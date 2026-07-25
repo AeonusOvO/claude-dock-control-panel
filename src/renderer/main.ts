@@ -2,6 +2,10 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type {
+  ClaudeLaunchMode,
+  ClaudePreset,
+  ClaudeProjectState,
+  SaveClaudeConfigInput,
   OperationResult,
   TerminalPhase,
   TerminalStatus,
@@ -25,12 +29,46 @@ const requiredElement = <T extends HTMLElement>(selector: string): T => {
 };
 
 const chooseDirectoryButton = requiredElement<HTMLButtonElement>('#choose-directory');
+const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
+const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
+const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
+const claudeCredential = requiredElement<HTMLInputElement>('#claude-credential');
+const claudeInstallationDetail = requiredElement<HTMLElement>('#claude-installation-detail');
+const claudeInstallationTitle = requiredElement<HTMLElement>('#claude-installation-title');
+const claudeLiveIndicator = requiredElement<HTMLElement>('#claude-live-indicator');
+const claudeModel = requiredElement<HTMLInputElement>('#claude-model');
+const claudePreset = requiredElement<HTMLSelectElement>('#claude-preset');
+const claudeRouteEndpoint = requiredElement<HTMLElement>('#claude-route-endpoint');
+const claudeRouteModel = requiredElement<HTMLElement>('#claude-route-model');
+const claudeRouteName = requiredElement<HTMLElement>('#claude-route-name');
+const claudeRuntimeWarning = requiredElement<HTMLElement>('#claude-runtime-warning');
+const claudeSecurityBanner = requiredElement<HTMLElement>('#claude-security-banner');
+const claudeWorkbench = requiredElement<HTMLElement>('#claude-workbench');
 const brandLogo = requiredElement<HTMLImageElement>('#brand-logo');
+const baseUrlField = requiredElement<HTMLElement>('#base-url-field');
 const clearTerminalButton = requiredElement<HTMLButtonElement>('#clear-terminal');
+const clearCredentialButton = requiredElement<HTMLButtonElement>('#clear-credential');
+const commandArgument = requiredElement<HTMLInputElement>('#command-argument');
+const contextPercentage = requiredElement<HTMLElement>('#context-percentage');
+const contextProgress = requiredElement<HTMLElement>('.context-progress');
+const contextProgressBar = requiredElement<HTMLElement>('#context-progress-bar');
+const contextSize = requiredElement<HTMLElement>('#context-size');
+const contextUsed = requiredElement<HTMLElement>('#context-used');
+const credentialField = requiredElement<HTMLElement>('#credential-field');
+const credentialStatus = requiredElement<HTMLElement>('#credential-status');
 const dropOverlay = requiredElement<HTMLElement>('#drop-overlay');
 const dropZone = requiredElement<HTMLButtonElement>('#drop-zone');
 const emptyState = requiredElement<HTMLElement>('#terminal-empty-state');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
+const launchContinueButton = requiredElement<HTMLButtonElement>('#launch-continue');
+const launchNewButton = requiredElement<HTMLButtonElement>('#launch-new');
+const launchResumeButton = requiredElement<HTMLButtonElement>('#launch-resume');
+const metricCost = requiredElement<HTMLElement>('#metric-cost');
+const metricDuration = requiredElement<HTMLElement>('#metric-duration');
+const metricInput = requiredElement<HTMLElement>('#metric-input');
+const metricModel = requiredElement<HTMLElement>('#metric-model');
+const metricOutput = requiredElement<HTMLElement>('#metric-output');
+const metricSession = requiredElement<HTMLElement>('#metric-session');
 const projectCount = requiredElement<HTMLElement>('#project-count');
 const projectList = requiredElement<HTMLElement>('#project-list');
 const restartButton = requiredElement<HTMLButtonElement>('#restart-terminal');
@@ -44,11 +82,19 @@ const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
 const toggleButton = requiredElement<HTMLButtonElement>('#toggle-terminal');
 const toggleLabel = requiredElement<HTMLElement>('#toggle-terminal-label');
+const workbenchClose = requiredElement<HTMLButtonElement>('#workbench-close');
+const workbenchScrim = requiredElement<HTMLButtonElement>('#workbench-scrim');
+const workbenchTrigger = requiredElement<HTMLButtonElement>('#workbench-trigger');
 
 brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
 
 const terminalViews = new Map<string, TerminalView>();
+const claudeStates = new Map<string, ClaudeProjectState>();
 let dragDepth = 0;
+let claudeRequestGeneration = 0;
+let configFormSessionId = '';
+let lastClaudeSessionId = '';
+let launchInProgress = false;
 let toastTimer: number | undefined;
 let workspaceState: WorkspaceState = {
   activeSessionId: '',
@@ -130,6 +176,204 @@ const projectNameFromPath = (directoryPath: string): string => {
 
 const activeStatus = (): TerminalStatus | undefined =>
   workspaceState.sessions.find((status) => status.id === workspaceState.activeSessionId);
+
+const formatTokenCount = (value: number | undefined): string => {
+  if (value === undefined) {
+    return '—';
+  }
+  return new Intl.NumberFormat('zh-CN', {
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+    notation: value >= 1000 ? 'compact' : 'standard',
+  }).format(value);
+};
+
+const formatDuration = (milliseconds: number | undefined): string => {
+  if (milliseconds === undefined) {
+    return '—';
+  }
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (totalMinutes < 60) {
+    return `${totalMinutes} 分`;
+  }
+  return `${Math.floor(totalMinutes / 60)} 时 ${totalMinutes % 60} 分`;
+};
+
+const setAuthOptions = (
+  options: Array<{ label: string; value: SaveClaudeConfigInput['authMode'] }>,
+  selected?: SaveClaudeConfigInput['authMode'],
+): void => {
+  claudeAuthMode.replaceChildren();
+  for (const option of options) {
+    const element = document.createElement('option');
+    element.value = option.value;
+    element.textContent = option.label;
+    claudeAuthMode.append(element);
+  }
+  if (selected && options.some((option) => option.value === selected)) {
+    claudeAuthMode.value = selected;
+  }
+};
+
+const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
+  const isOfficial = preset === 'anthropic';
+  baseUrlField.hidden = isOfficial;
+  if (isOfficial) {
+    setAuthOptions(
+      [
+        { label: '使用 Claude Code 现有登录', value: 'existing' },
+        { label: 'API Key（X-Api-Key）', value: 'apiKey' },
+      ],
+      preserveValues ? (claudeAuthMode.value as SaveClaudeConfigInput['authMode']) : 'existing',
+    );
+    if (!preserveValues) {
+      claudeBaseUrl.value = '';
+      claudeModel.value = 'default';
+    }
+  } else {
+    setAuthOptions(
+      [
+        { label: 'API Key（X-Api-Key）', value: 'apiKey' },
+        { label: 'Bearer Token（Authorization）', value: 'authToken' },
+        { label: '无需认证（仅建议本机网关）', value: 'none' },
+      ],
+      preserveValues
+        ? (claudeAuthMode.value as SaveClaudeConfigInput['authMode'])
+        : preset === 'deepseek'
+          ? 'apiKey'
+          : 'apiKey',
+    );
+    if (!preserveValues && preset === 'deepseek') {
+      claudeBaseUrl.value = 'http://127.0.0.1:4000';
+      claudeModel.value = 'deepseek-chat';
+    } else if (!preserveValues && claudeModel.value === 'default') {
+      claudeModel.value = '';
+    }
+  }
+  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+};
+
+const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
+  const { config } = state;
+  claudePreset.value = config.preset;
+  applyPresetUi(config.preset, false);
+  claudeBaseUrl.value = config.baseUrl;
+  claudeModel.value = config.model;
+  claudeAuthMode.value = config.authMode;
+  credentialField.hidden = config.authMode === 'existing' || config.authMode === 'none';
+  claudeCredential.value = '';
+  credentialStatus.textContent = config.credentialConfigured
+    ? '已使用 Windows 安全存储加密保存；留空将继续使用'
+    : '当前项目未保存凭据';
+  clearCredentialButton.disabled = !config.credentialConfigured;
+  configFormSessionId = state.sessionId;
+};
+
+const renderClaudeState = (state: ClaudeProjectState): void => {
+  claudeStates.set(state.sessionId, state);
+  if (state.sessionId !== workspaceState.activeSessionId) {
+    return;
+  }
+
+  const { config, installation, metrics } = state;
+  const installationReady = installation.security === 'ready';
+  claudeSecurityBanner.dataset.tone = installationReady
+    ? 'ready'
+    : installation.security === 'unknown'
+      ? 'checking'
+      : 'blocked';
+  claudeInstallationTitle.textContent = installationReady
+    ? `安全版本 · ${installation.version ?? '已识别'}`
+    : installation.installed
+      ? '需要更新 Claude Code'
+      : '未找到 Claude Code';
+  claudeInstallationDetail.textContent = installation.message;
+
+  claudeRouteName.textContent =
+    config.provider === 'anthropic'
+      ? 'Anthropic 官方'
+      : config.preset === 'deepseek'
+        ? 'DeepSeek · 兼容网关'
+        : 'Anthropic 兼容网关';
+  claudeRouteModel.textContent = config.model;
+  claudeRouteEndpoint.textContent =
+    config.provider === 'anthropic'
+      ? config.authMode === 'existing'
+        ? '使用官方登录与默认端点'
+        : '使用官方 API Key 与默认端点'
+      : config.baseUrl;
+
+  claudeLiveIndicator.dataset.active = String(state.active);
+  claudeLiveIndicator.textContent = state.active ? '实时同步' : '未运行';
+  const used = metrics?.contextWindowUsed;
+  const size = metrics?.contextWindowSize;
+  const percentage =
+    used !== undefined && size ? Math.min(100, Math.max(0, (used / size) * 100)) : undefined;
+  contextPercentage.textContent =
+    percentage === undefined ? '等待首个响应' : `${percentage.toFixed(1)}%`;
+  contextProgressBar.style.width = `${percentage ?? 0}%`;
+  contextProgress.setAttribute('aria-valuenow', String(Math.round(percentage ?? 0)));
+  contextProgress.dataset.level =
+    percentage !== undefined && percentage >= 85
+      ? 'danger'
+      : percentage !== undefined && percentage >= 65
+        ? 'warning'
+        : 'normal';
+  contextUsed.textContent = `${formatTokenCount(used)} 已用`;
+  contextSize.textContent = `窗口 ${formatTokenCount(size)}`;
+
+  metricInput.textContent = formatTokenCount(metrics?.inputTokens);
+  metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
+  metricCost.textContent =
+    metrics?.sessionCostUsd === undefined ? '—' : `$${metrics.sessionCostUsd.toFixed(4)}`;
+  metricDuration.textContent = formatDuration(metrics?.sessionDurationMs);
+  metricModel.textContent = metrics?.modelDisplayName ?? metrics?.modelId ?? '等待状态行';
+  metricModel.title = metrics?.modelId ?? '';
+  metricSession.textContent = metrics?.sessionName ?? metrics?.sessionId ?? '新会话尚未创建';
+  metricSession.title = metrics?.sessionId ?? '';
+
+  claudeRuntimeWarning.hidden = !state.warning;
+  claudeRuntimeWarning.textContent = state.warning ?? '';
+  for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
+    button.disabled = launchInProgress || !installationReady;
+  }
+
+  if (configFormSessionId !== state.sessionId) {
+    populateClaudeConfigForm(state);
+  }
+};
+
+const loadClaudeState = async (sessionId: string): Promise<void> => {
+  const generation = ++claudeRequestGeneration;
+  try {
+    const state = await window.controlPanel.getClaudeProjectState(sessionId);
+    if (generation === claudeRequestGeneration) {
+      renderClaudeState(state);
+    }
+  } catch {
+    if (generation === claudeRequestGeneration) {
+      showToast('无法读取 Claude 工作台状态。', 'error');
+    }
+  }
+};
+
+const setWorkbenchOpen = (open: boolean): void => {
+  claudeWorkbench.classList.toggle('claude-workbench--open', open);
+  claudeWorkbench.setAttribute('aria-hidden', String(!open));
+  workbenchScrim.classList.toggle('workbench-scrim--visible', open);
+  workbenchTrigger.setAttribute('aria-expanded', String(open));
+  if (open && workspaceState.activeSessionId) {
+    void loadClaudeState(workspaceState.activeSessionId);
+  }
+};
+
+const selectWorkbenchPage = (page: string): void => {
+  for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
+    tab.classList.toggle('workbench-tab--active', tab.dataset.workbenchTab === page);
+  }
+  for (const panel of document.querySelectorAll<HTMLElement>('[data-workbench-page]')) {
+    panel.classList.toggle('workbench-page--active', panel.dataset.workbenchPage === page);
+  }
+};
 
 const createTerminalView = (sessionId: string): TerminalView => {
   const container = document.createElement('div');
@@ -305,11 +549,26 @@ function renderWorkspace(state: WorkspaceState): void {
       terminalViews.delete(sessionId);
     }
   }
+  for (const sessionId of claudeStates.keys()) {
+    if (!validSessionIds.has(sessionId)) {
+      claudeStates.delete(sessionId);
+    }
+  }
 
   renderProjectList();
   const status = activeStatus();
   if (status) {
     renderActiveStatus(status);
+  }
+  if (state.activeSessionId !== lastClaudeSessionId) {
+    lastClaudeSessionId = state.activeSessionId;
+    configFormSessionId = '';
+    const knownClaudeState = claudeStates.get(state.activeSessionId);
+    if (knownClaudeState) {
+      renderClaudeState(knownClaudeState);
+    } else if (state.activeSessionId) {
+      void loadClaudeState(state.activeSessionId);
+    }
   }
   window.requestAnimationFrame(fitActiveTerminal);
 }
@@ -379,9 +638,93 @@ const openDirectoryPicker = async (): Promise<void> => {
   }
 };
 
+const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
+  const status = activeStatus();
+  if (!status || launchInProgress) {
+    return;
+  }
+
+  launchInProgress = true;
+  const existingState = claudeStates.get(status.id);
+  if (existingState) {
+    renderClaudeState(existingState);
+  }
+  try {
+    terminalViews.get(status.id)?.terminal.clear();
+    const result = await window.controlPanel.launchClaude(status.id, mode);
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法启动 Claude Code。', 'error');
+      return;
+    }
+    showToast(
+      mode === 'new'
+        ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
+        : mode === 'continue'
+          ? '正在续接当前项目最近的会话'
+          : '已打开当前项目的历史会话选择器',
+    );
+    terminalViews.get(status.id)?.terminal.focus();
+  } catch {
+    showToast('无法启动 Claude Code。', 'error');
+  } finally {
+    launchInProgress = false;
+    const latest = claudeStates.get(status.id);
+    if (latest) {
+      renderClaudeState(latest);
+    }
+  }
+};
+
+const currentConfigInput = (
+  credentialAction: SaveClaudeConfigInput['credentialAction'],
+): SaveClaudeConfigInput => {
+  const preset = claudePreset.value as ClaudePreset;
+  return {
+    authMode: claudeAuthMode.value as SaveClaudeConfigInput['authMode'],
+    baseUrl: claudeBaseUrl.value,
+    credential: claudeCredential.value,
+    credentialAction,
+    model: claudeModel.value,
+    preset,
+    provider: preset === 'anthropic' ? 'anthropic' : 'gateway',
+  };
+};
+
+const saveClaudeConfig = async (
+  credentialAction: SaveClaudeConfigInput['credentialAction'],
+): Promise<void> => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+  const submitButton = requiredElement<HTMLButtonElement>('#save-claude-config');
+  submitButton.disabled = true;
+  try {
+    const action =
+      credentialAction === 'keep' && claudeCredential.value.trim() ? 'replace' : credentialAction;
+    const result = await window.controlPanel.saveClaudeConfig(
+      status.id,
+      currentConfigInput(action),
+    );
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法保存接入配置。', 'error');
+      return;
+    }
+    populateClaudeConfigForm(result.state);
+    showToast('当前项目的模型与 API 接入已保存');
+  } catch {
+    showToast('无法保存接入配置。', 'error');
+  } finally {
+    submitButton.disabled = false;
+  }
+};
+
 window.controlPanel.onTerminalData((sessionId, data) => {
   terminalViews.get(sessionId)?.terminal.write(data);
 });
+window.controlPanel.onClaudeState(renderClaudeState);
 window.controlPanel.onWorkspaceState(renderWorkspace);
 
 chooseDirectoryButton.addEventListener('click', () => {
@@ -390,6 +733,74 @@ chooseDirectoryButton.addEventListener('click', () => {
 dropZone.addEventListener('click', () => {
   void openDirectoryPicker();
 });
+runClaudeButton.addEventListener('click', () => {
+  setWorkbenchOpen(true);
+  selectWorkbenchPage('session');
+});
+workbenchTrigger.addEventListener('click', () => {
+  setWorkbenchOpen(!claudeWorkbench.classList.contains('claude-workbench--open'));
+});
+workbenchClose.addEventListener('click', () => {
+  setWorkbenchOpen(false);
+});
+workbenchScrim.addEventListener('click', () => {
+  setWorkbenchOpen(false);
+});
+for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
+  tab.addEventListener('click', () => {
+    selectWorkbenchPage(tab.dataset.workbenchTab ?? 'session');
+  });
+}
+launchNewButton.addEventListener('click', () => {
+  void launchClaude('new');
+});
+launchContinueButton.addEventListener('click', () => {
+  void launchClaude('continue');
+});
+launchResumeButton.addEventListener('click', () => {
+  void launchClaude('resume');
+});
+claudePreset.addEventListener('change', () => {
+  applyPresetUi(claudePreset.value as ClaudePreset, false);
+});
+claudeAuthMode.addEventListener('change', () => {
+  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+});
+claudeConfigForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void saveClaudeConfig('keep');
+});
+clearCredentialButton.addEventListener('click', () => {
+  if (window.confirm('清除当前项目已加密保存的 API 凭据？')) {
+    void saveClaudeConfig('clear');
+  }
+});
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-claude-command]')) {
+  button.addEventListener('click', async () => {
+    const status = activeStatus();
+    const command = button.dataset.claudeCommand;
+    if (!status || !command) {
+      return;
+    }
+    if (
+      command === '/clear' &&
+      !window.confirm('/clear 会结束当前上下文并开启新会话，是否继续？')
+    ) {
+      return;
+    }
+    const argument = button.dataset.usesArgument
+      ? commandArgument.value
+      : button.dataset.defaultArgument;
+    const result = await window.controlPanel.runClaudeCommand(status.id, command, argument);
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法执行 Claude 命令。', 'error');
+      return;
+    }
+    showToast(`已执行 ${command}`);
+    terminalViews.get(status.id)?.terminal.focus();
+  });
+}
 restartButton.addEventListener('click', async () => {
   const status = activeStatus();
   if (!status) {
@@ -411,24 +822,6 @@ toggleButton.addEventListener('click', async () => {
     handleOperation(await window.controlPanel.startTerminal(status.id), 'PowerShell 已启动');
     window.setTimeout(fitActiveTerminal, 60);
   }
-});
-runClaudeButton.addEventListener('click', async () => {
-  let status = activeStatus();
-  if (!status) {
-    return;
-  }
-
-  if (status.phase !== 'running') {
-    const result = await window.controlPanel.startTerminal(status.id);
-    if (!handleOperation(result)) {
-      return;
-    }
-    status = result.status;
-  }
-
-  terminalViews.get(status.id)?.terminal.focus();
-  window.controlPanel.writeTerminal(status.id, 'claude\r');
-  showToast(`已在 ${projectNameFromPath(status.cwd)} 运行 Claude Code`);
 });
 clearTerminalButton.addEventListener('click', () => {
   const view = terminalViews.get(workspaceState.activeSessionId);

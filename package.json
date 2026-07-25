@@ -1,7 +1,7 @@
 {
   "name": "claude-dock-control-panel",
   "version": "1.0.0",
-  "description": "A Windows PowerShell control panel with drag-and-drop project switching and tray status.",
+  "description": "A Windows project terminal and visual Claude Code workbench.",
   "main": "dist/main/main.js",
   "private": true,
   "author": "Cheng",
@@ -65,9 +65,11 @@
     "files": [
       "dist/**/*",
       "assets/generated/**/*",
+      "assets/runtime/**/*",
       "package.json"
     ],
     "asarUnpack": [
+      "assets/runtime/**/*",
       "node_modules/@lydell/node-pty/**/*",
       "node_modules/@lydell/node-pty-*/**/*"
     ],

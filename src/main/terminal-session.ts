@@ -7,12 +7,26 @@ import { normalizeTerminalSize } from './directory';
 
 type DataListener = (data: string) => void;
 type StatusListener = (status: TerminalStatus) => void;
+export type TerminalEnvironmentOverrides = Record<string, null | string>;
 
-const buildEnvironment = (): Record<string, string> => {
+const buildEnvironment = (overrides: TerminalEnvironmentOverrides = {}): Record<string, string> => {
   const environment: Record<string, string> = {};
+  const normalizedOverrides = new Map(
+    Object.entries(overrides).map(([key, value]) => [key.toLowerCase(), { key, value }]),
+  );
 
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === 'string') {
+    const override = normalizedOverrides.get(key.toLowerCase());
+    if (override?.value === null) {
+      continue;
+    }
+    if (typeof value === 'string' && !override) {
+      environment[key] = value;
+    }
+  }
+
+  for (const { key, value } of normalizedOverrides.values()) {
+    if (value !== null) {
       environment[key] = value;
     }
   }
@@ -70,12 +84,18 @@ export class TerminalSession {
     }
   }
 
-  public restart(cwd = this.status.cwd): TerminalStatus {
+  public restart(
+    cwd = this.status.cwd,
+    environment: TerminalEnvironmentOverrides = {},
+  ): TerminalStatus {
     this.stop(false);
-    return this.start(cwd);
+    return this.start(cwd, environment);
   }
 
-  public start(cwd = this.status.cwd): TerminalStatus {
+  public start(
+    cwd = this.status.cwd,
+    environment: TerminalEnvironmentOverrides = {},
+  ): TerminalStatus {
     if (this.process) {
       return this.getStatus();
     }
@@ -93,7 +113,7 @@ export class TerminalSession {
       const terminalProcess = pty.spawn(resolvePowerShell(), ['-NoLogo'], {
         cols: this.cols,
         cwd,
-        env: buildEnvironment(),
+        env: buildEnvironment(environment),
         name: 'xterm-256color',
         rows: this.rows,
         useConpty: true,

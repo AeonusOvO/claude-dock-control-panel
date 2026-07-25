@@ -3,29 +3,42 @@ import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } fro
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
+  ClaudeConfigResult,
+  ClaudeLaunchMode,
+  ClaudeOperationResult,
   DirectoryChoiceResult,
   OperationResult,
+  SaveClaudeConfigInput,
   TerminalStatus,
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import { ClaudeRuntime } from './claude-runtime';
 import { resolveDirectory } from './directory';
 import { TerminalWorkspace } from './terminal-workspace';
 
 app.enableSandbox();
 
 let isQuitting = false;
+let claudeRuntime: ClaudeRuntime | null = null;
 let mainWindow: BrowserWindow | null = null;
 let minimizedNoticeShown = false;
 let tray: Tray | null = null;
 
 const assetPath = (fileName: string): string =>
   path.join(app.getAppPath(), 'assets', 'generated', fileName);
+const runtimeAssetPath = (fileName: string): string =>
+  app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', 'runtime', fileName)
+    : path.join(app.getAppPath(), 'assets', 'runtime', fileName);
 
 const workspace = new TerminalWorkspace(
   homedir(),
   (sessionId, data) => {
-    mainWindow?.webContents.send('terminal:data', sessionId, data);
+    const filtered = claudeRuntime?.consumeTerminalOutput(sessionId, data) ?? data;
+    if (filtered) {
+      mainWindow?.webContents.send('terminal:data', sessionId, filtered);
+    }
   },
   (state) => {
     mainWindow?.webContents.send('workspace:state', state);
@@ -222,6 +235,84 @@ const validateSessionId = (sessionId: unknown): string => {
   return sessionId;
 };
 
+const requireClaudeRuntime = (): ClaudeRuntime => {
+  if (!claudeRuntime) {
+    throw new Error('Claude 工作台尚未初始化。');
+  }
+  return claudeRuntime;
+};
+
+const validateClaudeLaunchMode = (mode: unknown): ClaudeLaunchMode => {
+  if (mode !== 'new' && mode !== 'continue' && mode !== 'resume') {
+    throw new Error('Claude 会话启动方式无效。');
+  }
+  return mode;
+};
+
+const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
+  if (!input || typeof input !== 'object') {
+    throw new Error('Claude 接入配置格式无效。');
+  }
+  const value = input as Record<string, unknown>;
+  if (
+    (value.provider !== 'anthropic' && value.provider !== 'gateway') ||
+    (value.preset !== 'anthropic' &&
+      value.preset !== 'custom' &&
+      value.preset !== 'deepseek' &&
+      value.preset !== 'gateway') ||
+    (value.authMode !== 'apiKey' &&
+      value.authMode !== 'authToken' &&
+      value.authMode !== 'existing' &&
+      value.authMode !== 'none') ||
+    (value.credentialAction !== 'clear' &&
+      value.credentialAction !== 'keep' &&
+      value.credentialAction !== 'replace') ||
+    typeof value.baseUrl !== 'string' ||
+    typeof value.model !== 'string' ||
+    (value.credential !== undefined && typeof value.credential !== 'string')
+  ) {
+    throw new Error('Claude 接入配置包含无效字段。');
+  }
+
+  return {
+    authMode: value.authMode,
+    baseUrl: value.baseUrl,
+    credential: value.credential,
+    credentialAction: value.credentialAction,
+    model: value.model,
+    preset: value.preset,
+    provider: value.provider,
+  };
+};
+
+const claudeCommands = new Map<string, boolean>([
+  ['/agents', false],
+  ['/clear', false],
+  ['/compact', true],
+  ['/context', true],
+  ['/doctor', false],
+  ['/help', false],
+  ['/hooks', false],
+  ['/mcp', false],
+  ['/memory', false],
+  ['/model', false],
+  ['/permissions', false],
+  ['/rename', true],
+  ['/resume', false],
+  ['/status', false],
+  ['/usage', false],
+]);
+
+const claudeFailure = async (sessionId: string, error: unknown): Promise<ClaudeOperationResult> => {
+  const runtime = requireClaudeRuntime();
+  const status = workspace.getStatus(sessionId);
+  return {
+    error: error instanceof Error ? error.message : 'Claude Code 操作失败。',
+    ok: false,
+    state: await runtime.getState(sessionId, status.cwd),
+  };
+};
+
 const registerIpc = (): void => {
   ipcMain.handle('workspace:get-state', (event) => {
     validateSender(event);
@@ -248,9 +339,11 @@ const registerIpc = (): void => {
   ipcMain.handle('project:close', (event, sessionId: unknown) => {
     validateSender(event);
     try {
+      const validatedSessionId = validateSessionId(sessionId);
+      requireClaudeRuntime().closeSession(validatedSessionId);
       return {
         ok: true,
-        state: workspace.close(validateSessionId(sessionId)),
+        state: workspace.close(validatedSessionId),
       } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
@@ -271,7 +364,9 @@ const registerIpc = (): void => {
   ipcMain.handle('terminal:restart', (event, sessionId: unknown) => {
     validateSender(event);
     try {
-      return operationFromStatus(workspace.restart(validateSessionId(sessionId)));
+      const validatedSessionId = validateSessionId(sessionId);
+      requireClaudeRuntime().setInactive(validatedSessionId);
+      return operationFromStatus(workspace.restart(validatedSessionId));
     } catch (error) {
       return {
         error: error instanceof Error ? error.message : '无法重启 PowerShell。',
@@ -283,7 +378,9 @@ const registerIpc = (): void => {
   ipcMain.handle('terminal:stop', (event, sessionId: unknown) => {
     validateSender(event);
     try {
-      return operationFromStatus(workspace.stop(validateSessionId(sessionId)));
+      const validatedSessionId = validateSessionId(sessionId);
+      requireClaudeRuntime().setInactive(validatedSessionId);
+      return operationFromStatus(workspace.stop(validatedSessionId));
     } catch (error) {
       return {
         error: error instanceof Error ? error.message : '无法停止 PowerShell。',
@@ -296,6 +393,106 @@ const registerIpc = (): void => {
     validateSender(event);
     return chooseDirectory();
   });
+  ipcMain.handle('claude:get-state', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return requireClaudeRuntime().getState(validatedSessionId, status.cwd);
+  });
+  ipcMain.handle(
+    'claude:save-config',
+    async (event, sessionId: unknown, input: unknown): Promise<ClaudeConfigResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireClaudeRuntime().saveConfig(
+            validatedSessionId,
+            status.cwd,
+            validateClaudeConfigInput(input),
+          ),
+        };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : '无法保存 Claude 接入配置。',
+          ok: false,
+          state: await requireClaudeRuntime().getState(validatedSessionId, status.cwd),
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:launch',
+    async (event, sessionId: unknown, mode: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        const prepared = await runtime.prepareLaunch(
+          validatedSessionId,
+          status.cwd,
+          validateClaudeLaunchMode(mode),
+        );
+        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
+        if (terminalStatus.phase === 'error') {
+          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
+        }
+        workspace.write(validatedSessionId, `${prepared.command}\r`);
+        return {
+          ok: true,
+          state: await runtime.getState(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        runtime.setInactive(validatedSessionId);
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:command',
+    async (
+      event,
+      sessionId: unknown,
+      command: unknown,
+      argument: unknown,
+    ): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        if (typeof command !== 'string' || !claudeCommands.has(command)) {
+          throw new Error('该 Claude 命令不在可视化命令白名单中。');
+        }
+        if (!runtime.isActive(validatedSessionId)) {
+          throw new Error('请先通过 Claude 工作台启动会话，再执行可视化命令。');
+        }
+        const acceptsArgument = claudeCommands.get(command) ?? false;
+        const normalizedArgument =
+          typeof argument === 'string' && acceptsArgument ? argument.trim() : '';
+        if (
+          normalizedArgument.length > 500 ||
+          /[\r\n]/.test(normalizedArgument) ||
+          (!acceptsArgument && typeof argument === 'string' && argument.trim())
+        ) {
+          throw new Error('命令参数无效。');
+        }
+        workspace.write(
+          validatedSessionId,
+          `${command}${normalizedArgument ? ` ${normalizedArgument}` : ''}\r`,
+        );
+        const status = workspace.getStatus(validatedSessionId);
+        return {
+          ok: true,
+          state: await runtime.getState(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
   ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
     validateSender(event);
     if (typeof data !== 'string' || data.length > 65_536) {
@@ -397,6 +594,13 @@ if (!hasSingleInstanceLock) {
   app.on('second-instance', showMainWindow);
   app.whenReady().then(async () => {
     app.setAppUserModelId('cn.cheng.claudedock');
+    claudeRuntime = new ClaudeRuntime(
+      app.getPath('userData'),
+      runtimeAssetPath('claude-statusline.ps1'),
+      (state) => {
+        mainWindow?.webContents.send('claude:state', state);
+      },
+    );
     registerIpc();
     createTray();
     await createWindow();
@@ -406,5 +610,6 @@ if (!hasSingleInstanceLock) {
 app.on('activate', showMainWindow);
 app.on('before-quit', () => {
   isQuitting = true;
+  claudeRuntime?.shutdown();
   workspace.shutdown();
 });

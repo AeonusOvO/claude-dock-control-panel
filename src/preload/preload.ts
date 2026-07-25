@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  ClaudeConfigResult,
+  ClaudeOperationResult,
+  ClaudeProjectState,
   ControlPanelApi,
   DirectoryChoiceResult,
   OperationResult,
@@ -15,8 +18,21 @@ const api: ControlPanelApi = {
   chooseDirectory: () => ipcRenderer.invoke('directory:choose') as Promise<DirectoryChoiceResult>,
   closeProject: (sessionId: string) =>
     ipcRenderer.invoke('project:close', sessionId) as Promise<WorkspaceResult>,
+  getClaudeProjectState: (sessionId: string) =>
+    ipcRenderer.invoke('claude:get-state', sessionId) as Promise<ClaudeProjectState>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
+  launchClaude: (sessionId, mode) =>
+    ipcRenderer.invoke('claude:launch', sessionId, mode) as Promise<ClaudeOperationResult>,
+  onClaudeState: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, state: ClaudeProjectState): void => {
+      listener(state);
+    };
+    ipcRenderer.on('claude:state', callback);
+    return () => {
+      ipcRenderer.removeListener('claude:state', callback);
+    };
+  },
   onTerminalData: (listener) => {
     const callback = (
       _event: Electron.IpcRendererEvent,
@@ -46,6 +62,15 @@ const api: ControlPanelApi = {
   },
   restartTerminal: (sessionId) =>
     ipcRenderer.invoke('terminal:restart', sessionId) as Promise<OperationResult>,
+  runClaudeCommand: (sessionId, command, argument) =>
+    ipcRenderer.invoke(
+      'claude:command',
+      sessionId,
+      command,
+      argument,
+    ) as Promise<ClaudeOperationResult>,
+  saveClaudeConfig: (sessionId, input) =>
+    ipcRenderer.invoke('claude:save-config', sessionId, input) as Promise<ClaudeConfigResult>,
   startTerminal: (sessionId) =>
     ipcRenderer.invoke('terminal:start', sessionId) as Promise<OperationResult>,
   stopTerminal: (sessionId) =>

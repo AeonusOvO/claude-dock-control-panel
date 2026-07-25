@@ -80,7 +80,7 @@
               <path d="m8 6 6 6-6 6" />
               <path d="M15 18h3" />
             </svg>
-            运行 Claude Code
+            打开 Claude 工作台
           </button>
           <div class="button-row">
             <button class="button button--quiet" id="restart-terminal" type="button">
@@ -116,12 +116,24 @@
             <span>PS</span>
             <strong id="terminal-project">PowerShell</strong>
           </div>
-          <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7" />
-            </svg>
-            <span class="sr-only">清空终端显示</span>
-          </button>
+          <div class="terminal-toolbar__actions">
+            <button
+              class="workbench-trigger"
+              id="workbench-trigger"
+              type="button"
+              aria-expanded="false"
+              aria-controls="claude-workbench"
+            >
+              <span class="workbench-trigger__dot" aria-hidden="true"></span>
+              Claude 工作台
+            </button>
+            <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7" />
+              </svg>
+              <span class="sr-only">清空终端显示</span>
+            </button>
+          </div>
         </div>
         <div class="terminal-stage" id="terminal-stage">
           <div class="terminal-empty-state" id="terminal-empty-state" aria-hidden="false">
@@ -135,6 +147,297 @@
           <span><kbd>Ctrl</kbd> + <kbd>L</kbd> 清屏</span>
           <span id="footer-status">后台待命</span>
         </footer>
+
+        <button
+          class="workbench-scrim"
+          id="workbench-scrim"
+          type="button"
+          aria-label="关闭 Claude 工作台"
+          tabindex="-1"
+        ></button>
+        <aside
+          class="claude-workbench"
+          id="claude-workbench"
+          aria-label="Claude 可视化工作台"
+          aria-hidden="true"
+        >
+          <header class="workbench-header">
+            <div>
+              <span class="workbench-eyebrow">Project-scoped</span>
+              <h2>Claude 工作台</h2>
+            </div>
+            <button
+              class="workbench-close"
+              id="workbench-close"
+              type="button"
+              aria-label="关闭工作台"
+            >
+              ×
+            </button>
+          </header>
+
+          <nav class="workbench-tabs" aria-label="Claude 工作台页面">
+            <button
+              class="workbench-tab workbench-tab--active"
+              data-workbench-tab="session"
+              type="button"
+            >
+              会话
+            </button>
+            <button class="workbench-tab" data-workbench-tab="commands" type="button">命令</button>
+            <button class="workbench-tab" data-workbench-tab="connection" type="button">
+              接入
+            </button>
+          </nav>
+
+          <div class="workbench-pages">
+            <section class="workbench-page workbench-page--active" data-workbench-page="session">
+              <div class="security-banner" id="claude-security-banner" data-tone="checking">
+                <span class="security-banner__icon" aria-hidden="true">✓</span>
+                <div>
+                  <strong id="claude-installation-title">正在检查 Claude Code</strong>
+                  <span id="claude-installation-detail">核对版本与已知风险范围</span>
+                </div>
+              </div>
+
+              <div class="route-card">
+                <div class="route-card__topline">
+                  <span>当前路由</span>
+                  <span class="route-lock">端点锁定</span>
+                </div>
+                <strong id="claude-route-name">Anthropic 官方</strong>
+                <code id="claude-route-model">default</code>
+                <span id="claude-route-endpoint">使用官方登录与默认端点</span>
+              </div>
+
+              <div class="context-card">
+                <div class="context-card__heading">
+                  <div>
+                    <span>实时上下文</span>
+                    <strong id="context-percentage">等待首个响应</strong>
+                  </div>
+                  <span class="live-indicator" id="claude-live-indicator">未运行</span>
+                </div>
+                <div
+                  class="context-progress"
+                  role="progressbar"
+                  aria-label="Claude 上下文占用"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                >
+                  <span id="context-progress-bar"></span>
+                </div>
+                <div class="context-scale">
+                  <span id="context-used">— 已用</span>
+                  <span id="context-size">窗口 —</span>
+                </div>
+              </div>
+
+              <div class="metrics-grid">
+                <div>
+                  <span>输入 token</span>
+                  <strong id="metric-input">—</strong>
+                </div>
+                <div>
+                  <span>输出 token</span>
+                  <strong id="metric-output">—</strong>
+                </div>
+                <div>
+                  <span>会话估算</span>
+                  <strong id="metric-cost">—</strong>
+                </div>
+                <div>
+                  <span>持续时间</span>
+                  <strong id="metric-duration">—</strong>
+                </div>
+              </div>
+
+              <dl class="session-facts">
+                <div>
+                  <dt>运行模型</dt>
+                  <dd id="metric-model">等待状态行</dd>
+                </div>
+                <div>
+                  <dt>会话 ID</dt>
+                  <dd id="metric-session">新会话尚未创建</dd>
+                </div>
+              </dl>
+              <p class="workbench-warning" id="claude-runtime-warning" hidden></p>
+
+              <div class="launch-actions">
+                <button class="launch-primary" id="launch-new" type="button">新建安全会话</button>
+                <div>
+                  <button class="launch-secondary" id="launch-continue" type="button">
+                    继续最近会话
+                  </button>
+                  <button class="launch-secondary" id="launch-resume" type="button">
+                    选择历史会话
+                  </button>
+                </div>
+              </div>
+              <p class="session-explainer">
+                新建会话使用空上下文；“继续”只续接当前项目目录最近的会话；“选择历史”打开 Claude Code
+                自带会话选择器。
+              </p>
+            </section>
+
+            <section class="workbench-page" data-workbench-page="commands">
+              <div class="command-intro">
+                <strong>斜杠命令，可视化执行</strong>
+                <span>只有由工作台启动的 Claude 会话才会接收这些命令。</span>
+              </div>
+              <label class="field" for="command-argument">
+                <span>可选参数</span>
+                <input
+                  id="command-argument"
+                  type="text"
+                  maxlength="500"
+                  placeholder="例如：保留 API 设计与测试结论"
+                />
+              </label>
+              <div class="command-grid">
+                <button data-claude-command="/context" data-default-argument="all" type="button">
+                  <code>/context</code><span>上下文构成</span>
+                </button>
+                <button data-claude-command="/usage" type="button">
+                  <code>/usage</code><span>token 与用量</span>
+                </button>
+                <button data-claude-command="/status" type="button">
+                  <code>/status</code><span>配置与状态</span>
+                </button>
+                <button data-claude-command="/model" type="button">
+                  <code>/model</code><span>查看运行模型</span>
+                </button>
+                <button data-claude-command="/permissions" type="button">
+                  <code>/permissions</code><span>权限策略</span>
+                </button>
+                <button data-claude-command="/mcp" type="button">
+                  <code>/mcp</code><span>MCP 服务</span>
+                </button>
+                <button data-claude-command="/agents" type="button">
+                  <code>/agents</code><span>子代理管理</span>
+                </button>
+                <button data-claude-command="/hooks" type="button">
+                  <code>/hooks</code><span>Hooks 检查</span>
+                </button>
+                <button data-claude-command="/memory" type="button">
+                  <code>/memory</code><span>项目记忆</span>
+                </button>
+                <button data-claude-command="/resume" type="button">
+                  <code>/resume</code><span>切换会话</span>
+                </button>
+                <button data-claude-command="/compact" data-uses-argument="true" type="button">
+                  <code>/compact</code><span>压缩上下文</span>
+                </button>
+                <button data-claude-command="/rename" data-uses-argument="true" type="button">
+                  <code>/rename</code><span>命名会话</span>
+                </button>
+                <button data-claude-command="/doctor" type="button">
+                  <code>/doctor</code><span>诊断安装</span>
+                </button>
+                <button data-claude-command="/help" type="button">
+                  <code>/help</code><span>全部帮助</span>
+                </button>
+                <button class="command-danger" data-claude-command="/clear" type="button">
+                  <code>/clear</code><span>清空并新开会话</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="workbench-page" data-workbench-page="connection">
+              <form id="claude-config-form">
+                <div class="connection-heading">
+                  <strong>项目级模型与 API</strong>
+                  <span>配置保存在 ClaudeDock 用户数据中，不写入仓库。</span>
+                </div>
+
+                <label class="field" for="claude-preset">
+                  <span>接入预设</span>
+                  <select id="claude-preset">
+                    <option value="anthropic">Anthropic 官方</option>
+                    <option value="gateway">Anthropic 兼容中转</option>
+                    <option value="deepseek">DeepSeek（经兼容网关）</option>
+                    <option value="custom">自定义兼容服务</option>
+                  </select>
+                </label>
+
+                <label class="field" id="base-url-field" for="claude-base-url">
+                  <span>API 基址</span>
+                  <input
+                    id="claude-base-url"
+                    type="url"
+                    maxlength="2048"
+                    placeholder="https://gateway.example.com"
+                    spellcheck="false"
+                  />
+                  <small
+                    >必须提供 Anthropic Messages API；DeepSeek 原生 OpenAI API 需要 LiteLLM
+                    等转换层。</small
+                  >
+                </label>
+
+                <label class="field" for="claude-model">
+                  <span>模型 ID</span>
+                  <input
+                    id="claude-model"
+                    type="text"
+                    maxlength="200"
+                    value="default"
+                    spellcheck="false"
+                  />
+                </label>
+
+                <label class="field" for="claude-auth-mode">
+                  <span>认证方式</span>
+                  <select id="claude-auth-mode">
+                    <option value="existing">使用 Claude Code 现有登录</option>
+                    <option value="apiKey">API Key（X-Api-Key）</option>
+                  </select>
+                </label>
+
+                <label class="field" id="credential-field" for="claude-credential">
+                  <span>API 凭据</span>
+                  <input
+                    id="claude-credential"
+                    type="password"
+                    maxlength="4096"
+                    autocomplete="new-password"
+                    placeholder="留空则保留已保存的凭据"
+                  />
+                  <small id="credential-status">未保存凭据</small>
+                </label>
+
+                <div class="privacy-shield">
+                  <span class="privacy-shield__icon" aria-hidden="true">◆</span>
+                  <div>
+                    <strong>严格防护始终启用</strong>
+                    <span
+                      >锁定端点和模型；关闭遥测、错误上报、反馈与 WebFetch 的 Anthropic 预检。</span
+                    >
+                  </div>
+                </div>
+
+                <div class="config-actions">
+                  <button class="save-config" id="save-claude-config" type="submit">
+                    保存接入
+                  </button>
+                  <button class="clear-credential" id="clear-credential" type="button">
+                    清除密钥
+                  </button>
+                </div>
+              </form>
+
+              <div class="risk-note">
+                <strong>版本防线</strong>
+                <p>
+                  ClaudeDock 拒绝受保护启动 Claude Code 2.1.91–2.1.196，并要求至少
+                  2.1.197。当前检查结果显示在“会话”页。
+                </p>
+              </div>
+            </section>
+          </div>
+        </aside>
       </section>
     </main>
 

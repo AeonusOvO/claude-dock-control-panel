@@ -1,12 +1,12 @@
 import path from 'node:path';
 import type { TerminalStatus, WorkspaceState } from '../shared/contracts';
-import { TerminalSession } from './terminal-session';
+import { TerminalSession, type TerminalEnvironmentOverrides } from './terminal-session';
 
 export interface ManagedTerminal {
   getStatus: () => TerminalStatus;
   resize: (cols: number, rows: number) => void;
-  restart: (cwd?: string) => TerminalStatus;
-  start: (cwd?: string) => TerminalStatus;
+  restart: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
+  start: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
   stop: (emitStatus?: boolean) => TerminalStatus;
   write: (data: string) => void;
 }
@@ -76,6 +76,10 @@ export class TerminalWorkspace {
     return this.requireSession(this.activeSessionId).getStatus();
   }
 
+  public getStatus(sessionId: string): TerminalStatus {
+    return this.requireSession(sessionId).getStatus();
+  }
+
   public getState(): WorkspaceState {
     return {
       activeSessionId: this.activeSessionId,
@@ -110,8 +114,11 @@ export class TerminalWorkspace {
     this.requireSession(sessionId).resize(cols, rows);
   }
 
-  public restart(sessionId: string): TerminalStatus {
-    return this.requireSession(sessionId).restart();
+  public restart(
+    sessionId: string,
+    environment: TerminalEnvironmentOverrides = {},
+  ): TerminalStatus {
+    return this.requireSession(sessionId).restart(undefined, environment);
   }
 
   public shutdown(): void {
