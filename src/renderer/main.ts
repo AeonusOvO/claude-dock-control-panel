@@ -736,13 +736,23 @@ const projectUsesHttpsGateway = (baseUrl: string): boolean => {
 const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
   const projectState = claudeStates.get(workspaceState.activeSessionId);
   const config = projectState?.config;
+  const runtimeMismatch = state.runtimeMismatch === true;
   const noProviders = state.managementAvailable && state.providers.length === 0;
   const providerError =
     state.managementAvailable && state.providers.length > 0 && state.gatewayState === 'error';
-  routerRemediation.hidden = !noProviders && !providerError;
+  routerRemediation.hidden = !runtimeMismatch && !noProviders && !providerError;
   if (routerRemediation.hidden) {
     return;
   }
+  configureRouterProviderButton.hidden = runtimeMismatch;
+  if (runtimeMismatch) {
+    repairRouterFromProjectButton.hidden = true;
+    routerRemediationTitle.textContent = '解决办法：切换到 CCR 配套的 Node.js';
+    routerRemediationDetail.textContent =
+      'CCR 数据库没有损坏；它只是被 Electron 内置 Node 错误启动。点击上方“修复运行环境并重启”，ClaudeDock 会停止这个错误进程，再用 CCR 安装时的系统 Node 重启。Provider、密钥和 Codex 配置都不会被修改。';
+    return;
+  }
+  configureRouterProviderButton.hidden = false;
 
   const projectUsesRouter = Boolean(
     config?.provider === 'gateway' && projectUsesDefaultRouter(config.baseUrl),
@@ -805,11 +815,12 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
 
   installRouterButton.disabled = routerOperationInProgress;
   installRouterButton.textContent = state.installed ? '安装 / 更新官方版' : '一键获取官方安装包';
+  startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动 Router';
   startRouterButton.disabled =
     routerOperationInProgress ||
     !state.installed ||
     !state.manageable ||
-    state.providers.length === 0 ||
+    (!state.runtimeMismatch && state.providers.length === 0) ||
     state.gatewayState === 'running' ||
     state.gatewayState === 'starting';
   stopRouterButton.disabled =

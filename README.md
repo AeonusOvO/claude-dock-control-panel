@@ -25,6 +25,10 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - CCR 管理服务已运行但 Provider 为空时，不再只显示 `No available models`：界面会解释
   当前项目是否受影响、禁止无意义的重复启动，并提供“用当前项目配置一键修复”或手动添加
   第一个 Provider。自动修复只在远程 Anthropic 直连和 API Key 已安全保存时可用。
+- CCR 的 `better-sqlite3` 若被 Electron 内置 Node 误加载，界面会把
+  `NODE_MODULE_VERSION` 报错解释为运行时不匹配，并提供“修复运行环境并重启”。修复只会
+  用 CCR 安装时配套的系统 `node.exe` 重启管理服务，不重编译数据库、不修改 Provider，
+  也不触碰 Codex。
 - 可按 Claude 官方建议主动发送最多 1 个输出 token 的 `/v1/messages` 测试，分别显示
   端点、身份认证和模型响应结果；后台自动检测不会发起付费模型请求。
 - “会话”页持续显示当前路由健康状态：使用本机 Router 时会在启动前确认 `3456` 网关与
@@ -93,6 +97,9 @@ npm run dist
      Windows 安全存储中的密钥，创建 Provider、启动 `3456` 并切换当前项目。
    - Bearer、无认证或当前项目本来就指向 `3456` 时，点击“手动添加第一个 Provider”，
      依次填写协议、接口、模型和上游密钥，保存后再启动 Router。
+   - 如果出现 `better_sqlite3.node`、`NODE_MODULE_VERSION` 或“compiled against a
+     different Node.js version”，点击“修复运行环境并重启”。这不是数据库损坏，也不需要
+     手工运行 `npm rebuild`。
 8. 点击“真实测试端点、密钥和模型”。测试最多请求 1 个输出 token，可能产生极少量费用；
    三项全部通过后再保存。该结果只证明测试时刻的最小 Messages 请求成功，不保证服务持续
    在线或完整兼容 Claude Code 的流式、工具调用与长对话。API 凭据通过 Windows 安全存储
@@ -159,6 +166,12 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
 - Router 安装需要访问 GitHub。ClaudeDock 只接受官方仓库当前 Release 中命名匹配的
   Windows `.exe`，限制最大 250 MiB，并在打开前校验文件大小与 SHA-256；安装程序本身仍
   可能因未签名或发布者信誉不足触发 Windows SmartScreen。
+- ClaudeDock 不再通过自身 Electron 可执行文件运行 npm 版 CCR。它会定位 CCR npm 前缀
+  旁或 `PATH` 中的系统 `node.exe`，并先验证该运行时可以加载 CCR 自带的
+  `better_sqlite3.node`。已被旧版 ClaudeDock 错误启动的服务可由界面定向停止和重启。
+- CCR 3.x 的 `preferredProvider` 按 Provider 名称路由。ClaudeDock 同时识别旧配置中遗留的
+  Provider ID，并在用户保存该 Provider 时迁移为当前名称，避免以后增加多个 Provider 后
+  选错上游。
 - 关闭项目会终止该项目的 PowerShell 进程；切换项目不会影响其他项目的运行。
 - 项目会话只在本次应用运行期间保留，彻底退出后不会恢复终端进程或历史缓冲。
 - Claude Code 自己会按项目目录把会话明文保存在 `~/.claude/projects/`，默认约 30 天；

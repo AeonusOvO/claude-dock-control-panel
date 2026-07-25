@@ -156,6 +156,7 @@ export interface ClaudeRouterManagementState {
   managementAvailable: boolean;
   message: string;
   providers: ClaudeRouterProviderView[];
+  runtimeMismatch?: boolean;
   serviceRunning: boolean;
   version?: string;
 }

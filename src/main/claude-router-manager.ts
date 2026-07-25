@@ -43,6 +43,7 @@ const SERVICE_WAIT_MS = 20_000;
 
 interface CcrCliInstallation {
   cliPath: string;
+  nodeExecutable?: string;
   version: string;
 }
 
@@ -148,9 +149,81 @@ const safeMessage = (error: unknown, secrets: string[] = []): string => {
   return message
     .replace(/sk-[A-Za-z0-9_-]{8,}/gi, '[已隐藏]')
     .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer [已隐藏]')
+    .replace(/ccr_web_token=[A-Za-z0-9_-]+/gi, 'ccr_web_token=[已隐藏]')
     .replace(/\s+/g, ' ')
     .slice(0, 300);
 };
+
+const routerNativeModuleMismatch = (
+  error: unknown,
+): { compiledAbi?: string; requiredAbi?: string } | undefined => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    !/compiled against a different Node\.js version|NODE_MODULE_VERSION/i.test(message) ||
+    !/better[-_]?sqlite3|better_sqlite3/i.test(message)
+  ) {
+    return undefined;
+  }
+  const match =
+    /NODE_MODULE_VERSION\s+(\d+)[\s\S]{0,400}?requires\s+NODE_MODULE_VERSION\s+(\d+)/i.exec(
+      message,
+    );
+  return {
+    compiledAbi: match?.[1],
+    requiredAbi: match?.[2],
+  };
+};
+
+export const routerNativeModuleErrorMessage = (error: unknown): string | undefined => {
+  const mismatch = routerNativeModuleMismatch(error);
+  if (!mismatch) {
+    return undefined;
+  }
+  const abiDetail =
+    mismatch.compiledAbi && mismatch.requiredAbi
+      ? `（原生模块 ABI ${mismatch.compiledAbi}，当前运行时 ABI ${mismatch.requiredAbi}）`
+      : '';
+  return `Router 的 Node.js 运行环境不匹配${abiDetail}。点击“修复运行环境并重启”，ClaudeDock 会改用 CCR 安装时配套的系统 Node；不会重编译数据库，也不会修改 Provider 或 Codex。`;
+};
+
+export const routerServiceRunsInAppRuntime = (
+  serviceImageName: string,
+  appExecutable: string,
+): boolean => {
+  const serviceImage = path.basename(serviceImageName).toLowerCase();
+  const appImage = path.basename(appExecutable).toLowerCase();
+  return (
+    Boolean(serviceImage) &&
+    Boolean(appImage) &&
+    appImage !== 'node.exe' &&
+    serviceImage === appImage
+  );
+};
+
+export const tasklistImageNames = (bytes: Uint8Array): string[] => {
+  const imageNames = new Set<string>();
+  for (const encoding of ['utf-8', 'gb18030']) {
+    try {
+      const output = new TextDecoder(encoding).decode(bytes).trim();
+      const imageMatch = /^"((?:""|[^"])*)"/.exec(output);
+      const imageName = imageMatch?.[1]?.replaceAll('""', '"').trim();
+      if (imageName) {
+        imageNames.add(imageName);
+      }
+    } catch {
+      // Try the other Windows console encoding.
+    }
+  }
+  return [...imageNames];
+};
+
+export const routerCliStartSpec = (
+  nodeExecutable: string,
+  cliPath: string,
+): { args: string[]; executable: string } => ({
+  args: [cliPath, 'start', '--no-open', '--gateway'],
+  executable: nodeExecutable,
+});
 
 export const routerGatewayErrorMessage = (providerCount: number, lastError?: string): string => {
   if (
@@ -299,7 +372,7 @@ const providerView = (
     id: id || `provider-${index + 1}`,
     models: providerModels(provider),
     name,
-    preferred: preferredProvider === name,
+    preferred: preferredProvider === name || preferredProvider === id,
     protocol: providerProtocol(provider),
   };
 };
@@ -401,7 +474,10 @@ export const buildUpdatedRouterConfig = (
   if (
     input.makePreferred ||
     !optionalString(config.preferredProvider) ||
-    (previous && optionalString(config.preferredProvider) === optionalString(previous.name))
+    (previous &&
+      [optionalString(previous.name), optionalString(previous.id)].includes(
+        optionalString(config.preferredProvider),
+      ))
   ) {
     config.preferredProvider = input.name;
   }
@@ -422,7 +498,11 @@ export const buildDeletedRouterConfig = (
     throw new Error('要删除的 Provider 已不存在。');
   }
   config.Providers = providers.filter((provider) => optionalString(provider.id) !== providerId);
-  if (optionalString(config.preferredProvider) === optionalString(removed.name)) {
+  if (
+    [optionalString(removed.name), optionalString(removed.id)].includes(
+      optionalString(config.preferredProvider),
+    )
+  ) {
     config.preferredProvider = optionalString(providerRecords(config)[0]?.name) ?? '';
   }
   return config;
@@ -512,6 +592,7 @@ const versionMajor = (version: string | undefined): number | undefined => {
 
 export class ClaudeRouterManager {
   private readonly installerDirectory: string;
+  private serviceRuntimeCache?: { pid: number; usesAppRuntime: boolean };
 
   public constructor(userDataPath: string) {
     this.installerDirectory = path.join(userDataPath, 'claude', 'router-installers');
@@ -526,7 +607,8 @@ export class ClaudeRouterManager {
     const access = await this.getActiveServiceAccess();
     if (!access) {
       const installed = Boolean(cli || desktop);
-      const manageable = installed && (!cli?.version || (versionMajor(cli.version) ?? 0) >= 3);
+      const cliManageable = Boolean(cli?.nodeExecutable && (versionMajor(cli.version) ?? 0) >= 3);
+      const manageable = Boolean(desktop || cliManageable);
       return {
         checkedAt,
         endpoint: 'http://127.0.0.1:3456',
@@ -537,11 +619,30 @@ export class ClaudeRouterManager {
         message: installed
           ? manageable
             ? 'Claude Code Router 已安装，但管理服务当前未运行。'
-            : '检测到旧版 Router；请安装或升级到 3.x 后使用可视化管理。'
+            : cli && (versionMajor(cli.version) ?? 0) >= 3
+              ? '检测到 CCR 3.x，但没有找到能加载其 better-sqlite3 的系统 Node.js；请安装或更新官方版 Router。'
+              : '检测到旧版 Router；请安装或升级到 3.x 后使用可视化管理。'
           : '尚未检测到 Claude Code Router，可下载并启动官方 Windows 安装程序。',
         providers: [],
         serviceRunning: false,
         version: cli?.version,
+      };
+    }
+
+    if (cli?.nodeExecutable && (await this.serviceUsesAppRuntime(access))) {
+      return {
+        checkedAt,
+        endpoint: 'http://127.0.0.1:3456',
+        gatewayState: 'unknown',
+        installed: true,
+        manageable: true,
+        managementAvailable: false,
+        message:
+          '检测到 CCR 正由 ClaudeDock 的 Electron 内置 Node 运行，可能把 Provider 误报为空并触发 better-sqlite3 ABI 错误。点击“修复运行环境并重启”；数据库、Provider 和 Codex 都不会被修改。',
+        providers: [],
+        runtimeMismatch: true,
+        serviceRunning: true,
+        version: cli.version,
       };
     }
 
@@ -572,15 +673,17 @@ export class ClaudeRouterManager {
         version: optionalString(appInfo.version) ?? cli?.version,
       };
     } catch (error) {
+      const nativeModuleMessage = routerNativeModuleErrorMessage(error);
       return {
         checkedAt,
         endpoint: 'http://127.0.0.1:3456',
         gatewayState: 'unknown',
         installed: true,
-        manageable: false,
+        manageable: Boolean(nativeModuleMessage && cli?.nodeExecutable),
         managementAvailable: false,
-        message: `CCR 管理服务响应异常：${safeMessage(error)}`,
+        message: nativeModuleMessage ?? `CCR 管理服务响应异常：${safeMessage(error)}`,
         providers: [],
+        runtimeMismatch: Boolean(nativeModuleMessage),
         serviceRunning: true,
         version: cli?.version,
       };
@@ -588,24 +691,29 @@ export class ClaudeRouterManager {
   }
 
   public async start(): Promise<ClaudeRouterManagementState> {
+    const cli = await this.findCliInstallation();
     const existing = await this.getActiveServiceAccess();
     if (existing) {
-      await this.rpcWithAccess(existing, 'startGateway');
+      if (cli?.nodeExecutable && (await this.serviceUsesAppRuntime(existing))) {
+        await this.restartCliService(cli, existing);
+        return this.getState();
+      }
+      try {
+        await this.rpcWithAccess(existing, 'startGateway');
+      } catch (error) {
+        if (!routerNativeModuleMismatch(error) || !cli?.nodeExecutable) {
+          throw error;
+        }
+        await this.restartCliService(cli, existing);
+      }
       return this.getState();
     }
 
-    const cli = await this.findCliInstallation();
     if (cli) {
       if ((versionMajor(cli.version) ?? 0) < 3) {
         throw new Error('一键管理要求 Claude Code Router 3.x，请先升级。');
       }
-      await execFileAsync(process.execPath, [cli.cliPath, 'start', '--no-open', '--gateway'], {
-        encoding: 'utf8',
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-        maxBuffer: 1024 * 1024,
-        timeout: 30_000,
-        windowsHide: true,
-      });
+      await this.startCliService(cli);
     } else {
       const desktop = this.findDesktopExecutable();
       if (!desktop) {
@@ -801,13 +909,171 @@ export class ClaudeRouterManager {
         const parsed = readJsonFile(packageFile) as Record<string, unknown>;
         const version = optionalString(parsed.version);
         if (version && /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(version)) {
-          return { cliPath, version };
+          return {
+            cliPath,
+            nodeExecutable: await this.findCompatibleNodeExecutable(directory, packageRoot),
+            version,
+          };
         }
       } catch {
         // Try the next installation candidate.
       }
     }
     return undefined;
+  }
+
+  private async findCompatibleNodeExecutable(
+    installationDirectory: string,
+    packageRoot: string,
+  ): Promise<string | undefined> {
+    const candidates = new Set<string>();
+    const localNode = path.join(installationDirectory, 'node.exe');
+    if (existsSync(localNode)) {
+      candidates.add(localNode);
+    }
+    try {
+      const result = await execFileAsync('where.exe', ['node'], {
+        encoding: 'utf8',
+        timeout: 3_000,
+        windowsHide: true,
+      });
+      for (const line of result.stdout.split(/\r?\n/)) {
+        const candidate = line.trim();
+        if (
+          candidate &&
+          path.isAbsolute(candidate) &&
+          path.basename(candidate).toLowerCase() === 'node.exe' &&
+          existsSync(candidate)
+        ) {
+          candidates.add(candidate);
+        }
+      }
+    } catch {
+      // A local Node next to the npm prefix may still be available.
+    }
+    if (
+      path.basename(process.execPath).toLowerCase() === 'node.exe' &&
+      existsSync(process.execPath)
+    ) {
+      candidates.add(process.execPath);
+    }
+
+    const nativeBinding = path.join(
+      packageRoot,
+      'node_modules',
+      'better-sqlite3',
+      'build',
+      'Release',
+      'better_sqlite3.node',
+    );
+    for (const candidate of candidates) {
+      try {
+        const args = existsSync(nativeBinding)
+          ? [
+              '-e',
+              'require(process.argv[1]); process.stdout.write(process.versions.modules || "")',
+              nativeBinding,
+            ]
+          : ['-e', 'process.stdout.write(process.versions.modules || "")'];
+        await execFileAsync(candidate, args, {
+          encoding: 'utf8',
+          maxBuffer: 64 * 1024,
+          timeout: 5_000,
+          windowsHide: true,
+        });
+        return candidate;
+      } catch {
+        // Try another installed Node runtime.
+      }
+    }
+    return undefined;
+  }
+
+  private nodeEnvironment(): NodeJS.ProcessEnv {
+    const environment = { ...process.env };
+    delete environment.ELECTRON_RUN_AS_NODE;
+    return environment;
+  }
+
+  private async serviceUsesAppRuntime(access: CcrServiceAccess): Promise<boolean> {
+    if (this.serviceRuntimeCache?.pid === access.pid) {
+      return this.serviceRuntimeCache.usesAppRuntime;
+    }
+    let usesAppRuntime: boolean;
+    try {
+      const result = await execFileAsync(
+        'tasklist.exe',
+        ['/FI', `PID eq ${access.pid}`, '/FO', 'CSV', '/NH'],
+        {
+          encoding: 'buffer',
+          maxBuffer: 64 * 1024,
+          timeout: 3_000,
+          windowsHide: true,
+        },
+      );
+      const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
+      usesAppRuntime = tasklistImageNames(bytes).some((imageName) =>
+        routerServiceRunsInAppRuntime(imageName, process.execPath),
+      );
+    } catch {
+      usesAppRuntime = false;
+    }
+    this.serviceRuntimeCache = { pid: access.pid, usesAppRuntime };
+    return usesAppRuntime;
+  }
+
+  private async startCliService(cli: CcrCliInstallation): Promise<void> {
+    if (!cli.nodeExecutable) {
+      throw new Error(
+        'CCR 已安装，但没有找到能加载 better-sqlite3 的系统 Node.js；请安装或更新官方版 Router。',
+      );
+    }
+    const command = routerCliStartSpec(cli.nodeExecutable, cli.cliPath);
+    await execFileAsync(command.executable, command.args, {
+      encoding: 'utf8',
+      env: this.nodeEnvironment(),
+      maxBuffer: 1024 * 1024,
+      timeout: 30_000,
+      windowsHide: true,
+    });
+  }
+
+  private async restartCliService(
+    cli: CcrCliInstallation,
+    access: CcrServiceAccess,
+  ): Promise<void> {
+    if (!cli.nodeExecutable) {
+      throw new Error('没有找到与 CCR 原生模块兼容的系统 Node.js。');
+    }
+    if (access.pid === process.pid) {
+      throw new Error('拒绝终止 ClaudeDock 主进程；请彻底退出旧版后重新打开。');
+    }
+    try {
+      process.kill(access.pid, 'SIGTERM');
+    } catch (error) {
+      if (!isRecord(error) || (error.code !== 'ESRCH' && error.code !== 'EINVAL')) {
+        throw error;
+      }
+    }
+    const stoppedAt = Date.now();
+    while (Date.now() - stoppedAt < 10_000 && this.processIsRunning(access.pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this.processIsRunning(access.pid)) {
+      throw new Error('旧 CCR 服务没有在 10 秒内退出，请彻底退出旧版 ClaudeDock 后重试。');
+    }
+    this.serviceRuntimeCache = undefined;
+    await this.startCliService(cli);
+    await this.waitForActiveService();
+  }
+
+  private processIsRunning(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return isRecord(error) && error.code === 'EPERM';
+    }
   }
 
   private findDesktopExecutable(): string | undefined {

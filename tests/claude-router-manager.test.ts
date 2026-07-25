@@ -5,8 +5,12 @@ import {
   buildUpdatedRouterConfig,
   normalizeRouterProviderInput,
   parseRouterInstallerRelease,
+  routerCliStartSpec,
   routerGatewayErrorMessage,
+  routerNativeModuleErrorMessage,
+  routerServiceRunsInAppRuntime,
   sanitizeRouterConfig,
+  tasklistImageNames,
 } from '../src/main/claude-router-manager';
 
 const providerInput: SaveClaudeRouterProviderInput = {
@@ -126,6 +130,30 @@ describe('Claude Code Router management', () => {
     expect(updated.config.profile).toEqual(baseConfig.profile);
   });
 
+  it('recognizes and migrates a legacy preferred Provider ID to its current name', () => {
+    const legacyConfig = {
+      ...baseConfig,
+      Providers: [
+        {
+          ...(baseConfig.Providers[0] as Record<string, unknown>),
+          id: 'legacy-provider-id',
+          name: 'renamed-provider',
+        },
+      ],
+      preferredProvider: 'legacy-provider-id',
+    };
+
+    expect(sanitizeRouterConfig(legacyConfig)[0]?.preferred).toBe(true);
+    const updated = buildUpdatedRouterConfig(legacyConfig, {
+      ...providerInput,
+      apiKey: undefined,
+      credentialAction: 'keep',
+      id: 'legacy-provider-id',
+      name: 'renamed-provider',
+    });
+    expect(updated.config.preferredProvider).toBe('renamed-provider');
+  });
+
   it('deletes only the selected provider and leaves Codex configuration untouched', () => {
     const withSecond = buildUpdatedRouterConfig(baseConfig, providerInput).config;
     const deleted = buildDeletedRouterConfig(withSecond, 'existing');
@@ -174,5 +202,63 @@ describe('Claude Code Router management', () => {
     expect(message).toContain('还没有配置 Provider 和模型');
     expect(message).toContain('解决办法');
     expect(message).not.toContain('No available models');
+  });
+
+  it('launches the CCR CLI with its compatible system Node instead of Electron', () => {
+    expect(
+      routerCliStartSpec(
+        'D:\\Program Files\\nodejs\\node.exe',
+        'D:\\ClaudeCode\\node_modules\\@musistudio\\claude-code-router\\dist\\main\\cli.js',
+      ),
+    ).toEqual({
+      args: [
+        'D:\\ClaudeCode\\node_modules\\@musistudio\\claude-code-router\\dist\\main\\cli.js',
+        'start',
+        '--no-open',
+        '--gateway',
+      ],
+      executable: 'D:\\Program Files\\nodejs\\node.exe',
+    });
+  });
+
+  it('turns a better-sqlite3 ABI mismatch into a safe repair instruction', () => {
+    const message = routerNativeModuleErrorMessage(
+      new Error(
+        "The module 'D:\\ClaudeCode\\better_sqlite3.node' was compiled against a different Node.js version using NODE_MODULE_VERSION 137. This version of Node.js requires NODE_MODULE_VERSION 148.",
+      ),
+    );
+
+    expect(message).toContain('原生模块 ABI 137');
+    expect(message).toContain('当前运行时 ABI 148');
+    expect(message).toContain('修复运行环境并重启');
+    expect(message).toContain('不会修改 Provider 或 Codex');
+    expect(message).not.toContain('D:\\ClaudeCode');
+  });
+
+  it('detects a CCR daemon incorrectly hosted by the ClaudeDock Electron executable', () => {
+    expect(
+      routerServiceRunsInAppRuntime(
+        'ClaudeDock 控制面板.exe',
+        'D:\\Program Files\\claude-dock-control-panel\\ClaudeDock 控制面板.exe',
+      ),
+    ).toBe(true);
+    expect(
+      routerServiceRunsInAppRuntime(
+        'node.exe',
+        'D:\\Program Files\\claude-dock-control-panel\\ClaudeDock 控制面板.exe',
+      ),
+    ).toBe(false);
+    expect(routerServiceRunsInAppRuntime('node.exe', 'D:\\Program Files\\nodejs\\node.exe')).toBe(
+      false,
+    );
+  });
+
+  it('decodes a Chinese tasklist image name from the Windows GB18030 code page', () => {
+    const tasklistBytes = Buffer.from(
+      '22436c61756465446f636b20bfd8d6c6c3e6b0e52e657865222c2231323334222c22436f6e736f6c65222c2231222c22312c303030204b22',
+      'hex',
+    );
+
+    expect(tasklistImageNames(tasklistBytes)).toContain('ClaudeDock 控制面板.exe');
   });
 });

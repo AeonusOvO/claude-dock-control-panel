@@ -113,6 +113,11 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 
 - `ClaudeRouterManager` 支持 Claude Code Router 3.x。它优先从 `where.exe ccr` 与标准 npm
   全局目录定位 CLI，也识别官方桌面版的标准 Windows 安装位置；不遍历磁盘或猜测任意程序。
+- npm 版 CCR 必须由其安装环境中的系统 Node 运行。ClaudeDock 会从 npm 前缀旁和
+  `where.exe node` 的结果中选择绝对 `node.exe`，并用一次不访问数据库的原生绑定加载探针
+  验证它可以加载 CCR 的 `better_sqlite3.node`。禁止再用 Electron 的 `process.execPath`
+  加 `ELECTRON_RUN_AS_NODE` 启动 CCR，因为 Electron 与系统 Node 可能具有不同的
+  `NODE_MODULE_VERSION`。
 - 正在运行的 CCR 会在 `%APPDATA%/claude-code-router/service.json` 记录本机管理端点、
   Web token 与 service token。主进程只接受 `http://localhost|127.0.0.1|::1` 回环地址，
   校验 service identity 后调用 `POST /api/ccr/rpc`；token 和原始配置永不跨 IPC。
@@ -124,6 +129,9 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
   媒体能力、Codex/Claude profile 与 proxy 原样保留；删除也只移除目标 Provider。项目不会
   调用 CCR 的 profile 应用或系统代理方法，因此不会修改 Codex、Claude Code 全局设置或
   Windows 系统代理。
+- CCR 3.x 运行期按 Provider 名称解析 `preferredProvider`。兼容读取时同时接受旧配置中的
+  Provider ID，以便正确显示首选状态；编辑、设为首选或删除时会把该字段规范化为当前
+  Provider 名称。
 - Provider 名称和模型路由只接受可安全组成 `provider/model` 的字符；远程上游必须为
   HTTPS，本机回环地址允许 HTTP，URL 禁止用户信息、查询参数和片段。Provider 密钥不会
   回显，编辑时可显式保留原值。
@@ -136,6 +144,16 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
   Bearer、无认证、已有 Provider 或项目已指向 `3456` 时拒绝自动复制并引导手动配置。
 - CCR 返回 `No available models` 或 Provider 列表为空时，主进程将其映射为中文原因和
   下一步，不向 renderer 透传英文错误；其他错误在显示前会净化 Bearer 与 `sk-` 形态。
+- 如果现有 3458 管理服务返回 `better-sqlite3` ABI 不匹配，状态会携带
+  `runtimeMismatch` 并显示编译/运行时 ABI。用户点击修复后，主进程仅在错误模式明确匹配时
+  终止 `service.json` 中已通过 service token/identity 校验的单一 PID，等待它退出，再用
+  兼容系统 Node 执行 `start --no-open --gateway`；不会按映像名批量杀进程，数据库、
+  Provider、CCR profile 和 Codex 均不改写。`ccr_web_token` 也会在错误净化时隐藏。
+- 部分错误服务在真正访问 SQLite 前会先返回空配置。为避免再次误报“No available
+  models”，主进程还会用 `tasklist.exe` 按 service PID 核对进程映像；只有映像名与当前
+  ClaudeDock/Electron 可执行文件完全相同时才提前标记 `runtimeMismatch`，官方 CCR 桌面
+  进程和系统 `node.exe` 不受影响。`tasklist` 原始字节同时尝试 UTF-8 与 Windows
+  GB18030 解码，以覆盖中文产品名；结果按 PID 缓存，避免轮询重复创建进程。
 - 启动操作优先复用现有管理服务并调用 `startGateway`；服务未运行时用检测到的官方 CLI
   或桌面程序启动。停止只调用 `stopGateway`，保留管理服务，便于继续编辑 Provider。
 - 一键安装从 `api.github.com/repos/musistudio/claude-code-router/releases/latest` 读取
@@ -302,6 +320,10 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://github.com/musistudio/claude-code-router/releases>
 - Claude Code Router 基础配置：
   <https://musistudio.github.io/claude-code-router/docs/cli/config/basic/>
+- Node.js 原生模块 ABI（`process.versions.modules`）：
+  <https://nodejs.org/api/process.html#processversions>
+- `better-sqlite3` 原生模块与 Electron 故障排查：
+  <https://github.com/WiseLibs/better-sqlite3/blob/master/docs/troubleshooting.md>
 - Anthropic 地区限制更新（2025-09-04）：
   <https://www.anthropic.com/news/updating-restrictions-of-sales-to-unsupported-regions>
 - Anthropic 当前支持地区：
