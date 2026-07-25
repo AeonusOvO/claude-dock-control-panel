@@ -1,6 +1,9 @@
 * text=auto
 
+.editorconfig text eol=lf
 .gitattributes text eol=lf
+.gitignore text eol=lf
+.prettierignore text eol=lf
 *.css text eol=lf
 *.html text eol=lf
 *.json text eol=lf

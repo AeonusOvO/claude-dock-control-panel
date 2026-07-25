@@ -48,7 +48,8 @@ Electron Main ── TerminalSession ── node-pty ── Windows PowerShell /
 - `npm run typecheck`：分别检查渲染端和主进程类型。
 - `npm test`：运行纯函数和目录校验单元测试。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
-- `npm run dist`：构建 Windows x64 NSIS 安装包。
+- `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
+  将最终安装程序复制到项目根目录。
 
 CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不发布安装包。
 

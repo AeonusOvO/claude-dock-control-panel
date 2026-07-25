@@ -5,6 +5,7 @@ coverage/
 .vite/
 *.log
 *.pdb
+/ClaudeDock-Setup-*.exe
 
 .env
 .env.*
@@ -16,4 +17,3 @@ work/
 
 .DS_Store
 Thumbs.db
-

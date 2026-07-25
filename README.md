@@ -35,7 +35,8 @@ npm run build
 npm run dist
 ```
 
-`npm run dist` 在 `release/` 生成 Windows x64 安装程序。
+`npm run dist` 在 `release/` 完成 Windows x64 打包，并把最终安装程序
+`ClaudeDock-Setup-<version>-x64.exe` 发布到项目根目录。
 
 ## 日常使用
 
@@ -59,6 +60,7 @@ src/renderer/        控制面板界面与 xterm.js 终端
 src/shared/          跨进程类型和纯函数
 tests/               单元测试
 outputs/             本地交付物，不纳入 Git
+ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
 ```
 
 ## 安全与限制
