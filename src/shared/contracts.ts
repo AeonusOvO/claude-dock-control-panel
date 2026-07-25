@@ -7,6 +7,8 @@ export type ClaudeProvider = 'anthropic' | 'gateway';
 export type ClaudeSecurityStatus =
   'blocked-version' | 'not-installed' | 'ready' | 'update-required' | 'unknown';
 export type ClaudeConnectionTestTone = 'error' | 'success' | 'warning';
+export type ClaudeRouteHealthSource = 'connection-test' | 'router' | 'runtime';
+export type ClaudeRouteHealthTone = 'error' | 'success' | 'warning';
 export type ClaudeEndpointProtocol = 'anthropic' | 'openai' | 'unknown';
 export type GatewayCandidateKind = 'claude-code-router' | 'custom' | 'litellm';
 export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
@@ -59,6 +61,15 @@ export interface ClaudeMetrics {
   sessionName?: string;
 }
 
+export interface ClaudeRouteHealth {
+  blocking: boolean;
+  checkedAt: number;
+  detail: string;
+  headline: string;
+  source: ClaudeRouteHealthSource;
+  tone: ClaudeRouteHealthTone;
+}
+
 export interface ClaudeProjectState {
   active: boolean;
   config: ClaudeConfigView;
@@ -67,6 +78,7 @@ export interface ClaudeProjectState {
   installation: ClaudeInstallationStatus;
   metrics?: ClaudeMetrics;
   modelMatches?: boolean;
+  routeHealth?: ClaudeRouteHealth;
   sessionId: string;
   warning?: string;
 }

@@ -110,6 +110,11 @@ const projectCount = requiredElement<HTMLElement>('#project-count');
 const projectList = requiredElement<HTMLElement>('#project-list');
 const restartButton = requiredElement<HTMLButtonElement>('#restart-terminal');
 const refreshGatewaysButton = requiredElement<HTMLButtonElement>('#refresh-gateways');
+const routeHealth = requiredElement<HTMLElement>('#route-health');
+const routeHealthAction = requiredElement<HTMLButtonElement>('#route-health-action');
+const routeHealthBadge = requiredElement<HTMLElement>('#route-health-badge');
+const routeHealthDetail = requiredElement<HTMLElement>('#route-health-detail');
+const routeHealthTitle = requiredElement<HTMLElement>('#route-health-title');
 const runClaudeButton = requiredElement<HTMLButtonElement>('#run-claude');
 const routerProviderApiKey = requiredElement<HTMLInputElement>('#router-provider-api-key');
 const routerProviderBaseUrl = requiredElement<HTMLInputElement>('#router-provider-base-url');
@@ -158,6 +163,7 @@ let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
 let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
 let launchInProgress = false;
+const routeHealthNotifications = new Map<string, string>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerOperationInProgress = false;
 let routerRefreshInProgress = false;
@@ -396,6 +402,33 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
         : '使用官方 API Key 与默认端点'
       : config.baseUrl;
 
+  const health = state.routeHealth;
+  routeHealth.hidden = !health;
+  if (health) {
+    routeHealth.dataset.tone = health.tone;
+    routeHealthBadge.textContent =
+      health.source === 'runtime'
+        ? '真实会话'
+        : health.source === 'router'
+          ? 'Router 状态'
+          : '连接测试';
+    routeHealthTitle.textContent = health.headline;
+    routeHealthDetail.textContent = health.detail;
+    routeHealthAction.hidden = health.tone === 'success';
+    const notificationKey = `${health.source}:${health.tone}:${health.checkedAt}`;
+    if (
+      health.tone === 'error' &&
+      routeHealthNotifications.get(state.sessionId) !== notificationKey
+    ) {
+      routeHealthNotifications.set(state.sessionId, notificationKey);
+      if (!launchInProgress) {
+        showToast(health.headline, 'error');
+      }
+    }
+  }
+  runClaudeButton.dataset.routeHealth = health?.tone ?? 'unknown';
+  runClaudeButton.title = health?.detail ?? '';
+
   claudeLiveIndicator.dataset.active = String(state.active);
   claudeLiveIndicator.textContent = state.active ? '实时同步' : '未运行';
   const used = metrics?.contextWindowUsed;
@@ -428,7 +461,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   claudeRuntimeWarning.hidden = !state.warning;
   claudeRuntimeWarning.textContent = state.warning ?? '';
   for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
-    button.disabled = launchInProgress || !installationReady;
+    button.disabled = launchInProgress || !installationReady || Boolean(health?.blocking);
   }
 
   if (configFormSessionId !== state.sessionId) {
@@ -1033,9 +1066,12 @@ const runConnectionTest = async (): Promise<void> => {
   testClaudeConnectionButton.disabled = true;
   testClaudeConnectionButton.textContent = '正在发送 1-token 测试…';
   try {
-    renderConnectionTest(
-      await window.controlPanel.testClaudeConnection(status.id, currentConfigInput('keep')),
+    const result = await window.controlPanel.testClaudeConnection(
+      status.id,
+      currentConfigInput('keep'),
     );
+    renderConnectionTest(result);
+    void loadClaudeState(status.id);
   } catch {
     showToast('连接测试发生异常。', 'error');
   } finally {
@@ -1453,6 +1489,11 @@ dropZone.addEventListener('click', () => {
 runClaudeButton.addEventListener('click', () => {
   setWorkbenchOpen(true);
   selectWorkbenchPage('session');
+});
+routeHealthAction.addEventListener('click', () => {
+  selectWorkbenchPage('connection');
+  void loadGatewayDiagnostics();
+  void loadRouterManagement();
 });
 workbenchTrigger.addEventListener('click', () => {
   setWorkbenchOpen(!claudeWorkbench.classList.contains('claude-workbench--open'));

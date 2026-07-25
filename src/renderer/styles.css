@@ -1052,6 +1052,84 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+.route-health {
+  background: rgb(255 214 107 / 5%);
+  border: 1px solid rgb(255 214 107 / 22%);
+  border-radius: 11px;
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px;
+}
+
+.route-health[hidden] {
+  display: none;
+}
+
+.route-health[data-tone='error'] {
+  background: rgb(255 107 122 / 7%);
+  border-color: rgb(255 107 122 / 28%);
+}
+
+.route-health[data-tone='success'] {
+  background: rgb(81 230 166 / 5%);
+  border-color: rgb(81 230 166 / 22%);
+}
+
+.route-health__heading {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.route-health__heading > span {
+  background: rgb(255 214 107 / 10%);
+  border-radius: 999px;
+  color: #e8c86f;
+  flex: 0 0 auto;
+  font-size: 7px;
+  padding: 3px 6px;
+}
+
+.route-health[data-tone='error'] .route-health__heading > span {
+  background: rgb(255 107 122 / 11%);
+  color: #ff929c;
+}
+
+.route-health[data-tone='success'] .route-health__heading > span {
+  background: rgb(81 230 166 / 10%);
+  color: #68dcae;
+}
+
+.route-health__heading > strong {
+  color: #dbe8ec;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.route-health > p {
+  color: #7b8d95;
+  font-size: 8px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.route-health > button {
+  background: transparent;
+  border: 1px solid #364852;
+  border-radius: 7px;
+  color: #a9c0c8;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 7.5px;
+  min-height: 27px;
+}
+
+.route-health[data-tone='error'] > button {
+  border-color: rgb(255 107 122 / 30%);
+  color: #ffabb2;
+}
+
 .context-card__heading {
   align-items: flex-start;
   display: flex;

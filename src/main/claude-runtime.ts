@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -9,6 +10,7 @@ import type {
   ClaudeLaunchMode,
   ClaudeMetrics,
   ClaudeProjectState,
+  ClaudeRouteHealth,
   ClaudeRouterManagementState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -16,10 +18,12 @@ import type {
 import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
+  buildClaudeSettingsEnvironment,
   buildStatusLineCommand,
   evaluateClaudeInstallation,
   normalizeClaudeConfig,
   type ClaudeEnvironmentOverrides,
+  type NormalizedClaudeConfig,
 } from './claude-configuration';
 import { testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
@@ -33,12 +37,23 @@ import {
 interface RuntimeSession {
   active: boolean;
   cwd: string;
+  diagnosticBuffer: string;
   exitMarker?: string;
   expectedModel?: string;
+  lastApiError?: {
+    detectedAt: number;
+    detail: string;
+  };
+  launchedConfigFingerprint?: string;
   markerRemainder: string;
   metrics?: ClaudeMetrics;
   metricsPath?: string;
   sessionId: string;
+}
+
+interface ConnectionCheckRecord {
+  fingerprint: string;
+  result: ClaudeConnectionTestResult;
 }
 
 export interface PreparedClaudeLaunch {
@@ -50,6 +65,8 @@ export interface PreparedClaudeLaunch {
 const execFileAsync = promisify(execFile);
 const INSTALLATION_CACHE_MS = 30_000;
 const METRICS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const ROUTER_HEALTH_CACHE_MS = 3_000;
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 
 const noInstallation = (message: string): ClaudeInstallationStatus => ({
   installed: false,
@@ -62,6 +79,92 @@ const optionalFiniteNumber = (value: unknown): number | undefined =>
 
 const optionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length <= 1000 ? value : undefined;
+
+const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+
+const credentialDigest = (credential?: string): string =>
+  createHash('sha256')
+    .update(credential ?? '')
+    .digest('hex');
+
+const connectionFingerprint = (config: NormalizedClaudeConfig, credential?: string): string =>
+  JSON.stringify({
+    authMode: config.authMode,
+    baseUrl: config.baseUrl,
+    credentialDigest: credentialDigest(credential),
+    model: config.model,
+    preset: config.preset,
+    provider: config.provider,
+  });
+
+export const usesDefaultClaudeRouter = (config: NormalizedClaudeConfig): boolean => {
+  if (config.provider !== 'gateway' || !config.baseUrl) {
+    return false;
+  }
+  try {
+    const parsed = new URL(config.baseUrl);
+    const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    return (
+      parsed.protocol === 'http:' &&
+      LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase()) &&
+      port === 3456
+    );
+  } catch {
+    return false;
+  }
+};
+
+const normalizedRuntimeError = (value: string): string => {
+  const compact = value
+    .replace(/sk-[A-Za-z0-9_-]{8,}/gi, '[已隐藏]')
+    .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer [已隐藏]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 260);
+  if (/ConnectionRefused/i.test(compact)) {
+    return 'Claude Code 无法连接到当前 API 地址（ConnectionRefused）。端点可能已停止、被代理拒绝，或保存后的路由已经变化。';
+  }
+  if (/\b(?:401|403)\b|unauthori[sz]ed|invalid (?:api )?key|authentication/i.test(compact)) {
+    return 'Claude Code 的真实会话被接口拒绝认证。请重新核对认证方式与当前保存的密钥。';
+  }
+  if (/\b404\b|not found/i.test(compact)) {
+    return 'Claude Code 没有找到 Messages 接口；请确认当前基址最终提供 /v1/messages。';
+  }
+  if (/model.+(?:not found|invalid|unsupported)|unknown model/i.test(compact)) {
+    return 'Claude Code 的真实会话未被当前模型接受；请核对最终接口中的模型 ID。';
+  }
+  return compact ? `Claude Code 返回 API 错误：${compact}` : 'Claude Code 的真实会话请求失败。';
+};
+
+export const parseClaudeRuntimeApiError = (value: string): string | undefined => {
+  const withoutAnsi = value
+    .replace(
+      // ANSI CSI / OSC control sequences emitted by the terminal renderer.
+      // eslint-disable-next-line no-control-regex
+      /\u001B(?:\][^\u0007]*(?:\u0007|\u001B\\)|\[[0-?]*[ -/]*[@-~])/g,
+      '',
+    )
+    .replace(/\r/g, '\n');
+  const matches = [...withoutAnsi.matchAll(/API Error:\s*([^\n]{1,500})/gi)];
+  const latest = matches.at(-1)?.[1];
+  return latest ? normalizedRuntimeError(latest) : undefined;
+};
+
+export const routerBlockingDetail = (
+  config: NormalizedClaudeConfig,
+  router: ClaudeRouterManagementState,
+): string | undefined => {
+  if (!usesDefaultClaudeRouter(config)) {
+    return undefined;
+  }
+  if (router.providers.length === 0) {
+    return '当前项目指向 Router 的 3456 接口，但 CCR 没有任何 Provider/模型。请先在“接入”页添加 Provider。';
+  }
+  if (router.gatewayState !== 'running') {
+    return `当前项目指向 Router 的 3456 接口，但模型网关未就绪：${router.message}`;
+  }
+  return undefined;
+};
 
 export const parseClaudeMetrics = (raw: string): ClaudeMetrics | undefined => {
   try {
@@ -119,7 +222,9 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
 
 export class ClaudeRuntime {
   private cachedInstallation?: { checkedAt: number; value: ClaudeInstallationStatus };
+  private cachedRouterHealth?: { checkedAt: number; value: ClaudeRouterManagementState };
   private readonly configStore: ClaudeConfigStore;
+  private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   private readonly gatewayDetector = new ClaudeGatewayDetector();
   private readonly metricsTimer: NodeJS.Timeout;
   private readonly routerManager: ClaudeRouterManager;
@@ -150,6 +255,16 @@ export class ClaudeRuntime {
       return data;
     }
 
+    runtime.diagnosticBuffer = `${runtime.diagnosticBuffer}${data}`.slice(-4_000);
+    const detectedError = parseClaudeRuntimeApiError(runtime.diagnosticBuffer);
+    if (detectedError && detectedError !== runtime.lastApiError?.detail) {
+      runtime.lastApiError = {
+        detail: detectedError,
+        detectedAt: Date.now(),
+      };
+      void this.emitState(runtime);
+    }
+
     let combined = runtime.markerRemainder + data;
     runtime.markerRemainder = '';
     if (combined.includes(runtime.exitMarker)) {
@@ -174,6 +289,7 @@ export class ClaudeRuntime {
     const runtime = this.ensureSession(sessionId, cwd);
     const installation = await this.diagnoseInstallation();
     const matches = modelMatches(runtime.expectedModel, runtime.metrics?.modelId);
+    const config = this.configStore.getConfig(cwd);
     return {
       active: runtime.active,
       config: this.configStore.getView(cwd),
@@ -182,6 +298,7 @@ export class ClaudeRuntime {
       installation,
       metrics: runtime.metrics,
       modelMatches: matches,
+      routeHealth: await this.getRouteHealth(runtime, config),
       sessionId,
       warning: matches
         ? undefined
@@ -205,20 +322,26 @@ export class ClaudeRuntime {
     return this.routerManager.downloadLatestInstaller();
   }
 
-  public startRouter(): Promise<ClaudeRouterManagementState> {
-    return this.routerManager.start();
+  public async startRouter(): Promise<ClaudeRouterManagementState> {
+    const state = await this.routerManager.start();
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: state };
+    return state;
   }
 
-  public stopRouter(): Promise<ClaudeRouterManagementState> {
-    return this.routerManager.stop();
+  public async stopRouter(): Promise<ClaudeRouterManagementState> {
+    const state = await this.routerManager.stop();
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: state };
+    return state;
   }
 
   public routerManagementUrl(): Promise<string> {
     return this.routerManager.managementUrl();
   }
 
-  public deleteRouterProvider(providerId: string): Promise<ClaudeRouterManagementState> {
-    return this.routerManager.deleteProvider(providerId);
+  public async deleteRouterProvider(providerId: string): Promise<ClaudeRouterManagementState> {
+    const state = await this.routerManager.deleteProvider(providerId);
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: state };
+    return state;
   }
 
   public async saveRouterProvider(
@@ -230,6 +353,7 @@ export class ClaudeRuntime {
     saved: SavedRouterProvider;
   }> {
     const saved = await this.routerManager.saveProvider(input);
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: saved.state };
     if (!input.useForCurrentProject) {
       return { saved };
     }
@@ -260,6 +384,14 @@ export class ClaudeRuntime {
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
       throw new Error('当前接入需要 API 凭据，请先在“接入”页保存密钥。');
     }
+    if (usesDefaultClaudeRouter(config)) {
+      const router = await this.routerManager.getState();
+      this.cachedRouterHealth = { checkedAt: Date.now(), value: router };
+      const blockingDetail = routerBlockingDetail(config, router);
+      if (blockingDetail) {
+        throw new Error(blockingDetail);
+      }
+    }
 
     const sessionDirectory = path.join(this.runtimeRoot, sessionId);
     const metricsPath = path.join(sessionDirectory, 'metrics.json');
@@ -271,6 +403,7 @@ export class ClaudeRuntime {
 
     const settings = {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
+      env: buildClaudeSettingsEnvironment(config),
       model: config.model,
       skipWebFetchPreflight: true,
       statusLine: {
@@ -283,9 +416,12 @@ export class ClaudeRuntime {
 
     const runtime = this.ensureSession(sessionId, cwd);
     runtime.active = true;
+    runtime.diagnosticBuffer = '';
     runtime.expectedModel = config.model;
     runtime.exitMarker = `\u001b]9;claudedock-exit:${sessionId}:${Date.now()}\u0007`;
     runtime.markerRemainder = '';
+    runtime.lastApiError = undefined;
+    runtime.launchedConfigFingerprint = connectionFingerprint(config, credential);
     runtime.metrics = undefined;
     runtime.metricsPath = metricsPath;
 
@@ -310,14 +446,19 @@ export class ClaudeRuntime {
     return { ...state, active: runtime.active };
   }
 
-  public testConnection(
+  public async testConnection(
     cwd: string,
     input: SaveClaudeConfigInput,
   ): Promise<ClaudeConnectionTestResult> {
     const config = normalizeClaudeConfig(input);
     const enteredCredential = input.credential?.trim();
     const credential = enteredCredential || this.configStore.getCredential(cwd);
-    return testClaudeConnection(config, credential);
+    const result = await testClaudeConnection(config, credential);
+    this.connectionChecks.set(projectKey(cwd), {
+      fingerprint: connectionFingerprint(config, credential),
+      result,
+    });
+    return result;
   }
 
   public setInactive(sessionId: string): void {
@@ -334,6 +475,86 @@ export class ClaudeRuntime {
   public shutdown(): void {
     clearInterval(this.metricsTimer);
     this.sessions.clear();
+  }
+
+  private async getRouteHealth(
+    runtime: RuntimeSession,
+    config: NormalizedClaudeConfig,
+  ): Promise<ClaudeRouteHealth | undefined> {
+    const credential = this.configStore.getCredential(runtime.cwd);
+    const fingerprint = connectionFingerprint(config, credential);
+    const connectionCheck = this.connectionChecks.get(projectKey(runtime.cwd));
+    const matchingCheck =
+      connectionCheck?.fingerprint === fingerprint ? connectionCheck.result : undefined;
+
+    if (usesDefaultClaudeRouter(config)) {
+      const router = await this.getRouterHealthState();
+      const blockingDetail = routerBlockingDetail(config, router);
+      if (blockingDetail) {
+        return {
+          blocking: true,
+          checkedAt: router.checkedAt,
+          detail: blockingDetail,
+          headline: '当前 Router 无法接收 Claude Code 请求',
+          source: 'router',
+          tone: 'error',
+        };
+      }
+    }
+
+    if (runtime.lastApiError && runtime.launchedConfigFingerprint === fingerprint) {
+      return {
+        blocking: false,
+        checkedAt: runtime.lastApiError.detectedAt,
+        detail: matchingCheck?.ok
+          ? `${runtime.lastApiError.detail} 此配置此前的 1-token 测试通过，但真实 Claude Code 会话随后失败；测试成功不代表端点会持续可用或完整支持 Claude Code。`
+          : runtime.lastApiError.detail,
+        headline: 'Claude Code 的真实对话请求失败',
+        source: 'runtime',
+        tone: 'error',
+      };
+    }
+
+    if (matchingCheck) {
+      return {
+        blocking: matchingCheck.tone === 'error',
+        checkedAt: matchingCheck.testedAt,
+        detail: matchingCheck.message,
+        headline:
+          matchingCheck.tone === 'success'
+            ? '当前配置已通过 1-token 测试'
+            : matchingCheck.tone === 'warning'
+              ? '当前配置只通过了部分测试'
+              : '当前配置的连接测试失败',
+        source: 'connection-test',
+        tone: matchingCheck.tone,
+      };
+    }
+
+    if (usesDefaultClaudeRouter(config)) {
+      const router = await this.getRouterHealthState();
+      return {
+        blocking: false,
+        checkedAt: router.checkedAt,
+        detail: `CCR 模型网关正在运行，当前可见 ${router.providers.length} 个 Provider。仍建议执行 1-token 真实测试。`,
+        headline: '当前 Router 基础状态正常',
+        source: 'router',
+        tone: 'success',
+      };
+    }
+    return undefined;
+  }
+
+  private async getRouterHealthState(): Promise<ClaudeRouterManagementState> {
+    if (
+      this.cachedRouterHealth &&
+      Date.now() - this.cachedRouterHealth.checkedAt < ROUTER_HEALTH_CACHE_MS
+    ) {
+      return this.cachedRouterHealth.value;
+    }
+    const value = await this.routerManager.getState();
+    this.cachedRouterHealth = { checkedAt: Date.now(), value };
+    return value;
   }
 
   private async diagnoseInstallation(force = false): Promise<ClaudeInstallationStatus> {
@@ -396,6 +617,7 @@ export class ClaudeRuntime {
     const created: RuntimeSession = {
       active: false,
       cwd,
+      diagnosticBuffer: '',
       markerRemainder: '',
       sessionId,
     };
@@ -415,6 +637,9 @@ export class ClaudeRuntime {
           continue;
         }
         runtime.metrics = metrics;
+        if (runtime.lastApiError && metrics.capturedAt > runtime.lastApiError.detectedAt) {
+          runtime.lastApiError = undefined;
+        }
         void this.emitState(runtime);
       } catch {
         // The status-line helper replaces the file atomically; retry on the next poll.

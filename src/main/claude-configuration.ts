@@ -23,6 +23,14 @@ export const DEFAULT_CLAUDE_CONFIG: NormalizedClaudeConfig = {
   provider: 'anthropic',
 };
 
+export const CLAUDE_ROUTE_ALIAS_ENVIRONMENT_KEYS = [
+  'ANTHROPIC_API_BASE_URL',
+  'CLAUDE_AGENT_API_BASE_URL',
+  'CCR_CLAUDE_CODE_MODEL',
+  'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY',
+  'CODEXL_CLAUDE_CODE_MODEL',
+] as const;
+
 export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
@@ -40,6 +48,7 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_FOUNDRY',
   'CLAUDE_CODE_USE_VERTEX',
+  ...CLAUDE_ROUTE_ALIAS_ENVIRONMENT_KEYS,
 ] as const;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
@@ -218,6 +227,35 @@ export const buildClaudeEnvironment = (
     environment.ANTHROPIC_DEFAULT_SONNET_MODEL = config.model;
     environment.ANTHROPIC_SMALL_FAST_MODEL = config.model;
     environment.DISABLE_AUTOUPDATER = '1';
+  }
+
+  return environment;
+};
+
+export const buildClaudeSettingsEnvironment = (
+  config: NormalizedClaudeConfig,
+): Record<string, string> => {
+  const desiredCredentialKey =
+    config.authMode === 'apiKey'
+      ? 'ANTHROPIC_API_KEY'
+      : config.authMode === 'authToken'
+        ? 'ANTHROPIC_AUTH_TOKEN'
+        : undefined;
+  const environment: Record<string, string> = {};
+  for (const key of MANAGED_CLAUDE_ENVIRONMENT_KEYS) {
+    if (key !== desiredCredentialKey) {
+      environment[key] = '';
+    }
+  }
+
+  environment.ANTHROPIC_MODEL = config.model;
+  if (config.provider === 'gateway') {
+    environment.ANTHROPIC_BASE_URL = config.baseUrl;
+    environment.ANTHROPIC_CUSTOM_MODEL_OPTION = config.model;
+    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = config.model;
+    environment.ANTHROPIC_DEFAULT_OPUS_MODEL = config.model;
+    environment.ANTHROPIC_DEFAULT_SONNET_MODEL = config.model;
+    environment.ANTHROPIC_SMALL_FAST_MODEL = config.model;
   }
 
   return environment;

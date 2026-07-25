@@ -24,12 +24,16 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   同时把 Router 路由接入当前 ClaudeDock 项目。
 - 可按 Claude 官方建议主动发送最多 1 个输出 token 的 `/v1/messages` 测试，分别显示
   端点、身份认证和模型响应结果；后台自动检测不会发起付费模型请求。
+- “会话”页持续显示当前路由健康状态：使用本机 Router 时会在启动前确认 `3456` 网关与
+  Provider 是否就绪；Claude Code 真实对话若返回 ConnectionRefused、认证、端点或模型
+  错误，会立即显示红色提示并引导回“接入”页。
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
   `/model`、`/permissions`、`/compact` 等常用斜杠命令变成可点击操作。
 - 通过 Claude Code 官方 `statusLine` 数据实时显示上下文窗口、输入/输出 token、会话估算
   费用、持续时间、模型和会话 ID；不解析易变的终端绘制文本。
 - 模型/API 路由只注入 ClaudeDock 为当前项目启动的进程，不修改 Codex、Claude Code
-  全局配置或 Windows 系统级 API 路由。
+  全局配置或 Windows 系统级 API 路由；启动时会用更高优先级的临时设置覆盖用户配置中
+  遗留的 CCR/Claude 路由别名，避免“测试直连成功、真实会话却回到已停止的 3456”。
 - 不劫持任意已经打开的外部 PowerShell 窗口；应用创建并接管自己的 ConPTY 会话。
 
 ## 开发环境
@@ -82,7 +86,9 @@ npm run dist
    Messages 三种上游。可逐项编辑地址、模型和密钥，也可只点“用于当前项目”复用已保存
    的上游凭据。
 8. 点击“真实测试端点、密钥和模型”。测试最多请求 1 个输出 token，可能产生极少量费用；
-   三项全部通过后再保存。API 凭据通过 Windows 安全存储加密，界面不会回读明文。
+   三项全部通过后再保存。该结果只证明测试时刻的最小 Messages 请求成功，不保证服务持续
+   在线或完整兼容 Claude Code 的流式、工具调用与长对话。API 凭据通过 Windows 安全存储
+   加密，界面不会回读明文。
 9. 不想安装转换器时，也可选择 Anthropic 官方、DeepSeek 官方 Anthropic 接口，或服务商
    明确提供的其他 `/v1/messages` 地址。DeepSeek 官方预设会填入
    `https://api.deepseek.com/anthropic` 和当前文档中的模型示例。
@@ -122,6 +128,9 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
 - 第三方接入固定 `ANTHROPIC_BASE_URL` 与主/小模型别名，同时关闭遥测、错误上报、反馈、
   调查问卷以及 WebFetch 的 Anthropic 域名预检；这能阻断已知的非必要 Anthropic 流量，
   但不能替用户审计第三方网关，也不能证明网关没有在服务端替换模型。
+- Claude Code 会按优先级合并用户、项目和命令行设置。ClaudeDock 的临时 settings 会明确
+  覆盖 `ANTHROPIC_API_BASE_URL`、`CLAUDE_AGENT_API_BASE_URL`、`CCR_CLAUDE_CODE_MODEL`
+  等第三方 Router 遗留别名；临时文件只含地址、模型和空覆盖值，不含 API 凭据。
 - ClaudeDock 拒绝受保护启动已披露含隐藏地区/代理检测逻辑的 Claude Code
   2.1.91–2.1.196。Anthropic 当前仍不向中国大陆/香港及受不支持地区控制的实体提供官方
   服务；本项目不会伪造位置、绕过地区限制或保证官方账号可用。
@@ -130,6 +139,9 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
 - 自动发现每 6 秒检查已知本机端口，只发送不带凭据的连通性/模型列表探测；它不会扫描全部
   端口，也不会自动调用远程模型。只有用户点击“真实测试”后才会向当前表单地址发送
   1-token 请求。
+- 会话启动前只对当前项目确实指向的本机 Router 做阻断检查；其他远程直连项目不会因为
+  本机 CCR 故障被错误阻止。运行中只识别 Claude Code 明确输出的 API Error 类错误，并将
+  密钥形态再次净化后显示，不保存终端正文或提示词。
 - cURL 分析发生在本地 renderer 中，不写日志；分析结果永远不显示完整密钥。cURL 输入框
   在当前项目切换或一键导入成功后清空。已经粘贴到对话、工单或其他第三方位置的密钥仍应
   立即撤销。

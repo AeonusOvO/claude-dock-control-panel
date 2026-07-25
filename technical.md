@@ -68,9 +68,14 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 1. 主进程用固定 PowerShell 诊断命令解析 `claude --version`。2.1.91–2.1.196 直接阻止，
    其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.220。
 2. `ClaudeRuntime` 为项目会话生成 `userData/claude/runtime/<session-id>/settings.json`，
-   通过 Claude Code 官方 `--settings` 参数临时合并，不改变用户、项目或系统设置。
+   通过 Claude Code 官方 `--settings` 参数临时合并，不改变用户、项目或系统设置。命令行
+   settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
+   与模型，并把 `ANTHROPIC_API_BASE_URL`、`CLAUDE_AGENT_API_BASE_URL`、
+   `CCR_CLAUDE_CODE_MODEL`、`CODEXL_CLAUDE_CODE_MODEL` 和 Router 模型发现开关清空，防止
+   旧 CCR profile 把真实会话重新指向已停止的 `3456`。
 3. 主进程重建当前 PowerShell，并在 PTY 创建时注入路由与解密后的凭据；密钥不会出现在
-   命令行、xterm.js 输入或 PowerShell 历史中。Claude 退出后命令会清理所有受管环境变量。
+   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。显式凭据环境变量优先于
+   用户级 `apiKeyHelper`；Claude 退出后命令会清理所有受管环境变量与第三方路由别名。
 4. 非必要流量保护固定启用：
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`DISABLE_TELEMETRY=1`、
    `DISABLE_ERROR_REPORTING=1`、`DISABLE_FEEDBACK_COMMAND=1`、
@@ -146,6 +151,24 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
   成功响应正文不返回 renderer。15 秒超时或网络错误只回传分阶段诊断。
 - 已保存凭据从 `safeStorage` 解密后仅用于该次测试；表单新输入可在保存前测试。测试结果
   不包含凭据或模型回复文本。
+- 每次测试按“规范化配置 + 凭据 SHA-256”生成内存指纹，只在当前项目保存的配置与凭据完全
+  匹配时显示到会话页；不会持久化凭据摘要。最小请求通过是一个时间点信号，不能证明上游
+  持续在线，也不能覆盖 Claude Code 后续的流式内容、工具调用和更大请求。
+
+### 会话路由健康
+
+- `ClaudeProjectState.routeHealth` 统一表达连接测试、Router 状态与真实会话三种来源，包含
+  success/warning/error、检查时间、说明及是否阻止启动。renderer 在会话页显示健康卡，
+  新错误同时触发一次 toast。
+- 只有当前项目的基址确实是本机回环 `http://*:3456` 时，启动前才读取 CCR 状态；Provider
+  为空或 gateway 非 running 会在重启 PowerShell 前阻断，并引导到接入页。远程直连和其他
+  本机端口不会被无关 CCR 故障影响。
+- `ClaudeRuntime.consumeTerminalOutput` 保留最多 4 KiB 的短期诊断窗口，只识别 Claude
+  Code 明确输出的 `API Error:`。ConnectionRefused、401/403、404 与模型错误映射为可读
+  原因；通用错误在截断前清除 Bearer 与 `sk-` 形态。诊断窗口、终端正文和提示词都不落盘。
+- 新会话启动会清除旧运行错误；当后续 statusLine 指标时间晚于错误时也视为恢复。若同一
+  配置先通过 1-token 测试、后在真实会话失败，健康卡会明确解释“测试成功不代表持续可用或
+  完整兼容”，避免把两种结果误认为矛盾。
 
 ### 会话、上下文与用量
 
@@ -188,8 +211,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - `npm run lint`：检查 TypeScript 源码。
 - `npm run typecheck`：分别检查渲染端和主进程类型。
 - `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别、Router 配置
-  定向修改与秘密净化、官方安装包元数据校验、连接测试结果映射，并在 Windows PowerShell
-  中用模拟 statusLine JSON 验证指标采集脚本。
+  定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
+  结果映射，并在 Windows PowerShell 中用模拟 statusLine JSON 验证指标采集脚本。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
   将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。

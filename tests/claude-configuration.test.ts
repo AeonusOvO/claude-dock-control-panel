@@ -3,6 +3,7 @@ import type { SaveClaudeConfigInput } from '../src/shared/contracts';
 import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
+  buildClaudeSettingsEnvironment,
   evaluateClaudeInstallation,
   normalizeClaudeConfig,
 } from '../src/main/claude-configuration';
@@ -71,6 +72,23 @@ describe('Claude Code configuration', () => {
     });
   });
 
+  it('overrides inherited CCR route aliases without writing credentials to temporary settings', () => {
+    const config = normalizeClaudeConfig(gatewayInput);
+    const environment = buildClaudeSettingsEnvironment(config);
+
+    expect(environment).toMatchObject({
+      ANTHROPIC_API_BASE_URL: '',
+      ANTHROPIC_BASE_URL: 'https://gateway.example.com',
+      ANTHROPIC_MODEL: 'deepseek-chat',
+      CCR_CLAUDE_CODE_MODEL: '',
+      CLAUDE_AGENT_API_BASE_URL: '',
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '',
+      CODEXL_CLAUDE_CODE_MODEL: '',
+    });
+    expect(environment).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(JSON.stringify(environment)).not.toContain('encrypted-at-rest-secret');
+  });
+
   it('classifies the disclosed tracking versions and protected versions', () => {
     expect(evaluateClaudeInstallation('2.1.91 (Claude Code)').security).toBe('blocked-version');
     expect(evaluateClaudeInstallation('2.1.196 (Claude Code)').security).toBe('blocked-version');
@@ -93,5 +111,8 @@ describe('Claude Code configuration', () => {
     expect(command).toContain('--continue');
     expect(command).not.toContain(marker);
     expect(command).toContain('FromBase64String');
+    expect(command).toContain('Env:ANTHROPIC_API_BASE_URL');
+    expect(command).toContain('Env:CCR_CLAUDE_CODE_MODEL');
+    expect(command).toContain('Env:CODEXL_CLAUDE_CODE_MODEL');
   });
 });
