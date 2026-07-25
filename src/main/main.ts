@@ -7,8 +7,10 @@ import type {
   ClaudeConnectionTestResult,
   ClaudeLaunchMode,
   ClaudeOperationResult,
+  ClaudeRouterOperationResult,
   DirectoryChoiceResult,
   OperationResult,
+  SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   TerminalStatus,
   WorkspaceResult,
@@ -286,6 +288,40 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
   };
 };
 
+const validateClaudeRouterProviderInput = (input: unknown): SaveClaudeRouterProviderInput => {
+  if (!input || typeof input !== 'object') {
+    throw new Error('Router Provider 配置格式无效。');
+  }
+  const value = input as Record<string, unknown>;
+  if (
+    (value.id !== undefined && typeof value.id !== 'string') ||
+    typeof value.name !== 'string' ||
+    typeof value.baseUrl !== 'string' ||
+    !Array.isArray(value.models) ||
+    !value.models.every((model) => typeof model === 'string') ||
+    (value.protocol !== 'anthropic_messages' &&
+      value.protocol !== 'openai_chat_completions' &&
+      value.protocol !== 'openai_responses') ||
+    (value.credentialAction !== 'keep' && value.credentialAction !== 'replace') ||
+    (value.apiKey !== undefined && typeof value.apiKey !== 'string') ||
+    typeof value.makePreferred !== 'boolean' ||
+    typeof value.useForCurrentProject !== 'boolean'
+  ) {
+    throw new Error('Router Provider 配置包含无效字段。');
+  }
+  return {
+    apiKey: value.apiKey,
+    baseUrl: value.baseUrl,
+    credentialAction: value.credentialAction,
+    id: value.id,
+    makePreferred: value.makePreferred,
+    models: value.models,
+    name: value.name,
+    protocol: value.protocol,
+    useForCurrentProject: value.useForCurrentProject,
+  };
+};
+
 const allowedExternalHosts = new Set([
   'api-docs.deepseek.com',
   'ccrdesk.top',
@@ -341,6 +377,19 @@ const claudeFailure = async (sessionId: string, error: unknown): Promise<ClaudeO
     error: error instanceof Error ? error.message : 'Claude Code 操作失败。',
     ok: false,
     state: await runtime.getState(sessionId, status.cwd),
+  };
+};
+
+const routerFailure = async (
+  error: unknown,
+  fallback: string,
+): Promise<ClaudeRouterOperationResult> => {
+  const message = error instanceof Error ? error.message : fallback;
+  return {
+    error: message,
+    message,
+    ok: false,
+    routerState: await requireClaudeRuntime().getRouterManagementState(),
   };
 };
 
@@ -436,6 +485,135 @@ const registerIpc = (): void => {
     const status = workspace.getStatus(validatedSessionId);
     return requireClaudeRuntime().getGatewayDiagnostics(status.cwd);
   });
+  ipcMain.handle('claude:router-get-state', async (event, sessionId: unknown) => {
+    validateSender(event);
+    validateSessionId(sessionId);
+    return requireClaudeRuntime().getRouterManagementState();
+  });
+  ipcMain.handle(
+    'claude:router-install',
+    async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        const installer = await runtime.downloadRouterInstaller();
+        const launchError = await shell.openPath(installer.filePath);
+        if (launchError) {
+          throw new Error(`安装包已校验，但无法启动：${launchError}`);
+        }
+        return {
+          message: `CCR ${installer.version} 官方安装程序已通过 SHA-256 校验并启动，请完成安装向导。`,
+          ok: true,
+          routerState: await runtime.getRouterManagementState(),
+        };
+      } catch (error) {
+        return routerFailure(error, '无法下载或启动 CCR 官方安装程序。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:router-start',
+    async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      try {
+        const routerState = await requireClaudeRuntime().startRouter();
+        return {
+          message:
+            routerState.gatewayState === 'running' ? 'Router 网关已启动。' : routerState.message,
+          ok: routerState.gatewayState === 'running',
+          routerState,
+        };
+      } catch (error) {
+        return routerFailure(error, '无法启动 Router。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:router-stop',
+    async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      try {
+        const routerState = await requireClaudeRuntime().stopRouter();
+        return {
+          message: 'Router 网关已停止，管理服务仍可用于修改配置。',
+          ok: routerState.gatewayState === 'stopped',
+          routerState,
+        };
+      } catch (error) {
+        return routerFailure(error, '无法停止 Router。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:router-open-management',
+    async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        await shell.openExternal(await runtime.routerManagementUrl());
+        return {
+          message: '已打开 CCR 本机管理页。',
+          ok: true,
+          routerState: await runtime.getRouterManagementState(),
+        };
+      } catch (error) {
+        return routerFailure(error, '无法打开 CCR 管理页。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:router-save-provider',
+    async (event, sessionId: unknown, input: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        const result = await requireClaudeRuntime().saveRouterProvider(
+          validatedSessionId,
+          status.cwd,
+          validateClaudeRouterProviderInput(input),
+        );
+        return {
+          message: result.projectState
+            ? `Provider ${result.saved.provider.name} 已保存，并已安全接入当前项目。`
+            : `Provider ${result.saved.provider.name} 已保存。`,
+          ok: true,
+          projectState: result.projectState,
+          provider: result.saved.provider,
+          routerState: result.saved.state,
+        };
+      } catch (error) {
+        return routerFailure(error, '无法保存 Router Provider。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:router-delete-provider',
+    async (
+      event,
+      sessionId: unknown,
+      providerId: unknown,
+    ): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      if (typeof providerId !== 'string') {
+        return routerFailure(new Error('Provider 标识无效。'), '无法删除 Provider。');
+      }
+      try {
+        return {
+          message: 'Provider 已从 Router 删除。',
+          ok: true,
+          routerState: await requireClaudeRuntime().deleteRouterProvider(providerId),
+        };
+      } catch (error) {
+        return routerFailure(error, '无法删除 Router Provider。');
+      }
+    },
+  );
   ipcMain.handle(
     'claude:save-config',
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeConfigResult> => {

@@ -19,6 +19,9 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   用户/项目设置；检测只回传地址和“是否有凭据”，不回传凭据内容。
 - 可粘贴服务商提供的 cURL，自动识别 OpenAI/Anthropic 协议、接口、模型和认证头，并给出
   “可直连”或“先配置本地转换器”的明确下一步。
+- 可在“接入”页一键获取 Claude Code Router 官方 Windows 安装程序、启动/停止模型网关、
+  打开完整管理页，并可视化新增、编辑、删除 Provider。OpenAI cURL 可一键写入 Router，
+  同时把 Router 路由接入当前 ClaudeDock 项目。
 - 可按 Claude 官方建议主动发送最多 1 个输出 token 的 `/v1/messages` 测试，分别显示
   端点、身份认证和模型响应结果；后台自动检测不会发起付费模型请求。
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
@@ -67,20 +70,27 @@ npm run dist
    `3458` 只视为浏览器管理页。
 5. 如果服务商给了一段 cURL，直接粘到“把服务商给你的 cURL 粘进来”：
    - 识别为 **Anthropic `/v1/messages`**：点击“自动填入可直连配置”。
-   - 识别为 **OpenAI `/v1/chat/completions`**：先在 Router 管理页把它添加为
-     `OpenAI Compatible` 上游，再回到 ClaudeDock 选用 Router 的 `3456` 接口。
+   - 识别为 **OpenAI `/v1/chat/completions`**：如果已安装 Router，可点击
+     “一键写入 Router 并接入当前项目”；应用会新增或更新 Provider、设为首选，并把
+     `provider/model` 路由保存为当前项目的 ClaudeDock 接入。
    - cURL 中的 Bearer 上游密钥交给 Router；如果 Router 自己启用了访问保护，
      ClaudeDock 需要填写的是另一把 Router 访问密钥，二者不要混用。
-6. 点击“真实测试端点、密钥和模型”。测试最多请求 1 个输出 token，可能产生极少量费用；
+6. 没有 Router 时，点击“一键获取官方安装包”。ClaudeDock 会从 CCR 官方 GitHub
+   Release 下载 Windows 安装程序，核对 Release 声明的文件大小与 SHA-256 后打开标准
+   安装向导；安装与 Windows UAC 仍由用户确认。完成后点击“重新检测”。
+7. “Provider 配置”支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic
+   Messages 三种上游。可逐项编辑地址、模型和密钥，也可只点“用于当前项目”复用已保存
+   的上游凭据。
+8. 点击“真实测试端点、密钥和模型”。测试最多请求 1 个输出 token，可能产生极少量费用；
    三项全部通过后再保存。API 凭据通过 Windows 安全存储加密，界面不会回读明文。
-7. 不想安装转换器时，也可选择 Anthropic 官方、DeepSeek 官方 Anthropic 接口，或服务商
+9. 不想安装转换器时，也可选择 Anthropic 官方、DeepSeek 官方 Anthropic 接口，或服务商
    明确提供的其他 `/v1/messages` 地址。DeepSeek 官方预设会填入
    `https://api.deepseek.com/anthropic` 和当前文档中的模型示例。
-8. 在“会话”页选择“新建安全会话”“继续最近会话”或“选择历史会话”；启动会重建当前项目
-   的 PowerShell，以便只通过子进程环境注入路由和密钥，因此会终止该终端中原有的进程。
-9. Claude 响应后，“会话”页实时显示当前上下文和用量；“命令”页可以执行白名单中的
-   Claude Code 斜杠命令。`/clear` 会开启空上下文的新会话，执行前会二次确认。
-10. 点击窗口关闭按钮只会隐藏面板，所有会话继续在后台运行；右键系统托盘图标可以恢复
+10. 在“会话”页选择“新建安全会话”“继续最近会话”或“选择历史会话”；启动会重建当前项目
+    的 PowerShell，以便只通过子进程环境注入路由和密钥，因此会终止该终端中原有的进程。
+11. Claude 响应后，“会话”页实时显示当前上下文和用量；“命令”页可以执行白名单中的
+    Claude Code 斜杠命令。`/clear` 会开启空上下文的新会话，执行前会二次确认。
+12. 点击窗口关闭按钮只会隐藏面板，所有会话继续在后台运行；右键系统托盘图标可以恢复
     窗口、切换/添加项目、控制当前终端或彻底退出。
 
 安装时可自行选择 `D:\ClaudeDock` 等目标路径，并可在“安装选项”页面勾选或取消
@@ -121,7 +131,14 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
   端口，也不会自动调用远程模型。只有用户点击“真实测试”后才会向当前表单地址发送
   1-token 请求。
 - cURL 分析发生在本地 renderer 中，不写日志；分析结果永远不显示完整密钥。cURL 输入框
-  在当前项目切换时清空。已经粘贴到对话、工单或其他第三方位置的密钥仍应立即撤销。
+  在当前项目切换或一键导入成功后清空。已经粘贴到对话、工单或其他第三方位置的密钥仍应
+  立即撤销。
+- Router 管理凭据只在 Electron 主进程读取并用于本机回环 RPC，不会传给 renderer。
+  Provider 列表只显示“是否已配置密钥”。保存 Provider 时只改 CCR 的 `Providers` 和
+  `preferredProvider`，不会应用或改写 CCR 中的 Codex profile、Claude profile 或系统代理。
+- Router 安装需要访问 GitHub。ClaudeDock 只接受官方仓库当前 Release 中命名匹配的
+  Windows `.exe`，限制最大 250 MiB，并在打开前校验文件大小与 SHA-256；安装程序本身仍
+  可能因未签名或发布者信誉不足触发 Windows SmartScreen。
 - 关闭项目会终止该项目的 PowerShell 进程；切换项目不会影响其他项目的运行。
 - 项目会话只在本次应用运行期间保留，彻底退出后不会恢复终端进程或历史缓冲。
 - Claude Code 自己会按项目目录把会话明文保存在 `~/.claude/projects/`，默认约 30 天；

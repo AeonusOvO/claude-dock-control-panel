@@ -8,6 +8,10 @@ import type {
   ClaudeLaunchMode,
   ClaudePreset,
   ClaudeProjectState,
+  ClaudeRouterManagementState,
+  ClaudeRouterOperationResult,
+  ClaudeRouterProviderView,
+  SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   OperationResult,
   TerminalPhase,
@@ -35,6 +39,7 @@ const requiredElement = <T extends HTMLElement>(selector: string): T => {
 const chooseDirectoryButton = requiredElement<HTMLButtonElement>('#choose-directory');
 const analyzeCurlButton = requiredElement<HTMLButtonElement>('#analyze-curl');
 const applyCurlDirectButton = requiredElement<HTMLButtonElement>('#apply-curl-direct');
+const importCurlRouterButton = requiredElement<HTMLButtonElement>('#import-curl-router');
 const authModeHelp = requiredElement<HTMLElement>('#auth-mode-help');
 const authModeLabel = requiredElement<HTMLElement>('#auth-mode-label');
 const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
@@ -96,15 +101,37 @@ const metricModel = requiredElement<HTMLElement>('#metric-model');
 const metricOutput = requiredElement<HTMLElement>('#metric-output');
 const metricSession = requiredElement<HTMLElement>('#metric-session');
 const modelHelp = requiredElement<HTMLElement>('#model-help');
+const addRouterProviderButton = requiredElement<HTMLButtonElement>('#add-router-provider');
+const cancelRouterProviderButton = requiredElement<HTMLButtonElement>('#cancel-router-provider');
+const installRouterButton = requiredElement<HTMLButtonElement>('#install-router');
 const openDetectedRouterButton = requiredElement<HTMLButtonElement>('#open-detected-router');
+const openRouterManagementButton = requiredElement<HTMLButtonElement>('#open-router-management');
 const projectCount = requiredElement<HTMLElement>('#project-count');
 const projectList = requiredElement<HTMLElement>('#project-list');
 const restartButton = requiredElement<HTMLButtonElement>('#restart-terminal');
 const refreshGatewaysButton = requiredElement<HTMLButtonElement>('#refresh-gateways');
 const runClaudeButton = requiredElement<HTMLButtonElement>('#run-claude');
+const routerProviderApiKey = requiredElement<HTMLInputElement>('#router-provider-api-key');
+const routerProviderBaseUrl = requiredElement<HTMLInputElement>('#router-provider-base-url');
+const routerProviderForm = requiredElement<HTMLFormElement>('#router-provider-form');
+const routerProviderFormTitle = requiredElement<HTMLElement>('#router-provider-form-title');
+const routerProviderId = requiredElement<HTMLInputElement>('#router-provider-id');
+const routerProviderList = requiredElement<HTMLElement>('#router-provider-list');
+const routerProviderModels = requiredElement<HTMLTextAreaElement>('#router-provider-models');
+const routerProviderName = requiredElement<HTMLInputElement>('#router-provider-name');
+const routerProviderPreferred = requiredElement<HTMLInputElement>('#router-provider-preferred');
+const routerProviderProtocol = requiredElement<HTMLSelectElement>('#router-provider-protocol');
+const routerProviderUseProject = requiredElement<HTMLInputElement>('#router-provider-use-project');
+const routerStatus = requiredElement<HTMLElement>('#router-status');
+const routerStatusDetail = requiredElement<HTMLElement>('#router-status-detail');
+const routerStatusTitle = requiredElement<HTMLElement>('#router-status-title');
+const routerVersion = requiredElement<HTMLElement>('#router-version');
+const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-router-provider');
 const sessionDetail = requiredElement<HTMLElement>('#session-detail');
 const sessionPid = requiredElement<HTMLElement>('#session-pid');
 const statusPill = requiredElement<HTMLElement>('#status-pill');
+const startRouterButton = requiredElement<HTMLButtonElement>('#start-router');
+const stopRouterButton = requiredElement<HTMLButtonElement>('#stop-router');
 const terminalProject = requiredElement<HTMLElement>('#terminal-project');
 const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
@@ -131,6 +158,9 @@ let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
 let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
 let launchInProgress = false;
+let routerManagementState: ClaudeRouterManagementState | undefined;
+let routerOperationInProgress = false;
+let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
 let workspaceState: WorkspaceState = {
   activeSessionId: '',
@@ -500,7 +530,16 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
       manageButton.type = 'button';
       manageButton.textContent = '打开管理页';
       manageButton.addEventListener('click', () => {
-        void openExternal(candidate.managementUrl ?? '');
+        const status = activeStatus();
+        if (candidate.kind === 'claude-code-router' && status) {
+          void runRouterOperation(
+            (sessionId) => window.controlPanel.openClaudeRouterManagement(sessionId),
+            '正在打开…',
+            manageButton,
+          );
+        } else {
+          void openExternal(candidate.managementUrl ?? '');
+        }
       });
       actions.append(manageButton);
     }
@@ -542,6 +581,325 @@ const loadGatewayDiagnostics = async (): Promise<void> => {
   }
 };
 
+const routerProtocolLabel = (protocol: ClaudeRouterProviderView['protocol']): string =>
+  protocol === 'anthropic_messages'
+    ? 'Anthropic Messages'
+    : protocol === 'openai_responses'
+      ? 'OpenAI Responses'
+      : 'OpenAI Chat Completions';
+
+const routerProviderInput = (
+  provider: ClaudeRouterProviderView,
+  useForCurrentProject: boolean,
+): SaveClaudeRouterProviderInput => ({
+  baseUrl: provider.baseUrl,
+  credentialAction: 'keep',
+  id: provider.id,
+  makePreferred: true,
+  models: provider.models,
+  name: provider.name,
+  protocol: provider.protocol,
+  useForCurrentProject,
+});
+
+const handleRouterResult = (result: ClaudeRouterOperationResult): boolean => {
+  renderRouterManagement(result.routerState);
+  if (result.projectState) {
+    renderClaudeState(result.projectState);
+    populateClaudeConfigForm(result.projectState);
+  }
+  showToast(result.message, result.ok ? 'success' : 'error');
+  return result.ok;
+};
+
+const runRouterProviderSave = async (input: SaveClaudeRouterProviderInput): Promise<boolean> => {
+  const status = activeStatus();
+  if (!status || routerOperationInProgress) {
+    return false;
+  }
+  routerOperationInProgress = true;
+  renderRouterManagement(
+    routerManagementState ?? {
+      checkedAt: Date.now(),
+      endpoint: 'http://127.0.0.1:3456',
+      gatewayState: 'unknown',
+      installed: false,
+      manageable: false,
+      managementAvailable: false,
+      message: '正在保存 Router Provider…',
+      providers: [],
+      serviceRunning: false,
+    },
+  );
+  try {
+    const result = await window.controlPanel.saveClaudeRouterProvider(status.id, input);
+    const ok = handleRouterResult(result);
+    if (ok) {
+      routerProviderForm.hidden = true;
+      routerProviderApiKey.value = '';
+      void loadGatewayDiagnostics();
+    }
+    return ok;
+  } catch {
+    showToast('保存 Router Provider 时发生异常。', 'error');
+    return false;
+  } finally {
+    routerOperationInProgress = false;
+    if (routerManagementState) {
+      renderRouterManagement(routerManagementState);
+    }
+  }
+};
+
+const openRouterProviderForm = (provider?: ClaudeRouterProviderView): void => {
+  routerProviderId.value = provider?.id ?? '';
+  routerProviderName.value = provider?.name ?? '';
+  routerProviderBaseUrl.value = provider?.baseUrl ?? '';
+  routerProviderProtocol.value = provider?.protocol ?? 'openai_chat_completions';
+  routerProviderModels.value = provider?.models.join('\n') ?? '';
+  routerProviderApiKey.value = '';
+  routerProviderPreferred.checked = provider?.preferred ?? true;
+  routerProviderUseProject.checked = true;
+  routerProviderFormTitle.textContent = provider ? `编辑 ${provider.name}` : '添加 Provider';
+  routerProviderForm.hidden = false;
+  routerProviderForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  routerProviderName.focus();
+};
+
+function renderRouterManagement(state: ClaudeRouterManagementState): void {
+  routerManagementState = state;
+  const displayState = state.installed ? state.gatewayState : 'not-installed';
+  routerStatus.dataset.state = displayState;
+  routerStatusTitle.textContent = !state.installed
+    ? '尚未安装 Claude Code Router'
+    : state.gatewayState === 'running'
+      ? 'Router 网关正在运行'
+      : state.serviceRunning
+        ? 'Router 管理服务已运行'
+        : 'Router 已安装但未运行';
+  routerStatusDetail.textContent = state.message;
+  routerVersion.textContent = state.version ? `v${state.version}` : '版本待识别';
+
+  installRouterButton.disabled = routerOperationInProgress;
+  installRouterButton.textContent = state.installed ? '安装 / 更新官方版' : '一键获取官方安装包';
+  startRouterButton.disabled =
+    routerOperationInProgress ||
+    !state.installed ||
+    !state.manageable ||
+    state.gatewayState === 'running' ||
+    state.gatewayState === 'starting';
+  stopRouterButton.disabled =
+    routerOperationInProgress || !state.serviceRunning || state.gatewayState !== 'running';
+  openRouterManagementButton.disabled =
+    routerOperationInProgress || !state.installed || !state.manageable;
+  addRouterProviderButton.disabled = routerOperationInProgress || !state.managementAvailable;
+  saveRouterProviderButton.disabled = routerOperationInProgress;
+  if (lastCurlAnalysis?.protocol === 'openai') {
+    importCurlRouterButton.hidden =
+      !lastCurlAnalysis.model ||
+      !lastCurlAnalysis.credentialDetected ||
+      !state.installed ||
+      !state.manageable;
+  }
+
+  routerProviderList.replaceChildren();
+  if (!state.managementAvailable) {
+    const empty = document.createElement('div');
+    empty.className = 'router-provider-empty';
+    empty.textContent = state.installed
+      ? '启动 Router 后即可在这里增删 Provider。'
+      : '完成官方安装后，点击“启动 Router”。';
+    routerProviderList.append(empty);
+    return;
+  }
+  if (state.providers.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'router-provider-empty';
+    empty.textContent = '还没有 Provider；可手动添加，或粘贴 OpenAI cURL 后一键导入。';
+    routerProviderList.append(empty);
+    return;
+  }
+
+  for (const provider of state.providers) {
+    const card = document.createElement('article');
+    card.className = 'router-provider-card';
+    const headline = document.createElement('div');
+    headline.className = 'router-provider-card__headline';
+    const title = document.createElement('strong');
+    title.textContent = provider.name;
+    const badge = document.createElement('span');
+    badge.textContent = provider.preferred ? '首选' : routerProtocolLabel(provider.protocol);
+    headline.append(title, badge);
+
+    const endpoint = document.createElement('code');
+    endpoint.textContent = provider.baseUrl;
+    const meta = document.createElement('span');
+    meta.textContent = `${routerProtocolLabel(provider.protocol)} · ${
+      provider.credentialConfigured ? '已保存上游密钥' : '未保存上游密钥'
+    }`;
+    const models = document.createElement('small');
+    models.textContent = `模型：${provider.models.join('、') || '未配置'}`;
+
+    const actions = document.createElement('div');
+    actions.className = 'router-provider-card__actions';
+    const useButton = document.createElement('button');
+    useButton.type = 'button';
+    useButton.textContent = '用于当前项目';
+    useButton.disabled =
+      provider.models.length === 0 ||
+      !/^[A-Za-z0-9._-]+$/.test(provider.name) ||
+      provider.models.some((model) => !/^[A-Za-z0-9._/-]+$/.test(model));
+    useButton.addEventListener('click', () => {
+      void runRouterProviderSave(routerProviderInput(provider, true));
+    });
+    const editButton = document.createElement('button');
+    editButton.type = 'button';
+    editButton.textContent = '编辑';
+    editButton.addEventListener('click', () => {
+      openRouterProviderForm(provider);
+    });
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.textContent = '删除';
+    deleteButton.addEventListener('click', async () => {
+      const status = activeStatus();
+      if (
+        !status ||
+        routerOperationInProgress ||
+        !window.confirm(`从 Router 删除 Provider“${provider.name}”？`)
+      ) {
+        return;
+      }
+      routerOperationInProgress = true;
+      try {
+        handleRouterResult(
+          await window.controlPanel.deleteClaudeRouterProvider(status.id, provider.id),
+        );
+        void loadGatewayDiagnostics();
+      } catch {
+        showToast('删除 Router Provider 时发生异常。', 'error');
+      } finally {
+        routerOperationInProgress = false;
+        if (routerManagementState) {
+          renderRouterManagement(routerManagementState);
+        }
+      }
+    });
+    actions.append(useButton, editButton, deleteButton);
+    card.append(headline, endpoint, meta, models, actions);
+    routerProviderList.append(card);
+  }
+}
+
+const loadRouterManagement = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status || routerRefreshInProgress || routerOperationInProgress) {
+    return;
+  }
+  routerRefreshInProgress = true;
+  try {
+    renderRouterManagement(await window.controlPanel.getClaudeRouterManagementState(status.id));
+  } catch {
+    routerStatus.dataset.state = 'error';
+    routerStatusTitle.textContent = '无法读取 Router 状态';
+    routerStatusDetail.textContent = '仍可使用下方手动 Claude 接入配置。';
+  } finally {
+    routerRefreshInProgress = false;
+  }
+};
+
+const runRouterOperation = async (
+  action: (sessionId: string) => Promise<ClaudeRouterOperationResult>,
+  busyLabel: string,
+  button: HTMLButtonElement,
+): Promise<void> => {
+  const status = activeStatus();
+  if (!status || routerOperationInProgress) {
+    return;
+  }
+  routerOperationInProgress = true;
+  const originalLabel = button.textContent;
+  button.textContent = busyLabel;
+  button.disabled = true;
+  try {
+    handleRouterResult(await action(status.id));
+    void loadGatewayDiagnostics();
+  } catch {
+    showToast('Router 操作发生异常。', 'error');
+  } finally {
+    routerOperationInProgress = false;
+    button.textContent = originalLabel;
+    if (routerManagementState) {
+      renderRouterManagement(routerManagementState);
+    }
+  }
+};
+
+const uniqueCurlProviderName = (analysis: ClaudeCurlAnalysis): string => {
+  const base =
+    new URL(analysis.endpoint).hostname
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'openai-relay';
+  const names = new Set((routerManagementState?.providers ?? []).map((provider) => provider.name));
+  if (!names.has(base)) {
+    return base;
+  }
+  for (let index = 2; index < 100; index += 1) {
+    const candidate = `${base.slice(0, 55)}-${index}`;
+    if (!names.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${base.slice(0, 45)}-${Date.now()}`;
+};
+
+const importCurlIntoRouter = async (): Promise<void> => {
+  const analysis = lastCurlAnalysis;
+  const status = activeStatus();
+  if (
+    !analysis ||
+    analysis.protocol !== 'openai' ||
+    !analysis.model ||
+    !analysis.credential ||
+    !status ||
+    routerOperationInProgress
+  ) {
+    showToast('cURL 需要同时包含 OpenAI 接口、模型和新密钥。', 'error');
+    return;
+  }
+
+  if (!routerManagementState?.managementAvailable) {
+    const startResult = await window.controlPanel.startClaudeRouter(status.id);
+    renderRouterManagement(startResult.routerState);
+    if (!startResult.routerState.managementAvailable) {
+      showToast(startResult.message, 'error');
+      return;
+    }
+  }
+  const existing = routerManagementState?.providers.find(
+    (provider) => provider.baseUrl.replace(/\/+$/, '') === analysis.endpoint.replace(/\/+$/, ''),
+  );
+  const imported = await runRouterProviderSave({
+    apiKey: analysis.credential,
+    baseUrl: analysis.endpoint,
+    credentialAction: 'replace',
+    id: existing?.id,
+    makePreferred: true,
+    models: [analysis.model],
+    name: existing?.name ?? uniqueCurlProviderName(analysis),
+    protocol: 'openai_chat_completions',
+    useForCurrentProject: true,
+  });
+  if (imported) {
+    curlInput.value = '';
+    lastCurlAnalysis = undefined;
+    curlAnalysis.hidden = true;
+    importCurlRouterButton.hidden = true;
+  }
+};
+
 const preferredRouter = (): ClaudeGatewayCandidate | undefined =>
   gatewayDiagnostics?.candidates.find(
     (candidate) => candidate.kind === 'claude-code-router' && candidate.status === 'ready',
@@ -578,6 +936,12 @@ const analyzeCurlInput = (): void => {
 
     const router = preferredRouter();
     applyCurlDirectButton.hidden = analysis.protocol !== 'anthropic';
+    importCurlRouterButton.hidden =
+      analysis.protocol !== 'openai' ||
+      !analysis.model ||
+      !analysis.credentialDetected ||
+      !routerManagementState?.installed ||
+      !routerManagementState.manageable;
     useDetectedRouterButton.hidden = analysis.protocol !== 'openai' || !router;
     openDetectedRouterButton.hidden = analysis.protocol !== 'openai' || !router?.managementUrl;
 
@@ -603,6 +967,7 @@ const analyzeCurlInput = (): void => {
   } catch (error) {
     lastCurlAnalysis = undefined;
     curlAnalysis.hidden = true;
+    importCurlRouterButton.hidden = true;
     showToast(error instanceof Error ? error.message : '无法识别这段 cURL。', 'error');
   }
 };
@@ -687,9 +1052,11 @@ const setWorkbenchOpen = (open: boolean): void => {
   if (open && workspaceState.activeSessionId) {
     void loadClaudeState(workspaceState.activeSessionId);
     void loadGatewayDiagnostics();
+    void loadRouterManagement();
     if (gatewayRefreshTimer === undefined) {
       gatewayRefreshTimer = window.setInterval(() => {
         void loadGatewayDiagnostics();
+        void loadRouterManagement();
       }, 6_000);
     }
   } else if (gatewayRefreshTimer !== undefined) {
@@ -707,6 +1074,7 @@ const selectWorkbenchPage = (page: string): void => {
   }
   if (page === 'connection') {
     void loadGatewayDiagnostics();
+    void loadRouterManagement();
   }
 };
 
@@ -902,7 +1270,10 @@ function renderWorkspace(state: WorkspaceState): void {
     lastCurlAnalysis = undefined;
     curlInput.value = '';
     curlAnalysis.hidden = true;
+    importCurlRouterButton.hidden = true;
     connectionTestResult.hidden = true;
+    routerProviderForm.hidden = true;
+    routerProviderApiKey.value = '';
     gatewayCandidates.replaceChildren();
     gatewayDiagnosticsSummary.textContent = '正在检查常见本地端口、命令和 Claude 设置…';
     gatewayCheckedAt.textContent = '等待首次检测';
@@ -911,6 +1282,9 @@ function renderWorkspace(state: WorkspaceState): void {
       renderClaudeState(knownClaudeState);
     } else if (state.activeSessionId) {
       void loadClaudeState(state.activeSessionId);
+    }
+    if (state.activeSessionId) {
+      void loadRouterManagement();
     }
   }
   window.requestAnimationFrame(fitActiveTerminal);
@@ -1113,6 +1487,9 @@ claudeAuthMode.addEventListener('change', () => {
 });
 analyzeCurlButton.addEventListener('click', analyzeCurlInput);
 applyCurlDirectButton.addEventListener('click', applyDirectCurlAnalysis);
+importCurlRouterButton.addEventListener('click', () => {
+  void importCurlIntoRouter();
+});
 useDetectedRouterButton.addEventListener('click', () => {
   const router = preferredRouter();
   if (router) {
@@ -1120,13 +1497,65 @@ useDetectedRouterButton.addEventListener('click', () => {
   }
 });
 openDetectedRouterButton.addEventListener('click', () => {
-  const managementUrl = preferredRouter()?.managementUrl;
-  if (managementUrl) {
-    void openExternal(managementUrl);
-  }
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.openClaudeRouterManagement(sessionId),
+    '正在打开…',
+    openDetectedRouterButton,
+  );
 });
 refreshGatewaysButton.addEventListener('click', () => {
   void loadGatewayDiagnostics();
+  void loadRouterManagement();
+});
+installRouterButton.addEventListener('click', () => {
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.installClaudeRouter(sessionId),
+    '正在下载并校验…',
+    installRouterButton,
+  );
+});
+startRouterButton.addEventListener('click', () => {
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.startClaudeRouter(sessionId),
+    '正在启动…',
+    startRouterButton,
+  );
+});
+stopRouterButton.addEventListener('click', () => {
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.stopClaudeRouter(sessionId),
+    '正在停止…',
+    stopRouterButton,
+  );
+});
+openRouterManagementButton.addEventListener('click', () => {
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.openClaudeRouterManagement(sessionId),
+    '正在打开…',
+    openRouterManagementButton,
+  );
+});
+addRouterProviderButton.addEventListener('click', () => {
+  openRouterProviderForm();
+});
+cancelRouterProviderButton.addEventListener('click', () => {
+  routerProviderForm.hidden = true;
+  routerProviderApiKey.value = '';
+});
+routerProviderForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const apiKey = routerProviderApiKey.value.trim();
+  void runRouterProviderSave({
+    apiKey: apiKey || undefined,
+    baseUrl: routerProviderBaseUrl.value,
+    credentialAction: routerProviderId.value && !apiKey ? 'keep' : 'replace',
+    id: routerProviderId.value || undefined,
+    makePreferred: routerProviderPreferred.checked,
+    models: routerProviderModels.value.split(/\r?\n/),
+    name: routerProviderName.value,
+    protocol: routerProviderProtocol.value as SaveClaudeRouterProviderInput['protocol'],
+    useForCurrentProject: routerProviderUseProject.checked,
+  });
 });
 testClaudeConnectionButton.addEventListener('click', () => {
   void runConnectionTest();

@@ -28,6 +28,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
+        ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 官方安装包
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
@@ -97,12 +98,40 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
   `ANTHROPIC_BASE_URL` 与凭据是否存在的布尔值；密钥值从不跨 IPC。
 - `src/shared/claude-curl.ts` 在本地 renderer 中解析 cURL 的 URL、`model`、Bearer 或
   `x-api-key`。URL 的用户信息、查询参数和片段不会进入结果；解析文本不写日志。切换项目会
-  清空 cURL 输入与内存中的解析结果。
-- OpenAI cURL 只用于解释如何在外部 Router 中配置上游；“选用 Router”只把 `3456`、模型
-  和 Router 认证方式填入 ClaudeDock，绝不会把 cURL 中的上游密钥误填为 Router 客户端
-  密钥。项目规则禁止 ClaudeDock 自动改写外部 Router、Claude Code 或系统级路由。
+  清空 cURL 输入与内存中的解析结果；一键导入 Router 成功后也会立即清空。
+- OpenAI cURL 可由用户主动一键写入 CCR Provider；上游密钥只发给本机 CCR 管理 RPC，
+  Router 客户端密钥只由主进程写入 ClaudeDock 的 DPAPI 配置。两类密钥不会互相代用。
 - 帮助按钮仅允许打开 Claude/DeepSeek/LiteLLM/CCR 官方文档域名；本机管理页仅允许
   `http://localhost|127.0.0.1|::1:3458`，其他任意外链会被主进程拒绝。
+
+### Router 安装与 Provider 管理
+
+- `ClaudeRouterManager` 支持 Claude Code Router 3.x。它优先从 `where.exe ccr` 与标准 npm
+  全局目录定位 CLI，也识别官方桌面版的标准 Windows 安装位置；不遍历磁盘或猜测任意程序。
+- 正在运行的 CCR 会在 `%APPDATA%/claude-code-router/service.json` 记录本机管理端点、
+  Web token 与 service token。主进程只接受 `http://localhost|127.0.0.1|::1` 回环地址，
+  校验 service identity 后调用 `POST /api/ccr/rpc`；token 和原始配置永不跨 IPC。
+- 状态、Provider 列表与操作结果只向 renderer 返回净化后的 URL、模型和
+  `credentialConfigured` 布尔值。RPC 响应限制为 8 MiB，超时或错误消息会再次清除已知
+  token 与凭据。
+- Provider 保存先结构化克隆 CCR 的完整配置，只修改 `Providers` 与
+  `preferredProvider`，然后调用 `saveConfig(config, { applyProfile: false })`。未知字段、
+  媒体能力、Codex/Claude profile 与 proxy 原样保留；删除也只移除目标 Provider。项目不会
+  调用 CCR 的 profile 应用或系统代理方法，因此不会修改 Codex、Claude Code 全局设置或
+  Windows 系统代理。
+- Provider 名称和模型路由只接受可安全组成 `provider/model` 的字符；远程上游必须为
+  HTTPS，本机回环地址允许 HTTP，URL 禁止用户信息、查询参数和片段。Provider 密钥不会
+  回显，编辑时可显式保留原值。
+- “用于当前项目”会取得 CCR 当前 API 端点、路由模型和 Router 客户端密钥；密钥直接交给
+  `ClaudeConfigStore` 用 Windows DPAPI 保存，不经过 renderer。最终只影响 ClaudeDock 为
+  当前项目启动的 Claude Code 子进程。
+- 启动操作优先复用现有管理服务并调用 `startGateway`；服务未运行时用检测到的官方 CLI
+  或桌面程序启动。停止只调用 `stopGateway`，保留管理服务，便于继续编辑 Provider。
+- 一键安装从 `api.github.com/repos/musistudio/claude-code-router/releases/latest` 读取
+  官方发布元数据，只接受标签版本与文件名一致的 Windows `.exe`。下载限制 250 MiB、最长
+  10 分钟，并按 Release 的 `size` 与 `sha256:` digest 校验后缓存到
+  `userData/claude/router-installers/`；随后仅打开标准安装向导，Windows UAC、SmartScreen
+  和安装确认仍由用户处理。
 
 ### 连接实测
 
@@ -158,8 +187,9 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
 - `npm run lint`：检查 TypeScript 源码。
 - `npm run typecheck`：分别检查渲染端和主进程类型。
-- `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别和连接测试结果映射，
-  并在 Windows PowerShell 中用模拟 statusLine JSON 验证指标采集脚本。
+- `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别、Router 配置
+  定向修改与秘密净化、官方安装包元数据校验、连接测试结果映射，并在 Windows PowerShell
+  中用模拟 statusLine JSON 验证指标采集脚本。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
   将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。
@@ -239,6 +269,8 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://api-docs.deepseek.com/guides/anthropic_api/>
 - Claude Code Router 仓库、Windows 图形版与默认端口：
   <https://github.com/musistudio/claude-code-router>
+- Claude Code Router 官方 Releases：
+  <https://github.com/musistudio/claude-code-router/releases>
 - Claude Code Router 基础配置：
   <https://musistudio.github.io/claude-code-router/docs/cli/config/basic/>
 - Anthropic 地区限制更新（2025-09-04）：

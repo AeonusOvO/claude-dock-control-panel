@@ -1305,6 +1305,7 @@ kbd {
 
 .gateway-discovery,
 .curl-onboarding,
+.router-manager,
 .converter-help,
 #claude-config-form,
 .connection-glossary {
@@ -1484,7 +1485,11 @@ kbd {
 .curl-analysis__actions button,
 .help-link-grid button,
 .analyze-curl,
-.connection-test > button {
+.connection-test > button,
+.router-actions button,
+.router-provider-heading button,
+.router-provider-card__actions button,
+.router-provider-form__actions button {
   background: #15232a;
   border: 1px solid #304550;
   border-radius: 7px;
@@ -1498,9 +1503,13 @@ kbd {
 
 .gateway-candidate__actions button:first-child,
 #apply-curl-direct,
+#import-curl-router,
 #use-detected-router,
 .analyze-curl,
-.connection-test > button {
+.connection-test > button,
+#install-router,
+#save-router-provider,
+.router-provider-card__actions button:first-child {
   background: rgb(100 216 255 / 10%);
   border-color: rgb(100 216 255 / 28%);
   color: #a8ebff;
@@ -1509,6 +1518,263 @@ kbd {
 .gateway-candidate__actions button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.router-manager {
+  display: grid;
+  gap: 10px;
+}
+
+.router-status {
+  align-items: center;
+  background: #080d10;
+  border: 1px solid #26353d;
+  border-radius: 9px;
+  display: flex;
+  gap: 9px;
+  justify-content: space-between;
+  padding: 9px;
+}
+
+.router-status > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.router-status strong {
+  color: #d7e4e8;
+  font-size: 8.5px;
+}
+
+.router-status div span {
+  color: #657982;
+  font-size: 7.2px;
+  line-height: 1.45;
+}
+
+.router-status > span {
+  background: rgb(110 128 138 / 10%);
+  border-radius: 999px;
+  color: #8da0a8;
+  flex: 0 0 auto;
+  font-size: 7px;
+  padding: 4px 7px;
+}
+
+.router-status[data-state='running'] {
+  border-color: rgb(81 230 166 / 28%);
+}
+
+.router-status[data-state='running'] > span {
+  background: rgb(81 230 166 / 9%);
+  color: #69ddad;
+}
+
+.router-status[data-state='error'] {
+  border-color: rgb(255 107 122 / 28%);
+}
+
+.router-status[data-state='error'] > span {
+  background: rgb(255 107 122 / 9%);
+  color: #ff8e98;
+}
+
+.router-status[data-state='not-installed'] {
+  border-style: dashed;
+}
+
+.router-actions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.router-actions button,
+.router-provider-heading button,
+.router-provider-card__actions button,
+.router-provider-form__actions button {
+  min-height: 29px;
+}
+
+.router-actions button:disabled,
+.router-provider-heading button:disabled,
+.router-provider-card__actions button:disabled,
+.router-provider-form__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.router-install-note {
+  color: #5d717a;
+  font-size: 7px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.router-install-note code {
+  color: #72cce8;
+  font-family: 'Cascadia Mono', Consolas, monospace;
+}
+
+.router-provider-heading {
+  align-items: center;
+  border-top: 1px solid #1f2c33;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding-top: 9px;
+}
+
+.router-provider-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.router-provider-heading strong {
+  color: #bacbd1;
+  font-size: 8.5px;
+}
+
+.router-provider-heading span {
+  color: #61747d;
+  font-size: 7px;
+}
+
+.router-provider-heading button {
+  flex: 0 0 auto;
+}
+
+.router-provider-list {
+  display: grid;
+  gap: 7px;
+}
+
+.router-provider-empty {
+  background: #080d10;
+  border: 1px dashed #26353d;
+  border-radius: 8px;
+  color: #60737c;
+  font-size: 7.5px;
+  line-height: 1.45;
+  padding: 9px;
+}
+
+.router-provider-card {
+  background: #0e181d;
+  border: 1px solid #273842;
+  border-radius: 9px;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+}
+
+.router-provider-card__headline {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.router-provider-card__headline strong {
+  color: #dce8ec;
+  font-size: 8.5px;
+}
+
+.router-provider-card__headline span {
+  background: rgb(100 216 255 / 9%);
+  border-radius: 999px;
+  color: #8de3fd;
+  font-size: 6.8px;
+  padding: 3px 6px;
+}
+
+.router-provider-card code {
+  color: #69d8fb;
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 7.2px;
+  overflow-wrap: anywhere;
+}
+
+.router-provider-card > span,
+.router-provider-card > small {
+  color: #60747d;
+  font-size: 7px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.router-provider-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.router-provider-card__actions button:last-child {
+  color: #e68f98;
+}
+
+#router-provider-form {
+  background: #080e11;
+  border: 1px solid rgb(100 216 255 / 20%);
+  border-radius: 9px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+#router-provider-form[hidden] {
+  display: none;
+}
+
+.router-provider-form__heading {
+  display: grid;
+  gap: 3px;
+}
+
+.router-provider-form__heading strong {
+  color: #d8e5e9;
+  font-size: 8.8px;
+}
+
+.router-provider-form__heading span {
+  color: #637780;
+  font-size: 7px;
+}
+
+#router-provider-form .field {
+  gap: 5px;
+}
+
+#router-provider-form .field textarea {
+  min-height: 66px;
+}
+
+.router-choice {
+  align-items: center;
+  color: #8fa2aa;
+  cursor: pointer;
+  display: flex;
+  font-size: 7.5px;
+  gap: 7px;
+}
+
+.router-choice input {
+  accent-color: #64d8ff;
+  height: 13px;
+  width: 13px;
+}
+
+.router-project-note {
+  color: #587079;
+  font-size: 6.8px;
+  line-height: 1.45;
+}
+
+.router-provider-form__actions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr 0.55fr;
 }
 
 .configuration-hints {

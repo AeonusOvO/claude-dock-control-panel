@@ -9,6 +9,8 @@ import type {
   ClaudeLaunchMode,
   ClaudeMetrics,
   ClaudeProjectState,
+  ClaudeRouterManagementState,
+  SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import {
@@ -22,6 +24,11 @@ import {
 import { testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
+import {
+  ClaudeRouterManager,
+  type DownloadedRouterInstaller,
+  type SavedRouterProvider,
+} from './claude-router-manager';
 
 interface RuntimeSession {
   active: boolean;
@@ -115,6 +122,7 @@ export class ClaudeRuntime {
   private readonly configStore: ClaudeConfigStore;
   private readonly gatewayDetector = new ClaudeGatewayDetector();
   private readonly metricsTimer: NodeJS.Timeout;
+  private readonly routerManager: ClaudeRouterManager;
   private readonly runtimeRoot: string;
   private readonly sessions = new Map<string, RuntimeSession>();
 
@@ -124,6 +132,7 @@ export class ClaudeRuntime {
     private readonly onState: (state: ClaudeProjectState) => void,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
+    this.routerManager = new ClaudeRouterManager(userDataPath);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
     this.metricsTimer = setInterval(() => {
       this.pollMetrics();
@@ -186,6 +195,54 @@ export class ClaudeRuntime {
 
   public getGatewayDiagnostics(cwd: string): Promise<ClaudeGatewayDiagnostics> {
     return this.gatewayDetector.detect(cwd, this.configStore.getConfig(cwd));
+  }
+
+  public getRouterManagementState(): Promise<ClaudeRouterManagementState> {
+    return this.routerManager.getState();
+  }
+
+  public downloadRouterInstaller(): Promise<DownloadedRouterInstaller> {
+    return this.routerManager.downloadLatestInstaller();
+  }
+
+  public startRouter(): Promise<ClaudeRouterManagementState> {
+    return this.routerManager.start();
+  }
+
+  public stopRouter(): Promise<ClaudeRouterManagementState> {
+    return this.routerManager.stop();
+  }
+
+  public routerManagementUrl(): Promise<string> {
+    return this.routerManager.managementUrl();
+  }
+
+  public deleteRouterProvider(providerId: string): Promise<ClaudeRouterManagementState> {
+    return this.routerManager.deleteProvider(providerId);
+  }
+
+  public async saveRouterProvider(
+    sessionId: string,
+    cwd: string,
+    input: SaveClaudeRouterProviderInput,
+  ): Promise<{
+    projectState?: ClaudeProjectState;
+    saved: SavedRouterProvider;
+  }> {
+    const saved = await this.routerManager.saveProvider(input);
+    if (!input.useForCurrentProject) {
+      return { saved };
+    }
+    const projectState = await this.saveConfig(sessionId, cwd, {
+      authMode: 'authToken',
+      baseUrl: saved.connection.baseUrl,
+      credential: saved.connection.apiKey,
+      credentialAction: 'replace',
+      model: saved.connection.model,
+      preset: 'gateway',
+      provider: 'gateway',
+    });
+    return { projectState, saved };
   }
 
   public async prepareLaunch(

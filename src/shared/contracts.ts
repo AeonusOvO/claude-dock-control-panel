@@ -10,6 +10,9 @@ export type ClaudeConnectionTestTone = 'error' | 'success' | 'warning';
 export type ClaudeEndpointProtocol = 'anthropic' | 'openai' | 'unknown';
 export type GatewayCandidateKind = 'claude-code-router' | 'custom' | 'litellm';
 export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
+export type ClaudeRouterGatewayState = 'error' | 'running' | 'starting' | 'stopped' | 'unknown';
+export type ClaudeRouterProviderProtocol =
+  'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
 
 export interface ClaudeConfigView {
   authMode: ClaudeAuthMode;
@@ -122,6 +125,50 @@ export interface ClaudeGatewayDiagnostics {
   message: string;
 }
 
+export interface ClaudeRouterProviderView {
+  baseUrl: string;
+  credentialConfigured: boolean;
+  id: string;
+  models: string[];
+  name: string;
+  preferred: boolean;
+  protocol: ClaudeRouterProviderProtocol;
+}
+
+export interface ClaudeRouterManagementState {
+  checkedAt: number;
+  endpoint: string;
+  gatewayState: ClaudeRouterGatewayState;
+  installed: boolean;
+  manageable: boolean;
+  managementAvailable: boolean;
+  message: string;
+  providers: ClaudeRouterProviderView[];
+  serviceRunning: boolean;
+  version?: string;
+}
+
+export interface SaveClaudeRouterProviderInput {
+  apiKey?: string;
+  baseUrl: string;
+  credentialAction: 'keep' | 'replace';
+  id?: string;
+  makePreferred: boolean;
+  models: string[];
+  name: string;
+  protocol: ClaudeRouterProviderProtocol;
+  useForCurrentProject: boolean;
+}
+
+export interface ClaudeRouterOperationResult {
+  error?: string;
+  message: string;
+  ok: boolean;
+  projectState?: ClaudeProjectState;
+  provider?: ClaudeRouterProviderView;
+  routerState: ClaudeRouterManagementState;
+}
+
 export interface TerminalStatus {
   cwd: string;
   id: string;
@@ -167,9 +214,16 @@ export interface ControlPanelApi {
   closeProject: (sessionId: string) => Promise<WorkspaceResult>;
   getClaudeProjectState: (sessionId: string) => Promise<ClaudeProjectState>;
   getClaudeGatewayDiagnostics: (sessionId: string) => Promise<ClaudeGatewayDiagnostics>;
+  getClaudeRouterManagementState: (sessionId: string) => Promise<ClaudeRouterManagementState>;
   getDroppedPath: (file: File) => string;
   getWorkspace: () => Promise<WorkspaceState>;
+  deleteClaudeRouterProvider: (
+    sessionId: string,
+    providerId: string,
+  ) => Promise<ClaudeRouterOperationResult>;
+  installClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
+  openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
   onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;
   onWorkspaceState: (listener: (state: WorkspaceState) => void) => Unsubscribe;
@@ -184,6 +238,12 @@ export interface ControlPanelApi {
     sessionId: string,
     input: SaveClaudeConfigInput,
   ) => Promise<ClaudeConfigResult>;
+  saveClaudeRouterProvider: (
+    sessionId: string,
+    input: SaveClaudeRouterProviderInput,
+  ) => Promise<ClaudeRouterOperationResult>;
+  startClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
+  stopClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   testClaudeConnection: (
     sessionId: string,
     input: SaveClaudeConfigInput,

@@ -1,0 +1,932 @@
+import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import type {
+  ClaudeRouterGatewayState,
+  ClaudeRouterManagementState,
+  ClaudeRouterProviderProtocol,
+  ClaudeRouterProviderView,
+  SaveClaudeRouterProviderInput,
+} from '../shared/contracts';
+
+const execFileAsync = promisify(execFile);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+const PROVIDER_PROTOCOLS = new Set<ClaudeRouterProviderProtocol>([
+  'anthropic_messages',
+  'openai_chat_completions',
+  'openai_responses',
+]);
+const PROVIDER_PROTOCOL_VALUES = new Set([
+  'anthropic_messages',
+  'openai_chat_completions',
+  'openai_responses',
+]);
+const ROUTER_RELEASE_API =
+  'https://api.github.com/repos/musistudio/claude-code-router/releases/latest';
+const MAX_RELEASE_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_INSTALLER_BYTES = 250 * 1024 * 1024;
+const MAX_RPC_RESPONSE_BYTES = 8 * 1024 * 1024;
+const SERVICE_WAIT_MS = 20_000;
+
+interface CcrCliInstallation {
+  cliPath: string;
+  version: string;
+}
+
+interface CcrServiceAccess {
+  managementUrl: string;
+  origin: string;
+  pid: number;
+  serviceToken: string;
+  webToken: string;
+}
+
+interface CcrGatewayStatus {
+  endpoint?: unknown;
+  lastError?: unknown;
+  state?: unknown;
+}
+
+interface CcrAppInfo {
+  version?: unknown;
+}
+
+interface CcrProviderConfig extends Record<string, unknown> {
+  id?: unknown;
+  models?: unknown;
+  name?: unknown;
+}
+
+interface CcrAppConfig extends Record<string, unknown> {
+  APIKEY?: unknown;
+  APIKEYS?: unknown;
+  Providers?: unknown;
+  preferredProvider?: unknown;
+}
+
+interface CcrRpcSuccess<T> {
+  ok: true;
+  value: T;
+}
+
+interface CcrRpcFailure {
+  error?: { message?: unknown };
+  ok: false;
+}
+
+interface RouterInstallerRelease {
+  digest: string;
+  downloadUrl: string;
+  fileName: string;
+  size: number;
+  version: string;
+}
+
+export interface DownloadedRouterInstaller {
+  filePath: string;
+  version: string;
+}
+
+export interface SavedRouterProvider {
+  connection: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+  };
+  provider: ClaudeRouterProviderView;
+  state: ClaudeRouterManagementState;
+}
+
+interface NormalizedRouterProviderInput extends Omit<
+  SaveClaudeRouterProviderInput,
+  'apiKey' | 'baseUrl' | 'id' | 'models' | 'name'
+> {
+  apiKey?: string;
+  baseUrl: string;
+  id?: string;
+  models: string[];
+  name: string;
+}
+
+interface UpdatedRouterConfig {
+  config: CcrAppConfig;
+  providerId: string;
+}
+
+const appDataRoot = (): string =>
+  process.env.APPDATA ?? process.env.LOCALAPPDATA ?? path.join(homedir(), 'AppData', 'Roaming');
+
+const localAppDataRoot = (): string =>
+  process.env.LOCALAPPDATA ?? path.join(homedir(), 'AppData', 'Local');
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
+const safeMessage = (error: unknown, secrets: string[] = []): string => {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const secret of secrets) {
+    if (secret) {
+      message = message.replaceAll(secret, '[已隐藏]');
+    }
+  }
+  return message.replace(/\s+/g, ' ').slice(0, 300);
+};
+
+const readJsonFile = (filePath: string, maximumBytes = 2 * 1024 * 1024): unknown => {
+  const stats = statSync(filePath);
+  if (!stats.isFile() || stats.size <= 0 || stats.size > maximumBytes) {
+    throw new Error('CCR 状态文件大小异常。');
+  }
+  return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
+};
+
+const normalizeProviderBaseUrl = (value: string): string => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error('Router 上游地址不是有效 URL。');
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('Router 上游地址不能包含用户名、密码、查询参数或片段。');
+  }
+  if (
+    parsed.protocol !== 'https:' &&
+    !(parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(hostname))
+  ) {
+    throw new Error('Router 的远程上游必须使用 HTTPS；仅本机地址允许 HTTP。');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+  const normalized = parsed.toString();
+  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+};
+
+export const normalizeRouterProviderInput = (
+  input: SaveClaudeRouterProviderInput,
+): NormalizedRouterProviderInput => {
+  const name = input.name.trim();
+  if (!/^[A-Za-z0-9._-]{1,80}$/.test(name)) {
+    throw new Error('Provider 名称只能包含字母、数字、点、下划线和短横线。');
+  }
+  if (input.id !== undefined && (input.id.length > 120 || !/^[A-Za-z0-9_.-]+$/.test(input.id))) {
+    throw new Error('Provider 标识无效。');
+  }
+  if (!PROVIDER_PROTOCOLS.has(input.protocol)) {
+    throw new Error('Provider 协议不受支持。');
+  }
+  const models = [
+    ...new Set(input.models.map((model) => model.trim()).filter((model) => Boolean(model))),
+  ];
+  if (
+    models.length === 0 ||
+    models.length > 50 ||
+    models.some((model) => !/^[-A-Za-z0-9._:/@[\]]{1,200}$/.test(model))
+  ) {
+    throw new Error('模型 ID 只能包含字母、数字以及 . _ : / @ [ ] -。');
+  }
+  const apiKey = input.apiKey?.trim();
+  if (input.credentialAction === 'replace' && !apiKey) {
+    throw new Error('新增或替换 Provider 时必须填写上游 API Key。');
+  }
+  if (apiKey && (apiKey.length > 20_000 || /[\r\n]/.test(apiKey))) {
+    throw new Error('上游 API Key 格式无效。');
+  }
+  return {
+    apiKey,
+    baseUrl: normalizeProviderBaseUrl(input.baseUrl),
+    credentialAction: input.credentialAction,
+    id: input.id,
+    makePreferred: Boolean(input.makePreferred),
+    models,
+    name,
+    protocol: input.protocol,
+    useForCurrentProject: Boolean(input.useForCurrentProject),
+  };
+};
+
+const providerBaseUrl = (provider: Record<string, unknown>): string =>
+  optionalString(provider.api_base_url) ??
+  optionalString(provider.baseUrl) ??
+  optionalString(provider.baseurl) ??
+  '';
+
+const providerProtocol = (provider: Record<string, unknown>): ClaudeRouterProviderProtocol => {
+  const type = optionalString(provider.type);
+  return type && PROVIDER_PROTOCOL_VALUES.has(type)
+    ? (type as ClaudeRouterProviderProtocol)
+    : 'openai_chat_completions';
+};
+
+const providerHasCredential = (provider: Record<string, unknown>): boolean => {
+  if (
+    optionalString(provider.api_key) ||
+    optionalString(provider.apiKey) ||
+    optionalString(provider.apikey)
+  ) {
+    return true;
+  }
+  return (
+    Array.isArray(provider.credentials) &&
+    provider.credentials.some(
+      (credential) =>
+        isRecord(credential) &&
+        Boolean(
+          optionalString(credential.api_key) ??
+          optionalString(credential.apiKey) ??
+          optionalString(credential.apikey),
+        ),
+    )
+  );
+};
+
+const providerModels = (provider: Record<string, unknown>): string[] =>
+  Array.isArray(provider.models)
+    ? provider.models
+        .filter((model): model is string => typeof model === 'string')
+        .map((model) => model.trim())
+        .filter(Boolean)
+        .slice(0, 50)
+    : [];
+
+const providerView = (
+  provider: Record<string, unknown>,
+  index: number,
+  preferredProvider: string,
+): ClaudeRouterProviderView => {
+  const name = optionalString(provider.name) ?? `Provider ${index + 1}`;
+  const id =
+    optionalString(provider.id) ??
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, '-')
+      .replace(/^-+|-+$/g, '') ??
+    `provider-${index + 1}`;
+  return {
+    baseUrl: providerBaseUrl(provider),
+    credentialConfigured: providerHasCredential(provider),
+    id: id || `provider-${index + 1}`,
+    models: providerModels(provider),
+    name,
+    preferred: preferredProvider === name,
+    protocol: providerProtocol(provider),
+  };
+};
+
+const providerRecords = (config: CcrAppConfig): CcrProviderConfig[] =>
+  Array.isArray(config.Providers)
+    ? config.Providers.filter((provider): provider is CcrProviderConfig => isRecord(provider))
+    : [];
+
+export const sanitizeRouterConfig = (config: CcrAppConfig): ClaudeRouterProviderView[] => {
+  const preferredProvider = optionalString(config.preferredProvider) ?? '';
+  return providerRecords(config).map((provider, index) =>
+    providerView(provider, index, preferredProvider),
+  );
+};
+
+const providerSlug = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'provider';
+
+const uniqueProviderId = (providers: CcrProviderConfig[], name: string): string => {
+  const base = providerSlug(name);
+  const existing = new Set(
+    providers.map((provider) => optionalString(provider.id)).filter(Boolean),
+  );
+  if (!existing.has(base)) {
+    return base;
+  }
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+  return `${base}-${Date.now()}`;
+};
+
+export const buildUpdatedRouterConfig = (
+  source: CcrAppConfig,
+  rawInput: SaveClaudeRouterProviderInput,
+): UpdatedRouterConfig => {
+  const input = normalizeRouterProviderInput(rawInput);
+  const config = structuredClone(source);
+  const providers = providerRecords(config);
+  const existingIndex = input.id
+    ? providers.findIndex((provider) => optionalString(provider.id) === input.id)
+    : -1;
+  if (input.id && existingIndex < 0) {
+    throw new Error('要编辑的 Provider 已不存在，请重新检测。');
+  }
+  const duplicateIndex = providers.findIndex(
+    (provider, index) => index !== existingIndex && optionalString(provider.name) === input.name,
+  );
+  if (duplicateIndex >= 0) {
+    throw new Error('Provider 名称已存在，请换一个名称。');
+  }
+
+  const previous = existingIndex >= 0 ? providers[existingIndex] : undefined;
+  const providerId = optionalString(previous?.id) ?? uniqueProviderId(providers, input.name);
+  const capabilities = Array.isArray(previous?.capabilities)
+    ? previous.capabilities.filter(
+        (capability) =>
+          isRecord(capability) &&
+          !PROVIDER_PROTOCOL_VALUES.has(optionalString(capability.type) ?? ''),
+      )
+    : [];
+  const next: CcrProviderConfig = {
+    ...(previous ?? {}),
+    api_base_url: input.baseUrl,
+    capabilities: [
+      ...capabilities,
+      {
+        baseUrl: input.baseUrl,
+        source: 'detected',
+        type: input.protocol,
+      },
+    ],
+    id: providerId,
+    models: input.models,
+    name: input.name,
+    type: input.protocol,
+  };
+  delete next.baseUrl;
+  delete next.baseurl;
+  if (input.credentialAction === 'replace') {
+    next.api_key = input.apiKey ?? '';
+    delete next.apiKey;
+    delete next.apikey;
+  }
+
+  if (existingIndex >= 0) {
+    providers[existingIndex] = next;
+  } else {
+    providers.push(next);
+  }
+  config.Providers = providers;
+  if (
+    input.makePreferred ||
+    !optionalString(config.preferredProvider) ||
+    (previous && optionalString(config.preferredProvider) === optionalString(previous.name))
+  ) {
+    config.preferredProvider = input.name;
+  }
+  return { config, providerId };
+};
+
+export const buildDeletedRouterConfig = (
+  source: CcrAppConfig,
+  providerId: string,
+): CcrAppConfig => {
+  if (!/^[A-Za-z0-9_.-]{1,120}$/.test(providerId)) {
+    throw new Error('Provider 标识无效。');
+  }
+  const config = structuredClone(source);
+  const providers = providerRecords(config);
+  const removed = providers.find((provider) => optionalString(provider.id) === providerId);
+  if (!removed) {
+    throw new Error('要删除的 Provider 已不存在。');
+  }
+  config.Providers = providers.filter((provider) => optionalString(provider.id) !== providerId);
+  if (optionalString(config.preferredProvider) === optionalString(removed.name)) {
+    config.preferredProvider = optionalString(providerRecords(config)[0]?.name) ?? '';
+  }
+  return config;
+};
+
+const readGatewayApiKey = (config: CcrAppConfig): string => {
+  const direct = optionalString(config.APIKEY);
+  if (direct) {
+    return direct;
+  }
+  if (Array.isArray(config.APIKEYS)) {
+    for (const candidate of config.APIKEYS) {
+      if (isRecord(candidate)) {
+        const key = optionalString(candidate.key);
+        if (key) {
+          return key;
+        }
+      }
+    }
+  }
+  throw new Error('CCR 没有可用于本机网关的访问密钥。');
+};
+
+export const parseRouterInstallerRelease = (value: unknown): RouterInstallerRelease => {
+  if (!isRecord(value)) {
+    throw new Error('CCR Release 元数据格式无效。');
+  }
+  const tag = optionalString(value.tag_name);
+  const assets = Array.isArray(value.assets) ? value.assets : [];
+  const asset = assets.find(
+    (candidate) =>
+      isRecord(candidate) &&
+      typeof candidate.name === 'string' &&
+      /^Claude-Code-Router_\d+\.\d+\.\d+\.exe$/.test(candidate.name),
+  );
+  if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag) || !asset || !isRecord(asset)) {
+    throw new Error('CCR 最新 Release 没有可验证的 Windows 安装包。');
+  }
+  const fileName = optionalString(asset.name) ?? '';
+  const version = tag.slice(1);
+  const downloadUrl = optionalString(asset.browser_download_url) ?? '';
+  const digestText = optionalString(asset.digest) ?? '';
+  const digestMatch = /^sha256:([a-f0-9]{64})$/i.exec(digestText);
+  const digest = digestMatch?.[1]?.toLowerCase();
+  const size = typeof asset.size === 'number' ? asset.size : 0;
+  let parsedDownload: URL;
+  try {
+    parsedDownload = new URL(downloadUrl);
+  } catch {
+    throw new Error('CCR 安装包下载地址无效。');
+  }
+  if (
+    fileName !== `Claude-Code-Router_${version}.exe` ||
+    parsedDownload.protocol !== 'https:' ||
+    parsedDownload.hostname !== 'github.com' ||
+    !parsedDownload.pathname.startsWith(
+      `/musistudio/claude-code-router/releases/download/${tag}/`,
+    ) ||
+    !digest ||
+    !Number.isInteger(size) ||
+    size <= 0 ||
+    size > MAX_INSTALLER_BYTES
+  ) {
+    throw new Error('CCR Windows 安装包未通过来源、版本、大小或 SHA-256 元数据检查。');
+  }
+  return {
+    digest,
+    downloadUrl,
+    fileName,
+    size,
+    version,
+  };
+};
+
+const fileSha256 = async (filePath: string): Promise<string> => {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest('hex');
+};
+
+const versionMajor = (version: string | undefined): number | undefined => {
+  const match = /^(\d+)\./.exec(version ?? '');
+  return match ? Number(match[1]) : undefined;
+};
+
+export class ClaudeRouterManager {
+  private readonly installerDirectory: string;
+
+  public constructor(userDataPath: string) {
+    this.installerDirectory = path.join(userDataPath, 'claude', 'router-installers');
+  }
+
+  public async getState(): Promise<ClaudeRouterManagementState> {
+    const checkedAt = Date.now();
+    const [cli, desktop] = await Promise.all([
+      this.findCliInstallation(),
+      Promise.resolve(this.findDesktopExecutable()),
+    ]);
+    const access = await this.getActiveServiceAccess();
+    if (!access) {
+      const installed = Boolean(cli || desktop);
+      const manageable = installed && (!cli?.version || (versionMajor(cli.version) ?? 0) >= 3);
+      return {
+        checkedAt,
+        endpoint: 'http://127.0.0.1:3456',
+        gatewayState: 'stopped',
+        installed,
+        manageable,
+        managementAvailable: false,
+        message: installed
+          ? manageable
+            ? 'Claude Code Router 已安装，但管理服务当前未运行。'
+            : '检测到旧版 Router；请安装或升级到 3.x 后使用可视化管理。'
+          : '尚未检测到 Claude Code Router，可下载并启动官方 Windows 安装程序。',
+        providers: [],
+        serviceRunning: false,
+        version: cli?.version,
+      };
+    }
+
+    try {
+      const [appInfo, gateway, config] = await Promise.all([
+        this.rpcWithAccess<CcrAppInfo>(access, 'getAppInfo'),
+        this.rpcWithAccess<CcrGatewayStatus>(access, 'getGatewayStatus'),
+        this.rpcWithAccess<CcrAppConfig>(access, 'getConfig'),
+      ]);
+      const gatewayState = this.gatewayState(gateway.state);
+      const lastError = optionalString(gateway.lastError);
+      const providers = sanitizeRouterConfig(config);
+      return {
+        checkedAt,
+        endpoint: optionalString(gateway.endpoint) ?? 'http://127.0.0.1:3456',
+        gatewayState,
+        installed: true,
+        manageable: true,
+        managementAvailable: true,
+        message:
+          gatewayState === 'running'
+            ? `Router 网关正在运行，已配置 ${providers.length} 个 Provider。`
+            : gatewayState === 'error'
+              ? `Router 管理服务已运行，但网关出错：${lastError ?? '请检查 Provider 配置。'}`
+              : `Router 管理服务已运行，网关状态：${gatewayState}。`,
+        providers,
+        serviceRunning: true,
+        version: optionalString(appInfo.version) ?? cli?.version,
+      };
+    } catch (error) {
+      return {
+        checkedAt,
+        endpoint: 'http://127.0.0.1:3456',
+        gatewayState: 'unknown',
+        installed: true,
+        manageable: false,
+        managementAvailable: false,
+        message: `CCR 管理服务响应异常：${safeMessage(error)}`,
+        providers: [],
+        serviceRunning: true,
+        version: cli?.version,
+      };
+    }
+  }
+
+  public async start(): Promise<ClaudeRouterManagementState> {
+    const existing = await this.getActiveServiceAccess();
+    if (existing) {
+      await this.rpcWithAccess(existing, 'startGateway');
+      return this.getState();
+    }
+
+    const cli = await this.findCliInstallation();
+    if (cli) {
+      if ((versionMajor(cli.version) ?? 0) < 3) {
+        throw new Error('一键管理要求 Claude Code Router 3.x，请先升级。');
+      }
+      await execFileAsync(process.execPath, [cli.cliPath, 'start', '--no-open', '--gateway'], {
+        encoding: 'utf8',
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        maxBuffer: 1024 * 1024,
+        timeout: 30_000,
+        windowsHide: true,
+      });
+    } else {
+      const desktop = this.findDesktopExecutable();
+      if (!desktop) {
+        throw new Error('未找到 Claude Code Router，请先下载安装。');
+      }
+      const child = spawn(desktop, [], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+    }
+
+    const access = await this.waitForActiveService();
+    await this.rpcWithAccess(access, 'startGateway');
+    return this.getState();
+  }
+
+  public async stop(): Promise<ClaudeRouterManagementState> {
+    const access = await this.requireActiveService();
+    await this.rpcWithAccess(access, 'stopGateway');
+    return this.getState();
+  }
+
+  public async managementUrl(): Promise<string> {
+    let access = await this.getActiveServiceAccess();
+    if (!access) {
+      await this.start();
+      access = await this.requireActiveService();
+    }
+    return access.managementUrl;
+  }
+
+  public async saveProvider(rawInput: SaveClaudeRouterProviderInput): Promise<SavedRouterProvider> {
+    const input = normalizeRouterProviderInput(rawInput);
+    const access = await this.requireActiveService();
+    const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
+    const updated = buildUpdatedRouterConfig(current, input);
+    const saved = await this.rpcWithAccess<CcrAppConfig>(
+      access,
+      'saveConfig',
+      [updated.config, { applyProfile: false }],
+      [input.apiKey ?? ''],
+    );
+    const state = await this.getState();
+    const provider = state.providers.find((item) => item.id === updated.providerId);
+    if (!provider) {
+      throw new Error('CCR 已保存配置，但没有返回对应 Provider。');
+    }
+    return {
+      connection: {
+        apiKey: readGatewayApiKey(saved),
+        baseUrl: state.endpoint,
+        model: `${provider.name}/${provider.models[0]}`,
+      },
+      provider,
+      state,
+    };
+  }
+
+  public async deleteProvider(providerId: string): Promise<ClaudeRouterManagementState> {
+    const access = await this.requireActiveService();
+    const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
+    const updated = buildDeletedRouterConfig(current, providerId);
+    await this.rpcWithAccess(access, 'saveConfig', [updated, { applyProfile: false }]);
+    return this.getState();
+  }
+
+  public async downloadLatestInstaller(): Promise<DownloadedRouterInstaller> {
+    const releaseResponse = await fetch(ROUTER_RELEASE_API, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'ClaudeDock/1.0',
+        'x-github-api-version': '2022-11-28',
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!releaseResponse.ok) {
+      throw new Error(`无法读取 CCR 官方 Release：HTTP ${releaseResponse.status}。`);
+    }
+    const releaseBytes = Buffer.from(await releaseResponse.arrayBuffer());
+    if (releaseBytes.length > MAX_RELEASE_RESPONSE_BYTES) {
+      throw new Error('CCR Release 元数据超过允许大小。');
+    }
+    const release = parseRouterInstallerRelease(
+      JSON.parse(releaseBytes.toString('utf8')) as unknown,
+    );
+
+    mkdirSync(this.installerDirectory, { recursive: true });
+    const finalPath = path.join(this.installerDirectory, release.fileName);
+    if (
+      existsSync(finalPath) &&
+      statSync(finalPath).size === release.size &&
+      (await fileSha256(finalPath)) === release.digest
+    ) {
+      return { filePath: finalPath, version: release.version };
+    }
+
+    const temporaryPath = `${finalPath}.${process.pid}.${Date.now()}.download`;
+    try {
+      await this.downloadInstaller(release, temporaryPath);
+      if (existsSync(finalPath)) {
+        unlinkSync(finalPath);
+      }
+      renameSync(temporaryPath, finalPath);
+    } catch (error) {
+      if (existsSync(temporaryPath)) {
+        unlinkSync(temporaryPath);
+      }
+      throw error;
+    }
+    return { filePath: finalPath, version: release.version };
+  }
+
+  private async downloadInstaller(
+    release: RouterInstallerRelease,
+    destination: string,
+  ): Promise<void> {
+    const response = await fetch(release.downloadUrl, {
+      headers: { 'user-agent': 'ClaudeDock/1.0' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(10 * 60_000),
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`下载 CCR 官方安装包失败：HTTP ${response.status}。`);
+    }
+    const contentLength = Number(response.headers.get('content-length') ?? 0);
+    if (contentLength > MAX_INSTALLER_BYTES) {
+      throw new Error('CCR 安装包超过允许大小。');
+    }
+
+    const output = createWriteStream(destination, { flags: 'wx' });
+    const reader = response.body.getReader();
+    const hash = createHash('sha256');
+    let written = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          break;
+        }
+        const buffer = Buffer.from(chunk.value);
+        written += buffer.length;
+        if (written > MAX_INSTALLER_BYTES) {
+          throw new Error('CCR 安装包超过允许大小。');
+        }
+        hash.update(buffer);
+        if (!output.write(buffer)) {
+          await once(output, 'drain');
+        }
+      }
+      output.end();
+      await once(output, 'finish');
+    } catch (error) {
+      output.destroy();
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    if (written !== release.size || hash.digest('hex') !== release.digest) {
+      throw new Error('CCR 官方安装包大小或 SHA-256 校验失败，已拒绝启动。');
+    }
+  }
+
+  private async findCliInstallation(): Promise<CcrCliInstallation | undefined> {
+    const directories = new Set<string>();
+    try {
+      const result = await execFileAsync('where.exe', ['ccr'], {
+        encoding: 'utf8',
+        timeout: 3_000,
+        windowsHide: true,
+      });
+      for (const line of result.stdout.split(/\r?\n/)) {
+        const candidate = line.trim();
+        if (candidate && path.isAbsolute(candidate)) {
+          directories.add(path.dirname(candidate));
+        }
+      }
+    } catch {
+      // Fall through to the standard npm location.
+    }
+    directories.add(path.join(appDataRoot(), 'npm'));
+
+    for (const directory of directories) {
+      const packageRoot = path.join(directory, 'node_modules', '@musistudio', 'claude-code-router');
+      const packageFile = path.join(packageRoot, 'package.json');
+      const cliPath = path.join(packageRoot, 'dist', 'main', 'cli.js');
+      if (!existsSync(packageFile) || !existsSync(cliPath)) {
+        continue;
+      }
+      try {
+        const parsed = readJsonFile(packageFile) as Record<string, unknown>;
+        const version = optionalString(parsed.version);
+        if (version && /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(version)) {
+          return { cliPath, version };
+        }
+      } catch {
+        // Try the next installation candidate.
+      }
+    }
+    return undefined;
+  }
+
+  private findDesktopExecutable(): string | undefined {
+    const root = localAppDataRoot();
+    const candidates = [
+      path.join(root, 'Programs', 'claude-code-router', 'Claude Code Router.exe'),
+      path.join(root, 'Programs', 'Claude Code Router', 'Claude Code Router.exe'),
+      path.join(root, 'Claude Code Router', 'Claude Code Router.exe'),
+    ];
+    return candidates.find((candidate) => existsSync(candidate));
+  }
+
+  private serviceFile(): string {
+    return path.join(appDataRoot(), 'claude-code-router', 'service.json');
+  }
+
+  private readServiceAccess(): CcrServiceAccess {
+    const parsed = readJsonFile(this.serviceFile());
+    if (!isRecord(parsed)) {
+      throw new Error('CCR service.json 格式无效。');
+    }
+    const urlText = optionalString(parsed.url);
+    const serviceToken = optionalString(parsed.serviceToken);
+    const pid = typeof parsed.pid === 'number' ? parsed.pid : 0;
+    if (!urlText || !serviceToken || !Number.isInteger(pid) || pid <= 0) {
+      throw new Error('CCR service.json 缺少必要字段。');
+    }
+    const url = new URL(urlText);
+    if (
+      url.protocol !== 'http:' ||
+      !LOOPBACK_HOSTS.has(url.hostname.toLowerCase()) ||
+      url.username ||
+      url.password
+    ) {
+      throw new Error('CCR 管理服务不是受支持的本机地址。');
+    }
+    const webToken = url.searchParams.get('ccr_web_token')?.trim() ?? '';
+    if (webToken.length < 20 || webToken.length > 300 || serviceToken.length > 300) {
+      throw new Error('CCR 管理令牌格式无效。');
+    }
+    const origin = url.origin;
+    return {
+      managementUrl: url.toString(),
+      origin,
+      pid,
+      serviceToken,
+      webToken,
+    };
+  }
+
+  private async getActiveServiceAccess(): Promise<CcrServiceAccess | undefined> {
+    if (!existsSync(this.serviceFile())) {
+      return undefined;
+    }
+    try {
+      const access = this.readServiceAccess();
+      const identity = await this.rpcWithAccess<Record<string, unknown>>(
+        access,
+        'getServiceIdentity',
+        [access.serviceToken],
+        [access.serviceToken, access.webToken],
+      );
+      if (identity.serviceTokenMatches !== true || identity.pid !== access.pid) {
+        return undefined;
+      }
+      return access;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async requireActiveService(): Promise<CcrServiceAccess> {
+    const access = await this.getActiveServiceAccess();
+    if (!access) {
+      throw new Error('CCR 管理服务没有运行，请先点击“启动 Router”。');
+    }
+    return access;
+  }
+
+  private async waitForActiveService(): Promise<CcrServiceAccess> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < SERVICE_WAIT_MS) {
+      const access = await this.getActiveServiceAccess();
+      if (access) {
+        return access;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error('等待 CCR 管理服务启动超时。');
+  }
+
+  private async rpcWithAccess<T>(
+    access: CcrServiceAccess,
+    method: string,
+    args: unknown[] = [],
+    secrets: string[] = [],
+  ): Promise<T> {
+    const response = await fetch(`${access.origin}/api/ccr/rpc`, {
+      body: JSON.stringify({ args, method }),
+      headers: {
+        'content-type': 'application/json',
+        'x-ccr-web-auth': access.webToken,
+      },
+      method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+    const contentLength = Number(response.headers.get('content-length') ?? 0);
+    if (contentLength > MAX_RPC_RESPONSE_BYTES) {
+      throw new Error('CCR 管理响应超过允许大小。');
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > MAX_RPC_RESPONSE_BYTES) {
+      throw new Error('CCR 管理响应超过允许大小。');
+    }
+    let payload: CcrRpcSuccess<T> | CcrRpcFailure;
+    try {
+      payload = JSON.parse(bytes.toString('utf8')) as CcrRpcSuccess<T> | CcrRpcFailure;
+    } catch {
+      throw new Error(`CCR 管理接口返回了无效 JSON（HTTP ${response.status}）。`);
+    }
+    if (!response.ok || payload.ok !== true) {
+      const message =
+        payload.ok === false && typeof payload.error?.message === 'string'
+          ? payload.error.message
+          : `CCR 管理接口返回 HTTP ${response.status}。`;
+      throw new Error(safeMessage(message, [access.webToken, access.serviceToken, ...secrets]));
+    }
+    return payload.value;
+  }
+
+  private gatewayState(value: unknown): ClaudeRouterGatewayState {
+    return value === 'error' || value === 'running' || value === 'starting' || value === 'stopped'
+      ? value
+      : 'unknown';
+  }
+}

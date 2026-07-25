@@ -409,6 +409,9 @@
                   <div class="curl-next-step" id="curl-next-step"></div>
                   <div class="curl-analysis__actions">
                     <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
+                    <button id="import-curl-router" type="button" hidden>
+                      一键写入 Router 并接入当前项目
+                    </button>
                     <button id="use-detected-router" type="button" hidden>
                       选用已发现的 Router
                     </button>
@@ -419,9 +422,125 @@
                 </div>
               </section>
 
-              <section class="converter-help">
+              <section class="router-manager" aria-labelledby="router-manager-title">
                 <div class="step-heading">
                   <span class="step-number">2</span>
+                  <div>
+                    <strong id="router-manager-title">安装与管理 Claude Code Router</strong>
+                    <span>只管理 Claude Code 接入；不会修改 Codex profile 或系统代理。</span>
+                  </div>
+                </div>
+                <div class="router-status" id="router-status" data-state="unknown">
+                  <div>
+                    <strong id="router-status-title">正在读取 Router 状态…</strong>
+                    <span id="router-status-detail">等待首次检测</span>
+                  </div>
+                  <span id="router-version">未检测</span>
+                </div>
+                <div class="router-actions">
+                  <button id="install-router" type="button">安装 / 更新官方版</button>
+                  <button id="start-router" type="button">启动 Router</button>
+                  <button id="stop-router" type="button">停止网关</button>
+                  <button id="open-router-management" type="button">打开完整管理页</button>
+                </div>
+                <p class="router-install-note">
+                  安装会从
+                  <code>musistudio/claude-code-router</code>
+                  官方 GitHub Release 下载 Windows 安装包，核对 Release 的 SHA-256
+                  后才启动安装向导。
+                </p>
+
+                <div class="router-provider-heading">
+                  <div>
+                    <strong>Provider 配置</strong>
+                    <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
+                  </div>
+                  <button id="add-router-provider" type="button">添加 Provider</button>
+                </div>
+                <div
+                  id="router-provider-list"
+                  class="router-provider-list"
+                  aria-live="polite"
+                ></div>
+
+                <form id="router-provider-form" hidden>
+                  <input id="router-provider-id" type="hidden" />
+                  <div class="router-provider-form__heading">
+                    <strong id="router-provider-form-title">添加 Provider</strong>
+                    <span>OpenAI cURL 通常选择 Chat Completions。</span>
+                  </div>
+                  <label class="field" for="router-provider-name">
+                    <span>Provider 名称</span>
+                    <input
+                      id="router-provider-name"
+                      type="text"
+                      maxlength="80"
+                      pattern="[A-Za-z0-9._-]+"
+                      placeholder="aancn-relay"
+                      spellcheck="false"
+                    />
+                    <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型 ID。</small>
+                  </label>
+                  <label class="field" for="router-provider-protocol">
+                    <span>上游协议</span>
+                    <select id="router-provider-protocol">
+                      <option value="openai_chat_completions">OpenAI Chat Completions</option>
+                      <option value="openai_responses">OpenAI Responses</option>
+                      <option value="anthropic_messages">Anthropic Messages</option>
+                    </select>
+                  </label>
+                  <label class="field" for="router-provider-base-url">
+                    <span>上游接口地址</span>
+                    <input
+                      id="router-provider-base-url"
+                      type="url"
+                      maxlength="2048"
+                      placeholder="https://example.com/v1/chat/completions"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="field" for="router-provider-models">
+                    <span>模型 ID（每行一个）</span>
+                    <textarea
+                      id="router-provider-models"
+                      maxlength="10000"
+                      rows="3"
+                      spellcheck="false"
+                      placeholder="claude-fable-5"
+                    ></textarea>
+                  </label>
+                  <label class="field" for="router-provider-api-key">
+                    <span>上游 API Key</span>
+                    <input
+                      id="router-provider-api-key"
+                      type="password"
+                      maxlength="20000"
+                      autocomplete="new-password"
+                      placeholder="编辑时留空可保留 CCR 中的原密钥"
+                    />
+                  </label>
+                  <label class="router-choice" for="router-provider-preferred">
+                    <input id="router-provider-preferred" type="checkbox" checked />
+                    <span>设为 Router 首选 Provider</span>
+                  </label>
+                  <label class="router-choice" for="router-provider-use-project">
+                    <input id="router-provider-use-project" type="checkbox" checked />
+                    <span>同时安全接入当前 ClaudeDock 项目</span>
+                  </label>
+                  <small class="router-project-note"
+                    >启用后，Router 本机访问密钥会在主进程内直接进入 Windows
+                    安全存储，不会传回界面。</small
+                  >
+                  <div class="router-provider-form__actions">
+                    <button id="save-router-provider" type="submit">保存 Provider</button>
+                    <button id="cancel-router-provider" type="button">取消</button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="converter-help">
+                <div class="step-heading">
+                  <span class="step-number">3</span>
                   <div>
                     <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
                     <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
@@ -456,7 +575,7 @@
 
               <form id="claude-config-form">
                 <div class="step-heading">
-                  <span class="step-number">3</span>
+                  <span class="step-number">4</span>
                   <div>
                     <strong>确认 Claude Code 最终连接配置</strong>
                     <span>上面的自动操作会填到这里；熟悉后也可以手动修改。</span>

@@ -5,6 +5,8 @@ import type {
   ClaudeGatewayDiagnostics,
   ClaudeOperationResult,
   ClaudeProjectState,
+  ClaudeRouterManagementState,
+  ClaudeRouterOperationResult,
   ControlPanelApi,
   DirectoryChoiceResult,
   OperationResult,
@@ -27,8 +29,21 @@ const api: ControlPanelApi = {
       'claude:get-gateway-diagnostics',
       sessionId,
     ) as Promise<ClaudeGatewayDiagnostics>,
+  getClaudeRouterManagementState: (sessionId: string) =>
+    ipcRenderer.invoke(
+      'claude:router-get-state',
+      sessionId,
+    ) as Promise<ClaudeRouterManagementState>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
+  deleteClaudeRouterProvider: (sessionId, providerId) =>
+    ipcRenderer.invoke(
+      'claude:router-delete-provider',
+      sessionId,
+      providerId,
+    ) as Promise<ClaudeRouterOperationResult>,
+  installClaudeRouter: (sessionId) =>
+    ipcRenderer.invoke('claude:router-install', sessionId) as Promise<ClaudeRouterOperationResult>,
   launchClaude: (sessionId, mode) =>
     ipcRenderer.invoke('claude:launch', sessionId, mode) as Promise<ClaudeOperationResult>,
   onClaudeState: (listener) => {
@@ -78,6 +93,21 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeOperationResult>,
   saveClaudeConfig: (sessionId, input) =>
     ipcRenderer.invoke('claude:save-config', sessionId, input) as Promise<ClaudeConfigResult>,
+  saveClaudeRouterProvider: (sessionId, input) =>
+    ipcRenderer.invoke(
+      'claude:router-save-provider',
+      sessionId,
+      input,
+    ) as Promise<ClaudeRouterOperationResult>,
+  startClaudeRouter: (sessionId) =>
+    ipcRenderer.invoke('claude:router-start', sessionId) as Promise<ClaudeRouterOperationResult>,
+  stopClaudeRouter: (sessionId) =>
+    ipcRenderer.invoke('claude:router-stop', sessionId) as Promise<ClaudeRouterOperationResult>,
+  openClaudeRouterManagement: (sessionId) =>
+    ipcRenderer.invoke(
+      'claude:router-open-management',
+      sessionId,
+    ) as Promise<ClaudeRouterOperationResult>,
   testClaudeConnection: (sessionId, input) =>
     ipcRenderer.invoke(
       'claude:test-connection',
