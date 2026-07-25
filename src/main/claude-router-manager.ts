@@ -145,7 +145,22 @@ const safeMessage = (error: unknown, secrets: string[] = []): string => {
       message = message.replaceAll(secret, '[已隐藏]');
     }
   }
-  return message.replace(/\s+/g, ' ').slice(0, 300);
+  return message
+    .replace(/sk-[A-Za-z0-9_-]{8,}/gi, '[已隐藏]')
+    .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer [已隐藏]')
+    .replace(/\s+/g, ' ')
+    .slice(0, 300);
+};
+
+export const routerGatewayErrorMessage = (providerCount: number, lastError?: string): string => {
+  if (
+    providerCount === 0 ||
+    /No available models|Configure at least one provider/i.test(lastError ?? '')
+  ) {
+    return 'Router 管理服务已运行，但 3456 模型网关无法启动：还没有配置 Provider 和模型。请按下方“解决办法”添加第一个 Provider。';
+  }
+  const detail = lastError ? safeMessage(lastError) : '请检查 Provider 的地址、模型和密钥。';
+  return `Router 管理服务已运行，但 3456 模型网关出错：${detail} 请编辑 Provider 后重新启动。`;
 };
 
 const readJsonFile = (filePath: string, maximumBytes = 2 * 1024 * 1024): unknown => {
@@ -550,7 +565,7 @@ export class ClaudeRouterManager {
           gatewayState === 'running'
             ? `Router 网关正在运行，已配置 ${providers.length} 个 Provider。`
             : gatewayState === 'error'
-              ? `Router 管理服务已运行，但网关出错：${lastError ?? '请检查 Provider 配置。'}`
+              ? routerGatewayErrorMessage(providers.length, lastError)
               : `Router 管理服务已运行，网关状态：${gatewayState}。`,
         providers,
         serviceRunning: true,

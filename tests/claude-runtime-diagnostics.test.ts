@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import {
   parseClaudeRuntimeApiError,
+  routerRepairInputForProject,
   routerBlockingDetail,
   usesDefaultClaudeRouter,
 } from '../src/main/claude-runtime';
@@ -61,5 +62,29 @@ describe('Claude runtime route diagnostics', () => {
 
     expect(usesDefaultClaudeRouter(directConfig)).toBe(false);
     expect(routerBlockingDetail(directConfig, routerState)).toBeUndefined();
+  });
+
+  it('builds a secret-preserving one-click repair input from a direct Anthropic project', () => {
+    const directConfig: NormalizedClaudeConfig = {
+      authMode: 'apiKey',
+      baseUrl: 'https://gateway.example.com/team',
+      model: 'team-opus',
+      preset: 'custom',
+      provider: 'gateway',
+    };
+
+    expect(routerRepairInputForProject(directConfig, 'stored-project-key')).toEqual({
+      apiKey: 'stored-project-key',
+      baseUrl: 'https://gateway.example.com/team/v1/messages',
+      credentialAction: 'replace',
+      makePreferred: true,
+      models: ['team-opus'],
+      name: 'claudedock-gateway.example.com',
+      protocol: 'anthropic_messages',
+      useForCurrentProject: false,
+    });
+    expect(() =>
+      routerRepairInputForProject({ ...directConfig, authMode: 'authToken' }, 'bearer-token'),
+    ).toThrow('API Key');
   });
 });

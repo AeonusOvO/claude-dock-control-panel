@@ -99,6 +99,11 @@ const api: ControlPanelApi = {
       sessionId,
       input,
     ) as Promise<ClaudeRouterOperationResult>,
+  repairClaudeRouterFromProject: (sessionId) =>
+    ipcRenderer.invoke(
+      'claude:router-repair-from-project',
+      sessionId,
+    ) as Promise<ClaudeRouterOperationResult>,
   startClaudeRouter: (sessionId) =>
     ipcRenderer.invoke('claude:router-start', sessionId) as Promise<ClaudeRouterOperationResult>,
   stopClaudeRouter: (sessionId) =>

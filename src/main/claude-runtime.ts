@@ -25,7 +25,7 @@ import {
   type ClaudeEnvironmentOverrides,
   type NormalizedClaudeConfig,
 } from './claude-configuration';
-import { testClaudeConnection } from './claude-connection-test';
+import { claudeMessagesEndpoint, testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import {
@@ -112,6 +112,44 @@ export const usesDefaultClaudeRouter = (config: NormalizedClaudeConfig): boolean
   } catch {
     return false;
   }
+};
+
+export const routerRepairInputForProject = (
+  config: NormalizedClaudeConfig,
+  credential?: string,
+): SaveClaudeRouterProviderInput => {
+  let parsed: URL;
+  try {
+    parsed = new URL(config.baseUrl);
+  } catch {
+    throw new Error('当前项目没有可复制到 Router 的远程 Anthropic 接口。');
+  }
+  if (
+    config.provider !== 'gateway' ||
+    usesDefaultClaudeRouter(config) ||
+    parsed.protocol !== 'https:'
+  ) {
+    throw new Error('当前项目不是可复制到 Router 的 HTTPS 远程直连配置。');
+  }
+  if (config.authMode !== 'apiKey' || !credential) {
+    throw new Error('一键修复要求当前项目已保存 API Key；Bearer 或无认证上游请手动添加。');
+  }
+  const providerSuffix =
+    parsed.hostname
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 65) || 'current-project';
+  return {
+    apiKey: credential,
+    baseUrl: claudeMessagesEndpoint(config.baseUrl),
+    credentialAction: 'replace',
+    makePreferred: true,
+    models: [config.model],
+    name: `claudedock-${providerSuffix}`,
+    protocol: 'anthropic_messages',
+    useForCurrentProject: false,
+  };
 };
 
 const normalizedRuntimeError = (value: string): string => {
@@ -367,6 +405,45 @@ export class ClaudeRuntime {
       provider: 'gateway',
     });
     return { projectState, saved };
+  }
+
+  public async repairRouterFromProject(
+    sessionId: string,
+    cwd: string,
+  ): Promise<{
+    projectState: ClaudeProjectState;
+    saved: SavedRouterProvider;
+  }> {
+    const config = this.configStore.getConfig(cwd);
+    const credential = this.configStore.getCredential(cwd);
+    const input = routerRepairInputForProject(config, credential);
+    const current = await this.routerManager.getState();
+    if (!current.managementAvailable) {
+      throw new Error('CCR 管理服务尚未就绪，无法写入 Provider。');
+    }
+    if (current.providers.length > 0) {
+      throw new Error('CCR 已存在 Provider；请编辑现有配置或手动选择要使用的 Provider。');
+    }
+
+    const saved = await this.routerManager.saveProvider(input);
+    const routerState = await this.routerManager.start();
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: routerState };
+    if (routerState.gatewayState !== 'running') {
+      throw new Error(routerState.message);
+    }
+    const projectState = await this.saveConfig(sessionId, cwd, {
+      authMode: 'authToken',
+      baseUrl: saved.connection.baseUrl,
+      credential: saved.connection.apiKey,
+      credentialAction: 'replace',
+      model: saved.connection.model,
+      preset: 'gateway',
+      provider: 'gateway',
+    });
+    return {
+      projectState,
+      saved: { ...saved, state: routerState },
+    };
   }
 
   public async prepareLaunch(

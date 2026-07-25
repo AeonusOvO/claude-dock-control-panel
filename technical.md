@@ -130,6 +130,12 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - “用于当前项目”会取得 CCR 当前 API 端点、路由模型和 Router 客户端密钥；密钥直接交给
   `ClaudeConfigStore` 用 Windows DPAPI 保存，不经过 renderer。最终只影响 ClaudeDock 为
   当前项目启动的 Claude Code 子进程。
+- `router-repair-from-project` 只接受当前项目的 HTTPS Anthropic 直连、`apiKey` 认证和
+  已加密保存凭据。主进程把规范化基址转换为完整 `/v1/messages` Provider，使用
+  `applyProfile: false` 保存，确认 `3456` 启动成功后才把项目切到 Router；凭据不跨 IPC。
+  Bearer、无认证、已有 Provider 或项目已指向 `3456` 时拒绝自动复制并引导手动配置。
+- CCR 返回 `No available models` 或 Provider 列表为空时，主进程将其映射为中文原因和
+  下一步，不向 renderer 透传英文错误；其他错误在显示前会净化 Bearer 与 `sk-` 形态。
 - 启动操作优先复用现有管理服务并调用 `startGateway`；服务未运行时用检测到的官方 CLI
   或桌面程序启动。停止只调用 `stopGateway`，保留管理服务，便于继续编辑 Provider。
 - 一键安装从 `api.github.com/repos/musistudio/claude-code-router/releases/latest` 读取

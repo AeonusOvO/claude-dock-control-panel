@@ -22,6 +22,9 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - 可在“接入”页一键获取 Claude Code Router 官方 Windows 安装程序、启动/停止模型网关、
   打开完整管理页，并可视化新增、编辑、删除 Provider。OpenAI cURL 可一键写入 Router，
   同时把 Router 路由接入当前 ClaudeDock 项目。
+- CCR 管理服务已运行但 Provider 为空时，不再只显示 `No available models`：界面会解释
+  当前项目是否受影响、禁止无意义的重复启动，并提供“用当前项目配置一键修复”或手动添加
+  第一个 Provider。自动修复只在远程 Anthropic 直连和 API Key 已安全保存时可用。
 - 可按 Claude 官方建议主动发送最多 1 个输出 token 的 `/v1/messages` 测试，分别显示
   端点、身份认证和模型响应结果；后台自动检测不会发起付费模型请求。
 - “会话”页持续显示当前路由健康状态：使用本机 Router 时会在启动前确认 `3456` 网关与
@@ -85,6 +88,11 @@ npm run dist
 7. “Provider 配置”支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic
    Messages 三种上游。可逐项编辑地址、模型和密钥，也可只点“用于当前项目”复用已保存
    的上游凭据。
+   - 如果显示“还没有配置 Provider 和模型”，先看黄色“解决办法”卡片。
+   - 当前项目已有测试通过的远程 Anthropic + API Key 时，点击“一键修复”会在主进程复用
+     Windows 安全存储中的密钥，创建 Provider、启动 `3456` 并切换当前项目。
+   - Bearer、无认证或当前项目本来就指向 `3456` 时，点击“手动添加第一个 Provider”，
+     依次填写协议、接口、模型和上游密钥，保存后再启动 Router。
 8. 点击“真实测试端点、密钥和模型”。测试最多请求 1 个输出 token，可能产生极少量费用；
    三项全部通过后再保存。该结果只证明测试时刻的最小 Messages 请求成功，不保证服务持续
    在线或完整兼容 Claude Code 的流式、工具调用与长对话。API 凭据通过 Windows 安全存储

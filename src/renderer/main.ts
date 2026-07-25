@@ -108,6 +108,9 @@ const openDetectedRouterButton = requiredElement<HTMLButtonElement>('#open-detec
 const openRouterManagementButton = requiredElement<HTMLButtonElement>('#open-router-management');
 const projectCount = requiredElement<HTMLElement>('#project-count');
 const projectList = requiredElement<HTMLElement>('#project-list');
+const repairRouterFromProjectButton = requiredElement<HTMLButtonElement>(
+  '#repair-router-from-project',
+);
 const restartButton = requiredElement<HTMLButtonElement>('#restart-terminal');
 const refreshGatewaysButton = requiredElement<HTMLButtonElement>('#refresh-gateways');
 const routeHealth = requiredElement<HTMLElement>('#route-health');
@@ -127,11 +130,17 @@ const routerProviderName = requiredElement<HTMLInputElement>('#router-provider-n
 const routerProviderPreferred = requiredElement<HTMLInputElement>('#router-provider-preferred');
 const routerProviderProtocol = requiredElement<HTMLSelectElement>('#router-provider-protocol');
 const routerProviderUseProject = requiredElement<HTMLInputElement>('#router-provider-use-project');
+const routerRemediation = requiredElement<HTMLElement>('#router-remediation');
+const routerRemediationDetail = requiredElement<HTMLElement>('#router-remediation-detail');
+const routerRemediationTitle = requiredElement<HTMLElement>('#router-remediation-title');
 const routerStatus = requiredElement<HTMLElement>('#router-status');
 const routerStatusDetail = requiredElement<HTMLElement>('#router-status-detail');
 const routerStatusTitle = requiredElement<HTMLElement>('#router-status-title');
 const routerVersion = requiredElement<HTMLElement>('#router-version');
 const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-router-provider');
+const configureRouterProviderButton = requiredElement<HTMLButtonElement>(
+  '#configure-router-provider',
+);
 const sessionDetail = requiredElement<HTMLElement>('#session-detail');
 const sessionPid = requiredElement<HTMLElement>('#session-pid');
 const statusPill = requiredElement<HTMLElement>('#status-pill');
@@ -467,6 +476,9 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   if (configFormSessionId !== state.sessionId) {
     populateClaudeConfigForm(state);
   }
+  if (routerManagementState) {
+    renderRouterRemediation(routerManagementState);
+  }
 };
 
 const loadClaudeState = async (sessionId: string): Promise<void> => {
@@ -699,6 +711,83 @@ const openRouterProviderForm = (provider?: ClaudeRouterProviderView): void => {
   routerProviderName.focus();
 };
 
+const projectUsesDefaultRouter = (baseUrl: string): boolean => {
+  try {
+    const parsed = new URL(baseUrl);
+    const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+    return (
+      parsed.protocol === 'http:' &&
+      ['127.0.0.1', '::1', '[::1]', 'localhost'].includes(parsed.hostname.toLowerCase()) &&
+      port === 3456
+    );
+  } catch {
+    return false;
+  }
+};
+
+const projectUsesHttpsGateway = (baseUrl: string): boolean => {
+  try {
+    return new URL(baseUrl).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
+  const projectState = claudeStates.get(workspaceState.activeSessionId);
+  const config = projectState?.config;
+  const noProviders = state.managementAvailable && state.providers.length === 0;
+  const providerError =
+    state.managementAvailable && state.providers.length > 0 && state.gatewayState === 'error';
+  routerRemediation.hidden = !noProviders && !providerError;
+  if (routerRemediation.hidden) {
+    return;
+  }
+
+  const projectUsesRouter = Boolean(
+    config?.provider === 'gateway' && projectUsesDefaultRouter(config.baseUrl),
+  );
+  const projectHasRemoteDirect = Boolean(
+    config?.provider === 'gateway' &&
+    config.baseUrl &&
+    projectUsesHttpsGateway(config.baseUrl) &&
+    !projectUsesDefaultRouter(config.baseUrl),
+  );
+  const canRepairFromProject = Boolean(
+    noProviders &&
+    projectHasRemoteDirect &&
+    config?.authMode === 'apiKey' &&
+    config.credentialConfigured,
+  );
+
+  repairRouterFromProjectButton.hidden = !canRepairFromProject;
+  repairRouterFromProjectButton.disabled = routerOperationInProgress;
+  configureRouterProviderButton.disabled = routerOperationInProgress;
+  if (noProviders) {
+    routerRemediationTitle.textContent = '解决办法：先创建第一个 Provider';
+    configureRouterProviderButton.textContent = '手动添加第一个 Provider';
+    if (canRepairFromProject && config) {
+      routerRemediationDetail.textContent = `当前项目正在直连 ${config.baseUrl}，这个 CCR 错误目前不会影响直连。点击一键修复后，ClaudeDock 会在主进程内复用已加密保存的 API Key，创建 Anthropic Messages Provider、启动 3456，并将当前项目切换到 Router。`;
+    } else if (projectUsesRouter) {
+      routerRemediationDetail.textContent =
+        '当前项目依赖 3456，因此必须先添加 Provider。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
+    } else if (projectHasRemoteDirect) {
+      routerRemediationDetail.textContent =
+        '当前项目的远程直连不受这个 CCR 错误影响。由于当前认证不是可安全自动复制的 API Key，请手动添加 Provider；保存后再启动 Router。';
+    } else {
+      routerRemediationDetail.textContent =
+        '当前项目没有可复制的远程网关配置。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
+    }
+    return;
+  }
+
+  repairRouterFromProjectButton.hidden = true;
+  routerRemediationTitle.textContent = '解决办法：检查已有 Provider';
+  routerRemediationDetail.textContent =
+    'Router 已有 Provider，但 3456 仍未启动。请检查首选 Provider 的接口、模型和上游密钥，保存后再次点击“启动 Router”。';
+  configureRouterProviderButton.textContent = '检查 Provider';
+};
+
 function renderRouterManagement(state: ClaudeRouterManagementState): void {
   routerManagementState = state;
   const displayState = state.installed ? state.gatewayState : 'not-installed';
@@ -712,6 +801,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
         : 'Router 已安装但未运行';
   routerStatusDetail.textContent = state.message;
   routerVersion.textContent = state.version ? `v${state.version}` : '版本待识别';
+  renderRouterRemediation(state);
 
   installRouterButton.disabled = routerOperationInProgress;
   installRouterButton.textContent = state.installed ? '安装 / 更新官方版' : '一键获取官方安装包';
@@ -719,6 +809,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
     routerOperationInProgress ||
     !state.installed ||
     !state.manageable ||
+    state.providers.length === 0 ||
     state.gatewayState === 'running' ||
     state.gatewayState === 'starting';
   stopRouterButton.disabled =
@@ -1575,6 +1666,46 @@ openRouterManagementButton.addEventListener('click', () => {
     '正在打开…',
     openRouterManagementButton,
   );
+});
+repairRouterFromProjectButton.addEventListener('click', () => {
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.repairClaudeRouterFromProject(sessionId),
+    '正在创建 Provider 并启动…',
+    repairRouterFromProjectButton,
+  );
+});
+configureRouterProviderButton.addEventListener('click', () => {
+  const provider =
+    routerManagementState?.providers.find((candidate) => candidate.preferred) ??
+    routerManagementState?.providers[0];
+  openRouterProviderForm(provider);
+  if (provider) {
+    return;
+  }
+  const config = claudeStates.get(workspaceState.activeSessionId)?.config;
+  if (
+    !config ||
+    config.provider !== 'gateway' ||
+    !projectUsesHttpsGateway(config.baseUrl) ||
+    projectUsesDefaultRouter(config.baseUrl)
+  ) {
+    return;
+  }
+  const endpoint = new URL(config.baseUrl);
+  const pathname = endpoint.pathname.replace(/\/+$/, '');
+  endpoint.pathname = /\/v1\/messages$/i.test(pathname)
+    ? pathname
+    : `${pathname}/v1/messages`.replace(/\/{2,}/g, '/');
+  const providerSuffix =
+    endpoint.hostname
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 65) || 'current-project';
+  routerProviderName.value = `claudedock-${providerSuffix}`;
+  routerProviderProtocol.value = 'anthropic_messages';
+  routerProviderBaseUrl.value = endpoint.toString();
+  routerProviderModels.value = config.model;
 });
 addRouterProviderButton.addEventListener('click', () => {
   openRouterProviderForm();

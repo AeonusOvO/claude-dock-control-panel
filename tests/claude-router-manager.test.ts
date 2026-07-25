@@ -5,6 +5,7 @@ import {
   buildUpdatedRouterConfig,
   normalizeRouterProviderInput,
   parseRouterInstallerRelease,
+  routerGatewayErrorMessage,
   sanitizeRouterConfig,
 } from '../src/main/claude-router-manager';
 
@@ -162,5 +163,16 @@ describe('Claude Code Router management', () => {
         assets: [{ ...release.assets[0], digest: undefined }],
       }),
     ).toThrow('未通过来源、版本、大小或 SHA-256');
+  });
+
+  it('turns an empty Router startup error into a Chinese actionable solution', () => {
+    const message = routerGatewayErrorMessage(
+      0,
+      'No available models. Configure at least one provider with a model.',
+    );
+
+    expect(message).toContain('还没有配置 Provider 和模型');
+    expect(message).toContain('解决办法');
+    expect(message).not.toContain('No available models');
   });
 });

@@ -566,6 +566,29 @@ const registerIpc = (): void => {
     },
   );
   ipcMain.handle(
+    'claude:router-repair-from-project',
+    async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        const result = await requireClaudeRuntime().repairRouterFromProject(
+          validatedSessionId,
+          status.cwd,
+        );
+        return {
+          message: `已用当前项目配置创建 Provider ${result.saved.provider.name}，启动 3456，并将当前项目安全切换到 Router。`,
+          ok: true,
+          projectState: result.projectState,
+          provider: result.saved.provider,
+          routerState: result.saved.state,
+        };
+      } catch (error) {
+        return routerFailure(error, '无法用当前项目配置修复 Router。');
+      }
+    },
+  );
+  ipcMain.handle(
     'claude:router-save-provider',
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeRouterOperationResult> => {
       validateSender(event);

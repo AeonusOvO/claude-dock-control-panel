@@ -1565,6 +1565,7 @@ kbd {
 .analyze-curl,
 .connection-test > button,
 .router-actions button,
+.router-remediation button,
 .router-provider-heading button,
 .router-provider-card__actions button,
 .router-provider-form__actions button {
@@ -1586,6 +1587,7 @@ kbd {
 .analyze-curl,
 .connection-test > button,
 #install-router,
+#repair-router-from-project,
 #save-router-provider,
 .router-provider-card__actions button:first-child {
   background: rgb(100 216 255 / 10%);
@@ -1662,6 +1664,41 @@ kbd {
   border-style: dashed;
 }
 
+.router-remediation {
+  background: rgb(255 214 107 / 5%);
+  border: 1px solid rgb(255 214 107 / 25%);
+  border-radius: 9px;
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+}
+
+.router-remediation[hidden] {
+  display: none;
+}
+
+.router-remediation > strong {
+  color: #f1d27e;
+  font-size: 8.5px;
+}
+
+.router-remediation > span {
+  color: #8f805a;
+  font-size: 7.2px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.router-remediation > div {
+  display: grid;
+  gap: 6px;
+}
+
+.router-remediation button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
 .router-actions {
   display: grid;
   gap: 6px;
@@ -1669,6 +1706,7 @@ kbd {
 }
 
 .router-actions button,
+.router-remediation button,
 .router-provider-heading button,
 .router-provider-card__actions button,
 .router-provider-form__actions button {
@@ -1676,6 +1714,7 @@ kbd {
 }
 
 .router-actions button:disabled,
+.router-remediation button:disabled,
 .router-provider-heading button:disabled,
 .router-provider-card__actions button:disabled,
 .router-provider-form__actions button:disabled {

@@ -254,6 +254,7 @@ export interface ControlPanelApi {
     sessionId: string,
     input: SaveClaudeRouterProviderInput,
   ) => Promise<ClaudeRouterOperationResult>;
+  repairClaudeRouterFromProject: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   startClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   stopClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   testClaudeConnection: (

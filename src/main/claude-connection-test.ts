@@ -1,7 +1,7 @@
 import type { ClaudeConnectionTestResult, ClaudeConnectionTestStage } from '../shared/contracts';
 import type { NormalizedClaudeConfig } from './claude-configuration';
 
-const endpointForBaseUrl = (baseUrl: string): string => {
+export const claudeMessagesEndpoint = (baseUrl: string): string => {
   const parsed = new URL(baseUrl);
   const pathname = parsed.pathname.replace(/\/+$/, '');
   parsed.pathname = /\/v1\/messages$/i.test(pathname)
@@ -88,7 +88,7 @@ export const testClaudeConnection = async (
   }
 
   const baseUrl = config.provider === 'anthropic' ? 'https://api.anthropic.com' : config.baseUrl;
-  const endpoint = endpointForBaseUrl(baseUrl);
+  const endpoint = claudeMessagesEndpoint(baseUrl);
   const headers: Record<string, string> = {
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
