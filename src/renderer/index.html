@@ -346,24 +346,135 @@
             </section>
 
             <section class="workbench-page" data-workbench-page="connection">
+              <div class="connection-heading">
+                <strong>小白接入向导</strong>
+                <span>先看懂你手上的接口，再决定 Claude Code 最终连接哪里。</span>
+              </div>
+
+              <section class="gateway-discovery" aria-labelledby="gateway-discovery-title">
+                <div class="gateway-discovery__heading">
+                  <div>
+                    <span class="step-kicker">自动检测</span>
+                    <strong id="gateway-discovery-title">这台电脑现在有什么？</strong>
+                  </div>
+                  <button id="refresh-gateways" type="button">重新检测</button>
+                </div>
+                <p id="gateway-diagnostics-summary">正在检查常见本地端口、命令和 Claude 设置…</p>
+                <div id="gateway-candidates" class="gateway-candidates" aria-live="polite"></div>
+                <div id="configuration-hints" class="configuration-hints" hidden></div>
+                <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
+              </section>
+
+              <section class="curl-onboarding" aria-labelledby="curl-onboarding-title">
+                <div class="step-heading">
+                  <span class="step-number">1</span>
+                  <div>
+                    <strong id="curl-onboarding-title">把服务商给你的 cURL 粘进来</strong>
+                    <span>ClaudeDock 只做本地识别，不会自动发送，也不会记录到日志。</span>
+                  </div>
+                </div>
+                <label class="field" for="curl-input">
+                  <span>cURL 命令或接口地址</span>
+                  <textarea
+                    id="curl-input"
+                    maxlength="50000"
+                    rows="5"
+                    spellcheck="false"
+                    placeholder='curl https://example.com/v1/chat/completions -H "Authorization: Bearer 新密钥" -d &apos;{"model":"模型名",...}&apos;'
+                  ></textarea>
+                </label>
+                <button class="analyze-curl" id="analyze-curl" type="button">
+                  识别这是什么接口
+                </button>
+                <div class="curl-analysis" id="curl-analysis" hidden>
+                  <div class="curl-analysis__headline">
+                    <span id="curl-protocol-badge">等待识别</span>
+                    <strong id="curl-analysis-title">—</strong>
+                  </div>
+                  <p id="curl-analysis-detail"></p>
+                  <dl>
+                    <div>
+                      <dt>接口</dt>
+                      <dd id="curl-analysis-endpoint">—</dd>
+                    </div>
+                    <div>
+                      <dt>模型</dt>
+                      <dd id="curl-analysis-model">—</dd>
+                    </div>
+                    <div>
+                      <dt>认证</dt>
+                      <dd id="curl-analysis-auth">—</dd>
+                    </div>
+                  </dl>
+                  <div class="curl-next-step" id="curl-next-step"></div>
+                  <div class="curl-analysis__actions">
+                    <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
+                    <button id="use-detected-router" type="button" hidden>
+                      选用已发现的 Router
+                    </button>
+                    <button id="open-detected-router" type="button" hidden>
+                      打开 Router 管理页
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="converter-help">
+                <div class="step-heading">
+                  <span class="step-number">2</span>
+                  <div>
+                    <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
+                    <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
+                  </div>
+                </div>
+                <p>
+                  推荐新手使用 Claude Code Router 图形版；它默认用
+                  <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
+                  更适合熟悉配置文件和 Python 的用户。
+                </p>
+                <div class="help-link-grid">
+                  <button
+                    type="button"
+                    data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
+                  >
+                    获取 Router 图形版
+                  </button>
+                  <button
+                    type="button"
+                    data-external-url="https://docs.litellm.ai/docs/anthropic_unified/"
+                  >
+                    查看 LiteLLM 教程
+                  </button>
+                  <button
+                    type="button"
+                    data-external-url="https://code.claude.com/docs/en/llm-gateway-connect"
+                  >
+                    Claude 官方网关说明
+                  </button>
+                </div>
+              </section>
+
               <form id="claude-config-form">
-                <div class="connection-heading">
-                  <strong>项目级模型与 API</strong>
-                  <span>配置保存在 ClaudeDock 用户数据中，不写入仓库。</span>
+                <div class="step-heading">
+                  <span class="step-number">3</span>
+                  <div>
+                    <strong>确认 Claude Code 最终连接配置</strong>
+                    <span>上面的自动操作会填到这里；熟悉后也可以手动修改。</span>
+                  </div>
                 </div>
 
                 <label class="field" for="claude-preset">
-                  <span>接入预设</span>
+                  <span>最终连接方式</span>
                   <select id="claude-preset">
                     <option value="anthropic">Anthropic 官方</option>
-                    <option value="gateway">Anthropic 兼容中转</option>
-                    <option value="deepseek">DeepSeek（经兼容网关）</option>
-                    <option value="custom">自定义兼容服务</option>
+                    <option value="gateway">本机转换器 / 模型网关</option>
+                    <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
+                    <option value="custom">其他 Anthropic /v1/messages 服务</option>
                   </select>
                 </label>
 
                 <label class="field" id="base-url-field" for="claude-base-url">
-                  <span>API 基址</span>
+                  <span>Claude API 基址</span>
                   <input
                     id="claude-base-url"
                     type="url"
@@ -371,9 +482,9 @@
                     placeholder="https://gateway.example.com"
                     spellcheck="false"
                   />
-                  <small
-                    >必须提供 Anthropic Messages API；DeepSeek 原生 OpenAI API 需要 LiteLLM
-                    等转换层。</small
+                  <small id="base-url-help"
+                    >这里填 Claude Code 最终访问的基址，不要填 /v1/chat/completions；接口必须提供
+                    /v1/messages。</small
                   >
                 </label>
 
@@ -386,18 +497,22 @@
                     value="default"
                     spellcheck="false"
                   />
+                  <small id="model-help">必须与最终网关中可用的模型 ID 完全一致。</small>
                 </label>
 
                 <label class="field" for="claude-auth-mode">
-                  <span>认证方式</span>
+                  <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
                   <select id="claude-auth-mode">
                     <option value="existing">使用 Claude Code 现有登录</option>
                     <option value="apiKey">API Key（X-Api-Key）</option>
                   </select>
+                  <small id="auth-mode-help"
+                    >服务商写 Authorization / Bearer 就选 Bearer；写 x-api-key 就选 API Key。</small
+                  >
                 </label>
 
                 <label class="field" id="credential-field" for="claude-credential">
-                  <span>API 凭据</span>
+                  <span id="credential-label">API 凭据</span>
                   <input
                     id="claude-credential"
                     type="password"
@@ -407,6 +522,18 @@
                   />
                   <small id="credential-status">未保存凭据</small>
                 </label>
+
+                <div class="connection-test">
+                  <button id="test-claude-connection" type="button">
+                    真实测试端点、密钥和模型
+                  </button>
+                  <span>会发送最多 1 个输出 token，可能产生极少量费用。</span>
+                </div>
+                <div class="connection-test-result" id="connection-test-result" hidden>
+                  <strong id="connection-test-title">等待测试</strong>
+                  <span id="connection-test-summary"></span>
+                  <div id="connection-test-stages"></div>
+                </div>
 
                 <div class="privacy-shield">
                   <span class="privacy-shield__icon" aria-hidden="true">◆</span>
@@ -428,13 +555,33 @@
                 </div>
               </form>
 
-              <div class="risk-note">
-                <strong>版本防线</strong>
-                <p>
-                  ClaudeDock 拒绝受保护启动 Claude Code 2.1.91–2.1.196，并要求至少
-                  2.1.197。当前检查结果显示在“会话”页。
-                </p>
-              </div>
+              <details class="connection-glossary">
+                <summary>还是看不懂？展开术语解释</summary>
+                <dl>
+                  <div>
+                    <dt>上游接口</dt>
+                    <dd>服务商给你的模型地址，例如带 /v1/chat/completions 的中转。</dd>
+                  </div>
+                  <div>
+                    <dt>本地转换器 / 模型网关</dt>
+                    <dd>把 OpenAI 格式翻译成 Claude Code 需要的 Anthropic 格式。</dd>
+                  </div>
+                  <div>
+                    <dt>管理页 3458</dt>
+                    <dd>用浏览器配置 Router，不是 Claude Code 应连接的 API。</dd>
+                  </div>
+                  <div>
+                    <dt>模型接口 3456</dt>
+                    <dd>Router 默认给 Claude Code 使用的地址，通常填到 API 基址。</dd>
+                  </div>
+                  <div>
+                    <dt>两种密钥</dt>
+                    <dd>
+                      上游密钥交给 Router 访问服务商；Router 访问密钥交给 ClaudeDock。两者可能不同。
+                    </dd>
+                  </div>
+                </dl>
+              </details>
             </section>
           </div>
         </aside>

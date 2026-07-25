@@ -27,6 +27,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
+        ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
+        ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
 ```
@@ -50,9 +52,13 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - 网关模式会把 `ANTHROPIC_MODEL`、`ANTHROPIC_SMALL_FAST_MODEL` 和
   `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL` 全部固定到用户选择的模型，避免 Claude Code
   的后台小模型或别名请求意外离开所选模型。启动时同时使用 `--model` 提高可观察性。
-- DeepSeek 原生服务是 OpenAI 兼容 API，不能直接满足 Claude Code 的 Anthropic
-  `/v1/messages`、流式内容块和工具调用语义。界面中的 DeepSeek 预设明确要求 LiteLLM 或
-  同类 Anthropic Messages API 转换层；本机默认示例基址为 `http://127.0.0.1:4000`。
+- 带 `/v1/chat/completions` 的服务是 OpenAI Chat Completions 格式，不能直接满足
+  Claude Code 的 Anthropic `/v1/messages`、流式内容块和工具调用语义，必须经
+  Claude Code Router、LiteLLM 或服务商自己的协议转换层。
+- DeepSeek 官方目前另行提供 Anthropic 格式，基址为
+  `https://api.deepseek.com/anthropic`；因此 DeepSeek 官方预设可以直连，默认示例模型
+  更新为 `deepseek-v4-pro`。官方兼容表仍列出图片、文档、部分 MCP/代码执行结果等不支持
+  或忽略字段，界面不会把“Anthropic 格式兼容”描述成完整 Claude 功能等价。
 - 远程中转只接受 HTTPS；HTTP 仅允许 `localhost`、`127.0.0.1` 或 `::1`，URL 不允许嵌入
   用户名、密码、查询参数或片段。
 
@@ -74,6 +80,43 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 
 `safeStorage` 在 Windows 使用操作系统凭据保护能力；若不可用，保存密钥会失败关闭，而不是
 回退到明文。渲染进程只能获得 `credentialConfigured` 布尔值，从不获得已保存密钥。
+
+### 自动发现与新手接入
+
+- `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在工作台打开期间每 6 秒刷新。它用
+  短连接检查 Claude Code Router 默认 `3456/3458` 与 LiteLLM 常用 `4000`，不会枚举或扫描
+  全部本机端口。
+- CCR 的识别依据包括 `ccr` 命令、旧版
+  `~/.claude-code-router/config.json`、新版 Windows
+  `%APPDATA%/claude-code-router/{config.sqlite,gateway.config.json}`，以及默认端口状态。
+  只检查配置文件是否存在，不读取 SQLite 中的密钥或上游凭据。
+- 对 `3456/4000` 的后台探测只执行不带凭据的 `GET /v1/models`：`200` 表示可访问，
+  `401/403` 表示接口已运行但需要网关访问密钥。管理页 `3458` 只做 TCP 存活判断。
+- 检测会只读解析用户 `~/.claude/settings.json`、项目 `.claude/settings.json` 和
+  `.claude/settings.local.json` 的 `env` 块，只向 renderer 传递净化后的
+  `ANTHROPIC_BASE_URL` 与凭据是否存在的布尔值；密钥值从不跨 IPC。
+- `src/shared/claude-curl.ts` 在本地 renderer 中解析 cURL 的 URL、`model`、Bearer 或
+  `x-api-key`。URL 的用户信息、查询参数和片段不会进入结果；解析文本不写日志。切换项目会
+  清空 cURL 输入与内存中的解析结果。
+- OpenAI cURL 只用于解释如何在外部 Router 中配置上游；“选用 Router”只把 `3456`、模型
+  和 Router 认证方式填入 ClaudeDock，绝不会把 cURL 中的上游密钥误填为 Router 客户端
+  密钥。项目规则禁止 ClaudeDock 自动改写外部 Router、Claude Code 或系统级路由。
+- 帮助按钮仅允许打开 Claude/DeepSeek/LiteLLM/CCR 官方文档域名；本机管理页仅允许
+  `http://localhost|127.0.0.1|::1:3458`，其他任意外链会被主进程拒绝。
+
+### 连接实测
+
+- `ClaudeConnectionTest` 根据基址追加 `/v1/messages`；用户若粘贴完整
+  `/v1/messages`，保存时会先规范化为基址。测试请求固定 `max_tokens: 1`、非流式和
+  单字符提示，只有用户点击后才执行。
+- Bearer 对应 `Authorization: Bearer`，API Key 对应 `x-api-key`。返回标准
+  `msg_` ID 和 `content` 数组才算三项全部通过；`401/403` 定位为认证错误，
+  `404` 提示可能误填 OpenAI 地址，`400/422` 作为“端点与认证基本可用、模型或字段需处理”
+  的警告。
+- 主进程最多读取 64 KiB 错误体，只抽取 180 字符的结构化错误消息并再次清除当前凭据；
+  成功响应正文不返回 renderer。15 秒超时或网络错误只回传分阶段诊断。
+- 已保存凭据从 `safeStorage` 解密后仅用于该次测试；表单新输入可在保存前测试。测试结果
+  不包含凭据或模型回复文本。
 
 ### 会话、上下文与用量
 
@@ -115,8 +158,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
 - `npm run lint`：检查 TypeScript 源码。
 - `npm run typecheck`：分别检查渲染端和主进程类型。
-- `npm test`：运行目录/工作区、Claude 配置与版本门禁测试，并在 Windows PowerShell 中用
-  模拟 statusLine JSON 验证指标采集脚本。
+- `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别和连接测试结果映射，
+  并在 Windows PowerShell 中用模拟 statusLine JSON 验证指标采集脚本。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
   将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。
@@ -172,6 +215,10 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://xtermjs.org/docs/guides/using-addons/>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
+- Claude Code 连接网关与官方 1-token 验证：
+  <https://code.claude.com/docs/en/llm-gateway-connect>
+- Claude Code 网关协议：
+  <https://code.claude.com/docs/en/llm-gateway-protocol>
 - Claude Code 环境变量：
   <https://code.claude.com/docs/en/env-vars>
 - Claude Code settings 与 `--settings` 优先级：
@@ -188,6 +235,12 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://code.claude.com/docs/en/data-usage>
 - LiteLLM Anthropic `/v1/messages` 统一端点：
   <https://docs.litellm.ai/docs/anthropic_unified/>
+- DeepSeek 官方 Anthropic API：
+  <https://api-docs.deepseek.com/guides/anthropic_api/>
+- Claude Code Router 仓库、Windows 图形版与默认端口：
+  <https://github.com/musistudio/claude-code-router>
+- Claude Code Router 基础配置：
+  <https://musistudio.github.io/claude-code-router/docs/cli/config/basic/>
 - Anthropic 地区限制更新（2025-09-04）：
   <https://www.anthropic.com/news/updating-restrictions-of-sales-to-unsupported-regions>
 - Anthropic 当前支持地区：

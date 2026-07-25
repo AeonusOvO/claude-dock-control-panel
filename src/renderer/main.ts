@@ -2,6 +2,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type {
+  ClaudeConnectionTestResult,
+  ClaudeGatewayCandidate,
+  ClaudeGatewayDiagnostics,
   ClaudeLaunchMode,
   ClaudePreset,
   ClaudeProjectState,
@@ -12,6 +15,7 @@ import type {
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import './styles.css';
 
 interface TerminalView {
@@ -29,6 +33,10 @@ const requiredElement = <T extends HTMLElement>(selector: string): T => {
 };
 
 const chooseDirectoryButton = requiredElement<HTMLButtonElement>('#choose-directory');
+const analyzeCurlButton = requiredElement<HTMLButtonElement>('#analyze-curl');
+const applyCurlDirectButton = requiredElement<HTMLButtonElement>('#apply-curl-direct');
+const authModeHelp = requiredElement<HTMLElement>('#auth-mode-help');
+const authModeLabel = requiredElement<HTMLElement>('#auth-mode-label');
 const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
 const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
@@ -48,6 +56,11 @@ const brandLogo = requiredElement<HTMLImageElement>('#brand-logo');
 const baseUrlField = requiredElement<HTMLElement>('#base-url-field');
 const clearTerminalButton = requiredElement<HTMLButtonElement>('#clear-terminal');
 const clearCredentialButton = requiredElement<HTMLButtonElement>('#clear-credential');
+const configurationHints = requiredElement<HTMLElement>('#configuration-hints');
+const connectionTestResult = requiredElement<HTMLElement>('#connection-test-result');
+const connectionTestStages = requiredElement<HTMLElement>('#connection-test-stages');
+const connectionTestSummary = requiredElement<HTMLElement>('#connection-test-summary');
+const connectionTestTitle = requiredElement<HTMLElement>('#connection-test-title');
 const commandArgument = requiredElement<HTMLInputElement>('#command-argument');
 const contextPercentage = requiredElement<HTMLElement>('#context-percentage');
 const contextProgress = requiredElement<HTMLElement>('.context-progress');
@@ -55,11 +68,24 @@ const contextProgressBar = requiredElement<HTMLElement>('#context-progress-bar')
 const contextSize = requiredElement<HTMLElement>('#context-size');
 const contextUsed = requiredElement<HTMLElement>('#context-used');
 const credentialField = requiredElement<HTMLElement>('#credential-field');
+const credentialLabel = requiredElement<HTMLElement>('#credential-label');
 const credentialStatus = requiredElement<HTMLElement>('#credential-status');
+const curlAnalysis = requiredElement<HTMLElement>('#curl-analysis');
+const curlAnalysisAuth = requiredElement<HTMLElement>('#curl-analysis-auth');
+const curlAnalysisDetail = requiredElement<HTMLElement>('#curl-analysis-detail');
+const curlAnalysisEndpoint = requiredElement<HTMLElement>('#curl-analysis-endpoint');
+const curlAnalysisModel = requiredElement<HTMLElement>('#curl-analysis-model');
+const curlAnalysisTitle = requiredElement<HTMLElement>('#curl-analysis-title');
+const curlInput = requiredElement<HTMLTextAreaElement>('#curl-input');
+const curlNextStep = requiredElement<HTMLElement>('#curl-next-step');
+const curlProtocolBadge = requiredElement<HTMLElement>('#curl-protocol-badge');
 const dropOverlay = requiredElement<HTMLElement>('#drop-overlay');
 const dropZone = requiredElement<HTMLButtonElement>('#drop-zone');
 const emptyState = requiredElement<HTMLElement>('#terminal-empty-state');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
+const gatewayCandidates = requiredElement<HTMLElement>('#gateway-candidates');
+const gatewayCheckedAt = requiredElement<HTMLElement>('#gateway-checked-at');
+const gatewayDiagnosticsSummary = requiredElement<HTMLElement>('#gateway-diagnostics-summary');
 const launchContinueButton = requiredElement<HTMLButtonElement>('#launch-continue');
 const launchNewButton = requiredElement<HTMLButtonElement>('#launch-new');
 const launchResumeButton = requiredElement<HTMLButtonElement>('#launch-resume');
@@ -69,9 +95,12 @@ const metricInput = requiredElement<HTMLElement>('#metric-input');
 const metricModel = requiredElement<HTMLElement>('#metric-model');
 const metricOutput = requiredElement<HTMLElement>('#metric-output');
 const metricSession = requiredElement<HTMLElement>('#metric-session');
+const modelHelp = requiredElement<HTMLElement>('#model-help');
+const openDetectedRouterButton = requiredElement<HTMLButtonElement>('#open-detected-router');
 const projectCount = requiredElement<HTMLElement>('#project-count');
 const projectList = requiredElement<HTMLElement>('#project-list');
 const restartButton = requiredElement<HTMLButtonElement>('#restart-terminal');
+const refreshGatewaysButton = requiredElement<HTMLButtonElement>('#refresh-gateways');
 const runClaudeButton = requiredElement<HTMLButtonElement>('#run-claude');
 const sessionDetail = requiredElement<HTMLElement>('#session-detail');
 const sessionPid = requiredElement<HTMLElement>('#session-pid');
@@ -80,11 +109,14 @@ const terminalProject = requiredElement<HTMLElement>('#terminal-project');
 const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
+const testClaudeConnectionButton = requiredElement<HTMLButtonElement>('#test-claude-connection');
 const toggleButton = requiredElement<HTMLButtonElement>('#toggle-terminal');
 const toggleLabel = requiredElement<HTMLElement>('#toggle-terminal-label');
 const workbenchClose = requiredElement<HTMLButtonElement>('#workbench-close');
 const workbenchScrim = requiredElement<HTMLButtonElement>('#workbench-scrim');
 const workbenchTrigger = requiredElement<HTMLButtonElement>('#workbench-trigger');
+const useDetectedRouterButton = requiredElement<HTMLButtonElement>('#use-detected-router');
+const baseUrlHelp = requiredElement<HTMLElement>('#base-url-help');
 
 brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
 
@@ -93,7 +125,11 @@ const claudeStates = new Map<string, ClaudeProjectState>();
 let dragDepth = 0;
 let claudeRequestGeneration = 0;
 let configFormSessionId = '';
+let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
+let gatewayRefreshInProgress = false;
+let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
+let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
 let launchInProgress = false;
 let toastTimer: number | undefined;
 let workspaceState: WorkspaceState = {
@@ -229,6 +265,22 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
       claudeBaseUrl.value = '';
       claudeModel.value = 'default';
     }
+    baseUrlHelp.textContent = 'Anthropic 官方接入使用固定端点，无需填写地址。';
+    modelHelp.textContent = 'default 表示由 Claude Code 选择当前官方默认模型。';
+    authModeHelp.textContent = '已有 Claude 登录不会把登录令牌交给 ClaudeDock。';
+    credentialLabel.textContent = 'Anthropic API Key';
+  } else if (preset === 'deepseek') {
+    setAuthOptions([{ label: 'API Key（X-Api-Key）', value: 'apiKey' }], 'apiKey');
+    if (!preserveValues) {
+      claudeBaseUrl.value = 'https://api.deepseek.com/anthropic';
+      claudeModel.value = 'deepseek-v4-pro';
+    }
+    baseUrlHelp.textContent =
+      'DeepSeek 官方已提供 Anthropic 格式；Claude Code 会访问 /anthropic/v1/messages。';
+    modelHelp.textContent =
+      '可填写 DeepSeek 官方当前提供的模型 ID；不支持的名字可能被服务端自动映射。';
+    authModeHelp.textContent = 'DeepSeek 官方 Anthropic 接口使用 x-api-key。';
+    credentialLabel.textContent = 'DeepSeek API Key';
   } else {
     setAuthOptions(
       [
@@ -238,17 +290,29 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
       ],
       preserveValues
         ? (claudeAuthMode.value as SaveClaudeConfigInput['authMode'])
-        : preset === 'deepseek'
-          ? 'apiKey'
+        : preset === 'gateway'
+          ? 'authToken'
           : 'apiKey',
     );
-    if (!preserveValues && preset === 'deepseek') {
-      claudeBaseUrl.value = 'http://127.0.0.1:4000';
-      claudeModel.value = 'deepseek-chat';
-    } else if (!preserveValues && claudeModel.value === 'default') {
+    if (!preserveValues && claudeModel.value === 'default') {
       claudeModel.value = '';
     }
+    baseUrlHelp.textContent =
+      preset === 'gateway'
+        ? '填转换器真正的模型接口，例如 Router 的 http://127.0.0.1:3456；不要填 3458 管理页。'
+        : '接口必须提供 Anthropic /v1/messages；不要直接填 /v1/chat/completions。';
+    modelHelp.textContent =
+      preset === 'gateway'
+        ? '填写 Router 路由中暴露给 Claude Code 的模型 ID。'
+        : '必须与最终接口可用的模型 ID 完全一致。';
+    authModeHelp.textContent =
+      preset === 'gateway'
+        ? '这里是 ClaudeDock 到本地 Router 的访问密钥，不是服务商的上游密钥。'
+        : '服务商写 Authorization / Bearer 就选 Bearer；写 x-api-key 就选 API Key。';
+    credentialLabel.textContent =
+      preset === 'gateway' ? 'Router 访问密钥（不是上游密钥）' : '接口访问凭据';
   }
+  authModeLabel.textContent = isOfficial ? '官方认证方式' : 'Claude Code 到最终接口的认证方式';
   credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
 };
 
@@ -292,7 +356,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     config.provider === 'anthropic'
       ? 'Anthropic 官方'
       : config.preset === 'deepseek'
-        ? 'DeepSeek · 兼容网关'
+        ? 'DeepSeek 官方直连'
         : 'Anthropic 兼容网关';
   claudeRouteModel.textContent = config.model;
   claudeRouteEndpoint.textContent =
@@ -356,6 +420,265 @@ const loadClaudeState = async (sessionId: string): Promise<void> => {
   }
 };
 
+const openExternal = async (url: string): Promise<void> => {
+  if (!(await window.controlPanel.openExternal(url))) {
+    showToast('无法打开该帮助或管理地址。', 'error');
+  }
+};
+
+const applyGatewayCandidate = (candidate: ClaudeGatewayCandidate): void => {
+  claudePreset.value = 'gateway';
+  applyPresetUi('gateway', false);
+  claudeBaseUrl.value = candidate.apiBaseUrl;
+  claudeModel.value =
+    lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
+  claudeAuthMode.value = candidate.authRequired ? 'authToken' : 'none';
+  claudeCredential.value = '';
+  credentialField.hidden = claudeAuthMode.value === 'none';
+  connectionTestResult.hidden = true;
+  showToast(
+    candidate.authRequired
+      ? `已选用 ${candidate.label}；请填写 Router 自己的访问密钥`
+      : `已选用 ${candidate.label}；下一步执行真实连接测试`,
+  );
+  claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void => {
+  gatewayDiagnostics = diagnostics;
+  gatewayDiagnosticsSummary.textContent = diagnostics.message;
+  gatewayCheckedAt.textContent = `上次检测 ${new Date(diagnostics.checkedAt).toLocaleTimeString(
+    'zh-CN',
+    { hour: '2-digit', minute: '2-digit', second: '2-digit' },
+  )}`;
+  gatewayCandidates.replaceChildren();
+
+  if (diagnostics.candidates.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'gateway-empty';
+    empty.textContent = '没有发现 CCR、LiteLLM 或当前项目保存的本机服务。';
+    gatewayCandidates.append(empty);
+  }
+
+  for (const candidate of diagnostics.candidates) {
+    const card = document.createElement('article');
+    card.className = 'gateway-candidate';
+    card.dataset.status = candidate.status;
+
+    const headline = document.createElement('div');
+    headline.className = 'gateway-candidate__headline';
+    const title = document.createElement('strong');
+    title.textContent = candidate.label;
+    const status = document.createElement('span');
+    status.textContent =
+      candidate.status === 'ready'
+        ? '模型接口已运行'
+        : candidate.status === 'partial'
+          ? '需要处理'
+          : '未运行';
+    headline.append(title, status);
+
+    const endpoint = document.createElement('code');
+    endpoint.textContent = candidate.apiBaseUrl;
+    const detail = document.createElement('p');
+    detail.textContent = candidate.detail;
+    const detected = document.createElement('small');
+    detected.textContent = `依据：${candidate.detectedBy.join('、')}`;
+
+    const actions = document.createElement('div');
+    actions.className = 'gateway-candidate__actions';
+    const useButton = document.createElement('button');
+    useButton.type = 'button';
+    useButton.textContent = '选用这个接口';
+    useButton.disabled = candidate.status === 'offline';
+    useButton.addEventListener('click', () => {
+      applyGatewayCandidate(candidate);
+    });
+    actions.append(useButton);
+    if (candidate.managementUrl) {
+      const manageButton = document.createElement('button');
+      manageButton.type = 'button';
+      manageButton.textContent = '打开管理页';
+      manageButton.addEventListener('click', () => {
+        void openExternal(candidate.managementUrl ?? '');
+      });
+      actions.append(manageButton);
+    }
+
+    card.append(headline, endpoint, detail, detected, actions);
+    gatewayCandidates.append(card);
+  }
+
+  configurationHints.replaceChildren();
+  configurationHints.hidden = diagnostics.configurationHints.length === 0;
+  if (diagnostics.configurationHints.length > 0) {
+    const heading = document.createElement('strong');
+    heading.textContent = '还发现了外部 Claude 配置（只读）';
+    configurationHints.append(heading);
+    for (const hint of diagnostics.configurationHints) {
+      const item = document.createElement('span');
+      item.textContent = `${hint.label}：${hint.baseUrl ?? '未设置基址'} · ${
+        hint.authConfigured ? '已配置凭据' : '未发现凭据'
+      }`;
+      configurationHints.append(item);
+    }
+  }
+};
+
+const loadGatewayDiagnostics = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status || gatewayRefreshInProgress) {
+    return;
+  }
+  gatewayRefreshInProgress = true;
+  refreshGatewaysButton.disabled = true;
+  try {
+    renderGatewayDiagnostics(await window.controlPanel.getClaudeGatewayDiagnostics(status.id));
+  } catch {
+    gatewayDiagnosticsSummary.textContent = '自动检测失败；仍可手动填写接入配置。';
+  } finally {
+    gatewayRefreshInProgress = false;
+    refreshGatewaysButton.disabled = false;
+  }
+};
+
+const preferredRouter = (): ClaudeGatewayCandidate | undefined =>
+  gatewayDiagnostics?.candidates.find(
+    (candidate) => candidate.kind === 'claude-code-router' && candidate.status === 'ready',
+  );
+
+const analyzeCurlInput = (): void => {
+  try {
+    const analysis = parseClaudeCurl(curlInput.value);
+    lastCurlAnalysis = analysis;
+    curlAnalysis.hidden = false;
+    curlAnalysis.dataset.protocol = analysis.protocol;
+    curlProtocolBadge.textContent =
+      analysis.protocol === 'anthropic'
+        ? 'Anthropic 格式'
+        : analysis.protocol === 'openai'
+          ? 'OpenAI 格式'
+          : '协议待确认';
+    curlAnalysisTitle.textContent =
+      analysis.protocol === 'anthropic'
+        ? '可以直接接入 Claude Code'
+        : analysis.protocol === 'openai'
+          ? '不能直接接入，需要转换器'
+          : '请向服务商确认 /v1/messages';
+    curlAnalysisDetail.textContent = analysis.explanation;
+    curlAnalysisEndpoint.textContent = analysis.endpoint;
+    curlAnalysisModel.textContent = analysis.model || '没有识别到模型名';
+    curlAnalysisAuth.textContent =
+      analysis.authMode === 'authToken'
+        ? `Bearer（Authorization）${analysis.credentialDetected ? ' · 已识别密钥但不显示' : ''}`
+        : analysis.authMode === 'apiKey'
+          ? `API Key（x-api-key）${analysis.credentialDetected ? ' · 已识别密钥但不显示' : ''}`
+          : '没有识别到认证头';
+    curlNextStep.replaceChildren();
+
+    const router = preferredRouter();
+    applyCurlDirectButton.hidden = analysis.protocol !== 'anthropic';
+    useDetectedRouterButton.hidden = analysis.protocol !== 'openai' || !router;
+    openDetectedRouterButton.hidden = analysis.protocol !== 'openai' || !router?.managementUrl;
+
+    const nextTitle = document.createElement('strong');
+    const nextDetail = document.createElement('span');
+    if (analysis.protocol === 'anthropic') {
+      nextTitle.textContent = '下一步：自动填入并执行真实测试';
+      nextDetail.textContent = '确认测试通过后再保存；保存时密钥才会进入 Windows 安全存储。';
+    } else if (analysis.protocol === 'openai') {
+      nextTitle.textContent = router
+        ? '下一步：先在 Router 管理页添加这个上游'
+        : '下一步：先安装并启动本地转换器';
+      nextDetail.textContent = router
+        ? `Provider 选择 OpenAI Compatible，接口填 ${analysis.endpoint}，模型填 ${
+            analysis.model || '服务商提供的模型名'
+          }；上游密钥只填在 Router 中。然后回到这里选用 3456。`
+        : '推荐从下方打开 Claude Code Router 图形版安装页。配置完成后，重新检测会自动发现 3456。';
+    } else {
+      nextTitle.textContent = '下一步：向服务商确认协议';
+      nextDetail.textContent = '需要明确询问：“是否提供 Anthropic Messages /v1/messages 接口？”';
+    }
+    curlNextStep.append(nextTitle, nextDetail);
+  } catch (error) {
+    lastCurlAnalysis = undefined;
+    curlAnalysis.hidden = true;
+    showToast(error instanceof Error ? error.message : '无法识别这段 cURL。', 'error');
+  }
+};
+
+const applyDirectCurlAnalysis = (): void => {
+  const analysis = lastCurlAnalysis;
+  if (!analysis || analysis.protocol !== 'anthropic') {
+    return;
+  }
+  claudePreset.value = 'custom';
+  applyPresetUi('custom', false);
+  claudeBaseUrl.value = analysis.baseUrl;
+  claudeModel.value = analysis.model;
+  claudeAuthMode.value = analysis.authMode;
+  claudeCredential.value = analysis.credential ?? '';
+  credentialField.hidden = analysis.authMode === 'none';
+  connectionTestResult.hidden = true;
+  claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showToast('已填入直连接口；请先进行真实连接测试');
+};
+
+const renderConnectionTest = (result: ClaudeConnectionTestResult): void => {
+  connectionTestResult.hidden = false;
+  connectionTestResult.dataset.tone = result.tone;
+  connectionTestTitle.textContent =
+    result.tone === 'success'
+      ? '连接测试通过'
+      : result.tone === 'warning'
+        ? '部分通过，还需处理'
+        : '连接测试未通过';
+  connectionTestSummary.textContent = `${result.message}${
+    result.latencyMs === undefined ? '' : ` · ${result.latencyMs} ms`
+  }`;
+  connectionTestStages.replaceChildren();
+  for (const resultStage of result.stages) {
+    const item = document.createElement('div');
+    item.dataset.status = resultStage.status;
+    const icon = document.createElement('span');
+    icon.textContent =
+      resultStage.status === 'passed'
+        ? '✓'
+        : resultStage.status === 'failed'
+          ? '×'
+          : resultStage.status === 'warning'
+            ? '!'
+            : '–';
+    const copy = document.createElement('div');
+    const label = document.createElement('strong');
+    label.textContent = resultStage.label;
+    const detail = document.createElement('span');
+    detail.textContent = resultStage.detail;
+    copy.append(label, detail);
+    item.append(icon, copy);
+    connectionTestStages.append(item);
+  }
+};
+
+const runConnectionTest = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+  testClaudeConnectionButton.disabled = true;
+  testClaudeConnectionButton.textContent = '正在发送 1-token 测试…';
+  try {
+    renderConnectionTest(
+      await window.controlPanel.testClaudeConnection(status.id, currentConfigInput('keep')),
+    );
+  } catch {
+    showToast('连接测试发生异常。', 'error');
+  } finally {
+    testClaudeConnectionButton.disabled = false;
+    testClaudeConnectionButton.textContent = '真实测试端点、密钥和模型';
+  }
+};
+
 const setWorkbenchOpen = (open: boolean): void => {
   claudeWorkbench.classList.toggle('claude-workbench--open', open);
   claudeWorkbench.setAttribute('aria-hidden', String(!open));
@@ -363,6 +686,15 @@ const setWorkbenchOpen = (open: boolean): void => {
   workbenchTrigger.setAttribute('aria-expanded', String(open));
   if (open && workspaceState.activeSessionId) {
     void loadClaudeState(workspaceState.activeSessionId);
+    void loadGatewayDiagnostics();
+    if (gatewayRefreshTimer === undefined) {
+      gatewayRefreshTimer = window.setInterval(() => {
+        void loadGatewayDiagnostics();
+      }, 6_000);
+    }
+  } else if (gatewayRefreshTimer !== undefined) {
+    window.clearInterval(gatewayRefreshTimer);
+    gatewayRefreshTimer = undefined;
   }
 };
 
@@ -372,6 +704,9 @@ const selectWorkbenchPage = (page: string): void => {
   }
   for (const panel of document.querySelectorAll<HTMLElement>('[data-workbench-page]')) {
     panel.classList.toggle('workbench-page--active', panel.dataset.workbenchPage === page);
+  }
+  if (page === 'connection') {
+    void loadGatewayDiagnostics();
   }
 };
 
@@ -563,6 +898,14 @@ function renderWorkspace(state: WorkspaceState): void {
   if (state.activeSessionId !== lastClaudeSessionId) {
     lastClaudeSessionId = state.activeSessionId;
     configFormSessionId = '';
+    gatewayDiagnostics = undefined;
+    lastCurlAnalysis = undefined;
+    curlInput.value = '';
+    curlAnalysis.hidden = true;
+    connectionTestResult.hidden = true;
+    gatewayCandidates.replaceChildren();
+    gatewayDiagnosticsSummary.textContent = '正在检查常见本地端口、命令和 Claude 设置…';
+    gatewayCheckedAt.textContent = '等待首次检测';
     const knownClaudeState = claudeStates.get(state.activeSessionId);
     if (knownClaudeState) {
       renderClaudeState(knownClaudeState);
@@ -762,10 +1105,40 @@ launchResumeButton.addEventListener('click', () => {
 });
 claudePreset.addEventListener('change', () => {
   applyPresetUi(claudePreset.value as ClaudePreset, false);
+  connectionTestResult.hidden = true;
 });
 claudeAuthMode.addEventListener('change', () => {
   credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+  connectionTestResult.hidden = true;
 });
+analyzeCurlButton.addEventListener('click', analyzeCurlInput);
+applyCurlDirectButton.addEventListener('click', applyDirectCurlAnalysis);
+useDetectedRouterButton.addEventListener('click', () => {
+  const router = preferredRouter();
+  if (router) {
+    applyGatewayCandidate(router);
+  }
+});
+openDetectedRouterButton.addEventListener('click', () => {
+  const managementUrl = preferredRouter()?.managementUrl;
+  if (managementUrl) {
+    void openExternal(managementUrl);
+  }
+});
+refreshGatewaysButton.addEventListener('click', () => {
+  void loadGatewayDiagnostics();
+});
+testClaudeConnectionButton.addEventListener('click', () => {
+  void runConnectionTest();
+});
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-external-url]')) {
+  button.addEventListener('click', () => {
+    const url = button.dataset.externalUrl;
+    if (url) {
+      void openExternal(url);
+    }
+  });
+}
 claudeConfigForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void saveClaudeConfig('keep');
@@ -877,6 +1250,9 @@ resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
   resizeObserver.disconnect();
+  if (gatewayRefreshTimer !== undefined) {
+    window.clearInterval(gatewayRefreshTimer);
+  }
   for (const view of terminalViews.values()) {
     view.terminal.dispose();
   }

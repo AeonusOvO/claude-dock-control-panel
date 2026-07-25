@@ -39,6 +39,18 @@ describe('Claude Code configuration', () => {
         baseUrl: 'http://127.0.0.1:4000',
       }).baseUrl,
     ).toBe('http://127.0.0.1:4000');
+    expect(
+      normalizeClaudeConfig({
+        ...gatewayInput,
+        baseUrl: 'https://gateway.example.com/team/v1/messages',
+      }).baseUrl,
+    ).toBe('https://gateway.example.com/team');
+    expect(() =>
+      normalizeClaudeConfig({
+        ...gatewayInput,
+        baseUrl: 'https://gateway.example.com/v1/chat/completions',
+      }),
+    ).toThrow('不能直接用于 Claude Code');
   });
 
   it('pins every Claude model alias to the selected gateway model', () => {

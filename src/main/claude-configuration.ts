@@ -140,6 +140,12 @@ const normalizeBaseUrl = (value: string): string => {
   ) {
     throw new Error('中转地址必须使用 HTTPS；仅本机回环地址允许 HTTP。');
   }
+  if (/\/(?:v1\/)?chat\/completions\/?$/i.test(parsed.pathname)) {
+    throw new Error(
+      '这是 OpenAI /chat/completions 地址，不能直接用于 Claude Code；请先选用本地转换器。',
+    );
+  }
+  parsed.pathname = parsed.pathname.replace(/\/v1\/messages\/?$/i, '') || '/';
 
   const normalized = parsed.toString();
   return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;

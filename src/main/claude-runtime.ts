@@ -3,19 +3,25 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
+  ClaudeConnectionTestResult,
+  ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
   ClaudeLaunchMode,
   ClaudeMetrics,
   ClaudeProjectState,
+  SaveClaudeConfigInput,
 } from '../shared/contracts';
 import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
   buildStatusLineCommand,
   evaluateClaudeInstallation,
+  normalizeClaudeConfig,
   type ClaudeEnvironmentOverrides,
 } from './claude-configuration';
+import { testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
+import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 
 interface RuntimeSession {
   active: boolean;
@@ -107,6 +113,7 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
 export class ClaudeRuntime {
   private cachedInstallation?: { checkedAt: number; value: ClaudeInstallationStatus };
   private readonly configStore: ClaudeConfigStore;
+  private readonly gatewayDetector = new ClaudeGatewayDetector();
   private readonly metricsTimer: NodeJS.Timeout;
   private readonly runtimeRoot: string;
   private readonly sessions = new Map<string, RuntimeSession>();
@@ -177,6 +184,10 @@ export class ClaudeRuntime {
     return this.sessions.get(sessionId)?.active ?? false;
   }
 
+  public getGatewayDiagnostics(cwd: string): Promise<ClaudeGatewayDiagnostics> {
+    return this.gatewayDetector.detect(cwd, this.configStore.getConfig(cwd));
+  }
+
   public async prepareLaunch(
     sessionId: string,
     cwd: string,
@@ -240,6 +251,16 @@ export class ClaudeRuntime {
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return { ...state, active: runtime.active };
+  }
+
+  public testConnection(
+    cwd: string,
+    input: SaveClaudeConfigInput,
+  ): Promise<ClaudeConnectionTestResult> {
+    const config = normalizeClaudeConfig(input);
+    const enteredCredential = input.credential?.trim();
+    const credential = enteredCredential || this.configStore.getCredential(cwd);
+    return testClaudeConnection(config, credential);
   }
 
   public setInactive(sessionId: string): void {

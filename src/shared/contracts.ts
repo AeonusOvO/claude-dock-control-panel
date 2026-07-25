@@ -6,6 +6,10 @@ export type ClaudePreset = 'anthropic' | 'custom' | 'deepseek' | 'gateway';
 export type ClaudeProvider = 'anthropic' | 'gateway';
 export type ClaudeSecurityStatus =
   'blocked-version' | 'not-installed' | 'ready' | 'update-required' | 'unknown';
+export type ClaudeConnectionTestTone = 'error' | 'success' | 'warning';
+export type ClaudeEndpointProtocol = 'anthropic' | 'openai' | 'unknown';
+export type GatewayCandidateKind = 'claude-code-router' | 'custom' | 'litellm';
+export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
 
 export interface ClaudeConfigView {
   authMode: ClaudeAuthMode;
@@ -76,6 +80,48 @@ export interface ClaudeOperationResult {
   state: ClaudeProjectState;
 }
 
+export interface ClaudeConnectionTestStage {
+  detail: string;
+  id: 'authentication' | 'endpoint' | 'model';
+  label: string;
+  status: 'failed' | 'passed' | 'skipped' | 'warning';
+}
+
+export interface ClaudeConnectionTestResult {
+  latencyMs?: number;
+  message: string;
+  ok: boolean;
+  stages: ClaudeConnectionTestStage[];
+  testedAt: number;
+  tone: ClaudeConnectionTestTone;
+}
+
+export interface ClaudeGatewayCandidate {
+  apiBaseUrl: string;
+  authRequired: boolean;
+  detail: string;
+  detectedBy: string[];
+  id: string;
+  kind: GatewayCandidateKind;
+  label: string;
+  managementUrl?: string;
+  status: GatewayCandidateStatus;
+}
+
+export interface ClaudeConfigurationHint {
+  authConfigured: boolean;
+  baseUrl?: string;
+  label: string;
+  source: 'environment' | 'project-settings' | 'user-settings';
+}
+
+export interface ClaudeGatewayDiagnostics {
+  candidates: ClaudeGatewayCandidate[];
+  checkedAt: number;
+  configurationHints: ClaudeConfigurationHint[];
+  message: string;
+}
+
 export interface TerminalStatus {
   cwd: string;
   id: string;
@@ -120,6 +166,7 @@ export interface ControlPanelApi {
   chooseDirectory: () => Promise<DirectoryChoiceResult>;
   closeProject: (sessionId: string) => Promise<WorkspaceResult>;
   getClaudeProjectState: (sessionId: string) => Promise<ClaudeProjectState>;
+  getClaudeGatewayDiagnostics: (sessionId: string) => Promise<ClaudeGatewayDiagnostics>;
   getDroppedPath: (file: File) => string;
   getWorkspace: () => Promise<WorkspaceState>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
@@ -137,6 +184,11 @@ export interface ControlPanelApi {
     sessionId: string,
     input: SaveClaudeConfigInput,
   ) => Promise<ClaudeConfigResult>;
+  testClaudeConnection: (
+    sessionId: string,
+    input: SaveClaudeConfigInput,
+  ) => Promise<ClaudeConnectionTestResult>;
+  openExternal: (url: string) => Promise<boolean>;
   startTerminal: (sessionId: string) => Promise<OperationResult>;
   stopTerminal: (sessionId: string) => Promise<OperationResult>;
   writeTerminal: (sessionId: string, data: string) => void;

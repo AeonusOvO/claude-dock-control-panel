@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   ClaudeConfigResult,
+  ClaudeConnectionTestResult,
+  ClaudeGatewayDiagnostics,
   ClaudeOperationResult,
   ClaudeProjectState,
   ControlPanelApi,
@@ -20,6 +22,11 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('project:close', sessionId) as Promise<WorkspaceResult>,
   getClaudeProjectState: (sessionId: string) =>
     ipcRenderer.invoke('claude:get-state', sessionId) as Promise<ClaudeProjectState>,
+  getClaudeGatewayDiagnostics: (sessionId: string) =>
+    ipcRenderer.invoke(
+      'claude:get-gateway-diagnostics',
+      sessionId,
+    ) as Promise<ClaudeGatewayDiagnostics>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
   launchClaude: (sessionId, mode) =>
@@ -71,6 +78,13 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeOperationResult>,
   saveClaudeConfig: (sessionId, input) =>
     ipcRenderer.invoke('claude:save-config', sessionId, input) as Promise<ClaudeConfigResult>,
+  testClaudeConnection: (sessionId, input) =>
+    ipcRenderer.invoke(
+      'claude:test-connection',
+      sessionId,
+      input,
+    ) as Promise<ClaudeConnectionTestResult>,
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url) as Promise<boolean>,
   startTerminal: (sessionId) =>
     ipcRenderer.invoke('terminal:start', sessionId) as Promise<OperationResult>,
   stopTerminal: (sessionId) =>

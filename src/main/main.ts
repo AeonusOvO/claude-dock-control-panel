@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
   ClaudeConfigResult,
+  ClaudeConnectionTestResult,
   ClaudeLaunchMode,
   ClaudeOperationResult,
   DirectoryChoiceResult,
@@ -285,6 +286,36 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
   };
 };
 
+const allowedExternalHosts = new Set([
+  'api-docs.deepseek.com',
+  'ccrdesk.top',
+  'code.claude.com',
+  'docs.litellm.ai',
+  'github.com',
+  'musistudio.github.io',
+]);
+const loopbackHosts = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+
+const validateExternalUrl = (value: unknown): string => {
+  if (typeof value !== 'string' || value.length > 2048) {
+    throw new Error('外部链接格式无效。');
+  }
+  const parsed = new URL(value);
+  const hostname = parsed.hostname.toLowerCase();
+  const allowedHttps = parsed.protocol === 'https:' && allowedExternalHosts.has(hostname);
+  const allowedLoopback =
+    parsed.protocol === 'http:' && loopbackHosts.has(hostname) && parsed.port === '3458';
+  if (
+    (!allowedHttps && !allowedLoopback) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.protocol === 'file:'
+  ) {
+    throw new Error('该链接不在 ClaudeDock 允许打开的帮助或本机管理地址中。');
+  }
+  return parsed.toString();
+};
+
 const claudeCommands = new Map<string, boolean>([
   ['/agents', false],
   ['/clear', false],
@@ -399,6 +430,12 @@ const registerIpc = (): void => {
     const status = workspace.getStatus(validatedSessionId);
     return requireClaudeRuntime().getState(validatedSessionId, status.cwd);
   });
+  ipcMain.handle('claude:get-gateway-diagnostics', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return requireClaudeRuntime().getGatewayDiagnostics(status.cwd);
+  });
   ipcMain.handle(
     'claude:save-config',
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeConfigResult> => {
@@ -423,6 +460,47 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.handle(
+    'claude:test-connection',
+    async (event, sessionId: unknown, input: unknown): Promise<ClaudeConnectionTestResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return await requireClaudeRuntime().testConnection(
+          status.cwd,
+          validateClaudeConfigInput(input),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法测试 Claude 接入。';
+        return {
+          message,
+          ok: false,
+          stages: [
+            { detail: message, id: 'endpoint', label: '接口地址', status: 'failed' },
+            {
+              detail: '请先修正配置。',
+              id: 'authentication',
+              label: '身份认证',
+              status: 'skipped',
+            },
+            { detail: '尚未发送请求。', id: 'model', label: '模型响应', status: 'skipped' },
+          ],
+          testedAt: Date.now(),
+          tone: 'error',
+        };
+      }
+    },
+  );
+  ipcMain.handle('app:open-external', async (event, url: unknown) => {
+    validateSender(event);
+    try {
+      await shell.openExternal(validateExternalUrl(url));
+      return true;
+    } catch {
+      return false;
+    }
+  });
   ipcMain.handle(
     'claude:launch',
     async (event, sessionId: unknown, mode: unknown): Promise<ClaudeOperationResult> => {
