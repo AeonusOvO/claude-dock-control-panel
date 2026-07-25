@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   root: 'src/renderer',
@@ -13,5 +13,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  test: {
+    root: '.',
+  },
 });
-

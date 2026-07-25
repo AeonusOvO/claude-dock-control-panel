@@ -11,6 +11,7 @@
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
+    "postinstall": "electron-builder install-app-deps",
     "dev": "npm run generate:icons && concurrently -k \"npm:dev:main\" \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:main": "tsc -p tsconfig.main.json --watch --preserveWatchOutput",
     "dev:renderer": "vite --host 127.0.0.1",
@@ -31,9 +32,9 @@
     "verify": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.14",
     "@xterm/addon-fit": "0.11.0",
-    "@xterm/xterm": "6.0.0",
-    "node-pty": "1.1.0"
+    "@xterm/xterm": "6.0.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -66,7 +67,8 @@
       "package.json"
     ],
     "asarUnpack": [
-      "node_modules/node-pty/**/*"
+      "node_modules/@lydell/node-pty/**/*",
+      "node_modules/@lydell/node-pty-*/**/*"
     ],
     "win": {
       "icon": "assets/generated/app-icon.ico",
@@ -88,4 +90,3 @@
     }
   }
 }
-

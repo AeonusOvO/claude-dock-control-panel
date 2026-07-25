@@ -37,6 +37,17 @@ npm run dist
 
 `npm run dist` 在 `release/` 生成 Windows x64 安装程序。
 
+## 日常使用
+
+1. 启动 ClaudeDock 后，PowerShell 会自动连接并显示当前用户目录。
+2. 把项目文件夹拖到窗口任意位置，或点击“选择文件夹”；当前会话会在目标目录重启。
+3. 直接在黑色终端区输入 PowerShell 命令。点击“运行 Claude Code”相当于在当前目录输入
+   `claude`。
+4. 点击窗口关闭按钮只会隐藏面板，会话继续在后台运行；右键系统托盘图标可以恢复窗口、
+   重启/停止终端或彻底退出。
+
+安装时可自行选择 `D:\ClaudeDock` 等目标路径。
+
 ## 目录
 
 ```text
@@ -57,6 +68,7 @@ outputs/             本地交付物，不纳入 Git
 - 切换项目目录会重启当前内嵌终端，因此正在运行的前台命令会结束。
 - 本地构建默认没有代码签名，Windows SmartScreen 可能显示未知发布者提示。
 - 当前仅打包 Windows x64。
+- `@lydell/node-pty` 提供与上游 node-pty API 兼容的按平台预编译包，避免最终用户安装
+  Visual Studio C++ 构建组件。
 
 维护者：本项目当前由本地使用者维护。
-

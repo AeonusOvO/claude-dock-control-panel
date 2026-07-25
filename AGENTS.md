@@ -6,4 +6,3 @@
 - 修改后至少运行：`npm run lint`、`npm run typecheck`、`npm test`、`npm run build`。
 - UI、运行方式或技术实现变化时，同步检查三个根目录文档。
 - 生成目录：`dist/`、`release/`；交付安装包复制到 `outputs/`，这些目录均不提交 Git。
-

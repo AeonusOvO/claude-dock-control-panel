@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="128" y1="96" x2="920" y2="944" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#172534"/>
+      <stop offset="1" stop-color="#071015"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="306" y1="352" x2="698" y2="696" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#68DBFF"/>
+      <stop offset="1" stop-color="#52E7AF"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="204" fill="none" stroke="#32495A" stroke-width="14"/>
+  <circle cx="782" cy="773" r="92" fill="#52E7AF" opacity=".28" filter="url(#glow)"/>
+  <rect x="202" y="238" width="620" height="526" rx="82" fill="#05090D" stroke="#385064" stroke-width="18"/>
+  <path d="M330 389 462 512 330 635" fill="none" stroke="url(#accent)" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M520 641h154" fill="none" stroke="#E8F3F8" stroke-width="50" stroke-linecap="round"/>
+  <circle cx="783" cy="775" r="68" fill="#52E7AF" stroke="#0D1B20" stroke-width="20"/>
+</svg>
+

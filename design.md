@@ -35,4 +35,3 @@
 - 矢量源位于 `assets/source/`。
 - `npm run generate:icons` 生成 `assets/generated/` 中的 PNG 和 ICO。
 - 不直接手改生成文件；更改图标时修改 SVG 源并重新生成。
-

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClaudeDock 控制面板</title>
+  </head>
+  <body data-phase="stopped">
+    <header class="titlebar">
+      <div class="brand">
+        <img src="./app-icon-64.png" alt="" class="brand__icon" />
+        <div>
+          <span class="brand__name">ClaudeDock</span>
+          <span class="brand__descriptor">PowerShell Control</span>
+        </div>
+      </div>
+      <div class="titlebar__status" aria-live="polite">
+        <span class="status-dot status-dot--small" aria-hidden="true"></span>
+        <span id="title-status">准备连接</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="control-panel">
+        <section class="session-card" aria-labelledby="session-heading">
+          <div class="section-label">
+            <span>会话状态</span>
+            <span class="status-pill" id="status-pill">已停止</span>
+          </div>
+          <div class="session-card__heading">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+              <h1 id="session-heading">Windows PowerShell</h1>
+              <p id="session-detail">等待启动终端</p>
+            </div>
+          </div>
+          <div class="session-meta">
+            <span>ConPTY</span>
+            <span id="session-pid">PID —</span>
+          </div>
+        </section>
+
+        <section class="project-section" aria-labelledby="project-heading">
+          <div class="section-label">
+            <span id="project-heading">项目目录</span>
+            <span>拖放定位</span>
+          </div>
+          <button class="drop-zone" id="drop-zone" type="button">
+            <span class="drop-zone__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
+                <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+                <path d="M12 10v7m-3-3 3 3 3-3" />
+              </svg>
+            </span>
+            <span class="drop-zone__title">拖入项目文件夹</span>
+            <span class="drop-zone__hint">终端将在该目录重新启动</span>
+          </button>
+          <div class="current-path" title="">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.1" />
+              <path d="M20.5 10.5v7.8a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+            </svg>
+            <span id="current-path">尚未选择目录</span>
+          </div>
+          <button class="button button--secondary" id="choose-directory" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.1" />
+              <path d="M20.5 10.5v7.8a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+            </svg>
+            选择文件夹
+          </button>
+        </section>
+
+        <section class="actions" aria-labelledby="actions-heading">
+          <div class="section-label">
+            <span id="actions-heading">快捷操作</span>
+            <span>当前会话</span>
+          </div>
+          <button class="button button--primary" id="run-claude" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m8 6 6 6-6 6" />
+              <path d="M15 18h3" />
+            </svg>
+            运行 Claude Code
+          </button>
+          <div class="button-row">
+            <button class="button button--quiet" id="restart-terminal" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
+              </svg>
+              重启
+            </button>
+            <button class="button button--quiet" id="toggle-terminal" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="5" width="14" height="14" rx="2" />
+              </svg>
+              <span id="toggle-terminal-label">启动</span>
+            </button>
+          </div>
+        </section>
+
+        <div class="tray-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
+            <path d="M10 20h4" />
+          </svg>
+          <p>关闭窗口后继续在托盘运行。右键托盘图标可控制会话。</p>
+        </div>
+      </aside>
+
+      <section class="terminal-shell" aria-label="PowerShell 终端">
+        <div class="terminal-toolbar">
+          <div class="window-lights" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="terminal-title">
+            <span>PS</span>
+            <strong id="terminal-project">PowerShell</strong>
+          </div>
+          <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7" />
+            </svg>
+            <span class="sr-only">清空终端显示</span>
+          </button>
+        </div>
+        <div class="terminal-stage">
+          <div id="terminal" tabindex="0"></div>
+          <div class="terminal-empty-state" id="terminal-empty-state">
+            <span class="empty-prompt">&gt;_</span>
+            <strong>PowerShell 尚未运行</strong>
+            <span>点击左侧“启动”创建终端会话</span>
+          </div>
+        </div>
+        <footer class="terminal-footer">
+          <span><kbd>Ctrl</kbd> + <kbd>C</kbd> 中断</span>
+          <span><kbd>Ctrl</kbd> + <kbd>L</kbd> 清屏</span>
+          <span id="footer-status">后台待命</span>
+        </footer>
+      </section>
+    </main>
+
+    <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+      <div>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
+          <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+          <path d="M12 10v7m-3-3 3 3 3-3" />
+        </svg>
+        <strong>松开以定位项目</strong>
+        <span>PowerShell 会在新目录重新启动</span>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

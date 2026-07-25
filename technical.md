@@ -4,7 +4,8 @@
 
 - Electron 43：桌面窗口、系统托盘、目录选择与进程生命周期。
 - TypeScript 6、Vite 8：主进程编译和渲染资源构建。
-- `node-pty` 1.1：通过 Windows ConPTY 创建真实伪终端。
+- `@lydell/node-pty` 1.2 beta：通过 Windows ConPTY 创建真实伪终端，并提供按平台预编译
+  原生模块。
 - xterm.js 6：终端渲染和键盘输入。
 - Vitest、ESLint、Prettier：测试和静态检查。
 - electron-builder：Windows NSIS 安装包。
@@ -51,9 +52,14 @@ Electron Main ── TerminalSession ── node-pty ── Windows PowerShell /
 
 CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不发布安装包。
 
+`npm audit --omit=dev` 当前为 0 个生产依赖漏洞。完整审计仍会报告 electron-builder 最新版
+依赖树中的构建期问题；这些开发依赖不会进入生产 ASAR，后续应随打包器上游修复升级。
+
 ## 关键取舍与限制
 
 - 采用“应用自建并控制 PTY”，而不是注入或劫持外部控制台；后者不稳定且扩大权限边界。
+- Windows 原生模块采用 `@lydell/node-pty` 的预编译分发；API 与微软 node-pty 上游保持
+  同源，避免要求本机安装 Spectre 缓解 C++ 库。
 - 拖入文件夹时重启 PTY，换取可验证的工作目录；当前不保存多个会话。
 - Windows 10 1809 之前没有所需 ConPTY API，不在支持范围。
 - 代码签名、自动更新、多标签终端和会话恢复尚未实现。
@@ -68,6 +74,7 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://www.electronjs.org/docs/latest/api/web-utils>
 - node-pty：
   <https://github.com/microsoft/node-pty>
+- `@lydell/node-pty` 预编译分发：
+  <https://github.com/lydell/node-pty>
 - xterm.js addons：
   <https://xtermjs.org/docs/guides/using-addons/>
-
