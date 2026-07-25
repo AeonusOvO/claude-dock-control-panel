@@ -1,4 +1,4 @@
-import { copyFile, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,15 +9,25 @@ const packageJson = JSON.parse(
 const installerName = `ClaudeDock-Setup-${packageJson.version}-x64.exe`;
 const releaseDirectory = path.resolve(projectRoot, 'release');
 const source = path.resolve(releaseDirectory, installerName);
-const destination = path.resolve(projectRoot, installerName);
+const outputDirectory = path.resolve(projectRoot, 'outputs');
+const destinations = [
+  path.resolve(projectRoot, installerName),
+  path.resolve(outputDirectory, installerName),
+];
 
 if (path.dirname(source) !== releaseDirectory) {
   throw new Error(`Refusing to publish from unexpected path: ${source}`);
 }
 
-if (path.dirname(destination) !== projectRoot) {
-  throw new Error(`Refusing to publish to unexpected path: ${destination}`);
+for (const destination of destinations) {
+  const destinationDirectory = path.dirname(destination);
+  if (destinationDirectory !== projectRoot && destinationDirectory !== outputDirectory) {
+    throw new Error(`Refusing to publish to unexpected path: ${destination}`);
+  }
 }
 
-await copyFile(source, destination);
-console.log(`Published installer: ${destination}`);
+await mkdir(outputDirectory, { recursive: true });
+for (const destination of destinations) {
+  await copyFile(source, destination);
+  console.log(`Published installer: ${destination}`);
+}

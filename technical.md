@@ -119,7 +119,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
   模拟 statusLine JSON 验证指标采集脚本。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
-  将最终安装程序复制到项目根目录。
+  将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。
 - `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
   electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
