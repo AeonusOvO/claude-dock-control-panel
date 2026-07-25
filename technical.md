@@ -21,17 +21,21 @@ Renderer (xterm.js / UI)
 Preload contextBridge
         │ 参数过滤
         ▼
-Electron Main ── TerminalSession ── node-pty ── Windows PowerShell / ConPTY
+Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty ── PowerShell / ConPTY
+        │                           ├─ TerminalSession ── node-pty ── PowerShell / ConPTY
+        │                           └─ …
         │
-        ├── Tray 状态与菜单
+        ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
 ```
 
 - 渲染进程不启用 Node.js，只能调用 preload 暴露的固定方法。
-- 主进程验证 IPC 发送方、字符串长度、终端尺寸和目录是否真实存在。
-- PTY 输出由主进程推送到渲染进程；键盘输入反向写入 PTY。
-- 目录切换会终止旧 PTY，并以新目录创建新会话，保证工作目录确定。
-- 托盘状态由同一个 `TerminalStatus` 驱动，避免界面与后台状态分叉。
+- 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。
+- `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
+- PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
+- 添加目录会创建新会话；同一路径（忽略大小写）只保留一个会话并直接激活。
+- 切换项目不重启 PTY；关闭项目才会终止对应进程，且不会影响其他会话。
+- 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
 
 ## 安全策略
 
@@ -50,6 +54,8 @@ Electron Main ── TerminalSession ── node-pty ── Windows PowerShell /
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
   将最终安装程序复制到项目根目录。
+- `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
+  electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
 CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不发布安装包。
 
@@ -61,9 +67,9 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
 - 采用“应用自建并控制 PTY”，而不是注入或劫持外部控制台；后者不稳定且扩大权限边界。
 - Windows 原生模块采用 `@lydell/node-pty` 的预编译分发；API 与微软 node-pty 上游保持
   同源，避免要求本机安装 Spectre 缓解 C++ 库。
-- 拖入文件夹时重启 PTY，换取可验证的工作目录；当前不保存多个会话。
+- 项目工作区以应用进程生命周期为边界，不持久化会话列表、终端进程或 xterm.js 缓冲。
 - Windows 10 1809 之前没有所需 ConPTY API，不在支持范围。
-- 代码签名、自动更新、多标签终端和会话恢复尚未实现。
+- 代码签名、自动更新和退出后的会话恢复尚未实现。
 
 ## 外部依据
 

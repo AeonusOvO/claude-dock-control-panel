@@ -43,12 +43,14 @@ export class TerminalSession {
   private status: TerminalStatus;
 
   public constructor(
+    id: string,
     initialCwd: string,
     private readonly onData: DataListener,
     private readonly onStatus: StatusListener,
   ) {
     this.status = {
       cwd: initialCwd,
+      id,
       phase: 'stopped',
       shell: 'Windows PowerShell',
     };
@@ -80,6 +82,7 @@ export class TerminalSession {
 
     this.setStatus({
       cwd,
+      id: this.status.id,
       phase: 'starting',
       shell: 'Windows PowerShell',
     });
@@ -110,6 +113,7 @@ export class TerminalSession {
         this.process = undefined;
         this.setStatus({
           cwd: this.status.cwd,
+          id: this.status.id,
           message: `PowerShell 已退出（代码 ${exitCode}）`,
           phase: 'stopped',
           shell: 'Windows PowerShell',
@@ -118,6 +122,7 @@ export class TerminalSession {
 
       this.setStatus({
         cwd,
+        id: this.status.id,
         phase: 'running',
         pid: terminalProcess.pid,
         shell: 'Windows PowerShell',
@@ -126,6 +131,7 @@ export class TerminalSession {
       this.process = undefined;
       this.setStatus({
         cwd,
+        id: this.status.id,
         message: error instanceof Error ? error.message : '无法启动 PowerShell。',
         phase: 'error',
         shell: 'Windows PowerShell',
@@ -147,6 +153,7 @@ export class TerminalSession {
     if (emitStatus) {
       this.setStatus({
         cwd: this.status.cwd,
+        id: this.status.id,
         phase: 'stopped',
         shell: 'Windows PowerShell',
       });

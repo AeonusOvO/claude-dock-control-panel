@@ -1,8 +1,20 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import type { OperationResult, TerminalPhase, TerminalStatus } from '../shared/contracts';
+import type {
+  OperationResult,
+  TerminalPhase,
+  TerminalStatus,
+  WorkspaceResult,
+  WorkspaceState,
+} from '../shared/contracts';
 import './styles.css';
+
+interface TerminalView {
+  container: HTMLDivElement;
+  fitAddon: FitAddon;
+  terminal: Terminal;
+}
 
 const requiredElement = <T extends HTMLElement>(selector: string): T => {
   const element = document.querySelector<T>(selector);
@@ -13,30 +25,64 @@ const requiredElement = <T extends HTMLElement>(selector: string): T => {
 };
 
 const chooseDirectoryButton = requiredElement<HTMLButtonElement>('#choose-directory');
+const brandLogo = requiredElement<HTMLImageElement>('#brand-logo');
 const clearTerminalButton = requiredElement<HTMLButtonElement>('#clear-terminal');
-const currentPathElement = requiredElement<HTMLElement>('#current-path');
-const currentPathContainer = requiredElement<HTMLElement>('.current-path');
 const dropOverlay = requiredElement<HTMLElement>('#drop-overlay');
 const dropZone = requiredElement<HTMLButtonElement>('#drop-zone');
 const emptyState = requiredElement<HTMLElement>('#terminal-empty-state');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
+const projectCount = requiredElement<HTMLElement>('#project-count');
+const projectList = requiredElement<HTMLElement>('#project-list');
 const restartButton = requiredElement<HTMLButtonElement>('#restart-terminal');
 const runClaudeButton = requiredElement<HTMLButtonElement>('#run-claude');
 const sessionDetail = requiredElement<HTMLElement>('#session-detail');
 const sessionPid = requiredElement<HTMLElement>('#session-pid');
 const statusPill = requiredElement<HTMLElement>('#status-pill');
-const terminalContainer = requiredElement<HTMLElement>('#terminal');
 const terminalProject = requiredElement<HTMLElement>('#terminal-project');
+const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
 const toggleButton = requiredElement<HTMLButtonElement>('#toggle-terminal');
 const toggleLabel = requiredElement<HTMLElement>('#toggle-terminal-label');
 
-const terminal = new Terminal({
+brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
+
+const terminalViews = new Map<string, TerminalView>();
+let dragDepth = 0;
+let toastTimer: number | undefined;
+let workspaceState: WorkspaceState = {
+  activeSessionId: '',
+  sessions: [],
+};
+
+const phaseCopy: Record<TerminalPhase, { detail: string; footer: string; pill: string }> = {
+  error: {
+    detail: '终端连接发生错误',
+    footer: '需要处理',
+    pill: '错误',
+  },
+  running: {
+    detail: 'ConPTY 会话已连接',
+    footer: '后台运行中',
+    pill: '运行中',
+  },
+  starting: {
+    detail: '正在创建 ConPTY 会话',
+    footer: '正在连接',
+    pill: '启动中',
+  },
+  stopped: {
+    detail: 'PowerShell 会话已停止',
+    footer: '后台待命',
+    pill: '已停止',
+  },
+};
+
+const terminalOptions = {
   allowProposedApi: false,
   convertEol: false,
   cursorBlink: true,
-  cursorStyle: 'bar',
+  cursorStyle: 'bar' as const,
   fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
   fontSize: 14,
   letterSpacing: 0.2,
@@ -65,40 +111,6 @@ const terminal = new Terminal({
     white: '#d9e3e8',
     yellow: '#ffd66b',
   },
-});
-const fitAddon = new FitAddon();
-terminal.loadAddon(fitAddon);
-terminal.open(terminalContainer);
-
-let currentStatus: TerminalStatus = {
-  cwd: '',
-  phase: 'stopped',
-  shell: 'Windows PowerShell',
-};
-let dragDepth = 0;
-let toastTimer: number | undefined;
-
-const phaseCopy: Record<TerminalPhase, { detail: string; footer: string; pill: string }> = {
-  error: {
-    detail: '终端连接发生错误',
-    footer: '需要处理',
-    pill: '错误',
-  },
-  running: {
-    detail: 'ConPTY 会话已连接',
-    footer: '后台运行中',
-    pill: '运行中',
-  },
-  starting: {
-    detail: '正在创建 ConPTY 会话',
-    footer: '正在连接',
-    pill: '启动中',
-  },
-  stopped: {
-    detail: 'PowerShell 会话已停止',
-    footer: '后台待命',
-    pill: '已停止',
-  },
 };
 
 const showToast = (message: string, tone: 'error' | 'success' = 'success'): void => {
@@ -113,31 +125,208 @@ const showToast = (message: string, tone: 'error' | 'success' = 'success'): void
 
 const projectNameFromPath = (directoryPath: string): string => {
   const parts = directoryPath.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? 'PowerShell';
+  return parts.at(-1) ?? directoryPath ?? 'PowerShell';
 };
 
-const renderStatus = (status: TerminalStatus): void => {
-  currentStatus = status;
+const activeStatus = (): TerminalStatus | undefined =>
+  workspaceState.sessions.find((status) => status.id === workspaceState.activeSessionId);
+
+const createTerminalView = (sessionId: string): TerminalView => {
+  const container = document.createElement('div');
+  container.className = 'project-terminal';
+  container.dataset.sessionId = sessionId;
+  terminalStage.prepend(container);
+
+  const terminal = new Terminal(terminalOptions);
+  const fitAddon = new FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.open(container);
+
+  terminal.onData((data) => {
+    const status = workspaceState.sessions.find((item) => item.id === sessionId);
+    if (status?.phase === 'running') {
+      window.controlPanel.writeTerminal(sessionId, data);
+    }
+  });
+
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (event.type !== 'keydown') {
+      return true;
+    }
+
+    if (event.ctrlKey && !event.shiftKey && event.code === 'KeyL') {
+      terminal.clear();
+      return false;
+    }
+
+    return true;
+  });
+
+  const view = { container, fitAddon, terminal };
+  terminalViews.set(sessionId, view);
+  return view;
+};
+
+const ensureTerminalView = (sessionId: string): TerminalView =>
+  terminalViews.get(sessionId) ?? createTerminalView(sessionId);
+
+const fitActiveTerminal = (): void => {
+  const view = terminalViews.get(workspaceState.activeSessionId);
+  if (!view) {
+    return;
+  }
+
+  try {
+    view.fitAddon.fit();
+    window.controlPanel.resizeTerminal(
+      workspaceState.activeSessionId,
+      view.terminal.cols,
+      view.terminal.rows,
+    );
+  } catch {
+    // A resize can race with initial layout; the ResizeObserver will retry.
+  }
+};
+
+const renderActiveStatus = (status: TerminalStatus): void => {
   const copy = phaseCopy[status.phase];
 
   document.body.dataset.phase = status.phase;
-  titleStatus.textContent = copy.detail;
+  titleStatus.textContent = `${copy.detail} · ${workspaceState.sessions.length} 个项目`;
   statusPill.textContent = copy.pill;
   sessionDetail.textContent = status.message ?? copy.detail;
   sessionPid.textContent = status.pid ? `PID ${status.pid}` : 'PID —';
   footerStatus.textContent = copy.footer;
   toggleLabel.textContent = status.phase === 'running' ? '停止' : '启动';
-  emptyState.classList.toggle('terminal-empty-state--hidden', status.phase !== 'stopped');
+  const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
+  emptyState.classList.toggle('terminal-empty-state--hidden', terminalIsVisible);
+  emptyState.setAttribute('aria-hidden', String(terminalIsVisible));
+  terminalProject.textContent = projectNameFromPath(status.cwd);
+  terminalProject.title = status.cwd;
+};
 
-  if (status.cwd) {
-    currentPathElement.textContent = status.cwd;
-    currentPathContainer.title = status.cwd;
-    terminalProject.textContent = projectNameFromPath(status.cwd);
+const activateProject = async (sessionId: string): Promise<void> => {
+  const result = await window.controlPanel.activateProject(sessionId);
+  if (!result.ok) {
+    showToast(result.error ?? '无法切换项目。', 'error');
+    return;
+  }
+  renderWorkspace(result.state);
+  window.setTimeout(() => {
+    fitActiveTerminal();
+    terminalViews.get(sessionId)?.terminal.focus();
+  }, 40);
+};
+
+const closeProject = async (status: TerminalStatus): Promise<void> => {
+  if (
+    status.phase === 'running' &&
+    !window.confirm(`关闭“${projectNameFromPath(status.cwd)}”会终止其 PowerShell 进程，是否继续？`)
+  ) {
+    return;
+  }
+
+  const result = await window.controlPanel.closeProject(status.id);
+  if (!result.ok) {
+    showToast(result.error ?? '无法关闭项目。', 'error');
+    return;
+  }
+  renderWorkspace(result.state);
+  showToast(`已关闭 ${projectNameFromPath(status.cwd)}`);
+};
+
+const renderProjectList = (): void => {
+  projectList.replaceChildren();
+  projectCount.textContent = `${workspaceState.sessions.length} 个会话`;
+
+  for (const status of workspaceState.sessions) {
+    const item = document.createElement('div');
+    item.className = 'project-item';
+    item.dataset.active = String(status.id === workspaceState.activeSessionId);
+    item.dataset.phase = status.phase;
+    item.dataset.sessionId = status.id;
+
+    const selectButton = document.createElement('button');
+    selectButton.className = 'project-item__select';
+    selectButton.type = 'button';
+    selectButton.title = status.cwd;
+    selectButton.setAttribute('aria-pressed', String(status.id === workspaceState.activeSessionId));
+
+    const indicator = document.createElement('span');
+    indicator.className = 'project-item__status';
+    indicator.setAttribute('aria-hidden', 'true');
+
+    const copy = document.createElement('span');
+    copy.className = 'project-item__copy';
+
+    const name = document.createElement('strong');
+    name.textContent = projectNameFromPath(status.cwd);
+
+    const directory = document.createElement('span');
+    directory.textContent = status.cwd;
+
+    copy.append(name, directory);
+    selectButton.append(indicator, copy);
+    selectButton.addEventListener('click', () => {
+      void activateProject(status.id);
+    });
+
+    const closeButton = document.createElement('button');
+    closeButton.className = 'project-item__close';
+    closeButton.type = 'button';
+    closeButton.textContent = '×';
+    closeButton.title = `关闭 ${projectNameFromPath(status.cwd)}`;
+    closeButton.setAttribute('aria-label', `关闭项目 ${projectNameFromPath(status.cwd)}`);
+    closeButton.addEventListener('click', () => {
+      void closeProject(status);
+    });
+
+    item.append(selectButton, closeButton);
+    projectList.append(item);
   }
 };
 
+function renderWorkspace(state: WorkspaceState): void {
+  workspaceState = state;
+  const validSessionIds = new Set(state.sessions.map((status) => status.id));
+
+  for (const status of state.sessions) {
+    const view = ensureTerminalView(status.id);
+    view.container.classList.toggle(
+      'project-terminal--active',
+      status.id === state.activeSessionId,
+    );
+  }
+
+  for (const [sessionId, view] of terminalViews) {
+    if (!validSessionIds.has(sessionId)) {
+      view.terminal.dispose();
+      view.container.remove();
+      terminalViews.delete(sessionId);
+    }
+  }
+
+  renderProjectList();
+  const status = activeStatus();
+  if (status) {
+    renderActiveStatus(status);
+  }
+  window.requestAnimationFrame(fitActiveTerminal);
+}
+
+const applyTerminalStatus = (status: TerminalStatus): void => {
+  const sessionIndex = workspaceState.sessions.findIndex((session) => session.id === status.id);
+  if (sessionIndex === -1) {
+    return;
+  }
+
+  const sessions = [...workspaceState.sessions];
+  sessions[sessionIndex] = status;
+  renderWorkspace({ ...workspaceState, sessions });
+};
+
 const handleOperation = (result: OperationResult, successMessage?: string): boolean => {
-  renderStatus(result.status);
+  applyTerminalStatus(result.status);
   if (!result.ok) {
     showToast(result.error ?? '操作失败，请重试。', 'error');
     return false;
@@ -148,30 +337,34 @@ const handleOperation = (result: OperationResult, successMessage?: string): bool
   return true;
 };
 
-const fitTerminal = (): void => {
-  try {
-    fitAddon.fit();
-    window.controlPanel.resizeTerminal(terminal.cols, terminal.rows);
-  } catch {
-    // A resize can race with initial layout; the ResizeObserver will retry.
+const handleWorkspaceResult = (result: WorkspaceResult, projectPath: string): boolean => {
+  renderWorkspace(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '添加项目失败，请重试。', 'error');
+    return false;
   }
+  const name = projectNameFromPath(projectPath);
+  showToast(result.reused ? `${name} 已经打开，已切换到该项目` : `已添加并启动 ${name}`);
+  return true;
 };
 
-const switchProject = async (directoryPath: string): Promise<void> => {
+const addProject = async (directoryPath: string): Promise<void> => {
   dropZone.disabled = true;
+  chooseDirectoryButton.disabled = true;
   dropZone.classList.add('drop-zone--busy');
-  const result = await window.controlPanel.changeDirectory(directoryPath);
-  dropZone.disabled = false;
-  dropZone.classList.remove('drop-zone--busy');
 
-  if (
-    handleOperation(
-      result,
-      result.ok ? `已定位到 ${projectNameFromPath(directoryPath)}` : undefined,
-    )
-  ) {
-    terminal.clear();
-    window.setTimeout(fitTerminal, 60);
+  try {
+    const result = await window.controlPanel.addProject(directoryPath);
+    if (handleWorkspaceResult(result, directoryPath)) {
+      window.setTimeout(() => {
+        fitActiveTerminal();
+        terminalViews.get(result.state.activeSessionId)?.terminal.focus();
+      }, 60);
+    }
+  } finally {
+    dropZone.disabled = false;
+    chooseDirectoryButton.disabled = false;
+    dropZone.classList.remove('drop-zone--busy');
   }
 };
 
@@ -179,36 +372,17 @@ const openDirectoryPicker = async (): Promise<void> => {
   try {
     const choice = await window.controlPanel.chooseDirectory();
     if (!choice.canceled) {
-      await switchProject(choice.path);
+      await addProject(choice.path);
     }
   } catch {
     showToast('无法打开文件夹选择器。', 'error');
   }
 };
 
-terminal.onData((data) => {
-  if (currentStatus.phase === 'running') {
-    window.controlPanel.writeTerminal(data);
-  }
+window.controlPanel.onTerminalData((sessionId, data) => {
+  terminalViews.get(sessionId)?.terminal.write(data);
 });
-
-terminal.attachCustomKeyEventHandler((event) => {
-  if (event.type !== 'keydown') {
-    return true;
-  }
-
-  if (event.ctrlKey && !event.shiftKey && event.code === 'KeyL') {
-    terminal.clear();
-    return false;
-  }
-
-  return true;
-});
-
-window.controlPanel.onTerminalData((data) => {
-  terminal.write(data);
-});
-window.controlPanel.onTerminalStatus(renderStatus);
+window.controlPanel.onWorkspaceState(renderWorkspace);
 
 chooseDirectoryButton.addEventListener('click', () => {
   void openDirectoryPicker();
@@ -217,35 +391,49 @@ dropZone.addEventListener('click', () => {
   void openDirectoryPicker();
 });
 restartButton.addEventListener('click', async () => {
-  const result = await window.controlPanel.restartTerminal(currentStatus.cwd || undefined);
-  terminal.clear();
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+  const result = await window.controlPanel.restartTerminal(status.id);
+  terminalViews.get(status.id)?.terminal.clear();
   handleOperation(result, result.ok ? 'PowerShell 已重启' : undefined);
 });
 toggleButton.addEventListener('click', async () => {
-  if (currentStatus.phase === 'running') {
-    handleOperation(await window.controlPanel.stopTerminal(), 'PowerShell 已停止');
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  if (status.phase === 'running') {
+    handleOperation(await window.controlPanel.stopTerminal(status.id), 'PowerShell 已停止');
   } else {
-    handleOperation(
-      await window.controlPanel.startTerminal(currentStatus.cwd || undefined),
-      'PowerShell 已启动',
-    );
-    window.setTimeout(fitTerminal, 60);
+    handleOperation(await window.controlPanel.startTerminal(status.id), 'PowerShell 已启动');
+    window.setTimeout(fitActiveTerminal, 60);
   }
 });
 runClaudeButton.addEventListener('click', async () => {
-  if (currentStatus.phase !== 'running') {
-    const result = await window.controlPanel.startTerminal(currentStatus.cwd || undefined);
+  let status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  if (status.phase !== 'running') {
+    const result = await window.controlPanel.startTerminal(status.id);
     if (!handleOperation(result)) {
       return;
     }
+    status = result.status;
   }
-  terminal.focus();
-  window.controlPanel.writeTerminal('claude\r');
-  showToast('已在当前项目运行 Claude Code');
+
+  terminalViews.get(status.id)?.terminal.focus();
+  window.controlPanel.writeTerminal(status.id, 'claude\r');
+  showToast(`已在 ${projectNameFromPath(status.cwd)} 运行 Claude Code`);
 });
 clearTerminalButton.addEventListener('click', () => {
-  terminal.clear();
-  terminal.focus();
+  const view = terminalViews.get(workspaceState.activeSessionId);
+  view?.terminal.clear();
+  view?.terminal.focus();
 });
 
 document.addEventListener('dragenter', (event) => {
@@ -283,27 +471,35 @@ document.addEventListener('drop', (event) => {
       showToast('无法读取拖入项目的路径。', 'error');
       return;
     }
-    void switchProject(directoryPath);
+    void addProject(directoryPath);
   } catch {
     showToast('无法读取拖入项目的路径。', 'error');
   }
 });
 
 const resizeObserver = new ResizeObserver(() => {
-  window.requestAnimationFrame(fitTerminal);
+  window.requestAnimationFrame(fitActiveTerminal);
 });
-resizeObserver.observe(terminalContainer);
+resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
   resizeObserver.disconnect();
+  for (const view of terminalViews.values()) {
+    view.terminal.dispose();
+  }
 });
 
 void (async () => {
-  renderStatus(await window.controlPanel.getStatus());
-  const result = await window.controlPanel.startTerminal(currentStatus.cwd || undefined);
+  renderWorkspace(await window.controlPanel.getWorkspace());
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  const result = await window.controlPanel.startTerminal(status.id);
   handleOperation(result);
   window.setTimeout(() => {
-    fitTerminal();
-    terminal.focus();
+    fitActiveTerminal();
+    terminalViews.get(status.id)?.terminal.focus();
   }, 80);
 })();

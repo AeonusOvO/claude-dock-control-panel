@@ -12,7 +12,7 @@
   <body data-phase="stopped">
     <header class="titlebar">
       <div class="brand">
-        <img src="./app-icon-64.png" alt="" class="brand__icon" />
+        <img id="brand-logo" alt="" class="brand__icon" />
         <div>
           <span class="brand__name">ClaudeDock</span>
           <span class="brand__descriptor">PowerShell Control</span>
@@ -28,7 +28,7 @@
       <aside class="control-panel">
         <section class="session-card" aria-labelledby="session-heading">
           <div class="section-label">
-            <span>会话状态</span>
+            <span>当前项目状态</span>
             <span class="status-pill" id="status-pill">已停止</span>
           </div>
           <div class="session-card__heading">
@@ -46,9 +46,10 @@
 
         <section class="project-section" aria-labelledby="project-heading">
           <div class="section-label">
-            <span id="project-heading">项目目录</span>
-            <span>拖放定位</span>
+            <span id="project-heading">项目管理</span>
+            <span id="project-count">1 个会话</span>
           </div>
+          <div class="project-list" id="project-list" aria-label="已打开的项目"></div>
           <button class="drop-zone" id="drop-zone" type="button">
             <span class="drop-zone__icon" aria-hidden="true">
               <svg viewBox="0 0 24 24">
@@ -57,22 +58,15 @@
                 <path d="M12 10v7m-3-3 3 3 3-3" />
               </svg>
             </span>
-            <span class="drop-zone__title">拖入项目文件夹</span>
-            <span class="drop-zone__hint">终端将在该目录重新启动</span>
+            <span class="drop-zone__title">拖入新的项目文件夹</span>
+            <span class="drop-zone__hint">为项目创建独立终端</span>
           </button>
-          <div class="current-path" title="">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.1" />
-              <path d="M20.5 10.5v7.8a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
-            </svg>
-            <span id="current-path">尚未选择目录</span>
-          </div>
           <button class="button button--secondary" id="choose-directory" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.1" />
               <path d="M20.5 10.5v7.8a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
             </svg>
-            选择文件夹
+            添加项目
           </button>
         </section>
 
@@ -109,7 +103,7 @@
             <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
             <path d="M10 20h4" />
           </svg>
-          <p>关闭窗口后继续在托盘运行。右键托盘图标可控制会话。</p>
+          <p>关闭窗口后所有项目继续在托盘运行。右键托盘图标可切换项目。</p>
         </div>
       </aside>
 
@@ -129,9 +123,8 @@
             <span class="sr-only">清空终端显示</span>
           </button>
         </div>
-        <div class="terminal-stage">
-          <div id="terminal" tabindex="0"></div>
-          <div class="terminal-empty-state" id="terminal-empty-state">
+        <div class="terminal-stage" id="terminal-stage">
+          <div class="terminal-empty-state" id="terminal-empty-state" aria-hidden="false">
             <span class="empty-prompt">&gt;_</span>
             <strong>PowerShell 尚未运行</strong>
             <span>点击左侧“启动”创建终端会话</span>
@@ -152,8 +145,8 @@
           <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
           <path d="M12 10v7m-3-3 3 3 3-3" />
         </svg>
-        <strong>松开以定位项目</strong>
-        <span>PowerShell 会在新目录重新启动</span>
+        <strong>松开以添加项目</strong>
+        <span>将为该项目创建独立 PowerShell 会话</span>
       </div>
     </div>
 

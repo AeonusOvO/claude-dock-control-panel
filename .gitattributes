@@ -9,6 +9,7 @@
 *.json text eol=lf
 *.md text eol=lf
 *.mjs text eol=lf
+*.nsh text eol=lf
 *.svg text eol=lf
 *.ts text eol=lf
 *.yaml text eol=lf

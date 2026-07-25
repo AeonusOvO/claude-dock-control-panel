@@ -1,10 +1,16 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
-import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
+import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import type { DirectoryChoiceResult, OperationResult, TerminalStatus } from '../shared/contracts';
+import type {
+  DirectoryChoiceResult,
+  OperationResult,
+  TerminalStatus,
+  WorkspaceResult,
+  WorkspaceState,
+} from '../shared/contracts';
 import { resolveDirectory } from './directory';
-import { TerminalSession } from './terminal-session';
+import { TerminalWorkspace } from './terminal-workspace';
 
 app.enableSandbox();
 
@@ -16,14 +22,14 @@ let tray: Tray | null = null;
 const assetPath = (fileName: string): string =>
   path.join(app.getAppPath(), 'assets', 'generated', fileName);
 
-const terminal = new TerminalSession(
+const workspace = new TerminalWorkspace(
   homedir(),
-  (data) => {
-    mainWindow?.webContents.send('terminal:data', data);
+  (sessionId, data) => {
+    mainWindow?.webContents.send('terminal:data', sessionId, data);
   },
-  (status) => {
-    mainWindow?.webContents.send('terminal:status', status);
-    updateTray(status);
+  (state) => {
+    mainWindow?.webContents.send('workspace:state', state);
+    updateTray(state);
   },
 );
 
@@ -40,12 +46,14 @@ const statusText = (status: TerminalStatus): string => {
   }
 };
 
-const trayIconForStatus = (status: TerminalStatus): string => {
-  if (status.phase === 'running') {
-    return assetPath('tray-running.png');
-  }
-  if (status.phase === 'error') {
+const projectName = (status: TerminalStatus): string => path.basename(status.cwd) || status.cwd;
+
+const trayIconForState = (state: WorkspaceState): string => {
+  if (state.sessions.some((session) => session.phase === 'error')) {
     return assetPath('tray-error.png');
+  }
+  if (state.sessions.some((session) => session.phase === 'running')) {
+    return assetPath('tray-running.png');
   }
   return assetPath('tray-idle.png');
 };
@@ -64,10 +72,10 @@ const showMainWindow = (): void => {
 
 const chooseDirectory = async (): Promise<DirectoryChoiceResult> => {
   const options: Electron.OpenDialogOptions = {
-    buttonLabel: '定位到此项目',
-    defaultPath: terminal.getStatus().cwd,
+    buttonLabel: '添加此项目',
+    defaultPath: workspace.getActiveStatus().cwd,
     properties: ['openDirectory'],
-    title: '选择项目文件夹',
+    title: '添加项目文件夹',
   };
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
@@ -89,16 +97,23 @@ const operationFromStatus = (status: TerminalStatus): OperationResult => ({
   status,
 });
 
-const switchDirectory = (directoryPath: string): OperationResult => {
+const failedWorkspaceResult = (error: unknown): WorkspaceResult => ({
+  error: error instanceof Error ? error.message : '项目操作失败。',
+  ok: false,
+  state: workspace.getState(),
+});
+
+const addProject = (directoryPath: string): WorkspaceResult => {
   try {
     const resolved = resolveDirectory(directoryPath);
-    return operationFromStatus(terminal.restart(resolved));
-  } catch (error) {
+    const result = workspace.openProject(resolved);
     return {
-      error: error instanceof Error ? error.message : '无法切换到该文件夹。',
-      ok: false,
-      status: terminal.getStatus(),
+      ok: true,
+      reused: result.reused,
+      state: result.state,
     };
+  } catch (error) {
+    return failedWorkspaceResult(error);
   }
 };
 
@@ -106,35 +121,60 @@ const pickDirectoryFromTray = async (): Promise<void> => {
   try {
     const choice = await chooseDirectory();
     if (!choice.canceled) {
-      switchDirectory(choice.path);
+      addProject(choice.path);
       showMainWindow();
     }
   } catch (error) {
     await dialog.showMessageBox({
       message: error instanceof Error ? error.message : '无法打开该文件夹。',
-      title: '目录定位失败',
+      title: '添加项目失败',
       type: 'error',
     });
   }
 };
 
-function updateTray(status = terminal.getStatus()): void {
+function updateTray(state = workspace.getState()): void {
   if (!tray) {
     return;
   }
 
-  const icon = nativeImage.createFromPath(trayIconForStatus(status));
+  const activeStatus =
+    state.sessions.find((session) => session.id === state.activeSessionId) ?? state.sessions[0];
+  if (!activeStatus) {
+    return;
+  }
+
+  const runningCount = state.sessions.filter((session) => session.phase === 'running').length;
+  const projectMenu: MenuItemConstructorOptions[] = state.sessions.map((status) => ({
+    checked: status.id === state.activeSessionId,
+    click: () => {
+      workspace.activate(status.id);
+      showMainWindow();
+    },
+    label: `${projectName(status)} · ${statusText(status)}`,
+    type: 'radio',
+  }));
+
+  const icon = nativeImage.createFromPath(trayIconForState(state));
   tray.setImage(icon);
-  tray.setToolTip(`ClaudeDock · ${statusText(status)}\n${status.cwd}`);
+  tray.setToolTip(
+    `ClaudeDock · ${runningCount}/${state.sessions.length} 个项目运行中\n${activeStatus.cwd}`,
+  );
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
         enabled: false,
-        label: `状态：${statusText(status)}`,
+        label: `项目：${state.sessions.length} 个 · 运行中：${runningCount} 个`,
       },
       {
-        enabled: false,
-        label: `目录：${status.cwd}`,
+        label: '切换项目',
+        submenu: projectMenu,
+      },
+      {
+        click: () => {
+          void pickDirectoryFromTray();
+        },
+        label: '添加项目…',
       },
       { type: 'separator' },
       {
@@ -143,26 +183,19 @@ function updateTray(status = terminal.getStatus()): void {
       },
       {
         click: () => {
-          void pickDirectoryFromTray();
+          workspace.restart(activeStatus.id);
         },
-        label: '切换项目文件夹…',
-      },
-      { type: 'separator' },
-      {
-        click: () => {
-          terminal.restart();
-        },
-        label: '重启 PowerShell',
+        label: `重启 ${projectName(activeStatus)}`,
       },
       {
         click: () => {
-          if (terminal.getStatus().phase === 'running') {
-            terminal.stop();
+          if (activeStatus.phase === 'running') {
+            workspace.stop(activeStatus.id);
           } else {
-            terminal.start();
+            workspace.start(activeStatus.id);
           }
         },
-        label: status.phase === 'running' ? '停止 PowerShell' : '启动 PowerShell',
+        label: activeStatus.phase === 'running' ? '停止当前 PowerShell' : '启动当前 PowerShell',
       },
       { type: 'separator' },
       {
@@ -182,72 +215,113 @@ const validateSender = (event: IpcMainEvent | IpcMainInvokeEvent): void => {
   }
 };
 
+const validateSessionId = (sessionId: unknown): string => {
+  if (typeof sessionId !== 'string' || !/^session-\d{1,10}$/.test(sessionId)) {
+    throw new Error('项目会话标识无效。');
+  }
+  return sessionId;
+};
+
 const registerIpc = (): void => {
-  ipcMain.handle('terminal:get-status', (event) => {
+  ipcMain.handle('workspace:get-state', (event) => {
     validateSender(event);
-    return terminal.getStatus();
+    return workspace.getState();
   });
-  ipcMain.handle('terminal:start', (event, cwd?: unknown) => {
+  ipcMain.handle('project:add', (event, directoryPath: unknown) => {
+    validateSender(event);
+    if (typeof directoryPath !== 'string') {
+      return failedWorkspaceResult(new Error('文件夹路径格式无效。'));
+    }
+    return addProject(directoryPath);
+  });
+  ipcMain.handle('project:activate', (event, sessionId: unknown) => {
     validateSender(event);
     try {
-      const resolved = typeof cwd === 'string' ? resolveDirectory(cwd) : terminal.getStatus().cwd;
-      return operationFromStatus(terminal.start(resolved));
+      return {
+        ok: true,
+        state: workspace.activate(validateSessionId(sessionId)),
+      } satisfies WorkspaceResult;
+    } catch (error) {
+      return failedWorkspaceResult(error);
+    }
+  });
+  ipcMain.handle('project:close', (event, sessionId: unknown) => {
+    validateSender(event);
+    try {
+      return {
+        ok: true,
+        state: workspace.close(validateSessionId(sessionId)),
+      } satisfies WorkspaceResult;
+    } catch (error) {
+      return failedWorkspaceResult(error);
+    }
+  });
+  ipcMain.handle('terminal:start', (event, sessionId: unknown) => {
+    validateSender(event);
+    try {
+      return operationFromStatus(workspace.start(validateSessionId(sessionId)));
     } catch (error) {
       return {
         error: error instanceof Error ? error.message : '无法启动 PowerShell。',
         ok: false,
-        status: terminal.getStatus(),
+        status: workspace.getActiveStatus(),
       } satisfies OperationResult;
     }
   });
-  ipcMain.handle('terminal:restart', (event, cwd?: unknown) => {
+  ipcMain.handle('terminal:restart', (event, sessionId: unknown) => {
     validateSender(event);
     try {
-      const resolved = typeof cwd === 'string' ? resolveDirectory(cwd) : terminal.getStatus().cwd;
-      return operationFromStatus(terminal.restart(resolved));
+      return operationFromStatus(workspace.restart(validateSessionId(sessionId)));
     } catch (error) {
       return {
         error: error instanceof Error ? error.message : '无法重启 PowerShell。',
         ok: false,
-        status: terminal.getStatus(),
+        status: workspace.getActiveStatus(),
       } satisfies OperationResult;
     }
   });
-  ipcMain.handle('terminal:stop', (event) => {
+  ipcMain.handle('terminal:stop', (event, sessionId: unknown) => {
     validateSender(event);
-    return operationFromStatus(terminal.stop());
+    try {
+      return operationFromStatus(workspace.stop(validateSessionId(sessionId)));
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : '无法停止 PowerShell。',
+        ok: false,
+        status: workspace.getActiveStatus(),
+      } satisfies OperationResult;
+    }
   });
   ipcMain.handle('directory:choose', async (event) => {
     validateSender(event);
     return chooseDirectory();
   });
-  ipcMain.handle('directory:change', (event, directoryPath: unknown) => {
+  ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
     validateSender(event);
-    if (typeof directoryPath !== 'string') {
-      return {
-        error: '文件夹路径格式无效。',
-        ok: false,
-        status: terminal.getStatus(),
-      } satisfies OperationResult;
+    if (typeof data !== 'string' || data.length > 65_536) {
+      return;
     }
-    return switchDirectory(directoryPath);
-  });
-  ipcMain.on('terminal:write', (event, data: unknown) => {
-    validateSender(event);
-    if (typeof data === 'string' && data.length <= 65_536) {
-      terminal.write(data);
+    try {
+      workspace.write(validateSessionId(sessionId), data);
+    } catch {
+      // A stale renderer event can arrive immediately after a project is closed.
     }
   });
-  ipcMain.on('terminal:resize', (event, cols: unknown, rows: unknown) => {
+  ipcMain.on('terminal:resize', (event, sessionId: unknown, cols: unknown, rows: unknown) => {
     validateSender(event);
-    if (typeof cols === 'number' && typeof rows === 'number') {
-      terminal.resize(cols, rows);
+    if (typeof cols !== 'number' || typeof rows !== 'number') {
+      return;
+    }
+    try {
+      workspace.resize(validateSessionId(sessionId), cols, rows);
+    } catch {
+      // A ResizeObserver callback can race with project closure.
     }
   });
 };
 
 const createTray = (): void => {
-  tray = new Tray(nativeImage.createFromPath(trayIconForStatus(terminal.getStatus())));
+  tray = new Tray(nativeImage.createFromPath(trayIconForState(workspace.getState())));
   tray.on('click', showMainWindow);
   tray.on('double-click', showMainWindow);
   updateTray();
@@ -295,7 +369,7 @@ const createWindow = async (): Promise<void> => {
     if (!minimizedNoticeShown && tray) {
       minimizedNoticeShown = true;
       tray.displayBalloon({
-        content: '终端会话仍在后台运行，可从托盘恢复窗口。',
+        content: '所有项目终端仍在后台运行，可从托盘恢复窗口。',
         iconType: 'info',
         title: 'ClaudeDock 已进入后台',
       });
@@ -332,5 +406,5 @@ if (!hasSingleInstanceLock) {
 app.on('activate', showMainWindow);
 app.on('before-quit', () => {
   isQuitting = true;
-  terminal.stop(false);
+  workspace.shutdown();
 });

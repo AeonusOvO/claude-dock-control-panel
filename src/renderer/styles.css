@@ -106,7 +106,7 @@ svg {
   border-right: 1px solid #1d2931;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   overflow-y: auto;
   padding: 20px 18px 17px;
 }
@@ -255,8 +255,9 @@ body[data-phase='error'] .status-pill {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  min-height: 108px;
-  padding: 15px 12px;
+  margin-top: 9px;
+  min-height: 84px;
+  padding: 11px 12px;
   transition:
     background 160ms ease,
     border-color 160ms ease,
@@ -286,10 +287,10 @@ body[data-phase='error'] .status-pill {
   border-radius: 10px;
   color: #64d8ff;
   display: flex;
-  height: 34px;
+  height: 30px;
   justify-content: center;
-  margin-bottom: 9px;
-  width: 34px;
+  margin-bottom: 6px;
+  width: 30px;
 }
 
 .drop-zone__icon svg {
@@ -309,27 +310,114 @@ body[data-phase='error'] .status-pill {
   margin-top: 4px;
 }
 
-.current-path {
+.project-list {
+  display: grid;
+  gap: 6px;
+  max-height: 178px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-color: #273740 transparent;
+  scrollbar-width: thin;
+}
+
+.project-item {
+  align-items: stretch;
+  background: #0d151a;
+  border: 1px solid #1f2d35;
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  min-height: 48px;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+}
+
+.project-item[data-active='true'] {
+  background: rgb(100 216 255 / 8%);
+  border-color: #365463;
+}
+
+.project-item__select {
   align-items: center;
-  color: #7f929c;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
   display: flex;
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 9.5px;
-  gap: 7px;
-  margin: 10px 2px;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px 5px 7px 10px;
+  text-align: left;
+}
+
+.project-item__status {
+  background: #8796a0;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 7px;
+  width: 7px;
+}
+
+.project-item[data-phase='running'] .project-item__status {
+  background: #51e6a6;
+  box-shadow: 0 0 0 3px rgb(81 230 166 / 9%);
+}
+
+.project-item[data-phase='starting'] .project-item__status {
+  background: #ffd66b;
+}
+
+.project-item[data-phase='error'] .project-item__status {
+  background: #ff6b7a;
+}
+
+.project-item__copy {
+  display: grid;
+  gap: 3px;
   min-width: 0;
 }
 
-.current-path svg {
-  flex: 0 0 auto;
-  height: 14px;
-  width: 14px;
-}
-
-.current-path span {
+.project-item__copy strong,
+.project-item__copy span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-item__copy strong {
+  color: #cbd9df;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.project-item[data-active='true'] .project-item__copy strong {
+  color: #eef8fb;
+}
+
+.project-item__copy span {
+  color: #5f727c;
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 8px;
+}
+
+.project-item__close {
+  align-self: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #52656f;
+  cursor: pointer;
+  font-family: Arial, sans-serif;
+  font-size: 17px;
+  height: 26px;
+  line-height: 1;
+  padding: 0;
+  width: 24px;
+}
+
+.project-item__close:hover {
+  background: rgb(255 107 122 / 10%);
+  color: #ff8792;
 }
 
 .button {
@@ -348,6 +436,12 @@ body[data-phase='error'] .status-pill {
     color 150ms ease,
     transform 150ms ease;
   width: 100%;
+}
+
+.button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+  transform: none;
 }
 
 .button:hover {
@@ -523,9 +617,14 @@ body[data-phase='error'] .status-pill {
   position: relative;
 }
 
-#terminal {
+.project-terminal {
+  display: none;
   height: 100%;
   width: 100%;
+}
+
+.project-terminal--active {
+  display: block;
 }
 
 .xterm {
@@ -549,6 +648,7 @@ body[data-phase='error'] .status-pill {
   pointer-events: none;
   position: absolute;
   transition: opacity 160ms ease;
+  z-index: 2;
 }
 
 .terminal-empty-state--hidden {

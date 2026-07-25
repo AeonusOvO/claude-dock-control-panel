@@ -3,19 +3,28 @@ import type {
   ControlPanelApi,
   DirectoryChoiceResult,
   OperationResult,
-  TerminalStatus,
+  WorkspaceResult,
+  WorkspaceState,
 } from '../shared/contracts';
 
 const api: ControlPanelApi = {
-  changeDirectory: (directoryPath: string) =>
-    ipcRenderer.invoke('directory:change', directoryPath) as Promise<OperationResult>,
+  activateProject: (sessionId: string) =>
+    ipcRenderer.invoke('project:activate', sessionId) as Promise<WorkspaceResult>,
+  addProject: (directoryPath: string) =>
+    ipcRenderer.invoke('project:add', directoryPath) as Promise<WorkspaceResult>,
   chooseDirectory: () => ipcRenderer.invoke('directory:choose') as Promise<DirectoryChoiceResult>,
+  closeProject: (sessionId: string) =>
+    ipcRenderer.invoke('project:close', sessionId) as Promise<WorkspaceResult>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
-  getStatus: () => ipcRenderer.invoke('terminal:get-status') as Promise<TerminalStatus>,
+  getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
   onTerminalData: (listener) => {
-    const callback = (_event: Electron.IpcRendererEvent, data: unknown): void => {
-      if (typeof data === 'string') {
-        listener(data);
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      sessionId: unknown,
+      data: unknown,
+    ): void => {
+      if (typeof sessionId === 'string' && typeof data === 'string') {
+        listener(sessionId, data);
       }
     };
     ipcRenderer.on('terminal:data', callback);
@@ -23,23 +32,26 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('terminal:data', callback);
     };
   },
-  onTerminalStatus: (listener) => {
-    const callback = (_event: Electron.IpcRendererEvent, status: TerminalStatus): void => {
-      listener(status);
+  onWorkspaceState: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, state: WorkspaceState): void => {
+      listener(state);
     };
-    ipcRenderer.on('terminal:status', callback);
+    ipcRenderer.on('workspace:state', callback);
     return () => {
-      ipcRenderer.removeListener('terminal:status', callback);
+      ipcRenderer.removeListener('workspace:state', callback);
     };
   },
-  resizeTerminal: (cols, rows) => {
-    ipcRenderer.send('terminal:resize', cols, rows);
+  resizeTerminal: (sessionId, cols, rows) => {
+    ipcRenderer.send('terminal:resize', sessionId, cols, rows);
   },
-  restartTerminal: (cwd) => ipcRenderer.invoke('terminal:restart', cwd) as Promise<OperationResult>,
-  startTerminal: (cwd) => ipcRenderer.invoke('terminal:start', cwd) as Promise<OperationResult>,
-  stopTerminal: () => ipcRenderer.invoke('terminal:stop') as Promise<OperationResult>,
-  writeTerminal: (data) => {
-    ipcRenderer.send('terminal:write', data);
+  restartTerminal: (sessionId) =>
+    ipcRenderer.invoke('terminal:restart', sessionId) as Promise<OperationResult>,
+  startTerminal: (sessionId) =>
+    ipcRenderer.invoke('terminal:start', sessionId) as Promise<OperationResult>,
+  stopTerminal: (sessionId) =>
+    ipcRenderer.invoke('terminal:stop', sessionId) as Promise<OperationResult>,
+  writeTerminal: (sessionId, data) => {
+    ipcRenderer.send('terminal:write', sessionId, data);
   },
 };
 
