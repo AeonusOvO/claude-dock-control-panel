@@ -190,7 +190,7 @@ export const routerNativeModuleErrorMessage = (error: unknown): string | undefin
     mismatch.compiledAbi && mismatch.requiredAbi
       ? `（原生模块 ABI ${mismatch.compiledAbi}，当前运行时 ABI ${mismatch.requiredAbi}）`
       : '';
-  return `Router 的 Node.js 运行环境不匹配${abiDetail}。点击“修复运行环境并重启”，ClaudeDock 会改用 CCR 安装时配套的系统 Node；不会重编译数据库，也不会修改 Provider 或 Codex。`;
+  return `路由器的 Node.js 运行环境不匹配${abiDetail}。点击“修复运行环境并重启”，ClaudeDock 会改用 CCR 安装时配套的系统 Node.js；不会重编译数据库，也不会修改服务提供方或 Codex。`;
 };
 
 export const routerServiceRunsInAppRuntime = (
@@ -237,10 +237,12 @@ export const routerGatewayErrorMessage = (providerCount: number, lastError?: str
     providerCount === 0 ||
     /No available models|Configure at least one provider/i.test(lastError ?? '')
   ) {
-    return 'Router 管理服务已运行，但 3456 模型网关无法启动：还没有配置 Provider 和模型。请按下方“解决办法”添加第一个 Provider。';
+    return '路由器管理服务已运行，但 3456 模型网关无法启动：还没有配置服务提供方和模型。请按下方“解决办法”添加第一个服务提供方。';
   }
-  const detail = lastError ? safeMessage(lastError) : '请检查 Provider 的地址、模型和密钥。';
-  return `Router 管理服务已运行，但 3456 模型网关出错：${detail} 请编辑 Provider 后重新启动。`;
+  const detail = lastError
+    ? '网关返回了错误；原始信息已保留在终端输出或日志中。'
+    : '请检查服务提供方的地址、模型和密钥。';
+  return `路由器管理服务已运行，但 3456 模型网关出错：${detail} 请编辑服务提供方后重新启动。`;
 };
 
 const readJsonFile = (filePath: string, maximumBytes = 2 * 1024 * 1024): unknown => {
@@ -256,17 +258,17 @@ const normalizeProviderBaseUrl = (value: string): string => {
   try {
     parsed = new URL(value.trim());
   } catch {
-    throw new Error('Router 上游地址不是有效 URL。');
+    throw new Error('路由器上游地址不是有效网址。');
   }
   const hostname = parsed.hostname.toLowerCase();
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('Router 上游地址不能包含用户名、密码、查询参数或片段。');
+    throw new Error('路由器上游地址不能包含用户名、密码、查询参数或片段。');
   }
   if (
     parsed.protocol !== 'https:' &&
     !(parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(hostname))
   ) {
-    throw new Error('Router 的远程上游必须使用 HTTPS；仅本机地址允许 HTTP。');
+    throw new Error('路由器的远程上游必须使用 HTTPS；仅本机地址允许 HTTP。');
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
   const normalized = parsed.toString();
@@ -278,13 +280,13 @@ export const normalizeRouterProviderInput = (
 ): NormalizedRouterProviderInput => {
   const name = input.name.trim();
   if (!/^[A-Za-z0-9._-]{1,80}$/.test(name)) {
-    throw new Error('Provider 名称只能包含字母、数字、点、下划线和短横线。');
+    throw new Error('服务提供方名称只能包含字母、数字、点、下划线和短横线。');
   }
   if (input.id !== undefined && (input.id.length > 120 || !/^[A-Za-z0-9_.-]+$/.test(input.id))) {
-    throw new Error('Provider 标识无效。');
+    throw new Error('服务提供方标识无效。');
   }
   if (!PROVIDER_PROTOCOLS.has(input.protocol)) {
-    throw new Error('Provider 协议不受支持。');
+    throw new Error('服务提供方协议不受支持。');
   }
   const models = [
     ...new Set(input.models.map((model) => model.trim()).filter((model) => Boolean(model))),
@@ -294,14 +296,14 @@ export const normalizeRouterProviderInput = (
     models.length > 50 ||
     models.some((model) => !/^[-A-Za-z0-9._:/@[\]]{1,200}$/.test(model))
   ) {
-    throw new Error('模型 ID 只能包含字母、数字以及 . _ : / @ [ ] -。');
+    throw new Error('模型标识只能包含字母、数字以及 . _ : / @ [ ] -。');
   }
   const apiKey = input.apiKey?.trim();
   if (input.credentialAction === 'replace' && !apiKey) {
-    throw new Error('新增或替换 Provider 时必须填写上游 API Key。');
+    throw new Error('新增或替换服务提供方时必须填写上游接口密钥。');
   }
   if (apiKey && (apiKey.length > 20_000 || /[\r\n]/.test(apiKey))) {
-    throw new Error('上游 API Key 格式无效。');
+    throw new Error('上游接口密钥格式无效。');
   }
   return {
     apiKey,
@@ -365,7 +367,7 @@ const providerView = (
   index: number,
   preferredProvider: string,
 ): ClaudeRouterProviderView => {
-  const name = optionalString(provider.name) ?? `Provider ${index + 1}`;
+  const name = optionalString(provider.name) ?? `服务提供方 ${index + 1}`;
   const id =
     optionalString(provider.id) ??
     name
@@ -430,13 +432,13 @@ export const buildUpdatedRouterConfig = (
     ? providers.findIndex((provider) => optionalString(provider.id) === input.id)
     : -1;
   if (input.id && existingIndex < 0) {
-    throw new Error('要编辑的 Provider 已不存在，请重新检测。');
+    throw new Error('要编辑的服务提供方已不存在，请重新检测。');
   }
   const duplicateIndex = providers.findIndex(
     (provider, index) => index !== existingIndex && optionalString(provider.name) === input.name,
   );
   if (duplicateIndex >= 0) {
-    throw new Error('Provider 名称已存在，请换一个名称。');
+    throw new Error('服务提供方名称已存在，请换一个名称。');
   }
 
   const previous = existingIndex >= 0 ? providers[existingIndex] : undefined;
@@ -496,13 +498,13 @@ export const buildDeletedRouterConfig = (
   providerId: string,
 ): CcrAppConfig => {
   if (!/^[A-Za-z0-9_.-]{1,120}$/.test(providerId)) {
-    throw new Error('Provider 标识无效。');
+    throw new Error('服务提供方标识无效。');
   }
   const config = structuredClone(source);
   const providers = providerRecords(config);
   const removed = providers.find((provider) => optionalString(provider.id) === providerId);
   if (!removed) {
-    throw new Error('要删除的 Provider 已不存在。');
+    throw new Error('要删除的服务提供方已不存在。');
   }
   config.Providers = providers.filter((provider) => optionalString(provider.id) !== providerId);
   if (
@@ -535,7 +537,7 @@ const readGatewayApiKey = (config: CcrAppConfig): string => {
 
 export const parseRouterInstallerRelease = (value: unknown): RouterInstallerRelease => {
   if (!isRecord(value)) {
-    throw new Error('CCR Release 元数据格式无效。');
+    throw new Error('CCR 发布包元数据格式无效。');
   }
   const tag = optionalString(value.tag_name);
   const assets = Array.isArray(value.assets) ? value.assets : [];
@@ -546,7 +548,7 @@ export const parseRouterInstallerRelease = (value: unknown): RouterInstallerRele
       /^Claude-Code-Router_\d+\.\d+\.\d+\.exe$/.test(candidate.name),
   );
   if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag) || !asset || !isRecord(asset)) {
-    throw new Error('CCR 最新 Release 没有可验证的 Windows 安装包。');
+    throw new Error('CCR 最新发布包没有可验证的 Windows 安装包。');
   }
   const fileName = optionalString(asset.name) ?? '';
   const version = tag.slice(1);
@@ -632,11 +634,11 @@ export class ClaudeRouterManager {
         managementAvailable: false,
         message: installed
           ? manageable
-            ? 'Claude Code Router 已安装，但管理服务当前未运行。'
+            ? 'Claude Code 路由器已安装，但管理服务当前未运行。'
             : cli && (versionMajor(cli.version) ?? 0) >= 3
-              ? '检测到 CCR 3.x，但没有找到能加载其 better-sqlite3 的系统 Node.js；请安装或更新官方版 Router。'
-              : '检测到旧版 Router；请安装或升级到 3.x 后使用可视化管理。'
-          : '尚未检测到 Claude Code Router，可下载并启动官方 Windows 安装程序。',
+              ? '检测到 CCR 3.x，但没有找到能加载其 better-sqlite3 的系统 Node.js；请安装或更新官方版路由器。'
+              : '检测到旧版路由器；请安装或升级到 3.x 后使用可视化管理。'
+          : '尚未检测到 Claude Code 路由器，可下载并启动官方 Windows 安装程序。',
         providers: [],
         serviceRunning: false,
         version: cli?.version,
@@ -653,7 +655,7 @@ export class ClaudeRouterManager {
         manageable: true,
         managementAvailable: false,
         message:
-          '检测到 CCR 正由 ClaudeDock 的 Electron 内置 Node 运行，可能把 Provider 误报为空并触发 better-sqlite3 ABI 错误。点击“修复运行环境并重启”；数据库、Provider 和 Codex 都不会被修改。',
+          '检测到 CCR 正由 ClaudeDock 的 Electron 内置 Node.js 运行，可能把服务提供方误报为空并触发原生模块兼容错误。点击“修复运行环境并重启”；数据库、服务提供方和 Codex 都不会被修改。',
         providers: [],
         runtimeMismatch: true,
         serviceRunning: true,
@@ -668,6 +670,14 @@ export class ClaudeRouterManager {
         this.rpcWithAccess<CcrAppConfig>(access, 'getConfig'),
       ]);
       const gatewayState = this.gatewayState(gateway.state);
+      const gatewayStateText =
+        gatewayState === 'starting'
+          ? '启动中'
+          : gatewayState === 'stopped'
+            ? '已停止'
+            : gatewayState === 'unknown'
+              ? '未知'
+              : gatewayState;
       const lastError = optionalString(gateway.lastError);
       const providers = sanitizeRouterConfig(config);
       return {
@@ -680,10 +690,10 @@ export class ClaudeRouterManager {
         managementAvailable: true,
         message:
           gatewayState === 'running'
-            ? `Router 网关正在运行，已配置 ${providers.length} 个 Provider。`
+            ? `路由器网关正在运行，已配置 ${providers.length} 个服务提供方。`
             : gatewayState === 'error'
               ? routerGatewayErrorMessage(providers.length, lastError)
-              : `Router 管理服务已运行，网关状态：${gatewayState}。`,
+              : `路由器管理服务已运行，网关状态：${gatewayStateText}。`,
         providers,
         serviceRunning: true,
         version: optionalString(appInfo.version) ?? cli?.version,
@@ -698,7 +708,9 @@ export class ClaudeRouterManager {
         installed: true,
         manageable: Boolean(nativeModuleMessage && cli?.nodeExecutable),
         managementAvailable: false,
-        message: nativeModuleMessage ?? `CCR 管理服务响应异常：${safeMessage(error)}`,
+        message:
+          nativeModuleMessage ??
+          'CCR 管理服务响应异常；请重启路由器，或查看终端输出和日志了解详情。',
         providers: [],
         runtimeMismatch: Boolean(nativeModuleMessage),
         serviceRunning: true,
@@ -723,8 +735,8 @@ export class ClaudeRouterManager {
     return {
       message:
         source === 'npmmirror'
-          ? '已通过 npmmirror 安装或更新 Claude Code Router。'
-          : '已通过 npm 官方源安装或更新 Claude Code Router。',
+          ? '已通过 npmmirror 安装或更新 Claude Code 路由器。'
+          : '已通过 npm 官方源安装或更新 Claude Code 路由器。',
       state: await this.getState(),
     };
   }
@@ -734,7 +746,7 @@ export class ClaudeRouterManager {
     const desktop = this.findDesktopExecutable();
     const desktopUninstaller = this.findDesktopUninstaller(desktop);
     if (!cli && !desktop) {
-      return { message: '当前没有检测到可卸载的 Router。', state: await this.getState() };
+      return { message: '当前没有检测到可卸载的路由器。', state: await this.getState() };
     }
 
     const access = await this.getActiveServiceAccess();
@@ -762,7 +774,7 @@ export class ClaudeRouterManager {
 
     if (desktop && !desktopUninstaller) {
       throw new Error(
-        '检测到桌面版 Router，但没有找到它的卸载程序。请从 Windows“已安装的应用”中卸载后再安装新版本。',
+        '检测到桌面版路由器，但没有找到它的卸载程序。请从 Windows“已安装的应用”中卸载后再安装新版本。',
       );
     }
     if (desktopUninstaller) {
@@ -774,14 +786,14 @@ export class ClaudeRouterManager {
       child.unref();
       return {
         message: cli
-          ? 'npm 版 Router 已移除，并已打开桌面版卸载程序。完成后即可选择新的下载源。'
-          : '已打开 Router 卸载程序。完成后即可选择新的下载源。',
+          ? 'npm 版路由器已移除，并已打开桌面版卸载程序。完成后即可选择新的下载源。'
+          : '已打开路由器卸载程序。完成后即可选择新的下载源。',
         state: await this.getState(),
       };
     }
 
     return {
-      message: 'npm 版 Router 已移除；Provider 配置文件未被删除。',
+      message: 'npm 版路由器已移除；服务提供方配置文件未被删除。',
       state: await this.getState(),
     };
   }
@@ -807,13 +819,13 @@ export class ClaudeRouterManager {
 
     if (cli) {
       if ((versionMajor(cli.version) ?? 0) < 3) {
-        throw new Error('一键管理要求 Claude Code Router 3.x，请先升级。');
+        throw new Error('一键管理要求 Claude Code 路由器 3.x，请先升级。');
       }
       await this.startCliService(cli);
     } else {
       const desktop = this.findDesktopExecutable();
       if (!desktop) {
-        throw new Error('未找到 Claude Code Router，请先下载安装。');
+        throw new Error('未找到 Claude Code 路由器，请先下载安装。');
       }
       const child = spawn(desktop, [], {
         detached: true,
@@ -857,7 +869,7 @@ export class ClaudeRouterManager {
     const state = await this.getState();
     const provider = state.providers.find((item) => item.id === updated.providerId);
     if (!provider) {
-      throw new Error('CCR 已保存配置，但没有返回对应 Provider。');
+      throw new Error('CCR 已保存配置，但没有返回对应服务提供方。');
     }
     return {
       connection: {
@@ -889,11 +901,11 @@ export class ClaudeRouterManager {
       signal: AbortSignal.timeout(20_000),
     });
     if (!releaseResponse.ok) {
-      throw new Error(`无法读取 CCR 官方 Release：HTTP ${releaseResponse.status}。`);
+      throw new Error(`无法读取 CCR 官方发布信息：请求状态 ${releaseResponse.status}。`);
     }
     const releaseBytes = Buffer.from(await releaseResponse.arrayBuffer());
     if (releaseBytes.length > MAX_RELEASE_RESPONSE_BYTES) {
-      throw new Error('CCR Release 元数据超过允许大小。');
+      throw new Error('CCR 发布包元数据超过允许大小。');
     }
     const release = parseRouterInstallerRelease(
       JSON.parse(releaseBytes.toString('utf8')) as unknown,
@@ -1121,7 +1133,7 @@ export class ClaudeRouterManager {
   private async startCliService(cli: CcrCliInstallation): Promise<void> {
     if (!cli.nodeExecutable) {
       throw new Error(
-        'CCR 已安装，但没有找到能加载 better-sqlite3 的系统 Node.js；请安装或更新官方版 Router。',
+        'CCR 已安装，但没有找到能加载 better-sqlite3 的系统 Node.js；请安装或更新官方版路由器。',
       );
     }
     const command = routerCliStartSpec(cli.nodeExecutable, cli.cliPath);
@@ -1258,7 +1270,7 @@ export class ClaudeRouterManager {
   private async requireActiveService(): Promise<CcrServiceAccess> {
     const access = await this.getActiveServiceAccess();
     if (!access) {
-      throw new Error('CCR 管理服务没有运行，请先点击“启动 Router”。');
+      throw new Error('CCR 管理服务没有运行，请先点击“启动路由器”。');
     }
     return access;
   }

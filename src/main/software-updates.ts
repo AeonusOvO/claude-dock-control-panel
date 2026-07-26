@@ -92,12 +92,12 @@ export const checkSoftwareUpdates = async (
       installed: router.installed,
       latestVersion: latestRouter,
       message: !router.installed
-        ? '尚未安装 Router，可从官方安装包、npm 或国内镜像中选择。'
+        ? '尚未安装路由器，可从官方安装包、npm 或国内镜像中选择。'
         : latestRouter
           ? routerUpdateAvailable
-            ? `发现 Router ${latestRouter}。`
-            : 'Router 已是当前可检测到的最新版本。'
-          : '暂时无法读取 Router 最新版本。',
+            ? `发现路由器 ${latestRouter}。`
+            : '路由器已是当前可检测到的最新版本。'
+          : '暂时无法读取路由器最新版本。',
       updateAvailable: routerUpdateAvailable,
     },
   };

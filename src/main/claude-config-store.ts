@@ -69,13 +69,13 @@ export class ClaudeConfigStore {
       return undefined;
     }
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Windows 安全存储当前不可用，无法解密 API 凭据。');
+      throw new Error('Windows 安全存储当前不可用，无法解密接口凭据。');
     }
 
     try {
       return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
     } catch {
-      throw new Error('API 凭据无法解密，请在接入设置中重新填写。');
+      throw new Error('接口凭据无法解密，请在接入设置中重新填写。');
     }
   }
 
@@ -98,10 +98,10 @@ export class ClaudeConfigStore {
     if (input.credentialAction === 'replace') {
       const credential = input.credential?.trim() ?? '';
       if (!credential || credential.length > 4096 || /[\r\n]/.test(credential)) {
-        throw new Error('API 凭据不能为空、不能换行，且长度不能超过 4096 个字符。');
+        throw new Error('接口凭据不能为空、不能换行，且长度不能超过 4096 个字符。');
       }
       if (!safeStorage.isEncryptionAvailable()) {
-        throw new Error('Windows 安全存储当前不可用，拒绝以明文保存 API 凭据。');
+        throw new Error('Windows 安全存储当前不可用，拒绝以明文保存接口凭据。');
       }
       encryptedCredential = safeStorage.encryptString(credential).toString('base64');
     } else if (input.credentialAction === 'clear') {

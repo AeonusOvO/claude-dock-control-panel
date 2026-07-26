@@ -1074,6 +1074,7 @@ body[data-phase='error'] .status-pill {
   letter-spacing: -0.003em;
   line-height: 19px;
   padding: 0 10px;
+  white-space: nowrap;
 }
 
 .workbench-trigger:hover,
@@ -1102,6 +1103,11 @@ body[data-phase='error'] .status-pill {
   gap: 5px;
   height: 30px;
   padding: 0 5px 0 8px;
+  white-space: nowrap;
+}
+
+.terminal-theme-picker > span {
+  flex: 0 0 auto;
 }
 
 .terminal-theme-picker select {
@@ -1114,6 +1120,7 @@ body[data-phase='error'] .status-pill {
   font: inherit;
   height: 22px;
   padding: 0 18px 0 6px;
+  white-space: nowrap;
 }
 
 .terminal-theme-picker:focus-within {
@@ -3993,28 +4000,6 @@ body.is-resizing * {
 
 .plugin-card__category {
   color: var(--accent-text);
-}
-
-.plugin-card__original {
-  border-left: 2px solid var(--line-strong);
-  margin: 0;
-  padding-left: var(--s-3);
-}
-
-.plugin-card__original summary {
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: var(--text-2xs);
-  width: fit-content;
-}
-
-.plugin-card__original p {
-  color: var(--text-dim);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  margin: var(--s-2) 0 0;
-  overflow-wrap: anywhere;
-  user-select: text;
 }
 
 .shortcut-list {

@@ -97,9 +97,9 @@ export const parseClaudeCurl = (command: string): ClaudeCurlAnalysis => {
     endpoint: endpoint.toString(),
     explanation:
       protocol === 'anthropic'
-        ? '这是 Claude Code 可直接使用的 Anthropic Messages 格式。'
+        ? '这是 Claude Code 可直接使用的 Anthropic 消息格式。'
         : protocol === 'openai'
-          ? '这是 OpenAI Chat Completions 格式，不能直接填给 Claude Code；需要先经过本地转换器。'
+          ? '这是 OpenAI 对话补全格式，不能直接填给 Claude Code；需要先经过本地转换器。'
           : '暂时无法只凭路径确认协议；请让服务商确认是否提供 /v1/messages。',
     model: extractModel(trimmed),
     protocol,

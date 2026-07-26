@@ -134,14 +134,14 @@ const normalizeBaseUrl = (value: string): string => {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error('API 地址不是有效 URL。');
+    throw new Error('接口地址不是有效网址。');
   }
 
   if (parsed.username || parsed.password) {
-    throw new Error('API 地址不能内嵌用户名或密码。');
+    throw new Error('接口地址不能内嵌用户名或密码。');
   }
   if (parsed.search || parsed.hash) {
-    throw new Error('API 地址不能包含查询参数或片段。');
+    throw new Error('接口地址不能包含查询参数或片段。');
   }
   if (
     parsed.protocol !== 'https:' &&
@@ -163,12 +163,12 @@ const normalizeBaseUrl = (value: string): string => {
 export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedClaudeConfig => {
   const model = input.model.trim();
   if (!MODEL_NAME_PATTERN.test(model)) {
-    throw new Error('模型 ID 只能包含字母、数字以及 . _ : / @ [ ] -。');
+    throw new Error('模型标识只能包含字母、数字以及 . _ : / @ [ ] -。');
   }
 
   if (input.provider === 'anthropic') {
     if (input.authMode !== 'existing' && input.authMode !== 'apiKey') {
-      throw new Error('Anthropic 官方接入只能使用现有登录或 API Key。');
+      throw new Error('Anthropic 官方接入只能使用现有登录或接口密钥。');
     }
     return {
       authMode: input.authMode,

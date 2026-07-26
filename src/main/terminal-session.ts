@@ -86,7 +86,7 @@ export class TerminalSession {
       cwd: initialCwd,
       id,
       phase: 'stopped',
-      shell: 'Windows PowerShell',
+      shell: 'Windows 终端',
       title: initialTitle,
     };
   }
@@ -130,7 +130,7 @@ export class TerminalSession {
       cwd,
       id: this.status.id,
       phase: 'starting',
-      shell: 'Windows PowerShell',
+      shell: 'Windows 终端',
       title: this.status.title,
     });
 
@@ -165,9 +165,9 @@ export class TerminalSession {
         this.setStatus({
           cwd: this.status.cwd,
           id: this.status.id,
-          message: `PowerShell 已退出（代码 ${exitCode}）`,
+          message: `终端已退出（代码 ${exitCode}）`,
           phase: 'stopped',
-          shell: 'Windows PowerShell',
+          shell: 'Windows 终端',
           title: this.status.title,
         });
       });
@@ -177,17 +177,17 @@ export class TerminalSession {
         id: this.status.id,
         phase: 'running',
         pid: terminalProcess.pid,
-        shell: 'Windows PowerShell',
+        shell: 'Windows 终端',
         title: this.status.title,
       });
-    } catch (error) {
+    } catch {
       this.process = undefined;
       this.setStatus({
         cwd,
         id: this.status.id,
-        message: error instanceof Error ? error.message : '无法启动 PowerShell。',
+        message: '无法启动终端；请检查系统命令环境与当前目录。',
         phase: 'error',
-        shell: 'Windows PowerShell',
+        shell: 'Windows 终端',
         title: this.status.title,
       });
     }
@@ -209,7 +209,7 @@ export class TerminalSession {
         cwd: this.status.cwd,
         id: this.status.id,
         phase: 'stopped',
-        shell: 'Windows PowerShell',
+        shell: 'Windows 终端',
         title: this.status.title,
       });
     }

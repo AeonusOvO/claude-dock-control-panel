@@ -49,7 +49,7 @@ export const testClaudeConnection = async (
   const testedAt = Date.now();
   if (config.authMode === 'existing') {
     return {
-      message: '现有 Claude 登录不能通过独立 API 请求验证；请启动会话并在 /status 中确认。',
+      message: '现有 Claude 登录不能通过独立接口请求验证；请启动会话并在 /status 中确认。',
       ok: false,
       stages: [
         stage('endpoint', '接口地址', 'skipped', '官方登录使用 Claude Code 自己的会话认证。'),
@@ -62,7 +62,7 @@ export const testClaudeConnection = async (
   }
   if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
     return {
-      message: '缺少 API 凭据，请填写新密钥或先保存密钥。',
+      message: '缺少接口凭据，请填写新密钥或先保存密钥。',
       ok: false,
       stages: [
         stage('endpoint', '接口地址', 'skipped', '尚未发送请求。'),
@@ -75,11 +75,11 @@ export const testClaudeConnection = async (
   }
   if (config.provider === 'anthropic' && config.model === 'default') {
     return {
-      message: '官方接入使用“default”时由 Claude Code 选择模型，请直接启动安全会话验证。',
+      message: '官方接入使用“默认”时由 Claude Code 选择模型，请直接启动安全会话验证。',
       ok: false,
       stages: [
         stage('endpoint', '接口地址', 'passed', '使用 Anthropic 官方默认端点。'),
-        stage('authentication', '身份认证', 'skipped', '不会为了诊断猜测官方模型 ID。'),
+        stage('authentication', '身份认证', 'skipped', '不会为了诊断猜测官方模型标识。'),
         stage('model', '模型响应', 'skipped', '启动 Claude 会话后验证。'),
       ],
       testedAt,
@@ -162,12 +162,12 @@ export const testClaudeConnection = async (
     }
     return {
       latencyMs,
-      message: '接口返回成功状态，但响应不是标准 Anthropic Messages 格式。',
+      message: '接口返回成功状态，但响应不是标准 Anthropic 消息格式。',
       ok: false,
       stages: [
         stage('endpoint', '接口地址', 'passed', `${response.status} · 已收到响应`),
         stage('authentication', '身份认证', 'passed', '请求未被拒绝。'),
-        stage('model', '模型响应', 'failed', '缺少 msg_ 开头的 ID 或 content 数组。'),
+        stage('model', '模型响应', 'failed', '缺少以 msg_ 开头的标识或 content 数组。'),
       ],
       testedAt,
       tone: 'error',
@@ -185,7 +185,7 @@ export const testClaudeConnection = async (
           'authentication',
           '身份认证',
           'failed',
-          'Bearer 对应 Authorization；API Key 对应 x-api-key。请切换后重试。',
+          '持有者令牌对应 Authorization；接口密钥对应 x-api-key。请切换后重试。',
         ),
         stage('model', '模型响应', 'skipped', '认证未通过。'),
       ],

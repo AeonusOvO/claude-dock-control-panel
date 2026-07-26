@@ -15,7 +15,7 @@
         <img id="brand-logo" alt="" class="brand__icon" />
         <div>
           <span class="brand__name">ClaudeDock</span>
-          <span class="brand__descriptor">PowerShell Control</span>
+          <span class="brand__descriptor">项目终端控制台</span>
         </div>
       </div>
       <div class="titlebar__status" aria-live="polite">
@@ -78,13 +78,13 @@
             <div class="session-card__heading">
               <span class="status-dot" aria-hidden="true"></span>
               <div>
-                <h1 id="session-heading">Windows PowerShell</h1>
+                <h1 id="session-heading">Windows 终端</h1>
                 <p id="session-detail">等待启动终端</p>
               </div>
             </div>
             <div class="session-meta">
-              <span>ConPTY</span>
-              <span id="session-pid">PID —</span>
+              <span>伪终端</span>
+              <span id="session-pid">进程号 —</span>
             </div>
           </section>
 
@@ -154,7 +154,7 @@
             <div class="connection-advice__icon" aria-hidden="true">💡</div>
             <div class="connection-advice__body">
               <strong id="connection-advice-title">正在判断当前项目怎么连</strong>
-              <p id="connection-advice-detail">读取当前项目的接入配置与本机 Router 状态…</p>
+              <p id="connection-advice-detail">读取当前项目的接入配置与本机路由器状态…</p>
             </div>
             <div class="connection-advice__actions" id="connection-advice-actions"></div>
           </section>
@@ -248,10 +248,10 @@
               <div class="curl-analysis__actions">
                 <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
                 <button id="import-curl-router" type="button" hidden>
-                  一键写入 Router 并接入当前项目
+                  一键写入路由器并接入当前项目
                 </button>
-                <button id="use-detected-router" type="button" hidden>选用已发现的 Router</button>
-                <button id="open-detected-router" type="button" hidden>打开 Router 管理页</button>
+                <button id="use-detected-router" type="button" hidden>选用已发现的路由器</button>
+                <button id="open-detected-router" type="button" hidden>打开路由器管理页</button>
               </div>
             </div>
 
@@ -274,26 +274,26 @@
             <div class="step-heading">
               <span class="step-number">2</span>
               <div>
-                <strong id="router-manager-title">安装与管理 Claude Code Router</strong>
-                <span>只管理 Claude Code 接入；不会修改 Codex profile 或系统代理。</span>
+                <strong id="router-manager-title">安装与管理 Claude Code 路由器</strong>
+                <span>只管理 Claude Code 接入；不会修改 Codex 配置或系统代理。</span>
               </div>
             </div>
             <div class="router-status" id="router-status" data-state="unknown">
               <div>
-                <strong id="router-status-title">正在读取 Router 状态…</strong>
+                <strong id="router-status-title">正在读取路由器状态…</strong>
                 <span id="router-status-detail">等待首次检测</span>
               </div>
               <span id="router-version">未检测</span>
             </div>
             <div class="router-remediation" id="router-remediation" hidden>
-              <strong id="router-remediation-title">Router 需要完成配置</strong>
+              <strong id="router-remediation-title">路由器需要完成配置</strong>
               <span id="router-remediation-detail"></span>
               <div>
                 <button id="repair-router-from-project" type="button">
                   用当前项目配置一键修复
                 </button>
                 <button id="configure-router-provider" type="button">
-                  手动添加第一个 Provider
+                  手动添加第一个服务提供方
                 </button>
               </div>
             </div>
@@ -308,32 +308,32 @@
               </label>
               <button id="install-router" type="button">一键安装 / 更新</button>
               <button id="uninstall-router" type="button">卸载 / 更换</button>
-              <button id="start-router" type="button">启动 Router</button>
+              <button id="start-router" type="button">启动路由器</button>
               <button id="stop-router" type="button">停止网关</button>
               <button id="open-router-management" type="button">打开完整管理页</button>
             </div>
             <p class="router-install-note">
-              官方安装包会核对 Release 的 SHA-256；npm 与 npmmirror 只在本次安装命令中指定源，
+              官方安装包会核对发布包的 SHA-256；npm 与 npmmirror 只在本次安装命令中指定源，
               不会修改用户的全局 npm 配置。
             </p>
 
             <div class="router-provider-heading">
               <div>
-                <strong>Provider 配置</strong>
+                <strong>服务提供方配置</strong>
                 <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
               </div>
-              <button id="add-router-provider" type="button">添加 Provider</button>
+              <button id="add-router-provider" type="button">添加服务提供方</button>
             </div>
             <div id="router-provider-list" class="router-provider-list" aria-live="polite"></div>
 
             <form id="router-provider-form" hidden>
               <input id="router-provider-id" type="hidden" />
               <div class="router-provider-form__heading">
-                <strong id="router-provider-form-title">添加 Provider</strong>
-                <span>OpenAI cURL 通常选择 Chat Completions。</span>
+                <strong id="router-provider-form-title">添加服务提供方</strong>
+                <span>OpenAI cURL 通常选择“对话补全”协议。</span>
               </div>
               <label class="field" for="router-provider-name">
-                <span>Provider 名称</span>
+                <span>服务提供方名称</span>
                 <input
                   id="router-provider-name"
                   type="text"
@@ -342,14 +342,14 @@
                   placeholder="aancn-relay"
                   spellcheck="false"
                 />
-                <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型 ID。</small>
+                <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型标识。</small>
               </label>
               <label class="field" for="router-provider-protocol">
                 <span>上游协议</span>
                 <select id="router-provider-protocol">
-                  <option value="openai_chat_completions">OpenAI Chat Completions</option>
-                  <option value="openai_responses">OpenAI Responses</option>
-                  <option value="anthropic_messages">Anthropic Messages</option>
+                  <option value="openai_chat_completions">OpenAI 对话补全协议</option>
+                  <option value="openai_responses">OpenAI 响应协议</option>
+                  <option value="anthropic_messages">Anthropic 消息协议</option>
                 </select>
               </label>
               <label class="field" for="router-provider-base-url">
@@ -363,7 +363,7 @@
                 />
               </label>
               <label class="field" for="router-provider-models">
-                <span>模型 ID（每行一个）</span>
+                <span>模型标识（每行一个）</span>
                 <textarea
                   id="router-provider-models"
                   maxlength="10000"
@@ -373,7 +373,7 @@
                 ></textarea>
               </label>
               <label class="field" for="router-provider-api-key">
-                <span>上游 API Key</span>
+                <span>上游接口密钥</span>
                 <input
                   id="router-provider-api-key"
                   type="password"
@@ -384,18 +384,18 @@
               </label>
               <label class="router-choice" for="router-provider-preferred">
                 <input id="router-provider-preferred" type="checkbox" checked />
-                <span>设为 Router 首选 Provider</span>
+                <span>设为路由器首选服务提供方</span>
               </label>
               <label class="router-choice" for="router-provider-use-project">
                 <input id="router-provider-use-project" type="checkbox" checked />
                 <span>同时安全接入当前 ClaudeDock 项目</span>
               </label>
               <small class="router-project-note"
-                >启用后，Router 本机访问密钥会在主进程内直接进入 Windows
+                >启用后，路由器本机访问密钥会在主进程内直接进入 Windows
                 安全存储，不会传回界面。</small
               >
               <div class="router-provider-form__actions">
-                <button id="save-router-provider" type="submit">保存 Provider</button>
+                <button id="save-router-provider" type="submit">保存服务提供方</button>
                 <button id="cancel-router-provider" type="button">取消</button>
               </div>
             </form>
@@ -410,7 +410,7 @@
               </div>
             </div>
             <p>
-              推荐新手使用 Claude Code Router 图形版；它默认用
+              推荐新手使用 Claude Code 路由器图形版；它默认用
               <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
               更适合熟悉配置文件和 Python 的用户。
             </p>
@@ -419,7 +419,7 @@
                 type="button"
                 data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
               >
-                获取 Router 图形版
+                获取路由器图形版
               </button>
               <button
                 type="button"
@@ -456,7 +456,7 @@
             </label>
 
             <label class="field" id="base-url-field" for="claude-base-url">
-              <span>Claude API 基址</span>
+              <span>Claude 接口基址</span>
               <input
                 id="claude-base-url"
                 type="url"
@@ -471,7 +471,7 @@
             </label>
 
             <label class="field" for="claude-model">
-              <span>模型 ID</span>
+              <span>模型标识</span>
               <input
                 id="claude-model"
                 type="text"
@@ -479,22 +479,23 @@
                 value="default"
                 spellcheck="false"
               />
-              <small id="model-help">必须与最终网关中可用的模型 ID 完全一致。</small>
+              <small id="model-help">必须与最终网关中可用的模型标识完全一致。</small>
             </label>
 
             <label class="field" for="claude-auth-mode">
               <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
               <select id="claude-auth-mode">
                 <option value="existing">使用 Claude Code 现有登录</option>
-                <option value="apiKey">API Key（X-Api-Key）</option>
+                <option value="apiKey">接口密钥（X-Api-Key）</option>
               </select>
               <small id="auth-mode-help"
-                >服务商写 Authorization / Bearer 就选 Bearer；写 x-api-key 就选 API Key。</small
+                >服务商要求 Authorization / Bearer 时选择“持有者令牌”；要求 x-api-key
+                时选择“接口密钥”。</small
               >
             </label>
 
             <label class="field" id="credential-field" for="claude-credential">
-              <span id="credential-label">API 凭据</span>
+              <span id="credential-label">接口凭据</span>
               <input
                 id="claude-credential"
                 type="password"
@@ -507,7 +508,7 @@
 
             <div class="connection-test">
               <button id="test-claude-connection" type="button">真实测试端点、密钥和模型</button>
-              <span>会发送最多 1 个输出 token，可能产生极少量费用。</span>
+              <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
             </div>
             <div class="connection-test-result" id="connection-test-result" hidden>
               <strong id="connection-test-title">等待测试</strong>
@@ -519,7 +520,9 @@
               <span class="privacy-shield__icon" aria-hidden="true">◆</span>
               <div>
                 <strong>严格防护始终启用</strong>
-                <span>锁定端点和模型；关闭遥测、错误上报、反馈与 WebFetch 的 Anthropic 预检。</span>
+                <span
+                  >锁定端点和模型；关闭遥测、错误上报、反馈与网页抓取功能的 Anthropic 预检。</span
+                >
               </div>
             </div>
 
@@ -542,17 +545,15 @@
               </div>
               <div>
                 <dt>管理页 3458</dt>
-                <dd>用浏览器配置 Router，不是 Claude Code 应连接的 API。</dd>
+                <dd>用浏览器配置路由器，不是 Claude Code 应连接的模型接口。</dd>
               </div>
               <div>
                 <dt>模型接口 3456</dt>
-                <dd>Router 默认给 Claude Code 使用的地址，通常填到 API 基址。</dd>
+                <dd>路由器默认给 Claude Code 使用的地址，通常填到接口基址。</dd>
               </div>
               <div>
                 <dt>两种密钥</dt>
-                <dd>
-                  上游密钥交给 Router 访问服务商；Router 访问密钥交给 ClaudeDock。两者可能不同。
-                </dd>
+                <dd>上游密钥交给路由器访问服务商；路由器访问密钥交给 ClaudeDock。两者可能不同。</dd>
               </div>
             </dl>
           </details>
@@ -609,10 +610,10 @@
                   id="plugin-marketplace-source"
                   type="text"
                   maxlength="400"
-                  placeholder="owner/repo 或 https 地址"
+                  placeholder="仓库所有者/仓库名、HTTPS 地址或本机路径"
                   spellcheck="false"
                 />
-                <small>支持 GitHub 仓库、https 地址或本机绝对路径。</small>
+                <small>支持 GitHub 仓库、HTTPS 地址或本机绝对路径。</small>
               </label>
               <button id="add-plugin-marketplace" type="submit">添加市场</button>
             </form>
@@ -629,14 +630,14 @@
         tabindex="0"
       ></div>
 
-      <section class="terminal-shell" aria-label="PowerShell 终端">
+      <section class="terminal-shell" aria-label="项目终端">
         <div class="terminal-toolbar">
           <div class="window-lights" aria-hidden="true">
             <span></span><span></span><span></span>
           </div>
           <div class="terminal-title">
-            <span>PS</span>
-            <strong id="terminal-project">PowerShell</strong>
+            <span>终端</span>
+            <strong id="terminal-project">项目终端</strong>
           </div>
           <div class="terminal-toolbar__actions">
             <button
@@ -652,7 +653,7 @@
             </button>
             <label class="terminal-theme-picker" for="terminal-theme">
               <span>主题</span>
-              <select id="terminal-theme" aria-label="切换 PowerShell 终端主题">
+              <select id="terminal-theme" aria-label="切换终端主题">
                 <option value="claude">Claude 暖色</option>
                 <option value="graphite">石墨深色</option>
                 <option value="midnight">深海蓝</option>
@@ -681,7 +682,7 @@
         <div class="terminal-stage" id="terminal-stage">
           <div class="terminal-empty-state" id="terminal-empty-state" aria-hidden="false">
             <span class="empty-prompt">&gt;_</span>
-            <strong>PowerShell 尚未运行</strong>
+            <strong>终端尚未运行</strong>
             <span>点击左侧“启动”创建终端会话</span>
           </div>
         </div>
@@ -764,7 +765,7 @@
                   <span class="route-lock">端点锁定</span>
                 </div>
                 <strong id="claude-route-name">Anthropic 官方</strong>
-                <code id="claude-route-model">default</code>
+                <code id="claude-route-model">默认</code>
                 <span id="claude-route-endpoint">使用官方登录与默认端点</span>
               </div>
 
@@ -803,11 +804,11 @@
 
               <div class="metrics-grid">
                 <div>
-                  <span>输入 token</span>
+                  <span>输入令牌</span>
                   <strong id="metric-input">—</strong>
                 </div>
                 <div>
-                  <span>输出 token</span>
+                  <span>输出令牌</span>
                   <strong id="metric-output">—</strong>
                 </div>
                 <div>
@@ -826,7 +827,7 @@
                   <dd id="metric-model">等待状态行</dd>
                 </div>
                 <div>
-                  <dt>会话 ID</dt>
+                  <dt>会话编号</dt>
                   <dd id="metric-session">新会话尚未创建</dd>
                 </div>
               </dl>
@@ -867,7 +868,7 @@
                   <code>/context</code><span>上下文构成</span>
                 </button>
                 <button data-claude-command="/usage" type="button">
-                  <code>/usage</code><span>token 与用量</span>
+                  <code>/usage</code><span>令牌与用量</span>
                 </button>
                 <button data-claude-command="/status" type="button">
                   <code>/status</code><span>配置与状态</span>
@@ -885,7 +886,7 @@
                   <code>/agents</code><span>子代理管理</span>
                 </button>
                 <button data-claude-command="/hooks" type="button">
-                  <code>/hooks</code><span>Hooks 检查</span>
+                  <code>/hooks</code><span>钩子检查</span>
                 </button>
                 <button data-claude-command="/memory" type="button">
                   <code>/memory</code><span>项目记忆</span>
@@ -916,7 +917,7 @@
 
             <section class="workbench-page" data-workbench-page="shortcuts">
               <div class="command-intro">
-                <strong>PowerShell 与终端快捷键</strong>
+                <strong>终端快捷键</strong>
                 <span>这些映射只在 ClaudeDock 的终端窗口内生效，不修改系统配置。</span>
               </div>
               <dl class="shortcut-list">
@@ -930,7 +931,7 @@
                 </div>
                 <div>
                   <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt>
-                  <dd>在当前 PowerShell 命令中换行</dd>
+                  <dd>在当前命令中换行</dd>
                 </div>
                 <div>
                   <dt><kbd>Ctrl</kbd> + <kbd>L</kbd></dt>
@@ -938,7 +939,7 @@
                 </div>
                 <div>
                   <dt><kbd>Ctrl</kbd> + <kbd>A</kbd></dt>
-                  <dd>在 PowerShell 行编辑中移动到行首</dd>
+                  <dd>在命令行编辑中移动到行首</dd>
                 </div>
                 <div>
                   <dt>鼠标右键</dt>
@@ -959,7 +960,7 @@
           <path d="M12 10v7m-3-3 3 3 3-3" />
         </svg>
         <strong>松开以添加项目</strong>
-        <span>将为该项目创建独立 PowerShell 会话</span>
+        <span>将为该项目创建独立终端会话</span>
       </div>
     </div>
 

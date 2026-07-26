@@ -37,7 +37,12 @@ describe('Claude runtime route diagnostics', () => {
       parseClaudeRuntimeApiError(
         '\u001B[31mAPI Error: Unable to connect to API (ConnectionRefused)\u001B[0m\r\n',
       ),
-    ).toContain('ConnectionRefused');
+    ).toContain('无法连接');
+    expect(
+      parseClaudeRuntimeApiError(
+        '\u001B[31mAPI Error: Unable to connect to API (ConnectionRefused)\u001B[0m\r\n',
+      ),
+    ).not.toContain('ConnectionRefused');
     expect(parseClaudeRuntimeApiError('Claude Code ready')).toBeUndefined();
   });
 
@@ -46,13 +51,14 @@ describe('Claude runtime route diagnostics', () => {
       'API Error: upstream rejected Bearer sk-example-sensitive-token',
     );
 
-    expect(result).toContain('[已隐藏]');
+    expect(result).toContain('接口请求失败');
+    expect(result).not.toContain('upstream rejected');
     expect(result).not.toContain('sk-example-sensitive-token');
   });
 
   it('blocks a project that points at CCR while its Provider list is empty', () => {
     expect(usesDefaultClaudeRouter(routerConfig)).toBe(true);
-    expect(routerBlockingDetail(routerConfig, routerState)).toContain('没有任何 Provider');
+    expect(routerBlockingDetail(routerConfig, routerState)).toContain('没有任何服务提供方');
   });
 
   it('does not apply an unrelated CCR failure to a direct remote endpoint', () => {
@@ -87,6 +93,6 @@ describe('Claude runtime route diagnostics', () => {
     });
     expect(() =>
       routerRepairInputForProject({ ...directConfig, authMode: 'authToken' }, 'bearer-token'),
-    ).toThrow('API Key');
+    ).toThrow('接口密钥');
   });
 });

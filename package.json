@@ -1,7 +1,7 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "1.0.2",
-  "description": "A Windows project terminal and visual Claude Code workbench.",
+  "version": "1.0.3",
+  "description": "Windows 项目终端与 Claude Code 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,
   "author": "Cheng",
@@ -89,6 +89,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "installerLanguages": [
+        "zh_CN"
+      ],
       "include": "build/installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,

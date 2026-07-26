@@ -128,17 +128,17 @@ export const routerRepairInputForProject = (
   try {
     parsed = new URL(config.baseUrl);
   } catch {
-    throw new Error('当前项目没有可复制到 Router 的远程 Anthropic 接口。');
+    throw new Error('当前项目没有可复制到路由器的远程 Anthropic 接口。');
   }
   if (
     config.provider !== 'gateway' ||
     usesDefaultClaudeRouter(config) ||
     parsed.protocol !== 'https:'
   ) {
-    throw new Error('当前项目不是可复制到 Router 的 HTTPS 远程直连配置。');
+    throw new Error('当前项目不是可复制到路由器的 HTTPS 远程接入配置。');
   }
   if (config.authMode !== 'apiKey' || !credential) {
-    throw new Error('一键修复要求当前项目已保存 API Key；Bearer 或无认证上游请手动添加。');
+    throw new Error('一键修复要求当前项目已保存接口密钥；持有者令牌或无认证上游请手动添加。');
   }
   const providerSuffix =
     parsed.hostname
@@ -166,18 +166,20 @@ const normalizedRuntimeError = (value: string): string => {
     .trim()
     .slice(0, 260);
   if (/ConnectionRefused/i.test(compact)) {
-    return 'Claude Code 无法连接到当前 API 地址（ConnectionRefused）。端点可能已停止、被代理拒绝，或保存后的路由已经变化。';
+    return 'Claude Code 无法连接到当前接口地址。端点可能已停止、被代理拒绝，或保存后的路由已经变化。';
   }
   if (/\b(?:401|403)\b|unauthori[sz]ed|invalid (?:api )?key|authentication/i.test(compact)) {
     return 'Claude Code 的真实会话被接口拒绝认证。请重新核对认证方式与当前保存的密钥。';
   }
   if (/\b404\b|not found/i.test(compact)) {
-    return 'Claude Code 没有找到 Messages 接口；请确认当前基址最终提供 /v1/messages。';
+    return 'Claude Code 没有找到消息接口；请确认当前基址最终提供 /v1/messages。';
   }
   if (/model.+(?:not found|invalid|unsupported)|unknown model/i.test(compact)) {
-    return 'Claude Code 的真实会话未被当前模型接受；请核对最终接口中的模型 ID。';
+    return 'Claude Code 的真实会话未被当前模型接受；请核对最终接口中的模型标识。';
   }
-  return compact ? `Claude Code 返回 API 错误：${compact}` : 'Claude Code 的真实会话请求失败。';
+  return compact
+    ? 'Claude Code 的接口请求失败；请检查接入地址、认证方式和模型配置。原始错误已保留在终端输出中。'
+    : 'Claude Code 的真实会话请求失败。';
 };
 
 export const parseClaudeRuntimeApiError = (value: string): string | undefined => {
@@ -202,10 +204,10 @@ export const routerBlockingDetail = (
     return undefined;
   }
   if (router.providers.length === 0) {
-    return '当前项目指向 Router 的 3456 接口，但 CCR 没有任何 Provider/模型。请先在“接入”页添加 Provider。';
+    return '当前项目指向路由器的 3456 接口，但 CCR 没有任何服务提供方或模型。请先在“接入”页添加服务提供方。';
   }
   if (router.gatewayState !== 'running') {
-    return `当前项目指向 Router 的 3456 接口，但模型网关未就绪：${router.message}`;
+    return `当前项目指向路由器的 3456 接口，但模型网关未就绪：${router.message}`;
   }
   return undefined;
 };
@@ -247,7 +249,7 @@ export const computeClaudeConnectionAdvice = (
       detail: '当前接入方式需要密钥，但当前项目还没有保存。填好密钥后点“保存接入配置”即可。',
       routerNeeded,
       routerRunningButUnused,
-      title: '还缺一个 API 密钥',
+      title: '还缺一个接口密钥',
       tone: 'warning',
     };
   }
@@ -257,39 +259,39 @@ export const computeClaudeConnectionAdvice = (
       return {
         actions: ['install-router', 'switch-to-direct'],
         detail:
-          '当前配置选择了本机 Router 3456，但 CCR 尚未安装。请先安装 Router，或改用可用的 Anthropic Messages 兼容接口。',
+          '当前配置选择了本机路由器 3456，但 CCR 尚未安装。请先安装路由器，或改用可用的 Anthropic 消息兼容接口。',
         routerNeeded,
         routerRunningButUnused: false,
-        title: '需要先安装 Router',
+        title: '需要先安装路由器',
         tone: 'error',
       };
     }
     if (router.providers.length === 0) {
       return {
         actions: ['open-router-management', 'switch-to-direct'],
-        detail: 'Router 已安装但还没有任何 Provider，模型请求无处可去。请先添加一个 Provider。',
+        detail: '路由器已安装但还没有任何服务提供方，模型请求无处可去。请先添加一个服务提供方。',
         routerNeeded,
         routerRunningButUnused: false,
-        title: 'Router 还没有配置上游',
+        title: '路由器还没有配置上游',
         tone: 'warning',
       };
     }
     if (!routerGatewayUp) {
       return {
         actions: ['start-router'],
-        detail: `当前项目通过 Router 连接模型服务，但模型网关没有运行：${router.message}`,
+        detail: `当前项目通过路由器连接模型服务，但模型网关没有运行：${router.message}`,
         routerNeeded,
         routerRunningButUnused: false,
-        title: 'Router 网关未启动',
+        title: '路由器网关未启动',
         tone: 'warning',
       };
     }
     return {
       actions: ['test-connection'],
-      detail: `Router 网关运行中，已配置 ${router.providers.length} 个 Provider，当前项目会经由它访问模型。`,
+      detail: `路由器网关运行中，已配置 ${router.providers.length} 个服务提供方，当前项目会经由它访问模型。`,
       routerNeeded,
       routerRunningButUnused: false,
-      title: '经 Router 接入，一切正常',
+      title: '经路由器接入，一切正常',
       tone: 'success',
     };
   }
@@ -297,7 +299,7 @@ export const computeClaudeConnectionAdvice = (
   if (usesRemoteRelay(config)) {
     return {
       actions: ['test-connection'],
-      detail: `已配置 Anthropic Messages 兼容接口 ${config.baseUrl}。建议保存后执行真实连接测试。`,
+      detail: `已配置 Anthropic 消息兼容接口 ${config.baseUrl}。建议保存后执行真实连接测试。`,
       routerNeeded: false,
       routerRunningButUnused,
       title: '兼容接口已配置',
@@ -604,10 +606,10 @@ export class ClaudeRuntime {
     const input = routerRepairInputForProject(config, credential);
     const current = await this.routerManager.getState();
     if (!current.managementAvailable) {
-      throw new Error('CCR 管理服务尚未就绪，无法写入 Provider。');
+      throw new Error('CCR 管理服务尚未就绪，无法写入服务提供方。');
     }
     if (current.providers.length > 0) {
-      throw new Error('CCR 已存在 Provider；请编辑现有配置或手动选择要使用的 Provider。');
+      throw new Error('CCR 已存在服务提供方；请编辑现有配置或手动选择要使用的服务提供方。');
     }
 
     const saved = await this.routerManager.saveProvider(input);
@@ -661,7 +663,7 @@ export class ClaudeRuntime {
     const config = this.configStore.getConfig(cwd);
     const credential = this.configStore.getCredential(cwd);
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
-      throw new Error('当前接入需要 API 凭据，请先在“接入”页保存密钥。');
+      throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
     }
     if (usesDefaultClaudeRouter(config)) {
       const router = await this.routerManager.getState();
@@ -780,7 +782,7 @@ export class ClaudeRuntime {
           blocking: true,
           checkedAt: router.checkedAt,
           detail: blockingDetail,
-          headline: '当前 Router 无法接收 Claude Code 请求',
+          headline: '当前路由器无法接收 Claude Code 请求',
           source: 'router',
           tone: 'error',
         };
@@ -792,7 +794,7 @@ export class ClaudeRuntime {
         blocking: false,
         checkedAt: runtime.lastApiError.detectedAt,
         detail: matchingCheck?.ok
-          ? `${runtime.lastApiError.detail} 此配置此前的 1-token 测试通过，但真实 Claude Code 会话随后失败；测试成功不代表端点会持续可用或完整支持 Claude Code。`
+          ? `${runtime.lastApiError.detail} 此配置此前的单令牌测试通过，但真实 Claude Code 会话随后失败；测试成功不代表端点会持续可用或完整支持 Claude Code。`
           : runtime.lastApiError.detail,
         headline: 'Claude Code 的真实对话请求失败',
         source: 'runtime',
@@ -807,7 +809,7 @@ export class ClaudeRuntime {
         detail: matchingCheck.message,
         headline:
           matchingCheck.tone === 'success'
-            ? '当前配置已通过 1-token 测试'
+            ? '当前配置已通过单令牌测试'
             : matchingCheck.tone === 'warning'
               ? '当前配置只通过了部分测试'
               : '当前配置的连接测试失败',
@@ -821,8 +823,8 @@ export class ClaudeRuntime {
       return {
         blocking: false,
         checkedAt: router.checkedAt,
-        detail: `CCR 模型网关正在运行，当前可见 ${router.providers.length} 个 Provider。仍建议执行 1-token 真实测试。`,
-        headline: '当前 Router 基础状态正常',
+        detail: `CCR 模型网关正在运行，当前可见 ${router.providers.length} 个服务提供方。仍建议执行单令牌真实测试。`,
+        headline: '当前路由器基础状态正常',
         source: 'router',
         tone: 'success',
       };

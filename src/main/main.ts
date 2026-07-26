@@ -144,13 +144,13 @@ function describeWorkspace(state: TerminalWorkspaceState = workspace.getState())
 const statusText = (status: TerminalStatus): string => {
   switch (status.phase) {
     case 'starting':
-      return 'PowerShell 启动中';
+      return '终端启动中';
     case 'running':
-      return 'PowerShell 运行中';
+      return '终端运行中';
     case 'error':
-      return 'PowerShell 出错';
+      return '终端出错';
     case 'stopped':
-      return 'PowerShell 已停止';
+      return '终端已停止';
   }
 };
 
@@ -367,7 +367,7 @@ function updateTray(state = describeWorkspace()): void {
             workspace.start(activeStatus.id);
           }
         },
-        label: activeStatus.phase === 'running' ? '停止当前 PowerShell' : '启动当前 PowerShell',
+        label: activeStatus.phase === 'running' ? '停止当前终端' : '启动当前终端',
       },
       { type: 'separator' },
       {
@@ -446,7 +446,7 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
 
 const validateClaudeRouterProviderInput = (input: unknown): SaveClaudeRouterProviderInput => {
   if (!input || typeof input !== 'object') {
-    throw new Error('Router Provider 配置格式无效。');
+    throw new Error('路由器服务提供方配置格式无效。');
   }
   const value = input as Record<string, unknown>;
   if (
@@ -463,7 +463,7 @@ const validateClaudeRouterProviderInput = (input: unknown): SaveClaudeRouterProv
     typeof value.makePreferred !== 'boolean' ||
     typeof value.useForCurrentProject !== 'boolean'
   ) {
-    throw new Error('Router Provider 配置包含无效字段。');
+    throw new Error('路由器服务提供方配置包含无效字段。');
   }
   return {
     apiKey: value.apiKey,
@@ -592,7 +592,7 @@ const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Pr
     'claude:plugins-marketplace-add',
     (argument) => {
       if (!isValidMarketplaceSource(argument)) {
-        throw new Error('插件市场地址无效，请填写 owner/repo、https 地址或本机绝对路径。');
+        throw new Error('插件市场地址无效，请填写仓库所有者/仓库名、HTTPS 地址或本机绝对路径。');
       }
       return pluginManager.addMarketplace(argument.trim());
     },
@@ -766,7 +766,7 @@ const registerIpc = (): void => {
       return operationFromStatus(workspace.start(validateSessionId(sessionId)));
     } catch (error) {
       return {
-        error: error instanceof Error ? error.message : '无法启动 PowerShell。',
+        error: error instanceof Error ? error.message : '无法启动终端。',
         ok: false,
         status: workspace.getActiveStatus(),
       } satisfies OperationResult;
@@ -780,7 +780,7 @@ const registerIpc = (): void => {
       return operationFromStatus(workspace.restart(validatedSessionId));
     } catch (error) {
       return {
-        error: error instanceof Error ? error.message : '无法重启 PowerShell。',
+        error: error instanceof Error ? error.message : '无法重启终端。',
         ok: false,
         status: workspace.getActiveStatus(),
       } satisfies OperationResult;
@@ -794,7 +794,7 @@ const registerIpc = (): void => {
       return operationFromStatus(workspace.stop(validatedSessionId));
     } catch (error) {
       return {
-        error: error instanceof Error ? error.message : '无法停止 PowerShell。',
+        error: error instanceof Error ? error.message : '无法停止终端。',
         ok: false,
         status: workspace.getActiveStatus(),
       } satisfies OperationResult;
@@ -838,7 +838,7 @@ const registerIpc = (): void => {
         typeof source !== 'string' ||
         !routerInstallSources.has(source as ClaudeRouterInstallSource)
       ) {
-        return routerFailure(new Error('Router 安装源无效。'), '无法安装 Router。');
+        return routerFailure(new Error('路由器安装源无效。'), '无法安装路由器。');
       }
       if (source === 'github') {
         return launchRouterInstaller();
@@ -849,7 +849,7 @@ const registerIpc = (): void => {
         );
         return { message: result.message, ok: true, routerState: result.state };
       } catch (error) {
-        return routerFailure(error, '无法安装或更新 Router。');
+        return routerFailure(error, '无法安装或更新路由器。');
       }
     },
   );
@@ -862,7 +862,7 @@ const registerIpc = (): void => {
         const result = await requireClaudeRuntime().uninstallRouter();
         return { message: result.message, ok: true, routerState: result.state };
       } catch (error) {
-        return routerFailure(error, '无法卸载 Router。');
+        return routerFailure(error, '无法卸载路由器。');
       }
     },
   );
@@ -875,12 +875,12 @@ const registerIpc = (): void => {
         const routerState = await requireClaudeRuntime().startRouter();
         return {
           message:
-            routerState.gatewayState === 'running' ? 'Router 网关已启动。' : routerState.message,
+            routerState.gatewayState === 'running' ? '路由器网关已启动。' : routerState.message,
           ok: routerState.gatewayState === 'running',
           routerState,
         };
       } catch (error) {
-        return routerFailure(error, '无法启动 Router。');
+        return routerFailure(error, '无法启动路由器。');
       }
     },
   );
@@ -892,12 +892,12 @@ const registerIpc = (): void => {
       try {
         const routerState = await requireClaudeRuntime().stopRouter();
         return {
-          message: 'Router 网关已停止，管理服务仍可用于修改配置。',
+          message: '路由器网关已停止，管理服务仍可用于修改配置。',
           ok: routerState.gatewayState === 'stopped',
           routerState,
         };
       } catch (error) {
-        return routerFailure(error, '无法停止 Router。');
+        return routerFailure(error, '无法停止路由器。');
       }
     },
   );
@@ -931,14 +931,14 @@ const registerIpc = (): void => {
           status.cwd,
         );
         return {
-          message: `已用当前项目配置创建 Provider ${result.saved.provider.name}，启动 3456，并将当前项目安全切换到 Router。`,
+          message: `已用当前项目配置创建服务提供方 ${result.saved.provider.name}，启动 3456，并将当前项目安全切换到路由器。`,
           ok: true,
           projectState: result.projectState,
           provider: result.saved.provider,
           routerState: result.saved.state,
         };
       } catch (error) {
-        return routerFailure(error, '无法用当前项目配置修复 Router。');
+        return routerFailure(error, '无法用当前项目配置修复路由器。');
       }
     },
   );
@@ -956,15 +956,15 @@ const registerIpc = (): void => {
         );
         return {
           message: result.projectState
-            ? `Provider ${result.saved.provider.name} 已保存，并已安全接入当前项目。`
-            : `Provider ${result.saved.provider.name} 已保存。`,
+            ? `服务提供方 ${result.saved.provider.name} 已保存，并已安全接入当前项目。`
+            : `服务提供方 ${result.saved.provider.name} 已保存。`,
           ok: true,
           projectState: result.projectState,
           provider: result.saved.provider,
           routerState: result.saved.state,
         };
       } catch (error) {
-        return routerFailure(error, '无法保存 Router Provider。');
+        return routerFailure(error, '无法保存路由器服务提供方。');
       }
     },
   );
@@ -978,16 +978,16 @@ const registerIpc = (): void => {
       validateSender(event);
       validateSessionId(sessionId);
       if (typeof providerId !== 'string') {
-        return routerFailure(new Error('Provider 标识无效。'), '无法删除 Provider。');
+        return routerFailure(new Error('服务提供方标识无效。'), '无法删除服务提供方。');
       }
       try {
         return {
-          message: 'Provider 已从 Router 删除。',
+          message: '服务提供方已从路由器删除。',
           ok: true,
           routerState: await requireClaudeRuntime().deleteRouterProvider(providerId),
         };
       } catch (error) {
-        return routerFailure(error, '无法删除 Router Provider。');
+        return routerFailure(error, '无法删除路由器服务提供方。');
       }
     },
   );

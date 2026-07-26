@@ -213,8 +213,9 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   接口。插件标识、市场名和市场来源分别经过格式校验；变更后强制刷新目录。CLI 返回版本或
   source SHA 时与市场记录比较并标记更新，用户也可刷新市场后批量执行官方 `plugin update`。
 - `src/shared/plugin-localization.ts` 不调用外部翻译接口。它按安全、测试、API、数据、运维、
-  前端等可追踪关键词生成中文能力概括；renderer 保留英文原文折叠区，插件 ID 始终使用 CLI
-  返回值，搜索同时覆盖原文、中文概括与分类。该概括属于项目自研规则，不是插件作者译文。
+  前端等可追踪关键词生成中文能力概括；renderer 只展示中文概括，插件 ID 始终使用 CLI
+  返回值，搜索仍覆盖原文、中文概括与分类。该概括属于项目自研规则，不是插件作者译文。
+  插件命令的英文标准错误不会直接进入界面，而是映射成中文操作提示。
 - Windows 上 `claude`/`npm` 常由 `.ps1` shim 提供。`WindowsCommand` 先用固定 PowerShell
   查询 `Get-Command` 的绝对 `Source`，再通过 `-File` 与独立 argv 调用；stdin 显式连接
   NUL，避免 Claude CLI 把匿名管道当作慢输入等待。`.cmd` 只在同目录存在配套 `.ps1` 时
@@ -295,8 +296,10 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   加载 PSReadLine，并把 `Ctrl+J` 绑定到 `AddLine`；renderer 将 `Shift+Enter` 转为 LF，
   因此多行输入不需要修改用户 profile 或外部终端。
 - xterm 的键盘处理在自定义快捷键前放行 `isComposing`/keyCode 229，避免截断 Windows 中文
-  输入法组合事件；Unicode 11 addon 负责 CJK 宽字符单元格计算。renderer 不再依赖可能滞后
-  的状态快照丢弃 `onData`，主进程 PTY 仍是最终写入边界。
+  输入法组合事件；Unicode 11 addon 负责 CJK 宽字符单元格计算。该 addon 使用 xterm 的
+  提议 Unicode API，因此终端实例显式设置 `allowProposedApi: true`；当前只把它用于固定的
+  Unicode 11 addon。renderer 不再依赖可能滞后的状态快照丢弃 `onData`，主进程 PTY 仍是
+  最终写入边界。
 - 会话内 Backspace 处理器检测光标前是否为 PSReadLine 多行换行符：是则删除该换行并回退
   光标，否则调用标准 `BackwardDeleteChar`。该绑定不会写入用户 profile。
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
@@ -329,11 +332,14 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   软件语义版本比较。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
+- `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
+  汉化的终端、接入与插件文案回退为英文或重新出现“英文原文”面板。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
   关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放不计为控件重叠。
 - `npm run test:visual` 在本地生成 820px 插件页与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
   人工核对主题选择器、窄宽响应式和弹窗层级；图片属于构建产物。
+- NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
   固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行

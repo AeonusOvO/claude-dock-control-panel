@@ -76,7 +76,7 @@ describe('Claude Code Router management', () => {
         ...providerInput,
         name: '包含空格',
       }),
-    ).toThrow('Provider 名称只能包含');
+    ).toThrow('服务提供方名称只能包含');
   });
 
   it('adds a provider while preserving Codex and proxy configuration byte-for-byte', () => {
@@ -199,7 +199,7 @@ describe('Claude Code Router management', () => {
       'No available models. Configure at least one provider with a model.',
     );
 
-    expect(message).toContain('还没有配置 Provider 和模型');
+    expect(message).toContain('还没有配置服务提供方和模型');
     expect(message).toContain('解决办法');
     expect(message).not.toContain('No available models');
   });
@@ -231,7 +231,7 @@ describe('Claude Code Router management', () => {
     expect(message).toContain('原生模块 ABI 137');
     expect(message).toContain('当前运行时 ABI 148');
     expect(message).toContain('修复运行环境并重启');
-    expect(message).toContain('不会修改 Provider 或 Codex');
+    expect(message).toContain('不会修改服务提供方或 Codex');
     expect(message).not.toContain('D:\\ClaudeCode');
   });
 

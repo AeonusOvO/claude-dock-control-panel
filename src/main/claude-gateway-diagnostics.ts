@@ -174,15 +174,15 @@ export class ClaudeGatewayDetector {
         authRequired: authRequiredFromStatus(modelStatus),
         detail: ccrApiOpen
           ? authRequiredFromStatus(modelStatus)
-            ? '转换接口已运行，并要求单独的 Router 访问密钥。3458 只是管理页。'
+            ? '转换接口已运行，并要求单独的路由器访问密钥。3458 只是管理页。'
             : '转换接口已运行；Claude Code 应连接 3456，3458 只用于管理。'
           : ccrUiOpen
-            ? '管理页已运行，但模型接口 3456 尚未就绪；请在管理页启动 Server。'
+            ? '管理页已运行，但模型接口 3456 尚未就绪；请在管理页启动服务。'
             : '已检测到安装或配置，但服务当前没有运行。',
         detectedBy,
         id: 'claude-code-router',
         kind: 'claude-code-router',
-        label: 'Claude Code Router',
+        label: 'Claude Code 路由器',
         managementUrl: ccrUiOpen ? 'http://127.0.0.1:3458/' : undefined,
         status: ccrApiOpen ? 'ready' : ccrUiOpen ? 'partial' : 'offline',
       });
@@ -204,7 +204,7 @@ export class ClaudeGatewayDetector {
         ],
         id: 'litellm',
         kind: 'litellm',
-        label: 'LiteLLM Proxy',
+        label: 'LiteLLM 代理',
         status: liteLlmOpen ? 'ready' : 'offline',
       });
     }
@@ -220,7 +220,7 @@ export class ClaudeGatewayDetector {
         apiBaseUrl: config.baseUrl,
         authRequired: config.authMode !== 'none',
         detail: open
-          ? '当前项目保存的本机地址正在监听；服务类型未知，建议继续执行真实 API 测试。'
+          ? '当前项目保存的本机地址正在监听；服务类型未知，建议继续执行真实接口测试。'
           : '当前项目保存了这个本机地址，但对应端口现在没有运行。',
         detectedBy: ['当前项目已保存'],
         id: `custom-${configuredLoopback.host}-${configuredLoopback.port}`,

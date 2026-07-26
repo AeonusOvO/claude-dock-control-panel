@@ -275,17 +275,17 @@ const phaseCopy: Record<TerminalPhase, { detail: string; footer: string; pill: s
     pill: '错误',
   },
   running: {
-    detail: 'ConPTY 会话已连接',
+    detail: '伪终端会话已连接',
     footer: '后台运行中',
     pill: '运行中',
   },
   starting: {
-    detail: '正在创建 ConPTY 会话',
+    detail: '正在创建伪终端会话',
     footer: '正在连接',
     pill: '启动中',
   },
   stopped: {
-    detail: 'PowerShell 会话已停止',
+    detail: '终端会话已停止',
     footer: '后台待命',
     pill: '已停止',
   },
@@ -298,7 +298,7 @@ let activeTerminalTheme: TerminalThemeId = isTerminalThemeId(storedTerminalTheme
 terminalThemeSelect.value = activeTerminalTheme;
 
 const terminalOptions = {
-  allowProposedApi: false,
+  allowProposedApi: true,
   convertEol: false,
   cursorBlink: true,
   cursorStyle: 'bar' as const,
@@ -313,7 +313,10 @@ const terminalOptions = {
 
 const showToast = (message: string, tone: 'error' | 'success' = 'success'): void => {
   window.clearTimeout(toastTimer);
-  toast.textContent = message;
+  toast.textContent =
+    tone === 'error' && !/[\u3400-\u9fff]/u.test(message)
+      ? '操作失败；请查看终端输出或日志了解详情。'
+      : message;
   toast.dataset.tone = tone;
   toast.classList.add('toast--visible');
   toastTimer = window.setTimeout(() => {
@@ -335,7 +338,7 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
 
 const projectNameFromPath = (directoryPath: string): string => {
   const parts = directoryPath.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? directoryPath ?? 'PowerShell';
+  return parts.at(-1) ?? directoryPath ?? '项目终端';
 };
 
 const activeStatus = (): TerminalStatus | undefined =>
@@ -412,7 +415,7 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     setAuthOptions(
       [
         { label: '使用 Claude Code 现有登录', value: 'existing' },
-        { label: 'API Key（X-Api-Key）', value: 'apiKey' },
+        { label: '接口密钥（X-Api-Key）', value: 'apiKey' },
       ],
       preserveValues ? (claudeAuthMode.value as SaveClaudeConfigInput['authMode']) : 'existing',
     );
@@ -421,11 +424,11 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
       claudeModel.value = 'default';
     }
     baseUrlHelp.textContent = 'Anthropic 官方接入使用固定端点，无需填写地址。';
-    modelHelp.textContent = 'default 表示由 Claude Code 选择当前官方默认模型。';
+    modelHelp.textContent = '“默认”表示由 Claude Code 选择当前官方默认模型。';
     authModeHelp.textContent = '已有 Claude 登录不会把登录令牌交给 ClaudeDock。';
-    credentialLabel.textContent = 'Anthropic API Key';
+    credentialLabel.textContent = 'Anthropic 接口密钥';
   } else if (preset === 'deepseek') {
-    setAuthOptions([{ label: 'API Key（X-Api-Key）', value: 'apiKey' }], 'apiKey');
+    setAuthOptions([{ label: '接口密钥（X-Api-Key）', value: 'apiKey' }], 'apiKey');
     if (!preserveValues) {
       claudeBaseUrl.value = 'https://api.deepseek.com/anthropic';
       claudeModel.value = 'deepseek-v4-pro';
@@ -433,14 +436,14 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     baseUrlHelp.textContent =
       'DeepSeek 官方已提供 Anthropic 格式；Claude Code 会访问 /anthropic/v1/messages。';
     modelHelp.textContent =
-      '可填写 DeepSeek 官方当前提供的模型 ID；不支持的名字可能被服务端自动映射。';
+      '可填写 DeepSeek 官方当前提供的模型标识；不支持的名字可能被服务端自动映射。';
     authModeHelp.textContent = 'DeepSeek 官方 Anthropic 接口使用 x-api-key。';
-    credentialLabel.textContent = 'DeepSeek API Key';
+    credentialLabel.textContent = 'DeepSeek 接口密钥';
   } else {
     setAuthOptions(
       [
-        { label: 'API Key（X-Api-Key）', value: 'apiKey' },
-        { label: 'Bearer Token（Authorization）', value: 'authToken' },
+        { label: '接口密钥（X-Api-Key）', value: 'apiKey' },
+        { label: '持有者令牌（Authorization / Bearer）', value: 'authToken' },
         { label: '无需认证（仅建议本机网关）', value: 'none' },
       ],
       preserveValues
@@ -454,18 +457,18 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     }
     baseUrlHelp.textContent =
       preset === 'gateway'
-        ? '填转换器真正的模型接口，例如 Router 的 http://127.0.0.1:3456；不要填 3458 管理页。'
+        ? '填转换器真正的模型接口，例如路由器的 http://127.0.0.1:3456；不要填 3458 管理页。'
         : '接口必须提供 Anthropic /v1/messages；不要直接填 /v1/chat/completions。';
     modelHelp.textContent =
       preset === 'gateway'
-        ? '填写 Router 路由中暴露给 Claude Code 的模型 ID。'
-        : '必须与最终接口可用的模型 ID 完全一致。';
+        ? '填写路由器中暴露给 Claude Code 的模型标识。'
+        : '必须与最终接口可用的模型标识完全一致。';
     authModeHelp.textContent =
       preset === 'gateway'
-        ? '这里是 ClaudeDock 到本地 Router 的访问密钥，不是服务商的上游密钥。'
-        : '服务商写 Authorization / Bearer 就选 Bearer；写 x-api-key 就选 API Key。';
+        ? '这里是 ClaudeDock 到本地路由器的访问密钥，不是服务商的上游密钥。'
+        : '服务商要求 Authorization / Bearer 时选择“持有者令牌”；要求 x-api-key 时选择“接口密钥”。';
     credentialLabel.textContent =
-      preset === 'gateway' ? 'Router 访问密钥（不是上游密钥）' : '接口访问凭据';
+      preset === 'gateway' ? '路由器访问密钥（不是上游密钥）' : '接口访问凭据';
   }
   authModeLabel.textContent = isOfficial ? '官方认证方式' : 'Claude Code 到最终接口的认证方式';
   credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
@@ -513,12 +516,12 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
       : config.preset === 'deepseek'
         ? 'DeepSeek 官方直连'
         : 'Anthropic 兼容网关';
-  claudeRouteModel.textContent = config.model;
+  claudeRouteModel.textContent = config.model === 'default' ? '默认' : config.model;
   claudeRouteEndpoint.textContent =
     config.provider === 'anthropic'
       ? config.authMode === 'existing'
         ? '使用官方登录与默认端点'
-        : '使用官方 API Key 与默认端点'
+        : '使用官方接口密钥与默认端点'
       : config.baseUrl;
 
   const health = state.routeHealth;
@@ -529,7 +532,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
       health.source === 'runtime'
         ? '真实会话'
         : health.source === 'router'
-          ? 'Router 状态'
+          ? '路由器状态'
           : '连接测试';
     routeHealthTitle.textContent = health.headline;
     routeHealthDetail.textContent = health.detail;
@@ -680,7 +683,7 @@ const applyGatewayCandidate = (candidate: ClaudeGatewayCandidate): void => {
   connectionTestResult.hidden = true;
   showToast(
     candidate.authRequired
-      ? `已选用 ${candidate.label}；请填写 Router 自己的访问密钥`
+      ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
       : `已选用 ${candidate.label}；下一步执行真实连接测试`,
   );
   claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -795,10 +798,15 @@ const loadGatewayDiagnostics = async (): Promise<void> => {
 
 const routerProtocolLabel = (protocol: ClaudeRouterProviderView['protocol']): string =>
   protocol === 'anthropic_messages'
-    ? 'Anthropic Messages'
+    ? 'Anthropic 消息协议'
     : protocol === 'openai_responses'
-      ? 'OpenAI Responses'
-      : 'OpenAI Chat Completions';
+      ? 'OpenAI 响应协议'
+      : 'OpenAI 对话补全协议';
+
+const routerInstallationKindLabel = (
+  kind: ClaudeRouterManagementState['installationKind'],
+): string =>
+  kind === 'desktop' ? '桌面版' : kind === 'npm' ? '命令行版' : kind === 'mixed' ? '混合' : '未知';
 
 const routerProviderInput = (
   provider: ClaudeRouterProviderView,
@@ -840,7 +848,7 @@ const runRouterProviderSave = async (input: SaveClaudeRouterProviderInput): Prom
       installationKind: 'unknown',
       manageable: false,
       managementAvailable: false,
-      message: '正在保存 Router Provider…',
+      message: '正在保存路由器服务提供方…',
       providers: [],
       serviceRunning: false,
     },
@@ -855,7 +863,7 @@ const runRouterProviderSave = async (input: SaveClaudeRouterProviderInput): Prom
     }
     return ok;
   } catch {
-    showToast('保存 Router Provider 时发生异常。', 'error');
+    showToast('保存路由器服务提供方时发生异常。', 'error');
     return false;
   } finally {
     routerOperationInProgress = false;
@@ -874,7 +882,7 @@ const openRouterProviderForm = (provider?: ClaudeRouterProviderView): void => {
   routerProviderApiKey.value = '';
   routerProviderPreferred.checked = provider?.preferred ?? true;
   routerProviderUseProject.checked = true;
-  routerProviderFormTitle.textContent = provider ? `编辑 ${provider.name}` : '添加 Provider';
+  routerProviderFormTitle.textContent = provider ? `编辑 ${provider.name}` : '添加服务提供方';
   routerProviderForm.hidden = false;
   routerProviderForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   routerProviderName.focus();
@@ -918,7 +926,7 @@ const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
     repairRouterFromProjectButton.hidden = true;
     routerRemediationTitle.textContent = '解决办法：切换到 CCR 配套的 Node.js';
     routerRemediationDetail.textContent =
-      'CCR 数据库没有损坏；它只是被 Electron 内置 Node 错误启动。点击上方“修复运行环境并重启”，ClaudeDock 会停止这个错误进程，再用 CCR 安装时的系统 Node 重启。Provider、密钥和 Codex 配置都不会被修改。';
+      'CCR 数据库没有损坏；它只是被 Electron 内置 Node.js 错误启动。点击上方“修复运行环境并重启”，ClaudeDock 会停止这个错误进程，再用 CCR 安装时的系统 Node.js 重启。服务提供方、密钥和 Codex 配置都不会被修改。';
     return;
   }
   configureRouterProviderButton.hidden = false;
@@ -943,28 +951,28 @@ const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
   repairRouterFromProjectButton.disabled = routerOperationInProgress;
   configureRouterProviderButton.disabled = routerOperationInProgress;
   if (noProviders) {
-    routerRemediationTitle.textContent = '解决办法：先创建第一个 Provider';
-    configureRouterProviderButton.textContent = '手动添加第一个 Provider';
+    routerRemediationTitle.textContent = '解决办法：先创建第一个服务提供方';
+    configureRouterProviderButton.textContent = '手动添加第一个服务提供方';
     if (canRepairFromProject && config) {
-      routerRemediationDetail.textContent = `可将当前项目已加密保存的 ${config.baseUrl} 接入信息导入为 Anthropic Messages Provider，随后启动 3456 并应用 Router 配置。`;
+      routerRemediationDetail.textContent = `可将当前项目已加密保存的 ${config.baseUrl} 接入信息导入为 Anthropic 消息协议服务提供方，随后启动 3456 并应用路由器配置。`;
     } else if (projectUsesRouter) {
       routerRemediationDetail.textContent =
-        '当前项目依赖 3456，因此必须先添加 Provider。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
+        '当前项目依赖 3456，因此必须先添加服务提供方。点击下方按钮，依次填写上游协议、接口地址、模型标识和上游密钥；保存后再启动路由器。';
     } else if (projectHasRemoteDirect) {
       routerRemediationDetail.textContent =
-        '已保存兼容接口，但当前认证方式无法安全自动导入。请手动添加 Provider，保存后再启动 Router。';
+        '已保存兼容接口，但当前认证方式无法安全自动导入。请手动添加服务提供方，保存后再启动路由器。';
     } else {
       routerRemediationDetail.textContent =
-        '没有可自动导入的网关配置。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
+        '没有可自动导入的网关配置。点击下方按钮，依次填写上游协议、接口地址、模型标识和上游密钥；保存后再启动路由器。';
     }
     return;
   }
 
   repairRouterFromProjectButton.hidden = true;
-  routerRemediationTitle.textContent = '解决办法：检查已有 Provider';
+  routerRemediationTitle.textContent = '解决办法：检查已有服务提供方';
   routerRemediationDetail.textContent =
-    'Router 已有 Provider，但 3456 仍未启动。请检查首选 Provider 的接口、模型和上游密钥，保存后再次点击“启动 Router”。';
-  configureRouterProviderButton.textContent = '检查 Provider';
+    '路由器已有服务提供方，但 3456 仍未启动。请检查首选服务提供方的接口、模型和上游密钥，保存后再次点击“启动路由器”。';
+  configureRouterProviderButton.textContent = '检查服务提供方';
 };
 
 const applyRouterRelevance = (): void => {
@@ -980,7 +988,7 @@ const applyRouterRelevance = (): void => {
         softwareUpdates?.claudeCode.updateAvailable &&
           `Claude Code ${softwareUpdates.claudeCode.latestVersion ?? ''}`,
         softwareUpdates?.router.updateAvailable &&
-          `Router ${softwareUpdates.router.latestVersion ?? ''}`,
+          `路由器 ${softwareUpdates.router.latestVersion ?? ''}`,
       ]
         .filter(Boolean)
         .join('、')
@@ -989,13 +997,13 @@ const applyRouterRelevance = (): void => {
 
 const adviceActionLabel: Record<ClaudeConnectionAdviceAction, string> = {
   'import-curl': '粘贴中转站 cURL',
-  'install-router': '安装 Router',
-  'open-router-management': '打开 Router 管理页',
+  'install-router': '安装路由器',
+  'open-router-management': '打开路由器管理页',
   'save-config': '去填写接入配置',
-  'start-router': '启动 Router',
-  'stop-router': '停止空闲 Router',
+  'start-router': '启动路由器',
+  'stop-router': '停止空闲路由器',
   'switch-to-direct': '改用兼容接口',
-  'switch-to-router': '改为经过 Router',
+  'switch-to-router': '改为经过路由器',
   'test-connection': '做一次真实连接测试',
 };
 
@@ -1063,7 +1071,7 @@ const runAdviceAction = (action: ClaudeConnectionAdviceAction, button: HTMLButto
       applyPresetUi('gateway', true);
       claudeBaseUrl.value = 'http://127.0.0.1:3456';
       focusConnectionForm();
-      showToast('已填入本机 Router 地址；确认模型后保存');
+      showToast('已填入本机路由器地址；确认模型后保存');
       return;
     }
     case 'test-connection': {
@@ -1104,7 +1112,7 @@ const loadConnectionAdvice = async (): Promise<void> => {
   } catch {
     connectionAdvice.dataset.tone = 'warning';
     connectionAdviceTitle.textContent = '暂时无法判断接入方式';
-    connectionAdviceDetail.textContent = '仍可手动检查下面的 Router 与接入配置。';
+    connectionAdviceDetail.textContent = '仍可手动检查下面的路由器与接入配置。';
   } finally {
     adviceRefreshInProgress = false;
   }
@@ -1115,12 +1123,12 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   const displayState = state.installed ? state.gatewayState : 'not-installed';
   routerStatus.dataset.state = displayState;
   routerStatusTitle.textContent = !state.installed
-    ? '尚未安装 Claude Code Router'
+    ? '尚未安装 Claude Code 路由器'
     : state.gatewayState === 'running'
-      ? 'Router 网关正在运行'
+      ? '路由器网关正在运行'
       : state.serviceRunning
-        ? 'Router 管理服务已运行'
-        : 'Router 已安装但未运行';
+        ? '路由器管理服务已运行'
+        : '路由器已安装但未运行';
   routerStatusDetail.textContent = state.message;
   routerVersion.textContent = state.version ? `v${state.version}` : '版本待识别';
   renderRouterRemediation(state);
@@ -1130,9 +1138,9 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   installRouterButton.textContent = state.installed ? '一键更新 / 重装' : '一键安装';
   uninstallRouterButton.disabled = routerOperationInProgress || !state.canUninstall;
   uninstallRouterButton.title = state.canUninstall
-    ? `卸载当前${state.installationKind === 'mixed' ? '混合' : state.installationKind}安装`
+    ? `卸载当前${routerInstallationKindLabel(state.installationKind)}安装`
     : '未检测到可调用的卸载程序';
-  startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动 Router';
+  startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动路由器';
   startRouterButton.disabled =
     routerOperationInProgress ||
     !state.installed ||
@@ -1160,13 +1168,13 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
     empty.className = 'router-provider-empty';
     const copy = document.createElement('span');
     copy.textContent = state.installed
-      ? '启动 Router 后即可在这里增删、编辑网关 Provider。'
-      : '完成 Router 安装后，点击“启动 Router”即可管理网关。';
+      ? '启动路由器后即可在这里增删、编辑网关服务提供方。'
+      : '完成路由器安装后，点击“启动路由器”即可管理网关。';
     empty.append(copy);
     const action = document.createElement('button');
     action.type = 'button';
     action.className = 'button button--secondary button--small';
-    action.textContent = state.installed ? '启动 Router 以管理网关' : '安装 Router';
+    action.textContent = state.installed ? '启动路由器以管理网关' : '安装路由器';
     action.disabled = routerOperationInProgress;
     action.addEventListener('click', () => {
       void runRouterOperation(
@@ -1190,12 +1198,12 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
     const empty = document.createElement('div');
     empty.className = 'router-provider-empty';
     const copy = document.createElement('span');
-    copy.textContent = '还没有 Provider；可手动添加，或粘贴 OpenAI cURL 后一键导入。';
+    copy.textContent = '还没有服务提供方；可手动添加，或粘贴 OpenAI cURL 后一键导入。';
     empty.append(copy);
     const action = document.createElement('button');
     action.type = 'button';
     action.className = 'button button--secondary button--small';
-    action.textContent = '添加第一个 Provider';
+    action.textContent = '添加第一个服务提供方';
     action.disabled = routerOperationInProgress;
     action.addEventListener('click', () => {
       openRouterProviderForm();
@@ -1252,7 +1260,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
       if (
         !status ||
         routerOperationInProgress ||
-        !window.confirm(`从 Router 删除 Provider“${provider.name}”？`)
+        !window.confirm(`从路由器删除服务提供方“${provider.name}”？`)
       ) {
         return;
       }
@@ -1263,7 +1271,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
         );
         void loadGatewayDiagnostics();
       } catch {
-        showToast('删除 Router Provider 时发生异常。', 'error');
+        showToast('删除路由器服务提供方时发生异常。', 'error');
       } finally {
         routerOperationInProgress = false;
         if (routerManagementState) {
@@ -1288,7 +1296,7 @@ const loadRouterManagement = async (): Promise<void> => {
     renderRouterManagement(await window.controlPanel.getClaudeRouterManagementState(status.id));
   } catch {
     routerStatus.dataset.state = 'error';
-    routerStatusTitle.textContent = '无法读取 Router 状态';
+    routerStatusTitle.textContent = '无法读取路由器状态';
     routerStatusDetail.textContent = '仍可使用下方手动 Claude 接入配置。';
   } finally {
     routerRefreshInProgress = false;
@@ -1312,7 +1320,7 @@ const runRouterOperation = async (
     handleRouterResult(await action(status.id));
     void loadGatewayDiagnostics();
   } catch {
-    showToast('Router 操作发生异常。', 'error');
+    showToast('路由器操作发生异常。', 'error');
   } finally {
     routerOperationInProgress = false;
     button.textContent = originalLabel;
@@ -1415,9 +1423,9 @@ const analyzeCurlInput = (): void => {
     curlAnalysisModel.textContent = analysis.model || '没有识别到模型名';
     curlAnalysisAuth.textContent =
       analysis.authMode === 'authToken'
-        ? `Bearer（Authorization）${analysis.credentialDetected ? ' · 已识别密钥但不显示' : ''}`
+        ? `持有者令牌（Authorization / Bearer）${analysis.credentialDetected ? ' · 已识别密钥但不显示' : ''}`
         : analysis.authMode === 'apiKey'
-          ? `API Key（x-api-key）${analysis.credentialDetected ? ' · 已识别密钥但不显示' : ''}`
+          ? `接口密钥（x-api-key）${analysis.credentialDetected ? ' · 已识别密钥但不显示' : ''}`
           : '没有识别到认证头';
     curlNextStep.replaceChildren();
 
@@ -1439,16 +1447,16 @@ const analyzeCurlInput = (): void => {
       nextDetail.textContent = '确认测试通过后再保存；保存时密钥才会进入 Windows 安全存储。';
     } else if (analysis.protocol === 'openai') {
       nextTitle.textContent = router
-        ? '下一步：先在 Router 管理页添加这个上游'
+        ? '下一步：先在路由器管理页添加这个上游'
         : '下一步：先安装并启动本地转换器';
       nextDetail.textContent = router
-        ? `Provider 选择 OpenAI Compatible，接口填 ${analysis.endpoint}，模型填 ${
+        ? `服务提供方选择 OpenAI 兼容协议，接口填 ${analysis.endpoint}，模型填 ${
             analysis.model || '服务商提供的模型名'
-          }；上游密钥只填在 Router 中。然后回到这里选用 3456。`
-        : '推荐从下方打开 Claude Code Router 图形版安装页。配置完成后，重新检测会自动发现 3456。';
+          }；上游密钥只填在路由器中。然后回到这里选用 3456。`
+        : '推荐从下方打开 Claude Code 路由器图形版安装页。配置完成后，重新检测会自动发现 3456。';
     } else {
       nextTitle.textContent = '下一步：向服务商确认协议';
-      nextDetail.textContent = '需要明确询问：“是否提供 Anthropic Messages /v1/messages 接口？”';
+      nextDetail.textContent = '需要明确询问：“是否提供 Anthropic 消息协议的 /v1/messages 接口？”';
     }
     curlNextStep.append(nextTitle, nextDetail);
     updateSmartGuidance();
@@ -1504,12 +1512,12 @@ const updateSmartGuidance = (): void => {
     smartGuidance.dataset.tone = 'info';
     smartGuidanceTitle.textContent = '检测到可直连的 Anthropic 接口';
     smartGuidanceDetail.textContent =
-      'Router 当前未被使用。您可以直接接入，或者停止 Router 以节省系统资源。';
+      '路由器当前未被使用。您可以直接接入，或者停止路由器以节省系统资源。';
 
     smartGuidanceActions.replaceChildren();
     const stopButton = document.createElement('button');
     stopButton.type = 'button';
-    stopButton.textContent = '停止空闲 Router';
+    stopButton.textContent = '停止空闲路由器';
     stopButton.className = 'button button--secondary button--small';
     stopButton.addEventListener('click', () => {
       void runRouterOperation(
@@ -1528,14 +1536,14 @@ const updateSmartGuidance = (): void => {
     smartGuidance.dataset.tone = 'warning';
     smartGuidanceTitle.textContent = 'OpenAI 格式需要转换器';
     smartGuidanceDetail.textContent = routerInstalled
-      ? '检测到 OpenAI 格式接口，需要先启动 Router 将其转换为 Anthropic 格式。'
-      : '检测到 OpenAI 格式接口，需要安装 Claude Code Router 转换器。';
+      ? '检测到 OpenAI 格式接口，需要先启动路由器将其转换为 Anthropic 格式。'
+      : '检测到 OpenAI 格式接口，需要安装 Claude Code 路由器转换器。';
 
     smartGuidanceActions.replaceChildren();
     if (routerInstalled && curlResult.model && curlResult.credentialDetected) {
       const importButton = document.createElement('button');
       importButton.type = 'button';
-      importButton.textContent = '一键导入 Router';
+      importButton.textContent = '一键导入路由器';
       importButton.className = 'button button--primary button--small';
       importButton.addEventListener('click', () => {
         void importCurlIntoRouter();
@@ -1544,7 +1552,7 @@ const updateSmartGuidance = (): void => {
     } else if (!routerInstalled) {
       const installButton = document.createElement('button');
       installButton.type = 'button';
-      installButton.textContent = '安装 Router';
+      installButton.textContent = '安装路由器';
       installButton.className = 'button button--primary button--small';
       installButton.addEventListener('click', () => {
         void runRouterOperation(
@@ -1566,13 +1574,13 @@ const updateSmartGuidance = (): void => {
   ) {
     smartGuidance.hidden = false;
     smartGuidance.dataset.tone = 'error';
-    smartGuidanceTitle.textContent = '当前项目依赖 Router';
-    smartGuidanceDetail.textContent = '项目配置指向本地 Router，但网关未运行。请启动 Router。';
+    smartGuidanceTitle.textContent = '当前项目依赖路由器';
+    smartGuidanceDetail.textContent = '项目配置指向本地路由器，但网关未运行。请启动路由器。';
 
     smartGuidanceActions.replaceChildren();
     const startButton = document.createElement('button');
     startButton.type = 'button';
-    startButton.textContent = '启动 Router';
+    startButton.textContent = '启动路由器';
     startButton.className = 'button button--primary button--small';
     startButton.addEventListener('click', () => {
       void runRouterOperation(
@@ -1631,7 +1639,7 @@ const runConnectionTest = async (): Promise<void> => {
     return;
   }
   testClaudeConnectionButton.disabled = true;
-  testClaudeConnectionButton.textContent = '正在发送 1-token 测试…';
+  testClaudeConnectionButton.textContent = '正在发送单令牌测试…';
   try {
     const result = await window.controlPanel.testClaudeConnection(
       status.id,
@@ -1869,15 +1877,6 @@ const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
   const description = document.createElement('p');
   description.textContent = localized.description;
 
-  const original = document.createElement('details');
-  original.className = 'plugin-card__original';
-  original.hidden = !localized.originalDescription;
-  const originalSummary = document.createElement('summary');
-  originalSummary.textContent = '查看英文原文';
-  const originalCopy = document.createElement('p');
-  originalCopy.textContent = localized.originalDescription ?? '';
-  original.append(originalSummary, originalCopy);
-
   const meta = document.createElement('div');
   meta.className = 'plugin-card__meta';
   const source = document.createElement('span');
@@ -1946,7 +1945,7 @@ const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
     );
   }
 
-  card.append(header, description, original, meta, actions);
+  card.append(header, description, meta, actions);
   return card;
 };
 
@@ -2341,7 +2340,7 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   titleStatus.textContent = `${copy.detail} · ${openFolders} 个项目 / ${workspaceState.sessions.length} 个对话`;
   statusPill.textContent = copy.pill;
   sessionDetail.textContent = status.message ?? copy.detail;
-  sessionPid.textContent = status.pid ? `PID ${status.pid}` : 'PID —';
+  sessionPid.textContent = status.pid ? `进程号 ${status.pid}` : '进程号 —';
   footerStatus.textContent = copy.footer;
   toggleLabel.textContent = status.phase === 'running' ? '停止' : '启动';
   const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
@@ -2368,7 +2367,7 @@ const activateProject = async (sessionId: string): Promise<void> => {
 const closeProject = async (status: TerminalStatus): Promise<void> => {
   if (
     status.phase === 'running' &&
-    !window.confirm(`关闭“${status.title}”会终止它的 PowerShell 进程，是否继续？`)
+    !window.confirm(`关闭“${status.title}”会终止它的终端进程，是否继续？`)
   ) {
     return;
   }
@@ -2917,7 +2916,7 @@ const saveClaudeConfig = async (
       return;
     }
     populateClaudeConfigForm(result.state);
-    showToast('当前项目的模型与 API 接入已保存');
+    showToast('当前项目的模型与接口接入已保存');
   } catch {
     showToast('无法保存接入配置。', 'error');
   } finally {
@@ -3071,7 +3070,7 @@ installRouterButton.addEventListener('click', () => {
 uninstallRouterButton.addEventListener('click', () => {
   if (
     !window.confirm(
-      '卸载当前 Router 应用？Provider 配置文件会保留，桌面版可能继续弹出系统卸载向导。',
+      '卸载当前路由器应用？服务提供方配置文件会保留，桌面版可能继续弹出系统卸载向导。',
     )
   ) {
     return;
@@ -3112,7 +3111,7 @@ openRouterManagementButton.addEventListener('click', () => {
 repairRouterFromProjectButton.addEventListener('click', () => {
   void runRouterOperation(
     (sessionId) => window.controlPanel.repairClaudeRouterFromProject(sessionId),
-    '正在创建 Provider 并启动…',
+    '正在创建服务提供方并启动…',
     repairRouterFromProjectButton,
   );
 });
@@ -3187,7 +3186,7 @@ claudeConfigForm.addEventListener('submit', (event) => {
   void saveClaudeConfig('keep');
 });
 clearCredentialButton.addEventListener('click', () => {
-  if (window.confirm('清除当前项目已加密保存的 API 凭据？')) {
+  if (window.confirm('清除当前项目已加密保存的接口凭据？')) {
     void saveClaudeConfig('clear');
   }
 });
@@ -3224,7 +3223,7 @@ restartButton.addEventListener('click', async () => {
   }
   const result = await window.controlPanel.restartTerminal(status.id);
   terminalViews.get(status.id)?.terminal.clear();
-  handleOperation(result, result.ok ? 'PowerShell 已重启' : undefined);
+  handleOperation(result, result.ok ? '终端已重启' : undefined);
 });
 toggleButton.addEventListener('click', async () => {
   const status = activeStatus();
@@ -3233,9 +3232,9 @@ toggleButton.addEventListener('click', async () => {
   }
 
   if (status.phase === 'running') {
-    handleOperation(await window.controlPanel.stopTerminal(status.id), 'PowerShell 已停止');
+    handleOperation(await window.controlPanel.stopTerminal(status.id), '终端已停止');
   } else {
-    handleOperation(await window.controlPanel.startTerminal(status.id), 'PowerShell 已启动');
+    handleOperation(await window.controlPanel.startTerminal(status.id), '终端已启动');
     window.setTimeout(fitActiveTerminal, 60);
   }
 });

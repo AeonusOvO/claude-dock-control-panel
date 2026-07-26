@@ -300,7 +300,7 @@ export class ClaudePluginManager {
     try {
       plugins = parsePluginCatalog(listOutput);
     } catch {
-      const catalog = emptyCatalog('Claude CLI 返回了无法解析的插件列表。', true);
+      const catalog = emptyCatalog('Claude 命令行返回了无法解析的插件列表。', true);
       this.cached = catalog;
       return catalog;
     }
@@ -340,7 +340,7 @@ export class ClaudePluginManager {
       });
       return stdout;
     } catch (error) {
-      const record = error as { code?: unknown; killed?: boolean; stderr?: unknown };
+      const record = error as { code?: unknown; killed?: boolean };
       const rawMessage = error instanceof Error ? error.message : '';
       if (
         record.code === 'ENOENT' ||
@@ -353,11 +353,9 @@ export class ClaudePluginManager {
       if (record.killed) {
         throw new Error('Claude 插件命令执行超时，请稍后重试。', { cause: error });
       }
-      const stderr = typeof record.stderr === 'string' ? record.stderr.trim() : '';
-      throw new Error(
-        stderr ? stderr.split(/\r?\n/).slice(-4).join(' ') : 'Claude 插件命令执行失败。',
-        { cause: error },
-      );
+      throw new Error('Claude 插件命令执行失败；请确认 Claude Code 已登录并支持插件命令。', {
+        cause: error,
+      });
     }
   }
 }
