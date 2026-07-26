@@ -278,9 +278,6 @@
                 <span>只管理 Claude Code 接入；不会修改 Codex profile 或系统代理。</span>
               </div>
             </div>
-            <p class="router-unused-note" id="router-unused-note" hidden>
-              当前项目不经过 Router，下面的设置对它没有作用。仍可展开管理其他项目要用的网关。
-            </p>
             <div class="router-status" id="router-status" data-state="unknown">
               <div>
                 <strong id="router-status-title">正在读取 Router 状态…</strong>
@@ -653,6 +650,14 @@
               <span class="workbench-trigger__dot" aria-hidden="true"></span>
               Claude 工作台
             </button>
+            <label class="terminal-theme-picker" for="terminal-theme">
+              <span>主题</span>
+              <select id="terminal-theme" aria-label="切换 PowerShell 终端主题">
+                <option value="claude">Claude 暖色</option>
+                <option value="graphite">石墨深色</option>
+                <option value="midnight">深海蓝</option>
+              </select>
+            </label>
             <button
               class="icon-button"
               id="workbench-shortcuts"
@@ -894,6 +899,9 @@
                 <button data-claude-command="/rename" data-uses-argument="true" type="button">
                   <code>/rename</code><span>命名会话</span>
                 </button>
+                <button data-claude-command="/theme" type="button">
+                  <code>/theme</code><span>Claude 主题</span>
+                </button>
                 <button data-claude-command="/doctor" type="button">
                   <code>/doctor</code><span>诊断安装</span>
                 </button>
@@ -967,6 +975,35 @@
         清空显示 <span>Ctrl+L</span>
       </button>
     </div>
+
+    <div class="conversation-context-menu" id="conversation-context-menu" role="menu" hidden>
+      <button data-conversation-context-action="rename" role="menuitem" type="button">
+        重命名对话
+      </button>
+    </div>
+
+    <dialog class="conversation-rename-dialog" id="conversation-rename-dialog">
+      <form method="dialog">
+        <header>
+          <strong id="conversation-rename-dialog-title">重命名对话</strong>
+          <span>名称会同步显示在项目列表和历史对话中。</span>
+        </header>
+        <label class="field" for="conversation-rename-input">
+          <span>对话名称</span>
+          <input
+            id="conversation-rename-input"
+            type="text"
+            maxlength="60"
+            required
+            autocomplete="off"
+          />
+        </label>
+        <footer>
+          <button id="conversation-rename-cancel" type="button">取消</button>
+          <button class="dialog-primary" type="submit" value="confirm">保存</button>
+        </footer>
+      </form>
+    </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/main.ts"></script>

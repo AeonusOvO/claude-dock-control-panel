@@ -15,7 +15,8 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - 820px 起的窄窗口和 640px 起的低高度都有独立响应式布局，控件空间不足时换行或收起次要
   信息，避免按钮、下拉框、工具栏与抽屉互相覆盖。
 - 工作台状态下沉到终端底栏，直接显示连接健康、上下文占用与运行模型；快捷键说明独立成页。
-- PowerShell 终端提供标准复制/粘贴、`Shift+Enter` 换行和右键菜单，映射仅在应用终端内生效。
+- PowerShell 终端提供 UTF-8 中文输入、标准复制/粘贴、`Shift+Enter` 换行、跨行退格和右键
+  菜单；工具栏可切换三套深色终端主题，映射和 PSReadLine 调整仅在应用终端内生效。
 
 视觉与交互约束详见 [design.md](design.md)。
 
@@ -50,9 +51,10 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   Provider 是否就绪；Claude Code 真实对话若返回 ConnectionRefused、认证、端点或模型
   错误，会立即显示红色提示并引导回“接入”页。
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
-  `/model`、`/permissions`、`/compact` 等常用斜杠命令变成可点击操作。
+  `/model`、`/permissions`、`/compact`、`/theme` 等常用斜杠命令变成可点击操作。
 - 项目列表按“文件夹 → 当前对话 → 历史对话”折叠展示。恢复历史仍通过 Claude Code 官方
-  `--resume <session-id>`，工作台不再重复显示同一份历史列表。
+  `--resume <session-id>`；运行中和历史对话均可重命名，历史项右键写入 Claude 的
+  `custom-title` 元数据。工作台不再重复显示同一份历史列表。
 - 通过 Claude Code 官方 `statusLine` 数据实时显示上下文窗口、输入/输出 token、会话估算
   费用、持续时间、模型和会话 ID；不解析易变的终端绘制文本。
 - 终端底栏无需展开面板即可查看连接健康、上下文占用和模型；右键菜单提供复制、粘贴、
@@ -86,12 +88,15 @@ npm run format:check
 npm run typecheck
 npm test
 npm run test:layout
+npm run test:visual
 npm run build
 npm run dist
 ```
 
 `npm run test:layout` 会在隐藏的 Electron 窗口中检查 820×640、900×640 和 1180×760，
-覆盖项目、接入、插件及工作台三页，若交互组件重叠或关键容器横向溢出则失败。
+覆盖项目、接入、插件三个分组及工作台三页，若交互组件重叠或关键容器横向溢出则失败。
+`npm run test:visual` 会生成 820px 插件页和重命名弹窗的本地视觉检查图到
+`dist/visual-qa/`。
 
 `npm run dist` 在 `outputs/` 完成 Windows x64 打包，最终安装程序固定为
 `outputs/ClaudeDock-Setup-<version>-x64.exe`。后续安装包、校验元数据和解包产物均只放在该
@@ -138,7 +143,9 @@ npm run dist
     的历史选择器。启动会重建当前项目
     的 PowerShell，以便只通过子进程环境注入路由和密钥，因此会终止该终端中原有的进程。
 11. Claude 响应后，终端底栏与“会话”页实时显示当前上下文；“命令”页执行白名单斜杠命令，
-    “快捷键”页说明终端映射。`/clear` 会开启空上下文的新会话，执行前会二次确认。
+    “快捷键”页说明终端映射。终端顶部可切换本地 xterm 主题，命令页的 `/theme` 打开
+    Claude Code 自身主题选择；左侧对话可右键重命名。`/clear` 会开启空上下文的新会话，
+    执行前会二次确认。
 12. 点击窗口关闭按钮只会隐藏面板，所有会话继续在后台运行；右键系统托盘图标可以恢复
     窗口、切换/添加项目、控制当前终端或彻底退出。
 
@@ -202,7 +209,8 @@ outputs/             安装包、校验元数据与解包产物，不纳入 Git
 - 关闭项目会终止该项目的 PowerShell 进程；切换项目不会影响其他项目的运行。
 - 项目会话只在本次应用运行期间保留，彻底退出后不会恢复终端进程或历史缓冲。
 - Claude Code 自己会按项目目录把会话明文保存在 `~/.claude/projects/`，默认约 30 天；
-  ClaudeDock 不复制对话正文，只保存 statusLine 提供的数字指标。
+  ClaudeDock 不复制对话正文，只读取标题等元数据和 statusLine 提供的数字指标。用户重命名
+  历史对话时只向对应 UUID JSONL 追加 Claude 兼容的 `custom-title` 记录。
 - 本地构建默认没有代码签名，Windows SmartScreen 可能显示未知发布者提示。
 - 当前仅打包 Windows x64。
 - 自动发现覆盖 Claude Code Router 的默认 `3456/3458`、LiteLLM 的常用 `4000` 和当前

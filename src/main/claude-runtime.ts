@@ -5,7 +5,6 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
   ClaudeConnectionAdvice,
-  ClaudeConnectionAdviceAction,
   ClaudeConnectionTestResult,
   ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
@@ -211,10 +210,7 @@ export const routerBlockingDetail = (
   return undefined;
 };
 
-/**
- * A relay ("中转站") is any remote gateway base URL: the project talks to it directly, so the
- * local CCR Router plays no part and every Router control should be greyed out.
- */
+/** A relay ("中转站") is any remote gateway base URL saved in the project configuration. */
 export const usesRemoteRelay = (config: NormalizedClaudeConfig): boolean =>
   config.provider === 'gateway' && Boolean(config.baseUrl) && !usesDefaultClaudeRouter(config);
 
@@ -231,9 +227,6 @@ export const computeClaudeConnectionAdvice = (
   const routerNeeded = usesDefaultClaudeRouter(config);
   const routerGatewayUp = router.gatewayState === 'running' || router.gatewayState === 'starting';
   const routerRunningButUnused = !routerNeeded && routerGatewayUp;
-  const idleRouterActions: ClaudeConnectionAdviceAction[] = routerRunningButUnused
-    ? ['stop-router']
-    : [];
   const credentialMissing =
     (config.authMode === 'apiKey' || config.authMode === 'authToken') && !credentialConfigured;
 
@@ -250,7 +243,7 @@ export const computeClaudeConnectionAdvice = (
 
   if (credentialMissing) {
     return {
-      actions: ['save-config', ...idleRouterActions],
+      actions: ['save-config'],
       detail: '当前接入方式需要密钥，但当前项目还没有保存。填好密钥后点“保存接入配置”即可。',
       routerNeeded,
       routerRunningButUnused,
@@ -264,7 +257,7 @@ export const computeClaudeConnectionAdvice = (
       return {
         actions: ['install-router', 'switch-to-direct'],
         detail:
-          '当前项目指向本机 Router 的 3456 端口，但 CCR 还没有安装。可以先安装 Router，或改成直连中转站。',
+          '当前配置选择了本机 Router 3456，但 CCR 尚未安装。请先安装 Router，或改用可用的 Anthropic Messages 兼容接口。',
         routerNeeded,
         routerRunningButUnused: false,
         title: '需要先安装 Router',
@@ -302,29 +295,19 @@ export const computeClaudeConnectionAdvice = (
   }
 
   if (usesRemoteRelay(config)) {
-    if (routerRunningButUnused) {
-      return {
-        actions: ['stop-router', 'test-connection'],
-        detail: `当前项目直连 ${config.baseUrl}，不经过 Router。本机 Router 网关仍在运行，可以按需关闭。`,
-        routerNeeded: false,
-        routerRunningButUnused: true,
-        title: '这个中转站不需要 Router',
-        tone: 'info',
-      };
-    }
     return {
       actions: ['test-connection'],
-      detail: `当前项目直连 ${config.baseUrl}，不需要 Router。下面的 Router 面板对这个项目没有作用。`,
+      detail: `已配置 Anthropic Messages 兼容接口 ${config.baseUrl}。建议保存后执行真实连接测试。`,
       routerNeeded: false,
-      routerRunningButUnused: false,
-      title: '直连中转站，无需 Router',
+      routerRunningButUnused,
+      title: '兼容接口已配置',
       tone: 'success',
     };
   }
 
   if (config.provider === 'gateway') {
     return {
-      actions: ['import-curl', 'save-config', ...idleRouterActions],
+      actions: ['import-curl', 'save-config'],
       detail:
         '选了“网关/中转站”但还没有填接口地址。可以直接粘贴中转站给的 curl 命令，自动带出地址、密钥和模型。',
       routerNeeded: false,
@@ -335,14 +318,12 @@ export const computeClaudeConnectionAdvice = (
   }
 
   return {
-    actions: ['test-connection', ...idleRouterActions],
-    detail: routerRunningButUnused
-      ? '当前项目使用 Anthropic 官方接口，不经过 Router。本机 Router 网关仍在运行，可以按需关闭。'
-      : '当前项目使用 Anthropic 官方接口，不需要 Router。',
+    actions: ['test-connection'],
+    detail: 'Claude Code 将使用现有官方登录或已保存的官方凭据。可执行连接测试确认当前状态。',
     routerNeeded: false,
     routerRunningButUnused,
-    title: routerRunningButUnused ? '官方接入不需要 Router' : '使用 Anthropic 官方接入',
-    tone: routerRunningButUnused ? 'info' : 'success',
+    title: '使用 Anthropic 官方接入',
+    tone: 'success',
   };
 };
 

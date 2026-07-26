@@ -41,7 +41,11 @@ import {
   isValidPluginId,
 } from './claude-plugin-manager';
 import { ClaudeRuntime } from './claude-runtime';
-import { ClaudeSessionManager, isValidClaudeSessionId } from './claude-session-manager';
+import {
+  ClaudeSessionManager,
+  isValidClaudeSessionId,
+  normalizeClaudeSessionTitle,
+} from './claude-session-manager';
 import { resolveDirectory } from './directory';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
@@ -491,6 +495,7 @@ const claudeCommands = new Map<string, boolean>([
   ['/rename', true],
   ['/resume', false],
   ['/status', false],
+  ['/theme', false],
   ['/usage', false],
 ]);
 
@@ -680,7 +685,12 @@ const registerIpc = (): void => {
       if (typeof title !== 'string') {
         throw new Error('对话名称格式无效。');
       }
-      const state = workspace.renameSession(validateSessionId(sessionId), title);
+      const validatedSessionId = validateSessionId(sessionId);
+      const normalizedTitle = normalizeClaudeSessionTitle(title);
+      const state = workspace.renameSession(validatedSessionId, normalizedTitle);
+      if (claudeRuntime?.isActive(validatedSessionId)) {
+        workspace.write(validatedSessionId, `/rename ${normalizedTitle}\r`);
+      }
       return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
@@ -1143,6 +1153,24 @@ const registerIpc = (): void => {
     validateSender(event);
     return sessionManager.getSessionsForProject(validateProjectPath(projectPath));
   });
+  ipcMain.handle(
+    'claude:rename-session',
+    async (event, projectPath: unknown, conversationId: unknown, title: unknown) => {
+      validateSender(event);
+      if (
+        typeof conversationId !== 'string' ||
+        !isValidClaudeSessionId(conversationId) ||
+        typeof title !== 'string'
+      ) {
+        throw new Error('历史对话重命名参数无效。');
+      }
+      return sessionManager.renameSession(
+        validateProjectPath(projectPath),
+        conversationId,
+        normalizeClaudeSessionTitle(title),
+      );
+    },
+  );
   ipcMain.handle('claude:get-connection-advice', async (event, sessionId: unknown) => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);

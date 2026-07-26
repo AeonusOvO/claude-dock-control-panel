@@ -6,7 +6,7 @@
 - TypeScript 6、Vite 8：主进程编译和渲染资源构建。
 - `@lydell/node-pty` 1.2 beta：通过 Windows ConPTY 创建真实伪终端，并提供按平台预编译
   原生模块。
-- xterm.js 6：终端渲染和键盘输入。
+- xterm.js 6 + `@xterm/addon-unicode11`：终端渲染、键盘输入与中文宽字符计算。
 - Vitest、ESLint、Prettier：测试和静态检查。
 - electron-builder：Windows NSIS 安装包。
 
@@ -47,10 +47,13 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - **`--toolbar-h` / `--footer-h`** ↔ `.terminal-shell` 网格行 ↔ `.workbench-scrim` / `.claude-workbench` 的 `top`/`bottom`（共 3 处）
 - **`--surface-canvas`** ↔ `src/main/main.ts:809` `backgroundColor` ↔ `body` 背景色
 - **`--surface-1`** ↔ `src/main/main.ts:817` `titleBarOverlay.color` ↔ `.titlebar` 背景色
-- **`--surface-terminal`** ↔ `.terminal-shell` 背景色 ↔ `src/renderer/main.ts:219` xterm `theme.background`（三者必须完全一致，否则出现接缝）
+- **`--surface-terminal`** ↔ `.terminal-shell` 背景色 ↔
+  `src/shared/terminal-themes.ts` 默认主题背景（不一致会出现接缝）
 - **`--text`** ↔ `src/main/main.ts:818` `titleBarOverlay.symbolColor`（Windows 标题栏按钮颜色）
 
-xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`letterSpacing: 0` 是 TUI 边框对齐的必需值。
+xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题 ID 到
+`localStorage` 并把选中 palette 应用到全部终端实例。三套内置 palette 都必须保持深色背景；
+`letterSpacing: 0` 是 TUI 边框对齐的必需值。
 
 ### 关键取舍
 
@@ -254,9 +257,13 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
   不复制、索引或向 renderer 返回正文；历史列表读取 JSONL 结构时只提取元数据，运行中用量
   仍只显示 Claude Code `statusLine` 提供的结构化数字。
 - 历史会话列表只进入当前工作目录编码后对应的项目目录，并只读取目录顶层 UUID 命名的
-  `.jsonl` 文件。列表提取 session ID、slug/标题、时间、模型和 usage 等元数据，不跨项目
-  枚举；单文件超过 50 MiB 时跳过。渲染层只在项目文件夹的折叠层级中展示历史，不在工作台
+  `.jsonl` 文件。标题优先级为 `customTitle > aiTitle > sessionName > slug`，避免把随机
+  slug 当作用户可读名称；其余只提取 session ID、时间、模型和 usage 等元数据，不跨项目
+  枚举。单文件超过 50 MiB 时跳过。渲染层只在项目文件夹的折叠层级中展示历史，不在工作台
   重复生成第二份列表。
+- 历史右键重命名先验证项目路径、UUID、文件类型、50 MiB 上限和 1–60 字符标题，再向对应
+  JSONL 追加 `type: "custom-title"` 记录，不重写正文。运行中重命名先更新工作区标题；若该
+  PTY 正在运行 Claude Code，再发送白名单 `/rename <title>` 让 Claude 元数据同步更新。
 - 定向恢复把经过 UUID 校验的 session ID 交给统一的 PowerShell 命令构造器，因此继续保留
   参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
@@ -274,14 +281,20 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
 
 渲染进程提交命令名称与可选参数，主进程只接受固定白名单：
 `/context`、`/usage`、`/status`、`/model`、`/permissions`、`/mcp`、`/agents`、`/hooks`、
-`/memory`、`/resume`、`/compact`、`/rename`、`/doctor`、`/help`、`/clear`。参数最长
+`/memory`、`/resume`、`/compact`、`/rename`、`/theme`、`/doctor`、`/help`、`/clear`。参数最长
 500 字符且禁止换行；只有工作台已知正在运行的 Claude 会话可以接收。`/clear` 的二次确认
 在渲染层完成。
 
 ### PowerShell 键盘与剪贴板
 
-- 每个应用内 PowerShell 启动时仅为该进程加载 PSReadLine，并把 `Ctrl+J` 绑定到 `AddLine`；
-  renderer 将 `Shift+Enter` 转为 LF，因此多行输入不需要修改用户 profile 或外部终端。
+- 每个应用内 PowerShell 启动时把控制台输入、输出和管道编码设为无 BOM UTF-8，仅为该进程
+  加载 PSReadLine，并把 `Ctrl+J` 绑定到 `AddLine`；renderer 将 `Shift+Enter` 转为 LF，
+  因此多行输入不需要修改用户 profile 或外部终端。
+- xterm 的键盘处理在自定义快捷键前放行 `isComposing`/keyCode 229，避免截断 Windows 中文
+  输入法组合事件；Unicode 11 addon 负责 CJK 宽字符单元格计算。renderer 不再依赖可能滞后
+  的状态快照丢弃 `onData`，主进程 PTY 仍是最终写入边界。
+- 会话内 Backspace 处理器检测光标前是否为 PSReadLine 多行换行符：是则删除该换行并回退
+  光标，否则调用标准 `BackwardDeleteChar`。该绑定不会写入用户 profile。
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
   `Ctrl+V` 从主进程读取最多 5 MiB 文本并写入当前 PTY。右键菜单复用同一受限 API，并提供
   全选和只清除 xterm 显示。
@@ -307,12 +320,15 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
 - `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别、Router 配置
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
-  statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验与软件语义版本比较。
+  statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
+  `custom-title` 写入、终端主题约束、PowerShell 启动脚本语法和软件语义版本比较。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
-  轮换项目/接入/插件页及工作台三页，检查交互控件矩形相交、关键容器横向溢出和文档级
-  overflow；遮罩层与抽屉的有意叠放不计为控件重叠。
+  轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
+  关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放不计为控件重叠。
+- `npm run test:visual` 在本地生成 820px 插件页与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
+  人工核对主题选择器、窄宽响应式和弹窗层级；图片属于构建产物。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
   固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行
@@ -368,6 +384,8 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://github.com/lydell/node-pty>
 - xterm.js addons：
   <https://xtermjs.org/docs/guides/using-addons/>
+- xterm.js GitHub（IME、CJK 与主题能力）：
+  <https://github.com/xtermjs/xterm.js>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：
@@ -384,6 +402,8 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://code.claude.com/docs/en/sessions>
 - Claude Code commands：
   <https://code.claude.com/docs/en/commands>
+- Claude Code changelog（`/theme` 与自定义主题）：
+  <https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md>
 - Claude Code 官方安装与更新：
   <https://code.claude.com/docs/en/installation>
 - Claude Code 插件发现与管理：

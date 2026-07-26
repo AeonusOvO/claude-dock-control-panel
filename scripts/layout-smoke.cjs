@@ -1,6 +1,8 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('node:path');
 
+app.setPath('userData', path.join(__dirname, '..', 'dist', '.electron-layout-smoke'));
+
 const sizes = [
   [820, 640],
   [900, 640],
@@ -37,7 +39,7 @@ const inspectLayout = `
     }
   }
   const overflow = [...document.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .install-source-row, .router-actions, .claude-workbench'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .install-source-row, .router-actions, .claude-workbench'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -63,6 +65,15 @@ const selectWorkbenchPage = (name) => `
   }
 `;
 
+const selectPluginPage = (name) => `
+  for (const tab of document.querySelectorAll('[data-plugin-tab]')) {
+    tab.classList.toggle('plugin-tab--active', tab.dataset.pluginTab === ${JSON.stringify(name)});
+  }
+  for (const panel of document.querySelectorAll('[data-plugin-panel]')) {
+    panel.classList.toggle('plugin-panel--active', panel.dataset.pluginPanel === ${JSON.stringify(name)});
+  }
+`;
+
 app.whenReady().then(async () => {
   const results = [];
   const window = new BrowserWindow({
@@ -80,10 +91,16 @@ app.whenReady().then(async () => {
   for (const [width, height] of sizes) {
     window.setSize(width, height);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    for (const page of ['projects', 'connection', 'plugins']) {
+    for (const page of ['projects', 'connection']) {
       await window.webContents.executeJavaScript(selectRailPage(page));
       const result = await window.webContents.executeJavaScript(inspectLayout);
       results.push({ height, page, width, ...result });
+    }
+    await window.webContents.executeJavaScript(selectRailPage('plugins'));
+    for (const page of ['installed', 'available', 'marketplaces']) {
+      await window.webContents.executeJavaScript(selectPluginPage(page));
+      const result = await window.webContents.executeJavaScript(inspectLayout);
+      results.push({ height, page: `plugins:${page}`, width, ...result });
     }
     await window.webContents.executeJavaScript(selectRailPage('projects'));
     for (const page of ['session', 'commands', 'shortcuts']) {

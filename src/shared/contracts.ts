@@ -411,6 +411,11 @@ export interface ControlPanelApi {
   removeStoredProject: (projectPath: string) => Promise<void>;
   getClaudeSessions: (sessionId: string) => Promise<ClaudeSessionMetadata[]>;
   getClaudeSessionsForPath: (projectPath: string) => Promise<ClaudeSessionMetadata[]>;
+  renameClaudeSession: (
+    projectPath: string,
+    conversationId: string,
+    title: string,
+  ) => Promise<boolean>;
   deleteClaudeSession: (sessionId: string, conversationId: string) => Promise<boolean>;
   launchClaudeWithSession: (
     sessionId: string,

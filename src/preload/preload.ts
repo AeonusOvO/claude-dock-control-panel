@@ -172,6 +172,13 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('claude:get-sessions-for-path', projectPath) as Promise<
       ClaudeSessionMetadata[]
     >,
+  renameClaudeSession: (projectPath, conversationId, title) =>
+    ipcRenderer.invoke(
+      'claude:rename-session',
+      projectPath,
+      conversationId,
+      title,
+    ) as Promise<boolean>,
   deleteClaudeSession: (sessionId, conversationId) =>
     ipcRenderer.invoke('claude:delete-session', sessionId, conversationId) as Promise<boolean>,
   launchClaudeWithSession: (sessionId, conversationId) =>

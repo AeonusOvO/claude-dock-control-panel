@@ -1,4 +1,5 @@
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type {
@@ -30,6 +31,12 @@ import type {
 } from '../shared/contracts';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import { localizePluginCopy } from '../shared/plugin-localization';
+import {
+  DEFAULT_TERMINAL_THEME,
+  isTerminalThemeId,
+  TERMINAL_THEMES,
+  type TerminalThemeId,
+} from '../shared/terminal-themes';
 import './styles.css';
 
 interface TerminalView {
@@ -168,6 +175,7 @@ const startRouterButton = requiredElement<HTMLButtonElement>('#start-router');
 const stopRouterButton = requiredElement<HTMLButtonElement>('#stop-router');
 const terminalProject = requiredElement<HTMLElement>('#terminal-project');
 const terminalContextMenu = requiredElement<HTMLElement>('#terminal-context-menu');
+const terminalThemeSelect = requiredElement<HTMLSelectElement>('#terminal-theme');
 const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
@@ -192,7 +200,6 @@ const connectionAdviceTitle = requiredElement<HTMLElement>('#connection-advice-t
 const connectionAdviceDetail = requiredElement<HTMLElement>('#connection-advice-detail');
 const connectionAdviceActions = requiredElement<HTMLElement>('#connection-advice-actions');
 const routerManager = requiredElement<HTMLElement>('#router-manager');
-const routerUnusedNote = requiredElement<HTMLElement>('#router-unused-note');
 const routerActions = requiredElement<HTMLElement>('#router-actions');
 const workbenchScope = requiredElement<HTMLElement>('#workbench-scope');
 const pluginSearch = requiredElement<HTMLInputElement>('#plugin-search');
@@ -214,6 +221,13 @@ const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-c
 const refreshSoftwareUpdatesButton = requiredElement<HTMLButtonElement>(
   '#refresh-software-updates',
 );
+const conversationContextMenu = requiredElement<HTMLElement>('#conversation-context-menu');
+const conversationRenameDialog = requiredElement<HTMLDialogElement>('#conversation-rename-dialog');
+const conversationRenameDialogTitle = requiredElement<HTMLElement>(
+  '#conversation-rename-dialog-title',
+);
+const conversationRenameCancel = requiredElement<HTMLButtonElement>('#conversation-rename-cancel');
+const conversationRenameInput = requiredElement<HTMLInputElement>('#conversation-rename-input');
 
 brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
 
@@ -244,6 +258,10 @@ let pluginLoadInProgress = false;
 let pluginMutationInProgress = false;
 let softwareUpdates: SoftwareUpdateState | undefined;
 let softwareUpdateInProgress = false;
+let conversationContextTarget:
+  | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
+  | { kind: 'running'; status: TerminalStatus }
+  | undefined;
 let workspaceState: WorkspaceState = {
   activeSessionId: '',
   projects: [],
@@ -273,6 +291,12 @@ const phaseCopy: Record<TerminalPhase, { detail: string; footer: string; pill: s
   },
 };
 
+const storedTerminalTheme = localStorage.getItem('claudedock.terminalTheme');
+let activeTerminalTheme: TerminalThemeId = isTerminalThemeId(storedTerminalTheme)
+  ? storedTerminalTheme
+  : DEFAULT_TERMINAL_THEME;
+terminalThemeSelect.value = activeTerminalTheme;
+
 const terminalOptions = {
   allowProposedApi: false,
   convertEol: false,
@@ -282,30 +306,9 @@ const terminalOptions = {
   fontSize: 14,
   letterSpacing: 0,
   lineHeight: 1.28,
+  minimumContrastRatio: 1,
   scrollback: 10_000,
-  theme: {
-    background: '#050708',
-    black: '#12171b',
-    blue: '#66b8ff',
-    brightBlack: '#67747d',
-    brightBlue: '#8dcdff',
-    brightCyan: '#8deaff',
-    brightGreen: '#78efbc',
-    brightMagenta: '#dcb9ff',
-    brightRed: '#ff8792',
-    brightWhite: '#ffffff',
-    brightYellow: '#ffe38a',
-    cursor: '#68dcff',
-    cursorAccent: '#081016',
-    cyan: '#64d8ff',
-    foreground: '#e4edf1',
-    green: '#51e6a6',
-    magenta: '#c997ff',
-    red: '#ff6b7a',
-    selectionBackground: '#294653',
-    white: '#d9e3e8',
-    yellow: '#ffd66b',
-  },
+  theme: { ...TERMINAL_THEMES[activeTerminalTheme].palette },
 };
 
 const showToast = (message: string, tone: 'error' | 'success' = 'success'): void => {
@@ -316,6 +319,18 @@ const showToast = (message: string, tone: 'error' | 'success' = 'success'): void
   toastTimer = window.setTimeout(() => {
     toast.classList.remove('toast--visible');
   }, 3200);
+};
+
+const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => {
+  activeTerminalTheme = themeId;
+  terminalThemeSelect.value = themeId;
+  localStorage.setItem('claudedock.terminalTheme', themeId);
+  for (const view of terminalViews.values()) {
+    view.terminal.options.theme = { ...TERMINAL_THEMES[themeId].palette };
+  }
+  if (announce) {
+    showToast(`终端主题已切换为“${TERMINAL_THEMES[themeId].label}”`);
+  }
 };
 
 const projectNameFromPath = (directoryPath: string): string => {
@@ -931,16 +946,16 @@ const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
     routerRemediationTitle.textContent = '解决办法：先创建第一个 Provider';
     configureRouterProviderButton.textContent = '手动添加第一个 Provider';
     if (canRepairFromProject && config) {
-      routerRemediationDetail.textContent = `当前项目正在直连 ${config.baseUrl}，这个 CCR 错误目前不会影响直连。点击一键修复后，ClaudeDock 会在主进程内复用已加密保存的 API Key，创建 Anthropic Messages Provider、启动 3456，并将当前项目切换到 Router。`;
+      routerRemediationDetail.textContent = `可将当前项目已加密保存的 ${config.baseUrl} 接入信息导入为 Anthropic Messages Provider，随后启动 3456 并应用 Router 配置。`;
     } else if (projectUsesRouter) {
       routerRemediationDetail.textContent =
         '当前项目依赖 3456，因此必须先添加 Provider。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
     } else if (projectHasRemoteDirect) {
       routerRemediationDetail.textContent =
-        '当前项目的远程直连不受这个 CCR 错误影响。由于当前认证不是可安全自动复制的 API Key，请手动添加 Provider；保存后再启动 Router。';
+        '已保存兼容接口，但当前认证方式无法安全自动导入。请手动添加 Provider，保存后再启动 Router。';
     } else {
       routerRemediationDetail.textContent =
-        '当前项目没有可复制的远程网关配置。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
+        '没有可自动导入的网关配置。点击下方按钮，依次填写上游协议、接口地址、模型 ID 和上游密钥；保存后再启动 Router。';
     }
     return;
   }
@@ -952,19 +967,10 @@ const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
   configureRouterProviderButton.textContent = '检查 Provider';
 };
 
-/**
- * Greys out the whole Router panel when the active project does not route through 3456. The user
- * should never have to guess whether the Router controls apply to what they are configuring.
- */
 const applyRouterRelevance = (): void => {
   const advice = connectionAdviceState;
-  const irrelevant = advice !== undefined && !advice.routerNeeded;
-  routerManager.dataset.relevance = irrelevant ? 'idle' : 'active';
-  routerUnusedNote.hidden = !irrelevant;
-  routerUnusedNote.textContent = advice?.routerRunningButUnused
-    ? '当前项目不经过 Router，但本机网关仍在运行——它只是白占端口和内存，可以关掉。'
-    : '当前项目不经过 Router，下面的设置对它没有作用。仍可展开管理其他项目要用的网关。';
-  routerActions.dataset.relevance = irrelevant ? 'idle' : 'active';
+  routerManager.dataset.relevance = 'active';
+  routerActions.dataset.relevance = 'active';
   const updateAvailable =
     softwareUpdates?.claudeCode.updateAvailable || softwareUpdates?.router.updateAvailable;
   connectionRailDot.hidden = (!advice || advice.tone === 'success') && !updateAvailable;
@@ -988,7 +994,7 @@ const adviceActionLabel: Record<ClaudeConnectionAdviceAction, string> = {
   'save-config': '去填写接入配置',
   'start-router': '启动 Router',
   'stop-router': '停止空闲 Router',
-  'switch-to-direct': '改为直连中转站',
+  'switch-to-direct': '改用兼容接口',
   'switch-to-router': '改为经过 Router',
   'test-connection': '做一次真实连接测试',
 };
@@ -2095,8 +2101,63 @@ const hideTerminalContextMenu = (): void => {
   terminalContextMenu.hidden = true;
 };
 
+const hideConversationContextMenu = (): void => {
+  conversationContextMenu.hidden = true;
+  conversationContextTarget = undefined;
+};
+
+const requestConversationTitle = (
+  currentTitle: string,
+  historical: boolean,
+): Promise<string | null> =>
+  new Promise((resolve) => {
+    conversationRenameDialogTitle.textContent = historical ? '重命名历史对话' : '重命名运行中对话';
+    conversationRenameInput.value = currentTitle;
+    conversationRenameDialog.returnValue = 'cancel';
+    conversationRenameDialog.addEventListener(
+      'close',
+      () => {
+        if (conversationRenameDialog.returnValue !== 'confirm') {
+          resolve(null);
+          return;
+        }
+        const title = conversationRenameInput.value.trim();
+        resolve(title && title !== currentTitle ? title : null);
+      },
+      { once: true },
+    );
+    conversationRenameDialog.showModal();
+    window.setTimeout(() => {
+      conversationRenameInput.focus();
+      conversationRenameInput.select();
+    });
+  });
+
+const showConversationContextMenu = (
+  event: MouseEvent,
+  target:
+    | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
+    | { kind: 'running'; status: TerminalStatus },
+): void => {
+  event.preventDefault();
+  hideTerminalContextMenu();
+  conversationContextTarget = target;
+  conversationContextMenu.hidden = false;
+  const menuRect = conversationContextMenu.getBoundingClientRect();
+  conversationContextMenu.style.left = `${Math.max(
+    8,
+    Math.min(event.clientX, window.innerWidth - menuRect.width - 8),
+  )}px`;
+  conversationContextMenu.style.top = `${Math.max(
+    8,
+    Math.min(event.clientY, window.innerHeight - menuRect.height - 8),
+  )}px`;
+  conversationContextMenu.querySelector<HTMLButtonElement>('button')?.focus();
+};
+
 const showTerminalContextMenu = (event: MouseEvent): void => {
   event.preventDefault();
+  hideConversationContextMenu();
   const terminal = terminalViews.get(workspaceState.activeSessionId)?.terminal;
   const copy = terminalContextMenu.querySelector<HTMLButtonElement>(
     '[data-terminal-context-action="copy"]',
@@ -2125,17 +2186,20 @@ const createTerminalView = (sessionId: string): TerminalView => {
 
   const terminal = new Terminal(terminalOptions);
   const fitAddon = new FitAddon();
+  const unicode11Addon = new Unicode11Addon();
   terminal.loadAddon(fitAddon);
+  terminal.loadAddon(unicode11Addon);
+  terminal.unicode.activeVersion = '11';
   terminal.open(container);
 
   terminal.onData((data) => {
-    const status = workspaceState.sessions.find((item) => item.id === sessionId);
-    if (status?.phase === 'running') {
-      window.controlPanel.writeTerminal(sessionId, data);
-    }
+    window.controlPanel.writeTerminal(sessionId, data);
   });
 
   terminal.attachCustomKeyEventHandler((event) => {
+    if (event.isComposing || event.keyCode === 229) {
+      return true;
+    }
     if (event.type !== 'keydown') {
       return true;
     }
@@ -2153,7 +2217,7 @@ const createTerminalView = (sessionId: string): TerminalView => {
       return false;
     }
     if (event.shiftKey && !event.ctrlKey && event.code === 'Enter') {
-      window.controlPanel.writeTerminal(sessionId, '\n');
+      window.controlPanel.writeTerminal(sessionId, '\x0a');
       return false;
     }
 
@@ -2333,15 +2397,17 @@ const openConversation = async (projectPath: string): Promise<void> => {
 };
 
 const renameConversation = async (status: TerminalStatus): Promise<void> => {
-  const nextTitle = window.prompt('给这个对话起个名字', status.title);
-  if (nextTitle === null || nextTitle.trim() === status.title) {
+  const nextTitle = await requestConversationTitle(status.title, false);
+  if (!nextTitle) {
     return;
   }
   const result = await window.controlPanel.renameConversation(status.id, nextTitle);
   renderWorkspace(result.state);
   if (!result.ok) {
     showToast(result.error ?? '无法重命名这个对话。', 'error');
+    return;
   }
+  showToast(`对话已重命名为“${nextTitle}”`);
 };
 
 const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
@@ -2391,6 +2457,32 @@ async function loadFolderHistory(projectPath: string, force = false): Promise<vo
   }
 }
 
+const renameStoredConversation = async (
+  projectPath: string,
+  session: ClaudeSessionMetadata,
+): Promise<void> => {
+  const currentTitle = session.sessionName || session.sessionId.slice(0, 8);
+  const nextTitle = await requestConversationTitle(currentTitle, true);
+  if (!nextTitle) {
+    return;
+  }
+  try {
+    const renamed = await window.controlPanel.renameClaudeSession(
+      projectPath,
+      session.sessionId,
+      nextTitle,
+    );
+    if (!renamed) {
+      showToast('无法重命名这个历史对话。', 'error');
+      return;
+    }
+    await loadFolderHistory(projectPath, true);
+    showToast(`历史对话已重命名为“${nextTitle}”`);
+  } catch {
+    showToast('无法重命名这个历史对话。', 'error');
+  }
+};
+
 const renderConversationRow = (status: TerminalStatus): HTMLElement => {
   const row = document.createElement('div');
   row.className = 'conversation-item';
@@ -2430,6 +2522,9 @@ const renderConversationRow = (status: TerminalStatus): HTMLElement => {
   renameButton.addEventListener('click', () => {
     void renameConversation(status);
   });
+  row.addEventListener('contextmenu', (event) => {
+    showConversationContextMenu(event, { kind: 'running', status });
+  });
 
   const closeButton = document.createElement('button');
   closeButton.className = 'conversation-item__action conversation-item__action--close';
@@ -2449,7 +2544,7 @@ const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): 
   const row = document.createElement('button');
   row.className = 'history-item';
   row.type = 'button';
-  row.title = `在新对话中恢复 ${session.sessionId}`;
+  row.title = `左键恢复，右键重命名：${session.sessionId}`;
 
   const icon = document.createElement('span');
   icon.className = 'history-item__icon';
@@ -2467,6 +2562,9 @@ const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): 
   row.append(icon, label, time);
   row.addEventListener('click', () => {
     void resumeStoredConversation(projectPath, session);
+  });
+  row.addEventListener('contextmenu', (event) => {
+    showConversationContextMenu(event, { kind: 'history', projectPath, session });
   });
   return row;
 };
@@ -2886,6 +2984,15 @@ workbenchShortcuts.addEventListener('click', () => {
   setWorkbenchOpen(true);
   selectWorkbenchPage('shortcuts');
 });
+terminalThemeSelect.addEventListener('change', () => {
+  const themeId = terminalThemeSelect.value;
+  if (isTerminalThemeId(themeId)) {
+    applyTerminalTheme(themeId);
+  }
+});
+conversationRenameCancel.addEventListener('click', () => {
+  conversationRenameDialog.close('cancel');
+});
 footerConnection.addEventListener('click', () => {
   setWorkbenchOpen(false);
   selectRailTab('connection');
@@ -3153,12 +3260,32 @@ for (const button of terminalContextMenu.querySelectorAll<HTMLButtonElement>(
     hideTerminalContextMenu();
   });
 }
+conversationContextMenu
+  .querySelector<HTMLButtonElement>('[data-conversation-context-action="rename"]')
+  ?.addEventListener('click', () => {
+    const target = conversationContextTarget;
+    hideConversationContextMenu();
+    if (!target) {
+      return;
+    }
+    if (target.kind === 'running') {
+      void renameConversation(target.status);
+      return;
+    }
+    void renameStoredConversation(target.projectPath, target.session);
+  });
 document.addEventListener('pointerdown', (event) => {
   if (!terminalContextMenu.contains(event.target as Node)) {
     hideTerminalContextMenu();
   }
+  if (!conversationContextMenu.contains(event.target as Node)) {
+    hideConversationContextMenu();
+  }
 });
-window.addEventListener('blur', hideTerminalContextMenu);
+window.addEventListener('blur', () => {
+  hideTerminalContextMenu();
+  hideConversationContextMenu();
+});
 
 document.addEventListener('dragenter', (event) => {
   event.preventDefault();

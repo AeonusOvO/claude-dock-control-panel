@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -6,6 +13,7 @@ import {
   ClaudeSessionManager,
   claudeProjectDirectoryName,
   isValidClaudeSessionId,
+  normalizeClaudeSessionTitle,
 } from '../src/main/claude-session-manager';
 
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'claudedock-sessions-'));
@@ -88,9 +96,44 @@ describe('ClaudeSessionManager', () => {
     expect(manager.deleteSession(otherProject, '..\\secrets')).toBe(false);
   });
 
+  it('prefers AI titles and persists a user rename as Claude custom-title metadata', () => {
+    const currentProject = 'D:\\Projects\\RenameCurrent';
+    const sessionId = '66666666-6666-4666-8666-666666666666';
+    const sessionFile = writeSession(currentProject, sessionId, '2026-07-24T10:00:00.000Z');
+    appendFileSync(
+      sessionFile,
+      `\n${JSON.stringify({
+        aiTitle: '修复终端输入',
+        sessionId,
+        timestamp: '2026-07-24T10:05:00.000Z',
+        type: 'ai-title',
+      })}`,
+      'utf8',
+    );
+    const manager = new ClaudeSessionManager(projectsRoot);
+
+    expect(manager.getSessionsForProject(currentProject)[0]?.sessionName).toBe('修复终端输入');
+    expect(manager.renameSession(currentProject, sessionId, '  中文自定义标题  ')).toBe(true);
+
+    const lines = readFileSync(sessionFile, 'utf8').trim().split('\n');
+    expect(JSON.parse(lines.at(-1) ?? '{}')).toMatchObject({
+      customTitle: '中文自定义标题',
+      sessionId,
+      type: 'custom-title',
+    });
+    expect(manager.getSessionsForProject(currentProject)[0]?.sessionName).toBe('中文自定义标题');
+  });
+
   it('accepts only UUID-shaped Claude session identifiers', () => {
     expect(isValidClaudeSessionId('55555555-5555-4555-8555-555555555555')).toBe(true);
     expect(isValidClaudeSessionId('not-a-session')).toBe(false);
     expect(isValidClaudeSessionId('..\\session')).toBe(false);
+  });
+
+  it('rejects empty, oversized, or control-character session titles', () => {
+    expect(normalizeClaudeSessionTitle('  正常标题  ')).toBe('正常标题');
+    expect(() => normalizeClaudeSessionTitle('')).toThrow(/1-60/);
+    expect(() => normalizeClaudeSessionTitle('a'.repeat(61))).toThrow(/1-60/);
+    expect(() => normalizeClaudeSessionTitle('标题\u001b')).toThrow(/控制字符/);
   });
 });

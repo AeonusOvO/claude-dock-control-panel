@@ -49,9 +49,23 @@ const resolvePowerShell = (): string => {
   return existsSync(absolutePath) ? absolutePath : 'powershell.exe';
 };
 
-const powershellStartup = [
+export const powershellStartup = [
+  '$utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $global:OutputEncoding = $utf8',
   'Import-Module PSReadLine -ErrorAction SilentlyContinue',
-  "if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) { Set-PSReadLineKeyHandler -Chord 'Ctrl+j' -Function AddLine }",
+  [
+    'if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {',
+    "Set-PSReadLineKeyHandler -Chord 'Ctrl+j' -Function AddLine;",
+    'Set-PSReadLineOption -Colors @{ Command = [ConsoleColor]::Cyan; Parameter = [ConsoleColor]::DarkGray; Operator = [ConsoleColor]::Magenta; Variable = [ConsoleColor]::Yellow; String = [ConsoleColor]::Green; Number = [ConsoleColor]::Blue; Type = [ConsoleColor]::Cyan; Comment = [ConsoleColor]::DarkGray };',
+    "Set-PSReadLineKeyHandler -Chord 'Backspace' -ScriptBlock {",
+    "$line = ''; $cursor = 0;",
+    '[Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor);',
+    'if ($cursor -gt 0 -and $line[$cursor - 1] -eq "`n") {',
+    "[Microsoft.PowerShell.PSConsoleReadLine]::Replace($cursor - 1, 1, '');",
+    '[Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor - 1);',
+    '} else { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($null, $null) }',
+    '}',
+    '}',
+  ].join(' '),
 ].join('; ');
 
 export class TerminalSession {

@@ -1,4 +1,15 @@
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { ClaudeSessionMetadata } from '../shared/contracts';
@@ -28,6 +39,18 @@ export const isValidClaudeSessionId = (value: string): boolean => CLAUDE_SESSION
 
 export const claudeProjectDirectoryName = (cwd: string): string =>
   path.resolve(cwd).replace(/[:\\/]/g, '-');
+
+export const normalizeClaudeSessionTitle = (value: string): string => {
+  const normalized = value.trim();
+  const hasControlCharacter = [...normalized].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+  if (!normalized || normalized.length > 60 || hasControlCharacter) {
+    throw new Error('对话名称需为 1-60 个字符，且不能包含控制字符。');
+  }
+  return normalized;
+};
 
 export class ClaudeSessionManager {
   public constructor(private readonly projectsDirectory = DEFAULT_CLAUDE_PROJECTS_DIRECTORY) {}
@@ -86,6 +109,39 @@ export class ClaudeSessionManager {
     }
   }
 
+  public renameSession(cwd: string, conversationId: string, title: string): boolean {
+    if (!isValidClaudeSessionId(conversationId)) {
+      return false;
+    }
+    const normalizedTitle = normalizeClaudeSessionTitle(title);
+    const sessionFile = path.join(this.projectDirectory(cwd), `${conversationId}.jsonl`);
+    try {
+      const stat = lstatSync(sessionFile);
+      if (!stat.isFile() || stat.size === 0 || stat.size > MAX_JSONL_SIZE) {
+        return false;
+      }
+
+      const descriptor = openSync(sessionFile, 'r');
+      const finalByte = Buffer.alloc(1);
+      try {
+        readSync(descriptor, finalByte, 0, 1, stat.size - 1);
+      } finally {
+        closeSync(descriptor);
+      }
+      const prefix = finalByte[0] === 0x0a ? '' : '\n';
+      const titleRecord = JSON.stringify({
+        customTitle: normalizedTitle,
+        sessionId: conversationId,
+        timestamp: new Date().toISOString(),
+        type: 'custom-title',
+      });
+      appendFileSync(sessionFile, `${prefix}${titleRecord}\n`, 'utf8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private projectDirectory(cwd: string): string {
     return path.join(this.projectsDirectory, claudeProjectDirectoryName(cwd));
   }
@@ -100,7 +156,10 @@ export class ClaudeSessionManager {
     }
 
     let sessionId: string | undefined;
+    let aiTitle: string | undefined;
+    let customTitle: string | undefined;
     let sessionName: string | undefined;
+    let slug: string | undefined;
     let modelId: string | undefined;
     let inputTokens = 0;
     let outputTokens = 0;
@@ -117,10 +176,14 @@ export class ClaudeSessionManager {
         const parsed = JSON.parse(line) as Record<string, unknown>;
         sessionId ??=
           optionalNonEmptyString(parsed.sessionId) ?? optionalNonEmptyString(parsed.session_id);
-        sessionName ??=
-          optionalNonEmptyString(parsed.slug) ??
-          optionalNonEmptyString(parsed.aiTitle) ??
-          optionalNonEmptyString(parsed.sessionName);
+        slug ??= optionalNonEmptyString(parsed.slug);
+        sessionName ??= optionalNonEmptyString(parsed.sessionName);
+        if (parsed.type === 'ai-title') {
+          aiTitle = optionalNonEmptyString(parsed.aiTitle) ?? aiTitle;
+        }
+        if (parsed.type === 'custom-title') {
+          customTitle = optionalNonEmptyString(parsed.customTitle) ?? customTitle;
+        }
 
         const message =
           parsed.message && typeof parsed.message === 'object'
@@ -172,7 +235,7 @@ export class ClaudeSessionManager {
       modelId,
       outputTokens: outputTokens > 0 ? outputTokens : undefined,
       sessionId: normalizedSessionId,
-      sessionName,
+      sessionName: customTitle ?? aiTitle ?? sessionName ?? slug,
     };
   }
 }
