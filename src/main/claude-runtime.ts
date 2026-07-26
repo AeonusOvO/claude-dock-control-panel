@@ -4,14 +4,19 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
+  ClaudeConnectionAdvice,
+  ClaudeConnectionAdviceAction,
   ClaudeConnectionTestResult,
   ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
+  ClaudeCodeInstallSource,
   ClaudeLaunchMode,
   ClaudeMetrics,
   ClaudeProjectState,
   ClaudeRouteHealth,
   ClaudeRouterManagementState,
+  ClaudeRouterInstallSource,
+  SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
@@ -33,6 +38,7 @@ import {
   type DownloadedRouterInstaller,
   type SavedRouterProvider,
 } from './claude-router-manager';
+import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-updates';
 
 interface RuntimeSession {
   active: boolean;
@@ -66,6 +72,7 @@ const execFileAsync = promisify(execFile);
 const INSTALLATION_CACHE_MS = 30_000;
 const METRICS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const ROUTER_HEALTH_CACHE_MS = 3_000;
+const SOFTWARE_UPDATE_CACHE_MS = 5 * 60_000;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 
 const noInstallation = (message: string): ClaudeInstallationStatus => ({
@@ -204,6 +211,141 @@ export const routerBlockingDetail = (
   return undefined;
 };
 
+/**
+ * A relay ("中转站") is any remote gateway base URL: the project talks to it directly, so the
+ * local CCR Router plays no part and every Router control should be greyed out.
+ */
+export const usesRemoteRelay = (config: NormalizedClaudeConfig): boolean =>
+  config.provider === 'gateway' && Boolean(config.baseUrl) && !usesDefaultClaudeRouter(config);
+
+/**
+ * Turns the saved config plus live Router state into one plain-language verdict. Computed in the
+ * main process so the advice is identical whether or not the user ever pasted a curl command.
+ */
+export const computeClaudeConnectionAdvice = (
+  config: NormalizedClaudeConfig,
+  credentialConfigured: boolean,
+  router: ClaudeRouterManagementState,
+  installation: ClaudeInstallationStatus,
+): ClaudeConnectionAdvice => {
+  const routerNeeded = usesDefaultClaudeRouter(config);
+  const routerGatewayUp = router.gatewayState === 'running' || router.gatewayState === 'starting';
+  const routerRunningButUnused = !routerNeeded && routerGatewayUp;
+  const idleRouterActions: ClaudeConnectionAdviceAction[] = routerRunningButUnused
+    ? ['stop-router']
+    : [];
+  const credentialMissing =
+    (config.authMode === 'apiKey' || config.authMode === 'authToken') && !credentialConfigured;
+
+  if (installation.security !== 'ready') {
+    return {
+      actions: [],
+      detail: installation.message,
+      routerNeeded,
+      routerRunningButUnused,
+      title: 'Claude Code 尚未就绪',
+      tone: 'error',
+    };
+  }
+
+  if (credentialMissing) {
+    return {
+      actions: ['save-config', ...idleRouterActions],
+      detail: '当前接入方式需要密钥，但当前项目还没有保存。填好密钥后点“保存接入配置”即可。',
+      routerNeeded,
+      routerRunningButUnused,
+      title: '还缺一个 API 密钥',
+      tone: 'warning',
+    };
+  }
+
+  if (routerNeeded) {
+    if (!router.installed) {
+      return {
+        actions: ['install-router', 'switch-to-direct'],
+        detail:
+          '当前项目指向本机 Router 的 3456 端口，但 CCR 还没有安装。可以先安装 Router，或改成直连中转站。',
+        routerNeeded,
+        routerRunningButUnused: false,
+        title: '需要先安装 Router',
+        tone: 'error',
+      };
+    }
+    if (router.providers.length === 0) {
+      return {
+        actions: ['open-router-management', 'switch-to-direct'],
+        detail: 'Router 已安装但还没有任何 Provider，模型请求无处可去。请先添加一个 Provider。',
+        routerNeeded,
+        routerRunningButUnused: false,
+        title: 'Router 还没有配置上游',
+        tone: 'warning',
+      };
+    }
+    if (!routerGatewayUp) {
+      return {
+        actions: ['start-router'],
+        detail: `当前项目通过 Router 连接模型服务，但模型网关没有运行：${router.message}`,
+        routerNeeded,
+        routerRunningButUnused: false,
+        title: 'Router 网关未启动',
+        tone: 'warning',
+      };
+    }
+    return {
+      actions: ['test-connection'],
+      detail: `Router 网关运行中，已配置 ${router.providers.length} 个 Provider，当前项目会经由它访问模型。`,
+      routerNeeded,
+      routerRunningButUnused: false,
+      title: '经 Router 接入，一切正常',
+      tone: 'success',
+    };
+  }
+
+  if (usesRemoteRelay(config)) {
+    if (routerRunningButUnused) {
+      return {
+        actions: ['stop-router', 'test-connection'],
+        detail: `当前项目直连 ${config.baseUrl}，不经过 Router。本机 Router 网关仍在运行，可以按需关闭。`,
+        routerNeeded: false,
+        routerRunningButUnused: true,
+        title: '这个中转站不需要 Router',
+        tone: 'info',
+      };
+    }
+    return {
+      actions: ['test-connection'],
+      detail: `当前项目直连 ${config.baseUrl}，不需要 Router。下面的 Router 面板对这个项目没有作用。`,
+      routerNeeded: false,
+      routerRunningButUnused: false,
+      title: '直连中转站，无需 Router',
+      tone: 'success',
+    };
+  }
+
+  if (config.provider === 'gateway') {
+    return {
+      actions: ['import-curl', 'save-config', ...idleRouterActions],
+      detail:
+        '选了“网关/中转站”但还没有填接口地址。可以直接粘贴中转站给的 curl 命令，自动带出地址、密钥和模型。',
+      routerNeeded: false,
+      routerRunningButUnused,
+      title: '还没有填写接口地址',
+      tone: 'warning',
+    };
+  }
+
+  return {
+    actions: ['test-connection', ...idleRouterActions],
+    detail: routerRunningButUnused
+      ? '当前项目使用 Anthropic 官方接口，不经过 Router。本机 Router 网关仍在运行，可以按需关闭。'
+      : '当前项目使用 Anthropic 官方接口，不需要 Router。',
+    routerNeeded: false,
+    routerRunningButUnused,
+    title: routerRunningButUnused ? '官方接入不需要 Router' : '使用 Anthropic 官方接入',
+    tone: routerRunningButUnused ? 'info' : 'success',
+  };
+};
+
 export const parseClaudeMetrics = (raw: string): ClaudeMetrics | undefined => {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as Record<string, unknown>;
@@ -261,6 +403,7 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
 export class ClaudeRuntime {
   private cachedInstallation?: { checkedAt: number; value: ClaudeInstallationStatus };
   private cachedRouterHealth?: { checkedAt: number; value: ClaudeRouterManagementState };
+  private cachedSoftwareUpdates?: { checkedAt: number; value: SoftwareUpdateState };
   private readonly configStore: ClaudeConfigStore;
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   private readonly gatewayDetector = new ClaudeGatewayDetector();
@@ -356,8 +499,69 @@ export class ClaudeRuntime {
     return this.routerManager.getState();
   }
 
+  /** Plain-language verdict on how this project reaches a model, and whether Router matters. */
+  public async getConnectionAdvice(cwd: string): Promise<ClaudeConnectionAdvice> {
+    const [installation, router] = await Promise.all([
+      this.diagnoseInstallation(),
+      this.routerManager.getState(),
+    ]);
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: router };
+    return computeClaudeConnectionAdvice(
+      this.configStore.getConfig(cwd),
+      Boolean(this.configStore.getCredential(cwd)),
+      router,
+      installation,
+    );
+  }
+
   public downloadRouterInstaller(): Promise<DownloadedRouterInstaller> {
     return this.routerManager.downloadLatestInstaller();
+  }
+
+  public async installRouterPackage(
+    source: Exclude<ClaudeRouterInstallSource, 'github'>,
+  ): Promise<{ message: string; state: ClaudeRouterManagementState }> {
+    const result = await this.routerManager.installFromNpm(source);
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: result.state };
+    this.cachedSoftwareUpdates = undefined;
+    return result;
+  }
+
+  public async uninstallRouter(): Promise<{
+    message: string;
+    state: ClaudeRouterManagementState;
+  }> {
+    const result = await this.routerManager.uninstall();
+    this.cachedRouterHealth = { checkedAt: Date.now(), value: result.state };
+    this.cachedSoftwareUpdates = undefined;
+    return result;
+  }
+
+  public async getSoftwareUpdates(force = false): Promise<SoftwareUpdateState> {
+    if (
+      !force &&
+      this.cachedSoftwareUpdates &&
+      Date.now() - this.cachedSoftwareUpdates.checkedAt < SOFTWARE_UPDATE_CACHE_MS
+    ) {
+      return this.cachedSoftwareUpdates.value;
+    }
+    const [installation, router] = await Promise.all([
+      this.diagnoseInstallation(force),
+      this.routerManager.getState(),
+    ]);
+    const value = await checkSoftwareUpdates(installation, router);
+    this.cachedSoftwareUpdates = { checkedAt: Date.now(), value };
+    return value;
+  }
+
+  public async installOrUpdateClaudeCode(
+    source: ClaudeCodeInstallSource,
+  ): Promise<{ message: string; state: SoftwareUpdateState }> {
+    const installation = await this.diagnoseInstallation(true);
+    const message = await installOrUpdateClaudeCode(source, installation.installed);
+    this.cachedInstallation = undefined;
+    this.cachedSoftwareUpdates = undefined;
+    return { message, state: await this.getSoftwareUpdates(true) };
   }
 
   public async startRouter(): Promise<ClaudeRouterManagementState> {

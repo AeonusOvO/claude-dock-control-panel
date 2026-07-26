@@ -30,7 +30,10 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ClaudeSessionManager ── 当前项目 JSONL 元数据 / 定向恢复与删除
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
-        ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 官方安装包
+        ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
+        ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
+        ├── SoftwareUpdates ── Claude Code / Router 版本检测与安装源
+        ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
@@ -60,7 +63,7 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
 - 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
-- 添加目录会创建新会话；同一路径（忽略大小写）只保留一个会话并直接激活。
+- 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。
 - 切换项目不重启 PTY；关闭项目才会终止对应进程，且不会影响其他会话。
 - `WorkspaceStore` 把已添加项目与最后激活路径保存到
   `userData/claude/workspace.json`。写入采用临时文件加重命名；启动恢复不会改写原来的
@@ -114,7 +117,7 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
 
 ### 自动发现与新手接入
 
-- `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在工作台打开期间每 6 秒刷新。它用
+- `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
   短连接检查 Claude Code Router 默认 `3456/3458` 与 LiteLLM 常用 `4000`，不会枚举或扫描
   全部本机端口。
 - CCR 的识别依据包括 `ccr` 命令、旧版
@@ -186,6 +189,29 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
   10 分钟，并按 Release 的 `size` 与 `sha256:` digest 校验后缓存到
   `userData/claude/router-installers/`；随后仅打开标准安装向导，Windows UAC、SmartScreen
   和安装确认仍由用户处理。
+- 另一条安装路径通过固定包名 `@musistudio/claude-code-router@latest` 调用 npm；来源只能
+  是 `https://registry.npmjs.org` 或 `https://registry.npmmirror.com`，registry 以本次
+  argv 参数传入，不写入用户 npm 配置。安装状态区分 desktop/npm/mixed。
+- 卸载前只停止经 `service.json` token 与 identity 校验的 CCR 服务；npm 版调用固定包名的
+  全局卸载，桌面版只启动其安装目录中的已知卸载程序。Provider 配置目录默认保留，便于用户
+  更换安装来源后继续使用；没有可信卸载程序时引导到 Windows“已安装的应用”。
+
+### 软件与插件更新
+
+- `SoftwareUpdates` 从 npm 官方 registry 读取 Claude Code 与 Router 的 `latest` 元数据；
+  官方源失败时再读 npmmirror。结果缓存 5 分钟，接入页轮询只在缓存到期后产生网络请求。
+- Claude Code 的官方原生路径使用固定的 `claude update`；未安装时使用固定 winget ID
+  `Anthropic.ClaudeCode`。npm 与 npmmirror 路径使用固定包名，均不拼接用户输入到 shell。
+- `ClaudePluginManager` 调用 `claude plugin list --json --available` 与 marketplace JSON
+  接口。插件标识、市场名和市场来源分别经过格式校验；变更后强制刷新目录。CLI 返回版本或
+  source SHA 时与市场记录比较并标记更新，用户也可刷新市场后批量执行官方 `plugin update`。
+- `src/shared/plugin-localization.ts` 不调用外部翻译接口。它按安全、测试、API、数据、运维、
+  前端等可追踪关键词生成中文能力概括；renderer 保留英文原文折叠区，插件 ID 始终使用 CLI
+  返回值，搜索同时覆盖原文、中文概括与分类。该概括属于项目自研规则，不是插件作者译文。
+- Windows 上 `claude`/`npm` 常由 `.ps1` shim 提供。`WindowsCommand` 先用固定 PowerShell
+  查询 `Get-Command` 的绝对 `Source`，再通过 `-File` 与独立 argv 调用；stdin 显式连接
+  NUL，避免 Claude CLI 把匿名管道当作慢输入等待。`.cmd` 只在同目录存在配套 `.ps1` 时
+  转用该脚本，不启用字符串 shell。
 
 ### 连接实测
 
@@ -229,7 +255,8 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
   仍只显示 Claude Code `statusLine` 提供的结构化数字。
 - 历史会话列表只进入当前工作目录编码后对应的项目目录，并只读取目录顶层 UUID 命名的
   `.jsonl` 文件。列表提取 session ID、slug/标题、时间、模型和 usage 等元数据，不跨项目
-  枚举；单文件超过 50 MiB 时跳过。
+  枚举；单文件超过 50 MiB 时跳过。渲染层只在项目文件夹的折叠层级中展示历史，不在工作台
+  重复生成第二份列表。
 - 定向恢复把经过 UUID 校验的 session ID 交给统一的 PowerShell 命令构造器，因此继续保留
   参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
@@ -251,6 +278,17 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
 500 字符且禁止换行；只有工作台已知正在运行的 Claude 会话可以接收。`/clear` 的二次确认
 在渲染层完成。
 
+### PowerShell 键盘与剪贴板
+
+- 每个应用内 PowerShell 启动时仅为该进程加载 PSReadLine，并把 `Ctrl+J` 绑定到 `AddLine`；
+  renderer 将 `Shift+Enter` 转为 LF，因此多行输入不需要修改用户 profile 或外部终端。
+- xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
+  `Ctrl+V` 从主进程读取最多 5 MiB 文本并写入当前 PTY。右键菜单复用同一受限 API，并提供
+  全选和只清除 xterm 显示。
+- 控制栏与工作台宽度写入 renderer `localStorage`；这只保存像素宽度，不包含项目、命令或
+  终端内容。窗口缩到 900px 以下时会重新夹紧宽度；CSS 在 900/850px 和 700px 高度设置
+  独立断点，避免工具栏、状态栏、插件操作区和安装来源控件重叠。
+
 ## 安全策略
 
 - `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
@@ -269,9 +307,12 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
 - `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别、Router 配置
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
-  statusLine JSON 验证指标采集脚本。
+  statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验与软件语义版本比较。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
+- `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
+  轮换项目/接入/插件页及工作台三页，检查交互控件矩形相交、关键容器横向溢出和文档级
+  overflow；遮罩层与抽屉的有意叠放不计为控件重叠。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
   将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。
@@ -291,8 +332,9 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
 - 项目工作区以应用进程生命周期为边界，不持久化会话列表、终端进程或 xterm.js 缓冲。
 - 保存或切换 Claude 接入不会热修改已运行 PowerShell 的环境；受保护启动会重建当前项目
   终端。这是避免把密钥写入可见终端输入和历史的有意取舍。
-- Windows 10 1809 之前没有所需 ConPTY API，不在支持范围。
-- 代码签名、自动更新和退出后的会话恢复尚未实现。
+- Windows 10 1809 之前没有所需 ConPTY API，不在支持范围；最小窗口为 820 × 640。
+- 应用自身的自动更新、代码签名和退出后的 PTY 恢复尚未实现；Claude Code、Router 与插件
+  的检测/更新已经实现，但不等同于 ClaudeDock 安装包自更新。
 
 ## 地区限制与“降智”调研结论（截至 2026-07-25）
 
@@ -341,6 +383,12 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://code.claude.com/docs/en/sessions>
 - Claude Code commands：
   <https://code.claude.com/docs/en/commands>
+- Claude Code 官方安装与更新：
+  <https://code.claude.com/docs/en/installation>
+- Claude Code 插件发现与管理：
+  <https://code.claude.com/docs/en/discover-plugins>
+- Claude Code 插件市场：
+  <https://code.claude.com/docs/en/plugin-marketplaces>
 - Claude Code statusLine：
   <https://code.claude.com/docs/en/statusline>
 - Claude Code 数据与 WebFetch 预检：
@@ -355,6 +403,12 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://github.com/musistudio/claude-code-router/releases>
 - Claude Code Router 基础配置：
   <https://musistudio.github.io/claude-code-router/docs/cli/config/basic/>
+- Claude Code Router CLI 安装：
+  <https://musistudio.github.io/claude-code-router/docs/cli/installation/>
+- PowerShell PSReadLine 多行编辑：
+  <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_line_editing>
+- npmmirror registry：
+  <https://developer.aliyun.com/article/878125>
 - Node.js 原生模块 ABI（`process.versions.modules`）：
   <https://nodejs.org/api/process.html#processversions>
 - `better-sqlite3` 原生模块与 Electron 故障排查：

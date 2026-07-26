@@ -13,6 +13,7 @@ const createFakeFactory = () => {
   const factory = (
     id: string,
     initialCwd: string,
+    initialTitle: string,
     onData: (data: string) => void,
     onStatus: (status: TerminalStatus) => void,
   ): FakeTerminal => {
@@ -21,6 +22,7 @@ const createFakeFactory = () => {
       id,
       phase: 'stopped',
       shell: 'Windows PowerShell',
+      title: initialTitle,
     };
     const update = (next: TerminalStatus): TerminalStatus => {
       status = next;
@@ -38,8 +40,10 @@ const createFakeFactory = () => {
           phase: 'running',
           pid: 200 + terminals.size,
           shell: status.shell,
+          title: status.title,
         }),
       ),
+      setTitle: vi.fn((title: string) => update({ ...status, title })),
       start: vi.fn(() =>
         update({
           cwd: status.cwd,
@@ -47,6 +51,7 @@ const createFakeFactory = () => {
           phase: 'running',
           pid: 100 + terminals.size,
           shell: status.shell,
+          title: status.title,
         }),
       ),
       stop: vi.fn((emitStatus = true) => {
@@ -55,6 +60,7 @@ const createFakeFactory = () => {
           id,
           phase: 'stopped' as const,
           shell: status.shell,
+          title: status.title,
         };
         if (emitStatus) {
           return update(next);
@@ -92,6 +98,7 @@ describe('TerminalWorkspace', () => {
     expect(state.sessions[1]).toMatchObject({
       cwd: 'D:\\Project Alpha',
       phase: 'running',
+      title: '对话 1',
     });
 
     terminals.get('session-1')?.emitData('home output');
@@ -110,6 +117,46 @@ describe('TerminalWorkspace', () => {
     expect(result.reused).toBe(true);
     expect(result.state.sessions).toHaveLength(2);
     expect(result.state.activeSessionId).toBe('session-2');
+  });
+
+  it('runs several concurrent conversations inside one project folder', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace('C:\\Users\\Tester', vi.fn(), vi.fn(), factory);
+
+    workspace.openProject('D:\\Project Alpha');
+    const state = workspace.openConversation('d:\\project alpha');
+
+    expect(state.activeSessionId).toBe('session-3');
+    expect(workspace.sessionIdsForDirectory('D:\\Project Alpha')).toEqual([
+      'session-2',
+      'session-3',
+    ]);
+    expect(state.sessions.map((session) => session.title)).toEqual(['对话 1', '对话 1', '对话 2']);
+    expect(state.sessions.filter((session) => session.phase === 'running')).toHaveLength(2);
+  });
+
+  it('closes every conversation of a folder at once', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace('C:\\Users\\Tester', vi.fn(), vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+    workspace.openConversation('D:\\Project Alpha');
+
+    const state = workspace.closeDirectory('d:\\project alpha');
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0]?.cwd).toBe('C:\\Users\\Tester');
+    expect(workspace.sessionIdsForDirectory('D:\\Project Alpha')).toEqual([]);
+  });
+
+  it('renames a conversation and rejects unusable titles', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace('C:\\Users\\Tester', vi.fn(), vi.fn(), factory);
+
+    const state = workspace.renameSession('session-1', '  重构登录流程  ');
+
+    expect(state.sessions[0]?.title).toBe('重构登录流程');
+    expect(() => workspace.renameSession('session-1', '   ')).toThrow(/1-60/);
+    expect(() => workspace.renameSession('session-1', 'a\nb')).toThrow(/1-60/);
   });
 
   it('keeps other projects running when the active project is closed', () => {
@@ -139,6 +186,7 @@ describe('TerminalWorkspace', () => {
         id: 'session-2',
         phase: 'stopped',
         shell: 'Windows PowerShell',
+        title: '对话 1',
       },
     ]);
   });

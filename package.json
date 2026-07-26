@@ -23,6 +23,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
     "test": "vitest run",
+    "test:layout": "npm run build:renderer && electron scripts/layout-smoke.cjs",
     "test:coverage": "vitest run --coverage",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",

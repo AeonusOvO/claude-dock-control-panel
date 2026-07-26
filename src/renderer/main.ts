@@ -2,25 +2,34 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type {
+  ClaudeConnectionAdvice,
+  ClaudeConnectionAdviceAction,
   ClaudeConnectionTestResult,
   ClaudeGatewayCandidate,
   ClaudeGatewayDiagnostics,
   ClaudeLaunchMode,
+  ClaudePluginCatalog,
+  ClaudePluginMarketplaceView,
+  ClaudePluginOperationResult,
+  ClaudePluginView,
   ClaudePreset,
   ClaudeProjectState,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeRouterProviderView,
   ClaudeSessionMetadata,
+  SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   OperationResult,
   TerminalPhase,
   TerminalStatus,
+  WorkspaceProjectView,
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
+import { localizePluginCopy } from '../shared/plugin-localization';
 import './styles.css';
 
 interface TerminalView {
@@ -47,6 +56,7 @@ const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
 const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
 const claudeCredential = requiredElement<HTMLInputElement>('#claude-credential');
+const claudeInstallSource = requiredElement<HTMLSelectElement>('#claude-install-source');
 const claudeInstallationDetail = requiredElement<HTMLElement>('#claude-installation-detail');
 const claudeInstallationTitle = requiredElement<HTMLElement>('#claude-installation-title');
 const claudeLiveIndicator = requiredElement<HTMLElement>('#claude-live-indicator');
@@ -86,8 +96,13 @@ const curlInput = requiredElement<HTMLTextAreaElement>('#curl-input');
 const curlNextStep = requiredElement<HTMLElement>('#curl-next-step');
 const curlProtocolBadge = requiredElement<HTMLElement>('#curl-protocol-badge');
 const dropOverlay = requiredElement<HTMLElement>('#drop-overlay');
-const dropZone = requiredElement<HTMLButtonElement>('#drop-zone');
+const dropZone = chooseDirectoryButton;
 const emptyState = requiredElement<HTMLElement>('#terminal-empty-state');
+const footerConnection = requiredElement<HTMLButtonElement>('#footer-connection');
+const footerConnectionLabel = requiredElement<HTMLElement>('#footer-connection-label');
+const footerContextLabel = requiredElement<HTMLElement>('#footer-context-label');
+const footerContextRing = requiredElement<HTMLElement>('#footer-context-ring');
+const footerModel = requiredElement<HTMLElement>('#footer-model');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
 const gatewayCandidates = requiredElement<HTMLElement>('#gateway-candidates');
 const gatewayCheckedAt = requiredElement<HTMLElement>('#gateway-checked-at');
@@ -105,8 +120,10 @@ const modelHelp = requiredElement<HTMLElement>('#model-help');
 const addRouterProviderButton = requiredElement<HTMLButtonElement>('#add-router-provider');
 const cancelRouterProviderButton = requiredElement<HTMLButtonElement>('#cancel-router-provider');
 const installRouterButton = requiredElement<HTMLButtonElement>('#install-router');
+const installUpdateClaudeButton = requiredElement<HTMLButtonElement>('#install-update-claude');
 const openDetectedRouterButton = requiredElement<HTMLButtonElement>('#open-detected-router');
 const openRouterManagementButton = requiredElement<HTMLButtonElement>('#open-router-management');
+const panelResizer = requiredElement<HTMLElement>('#panel-resizer');
 const projectCount = requiredElement<HTMLElement>('#project-count');
 const projectList = requiredElement<HTMLElement>('#project-list');
 const repairRouterFromProjectButton = requiredElement<HTMLButtonElement>(
@@ -131,6 +148,7 @@ const routerProviderName = requiredElement<HTMLInputElement>('#router-provider-n
 const routerProviderPreferred = requiredElement<HTMLInputElement>('#router-provider-preferred');
 const routerProviderProtocol = requiredElement<HTMLSelectElement>('#router-provider-protocol');
 const routerProviderUseProject = requiredElement<HTMLInputElement>('#router-provider-use-project');
+const routerInstallSource = requiredElement<HTMLSelectElement>('#router-install-source');
 const routerRemediation = requiredElement<HTMLElement>('#router-remediation');
 const routerRemediationDetail = requiredElement<HTMLElement>('#router-remediation-detail');
 const routerRemediationTitle = requiredElement<HTMLElement>('#router-remediation-title');
@@ -138,6 +156,7 @@ const routerStatus = requiredElement<HTMLElement>('#router-status');
 const routerStatusDetail = requiredElement<HTMLElement>('#router-status-detail');
 const routerStatusTitle = requiredElement<HTMLElement>('#router-status-title');
 const routerVersion = requiredElement<HTMLElement>('#router-version');
+const uninstallRouterButton = requiredElement<HTMLButtonElement>('#uninstall-router');
 const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-router-provider');
 const configureRouterProviderButton = requiredElement<HTMLButtonElement>(
   '#configure-router-provider',
@@ -148,6 +167,7 @@ const statusPill = requiredElement<HTMLElement>('#status-pill');
 const startRouterButton = requiredElement<HTMLButtonElement>('#start-router');
 const stopRouterButton = requiredElement<HTMLButtonElement>('#stop-router');
 const terminalProject = requiredElement<HTMLElement>('#terminal-project');
+const terminalContextMenu = requiredElement<HTMLElement>('#terminal-context-menu');
 const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
@@ -157,19 +177,52 @@ const toggleLabel = requiredElement<HTMLElement>('#toggle-terminal-label');
 const workbenchClose = requiredElement<HTMLButtonElement>('#workbench-close');
 const workbenchScrim = requiredElement<HTMLButtonElement>('#workbench-scrim');
 const workbenchTrigger = requiredElement<HTMLButtonElement>('#workbench-trigger');
+const workbenchShortcuts = requiredElement<HTMLButtonElement>('#workbench-shortcuts');
+const drawerResizer = requiredElement<HTMLElement>('#drawer-resizer');
 const useDetectedRouterButton = requiredElement<HTMLButtonElement>('#use-detected-router');
 const baseUrlHelp = requiredElement<HTMLElement>('#base-url-help');
-const sessionCount = requiredElement<HTMLElement>('#session-count');
-const sessionList = requiredElement<HTMLElement>('#session-list');
 const smartGuidance = requiredElement<HTMLElement>('#smart-guidance');
 const smartGuidanceTitle = requiredElement<HTMLElement>('#smart-guidance-title');
 const smartGuidanceDetail = requiredElement<HTMLElement>('#smart-guidance-detail');
 const smartGuidanceActions = requiredElement<HTMLElement>('#smart-guidance-actions');
+const activityRail = requiredElement<HTMLElement>('#activity-rail');
+const connectionRailDot = requiredElement<HTMLElement>('#connection-rail-dot');
+const connectionAdvice = requiredElement<HTMLElement>('#connection-advice');
+const connectionAdviceTitle = requiredElement<HTMLElement>('#connection-advice-title');
+const connectionAdviceDetail = requiredElement<HTMLElement>('#connection-advice-detail');
+const connectionAdviceActions = requiredElement<HTMLElement>('#connection-advice-actions');
+const routerManager = requiredElement<HTMLElement>('#router-manager');
+const routerUnusedNote = requiredElement<HTMLElement>('#router-unused-note');
+const routerActions = requiredElement<HTMLElement>('#router-actions');
+const workbenchScope = requiredElement<HTMLElement>('#workbench-scope');
+const pluginSearch = requiredElement<HTMLInputElement>('#plugin-search');
+const refreshPluginsButton = requiredElement<HTMLButtonElement>('#refresh-plugins');
+const updateAllPluginsButton = requiredElement<HTMLButtonElement>('#update-all-plugins');
+const pluginStatus = requiredElement<HTMLElement>('#plugin-status');
+const pluginRailDot = requiredElement<HTMLElement>('#plugin-rail-dot');
+const pluginInstalledCount = requiredElement<HTMLElement>('#plugin-installed-count');
+const pluginAvailableCount = requiredElement<HTMLElement>('#plugin-available-count');
+const pluginInstalledList = requiredElement<HTMLElement>('#plugin-installed-list');
+const pluginAvailableList = requiredElement<HTMLElement>('#plugin-available-list');
+const pluginMarketplaceList = requiredElement<HTMLElement>('#plugin-marketplace-list');
+const pluginMarketplaceForm = requiredElement<HTMLFormElement>('#plugin-marketplace-form');
+const pluginMarketplaceSource = requiredElement<HTMLInputElement>('#plugin-marketplace-source');
+const addPluginMarketplaceButton = requiredElement<HTMLButtonElement>('#add-plugin-marketplace');
+const claudeUpdateDetail = requiredElement<HTMLElement>('#claude-update-detail');
+const claudeUpdateVersion = requiredElement<HTMLElement>('#claude-update-version');
+const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-checked-at');
+const refreshSoftwareUpdatesButton = requiredElement<HTMLButtonElement>(
+  '#refresh-software-updates',
+);
 
 brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
 
 const terminalViews = new Map<string, TerminalView>();
 const claudeStates = new Map<string, ClaudeProjectState>();
+/** Conversation history per project folder, keyed by the lower-cased folder path. */
+const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
+const expandedFolders = new Set<string>();
+const historyLoadsInFlight = new Set<string>();
 let dragDepth = 0;
 let claudeRequestGeneration = 0;
 let configFormSessionId = '';
@@ -184,9 +237,16 @@ let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerOperationInProgress = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
-let sessionLoadInProgress = false;
+let connectionAdviceState: ClaudeConnectionAdvice | undefined;
+let adviceRefreshInProgress = false;
+let pluginCatalog: ClaudePluginCatalog | undefined;
+let pluginLoadInProgress = false;
+let pluginMutationInProgress = false;
+let softwareUpdates: SoftwareUpdateState | undefined;
+let softwareUpdateInProgress = false;
 let workspaceState: WorkspaceState = {
   activeSessionId: '',
+  projects: [],
   sessions: [],
 };
 
@@ -220,7 +280,7 @@ const terminalOptions = {
   cursorStyle: 'bar' as const,
   fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
   fontSize: 14,
-  letterSpacing: 0.2,
+  letterSpacing: 0,
   lineHeight: 1.28,
   scrollback: 10_000,
   theme: {
@@ -471,7 +531,23 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     }
   }
   runClaudeButton.dataset.routeHealth = health?.tone ?? 'unknown';
-  runClaudeButton.title = health?.detail ?? '';
+  const launchBlocked = !installationReady || Boolean(health?.blocking);
+  runClaudeButton.disabled = launchInProgress || launchBlocked;
+  runClaudeButton.title = !installationReady
+    ? installation.message
+    : health?.blocking
+      ? health.detail
+      : '使用当前已验证配置新建独立 Claude 会话';
+  footerConnection.dataset.tone = health?.tone ?? (installationReady ? 'warning' : 'error');
+  footerConnectionLabel.textContent = health
+    ? health.tone === 'success'
+      ? '连接正常'
+      : health.tone === 'warning'
+        ? '连接需确认'
+        : '连接异常'
+    : installationReady
+      ? '连接待测试'
+      : '环境未就绪';
 
   claudeLiveIndicator.dataset.active = String(state.active);
   claudeLiveIndicator.textContent = state.active ? '实时同步' : '未运行';
@@ -491,6 +567,11 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
         : 'normal';
   contextUsed.textContent = `${formatTokenCount(used)} 已用`;
   contextSize.textContent = `窗口 ${formatTokenCount(size)}`;
+  footerContextRing.style.setProperty('--context-progress', `${percentage ?? 0}%`);
+  footerContextRing.dataset.level = contextProgress.dataset.level;
+  footerContextLabel.textContent =
+    percentage === undefined ? '上下文 —' : `上下文 ${percentage.toFixed(0)}%`;
+  footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
 
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
   metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
@@ -505,7 +586,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   claudeRuntimeWarning.hidden = !state.warning;
   claudeRuntimeWarning.textContent = state.warning ?? '';
   for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
-    button.disabled = launchInProgress || !installationReady || Boolean(health?.blocking);
+    button.disabled = launchInProgress || launchBlocked;
   }
 
   if (configFormSessionId !== state.sessionId) {
@@ -531,160 +612,40 @@ const loadClaudeState = async (sessionId: string): Promise<void> => {
   }
 };
 
-const loadClaudeSessions = async (sessionId: string): Promise<void> => {
-  if (sessionLoadInProgress) {
+/**
+ * Resumes a stored Claude conversation in its own terminal, so a project folder can keep several
+ * historical conversations running side by side instead of restarting the active one.
+ */
+async function resumeStoredConversation(
+  projectPath: string,
+  session: ClaudeSessionMetadata,
+): Promise<void> {
+  if (launchInProgress) {
     return;
   }
-  sessionLoadInProgress = true;
-  try {
-    const sessions = await window.controlPanel.getClaudeSessions(sessionId);
-    renderClaudeSessions(sessions);
-  } catch {
-    sessionCount.textContent = '加载失败';
-    sessionList.innerHTML = '<div class="session-empty">无法读取会话历史</div>';
-  } finally {
-    sessionLoadInProgress = false;
-  }
-};
-
-const renderClaudeSessions = (sessions: ClaudeSessionMetadata[]): void => {
-  sessionCount.textContent = sessions.length === 0 ? '暂无历史' : `${sessions.length} 个会话`;
-  sessionList.replaceChildren();
-
-  if (sessions.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'session-empty';
-    empty.textContent = '还没有历史会话。启动 Claude Code 后会在这里显示。';
-    sessionList.append(empty);
-    return;
-  }
-
-  for (const session of sessions) {
-    const card = document.createElement('article');
-    card.className = 'session-card';
-
-    const header = document.createElement('div');
-    header.className = 'session-card__header';
-    const title = document.createElement('strong');
-    title.textContent = session.sessionName || session.sessionId.slice(0, 8);
-    const time = document.createElement('span');
-    time.className = 'session-card__time';
-    time.textContent = formatRelativeTime(session.lastActiveAt);
-    header.append(title, time);
-
-    const meta = document.createElement('div');
-    meta.className = 'session-card__meta';
-
-    if (session.messageCount > 0) {
-      const messages = document.createElement('span');
-      messages.textContent = `${session.messageCount} 条消息`;
-      meta.append(messages);
-    }
-
-    const totalTokens = (session.inputTokens || 0) + (session.outputTokens || 0);
-    if (totalTokens > 0) {
-      const tokens = document.createElement('span');
-      tokens.textContent = `${formatTokenCount(totalTokens)} tokens`;
-      meta.append(tokens);
-    }
-
-    if (session.estimatedCostUsd !== undefined) {
-      const cost = document.createElement('span');
-      cost.textContent = `$${session.estimatedCostUsd.toFixed(4)}`;
-      meta.append(cost);
-    }
-
-    if (session.modelId) {
-      const model = document.createElement('span');
-      model.textContent = session.modelId;
-      model.className = 'session-card__model';
-      meta.append(model);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'session-card__actions';
-
-    const launchButton = document.createElement('button');
-    launchButton.type = 'button';
-    launchButton.textContent = '启动此会话';
-    launchButton.className = 'button button--primary button--small';
-    launchButton.addEventListener('click', () => {
-      void launchSessionById(session.conversationId);
-    });
-
-    const deleteButton = document.createElement('button');
-    deleteButton.type = 'button';
-    deleteButton.textContent = '删除';
-    deleteButton.className = 'button button--quiet button--small';
-    deleteButton.addEventListener('click', () => {
-      void deleteSession(session);
-    });
-
-    actions.append(launchButton, deleteButton);
-    card.append(header, meta, actions);
-    sessionList.append(card);
-  }
-};
-
-const launchSessionById = async (conversationId: string): Promise<void> => {
-  const status = activeStatus();
-  if (!status || launchInProgress) {
-    return;
-  }
-
   launchInProgress = true;
-  const existingState = claudeStates.get(status.id);
-  if (existingState) {
-    renderClaudeState(existingState);
-  }
-
   try {
-    terminalViews.get(status.id)?.terminal.clear();
-    const result = await window.controlPanel.launchClaudeWithSession(status.id, conversationId);
-    renderClaudeState(result.state);
-    if (!result.ok) {
-      showToast(result.error ?? '无法启动 Claude Code。', 'error');
-      return;
-    }
-    showToast('正在启动历史会话');
-    terminalViews.get(status.id)?.terminal.focus();
-  } catch {
-    showToast('无法启动 Claude Code。', 'error');
-  } finally {
-    launchInProgress = false;
-    const latest = claudeStates.get(status.id);
-    if (latest) {
-      renderClaudeState(latest);
-    }
-  }
-};
-
-const deleteSession = async (session: ClaudeSessionMetadata): Promise<void> => {
-  const status = activeStatus();
-  if (!status) {
-    return;
-  }
-
-  const sessionName = session.sessionName || session.sessionId.slice(0, 8);
-  if (!window.confirm(`确定删除会话"${sessionName}"？此操作无法撤销。`)) {
-    return;
-  }
-
-  try {
-    const deleted = await window.controlPanel.deleteClaudeSession(
-      status.id,
+    const result = await window.controlPanel.openStoredConversation(
+      projectPath,
       session.conversationId,
     );
-    if (deleted) {
-      showToast(`已删除会话 ${sessionName}`);
-      void loadClaudeSessions(status.id);
-    } else {
-      showToast('无法删除该会话', 'error');
+    renderWorkspace(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法恢复这个历史会话。', 'error');
+      return;
     }
+    const label = session.sessionName || session.sessionId.slice(0, 8);
+    showToast(`已在新对话中恢复 ${label}`);
+    window.setTimeout(() => {
+      fitActiveTerminal();
+      terminalViews.get(result.state.activeSessionId)?.terminal.focus();
+    }, 60);
   } catch {
-    showToast('删除会话时发生错误', 'error');
+    showToast('无法恢复这个历史会话。', 'error');
+  } finally {
+    launchInProgress = false;
   }
-};
+}
 
 const openExternal = async (url: string): Promise<void> => {
   if (!(await window.controlPanel.openExternal(url))) {
@@ -856,10 +817,12 @@ const runRouterProviderSave = async (input: SaveClaudeRouterProviderInput): Prom
   routerOperationInProgress = true;
   renderRouterManagement(
     routerManagementState ?? {
+      canUninstall: false,
       checkedAt: Date.now(),
       endpoint: 'http://127.0.0.1:3456',
       gatewayState: 'unknown',
       installed: false,
+      installationKind: 'unknown',
       manageable: false,
       managementAvailable: false,
       message: '正在保存 Router Provider…',
@@ -989,6 +952,158 @@ const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
   configureRouterProviderButton.textContent = '检查 Provider';
 };
 
+/**
+ * Greys out the whole Router panel when the active project does not route through 3456. The user
+ * should never have to guess whether the Router controls apply to what they are configuring.
+ */
+const applyRouterRelevance = (): void => {
+  const advice = connectionAdviceState;
+  const irrelevant = advice !== undefined && !advice.routerNeeded;
+  routerManager.dataset.relevance = irrelevant ? 'idle' : 'active';
+  routerUnusedNote.hidden = !irrelevant;
+  routerUnusedNote.textContent = advice?.routerRunningButUnused
+    ? '当前项目不经过 Router，但本机网关仍在运行——它只是白占端口和内存，可以关掉。'
+    : '当前项目不经过 Router，下面的设置对它没有作用。仍可展开管理其他项目要用的网关。';
+  routerActions.dataset.relevance = irrelevant ? 'idle' : 'active';
+  const updateAvailable =
+    softwareUpdates?.claudeCode.updateAvailable || softwareUpdates?.router.updateAvailable;
+  connectionRailDot.hidden = (!advice || advice.tone === 'success') && !updateAvailable;
+  connectionRailDot.dataset.tone = updateAvailable ? 'warning' : (advice?.tone ?? 'info');
+  connectionRailDot.title = updateAvailable
+    ? [
+        softwareUpdates?.claudeCode.updateAvailable &&
+          `Claude Code ${softwareUpdates.claudeCode.latestVersion ?? ''}`,
+        softwareUpdates?.router.updateAvailable &&
+          `Router ${softwareUpdates.router.latestVersion ?? ''}`,
+      ]
+        .filter(Boolean)
+        .join('、')
+    : (advice?.title ?? '');
+};
+
+const adviceActionLabel: Record<ClaudeConnectionAdviceAction, string> = {
+  'import-curl': '粘贴中转站 cURL',
+  'install-router': '安装 Router',
+  'open-router-management': '打开 Router 管理页',
+  'save-config': '去填写接入配置',
+  'start-router': '启动 Router',
+  'stop-router': '停止空闲 Router',
+  'switch-to-direct': '改为直连中转站',
+  'switch-to-router': '改为经过 Router',
+  'test-connection': '做一次真实连接测试',
+};
+
+const focusConnectionForm = (): void => {
+  selectRailTab('connection');
+  claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+const runAdviceAction = (action: ClaudeConnectionAdviceAction, button: HTMLButtonElement): void => {
+  switch (action) {
+    case 'install-router': {
+      void runRouterOperation(
+        (sessionId) => window.controlPanel.installClaudeRouter(sessionId),
+        '正在下载并校验…',
+        button,
+      );
+      return;
+    }
+    case 'start-router': {
+      void runRouterOperation(
+        (sessionId) => window.controlPanel.startClaudeRouter(sessionId),
+        '正在启动…',
+        button,
+      );
+      return;
+    }
+    case 'stop-router': {
+      void runRouterOperation(
+        (sessionId) => window.controlPanel.stopClaudeRouter(sessionId),
+        '正在停止…',
+        button,
+      );
+      return;
+    }
+    case 'open-router-management': {
+      void runRouterOperation(
+        (sessionId) => window.controlPanel.openClaudeRouterManagement(sessionId),
+        '正在打开…',
+        button,
+      );
+      return;
+    }
+    case 'import-curl': {
+      selectRailTab('connection');
+      curlInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      curlInput.focus();
+      return;
+    }
+    case 'save-config': {
+      focusConnectionForm();
+      claudeCredential.focus();
+      return;
+    }
+    case 'switch-to-direct': {
+      claudePreset.value = 'custom';
+      applyPresetUi('custom', true);
+      claudeBaseUrl.value = '';
+      focusConnectionForm();
+      claudeBaseUrl.focus();
+      showToast('已切到直连模式；填入中转站地址后保存即可');
+      return;
+    }
+    case 'switch-to-router': {
+      claudePreset.value = 'gateway';
+      applyPresetUi('gateway', true);
+      claudeBaseUrl.value = 'http://127.0.0.1:3456';
+      focusConnectionForm();
+      showToast('已填入本机 Router 地址；确认模型后保存');
+      return;
+    }
+    case 'test-connection': {
+      selectRailTab('connection');
+      void runConnectionTest();
+    }
+  }
+};
+
+const renderConnectionAdvice = (advice: ClaudeConnectionAdvice): void => {
+  connectionAdviceState = advice;
+  connectionAdvice.dataset.tone = advice.tone;
+  connectionAdviceTitle.textContent = advice.title;
+  connectionAdviceDetail.textContent = advice.detail;
+  connectionAdviceActions.replaceChildren();
+
+  for (const [index, action] of advice.actions.entries()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `button button--${index === 0 ? 'primary' : 'secondary'} button--small`;
+    button.textContent = adviceActionLabel[action];
+    button.addEventListener('click', () => {
+      runAdviceAction(action, button);
+    });
+    connectionAdviceActions.append(button);
+  }
+  applyRouterRelevance();
+};
+
+const loadConnectionAdvice = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status || adviceRefreshInProgress) {
+    return;
+  }
+  adviceRefreshInProgress = true;
+  try {
+    renderConnectionAdvice(await window.controlPanel.getClaudeConnectionAdvice(status.id));
+  } catch {
+    connectionAdvice.dataset.tone = 'warning';
+    connectionAdviceTitle.textContent = '暂时无法判断接入方式';
+    connectionAdviceDetail.textContent = '仍可手动检查下面的 Router 与接入配置。';
+  } finally {
+    adviceRefreshInProgress = false;
+  }
+};
+
 function renderRouterManagement(state: ClaudeRouterManagementState): void {
   routerManagementState = state;
   const displayState = state.installed ? state.gatewayState : 'not-installed';
@@ -1003,9 +1118,14 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   routerStatusDetail.textContent = state.message;
   routerVersion.textContent = state.version ? `v${state.version}` : '版本待识别';
   renderRouterRemediation(state);
+  applyRouterRelevance();
 
   installRouterButton.disabled = routerOperationInProgress;
-  installRouterButton.textContent = state.installed ? '安装 / 更新官方版' : '一键获取官方安装包';
+  installRouterButton.textContent = state.installed ? '一键更新 / 重装' : '一键安装';
+  uninstallRouterButton.disabled = routerOperationInProgress || !state.canUninstall;
+  uninstallRouterButton.title = state.canUninstall
+    ? `卸载当前${state.installationKind === 'mixed' ? '混合' : state.installationKind}安装`
+    : '未检测到可调用的卸载程序';
   startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动 Router';
   startRouterButton.disabled =
     routerOperationInProgress ||
@@ -1032,17 +1152,51 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   if (!state.managementAvailable) {
     const empty = document.createElement('div');
     empty.className = 'router-provider-empty';
-    empty.textContent = state.installed
-      ? '启动 Router 后即可在这里增删 Provider。'
-      : '完成官方安装后，点击“启动 Router”。';
+    const copy = document.createElement('span');
+    copy.textContent = state.installed
+      ? '启动 Router 后即可在这里增删、编辑网关 Provider。'
+      : '完成 Router 安装后，点击“启动 Router”即可管理网关。';
+    empty.append(copy);
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'button button--secondary button--small';
+    action.textContent = state.installed ? '启动 Router 以管理网关' : '安装 Router';
+    action.disabled = routerOperationInProgress;
+    action.addEventListener('click', () => {
+      void runRouterOperation(
+        (sessionId) =>
+          state.installed
+            ? window.controlPanel.startClaudeRouter(sessionId)
+            : window.controlPanel.installClaudeRouterFromSource(
+                sessionId,
+                routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
+              ),
+        state.installed ? '正在启动…' : '正在安装…',
+        action,
+      );
+    });
+    empty.append(action);
     routerProviderList.append(empty);
+    updateSmartGuidance();
     return;
   }
   if (state.providers.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'router-provider-empty';
-    empty.textContent = '还没有 Provider；可手动添加，或粘贴 OpenAI cURL 后一键导入。';
+    const copy = document.createElement('span');
+    copy.textContent = '还没有 Provider；可手动添加，或粘贴 OpenAI cURL 后一键导入。';
+    empty.append(copy);
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'button button--secondary button--small';
+    action.textContent = '添加第一个 Provider';
+    action.disabled = routerOperationInProgress;
+    action.addEventListener('click', () => {
+      openRouterProviderForm();
+    });
+    empty.append(action);
     routerProviderList.append(empty);
+    updateSmartGuidance();
     return;
   }
 
@@ -1323,7 +1477,8 @@ const updateSmartGuidance = (): void => {
   const curlResult = lastCurlAnalysis;
   const routerState = routerManagementState;
 
-  // Clear guidance if no analysis
+  // Guidance here is strictly about the pasted cURL. The project-level "how should this connect"
+  // question is answered unconditionally by #connection-advice, so there is nothing to say yet.
   if (!curlResult) {
     smartGuidance.hidden = true;
     return;
@@ -1493,20 +1648,50 @@ const setWorkbenchOpen = (open: boolean): void => {
   workbenchTrigger.setAttribute('aria-expanded', String(open));
   if (open && workspaceState.activeSessionId) {
     void loadClaudeState(workspaceState.activeSessionId);
-    void loadClaudeSessions(workspaceState.activeSessionId);
+    void loadConnectionAdvice();
+  }
+};
+
+/**
+ * The connection page polls, because Router state changes underneath us (installs, crashes, the
+ * user starting CCR by hand). Nothing else needs a timer, so it only runs while that tab is open.
+ */
+const setConnectionPolling = (enabled: boolean): void => {
+  if (enabled) {
     void loadGatewayDiagnostics();
     void loadRouterManagement();
+    void loadConnectionAdvice();
+    void loadSoftwareUpdates(false);
     if (gatewayRefreshTimer === undefined) {
       gatewayRefreshTimer = window.setInterval(() => {
         void loadGatewayDiagnostics();
         void loadRouterManagement();
+        void loadConnectionAdvice();
+        void loadSoftwareUpdates(false);
       }, 6_000);
     }
-  } else if (gatewayRefreshTimer !== undefined) {
+    return;
+  }
+  if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
     gatewayRefreshTimer = undefined;
   }
 };
+
+function selectRailTab(tab: string): void {
+  for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
+    const selected = button.dataset.railTab === tab;
+    button.classList.toggle('activity-rail__button--active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  for (const page of document.querySelectorAll<HTMLElement>('[data-rail-page]')) {
+    page.classList.toggle('rail-page--active', page.dataset.railPage === tab);
+  }
+  setConnectionPolling(tab === 'connection');
+  if (tab === 'plugins') {
+    void loadPluginCatalog(false);
+  }
+}
 
 const selectWorkbenchPage = (page: string): void => {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
@@ -1515,13 +1700,421 @@ const selectWorkbenchPage = (page: string): void => {
   for (const panel of document.querySelectorAll<HTMLElement>('[data-workbench-page]')) {
     panel.classList.toggle('workbench-page--active', panel.dataset.workbenchPage === page);
   }
-  if (page === 'connection') {
-    void loadGatewayDiagnostics();
-    void loadRouterManagement();
+};
+
+const pluginKey = (plugin: ClaudePluginView): string =>
+  `${plugin.marketplaceName}/${plugin.name}`.toLowerCase();
+
+const pluginMatchesSearch = (plugin: ClaudePluginView, needle: string): boolean =>
+  needle === '' ||
+  (() => {
+    const localized = localizePluginCopy(plugin);
+    return [
+      plugin.name,
+      plugin.description,
+      plugin.marketplaceName,
+      plugin.sourceLabel,
+      localized.category,
+      localized.description,
+    ].some((field) => field.toLowerCase().includes(needle));
+  })();
+
+const selectPluginTab = (tab: string): void => {
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-tab]')) {
+    button.classList.toggle('plugin-tab--active', button.dataset.pluginTab === tab);
   }
-  if (page === 'session' && workspaceState.activeSessionId) {
-    void loadClaudeSessions(workspaceState.activeSessionId);
+  for (const panel of document.querySelectorAll<HTMLElement>('[data-plugin-panel]')) {
+    panel.classList.toggle('plugin-panel--active', panel.dataset.pluginPanel === tab);
   }
+};
+
+const renderSoftwareUpdates = (state: SoftwareUpdateState): void => {
+  softwareUpdates = state;
+  const target = state.claudeCode;
+  claudeUpdateDetail.textContent = target.message;
+  claudeUpdateVersion.textContent = target.installed
+    ? `v${target.currentVersion ?? '未知'}${target.updateAvailable ? ` → ${target.latestVersion}` : ''}`
+    : target.latestVersion
+      ? `可安装 v${target.latestVersion}`
+      : '未安装';
+  claudeUpdateVersion.dataset.update = String(target.updateAvailable);
+  installUpdateClaudeButton.textContent = target.installed
+    ? target.updateAvailable
+      ? '一键更新'
+      : '重新安装 / 检查'
+    : '一键安装';
+  installUpdateClaudeButton.disabled = softwareUpdateInProgress;
+  softwareUpdateCheckedAt.textContent = `上次检查 ${new Date(state.checkedAt).toLocaleTimeString(
+    'zh-CN',
+    { hour: '2-digit', minute: '2-digit' },
+  )}`;
+  applyRouterRelevance();
+};
+
+const loadSoftwareUpdates = async (refresh = false): Promise<void> => {
+  if (softwareUpdateInProgress) {
+    return;
+  }
+  softwareUpdateInProgress = true;
+  refreshSoftwareUpdatesButton.disabled = true;
+  try {
+    renderSoftwareUpdates(await window.controlPanel.getSoftwareUpdates(refresh));
+  } catch {
+    claudeUpdateDetail.textContent = '暂时无法读取软件版本，请检查网络后重试。';
+  } finally {
+    softwareUpdateInProgress = false;
+    refreshSoftwareUpdatesButton.disabled = false;
+    installUpdateClaudeButton.disabled = false;
+  }
+};
+
+const runClaudeInstallUpdate = async (): Promise<void> => {
+  if (softwareUpdateInProgress) {
+    return;
+  }
+  softwareUpdateInProgress = true;
+  installUpdateClaudeButton.disabled = true;
+  const original = installUpdateClaudeButton.textContent;
+  installUpdateClaudeButton.textContent = '正在安装，请稍候…';
+  try {
+    const result = await window.controlPanel.installOrUpdateClaudeCode(
+      claudeInstallSource.value as 'native' | 'npm' | 'npmmirror',
+    );
+    renderSoftwareUpdates(result.state);
+    showToast(result.message, result.ok ? 'success' : 'error');
+    const status = activeStatus();
+    if (status) {
+      void loadClaudeState(status.id);
+    }
+  } catch {
+    showToast('Claude Code 安装或更新发生异常。', 'error');
+  } finally {
+    softwareUpdateInProgress = false;
+    installUpdateClaudeButton.textContent = original;
+    installUpdateClaudeButton.disabled = false;
+  }
+};
+
+const runPluginMutation = async (
+  operation: () => Promise<ClaudePluginOperationResult>,
+  busyLabel: string,
+  button: HTMLButtonElement,
+): Promise<void> => {
+  if (pluginMutationInProgress) {
+    return;
+  }
+  pluginMutationInProgress = true;
+  const originalLabel = button.textContent;
+  button.textContent = busyLabel;
+  button.disabled = true;
+  pluginStatus.textContent = `${busyLabel}这一步会调用 claude 命令行，可能需要几十秒。`;
+  try {
+    const result = await operation();
+    renderPluginCatalog(result.catalog);
+    showToast(result.message, result.ok ? 'success' : 'error');
+  } catch {
+    showToast('插件操作发生异常。', 'error');
+  } finally {
+    pluginMutationInProgress = false;
+    button.textContent = originalLabel;
+    button.disabled = false;
+  }
+};
+
+const pluginActionButton = (
+  label: string,
+  variant: 'primary' | 'quiet' | 'secondary',
+  busyLabel: string,
+  operation: () => Promise<ClaudePluginOperationResult>,
+): HTMLButtonElement => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `button button--${variant} button--small`;
+  button.textContent = label;
+  button.disabled = pluginMutationInProgress;
+  button.addEventListener('click', () => {
+    void runPluginMutation(operation, busyLabel, button);
+  });
+  return button;
+};
+
+const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'plugin-card';
+  card.dataset.enabled = String(plugin.enabled);
+
+  const header = document.createElement('div');
+  header.className = 'plugin-card__header';
+  const title = document.createElement('strong');
+  title.textContent = plugin.name;
+  const badge = document.createElement('span');
+  badge.className = 'plugin-card__badge';
+  badge.textContent = plugin.updateAvailable
+    ? '可更新'
+    : plugin.installed
+      ? plugin.enabled
+        ? '已启用'
+        : '已停用'
+      : '未安装';
+  badge.dataset.update = String(plugin.updateAvailable);
+  header.append(title, badge);
+
+  const localized = localizePluginCopy(plugin);
+  const description = document.createElement('p');
+  description.textContent = localized.description;
+
+  const original = document.createElement('details');
+  original.className = 'plugin-card__original';
+  original.hidden = !localized.originalDescription;
+  const originalSummary = document.createElement('summary');
+  originalSummary.textContent = '查看英文原文';
+  const originalCopy = document.createElement('p');
+  originalCopy.textContent = localized.originalDescription ?? '';
+  original.append(originalSummary, originalCopy);
+
+  const meta = document.createElement('div');
+  meta.className = 'plugin-card__meta';
+  const source = document.createElement('span');
+  source.textContent = plugin.sourceLabel;
+  const category = document.createElement('span');
+  category.className = 'plugin-card__category';
+  category.textContent = localized.category;
+  meta.append(category, source);
+  if (plugin.version) {
+    const version = document.createElement('span');
+    version.textContent = `v${plugin.version}`;
+    meta.append(version);
+  }
+  if (plugin.latestVersion && plugin.updateAvailable) {
+    const latest = document.createElement('span');
+    latest.textContent = `最新 v${plugin.latestVersion}`;
+    meta.append(latest);
+  }
+  if (plugin.scope) {
+    const scope = document.createElement('span');
+    scope.textContent =
+      plugin.scope === 'user' ? '用户级' : plugin.scope === 'project' ? '项目级' : '本机级';
+    meta.append(scope);
+  }
+  if (plugin.installCount !== undefined) {
+    const installs = document.createElement('span');
+    installs.textContent = `${formatTokenCount(plugin.installCount)} 次安装`;
+    meta.append(installs);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'plugin-card__actions';
+  if (plugin.installed) {
+    actions.append(
+      pluginActionButton(
+        plugin.enabled ? '停用' : '启用',
+        'secondary',
+        plugin.enabled ? '正在停用…' : '正在启用…',
+        () => window.controlPanel.setClaudePluginEnabled(plugin.pluginId, !plugin.enabled),
+      ),
+      pluginActionButton('更新', 'quiet', '正在更新…', () =>
+        window.controlPanel.updateClaudePlugin(plugin.pluginId),
+      ),
+    );
+    const uninstall = document.createElement('button');
+    uninstall.type = 'button';
+    uninstall.className = 'button button--quiet button--small plugin-card__danger';
+    uninstall.textContent = '卸载';
+    uninstall.disabled = pluginMutationInProgress;
+    uninstall.addEventListener('click', () => {
+      if (!window.confirm(`卸载插件“${plugin.name}”？`)) {
+        return;
+      }
+      void runPluginMutation(
+        () => window.controlPanel.uninstallClaudePlugin(plugin.pluginId),
+        '正在卸载…',
+        uninstall,
+      );
+    });
+    actions.append(uninstall);
+  } else {
+    actions.append(
+      pluginActionButton('安装', 'primary', '正在安装…', () =>
+        window.controlPanel.installClaudePlugin(plugin.pluginId),
+      ),
+    );
+  }
+
+  card.append(header, description, original, meta, actions);
+  return card;
+};
+
+const renderPluginList = (
+  container: HTMLElement,
+  plugins: ClaudePluginView[],
+  emptyMessage: string,
+): void => {
+  container.replaceChildren();
+  if (plugins.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'plugin-empty';
+    empty.textContent = emptyMessage;
+    container.append(empty);
+    return;
+  }
+  for (const plugin of plugins) {
+    container.append(renderPluginCard(plugin));
+  }
+};
+
+function renderPluginCatalog(catalog: ClaudePluginCatalog): void {
+  pluginCatalog = catalog;
+  const needle = pluginSearch.value.trim().toLowerCase();
+  const installed = catalog.installed.filter((plugin) => pluginMatchesSearch(plugin, needle));
+  const installedKeys = new Set(catalog.installed.map(pluginKey));
+  const available = catalog.available
+    .filter((plugin) => !installedKeys.has(pluginKey(plugin)))
+    .filter((plugin) => pluginMatchesSearch(plugin, needle));
+
+  pluginInstalledCount.textContent = String(installed.length);
+  pluginAvailableCount.textContent = String(available.length);
+  pluginRailDot.hidden = catalog.updatesAvailable === 0;
+  pluginRailDot.dataset.tone = 'warning';
+  pluginRailDot.title =
+    catalog.updatesAvailable > 0 ? `${catalog.updatesAvailable} 个插件可更新` : '';
+  pluginStatus.textContent = catalog.cliAvailable
+    ? `${catalog.message}${
+        catalog.updatesAvailable > 0 ? ` · ${catalog.updatesAvailable} 个可更新` : ''
+      } · 上次读取 ${new Date(catalog.checkedAt).toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`
+    : catalog.message;
+
+  renderPluginList(
+    pluginInstalledList,
+    installed,
+    needle ? '没有匹配的已安装插件。' : '还没有安装任何插件。到“可安装”里挑一个吧。',
+  );
+  renderPluginList(
+    pluginAvailableList,
+    available,
+    needle
+      ? '没有匹配的可安装插件。'
+      : '当前插件市场里没有更多可安装的插件；可以在下面添加新的市场。',
+  );
+
+  pluginMarketplaceList.replaceChildren();
+  if (catalog.marketplaces.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'plugin-empty';
+    empty.textContent = '还没有添加插件市场。添加后即可浏览它提供的插件。';
+    pluginMarketplaceList.append(empty);
+  }
+  for (const marketplace of catalog.marketplaces) {
+    pluginMarketplaceList.append(renderMarketplaceCard(marketplace));
+  }
+  addPluginMarketplaceButton.disabled = pluginMutationInProgress || !catalog.cliAvailable;
+  updateAllPluginsButton.disabled =
+    pluginMutationInProgress || !catalog.cliAvailable || catalog.installed.length === 0;
+}
+
+const renderMarketplaceCard = (marketplace: ClaudePluginMarketplaceView): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'plugin-card plugin-card--marketplace';
+
+  const header = document.createElement('div');
+  header.className = 'plugin-card__header';
+  const title = document.createElement('strong');
+  title.textContent = marketplace.name;
+  header.append(title);
+
+  const source = document.createElement('code');
+  source.textContent = marketplace.repo ?? marketplace.source;
+
+  const actions = document.createElement('div');
+  actions.className = 'plugin-card__actions';
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'button button--quiet button--small plugin-card__danger';
+  remove.textContent = '移除市场';
+  remove.disabled = pluginMutationInProgress;
+  remove.addEventListener('click', () => {
+    if (!window.confirm(`移除插件市场“${marketplace.name}”？来自它的插件将不再可见。`)) {
+      return;
+    }
+    void runPluginMutation(
+      () => window.controlPanel.removeClaudePluginMarketplace(marketplace.name),
+      '正在移除…',
+      remove,
+    );
+  });
+  actions.append(remove);
+
+  card.append(header, source, actions);
+  return card;
+};
+
+async function loadPluginCatalog(refresh: boolean): Promise<void> {
+  if (pluginLoadInProgress) {
+    return;
+  }
+  pluginLoadInProgress = true;
+  refreshPluginsButton.disabled = true;
+  updateAllPluginsButton.disabled = true;
+  if (refresh || !pluginCatalog) {
+    pluginStatus.textContent = '正在读取插件列表…';
+  }
+  try {
+    renderPluginCatalog(await window.controlPanel.getClaudePlugins(refresh));
+  } catch {
+    pluginStatus.textContent = '无法读取插件列表；请确认已安装 Claude Code 命令行。';
+  } finally {
+    pluginLoadInProgress = false;
+    refreshPluginsButton.disabled = false;
+    updateAllPluginsButton.disabled = !pluginCatalog?.cliAvailable;
+  }
+}
+
+const pasteIntoActiveTerminal = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status || status.phase !== 'running') {
+    return;
+  }
+  const text = await window.controlPanel.readClipboardText();
+  if (text) {
+    window.controlPanel.writeTerminal(status.id, text.replace(/\r?\n/g, '\r'));
+  }
+  terminalViews.get(status.id)?.terminal.focus();
+};
+
+const copyActiveTerminalSelection = async (): Promise<void> => {
+  const terminal = terminalViews.get(workspaceState.activeSessionId)?.terminal;
+  if (terminal?.hasSelection()) {
+    await window.controlPanel.writeClipboardText(terminal.getSelection());
+  }
+  terminal?.focus();
+};
+
+const hideTerminalContextMenu = (): void => {
+  terminalContextMenu.hidden = true;
+};
+
+const showTerminalContextMenu = (event: MouseEvent): void => {
+  event.preventDefault();
+  const terminal = terminalViews.get(workspaceState.activeSessionId)?.terminal;
+  const copy = terminalContextMenu.querySelector<HTMLButtonElement>(
+    '[data-terminal-context-action="copy"]',
+  );
+  if (copy) {
+    copy.disabled = !terminal?.hasSelection();
+  }
+  terminalContextMenu.hidden = false;
+  const menuRect = terminalContextMenu.getBoundingClientRect();
+  terminalContextMenu.style.left = `${Math.max(
+    8,
+    Math.min(event.clientX, window.innerWidth - menuRect.width - 8),
+  )}px`;
+  terminalContextMenu.style.top = `${Math.max(
+    56,
+    Math.min(event.clientY, window.innerHeight - menuRect.height - 8),
+  )}px`;
+  terminalContextMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
 };
 
 const createTerminalView = (sessionId: string): TerminalView => {
@@ -1551,9 +2144,22 @@ const createTerminalView = (sessionId: string): TerminalView => {
       terminal.clear();
       return false;
     }
+    if (event.ctrlKey && !event.shiftKey && event.code === 'KeyC' && terminal.hasSelection()) {
+      void window.controlPanel.writeClipboardText(terminal.getSelection());
+      return false;
+    }
+    if (event.ctrlKey && !event.shiftKey && event.code === 'KeyV') {
+      void pasteIntoActiveTerminal();
+      return false;
+    }
+    if (event.shiftKey && !event.ctrlKey && event.code === 'Enter') {
+      window.controlPanel.writeTerminal(sessionId, '\n');
+      return false;
+    }
 
     return true;
   });
+  container.addEventListener('contextmenu', showTerminalContextMenu);
 
   const view = { container, fitAddon, terminal };
   terminalViews.set(sessionId, view);
@@ -1581,11 +2187,94 @@ const fitActiveTerminal = (): void => {
   }
 };
 
+const clamp = (value: number, minimum: number, maximum: number): number =>
+  Math.min(maximum, Math.max(minimum, value));
+
+const setPanelWidth = (value: number): void => {
+  const narrow = window.innerWidth <= 900;
+  const minimum = narrow ? 240 : 270;
+  const width = clamp(
+    value,
+    minimum,
+    Math.max(minimum, Math.min(560, window.innerWidth - (narrow ? 360 : 520))),
+  );
+  document.documentElement.style.setProperty('--rail-w', `${width}px`);
+  localStorage.setItem('claudedock.panelWidth', String(width));
+  window.requestAnimationFrame(fitActiveTerminal);
+};
+
+const setDrawerWidth = (value: number): void => {
+  const minimum = window.innerWidth <= 900 ? 320 : 360;
+  const width = clamp(value, minimum, Math.max(minimum, Math.min(760, window.innerWidth - 140)));
+  document.documentElement.style.setProperty('--drawer-w', `${width}px`);
+  localStorage.setItem('claudedock.drawerWidth', String(width));
+  window.requestAnimationFrame(fitActiveTerminal);
+};
+
+const installResizer = (
+  handle: HTMLElement,
+  current: () => number,
+  apply: (value: number) => void,
+  direction: 1 | -1,
+): void => {
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = current();
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('is-resizing');
+    const move = (moveEvent: PointerEvent): void => {
+      apply(startWidth + (moveEvent.clientX - startX) * direction);
+    };
+    const finish = (): void => {
+      handle.removeEventListener('pointermove', move);
+      document.body.classList.remove('is-resizing');
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', finish, { once: true });
+    handle.addEventListener('pointercancel', finish, { once: true });
+  });
+  handle.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+      return;
+    }
+    event.preventDefault();
+    const delta = event.key === 'ArrowRight' ? 12 : -12;
+    apply(current() + delta * direction);
+  });
+};
+
+const storedPanelWidth = Number(localStorage.getItem('claudedock.panelWidth'));
+const storedDrawerWidth = Number(localStorage.getItem('claudedock.drawerWidth'));
+if (Number.isFinite(storedPanelWidth) && storedPanelWidth > 0) {
+  setPanelWidth(storedPanelWidth);
+}
+if (Number.isFinite(storedDrawerWidth) && storedDrawerWidth > 0) {
+  setDrawerWidth(storedDrawerWidth);
+}
+installResizer(
+  panelResizer,
+  () => document.querySelector<HTMLElement>('.control-panel')?.offsetWidth ?? 320,
+  setPanelWidth,
+  1,
+);
+installResizer(
+  drawerResizer,
+  () => claudeWorkbench.getBoundingClientRect().width,
+  setDrawerWidth,
+  -1,
+);
+window.addEventListener('resize', () => {
+  setPanelWidth(document.querySelector<HTMLElement>('.control-panel')?.offsetWidth ?? 320);
+  setDrawerWidth(claudeWorkbench.getBoundingClientRect().width || 468);
+});
+
 const renderActiveStatus = (status: TerminalStatus): void => {
   const copy = phaseCopy[status.phase];
+  const openFolders = workspaceState.projects.filter((project) => project.open).length;
 
   document.body.dataset.phase = status.phase;
-  titleStatus.textContent = `${copy.detail} · ${workspaceState.sessions.length} 个项目`;
+  titleStatus.textContent = `${copy.detail} · ${openFolders} 个项目 / ${workspaceState.sessions.length} 个对话`;
   statusPill.textContent = copy.pill;
   sessionDetail.textContent = status.message ?? copy.detail;
   sessionPid.textContent = status.pid ? `PID ${status.pid}` : 'PID —';
@@ -1594,14 +2283,15 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
   emptyState.classList.toggle('terminal-empty-state--hidden', terminalIsVisible);
   emptyState.setAttribute('aria-hidden', String(terminalIsVisible));
-  terminalProject.textContent = projectNameFromPath(status.cwd);
+  terminalProject.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
   terminalProject.title = status.cwd;
+  workbenchScope.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
 };
 
 const activateProject = async (sessionId: string): Promise<void> => {
   const result = await window.controlPanel.activateProject(sessionId);
   if (!result.ok) {
-    showToast(result.error ?? '无法切换项目。', 'error');
+    showToast(result.error ?? '无法切换对话。', 'error');
     return;
   }
   renderWorkspace(result.state);
@@ -1614,70 +2304,314 @@ const activateProject = async (sessionId: string): Promise<void> => {
 const closeProject = async (status: TerminalStatus): Promise<void> => {
   if (
     status.phase === 'running' &&
-    !window.confirm(`关闭“${projectNameFromPath(status.cwd)}”会终止其 PowerShell 进程，是否继续？`)
+    !window.confirm(`关闭“${status.title}”会终止它的 PowerShell 进程，是否继续？`)
   ) {
     return;
   }
 
   const result = await window.controlPanel.closeProject(status.id);
   if (!result.ok) {
-    showToast(result.error ?? '无法关闭项目。', 'error');
+    showToast(result.error ?? '无法关闭这个对话。', 'error');
     return;
   }
   renderWorkspace(result.state);
-  showToast(`已关闭 ${projectNameFromPath(status.cwd)}`);
+  showToast(`已关闭 ${status.title}`);
 };
 
-const renderProjectList = (): void => {
-  projectList.replaceChildren();
-  projectCount.textContent = `${workspaceState.sessions.length} 个会话`;
+const openConversation = async (projectPath: string): Promise<void> => {
+  const result = await window.controlPanel.openConversation(projectPath);
+  renderWorkspace(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '无法新建对话。', 'error');
+    return;
+  }
+  showToast(`已在 ${projectNameFromPath(projectPath)} 新开一个对话`);
+  window.setTimeout(() => {
+    fitActiveTerminal();
+    terminalViews.get(result.state.activeSessionId)?.terminal.focus();
+  }, 60);
+};
 
-  for (const status of workspaceState.sessions) {
-    const item = document.createElement('div');
-    item.className = 'project-item';
-    item.dataset.active = String(status.id === workspaceState.activeSessionId);
-    item.dataset.phase = status.phase;
-    item.dataset.sessionId = status.id;
-
-    const selectButton = document.createElement('button');
-    selectButton.className = 'project-item__select';
-    selectButton.type = 'button';
-    selectButton.title = status.cwd;
-    selectButton.setAttribute('aria-pressed', String(status.id === workspaceState.activeSessionId));
-
-    const indicator = document.createElement('span');
-    indicator.className = 'project-item__status';
-    indicator.setAttribute('aria-hidden', 'true');
-
-    const copy = document.createElement('span');
-    copy.className = 'project-item__copy';
-
-    const name = document.createElement('strong');
-    name.textContent = projectNameFromPath(status.cwd);
-
-    const directory = document.createElement('span');
-    directory.textContent = status.cwd;
-
-    copy.append(name, directory);
-    selectButton.append(indicator, copy);
-    selectButton.addEventListener('click', () => {
-      void activateProject(status.id);
-    });
-
-    const closeButton = document.createElement('button');
-    closeButton.className = 'project-item__close';
-    closeButton.type = 'button';
-    closeButton.textContent = '×';
-    closeButton.title = `关闭 ${projectNameFromPath(status.cwd)}`;
-    closeButton.setAttribute('aria-label', `关闭项目 ${projectNameFromPath(status.cwd)}`);
-    closeButton.addEventListener('click', () => {
-      void closeProject(status);
-    });
-
-    item.append(selectButton, closeButton);
-    projectList.append(item);
+const renameConversation = async (status: TerminalStatus): Promise<void> => {
+  const nextTitle = window.prompt('给这个对话起个名字', status.title);
+  if (nextTitle === null || nextTitle.trim() === status.title) {
+    return;
+  }
+  const result = await window.controlPanel.renameConversation(status.id, nextTitle);
+  renderWorkspace(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '无法重命名这个对话。', 'error');
   }
 };
+
+const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
+  if (
+    project.sessionIds.length > 0 &&
+    !window.confirm(`关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？`)
+  ) {
+    return;
+  }
+  const result = await window.controlPanel.closeProjectFolder(project.path);
+  renderWorkspace(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '无法关闭这个项目。', 'error');
+    return;
+  }
+  showToast(`已关闭 ${project.name}，项目仍然会被记住`);
+};
+
+const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
+  if (!window.confirm(`把“${project.name}”从列表中移除？磁盘上的文件不会被删除。`)) {
+    return;
+  }
+  const result = await window.controlPanel.forgetProject(project.path);
+  renderWorkspace(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '无法移除这个项目。', 'error');
+    return;
+  }
+  expandedFolders.delete(project.path.toLowerCase());
+  showToast(`已从列表中移除 ${project.name}`);
+};
+
+/** Loads a folder's Claude conversation history without requiring a live terminal for it. */
+async function loadFolderHistory(projectPath: string, force = false): Promise<void> {
+  const key = projectPath.toLowerCase();
+  if (historyLoadsInFlight.has(key) || (!force && storedConversations.has(key))) {
+    return;
+  }
+  historyLoadsInFlight.add(key);
+  try {
+    storedConversations.set(key, await window.controlPanel.getClaudeSessionsForPath(projectPath));
+    renderProjectList();
+  } catch {
+    storedConversations.set(key, []);
+  } finally {
+    historyLoadsInFlight.delete(key);
+  }
+}
+
+const renderConversationRow = (status: TerminalStatus): HTMLElement => {
+  const row = document.createElement('div');
+  row.className = 'conversation-item';
+  row.dataset.active = String(status.id === workspaceState.activeSessionId);
+  row.dataset.phase = status.phase;
+  row.dataset.sessionId = status.id;
+
+  const selectButton = document.createElement('button');
+  selectButton.className = 'conversation-item__select';
+  selectButton.type = 'button';
+  selectButton.title = `${status.title} · ${status.cwd}`;
+  selectButton.setAttribute('aria-pressed', String(status.id === workspaceState.activeSessionId));
+
+  const indicator = document.createElement('span');
+  indicator.className = 'conversation-item__status';
+  indicator.setAttribute('aria-hidden', 'true');
+
+  const label = document.createElement('span');
+  label.className = 'conversation-item__label';
+  label.textContent = status.title;
+
+  const phaseText = document.createElement('span');
+  phaseText.className = 'conversation-item__phase';
+  phaseText.textContent = phaseCopy[status.phase].pill;
+
+  selectButton.append(indicator, label, phaseText);
+  selectButton.addEventListener('click', () => {
+    void activateProject(status.id);
+  });
+
+  const renameButton = document.createElement('button');
+  renameButton.className = 'conversation-item__action';
+  renameButton.type = 'button';
+  renameButton.textContent = '✎';
+  renameButton.title = `重命名 ${status.title}`;
+  renameButton.setAttribute('aria-label', `重命名对话 ${status.title}`);
+  renameButton.addEventListener('click', () => {
+    void renameConversation(status);
+  });
+
+  const closeButton = document.createElement('button');
+  closeButton.className = 'conversation-item__action conversation-item__action--close';
+  closeButton.type = 'button';
+  closeButton.textContent = '×';
+  closeButton.title = `关闭 ${status.title}`;
+  closeButton.setAttribute('aria-label', `关闭对话 ${status.title}`);
+  closeButton.addEventListener('click', () => {
+    void closeProject(status);
+  });
+
+  row.append(selectButton, renameButton, closeButton);
+  return row;
+};
+
+const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): HTMLElement => {
+  const row = document.createElement('button');
+  row.className = 'history-item';
+  row.type = 'button';
+  row.title = `在新对话中恢复 ${session.sessionId}`;
+
+  const icon = document.createElement('span');
+  icon.className = 'history-item__icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '⏱';
+
+  const label = document.createElement('span');
+  label.className = 'history-item__label';
+  label.textContent = session.sessionName || session.sessionId.slice(0, 8);
+
+  const time = document.createElement('span');
+  time.className = 'history-item__time';
+  time.textContent = formatRelativeTime(session.lastActiveAt);
+
+  row.append(icon, label, time);
+  row.addEventListener('click', () => {
+    void resumeStoredConversation(projectPath, session);
+  });
+  return row;
+};
+
+const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
+  const key = project.path.toLowerCase();
+  const sessions = workspaceState.sessions.filter((session) =>
+    project.sessionIds.includes(session.id),
+  );
+  const containsActive = project.sessionIds.includes(workspaceState.activeSessionId);
+  const expanded = expandedFolders.has(key) || containsActive;
+
+  const folder = document.createElement('section');
+  folder.className = 'project-folder';
+  folder.dataset.open = String(project.open);
+  folder.dataset.expanded = String(expanded);
+  folder.dataset.missing = String(project.missing);
+  folder.dataset.active = String(containsActive);
+
+  const header = document.createElement('div');
+  header.className = 'project-folder__header';
+
+  const disclosure = document.createElement('button');
+  disclosure.className = 'project-folder__disclosure';
+  disclosure.type = 'button';
+  disclosure.setAttribute('aria-expanded', String(expanded));
+  disclosure.title = project.path;
+
+  const chevron = document.createElement('span');
+  chevron.className = 'project-folder__chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.textContent = '▸';
+
+  const copy = document.createElement('span');
+  copy.className = 'project-folder__copy';
+  const name = document.createElement('strong');
+  name.textContent = project.name;
+  const detail = document.createElement('span');
+  detail.textContent = project.missing
+    ? '文件夹已不存在'
+    : project.open
+      ? `${sessions.length} 个对话进行中`
+      : project.lastActiveAt
+        ? `上次使用 ${formatRelativeTime(project.lastActiveAt)}`
+        : '已记住，未打开';
+  copy.append(name, detail);
+
+  disclosure.append(chevron, copy);
+  disclosure.addEventListener('click', () => {
+    if (expanded) {
+      expandedFolders.delete(key);
+    } else {
+      expandedFolders.add(key);
+      if (!project.missing) {
+        void loadFolderHistory(project.path);
+      }
+    }
+    renderProjectList();
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'project-folder__actions';
+
+  const newConversation = document.createElement('button');
+  newConversation.className = 'project-folder__action';
+  newConversation.type = 'button';
+  newConversation.textContent = '+';
+  newConversation.title = `在 ${project.name} 里新开一个对话`;
+  newConversation.setAttribute('aria-label', `在 ${project.name} 里新开一个对话`);
+  newConversation.disabled = project.missing;
+  newConversation.addEventListener('click', () => {
+    expandedFolders.add(key);
+    void openConversation(project.path);
+  });
+  actions.append(newConversation);
+
+  const removeButton = document.createElement('button');
+  removeButton.className = 'project-folder__action project-folder__action--close';
+  removeButton.type = 'button';
+  removeButton.textContent = '×';
+  removeButton.title = project.open
+    ? `关闭 ${project.name} 的所有对话`
+    : `从列表中移除 ${project.name}`;
+  removeButton.setAttribute('aria-label', removeButton.title);
+  removeButton.addEventListener('click', () => {
+    void (project.open ? closeProjectFolder(project) : forgetProject(project));
+  });
+  actions.append(removeButton);
+
+  header.append(disclosure, actions);
+  folder.append(header);
+
+  if (!expanded) {
+    return folder;
+  }
+
+  const body = document.createElement('div');
+  body.className = 'project-folder__body';
+
+  for (const session of sessions) {
+    body.append(renderConversationRow(session));
+  }
+
+  if (sessions.length === 0) {
+    const reopen = document.createElement('button');
+    reopen.className = 'project-folder__reopen';
+    reopen.type = 'button';
+    reopen.textContent = project.missing ? '文件夹已不存在，可从列表中移除' : '打开一个新对话';
+    reopen.disabled = project.missing;
+    reopen.addEventListener('click', () => {
+      void openConversation(project.path);
+    });
+    body.append(reopen);
+  }
+
+  const history = storedConversations.get(key);
+  if (history === undefined && !project.missing) {
+    void loadFolderHistory(project.path);
+    const loading = document.createElement('span');
+    loading.className = 'project-folder__hint';
+    loading.textContent = '正在读取历史对话…';
+    body.append(loading);
+  } else if (history && history.length > 0) {
+    const heading = document.createElement('span');
+    heading.className = 'project-folder__hint';
+    heading.textContent = `历史对话（点击可在新对话中恢复，共 ${history.length} 个）`;
+    body.append(heading);
+    for (const session of history.slice(0, 6)) {
+      body.append(renderHistoryRow(project.path, session));
+    }
+  }
+
+  folder.append(body);
+  return folder;
+};
+
+function renderProjectList(): void {
+  projectList.replaceChildren();
+  const openFolders = workspaceState.projects.filter((project) => project.open).length;
+  projectCount.textContent = `${openFolders} 个项目 · ${workspaceState.sessions.length} 个对话`;
+
+  for (const project of workspaceState.projects) {
+    projectList.append(renderProjectFolder(project));
+  }
+}
 
 function renderWorkspace(state: WorkspaceState): void {
   workspaceState = state;
@@ -1731,6 +2665,7 @@ function renderWorkspace(state: WorkspaceState): void {
     }
     if (state.activeSessionId) {
       void loadRouterManagement();
+      void loadConnectionAdvice();
     }
   }
   window.requestAnimationFrame(fitActiveTerminal);
@@ -1893,20 +2828,67 @@ window.controlPanel.onWorkspaceState(renderWorkspace);
 chooseDirectoryButton.addEventListener('click', () => {
   void openDirectoryPicker();
 });
-dropZone.addEventListener('click', () => {
-  void openDirectoryPicker();
-});
 runClaudeButton.addEventListener('click', () => {
-  setWorkbenchOpen(true);
-  selectWorkbenchPage('session');
+  void launchClaude('new');
 });
 routeHealthAction.addEventListener('click', () => {
-  selectWorkbenchPage('connection');
-  void loadGatewayDiagnostics();
-  void loadRouterManagement();
+  setWorkbenchOpen(false);
+  selectRailTab('connection');
+});
+for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
+  button.addEventListener('click', () => {
+    selectRailTab(button.dataset.railTab ?? 'projects');
+  });
+}
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-tab]')) {
+  button.addEventListener('click', () => {
+    selectPluginTab(button.dataset.pluginTab ?? 'installed');
+  });
+}
+refreshPluginsButton.addEventListener('click', () => {
+  void runPluginMutation(
+    () => window.controlPanel.refreshClaudePluginMarketplaces(),
+    '正在刷新…',
+    refreshPluginsButton,
+  );
+});
+updateAllPluginsButton.addEventListener('click', () => {
+  void runPluginMutation(
+    () => window.controlPanel.updateAllClaudePlugins(),
+    '正在更新…',
+    updateAllPluginsButton,
+  );
+});
+pluginSearch.addEventListener('input', () => {
+  if (pluginCatalog) {
+    renderPluginCatalog(pluginCatalog);
+  }
+});
+pluginMarketplaceForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const source = pluginMarketplaceSource.value.trim();
+  if (!source) {
+    showToast('请先填写插件市场地址。', 'error');
+    return;
+  }
+  void runPluginMutation(
+    () => window.controlPanel.addClaudePluginMarketplace(source),
+    '正在添加…',
+    addPluginMarketplaceButton,
+  ).then(() => {
+    pluginMarketplaceSource.value = '';
+  });
 });
 workbenchTrigger.addEventListener('click', () => {
   setWorkbenchOpen(!claudeWorkbench.classList.contains('claude-workbench--open'));
+});
+workbenchShortcuts.addEventListener('click', () => {
+  setWorkbenchOpen(true);
+  selectWorkbenchPage('shortcuts');
+});
+footerConnection.addEventListener('click', () => {
+  setWorkbenchOpen(false);
+  selectRailTab('connection');
 });
 workbenchClose.addEventListener('click', () => {
   setWorkbenchOpen(false);
@@ -1957,13 +2939,39 @@ openDetectedRouterButton.addEventListener('click', () => {
 refreshGatewaysButton.addEventListener('click', () => {
   void loadGatewayDiagnostics();
   void loadRouterManagement();
+  void loadConnectionAdvice();
+  void loadSoftwareUpdates(true);
 });
 installRouterButton.addEventListener('click', () => {
   void runRouterOperation(
-    (sessionId) => window.controlPanel.installClaudeRouter(sessionId),
-    '正在下载并校验…',
+    (sessionId) =>
+      window.controlPanel.installClaudeRouterFromSource(
+        sessionId,
+        routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
+      ),
+    routerInstallSource.value === 'github' ? '正在下载并校验…' : '正在安装…',
     installRouterButton,
   );
+});
+uninstallRouterButton.addEventListener('click', () => {
+  if (
+    !window.confirm(
+      '卸载当前 Router 应用？Provider 配置文件会保留，桌面版可能继续弹出系统卸载向导。',
+    )
+  ) {
+    return;
+  }
+  void runRouterOperation(
+    (sessionId) => window.controlPanel.uninstallClaudeRouter(sessionId),
+    '正在卸载…',
+    uninstallRouterButton,
+  );
+});
+refreshSoftwareUpdatesButton.addEventListener('click', () => {
+  void loadSoftwareUpdates(true);
+});
+installUpdateClaudeButton.addEventListener('click', () => {
+  void runClaudeInstallUpdate();
 });
 startRouterButton.addEventListener('click', () => {
   void runRouterOperation(
@@ -2121,6 +3129,36 @@ clearTerminalButton.addEventListener('click', () => {
   view?.terminal.clear();
   view?.terminal.focus();
 });
+for (const button of terminalContextMenu.querySelectorAll<HTMLButtonElement>(
+  '[data-terminal-context-action]',
+)) {
+  button.addEventListener('click', () => {
+    const terminal = terminalViews.get(workspaceState.activeSessionId)?.terminal;
+    switch (button.dataset.terminalContextAction) {
+      case 'copy':
+        void copyActiveTerminalSelection();
+        break;
+      case 'paste':
+        void pasteIntoActiveTerminal();
+        break;
+      case 'select-all':
+        terminal?.selectAll();
+        terminal?.focus();
+        break;
+      case 'clear':
+        terminal?.clear();
+        terminal?.focus();
+        break;
+    }
+    hideTerminalContextMenu();
+  });
+}
+document.addEventListener('pointerdown', (event) => {
+  if (!terminalContextMenu.contains(event.target as Node)) {
+    hideTerminalContextMenu();
+  }
+});
+window.addEventListener('blur', hideTerminalContextMenu);
 
 document.addEventListener('dragenter', (event) => {
   event.preventDefault();

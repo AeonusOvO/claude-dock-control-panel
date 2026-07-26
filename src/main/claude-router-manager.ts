@@ -16,11 +16,13 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
   ClaudeRouterGatewayState,
+  ClaudeRouterInstallSource,
   ClaudeRouterManagementState,
   ClaudeRouterProviderProtocol,
   ClaudeRouterProviderView,
   SaveClaudeRouterProviderInput,
 } from '../shared/contracts';
+import { runWindowsCommand } from './windows-command';
 
 const execFileAsync = promisify(execFile);
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
@@ -108,6 +110,11 @@ export interface SavedRouterProvider {
     model: string;
   };
   provider: ClaudeRouterProviderView;
+  state: ClaudeRouterManagementState;
+}
+
+export interface RouterPackageOperation {
+  message: string;
   state: ClaudeRouterManagementState;
 }
 
@@ -605,11 +612,18 @@ export class ClaudeRouterManager {
       Promise.resolve(this.findDesktopExecutable()),
     ]);
     const access = await this.getActiveServiceAccess();
+    const installationKind =
+      cli && desktop ? 'mixed' : cli ? 'npm' : desktop ? 'desktop' : 'unknown';
+    const installation = {
+      canUninstall: Boolean(cli || this.findDesktopUninstaller(desktop)),
+      installationKind,
+    } as const;
     if (!access) {
       const installed = Boolean(cli || desktop);
       const cliManageable = Boolean(cli?.nodeExecutable && (versionMajor(cli.version) ?? 0) >= 3);
       const manageable = Boolean(desktop || cliManageable);
       return {
+        ...installation,
         checkedAt,
         endpoint: 'http://127.0.0.1:3456',
         gatewayState: 'stopped',
@@ -631,6 +645,7 @@ export class ClaudeRouterManager {
 
     if (cli?.nodeExecutable && (await this.serviceUsesAppRuntime(access))) {
       return {
+        ...installation,
         checkedAt,
         endpoint: 'http://127.0.0.1:3456',
         gatewayState: 'unknown',
@@ -656,6 +671,7 @@ export class ClaudeRouterManager {
       const lastError = optionalString(gateway.lastError);
       const providers = sanitizeRouterConfig(config);
       return {
+        ...installation,
         checkedAt,
         endpoint: optionalString(gateway.endpoint) ?? 'http://127.0.0.1:3456',
         gatewayState,
@@ -675,6 +691,7 @@ export class ClaudeRouterManager {
     } catch (error) {
       const nativeModuleMessage = routerNativeModuleErrorMessage(error);
       return {
+        ...installation,
         checkedAt,
         endpoint: 'http://127.0.0.1:3456',
         gatewayState: 'unknown',
@@ -688,6 +705,85 @@ export class ClaudeRouterManager {
         version: cli?.version,
       };
     }
+  }
+
+  public async installFromNpm(
+    source: Exclude<ClaudeRouterInstallSource, 'github'>,
+  ): Promise<RouterPackageOperation> {
+    const registry =
+      source === 'npmmirror' ? 'https://registry.npmmirror.com' : 'https://registry.npmjs.org';
+    await runWindowsCommand(
+      'npm',
+      ['install', '--global', '@musistudio/claude-code-router@latest', '--registry', registry],
+      {
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 10 * 60_000,
+      },
+    );
+    return {
+      message:
+        source === 'npmmirror'
+          ? '已通过 npmmirror 安装或更新 Claude Code Router。'
+          : '已通过 npm 官方源安装或更新 Claude Code Router。',
+      state: await this.getState(),
+    };
+  }
+
+  public async uninstall(): Promise<RouterPackageOperation> {
+    const cli = await this.findCliInstallation();
+    const desktop = this.findDesktopExecutable();
+    const desktopUninstaller = this.findDesktopUninstaller(desktop);
+    if (!cli && !desktop) {
+      return { message: '当前没有检测到可卸载的 Router。', state: await this.getState() };
+    }
+
+    const access = await this.getActiveServiceAccess();
+    if (access) {
+      try {
+        await this.rpcWithAccess(access, 'stopGateway');
+      } catch {
+        // Continue with application removal even if the gateway is already unavailable.
+      }
+      if (access.pid !== process.pid) {
+        try {
+          process.kill(access.pid, 'SIGTERM');
+        } catch {
+          // The service may have exited after the gateway stopped.
+        }
+      }
+    }
+
+    if (cli) {
+      await runWindowsCommand('npm', ['uninstall', '--global', '@musistudio/claude-code-router'], {
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 10 * 60_000,
+      });
+    }
+
+    if (desktop && !desktopUninstaller) {
+      throw new Error(
+        '检测到桌面版 Router，但没有找到它的卸载程序。请从 Windows“已安装的应用”中卸载后再安装新版本。',
+      );
+    }
+    if (desktopUninstaller) {
+      const child = spawn(desktopUninstaller, [], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      });
+      child.unref();
+      return {
+        message: cli
+          ? 'npm 版 Router 已移除，并已打开桌面版卸载程序。完成后即可选择新的下载源。'
+          : '已打开 Router 卸载程序。完成后即可选择新的下载源。',
+        state: await this.getState(),
+      };
+    }
+
+    return {
+      message: 'npm 版 Router 已移除；Provider 配置文件未被删除。',
+      state: await this.getState(),
+    };
   }
 
   public async start(): Promise<ClaudeRouterManagementState> {
@@ -1082,6 +1178,20 @@ export class ClaudeRouterManager {
       path.join(root, 'Programs', 'claude-code-router', 'Claude Code Router.exe'),
       path.join(root, 'Programs', 'Claude Code Router', 'Claude Code Router.exe'),
       path.join(root, 'Claude Code Router', 'Claude Code Router.exe'),
+    ];
+    return candidates.find((candidate) => existsSync(candidate));
+  }
+
+  private findDesktopUninstaller(desktopExecutable?: string): string | undefined {
+    if (!desktopExecutable) {
+      return undefined;
+    }
+    const directory = path.dirname(desktopExecutable);
+    const candidates = [
+      path.join(directory, 'Uninstall Claude Code Router.exe'),
+      path.join(directory, 'Uninstall.exe'),
+      path.join(directory, 'uninstall.exe'),
+      path.join(directory, 'unins000.exe'),
     ];
     return candidates.find((candidate) => existsSync(candidate));
   }

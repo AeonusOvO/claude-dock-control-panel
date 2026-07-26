@@ -49,6 +49,11 @@ const resolvePowerShell = (): string => {
   return existsSync(absolutePath) ? absolutePath : 'powershell.exe';
 };
 
+const powershellStartup = [
+  'Import-Module PSReadLine -ErrorAction SilentlyContinue',
+  "if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) { Set-PSReadLineKeyHandler -Chord 'Ctrl+j' -Function AddLine }",
+].join('; ');
+
 export class TerminalSession {
   private cols = 100;
   private generation = 0;
@@ -59,6 +64,7 @@ export class TerminalSession {
   public constructor(
     id: string,
     initialCwd: string,
+    initialTitle: string,
     private readonly onData: DataListener,
     private readonly onStatus: StatusListener,
   ) {
@@ -67,11 +73,17 @@ export class TerminalSession {
       id,
       phase: 'stopped',
       shell: 'Windows PowerShell',
+      title: initialTitle,
     };
   }
 
   public getStatus(): TerminalStatus {
     return { ...this.status };
+  }
+
+  public setTitle(title: string): TerminalStatus {
+    this.setStatus({ ...this.status, title });
+    return this.getStatus();
   }
 
   public resize(cols: number, rows: number): void {
@@ -105,19 +117,24 @@ export class TerminalSession {
       id: this.status.id,
       phase: 'starting',
       shell: 'Windows PowerShell',
+      title: this.status.title,
     });
 
     const generation = ++this.generation;
 
     try {
-      const terminalProcess = pty.spawn(resolvePowerShell(), ['-NoLogo'], {
-        cols: this.cols,
-        cwd,
-        env: buildEnvironment(environment),
-        name: 'xterm-256color',
-        rows: this.rows,
-        useConpty: true,
-      });
+      const terminalProcess = pty.spawn(
+        resolvePowerShell(),
+        ['-NoLogo', '-NoExit', '-Command', powershellStartup],
+        {
+          cols: this.cols,
+          cwd,
+          env: buildEnvironment(environment),
+          name: 'xterm-256color',
+          rows: this.rows,
+          useConpty: true,
+        },
+      );
 
       this.process = terminalProcess;
       terminalProcess.onData((data) => {
@@ -137,6 +154,7 @@ export class TerminalSession {
           message: `PowerShell 已退出（代码 ${exitCode}）`,
           phase: 'stopped',
           shell: 'Windows PowerShell',
+          title: this.status.title,
         });
       });
 
@@ -146,6 +164,7 @@ export class TerminalSession {
         phase: 'running',
         pid: terminalProcess.pid,
         shell: 'Windows PowerShell',
+        title: this.status.title,
       });
     } catch (error) {
       this.process = undefined;
@@ -155,6 +174,7 @@ export class TerminalSession {
         message: error instanceof Error ? error.message : '无法启动 PowerShell。',
         phase: 'error',
         shell: 'Windows PowerShell',
+        title: this.status.title,
       });
     }
 
@@ -176,6 +196,7 @@ export class TerminalSession {
         id: this.status.id,
         phase: 'stopped',
         shell: 'Windows PowerShell',
+        title: this.status.title,
       });
     }
 

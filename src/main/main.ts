@@ -1,4 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  shell,
+  Tray,
+} from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -6,21 +16,34 @@ import path from 'node:path';
 import type {
   ClaudeConfigResult,
   ClaudeConnectionTestResult,
+  ClaudeCodeInstallSource,
   ClaudeLaunchMode,
   ClaudeOperationResult,
+  ClaudePluginCatalog,
+  ClaudePluginOperationResult,
   ClaudeRouterOperationResult,
+  ClaudeRouterInstallSource,
+  SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   TerminalStatus,
+  TerminalWorkspaceState,
+  WorkspaceProjectView,
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import {
+  ClaudePluginManager,
+  isValidMarketplaceName,
+  isValidMarketplaceSource,
+  isValidPluginId,
+} from './claude-plugin-manager';
 import { ClaudeRuntime } from './claude-runtime';
 import { ClaudeSessionManager, isValidClaudeSessionId } from './claude-session-manager';
 import { resolveDirectory } from './directory';
-import { TerminalWorkspace } from './terminal-workspace';
+import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
 
 app.enableSandbox();
@@ -47,13 +70,71 @@ const workspace = new TerminalWorkspace(
     }
   },
   (state) => {
-    mainWindow?.webContents.send('workspace:state', state);
-    updateTray(state);
+    const enriched = describeWorkspace(state);
+    mainWindow?.webContents.send('workspace:state', enriched);
+    updateTray(enriched);
   },
 );
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
 const sessionManager = new ClaudeSessionManager();
+const pluginManager = new ClaudePluginManager(homedir());
+
+/**
+ * Merges the live terminal sessions with the folders remembered on disk. A folder stays in the
+ * list after its last conversation is closed — closing a tab must never mean forgetting a project.
+ */
+function describeWorkspace(state: TerminalWorkspaceState = workspace.getState()): WorkspaceState {
+  const projects: WorkspaceProjectView[] = [];
+  const indexOfPath = (candidate: string): number =>
+    projects.findIndex((project) => sameDirectory(project.path, candidate));
+
+  for (const session of state.sessions) {
+    const existing = projects[indexOfPath(session.cwd)];
+    if (existing) {
+      existing.sessionIds.push(session.id);
+    } else {
+      projects.push({
+        missing: false,
+        name: path.basename(session.cwd) || session.cwd,
+        open: true,
+        path: session.cwd,
+        remembered: false,
+        sessionIds: [session.id],
+      });
+    }
+  }
+
+  for (const stored of workspaceStore.getProjects()) {
+    const index = indexOfPath(stored.path);
+    if (index >= 0) {
+      const project = projects[index];
+      if (project) {
+        project.lastActiveAt = stored.lastActiveAt;
+        project.remembered = true;
+      }
+      continue;
+    }
+    projects.push({
+      lastActiveAt: stored.lastActiveAt,
+      missing: !existsSync(stored.path),
+      name: path.basename(stored.path) || stored.path,
+      open: false,
+      path: stored.path,
+      remembered: true,
+      sessionIds: [],
+    });
+  }
+
+  projects.sort((left, right) => {
+    if (left.open !== right.open) {
+      return left.open ? -1 : 1;
+    }
+    return (right.lastActiveAt ?? 0) - (left.lastActiveAt ?? 0);
+  });
+
+  return { ...state, projects };
+}
 
 const statusText = (status: TerminalStatus): string => {
   switch (status.phase) {
@@ -69,6 +150,8 @@ const statusText = (status: TerminalStatus): string => {
 };
 
 const projectName = (status: TerminalStatus): string => path.basename(status.cwd) || status.cwd;
+
+const sessionLabel = (status: TerminalStatus): string => `${projectName(status)} · ${status.title}`;
 
 const trayIconForState = (state: WorkspaceState): string => {
   if (state.sessions.some((session) => session.phase === 'error')) {
@@ -122,8 +205,15 @@ const operationFromStatus = (status: TerminalStatus): OperationResult => ({
 const failedWorkspaceResult = (error: unknown): WorkspaceResult => ({
   error: error instanceof Error ? error.message : '项目操作失败。',
   ok: false,
-  state: workspace.getState(),
+  state: describeWorkspace(),
 });
+
+const validateProjectPath = (value: unknown): string => {
+  if (typeof value !== 'string' || !value.trim() || value.length > 4096) {
+    throw new Error('项目路径格式无效。');
+  }
+  return path.resolve(value);
+};
 
 const addProject = (directoryPath: string): WorkspaceResult => {
   try {
@@ -136,7 +226,7 @@ const addProject = (directoryPath: string): WorkspaceResult => {
     return {
       ok: true,
       reused: result.reused,
-      state: result.state,
+      state: describeWorkspace(result.state),
     };
   } catch (error) {
     return failedWorkspaceResult(error);
@@ -149,7 +239,14 @@ const activateProject = (sessionId: string): WorkspaceState => {
   if (active) {
     workspaceStore.updateLastActive(active.cwd);
   }
-  return state;
+  return describeWorkspace(state);
+};
+
+/** Drops every runtime session bound to a folder so its Claude state does not leak into a reopen. */
+const releaseRuntimeForSessions = (sessionIds: string[]): void => {
+  for (const sessionId of sessionIds) {
+    claudeRuntime?.closeSession(sessionId);
+  }
 };
 
 const pickDirectoryFromTray = async (): Promise<void> => {
@@ -168,7 +265,7 @@ const pickDirectoryFromTray = async (): Promise<void> => {
   }
 };
 
-function updateTray(state = workspace.getState()): void {
+function updateTray(state = describeWorkspace()): void {
   if (!tray) {
     return;
   }
@@ -180,29 +277,37 @@ function updateTray(state = workspace.getState()): void {
   }
 
   const runningCount = state.sessions.filter((session) => session.phase === 'running').length;
-  const projectMenu: MenuItemConstructorOptions[] = state.sessions.map((status) => ({
-    checked: status.id === state.activeSessionId,
-    click: () => {
-      activateProject(status.id);
-      showMainWindow();
-    },
-    label: `${projectName(status)} · ${statusText(status)}`,
-    type: 'radio',
+  const openProjects = state.projects.filter((project) => project.open);
+  // One submenu per folder so a project with several conversations reads as one project.
+  const projectMenu: MenuItemConstructorOptions[] = openProjects.map((project) => ({
+    label: project.name,
+    submenu: project.sessionIds.map((sessionId) => {
+      const status = state.sessions.find((session) => session.id === sessionId);
+      return {
+        checked: sessionId === state.activeSessionId,
+        click: () => {
+          activateProject(sessionId);
+          showMainWindow();
+        },
+        label: status ? `${status.title} · ${statusText(status)}` : sessionId,
+        type: 'radio' as const,
+      };
+    }),
   }));
 
   const icon = nativeImage.createFromPath(trayIconForState(state));
   tray.setImage(icon);
   tray.setToolTip(
-    `ClaudeDock · ${runningCount}/${state.sessions.length} 个项目运行中\n${activeStatus.cwd}`,
+    `ClaudeDock · ${openProjects.length} 个项目 · ${runningCount}/${state.sessions.length} 个对话运行中\n${activeStatus.cwd}`,
   );
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
         enabled: false,
-        label: `项目：${state.sessions.length} 个 · 运行中：${runningCount} 个`,
+        label: `项目：${openProjects.length} 个 · 对话：${state.sessions.length} 个 · 运行中：${runningCount} 个`,
       },
       {
-        label: '切换项目',
+        label: '切换对话',
         submenu: projectMenu,
       },
       {
@@ -220,7 +325,7 @@ function updateTray(state = workspace.getState()): void {
         click: () => {
           workspace.restart(activeStatus.id);
         },
-        label: `重启 ${projectName(activeStatus)}`,
+        label: `重启 ${sessionLabel(activeStatus)}`,
       },
       {
         click: () => {
@@ -412,10 +517,91 @@ const routerFailure = async (
   };
 };
 
+const validatePluginId = (value: unknown): string => {
+  if (!isValidPluginId(value)) {
+    throw new Error('插件标识无效。');
+  }
+  return value;
+};
+
+const refreshedPluginCatalog = async (): Promise<ClaudePluginCatalog> => {
+  pluginManager.invalidate();
+  return pluginManager.getCatalog(true);
+};
+
+/** Every plugin mutation shares the same validate → run → refresh → report shape. */
+const runPluginMutation = async (
+  operation: () => Promise<string>,
+): Promise<ClaudePluginOperationResult> => {
+  try {
+    const message = await operation();
+    return { catalog: await refreshedPluginCatalog(), message, ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '插件操作失败。';
+    return { catalog: await refreshedPluginCatalog(), error: message, message, ok: false };
+  }
+};
+
+const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Promise<string>>([
+  ['claude:plugins-install', (argument) => pluginManager.install(validatePluginId(argument))],
+  ['claude:plugins-uninstall', (argument) => pluginManager.uninstall(validatePluginId(argument))],
+  ['claude:plugins-update', (argument) => pluginManager.update(validatePluginId(argument))],
+  [
+    'claude:plugins-set-enabled',
+    (argument, flag) => {
+      if (typeof flag !== 'boolean') {
+        throw new Error('插件启用状态无效。');
+      }
+      return pluginManager.setEnabled(validatePluginId(argument), flag);
+    },
+  ],
+  [
+    'claude:plugins-marketplace-add',
+    (argument) => {
+      if (!isValidMarketplaceSource(argument)) {
+        throw new Error('插件市场地址无效，请填写 owner/repo、https 地址或本机绝对路径。');
+      }
+      return pluginManager.addMarketplace(argument.trim());
+    },
+  ],
+  [
+    'claude:plugins-marketplace-remove',
+    (argument) => {
+      if (!isValidMarketplaceName(argument)) {
+        throw new Error('插件市场名称无效。');
+      }
+      return pluginManager.removeMarketplace(argument);
+    },
+  ],
+  ['claude:plugins-marketplaces-refresh', () => pluginManager.refreshMarketplaces()],
+  ['claude:plugins-update-all', () => pluginManager.updateAll()],
+]);
+
+const routerInstallSources = new Set<ClaudeRouterInstallSource>(['github', 'npm', 'npmmirror']);
+const claudeInstallSources = new Set<ClaudeCodeInstallSource>(['native', 'npm', 'npmmirror']);
+
+const launchRouterInstaller = async (): Promise<ClaudeRouterOperationResult> => {
+  const runtime = requireClaudeRuntime();
+  try {
+    const installer = await runtime.downloadRouterInstaller();
+    const launchError = await shell.openPath(installer.filePath);
+    if (launchError) {
+      throw new Error(`安装包已校验，但无法启动：${launchError}`);
+    }
+    return {
+      message: `CCR ${installer.version} 官方安装程序已通过 SHA-256 校验并启动，请完成安装向导。`,
+      ok: true,
+      routerState: await runtime.getRouterManagementState(),
+    };
+  } catch (error) {
+    return routerFailure(error, '无法下载或启动 CCR 官方安装程序。');
+  }
+};
+
 const registerIpc = (): void => {
   ipcMain.handle('workspace:get-state', (event) => {
     validateSender(event);
-    return workspace.getState();
+    return describeWorkspace();
   });
   ipcMain.handle('project:add', (event, directoryPath: unknown) => {
     validateSender(event);
@@ -439,9 +625,8 @@ const registerIpc = (): void => {
     validateSender(event);
     try {
       const validatedSessionId = validateSessionId(sessionId);
-      const status = workspace.getStatus(validatedSessionId);
       requireClaudeRuntime().closeSession(validatedSessionId);
-      workspaceStore.removeProject(status.cwd);
+      // The folder stays remembered: closing one conversation is not "forget this project".
       const state = workspace.close(validatedSessionId);
       const active = state.sessions.find((session) => session.id === state.activeSessionId);
       if (active) {
@@ -449,12 +634,94 @@ const registerIpc = (): void => {
       }
       return {
         ok: true,
-        state,
+        state: describeWorkspace(state),
       } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
     }
   });
+  ipcMain.handle('project:open-conversation', (event, projectPath: unknown) => {
+    validateSender(event);
+    try {
+      const resolved = resolveDirectory(validateProjectPath(projectPath));
+      const state = workspace.openConversation(resolved);
+      workspaceStore.addProject(resolved);
+      return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
+    } catch (error) {
+      return failedWorkspaceResult(error);
+    }
+  });
+  ipcMain.handle('project:close-folder', (event, projectPath: unknown) => {
+    validateSender(event);
+    try {
+      const target = validateProjectPath(projectPath);
+      releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
+      const state = workspace.closeDirectory(target);
+      return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
+    } catch (error) {
+      return failedWorkspaceResult(error);
+    }
+  });
+  ipcMain.handle('project:forget', (event, projectPath: unknown) => {
+    validateSender(event);
+    try {
+      const target = validateProjectPath(projectPath);
+      releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
+      const state = workspace.closeDirectory(target);
+      workspaceStore.removeProject(target);
+      return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
+    } catch (error) {
+      return failedWorkspaceResult(error);
+    }
+  });
+  ipcMain.handle('project:rename-conversation', (event, sessionId: unknown, title: unknown) => {
+    validateSender(event);
+    try {
+      if (typeof title !== 'string') {
+        throw new Error('对话名称格式无效。');
+      }
+      const state = workspace.renameSession(validateSessionId(sessionId), title);
+      return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
+    } catch (error) {
+      return failedWorkspaceResult(error);
+    }
+  });
+  ipcMain.handle(
+    'project:open-stored-conversation',
+    async (event, projectPath: unknown, conversationId: unknown): Promise<WorkspaceResult> => {
+      validateSender(event);
+      let sessionId: string | undefined;
+      try {
+        if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
+          throw new Error('会话标识无效。');
+        }
+        const resolved = resolveDirectory(validateProjectPath(projectPath));
+        const runtime = requireClaudeRuntime();
+
+        // A stored conversation always gets its own terminal, so several can resume side by side.
+        workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`);
+        sessionId = workspace.getState().activeSessionId;
+        workspaceStore.addProject(resolved);
+
+        const prepared = await runtime.prepareLaunchWithSession(
+          sessionId,
+          resolved,
+          conversationId,
+        );
+        const terminalStatus = workspace.restart(sessionId, prepared.environment);
+        if (terminalStatus.phase === 'error') {
+          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
+        }
+        workspace.write(sessionId, `${prepared.command}\r`);
+        return { ok: true, state: describeWorkspace() };
+      } catch (error) {
+        if (sessionId) {
+          requireClaudeRuntime().setInactive(sessionId);
+        }
+        return failedWorkspaceResult(error);
+      }
+    },
+  );
   ipcMain.handle('terminal:start', (event, sessionId: unknown) => {
     validateSender(event);
     try {
@@ -521,20 +788,43 @@ const registerIpc = (): void => {
     async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
       validateSender(event);
       validateSessionId(sessionId);
-      const runtime = requireClaudeRuntime();
+      return launchRouterInstaller();
+    },
+  );
+  ipcMain.handle(
+    'claude:router-install-source',
+    async (event, sessionId: unknown, source: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      if (
+        typeof source !== 'string' ||
+        !routerInstallSources.has(source as ClaudeRouterInstallSource)
+      ) {
+        return routerFailure(new Error('Router 安装源无效。'), '无法安装 Router。');
+      }
+      if (source === 'github') {
+        return launchRouterInstaller();
+      }
       try {
-        const installer = await runtime.downloadRouterInstaller();
-        const launchError = await shell.openPath(installer.filePath);
-        if (launchError) {
-          throw new Error(`安装包已校验，但无法启动：${launchError}`);
-        }
-        return {
-          message: `CCR ${installer.version} 官方安装程序已通过 SHA-256 校验并启动，请完成安装向导。`,
-          ok: true,
-          routerState: await runtime.getRouterManagementState(),
-        };
+        const result = await requireClaudeRuntime().installRouterPackage(
+          source as Exclude<ClaudeRouterInstallSource, 'github'>,
+        );
+        return { message: result.message, ok: true, routerState: result.state };
       } catch (error) {
-        return routerFailure(error, '无法下载或启动 CCR 官方安装程序。');
+        return routerFailure(error, '无法安装或更新 Router。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:router-uninstall',
+    async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      try {
+        const result = await requireClaudeRuntime().uninstallRouter();
+        return { message: result.message, ok: true, routerState: result.state };
+      } catch (error) {
+        return routerFailure(error, '无法卸载 Router。');
       }
     },
   );
@@ -728,6 +1018,18 @@ const registerIpc = (): void => {
       return false;
     }
   });
+  ipcMain.handle('app:clipboard-read', (event) => {
+    validateSender(event);
+    return clipboard.readText().slice(0, 5 * 1024 * 1024);
+  });
+  ipcMain.handle('app:clipboard-write', (event, text: unknown) => {
+    validateSender(event);
+    if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) {
+      return false;
+    }
+    clipboard.writeText(text);
+    return true;
+  });
   ipcMain.handle(
     'claude:launch',
     async (event, sessionId: unknown, mode: unknown): Promise<ClaudeOperationResult> => {
@@ -837,6 +1139,16 @@ const registerIpc = (): void => {
     const status = workspace.getStatus(validatedSessionId);
     return sessionManager.getSessionsForProject(status.cwd);
   });
+  ipcMain.handle('claude:get-sessions-for-path', async (event, projectPath: unknown) => {
+    validateSender(event);
+    return sessionManager.getSessionsForProject(validateProjectPath(projectPath));
+  });
+  ipcMain.handle('claude:get-connection-advice', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return requireClaudeRuntime().getConnectionAdvice(status.cwd);
+  });
   ipcMain.handle(
     'claude:delete-session',
     async (event, sessionId: unknown, conversationId: unknown) => {
@@ -880,10 +1192,55 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.handle('claude:plugins-get', async (event, refresh: unknown) => {
+    validateSender(event);
+    return pluginManager.getCatalog(refresh === true);
+  });
+  for (const [channel, run] of pluginMutations) {
+    ipcMain.handle(channel, async (event, argument: unknown, flag: unknown) => {
+      validateSender(event);
+      return runPluginMutation(() => run(argument, flag));
+    });
+  }
+  ipcMain.handle('software:updates-get', async (event, refresh: unknown) => {
+    validateSender(event);
+    return requireClaudeRuntime().getSoftwareUpdates(refresh === true);
+  });
+  ipcMain.handle(
+    'software:claude-install-update',
+    async (event, source: unknown): Promise<SoftwareUpdateOperationResult> => {
+      validateSender(event);
+      const runtime = requireClaudeRuntime();
+      if (
+        typeof source !== 'string' ||
+        !claudeInstallSources.has(source as ClaudeCodeInstallSource)
+      ) {
+        const message = 'Claude Code 安装源无效。';
+        return {
+          error: message,
+          message,
+          ok: false,
+          state: await runtime.getSoftwareUpdates(),
+        };
+      }
+      try {
+        const result = await runtime.installOrUpdateClaudeCode(source as ClaudeCodeInstallSource);
+        return { message: result.message, ok: true, state: result.state };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法安装或更新 Claude Code。';
+        return {
+          error: message,
+          message,
+          ok: false,
+          state: await runtime.getSoftwareUpdates(true),
+        };
+      }
+    },
+  );
 };
 
 const createTray = (): void => {
-  tray = new Tray(nativeImage.createFromPath(trayIconForState(workspace.getState())));
+  tray = new Tray(nativeImage.createFromPath(trayIconForState(describeWorkspace())));
   tray.on('click', showMainWindow);
   tray.on('double-click', showMainWindow);
   updateTray();
@@ -896,7 +1253,7 @@ const createWindow = async (): Promise<void> => {
     height: 760,
     icon: assetPath('app-icon-256.png'),
     minHeight: 640,
-    minWidth: 960,
+    minWidth: 820,
     show: false,
     title: 'ClaudeDock 控制面板',
     titleBarOverlay: {
@@ -969,27 +1326,20 @@ if (!hasSingleInstanceLock) {
     registerIpc();
     createTray();
 
-    // Restore workspace projects from persistent storage
+    // Remembered folders are listed without a terminal each — otherwise every folder ever opened
+    // would spawn a PowerShell at startup. Only the folder in use last time is reopened live.
     const lastActive = workspaceStore.getLastActiveProject();
-    const storedProjects = workspaceStore.getProjects();
-    for (const project of storedProjects) {
-      if (existsSync(project.path)) {
-        try {
-          workspace.openProject(project.path);
-        } catch {
-          // Skip projects that can't be opened
-        }
-      }
-    }
-
-    // If last active project exists, activate it
     if (lastActive && existsSync(lastActive)) {
-      const state = workspace.getState();
-      const session = state.sessions.find(
-        (s) => path.resolve(s.cwd).toLowerCase() === path.resolve(lastActive).toLowerCase(),
-      );
-      if (session) {
-        activateProject(session.id);
+      try {
+        const result = workspace.openProject(lastActive);
+        const restored = result.state.sessions.find((session) =>
+          sameDirectory(session.cwd, lastActive),
+        );
+        if (restored) {
+          activateProject(restored.id);
+        }
+      } catch {
+        // A folder that has become unreadable stays in the list as a remembered entry.
       }
     }
 

@@ -17,10 +17,12 @@ const routerConfig: NormalizedClaudeConfig = {
 };
 
 const routerState: ClaudeRouterManagementState = {
+  canUninstall: true,
   checkedAt: Date.now(),
   endpoint: 'http://127.0.0.1:3456',
   gatewayState: 'error',
   installed: true,
+  installationKind: 'npm',
   manageable: true,
   managementAvailable: true,
   message: 'No available models.',

@@ -4,18 +4,18 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code 模型/API 接入、会话上下文与常用斜杠命令，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点 (2026-07-26)
+## 当前版本重点（2026-07-26）
 
-当前开发分支包含以下改进：
-
-- 🎨 **完整设计令牌系统**：201 处 CSS 变量统一管理颜色、间距、字号、动效
-- 📐 **响应式布局优化**：结构性保证终端最小宽度 256px，抽屉自适应收缩
-- ✨ **Material Design 3 动效**：非对称进出场、错落动画、完善的 reduced-motion 支持
-- ♿ **可访问性修复**：最小字号从 6.8px 提升到 11px，所有文字对比度符合 WCAG 标准
-- 🎯 **单一强调色原则**：移除装饰性渐变和多余彩色，保留功能性状态色
-- 📁 **项目工作区恢复**：自动记住已添加项目和最后激活项目，关闭项目时同步移除恢复记录
-- 💬 **当前项目会话历史**：读取 Claude Code 的项目级 JSONL 元数据，可安全恢复或经确认删除
-- 🧪 **渲染启动契约测试**：检查 HTML 结构、重复 ID 和入口脚本依赖的必需控件
+- 面向公开用户的环境准备与接入向导：检测 Claude Code/Router，并提供官方源、npm 官方源
+  与 npmmirror 国内镜像的一键安装或更新。
+- Router 可识别桌面版、npm 版和混合安装；用户可停止并卸载旧安装，再切换来源安装新版。
+- 插件市场直接读取 Claude CLI 的官方目录，支持安装、启停、卸载、刷新市场与批量更新。
+- 插件 ID 保留官方名称，英文说明通过本地规则生成中文主说明，英文原文可按需展开查看。
+- 统一全部滚动区域的样式；左侧控制栏与右侧工作台都可拖动调整宽度并记住设置。
+- 820px 起的窄窗口和 640px 起的低高度都有独立响应式布局，控件空间不足时换行或收起次要
+  信息，避免按钮、下拉框、工具栏与抽屉互相覆盖。
+- 工作台状态下沉到终端底栏，直接显示连接健康、上下文占用与运行模型；快捷键说明独立成页。
+- PowerShell 终端提供标准复制/粘贴、`Shift+Enter` 换行和右键菜单，映射仅在应用终端内生效。
 
 视觉与交互约束详见 [design.md](design.md)。
 
@@ -35,8 +35,8 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - 可粘贴服务商提供的 cURL，自动识别 OpenAI/Anthropic 协议、接口、模型和认证头，并给出
   “可直连”或“先配置本地转换器”的明确下一步。
 - 可在“接入”页一键获取 Claude Code Router 官方 Windows 安装程序、启动/停止模型网关、
-  打开完整管理页，并可视化新增、编辑、删除 Provider。OpenAI cURL 可一键写入 Router，
-  同时把 Router 路由接入当前 ClaudeDock 项目。
+  通过 npm 或 npmmirror 安装、卸载/替换旧版、打开完整管理页，并可视化新增、编辑、删除
+  Provider。OpenAI cURL 可一键写入 Router，同时把 Router 路由接入当前 ClaudeDock 项目。
 - CCR 管理服务已运行但 Provider 为空时，不再只显示 `No available models`：界面会解释
   当前项目是否受影响、禁止无意义的重复启动，并提供“用当前项目配置一键修复”或手动添加
   第一个 Provider。自动修复只在远程 Anthropic 直连和 API Key 已安全保存时可用。
@@ -51,10 +51,14 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   错误，会立即显示红色提示并引导回“接入”页。
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
   `/model`、`/permissions`、`/compact` 等常用斜杠命令变成可点击操作。
-- “会话”页列出当前项目的 Claude Code 历史会话元数据，不跨项目扫描。恢复会话仍通过
-  Claude Code 官方 `--resume <session-id>`；删除只针对当前项目的对应 JSONL，并要求确认。
+- 项目列表按“文件夹 → 当前对话 → 历史对话”折叠展示。恢复历史仍通过 Claude Code 官方
+  `--resume <session-id>`，工作台不再重复显示同一份历史列表。
 - 通过 Claude Code 官方 `statusLine` 数据实时显示上下文窗口、输入/输出 token、会话估算
   费用、持续时间、模型和会话 ID；不解析易变的终端绘制文本。
+- 终端底栏无需展开面板即可查看连接健康、上下文占用和模型；右键菜单提供复制、粘贴、
+  全选和清屏，`Ctrl+C` 在有选区时复制、无选区时保持 PowerShell 中断语义。
+- 插件页兼容原生 Claude 可执行文件与 npm 生成的 `.cmd/.ps1` 启动器；插件目录及市场刷新
+  不依赖是否打开了项目。插件包 ID 不翻译，中文能力说明优先展示，英文原文收在展开区。
 - 模型/API 路由只注入 ClaudeDock 为当前项目启动的进程，不修改 Codex、Claude Code
   全局配置或 Windows 系统级 API 路由；启动时会用更高优先级的临时设置覆盖用户配置中
   遗留的 CCR/Claude 路由别名，避免“测试直连成功、真实会话却回到已停止的 3456”。
@@ -81,9 +85,13 @@ npm run lint
 npm run format:check
 npm run typecheck
 npm test
+npm run test:layout
 npm run build
 npm run dist
 ```
+
+`npm run test:layout` 会在隐藏的 Electron 窗口中检查 820×640、900×640 和 1180×760，
+覆盖项目、接入、插件及工作台三页，若交互组件重叠或关键容器横向溢出则失败。
 
 `npm run dist` 在 `release/` 完成 Windows x64 打包，并把最终安装程序
 `ClaudeDock-Setup-<version>-x64.exe` 同时发布到项目根目录与 `outputs/` 本地交付目录。
@@ -91,10 +99,10 @@ npm run dist
 ## 日常使用
 
 1. 启动 ClaudeDock 后，首个 PowerShell 会话会自动连接并显示当前用户目录。
-2. 把项目文件夹拖到窗口任意位置，或点击“添加项目”；应用会为它新建独立会话，不会停止
+2. 把项目文件夹拖到窗口任意位置，或点击虚线“＋ 添加项目”区域；应用会为它新建独立会话，不会停止
    已经运行的其他项目。
 3. 在左侧项目列表切换当前项目；点击项目行右侧的关闭按钮会终止并移除该项目会话。
-4. 点击“打开 Claude 工作台”→“接入”。应用会先自动显示本机已有的 Router、LiteLLM 和
+4. 点击左侧“接入”。应用会先检查 Claude Code 版本，并显示本机已有的 Router、LiteLLM 和
    外部 Claude 配置；如果发现 Claude Code Router，应把 `3456` 视为模型接口，
    `3458` 只视为浏览器管理页。
 5. 如果服务商给了一段 cURL，直接粘到“把服务商给你的 cURL 粘进来”：
@@ -104,9 +112,9 @@ npm run dist
      `provider/model` 路由保存为当前项目的 ClaudeDock 接入。
    - cURL 中的 Bearer 上游密钥交给 Router；如果 Router 自己启用了访问保护，
      ClaudeDock 需要填写的是另一把 Router 访问密钥，二者不要混用。
-6. 没有 Router 时，点击“一键获取官方安装包”。ClaudeDock 会从 CCR 官方 GitHub
-   Release 下载 Windows 安装程序，核对 Release 声明的文件大小与 SHA-256 后打开标准
-   安装向导；安装与 Windows UAC 仍由用户确认。完成后点击“重新检测”。
+6. 没有 Router 时，在“安装来源”选择官方 GitHub 安装包、npm 官方源或 npmmirror，点击
+   “一键安装”。GitHub 安装包会核对 Release 声明的文件大小与 SHA-256；npm 镜像只对
+   本次命令生效，不改全局 registry。已有 Router 可点击“卸载 / 更换”，完成卸载后再选新源。
 7. “Provider 配置”支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic
    Messages 三种上游。可逐项编辑地址、模型和密钥，也可只点“用于当前项目”复用已保存
    的上游凭据。
@@ -125,10 +133,11 @@ npm run dist
 9. 不想安装转换器时，也可选择 Anthropic 官方、DeepSeek 官方 Anthropic 接口，或服务商
    明确提供的其他 `/v1/messages` 地址。DeepSeek 官方预设会填入
    `https://api.deepseek.com/anthropic` 和当前文档中的模型示例。
-10. 在“会话”页选择“新建安全会话”“继续最近会话”或“选择历史会话”；启动会重建当前项目
+10. 左侧快捷操作可直接“新建安全会话”；工作台“会话”页还可继续最近会话或打开 Claude
+    的历史选择器。启动会重建当前项目
     的 PowerShell，以便只通过子进程环境注入路由和密钥，因此会终止该终端中原有的进程。
-11. Claude 响应后，“会话”页实时显示当前上下文和用量；“命令”页可以执行白名单中的
-    Claude Code 斜杠命令。`/clear` 会开启空上下文的新会话，执行前会二次确认。
+11. Claude 响应后，终端底栏与“会话”页实时显示当前上下文；“命令”页执行白名单斜杠命令，
+    “快捷键”页说明终端映射。`/clear` 会开启空上下文的新会话，执行前会二次确认。
 12. 点击窗口关闭按钮只会隐藏面板，所有会话继续在后台运行；右键系统托盘图标可以恢复
     窗口、切换/添加项目、控制当前终端或彻底退出。
 
@@ -166,7 +175,7 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
   等第三方 Router 遗留别名；临时文件只含地址、模型和空覆盖值，不含 API 凭据。
 - ClaudeDock 拒绝受保护启动已披露含隐藏地区/代理检测逻辑的 Claude Code
   2.1.91–2.1.196。Anthropic 当前仍不向中国大陆/香港及受不支持地区控制的实体提供官方
-  服务；本项目不会伪造位置、绕过地区限制或保证官方账号可用。
+  服务；ClaudeDock 不会伪造位置、绕过地区限制或保证官方账号可用。
 - 经中转时，项目代码、提示词和输出会经过该网关。只使用有明确数据处理、日志和模型路由
   说明的服务，不要把生产代码交给来源不明的低价中转。
 - 自动发现每 6 秒检查已知本机端口，只发送不带凭据的连通性/模型列表探测；它不会扫描全部
@@ -181,9 +190,9 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
 - Router 管理凭据只在 Electron 主进程读取并用于本机回环 RPC，不会传给 renderer。
   Provider 列表只显示“是否已配置密钥”。保存 Provider 时只改 CCR 的 `Providers` 和
   `preferredProvider`，不会应用或改写 CCR 中的 Codex profile、Claude profile 或系统代理。
-- Router 安装需要访问 GitHub。ClaudeDock 只接受官方仓库当前 Release 中命名匹配的
-  Windows `.exe`，限制最大 250 MiB，并在打开前校验文件大小与 SHA-256；安装程序本身仍
-  可能因未签名或发布者信誉不足触发 Windows SmartScreen。
+- Router 的 GitHub 安装方式只接受官方仓库当前 Release 中命名匹配的 Windows `.exe`，
+  限制最大 250 MiB，并在打开前校验文件大小与 SHA-256。网络受限时可改用 npm 官方源或
+  npmmirror；镜像仅作为包下载源，不代替代码签名或供应链审查。
 - ClaudeDock 不再通过自身 Electron 可执行文件运行 npm 版 CCR。它会定位 CCR npm 前缀
   旁或 `PATH` 中的系统 `node.exe`，并先验证该运行时可以加载 CCR 自带的
   `better_sqlite3.node`。已被旧版 ClaudeDock 错误启动的服务可由界面定向停止和重启。
@@ -201,4 +210,4 @@ ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
 - `@lydell/node-pty` 提供与上游 node-pty API 兼容的按平台预编译包，避免最终用户安装
   Visual Studio C++ 构建组件。
 
-维护者：本项目当前由本地使用者维护。
+项目面向公开用户使用与评审；维护信息以仓库提交记录和后续发布说明为准。

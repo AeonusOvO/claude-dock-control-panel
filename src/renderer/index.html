@@ -25,87 +25,612 @@
     </header>
 
     <main class="workspace">
+      <nav class="activity-rail" id="activity-rail" aria-label="主导航">
+        <button
+          class="activity-rail__button activity-rail__button--active"
+          data-rail-tab="projects"
+          type="button"
+          aria-pressed="true"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
+            />
+          </svg>
+          <span>项目</span>
+        </button>
+        <button
+          class="activity-rail__button"
+          data-rail-tab="connection"
+          type="button"
+          aria-pressed="false"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10 14a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.3 7" />
+            <path d="M14 10a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7L12.7 17" />
+          </svg>
+          <span>接入</span>
+          <span class="activity-rail__dot" id="connection-rail-dot" hidden></span>
+        </button>
+        <button
+          class="activity-rail__button"
+          data-rail-tab="plugins"
+          type="button"
+          aria-pressed="false"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M9 4v3H6.2A1.2 1.2 0 0 0 5 8.2V11h2.4a2.6 2.6 0 1 1 0 5.2H5v2.6A1.2 1.2 0 0 0 6.2 20H9v-2.4a2.6 2.6 0 1 1 5.2 0V20h3.6a1.2 1.2 0 0 0 1.2-1.2V15h-2.4a2.6 2.6 0 1 1 0-5.2H19V8.2A1.2 1.2 0 0 0 17.8 7H15V4Z"
+            />
+          </svg>
+          <span>插件</span>
+          <span class="activity-rail__dot" id="plugin-rail-dot" hidden></span>
+        </button>
+      </nav>
+
       <aside class="control-panel">
-        <section class="session-card" aria-labelledby="session-heading">
-          <div class="section-label">
-            <span>当前项目状态</span>
-            <span class="status-pill" id="status-pill">已停止</span>
+        <section class="rail-page rail-page--active" data-rail-page="projects">
+          <section class="session-card" aria-labelledby="session-heading">
+            <div class="section-label">
+              <span>当前对话状态</span>
+              <span class="status-pill" id="status-pill">已停止</span>
+            </div>
+            <div class="session-card__heading">
+              <span class="status-dot" aria-hidden="true"></span>
+              <div>
+                <h1 id="session-heading">Windows PowerShell</h1>
+                <p id="session-detail">等待启动终端</p>
+              </div>
+            </div>
+            <div class="session-meta">
+              <span>ConPTY</span>
+              <span id="session-pid">PID —</span>
+            </div>
+          </section>
+
+          <section class="project-section" aria-labelledby="project-heading">
+            <div class="section-label">
+              <span id="project-heading">项目与对话</span>
+              <span id="project-count">1 个对话</span>
+            </div>
+            <div class="project-list" id="project-list" aria-label="项目文件夹与对话"></div>
+            <button class="drop-zone" id="choose-directory" type="button">
+              <span class="drop-zone__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
+                  <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+                  <path d="M12 10v7m-3-3 3 3 3-3" />
+                </svg>
+              </span>
+              <span class="drop-zone__title">＋ 添加项目</span>
+              <span class="drop-zone__hint">点击选择，或把项目文件夹拖到这里</span>
+            </button>
+          </section>
+
+          <section class="actions" aria-labelledby="actions-heading">
+            <div class="section-label">
+              <span id="actions-heading">快捷操作</span>
+              <span>当前对话</span>
+            </div>
+            <button class="button button--primary" id="run-claude" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m8 6 6 6-6 6" />
+                <path d="M15 18h3" />
+              </svg>
+              新建安全会话
+            </button>
+            <div class="button-row">
+              <button class="button button--quiet" id="restart-terminal" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
+                </svg>
+                重启
+              </button>
+              <button class="button button--quiet" id="toggle-terminal" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="5" y="5" width="14" height="14" rx="2" />
+                </svg>
+                <span id="toggle-terminal-label">启动</span>
+              </button>
+            </div>
+          </section>
+
+          <div class="tray-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
+              <path d="M10 20h4" />
+            </svg>
+            <p>关闭窗口后所有对话继续在托盘运行。项目会被记住，下次打开还在。</p>
           </div>
-          <div class="session-card__heading">
-            <span class="status-dot" aria-hidden="true"></span>
-            <div>
-              <h1 id="session-heading">Windows PowerShell</h1>
-              <p id="session-detail">等待启动终端</p>
+        </section>
+
+        <section class="rail-page" data-rail-page="connection">
+          <div class="connection-heading">
+            <strong>接入向导</strong>
+            <span>先看懂你手上的接口，再决定 Claude Code 最终连接哪里。</span>
+          </div>
+
+          <section class="connection-advice" id="connection-advice" data-tone="info">
+            <div class="connection-advice__icon" aria-hidden="true">💡</div>
+            <div class="connection-advice__body">
+              <strong id="connection-advice-title">正在判断当前项目怎么连</strong>
+              <p id="connection-advice-detail">读取当前项目的接入配置与本机 Router 状态…</p>
+            </div>
+            <div class="connection-advice__actions" id="connection-advice-actions"></div>
+          </section>
+
+          <section class="environment-setup" aria-labelledby="environment-setup-title">
+            <div class="step-heading">
+              <span class="step-number">0</span>
+              <div>
+                <strong id="environment-setup-title">准备 Claude Code 环境</strong>
+                <span>自动判断当前电脑缺少什么，也可以直接检查并更新已有安装。</span>
+              </div>
+            </div>
+            <div class="software-update-row">
+              <div>
+                <strong>Claude Code</strong>
+                <span id="claude-update-detail">正在检查本机版本与最新版本…</span>
+              </div>
+              <span class="version-pill" id="claude-update-version">检测中</span>
+            </div>
+            <div class="install-source-row">
+              <label class="field field--compact" for="claude-install-source">
+                <span>安装 / 更新来源</span>
+                <select id="claude-install-source">
+                  <option value="native">官方原生安装（推荐）</option>
+                  <option value="npm">npm 官方源</option>
+                  <option value="npmmirror">npmmirror 国内镜像</option>
+                </select>
+              </label>
+              <button id="install-update-claude" type="button">一键安装 / 更新</button>
+            </div>
+            <div class="environment-check-footer">
+              <span id="software-update-checked-at">等待首次检查</span>
+              <button id="refresh-software-updates" type="button">检查更新</button>
+            </div>
+          </section>
+
+          <section class="gateway-discovery" aria-labelledby="gateway-discovery-title">
+            <div class="gateway-discovery__heading">
+              <div>
+                <span class="step-kicker">自动检测</span>
+                <strong id="gateway-discovery-title">这台电脑现在有什么？</strong>
+              </div>
+              <button id="refresh-gateways" type="button">重新检测</button>
+            </div>
+            <p id="gateway-diagnostics-summary">正在检查常见本地端口、命令和 Claude 设置…</p>
+            <div id="gateway-candidates" class="gateway-candidates" aria-live="polite"></div>
+            <div id="configuration-hints" class="configuration-hints" hidden></div>
+            <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
+          </section>
+
+          <section class="curl-onboarding" aria-labelledby="curl-onboarding-title">
+            <div class="step-heading">
+              <span class="step-number">1</span>
+              <div>
+                <strong id="curl-onboarding-title">把服务商给你的 cURL 粘进来</strong>
+                <span>ClaudeDock 只做本地识别，不会自动发送，也不会记录到日志。</span>
+              </div>
+            </div>
+            <label class="field" for="curl-input">
+              <span>cURL 命令或接口地址</span>
+              <textarea
+                id="curl-input"
+                maxlength="50000"
+                rows="5"
+                spellcheck="false"
+                placeholder='curl https://example.com/v1/chat/completions -H "Authorization: Bearer 新密钥" -d &apos;{"model":"模型名",...}&apos;'
+              ></textarea>
+            </label>
+            <button class="analyze-curl" id="analyze-curl" type="button">识别这是什么接口</button>
+            <div class="curl-analysis" id="curl-analysis" hidden>
+              <div class="curl-analysis__headline">
+                <span id="curl-protocol-badge">等待识别</span>
+                <strong id="curl-analysis-title">—</strong>
+              </div>
+              <p id="curl-analysis-detail"></p>
+              <dl>
+                <div>
+                  <dt>接口</dt>
+                  <dd id="curl-analysis-endpoint">—</dd>
+                </div>
+                <div>
+                  <dt>模型</dt>
+                  <dd id="curl-analysis-model">—</dd>
+                </div>
+                <div>
+                  <dt>认证</dt>
+                  <dd id="curl-analysis-auth">—</dd>
+                </div>
+              </dl>
+              <div class="curl-next-step" id="curl-next-step"></div>
+              <div class="curl-analysis__actions">
+                <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
+                <button id="import-curl-router" type="button" hidden>
+                  一键写入 Router 并接入当前项目
+                </button>
+                <button id="use-detected-router" type="button" hidden>选用已发现的 Router</button>
+                <button id="open-detected-router" type="button" hidden>打开 Router 管理页</button>
+              </div>
+            </div>
+
+            <!-- Smart guidance hints -->
+            <div class="smart-guidance" id="smart-guidance" hidden>
+              <div class="smart-guidance__icon" aria-hidden="true">💡</div>
+              <div>
+                <strong id="smart-guidance-title">智能提示</strong>
+                <p id="smart-guidance-detail"></p>
+              </div>
+              <div class="smart-guidance__actions" id="smart-guidance-actions"></div>
+            </div>
+          </section>
+
+          <section
+            class="router-manager"
+            id="router-manager"
+            aria-labelledby="router-manager-title"
+          >
+            <div class="step-heading">
+              <span class="step-number">2</span>
+              <div>
+                <strong id="router-manager-title">安装与管理 Claude Code Router</strong>
+                <span>只管理 Claude Code 接入；不会修改 Codex profile 或系统代理。</span>
+              </div>
+            </div>
+            <p class="router-unused-note" id="router-unused-note" hidden>
+              当前项目不经过 Router，下面的设置对它没有作用。仍可展开管理其他项目要用的网关。
+            </p>
+            <div class="router-status" id="router-status" data-state="unknown">
+              <div>
+                <strong id="router-status-title">正在读取 Router 状态…</strong>
+                <span id="router-status-detail">等待首次检测</span>
+              </div>
+              <span id="router-version">未检测</span>
+            </div>
+            <div class="router-remediation" id="router-remediation" hidden>
+              <strong id="router-remediation-title">Router 需要完成配置</strong>
+              <span id="router-remediation-detail"></span>
+              <div>
+                <button id="repair-router-from-project" type="button">
+                  用当前项目配置一键修复
+                </button>
+                <button id="configure-router-provider" type="button">
+                  手动添加第一个 Provider
+                </button>
+              </div>
+            </div>
+            <div class="router-actions" id="router-actions">
+              <label class="field field--compact" for="router-install-source">
+                <span>安装来源</span>
+                <select id="router-install-source">
+                  <option value="github">官方 GitHub 安装包</option>
+                  <option value="npm">npm 官方源</option>
+                  <option value="npmmirror">npmmirror 国内镜像</option>
+                </select>
+              </label>
+              <button id="install-router" type="button">一键安装 / 更新</button>
+              <button id="uninstall-router" type="button">卸载 / 更换</button>
+              <button id="start-router" type="button">启动 Router</button>
+              <button id="stop-router" type="button">停止网关</button>
+              <button id="open-router-management" type="button">打开完整管理页</button>
+            </div>
+            <p class="router-install-note">
+              官方安装包会核对 Release 的 SHA-256；npm 与 npmmirror 只在本次安装命令中指定源，
+              不会修改用户的全局 npm 配置。
+            </p>
+
+            <div class="router-provider-heading">
+              <div>
+                <strong>Provider 配置</strong>
+                <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
+              </div>
+              <button id="add-router-provider" type="button">添加 Provider</button>
+            </div>
+            <div id="router-provider-list" class="router-provider-list" aria-live="polite"></div>
+
+            <form id="router-provider-form" hidden>
+              <input id="router-provider-id" type="hidden" />
+              <div class="router-provider-form__heading">
+                <strong id="router-provider-form-title">添加 Provider</strong>
+                <span>OpenAI cURL 通常选择 Chat Completions。</span>
+              </div>
+              <label class="field" for="router-provider-name">
+                <span>Provider 名称</span>
+                <input
+                  id="router-provider-name"
+                  type="text"
+                  maxlength="80"
+                  pattern="[A-Za-z0-9._-]+"
+                  placeholder="aancn-relay"
+                  spellcheck="false"
+                />
+                <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型 ID。</small>
+              </label>
+              <label class="field" for="router-provider-protocol">
+                <span>上游协议</span>
+                <select id="router-provider-protocol">
+                  <option value="openai_chat_completions">OpenAI Chat Completions</option>
+                  <option value="openai_responses">OpenAI Responses</option>
+                  <option value="anthropic_messages">Anthropic Messages</option>
+                </select>
+              </label>
+              <label class="field" for="router-provider-base-url">
+                <span>上游接口地址</span>
+                <input
+                  id="router-provider-base-url"
+                  type="url"
+                  maxlength="2048"
+                  placeholder="https://example.com/v1/chat/completions"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="field" for="router-provider-models">
+                <span>模型 ID（每行一个）</span>
+                <textarea
+                  id="router-provider-models"
+                  maxlength="10000"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="claude-fable-5"
+                ></textarea>
+              </label>
+              <label class="field" for="router-provider-api-key">
+                <span>上游 API Key</span>
+                <input
+                  id="router-provider-api-key"
+                  type="password"
+                  maxlength="20000"
+                  autocomplete="new-password"
+                  placeholder="编辑时留空可保留 CCR 中的原密钥"
+                />
+              </label>
+              <label class="router-choice" for="router-provider-preferred">
+                <input id="router-provider-preferred" type="checkbox" checked />
+                <span>设为 Router 首选 Provider</span>
+              </label>
+              <label class="router-choice" for="router-provider-use-project">
+                <input id="router-provider-use-project" type="checkbox" checked />
+                <span>同时安全接入当前 ClaudeDock 项目</span>
+              </label>
+              <small class="router-project-note"
+                >启用后，Router 本机访问密钥会在主进程内直接进入 Windows
+                安全存储，不会传回界面。</small
+              >
+              <div class="router-provider-form__actions">
+                <button id="save-router-provider" type="submit">保存 Provider</button>
+                <button id="cancel-router-provider" type="button">取消</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="converter-help">
+            <div class="step-heading">
+              <span class="step-number">3</span>
+              <div>
+                <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
+                <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
+              </div>
+            </div>
+            <p>
+              推荐新手使用 Claude Code Router 图形版；它默认用
+              <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
+              更适合熟悉配置文件和 Python 的用户。
+            </p>
+            <div class="help-link-grid">
+              <button
+                type="button"
+                data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
+              >
+                获取 Router 图形版
+              </button>
+              <button
+                type="button"
+                data-external-url="https://docs.litellm.ai/docs/anthropic_unified/"
+              >
+                查看 LiteLLM 教程
+              </button>
+              <button
+                type="button"
+                data-external-url="https://code.claude.com/docs/en/llm-gateway-connect"
+              >
+                Claude 官方网关说明
+              </button>
+            </div>
+          </section>
+
+          <form id="claude-config-form">
+            <div class="step-heading">
+              <span class="step-number">4</span>
+              <div>
+                <strong>确认 Claude Code 最终连接配置</strong>
+                <span>上面的自动操作会填到这里；熟悉后也可以手动修改。</span>
+              </div>
+            </div>
+
+            <label class="field" for="claude-preset">
+              <span>最终连接方式</span>
+              <select id="claude-preset">
+                <option value="anthropic">Anthropic 官方</option>
+                <option value="gateway">本机转换器 / 模型网关</option>
+                <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
+                <option value="custom">其他 Anthropic /v1/messages 服务</option>
+              </select>
+            </label>
+
+            <label class="field" id="base-url-field" for="claude-base-url">
+              <span>Claude API 基址</span>
+              <input
+                id="claude-base-url"
+                type="url"
+                maxlength="2048"
+                placeholder="https://gateway.example.com"
+                spellcheck="false"
+              />
+              <small id="base-url-help"
+                >这里填 Claude Code 最终访问的基址，不要填 /v1/chat/completions；接口必须提供
+                /v1/messages。</small
+              >
+            </label>
+
+            <label class="field" for="claude-model">
+              <span>模型 ID</span>
+              <input
+                id="claude-model"
+                type="text"
+                maxlength="200"
+                value="default"
+                spellcheck="false"
+              />
+              <small id="model-help">必须与最终网关中可用的模型 ID 完全一致。</small>
+            </label>
+
+            <label class="field" for="claude-auth-mode">
+              <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
+              <select id="claude-auth-mode">
+                <option value="existing">使用 Claude Code 现有登录</option>
+                <option value="apiKey">API Key（X-Api-Key）</option>
+              </select>
+              <small id="auth-mode-help"
+                >服务商写 Authorization / Bearer 就选 Bearer；写 x-api-key 就选 API Key。</small
+              >
+            </label>
+
+            <label class="field" id="credential-field" for="claude-credential">
+              <span id="credential-label">API 凭据</span>
+              <input
+                id="claude-credential"
+                type="password"
+                maxlength="4096"
+                autocomplete="new-password"
+                placeholder="留空则保留已保存的凭据"
+              />
+              <small id="credential-status">未保存凭据</small>
+            </label>
+
+            <div class="connection-test">
+              <button id="test-claude-connection" type="button">真实测试端点、密钥和模型</button>
+              <span>会发送最多 1 个输出 token，可能产生极少量费用。</span>
+            </div>
+            <div class="connection-test-result" id="connection-test-result" hidden>
+              <strong id="connection-test-title">等待测试</strong>
+              <span id="connection-test-summary"></span>
+              <div id="connection-test-stages"></div>
+            </div>
+
+            <div class="privacy-shield">
+              <span class="privacy-shield__icon" aria-hidden="true">◆</span>
+              <div>
+                <strong>严格防护始终启用</strong>
+                <span>锁定端点和模型；关闭遥测、错误上报、反馈与 WebFetch 的 Anthropic 预检。</span>
+              </div>
+            </div>
+
+            <div class="config-actions">
+              <button class="save-config" id="save-claude-config" type="submit">保存接入</button>
+              <button class="clear-credential" id="clear-credential" type="button">清除密钥</button>
+            </div>
+          </form>
+
+          <details class="connection-glossary">
+            <summary>还是看不懂？展开术语解释</summary>
+            <dl>
+              <div>
+                <dt>上游接口</dt>
+                <dd>服务商给你的模型地址，例如带 /v1/chat/completions 的中转。</dd>
+              </div>
+              <div>
+                <dt>本地转换器 / 模型网关</dt>
+                <dd>把 OpenAI 格式翻译成 Claude Code 需要的 Anthropic 格式。</dd>
+              </div>
+              <div>
+                <dt>管理页 3458</dt>
+                <dd>用浏览器配置 Router，不是 Claude Code 应连接的 API。</dd>
+              </div>
+              <div>
+                <dt>模型接口 3456</dt>
+                <dd>Router 默认给 Claude Code 使用的地址，通常填到 API 基址。</dd>
+              </div>
+              <div>
+                <dt>两种密钥</dt>
+                <dd>
+                  上游密钥交给 Router 访问服务商；Router 访问密钥交给 ClaudeDock。两者可能不同。
+                </dd>
+              </div>
+            </dl>
+          </details>
+        </section>
+
+        <section class="rail-page" data-rail-page="plugins">
+          <div class="connection-heading">
+            <strong>插件管理</strong>
+            <span>浏览、安装、启停和卸载 Claude Code 插件，无需记住命令。</span>
+          </div>
+
+          <div class="plugin-toolbar">
+            <label class="field" for="plugin-search">
+              <span>搜索插件</span>
+              <input
+                id="plugin-search"
+                type="search"
+                maxlength="120"
+                placeholder="按名称、说明或市场筛选"
+                spellcheck="false"
+              />
+            </label>
+            <div class="plugin-toolbar__actions">
+              <button id="update-all-plugins" type="button">更新全部</button>
+              <button id="refresh-plugins" type="button">刷新市场</button>
             </div>
           </div>
-          <div class="session-meta">
-            <span>ConPTY</span>
-            <span id="session-pid">PID —</span>
-          </div>
-        </section>
+          <p class="plugin-status" id="plugin-status">正在读取插件列表…</p>
 
-        <section class="project-section" aria-labelledby="project-heading">
-          <div class="section-label">
-            <span id="project-heading">项目管理</span>
-            <span id="project-count">1 个会话</span>
-          </div>
-          <div class="project-list" id="project-list" aria-label="已打开的项目"></div>
-          <button class="drop-zone" id="drop-zone" type="button">
-            <span class="drop-zone__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
-                <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
-                <path d="M12 10v7m-3-3 3 3 3-3" />
-              </svg>
-            </span>
-            <span class="drop-zone__title">拖入新的项目文件夹</span>
-            <span class="drop-zone__hint">为项目创建独立终端</span>
-          </button>
-          <button class="button button--secondary" id="choose-directory" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.1" />
-              <path d="M20.5 10.5v7.8a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
-            </svg>
-            添加项目
-          </button>
-        </section>
-
-        <section class="actions" aria-labelledby="actions-heading">
-          <div class="section-label">
-            <span id="actions-heading">快捷操作</span>
-            <span>当前会话</span>
-          </div>
-          <button class="button button--primary" id="run-claude" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m8 6 6 6-6 6" />
-              <path d="M15 18h3" />
-            </svg>
-            打开 Claude 工作台
-          </button>
-          <div class="button-row">
-            <button class="button button--quiet" id="restart-terminal" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
-              </svg>
-              重启
+          <nav class="plugin-tabs" aria-label="插件分组">
+            <button class="plugin-tab plugin-tab--active" data-plugin-tab="installed" type="button">
+              已安装 <span id="plugin-installed-count">0</span>
             </button>
-            <button class="button button--quiet" id="toggle-terminal" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="5" y="5" width="14" height="14" rx="2" />
-              </svg>
-              <span id="toggle-terminal-label">启动</span>
+            <button class="plugin-tab" data-plugin-tab="available" type="button">
+              可安装 <span id="plugin-available-count">0</span>
             </button>
+            <button class="plugin-tab" data-plugin-tab="marketplaces" type="button">
+              插件市场
+            </button>
+          </nav>
+
+          <div class="plugin-panel plugin-panel--active" data-plugin-panel="installed">
+            <div id="plugin-installed-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-plugin-panel="available">
+            <div id="plugin-available-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-plugin-panel="marketplaces">
+            <div id="plugin-marketplace-list" class="plugin-list" aria-live="polite"></div>
+            <form id="plugin-marketplace-form">
+              <label class="field" for="plugin-marketplace-source">
+                <span>添加插件市场</span>
+                <input
+                  id="plugin-marketplace-source"
+                  type="text"
+                  maxlength="400"
+                  placeholder="owner/repo 或 https 地址"
+                  spellcheck="false"
+                />
+                <small>支持 GitHub 仓库、https 地址或本机绝对路径。</small>
+              </label>
+              <button id="add-plugin-marketplace" type="submit">添加市场</button>
+            </form>
           </div>
         </section>
-
-        <div class="tray-note">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
-            <path d="M10 20h4" />
-          </svg>
-          <p>关闭窗口后所有项目继续在托盘运行。右键托盘图标可切换项目。</p>
-        </div>
       </aside>
+
+      <div
+        class="panel-resizer"
+        id="panel-resizer"
+        role="separator"
+        aria-label="调整侧栏宽度"
+        aria-orientation="vertical"
+        tabindex="0"
+      ></div>
 
       <section class="terminal-shell" aria-label="PowerShell 终端">
         <div class="terminal-toolbar">
@@ -121,11 +646,24 @@
               class="workbench-trigger"
               id="workbench-trigger"
               type="button"
+              title="Claude 工作台"
               aria-expanded="false"
               aria-controls="claude-workbench"
             >
               <span class="workbench-trigger__dot" aria-hidden="true"></span>
               Claude 工作台
+            </button>
+            <button
+              class="icon-button"
+              id="workbench-shortcuts"
+              type="button"
+              title="查看终端快捷键"
+              aria-label="查看终端快捷键"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 11v6M12 7.5h.01" />
+              </svg>
             </button>
             <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -143,8 +681,15 @@
           </div>
         </div>
         <footer class="terminal-footer">
-          <span><kbd>Ctrl</kbd> + <kbd>C</kbd> 中断</span>
-          <span><kbd>Ctrl</kbd> + <kbd>L</kbd> 清屏</span>
+          <button id="footer-connection" type="button">
+            <span class="footer-connection-dot" aria-hidden="true"></span>
+            <span id="footer-connection-label">连接待检测</span>
+          </button>
+          <span class="footer-context">
+            <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
+            <span id="footer-context-label">上下文 —</span>
+          </span>
+          <span id="footer-model">模型 —</span>
           <span id="footer-status">后台待命</span>
         </footer>
 
@@ -161,9 +706,17 @@
           aria-label="Claude 可视化工作台"
           aria-hidden="true"
         >
+          <div
+            class="drawer-resizer"
+            id="drawer-resizer"
+            role="separator"
+            aria-label="调整工作台宽度"
+            aria-orientation="vertical"
+            tabindex="0"
+          ></div>
           <header class="workbench-header">
             <div>
-              <span class="workbench-eyebrow">Project-scoped</span>
+              <span class="workbench-eyebrow" id="workbench-scope">当前对话</span>
               <h2>Claude 工作台</h2>
             </div>
             <button
@@ -185,8 +738,8 @@
               会话
             </button>
             <button class="workbench-tab" data-workbench-tab="commands" type="button">命令</button>
-            <button class="workbench-tab" data-workbench-tab="connection" type="button">
-              接入
+            <button class="workbench-tab" data-workbench-tab="shortcuts" type="button">
+              快捷键
             </button>
           </nav>
 
@@ -286,20 +839,8 @@
                 </div>
               </div>
               <p class="session-explainer">
-                新建会话使用空上下文；“继续”只续接当前项目目录最近的会话；“选择历史”打开 Claude Code
-                自带会话选择器。
+                这些按钮只作用于当前这一个对话。想同时跑多个，请到左侧“项目”里给同一个文件夹再开一个对话。
               </p>
-
-              <div class="session-history">
-                <div class="session-history__heading">
-                  <div>
-                    <span>历史会话</span>
-                    <strong>当前项目的所有对话</strong>
-                  </div>
-                  <span id="session-count">加载中...</span>
-                </div>
-                <div id="session-list" class="session-list" aria-live="polite"></div>
-              </div>
             </section>
 
             <section class="workbench-page" data-workbench-page="commands">
@@ -365,384 +906,37 @@
               </div>
             </section>
 
-            <section class="workbench-page" data-workbench-page="connection">
-              <div class="connection-heading">
-                <strong>小白接入向导</strong>
-                <span>先看懂你手上的接口，再决定 Claude Code 最终连接哪里。</span>
+            <section class="workbench-page" data-workbench-page="shortcuts">
+              <div class="command-intro">
+                <strong>PowerShell 与终端快捷键</strong>
+                <span>这些映射只在 ClaudeDock 的终端窗口内生效，不修改系统配置。</span>
               </div>
-
-              <section class="gateway-discovery" aria-labelledby="gateway-discovery-title">
-                <div class="gateway-discovery__heading">
-                  <div>
-                    <span class="step-kicker">自动检测</span>
-                    <strong id="gateway-discovery-title">这台电脑现在有什么？</strong>
-                  </div>
-                  <button id="refresh-gateways" type="button">重新检测</button>
+              <dl class="shortcut-list">
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>C</kbd></dt>
+                  <dd>有选区时复制；无选区时中断命令</dd>
                 </div>
-                <p id="gateway-diagnostics-summary">正在检查常见本地端口、命令和 Claude 设置…</p>
-                <div id="gateway-candidates" class="gateway-candidates" aria-live="polite"></div>
-                <div id="configuration-hints" class="configuration-hints" hidden></div>
-                <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
-              </section>
-
-              <section class="curl-onboarding" aria-labelledby="curl-onboarding-title">
-                <div class="step-heading">
-                  <span class="step-number">1</span>
-                  <div>
-                    <strong id="curl-onboarding-title">把服务商给你的 cURL 粘进来</strong>
-                    <span>ClaudeDock 只做本地识别，不会自动发送，也不会记录到日志。</span>
-                  </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>V</kbd></dt>
+                  <dd>粘贴剪贴板文本</dd>
                 </div>
-                <label class="field" for="curl-input">
-                  <span>cURL 命令或接口地址</span>
-                  <textarea
-                    id="curl-input"
-                    maxlength="50000"
-                    rows="5"
-                    spellcheck="false"
-                    placeholder='curl https://example.com/v1/chat/completions -H "Authorization: Bearer 新密钥" -d &apos;{"model":"模型名",...}&apos;'
-                  ></textarea>
-                </label>
-                <button class="analyze-curl" id="analyze-curl" type="button">
-                  识别这是什么接口
-                </button>
-                <div class="curl-analysis" id="curl-analysis" hidden>
-                  <div class="curl-analysis__headline">
-                    <span id="curl-protocol-badge">等待识别</span>
-                    <strong id="curl-analysis-title">—</strong>
-                  </div>
-                  <p id="curl-analysis-detail"></p>
-                  <dl>
-                    <div>
-                      <dt>接口</dt>
-                      <dd id="curl-analysis-endpoint">—</dd>
-                    </div>
-                    <div>
-                      <dt>模型</dt>
-                      <dd id="curl-analysis-model">—</dd>
-                    </div>
-                    <div>
-                      <dt>认证</dt>
-                      <dd id="curl-analysis-auth">—</dd>
-                    </div>
-                  </dl>
-                  <div class="curl-next-step" id="curl-next-step"></div>
-                  <div class="curl-analysis__actions">
-                    <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
-                    <button id="import-curl-router" type="button" hidden>
-                      一键写入 Router 并接入当前项目
-                    </button>
-                    <button id="use-detected-router" type="button" hidden>
-                      选用已发现的 Router
-                    </button>
-                    <button id="open-detected-router" type="button" hidden>
-                      打开 Router 管理页
-                    </button>
-                  </div>
+                <div>
+                  <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt>
+                  <dd>在当前 PowerShell 命令中换行</dd>
                 </div>
-
-                <!-- Smart guidance hints -->
-                <div class="smart-guidance" id="smart-guidance" hidden>
-                  <div class="smart-guidance__icon" aria-hidden="true">💡</div>
-                  <div>
-                    <strong id="smart-guidance-title">智能提示</strong>
-                    <p id="smart-guidance-detail"></p>
-                  </div>
-                  <div class="smart-guidance__actions" id="smart-guidance-actions"></div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>L</kbd></dt>
+                  <dd>清空当前终端显示</dd>
                 </div>
-              </section>
-
-              <section class="router-manager" aria-labelledby="router-manager-title">
-                <div class="step-heading">
-                  <span class="step-number">2</span>
-                  <div>
-                    <strong id="router-manager-title">安装与管理 Claude Code Router</strong>
-                    <span>只管理 Claude Code 接入；不会修改 Codex profile 或系统代理。</span>
-                  </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>A</kbd></dt>
+                  <dd>在 PowerShell 行编辑中移动到行首</dd>
                 </div>
-                <div class="router-status" id="router-status" data-state="unknown">
-                  <div>
-                    <strong id="router-status-title">正在读取 Router 状态…</strong>
-                    <span id="router-status-detail">等待首次检测</span>
-                  </div>
-                  <span id="router-version">未检测</span>
+                <div>
+                  <dt>鼠标右键</dt>
+                  <dd>打开复制、粘贴、全选和清屏菜单</dd>
                 </div>
-                <div class="router-remediation" id="router-remediation" hidden>
-                  <strong id="router-remediation-title">Router 需要完成配置</strong>
-                  <span id="router-remediation-detail"></span>
-                  <div>
-                    <button id="repair-router-from-project" type="button">
-                      用当前项目配置一键修复
-                    </button>
-                    <button id="configure-router-provider" type="button">
-                      手动添加第一个 Provider
-                    </button>
-                  </div>
-                </div>
-                <div class="router-actions">
-                  <button id="install-router" type="button">安装 / 更新官方版</button>
-                  <button id="start-router" type="button">启动 Router</button>
-                  <button id="stop-router" type="button">停止网关</button>
-                  <button id="open-router-management" type="button">打开完整管理页</button>
-                </div>
-                <p class="router-install-note">
-                  安装会从
-                  <code>musistudio/claude-code-router</code>
-                  官方 GitHub Release 下载 Windows 安装包，核对 Release 的 SHA-256
-                  后才启动安装向导。
-                </p>
-
-                <div class="router-provider-heading">
-                  <div>
-                    <strong>Provider 配置</strong>
-                    <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
-                  </div>
-                  <button id="add-router-provider" type="button">添加 Provider</button>
-                </div>
-                <div
-                  id="router-provider-list"
-                  class="router-provider-list"
-                  aria-live="polite"
-                ></div>
-
-                <form id="router-provider-form" hidden>
-                  <input id="router-provider-id" type="hidden" />
-                  <div class="router-provider-form__heading">
-                    <strong id="router-provider-form-title">添加 Provider</strong>
-                    <span>OpenAI cURL 通常选择 Chat Completions。</span>
-                  </div>
-                  <label class="field" for="router-provider-name">
-                    <span>Provider 名称</span>
-                    <input
-                      id="router-provider-name"
-                      type="text"
-                      maxlength="80"
-                      pattern="[A-Za-z0-9._-]+"
-                      placeholder="aancn-relay"
-                      spellcheck="false"
-                    />
-                    <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型 ID。</small>
-                  </label>
-                  <label class="field" for="router-provider-protocol">
-                    <span>上游协议</span>
-                    <select id="router-provider-protocol">
-                      <option value="openai_chat_completions">OpenAI Chat Completions</option>
-                      <option value="openai_responses">OpenAI Responses</option>
-                      <option value="anthropic_messages">Anthropic Messages</option>
-                    </select>
-                  </label>
-                  <label class="field" for="router-provider-base-url">
-                    <span>上游接口地址</span>
-                    <input
-                      id="router-provider-base-url"
-                      type="url"
-                      maxlength="2048"
-                      placeholder="https://example.com/v1/chat/completions"
-                      spellcheck="false"
-                    />
-                  </label>
-                  <label class="field" for="router-provider-models">
-                    <span>模型 ID（每行一个）</span>
-                    <textarea
-                      id="router-provider-models"
-                      maxlength="10000"
-                      rows="3"
-                      spellcheck="false"
-                      placeholder="claude-fable-5"
-                    ></textarea>
-                  </label>
-                  <label class="field" for="router-provider-api-key">
-                    <span>上游 API Key</span>
-                    <input
-                      id="router-provider-api-key"
-                      type="password"
-                      maxlength="20000"
-                      autocomplete="new-password"
-                      placeholder="编辑时留空可保留 CCR 中的原密钥"
-                    />
-                  </label>
-                  <label class="router-choice" for="router-provider-preferred">
-                    <input id="router-provider-preferred" type="checkbox" checked />
-                    <span>设为 Router 首选 Provider</span>
-                  </label>
-                  <label class="router-choice" for="router-provider-use-project">
-                    <input id="router-provider-use-project" type="checkbox" checked />
-                    <span>同时安全接入当前 ClaudeDock 项目</span>
-                  </label>
-                  <small class="router-project-note"
-                    >启用后，Router 本机访问密钥会在主进程内直接进入 Windows
-                    安全存储，不会传回界面。</small
-                  >
-                  <div class="router-provider-form__actions">
-                    <button id="save-router-provider" type="submit">保存 Provider</button>
-                    <button id="cancel-router-provider" type="button">取消</button>
-                  </div>
-                </form>
-              </section>
-
-              <section class="converter-help">
-                <div class="step-heading">
-                  <span class="step-number">3</span>
-                  <div>
-                    <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
-                    <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
-                  </div>
-                </div>
-                <p>
-                  推荐新手使用 Claude Code Router 图形版；它默认用
-                  <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
-                  更适合熟悉配置文件和 Python 的用户。
-                </p>
-                <div class="help-link-grid">
-                  <button
-                    type="button"
-                    data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
-                  >
-                    获取 Router 图形版
-                  </button>
-                  <button
-                    type="button"
-                    data-external-url="https://docs.litellm.ai/docs/anthropic_unified/"
-                  >
-                    查看 LiteLLM 教程
-                  </button>
-                  <button
-                    type="button"
-                    data-external-url="https://code.claude.com/docs/en/llm-gateway-connect"
-                  >
-                    Claude 官方网关说明
-                  </button>
-                </div>
-              </section>
-
-              <form id="claude-config-form">
-                <div class="step-heading">
-                  <span class="step-number">4</span>
-                  <div>
-                    <strong>确认 Claude Code 最终连接配置</strong>
-                    <span>上面的自动操作会填到这里；熟悉后也可以手动修改。</span>
-                  </div>
-                </div>
-
-                <label class="field" for="claude-preset">
-                  <span>最终连接方式</span>
-                  <select id="claude-preset">
-                    <option value="anthropic">Anthropic 官方</option>
-                    <option value="gateway">本机转换器 / 模型网关</option>
-                    <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
-                    <option value="custom">其他 Anthropic /v1/messages 服务</option>
-                  </select>
-                </label>
-
-                <label class="field" id="base-url-field" for="claude-base-url">
-                  <span>Claude API 基址</span>
-                  <input
-                    id="claude-base-url"
-                    type="url"
-                    maxlength="2048"
-                    placeholder="https://gateway.example.com"
-                    spellcheck="false"
-                  />
-                  <small id="base-url-help"
-                    >这里填 Claude Code 最终访问的基址，不要填 /v1/chat/completions；接口必须提供
-                    /v1/messages。</small
-                  >
-                </label>
-
-                <label class="field" for="claude-model">
-                  <span>模型 ID</span>
-                  <input
-                    id="claude-model"
-                    type="text"
-                    maxlength="200"
-                    value="default"
-                    spellcheck="false"
-                  />
-                  <small id="model-help">必须与最终网关中可用的模型 ID 完全一致。</small>
-                </label>
-
-                <label class="field" for="claude-auth-mode">
-                  <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
-                  <select id="claude-auth-mode">
-                    <option value="existing">使用 Claude Code 现有登录</option>
-                    <option value="apiKey">API Key（X-Api-Key）</option>
-                  </select>
-                  <small id="auth-mode-help"
-                    >服务商写 Authorization / Bearer 就选 Bearer；写 x-api-key 就选 API Key。</small
-                  >
-                </label>
-
-                <label class="field" id="credential-field" for="claude-credential">
-                  <span id="credential-label">API 凭据</span>
-                  <input
-                    id="claude-credential"
-                    type="password"
-                    maxlength="4096"
-                    autocomplete="new-password"
-                    placeholder="留空则保留已保存的凭据"
-                  />
-                  <small id="credential-status">未保存凭据</small>
-                </label>
-
-                <div class="connection-test">
-                  <button id="test-claude-connection" type="button">
-                    真实测试端点、密钥和模型
-                  </button>
-                  <span>会发送最多 1 个输出 token，可能产生极少量费用。</span>
-                </div>
-                <div class="connection-test-result" id="connection-test-result" hidden>
-                  <strong id="connection-test-title">等待测试</strong>
-                  <span id="connection-test-summary"></span>
-                  <div id="connection-test-stages"></div>
-                </div>
-
-                <div class="privacy-shield">
-                  <span class="privacy-shield__icon" aria-hidden="true">◆</span>
-                  <div>
-                    <strong>严格防护始终启用</strong>
-                    <span
-                      >锁定端点和模型；关闭遥测、错误上报、反馈与 WebFetch 的 Anthropic 预检。</span
-                    >
-                  </div>
-                </div>
-
-                <div class="config-actions">
-                  <button class="save-config" id="save-claude-config" type="submit">
-                    保存接入
-                  </button>
-                  <button class="clear-credential" id="clear-credential" type="button">
-                    清除密钥
-                  </button>
-                </div>
-              </form>
-
-              <details class="connection-glossary">
-                <summary>还是看不懂？展开术语解释</summary>
-                <dl>
-                  <div>
-                    <dt>上游接口</dt>
-                    <dd>服务商给你的模型地址，例如带 /v1/chat/completions 的中转。</dd>
-                  </div>
-                  <div>
-                    <dt>本地转换器 / 模型网关</dt>
-                    <dd>把 OpenAI 格式翻译成 Claude Code 需要的 Anthropic 格式。</dd>
-                  </div>
-                  <div>
-                    <dt>管理页 3458</dt>
-                    <dd>用浏览器配置 Router，不是 Claude Code 应连接的 API。</dd>
-                  </div>
-                  <div>
-                    <dt>模型接口 3456</dt>
-                    <dd>Router 默认给 Claude Code 使用的地址，通常填到 API 基址。</dd>
-                  </div>
-                  <div>
-                    <dt>两种密钥</dt>
-                    <dd>
-                      上游密钥交给 Router 访问服务商；Router 访问密钥交给 ClaudeDock。两者可能不同。
-                    </dd>
-                  </div>
-                </dl>
-              </details>
+              </dl>
             </section>
           </div>
         </aside>
@@ -759,6 +953,19 @@
         <strong>松开以添加项目</strong>
         <span>将为该项目创建独立 PowerShell 会话</span>
       </div>
+    </div>
+
+    <div class="terminal-context-menu" id="terminal-context-menu" role="menu" hidden>
+      <button data-terminal-context-action="copy" role="menuitem" type="button">
+        复制 <span>Ctrl+C</span>
+      </button>
+      <button data-terminal-context-action="paste" role="menuitem" type="button">
+        粘贴 <span>Ctrl+V</span>
+      </button>
+      <button data-terminal-context-action="select-all" role="menuitem" type="button">全选</button>
+      <button data-terminal-context-action="clear" role="menuitem" type="button">
+        清空显示 <span>Ctrl+L</span>
+      </button>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

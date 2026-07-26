@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   ClaudeConfigResult,
+  ClaudeConnectionAdvice,
   ClaudeConnectionTestResult,
   ClaudeGatewayDiagnostics,
   ClaudeOperationResult,
+  ClaudePluginCatalog,
+  ClaudePluginOperationResult,
   ClaudeProjectState,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
@@ -24,6 +27,20 @@ const api: ControlPanelApi = {
   chooseDirectory: () => ipcRenderer.invoke('directory:choose') as Promise<DirectoryChoiceResult>,
   closeProject: (sessionId: string) =>
     ipcRenderer.invoke('project:close', sessionId) as Promise<WorkspaceResult>,
+  closeProjectFolder: (projectPath: string) =>
+    ipcRenderer.invoke('project:close-folder', projectPath) as Promise<WorkspaceResult>,
+  openConversation: (projectPath: string) =>
+    ipcRenderer.invoke('project:open-conversation', projectPath) as Promise<WorkspaceResult>,
+  openStoredConversation: (projectPath: string, conversationId: string) =>
+    ipcRenderer.invoke(
+      'project:open-stored-conversation',
+      projectPath,
+      conversationId,
+    ) as Promise<WorkspaceResult>,
+  renameConversation: (sessionId: string, title: string) =>
+    ipcRenderer.invoke('project:rename-conversation', sessionId, title) as Promise<WorkspaceResult>,
+  forgetProject: (projectPath: string) =>
+    ipcRenderer.invoke('project:forget', projectPath) as Promise<WorkspaceResult>,
   getClaudeProjectState: (sessionId: string) =>
     ipcRenderer.invoke('claude:get-state', sessionId) as Promise<ClaudeProjectState>,
   getClaudeGatewayDiagnostics: (sessionId: string) =>
@@ -36,6 +53,11 @@ const api: ControlPanelApi = {
       'claude:router-get-state',
       sessionId,
     ) as Promise<ClaudeRouterManagementState>,
+  getClaudeConnectionAdvice: (sessionId: string) =>
+    ipcRenderer.invoke(
+      'claude:get-connection-advice',
+      sessionId,
+    ) as Promise<ClaudeConnectionAdvice>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
   deleteClaudeRouterProvider: (sessionId, providerId) =>
@@ -46,6 +68,17 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeRouterOperationResult>,
   installClaudeRouter: (sessionId) =>
     ipcRenderer.invoke('claude:router-install', sessionId) as Promise<ClaudeRouterOperationResult>,
+  installClaudeRouterFromSource: (sessionId, source) =>
+    ipcRenderer.invoke(
+      'claude:router-install-source',
+      sessionId,
+      source,
+    ) as Promise<ClaudeRouterOperationResult>,
+  uninstallClaudeRouter: (sessionId) =>
+    ipcRenderer.invoke(
+      'claude:router-uninstall',
+      sessionId,
+    ) as Promise<ClaudeRouterOperationResult>,
   launchClaude: (sessionId, mode) =>
     ipcRenderer.invoke('claude:launch', sessionId, mode) as Promise<ClaudeOperationResult>,
   onClaudeState: (listener) => {
@@ -135,6 +168,10 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('workspace:remove-stored-project', projectPath) as Promise<void>,
   getClaudeSessions: (sessionId) =>
     ipcRenderer.invoke('claude:get-sessions', sessionId) as Promise<ClaudeSessionMetadata[]>,
+  getClaudeSessionsForPath: (projectPath) =>
+    ipcRenderer.invoke('claude:get-sessions-for-path', projectPath) as Promise<
+      ClaudeSessionMetadata[]
+    >,
   deleteClaudeSession: (sessionId, conversationId) =>
     ipcRenderer.invoke('claude:delete-session', sessionId, conversationId) as Promise<boolean>,
   launchClaudeWithSession: (sessionId, conversationId) =>
@@ -143,6 +180,44 @@ const api: ControlPanelApi = {
       sessionId,
       conversationId,
     ) as Promise<ClaudeOperationResult>,
+  getClaudePlugins: (refresh) =>
+    ipcRenderer.invoke('claude:plugins-get', refresh ?? false) as Promise<ClaudePluginCatalog>,
+  installClaudePlugin: (pluginId) =>
+    ipcRenderer.invoke('claude:plugins-install', pluginId) as Promise<ClaudePluginOperationResult>,
+  uninstallClaudePlugin: (pluginId) =>
+    ipcRenderer.invoke(
+      'claude:plugins-uninstall',
+      pluginId,
+    ) as Promise<ClaudePluginOperationResult>,
+  setClaudePluginEnabled: (pluginId, enabled) =>
+    ipcRenderer.invoke(
+      'claude:plugins-set-enabled',
+      pluginId,
+      enabled,
+    ) as Promise<ClaudePluginOperationResult>,
+  updateClaudePlugin: (pluginId) =>
+    ipcRenderer.invoke('claude:plugins-update', pluginId) as Promise<ClaudePluginOperationResult>,
+  addClaudePluginMarketplace: (source) =>
+    ipcRenderer.invoke(
+      'claude:plugins-marketplace-add',
+      source,
+    ) as Promise<ClaudePluginOperationResult>,
+  removeClaudePluginMarketplace: (name) =>
+    ipcRenderer.invoke(
+      'claude:plugins-marketplace-remove',
+      name,
+    ) as Promise<ClaudePluginOperationResult>,
+  refreshClaudePluginMarketplaces: () =>
+    ipcRenderer.invoke(
+      'claude:plugins-marketplaces-refresh',
+    ) as Promise<ClaudePluginOperationResult>,
+  updateAllClaudePlugins: () =>
+    ipcRenderer.invoke('claude:plugins-update-all') as Promise<ClaudePluginOperationResult>,
+  getSoftwareUpdates: (refresh) => ipcRenderer.invoke('software:updates-get', refresh ?? false),
+  installOrUpdateClaudeCode: (source) =>
+    ipcRenderer.invoke('software:claude-install-update', source),
+  readClipboardText: () => ipcRenderer.invoke('app:clipboard-read') as Promise<string>,
+  writeClipboardText: (text) => ipcRenderer.invoke('app:clipboard-write', text) as Promise<boolean>,
 };
 
 contextBridge.exposeInMainWorld('controlPanel', api);

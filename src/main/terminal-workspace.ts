@@ -1,11 +1,12 @@
 import path from 'node:path';
-import type { TerminalStatus, WorkspaceState } from '../shared/contracts';
+import type { TerminalStatus, TerminalWorkspaceState } from '../shared/contracts';
 import { TerminalSession, type TerminalEnvironmentOverrides } from './terminal-session';
 
 export interface ManagedTerminal {
   getStatus: () => TerminalStatus;
   resize: (cols: number, rows: number) => void;
   restart: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
+  setTitle: (title: string) => TerminalStatus;
   start: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
   stop: (emitStatus?: boolean) => TerminalStatus;
   write: (data: string) => void;
@@ -14,19 +15,20 @@ export interface ManagedTerminal {
 type TerminalFactory = (
   id: string,
   initialCwd: string,
+  initialTitle: string,
   onData: (data: string) => void,
   onStatus: (status: TerminalStatus) => void,
 ) => ManagedTerminal;
 
 export interface OpenProjectResult {
   reused: boolean;
-  state: WorkspaceState;
+  state: TerminalWorkspaceState;
 }
 
-const defaultFactory: TerminalFactory = (id, initialCwd, onData, onStatus) =>
-  new TerminalSession(id, initialCwd, onData, onStatus);
+const defaultFactory: TerminalFactory = (id, initialCwd, initialTitle, onData, onStatus) =>
+  new TerminalSession(id, initialCwd, initialTitle, onData, onStatus);
 
-const sameDirectory = (left: string, right: string): boolean =>
+export const sameDirectory = (left: string, right: string): boolean =>
   path.resolve(left).localeCompare(path.resolve(right), undefined, { sensitivity: 'base' }) === 0;
 
 export class TerminalWorkspace {
@@ -37,20 +39,20 @@ export class TerminalWorkspace {
   public constructor(
     private readonly initialCwd: string,
     private readonly onData: (sessionId: string, data: string) => void,
-    private readonly onState: (state: WorkspaceState) => void,
+    private readonly onState: (state: TerminalWorkspaceState) => void,
     private readonly terminalFactory: TerminalFactory = defaultFactory,
   ) {
     this.activeSessionId = this.createSession(initialCwd);
   }
 
-  public activate(sessionId: string): WorkspaceState {
+  public activate(sessionId: string): TerminalWorkspaceState {
     this.requireSession(sessionId);
     this.activeSessionId = sessionId;
     this.emitState();
     return this.getState();
   }
 
-  public close(sessionId: string): WorkspaceState {
+  public close(sessionId: string): TerminalWorkspaceState {
     const session = this.requireSession(sessionId);
     const sessionIds = [...this.sessions.keys()];
     const closedIndex = sessionIds.indexOf(sessionId);
@@ -72,6 +74,18 @@ export class TerminalWorkspace {
     return this.getState();
   }
 
+  /** Close every conversation that belongs to one project folder. */
+  public closeDirectory(cwd: string): TerminalWorkspaceState {
+    const targets = this.sessionIdsForDirectory(cwd);
+    if (targets.length === 0) {
+      return this.getState();
+    }
+    for (const sessionId of targets) {
+      this.close(sessionId);
+    }
+    return this.getState();
+  }
+
   public getActiveStatus(): TerminalStatus {
     return this.requireSession(this.activeSessionId).getStatus();
   }
@@ -80,19 +94,32 @@ export class TerminalWorkspace {
     return this.requireSession(sessionId).getStatus();
   }
 
-  public getState(): WorkspaceState {
+  public getState(): TerminalWorkspaceState {
     return {
       activeSessionId: this.activeSessionId,
       sessions: [...this.sessions.values()].map((session) => session.getStatus()),
     };
   }
 
-  public openProject(cwd: string): OpenProjectResult {
-    const existing = [...this.sessions.values()].find((session) =>
-      sameDirectory(session.getStatus().cwd, cwd),
-    );
+  public hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
 
-    if (existing) {
+  public sessionIdsForDirectory(cwd: string): string[] {
+    return [...this.sessions.values()]
+      .filter((session) => sameDirectory(session.getStatus().cwd, cwd))
+      .map((session) => session.getStatus().id);
+  }
+
+  /**
+   * Focus a folder: reuse its first conversation when it is already open, otherwise
+   * create the folder's first one. Use `openConversation` to add a parallel one.
+   */
+  public openProject(cwd: string): OpenProjectResult {
+    const existingId = this.sessionIdsForDirectory(cwd)[0];
+
+    if (existingId) {
+      const existing = this.requireSession(existingId);
       const status = existing.getStatus();
       this.activeSessionId = status.id;
       if (status.phase === 'stopped' || status.phase === 'error') {
@@ -103,11 +130,25 @@ export class TerminalWorkspace {
       return { reused: true, state: this.getState() };
     }
 
-    const sessionId = this.createSession(cwd);
+    return { reused: false, state: this.openConversation(cwd) };
+  }
+
+  /** Always create an additional concurrent conversation for this folder. */
+  public openConversation(cwd: string, title?: string): TerminalWorkspaceState {
+    const sessionId = this.createSession(cwd, title ?? this.nextConversationTitle(cwd));
     this.activeSessionId = sessionId;
     this.emitState();
     this.requireSession(sessionId).start(cwd);
-    return { reused: false, state: this.getState() };
+    return this.getState();
+  }
+
+  public renameSession(sessionId: string, title: string): TerminalWorkspaceState {
+    const normalized = title.trim();
+    if (!normalized || normalized.length > 60 || /[\r\n]/.test(normalized)) {
+      throw new Error('对话名称需为 1-60 个字符，且不能换行。');
+    }
+    this.requireSession(sessionId).setTitle(normalized);
+    return this.getState();
   }
 
   public resize(sessionId: string, cols: number, rows: number): void {
@@ -139,13 +180,18 @@ export class TerminalWorkspace {
     this.requireSession(sessionId).write(data);
   }
 
-  private createSession(cwd: string): string {
+  private nextConversationTitle(cwd: string): string {
+    return `对话 ${this.sessionIdsForDirectory(cwd).length + 1}`;
+  }
+
+  private createSession(cwd: string, title = '对话 1'): string {
     const sessionId = `session-${this.nextSessionNumber}`;
     this.nextSessionNumber += 1;
 
     const session = this.terminalFactory(
       sessionId,
       cwd,
+      title,
       (data) => {
         this.onData(sessionId, data);
       },

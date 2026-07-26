@@ -13,6 +13,9 @@ export type ClaudeEndpointProtocol = 'anthropic' | 'openai' | 'unknown';
 export type GatewayCandidateKind = 'claude-code-router' | 'custom' | 'litellm';
 export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
 export type ClaudeRouterGatewayState = 'error' | 'running' | 'starting' | 'stopped' | 'unknown';
+export type ClaudeRouterInstallationKind = 'desktop' | 'mixed' | 'npm' | 'unknown';
+export type ClaudeRouterInstallSource = 'github' | 'npm' | 'npmmirror';
+export type ClaudeCodeInstallSource = 'native' | 'npm' | 'npmmirror';
 export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
 
@@ -148,10 +151,12 @@ export interface ClaudeRouterProviderView {
 }
 
 export interface ClaudeRouterManagementState {
+  canUninstall: boolean;
   checkedAt: number;
   endpoint: string;
   gatewayState: ClaudeRouterGatewayState;
   installed: boolean;
+  installationKind: ClaudeRouterInstallationKind;
   manageable: boolean;
   managementAvailable: boolean;
   message: string;
@@ -189,6 +194,7 @@ export interface TerminalStatus {
   phase: TerminalPhase;
   pid?: number;
   shell: string;
+  title: string;
 }
 
 export interface WorkspaceProject {
@@ -197,9 +203,25 @@ export interface WorkspaceProject {
   path: string;
 }
 
-export interface WorkspaceState {
+/** Shape owned by TerminalWorkspace; it knows nothing about persisted projects. */
+export interface TerminalWorkspaceState {
   activeSessionId: string;
   sessions: TerminalStatus[];
+}
+
+/** A project folder: either currently open (has live conversations) or only remembered. */
+export interface WorkspaceProjectView {
+  lastActiveAt?: number;
+  missing: boolean;
+  name: string;
+  open: boolean;
+  path: string;
+  remembered: boolean;
+  sessionIds: string[];
+}
+
+export interface WorkspaceState extends TerminalWorkspaceState {
+  projects: WorkspaceProjectView[];
 }
 
 export interface ClaudeSessionMetadata {
@@ -212,6 +234,92 @@ export interface ClaudeSessionMetadata {
   outputTokens?: number;
   sessionId: string;
   sessionName?: string;
+}
+
+export type ClaudePluginScope = 'local' | 'project' | 'user';
+
+export interface ClaudePluginView {
+  description: string;
+  enabled: boolean;
+  installCount?: number;
+  installed: boolean;
+  latestVersion?: string;
+  marketplaceName: string;
+  name: string;
+  pluginId: string;
+  scope?: ClaudePluginScope;
+  sourceLabel: string;
+  sourceRevision?: string;
+  latestSourceRevision?: string;
+  updateAvailable: boolean;
+  version?: string;
+}
+
+export interface ClaudePluginMarketplaceView {
+  installLocation?: string;
+  name: string;
+  repo?: string;
+  source: string;
+}
+
+export interface ClaudePluginCatalog {
+  available: ClaudePluginView[];
+  checkedAt: number;
+  cliAvailable: boolean;
+  installed: ClaudePluginView[];
+  marketplaces: ClaudePluginMarketplaceView[];
+  message: string;
+  updatesAvailable: number;
+}
+
+export interface ClaudePluginOperationResult {
+  catalog: ClaudePluginCatalog;
+  error?: string;
+  message: string;
+  ok: boolean;
+}
+
+export interface SoftwareUpdateTarget {
+  currentVersion?: string;
+  installed: boolean;
+  latestVersion?: string;
+  message: string;
+  updateAvailable: boolean;
+}
+
+export interface SoftwareUpdateState {
+  checkedAt: number;
+  claudeCode: SoftwareUpdateTarget;
+  router: SoftwareUpdateTarget;
+}
+
+export interface SoftwareUpdateOperationResult {
+  error?: string;
+  message: string;
+  ok: boolean;
+  state: SoftwareUpdateState;
+}
+
+export type ClaudeConnectionAdviceTone = 'error' | 'info' | 'success' | 'warning';
+export type ClaudeConnectionAdviceAction =
+  | 'install-router'
+  | 'import-curl'
+  | 'open-router-management'
+  | 'save-config'
+  | 'start-router'
+  | 'stop-router'
+  | 'switch-to-direct'
+  | 'switch-to-router'
+  | 'test-connection';
+
+export interface ClaudeConnectionAdvice {
+  actions: ClaudeConnectionAdviceAction[];
+  detail: string;
+  /** When true the renderer greys out every Router control: this project does not need it. */
+  routerNeeded: boolean;
+  routerRunningButUnused: boolean;
+  title: string;
+  tone: ClaudeConnectionAdviceTone;
 }
 
 export interface OperationResult {
@@ -243,9 +351,19 @@ export interface ControlPanelApi {
   addProject: (directoryPath: string) => Promise<WorkspaceResult>;
   chooseDirectory: () => Promise<DirectoryChoiceResult>;
   closeProject: (sessionId: string) => Promise<WorkspaceResult>;
+  /** Close every live conversation of a folder but keep the folder remembered. */
+  closeProjectFolder: (projectPath: string) => Promise<WorkspaceResult>;
+  /** Open one more concurrent conversation inside an already-open folder. */
+  openConversation: (projectPath: string) => Promise<WorkspaceResult>;
+  /** Open a remembered folder's history entry as a live conversation. */
+  openStoredConversation: (projectPath: string, conversationId: string) => Promise<WorkspaceResult>;
+  renameConversation: (sessionId: string, title: string) => Promise<WorkspaceResult>;
+  /** Forget a folder entirely: closes its conversations and drops it from disk. */
+  forgetProject: (projectPath: string) => Promise<WorkspaceResult>;
   getClaudeProjectState: (sessionId: string) => Promise<ClaudeProjectState>;
   getClaudeGatewayDiagnostics: (sessionId: string) => Promise<ClaudeGatewayDiagnostics>;
   getClaudeRouterManagementState: (sessionId: string) => Promise<ClaudeRouterManagementState>;
+  getClaudeConnectionAdvice: (sessionId: string) => Promise<ClaudeConnectionAdvice>;
   getDroppedPath: (file: File) => string;
   getWorkspace: () => Promise<WorkspaceState>;
   deleteClaudeRouterProvider: (
@@ -253,6 +371,11 @@ export interface ControlPanelApi {
     providerId: string,
   ) => Promise<ClaudeRouterOperationResult>;
   installClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
+  installClaudeRouterFromSource: (
+    sessionId: string,
+    source: ClaudeRouterInstallSource,
+  ) => Promise<ClaudeRouterOperationResult>;
+  uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
   openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
@@ -287,9 +410,28 @@ export interface ControlPanelApi {
   getStoredProjects: () => Promise<WorkspaceProject[]>;
   removeStoredProject: (projectPath: string) => Promise<void>;
   getClaudeSessions: (sessionId: string) => Promise<ClaudeSessionMetadata[]>;
+  getClaudeSessionsForPath: (projectPath: string) => Promise<ClaudeSessionMetadata[]>;
   deleteClaudeSession: (sessionId: string, conversationId: string) => Promise<boolean>;
   launchClaudeWithSession: (
     sessionId: string,
     conversationId: string,
   ) => Promise<ClaudeOperationResult>;
+  getClaudePlugins: (refresh?: boolean) => Promise<ClaudePluginCatalog>;
+  installClaudePlugin: (pluginId: string) => Promise<ClaudePluginOperationResult>;
+  uninstallClaudePlugin: (pluginId: string) => Promise<ClaudePluginOperationResult>;
+  setClaudePluginEnabled: (
+    pluginId: string,
+    enabled: boolean,
+  ) => Promise<ClaudePluginOperationResult>;
+  updateClaudePlugin: (pluginId: string) => Promise<ClaudePluginOperationResult>;
+  addClaudePluginMarketplace: (source: string) => Promise<ClaudePluginOperationResult>;
+  removeClaudePluginMarketplace: (name: string) => Promise<ClaudePluginOperationResult>;
+  refreshClaudePluginMarketplaces: () => Promise<ClaudePluginOperationResult>;
+  updateAllClaudePlugins: () => Promise<ClaudePluginOperationResult>;
+  getSoftwareUpdates: (refresh?: boolean) => Promise<SoftwareUpdateState>;
+  installOrUpdateClaudeCode: (
+    source: ClaudeCodeInstallSource,
+  ) => Promise<SoftwareUpdateOperationResult>;
+  readClipboardText: () => Promise<string>;
+  writeClipboardText: (text: string) => Promise<boolean>;
 }
