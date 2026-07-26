@@ -338,6 +338,7 @@ export interface WorkspaceResult {
 export type DirectoryChoiceResult =
   | {
       canceled: true;
+      error?: string;
     }
   | {
       canceled: false;

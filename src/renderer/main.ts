@@ -2816,6 +2816,9 @@ const addProject = async (directoryPath: string): Promise<void> => {
         terminalViews.get(result.state.activeSessionId)?.terminal.focus();
       }, 60);
     }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '';
+    showToast(detail || '添加项目失败，请重试。', 'error');
   } finally {
     dropZone.disabled = false;
     chooseDirectoryButton.disabled = false;
@@ -2826,11 +2829,16 @@ const addProject = async (directoryPath: string): Promise<void> => {
 const openDirectoryPicker = async (): Promise<void> => {
   try {
     const choice = await window.controlPanel.chooseDirectory();
-    if (!choice.canceled) {
-      await addProject(choice.path);
+    if (choice.canceled) {
+      if (choice.error) {
+        showToast(choice.error, 'error');
+      }
+      return;
     }
-  } catch {
-    showToast('无法打开文件夹选择器。', 'error');
+    await addProject(choice.path);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '';
+    showToast(detail || '无法调用系统文件夹选择器。', 'error');
   }
 };
 

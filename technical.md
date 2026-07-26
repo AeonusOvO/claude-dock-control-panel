@@ -67,6 +67,10 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
 - 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。
+- `directory:choose` 从 IPC sender 解析真实所属 `BrowserWindow`，并仅在活动 cwd 仍是可访问
+  目录时把它设为 `defaultPath`，否则回退到用户目录。带父窗口的原生对话框若因 Windows
+  owner handle 状态失败，会无父窗口重试一次；失败原因通过结构化结果返回，不与后续
+  `project:add` 错误混淆。
 - 切换项目不重启 PTY；关闭项目才会终止对应进程，且不会影响其他会话。
 - `WorkspaceStore` 把已添加项目与最后激活路径保存到
   `userData/claude/workspace.json`。写入采用临时文件加重命名；启动恢复不会改写原来的
@@ -321,7 +325,8 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
-  `custom-title` 写入、终端主题约束、PowerShell 启动脚本语法和软件语义版本比较。
+  `custom-title` 写入、目录选择器默认路径回退、终端主题约束、PowerShell 启动脚本语法和
+  软件语义版本比较。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸

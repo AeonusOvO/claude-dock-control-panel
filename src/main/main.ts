@@ -47,6 +47,7 @@ import {
   normalizeClaudeSessionTitle,
 } from './claude-session-manager';
 import { resolveDirectory } from './directory';
+import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
 
@@ -179,25 +180,47 @@ const showMainWindow = (): void => {
   mainWindow.focus();
 };
 
-const chooseDirectory = async (): Promise<DirectoryChoiceResult> => {
+const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
+  const defaultPath = directoryDialogDefaultPath(workspace.getActiveStatus().cwd, homedir());
   const options: Electron.OpenDialogOptions = {
     buttonLabel: '添加此项目',
-    defaultPath: workspace.getActiveStatus().cwd,
+    ...(defaultPath ? { defaultPath } : {}),
     properties: ['openDirectory'],
     title: '添加项目文件夹',
   };
-  const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, options)
-    : await dialog.showOpenDialog(options);
+  let result: Electron.OpenDialogReturnValue;
+  try {
+    result =
+      ownerWindow && !ownerWindow.isDestroyed()
+        ? await dialog.showOpenDialog(ownerWindow, options)
+        : await dialog.showOpenDialog(options);
+  } catch (ownedDialogError) {
+    if (!ownerWindow || ownerWindow.isDestroyed()) {
+      return { canceled: true, error: directoryDialogError(ownedDialogError) };
+    }
+    try {
+      // A stale Windows owner handle can reject the native dialog. Retry once without a parent.
+      result = await dialog.showOpenDialog(options);
+    } catch (unownedDialogError) {
+      return { canceled: true, error: directoryDialogError(unownedDialogError) };
+    }
+  }
 
   if (result.canceled || !result.filePaths[0]) {
     return { canceled: true };
   }
 
-  return {
-    canceled: false,
-    path: resolveDirectory(result.filePaths[0]),
-  };
+  try {
+    return {
+      canceled: false,
+      path: resolveDirectory(result.filePaths[0]),
+    };
+  } catch (error) {
+    return {
+      canceled: true,
+      error: error instanceof Error ? error.message : '所选文件夹无法访问。',
+    };
+  }
 };
 
 const operationFromStatus = (status: TerminalStatus): OperationResult => ({
@@ -255,10 +278,15 @@ const releaseRuntimeForSessions = (sessionIds: string[]): void => {
 
 const pickDirectoryFromTray = async (): Promise<void> => {
   try {
-    const choice = await chooseDirectory();
+    showMainWindow();
+    const choice = await chooseDirectory(mainWindow ?? undefined);
     if (!choice.canceled) {
-      addProject(choice.path);
-      showMainWindow();
+      const added = addProject(choice.path);
+      if (!added.ok) {
+        throw new Error(added.error ?? '无法添加该项目。');
+      }
+    } else if (choice.error) {
+      throw new Error(choice.error);
     }
   } catch (error) {
     await dialog.showMessageBox({
@@ -774,7 +802,7 @@ const registerIpc = (): void => {
   });
   ipcMain.handle('directory:choose', async (event) => {
     validateSender(event);
-    return chooseDirectory();
+    return chooseDirectory(BrowserWindow.fromWebContents(event.sender) ?? undefined);
   });
   ipcMain.handle('claude:get-state', async (event, sessionId: unknown) => {
     validateSender(event);
