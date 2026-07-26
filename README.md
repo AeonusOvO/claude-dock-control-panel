@@ -4,6 +4,21 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code 模型/API 接入、会话上下文与常用斜杠命令，
 并通过系统托盘查看后台状态。
 
+## 当前版本重点 (2026-07-26)
+
+当前开发分支包含以下改进：
+
+- 🎨 **完整设计令牌系统**：201 处 CSS 变量统一管理颜色、间距、字号、动效
+- 📐 **响应式布局优化**：结构性保证终端最小宽度 256px，抽屉自适应收缩
+- ✨ **Material Design 3 动效**：非对称进出场、错落动画、完善的 reduced-motion 支持
+- ♿ **可访问性修复**：最小字号从 6.8px 提升到 11px，所有文字对比度符合 WCAG 标准
+- 🎯 **单一强调色原则**：移除装饰性渐变和多余彩色，保留功能性状态色
+- 📁 **项目工作区恢复**：自动记住已添加项目和最后激活项目，关闭项目时同步移除恢复记录
+- 💬 **当前项目会话历史**：读取 Claude Code 的项目级 JSONL 元数据，可安全恢复或经确认删除
+- 🧪 **渲染启动契约测试**：检查 HTML 结构、重复 ID 和入口脚本依赖的必需控件
+
+视觉与交互约束详见 [design.md](design.md)。
+
 ## 功能边界
 
 - 每个项目拥有独立的 Windows PowerShell/ConPTY 会话，可同时在后台运行。
@@ -36,6 +51,8 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   错误，会立即显示红色提示并引导回“接入”页。
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
   `/model`、`/permissions`、`/compact` 等常用斜杠命令变成可点击操作。
+- “会话”页列出当前项目的 Claude Code 历史会话元数据，不跨项目扫描。恢复会话仍通过
+  Claude Code 官方 `--resume <session-id>`；删除只针对当前项目的对应 JSONL，并要求确认。
 - 通过 Claude Code 官方 `statusLine` 数据实时显示上下文窗口、输入/输出 token、会话估算
   费用、持续时间、模型和会话 ID；不解析易变的终端绘制文本。
 - 模型/API 路由只注入 ClaudeDock 为当前项目启动的进程，不修改 Codex、Claude Code
@@ -61,6 +78,7 @@ npm run dev
 
 ```powershell
 npm run lint
+npm run format:check
 npm run typecheck
 npm test
 npm run build

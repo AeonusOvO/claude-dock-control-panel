@@ -289,6 +289,17 @@
                 新建会话使用空上下文；“继续”只续接当前项目目录最近的会话；“选择历史”打开 Claude Code
                 自带会话选择器。
               </p>
+
+              <div class="session-history">
+                <div class="session-history__heading">
+                  <div>
+                    <span>历史会话</span>
+                    <strong>当前项目的所有对话</strong>
+                  </div>
+                  <span id="session-count">加载中...</span>
+                </div>
+                <div id="session-list" class="session-list" aria-live="polite"></div>
+              </div>
             </section>
 
             <section class="workbench-page" data-workbench-page="commands">
@@ -428,6 +439,16 @@
                       打开 Router 管理页
                     </button>
                   </div>
+                </div>
+
+                <!-- Smart guidance hints -->
+                <div class="smart-guidance" id="smart-guidance" hidden>
+                  <div class="smart-guidance__icon" aria-hidden="true">💡</div>
+                  <div>
+                    <strong id="smart-guidance-title">智能提示</strong>
+                    <p id="smart-guidance-detail"></p>
+                  </div>
+                  <div class="smart-guidance__actions" id="smart-guidance-actions"></div>
                 </div>
               </section>
 

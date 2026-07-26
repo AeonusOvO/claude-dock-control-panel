@@ -451,6 +451,23 @@ export class ClaudeRuntime {
     cwd: string,
     mode: ClaudeLaunchMode,
   ): Promise<PreparedClaudeLaunch> {
+    return this.prepareLaunchInternal(sessionId, cwd, mode);
+  }
+
+  public async prepareLaunchWithSession(
+    sessionId: string,
+    cwd: string,
+    conversationId: string,
+  ): Promise<PreparedClaudeLaunch> {
+    return this.prepareLaunchInternal(sessionId, cwd, 'resume', conversationId);
+  }
+
+  private async prepareLaunchInternal(
+    sessionId: string,
+    cwd: string,
+    mode: ClaudeLaunchMode,
+    resumeSessionId?: string,
+  ): Promise<PreparedClaudeLaunch> {
     const installation = await this.diagnoseInstallation(true);
     if (installation.security !== 'ready') {
       throw new Error(installation.message);
@@ -502,7 +519,13 @@ export class ClaudeRuntime {
     runtime.metrics = undefined;
     runtime.metricsPath = metricsPath;
 
-    const command = buildClaudeLaunchCommand(settingsPath, config.model, mode, runtime.exitMarker);
+    const command = buildClaudeLaunchCommand(
+      settingsPath,
+      config.model,
+      mode,
+      runtime.exitMarker,
+      resumeSessionId,
+    );
     const state = await this.getState(sessionId, cwd);
     return {
       command,

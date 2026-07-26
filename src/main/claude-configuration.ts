@@ -268,6 +268,7 @@ export const buildClaudeLaunchCommand = (
   model: string,
   mode: ClaudeLaunchMode,
   exitMarker: string,
+  resumeSessionId?: string,
 ): string => {
   const argumentsList = [
     '--settings',
@@ -281,6 +282,9 @@ export const buildClaudeLaunchCommand = (
     argumentsList.push('--continue');
   } else if (mode === 'resume') {
     argumentsList.push('--resume');
+    if (resumeSessionId) {
+      argumentsList.push(quotePowerShellArgument(resumeSessionId));
+    }
   }
 
   const cleanupPaths = [

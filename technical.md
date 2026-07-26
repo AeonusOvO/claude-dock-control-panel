@@ -27,6 +27,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
+        ├── ClaudeSessionManager ── 当前项目 JSONL 元数据 / 定向恢复与删除
+        ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 官方安装包
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
@@ -34,12 +36,35 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         └── 原生目录选择器、路径验证
 ```
 
+### 设计系统跨文件耦合（关键约束）
+
+以下值必须跨文件同步，不一致会导致视觉错位或色块跳变：
+
+- **`--titlebar-h` (48px)** ↔ `src/main/main.ts:818` `titleBarOverlay.height`
+- **`--toolbar-h` / `--footer-h`** ↔ `.terminal-shell` 网格行 ↔ `.workbench-scrim` / `.claude-workbench` 的 `top`/`bottom`（共 3 处）
+- **`--surface-canvas`** ↔ `src/main/main.ts:809` `backgroundColor` ↔ `body` 背景色
+- **`--surface-1`** ↔ `src/main/main.ts:817` `titleBarOverlay.color` ↔ `.titlebar` 背景色
+- **`--surface-terminal`** ↔ `.terminal-shell` 背景色 ↔ `src/renderer/main.ts:219` xterm `theme.background`（三者必须完全一致，否则出现接缝）
+- **`--text`** ↔ `src/main/main.ts:818` `titleBarOverlay.symbolColor`（Windows 标题栏按钮颜色）
+
+xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`letterSpacing: 0` 是 TUI 边框对齐的必需值。
+
+### 关键取舍
+
+- **拒绝 Win11 `backgroundMaterial: 'mica'/'acrylic'`**：半透明桌面色调与需要接近纯黑对比度的终端直接冲突，且在非 Win11 上降级不可预测。
+- **遮罩层不用 `backdrop-filter`**：遮罩覆盖在持续刷新的 xterm canvas 上，背景模糊会在 Claude 流式输出时每帧强制 GPU 合成，造成性能问题。
+
+## 渲染进程与 IPC
+
 - 渲染进程不启用 Node.js，只能调用 preload 暴露的固定方法。
 - 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
 - 添加目录会创建新会话；同一路径（忽略大小写）只保留一个会话并直接激活。
 - 切换项目不重启 PTY；关闭项目才会终止对应进程，且不会影响其他会话。
+- `WorkspaceStore` 把已添加项目与最后激活路径保存到
+  `userData/claude/workspace.json`。写入采用临时文件加重命名；启动恢复不会改写原来的
+  最后激活项，项目切换和关闭后再同步状态。
 - 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
 
 ## Claude Code 接入与会话
@@ -200,7 +225,14 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
   创建新 session；`--continue` 续接当前目录最近的 session；`--resume` 打开会话选择器；
   `/clear` 保存旧会话并用空上下文创建新 session。
 - Claude Code 会把当前项目的会话 JSONL 存在 `~/.claude/projects/<project>/`。ClaudeDock
-  不复制或解析正文；它只显示 Claude Code `statusLine` 提供的结构化数字。
+  不复制、索引或向 renderer 返回正文；历史列表读取 JSONL 结构时只提取元数据，运行中用量
+  仍只显示 Claude Code `statusLine` 提供的结构化数字。
+- 历史会话列表只进入当前工作目录编码后对应的项目目录，并只读取目录顶层 UUID 命名的
+  `.jsonl` 文件。列表提取 session ID、slug/标题、时间、模型和 usage 等元数据，不跨项目
+  枚举；单文件超过 50 MiB 时跳过。
+- 定向恢复把经过 UUID 校验的 session ID 交给统一的 PowerShell 命令构造器，因此继续保留
+  参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
+  目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
   session ID、上下文窗口、输入/输出 token、估算费用、持续时间和改动行数。主进程每秒读取
   变更并通过受限 IPC 推送。
@@ -236,7 +268,10 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 - `npm run typecheck`：分别检查渲染端和主进程类型。
 - `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别、Router 配置
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
-  结果映射，并在 Windows PowerShell 中用模拟 statusLine JSON 验证指标采集脚本。
+  结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
+  statusLine JSON 验证指标采集脚本。
+- `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
+  唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
   将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。

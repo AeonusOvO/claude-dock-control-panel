@@ -191,9 +191,27 @@ export interface TerminalStatus {
   shell: string;
 }
 
+export interface WorkspaceProject {
+  addedAt: number;
+  lastActiveAt: number;
+  path: string;
+}
+
 export interface WorkspaceState {
   activeSessionId: string;
   sessions: TerminalStatus[];
+}
+
+export interface ClaudeSessionMetadata {
+  conversationId: string;
+  estimatedCostUsd?: number;
+  inputTokens?: number;
+  lastActiveAt: number;
+  messageCount: number;
+  modelId?: string;
+  outputTokens?: number;
+  sessionId: string;
+  sessionName?: string;
 }
 
 export interface OperationResult {
@@ -266,4 +284,12 @@ export interface ControlPanelApi {
   startTerminal: (sessionId: string) => Promise<OperationResult>;
   stopTerminal: (sessionId: string) => Promise<OperationResult>;
   writeTerminal: (sessionId: string, data: string) => void;
+  getStoredProjects: () => Promise<WorkspaceProject[]>;
+  removeStoredProject: (projectPath: string) => Promise<void>;
+  getClaudeSessions: (sessionId: string) => Promise<ClaudeSessionMetadata[]>;
+  deleteClaudeSession: (sessionId: string, conversationId: string) => Promise<boolean>;
+  launchClaudeWithSession: (
+    sessionId: string,
+    conversationId: string,
+  ) => Promise<ClaudeOperationResult>;
 }

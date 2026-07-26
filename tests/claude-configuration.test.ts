@@ -115,4 +115,20 @@ describe('Claude Code configuration', () => {
     expect(command).toContain('Env:CCR_CLAUDE_CODE_MODEL');
     expect(command).toContain('Env:CODEXL_CLAUDE_CODE_MODEL');
   });
+
+  it('quotes a specific resume session while preserving environment cleanup', () => {
+    const marker = '\u001b]9;claudedock-exit:session-2\u0007';
+    const command = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'resume',
+      marker,
+      "a'quoted-session",
+    );
+
+    expect(command).toContain("--resume 'a''quoted-session'");
+    expect(command).toContain('--no-chrome');
+    expect(command).toContain('Remove-Item Env:ANTHROPIC_API_KEY');
+    expect(command).not.toContain(marker);
+  });
 });

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
@@ -17,8 +18,10 @@ import type {
   WorkspaceState,
 } from '../shared/contracts';
 import { ClaudeRuntime } from './claude-runtime';
+import { ClaudeSessionManager, isValidClaudeSessionId } from './claude-session-manager';
 import { resolveDirectory } from './directory';
 import { TerminalWorkspace } from './terminal-workspace';
+import { WorkspaceStore } from './workspace-store';
 
 app.enableSandbox();
 
@@ -48,6 +51,9 @@ const workspace = new TerminalWorkspace(
     updateTray(state);
   },
 );
+
+const workspaceStore = new WorkspaceStore(app.getPath('userData'));
+const sessionManager = new ClaudeSessionManager();
 
 const statusText = (status: TerminalStatus): string => {
   switch (status.phase) {
@@ -123,6 +129,10 @@ const addProject = (directoryPath: string): WorkspaceResult => {
   try {
     const resolved = resolveDirectory(directoryPath);
     const result = workspace.openProject(resolved);
+
+    // Save to persistent workspace
+    workspaceStore.addProject(resolved);
+
     return {
       ok: true,
       reused: result.reused,
@@ -131,6 +141,15 @@ const addProject = (directoryPath: string): WorkspaceResult => {
   } catch (error) {
     return failedWorkspaceResult(error);
   }
+};
+
+const activateProject = (sessionId: string): WorkspaceState => {
+  const state = workspace.activate(sessionId);
+  const active = state.sessions.find((session) => session.id === state.activeSessionId);
+  if (active) {
+    workspaceStore.updateLastActive(active.cwd);
+  }
+  return state;
 };
 
 const pickDirectoryFromTray = async (): Promise<void> => {
@@ -164,7 +183,7 @@ function updateTray(state = workspace.getState()): void {
   const projectMenu: MenuItemConstructorOptions[] = state.sessions.map((status) => ({
     checked: status.id === state.activeSessionId,
     click: () => {
-      workspace.activate(status.id);
+      activateProject(status.id);
       showMainWindow();
     },
     label: `${projectName(status)} · ${statusText(status)}`,
@@ -410,7 +429,7 @@ const registerIpc = (): void => {
     try {
       return {
         ok: true,
-        state: workspace.activate(validateSessionId(sessionId)),
+        state: activateProject(validateSessionId(sessionId)),
       } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
@@ -420,10 +439,17 @@ const registerIpc = (): void => {
     validateSender(event);
     try {
       const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
       requireClaudeRuntime().closeSession(validatedSessionId);
+      workspaceStore.removeProject(status.cwd);
+      const state = workspace.close(validatedSessionId);
+      const active = state.sessions.find((session) => session.id === state.activeSessionId);
+      if (active) {
+        workspaceStore.updateLastActive(active.cwd);
+      }
       return {
         ok: true,
-        state: workspace.close(validatedSessionId),
+        state,
       } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
@@ -794,6 +820,66 @@ const registerIpc = (): void => {
       // A ResizeObserver callback can race with project closure.
     }
   });
+  ipcMain.handle('workspace:get-stored-projects', async (event) => {
+    validateSender(event);
+    return workspaceStore.getProjects().filter((project) => existsSync(project.path));
+  });
+  ipcMain.handle('workspace:remove-stored-project', async (event, projectPath: unknown) => {
+    validateSender(event);
+    if (typeof projectPath !== 'string') {
+      throw new Error('项目路径格式无效。');
+    }
+    workspaceStore.removeProject(projectPath);
+  });
+  ipcMain.handle('claude:get-sessions', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return sessionManager.getSessionsForProject(status.cwd);
+  });
+  ipcMain.handle(
+    'claude:delete-session',
+    async (event, sessionId: unknown, conversationId: unknown) => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
+        throw new Error('会话标识无效。');
+      }
+      const status = workspace.getStatus(validatedSessionId);
+      return sessionManager.deleteSession(status.cwd, conversationId);
+    },
+  );
+  ipcMain.handle(
+    'claude:launch-with-session',
+    async (event, sessionId: unknown, conversationId: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
+          throw new Error('会话标识无效。');
+        }
+        const prepared = await runtime.prepareLaunchWithSession(
+          validatedSessionId,
+          status.cwd,
+          conversationId,
+        );
+        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
+        if (terminalStatus.phase === 'error') {
+          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
+        }
+        workspace.write(validatedSessionId, `${prepared.command}\r`);
+        return {
+          ok: true,
+          state: await runtime.getState(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        runtime.setInactive(validatedSessionId);
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
 };
 
 const createTray = (): void => {
@@ -882,6 +968,31 @@ if (!hasSingleInstanceLock) {
     );
     registerIpc();
     createTray();
+
+    // Restore workspace projects from persistent storage
+    const lastActive = workspaceStore.getLastActiveProject();
+    const storedProjects = workspaceStore.getProjects();
+    for (const project of storedProjects) {
+      if (existsSync(project.path)) {
+        try {
+          workspace.openProject(project.path);
+        } catch {
+          // Skip projects that can't be opened
+        }
+      }
+    }
+
+    // If last active project exists, activate it
+    if (lastActive && existsSync(lastActive)) {
+      const state = workspace.getState();
+      const session = state.sessions.find(
+        (s) => path.resolve(s.cwd).toLowerCase() === path.resolve(lastActive).toLowerCase(),
+      );
+      if (session) {
+        activateProject(session.id);
+      }
+    }
+
     await createWindow();
   });
 }

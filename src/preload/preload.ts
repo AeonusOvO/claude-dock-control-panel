@@ -7,9 +7,11 @@ import type {
   ClaudeProjectState,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
+  ClaudeSessionMetadata,
   ControlPanelApi,
   DirectoryChoiceResult,
   OperationResult,
+  WorkspaceProject,
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
@@ -127,6 +129,20 @@ const api: ControlPanelApi = {
   writeTerminal: (sessionId, data) => {
     ipcRenderer.send('terminal:write', sessionId, data);
   },
+  getStoredProjects: () =>
+    ipcRenderer.invoke('workspace:get-stored-projects') as Promise<WorkspaceProject[]>,
+  removeStoredProject: (projectPath) =>
+    ipcRenderer.invoke('workspace:remove-stored-project', projectPath) as Promise<void>,
+  getClaudeSessions: (sessionId) =>
+    ipcRenderer.invoke('claude:get-sessions', sessionId) as Promise<ClaudeSessionMetadata[]>,
+  deleteClaudeSession: (sessionId, conversationId) =>
+    ipcRenderer.invoke('claude:delete-session', sessionId, conversationId) as Promise<boolean>,
+  launchClaudeWithSession: (sessionId, conversationId) =>
+    ipcRenderer.invoke(
+      'claude:launch-with-session',
+      sessionId,
+      conversationId,
+    ) as Promise<ClaudeOperationResult>,
 };
 
 contextBridge.exposeInMainWorld('controlPanel', api);

@@ -11,6 +11,7 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeRouterProviderView,
+  ClaudeSessionMetadata,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   OperationResult,
@@ -158,6 +159,12 @@ const workbenchScrim = requiredElement<HTMLButtonElement>('#workbench-scrim');
 const workbenchTrigger = requiredElement<HTMLButtonElement>('#workbench-trigger');
 const useDetectedRouterButton = requiredElement<HTMLButtonElement>('#use-detected-router');
 const baseUrlHelp = requiredElement<HTMLElement>('#base-url-help');
+const sessionCount = requiredElement<HTMLElement>('#session-count');
+const sessionList = requiredElement<HTMLElement>('#session-list');
+const smartGuidance = requiredElement<HTMLElement>('#smart-guidance');
+const smartGuidanceTitle = requiredElement<HTMLElement>('#smart-guidance-title');
+const smartGuidanceDetail = requiredElement<HTMLElement>('#smart-guidance-detail');
+const smartGuidanceActions = requiredElement<HTMLElement>('#smart-guidance-actions');
 
 brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
 
@@ -177,6 +184,7 @@ let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerOperationInProgress = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
+let sessionLoadInProgress = false;
 let workspaceState: WorkspaceState = {
   activeSessionId: '',
   sessions: [],
@@ -277,6 +285,33 @@ const formatDuration = (milliseconds: number | undefined): string => {
     return `${totalMinutes} 分`;
   }
   return `${Math.floor(totalMinutes / 60)} 时 ${totalMinutes % 60} 分`;
+};
+
+const formatRelativeTime = (timestamp: number): string => {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const minutes = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days = Math.floor(diff / 86_400_000);
+
+  if (minutes < 1) {
+    return '刚刚';
+  }
+  if (minutes < 60) {
+    return `${minutes} 分钟前`;
+  }
+  if (hours < 24) {
+    return `${hours} 小时前`;
+  }
+  if (days < 30) {
+    return `${days} 天前`;
+  }
+
+  return new Date(timestamp).toLocaleDateString('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    year: timestamp < now - 365 * 86_400_000 ? 'numeric' : undefined,
+  });
 };
 
 const setAuthOptions = (
@@ -479,6 +514,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   if (routerManagementState) {
     renderRouterRemediation(routerManagementState);
   }
+  updateSmartGuidance();
 };
 
 const loadClaudeState = async (sessionId: string): Promise<void> => {
@@ -492,6 +528,161 @@ const loadClaudeState = async (sessionId: string): Promise<void> => {
     if (generation === claudeRequestGeneration) {
       showToast('无法读取 Claude 工作台状态。', 'error');
     }
+  }
+};
+
+const loadClaudeSessions = async (sessionId: string): Promise<void> => {
+  if (sessionLoadInProgress) {
+    return;
+  }
+  sessionLoadInProgress = true;
+  try {
+    const sessions = await window.controlPanel.getClaudeSessions(sessionId);
+    renderClaudeSessions(sessions);
+  } catch {
+    sessionCount.textContent = '加载失败';
+    sessionList.innerHTML = '<div class="session-empty">无法读取会话历史</div>';
+  } finally {
+    sessionLoadInProgress = false;
+  }
+};
+
+const renderClaudeSessions = (sessions: ClaudeSessionMetadata[]): void => {
+  sessionCount.textContent = sessions.length === 0 ? '暂无历史' : `${sessions.length} 个会话`;
+  sessionList.replaceChildren();
+
+  if (sessions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'session-empty';
+    empty.textContent = '还没有历史会话。启动 Claude Code 后会在这里显示。';
+    sessionList.append(empty);
+    return;
+  }
+
+  for (const session of sessions) {
+    const card = document.createElement('article');
+    card.className = 'session-card';
+
+    const header = document.createElement('div');
+    header.className = 'session-card__header';
+    const title = document.createElement('strong');
+    title.textContent = session.sessionName || session.sessionId.slice(0, 8);
+    const time = document.createElement('span');
+    time.className = 'session-card__time';
+    time.textContent = formatRelativeTime(session.lastActiveAt);
+    header.append(title, time);
+
+    const meta = document.createElement('div');
+    meta.className = 'session-card__meta';
+
+    if (session.messageCount > 0) {
+      const messages = document.createElement('span');
+      messages.textContent = `${session.messageCount} 条消息`;
+      meta.append(messages);
+    }
+
+    const totalTokens = (session.inputTokens || 0) + (session.outputTokens || 0);
+    if (totalTokens > 0) {
+      const tokens = document.createElement('span');
+      tokens.textContent = `${formatTokenCount(totalTokens)} tokens`;
+      meta.append(tokens);
+    }
+
+    if (session.estimatedCostUsd !== undefined) {
+      const cost = document.createElement('span');
+      cost.textContent = `$${session.estimatedCostUsd.toFixed(4)}`;
+      meta.append(cost);
+    }
+
+    if (session.modelId) {
+      const model = document.createElement('span');
+      model.textContent = session.modelId;
+      model.className = 'session-card__model';
+      meta.append(model);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'session-card__actions';
+
+    const launchButton = document.createElement('button');
+    launchButton.type = 'button';
+    launchButton.textContent = '启动此会话';
+    launchButton.className = 'button button--primary button--small';
+    launchButton.addEventListener('click', () => {
+      void launchSessionById(session.conversationId);
+    });
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.textContent = '删除';
+    deleteButton.className = 'button button--quiet button--small';
+    deleteButton.addEventListener('click', () => {
+      void deleteSession(session);
+    });
+
+    actions.append(launchButton, deleteButton);
+    card.append(header, meta, actions);
+    sessionList.append(card);
+  }
+};
+
+const launchSessionById = async (conversationId: string): Promise<void> => {
+  const status = activeStatus();
+  if (!status || launchInProgress) {
+    return;
+  }
+
+  launchInProgress = true;
+  const existingState = claudeStates.get(status.id);
+  if (existingState) {
+    renderClaudeState(existingState);
+  }
+
+  try {
+    terminalViews.get(status.id)?.terminal.clear();
+    const result = await window.controlPanel.launchClaudeWithSession(status.id, conversationId);
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法启动 Claude Code。', 'error');
+      return;
+    }
+    showToast('正在启动历史会话');
+    terminalViews.get(status.id)?.terminal.focus();
+  } catch {
+    showToast('无法启动 Claude Code。', 'error');
+  } finally {
+    launchInProgress = false;
+    const latest = claudeStates.get(status.id);
+    if (latest) {
+      renderClaudeState(latest);
+    }
+  }
+};
+
+const deleteSession = async (session: ClaudeSessionMetadata): Promise<void> => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  const sessionName = session.sessionName || session.sessionId.slice(0, 8);
+  if (!window.confirm(`确定删除会话"${sessionName}"？此操作无法撤销。`)) {
+    return;
+  }
+
+  try {
+    const deleted = await window.controlPanel.deleteClaudeSession(
+      status.id,
+      session.conversationId,
+    );
+    if (deleted) {
+      showToast(`已删除会话 ${sessionName}`);
+      void loadClaudeSessions(status.id);
+    } else {
+      showToast('无法删除该会话', 'error');
+    }
+  } catch {
+    showToast('删除会话时发生错误', 'error');
   }
 };
 
@@ -924,6 +1115,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
     card.append(headline, endpoint, meta, models, actions);
     routerProviderList.append(card);
   }
+  updateSmartGuidance();
 }
 
 const loadRouterManagement = async (): Promise<void> => {
@@ -1099,6 +1291,7 @@ const analyzeCurlInput = (): void => {
       nextDetail.textContent = '需要明确询问：“是否提供 Anthropic Messages /v1/messages 接口？”';
     }
     curlNextStep.append(nextTitle, nextDetail);
+    updateSmartGuidance();
   } catch (error) {
     lastCurlAnalysis = undefined;
     curlAnalysis.hidden = true;
@@ -1122,6 +1315,117 @@ const applyDirectCurlAnalysis = (): void => {
   connectionTestResult.hidden = true;
   claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
   showToast('已填入直连接口；请先进行真实连接测试');
+  updateSmartGuidance();
+};
+
+const updateSmartGuidance = (): void => {
+  const projectState = claudeStates.get(workspaceState.activeSessionId);
+  const curlResult = lastCurlAnalysis;
+  const routerState = routerManagementState;
+
+  // Clear guidance if no analysis
+  if (!curlResult) {
+    smartGuidance.hidden = true;
+    return;
+  }
+
+  const projectConfig = projectState?.config;
+  const routerRunning = routerState?.gatewayState === 'running';
+  const routerInstalled = routerState?.installed ?? false;
+
+  // Scenario 1: Anthropic direct + Router running unused
+  if (
+    curlResult.protocol === 'anthropic' &&
+    routerRunning &&
+    projectConfig?.provider !== 'gateway'
+  ) {
+    smartGuidance.hidden = false;
+    smartGuidance.dataset.tone = 'info';
+    smartGuidanceTitle.textContent = '检测到可直连的 Anthropic 接口';
+    smartGuidanceDetail.textContent =
+      'Router 当前未被使用。您可以直接接入，或者停止 Router 以节省系统资源。';
+
+    smartGuidanceActions.replaceChildren();
+    const stopButton = document.createElement('button');
+    stopButton.type = 'button';
+    stopButton.textContent = '停止空闲 Router';
+    stopButton.className = 'button button--secondary button--small';
+    stopButton.addEventListener('click', () => {
+      void runRouterOperation(
+        (sessionId) => window.controlPanel.stopClaudeRouter(sessionId),
+        '正在停止…',
+        stopButton,
+      );
+    });
+    smartGuidanceActions.append(stopButton);
+    return;
+  }
+
+  // Scenario 2: OpenAI format + Router not running
+  if (curlResult.protocol === 'openai' && !routerRunning) {
+    smartGuidance.hidden = false;
+    smartGuidance.dataset.tone = 'warning';
+    smartGuidanceTitle.textContent = 'OpenAI 格式需要转换器';
+    smartGuidanceDetail.textContent = routerInstalled
+      ? '检测到 OpenAI 格式接口，需要先启动 Router 将其转换为 Anthropic 格式。'
+      : '检测到 OpenAI 格式接口，需要安装 Claude Code Router 转换器。';
+
+    smartGuidanceActions.replaceChildren();
+    if (routerInstalled && curlResult.model && curlResult.credentialDetected) {
+      const importButton = document.createElement('button');
+      importButton.type = 'button';
+      importButton.textContent = '一键导入 Router';
+      importButton.className = 'button button--primary button--small';
+      importButton.addEventListener('click', () => {
+        void importCurlIntoRouter();
+      });
+      smartGuidanceActions.append(importButton);
+    } else if (!routerInstalled) {
+      const installButton = document.createElement('button');
+      installButton.type = 'button';
+      installButton.textContent = '安装 Router';
+      installButton.className = 'button button--primary button--small';
+      installButton.addEventListener('click', () => {
+        void runRouterOperation(
+          (sessionId) => window.controlPanel.installClaudeRouter(sessionId),
+          '正在下载…',
+          installButton,
+        );
+      });
+      smartGuidanceActions.append(installButton);
+    }
+    return;
+  }
+
+  // Scenario 3: Project using Router + Router stopped
+  if (
+    projectConfig?.provider === 'gateway' &&
+    projectConfig.baseUrl.includes('127.0.0.1:3456') &&
+    routerState?.gatewayState === 'stopped'
+  ) {
+    smartGuidance.hidden = false;
+    smartGuidance.dataset.tone = 'error';
+    smartGuidanceTitle.textContent = '当前项目依赖 Router';
+    smartGuidanceDetail.textContent = '项目配置指向本地 Router，但网关未运行。请启动 Router。';
+
+    smartGuidanceActions.replaceChildren();
+    const startButton = document.createElement('button');
+    startButton.type = 'button';
+    startButton.textContent = '启动 Router';
+    startButton.className = 'button button--primary button--small';
+    startButton.addEventListener('click', () => {
+      void runRouterOperation(
+        (sessionId) => window.controlPanel.startClaudeRouter(sessionId),
+        '正在启动…',
+        startButton,
+      );
+    });
+    smartGuidanceActions.append(startButton);
+    return;
+  }
+
+  // No guidance needed
+  smartGuidance.hidden = true;
 };
 
 const renderConnectionTest = (result: ClaudeConnectionTestResult): void => {
@@ -1189,6 +1493,7 @@ const setWorkbenchOpen = (open: boolean): void => {
   workbenchTrigger.setAttribute('aria-expanded', String(open));
   if (open && workspaceState.activeSessionId) {
     void loadClaudeState(workspaceState.activeSessionId);
+    void loadClaudeSessions(workspaceState.activeSessionId);
     void loadGatewayDiagnostics();
     void loadRouterManagement();
     if (gatewayRefreshTimer === undefined) {
@@ -1213,6 +1518,9 @@ const selectWorkbenchPage = (page: string): void => {
   if (page === 'connection') {
     void loadGatewayDiagnostics();
     void loadRouterManagement();
+  }
+  if (page === 'session' && workspaceState.activeSessionId) {
+    void loadClaudeSessions(workspaceState.activeSessionId);
   }
 };
 
