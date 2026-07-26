@@ -1,5 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type {
@@ -30,10 +31,20 @@ import type {
   WorkspaceState,
 } from '../shared/contracts';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
+import {
+  createComposerHistory,
+  rememberSubmission,
+  resetBrowsing,
+  stepBack,
+  stepForward,
+  type ComposerHistoryState,
+} from '../shared/composer-history';
+import { buildTerminalSubmission } from '../shared/composer-input';
 import { localizePluginCopy } from '../shared/plugin-localization';
 import {
   DEFAULT_TERMINAL_THEME,
   isTerminalThemeId,
+  SHELL_CSS_VARIABLES,
   TERMINAL_THEMES,
   type TerminalThemeId,
 } from '../shared/terminal-themes';
@@ -42,6 +53,11 @@ import './styles.css';
 interface TerminalView {
   container: HTMLDivElement;
   fitAddon: FitAddon;
+  /** Output arriving between two frames, flushed as one `write` so heavy output stays smooth. */
+  pending: string[];
+  pendingLength: number;
+  /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
+  pendingFrame: number;
   terminal: Terminal;
 }
 
@@ -162,6 +178,7 @@ const routerRemediationTitle = requiredElement<HTMLElement>('#router-remediation
 const routerStatus = requiredElement<HTMLElement>('#router-status');
 const routerStatusDetail = requiredElement<HTMLElement>('#router-status-detail');
 const routerStatusTitle = requiredElement<HTMLElement>('#router-status-title');
+const routerSwapHint = requiredElement<HTMLElement>('#router-swap-hint');
 const routerVersion = requiredElement<HTMLElement>('#router-version');
 const uninstallRouterButton = requiredElement<HTMLButtonElement>('#uninstall-router');
 const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-router-provider');
@@ -177,6 +194,9 @@ const terminalProject = requiredElement<HTMLElement>('#terminal-project');
 const terminalContextMenu = requiredElement<HTMLElement>('#terminal-context-menu');
 const terminalThemeSelect = requiredElement<HTMLSelectElement>('#terminal-theme');
 const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
+const composerForm = requiredElement<HTMLFormElement>('#terminal-composer');
+const composerInput = requiredElement<HTMLTextAreaElement>('#composer-input');
+const composerSendButton = requiredElement<HTMLButtonElement>('#composer-send');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
 const testClaudeConnectionButton = requiredElement<HTMLButtonElement>('#test-claude-connection');
@@ -249,6 +269,8 @@ let launchInProgress = false;
 const routeHealthNotifications = new Map<string, string>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerOperationInProgress = false;
+/** Set after a successful purge so the “pick a new source” hint only appears when it applies. */
+let routerPurgeCompleted = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
@@ -328,13 +350,29 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
   activeTerminalTheme = themeId;
   terminalThemeSelect.value = themeId;
   localStorage.setItem('claudedock.terminalTheme', themeId);
-  for (const view of terminalViews.values()) {
-    view.terminal.options.theme = { ...TERMINAL_THEMES[themeId].palette };
+  const definition = TERMINAL_THEMES[themeId];
+  // The shell steps are written onto the root element so every `var(--…)` in styles.css follows the
+  // theme; without this the terminal recolours but the frame around it stays graphite.
+  for (const [field, property] of Object.entries(SHELL_CSS_VARIABLES)) {
+    document.documentElement.style.setProperty(
+      property,
+      definition.shell[field as keyof typeof definition.shell],
+    );
   }
+  document.documentElement.dataset.theme = themeId;
+  for (const view of terminalViews.values()) {
+    view.terminal.options.theme = { ...definition.palette };
+  }
+  // The native titlebar and window background live outside the document and need the main process.
+  void window.controlPanel.setAppTheme(themeId).catch(() => {
+    // A repaint failure is cosmetic only; the CSS side has already switched.
+  });
   if (announce) {
-    showToast(`终端主题已切换为“${TERMINAL_THEMES[themeId].label}”`);
+    showToast(`主题已切换为“${definition.label}”`);
   }
 };
+
+applyTerminalTheme(activeTerminalTheme, false);
 
 const projectNameFromPath = (directoryPath: string): string => {
   const parts = directoryPath.split(/[\\/]/).filter(Boolean);
@@ -656,7 +694,7 @@ async function resumeStoredConversation(
     showToast(`已在新对话中恢复 ${label}`);
     window.setTimeout(() => {
       fitActiveTerminal();
-      terminalViews.get(result.state.activeSessionId)?.terminal.focus();
+      focusComposer();
     }, 60);
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
@@ -757,6 +795,16 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
         }
       });
       actions.append(manageButton);
+    }
+    if (candidate.kind === 'claude-code-router') {
+      // Swapping gateways starts here, where the user actually sees what is installed.
+      const purgeButton = document.createElement('button');
+      purgeButton.type = 'button';
+      purgeButton.textContent = '彻底清除这个路由器';
+      purgeButton.addEventListener('click', () => {
+        purgeRouter(purgeButton);
+      });
+      actions.append(purgeButton);
     }
 
     card.append(headline, endpoint, detail, detected, actions);
@@ -1138,8 +1186,10 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   installRouterButton.textContent = state.installed ? '一键更新 / 重装' : '一键安装';
   uninstallRouterButton.disabled = routerOperationInProgress || !state.canUninstall;
   uninstallRouterButton.title = state.canUninstall
-    ? `卸载当前${routerInstallationKindLabel(state.installationKind)}安装`
-    : '未检测到可调用的卸载程序';
+    ? `彻底卸载当前${routerInstallationKindLabel(state.installationKind)}安装并删除全部配置数据`
+    : '未检测到需要清除的路由器程序或配置';
+  // Only offer the swap guidance once the purge actually left a clean slate.
+  routerSwapHint.hidden = state.installed || !routerPurgeCompleted;
   startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动路由器';
   startRouterButton.disabled =
     routerOperationInProgress ||
@@ -1330,8 +1380,33 @@ const runRouterOperation = async (
   }
 };
 
-const uniqueCurlProviderName = (analysis: ClaudeCurlAnalysis): string => {
-  const base =
+/**
+ * The purge is irreversible — CCR keeps the upstream keys inside the data directory that gets
+ * deleted — so the confirmation spells out exactly what disappears before anything runs.
+ */
+const purgeRouter = (button: HTMLButtonElement): void => {
+  if (
+    !window.confirm(
+      '彻底卸载路由器并清除全部数据？\n\n' +
+        '将删除：路由器程序、全部服务提供方配置、保存在其中的上游密钥与用量记录。\n' +
+        '不会改动：Claude Code 与 Codex 自己的配置。\n\n' +
+        '删除后无法恢复；完成后可以选择新的安装来源重新安装。',
+    )
+  ) {
+    return;
+  }
+  void runRouterOperation(
+    async (sessionId) => {
+      const result = await window.controlPanel.uninstallClaudeRouter(sessionId);
+      routerPurgeCompleted = result.ok;
+      return result;
+    },
+    '正在清除…',
+    button,
+  );
+};
+
+const uniqueCurlProviderName = (analysis: ClaudeCurlAnalysis): string => {  const base =
     new URL(analysis.endpoint).hostname
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, '-')
@@ -2191,6 +2266,21 @@ const createTerminalView = (sessionId: string): TerminalView => {
   terminal.unicode.activeVersion = '11';
   terminal.open(container);
 
+  /*
+   * The GPU renderer is what removes the visible lag on large output. It is attached after `open()`
+   * (it needs a canvas) and disposed on context loss so the DOM renderer takes over instead of the
+   * terminal going blank — a lost WebGL context is normal after a driver reset or GPU switch.
+   */
+  try {
+    const webglAddon = new WebglAddon();
+    webglAddon.onContextLoss(() => {
+      webglAddon.dispose();
+    });
+    terminal.loadAddon(webglAddon);
+  } catch {
+    // No WebGL (remote session, blocklisted driver): the default DOM renderer still works.
+  }
+
   terminal.onData((data) => {
     window.controlPanel.writeTerminal(sessionId, data);
   });
@@ -2205,6 +2295,11 @@ const createTerminalView = (sessionId: string): TerminalView => {
 
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyL') {
       terminal.clear();
+      return false;
+    }
+    if (event.ctrlKey && !event.shiftKey && event.code === 'KeyA') {
+      // Without this, Ctrl+A reaches PSReadLine as "move to line start" and never selects output.
+      terminal.selectAll();
       return false;
     }
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyC' && terminal.hasSelection()) {
@@ -2224,9 +2319,50 @@ const createTerminalView = (sessionId: string): TerminalView => {
   });
   container.addEventListener('contextmenu', showTerminalContextMenu);
 
-  const view = { container, fitAddon, terminal };
+  const view: TerminalView = {
+    container,
+    fitAddon,
+    pending: [],
+    pendingFrame: 0,
+    pendingLength: 0,
+    terminal,
+  };
   terminalViews.set(sessionId, view);
   return view;
+};
+
+/** Caps the queue so a runaway process cannot grow the buffer without bound. */
+const MAX_PENDING_OUTPUT = 512 * 1024;
+
+/**
+ * Output is queued and written once per frame. Writing every IPC chunk separately made xterm reflow
+ * dozens of times between paints, which is what the input stutter actually was.
+ */
+const queueTerminalOutput = (sessionId: string, data: string): void => {
+  const view = terminalViews.get(sessionId);
+  if (!view) {
+    return;
+  }
+
+  view.pending.push(data);
+  view.pendingLength += data.length;
+  if (view.pendingLength > MAX_PENDING_OUTPUT) {
+    // Dropping the oldest queued output keeps the newest visible; xterm's scrollback would have
+    // discarded it moments later anyway.
+    while (view.pending.length > 1 && view.pendingLength > MAX_PENDING_OUTPUT) {
+      view.pendingLength -= view.pending.shift()?.length ?? 0;
+    }
+  }
+  if (view.pendingFrame !== 0) {
+    return;
+  }
+  view.pendingFrame = requestAnimationFrame(() => {
+    view.pendingFrame = 0;
+    const chunk = view.pending.join('');
+    view.pending.length = 0;
+    view.pendingLength = 0;
+    view.terminal.write(chunk);
+  });
 };
 
 const ensureTerminalView = (sessionId: string): TerminalView =>
@@ -2332,6 +2468,147 @@ window.addEventListener('resize', () => {
   setDrawerWidth(claudeWorkbench.getBoundingClientRect().width || 468);
 });
 
+/*
+ * The composer. Everything a chat box gives for free — Ctrl+A, Shift+arrow selection, drag-select,
+ * Ctrl+Z, IME composition, mouse caret placement — is native `<textarea>` behaviour, so this code
+ * only handles submitting, history and sizing. No key handler re-implements text editing.
+ */
+const COMPOSER_HISTORY_KEY = 'claudedock.composerHistory';
+
+const loadComposerHistory = (): ComposerHistoryState => {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(COMPOSER_HISTORY_KEY) ?? '[]');
+    return createComposerHistory(
+      Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [],
+    );
+  } catch {
+    return createComposerHistory();
+  }
+};
+
+let composerHistory = loadComposerHistory();
+
+const persistComposerHistory = (): void => {
+  try {
+    localStorage.setItem(COMPOSER_HISTORY_KEY, JSON.stringify(composerHistory.entries));
+  } catch {
+    // A full or unavailable localStorage must not break sending.
+  }
+};
+
+/** Grows the textarea with its content up to `--composer-max`, then scrolls. */
+const resizeComposer = (): void => {
+  composerInput.style.height = 'auto';
+  const maxHeight = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--composer-max'),
+  );
+  const height = Number.isFinite(maxHeight)
+    ? Math.min(composerInput.scrollHeight, maxHeight)
+    : composerInput.scrollHeight;
+  composerInput.style.height = `${height}px`;
+  // The workbench drawer is absolutely positioned against the shell, so it needs the live height.
+  document.documentElement.style.setProperty(
+    '--composer-h',
+    `${Math.round(composerForm.getBoundingClientRect().height)}px`,
+  );
+};
+
+const setComposerEnabled = (enabled: boolean): void => {
+  composerInput.disabled = !enabled;
+  composerSendButton.disabled = !enabled;
+  composerInput.placeholder = enabled
+    ? '在这里输入提示词，Enter 发送'
+    : '终端未运行；先启动对话后再输入';
+};
+
+const focusComposer = (): void => {
+  if (!composerInput.disabled) {
+    composerInput.focus();
+  }
+};
+
+const submitComposer = (): void => {
+  const status = activeStatus();
+  if (!status || status.phase !== 'running') {
+    showToast('终端还没有运行，无法发送。', 'error');
+    return;
+  }
+
+  const text = composerInput.value;
+  let submission: string;
+  try {
+    submission = buildTerminalSubmission(text);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '内容过长，无法发送。', 'error');
+    return;
+  }
+
+  window.controlPanel.writeTerminal(status.id, submission);
+  composerHistory = rememberSubmission(composerHistory, text);
+  persistComposerHistory();
+  composerInput.value = '';
+  resizeComposer();
+};
+
+/** ↑/↓ only browse history when the caret is at the very start / end, so editing still works. */
+const walkComposerHistory = (direction: 'back' | 'forward'): boolean => {
+  const { selectionEnd, selectionStart, value } = composerInput;
+  if (selectionStart !== selectionEnd) {
+    return false;
+  }
+  if (direction === 'back' && selectionStart !== 0) {
+    return false;
+  }
+  if (direction === 'forward' && selectionEnd !== value.length) {
+    return false;
+  }
+
+  const step = direction === 'back' ? stepBack(composerHistory, value) : stepForward(composerHistory);
+  composerHistory = step.state;
+  if (step.text === undefined) {
+    return false;
+  }
+  composerInput.value = step.text;
+  composerInput.setSelectionRange(step.text.length, step.text.length);
+  resizeComposer();
+  return true;
+};
+
+composerForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitComposer();
+});
+
+composerInput.addEventListener('keydown', (event) => {
+  // Never intercept while an IME candidate window is open, or Chinese input breaks apart.
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
+
+  if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
+    event.preventDefault();
+    submitComposer();
+    return;
+  }
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey) {
+    if (walkComposerHistory(event.key === 'ArrowUp' ? 'back' : 'forward')) {
+      event.preventDefault();
+    }
+    return;
+  }
+  if (event.key === 'Escape' && composerInput.value.length > 0) {
+    event.preventDefault();
+    composerInput.value = '';
+    composerHistory = resetBrowsing(composerHistory);
+    resizeComposer();
+  }
+});
+
+composerInput.addEventListener('input', () => {
+  composerHistory = resetBrowsing(composerHistory);
+  resizeComposer();
+});
+
 const renderActiveStatus = (status: TerminalStatus): void => {
   const copy = phaseCopy[status.phase];
   const openFolders = workspaceState.projects.filter((project) => project.open).length;
@@ -2349,6 +2626,7 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   terminalProject.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
   terminalProject.title = status.cwd;
   workbenchScope.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
+  setComposerEnabled(status.phase === 'running');
 };
 
 const activateProject = async (sessionId: string): Promise<void> => {
@@ -2360,7 +2638,7 @@ const activateProject = async (sessionId: string): Promise<void> => {
   renderWorkspace(result.state);
   window.setTimeout(() => {
     fitActiveTerminal();
-    terminalViews.get(sessionId)?.terminal.focus();
+    focusComposer();
   }, 40);
 };
 
@@ -2391,7 +2669,7 @@ const openConversation = async (projectPath: string): Promise<void> => {
   showToast(`已在 ${projectNameFromPath(projectPath)} 新开一个对话`);
   window.setTimeout(() => {
     fitActiveTerminal();
-    terminalViews.get(result.state.activeSessionId)?.terminal.focus();
+    focusComposer();
   }, 60);
 };
 
@@ -2724,6 +3002,9 @@ function renderWorkspace(state: WorkspaceState): void {
 
   for (const [sessionId, view] of terminalViews) {
     if (!validSessionIds.has(sessionId)) {
+      if (view.pendingFrame !== 0) {
+        cancelAnimationFrame(view.pendingFrame);
+      }
       view.terminal.dispose();
       view.container.remove();
       terminalViews.delete(sessionId);
@@ -2812,7 +3093,7 @@ const addProject = async (directoryPath: string): Promise<void> => {
     if (handleWorkspaceResult(result, directoryPath)) {
       window.setTimeout(() => {
         fitActiveTerminal();
-        terminalViews.get(result.state.activeSessionId)?.terminal.focus();
+        focusComposer();
       }, 60);
     }
   } catch (error) {
@@ -2867,7 +3148,12 @@ const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
           ? '正在续接当前项目最近的会话'
           : '已打开当前项目的历史会话选择器',
     );
-    terminalViews.get(status.id)?.terminal.focus();
+    // `resume` opens Claude's own arrow-key picker, which needs the raw keystrokes.
+    if (mode === 'resume') {
+      terminalViews.get(status.id)?.terminal.focus();
+    } else {
+      focusComposer();
+    }
   } catch {
     showToast('无法启动 Claude Code。', 'error');
   } finally {
@@ -2925,7 +3211,7 @@ const saveClaudeConfig = async (
 };
 
 window.controlPanel.onTerminalData((sessionId, data) => {
-  terminalViews.get(sessionId)?.terminal.write(data);
+  queueTerminalOutput(sessionId, data);
 });
 window.controlPanel.onClaudeState(renderClaudeState);
 window.controlPanel.onWorkspaceState(renderWorkspace);
@@ -3057,6 +3343,7 @@ refreshGatewaysButton.addEventListener('click', () => {
   void loadSoftwareUpdates(true);
 });
 installRouterButton.addEventListener('click', () => {
+  routerPurgeCompleted = false;
   void runRouterOperation(
     (sessionId) =>
       window.controlPanel.installClaudeRouterFromSource(
@@ -3068,18 +3355,7 @@ installRouterButton.addEventListener('click', () => {
   );
 });
 uninstallRouterButton.addEventListener('click', () => {
-  if (
-    !window.confirm(
-      '卸载当前路由器应用？服务提供方配置文件会保留，桌面版可能继续弹出系统卸载向导。',
-    )
-  ) {
-    return;
-  }
-  void runRouterOperation(
-    (sessionId) => window.controlPanel.uninstallClaudeRouter(sessionId),
-    '正在卸载…',
-    uninstallRouterButton,
-  );
+  purgeRouter(uninstallRouterButton);
 });
 refreshSoftwareUpdatesButton.addEventListener('click', () => {
   void loadSoftwareUpdates(true);
@@ -3213,7 +3489,7 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-claude-
       return;
     }
     showToast(`已执行 ${command}`);
-    terminalViews.get(status.id)?.terminal.focus();
+    focusComposer();
   });
 }
 restartButton.addEventListener('click', async () => {
@@ -3346,6 +3622,9 @@ window.addEventListener('beforeunload', () => {
     window.clearInterval(gatewayRefreshTimer);
   }
   for (const view of terminalViews.values()) {
+    if (view.pendingFrame !== 0) {
+      cancelAnimationFrame(view.pendingFrame);
+    }
     view.terminal.dispose();
   }
 });
@@ -3361,6 +3640,6 @@ void (async () => {
   handleOperation(result);
   window.setTimeout(() => {
     fitActiveTerminal();
-    terminalViews.get(status.id)?.terminal.focus();
+    focusComposer();
   }, 80);
 })();

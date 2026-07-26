@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type {
   ClaudePluginCatalog,
   ClaudePluginMarketplaceView,
@@ -51,11 +53,16 @@ export const isValidMarketplaceSource = (value: unknown): value is string => {
 const optionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
 const optionalCount = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 
 const scopeOf = (value: unknown): ClaudePluginScope | undefined =>
   value === 'local' || value === 'project' || value === 'user' ? value : undefined;
+
+export const UNKNOWN_PLUGIN_SOURCE = '未知来源';
 
 /** The CLI prints `source` either as a bare relative path or as a git descriptor object. */
 export const describePluginSource = (value: unknown): string => {
@@ -63,7 +70,7 @@ export const describePluginSource = (value: unknown): string => {
     return value;
   }
   if (!value || typeof value !== 'object') {
-    return '未知来源';
+    return UNKNOWN_PLUGIN_SOURCE;
   }
   const record = value as Record<string, unknown>;
   const url = optionalString(record.url);
@@ -71,9 +78,17 @@ export const describePluginSource = (value: unknown): string => {
   const ref = optionalString(record.ref);
   const label = url
     ? url.replace(/^https:\/\/(?:www\.)?github\.com\//i, '').replace(/\.git$/i, '')
-    : (optionalString(record.source) ?? '未知来源');
+    : (optionalString(record.source) ?? UNKNOWN_PLUGIN_SOURCE);
   return [label, subPath, ref && `@${ref}`].filter(Boolean).join(' · ');
 };
+
+/** Installed entries report `"unknown"` when the marketplace ships no version of its own. */
+const optionalVersion = (value: unknown): string | undefined => {
+  const version = optionalString(value);
+  return version && version.toLowerCase() !== 'unknown' ? version : undefined;
+};
+
+export const MISSING_PLUGIN_DESCRIPTION = '这个插件没有提供说明。';
 
 export const parsePluginEntry = (value: unknown, installed: boolean): ClaudePluginView | null => {
   if (!value || typeof value !== 'object') {
@@ -84,30 +99,41 @@ export const parsePluginEntry = (value: unknown, installed: boolean): ClaudePlug
     record.source && typeof record.source === 'object'
       ? (record.source as Record<string, unknown>)
       : undefined;
-  const name = optionalString(record.name);
-  const marketplaceName = optionalString(record.marketplaceName) ?? '';
+  const declaredName = optionalString(record.name);
+  const declaredMarketplace = optionalString(record.marketplaceName) ?? '';
+  /*
+   * `claude plugin list --json --available` describes available plugins with
+   * `pluginId`/`name`/`marketplaceName`, but installed plugins only with `id`
+   * (`plugin@marketplace`). Accepting `id` and splitting it keeps installed plugins visible.
+   */
   const pluginId =
     optionalString(record.pluginId) ??
-    (name && marketplaceName ? `${name}@${marketplaceName}` : name);
-  if (!name || !pluginId || !isValidPluginId(pluginId)) {
+    optionalString(record.id) ??
+    (declaredName && declaredMarketplace ? `${declaredName}@${declaredMarketplace}` : declaredName);
+  if (!pluginId || !isValidPluginId(pluginId)) {
+    return null;
+  }
+  const [idName, idMarketplace] = pluginId.split('@');
+  const name = declaredName ?? idName;
+  if (!name) {
     return null;
   }
 
   return {
-    description: optionalString(record.description) ?? '这个插件没有提供说明。',
+    description: optionalString(record.description) ?? MISSING_PLUGIN_DESCRIPTION,
     // The CLI omits `enabled` for available plugins and for enabled installs alike.
     enabled: installed ? record.enabled !== false : false,
     installCount: optionalCount(record.installCount),
     installed,
-    marketplaceName: marketplaceName || pluginId.split('@')[1] || '本地',
+    marketplaceName: declaredMarketplace || idMarketplace || '本地',
     name,
     pluginId,
     scope: scopeOf(record.scope),
     sourceLabel: describePluginSource(record.source),
     sourceRevision: optionalString(sourceRecord?.sha),
-    latestVersion: optionalString(record.latestVersion),
+    latestVersion: optionalVersion(record.latestVersion),
     updateAvailable: record.updateAvailable === true,
-    version: optionalString(record.version),
+    version: optionalVersion(record.version),
   };
 };
 
@@ -182,6 +208,80 @@ export const parseMarketplaces = (raw: string): ClaudePluginMarketplaceView[] =>
   }
   return marketplaces;
 };
+
+/** What a marketplace manifest knows about a plugin that `plugin list` omits for installs. */
+export interface PluginManifestEntry {
+  description?: string;
+  sourceLabel?: string;
+}
+
+/**
+ * Reads `<installLocation>/.claude-plugin/marketplace.json` for every checked-out marketplace and
+ * keys its plugins by `plugin@marketplace`. Installed entries carry no description of their own,
+ * so this is the only local source for one.
+ */
+export const collectMarketplaceManifests = (
+  marketplaces: ClaudePluginMarketplaceView[],
+  readManifest: (installLocation: string) => string,
+): Map<string, PluginManifestEntry> => {
+  const manifests = new Map<string, PluginManifestEntry>();
+  for (const marketplace of marketplaces) {
+    if (!marketplace.installLocation) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readManifest(marketplace.installLocation));
+    } catch {
+      // A missing or malformed manifest only costs descriptions, never the plugin list itself.
+      continue;
+    }
+    const plugins = isRecord(parsed) ? parsed.plugins : undefined;
+    if (!Array.isArray(plugins)) {
+      continue;
+    }
+    for (const entry of plugins) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const name = optionalString(entry.name);
+      if (!name) {
+        continue;
+      }
+      const subPath = optionalString(entry.source);
+      manifests.set(`${name}@${marketplace.name}`, {
+        description: optionalString(entry.description),
+        sourceLabel: [marketplace.repo ?? marketplace.name, subPath?.replace(/^\.\//, '')]
+          .filter(Boolean)
+          .join(' · '),
+      });
+    }
+  }
+  return manifests;
+};
+
+/** Fills in the description and source the CLI omits for installed plugins. */
+export const enrichInstalledPlugins = (
+  installed: ClaudePluginView[],
+  manifests: Map<string, PluginManifestEntry>,
+): ClaudePluginView[] =>
+  installed.map((plugin) => {
+    const manifest = manifests.get(plugin.pluginId);
+    if (!manifest) {
+      return plugin;
+    }
+    return {
+      ...plugin,
+      description:
+        plugin.description === MISSING_PLUGIN_DESCRIPTION && manifest.description
+          ? manifest.description
+          : plugin.description,
+      sourceLabel:
+        plugin.sourceLabel === UNKNOWN_PLUGIN_SOURCE && manifest.sourceLabel
+          ? manifest.sourceLabel
+          : plugin.sourceLabel,
+    };
+  });
 
 const emptyCatalog = (message: string, cliAvailable: boolean): ClaudePluginCatalog => ({
   available: [],
@@ -314,14 +414,21 @@ export class ClaudePluginManager {
       // A missing marketplace list must not hide the plugins that were read successfully.
     }
 
+    const installed = enrichInstalledPlugins(
+      plugins.installed,
+      collectMarketplaceManifests(marketplaces, (installLocation) =>
+        readFileSync(path.join(installLocation, '.claude-plugin', 'marketplace.json'), 'utf8'),
+      ),
+    );
+
     const catalog: ClaudePluginCatalog = {
       available: plugins.available,
       checkedAt: Date.now(),
       cliAvailable: true,
-      installed: plugins.installed,
+      installed,
       marketplaces,
-      message: `已安装 ${plugins.installed.length} 个插件，市场中还有 ${plugins.available.length} 个可选。`,
-      updatesAvailable: plugins.installed.filter((plugin) => plugin.updateAvailable).length,
+      message: `已安装 ${installed.length} 个插件，市场中还有 ${plugins.available.length} 个可选。`,
+      updatesAvailable: installed.filter((plugin) => plugin.updateAvailable).length,
     };
     this.cached = catalog;
     return catalog;

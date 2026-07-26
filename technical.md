@@ -6,7 +6,8 @@
 - TypeScript 6、Vite 8：主进程编译和渲染资源构建。
 - `@lydell/node-pty` 1.2 beta：通过 Windows ConPTY 创建真实伪终端，并提供按平台预编译
   原生模块。
-- xterm.js 6 + `@xterm/addon-unicode11`：终端渲染、键盘输入与中文宽字符计算。
+- xterm.js 6 + `@xterm/addon-unicode11` + `@xterm/addon-webgl`：终端渲染、键盘输入与中文
+  宽字符计算；WebGL 渲染器负责大量输出时的绘制性能，丢失上下文时回退 DOM 渲染器。
 - Vitest、ESLint、Prettier：测试和静态检查。
 - electron-builder：Windows NSIS 安装包。
 
@@ -43,22 +44,77 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 
 以下值必须跨文件同步，不一致会导致视觉错位或色块跳变：
 
-- **`--titlebar-h` (48px)** ↔ `src/main/main.ts:818` `titleBarOverlay.height`
-- **`--toolbar-h` / `--footer-h`** ↔ `.terminal-shell` 网格行 ↔ `.workbench-scrim` / `.claude-workbench` 的 `top`/`bottom`（共 3 处）
-- **`--surface-canvas`** ↔ `src/main/main.ts:809` `backgroundColor` ↔ `body` 背景色
-- **`--surface-1`** ↔ `src/main/main.ts:817` `titleBarOverlay.color` ↔ `.titlebar` 背景色
-- **`--surface-terminal`** ↔ `.terminal-shell` 背景色 ↔
-  `src/shared/terminal-themes.ts` 默认主题背景（不一致会出现接缝）
-- **`--text`** ↔ `src/main/main.ts:818` `titleBarOverlay.symbolColor`（Windows 标题栏按钮颜色）
+- **`--titlebar-h` (48px)** ↔ `src/main/main.ts:1373` / `:1392` `titleBarOverlay.height`（两处：
+  切换主题与创建窗口）
+- **`--toolbar-h` / `--footer-h` / `--composer-h`** ↔ `.terminal-shell` 网格行 ↔
+  `.workbench-scrim` / `.claude-workbench` 的 `top` / `bottom`。`--composer-h` 由渲染层实测输入框
+  高度后写回，抽屉的 `bottom` 是 `calc(var(--footer-h) + var(--composer-h))`；输入框自动增高时
+  抽屉底边随之上移，不会盖住输入框。
+- **`--surface-canvas`** ↔ `src/main/main.ts:1370` `setBackgroundColor` / `:1383`
+  `backgroundColor` ↔ `body` 背景色
+- **`--surface-1`** ↔ `src/main/main.ts:1372` / `:1391` `titleBarOverlay.color` ↔ `.titlebar` 背景色
+- **`--text-hi`** ↔ `src/main/main.ts:1374` / `:1393` `titleBarOverlay.symbolColor`
+  （Windows 标题栏按钮颜色）
 
-xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题 ID 到
-`localStorage` 并把选中 palette 应用到全部终端实例。三套内置 palette 都必须保持深色背景；
-`letterSpacing: 0` 是 TUI 边框对齐的必需值。
+#### 主题令牌桥
+
+主题的作用域是**整个外壳**，不只是 xterm palette。`src/shared/terminal-themes.ts` 的每套主题
+除 `palette`（22 个 xterm 字段）外还有 `shell`（22 个外壳字段），
+`SHELL_CSS_VARIABLES` 是「shell 字段 → CSS 自定义属性」的映射表，是这套机制唯一的接线点：
+
+1. `applyTerminalTheme`（`src/renderer/main.ts`）遍历映射表写
+   `documentElement.style.setProperty(...)`，并设 `dataset.theme`；`styles.css` 里所有
+   `var(--…)` 因此一起换色。启动时以 `announce = false` 调用一次。
+2. 原生窗口边框由 Windows 绘制，CSS 到不了，所以渲染层再调 `ui:set-theme` IPC；主进程
+   `applyWindowTheme`（`main.ts:1368`）执行 `setBackgroundColor` + `setTitleBarOverlay`。
+   **只改 CSS 会留下用户看到的那圈深色边框。**
+3. 主题 ID 存进 `WorkspaceStore`（`StoredWorkspace.terminalTheme`，version 仍为 1，
+   `load()` 用 `isTerminalThemeId` 校验）。`createWindow()` 在第一帧之前读它决定初始
+   `backgroundColor` / `titleBarOverlay`，冷启动不会闪出错色外框。
+
+新增主题只需补 `shell` 字面量；新增可主题化的属性需要同时补 `TerminalThemeShell` 字段、
+`SHELL_CSS_VARIABLES` 条目和 `:root` 默认值——`tests/design-tokens.test.ts` 会检查这三者齐全，
+并要求该属性在 `styles.css` 正文里至少被引用一次（否则是死令牌）。
+
+`tests/design-tokens.test.ts` 同时守住「主题能生效」的前提：`:root` 之外不允许 hex 字面量、
+不允许带色相的 `rgb()`/`rgba()`、`font-family` 只能是两个字体令牌或 `inherit`、不允许写死
+`font-size`。半透明色用 `color-mix(in srgb, var(--token) n%, transparent)`。
+一次性的批量替换脚本保留在 `scripts/tokenize-colors.cjs`（按 CSS 属性判角色、
+alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`--write` 才落盘）。
+
+`letterSpacing: 0` 是 TUI 边框对齐的必需值。状态三色（`--ok-*` / `--warn-*` / `--bad-*`）
+刻意不进主题——语义色跨主题保持一致。
+
+#### 终端输出与输入的性能路径
+
+- xterm 在 `createTerminalView` 里 try/catch 加载 `@xterm/addon-webgl`，并监听
+  `onContextLoss` → `dispose()` 回退 DOM 渲染器。加载失败不影响会话可用性。
+- **主进程侧合并**：`queueTerminalOutput`（`main.ts:105`）按会话攒 8ms（`OUTPUT_FLUSH_MS`）
+  或 64KB（`OUTPUT_FLUSH_BYTES`）发一次 `terminal:data`。IPC 往返次数是卡顿主因。
+  `consumeTerminalOutput` 仍逐块调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。
+  `before-quit` 清理全部待发定时器。
+- **渲染层侧合并**：同名的 `queueTerminalOutput`（`src/renderer/main.ts:2341`）按
+  `requestAnimationFrame` 把队列合成一次 `terminal.write`，缓冲上限 512KB（超限丢弃最旧
+  分块，xterm 的 scrollback 随后也会丢掉它们）。销毁视图的两处（`renderWorkspace` 清理过期
+  会话、`beforeunload`）都要 `cancelAnimationFrame(view.pendingFrame)`。
+- 输入框的 `Ctrl+A` / `Shift+←→` / 拖选 / `Ctrl+Z` / IME 全部是 `<textarea>` 原生行为，
+  **没有对应代码**。需要实现的只有发送、历史与自动增高，见
+  `src/shared/composer-input.ts` 与 `src/shared/composer-history.ts`。
+  `buildTerminalSubmission` 用 `\x0a` 连接多行、末尾补 `\r`，与 `terminal-session.ts` 里
+  PSReadLine 的 `Ctrl+j`(AddLine) 绑定成对存在：改一处必须改另一处，否则多行提示词会被
+  逐行当成独立命令执行。输出区内的 `Ctrl+A` 由 `attachCustomKeyEventHandler` 映射到
+  `terminal.selectAll()`（否则会被 PSReadLine 解释成「移到行首」）。
 
 ### 关键取舍
 
 - **拒绝 Win11 `backgroundMaterial: 'mica'/'acrylic'`**：半透明桌面色调与需要接近纯黑对比度的终端直接冲突，且在非 Win11 上降级不可预测。
 - **遮罩层不用 `backdrop-filter`**：遮罩覆盖在持续刷新的 xterm canvas 上，背景模糊会在 Claude 流式输出时每帧强制 GPU 合成，造成性能问题。
+- **输入用 `<textarea>` 而不是在 xterm 里做行编辑**：`Ctrl+A`、`Shift+←/→`、拖选、`Ctrl+Z`、
+  IME 全部由浏览器免费提供且行为正确；在终端画布里模拟它们意味着自己实现一个编辑器，
+  并且要和 PSReadLine 抢同一批按键。代价是终端不再是唯一输入入口，需要为 Claude Code 的
+  TUI 保留直接聚焦输出区的能力。
+- **主题存在主进程而不只在 `localStorage`**：原生窗口边框在第一帧就要有颜色，此时渲染进程
+  还没运行，只靠 `localStorage` 一定会闪一下错色外框。
 
 ## 渲染进程与 IPC
 
@@ -72,9 +128,11 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   owner handle 状态失败，会无父窗口重试一次；失败原因通过结构化结果返回，不与后续
   `project:add` 错误混淆。
 - 切换项目不重启 PTY；关闭项目才会终止对应进程，且不会影响其他会话。
-- `WorkspaceStore` 把已添加项目与最后激活路径保存到
+- `WorkspaceStore` 把已添加项目、最后激活路径与所选主题保存到
   `userData/claude/workspace.json`。写入采用临时文件加重命名；启动恢复不会改写原来的
-  最后激活项，项目切换和关闭后再同步状态。
+  最后激活项，项目切换和关闭后再同步状态。`terminalTheme` 是可选字段，`load()` 用
+  `isTerminalThemeId` 校验后才采用，因此写入未知主题 ID 只会回退到默认主题而不破坏文件，
+  version 保持 1。
 - 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
 
 ## Claude Code 接入与会话
@@ -199,9 +257,28 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
 - 另一条安装路径通过固定包名 `@musistudio/claude-code-router@latest` 调用 npm；来源只能
   是 `https://registry.npmjs.org` 或 `https://registry.npmmirror.com`，registry 以本次
   argv 参数传入，不写入用户 npm 配置。安装状态区分 desktop/npm/mixed。
-- 卸载前只停止经 `service.json` token 与 identity 校验的 CCR 服务；npm 版调用固定包名的
-  全局卸载，桌面版只启动其安装目录中的已知卸载程序。Provider 配置目录默认保留，便于用户
-  更换安装来源后继续使用；没有可信卸载程序时引导到 Windows“已安装的应用”。
+- 卸载是「彻底清除」，目的是把机器恢复到真正未安装的状态，让用户可以换来源重装。步骤固定：
+  1. 只停止经 `service.json` token 与 identity 校验的 CCR 服务（`stopGateway` +
+     对该 PID 发 `SIGTERM`），等待 600ms 让守护进程释放 SQLite 句柄。
+  2. npm 版走 `removeCliInstallation`：先按固定包名 `npm uninstall --global`；包目录仍存在时
+     再按检测到的安装目录 `npm uninstall --global --prefix <installDirectory>`；仍存在才直接
+     `rmSync(packageRoot)` 并删除同目录的 `ccr` / `ccr.cmd` / `ccr.ps1` shim。
+     **`npm uninstall --global` 只能触及当前 npm prefix 下的包**，CCR 装在
+     `D:\ClaudeCode` 而 prefix 是 `%APPDATA%\npm` 时前两步都无效，第三步才是必需的。
+  3. 桌面版找到已知卸载程序就 detached 启动；找不到不再抛错中断整个流程，改为继续清数据并
+     在返回消息里引导用户去 Windows“已安装的应用”移除。
+  4. 删除 `%APPDATA%\claude-code-router` 整个目录（内容清单见 `ROUTER_DATA_ENTRIES`：
+     `config.sqlite` / `api-keys.sqlite` / `usage.sqlite` / `gateway.config.json` /
+     `service.json` / `gateway-proxy-preload.cjs` / `claude-app-gateway-backup.json` /
+     `global-profile-takeover.json` / `bin` / `provider-icons` / `raw-trace-spool`），
+     以及本应用的安装包缓存，并失效 `serviceRuntimeCache`。
+     **Provider 配置与上游密钥由此不可恢复**，renderer 的确认弹窗必须明说这一点。
+- 递归删除的路径由 `routerDataDirectory(appData)` 计算：非绝对路径、basename 不是
+  `claude-code-router`、或父目录不等于传入的 APPDATA 时返回 `undefined` 而不删除。这样被
+  篡改的 `APPDATA` 无法扩大删除范围，`~/.claude` 下 Claude Code 与 Codex 自己的配置也永远
+  触及不到（符合「不得修改 Codex、Claude Code 或系统级 API 路由」）。
+- `canUninstall` 是 `Boolean(cli || desktop || 数据目录存在)`：程序已经没了、只剩孤立配置目录
+  时，清理入口依然可达。
 
 ### 软件与插件更新
 
@@ -212,6 +289,18 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
 - `ClaudePluginManager` 调用 `claude plugin list --json --available` 与 marketplace JSON
   接口。插件标识、市场名和市场来源分别经过格式校验；变更后强制刷新目录。CLI 返回版本或
   source SHA 时与市场记录比较并标记更新，用户也可刷新市场后批量执行官方 `plugin update`。
+- **CLI 对已装与可装插件的描述形状不同**，这是曾经导致已安装插件两边都看不到的原因：
+  `available` 条目带 `pluginId` / `name` / `marketplaceName` / `description`，而 `installed`
+  条目**只有 `id`（`plugin@marketplace`）**，没有 `name`、没有 `description`，`version` 常为
+  字符串 `"unknown"`；同时 CLI 已把已装插件从 `available` 里剔除。因此 `parsePluginEntry`：
+  - `pluginId` 依次接受 `pluginId` → `id` → `name@marketplaceName`；
+  - `name` / `marketplaceName` 缺失时从 `pluginId` 按 `@` 拆分反推，市场名兜底为 `本地`；
+  - `version === 'unknown'` 归一化为 `undefined`，既不显示 `vunknown`，也不会与市场版本
+    比较出虚假的「可更新」。
+- `installed` 缺失的说明与来源由 `enrichInstalledPlugins` 用市场清单补齐：清单读自
+  `parseMarketplaces` 返回的 `installLocation` 下的 `.claude-plugin/marketplace.json`
+  （读取函数以参数注入，便于单测）。只在字段仍是兜底值时才覆盖，CLI 自己给出的说明优先。
+  市场清单读取失败不影响已成功解析的插件。
 - `src/shared/plugin-localization.ts` 不调用外部翻译接口。它按安全、测试、API、数据、运维、
   前端等可追踪关键词生成中文能力概括；renderer 只展示中文概括，插件 ID 始终使用 CLI
   返回值，搜索仍覆盖原文、中文概括与分类。该概括属于项目自研规则，不是插件作者译文。
@@ -292,6 +381,17 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
 
 ### PowerShell 键盘与剪贴板
 
+- 提示词的主入口是输出区下方的 `<textarea>` 输入框，不是 xterm 画布。选它的全部理由是
+  `Ctrl+A`、`Shift+←/→`、鼠标拖选、`Ctrl+Z` 与 IME 组合都由浏览器原生提供，**没有对应代码**，
+  因此也没有「按键处理器模拟编辑器」引入的终端弊端。需要实现的只有三件事：
+  `Enter` 发送 / `Shift+Enter` 换行、`↑/↓` 翻本地历史、自动增高。
+  `↑/↓` 只在光标位于首/末且无选区时才翻历史，否则方向键属于文本编辑；
+  `event.isComposing` 或 `keyCode === 229` 期间一律不拦截。
+  历史存在 `localStorage['claudedock.composerHistory']`（最多 200 条，
+  `src/shared/composer-history.ts`），只保存提示词文本，不保存终端输出。
+- `src/shared/composer-input.ts` 的 `buildTerminalSubmission` 把多行内容用 `\x0a` 连接、
+  末尾补 `\r`，单次上限 64,000 字符。`\x0a` 正是下面 `Ctrl+J`→`AddLine` 绑定所插入的字符，
+  所以多行提示词进入 PowerShell 时是**一条**命令而不是逐行执行；这两处必须成对修改。
 - 每个应用内 PowerShell 启动时把控制台输入、输出和管道编码设为无 BOM UTF-8，仅为该进程
   加载 PSReadLine，并把 `Ctrl+J` 绑定到 `AddLine`；renderer 将 `Shift+Enter` 转为 LF，
   因此多行输入不需要修改用户 profile 或外部终端。
@@ -300,11 +400,16 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   提议 Unicode API，因此终端实例显式设置 `allowProposedApi: true`；当前只把它用于固定的
   Unicode 11 addon。renderer 不再依赖可能滞后的状态快照丢弃 `onData`，主进程 PTY 仍是
   最终写入边界。
+- 输出区仍可直接聚焦打字，因为 Claude Code 自身的 TUI 需要原始按键（例如 `resume` 打开的
+  方向键选择器，所以该操作之后焦点留在输出区而不是输入框）。输出区内的 `Ctrl+A` 映射到
+  `terminal.selectAll()`——不映射的话它会被 PSReadLine 解释成「移到行首」，用户看到的就是
+  「Ctrl+A 无法全选」。
 - 会话内 Backspace 处理器检测光标前是否为 PSReadLine 多行换行符：是则删除该换行并回退
   光标，否则调用标准 `BackwardDeleteChar`。该绑定不会写入用户 profile。
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
   `Ctrl+V` 从主进程读取最多 5 MiB 文本并写入当前 PTY。右键菜单复用同一受限 API，并提供
   全选和只清除 xterm 显示。
+- 会话未在运行时输入框禁用并更换 placeholder；启动会话、切项目等操作完成后焦点交给输入框。
 - 控制栏与工作台宽度写入 renderer `localStorage`；这只保存像素宽度，不包含项目、命令或
   终端内容。窗口缩到 900px 以下时会重新夹紧宽度；CSS 在 900/850px 和 700px 高度设置
   独立断点，避免工具栏、状态栏、插件操作区和安装来源控件重叠。
@@ -334,9 +439,16 @@ xterm 主题集中在 `src/shared/terminal-themes.ts`，renderer 只保存主题
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
   汉化的终端、接入与插件文案回退为英文或重新出现“英文原文”面板。
+- `tests/design-tokens.test.ts` 是「全局主题真的生效」的守栏：`styles.css` 的 `:root` 之外不得
+  出现 hex 字面量、带色相的 `rgb()`/`rgba()`、第三种 `font-family` 或写死的 `font-size`；
+  每个 `SHELL_CSS_VARIABLES` 属性都必须既有 `:root` 默认值又在正文里被引用；同时按 WCAG
+  相对亮度校验三套主题的画布与文字对比度（`textHi`/canvas > 7，正文与强调色 > 4.5）。
+- `tests/composer-input.test.ts` / `tests/composer-history.test.ts` 覆盖输入框的两个纯模块：
+  多行提交必须是 `\x0a` 连接 + `\r` 结尾的单条命令，历史的去重、上限与游标行为。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
-  关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放不计为控件重叠。
+  关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言
+  输入框不被底栏或已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。
 - `npm run test:visual` 在本地生成 820px 插件页与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
   人工核对主题选择器、窄宽响应式和弹窗层级；图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。

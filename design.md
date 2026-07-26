@@ -4,13 +4,36 @@
 
 所有样式使用 CSS 自定义属性管理，禁止硬编码颜色、间距、圆角或时长。
 
+`:root` 是唯一允许出现字面值的地方；文件其余部分只能引用令牌。`tests/design-tokens.test.ts`
+把这一点变成可检查的不变式：`:root` 之外不允许 `#rrggbb`、不允许带色相的 `rgb()`/`rgba()`
+（只放行 `0 0 0` 与 `255 255 255` 的中性透明度）、`font-family` 只能是
+`var(--font-ui)` / `var(--font-mono)` / `inherit`、不允许写死 `font-size: <n>px`。
+这条不变式同时是「全局主题真的生效」的保证——主题只需覆写令牌，不需要逐条改样式。
+批量替换的工具与感知色差（CIE76）报告见 `scripts/tokenize-colors.cjs`。
+
+### 字体族
+
+- **界面**：`--font-ui`（`Segoe UI Variable` → `Segoe UI` → `system-ui`）
+- **等宽**：`--font-mono`（`Cascadia Mono` → `Consolas`）
+- 整个界面只有这两种字体族，第三种写法即视为回归。图标按钮继承上下文字体（`inherit`），
+  不再单独指定 `Arial`。
+
 ### 颜色令牌
 
 - **表面阶梯**：`--surface-canvas` (body 背景) → `--surface-terminal` (终端背景) → `--surface-1` (chrome) → `--surface-2` (面板) → `--surface-3` (卡片) → `--surface-4` (嵌套卡片) → `--surface-inset` (凹陷)
 - **文字层级**：`--text-hi` (标题) → `--text` (正文) → `--text-lo` (次级/必读辅助) → `--text-dim` (装饰性) → `--text-mute` (禁用)
 - **发丝描边**：`--line-subtle` (6%) / `--line` (9%) / `--line-strong` (13%) / `--line-hover` (20%)
-- **主色**：`--accent-solid` (#2ea8d8 实心填充) / `--accent-text` (#7cd4f0 文字图标)
+- **主色**：`--accent-solid` (实心填充) / `--accent-text` (文字图标)；石墨深色下为 #2ea8d8 / #7cd4f0
 - **状态三色**：`--ok-*` (绿) / `--warn-*` (琥珀) / `--bad-*` (红)，每色包含 solid/text/tint/line 四槽
+- **主题作用域是全局的**：表面阶梯、文字层级、发丝描边与主色共 22 个令牌由
+  `src/shared/terminal-themes.ts` 的 `shell` 字段驱动，映射表是同文件的 `SHELL_CSS_VARIABLES`。
+  切换主题时渲染层遍历该映射写到 `documentElement.style`，主进程同步
+  `setBackgroundColor` / `setTitleBarOverlay`（原生窗口边框由 Windows 绘制，CSS 管不到），
+  所选主题存进 `WorkspaceStore`，冷启动第一帧即为正确配色。状态三色刻意不随主题变化——
+  绿/琥珀/红是语义色，换主题不应改变「正常/警告/错误」的读法。
+- **跟随主题的半透明色**：不写 `rgba(r g b / n%)`，改用
+  `color-mix(in srgb, var(--token) n%, transparent)`，这样色相跟着令牌走。纯黑投影
+  （`rgb(0 0 0 / n%)`）与纯白提亮（`rgb(255 255 255 / n%)`）与主题无关，保留字面值。
 
 ### 间距与圆角
 
@@ -20,14 +43,17 @@
 
 ### 字号阶梯
 
+- **微标 10px**：`--text-3xs` (仅用于极窄空间的图标附标)
 - **最小 11px**：`--text-2xs` (mono 路径、微徽章)
 - **次级 12px**：`--text-xs` (帮助文字、术语表)
 - **默认 13px**：`--text-sm` (按钮、输入、列表)
 - **标题 14px**：`--text-base` (卡片标题)
 - **面板 16px**：`--text-md`
 - **大数值 20px**：`--text-lg`
+- **展示 24px**：`--text-display` (引导图标等大字形)
 - **浮层 28px**：`--text-xl`
 - **眉标 11px**：`--text-eyebrow` (大写、字距 0.08em)
+- 窄屏媒体查询里的 `font-size: 0` 是把按钮收成纯图标的手段，不是阶梯上的一档。
 
 ### 动效令牌
 
@@ -56,9 +82,11 @@
 
 ## 视觉语言
 
-- 背景：石墨黑与深蓝灰分层，终端保持接近纯黑。
-- 主色：青蓝 `--accent-solid` (#2ea8d8 实心) / `--accent-text` (#7cd4f0 文字图标)；状态色：薄荷绿 `--ok-solid` / 琥珀 `--warn-solid` / 珊瑚红 `--bad-solid`。
-- 字体：界面优先使用 `Segoe UI Variable`；终端使用 `Cascadia Mono`、`Consolas` 回退。
+- 背景：由所选主题决定的分层表面，终端始终是全局最暗的一层。
+- 主色：由主题提供的 `--accent-solid` / `--accent-text`（石墨深色为青蓝 #2ea8d8 / #7cd4f0）；
+  状态色固定为薄荷绿 `--ok-solid` / 琥珀 `--warn-solid` / 珊瑚红 `--bad-solid`，不随主题变化。
+- 字体：界面使用 `--font-ui`（`Segoe UI Variable` 起）；终端与路径、命令等技术标识使用
+  `--font-mono`（`Cascadia Mono`、`Consolas` 回退）。
 - 圆角：卡片 14px (`--r-xl`)，嵌套卡片 10px (`--r-lg`)，按钮 8px (`--r-md`)，状态胶囊为全圆角 (`--r-pill`)。
 - 阴影：只用于窗口内浮层与拖放激活态，避免装饰性重阴影。
 - 图标：使用一致的 1.8px 线性 SVG，禁止字形充当图标；应用图标以终端提示符和状态灯为核心。
@@ -72,10 +100,12 @@
 - Claude 工作台默认 468px (`--drawer-w`) 右侧抽屉，可通过左缘分隔条在 360–760px
   之间调整并持久化；顶部固定“会话 / 命令 / 快捷键”三页签，内容区独立滚动。
   抽屉打开时以半透明遮罩压低终端，不销毁或重排 xterm.js 实例。
-- 在 820–900px 窄窗口下，控制栏最小 240px，终端工具栏改为两列并隐藏装饰灯，工作台允许
+- 在 820–900px 窄窗口下，控制栏最小 240px，终端工具栏改为两列，工作台允许
   覆盖除 80px 外的终端区域；插件工具栏改为纵向，三个插件页签始终等分可用宽度，按钮文字
   自然换行。插件页不得出现横向滚动，底栏隐藏模型和后台状态等次要摘要。
   控件只能自然换行、收起次要文本或滚动，不允许通过负边距、绝对定位挤压造成重叠。
+- 终端工具栏只有「标题 + 操作」两列，没有装饰性窗口灯之类的假 chrome。真实终端已经在
+  应用的窗口里，再画一组红黄绿点只是在模仿另一个软件的外观。
 - 在高度 640–700px 的窗口中收紧卡片和控制栏纵向间距，全部长内容继续由已有滚动容器承接。
 - 左侧项目列表使用较大的文件夹标题，并按文件夹、运行中对话、历史对话形成可折叠层级；
   列表溢出时内部滚动。
@@ -89,6 +119,42 @@
   项目列表遵循同一规则。
 - NSIS 安装器在目录选择后显示”安装选项”页，桌面快捷方式复选框默认勾选。
 - NSIS 安装器只提供简体中文界面，与应用内中文文案保持一致。
+
+## 终端输入框（对话式输入）
+
+终端区自上而下是 `工具栏 / 输出区 / 输入框 / 底栏`
+（`.terminal-shell` 的 `grid-template-rows: var(--toolbar-h) minmax(0, 1fr) auto var(--footer-h)`）。
+输入提示词的主入口是输入框，不是输出区。
+
+- 输入框是真正的 `<textarea>`。这是选它的全部理由：`Ctrl+A` 全选、`Shift+←/→` 逐字选择、
+  鼠标拖选、`Ctrl+Z` 撤销、中文 IME 组合全部是浏览器原生行为，不由按键处理器在终端画布里
+  模拟编辑器。**不要为这些行为写代码**——写了就会与原生行为冲突并重新引入终端的弊端。
+- 只有三件事需要实现：`Enter` 发送 / `Shift+Enter` 换行、`↑/↓` 翻本地历史、随内容自动增高
+  （上限 `--composer-max`，168px）。历史只在光标位于首/末且无选区时才翻，否则方向键属于
+  文本编辑；`event.isComposing` 或 `keyCode === 229` 期间一律不拦截，避免打断 IME 候选。
+- 实测高度写回 `--composer-h`，`.workbench-scrim` 与 `.claude-workbench` 的 `bottom` 由
+  `calc(var(--footer-h) + var(--composer-h))` 得出，抽屉永远不会盖住输入框。
+  `npm run test:layout` 断言在 820×640 下输入框不被底栏或抽屉覆盖。
+- 多行提示词必须作为**一条**命令进入 PowerShell：行间用 `\x0a`（PSReadLine 的
+  `Ctrl+j`/AddLine 绑定所插入的字符）连接，末尾补 `\r`。构造逻辑在
+  `src/shared/composer-input.ts`，与 `terminal-session.ts` 的键位绑定成对存在，改一处必须改另一处。
+- 会话未在运行时输入框禁用并换 placeholder；启动会话、切项目等操作之后焦点给输入框。
+  例外：`resume` 模式打开的是 Claude 自己的方向键选择器，需要原始按键，焦点留在输出区。
+- 输出区仍然可以点进去直接打字（Claude Code 的 TUI 需要原始按键）。输出区内 `Ctrl+A`
+  的含义是「全选输出」而不是 PSReadLine 的「移到行首」。
+- 提示文字固定为 `Enter 发送 · Shift+Enter 换行 · ↑↓ 历史`，与「快捷键」页一致；快捷键页
+  不得再出现与输入框冲突的旧条目（例如把 `Ctrl+A` 说成「移动到行首」）。
+
+## 性能约束
+
+- xterm 使用 WebGL 渲染器（`@xterm/addon-webgl`），并监听 `onContextLoss` → dispose
+  回退 DOM 渲染器，不让丢失上下文变成白屏。
+- 输出写入在两侧都做合并：主进程按会话攒 8ms 或 64KB 发一次 IPC，渲染层按
+  `requestAnimationFrame` 合并成一次 `terminal.write`（缓冲上限 512KB，超限丢弃最旧的
+  分块）。逐块 `send`/`write` 是输入卡顿的真实来源——每块都会触发一次 xterm 重排。
+- 主进程的合并只影响发给渲染层的消息；`consumeTerminalOutput` 仍然逐块接收，因为它跨块
+  跟踪退出标记，喂给它合并后的缓冲会漏判。
+- 遮罩层刻意不用 `backdrop-filter`（终端画布持续刷新，模糊会每帧强制 GPU 合成）。
 
 ## Claude 工作台
 

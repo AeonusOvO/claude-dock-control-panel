@@ -1,3 +1,5 @@
+import type { TerminalThemeId } from './terminal-themes';
+
 export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 export type ClaudeAuthMode = 'apiKey' | 'authToken' | 'existing' | 'none';
 export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
@@ -410,6 +412,8 @@ export interface ControlPanelApi {
   writeTerminal: (sessionId: string, data: string) => void;
   getStoredProjects: () => Promise<WorkspaceProject[]>;
   removeStoredProject: (projectPath: string) => Promise<void>;
+  /** Repaints the native frame and remembers the choice for the next cold start. */
+  setAppTheme: (themeId: TerminalThemeId) => Promise<void>;
   getClaudeSessions: (sessionId: string) => Promise<ClaudeSessionMetadata[]>;
   getClaudeSessionsForPath: (projectPath: string) => Promise<ClaudeSessionMetadata[]>;
   renameClaudeSession: (

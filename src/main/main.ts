@@ -35,6 +35,12 @@ import type {
   WorkspaceState,
 } from '../shared/contracts';
 import {
+  DEFAULT_TERMINAL_THEME,
+  isTerminalThemeId,
+  TERMINAL_THEMES,
+  type TerminalThemeId,
+} from '../shared/terminal-themes';
+import {
   ClaudePluginManager,
   isValidMarketplaceName,
   isValidMarketplaceSource,
@@ -50,7 +56,6 @@ import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
-
 app.enableSandbox();
 
 let isQuitting = false;
@@ -66,12 +71,58 @@ const runtimeAssetPath = (fileName: string): string =>
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', 'runtime', fileName)
     : path.join(app.getAppPath(), 'assets', 'runtime', fileName);
 
+/*
+ * PTY output arrives in many small chunks, and one IPC message per chunk was the dominant cost when
+ * a command produced a lot of output. Chunks are coalesced for a few milliseconds and sent as one
+ * message. `consumeTerminalOutput` still sees every chunk individually — it tracks exit markers
+ * across chunk boundaries and must not be fed a merged buffer.
+ */
+const OUTPUT_FLUSH_MS = 8;
+const OUTPUT_FLUSH_BYTES = 64 * 1024;
+
+interface OutputBuffer {
+  chunks: string[];
+  length: number;
+  timer: NodeJS.Timeout | undefined;
+}
+
+const outputBuffers = new Map<string, OutputBuffer>();
+
+const flushTerminalOutput = (sessionId: string): void => {
+  const buffer = outputBuffers.get(sessionId);
+  if (!buffer) {
+    return;
+  }
+  if (buffer.timer) {
+    clearTimeout(buffer.timer);
+  }
+  outputBuffers.delete(sessionId);
+  if (buffer.chunks.length > 0) {
+    mainWindow?.webContents.send('terminal:data', sessionId, buffer.chunks.join(''));
+  }
+};
+
+const queueTerminalOutput = (sessionId: string, data: string): void => {
+  const buffer = outputBuffers.get(sessionId) ?? { chunks: [], length: 0, timer: undefined };
+  buffer.chunks.push(data);
+  buffer.length += data.length;
+  outputBuffers.set(sessionId, buffer);
+
+  if (buffer.length >= OUTPUT_FLUSH_BYTES) {
+    flushTerminalOutput(sessionId);
+    return;
+  }
+  buffer.timer ??= setTimeout(() => {
+    flushTerminalOutput(sessionId);
+  }, OUTPUT_FLUSH_MS);
+};
+
 const workspace = new TerminalWorkspace(
   homedir(),
   (sessionId, data) => {
     const filtered = claudeRuntime?.consumeTerminalOutput(sessionId, data) ?? data;
     if (filtered) {
-      mainWindow?.webContents.send('terminal:data', sessionId, filtered);
+      queueTerminalOutput(sessionId, filtered);
     }
   },
   (state) => {
@@ -1171,6 +1222,14 @@ const registerIpc = (): void => {
     }
     workspaceStore.removeProject(projectPath);
   });
+  ipcMain.handle('ui:set-theme', async (event, themeId: unknown) => {
+    validateSender(event);
+    if (!isTerminalThemeId(themeId)) {
+      throw new Error('主题标识无效。');
+    }
+    workspaceStore.setTheme(themeId);
+    applyWindowTheme(themeId);
+  });
   ipcMain.handle('claude:get-sessions', async (event, sessionId: unknown) => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
@@ -1302,10 +1361,26 @@ const createTray = (): void => {
   updateTray();
 };
 
+/**
+ * The native frame is drawn by Windows, not by CSS, so the theme has to be pushed into Electron as
+ * well — otherwise the chosen colour stops at the document edge and the window keeps a dark ring.
+ */
+const applyWindowTheme = (themeId: TerminalThemeId): void => {
+  const { shell } = TERMINAL_THEMES[themeId];
+  mainWindow?.setBackgroundColor(shell.surfaceCanvas);
+  mainWindow?.setTitleBarOverlay({
+    color: shell.surface1,
+    height: 48,
+    symbolColor: shell.textHi,
+  });
+};
+
 const createWindow = async (): Promise<void> => {
+  // Reading the remembered theme before the first paint keeps cold start from flashing the wrong hue.
+  const { shell } = TERMINAL_THEMES[workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME];
   mainWindow = new BrowserWindow({
     autoHideMenuBar: true,
-    backgroundColor: '#080c10',
+    backgroundColor: shell.surfaceCanvas,
     height: 760,
     icon: assetPath('app-icon-256.png'),
     minHeight: 640,
@@ -1313,9 +1388,9 @@ const createWindow = async (): Promise<void> => {
     show: false,
     title: 'ClaudeDock 控制面板',
     titleBarOverlay: {
-      color: '#0a0e13',
+      color: shell.surface1,
       height: 48,
-      symbolColor: '#dce9f0',
+      symbolColor: shell.textHi,
     },
     titleBarStyle: 'hidden',
     webPreferences: {
@@ -1406,6 +1481,12 @@ if (!hasSingleInstanceLock) {
 app.on('activate', showMainWindow);
 app.on('before-quit', () => {
   isQuitting = true;
+  for (const buffer of outputBuffers.values()) {
+    if (buffer.timer) {
+      clearTimeout(buffer.timer);
+    }
+  }
+  outputBuffers.clear();
   claudeRuntime?.shutdown();
   workspace.shutdown();
 });

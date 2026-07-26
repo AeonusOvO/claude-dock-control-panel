@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
@@ -45,7 +46,9 @@ const SERVICE_WAIT_MS = 20_000;
 
 interface CcrCliInstallation {
   cliPath: string;
+  installDirectory: string;
   nodeExecutable?: string;
+  packageRoot: string;
   version: string;
 }
 
@@ -140,9 +143,47 @@ const appDataRoot = (): string =>
 const localAppDataRoot = (): string =>
   process.env.LOCALAPPDATA ?? path.join(homedir(), 'AppData', 'Local');
 
+/** Every file CCR keeps under `%APPDATA%\claude-code-router`, for the purge confirmation copy. */
+export const ROUTER_DATA_ENTRIES = [
+  'config.sqlite',
+  'api-keys.sqlite',
+  'usage.sqlite',
+  'gateway.config.json',
+  'service.json',
+  'gateway-proxy-preload.cjs',
+  'claude-app-gateway-backup.json',
+  'global-profile-takeover.json',
+  'bin',
+  'provider-icons',
+  'raw-trace-spool',
+] as const;
+
+/**
+ * A recursive delete only ever runs against the CCR data directory itself. Anything that does not
+ * resolve to `<AppData>\claude-code-router` is refused so a tampered `APPDATA` cannot widen the
+ * blast radius, and so Claude Code's and Codex's own configuration can never be reached.
+ */
+export const routerDataDirectory = (appData: string): string | undefined => {
+  if (!appData || !path.isAbsolute(appData)) {
+    return undefined;
+  }
+  const resolved = path.resolve(appData, 'claude-code-router');
+  const parent = path.dirname(resolved);
+  if (
+    path.basename(resolved).toLowerCase() !== 'claude-code-router' ||
+    parent === resolved ||
+    path.resolve(parent) !== path.resolve(appData)
+  ) {
+    return undefined;
+  }
+  return resolved;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 const optionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
@@ -616,8 +657,10 @@ export class ClaudeRouterManager {
     const access = await this.getActiveServiceAccess();
     const installationKind =
       cli && desktop ? 'mixed' : cli ? 'npm' : desktop ? 'desktop' : 'unknown';
+    const dataDirectory = routerDataDirectory(appDataRoot());
     const installation = {
-      canUninstall: Boolean(cli || this.findDesktopUninstaller(desktop)),
+      // Leftover configuration alone is still worth clearing, so the purge stays reachable.
+      canUninstall: Boolean(cli || desktop || (dataDirectory && existsSync(dataDirectory))),
       installationKind,
     } as const;
     if (!access) {
@@ -741,11 +784,19 @@ export class ClaudeRouterManager {
     };
   }
 
+  /**
+   * Restores the machine to a genuinely not-installed state: the program is removed and every
+   * CCR data file is deleted, so the user can pick a different install source afterwards.
+   * Provider configuration and upstream keys are unrecoverable by design — the renderer states
+   * that in its confirmation before calling this.
+   */
   public async uninstall(): Promise<RouterPackageOperation> {
     const cli = await this.findCliInstallation();
     const desktop = this.findDesktopExecutable();
     const desktopUninstaller = this.findDesktopUninstaller(desktop);
-    if (!cli && !desktop) {
+    const dataDirectory = routerDataDirectory(appDataRoot());
+    const hadData = Boolean(dataDirectory && existsSync(dataDirectory));
+    if (!cli && !desktop && !hadData) {
       return { message: '当前没有检测到可卸载的路由器。', state: await this.getState() };
     }
 
@@ -763,20 +814,15 @@ export class ClaudeRouterManager {
           // The service may have exited after the gateway stopped.
         }
       }
+      // Give the daemon a moment to release its SQLite handles before the directory is deleted.
+      await delay(600);
     }
 
+    const notes: string[] = [];
     if (cli) {
-      await runWindowsCommand('npm', ['uninstall', '--global', '@musistudio/claude-code-router'], {
-        maxBuffer: 16 * 1024 * 1024,
-        timeout: 10 * 60_000,
-      });
+      notes.push(await this.removeCliInstallation(cli));
     }
 
-    if (desktop && !desktopUninstaller) {
-      throw new Error(
-        '检测到桌面版路由器，但没有找到它的卸载程序。请从 Windows“已安装的应用”中卸载后再安装新版本。',
-      );
-    }
     if (desktopUninstaller) {
       const child = spawn(desktopUninstaller, [], {
         detached: true,
@@ -784,18 +830,85 @@ export class ClaudeRouterManager {
         windowsHide: false,
       });
       child.unref();
-      return {
-        message: cli
-          ? 'npm 版路由器已移除，并已打开桌面版卸载程序。完成后即可选择新的下载源。'
-          : '已打开路由器卸载程序。完成后即可选择新的下载源。',
-        state: await this.getState(),
-      };
+      notes.push('已打开桌面版卸载程序，请按向导完成移除');
+    } else if (desktop) {
+      notes.push('检测到桌面版路由器但找不到它的卸载程序，请在 Windows“已安装的应用”中移除');
     }
 
+    if (dataDirectory) {
+      try {
+        rmSync(dataDirectory, { force: true, maxRetries: 3, recursive: true, retryDelay: 200 });
+        if (hadData) {
+          notes.push('已删除全部服务提供方配置、上游密钥与用量数据');
+        }
+      } catch {
+        notes.push(`无法删除配置目录 ${dataDirectory}，请关闭正在使用它的程序后重试`);
+      }
+    }
+
+    try {
+      rmSync(this.installerDirectory, { force: true, maxRetries: 2, recursive: true });
+    } catch {
+      // A leftover installer cache is harmless; it is re-created on the next download.
+    }
+    this.serviceRuntimeCache = undefined;
+
     return {
-      message: 'npm 版路由器已移除；服务提供方配置文件未被删除。',
+      message: notes.length > 0 ? `${notes.join('；')}。` : '没有需要移除的路由器组件。',
       state: await this.getState(),
     };
+  }
+
+  /**
+   * `npm uninstall --global` only reaches the package when it lives under the active npm prefix.
+   * A CCR installed against another prefix (for example `D:\ClaudeCode`) survives it, so the
+   * package directory is verified afterwards and removed directly when it is still present.
+   */
+  private async removeCliInstallation(cli: CcrCliInstallation): Promise<string> {
+    try {
+      await runWindowsCommand('npm', ['uninstall', '--global', '@musistudio/claude-code-router'], {
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: 10 * 60_000,
+      });
+    } catch {
+      // Fall through to the prefix-scoped attempt and the direct removal below.
+    }
+
+    if (existsSync(cli.packageRoot)) {
+      try {
+        await runWindowsCommand(
+          'npm',
+          [
+            'uninstall',
+            '--global',
+            '--prefix',
+            cli.installDirectory,
+            '@musistudio/claude-code-router',
+          ],
+          { maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000 },
+        );
+      } catch {
+        // The directory removal below is the last resort.
+      }
+    }
+
+    if (existsSync(cli.packageRoot)) {
+      rmSync(cli.packageRoot, { force: true, maxRetries: 3, recursive: true, retryDelay: 200 });
+    }
+    for (const shim of ['ccr', 'ccr.cmd', 'ccr.ps1']) {
+      const shimPath = path.join(cli.installDirectory, shim);
+      if (existsSync(shimPath)) {
+        try {
+          unlinkSync(shimPath);
+        } catch {
+          // A locked shim stops working once its package is gone; report success anyway.
+        }
+      }
+    }
+
+    return existsSync(cli.packageRoot)
+      ? `无法完全删除 ${cli.packageRoot}，请手动移除该目录`
+      : '已移除命令行版路由器';
   }
 
   public async start(): Promise<ClaudeRouterManagementState> {
@@ -1019,7 +1132,9 @@ export class ClaudeRouterManager {
         if (version && /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(version)) {
           return {
             cliPath,
+            installDirectory: directory,
             nodeExecutable: await this.findCompatibleNodeExecutable(directory, packageRoot),
+            packageRoot,
             version,
           };
         }

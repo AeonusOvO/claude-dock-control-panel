@@ -307,11 +307,14 @@
                 </select>
               </label>
               <button id="install-router" type="button">一键安装 / 更新</button>
-              <button id="uninstall-router" type="button">卸载 / 更换</button>
+              <button id="uninstall-router" type="button">彻底卸载并清除数据</button>
               <button id="start-router" type="button">启动路由器</button>
               <button id="stop-router" type="button">停止网关</button>
               <button id="open-router-management" type="button">打开完整管理页</button>
             </div>
+            <p class="router-swap-hint" id="router-swap-hint" hidden>
+              已恢复到未安装状态。现在可以选择新的安装来源，再点“一键安装”换成另一个网关。
+            </p>
             <p class="router-install-note">
               官方安装包会核对发布包的 SHA-256；npm 与 npmmirror 只在本次安装命令中指定源，
               不会修改用户的全局 npm 配置。
@@ -632,9 +635,6 @@
 
       <section class="terminal-shell" aria-label="项目终端">
         <div class="terminal-toolbar">
-          <div class="window-lights" aria-hidden="true">
-            <span></span><span></span><span></span>
-          </div>
           <div class="terminal-title">
             <span>终端</span>
             <strong id="terminal-project">项目终端</strong>
@@ -686,6 +686,28 @@
             <span>点击左侧“启动”创建终端会话</span>
           </div>
         </div>
+        <form class="terminal-composer" id="terminal-composer">
+          <textarea
+            id="composer-input"
+            rows="1"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="在这里输入提示词，Enter 发送"
+            aria-label="终端输入框"
+            aria-describedby="composer-hint"
+          ></textarea>
+          <div class="terminal-composer__side">
+            <button id="composer-send" type="submit" title="发送到终端（Enter）">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h13M12 6l6 6-6 6" />
+              </svg>
+              <span class="sr-only">发送到终端</span>
+            </button>
+            <span class="terminal-composer__hint" id="composer-hint"
+              >Enter 发送 · Shift+Enter 换行 · ↑↓ 历史</span
+            >
+          </div>
+        </form>
         <footer class="terminal-footer">
           <button id="footer-connection" type="button">
             <span class="footer-connection-dot" aria-hidden="true"></span>
@@ -922,6 +944,30 @@
               </div>
               <dl class="shortcut-list">
                 <div>
+                  <dt><kbd>Enter</kbd></dt>
+                  <dd>把输入框里的内容发送到终端</dd>
+                </div>
+                <div>
+                  <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt>
+                  <dd>在输入框里换行，多行内容仍作为一条命令发送</dd>
+                </div>
+                <div>
+                  <dt><kbd>↑</kbd> / <kbd>↓</kbd></dt>
+                  <dd>在输入框里翻阅发送过的历史</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>A</kbd></dt>
+                  <dd>输入框内全选文本；终端内全选输出</dd>
+                </div>
+                <div>
+                  <dt><kbd>Shift</kbd> + <kbd>←</kbd> / <kbd>→</kbd></dt>
+                  <dd>在输入框里逐字选择，配合 <kbd>Ctrl</kbd> 可逐词选择</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>Z</kbd></dt>
+                  <dd>撤销输入框里的编辑</dd>
+                </div>
+                <div>
                   <dt><kbd>Ctrl</kbd> + <kbd>C</kbd></dt>
                   <dd>有选区时复制；无选区时中断命令</dd>
                 </div>
@@ -930,16 +976,12 @@
                   <dd>粘贴剪贴板文本</dd>
                 </div>
                 <div>
-                  <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt>
-                  <dd>在当前命令中换行</dd>
-                </div>
-                <div>
                   <dt><kbd>Ctrl</kbd> + <kbd>L</kbd></dt>
                   <dd>清空当前终端显示</dd>
                 </div>
                 <div>
-                  <dt><kbd>Ctrl</kbd> + <kbd>A</kbd></dt>
-                  <dd>在命令行编辑中移动到行首</dd>
+                  <dt><kbd>Esc</kbd></dt>
+                  <dd>清空输入框</dd>
                 </div>
                 <div>
                   <dt>鼠标右键</dt>

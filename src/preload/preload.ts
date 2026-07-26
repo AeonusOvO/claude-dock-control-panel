@@ -166,6 +166,7 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('workspace:get-stored-projects') as Promise<WorkspaceProject[]>,
   removeStoredProject: (projectPath) =>
     ipcRenderer.invoke('workspace:remove-stored-project', projectPath) as Promise<void>,
+  setAppTheme: (themeId) => ipcRenderer.invoke('ui:set-theme', themeId) as Promise<void>,
   getClaudeSessions: (sessionId) =>
     ipcRenderer.invoke('claude:get-sessions', sessionId) as Promise<ClaudeSessionMetadata[]>,
   getClaudeSessionsForPath: (projectPath) =>

@@ -1,10 +1,13 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { WorkspaceProject } from '../shared/contracts';
+import { isTerminalThemeId, type TerminalThemeId } from '../shared/terminal-themes';
 
 interface StoredWorkspace {
   lastActiveProject?: string;
   projects: WorkspaceProject[];
+  /** Remembered so the very first frame is painted in the right colours instead of flashing. */
+  terminalTheme?: TerminalThemeId;
   version: 1;
 }
 
@@ -31,6 +34,16 @@ export class WorkspaceStore {
 
   public getLastActiveProject(): string | undefined {
     return this.load().lastActiveProject;
+  }
+
+  public getTheme(): TerminalThemeId | undefined {
+    return this.load().terminalTheme;
+  }
+
+  public setTheme(themeId: TerminalThemeId): void {
+    const store = this.load();
+    store.terminalTheme = themeId;
+    this.persist(store);
   }
 
   public addProject(projectPath: string): void {
@@ -85,6 +98,7 @@ export class WorkspaceStore {
       const parsed = JSON.parse(readFileSync(this.storagePath, 'utf8')) as {
         lastActiveProject?: unknown;
         projects?: unknown;
+        terminalTheme?: unknown;
         version?: unknown;
       };
 
@@ -118,6 +132,7 @@ export class WorkspaceStore {
         lastActiveProject:
           typeof parsed.lastActiveProject === 'string' ? parsed.lastActiveProject : undefined,
         projects,
+        terminalTheme: isTerminalThemeId(parsed.terminalTheme) ? parsed.terminalTheme : undefined,
         version: 1,
       };
     } catch {

@@ -6,11 +6,13 @@ import {
   normalizeRouterProviderInput,
   parseRouterInstallerRelease,
   routerCliStartSpec,
+  routerDataDirectory,
   routerGatewayErrorMessage,
   routerNativeModuleErrorMessage,
   routerServiceRunsInAppRuntime,
   sanitizeRouterConfig,
   tasklistImageNames,
+  ROUTER_DATA_ENTRIES,
 } from '../src/main/claude-router-manager';
 
 const providerInput: SaveClaudeRouterProviderInput = {
@@ -260,5 +262,26 @@ describe('Claude Code Router management', () => {
     );
 
     expect(tasklistImageNames(tasklistBytes)).toContain('ClaudeDock 控制面板.exe');
+  });
+
+  it('only ever resolves the purge target to the CCR directory inside AppData', () => {
+    expect(routerDataDirectory('C:\\Users\\tester\\AppData\\Roaming')).toBe(
+      'C:\\Users\\tester\\AppData\\Roaming\\claude-code-router',
+    );
+    // A tampered APPDATA must not be able to widen the recursive delete.
+    expect(routerDataDirectory('')).toBeUndefined();
+    expect(routerDataDirectory('AppData\\Roaming')).toBeUndefined();
+    expect(routerDataDirectory('C:\\Users\\tester\\AppData\\Roaming\\..')).toBe(
+      'C:\\Users\\tester\\AppData\\claude-code-router',
+    );
+  });
+
+  it('lists the CCR data files that a thorough uninstall removes', () => {
+    expect(ROUTER_DATA_ENTRIES).toContain('config.sqlite');
+    expect(ROUTER_DATA_ENTRIES).toContain('api-keys.sqlite');
+    expect(ROUTER_DATA_ENTRIES).toContain('service.json');
+    expect(ROUTER_DATA_ENTRIES).toContain('gateway.config.json');
+    // Claude Code's and Codex's own configuration lives elsewhere and is never touched.
+    expect(ROUTER_DATA_ENTRIES.some((entry) => entry.includes('claude.json'))).toBe(false);
   });
 });

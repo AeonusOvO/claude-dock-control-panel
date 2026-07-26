@@ -44,7 +44,27 @@ const inspectLayout = `
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
     .map((element) => element.id || element.className);
+
+  // The composer is the primary input; the footer and the workbench drawer must never sit on top of
+  // it. The generic overlap sweep above misses this because neither is a focusable control.
+  const covered = [];
+  const composer = document.querySelector('#terminal-composer');
+  if (composer && visible(composer)) {
+    const composerRect = composer.getBoundingClientRect();
+    for (const selector of ['.terminal-footer', '.claude-workbench--open']) {
+      const other = document.querySelector(selector);
+      if (!other || !visible(other)) continue;
+      const otherRect = other.getBoundingClientRect();
+      const overlapWidth = Math.min(composerRect.right, otherRect.right) - Math.max(composerRect.left, otherRect.left);
+      const overlapHeight = Math.min(composerRect.bottom, otherRect.bottom) - Math.max(composerRect.top, otherRect.top);
+      if (overlapWidth > 1 && overlapHeight > 1) {
+        covered.push(selector);
+      }
+    }
+  }
+
   return {
+    covered,
     documentOverflow: document.documentElement.scrollWidth > innerWidth + 2,
     overlaps,
     overflow,
@@ -114,7 +134,11 @@ app.whenReady().then(async () => {
   }
 
   const failures = results.filter(
-    (result) => result.documentOverflow || result.overlaps.length > 0 || result.overflow.length > 0,
+    (result) =>
+      result.documentOverflow ||
+      result.overlaps.length > 0 ||
+      result.overflow.length > 0 ||
+      result.covered.length > 0,
   );
   console.log(JSON.stringify({ failures, sizes: results.length }, null, 2));
   app.exit(failures.length === 0 ? 0 : 1);
