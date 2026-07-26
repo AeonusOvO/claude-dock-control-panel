@@ -93,8 +93,9 @@ npm run dist
 `npm run test:layout` 会在隐藏的 Electron 窗口中检查 820×640、900×640 和 1180×760，
 覆盖项目、接入、插件及工作台三页，若交互组件重叠或关键容器横向溢出则失败。
 
-`npm run dist` 在 `release/` 完成 Windows x64 打包，并把最终安装程序
-`ClaudeDock-Setup-<version>-x64.exe` 同时发布到项目根目录与 `outputs/` 本地交付目录。
+`npm run dist` 在 `outputs/` 完成 Windows x64 打包，最终安装程序固定为
+`outputs/ClaudeDock-Setup-<version>-x64.exe`。后续安装包、校验元数据和解包产物均只放在该
+本地输出目录，不再复制到项目根目录。
 
 ## 日常使用
 
@@ -156,8 +157,7 @@ src/renderer/        控制面板界面与 xterm.js 终端
 src/shared/          跨进程类型和纯函数
 tests/               单元测试
 assets/runtime/      Claude Code statusLine 本地指标采集脚本
-outputs/             安装包与本地交付说明，不纳入 Git
-ClaudeDock-Setup-*.exe  根目录中的最终安装包，不纳入 Git
+outputs/             安装包、校验元数据与解包产物，不纳入 Git
 ```
 
 ## 安全与限制

@@ -314,8 +314,9 @@ xterm 主题值硬编码在 `terminalOptions` 中，更新令牌时需同步。`
   轮换项目/接入/插件页及工作台三页，检查交互控件矩形相交、关键容器横向溢出和文档级
   overflow；遮罩层与抽屉的有意叠放不计为控件重叠。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
-- `npm run dist`：构建 Windows x64 NSIS 安装包，并由 `scripts/publish-installer.mjs`
-  将最终安装程序同时复制到项目根目录与 `outputs/` 本地交付目录。
+- `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
+  固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行
+  二次复制或向项目根目录发布。
 - `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
   electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
