@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
   ClaudeConnectionAdvice,
+  ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
   ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
@@ -31,6 +32,7 @@ import {
 } from './claude-configuration';
 import { claudeMessagesEndpoint, testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
+import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import {
   ClaudeRouterManager,
@@ -390,6 +392,7 @@ export class ClaudeRuntime {
   private readonly configStore: ClaudeConfigStore;
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   private readonly gatewayDetector = new ClaudeGatewayDetector();
+  private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly metricsTimer: NodeJS.Timeout;
   private readonly routerManager: ClaudeRouterManager;
   private readonly runtimeRoot: string;
@@ -401,6 +404,7 @@ export class ClaudeRuntime {
     private readonly onState: (state: ClaudeProjectState) => void,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
+    this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
     this.routerManager = new ClaudeRouterManager(userDataPath);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
     this.metricsTimer = setInterval(() => {
@@ -727,10 +731,50 @@ export class ClaudeRuntime {
     input: Parameters<ClaudeConfigStore['save']>[1],
   ): Promise<ClaudeProjectState> {
     this.configStore.save(cwd, input);
+    await this.recordConnectionHistory(cwd, input);
     const runtime = this.ensureSession(sessionId, cwd);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return { ...state, active: runtime.active };
+  }
+
+  public getConnectionHistory(cwd: string): ClaudeConnectionHistoryEntry[] {
+    return this.historyStore.list(cwd);
+  }
+
+  public deleteConnectionHistory(cwd: string, entryId: string): ClaudeConnectionHistoryEntry[] {
+    return this.historyStore.remove(cwd, entryId);
+  }
+
+  /**
+   * Replays a saved setup. It goes through `saveConfig`, so restoring a record is indistinguishable
+   * from having typed it again — including the deduplication that keeps the list from growing when
+   * the restored setup is already the newest one.
+   */
+  public async applyConnectionHistory(
+    sessionId: string,
+    cwd: string,
+    entryId: string,
+  ): Promise<ClaudeProjectState> {
+    return this.saveConfig(sessionId, cwd, this.historyStore.toSaveInput(cwd, entryId));
+  }
+
+  /**
+   * Snapshots what was saved together with the gateway state at that moment, so a record restores
+   * the situation and not just the form fields. A history failure must never fail the save itself.
+   */
+  private async recordConnectionHistory(cwd: string, input: SaveClaudeConfigInput): Promise<void> {
+    try {
+      const router = await this.getRouterHealthState();
+      this.historyStore.record(cwd, {
+        config: input,
+        credential: this.configStore.getCredential(cwd),
+        gatewayEndpoint: router.endpoint,
+        gatewayState: router.gatewayState,
+      });
+    } catch {
+      // The configuration is already saved; a missing history entry is not worth failing over.
+    }
   }
 
   public async testConnection(

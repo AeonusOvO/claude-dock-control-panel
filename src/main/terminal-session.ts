@@ -100,7 +100,15 @@ export class TerminalSession {
     return this.getStatus();
   }
 
-  public resize(cols: number, rows: number): void {
+  /**
+   * Applies a size and reports the size the PTY actually adopted. The two can differ: sizes are
+   * clamped, and PSReadLine repaints its edit buffer with ABSOLUTE cursor moves (pressing Ctrl+C
+   * emits e.g. `ESC[10;27H`). If xterm believes it has different dimensions than ConPTY, that
+   * repaint lands on the wrong row and the previous screen is left behind — which is what the
+   * "two screens stacked on top of each other" bug is. The caller echoes this back so the
+   * renderer can force xterm onto the same grid.
+   */
+  public resize(cols: number, rows: number): { cols: number; rows: number } {
     const normalized = normalizeTerminalSize(cols, rows);
     this.cols = normalized.cols;
     this.rows = normalized.rows;
@@ -108,6 +116,8 @@ export class TerminalSession {
     if (this.process) {
       this.process.resize(this.cols, this.rows);
     }
+
+    return { cols: this.cols, rows: this.rows };
   }
 
   public restart(

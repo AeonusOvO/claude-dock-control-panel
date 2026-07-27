@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   ClaudeConfigResult,
   ClaudeConnectionAdvice,
+  ClaudeConnectionHistoryEntry,
+  ClaudeConnectionHistoryResult,
   ClaudeConnectionTestResult,
   ClaudeGatewayDiagnostics,
   ClaudeOperationResult,
@@ -58,6 +60,22 @@ const api: ControlPanelApi = {
       'claude:get-connection-advice',
       sessionId,
     ) as Promise<ClaudeConnectionAdvice>,
+  getClaudeConnectionHistory: (sessionId: string) =>
+    ipcRenderer.invoke('claude:connection-history', sessionId) as Promise<
+      ClaudeConnectionHistoryEntry[]
+    >,
+  applyClaudeConnectionHistory: (sessionId: string, entryId: string) =>
+    ipcRenderer.invoke(
+      'claude:connection-history-apply',
+      sessionId,
+      entryId,
+    ) as Promise<ClaudeConnectionHistoryResult>,
+  deleteClaudeConnectionHistory: (sessionId: string, entryId: string) =>
+    ipcRenderer.invoke(
+      'claude:connection-history-delete',
+      sessionId,
+      entryId,
+    ) as Promise<ClaudeConnectionHistoryResult>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
   deleteClaudeRouterProvider: (sessionId, providerId) =>
@@ -103,6 +121,22 @@ const api: ControlPanelApi = {
     ipcRenderer.on('terminal:data', callback);
     return () => {
       ipcRenderer.removeListener('terminal:data', callback);
+    };
+  },
+  onTerminalSize: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      sessionId: unknown,
+      cols: unknown,
+      rows: unknown,
+    ): void => {
+      if (typeof sessionId === 'string' && typeof cols === 'number' && typeof rows === 'number') {
+        listener(sessionId, cols, rows);
+      }
+    };
+    ipcRenderer.on('terminal:size', callback);
+    return () => {
+      ipcRenderer.removeListener('terminal:size', callback);
     };
   },
   onWorkspaceState: (listener) => {

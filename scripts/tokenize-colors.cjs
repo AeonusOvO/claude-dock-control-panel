@@ -129,7 +129,11 @@ const roleOf = (property) => {
   if (/^(background|background-color|background-image|fill|stroke|accent-color)$/.test(property)) {
     return 'surface';
   }
-  if (/^(border|border-[a-z-]*|outline|outline-color|scrollbar-color|box-shadow|text-shadow|column-rule)$/.test(property)) {
+  if (
+    /^(border|border-[a-z-]*|outline|outline-color|scrollbar-color|box-shadow|text-shadow|column-rule)$/.test(
+      property,
+    )
+  ) {
     return 'border';
   }
   return undefined;

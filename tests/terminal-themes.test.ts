@@ -22,6 +22,20 @@ describe('terminal themes', () => {
     }
   });
 
+  it('paints the canvas and the surface around it the same colour', () => {
+    /*
+     * The xterm canvas only covers whole character cells, so a strip of `--surface-terminal` is
+     * always visible below and to the right of the grid. If it differs from the palette background
+     * that strip reads as a frame around the terminal — which is the black-border bug, since
+     * xterm.css defaults that surround to #000.
+     */
+    for (const [id, theme] of Object.entries(TERMINAL_THEMES)) {
+      expect(theme.palette.background, `${id} canvas vs surround`).toBe(
+        theme.shell.surfaceTerminal,
+      );
+    }
+  });
+
   it('validates persisted theme identifiers', () => {
     expect(isTerminalThemeId(DEFAULT_TERMINAL_THEME)).toBe(true);
     expect(isTerminalThemeId('claude')).toBe(true);

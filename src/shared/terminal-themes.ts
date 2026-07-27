@@ -152,7 +152,7 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
   graphite: {
     label: '石墨深色',
     palette: {
-      background: '#050708',
+      background: '#05070a',
       black: '#12171b',
       blue: '#66b8ff',
       brightBlack: '#67747d',

@@ -16,6 +16,7 @@ import path from 'node:path';
 import type {
   ClaudeConfigResult,
   ClaudeConnectionTestResult,
+  ClaudeConnectionHistoryResult,
   ClaudeCodeInstallSource,
   ClaudeLaunchMode,
   ClaudeOperationResult,
@@ -118,7 +119,6 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
 };
 
 const workspace = new TerminalWorkspace(
-  homedir(),
   (sessionId, data) => {
     const filtered = claudeRuntime?.consumeTerminalOutput(sessionId, data) ?? data;
     if (filtered) {
@@ -232,7 +232,10 @@ const showMainWindow = (): void => {
 };
 
 const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
-  const defaultPath = directoryDialogDefaultPath(workspace.getActiveStatus().cwd, homedir());
+  const defaultPath = directoryDialogDefaultPath(
+    workspace.getActiveStatus()?.cwd ?? homedir(),
+    homedir(),
+  );
   const options: Electron.OpenDialogOptions = {
     buttonLabel: '添加此项目',
     ...(defaultPath ? { defaultPath } : {}),
@@ -538,6 +541,13 @@ const allowedExternalHosts = new Set([
   'musistudio.github.io',
 ]);
 const loopbackHosts = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+
+const validateHistoryEntryId = (value: unknown): string => {
+  if (typeof value !== 'string' || !/^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/.test(value)) {
+    throw new Error('接入记录标识无效。');
+  }
+  return value;
+};
 
 const validateExternalUrl = (value: unknown): string => {
   if (typeof value !== 'string' || value.length > 2048) {
@@ -1066,6 +1076,56 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.handle('claude:connection-history', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return requireClaudeRuntime().getConnectionHistory(status.cwd);
+  });
+  ipcMain.handle(
+    'claude:connection-history-apply',
+    async (event, sessionId: unknown, entryId: unknown): Promise<ClaudeConnectionHistoryResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        const state = await runtime.applyConnectionHistory(
+          validatedSessionId,
+          status.cwd,
+          validateHistoryEntryId(entryId),
+        );
+        return { entries: runtime.getConnectionHistory(status.cwd), ok: true, state };
+      } catch (error) {
+        return {
+          entries: runtime.getConnectionHistory(status.cwd),
+          error: error instanceof Error ? error.message : '无法应用这条接入记录。',
+          ok: false,
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:connection-history-delete',
+    async (event, sessionId: unknown, entryId: unknown): Promise<ClaudeConnectionHistoryResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        return {
+          entries: runtime.deleteConnectionHistory(status.cwd, validateHistoryEntryId(entryId)),
+          ok: true,
+        };
+      } catch (error) {
+        return {
+          entries: runtime.getConnectionHistory(status.cwd),
+          error: error instanceof Error ? error.message : '无法删除这条接入记录。',
+          ok: false,
+        };
+      }
+    },
+  );
   ipcMain.handle(
     'claude:test-connection',
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeConnectionTestResult> => {
@@ -1206,7 +1266,21 @@ const registerIpc = (): void => {
       return;
     }
     try {
-      workspace.resize(validateSessionId(sessionId), cols, rows);
+      const validatedSessionId = validateSessionId(sessionId);
+      const applied = workspace.resize(validatedSessionId, cols, rows);
+      /*
+       * Echo back the size the PTY actually took. PSReadLine repaints with absolute cursor moves,
+       * so xterm disagreeing with ConPTY by even one row makes that repaint overwrite the wrong
+       * line and leaves the previous screen visible underneath.
+       */
+      if (applied.cols !== cols || applied.rows !== rows) {
+        mainWindow?.webContents.send(
+          'terminal:size',
+          validatedSessionId,
+          applied.cols,
+          applied.rows,
+        );
+      }
     } catch {
       // A ResizeObserver callback can race with project closure.
     }

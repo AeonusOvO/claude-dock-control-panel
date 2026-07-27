@@ -535,6 +535,17 @@
             </div>
           </form>
 
+          <section class="connection-history" id="connection-history">
+            <div class="connection-history__heading">
+              <strong>接入历史记录</strong>
+              <span id="connection-history-count">每次保存都会记录，点击即可一键恢复。</span>
+            </div>
+            <p class="connection-history__empty" id="connection-history-empty">
+              还没有记录；保存一次接入配置后就会出现在这里。
+            </p>
+            <ul class="connection-history__list" id="connection-history-list"></ul>
+          </section>
+
           <details class="connection-glossary">
             <summary>还是看不懂？展开术语解释</summary>
             <dl>
@@ -682,8 +693,8 @@
         <div class="terminal-stage" id="terminal-stage">
           <div class="terminal-empty-state" id="terminal-empty-state" aria-hidden="false">
             <span class="empty-prompt">&gt;_</span>
-            <strong>终端尚未运行</strong>
-            <span>点击左侧“启动”创建终端会话</span>
+            <strong id="empty-state-title">终端尚未运行</strong>
+            <span id="empty-state-hint">点击左侧“启动”创建终端会话</span>
           </div>
         </div>
         <form class="terminal-composer" id="terminal-composer">
@@ -692,21 +703,19 @@
             rows="1"
             spellcheck="false"
             autocomplete="off"
-            placeholder="在这里输入提示词，Enter 发送"
+            placeholder="输入提示词　·　Enter 发送　·　Shift+Enter 换行　·　↑↓ 翻阅历史"
             aria-label="终端输入框"
             aria-describedby="composer-hint"
           ></textarea>
-          <div class="terminal-composer__side">
-            <button id="composer-send" type="submit" title="发送到终端（Enter）">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 12h13M12 6l6 6-6 6" />
-              </svg>
-              <span class="sr-only">发送到终端</span>
-            </button>
-            <span class="terminal-composer__hint" id="composer-hint"
-              >Enter 发送 · Shift+Enter 换行 · ↑↓ 历史</span
-            >
-          </div>
+          <button id="composer-send" type="submit" title="发送到终端（Enter）">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 12h13M12 6l6 6-6 6" />
+            </svg>
+            <span class="sr-only">发送到终端</span>
+          </button>
+          <span class="sr-only" id="composer-hint"
+            >Enter 发送，Shift+Enter 换行，上下方向键翻阅历史记录</span
+          >
         </form>
         <footer class="terminal-footer">
           <button id="footer-connection" type="button">
@@ -1023,6 +1032,13 @@
       <button data-conversation-context-action="rename" role="menuitem" type="button">
         重命名对话
       </button>
+    </div>
+
+    <div class="conversation-context-menu" id="history-context-menu" role="menu" hidden>
+      <button data-history-context-action="apply" role="menuitem" type="button">
+        恢复这条配置
+      </button>
+      <button data-history-context-action="delete" role="menuitem" type="button">删除记录</button>
     </div>
 
     <dialog class="conversation-rename-dialog" id="conversation-rename-dialog">

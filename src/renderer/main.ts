@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import type {
   ClaudeConnectionAdvice,
   ClaudeConnectionAdviceAction,
+  ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
   ClaudeGatewayCandidate,
   ClaudeGatewayDiagnostics,
@@ -39,7 +40,7 @@ import {
   stepForward,
   type ComposerHistoryState,
 } from '../shared/composer-history';
-import { buildTerminalSubmission } from '../shared/composer-input';
+import { buildTerminalSubmission, SUBMIT_DELAY_MS } from '../shared/composer-input';
 import { localizePluginCopy } from '../shared/plugin-localization';
 import {
   DEFAULT_TERMINAL_THEME,
@@ -121,6 +122,8 @@ const curlProtocolBadge = requiredElement<HTMLElement>('#curl-protocol-badge');
 const dropOverlay = requiredElement<HTMLElement>('#drop-overlay');
 const dropZone = chooseDirectoryButton;
 const emptyState = requiredElement<HTMLElement>('#terminal-empty-state');
+const emptyStateTitle = requiredElement<HTMLElement>('#empty-state-title');
+const emptyStateHint = requiredElement<HTMLElement>('#empty-state-hint');
 const footerConnection = requiredElement<HTMLButtonElement>('#footer-connection');
 const footerConnectionLabel = requiredElement<HTMLElement>('#footer-connection-label');
 const footerContextLabel = requiredElement<HTMLElement>('#footer-context-label');
@@ -248,6 +251,10 @@ const conversationRenameDialogTitle = requiredElement<HTMLElement>(
 );
 const conversationRenameCancel = requiredElement<HTMLButtonElement>('#conversation-rename-cancel');
 const conversationRenameInput = requiredElement<HTMLInputElement>('#conversation-rename-input');
+const connectionHistoryList = requiredElement<HTMLElement>('#connection-history-list');
+const connectionHistoryEmpty = requiredElement<HTMLElement>('#connection-history-empty');
+const connectionHistoryCount = requiredElement<HTMLElement>('#connection-history-count');
+const historyContextMenu = requiredElement<HTMLElement>('#history-context-menu');
 
 brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
 
@@ -275,6 +282,9 @@ let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 let adviceRefreshInProgress = false;
+let connectionHistoryEntries: ClaudeConnectionHistoryEntry[] = [];
+let connectionHistoryTargetId = '';
+let connectionHistoryMutationInProgress = false;
 let pluginCatalog: ClaudePluginCatalog | undefined;
 let pluginLoadInProgress = false;
 let pluginMutationInProgress = false;
@@ -1406,7 +1416,8 @@ const purgeRouter = (button: HTMLButtonElement): void => {
   );
 };
 
-const uniqueCurlProviderName = (analysis: ClaudeCurlAnalysis): string => {  const base =
+const uniqueCurlProviderName = (analysis: ClaudeCurlAnalysis): string => {
+  const base =
     new URL(analysis.endpoint).hostname
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, '-')
@@ -2479,7 +2490,9 @@ const loadComposerHistory = (): ComposerHistoryState => {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(COMPOSER_HISTORY_KEY) ?? '[]');
     return createComposerHistory(
-      Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [],
+      Array.isArray(parsed)
+        ? parsed.filter((entry): entry is string => typeof entry === 'string')
+        : [],
     );
   } catch {
     return createComposerHistory();
@@ -2513,18 +2526,54 @@ const resizeComposer = (): void => {
   );
 };
 
+/* The keyboard hints live in the placeholder, so they vanish the moment the user starts typing. */
+const COMPOSER_PLACEHOLDER = '输入提示词　·　Enter 发送　·　Shift+Enter 换行　·　↑↓ 翻阅历史';
+
 const setComposerEnabled = (enabled: boolean): void => {
   composerInput.disabled = !enabled;
   composerSendButton.disabled = !enabled;
-  composerInput.placeholder = enabled
-    ? '在这里输入提示词，Enter 发送'
-    : '终端未运行；先启动对话后再输入';
+  composerInput.placeholder = enabled ? COMPOSER_PLACEHOLDER : '终端未运行；先启动对话后再输入';
 };
 
 const focusComposer = (): void => {
   if (!composerInput.disabled) {
     composerInput.focus();
   }
+};
+
+/**
+ * The iMessage-style send: a bubble holding what was typed lifts out of the composer and fades into
+ * the terminal. It is a throwaway element positioned over the textarea, so it never affects layout,
+ * and it is skipped entirely when the user has asked for reduced motion.
+ */
+const playSendAnimation = (text: string): void => {
+  const trimmed = text.trim();
+  if (!trimmed || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return;
+  }
+
+  const rect = composerInput.getBoundingClientRect();
+  const bubble = document.createElement('div');
+  bubble.className = 'composer-send-bubble';
+  // A very long prompt would make an unreadable bubble; the first lines carry the meaning.
+  bubble.textContent = trimmed.length > 220 ? `${trimmed.slice(0, 220)}…` : trimmed;
+  bubble.style.left = `${rect.left}px`;
+  bubble.style.top = `${rect.top}px`;
+  bubble.style.width = `${rect.width}px`;
+  bubble.style.maxHeight = `${rect.height}px`;
+  document.body.append(bubble);
+
+  bubble.addEventListener(
+    'animationend',
+    () => {
+      bubble.remove();
+    },
+    { once: true },
+  );
+  // A dropped animationend (background tab, compositor hiccup) must not leak the node.
+  window.setTimeout(() => {
+    bubble.remove();
+  }, 700);
 };
 
 const submitComposer = (): void => {
@@ -2535,7 +2584,7 @@ const submitComposer = (): void => {
   }
 
   const text = composerInput.value;
-  let submission: string;
+  let submission: ReturnType<typeof buildTerminalSubmission>;
   try {
     submission = buildTerminalSubmission(text);
   } catch (error) {
@@ -2543,7 +2592,23 @@ const submitComposer = (): void => {
     return;
   }
 
-  window.controlPanel.writeTerminal(status.id, submission);
+  /*
+   * Body and return go as two writes: Claude Code's TUI reads one big chunk as a paste and eats a
+   * trailing return, leaving the prompt sitting unsent in its input box. See `composer-input.ts`.
+   */
+  if (submission.body) {
+    window.controlPanel.writeTerminal(status.id, submission.body);
+    window.setTimeout(() => {
+      // The session can be closed or stopped during the gap between the two writes.
+      if (activeStatus()?.id === status.id && activeStatus()?.phase === 'running') {
+        window.controlPanel.writeTerminal(status.id, submission.submit);
+      }
+    }, SUBMIT_DELAY_MS);
+  } else {
+    window.controlPanel.writeTerminal(status.id, submission.submit);
+  }
+
+  playSendAnimation(text);
   composerHistory = rememberSubmission(composerHistory, text);
   persistComposerHistory();
   composerInput.value = '';
@@ -2563,7 +2628,8 @@ const walkComposerHistory = (direction: 'back' | 'forward'): boolean => {
     return false;
   }
 
-  const step = direction === 'back' ? stepBack(composerHistory, value) : stepForward(composerHistory);
+  const step =
+    direction === 'back' ? stepBack(composerHistory, value) : stepForward(composerHistory);
   composerHistory = step.state;
   if (step.text === undefined) {
     return false;
@@ -2621,12 +2687,43 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   footerStatus.textContent = copy.footer;
   toggleLabel.textContent = status.phase === 'running' ? '停止' : '启动';
   const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
+  emptyStateTitle.textContent = '终端尚未运行';
+  emptyStateHint.textContent = '点击左侧“启动”创建终端会话';
   emptyState.classList.toggle('terminal-empty-state--hidden', terminalIsVisible);
   emptyState.setAttribute('aria-hidden', String(terminalIsVisible));
   terminalProject.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
   terminalProject.title = status.cwd;
   workbenchScope.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
   setComposerEnabled(status.phase === 'running');
+};
+
+/**
+ * With no conversation open there is nothing to describe — this is the real startup state now that
+ * the app no longer invents a session in the home folder. The panel invites the user to pick a
+ * project instead of reporting on one they never opened.
+ */
+const renderNoActiveSession = (): void => {
+  const rememberedCount = workspaceState.projects.length;
+
+  document.body.dataset.phase = 'stopped';
+  titleStatus.textContent =
+    rememberedCount > 0 ? `未打开对话 · ${rememberedCount} 个最近项目` : '未打开任何项目';
+  statusPill.textContent = '未打开';
+  sessionDetail.textContent = '尚未打开项目对话';
+  sessionPid.textContent = '进程号 —';
+  footerStatus.textContent = '等待打开项目';
+  toggleLabel.textContent = '启动';
+  emptyStateTitle.textContent = rememberedCount > 0 ? '选择一个项目继续' : '还没有项目';
+  emptyStateHint.textContent =
+    rememberedCount > 0
+      ? '在左侧点击最近打开的项目，或添加新的项目文件夹'
+      : '点击左侧“添加项目”选择一个文件夹';
+  emptyState.classList.remove('terminal-empty-state--hidden');
+  emptyState.setAttribute('aria-hidden', 'false');
+  terminalProject.textContent = '未打开项目';
+  terminalProject.title = '';
+  workbenchScope.textContent = '未打开项目';
+  setComposerEnabled(false);
 };
 
 const activateProject = async (sessionId: string): Promise<void> => {
@@ -3020,6 +3117,8 @@ function renderWorkspace(state: WorkspaceState): void {
   const status = activeStatus();
   if (status) {
     renderActiveStatus(status);
+  } else {
+    renderNoActiveSession();
   }
   if (state.activeSessionId !== lastClaudeSessionId) {
     lastClaudeSessionId = state.activeSessionId;
@@ -3044,6 +3143,10 @@ function renderWorkspace(state: WorkspaceState): void {
     if (state.activeSessionId) {
       void loadRouterManagement();
       void loadConnectionAdvice();
+      void loadConnectionHistory();
+    } else {
+      connectionHistoryEntries = [];
+      renderConnectionHistory();
     }
   }
   window.requestAnimationFrame(fitActiveTerminal);
@@ -3061,7 +3164,9 @@ const applyTerminalStatus = (status: TerminalStatus): void => {
 };
 
 const handleOperation = (result: OperationResult, successMessage?: string): boolean => {
-  applyTerminalStatus(result.status);
+  if (result.status) {
+    applyTerminalStatus(result.status);
+  }
   if (!result.ok) {
     showToast(result.error ?? '操作失败，请重试。', 'error');
     return false;
@@ -3203,6 +3308,7 @@ const saveClaudeConfig = async (
     }
     populateClaudeConfigForm(result.state);
     showToast('当前项目的模型与接口接入已保存');
+    void loadConnectionHistory();
   } catch {
     showToast('无法保存接入配置。', 'error');
   } finally {
@@ -3210,8 +3316,158 @@ const saveClaudeConfig = async (
   }
 };
 
+const PRESET_LABELS: Record<ClaudePreset, string> = {
+  anthropic: 'Anthropic 官方',
+  custom: '其他 Anthropic 服务',
+  deepseek: 'DeepSeek 官方',
+  gateway: '本机网关',
+};
+
+const GATEWAY_STATE_LABELS: Record<ClaudeConnectionHistoryEntry['gatewayState'], string> = {
+  error: '网关出错',
+  running: '网关运行中',
+  starting: '网关启动中',
+  stopped: '网关未运行',
+  unknown: '网关状态未知',
+};
+
+const formatHistoryTimestamp = (savedAt: number): string =>
+  new Date(savedAt).toLocaleString('zh-CN', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: '2-digit',
+  });
+
+const renderConnectionHistory = (): void => {
+  connectionHistoryList.replaceChildren();
+  connectionHistoryEmpty.hidden = connectionHistoryEntries.length > 0;
+  connectionHistoryCount.textContent =
+    connectionHistoryEntries.length > 0
+      ? `${connectionHistoryEntries.length} 条记录 · 点击恢复，右侧 × 删除`
+      : '每次保存都会记录，点击即可一键恢复。';
+
+  for (const entry of connectionHistoryEntries) {
+    const item = document.createElement('li');
+    item.className = 'connection-history__item';
+    item.dataset.historyId = entry.id;
+
+    const restore = document.createElement('button');
+    restore.className = 'connection-history__restore';
+    restore.type = 'button';
+    restore.title = '恢复这条接入配置';
+
+    const title = document.createElement('strong');
+    title.textContent = `${PRESET_LABELS[entry.preset]} · ${entry.model || '默认模型'}`;
+    const detail = document.createElement('span');
+    detail.textContent = entry.baseUrl || 'Anthropic 官方端点';
+    const meta = document.createElement('span');
+    meta.className = 'connection-history__meta';
+    meta.textContent = [
+      formatHistoryTimestamp(entry.savedAt),
+      entry.credentialConfigured ? '含凭据' : '无凭据',
+      GATEWAY_STATE_LABELS[entry.gatewayState],
+    ].join(' · ');
+    restore.append(title, detail, meta);
+
+    const remove = document.createElement('button');
+    remove.className = 'connection-history__delete';
+    remove.type = 'button';
+    remove.title = '删除这条记录';
+    remove.setAttribute('aria-label', '删除这条接入记录');
+    remove.textContent = '×';
+
+    item.append(restore, remove);
+    connectionHistoryList.append(item);
+  }
+};
+
+const loadConnectionHistory = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status) {
+    connectionHistoryEntries = [];
+    renderConnectionHistory();
+    return;
+  }
+  try {
+    connectionHistoryEntries = await window.controlPanel.getClaudeConnectionHistory(status.id);
+  } catch {
+    connectionHistoryEntries = [];
+  }
+  renderConnectionHistory();
+};
+
+const hideHistoryContextMenu = (): void => {
+  historyContextMenu.hidden = true;
+  connectionHistoryTargetId = '';
+};
+
+const applyConnectionHistory = async (entryId: string): Promise<void> => {
+  const status = activeStatus();
+  if (!status || connectionHistoryMutationInProgress) {
+    return;
+  }
+  connectionHistoryMutationInProgress = true;
+  try {
+    const result = await window.controlPanel.applyClaudeConnectionHistory(status.id, entryId);
+    connectionHistoryEntries = result.entries;
+    renderConnectionHistory();
+    if (!result.ok) {
+      showToast(result.error ?? '无法恢复这条接入记录。', 'error');
+      return;
+    }
+    if (result.state) {
+      renderClaudeState(result.state);
+      populateClaudeConfigForm(result.state);
+    }
+    showToast('已恢复这条接入配置');
+  } catch {
+    showToast('无法恢复这条接入记录。', 'error');
+  } finally {
+    connectionHistoryMutationInProgress = false;
+  }
+};
+
+const deleteConnectionHistory = async (entryId: string): Promise<void> => {
+  const status = activeStatus();
+  if (!status || connectionHistoryMutationInProgress) {
+    return;
+  }
+  connectionHistoryMutationInProgress = true;
+  try {
+    const result = await window.controlPanel.deleteClaudeConnectionHistory(status.id, entryId);
+    connectionHistoryEntries = result.entries;
+    renderConnectionHistory();
+    if (!result.ok) {
+      showToast(result.error ?? '无法删除这条接入记录。', 'error');
+      return;
+    }
+    showToast('已删除这条接入记录');
+  } catch {
+    showToast('无法删除这条接入记录。', 'error');
+  } finally {
+    connectionHistoryMutationInProgress = false;
+  }
+};
+
 window.controlPanel.onTerminalData((sessionId, data) => {
   queueTerminalOutput(sessionId, data);
+});
+/*
+ * The PTY clamps the size it was asked for. xterm has to follow, because PSReadLine repaints its
+ * edit buffer with absolute cursor moves — a one-row disagreement puts that repaint on the wrong
+ * line and leaves the previous screen visible underneath it.
+ */
+window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
+  const view = terminalViews.get(sessionId);
+  if (!view || (view.terminal.cols === cols && view.terminal.rows === rows)) {
+    return;
+  }
+  try {
+    view.terminal.resize(cols, rows);
+  } catch {
+    // A resize can race with the terminal being disposed.
+  }
 });
 window.controlPanel.onClaudeState(renderClaudeState);
 window.controlPanel.onWorkspaceState(renderWorkspace);
@@ -3557,6 +3813,64 @@ conversationContextMenu
     }
     void renameStoredConversation(target.projectPath, target.session);
   });
+/*
+ * One delegated listener for the whole list: entries are re-rendered on every save and delete, so
+ * per-row listeners would have to be re-attached each time.
+ */
+connectionHistoryList.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement;
+  const item = target.closest<HTMLElement>('[data-history-id]');
+  const entryId = item?.dataset.historyId;
+  if (!entryId) {
+    return;
+  }
+  if (target.closest('.connection-history__delete')) {
+    void deleteConnectionHistory(entryId);
+    return;
+  }
+  if (target.closest('.connection-history__restore')) {
+    void applyConnectionHistory(entryId);
+  }
+});
+connectionHistoryList.addEventListener('contextmenu', (event) => {
+  const item = (event.target as HTMLElement).closest<HTMLElement>('[data-history-id]');
+  const entryId = item?.dataset.historyId;
+  if (!entryId) {
+    return;
+  }
+  event.preventDefault();
+  hideTerminalContextMenu();
+  hideConversationContextMenu();
+  connectionHistoryTargetId = entryId;
+  historyContextMenu.hidden = false;
+  const menuRect = historyContextMenu.getBoundingClientRect();
+  historyContextMenu.style.left = `${Math.max(
+    8,
+    Math.min(event.clientX, window.innerWidth - menuRect.width - 8),
+  )}px`;
+  historyContextMenu.style.top = `${Math.max(
+    8,
+    Math.min(event.clientY, window.innerHeight - menuRect.height - 8),
+  )}px`;
+  historyContextMenu.querySelector<HTMLButtonElement>('button')?.focus();
+});
+for (const button of historyContextMenu.querySelectorAll<HTMLButtonElement>(
+  '[data-history-context-action]',
+)) {
+  button.addEventListener('click', () => {
+    const entryId = connectionHistoryTargetId;
+    const action = button.dataset.historyContextAction;
+    hideHistoryContextMenu();
+    if (!entryId) {
+      return;
+    }
+    if (action === 'apply') {
+      void applyConnectionHistory(entryId);
+    } else if (action === 'delete') {
+      void deleteConnectionHistory(entryId);
+    }
+  });
+}
 document.addEventListener('pointerdown', (event) => {
   if (!terminalContextMenu.contains(event.target as Node)) {
     hideTerminalContextMenu();
@@ -3564,10 +3878,14 @@ document.addEventListener('pointerdown', (event) => {
   if (!conversationContextMenu.contains(event.target as Node)) {
     hideConversationContextMenu();
   }
+  if (!historyContextMenu.contains(event.target as Node)) {
+    hideHistoryContextMenu();
+  }
 });
 window.addEventListener('blur', () => {
   hideTerminalContextMenu();
   hideConversationContextMenu();
+  hideHistoryContextMenu();
 });
 
 document.addEventListener('dragenter', (event) => {
@@ -3632,12 +3950,16 @@ window.addEventListener('beforeunload', () => {
 void (async () => {
   renderWorkspace(await window.controlPanel.getWorkspace());
   const status = activeStatus();
+  // No session means no project has been opened yet: leave the empty state up rather than
+  // spawning a terminal the user did not ask for.
   if (!status) {
     return;
   }
 
-  const result = await window.controlPanel.startTerminal(status.id);
-  handleOperation(result);
+  if (status.phase !== 'running' && status.phase !== 'starting') {
+    handleOperation(await window.controlPanel.startTerminal(status.id));
+  }
+  void loadConnectionHistory();
   window.setTimeout(() => {
     fitActiveTerminal();
     focusComposer();

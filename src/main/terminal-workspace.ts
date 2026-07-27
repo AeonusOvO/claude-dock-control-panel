@@ -4,7 +4,7 @@ import { TerminalSession, type TerminalEnvironmentOverrides } from './terminal-s
 
 export interface ManagedTerminal {
   getStatus: () => TerminalStatus;
-  resize: (cols: number, rows: number) => void;
+  resize: (cols: number, rows: number) => { cols: number; rows: number };
   restart: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
   setTitle: (title: string) => TerminalStatus;
   start: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
@@ -31,19 +31,22 @@ const defaultFactory: TerminalFactory = (id, initialCwd, initialTitle, onData, o
 export const sameDirectory = (left: string, right: string): boolean =>
   path.resolve(left).localeCompare(path.resolve(right), undefined, { sensitivity: 'base' }) === 0;
 
+/**
+ * A workspace holds only real project conversations. It is legitimately empty — at first launch,
+ * and again after the last conversation is closed — because a session always belongs to a folder
+ * the user chose. Spawning a PowerShell in the home directory to avoid the empty case would show a
+ * project named after the Windows account that the user never opened.
+ */
 export class TerminalWorkspace {
   private activeSessionId = '';
   private nextSessionNumber = 1;
   private readonly sessions = new Map<string, ManagedTerminal>();
 
   public constructor(
-    private readonly initialCwd: string,
     private readonly onData: (sessionId: string, data: string) => void,
     private readonly onState: (state: TerminalWorkspaceState) => void,
     private readonly terminalFactory: TerminalFactory = defaultFactory,
-  ) {
-    this.activeSessionId = this.createSession(initialCwd);
-  }
+  ) {}
 
   public activate(sessionId: string): TerminalWorkspaceState {
     this.requireSession(sessionId);
@@ -61,7 +64,7 @@ export class TerminalWorkspace {
     this.sessions.delete(sessionId);
 
     if (this.sessions.size === 0) {
-      this.activeSessionId = this.createSession(this.initialCwd);
+      this.activeSessionId = '';
     } else if (this.activeSessionId === sessionId) {
       const nextId = sessionIds[closedIndex + 1] ?? sessionIds[closedIndex - 1];
       if (!nextId || !this.sessions.has(nextId)) {
@@ -86,8 +89,9 @@ export class TerminalWorkspace {
     return this.getState();
   }
 
-  public getActiveStatus(): TerminalStatus {
-    return this.requireSession(this.activeSessionId).getStatus();
+  /** `undefined` when no conversation is open — the startup state before a project is picked. */
+  public getActiveStatus(): TerminalStatus | undefined {
+    return this.sessions.get(this.activeSessionId)?.getStatus();
   }
 
   public getStatus(sessionId: string): TerminalStatus {
@@ -151,8 +155,9 @@ export class TerminalWorkspace {
     return this.getState();
   }
 
-  public resize(sessionId: string, cols: number, rows: number): void {
-    this.requireSession(sessionId).resize(cols, rows);
+  /** Returns the size the PTY actually adopted, which the renderer uses to keep xterm in step. */
+  public resize(sessionId: string, cols: number, rows: number): { cols: number; rows: number } {
+    return this.requireSession(sessionId).resize(cols, rows);
   }
 
   public restart(

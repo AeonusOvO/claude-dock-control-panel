@@ -121,6 +121,10 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 渲染进程不启用 Node.js，只能调用 preload 暴露的固定方法。
 - 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
+- `TerminalWorkspace` 构造出来是空的，也允许一直是空的：会话总是属于用户选定的文件夹，
+  冷启动和关掉最后一个对话之后都没有活动会话。`getActiveStatus()` 因此返回
+  `TerminalStatus | undefined`，`OperationResult.status` 也是可选字段，渲染层要判空。
+  用 `homedir()` 兜底会造出一个以 Windows 用户名命名、用户从没打开过的项目。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
 - 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。
 - `directory:choose` 从 IPC sender 解析真实所属 `BrowserWindow`，并仅在活动 cwd 仍是可访问
@@ -141,6 +145,20 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 
 - ClaudeDock 以规范化绝对项目路径作为配置键；非敏感配置和加密凭据保存在 Electron
   `userData/claude/project-profiles.json`，不写入仓库中的 `.claude/settings*.json`。
+- `ClaudeConnectionHistoryStore`（`src/main/claude-connection-history.ts`）在
+  `userData/claude/connection-history.json` 按项目保存最近 20 条接入配置，写入同样是
+  临时文件加 `renameSync`、权限 `0600`；文件损坏时 `load()` 回落到空存储而不是抛错。
+  项目键用小写后的绝对路径，因为 Windows 路径大小写不敏感。
+  凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
+  `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
+- 判重用 `authMode / baseUrl / credential / model / preset / provider` 的 SHA-256 指纹，
+  只和最新一条比较：相同就不新增。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
+  机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
+  网关状态仍然逐条存下来，恢复时能看到当时的情况。
+- `saveConfig` 成功后才记历史，且整个记录过程包在 try/catch 里：配置已经保存了，
+  少一条历史不值得让保存失败。`applyConnectionHistory` 走的是同一个 `saveConfig`，
+  所以恢复和手工保存的路径完全一致。历史条目 ID 由主进程用
+  `/^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/` 校验后才接受。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
 - 网关模式会把 `ANTHROPIC_MODEL`、`ANTHROPIC_SMALL_FAST_MODEL` 和
@@ -389,9 +407,14 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `event.isComposing` 或 `keyCode === 229` 期间一律不拦截。
   历史存在 `localStorage['claudedock.composerHistory']`（最多 200 条，
   `src/shared/composer-history.ts`），只保存提示词文本，不保存终端输出。
-- `src/shared/composer-input.ts` 的 `buildTerminalSubmission` 把多行内容用 `\x0a` 连接、
-  末尾补 `\r`，单次上限 64,000 字符。`\x0a` 正是下面 `Ctrl+J`→`AddLine` 绑定所插入的字符，
+- `src/shared/composer-input.ts` 的 `buildTerminalSubmission` 把多行内容用 `\x0a` 连接，
+  单次上限 64,000 字符。`\x0a` 正是下面 `Ctrl+J`→`AddLine` 绑定所插入的字符，
   所以多行提示词进入 PowerShell 时是**一条**命令而不是逐行执行；这两处必须成对修改。
+- 它返回的是 `{ body, submit }` 两段而不是一个字符串，渲染层间隔 `SUBMIT_DELAY_MS`（40ms）
+  分两次写入 PTY。原因是 Claude Code 的 TUI 会把一大块单次写入判定成括号粘贴，并吞掉贴在
+  末尾的回车——提示词落进它的输入框却不发送，用户看到的就是「点了发送没反应」。
+  对 Claude Code 2.1.220 实测：200 字符的提示词以 `body + \r` 单块发送 0/3 提交成功，
+  拆成两次写入 3/3 成功。PowerShell 两种写法都一样，多行仍是一条命令。
 - 每个应用内 PowerShell 启动时把控制台输入、输出和管道编码设为无 BOM UTF-8，仅为该进程
   加载 PSReadLine，并把 `Ctrl+J` 绑定到 `AddLine`；renderer 将 `Shift+Enter` 转为 LF，
   因此多行输入不需要修改用户 profile 或外部终端。
@@ -406,6 +429,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   「Ctrl+A 无法全选」。
 - 会话内 Backspace 处理器检测光标前是否为 PSReadLine 多行换行符：是则删除该换行并回退
   光标，否则调用标准 `BackwardDeleteChar`。该绑定不会写入用户 profile。
+- 尺寸以 PTY 为准，不以 xterm 为准。`TerminalSession.resize()` 会夹紧尺寸，因此它返回
+  真正采纳的 `{ cols, rows }`，主进程再通过 `terminal:size` 回传，渲染层收到后调用
+  `terminal.resize()` 把 xterm 强制对齐到同一网格。这不是冗余：PSReadLine 用**绝对**光标
+  移动重绘编辑缓冲（按 `Ctrl+C` 会发出形如 `ESC[10;27H` 的序列），两侧网格只要不一致，
+  重绘就落在错误的行上，上一屏留在原地——这正是「两屏叠在一起」那个 bug。
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
   `Ctrl+V` 从主进程读取最多 5 MiB 文本并写入当前 PTY。右键菜单复用同一受限 API，并提供
   全选和只清除 xterm 显示。
@@ -444,7 +472,12 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   每个 `SHELL_CSS_VARIABLES` 属性都必须既有 `:root` 默认值又在正文里被引用；同时按 WCAG
   相对亮度校验三套主题的画布与文字对比度（`textHi`/canvas > 7，正文与强调色 > 4.5）。
 - `tests/composer-input.test.ts` / `tests/composer-history.test.ts` 覆盖输入框的两个纯模块：
-  多行提交必须是 `\x0a` 连接 + `\r` 结尾的单条命令，历史的去重、上限与游标行为。
+  多行提交必须是 `\x0a` 连接的 `body` 加上单独的 `\r` `submit` 两段，历史的去重、上限与
+  游标行为。
+- `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
+  重复保存不新增、任一字段（含凭据）变化就新增、只有网关状态变化不新增、明文密钥不得出现在
+  磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、Windows 路径大小写
+  不敏感、条数上限、文件损坏后回落到空列表。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
   关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言

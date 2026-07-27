@@ -1113,9 +1113,14 @@ body[data-phase='error'] .status-pill {
 }
 
 .terminal-stage {
+  /*
+   * Symmetric padding: the old 15/9/10/17 was visibly lopsided, and the extra right inset left a
+   * gap between the fitted canvas and the viewport that read as part of the black frame.
+   */
+  background: var(--surface-terminal);
   min-height: 0;
   overflow: hidden;
-  padding: 15px 9px 10px 17px;
+  padding: 10px 12px;
   position: relative;
 }
 
@@ -1132,6 +1137,18 @@ body[data-phase='error'] .status-pill {
 .xterm {
   height: 100%;
   padding: 1px;
+}
+
+/*
+ * xterm.css hardcodes an opaque black background on `.xterm .xterm-viewport`. The canvas only
+ * covers whole character cells, so the leftover strip below and right of the grid showed that pure
+ * black as a hard frame around the terminal — jarring against every theme, none of which is that
+ * colour. These follow the active theme instead so the surround melts into the surrounding shell.
+ */
+.xterm,
+.xterm .xterm-viewport,
+.xterm .xterm-screen {
+  background-color: var(--surface-terminal);
 }
 
 .xterm-viewport {
@@ -1185,15 +1202,19 @@ body[data-phase='error'] .status-pill {
  * The composer is the primary way prompts are typed: a real textarea, so Ctrl+A, Shift+arrow
  * selection, drag-select, undo and IME composition are all native browser behaviour rather than
  * key handlers emulating an editor inside the terminal canvas.
+ *
+ * `align-items: stretch` is what lets the send button match the textarea's height as it grows,
+ * instead of the button floating next to a caption. The keyboard hints that used to sit under the
+ * button now live in the textarea's placeholder, where they disappear as soon as typing starts.
  */
 .terminal-composer {
-  align-items: end;
+  align-items: stretch;
   background: var(--surface-1);
   border-top: 1px solid var(--line);
   display: grid;
   gap: var(--s-2);
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 9px 13px;
+  padding: 10px 13px;
 }
 
 .terminal-composer textarea {
@@ -1204,12 +1225,12 @@ body[data-phase='error'] .status-pill {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   letter-spacing: -0.003em;
-  line-height: 20px;
+  line-height: 21px;
   max-height: var(--composer-max);
-  min-height: 38px;
+  min-height: 52px;
   outline: none;
   overflow-y: auto;
-  padding: 8px 11px;
+  padding: 14px 13px;
   resize: none;
   transition:
     border-color var(--dur-2) var(--ease-standard),
@@ -1232,41 +1253,82 @@ body[data-phase='error'] .status-pill {
   cursor: not-allowed;
 }
 
-.terminal-composer__side {
-  align-items: center;
-  display: grid;
-  gap: 2px;
-  justify-items: center;
-  padding-bottom: 2px;
-}
-
-.terminal-composer__hint {
-  color: var(--text-mute);
-  font-size: var(--text-3xs);
-  line-height: 13px;
-  white-space: nowrap;
-}
-
 #composer-send {
   align-items: center;
+  align-self: stretch;
   background: var(--accent-solid);
   border: 1px solid transparent;
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   color: var(--accent-fg);
   cursor: pointer;
   display: flex;
-  height: 30px;
   justify-content: center;
+  min-height: 52px;
   transition:
     background-color var(--dur-2) var(--ease-standard),
     transform var(--dur-1) var(--ease-standard);
-  width: 38px;
+  width: 56px;
+}
+
+#composer-send:hover:not(:disabled) {
+  background: var(--accent-solid-hover);
+}
+
+#composer-send:active:not(:disabled) {
+  transform: scale(var(--press-lg));
+}
+
+#composer-send:disabled {
+  background: var(--surface-4);
+  color: var(--text-mute);
+  cursor: not-allowed;
 }
 
 #composer-send svg {
-  height: 17px;
+  height: 19px;
   stroke-width: 2;
-  width: 17px;
+  width: 19px;
+}
+
+/*
+ * The send animation: a copy of the prompt lifts out of the composer and fades toward the
+ * terminal, the way an iMessage bubble does. It is a throwaway node on `body`, positioned over the
+ * textarea by the renderer, so it never participates in layout.
+ */
+.composer-send-bubble {
+  background: var(--accent-solid);
+  border-radius: var(--r-lg);
+  color: var(--accent-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: -0.003em;
+  line-height: 21px;
+  overflow: hidden;
+  padding: 14px 13px;
+  pointer-events: none;
+  position: fixed;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  z-index: 60;
+  animation: composer-send-lift 420ms var(--ease-accel) forwards;
+}
+
+@keyframes composer-send-lift {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-64px) scale(0.94);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-send-bubble {
+    display: none;
+  }
 }
 
 #composer-send:hover:not(:disabled) {
@@ -3016,6 +3078,120 @@ kbd {
   border-top: 1px solid var(--accent-tint);
   margin-top: 16px;
   padding: 13px 2px 0;
+}
+
+/*
+ * Saved connection setups, newest first. The whole row is the restore button so the click target
+ * matches what the row reads as; the delete affordance sits outside it because a nested button
+ * would be an invalid — and unclickable — child of the restore control.
+ */
+.connection-history {
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sheen);
+  display: grid;
+  gap: 9px;
+  margin-top: 11px;
+  padding: 12px;
+}
+
+.connection-history__heading {
+  display: grid;
+  gap: 3px;
+}
+
+.connection-history__heading strong {
+  color: var(--text-hi);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  line-height: 19px;
+}
+
+.connection-history__heading span,
+.connection-history__empty {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.connection-history__list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.connection-history__item {
+  align-items: stretch;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  overflow: hidden;
+  transition: border-color var(--dur-2) var(--ease-standard);
+}
+
+.connection-history__item:hover {
+  border-color: var(--line-hover);
+}
+
+.connection-history__restore {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.connection-history__restore strong {
+  color: var(--text-hi);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  letter-spacing: -0.003em;
+  line-height: 19px;
+}
+
+.connection-history__restore span {
+  color: var(--text-lo);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-history__meta {
+  color: var(--text-dim);
+  font-size: var(--text-3xs);
+}
+
+.connection-history__delete {
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line-subtle);
+  color: var(--text-mute);
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+  padding: 0 12px;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.connection-history__delete:hover {
+  background: var(--surface-4);
+  color: var(--text-hi);
 }
 
 .risk-note strong {

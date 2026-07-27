@@ -40,6 +40,31 @@ export interface SaveClaudeConfigInput {
   provider: ClaudeProvider;
 }
 
+/**
+ * A previously saved connection setup, replayable in one click. The credential itself never leaves
+ * the main process — the renderer only learns whether one is attached.
+ */
+export interface ClaudeConnectionHistoryEntry {
+  authMode: ClaudeAuthMode;
+  baseUrl: string;
+  credentialConfigured: boolean;
+  gatewayEndpoint?: string;
+  gatewayState: ClaudeRouterGatewayState;
+  id: string;
+  model: string;
+  preset: ClaudePreset;
+  provider: ClaudeProvider;
+  savedAt: number;
+}
+
+export interface ClaudeConnectionHistoryResult {
+  entries: ClaudeConnectionHistoryEntry[];
+  error?: string;
+  ok: boolean;
+  /** Present when applying an entry changed the live configuration. */
+  state?: ClaudeProjectState;
+}
+
 export interface ClaudeInstallationStatus {
   executable?: string;
   installed: boolean;
@@ -327,7 +352,8 @@ export interface ClaudeConnectionAdvice {
 export interface OperationResult {
   error?: string;
   ok: boolean;
-  status: TerminalStatus;
+  /** Absent when the workspace has no conversation to report on — e.g. before a project is opened. */
+  status?: TerminalStatus;
 }
 
 export interface WorkspaceResult {
@@ -367,6 +393,15 @@ export interface ControlPanelApi {
   getClaudeGatewayDiagnostics: (sessionId: string) => Promise<ClaudeGatewayDiagnostics>;
   getClaudeRouterManagementState: (sessionId: string) => Promise<ClaudeRouterManagementState>;
   getClaudeConnectionAdvice: (sessionId: string) => Promise<ClaudeConnectionAdvice>;
+  getClaudeConnectionHistory: (sessionId: string) => Promise<ClaudeConnectionHistoryEntry[]>;
+  applyClaudeConnectionHistory: (
+    sessionId: string,
+    entryId: string,
+  ) => Promise<ClaudeConnectionHistoryResult>;
+  deleteClaudeConnectionHistory: (
+    sessionId: string,
+    entryId: string,
+  ) => Promise<ClaudeConnectionHistoryResult>;
   getDroppedPath: (file: File) => string;
   getWorkspace: () => Promise<WorkspaceState>;
   deleteClaudeRouterProvider: (
@@ -383,6 +418,13 @@ export interface ControlPanelApi {
   openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
   onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;
+  /**
+   * The size the PTY actually adopted after clamping. xterm must follow it: PSReadLine repaints
+   * with absolute cursor moves, so a size disagreement leaves the previous screen on top.
+   */
+  onTerminalSize: (
+    listener: (sessionId: string, cols: number, rows: number) => void,
+  ) => Unsubscribe;
   onWorkspaceState: (listener: (state: WorkspaceState) => void) => Unsubscribe;
   resizeTerminal: (sessionId: string, cols: number, rows: number) => void;
   restartTerminal: (sessionId: string) => Promise<OperationResult>;
