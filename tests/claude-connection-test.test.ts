@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
-import { testClaudeConnection } from '../src/main/claude-connection-test';
+import { readLimitedResponseText, testClaudeConnection } from '../src/main/claude-connection-test';
 
 const gatewayConfig: NormalizedClaudeConfig = {
   authMode: 'authToken',
@@ -15,6 +15,12 @@ afterEach(() => {
 });
 
 describe('Claude connection test', () => {
+  it('stops reading a response after 64 KiB', async () => {
+    const text = await readLimitedResponseText(new Response('a'.repeat(80 * 1024)));
+
+    expect(text).toHaveLength(64 * 1024);
+  });
+
   it('accepts a standard Anthropic Messages response without returning its content', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

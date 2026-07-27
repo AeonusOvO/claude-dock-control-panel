@@ -2862,6 +2862,11 @@ kbd {
   border-color: color-mix(in srgb, var(--warn-text) 23%, transparent);
 }
 
+.connection-test-result[data-tone='pending'] {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
 .connection-test-result > strong {
   color: var(--text-hi);
   font-size: var(--text-sm);

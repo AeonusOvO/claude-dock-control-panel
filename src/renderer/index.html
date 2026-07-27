@@ -513,7 +513,12 @@
               <button id="test-claude-connection" type="button">真实测试端点、密钥和模型</button>
               <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
             </div>
-            <div class="connection-test-result" id="connection-test-result" hidden>
+            <div
+              class="connection-test-result"
+              id="connection-test-result"
+              aria-live="polite"
+              hidden
+            >
               <strong id="connection-test-title">等待测试</strong>
               <span id="connection-test-summary"></span>
               <div id="connection-test-stages"></div>

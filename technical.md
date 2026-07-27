@@ -212,6 +212,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
   短连接检查 Claude Code Router 默认 `3456/3458` 与 LiteLLM 常用 `4000`，不会枚举或扫描
   全部本机端口。
+- `BackgroundTaskCoordinator` 为安装检测、Router 状态、网关扫描、软件更新和连接实测提供
+  两个并发槽。相同 key 的并发请求共用同一个 Promise，用户触发的连接实测会排在尚未开始的
+  后台刷新之前；`AsyncRefreshCache` 让安装、Router 和更新检查在 TTL 内复用结果，并防止旧
+  请求覆盖操作后的新状态。这些工作本身是异步网络/子进程 I/O，采用限流队列比额外占用
+  Worker Thread 更合适。
 - CCR 的识别依据包括 `ccr` 命令、旧版
   `~/.claude-code-router/config.json`、新版 Windows
   `%APPDATA%/claude-code-router/{config.sqlite,gateway.config.json}`，以及默认端口状态。
@@ -346,10 +351,13 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `msg_` ID 和 `content` 数组才算三项全部通过；`401/403` 定位为认证错误，
   `404` 提示可能误填 OpenAI 地址，`400/422` 作为“端点与认证基本可用、模型或字段需处理”
   的警告。
-- 主进程最多读取 64 KiB 错误体，只抽取 180 字符的结构化错误消息并再次清除当前凭据；
-  成功响应正文不返回 renderer。15 秒超时或网络错误只回传分阶段诊断。
+- 主进程通过 `ReadableStream` 最多读取 64 KiB 响应体，达到上限立即取消余下正文；只抽取
+  180 字符的结构化错误消息并再次清除当前凭据，成功响应正文不返回 renderer。15 秒超时或
+  网络错误只回传分阶段诊断。
 - 已保存凭据从 `safeStorage` 解密后仅用于该次测试；表单新输入可在保存前测试。测试结果
   不包含凭据或模型回复文本。
+- 测试在后台协调器的 `interactive` 优先级运行；renderer 显示 `aria-busy` 状态，只禁用测试
+  按钮，并在测试期间跳过接入页的 6 秒轮询，不阻断导航、表单或 PowerShell 输入。
 - 每次测试按“规范化配置 + 凭据 SHA-256”生成内存指纹，只在当前项目保存的配置与凭据完全
   匹配时显示到会话页；不会持久化凭据摘要。最小请求通过是一个时间点信号，不能证明上游
   持续在线，也不能覆盖 Claude Code 后续的流式内容、工具调用和更大请求。
@@ -494,7 +502,10 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   游标行为。
 - `tests/renderer-interaction.test.ts` 固化渲染层交互生命周期：分隔条必须显式释放捕获并覆盖
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
-  的进场动画不得使用 `transform`。
+  的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让。
+- `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
+  同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
+  `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据）变化就新增、只有网关状态变化不新增、明文密钥不得出现在
   磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、Windows 路径大小写

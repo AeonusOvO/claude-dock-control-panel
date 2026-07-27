@@ -20,6 +20,11 @@ import type {
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { AsyncRefreshCache } from './async-refresh-cache';
+import {
+  BackgroundTaskCoordinator,
+  type BackgroundTaskPriority,
+} from './background-task-coordinator';
 import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
@@ -386,9 +391,16 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
 };
 
 export class ClaudeRuntime {
-  private cachedInstallation?: { checkedAt: number; value: ClaudeInstallationStatus };
-  private cachedRouterHealth?: { checkedAt: number; value: ClaudeRouterManagementState };
-  private cachedSoftwareUpdates?: { checkedAt: number; value: SoftwareUpdateState };
+  private readonly backgroundTasks = new BackgroundTaskCoordinator(2);
+  private readonly installationCache = new AsyncRefreshCache<ClaudeInstallationStatus>(
+    INSTALLATION_CACHE_MS,
+  );
+  private readonly routerHealthCache = new AsyncRefreshCache<ClaudeRouterManagementState>(
+    ROUTER_HEALTH_CACHE_MS,
+  );
+  private readonly softwareUpdatesCache = new AsyncRefreshCache<SoftwareUpdateState>(
+    SOFTWARE_UPDATE_CACHE_MS,
+  );
   private readonly configStore: ClaudeConfigStore;
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   private readonly gatewayDetector = new ClaudeGatewayDetector();
@@ -479,20 +491,24 @@ export class ClaudeRuntime {
   }
 
   public getGatewayDiagnostics(cwd: string): Promise<ClaudeGatewayDiagnostics> {
-    return this.gatewayDetector.detect(cwd, this.configStore.getConfig(cwd));
+    const config = this.configStore.getConfig(cwd);
+    return this.backgroundTasks.run(
+      `gateway-diagnostics:${projectKey(cwd)}:${config.baseUrl}`,
+      'background',
+      () => this.gatewayDetector.detect(cwd, config),
+    );
   }
 
   public getRouterManagementState(): Promise<ClaudeRouterManagementState> {
-    return this.routerManager.getState();
+    return this.getRouterHealthState();
   }
 
   /** Plain-language verdict on how this project reaches a model, and whether Router matters. */
   public async getConnectionAdvice(cwd: string): Promise<ClaudeConnectionAdvice> {
     const [installation, router] = await Promise.all([
       this.diagnoseInstallation(),
-      this.routerManager.getState(),
+      this.getRouterHealthState(),
     ]);
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: router };
     return computeClaudeConnectionAdvice(
       this.configStore.getConfig(cwd),
       Boolean(this.configStore.getCredential(cwd)),
@@ -509,8 +525,8 @@ export class ClaudeRuntime {
     source: Exclude<ClaudeRouterInstallSource, 'github'>,
   ): Promise<{ message: string; state: ClaudeRouterManagementState }> {
     const result = await this.routerManager.installFromNpm(source);
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: result.state };
-    this.cachedSoftwareUpdates = undefined;
+    this.routerHealthCache.set(result.state);
+    this.softwareUpdatesCache.clear();
     return result;
   }
 
@@ -519,26 +535,21 @@ export class ClaudeRuntime {
     state: ClaudeRouterManagementState;
   }> {
     const result = await this.routerManager.uninstall();
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: result.state };
-    this.cachedSoftwareUpdates = undefined;
+    this.routerHealthCache.set(result.state);
+    this.softwareUpdatesCache.clear();
     return result;
   }
 
   public async getSoftwareUpdates(force = false): Promise<SoftwareUpdateState> {
-    if (
-      !force &&
-      this.cachedSoftwareUpdates &&
-      Date.now() - this.cachedSoftwareUpdates.checkedAt < SOFTWARE_UPDATE_CACHE_MS
-    ) {
-      return this.cachedSoftwareUpdates.value;
-    }
-    const [installation, router] = await Promise.all([
-      this.diagnoseInstallation(force),
-      this.routerManager.getState(),
-    ]);
-    const value = await checkSoftwareUpdates(installation, router);
-    this.cachedSoftwareUpdates = { checkedAt: Date.now(), value };
-    return value;
+    return this.softwareUpdatesCache.get(async () => {
+      const [installation, router] = await Promise.all([
+        this.diagnoseInstallation(force),
+        this.getRouterHealthState(force),
+      ]);
+      return this.backgroundTasks.run('software-updates', 'background', () =>
+        checkSoftwareUpdates(installation, router),
+      );
+    }, force);
   }
 
   public async installOrUpdateClaudeCode(
@@ -546,20 +557,20 @@ export class ClaudeRuntime {
   ): Promise<{ message: string; state: SoftwareUpdateState }> {
     const installation = await this.diagnoseInstallation(true);
     const message = await installOrUpdateClaudeCode(source, installation.installed);
-    this.cachedInstallation = undefined;
-    this.cachedSoftwareUpdates = undefined;
+    this.installationCache.clear();
+    this.softwareUpdatesCache.clear();
     return { message, state: await this.getSoftwareUpdates(true) };
   }
 
   public async startRouter(): Promise<ClaudeRouterManagementState> {
     const state = await this.routerManager.start();
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: state };
+    this.routerHealthCache.set(state);
     return state;
   }
 
   public async stopRouter(): Promise<ClaudeRouterManagementState> {
     const state = await this.routerManager.stop();
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: state };
+    this.routerHealthCache.set(state);
     return state;
   }
 
@@ -569,7 +580,7 @@ export class ClaudeRuntime {
 
   public async deleteRouterProvider(providerId: string): Promise<ClaudeRouterManagementState> {
     const state = await this.routerManager.deleteProvider(providerId);
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: state };
+    this.routerHealthCache.set(state);
     return state;
   }
 
@@ -582,7 +593,7 @@ export class ClaudeRuntime {
     saved: SavedRouterProvider;
   }> {
     const saved = await this.routerManager.saveProvider(input);
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: saved.state };
+    this.routerHealthCache.set(saved.state);
     if (!input.useForCurrentProject) {
       return { saved };
     }
@@ -608,7 +619,7 @@ export class ClaudeRuntime {
     const config = this.configStore.getConfig(cwd);
     const credential = this.configStore.getCredential(cwd);
     const input = routerRepairInputForProject(config, credential);
-    const current = await this.routerManager.getState();
+    const current = await this.getRouterHealthState(true);
     if (!current.managementAvailable) {
       throw new Error('CCR 管理服务尚未就绪，无法写入服务提供方。');
     }
@@ -618,7 +629,7 @@ export class ClaudeRuntime {
 
     const saved = await this.routerManager.saveProvider(input);
     const routerState = await this.routerManager.start();
-    this.cachedRouterHealth = { checkedAt: Date.now(), value: routerState };
+    this.routerHealthCache.set(routerState);
     if (routerState.gatewayState !== 'running') {
       throw new Error(routerState.message);
     }
@@ -670,8 +681,7 @@ export class ClaudeRuntime {
       throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
     }
     if (usesDefaultClaudeRouter(config)) {
-      const router = await this.routerManager.getState();
-      this.cachedRouterHealth = { checkedAt: Date.now(), value: router };
+      const router = await this.getRouterHealthState(true);
       const blockingDetail = routerBlockingDetail(config, router);
       if (blockingDetail) {
         throw new Error(blockingDetail);
@@ -784,9 +794,14 @@ export class ClaudeRuntime {
     const config = normalizeClaudeConfig(input);
     const enteredCredential = input.credential?.trim();
     const credential = enteredCredential || this.configStore.getCredential(cwd);
-    const result = await testClaudeConnection(config, credential);
+    const fingerprint = connectionFingerprint(config, credential);
+    const result = await this.backgroundTasks.run(
+      `connection-test:${projectKey(cwd)}:${fingerprint}`,
+      'interactive',
+      () => testClaudeConnection(config, credential),
+    );
     this.connectionChecks.set(projectKey(cwd), {
-      fingerprint: connectionFingerprint(config, credential),
+      fingerprint,
       result,
     });
     return result;
@@ -876,62 +891,55 @@ export class ClaudeRuntime {
     return undefined;
   }
 
-  private async getRouterHealthState(): Promise<ClaudeRouterManagementState> {
-    if (
-      this.cachedRouterHealth &&
-      Date.now() - this.cachedRouterHealth.checkedAt < ROUTER_HEALTH_CACHE_MS
-    ) {
-      return this.cachedRouterHealth.value;
-    }
-    const value = await this.routerManager.getState();
-    this.cachedRouterHealth = { checkedAt: Date.now(), value };
-    return value;
+  private getRouterHealthState(
+    force = false,
+    priority: BackgroundTaskPriority = 'background',
+  ): Promise<ClaudeRouterManagementState> {
+    return this.routerHealthCache.get(
+      () =>
+        this.backgroundTasks.run('router-health', priority, () => this.routerManager.getState()),
+      force,
+    );
   }
 
-  private async diagnoseInstallation(force = false): Promise<ClaudeInstallationStatus> {
-    if (
-      !force &&
-      this.cachedInstallation &&
-      Date.now() - this.cachedInstallation.checkedAt < INSTALLATION_CACHE_MS
-    ) {
-      return this.cachedInstallation.value;
-    }
-
-    let value: ClaudeInstallationStatus;
-    try {
-      const result = await execFileAsync(
-        'powershell.exe',
-        [
-          '-NoLogo',
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          '$command = Get-Command claude -ErrorAction Stop; Write-Output $command.Source; & claude --version',
-        ],
-        {
-          encoding: 'utf8',
-          timeout: 10_000,
-          windowsHide: true,
-        },
-      );
-      const lines = result.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const executable = lines.shift();
-      value = evaluateClaudeInstallation(lines.join(' '), executable);
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message.includes('timed out')
-          ? '检查 Claude Code 版本超时。'
-          : '未找到 claude 命令，请先安装 Claude Code 2.1.197 或更高版本。';
-      value = noInstallation(message);
-    }
-
-    this.cachedInstallation = { checkedAt: Date.now(), value };
-    return value;
+  private diagnoseInstallation(force = false): Promise<ClaudeInstallationStatus> {
+    return this.installationCache.get(
+      () =>
+        this.backgroundTasks.run('claude-installation', 'background', async () => {
+          try {
+            const result = await execFileAsync(
+              'powershell.exe',
+              [
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-ExecutionPolicy',
+                'Bypass',
+                '-Command',
+                '$command = Get-Command claude -ErrorAction Stop; Write-Output $command.Source; & claude --version',
+              ],
+              {
+                encoding: 'utf8',
+                timeout: 10_000,
+                windowsHide: true,
+              },
+            );
+            const lines = result.stdout
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean);
+            const executable = lines.shift();
+            return evaluateClaudeInstallation(lines.join(' '), executable);
+          } catch (error) {
+            const message =
+              error instanceof Error && error.message.includes('timed out')
+                ? '检查 Claude Code 版本超时。'
+                : '未找到 claude 命令，请先安装 Claude Code 2.1.197 或更高版本。';
+            return noInstallation(message);
+          }
+        }),
+      force,
+    );
   }
 
   private async emitState(runtime: RuntimeSession): Promise<void> {

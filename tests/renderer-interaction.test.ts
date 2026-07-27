@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
 
 describe('renderer interaction lifecycle contract', () => {
   it('always releases resize pointer capture across interrupted window lifecycles', () => {
@@ -34,5 +35,16 @@ describe('renderer interaction lifecycle contract', () => {
 
     expect(pageAnimation).toBeDefined();
     expect(pageAnimation).not.toContain('transform:');
+  });
+
+  it('keeps the shell interactive while a real connection test runs in the background', () => {
+    expect(rendererSource).toContain('let connectionTestInProgress = false;');
+    expect(rendererSource).toContain('if (!status || connectionTestInProgress)');
+    expect(rendererSource).toContain('界面与 PowerShell 仍可继续使用');
+    expect(rendererSource).toMatch(
+      /window\.setInterval\(\(\) => \{\s+if \(connectionTestInProgress\) \{\s+return;/,
+    );
+    expect(rendererStyles).toContain(".connection-test-result[data-tone='pending']");
+    expect(rendererMarkup).toMatch(/id="connection-test-result"[\s\S]*?aria-live="polite"/);
   });
 });

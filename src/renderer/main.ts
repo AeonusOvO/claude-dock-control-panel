@@ -267,6 +267,7 @@ const historyLoadsInFlight = new Set<string>();
 let dragDepth = 0;
 let claudeRequestGeneration = 0;
 let configFormSessionId = '';
+let connectionTestInProgress = false;
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
@@ -1685,6 +1686,7 @@ const updateSmartGuidance = (): void => {
 const renderConnectionTest = (result: ClaudeConnectionTestResult): void => {
   connectionTestResult.hidden = false;
   connectionTestResult.dataset.tone = result.tone;
+  connectionTestResult.setAttribute('aria-busy', 'false');
   connectionTestTitle.textContent =
     result.tone === 'success'
       ? '连接测试通过'
@@ -1718,13 +1720,24 @@ const renderConnectionTest = (result: ClaudeConnectionTestResult): void => {
   }
 };
 
+const renderConnectionTestPending = (): void => {
+  connectionTestResult.hidden = false;
+  connectionTestResult.dataset.tone = 'pending';
+  connectionTestResult.setAttribute('aria-busy', 'true');
+  connectionTestTitle.textContent = '后台正在测试连接';
+  connectionTestSummary.textContent = '界面与 PowerShell 仍可继续使用；真实请求最多等待 15 秒。';
+  connectionTestStages.replaceChildren();
+};
+
 const runConnectionTest = async (): Promise<void> => {
   const status = activeStatus();
-  if (!status) {
+  if (!status || connectionTestInProgress) {
     return;
   }
+  connectionTestInProgress = true;
   testClaudeConnectionButton.disabled = true;
   testClaudeConnectionButton.textContent = '正在发送单令牌测试…';
+  renderConnectionTestPending();
   try {
     const result = await window.controlPanel.testClaudeConnection(
       status.id,
@@ -1733,8 +1746,14 @@ const runConnectionTest = async (): Promise<void> => {
     renderConnectionTest(result);
     void loadClaudeState(status.id);
   } catch {
+    connectionTestResult.dataset.tone = 'error';
+    connectionTestTitle.textContent = '连接测试发生异常';
+    connectionTestSummary.textContent = '后台测试已结束，请稍后重试。';
+    connectionTestStages.replaceChildren();
     showToast('连接测试发生异常。', 'error');
   } finally {
+    connectionTestInProgress = false;
+    connectionTestResult.setAttribute('aria-busy', 'false');
     testClaudeConnectionButton.disabled = false;
     testClaudeConnectionButton.textContent = '真实测试端点、密钥和模型';
   }
@@ -1763,6 +1782,9 @@ const setConnectionPolling = (enabled: boolean): void => {
     void loadSoftwareUpdates(false);
     if (gatewayRefreshTimer === undefined) {
       gatewayRefreshTimer = window.setInterval(() => {
+        if (connectionTestInProgress) {
+          return;
+        }
         void loadGatewayDiagnostics();
         void loadRouterManagement();
         void loadConnectionAdvice();

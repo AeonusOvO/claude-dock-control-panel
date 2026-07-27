@@ -1,6 +1,8 @@
 import type { ClaudeConnectionTestResult, ClaudeConnectionTestStage } from '../shared/contracts';
 import type { NormalizedClaudeConfig } from './claude-configuration';
 
+const MAX_RESPONSE_BYTES = 64 * 1024;
+
 export const claudeMessagesEndpoint = (baseUrl: string): string => {
   const parsed = new URL(baseUrl);
   const pathname = parsed.pathname.replace(/\/+$/, '');
@@ -39,6 +41,39 @@ const safeServerMessage = (raw: string, credential?: string): string | undefined
     return scrubbed.replace(/\s+/g, ' ').slice(0, 180);
   } catch {
     return undefined;
+  }
+};
+
+export const readLimitedResponseText = async (
+  response: Response,
+  maximumBytes = MAX_RESPONSE_BYTES,
+): Promise<string> => {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return '';
+  }
+
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = '';
+  try {
+    while (bytesRead < maximumBytes) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      const remaining = maximumBytes - bytesRead;
+      const accepted = chunk.value.subarray(0, remaining);
+      text += decoder.decode(accepted, { stream: true });
+      bytesRead += accepted.byteLength;
+      if (accepted.byteLength < chunk.value.byteLength || bytesRead >= maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
   }
 };
 
@@ -132,7 +167,7 @@ export const testClaudeConnection = async (
     };
   }
 
-  const raw = (await response.text()).slice(0, 64_000);
+  const raw = await readLimitedResponseText(response);
   const serverMessage = safeServerMessage(raw, credential);
   const latencyMs = Date.now() - startedAt;
   if (response.ok) {
