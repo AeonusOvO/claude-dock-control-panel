@@ -18,9 +18,23 @@
           <span class="brand__descriptor">项目终端控制台</span>
         </div>
       </div>
-      <div class="titlebar__status" aria-live="polite">
-        <span class="status-dot status-dot--small" aria-hidden="true"></span>
-        <span id="title-status">准备连接</span>
+      <div class="titlebar__actions">
+        <div class="titlebar__status" aria-live="polite">
+          <span class="status-dot status-dot--small" aria-hidden="true"></span>
+          <span id="title-status">准备连接</span>
+        </div>
+        <button
+          class="titlebar__refresh"
+          id="refresh-updates"
+          type="button"
+          title="检查软件与插件更新"
+          aria-label="检查软件与插件更新"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 6v5h-5" />
+            <path d="M18.1 15a7 7 0 1 1-.9-7.9L20 11" />
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -174,7 +188,7 @@
               </div>
               <span class="version-pill" id="claude-update-version">检测中</span>
             </div>
-            <div class="install-source-row">
+            <div class="install-source-row" id="claude-install-actions" hidden>
               <label class="field field--compact" for="claude-install-source">
                 <span>安装 / 更新来源</span>
                 <select id="claude-install-source">
@@ -183,11 +197,10 @@
                   <option value="npmmirror">npmmirror 国内镜像</option>
                 </select>
               </label>
-              <button id="install-update-claude" type="button">一键安装 / 更新</button>
+              <button id="install-update-claude" type="button" hidden>一键安装</button>
             </div>
             <div class="environment-check-footer">
               <span id="software-update-checked-at">等待首次检查</span>
-              <button id="refresh-software-updates" type="button">检查更新</button>
             </div>
           </section>
 
@@ -298,7 +311,12 @@
               </div>
             </div>
             <div class="router-actions" id="router-actions">
-              <label class="field field--compact" for="router-install-source">
+              <label
+                class="field field--compact"
+                id="router-install-source-field"
+                for="router-install-source"
+                hidden
+              >
                 <span>安装来源</span>
                 <select id="router-install-source">
                   <option value="github">官方 GitHub 安装包</option>
@@ -306,7 +324,7 @@
                   <option value="npmmirror">npmmirror 国内镜像</option>
                 </select>
               </label>
-              <button id="install-router" type="button">一键安装 / 更新</button>
+              <button id="install-router" type="button" hidden>一键安装</button>
               <button id="uninstall-router" type="button">彻底卸载并清除数据</button>
               <button id="start-router" type="button">启动路由器</button>
               <button id="stop-router" type="button">停止网关</button>
@@ -595,9 +613,8 @@
                 spellcheck="false"
               />
             </label>
-            <div class="plugin-toolbar__actions">
-              <button id="update-all-plugins" type="button">更新全部</button>
-              <button id="refresh-plugins" type="button">刷新市场</button>
+            <div class="plugin-toolbar__actions" id="plugin-update-actions" hidden>
+              <button id="update-all-plugins" type="button" hidden>更新全部</button>
             </div>
           </div>
           <p class="plugin-status" id="plugin-status">正在读取插件列表…</p>

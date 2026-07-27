@@ -217,6 +217,9 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   后台刷新之前；`AsyncRefreshCache` 让安装、Router 和更新检查在 TTL 内复用结果，并防止旧
   请求覆盖操作后的新状态。这些工作本身是异步网络/子进程 I/O，采用限流队列比额外占用
   Worker Thread 更合适。
+- renderer 完成首屏工作区 hydration 后用零延时任务启动统一更新检查，不阻塞终端启动：
+  `SoftwareUpdates` 读取 Claude Code/Router 元数据，插件侧在独立 Claude CLI 子进程中先刷新
+  marketplace 再读取目录。标题栏按钮复用同一路径并强制刷新；两条路径都不会调用模型。
 - CCR 的识别依据包括 `ccr` 命令、旧版
   `~/.claude-code-router/config.json`、新版 Windows
   `%APPDATA%/claude-code-router/{config.sqlite,gateway.config.json}`，以及默认端口状态。
@@ -316,11 +319,19 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 
 - `SoftwareUpdates` 从 npm 官方 registry 读取 Claude Code 与 Router 的 `latest` 元数据；
   官方源失败时再读 npmmirror。结果缓存 5 分钟，接入页轮询只在缓存到期后产生网络请求。
+- `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
+  返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
+  插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
+  `updateAvailable` 控制。
+- 标题栏 `refresh-updates` 是唯一的主动更新检查入口。首屏自动检查和用户点击均并行检查
+  软件与插件，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现数量；
+  检查本身不安装任何内容。
 - Claude Code 的官方原生路径使用固定的 `claude update`；未安装时使用固定 winget ID
   `Anthropic.ClaudeCode`。npm 与 npmmirror 路径使用固定包名，均不拼接用户输入到 shell。
 - `ClaudePluginManager` 调用 `claude plugin list --json --available` 与 marketplace JSON
   接口。插件标识、市场名和市场来源分别经过格式校验；变更后强制刷新目录。CLI 返回版本或
-  source SHA 时与市场记录比较并标记更新，用户也可刷新市场后批量执行官方 `plugin update`。
+  source SHA 时与市场记录比较并标记更新；统一刷新会先执行官方 marketplace update，确认
+  有新版后才允许单个或批量执行官方 `plugin update`。
 - **CLI 对已装与可装插件的描述形状不同**，这是曾经导致已安装插件两边都看不到的原因：
   `available` 条目带 `pluginId` / `name` / `marketplaceName` / `description`，而 `installed`
   条目**只有 `id`（`plugin@marketplace`）**，没有 `name`、没有 `description`，`version` 常为
@@ -502,7 +513,10 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   游标行为。
 - `tests/renderer-interaction.test.ts` 固化渲染层交互生命周期：分隔条必须显式释放捕获并覆盖
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
-  的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让。
+  的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让；统一刷新
+  必须在首屏后异步启动，三类更新入口默认隐藏。
+- `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
+  软件/插件混合更新四类状态不能互相误显。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
@@ -514,7 +528,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
   `elementFromPoint` 命中对象、关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放
   不计为控件重叠。此外单独断言输入框不被底栏或已打开的工作台抽屉覆盖——两者都不是可聚焦
-  控件，通用相交扫描发现不了。
+  控件，通用相交扫描发现不了。插件页额外注入超长插件名、市场名、仓库 URL 与多按钮操作区，
+  把内容最小宽度导致的遮挡变成 820px 下的可复现失败。
 - `npm run test:visual` 在本地生成 820px 插件页与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
   人工核对主题选择器、窄宽响应式和弹窗层级；图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。

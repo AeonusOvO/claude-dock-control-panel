@@ -47,4 +47,16 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toContain(".connection-test-result[data-tone='pending']");
     expect(rendererMarkup).toMatch(/id="connection-test-result"[\s\S]*?aria-live="polite"/);
   });
+
+  it('checks all update sources after first paint and only reveals detected update actions', () => {
+    expect(rendererMarkup).toMatch(/id="refresh-updates"[\s\S]*?aria-label="检查软件与插件更新"/);
+    expect(rendererMarkup).toMatch(/id="install-update-claude"[^>]*hidden/);
+    expect(rendererMarkup).toMatch(/id="install-router"[^>]*hidden/);
+    expect(rendererMarkup).toMatch(/id="update-all-plugins"[^>]*hidden/);
+    expect(rendererSource).toContain('void refreshAvailableUpdates(false);');
+    expect(rendererSource).toMatch(
+      /window\.setTimeout\(\(\) => \{\s+void refreshAvailableUpdates\(false\);/,
+    );
+    expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
+  });
 });

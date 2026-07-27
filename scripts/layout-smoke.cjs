@@ -55,7 +55,7 @@ const inspectLayout = `
     }
   }
   const overflow = [...document.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .install-source-row, .router-actions, .claude-workbench'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -111,6 +111,61 @@ const selectPluginPage = (name) => `
   }
 `;
 
+const addPluginStressFixtures = `
+  (() => {
+    const makeButton = (label) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      return button;
+    };
+    const installedList = document.querySelector('#plugin-installed-list');
+    installedList.replaceChildren();
+    const installedCard = document.createElement('article');
+    installedCard.className = 'plugin-card';
+    installedCard.dataset.enabled = 'true';
+    const installedHeader = document.createElement('div');
+    installedHeader.className = 'plugin-card__header';
+    const installedTitle = document.createElement('strong');
+    installedTitle.textContent =
+      'extremely-long-plugin-name-that-must-wrap-without-defining-a-minimum-card-width';
+    const installedBadge = document.createElement('span');
+    installedBadge.className = 'plugin-card__badge';
+    installedBadge.textContent = '可更新';
+    installedHeader.append(installedTitle, installedBadge);
+    const installedDescription = document.createElement('p');
+    installedDescription.textContent =
+      '用于验证最窄侧栏下的长插件说明、默认操作和更新操作都不会互相遮挡。';
+    const installedSource = document.createElement('code');
+    installedSource.textContent =
+      'https://example.com/an/intentionally/very/long/plugin/source/without/a/short/display/name';
+    const installedActions = document.createElement('div');
+    installedActions.className = 'plugin-card__actions';
+    installedActions.append(makeButton('停用'), makeButton('更新'), makeButton('卸载'));
+    installedCard.append(installedHeader, installedDescription, installedSource, installedActions);
+    installedList.append(installedCard);
+
+    const marketplaceList = document.querySelector('#plugin-marketplace-list');
+    marketplaceList.replaceChildren();
+    const marketplaceCard = document.createElement('article');
+    marketplaceCard.className = 'plugin-card plugin-card--marketplace';
+    const marketplaceHeader = document.createElement('div');
+    marketplaceHeader.className = 'plugin-card__header';
+    const marketplaceTitle = document.createElement('strong');
+    marketplaceTitle.textContent =
+      'marketplace-with-a-name-that-is-longer-than-the-narrow-plugin-panel';
+    marketplaceHeader.append(marketplaceTitle);
+    const marketplaceSource = document.createElement('code');
+    marketplaceSource.textContent =
+      'https://example.com/a/marketplace/repository/path/that/must/wrap/instead/of/overflow';
+    const marketplaceActions = document.createElement('div');
+    marketplaceActions.className = 'plugin-card__actions';
+    marketplaceActions.append(makeButton('移除市场'));
+    marketplaceCard.append(marketplaceHeader, marketplaceSource, marketplaceActions);
+    marketplaceList.append(marketplaceCard);
+  })()
+`;
+
 app.whenReady().then(async () => {
   const results = [];
   const window = new BrowserWindow({
@@ -134,6 +189,7 @@ app.whenReady().then(async () => {
       results.push({ height, page, width, ...result });
     }
     await window.webContents.executeJavaScript(selectRailPage('plugins'));
+    await window.webContents.executeJavaScript(addPluginStressFixtures);
     for (const page of ['installed', 'available', 'marketplaces']) {
       await window.webContents.executeJavaScript(selectPluginPage(page));
       const result = await window.webContents.executeJavaScript(inspectLayout);

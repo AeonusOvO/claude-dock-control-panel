@@ -11,6 +11,15 @@ const activateRailPage = (name) => `
   }
 `;
 
+const activatePluginPage = (name) => `
+  for (const tab of document.querySelectorAll('[data-plugin-tab]')) {
+    tab.classList.toggle('plugin-tab--active', tab.dataset.pluginTab === ${JSON.stringify(name)});
+  }
+  for (const panel of document.querySelectorAll('[data-plugin-panel]')) {
+    panel.classList.toggle('plugin-panel--active', panel.dataset.pluginPanel === ${JSON.stringify(name)});
+  }
+`;
+
 app.whenReady().then(async () => {
   mkdirSync(outputDirectory, { recursive: true });
   const window = new BrowserWindow({
@@ -25,7 +34,32 @@ app.whenReady().then(async () => {
   });
   await window.loadFile(path.join(__dirname, '..', 'dist', 'renderer', 'index.html'));
 
-  await window.webContents.executeJavaScript(activateRailPage('plugins'));
+  await window.webContents.executeJavaScript(`
+    ${activateRailPage('plugins')}
+    ${activatePluginPage('marketplaces')}
+    (() => {
+      const list = document.querySelector('#plugin-marketplace-list');
+      list.replaceChildren();
+      const card = document.createElement('article');
+      card.className = 'plugin-card plugin-card--marketplace';
+      const header = document.createElement('div');
+      header.className = 'plugin-card__header';
+      const title = document.createElement('strong');
+      title.textContent = 'claude-plugins-official-with-a-long-responsive-name';
+      header.append(title);
+      const source = document.createElement('code');
+      source.textContent =
+        'https://github.com/anthropics/claude-plugins-official/tree/main/plugins';
+      const actions = document.createElement('div');
+      actions.className = 'plugin-card__actions';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '移除市场';
+      actions.append(remove);
+      card.append(header, source, actions);
+      list.append(card);
+    })();
+  `);
   await new Promise((resolve) => setTimeout(resolve, 80));
   writeFileSync(
     path.join(outputDirectory, 'plugins-820.png'),

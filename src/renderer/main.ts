@@ -49,6 +49,7 @@ import {
   TERMINAL_THEMES,
   type TerminalThemeId,
 } from '../shared/terminal-themes';
+import { deriveUpdateActionState } from '../shared/update-actions';
 import './styles.css';
 
 interface TerminalView {
@@ -145,6 +146,7 @@ const metricSession = requiredElement<HTMLElement>('#metric-session');
 const modelHelp = requiredElement<HTMLElement>('#model-help');
 const addRouterProviderButton = requiredElement<HTMLButtonElement>('#add-router-provider');
 const cancelRouterProviderButton = requiredElement<HTMLButtonElement>('#cancel-router-provider');
+const claudeInstallActions = requiredElement<HTMLElement>('#claude-install-actions');
 const installRouterButton = requiredElement<HTMLButtonElement>('#install-router');
 const installUpdateClaudeButton = requiredElement<HTMLButtonElement>('#install-update-claude');
 const openDetectedRouterButton = requiredElement<HTMLButtonElement>('#open-detected-router');
@@ -175,6 +177,7 @@ const routerProviderPreferred = requiredElement<HTMLInputElement>('#router-provi
 const routerProviderProtocol = requiredElement<HTMLSelectElement>('#router-provider-protocol');
 const routerProviderUseProject = requiredElement<HTMLInputElement>('#router-provider-use-project');
 const routerInstallSource = requiredElement<HTMLSelectElement>('#router-install-source');
+const routerInstallSourceField = requiredElement<HTMLElement>('#router-install-source-field');
 const routerRemediation = requiredElement<HTMLElement>('#router-remediation');
 const routerRemediationDetail = requiredElement<HTMLElement>('#router-remediation-detail');
 const routerRemediationTitle = requiredElement<HTMLElement>('#router-remediation-title');
@@ -226,8 +229,9 @@ const routerManager = requiredElement<HTMLElement>('#router-manager');
 const routerActions = requiredElement<HTMLElement>('#router-actions');
 const workbenchScope = requiredElement<HTMLElement>('#workbench-scope');
 const pluginSearch = requiredElement<HTMLInputElement>('#plugin-search');
-const refreshPluginsButton = requiredElement<HTMLButtonElement>('#refresh-plugins');
+const refreshUpdatesButton = requiredElement<HTMLButtonElement>('#refresh-updates');
 const updateAllPluginsButton = requiredElement<HTMLButtonElement>('#update-all-plugins');
+const pluginUpdateActions = requiredElement<HTMLElement>('#plugin-update-actions');
 const pluginStatus = requiredElement<HTMLElement>('#plugin-status');
 const pluginRailDot = requiredElement<HTMLElement>('#plugin-rail-dot');
 const pluginInstalledCount = requiredElement<HTMLElement>('#plugin-installed-count');
@@ -241,9 +245,6 @@ const addPluginMarketplaceButton = requiredElement<HTMLButtonElement>('#add-plug
 const claudeUpdateDetail = requiredElement<HTMLElement>('#claude-update-detail');
 const claudeUpdateVersion = requiredElement<HTMLElement>('#claude-update-version');
 const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-checked-at');
-const refreshSoftwareUpdatesButton = requiredElement<HTMLButtonElement>(
-  '#refresh-software-updates',
-);
 const conversationContextMenu = requiredElement<HTMLElement>('#conversation-context-menu');
 const conversationRenameDialog = requiredElement<HTMLDialogElement>('#conversation-rename-dialog');
 const conversationRenameDialogTitle = requiredElement<HTMLElement>(
@@ -287,10 +288,12 @@ let connectionHistoryEntries: ClaudeConnectionHistoryEntry[] = [];
 let connectionHistoryTargetId = '';
 let connectionHistoryMutationInProgress = false;
 let pluginCatalog: ClaudePluginCatalog | undefined;
-let pluginLoadInProgress = false;
+let pluginLoadPromise: Promise<void> | undefined;
 let pluginMutationInProgress = false;
 let softwareUpdates: SoftwareUpdateState | undefined;
 let softwareUpdateInProgress = false;
+let softwareUpdatePromise: Promise<void> | undefined;
+let updateRefreshInProgress = false;
 let pendingComposerFocusSessionId = '';
 let conversationContextTarget:
   | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
@@ -1033,6 +1036,31 @@ const renderRouterRemediation = (state: ClaudeRouterManagementState): void => {
   configureRouterProviderButton.textContent = '检查服务提供方';
 };
 
+const syncUpdateActionVisibility = (): void => {
+  const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
+  const claudeActionVisible = actions.claudeCode !== 'hidden';
+  const routerActionVisible = actions.router !== 'hidden';
+
+  claudeInstallActions.hidden = !claudeActionVisible;
+  installUpdateClaudeButton.hidden = !claudeActionVisible;
+  installUpdateClaudeButton.textContent = actions.claudeCode === 'update' ? '一键更新' : '一键安装';
+
+  routerInstallSourceField.hidden = !routerActionVisible;
+  installRouterButton.hidden = !routerActionVisible;
+  installRouterButton.textContent = actions.router === 'update' ? '一键更新' : '一键安装';
+
+  pluginUpdateActions.hidden = !actions.plugins;
+  updateAllPluginsButton.hidden = !actions.plugins;
+
+  const refreshLabel =
+    actions.totalAvailable > 0
+      ? `检查软件与插件更新，当前发现 ${actions.totalAvailable} 项可更新`
+      : '检查软件与插件更新';
+  refreshUpdatesButton.dataset.update = String(actions.totalAvailable > 0);
+  refreshUpdatesButton.title = refreshLabel;
+  refreshUpdatesButton.setAttribute('aria-label', refreshLabel);
+};
+
 const applyRouterRelevance = (): void => {
   const advice = connectionAdviceState;
   routerManager.dataset.relevance = 'active';
@@ -1193,7 +1221,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   applyRouterRelevance();
 
   installRouterButton.disabled = routerOperationInProgress;
-  installRouterButton.textContent = state.installed ? '一键更新 / 重装' : '一键安装';
+  syncUpdateActionVisibility();
   uninstallRouterButton.disabled = routerOperationInProgress || !state.canUninstall;
   uninstallRouterButton.title = state.canUninstall
     ? `彻底卸载当前${routerInstallationKindLabel(state.installationKind)}安装并删除全部配置数据`
@@ -1379,6 +1407,7 @@ const runRouterOperation = async (
   try {
     handleRouterResult(await action(status.id));
     void loadGatewayDiagnostics();
+    void loadSoftwareUpdates(false);
   } catch {
     showToast('路由器操作发生异常。', 'error');
   } finally {
@@ -1859,34 +1888,36 @@ const renderSoftwareUpdates = (state: SoftwareUpdateState): void => {
       ? `可安装 v${target.latestVersion}`
       : '未安装';
   claudeUpdateVersion.dataset.update = String(target.updateAvailable);
-  installUpdateClaudeButton.textContent = target.installed
-    ? target.updateAvailable
-      ? '一键更新'
-      : '重新安装 / 检查'
-    : '一键安装';
   installUpdateClaudeButton.disabled = softwareUpdateInProgress;
   softwareUpdateCheckedAt.textContent = `上次检查 ${new Date(state.checkedAt).toLocaleTimeString(
     'zh-CN',
     { hour: '2-digit', minute: '2-digit' },
   )}`;
+  syncUpdateActionVisibility();
   applyRouterRelevance();
 };
 
-const loadSoftwareUpdates = async (refresh = false): Promise<void> => {
+const loadSoftwareUpdates = (refresh = false): Promise<void> => {
+  if (softwareUpdatePromise) {
+    return softwareUpdatePromise;
+  }
   if (softwareUpdateInProgress) {
-    return;
+    return Promise.resolve();
   }
   softwareUpdateInProgress = true;
-  refreshSoftwareUpdatesButton.disabled = true;
-  try {
-    renderSoftwareUpdates(await window.controlPanel.getSoftwareUpdates(refresh));
-  } catch {
-    claudeUpdateDetail.textContent = '暂时无法读取软件版本，请检查网络后重试。';
-  } finally {
-    softwareUpdateInProgress = false;
-    refreshSoftwareUpdatesButton.disabled = false;
-    installUpdateClaudeButton.disabled = false;
-  }
+  softwareUpdatePromise = (async () => {
+    try {
+      renderSoftwareUpdates(await window.controlPanel.getSoftwareUpdates(refresh));
+    } catch {
+      claudeUpdateDetail.textContent = '暂时无法读取软件版本，请检查网络后重试。';
+    } finally {
+      softwareUpdateInProgress = false;
+      softwareUpdatePromise = undefined;
+      installUpdateClaudeButton.disabled = false;
+      syncUpdateActionVisibility();
+    }
+  })();
+  return softwareUpdatePromise;
 };
 
 const runClaudeInstallUpdate = async (): Promise<void> => {
@@ -1913,6 +1944,7 @@ const runClaudeInstallUpdate = async (): Promise<void> => {
     softwareUpdateInProgress = false;
     installUpdateClaudeButton.textContent = original;
     installUpdateClaudeButton.disabled = false;
+    syncUpdateActionVisibility();
   }
 };
 
@@ -2024,10 +2056,14 @@ const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
         plugin.enabled ? '正在停用…' : '正在启用…',
         () => window.controlPanel.setClaudePluginEnabled(plugin.pluginId, !plugin.enabled),
       ),
-      pluginActionButton('更新', 'quiet', '正在更新…', () =>
-        window.controlPanel.updateClaudePlugin(plugin.pluginId),
-      ),
     );
+    if (plugin.updateAvailable) {
+      actions.append(
+        pluginActionButton('更新', 'quiet', '正在更新…', () =>
+          window.controlPanel.updateClaudePlugin(plugin.pluginId),
+        ),
+      );
+    }
     const uninstall = document.createElement('button');
     uninstall.type = 'button';
     uninstall.className = 'button button--quiet button--small plugin-card__danger';
@@ -2123,7 +2159,8 @@ function renderPluginCatalog(catalog: ClaudePluginCatalog): void {
   }
   addPluginMarketplaceButton.disabled = pluginMutationInProgress || !catalog.cliAvailable;
   updateAllPluginsButton.disabled =
-    pluginMutationInProgress || !catalog.cliAvailable || catalog.installed.length === 0;
+    pluginMutationInProgress || !catalog.cliAvailable || catalog.updatesAvailable === 0;
+  syncUpdateActionVisibility();
 }
 
 const renderMarketplaceCard = (marketplace: ClaudePluginMarketplaceView): HTMLElement => {
@@ -2162,26 +2199,98 @@ const renderMarketplaceCard = (marketplace: ClaudePluginMarketplaceView): HTMLEl
   return card;
 };
 
-async function loadPluginCatalog(refresh: boolean): Promise<void> {
-  if (pluginLoadInProgress) {
-    return;
+function loadPluginCatalog(refresh: boolean): Promise<void> {
+  if (pluginLoadPromise) {
+    return pluginLoadPromise;
   }
-  pluginLoadInProgress = true;
-  refreshPluginsButton.disabled = true;
-  updateAllPluginsButton.disabled = true;
-  if (refresh || !pluginCatalog) {
-    pluginStatus.textContent = '正在读取插件列表…';
+  if (pluginMutationInProgress) {
+    return Promise.resolve();
+  }
+  pluginLoadPromise = (async () => {
+    updateAllPluginsButton.disabled = true;
+    if (refresh || !pluginCatalog) {
+      pluginStatus.textContent = '正在读取插件列表…';
+    }
+    try {
+      renderPluginCatalog(await window.controlPanel.getClaudePlugins(refresh));
+    } catch {
+      pluginStatus.textContent = '无法读取插件列表；请确认已安装 Claude Code 命令行。';
+    } finally {
+      pluginLoadPromise = undefined;
+      updateAllPluginsButton.disabled =
+        !pluginCatalog?.cliAvailable || pluginCatalog.updatesAvailable === 0;
+      syncUpdateActionVisibility();
+    }
+  })();
+  return pluginLoadPromise;
+}
+
+const refreshPluginUpdates = async (): Promise<boolean> => {
+  if (pluginLoadPromise) {
+    await pluginLoadPromise;
+  }
+  if (pluginMutationInProgress) {
+    return false;
+  }
+
+  pluginMutationInProgress = true;
+  pluginStatus.textContent = '正在刷新插件市场并检查更新…';
+  if (pluginCatalog) {
+    renderPluginCatalog(pluginCatalog);
   }
   try {
-    renderPluginCatalog(await window.controlPanel.getClaudePlugins(refresh));
+    const result = await window.controlPanel.refreshClaudePluginMarketplaces();
+    renderPluginCatalog(result.catalog);
+    if (!result.ok) {
+      pluginStatus.textContent = result.message;
+    }
+    return result.ok;
   } catch {
-    pluginStatus.textContent = '无法读取插件列表；请确认已安装 Claude Code 命令行。';
+    pluginStatus.textContent = '无法刷新插件市场；请确认网络与 Claude Code 命令行可用。';
+    return false;
   } finally {
-    pluginLoadInProgress = false;
-    refreshPluginsButton.disabled = false;
-    updateAllPluginsButton.disabled = !pluginCatalog?.cliAvailable;
+    pluginMutationInProgress = false;
+    if (pluginCatalog) {
+      renderPluginCatalog(pluginCatalog);
+    }
   }
-}
+};
+
+const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
+  if (updateRefreshInProgress) {
+    return;
+  }
+  updateRefreshInProgress = true;
+  refreshUpdatesButton.disabled = true;
+  refreshUpdatesButton.classList.add('titlebar__refresh--busy');
+  refreshUpdatesButton.setAttribute('aria-busy', 'true');
+
+  try {
+    const [, pluginsOk] = await Promise.all([
+      loadSoftwareUpdates(manual),
+      // Plugin update flags are only trustworthy after the local marketplace checkout is refreshed.
+      // This remains a background CLI task on first load and only becomes user-visible through the
+      // titlebar busy state.
+      refreshPluginUpdates(),
+    ]);
+    syncUpdateActionVisibility();
+    if (manual) {
+      const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
+      if (!pluginsOk) {
+        showToast('软件检查已完成，但插件市场暂时无法刷新。', 'error');
+      } else if (actions.totalAvailable > 0) {
+        showToast(`检查完成，发现 ${actions.totalAvailable} 项可更新。`);
+      } else {
+        showToast('检查完成，当前没有发现可用更新。');
+      }
+    }
+  } finally {
+    updateRefreshInProgress = false;
+    refreshUpdatesButton.disabled = false;
+    refreshUpdatesButton.classList.remove('titlebar__refresh--busy');
+    refreshUpdatesButton.setAttribute('aria-busy', 'false');
+  }
+};
 
 const pasteIntoActiveTerminal = async (): Promise<void> => {
   const status = activeStatus();
@@ -3637,12 +3746,8 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-
     selectPluginTab(button.dataset.pluginTab ?? 'installed');
   });
 }
-refreshPluginsButton.addEventListener('click', () => {
-  void runPluginMutation(
-    () => window.controlPanel.refreshClaudePluginMarketplaces(),
-    '正在刷新…',
-    refreshPluginsButton,
-  );
+refreshUpdatesButton.addEventListener('click', () => {
+  void refreshAvailableUpdates(true);
 });
 updateAllPluginsButton.addEventListener('click', () => {
   void runPluginMutation(
@@ -3757,9 +3862,6 @@ installRouterButton.addEventListener('click', () => {
 });
 uninstallRouterButton.addEventListener('click', () => {
   purgeRouter(uninstallRouterButton);
-});
-refreshSoftwareUpdatesButton.addEventListener('click', () => {
-  void loadSoftwareUpdates(true);
 });
 installUpdateClaudeButton.addEventListener('click', () => {
   void runClaudeInstallUpdate();
@@ -4117,6 +4219,11 @@ window.addEventListener('beforeunload', () => {
 
 void (async () => {
   renderWorkspace(await window.controlPanel.getWorkspace());
+  // Let first paint and workspace hydration complete, then check all update sources without
+  // blocking terminal startup or requiring the user to open the connection/plugins pages.
+  window.setTimeout(() => {
+    void refreshAvailableUpdates(false);
+  }, 0);
   const status = activeStatus();
   // No session means no project has been opened yet: leave the empty state up rather than
   // spawning a terminal the user did not ask for.
