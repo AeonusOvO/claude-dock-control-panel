@@ -496,6 +496,12 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
   固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行
   二次复制或向项目根目录发布。
+- 发布版本结合 SemVer 与项目发布尺度，且每轮完成的项目修改都必须产生新版本：不兼容或
+  架构级 API/数据/交互变更升主版本，有明确发布价值的成组/重大新功能升次版本，小功能优化、
+  修复、文档、构建与维护改动升修订版本；避免因单个细小行为变化机械升次版本。版本必须同时
+  写入 `package.json` 与 `package-lock.json`；完成验证后必须运行 `npm run dist`，并核对
+  `outputs/ClaudeDock-Setup-<version>-x64.exe`、对应 blockmap、`latest.yml` 与
+  `win-unpacked/`。这些发布产物仍不纳入 Git。
 - `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
   electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
