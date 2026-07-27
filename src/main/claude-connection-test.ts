@@ -82,8 +82,11 @@ export const testClaudeConnection = async (
   credential?: string,
 ): Promise<ClaudeConnectionTestResult> => {
   const testedAt = Date.now();
+  const effectiveCredential = credential || (config.preset === 'ollama' ? 'ollama' : undefined);
   if (config.authMode === 'existing') {
     return {
+      authMode: config.authMode,
+      failureKind: 'unknown',
       message: '现有 Claude 登录不能通过独立接口请求验证；请启动会话并在 /status 中确认。',
       ok: false,
       stages: [
@@ -95,8 +98,10 @@ export const testClaudeConnection = async (
       tone: 'warning',
     };
   }
-  if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
+  if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !effectiveCredential) {
     return {
+      authMode: config.authMode,
+      failureKind: 'authentication',
       message: '缺少接口凭据，请填写新密钥或先保存密钥。',
       ok: false,
       stages: [
@@ -110,6 +115,8 @@ export const testClaudeConnection = async (
   }
   if (config.provider === 'anthropic' && config.model === 'default') {
     return {
+      authMode: config.authMode,
+      failureKind: 'unknown',
       message: '官方接入使用“默认”时由 Claude Code 选择模型，请直接启动安全会话验证。',
       ok: false,
       stages: [
@@ -128,10 +135,10 @@ export const testClaudeConnection = async (
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
   };
-  if (config.authMode === 'apiKey' && credential) {
-    headers['x-api-key'] = credential;
-  } else if (config.authMode === 'authToken' && credential) {
-    headers.authorization = `Bearer ${credential}`;
+  if (config.authMode === 'apiKey' && effectiveCredential) {
+    headers['x-api-key'] = effectiveCredential;
+  } else if (config.authMode === 'authToken' && effectiveCredential) {
+    headers.authorization = `Bearer ${effectiveCredential}`;
   }
 
   const startedAt = Date.now();
@@ -154,6 +161,8 @@ export const testClaudeConnection = async (
         ? '15 秒内没有收到响应。'
         : '无法建立网络连接，请检查地址、服务状态和代理。';
     return {
+      authMode: config.authMode,
+      failureKind: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'network',
       latencyMs: Date.now() - startedAt,
       message: detail,
       ok: false,
@@ -168,7 +177,7 @@ export const testClaudeConnection = async (
   }
 
   const raw = await readLimitedResponseText(response);
-  const serverMessage = safeServerMessage(raw, credential);
+  const serverMessage = safeServerMessage(raw, effectiveCredential);
   const latencyMs = Date.now() - startedAt;
   if (response.ok) {
     let validMessage: boolean;
@@ -183,6 +192,8 @@ export const testClaudeConnection = async (
     }
     if (validMessage) {
       return {
+        authMode: config.authMode,
+        httpStatus: response.status,
         latencyMs,
         message: '端点、认证和模型响应全部通过，可以保存并启动 Claude Code。',
         ok: true,
@@ -196,6 +207,9 @@ export const testClaudeConnection = async (
       };
     }
     return {
+      authMode: config.authMode,
+      failureKind: 'response-shape',
+      httpStatus: response.status,
       latencyMs,
       message: '接口返回成功状态，但响应不是标准 Anthropic 消息格式。',
       ok: false,
@@ -211,6 +225,9 @@ export const testClaudeConnection = async (
 
   if (response.status === 401 || response.status === 403) {
     return {
+      authMode: config.authMode,
+      failureKind: 'authentication',
+      httpStatus: response.status,
       latencyMs,
       message: '接口已找到，但密钥或认证方式不正确。',
       ok: false,
@@ -231,6 +248,9 @@ export const testClaudeConnection = async (
 
   if (response.status === 400 || response.status === 422) {
     return {
+      authMode: config.authMode,
+      failureKind: 'model',
+      httpStatus: response.status,
       latencyMs,
       message: '端点与认证基本可用，但当前模型名或请求兼容性仍需处理。',
       ok: false,
@@ -250,6 +270,9 @@ export const testClaudeConnection = async (
   }
 
   return {
+    authMode: config.authMode,
+    failureKind: response.status === 404 ? 'not-found' : 'unknown',
+    httpStatus: response.status,
     latencyMs,
     message:
       response.status === 404

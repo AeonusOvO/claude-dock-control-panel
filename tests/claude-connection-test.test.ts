@@ -96,6 +96,8 @@ describe('Claude connection test', () => {
     const result = await testClaudeConnection(gatewayConfig, 'wrong-example-key');
 
     expect(result.ok).toBe(false);
+    expect(result.failureKind).toBe('authentication');
+    expect(result.httpStatus).toBe(401);
     expect(result.message).toContain('认证方式');
     expect(result.stages).toContainEqual(
       expect.objectContaining({ id: 'authentication', status: 'failed' }),

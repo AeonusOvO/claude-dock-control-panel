@@ -66,6 +66,61 @@ app.whenReady().then(async () => {
     (await window.capturePage()).toPNG(),
   );
 
+  window.setSize(1180, 760);
+  await window.webContents.executeJavaScript(`
+    ${activateRailPage('connection')}
+    document.querySelector('#environment-setup').hidden = true;
+    document.querySelector('#connection-provider-picker').setAttribute('aria-disabled', 'false');
+    document.querySelector('#connection-provider-setup').hidden = false;
+    document.querySelector('#connection-provider-title').textContent = 'DeepSeek';
+    document.querySelector('#connection-provider-description').textContent =
+      'DeepSeek 官方 Anthropic 兼容接口，适合国内网络环境。';
+    document.querySelector('#connection-provider-caveat').hidden = true;
+    document.querySelector('#claude-config-form').hidden = false;
+    const groups = document.querySelector('#connection-provider-groups');
+    groups.replaceChildren();
+    for (const fixture of [
+      ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key']],
+      ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）']],
+      ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter']],
+    ]) {
+      const section = document.createElement('section');
+      section.className = 'provider-group';
+      const heading = document.createElement('strong');
+      heading.className = 'provider-group__title';
+      heading.textContent = fixture[0];
+      const grid = document.createElement('div');
+      grid.className = 'provider-card-grid';
+      for (const label of fixture[1]) {
+        const card = document.createElement('button');
+        card.className = 'provider-card';
+        card.classList.toggle('provider-card--selected', label === 'DeepSeek');
+        card.type = 'button';
+        const title = document.createElement('strong');
+        title.textContent = label;
+        const detail = document.createElement('span');
+        detail.textContent = '由服务商目录自动填入兼容端点、认证方式与推荐模型。';
+        card.append(title, detail);
+        grid.append(card);
+      }
+      section.append(heading, grid);
+      groups.append(section);
+    }
+    document.querySelector('.control-panel').scrollTop = 0;
+    document.querySelector('[data-rail-page="connection"]').style.animation = 'none';
+    for (const button of document.querySelectorAll('[data-rail-tab]')) {
+      button.classList.toggle(
+        'activity-rail__button--active',
+        button.dataset.railTab === 'connection',
+      );
+    }
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  writeFileSync(
+    path.join(outputDirectory, 'connection-1180.png'),
+    (await window.capturePage()).toPNG(),
+  );
+
   window.setSize(1000, 720);
   await window.webContents.executeJavaScript(`
     ${activateRailPage('projects')}

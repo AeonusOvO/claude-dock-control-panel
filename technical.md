@@ -160,7 +160,7 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   项目键用小写后的绝对路径，因为 Windows 路径大小写不敏感。
   凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
   `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
-- 判重用 `authMode / baseUrl / credential / model / preset / provider` 的 SHA-256 指纹，
+- 判重用 `authMode / baseUrl / credential / model / modelFast / preset / provider` 的 SHA-256 指纹，
   只和最新一条比较：相同就不新增。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
   机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
   网关状态仍然逐条存下来，恢复时能看到当时的情况。
@@ -170,15 +170,16 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `/^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/` 校验后才接受。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
-- 网关模式会把 `ANTHROPIC_MODEL`、`ANTHROPIC_SMALL_FAST_MODEL` 和
-  `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL` 全部固定到用户选择的模型，避免 Claude Code
-  的后台小模型或别名请求意外离开所选模型。启动时同时使用 `--model` 提高可观察性。
+- 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
+  `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；快速模型写入
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少快速模型时
+  自动回落到主模型；启动时同时使用 `--model` 提高可观察性。
 - 带 `/v1/chat/completions` 的服务是 OpenAI Chat Completions 格式，不能直接满足
   Claude Code 的 Anthropic `/v1/messages`、流式内容块和工具调用语义，必须经
   Claude Code Router、LiteLLM 或服务商自己的协议转换层。
 - DeepSeek 官方目前另行提供 Anthropic 格式，基址为
-  `https://api.deepseek.com/anthropic`；因此 DeepSeek 官方预设可以直连，默认示例模型
-  更新为 `deepseek-v4-pro`。官方兼容表仍列出图片、文档、部分 MCP/代码执行结果等不支持
+  `https://api.deepseek.com/anthropic`；因此 DeepSeek 官方预设可以直连。官方兼容表仍列出
+  图片、文档、部分 MCP/代码执行结果等不支持
   或忽略字段，界面不会把“Anthropic 格式兼容”描述成完整 Claude 功能等价。
 - 远程中转只接受 HTTPS；HTTP 仅允许 `localhost`、`127.0.0.1` 或 `::1`，URL 不允许嵌入
   用户名、密码、查询参数或片段。
@@ -209,6 +210,17 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 
 ### 自动发现与新手接入
 
+- `src/shared/claude-providers.ts` 是接入目录的单一事实来源：21 个预设统一声明分组、基址、
+  认证方式、主/快速模型、控制台、文档、密钥提示和风险说明。`ClaudePreset` 直接派生自目录
+  ID；主进程 IPC 用目录 ID 集合校验，外链白名单从目录 URL 主机派生，避免 renderer、主进程
+  与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
+- `normalizeClaudeConfig` 用目录分组推导 `provider`：官方组进入 `anthropic`，其余进入
+  `gateway`；未知的旧预设按可验证配置迁移到 `custom`，无效基址或模型则安全回到默认配置。
+- renderer 用 `selectedProviderId` 驱动三步 UI。切换服务商清空未保存凭据、旧测试结果与修复
+  建议；Router/cURL 选择把原有完整工具节点移动到第二步，其他时候移回默认折叠的高级区，
+  没有缩减或复制原功能。
+- Kimi 开放平台与 Kimi Code 会员分为两个目录项，明确阻止密钥/基址混用；SiliconFlow 按其
+  Claude Code 文档使用 `apiKey`（`x-api-key`）；Ollama 使用不落盘的 `ollama` 占位令牌。
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
   短连接检查 Claude Code Router 默认 `3456/3458` 与 LiteLLM 常用 `4000`，不会枚举或扫描
   全部本机端口。
@@ -234,7 +246,7 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   清空 cURL 输入与内存中的解析结果；一键导入 Router 成功后也会立即清空。
 - OpenAI cURL 可由用户主动一键写入 CCR Provider；上游密钥只发给本机 CCR 管理 RPC，
   Router 客户端密钥只由主进程写入 ClaudeDock 的 DPAPI 配置。两类密钥不会互相代用。
-- 帮助按钮仅允许打开 Claude/DeepSeek/LiteLLM/CCR 官方文档域名；本机管理页仅允许
+- 帮助按钮仅允许打开服务商目录、Claude/LiteLLM/CCR 声明的文档与控制台域名；本机管理页仅允许
   `http://localhost|127.0.0.1|::1:3458`，其他任意外链会被主进程拒绝。
 
 ### Router 安装与 Provider 管理
@@ -367,8 +379,13 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   网络错误只回传分阶段诊断。
 - 已保存凭据从 `safeStorage` 解密后仅用于该次测试；表单新输入可在保存前测试。测试结果
   不包含凭据或模型回复文本。
-- 测试在后台协调器的 `interactive` 优先级运行；renderer 显示 `aria-busy` 状态，只禁用测试
-  按钮，并在测试期间跳过接入页的 6 秒轮询，不阻断导航、表单或 PowerShell 输入。
+- `src/shared/claude-connection-remedy.ts` 把安装门禁、Router 生命周期、401/403、404、
+  400/422、超时/网络、200 非标准响应和 Kimi 密钥族不匹配映射为结构化原因、建议与动作；
+  renderer 只负责执行打开控制台/文档、切认证、用快速模型、安装/启动 Router、重试或重选。
+- “测试并接入”严格串行：真实测试 `ok` 后才调用保存；“跳过测试并保存”是明确的次操作。
+  `runGuarded` 用 `WeakSet<HTMLButtonElement>` 防止重复点击，并在 `finally` 恢复禁用状态、
+  `aria-busy` 与原文案。测试期间跳过 6 秒轮询并禁用服务商/配置控件，但不阻断导航或
+  PowerShell 输入。
 - 每次测试按“规范化配置 + 凭据 SHA-256”生成内存指纹，只在当前项目保存的配置与凭据完全
   匹配时显示到会话页；不会持久化凭据摘要。最小请求通过是一个时间点信号，不能证明上游
   持续在线，也不能覆盖 Claude Code 后续的流式内容、工具调用和更大请求。
@@ -524,14 +541,18 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   重复保存不新增、任一字段（含凭据）变化就新增、只有网关状态变化不新增、明文密钥不得出现在
   磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、Windows 路径大小写
   不敏感、条数上限、文件损坏后回落到空列表。
+- `tests/claude-providers.test.ts` 锁定目录 ID 唯一、分组完整、远程 HTTPS/本机 HTTP 边界、
+  模型字符规则、外链可解析及 Kimi/SiliconFlow/Ollama 特例；
+  `tests/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
   `elementFromPoint` 命中对象、关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放
   不计为控件重叠。此外单独断言输入框不被底栏或已打开的工作台抽屉覆盖——两者都不是可聚焦
   控件，通用相交扫描发现不了。插件页额外注入超长插件名、市场名、仓库 URL 与多按钮操作区，
   把内容最小宽度导致的遮挡变成 820px 下的可复现失败。
-- `npm run test:visual` 在本地生成 820px 插件页与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
-  人工核对主题选择器、窄宽响应式和弹窗层级；图片属于构建产物。
+- `npm run test:visual` 在本地生成 820px 插件页、1180px 服务商向导与重命名弹窗 PNG 到
+  `dist/visual-qa/`，用于人工核对主题选择器、窄宽响应式、服务商卡片和弹窗层级；图片属于
+  构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`

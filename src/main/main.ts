@@ -41,6 +41,7 @@ import {
   TERMINAL_THEMES,
   type TerminalThemeId,
 } from '../shared/terminal-themes';
+import { CLAUDE_PROVIDER_EXTERNAL_HOSTS, claudeProviderIdSet } from '../shared/claude-providers';
 import {
   ClaudePluginManager,
   isValidMarketplaceName,
@@ -469,10 +470,8 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
   const value = input as Record<string, unknown>;
   if (
     (value.provider !== 'anthropic' && value.provider !== 'gateway') ||
-    (value.preset !== 'anthropic' &&
-      value.preset !== 'custom' &&
-      value.preset !== 'deepseek' &&
-      value.preset !== 'gateway') ||
+    typeof value.preset !== 'string' ||
+    !claudeProviderIdSet.has(value.preset) ||
     (value.authMode !== 'apiKey' &&
       value.authMode !== 'authToken' &&
       value.authMode !== 'existing' &&
@@ -482,6 +481,7 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
       value.credentialAction !== 'replace') ||
     typeof value.baseUrl !== 'string' ||
     typeof value.model !== 'string' ||
+    (value.modelFast !== undefined && typeof value.modelFast !== 'string') ||
     (value.credential !== undefined && typeof value.credential !== 'string')
   ) {
     throw new Error('Claude 接入配置包含无效字段。');
@@ -493,7 +493,8 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
     credential: value.credential,
     credentialAction: value.credentialAction,
     model: value.model,
-    preset: value.preset,
+    modelFast: value.modelFast,
+    preset: value.preset as SaveClaudeConfigInput['preset'],
     provider: value.provider,
   };
 };
@@ -533,6 +534,7 @@ const validateClaudeRouterProviderInput = (input: unknown): SaveClaudeRouterProv
 };
 
 const allowedExternalHosts = new Set([
+  ...CLAUDE_PROVIDER_EXTERNAL_HOSTS,
   'api-docs.deepseek.com',
   'ccrdesk.top',
   'code.claude.com',

@@ -1,10 +1,11 @@
 import type { TerminalThemeId } from './terminal-themes';
+import type { ClaudeProviderId } from './claude-providers';
 
 export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 export type ClaudeAuthMode = 'apiKey' | 'authToken' | 'existing' | 'none';
 export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
 export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
-export type ClaudePreset = 'anthropic' | 'custom' | 'deepseek' | 'gateway';
+export type ClaudePreset = ClaudeProviderId;
 export type ClaudeProvider = 'anthropic' | 'gateway';
 export type ClaudeSecurityStatus =
   'blocked-version' | 'not-installed' | 'ready' | 'update-required' | 'unknown';
@@ -26,6 +27,7 @@ export interface ClaudeConfigView {
   baseUrl: string;
   credentialConfigured: boolean;
   model: string;
+  modelFast?: string;
   preset: ClaudePreset;
   provider: ClaudeProvider;
 }
@@ -36,6 +38,7 @@ export interface SaveClaudeConfigInput {
   credential?: string;
   credentialAction: ClaudeCredentialAction;
   model: string;
+  modelFast?: string;
   preset: ClaudePreset;
   provider: ClaudeProvider;
 }
@@ -52,6 +55,7 @@ export interface ClaudeConnectionHistoryEntry {
   gatewayState: ClaudeRouterGatewayState;
   id: string;
   model: string;
+  modelFast?: string;
   preset: ClaudePreset;
   provider: ClaudeProvider;
   savedAt: number;
@@ -133,6 +137,10 @@ export interface ClaudeConnectionTestStage {
 }
 
 export interface ClaudeConnectionTestResult {
+  authMode?: ClaudeAuthMode;
+  failureKind?:
+    'authentication' | 'model' | 'network' | 'not-found' | 'response-shape' | 'timeout' | 'unknown';
+  httpStatus?: number;
   latencyMs?: number;
   message: string;
   ok: boolean;

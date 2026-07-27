@@ -4,11 +4,13 @@ import type {
   ClaudeLaunchMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 
 export interface NormalizedClaudeConfig {
   authMode: SaveClaudeConfigInput['authMode'];
   baseUrl: string;
   model: string;
+  modelFast?: string;
   preset: SaveClaudeConfigInput['preset'];
   provider: SaveClaudeConfigInput['provider'];
 }
@@ -19,6 +21,7 @@ export const DEFAULT_CLAUDE_CONFIG: NormalizedClaudeConfig = {
   authMode: 'existing',
   baseUrl: '',
   model: 'default',
+  modelFast: 'default',
   preset: 'anthropic',
   provider: 'anthropic',
 };
@@ -52,7 +55,7 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
 ] as const;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
-const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]]{1,200}$/;
+export const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]~]{1,200}$/;
 const TRACKING_VERSION_START = [2, 1, 91] as const;
 const TRACKING_VERSION_END = [2, 1, 196] as const;
 const MINIMUM_PROTECTED_VERSION = [2, 1, 197] as const;
@@ -163,10 +166,21 @@ const normalizeBaseUrl = (value: string): string => {
 export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedClaudeConfig => {
   const model = input.model.trim();
   if (!MODEL_NAME_PATTERN.test(model)) {
-    throw new Error('模型标识只能包含字母、数字以及 . _ : / @ [ ] -。');
+    throw new Error('模型标识只能包含字母、数字以及 . _ : / @ [ ] ~ -。');
+  }
+  const modelFast = input.modelFast?.trim() || model;
+  if (!MODEL_NAME_PATTERN.test(modelFast)) {
+    throw new Error('快速模型标识只能包含字母、数字以及 . _ : / @ [ ] ~ -。');
   }
 
-  if (input.provider === 'anthropic') {
+  const providerDefinition = findClaudeProvider(input.preset);
+  const preset = providerDefinition?.id ?? 'custom';
+  const provider = providerForPreset(preset);
+  if (input.provider !== provider) {
+    throw new Error('服务商预设与连接类型不一致。');
+  }
+
+  if (provider === 'anthropic') {
     if (input.authMode !== 'existing' && input.authMode !== 'apiKey') {
       throw new Error('Anthropic 官方接入只能使用现有登录或接口密钥。');
     }
@@ -174,7 +188,8 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
       authMode: input.authMode,
       baseUrl: '',
       model,
-      preset: 'anthropic',
+      modelFast,
+      preset,
       provider: 'anthropic',
     };
   }
@@ -187,8 +202,8 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
     authMode: input.authMode,
     baseUrl: normalizeBaseUrl(input.baseUrl),
     model,
-    preset:
-      input.preset === 'deepseek' ? 'deepseek' : input.preset === 'gateway' ? 'gateway' : 'custom',
+    modelFast,
+    preset,
     provider: 'gateway',
   };
 };
@@ -211,21 +226,26 @@ export const buildClaudeEnvironment = (
     DO_NOT_TRACK: '1',
   });
 
-  if (config.authMode === 'apiKey' && credential) {
-    environment.ANTHROPIC_API_KEY = credential;
-  } else if (config.authMode === 'authToken' && credential) {
-    environment.ANTHROPIC_AUTH_TOKEN = credential;
+  const effectiveCredential = credential || (config.preset === 'ollama' ? 'ollama' : undefined);
+  if (config.authMode === 'apiKey' && effectiveCredential) {
+    environment.ANTHROPIC_API_KEY = effectiveCredential;
+  } else if (config.authMode === 'authToken' && effectiveCredential) {
+    environment.ANTHROPIC_AUTH_TOKEN = effectiveCredential;
   }
 
   environment.ANTHROPIC_MODEL = config.model;
 
-  if (config.provider === 'gateway') {
-    environment.ANTHROPIC_BASE_URL = config.baseUrl;
+  if (config.provider === 'gateway' || config.model !== 'default') {
+    const fastModel = config.modelFast || config.model;
     environment.ANTHROPIC_CUSTOM_MODEL_OPTION = config.model;
-    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = config.model;
+    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = fastModel;
     environment.ANTHROPIC_DEFAULT_OPUS_MODEL = config.model;
     environment.ANTHROPIC_DEFAULT_SONNET_MODEL = config.model;
-    environment.ANTHROPIC_SMALL_FAST_MODEL = config.model;
+    environment.ANTHROPIC_SMALL_FAST_MODEL = fastModel;
+  }
+
+  if (config.provider === 'gateway') {
+    environment.ANTHROPIC_BASE_URL = config.baseUrl;
     environment.DISABLE_AUTOUPDATER = '1';
   }
 
@@ -249,13 +269,16 @@ export const buildClaudeSettingsEnvironment = (
   }
 
   environment.ANTHROPIC_MODEL = config.model;
-  if (config.provider === 'gateway') {
-    environment.ANTHROPIC_BASE_URL = config.baseUrl;
+  if (config.provider === 'gateway' || config.model !== 'default') {
+    const fastModel = config.modelFast || config.model;
     environment.ANTHROPIC_CUSTOM_MODEL_OPTION = config.model;
-    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = config.model;
+    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = fastModel;
     environment.ANTHROPIC_DEFAULT_OPUS_MODEL = config.model;
     environment.ANTHROPIC_DEFAULT_SONNET_MODEL = config.model;
-    environment.ANTHROPIC_SMALL_FAST_MODEL = config.model;
+    environment.ANTHROPIC_SMALL_FAST_MODEL = fastModel;
+  }
+  if (config.provider === 'gateway') {
+    environment.ANTHROPIC_BASE_URL = config.baseUrl;
   }
 
   return environment;

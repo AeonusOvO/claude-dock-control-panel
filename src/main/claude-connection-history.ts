@@ -7,6 +7,7 @@ import type {
   ClaudeRouterGatewayState,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { claudeProviderIdSet } from '../shared/claude-providers';
 import { normalizeClaudeConfig, type NormalizedClaudeConfig } from './claude-configuration';
 
 /**
@@ -59,6 +60,7 @@ const isStoredEntry = (value: unknown): value is StoredHistoryEntry => {
     typeof record.baseUrl === 'string' &&
     typeof record.authMode === 'string' &&
     typeof record.preset === 'string' &&
+    claudeProviderIdSet.has(record.preset) &&
     GATEWAY_STATES.has(record.gatewayState as ClaudeRouterGatewayState) &&
     (record.gatewayEndpoint === undefined || typeof record.gatewayEndpoint === 'string') &&
     (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string')
@@ -78,6 +80,7 @@ const entryFingerprint = (config: NormalizedClaudeConfig, credential?: string): 
         baseUrl: config.baseUrl,
         credential: credential ?? '',
         model: config.model,
+        modelFast: config.modelFast || config.model,
         preset: config.preset,
         provider: config.provider,
       }),
@@ -111,6 +114,7 @@ export class ClaudeConnectionHistoryStore {
       gatewayState: entry.gatewayState,
       id: entry.id,
       model: entry.model,
+      modelFast: entry.modelFast || entry.model,
       preset: entry.preset,
       provider: entry.provider,
       savedAt: entry.savedAt,
@@ -187,6 +191,7 @@ export class ClaudeConnectionHistoryStore {
       // Without a credential there is nothing to restore, so leave whatever is stored untouched.
       credentialAction: credential ? 'replace' : 'keep',
       model: entry.model,
+      modelFast: entry.modelFast || entry.model,
       preset: entry.preset,
       provider: entry.provider,
     };
@@ -198,6 +203,7 @@ export class ClaudeConnectionHistoryStore {
         authMode: entry.authMode,
         baseUrl: entry.baseUrl,
         model: entry.model,
+        modelFast: entry.modelFast || entry.model,
         preset: entry.preset,
         provider: entry.provider,
       },

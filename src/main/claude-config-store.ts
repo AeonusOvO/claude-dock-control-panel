@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { safeStorage } from 'electron';
 import type { ClaudeConfigView, SaveClaudeConfigInput } from '../shared/contracts';
+import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 import {
   DEFAULT_CLAUDE_CONFIG,
   type NormalizedClaudeConfig,
@@ -54,13 +55,20 @@ export class ClaudeConfigStore {
       return { ...DEFAULT_CLAUDE_CONFIG };
     }
 
-    return {
-      authMode: stored.authMode,
-      baseUrl: stored.baseUrl,
-      model: stored.model,
-      preset: stored.preset,
-      provider: stored.provider,
-    };
+    const preset = findClaudeProvider(stored.preset)?.id ?? 'custom';
+    try {
+      return normalizeClaudeConfig({
+        authMode: stored.authMode,
+        baseUrl: stored.baseUrl,
+        credentialAction: 'keep',
+        model: stored.model,
+        modelFast: stored.modelFast || stored.model,
+        preset,
+        provider: providerForPreset(preset),
+      });
+    } catch {
+      return { ...DEFAULT_CLAUDE_CONFIG };
+    }
   }
 
   public getCredential(cwd: string): string | undefined {

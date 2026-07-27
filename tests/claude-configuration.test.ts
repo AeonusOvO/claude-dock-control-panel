@@ -24,6 +24,7 @@ describe('Claude Code configuration', () => {
       authMode: 'apiKey',
       baseUrl: 'https://gateway.example.com',
       model: 'deepseek-chat',
+      modelFast: 'deepseek-chat',
       preset: 'deepseek',
       provider: 'gateway',
     });
@@ -55,21 +56,29 @@ describe('Claude Code configuration', () => {
   });
 
   it('pins every Claude model alias to the selected gateway model', () => {
-    const config = normalizeClaudeConfig(gatewayInput);
+    const config = normalizeClaudeConfig({ ...gatewayInput, modelFast: 'deepseek-fast' });
     const environment = buildClaudeEnvironment(config, 'encrypted-at-rest-secret');
 
     expect(environment).toMatchObject({
       ANTHROPIC_API_KEY: 'encrypted-at-rest-secret',
       ANTHROPIC_BASE_URL: 'https://gateway.example.com',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-chat',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-fast',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-chat',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-chat',
       ANTHROPIC_MODEL: 'deepseek-chat',
+      ANTHROPIC_SMALL_FAST_MODEL: 'deepseek-fast',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       DISABLE_ERROR_REPORTING: '1',
       DISABLE_FEEDBACK_COMMAND: '1',
       DISABLE_TELEMETRY: '1',
     });
+  });
+
+  it('defaults the fast model to the main model and validates both identifiers', () => {
+    expect(normalizeClaudeConfig(gatewayInput).modelFast).toBe('deepseek-chat');
+    expect(() =>
+      normalizeClaudeConfig({ ...gatewayInput, modelFast: 'invalid model name' }),
+    ).toThrow('快速模型标识');
   });
 
   it('overrides inherited CCR route aliases without writing credentials to temporary settings', () => {

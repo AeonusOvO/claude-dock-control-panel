@@ -6,6 +6,13 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 
 ## 当前版本重点（2026-07-27）
 
+- “接入”页改为“环境准备 → 选择服务商 → 填写凭据与模型 → 测试并接入”三步主流程。
+  Anthropic、DeepSeek、GLM、Kimi、通义千问、MiniMax、豆包、MiMo、StepFun、
+  SiliconFlow、OpenRouter 和 Ollama 等入口由同一份服务商目录预填官方兼容基址、认证方式、
+  主模型与快速模型；自定义 Anthropic、Router 和 cURL 路径完整保留在高级方式中。
+- 连接测试通过后才自动保存；401/403、404、400/422、超时、网络错误和非标准 Anthropic
+  响应会生成可点击的修复动作。Kimi 开放平台/Kimi Code 密钥不通用、SiliconFlow 使用
+  `x-api-key` 等服务商差异会在选择时直接提示。
 - 标题栏右上角新增统一刷新图标：首屏完成后会在后台检查 Claude Code、Router 与插件市场，
   平时不再常驻“更新”按钮；只有确认存在新版时才显示对应更新入口，未安装的软件仍显示安装
   入口。点击刷新图标会强制刷新软件元数据与插件市场。
@@ -72,6 +79,8 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   模型转换器。带 `/v1/chat/completions` 的 OpenAI 格式地址不能直接填给 Claude Code；
   服务商若另行提供 `/v1/messages` 则可以直连。DeepSeek 官方现已提供
   `https://api.deepseek.com/anthropic` 直连接口。
+- 服务商目录是预设、认证方式、主/快速模型、控制台/文档链接和外链白名单的单一事实来源。
+  切换服务商会清空未保存凭据和旧测试结果，避免把上一家服务商的密钥误发给下一家。
 - “接入”页自动发现 Claude Code Router（默认模型接口 `3456`、管理页 `3458`）、
   LiteLLM（常用端口 `4000`）、当前项目保存的本机地址，以及现有 Claude Code
   用户/项目设置；检测只回传地址和“是否有凭据”，不回传凭据内容。
@@ -150,7 +159,7 @@ npm run dist
 `npm run test:layout` 会在隐藏的 Electron 窗口中检查 820×640、900×640 和 1180×760，
 覆盖项目、接入、插件三个分组及工作台三页；若交互组件被透明层挡住、彼此重叠或关键容器
 横向溢出则失败。
-`npm run test:visual` 会生成 820px 插件页和重命名弹窗的本地视觉检查图到
+`npm run test:visual` 会生成 820px 插件页、1180px 接入向导和重命名弹窗的本地视觉检查图到
 `dist/visual-qa/`。
 
 `npm run dist` 在 `outputs/` 完成 Windows x64 打包，最终安装程序固定为
@@ -172,23 +181,30 @@ npm run dist
 2. 把项目文件夹拖到窗口任意位置，或点击虚线“＋ 添加项目”区域；应用会为它新建独立会话，不会停止
    已经运行的其他项目。
 3. 在左侧项目列表切换当前项目；点击项目行右侧的关闭按钮会终止并移除该项目会话。
-4. 点击左侧“接入”。应用会先检查 Claude Code 版本，并显示本机已有的 Router、LiteLLM 和
-   外部 Claude 配置；如果发现 Claude Code Router，应把 `3456` 视为模型接口，
-   `3458` 只视为浏览器管理页。
-5. 如果服务商给了一段 cURL，直接粘到“把服务商给你的 cURL 粘进来”：
+4. 点击左侧“接入”。如果 Claude Code 未安装、版本过旧或位于受阻止版本范围，先在环境卡完成
+   安装或更新；环境达到受保护启动要求后，该卡自动收起。
+5. 在第一步选择密钥所属服务商。目录会自动填好真实 Anthropic 兼容基址、认证方式、主模型和
+   快速模型；Kimi 开放平台与 Kimi Code 会员必须按密钥来源分别选择。需要自定义地址、
+   本地 Router 或 cURL 时，选择“高级方式”中的对应入口，功能没有被移除。
+6. 填写凭据并核对模型，点击“测试并接入”。测试最多请求 1 个输出 token，可能产生极少量
+   费用；只有端点、认证和模型三项全部通过才自动保存。失败卡会解释原因并提供切换认证、
+   打开服务商控制台/文档、改用快速模型、安装/启动 Router、重试或返回选择服务商等操作。
+   “跳过测试并保存”保留给官方登录、离线配置或已明确接受风险的高级用户。
+7. 页面底部“高级设置与诊断工具”完整保留自动发现、手动配置、Router 管理、cURL 识别、
+   转换器说明、历史恢复与术语解释。如果服务商给了一段 cURL，选择“粘贴 cURL”后直接粘入：
    - 识别为 **Anthropic `/v1/messages`**：点击“自动填入可直连配置”。
    - 识别为 **OpenAI `/v1/chat/completions`**：如果已安装 Router，可点击
      “一键写入 Router 并接入当前项目”；应用会新增或更新 Provider、设为首选，并把
      `provider/model` 路由保存为当前项目的 ClaudeDock 接入。
    - cURL 中的 Bearer 上游密钥交给 Router；如果 Router 自己启用了访问保护，
      ClaudeDock 需要填写的是另一把 Router 访问密钥，二者不要混用。
-6. 没有 Router 时，在“安装来源”选择官方 GitHub 安装包、npm 官方源或 npmmirror，点击
+8. 没有 Router 时，在“安装来源”选择官方 GitHub 安装包、npm 官方源或 npmmirror，点击
    “一键安装”。GitHub 安装包会核对 Release 声明的文件大小与 SHA-256；npm 镜像只对
    本次命令生效，不改全局 registry。已有 Router 可点击“彻底卸载并清除数据”，会删除路由器
    程序、`%APPDATA%\claude-code-router` 下的全部 Provider 配置与上游密钥，状态回到“尚未
    安装”，随后即可换一个安装来源重新安装。该操作不可恢复，也不会触碰 `~/.claude` 下
    Claude Code 与 Codex 自己的配置。
-7. “Provider 配置”支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic
+9. “Provider 配置”支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic
    Messages 三种上游。可逐项编辑地址、模型和密钥，也可只点“用于当前项目”复用已保存
    的上游凭据。
    - 如果显示“还没有配置 Provider 和模型”，先看黄色“解决办法”卡片。
@@ -199,16 +215,8 @@ npm run dist
    - 如果出现 `better_sqlite3.node`、`NODE_MODULE_VERSION` 或“compiled against a
      different Node.js version”，点击“修复运行环境并重启”。这不是数据库损坏，也不需要
      手工运行 `npm rebuild`。
-8. 点击“真实测试端点、密钥和模型”。测试最多请求 1 个输出 token，可能产生极少量费用；
-   三项全部通过后再保存。该结果只证明测试时刻的最小 Messages 请求成功，不保证服务持续
-   在线或完整兼容 Claude Code 的流式、工具调用与长对话。测试卡显示“后台正在测试连接”时，
-   仍可切换页面或继续操作 PowerShell；为避免抢占资源，接入页的 6 秒自动刷新会暂时跳过。
-   API 凭据通过 Windows 安全存储加密，界面不会回读明文。保存成功后这份配置会进入页面底部
-   的“接入历史记录”，下次点一下就能整套恢复；不需要的记录可以右键或用记录右侧的 `×`
-   删掉。
-9. 不想安装转换器时，也可选择 Anthropic 官方、DeepSeek 官方 Anthropic 接口，或服务商
-   明确提供的其他 `/v1/messages` 地址。DeepSeek 官方预设会填入
-   `https://api.deepseek.com/anthropic` 和当前文档中的模型示例。
+     保存成功后配置会进入“接入历史记录”，下次点一下即可整套恢复；不需要的记录可以右键或用
+     记录右侧的 `×` 删除。API 凭据通过 Windows 安全存储加密，界面不会回读明文。
 10. 左侧快捷操作可直接“新建安全会话”；工作台“会话”页还可继续最近会话或打开 Claude
     的历史选择器。启动会重建当前项目
     的 PowerShell，以便只通过子进程环境注入路由和密钥，因此会终止该终端中原有的进程。

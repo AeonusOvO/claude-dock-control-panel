@@ -131,6 +131,7 @@ describe('ClaudeConnectionHistoryStore', () => {
       credential: 'sk-secret-value',
       credentialAction: 'replace',
       model: 'glm-4.6',
+      modelFast: 'glm-4.6',
       preset: 'gateway',
       provider: 'gateway',
     });

@@ -106,6 +106,7 @@ const connectionFingerprint = (config: NormalizedClaudeConfig, credential?: stri
     baseUrl: config.baseUrl,
     credentialDigest: credentialDigest(credential),
     model: config.model,
+    modelFast: config.modelFast || config.model,
     preset: config.preset,
     provider: config.provider,
   });

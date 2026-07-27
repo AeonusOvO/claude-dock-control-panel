@@ -160,8 +160,8 @@
 
         <section class="rail-page" data-rail-page="connection">
           <div class="connection-heading">
-            <strong>接入向导</strong>
-            <span>先看懂你手上的接口，再决定 Claude Code 最终连接哪里。</span>
+            <strong>选择服务商，三步完成接入</strong>
+            <span>ClaudeDock 会填好官方兼容参数；高级方式和旧工具仍可随时展开。</span>
           </div>
 
           <section class="connection-advice" id="connection-advice" data-tone="info">
@@ -173,7 +173,11 @@
             <div class="connection-advice__actions" id="connection-advice-actions"></div>
           </section>
 
-          <section class="environment-setup" aria-labelledby="environment-setup-title">
+          <section
+            class="environment-setup"
+            id="environment-setup"
+            aria-labelledby="environment-setup-title"
+          >
             <div class="step-heading">
               <span class="step-number">0</span>
               <div>
@@ -204,7 +208,38 @@
             </div>
           </section>
 
-          <section class="gateway-discovery" aria-labelledby="gateway-discovery-title">
+          <section class="provider-picker" id="connection-provider-picker">
+            <div class="step-heading">
+              <span class="step-number">1</span>
+              <div>
+                <strong>选择你的服务商</strong>
+                <span>按密钥所属平台选择；不要混用不同平台的密钥和地址。</span>
+              </div>
+            </div>
+            <div class="provider-groups" id="connection-provider-groups" aria-live="polite"></div>
+          </section>
+
+          <section class="provider-setup" id="connection-provider-setup" hidden>
+            <div class="provider-setup__heading">
+              <div>
+                <span class="step-kicker">已选择</span>
+                <strong id="connection-provider-title">选择服务商后继续</strong>
+              </div>
+              <div class="provider-setup__links">
+                <button id="open-provider-console" type="button" hidden>打开密钥控制台</button>
+                <button id="open-provider-docs" type="button" hidden>查看官方文档</button>
+              </div>
+            </div>
+            <p id="connection-provider-description"></p>
+            <p class="provider-caveat" id="connection-provider-caveat" hidden></p>
+            <div id="connection-provider-special"></div>
+          </section>
+
+          <section
+            class="gateway-discovery"
+            id="gateway-discovery"
+            aria-labelledby="gateway-discovery-title"
+          >
             <div class="gateway-discovery__heading">
               <div>
                 <span class="step-kicker">自动检测</span>
@@ -218,7 +253,11 @@
             <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
           </section>
 
-          <section class="curl-onboarding" aria-labelledby="curl-onboarding-title">
+          <section
+            class="curl-onboarding"
+            id="curl-onboarding"
+            aria-labelledby="curl-onboarding-title"
+          >
             <div class="step-heading">
               <span class="step-number">1</span>
               <div>
@@ -422,7 +461,7 @@
             </form>
           </section>
 
-          <section class="converter-help">
+          <section class="converter-help" id="converter-help">
             <div class="step-heading">
               <span class="step-number">3</span>
               <div>
@@ -457,16 +496,16 @@
             </div>
           </section>
 
-          <form id="claude-config-form">
+          <form id="claude-config-form" hidden>
             <div class="step-heading">
-              <span class="step-number">4</span>
+              <span class="step-number">2</span>
               <div>
-                <strong>确认 Claude Code 最终连接配置</strong>
-                <span>上面的自动操作会填到这里；熟悉后也可以手动修改。</span>
+                <strong>填写凭据与模型</strong>
+                <span>密钥只交给主进程加密保存，界面不会回显已保存内容。</span>
               </div>
             </div>
 
-            <label class="field" for="claude-preset">
+            <label class="field" for="claude-preset" hidden>
               <span>最终连接方式</span>
               <select id="claude-preset">
                 <option value="anthropic">Anthropic 官方</option>
@@ -503,6 +542,18 @@
               <small id="model-help">必须与最终网关中可用的模型标识完全一致。</small>
             </label>
 
+            <label class="field" for="claude-model-fast">
+              <span>快速模型标识</span>
+              <input
+                id="claude-model-fast"
+                type="text"
+                maxlength="200"
+                value="default"
+                spellcheck="false"
+              />
+              <small>用于 Haiku 与小型快速任务；留空时跟随主模型。</small>
+            </label>
+
             <label class="field" for="claude-auth-mode">
               <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
               <select id="claude-auth-mode">
@@ -528,7 +579,13 @@
             </label>
 
             <div class="connection-test">
-              <button id="test-claude-connection" type="button">真实测试端点、密钥和模型</button>
+              <div class="step-heading">
+                <span class="step-number">3</span>
+                <div>
+                  <strong>测试并接入</strong>
+                  <span>先真实验证端点、认证和模型，通过后再保存。</span>
+                </div>
+              </div>
               <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
             </div>
             <div
@@ -541,6 +598,12 @@
               <span id="connection-test-summary"></span>
               <div id="connection-test-stages"></div>
             </div>
+            <section class="connection-remedy" id="connection-remedy" hidden>
+              <strong id="connection-remedy-title">接入建议</strong>
+              <p id="connection-remedy-cause"></p>
+              <p id="connection-remedy-fix"></p>
+              <div id="connection-remedy-actions"></div>
+            </section>
 
             <div class="privacy-shield">
               <span class="privacy-shield__icon" aria-hidden="true">◆</span>
@@ -553,7 +616,12 @@
             </div>
 
             <div class="config-actions">
-              <button class="save-config" id="save-claude-config" type="submit">保存接入</button>
+              <button class="save-config" id="test-claude-connection" type="submit">
+                测试并接入
+              </button>
+              <button class="skip-test" id="save-claude-config" type="button">
+                跳过测试并保存
+              </button>
               <button class="clear-credential" id="clear-credential" type="button">清除密钥</button>
             </div>
           </form>
@@ -593,6 +661,11 @@
                 <dd>上游密钥交给路由器访问服务商；路由器访问密钥交给 ClaudeDock。两者可能不同。</dd>
               </div>
             </dl>
+          </details>
+
+          <details class="connection-advanced" id="connection-advanced">
+            <summary>高级设置与诊断工具</summary>
+            <div id="connection-advanced-content"></div>
           </details>
         </section>
 
