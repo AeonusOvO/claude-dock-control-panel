@@ -33,6 +33,12 @@ app.whenReady().then(async () => {
     width: 820,
   });
   await window.loadFile(path.join(__dirname, '..', 'dist', 'renderer', 'index.html'));
+  const captureSettledPage = async () => {
+    window.webContents.invalidate();
+    await window.capturePage();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return window.capturePage();
+  };
 
   await window.webContents.executeJavaScript(`
     ${activateRailPage('plugins')}
@@ -63,12 +69,13 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 80));
   writeFileSync(
     path.join(outputDirectory, 'plugins-820.png'),
-    (await window.capturePage()).toPNG(),
+    (await captureSettledPage()).toPNG(),
   );
 
   window.setSize(1180, 760);
   await window.webContents.executeJavaScript(`
     ${activateRailPage('connection')}
+    document.documentElement.style.setProperty('--rail-w', '560px');
     document.querySelector('#environment-setup').hidden = true;
     document.querySelector('#connection-provider-picker').setAttribute('aria-disabled', 'false');
     document.querySelector('#connection-provider-setup').hidden = false;
@@ -80,15 +87,30 @@ app.whenReady().then(async () => {
     const groups = document.querySelector('#connection-provider-groups');
     groups.replaceChildren();
     for (const fixture of [
-      ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key']],
-      ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）']],
-      ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter']],
+      ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], false],
+      ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], false],
+      ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], false],
+      ['高级方式', ['从 cURL 识别', '本机转换器 / 模型网关', '自定义接口'], true],
     ]) {
       const section = document.createElement('section');
       section.className = 'provider-group';
-      const heading = document.createElement('strong');
+      section.dataset.collapsed = String(fixture[2]);
+      const toggle = document.createElement('button');
+      toggle.className = 'provider-group__toggle';
+      toggle.type = 'button';
+      toggle.setAttribute('aria-expanded', String(!fixture[2]));
+      const heading = document.createElement('span');
       heading.className = 'provider-group__title';
       heading.textContent = fixture[0];
+      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      arrow.setAttribute('class', 'provider-group__arrow');
+      arrow.setAttribute('viewBox', '0 0 24 24');
+      const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      arrowPath.setAttribute('d', 'm9 5 7 7-7 7');
+      arrow.append(arrowPath);
+      toggle.append(heading, arrow);
+      const content = document.createElement('div');
+      content.className = 'provider-group__content';
       const grid = document.createElement('div');
       grid.className = 'provider-card-grid';
       for (const label of fixture[1]) {
@@ -103,7 +125,8 @@ app.whenReady().then(async () => {
         card.append(title, detail);
         grid.append(card);
       }
-      section.append(heading, grid);
+      content.append(grid);
+      section.append(toggle, content);
       groups.append(section);
     }
     document.querySelector('.control-panel').scrollTop = 0;
@@ -118,8 +141,20 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 80));
   writeFileSync(
     path.join(outputDirectory, 'connection-1180.png'),
-    (await window.capturePage()).toPNG(),
+    (await captureSettledPage()).toPNG(),
   );
+
+  await window.webContents.executeJavaScript(`
+    document.querySelector('#connection-advanced-dialog').showModal();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  writeFileSync(
+    path.join(outputDirectory, 'advanced-settings-1180.png'),
+    (await captureSettledPage()).toPNG(),
+  );
+  await window.webContents.executeJavaScript(`
+    document.querySelector('#connection-advanced-dialog').close();
+  `);
 
   window.setSize(1000, 720);
   await window.webContents.executeJavaScript(`
@@ -130,7 +165,7 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 80));
   writeFileSync(
     path.join(outputDirectory, 'rename-theme-1000.png'),
-    (await window.capturePage()).toPNG(),
+    (await captureSettledPage()).toPNG(),
   );
 
   console.log(outputDirectory);

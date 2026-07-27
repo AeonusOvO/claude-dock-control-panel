@@ -48,6 +48,56 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toMatch(/id="connection-test-result"[\s\S]*?aria-live="polite"/);
   });
 
+  it('treats provider selection, grouping and follow-up steps as explicit UI state', () => {
+    expect(rendererSource).toMatch(
+      /if \(selectedProviderId === provider\.id\) \{\s+clearProviderSelection\(\);/,
+    );
+    expect(rendererSource).toMatch(
+      /const clearProviderSelection[\s\S]*?providerSetup\.hidden = true;[\s\S]*?claudeConfigForm\.hidden = true;/,
+    );
+    expect(rendererSource).toContain(
+      'const collapsedProviderGroups = new Set<ClaudeProviderGroupId>',
+    );
+    expect(rendererSource).toContain(
+      "toggle.setAttribute('aria-expanded', String(!nextCollapsed))",
+    );
+    expect(rendererSource).toContain('content.inert = nextCollapsed;');
+    expect(rendererStyles).toContain('container-type: inline-size;');
+    expect(rendererStyles).toMatch(
+      /@container provider-picker \(min-width: 290px\)[\s\S]*?repeat\(2,/,
+    );
+    expect(rendererStyles).toMatch(
+      /@container provider-picker \(min-width: 470px\)[\s\S]*?repeat\(3,/,
+    );
+  });
+
+  it('opens advanced connection tools in a themed cancellable modal', () => {
+    expect(rendererMarkup).toMatch(/id="open-connection-advanced"[\s\S]*?aria-haspopup="dialog"/);
+    expect(rendererMarkup).toMatch(
+      /<dialog[\s\S]*?id="connection-advanced-dialog"[\s\S]*?id="cancel-connection-advanced"[\s\S]*?id="complete-connection-advanced"/,
+    );
+    expect(rendererSource).toContain(
+      'advancedConnectionSnapshot = captureAdvancedConnectionSnapshot();',
+    );
+    expect(rendererSource).toContain(
+      'restoreAdvancedConnectionSnapshot(advancedConnectionSnapshot)',
+    );
+    expect(rendererSource).toContain('connectionAdvancedDialog.showModal();');
+    expect(rendererStyles).toContain('.connection-advanced-dialog::backdrop');
+  });
+
+  it('collapses an already-selected activity tab without losing the terminal', () => {
+    expect(rendererSource).toContain('applyRailTab(selectedRailTab === tab ? undefined : tab);');
+    expect(rendererSource).toContain(
+      "workspace.classList.toggle('workspace--rail-collapsed', collapsed)",
+    );
+    expect(rendererSource).toContain('controlPanel.inert = collapsed;');
+    expect(rendererStyles).toContain('.workspace.workspace--rail-collapsed');
+    expect(rendererStyles).toContain(
+      'grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);',
+    );
+  });
+
   it('checks all update sources after first paint and only reveals detected update actions', () => {
     expect(rendererMarkup).toMatch(/id="refresh-updates"[\s\S]*?aria-label="检查软件与插件更新"/);
     expect(rendererMarkup).toMatch(/id="install-update-claude"[^>]*hidden/);

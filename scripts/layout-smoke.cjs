@@ -14,10 +14,33 @@ const inspectLayout = `
   const visible = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
-    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const ancestorStyle = getComputedStyle(ancestor);
+      const ancestorRect = ancestor.getBoundingClientRect();
+      if (
+        /auto|clip|hidden|scroll/.test(ancestorStyle.overflowX) &&
+        (centerX < ancestorRect.left || centerX > ancestorRect.right)
+      ) {
+        return false;
+      }
+      if (
+        /auto|clip|hidden|scroll/.test(ancestorStyle.overflowY) &&
+        (centerY < ancestorRect.top || centerY > ancestorRect.bottom)
+      ) {
+        return false;
+      }
+    }
+    return true;
   };
+  const openDialog = document.querySelector('dialog[open]');
+  const inspectionRoot = openDialog || document;
   const selector = 'button, input, select, textarea, [role="separator"]';
-  const controls = [...document.querySelectorAll(selector)].filter(
+  const controls = [...inspectionRoot.querySelectorAll(selector)].filter(
     (element) => visible(element) && !element.classList.contains('workbench-scrim'),
   );
   const hitTargetMisses = controls
@@ -54,8 +77,8 @@ const inspectLayout = `
       }
     }
   }
-  const overflow = [...document.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench'
+  const overflow = [...inspectionRoot.querySelectorAll(
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, #connection-advanced-content'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -204,6 +227,30 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript(
       `document.querySelector('#claude-workbench').classList.remove('claude-workbench--open')`,
     );
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.workspace').classList.add('workspace--rail-collapsed');
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    results.push({
+      height,
+      page: 'rail:collapsed',
+      width,
+      ...(await window.webContents.executeJavaScript(inspectLayout)),
+    });
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.workspace').classList.remove('workspace--rail-collapsed');
+      document.querySelector('#connection-advanced-dialog').showModal();
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    results.push({
+      height,
+      page: 'connection:advanced-dialog',
+      width,
+      ...(await window.webContents.executeJavaScript(inspectLayout)),
+    });
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#connection-advanced-dialog').close();
+    `);
   }
 
   const failures = results.filter(

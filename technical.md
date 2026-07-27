@@ -216,9 +216,18 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
 - `normalizeClaudeConfig` 用目录分组推导 `provider`：官方组进入 `anthropic`，其余进入
   `gateway`；未知的旧预设按可验证配置迁移到 `custom`，无效基址或模型则安全回到默认配置。
-- renderer 用 `selectedProviderId` 驱动三步 UI。切换服务商清空未保存凭据、旧测试结果与修复
-  建议；Router/cURL 选择把原有完整工具节点移动到第二步，其他时候移回默认折叠的高级区，
-  没有缩减或复制原功能。
+- renderer 用 `selectedProviderId | undefined` 驱动三步 UI。点击不同服务商会清空未保存
+  凭据、旧测试结果与修复建议；再次点击同一服务商进入 `undefined`，同时隐藏服务商说明、
+  配置表单、测试结果和修复卡。Router/cURL 选择把原有完整工具节点移动到第二步，其他时候
+  移回高级设置模态层，没有缩减或复制原功能。
+- 五个服务商分组由独立 `Set<ClaudeProviderGroupId>` 保存折叠状态；每次切换只更新当前分组
+  的 `data-collapsed`、ARIA 与 `inert`，CSS 用可插值的网格行和透明度过渡。服务商卡片网格
+  用命名容器查询在 `<290 / 290–469 / >=470px` 切换一、二、三列，因此响应侧栏实际拖拽
+  宽度，而不依赖整个窗口的媒体查询。
+- 高级设置使用原生模态 `<dialog>` 和唯一一组原有工具节点。打开时保存服务商草稿及模态层
+  内所有 `input/select/textarea` 的值与勾选状态；“取消”、关闭按钮和 `Esc` 恢复快照，
+  “完成”保留当前输入。Router 安装/卸载/启停与 Provider 保存仍走既有即时 IPC，不能伪装
+  成可回滚事务，界面在操作区上方明确说明这一边界。
 - Kimi 开放平台与 Kimi Code 会员分为两个目录项，明确阻止密钥/基址混用；SiliconFlow 按其
   Claude Code 文档使用 `apiKey`（`x-api-key`）；Ollama 使用不落盘的 `ollama` 占位令牌。
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
@@ -493,8 +502,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   renderer 只在该 session 仍为活动会话且 phase 已变为 `running` 后于下一绘制帧聚焦输入框。
   固定 40/60/80ms 延时已删除，避免 PTY 冷启动慢时焦点请求落在 disabled textarea 上后丢失。
 - 控制栏与工作台宽度写入 renderer `localStorage`；这只保存像素宽度，不包含项目、命令或
-  终端内容。窗口缩到 900px 以下时会重新夹紧宽度；CSS 在 900/850px 和 700px 高度设置
-  独立断点，避免工具栏、状态栏、插件操作区和安装来源控件重叠。
+  终端内容。活动栏维护 `selectedRailTab | undefined`：点击当前项切到 `undefined` 后把
+  控制栏设为 `inert` / `aria-hidden`、把四列工作区压成“活动栏 + 终端”，并重新安排有限次
+  xterm `fit()`；任一程序化导航仍会重新展开对应页。窗口缩到 900px 以下时会重新夹紧宽度；
+  CSS 在 900/850px 和 700px 高度设置独立断点，避免工具栏、状态栏、插件操作区和安装来源
+  控件重叠。
 
 ## 安全策略
 
@@ -531,7 +543,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - `tests/renderer-interaction.test.ts` 固化渲染层交互生命周期：分隔条必须显式释放捕获并覆盖
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
   的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让；统一刷新
-  必须在首屏后异步启动，三类更新入口默认隐藏。
+  必须在首屏后异步启动，三类更新入口默认隐藏；服务商反选、分组折叠、1/2/3 列容器查询、
+  高级设置快照式取消和活动栏二次点击收起也作为源码/结构契约锁定。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
@@ -545,14 +558,16 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   模型字符规则、外链可解析及 Kimi/SiliconFlow/Ollama 特例；
   `tests/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
-  轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
-  `elementFromPoint` 命中对象、关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放
-  不计为控件重叠。此外单独断言输入框不被底栏或已打开的工作台抽屉覆盖——两者都不是可聚焦
-  控件，通用相交扫描发现不了。插件页额外注入超长插件名、市场名、仓库 URL 与多按钮操作区，
-  把内容最小宽度导致的遮挡变成 820px 下的可复现失败。
-- `npm run test:visual` 在本地生成 820px 插件页、1180px 服务商向导与重命名弹窗 PNG 到
-  `dist/visual-qa/`，用于人工核对主题选择器、窄宽响应式、服务商卡片和弹窗层级；图片属于
-  构建产物。
+  轮换项目/接入、插件的已安装/可安装/市场三个面板、工作台三页、收起控制栏和高级设置
+  模态层，共 30 个场景；检查交互控件矩形相交、`elementFromPoint` 命中对象、关键容器
+  横向溢出和文档级 overflow。扫描会识别滚动裁剪祖先，避免把模态内容区外不可见的控件误判
+  为覆盖固定底栏；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言输入框不被底栏或
+  已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
+  超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
+  可复现失败。
+- `npm run test:visual` 在本地生成 820px 插件页、1180px 服务商向导、1180px 高级设置模态层
+  与重命名弹窗 PNG 到 `dist/visual-qa/`，用于人工核对主题选择器、窄宽响应式、服务商卡片和
+  弹窗层级；隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`

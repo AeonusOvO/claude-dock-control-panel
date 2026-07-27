@@ -37,6 +37,7 @@ import {
   CLAUDE_PROVIDERS,
   findClaudeProvider,
   providerForPreset,
+  type ClaudeProviderGroupId,
   type ClaudeProviderId,
 } from '../shared/claude-providers';
 import {
@@ -72,6 +73,24 @@ interface TerminalView {
   /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
   pendingFrame: number;
   terminal: Terminal;
+}
+
+type AdvancedDraftControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+interface AdvancedDraftControlState {
+  checked?: boolean;
+  control: AdvancedDraftControl;
+  value: string;
+}
+
+interface AdvancedConnectionSnapshot {
+  authMode: SaveClaudeConfigInput['authMode'];
+  baseUrl: string;
+  controls: AdvancedDraftControlState[];
+  credential: string;
+  model: string;
+  modelFast: string;
+  providerId?: ClaudeProviderId;
 }
 
 const requiredElement = <T extends HTMLElement>(selector: string): T => {
@@ -173,6 +192,19 @@ const providerSpecialSetup = requiredElement<HTMLElement>('#connection-provider-
 const openProviderConsoleButton = requiredElement<HTMLButtonElement>('#open-provider-console');
 const openProviderDocsButton = requiredElement<HTMLButtonElement>('#open-provider-docs');
 const connectionAdvancedContent = requiredElement<HTMLElement>('#connection-advanced-content');
+const connectionAdvancedDialog = requiredElement<HTMLDialogElement>('#connection-advanced-dialog');
+const openConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
+  '#open-connection-advanced',
+);
+const closeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
+  '#close-connection-advanced',
+);
+const cancelConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
+  '#cancel-connection-advanced',
+);
+const completeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
+  '#complete-connection-advanced',
+);
 const curlOnboarding = requiredElement<HTMLElement>('#curl-onboarding');
 const converterHelp = requiredElement<HTMLElement>('#converter-help');
 const addRouterProviderButton = requiredElement<HTMLButtonElement>('#add-router-provider');
@@ -251,6 +283,8 @@ const smartGuidanceTitle = requiredElement<HTMLElement>('#smart-guidance-title')
 const smartGuidanceDetail = requiredElement<HTMLElement>('#smart-guidance-detail');
 const smartGuidanceActions = requiredElement<HTMLElement>('#smart-guidance-actions');
 const activityRail = requiredElement<HTMLElement>('#activity-rail');
+const workspace = requiredElement<HTMLElement>('#workspace');
+const controlPanel = requiredElement<HTMLElement>('#control-panel');
 const connectionRailDot = requiredElement<HTMLElement>('#connection-rail-dot');
 const connectionAdvice = requiredElement<HTMLElement>('#connection-advice');
 const connectionAdviceTitle = requiredElement<HTMLElement>('#connection-advice-title');
@@ -317,6 +351,7 @@ const claudeStates = new Map<string, ClaudeProjectState>();
 /** Conversation history per project folder, keyed by the lower-cased folder path. */
 const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
 const expandedFolders = new Set<string>();
+const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
 const historyLoadsInFlight = new Set<string>();
 let dragDepth = 0;
 let claudeRequestGeneration = 0;
@@ -324,6 +359,8 @@ let configFormSessionId = '';
 let connectionTestInProgress = false;
 let connectionEnvironmentReady = false;
 let selectedProviderId: ClaudeProviderId | undefined;
+let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
+let selectedRailTab: string | undefined = 'projects';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
@@ -545,7 +582,7 @@ const setAuthOptions = (
 
 const syncConnectionInteractivity = (): void => {
   providerPicker.setAttribute('aria-disabled', String(!connectionEnvironmentReady));
-  for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('button')) {
+  for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('.provider-card')) {
     button.disabled = !connectionEnvironmentReady || connectionTestInProgress;
   }
   for (const control of claudeConfigForm.querySelectorAll<
@@ -559,30 +596,72 @@ const syncConnectionInteractivity = (): void => {
   }
 };
 
-const moveProviderTools = (providerId: ClaudeProviderId): void => {
+const moveProviderTools = (providerId?: ClaudeProviderId): void => {
+  connectionAdvancedContent.append(
+    connectionAdvice,
+    gatewayDiscoverySection,
+    curlOnboarding,
+    routerManager,
+    converterHelp,
+    connectionHistorySection,
+    connectionGlossary,
+  );
   if (providerId === 'curl') {
     providerSpecialSetup.append(curlOnboarding);
-    connectionAdvancedContent.append(gatewayDiscoverySection, routerManager);
     return;
   }
   if (providerId === 'gateway') {
     providerSpecialSetup.append(gatewayDiscoverySection, routerManager);
-    connectionAdvancedContent.append(curlOnboarding);
-    return;
   }
-  connectionAdvancedContent.append(gatewayDiscoverySection, curlOnboarding, routerManager);
 };
 
-const renderProviderPicker = (): void => {
+const clearProviderSelection = (clearDraft = true): void => {
+  selectedProviderId = undefined;
+  claudePreset.value = '';
+  providerSetup.hidden = true;
+  claudeConfigForm.hidden = true;
+  connectionTestResult.hidden = true;
+  connectionRemedy.hidden = true;
+  if (clearDraft) {
+    claudeCredential.value = '';
+  }
+  moveProviderTools();
+  renderProviderPicker();
+  syncConnectionInteractivity();
+};
+
+function renderProviderPicker(): void {
   providerGroups.replaceChildren();
   const configuredPreset = claudeStates.get(workspaceState.activeSessionId)?.config.preset;
   for (const group of CLAUDE_PROVIDER_GROUPS) {
     const providers = CLAUDE_PROVIDERS.filter((provider) => provider.group === group.id);
+    const collapsed = collapsedProviderGroups.has(group.id);
     const section = document.createElement('section');
     section.className = 'provider-group';
-    const heading = document.createElement('strong');
+    section.dataset.collapsed = String(collapsed);
+
+    const toggle = document.createElement('button');
+    toggle.className = 'provider-group__toggle';
+    toggle.type = 'button';
+    toggle.setAttribute('aria-controls', `provider-group-${group.id}`);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    const heading = document.createElement('span');
     heading.className = 'provider-group__title';
     heading.textContent = group.label;
+    const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    arrow.setAttribute('class', 'provider-group__arrow');
+    arrow.setAttribute('viewBox', '0 0 24 24');
+    arrow.setAttribute('aria-hidden', 'true');
+    const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    arrowPath.setAttribute('d', 'm9 5 7 7-7 7');
+    arrow.append(arrowPath);
+    toggle.append(heading, arrow);
+
+    const content = document.createElement('div');
+    content.className = 'provider-group__content';
+    content.id = `provider-group-${group.id}`;
+    content.inert = collapsed;
+    content.setAttribute('aria-hidden', String(collapsed));
     const grid = document.createElement('div');
     grid.className = 'provider-card-grid';
     for (const provider of providers) {
@@ -609,22 +688,36 @@ const renderProviderPicker = (): void => {
           showToast('请先安装或更新 Claude Code。', 'error');
           return;
         }
-        const changed = selectedProviderId !== provider.id;
-        selectedProviderId = provider.id;
-        applyPresetUi(provider.id, false);
-        if (changed) {
-          claudeCredential.value = '';
-          connectionTestResult.hidden = true;
-          connectionRemedy.hidden = true;
+        if (selectedProviderId === provider.id) {
+          clearProviderSelection();
+          showToast('已取消服务商选择');
+          return;
         }
+        applyPresetUi(provider.id, false);
+        claudeCredential.value = '';
+        connectionTestResult.hidden = true;
+        connectionRemedy.hidden = true;
         renderProviderPicker();
       });
       grid.append(card);
     }
-    section.append(heading, grid);
+    content.append(grid);
+    toggle.addEventListener('click', () => {
+      const nextCollapsed = !collapsedProviderGroups.has(group.id);
+      if (nextCollapsed) {
+        collapsedProviderGroups.add(group.id);
+      } else {
+        collapsedProviderGroups.delete(group.id);
+      }
+      section.dataset.collapsed = String(nextCollapsed);
+      toggle.setAttribute('aria-expanded', String(!nextCollapsed));
+      content.inert = nextCollapsed;
+      content.setAttribute('aria-hidden', String(nextCollapsed));
+    });
+    section.append(toggle, content);
     providerGroups.append(section);
   }
-};
+}
 
 const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   const provider = findClaudeProvider(preset) ?? findClaudeProvider('custom');
@@ -724,6 +817,67 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
   clearCredentialButton.disabled = !config.credentialConfigured;
   configFormSessionId = state.sessionId;
   renderProviderPicker();
+};
+
+const captureAdvancedConnectionSnapshot = (): AdvancedConnectionSnapshot => ({
+  authMode: claudeAuthMode.value as SaveClaudeConfigInput['authMode'],
+  baseUrl: claudeBaseUrl.value,
+  controls: [
+    ...connectionAdvancedContent.querySelectorAll<AdvancedDraftControl>('input, select, textarea'),
+  ].map((control) => ({
+    checked: control instanceof HTMLInputElement ? control.checked : undefined,
+    control,
+    value: control.value,
+  })),
+  credential: claudeCredential.value,
+  model: claudeModel.value,
+  modelFast: claudeModelFast.value,
+  providerId: selectedProviderId,
+});
+
+const restoreAdvancedConnectionSnapshot = (snapshot: AdvancedConnectionSnapshot): void => {
+  if (snapshot.providerId) {
+    applyPresetUi(snapshot.providerId, true);
+  } else {
+    clearProviderSelection(false);
+  }
+  claudeBaseUrl.value = snapshot.baseUrl;
+  claudeModel.value = snapshot.model;
+  claudeModelFast.value = snapshot.modelFast;
+  claudeAuthMode.value = snapshot.authMode;
+  claudeCredential.value = snapshot.credential;
+  credentialField.hidden =
+    snapshot.authMode === 'existing' ||
+    snapshot.authMode === 'none' ||
+    snapshot.providerId === 'ollama';
+  for (const state of snapshot.controls) {
+    state.control.value = state.value;
+    if (state.control instanceof HTMLInputElement && state.checked !== undefined) {
+      state.control.checked = state.checked;
+    }
+  }
+  renderProviderPicker();
+  syncConnectionInteractivity();
+};
+
+const openAdvancedConnectionDialog = (): void => {
+  if (connectionAdvancedDialog.open) {
+    return;
+  }
+  advancedConnectionSnapshot = captureAdvancedConnectionSnapshot();
+  connectionAdvancedDialog.showModal();
+};
+
+const closeAdvancedConnectionDialog = (complete: boolean): void => {
+  if (!connectionAdvancedDialog.open) {
+    return;
+  }
+  if (!complete && advancedConnectionSnapshot) {
+    restoreAdvancedConnectionSnapshot(advancedConnectionSnapshot);
+  }
+  advancedConnectionSnapshot = undefined;
+  connectionAdvancedDialog.close(complete ? 'complete' : 'cancel');
+  openConnectionAdvancedButton.focus();
 };
 
 const renderClaudeState = (state: ClaudeProjectState): void => {
@@ -2023,12 +2177,7 @@ const handleConnectionRemedyAction = async (
       await runConnectionTest(false);
       break;
     case 'switch-provider':
-      selectedProviderId = undefined;
-      providerSetup.hidden = true;
-      connectionTestResult.hidden = true;
-      connectionRemedy.hidden = true;
-      claudeCredential.value = '';
-      renderProviderPicker();
+      clearProviderSelection();
       providerPicker.scrollIntoView({ behavior: 'smooth', block: 'start' });
       break;
   }
@@ -2118,11 +2267,21 @@ const setConnectionPolling = (enabled: boolean): void => {
   }
 };
 
-function selectRailTab(tab: string): void {
+const applyRailTab = (tab?: string): void => {
+  selectedRailTab = tab;
+  const collapsed = tab === undefined;
+  workspace.classList.toggle('workspace--rail-collapsed', collapsed);
+  workspace.dataset.railPanel = tab ?? 'collapsed';
+  controlPanel.inert = collapsed;
+  controlPanel.setAttribute('aria-hidden', String(collapsed));
+  panelResizer.tabIndex = collapsed ? -1 : 0;
   for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
     const selected = button.dataset.railTab === tab;
     button.classList.toggle('activity-rail__button--active', selected);
+    button.setAttribute('aria-expanded', String(selected));
     button.setAttribute('aria-pressed', String(selected));
+    const label = button.querySelector<HTMLElement>('span:not(.activity-rail__dot)')?.textContent;
+    button.title = selected ? `${label ?? '侧栏'}（再次点击可收起侧栏）` : (label ?? '打开侧栏');
   }
   for (const page of document.querySelectorAll<HTMLElement>('[data-rail-page]')) {
     page.classList.toggle('rail-page--active', page.dataset.railPage === tab);
@@ -2131,7 +2290,16 @@ function selectRailTab(tab: string): void {
   if (tab === 'plugins') {
     void loadPluginCatalog(false);
   }
+  scheduleActiveTerminalFit();
+};
+
+function selectRailTab(tab: string): void {
+  applyRailTab(tab);
 }
+
+const toggleRailTab = (tab: string): void => {
+  applyRailTab(selectedRailTab === tab ? undefined : tab);
+};
 
 const selectWorkbenchPage = (page: string): void => {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
@@ -3670,10 +3838,11 @@ function renderWorkspace(state: WorkspaceState): void {
     lastClaudeSessionId = state.activeSessionId;
     configFormSessionId = '';
     connectionEnvironmentReady = false;
-    selectedProviderId = undefined;
-    providerSetup.hidden = true;
-    claudeConfigForm.hidden = true;
-    connectionRemedy.hidden = true;
+    advancedConnectionSnapshot = undefined;
+    if (connectionAdvancedDialog.open) {
+      connectionAdvancedDialog.close('project-changed');
+    }
+    clearProviderSelection();
     gatewayDiagnostics = undefined;
     lastCurlAnalysis = undefined;
     curlInput.value = '';
@@ -4034,7 +4203,7 @@ routeHealthAction.addEventListener('click', () => {
 });
 for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
   button.addEventListener('click', () => {
-    selectRailTab(button.dataset.railTab ?? 'projects');
+    toggleRailTab(button.dataset.railTab ?? 'projects');
   });
 }
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-tab]')) {
@@ -4087,6 +4256,20 @@ terminalThemeSelect.addEventListener('change', () => {
 });
 conversationRenameCancel.addEventListener('click', () => {
   conversationRenameDialog.close('cancel');
+});
+openConnectionAdvancedButton.addEventListener('click', openAdvancedConnectionDialog);
+completeConnectionAdvancedButton.addEventListener('click', () => {
+  closeAdvancedConnectionDialog(true);
+});
+cancelConnectionAdvancedButton.addEventListener('click', () => {
+  closeAdvancedConnectionDialog(false);
+});
+closeConnectionAdvancedButton.addEventListener('click', () => {
+  closeAdvancedConnectionDialog(false);
+});
+connectionAdvancedDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeAdvancedConnectionDialog(false);
 });
 footerConnection.addEventListener('click', () => {
   setWorkbenchOpen(false);

@@ -38,13 +38,16 @@
       </div>
     </header>
 
-    <main class="workspace">
+    <main class="workspace" id="workspace">
       <nav class="activity-rail" id="activity-rail" aria-label="主导航">
         <button
           class="activity-rail__button activity-rail__button--active"
           data-rail-tab="projects"
           type="button"
+          aria-controls="control-panel"
+          aria-expanded="true"
           aria-pressed="true"
+          title="项目（再次点击可收起侧栏）"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -57,7 +60,10 @@
           class="activity-rail__button"
           data-rail-tab="connection"
           type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
           aria-pressed="false"
+          title="接入"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M10 14a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.3 7" />
@@ -70,7 +76,10 @@
           class="activity-rail__button"
           data-rail-tab="plugins"
           type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
           aria-pressed="false"
+          title="插件"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -82,7 +91,7 @@
         </button>
       </nav>
 
-      <aside class="control-panel">
+      <aside class="control-panel" id="control-panel">
         <section class="rail-page rail-page--active" data-rail-page="projects">
           <section class="session-card" aria-labelledby="session-heading">
             <div class="section-label">
@@ -663,10 +672,20 @@
             </dl>
           </details>
 
-          <details class="connection-advanced" id="connection-advanced">
-            <summary>高级设置与诊断工具</summary>
-            <div id="connection-advanced-content"></div>
-          </details>
+          <section class="connection-advanced-launch" aria-labelledby="connection-advanced-title">
+            <div>
+              <strong id="connection-advanced-title">高级设置</strong>
+              <span>网关、cURL 导入、路由器管理、诊断与接入历史。</span>
+            </div>
+            <button
+              id="open-connection-advanced"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="connection-advanced-dialog"
+            >
+              打开高级设置
+            </button>
+          </section>
         </section>
 
         <section class="rail-page" data-rail-page="plugins">
@@ -1135,6 +1154,46 @@
       </button>
       <button data-history-context-action="delete" role="menuitem" type="button">删除记录</button>
     </div>
+
+    <dialog
+      class="connection-advanced-dialog"
+      id="connection-advanced-dialog"
+      aria-labelledby="connection-advanced-dialog-title"
+      aria-describedby="connection-advanced-dialog-description"
+    >
+      <div class="connection-advanced-dialog__shell">
+        <header>
+          <div>
+            <span class="step-kicker">接入工作台</span>
+            <strong id="connection-advanced-dialog-title">高级设置与诊断工具</strong>
+            <p id="connection-advanced-dialog-description">
+              可在这里完成接口识别、网关诊断、路由器管理和历史恢复。
+            </p>
+          </div>
+          <button
+            class="connection-advanced-dialog__close"
+            id="close-connection-advanced"
+            type="button"
+            aria-label="取消并关闭高级设置"
+            title="取消并关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <p class="connection-advanced-dialog__notice">
+          “取消”会恢复本次打开窗口前尚未保存的输入；安装、卸载、启动、停止、保存路由器服务商等已执行操作会立即生效。
+        </p>
+        <div id="connection-advanced-content"></div>
+        <footer>
+          <button id="cancel-connection-advanced" type="button">取消</button>
+          <button class="dialog-primary" id="complete-connection-advanced" type="button">
+            完成
+          </button>
+        </footer>
+      </div>
+    </dialog>
 
     <dialog class="conversation-rename-dialog" id="conversation-rename-dialog">
       <form method="dialog">
