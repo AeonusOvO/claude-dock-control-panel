@@ -290,6 +290,7 @@ let pluginLoadInProgress = false;
 let pluginMutationInProgress = false;
 let softwareUpdates: SoftwareUpdateState | undefined;
 let softwareUpdateInProgress = false;
+let pendingComposerFocusSessionId = '';
 let conversationContextTarget:
   | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
   | { kind: 'running'; status: TerminalStatus }
@@ -702,10 +703,8 @@ async function resumeStoredConversation(
     }
     const label = session.sessionName || session.sessionId.slice(0, 8);
     showToast(`已在新对话中恢复 ${label}`);
-    window.setTimeout(() => {
-      fitActiveTerminal();
-      focusComposer();
-    }, 60);
+    scheduleActiveTerminalFit();
+    requestComposerFocus(result.state.activeSessionId);
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
   } finally {
@@ -2263,9 +2262,9 @@ const showTerminalContextMenu = (event: MouseEvent): void => {
   terminalContextMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
 };
 
-const createTerminalView = (sessionId: string): TerminalView => {
+const createTerminalView = (sessionId: string, active: boolean): TerminalView => {
   const container = document.createElement('div');
-  container.className = 'project-terminal';
+  container.className = active ? 'project-terminal project-terminal--active' : 'project-terminal';
   container.dataset.sessionId = sessionId;
   terminalStage.prepend(container);
 
@@ -2376,13 +2375,21 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
   });
 };
 
-const ensureTerminalView = (sessionId: string): TerminalView =>
-  terminalViews.get(sessionId) ?? createTerminalView(sessionId);
+const ensureTerminalView = (sessionId: string, active: boolean): TerminalView =>
+  terminalViews.get(sessionId) ?? createTerminalView(sessionId, active);
 
-const fitActiveTerminal = (): void => {
+const fitActiveTerminal = (): boolean => {
   const view = terminalViews.get(workspaceState.activeSessionId);
-  if (!view) {
-    return;
+  const bounds = view?.container.getBoundingClientRect();
+  if (
+    !view ||
+    !view.container.isConnected ||
+    !view.container.classList.contains('project-terminal--active') ||
+    !bounds ||
+    bounds.width < 1 ||
+    bounds.height < 1
+  ) {
+    return false;
   }
 
   try {
@@ -2392,9 +2399,42 @@ const fitActiveTerminal = (): void => {
       view.terminal.cols,
       view.terminal.rows,
     );
+    return true;
   } catch {
-    // A resize can race with initial layout; the ResizeObserver will retry.
+    // A resize can race with initial layout; the bounded frame scheduler will retry.
+    return false;
   }
+};
+
+/*
+ * xterm must measure character cells after its active container is visible. A single fixed timeout
+ * is unreliable on a cold start, after a GPU reset, or when the window comes back from the tray.
+ * Re-fitting over a few paint frames lets CSS layout and xterm's own observers settle without
+ * leaving an unbounded timer running.
+ */
+let terminalFitGeneration = 0;
+const scheduleActiveTerminalFit = (): void => {
+  const expectedSessionId = workspaceState.activeSessionId;
+  const generation = ++terminalFitGeneration;
+  let attemptsRemaining = 4;
+
+  const fitOnNextFrame = (): void => {
+    if (
+      generation !== terminalFitGeneration ||
+      workspaceState.activeSessionId !== expectedSessionId ||
+      !expectedSessionId
+    ) {
+      return;
+    }
+
+    fitActiveTerminal();
+    attemptsRemaining -= 1;
+    if (attemptsRemaining > 0) {
+      window.requestAnimationFrame(fitOnNextFrame);
+    }
+  };
+
+  window.requestAnimationFrame(fitOnNextFrame);
 };
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -2410,7 +2450,7 @@ const setPanelWidth = (value: number): void => {
   );
   document.documentElement.style.setProperty('--rail-w', `${width}px`);
   localStorage.setItem('claudedock.panelWidth', String(width));
-  window.requestAnimationFrame(fitActiveTerminal);
+  scheduleActiveTerminalFit();
 };
 
 const setDrawerWidth = (value: number): void => {
@@ -2418,7 +2458,15 @@ const setDrawerWidth = (value: number): void => {
   const width = clamp(value, minimum, Math.max(minimum, Math.min(760, window.innerWidth - 140)));
   document.documentElement.style.setProperty('--drawer-w', `${width}px`);
   localStorage.setItem('claudedock.drawerWidth', String(width));
-  window.requestAnimationFrame(fitActiveTerminal);
+  scheduleActiveTerminalFit();
+};
+
+const activeResizeCleanups = new Set<() => void>();
+
+const cancelActiveResizes = (): void => {
+  for (const cleanup of [...activeResizeCleanups]) {
+    cleanup();
+  }
 };
 
 const installResizer = (
@@ -2428,21 +2476,58 @@ const installResizer = (
   direction: 1 | -1,
 ): void => {
   handle.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary || event.button !== 0) {
+      return;
+    }
+
+    // Only one captured resize may exist. This also clears a capture whose pointerup was lost.
+    cancelActiveResizes();
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = current();
-    handle.setPointerCapture(event.pointerId);
-    document.body.classList.add('is-resizing');
+    const pointerId = event.pointerId;
+    let finished = false;
     const move = (moveEvent: PointerEvent): void => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
       apply(startWidth + (moveEvent.clientX - startX) * direction);
     };
     const finish = (): void => {
+      if (finished) {
+        return;
+      }
+      finished = true;
       handle.removeEventListener('pointermove', move);
-      document.body.classList.remove('is-resizing');
+      handle.removeEventListener('pointerup', finish);
+      handle.removeEventListener('pointercancel', finish);
+      handle.removeEventListener('lostpointercapture', finish);
+      activeResizeCleanups.delete(finish);
+      try {
+        if (handle.hasPointerCapture(pointerId)) {
+          handle.releasePointerCapture(pointerId);
+        }
+      } catch {
+        // The OS may already have revoked capture while the window was being hidden.
+      } finally {
+        if (activeResizeCleanups.size === 0) {
+          document.body.classList.remove('is-resizing');
+        }
+        scheduleActiveTerminalFit();
+      }
     };
+
     handle.addEventListener('pointermove', move);
-    handle.addEventListener('pointerup', finish, { once: true });
-    handle.addEventListener('pointercancel', finish, { once: true });
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    handle.addEventListener('lostpointercapture', finish);
+    activeResizeCleanups.add(finish);
+    document.body.classList.add('is-resizing');
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {
+      finish();
+    }
   });
   handle.addEventListener('keydown', (event) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
@@ -2535,10 +2620,48 @@ const setComposerEnabled = (enabled: boolean): void => {
   composerInput.placeholder = enabled ? COMPOSER_PLACEHOLDER : '终端未运行；先启动对话后再输入';
 };
 
-const focusComposer = (): void => {
-  if (!composerInput.disabled) {
-    composerInput.focus();
+const focusComposer = (): boolean => {
+  if (composerInput.disabled) {
+    return false;
   }
+  composerInput.focus({ preventScroll: true });
+  return document.activeElement === composerInput;
+};
+
+/*
+ * Opening a project can resolve before its final `running` status has reached the renderer. Keep
+ * the intent to focus, then fulfil it only after the matching active session is actually writable.
+ */
+const flushPendingComposerFocus = (): void => {
+  const status = activeStatus();
+  if (
+    !pendingComposerFocusSessionId ||
+    status?.id !== pendingComposerFocusSessionId ||
+    status.phase !== 'running' ||
+    composerInput.disabled
+  ) {
+    return;
+  }
+
+  const expectedSessionId = pendingComposerFocusSessionId;
+  window.requestAnimationFrame(() => {
+    const latestStatus = activeStatus();
+    if (
+      latestStatus?.id === expectedSessionId &&
+      latestStatus.phase === 'running' &&
+      focusComposer()
+    ) {
+      pendingComposerFocusSessionId = '';
+    }
+  });
+};
+
+const requestComposerFocus = (sessionId = workspaceState.activeSessionId): void => {
+  if (!sessionId) {
+    return;
+  }
+  pendingComposerFocusSessionId = sessionId;
+  flushPendingComposerFocus();
 };
 
 /**
@@ -2733,10 +2856,8 @@ const activateProject = async (sessionId: string): Promise<void> => {
     return;
   }
   renderWorkspace(result.state);
-  window.setTimeout(() => {
-    fitActiveTerminal();
-    focusComposer();
-  }, 40);
+  scheduleActiveTerminalFit();
+  requestComposerFocus(result.state.activeSessionId);
 };
 
 const closeProject = async (status: TerminalStatus): Promise<void> => {
@@ -2764,10 +2885,8 @@ const openConversation = async (projectPath: string): Promise<void> => {
     return;
   }
   showToast(`已在 ${projectNameFromPath(projectPath)} 新开一个对话`);
-  window.setTimeout(() => {
-    fitActiveTerminal();
-    focusComposer();
-  }, 60);
+  scheduleActiveTerminalFit();
+  requestComposerFocus(result.state.activeSessionId);
 };
 
 const renameConversation = async (status: TerminalStatus): Promise<void> => {
@@ -3088,13 +3207,18 @@ function renderProjectList(): void {
 function renderWorkspace(state: WorkspaceState): void {
   workspaceState = state;
   const validSessionIds = new Set(state.sessions.map((status) => status.id));
+  if (
+    pendingComposerFocusSessionId &&
+    (pendingComposerFocusSessionId !== state.activeSessionId ||
+      !validSessionIds.has(pendingComposerFocusSessionId))
+  ) {
+    pendingComposerFocusSessionId = '';
+  }
 
   for (const status of state.sessions) {
-    const view = ensureTerminalView(status.id);
-    view.container.classList.toggle(
-      'project-terminal--active',
-      status.id === state.activeSessionId,
-    );
+    const active = status.id === state.activeSessionId;
+    const view = ensureTerminalView(status.id, active);
+    view.container.classList.toggle('project-terminal--active', active);
   }
 
   for (const [sessionId, view] of terminalViews) {
@@ -3120,6 +3244,7 @@ function renderWorkspace(state: WorkspaceState): void {
   } else {
     renderNoActiveSession();
   }
+  flushPendingComposerFocus();
   if (state.activeSessionId !== lastClaudeSessionId) {
     lastClaudeSessionId = state.activeSessionId;
     configFormSessionId = '';
@@ -3149,7 +3274,7 @@ function renderWorkspace(state: WorkspaceState): void {
       renderConnectionHistory();
     }
   }
-  window.requestAnimationFrame(fitActiveTerminal);
+  scheduleActiveTerminalFit();
 }
 
 const applyTerminalStatus = (status: TerminalStatus): void => {
@@ -3196,10 +3321,8 @@ const addProject = async (directoryPath: string): Promise<void> => {
   try {
     const result = await window.controlPanel.addProject(directoryPath);
     if (handleWorkspaceResult(result, directoryPath)) {
-      window.setTimeout(() => {
-        fitActiveTerminal();
-        focusComposer();
-      }, 60);
+      scheduleActiveTerminalFit();
+      requestComposerFocus(result.state.activeSessionId);
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : '';
@@ -3257,7 +3380,7 @@ const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
     if (mode === 'resume') {
       terminalViews.get(status.id)?.terminal.focus();
     } else {
-      focusComposer();
+      requestComposerFocus(status.id);
     }
   } catch {
     showToast('无法启动 Claude Code。', 'error');
@@ -3755,7 +3878,10 @@ restartButton.addEventListener('click', async () => {
   }
   const result = await window.controlPanel.restartTerminal(status.id);
   terminalViews.get(status.id)?.terminal.clear();
-  handleOperation(result, result.ok ? '终端已重启' : undefined);
+  if (handleOperation(result, result.ok ? '终端已重启' : undefined)) {
+    scheduleActiveTerminalFit();
+    requestComposerFocus(status.id);
+  }
 });
 toggleButton.addEventListener('click', async () => {
   const status = activeStatus();
@@ -3766,8 +3892,11 @@ toggleButton.addEventListener('click', async () => {
   if (status.phase === 'running') {
     handleOperation(await window.controlPanel.stopTerminal(status.id), '终端已停止');
   } else {
-    handleOperation(await window.controlPanel.startTerminal(status.id), '终端已启动');
-    window.setTimeout(fitActiveTerminal, 60);
+    const result = await window.controlPanel.startTerminal(status.id);
+    if (handleOperation(result, '终端已启动')) {
+      scheduleActiveTerminalFit();
+      requestComposerFocus(status.id);
+    }
   }
 });
 clearTerminalButton.addEventListener('click', () => {
@@ -3883,9 +4012,24 @@ document.addEventListener('pointerdown', (event) => {
   }
 });
 window.addEventListener('blur', () => {
+  cancelActiveResizes();
   hideTerminalContextMenu();
   hideConversationContextMenu();
   hideHistoryContextMenu();
+});
+window.addEventListener('focus', () => {
+  // Tray restoration is a fresh layout/focus boundary even when Chromium missed the earlier blur.
+  cancelActiveResizes();
+  scheduleActiveTerminalFit();
+  flushPendingComposerFocus();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    scheduleActiveTerminalFit();
+    flushPendingComposerFocus();
+  } else {
+    cancelActiveResizes();
+  }
 });
 
 document.addEventListener('dragenter', (event) => {
@@ -3930,11 +4074,13 @@ document.addEventListener('drop', (event) => {
 });
 
 const resizeObserver = new ResizeObserver(() => {
-  window.requestAnimationFrame(fitActiveTerminal);
+  scheduleActiveTerminalFit();
 });
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
+  cancelActiveResizes();
+  terminalFitGeneration += 1;
   resizeObserver.disconnect();
   if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
@@ -3960,8 +4106,6 @@ void (async () => {
     handleOperation(await window.controlPanel.startTerminal(status.id));
   }
   void loadConnectionHistory();
-  window.setTimeout(() => {
-    fitActiveTerminal();
-    focusComposer();
-  }, 80);
+  scheduleActiveTerminalFit();
+  requestComposerFocus(status.id);
 })();

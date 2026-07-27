@@ -1,0 +1,38 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
+const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
+
+describe('renderer interaction lifecycle contract', () => {
+  it('always releases resize pointer capture across interrupted window lifecycles', () => {
+    expect(rendererSource).toContain("handle.addEventListener('lostpointercapture', finish)");
+    expect(rendererSource).toContain('handle.releasePointerCapture(pointerId)');
+    expect(rendererSource).toContain("window.addEventListener('blur', () => {");
+    expect(rendererSource).toContain("document.addEventListener('visibilitychange', () => {");
+    expect(rendererSource).toContain('cancelActiveResizes();');
+  });
+
+  it('opens the active xterm visibly and retries fitting across paint frames', () => {
+    expect(rendererSource).toMatch(
+      /container\.className = active\s*\?\s*'project-terminal project-terminal--active'/,
+    );
+    expect(rendererSource).toContain('const scheduleActiveTerminalFit = (): void => {');
+    expect(rendererSource).toContain('let attemptsRemaining = 4;');
+    expect(rendererSource).toContain('view?.container.getBoundingClientRect()');
+  });
+
+  it('defers composer focus until the matching terminal is running', () => {
+    expect(rendererSource).toContain("status.phase !== 'running'");
+    expect(rendererSource).toContain('pendingComposerFocusSessionId = sessionId;');
+    expect(rendererSource).toContain('flushPendingComposerFocus();');
+  });
+
+  it('does not animate interactive rail pages through a transformed hit-test layer', () => {
+    const pageAnimation = rendererStyles.match(/@keyframes railPageEnter\s*\{(?<body>[\s\S]*?)\n\}/)
+      ?.groups?.body;
+
+    expect(pageAnimation).toBeDefined();
+    expect(pageAnimation).not.toContain('transform:');
+  });
+});

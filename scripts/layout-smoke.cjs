@@ -20,6 +20,22 @@ const inspectLayout = `
   const controls = [...document.querySelectorAll(selector)].filter(
     (element) => visible(element) && !element.classList.contains('workbench-scrim'),
   );
+  const hitTargetMisses = controls
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      return x >= 0 && x < innerWidth && y >= 0 && y < innerHeight;
+    })
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      return !hit || !element.contains(hit);
+    })
+    .map((element) => element.id || element.textContent.trim().slice(0, 24));
   const overlaps = [];
   for (let leftIndex = 0; leftIndex < controls.length; leftIndex += 1) {
     const left = controls[leftIndex];
@@ -66,6 +82,7 @@ const inspectLayout = `
   return {
     covered,
     documentOverflow: document.documentElement.scrollWidth > innerWidth + 2,
+    hitTargetMisses,
     overlaps,
     overflow,
   };
@@ -136,6 +153,7 @@ app.whenReady().then(async () => {
   const failures = results.filter(
     (result) =>
       result.documentOverflow ||
+      result.hitTargetMisses.length > 0 ||
       result.overlaps.length > 0 ||
       result.overflow.length > 0 ||
       result.covered.length > 0,

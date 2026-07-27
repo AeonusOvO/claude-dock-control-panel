@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Windows 项目终端与 Claude Code 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,

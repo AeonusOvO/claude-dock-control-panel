@@ -97,6 +97,15 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `requestAnimationFrame` 把队列合成一次 `terminal.write`，缓冲上限 512KB（超限丢弃最旧
   分块，xterm 的 scrollback 随后也会丢掉它们）。销毁视图的两处（`renderWorkspace` 清理过期
   会话、`beforeunload`）都要 `cancelAnimationFrame(view.pendingFrame)`。
+- **可见后布局**：活动 xterm 的容器在 `terminal.open()` 前就带
+  `project-terminal--active`；会话切换、宽度变化、`ResizeObserver`、窗口重新获得焦点或从
+  后台恢复时，`scheduleActiveTerminalFit` 会用带 generation 的四个连续绘制帧做有界重试。
+  `fitActiveTerminal` 在容器未连接、未激活或矩形为 0 时直接返回，避免把隐藏态的错误网格
+  回传给 PTY。
+- **全局指针捕获收口**：两个宽度分隔条共用 `activeResizeCleanups`。正常抬起、系统取消、
+  `lostpointercapture`、窗口失焦、页面隐藏和重新聚焦都会调用幂等清理，显式
+  `releasePointerCapture` 并移除 `body.is-resizing`。这是窗口内所有按钮、下拉框、textarea
+  偶发同时失去命中响应的统一修复边界。
 - 输入框的 `Ctrl+A` / `Shift+←→` / 拖选 / `Ctrl+Z` / IME 全部是 `<textarea>` 原生行为，
   **没有对应代码**。需要实现的只有发送、历史与自动增高，见
   `src/shared/composer-input.ts` 与 `src/shared/composer-history.ts`。
@@ -444,7 +453,9 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
   `Ctrl+V` 从主进程读取最多 5 MiB 文本并写入当前 PTY。右键菜单复用同一受限 API，并提供
   全选和只清除 xterm 显示。
-- 会话未在运行时输入框禁用并更换 placeholder；启动会话、切项目等操作完成后焦点交给输入框。
+- 会话未在运行时输入框禁用并更换 placeholder；启动会话、切项目等操作记录目标 session ID，
+  renderer 只在该 session 仍为活动会话且 phase 已变为 `running` 后于下一绘制帧聚焦输入框。
+  固定 40/60/80ms 延时已删除，避免 PTY 冷启动慢时焦点请求落在 disabled textarea 上后丢失。
 - 控制栏与工作台宽度写入 renderer `localStorage`；这只保存像素宽度，不包含项目、命令或
   终端内容。窗口缩到 900px 以下时会重新夹紧宽度；CSS 在 900/850px 和 700px 高度设置
   独立断点，避免工具栏、状态栏、插件操作区和安装来源控件重叠。
@@ -481,14 +492,18 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - `tests/composer-input.test.ts` / `tests/composer-history.test.ts` 覆盖输入框的两个纯模块：
   多行提交必须是 `\x0a` 连接的 `body` 加上单独的 `\r` `submit` 两段，历史的去重、上限与
   游标行为。
+- `tests/renderer-interaction.test.ts` 固化渲染层交互生命周期：分隔条必须显式释放捕获并覆盖
+  失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
+  的进场动画不得使用 `transform`。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据）变化就新增、只有网关状态变化不新增、明文密钥不得出现在
   磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、Windows 路径大小写
   不敏感、条数上限、文件损坏后回落到空列表。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/接入、插件的已安装/可安装/市场三个面板及工作台三页，检查交互控件矩形相交、
-  关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言
-  输入框不被底栏或已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。
+  `elementFromPoint` 命中对象、关键容器横向溢出和文档级 overflow；遮罩层与抽屉的有意叠放
+  不计为控件重叠。此外单独断言输入框不被底栏或已打开的工作台抽屉覆盖——两者都不是可聚焦
+  控件，通用相交扫描发现不了。
 - `npm run test:visual` 在本地生成 820px 插件页与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
   人工核对主题选择器、窄宽响应式和弹窗层级；图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
