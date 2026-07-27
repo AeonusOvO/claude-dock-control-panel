@@ -323,7 +323,6 @@ const connectionHistoryCount = requiredElement<HTMLElement>('#connection-history
 const historyContextMenu = requiredElement<HTMLElement>('#history-context-menu');
 const saveClaudeConfigButton = requiredElement<HTMLButtonElement>('#save-claude-config');
 
-const connectionHistorySection = requiredElement<HTMLElement>('#connection-history');
 const connectionGlossary = requiredElement<HTMLElement>('.connection-glossary');
 
 connectionAdvancedContent.append(
@@ -332,7 +331,6 @@ connectionAdvancedContent.append(
   curlOnboarding,
   routerManager,
   converterHelp,
-  connectionHistorySection,
   connectionGlossary,
 );
 claudePreset.replaceChildren(
@@ -603,7 +601,6 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     curlOnboarding,
     routerManager,
     converterHelp,
-    connectionHistorySection,
     connectionGlossary,
   );
   if (providerId === 'curl') {
@@ -4058,13 +4055,26 @@ const formatHistoryTimestamp = (savedAt: number): string =>
     month: '2-digit',
   });
 
+const historyAuthModeLabel = (authMode: ClaudeConnectionHistoryEntry['authMode']): string => {
+  switch (authMode) {
+    case 'apiKey':
+      return 'API Key';
+    case 'authToken':
+      return 'Bearer';
+    case 'existing':
+      return '现有登录';
+    case 'none':
+      return '无认证';
+  }
+};
+
 const renderConnectionHistory = (): void => {
   connectionHistoryList.replaceChildren();
   connectionHistoryEmpty.hidden = connectionHistoryEntries.length > 0;
   connectionHistoryCount.textContent =
     connectionHistoryEntries.length > 0
-      ? `${connectionHistoryEntries.length} 条记录 · 点击恢复，右侧 × 删除`
-      : '每次保存都会记录，点击即可一键恢复。';
+      ? `${connectionHistoryEntries.length} 条历史配置 · 点击恢复全部参数`
+      : '记录曾填写的接口、网关和模型参数，点击即可一键恢复。';
 
   for (const entry of connectionHistoryEntries) {
     const item = document.createElement('li');
@@ -4077,17 +4087,34 @@ const renderConnectionHistory = (): void => {
     restore.title = '恢复这条接入配置';
 
     const title = document.createElement('strong');
-    title.textContent = `${presetLabel(entry.preset)} · ${entry.model || '默认模型'}`;
-    const detail = document.createElement('span');
-    detail.textContent = entry.baseUrl || 'Anthropic 官方端点';
+    title.textContent = presetLabel(entry.preset);
+    const parameters = document.createElement('span');
+    parameters.className = 'connection-history__parameters';
+    const appendParameter = (labelText: string, valueText: string): void => {
+      const parameter = document.createElement('span');
+      parameter.className = 'connection-history__parameter';
+      const label = document.createElement('span');
+      label.textContent = labelText;
+      const value = document.createElement('code');
+      value.textContent = valueText;
+      parameter.append(label, value);
+      parameters.append(parameter);
+    };
+    appendParameter('接口 / 网关', entry.baseUrl || 'Anthropic 官方端点');
+    if (entry.gatewayEndpoint && entry.gatewayEndpoint !== entry.baseUrl) {
+      appendParameter('检测网关', entry.gatewayEndpoint);
+    }
+    appendParameter('主模型', entry.model || '默认模型');
+    appendParameter('快速模型', entry.modelFast || entry.model || '跟随主模型');
     const meta = document.createElement('span');
     meta.className = 'connection-history__meta';
     meta.textContent = [
       formatHistoryTimestamp(entry.savedAt),
+      historyAuthModeLabel(entry.authMode),
       entry.credentialConfigured ? '含凭据' : '无凭据',
       GATEWAY_STATE_LABELS[entry.gatewayState],
     ].join(' · ');
-    restore.append(title, detail, meta);
+    restore.append(title, parameters, meta);
 
     const remove = document.createElement('button');
     remove.className = 'connection-history__delete';

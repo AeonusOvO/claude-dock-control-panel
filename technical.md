@@ -168,6 +168,10 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   少一条历史不值得让保存失败。`applyConnectionHistory` 走的是同一个 `saveConfig`，
   所以恢复和手工保存的路径完全一致。历史条目 ID 由主进程用
   `/^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/` 校验后才接受。
+- renderer 将历史作为主流程组件固定在高级设置入口与模型表单之间，不再把它移动进高级
+  `<dialog>`。每条恢复按钮显式渲染 `baseUrl`（接口/网关）、`gatewayEndpoint`（与基址不同时）、
+  `model`、`modelFast`、认证方式、凭据布尔值和保存时网关状态；列表在 360px 高度内独立滚动，
+  长地址和模型名允许断行。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
 - 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
@@ -227,7 +231,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 高级设置使用原生模态 `<dialog>` 和唯一一组原有工具节点。打开时保存服务商草稿及模态层
   内所有 `input/select/textarea` 的值与勾选状态；“取消”、关闭按钮和 `Esc` 恢复快照，
   “完成”保留当前输入。Router 安装/卸载/启停与 Provider 保存仍走既有即时 IPC，不能伪装
-  成可回滚事务，界面在操作区上方明确说明这一边界。
+  成可回滚事务，界面在操作区上方明确说明这一边界。接入历史不属于高级诊断工具，因此不进入
+  快照范围，也不会随 Router/cURL 工具节点移动。
 - Kimi 开放平台与 Kimi Code 会员分为两个目录项，明确阻止密钥/基址混用；SiliconFlow 按其
   Claude Code 文档使用 `apiKey`（`x-api-key`）；Ollama 使用不落盘的 `ollama` 占位令牌。
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
@@ -544,7 +549,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
   的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让；统一刷新
   必须在首屏后异步启动，三类更新入口默认隐藏；服务商反选、分组折叠、1/2/3 列容器查询、
-  高级设置快照式取消和活动栏二次点击收起也作为源码/结构契约锁定。
+  高级设置快照式取消、历史配置位于高级设置与模型表单之间，以及活动栏二次点击收起也作为
+  源码/结构契约锁定。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
@@ -565,9 +571,10 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败。
-- `npm run test:visual` 在本地生成 820px 插件页、1180px 服务商向导、1180px 高级设置模态层
-  与重命名弹窗 PNG 到 `dist/visual-qa/`，用于人工核对主题选择器、窄宽响应式、服务商卡片和
-  弹窗层级；隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
+- `npm run test:visual` 在本地生成 820px 插件页、1180px 服务商向导、1180px 历史配置组件、
+  1180px 高级设置模态层与重命名弹窗 PNG 到 `dist/visual-qa/`，用于人工核对主题选择器、
+  窄宽响应式、服务商卡片、历史参数和弹窗层级；隐藏窗口截图会先丢弃一次未稳定合成帧，
+  图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`

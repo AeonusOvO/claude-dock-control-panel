@@ -3195,6 +3195,8 @@ kbd {
   gap: 6px;
   list-style: none;
   margin: 0;
+  max-height: 360px;
+  overflow-y: auto;
   padding: 0;
 }
 
@@ -3240,6 +3242,41 @@ kbd {
   max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.connection-history__restore .connection-history__parameters {
+  display: grid;
+  gap: 3px;
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  width: 100%;
+}
+
+.connection-history__parameter {
+  align-items: baseline;
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: 72px minmax(0, 1fr);
+  max-width: 100%;
+  white-space: normal;
+}
+
+.connection-history__parameter > span {
+  color: var(--text-dim);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.connection-history__parameter code {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .connection-history__meta {

@@ -505,11 +505,43 @@
             </div>
           </section>
 
+          <section class="connection-advanced-launch" aria-labelledby="connection-advanced-title">
+            <div>
+              <strong id="connection-advanced-title">高级设置</strong>
+              <span>网关检测、cURL 导入、路由器管理与接入诊断。</span>
+            </div>
+            <button
+              id="open-connection-advanced"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="connection-advanced-dialog"
+            >
+              打开高级设置
+            </button>
+          </section>
+
+          <section
+            class="connection-history"
+            id="connection-history"
+            aria-labelledby="connection-history-title"
+          >
+            <div class="connection-history__heading">
+              <strong id="connection-history-title">选择历史配置</strong>
+              <span id="connection-history-count">
+                记录曾填写的接口、网关和模型参数，点击即可一键恢复。
+              </span>
+            </div>
+            <p class="connection-history__empty" id="connection-history-empty">
+              还没有历史配置；完成一次保存后，这里会记录接口、网关和模型参数。
+            </p>
+            <ul class="connection-history__list" id="connection-history-list"></ul>
+          </section>
+
           <form id="claude-config-form" hidden>
             <div class="step-heading">
               <span class="step-number">2</span>
               <div>
-                <strong>填写凭据与模型</strong>
+                <strong>选择模型并填写凭据</strong>
                 <span>密钥只交给主进程加密保存，界面不会回显已保存内容。</span>
               </div>
             </div>
@@ -635,17 +667,6 @@
             </div>
           </form>
 
-          <section class="connection-history" id="connection-history">
-            <div class="connection-history__heading">
-              <strong>接入历史记录</strong>
-              <span id="connection-history-count">每次保存都会记录，点击即可一键恢复。</span>
-            </div>
-            <p class="connection-history__empty" id="connection-history-empty">
-              还没有记录；保存一次接入配置后就会出现在这里。
-            </p>
-            <ul class="connection-history__list" id="connection-history-list"></ul>
-          </section>
-
           <details class="connection-glossary">
             <summary>还是看不懂？展开术语解释</summary>
             <dl>
@@ -671,21 +692,6 @@
               </div>
             </dl>
           </details>
-
-          <section class="connection-advanced-launch" aria-labelledby="connection-advanced-title">
-            <div>
-              <strong id="connection-advanced-title">高级设置</strong>
-              <span>网关、cURL 导入、路由器管理、诊断与接入历史。</span>
-            </div>
-            <button
-              id="open-connection-advanced"
-              type="button"
-              aria-haspopup="dialog"
-              aria-controls="connection-advanced-dialog"
-            >
-              打开高级设置
-            </button>
-          </section>
         </section>
 
         <section class="rail-page" data-rail-page="plugins">
@@ -1167,7 +1173,7 @@
             <span class="step-kicker">接入工作台</span>
             <strong id="connection-advanced-dialog-title">高级设置与诊断工具</strong>
             <p id="connection-advanced-dialog-description">
-              可在这里完成接口识别、网关诊断、路由器管理和历史恢复。
+              可在这里完成接口识别、网关诊断和路由器管理。
             </p>
           </div>
           <button

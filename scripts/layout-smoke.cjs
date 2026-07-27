@@ -78,7 +78,7 @@ const inspectLayout = `
     }
   }
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, #connection-advanced-content'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -189,6 +189,49 @@ const addPluginStressFixtures = `
   })()
 `;
 
+const addConnectionHistoryStressFixture = `
+  (() => {
+    const list = document.querySelector('#connection-history-list');
+    list.replaceChildren();
+    const item = document.createElement('li');
+    item.className = 'connection-history__item';
+    const restore = document.createElement('button');
+    restore.className = 'connection-history__restore';
+    restore.type = 'button';
+    const title = document.createElement('strong');
+    title.textContent = '本机转换器 / 模型网关';
+    const parameters = document.createElement('span');
+    parameters.className = 'connection-history__parameters';
+    for (const [labelText, valueText] of [
+      ['接口 / 网关', 'https://gateway.example.com/an/intentionally/long/anthropic/v1/messages'],
+      ['主模型', 'provider/a-very-long-primary-model-name-that-must-wrap'],
+      ['快速模型', 'provider/a-very-long-fast-model-name-that-must-wrap'],
+    ]) {
+      const parameter = document.createElement('span');
+      parameter.className = 'connection-history__parameter';
+      const label = document.createElement('span');
+      label.textContent = labelText;
+      const value = document.createElement('code');
+      value.textContent = valueText;
+      parameter.append(label, value);
+      parameters.append(parameter);
+    }
+    const meta = document.createElement('span');
+    meta.className = 'connection-history__meta';
+    meta.textContent = '07/27 23:58 · Bearer · 含凭据 · 网关运行中';
+    restore.append(title, parameters, meta);
+    const remove = document.createElement('button');
+    remove.className = 'connection-history__delete';
+    remove.type = 'button';
+    remove.textContent = '×';
+    item.append(restore, remove);
+    list.append(item);
+    document.querySelector('#connection-history-empty').hidden = true;
+    document.querySelector('#connection-history-count').textContent =
+      '1 条历史配置 · 点击恢复全部参数';
+  })()
+`;
+
 app.whenReady().then(async () => {
   const results = [];
   const window = new BrowserWindow({
@@ -202,6 +245,7 @@ app.whenReady().then(async () => {
     width: 820,
   });
   await window.loadFile(path.join(__dirname, '..', 'dist', 'renderer', 'index.html'));
+  await window.webContents.executeJavaScript(addConnectionHistoryStressFixture);
 
   for (const [width, height] of sizes) {
     window.setSize(width, height);

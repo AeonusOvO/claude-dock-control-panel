@@ -86,6 +86,24 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toContain('.connection-advanced-dialog::backdrop');
   });
 
+  it('keeps saved gateway and model history in the main flow before model configuration', () => {
+    const advancedIndex = rendererMarkup.indexOf('class="connection-advanced-launch"');
+    const historyIndex = rendererMarkup.indexOf('id="connection-history"');
+    const configIndex = rendererMarkup.indexOf('id="claude-config-form"');
+
+    expect(advancedIndex).toBeGreaterThan(0);
+    expect(historyIndex).toBeGreaterThan(advancedIndex);
+    expect(configIndex).toBeGreaterThan(historyIndex);
+    expect(rendererSource).toContain(
+      "appendParameter('接口 / 网关', entry.baseUrl || 'Anthropic 官方端点')",
+    );
+    expect(rendererSource).toContain("appendParameter('主模型', entry.model || '默认模型')");
+    expect(rendererSource).toContain(
+      "appendParameter('快速模型', entry.modelFast || entry.model || '跟随主模型')",
+    );
+    expect(rendererSource).not.toContain('connectionHistorySection');
+  });
+
   it('collapses an already-selected activity tab without losing the terminal', () => {
     expect(rendererSource).toContain('applyRailTab(selectedRailTab === tab ? undefined : tab);');
     expect(rendererSource).toContain(

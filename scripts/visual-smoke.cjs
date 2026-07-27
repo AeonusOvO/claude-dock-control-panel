@@ -129,6 +129,44 @@ app.whenReady().then(async () => {
       section.append(toggle, content);
       groups.append(section);
     }
+    const historyList = document.querySelector('#connection-history-list');
+    historyList.replaceChildren();
+    const historyItem = document.createElement('li');
+    historyItem.className = 'connection-history__item';
+    const historyRestore = document.createElement('button');
+    historyRestore.className = 'connection-history__restore';
+    historyRestore.type = 'button';
+    const historyTitle = document.createElement('strong');
+    historyTitle.textContent = '本机转换器 / 模型网关';
+    const historyParameters = document.createElement('span');
+    historyParameters.className = 'connection-history__parameters';
+    for (const [labelText, valueText] of [
+      ['接口 / 网关', 'http://127.0.0.1:3456'],
+      ['主模型', 'deepseek/deepseek-v4-pro'],
+      ['快速模型', 'deepseek/deepseek-v4-flash'],
+    ]) {
+      const parameter = document.createElement('span');
+      parameter.className = 'connection-history__parameter';
+      const label = document.createElement('span');
+      label.textContent = labelText;
+      const value = document.createElement('code');
+      value.textContent = valueText;
+      parameter.append(label, value);
+      historyParameters.append(parameter);
+    }
+    const historyMeta = document.createElement('span');
+    historyMeta.className = 'connection-history__meta';
+    historyMeta.textContent = '07/27 23:58 · Bearer · 含凭据 · 网关运行中';
+    historyRestore.append(historyTitle, historyParameters, historyMeta);
+    const historyDelete = document.createElement('button');
+    historyDelete.className = 'connection-history__delete';
+    historyDelete.type = 'button';
+    historyDelete.textContent = '×';
+    historyItem.append(historyRestore, historyDelete);
+    historyList.append(historyItem);
+    document.querySelector('#connection-history-empty').hidden = true;
+    document.querySelector('#connection-history-count').textContent =
+      '1 条历史配置 · 点击恢复全部参数';
     document.querySelector('.control-panel').scrollTop = 0;
     document.querySelector('[data-rail-page="connection"]').style.animation = 'none';
     for (const button of document.querySelectorAll('[data-rail-tab]')) {
@@ -141,6 +179,15 @@ app.whenReady().then(async () => {
   await new Promise((resolve) => setTimeout(resolve, 80));
   writeFileSync(
     path.join(outputDirectory, 'connection-1180.png'),
+    (await captureSettledPage()).toPNG(),
+  );
+
+  await window.webContents.executeJavaScript(`
+    document.querySelector('#connection-history').scrollIntoView({ block: 'start' });
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  writeFileSync(
+    path.join(outputDirectory, 'connection-history-1180.png'),
     (await captureSettledPage()).toPNG(),
   );
 
