@@ -85,6 +85,9 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   错误，会立即显示红色提示并引导回“接入”页。
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
   `/model`、`/permissions`、`/compact`、`/theme` 等常用斜杠命令变成可点击操作。
+- 新对话先显示“对话 1 / 对话 2”等临时名称；Claude Code 根据首条提示词生成标题后，
+  ClaudeDock 会通过官方 `statusLine.session_name` 自动同步到左侧列表、终端标题和工作台范围。
+  这不会额外发送一条 ClaudeDock 提示词；手动重命名仍会覆盖自动标题。
 - 项目列表按“文件夹 → 当前对话 → 历史对话”折叠展示。恢复历史仍通过 Claude Code 官方
   `--resume <session-id>`；运行中和历史对话均可重命名，历史项右键写入 Claude 的
   `custom-title` 元数据。工作台不再重复显示同一份历史列表。
@@ -187,8 +190,9 @@ npm run dist
 11. 提示词写在终端输出区下方的输入框里，`Enter` 发送、`Shift+Enter` 换行、`↑/↓` 翻历史；
     Claude 响应后，终端底栏与“会话”页实时显示当前上下文；“命令”页执行白名单斜杠命令，
     “快捷键”页说明终端映射。终端顶部的主题选择会改变整个应用外壳的配色，命令页的 `/theme`
-    打开 Claude Code 自身主题选择；左侧对话可右键重命名。`/clear` 会开启空上下文的新会话，
-    执行前会二次确认。
+    打开 Claude Code 自身主题选择。Claude Code 完成首条提示词的后台命名后，左侧临时名称会
+    自动替换为主题标题；也可随时右键手动重命名。`/clear` 会开启空上下文的新会话，执行前会
+    二次确认。
 12. 点击窗口关闭按钮只会隐藏面板，所有会话继续在后台运行；右键系统托盘图标可以恢复
     窗口、切换/添加项目、控制当前终端或彻底退出。
 
@@ -256,8 +260,9 @@ outputs/             安装包、校验元数据与解包产物，不纳入 Git
 - 关闭项目会终止该项目的 PowerShell 进程；切换项目不会影响其他项目的运行。
 - 项目会话只在本次应用运行期间保留，彻底退出后不会恢复终端进程或历史缓冲。
 - Claude Code 自己会按项目目录把会话明文保存在 `~/.claude/projects/`，默认约 30 天；
-  ClaudeDock 不复制对话正文，只读取标题等元数据和 statusLine 提供的数字指标。用户重命名
-  历史对话时只向对应 UUID JSONL 追加 Claude 兼容的 `custom-title` 记录。
+  ClaudeDock 不复制对话正文，只读取标题等元数据和 statusLine 提供的结构化状态。自动命名
+  复用 Claude Code 自己根据首条提示词生成并放入 `session_name` 的标题，不另发隐藏提示词；
+  用户重命名历史对话时只向对应 UUID JSONL 追加 Claude 兼容的 `custom-title` 记录。
 - 本地构建默认没有代码签名，Windows SmartScreen 可能显示未知发布者提示。
 - 当前仅打包 Windows x64。
 - 自动发现覆盖 Claude Code Router 的默认 `3456/3458`、LiteLLM 的常用 `4000` 和当前

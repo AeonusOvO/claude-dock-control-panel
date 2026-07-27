@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { TerminalStatus, TerminalWorkspaceState } from '../shared/contracts';
+import { normalizeClaudeSessionTitle } from './claude-session-manager';
 import { TerminalSession, type TerminalEnvironmentOverrides } from './terminal-session';
 
 export interface ManagedTerminal {
@@ -39,6 +40,7 @@ export const sameDirectory = (left: string, right: string): boolean =>
  */
 export class TerminalWorkspace {
   private activeSessionId = '';
+  private readonly claudeSessionTitles = new Map<string, string>();
   private nextSessionNumber = 1;
   private readonly sessions = new Map<string, ManagedTerminal>();
 
@@ -62,6 +64,7 @@ export class TerminalWorkspace {
 
     session.stop(false);
     this.sessions.delete(sessionId);
+    this.claudeSessionTitles.delete(sessionId);
 
     if (this.sessions.size === 0) {
       this.activeSessionId = '';
@@ -147,12 +150,28 @@ export class TerminalWorkspace {
   }
 
   public renameSession(sessionId: string, title: string): TerminalWorkspaceState {
-    const normalized = title.trim();
-    if (!normalized || normalized.length > 60 || /[\r\n]/.test(normalized)) {
-      throw new Error('对话名称需为 1-60 个字符，且不能换行。');
-    }
+    const normalized = normalizeClaudeSessionTitle(title);
     this.requireSession(sessionId).setTitle(normalized);
     return this.getState();
+  }
+
+  /**
+   * Mirrors Claude Code's official statusLine.session_name into the workspace label. Remembering
+   * the last observed value prevents a repeated, stale status-line tick from undoing a local rename
+   * while Claude Code is still processing the matching `/rename` command.
+   */
+  public syncClaudeSessionTitle(sessionId: string, title: string): boolean {
+    const session = this.requireSession(sessionId);
+    const normalized = normalizeClaudeSessionTitle(title);
+    const previousClaudeTitle = this.claudeSessionTitles.get(sessionId);
+    this.claudeSessionTitles.set(sessionId, normalized);
+
+    if (session.getStatus().title === normalized || previousClaudeTitle === normalized) {
+      return false;
+    }
+
+    session.setTitle(normalized);
+    return true;
   }
 
   /** Returns the size the PTY actually adopted, which the renderer uses to keep xterm in step. */

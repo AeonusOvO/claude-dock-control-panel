@@ -1525,6 +1525,14 @@ if (!hasSingleInstanceLock) {
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
       (state) => {
+        const claudeTitle = state.metrics?.sessionName;
+        if (claudeTitle && workspace.hasSession(state.sessionId)) {
+          try {
+            workspace.syncClaudeSessionTitle(state.sessionId, claudeTitle);
+          } catch {
+            // Ignore malformed or oversized names from a future Claude Code status-line schema.
+          }
+        }
         mainWindow?.webContents.send('claude:state', state);
       },
     );

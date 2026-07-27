@@ -195,6 +195,23 @@ describe('TerminalWorkspace', () => {
     expect(() => workspace.renameSession('session-1', 'a\nb')).toThrow(/1-60/);
   });
 
+  it('syncs Claude automatic titles without letting stale ticks undo a manual rename', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+
+    expect(workspace.syncClaudeSessionTitle('session-1', '  修复登录重定向  ')).toBe(true);
+    expect(workspace.getStatus('session-1').title).toBe('修复登录重定向');
+
+    workspace.renameSession('session-1', '自定义登录标题');
+    expect(workspace.syncClaudeSessionTitle('session-1', '修复登录重定向')).toBe(false);
+    expect(workspace.getStatus('session-1').title).toBe('自定义登录标题');
+
+    expect(workspace.syncClaudeSessionTitle('session-1', '自定义登录标题')).toBe(false);
+    expect(workspace.syncClaudeSessionTitle('session-1', '最终登录标题')).toBe(true);
+    expect(workspace.getStatus('session-1').title).toBe('最终登录标题');
+  });
+
   it('keeps other projects running when the active project is closed', () => {
     const { factory, terminals } = createFakeFactory();
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);

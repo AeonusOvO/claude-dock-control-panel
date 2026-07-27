@@ -376,12 +376,19 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 历史右键重命名先验证项目路径、UUID、文件类型、50 MiB 上限和 1–60 字符标题，再向对应
   JSONL 追加 `type: "custom-title"` 记录，不重写正文。运行中重命名先更新工作区标题；若该
   PTY 正在运行 Claude Code，再发送白名单 `/rename <title>` 让 Claude 元数据同步更新。
+- Claude Code 2.1.196+ 会用小型/快速模型根据首条提示词生成短标题；官方 statusLine 的
+  `session_name` 在存在 `/rename`/`--name` 自定义名称时返回自定义名称，否则返回该 AI 标题。
+  ClaudeDock 已要求 2.1.197+，因此直接把这个字段同步到对应 `TerminalWorkspace` 标题，不再
+  额外运行 `claude -p`、不注入隐藏提示词，也不解析终端绘制文本。工作区记录每个 PTY 最近
+  看见的 Claude 标题：手动重命名后重复到达的旧状态行会被忽略，直到 Claude 返回一个新名称，
+  避免 `/rename` 处理期间界面短暂回退。
 - 定向恢复把经过 UUID 校验的 session ID 交给统一的 PowerShell 命令构造器，因此继续保留
   参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
-  session ID、上下文窗口、输入/输出 token、估算费用、持续时间和改动行数。主进程每秒读取
-  变更并通过受限 IPC 推送。
+  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间和改动行数。
+  主进程每秒读取变更，通过受限 IPC 推送，同时把有效的 1–60 字符 session name 同步到
+  工作区标签。
 - 上下文占用使用 `context_window.used_percentage × context_window_size`，而不是累计所有
   历史请求。Claude Code 会在接近窗口上限时自动 compact；界面的“实时”表示每次 statusLine
   刷新后的最新状态，不代表逐 token 流式计数。
@@ -461,8 +468,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
-  `custom-title` 写入、目录选择器默认路径回退、终端主题约束、PowerShell 启动脚本语法和
-  软件语义版本比较。
+  `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
+  PowerShell 启动脚本语法和软件语义版本比较。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已

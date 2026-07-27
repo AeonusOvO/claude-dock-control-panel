@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import {
+  parseClaudeMetrics,
   parseClaudeRuntimeApiError,
   routerRepairInputForProject,
   routerBlockingDetail,
@@ -32,6 +33,22 @@ const routerState: ClaudeRouterManagementState = {
 };
 
 describe('Claude runtime route diagnostics', () => {
+  it('keeps the official status-line session title for workspace synchronization', () => {
+    const metrics = parseClaudeMetrics(
+      JSON.stringify({
+        capturedAt: Date.now(),
+        modelId: 'claude-sonnet',
+        sessionId: 'conversation-id',
+        sessionName: '修复登录重定向',
+      }),
+    );
+
+    expect(metrics).toMatchObject({
+      sessionId: 'conversation-id',
+      sessionName: '修复登录重定向',
+    });
+  });
+
   it('recognizes the real Claude Code ConnectionRefused output without echoing raw details', () => {
     expect(
       parseClaudeRuntimeApiError(

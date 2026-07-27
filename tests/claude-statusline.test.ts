@@ -75,6 +75,7 @@ describe('ClaudeDock status-line helper', () => {
       outputTokens: 3_000,
       sessionCostUsd: 0.42,
       sessionId: 'session-fixture',
+      sessionName: 'api-visualization',
     });
   });
 });
