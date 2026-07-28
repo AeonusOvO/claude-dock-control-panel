@@ -1,4 +1,5 @@
-export type TerminalThemeId = 'claude' | 'graphite' | 'midnight';
+export type TerminalThemeId = 'claude' | 'graphite' | 'midnight' | 'telegram';
+export type TerminalThemeAppearance = 'dark' | 'light';
 
 export interface TerminalThemePalette {
   background: string;
@@ -26,9 +27,8 @@ export interface TerminalThemePalette {
 }
 
 /**
- * The shell colours that surround the terminal: titlebar, activity rail, sidebar, toolbar, footer
- * and cards. Every field maps one-to-one onto a CSS custom property (see `SHELL_CSS_VARIABLES`), so
- * picking a theme repaints the whole window instead of only the xterm canvas.
+ * The visual language surrounding xterm. Light themes replace more than colours: typography,
+ * elevation, interaction layers and semantic status contrast all travel through this one bridge.
  */
 export interface TerminalThemeShell {
   accentFg: string;
@@ -38,10 +38,24 @@ export interface TerminalThemeShell {
   accentSolidHover: string;
   accentText: string;
   accentTint: string;
+  badLine: string;
+  badSolid: string;
+  badText: string;
+  badTint: string;
+  fontUi: string;
+  layerActive: string;
+  layerHover: string;
   line: string;
   lineHover: string;
   lineStrong: string;
   lineSubtle: string;
+  okLine: string;
+  okSolid: string;
+  okText: string;
+  okTint: string;
+  shadowDrawer: string;
+  shadowOverlay: string;
+  sheen: string;
   surface1: string;
   surface2: string;
   surface3: string;
@@ -54,15 +68,20 @@ export interface TerminalThemeShell {
   textHi: string;
   textLo: string;
   textMute: string;
+  warnLine: string;
+  warnSolid: string;
+  warnText: string;
+  warnTint: string;
 }
 
 export interface TerminalThemeDefinition {
+  appearance: TerminalThemeAppearance;
   label: string;
   palette: TerminalThemePalette;
   shell: TerminalThemeShell;
 }
 
-/** Shell field → CSS custom property. The renderer just walks this map; no per-theme wiring. */
+/** Shell field → CSS custom property. The renderer walks this map without per-theme branches. */
 export const SHELL_CSS_VARIABLES: Record<keyof TerminalThemeShell, string> = {
   accentFg: '--accent-fg',
   accentLine: '--accent-line',
@@ -71,10 +90,24 @@ export const SHELL_CSS_VARIABLES: Record<keyof TerminalThemeShell, string> = {
   accentSolidHover: '--accent-solid-hover',
   accentText: '--accent-text',
   accentTint: '--accent-tint',
+  badLine: '--bad-line',
+  badSolid: '--bad-solid',
+  badText: '--bad-text',
+  badTint: '--bad-tint',
+  fontUi: '--font-ui',
+  layerActive: '--layer-active',
+  layerHover: '--layer-hover',
   line: '--line',
   lineHover: '--line-hover',
   lineStrong: '--line-strong',
   lineSubtle: '--line-subtle',
+  okLine: '--ok-line',
+  okSolid: '--ok-solid',
+  okText: '--ok-text',
+  okTint: '--ok-tint',
+  shadowDrawer: '--shadow-drawer',
+  shadowOverlay: '--shadow-overlay',
+  sheen: '--sheen',
   surface1: '--surface-1',
   surface2: '--surface-2',
   surface3: '--surface-3',
@@ -87,69 +120,117 @@ export const SHELL_CSS_VARIABLES: Record<keyof TerminalThemeShell, string> = {
   textHi: '--text-hi',
   textLo: '--text-lo',
   textMute: '--text-mute',
+  warnLine: '--warn-line',
+  warnSolid: '--warn-solid',
+  warnText: '--warn-text',
+  warnTint: '--warn-tint',
 };
 
-/** Hairlines are white alphas in every theme, so they read correctly on warm and cool surfaces. */
-const HAIRLINES = {
+const DARK_CHROME = {
+  badLine: 'rgb(216 67 79 / 34%)',
+  badSolid: '#d8434f',
+  badText: '#f58c95',
+  badTint: 'rgb(216 67 79 / 12%)',
+  fontUi: "'Segoe UI Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+  layerActive: 'rgb(255 255 255 / 7%)',
+  layerHover: 'rgb(255 255 255 / 4%)',
   line: 'rgb(255 255 255 / 9%)',
   lineHover: 'rgb(255 255 255 / 20%)',
   lineStrong: 'rgb(255 255 255 / 13%)',
   lineSubtle: 'rgb(255 255 255 / 6%)',
+  okLine: 'rgb(31 157 99 / 32%)',
+  okSolid: '#1f9d63',
+  okText: '#5fd39d',
+  okTint: 'rgb(31 157 99 / 12%)',
+  shadowDrawer: '-1px 0 0 rgb(255 255 255 / 9%), -32px 0 64px -24px rgb(0 0 0 / 55%)',
+  shadowOverlay: '0 16px 40px -12px rgb(0 0 0 / 60%), 0 4px 12px -4px rgb(0 0 0 / 40%)',
+  sheen: 'inset 0 1px 0 rgb(255 255 255 / 4%)',
+  warnLine: 'rgb(180 130 12 / 34%)',
+  warnSolid: '#b4820c',
+  warnText: '#e0b95a',
+  warnTint: 'rgb(180 130 12 / 14%)',
 } as const;
 
-export const DEFAULT_TERMINAL_THEME: TerminalThemeId = 'graphite';
+const LIGHT_CHROME = {
+  badLine: 'rgb(167 61 57 / 36%)',
+  badSolid: '#a73d39',
+  badText: '#7f2c28',
+  badTint: 'rgb(167 61 57 / 9%)',
+  fontUi: "'Open Sans Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+  layerActive: 'rgb(20 20 19 / 7%)',
+  layerHover: 'rgb(20 20 19 / 4%)',
+  line: 'rgb(31 30 29 / 16%)',
+  lineHover: 'rgb(31 30 29 / 30%)',
+  lineStrong: 'rgb(31 30 29 / 22%)',
+  lineSubtle: 'rgb(31 30 29 / 10%)',
+  okLine: 'rgb(67 116 38 / 36%)',
+  okSolid: '#437426',
+  okText: '#265b19',
+  okTint: 'rgb(67 116 38 / 9%)',
+  shadowDrawer: '-1px 0 0 rgb(31 30 29 / 12%), -20px 0 50px -26px rgb(31 30 29 / 28%)',
+  shadowOverlay: '0 18px 44px -18px rgb(31 30 29 / 28%), 0 3px 10px -4px rgb(31 30 29 / 18%)',
+  sheen: '0 1px 2px rgb(31 30 29 / 5%), 0 5px 18px -14px rgb(31 30 29 / 22%)',
+  warnLine: 'rgb(128 92 31 / 36%)',
+  warnSolid: '#805c1f',
+  warnText: '#5a4815',
+  warnTint: 'rgb(128 92 31 / 9%)',
+} as const;
+
+export const DEFAULT_TERMINAL_THEME: TerminalThemeId = 'claude';
 
 export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> = {
   claude: {
-    label: 'Claude 暖色',
+    appearance: 'light',
+    label: 'Claude 明亮',
     palette: {
-      background: '#17130f',
-      black: '#211b16',
-      blue: '#7aa2f7',
-      brightBlack: '#75675c',
-      brightBlue: '#9bbcff',
-      brightCyan: '#8ad8d2',
-      brightGreen: '#a7d98b',
-      brightMagenta: '#d8a6d8',
-      brightRed: '#ff9b82',
-      brightWhite: '#fff8ee',
-      brightYellow: '#f3d98b',
-      cursor: '#d97757',
-      cursorAccent: '#17130f',
-      cyan: '#65c3bd',
-      foreground: '#eadfd2',
-      green: '#8bcf75',
-      magenta: '#c58ac5',
-      red: '#e87962',
-      selectionBackground: '#533a2d',
-      selectionInactiveBackground: '#342922',
-      white: '#ded2c5',
-      yellow: '#d9b85f',
+      background: '#faf9f5',
+      black: '#141413',
+      blue: '#3266ad',
+      brightBlack: '#73726c',
+      brightBlue: '#4682d5',
+      brightCyan: '#247e86',
+      brightGreen: '#437426',
+      brightMagenta: '#8a4f8e',
+      brightRed: '#a73d39',
+      brightWhite: '#ffffff',
+      brightYellow: '#805c1f',
+      cursor: '#b85b3d',
+      cursorAccent: '#ffffff',
+      cyan: '#246c72',
+      foreground: '#141413',
+      green: '#265b19',
+      magenta: '#704074',
+      red: '#7f2c28',
+      selectionBackground: '#ead8cf',
+      selectionInactiveBackground: '#e8e5dc',
+      white: '#f5f4ed',
+      yellow: '#5a4815',
     },
     shell: {
-      accentFg: '#1a0f08',
-      accentLine: 'rgb(217 119 87 / 32%)',
-      accentRing: 'rgb(240 161 132 / 55%)',
-      accentSolid: '#d97757',
-      accentSolidHover: '#e88b6b',
-      accentText: '#f0a184',
-      accentTint: 'rgb(217 119 87 / 12%)',
-      ...HAIRLINES,
-      surface1: '#1c1712',
-      surface2: '#221b16',
-      surface3: '#2a221b',
-      surface4: '#332a21',
-      surfaceCanvas: '#100c09',
-      surfaceInset: '#130f0c',
-      surfaceTerminal: '#17130f',
-      text: '#d6c8b8',
-      textDim: '#7c6b5b',
-      textHi: '#f4ece2',
-      textLo: '#a1907f',
-      textMute: '#63544a',
+      accentFg: '#ffffff',
+      accentLine: 'rgb(184 91 61 / 34%)',
+      accentRing: 'rgb(184 91 61 / 48%)',
+      accentSolid: '#b85b3d',
+      accentSolidHover: '#a64e33',
+      accentText: '#91462f',
+      accentTint: 'rgb(184 91 61 / 10%)',
+      ...LIGHT_CHROME,
+      surface1: '#ffffff',
+      surface2: '#faf9f5',
+      surface3: '#ffffff',
+      surface4: '#ffffff',
+      surfaceCanvas: '#f5f4ed',
+      surfaceInset: '#f2f0e8',
+      surfaceTerminal: '#faf9f5',
+      text: '#3d3d3a',
+      textDim: '#73726c',
+      textHi: '#141413',
+      textLo: '#5f5e59',
+      textMute: '#908f88',
     },
   },
   graphite: {
+    appearance: 'dark',
     label: '石墨深色',
     palette: {
       background: '#05070a',
@@ -175,7 +256,6 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       white: '#d9e3e8',
       yellow: '#ffd66b',
     },
-    /* Byte-for-byte the ladder that `styles.css` ships in `:root`, so the default look is unchanged. */
     shell: {
       accentFg: '#04121a',
       accentLine: 'rgb(46 168 216 / 30%)',
@@ -184,7 +264,7 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentSolidHover: '#3fb8e8',
       accentText: '#7cd4f0',
       accentTint: 'rgb(46 168 216 / 10%)',
-      ...HAIRLINES,
+      ...DARK_CHROME,
       surface1: '#0b0e13',
       surface2: '#101419',
       surface3: '#151a20',
@@ -200,6 +280,7 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
     },
   },
   midnight: {
+    appearance: 'dark',
     label: '深海蓝',
     palette: {
       background: '#07111c',
@@ -233,7 +314,7 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentSolidHover: '#4bc4d6',
       accentText: '#7ed8e2',
       accentTint: 'rgb(56 176 196 / 12%)',
-      ...HAIRLINES,
+      ...DARK_CHROME,
       surface1: '#0b1725',
       surface2: '#101f30',
       surface3: '#16283b',
@@ -246,6 +327,56 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       textHi: '#e9f2f9',
       textLo: '#8b9dae',
       textMute: '#4f6273',
+    },
+  },
+  telegram: {
+    appearance: 'light',
+    label: 'Telegram 明亮',
+    palette: {
+      background: '#ffffff',
+      black: '#1c1c1d',
+      blue: '#1267a8',
+      brightBlack: '#707579',
+      brightBlue: '#3390ec',
+      brightCyan: '#16868f',
+      brightGreen: '#18864b',
+      brightMagenta: '#7c4d99',
+      brightRed: '#c33a35',
+      brightWhite: '#ffffff',
+      brightYellow: '#9a6518',
+      cursor: '#237bc4',
+      cursorAccent: '#ffffff',
+      cyan: '#126c73',
+      foreground: '#1c1c1d',
+      green: '#166b3e',
+      magenta: '#653d7d',
+      red: '#9a2e2a',
+      selectionBackground: '#cfe7fb',
+      selectionInactiveBackground: '#e5e7e9',
+      white: '#f4f4f5',
+      yellow: '#765019',
+    },
+    shell: {
+      accentFg: '#ffffff',
+      accentLine: 'rgb(35 123 196 / 34%)',
+      accentRing: 'rgb(35 123 196 / 46%)',
+      accentSolid: '#237bc4',
+      accentSolidHover: '#1c6fb5',
+      accentText: '#1267a8',
+      accentTint: 'rgb(35 123 196 / 10%)',
+      ...LIGHT_CHROME,
+      surface1: '#ffffff',
+      surface2: '#f4f4f5',
+      surface3: '#ffffff',
+      surface4: '#ffffff',
+      surfaceCanvas: '#e8eaec',
+      surfaceInset: '#eef0f2',
+      surfaceTerminal: '#ffffff',
+      text: '#343638',
+      textDim: '#707579',
+      textHi: '#17191b',
+      textLo: '#565b5f',
+      textMute: '#979ca0',
     },
   },
 };

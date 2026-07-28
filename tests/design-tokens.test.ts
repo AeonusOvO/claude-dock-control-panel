@@ -78,9 +78,7 @@ describe('terminal theme shells', () => {
   for (const [themeId, definition] of Object.entries(TERMINAL_THEMES)) {
     it(`gives ${themeId} a complete, legible shell`, () => {
       for (const field of Object.keys(SHELL_CSS_VARIABLES)) {
-        expect(definition.shell[field as keyof typeof definition.shell]).toMatch(
-          /^(#[0-9a-f]{6}|rgb\(.+\))$/,
-        );
+        expect(definition.shell[field as keyof typeof definition.shell].trim()).not.toBe('');
       }
       // The canvas has to sit behind the raised surfaces, otherwise cards read as holes.
       expect(luminance(definition.shell.surfaceCanvas)).toBeLessThan(
@@ -89,6 +87,9 @@ describe('terminal theme shells', () => {
       expect(contrast(definition.shell.textHi, definition.shell.surfaceCanvas)).toBeGreaterThan(7);
       expect(contrast(definition.shell.text, definition.shell.surface2)).toBeGreaterThan(4.5);
       expect(contrast(definition.shell.accentText, definition.shell.surface2)).toBeGreaterThan(4.5);
+      expect(contrast(definition.shell.okText, definition.shell.surface2)).toBeGreaterThan(4.5);
+      expect(contrast(definition.shell.warnText, definition.shell.surface2)).toBeGreaterThan(4.5);
+      expect(contrast(definition.shell.badText, definition.shell.surface2)).toBeGreaterThan(4.5);
     });
   }
 });

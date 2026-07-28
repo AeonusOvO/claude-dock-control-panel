@@ -33,6 +33,7 @@ import type {
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   SaveChatConfigInput,
+  SaveChatConversationInput,
   TerminalStatus,
   TerminalWorkspaceState,
   WorkspaceProjectView,
@@ -59,6 +60,7 @@ import {
   normalizeClaudeSessionTitle,
 } from './claude-session-manager';
 import { ChatConfigStore } from './chat-config-store';
+import { ChatHistoryStore } from './chat-history-store';
 import { ChatService } from './chat-service';
 import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
@@ -185,6 +187,7 @@ const workspaceStore = new WorkspaceStore(app.getPath('userData'));
 const sessionManager = new ClaudeSessionManager();
 const pluginManager = new ClaudePluginManager(homedir());
 const chatConfigStore = new ChatConfigStore(app.getPath('userData'));
+const chatHistoryStore = new ChatHistoryStore(app.getPath('userData'));
 const chatService = new ChatService(chatConfigStore, (event) => {
   mainWindow?.webContents.send('chat:stream', event);
 });
@@ -832,6 +835,38 @@ const registerIpc = (): void => {
       throw new Error('对话接入配置格式无效。');
     }
     return chatConfigStore.save(input as SaveChatConfigInput);
+  });
+  ipcMain.handle('chat:test-connection', async (event, input: unknown) => {
+    validateSender(event);
+    if (!input || typeof input !== 'object') {
+      throw new Error('对话接入测试参数无效。');
+    }
+    return chatService.test(input as SaveChatConfigInput);
+  });
+  ipcMain.handle('chat:list-conversations', (event) => {
+    validateSender(event);
+    return chatHistoryStore.list();
+  });
+  ipcMain.handle('chat:get-conversation', (event, conversationId: unknown) => {
+    validateSender(event);
+    if (typeof conversationId !== 'string') {
+      throw new Error('对话历史标识无效。');
+    }
+    return chatHistoryStore.get(conversationId);
+  });
+  ipcMain.handle('chat:save-conversation', (event, input: unknown) => {
+    validateSender(event);
+    if (!input || typeof input !== 'object') {
+      throw new Error('对话历史保存参数无效。');
+    }
+    return chatHistoryStore.save(input as SaveChatConversationInput);
+  });
+  ipcMain.handle('chat:delete-conversation', (event, conversationId: unknown) => {
+    validateSender(event);
+    if (typeof conversationId !== 'string') {
+      throw new Error('对话历史标识无效。');
+    }
+    return chatHistoryStore.delete(conversationId);
   });
   ipcMain.handle('chat:start', (event, input: unknown) => {
     validateSender(event);

@@ -41,22 +41,6 @@
     <main class="workspace" id="workspace">
       <nav class="activity-rail" id="activity-rail" aria-label="主导航">
         <button
-          class="activity-rail__button activity-rail__button--active"
-          data-rail-tab="projects"
-          type="button"
-          aria-controls="control-panel"
-          aria-expanded="true"
-          aria-pressed="true"
-          title="项目（再次点击可收起侧栏）"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
-            />
-          </svg>
-          <span>项目</span>
-        </button>
-        <button
           class="activity-rail__button"
           data-rail-tab="chat"
           type="button"
@@ -72,6 +56,22 @@
             <path d="M8 10h8M8 13.5h5" />
           </svg>
           <span>对话</span>
+        </button>
+        <button
+          class="activity-rail__button activity-rail__button--active"
+          data-rail-tab="projects"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="true"
+          aria-pressed="true"
+          title="项目（再次点击可收起侧栏）"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
+            />
+          </svg>
+          <span>项目</span>
         </button>
         <button
           class="activity-rail__button"
@@ -202,6 +202,16 @@
         </section>
 
         <section class="rail-page rail-page--chat" data-rail-page="chat">
+          <section class="chat-history" aria-labelledby="chat-history-heading">
+            <div class="section-label">
+              <span id="chat-history-heading">对话历史</span>
+              <span id="chat-history-count">0 条</span>
+            </div>
+            <div class="chat-history__list" id="chat-history-list"></div>
+            <p class="chat-history__empty" id="chat-history-empty">
+              发送第一条消息后，对话会保存在这台电脑上。
+            </p>
+          </section>
           <div class="connection-heading">
             <strong>独立模型接入</strong>
             <span>此处配置只用于“对话”页，不会修改项目终端和 Claude Code 的接入。</span>
@@ -260,9 +270,22 @@
               <input id="chat-clear-credential" type="checkbox" />
               <span>保存时清除已有凭据</span>
             </label>
-            <button class="button button--primary" id="save-chat-config" type="submit">
-              保存独立接入
-            </button>
+            <div class="chat-config-actions">
+              <button class="button button--secondary" id="test-chat-connection" type="button">
+                测试连接
+              </button>
+              <button class="button button--primary" id="save-chat-config" type="submit">
+                保存独立接入
+              </button>
+            </div>
+            <div
+              class="chat-connection-test"
+              id="chat-connection-test"
+              role="status"
+              aria-live="polite"
+            >
+              尚未测试当前配置。
+            </div>
             <p class="chat-config-status" id="chat-config-status" role="status"></p>
           </form>
         </section>
@@ -894,7 +917,8 @@
             <label class="terminal-theme-picker" for="terminal-theme">
               <span>主题</span>
               <select id="terminal-theme" aria-label="切换终端主题">
-                <option value="claude">Claude 暖色</option>
+                <option value="claude">Claude 明亮</option>
+                <option value="telegram">Telegram 明亮</option>
                 <option value="graphite">石墨深色</option>
                 <option value="midnight">深海蓝</option>
               </select>
@@ -1248,11 +1272,27 @@
 
       <section class="chat-shell" id="chat-shell" aria-label="独立对话" hidden>
         <header class="chat-toolbar">
-          <div>
+          <div class="chat-toolbar__identity">
             <span>独立对话</span>
             <strong id="chat-active-model">尚未配置模型</strong>
           </div>
-          <button class="button button--quiet" id="new-chat" type="button">新对话</button>
+          <div class="chat-toolbar__metrics" aria-live="polite">
+            <div class="chat-metric">
+              <span class="chat-metric__live" aria-hidden="true"></span>
+              <span>实时上下文</span>
+              <strong id="chat-context-total">—</strong>
+            </div>
+            <div class="chat-metric">
+              <span>Token</span>
+              <strong id="chat-token-usage">输入 — · 输出 —</strong>
+            </div>
+          </div>
+          <button class="button button--quiet" id="new-chat" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            新对话
+          </button>
         </header>
         <div class="chat-messages" id="chat-messages" aria-live="polite">
           <div class="chat-empty-state" id="chat-empty-state">
@@ -1396,7 +1436,8 @@
                   <small>同步调整应用外观与终端配色。</small>
                 </span>
                 <select id="settings-theme">
-                  <option value="claude">Claude 暖色</option>
+                  <option value="claude">Claude 明亮</option>
+                  <option value="telegram">Telegram 明亮</option>
                   <option value="graphite">石墨深色</option>
                   <option value="midnight">深海蓝</option>
                 </select>

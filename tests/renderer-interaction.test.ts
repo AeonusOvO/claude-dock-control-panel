@@ -154,6 +154,39 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toContain('.chat-message--user');
   });
 
+  it('places chat above the project/connection group and exposes its complete conversation state', () => {
+    const chatNavigation = rendererMarkup.indexOf('data-rail-tab="chat"');
+    const projectNavigation = rendererMarkup.indexOf('data-rail-tab="projects"');
+    const connectionNavigation = rendererMarkup.indexOf('data-rail-tab="connection"');
+
+    expect(chatNavigation).toBeGreaterThan(0);
+    expect(chatNavigation).toBeLessThan(projectNavigation);
+    expect(projectNavigation).toBeLessThan(connectionNavigation);
+    expect(rendererMarkup).toContain('id="chat-context-total"');
+    expect(rendererMarkup).toContain('id="chat-token-usage"');
+    expect(rendererMarkup).toContain('id="new-chat"');
+    expect(rendererMarkup).toContain('id="test-chat-connection"');
+    expect(rendererMarkup).toContain('id="chat-history-list"');
+    expect(rendererSource).toContain('window.controlPanel.testChatConnection(chatConfigInput())');
+    expect(rendererSource).toContain('window.controlPanel.saveChatConversation({');
+    expect(rendererSource).toContain('window.controlPanel.getChatConversations()');
+    expect(rendererSource).toContain('window.controlPanel.deleteChatConversation(conversation.id)');
+    expect(rendererSource).toContain("chatInput.addEventListener('input', renderChatUsage);");
+    expect(rendererSource).toContain(
+      "estimateChatUsage([...chatMessages, { content: draft, role: 'user' }])",
+    );
+  });
+
+  it('uses theme-aware typography and glow feedback without hover lift', () => {
+    expect(rendererSource).toContain("import '@fontsource-variable/open-sans';");
+    expect(rendererSource).toContain(
+      'document.documentElement.style.colorScheme = definition.appearance;',
+    );
+    expect(rendererStyles).toContain('--ease-telegram: cubic-bezier(0.25, 1, 0.5, 1);');
+    expect(rendererStyles).toContain('@keyframes chatMessageEnter');
+    expect(rendererStyles).not.toMatch(/:hover[^{]*\{[^}]*transform:\s*translateY\(/s);
+  });
+
   it('exposes permanent history deletion with confirmation in every stored conversation row', () => {
     expect(rendererMarkup).toContain('data-conversation-context-action="delete"');
     expect(rendererSource).toContain('const deleteStoredConversation = async');

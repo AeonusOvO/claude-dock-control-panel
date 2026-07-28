@@ -16,6 +16,14 @@ interface StoredChatConfig {
   protocol: ChatProtocol;
 }
 
+export interface ChatRuntimeConfig {
+  authMode: ChatAuthMode;
+  baseUrl: string;
+  credential?: string;
+  model: string;
+  protocol: ChatProtocol;
+}
+
 interface StoredChatConfigFile {
   config: StoredChatConfig;
   version: 1;
@@ -87,6 +95,30 @@ const isStoredConfig = (value: unknown): value is StoredChatConfig => {
   );
 };
 
+const validateInput = (
+  input: SaveChatConfigInput,
+): Omit<StoredChatConfig, 'encryptedCredential'> => {
+  if (input.protocol !== 'anthropic' && input.protocol !== 'openai') {
+    throw new Error('对话接口协议无效。');
+  }
+  if (input.authMode !== 'apiKey' && input.authMode !== 'bearer' && input.authMode !== 'none') {
+    throw new Error('对话接口认证方式无效。');
+  }
+  if (
+    input.credentialAction !== 'clear' &&
+    input.credentialAction !== 'keep' &&
+    input.credentialAction !== 'replace'
+  ) {
+    throw new Error('对话接口凭据操作无效。');
+  }
+  return {
+    authMode: input.authMode,
+    baseUrl: normalizeChatBaseUrl(input.baseUrl),
+    model: normalizeModel(input.model),
+    protocol: input.protocol,
+  };
+};
+
 export class ChatConfigStore {
   private readonly storageDirectory: string;
   private readonly storagePath: string;
@@ -107,36 +139,36 @@ export class ChatConfigStore {
     };
   }
 
-  public getRuntimeConfig(): StoredChatConfig & { credential?: string } {
+  public getRuntimeConfig(): ChatRuntimeConfig {
     const config = this.load().config;
+    return {
+      authMode: config.authMode,
+      baseUrl: config.baseUrl,
+      credential: this.decryptCredential(config.encryptedCredential),
+      model: config.model,
+      protocol: config.protocol,
+    };
+  }
+
+  public resolveRuntimeConfig(input: SaveChatConfigInput): ChatRuntimeConfig {
+    const normalized = validateInput(input);
+    const current = this.load().config;
     let credential: string | undefined;
-    if (config.encryptedCredential) {
-      if (!safeStorage.isEncryptionAvailable()) {
-        throw new Error('Windows 安全存储当前不可用，无法解密对话接口凭据。');
-      }
-      try {
-        credential = safeStorage.decryptString(Buffer.from(config.encryptedCredential, 'base64'));
-      } catch {
-        throw new Error('对话接口凭据无法解密，请在全局设置中重新填写。');
+    if (normalized.authMode !== 'none' && input.credentialAction !== 'clear') {
+      if (input.credentialAction === 'replace') {
+        credential = input.credential?.trim();
+        if (!credential || credential.length > 4096 || /[\r\n]/.test(credential)) {
+          throw new Error('接口凭据不能为空、不能换行，且长度不能超过 4096 个字符。');
+        }
+      } else {
+        credential = this.decryptCredential(current.encryptedCredential);
       }
     }
-    return { ...config, credential };
+    return { ...normalized, credential };
   }
 
   public save(input: SaveChatConfigInput): ChatConfigView {
-    if (input.protocol !== 'anthropic' && input.protocol !== 'openai') {
-      throw new Error('对话接口协议无效。');
-    }
-    if (input.authMode !== 'apiKey' && input.authMode !== 'bearer' && input.authMode !== 'none') {
-      throw new Error('对话接口认证方式无效。');
-    }
-    if (
-      input.credentialAction !== 'clear' &&
-      input.credentialAction !== 'keep' &&
-      input.credentialAction !== 'replace'
-    ) {
-      throw new Error('对话接口凭据操作无效。');
-    }
+    const normalized = validateInput(input);
 
     const current = this.load().config;
     let encryptedCredential = current.encryptedCredential;
@@ -155,16 +187,30 @@ export class ChatConfigStore {
 
     const store: StoredChatConfigFile = {
       config: {
-        authMode: input.authMode,
-        baseUrl: normalizeChatBaseUrl(input.baseUrl),
+        authMode: normalized.authMode,
+        baseUrl: normalized.baseUrl,
         encryptedCredential,
-        model: normalizeModel(input.model),
-        protocol: input.protocol,
+        model: normalized.model,
+        protocol: normalized.protocol,
       },
       version: 1,
     };
     this.persist(store);
     return this.getView();
+  }
+
+  private decryptCredential(encryptedCredential: string | undefined): string | undefined {
+    if (!encryptedCredential) {
+      return undefined;
+    }
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('Windows 安全存储当前不可用，无法解密对话接口凭据。');
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(encryptedCredential, 'base64'));
+    } catch {
+      throw new Error('对话接口凭据无法解密，请在对话页重新填写。');
+    }
   }
 
   private load(): StoredChatConfigFile {

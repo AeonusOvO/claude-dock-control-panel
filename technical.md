@@ -8,6 +8,7 @@
   原生模块。
 - xterm.js 6 + `@xterm/addon-unicode11` + `@xterm/addon-webgl`：终端渲染、键盘输入与中文
   宽字符计算；WebGL 渲染器负责大量输出时的绘制性能，丢失上下文时回退 DOM 渲染器。
+- `@fontsource-variable/open-sans`：把 Open Sans 可变字体随应用本地打包，供明亮主题离线使用。
 - Vitest、ESLint、Prettier：测试和静态检查。
 - electron-builder：Windows NSIS 安装包。
 
@@ -30,7 +31,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
         ├── ClaudeSessionManager ── 当前项目 JSONL 元数据 / 定向恢复与删除
         ├── ChatConfigStore ── safeStorage / 全局独立对话配置
-        ├── ChatService ── Anthropic/OpenAI HTTP + SSE 流式适配与取消
+        ├── ChatHistoryStore ── 独立对话正文 / Token 快照 / 原子 JSON
+        ├── ChatService ── Anthropic/OpenAI HTTP + SSE / usage / 测试 / 取消
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
@@ -61,12 +63,13 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 #### 主题令牌桥
 
 主题的作用域是**整个外壳**，不只是 xterm palette。`src/shared/terminal-themes.ts` 的每套主题
-除 `palette`（22 个 xterm 字段）外还有 `shell`（22 个外壳字段），
+除 `palette`（22 个 xterm 字段）外还有 `appearance` 与 `shell`（41 个外壳字段），
 `SHELL_CSS_VARIABLES` 是「shell 字段 → CSS 自定义属性」的映射表，是这套机制唯一的接线点：
 
 1. `applyTerminalTheme`（`src/renderer/main.ts`）遍历映射表写
-   `documentElement.style.setProperty(...)`，并设 `dataset.theme`；`styles.css` 里所有
-   `var(--…)` 因此一起换色。启动时以 `announce = false` 调用一次。
+   `documentElement.style.setProperty(...)`，并设 `dataset.theme`、`dataset.appearance` 与
+   原生 `colorScheme`；`styles.css` 里所有 `var(--…)` 因此一起切换字体、表面、交互层、阴影、
+   语义状态色与颜色。启动时以 `announce = false` 调用一次。
 2. 原生窗口边框由 Windows 绘制，CSS 到不了，所以渲染层再调 `ui:set-theme` IPC；主进程
    `applyWindowTheme`（`main.ts:1368`）执行 `setBackgroundColor` + `setTitleBarOverlay`。
    **只改 CSS 会留下用户看到的那圈深色边框。**
@@ -85,7 +88,9 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`--write` 才落盘）。
 
 `letterSpacing: 0` 是 TUI 边框对齐的必需值。状态三色（`--ok-*` / `--warn-*` / `--bad-*`）
-刻意不进主题——语义色跨主题保持一致。
+的语义跨主题保持一致，但浅底需要更深的文字与描边，所以实际令牌随 `appearance` 调整并逐主题
+做 WCAG 对比度测试。Claude / Telegram 明亮主题的 `fontUi` 指向本地 Open Sans Variable；
+深色主题保留 Segoe UI Variable。
 
 #### 终端输出与输入的性能路径
 
@@ -182,14 +187,28 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - `ChatService`（`src/main/chat-service.ts`）只在 Electron 主进程使用 Node `fetch`。Anthropic
   协议补全 `/v1/messages`、发送 `x-api-key` 和 `anthropic-version`，并解析
   `content_block_delta`；OpenAI 兼容协议补全 `/v1/chat/completions`、支持 Bearer，并解析
-  `choices[0].delta.content`。中转若返回非 SSE JSON，则提取对应协议的普通文本响应。
+  `choices[0].delta.content`。OpenAI 流默认请求 `stream_options.include_usage`；遇到拒绝该扩展
+  的 400/422 兼容网关会自动重试一次普通流。两种协议都解析供应商 usage 并沿流事件回传；
+  中转若返回非 SSE JSON，则提取对应协议的普通文本与 usage。
 - renderer 通过 `chat:start` 发起，主进程用 `requestId → AbortController` Map 管理 120 秒
   超时与 `chat:stop`；`chat:stream` 只推送 start/delta/done/error/aborted，不推送请求头或
   凭据。每次最多 100 条消息、单条 200,000 字符、请求合计 1,000,000 字符、响应
   2,000,000 字符；错误文案再次替换可能回显的凭据。
-- 首期聊天消息只存在 renderer 内存，不写磁盘、不读取项目文件，也不创建 PTY。新对话清空
-  当前运行期数组；应用退出后正文自然消失。持久化历史需要先增加“隐私与数据”保留/删除规则，
-  不在本轮隐式开启。
+- `chat:test-connection` 使用当前未保存表单草稿解析运行期配置，发送最多 1-token、15 秒超时、
+  64 KiB 响应上限的非流式最小请求；不会顺带保存草稿。结果包含成功状态、净化后的说明、
+  延迟和供应商可用时的 usage。
+- `src/shared/chat-usage.ts` 是供应商未返回 usage 时的显式回退：ASCII 约 4 字符/token，
+  非 ASCII 按 1 字符/token，加上每条消息固定开销。renderer 在输入事件、发送、流式增量及
+  终止事件上更新显示；估算数据使用 `source: 'estimated'` 并在 UI 标“约”，供应商数据使用
+  `source: 'provider'`。
+- `ChatHistoryStore`（`src/main/chat-history-store.ts`）把正文、标题、时间与 Token 快照以
+  明文原子写入 `userData/claude/chat-history.json`：先写权限 `0600` 的 `.tmp` 再重命名。
+  最多保留最近 50 个对话、每个 100 条消息，单条与总长度复用请求上限；对话 ID 只接受 v4 UUID。
+  损坏或版本未知的文件只读为空，不在读取阶段覆盖原文件。每次发送前和生成完成/停止/失败后
+  更新历史；新对话只清空当前视图，逐条删除要经过 renderer 的应用内危险确认。
+- 独立对话仍不读取项目文件，也不创建 PTY。历史正文没有使用 `safeStorage` 加密，因为其
+  数据体量与可检索性不同于凭据；README 与界面将其明确为本机明文记录。凭据继续只存在
+  `chat-profile.json` 的 Windows 安全存储密文中。
 
 ## Claude Code 接入与会话
 
@@ -698,7 +717,9 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
   PowerShell 启动脚本语法和软件语义版本比较；独立对话测试额外覆盖凭据密文落盘、URL
-  安全边界、credential keep/clear，以及 Anthropic/OpenAI 两类 SSE 流、端点补全和认证头。
+  安全边界、未保存草稿连接测试、credential keep/clear、Token 估算、Anthropic/OpenAI
+  两类 SSE usage、OpenAI 兼容回退、端点补全和认证头，以及历史创建/更新/排序/删除、UUID/
+  长度/50 条上限与损坏文件恢复。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
@@ -706,7 +727,8 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 - `tests/design-tokens.test.ts` 是「全局主题真的生效」的守栏：`styles.css` 的 `:root` 之外不得
   出现 hex 字面量、带色相的 `rgb()`/`rgba()`、第三种 `font-family` 或写死的 `font-size`；
   每个 `SHELL_CSS_VARIABLES` 属性都必须既有 `:root` 默认值又在正文里被引用；同时按 WCAG
-  相对亮度校验三套主题的画布与文字对比度（`textHi`/canvas > 7，正文与强调色 > 4.5）。
+  相对亮度校验四套明暗主题的画布、正文、强调色与语义状态色对比度
+  （`textHi`/canvas > 7，其余正文级文字 > 4.5）。
 - `tests/composer-input.test.ts` / `tests/composer-history.test.ts` 覆盖输入框的两个纯模块：
   多行提交必须是 `\x0a` 连接的 `body` 加上单独的 `\r` `submit` 两段，历史的去重、上限与
   游标行为；提交测试还用假时钟验证两次 PTY 写入的顺序，以及会话在 40ms 间隔内失效时不会
@@ -718,7 +740,8 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   活动终端的 `focus-within` 必须有主题色聚焦反馈；连接实测必须显示后台状态、在唯一
   `finally` 恢复测试按钮并让定时轮询避让；统一刷新必须在首屏后异步启动，三类更新入口默认
   隐藏；服务商反选、按上次选择单组展开、
-  1/2/3 列容器查询、全局设置分类与接入快照式取消、独立聊天主视图、历史对话删除入口，
+  1/2/3 列容器查询、全局设置分类与接入快照式取消、独立聊天导航顺序、实时草稿 Token、
+  连接测试、历史保存/恢复/删除入口、Claude/Telegram 主题外观和禁止 hover 上浮，
   以及活动栏二次点击收起也作为源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须
   用保存配置原地测试、不得跳转
   “接入”页，且忙态分支必须排在健康色分支之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
@@ -767,9 +790,10 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   为覆盖固定底栏；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言输入框不被底栏或
   已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
-  可复现失败。
+  可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。
 - `npm run test:visual` 在本地生成 820px 插件页、1180px 单组展开服务商向导、1180px 历史
-  配置组件、1180px 全局设置两个分类、独立对话、终端聚焦态与重命名弹窗 PNG 到
+  配置组件、1180px 全局设置两个分类、带历史/Token/连接测试结果的 Claude 明亮独立对话、
+  终端聚焦态与重命名弹窗 PNG 到
   `dist/visual-qa/`，用于
   人工核对主题选择器、窄宽响应式、服务商卡片、认证设置、聚焦微光、历史参数和弹窗层级；
   隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
@@ -823,6 +847,18 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
 
 ## 外部依据
 
+- Claude 官方 MCP Apps 设计规范（明亮/深色令牌、排版层级、WCAG）：
+  <https://claude.com/docs/connectors/building/mcp-apps/design-guidelines>
+- Claude 官方透明主题规范：
+  <https://claude.com/docs/connectors/building/mcp-apps/transparent-theming>
+- Telegram Desktop 官方仓库（Open Sans 与桌面交互基线）：
+  <https://github.com/telegramdesktop/tdesktop>
+- Telegram Web A 主题与动效令牌实现：
+  <https://github.com/Ajaxy/telegram-tt>
+- Open Sans 字体源：
+  <https://github.com/googlefonts/opensans>
+- Fontsource 字体文件仓库：
+  <https://github.com/fontsource/font-files>
 - Electron Security：
   <https://www.electronjs.org/docs/latest/tutorial/security>
 - Electron Tray：

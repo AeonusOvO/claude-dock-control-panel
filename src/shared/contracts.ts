@@ -32,6 +32,7 @@ export type ChatProtocol = 'anthropic' | 'openai';
 export type ChatAuthMode = 'apiKey' | 'bearer' | 'none';
 export type ChatMessageRole = 'assistant' | 'system' | 'user';
 export type ChatStreamEventType = 'aborted' | 'delta' | 'done' | 'error' | 'start';
+export type ChatTokenUsageSource = 'estimated' | 'provider';
 
 export interface ChatConfigView {
   authMode: ChatAuthMode;
@@ -55,6 +56,13 @@ export interface ChatMessage {
   role: ChatMessageRole;
 }
 
+export interface ChatTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  source: ChatTokenUsageSource;
+  totalTokens: number;
+}
+
 export interface ChatStartInput {
   messages: ChatMessage[];
   requestId: string;
@@ -65,6 +73,33 @@ export interface ChatStreamEvent {
   error?: string;
   requestId: string;
   type: ChatStreamEventType;
+  usage?: ChatTokenUsage;
+}
+
+export interface ChatConversationSummary {
+  createdAt: number;
+  id: string;
+  messageCount: number;
+  title: string;
+  updatedAt: number;
+  usage: ChatTokenUsage;
+}
+
+export interface ChatConversation extends ChatConversationSummary {
+  messages: ChatMessage[];
+}
+
+export interface SaveChatConversationInput {
+  conversationId?: string;
+  messages: ChatMessage[];
+  usage: ChatTokenUsage;
+}
+
+export interface ChatConnectionTestResult {
+  detail: string;
+  latencyMs: number;
+  ok: boolean;
+  usage?: ChatTokenUsage;
 }
 
 export interface AppSettingsView {
@@ -484,6 +519,11 @@ export interface ControlPanelApi {
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
   getChatConfig: () => Promise<ChatConfigView>;
   saveChatConfig: (input: SaveChatConfigInput) => Promise<ChatConfigView>;
+  testChatConnection: (input: SaveChatConfigInput) => Promise<ChatConnectionTestResult>;
+  getChatConversations: () => Promise<ChatConversationSummary[]>;
+  getChatConversation: (conversationId: string) => Promise<ChatConversation | undefined>;
+  saveChatConversation: (input: SaveChatConversationInput) => Promise<ChatConversation>;
+  deleteChatConversation: (conversationId: string) => Promise<boolean>;
   startChat: (input: ChatStartInput) => Promise<void>;
   stopChat: (requestId: string) => Promise<void>;
   onChatStream: (listener: (event: ChatStreamEvent) => void) => Unsubscribe;

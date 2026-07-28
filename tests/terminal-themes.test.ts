@@ -14,10 +14,15 @@ const perceivedLightness = (hexColor: string): number => {
 };
 
 describe('terminal themes', () => {
-  it('ships only dark terminal backgrounds with readable foregrounds', () => {
+  it('ships genuinely distinct light and dark terminal appearances', () => {
     for (const theme of Object.values(TERMINAL_THEMES)) {
-      expect(perceivedLightness(theme.palette.background)).toBeLessThan(48);
-      expect(perceivedLightness(theme.palette.foreground)).toBeGreaterThan(150);
+      if (theme.appearance === 'light') {
+        expect(perceivedLightness(theme.palette.background)).toBeGreaterThan(220);
+        expect(perceivedLightness(theme.palette.foreground)).toBeLessThan(90);
+      } else {
+        expect(perceivedLightness(theme.palette.background)).toBeLessThan(48);
+        expect(perceivedLightness(theme.palette.foreground)).toBeGreaterThan(150);
+      }
       expect(theme.palette.foreground).not.toBe(theme.palette.background);
     }
   });
@@ -39,6 +44,7 @@ describe('terminal themes', () => {
   it('validates persisted theme identifiers', () => {
     expect(isTerminalThemeId(DEFAULT_TERMINAL_THEME)).toBe(true);
     expect(isTerminalThemeId('claude')).toBe(true);
+    expect(isTerminalThemeId('telegram')).toBe(true);
     expect(isTerminalThemeId('pure-white')).toBe(false);
     expect(isTerminalThemeId(null)).toBe(false);
   });

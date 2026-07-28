@@ -30,6 +30,13 @@ const api: ControlPanelApi = {
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
   getChatConfig: () => ipcRenderer.invoke('chat:get-config'),
   saveChatConfig: (input) => ipcRenderer.invoke('chat:save-config', input),
+  testChatConnection: (input) => ipcRenderer.invoke('chat:test-connection', input),
+  getChatConversations: () => ipcRenderer.invoke('chat:list-conversations'),
+  getChatConversation: (conversationId) =>
+    ipcRenderer.invoke('chat:get-conversation', conversationId),
+  saveChatConversation: (input) => ipcRenderer.invoke('chat:save-conversation', input),
+  deleteChatConversation: (conversationId) =>
+    ipcRenderer.invoke('chat:delete-conversation', conversationId),
   startChat: (input) => ipcRenderer.invoke('chat:start', input) as Promise<void>,
   stopChat: (requestId) => ipcRenderer.invoke('chat:stop', requestId) as Promise<void>,
   onChatStream: (listener) => {

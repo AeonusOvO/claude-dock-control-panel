@@ -85,6 +85,37 @@ describe('independent chat profile store', () => {
     ).toBe(false);
   });
 
+  it('resolves an unsaved draft for connection testing without persisting the new credential', () => {
+    const { store } = createStore();
+    store.save({
+      authMode: 'apiKey',
+      baseUrl: 'https://api.anthropic.com',
+      credential: 'saved-secret',
+      credentialAction: 'replace',
+      model: 'saved-model',
+      protocol: 'anthropic',
+    });
+
+    expect(
+      store.resolveRuntimeConfig({
+        authMode: 'bearer',
+        baseUrl: 'https://gateway.example.com/v1',
+        credential: 'draft-secret',
+        credentialAction: 'replace',
+        model: 'draft-model',
+        protocol: 'openai',
+      }),
+    ).toEqual({
+      authMode: 'bearer',
+      baseUrl: 'https://gateway.example.com/v1',
+      credential: 'draft-secret',
+      model: 'draft-model',
+      protocol: 'openai',
+    });
+    expect(store.getRuntimeConfig().credential).toBe('saved-secret');
+    expect(store.getRuntimeConfig()).not.toHaveProperty('encryptedCredential');
+  });
+
   it('allows local HTTP but rejects remote plaintext and URL-embedded metadata', () => {
     expect(normalizeChatBaseUrl('http://127.0.0.1:8080/v1')).toBe('http://127.0.0.1:8080/v1');
     expect(() => normalizeChatBaseUrl('http://gateway.example.com')).toThrow(/HTTPS/);

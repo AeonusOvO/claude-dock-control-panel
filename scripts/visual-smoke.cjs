@@ -36,7 +36,8 @@ app.whenReady().then(async () => {
   const captureSettledPage = async () => {
     window.webContents.invalidate();
     await window.capturePage();
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Let the longest 280–300 ms Telegram-style entrance finish before visual comparison.
+    await new Promise((resolve) => setTimeout(resolve, 360));
     return window.capturePage();
   };
 
@@ -220,6 +221,7 @@ app.whenReady().then(async () => {
   );
   await window.webContents.executeJavaScript(`
     document.querySelector('#connection-advanced-dialog').close();
+    document.documentElement.style.setProperty('--rail-w', '360px');
     ${activateRailPage('projects')}
     const focusEmptyTerminal = document.querySelector('#terminal-empty-state');
     focusEmptyTerminal.classList.add('terminal-empty-state--hidden');
@@ -246,6 +248,44 @@ app.whenReady().then(async () => {
     document.querySelector('#terminal-shell').hidden = true;
     document.querySelector('#chat-shell').hidden = false;
     ${activateRailPage('chat')}
+    for (const button of document.querySelectorAll('[data-rail-tab]')) {
+      button.classList.toggle(
+        'activity-rail__button--active',
+        button.dataset.railTab === 'chat',
+      );
+    }
+    document.querySelector('#chat-active-model').textContent = 'claude-sonnet-4-5';
+    document.querySelector('#chat-context-total').textContent = '1.2K tokens';
+    document.querySelector('#chat-token-usage').textContent = '输入 986 · 输出 238';
+    document.querySelector('#chat-connection-test').dataset.tone = 'success';
+    document.querySelector('#chat-connection-test').textContent =
+      '连接成功，接口、认证与模型响应均可用。 · 412 ms · 6 tokens';
+    const chatHistory = document.querySelector('#chat-history-list');
+    chatHistory.replaceChildren();
+    for (const [titleText, metaText, active] of [
+      ['总结 ClaudeDock 当前状态', '7月28日 21:42 · 4 条消息 · 1.2K tokens', true],
+      ['比较两套亮色主题', '7月28日 20:16 · 6 条消息 · 2.8K tokens', false],
+    ]) {
+      const item = document.createElement('div');
+      item.className = 'chat-history__item';
+      item.dataset.active = String(active);
+      const open = document.createElement('button');
+      open.className = 'chat-history__open';
+      open.type = 'button';
+      const title = document.createElement('strong');
+      title.textContent = titleText;
+      const meta = document.createElement('span');
+      meta.textContent = metaText;
+      open.append(title, meta);
+      const remove = document.createElement('button');
+      remove.className = 'chat-history__delete';
+      remove.type = 'button';
+      remove.textContent = '×';
+      item.append(open, remove);
+      chatHistory.append(item);
+    }
+    document.querySelector('#chat-history-empty').hidden = true;
+    document.querySelector('#chat-history-count').textContent = '2 条';
     document.querySelector('#chat-empty-state').hidden = true;
     const messages = document.querySelector('#chat-messages');
     for (const [role, label, content] of [
@@ -268,7 +308,17 @@ app.whenReady().then(async () => {
     }
   `);
   await new Promise((resolve) => setTimeout(resolve, 80));
-  writeFileSync(path.join(outputDirectory, 'chat-1180.png'), (await captureSettledPage()).toPNG());
+  writeFileSync(
+    path.join(outputDirectory, 'chat-claude-light-1180.png'),
+    (await captureSettledPage()).toPNG(),
+  );
+  await window.webContents.executeJavaScript(`
+    document.querySelector('#chat-connection-test').scrollIntoView({ block: 'center' });
+  `);
+  writeFileSync(
+    path.join(outputDirectory, 'chat-connection-test-claude-light-1180.png'),
+    (await captureSettledPage()).toPNG(),
+  );
   await window.webContents.executeJavaScript(`
     document.querySelector('#terminal-focus-fixture').remove();
     document.querySelector('#terminal-shell').hidden = false;

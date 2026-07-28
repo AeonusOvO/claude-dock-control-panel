@@ -3,6 +3,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import '@fontsource-variable/open-sans';
 import type {
   ClaudeConnectionAdvice,
   ClaudeConnectionAdviceAction,
@@ -26,8 +27,10 @@ import type {
   ClaudeRouterProviderView,
   ClaudeSessionMetadata,
   ChatConfigView,
+  ChatConversationSummary,
   ChatMessage,
   ChatStreamEvent,
+  ChatTokenUsage,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -39,6 +42,7 @@ import type {
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import { estimateChatUsage } from '../shared/chat-usage';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import {
@@ -371,7 +375,14 @@ const chatCredentialStatus = requiredElement<HTMLElement>('#chat-credential-stat
 const chatClearCredential = requiredElement<HTMLInputElement>('#chat-clear-credential');
 const saveChatConfigButton = requiredElement<HTMLButtonElement>('#save-chat-config');
 const chatConfigStatus = requiredElement<HTMLElement>('#chat-config-status');
+const chatConnectionTest = requiredElement<HTMLElement>('#chat-connection-test');
+const testChatConnectionButton = requiredElement<HTMLButtonElement>('#test-chat-connection');
 const chatActiveModel = requiredElement<HTMLElement>('#chat-active-model');
+const chatContextTotal = requiredElement<HTMLElement>('#chat-context-total');
+const chatTokenUsage = requiredElement<HTMLElement>('#chat-token-usage');
+const chatHistoryList = requiredElement<HTMLElement>('#chat-history-list');
+const chatHistoryEmpty = requiredElement<HTMLElement>('#chat-history-empty');
+const chatHistoryCount = requiredElement<HTMLElement>('#chat-history-count');
 const chatMessagesElement = requiredElement<HTMLElement>('#chat-messages');
 const chatEmptyState = requiredElement<HTMLElement>('#chat-empty-state');
 const chatComposer = requiredElement<HTMLFormElement>('#chat-composer');
@@ -443,6 +454,11 @@ const guardedButtons = new WeakSet<HTMLButtonElement>();
 let chatConfig: ChatConfigView | undefined;
 let chatConfigLoadPromise: Promise<void> | undefined;
 const chatMessages: ChatMessage[] = [];
+let chatConversations: ChatConversationSummary[] = [];
+let activeChatConversationId: string | undefined;
+let activeChatUsage: ChatTokenUsage = estimateChatUsage([]);
+let activeChatProviderUsage: ChatTokenUsage | undefined;
+let activeChatRequestMessages: ChatMessage[] = [];
 let activeChatRequestId = '';
 let activeChatReply = '';
 let activeChatReplyElement: HTMLElement | undefined;
@@ -565,6 +581,8 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
     );
   }
   document.documentElement.dataset.theme = themeId;
+  document.documentElement.dataset.appearance = definition.appearance;
+  document.documentElement.style.colorScheme = definition.appearance;
   for (const view of terminalViews.values()) {
     view.terminal.options.theme = { ...definition.palette };
   }
@@ -586,6 +604,190 @@ const projectNameFromPath = (directoryPath: string): string => {
 
 const activeStatus = (): TerminalStatus | undefined =>
   workspaceState.sessions.find((status) => status.id === workspaceState.activeSessionId);
+
+const chatConfigInput = (): SaveChatConfigInput => {
+  const credential = chatCredential.value.trim();
+  return {
+    authMode: chatAuthMode.value as SaveChatConfigInput['authMode'],
+    baseUrl: chatBaseUrl.value,
+    credential: credential || undefined,
+    credentialAction: chatClearCredential.checked ? 'clear' : credential ? 'replace' : 'keep',
+    model: chatModel.value,
+    protocol: chatProtocol.value as SaveChatConfigInput['protocol'],
+  };
+};
+
+const renderChatUsage = (): void => {
+  const draft = chatInput.value.trim();
+  const displayUsage = draft
+    ? estimateChatUsage([...chatMessages, { content: draft, role: 'user' }])
+    : activeChatUsage;
+  const marker = displayUsage.source === 'estimated' ? '约 ' : '';
+  chatContextTotal.textContent = `${marker}${formatTokenCount(displayUsage.totalTokens)} tokens`;
+  chatTokenUsage.textContent = `输入 ${marker}${formatTokenCount(displayUsage.inputTokens)} · 输出 ${marker}${formatTokenCount(displayUsage.outputTokens)}`;
+  const detail =
+    displayUsage.source === 'provider'
+      ? 'Token 数由当前模型接口返回。'
+      : draft
+        ? '已把输入框草稿计入当前上下文，并按文本长度实时估算。'
+        : '当前接口尚未返回 usage，暂按文本长度估算。';
+  chatContextTotal.title = detail;
+  chatTokenUsage.title = detail;
+};
+
+const formatChatHistoryTime = (timestamp: number): string =>
+  new Intl.DateTimeFormat('zh-CN', {
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+  }).format(new Date(timestamp));
+
+const loadChatConversation = async (conversationId: string): Promise<void> => {
+  if (activeChatRequestId) {
+    return;
+  }
+  try {
+    const conversation = await window.controlPanel.getChatConversation(conversationId);
+    if (!conversation) {
+      showToast('这条对话历史已经不存在。', 'error');
+      await loadChatHistory();
+      return;
+    }
+    activeChatConversationId = conversation.id;
+    chatMessages.splice(0, chatMessages.length, ...conversation.messages);
+    activeChatUsage = { ...conversation.usage };
+    activeChatProviderUsage =
+      conversation.usage.source === 'provider' ? { ...conversation.usage } : undefined;
+    activeChatRequestMessages = [];
+    renderChatMessages();
+    renderChatUsage();
+    renderChatHistory();
+    chatInput.focus();
+  } catch {
+    showToast('无法读取这条对话历史。', 'error');
+  }
+};
+
+const deleteChatConversation = async (conversation: ChatConversationSummary): Promise<void> => {
+  if (
+    activeChatRequestId ||
+    !(await requestConfirmation({
+      confirmLabel: '删除对话',
+      message: `永久删除“${conversation.title}”及其本机消息记录？此操作无法撤销。`,
+      title: '删除对话历史',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+  try {
+    const deleted = await window.controlPanel.deleteChatConversation(conversation.id);
+    if (!deleted) {
+      throw new Error('对话历史已经不存在。');
+    }
+    if (activeChatConversationId === conversation.id) {
+      resetChatConversation();
+    }
+    await loadChatHistory();
+    showToast(`已删除对话“${conversation.title}”`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法删除对话历史。', 'error');
+  }
+};
+
+const renderChatHistory = (): void => {
+  chatHistoryList.replaceChildren();
+  chatHistoryEmpty.hidden = chatConversations.length > 0;
+  chatHistoryEmpty.textContent = '还没有历史记录；发送第一条消息后会自动保存。';
+  chatHistoryCount.textContent = `${chatConversations.length} 条`;
+  for (const conversation of chatConversations) {
+    const row = document.createElement('div');
+    row.className = 'chat-history__item';
+    row.dataset.active = String(conversation.id === activeChatConversationId);
+
+    const open = document.createElement('button');
+    open.className = 'chat-history__open';
+    open.type = 'button';
+    open.disabled = Boolean(activeChatRequestId);
+    open.setAttribute('aria-label', `打开对话 ${conversation.title}`);
+    const title = document.createElement('strong');
+    title.textContent = conversation.title;
+    const meta = document.createElement('span');
+    meta.textContent = `${formatChatHistoryTime(conversation.updatedAt)} · ${conversation.messageCount} 条消息 · ${formatTokenCount(conversation.usage.totalTokens)} tokens`;
+    open.append(title, meta);
+    open.addEventListener('click', () => {
+      void loadChatConversation(conversation.id);
+    });
+
+    const remove = document.createElement('button');
+    remove.className = 'chat-history__delete';
+    remove.type = 'button';
+    remove.disabled = Boolean(activeChatRequestId);
+    remove.title = '删除对话历史';
+    remove.setAttribute('aria-label', `删除对话 ${conversation.title}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      void deleteChatConversation(conversation);
+    });
+    row.append(open, remove);
+    chatHistoryList.append(row);
+  }
+};
+
+async function loadChatHistory(): Promise<void> {
+  try {
+    chatConversations = await window.controlPanel.getChatConversations();
+    renderChatHistory();
+  } catch {
+    chatHistoryEmpty.hidden = false;
+    chatHistoryEmpty.textContent = '无法读取本机对话历史。';
+  }
+}
+
+const renderChatMessages = (): void => {
+  chatMessagesElement.replaceChildren(chatEmptyState);
+  chatEmptyState.hidden = chatMessages.length > 0;
+  for (const message of chatMessages) {
+    if (message.role !== 'system') {
+      appendChatMessage(message.role, message.content);
+    }
+  }
+};
+
+const persistActiveChat = async (): Promise<void> => {
+  if (chatMessages.length === 0) {
+    return;
+  }
+  try {
+    const saved = await window.controlPanel.saveChatConversation({
+      conversationId: activeChatConversationId,
+      messages: [...chatMessages],
+      usage: { ...activeChatUsage },
+    });
+    activeChatConversationId = saved.id;
+    chatConversations = [
+      saved,
+      ...chatConversations.filter((conversation) => conversation.id !== saved.id),
+    ];
+    renderChatHistory();
+  } catch {
+    showToast('消息已发送，但本机对话历史保存失败。', 'error');
+  }
+};
+
+function resetChatConversation(): void {
+  activeChatConversationId = undefined;
+  chatMessages.splice(0);
+  activeChatUsage = estimateChatUsage([]);
+  activeChatProviderUsage = undefined;
+  activeChatRequestMessages = [];
+  chatMessagesElement.replaceChildren(chatEmptyState);
+  chatEmptyState.hidden = false;
+  chatInput.value = '';
+  renderChatUsage();
+  renderChatHistory();
+}
 
 const renderChatConfig = (config: ChatConfigView): void => {
   chatConfig = config;
@@ -645,13 +847,17 @@ const setChatBusy = (busy: boolean): void => {
   chatInput.disabled = busy;
   sendChatButton.disabled = busy;
   stopChatButton.hidden = !busy;
+  newChatButton.disabled = busy;
+  testChatConnectionButton.disabled = busy;
   chatComposer.setAttribute('aria-busy', String(busy));
+  renderChatHistory();
 };
 
 const finishChatRequest = (): void => {
   activeChatRequestId = '';
   activeChatReply = '';
   activeChatReplyElement = undefined;
+  activeChatRequestMessages = [];
   setChatBusy(false);
   chatInput.focus();
 };
@@ -660,11 +866,28 @@ const handleChatStream = (event: ChatStreamEvent): void => {
   if (event.requestId !== activeChatRequestId) {
     return;
   }
+  if (event.usage) {
+    activeChatProviderUsage = { ...event.usage };
+    activeChatUsage = { ...event.usage };
+    renderChatUsage();
+  }
   if (event.type === 'delta' && event.delta) {
     activeChatReply += event.delta;
     if (activeChatReplyElement) {
       activeChatReplyElement.textContent = activeChatReply;
       chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+    }
+    if (!event.usage) {
+      const estimated = estimateChatUsage(activeChatRequestMessages, activeChatReply);
+      activeChatUsage = activeChatProviderUsage
+        ? {
+            inputTokens: activeChatProviderUsage.inputTokens,
+            outputTokens: estimated.outputTokens,
+            source: 'estimated',
+            totalTokens: activeChatProviderUsage.inputTokens + estimated.outputTokens,
+          }
+        : estimated;
+      renderChatUsage();
     }
     return;
   }
@@ -674,7 +897,11 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     } else if (activeChatReplyElement) {
       activeChatReplyElement.textContent = '模型没有返回可显示的文本。';
     }
-    finishChatRequest();
+    if (!activeChatProviderUsage) {
+      activeChatUsage = estimateChatUsage(activeChatRequestMessages, activeChatReply);
+      renderChatUsage();
+    }
+    void persistActiveChat().finally(finishChatRequest);
     return;
   }
   if (event.type === 'aborted') {
@@ -684,7 +911,11 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     if (activeChatReply) {
       chatMessages.push({ content: activeChatReply, role: 'assistant' });
     }
-    finishChatRequest();
+    activeChatUsage = activeChatProviderUsage
+      ? { ...activeChatProviderUsage }
+      : estimateChatUsage(activeChatRequestMessages, activeChatReply);
+    renderChatUsage();
+    void persistActiveChat().finally(finishChatRequest);
     return;
   }
   if (event.type === 'error') {
@@ -696,8 +927,12 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     if (activeChatReply) {
       chatMessages.push({ content: activeChatReply, role: 'assistant' });
     }
+    activeChatUsage = activeChatProviderUsage
+      ? { ...activeChatProviderUsage }
+      : estimateChatUsage(activeChatRequestMessages, activeChatReply);
+    renderChatUsage();
     showToast(event.error ?? '独立对话请求失败。', 'error');
-    finishChatRequest();
+    void persistActiveChat().finally(finishChatRequest);
   }
 };
 
@@ -717,12 +952,17 @@ const submitChatMessage = async (): Promise<void> => {
   const userMessage: ChatMessage = { content, role: 'user' };
   chatMessages.push(userMessage);
   appendChatMessage('user', content);
+  activeChatRequestMessages = [...chatMessages];
+  activeChatUsage = estimateChatUsage(activeChatRequestMessages);
+  activeChatProviderUsage = undefined;
+  chatInput.value = '';
+  renderChatUsage();
   activeChatReplyElement = appendChatMessage('assistant', '正在连接模型…');
   activeChatReply = '';
   activeChatRequestId = crypto.randomUUID();
-  chatInput.value = '';
   setChatBusy(true);
   try {
+    await persistActiveChat();
     await window.controlPanel.startChat({
       messages: [...chatMessages],
       requestId: activeChatRequestId,
@@ -2934,6 +3174,8 @@ const applyRailTab = (tab?: string): void => {
   );
   if (tab === 'chat') {
     void loadChatConfig();
+    void loadChatHistory();
+    renderChatUsage();
   }
   if (tab === 'plugins') {
     void loadPluginCatalog(false);
@@ -5418,18 +5660,9 @@ connectionAdvancedDialog.addEventListener('cancel', (event) => {
 });
 chatConfigForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  const credential = chatCredential.value.trim();
-  const input: SaveChatConfigInput = {
-    authMode: chatAuthMode.value as SaveChatConfigInput['authMode'],
-    baseUrl: chatBaseUrl.value,
-    credential: credential || undefined,
-    credentialAction: chatClearCredential.checked ? 'clear' : credential ? 'replace' : 'keep',
-    model: chatModel.value,
-    protocol: chatProtocol.value as SaveChatConfigInput['protocol'],
-  };
   void runGuarded(saveChatConfigButton, '正在保存…', async () => {
     try {
-      const config = await window.controlPanel.saveChatConfig(input);
+      const config = await window.controlPanel.saveChatConfig(chatConfigInput());
       renderChatConfig(config);
       chatConfigStatus.textContent = '独立接入已保存并可用于新消息。';
       showToast('独立对话接入已保存');
@@ -5439,6 +5672,35 @@ chatConfigForm.addEventListener('submit', (event) => {
       showToast(message, 'error');
     }
   });
+});
+testChatConnectionButton.addEventListener('click', () => {
+  chatConnectionTest.dataset.tone = 'pending';
+  chatConnectionTest.textContent = '正在发送最小请求，验证接口、认证和模型…';
+  void runGuarded(testChatConnectionButton, '正在测试…', async () => {
+    try {
+      const result = await window.controlPanel.testChatConnection(chatConfigInput());
+      chatConnectionTest.dataset.tone = result.ok ? 'success' : 'error';
+      chatConnectionTest.textContent = `${result.detail} · ${result.latencyMs} ms${
+        result.usage ? ` · ${formatTokenCount(result.usage.totalTokens)} tokens` : ''
+      }`;
+      showToast(
+        result.ok ? '独立对话连接测试通过' : result.detail,
+        result.ok ? 'success' : 'error',
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '连接测试失败。';
+      chatConnectionTest.dataset.tone = 'error';
+      chatConnectionTest.textContent = message;
+      showToast(message, 'error');
+    }
+  });
+});
+chatConfigForm.addEventListener('input', (event) => {
+  if (event.target === testChatConnectionButton || event.target === saveChatConfigButton) {
+    return;
+  }
+  chatConnectionTest.dataset.tone = 'idle';
+  chatConnectionTest.textContent = '配置已变化，请重新测试连接。';
 });
 chatAuthMode.addEventListener('change', () => {
   const disabled = chatAuthMode.value === 'none';
@@ -5464,20 +5726,14 @@ chatInput.addEventListener('keydown', (event) => {
     void submitChatMessage();
   }
 });
+chatInput.addEventListener('input', renderChatUsage);
 stopChatButton.addEventListener('click', () => {
   if (activeChatRequestId) {
     void window.controlPanel.stopChat(activeChatRequestId);
   }
 });
 newChatButton.addEventListener('click', () => {
-  if (activeChatRequestId) {
-    void window.controlPanel.stopChat(activeChatRequestId);
-    finishChatRequest();
-  }
-  chatMessages.splice(0);
-  chatMessagesElement.replaceChildren(chatEmptyState);
-  chatEmptyState.hidden = false;
-  chatInput.value = '';
+  resetChatConversation();
   chatInput.focus();
 });
 footerConnection.addEventListener('click', () => {

@@ -78,7 +78,7 @@ const inspectLayout = `
     }
   }
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-shell, .chat-toolbar, .chat-messages, .chat-composer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-shell, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -234,6 +234,43 @@ const addConnectionHistoryStressFixture = `
   })()
 `;
 
+const addChatStressFixture = `
+  (() => {
+    document.querySelector('#chat-active-model').textContent =
+      'provider/a-very-long-model-name-for-responsive-layout';
+    document.querySelector('#chat-context-total').textContent = '128.6K tokens';
+    document.querySelector('#chat-token-usage').textContent = '输入 126.8K · 输出 1.8K';
+    const list = document.querySelector('#chat-history-list');
+    list.replaceChildren();
+    for (const [titleText, metaText] of [
+      [
+        '一条需要在最窄控制栏内正确截断而不能撑破布局的对话标题',
+        '7月28日 21:42 · 100 条消息 · 128.6K tokens',
+      ],
+      ['第二条对话', '7月28日 20:16 · 6 条消息 · 2.8K tokens'],
+    ]) {
+      const item = document.createElement('div');
+      item.className = 'chat-history__item';
+      const open = document.createElement('button');
+      open.className = 'chat-history__open';
+      open.type = 'button';
+      const title = document.createElement('strong');
+      title.textContent = titleText;
+      const meta = document.createElement('span');
+      meta.textContent = metaText;
+      open.append(title, meta);
+      const remove = document.createElement('button');
+      remove.className = 'chat-history__delete';
+      remove.type = 'button';
+      remove.textContent = '×';
+      item.append(open, remove);
+      list.append(item);
+    }
+    document.querySelector('#chat-history-empty').hidden = true;
+    document.querySelector('#chat-history-count').textContent = '2 条';
+  })()
+`;
+
 app.whenReady().then(async () => {
   const results = [];
   const window = new BrowserWindow({
@@ -248,6 +285,7 @@ app.whenReady().then(async () => {
   });
   await window.loadFile(path.join(__dirname, '..', 'dist', 'renderer', 'index.html'));
   await window.webContents.executeJavaScript(addConnectionHistoryStressFixture);
+  await window.webContents.executeJavaScript(addChatStressFixture);
 
   for (const [width, height] of sizes) {
     window.setSize(width, height);
