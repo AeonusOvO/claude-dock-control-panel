@@ -6,7 +6,19 @@ param(
 $ErrorActionPreference = 'Stop'
 
 try {
-  $rawInput = [Console]::In.ReadToEnd()
+  # Claude Code writes the payload as UTF-8. [Console]::In would decode it with the machine's
+  # ANSI/OEM codepage (GBK on Chinese Windows), where a multi-byte session_name can even swallow
+  # the closing quote and break the JSON — that is why resumed sessions with Chinese titles
+  # produced no metrics at all. Read the raw stream and decode UTF-8 explicitly.
+  $reader = New-Object System.IO.StreamReader(
+    [Console]::OpenStandardInput(),
+    (New-Object System.Text.UTF8Encoding($false))
+  )
+  try {
+    $rawInput = $reader.ReadToEnd()
+  } finally {
+    $reader.Dispose()
+  }
   $status = $rawInput | ConvertFrom-Json
   $contextSize = $status.context_window.context_window_size
   $usedPercentage = $status.context_window.used_percentage

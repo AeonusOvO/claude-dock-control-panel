@@ -482,8 +482,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
   session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间和改动行数。
-  主进程每秒读取变更，通过受限 IPC 推送，同时把有效的 1–60 字符 session name 同步到
-  工作区标签。
+  stdin 必须显式按 UTF-8 解码（`StreamReader` + `UTF8Encoding`），不能用 `[Console]::In`：
+  中文 Windows 的控制台代码页是 GBK，多字节 `session_name` 会被解错，双字节读还可能吞掉
+  JSON 的结尾引号导致整个解析失败——症状是恢复带 AI 标题的历史会话后完全没有指标，而全新
+  （未命名）会话正常。主进程每秒读取变更，通过受限 IPC 推送，同时把有效的 1–60 字符
+  session name 同步到工作区标签。
 - 上下文占用使用 `context_window.used_percentage × context_window_size`，而不是累计所有
   历史请求。Claude Code 会在接近窗口上限时自动 compact；界面的“实时”表示每次 statusLine
   刷新后的最新状态，不代表逐 token 流式计数。
