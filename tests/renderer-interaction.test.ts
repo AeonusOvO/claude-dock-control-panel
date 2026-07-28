@@ -128,16 +128,26 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
   });
 
-  it('shows the connection test as busy the moment the footer button is pressed', () => {
-    // Clicking used to only switch tabs, which read as "nothing happened".
+  it('tests the saved connection in place and shows the busy state immediately', () => {
     expect(rendererSource).toMatch(
-      /footerConnection\.addEventListener\('click', \(\) => \{\s+if \(connectionTestInProgress\) \{\s+return;\s+\}\s+setWorkbenchOpen\(false\);[\s\S]*?selectRailTab\('connection'\);\s+void runConnectionTest\(false\);/,
+      /footerConnection\.addEventListener\('click', \(\) => \{\s+if \(connectionTestInProgress\) \{\s+return;\s+\}[\s\S]*?void runConnectionTest\(false, \{[\s\S]*?credentialAction: 'keep',/,
+    );
+    const footerHandler = rendererSource.slice(
+      rendererSource.indexOf("footerConnection.addEventListener('click'"),
+      rendererSource.indexOf("footerModel.addEventListener('click'"),
+    );
+    expect(footerHandler).not.toContain("selectRailTab('connection')");
+    expect(footerHandler).not.toContain('setWorkbenchOpen(false)');
+    expect(rendererSource).toMatch(
+      /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState\);/,
     );
     // The busy branch has to precede the tone branch, or a stale route health would overwrite it.
     expect(rendererSource).toMatch(
       /if \(connectionTestInProgress\) \{\s+footerConnection\.dataset\.tone = 'pending';\s+footerConnection\.disabled = true;\s+footerConnection\.setAttribute\('aria-busy', 'true'\);\s+footerConnectionLabel\.textContent = '正在检测连接';\s+\} else \{\s+footerConnection\.disabled = false;\s+footerConnection\.setAttribute\('aria-busy', 'false'\);/,
     );
-    expect(rendererStyles).toContain("#footer-connection[data-tone='pending'] .footer-connection-dot");
+    expect(rendererStyles).toContain(
+      "#footer-connection[data-tone='pending'] .footer-connection-dot",
+    );
     expect(rendererStyles).toContain('#footer-connection:disabled {');
     expect(rendererMarkup).toContain('<span id="footer-connection-label">连接待测试</span>');
   });
@@ -159,7 +169,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\)/,
     );
-    expect(rendererSource).toMatch(/window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/);
+    expect(rendererSource).toMatch(
+      /window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/,
+    );
     // Narrow windows drop both readouts together, so the footer cannot overflow.
     expect(rendererStyles).toMatch(
       /@media \(max-width: 900px\)[\s\S]*?#footer-mode,\s+#footer-model \{\s+display: none;/,
@@ -167,14 +179,7 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('lists every permission mode and routes the un-cyclable one through a relaunch', () => {
-    for (const mode of [
-      'default',
-      'acceptEdits',
-      'plan',
-      'auto',
-      'bypassPermissions',
-      'dontAsk',
-    ]) {
+    for (const mode of ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk']) {
       expect(rendererSource).toContain(`id: '${mode}',`);
     }
     // `dontAsk` is only reachable as a launch argument, so it must not be sent to the stepper.
@@ -195,5 +200,17 @@ describe('renderer interaction lifecycle contract', () => {
     );
     // xterm already emits the same CBT sequence, so its key handler stays untouched.
     expect(rendererSource).not.toContain("event.code === 'Tab'");
+  });
+
+  it('reads permission badges from xterm after screen deltas have been applied', () => {
+    expect(rendererSource).toContain('const buffer = view.terminal.buffer.active;');
+    expect(rendererSource).toContain('const start = Math.max(buffer.baseY, end - 8);');
+    expect(rendererSource).toContain("buffer.getLine(row)?.translateToString(true) ?? ''");
+    expect(rendererSource).toContain(
+      'window.controlPanel.observeClaudePermissionMode(sessionId, mode);',
+    );
+    expect(rendererSource).toMatch(
+      /view\.terminal\.write\(chunk, \(\) => \{\s+reportTerminalPermissionMode\(sessionId, view\);/,
+    );
   });
 });

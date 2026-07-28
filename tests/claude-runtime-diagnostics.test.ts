@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
-import { parseClaudePermissionMode } from '../src/main/claude-configuration';
+import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 import {
   parseClaudeMetrics,
   parseClaudeRuntimeApiError,
@@ -140,6 +140,12 @@ describe('Claude runtime permission mode observation', () => {
     ).toBe('plan');
   });
 
+  it('does not mistake a cursor-movement delta for a complete mode badge', () => {
+    const rawDelta = '\u001b[23;3H⏵⏵ \u001b[1Cccept e\u001b[1Cits on (shift+tab to cycle)';
+
+    expect(parseClaudePermissionMode(rawDelta)).toBeUndefined();
+  });
+
   it('follows the mode forward as the session repaints new badges', () => {
     const chunks = ['⏸ manual mode on', '\r\n⏵⏵ accept edits on', '\r\n⏸ plan mode on'];
     expect(parseClaudePermissionMode(feedChunks(chunks.slice(0, 1)))).toBe('default');
@@ -170,6 +176,11 @@ describe('Claude runtime permission mode observation', () => {
     expect(runtimeSource).toContain('private readonly modeSwitchLocks = new Set<string>();');
     expect(runtimeSource).toContain('this.modeSwitchLocks.add(sessionId);');
     expect(runtimeSource).toContain('this.modeSwitchLocks.delete(sessionId);');
+    expect(runtimeSource).toContain('public observePermissionModeFromScreen(');
+    expect(runtimeSource).toContain('this.recordPermissionMode(runtime, mode);');
+    expect(runtimeSource).toMatch(
+      /observePermissionModeFromRawOutput\(runtime: RuntimeSession\): void \{\s+if \(runtime\.permissionMode !== undefined\) \{\s+return;/,
+    );
   });
 
   it('refuses the two modes the Shift+Tab cycle can never reach', () => {

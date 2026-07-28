@@ -24,6 +24,7 @@ import type {
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import { findClaudeProvider } from '../shared/claude-providers';
 import { AsyncRefreshCache } from './async-refresh-cache';
 import {
@@ -39,7 +40,6 @@ import {
   evaluateClaudeInstallation,
   MODEL_NAME_PATTERN,
   normalizeClaudeConfig,
-  parseClaudePermissionMode,
   type ClaudeEnvironmentOverrides,
   type NormalizedClaudeConfig,
 } from './claude-configuration';
@@ -502,7 +502,7 @@ export class ClaudeRuntime {
       };
       void this.emitState(runtime);
     }
-    this.observePermissionMode(runtime);
+    this.observePermissionModeFromRawOutput(runtime);
 
     let combined = runtime.markerRemainder + data;
     runtime.markerRemainder = '';
@@ -1012,10 +1012,34 @@ export class ClaudeRuntime {
     return state;
   }
 
-  /** Reads the badge out of the rolling terminal buffer and records any mode this session reaches. */
-  private observePermissionMode(runtime: RuntimeSession): void {
+  /**
+   * Accepts the badge reconstructed by xterm. Claude Code normally repaints only changed cells, so
+   * the complete viewport is the reliable source after a Shift+Tab step.
+   */
+  public observePermissionModeFromScreen(
+    sessionId: string,
+    cwd: string,
+    mode: ClaudePermissionMode,
+  ): void {
+    const runtime = this.ensureSession(sessionId, cwd);
+    if (runtime.active) {
+      this.recordPermissionMode(runtime, mode);
+    }
+  }
+
+  /** A full raw repaint remains a useful startup fallback before xterm reports its first screen. */
+  private observePermissionModeFromRawOutput(runtime: RuntimeSession): void {
+    if (runtime.permissionMode !== undefined) {
+      return;
+    }
     const mode = parseClaudePermissionMode(runtime.diagnosticBuffer);
-    if (!mode || mode === runtime.permissionMode) {
+    if (mode) {
+      this.recordPermissionMode(runtime, mode);
+    }
+  }
+
+  private recordPermissionMode(runtime: RuntimeSession, mode: ClaudePermissionMode): void {
+    if (mode === runtime.permissionMode) {
       return;
     }
     runtime.permissionMode = mode;

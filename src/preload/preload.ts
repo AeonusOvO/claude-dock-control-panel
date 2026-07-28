@@ -83,6 +83,9 @@ const api: ControlPanelApi = {
       sessionId,
       mode,
     ) as Promise<ClaudeOperationResult>,
+  observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => {
+    ipcRenderer.send('claude:permission-mode-observed', sessionId, mode);
+  },
   setClaudeAllowBypassPermissions: (sessionId: string, allowed: boolean) =>
     ipcRenderer.invoke(
       'claude:set-allow-bypass-permissions',

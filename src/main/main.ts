@@ -1249,6 +1249,20 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.on('claude:permission-mode-observed', (event, sessionId: unknown, mode: unknown) => {
+    validateSender(event);
+    try {
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      requireClaudeRuntime().observePermissionModeFromScreen(
+        validatedSessionId,
+        status.cwd,
+        validateClaudePermissionMode(mode),
+      );
+    } catch {
+      // A queued xterm write can finish immediately after its project or Claude session is closed.
+    }
+  });
   ipcMain.handle(
     'claude:set-allow-bypass-permissions',
     async (event, sessionId: unknown, allowed: unknown): Promise<ClaudeOperationResult> => {

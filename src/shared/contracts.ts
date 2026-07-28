@@ -464,6 +464,8 @@ export interface ControlPanelApi {
     sessionId: string,
     mode: ClaudePermissionMode,
   ) => Promise<ClaudeOperationResult>;
+  /** Reports the complete mode badge after xterm has applied PTY screen-delta output. */
+  observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;
   setClaudeAllowBypassPermissions: (
     sessionId: string,
     allowed: boolean,

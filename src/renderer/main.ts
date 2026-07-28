@@ -36,6 +36,7 @@ import type {
   WorkspaceState,
 } from '../shared/contracts';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
+import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import {
   CLAUDE_PROVIDER_GROUPS,
   CLAUDE_PROVIDERS,
@@ -76,6 +77,8 @@ interface TerminalView {
   pendingLength: number;
   /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
   pendingFrame: number;
+  /** Last complete badge reported from xterm's reconstructed viewport. */
+  observedPermissionMode?: ClaudePermissionMode;
   terminal: Terminal;
 }
 
@@ -991,6 +994,12 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
 
 const renderClaudeState = (state: ClaudeProjectState): void => {
   claudeStates.set(state.sessionId, state);
+  if (state.permissionMode === undefined) {
+    const view = terminalViews.get(state.sessionId);
+    if (view) {
+      view.observedPermissionMode = undefined;
+    }
+  }
   if (state.sessionId !== workspaceState.activeSessionId) {
     return;
   }
@@ -2321,19 +2330,26 @@ const renderConnectionTestPending = (): void => {
   connectionTestStages.replaceChildren();
 };
 
-const runConnectionTest = async (saveOnSuccess = true): Promise<void> => {
+const runConnectionTest = async (
+  saveOnSuccess = true,
+  configInput?: SaveClaudeConfigInput,
+): Promise<void> => {
   const status = activeStatus();
   if (!status || connectionTestInProgress) {
     return;
   }
   connectionTestInProgress = true;
   renderConnectionTestPending();
+  const knownState = claudeStates.get(status.id);
+  if (knownState) {
+    renderClaudeState(knownState);
+  }
   await runGuarded(testClaudeConnectionButton, '正在发送单令牌测试…', async () => {
     syncConnectionInteractivity();
     try {
       const result = await window.controlPanel.testClaudeConnection(
         status.id,
-        currentConfigInput('keep'),
+        configInput ?? currentConfigInput('keep'),
       );
       renderConnectionTest(result);
       if (result.ok && saveOnSuccess) {
@@ -2352,6 +2368,10 @@ const runConnectionTest = async (saveOnSuccess = true): Promise<void> => {
       connectionTestInProgress = false;
       connectionTestResult.setAttribute('aria-busy', 'false');
       syncConnectionInteractivity();
+      const latestState = claudeStates.get(status.id);
+      if (latestState) {
+        renderClaudeState(latestState);
+      }
     }
   });
 };
@@ -3233,6 +3253,26 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
 const MAX_PENDING_OUTPUT = 512 * 1024;
 
 /**
+ * xterm has already applied cursor moves and retained unchanged cells, so its viewport contains the
+ * complete mode badge even when the PTY emitted only a repaint delta.
+ */
+const reportTerminalPermissionMode = (sessionId: string, view: TerminalView): void => {
+  const buffer = view.terminal.buffer.active;
+  const lines: string[] = [];
+  const end = Math.min(buffer.length, buffer.baseY + view.terminal.rows);
+  const start = Math.max(buffer.baseY, end - 8);
+  for (let row = start; row < end; row += 1) {
+    lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
+  }
+  const mode = parseClaudePermissionMode(lines.join('\n'));
+  if (!mode || mode === view.observedPermissionMode) {
+    return;
+  }
+  view.observedPermissionMode = mode;
+  window.controlPanel.observeClaudePermissionMode(sessionId, mode);
+};
+
+/**
  * Output is queued and written once per frame. Writing every IPC chunk separately made xterm reflow
  * dozens of times between paints, which is what the input stutter actually was.
  */
@@ -3259,7 +3299,9 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
     const chunk = view.pending.join('');
     view.pending.length = 0;
     view.pendingLength = 0;
-    view.terminal.write(chunk);
+    view.terminal.write(chunk, () => {
+      reportTerminalPermissionMode(sessionId, view);
+    });
   });
 };
 
@@ -4615,11 +4657,22 @@ footerConnection.addEventListener('click', () => {
   if (connectionTestInProgress) {
     return;
   }
-  setWorkbenchOpen(false);
-  // The tab has to change first: the form is only repopulated when the connection page opens, and
-  // the test reads its values.
-  selectRailTab('connection');
-  void runConnectionTest(false);
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (!state) {
+    showToast('无法读取当前接入配置。', 'error');
+    return;
+  }
+  const { config } = state;
+  void runConnectionTest(false, {
+    authMode: config.authMode,
+    baseUrl: config.baseUrl,
+    credentialAction: 'keep',
+    model: config.model,
+    modelFast: config.modelFast,
+    preset: config.preset,
+    provider: config.provider,
+  });
 });
 footerModel.addEventListener('click', () => {
   if (footerModelMenu.hidden) {

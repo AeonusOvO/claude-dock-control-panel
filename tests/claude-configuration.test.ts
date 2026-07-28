@@ -7,8 +7,8 @@ import {
   buildRuntimeSignalCommand,
   evaluateClaudeInstallation,
   normalizeClaudeConfig,
-  parseClaudePermissionMode,
 } from '../src/main/claude-configuration';
+import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 
 const gatewayInput: SaveClaudeConfigInput = {
   authMode: 'apiKey',

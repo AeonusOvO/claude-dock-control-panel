@@ -469,17 +469,24 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 字段（逐条核对过官方字段表），SessionStart hook 的载荷也不带它。唯一持续可读的来源是
 TUI 自己重绘的模式徽标：`⏸ manual mode on` / `⏵⏵ accept edits on` / `⏸ plan mode on` /
 `⏵⏵ auto mode on` / `⏵⏵ don't ask on` / `⏵⏵ bypass permissions on`。
-`consumeTerminalOutput` 已经为了识别 API Error 维护一份 4,000 字符的滚动缓冲，
-`parseClaudePermissionMode` 复用同一份缓冲：先去掉 CSI/OSC 序列、把空白折叠成单空格，
-再取位置最靠后的一次匹配。折叠空白让软换行拆开的徽标仍能命中，取最后一次匹配让缓冲里的
-历史徽标不会盖住当前状态。这条路径不新增 hook、不新增定时器。
+`parseClaudePermissionMode` 位于 `src/shared/claude-permission-mode.ts`，先去掉 CSI/OSC、
+折叠空白，再取位置最靠后的完整徽标。
+
+Claude Code 的 Ink 界面会用光标移动只重绘发生变化的单元格。实测从 manual 切到 accept edits
+时，PTY 新增数据不是完整的 `accept edits on`，而是带 `CSI n C` 的字符残片；直接剥掉控制序列
+会得到 `ccept edits on`，旧的主进程原始字节解析因此会误报“没有响应”。renderer 现在等
+`terminal.write(..., callback)` 完成，从 `terminal.buffer.active` 的当前可见视口逐行读取
+`translateToString(true)`，解析完整徽标后通过单向 IPC 回报。主进程重新校验 session ID 与六种
+已知模式，再更新闭环状态。4,000 字符原始诊断缓冲只保留为完整首帧的启动兜底和 API Error
+识别，不再承担屏幕差量重建。
 
 **列表点击是闭环步进，不是盲按 N 次。** `auto` 是否出现在 `Shift+Tab` 循环里取决于账号、
 模型和供应商，客户端无法先验判断，所以「算差值按 N 次」一定会在某些账号上切歪。
 `setPermissionMode` 改为：写一次 `ESC [Z`（xterm 对 `Shift+Tab` 发的就是这段 CBT 序列）→
 以 40ms 轮询等徽标变化，最多 700ms → 命中目标就停，最多 8 轮，绕完仍未命中则报
 「该模式在当前会话不可用」。`modeSwitchLocks` 按 sessionId 串行化，两次快速点击不会把按键
-叠在一起。渲染层不做乐观更新：底栏永远显示主进程读回来的徽标。
+叠在一起。渲染层只报告 xterm 当前屏幕的事实，不按菜单点击乐观改状态；底栏永远显示主进程
+校验后回传的徽标。
 
 **两个模式进不了循环。** `bypassPermissions` 无法在未预置的会话中进入（官方明确说明），
 必须启动时带 `--allow-dangerously-skip-permissions`（加入循环但不激活）或
@@ -519,7 +526,6 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
 所以 renderer 拦下它并转发同一段序列，让快捷键与焦点位置无关。
 
 ### 斜杠命令可视化
-
 
 渲染进程提交命令名称与可选参数，主进程只接受固定白名单：
 `/context`、`/usage`、`/status`、`/model`、`/permissions`、`/mcp`、`/agents`、`/hooks`、
@@ -618,20 +624,20 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让；统一刷新
   必须在首屏后异步启动，三类更新入口默认隐藏；服务商反选、分组折叠、1/2/3 列容器查询、
   高级设置快照式取消、历史配置位于高级设置与模型表单之间，以及活动栏二次点击收起也作为
-  源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮的忙态分支必须排在健康色分支之前
-  （否则陈旧的路由健康会盖掉刚点下去的进度），模型/模式菜单必须挂在同一套 `pointerdown` +
-  `blur` 收拢逻辑上、900px 以下一起隐藏，六种权限模式必须全部出现在目录里，`dontAsk` 与
-  跨端点模型必须走同一个重启函数，输入框的 `Shift+Tab` 必须转发 CBT 序列而 xterm 的
-  按键处理器不得被改动。
+  源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须用保存配置原地测试、不得跳转
+  “接入”页，且忙态分支必须排在健康色分支之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
+  模型/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上、900px 以下一起隐藏，六种
+  权限模式必须全部出现在目录里，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
+  `Shift+Tab` 必须转发 CBT 序列，而模式回读必须发生在 xterm 应用屏幕差量之后。
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
-  与 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行拆开、
-  同一缓冲多次重绘取最后一次，以及未绘制徽标时返回 `undefined`。
+  与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
+  拆开、同一快照多次出现时取最后一次，以及未绘制徽标时返回 `undefined`。
 - `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
-  4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并把闭环步进的不变式锁成源码契约：
-  最多 8 轮、每轮必须先读旧值再等徽标变化、per-session 互斥锁、切不到时报明确文案、
-  `dontAsk` 与未预置的 `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、
-  PostCompact 信号只在已有的 metrics 轮询里读且只认没消费过的时间戳。
+  4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
+  完整徽标；闭环源码契约还覆盖最多 8 轮、每轮先读旧值再等变化、xterm 屏幕回报入口、
+  per-session 互斥锁、切不到时报明确文案、`dontAsk` 与未预置的 `bypassPermissions` 一律拒绝、
+  模型选项在主进程重新核对、PostCompact 信号只在已有 metrics 轮询里读且只认未消费时间戳。
 - `tests/claude-config-store.test.ts` 覆盖 `allowBypassPermissions` 的持久化：默认开启、
   单独写入不动凭据、保存接入配置不会静默重置、没有配置过路由的项目也能记住、重开 store
   后仍在且 Windows 路径大小写不敏感。
