@@ -24,6 +24,7 @@ import type {
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import { findClaudeProvider } from '../shared/claude-providers';
 import { AsyncRefreshCache } from './async-refresh-cache';
@@ -463,6 +464,8 @@ export class ClaudeRuntime {
   );
   private readonly configStore: ClaudeConfigStore;
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
+  /** Serialises complete body/return submissions so two UI actions cannot interleave PTY bytes. */
+  private readonly commandSubmissionQueues = new Map<string, Promise<void>>();
   private readonly gatewayDetector = new ClaudeGatewayDetector();
   private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly metricsTimer: NodeJS.Timeout;
@@ -878,8 +881,10 @@ export class ClaudeRuntime {
    * entry per saved connection. Entries that keep the current endpoint switch inside the live
    * conversation; the rest need a relaunch because base URL and credential are PTY-spawn variables.
    */
-  public getModelOptions(cwd: string): ClaudeModelOptions {
+  public getModelOptions(cwd: string, sessionId?: string): ClaudeModelOptions {
     const config = this.configStore.getConfig(cwd);
+    const runtime = sessionId ? this.sessions.get(sessionId) : undefined;
+    const activeModel = runtime?.expectedModel ?? runtime?.metrics?.modelId ?? config.model;
     const options: ClaudeModelOption[] = [
       {
         id: 'current',
@@ -908,7 +913,7 @@ export class ClaudeRuntime {
       });
     }
 
-    return { activeModel: config.model, options };
+    return { activeModel, options };
   }
 
   /**
@@ -925,7 +930,9 @@ export class ClaudeRuntime {
       throw new Error('Claude Code 尚未运行，无法切换模型。');
     }
 
-    const option = this.getModelOptions(cwd).options.find((candidate) => candidate.id === optionId);
+    const option = this.getModelOptions(cwd, sessionId).options.find(
+      (candidate) => candidate.id === optionId,
+    );
     if (!option) {
       throw new Error('这个模型选项已经失效，请重新打开列表。');
     }
@@ -936,8 +943,28 @@ export class ClaudeRuntime {
       throw new Error('模型标识不合法，拒绝写入终端。');
     }
 
+    await this.submitClaudeCommand(runtime, `/model ${option.model}`);
     runtime.expectedModel = option.model;
-    this.writeToTerminal(sessionId, `/model ${option.model}\r`);
+    const state = await this.getState(sessionId, cwd);
+    this.onState(state);
+    return state;
+  }
+
+  /**
+   * Runs a command that has already passed the main-process command/argument whitelist. Keeping the
+   * actual PTY submission here gives model switching, compaction, and command-palette actions the
+   * same ordering and stale-session guarantees.
+   */
+  public async runCommand(
+    sessionId: string,
+    cwd: string,
+    commandLine: string,
+  ): Promise<ClaudeProjectState> {
+    const runtime = this.ensureSession(sessionId, cwd);
+    if (!runtime.active) {
+      throw new Error('Claude Code 尚未运行，无法执行命令。');
+    }
+    await this.submitClaudeCommand(runtime, commandLine);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return state;
@@ -1104,19 +1131,63 @@ export class ClaudeRuntime {
    * Issues `/compact` and waits for the PostCompact hook. A timeout is not fatal — the relaunch is
    * still safe, it just carries the un-compacted history — so the caller is never blocked.
    */
-  private compactAndWait(runtime: RuntimeSession): Promise<void> {
-    this.writeToTerminal(runtime.sessionId, `/compact ${COMPACT_INSTRUCTION}\r`);
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+  private async compactAndWait(runtime: RuntimeSession): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const compacted = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
         runtime.waitingForCompact = undefined;
         resolve();
       }, COMPACT_TIMEOUT_MS);
       timer.unref?.();
       runtime.waitingForCompact = () => {
-        clearTimeout(timer);
+        if (timer) {
+          clearTimeout(timer);
+        }
         runtime.waitingForCompact = undefined;
         resolve();
       };
+    });
+    try {
+      await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`);
+      await compacted;
+    } catch (error) {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      runtime.waitingForCompact = undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Claude Code's TUI treats command text and a trailing return received in one PTY chunk as a
+   * paste, which can leave `/model ...` sitting in the input box forever. Queue complete submissions
+   * per session, then write the return separately after the shared TUI-safe gap.
+   */
+  private submitClaudeCommand(runtime: RuntimeSession, commandLine: string): Promise<void> {
+    const { sessionId } = runtime;
+    const previous = this.commandSubmissionQueues.get(sessionId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const isCurrentSession = (): boolean =>
+          this.sessions.get(sessionId) === runtime && runtime.active;
+        const submitted = await writeTerminalSubmission(
+          buildTerminalSubmission(commandLine),
+          (data) => {
+            this.writeToTerminal(sessionId, data);
+          },
+          isCurrentSession,
+        );
+        if (!submitted) {
+          throw new Error('Claude Code 会话已停止或重启，已取消这次命令。');
+        }
+      });
+    this.commandSubmissionQueues.set(sessionId, current);
+    return current.finally(() => {
+      if (this.commandSubmissionQueues.get(sessionId) === current) {
+        this.commandSubmissionQueues.delete(sessionId);
+      }
     });
   }
 
@@ -1172,6 +1243,7 @@ export class ClaudeRuntime {
   public shutdown(): void {
     clearInterval(this.metricsTimer);
     this.sessions.clear();
+    this.commandSubmissionQueues.clear();
   }
 
   private async getRouteHealth(

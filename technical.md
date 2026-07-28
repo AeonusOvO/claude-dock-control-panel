@@ -521,10 +521,21 @@ sessionId 串行化，两次快速点击不会把按键叠在一起。渲染层�
 启动，因此它走重启路径。
 
 **换模型分同端点与跨端点。** `getClaudeModelOptions` 合并当前配置与该项目的接入历史，
-按 `provider|preset|authMode|baseUrl` 判定 `sameEndpoint`。同端点直接向运行中的会话写
-`/model <model>`，对话不中断，随后由既有的 `expectedModel` / `modelMatches` 漂移检测核对
-statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 与凭据是 PTY spawn 时
-定死的环境变量，运行中改不了。
+按 `provider|preset|authMode|apiKeyHelperPolicy|baseUrl` 判定 `sameEndpoint`。同端点直接向
+运行中的会话提交 `/model <model>`，对话不中断，随后由既有的 `expectedModel` /
+`modelMatches` 漂移检测核对 statusLine 报回的真实模型。模型列表的 `activeModel` 优先取本次
+会话已提交的 `expectedModel`，其次取 statusLine 的 `modelId`，最后才回落到项目默认配置。
+跨端点必须重启：`ANTHROPIC_BASE_URL`、凭据和 helper 策略是 PTY spawn 时定死的环境/临时设置，
+运行中改不了。
+
+Claude Code 的 TUI 会把同一 PTY 写入中的命令正文和尾随回车视为一次粘贴，可能吞掉回车。
+`switchModel` 因此不能写 `` `/model ${model}\r` ``：它与 `/compact`、命令页白名单动作一起
+进入 `commandSubmissionQueues` 的 per-session 队列，再复用
+`writeTerminalSubmission(buildTerminalSubmission(...))` 先写正文、等待 40ms、单独写 `\r`。
+队列防止快速操作把两条命令的字节交错；间隔两侧都检查 session 对象仍是当前且 `active`，
+会话停止或重启时不向替代 shell 写迟到的回车。只有两段均成功写入后才更新 `expectedModel`。
+renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`，结束时先直接恢复并重绘
+已有状态，再异步刷新，因此状态读取延迟或失败不会把按钮永久锁住。
 
 `claude:switch-model` 是独立 IPC，不放宽 `/model` 的斜杠命令白名单（仍是
 `['/model', false]`，不接受参数）。handler 收到的只是一个选项 ID，主进程重新生成一次选项
@@ -555,7 +566,8 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
 `/context`、`/usage`、`/status`、`/model`、`/permissions`、`/mcp`、`/agents`、`/hooks`、
 `/memory`、`/resume`、`/compact`、`/rename`、`/theme`、`/doctor`、`/help`、`/clear`。参数最长
 500 字符且禁止换行；只有工作台已知正在运行的 Claude 会话可以接收。`/clear` 的二次确认
-在渲染层完成。
+在渲染层完成。验证后的命令不由 IPC handler 直接拼接 `\r` 写 PTY，而交给
+`ClaudeRuntime.runCommand`，与换模型和压缩共享同一分段提交与 per-session 队列。
 
 ### PowerShell 键盘与剪贴板
 
@@ -570,9 +582,11 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
 - `src/shared/composer-input.ts` 的 `buildTerminalSubmission` 把多行内容用 `\x0a` 连接，
   单次上限 64,000 字符。`\x0a` 正是下面 `Ctrl+J`→`AddLine` 绑定所插入的字符，
   所以多行提示词进入 PowerShell 时是**一条**命令而不是逐行执行；这两处必须成对修改。
-- 它返回的是 `{ body, submit }` 两段而不是一个字符串，渲染层间隔 `SUBMIT_DELAY_MS`（40ms）
-  分两次写入 PTY。原因是 Claude Code 的 TUI 会把一大块单次写入判定成括号粘贴，并吞掉贴在
-  末尾的回车——提示词落进它的输入框却不发送，用户看到的就是「点了发送没反应」。
+- 它返回的是 `{ body, submit }` 两段而不是一个字符串；共享的 `writeTerminalSubmission`
+  间隔 `SUBMIT_DELAY_MS`（40ms）分两次写入 PTY，并在间隔两侧检查目标会话仍有效。renderer
+  的提示词、主进程的模型切换、压缩和命令页动作都走这个物理写入约束。原因是 Claude Code
+  的 TUI 会把一大块单次写入判定成括号粘贴，并吞掉贴在末尾的回车——内容落进它的输入框却
+  不发送，用户看到的就是「点了发送没反应」。
   对 Claude Code 2.1.220 实测：200 字符的提示词以 `body + \r` 单块发送 0/3 提交成功，
   拆成两次写入 3/3 成功。PowerShell 两种写法都一样，多行仍是一条命令。
 - 每个应用内 PowerShell 启动时把控制台输入、输出和管道编码设为无 BOM UTF-8，仅为该进程
@@ -642,7 +656,8 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   相对亮度校验三套主题的画布与文字对比度（`textHi`/canvas > 7，正文与强调色 > 4.5）。
 - `tests/composer-input.test.ts` / `tests/composer-history.test.ts` 覆盖输入框的两个纯模块：
   多行提交必须是 `\x0a` 连接的 `body` 加上单独的 `\r` `submit` 两段，历史的去重、上限与
-  游标行为。
+  游标行为；提交测试还用假时钟验证两次 PTY 写入的顺序，以及会话在 40ms 间隔内失效时不会
+  发送迟到的回车。
 - `tests/renderer-interaction.test.ts` 固化渲染层交互生命周期：分隔条必须显式释放捕获并覆盖
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
   的进场动画不得使用 `transform`；原生 `alert` / `confirm` 不得重新进入 renderer，统一
@@ -655,7 +670,8 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   用保存配置原地测试、不得跳转
   “接入”页，且忙态分支必须排在健康色分支之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
   模型/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上、900px 以下一起隐藏，六种
-  权限模式必须全部出现在目录里，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
+  权限模式必须全部出现在目录里，模型切换的 `disabled` / `aria-busy` 必须在 `finally` 中
+  直接恢复，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
   `Shift+Tab` 必须转发 CBT 序列，而模式回读必须发生在 xterm 应用屏幕差量之后；主动 probe
   还要受输出修订号屏障保护并扫描完整活动缓冲区，不能在仍有待写数据时回复旧快照。
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
@@ -667,8 +683,9 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
   完整徽标；闭环源码契约还覆盖首次按键前主动取样、单步失败即停止、已访问模式绕环检测、
   xterm 双向 probe 回报入口、per-session 互斥锁、切不到时报明确文案、`dontAsk` 与未预置的
-  `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、PostCompact 信号只在已有 metrics
-  轮询里读且只认未消费时间戳。
+  `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、模型/压缩/命令页不再拼接尾随
+  回车而是进入 per-session 提交队列、PostCompact 信号只在已有 metrics 轮询里读且只认未消费
+  时间戳。
 - `tests/claude-config-store.test.ts` 覆盖 `allowBypassPermissions` 与 `apiKeyHelperPolicy`
   的持久化：权限默认开启、认证来源默认 ClaudeDock 单一凭据、单独写入不动凭据、保存接入
   配置不会静默重置、没有配置过路由的项目也能记住、重开 store 后仍在且 Windows 路径

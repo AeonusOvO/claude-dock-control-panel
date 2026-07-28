@@ -219,6 +219,20 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
+  it('always releases the model switch trigger after the IPC operation settles', () => {
+    const switchHandler = rendererSource.slice(
+      rendererSource.indexOf('const switchClaudeModel = async'),
+      rendererSource.indexOf('const switchPermissionMode = async'),
+    );
+    expect(switchHandler).toMatch(
+      /modelSwitchInProgress = true;\s+footerModel\.disabled = true;\s+footerModel\.setAttribute\('aria-busy', 'true'\);/,
+    );
+    expect(switchHandler).toMatch(
+      /finally \{\s+modelSwitchInProgress = false;\s+footerModel\.disabled = false;\s+footerModel\.setAttribute\('aria-busy', 'false'\);/,
+    );
+    expect(switchHandler).toContain('renderClaudeState(knownState);');
+  });
+
   it('lists every permission mode and routes the un-cyclable one through a relaunch', () => {
     for (const mode of ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions', 'dontAsk']) {
       expect(rendererSource).toContain(`id: '${mode}',`);

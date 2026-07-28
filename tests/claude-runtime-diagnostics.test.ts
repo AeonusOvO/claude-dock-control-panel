@@ -222,12 +222,39 @@ describe('Claude runtime permission mode observation', () => {
 
   it('re-derives and re-validates a model option in the main process before writing to the shell', () => {
     expect(runtimeSource).toMatch(
-      /const option = this\.getModelOptions\(cwd\)\.options\.find\(\(candidate\) => candidate\.id === optionId\);/,
+      /const option = this\.getModelOptions\(cwd, sessionId\)\.options\.find\(\s+\(candidate\) => candidate\.id === optionId,\s+\);/,
     );
     expect(runtimeSource).toContain(
       "throw new Error('这个模型属于其他接入端点，需要重启会话才能切换。');",
     );
     expect(runtimeSource).toContain('if (!MODEL_NAME_PATTERN.test(option.model))');
+  });
+
+  it('submits every main-process slash command as queued body and return writes', () => {
+    expect(runtimeSource).toContain(
+      'private readonly commandSubmissionQueues = new Map<string, Promise<void>>();',
+    );
+    expect(runtimeSource).toContain(
+      'await this.submitClaudeCommand(runtime, `/model ${option.model}`);',
+    );
+    expect(runtimeSource).toContain(
+      'await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`);',
+    );
+    expect(runtimeSource).toContain('const submitted = await writeTerminalSubmission(');
+    expect(runtimeSource).toContain('buildTerminalSubmission(commandLine),');
+    expect(runtimeSource).toContain(
+      'const activeModel = runtime?.expectedModel ?? runtime?.metrics?.modelId ?? config.model;',
+    );
+    expect(mainSource).toContain(
+      'return requireClaudeRuntime().getModelOptions(status.cwd, validatedSessionId);',
+    );
+    expect(runtimeSource).not.toContain(
+      'this.writeToTerminal(sessionId, `/model ${option.model}\\r`);',
+    );
+    expect(mainSource).toContain('state: await runtime.runCommand(');
+    expect(mainSource).not.toMatch(
+      /workspace\.write\(\s*validatedSessionId,\s*`\$\{command\}.*\\r`/,
+    );
   });
 
   it('waits for the PostCompact signal on the existing metrics tick and only acts on fresh stamps', () => {

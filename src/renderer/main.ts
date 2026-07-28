@@ -58,7 +58,7 @@ import {
   stepForward,
   type ComposerHistoryState,
 } from '../shared/composer-history';
-import { buildTerminalSubmission, SUBMIT_DELAY_MS } from '../shared/composer-input';
+import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
 import { localizePluginCopy } from '../shared/plugin-localization';
 import {
   DEFAULT_TERMINAL_THEME,
@@ -1161,6 +1161,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     percentage === undefined ? '上下文 —' : `上下文 ${percentage.toFixed(0)}%`;
   footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
   footerModel.disabled = modelSwitchInProgress;
+  footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
   footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
   footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
   footerMode.dataset.mode = state.permissionMode ?? 'unknown';
@@ -2523,6 +2524,7 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
 
   modelSwitchInProgress = true;
   footerModel.disabled = true;
+  footerModel.setAttribute('aria-busy', 'true');
   try {
     const result = await window.controlPanel.switchClaudeModel(status.id, option.id);
     renderClaudeState(result.state);
@@ -2533,6 +2535,12 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
     showToast('切换模型时发生异常。', 'error');
   } finally {
     modelSwitchInProgress = false;
+    footerModel.disabled = false;
+    footerModel.setAttribute('aria-busy', 'false');
+    const knownState = claudeStates.get(status.id);
+    if (knownState) {
+      renderClaudeState(knownState);
+    }
     void loadClaudeState(status.id);
   }
 };
@@ -3844,17 +3852,14 @@ const submitComposer = (): void => {
    * Body and return go as two writes: Claude Code's TUI reads one big chunk as a paste and eats a
    * trailing return, leaving the prompt sitting unsent in its input box. See `composer-input.ts`.
    */
-  if (submission.body) {
-    window.controlPanel.writeTerminal(status.id, submission.body);
-    window.setTimeout(() => {
-      // The session can be closed or stopped during the gap between the two writes.
-      if (activeStatus()?.id === status.id && activeStatus()?.phase === 'running') {
-        window.controlPanel.writeTerminal(status.id, submission.submit);
-      }
-    }, SUBMIT_DELAY_MS);
-  } else {
-    window.controlPanel.writeTerminal(status.id, submission.submit);
-  }
+  void writeTerminalSubmission(
+    submission,
+    (data) => {
+      window.controlPanel.writeTerminal(status.id, data);
+    },
+    // The session can be closed or stopped during the gap between the two writes.
+    () => activeStatus()?.id === status.id && activeStatus()?.phase === 'running',
+  );
 
   playSendAnimation(text);
   composerHistory = rememberSubmission(composerHistory, text);

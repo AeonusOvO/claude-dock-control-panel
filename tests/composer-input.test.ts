@@ -1,12 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildTerminalSubmission,
   MAX_SUBMISSION_LENGTH,
   normalizePastedText,
   SUBMIT_DELAY_MS,
+  writeTerminalSubmission,
 } from '../src/shared/composer-input';
 
 describe('composer submissions', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('sends a single line as one command', () => {
     expect(buildTerminalSubmission('Get-ChildItem')).toEqual({
       body: 'Get-ChildItem',
@@ -35,6 +40,40 @@ describe('composer submissions', () => {
   it('waits between the two writes without making sending feel slow', () => {
     expect(SUBMIT_DELAY_MS).toBeGreaterThan(0);
     expect(SUBMIT_DELAY_MS).toBeLessThanOrEqual(100);
+  });
+
+  it('physically writes the body and return as two ordered PTY events', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const pending = writeTerminalSubmission(
+      buildTerminalSubmission('/model claude-sonnet-4-6'),
+      (data) => writes.push(data),
+    );
+
+    expect(writes).toEqual(['/model claude-sonnet-4-6']);
+    await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS - 1);
+    expect(writes).toEqual(['/model claude-sonnet-4-6']);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toBe(true);
+    expect(writes).toEqual(['/model claude-sonnet-4-6', '\r']);
+  });
+
+  it('drops a late return when the target session changed during the gap', async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    let active = true;
+    const pending = writeTerminalSubmission(
+      buildTerminalSubmission('/model claude-opus-4-7'),
+      (data) => writes.push(data),
+      () => active,
+    );
+
+    active = false;
+    await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
+
+    await expect(pending).resolves.toBe(false);
+    expect(writes).toEqual(['/model claude-opus-4-7']);
   });
 
   it('normalizes Windows and old-Mac line endings before splitting', () => {

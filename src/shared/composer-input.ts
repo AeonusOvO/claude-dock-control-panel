@@ -28,6 +28,8 @@ export interface TerminalSubmission {
   submit: string;
 }
 
+export type TerminalSubmissionWriter = (data: string) => void;
+
 export const buildTerminalSubmission = (text: string): TerminalSubmission => {
   const normalized = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
   if (normalized.length === 0) {
@@ -49,6 +51,32 @@ export const buildTerminalSubmission = (text: string): TerminalSubmission => {
  * body as a paste, short enough that sending still feels instant.
  */
 export const SUBMIT_DELAY_MS = 40;
+
+/**
+ * Delivers one prepared submission without ever joining its body and carriage return back into a
+ * single PTY write. `canWrite` is checked on both sides of the gap so closing or restarting a
+ * session cannot send a late return into its replacement shell.
+ */
+export const writeTerminalSubmission = async (
+  submission: TerminalSubmission,
+  write: TerminalSubmissionWriter,
+  canWrite: () => boolean = () => true,
+): Promise<boolean> => {
+  if (!canWrite()) {
+    return false;
+  }
+  if (submission.body) {
+    write(submission.body);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, SUBMIT_DELAY_MS);
+    });
+    if (!canWrite()) {
+      return false;
+    }
+  }
+  write(submission.submit);
+  return true;
+};
 
 /** Text dropped straight into the composer, with the line endings the textarea expects. */
 export const normalizePastedText = (text: string): string => text.replace(/\r\n?/g, '\n');

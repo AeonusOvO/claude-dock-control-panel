@@ -1225,7 +1225,7 @@ const registerIpc = (): void => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
     const status = workspace.getStatus(validatedSessionId);
-    return requireClaudeRuntime().getModelOptions(status.cwd);
+    return requireClaudeRuntime().getModelOptions(status.cwd, validatedSessionId);
   });
   ipcMain.handle(
     'claude:switch-model',
@@ -1470,14 +1470,14 @@ const registerIpc = (): void => {
         ) {
           throw new Error('命令参数无效。');
         }
-        workspace.write(
-          validatedSessionId,
-          `${command}${normalizedArgument ? ` ${normalizedArgument}` : ''}\r`,
-        );
         const status = workspace.getStatus(validatedSessionId);
         return {
           ok: true,
-          state: await runtime.getState(validatedSessionId, status.cwd),
+          state: await runtime.runCommand(
+            validatedSessionId,
+            status.cwd,
+            `${command}${normalizedArgument ? ` ${normalizedArgument}` : ''}`,
+          ),
         };
       } catch (error) {
         return claudeFailure(validatedSessionId, error);
