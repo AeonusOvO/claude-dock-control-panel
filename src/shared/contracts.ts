@@ -3,6 +3,7 @@ import type { ClaudeProviderId } from './claude-providers';
 
 export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 export type ClaudeAuthMode = 'apiKey' | 'authToken' | 'existing' | 'none';
+export type ClaudeApiKeyHelperPolicy = 'inherit' | 'prefer-claudedock';
 export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
 export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
 /**
@@ -29,6 +30,7 @@ export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
 
 export interface ClaudeConfigView {
+  apiKeyHelperPolicy: ClaudeApiKeyHelperPolicy;
   authMode: ClaudeAuthMode;
   baseUrl: string;
   credentialConfigured: boolean;
@@ -39,6 +41,7 @@ export interface ClaudeConfigView {
 }
 
 export interface SaveClaudeConfigInput {
+  apiKeyHelperPolicy?: ClaudeApiKeyHelperPolicy;
   authMode: ClaudeAuthMode;
   baseUrl: string;
   credential?: string;
@@ -54,6 +57,7 @@ export interface SaveClaudeConfigInput {
  * the main process — the renderer only learns whether one is attached.
  */
 export interface ClaudeConnectionHistoryEntry {
+  apiKeyHelperPolicy: ClaudeApiKeyHelperPolicy;
   authMode: ClaudeAuthMode;
   baseUrl: string;
   credentialConfigured: boolean;
@@ -208,6 +212,7 @@ export interface ClaudeGatewayCandidate {
 }
 
 export interface ClaudeConfigurationHint {
+  apiKeyHelperConfigured?: boolean;
   authConfigured: boolean;
   baseUrl?: string;
   label: string;

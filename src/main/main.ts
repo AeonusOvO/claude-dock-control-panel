@@ -568,6 +568,9 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
     (value.credentialAction !== 'clear' &&
       value.credentialAction !== 'keep' &&
       value.credentialAction !== 'replace') ||
+    (value.apiKeyHelperPolicy !== undefined &&
+      value.apiKeyHelperPolicy !== 'inherit' &&
+      value.apiKeyHelperPolicy !== 'prefer-claudedock') ||
     typeof value.baseUrl !== 'string' ||
     typeof value.model !== 'string' ||
     (value.modelFast !== undefined && typeof value.modelFast !== 'string') ||
@@ -577,6 +580,7 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
   }
 
   return {
+    apiKeyHelperPolicy: value.apiKeyHelperPolicy as SaveClaudeConfigInput['apiKeyHelperPolicy'],
     authMode: value.authMode,
     baseUrl: value.baseUrl,
     credential: value.credential,

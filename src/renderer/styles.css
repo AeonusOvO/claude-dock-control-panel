@@ -1188,11 +1188,22 @@ body[data-phase='error'] .status-pill {
 .project-terminal {
   display: none;
   height: 100%;
+  transition:
+    box-shadow var(--dur-2) var(--ease-standard),
+    outline-color var(--dur-2) var(--ease-standard);
   width: 100%;
 }
 
 .project-terminal--active {
   display: block;
+}
+
+.project-terminal--active:focus-within {
+  box-shadow:
+    0 0 0 1px var(--accent-line),
+    0 0 20px var(--accent-tint);
+  outline: 1px solid var(--accent-line);
+  outline-offset: 2px;
 }
 
 .xterm {
@@ -2149,6 +2160,7 @@ kbd {
 .curl-onboarding,
 .router-manager,
 .converter-help,
+.credential-source-settings,
 #claude-config-form,
 .connection-glossary {
   background: var(--surface-3);

@@ -87,9 +87,9 @@ app.whenReady().then(async () => {
     const groups = document.querySelector('#connection-provider-groups');
     groups.replaceChildren();
     for (const fixture of [
-      ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], false],
+      ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], true],
       ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], false],
-      ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], false],
+      ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], true],
       ['高级方式', ['从 cURL 识别', '本机转换器 / 模型网关', '自定义接口'], true],
     ]) {
       const section = document.createElement('section');
@@ -156,7 +156,8 @@ app.whenReady().then(async () => {
     }
     const historyMeta = document.createElement('span');
     historyMeta.className = 'connection-history__meta';
-    historyMeta.textContent = '07/27 23:58 · Bearer · 含凭据 · 网关运行中';
+    historyMeta.textContent =
+      '07/27 23:58 · Bearer · 含凭据 · ClaudeDock 单一凭据 · 网关运行中';
     historyRestore.append(historyTitle, historyParameters, historyMeta);
     const historyDelete = document.createElement('button');
     historyDelete.className = 'connection-history__delete';
@@ -201,6 +202,32 @@ app.whenReady().then(async () => {
   );
   await window.webContents.executeJavaScript(`
     document.querySelector('#connection-advanced-dialog').close();
+    ${activateRailPage('projects')}
+    const focusEmptyTerminal = document.querySelector('#terminal-empty-state');
+    focusEmptyTerminal.classList.add('terminal-empty-state--hidden');
+    focusEmptyTerminal.style.display = 'none';
+    const focusFixture = document.createElement('div');
+    focusFixture.className = 'project-terminal project-terminal--active';
+    focusFixture.id = 'terminal-focus-fixture';
+    focusFixture.tabIndex = 0;
+    const terminalText = document.createElement('pre');
+    terminalText.textContent =
+      'PowerShell 7.5.2\\nPS D:\\\\Projects\\\\ClaudeDock> claude\\nClaude Code 已准备就绪';
+    terminalText.style.color = 'var(--text-hi)';
+    terminalText.style.padding = '14px';
+    focusFixture.append(terminalText);
+    document.querySelector('#terminal-stage').prepend(focusFixture);
+    focusFixture.focus();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  writeFileSync(
+    path.join(outputDirectory, 'terminal-focus-1180.png'),
+    (await captureSettledPage()).toPNG(),
+  );
+  await window.webContents.executeJavaScript(`
+    document.querySelector('#terminal-focus-fixture').remove();
+    document.querySelector('#terminal-empty-state').style.display = '';
+    document.querySelector('#terminal-empty-state').classList.remove('terminal-empty-state--hidden');
   `);
 
   window.setSize(1000, 720);

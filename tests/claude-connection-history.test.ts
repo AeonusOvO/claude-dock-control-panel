@@ -62,6 +62,7 @@ describe('ClaudeConnectionHistoryStore', () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
+      apiKeyHelperPolicy: 'prefer-claudedock',
       baseUrl: 'http://127.0.0.1:3456',
       credentialConfigured: true,
       gatewayEndpoint: 'http://127.0.0.1:3456',
@@ -88,6 +89,34 @@ describe('ClaudeConnectionHistoryStore', () => {
 
     expect(entries).toHaveLength(2);
     expect(entries[0]?.model).toBe('glm-4.6-air');
+  });
+
+  it('records and restores a changed apiKeyHelper policy as a distinct setup', () => {
+    const { store } = createStore();
+
+    store.record(CWD, gatewayConfig());
+    const entries = store.record(CWD, gatewayConfig({ apiKeyHelperPolicy: 'inherit' as const }));
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.apiKeyHelperPolicy).toBe('inherit');
+    expect(store.toSaveInput(CWD, entries[0]?.id ?? '')).toMatchObject({
+      apiKeyHelperPolicy: 'inherit',
+    });
+  });
+
+  it('loads pre-policy history with the safe single-credential default', () => {
+    const { fixtureRoot, historyPath, store } = createStore();
+    store.record(CWD, gatewayConfig());
+    const persisted = JSON.parse(readFileSync(historyPath, 'utf8')) as {
+      projects: Record<string, Array<Record<string, unknown>>>;
+    };
+    const [entries] = Object.values(persisted.projects);
+    delete entries?.[0]?.apiKeyHelperPolicy;
+    writeFileSync(historyPath, JSON.stringify(persisted), 'utf8');
+
+    expect(new ClaudeConnectionHistoryStore(fixtureRoot).list(CWD)[0]?.apiKeyHelperPolicy).toBe(
+      'prefer-claudedock',
+    );
   });
 
   it('adds a record when only the credential changed', () => {
@@ -126,6 +155,7 @@ describe('ClaudeConnectionHistoryStore', () => {
     const [entry] = store.record(CWD, gatewayConfig());
 
     expect(store.toSaveInput(CWD, entry?.id ?? '')).toEqual({
+      apiKeyHelperPolicy: 'prefer-claudedock',
       authMode: 'apiKey',
       baseUrl: 'http://127.0.0.1:3456',
       credential: 'sk-secret-value',

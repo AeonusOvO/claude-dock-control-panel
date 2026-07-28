@@ -7,6 +7,7 @@ import {
   buildRuntimeSignalCommand,
   evaluateClaudeInstallation,
   normalizeClaudeConfig,
+  shouldDisableInheritedApiKeyHelper,
 } from '../src/main/claude-configuration';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 
@@ -23,6 +24,7 @@ const gatewayInput: SaveClaudeConfigInput = {
 describe('Claude Code configuration', () => {
   it('normalizes an Anthropic-compatible gateway without accepting insecure remote HTTP', () => {
     expect(normalizeClaudeConfig(gatewayInput)).toEqual({
+      apiKeyHelperPolicy: 'prefer-claudedock',
       authMode: 'apiKey',
       baseUrl: 'https://gateway.example.com',
       model: 'deepseek-chat',
@@ -98,6 +100,28 @@ describe('Claude Code configuration', () => {
     });
     expect(environment).not.toHaveProperty('ANTHROPIC_API_KEY');
     expect(JSON.stringify(environment)).not.toContain('encrypted-at-rest-secret');
+  });
+
+  it('disables an inherited apiKeyHelper only for an explicit ClaudeDock credential', () => {
+    const preferred = normalizeClaudeConfig(gatewayInput);
+
+    expect(shouldDisableInheritedApiKeyHelper(preferred)).toBe(true);
+    expect(
+      shouldDisableInheritedApiKeyHelper(
+        normalizeClaudeConfig({ ...gatewayInput, authMode: 'authToken' }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldDisableInheritedApiKeyHelper(
+        normalizeClaudeConfig({ ...gatewayInput, apiKeyHelperPolicy: 'inherit' }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldDisableInheritedApiKeyHelper({
+        ...preferred,
+        authMode: 'existing',
+      }),
+    ).toBe(false);
   });
 
   it('classifies the disclosed tracking versions and protected versions', () => {

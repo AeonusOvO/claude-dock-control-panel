@@ -3,6 +3,7 @@ import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import { readLimitedResponseText, testClaudeConnection } from '../src/main/claude-connection-test';
 
 const gatewayConfig: NormalizedClaudeConfig = {
+  apiKeyHelperPolicy: 'prefer-claudedock',
   authMode: 'authToken',
   baseUrl: 'http://127.0.0.1:3456',
   model: 'claude-fable-5',
@@ -64,6 +65,7 @@ describe('Claude connection test', () => {
 
     await testClaudeConnection(
       {
+        apiKeyHelperPolicy: 'prefer-claudedock',
         authMode: 'apiKey',
         baseUrl: 'https://api.deepseek.com/anthropic',
         model: 'deepseek-v4-pro',

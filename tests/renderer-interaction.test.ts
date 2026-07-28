@@ -21,6 +21,10 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('const scheduleActiveTerminalFit = (): void => {');
     expect(rendererSource).toContain('let attemptsRemaining = 4;');
     expect(rendererSource).toContain('view?.container.getBoundingClientRect()');
+    expect(rendererStyles).toContain('.project-terminal--active:focus-within');
+    expect(rendererStyles).toMatch(
+      /\.project-terminal--active:focus-within\s*\{[\s\S]*?var\(--accent-line\)[\s\S]*?var\(--accent-tint\)/,
+    );
   });
 
   it('defers composer focus until the matching terminal is running', () => {
@@ -81,6 +85,10 @@ describe('renderer interaction lifecycle contract', () => {
       "toggle.setAttribute('aria-expanded', String(!nextCollapsed))",
     );
     expect(rendererSource).toContain('content.inert = nextCollapsed;');
+    expect(rendererSource).toContain('collapsedClaudeProviderGroups(providerId)');
+    expect(rendererSource).toMatch(
+      /const enteringConnection = tab === 'connection'[\s\S]*?applyDefaultProviderGroupExpansion\(lastProvider\)/,
+    );
     expect(rendererStyles).toContain('container-type: inline-size;');
     expect(rendererStyles).toMatch(
       /@container provider-picker \(min-width: 290px\)[\s\S]*?repeat\(2,/,
@@ -102,6 +110,12 @@ describe('renderer interaction lifecycle contract', () => {
       'restoreAdvancedConnectionSnapshot(advancedConnectionSnapshot)',
     );
     expect(rendererSource).toContain('connectionAdvancedDialog.showModal();');
+    expect(rendererMarkup).toMatch(
+      /id="connection-advanced-content"[\s\S]*?id="complete-connection-advanced"/,
+    );
+    expect(rendererMarkup).toContain('id="claude-api-key-helper-policy"');
+    expect(rendererSource).toContain('connectionAdvancedContent.append(');
+    expect(rendererSource).toContain('credentialSourceSettings,');
     expect(rendererStyles).toContain('.connection-advanced-dialog::backdrop');
   });
 
@@ -159,6 +173,14 @@ describe('renderer interaction lifecycle contract', () => {
     expect(footerHandler).not.toContain('setWorkbenchOpen(false)');
     expect(rendererSource).toMatch(
       /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState\);/,
+    );
+    const testHandler = rendererSource.slice(
+      rendererSource.indexOf('const runConnectionTest = async'),
+      rendererSource.indexOf('const setWorkbenchOpen ='),
+    );
+    expect(testHandler).not.toContain('runGuarded(');
+    expect(testHandler).toMatch(
+      /finally \{\s+connectionTestInProgress = false;[\s\S]*?testClaudeConnectionButton\.setAttribute\('aria-busy', 'false'\);[\s\S]*?testClaudeConnectionButton\.textContent = originalLabel;[\s\S]*?syncConnectionInteractivity\(\);/,
     );
     // The busy branch has to precede the tone branch, or a stale route health would overwrite it.
     expect(rendererSource).toMatch(

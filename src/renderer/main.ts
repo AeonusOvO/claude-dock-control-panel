@@ -40,6 +40,7 @@ import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import {
   CLAUDE_PROVIDER_GROUPS,
   CLAUDE_PROVIDERS,
+  collapsedClaudeProviderGroups,
   findClaudeProvider,
   providerForPreset,
   type ClaudeProviderGroupId,
@@ -121,6 +122,10 @@ const importCurlRouterButton = requiredElement<HTMLButtonElement>('#import-curl-
 const authModeHelp = requiredElement<HTMLElement>('#auth-mode-help');
 const authModeLabel = requiredElement<HTMLElement>('#auth-mode-label');
 const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
+const claudeApiKeyHelperPolicy = requiredElement<HTMLSelectElement>(
+  '#claude-api-key-helper-policy',
+);
+const claudeApiKeyHelperStatus = requiredElement<HTMLElement>('#claude-api-key-helper-status');
 const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
 const claudeCredential = requiredElement<HTMLInputElement>('#claude-credential');
@@ -158,6 +163,7 @@ const contextProgressBar = requiredElement<HTMLElement>('#context-progress-bar')
 const contextSize = requiredElement<HTMLElement>('#context-size');
 const contextUsed = requiredElement<HTMLElement>('#context-used');
 const credentialField = requiredElement<HTMLElement>('#credential-field');
+const credentialSourceSettings = requiredElement<HTMLElement>('#credential-source-settings');
 const credentialLabel = requiredElement<HTMLElement>('#credential-label');
 const credentialStatus = requiredElement<HTMLElement>('#credential-status');
 const curlAnalysis = requiredElement<HTMLElement>('#curl-analysis');
@@ -349,6 +355,7 @@ const saveClaudeConfigButton = requiredElement<HTMLButtonElement>('#save-claude-
 const connectionGlossary = requiredElement<HTMLElement>('.connection-glossary');
 
 connectionAdvancedContent.append(
+  credentialSourceSettings,
   connectionAdvice,
   gatewayDiscoverySection,
   curlOnboarding,
@@ -379,6 +386,7 @@ let claudeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
 let connectionEnvironmentReady = false;
+let providerGroupExpansionPending = false;
 let selectedProviderId: ClaudeProviderId | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let selectedRailTab: string | undefined = 'projects';
@@ -604,6 +612,29 @@ const setAuthOptions = (
   }
 };
 
+const syncApiKeyHelperPolicyUi = (): void => {
+  const usesExplicitCredential =
+    claudeAuthMode.value === 'apiKey' || claudeAuthMode.value === 'authToken';
+  claudeApiKeyHelperPolicy.disabled =
+    !connectionEnvironmentReady || connectionTestInProgress || !usesExplicitCredential;
+  const helperSources =
+    gatewayDiagnostics?.configurationHints
+      .filter((hint) => hint.apiKeyHelperConfigured)
+      .map((hint) => hint.label) ?? [];
+  const helperDetail =
+    helperSources.length > 0 ? `已检测到：${helperSources.join('、')}。` : '当前未检测到 helper。';
+
+  if (!usesExplicitCredential) {
+    claudeApiKeyHelperStatus.textContent =
+      '当前连接没有注入 ClaudeDock 密钥；apiKeyHelper 继续属于 Claude Code 自己的认证链。';
+    return;
+  }
+  claudeApiKeyHelperStatus.textContent =
+    claudeApiKeyHelperPolicy.value === 'prefer-claudedock'
+      ? `${helperDetail} 启动时会用临时高优先级设置停用它，只保留本项目加密保存的凭据；原设置文件不变。`
+      : `${helperDetail} 将按 Claude Code 官方优先级保留 helper；同时填写静态 API Key 时，Claude Code 可能显示双重认证警告。`;
+};
+
 const syncConnectionInteractivity = (): void => {
   providerPicker.setAttribute('aria-disabled', String(!connectionEnvironmentReady));
   for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('.provider-card')) {
@@ -618,6 +649,7 @@ const syncConnectionInteractivity = (): void => {
     const config = claudeStates.get(workspaceState.activeSessionId)?.config;
     clearCredentialButton.disabled = !config?.credentialConfigured;
   }
+  syncApiKeyHelperPolicyUi();
 };
 
 const moveProviderTools = (providerId?: ClaudeProviderId): void => {
@@ -651,6 +683,13 @@ const clearProviderSelection = (clearDraft = true): void => {
   moveProviderTools();
   renderProviderPicker();
   syncConnectionInteractivity();
+};
+
+const applyDefaultProviderGroupExpansion = (providerId?: ClaudeProviderId): void => {
+  collapsedProviderGroups.clear();
+  for (const groupId of collapsedClaudeProviderGroups(providerId)) {
+    collapsedProviderGroups.add(groupId);
+  }
 };
 
 function renderProviderPicker(): void {
@@ -824,6 +863,7 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
     claudePreset.append(option);
   }
   claudePreset.value = config.preset;
+  claudeApiKeyHelperPolicy.value = config.apiKeyHelperPolicy;
   applyPresetUi(config.preset, true);
   claudeBaseUrl.value = config.baseUrl;
   claudeModel.value = config.model;
@@ -1149,6 +1189,10 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   if (configFormSessionId !== state.sessionId) {
     populateClaudeConfigForm(state);
   }
+  if (providerGroupExpansionPending) {
+    applyDefaultProviderGroupExpansion(selectedProviderId ?? config.preset);
+    providerGroupExpansionPending = false;
+  }
   renderProviderPicker();
   syncConnectionInteractivity();
   if (routerManagementState) {
@@ -1321,12 +1365,17 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
     configurationHints.append(heading);
     for (const hint of diagnostics.configurationHints) {
       const item = document.createElement('span');
-      item.textContent = `${hint.label}：${hint.baseUrl ?? '未设置基址'} · ${
-        hint.authConfigured ? '已配置凭据' : '未发现凭据'
-      }`;
+      item.textContent = [
+        `${hint.label}：${hint.baseUrl ?? '未设置基址'}`,
+        hint.authConfigured ? '已配置静态凭据' : '未发现静态凭据',
+        hint.apiKeyHelperConfigured ? '已配置 apiKeyHelper' : undefined,
+      ]
+        .filter(Boolean)
+        .join(' · ');
       configurationHints.append(item);
     }
   }
+  syncApiKeyHelperPolicyUi();
 };
 
 const loadGatewayDiagnostics = async (): Promise<void> => {
@@ -2366,36 +2415,40 @@ const runConnectionTest = async (
   if (knownState) {
     renderClaudeState(knownState);
   }
-  await runGuarded(testClaudeConnectionButton, '正在发送单令牌测试…', async () => {
-    syncConnectionInteractivity();
-    try {
-      const result = await window.controlPanel.testClaudeConnection(
-        status.id,
-        configInput ?? currentConfigInput('keep'),
-      );
-      renderConnectionTest(result);
-      if (result.ok && saveOnSuccess) {
-        await saveClaudeConfig('keep');
-      } else {
-        void loadClaudeState(status.id);
-      }
-    } catch {
-      connectionTestResult.dataset.tone = 'error';
-      connectionTestTitle.textContent = '连接测试发生异常';
-      connectionTestSummary.textContent = '后台测试已结束，请稍后重试。';
-      connectionTestStages.replaceChildren();
-      connectionRemedy.hidden = true;
-      showToast('连接测试发生异常。', 'error');
-    } finally {
-      connectionTestInProgress = false;
-      connectionTestResult.setAttribute('aria-busy', 'false');
-      syncConnectionInteractivity();
-      const latestState = claudeStates.get(status.id);
-      if (latestState) {
-        renderClaudeState(latestState);
-      }
+  const originalLabel = testClaudeConnectionButton.textContent;
+  testClaudeConnectionButton.disabled = true;
+  testClaudeConnectionButton.setAttribute('aria-busy', 'true');
+  testClaudeConnectionButton.textContent = '正在发送单令牌测试…';
+  syncConnectionInteractivity();
+  try {
+    const result = await window.controlPanel.testClaudeConnection(
+      status.id,
+      configInput ?? currentConfigInput('keep'),
+    );
+    renderConnectionTest(result);
+    if (result.ok && saveOnSuccess) {
+      await saveClaudeConfig('keep');
+    } else {
+      void loadClaudeState(status.id);
     }
-  });
+  } catch {
+    connectionTestResult.dataset.tone = 'error';
+    connectionTestTitle.textContent = '连接测试发生异常';
+    connectionTestSummary.textContent = '后台测试已结束，请稍后重试。';
+    connectionTestStages.replaceChildren();
+    connectionRemedy.hidden = true;
+    showToast('连接测试发生异常。', 'error');
+  } finally {
+    connectionTestInProgress = false;
+    connectionTestResult.setAttribute('aria-busy', 'false');
+    testClaudeConnectionButton.setAttribute('aria-busy', 'false');
+    testClaudeConnectionButton.textContent = originalLabel;
+    syncConnectionInteractivity();
+    const latestState = claudeStates.get(status.id);
+    if (latestState) {
+      renderClaudeState(latestState);
+    }
+  }
 };
 
 const setWorkbenchOpen = (open: boolean): void => {
@@ -2611,7 +2664,15 @@ const setConnectionPolling = (enabled: boolean): void => {
 };
 
 const applyRailTab = (tab?: string): void => {
+  const enteringConnection = tab === 'connection' && selectedRailTab !== 'connection';
   selectedRailTab = tab;
+  if (enteringConnection) {
+    const lastProvider =
+      selectedProviderId ?? claudeStates.get(workspaceState.activeSessionId)?.config.preset;
+    applyDefaultProviderGroupExpansion(lastProvider);
+    providerGroupExpansionPending = Boolean(workspaceState.activeSessionId && !lastProvider);
+    renderProviderPicker();
+  }
   const collapsed = tab === undefined;
   workspace.classList.toggle('workspace--rail-collapsed', collapsed);
   workspace.dataset.railPanel = tab ?? 'collapsed';
@@ -4342,6 +4403,7 @@ function renderWorkspace(state: WorkspaceState): void {
     lastClaudeSessionId = state.activeSessionId;
     configFormSessionId = '';
     connectionEnvironmentReady = false;
+    providerGroupExpansionPending = selectedRailTab === 'connection';
     advancedConnectionSnapshot = undefined;
     if (connectionAdvancedDialog.open) {
       connectionAdvancedDialog.close('project-changed');
@@ -4497,6 +4559,8 @@ const currentConfigInput = (
 ): SaveClaudeConfigInput => {
   const preset = claudePreset.value as ClaudePreset;
   return {
+    apiKeyHelperPolicy:
+      claudeApiKeyHelperPolicy.value as SaveClaudeConfigInput['apiKeyHelperPolicy'],
     authMode: claudeAuthMode.value as SaveClaudeConfigInput['authMode'],
     baseUrl: claudeBaseUrl.value,
     credential: claudeCredential.value,
@@ -4619,6 +4683,7 @@ const renderConnectionHistory = (): void => {
       formatHistoryTimestamp(entry.savedAt),
       historyAuthModeLabel(entry.authMode),
       entry.credentialConfigured ? '含凭据' : '无凭据',
+      entry.apiKeyHelperPolicy === 'inherit' ? '保留 apiKeyHelper' : 'ClaudeDock 单一凭据',
       GATEWAY_STATE_LABELS[entry.gatewayState],
     ].join(' · ');
     restore.append(title, parameters, meta);
@@ -4833,6 +4898,7 @@ footerConnection.addEventListener('click', () => {
   }
   const { config } = state;
   void runConnectionTest(false, {
+    apiKeyHelperPolicy: config.apiKeyHelperPolicy,
     authMode: config.authMode,
     baseUrl: config.baseUrl,
     credentialAction: 'keep',
@@ -4902,6 +4968,12 @@ claudeAuthMode.addEventListener('change', () => {
   credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
   connectionTestResult.hidden = true;
   connectionRemedy.hidden = true;
+  syncApiKeyHelperPolicyUi();
+});
+claudeApiKeyHelperPolicy.addEventListener('change', () => {
+  connectionTestResult.hidden = true;
+  connectionRemedy.hidden = true;
+  syncApiKeyHelperPolicyUi();
 });
 analyzeCurlButton.addEventListener('click', analyzeCurlInput);
 applyCurlDirectButton.addEventListener('click', applyDirectCurlAnalysis);

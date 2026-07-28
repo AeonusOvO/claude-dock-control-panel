@@ -43,6 +43,9 @@ const isStoredConfig = (value: unknown): value is StoredClaudeConfig => {
     typeof record.model === 'string' &&
     typeof record.baseUrl === 'string' &&
     typeof record.authMode === 'string' &&
+    (record.apiKeyHelperPolicy === undefined ||
+      record.apiKeyHelperPolicy === 'inherit' ||
+      record.apiKeyHelperPolicy === 'prefer-claudedock') &&
     typeof record.preset === 'string' &&
     (record.allowBypassPermissions === undefined ||
       typeof record.allowBypassPermissions === 'boolean') &&
@@ -68,6 +71,7 @@ export class ClaudeConfigStore {
     const preset = findClaudeProvider(stored.preset)?.id ?? 'custom';
     try {
       return normalizeClaudeConfig({
+        apiKeyHelperPolicy: stored.apiKeyHelperPolicy,
         authMode: stored.authMode,
         baseUrl: stored.baseUrl,
         credentialAction: 'keep',

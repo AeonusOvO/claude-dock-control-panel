@@ -101,16 +101,19 @@ const readSettingsHint = (
   }
   try {
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      apiKeyHelper?: unknown;
       env?: Record<string, unknown>;
     };
     const baseUrl = normalizedVisibleUrl(parsed.env?.ANTHROPIC_BASE_URL);
     const authConfigured = Boolean(
       parsed.env?.ANTHROPIC_API_KEY || parsed.env?.ANTHROPIC_AUTH_TOKEN,
     );
-    if (!baseUrl && !authConfigured) {
+    const apiKeyHelperConfigured =
+      typeof parsed.apiKeyHelper === 'string' && parsed.apiKeyHelper.trim().length > 0;
+    if (!baseUrl && !authConfigured && !apiKeyHelperConfigured) {
       return undefined;
     }
-    return { authConfigured, baseUrl, label, source };
+    return { apiKeyHelperConfigured, authConfigured, baseUrl, label, source };
   } catch {
     return undefined;
   }

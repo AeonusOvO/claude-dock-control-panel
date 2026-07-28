@@ -74,6 +74,16 @@ describe('Claude project profile store', () => {
     expect(store.getConfig(CWD).model).toBe('deepseek-reasoner');
   });
 
+  it('persists the apiKeyHelper conflict policy and defaults older profiles safely', () => {
+    const { store } = createStore();
+
+    expect(store.getConfig(CWD).apiKeyHelperPolicy).toBe('prefer-claudedock');
+    store.save(CWD, { ...gatewayInput, apiKeyHelperPolicy: 'inherit' });
+
+    expect(store.getConfig(CWD).apiKeyHelperPolicy).toBe('inherit');
+    expect(store.getView(CWD).apiKeyHelperPolicy).toBe('inherit');
+  });
+
   it('remembers the switch for a project that has no saved route yet', () => {
     const { store } = createStore();
 

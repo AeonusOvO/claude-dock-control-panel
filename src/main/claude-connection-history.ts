@@ -59,6 +59,9 @@ const isStoredEntry = (value: unknown): value is StoredHistoryEntry => {
     typeof record.model === 'string' &&
     typeof record.baseUrl === 'string' &&
     typeof record.authMode === 'string' &&
+    (record.apiKeyHelperPolicy === undefined ||
+      record.apiKeyHelperPolicy === 'inherit' ||
+      record.apiKeyHelperPolicy === 'prefer-claudedock') &&
     typeof record.preset === 'string' &&
     claudeProviderIdSet.has(record.preset) &&
     GATEWAY_STATES.has(record.gatewayState as ClaudeRouterGatewayState) &&
@@ -76,6 +79,7 @@ const entryFingerprint = (config: NormalizedClaudeConfig, credential?: string): 
   createHash('sha256')
     .update(
       JSON.stringify({
+        apiKeyHelperPolicy: config.apiKeyHelperPolicy,
         authMode: config.authMode,
         baseUrl: config.baseUrl,
         credential: credential ?? '',
@@ -107,6 +111,7 @@ export class ClaudeConnectionHistoryStore {
   /** Newest first, so the list reads top-down as "most recent thing I tried". */
   public list(cwd: string): ClaudeConnectionHistoryEntry[] {
     return (this.load().projects[projectKey(cwd)] ?? []).map((entry) => ({
+      apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
       authMode: entry.authMode,
       baseUrl: entry.baseUrl,
       credentialConfigured: Boolean(entry.encryptedCredential),
@@ -185,6 +190,7 @@ export class ClaudeConnectionHistoryStore {
 
     const credential = this.decrypt(entry.encryptedCredential);
     return {
+      apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
       authMode: entry.authMode,
       baseUrl: entry.baseUrl,
       credential,
@@ -200,6 +206,7 @@ export class ClaudeConnectionHistoryStore {
   private fingerprintOf(entry: StoredHistoryEntry): string {
     return entryFingerprint(
       {
+        apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
         authMode: entry.authMode,
         baseUrl: entry.baseUrl,
         model: entry.model,

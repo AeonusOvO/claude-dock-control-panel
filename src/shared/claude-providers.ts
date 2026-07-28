@@ -317,6 +317,19 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
 export const findClaudeProvider = (id: string | undefined): ClaudeProviderDefinition | undefined =>
   CLAUDE_PROVIDERS.find((provider) => provider.id === id);
 
+/**
+ * The connection page opens only the group containing the last provider selection. Keeping this
+ * pure makes the official/custom and empty-state combinations independently testable.
+ */
+export const collapsedClaudeProviderGroups = (
+  providerId: ClaudeProviderId | undefined,
+): ClaudeProviderGroupId[] => {
+  const expandedGroup = findClaudeProvider(providerId)?.group;
+  return CLAUDE_PROVIDER_GROUPS.map((group) => group.id).filter(
+    (groupId) => groupId !== expandedGroup,
+  );
+};
+
 export const claudeProviderIdSet = new Set<string>(CLAUDE_PROVIDERS.map((provider) => provider.id));
 
 export const providerForPreset = (id: ClaudeProviderId): 'anthropic' | 'gateway' =>

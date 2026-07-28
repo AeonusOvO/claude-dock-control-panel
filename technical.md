@@ -170,7 +170,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   项目键用小写后的绝对路径，因为 Windows 路径大小写不敏感。
   凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
   `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
-- 判重用 `authMode / baseUrl / credential / model / modelFast / preset / provider` 的 SHA-256 指纹，
+- 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/快速模型、预设和 provider 的
+  SHA-256 指纹，
   只和最新一条比较：相同就不新增。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
   机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
   网关状态仍然逐条存下来，恢复时能看到当时的情况。
@@ -180,8 +181,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `/^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/` 校验后才接受。
 - renderer 将历史作为主流程组件固定在高级设置入口与模型表单之间，不再把它移动进高级
   `<dialog>`。每条恢复按钮显式渲染 `baseUrl`（接口/网关）、`gatewayEndpoint`（与基址不同时）、
-  `model`、`modelFast`、认证方式、凭据布尔值和保存时网关状态；列表在 360px 高度内独立滚动，
-  长地址和模型名允许断行。
+  `model`、`modelFast`、认证方式、`apiKeyHelperPolicy`、凭据布尔值和保存时网关状态；列表在
+  360px 高度内独立滚动，长地址和模型名允许断行。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
 - 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
@@ -207,11 +208,16 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
    settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
    与模型，并把 `ANTHROPIC_API_BASE_URL`、`CLAUDE_AGENT_API_BASE_URL`、
    `CCR_CLAUDE_CODE_MODEL`、`CODEXL_CLAUDE_CODE_MODEL` 和 Router 模型发现开关清空，防止
-   旧 CCR profile 把真实会话重新指向已停止的 `3456`。同一份 settings 里注册两个本地脚本：
+   旧 CCR profile 把真实会话重新指向已停止的 `3456`。项目级 `apiKeyHelperPolicy` 默认为
+   `prefer-claudedock`：仅当认证方式是显式 API Key / Auth Token 时，在该临时高优先级 settings
+   写入空 `apiKeyHelper`，让本次 ClaudeDock 会话只使用安全存储中解密后注入的凭据；`inherit`
+   则不写覆盖，保留 Claude Code 自己的 helper。现有登录和无认证模式不会停用 helper。
+   同一份 settings 里注册两个本地脚本：
    statusLine 指标采集和 `PostCompact` 完成信号，都只写本地 JSON，不外发。
 3. 主进程重建当前 PowerShell，并在 PTY 创建时注入路由与解密后的凭据；密钥不会出现在
-   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。显式凭据环境变量优先于
-   用户级 `apiKeyHelper`；Claude 退出后命令会清理所有受管环境变量与第三方路由别名。
+   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。认证策略属于端点指纹的一部分，
+   修改后必须重启 PTY，不能把旧会话当作同一端点热切模型；Claude 退出后命令会清理所有受管
+   环境变量与第三方路由别名。
 4. 非必要流量保护固定启用：
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`DISABLE_TELEMETRY=1`、
    `DISABLE_ERROR_REPORTING=1`、`DISABLE_FEEDBACK_COMMAND=1`、
@@ -243,8 +249,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 五个服务商分组由独立 `Set<ClaudeProviderGroupId>` 保存折叠状态；每次切换只更新当前分组
   的 `data-collapsed`、ARIA 与 `inert`，CSS 用可插值的网格行和透明度过渡。服务商卡片网格
   用命名容器查询在 `<290 / 290–469 / >=470px` 切换一、二、三列，因此响应侧栏实际拖拽
-  宽度，而不依赖整个窗口的媒体查询。
-- 高级设置使用原生模态 `<dialog>` 和唯一一组原有工具节点。打开时保存服务商草稿及模态层
+  宽度，而不依赖整个窗口的媒体查询。进入“接入”页时调用纯函数
+  `collapsedClaudeProviderGroups`，根据已选或已保存 preset 重建折叠集合，只保留其所在组展开；
+  项目配置尚未返回时先全折叠，`renderClaudeState` 到达后只补做一次正确展开。
+- 高级设置使用原生模态 `<dialog>` 和唯一一组原有工具节点，新增认证来源选择并由同一快照
+  机制管理 `apiKeyHelperPolicy`。打开时保存服务商草稿及模态层
   内所有 `input/select/textarea` 的值与勾选状态；“取消”、关闭按钮和 `Esc` 恢复快照，
   “完成”保留当前输入。Router 安装/卸载/启停与 Provider 保存仍走既有即时 IPC，不能伪装
   成可回滚事务，界面在操作区上方明确说明这一边界。接入历史不属于高级诊断工具，因此不进入
@@ -269,8 +278,9 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 对 `3456/4000` 的后台探测只执行不带凭据的 `GET /v1/models`：`200` 表示可访问，
   `401/403` 表示接口已运行但需要网关访问密钥。管理页 `3458` 只做 TCP 存活判断。
 - 检测会只读解析用户 `~/.claude/settings.json`、项目 `.claude/settings.json` 和
-  `.claude/settings.local.json` 的 `env` 块，只向 renderer 传递净化后的
-  `ANTHROPIC_BASE_URL` 与凭据是否存在的布尔值；密钥值从不跨 IPC。
+  `.claude/settings.local.json` 的 `env` 块与 `apiKeyHelper` 是否为非空字符串，只向 renderer
+  传递净化后的 `ANTHROPIC_BASE_URL`、静态凭据及 helper 是否存在的布尔值；helper 命令和密钥值
+  都不跨 IPC。
 - `src/shared/claude-curl.ts` 在本地 renderer 中解析 cURL 的 URL、`model`、Bearer 或
   `x-api-key`。URL 的用户信息、查询参数和片段不会进入结果；解析文本不写日志。切换项目会
   清空 cURL 输入与内存中的解析结果；一键导入 Router 成功后也会立即清空。
@@ -413,9 +423,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   400/422、超时/网络、200 非标准响应和 Kimi 密钥族不匹配映射为结构化原因、建议与动作；
   renderer 只负责执行打开控制台/文档、切认证、用快速模型、安装/启动 Router、重试或重选。
 - “测试并接入”严格串行：真实测试 `ok` 后才调用保存；“跳过测试并保存”是明确的次操作。
-  `runGuarded` 用 `WeakSet<HTMLButtonElement>` 防止重复点击，并在 `finally` 恢复禁用状态、
-  `aria-busy` 与原文案。测试期间跳过 6 秒轮询并禁用服务商/配置控件，但不阻断导航或
-  PowerShell 输入。
+  该按钮不用通用 `runGuarded` 包裹，因为成功路径会嵌套保存并重新渲染控件；它由
+  `connectionTestInProgress` 单独防重，并在唯一 `finally` 中先清 busy 状态和原文案，再让
+  `syncConnectionInteractivity` 按最新环境重算 disabled。这样成功、失败、异常和保存后的重绘
+  都不会把测试前快照中的 disabled 状态永久写回。测试期间跳过 6 秒轮询并禁用服务商/配置
+  控件，但不阻断导航或 PowerShell 输入。
 - 每次测试按“规范化配置 + 凭据 SHA-256”生成内存指纹，只在当前项目保存的配置与凭据完全
   匹配时显示到会话页；不会持久化凭据摘要。最小请求通过是一个时间点信号，不能证明上游
   持续在线，也不能覆盖 Claude Code 后续的流式内容、工具调用和更大请求。
@@ -635,10 +647,12 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
   的进场动画不得使用 `transform`；原生 `alert` / `confirm` 不得重新进入 renderer，统一
   确认框必须是可取消的应用内 `<dialog>`，窗口 focus/visibility 恢复路径必须重新读取工作区；
-  连接实测必须显示后台状态并让定时轮询避让；统一刷新
-  必须在首屏后异步启动，三类更新入口默认隐藏；服务商反选、分组折叠、1/2/3 列容器查询、
-  高级设置快照式取消、历史配置位于高级设置与模型表单之间，以及活动栏二次点击收起也作为
-  源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须用保存配置原地测试、不得跳转
+  活动终端的 `focus-within` 必须有主题色聚焦反馈；连接实测必须显示后台状态、在唯一
+  `finally` 恢复测试按钮并让定时轮询避让；统一刷新必须在首屏后异步启动，三类更新入口默认
+  隐藏；服务商反选、按上次选择单组展开、
+  1/2/3 列容器查询、高级设置的认证策略与快照式取消、历史配置位于高级设置与模型表单之间，
+  以及活动栏二次点击收起也作为源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须
+  用保存配置原地测试、不得跳转
   “接入”页，且忙态分支必须排在健康色分支之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
   模型/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上、900px 以下一起隐藏，六种
   权限模式必须全部出现在目录里，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
@@ -647,16 +661,18 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
-  拆开、同一快照多次出现时取最后一次，以及未绘制徽标时返回 `undefined`。
+  拆开、同一快照多次出现时取最后一次，以及未绘制徽标时返回 `undefined`；同时覆盖只有
+  显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`。
 - `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
   4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
   完整徽标；闭环源码契约还覆盖首次按键前主动取样、单步失败即停止、已访问模式绕环检测、
   xterm 双向 probe 回报入口、per-session 互斥锁、切不到时报明确文案、`dontAsk` 与未预置的
   `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、PostCompact 信号只在已有 metrics
   轮询里读且只认未消费时间戳。
-- `tests/claude-config-store.test.ts` 覆盖 `allowBypassPermissions` 的持久化：默认开启、
-  单独写入不动凭据、保存接入配置不会静默重置、没有配置过路由的项目也能记住、重开 store
-  后仍在且 Windows 路径大小写不敏感。
+- `tests/claude-config-store.test.ts` 覆盖 `allowBypassPermissions` 与 `apiKeyHelperPolicy`
+  的持久化：权限默认开启、认证来源默认 ClaudeDock 单一凭据、单独写入不动凭据、保存接入
+  配置不会静默重置、没有配置过路由的项目也能记住、重开 store 后仍在且 Windows 路径
+  大小写不敏感。
 - `tests/claude-runtime-signal.test.ts` 真实 spawn `claude-runtime-signal.ps1`：能在 stdin
   有 hook 载荷时正常写出 `{event, signaledAt}`、载荷内容不泄漏进文件、目录不存在时自建、
   再次触发时时间戳前进（否则主进程会把旧信号当成新信号）、成功后不留 `.tmp`。
@@ -666,11 +682,13 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
-  重复保存不新增、任一字段（含凭据）变化就新增、只有网关状态变化不新增、明文密钥不得出现在
-  磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、Windows 路径大小写
-  不敏感、条数上限、文件损坏后回落到空列表。
+  重复保存不新增、任一字段（含凭据和 helper 策略）变化就新增、只有网关状态变化不新增、
+  旧记录缺少策略时使用安全默认值、明文密钥不得出现在磁盘文件里、恢复出的配置可直接用于
+  保存、删除后再恢复报「已被删除」、Windows 路径大小写不敏感、条数上限、文件损坏后回落
+  到空列表。
 - `tests/claude-providers.test.ts` 锁定目录 ID 唯一、分组完整、远程 HTTPS/本机 HTTP 边界、
-  模型字符规则、外链可解析及 Kimi/SiliconFlow/Ollama 特例；
+  模型字符规则、外链可解析、上次官方/国内/自定义选择只展开对应组及
+  Kimi/SiliconFlow/Ollama 特例；
   `tests/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/接入、插件的已安装/可安装/市场三个面板、工作台三页、收起控制栏和高级设置
@@ -680,10 +698,10 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败。
-- `npm run test:visual` 在本地生成 820px 插件页、1180px 服务商向导、1180px 历史配置组件、
-  1180px 高级设置模态层与重命名弹窗 PNG 到 `dist/visual-qa/`，用于人工核对主题选择器、
-  窄宽响应式、服务商卡片、历史参数和弹窗层级；隐藏窗口截图会先丢弃一次未稳定合成帧，
-  图片属于构建产物。
+- `npm run test:visual` 在本地生成 820px 插件页、1180px 单组展开服务商向导、1180px 历史
+  配置组件、1180px 高级设置模态层、终端聚焦态与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
+  人工核对主题选择器、窄宽响应式、服务商卡片、认证设置、聚焦微光、历史参数和弹窗层级；
+  隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`

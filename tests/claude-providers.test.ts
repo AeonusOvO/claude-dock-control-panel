@@ -3,6 +3,7 @@ import { MODEL_NAME_PATTERN } from '../src/main/claude-configuration';
 import {
   CLAUDE_PROVIDER_GROUPS,
   CLAUDE_PROVIDERS,
+  collapsedClaudeProviderGroups,
   findClaudeProvider,
   providerForPreset,
 } from '../src/shared/claude-providers';
@@ -59,5 +60,18 @@ describe('Claude provider catalog', () => {
         }
       }
     }
+  });
+
+  it('opens only the group containing the last provider selection', () => {
+    expect(collapsedClaudeProviderGroups('anthropic')).not.toContain('official');
+    expect(collapsedClaudeProviderGroups('deepseek')).not.toContain('domestic');
+    expect(collapsedClaudeProviderGroups('custom')).not.toContain('advanced');
+    expect(collapsedClaudeProviderGroups('custom')).toHaveLength(CLAUDE_PROVIDER_GROUPS.length - 1);
+  });
+
+  it('keeps every provider group folded until an unknown selection is resolved', () => {
+    expect(collapsedClaudeProviderGroups(undefined)).toEqual(
+      CLAUDE_PROVIDER_GROUPS.map((group) => group.id),
+    );
   });
 });

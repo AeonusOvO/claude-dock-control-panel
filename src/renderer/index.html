@@ -245,6 +245,30 @@
           </section>
 
           <section
+            class="credential-source-settings"
+            id="credential-source-settings"
+            aria-labelledby="credential-source-settings-title"
+          >
+            <div class="step-heading">
+              <span class="step-number">A</span>
+              <div>
+                <strong id="credential-source-settings-title">认证来源与密钥冲突</strong>
+                <span>控制 ClaudeDock 密钥与 Claude Code apiKeyHelper 同时存在时的行为。</span>
+              </div>
+            </div>
+            <label class="field" for="claude-api-key-helper-policy">
+              <span>显式凭据的优先策略</span>
+              <select id="claude-api-key-helper-policy">
+                <option value="prefer-claudedock">只使用 ClaudeDock 保存的凭据（推荐）</option>
+                <option value="inherit">保留 Claude Code 的 apiKeyHelper</option>
+              </select>
+              <small id="claude-api-key-helper-status">
+                推荐模式只覆盖本次 ClaudeDock 会话，不修改 Claude Code 用户或项目设置。
+              </small>
+            </label>
+          </section>
+
+          <section
             class="gateway-discovery"
             id="gateway-discovery"
             aria-labelledby="gateway-discovery-title"
@@ -1198,7 +1222,7 @@
             <span class="step-kicker">接入工作台</span>
             <strong id="connection-advanced-dialog-title">高级设置与诊断工具</strong>
             <p id="connection-advanced-dialog-description">
-              可在这里完成接口识别、网关诊断和路由器管理。
+              可在这里调整认证来源、完成接口识别、网关诊断和路由器管理。
             </p>
           </div>
           <button

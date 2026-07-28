@@ -30,6 +30,7 @@ const feedChunks = (chunks: readonly string[]): string => {
 };
 
 const routerConfig: NormalizedClaudeConfig = {
+  apiKeyHelperPolicy: 'prefer-claudedock',
   authMode: 'authToken',
   baseUrl: 'http://127.0.0.1:3456',
   model: 'relay/claude-sonnet-4-5',
@@ -111,6 +112,7 @@ describe('Claude runtime route diagnostics', () => {
 
   it('builds a secret-preserving one-click repair input from a direct Anthropic project', () => {
     const directConfig: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
       authMode: 'apiKey',
       baseUrl: 'https://gateway.example.com/team',
       model: 'team-opus',
@@ -131,6 +133,13 @@ describe('Claude runtime route diagnostics', () => {
     expect(() =>
       routerRepairInputForProject({ ...directConfig, authMode: 'authToken' }, 'bearer-token'),
     ).toThrow('接口密钥');
+  });
+
+  it('uses a temporary high-priority setting for the single-credential policy', () => {
+    expect(runtimeSource).toContain(
+      "shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}",
+    );
+    expect(runtimeSource).toContain('apiKeyHelperPolicy: config.apiKeyHelperPolicy');
   });
 });
 

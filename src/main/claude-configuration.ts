@@ -8,6 +8,7 @@ import type {
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 
 export interface NormalizedClaudeConfig {
+  apiKeyHelperPolicy: NonNullable<SaveClaudeConfigInput['apiKeyHelperPolicy']>;
   authMode: SaveClaudeConfigInput['authMode'];
   baseUrl: string;
   model: string;
@@ -19,6 +20,7 @@ export interface NormalizedClaudeConfig {
 export type ClaudeEnvironmentOverrides = Record<string, null | string>;
 
 export const DEFAULT_CLAUDE_CONFIG: NormalizedClaudeConfig = {
+  apiKeyHelperPolicy: 'prefer-claudedock',
   authMode: 'existing',
   baseUrl: '',
   model: 'default',
@@ -165,6 +167,8 @@ const normalizeBaseUrl = (value: string): string => {
 };
 
 export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedClaudeConfig => {
+  const apiKeyHelperPolicy =
+    input.apiKeyHelperPolicy === 'inherit' ? 'inherit' : 'prefer-claudedock';
   const model = input.model.trim();
   if (!MODEL_NAME_PATTERN.test(model)) {
     throw new Error('模型标识只能包含字母、数字以及 . _ : / @ [ ] ~ -。');
@@ -186,6 +190,7 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
       throw new Error('Anthropic 官方接入只能使用现有登录或接口密钥。');
     }
     return {
+      apiKeyHelperPolicy,
       authMode: input.authMode,
       baseUrl: '',
       model,
@@ -200,6 +205,7 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
   }
 
   return {
+    apiKeyHelperPolicy,
     authMode: input.authMode,
     baseUrl: normalizeBaseUrl(input.baseUrl),
     model,
@@ -208,6 +214,15 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
     provider: 'gateway',
   };
 };
+
+/**
+ * Claude Code merges `--settings` above user/project settings. An empty helper is treated as
+ * unset by the CLI, so an explicit ClaudeDock credential remains the only credential source
+ * without editing the user's `~/.claude/settings.json`.
+ */
+export const shouldDisableInheritedApiKeyHelper = (config: NormalizedClaudeConfig): boolean =>
+  config.apiKeyHelperPolicy === 'prefer-claudedock' &&
+  (config.authMode === 'apiKey' || config.authMode === 'authToken');
 
 export const buildClaudeEnvironment = (
   config: NormalizedClaudeConfig,

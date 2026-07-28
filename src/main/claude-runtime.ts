@@ -40,6 +40,7 @@ import {
   evaluateClaudeInstallation,
   MODEL_NAME_PATTERN,
   normalizeClaudeConfig,
+  shouldDisableInheritedApiKeyHelper,
   type ClaudeEnvironmentOverrides,
   type NormalizedClaudeConfig,
 } from './claude-configuration';
@@ -134,6 +135,7 @@ const credentialDigest = (credential?: string): string =>
 
 const connectionFingerprint = (config: NormalizedClaudeConfig, credential?: string): string =>
   JSON.stringify({
+    apiKeyHelperPolicy: config.apiKeyHelperPolicy,
     authMode: config.authMode,
     baseUrl: config.baseUrl,
     credentialDigest: credentialDigest(credential),
@@ -428,11 +430,13 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
  * kind and preset. Anything else means a different PTY environment and therefore a relaunch.
  */
 const endpointKey = (value: {
+  apiKeyHelperPolicy: string;
   authMode: string;
   baseUrl: string;
   preset: string;
   provider: string;
-}): string => `${value.provider}|${value.preset}|${value.authMode}|${value.baseUrl}`;
+}): string =>
+  `${value.provider}|${value.preset}|${value.authMode}|${value.apiKeyHelperPolicy}|${value.baseUrl}`;
 
 const describeEndpoint = (entry: ClaudeConnectionHistoryEntry): string => {
   const providerLabel = findClaudeProvider(entry.preset)?.label ?? '自定义接入';
@@ -771,6 +775,7 @@ export class ClaudeRuntime {
 
     const settings = {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
+      ...(shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}),
       env: buildClaudeSettingsEnvironment(config),
       // The only hook we install: it reports that a `/compact` issued before a cross-endpoint
       // relaunch has actually finished, so the restart never cuts the summary short.
