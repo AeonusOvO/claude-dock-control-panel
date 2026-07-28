@@ -106,6 +106,14 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `lostpointercapture`、窗口失焦、页面隐藏和重新聚焦都会调用幂等清理，显式
   `releasePointerCapture` 并移除 `body.is-resizing`。这是窗口内所有按钮、下拉框、textarea
   偶发同时失去命中响应的统一修复边界。
+- **确认框不越过 renderer 焦点边界**：Electron/Chromium 在 Windows 关闭原生 JavaScript
+  `alert` / `confirm` 后存在 DOM 控件无法重新获得焦点的问题；xterm 的中文组合输入又依赖
+  隐藏 textarea，因此会出现“英文原始按键仍可输入，但中文和主输入框都卡住”的不对称症状。
+  renderer 统一用本地 `<dialog>` 实现二次确认，关闭后在下一绘制帧恢复打开前的控件，
+  不再调用原生 JavaScript 对话框。
+- **激活时状态自愈**：窗口重新获得焦点或页面从后台变为可见时，renderer 除了重新适配 xterm
+  外，还通过 `getWorkspace()` 获取一次主进程真值并重新渲染。这样即使隐藏/恢复期间漏掉阶段
+  事件，主输入框也不会因旧的非 `running` 快照长期保持 `disabled`。
 - 输入框的 `Ctrl+A` / `Shift+←→` / 拖选 / `Ctrl+Z` / IME 全部是 `<textarea>` 原生行为，
   **没有对应代码**。需要实现的只有发送、历史与自动增高，见
   `src/shared/composer-input.ts` 与 `src/shared/composer-history.ts`。
@@ -625,7 +633,9 @@ statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 
   游标行为。
 - `tests/renderer-interaction.test.ts` 固化渲染层交互生命周期：分隔条必须显式释放捕获并覆盖
   失焦/隐藏，活动 xterm 必须可见后初始化并跨帧适配，输入框必须等待 `running`，左栏交互页
-  的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让；统一刷新
+  的进场动画不得使用 `transform`；原生 `alert` / `confirm` 不得重新进入 renderer，统一
+  确认框必须是可取消的应用内 `<dialog>`，窗口 focus/visibility 恢复路径必须重新读取工作区；
+  连接实测必须显示后台状态并让定时轮询避让；统一刷新
   必须在首屏后异步启动，三类更新入口默认隐藏；服务商反选、分组折叠、1/2/3 列容器查询、
   高级设置快照式取消、历史配置位于高级设置与模型表单之间，以及活动栏二次点击收起也作为
   源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须用保存配置原地测试、不得跳转
@@ -738,6 +748,10 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://xtermjs.org/docs/guides/using-addons/>
 - xterm.js GitHub（IME、CJK 与主题能力）：
   <https://github.com/xtermjs/xterm.js>
+- Electron Windows 原生 JavaScript 对话框关闭后的输入焦点问题：
+  <https://github.com/electron/electron/issues/19977>
+- Electron 对该焦点问题的当前修复：
+  <https://github.com/electron/electron/pull/50770>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：

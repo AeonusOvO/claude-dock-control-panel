@@ -334,6 +334,12 @@ const conversationRenameDialogTitle = requiredElement<HTMLElement>(
 );
 const conversationRenameCancel = requiredElement<HTMLButtonElement>('#conversation-rename-cancel');
 const conversationRenameInput = requiredElement<HTMLInputElement>('#conversation-rename-input');
+const confirmationDialog = requiredElement<HTMLDialogElement>('#confirmation-dialog');
+const confirmationDialogTitle = requiredElement<HTMLElement>('#confirmation-dialog-title');
+const confirmationDialogMessage = requiredElement<HTMLElement>('#confirmation-dialog-message');
+const confirmationDialogConfirm = requiredElement<HTMLButtonElement>(
+  '#confirmation-dialog-confirm',
+);
 const connectionHistoryList = requiredElement<HTMLElement>('#connection-history-list');
 const connectionHistoryEmpty = requiredElement<HTMLElement>('#connection-history-empty');
 const connectionHistoryCount = requiredElement<HTMLElement>('#connection-history-count');
@@ -1298,7 +1304,7 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
       purgeButton.type = 'button';
       purgeButton.textContent = '彻底清除这个路由器';
       purgeButton.addEventListener('click', () => {
-        purgeRouter(purgeButton);
+        void purgeRouter(purgeButton);
       });
       actions.append(purgeButton);
     }
@@ -1828,10 +1834,16 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
     deleteButton.textContent = '删除';
     deleteButton.addEventListener('click', async () => {
       const status = activeStatus();
+      if (!status || routerOperationInProgress) {
+        return;
+      }
       if (
-        !status ||
-        routerOperationInProgress ||
-        !window.confirm(`从路由器删除服务提供方“${provider.name}”？`)
+        !(await requestConfirmation({
+          confirmLabel: '删除',
+          message: `从路由器删除服务提供方“${provider.name}”？`,
+          title: '删除服务提供方',
+          tone: 'danger',
+        }))
       ) {
         return;
       }
@@ -1904,14 +1916,18 @@ const runRouterOperation = async (
  * The purge is irreversible — CCR keeps the upstream keys inside the data directory that gets
  * deleted — so the confirmation spells out exactly what disappears before anything runs.
  */
-const purgeRouter = (button: HTMLButtonElement): void => {
+const purgeRouter = async (button: HTMLButtonElement): Promise<void> => {
   if (
-    !window.confirm(
-      '彻底卸载路由器并清除全部数据？\n\n' +
+    !(await requestConfirmation({
+      confirmLabel: '彻底清除',
+      message:
+        '彻底卸载路由器并清除全部数据？\n\n' +
         '将删除：路由器程序、全部服务提供方配置、保存在其中的上游密钥与用量记录。\n' +
         '不会改动：Claude Code 与 Codex 自己的配置。\n\n' +
         '删除后无法恢复；完成后可以选择新的安装来源重新安装。',
-    )
+      title: '彻底清除路由器',
+      tone: 'danger',
+    }))
   ) {
     return;
   }
@@ -2407,9 +2423,11 @@ const relaunchClaudeSession = async (
     return;
   }
   if (
-    !window.confirm(
-      `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
-    )
+    !(await requestConfirmation({
+      confirmLabel: '压缩并重启',
+      message: `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
+      title: '重启 Claude Code 会话',
+    }))
   ) {
     return;
   }
@@ -2852,8 +2870,15 @@ const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
     uninstall.className = 'button button--quiet button--small plugin-card__danger';
     uninstall.textContent = '卸载';
     uninstall.disabled = pluginMutationInProgress;
-    uninstall.addEventListener('click', () => {
-      if (!window.confirm(`卸载插件“${plugin.name}”？`)) {
+    uninstall.addEventListener('click', async () => {
+      if (
+        !(await requestConfirmation({
+          confirmLabel: '卸载',
+          message: `卸载插件“${plugin.name}”？`,
+          title: '卸载插件',
+          tone: 'danger',
+        }))
+      ) {
         return;
       }
       void runPluginMutation(
@@ -2966,8 +2991,15 @@ const renderMarketplaceCard = (marketplace: ClaudePluginMarketplaceView): HTMLEl
   remove.className = 'button button--quiet button--small plugin-card__danger';
   remove.textContent = '移除市场';
   remove.disabled = pluginMutationInProgress;
-  remove.addEventListener('click', () => {
-    if (!window.confirm(`移除插件市场“${marketplace.name}”？来自它的插件将不再可见。`)) {
+  remove.addEventListener('click', async () => {
+    if (
+      !(await requestConfirmation({
+        confirmLabel: '移除',
+        message: `移除插件市场“${marketplace.name}”？来自它的插件将不再可见。`,
+        title: '移除插件市场',
+        tone: 'danger',
+      }))
+    ) {
       return;
     }
     void runPluginMutation(
@@ -3093,6 +3125,67 @@ const copyActiveTerminalSelection = async (): Promise<void> => {
     await window.controlPanel.writeClipboardText(terminal.getSelection());
   }
   terminal?.focus();
+};
+
+interface ConfirmationRequest {
+  confirmLabel?: string;
+  message: string;
+  title: string;
+  tone?: 'danger' | 'default';
+}
+
+/**
+ * Uses an in-page modal instead of `window.confirm`. Electron on Windows can lose the renderer's
+ * DOM focus after a native JavaScript dialog closes, leaving both the composer and xterm's hidden
+ * IME textarea unable to regain focus. A DOM `<dialog>` keeps focus ownership inside the page.
+ */
+const requestConfirmation = ({
+  confirmLabel = '确认',
+  message,
+  title,
+  tone = 'default',
+}: ConfirmationRequest): Promise<boolean> => {
+  if (confirmationDialog.open) {
+    return Promise.resolve(false);
+  }
+
+  confirmationDialogTitle.textContent = title;
+  confirmationDialogMessage.textContent = message;
+  confirmationDialogConfirm.textContent = confirmLabel;
+  confirmationDialog.dataset.tone = tone;
+  confirmationDialog.returnValue = 'cancel';
+  const previouslyFocused =
+    document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      const confirmed = confirmationDialog.returnValue === 'confirm';
+      resolve(confirmed);
+      window.requestAnimationFrame(() => {
+        const previouslyFocusedControl =
+          previouslyFocused instanceof HTMLButtonElement ||
+          previouslyFocused instanceof HTMLInputElement ||
+          previouslyFocused instanceof HTMLSelectElement ||
+          previouslyFocused instanceof HTMLTextAreaElement
+            ? previouslyFocused
+            : undefined;
+        if (
+          document.activeElement === document.body &&
+          previouslyFocused?.isConnected &&
+          !previouslyFocusedControl?.disabled
+        ) {
+          previouslyFocused.focus({ preventScroll: true });
+        }
+      });
+    };
+    confirmationDialog.addEventListener('close', finish, { once: true });
+    try {
+      confirmationDialog.showModal();
+    } catch {
+      confirmationDialog.removeEventListener('close', finish);
+      resolve(false);
+    }
+  });
 };
 
 const hideTerminalContextMenu = (): void => {
@@ -3845,7 +3938,12 @@ const activateProject = async (sessionId: string): Promise<void> => {
 const closeProject = async (status: TerminalStatus): Promise<void> => {
   if (
     status.phase === 'running' &&
-    !window.confirm(`关闭“${status.title}”会终止它的终端进程，是否继续？`)
+    !(await requestConfirmation({
+      confirmLabel: '关闭对话',
+      message: `关闭“${status.title}”会终止它的终端进程，是否继续？`,
+      title: '关闭正在运行的对话',
+      tone: 'danger',
+    }))
   ) {
     return;
   }
@@ -3888,7 +3986,12 @@ const renameConversation = async (status: TerminalStatus): Promise<void> => {
 const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
   if (
     project.sessionIds.length > 0 &&
-    !window.confirm(`关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？`)
+    !(await requestConfirmation({
+      confirmLabel: '全部关闭',
+      message: `关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？`,
+      title: '关闭项目对话',
+      tone: 'danger',
+    }))
   ) {
     return;
   }
@@ -3902,7 +4005,14 @@ const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> 
 };
 
 const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
-  if (!window.confirm(`把“${project.name}”从列表中移除？磁盘上的文件不会被删除。`)) {
+  if (
+    !(await requestConfirmation({
+      confirmLabel: '从列表移除',
+      message: `把“${project.name}”从列表中移除？磁盘上的文件不会被删除。`,
+      title: '移除项目',
+      tone: 'danger',
+    }))
+  ) {
     return;
   }
   const result = await window.controlPanel.forgetProject(project.path);
@@ -4834,7 +4944,7 @@ installRouterButton.addEventListener('click', () => {
   );
 });
 uninstallRouterButton.addEventListener('click', () => {
-  purgeRouter(uninstallRouterButton);
+  void purgeRouter(uninstallRouterButton);
 });
 installUpdateClaudeButton.addEventListener('click', () => {
   void runClaudeInstallUpdate();
@@ -4945,8 +5055,15 @@ claudeConfigForm.addEventListener('submit', (event) => {
 saveClaudeConfigButton.addEventListener('click', () => {
   void saveClaudeConfig('keep');
 });
-clearCredentialButton.addEventListener('click', () => {
-  if (window.confirm('清除当前项目已加密保存的接口凭据？')) {
+clearCredentialButton.addEventListener('click', async () => {
+  if (
+    await requestConfirmation({
+      confirmLabel: '清除凭据',
+      message: '清除当前项目已加密保存的接口凭据？',
+      title: '清除接口凭据',
+      tone: 'danger',
+    })
+  ) {
     void saveClaudeConfig('clear');
   }
 });
@@ -4965,7 +5082,12 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-claude-
     }
     if (
       command === '/clear' &&
-      !window.confirm('/clear 会结束当前上下文并开启新会话，是否继续？')
+      !(await requestConfirmation({
+        confirmLabel: '开启新会话',
+        message: '/clear 会结束当前上下文并开启新会话，是否继续？',
+        title: '清空当前上下文',
+        tone: 'danger',
+      }))
     ) {
       return;
     }
@@ -5137,14 +5259,32 @@ window.addEventListener('blur', () => {
   hideHistoryContextMenu();
   hideFooterMenus();
 });
+
+let workspaceActivationSyncInProgress = false;
+const reconcileWorkspaceAfterActivation = async (): Promise<void> => {
+  if (workspaceActivationSyncInProgress) {
+    return;
+  }
+  workspaceActivationSyncInProgress = true;
+  try {
+    renderWorkspace(await window.controlPanel.getWorkspace());
+  } catch {
+    // Keep the last rendered snapshot; the normal workspace event stream may still recover.
+  } finally {
+    workspaceActivationSyncInProgress = false;
+  }
+};
+
 window.addEventListener('focus', () => {
   // Tray restoration is a fresh layout/focus boundary even when Chromium missed the earlier blur.
   cancelActiveResizes();
+  void reconcileWorkspaceAfterActivation();
   scheduleActiveTerminalFit();
   flushPendingComposerFocus();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    void reconcileWorkspaceAfterActivation();
     scheduleActiveTerminalFit();
     flushPendingComposerFocus();
   } else {

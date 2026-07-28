@@ -4965,7 +4965,8 @@ body.is-resizing * {
 }
 
 .connection-advanced-dialog::backdrop,
-.conversation-rename-dialog::backdrop {
+.conversation-rename-dialog::backdrop,
+.confirmation-dialog::backdrop {
   background: rgb(0 0 0 / 58%);
 }
 
@@ -5087,7 +5088,8 @@ body.is-resizing * {
   color: var(--accent-text);
 }
 
-.conversation-rename-dialog {
+.conversation-rename-dialog,
+.confirmation-dialog {
   background: var(--surface-3);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-xl);
@@ -5097,18 +5099,21 @@ body.is-resizing * {
   width: min(420px, calc(100vw - 32px));
 }
 
-.conversation-rename-dialog form {
+.conversation-rename-dialog form,
+.confirmation-dialog form {
   display: grid;
   gap: var(--s-4);
   padding: var(--s-5);
 }
 
-.conversation-rename-dialog header {
+.conversation-rename-dialog header,
+.confirmation-dialog header {
   display: grid;
   gap: var(--s-1);
 }
 
-.conversation-rename-dialog header strong {
+.conversation-rename-dialog header strong,
+.confirmation-dialog header strong {
   color: var(--text-hi);
   font-size: var(--text-lg);
 }
@@ -5118,13 +5123,15 @@ body.is-resizing * {
   font-size: var(--text-xs);
 }
 
-.conversation-rename-dialog footer {
+.conversation-rename-dialog footer,
+.confirmation-dialog footer {
   display: flex;
   gap: var(--s-2);
   justify-content: flex-end;
 }
 
-.conversation-rename-dialog footer button {
+.conversation-rename-dialog footer button,
+.confirmation-dialog footer button {
   background: var(--surface-4);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
@@ -5133,10 +5140,29 @@ body.is-resizing * {
   padding: 8px 15px;
 }
 
-.conversation-rename-dialog footer .dialog-primary {
+.conversation-rename-dialog footer .dialog-primary,
+.confirmation-dialog footer .dialog-primary {
   background: var(--accent-tint);
   border-color: var(--accent-line);
   color: var(--accent-text);
+}
+
+.confirmation-dialog[open] {
+  animation: advancedDialogEnter var(--dur-3) var(--ease-decel);
+}
+
+.confirmation-dialog p {
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  margin: 0;
+  white-space: pre-line;
+}
+
+.confirmation-dialog[data-tone='danger'] footer .dialog-primary {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+  color: var(--bad-text);
 }
 
 @media (max-width: 1040px) {

@@ -29,6 +29,25 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('flushPendingComposerFocus();');
   });
 
+  it('keeps confirmation and IME focus inside the renderer across window activation', () => {
+    expect(rendererMarkup).toMatch(
+      /<dialog[\s\S]*?id="confirmation-dialog"[\s\S]*?aria-labelledby="confirmation-dialog-title"[\s\S]*?<form method="dialog">/,
+    );
+    expect(rendererSource).toContain('confirmationDialog.showModal();');
+    expect(rendererSource).toContain('previouslyFocused.focus({ preventScroll: true });');
+    expect(rendererSource).not.toMatch(/window\.(?:alert|confirm)\(/);
+    expect(rendererSource).toContain('const reconcileWorkspaceAfterActivation = async');
+    expect(rendererSource).toContain('renderWorkspace(await window.controlPanel.getWorkspace());');
+    expect(rendererSource).toMatch(
+      /window\.addEventListener\('focus', \(\) => \{[\s\S]*?void reconcileWorkspaceAfterActivation\(\);/,
+    );
+    expect(rendererSource).toMatch(
+      /document\.visibilityState === 'visible'[\s\S]*?void reconcileWorkspaceAfterActivation\(\);/,
+    );
+    expect(rendererStyles).toContain('.confirmation-dialog::backdrop');
+    expect(rendererStyles).toContain(".confirmation-dialog[data-tone='danger']");
+  });
+
   it('does not animate interactive rail pages through a transformed hit-test layer', () => {
     const pageAnimation = rendererStyles.match(/@keyframes railPageEnter\s*\{(?<body>[\s\S]*?)\n\}/)
       ?.groups?.body;

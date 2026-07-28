@@ -1249,6 +1249,31 @@
       </form>
     </dialog>
 
+    <dialog
+      class="confirmation-dialog"
+      id="confirmation-dialog"
+      aria-labelledby="confirmation-dialog-title"
+      aria-describedby="confirmation-dialog-message"
+    >
+      <form method="dialog">
+        <header>
+          <strong id="confirmation-dialog-title">确认操作</strong>
+        </header>
+        <p id="confirmation-dialog-message"></p>
+        <footer>
+          <button type="submit" value="cancel" autofocus>取消</button>
+          <button
+            class="dialog-primary"
+            id="confirmation-dialog-confirm"
+            type="submit"
+            value="confirm"
+          >
+            确认
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script type="module" src="/main.ts"></script>
   </body>
