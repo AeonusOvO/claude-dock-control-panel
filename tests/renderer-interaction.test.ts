@@ -192,6 +192,9 @@ describe('renderer interaction lifecycle contract', () => {
     );
     expect(rendererSource).toContain('compactFirst: true,');
     expect(rendererSource).toContain('对话历史会通过 --continue 恢复');
+    expect(rendererSource.indexOf("id: 'bypassPermissions',")).toBeLessThan(
+      rendererSource.indexOf("id: 'auto',"),
+    );
   });
 
   it('forwards Shift+Tab from the composer so the shortcut does not depend on terminal focus', () => {
@@ -204,13 +207,22 @@ describe('renderer interaction lifecycle contract', () => {
 
   it('reads permission badges from xterm after screen deltas have been applied', () => {
     expect(rendererSource).toContain('const buffer = view.terminal.buffer.active;');
-    expect(rendererSource).toContain('const start = Math.max(buffer.baseY, end - 8);');
+    expect(rendererSource).toContain('for (let row = buffer.baseY; row < end; row += 1) {');
     expect(rendererSource).toContain("buffer.getLine(row)?.translateToString(true) ?? ''");
     expect(rendererSource).toContain(
       'window.controlPanel.observeClaudePermissionMode(sessionId, mode);',
     );
     expect(rendererSource).toMatch(
-      /view\.terminal\.write\(chunk, \(\) => \{\s+reportTerminalPermissionMode\(sessionId, view\);/,
+      /view\.terminal\.write\(chunk, \(\) => \{\s+view\.appliedOutputRevision = Math\.max\(view\.appliedOutputRevision, revision\);\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);/,
     );
+    expect(rendererSource).toContain('requiredRevision <= view.appliedOutputRevision');
+    expect(rendererSource).toContain(
+      'window.controlPanel.onClaudePermissionModeProbe((sessionId, probeId) => {',
+    );
+    expect(rendererSource).toContain('view.appliedOutputRevision >= view.outputRevision');
+    expect(rendererSource).toContain(
+      'view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });',
+    );
+    expect(rendererSource).toContain('window.controlPanel.reportClaudePermissionModeProbe(');
   });
 });

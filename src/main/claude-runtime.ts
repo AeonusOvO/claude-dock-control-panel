@@ -87,8 +87,10 @@ interface RuntimeSession {
 const SHIFT_TAB_SEQUENCE = `${String.fromCharCode(27)}[Z`;
 /** Upper bound on Shift+Tab presses when hunting for a mode. The real cycle is far shorter. */
 const PERMISSION_MODE_MAX_STEPS = 8;
-/** How long one press gets to repaint the badge before the step is treated as a no-op. */
-const PERMISSION_MODE_STEP_TIMEOUT_MS = 700;
+/** How long one press gets to repaint and survive a temporarily busy renderer before it is a no-op. */
+const PERMISSION_MODE_STEP_TIMEOUT_MS = 2_000;
+/** On-demand xterm snapshots are cheap, but leave enough time for PTY output to traverse both IPC hops. */
+const PERMISSION_MODE_PROBE_INTERVAL_MS = 50;
 const COMPACT_TIMEOUT_MS = 120_000;
 const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
 const COMPACT_INSTRUCTION = '请保留：当前任务目标、已完成的修改、待办的下一步。';
@@ -472,6 +474,9 @@ export class ClaudeRuntime {
     private readonly signalScriptPath: string,
     private readonly onState: (state: ClaudeProjectState) => void,
     private readonly writeToTerminal: (sessionId: string, data: string) => void,
+    private readonly readPermissionModeFromScreen: (
+      sessionId: string,
+    ) => Promise<ClaudePermissionMode | undefined>,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
@@ -954,9 +959,10 @@ export class ClaudeRuntime {
   }
 
   /**
-   * Walks the Shift+Tab cycle one press at a time, re-reading the badge after each, until the live
-   * mode is the requested one. Counting presses is not an option: whether `auto` participates
-   * depends on the account and model, so a blind jump would land on the wrong mode.
+   * Walks the Shift+Tab cycle one press at a time, taking an on-demand xterm snapshot before and
+   * after every press. A passive output event is not a sufficient barrier: it can be delayed, and
+   * Shift+Tab is contextual when Claude is showing a picker or confirmation dialog. If the badge is
+   * not currently visible, no key is sent. Re-visiting a mode proves the live cycle is exhausted.
    */
   public async setPermissionMode(
     sessionId: string,
@@ -973,29 +979,45 @@ export class ClaudeRuntime {
     if (mode === 'bypassPermissions' && !this.configStore.getAllowBypassPermissions(cwd)) {
       throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
     }
-    if (runtime.permissionMode === mode) {
-      return this.getState(sessionId, cwd);
-    }
     if (this.modeSwitchLocks.has(sessionId)) {
       throw new Error('上一次模式切换还没有完成，请稍候。');
     }
 
     this.modeSwitchLocks.add(sessionId);
     try {
+      const current = await this.readPermissionModeFromScreen(sessionId);
+      if (!current) {
+        throw new Error(
+          '当前终端没有显示权限模式徽标。请先关闭 Claude Code 的选择器或确认框，回到主输入界面后重试。',
+        );
+      }
+      this.recordPermissionMode(runtime, current);
+      if (current === mode) {
+        return this.getState(sessionId, cwd);
+      }
+
+      const visited = new Set<ClaudePermissionMode>([current]);
       for (let step = 0; step < PERMISSION_MODE_MAX_STEPS; step += 1) {
-        const before = runtime.permissionMode;
+        const before = runtime.permissionMode ?? current;
         this.writeToTerminal(sessionId, SHIFT_TAB_SEQUENCE);
-        const changed = await this.waitForPermissionModeChange(runtime, before);
+        const changed = await this.waitForPermissionModeChange(sessionId, before);
         if (!changed) {
-          throw new Error('Claude Code 没有响应模式切换，请在终端里直接按 Shift+Tab 试试。');
+          throw new Error(
+            '当前终端没有确认这次模式切换，已停止继续按键以避免切到错误模式。请回到 Claude Code 主输入界面后重试；若刚进入「完全允许」，请先在终端完成 Claude Code 自己的免责确认。',
+          );
         }
-        if (runtime.permissionMode === mode) {
+        this.recordPermissionMode(runtime, changed);
+        if (changed === mode) {
           const state = await this.getState(sessionId, cwd);
           this.onState(state);
           return state;
         }
+        if (visited.has(changed)) {
+          throw new Error('该模式不在当前会话的可用循环中。');
+        }
+        visited.add(changed);
       }
-      throw new Error('该模式在当前会话不可用。');
+      throw new Error('该模式不在当前会话的可用循环中。');
     } finally {
       this.modeSwitchLocks.delete(sessionId);
     }
@@ -1050,21 +1072,26 @@ export class ClaudeRuntime {
   }
 
   private waitForPermissionModeChange(
-    runtime: RuntimeSession,
+    sessionId: string,
     before: ClaudePermissionMode | undefined,
-  ): Promise<boolean> {
+  ): Promise<ClaudePermissionMode | undefined> {
+    const startedAt = Date.now();
     return new Promise((resolve) => {
-      const startedAt = Date.now();
-      const poll = setInterval(() => {
-        if (runtime.permissionMode !== before) {
-          clearInterval(poll);
-          resolve(true);
-        } else if (Date.now() - startedAt >= PERMISSION_MODE_STEP_TIMEOUT_MS) {
-          clearInterval(poll);
-          resolve(false);
+      const probe = async (): Promise<void> => {
+        const observed = await this.readPermissionModeFromScreen(sessionId);
+        if (observed && observed !== before) {
+          resolve(observed);
+          return;
         }
-      }, 40);
-      poll.unref?.();
+        if (Date.now() - startedAt >= PERMISSION_MODE_STEP_TIMEOUT_MS) {
+          resolve(undefined);
+          return;
+        }
+        setTimeout(() => {
+          void probe();
+        }, PERMISSION_MODE_PROBE_INTERVAL_MS);
+      };
+      void probe();
     });
   }
 

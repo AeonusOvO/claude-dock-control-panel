@@ -86,6 +86,32 @@ const api: ControlPanelApi = {
   observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => {
     ipcRenderer.send('claude:permission-mode-observed', sessionId, mode);
   },
+  reportClaudePermissionModeProbe: (
+    sessionId: string,
+    probeId: number,
+    mode?: ClaudePermissionMode,
+  ) => {
+    ipcRenderer.send('claude:permission-mode-probe-result', sessionId, probeId, mode);
+  },
+  onClaudePermissionModeProbe: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      sessionId: unknown,
+      probeId: unknown,
+    ): void => {
+      if (
+        typeof sessionId === 'string' &&
+        typeof probeId === 'number' &&
+        Number.isSafeInteger(probeId)
+      ) {
+        listener(sessionId, probeId);
+      }
+    };
+    ipcRenderer.on('claude:permission-mode-probe', callback);
+    return () => {
+      ipcRenderer.removeListener('claude:permission-mode-probe', callback);
+    };
+  },
   setClaudeAllowBypassPermissions: (sessionId: string, allowed: boolean) =>
     ipcRenderer.invoke(
       'claude:set-allow-bypass-permissions',

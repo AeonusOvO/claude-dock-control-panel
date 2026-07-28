@@ -68,6 +68,48 @@ let mainWindow: BrowserWindow | null = null;
 let minimizedNoticeShown = false;
 let tray: Tray | null = null;
 
+interface PendingPermissionModeProbe {
+  resolve: (mode: ClaudePermissionMode | undefined) => void;
+  sessionId: string;
+  timer: NodeJS.Timeout;
+}
+
+const PERMISSION_MODE_PROBE_TIMEOUT_MS = 300;
+let nextPermissionModeProbeId = 1;
+const pendingPermissionModeProbes = new Map<number, PendingPermissionModeProbe>();
+
+/**
+ * Requests a synchronous fact from the renderer's xterm buffer. Passive PTY output reports keep the
+ * footer current, while this request/reply path gives a mode-switch step a fresh before/after
+ * barrier and prevents another Shift+Tab from being sent against an unreadable screen.
+ */
+const requestPermissionModeFromScreen = (
+  sessionId: string,
+): Promise<ClaudePermissionMode | undefined> =>
+  new Promise((resolve) => {
+    const target = mainWindow?.webContents;
+    if (!target || target.isDestroyed()) {
+      resolve(undefined);
+      return;
+    }
+
+    const probeId = nextPermissionModeProbeId;
+    nextPermissionModeProbeId =
+      nextPermissionModeProbeId >= Number.MAX_SAFE_INTEGER ? 1 : nextPermissionModeProbeId + 1;
+    const timer = setTimeout(() => {
+      pendingPermissionModeProbes.delete(probeId);
+      resolve(undefined);
+    }, PERMISSION_MODE_PROBE_TIMEOUT_MS);
+    pendingPermissionModeProbes.set(probeId, { resolve, sessionId, timer });
+    try {
+      target.send('claude:permission-mode-probe', sessionId, probeId);
+    } catch {
+      clearTimeout(timer);
+      pendingPermissionModeProbes.delete(probeId);
+      resolve(undefined);
+    }
+  });
+
 const assetPath = (fileName: string): string =>
   path.join(app.getAppPath(), 'assets', 'generated', fileName);
 const runtimeAssetPath = (fileName: string): string =>
@@ -1263,6 +1305,35 @@ const registerIpc = (): void => {
       // A queued xterm write can finish immediately after its project or Claude session is closed.
     }
   });
+  ipcMain.on(
+    'claude:permission-mode-probe-result',
+    (event, sessionId: unknown, probeId: unknown, mode: unknown) => {
+      validateSender(event);
+      if (
+        typeof probeId !== 'number' ||
+        !Number.isSafeInteger(probeId) ||
+        probeId < 1 ||
+        typeof sessionId !== 'string'
+      ) {
+        return;
+      }
+      const pending = pendingPermissionModeProbes.get(probeId);
+      if (!pending || pending.sessionId !== sessionId) {
+        return;
+      }
+
+      let validatedMode: ClaudePermissionMode | undefined;
+      try {
+        validateSessionId(sessionId);
+        validatedMode = mode === undefined ? undefined : validateClaudePermissionMode(mode);
+      } catch {
+        return;
+      }
+      clearTimeout(pending.timer);
+      pendingPermissionModeProbes.delete(probeId);
+      pending.resolve(validatedMode);
+    },
+  );
   ipcMain.handle(
     'claude:set-allow-bypass-permissions',
     async (event, sessionId: unknown, allowed: unknown): Promise<ClaudeOperationResult> => {
@@ -1699,6 +1770,7 @@ if (!hasSingleInstanceLock) {
       (sessionId, data) => {
         workspace.write(sessionId, data);
       },
+      requestPermissionModeFromScreen,
     );
     registerIpc();
     createTray();
@@ -1733,6 +1805,11 @@ app.on('before-quit', () => {
     }
   }
   outputBuffers.clear();
+  for (const pending of pendingPermissionModeProbes.values()) {
+    clearTimeout(pending.timer);
+    pending.resolve(undefined);
+  }
+  pendingPermissionModeProbes.clear();
   claudeRuntime?.shutdown();
   workspace.shutdown();
 });

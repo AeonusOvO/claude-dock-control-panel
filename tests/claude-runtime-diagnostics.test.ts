@@ -15,6 +15,8 @@ const runtimeSource = readFileSync(
   new URL('../src/main/claude-runtime.ts', import.meta.url),
   'utf8',
 );
+const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
 
 /** Mirrors the rolling window `consumeTerminalOutput` keeps for diagnostics. */
 const DIAGNOSTIC_BUFFER_LIMIT = 4_000;
@@ -166,18 +168,35 @@ describe('Claude runtime permission mode observation', () => {
   });
 
   it('steps the Shift+Tab cycle in a closed loop instead of counting presses blind', () => {
-    // `auto` may or may not join the cycle depending on the account, so a computed press count
-    // would silently land on the wrong mode. Each press has to be confirmed by the badge.
+    // `auto` and `bypassPermissions` may or may not join the cycle, so a computed press count would
+    // silently land on the wrong mode. Read a fresh screen before any key, confirm every step, and
+    // stop as soon as the live cycle revisits a mode.
     expect(runtimeSource).toContain('const PERMISSION_MODE_MAX_STEPS = 8;');
-    expect(runtimeSource).toMatch(
-      /for \(let step = 0; step < PERMISSION_MODE_MAX_STEPS; step \+= 1\) \{\s+const before = runtime\.permissionMode;\s+this\.writeToTerminal\(sessionId, SHIFT_TAB_SEQUENCE\);\s+const changed = await this\.waitForPermissionModeChange\(runtime, before\);/,
+    expect(runtimeSource).toContain(
+      'const current = await this.readPermissionModeFromScreen(sessionId);',
     );
-    expect(runtimeSource).toContain("throw new Error('该模式在当前会话不可用。');");
+    expect(runtimeSource).toContain(
+      '当前终端没有显示权限模式徽标。请先关闭 Claude Code 的选择器或确认框',
+    );
+    expect(runtimeSource).toMatch(
+      /const visited = new Set<ClaudePermissionMode>\(\[current\]\);\s+for \(let step = 0; step < PERMISSION_MODE_MAX_STEPS; step \+= 1\) \{\s+const before = runtime\.permissionMode \?\? current;\s+this\.writeToTerminal\(sessionId, SHIFT_TAB_SEQUENCE\);\s+const changed = await this\.waitForPermissionModeChange\(sessionId, before\);/,
+    );
+    expect(runtimeSource).toContain('if (visited.has(changed))');
+    expect(runtimeSource).toContain("throw new Error('该模式不在当前会话的可用循环中。');");
+    expect(runtimeSource).toContain('const observed = await this.readPermissionModeFromScreen');
+    expect(runtimeSource).toContain('已停止继续按键以避免切到错误模式');
+    expect(runtimeSource).not.toContain('请在终端里直接按 Shift+Tab 试试');
     expect(runtimeSource).toContain('private readonly modeSwitchLocks = new Set<string>();');
     expect(runtimeSource).toContain('this.modeSwitchLocks.add(sessionId);');
     expect(runtimeSource).toContain('this.modeSwitchLocks.delete(sessionId);');
     expect(runtimeSource).toContain('public observePermissionModeFromScreen(');
     expect(runtimeSource).toContain('this.recordPermissionMode(runtime, mode);');
+    expect(mainSource).toContain(
+      "target.send('claude:permission-mode-probe', sessionId, probeId);",
+    );
+    expect(mainSource).toContain("'claude:permission-mode-probe-result'");
+    expect(preloadSource).toContain("ipcRenderer.on('claude:permission-mode-probe', callback);");
+    expect(preloadSource).toContain("ipcRenderer.send('claude:permission-mode-probe-result'");
     expect(runtimeSource).toMatch(
       /observePermissionModeFromRawOutput\(runtime: RuntimeSession\): void \{\s+if \(runtime\.permissionMode !== undefined\) \{\s+return;/,
     );

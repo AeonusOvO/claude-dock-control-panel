@@ -70,14 +70,20 @@ import { deriveUpdateActionState } from '../shared/update-actions';
 import './styles.css';
 
 interface TerminalView {
+  /** Latest PTY-output revision fully applied to xterm's screen buffer. */
+  appliedOutputRevision: number;
   container: HTMLDivElement;
   fitAddon: FitAddon;
+  /** Latest PTY-output revision accepted into this view's renderer-side queue. */
+  outputRevision: number;
   /** Output arriving between two frames, flushed as one `write` so heavy output stays smooth. */
   pending: string[];
   pendingLength: number;
   /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
   pendingFrame: number;
-  /** Last complete badge reported from xterm's reconstructed viewport. */
+  /** Main-process probes waiting for all output that preceded their request to reach xterm. */
+  permissionModeProbes: Array<{ probeId: number; requiredRevision: number }>;
+  /** Last complete badge passively reported after xterm reconstructed a PTY screen delta. */
   observedPermissionMode?: ClaudePermissionMode;
   terminal: Terminal;
 }
@@ -901,15 +907,15 @@ const PERMISSION_MODE_CATALOG: ReadonlyArray<{
     needsRelaunch: false,
   },
   {
-    detail: '由 Claude Code 自行判断，能否使用取决于账号与模型。',
-    id: 'auto',
-    label: '自动选择',
-    needsRelaunch: false,
-  },
-  {
     detail: '无视风险直接执行；需要在工作台预置后才能切入。',
     id: 'bypassPermissions',
     label: '完全允许',
+    needsRelaunch: false,
+  },
+  {
+    detail: '由 Claude Code 自行判断，能否使用取决于账号与模型。',
+    id: 'auto',
+    label: '自动选择',
     needsRelaunch: false,
   },
   {
@@ -3238,11 +3244,14 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
   container.addEventListener('contextmenu', showTerminalContextMenu);
 
   const view: TerminalView = {
+    appliedOutputRevision: 0,
     container,
     fitAddon,
+    outputRevision: 0,
     pending: [],
     pendingFrame: 0,
     pendingLength: 0,
+    permissionModeProbes: [],
     terminal,
   };
   terminalViews.set(sessionId, view);
@@ -3253,23 +3262,51 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
 const MAX_PENDING_OUTPUT = 512 * 1024;
 
 /**
- * xterm has already applied cursor moves and retained unchanged cells, so its viewport contains the
- * complete mode badge even when the PTY emitted only a repaint delta.
+ * xterm has already applied cursor moves and retained unchanged cells, so its current screen
+ * contains the complete mode badge even when the PTY emitted only a repaint delta. Read every row
+ * in the active screen: custom prompt layouts can place the badge more than eight rows from the
+ * bottom, and the screen is small enough that a full scan is negligible.
  */
-const reportTerminalPermissionMode = (sessionId: string, view: TerminalView): void => {
+const readTerminalPermissionMode = (view: TerminalView): ClaudePermissionMode | undefined => {
   const buffer = view.terminal.buffer.active;
   const lines: string[] = [];
   const end = Math.min(buffer.length, buffer.baseY + view.terminal.rows);
-  const start = Math.max(buffer.baseY, end - 8);
-  for (let row = start; row < end; row += 1) {
+  for (let row = buffer.baseY; row < end; row += 1) {
     lines.push(buffer.getLine(row)?.translateToString(true) ?? '');
   }
-  const mode = parseClaudePermissionMode(lines.join('\n'));
+  return parseClaudePermissionMode(lines.join('\n'));
+};
+
+const reportTerminalPermissionMode = (sessionId: string, view: TerminalView): void => {
+  const mode = readTerminalPermissionMode(view);
   if (!mode || mode === view.observedPermissionMode) {
     return;
   }
   view.observedPermissionMode = mode;
   window.controlPanel.observeClaudePermissionMode(sessionId, mode);
+};
+
+const answerReadyPermissionModeProbes = (sessionId: string, view: TerminalView): void => {
+  const ready = view.permissionModeProbes.filter(
+    (probe) => probe.requiredRevision <= view.appliedOutputRevision,
+  );
+  if (ready.length === 0) {
+    return;
+  }
+  view.permissionModeProbes = view.permissionModeProbes.filter(
+    (probe) => probe.requiredRevision > view.appliedOutputRevision,
+  );
+  const mode = readTerminalPermissionMode(view);
+  for (const { probeId } of ready) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId, mode);
+  }
+};
+
+const rejectPermissionModeProbes = (sessionId: string, view: TerminalView): void => {
+  for (const { probeId } of view.permissionModeProbes) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId);
+  }
+  view.permissionModeProbes.length = 0;
 };
 
 /**
@@ -3282,6 +3319,7 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
     return;
   }
 
+  view.outputRevision += 1;
   view.pending.push(data);
   view.pendingLength += data.length;
   if (view.pendingLength > MAX_PENDING_OUTPUT) {
@@ -3297,10 +3335,13 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
   view.pendingFrame = requestAnimationFrame(() => {
     view.pendingFrame = 0;
     const chunk = view.pending.join('');
+    const revision = view.outputRevision;
     view.pending.length = 0;
     view.pendingLength = 0;
     view.terminal.write(chunk, () => {
+      view.appliedOutputRevision = Math.max(view.appliedOutputRevision, revision);
       reportTerminalPermissionMode(sessionId, view);
+      answerReadyPermissionModeProbes(sessionId, view);
     });
   });
 };
@@ -4167,6 +4208,7 @@ function renderWorkspace(state: WorkspaceState): void {
       if (view.pendingFrame !== 0) {
         cancelAnimationFrame(view.pendingFrame);
       }
+      rejectPermissionModeProbes(sessionId, view);
       view.terminal.dispose();
       view.container.remove();
       terminalViews.delete(sessionId);
@@ -4553,6 +4595,22 @@ const deleteConnectionHistory = async (entryId: string): Promise<void> => {
 
 window.controlPanel.onTerminalData((sessionId, data) => {
   queueTerminalOutput(sessionId, data);
+});
+window.controlPanel.onClaudePermissionModeProbe((sessionId, probeId) => {
+  const view = terminalViews.get(sessionId);
+  if (!view) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId);
+    return;
+  }
+  if (view.appliedOutputRevision >= view.outputRevision) {
+    window.controlPanel.reportClaudePermissionModeProbe(
+      sessionId,
+      probeId,
+      readTerminalPermissionMode(view),
+    );
+    return;
+  }
+  view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });
 });
 /*
  * The PTY clamps the size it was asked for. xterm has to follow, because PSReadLine repaints its
@@ -5147,10 +5205,11 @@ window.addEventListener('beforeunload', () => {
   if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
   }
-  for (const view of terminalViews.values()) {
+  for (const [sessionId, view] of terminalViews) {
     if (view.pendingFrame !== 0) {
       cancelAnimationFrame(view.pendingFrame);
     }
+    rejectPermissionModeProbes(sessionId, view);
     view.terminal.dispose();
   }
 });

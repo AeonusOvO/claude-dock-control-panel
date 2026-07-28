@@ -466,6 +466,16 @@ export interface ControlPanelApi {
   ) => Promise<ClaudeOperationResult>;
   /** Reports the complete mode badge after xterm has applied PTY screen-delta output. */
   observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;
+  /** Answers a main-process probe with the mode currently visible in xterm's complete screen. */
+  reportClaudePermissionModeProbe: (
+    sessionId: string,
+    probeId: number,
+    mode?: ClaudePermissionMode,
+  ) => void;
+  /** Receives an on-demand request to read the current xterm screen, even if no new PTY data arrived. */
+  onClaudePermissionModeProbe: (
+    listener: (sessionId: string, probeId: number) => void,
+  ) => Unsubscribe;
   setClaudeAllowBypassPermissions: (
     sessionId: string,
     allowed: boolean,
