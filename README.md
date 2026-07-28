@@ -155,9 +155,11 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - Claude 工作台提供新建、继续最近和选择历史三种会话入口，并把 `/context`、`/usage`、
   `/model`、`/permissions`、`/compact`、`/theme` 等常用斜杠命令变成可点击操作。
 - 新对话先显示“对话 1 / 对话 2”等临时名称；Claude Code 根据首条提示词生成标题后，
-  ClaudeDock 会通过官方 `statusLine.session_name` 自动同步到左侧列表、终端标题和工作台范围。
-  这不会额外发送一条 ClaudeDock 提示词；手动重命名仍会覆盖自动标题。
-- 项目列表按“文件夹 → 当前对话 → 历史对话”折叠展示。恢复历史仍通过 Claude Code 官方
+  ClaudeDock 会通过官方 `statusLine.session_name` 自动同步到左侧列表、终端标题和工作台范围，
+  并以“擦除旧名、打字机输入新名”的动画原位更新（系统开启减少动态效果时直接替换）。
+  这不会额外发送一条 ClaudeDock 提示词；手动重命名立即生效且仍会覆盖自动标题。
+- 项目列表按“文件夹 → 当前对话 → 历史对话”折叠展示。历史对话完整列出并在文件夹内独立
+  滚动，运行中对话固定在上方不随滚动移动。恢复历史仍通过 Claude Code 官方
   `--resume <session-id>`；运行中和历史对话均可重命名，历史项右键写入 Claude 的
   `custom-title` 元数据。工作台不再重复显示同一份历史列表。
 - 通过 Claude Code 官方 `statusLine` 数据实时显示上下文窗口、输入/输出 token、会话估算

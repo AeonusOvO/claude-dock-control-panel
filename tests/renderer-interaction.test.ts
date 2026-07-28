@@ -260,6 +260,37 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).not.toContain("event.code === 'Tab'");
   });
 
+  it('scrolls a folder’s full conversation history without moving the running rows', () => {
+    // No truncation: every stored conversation is rendered into the dedicated scroller.
+    expect(rendererSource).not.toContain('history.slice(0, 6)');
+    expect(rendererSource).toMatch(
+      /scroller\.className = 'project-folder__history';[\s\S]*?for \(const session of history\) \{\s+scroller\.append\(renderHistoryRow\(project\.path, session\)\);/,
+    );
+    // Scroll position survives the sidebar rebuild that every workspace tick performs.
+    expect(rendererSource).toContain('historyScrollPositions.set(key, scroller.scrollTop);');
+    expect(rendererSource).toContain('const savedScroll = historyScrollPositions.get(key) ?? 0;');
+    expect(rendererStyles).toMatch(
+      /\.project-folder__history \{[\s\S]*?max-height:[\s\S]*?overflow-y: auto;/,
+    );
+  });
+
+  it('types Claude-generated titles in place and skips the animation for manual renames', () => {
+    expect(rendererSource).toContain('const syncConversationTitles = (state: WorkspaceState)');
+    expect(rendererSource).toMatch(
+      /function renderWorkspace\(state: WorkspaceState\): void \{\s+syncConversationTitles\(state\);/,
+    );
+    // The animation continues from the frame on screen when the sidebar is rebuilt mid-typing.
+    expect(rendererSource).toContain('const chars = existing ? existing.chars : [...fromTitle];');
+    expect(rendererSource).toContain('label.textContent = displayedConversationTitle(status);');
+    // Manual renames land instantly; reduced motion opts out entirely.
+    expect(rendererSource).toContain('suppressedTitleAnimations.add(status.id);');
+    expect(rendererSource).toMatch(
+      /suppressedTitleAnimations\.delete\(status\.id\) \|\|\s+window\.matchMedia\('\(prefers-reduced-motion: reduce\)'\)\.matches/,
+    );
+    expect(rendererStyles).toContain("[data-title-typing='true']::after");
+    expect(rendererStyles).toContain('@keyframes titleCaretBlink');
+  });
+
   it('reads permission badges from xterm after screen deltas have been applied', () => {
     expect(rendererSource).toContain('const buffer = view.terminal.buffer.active;');
     expect(rendererSource).toContain('for (let row = buffer.baseY; row < end; row += 1) {');

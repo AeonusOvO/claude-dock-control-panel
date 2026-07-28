@@ -379,6 +379,8 @@ const claudeStates = new Map<string, ClaudeProjectState>();
 /** Conversation history per project folder, keyed by the lower-cased folder path. */
 const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
 const expandedFolders = new Set<string>();
+/** Keeps each folder's history list where the user scrolled it, across sidebar rebuilds. */
+const historyScrollPositions = new Map<string, number>();
 const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
 const historyLoadsInFlight = new Set<string>();
 let dragDepth = 0;
@@ -3939,6 +3941,154 @@ composerInput.addEventListener('input', () => {
   resizeComposer();
 });
 
+/*
+ * Claude Code names a conversation after its first prompt, so the real title arrives mid-session
+ * through the statusLine sync. Instead of snapping, the old label is erased character by character
+ * and the new one typed in behind a blinking caret. The state machine lives outside the DOM because
+ * the sidebar is rebuilt on every workspace tick — each rebuild re-reads the animation's current
+ * frame, and each timer tick patches the live elements in place between rebuilds.
+ */
+interface TitleAnimationState {
+  chars: string[];
+  keep: number;
+  phase: 'erasing' | 'typing';
+  target: string[];
+  timer: number;
+}
+
+const TITLE_ERASE_MS = 24;
+const TITLE_TYPE_MS = 44;
+const TITLE_PHASE_PAUSE_MS = 200;
+
+const titleAnimations = new Map<string, TitleAnimationState>();
+const renderedConversationTitles = new Map<string, string>();
+/** Manual renames land instantly — the typewriter is reserved for titles Claude produced. */
+const suppressedTitleAnimations = new Set<string>();
+
+const displayedConversationTitle = (status: TerminalStatus): string => {
+  const animation = titleAnimations.get(status.id);
+  return animation ? animation.chars.join('') : status.title;
+};
+
+const isTitleAnimating = (sessionId: string): boolean => titleAnimations.has(sessionId);
+
+const applyAnimatedTitleFrame = (sessionId: string): void => {
+  const status = workspaceState.sessions.find((session) => session.id === sessionId);
+  if (!status) {
+    return;
+  }
+  const text = displayedConversationTitle(status);
+  const typing = String(isTitleAnimating(sessionId));
+  const label = projectList.querySelector<HTMLElement>(
+    `.conversation-item[data-session-id="${CSS.escape(sessionId)}"] .conversation-item__label`,
+  );
+  if (label) {
+    label.textContent = text;
+    label.dataset.titleTyping = typing;
+  }
+  if (sessionId === workspaceState.activeSessionId) {
+    const scoped = `${projectNameFromPath(status.cwd)} · ${text}`;
+    terminalProject.textContent = scoped;
+    terminalProject.dataset.titleTyping = typing;
+    workbenchScope.textContent = scoped;
+    workbenchScope.dataset.titleTyping = typing;
+  }
+};
+
+const cancelTitleAnimation = (sessionId: string): void => {
+  const animation = titleAnimations.get(sessionId);
+  if (!animation) {
+    return;
+  }
+  window.clearTimeout(animation.timer);
+  titleAnimations.delete(sessionId);
+};
+
+const stepTitleAnimation = (sessionId: string): void => {
+  const animation = titleAnimations.get(sessionId);
+  if (!animation) {
+    return;
+  }
+
+  let delay: number;
+  if (animation.phase === 'erasing') {
+    if (animation.chars.length > animation.keep) {
+      animation.chars.pop();
+      delay = TITLE_ERASE_MS;
+    } else {
+      animation.phase = 'typing';
+      delay = TITLE_PHASE_PAUSE_MS;
+    }
+  } else if (animation.chars.length < animation.target.length) {
+    animation.chars.push(animation.target[animation.chars.length] ?? '');
+    // Slightly uneven keystrokes read as typing rather than a mechanical ticker.
+    delay = TITLE_TYPE_MS + Math.random() * 42;
+  } else {
+    cancelTitleAnimation(sessionId);
+    applyAnimatedTitleFrame(sessionId);
+    return;
+  }
+
+  applyAnimatedTitleFrame(sessionId);
+  animation.timer = window.setTimeout(() => {
+    stepTitleAnimation(sessionId);
+  }, delay);
+};
+
+const startTitleAnimation = (sessionId: string, fromTitle: string, toTitle: string): void => {
+  const existing = titleAnimations.get(sessionId);
+  // A retarget mid-animation continues from whatever is on screen right now.
+  const chars = existing ? existing.chars : [...fromTitle];
+  if (existing) {
+    window.clearTimeout(existing.timer);
+  }
+
+  const target = [...toTitle];
+  let keep = 0;
+  while (keep < chars.length && keep < target.length && chars[keep] === target[keep]) {
+    keep += 1;
+  }
+
+  const animation: TitleAnimationState = {
+    chars,
+    keep,
+    phase: chars.length > keep ? 'erasing' : 'typing',
+    target,
+    timer: 0,
+  };
+  titleAnimations.set(sessionId, animation);
+  animation.timer = window.setTimeout(() => {
+    stepTitleAnimation(sessionId);
+  }, TITLE_ERASE_MS);
+};
+
+const syncConversationTitles = (state: WorkspaceState): void => {
+  const validSessionIds = new Set(state.sessions.map((session) => session.id));
+  for (const sessionId of [...renderedConversationTitles.keys()]) {
+    if (!validSessionIds.has(sessionId)) {
+      renderedConversationTitles.delete(sessionId);
+      suppressedTitleAnimations.delete(sessionId);
+      cancelTitleAnimation(sessionId);
+    }
+  }
+
+  for (const status of state.sessions) {
+    const previous = renderedConversationTitles.get(status.id);
+    renderedConversationTitles.set(status.id, status.title);
+    if (previous === undefined || previous === status.title) {
+      continue;
+    }
+    if (
+      suppressedTitleAnimations.delete(status.id) ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      cancelTitleAnimation(status.id);
+      continue;
+    }
+    startTitleAnimation(status.id, previous, status.title);
+  }
+};
+
 const renderActiveStatus = (status: TerminalStatus): void => {
   const copy = phaseCopy[status.phase];
   const openFolders = workspaceState.projects.filter((project) => project.open).length;
@@ -3955,9 +4105,14 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   emptyStateHint.textContent = '点击左侧“启动”创建终端会话';
   emptyState.classList.toggle('terminal-empty-state--hidden', terminalIsVisible);
   emptyState.setAttribute('aria-hidden', String(terminalIsVisible));
-  terminalProject.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
+  const displayedTitle = displayedConversationTitle(status);
+  const scopedTitle = `${projectNameFromPath(status.cwd)} · ${displayedTitle}`;
+  const typing = String(isTitleAnimating(status.id));
+  terminalProject.textContent = scopedTitle;
+  terminalProject.dataset.titleTyping = typing;
   terminalProject.title = status.cwd;
-  workbenchScope.textContent = `${projectNameFromPath(status.cwd)} · ${status.title}`;
+  workbenchScope.textContent = scopedTitle;
+  workbenchScope.dataset.titleTyping = typing;
   setComposerEnabled(status.phase === 'running');
 };
 
@@ -3986,7 +4141,9 @@ const renderNoActiveSession = (): void => {
   emptyState.setAttribute('aria-hidden', 'false');
   terminalProject.textContent = '未打开项目';
   terminalProject.title = '';
+  terminalProject.dataset.titleTyping = 'false';
   workbenchScope.textContent = '未打开项目';
+  workbenchScope.dataset.titleTyping = 'false';
   setComposerEnabled(false);
 };
 
@@ -4040,8 +4197,10 @@ const renameConversation = async (status: TerminalStatus): Promise<void> => {
   if (!nextTitle) {
     return;
   }
+  suppressedTitleAnimations.add(status.id);
   const result = await window.controlPanel.renameConversation(status.id, nextTitle);
   renderWorkspace(result.state);
+  suppressedTitleAnimations.delete(status.id);
   if (!result.ok) {
     showToast(result.error ?? '无法重命名这个对话。', 'error');
     return;
@@ -4088,6 +4247,7 @@ const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
     return;
   }
   expandedFolders.delete(project.path.toLowerCase());
+  historyScrollPositions.delete(project.path.toLowerCase());
   showToast(`已从列表中移除 ${project.name}`);
 };
 
@@ -4153,7 +4313,8 @@ const renderConversationRow = (status: TerminalStatus): HTMLElement => {
 
   const label = document.createElement('span');
   label.className = 'conversation-item__label';
-  label.textContent = status.title;
+  label.textContent = displayedConversationTitle(status);
+  label.dataset.titleTyping = String(isTitleAnimating(status.id));
 
   const phaseText = document.createElement('span');
   phaseText.className = 'conversation-item__phase';
@@ -4343,9 +4504,26 @@ const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
     heading.className = 'project-folder__hint';
     heading.textContent = `历史对话（点击可在新对话中恢复，共 ${history.length} 个）`;
     body.append(heading);
-    for (const session of history.slice(0, 6)) {
-      body.append(renderHistoryRow(project.path, session));
+
+    // Running conversations above stay put; only the history list itself scrolls.
+    const scroller = document.createElement('div');
+    scroller.className = 'project-folder__history';
+    scroller.setAttribute('role', 'list');
+    scroller.setAttribute('aria-label', `${project.name} 的历史对话`);
+    for (const session of history) {
+      scroller.append(renderHistoryRow(project.path, session));
     }
+    const savedScroll = historyScrollPositions.get(key) ?? 0;
+    if (savedScroll > 0) {
+      // The list is rebuilt on every workspace tick; restore after it has a layout box.
+      requestAnimationFrame(() => {
+        scroller.scrollTop = savedScroll;
+      });
+    }
+    scroller.addEventListener('scroll', () => {
+      historyScrollPositions.set(key, scroller.scrollTop);
+    });
+    body.append(scroller);
   }
 
   folder.append(body);
@@ -4363,6 +4541,7 @@ function renderProjectList(): void {
 }
 
 function renderWorkspace(state: WorkspaceState): void {
+  syncConversationTitles(state);
   workspaceState = state;
   const validSessionIds = new Set(state.sessions.map((status) => status.id));
   if (

@@ -840,6 +840,42 @@ body[data-phase='error'] .status-pill {
   font-weight: 600;
 }
 
+/*
+ * Typewriter caret shown while a Claude-generated title is being erased and retyped.
+ * The same data attribute drives the sidebar label, the terminal toolbar and the workbench scope.
+ */
+.conversation-item__label[data-title-typing='true']::after,
+#terminal-project[data-title-typing='true']::after,
+#workbench-scope[data-title-typing='true']::after {
+  animation: titleCaretBlink 720ms step-end infinite;
+  background: var(--accent-text);
+  border-radius: 1px;
+  content: '';
+  display: inline-block;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  width: 2px;
+}
+
+@keyframes titleCaretBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-item__label[data-title-typing='true']::after,
+  #terminal-project[data-title-typing='true']::after,
+  #workbench-scope[data-title-typing='true']::after {
+    animation: none;
+  }
+}
+
 .conversation-item__phase {
   color: var(--text-mute);
   flex: 0 0 auto;
@@ -880,6 +916,18 @@ body[data-phase='error'] .status-pill {
 .conversation-item__action--close:hover {
   background: color-mix(in srgb, var(--bad-text) 10%, transparent);
   color: var(--bad-text);
+}
+
+.project-folder__history {
+  display: grid;
+  gap: 2px;
+  /* Roughly six rows; running conversations above stay fixed while this list scrolls. */
+  max-height: 170px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
 }
 
 .history-item {
