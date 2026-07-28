@@ -109,6 +109,12 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 
 视觉与交互约束详见 [design.md](design.md)。
 
+## 规划中的工作
+
+已记录但尚未实现的产品任务见 [roadmap.md](roadmap.md)，包括历史对话删除、独立“对话”
+选项卡，以及左下角“全局设置”与设置分类重组。路线图会明确区分当前能力、实施门禁和验收标准；
+其中内容不代表功能已经上线。
+
 ## 功能边界
 
 - 每个项目拥有独立的 Windows PowerShell/ConPTY 会话，可同时在后台运行。
@@ -323,6 +329,7 @@ src/shared/          跨进程类型和纯函数
 tests/               单元测试
 assets/runtime/      Claude Code statusLine 本地指标采集脚本与 PostCompact 完成信号脚本
 outputs/             安装包、校验元数据与解包产物，不纳入 Git
+roadmap.md           已确认但尚未实现的产品任务、调研依据与验收标准
 ```
 
 ## 安全与限制
