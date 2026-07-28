@@ -28,6 +28,51 @@ export type ClaudeRouterInstallSource = 'github' | 'npm' | 'npmmirror';
 export type ClaudeCodeInstallSource = 'native' | 'npm' | 'npmmirror';
 export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
+export type ChatProtocol = 'anthropic' | 'openai';
+export type ChatAuthMode = 'apiKey' | 'bearer' | 'none';
+export type ChatMessageRole = 'assistant' | 'system' | 'user';
+export type ChatStreamEventType = 'aborted' | 'delta' | 'done' | 'error' | 'start';
+
+export interface ChatConfigView {
+  authMode: ChatAuthMode;
+  baseUrl: string;
+  credentialConfigured: boolean;
+  model: string;
+  protocol: ChatProtocol;
+}
+
+export interface SaveChatConfigInput {
+  authMode: ChatAuthMode;
+  baseUrl: string;
+  credential?: string;
+  credentialAction: ClaudeCredentialAction;
+  model: string;
+  protocol: ChatProtocol;
+}
+
+export interface ChatMessage {
+  content: string;
+  role: ChatMessageRole;
+}
+
+export interface ChatStartInput {
+  messages: ChatMessage[];
+  requestId: string;
+}
+
+export interface ChatStreamEvent {
+  delta?: string;
+  error?: string;
+  requestId: string;
+  type: ChatStreamEventType;
+}
+
+export interface AppSettingsView {
+  language: 'zh-CN';
+  launchAtLogin: boolean;
+  theme: TerminalThemeId;
+  version: string;
+}
 
 export interface ClaudeConfigView {
   apiKeyHelperPolicy: ClaudeApiKeyHelperPolicy;
@@ -435,6 +480,13 @@ export type DirectoryChoiceResult =
 export type Unsubscribe = () => void;
 
 export interface ControlPanelApi {
+  getAppSettings: () => Promise<AppSettingsView>;
+  setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
+  getChatConfig: () => Promise<ChatConfigView>;
+  saveChatConfig: (input: SaveChatConfigInput) => Promise<ChatConfigView>;
+  startChat: (input: ChatStartInput) => Promise<void>;
+  stopChat: (requestId: string) => Promise<void>;
+  onChatStream: (listener: (event: ChatStreamEvent) => void) => Unsubscribe;
   activateProject: (sessionId: string) => Promise<WorkspaceResult>;
   addProject: (directoryPath: string) => Promise<WorkspaceResult>;
   chooseDirectory: () => Promise<DirectoryChoiceResult>;
@@ -554,7 +606,7 @@ export interface ControlPanelApi {
     conversationId: string,
     title: string,
   ) => Promise<boolean>;
-  deleteClaudeSession: (sessionId: string, conversationId: string) => Promise<boolean>;
+  deleteClaudeSession: (projectPath: string, conversationId: string) => Promise<boolean>;
   launchClaudeWithSession: (
     sessionId: string,
     conversationId: string,

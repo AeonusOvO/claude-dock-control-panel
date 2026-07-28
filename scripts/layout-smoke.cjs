@@ -78,7 +78,7 @@ const inspectLayout = `
     }
   }
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-shell, .chat-toolbar, .chat-messages, .chat-composer, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -116,6 +116,8 @@ const selectRailPage = (name) => `
   for (const page of document.querySelectorAll('[data-rail-page]')) {
     page.classList.toggle('rail-page--active', page.dataset.railPage === ${JSON.stringify(name)});
   }
+  document.querySelector('#terminal-shell').hidden = ${JSON.stringify(name)} === 'chat';
+  document.querySelector('#chat-shell').hidden = ${JSON.stringify(name)} !== 'chat';
 `;
 
 const selectWorkbenchPage = (name) => `
@@ -250,7 +252,7 @@ app.whenReady().then(async () => {
   for (const [width, height] of sizes) {
     window.setSize(width, height);
     await new Promise((resolve) => setTimeout(resolve, 80));
-    for (const page of ['projects', 'connection']) {
+    for (const page of ['projects', 'connection', 'chat']) {
       await window.webContents.executeJavaScript(selectRailPage(page));
       const result = await window.webContents.executeJavaScript(inspectLayout);
       results.push({ height, page, width, ...result });
@@ -285,13 +287,28 @@ app.whenReady().then(async () => {
       document.querySelector('.workspace').classList.remove('workspace--rail-collapsed');
       document.querySelector('#connection-advanced-dialog').showModal();
     `);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    results.push({
-      height,
-      page: 'connection:advanced-dialog',
-      width,
-      ...(await window.webContents.executeJavaScript(inspectLayout)),
-    });
+    for (const settingsPage of ['general', 'connection']) {
+      await window.webContents.executeJavaScript(`
+        for (const tab of document.querySelectorAll('[data-settings-tab]')) {
+          const active = tab.dataset.settingsTab === ${JSON.stringify(settingsPage)};
+          tab.classList.toggle('settings-tab--active', active);
+          tab.setAttribute('aria-selected', String(active));
+        }
+        for (const panel of document.querySelectorAll('[data-settings-panel]')) {
+          panel.classList.toggle(
+            'settings-panel--active',
+            panel.dataset.settingsPanel === ${JSON.stringify(settingsPage)},
+          );
+        }
+      `);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      results.push({
+        height,
+        page: `settings:${settingsPage}`,
+        width,
+        ...(await window.webContents.executeJavaScript(inspectLayout)),
+      });
+    }
     await window.webContents.executeJavaScript(`
       document.querySelector('#connection-advanced-dialog').close();
     `);

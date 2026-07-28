@@ -26,11 +26,13 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterOperationResult,
   ClaudeRouterInstallSource,
+  ChatStartInput,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
+  SaveChatConfigInput,
   TerminalStatus,
   TerminalWorkspaceState,
   WorkspaceProjectView,
@@ -56,6 +58,8 @@ import {
   isValidClaudeSessionId,
   normalizeClaudeSessionTitle,
 } from './claude-session-manager';
+import { ChatConfigStore } from './chat-config-store';
+import { ChatService } from './chat-service';
 import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
@@ -180,6 +184,10 @@ const workspace = new TerminalWorkspace(
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
 const sessionManager = new ClaudeSessionManager();
 const pluginManager = new ClaudePluginManager(homedir());
+const chatConfigStore = new ChatConfigStore(app.getPath('userData'));
+const chatService = new ChatService(chatConfigStore, (event) => {
+  mainWindow?.webContents.send('chat:stream', event);
+});
 
 /**
  * Merges the live terminal sessions with the folders remembered on disk. A folder stays in the
@@ -788,6 +796,57 @@ const launchRouterInstaller = async (): Promise<ClaudeRouterOperationResult> => 
 };
 
 const registerIpc = (): void => {
+  ipcMain.handle('app:get-settings', (event) => {
+    validateSender(event);
+    return {
+      language: 'zh-CN',
+      launchAtLogin: app.getLoginItemSettings().openAtLogin,
+      theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
+      version: app.getVersion(),
+    };
+  });
+  ipcMain.handle('app:set-launch-at-login', (event, enabled: unknown) => {
+    validateSender(event);
+    if (typeof enabled !== 'boolean') {
+      throw new Error('开机启动设置无效。');
+    }
+    app.setLoginItemSettings({
+      args: app.isPackaged ? [] : [app.getAppPath()],
+      openAtLogin: enabled,
+      path: process.execPath,
+    });
+    return {
+      language: 'zh-CN',
+      launchAtLogin: app.getLoginItemSettings().openAtLogin,
+      theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
+      version: app.getVersion(),
+    };
+  });
+  ipcMain.handle('chat:get-config', (event) => {
+    validateSender(event);
+    return chatConfigStore.getView();
+  });
+  ipcMain.handle('chat:save-config', (event, input: unknown) => {
+    validateSender(event);
+    if (!input || typeof input !== 'object') {
+      throw new Error('对话接入配置格式无效。');
+    }
+    return chatConfigStore.save(input as SaveChatConfigInput);
+  });
+  ipcMain.handle('chat:start', (event, input: unknown) => {
+    validateSender(event);
+    if (!input || typeof input !== 'object') {
+      throw new Error('对话请求格式无效。');
+    }
+    chatService.start(input as ChatStartInput);
+  });
+  ipcMain.handle('chat:stop', (event, requestId: unknown) => {
+    validateSender(event);
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(requestId)) {
+      throw new Error('对话请求标识无效。');
+    }
+    chatService.stop(requestId);
+  });
   ipcMain.handle('workspace:get-state', (event) => {
     validateSender(event);
     return describeWorkspace();
@@ -1575,14 +1634,12 @@ const registerIpc = (): void => {
   });
   ipcMain.handle(
     'claude:delete-session',
-    async (event, sessionId: unknown, conversationId: unknown) => {
+    async (event, projectPath: unknown, conversationId: unknown) => {
       validateSender(event);
-      const validatedSessionId = validateSessionId(sessionId);
       if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
         throw new Error('会话标识无效。');
       }
-      const status = workspace.getStatus(validatedSessionId);
-      return sessionManager.deleteSession(status.cwd, conversationId);
+      return sessionManager.deleteSession(validateProjectPath(projectPath), conversationId);
     },
   );
   ipcMain.handle(
@@ -1814,6 +1871,7 @@ app.on('before-quit', () => {
     pending.resolve(undefined);
   }
   pendingPermissionModeProbes.clear();
+  chatService.shutdown();
   claudeRuntime?.shutdown();
   workspace.shutdown();
 });

@@ -197,7 +197,25 @@ app.whenReady().then(async () => {
   `);
   await new Promise((resolve) => setTimeout(resolve, 80));
   writeFileSync(
-    path.join(outputDirectory, 'advanced-settings-1180.png'),
+    path.join(outputDirectory, 'global-settings-1180.png'),
+    (await captureSettledPage()).toPNG(),
+  );
+  await window.webContents.executeJavaScript(`
+    for (const tab of document.querySelectorAll('[data-settings-tab]')) {
+      const selected = tab.dataset.settingsTab === 'connection';
+      tab.classList.toggle('settings-tab--active', selected);
+      tab.setAttribute('aria-selected', String(selected));
+    }
+    for (const panel of document.querySelectorAll('[data-settings-panel]')) {
+      panel.classList.toggle(
+        'settings-panel--active',
+        panel.dataset.settingsPanel === 'connection',
+      );
+    }
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  writeFileSync(
+    path.join(outputDirectory, 'global-settings-connection-1180.png'),
     (await captureSettledPage()).toPNG(),
   );
   await window.webContents.executeJavaScript(`
@@ -225,7 +243,36 @@ app.whenReady().then(async () => {
     (await captureSettledPage()).toPNG(),
   );
   await window.webContents.executeJavaScript(`
+    document.querySelector('#terminal-shell').hidden = true;
+    document.querySelector('#chat-shell').hidden = false;
+    ${activateRailPage('chat')}
+    document.querySelector('#chat-empty-state').hidden = true;
+    const messages = document.querySelector('#chat-messages');
+    for (const [role, label, content] of [
+      ['user', '你', '请用三点总结这个项目的当前状态。'],
+      [
+        'assistant',
+        '模型',
+        '1. 项目终端保持独立运行。\\n2. 对话页使用单独配置的模型。\\n3. 全局设置统一管理应用偏好与接入工具。',
+      ],
+    ]) {
+      const article = document.createElement('article');
+      article.className = \`chat-message chat-message--\${role}\`;
+      const heading = document.createElement('strong');
+      heading.textContent = label;
+      const body = document.createElement('div');
+      body.className = 'chat-message__content';
+      body.textContent = content;
+      article.append(heading, body);
+      messages.append(article);
+    }
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  writeFileSync(path.join(outputDirectory, 'chat-1180.png'), (await captureSettledPage()).toPNG());
+  await window.webContents.executeJavaScript(`
     document.querySelector('#terminal-focus-fixture').remove();
+    document.querySelector('#terminal-shell').hidden = false;
+    document.querySelector('#chat-shell').hidden = true;
     document.querySelector('#terminal-empty-state').style.display = '';
     document.querySelector('#terminal-empty-state').classList.remove('terminal-empty-state--hidden');
   `);

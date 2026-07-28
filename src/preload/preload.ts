@@ -16,6 +16,7 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeSessionMetadata,
+  ChatStreamEvent,
   ControlPanelApi,
   DirectoryChoiceResult,
   OperationResult,
@@ -25,6 +26,21 @@ import type {
 } from '../shared/contracts';
 
 const api: ControlPanelApi = {
+  getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
+  setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
+  getChatConfig: () => ipcRenderer.invoke('chat:get-config'),
+  saveChatConfig: (input) => ipcRenderer.invoke('chat:save-config', input),
+  startChat: (input) => ipcRenderer.invoke('chat:start', input) as Promise<void>,
+  stopChat: (requestId) => ipcRenderer.invoke('chat:stop', requestId) as Promise<void>,
+  onChatStream: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, streamEvent: ChatStreamEvent): void => {
+      listener(streamEvent);
+    };
+    ipcRenderer.on('chat:stream', callback);
+    return () => {
+      ipcRenderer.removeListener('chat:stream', callback);
+    };
+  },
   activateProject: (sessionId: string) =>
     ipcRenderer.invoke('project:activate', sessionId) as Promise<WorkspaceResult>,
   addProject: (directoryPath: string) =>
@@ -268,8 +284,8 @@ const api: ControlPanelApi = {
       conversationId,
       title,
     ) as Promise<boolean>,
-  deleteClaudeSession: (sessionId, conversationId) =>
-    ipcRenderer.invoke('claude:delete-session', sessionId, conversationId) as Promise<boolean>,
+  deleteClaudeSession: (projectPath, conversationId) =>
+    ipcRenderer.invoke('claude:delete-session', projectPath, conversationId) as Promise<boolean>,
   launchClaudeWithSession: (sessionId, conversationId) =>
     ipcRenderer.invoke(
       'claude:launch-with-session',

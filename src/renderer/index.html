@@ -58,6 +58,23 @@
         </button>
         <button
           class="activity-rail__button"
+          data-rail-tab="chat"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
+          aria-pressed="false"
+          title="对话"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3h-1a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"
+            />
+            <path d="M8 10h8M8 13.5h5" />
+          </svg>
+          <span>对话</span>
+        </button>
+        <button
+          class="activity-rail__button"
           data-rail-tab="connection"
           type="button"
           aria-controls="control-panel"
@@ -88,6 +105,23 @@
           </svg>
           <span>插件</span>
           <span class="activity-rail__dot" id="plugin-rail-dot" hidden></span>
+        </button>
+        <button
+          class="activity-rail__button activity-rail__button--settings"
+          id="open-connection-advanced"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="connection-advanced-dialog"
+          title="全局设置"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19 13.5v-3l-2-.6a7 7 0 0 0-.7-1.6l1-1.9-2.1-2.1-1.9 1A7 7 0 0 0 11.5 5L11 3H8l-.6 2a7 7 0 0 0-1.7.7l-1.9-1-2.1 2.1 1 1.9A7 7 0 0 0 2 10.5l-2 .5v3l2 .6a7 7 0 0 0 .7 1.7l-1 1.9 2.1 2.1 1.9-1a7 7 0 0 0 1.7.7l.6 2h3l.6-2a7 7 0 0 0 1.7-.7l1.9 1 2.1-2.1-1-1.9a7 7 0 0 0 .7-1.7Z"
+              transform="translate(1 -1)"
+            />
+          </svg>
+          <span>设置</span>
         </button>
       </nav>
 
@@ -165,6 +199,72 @@
             </svg>
             <p>关闭窗口后所有对话继续在托盘运行。项目会被记住，下次打开还在。</p>
           </div>
+        </section>
+
+        <section class="rail-page rail-page--chat" data-rail-page="chat">
+          <div class="connection-heading">
+            <strong>独立模型接入</strong>
+            <span>此处配置只用于“对话”页，不会修改项目终端和 Claude Code 的接入。</span>
+          </div>
+          <form class="chat-config-form" id="chat-config-form">
+            <label class="field" for="chat-protocol">
+              <span>接口协议</span>
+              <select id="chat-protocol">
+                <option value="anthropic">Anthropic 消息接口</option>
+                <option value="openai">OpenAI 对话补全接口</option>
+              </select>
+            </label>
+            <label class="field" for="chat-base-url">
+              <span>接口地址</span>
+              <input
+                id="chat-base-url"
+                type="url"
+                maxlength="2048"
+                spellcheck="false"
+                placeholder="https://api.anthropic.com"
+                required
+              />
+              <small>会自动补全对应的 /v1/messages 或 /v1/chat/completions。</small>
+            </label>
+            <label class="field" for="chat-model">
+              <span>模型名称</span>
+              <input
+                id="chat-model"
+                type="text"
+                maxlength="256"
+                spellcheck="false"
+                placeholder="填写接口实际支持的模型 ID"
+                required
+              />
+            </label>
+            <label class="field" for="chat-auth-mode">
+              <span>认证方式</span>
+              <select id="chat-auth-mode">
+                <option value="apiKey">x-api-key</option>
+                <option value="bearer">Bearer Token</option>
+                <option value="none">无需认证</option>
+              </select>
+            </label>
+            <label class="field" for="chat-credential">
+              <span>接口凭据</span>
+              <input
+                id="chat-credential"
+                type="password"
+                maxlength="4096"
+                autocomplete="new-password"
+                placeholder="填写新凭据，留空则保留已保存凭据"
+              />
+              <small id="chat-credential-status">尚未保存凭据。</small>
+            </label>
+            <label class="router-choice" for="chat-clear-credential">
+              <input id="chat-clear-credential" type="checkbox" />
+              <span>保存时清除已有凭据</span>
+            </label>
+            <button class="button button--primary" id="save-chat-config" type="submit">
+              保存独立接入
+            </button>
+            <p class="chat-config-status" id="chat-config-status" role="status"></p>
+          </form>
         </section>
 
         <section class="rail-page" data-rail-page="connection">
@@ -529,21 +629,6 @@
             </div>
           </section>
 
-          <section class="connection-advanced-launch" aria-labelledby="connection-advanced-title">
-            <div>
-              <strong id="connection-advanced-title">高级设置</strong>
-              <span>网关检测、cURL 导入、路由器管理与接入诊断。</span>
-            </div>
-            <button
-              id="open-connection-advanced"
-              type="button"
-              aria-haspopup="dialog"
-              aria-controls="connection-advanced-dialog"
-            >
-              打开高级设置
-            </button>
-          </section>
-
           <section
             class="connection-history"
             id="connection-history"
@@ -788,7 +873,7 @@
         tabindex="0"
       ></div>
 
-      <section class="terminal-shell" aria-label="项目终端">
+      <section class="terminal-shell" id="terminal-shell" aria-label="项目终端">
         <div class="terminal-toolbar">
           <div class="terminal-title">
             <span>终端</span>
@@ -1160,6 +1245,34 @@
           </div>
         </aside>
       </section>
+
+      <section class="chat-shell" id="chat-shell" aria-label="独立对话" hidden>
+        <header class="chat-toolbar">
+          <div>
+            <span>独立对话</span>
+            <strong id="chat-active-model">尚未配置模型</strong>
+          </div>
+          <button class="button button--quiet" id="new-chat" type="button">新对话</button>
+        </header>
+        <div class="chat-messages" id="chat-messages" aria-live="polite">
+          <div class="chat-empty-state" id="chat-empty-state">
+            <span aria-hidden="true">✦</span>
+            <strong>开始一段独立对话</strong>
+            <p>这里使用单独配置的模型，不会复用或改动项目终端的模型。</p>
+          </div>
+        </div>
+        <form class="chat-composer" id="chat-composer">
+          <textarea
+            id="chat-input"
+            rows="2"
+            maxlength="200000"
+            placeholder="输入消息 · Enter 发送 · Shift+Enter 换行"
+            aria-label="独立对话输入框"
+          ></textarea>
+          <button class="chat-stop" id="stop-chat" type="button" hidden>停止</button>
+          <button class="chat-send" id="send-chat" type="submit">发送</button>
+        </form>
+      </section>
     </main>
 
     <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
@@ -1191,6 +1304,14 @@
       <button data-conversation-context-action="rename" role="menuitem" type="button">
         重命名对话
       </button>
+      <button
+        class="conversation-context-menu__danger"
+        data-conversation-context-action="delete"
+        role="menuitem"
+        type="button"
+      >
+        删除历史对话
+      </button>
     </div>
 
     <div class="conversation-context-menu" id="history-context-menu" role="menu" hidden>
@@ -1219,17 +1340,17 @@
       <div class="connection-advanced-dialog__shell">
         <header>
           <div>
-            <span class="step-kicker">接入工作台</span>
-            <strong id="connection-advanced-dialog-title">高级设置与诊断工具</strong>
+            <span class="step-kicker">ClaudeDock</span>
+            <strong id="connection-advanced-dialog-title">全局设置</strong>
             <p id="connection-advanced-dialog-description">
-              可在这里调整认证来源、完成接口识别、网关诊断和路由器管理。
+              调整应用级偏好，或进入接入分类使用高级诊断工具。
             </p>
           </div>
           <button
             class="connection-advanced-dialog__close"
             id="close-connection-advanced"
             type="button"
-            aria-label="取消并关闭高级设置"
+            aria-label="取消并关闭全局设置"
             title="取消并关闭"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1237,10 +1358,74 @@
             </svg>
           </button>
         </header>
-        <p class="connection-advanced-dialog__notice">
-          “取消”会恢复本次打开窗口前尚未保存的输入；安装、卸载、启动、停止、保存路由器服务商等已执行操作会立即生效。
-        </p>
-        <div id="connection-advanced-content"></div>
+        <div class="settings-layout">
+          <nav class="settings-tabs" aria-label="设置分类">
+            <button
+              class="settings-tab settings-tab--active"
+              data-settings-tab="general"
+              type="button"
+              aria-selected="true"
+            >
+              总设置
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="connection"
+              type="button"
+              aria-selected="false"
+            >
+              接入
+            </button>
+          </nav>
+          <div class="settings-panels">
+            <section class="settings-panel settings-panel--active" data-settings-panel="general">
+              <div class="settings-section-heading">
+                <strong>应用偏好</strong>
+                <span>控制 ClaudeDock 自身的启动方式和外观。</span>
+              </div>
+              <label class="settings-row" for="settings-launch-at-login">
+                <span>
+                  <strong>开机启动</strong>
+                  <small>登录 Windows 后自动启动 ClaudeDock。</small>
+                </span>
+                <input id="settings-launch-at-login" type="checkbox" />
+              </label>
+              <label class="settings-row settings-row--select" for="settings-theme">
+                <span>
+                  <strong>主题</strong>
+                  <small>同步调整应用外观与终端配色。</small>
+                </span>
+                <select id="settings-theme">
+                  <option value="claude">Claude 暖色</option>
+                  <option value="graphite">石墨深色</option>
+                  <option value="midnight">深海蓝</option>
+                </select>
+              </label>
+              <label class="settings-row settings-row--select" for="settings-language">
+                <span>
+                  <strong>语言</strong>
+                  <small>当前版本暂提供简体中文。</small>
+                </span>
+                <select id="settings-language" disabled>
+                  <option value="zh-CN">简体中文</option>
+                </select>
+              </label>
+              <div class="settings-row">
+                <span>
+                  <strong>当前版本</strong>
+                  <small>安装包与应用版本。</small>
+                </span>
+                <output id="settings-version">—</output>
+              </div>
+            </section>
+            <section class="settings-panel" data-settings-panel="connection">
+              <p class="connection-advanced-dialog__notice">
+                “取消”会恢复本次打开窗口前尚未保存的输入；安装、卸载、启动、停止、保存路由器服务商等已执行操作会立即生效。
+              </p>
+              <div id="connection-advanced-content"></div>
+            </section>
+          </div>
+        </div>
         <footer>
           <button id="cancel-connection-advanced" type="button">取消</button>
           <button class="dialog-primary" id="complete-connection-advanced" type="button">

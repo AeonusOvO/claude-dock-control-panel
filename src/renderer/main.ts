@@ -25,9 +25,13 @@ import type {
   ClaudeRouterOperationResult,
   ClaudeRouterProviderView,
   ClaudeSessionMetadata,
+  ChatConfigView,
+  ChatMessage,
+  ChatStreamEvent,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
+  SaveChatConfigInput,
   OperationResult,
   TerminalPhase,
   TerminalStatus,
@@ -228,6 +232,10 @@ const cancelConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
 const completeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#complete-connection-advanced',
 );
+const settingsLaunchAtLogin = requiredElement<HTMLInputElement>('#settings-launch-at-login');
+const settingsTheme = requiredElement<HTMLSelectElement>('#settings-theme');
+const settingsLanguage = requiredElement<HTMLSelectElement>('#settings-language');
+const settingsVersion = requiredElement<HTMLOutputElement>('#settings-version');
 const curlOnboarding = requiredElement<HTMLElement>('#curl-onboarding');
 const converterHelp = requiredElement<HTMLElement>('#converter-help');
 const addRouterProviderButton = requiredElement<HTMLButtonElement>('#add-router-provider');
@@ -351,6 +359,26 @@ const connectionHistoryEmpty = requiredElement<HTMLElement>('#connection-history
 const connectionHistoryCount = requiredElement<HTMLElement>('#connection-history-count');
 const historyContextMenu = requiredElement<HTMLElement>('#history-context-menu');
 const saveClaudeConfigButton = requiredElement<HTMLButtonElement>('#save-claude-config');
+const terminalShell = requiredElement<HTMLElement>('#terminal-shell');
+const chatShell = requiredElement<HTMLElement>('#chat-shell');
+const chatConfigForm = requiredElement<HTMLFormElement>('#chat-config-form');
+const chatProtocol = requiredElement<HTMLSelectElement>('#chat-protocol');
+const chatBaseUrl = requiredElement<HTMLInputElement>('#chat-base-url');
+const chatModel = requiredElement<HTMLInputElement>('#chat-model');
+const chatAuthMode = requiredElement<HTMLSelectElement>('#chat-auth-mode');
+const chatCredential = requiredElement<HTMLInputElement>('#chat-credential');
+const chatCredentialStatus = requiredElement<HTMLElement>('#chat-credential-status');
+const chatClearCredential = requiredElement<HTMLInputElement>('#chat-clear-credential');
+const saveChatConfigButton = requiredElement<HTMLButtonElement>('#save-chat-config');
+const chatConfigStatus = requiredElement<HTMLElement>('#chat-config-status');
+const chatActiveModel = requiredElement<HTMLElement>('#chat-active-model');
+const chatMessagesElement = requiredElement<HTMLElement>('#chat-messages');
+const chatEmptyState = requiredElement<HTMLElement>('#chat-empty-state');
+const chatComposer = requiredElement<HTMLFormElement>('#chat-composer');
+const chatInput = requiredElement<HTMLTextAreaElement>('#chat-input');
+const sendChatButton = requiredElement<HTMLButtonElement>('#send-chat');
+const stopChatButton = requiredElement<HTMLButtonElement>('#stop-chat');
+const newChatButton = requiredElement<HTMLButtonElement>('#new-chat');
 
 const connectionGlossary = requiredElement<HTMLElement>('.connection-glossary');
 
@@ -392,6 +420,8 @@ let providerGroupExpansionPending = false;
 let selectedProviderId: ClaudeProviderId | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let selectedRailTab: string | undefined = 'projects';
+let selectedSettingsTab: 'connection' | 'general' = 'general';
+let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
@@ -410,6 +440,12 @@ let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 let modeSwitchInProgress = false;
 let modelSwitchInProgress = false;
 const guardedButtons = new WeakSet<HTMLButtonElement>();
+let chatConfig: ChatConfigView | undefined;
+let chatConfigLoadPromise: Promise<void> | undefined;
+const chatMessages: ChatMessage[] = [];
+let activeChatRequestId = '';
+let activeChatReply = '';
+let activeChatReplyElement: HTMLElement | undefined;
 
 const runGuarded = async <T>(
   button: HTMLButtonElement,
@@ -517,6 +553,7 @@ const showToast = (message: string, tone: 'error' | 'success' = 'success'): void
 const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => {
   activeTerminalTheme = themeId;
   terminalThemeSelect.value = themeId;
+  settingsTheme.value = themeId;
   localStorage.setItem('claudedock.terminalTheme', themeId);
   const definition = TERMINAL_THEMES[themeId];
   // The shell steps are written onto the root element so every `var(--…)` in styles.css follows the
@@ -549,6 +586,156 @@ const projectNameFromPath = (directoryPath: string): string => {
 
 const activeStatus = (): TerminalStatus | undefined =>
   workspaceState.sessions.find((status) => status.id === workspaceState.activeSessionId);
+
+const renderChatConfig = (config: ChatConfigView): void => {
+  chatConfig = config;
+  chatProtocol.value = config.protocol;
+  chatBaseUrl.value = config.baseUrl;
+  chatModel.value = config.model;
+  chatAuthMode.value = config.authMode;
+  chatCredential.value = '';
+  chatClearCredential.checked = false;
+  chatCredential.disabled = config.authMode === 'none';
+  chatClearCredential.disabled = config.authMode === 'none';
+  chatCredentialStatus.textContent =
+    config.authMode === 'none'
+      ? '当前接口不使用认证凭据。'
+      : config.credentialConfigured
+        ? '已通过 Windows 安全存储保存凭据；留空可继续使用。'
+        : '尚未保存凭据。';
+  chatActiveModel.textContent = config.model || '尚未配置模型';
+};
+
+const loadChatConfig = (force = false): Promise<void> => {
+  if (chatConfigLoadPromise && !force) {
+    return chatConfigLoadPromise;
+  }
+  chatConfigLoadPromise = window.controlPanel
+    .getChatConfig()
+    .then((config) => {
+      renderChatConfig(config);
+      chatConfigStatus.textContent = config.model ? '独立接入已就绪。' : '请填写模型并保存。';
+    })
+    .catch(() => {
+      chatConfigStatus.textContent = '无法读取独立对话配置。';
+      showToast('无法读取独立对话配置。', 'error');
+    })
+    .finally(() => {
+      chatConfigLoadPromise = undefined;
+    });
+  return chatConfigLoadPromise;
+};
+
+const appendChatMessage = (role: 'assistant' | 'user', content: string): HTMLElement => {
+  const article = document.createElement('article');
+  article.className = `chat-message chat-message--${role}`;
+  const label = document.createElement('strong');
+  label.textContent = role === 'user' ? '你' : '模型';
+  const body = document.createElement('div');
+  body.className = 'chat-message__content';
+  body.textContent = content;
+  article.append(label, body);
+  chatMessagesElement.append(article);
+  chatEmptyState.hidden = true;
+  chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+  return body;
+};
+
+const setChatBusy = (busy: boolean): void => {
+  chatInput.disabled = busy;
+  sendChatButton.disabled = busy;
+  stopChatButton.hidden = !busy;
+  chatComposer.setAttribute('aria-busy', String(busy));
+};
+
+const finishChatRequest = (): void => {
+  activeChatRequestId = '';
+  activeChatReply = '';
+  activeChatReplyElement = undefined;
+  setChatBusy(false);
+  chatInput.focus();
+};
+
+const handleChatStream = (event: ChatStreamEvent): void => {
+  if (event.requestId !== activeChatRequestId) {
+    return;
+  }
+  if (event.type === 'delta' && event.delta) {
+    activeChatReply += event.delta;
+    if (activeChatReplyElement) {
+      activeChatReplyElement.textContent = activeChatReply;
+      chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+    }
+    return;
+  }
+  if (event.type === 'done') {
+    if (activeChatReply) {
+      chatMessages.push({ content: activeChatReply, role: 'assistant' });
+    } else if (activeChatReplyElement) {
+      activeChatReplyElement.textContent = '模型没有返回可显示的文本。';
+    }
+    finishChatRequest();
+    return;
+  }
+  if (event.type === 'aborted') {
+    if (activeChatReplyElement && !activeChatReply) {
+      activeChatReplyElement.textContent = '已停止生成。';
+    }
+    if (activeChatReply) {
+      chatMessages.push({ content: activeChatReply, role: 'assistant' });
+    }
+    finishChatRequest();
+    return;
+  }
+  if (event.type === 'error') {
+    if (activeChatReplyElement) {
+      activeChatReplyElement.textContent = activeChatReply
+        ? `${activeChatReply}\n\n[生成中断：${event.error ?? '请求失败'}]`
+        : `请求失败：${event.error ?? '未知错误'}`;
+    }
+    if (activeChatReply) {
+      chatMessages.push({ content: activeChatReply, role: 'assistant' });
+    }
+    showToast(event.error ?? '独立对话请求失败。', 'error');
+    finishChatRequest();
+  }
+};
+
+const submitChatMessage = async (): Promise<void> => {
+  const content = chatInput.value.trim();
+  if (!content || activeChatRequestId) {
+    return;
+  }
+  if (!chatConfig?.model) {
+    await loadChatConfig(true);
+  }
+  if (!chatConfig?.model) {
+    showToast('请先在左侧保存独立对话模型配置。', 'error');
+    return;
+  }
+
+  const userMessage: ChatMessage = { content, role: 'user' };
+  chatMessages.push(userMessage);
+  appendChatMessage('user', content);
+  activeChatReplyElement = appendChatMessage('assistant', '正在连接模型…');
+  activeChatReply = '';
+  activeChatRequestId = crypto.randomUUID();
+  chatInput.value = '';
+  setChatBusy(true);
+  try {
+    await window.controlPanel.startChat({
+      messages: [...chatMessages],
+      requestId: activeChatRequestId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '无法启动独立对话请求。';
+    if (activeChatReplyElement) {
+      activeChatReplyElement.textContent = `请求失败：${message}`;
+    }
+    showToast(message, 'error');
+    finishChatRequest();
+  }
+};
 
 const formatTokenCount = (value: number | undefined): string => {
   if (value === undefined) {
@@ -1026,11 +1213,43 @@ const buildFooterMenuItem = (
   return item;
 };
 
+const selectSettingsTab = (tab: 'connection' | 'general'): void => {
+  selectedSettingsTab = tab;
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
+    const selected = button.dataset.settingsTab === tab;
+    button.classList.toggle('settings-tab--active', selected);
+    button.setAttribute('aria-selected', String(selected));
+  }
+  for (const panel of document.querySelectorAll<HTMLElement>('[data-settings-panel]')) {
+    panel.classList.toggle('settings-panel--active', panel.dataset.settingsPanel === tab);
+  }
+  if (tab === 'connection') {
+    setConnectionPolling(true);
+  } else {
+    setConnectionPolling(selectedRailTab === 'connection');
+  }
+};
+
+const loadAppSettings = async (): Promise<void> => {
+  try {
+    const settings = await window.controlPanel.getAppSettings();
+    settingsLaunchAtLogin.checked = settings.launchAtLogin;
+    settingsLanguage.value = settings.language;
+    settingsVersion.value = settings.version;
+    settingsVersion.textContent = settings.version;
+    settingsTheme.value = settings.theme;
+  } catch {
+    showToast('无法读取全局设置。', 'error');
+  }
+};
+
 const openAdvancedConnectionDialog = (): void => {
   if (connectionAdvancedDialog.open) {
     return;
   }
   advancedConnectionSnapshot = captureAdvancedConnectionSnapshot();
+  selectSettingsTab('general');
+  void loadAppSettings();
   connectionAdvancedDialog.showModal();
 };
 
@@ -1043,6 +1262,7 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   }
   advancedConnectionSnapshot = undefined;
   connectionAdvancedDialog.close(complete ? 'complete' : 'cancel');
+  setConnectionPolling(selectedRailTab === 'connection');
   openConnectionAdvancedButton.focus();
 };
 
@@ -2675,6 +2895,11 @@ const setConnectionPolling = (enabled: boolean): void => {
 
 const applyRailTab = (tab?: string): void => {
   const enteringConnection = tab === 'connection' && selectedRailTab !== 'connection';
+  if (tab === 'chat') {
+    mainView = 'chat';
+  } else if (tab !== undefined) {
+    mainView = 'terminal';
+  }
   selectedRailTab = tab;
   if (enteringConnection) {
     const lastProvider =
@@ -2700,11 +2925,22 @@ const applyRailTab = (tab?: string): void => {
   for (const page of document.querySelectorAll<HTMLElement>('[data-rail-page]')) {
     page.classList.toggle('rail-page--active', page.dataset.railPage === tab);
   }
-  setConnectionPolling(tab === 'connection');
+  const chatVisible = mainView === 'chat';
+  terminalShell.hidden = chatVisible;
+  chatShell.hidden = !chatVisible;
+  workspace.classList.toggle('workspace--chat', chatVisible);
+  setConnectionPolling(
+    tab === 'connection' || (connectionAdvancedDialog.open && selectedSettingsTab === 'connection'),
+  );
+  if (tab === 'chat') {
+    void loadChatConfig();
+  }
   if (tab === 'plugins') {
     void loadPluginCatalog(false);
   }
-  scheduleActiveTerminalFit();
+  if (!chatVisible) {
+    scheduleActiveTerminalFit();
+  }
 };
 
 function selectRailTab(tab: string): void {
@@ -3304,6 +3540,12 @@ const showConversationContextMenu = (
   event.preventDefault();
   hideTerminalContextMenu();
   conversationContextTarget = target;
+  const deleteButton = conversationContextMenu.querySelector<HTMLButtonElement>(
+    '[data-conversation-context-action="delete"]',
+  );
+  if (deleteButton) {
+    deleteButton.hidden = target.kind !== 'history';
+  }
   conversationContextMenu.hidden = false;
   const menuRect = conversationContextMenu.getBoundingClientRect();
   conversationContextMenu.style.left = `${Math.max(
@@ -4294,6 +4536,48 @@ const renameStoredConversation = async (
   }
 };
 
+const deleteStoredConversation = async (
+  projectPath: string,
+  session: ClaudeSessionMetadata,
+): Promise<void> => {
+  const title = session.sessionName || session.sessionId.slice(0, 8);
+  const runningMatches = workspaceState.sessions.filter(
+    (status) =>
+      status.cwd.toLowerCase() === projectPath.toLowerCase() &&
+      claudeStates.get(status.id)?.metrics?.sessionId === session.sessionId,
+  );
+  const activeWarning =
+    runningMatches.length > 0 ? '\n\n该历史对话当前仍在运行；继续后会先关闭对应终端。' : '';
+  if (
+    !(await requestConfirmation({
+      confirmLabel: '永久删除',
+      message: `永久删除历史对话“${title}”？此操作无法撤销。${activeWarning}`,
+      title: '删除历史对话',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+
+  try {
+    for (const status of runningMatches) {
+      const result = await window.controlPanel.closeProject(status.id);
+      renderWorkspace(result.state);
+      if (!result.ok) {
+        throw new Error(result.error ?? '无法关闭仍在运行的历史对话。');
+      }
+    }
+    const deleted = await window.controlPanel.deleteClaudeSession(projectPath, session.sessionId);
+    if (!deleted) {
+      throw new Error('历史对话文件已不存在或无法删除。');
+    }
+    await loadFolderHistory(projectPath, true);
+    showToast(`已删除历史对话“${title}”`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法删除这个历史对话。', 'error');
+  }
+};
+
 const renderConversationRow = (status: TerminalStatus): HTMLElement => {
   const row = document.createElement('div');
   row.className = 'conversation-item';
@@ -4353,10 +4637,18 @@ const renderConversationRow = (status: TerminalStatus): HTMLElement => {
 };
 
 const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): HTMLElement => {
-  const row = document.createElement('button');
+  const row = document.createElement('div');
   row.className = 'history-item';
-  row.type = 'button';
-  row.title = `左键恢复，右键重命名：${session.sessionId}`;
+  row.setAttribute('role', 'listitem');
+  row.title = `恢复或删除历史对话：${session.sessionId}`;
+
+  const selectButton = document.createElement('button');
+  selectButton.className = 'history-item__select';
+  selectButton.type = 'button';
+  selectButton.setAttribute(
+    'aria-label',
+    `恢复历史对话 ${session.sessionName || session.sessionId.slice(0, 8)}`,
+  );
 
   const icon = document.createElement('span');
   icon.className = 'history-item__icon';
@@ -4371,10 +4663,23 @@ const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): 
   time.className = 'history-item__time';
   time.textContent = formatRelativeTime(session.lastActiveAt);
 
-  row.append(icon, label, time);
-  row.addEventListener('click', () => {
+  selectButton.append(icon, label, time);
+  selectButton.addEventListener('click', () => {
     void resumeStoredConversation(projectPath, session);
   });
+  const deleteButton = document.createElement('button');
+  deleteButton.className = 'history-item__delete';
+  deleteButton.type = 'button';
+  deleteButton.textContent = '×';
+  deleteButton.title = '删除历史对话';
+  deleteButton.setAttribute(
+    'aria-label',
+    `删除历史对话 ${session.sessionName || session.sessionId.slice(0, 8)}`,
+  );
+  deleteButton.addEventListener('click', () => {
+    void deleteStoredConversation(projectPath, session);
+  });
+  row.append(selectButton, deleteButton);
   row.addEventListener('contextmenu', (event) => {
     showConversationContextMenu(event, { kind: 'history', projectPath, session });
   });
@@ -5001,6 +5306,7 @@ window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
 });
 window.controlPanel.onClaudeState(renderClaudeState);
 window.controlPanel.onWorkspaceState(renderWorkspace);
+window.controlPanel.onChatStream(handleChatStream);
 
 chooseDirectoryButton.addEventListener('click', () => {
   void openDirectoryPicker();
@@ -5065,6 +5371,34 @@ terminalThemeSelect.addEventListener('change', () => {
     applyTerminalTheme(themeId);
   }
 });
+settingsTheme.addEventListener('change', () => {
+  const themeId = settingsTheme.value;
+  if (isTerminalThemeId(themeId)) {
+    applyTerminalTheme(themeId);
+  }
+});
+settingsLaunchAtLogin.addEventListener('change', () => {
+  const requested = settingsLaunchAtLogin.checked;
+  settingsLaunchAtLogin.disabled = true;
+  void window.controlPanel
+    .setLaunchAtLogin(requested)
+    .then((settings) => {
+      settingsLaunchAtLogin.checked = settings.launchAtLogin;
+      showToast(settings.launchAtLogin ? '已开启开机启动' : '已关闭开机启动');
+    })
+    .catch(() => {
+      settingsLaunchAtLogin.checked = !requested;
+      showToast('无法修改开机启动设置。', 'error');
+    })
+    .finally(() => {
+      settingsLaunchAtLogin.disabled = false;
+    });
+});
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
+  button.addEventListener('click', () => {
+    selectSettingsTab(button.dataset.settingsTab === 'connection' ? 'connection' : 'general');
+  });
+}
 conversationRenameCancel.addEventListener('click', () => {
   conversationRenameDialog.close('cancel');
 });
@@ -5081,6 +5415,70 @@ closeConnectionAdvancedButton.addEventListener('click', () => {
 connectionAdvancedDialog.addEventListener('cancel', (event) => {
   event.preventDefault();
   closeAdvancedConnectionDialog(false);
+});
+chatConfigForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const credential = chatCredential.value.trim();
+  const input: SaveChatConfigInput = {
+    authMode: chatAuthMode.value as SaveChatConfigInput['authMode'],
+    baseUrl: chatBaseUrl.value,
+    credential: credential || undefined,
+    credentialAction: chatClearCredential.checked ? 'clear' : credential ? 'replace' : 'keep',
+    model: chatModel.value,
+    protocol: chatProtocol.value as SaveChatConfigInput['protocol'],
+  };
+  void runGuarded(saveChatConfigButton, '正在保存…', async () => {
+    try {
+      const config = await window.controlPanel.saveChatConfig(input);
+      renderChatConfig(config);
+      chatConfigStatus.textContent = '独立接入已保存并可用于新消息。';
+      showToast('独立对话接入已保存');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法保存独立对话接入。';
+      chatConfigStatus.textContent = message;
+      showToast(message, 'error');
+    }
+  });
+});
+chatAuthMode.addEventListener('change', () => {
+  const disabled = chatAuthMode.value === 'none';
+  chatCredential.disabled = disabled;
+  chatClearCredential.disabled = disabled;
+  chatCredentialStatus.textContent = disabled
+    ? '当前接口不使用认证凭据。'
+    : chatConfig?.credentialConfigured
+      ? '已通过 Windows 安全存储保存凭据；留空可继续使用。'
+      : '尚未保存凭据。';
+});
+chatProtocol.addEventListener('change', () => {
+  chatBaseUrl.placeholder =
+    chatProtocol.value === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
+});
+chatComposer.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void submitChatMessage();
+});
+chatInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    void submitChatMessage();
+  }
+});
+stopChatButton.addEventListener('click', () => {
+  if (activeChatRequestId) {
+    void window.controlPanel.stopChat(activeChatRequestId);
+  }
+});
+newChatButton.addEventListener('click', () => {
+  if (activeChatRequestId) {
+    void window.controlPanel.stopChat(activeChatRequestId);
+    finishChatRequest();
+  }
+  chatMessages.splice(0);
+  chatMessagesElement.replaceChildren(chatEmptyState);
+  chatEmptyState.hidden = false;
+  chatInput.value = '';
+  chatInput.focus();
 });
 footerConnection.addEventListener('click', () => {
   if (connectionTestInProgress) {
@@ -5442,6 +5840,15 @@ conversationContextMenu
       return;
     }
     void renameStoredConversation(target.projectPath, target.session);
+  });
+conversationContextMenu
+  .querySelector<HTMLButtonElement>('[data-conversation-context-action="delete"]')
+  ?.addEventListener('click', () => {
+    const target = conversationContextTarget;
+    hideConversationContextMenu();
+    if (target?.kind === 'history') {
+      void deleteStoredConversation(target.projectPath, target.session);
+    }
   });
 /*
  * One delegated listener for the whole list: entries are re-rendered on every save and delete, so

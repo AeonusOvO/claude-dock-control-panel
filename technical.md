@@ -29,6 +29,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
         ├── ClaudeSessionManager ── 当前项目 JSONL 元数据 / 定向恢复与删除
+        ├── ChatConfigStore ── safeStorage / 全局独立对话配置
+        ├── ChatService ── Anthropic/OpenAI HTTP + SSE 流式适配与取消
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
@@ -158,6 +160,37 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   version 保持 1。
 - 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
 
+### 全局设置 IPC
+
+- `app:get-settings` 从真实运行时读取 `app.getVersion()`、Windows 登录项状态和
+  `WorkspaceStore` 主题；语言当前固定为唯一已提供的 `zh-CN`。renderer 不维护版本常量。
+- `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
+  读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
+  避免登录项只启动空 Electron。
+- 主题继续复用 `ui:set-theme` 与 `WorkspaceStore.terminalTheme`，全局设置和终端工具栏只
+  是两个 UI 入口。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
+  快照与即时操作边界，没有新增第二套 Router/诊断状态。
+
+### 独立模型对话
+
+- `ChatConfigStore`（`src/main/chat-config-store.ts`）把单一独立 profile 原子写入
+  `userData/claude/chat-profile.json`。renderer 只能读取协议、基址、模型、认证方式和
+  `credentialConfigured`；密钥用 Electron `safeStorage` 加密，安全存储不可用时拒绝明文
+  降级。该文件和项目级 `project-profiles.json` 没有共享键或联动逻辑。
+- 基址校验只允许远程 HTTPS，本机 `localhost` / `127.0.0.1` / `::1` 可以使用 HTTP；拒绝
+  URL 用户信息、查询和片段。模型名、凭据长度与换行、credential action 均在主进程重验。
+- `ChatService`（`src/main/chat-service.ts`）只在 Electron 主进程使用 Node `fetch`。Anthropic
+  协议补全 `/v1/messages`、发送 `x-api-key` 和 `anthropic-version`，并解析
+  `content_block_delta`；OpenAI 兼容协议补全 `/v1/chat/completions`、支持 Bearer，并解析
+  `choices[0].delta.content`。中转若返回非 SSE JSON，则提取对应协议的普通文本响应。
+- renderer 通过 `chat:start` 发起，主进程用 `requestId → AbortController` Map 管理 120 秒
+  超时与 `chat:stop`；`chat:stream` 只推送 start/delta/done/error/aborted，不推送请求头或
+  凭据。每次最多 100 条消息、单条 200,000 字符、请求合计 1,000,000 字符、响应
+  2,000,000 字符；错误文案再次替换可能回显的凭据。
+- 首期聊天消息只存在 renderer 内存，不写磁盘、不读取项目文件，也不创建 PTY。新对话清空
+  当前运行期数组；应用退出后正文自然消失。持久化历史需要先增加“隐私与数据”保留/删除规则，
+  不在本轮隐式开启。
+
 ## Claude Code 接入与会话
 
 ### 项目级路由
@@ -179,7 +212,7 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   少一条历史不值得让保存失败。`applyConnectionHistory` 走的是同一个 `saveConfig`，
   所以恢复和手工保存的路径完全一致。历史条目 ID 由主进程用
   `/^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/` 校验后才接受。
-- renderer 将历史作为主流程组件固定在高级设置入口与模型表单之间，不再把它移动进高级
+- renderer 将历史作为接入主流程组件固定在服务商选择与模型表单之间，不把它移动进全局设置
   `<dialog>`。每条恢复按钮显式渲染 `baseUrl`（接口/网关）、`gatewayEndpoint`（与基址不同时）、
   `model`、`modelFast`、认证方式、`apiKeyHelperPolicy`、凭据布尔值和保存时网关状态；列表在
   360px 高度内独立滚动，长地址和模型名允许断行。
@@ -245,14 +278,14 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - renderer 用 `selectedProviderId | undefined` 驱动三步 UI。点击不同服务商会清空未保存
   凭据、旧测试结果与修复建议；再次点击同一服务商进入 `undefined`，同时隐藏服务商说明、
   配置表单、测试结果和修复卡。Router/cURL 选择把原有完整工具节点移动到第二步，其他时候
-  移回高级设置模态层，没有缩减或复制原功能。
+  移回“全局设置 → 接入”，没有缩减或复制原功能。
 - 五个服务商分组由独立 `Set<ClaudeProviderGroupId>` 保存折叠状态；每次切换只更新当前分组
   的 `data-collapsed`、ARIA 与 `inert`，CSS 用可插值的网格行和透明度过渡。服务商卡片网格
   用命名容器查询在 `<290 / 290–469 / >=470px` 切换一、二、三列，因此响应侧栏实际拖拽
   宽度，而不依赖整个窗口的媒体查询。进入“接入”页时调用纯函数
   `collapsedClaudeProviderGroups`，根据已选或已保存 preset 重建折叠集合，只保留其所在组展开；
   项目配置尚未返回时先全折叠，`renderClaudeState` 到达后只补做一次正确展开。
-- 高级设置使用原生模态 `<dialog>` 和唯一一组原有工具节点，新增认证来源选择并由同一快照
+- 全局设置的“接入”分类使用原生模态 `<dialog>` 和唯一一组原有工具节点，认证来源选择由同一快照
   机制管理 `apiKeyHelperPolicy`。打开时保存服务商草稿及模态层
   内所有 `input/select/textarea` 的值与勾选状态；“取消”、关闭按钮和 `Esc` 恢复快照，
   “完成”保留当前输入。Router 安装/卸载/启停与 Provider 保存仍走既有即时 IPC，不能伪装
@@ -466,6 +499,13 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 历史右键重命名先验证项目路径、UUID、文件类型、50 MiB 上限和 1–60 字符标题，再向对应
   JSONL 追加 `type: "custom-title"` 记录，不重写正文。运行中重命名先更新工作区标题；若该
   PTY 正在运行 Claude Code，再发送白名单 `/rename <title>` 让 Claude 元数据同步更新。
+- 历史删除的 renderer 入口同时存在于每行 `×` 与右键菜单，两者调用同一应用内危险确认。
+  删除 IPC 传入的是项目路径与 conversation UUID，不再依赖某个仍存活的终端 ID；主进程重新
+  规范化项目路径并校验 UUID，`ClaudeSessionManager.deleteSession()` 最终只允许删除编码后
+  项目目录下精确的 `<uuid>.jsonl`。若 statusLine 表明同一 conversation 正在运行，renderer
+  先通过现有 `project:close` 停掉对应 PTY，成功后才删除。
+- Claude Code 2.1.220 的公开 CLI 没有单会话删除命令；`claude project purge` 会清空整个
+  项目范围，不能用于本功能。因此当前实现明确属于现有的严格兼容删除路径，不宣称为官方 API。
 - Claude Code 2.1.196+ 会用小型/快速模型根据首条提示词生成短标题；官方 statusLine 的
   `session_name` 在存在 `/rename`/`--name` 自定义名称时返回自定义名称，否则返回该 AI 标题。
   ClaudeDock 已要求 2.1.197+，因此直接把这个字段同步到对应 `TerminalWorkspace` 标题，不再
@@ -628,7 +668,8 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 - 控制栏与工作台宽度写入 renderer `localStorage`；这只保存像素宽度，不包含项目、命令或
   终端内容。活动栏维护 `selectedRailTab | undefined`：点击当前项切到 `undefined` 后把
   控制栏设为 `inert` / `aria-hidden`、把四列工作区压成“活动栏 + 终端”，并重新安排有限次
-  xterm `fit()`；任一程序化导航仍会重新展开对应页。窗口缩到 900px 以下时会重新夹紧宽度；
+  xterm `fit()`；`mainView` 独立记录 `terminal/chat`，所以收起“对话”配置侧栏不会把聊天
+  主区误切回终端；任一其他业务导航会恢复终端。窗口缩到 900px 以下时会重新夹紧宽度；
   CSS 在 900/850px 和 700px 高度设置独立断点，避免工具栏、状态栏、插件操作区和安装来源
   控件重叠。
 
@@ -656,7 +697,8 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
-  PowerShell 启动脚本语法和软件语义版本比较。
+  PowerShell 启动脚本语法和软件语义版本比较；独立对话测试额外覆盖凭据密文落盘、URL
+  安全边界、credential keep/clear，以及 Anthropic/OpenAI 两类 SSE 流、端点补全和认证头。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
@@ -676,7 +718,7 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   活动终端的 `focus-within` 必须有主题色聚焦反馈；连接实测必须显示后台状态、在唯一
   `finally` 恢复测试按钮并让定时轮询避让；统一刷新必须在首屏后异步启动，三类更新入口默认
   隐藏；服务商反选、按上次选择单组展开、
-  1/2/3 列容器查询、高级设置的认证策略与快照式取消、历史配置位于高级设置与模型表单之间，
+  1/2/3 列容器查询、全局设置分类与接入快照式取消、独立聊天主视图、历史对话删除入口，
   以及活动栏二次点击收起也作为源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须
   用保存配置原地测试、不得跳转
   “接入”页，且忙态分支必须排在健康色分支之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
@@ -719,15 +761,16 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   Kimi/SiliconFlow/Ollama 特例；
   `tests/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
-  轮换项目/接入、插件的已安装/可安装/市场三个面板、工作台三页、收起控制栏和高级设置
-  模态层，共 30 个场景；检查交互控件矩形相交、`elementFromPoint` 命中对象、关键容器
+  轮换项目/对话/接入、插件的已安装/可安装/市场三个面板、工作台三页、收起控制栏和全局设置
+  两个分类，共 36 个场景；检查交互控件矩形相交、`elementFromPoint` 命中对象、关键容器
   横向溢出和文档级 overflow。扫描会识别滚动裁剪祖先，避免把模态内容区外不可见的控件误判
   为覆盖固定底栏；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言输入框不被底栏或
   已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败。
 - `npm run test:visual` 在本地生成 820px 插件页、1180px 单组展开服务商向导、1180px 历史
-  配置组件、1180px 高级设置模态层、终端聚焦态与重命名弹窗 PNG 到 `dist/visual-qa/`，用于
+  配置组件、1180px 全局设置两个分类、独立对话、终端聚焦态与重命名弹窗 PNG 到
+  `dist/visual-qa/`，用于
   人工核对主题选择器、窄宽响应式、服务商卡片、认证设置、聚焦微光、历史参数和弹窗层级；
   隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
@@ -784,6 +827,10 @@ CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不
   <https://www.electronjs.org/docs/latest/tutorial/security>
 - Electron Tray：
   <https://www.electronjs.org/docs/latest/api/tray>
+- Electron `app.setLoginItemSettings`：
+  <https://www.electronjs.org/docs/latest/api/app#appsetloginitemsettingssettings-macos-windows>
+- Microsoft Windows 应用设置设计指南：
+  <https://learn.microsoft.com/en-us/windows/apps/design/app-settings/guidelines-for-app-settings>
 - Electron `webUtils.getPathForFile`：
   <https://www.electronjs.org/docs/latest/api/web-utils>
 - node-pty：

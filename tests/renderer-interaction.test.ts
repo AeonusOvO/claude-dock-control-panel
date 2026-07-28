@@ -98,8 +98,15 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
-  it('opens advanced connection tools in a themed cancellable modal', () => {
+  it('opens global settings from the bottom rail and keeps advanced connection tools categorized', () => {
     expect(rendererMarkup).toMatch(/id="open-connection-advanced"[\s\S]*?aria-haspopup="dialog"/);
+    expect(rendererMarkup).toContain('activity-rail__button--settings');
+    expect(rendererMarkup).toMatch(
+      /data-settings-tab="general"[\s\S]*?data-settings-tab="connection"/,
+    );
+    expect(rendererMarkup).toMatch(
+      /id="settings-launch-at-login"[\s\S]*?id="settings-theme"[\s\S]*?id="settings-language"[\s\S]*?id="settings-version"/,
+    );
     expect(rendererMarkup).toMatch(
       /<dialog[\s\S]*?id="connection-advanced-dialog"[\s\S]*?id="cancel-connection-advanced"[\s\S]*?id="complete-connection-advanced"/,
     );
@@ -120,12 +127,11 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('keeps saved gateway and model history in the main flow before model configuration', () => {
-    const advancedIndex = rendererMarkup.indexOf('class="connection-advanced-launch"');
     const historyIndex = rendererMarkup.indexOf('id="connection-history"');
     const configIndex = rendererMarkup.indexOf('id="claude-config-form"');
 
-    expect(advancedIndex).toBeGreaterThan(0);
-    expect(historyIndex).toBeGreaterThan(advancedIndex);
+    expect(rendererMarkup).not.toContain('class="connection-advanced-launch"');
+    expect(historyIndex).toBeGreaterThan(0);
     expect(configIndex).toBeGreaterThan(historyIndex);
     expect(rendererSource).toContain(
       "appendParameter('接口 / 网关', entry.baseUrl || 'Anthropic 官方端点')",
@@ -135,6 +141,25 @@ describe('renderer interaction lifecycle contract', () => {
       "appendParameter('快速模型', entry.modelFast || entry.model || '跟随主模型')",
     );
     expect(rendererSource).not.toContain('connectionHistorySection');
+  });
+
+  it('provides independently configured model chat with a separate workspace', () => {
+    expect(rendererMarkup).toMatch(/data-rail-tab="chat"[\s\S]*?>\s*对话\s*</);
+    expect(rendererMarkup).toContain('id="chat-config-form"');
+    expect(rendererMarkup).toContain('id="chat-shell"');
+    expect(rendererMarkup).toContain('id="chat-composer"');
+    expect(rendererSource).toContain('window.controlPanel.startChat({');
+    expect(rendererSource).toContain('window.controlPanel.onChatStream(handleChatStream);');
+    expect(rendererSource).toContain("mainView = 'chat';");
+    expect(rendererStyles).toContain('.chat-message--user');
+  });
+
+  it('exposes permanent history deletion with confirmation in every stored conversation row', () => {
+    expect(rendererMarkup).toContain('data-conversation-context-action="delete"');
+    expect(rendererSource).toContain('const deleteStoredConversation = async');
+    expect(rendererSource).toContain('window.controlPanel.deleteClaudeSession(');
+    expect(rendererSource).toContain("deleteButton.className = 'history-item__delete';");
+    expect(rendererSource).toContain("confirmLabel: '永久删除'");
   });
 
   it('collapses an already-selected activity tab without losing the terminal', () => {
