@@ -4,8 +4,10 @@ import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
   buildClaudeSettingsEnvironment,
+  buildRuntimeSignalCommand,
   evaluateClaudeInstallation,
   normalizeClaudeConfig,
+  parseClaudePermissionMode,
 } from '../src/main/claude-configuration';
 
 const gatewayInput: SaveClaudeConfigInput = {
@@ -139,5 +141,115 @@ describe('Claude Code configuration', () => {
     expect(command).toContain('--no-chrome');
     expect(command).toContain('Remove-Item Env:ANTHROPIC_API_KEY');
     expect(command).not.toContain(marker);
+  });
+
+  it('arms the bypass cycle without starting in it', () => {
+    const command = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'continue',
+      '\u001b]9;claudedock-exit:session-3\u0007',
+      undefined,
+      { allowBypass: true },
+    );
+
+    expect(command).toContain('--allow-dangerously-skip-permissions');
+    expect(command).not.toContain('--permission-mode');
+  });
+
+  it('starts in an explicit permission mode with the value quoted', () => {
+    const command = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'continue',
+      '\u001b]9;claudedock-exit:session-4\u0007',
+      undefined,
+      { allowBypass: true, startMode: 'dontAsk' },
+    );
+
+    expect(command).toContain("--permission-mode 'dontAsk'");
+    expect(command).toContain('--allow-dangerously-skip-permissions');
+  });
+
+  it('never pairs the arming flag with a bypass start, and omits both when disarmed', () => {
+    const armedStart = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'continue',
+      '\u001b]9;claudedock-exit:session-5\u0007',
+      undefined,
+      { allowBypass: true, startMode: 'bypassPermissions' },
+    );
+
+    expect(armedStart).toContain("--permission-mode 'bypassPermissions'");
+    expect(armedStart).not.toContain('--allow-dangerously-skip-permissions');
+
+    const disarmed = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'continue',
+      '\u001b]9;claudedock-exit:session-6\u0007',
+      undefined,
+      { allowBypass: false },
+    );
+
+    expect(disarmed).not.toContain('--allow-dangerously-skip-permissions');
+    expect(disarmed).not.toContain('--permission-mode');
+  });
+
+  it('quotes the runtime signal helper paths and event for the hook shell', () => {
+    const command = buildRuntimeSignalCommand(
+      'C:\\Program Files\\ClaudeDock\\assets\\runtime\\claude-runtime-signal.ps1',
+      'C:\\Users\\Tester\\AppData\\claude\\runtime\\session-1\\signal.json',
+      'PostCompact',
+    );
+
+    expect(command).toContain('-NoProfile');
+    expect(command).toContain('-NonInteractive');
+    expect(command).toContain('-ExecutionPolicy Bypass');
+    expect(command).toContain('claude-runtime-signal.ps1"');
+    expect(command).toContain('-Event "PostCompact"');
+    expect(command).not.toContain('\\');
+  });
+});
+
+describe('Claude permission badge parsing', () => {
+  it('maps every badge Claude Code paints to a permission mode', () => {
+    expect(parseClaudePermissionMode('⏸ manual mode on')).toBe('default');
+    expect(parseClaudePermissionMode('⏵⏵ accept edits on')).toBe('acceptEdits');
+    expect(parseClaudePermissionMode('⏸ plan mode on')).toBe('plan');
+    expect(parseClaudePermissionMode('⏵⏵ auto mode on')).toBe('auto');
+    expect(parseClaudePermissionMode("⏵⏵ don't ask on")).toBe('dontAsk');
+    expect(parseClaudePermissionMode('⏵⏵ bypass permissions on')).toBe('bypassPermissions');
+  });
+
+  it('reads the badge through the ANSI and OSC noise a repaint carries', () => {
+    expect(
+      parseClaudePermissionMode(
+        '\u001b[?25l\u001b[2K\u001b[38;5;208m⏵⏵ accept edits on\u001b[39m\u001b[?25h',
+      ),
+    ).toBe('acceptEdits');
+    expect(
+      parseClaudePermissionMode('\u001b]0;Claude Code\u0007\u001b[1m⏸ plan mode on\u001b[22m'),
+    ).toBe('plan');
+    expect(parseClaudePermissionMode('⏵⏵ bypass \u001b[39mpermissions on')).toBe(
+      'bypassPermissions',
+    );
+  });
+
+  it('rejoins a badge split across a terminal soft wrap', () => {
+    expect(parseClaudePermissionMode('⏵⏵ accept\r\n  edits on')).toBe('acceptEdits');
+  });
+
+  it('keeps the newest badge when the rolling buffer holds several repaints', () => {
+    expect(parseClaudePermissionMode('⏸ plan mode on\r\n⏵⏵ bypass permissions on')).toBe(
+      'bypassPermissions',
+    );
+    expect(parseClaudePermissionMode('⏵⏵ bypass permissions on\r\n⏸ plan mode on')).toBe('plan');
+  });
+
+  it('reports nothing when the buffer has not painted a badge yet', () => {
+    expect(parseClaudePermissionMode('Welcome to Claude Code')).toBeUndefined();
+    expect(parseClaudePermissionMode('')).toBeUndefined();
   });
 });

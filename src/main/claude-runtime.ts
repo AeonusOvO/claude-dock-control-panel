@@ -12,7 +12,11 @@ import type {
   ClaudeCodeInstallSource,
   ClaudeLaunchMode,
   ClaudeMetrics,
+  ClaudeModelOption,
+  ClaudeModelOptions,
+  ClaudePermissionMode,
   ClaudeProjectState,
+  ClaudeRelaunchInput,
   ClaudeRouteHealth,
   ClaudeRouterManagementState,
   ClaudeRouterInstallSource,
@@ -20,6 +24,7 @@ import type {
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { findClaudeProvider } from '../shared/claude-providers';
 import { AsyncRefreshCache } from './async-refresh-cache';
 import {
   BackgroundTaskCoordinator,
@@ -29,9 +34,12 @@ import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
   buildClaudeSettingsEnvironment,
+  buildRuntimeSignalCommand,
   buildStatusLineCommand,
   evaluateClaudeInstallation,
+  MODEL_NAME_PATTERN,
   normalizeClaudeConfig,
+  parseClaudePermissionMode,
   type ClaudeEnvironmentOverrides,
   type NormalizedClaudeConfig,
 } from './claude-configuration';
@@ -60,8 +68,30 @@ interface RuntimeSession {
   markerRemainder: string;
   metrics?: ClaudeMetrics;
   metricsPath?: string;
+  /** Live mode read off the TUI badge; undefined until the badge has been painted once. */
+  permissionMode?: ClaudePermissionMode;
+  /** Modes this session has actually shown, in first-seen order. */
+  permissionModeCycle: ClaudePermissionMode[];
   sessionId: string;
+  /** Latest `signaledAt` consumed from signal.json, so each signal is only acted on once. */
+  signalSeenAt?: number;
+  signalPath?: string;
+  /** Resolved by the next PostCompact signal; lets a relaunch wait for compaction to finish. */
+  waitingForCompact?: (signaledAt: number) => void;
 }
+
+/**
+ * Terminal writes that drive Claude Code's own UI. `ESC [Z` is the CBT sequence xterm already sends
+ * for Shift+Tab, so stepping the mode from the status bar is byte-identical to pressing the key.
+ */
+const SHIFT_TAB_SEQUENCE = `${String.fromCharCode(27)}[Z`;
+/** Upper bound on Shift+Tab presses when hunting for a mode. The real cycle is far shorter. */
+const PERMISSION_MODE_MAX_STEPS = 8;
+/** How long one press gets to repaint the badge before the step is treated as a no-op. */
+const PERMISSION_MODE_STEP_TIMEOUT_MS = 700;
+const COMPACT_TIMEOUT_MS = 120_000;
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+const COMPACT_INSTRUCTION = '请保留：当前任务目标、已完成的修改、待办的下一步。';
 
 interface ConnectionCheckRecord {
   fingerprint: string;
@@ -391,6 +421,29 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
   return 0;
 };
 
+/**
+ * What makes two setups "the same endpoint" for switching purposes: identical route, credential
+ * kind and preset. Anything else means a different PTY environment and therefore a relaunch.
+ */
+const endpointKey = (value: {
+  authMode: string;
+  baseUrl: string;
+  preset: string;
+  provider: string;
+}): string => `${value.provider}|${value.preset}|${value.authMode}|${value.baseUrl}`;
+
+const describeEndpoint = (entry: ClaudeConnectionHistoryEntry): string => {
+  const providerLabel = findClaudeProvider(entry.preset)?.label ?? '自定义接入';
+  if (entry.provider !== 'gateway' || !entry.baseUrl) {
+    return providerLabel;
+  }
+  try {
+    return `${providerLabel} · ${new URL(entry.baseUrl).host}`;
+  } catch {
+    return providerLabel;
+  }
+};
+
 export class ClaudeRuntime {
   private readonly backgroundTasks = new BackgroundTaskCoordinator(2);
   private readonly installationCache = new AsyncRefreshCache<ClaudeInstallationStatus>(
@@ -407,6 +460,8 @@ export class ClaudeRuntime {
   private readonly gatewayDetector = new ClaudeGatewayDetector();
   private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly metricsTimer: NodeJS.Timeout;
+  /** Serialises Shift+Tab stepping per session so two clicks can never interleave presses. */
+  private readonly modeSwitchLocks = new Set<string>();
   private readonly routerManager: ClaudeRouterManager;
   private readonly runtimeRoot: string;
   private readonly sessions = new Map<string, RuntimeSession>();
@@ -414,7 +469,9 @@ export class ClaudeRuntime {
   public constructor(
     userDataPath: string,
     private readonly statusLineScriptPath: string,
+    private readonly signalScriptPath: string,
     private readonly onState: (state: ClaudeProjectState) => void,
+    private readonly writeToTerminal: (sessionId: string, data: string) => void,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
@@ -445,6 +502,7 @@ export class ClaudeRuntime {
       };
       void this.emitState(runtime);
     }
+    this.observePermissionMode(runtime);
 
     let combined = runtime.markerRemainder + data;
     runtime.markerRemainder = '';
@@ -473,12 +531,15 @@ export class ClaudeRuntime {
     const config = this.configStore.getConfig(cwd);
     return {
       active: runtime.active,
+      allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
       config: this.configStore.getView(cwd),
       cwd,
       expectedModel: runtime.expectedModel,
       installation,
       metrics: runtime.metrics,
       modelMatches: matches,
+      permissionMode: runtime.permissionMode,
+      permissionModeCycle: [...runtime.permissionModeCycle],
       routeHealth: await this.getRouteHealth(runtime, config),
       sessionId,
       warning: matches
@@ -653,8 +714,9 @@ export class ClaudeRuntime {
     sessionId: string,
     cwd: string,
     mode: ClaudeLaunchMode,
+    startMode?: ClaudePermissionMode,
   ): Promise<PreparedClaudeLaunch> {
-    return this.prepareLaunchInternal(sessionId, cwd, mode);
+    return this.prepareLaunchInternal(sessionId, cwd, mode, undefined, startMode);
   }
 
   public async prepareLaunchWithSession(
@@ -670,6 +732,7 @@ export class ClaudeRuntime {
     cwd: string,
     mode: ClaudeLaunchMode,
     resumeSessionId?: string,
+    startMode?: ClaudePermissionMode,
   ): Promise<PreparedClaudeLaunch> {
     const installation = await this.diagnoseInstallation(true);
     if (installation.security !== 'ready') {
@@ -692,14 +755,37 @@ export class ClaudeRuntime {
     const sessionDirectory = path.join(this.runtimeRoot, sessionId);
     const metricsPath = path.join(sessionDirectory, 'metrics.json');
     const settingsPath = path.join(sessionDirectory, 'settings.json');
+    const signalPath = path.join(sessionDirectory, 'signal.json');
     mkdirSync(sessionDirectory, { recursive: true });
     if (existsSync(metricsPath)) {
       unlinkSync(metricsPath);
+    }
+    if (existsSync(signalPath)) {
+      unlinkSync(signalPath);
     }
 
     const settings = {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
       env: buildClaudeSettingsEnvironment(config),
+      // The only hook we install: it reports that a `/compact` issued before a cross-endpoint
+      // relaunch has actually finished, so the restart never cuts the summary short.
+      hooks: {
+        PostCompact: [
+          {
+            hooks: [
+              {
+                command: buildRuntimeSignalCommand(
+                  this.signalScriptPath,
+                  signalPath,
+                  'PostCompact',
+                ),
+                shell: 'powershell',
+                type: 'command',
+              },
+            ],
+          },
+        ],
+      },
       model: config.model,
       skipWebFetchPreflight: true,
       statusLine: {
@@ -720,6 +806,12 @@ export class ClaudeRuntime {
     runtime.launchedConfigFingerprint = connectionFingerprint(config, credential);
     runtime.metrics = undefined;
     runtime.metricsPath = metricsPath;
+    // A relaunch paints a fresh TUI, so nothing observed in the previous one still holds.
+    runtime.permissionMode = startMode;
+    runtime.permissionModeCycle = startMode ? [startMode] : [];
+    runtime.signalPath = signalPath;
+    runtime.signalSeenAt = undefined;
+    runtime.waitingForCompact = undefined;
 
     const command = buildClaudeLaunchCommand(
       settingsPath,
@@ -727,6 +819,7 @@ export class ClaudeRuntime {
       mode,
       runtime.exitMarker,
       resumeSessionId,
+      { allowBypass: this.configStore.getAllowBypassPermissions(cwd), startMode },
     );
     const state = await this.getState(sessionId, cwd);
     return {
@@ -768,6 +861,207 @@ export class ClaudeRuntime {
     entryId: string,
   ): Promise<ClaudeProjectState> {
     return this.saveConfig(sessionId, cwd, this.historyStore.toSaveInput(cwd, entryId));
+  }
+
+  /**
+   * Everything the status-bar picker can offer: the model this project is configured with, plus one
+   * entry per saved connection. Entries that keep the current endpoint switch inside the live
+   * conversation; the rest need a relaunch because base URL and credential are PTY-spawn variables.
+   */
+  public getModelOptions(cwd: string): ClaudeModelOptions {
+    const config = this.configStore.getConfig(cwd);
+    const options: ClaudeModelOption[] = [
+      {
+        id: 'current',
+        label: config.model,
+        model: config.model,
+        providerLabel: '当前接入',
+        sameEndpoint: true,
+      },
+    ];
+
+    const seen = new Set([`${endpointKey(config)}|${config.model}`]);
+    for (const entry of this.historyStore.list(cwd)) {
+      const sameEndpoint = endpointKey(entry) === endpointKey(config);
+      const key = `${endpointKey(entry)}|${entry.model}`;
+      if (seen.has(key) || !MODEL_NAME_PATTERN.test(entry.model)) {
+        continue;
+      }
+      seen.add(key);
+      options.push({
+        entryId: entry.id,
+        id: `history:${entry.id}`,
+        label: entry.model,
+        model: entry.model,
+        providerLabel: describeEndpoint(entry),
+        sameEndpoint,
+      });
+    }
+
+    return { activeModel: config.model, options };
+  }
+
+  /**
+   * Same-endpoint switch: `/model` applies immediately inside the running conversation. The model
+   * is re-validated here rather than trusted from the renderer, because this writes to a live shell.
+   */
+  public async switchModel(
+    sessionId: string,
+    cwd: string,
+    optionId: string,
+  ): Promise<ClaudeProjectState> {
+    const runtime = this.ensureSession(sessionId, cwd);
+    if (!runtime.active) {
+      throw new Error('Claude Code 尚未运行，无法切换模型。');
+    }
+
+    const option = this.getModelOptions(cwd).options.find((candidate) => candidate.id === optionId);
+    if (!option) {
+      throw new Error('这个模型选项已经失效，请重新打开列表。');
+    }
+    if (!option.sameEndpoint) {
+      throw new Error('这个模型属于其他接入端点，需要重启会话才能切换。');
+    }
+    if (!MODEL_NAME_PATTERN.test(option.model)) {
+      throw new Error('模型标识不合法，拒绝写入终端。');
+    }
+
+    runtime.expectedModel = option.model;
+    this.writeToTerminal(sessionId, `/model ${option.model}\r`);
+    const state = await this.getState(sessionId, cwd);
+    this.onState(state);
+    return state;
+  }
+
+  /**
+   * The one relaunch path, shared by cross-endpoint model switches and by `dontAsk` — both need a
+   * new PTY. `--continue` restores the conversation; the optional `/compact` first keeps the restored
+   * context small enough for a model whose window may be narrower than the current one's.
+   */
+  public async relaunch(
+    sessionId: string,
+    cwd: string,
+    input: ClaudeRelaunchInput,
+  ): Promise<PreparedClaudeLaunch> {
+    const runtime = this.ensureSession(sessionId, cwd);
+    if (input.compactFirst && runtime.active) {
+      await this.compactAndWait(runtime);
+    }
+    if (input.entryId) {
+      await this.applyConnectionHistory(sessionId, cwd, input.entryId);
+    }
+    return this.prepareLaunch(sessionId, cwd, 'continue', input.permissionMode);
+  }
+
+  /**
+   * Walks the Shift+Tab cycle one press at a time, re-reading the badge after each, until the live
+   * mode is the requested one. Counting presses is not an option: whether `auto` participates
+   * depends on the account and model, so a blind jump would land on the wrong mode.
+   */
+  public async setPermissionMode(
+    sessionId: string,
+    cwd: string,
+    mode: ClaudePermissionMode,
+  ): Promise<ClaudeProjectState> {
+    const runtime = this.ensureSession(sessionId, cwd);
+    if (!runtime.active) {
+      throw new Error('Claude Code 尚未运行，无法切换模式。');
+    }
+    if (mode === 'dontAsk') {
+      throw new Error('「仅预批准」不在 Shift+Tab 循环内，需要重启会话才能进入。');
+    }
+    if (mode === 'bypassPermissions' && !this.configStore.getAllowBypassPermissions(cwd)) {
+      throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
+    }
+    if (runtime.permissionMode === mode) {
+      return this.getState(sessionId, cwd);
+    }
+    if (this.modeSwitchLocks.has(sessionId)) {
+      throw new Error('上一次模式切换还没有完成，请稍候。');
+    }
+
+    this.modeSwitchLocks.add(sessionId);
+    try {
+      for (let step = 0; step < PERMISSION_MODE_MAX_STEPS; step += 1) {
+        const before = runtime.permissionMode;
+        this.writeToTerminal(sessionId, SHIFT_TAB_SEQUENCE);
+        const changed = await this.waitForPermissionModeChange(runtime, before);
+        if (!changed) {
+          throw new Error('Claude Code 没有响应模式切换，请在终端里直接按 Shift+Tab 试试。');
+        }
+        if (runtime.permissionMode === mode) {
+          const state = await this.getState(sessionId, cwd);
+          this.onState(state);
+          return state;
+        }
+      }
+      throw new Error('该模式在当前会话不可用。');
+    } finally {
+      this.modeSwitchLocks.delete(sessionId);
+    }
+  }
+
+  public async setAllowBypassPermissions(
+    sessionId: string,
+    cwd: string,
+    allowed: boolean,
+  ): Promise<ClaudeProjectState> {
+    this.configStore.setAllowBypassPermissions(cwd, allowed);
+    const state = await this.getState(sessionId, cwd);
+    this.onState(state);
+    return state;
+  }
+
+  /** Reads the badge out of the rolling terminal buffer and records any mode this session reaches. */
+  private observePermissionMode(runtime: RuntimeSession): void {
+    const mode = parseClaudePermissionMode(runtime.diagnosticBuffer);
+    if (!mode || mode === runtime.permissionMode) {
+      return;
+    }
+    runtime.permissionMode = mode;
+    if (!runtime.permissionModeCycle.includes(mode)) {
+      runtime.permissionModeCycle.push(mode);
+    }
+    void this.emitState(runtime);
+  }
+
+  private waitForPermissionModeChange(
+    runtime: RuntimeSession,
+    before: ClaudePermissionMode | undefined,
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const poll = setInterval(() => {
+        if (runtime.permissionMode !== before) {
+          clearInterval(poll);
+          resolve(true);
+        } else if (Date.now() - startedAt >= PERMISSION_MODE_STEP_TIMEOUT_MS) {
+          clearInterval(poll);
+          resolve(false);
+        }
+      }, 40);
+      poll.unref?.();
+    });
+  }
+
+  /**
+   * Issues `/compact` and waits for the PostCompact hook. A timeout is not fatal — the relaunch is
+   * still safe, it just carries the un-compacted history — so the caller is never blocked.
+   */
+  private compactAndWait(runtime: RuntimeSession): Promise<void> {
+    this.writeToTerminal(runtime.sessionId, `/compact ${COMPACT_INSTRUCTION}\r`);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        runtime.waitingForCompact = undefined;
+        resolve();
+      }, COMPACT_TIMEOUT_MS);
+      timer.unref?.();
+      runtime.waitingForCompact = () => {
+        clearTimeout(timer);
+        runtime.waitingForCompact = undefined;
+        resolve();
+      };
+    });
   }
 
   /**
@@ -947,6 +1241,35 @@ export class ClaudeRuntime {
     this.onState(await this.getState(runtime.sessionId, runtime.cwd));
   }
 
+  /**
+   * Rides the existing 1-second metrics tick rather than adding a timer. Only fresh signals count:
+   * a stale `signal.json` from an earlier compaction must not release a later relaunch early.
+   */
+  private pollRuntimeSignal(runtime: RuntimeSession): void {
+    if (!runtime.waitingForCompact || !runtime.signalPath || !existsSync(runtime.signalPath)) {
+      return;
+    }
+
+    try {
+      // `Set-Content -Encoding UTF8` writes a BOM on Windows PowerShell; JSON.parse rejects it.
+      const raw = readFileSync(runtime.signalPath, 'utf8');
+      const parsed = JSON.parse(
+        raw.startsWith(BYTE_ORDER_MARK) ? raw.slice(BYTE_ORDER_MARK.length) : raw,
+      ) as {
+        event?: unknown;
+        signaledAt?: unknown;
+      };
+      const signaledAt = optionalFiniteNumber(parsed.signaledAt);
+      if (parsed.event !== 'PostCompact' || !signaledAt || signaledAt === runtime.signalSeenAt) {
+        return;
+      }
+      runtime.signalSeenAt = signaledAt;
+      runtime.waitingForCompact(signaledAt);
+    } catch {
+      // The helper replaces the file atomically; retry on the next poll.
+    }
+  }
+
   private ensureSession(sessionId: string, cwd: string): RuntimeSession {
     const existing = this.sessions.get(sessionId);
     if (existing) {
@@ -959,6 +1282,7 @@ export class ClaudeRuntime {
       cwd,
       diagnosticBuffer: '',
       markerRemainder: '',
+      permissionModeCycle: [],
       sessionId,
     };
     this.sessions.set(sessionId, created);
@@ -967,6 +1291,7 @@ export class ClaudeRuntime {
 
   private pollMetrics(): void {
     for (const runtime of this.sessions.values()) {
+      this.pollRuntimeSignal(runtime);
       if (!runtime.metricsPath || !existsSync(runtime.metricsPath)) {
         continue;
       }

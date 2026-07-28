@@ -11,12 +11,16 @@ import type {
   ClaudeGatewayCandidate,
   ClaudeGatewayDiagnostics,
   ClaudeLaunchMode,
+  ClaudeModelOption,
+  ClaudeModelOptions,
+  ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginMarketplaceView,
   ClaudePluginOperationResult,
   ClaudePluginView,
   ClaudePreset,
   ClaudeProjectState,
+  ClaudeRelaunchInput,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeRouterProviderView,
@@ -165,7 +169,10 @@ const footerConnection = requiredElement<HTMLButtonElement>('#footer-connection'
 const footerConnectionLabel = requiredElement<HTMLElement>('#footer-connection-label');
 const footerContextLabel = requiredElement<HTMLElement>('#footer-context-label');
 const footerContextRing = requiredElement<HTMLElement>('#footer-context-ring');
-const footerModel = requiredElement<HTMLElement>('#footer-model');
+const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
+const footerModelMenu = requiredElement<HTMLElement>('#footer-model-menu');
+const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
+const footerModeMenu = requiredElement<HTMLElement>('#footer-mode-menu');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
 const gatewayCandidates = requiredElement<HTMLElement>('#gateway-candidates');
 const gatewayCheckedAt = requiredElement<HTMLElement>('#gateway-checked-at');
@@ -174,6 +181,7 @@ const gatewayDiscoverySection = requiredElement<HTMLElement>('#gateway-discovery
 const launchContinueButton = requiredElement<HTMLButtonElement>('#launch-continue');
 const launchNewButton = requiredElement<HTMLButtonElement>('#launch-new');
 const launchResumeButton = requiredElement<HTMLButtonElement>('#launch-resume');
+const allowBypassPermissions = requiredElement<HTMLInputElement>('#allow-bypass-permissions');
 const metricCost = requiredElement<HTMLElement>('#metric-cost');
 const metricDuration = requiredElement<HTMLElement>('#metric-duration');
 const metricInput = requiredElement<HTMLElement>('#metric-input');
@@ -373,6 +381,9 @@ let routerPurgeCompleted = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
+/** Set while a status-bar switch is in flight, so a second click cannot stack terminal writes. */
+let modeSwitchInProgress = false;
+let modelSwitchInProgress = false;
 const guardedButtons = new WeakSet<HTMLButtonElement>();
 
 const runGuarded = async <T>(
@@ -857,6 +868,107 @@ const restoreAdvancedConnectionSnapshot = (snapshot: AdvancedConnectionSnapshot)
   syncConnectionInteractivity();
 };
 
+/**
+ * Every permission mode Claude Code supports, in the order the Shift+Tab cycle visits them.
+ * `dontAsk` is last because it never joins the cycle: it can only be set when the session starts,
+ * so choosing it relaunches the conversation.
+ */
+const PERMISSION_MODE_CATALOG: ReadonlyArray<{
+  detail: string;
+  id: ClaudePermissionMode;
+  label: string;
+  needsRelaunch: boolean;
+}> = [
+  {
+    detail: '每次动作都先征求同意。',
+    id: 'default',
+    label: '手动确认',
+    needsRelaunch: false,
+  },
+  {
+    detail: '文件编辑自动通过，其余仍需确认。',
+    id: 'acceptEdits',
+    label: '自动接受编辑',
+    needsRelaunch: false,
+  },
+  {
+    detail: '只读不改，先出方案再动手。',
+    id: 'plan',
+    label: '计划模式',
+    needsRelaunch: false,
+  },
+  {
+    detail: '由 Claude Code 自行判断，能否使用取决于账号与模型。',
+    id: 'auto',
+    label: '自动选择',
+    needsRelaunch: false,
+  },
+  {
+    detail: '无视风险直接执行；需要在工作台预置后才能切入。',
+    id: 'bypassPermissions',
+    label: '完全允许',
+    needsRelaunch: false,
+  },
+  {
+    detail: '只放行已预先批准的动作；不在快捷键循环内，选择后会重启会话。',
+    id: 'dontAsk',
+    label: '仅预批准',
+    needsRelaunch: true,
+  },
+];
+
+const permissionModeLabel = (mode?: ClaudePermissionMode): string =>
+  PERMISSION_MODE_CATALOG.find((entry) => entry.id === mode)?.label ?? '—';
+
+const hideFooterMenus = (): void => {
+  for (const [menu, trigger] of [
+    [footerModelMenu, footerModel],
+    [footerModeMenu, footerMode],
+  ] as const) {
+    menu.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+  }
+};
+
+/**
+ * Anchors a footer menu above its button. The footer sits at the very bottom, so the menu always
+ * opens upward; both axes are still clamped so a narrow window cannot push it off-screen.
+ */
+const openFooterMenu = (menu: HTMLElement, trigger: HTMLButtonElement): void => {
+  hideFooterMenus();
+  menu.hidden = false;
+  trigger.setAttribute('aria-expanded', 'true');
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(triggerRect.left, window.innerWidth - menuRect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, triggerRect.top - menuRect.height - 8)}px`;
+  menu.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
+};
+
+const buildFooterMenuItem = (
+  label: string,
+  detail: string,
+  selected: boolean,
+  onChoose: () => void,
+  disabled = false,
+): HTMLButtonElement => {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.role = 'menuitem';
+  item.disabled = disabled;
+  item.dataset.selected = String(selected);
+  const title = document.createElement('strong');
+  title.textContent = label;
+  const hint = document.createElement('small');
+  hint.textContent = detail;
+  item.append(title, hint);
+  item.addEventListener('click', () => {
+    hideFooterMenus();
+    onChoose();
+  });
+  return item;
+};
+
 const openAdvancedConnectionDialog = (): void => {
   if (connectionAdvancedDialog.open) {
     return;
@@ -942,16 +1054,27 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     : health?.blocking
       ? health.detail
       : '使用当前已验证配置新建独立 Claude 会话';
-  footerConnection.dataset.tone = health?.tone ?? (installationReady ? 'warning' : 'error');
-  footerConnectionLabel.textContent = health
-    ? health.tone === 'success'
-      ? '连接正常'
-      : health.tone === 'warning'
-        ? '连接需确认'
-        : '连接异常'
-    : installationReady
-      ? '连接待测试'
-      : '环境未就绪';
+  // Rendered before the tone branch so a running test always wins: the footer must show progress
+  // the instant the button is clicked, whatever the last recorded route health was.
+  if (connectionTestInProgress) {
+    footerConnection.dataset.tone = 'pending';
+    footerConnection.disabled = true;
+    footerConnection.setAttribute('aria-busy', 'true');
+    footerConnectionLabel.textContent = '正在检测连接';
+  } else {
+    footerConnection.disabled = false;
+    footerConnection.setAttribute('aria-busy', 'false');
+    footerConnection.dataset.tone = health?.tone ?? (installationReady ? 'warning' : 'error');
+    footerConnectionLabel.textContent = health
+      ? health.tone === 'success'
+        ? '连接正常'
+        : health.tone === 'warning'
+          ? '连接需确认'
+          : '连接异常'
+      : installationReady
+        ? '连接待测试'
+        : '环境未就绪';
+  }
 
   claudeLiveIndicator.dataset.active = String(state.active);
   claudeLiveIndicator.textContent = state.active ? '实时同步' : '未运行';
@@ -976,6 +1099,15 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   footerContextLabel.textContent =
     percentage === undefined ? '上下文 —' : `上下文 ${percentage.toFixed(0)}%`;
   footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
+  footerModel.disabled = modelSwitchInProgress;
+  footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
+  footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
+  footerMode.dataset.mode = state.permissionMode ?? 'unknown';
+  footerMode.disabled = modeSwitchInProgress;
+  footerMode.title = state.active
+    ? '点击切换权限模式，或在终端按 Shift+Tab'
+    : '启动 Claude Code 后可切换权限模式';
+  allowBypassPermissions.checked = state.allowBypassPermissions;
 
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
   metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
@@ -2236,6 +2368,176 @@ const setWorkbenchOpen = (open: boolean): void => {
 };
 
 /**
+ * Restarts the PTY and reattaches with `--continue`. Used by both cross-endpoint model switches and
+ * by 「仅预批准」, which Claude Code only accepts as a launch argument. Compaction is offered because
+ * the restored history may not fit a model whose context window is narrower than the current one's.
+ */
+const relaunchClaudeSession = async (
+  summary: string,
+  input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
+): Promise<void> => {
+  const status = activeStatus();
+  if (!status || launchInProgress) {
+    return;
+  }
+  if (
+    !window.confirm(
+      `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
+    )
+  ) {
+    return;
+  }
+
+  launchInProgress = true;
+  const known = claudeStates.get(status.id);
+  if (known) {
+    renderClaudeState(known);
+  }
+  try {
+    const result = await window.controlPanel.relaunchClaudeSession(status.id, {
+      ...input,
+      compactFirst: true,
+    });
+    renderClaudeState(result.state);
+    showToast(
+      result.ok ? '会话已重启并恢复上下文。' : (result.error ?? '重启会话失败。'),
+      result.ok ? 'success' : 'error',
+    );
+  } catch {
+    showToast('重启会话时发生异常。', 'error');
+  } finally {
+    launchInProgress = false;
+    void loadClaudeState(status.id);
+  }
+};
+
+const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
+  const status = activeStatus();
+  if (!status || modelSwitchInProgress) {
+    return;
+  }
+  if (!option.sameEndpoint) {
+    await relaunchClaudeSession(
+      `切换到「${option.providerLabel} · ${option.model}」需要更换接口地址与凭据。`,
+      { entryId: option.entryId },
+    );
+    return;
+  }
+
+  modelSwitchInProgress = true;
+  footerModel.disabled = true;
+  try {
+    const result = await window.controlPanel.switchClaudeModel(status.id, option.id);
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法切换模型。', 'error');
+    }
+  } catch {
+    showToast('切换模型时发生异常。', 'error');
+  } finally {
+    modelSwitchInProgress = false;
+    void loadClaudeState(status.id);
+  }
+};
+
+const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> => {
+  const status = activeStatus();
+  if (!status || modeSwitchInProgress) {
+    return;
+  }
+  if (mode === 'dontAsk') {
+    await relaunchClaudeSession('「仅预批准」只能在会话启动时设定。', { permissionMode: mode });
+    return;
+  }
+
+  modeSwitchInProgress = true;
+  footerMode.disabled = true;
+  try {
+    const result = await window.controlPanel.setClaudePermissionMode(status.id, mode);
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法切换权限模式。', 'error');
+    }
+  } catch {
+    showToast('切换权限模式时发生异常。', 'error');
+  } finally {
+    modeSwitchInProgress = false;
+    void loadClaudeState(status.id);
+  }
+};
+
+const openModelMenu = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  let options: ClaudeModelOptions;
+  try {
+    options = await window.controlPanel.getClaudeModelOptions(status.id);
+  } catch {
+    showToast('无法读取可切换的模型列表。', 'error');
+    return;
+  }
+
+  const running = claudeStates.get(status.id)?.active ?? false;
+  footerModelMenu.replaceChildren(
+    ...options.options.map((option) =>
+      buildFooterMenuItem(
+        option.model,
+        option.sameEndpoint ? option.providerLabel : `${option.providerLabel} · 需重启会话`,
+        option.model === options.activeModel,
+        () => {
+          void switchClaudeModel(option);
+        },
+        !running,
+      ),
+    ),
+  );
+  if (!running) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = '请先在工作台启动 Claude Code 会话。';
+    footerModelMenu.append(hint);
+  }
+  openFooterMenu(footerModelMenu, footerModel);
+};
+
+const openModeMenu = (): void => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  const state = claudeStates.get(status.id);
+  const running = state?.active ?? false;
+  footerModeMenu.replaceChildren(
+    ...PERMISSION_MODE_CATALOG.map((entry) =>
+      buildFooterMenuItem(
+        entry.label,
+        entry.id === 'bypassPermissions' && !state?.allowBypassPermissions
+          ? '当前项目未预置此模式，请在工作台开启后重新启动会话。'
+          : entry.detail,
+        entry.id === state?.permissionMode,
+        () => {
+          void switchPermissionMode(entry.id);
+        },
+        !running ||
+          (entry.id === 'bypassPermissions' && !state?.allowBypassPermissions) ||
+          (!entry.needsRelaunch && entry.id === state?.permissionMode),
+      ),
+    ),
+  );
+  if (!running) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = '请先在工作台启动 Claude Code 会话。';
+    footerModeMenu.append(hint);
+  }
+  openFooterMenu(footerModeMenu, footerMode);
+};
+
+/**
  * The connection page polls, because Router state changes underneath us (installs, crashes, the
  * user starting CCR by hand). Nothing else needs a timer, so it only runs while that tab is open.
  */
@@ -3376,6 +3678,17 @@ composerInput.addEventListener('keydown', (event) => {
     composerInput.value = '';
     composerHistory = resetBrowsing(composerHistory);
     resizeComposer();
+    return;
+  }
+  // Shift+Tab would otherwise move focus out of the composer. Forwarding the same CBT sequence
+  // xterm sends makes the shortcut work no matter which of the two inputs has focus; the status bar
+  // catches up when the main process reads the repainted badge.
+  if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey) {
+    const status = activeStatus();
+    if (status) {
+      event.preventDefault();
+      window.controlPanel.writeTerminal(status.id, '\x1b[Z');
+    }
   }
 });
 
@@ -4299,8 +4612,45 @@ connectionAdvancedDialog.addEventListener('cancel', (event) => {
   closeAdvancedConnectionDialog(false);
 });
 footerConnection.addEventListener('click', () => {
+  if (connectionTestInProgress) {
+    return;
+  }
   setWorkbenchOpen(false);
+  // The tab has to change first: the form is only repopulated when the connection page opens, and
+  // the test reads its values.
   selectRailTab('connection');
+  void runConnectionTest(false);
+});
+footerModel.addEventListener('click', () => {
+  if (footerModelMenu.hidden) {
+    void openModelMenu();
+  } else {
+    hideFooterMenus();
+  }
+});
+footerMode.addEventListener('click', () => {
+  if (footerModeMenu.hidden) {
+    openModeMenu();
+  } else {
+    hideFooterMenus();
+  }
+});
+allowBypassPermissions.addEventListener('change', () => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+  void window.controlPanel
+    .setClaudeAllowBypassPermissions(status.id, allowBypassPermissions.checked)
+    .then((result) => {
+      renderClaudeState(result.state);
+      if (!result.ok) {
+        showToast(result.error ?? '无法保存放权设置。', 'error');
+      }
+    })
+    .catch(() => {
+      showToast('无法保存放权设置。', 'error');
+    });
 });
 workbenchClose.addEventListener('click', () => {
   setWorkbenchOpen(false);
@@ -4660,12 +5010,21 @@ document.addEventListener('pointerdown', (event) => {
   if (!historyContextMenu.contains(event.target as Node)) {
     hideHistoryContextMenu();
   }
+  if (
+    !footerModelMenu.contains(event.target as Node) &&
+    !footerModeMenu.contains(event.target as Node) &&
+    !footerModel.contains(event.target as Node) &&
+    !footerMode.contains(event.target as Node)
+  ) {
+    hideFooterMenus();
+  }
 });
 window.addEventListener('blur', () => {
   cancelActiveResizes();
   hideTerminalContextMenu();
   hideConversationContextMenu();
   hideHistoryContextMenu();
+  hideFooterMenus();
 });
 window.addEventListener('focus', () => {
   // Tray restoration is a fresh layout/focus boundary even when Chromium missed the earlier blur.

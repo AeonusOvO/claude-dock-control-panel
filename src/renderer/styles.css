@@ -4250,6 +4250,25 @@ body.is-resizing * {
   box-shadow: 0 0 0 3px var(--bad-tint);
 }
 
+#footer-connection[data-tone='warning'] .footer-connection-dot {
+  background: var(--warn-text);
+  box-shadow: 0 0 0 3px var(--warn-tint);
+}
+
+#footer-connection[data-tone='pending'] .footer-connection-dot {
+  animation: status-pulse 1.4s ease-out infinite;
+  background: var(--accent-text);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+#footer-connection:disabled {
+  cursor: progress;
+}
+
+#footer-connection:disabled:hover {
+  background: transparent;
+}
+
 .footer-context {
   align-items: center;
   display: inline-flex;
@@ -4285,12 +4304,136 @@ body.is-resizing * {
   --context-color: var(--bad-text);
 }
 
-#footer-model {
+#footer-model,
+#footer-mode {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
   color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--text-xs);
   max-width: 180px;
+  min-height: 24px;
+  overflow: hidden;
+  padding: 0 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#footer-model:hover:not(:disabled),
+#footer-mode:hover:not(:disabled) {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+#footer-model:disabled,
+#footer-mode:disabled {
+  cursor: progress;
+}
+
+#footer-mode {
+  max-width: 130px;
+}
+
+#footer-mode[data-mode='bypassPermissions'],
+#footer-mode[data-mode='dontAsk'] {
+  color: var(--bad-text);
+}
+
+#footer-mode[data-mode='plan'] {
+  color: var(--accent-text);
+}
+
+.footer-menu {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-overlay);
+  display: grid;
+  gap: 1px;
+  max-height: 60vh;
+  max-width: 340px;
+  min-width: 240px;
+  overflow-y: auto;
+  padding: 5px;
+  position: fixed;
+  z-index: 50;
+}
+
+.footer-menu button {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+  padding: 6px 9px;
+  text-align: left;
+}
+
+.footer-menu button strong {
+  font-size: var(--text-sm);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.footer-menu button small {
+  color: var(--text-mute);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+}
+
+.footer-menu button:hover:not(:disabled),
+.footer-menu button:focus-visible {
+  background: var(--layer-active);
+}
+
+.footer-menu button:disabled {
+  color: var(--text-mute);
+  cursor: default;
+}
+
+.footer-menu button[data-selected='true'] {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+.footer-menu__hint {
+  color: var(--text-mute);
+  font-size: var(--text-2xs);
+  margin: 0;
+  padding: 6px 9px;
+}
+
+.launch-toggle {
+  align-items: start;
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: auto 1fr;
+  padding: 10px 12px;
+}
+
+.launch-toggle span {
+  display: grid;
+  gap: 2px;
+}
+
+.launch-toggle strong {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.launch-toggle small {
+  color: var(--text-mute);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
 }
 
 .environment-setup {
@@ -5042,6 +5185,7 @@ body.is-resizing * {
   }
 
   .terminal-footer #footer-status,
+  #footer-mode,
   #footer-model {
     display: none;
   }

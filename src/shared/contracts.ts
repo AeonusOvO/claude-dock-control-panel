@@ -5,6 +5,12 @@ export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 export type ClaudeAuthMode = 'apiKey' | 'authToken' | 'existing' | 'none';
 export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
 export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
+/**
+ * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
+ * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
+ */
+export type ClaudePermissionMode =
+  'acceptEdits' | 'auto' | 'bypassPermissions' | 'default' | 'dontAsk' | 'plan';
 export type ClaudePreset = ClaudeProviderId;
 export type ClaudeProvider = 'anthropic' | 'gateway';
 export type ClaudeSecurityStatus =
@@ -106,12 +112,18 @@ export interface ClaudeRouteHealth {
 
 export interface ClaudeProjectState {
   active: boolean;
+  /** Whether the next launch arms `bypassPermissions` so Shift+Tab can reach it. */
+  allowBypassPermissions: boolean;
   config: ClaudeConfigView;
   cwd: string;
   expectedModel?: string;
   installation: ClaudeInstallationStatus;
   metrics?: ClaudeMetrics;
   modelMatches?: boolean;
+  /** Parsed from the live Claude Code badge; absent until the badge has been seen once. */
+  permissionMode?: ClaudePermissionMode;
+  /** Modes actually observed in this session, in the order Shift+Tab visited them. */
+  permissionModeCycle?: ClaudePermissionMode[];
   routeHealth?: ClaudeRouteHealth;
   sessionId: string;
   warning?: string;
@@ -147,6 +159,40 @@ export interface ClaudeConnectionTestResult {
   stages: ClaudeConnectionTestStage[];
   testedAt: number;
   tone: ClaudeConnectionTestTone;
+}
+
+/**
+ * One switchable model in the status-bar picker. `sameEndpoint` decides the mechanism: same
+ * endpoint switches inside the live conversation via `/model`, otherwise the session must relaunch
+ * because the base URL and credential are baked into the PTY environment.
+ */
+export interface ClaudeModelOption {
+  /** Present when the option came from connection history; needed to replay that entry. */
+  entryId?: string;
+  id: string;
+  label: string;
+  model: string;
+  providerLabel: string;
+  sameEndpoint: boolean;
+}
+
+export interface ClaudeModelOptions {
+  activeModel: string;
+  options: ClaudeModelOption[];
+}
+
+/**
+ * A relaunch request. Both a cross-endpoint model switch and a `dontAsk` mode change need the PTY
+ * restarted, so they share one path: optionally compact, apply the new configuration, then
+ * relaunch with `--continue` so the conversation is restored.
+ */
+export interface ClaudeRelaunchInput {
+  /** Run `/compact` and wait for the PostCompact signal before restarting. */
+  compactFirst: boolean;
+  /** Connection-history entry to apply first; omit to keep the current configuration. */
+  entryId?: string;
+  /** Permission mode to start the new session in; omit to keep the project default. */
+  permissionMode?: ClaudePermissionMode;
 }
 
 export interface ClaudeGatewayCandidate {
@@ -402,6 +448,26 @@ export interface ControlPanelApi {
   getClaudeRouterManagementState: (sessionId: string) => Promise<ClaudeRouterManagementState>;
   getClaudeConnectionAdvice: (sessionId: string) => Promise<ClaudeConnectionAdvice>;
   getClaudeConnectionHistory: (sessionId: string) => Promise<ClaudeConnectionHistoryEntry[]>;
+  getClaudeModelOptions: (sessionId: string) => Promise<ClaudeModelOptions>;
+  /** Switches inside the live conversation with `/model`; only valid for same-endpoint options. */
+  switchClaudeModel: (sessionId: string, optionId: string) => Promise<ClaudeOperationResult>;
+  /**
+   * Relaunches the PTY so a new base URL, credential or permission mode takes effect, then
+   * reattaches the same conversation with `--continue`.
+   */
+  relaunchClaudeSession: (
+    sessionId: string,
+    input: ClaudeRelaunchInput,
+  ) => Promise<ClaudeOperationResult>;
+  /** Walks the Shift+Tab cycle until the live badge reports the requested mode. */
+  setClaudePermissionMode: (
+    sessionId: string,
+    mode: ClaudePermissionMode,
+  ) => Promise<ClaudeOperationResult>;
+  setClaudeAllowBypassPermissions: (
+    sessionId: string,
+    allowed: boolean,
+  ) => Promise<ClaudeOperationResult>;
   applyClaudeConnectionHistory: (
     sessionId: string,
     entryId: string,

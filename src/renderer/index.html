@@ -840,13 +840,18 @@
         <footer class="terminal-footer">
           <button id="footer-connection" type="button">
             <span class="footer-connection-dot" aria-hidden="true"></span>
-            <span id="footer-connection-label">连接待检测</span>
+            <span id="footer-connection-label">连接待测试</span>
           </button>
           <span class="footer-context">
             <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
             <span id="footer-context-label">上下文 —</span>
           </span>
-          <span id="footer-model">模型 —</span>
+          <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
+            模型 —
+          </button>
+          <button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">
+            模式 —
+          </button>
           <span id="footer-status">后台待命</span>
         </footer>
 
@@ -995,6 +1000,16 @@
                   </button>
                 </div>
               </div>
+              <label class="launch-toggle" for="allow-bypass-permissions">
+                <input id="allow-bypass-permissions" type="checkbox" />
+                <span>
+                  <strong>允许「完全允许」模式</strong>
+                  <small
+                    >启动时预置但不激活，之后可用 Shift+Tab
+                    或状态栏切入。关闭后需重新启动会话。</small
+                  >
+                </span>
+              </label>
               <p class="session-explainer">
                 这些按钮只作用于当前这一个对话。想同时跑多个，请到左侧“项目”里给同一个文件夹再开一个对话。
               </p>
@@ -1160,6 +1175,16 @@
       </button>
       <button data-history-context-action="delete" role="menuitem" type="button">删除记录</button>
     </div>
+
+    <div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden></div>
+
+    <div
+      class="footer-menu"
+      id="footer-mode-menu"
+      role="menu"
+      aria-label="切换权限模式"
+      hidden
+    ></div>
 
     <dialog
       class="connection-advanced-dialog"

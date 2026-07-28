@@ -2,6 +2,7 @@ import path from 'node:path';
 import type {
   ClaudeInstallationStatus,
   ClaudeLaunchMode,
+  ClaudePermissionMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
@@ -286,12 +287,24 @@ export const buildClaudeSettingsEnvironment = (
 
 const quotePowerShellArgument = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
+export interface ClaudeLaunchPermissions {
+  /**
+   * Adds `bypassPermissions` to the Shift+Tab cycle without starting in it. Claude Code refuses to
+   * enter that mode mid-session unless the launch armed it, so this is the only way the status-bar
+   * picker can ever reach 「完全允许」.
+   */
+  allowBypass: boolean;
+  /** Mode to begin in. `dontAsk` never joins the cycle, so it can only arrive through here. */
+  startMode?: ClaudePermissionMode;
+}
+
 export const buildClaudeLaunchCommand = (
   settingsPath: string,
   model: string,
   mode: ClaudeLaunchMode,
   exitMarker: string,
   resumeSessionId?: string,
+  permissions?: ClaudeLaunchPermissions,
 ): string => {
   const argumentsList = [
     '--settings',
@@ -300,6 +313,15 @@ export const buildClaudeLaunchCommand = (
     quotePowerShellArgument(model),
     '--no-chrome',
   ];
+
+  if (permissions?.startMode && permissions.startMode !== 'default') {
+    argumentsList.push('--permission-mode', quotePowerShellArgument(permissions.startMode));
+  }
+  // The `--allow-` variant only widens the cycle; `bypassPermissions` still has to be chosen
+  // explicitly, so arming it here does not change how the session behaves on its own.
+  if (permissions?.allowBypass && permissions.startMode !== 'bypassPermissions') {
+    argumentsList.push('--allow-dangerously-skip-permissions');
+  }
 
   if (mode === 'continue') {
     argumentsList.push('--continue');
@@ -335,4 +357,72 @@ export const buildStatusLineCommand = (scriptPath: string, outputPath: string): 
   const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
   const normalizedOutputPath = path.resolve(outputPath).replaceAll('\\', '/');
   return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -OutputPath "${normalizedOutputPath}"`;
+};
+
+export const buildRuntimeSignalCommand = (
+  scriptPath: string,
+  outputPath: string,
+  event: string,
+): string => {
+  const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
+  const normalizedOutputPath = path.resolve(outputPath).replaceAll('\\', '/');
+  return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -OutputPath "${normalizedOutputPath}" -Event "${event}"`;
+};
+
+/**
+ * The permission badge Claude Code repaints in its TUI. The status-line JSON carries no
+ * permission field, so the rendered badge is the only live source for the active mode.
+ */
+const PERMISSION_MODE_BADGES: ReadonlyArray<readonly [RegExp, ClaudePermissionMode]> = [
+  [/\bbypass\s+permissions\s+on\b/i, 'bypassPermissions'],
+  [/\baccept\s+edits\s+on\b/i, 'acceptEdits'],
+  [/\bdon'?t\s+ask\s+on\b/i, 'dontAsk'],
+  [/\bauto\s+mode\s+on\b/i, 'auto'],
+  [/\bplan\s+mode\s+on\b/i, 'plan'],
+  [/\bmanual\s+mode\s+on\b/i, 'default'],
+];
+
+const ESCAPE_CHARACTER = String.fromCharCode(27);
+const BELL_CHARACTER = String.fromCharCode(7);
+
+/**
+ * ANSI CSI / OSC control sequences emitted by the terminal renderer. Assembled from character
+ * codes so the source stays readable instead of a wall of escapes.
+ */
+const ANSI_SEQUENCE_PATTERN = new RegExp(
+  [
+    ESCAPE_CHARACTER,
+    '(?:',
+    // OSC: ESC ] ... BEL  or  ESC ] ... ESC \
+    `\\][^${BELL_CHARACTER}]*(?:${BELL_CHARACTER}|${ESCAPE_CHARACTER}\\\\)`,
+    '|',
+    // CSI: ESC [ params intermediates final
+    '\\[[0-?]*[ -/]*[@-~]',
+    ')',
+  ].join(''),
+  'g',
+);
+
+/**
+ * Strips the escape sequences xterm would have consumed, then reads the *last* badge in the
+ * buffer: Claude Code repaints the footer on every frame, so the newest match is the live mode.
+ */
+export const parseClaudePermissionMode = (buffer: string): ClaudePermissionMode | undefined => {
+  const plain = buffer.replace(ANSI_SEQUENCE_PATTERN, '').replace(/\s+/g, ' ');
+
+  let latest: ClaudePermissionMode | undefined;
+  let latestIndex = -1;
+  for (const [pattern, mode] of PERMISSION_MODE_BADGES) {
+    const globalPattern = new RegExp(pattern.source, `${pattern.flags}g`);
+    let match: RegExpExecArray | null = globalPattern.exec(plain);
+    while (match) {
+      if (match.index > latestIndex) {
+        latestIndex = match.index;
+        latest = mode;
+      }
+      match = globalPattern.exec(plain);
+    }
+  }
+
+  return latest;
 };

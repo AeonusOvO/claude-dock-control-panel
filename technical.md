@@ -128,7 +128,9 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 ## 渲染进程与 IPC
 
 - 渲染进程不启用 Node.js，只能调用 preload 暴露的固定方法。
-- 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。
+- 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。权限模式只接受
+  六个已知取值，模型选项 ID 只接受 `current` 或 `history:<id>` 形态，重启入参逐字段校验；
+  这些值最终都会影响启动命令或写进运行中的终端，所以一律在主进程重新核对，不信任 renderer。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
 - `TerminalWorkspace` 构造出来是空的，也允许一直是空的：会话总是属于用户选定的文件夹，
   冷启动和关掉最后一个对话之后都没有活动会话。`getActiveStatus()` 因此返回
@@ -197,7 +199,8 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
    settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
    与模型，并把 `ANTHROPIC_API_BASE_URL`、`CLAUDE_AGENT_API_BASE_URL`、
    `CCR_CLAUDE_CODE_MODEL`、`CODEXL_CLAUDE_CODE_MODEL` 和 Router 模型发现开关清空，防止
-   旧 CCR profile 把真实会话重新指向已停止的 `3456`。
+   旧 CCR profile 把真实会话重新指向已停止的 `3456`。同一份 settings 里注册两个本地脚本：
+   statusLine 指标采集和 `PostCompact` 完成信号，都只写本地 JSON，不外发。
 3. 主进程重建当前 PowerShell，并在 PTY 创建时注入路由与解密后的凭据；密钥不会出现在
    命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。显式凭据环境变量优先于
    用户级 `apiKeyHelper`；Claude 退出后命令会清理所有受管环境变量与第三方路由别名。
@@ -208,6 +211,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 5. 临时 settings 设置 `skipWebFetchPreflight: true`，避免 WebFetch 在第三方模型接入时仍把
    域名发往 `api.anthropic.com`。这会同时取消 Anthropic 的域名安全块列表检查，因此
    WebFetch 的最终风险仍由 Claude Code 权限提示和用户判断承担。
+6. 启动命令按项目的 `allowBypassPermissions` 追加
+   `--allow-dangerously-skip-permissions`（把 `bypassPermissions` 加进 `Shift+Tab` 循环，
+   但不以该模式启动），需要以特定模式启动时另加 `--permission-mode <mode>`。两者不叠加：
+   直接以 `bypassPermissions` 启动时不再附加 `--allow-` 变体。这个开关的默认值是开启，
+   但「预置」和「激活」是两件事——ClaudeDock 不会替用户进入完全允许模式。
 
 `safeStorage` 在 Windows 使用操作系统凭据保护能力；若不可用，保存密钥会失败关闭，而不是
 回退到明文。渲染进程只能获得 `credentialConfigured` 布尔值，从不获得已保存密钥。
@@ -455,7 +463,63 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   也可能为空或不准确。网关在服务端替换模型无法由客户端进行密码学证明；界面只能核对
   statusLine 报告的运行模型与锁定模型是否一致。
 
+### 运行中换模型与权限模式
+
+**模式真值来自终端徽标。** Claude Code 的 statusLine JSON 里没有 `permission_mode` 这个
+字段（逐条核对过官方字段表），SessionStart hook 的载荷也不带它。唯一持续可读的来源是
+TUI 自己重绘的模式徽标：`⏸ manual mode on` / `⏵⏵ accept edits on` / `⏸ plan mode on` /
+`⏵⏵ auto mode on` / `⏵⏵ don't ask on` / `⏵⏵ bypass permissions on`。
+`consumeTerminalOutput` 已经为了识别 API Error 维护一份 4,000 字符的滚动缓冲，
+`parseClaudePermissionMode` 复用同一份缓冲：先去掉 CSI/OSC 序列、把空白折叠成单空格，
+再取位置最靠后的一次匹配。折叠空白让软换行拆开的徽标仍能命中，取最后一次匹配让缓冲里的
+历史徽标不会盖住当前状态。这条路径不新增 hook、不新增定时器。
+
+**列表点击是闭环步进，不是盲按 N 次。** `auto` 是否出现在 `Shift+Tab` 循环里取决于账号、
+模型和供应商，客户端无法先验判断，所以「算差值按 N 次」一定会在某些账号上切歪。
+`setPermissionMode` 改为：写一次 `ESC [Z`（xterm 对 `Shift+Tab` 发的就是这段 CBT 序列）→
+以 40ms 轮询等徽标变化，最多 700ms → 命中目标就停，最多 8 轮，绕完仍未命中则报
+「该模式在当前会话不可用」。`modeSwitchLocks` 按 sessionId 串行化，两次快速点击不会把按键
+叠在一起。渲染层不做乐观更新：底栏永远显示主进程读回来的徽标。
+
+**两个模式进不了循环。** `bypassPermissions` 无法在未预置的会话中进入（官方明确说明），
+必须启动时带 `--allow-dangerously-skip-permissions`（加入循环但不激活）或
+`--permission-mode bypassPermissions`（直接进入）。ClaudeDock 采用前者，按项目持久化在
+`claude-config-store.ts` 的 `allowBypassPermissions`，默认 `true`；这个字段刻意不放进
+`NormalizedClaudeConfig`，因为它左右的是启动命令而不是模型路由，保存接入配置时也必须
+原样带过去，不能被静默重置。`dontAsk` 永远不在循环里，只能 `--permission-mode dontAsk`
+启动，因此它走重启路径。
+
+**换模型分同端点与跨端点。** `getClaudeModelOptions` 合并当前配置与该项目的接入历史，
+按 `provider|preset|authMode|baseUrl` 判定 `sameEndpoint`。同端点直接向运行中的会话写
+`/model <model>`，对话不中断，随后由既有的 `expectedModel` / `modelMatches` 漂移检测核对
+statusLine 报回的真实模型。跨端点必须重启：`ANTHROPIC_BASE_URL` 与凭据是 PTY spawn 时
+定死的环境变量，运行中改不了。
+
+`claude:switch-model` 是独立 IPC，不放宽 `/model` 的斜杠命令白名单（仍是
+`['/model', false]`，不接受参数）。handler 收到的只是一个选项 ID，主进程重新生成一次选项
+列表核对，模型串再过一遍 `MODEL_NAME_PATTERN`，才写进终端；渲染层给不出任意字符串。
+
+**一个重启机制，两个调用方。** 跨端点换模型和 `dontAsk` 都走 `ClaudeRuntime.relaunch()`：
+可选 `/compact` → 可选 `applyConnectionHistory` → `prepareLaunch(..., 'continue', startMode)`
+→ `workspace.restart` → 写入启动命令。`--continue` 恢复当前目录最近的会话，所以对话不丢；
+压缩是为了切到上下文窗口更窄的模型时不溢出。
+
+**压缩完成靠 hook 通知。** per-session `settings.json` 里注册唯一一个 hook：`PostCompact`
+执行 `assets/runtime/claude-runtime-signal.ps1`，脚本先把 stdin 读干（否则 CLI 可能阻塞在
+写管道上），再原子写 `signal.json`（`$OutputPath.$PID.tmp` → `Move-Item -Force`），内容只有
+`{event, signaledAt}`，不回写任何 hook 载荷。脚本吞掉所有异常：丢一个信号最多让调用方等到
+超时，不能弄坏对话。主进程在已有的 1 秒 `pollMetrics` 循环里顺带读它，只处理没消费过的
+`signaledAt`，避免上一次压缩的旧文件提前放行这一次重启；120 秒超时后不挂起，直接不压缩
+继续重启。Windows PowerShell 的 `Set-Content -Encoding UTF8` 会写 BOM，`JSON.parse` 不接受，
+读取时要先剥掉。
+
+**`Shift+Tab` 不改按键行为。** xterm 本来就把 `Shift+Tab` 编码成 `ESC [Z` 发给 PTY，
+`attachCustomKeyEventHandler` 没有拦它，所以终端里这个快捷键一直是通的，缺的只是状态栏
+知道模式变了。唯一需要新增的是输入框：`<textarea>` 里 `Shift+Tab` 默认做焦点遍历，
+所以 renderer 拦下它并转发同一段序列，让快捷键与焦点位置无关。
+
 ### 斜杠命令可视化
+
 
 渲染进程提交命令名称与可选参数，主进程只接受固定白名单：
 `/context`、`/usage`、`/status`、`/model`、`/permissions`、`/mcp`、`/agents`、`/hooks`、
@@ -521,7 +585,11 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 - 不保存终端输入或命令历史；API 密钥只以 Windows `safeStorage` 密文持久化，终端不会收到
   含密钥的文本命令。PowerShell 自身行为不在应用持久化范围内。
 - 原生 `node-pty` 只在主进程加载；`node-pty` 与需要由外部 PowerShell 执行的
-  `assets/runtime/claude-statusline.ps1` 均在打包时从 ASAR 解包。
+  `assets/runtime/claude-statusline.ps1`、`assets/runtime/claude-runtime-signal.ps1`
+  均在打包时从 ASAR 解包。
+- 「完全允许」的风险由用户承担，但入口受两道限制：项目级开关必须开启，且只有启动时预置过
+  的会话才能切进去（这是 Claude Code 自己的限制，客户端绕不过，也不应该绕）。首次以该标志
+  启动时 Claude Code 会弹自己的一次性免责框，ClaudeDock 不代答。
 
 ## 构建、测试与调试
 
@@ -550,7 +618,26 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   的进场动画不得使用 `transform`；连接实测必须显示后台状态并让定时轮询避让；统一刷新
   必须在首屏后异步启动，三类更新入口默认隐藏；服务商反选、分组折叠、1/2/3 列容器查询、
   高级设置快照式取消、历史配置位于高级设置与模型表单之间，以及活动栏二次点击收起也作为
-  源码/结构契约锁定。
+  源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮的忙态分支必须排在健康色分支之前
+  （否则陈旧的路由健康会盖掉刚点下去的进度），模型/模式菜单必须挂在同一套 `pointerdown` +
+  `blur` 收拢逻辑上、900px 以下一起隐藏，六种权限模式必须全部出现在目录里，`dontAsk` 与
+  跨端点模型必须走同一个重启函数，输入框的 `Shift+Tab` 必须转发 CBT 序列而 xterm 的
+  按键处理器不得被改动。
+- `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
+  `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
+  与 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行拆开、
+  同一缓冲多次重绘取最后一次，以及未绘制徽标时返回 `undefined`。
+- `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
+  4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并把闭环步进的不变式锁成源码契约：
+  最多 8 轮、每轮必须先读旧值再等徽标变化、per-session 互斥锁、切不到时报明确文案、
+  `dontAsk` 与未预置的 `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、
+  PostCompact 信号只在已有的 metrics 轮询里读且只认没消费过的时间戳。
+- `tests/claude-config-store.test.ts` 覆盖 `allowBypassPermissions` 的持久化：默认开启、
+  单独写入不动凭据、保存接入配置不会静默重置、没有配置过路由的项目也能记住、重开 store
+  后仍在且 Windows 路径大小写不敏感。
+- `tests/claude-runtime-signal.test.ts` 真实 spawn `claude-runtime-signal.ps1`：能在 stdin
+  有 hook 载荷时正常写出 `{event, signaledAt}`、载荷内容不泄漏进文件、目录不存在时自建、
+  再次触发时时间戳前进（否则主进程会把旧信号当成新信号）、成功后不留 `.tmp`。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖

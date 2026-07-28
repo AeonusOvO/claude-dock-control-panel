@@ -20,8 +20,10 @@ import type {
   ClaudeCodeInstallSource,
   ClaudeLaunchMode,
   ClaudeOperationResult,
+  ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginOperationResult,
+  ClaudeRelaunchInput,
   ClaudeRouterOperationResult,
   ClaudeRouterInstallSource,
   SoftwareUpdateOperationResult,
@@ -461,6 +463,51 @@ const validateClaudeLaunchMode = (mode: unknown): ClaudeLaunchMode => {
     throw new Error('Claude 会话启动方式无效。');
   }
   return mode;
+};
+
+const CLAUDE_PERMISSION_MODES = new Set<ClaudePermissionMode>([
+  'acceptEdits',
+  'auto',
+  'bypassPermissions',
+  'default',
+  'dontAsk',
+  'plan',
+]);
+
+const validateClaudePermissionMode = (mode: unknown): ClaudePermissionMode => {
+  if (typeof mode !== 'string' || !CLAUDE_PERMISSION_MODES.has(mode as ClaudePermissionMode)) {
+    throw new Error('权限模式标识无效。');
+  }
+  return mode as ClaudePermissionMode;
+};
+
+/** Option identifiers are minted by `getModelOptions`; anything else never reaches the terminal. */
+const validateModelOptionId = (value: unknown): string => {
+  if (
+    typeof value !== 'string' ||
+    !/^(?:current|history-[a-z0-9]{1,16}-[a-z0-9]{1,16})$/.test(value.replace(/^history:/, ''))
+  ) {
+    throw new Error('模型选项标识无效。');
+  }
+  return value;
+};
+
+const validateClaudeRelaunchInput = (input: unknown): ClaudeRelaunchInput => {
+  if (!input || typeof input !== 'object') {
+    throw new Error('会话重启参数无效。');
+  }
+  const value = input as Record<string, unknown>;
+  if (typeof value.compactFirst !== 'boolean') {
+    throw new Error('会话重启参数无效。');
+  }
+  return {
+    compactFirst: value.compactFirst,
+    entryId: value.entryId === undefined ? undefined : validateHistoryEntryId(value.entryId),
+    permissionMode:
+      value.permissionMode === undefined
+        ? undefined
+        : validateClaudePermissionMode(value.permissionMode),
+  };
 };
 
 const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
@@ -1128,6 +1175,103 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.handle('claude:model-options', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return requireClaudeRuntime().getModelOptions(status.cwd);
+  });
+  ipcMain.handle(
+    'claude:switch-model',
+    async (event, sessionId: unknown, optionId: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireClaudeRuntime().switchModel(
+            validatedSessionId,
+            status.cwd,
+            validateModelOptionId(optionId),
+          ),
+        };
+      } catch (error) {
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:relaunch',
+    async (event, sessionId: unknown, input: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        const prepared = await runtime.relaunch(
+          validatedSessionId,
+          status.cwd,
+          validateClaudeRelaunchInput(input),
+        );
+        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
+        if (terminalStatus.phase === 'error') {
+          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
+        }
+        workspace.write(validatedSessionId, `${prepared.command}\r`);
+        return {
+          ok: true,
+          state: await runtime.getState(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        runtime.setInactive(validatedSessionId);
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:set-permission-mode',
+    async (event, sessionId: unknown, mode: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireClaudeRuntime().setPermissionMode(
+            validatedSessionId,
+            status.cwd,
+            validateClaudePermissionMode(mode),
+          ),
+        };
+      } catch (error) {
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:set-allow-bypass-permissions',
+    async (event, sessionId: unknown, allowed: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        if (typeof allowed !== 'boolean') {
+          throw new Error('放权开关的取值无效。');
+        }
+        return {
+          ok: true,
+          state: await requireClaudeRuntime().setAllowBypassPermissions(
+            validatedSessionId,
+            status.cwd,
+            allowed,
+          ),
+        };
+      } catch (error) {
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
   ipcMain.handle(
     'claude:test-connection',
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeConnectionTestResult> => {
@@ -1526,6 +1670,7 @@ if (!hasSingleInstanceLock) {
     claudeRuntime = new ClaudeRuntime(
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
+      runtimeAssetPath('claude-runtime-signal.ps1'),
       (state) => {
         const claudeTitle = state.metrics?.sessionName;
         if (claudeTitle && workspace.hasSession(state.sessionId)) {
@@ -1536,6 +1681,9 @@ if (!hasSingleInstanceLock) {
           }
         }
         mainWindow?.webContents.send('claude:state', state);
+      },
+      (sessionId, data) => {
+        workspace.write(sessionId, data);
       },
     );
     registerIpc();

@@ -127,4 +127,73 @@ describe('renderer interaction lifecycle contract', () => {
     );
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
   });
+
+  it('shows the connection test as busy the moment the footer button is pressed', () => {
+    // Clicking used to only switch tabs, which read as "nothing happened".
+    expect(rendererSource).toMatch(
+      /footerConnection\.addEventListener\('click', \(\) => \{\s+if \(connectionTestInProgress\) \{\s+return;\s+\}\s+setWorkbenchOpen\(false\);[\s\S]*?selectRailTab\('connection'\);\s+void runConnectionTest\(false\);/,
+    );
+    // The busy branch has to precede the tone branch, or a stale route health would overwrite it.
+    expect(rendererSource).toMatch(
+      /if \(connectionTestInProgress\) \{\s+footerConnection\.dataset\.tone = 'pending';\s+footerConnection\.disabled = true;\s+footerConnection\.setAttribute\('aria-busy', 'true'\);\s+footerConnectionLabel\.textContent = '正在检测连接';\s+\} else \{\s+footerConnection\.disabled = false;\s+footerConnection\.setAttribute\('aria-busy', 'false'\);/,
+    );
+    expect(rendererStyles).toContain("#footer-connection[data-tone='pending'] .footer-connection-dot");
+    expect(rendererStyles).toContain('#footer-connection:disabled {');
+    expect(rendererMarkup).toContain('<span id="footer-connection-label">连接待测试</span>');
+  });
+
+  it('turns the footer model and mode readouts into real menu triggers', () => {
+    expect(rendererMarkup).toMatch(
+      /<button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    );
+    expect(rendererMarkup).toMatch(
+      /<button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    );
+    expect(rendererMarkup).toContain(
+      '<div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden>',
+    );
+    expect(rendererMarkup).toMatch(
+      /id="footer-mode-menu"\s+role="menu"\s+aria-label="切换权限模式"\s+hidden/,
+    );
+    // Both menus join the one dismissal path rather than starting a second one.
+    expect(rendererSource).toMatch(
+      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\)/,
+    );
+    expect(rendererSource).toMatch(/window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/);
+    // Narrow windows drop both readouts together, so the footer cannot overflow.
+    expect(rendererStyles).toMatch(
+      /@media \(max-width: 900px\)[\s\S]*?#footer-mode,\s+#footer-model \{\s+display: none;/,
+    );
+  });
+
+  it('lists every permission mode and routes the un-cyclable one through a relaunch', () => {
+    for (const mode of [
+      'default',
+      'acceptEdits',
+      'plan',
+      'auto',
+      'bypassPermissions',
+      'dontAsk',
+    ]) {
+      expect(rendererSource).toContain(`id: '${mode}',`);
+    }
+    // `dontAsk` is only reachable as a launch argument, so it must not be sent to the stepper.
+    expect(rendererSource).toMatch(
+      /if \(mode === 'dontAsk'\) \{\s+await relaunchClaudeSession\('「仅预批准」只能在会话启动时设定。', \{ permissionMode: mode \}\);/,
+    );
+    // Cross-endpoint models reuse the same relaunch instead of a second mechanism.
+    expect(rendererSource).toMatch(
+      /if \(!option\.sameEndpoint\) \{\s+await relaunchClaudeSession\(/,
+    );
+    expect(rendererSource).toContain('compactFirst: true,');
+    expect(rendererSource).toContain('对话历史会通过 --continue 恢复');
+  });
+
+  it('forwards Shift+Tab from the composer so the shortcut does not depend on terminal focus', () => {
+    expect(rendererSource).toMatch(
+      /if \(event\.key === 'Tab' && event\.shiftKey && !event\.ctrlKey && !event\.altKey\) \{\s+const status = activeStatus\(\);\s+if \(status\) \{\s+event\.preventDefault\(\);\s+window\.controlPanel\.writeTerminal\(status\.id, '\\x1b\[Z'\);/,
+    );
+    // xterm already emits the same CBT sequence, so its key handler stays untouched.
+    expect(rendererSource).not.toContain("event.code === 'Tab'");
+  });
 });

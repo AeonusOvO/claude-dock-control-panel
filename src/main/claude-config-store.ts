@@ -10,8 +10,16 @@ import {
 } from './claude-configuration';
 
 interface StoredClaudeConfig extends NormalizedClaudeConfig {
+  /**
+   * Arms `bypassPermissions` at launch so Shift+Tab can reach 「完全允许」. Kept out of
+   * `NormalizedClaudeConfig` because it steers the launch command, not the model route.
+   */
+  allowBypassPermissions?: boolean;
   encryptedCredential?: string;
 }
+
+/** Armed by default: without it the mode picker could never offer 「完全允许」 at all. */
+const DEFAULT_ALLOW_BYPASS_PERMISSIONS = true;
 
 interface StoredClaudeConfigFile {
   projects: Record<string, StoredClaudeConfig>;
@@ -36,6 +44,8 @@ const isStoredConfig = (value: unknown): value is StoredClaudeConfig => {
     typeof record.baseUrl === 'string' &&
     typeof record.authMode === 'string' &&
     typeof record.preset === 'string' &&
+    (record.allowBypassPermissions === undefined ||
+      typeof record.allowBypassPermissions === 'boolean') &&
     (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string')
   );
 };
@@ -96,6 +106,27 @@ export class ClaudeConfigStore {
     };
   }
 
+  public getAllowBypassPermissions(cwd: string): boolean {
+    return (
+      this.load().projects[projectKey(cwd)]?.allowBypassPermissions ??
+      DEFAULT_ALLOW_BYPASS_PERMISSIONS
+    );
+  }
+
+  /**
+   * Persists the launch-time arming switch on its own, so toggling it never rewrites — or requires
+   * the caller to re-supply — the credential.
+   */
+  public setAllowBypassPermissions(cwd: string, allowed: boolean): void {
+    const store = this.load();
+    const key = projectKey(cwd);
+    const existing = store.projects[key];
+    store.projects[key] = existing
+      ? { ...existing, allowBypassPermissions: allowed }
+      : { ...this.getConfig(cwd), allowBypassPermissions: allowed };
+    this.persist(store);
+  }
+
   public save(cwd: string, input: SaveClaudeConfigInput): ClaudeConfigView {
     const config = normalizeClaudeConfig(input);
     const store = this.load();
@@ -122,6 +153,8 @@ export class ClaudeConfigStore {
 
     store.projects[key] = {
       ...config,
+      // Saving a route must not silently re-arm (or disarm) the permission switch.
+      allowBypassPermissions: store.projects[key]?.allowBypassPermissions,
       encryptedCredential,
     };
     this.persist(store);

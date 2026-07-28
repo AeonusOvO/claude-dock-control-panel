@@ -6,10 +6,13 @@ import type {
   ClaudeConnectionHistoryResult,
   ClaudeConnectionTestResult,
   ClaudeGatewayDiagnostics,
+  ClaudeModelOptions,
   ClaudeOperationResult,
+  ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginOperationResult,
   ClaudeProjectState,
+  ClaudeRelaunchInput,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeSessionMetadata,
@@ -64,6 +67,28 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('claude:connection-history', sessionId) as Promise<
       ClaudeConnectionHistoryEntry[]
     >,
+  getClaudeModelOptions: (sessionId: string) =>
+    ipcRenderer.invoke('claude:model-options', sessionId) as Promise<ClaudeModelOptions>,
+  switchClaudeModel: (sessionId: string, optionId: string) =>
+    ipcRenderer.invoke(
+      'claude:switch-model',
+      sessionId,
+      optionId,
+    ) as Promise<ClaudeOperationResult>,
+  relaunchClaudeSession: (sessionId: string, input: ClaudeRelaunchInput) =>
+    ipcRenderer.invoke('claude:relaunch', sessionId, input) as Promise<ClaudeOperationResult>,
+  setClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) =>
+    ipcRenderer.invoke(
+      'claude:set-permission-mode',
+      sessionId,
+      mode,
+    ) as Promise<ClaudeOperationResult>,
+  setClaudeAllowBypassPermissions: (sessionId: string, allowed: boolean) =>
+    ipcRenderer.invoke(
+      'claude:set-allow-bypass-permissions',
+      sessionId,
+      allowed,
+    ) as Promise<ClaudeOperationResult>,
   applyClaudeConnectionHistory: (sessionId: string, entryId: string) =>
     ipcRenderer.invoke(
       'claude:connection-history-apply',

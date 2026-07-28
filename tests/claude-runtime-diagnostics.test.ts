@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
+import { parseClaudePermissionMode } from '../src/main/claude-configuration';
 import {
   parseClaudeMetrics,
   parseClaudeRuntimeApiError,
@@ -8,6 +10,22 @@ import {
   usesDefaultClaudeRouter,
 } from '../src/main/claude-runtime';
 import type { ClaudeRouterManagementState } from '../src/shared/contracts';
+
+const runtimeSource = readFileSync(
+  new URL('../src/main/claude-runtime.ts', import.meta.url),
+  'utf8',
+);
+
+/** Mirrors the rolling window `consumeTerminalOutput` keeps for diagnostics. */
+const DIAGNOSTIC_BUFFER_LIMIT = 4_000;
+
+const feedChunks = (chunks: readonly string[]): string => {
+  let buffer = '';
+  for (const chunk of chunks) {
+    buffer = `${buffer}${chunk}`.slice(-DIAGNOSTIC_BUFFER_LIMIT);
+  }
+  return buffer;
+};
 
 const routerConfig: NormalizedClaudeConfig = {
   authMode: 'authToken',
@@ -111,5 +129,76 @@ describe('Claude runtime route diagnostics', () => {
     expect(() =>
       routerRepairInputForProject({ ...directConfig, authMode: 'authToken' }, 'bearer-token'),
     ).toThrow('接口密钥');
+  });
+});
+
+describe('Claude runtime permission mode observation', () => {
+  it('reads the badge even when a repaint straddles two PTY chunks', () => {
+    expect(parseClaudePermissionMode(feedChunks(['⏵⏵ accept ', 'edits on']))).toBe('acceptEdits');
+    expect(
+      parseClaudePermissionMode(feedChunks(['\u001b[38;5;208m⏸ pl', 'an mo', 'de on\u001b[39m'])),
+    ).toBe('plan');
+  });
+
+  it('follows the mode forward as the session repaints new badges', () => {
+    const chunks = ['⏸ manual mode on', '\r\n⏵⏵ accept edits on', '\r\n⏸ plan mode on'];
+    expect(parseClaudePermissionMode(feedChunks(chunks.slice(0, 1)))).toBe('default');
+    expect(parseClaudePermissionMode(feedChunks(chunks.slice(0, 2)))).toBe('acceptEdits');
+    expect(parseClaudePermissionMode(feedChunks(chunks))).toBe('plan');
+  });
+
+  it('keeps reading the badge after the rolling buffer has scrolled past the older ones', () => {
+    const overflowed = feedChunks([
+      '⏸ plan mode on',
+      'x'.repeat(DIAGNOSTIC_BUFFER_LIMIT),
+      '⏵⏵ bypass permissions on',
+    ]);
+
+    expect(overflowed.length).toBeLessThanOrEqual(DIAGNOSTIC_BUFFER_LIMIT);
+    expect(overflowed).not.toContain('plan mode on');
+    expect(parseClaudePermissionMode(overflowed)).toBe('bypassPermissions');
+  });
+
+  it('steps the Shift+Tab cycle in a closed loop instead of counting presses blind', () => {
+    // `auto` may or may not join the cycle depending on the account, so a computed press count
+    // would silently land on the wrong mode. Each press has to be confirmed by the badge.
+    expect(runtimeSource).toContain('const PERMISSION_MODE_MAX_STEPS = 8;');
+    expect(runtimeSource).toMatch(
+      /for \(let step = 0; step < PERMISSION_MODE_MAX_STEPS; step \+= 1\) \{\s+const before = runtime\.permissionMode;\s+this\.writeToTerminal\(sessionId, SHIFT_TAB_SEQUENCE\);\s+const changed = await this\.waitForPermissionModeChange\(runtime, before\);/,
+    );
+    expect(runtimeSource).toContain("throw new Error('该模式在当前会话不可用。');");
+    expect(runtimeSource).toContain('private readonly modeSwitchLocks = new Set<string>();');
+    expect(runtimeSource).toContain('this.modeSwitchLocks.add(sessionId);');
+    expect(runtimeSource).toContain('this.modeSwitchLocks.delete(sessionId);');
+  });
+
+  it('refuses the two modes the Shift+Tab cycle can never reach', () => {
+    expect(runtimeSource).toContain(
+      "throw new Error('「仅预批准」不在 Shift+Tab 循环内，需要重启会话才能进入。');",
+    );
+    expect(runtimeSource).toMatch(
+      /if \(mode === 'bypassPermissions' && !this\.configStore\.getAllowBypassPermissions\(cwd\)\)/,
+    );
+  });
+
+  it('re-derives and re-validates a model option in the main process before writing to the shell', () => {
+    expect(runtimeSource).toMatch(
+      /const option = this\.getModelOptions\(cwd\)\.options\.find\(\(candidate\) => candidate\.id === optionId\);/,
+    );
+    expect(runtimeSource).toContain(
+      "throw new Error('这个模型属于其他接入端点，需要重启会话才能切换。');",
+    );
+    expect(runtimeSource).toContain('if (!MODEL_NAME_PATTERN.test(option.model))');
+  });
+
+  it('waits for the PostCompact signal on the existing metrics tick and only acts on fresh stamps', () => {
+    expect(runtimeSource).toMatch(
+      /pollMetrics\(\): void \{\s+for \(const runtime of this\.sessions\.values\(\)\) \{\s+this\.pollRuntimeSignal\(runtime\);/,
+    );
+    expect(runtimeSource).toContain(
+      "if (parsed.event !== 'PostCompact' || !signaledAt || signaledAt === runtime.signalSeenAt)",
+    );
+    expect(runtimeSource).toContain('runtime.signalSeenAt = signaledAt;');
+    expect(runtimeSource).toContain('const COMPACT_TIMEOUT_MS = 120_000;');
   });
 });
