@@ -4387,7 +4387,13 @@ const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
     project.sessionIds.includes(session.id),
   );
   const containsActive = project.sessionIds.includes(workspaceState.activeSessionId);
-  const expanded = expandedFolders.has(key) || containsActive;
+  /*
+   * Expansion only governs the history section. Running conversations always stay visible, so a
+   * folder that is in use can still be collapsed — collapsing it tucks the history away and keeps
+   * the live rows. Before, an active folder was forced open and its disclosure did nothing.
+   */
+  const expanded = expandedFolders.has(key);
+  const showsRunning = sessions.length > 0;
 
   const folder = document.createElement('section');
   folder.className = 'project-folder';
@@ -4469,7 +4475,7 @@ const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
   header.append(disclosure, actions);
   folder.append(header);
 
-  if (!expanded) {
+  if (!expanded && !showsRunning) {
     return folder;
   }
 
@@ -4478,6 +4484,12 @@ const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
 
   for (const session of sessions) {
     body.append(renderConversationRow(session));
+  }
+
+  if (!expanded) {
+    // Collapsed while in use: live conversations stay, the history section is tucked away.
+    folder.append(body);
+    return folder;
   }
 
   if (sessions.length === 0) {

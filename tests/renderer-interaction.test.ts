@@ -291,6 +291,17 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toContain('@keyframes titleCaretBlink');
   });
 
+  it('lets an in-use folder collapse to its running rows instead of pinning it open', () => {
+    // Expansion is user state only — an active session must not force the folder open.
+    expect(rendererSource).toContain('const expanded = expandedFolders.has(key);');
+    expect(rendererSource).not.toContain('expandedFolders.has(key) || containsActive');
+    // Collapsed while in use: running conversations stay, only the history section hides.
+    expect(rendererSource).toMatch(/if \(!expanded && !showsRunning\) \{\s+return folder;\s+\}/);
+    expect(rendererSource).toMatch(
+      /body\.append\(renderConversationRow\(session\)\);\s+\}\s+if \(!expanded\) \{[\s\S]*?folder\.append\(body\);\s+return folder;/,
+    );
+  });
+
   it('reads permission badges from xterm after screen deltas have been applied', () => {
     expect(rendererSource).toContain('const buffer = view.terminal.buffer.active;');
     expect(rendererSource).toContain('for (let row = buffer.baseY; row < end; row += 1) {');
