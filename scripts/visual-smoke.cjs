@@ -497,6 +497,61 @@ app
     document.querySelector('#connection-advanced-dialog').close();
     document.documentElement.style.setProperty('--rail-w', '360px');
     ${activateRailPage('projects')}
+    document.body.dataset.agentRuntime = 'codex';
+    document.querySelector('#runtime-claude').checked = false;
+    document.querySelector('#runtime-codex').checked = true;
+    document.querySelector('#workbench-tabs').hidden = true;
+    document.querySelector('#workbench-title').textContent = 'Codex 工作台';
+    document.querySelector('#workbench-trigger-label').textContent = 'Codex 工作台';
+    const codexWorkbench = document.querySelector('#claude-workbench');
+    codexWorkbench.classList.add('claude-workbench--open');
+    codexWorkbench.setAttribute('aria-hidden', 'false');
+    codexWorkbench.style.transform = 'translateX(0)';
+    codexWorkbench.style.transition = 'none';
+    document.querySelector('#workbench-scrim').hidden = false;
+    for (const page of document.querySelectorAll('[data-workbench-page]')) {
+      page.classList.toggle('workbench-page--active', page.dataset.workbenchPage === 'codex');
+    }
+    document.querySelector('#codex-install-step').dataset.state = 'ready';
+    document.querySelector('#codex-install-title').textContent = 'Codex CLI 0.146.0 已就绪';
+    document.querySelector('#codex-install-detail').textContent =
+      'Codex CLI 0.146.0 已就绪，已使用官方独立安装版。';
+    document.querySelector('#codex-install').hidden = true;
+    document.querySelector('#codex-account-step').dataset.state = 'ready';
+    document.querySelector('#codex-account-title').textContent = 'ChatGPT 已登录';
+    document.querySelector('#codex-account-detail').textContent =
+      'Plus 订阅 · 登录由 Codex 官方维护，ClaudeDock 不读取令牌';
+    document.querySelector('#codex-login').hidden = true;
+    document.querySelector('#codex-project-step').dataset.state = 'ready';
+    document.querySelector('#codex-project-title').textContent = '当前项目可安全开发';
+    document.querySelector('#codex-project-detail').textContent =
+      '默认只写当前工作区；扩大权限前仍会确认';
+    document.querySelector('#codex-usage-card').hidden = false;
+    document.querySelector('#codex-plan').textContent = 'Plus · ChatGPT 订阅';
+    document.querySelector('#codex-quota-label').textContent = '短周期额度';
+    document.querySelector('#codex-quota-value').textContent = '已使用 34%';
+    document.querySelector('#codex-quota-bar').style.width = '34%';
+    document.querySelector('#codex-primary-action').textContent = '启动 Codex';
+  `);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#codex-workbench-page').scrollTop = 0;
+    `);
+    writeFileSync(
+      path.join(outputDirectory, 'codex-workbench-1180.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+    document.querySelector('#claude-workbench').classList.remove('claude-workbench--open');
+    document.querySelector('#claude-workbench').setAttribute('aria-hidden', 'true');
+    document.querySelector('#claude-workbench').style.removeProperty('transform');
+    document.querySelector('#claude-workbench').style.removeProperty('transition');
+    document.querySelector('#workbench-scrim').hidden = true;
+    document.body.dataset.agentRuntime = 'claude';
+    document.querySelector('#runtime-claude').checked = true;
+    document.querySelector('#runtime-codex').checked = false;
+    document.documentElement.style.setProperty('--rail-w', '360px');
+    ${activateRailPage('projects')}
     const focusEmptyTerminal = document.querySelector('#terminal-empty-state');
     focusEmptyTerminal.classList.add('terminal-empty-state--hidden');
     focusEmptyTerminal.style.display = 'none';

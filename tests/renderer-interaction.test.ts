@@ -35,6 +35,28 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('flushPendingComposerFocus();');
   });
 
+  it('offers a project-scoped official Codex preparation path without hiding its safety boundary', () => {
+    expect(rendererMarkup).toMatch(
+      /id="runtime-picker"[\s\S]*?id="runtime-claude"[\s\S]*?id="runtime-codex"/,
+    );
+    expect(rendererMarkup).toContain('官方 ChatGPT 订阅通道');
+    expect(rendererMarkup).toMatch(
+      /id="codex-install-step"[\s\S]*?id="codex-account-step"[\s\S]*?id="codex-project-step"/,
+    );
+    expect(rendererMarkup).toContain('默认仅写当前工作区');
+    expect(rendererSource).toMatch(
+      /if \(!state\.installation\.installed\) \{\s+state = await installOrUpdateCodex\(\);/,
+    );
+    expect(rendererSource).toMatch(
+      /if \(state\.requiresOpenaiAuth && !state\.account\) \{\s+await startCodexLogin\('browser', true\);/,
+    );
+    expect(rendererSource).toContain("await launchCodex('new');");
+    expect(rendererStyles).toMatch(
+      /\.runtime-option input \{[\s\S]*?inset: 0;[\s\S]*?width: 100%;/,
+    );
+    expect(rendererStyles).toContain("body[data-agent-runtime='codex'] .codex-workbench-page");
+  });
+
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
     expect(rendererMarkup).toMatch(
       /<dialog[\s\S]*?id="confirmation-dialog"[\s\S]*?aria-labelledby="confirmation-dialog-title"[\s\S]*?<form method="dialog">/,
@@ -261,7 +283,7 @@ describe('renderer interaction lifecycle contract', () => {
 
   it('tests the saved connection in place and shows the busy state immediately', () => {
     expect(rendererSource).toMatch(
-      /footerConnection\.addEventListener\('click', \(\) => \{\s+if \(connectionTestInProgress\) \{\s+return;\s+\}[\s\S]*?void runConnectionTest\(false, \{[\s\S]*?credentialAction: 'keep',/,
+      /footerConnection\.addEventListener\('click', \(\) => \{[\s\S]*?if \(connectionTestInProgress\) \{\s+return;\s+\}[\s\S]*?void runConnectionTest\(false, \{[\s\S]*?credentialAction: 'keep',/,
     );
     const footerHandler = rendererSource.slice(
       rendererSource.indexOf("footerConnection.addEventListener('click'"),

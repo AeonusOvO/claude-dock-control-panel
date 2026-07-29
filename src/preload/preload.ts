@@ -18,6 +18,7 @@ import type {
   ClaudeSessionMetadata,
   ArtifactNetworkLogEntry,
   ChatStreamEvent,
+  CodexProjectState,
   ControlPanelApi,
   DirectoryChoiceResult,
   OperationResult,
@@ -181,6 +182,26 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeConnectionHistoryResult>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
+  getDevelopmentRuntime: (sessionId) => ipcRenderer.invoke('runtime:get', sessionId),
+  setDevelopmentRuntime: (sessionId, runtime) =>
+    ipcRenderer.invoke('runtime:set', sessionId, runtime),
+  getCodexProjectState: (sessionId) =>
+    ipcRenderer.invoke('codex:get-state', sessionId) as Promise<CodexProjectState>,
+  installOrUpdateCodex: (sessionId) => ipcRenderer.invoke('codex:install-update', sessionId),
+  startCodexLogin: (sessionId, method) =>
+    ipcRenderer.invoke('codex:login-start', sessionId, method),
+  cancelCodexLogin: (sessionId) => ipcRenderer.invoke('codex:login-cancel', sessionId),
+  logoutCodex: (sessionId) => ipcRenderer.invoke('codex:logout', sessionId),
+  launchCodex: (sessionId, mode) => ipcRenderer.invoke('codex:launch', sessionId, mode),
+  onCodexState: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, state: CodexProjectState): void => {
+      listener(state);
+    };
+    ipcRenderer.on('codex:state', callback);
+    return () => {
+      ipcRenderer.removeListener('codex:state', callback);
+    };
+  },
   deleteClaudeRouterProvider: (sessionId, providerId) =>
     ipcRenderer.invoke(
       'claude:router-delete-provider',

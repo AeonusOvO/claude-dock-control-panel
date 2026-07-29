@@ -2,10 +2,13 @@ import type { TerminalThemeId } from './terminal-themes';
 import type { ClaudeProviderId } from './claude-providers';
 
 export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
+export type DevelopmentRuntime = 'claude' | 'codex';
 export type ClaudeAuthMode = 'apiKey' | 'authToken' | 'existing' | 'none';
 export type ClaudeApiKeyHelperPolicy = 'inherit' | 'prefer-claudedock';
 export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
 export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
+export type CodexLaunchMode = ClaudeLaunchMode;
+export type CodexLoginMethod = 'browser' | 'device-code';
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
@@ -261,6 +264,69 @@ export interface ClaudeInstallationStatus {
   message: string;
   security: ClaudeSecurityStatus;
   version?: string;
+}
+
+export interface DevelopmentRuntimeState {
+  cwd: string;
+  runtime: DevelopmentRuntime;
+  sessionId: string;
+}
+
+export interface CodexInstallationStatus {
+  executable?: string;
+  installed: boolean;
+  latestVersion?: string;
+  message: string;
+  updateAvailable: boolean;
+  version?: string;
+}
+
+export interface CodexAccountView {
+  email?: string;
+  planType?: string;
+  type: 'apiKey' | 'chatgpt' | 'other';
+}
+
+export interface CodexRateLimitWindow {
+  resetsAt?: number;
+  usedPercent: number;
+  windowDurationMins?: number;
+}
+
+export interface CodexRateLimitsView {
+  primary?: CodexRateLimitWindow;
+  secondary?: CodexRateLimitWindow;
+}
+
+export interface CodexLoginView {
+  error?: string;
+  loginId?: string;
+  method?: CodexLoginMethod;
+  phase: 'error' | 'idle' | 'starting' | 'waiting';
+  userCode?: string;
+  verificationUrl?: string;
+}
+
+export interface CodexProjectState {
+  account?: CodexAccountView;
+  active: boolean;
+  cwd: string;
+  installation: CodexInstallationStatus;
+  login: CodexLoginView;
+  rateLimits?: CodexRateLimitsView;
+  requiresOpenaiAuth: boolean;
+  sessionId: string;
+  warning?: string;
+}
+
+export interface CodexOperationResult {
+  error?: string;
+  ok: boolean;
+  state: CodexProjectState;
+}
+
+export interface CodexLoginStartResult extends CodexOperationResult {
+  openedBrowser?: boolean;
 }
 
 export interface ClaudeMetrics {
@@ -701,6 +767,18 @@ export interface ControlPanelApi {
   ) => Promise<ClaudeConnectionHistoryResult>;
   getDroppedPath: (file: File) => string;
   getWorkspace: () => Promise<WorkspaceState>;
+  getDevelopmentRuntime: (sessionId: string) => Promise<DevelopmentRuntimeState>;
+  setDevelopmentRuntime: (
+    sessionId: string,
+    runtime: DevelopmentRuntime,
+  ) => Promise<DevelopmentRuntimeState>;
+  getCodexProjectState: (sessionId: string) => Promise<CodexProjectState>;
+  installOrUpdateCodex: (sessionId: string) => Promise<CodexOperationResult>;
+  startCodexLogin: (sessionId: string, method: CodexLoginMethod) => Promise<CodexLoginStartResult>;
+  cancelCodexLogin: (sessionId: string) => Promise<CodexOperationResult>;
+  logoutCodex: (sessionId: string) => Promise<CodexOperationResult>;
+  launchCodex: (sessionId: string, mode: CodexLaunchMode) => Promise<CodexOperationResult>;
+  onCodexState: (listener: (state: CodexProjectState) => void) => Unsubscribe;
   deleteClaudeRouterProvider: (
     sessionId: string,
     providerId: string,

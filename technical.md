@@ -32,8 +32,12 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │                           ├─ TerminalSession ── node-pty ── PowerShell / ConPTY
         │                           └─ …
         │
+        ├── AgentRuntimeStore ── 项目路径 → Claude Code / Codex 选择
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
+        ├── CodexRuntime ─┬─ 官方 CLI 检测 / 工作区沙箱 TUI 启动
+        │                 ├─ CodexInstaller ── GitHub Release / size + SHA-256
+        │                 └─ CodexAppServer ── JSONL / ChatGPT 登录与账号额度
         ├── ClaudeSessionManager ── 当前项目 JSONL 元数据 / 定向恢复与删除
         ├── ChatConfigStore ── safeStorage / 全局独立对话配置
         ├── ChatHistoryStore ── version 2 block 历史 / Token 快照 / 附件引用回收
@@ -294,6 +298,78 @@ Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。S
   controller dispose 后，即使异步 create 稍后才返回也会立即 destroy 主进程记录。
   MutationObserver 同时清理已断开 DOM 的 active 实例。详情抽屉从
   `getArtifactNetworkState` 取快照，再用 `artifact:network-log` 增量更新。
+
+## 项目开发引擎与 Codex
+
+### 项目级选择
+
+- `AgentRuntimeStore`（`src/main/agent-runtime-store.ts`）以小写规范化绝对路径为键，把
+  `claude | codex` 原子写入 `userData/claude/agent-runtimes.json`，文件权限为 `0600`。
+  新项目和损坏/未知版本的存储都安全回落到 `claude`；忘记项目时同步删除选择。
+- renderer 只能按 session ID 请求/切换，主进程再从 `TerminalWorkspace` 取可信 cwd。同一
+  项目任一 session 中有 Claude 或 Codex agent 运行时都拒绝切换，避免不同窗口绕过互斥规则。
+  相同项目的多个 session 在 renderer 同步更新选择快照。
+- `ControlPanelApi` 只暴露结构化 runtime、安装、登录、退出、账号状态和启动方法。preload
+  不提供任意命令、任意 App Server method 或任意外链入口；主进程继续验证 sender、session、
+  枚举值和登录 URL。
+
+### 官方安装与命令解析
+
+- `CodexInstaller` 只读取 `https://api.github.com/repos/openai/codex/releases/latest`。
+  Release tag 必须匹配 `rust-v<semver>`，资产必须叫 `install.ps1`，下载地址必须位于同一
+  `github.com/openai/codex/releases/download/<tag>/` 路径，且 GitHub 元数据必须提供
+  `sha256:<64 hex>` 和不超过 1 MiB 的正尺寸。脚本下载后再次核对精确字节数与 SHA-256，
+  再原子写入 `userData/claude/codex-installers/<version>/install.ps1`。
+- 执行固定使用 Windows PowerShell `-NoProfile -NonInteractive -ExecutionPolicy Bypass
+-File`，最长 15 分钟、总输出上限 2 MiB，并设置官方脚本支持的
+  `CODEX_NON_INTERACTIVE=1`、`CODEX_RELEASE=<version>` 与官方 Release 下载开关。用户输入
+  不进入脚本路径、参数或环境变量。
+- 运行时优先定位官方独立安装路径
+  `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`，否则解析 `PATH` 中的 `codex`。
+  npm 自动生成的 `codex.ps1` 会在接收 pipe 时通过 `$input` 缓冲到 EOF，无法承载长连接
+  JSONL；因此确认同目录存在官方 `node_modules/@openai/codex/bin/codex.js` 后，App Server
+  与版本诊断改用解析到的 `node.exe + codex.js`，用户可见 TUI 仍使用原 shim。真实 Windows
+  联调已覆盖 npm 安装形态。
+
+### App Server 登录边界
+
+- `CodexAppServerClient` 启动 `codex app-server --listen stdio://`，按行收发 JSONL。连接先
+  发送 `initialize`，成功后发送 `initialized`；请求 ID 单调增长，单请求 20 秒超时，单行
+  上限 8 MiB，stderr 只保留末尾 4,000 字符并在错误进入 UI 前净化。
+- 只调用官方账号方法：`account/read`、`account/rateLimits/read`、
+  `account/login/start`、`account/login/cancel` 和 `account/logout`。浏览器方式接受
+  `auth.openai.com` / `chatgpt.com` HTTPS URL；设备码方式额外显示 `userCode`。登录完成与
+  额度更新通过通知推送，账号缓存失效后重新读取。
+- `parseCodexAccountRead` 只映射 `type`、`email`、`planType` 与
+  `requiresOpenaiAuth`，其他字段（包括未来可能出现的 token 字段）默认丢弃。OAuth 凭据的
+  保存、刷新和退出均由官方 Codex 实现；项目不读写 `~/.codex/auth.json` 或
+  `~/.codex/config.toml`。
+- App Server 当前仍标记为 experimental，因此首版只依赖稳定、可回退的账号状态面，不把
+  完整任务执行绑死在协议上。账号读取失败会形成 warning；已安装 CLI 仍可在终端中按官方
+  行为人工登录和使用。
+
+### Codex 会话启动
+
+- `CodexRuntime.prepareLaunch()` 构造 PowerShell 单引号转义命令，固定包含
+  `--cd <cwd> --sandbox workspace-write --ask-for-approval on-request --no-alt-screen`。
+  新建直接运行 `codex`，继续最近使用 `codex resume --last`，选择历史使用 `codex resume`。
+  不提供 `danger-full-access` 或 `never` 审批快捷入口。
+- 启动前要求官方 CLI 已安装；当 `requiresOpenaiAuth` 为真时还要求存在账号。主进程重启当前
+  PTY 后再写入命令，使用 OSC 退出标记跨 chunk 跟踪 TUI 结束并从 renderer 输出中移除标记。
+  终端停止、重启、关闭项目与应用退出都会把两类 runtime 状态一起释放。
+- 浏览器登录的一键路径把待启动 session 记在 renderer 内存中；`account/login/completed`
+  到达且账号刷新成功后自动启动。并发操作锁避免登录通知早于 IPC 返回时重复/漏启，失败则
+  保留项目和登录状态供用户重试。
+
+### 与 CC Switch 类能力的边界
+
+- 调研的 `farion1231/cc-switch` 已覆盖多工具 Provider、MCP、Skills、提示词、用量和本地
+  代理；这证明 ClaudeDock 后续应把“受管应用 / 安装适配器 / 扩展同步”建成能力层，而不是
+  继续把所有功能堆进 Claude 路由表。
+- 其 Codex OAuth → Claude 路径本质是本地反向代理与 Anthropic/OpenAI 协议转换，不会让
+  Claude Code 原生获得 ChatGPT 订阅。CC Switch 自身文档也明确标记服务条款、账号与长期
+  可用性风险。ClaudeDock 当前先提供官方 Codex 客户端通道，不复制 OAuth 凭据、不默认安装
+  该代理、不把高风险兼容路径描述成官方集成。
 
 ## Claude Code 接入与会话
 
@@ -799,7 +875,8 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 - `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
 - `npm run lint`：检查 TypeScript 源码。
 - `npm run typecheck`：分别检查渲染端和主进程类型。
-- `npm test`：运行目录/工作区、Claude 配置与版本门禁、cURL 协议识别、Router 配置
+- `npm test`：运行目录/工作区、项目级开发引擎持久化、Codex 官方 Release 元数据与
+  SHA-256 约束、账号/额度响应白名单、沙箱启动命令、Claude 配置与版本门禁、cURL 协议识别、Router 配置
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
@@ -884,6 +961,7 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。
 - `npm run test:visual` 保留插件、服务商向导、历史配置、全局设置、连接测试、终端聚焦态、
+  Codex 三步工作台、
   独立对话详情抽屉与重命名弹窗回归图，并生成四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵
   PNG 到 `dist/visual-qa/`。富文本对话矩阵主动聚焦输入框，用于人工核对四主题的焦点颜色；
   其余继续核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、窄宽响应式和
@@ -978,6 +1056,16 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
   <https://github.com/electron/electron/issues/19977>
 - Electron 对该焦点问题的当前修复：
   <https://github.com/electron/electron/pull/50770>
+- Codex 官方仓库、Windows 安装与 ChatGPT 登录入口：
+  <https://github.com/openai/codex>
+- Codex 官方 Windows 安装脚本：
+  <https://github.com/openai/codex/blob/main/scripts/install/install.ps1>
+- Codex App Server 协议与账号方法：
+  <https://learn.chatgpt.com/docs/app-server>
+- Codex 官方认证说明：
+  <https://learn.chatgpt.com/docs/auth>
+- CC Switch 官方开源仓库（配置管理能力与非官方代理边界）：
+  <https://github.com/farion1231/cc-switch>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：

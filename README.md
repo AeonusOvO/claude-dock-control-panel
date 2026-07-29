@@ -1,10 +1,28 @@
 # ClaudeDock 控制面板
 
 ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面中同时管理多个项目的
-真实 PowerShell 伪终端、项目级 Claude Code 模型/API 接入、会话上下文与常用斜杠命令，
+真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2.0.2 · 2026-07-29）
+## 当前版本重点（2.1.0 · 2026-07-29）
+
+- 每个项目新增“Claude Code / Codex”开发引擎选择。选择 Codex 后，主操作会自动完成官方
+  CLI 检测、安装、ChatGPT 登录和当前项目启动；已安装用户不会重复安装，选择会按项目持久化。
+- Codex 安装只接受 OpenAI GitHub Release 中与版本匹配的 `install.ps1`，执行前同时核对
+  下载地址、文件大小和 SHA-256；优先使用官方 Windows 独立版，兼容现有 npm 安装。
+- ChatGPT Plus、Pro、Business、Edu 或 Enterprise 的 Codex 权益通过官方 Codex App Server
+  登录。ClaudeDock 只接收账号类型、套餐、额度和登录进度，不读取、保存或转交 OAuth 令牌；
+  支持浏览器登录、设备码登录、取消和退出。
+- Codex 会话仍运行在真实 PowerShell/ConPTY 中，默认固定 `workspace-write` 沙箱和
+  `on-request` 审批；提供新建、继续最近和选择历史三种官方 TUI 入口。Codex 与 Claude Code
+  不能在同一项目终端里同时运行，切换前会检查活动状态。
+- 新增 Codex 工作台，以“官方 CLI → ChatGPT 账号 → 当前项目”三步展示准备状态、版本、
+  订阅额度和安全边界。覆盖式工作台在 1180px 推荐宽度保持完整信息宽度，小窗口再按容器收缩。
+- 本版不把 ChatGPT 订阅伪装成 Claude Code 官方模型。CC Switch 的多工具配置、MCP/Skills
+  同步和可选本地路由已纳入后续路线，但 Codex OAuth → Claude 的反向代理属于非官方高风险
+  兼容路径，不会默认安装或静默启用。
+
+## 2.0.2 版本重点（2026-07-29）
 
 - 点击活动栏“对话”后，只要输入框当前可用且没有详情抽屉或设置弹窗占用焦点，就会在下一绘制帧
   自动聚焦独立对话输入框；再次点击“对话”收起左栏时也保持这一行为。
@@ -194,6 +212,10 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 ## 功能边界
 
 - 每个项目拥有独立的 Windows PowerShell/ConPTY 会话，可同时在后台运行。
+- 每个项目可独立选择 Claude Code 或 Codex。Codex 选择保存在
+  `userData/claude/agent-runtimes.json`；默认仍是 Claude Code，删除项目记忆时同时删除该选择。
+- Codex 使用 OpenAI 官方 CLI、官方 App Server 账号协议和官方 ChatGPT 登录，不把 ChatGPT
+  凭据写入 Claude 配置，也不修改 `~/.codex/config.toml`、`~/.codex/auth.json` 或系统代理。
 - 冷启动和关闭最后一个对话之后，工作区是真正的空状态：会话总是属于用户自己选的文件夹，
   不会为了填满界面而在用户目录里起一个 PowerShell。
 - 项目列表支持添加、切换和关闭项目；终端输出与滚动缓冲在项目切换后仍会保留。
@@ -338,6 +360,11 @@ npm run dist
 标题栏右上角的刷新图标是统一更新检查入口。页面首次完成加载后也会自动在后台执行同样的
 检查；没有发现更新时，Claude Code、Router 和插件区不会显示突兀的更新按钮。
 
+如果要使用 ChatGPT 订阅开发，添加项目后在“当前项目开发引擎”选择 **Codex**，再点击
+“一键准备 Codex”。应用会在需要时下载并校验官方安装器、打开官方 ChatGPT 登录页，登录完成
+后自动回到当前项目启动。浏览器登录不方便时可在 Codex 工作台选择设备码；已经登录的官方
+Codex 会直接复用自己的登录态。若选择 **Claude Code**，继续按下面的服务商接入流程使用。
+
 1. 启动 ClaudeDock 后不会自动打开任何项目：界面停在引导态，等你从左侧点击最近打开过的项目，
    或添加一个新的项目文件夹。
 2. 把项目文件夹拖到窗口任意位置，或点击虚线“＋ 添加项目”区域；应用会为它新建独立会话，不会停止
@@ -423,7 +450,7 @@ npm run dist
 assets/              图标矢量源及生成图标
 build/               electron-builder/NSIS 安装器自定义脚本
 scripts/             清理、图标生成等工程脚本
-src/main/            Electron 主进程、项目工作区、Claude 运行时与 PowerShell 会话管理
+src/main/            Electron 主进程、项目工作区、Claude/Codex 运行时与 PowerShell 会话管理
 src/preload/         受限的渲染进程桥接 API
 src/renderer/        控制面板界面与 xterm.js 终端
 src/shared/          跨进程类型和纯函数
@@ -440,6 +467,12 @@ roadmap.md           本轮产品任务的实施结论、调研依据与后续�
 - ClaudeDock 不把密钥写入项目、命令行或终端历史；保存的凭据使用 Electron
   `safeStorage`（Windows DPAPI）加密。受保护启动结束后会从 PowerShell 环境清理所有
   Claude 路由和凭据变量。
+- Codex 的 ChatGPT OAuth 凭据完全由官方 Codex 保存与续期。ClaudeDock 只通过结构化
+  `account/read`、`account/login/start`、`account/logout` 和额度事件显示必要状态，不读取
+  `~/.codex/auth.json`，也不把账号信息转换成 Claude Code 可用的凭据。
+- Codex 启动固定使用当前项目目录、`workspace-write` 和 `on-request`；这不是“完全允许”。
+  官方 TUI 请求工作区外写入、网络或更高权限时仍会让用户确认。首版结构化 App Server 只用于
+  账号与登录，任务交互保留在成熟的官方 TUI，协议不稳定时仍可独立回退。
 - 接入历史保存在 `userData/claude/connection-history.json`（权限 `0600`，临时文件加重命名
   写入），其中的凭据同样只以 `safeStorage` 密文存放，文件本身不含明文密钥。安全存储不可用
   时该条记录恢复出来就是“没有凭据”，而不是回落成明文。每个项目最多 20 条，超出丢弃最旧的。

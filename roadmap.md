@@ -5,11 +5,12 @@
 
 ## 状态与建议顺序
 
-| 编号 | 任务               | 状态         | 建议实施顺序 |
-| ---- | ------------------ | ------------ | ------------ |
-| 1    | 历史对话删除       | 已实现并验证 | 1            |
-| 2    | 独立“对话”选项卡   | 已实现并增强 | 3            |
-| 3    | 全局设置入口与分类 | 已实现首期   | 2            |
+| 编号 | 任务                 | 状态             | 建议实施顺序 |
+| ---- | -------------------- | ---------------- | ------------ |
+| 1    | 历史对话删除         | 已实现并验证     | 1            |
+| 2    | 独立“对话”选项卡     | 已实现并增强     | 3            |
+| 3    | 全局设置入口与分类   | 已实现首期       | 2            |
+| 4    | 多开发引擎与一键准备 | Codex 首期已实现 | 4            |
 
 实际按“历史删除 → 全局设置外壳 → 独立对话”完成。独立模型配置使用自己的
 `chat-profile.json` 与安全存储边界，没有与 Claude Code 的项目级接入配置强绑定。
@@ -175,6 +176,54 @@ workspace trust 和 advanced 作为可筛选类别；Windows 也长期将系统�
 - 分类切换、模态/面板焦点、最小窗口布局、ARIA、减少动态效果和全局主题纳入自动化及视觉
   检查。
 
+## 任务四：多开发引擎与一键准备
+
+### 已实现首期
+
+- 每个项目可在 Claude Code 与 Codex 间选择，选择按项目持久化；活动 agent 运行时禁止切换。
+- Codex 路径完成“检查官方 CLI → 校验并运行官方 Windows 安装器 → 官方 ChatGPT 浏览器/
+  设备码登录 → 当前项目安全启动”。主按钮把缺失步骤串联起来，任一步失败仍可单独重试。
+- 账号登录与额度使用官方 App Server 结构化接口；任务执行使用官方 TUI。默认
+  `workspace-write + on-request`，不向无代码用户暴露危险的全权限捷径。
+- 本版让 ChatGPT 官方订阅进入 ClaudeDock 的开发流程，但运行的客户端是 Codex，不宣称
+  “ChatGPT 订阅原生进入 Claude Code”。OAuth 令牌仍只归官方 Codex 管理。
+
+### 下一阶段能力层
+
+建议把后续扩展收敛为四类适配器，而不是继续增加彼此耦合的按钮：
+
+| 能力层            | 统一职责                                          | 下一步候选                                   |
+| ----------------- | ------------------------------------------------- | -------------------------------------------- |
+| Runtime Adapter   | 检测、安装、登录、启动、恢复、健康状态            | Claude Code、Codex、Gemini CLI、OpenCode     |
+| Provider Adapter  | 官方账号、API Key、兼容端点、模型发现与连通测试   | Anthropic、OpenAI、Azure、国内模型与本机网关 |
+| Extension Adapter | MCP、Skills、插件、提示词的发现、安装与跨工具同步 | 可预览 diff、分应用选择、冲突回滚            |
+| Policy Adapter    | 沙箱、审批、网络、凭据、条款风险和能力降级        | 官方 / 兼容 / 高风险实验三级标签             |
+
+具体顺序：
+
+1. **Codex 结构化任务页**：在 App Server 协议稳定度允许时加入 thread/turn、流式事件、
+   审批和历史；官方 TUI 始终保留为回退，不能一次性删除成熟路径。
+2. **统一安装中心**：复用当前 checksum、版本、来源和命令调用边界，先扩展到 Gemini CLI /
+   OpenCode；每个工具拥有独立 adapter，不共享任意 shell 字符串。
+3. **MCP / Skills 同步**：先做只读发现与预览，再做用户确认后的定向写入；写入必须逐工具
+   展示目标文件、备份和回滚，不允许“同步全部”成为默认。
+4. **可选 CC Switch 互操作**：优先检测已安装版本、打开官方界面或导入/导出非秘密配置；
+   是否随 ClaudeDock 一键安装必须再核对许可证、签名、发布资产与稳定自动化接口。不得直接
+   操纵其内部数据库。
+5. **协议转换实验区**：只有用户明确开启、看过风险并可随时恢复官方配置时，才评估
+   OpenAI Responses ↔ Anthropic Messages 本地转换。Codex OAuth → Claude 的反向代理有
+   服务条款、账号和长期可用性风险，不进入默认安装，不承诺账号安全，也不保存可复用 token。
+
+### 本轮调研结论
+
+- OpenAI 官方 Codex CLI 已原生支持 ChatGPT 订阅登录、Windows 独立安装和本地 App Server；
+  因而“让订阅用户一键开发”的最低风险首期，应先把 Codex 作为并列 runtime，而不是截获
+  OAuth 后转换给 Claude Code。
+- `farion1231/cc-switch` 的价值不止路由，还包括多应用 Provider、MCP、Skills、提示词、用量
+  与工具安装管理，适合作为能力矩阵参考；它不是 Claude Code 或 Codex 的替代客户端。
+- CC Switch 文档明确说明 Codex OAuth → Claude 依赖本地反向代理和协议转换，并提示条款、
+  账号与可持续性风险。因此这条路径必须与官方 Codex 登录在产品、技术和文案上完全分层。
+
 ## 外部依据
 
 - Claude 官方 MCP Apps 视觉令牌与排版规范：
@@ -207,11 +256,20 @@ workspace trust 和 advanced 作为可筛选类别；Windows 也长期将系统�
   <https://learn.microsoft.com/en-us/windows/apps/design/app-settings/guidelines-for-app-settings>
 - Windows 通知设置：
   <https://support.microsoft.com/en-US/Windows/Experience/notifications-and-do-not-disturb-in-windows>
+- Codex 官方仓库、Windows 安装与 ChatGPT 登录：
+  <https://github.com/openai/codex>
+- Codex App Server：
+  <https://learn.chatgpt.com/docs/app-server>
+- Codex Authentication：
+  <https://learn.chatgpt.com/docs/auth>
+- CC Switch 官方开源仓库：
+  <https://github.com/farion1231/cc-switch>
 
 ## 维护规则
 
 - 开始实现任一任务时，将对应状态改为“进行中”，并在分支/PR 中引用任务编号。
 - 功能通过规定验证并发布后，将状态改为“已完成”，把已上线事实同步到 README、design 和
   technical；路线图只保留关键决策与未完成后续项。
-- 调研日期为 2026-07-28。Claude Code 或同类产品能力变化后，应重新核对官方资料，尤其是
-  单会话删除接口与设置分类。
+- 初始调研日期为 2026-07-28，多开发引擎补充调研日期为 2026-07-29。Claude Code、Codex
+  或同类产品能力变化后，应重新核对官方资料，尤其是单会话删除接口、App Server experimental
+  协议、官方安装方式、订阅支持范围与第三方 OAuth 代理风险。

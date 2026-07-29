@@ -42,6 +42,11 @@ import type {
   ChatMessage,
   ChatStreamEvent,
   ChatTokenUsage,
+  CodexLaunchMode,
+  CodexLoginMethod,
+  CodexProjectState,
+  DevelopmentRuntime,
+  DevelopmentRuntimeState,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -222,6 +227,9 @@ const gatewayDiscoverySection = requiredElement<HTMLElement>('#gateway-discovery
 const launchContinueButton = requiredElement<HTMLButtonElement>('#launch-continue');
 const launchNewButton = requiredElement<HTMLButtonElement>('#launch-new');
 const launchResumeButton = requiredElement<HTMLButtonElement>('#launch-resume');
+const runtimePicker = requiredElement<HTMLFieldSetElement>('#runtime-picker');
+const runtimeClaude = requiredElement<HTMLInputElement>('#runtime-claude');
+const runtimeCodex = requiredElement<HTMLInputElement>('#runtime-codex');
 const allowBypassPermissions = requiredElement<HTMLInputElement>('#allow-bypass-permissions');
 const metricCost = requiredElement<HTMLElement>('#metric-cost');
 const metricDuration = requiredElement<HTMLElement>('#metric-duration');
@@ -281,6 +289,7 @@ const routeHealthBadge = requiredElement<HTMLElement>('#route-health-badge');
 const routeHealthDetail = requiredElement<HTMLElement>('#route-health-detail');
 const routeHealthTitle = requiredElement<HTMLElement>('#route-health-title');
 const runClaudeButton = requiredElement<HTMLButtonElement>('#run-claude');
+const runAgentLabel = requiredElement<HTMLElement>('#run-agent-label');
 const routerProviderApiKey = requiredElement<HTMLInputElement>('#router-provider-api-key');
 const routerProviderBaseUrl = requiredElement<HTMLInputElement>('#router-provider-base-url');
 const routerProviderForm = requiredElement<HTMLFormElement>('#router-provider-form');
@@ -327,6 +336,9 @@ const toggleLabel = requiredElement<HTMLElement>('#toggle-terminal-label');
 const workbenchClose = requiredElement<HTMLButtonElement>('#workbench-close');
 const workbenchScrim = requiredElement<HTMLButtonElement>('#workbench-scrim');
 const workbenchTrigger = requiredElement<HTMLButtonElement>('#workbench-trigger');
+const workbenchTriggerLabel = requiredElement<HTMLElement>('#workbench-trigger-label');
+const workbenchTitle = requiredElement<HTMLElement>('#workbench-title');
+const workbenchTabs = requiredElement<HTMLElement>('#workbench-tabs');
 const workbenchShortcuts = requiredElement<HTMLButtonElement>('#workbench-shortcuts');
 const drawerResizer = requiredElement<HTMLElement>('#drawer-resizer');
 const useDetectedRouterButton = requiredElement<HTMLButtonElement>('#use-detected-router');
@@ -421,6 +433,33 @@ const artifactDetailsScrim = requiredElement<HTMLElement>('#artifact-details-scr
 const artifactNetworkAllowed = requiredElement<HTMLInputElement>('#artifact-network-allowed');
 const artifactActiveList = requiredElement<HTMLElement>('#artifact-active-list');
 const artifactNetworkLog = requiredElement<HTMLOListElement>('#artifact-network-log');
+const codexPrimaryAction = requiredElement<HTMLButtonElement>('#codex-primary-action');
+const codexInstallStep = requiredElement<HTMLElement>('#codex-install-step');
+const codexInstallTitle = requiredElement<HTMLElement>('#codex-install-title');
+const codexInstallDetail = requiredElement<HTMLElement>('#codex-install-detail');
+const codexInstallButton = requiredElement<HTMLButtonElement>('#codex-install');
+const codexAccountStep = requiredElement<HTMLElement>('#codex-account-step');
+const codexAccountTitle = requiredElement<HTMLElement>('#codex-account-title');
+const codexAccountDetail = requiredElement<HTMLElement>('#codex-account-detail');
+const codexLoginButton = requiredElement<HTMLButtonElement>('#codex-login');
+const codexProjectStep = requiredElement<HTMLElement>('#codex-project-step');
+const codexProjectTitle = requiredElement<HTMLElement>('#codex-project-title');
+const codexProjectDetail = requiredElement<HTMLElement>('#codex-project-detail');
+const codexDeviceLogin = requiredElement<HTMLElement>('#codex-device-login');
+const codexDeviceCode = requiredElement<HTMLElement>('#codex-device-code');
+const codexCopyDeviceCode = requiredElement<HTMLButtonElement>('#codex-copy-device-code');
+const codexUsageCard = requiredElement<HTMLElement>('#codex-usage-card');
+const codexPlan = requiredElement<HTMLElement>('#codex-plan');
+const codexQuotaLabel = requiredElement<HTMLElement>('#codex-quota-label');
+const codexQuotaValue = requiredElement<HTMLElement>('#codex-quota-value');
+const codexQuotaBar = requiredElement<HTMLElement>('#codex-quota-bar');
+const codexDeviceLoginAction = requiredElement<HTMLButtonElement>('#codex-device-login-action');
+const codexCancelLogin = requiredElement<HTMLButtonElement>('#codex-cancel-login');
+const codexLogout = requiredElement<HTMLButtonElement>('#codex-logout');
+const codexLaunchNew = requiredElement<HTMLButtonElement>('#codex-launch-new');
+const codexLaunchContinue = requiredElement<HTMLButtonElement>('#codex-launch-continue');
+const codexLaunchResume = requiredElement<HTMLButtonElement>('#codex-launch-resume');
+const codexBoundaryNote = requiredElement<HTMLElement>('#codex-boundary-note');
 
 const connectionGlossary = requiredElement<HTMLElement>('.connection-glossary');
 
@@ -446,6 +485,8 @@ brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.ur
 
 const terminalViews = new Map<string, TerminalView>();
 const claudeStates = new Map<string, ClaudeProjectState>();
+const codexStates = new Map<string, CodexProjectState>();
+const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
 /** Conversation history per project folder, keyed by the lower-cased folder path. */
 const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
 const expandedFolders = new Set<string>();
@@ -455,6 +496,8 @@ const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
 const historyLoadsInFlight = new Set<string>();
 let dragDepth = 0;
 let claudeRequestGeneration = 0;
+let codexRequestGeneration = 0;
+let runtimeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
 let connectionEnvironmentReady = false;
@@ -470,6 +513,8 @@ let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
 let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
 let launchInProgress = false;
+let codexOperationInProgress = false;
+let codexAutoLaunchSessionId = '';
 const routeHealthNotifications = new Map<string, string>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerOperationInProgress = false;
@@ -869,6 +914,11 @@ const projectNameFromPath = (directoryPath: string): string => {
 
 const activeStatus = (): TerminalStatus | undefined =>
   workspaceState.sessions.find((status) => status.id === workspaceState.activeSessionId);
+
+const activeDevelopmentRuntime = (): DevelopmentRuntime => {
+  const status = activeStatus();
+  return status ? (developmentRuntimeStates.get(status.id)?.runtime ?? 'claude') : 'claude';
+};
 
 const chatConfigInput = (): SaveChatConfigInput => {
   const credential = chatCredential.value.trim();
@@ -2392,6 +2442,185 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   openConnectionAdvancedButton.focus();
 };
 
+const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => {
+  developmentRuntimeStates.set(state.sessionId, state);
+  if (state.sessionId !== workspaceState.activeSessionId) {
+    return;
+  }
+  const codexSelected = state.runtime === 'codex';
+  document.body.dataset.agentRuntime = state.runtime;
+  runtimeClaude.checked = !codexSelected;
+  runtimeCodex.checked = codexSelected;
+  runtimePicker.disabled = false;
+  workbenchTabs.hidden = codexSelected;
+  workbenchTitle.textContent = codexSelected ? 'Codex 工作台' : 'Claude 工作台';
+  workbenchTriggerLabel.textContent = codexSelected ? 'Codex 工作台' : 'Claude 工作台';
+  workbenchTrigger.title = codexSelected ? 'Codex 工作台' : 'Claude 工作台';
+  claudeWorkbench.setAttribute(
+    'aria-label',
+    codexSelected ? 'Codex 可视化工作台' : 'Claude 可视化工作台',
+  );
+  if (codexSelected) {
+    const codexState = codexStates.get(state.sessionId);
+    if (codexState) {
+      renderCodexState(codexState);
+    } else {
+      runAgentLabel.textContent = '正在检查 Codex';
+      runClaudeButton.disabled = true;
+      void loadCodexState(state.sessionId);
+    }
+  } else {
+    const claudeState = claudeStates.get(state.sessionId);
+    if (claudeState) {
+      renderClaudeState(claudeState);
+    } else {
+      runAgentLabel.textContent = '新建安全会话';
+      void loadClaudeState(state.sessionId);
+    }
+  }
+};
+
+const renderCodexState = (state: CodexProjectState): void => {
+  codexStates.set(state.sessionId, state);
+  if (
+    state.sessionId !== workspaceState.activeSessionId ||
+    activeDevelopmentRuntime() !== 'codex'
+  ) {
+    return;
+  }
+
+  const { account, installation, login, rateLimits } = state;
+  const installed = installation.installed;
+  const accountReady = Boolean(account) || !state.requiresOpenaiAuth;
+  const ready = installed && accountReady;
+  const waitingForLogin = login.phase === 'waiting' || login.phase === 'starting';
+
+  codexInstallStep.dataset.state = installed ? 'ready' : 'error';
+  codexInstallTitle.textContent = installed
+    ? `Codex CLI ${installation.version ?? '已安装'}`
+    : '需要安装 Codex CLI';
+  codexInstallDetail.textContent = installation.message;
+  codexInstallButton.hidden = installed && !installation.updateAvailable;
+  codexInstallButton.textContent = installation.updateAvailable ? '更新' : '安装';
+  codexInstallButton.disabled = codexOperationInProgress;
+
+  codexAccountStep.dataset.state = accountReady
+    ? 'ready'
+    : login.phase === 'error'
+      ? 'error'
+      : 'pending';
+  codexAccountTitle.textContent = account
+    ? account.type === 'chatgpt'
+      ? 'ChatGPT 账号已连接'
+      : account.type === 'apiKey'
+        ? 'Codex 已使用 API Key'
+        : 'Codex 账号已连接'
+    : waitingForLogin
+      ? '等待完成 ChatGPT 登录'
+      : '尚未登录 ChatGPT';
+  codexAccountDetail.textContent = account
+    ? [account.email, account.planType].filter(Boolean).join(' · ') || '凭据由 Codex 官方管理'
+    : (login.error ?? '浏览器登录可直接使用 ChatGPT 订阅额度');
+  codexLoginButton.hidden = accountReady || waitingForLogin;
+  codexLoginButton.disabled = !installed || codexOperationInProgress;
+
+  codexProjectStep.dataset.state = ready ? 'ready' : 'pending';
+  codexProjectTitle.textContent = ready ? '当前项目已就绪' : '等待环境与账号就绪';
+  codexProjectDetail.textContent = ready
+    ? `将在 ${projectNameFromPath(state.cwd)} 中以工作区写入沙箱启动`
+    : '完成安装和登录后，不需要再填写 Token 或配置路由';
+
+  codexDeviceLogin.hidden = !(
+    login.phase === 'waiting' &&
+    login.method === 'device-code' &&
+    login.userCode
+  );
+  codexDeviceCode.textContent = login.userCode ?? '—';
+  codexDeviceLoginAction.hidden = accountReady || waitingForLogin || !installed;
+  codexCancelLogin.hidden = !waitingForLogin;
+  codexLogout.hidden = !account;
+
+  codexUsageCard.hidden = !account;
+  codexPlan.textContent =
+    account?.type === 'chatgpt'
+      ? `${account.planType ? account.planType.toUpperCase() : 'ChatGPT'} · ${account.email ?? '已登录'}`
+      : account?.type === 'apiKey'
+        ? 'OpenAI API Key'
+        : 'Codex 账号';
+  const quota = rateLimits?.primary;
+  codexQuotaLabel.textContent = quota?.windowDurationMins
+    ? `${quota.windowDurationMins} 分钟窗口`
+    : '当前额度窗口';
+  codexQuotaValue.textContent = quota ? `已用 ${quota.usedPercent.toFixed(0)}%` : '等待额度数据';
+  codexQuotaBar.style.width = `${quota?.usedPercent ?? 0}%`;
+
+  const actionLabel = codexOperationInProgress
+    ? '正在准备 Codex…'
+    : !installed
+      ? '一键安装、登录并启动'
+      : !accountReady
+        ? '使用 ChatGPT 登录并启动'
+        : '新建 Codex 安全会话';
+  codexPrimaryAction.textContent = actionLabel;
+  codexPrimaryAction.disabled = codexOperationInProgress || waitingForLogin;
+  runAgentLabel.textContent = ready ? '新建 Codex 会话' : '一键准备 Codex';
+  runClaudeButton.disabled = codexOperationInProgress || waitingForLogin;
+  runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
+  runClaudeButton.title = ready
+    ? '在当前项目启动官方 Codex 安全会话'
+    : '自动完成官方安装与 ChatGPT 登录';
+
+  for (const button of [codexLaunchNew, codexLaunchContinue, codexLaunchResume]) {
+    button.disabled = !ready || codexOperationInProgress || launchInProgress;
+  }
+
+  routeHealth.hidden = true;
+  footerConnection.disabled = false;
+  footerConnection.dataset.tone = ready ? 'success' : 'warning';
+  footerConnectionLabel.textContent = ready
+    ? account?.type === 'chatgpt'
+      ? 'ChatGPT 已连接'
+      : 'Codex 已连接'
+    : 'Codex 待准备';
+  footerContextLabel.textContent = quota ? `额度 ${quota.usedPercent.toFixed(0)}%` : '额度 —';
+  footerContextRing.style.setProperty('--context-progress', `${quota?.usedPercent ?? 0}%`);
+  footerModel.textContent = '模型 Codex 自动';
+  footerModel.disabled = true;
+  footerMode.textContent = '模式 工作区写入';
+  footerMode.disabled = true;
+  codexBoundaryNote.textContent = state.warning
+    ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
+    : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
+};
+
+const loadCodexState = async (sessionId: string): Promise<void> => {
+  const generation = ++codexRequestGeneration;
+  try {
+    const state = await window.controlPanel.getCodexProjectState(sessionId);
+    if (generation === codexRequestGeneration) {
+      renderCodexState(state);
+    }
+  } catch {
+    if (generation === codexRequestGeneration) {
+      showToast('无法读取 Codex 工作台状态。', 'error');
+    }
+  }
+};
+
+const loadDevelopmentRuntime = async (sessionId: string): Promise<void> => {
+  const generation = ++runtimeRequestGeneration;
+  try {
+    const state = await window.controlPanel.getDevelopmentRuntime(sessionId);
+    if (generation === runtimeRequestGeneration) {
+      renderDevelopmentRuntimeState(state);
+    }
+  } catch {
+    if (generation === runtimeRequestGeneration) {
+      showToast('无法读取当前项目的开发引擎。', 'error');
+    }
+  }
+};
+
 const renderClaudeState = (state: ClaudeProjectState): void => {
   claudeStates.set(state.sessionId, state);
   if (state.permissionMode === undefined) {
@@ -2405,6 +2634,15 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   }
 
   const { config, installation, metrics } = state;
+  if (activeDevelopmentRuntime() !== 'claude') {
+    if (configFormSessionId !== state.sessionId) {
+      populateClaudeConfigForm(state);
+    }
+    renderProviderPicker();
+    syncConnectionInteractivity();
+    return;
+  }
+  runAgentLabel.textContent = '新建安全会话';
   const installationReady = installation.security === 'ready';
   connectionEnvironmentReady = installationReady;
   environmentSetup.hidden = installationReady;
@@ -3806,8 +4044,12 @@ const setWorkbenchOpen = (open: boolean): void => {
   workbenchScrim.classList.toggle('workbench-scrim--visible', open);
   workbenchTrigger.setAttribute('aria-expanded', String(open));
   if (open && workspaceState.activeSessionId) {
-    void loadClaudeState(workspaceState.activeSessionId);
-    void loadConnectionAdvice();
+    if (activeDevelopmentRuntime() === 'codex') {
+      void loadCodexState(workspaceState.activeSessionId);
+    } else {
+      void loadClaudeState(workspaceState.activeSessionId);
+      void loadConnectionAdvice();
+    }
   }
 };
 
@@ -5669,6 +5911,7 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   terminalProject.title = status.cwd;
   workbenchScope.textContent = scopedTitle;
   workbenchScope.dataset.titleTyping = typing;
+  runtimePicker.disabled = false;
   setComposerEnabled(status.phase === 'running');
 };
 
@@ -5700,6 +5943,16 @@ const renderNoActiveSession = (): void => {
   terminalProject.dataset.titleTyping = 'false';
   workbenchScope.textContent = '未打开项目';
   workbenchScope.dataset.titleTyping = 'false';
+  workbenchTabs.hidden = false;
+  workbenchTitle.textContent = 'Claude 工作台';
+  workbenchTriggerLabel.textContent = 'Claude 工作台';
+  workbenchTrigger.title = 'Claude 工作台';
+  claudeWorkbench.setAttribute('aria-label', 'Claude 可视化工作台');
+  setWorkbenchOpen(false);
+  runtimePicker.disabled = true;
+  runtimeClaude.checked = true;
+  runtimeCodex.checked = false;
+  document.body.dataset.agentRuntime = 'claude';
   setComposerEnabled(false);
 };
 
@@ -6209,6 +6462,16 @@ function renderWorkspace(state: WorkspaceState): void {
       claudeStates.delete(sessionId);
     }
   }
+  for (const sessionId of codexStates.keys()) {
+    if (!validSessionIds.has(sessionId)) {
+      codexStates.delete(sessionId);
+    }
+  }
+  for (const sessionId of developmentRuntimeStates.keys()) {
+    if (!validSessionIds.has(sessionId)) {
+      developmentRuntimeStates.delete(sessionId);
+    }
+  }
 
   renderProjectList();
   const status = activeStatus();
@@ -6239,11 +6502,11 @@ function renderWorkspace(state: WorkspaceState): void {
     gatewayCandidates.replaceChildren();
     gatewayDiagnosticsSummary.textContent = '正在检查常见本地端口、命令和 Claude 设置…';
     gatewayCheckedAt.textContent = '等待首次检测';
-    const knownClaudeState = claudeStates.get(state.activeSessionId);
-    if (knownClaudeState) {
-      renderClaudeState(knownClaudeState);
+    const knownRuntimeState = developmentRuntimeStates.get(state.activeSessionId);
+    if (knownRuntimeState) {
+      renderDevelopmentRuntimeState(knownRuntimeState);
     } else if (state.activeSessionId) {
-      void loadClaudeState(state.activeSessionId);
+      void loadDevelopmentRuntime(state.activeSessionId);
     }
     if (state.activeSessionId) {
       void loadRouterManagement();
@@ -6375,6 +6638,194 @@ const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
     if (latest) {
       renderClaudeState(latest);
     }
+  }
+};
+
+const launchCodex = async (mode: CodexLaunchMode): Promise<void> => {
+  const status = activeStatus();
+  if (!status || launchInProgress || codexOperationInProgress) {
+    return;
+  }
+  launchInProgress = true;
+  const existingState = codexStates.get(status.id);
+  if (existingState) {
+    renderCodexState(existingState);
+  }
+  try {
+    terminalViews.get(status.id)?.terminal.clear();
+    const result = await window.controlPanel.launchCodex(status.id, mode);
+    renderCodexState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法启动 Codex。', 'error');
+      return;
+    }
+    showToast(
+      mode === 'new'
+        ? `已在 ${projectNameFromPath(status.cwd)} 启动 Codex`
+        : mode === 'continue'
+          ? '正在续接当前项目最近的 Codex 会话'
+          : '已打开 Codex 历史会话选择器',
+    );
+    if (mode === 'resume') {
+      terminalViews.get(status.id)?.terminal.focus();
+    } else {
+      requestComposerFocus(status.id);
+    }
+  } catch {
+    showToast('无法启动 Codex。', 'error');
+  } finally {
+    launchInProgress = false;
+    const latest = codexStates.get(status.id);
+    if (latest) {
+      renderCodexState(latest);
+    }
+  }
+};
+
+const installOrUpdateCodex = async (): Promise<CodexProjectState | undefined> => {
+  const status = activeStatus();
+  if (!status || codexOperationInProgress) {
+    return undefined;
+  }
+  codexOperationInProgress = true;
+  const existing = codexStates.get(status.id);
+  if (existing) {
+    renderCodexState(existing);
+  }
+  try {
+    const result = await window.controlPanel.installOrUpdateCodex(status.id);
+    renderCodexState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? 'Codex 安装失败。', 'error');
+      return undefined;
+    }
+    showToast(`Codex CLI ${result.state.installation.version ?? ''} 已就绪。`);
+    return result.state;
+  } catch {
+    showToast('Codex 安装失败，请检查网络后重试。', 'error');
+    return undefined;
+  } finally {
+    codexOperationInProgress = false;
+    const latest = codexStates.get(status.id);
+    if (latest) {
+      renderCodexState(latest);
+    }
+  }
+};
+
+const startCodexLogin = async (
+  method: CodexLoginMethod,
+  launchAfterLogin: boolean,
+): Promise<void> => {
+  const status = activeStatus();
+  if (!status || codexOperationInProgress) {
+    return;
+  }
+  codexOperationInProgress = true;
+  if (launchAfterLogin) {
+    codexAutoLaunchSessionId = status.id;
+  }
+  const existing = codexStates.get(status.id);
+  if (existing) {
+    renderCodexState(existing);
+  }
+  try {
+    const result = await window.controlPanel.startCodexLogin(status.id, method);
+    renderCodexState(result.state);
+    if (!result.ok) {
+      codexAutoLaunchSessionId = '';
+      showToast(result.error ?? '无法启动 ChatGPT 登录。', 'error');
+      return;
+    }
+    showToast(
+      method === 'device-code'
+        ? '浏览器已打开，请输入工作台中显示的设备验证码。'
+        : '浏览器已打开；登录完成后会自动回到当前项目。',
+    );
+  } catch {
+    codexAutoLaunchSessionId = '';
+    showToast('无法启动 ChatGPT 登录。', 'error');
+  } finally {
+    codexOperationInProgress = false;
+    const latest = codexStates.get(status.id);
+    if (latest) {
+      renderCodexState(latest);
+      if (
+        codexAutoLaunchSessionId === latest.sessionId &&
+        latest.account &&
+        latest.sessionId === workspaceState.activeSessionId &&
+        activeDevelopmentRuntime() === 'codex'
+      ) {
+        codexAutoLaunchSessionId = '';
+        void launchCodex('new');
+      }
+    }
+  }
+};
+
+const prepareAndLaunchCodex = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status || codexOperationInProgress || launchInProgress) {
+    return;
+  }
+  let state = codexStates.get(status.id);
+  if (!state) {
+    try {
+      state = await window.controlPanel.getCodexProjectState(status.id);
+      renderCodexState(state);
+    } catch {
+      showToast('无法读取 Codex 环境。', 'error');
+      return;
+    }
+  }
+  if (!state.installation.installed) {
+    state = await installOrUpdateCodex();
+    if (!state) {
+      return;
+    }
+  }
+  if (state.requiresOpenaiAuth && !state.account) {
+    await startCodexLogin('browser', true);
+    return;
+  }
+  await launchCodex('new');
+};
+
+const switchDevelopmentRuntime = async (runtime: DevelopmentRuntime): Promise<void> => {
+  const status = activeStatus();
+  if (!status || runtimePicker.disabled) {
+    return;
+  }
+  runtimePicker.disabled = true;
+  try {
+    const state = await window.controlPanel.setDevelopmentRuntime(status.id, runtime);
+    const normalizedCwd = state.cwd.toLocaleLowerCase();
+    for (const session of workspaceState.sessions) {
+      if (session.cwd.toLocaleLowerCase() === normalizedCwd) {
+        developmentRuntimeStates.set(session.id, {
+          ...state,
+          sessionId: session.id,
+        });
+      }
+    }
+    renderDevelopmentRuntimeState({
+      ...state,
+      sessionId: status.id,
+    });
+    if (runtime === 'codex') {
+      await loadCodexState(status.id);
+      setWorkbenchOpen(true);
+    } else {
+      await loadClaudeState(status.id);
+    }
+    showToast(runtime === 'codex' ? '当前项目已切换到 Codex。' : '当前项目已切换到 Claude Code。');
+  } catch (error) {
+    const current = developmentRuntimeStates.get(status.id)?.runtime ?? 'claude';
+    runtimeClaude.checked = current === 'claude';
+    runtimeCodex.checked = current === 'codex';
+    showToast(error instanceof Error ? error.message : '无法切换开发引擎。', 'error');
+  } finally {
+    runtimePicker.disabled = false;
   }
 };
 
@@ -6628,6 +7079,19 @@ window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
   }
 });
 window.controlPanel.onClaudeState(renderClaudeState);
+window.controlPanel.onCodexState((state) => {
+  renderCodexState(state);
+  if (
+    codexAutoLaunchSessionId === state.sessionId &&
+    state.account &&
+    state.sessionId === workspaceState.activeSessionId &&
+    activeDevelopmentRuntime() === 'codex' &&
+    !codexOperationInProgress
+  ) {
+    codexAutoLaunchSessionId = '';
+    void launchCodex('new');
+  }
+});
 window.controlPanel.onWorkspaceState(renderWorkspace);
 window.controlPanel.onChatStream(handleChatStream);
 
@@ -6635,7 +7099,21 @@ chooseDirectoryButton.addEventListener('click', () => {
   void openDirectoryPicker();
 });
 runClaudeButton.addEventListener('click', () => {
-  void launchClaude('new');
+  if (activeDevelopmentRuntime() === 'codex') {
+    void prepareAndLaunchCodex();
+  } else {
+    void launchClaude('new');
+  }
+});
+runtimeClaude.addEventListener('change', () => {
+  if (runtimeClaude.checked) {
+    void switchDevelopmentRuntime('claude');
+  }
+});
+runtimeCodex.addEventListener('change', () => {
+  if (runtimeCodex.checked) {
+    void switchDevelopmentRuntime('codex');
+  }
 });
 routeHealthAction.addEventListener('click', () => {
   setWorkbenchOpen(false);
@@ -6686,7 +7164,9 @@ workbenchTrigger.addEventListener('click', () => {
 });
 workbenchShortcuts.addEventListener('click', () => {
   setWorkbenchOpen(true);
-  selectWorkbenchPage('shortcuts');
+  if (activeDevelopmentRuntime() === 'claude') {
+    selectWorkbenchPage('shortcuts');
+  }
 });
 terminalThemeSelect.addEventListener('change', () => {
   const themeId = terminalThemeSelect.value;
@@ -6894,6 +7374,10 @@ artifactNetworkAllowed.addEventListener('change', () => {
     });
 });
 footerConnection.addEventListener('click', () => {
+  if (activeDevelopmentRuntime() === 'codex') {
+    setWorkbenchOpen(true);
+    return;
+  }
   if (connectionTestInProgress) {
     return;
   }
@@ -6965,6 +7449,97 @@ launchContinueButton.addEventListener('click', () => {
 });
 launchResumeButton.addEventListener('click', () => {
   void launchClaude('resume');
+});
+codexPrimaryAction.addEventListener('click', () => {
+  void prepareAndLaunchCodex();
+});
+codexInstallButton.addEventListener('click', () => {
+  void installOrUpdateCodex();
+});
+codexLoginButton.addEventListener('click', () => {
+  void startCodexLogin('browser', false);
+});
+codexDeviceLoginAction.addEventListener('click', () => {
+  void startCodexLogin('device-code', true);
+});
+codexCancelLogin.addEventListener('click', () => {
+  const status = activeStatus();
+  if (!status || codexOperationInProgress) {
+    return;
+  }
+  codexOperationInProgress = true;
+  codexAutoLaunchSessionId = '';
+  void window.controlPanel
+    .cancelCodexLogin(status.id)
+    .then((result) => {
+      renderCodexState(result.state);
+      if (!result.ok) {
+        showToast(result.error ?? '无法取消 Codex 登录。', 'error');
+      }
+    })
+    .catch(() => {
+      showToast('无法取消 Codex 登录。', 'error');
+    })
+    .finally(() => {
+      codexOperationInProgress = false;
+      const latest = codexStates.get(status.id);
+      if (latest) {
+        renderCodexState(latest);
+      }
+    });
+});
+codexLogout.addEventListener('click', () => {
+  const status = activeStatus();
+  if (!status || codexOperationInProgress) {
+    return;
+  }
+  void requestConfirmation({
+    confirmLabel: '退出账号',
+    message: '这会让 Codex CLI 与共用其登录缓存的官方客户端退出当前账号，是否继续？',
+    title: '退出 Codex 账号',
+  }).then((confirmed) => {
+    if (!confirmed) {
+      return;
+    }
+    codexOperationInProgress = true;
+    void window.controlPanel
+      .logoutCodex(status.id)
+      .then((result) => {
+        renderCodexState(result.state);
+        showToast(
+          result.ok ? '已退出 Codex 账号。' : (result.error ?? '退出失败。'),
+          result.ok ? 'success' : 'error',
+        );
+      })
+      .catch(() => {
+        showToast('无法退出 Codex 账号。', 'error');
+      })
+      .finally(() => {
+        codexOperationInProgress = false;
+        const latest = codexStates.get(status.id);
+        if (latest) {
+          renderCodexState(latest);
+        }
+      });
+  });
+});
+codexCopyDeviceCode.addEventListener('click', () => {
+  const code = codexDeviceCode.textContent?.trim();
+  if (!code || code === '—') {
+    return;
+  }
+  void window.controlPanel.writeClipboardText(code).then((copied) => {
+    showToast(copied ? '设备验证码已复制。' : '无法复制设备验证码。', copied ? 'success' : 'error');
+  });
+});
+codexLaunchNew.addEventListener('click', () => {
+  void launchCodex('new');
+});
+codexLaunchContinue.addEventListener('click', () => {
+  void launchCodex('continue');
+});
+codexLaunchResume.addEventListener('click', () => {
+  void launchCodex('resume');
 });
 claudePreset.addEventListener('change', () => {
   applyPresetUi(claudePreset.value as ClaudePreset, false);

@@ -16,7 +16,7 @@ interface CommandOutput {
   stdout: string;
 }
 
-const runProcess = (
+export const runProcess = (
   executable: string,
   argumentsList: string[],
   environment: NodeJS.ProcessEnv,
@@ -86,7 +86,7 @@ const runProcess = (
     }
   });
 
-const resolveWindowsCommand = async (
+export const resolveWindowsCommand = async (
   command: string,
   environment: NodeJS.ProcessEnv,
   cwd?: string,
@@ -112,6 +112,57 @@ const resolveWindowsCommand = async (
   return resolved;
 };
 
+export interface WindowsCommandInvocation {
+  argumentsPrefix: string[];
+  executable: string;
+  source: string;
+}
+
+export const windowsCommandInvocationForPath = (
+  resolved: string,
+  command = path.basename(resolved, path.extname(resolved)),
+): WindowsCommandInvocation => {
+  if (!path.isAbsolute(resolved)) {
+    throw new Error(`${command} 命令路径无效。`);
+  }
+  const extension = path.extname(resolved).toLowerCase();
+  if (extension === '.ps1') {
+    return {
+      argumentsPrefix: [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        resolved,
+      ],
+      executable: 'powershell.exe',
+      source: resolved,
+    };
+  }
+  if (extension === '.cmd' || extension === '.bat') {
+    const powershellShim = `${resolved.slice(0, -extension.length)}.ps1`;
+    if (!existsSync(powershellShim)) {
+      throw new Error(`${command} 只有批处理启动器，无法安全传递参数。请重新安装对应工具。`);
+    }
+    return windowsCommandInvocationForPath(powershellShim, command);
+  }
+  return { argumentsPrefix: [], executable: resolved, source: resolved };
+};
+
+export const resolveWindowsCommandInvocation = async (
+  command: string,
+  options: Pick<WindowsCommandOptions, 'cwd'> = {},
+): Promise<WindowsCommandInvocation> => {
+  const environment: NodeJS.ProcessEnv = { ...process.env };
+  delete environment.ELECTRON_RUN_AS_NODE;
+  return windowsCommandInvocationForPath(
+    await resolveWindowsCommand(command, environment, options.cwd),
+    command,
+  );
+};
+
 /**
  * Resolves Windows `.ps1` shims and native executables first, then invokes the target with a closed
  * stdin handle. Arguments are always passed as an argv array and never interpolated into shell
@@ -125,37 +176,13 @@ export const runWindowsCommand = async (
   const environment: NodeJS.ProcessEnv = { ...process.env };
   delete environment.ELECTRON_RUN_AS_NODE;
   const resolved = await resolveWindowsCommand(command, environment, options.cwd);
-  const extension = path.extname(resolved).toLowerCase();
-  let executable = resolved;
-  let finalArguments = argumentsList;
-  if (extension === '.ps1') {
-    executable = 'powershell.exe';
-    finalArguments = [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      resolved,
-      ...argumentsList,
-    ];
-  } else if (extension === '.cmd' || extension === '.bat') {
-    const powershellShim = `${resolved.slice(0, -extension.length)}.ps1`;
-    if (!existsSync(powershellShim)) {
-      throw new Error(`${command} 只有批处理启动器，无法安全传递参数。请重新安装对应工具。`);
-    }
-    executable = 'powershell.exe';
-    finalArguments = [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      powershellShim,
-      ...argumentsList,
-    ];
-  }
-  return (await runProcess(executable, finalArguments, environment, options)).stdout;
+  const invocation = windowsCommandInvocationForPath(resolved, command);
+  return (
+    await runProcess(
+      invocation.executable,
+      [...invocation.argumentsPrefix, ...argumentsList],
+      environment,
+      options,
+    )
+  ).stdout;
 };

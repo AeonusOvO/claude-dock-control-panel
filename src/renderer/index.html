@@ -145,6 +145,24 @@
             </div>
           </section>
 
+          <fieldset class="runtime-picker" id="runtime-picker">
+            <legend>当前项目开发引擎</legend>
+            <label class="runtime-option" for="runtime-claude">
+              <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
+              <span>
+                <strong>Claude Code</strong>
+                <small>原生体验与现有路由接入</small>
+              </span>
+            </label>
+            <label class="runtime-option" for="runtime-codex">
+              <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
+              <span>
+                <strong>Codex</strong>
+                <small>官方 ChatGPT 订阅登录</small>
+              </span>
+            </label>
+          </fieldset>
+
           <section class="project-section" aria-labelledby="project-heading">
             <div class="section-label">
               <span id="project-heading">项目与对话</span>
@@ -174,7 +192,7 @@
                 <path d="m8 6 6 6-6 6" />
                 <path d="M15 18h3" />
               </svg>
-              新建安全会话
+              <span id="run-agent-label">新建安全会话</span>
             </button>
             <div class="button-row">
               <button class="button button--quiet" id="restart-terminal" type="button">
@@ -836,7 +854,7 @@
               aria-controls="claude-workbench"
             >
               <span class="workbench-trigger__dot" aria-hidden="true"></span>
-              Claude 工作台
+              <span id="workbench-trigger-label">Claude 工作台</span>
             </button>
             <label class="terminal-theme-picker" for="terminal-theme">
               <span>主题</span>
@@ -936,7 +954,7 @@
           <header class="workbench-header">
             <div>
               <span class="workbench-eyebrow" id="workbench-scope">当前对话</span>
-              <h2>Claude 工作台</h2>
+              <h2 id="workbench-title">Claude 工作台</h2>
             </div>
             <button
               class="workbench-close"
@@ -948,7 +966,7 @@
             </button>
           </header>
 
-          <nav class="workbench-tabs" aria-label="Claude 工作台页面">
+          <nav class="workbench-tabs" id="workbench-tabs" aria-label="Claude 工作台页面">
             <button
               class="workbench-tab workbench-tab--active"
               data-workbench-tab="session"
@@ -962,7 +980,7 @@
             </button>
           </nav>
 
-          <div class="workbench-pages">
+          <div class="workbench-pages workbench-pages--claude">
             <section class="workbench-page workbench-page--active" data-workbench-page="session">
               <div class="security-banner" id="claude-security-banner" data-tone="checking">
                 <span class="security-banner__icon" aria-hidden="true">✓</span>
@@ -1190,6 +1208,93 @@
                 </div>
               </dl>
             </section>
+          </div>
+
+          <div class="codex-workbench-page" id="codex-workbench-page">
+            <section class="codex-hero" aria-labelledby="codex-hero-title">
+              <span class="step-kicker">官方 ChatGPT 订阅通道</span>
+              <h3 id="codex-hero-title">从账号登录直接开始开发</h3>
+              <p>
+                ClaudeDock 负责安装、登录和项目启动；账号令牌、续期与执行沙箱仍由官方 Codex 管理。
+              </p>
+              <button class="launch-primary" id="codex-primary-action" type="button">
+                一键准备并启动
+              </button>
+            </section>
+
+            <ol class="codex-readiness" aria-label="Codex 准备进度">
+              <li id="codex-install-step" data-state="pending">
+                <span class="codex-readiness__index">1</span>
+                <div>
+                  <strong id="codex-install-title">正在检查 Codex CLI</strong>
+                  <small id="codex-install-detail">核对官方 Windows 安装与版本</small>
+                </div>
+                <button id="codex-install" type="button">安装</button>
+              </li>
+              <li id="codex-account-step" data-state="pending">
+                <span class="codex-readiness__index">2</span>
+                <div>
+                  <strong id="codex-account-title">等待 ChatGPT 登录</strong>
+                  <small id="codex-account-detail"
+                    >支持 Plus、Pro、Business、Edu 与 Enterprise</small
+                  >
+                </div>
+                <button id="codex-login" type="button">登录</button>
+              </li>
+              <li id="codex-project-step" data-state="pending">
+                <span class="codex-readiness__index">3</span>
+                <div>
+                  <strong id="codex-project-title">项目尚未就绪</strong>
+                  <small id="codex-project-detail">完成前两步后即可在当前目录开发</small>
+                </div>
+              </li>
+            </ol>
+
+            <section class="codex-device-login" id="codex-device-login" hidden>
+              <div>
+                <span>设备验证码</span>
+                <strong id="codex-device-code">—</strong>
+              </div>
+              <button id="codex-copy-device-code" type="button">复制验证码</button>
+            </section>
+
+            <section class="codex-usage-card" id="codex-usage-card" hidden>
+              <div>
+                <span>当前账号</span>
+                <strong id="codex-plan">ChatGPT</strong>
+              </div>
+              <div class="codex-usage-meter">
+                <span
+                  ><span id="codex-quota-label">当前窗口</span><b id="codex-quota-value">—</b></span
+                >
+                <div aria-hidden="true"><i id="codex-quota-bar"></i></div>
+              </div>
+            </section>
+
+            <div class="codex-secondary-actions">
+              <button id="codex-device-login-action" type="button">改用设备码登录</button>
+              <button id="codex-cancel-login" type="button" hidden>取消登录</button>
+              <button id="codex-logout" type="button" hidden>退出 Codex 账号</button>
+            </div>
+
+            <div class="launch-actions codex-launch-actions">
+              <button class="launch-primary" id="codex-launch-new" type="button">
+                新建安全会话
+              </button>
+              <div>
+                <button class="launch-secondary" id="codex-launch-continue" type="button">
+                  继续最近会话
+                </button>
+                <button class="launch-secondary" id="codex-launch-resume" type="button">
+                  选择历史会话
+                </button>
+              </div>
+            </div>
+
+            <p class="codex-boundary-note" id="codex-boundary-note">
+              首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。
+              App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。
+            </p>
           </div>
         </aside>
       </section>

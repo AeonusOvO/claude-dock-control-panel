@@ -30,6 +30,12 @@ import type {
   ChatAttachmentImportInput,
   ChatMessage,
   ChatStartInput,
+  CodexLaunchMode,
+  CodexLoginMethod,
+  CodexLoginStartResult,
+  CodexOperationResult,
+  DevelopmentRuntime,
+  DevelopmentRuntimeState,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
@@ -57,6 +63,8 @@ import {
   isValidPluginId,
 } from './claude-plugin-manager';
 import { ClaudeRuntime } from './claude-runtime';
+import { CodexRuntime } from './codex-runtime';
+import { AgentRuntimeStore } from './agent-runtime-store';
 import {
   ClaudeSessionManager,
   isValidClaudeSessionId,
@@ -76,6 +84,7 @@ registerArtifactScheme();
 
 let isQuitting = false;
 let claudeRuntime: ClaudeRuntime | null = null;
+let codexRuntime: CodexRuntime | null = null;
 let mainWindow: BrowserWindow | null = null;
 let minimizedNoticeShown = false;
 let tray: Tray | null = null;
@@ -177,7 +186,9 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
 
 const workspace = new TerminalWorkspace(
   (sessionId, data) => {
-    const filtered = claudeRuntime?.consumeTerminalOutput(sessionId, data) ?? data;
+    const claudeFiltered = claudeRuntime?.consumeTerminalOutput(sessionId, data) ?? data;
+    const filtered =
+      codexRuntime?.consumeTerminalOutput(sessionId, claudeFiltered) ?? claudeFiltered;
     if (filtered) {
       queueTerminalOutput(sessionId, filtered);
     }
@@ -190,6 +201,7 @@ const workspace = new TerminalWorkspace(
 );
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
+const agentRuntimeStore = new AgentRuntimeStore(app.getPath('userData'));
 workspace.setTheme(workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
 const sessionManager = new ClaudeSessionManager();
 const pluginManager = new ClaudePluginManager(homedir());
@@ -412,10 +424,11 @@ const activateProject = (sessionId: string): WorkspaceState => {
   return describeWorkspace(state);
 };
 
-/** Drops every runtime session bound to a folder so its Claude state does not leak into a reopen. */
+/** Drops every runtime session bound to a folder so agent state does not leak into a reopen. */
 const releaseRuntimeForSessions = (sessionIds: string[]): void => {
   for (const sessionId of sessionIds) {
     claudeRuntime?.closeSession(sessionId);
+    codexRuntime?.closeSession(sessionId);
   }
 };
 
@@ -548,11 +561,36 @@ const requireClaudeRuntime = (): ClaudeRuntime => {
   return claudeRuntime;
 };
 
+const requireCodexRuntime = (): CodexRuntime => {
+  if (!codexRuntime) {
+    throw new Error('Codex 工作台尚未初始化。');
+  }
+  return codexRuntime;
+};
+
+const DEVELOPMENT_RUNTIMES = new Set<DevelopmentRuntime>(['claude', 'codex']);
+
+const validateDevelopmentRuntime = (value: unknown): DevelopmentRuntime => {
+  if (typeof value !== 'string' || !DEVELOPMENT_RUNTIMES.has(value as DevelopmentRuntime)) {
+    throw new Error('开发引擎标识无效。');
+  }
+  return value as DevelopmentRuntime;
+};
+
 const validateClaudeLaunchMode = (mode: unknown): ClaudeLaunchMode => {
   if (mode !== 'new' && mode !== 'continue' && mode !== 'resume') {
     throw new Error('Claude 会话启动方式无效。');
   }
   return mode;
+};
+
+const validateCodexLaunchMode = (mode: unknown): CodexLaunchMode => validateClaudeLaunchMode(mode);
+
+const validateCodexLoginMethod = (method: unknown): CodexLoginMethod => {
+  if (method !== 'browser' && method !== 'device-code') {
+    throw new Error('Codex 登录方式无效。');
+  }
+  return method;
 };
 
 const CLAUDE_PERMISSION_MODES = new Set<ClaudePermissionMode>([
@@ -753,6 +791,16 @@ const claudeFailure = async (sessionId: string, error: unknown): Promise<ClaudeO
   const status = workspace.getStatus(sessionId);
   return {
     error: error instanceof Error ? error.message : 'Claude Code 操作失败。',
+    ok: false,
+    state: await runtime.getState(sessionId, status.cwd),
+  };
+};
+
+const codexFailure = async (sessionId: string, error: unknown): Promise<CodexOperationResult> => {
+  const runtime = requireCodexRuntime();
+  const status = workspace.getStatus(sessionId);
+  return {
+    error: error instanceof Error ? error.message : 'Codex 操作失败。',
     ok: false,
     state: await runtime.getState(sessionId, status.cwd),
   };
@@ -1120,6 +1168,40 @@ const registerIpc = (): void => {
     validateSender(event);
     return describeWorkspace();
   });
+  ipcMain.handle('runtime:get', (event, sessionId: unknown): DevelopmentRuntimeState => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return {
+      cwd: status.cwd,
+      runtime: agentRuntimeStore.get(status.cwd),
+      sessionId: validatedSessionId,
+    };
+  });
+  ipcMain.handle(
+    'runtime:set',
+    (event, sessionId: unknown, runtime: unknown): DevelopmentRuntimeState => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const selected = validateDevelopmentRuntime(runtime);
+      const status = workspace.getStatus(validatedSessionId);
+      const current = agentRuntimeStore.get(status.cwd);
+      if (current !== selected) {
+        const projectHasActiveAgent = workspace
+          .sessionIdsForDirectory(status.cwd)
+          .some(
+            (candidateSessionId) =>
+              requireClaudeRuntime().isActive(candidateSessionId) ||
+              requireCodexRuntime().isActive(candidateSessionId),
+          );
+        if (projectHasActiveAgent) {
+          throw new Error('请先结束当前开发会话，再切换开发引擎。');
+        }
+        agentRuntimeStore.set(status.cwd, selected);
+      }
+      return { cwd: status.cwd, runtime: selected, sessionId: validatedSessionId };
+    },
+  );
   ipcMain.handle('project:add', (event, directoryPath: unknown) => {
     validateSender(event);
     if (typeof directoryPath !== 'string') {
@@ -1143,6 +1225,7 @@ const registerIpc = (): void => {
     try {
       const validatedSessionId = validateSessionId(sessionId);
       requireClaudeRuntime().closeSession(validatedSessionId);
+      requireCodexRuntime().closeSession(validatedSessionId);
       // The folder stays remembered: closing one conversation is not "forget this project".
       const state = workspace.close(validatedSessionId);
       const active = state.sessions.find((session) => session.id === state.activeSessionId);
@@ -1186,6 +1269,7 @@ const registerIpc = (): void => {
       releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
       const state = workspace.closeDirectory(target);
       workspaceStore.removeProject(target);
+      agentRuntimeStore.remove(target);
       return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
@@ -1219,6 +1303,9 @@ const registerIpc = (): void => {
         }
         const resolved = resolveDirectory(validateProjectPath(projectPath));
         const runtime = requireClaudeRuntime();
+        if (agentRuntimeStore.get(resolved) !== 'claude') {
+          throw new Error('这是 Claude Code 历史会话，请先将该项目切换为 Claude Code。');
+        }
 
         // A stored conversation always gets its own terminal, so several can resume side by side.
         workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`);
@@ -1261,6 +1348,7 @@ const registerIpc = (): void => {
     try {
       const validatedSessionId = validateSessionId(sessionId);
       requireClaudeRuntime().setInactive(validatedSessionId);
+      requireCodexRuntime().setInactive(validatedSessionId);
       return operationFromStatus(workspace.restart(validatedSessionId));
     } catch (error) {
       return {
@@ -1275,6 +1363,7 @@ const registerIpc = (): void => {
     try {
       const validatedSessionId = validateSessionId(sessionId);
       requireClaudeRuntime().setInactive(validatedSessionId);
+      requireCodexRuntime().setInactive(validatedSessionId);
       return operationFromStatus(workspace.stop(validatedSessionId));
     } catch (error) {
       return {
@@ -1294,6 +1383,114 @@ const registerIpc = (): void => {
     const status = workspace.getStatus(validatedSessionId);
     return requireClaudeRuntime().getState(validatedSessionId, status.cwd);
   });
+  ipcMain.handle('codex:get-state', async (event, sessionId: unknown) => {
+    validateSender(event);
+    const validatedSessionId = validateSessionId(sessionId);
+    const status = workspace.getStatus(validatedSessionId);
+    return requireCodexRuntime().getState(validatedSessionId, status.cwd);
+  });
+  ipcMain.handle(
+    'codex:install-update',
+    async (event, sessionId: unknown): Promise<CodexOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireCodexRuntime().installOrUpdate(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        return codexFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'codex:login-start',
+    async (event, sessionId: unknown, method: unknown): Promise<CodexLoginStartResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        const prepared = await requireCodexRuntime().startLogin(
+          validatedSessionId,
+          status.cwd,
+          validateCodexLoginMethod(method),
+        );
+        let openedBrowser = false;
+        if (prepared.externalUrl) {
+          await shell.openExternal(prepared.externalUrl);
+          openedBrowser = true;
+        }
+        return { ok: true, openedBrowser, state: prepared.state };
+      } catch (error) {
+        return codexFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'codex:login-cancel',
+    async (event, sessionId: unknown): Promise<CodexOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireCodexRuntime().cancelLogin(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        return codexFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'codex:logout',
+    async (event, sessionId: unknown): Promise<CodexOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireCodexRuntime().logout(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        return codexFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'codex:launch',
+    async (event, sessionId: unknown, mode: unknown): Promise<CodexOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireCodexRuntime();
+      try {
+        if (agentRuntimeStore.get(status.cwd) !== 'codex') {
+          throw new Error('当前项目尚未选择 Codex 开发引擎。');
+        }
+        const prepared = await runtime.prepareLaunch(
+          validatedSessionId,
+          status.cwd,
+          validateCodexLaunchMode(mode),
+        );
+        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
+        if (terminalStatus.phase === 'error') {
+          throw new Error(terminalStatus.message ?? '无法为 Codex 启动安全终端。');
+        }
+        workspace.write(validatedSessionId, `${prepared.command}\r`);
+        return {
+          ok: true,
+          state: await runtime.getState(validatedSessionId, status.cwd),
+        };
+      } catch (error) {
+        runtime.setInactive(validatedSessionId);
+        return codexFailure(validatedSessionId, error);
+      }
+    },
+  );
   ipcMain.handle('claude:get-gateway-diagnostics', async (event, sessionId: unknown) => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
@@ -1750,6 +1947,9 @@ const registerIpc = (): void => {
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
       try {
+        if (agentRuntimeStore.get(status.cwd) !== 'claude') {
+          throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
+        }
         const prepared = await runtime.prepareLaunch(
           validatedSessionId,
           status.cwd,
@@ -2099,6 +2299,9 @@ if (!hasSingleInstanceLock) {
       requestPermissionModeFromScreen,
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
     );
+    codexRuntime = new CodexRuntime(app.getPath('userData'), (state) => {
+      mainWindow?.webContents.send('codex:state', state);
+    });
     registerIpc();
     createTray();
 
@@ -2139,5 +2342,6 @@ app.on('before-quit', () => {
   pendingPermissionModeProbes.clear();
   chatService.shutdown();
   claudeRuntime?.shutdown();
+  codexRuntime?.dispose();
   workspace.shutdown();
 });
