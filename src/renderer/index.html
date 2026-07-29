@@ -212,82 +212,9 @@
               发送第一条消息后，对话会保存在这台电脑上。
             </p>
           </section>
-          <div class="connection-heading">
-            <strong>独立模型接入</strong>
-            <span>此处配置只用于“对话”页，不会修改项目终端和 Claude Code 的接入。</span>
-          </div>
-          <form class="chat-config-form" id="chat-config-form">
-            <label class="field" for="chat-protocol">
-              <span>接口协议</span>
-              <select id="chat-protocol">
-                <option value="anthropic">Anthropic 消息接口</option>
-                <option value="openai">OpenAI 对话补全接口</option>
-              </select>
-            </label>
-            <label class="field" for="chat-base-url">
-              <span>接口地址</span>
-              <input
-                id="chat-base-url"
-                type="url"
-                maxlength="2048"
-                spellcheck="false"
-                placeholder="https://api.anthropic.com"
-                required
-              />
-              <small>会自动补全对应的 /v1/messages 或 /v1/chat/completions。</small>
-            </label>
-            <label class="field" for="chat-model">
-              <span>模型名称</span>
-              <input
-                id="chat-model"
-                type="text"
-                maxlength="256"
-                spellcheck="false"
-                placeholder="填写接口实际支持的模型 ID"
-                required
-              />
-            </label>
-            <label class="field" for="chat-auth-mode">
-              <span>认证方式</span>
-              <select id="chat-auth-mode">
-                <option value="apiKey">x-api-key</option>
-                <option value="bearer">Bearer Token</option>
-                <option value="none">无需认证</option>
-              </select>
-            </label>
-            <label class="field" for="chat-credential">
-              <span>接口凭据</span>
-              <input
-                id="chat-credential"
-                type="password"
-                maxlength="4096"
-                autocomplete="new-password"
-                placeholder="填写新凭据，留空则保留已保存凭据"
-              />
-              <small id="chat-credential-status">尚未保存凭据。</small>
-            </label>
-            <label class="router-choice" for="chat-clear-credential">
-              <input id="chat-clear-credential" type="checkbox" />
-              <span>保存时清除已有凭据</span>
-            </label>
-            <div class="chat-config-actions">
-              <button class="button button--secondary" id="test-chat-connection" type="button">
-                测试连接
-              </button>
-              <button class="button button--primary" id="save-chat-config" type="submit">
-                保存独立接入
-              </button>
-            </div>
-            <div
-              class="chat-connection-test"
-              id="chat-connection-test"
-              role="status"
-              aria-live="polite"
-            >
-              尚未测试当前配置。
-            </div>
-            <p class="chat-config-status" id="chat-config-status" role="status"></p>
-          </form>
+          <p class="rail-page__hint">
+            模型接入改到了「对话」右上角的设置按钮，随时打开小窗即可修改。
+          </p>
         </section>
 
         <section class="rail-page" data-rail-page="connection">
@@ -1302,6 +1229,20 @@
               </svg>
               新对话
             </button>
+            <button
+              class="chat-settings-trigger"
+              id="open-chat-settings"
+              type="button"
+              aria-label="模型接入设置"
+              title="模型接入设置"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="3.1" />
+                <path
+                  d="M19.4 13.2a7.7 7.7 0 0 0 0-2.4l1.9-1.4-1.9-3.3-2.3.8a7.6 7.6 0 0 0-2-1.2L14.7 3h-3.8l-.4 2.4a7.6 7.6 0 0 0-2 1.2l-2.3-.8L4.3 9.1l1.9 1.4a7.7 7.7 0 0 0 0 2.4l-1.9 1.4 1.9 3.3 2.3-.8a7.6 7.6 0 0 0 2 1.2l.4 2.4h3.8l.4-2.4a7.6 7.6 0 0 0 2-1.2l2.3.8 1.9-3.3-1.9-1.4Z"
+                />
+              </svg>
+            </button>
           </div>
         </header>
         <div class="chat-messages" id="chat-messages" aria-live="polite">
@@ -1543,6 +1484,103 @@
           </button>
         </footer>
       </div>
+    </dialog>
+
+    <dialog
+      class="chat-settings-dialog"
+      id="chat-settings-dialog"
+      aria-labelledby="chat-settings-dialog-title"
+    >
+      <form class="chat-config-form" id="chat-config-form">
+        <header>
+          <div>
+            <strong id="chat-settings-dialog-title">独立模型接入</strong>
+            <span>此处配置只用于“对话”页，不会修改项目终端和 Claude Code 的接入。</span>
+          </div>
+          <button
+            class="chat-settings-dialog__close"
+            id="close-chat-settings"
+            type="button"
+            aria-label="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <div class="chat-settings-dialog__body">
+          <label class="field" for="chat-protocol">
+            <span>接口协议</span>
+            <select id="chat-protocol">
+              <option value="anthropic">Anthropic 消息接口</option>
+              <option value="openai">OpenAI 对话补全接口</option>
+            </select>
+          </label>
+          <label class="field" for="chat-base-url">
+            <span>接口地址</span>
+            <input
+              id="chat-base-url"
+              type="url"
+              maxlength="2048"
+              spellcheck="false"
+              placeholder="https://api.anthropic.com"
+              required
+            />
+            <small>会自动补全对应的 /v1/messages 或 /v1/chat/completions。</small>
+          </label>
+          <label class="field" for="chat-model">
+            <span>模型名称</span>
+            <input
+              id="chat-model"
+              type="text"
+              maxlength="256"
+              spellcheck="false"
+              placeholder="填写接口实际支持的模型 ID"
+              required
+            />
+          </label>
+          <label class="field" for="chat-auth-mode">
+            <span>认证方式</span>
+            <select id="chat-auth-mode">
+              <option value="apiKey">x-api-key</option>
+              <option value="bearer">Bearer Token</option>
+              <option value="none">无需认证</option>
+            </select>
+          </label>
+          <label class="field" for="chat-credential">
+            <span>接口凭据</span>
+            <input
+              id="chat-credential"
+              type="password"
+              maxlength="4096"
+              autocomplete="new-password"
+              placeholder="填写新凭据，留空则保留已保存凭据"
+            />
+            <small id="chat-credential-status">尚未保存凭据。</small>
+          </label>
+          <label class="router-choice" for="chat-clear-credential">
+            <input id="chat-clear-credential" type="checkbox" />
+            <span>保存时清除已有凭据</span>
+          </label>
+          <div
+            class="chat-connection-test"
+            id="chat-connection-test"
+            role="status"
+            aria-live="polite"
+          >
+            尚未测试当前配置。
+          </div>
+          <p class="chat-config-status" id="chat-config-status" role="status"></p>
+        </div>
+        <footer class="chat-config-actions">
+          <button class="button button--secondary" id="test-chat-connection" type="button">
+            测试连接
+          </button>
+          <button class="button button--primary" id="save-chat-config" type="submit">
+            保存独立接入
+          </button>
+        </footer>
+      </form>
     </dialog>
 
     <dialog class="conversation-rename-dialog" id="conversation-rename-dialog">

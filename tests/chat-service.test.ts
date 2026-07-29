@@ -382,6 +382,71 @@ describe('independent chat service', () => {
     expect(prepared.messages[0]?.content).toEqual([{ text: '旧问题', type: 'text' }]);
   });
 
+  it('sends both gateway auth headers and a generous generation ceiling in apiKey mode', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamResponse(['data: {"type":"message_stop"}\n\n']),
+    );
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'apiKey' as const,
+        baseUrl: 'https://relay.example.com',
+        credential: 'relay-key',
+        model: 'claude-test',
+        protocol: 'anthropic' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock);
+
+    service.start({
+      messages: [{ content: '你好', role: 'user' }],
+      requestId: 'request-relay-headers',
+    });
+
+    await vi.waitFor(() => {
+      expect(events.at(-1)?.type).toBe('done');
+    });
+    const headers = (fetchMock.mock.calls[0]?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(headers['x-api-key']).toBe('relay-key');
+    expect(headers.authorization).toBe('Bearer relay-key');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      max_tokens: 64_000,
+    });
+  });
+
+  it('lowers the generation ceiling when a gateway rejects both thinking and max_tokens', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('thinking unsupported', { status: 400 }))
+      .mockResolvedValueOnce(new Response('max_tokens too large', { status: 400 }))
+      .mockResolvedValueOnce(streamResponse(['data: {"type":"message_stop"}\n\n']));
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'apiKey' as const,
+        baseUrl: 'https://relay.example.com',
+        credential: 'relay-key',
+        model: 'claude-test',
+        protocol: 'anthropic' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock);
+
+    service.start({
+      messages: [{ content: '你好', role: 'user' }],
+      requestId: 'request-ceiling-fallback',
+    });
+
+    await vi.waitFor(() => {
+      expect(events.at(-1)?.type).toBe('done');
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
+      max_tokens: 8_192,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).not.toHaveProperty('thinking');
+  });
+
   it('distinguishes a manual stop from an idle timeout', async () => {
     const store = {
       getRuntimeConfig: () => ({

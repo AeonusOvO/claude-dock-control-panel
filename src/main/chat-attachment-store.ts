@@ -19,11 +19,19 @@ interface StoredChatAttachmentMetadata extends ChatAttachmentView {
 }
 
 interface PreparedAttachmentSource {
+  /** Set for clipboard/in-memory imports; mutually exclusive with realPath. */
+  bytes?: Buffer;
   fileName: string;
   mediaType: string;
-  realPath: string;
+  /** Set for filesystem imports; mutually exclusive with bytes. */
+  realPath?: string;
   sizeBytes: number;
   type: 'document' | 'image';
+}
+
+export interface ChatAttachmentBytesSource {
+  bytes: ArrayBuffer | ArrayBufferView;
+  fileName: string;
 }
 
 export interface ResolvedChatAttachment extends ChatAttachmentView {
@@ -149,6 +157,32 @@ const parseMetadata = (value: unknown, expectedId: string): ChatAttachmentView =
 const sameIds = (first: ReadonlySet<string>, second: ReadonlySet<string>): boolean =>
   first.size === second.size && [...first].every((attachmentId) => second.has(attachmentId));
 
+const prepareByteSources = (sources: ChatAttachmentBytesSource[]): PreparedAttachmentSource[] => {
+  if (
+    !Array.isArray(sources) ||
+    sources.length === 0 ||
+    sources.length > MAX_CHAT_ATTACHMENT_COUNT
+  ) {
+    throw new Error(`每次最多可导入 ${MAX_CHAT_ATTACHMENT_COUNT} 个附件。`);
+  }
+  return sources.map((source) => {
+    const bytes = ArrayBuffer.isView(source?.bytes)
+      ? Buffer.from(source.bytes.buffer, source.bytes.byteOffset, source.bytes.byteLength)
+      : source?.bytes instanceof ArrayBuffer
+        ? Buffer.from(source.bytes)
+        : undefined;
+    if (!bytes) {
+      throw new Error('粘贴内容不是有效的文件数据。');
+    }
+    if (bytes.byteLength <= 0 || bytes.byteLength > MAX_CHAT_ATTACHMENT_BYTES) {
+      throw new Error('单个附件必须大于 0 字节且不超过 32 MiB。');
+    }
+    // Names come from the renderer, so basename them the same way a filesystem import does.
+    const fileName = cleanFileName(typeof source.fileName === 'string' ? source.fileName : '');
+    return { bytes, fileName, sizeBytes: bytes.byteLength, ...mediaFor(fileName) };
+  });
+};
+
 export class ChatAttachmentStore {
   private readonly drafts = new Map<string, Set<string>>();
   private mutationQueue: Promise<void> = Promise.resolve();
@@ -195,6 +229,41 @@ export class ChatAttachmentStore {
         sources,
       );
       const attachments = await this.importPreparedSources(sources);
+      const nextIds = new Set(currentIds);
+      for (const attachment of attachments) {
+        nextIds.add(attachment.attachmentId);
+      }
+      this.drafts.set(draftId, nextIds);
+      return { attachments, draftId };
+    });
+  }
+
+  /**
+   * Adds clipboard/in-memory payloads to a draft. Pasting an image produces bytes with no path on
+   * disk, so the filesystem path in prepareSources cannot validate it; the same count, size and
+   * media-type limits still apply.
+   */
+  public importDraftBytes(
+    sources: ChatAttachmentBytesSource[],
+    requestedDraftId?: string,
+  ): Promise<ImportedChatAttachmentDraft> {
+    return this.enqueueMutation(async () => {
+      const draftId = requestedDraftId ?? randomUUID();
+      if (requestedDraftId && !isChatAttachmentDraftId(requestedDraftId)) {
+        throw new Error('附件草稿标识无效。');
+      }
+      if (requestedDraftId && !this.drafts.has(requestedDraftId)) {
+        throw new Error('附件草稿已经失效，请重新选择文件。');
+      }
+      const currentIds = this.drafts.get(draftId) ?? new Set<string>();
+      const current = [...currentIds].map((attachmentId) => this.get(attachmentId));
+      const prepared = prepareByteSources(sources);
+      this.assertAggregateLimits(
+        current.length,
+        current.reduce((total, attachment) => total + attachment.sizeBytes, 0),
+        prepared,
+      );
+      const attachments = await this.importPreparedSources(prepared);
       const nextIds = new Set(currentIds);
       for (const attachment of attachments) {
         nextIds.add(attachment.attachmentId);
@@ -446,7 +515,13 @@ export class ChatAttachmentStore {
         await mkdir(temporaryDirectory, { recursive: false, mode: 0o700 });
         try {
           const payloadPath = path.join(temporaryDirectory, PAYLOAD_FILE_NAME);
-          await copyFile(source.realPath, payloadPath);
+          if (source.bytes) {
+            await writeFile(payloadPath, source.bytes, { mode: 0o600 });
+          } else if (source.realPath) {
+            await copyFile(source.realPath, payloadPath);
+          } else {
+            throw new Error('附件来源无效。');
+          }
           const copiedSize = (await stat(payloadPath)).size;
           if (copiedSize !== source.sizeBytes) {
             throw new Error('附件复制过程中发生变化，请重试。');

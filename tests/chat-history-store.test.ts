@@ -204,6 +204,45 @@ describe('independent chat history store', () => {
     expect(() => attachmentStore.get(attachment!.attachmentId)).toThrow();
   });
 
+  it('keeps a renamed conversation title through later saves and reloads', () => {
+    const { historyPath, store } = createStore();
+    const created = store.save({
+      messages: [{ content: '第一个问题', role: 'user' }],
+      usage,
+    });
+    expect(created.title).toBe('第一个问题');
+    expect(created.titleCustom).toBeUndefined();
+
+    const renamed = store.rename(created.id, '  重构   计划  ');
+    expect(renamed).toMatchObject({ title: '重构 计划', titleCustom: true });
+
+    const appended = store.save({
+      conversationId: created.id,
+      messages: [
+        { content: '第一个问题', role: 'user' },
+        { content: '回答', role: 'assistant' },
+        { content: '换个话题', role: 'user' },
+      ],
+      usage,
+    });
+    expect(appended.title).toBe('重构 计划');
+    expect(store.list()[0]).toMatchObject({ title: '重构 计划', titleCustom: true });
+    expect(
+      new ChatHistoryStore(path.dirname(path.dirname(historyPath))).get(created.id),
+    ).toMatchObject({ title: '重构 计划', titleCustom: true });
+  });
+
+  it('rejects empty, overlong and control-character conversation names', () => {
+    const { store } = createStore();
+    const created = store.save({ messages: [{ content: '标题', role: 'user' }], usage });
+
+    expect(() => store.rename(created.id, '   ')).toThrow(/不能为空/);
+    expect(() => store.rename(created.id, ' ')).toThrow(/不能为空/);
+    expect(() => store.rename(created.id, 'x'.repeat(61))).toThrow(/不能超过 60/);
+    expect(() => store.rename(created.id, 42)).toThrow(/无效/);
+    expect(store.rename('9f1d3c2b-4a5e-4f6a-8b7c-0d1e2f3a4b5c', '不存在')).toBeUndefined();
+  });
+
   it('refuses to persist base64 payloads in chat-history.json', () => {
     const { store } = createStore();
     expect(() =>

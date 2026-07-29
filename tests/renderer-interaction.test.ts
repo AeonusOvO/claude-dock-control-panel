@@ -184,7 +184,17 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain(
       'document.documentElement.style.colorScheme = definition.appearance;',
     );
-    expect(rendererStyles).toContain('--ease-telegram: cubic-bezier(0.25, 1, 0.5, 1);');
+    // The generic ladders the stylesheet spells everywhere must alias the theme-authored tokens,
+    // otherwise switching themes repaints colours but leaves motion, geometry and leading behind.
+    expect(rendererStyles).toContain('--ease-standard: var(--ease-enter);');
+    expect(rendererStyles).toContain('--ease-decel: var(--ease-spring);');
+    expect(rendererStyles).toContain('--ease-accel: var(--ease-exit);');
+    expect(rendererStyles).toContain('--dur-2: var(--dur-micro);');
+    expect(rendererStyles).toContain('--dur-4: var(--dur-enter);');
+    expect(rendererStyles).toContain('--r-md: var(--r-theme-md);');
+    expect(rendererStyles).toContain('--press-lg: var(--press-theme);');
+    expect(rendererStyles).toContain('--lh-prose: calc(1 + (var(--lh-body) - 1) * 0.79);');
+    expect(rendererStyles).toContain('--ls-body: calc(var(--ls-title) * 0.25);');
     expect(rendererStyles).toContain('@keyframes chatMessageEnter');
     expect(rendererStyles).not.toMatch(/:hover[^{]*\{[^}]*transform:\s*translateY\(/s);
   });

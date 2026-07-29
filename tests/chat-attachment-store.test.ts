@@ -127,6 +127,46 @@ describe('chat attachment store', () => {
     );
   });
 
+  it('imports pasted clipboard bytes that never touched the filesystem', async () => {
+    const { store } = fixture();
+
+    const imported = await store.importDraftBytes([
+      { bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), fileName: '粘贴内容-1.png' },
+    ]);
+    const attachment = imported.attachments[0]!;
+
+    expect(attachment).toMatchObject({
+      fileName: '粘贴内容-1.png',
+      mediaType: 'image/png',
+      sizeBytes: 4,
+      type: 'image',
+    });
+    expect(store.readBase64(attachment.attachmentId)).toBe('iVBORw==');
+
+    const appended = await store.importDraftBytes(
+      [{ bytes: new TextEncoder().encode('pasted'), fileName: 'note.txt' }],
+      imported.draftId,
+    );
+    expect(appended.draftId).toBe(imported.draftId);
+    expect(() =>
+      store.assertDraftMatches(
+        imported.draftId,
+        new Set([attachment.attachmentId, appended.attachments[0]!.attachmentId]),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects pasted bytes whose synthesized name has an unsupported extension', async () => {
+    const { store } = fixture();
+
+    await expect(
+      store.importDraftBytes([{ bytes: new Uint8Array([1, 2, 3]), fileName: 'payload.exe' }]),
+    ).rejects.toThrow(/仅支持/);
+    await expect(
+      store.importDraftBytes([{ bytes: new Uint8Array(), fileName: 'empty.png' }]),
+    ).rejects.toThrow(/大于 0 字节/);
+  });
+
   it('deletes a removed draft attachment immediately when history does not retain it', async () => {
     const { sourceDirectory, store } = fixture();
     const source = path.join(sourceDirectory, 'draft.txt');

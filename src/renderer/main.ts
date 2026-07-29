@@ -35,6 +35,7 @@ import type {
   ClaudeRouterProviderView,
   ClaudeSessionMetadata,
   ChatConfigView,
+  ChatAttachmentImportResult,
   ChatAttachmentView,
   ChatContentBlock,
   ChatConversationSummary,
@@ -383,6 +384,9 @@ const saveClaudeConfigButton = requiredElement<HTMLButtonElement>('#save-claude-
 const terminalShell = requiredElement<HTMLElement>('#terminal-shell');
 const chatShell = requiredElement<HTMLElement>('#chat-shell');
 const chatConfigForm = requiredElement<HTMLFormElement>('#chat-config-form');
+const chatSettingsDialog = requiredElement<HTMLDialogElement>('#chat-settings-dialog');
+const openChatSettingsButton = requiredElement<HTMLButtonElement>('#open-chat-settings');
+const closeChatSettingsButton = requiredElement<HTMLButtonElement>('#close-chat-settings');
 const chatProtocol = requiredElement<HTMLSelectElement>('#chat-protocol');
 const chatBaseUrl = requiredElement<HTMLInputElement>('#chat-base-url');
 const chatModel = requiredElement<HTMLInputElement>('#chat-model');
@@ -578,6 +582,13 @@ let activeTerminalTheme: TerminalThemeId = isTerminalThemeId(storedTerminalTheme
 let windowsBuildNumber: number | undefined;
 terminalThemeSelect.value = activeTerminalTheme;
 
+/**
+ * The main process spawns every PTY with the bundled conpty.dll (Windows Terminal backend), so the
+ * effective ConPTY behaviour is always at least this build regardless of the host OS. Reporting it
+ * to xterm keeps its resize reflow enabled (xterm disables reflow for conpty builds < 21376).
+ */
+const BUNDLED_CONPTY_BUILD = 21376;
+
 const buildTerminalOptions = (): ITerminalOptions => ({
   allowProposedApi: true,
   convertEol: false,
@@ -590,9 +601,10 @@ const buildTerminalOptions = (): ITerminalOptions => ({
   minimumContrastRatio: 4.5,
   scrollback: 10_000,
   theme: { ...TERMINAL_THEMES[activeTerminalTheme].palette },
-  ...(windowsBuildNumber
-    ? { windowsPty: { backend: 'conpty' as const, buildNumber: windowsBuildNumber } }
-    : {}),
+  windowsPty: {
+    backend: 'conpty' as const,
+    buildNumber: Math.max(windowsBuildNumber ?? 0, BUNDLED_CONPTY_BUILD),
+  },
 });
 
 const showToast = (message: string, tone: 'error' | 'success' = 'success'): void => {
@@ -952,10 +964,151 @@ const deleteChatConversation = async (conversation: ChatConversationSummary): Pr
     if (activeChatConversationId === conversation.id) {
       resetChatConversation();
     }
+    cancelChatTitleAnimation(conversation.id);
     await loadChatHistory();
     showToast(`已删除对话“${conversation.title}”`);
   } catch (error) {
     showToast(error instanceof Error ? error.message : '无法删除对话历史。', 'error');
+  }
+};
+
+/*
+ * Chat history titles get the same typewriter treatment as project conversations: the old name is
+ * erased character by character and the new one typed in behind a blinking caret. The state lives
+ * outside the DOM because the history list is rebuilt from scratch on every reload — each rebuild
+ * re-reads the current frame, and each timer tick patches the live element between rebuilds.
+ */
+interface ChatTitleAnimationState {
+  chars: string[];
+  keep: number;
+  phase: 'erasing' | 'typing';
+  target: string[];
+  timer: number;
+}
+
+const chatTitleAnimations = new Map<string, ChatTitleAnimationState>();
+
+const displayedChatTitle = (conversation: ChatConversationSummary): string => {
+  const animation = chatTitleAnimations.get(conversation.id);
+  return animation ? animation.chars.join('') : conversation.title;
+};
+
+const cancelChatTitleAnimation = (conversationId: string): void => {
+  const animation = chatTitleAnimations.get(conversationId);
+  if (!animation) {
+    return;
+  }
+  window.clearTimeout(animation.timer);
+  chatTitleAnimations.delete(conversationId);
+};
+
+const applyChatTitleFrame = (conversationId: string): void => {
+  const animation = chatTitleAnimations.get(conversationId);
+  const label = chatHistoryList.querySelector<HTMLElement>(
+    `strong[data-conversation-id="${CSS.escape(conversationId)}"]`,
+  );
+  if (!label) {
+    return;
+  }
+  if (animation) {
+    label.textContent = animation.chars.join('');
+    label.dataset.titleTyping = 'true';
+    return;
+  }
+  label.dataset.titleTyping = 'false';
+};
+
+const stepChatTitleAnimation = (conversationId: string): void => {
+  const animation = chatTitleAnimations.get(conversationId);
+  if (!animation) {
+    return;
+  }
+
+  let delay: number;
+  if (animation.phase === 'erasing') {
+    if (animation.chars.length > animation.keep) {
+      animation.chars.pop();
+      delay = CHAT_TITLE_ERASE_MS;
+    } else {
+      animation.phase = 'typing';
+      delay = CHAT_TITLE_PHASE_PAUSE_MS;
+    }
+  } else if (animation.chars.length < animation.target.length) {
+    animation.chars.push(animation.target[animation.chars.length] ?? '');
+    // Slightly uneven keystrokes read as typing rather than a mechanical ticker.
+    delay = CHAT_TITLE_TYPE_MS + Math.random() * 42;
+  } else {
+    cancelChatTitleAnimation(conversationId);
+    applyChatTitleFrame(conversationId);
+    return;
+  }
+
+  applyChatTitleFrame(conversationId);
+  animation.timer = window.setTimeout(() => {
+    stepChatTitleAnimation(conversationId);
+  }, delay);
+};
+
+const CHAT_TITLE_ERASE_MS = 24;
+const CHAT_TITLE_TYPE_MS = 44;
+const CHAT_TITLE_PHASE_PAUSE_MS = 200;
+
+const startChatTitleAnimation = (
+  conversationId: string,
+  fromTitle: string,
+  toTitle: string,
+): void => {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    cancelChatTitleAnimation(conversationId);
+    applyChatTitleFrame(conversationId);
+    return;
+  }
+  const existing = chatTitleAnimations.get(conversationId);
+  // A retarget mid-animation continues from whatever is on screen right now.
+  const chars = existing ? existing.chars : [...fromTitle];
+  if (existing) {
+    window.clearTimeout(existing.timer);
+  }
+
+  const target = [...toTitle];
+  let keep = 0;
+  while (keep < chars.length && keep < target.length && chars[keep] === target[keep]) {
+    keep += 1;
+  }
+
+  const animation: ChatTitleAnimationState = {
+    chars,
+    keep,
+    phase: chars.length > keep ? 'erasing' : 'typing',
+    target,
+    timer: 0,
+  };
+  chatTitleAnimations.set(conversationId, animation);
+  applyChatTitleFrame(conversationId);
+  animation.timer = window.setTimeout(() => {
+    stepChatTitleAnimation(conversationId);
+  }, CHAT_TITLE_ERASE_MS);
+};
+
+const renameChatConversation = async (conversation: ChatConversationSummary): Promise<void> => {
+  if (activeChatRequestId || queuedChatAttachmentImports > 0 || chatSubmissionInFlight) {
+    return;
+  }
+  const nextTitle = await requestConversationTitle(conversation.title, true);
+  if (!nextTitle) {
+    return;
+  }
+  const previousTitle = conversation.title;
+  try {
+    const renamed = await window.controlPanel.renameChatConversation(conversation.id, nextTitle);
+    if (!renamed) {
+      throw new Error('对话历史已经不存在。');
+    }
+    // Reload first so the list carries the persisted name, then animate from the old label to it.
+    await loadChatHistory();
+    startChatTitleAnimation(conversation.id, previousTitle, renamed.title);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法重命名对话。', 'error');
   }
 };
 
@@ -969,14 +1122,19 @@ const renderChatHistory = (): void => {
     row.className = 'chat-history__item';
     row.dataset.active = String(conversation.id === activeChatConversationId);
 
+    const busy =
+      Boolean(activeChatRequestId) || queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
+
     const open = document.createElement('button');
     open.className = 'chat-history__open';
     open.type = 'button';
-    open.disabled =
-      Boolean(activeChatRequestId) || queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
+    open.disabled = busy;
     open.setAttribute('aria-label', `打开对话 ${conversation.title}`);
     const title = document.createElement('strong');
-    title.textContent = conversation.title;
+    title.dataset.conversationId = conversation.id;
+    // A rename in flight owns the label until its animation finishes.
+    title.textContent = displayedChatTitle(conversation);
+    title.dataset.titleTyping = String(chatTitleAnimations.has(conversation.id));
     const meta = document.createElement('span');
     meta.textContent = `${formatChatHistoryTime(conversation.updatedAt)} · ${conversation.messageCount} 条消息 · ${formatTokenCount(conversation.usage.totalTokens)} tokens`;
     open.append(title, meta);
@@ -984,18 +1142,34 @@ const renderChatHistory = (): void => {
       void loadChatConversation(conversation.id);
     });
 
+    const rename = document.createElement('button');
+    rename.className = 'chat-history__rename';
+    rename.type = 'button';
+    rename.disabled = busy;
+    rename.title = '重命名对话';
+    rename.setAttribute('aria-label', `重命名对话 ${conversation.title}`);
+    const renameIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    renameIcon.setAttribute('viewBox', '0 0 24 24');
+    renameIcon.setAttribute('aria-hidden', 'true');
+    const renamePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    renamePath.setAttribute('d', 'M4 20h4l10-10-4-4L4 16v4ZM14.5 5.5l4 4');
+    renameIcon.append(renamePath);
+    rename.append(renameIcon);
+    rename.addEventListener('click', () => {
+      void renameChatConversation(conversation);
+    });
+
     const remove = document.createElement('button');
     remove.className = 'chat-history__delete';
     remove.type = 'button';
-    remove.disabled =
-      Boolean(activeChatRequestId) || queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
+    remove.disabled = busy;
     remove.title = '删除对话历史';
     remove.setAttribute('aria-label', `删除对话 ${conversation.title}`);
     remove.textContent = '×';
     remove.addEventListener('click', () => {
       void deleteChatConversation(conversation);
     });
-    row.append(open, remove);
+    row.append(open, rename, remove);
     chatHistoryList.append(row);
   }
 };
@@ -1449,6 +1623,57 @@ const renderPendingChatAttachments = (): void => {
   }
 };
 
+const applyChatAttachmentImportResult = (result: ChatAttachmentImportResult): void => {
+  if (result.draftId) {
+    activeChatAttachmentDraftId = result.draftId;
+  }
+  pendingChatAttachments.push(...result.attachments);
+  renderPendingChatAttachments();
+  for (const attachment of result.attachments) {
+    if (attachment.type === 'image') {
+      void window.controlPanel.readChatAttachment(attachment.attachmentId).then((preview) => {
+        if (preview?.previewDataUrl) {
+          attachment.previewDataUrl = preview.previewDataUrl;
+          renderPendingChatAttachments();
+        }
+      });
+    }
+  }
+  if (
+    chatProtocol.value === 'openai' &&
+    result.attachments.some((attachment) => attachment.mediaType === 'application/pdf')
+  ) {
+    showToast('已添加 PDF；当前 OpenAI 兼容端点可能不支持 PDF，请以服务端结果为准。');
+  } else if (result.attachments.length > 0) {
+    showToast(`已安全导入 ${result.attachments.length} 个附件`);
+  }
+  if (result.errors.length > 0) {
+    showToast(result.errors[0]?.message ?? '部分附件无法导入。', 'error');
+  }
+};
+
+/** Clipboard payloads have no path on disk, so a name has to be synthesized from the MIME type. */
+const EXTENSION_BY_MEDIA_TYPE: Readonly<Record<string, string>> = {
+  'application/pdf': '.pdf',
+  'image/gif': '.gif',
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'text/csv': '.csv',
+  'text/markdown': '.md',
+  'text/plain': '.txt',
+  'text/tab-separated-values': '.tsv',
+};
+
+const pastedFileName = (file: File, index: number): string => {
+  const name = file.name.replace(/[\\/]/g, '').trim();
+  if (name && /\.[a-z0-9]{1,8}$/i.test(name)) {
+    return name;
+  }
+  const extension = EXTENSION_BY_MEDIA_TYPE[file.type.toLowerCase()] ?? '.png';
+  return `${name || `粘贴内容-${index + 1}`}${extension}`;
+};
+
 const importChatAttachments = async (files: File[]): Promise<void> => {
   const remaining = 10 - pendingChatAttachments.length;
   if (remaining <= 0) {
@@ -1456,43 +1681,49 @@ const importChatAttachments = async (files: File[]): Promise<void> => {
     return;
   }
   const selected = files.slice(0, remaining);
-  const paths = selected
-    .map((file) => window.controlPanel.getDroppedPath(file))
-    .filter((filePath) => Boolean(filePath));
-  if (paths.length === 0) {
-    showToast('无法读取所选附件的本机路径。', 'error');
+  // Files dropped or picked from disk expose a native path; clipboard payloads do not, so they
+  // travel to the main process as bytes instead. One paste can contain both kinds.
+  const paths: string[] = [];
+  const inMemory: File[] = [];
+  for (const file of selected) {
+    let filePath: string;
+    try {
+      filePath = window.controlPanel.getDroppedPath(file) ?? '';
+    } catch {
+      filePath = '';
+    }
+    if (filePath) {
+      paths.push(filePath);
+    } else {
+      inMemory.push(file);
+    }
+  }
+  if (paths.length === 0 && inMemory.length === 0) {
+    showToast('无法读取所选附件的内容。', 'error');
     return;
   }
   try {
-    const result = await window.controlPanel.importChatAttachments({
-      draftId: activeChatAttachmentDraftId,
-      paths,
-    });
-    if (result.draftId) {
-      activeChatAttachmentDraftId = result.draftId;
+    if (paths.length > 0) {
+      applyChatAttachmentImportResult(
+        await window.controlPanel.importChatAttachments({
+          draftId: activeChatAttachmentDraftId,
+          paths,
+        }),
+      );
     }
-    pendingChatAttachments.push(...result.attachments);
-    renderPendingChatAttachments();
-    for (const attachment of result.attachments) {
-      if (attachment.type === 'image') {
-        void window.controlPanel.readChatAttachment(attachment.attachmentId).then((preview) => {
-          if (preview?.previewDataUrl) {
-            attachment.previewDataUrl = preview.previewDataUrl;
-            renderPendingChatAttachments();
-          }
-        });
-      }
-    }
-    if (
-      chatProtocol.value === 'openai' &&
-      result.attachments.some((attachment) => attachment.mediaType === 'application/pdf')
-    ) {
-      showToast('已添加 PDF；当前 OpenAI 兼容端点可能不支持 PDF，请以服务端结果为准。');
-    } else if (result.attachments.length > 0) {
-      showToast(`已安全导入 ${result.attachments.length} 个附件`);
-    }
-    if (result.errors.length > 0) {
-      showToast(result.errors[0]?.message ?? '部分附件无法导入。', 'error');
+    if (inMemory.length > 0) {
+      const sources = await Promise.all(
+        inMemory.map(async (file, index) => ({
+          bytes: await file.arrayBuffer(),
+          fileName: pastedFileName(file, index),
+        })),
+      );
+      applyChatAttachmentImportResult(
+        await window.controlPanel.importChatAttachmentBytes({
+          draftId: activeChatAttachmentDraftId,
+          sources,
+        }),
+      );
     }
   } catch (error) {
     showToast(error instanceof Error ? error.message : '无法导入附件。', 'error');
@@ -6496,12 +6727,35 @@ chatConfigForm.addEventListener('submit', (event) => {
       renderChatConfig(config);
       chatConfigStatus.textContent = '独立接入已保存并可用于新消息。';
       showToast('独立对话接入已保存');
+      chatSettingsDialog.close('saved');
     } catch (error) {
       const message = error instanceof Error ? error.message : '无法保存独立对话接入。';
       chatConfigStatus.textContent = message;
       showToast(message, 'error');
     }
   });
+});
+openChatSettingsButton.addEventListener('click', () => {
+  if (chatSettingsDialog.open) {
+    return;
+  }
+  // Re-read from the main process so the dialog never shows a stale draft from a previous open.
+  void loadChatConfig(true);
+  chatSettingsDialog.showModal();
+  chatModel.focus();
+});
+closeChatSettingsButton.addEventListener('click', () => {
+  chatSettingsDialog.close('cancel');
+});
+chatSettingsDialog.addEventListener('click', (event) => {
+  // A click that lands on the dialog element itself (not its form) is a click on the backdrop area.
+  if (event.target === chatSettingsDialog) {
+    chatSettingsDialog.close('cancel');
+  }
+});
+chatSettingsDialog.addEventListener('close', () => {
+  chatCredential.value = '';
+  chatClearCredential.checked = false;
 });
 testChatConnectionButton.addEventListener('click', () => {
   chatConnectionTest.dataset.tone = 'pending';
@@ -6563,6 +6817,21 @@ chatInput.addEventListener('keydown', (event) => {
   }
 });
 chatInput.addEventListener('input', renderChatUsage);
+chatInput.addEventListener('paste', (event) => {
+  const clipboard = event.clipboardData;
+  if (!clipboard) {
+    return;
+  }
+  const files = Array.from(clipboard.files);
+  if (files.length > 0) {
+    // Let the file(s) become attachments and keep any co-pasted text out of the textarea, matching
+    // how claude.ai treats a paste that carries both a rendering and its source bytes.
+    event.preventDefault();
+    queueChatAttachmentImport(files);
+    return;
+  }
+  // No files: fall through to the browser's own plain-text insertion.
+});
 stopChatButton.addEventListener('click', () => {
   if (activeChatRequestId) {
     void window.controlPanel.stopChat(activeChatRequestId);

@@ -26,6 +26,7 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterOperationResult,
   ClaudeRouterInstallSource,
+  ChatAttachmentBytesImportInput,
   ChatAttachmentImportInput,
   ChatMessage,
   ChatStartInput,
@@ -971,6 +972,44 @@ const registerIpc = (): void => {
       };
     }
   });
+  ipcMain.handle('chat:import-attachment-bytes', async (event, input: unknown) => {
+    validateSender(event);
+    const record =
+      input && typeof input === 'object'
+        ? (input as Partial<ChatAttachmentBytesImportInput>)
+        : undefined;
+    const sources = record?.sources;
+    if (
+      !Array.isArray(sources) ||
+      sources.length === 0 ||
+      sources.some(
+        (source) =>
+          !source ||
+          typeof source !== 'object' ||
+          typeof source.fileName !== 'string' ||
+          !(source.bytes instanceof ArrayBuffer || ArrayBuffer.isView(source.bytes)),
+      ) ||
+      (record?.draftId !== undefined && typeof record.draftId !== 'string')
+    ) {
+      throw new Error('粘贴的附件数据无效。');
+    }
+    try {
+      const imported = await chatAttachmentStore.importDraftBytes(sources, record?.draftId);
+      return {
+        attachments: imported.attachments,
+        draftId: imported.draftId,
+        errors: [],
+        ok: true,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法导入附件。';
+      return {
+        attachments: [],
+        errors: sources.map((source) => ({ message, path: String(source?.fileName ?? '') })),
+        ok: false,
+      };
+    }
+  });
   ipcMain.handle(
     'chat:delete-draft-attachment',
     async (event, draftId: unknown, attachmentId: unknown) => {
@@ -1029,6 +1068,13 @@ const registerIpc = (): void => {
       throw new Error('对话历史保存参数无效。');
     }
     return chatHistoryStore.save(input as SaveChatConversationInput);
+  });
+  ipcMain.handle('chat:rename-conversation', (event, conversationId: unknown, title: unknown) => {
+    validateSender(event);
+    if (typeof conversationId !== 'string') {
+      throw new Error('对话历史标识无效。');
+    }
+    return chatHistoryStore.rename(conversationId, title);
   });
   ipcMain.handle('chat:delete-conversation', (event, conversationId: unknown) => {
     validateSender(event);

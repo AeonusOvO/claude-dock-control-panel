@@ -262,11 +262,39 @@ const titleFor = (messages: ChatMessage[]): string => {
   return normalized.length > 40 ? `${normalized.slice(0, 39)}…` : normalized || '附件对话';
 };
 
+export const MAX_CONVERSATION_TITLE_LENGTH = 60;
+
+/**
+ * Normalizes a user-supplied conversation name. Control characters would corrupt the sidebar label
+ * and the persisted index, so they are stripped rather than escaped.
+ */
+const normalizeCustomTitle = (value: unknown): string => {
+  if (typeof value !== 'string') {
+    throw new Error('对话名称无效。');
+  }
+  const normalized = [...value.normalize('NFC')]
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code > 0x1f && code !== 0x7f;
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) {
+    throw new Error('对话名称不能为空。');
+  }
+  if (normalized.length > MAX_CONVERSATION_TITLE_LENGTH) {
+    throw new Error(`对话名称不能超过 ${MAX_CONVERSATION_TITLE_LENGTH} 个字符。`);
+  }
+  return normalized;
+};
+
 const summaryOf = (conversation: ChatConversation): ChatConversationSummary => ({
   createdAt: conversation.createdAt,
   id: conversation.id,
   messageCount: conversation.messageCount,
   title: conversation.title,
+  ...(conversation.titleCustom ? { titleCustom: true } : {}),
   updatedAt: conversation.updatedAt,
   usage: { ...conversation.usage },
 });
@@ -298,6 +326,7 @@ const parseConversation = (value: unknown): ChatConversation | undefined => {
       messageCount: messages.length,
       messages,
       title: record.title,
+      ...(record.titleCustom === true ? { titleCustom: true } : {}),
       updatedAt: record.updatedAt,
       usage: { ...record.usage },
     };
@@ -353,7 +382,9 @@ export class ChatHistoryStore {
       id: existing?.id ?? randomUUID(),
       messageCount: messages.length,
       messages,
-      title: titleFor(messages),
+      // A renamed conversation keeps its name; only derived titles follow the first user message.
+      title: existing?.titleCustom ? existing.title : titleFor(messages),
+      ...(existing?.titleCustom ? { titleCustom: true } : {}),
       updatedAt: now,
       usage: { ...input.usage },
     };
@@ -366,6 +397,20 @@ export class ChatHistoryStore {
     history.conversations = nextConversations;
     this.persist(history);
     this.cleanupAttachments(removed, nextConversations);
+    return cloneConversation(conversation);
+  }
+
+  public rename(conversationId: string, title: unknown): ChatConversation | undefined {
+    this.validateId(conversationId);
+    const normalized = normalizeCustomTitle(title);
+    const history = this.load();
+    const conversation = history.conversations.find((item) => item.id === conversationId);
+    if (!conversation) {
+      return undefined;
+    }
+    conversation.title = normalized;
+    conversation.titleCustom = true;
+    this.persist(history);
     return cloneConversation(conversation);
   }
 

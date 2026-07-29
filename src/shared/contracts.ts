@@ -102,6 +102,17 @@ export interface ChatAttachmentImportInput {
   paths: string[];
 }
 
+/** One clipboard payload. Pasted images arrive as bytes with no path on disk. */
+export interface ChatAttachmentBytesInput {
+  bytes: ArrayBuffer;
+  fileName: string;
+}
+
+export interface ChatAttachmentBytesImportInput {
+  draftId?: string;
+  sources: ChatAttachmentBytesInput[];
+}
+
 export interface ChatTokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -161,6 +172,8 @@ export interface ChatConversationSummary {
   id: string;
   messageCount: number;
   title: string;
+  /** True once the user renamed the conversation, which stops the derived title from overwriting it. */
+  titleCustom?: boolean;
   updatedAt: number;
   usage: ChatTokenUsage;
 }
@@ -609,12 +622,19 @@ export interface ControlPanelApi {
   saveChatConfig: (input: SaveChatConfigInput) => Promise<ChatConfigView>;
   testChatConnection: (input: SaveChatConfigInput) => Promise<ChatConnectionTestResult>;
   importChatAttachments: (input: ChatAttachmentImportInput) => Promise<ChatAttachmentImportResult>;
+  importChatAttachmentBytes: (
+    input: ChatAttachmentBytesImportInput,
+  ) => Promise<ChatAttachmentImportResult>;
   readChatAttachment: (attachmentId: string) => Promise<ChatAttachmentView | undefined>;
   deleteChatDraftAttachment: (draftId: string, attachmentId: string) => Promise<boolean>;
   releaseChatAttachmentDraft: (draftId: string) => Promise<number>;
   getChatConversations: () => Promise<ChatConversationSummary[]>;
   getChatConversation: (conversationId: string) => Promise<ChatConversation | undefined>;
   saveChatConversation: (input: SaveChatConversationInput) => Promise<ChatConversation>;
+  renameChatConversation: (
+    conversationId: string,
+    title: string,
+  ) => Promise<ChatConversation | undefined>;
   deleteChatConversation: (conversationId: string) => Promise<boolean>;
   preflightChat: (input: ChatStartInput) => Promise<ChatPreflightResult>;
   startChat: (input: ChatStartInput) => Promise<ChatPreflightResult>;

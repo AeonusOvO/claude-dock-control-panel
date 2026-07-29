@@ -47,6 +47,7 @@ const api: ControlPanelApi = {
   saveChatConfig: (input) => ipcRenderer.invoke('chat:save-config', input),
   testChatConnection: (input) => ipcRenderer.invoke('chat:test-connection', input),
   importChatAttachments: (input) => ipcRenderer.invoke('chat:import-attachments', input),
+  importChatAttachmentBytes: (input) => ipcRenderer.invoke('chat:import-attachment-bytes', input),
   readChatAttachment: (attachmentId) => ipcRenderer.invoke('chat:read-attachment', attachmentId),
   deleteChatDraftAttachment: (draftId, attachmentId) =>
     ipcRenderer.invoke('chat:delete-draft-attachment', draftId, attachmentId),
@@ -56,6 +57,8 @@ const api: ControlPanelApi = {
   getChatConversation: (conversationId) =>
     ipcRenderer.invoke('chat:get-conversation', conversationId),
   saveChatConversation: (input) => ipcRenderer.invoke('chat:save-conversation', input),
+  renameChatConversation: (conversationId, title) =>
+    ipcRenderer.invoke('chat:rename-conversation', conversationId, title),
   deleteChatConversation: (conversationId) =>
     ipcRenderer.invoke('chat:delete-conversation', conversationId),
   preflightChat: (input) => ipcRenderer.invoke('chat:preflight', input),

@@ -44,6 +44,7 @@ export interface ParsedChatStreamDelta {
 
 export interface ChatRequestBodyOptions {
   includeUsage: boolean;
+  maxTokens?: number;
   stream: boolean;
   thinking?: boolean;
 }
@@ -55,6 +56,13 @@ const MAX_BASE64_LENGTH = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
 const REQUEST_IDLE_TIMEOUT_MS = 120_000;
 const REQUEST_TOTAL_TIMEOUT_MS = 15 * 60_000;
 const TEST_TIMEOUT_MS = 15_000;
+/**
+ * The generation ceiling for one reply. 4096 silently truncated long answers, which read as the
+ * model being "dumber" than the same gateway used from Claude Code. Gateways that cap lower reject
+ * the request with a 400/422, which the retry ladder in run() handles.
+ */
+const STREAM_MAX_TOKENS = 64_000;
+const STREAM_MAX_TOKENS_FALLBACK = 8_192;
 const IMAGE_MEDIA_TYPES = new Set(['image/gif', 'image/jpeg', 'image/png', 'image/webp']);
 const DOCUMENT_MEDIA_TYPES = new Set(['application/pdf', 'text/plain']);
 
@@ -208,7 +216,11 @@ export const requestHeaders = (
 ): Record<string, string> => {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (config.authMode === 'apiKey' && config.credential) {
+    // Gateways disagree on which header carries the key: official Anthropic reads x-api-key,
+    // while most OpenAI-style relays only read Authorization. Sending both keeps one saved
+    // credential working across gateways that the project terminal already connects to.
     headers['x-api-key'] = config.credential;
+    headers.authorization = `Bearer ${config.credential}`;
   } else if (config.authMode === 'bearer' && config.credential) {
     headers.authorization = `Bearer ${config.credential}`;
   }
@@ -345,7 +357,7 @@ export const serializeChatRequestBody = (
 ): Record<string, unknown> => {
   if (config.protocol === 'anthropic') {
     return {
-      max_tokens: options.stream ? 4096 : 1,
+      max_tokens: options.stream ? (options.maxTokens ?? STREAM_MAX_TOKENS) : 1,
       messages: messages
         .filter((message) => message.role !== 'system')
         .map((message) => ({
@@ -772,11 +784,16 @@ export class ChatService {
       if (controller.signal.aborted) {
         throw new Error('对话请求已停止。');
       }
-      const fetchStream = (includeUsage: boolean, thinking: boolean): Promise<Response> =>
+      const fetchStream = (
+        includeUsage: boolean,
+        thinking: boolean,
+        maxTokens?: number,
+      ): Promise<Response> =>
         this.fetchImpl(endpointFor(config.baseUrl, config.protocol), {
           body: JSON.stringify(
             serializeChatRequestBody(config, providerMessages, {
               includeUsage,
+              maxTokens,
               stream: true,
               thinking,
             }),
@@ -785,18 +802,33 @@ export class ChatService {
           method: 'POST',
           signal: controller.signal,
         });
-      let response = await fetchStream(true, config.protocol === 'anthropic');
+      // Descend a compatibility ladder on 400/422: full request first, then drop the feature a
+      // strict gateway is most likely rejecting (adaptive thinking / stream usage), then lower the
+      // generation ceiling for gateways that cap max_tokens below our default.
+      const attempts: Array<{ includeUsage: boolean; maxTokens?: number; thinking: boolean }> =
+        config.protocol === 'anthropic'
+          ? [
+              { includeUsage: true, thinking: true },
+              { includeUsage: true, thinking: false },
+              { includeUsage: true, maxTokens: STREAM_MAX_TOKENS_FALLBACK, thinking: false },
+            ]
+          : [
+              { includeUsage: true, thinking: false },
+              { includeUsage: false, thinking: false },
+            ];
+      let response = await fetchStream(
+        attempts[0]!.includeUsage,
+        attempts[0]!.thinking,
+        attempts[0]!.maxTokens,
+      );
       touchIdleTimeout();
-      if (config.protocol === 'anthropic' && (response.status === 400 || response.status === 422)) {
+      for (let attempt = 1; attempt < attempts.length; attempt += 1) {
+        if (response.status !== 400 && response.status !== 422) {
+          break;
+        }
         await discardResponse(response);
-        response = await fetchStream(true, false);
-        touchIdleTimeout();
-      } else if (
-        config.protocol === 'openai' &&
-        (response.status === 400 || response.status === 422)
-      ) {
-        await discardResponse(response);
-        response = await fetchStream(false, false);
+        const next = attempts[attempt]!;
+        response = await fetchStream(next.includeUsage, next.thinking, next.maxTokens);
         touchIdleTimeout();
       }
       if (!response.ok) {

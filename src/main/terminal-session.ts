@@ -195,6 +195,10 @@ export class TerminalSession {
           name: 'xterm-256color',
           rows: this.rows,
           useConpty: true,
+          // The bundled conpty.dll (Windows Terminal rearchitecture) preserves soft-wrap
+          // continuations across resizes. The inbox ConPTY hard-wraps repainted lines at the old
+          // width, which is why resizing left Claude Code output broken at stale column positions.
+          useConptyDll: true,
         },
       );
 
