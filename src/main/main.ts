@@ -6,6 +6,8 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  net,
+  session,
   shell,
   Tray,
 } from 'electron';
@@ -36,6 +38,10 @@ import type {
   CodexOperationResult,
   DevelopmentRuntime,
   DevelopmentRuntimeState,
+  NetworkPreflightAction,
+  NetworkPreflightRunInput,
+  NetworkPreflightSettings,
+  NetworkProviderId,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
@@ -79,12 +85,20 @@ import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
+import { NetworkDiagnosticsStore } from './network-diagnostics-store';
+import { NetworkPreflightService } from './network-preflight-service';
+import { NetworkPreflightSettingsStore } from './network-preflight-settings-store';
+import { ProviderAccessGuard } from './provider-access-guard';
+import { ProviderConnectivityProbe } from './provider-connectivity-probe';
+import { RollbackCoordinator } from './rollback-coordinator';
 app.enableSandbox();
 registerArtifactScheme();
 
 let isQuitting = false;
 let claudeRuntime: ClaudeRuntime | null = null;
 let codexRuntime: CodexRuntime | null = null;
+let networkPreflightService: NetworkPreflightService | null = null;
+let providerAccessGuard: ProviderAccessGuard | null = null;
 let mainWindow: BrowserWindow | null = null;
 let minimizedNoticeShown = false;
 let tray: Tray | null = null;
@@ -568,13 +582,72 @@ const requireCodexRuntime = (): CodexRuntime => {
   return codexRuntime;
 };
 
+const requireNetworkPreflightService = (): NetworkPreflightService => {
+  if (!networkPreflightService) {
+    throw new Error('网络预检服务尚未初始化。');
+  }
+  return networkPreflightService;
+};
+
+const requireProviderAccessGuard = (): ProviderAccessGuard => {
+  if (!providerAccessGuard) {
+    throw new Error('官方服务访问守卫尚未初始化。');
+  }
+  return providerAccessGuard;
+};
+
 const DEVELOPMENT_RUNTIMES = new Set<DevelopmentRuntime>(['claude', 'codex']);
+const NETWORK_PROVIDERS = new Set<NetworkProviderId>([
+  'anthropic-claude',
+  'openai-api',
+  'openai-codex',
+]);
+const NETWORK_PREFLIGHT_ACTIONS = new Set<NetworkPreflightAction>([
+  'background',
+  'cli-launch',
+  'cloud-task',
+  'first-request',
+  'login',
+  'provider-switch',
+]);
 
 const validateDevelopmentRuntime = (value: unknown): DevelopmentRuntime => {
   if (typeof value !== 'string' || !DEVELOPMENT_RUNTIMES.has(value as DevelopmentRuntime)) {
     throw new Error('开发引擎标识无效。');
   }
   return value as DevelopmentRuntime;
+};
+
+const validateNetworkProvider = (value: unknown): NetworkProviderId => {
+  if (typeof value !== 'string' || !NETWORK_PROVIDERS.has(value as NetworkProviderId)) {
+    throw new Error('网络预检服务商标识无效。');
+  }
+  return value as NetworkProviderId;
+};
+
+const validateNetworkPreflightAction = (value: unknown): NetworkPreflightAction => {
+  if (
+    typeof value !== 'string' ||
+    !NETWORK_PREFLIGHT_ACTIONS.has(value as NetworkPreflightAction)
+  ) {
+    throw new Error('网络预检动作标识无效。');
+  }
+  return value as NetworkPreflightAction;
+};
+
+const officialProviderForChat = (): NetworkProviderId | undefined => {
+  try {
+    const hostname = new URL(chatConfigStore.getView().baseUrl).hostname.toLowerCase();
+    if (hostname === 'api.anthropic.com') {
+      return 'anthropic-claude';
+    }
+    if (hostname === 'api.openai.com' || hostname === 'chatgpt.com') {
+      return hostname === 'api.openai.com' ? 'openai-api' : 'openai-codex';
+    }
+  } catch {
+    // The chat config store already validates URLs; a malformed legacy value is treated as custom.
+  }
+  return undefined;
 };
 
 const validateClaudeLaunchMode = (mode: unknown): ClaudeLaunchMode => {
@@ -906,6 +979,54 @@ const launchRouterInstaller = async (): Promise<ClaudeRouterOperationResult> => 
 };
 
 const registerIpc = (): void => {
+  ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
+    validateSender(event);
+    return requireNetworkPreflightService().get(validateNetworkProvider(provider));
+  });
+  ipcMain.handle('network-preflight:run', (event, input: unknown) => {
+    validateSender(event);
+    const record =
+      input && typeof input === 'object' ? (input as Partial<NetworkPreflightRunInput>) : undefined;
+    if (!record) {
+      throw new Error('网络预检参数无效。');
+    }
+    return requireNetworkPreflightService().run({
+      action: validateNetworkPreflightAction(record.action),
+      force: record.force === true,
+      provider: validateNetworkProvider(record.provider),
+    });
+  });
+  ipcMain.handle('network-preflight:invalidate', (event, reason: unknown) => {
+    validateSender(event);
+    requireNetworkPreflightService().invalidate(
+      typeof reason === 'string' ? reason.slice(0, 120) : 'renderer-request',
+    );
+  });
+  ipcMain.handle('network-preflight:get-settings', (event) => {
+    validateSender(event);
+    return requireNetworkPreflightService().getSettings();
+  });
+  ipcMain.handle('network-preflight:set-settings', (event, settings: unknown) => {
+    validateSender(event);
+    const record =
+      settings && typeof settings === 'object'
+        ? (settings as Partial<NetworkPreflightSettings>)
+        : undefined;
+    if (typeof record?.enhancedPrivacyMode !== 'boolean') {
+      throw new Error('网络预检隐私设置无效。');
+    }
+    return requireNetworkPreflightService().setSettings({
+      enhancedPrivacyMode: record.enhancedPrivacyMode,
+    });
+  });
+  ipcMain.handle('network-preflight:get-history', (event) => {
+    validateSender(event);
+    return requireNetworkPreflightService().getHistory();
+  });
+  ipcMain.handle('network-preflight:clear-history', (event) => {
+    validateSender(event);
+    return requireNetworkPreflightService().clearHistory();
+  });
   ipcMain.handle('app:get-settings', (event) => {
     validateSender(event);
     return {
@@ -1144,12 +1265,16 @@ const registerIpc = (): void => {
     );
     return prepared;
   });
-  ipcMain.handle('chat:start', (event, input: unknown) => {
+  ipcMain.handle('chat:start', async (event, input: unknown) => {
     validateSender(event);
     if (!input || typeof input !== 'object') {
       throw new Error('对话请求格式无效。');
     }
     const request = input as ChatStartInput;
+    const officialProvider = officialProviderForChat();
+    if (officialProvider) {
+      await requireProviderAccessGuard().assertAllowed(officialProvider, 'first-request');
+    }
     return chatService.start(request, (prepared) => {
       chatAttachmentStore.commitDraft(
         request.draftId,
@@ -1180,7 +1305,7 @@ const registerIpc = (): void => {
   });
   ipcMain.handle(
     'runtime:set',
-    (event, sessionId: unknown, runtime: unknown): DevelopmentRuntimeState => {
+    async (event, sessionId: unknown, runtime: unknown): Promise<DevelopmentRuntimeState> => {
       validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
       const selected = validateDevelopmentRuntime(runtime);
@@ -1197,7 +1322,25 @@ const registerIpc = (): void => {
         if (projectHasActiveAgent) {
           throw new Error('请先结束当前开发会话，再切换开发引擎。');
         }
-        agentRuntimeStore.set(status.cwd, selected);
+        if (
+          selected === 'codex' ||
+          (selected === 'claude' && requireClaudeRuntime().usesOfficialProvider(status.cwd))
+        ) {
+          await requireProviderAccessGuard().assertAllowed(
+            selected === 'codex' ? 'openai-codex' : 'anthropic-claude',
+            'provider-switch',
+            status.cwd,
+          );
+        }
+        const rollback = new RollbackCoordinator();
+        rollback.add(() => agentRuntimeStore.set(status.cwd, current));
+        try {
+          agentRuntimeStore.set(status.cwd, selected);
+          rollback.commit();
+        } catch (error) {
+          await rollback.rollback();
+          throw error;
+        }
       }
       return { cwd: status.cwd, runtime: selected, sessionId: validatedSessionId };
     },
@@ -1412,6 +1555,7 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
+        await requireProviderAccessGuard().assertAllowed('openai-codex', 'login', status.cwd);
         const prepared = await requireCodexRuntime().startLogin(
           validatedSessionId,
           status.cwd,
@@ -1467,15 +1611,18 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireCodexRuntime();
+      let restartAttempted = false;
       try {
         if (agentRuntimeStore.get(status.cwd) !== 'codex') {
           throw new Error('当前项目尚未选择 Codex 开发引擎。');
         }
+        await requireProviderAccessGuard().assertAllowed('openai-codex', 'cli-launch', status.cwd);
         const prepared = await runtime.prepareLaunch(
           validatedSessionId,
           status.cwd,
           validateCodexLaunchMode(mode),
         );
+        restartAttempted = true;
         const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
         if (terminalStatus.phase === 'error') {
           throw new Error(terminalStatus.message ?? '无法为 Codex 启动安全终端。');
@@ -1486,7 +1633,9 @@ const registerIpc = (): void => {
           state: await runtime.getState(validatedSessionId, status.cwd),
         };
       } catch (error) {
-        runtime.setInactive(validatedSessionId);
+        if (restartAttempted) {
+          runtime.setInactive(validatedSessionId);
+        }
         return codexFailure(validatedSessionId, error);
       }
     },
@@ -1678,20 +1827,31 @@ const registerIpc = (): void => {
       validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      const rollback = new RollbackCoordinator();
       try {
+        const validatedInput = validateClaudeConfigInput(input);
+        if (validatedInput.provider === 'anthropic') {
+          await requireProviderAccessGuard().assertAllowed(
+            'anthropic-claude',
+            'provider-switch',
+            status.cwd,
+          );
+        }
+        const snapshot = runtime.createConfigSnapshot(status.cwd);
+        rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
+        const state = await runtime.saveConfig(validatedSessionId, status.cwd, validatedInput);
+        rollback.commit();
         return {
           ok: true,
-          state: await requireClaudeRuntime().saveConfig(
-            validatedSessionId,
-            status.cwd,
-            validateClaudeConfigInput(input),
-          ),
+          state,
         };
       } catch (error) {
+        await rollback.rollback();
         return {
           error: error instanceof Error ? error.message : '无法保存 Claude 接入配置。',
           ok: false,
-          state: await requireClaudeRuntime().getState(validatedSessionId, status.cwd),
+          state: await runtime.getState(validatedSessionId, status.cwd),
         };
       }
     },
@@ -1709,14 +1869,27 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
+      const rollback = new RollbackCoordinator();
       try {
+        const validatedEntryId = validateHistoryEntryId(entryId);
+        if (runtime.connectionHistoryUsesOfficialProvider(status.cwd, validatedEntryId)) {
+          await requireProviderAccessGuard().assertAllowed(
+            'anthropic-claude',
+            'provider-switch',
+            status.cwd,
+          );
+        }
+        const snapshot = runtime.createConfigSnapshot(status.cwd);
+        rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
         const state = await runtime.applyConnectionHistory(
           validatedSessionId,
           status.cwd,
-          validateHistoryEntryId(entryId),
+          validatedEntryId,
         );
+        rollback.commit();
         return { entries: runtime.getConnectionHistory(status.cwd), ok: true, state };
       } catch (error) {
+        await rollback.rollback();
         return {
           entries: runtime.getConnectionHistory(status.cwd),
           error: error instanceof Error ? error.message : '无法应用这条接入记录。',
@@ -1779,23 +1952,42 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
+      const rollback = new RollbackCoordinator();
+      let restartAttempted = false;
       try {
-        const prepared = await runtime.relaunch(
-          validatedSessionId,
-          status.cwd,
-          validateClaudeRelaunchInput(input),
-        );
+        const validatedInput = validateClaudeRelaunchInput(input);
+        const targetUsesOfficialProvider =
+          runtime.usesOfficialProvider(status.cwd) ||
+          Boolean(
+            validatedInput.entryId &&
+            runtime.connectionHistoryUsesOfficialProvider(status.cwd, validatedInput.entryId),
+          );
+        if (targetUsesOfficialProvider) {
+          await requireProviderAccessGuard().assertAllowed(
+            'anthropic-claude',
+            'cli-launch',
+            status.cwd,
+          );
+        }
+        const snapshot = runtime.createConfigSnapshot(status.cwd);
+        rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
+        const prepared = await runtime.relaunch(validatedSessionId, status.cwd, validatedInput);
+        restartAttempted = true;
         const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
         if (terminalStatus.phase === 'error') {
           throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
         }
         workspace.write(validatedSessionId, `${prepared.command}\r`);
+        rollback.commit();
         return {
           ok: true,
           state: await runtime.getState(validatedSessionId, status.cwd),
         };
       } catch (error) {
-        runtime.setInactive(validatedSessionId);
+        await rollback.rollback();
+        if (restartAttempted) {
+          runtime.setInactive(validatedSessionId);
+        }
         return claudeFailure(validatedSessionId, error);
       }
     },
@@ -1946,15 +2138,24 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
+      let restartAttempted = false;
       try {
         if (agentRuntimeStore.get(status.cwd) !== 'claude') {
           throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
+        }
+        if (runtime.usesOfficialProvider(status.cwd)) {
+          await requireProviderAccessGuard().assertAllowed(
+            'anthropic-claude',
+            'cli-launch',
+            status.cwd,
+          );
         }
         const prepared = await runtime.prepareLaunch(
           validatedSessionId,
           status.cwd,
           validateClaudeLaunchMode(mode),
         );
+        restartAttempted = true;
         const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
         if (terminalStatus.phase === 'error') {
           throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
@@ -1965,7 +2166,9 @@ const registerIpc = (): void => {
           state: await runtime.getState(validatedSessionId, status.cwd),
         };
       } catch (error) {
-        runtime.setInactive(validatedSessionId);
+        if (restartAttempted) {
+          runtime.setInactive(validatedSessionId);
+        }
         return claudeFailure(validatedSessionId, error);
       }
     },
@@ -2113,15 +2316,24 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
+      let restartAttempted = false;
       try {
         if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
           throw new Error('会话标识无效。');
+        }
+        if (runtime.usesOfficialProvider(status.cwd)) {
+          await requireProviderAccessGuard().assertAllowed(
+            'anthropic-claude',
+            'cli-launch',
+            status.cwd,
+          );
         }
         const prepared = await runtime.prepareLaunchWithSession(
           validatedSessionId,
           status.cwd,
           conversationId,
         );
+        restartAttempted = true;
         const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
         if (terminalStatus.phase === 'error') {
           throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
@@ -2132,7 +2344,9 @@ const registerIpc = (): void => {
           state: await runtime.getState(validatedSessionId, status.cwd),
         };
       } catch (error) {
-        runtime.setInactive(validatedSessionId);
+        if (restartAttempted) {
+          runtime.setInactive(validatedSessionId);
+        }
         return claudeFailure(validatedSessionId, error);
       }
     },
@@ -2302,6 +2516,21 @@ if (!hasSingleInstanceLock) {
     codexRuntime = new CodexRuntime(app.getPath('userData'), (state) => {
       mainWindow?.webContents.send('codex:state', state);
     });
+    const networkPreflightSettingsStore = new NetworkPreflightSettingsStore(
+      app.getPath('userData'),
+    );
+    networkPreflightService = new NetworkPreflightService({
+      diagnosticsStore: new NetworkDiagnosticsStore(app.getPath('userData')),
+      onResult: (result) => {
+        mainWindow?.webContents.send('network-preflight:result', result);
+      },
+      probe: new ProviderConnectivityProbe({
+        appFetch: (url, init) => net.fetch(url, init),
+        resolveProxy: (url) => session.defaultSession.resolveProxy(url),
+      }),
+      settingsStore: networkPreflightSettingsStore,
+    });
+    providerAccessGuard = new ProviderAccessGuard(networkPreflightService);
     registerIpc();
     createTray();
 

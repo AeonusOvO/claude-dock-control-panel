@@ -6155,6 +6155,257 @@ body.is-resizing * {
   background: transparent;
 }
 
+.network-preflight-card {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 12px 16px 0;
+  padding: 10px 12px;
+}
+
+.network-preflight-card__status {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+  min-width: 0;
+}
+
+.network-preflight-card__status > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.network-preflight-card__status strong {
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.network-preflight-card__status span {
+  color: var(--text-lo);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-preflight-card__dot {
+  background: var(--text-dim);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--text-dim) 16%, transparent);
+  flex: 0 0 auto;
+  height: 7px;
+  width: 7px;
+}
+
+.network-preflight-card[data-tone='success'] .network-preflight-card__dot {
+  background: var(--ok-text);
+  box-shadow: 0 0 0 4px var(--ok-tint);
+}
+
+.network-preflight-card[data-tone='warning'] .network-preflight-card__dot {
+  background: var(--warn-text);
+  box-shadow: 0 0 0 4px var(--warn-tint);
+}
+
+.network-preflight-card[data-tone='error'] .network-preflight-card__dot {
+  background: var(--bad-text);
+  box-shadow: 0 0 0 4px var(--bad-tint);
+}
+
+.network-preflight-card[data-tone='pending'] .network-preflight-card__dot {
+  animation: status-pulse 1.4s ease-out infinite;
+  background: var(--accent-text);
+  box-shadow: 0 0 0 4px var(--accent-tint);
+}
+
+.network-preflight-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.network-preflight-card__actions button,
+.network-preflight-dialog button {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 5px 8px;
+}
+
+.network-preflight-card__actions button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.network-preflight-dialog {
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text);
+  max-height: min(82vh, 820px);
+  max-width: min(880px, calc(100vw - 40px));
+  padding: 0;
+  width: 880px;
+}
+
+.network-preflight-dialog::backdrop {
+  background: rgb(0 0 0 / 62%);
+  backdrop-filter: blur(4px);
+}
+
+.network-preflight-dialog > form {
+  display: grid;
+  gap: 16px;
+  max-height: inherit;
+  overflow: auto;
+  padding: 20px;
+}
+
+.network-preflight-dialog__header,
+.network-preflight-dialog__footer,
+.network-preflight-privacy {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.network-preflight-dialog__header > div,
+.network-preflight-privacy > span {
+  display: grid;
+  gap: 3px;
+}
+
+.network-preflight-dialog__header span,
+.network-preflight-dialog__footer > span,
+.network-preflight-privacy small {
+  color: var(--text-lo);
+  font-size: var(--text-xs);
+}
+
+.network-preflight-dialog__summary {
+  background: var(--surface-2);
+  border-left: 3px solid var(--text-dim);
+  border-radius: var(--r-sm);
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+}
+
+.network-preflight-dialog__summary[data-tone='success'] {
+  border-color: var(--ok-text);
+}
+
+.network-preflight-dialog__summary[data-tone='warning'] {
+  border-color: var(--warn-text);
+}
+
+.network-preflight-dialog__summary[data-tone='error'] {
+  border-color: var(--bad-text);
+}
+
+.network-preflight-dialog__summary span {
+  color: var(--text-lo);
+  font-size: var(--text-xs);
+}
+
+.network-preflight-dialog__grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.network-preflight-dialog h3 {
+  font-size: var(--text-sm);
+  margin: 0 0 8px;
+}
+
+.network-preflight-dialog ul {
+  color: var(--text-lo);
+  display: grid;
+  font-size: var(--text-xs);
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.network-preflight-probes {
+  display: grid;
+  gap: 6px;
+}
+
+.network-preflight-probes > div {
+  align-items: start;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  display: grid;
+  font-size: var(--text-xs);
+  gap: 3px;
+  grid-template-columns: 88px minmax(130px, 0.7fr) minmax(220px, 1.5fr);
+  padding: 8px 10px;
+}
+
+.network-preflight-probes [data-status='passed'] {
+  color: var(--ok-text);
+}
+
+.network-preflight-probes [data-status='failed'] {
+  color: var(--bad-text);
+}
+
+.network-preflight-probes [data-status='warning'] {
+  color: var(--warn-text);
+}
+
+.network-preflight-dialog__footer {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.network-preflight-dialog__footer > div {
+  display: flex;
+  gap: 8px;
+}
+
+.network-preflight-dialog .dialog-primary {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-fg);
+}
+
+@media (max-width: 720px) {
+  .network-preflight-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .network-preflight-card__actions button {
+    flex: 1;
+  }
+
+  .network-preflight-dialog__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .network-preflight-probes > div {
+    grid-template-columns: 72px 1fr;
+  }
+
+  .network-preflight-probes > div > span:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
 .footer-context {
   align-items: center;
   display: inline-flex;

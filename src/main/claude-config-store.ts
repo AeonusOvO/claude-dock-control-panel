@@ -18,6 +18,10 @@ interface StoredClaudeConfig extends NormalizedClaudeConfig {
   encryptedCredential?: string;
 }
 
+export interface ClaudeConfigSnapshot {
+  project?: StoredClaudeConfig;
+}
+
 /** Armed by default: without it the mode picker could never offer 「完全允许」 at all. */
 const DEFAULT_ALLOW_BYPASS_PERMISSIONS = true;
 
@@ -115,6 +119,22 @@ export class ClaudeConfigStore {
       this.load().projects[projectKey(cwd)]?.allowBypassPermissions ??
       DEFAULT_ALLOW_BYPASS_PERMISSIONS
     );
+  }
+
+  public createSnapshot(cwd: string): ClaudeConfigSnapshot {
+    const project = this.load().projects[projectKey(cwd)];
+    return project ? { project: structuredClone(project) } : {};
+  }
+
+  public restoreSnapshot(cwd: string, snapshot: ClaudeConfigSnapshot): void {
+    const store = this.load();
+    const key = projectKey(cwd);
+    if (snapshot.project) {
+      store.projects[key] = structuredClone(snapshot.project);
+    } else {
+      delete store.projects[key];
+    }
+    this.persist(store);
   }
 
   /**

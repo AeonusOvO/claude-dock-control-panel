@@ -980,6 +980,25 @@
             </button>
           </nav>
 
+          <section
+            class="network-preflight-card"
+            id="network-preflight-card"
+            data-tone="unknown"
+            aria-live="polite"
+          >
+            <div class="network-preflight-card__status">
+              <span class="network-preflight-card__dot" aria-hidden="true"></span>
+              <div>
+                <strong id="network-preflight-provider">官方网络预检</strong>
+                <span id="network-preflight-summary">等待首次无额度探测</span>
+              </div>
+            </div>
+            <div class="network-preflight-card__actions">
+              <button id="network-preflight-recheck" type="button">重新检测</button>
+              <button id="network-preflight-details" type="button">详情</button>
+            </div>
+          </section>
+
           <div class="workbench-pages workbench-pages--claude">
             <section class="workbench-page workbench-page--active" data-workbench-page="session">
               <div class="security-banner" id="claude-security-banner" data-tone="checking">
@@ -1757,6 +1776,58 @@
           >
             确认
           </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
+      class="network-preflight-dialog"
+      id="network-preflight-dialog"
+      aria-labelledby="network-preflight-dialog-title"
+    >
+      <form method="dialog">
+        <header class="network-preflight-dialog__header">
+          <div>
+            <span>官方 AI 服务安全检查</span>
+            <strong id="network-preflight-dialog-title">网络预检详情</strong>
+          </div>
+          <button id="network-preflight-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <section class="network-preflight-dialog__summary" data-tone="unknown">
+          <strong id="network-preflight-dialog-summary">尚无探测结果</strong>
+          <span id="network-preflight-dialog-meta"
+            >探测不调用模型、不读取登录令牌，也不修改系统代理。</span
+          >
+        </section>
+        <label class="network-preflight-privacy" for="network-preflight-privacy">
+          <span>
+            <strong>增强隐私模式</strong>
+            <small>不请求第三方公网出口情报；官方 DNS、HTTPS、TLS 与 CLI 路径仍会检查。</small>
+          </span>
+          <input id="network-preflight-privacy" type="checkbox" />
+        </label>
+        <div class="network-preflight-dialog__grid">
+          <section>
+            <h3>风险与结论</h3>
+            <ul id="network-preflight-reasons"></ul>
+          </section>
+          <section>
+            <h3>进程网络路径</h3>
+            <ul id="network-preflight-paths"></ul>
+          </section>
+        </div>
+        <section>
+          <h3>逐项探测</h3>
+          <div class="network-preflight-probes" id="network-preflight-probes"></div>
+        </section>
+        <footer class="network-preflight-dialog__footer">
+          <span>诊断历史仅保留 7 天 / 40 条，地址只保存掩码网段，凭据会脱敏。</span>
+          <div>
+            <button id="network-preflight-clear-history" type="button">清除诊断历史</button>
+            <button class="dialog-primary" id="network-preflight-dialog-recheck" type="button">
+              立即重新检测
+            </button>
+          </div>
         </footer>
       </form>
     </dialog>

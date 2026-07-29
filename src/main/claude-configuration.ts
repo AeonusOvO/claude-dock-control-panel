@@ -6,6 +6,11 @@ import type {
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
+import {
+  blockingVersionRuleFor,
+  compareSemanticVersions,
+  getProviderProfile,
+} from '../shared/provider-profiles';
 
 export interface NormalizedClaudeConfig {
   apiKeyHelperPolicy: NonNullable<SaveClaudeConfigInput['apiKeyHelperPolicy']>;
@@ -59,23 +64,6 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 export const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]~]{1,200}$/;
-const TRACKING_VERSION_START = [2, 1, 91] as const;
-const TRACKING_VERSION_END = [2, 1, 196] as const;
-const MINIMUM_PROTECTED_VERSION = [2, 1, 197] as const;
-
-const compareVersions = (left: readonly number[], right: readonly number[]): -1 | 0 | 1 => {
-  for (let index = 0; index < 3; index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference < 0) {
-      return -1;
-    }
-    if (difference > 0) {
-      return 1;
-    }
-  }
-  return 0;
-};
-
 export const parseClaudeVersion = (output: string): [number, number, number] | undefined => {
   const match = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(output);
   if (!match) {
@@ -100,25 +88,26 @@ export const evaluateClaudeInstallation = (
   }
 
   const versionText = version.join('.');
-  const isKnownTrackingVersion =
-    compareVersions(version, TRACKING_VERSION_START) >= 0 &&
-    compareVersions(version, TRACKING_VERSION_END) <= 0;
-
-  if (isKnownTrackingVersion) {
+  const policy = getProviderProfile('anthropic-claude');
+  const blockingRule = blockingVersionRuleFor(policy, versionText);
+  if (blockingRule) {
     return {
       executable,
       installed: true,
-      message: `版本 ${versionText} 位于已披露的隐藏地区/代理检测影响范围内，请先升级。`,
+      message: `版本 ${versionText} 命中安全规则：${blockingRule.reason}`,
       security: 'blocked-version',
       version: versionText,
     };
   }
 
-  if (compareVersions(version, MINIMUM_PROTECTED_VERSION) < 0) {
+  if (
+    policy.minimumSecureClientVersion &&
+    compareSemanticVersions(versionText, policy.minimumSecureClientVersion) < 0
+  ) {
     return {
       executable,
       installed: true,
-      message: `版本 ${versionText} 过旧；受保护启动要求 2.1.197 或更高版本。`,
+      message: `版本 ${versionText} 过旧；受保护启动要求 ${policy.minimumSecureClientVersion} 或更高版本。`,
       security: 'update-required',
       version: versionText,
     };

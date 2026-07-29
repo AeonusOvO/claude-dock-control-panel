@@ -74,6 +74,27 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('chat:stream', callback);
     };
   },
+  getNetworkPreflight: (provider) => ipcRenderer.invoke('network-preflight:get', provider),
+  runNetworkPreflight: (input) => ipcRenderer.invoke('network-preflight:run', input),
+  invalidateNetworkPreflight: (reason) =>
+    ipcRenderer.invoke('network-preflight:invalidate', reason),
+  getNetworkPreflightSettings: () => ipcRenderer.invoke('network-preflight:get-settings'),
+  setNetworkPreflightSettings: (settings) =>
+    ipcRenderer.invoke('network-preflight:set-settings', settings),
+  getNetworkPreflightHistory: () => ipcRenderer.invoke('network-preflight:get-history'),
+  clearNetworkPreflightHistory: () => ipcRenderer.invoke('network-preflight:clear-history'),
+  onNetworkPreflight: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      result: Parameters<typeof listener>[0],
+    ): void => {
+      listener(result);
+    };
+    ipcRenderer.on('network-preflight:result', callback);
+    return () => {
+      ipcRenderer.removeListener('network-preflight:result', callback);
+    };
+  },
   openMarkdownExternal: (url) => ipcRenderer.invoke('markdown:open-external', url),
   activateProject: (sessionId: string) =>
     ipcRenderer.invoke('project:activate', sessionId) as Promise<WorkspaceResult>,

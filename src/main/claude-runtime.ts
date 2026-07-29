@@ -52,6 +52,7 @@ import {
 } from './claude-configuration';
 import { claudeMessagesEndpoint, testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
+import type { ClaudeConfigSnapshot } from './claude-config-store';
 import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import {
@@ -508,6 +509,22 @@ export class ClaudeRuntime {
 
   public closeSession(sessionId: string): void {
     this.sessions.delete(sessionId);
+  }
+
+  public usesOfficialProvider(cwd: string): boolean {
+    return this.configStore.getConfig(cwd).provider === 'anthropic';
+  }
+
+  public connectionHistoryUsesOfficialProvider(cwd: string, entryId: string): boolean {
+    return this.historyStore.toSaveInput(cwd, entryId).provider === 'anthropic';
+  }
+
+  public createConfigSnapshot(cwd: string): ClaudeConfigSnapshot {
+    return this.configStore.createSnapshot(cwd);
+  }
+
+  public restoreConfigSnapshot(cwd: string, snapshot: ClaudeConfigSnapshot): void {
+    this.configStore.restoreSnapshot(cwd, snapshot);
   }
 
   /** Applies to the next Claude launch; a live Ink TUI is never mutated underneath the user. */

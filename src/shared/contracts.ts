@@ -37,6 +37,110 @@ export type ChatMessageRole = 'assistant' | 'system' | 'user';
 export type ChatStreamEventType =
   'aborted' | 'delta' | 'done' | 'error' | 'input-json' | 'refusal' | 'start' | 'thinking';
 export type ChatTokenUsageSource = 'estimated' | 'provider';
+export type NetworkProviderId = 'anthropic-claude' | 'openai-api' | 'openai-codex';
+export type NetworkPreflightAction =
+  'background' | 'cli-launch' | 'cloud-task' | 'first-request' | 'login' | 'provider-switch';
+export type NetworkPreflightStatus =
+  | 'allowed'
+  | 'allowed_with_notice'
+  | 'blocked'
+  | 'degraded'
+  | 'partially_available'
+  | 'testing'
+  | 'unknown'
+  | 'warning';
+export type NetworkProbeStatus = 'failed' | 'passed' | 'skipped' | 'unknown' | 'warning';
+export type NetworkProcessKind =
+  'application' | 'claude-cli' | 'codex-cli' | 'oauth-browser' | 'renderer' | 'terminal';
+
+export interface NetworkPreflightSettings {
+  /** Omits third-party public-egress intelligence. Official connectivity checks still run. */
+  enhancedPrivacyMode: boolean;
+}
+
+export interface NetworkPathView {
+  detail: string;
+  dnsServers: string[];
+  ipv4Available: boolean;
+  ipv6Available: boolean;
+  process: NetworkProcessKind;
+  proxyConfigured: boolean;
+  proxyKind: 'direct' | 'environment' | 'pac' | 'socks' | 'system' | 'unknown';
+  virtualInterfaces: string[];
+}
+
+export interface NetworkProbeResult {
+  checkedAt: number;
+  detail: string;
+  id: string;
+  kind: 'api' | 'dns' | 'https' | 'oauth' | 'path' | 'tls' | 'version' | 'websocket';
+  label: string;
+  process: NetworkProcessKind;
+  required: boolean;
+  status: NetworkProbeStatus;
+  target?: string;
+}
+
+export interface NetworkRiskSignal {
+  confidence: 'high' | 'low' | 'medium';
+  detail: string;
+  id: string;
+  label: string;
+  observedAt: number;
+  score: number;
+  severity: 'critical' | 'info' | 'notice' | 'warning';
+  source: string;
+}
+
+export interface NetworkFeatureAccess {
+  action: NetworkPreflightAction;
+  allowed: boolean;
+  reason?: string;
+}
+
+export interface NetworkEgressSummary {
+  asn?: string;
+  countryCode?: string;
+  countryName?: string;
+  ipv4?: string;
+  ipv6?: string;
+  organization?: string;
+  riskFlags?: string[];
+  sourceCount: number;
+  sources?: string[];
+  sourcesAgree: boolean;
+  stability: 'changed' | 'stable' | 'unknown';
+}
+
+export interface NetworkPreflightResult {
+  cacheExpiresAt?: number;
+  checkedAt?: number;
+  egress?: NetworkEgressSummary;
+  featureAccess: NetworkFeatureAccess[];
+  paths: NetworkPathView[];
+  probes: NetworkProbeResult[];
+  provider: NetworkProviderId;
+  providerLabel: string;
+  reasons: string[];
+  riskLevel: 'critical' | 'high' | 'low' | 'medium' | 'unknown';
+  riskScore: number;
+  signals: NetworkRiskSignal[];
+  startedAt: number;
+  status: NetworkPreflightStatus;
+  summary: string;
+}
+
+export interface NetworkPreflightRunInput {
+  action: NetworkPreflightAction;
+  cwd?: string;
+  force?: boolean;
+  provider: NetworkProviderId;
+}
+
+export interface NetworkPreflightHistoryView {
+  entries: NetworkPreflightResult[];
+  retentionDays: number;
+}
 
 export interface ChatConfigView {
   authMode: ChatAuthMode;
@@ -706,6 +810,16 @@ export interface ControlPanelApi {
   startChat: (input: ChatStartInput) => Promise<ChatPreflightResult>;
   stopChat: (requestId: string) => Promise<void>;
   onChatStream: (listener: (event: ChatStreamEvent) => void) => Unsubscribe;
+  getNetworkPreflight: (provider: NetworkProviderId) => Promise<NetworkPreflightResult>;
+  runNetworkPreflight: (input: NetworkPreflightRunInput) => Promise<NetworkPreflightResult>;
+  invalidateNetworkPreflight: (reason: string) => Promise<void>;
+  getNetworkPreflightSettings: () => Promise<NetworkPreflightSettings>;
+  setNetworkPreflightSettings: (
+    settings: NetworkPreflightSettings,
+  ) => Promise<NetworkPreflightSettings>;
+  getNetworkPreflightHistory: () => Promise<NetworkPreflightHistoryView>;
+  clearNetworkPreflightHistory: () => Promise<NetworkPreflightHistoryView>;
+  onNetworkPreflight: (listener: (result: NetworkPreflightResult) => void) => Unsubscribe;
   openMarkdownExternal: (url: string) => Promise<boolean>;
   activateProject: (sessionId: string) => Promise<WorkspaceResult>;
   addProject: (directoryPath: string) => Promise<WorkspaceResult>;

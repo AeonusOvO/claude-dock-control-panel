@@ -281,16 +281,20 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
   });
 
-  it('tests the saved connection in place and shows the busy state immediately', () => {
+  it('opens the zero-quota network preflight from the footer and keeps manual tests explicit', () => {
     expect(rendererSource).toMatch(
-      /footerConnection\.addEventListener\('click', \(\) => \{[\s\S]*?if \(connectionTestInProgress\) \{\s+return;\s+\}[\s\S]*?void runConnectionTest\(false, \{[\s\S]*?credentialAction: 'keep',/,
+      /footerConnection\.addEventListener\('click', \(\) => \{\s+void openNetworkPreflightDialog\(\);[\s\S]*?void runActiveNetworkPreflight\(false\);/,
     );
     const footerHandler = rendererSource.slice(
       rendererSource.indexOf("footerConnection.addEventListener('click'"),
       rendererSource.indexOf("footerModel.addEventListener('click'"),
     );
+    expect(footerHandler).not.toContain('runConnectionTest(');
     expect(footerHandler).not.toContain("selectRailTab('connection')");
     expect(footerHandler).not.toContain('setWorkbenchOpen(false)');
+    expect(rendererSource).toContain('window.controlPanel.onNetworkPreflight((result) => {');
+    expect(rendererMarkup).toContain('id="network-preflight-dialog"');
+    expect(rendererMarkup).toContain('id="network-preflight-recheck"');
     expect(rendererSource).toMatch(
       /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState\);/,
     );

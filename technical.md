@@ -853,6 +853,83 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   CSS 在 900/850px 和 700px 高度设置独立断点，避免工具栏、状态栏、插件操作区和安装来源
   控件重叠。
 
+## 官方 AI 网络预检与访问守卫
+
+### 模块与数据流
+
+`src/shared/provider-profiles.ts` 是版本化服务商配置源，集中维护官方端点、动作需求、支持地区、
+缓存 TTL、风险阈值、隐私环境变量、版本规则和检索日期。Schema 在模块加载时校验；端点只允许
+HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启动，避免静默使用损坏规则。
+配置随经过构建/发布流程的应用版本更新，不接受运行时下载的无签名规则；这样牺牲即时热更新，
+但避免网络中间人替换封锁策略。规则损坏时 fail-closed 并要求安装修复版本，不回退到陈旧的
+隐藏常量。
+
+主进程链路如下：
+
+1. `NetworkPathResolver` 读取活动网卡、IPv4/IPv6 可用性、DNS 服务器、虚拟接口名称、
+   Electron `session.resolveProxy()` 与 CLI 标准代理环境；不记录代理 URL、用户名或密码。
+2. `ProviderConnectivityProbe` 并行执行官方域名 DNS、Electron 无凭据 `HEAD`、CLI
+   `curl.exe` HTTPS/TLS、Codex WebSocket Upgrade 和 CLI `--version`。401/403/405 表示端点
+   可达而不是认证成功；不附带现有登录令牌、API Key，不调用模型接口正文。
+3. 非增强隐私模式下，ipapi.co 与 ipwho.is 提供两路地区/ASN 情报；ipwho.is 可用时还读取
+   VPN、公共代理、Tor、托管/数据中心与匿名网络辅助标签，但标签本身只产生提示。api4/api6.ipify.org
+   分别补充公网 IPv4/IPv6。原始地址只存在于单次探测内存，进入结果前转换为 IPv4 `/24` 或
+   IPv6 `/64`。单源、冲突或服务不可用不能形成地区封锁。
+4. `RiskDecisionEngine` 把观测转换为 `allowed`、`allowed_with_notice`、`warning`、
+   `degraded`、`partially_available` 或 `blocked`，同时生成按动作的 `featureAccess`。
+   代理/VPN/虚拟网卡只加提示；双源一致的非支持地区、活动所需 DNS/API/CLI 路径失败、关键
+   TLS/跨域重定向异常、离线、危险版本和 Claude SOCKS 路径才会阻止对应高风险动作。
+5. `NetworkPreflightService` 按“服务商 + 动作 + 项目”执行 single-flight 和两分钟缓存。
+   网络或设置变化通过 generation 失效旧结果；失效期间完成的旧请求不会写入缓存或历史。
+6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 接入保存/历史恢复/
+   启动/重启、开发引擎切换和官方独立对话首次请求都必须先通过。自定义网关和普通本地终端
+   不被官方服务状态误伤。
+
+### 回滚与故障边界
+
+- `RollbackCoordinator` 以逆序、幂等方式执行补偿步骤。项目开发引擎持久化失败时恢复原选择；
+  Claude 保存、历史恢复和跨端点重启失败时恢复 `ClaudeConfigStore` 的加密快照。
+- 访问守卫在任何配置或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
+  inactive；只有已经尝试销毁并重启 PTY 后发生错误才进入 inactive 状态。
+- WebSocket 单独失败时基础 HTTPS/CLI 功能仍为 `partially_available`，但 `cloud-task`
+  动作被拒绝。未知或跳过的关键探测按 fail-closed 处理；公网情报未知只降级，不单独阻止。
+- 本实现不修改系统代理、DNS、路由表、Codex/Claude Code 配置文件或官方登录存储，也不自动
+  关闭 VPN。Claude Code 官方不支持 SOCKS，因此只对 Claude CLI 的 SOCKS 环境做硬阻止。
+
+### 隐私、历史与第三方边界
+
+- `NetworkDiagnosticsStore` 只保留 7 天、最多 40 条；写盘前再次移除 Bearer、`sk-*` 和 URL
+  查询凭据。记录包含时间、服务商、掩码出口、风险、进程路径和逐项结论，不包含 cwd、完整 IP、
+  请求/响应正文、OAuth Token、API Key 或代理凭据；用户可在详情弹窗立即清空。
+- 增强隐私模式持久化在 `userData/network-preflight/settings.json`。开启后完全跳过 ipapi.co、
+  ipwho.is 和 ipify，官方 DNS/HTTPS/TLS/CLI 探测仍运行，地区情报显示不可用但不据此封锁。
+- `userData/network-preflight/history.json` 和设置文件使用 `0600` 意图、临时文件 +
+  `rename` 原子替换。Windows 的最终 ACL 仍由当前用户配置和 Electron `userData` 目录继承。
+- 本轮没有复制 CheckCC、CC Switch 或其他开源项目的代码、图标、文案或数据文件，也没有新增
+  npm 依赖，因此无新增代码许可证归属。ipapi.co、ipwho.is 与 ipify 仅作为可关闭的远程诊断
+  服务，产品文档明确列出其用途；不得把它们的返回作为唯一封锁依据。
+
+### 维护与外部依据（核对日期 2026-07-29）
+
+- OpenAI ChatGPT 支持地区：
+  <https://help.openai.com/en/articles/7947663-chatgpt-supported-countries>
+- OpenAI API 支持地区：
+  <https://help.openai.com/en/articles/5347006-openai-api-supported-countries-and-territories>
+- OpenAI ChatGPT/Codex 网络与 WebSocket 端点：
+  <https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps>
+- Anthropic API/Claude.ai 支持地区：<https://www.anthropic.com/supported-countries>
+- Claude Code 企业代理、CA、必需域名和隐私流量说明：
+  <https://code.claude.com/docs/en/network-config>
+- Claude Code 官方安全公告：<https://github.com/anthropics/claude-code/security/advisories>
+- 公开出口诊断服务：<https://ipapi.co/>、<https://ipwho.is/>、<https://www.ipify.org/>
+
+维护服务商规则时必须同步更新 `updatedAt` / `sources[].retrievedAt`、相关测试和本节；支持地区
+发生变化时不能只改界面文案。媒体披露规则与官方安全公告必须保留独立 source，不能把媒体信息
+伪装成官方产品政策。
+
+地区情报目前只能可靠到国家/地区代码，无法判定官方列表中类似 Ukraine 特定州的细粒度例外；
+对这类国家级命中只显示“官方列表包含例外”的维护限制，不能把城市级推断包装成确定结论。
+
 ## 安全策略
 
 - `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。

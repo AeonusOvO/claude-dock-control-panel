@@ -47,6 +47,8 @@ import type {
   CodexProjectState,
   DevelopmentRuntime,
   DevelopmentRuntimeState,
+  NetworkPreflightResult,
+  NetworkProviderId,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -213,6 +215,30 @@ const emptyStateTitle = requiredElement<HTMLElement>('#empty-state-title');
 const emptyStateHint = requiredElement<HTMLElement>('#empty-state-hint');
 const footerConnection = requiredElement<HTMLButtonElement>('#footer-connection');
 const footerConnectionLabel = requiredElement<HTMLElement>('#footer-connection-label');
+const networkPreflightCard = requiredElement<HTMLElement>('#network-preflight-card');
+const networkPreflightProvider = requiredElement<HTMLElement>('#network-preflight-provider');
+const networkPreflightSummary = requiredElement<HTMLElement>('#network-preflight-summary');
+const networkPreflightRecheck = requiredElement<HTMLButtonElement>('#network-preflight-recheck');
+const networkPreflightDetails = requiredElement<HTMLButtonElement>('#network-preflight-details');
+const networkPreflightDialog = requiredElement<HTMLDialogElement>('#network-preflight-dialog');
+const networkPreflightDialogSummary = requiredElement<HTMLElement>(
+  '#network-preflight-dialog-summary',
+);
+const networkPreflightDialogMeta = requiredElement<HTMLElement>('#network-preflight-dialog-meta');
+const networkPreflightDialogTone = requiredElement<HTMLElement>(
+  '.network-preflight-dialog__summary',
+);
+const networkPreflightPrivacy = requiredElement<HTMLInputElement>('#network-preflight-privacy');
+const networkPreflightReasons = requiredElement<HTMLUListElement>('#network-preflight-reasons');
+const networkPreflightPaths = requiredElement<HTMLUListElement>('#network-preflight-paths');
+const networkPreflightProbes = requiredElement<HTMLElement>('#network-preflight-probes');
+const networkPreflightClearHistory = requiredElement<HTMLButtonElement>(
+  '#network-preflight-clear-history',
+);
+const networkPreflightDialogRecheck = requiredElement<HTMLButtonElement>(
+  '#network-preflight-dialog-recheck',
+);
+const networkPreflightClose = requiredElement<HTMLButtonElement>('#network-preflight-close');
 const footerContextLabel = requiredElement<HTMLElement>('#footer-context-label');
 const footerContextRing = requiredElement<HTMLElement>('#footer-context-ring');
 const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
@@ -487,6 +513,7 @@ const terminalViews = new Map<string, TerminalView>();
 const claudeStates = new Map<string, ClaudeProjectState>();
 const codexStates = new Map<string, CodexProjectState>();
 const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
+const networkPreflightResults = new Map<NetworkProviderId, NetworkPreflightResult>();
 /** Conversation history per project folder, keyed by the lower-cased folder path. */
 const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
 const expandedFolders = new Set<string>();
@@ -500,6 +527,8 @@ let codexRequestGeneration = 0;
 let runtimeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
+let networkPreflightInProgress = false;
+let networkPreflightDialogProvider: NetworkProviderId | undefined;
 let connectionEnvironmentReady = false;
 let providerGroupExpansionPending = false;
 let selectedProviderId: ClaudeProviderId | undefined;
@@ -918,6 +947,225 @@ const activeStatus = (): TerminalStatus | undefined =>
 const activeDevelopmentRuntime = (): DevelopmentRuntime => {
   const status = activeStatus();
   return status ? (developmentRuntimeStates.get(status.id)?.runtime ?? 'claude') : 'claude';
+};
+
+const activeNetworkProvider = (): NetworkProviderId | undefined => {
+  if (activeDevelopmentRuntime() === 'codex') {
+    return 'openai-codex';
+  }
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  return state?.config.provider === 'gateway' ? undefined : 'anthropic-claude';
+};
+
+const networkPreflightTone = (
+  result: NetworkPreflightResult | undefined,
+): 'error' | 'pending' | 'success' | 'unknown' | 'warning' => {
+  if (!result) {
+    return 'unknown';
+  }
+  if (result.status === 'testing') {
+    return 'pending';
+  }
+  if (result.status === 'blocked') {
+    return 'error';
+  }
+  if (result.status === 'allowed') {
+    return 'success';
+  }
+  return 'warning';
+};
+
+const networkStatusLabel = (result: NetworkPreflightResult): string => {
+  switch (result.status) {
+    case 'allowed':
+      return '官方网络正常';
+    case 'allowed_with_notice':
+      return '网络可用 · 有路径提示';
+    case 'blocked':
+      return '官方网络已阻止';
+    case 'degraded':
+      return '网络结果不完整';
+    case 'partially_available':
+      return '基础可用 · 云任务受限';
+    case 'testing':
+      return '正在执行无额度预检';
+    case 'unknown':
+      return '网络状态未知';
+    case 'warning':
+      return '网络可用 · 需要确认';
+  }
+};
+
+const replaceList = (target: HTMLUListElement, values: string[], empty: string): void => {
+  const items = values.length > 0 ? values : [empty];
+  target.replaceChildren(
+    ...items.map((value) => {
+      const item = document.createElement('li');
+      item.textContent = value;
+      return item;
+    }),
+  );
+};
+
+const renderNetworkPreflightDetails = (result?: NetworkPreflightResult): void => {
+  const tone = networkPreflightTone(result);
+  networkPreflightDialogTone.dataset.tone = tone;
+  if (!result) {
+    networkPreflightDialogSummary.textContent = '尚无探测结果';
+    networkPreflightDialogMeta.textContent = '探测不调用模型、不读取登录令牌，也不修改系统代理。';
+    replaceList(networkPreflightReasons, [], '打开工作台后会自动执行首次检查。');
+    replaceList(networkPreflightPaths, [], '尚未解析进程网络路径。');
+    networkPreflightProbes.replaceChildren();
+    return;
+  }
+  networkPreflightDialogSummary.textContent = result.summary;
+  const checkedAt = result.checkedAt
+    ? new Intl.DateTimeFormat('zh-CN', {
+        dateStyle: 'short',
+        timeStyle: 'medium',
+      }).format(result.checkedAt)
+    : '正在检测';
+  const egress = result.egress;
+  const egressDetail = egress
+    ? [
+        egress.countryCode,
+        egress.ipv4 ?? egress.ipv6,
+        `${egress.sourceCount} 个出口来源`,
+        egress.sources?.join(' + '),
+        egress.riskFlags?.length ? `辅助标签：${egress.riskFlags.join('、')}` : undefined,
+        egress.sourcesAgree ? '双源一致' : '未形成双源共识',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '出口情报未启用或不可用';
+  networkPreflightDialogMeta.textContent = `${checkedAt} · 风险 ${result.riskScore}/100 · ${egressDetail}`;
+  replaceList(networkPreflightReasons, result.reasons, '没有需要用户处理的风险信号。');
+  replaceList(
+    networkPreflightPaths,
+    result.paths.map(
+      (pathView) =>
+        `${pathView.detail} ${pathView.proxyConfigured ? `代理：${pathView.proxyKind}` : '直连'}${
+          pathView.virtualInterfaces.length > 0
+            ? `；虚拟接口：${pathView.virtualInterfaces.join('、')}`
+            : ''
+        }`,
+    ),
+    '尚未解析进程网络路径。',
+  );
+  networkPreflightProbes.replaceChildren(
+    ...result.probes.map((probe) => {
+      const row = document.createElement('div');
+      const status = document.createElement('span');
+      status.dataset.status = probe.status;
+      status.textContent =
+        probe.status === 'passed'
+          ? '通过'
+          : probe.status === 'failed'
+            ? '失败'
+            : probe.status === 'warning'
+              ? '警告'
+              : probe.status === 'skipped'
+                ? '已跳过'
+                : '未知';
+      const label = document.createElement('strong');
+      label.textContent = probe.label;
+      const detail = document.createElement('span');
+      detail.textContent = probe.detail;
+      row.append(status, label, detail);
+      return row;
+    }),
+  );
+};
+
+const renderActiveNetworkPreflight = (): void => {
+  const provider = activeNetworkProvider();
+  if (!provider) {
+    networkPreflightCard.dataset.tone = 'success';
+    networkPreflightProvider.textContent = '自定义网关';
+    networkPreflightSummary.textContent = '不使用官方服务守卫，按当前网关健康状态运行';
+    networkPreflightRecheck.disabled = false;
+    return;
+  }
+  const result = networkPreflightResults.get(provider);
+  const tone = networkPreflightTone(result);
+  networkPreflightCard.dataset.tone = tone;
+  networkPreflightProvider.textContent =
+    result?.providerLabel ??
+    (provider === 'openai-codex' ? 'OpenAI Codex' : 'Anthropic Claude Code');
+  networkPreflightSummary.textContent = result?.summary ?? '等待首次无额度探测';
+  networkPreflightRecheck.disabled = networkPreflightInProgress || result?.status === 'testing';
+  if (connectionTestInProgress && activeDevelopmentRuntime() === 'claude') {
+    return;
+  }
+  footerConnection.dataset.tone = tone === 'unknown' ? 'warning' : tone;
+  footerConnection.disabled = result?.status === 'testing';
+  footerConnection.setAttribute('aria-busy', String(result?.status === 'testing'));
+  footerConnectionLabel.textContent = result ? networkStatusLabel(result) : '官方网络待检测';
+  if (result?.status === 'blocked') {
+    runClaudeButton.disabled = true;
+    runClaudeButton.title = result.reasons[0] ?? result.summary;
+    for (const button of [
+      launchNewButton,
+      launchContinueButton,
+      launchResumeButton,
+      codexLaunchNew,
+      codexLaunchContinue,
+      codexLaunchResume,
+    ]) {
+      button.disabled = true;
+    }
+  }
+};
+
+const runActiveNetworkPreflight = async (
+  force: boolean,
+  providerOverride?: NetworkProviderId,
+): Promise<void> => {
+  const provider = providerOverride ?? activeNetworkProvider();
+  if (!provider || networkPreflightInProgress) {
+    if (!provider) {
+      showToast('当前 Claude 配置使用自定义网关，不需要官方服务预检。');
+    }
+    return;
+  }
+  networkPreflightInProgress = true;
+  networkPreflightRecheck.disabled = true;
+  networkPreflightDialogRecheck.disabled = true;
+  try {
+    const result = await window.controlPanel.runNetworkPreflight({
+      action: 'background',
+      force,
+      provider,
+    });
+    networkPreflightResults.set(provider, result);
+    renderActiveNetworkPreflight();
+    if (!networkPreflightDialogProvider || networkPreflightDialogProvider === provider) {
+      renderNetworkPreflightDetails(result);
+    }
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '网络预检无法完成。', 'error');
+  } finally {
+    networkPreflightInProgress = false;
+    networkPreflightDialogRecheck.disabled = false;
+    renderActiveNetworkPreflight();
+  }
+};
+
+const openNetworkPreflightDialog = async (providerOverride?: NetworkProviderId): Promise<void> => {
+  const provider = providerOverride ?? activeNetworkProvider();
+  networkPreflightDialogProvider = provider;
+  renderNetworkPreflightDetails(provider ? networkPreflightResults.get(provider) : undefined);
+  try {
+    networkPreflightPrivacy.checked = (
+      await window.controlPanel.getNetworkPreflightSettings()
+    ).enhancedPrivacyMode;
+  } catch {
+    networkPreflightPrivacy.checked = false;
+  }
+  if (!networkPreflightDialog.open) {
+    networkPreflightDialog.showModal();
+  }
 };
 
 const chatConfigInput = (): SaveChatConfigInput => {
@@ -2478,6 +2726,7 @@ const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => 
       void loadClaudeState(state.sessionId);
     }
   }
+  void runActiveNetworkPreflight(false);
 };
 
 const renderCodexState = (state: CodexProjectState): void => {
@@ -2591,6 +2840,7 @@ const renderCodexState = (state: CodexProjectState): void => {
   codexBoundaryNote.textContent = state.warning
     ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
     : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
+  renderActiveNetworkPreflight();
 };
 
 const loadCodexState = async (sessionId: string): Promise<void> => {
@@ -2786,6 +3036,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     renderRouterRemediation(routerManagementState);
   }
   updateSmartGuidance();
+  renderActiveNetworkPreflight();
 };
 
 const loadClaudeState = async (sessionId: string): Promise<void> => {
@@ -6818,6 +7069,8 @@ const switchDevelopmentRuntime = async (runtime: DevelopmentRuntime): Promise<vo
     } else {
       await loadClaudeState(status.id);
     }
+    await window.controlPanel.invalidateNetworkPreflight('provider-switch');
+    void runActiveNetworkPreflight(true);
     showToast(runtime === 'codex' ? '当前项目已切换到 Codex。' : '当前项目已切换到 Claude Code。');
   } catch (error) {
     const current = developmentRuntimeStates.get(status.id)?.runtime ?? 'claude';
@@ -7090,6 +7343,33 @@ window.controlPanel.onCodexState((state) => {
   ) {
     codexAutoLaunchSessionId = '';
     void launchCodex('new');
+  }
+});
+window.controlPanel.onNetworkPreflight((result) => {
+  networkPreflightResults.set(result.provider, result);
+  if (result.provider === activeNetworkProvider()) {
+    const status = activeStatus();
+    const codexState = status ? codexStates.get(status.id) : undefined;
+    const claudeState = status ? claudeStates.get(status.id) : undefined;
+    if (activeDevelopmentRuntime() === 'codex' && codexState) {
+      renderCodexState(codexState);
+    } else if (claudeState) {
+      renderClaudeState(claudeState);
+    } else {
+      renderActiveNetworkPreflight();
+    }
+    if (
+      networkPreflightDialog.open &&
+      (!networkPreflightDialogProvider || networkPreflightDialogProvider === result.provider)
+    ) {
+      renderNetworkPreflightDetails(result);
+    }
+  } else if (result.status === 'blocked') {
+    networkPreflightDialogProvider = result.provider;
+    renderNetworkPreflightDetails(result);
+    if (!networkPreflightDialog.open) {
+      networkPreflightDialog.showModal();
+    }
   }
 });
 window.controlPanel.onWorkspaceState(renderWorkspace);
@@ -7374,30 +7654,51 @@ artifactNetworkAllowed.addEventListener('change', () => {
     });
 });
 footerConnection.addEventListener('click', () => {
-  if (activeDevelopmentRuntime() === 'codex') {
-    setWorkbenchOpen(true);
-    return;
+  void openNetworkPreflightDialog();
+  const provider = activeNetworkProvider();
+  if (provider && !networkPreflightResults.has(provider)) {
+    void runActiveNetworkPreflight(false);
   }
-  if (connectionTestInProgress) {
-    return;
-  }
-  const status = activeStatus();
-  const state = status ? claudeStates.get(status.id) : undefined;
-  if (!state) {
-    showToast('无法读取当前接入配置。', 'error');
-    return;
-  }
-  const { config } = state;
-  void runConnectionTest(false, {
-    apiKeyHelperPolicy: config.apiKeyHelperPolicy,
-    authMode: config.authMode,
-    baseUrl: config.baseUrl,
-    credentialAction: 'keep',
-    model: config.model,
-    modelFast: config.modelFast,
-    preset: config.preset,
-    provider: config.provider,
-  });
+});
+networkPreflightDetails.addEventListener('click', () => {
+  void openNetworkPreflightDialog();
+});
+networkPreflightRecheck.addEventListener('click', () => {
+  void runActiveNetworkPreflight(true);
+});
+networkPreflightDialogRecheck.addEventListener('click', () => {
+  void runActiveNetworkPreflight(true, networkPreflightDialogProvider);
+});
+networkPreflightClose.addEventListener('click', () => {
+  networkPreflightDialog.close();
+});
+networkPreflightPrivacy.addEventListener('change', () => {
+  networkPreflightPrivacy.disabled = true;
+  void window.controlPanel
+    .setNetworkPreflightSettings({
+      enhancedPrivacyMode: networkPreflightPrivacy.checked,
+    })
+    .then(() => runActiveNetworkPreflight(true, networkPreflightDialogProvider))
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '无法保存网络预检隐私设置。', 'error');
+    })
+    .finally(() => {
+      networkPreflightPrivacy.disabled = false;
+    });
+});
+networkPreflightClearHistory.addEventListener('click', () => {
+  networkPreflightClearHistory.disabled = true;
+  void window.controlPanel
+    .clearNetworkPreflightHistory()
+    .then(() => {
+      showToast('网络诊断历史已清除。');
+    })
+    .catch(() => {
+      showToast('无法清除网络诊断历史。', 'error');
+    })
+    .finally(() => {
+      networkPreflightClearHistory.disabled = false;
+    });
 });
 footerModel.addEventListener('click', () => {
   if (footerModelMenu.hidden) {
@@ -8010,6 +8311,28 @@ document.addEventListener('drop', (event) => {
   }
 });
 
+const handleNetworkEnvironmentChange = (): void => {
+  void window.controlPanel
+    .invalidateNetworkPreflight('network-environment-changed')
+    .then(() => runActiveNetworkPreflight(true))
+    .catch(() => {
+      showToast('网络环境已变化，但自动复检无法启动。', 'error');
+    });
+};
+window.addEventListener('online', handleNetworkEnvironmentChange);
+window.addEventListener('offline', handleNetworkEnvironmentChange);
+const networkInformation = (
+  navigator as Navigator & {
+    connection?: EventTarget;
+  }
+).connection;
+networkInformation?.addEventListener('change', handleNetworkEnvironmentChange);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    void runActiveNetworkPreflight(false);
+  }
+});
+
 let observedTerminalWidth = -1;
 let observedTerminalHeight = -1;
 const resizeObserver = new ResizeObserver(([entry]) => {
@@ -8028,6 +8351,9 @@ const resizeObserver = new ResizeObserver(([entry]) => {
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
+  window.removeEventListener('online', handleNetworkEnvironmentChange);
+  window.removeEventListener('offline', handleNetworkEnvironmentChange);
+  networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
   cancelActiveResizes();
   activeChatReplyStream?.destroy();
   artifactController?.stopAll();
@@ -8070,6 +8396,9 @@ void (async () => {
     // The terminal still works without Windows-specific reflow hints; settings can be retried later.
   }
   renderWorkspace(await window.controlPanel.getWorkspace());
+  window.setTimeout(() => {
+    void runActiveNetworkPreflight(false);
+  }, 0);
   // Let first paint and workspace hydration complete, then check all update sources without
   // blocking terminal startup or requiring the user to open the connection/plugins pages.
   window.setTimeout(() => {
