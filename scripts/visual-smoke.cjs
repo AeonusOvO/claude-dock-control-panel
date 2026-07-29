@@ -183,6 +183,7 @@ const installThemeMatrixFixtures = `
       assistant.append(assistantLabel, body);
       messages.append(user, assistant);
       messages.scrollTop = 0;
+      document.querySelector('#chat-input').focus();
     };
 
     window.__claudeDockShowTerminalFixture = (masked) => {
@@ -593,6 +594,41 @@ app
       (await captureSettledPage()).toPNG(),
     );
     await window.webContents.executeJavaScript(`
+    const artifactDetailsPanel = document.querySelector('#artifact-details-panel');
+    artifactDetailsPanel.dataset.open = 'true';
+    artifactDetailsPanel.setAttribute('aria-hidden', 'false');
+    artifactDetailsPanel.inert = false;
+    artifactDetailsPanel.removeAttribute('inert');
+    artifactDetailsPanel.style.transform = 'translateX(0)';
+    artifactDetailsPanel.style.transition = 'none';
+    document.querySelector('#artifact-details-scrim').hidden = false;
+    document.querySelector('#chat-artifact-details').setAttribute('aria-expanded', 'true');
+    for (const [selector, copy] of [
+      ['#artifact-active-list', '当前没有正在运行的可视化。'],
+      ['#artifact-network-log', '还没有网络请求。内置库不会计入外部联网审计。'],
+    ]) {
+      const container = document.querySelector(selector);
+      if (!container.children.length) {
+        const empty = document.createElement(selector === '#artifact-network-log' ? 'li' : 'p');
+        empty.className = 'artifact-details__empty';
+        empty.textContent = copy;
+        container.append(empty);
+      }
+    }
+  `);
+    writeFileSync(
+      path.join(outputDirectory, 'chat-artifact-details-claude-light-1180.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+    document.querySelector('#artifact-details-panel').dataset.open = 'false';
+    document.querySelector('#artifact-details-panel').setAttribute('aria-hidden', 'true');
+    document.querySelector('#artifact-details-panel').inert = true;
+    document.querySelector('#artifact-details-panel').setAttribute('inert', '');
+    document.querySelector('#artifact-details-panel').style.removeProperty('transform');
+    document.querySelector('#artifact-details-panel').style.removeProperty('transition');
+    document.querySelector('#artifact-details-scrim').hidden = true;
+    document.querySelector('#chat-artifact-details').setAttribute('aria-expanded', 'false');
     document.querySelector('#terminal-focus-fixture').remove();
     document.querySelector('#terminal-shell').hidden = false;
     document.querySelector('#chat-shell').hidden = true;

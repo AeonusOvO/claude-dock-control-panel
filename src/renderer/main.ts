@@ -4208,12 +4208,32 @@ const applyRailTab = (tab?: string): void => {
   }
 };
 
+const focusChatInputAfterNavigation = (): void => {
+  window.requestAnimationFrame(() => {
+    const detailsOpen = artifactDetailsButton.getAttribute('aria-expanded') === 'true';
+    if (
+      mainView !== 'chat' ||
+      chatShell.hidden ||
+      chatInput.disabled ||
+      chatComposer.inert ||
+      chatSettingsDialog.open ||
+      detailsOpen
+    ) {
+      return;
+    }
+    chatInput.focus({ preventScroll: true });
+  });
+};
+
 function selectRailTab(tab: string): void {
   applyRailTab(tab);
 }
 
 const toggleRailTab = (tab: string): void => {
   applyRailTab(selectedRailTab === tab ? undefined : tab);
+  if (tab === 'chat') {
+    focusChatInputAfterNavigation();
+  }
 };
 
 const selectWorkbenchPage = (page: string): void => {

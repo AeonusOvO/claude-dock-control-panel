@@ -253,6 +253,19 @@ Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。S
 - 独立对话仍不读取项目文件，也不创建 PTY。历史正文没有使用 `safeStorage` 加密，因为其
   数据体量与可检索性不同于凭据；README 与界面将其明确为本机明文记录。凭据继续只存在
   `chat-profile.json` 的 Windows 安全存储密文中。
+- 独立对话左栏只有一个可增长的历史区：`.rail-page--chat` 与 `.chat-history` 依次占满
+  `control-panel` 剩余高度，`.chat-history__list` 取消固定 `248px` 上限并独立滚动；空列表时
+  `:empty` 取消弹性占位，使说明仍靠近标题。模型配置 DOM 只存在于右上角齿轮模态窗。
+- 活动栏点击路径在 `toggleRailTab('chat')` 完成主视图和侧栏布局后，通过
+  `requestAnimationFrame` 聚焦 `#chat-input`。聚焦前重新核对主视图、`hidden`、输入框禁用、
+  composer `inert`、设置模态窗和 Artifact 详情抽屉，避免导航抢走更高层界面的焦点。
+- 独立对话输入框显式关闭浏览器默认 outline；`:focus` 的描边、背景和一次收敛式
+  `chatComposerFocusIn` 微光只引用 `--accent-ring`、`--accent-solid`、`--accent-tint` 以及
+  主题时长/缓动令牌。因此四套主题在焦点持续期间和主题切换后都使用自身强调色，全局
+  `prefers-reduced-motion` 规则仍会把动画压缩到 `0.01ms`。
+- Artifact 详情抽屉的 body 使用 `align-content: start` 和 `grid-auto-rows: max-content`，
+  防止少量内容被网格默认 stretch 拉成巨块；正文按说明、网络策略、运行状态、请求审计组成
+  紧凑卡片，网络开关仍是可聚焦的原生 checkbox，审计与停止逻辑没有改变。
 
 ### Artifact 隔离与联网审计
 
@@ -826,6 +839,8 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   直接恢复，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
   `Shift+Tab` 必须转发 CBT 序列，而模式回读必须发生在 xterm 应用屏幕差量之后；主动 probe
   还要受输出修订号屏障保护并扫描完整活动缓冲区，不能在仍有待写数据时回复旧快照。
+  独立对话契约还锁定活动栏点击后的下一帧聚焦、焦点请求的禁用/模态边界、四主题强调色焦点
+  动画、历史区占满侧栏并独立滚动，以及详情抽屉禁止网格拉伸的紧凑分区结构。
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
@@ -868,10 +883,11 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。
-- `npm run test:visual` 保留插件、服务商向导、历史配置、全局设置、连接测试、终端聚焦态与
-  重命名弹窗回归图，并新增四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵 PNG 到
-  `dist/visual-qa/`。人工核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、
-  窄宽响应式和遮罩无重排；隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
+- `npm run test:visual` 保留插件、服务商向导、历史配置、全局设置、连接测试、终端聚焦态、
+  独立对话详情抽屉与重命名弹窗回归图，并生成四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵
+  PNG 到 `dist/visual-qa/`。富文本对话矩阵主动聚焦输入框，用于人工核对四主题的焦点颜色；
+  其余继续核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、窄宽响应式和
+  遮罩无重排。隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY，输出
   24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow，并在最终
   PTY size 确认行后捕获 `dist/visual-qa/conpty-resize-live.png`。该 Windows 专用烟测补足

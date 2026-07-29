@@ -212,9 +212,6 @@
               发送第一条消息后，对话会保存在这台电脑上。
             </p>
           </section>
-          <p class="rail-page__hint">
-            模型接入改到了「对话」右上角的设置按钮，随时打开小窗即可修改。
-          </p>
         </section>
 
         <section class="rail-page" data-rail-page="connection">
@@ -1305,19 +1302,47 @@
             </button>
           </header>
           <div class="artifact-details__body">
-            <label class="artifact-network-toggle">
-              <span>
-                <strong>允许 artifact 联网</strong>
-                <small>关闭后，新请求会被主进程立即拦截；内置可视化库仍可离线使用。</small>
-              </span>
-              <input id="artifact-network-allowed" type="checkbox" />
-            </label>
-            <section aria-labelledby="artifact-running-title">
-              <h3 id="artifact-running-title">正在运行</h3>
+            <div class="artifact-details__intro">
+              <strong>集中查看可视化的运行边界</strong>
+              <p>这里仅展示你手动启动的 HTML 可视化，以及它们发起的外部网络请求。</p>
+            </div>
+            <section class="artifact-details__section" aria-labelledby="artifact-network-title">
+              <div class="artifact-details__section-heading">
+                <div>
+                  <span class="artifact-details__eyebrow">网络策略</span>
+                  <h3 id="artifact-network-title">外部网络访问</h3>
+                </div>
+                <label class="artifact-network-toggle">
+                  <input id="artifact-network-allowed" type="checkbox" />
+                  <span>允许联网</span>
+                </label>
+              </div>
+              <p class="artifact-details__section-description">
+                关闭后会立即拦截新的外部请求；内置可视化库仍可离线使用。
+              </p>
+            </section>
+            <section class="artifact-details__section" aria-labelledby="artifact-running-title">
+              <div class="artifact-details__section-heading">
+                <div>
+                  <span class="artifact-details__eyebrow">运行状态</span>
+                  <h3 id="artifact-running-title">正在运行</h3>
+                </div>
+              </div>
+              <p class="artifact-details__section-description">
+                可在这里单独停止已经启动的可视化，不会影响对话内容。
+              </p>
               <div id="artifact-active-list" class="artifact-active-list"></div>
             </section>
-            <section aria-labelledby="artifact-network-title">
-              <h3 id="artifact-network-title">网络请求</h3>
+            <section class="artifact-details__section" aria-labelledby="artifact-request-title">
+              <div class="artifact-details__section-heading">
+                <div>
+                  <span class="artifact-details__eyebrow">审计记录</span>
+                  <h3 id="artifact-request-title">网络请求</h3>
+                </div>
+              </div>
+              <p class="artifact-details__section-description">
+                按时间记录请求地址、响应状态和可可靠取得的响应大小。
+              </p>
               <ol id="artifact-network-log" class="artifact-network-log"></ol>
             </section>
           </div>

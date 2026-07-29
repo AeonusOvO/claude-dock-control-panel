@@ -179,6 +179,34 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
+  it('focuses the chat composer from navigation and uses the active theme for its focus animation', () => {
+    expect(rendererSource).toContain('const focusChatInputAfterNavigation = (): void => {');
+    expect(rendererSource).toContain('chatInput.focus({ preventScroll: true });');
+    expect(rendererSource).toMatch(
+      /const toggleRailTab[\s\S]*?if \(tab === 'chat'\) \{\s+focusChatInputAfterNavigation\(\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.chat-composer textarea:focus\s*\{[\s\S]*?chatComposerFocusIn[\s\S]*?var\(--accent-ring\)[\s\S]*?var\(--accent-tint\)/,
+    );
+    expect(rendererStyles).toContain('@keyframes chatComposerFocusIn');
+  });
+
+  it('gives chat history the full rail and keeps artifact details compact and structured', () => {
+    expect(rendererMarkup).not.toContain('模型接入改到了「对话」右上角');
+    expect(rendererStyles).toMatch(
+      /\.rail-page--chat\s*\{[\s\S]*?flex:\s*1;[\s\S]*?min-height:\s*0;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.chat-history__list\s*\{[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/,
+    );
+    expect(rendererStyles).not.toContain('max-height: 248px;');
+    expect(rendererMarkup).toContain('class="artifact-details__intro"');
+    expect(rendererMarkup).toContain('class="artifact-details__section-heading"');
+    expect(rendererStyles).toMatch(
+      /\.artifact-details__body\s*\{[\s\S]*?align-content:\s*start;[\s\S]*?grid-auto-rows:\s*max-content;/,
+    );
+  });
+
   it('uses theme-aware typography and glow feedback without hover lift', () => {
     expect(rendererSource).toContain("import '@fontsource-variable/open-sans';");
     expect(rendererSource).toContain(
