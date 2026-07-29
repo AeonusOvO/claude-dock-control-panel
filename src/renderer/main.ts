@@ -1,10 +1,18 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { Terminal } from '@xterm/xterm';
+import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import '@fontsource-variable/inter';
 import '@fontsource-variable/open-sans';
+import '@fontsource-variable/source-serif-4';
+import 'katex/dist/katex.css';
+import katex from 'katex';
+import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
+import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
 import type {
+  ArtifactNetworkLogEntry,
+  ArtifactNetworkState,
   ClaudeConnectionAdvice,
   ClaudeConnectionAdviceAction,
   ClaudeConnectionHistoryEntry,
@@ -27,6 +35,8 @@ import type {
   ClaudeRouterProviderView,
   ClaudeSessionMetadata,
   ChatConfigView,
+  ChatAttachmentView,
+  ChatContentBlock,
   ChatConversationSummary,
   ChatMessage,
   ChatStreamEvent,
@@ -76,6 +86,13 @@ import {
   type TerminalThemeId,
 } from '../shared/terminal-themes';
 import { deriveUpdateActionState } from '../shared/update-actions';
+import { ArtifactController } from './artifact';
+import {
+  createKatexMathRenderer,
+  createMarkdownRenderer,
+  type MarkdownDomRenderer,
+  type MarkdownStreamRenderer,
+} from './markdown';
 import './styles.css';
 
 interface TerminalView {
@@ -387,9 +404,19 @@ const chatMessagesElement = requiredElement<HTMLElement>('#chat-messages');
 const chatEmptyState = requiredElement<HTMLElement>('#chat-empty-state');
 const chatComposer = requiredElement<HTMLFormElement>('#chat-composer');
 const chatInput = requiredElement<HTMLTextAreaElement>('#chat-input');
+const chatAttachmentInput = requiredElement<HTMLInputElement>('#chat-attachment-input');
+const chatAttachmentQueue = requiredElement<HTMLElement>('#chat-attachment-queue');
+const chatAttachButton = requiredElement<HTMLButtonElement>('#chat-attach');
 const sendChatButton = requiredElement<HTMLButtonElement>('#send-chat');
 const stopChatButton = requiredElement<HTMLButtonElement>('#stop-chat');
 const newChatButton = requiredElement<HTMLButtonElement>('#new-chat');
+const artifactDetailsButton = requiredElement<HTMLButtonElement>('#chat-artifact-details');
+const artifactDetailsClose = requiredElement<HTMLButtonElement>('#artifact-details-close');
+const artifactDetailsPanel = requiredElement<HTMLElement>('#artifact-details-panel');
+const artifactDetailsScrim = requiredElement<HTMLElement>('#artifact-details-scrim');
+const artifactNetworkAllowed = requiredElement<HTMLInputElement>('#artifact-network-allowed');
+const artifactActiveList = requiredElement<HTMLElement>('#artifact-active-list');
+const artifactNetworkLog = requiredElement<HTMLOListElement>('#artifact-network-log');
 
 const connectionGlossary = requiredElement<HTMLElement>('.connection-glossary');
 
@@ -462,6 +489,17 @@ let activeChatRequestMessages: ChatMessage[] = [];
 let activeChatRequestId = '';
 let activeChatReply = '';
 let activeChatReplyElement: HTMLElement | undefined;
+let activeChatReplyStream: MarkdownStreamRenderer | undefined;
+let activeChatThinking = '';
+let activeChatThinkingElement: HTMLElement | undefined;
+const pendingChatAttachments: ChatAttachmentView[] = [];
+let activeChatAttachmentDraftId: string | undefined;
+let chatAttachmentImportQueue: Promise<void> = Promise.resolve();
+let queuedChatAttachmentImports = 0;
+let chatSubmissionInFlight = false;
+let artifactNetworkState: ArtifactNetworkState = { allowed: true, entries: [] };
+let markdownRenderer: MarkdownDomRenderer;
+let markdownHighlighter: HighlighterCore | undefined;
 
 const runGuarded = async <T>(
   button: HTMLButtonElement,
@@ -537,21 +575,25 @@ const storedTerminalTheme = localStorage.getItem('claudedock.terminalTheme');
 let activeTerminalTheme: TerminalThemeId = isTerminalThemeId(storedTerminalTheme)
   ? storedTerminalTheme
   : DEFAULT_TERMINAL_THEME;
+let windowsBuildNumber: number | undefined;
 terminalThemeSelect.value = activeTerminalTheme;
 
-const terminalOptions = {
+const buildTerminalOptions = (): ITerminalOptions => ({
   allowProposedApi: true,
   convertEol: false,
   cursorBlink: true,
-  cursorStyle: 'bar' as const,
+  cursorStyle: 'bar',
   fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, monospace',
   fontSize: 14,
   letterSpacing: 0,
   lineHeight: 1.28,
-  minimumContrastRatio: 1,
+  minimumContrastRatio: 4.5,
   scrollback: 10_000,
   theme: { ...TERMINAL_THEMES[activeTerminalTheme].palette },
-};
+  ...(windowsBuildNumber
+    ? { windowsPty: { backend: 'conpty' as const, buildNumber: windowsBuildNumber } }
+    : {}),
+});
 
 const showToast = (message: string, tone: 'error' | 'success' = 'success'): void => {
   window.clearTimeout(toastTimer);
@@ -565,6 +607,205 @@ const showToast = (message: string, tone: 'error' | 'success' = 'success'): void
     toast.classList.remove('toast--visible');
   }, 3200);
 };
+
+const artifactThemePayload = (): {
+  appearance: 'dark' | 'light';
+  variables: Record<string, string>;
+} => {
+  const styles = getComputedStyle(document.documentElement);
+  return {
+    appearance: TERMINAL_THEMES[activeTerminalTheme].appearance,
+    variables: Object.values(SHELL_CSS_VARIABLES).reduce<Record<string, string>>(
+      (variables, property) => {
+        const value = styles.getPropertyValue(property).trim();
+        if (value) {
+          variables[property] = value;
+        }
+        return variables;
+      },
+      {},
+    ),
+  };
+};
+
+const renderArtifactActiveList = (): void => {
+  artifactActiveList.replaceChildren();
+  const ids = artifactController?.activeIds() ?? [];
+  if (ids.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'artifact-details__empty';
+    empty.textContent = '当前没有正在运行的可视化。';
+    artifactActiveList.append(empty);
+    return;
+  }
+  for (const [index, artifactId] of ids.entries()) {
+    const row = document.createElement('div');
+    row.className = 'artifact-active-list__item';
+    const copy = document.createElement('span');
+    copy.textContent = `可视化 ${index + 1}`;
+    copy.title = artifactId;
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.textContent = '停止运行';
+    stop.addEventListener('click', () => {
+      void artifactController?.stop(artifactId);
+    });
+    row.append(copy, stop);
+    artifactActiveList.append(row);
+  }
+};
+
+const formatArtifactBytes = (bytes: number | undefined): string => {
+  if (bytes === undefined) {
+    return '字节数未知';
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+};
+
+const renderArtifactNetworkLog = (): void => {
+  artifactNetworkAllowed.checked = artifactNetworkState.allowed;
+  artifactNetworkLog.replaceChildren();
+  const entries = artifactNetworkState.entries.slice(-100).reverse();
+  if (entries.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'artifact-details__empty';
+    empty.textContent = '还没有网络请求。内置库不会计入外部联网审计。';
+    artifactNetworkLog.append(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement('li');
+    row.className = 'artifact-network-log__item';
+    row.dataset.blocked = String(entry.blocked);
+    const top = document.createElement('div');
+    const method = document.createElement('strong');
+    method.textContent = entry.method;
+    const status = document.createElement('span');
+    status.textContent = entry.blocked
+      ? '已拦截'
+      : entry.error
+        ? '失败'
+        : String(entry.status ?? '完成');
+    top.append(method, status);
+    const url = document.createElement('code');
+    url.textContent = entry.url;
+    url.title = entry.url;
+    const meta = document.createElement('small');
+    meta.textContent = `${new Intl.DateTimeFormat('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(entry.startedAt)} · ${formatArtifactBytes(entry.responseBytes)}${
+      entry.error ? ` · ${entry.error}` : ''
+    }`;
+    row.append(top, url, meta);
+    artifactNetworkLog.append(row);
+  }
+};
+
+const setArtifactDetailsOpen = (open: boolean): void => {
+  artifactDetailsButton.setAttribute('aria-expanded', String(open));
+  artifactDetailsPanel.setAttribute('aria-hidden', String(!open));
+  artifactDetailsPanel.dataset.open = String(open);
+  artifactDetailsPanel.inert = !open;
+  chatMessagesElement.inert = open;
+  chatComposer.inert = open;
+  artifactDetailsScrim.hidden = !open;
+  if (open) {
+    void window.controlPanel
+      .getArtifactNetworkState()
+      .then((state) => {
+        artifactNetworkState = state;
+        renderArtifactNetworkLog();
+      })
+      .catch(() => {
+        showToast('无法读取 Artifact 审计信息。', 'error');
+      });
+    renderArtifactActiveList();
+    artifactDetailsClose.focus();
+  } else {
+    artifactDetailsButton.focus();
+  }
+};
+
+const artifactController = new ArtifactController({
+  create: (html) => window.controlPanel.createArtifact(html),
+  destroy: (artifactId) => window.controlPanel.destroyArtifact(artifactId),
+  getTheme: artifactThemePayload,
+  onActiveChange: renderArtifactActiveList,
+  onError: (message) => showToast(message, 'error'),
+});
+
+const rebuildMarkdownRenderer = (): void => {
+  const loadedLanguages = new Set(markdownHighlighter?.getLoadedLanguages() ?? []);
+  markdownRenderer = createMarkdownRenderer({
+    highlighter: markdownHighlighter
+      ? {
+          codeToTokens: (code, options) =>
+            markdownHighlighter?.codeToTokens(code, {
+              lang: (loadedLanguages.has(options.lang) ? options.lang : 'text') as never,
+              theme:
+                TERMINAL_THEMES[activeTerminalTheme].appearance === 'dark'
+                  ? 'github-dark'
+                  : 'github-light',
+            }),
+        }
+      : undefined,
+    mathRenderer: createKatexMathRenderer(katex),
+    onOpenExternal: async (url) => {
+      await window.controlPanel.openMarkdownExternal(url);
+    },
+    onRunArtifact: async (html, mount) => {
+      await artifactController?.run(html, mount);
+    },
+    writeClipboardText: async (text) => {
+      await window.controlPanel.writeClipboardText(text);
+    },
+  });
+};
+
+rebuildMarkdownRenderer();
+void createHighlighterCore({
+  engine: createOnigurumaEngine(import('shiki/wasm')),
+  langs: [
+    import('@shikijs/langs/bash'),
+    import('@shikijs/langs/css'),
+    import('@shikijs/langs/html'),
+    import('@shikijs/langs/javascript'),
+    import('@shikijs/langs/json'),
+    import('@shikijs/langs/markdown'),
+    import('@shikijs/langs/powershell'),
+    import('@shikijs/langs/python'),
+    import('@shikijs/langs/typescript'),
+  ],
+  themes: [import('@shikijs/themes/github-dark'), import('@shikijs/themes/github-light')],
+})
+  .then((highlighter) => {
+    markdownHighlighter = highlighter;
+    rebuildMarkdownRenderer();
+    if (!activeChatRequestId && (artifactController?.activeIds().length ?? 0) === 0) {
+      renderChatMessages();
+    }
+  })
+  .catch(() => {
+    // Rich Markdown remains safe and readable; only syntax colours are unavailable.
+  });
+
+window.controlPanel.onArtifactNetworkLog((entry: ArtifactNetworkLogEntry) => {
+  const existing = artifactNetworkState.entries.findIndex((candidate) => candidate.id === entry.id);
+  if (existing >= 0) {
+    artifactNetworkState.entries.splice(existing, 1, entry);
+  } else {
+    artifactNetworkState.entries.push(entry);
+  }
+  if (artifactNetworkState.entries.length > 500) {
+    artifactNetworkState.entries.splice(0, artifactNetworkState.entries.length - 500);
+  }
+  renderArtifactNetworkLog();
+});
 
 const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => {
   activeTerminalTheme = themeId;
@@ -583,8 +824,18 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
   document.documentElement.dataset.theme = themeId;
   document.documentElement.dataset.appearance = definition.appearance;
   document.documentElement.style.colorScheme = definition.appearance;
+  document.documentElement.style.setProperty('--syntax-red', definition.palette.red);
+  document.documentElement.style.setProperty('--syntax-blue', definition.palette.blue);
+  document.documentElement.style.setProperty('--syntax-cyan', definition.palette.cyan);
+  document.documentElement.style.setProperty('--syntax-green', definition.palette.green);
+  document.documentElement.style.setProperty('--syntax-magenta', definition.palette.magenta);
+  document.documentElement.style.setProperty('--syntax-yellow', definition.palette.yellow);
+  document.documentElement.style.setProperty('--syntax-neutral', definition.palette.brightBlack);
   for (const view of terminalViews.values()) {
     view.terminal.options.theme = { ...definition.palette };
+    if (view.terminal.rows > 0) {
+      view.terminal.refresh(0, view.terminal.rows - 1);
+    }
   }
   // The native titlebar and window background live outside the document and need the main process.
   void window.controlPanel.setAppTheme(themeId).catch(() => {
@@ -593,6 +844,8 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
   if (announce) {
     showToast(`主题已切换为“${definition.label}”`);
   }
+  rebuildMarkdownRenderer();
+  artifactController?.updateTheme();
 };
 
 applyTerminalTheme(activeTerminalTheme, false);
@@ -644,7 +897,7 @@ const formatChatHistoryTime = (timestamp: number): string =>
   }).format(new Date(timestamp));
 
 const loadChatConversation = async (conversationId: string): Promise<void> => {
-  if (activeChatRequestId) {
+  if (activeChatRequestId || queuedChatAttachmentImports > 0 || chatSubmissionInFlight) {
     return;
   }
   try {
@@ -653,6 +906,14 @@ const loadChatConversation = async (conversationId: string): Promise<void> => {
       showToast('这条对话历史已经不存在。', 'error');
       await loadChatHistory();
       return;
+    }
+    const discardedDraftId = activeChatAttachmentDraftId;
+    activeChatAttachmentDraftId = undefined;
+    pendingChatAttachments.splice(0);
+    if (discardedDraftId) {
+      void window.controlPanel.releaseChatAttachmentDraft(discardedDraftId).catch((error) => {
+        showToast(error instanceof Error ? error.message : '无法清理未发送的附件草稿。', 'error');
+      });
     }
     activeChatConversationId = conversation.id;
     chatMessages.splice(0, chatMessages.length, ...conversation.messages);
@@ -664,14 +925,16 @@ const loadChatConversation = async (conversationId: string): Promise<void> => {
     renderChatUsage();
     renderChatHistory();
     chatInput.focus();
-  } catch {
-    showToast('无法读取这条对话历史。', 'error');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法读取这条对话历史。', 'error');
   }
 };
 
 const deleteChatConversation = async (conversation: ChatConversationSummary): Promise<void> => {
   if (
     activeChatRequestId ||
+    queuedChatAttachmentImports > 0 ||
+    chatSubmissionInFlight ||
     !(await requestConfirmation({
       confirmLabel: '删除对话',
       message: `永久删除“${conversation.title}”及其本机消息记录？此操作无法撤销。`,
@@ -709,7 +972,8 @@ const renderChatHistory = (): void => {
     const open = document.createElement('button');
     open.className = 'chat-history__open';
     open.type = 'button';
-    open.disabled = Boolean(activeChatRequestId);
+    open.disabled =
+      Boolean(activeChatRequestId) || queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
     open.setAttribute('aria-label', `打开对话 ${conversation.title}`);
     const title = document.createElement('strong');
     title.textContent = conversation.title;
@@ -723,7 +987,8 @@ const renderChatHistory = (): void => {
     const remove = document.createElement('button');
     remove.className = 'chat-history__delete';
     remove.type = 'button';
-    remove.disabled = Boolean(activeChatRequestId);
+    remove.disabled =
+      Boolean(activeChatRequestId) || queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
     remove.title = '删除对话历史';
     remove.setAttribute('aria-label', `删除对话 ${conversation.title}`);
     remove.textContent = '×';
@@ -739,13 +1004,15 @@ async function loadChatHistory(): Promise<void> {
   try {
     chatConversations = await window.controlPanel.getChatConversations();
     renderChatHistory();
-  } catch {
+  } catch (error) {
     chatHistoryEmpty.hidden = false;
-    chatHistoryEmpty.textContent = '无法读取本机对话历史。';
+    chatHistoryEmpty.textContent =
+      error instanceof Error ? error.message : '无法读取本机对话历史。';
   }
 }
 
 const renderChatMessages = (): void => {
+  artifactController?.stopAll();
   chatMessagesElement.replaceChildren(chatEmptyState);
   chatEmptyState.hidden = chatMessages.length > 0;
   for (const message of chatMessages) {
@@ -771,12 +1038,20 @@ const persistActiveChat = async (): Promise<void> => {
       ...chatConversations.filter((conversation) => conversation.id !== saved.id),
     ];
     renderChatHistory();
-  } catch {
-    showToast('消息已发送，但本机对话历史保存失败。', 'error');
+  } catch (error) {
+    showToast(
+      error instanceof Error ? error.message : '消息已发送，但本机对话历史保存失败。',
+      'error',
+    );
   }
 };
 
 function resetChatConversation(): void {
+  activeChatReplyStream?.destroy();
+  activeChatReplyStream = undefined;
+  activeChatThinking = '';
+  activeChatThinkingElement = undefined;
+  artifactController?.stopAll();
   activeChatConversationId = undefined;
   chatMessages.splice(0);
   activeChatUsage = estimateChatUsage([]);
@@ -785,6 +1060,15 @@ function resetChatConversation(): void {
   chatMessagesElement.replaceChildren(chatEmptyState);
   chatEmptyState.hidden = false;
   chatInput.value = '';
+  const discardedDraftId = activeChatAttachmentDraftId;
+  activeChatAttachmentDraftId = undefined;
+  pendingChatAttachments.splice(0);
+  if (discardedDraftId) {
+    void window.controlPanel.releaseChatAttachmentDraft(discardedDraftId).catch((error) => {
+      showToast(error instanceof Error ? error.message : '无法清理未发送的附件草稿。', 'error');
+    });
+  }
+  renderPendingChatAttachments();
   renderChatUsage();
   renderChatHistory();
 }
@@ -828,35 +1112,131 @@ const loadChatConfig = (force = false): Promise<void> => {
   return chatConfigLoadPromise;
 };
 
-const appendChatMessage = (role: 'assistant' | 'user', content: string): HTMLElement => {
+const normalizedChatBlocks = (content: ChatMessage['content']): ChatContentBlock[] =>
+  typeof content === 'string' ? [{ text: content, type: 'text' }] : content;
+
+const chatTextContent = (content: ChatMessage['content']): string =>
+  normalizedChatBlocks(content)
+    .filter((block): block is Extract<ChatContentBlock, { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n\n');
+
+const formatAttachmentSize = (sizeBytes: number): string => {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(sizeBytes < 10 * 1024 ? 1 : 0)} KB`;
+  }
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const appendAttachmentCard = (
+  container: HTMLElement,
+  block: Exclude<ChatContentBlock, { type: 'text' }>,
+): void => {
+  const card = document.createElement('div');
+  card.className = `chat-attachment-card chat-attachment-card--${block.type}`;
+  const preview = document.createElement('div');
+  preview.className = 'chat-attachment-card__preview';
+  preview.textContent =
+    block.type === 'image' ? '图片' : block.mediaType === 'application/pdf' ? 'PDF' : '文件';
+  const copy = document.createElement('div');
+  const name = document.createElement('strong');
+  name.textContent = block.fileName || (block.type === 'image' ? '图片附件' : '文档附件');
+  const meta = document.createElement('small');
+  meta.textContent = block.mediaType;
+  copy.append(name, meta);
+  card.append(preview, copy);
+  container.append(card);
+
+  if (block.source.type !== 'local') {
+    return;
+  }
+  void window.controlPanel
+    .readChatAttachment(block.source.attachmentId)
+    .then((attachment) => {
+      if (!attachment || !card.isConnected) {
+        return;
+      }
+      name.textContent = attachment.fileName;
+      meta.textContent = `${attachment.mediaType} · ${formatAttachmentSize(attachment.sizeBytes)}`;
+      if (attachment.type === 'image' && attachment.previewDataUrl) {
+        const image = document.createElement('img');
+        image.alt = attachment.fileName;
+        image.loading = 'lazy';
+        image.src = attachment.previewDataUrl;
+        preview.replaceChildren(image);
+      }
+    })
+    .catch(() => {
+      meta.textContent = '附件在本机已不可用';
+      card.dataset.missing = 'true';
+    });
+};
+
+const appendChatMessage = (
+  role: 'assistant' | 'user',
+  content: ChatMessage['content'],
+  renderMarkdown = true,
+): HTMLElement => {
   const article = document.createElement('article');
   article.className = `chat-message chat-message--${role}`;
   const label = document.createElement('strong');
   label.textContent = role === 'user' ? '你' : '模型';
   const body = document.createElement('div');
   body.className = 'chat-message__content';
-  body.textContent = content;
+  const blocks = normalizedChatBlocks(content);
+  const attachments = blocks.filter(
+    (block): block is Exclude<ChatContentBlock, { type: 'text' }> => block.type !== 'text',
+  );
+  if (attachments.length > 0) {
+    const attachmentList = document.createElement('div');
+    attachmentList.className = 'chat-message__attachments';
+    for (const attachment of attachments) {
+      appendAttachmentCard(attachmentList, attachment);
+    }
+    body.append(attachmentList);
+  }
+  const text = chatTextContent(content);
+  let textMount: HTMLElement | undefined;
+  if (text) {
+    textMount = document.createElement('div');
+    textMount.className = 'chat-message__markdown';
+    body.append(textMount);
+    if (role === 'assistant' && renderMarkdown) {
+      void markdownRenderer.renderInto(textMount, text);
+    } else {
+      textMount.textContent = text;
+    }
+  }
   article.append(label, body);
   chatMessagesElement.append(article);
   chatEmptyState.hidden = true;
   chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
-  return body;
+  return textMount ?? body;
 };
 
 const setChatBusy = (busy: boolean): void => {
+  const preparing = queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
   chatInput.disabled = busy;
-  sendChatButton.disabled = busy;
+  chatAttachButton.disabled = busy || preparing;
+  sendChatButton.disabled = busy || preparing;
   stopChatButton.hidden = !busy;
-  newChatButton.disabled = busy;
-  testChatConnectionButton.disabled = busy;
-  chatComposer.setAttribute('aria-busy', String(busy));
+  newChatButton.disabled = busy || preparing;
+  testChatConnectionButton.disabled = busy || preparing;
+  chatComposer.setAttribute('aria-busy', String(busy || preparing));
   renderChatHistory();
 };
 
 const finishChatRequest = (): void => {
+  activeChatReplyStream?.destroy();
   activeChatRequestId = '';
   activeChatReply = '';
   activeChatReplyElement = undefined;
+  activeChatReplyStream = undefined;
+  activeChatThinking = '';
+  activeChatThinkingElement = undefined;
   activeChatRequestMessages = [];
   setChatBusy(false);
   chatInput.focus();
@@ -874,8 +1254,13 @@ const handleChatStream = (event: ChatStreamEvent): void => {
   if (event.type === 'delta' && event.delta) {
     activeChatReply += event.delta;
     if (activeChatReplyElement) {
-      activeChatReplyElement.textContent = activeChatReply;
-      chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+      if (!activeChatReplyStream) {
+        activeChatReplyElement.replaceChildren();
+        activeChatReplyStream = markdownRenderer.createStream(activeChatReplyElement);
+      }
+      void activeChatReplyStream.update(activeChatReply).then(() => {
+        chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+      });
     }
     if (!event.usage) {
       const estimated = estimateChatUsage(activeChatRequestMessages, activeChatReply);
@@ -891,9 +1276,44 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     }
     return;
   }
+  if (event.type === 'thinking' && event.delta) {
+    activeChatThinking += event.delta;
+    if (activeChatReplyElement) {
+      if (!activeChatThinkingElement) {
+        const details = document.createElement('details');
+        details.className = 'chat-thinking';
+        const summary = document.createElement('summary');
+        summary.textContent = '思考过程';
+        activeChatThinkingElement = document.createElement('div');
+        details.append(summary, activeChatThinkingElement);
+        activeChatReplyElement.before(details);
+      }
+      activeChatThinkingElement.textContent = activeChatThinking;
+    }
+    return;
+  }
+  if (event.type === 'input-json' && event.delta) {
+    activeChatThinking += event.delta;
+    if (activeChatThinkingElement) {
+      activeChatThinkingElement.textContent = activeChatThinking;
+    }
+    return;
+  }
+  if (event.type === 'refusal') {
+    const refusal = event.refusal || '模型拒绝了这项请求。';
+    activeChatReply = activeChatReply ? `${activeChatReply}\n\n> ${refusal}` : `> ${refusal}`;
+    if (activeChatReplyElement) {
+      activeChatReplyStream ??= markdownRenderer.createStream(activeChatReplyElement);
+      void activeChatReplyStream.update(activeChatReply);
+    }
+    return;
+  }
   if (event.type === 'done') {
     if (activeChatReply) {
-      chatMessages.push({ content: activeChatReply, role: 'assistant' });
+      chatMessages.push({
+        content: [{ text: activeChatReply, type: 'text' }],
+        role: 'assistant',
+      });
     } else if (activeChatReplyElement) {
       activeChatReplyElement.textContent = '模型没有返回可显示的文本。';
     }
@@ -901,79 +1321,314 @@ const handleChatStream = (event: ChatStreamEvent): void => {
       activeChatUsage = estimateChatUsage(activeChatRequestMessages, activeChatReply);
       renderChatUsage();
     }
-    void persistActiveChat().finally(finishChatRequest);
+    void (async () => {
+      await activeChatReplyStream?.finish(activeChatReply);
+      await persistActiveChat();
+    })().finally(finishChatRequest);
     return;
   }
   if (event.type === 'aborted') {
+    const timedOut = event.abortReason === 'timeout';
+    const notice = timedOut ? '请求长时间没有返回数据，已超时停止。' : '已停止生成。';
     if (activeChatReplyElement && !activeChatReply) {
-      activeChatReplyElement.textContent = '已停止生成。';
+      activeChatReplyElement.textContent = notice;
+    } else if (timedOut && activeChatReply) {
+      activeChatReply = `${activeChatReply}\n\n> ${notice}`;
+      activeChatReplyStream ??= activeChatReplyElement
+        ? markdownRenderer.createStream(activeChatReplyElement)
+        : undefined;
+      void activeChatReplyStream?.update(activeChatReply);
     }
     if (activeChatReply) {
-      chatMessages.push({ content: activeChatReply, role: 'assistant' });
+      chatMessages.push({
+        content: [{ text: activeChatReply, type: 'text' }],
+        role: 'assistant',
+      });
     }
     activeChatUsage = activeChatProviderUsage
       ? { ...activeChatProviderUsage }
       : estimateChatUsage(activeChatRequestMessages, activeChatReply);
     renderChatUsage();
-    void persistActiveChat().finally(finishChatRequest);
+    if (timedOut) {
+      showToast(notice, 'error');
+    }
+    void (async () => {
+      await activeChatReplyStream?.finish(activeChatReply);
+      await persistActiveChat();
+    })().finally(finishChatRequest);
     return;
   }
   if (event.type === 'error') {
     if (activeChatReplyElement) {
-      activeChatReplyElement.textContent = activeChatReply
-        ? `${activeChatReply}\n\n[生成中断：${event.error ?? '请求失败'}]`
-        : `请求失败：${event.error ?? '未知错误'}`;
+      activeChatReply = activeChatReply
+        ? `${activeChatReply}\n\n> 生成中断：${event.error ?? '请求失败'}`
+        : `> 请求失败：${event.error ?? '未知错误'}`;
+      activeChatReplyStream ??= markdownRenderer.createStream(activeChatReplyElement);
+      void activeChatReplyStream.update(activeChatReply);
     }
     if (activeChatReply) {
-      chatMessages.push({ content: activeChatReply, role: 'assistant' });
+      chatMessages.push({
+        content: [{ text: activeChatReply, type: 'text' }],
+        role: 'assistant',
+      });
     }
     activeChatUsage = activeChatProviderUsage
       ? { ...activeChatProviderUsage }
       : estimateChatUsage(activeChatRequestMessages, activeChatReply);
     renderChatUsage();
     showToast(event.error ?? '独立对话请求失败。', 'error');
-    void persistActiveChat().finally(finishChatRequest);
+    void (async () => {
+      await activeChatReplyStream?.finish(activeChatReply);
+      await persistActiveChat();
+    })().finally(finishChatRequest);
   }
 };
 
-const submitChatMessage = async (): Promise<void> => {
-  const content = chatInput.value.trim();
-  if (!content || activeChatRequestId) {
-    return;
-  }
-  if (!chatConfig?.model) {
-    await loadChatConfig(true);
-  }
-  if (!chatConfig?.model) {
-    showToast('请先在左侧保存独立对话模型配置。', 'error');
-    return;
-  }
-
-  const userMessage: ChatMessage = { content, role: 'user' };
-  chatMessages.push(userMessage);
-  appendChatMessage('user', content);
-  activeChatRequestMessages = [...chatMessages];
-  activeChatUsage = estimateChatUsage(activeChatRequestMessages);
-  activeChatProviderUsage = undefined;
-  chatInput.value = '';
-  renderChatUsage();
-  activeChatReplyElement = appendChatMessage('assistant', '正在连接模型…');
-  activeChatReply = '';
-  activeChatRequestId = crypto.randomUUID();
-  setChatBusy(true);
-  try {
-    await persistActiveChat();
-    await window.controlPanel.startChat({
-      messages: [...chatMessages],
-      requestId: activeChatRequestId,
+const renderPendingChatAttachments = (): void => {
+  chatAttachmentQueue.replaceChildren();
+  chatAttachmentQueue.hidden = pendingChatAttachments.length === 0;
+  for (const attachment of pendingChatAttachments) {
+    const card = document.createElement('div');
+    card.className = `chat-attachment-draft chat-attachment-draft--${attachment.type}`;
+    const preview = document.createElement('div');
+    preview.className = 'chat-attachment-draft__preview';
+    if (attachment.previewDataUrl) {
+      const image = document.createElement('img');
+      image.alt = '';
+      image.src = attachment.previewDataUrl;
+      preview.append(image);
+    } else {
+      preview.textContent =
+        attachment.type === 'image'
+          ? 'IMG'
+          : attachment.mediaType === 'application/pdf'
+            ? 'PDF'
+            : 'DOC';
+    }
+    const copy = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = attachment.fileName;
+    const meta = document.createElement('small');
+    meta.textContent = formatAttachmentSize(attachment.sizeBytes);
+    copy.append(name, meta);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `移除附件 ${attachment.fileName}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      const index = pendingChatAttachments.findIndex(
+        (candidate) => candidate.attachmentId === attachment.attachmentId,
+      );
+      const draftId = activeChatAttachmentDraftId;
+      if (index < 0 || !draftId) {
+        return;
+      }
+      remove.disabled = true;
+      void window.controlPanel
+        .deleteChatDraftAttachment(draftId, attachment.attachmentId)
+        .then((removed) => {
+          if (!removed) {
+            throw new Error('附件草稿已经变化，请重新选择文件。');
+          }
+          const currentIndex = pendingChatAttachments.findIndex(
+            (candidate) => candidate.attachmentId === attachment.attachmentId,
+          );
+          if (currentIndex >= 0) {
+            pendingChatAttachments.splice(currentIndex, 1);
+          }
+          renderPendingChatAttachments();
+          renderChatUsage();
+        })
+        .catch((error) => {
+          remove.disabled = false;
+          showToast(error instanceof Error ? error.message : '无法移除附件。', 'error');
+        });
     });
+    card.append(preview, copy, remove);
+    chatAttachmentQueue.append(card);
+  }
+};
+
+const importChatAttachments = async (files: File[]): Promise<void> => {
+  const remaining = 10 - pendingChatAttachments.length;
+  if (remaining <= 0) {
+    showToast('每条消息最多添加 10 个附件。', 'error');
+    return;
+  }
+  const selected = files.slice(0, remaining);
+  const paths = selected
+    .map((file) => window.controlPanel.getDroppedPath(file))
+    .filter((filePath) => Boolean(filePath));
+  if (paths.length === 0) {
+    showToast('无法读取所选附件的本机路径。', 'error');
+    return;
+  }
+  try {
+    const result = await window.controlPanel.importChatAttachments({
+      draftId: activeChatAttachmentDraftId,
+      paths,
+    });
+    if (result.draftId) {
+      activeChatAttachmentDraftId = result.draftId;
+    }
+    pendingChatAttachments.push(...result.attachments);
+    renderPendingChatAttachments();
+    for (const attachment of result.attachments) {
+      if (attachment.type === 'image') {
+        void window.controlPanel.readChatAttachment(attachment.attachmentId).then((preview) => {
+          if (preview?.previewDataUrl) {
+            attachment.previewDataUrl = preview.previewDataUrl;
+            renderPendingChatAttachments();
+          }
+        });
+      }
+    }
+    if (
+      chatProtocol.value === 'openai' &&
+      result.attachments.some((attachment) => attachment.mediaType === 'application/pdf')
+    ) {
+      showToast('已添加 PDF；当前 OpenAI 兼容端点可能不支持 PDF，请以服务端结果为准。');
+    } else if (result.attachments.length > 0) {
+      showToast(`已安全导入 ${result.attachments.length} 个附件`);
+    }
+    if (result.errors.length > 0) {
+      showToast(result.errors[0]?.message ?? '部分附件无法导入。', 'error');
+    }
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法导入附件。', 'error');
+  } finally {
+    chatAttachmentInput.value = '';
+  }
+};
+
+const queueChatAttachmentImport = (files: File[]): void => {
+  if (files.length === 0 || activeChatRequestId || chatSubmissionInFlight) {
+    return;
+  }
+  queuedChatAttachmentImports += 1;
+  setChatBusy(Boolean(activeChatRequestId));
+  const queued = chatAttachmentImportQueue.then(() => importChatAttachments(files));
+  chatAttachmentImportQueue = queued
+    .catch(() => {
+      // importChatAttachments already presents an actionable error.
+    })
+    .finally(() => {
+      queuedChatAttachmentImports = Math.max(0, queuedChatAttachmentImports - 1);
+      setChatBusy(Boolean(activeChatRequestId));
+    });
+};
+
+const submitChatMessage = async (): Promise<void> => {
+  if (activeChatRequestId || chatSubmissionInFlight) {
+    return;
+  }
+  chatSubmissionInFlight = true;
+  setChatBusy(false);
+  let previousMessages: ChatMessage[] | undefined;
+  let previousUsage: ChatTokenUsage | undefined;
+  let previousProviderUsage: ChatTokenUsage | undefined;
+  let requestId = '';
+  let historyRepaired = false;
+  let pendingUserArticle: HTMLElement | undefined;
+  let pendingAssistantArticle: HTMLElement | undefined;
+  try {
+    await chatAttachmentImportQueue;
+    const content = chatInput.value.trim();
+    if (!content && pendingChatAttachments.length === 0) {
+      return;
+    }
+    if (!chatConfig?.model) {
+      await loadChatConfig(true);
+    }
+    if (!chatConfig?.model) {
+      showToast('请先在左侧保存独立对话模型配置。', 'error');
+      return;
+    }
+
+    const contentBlocks: ChatContentBlock[] = [
+      ...pendingChatAttachments.map((attachment): Exclude<ChatContentBlock, { type: 'text' }> => ({
+        fileName: attachment.fileName,
+        mediaType: attachment.mediaType,
+        source: { attachmentId: attachment.attachmentId, type: 'local' },
+        type: attachment.type,
+      })),
+      ...(content ? ([{ text: content, type: 'text' }] satisfies ChatContentBlock[]) : []),
+    ];
+    const candidateMessages = [...chatMessages, { content: contentBlocks, role: 'user' as const }];
+    requestId = crypto.randomUUID();
+    const prepared = await window.controlPanel.preflightChat({
+      draftId: activeChatAttachmentDraftId,
+      messages: candidateMessages,
+      requestId,
+    });
+    if (prepared.warning) {
+      showToast(prepared.warning);
+    }
+
+    previousMessages = [...chatMessages];
+    previousUsage = { ...activeChatUsage };
+    previousProviderUsage = activeChatProviderUsage ? { ...activeChatProviderUsage } : undefined;
+    chatMessages.splice(0, chatMessages.length, ...prepared.messages);
+    activeChatRequestMessages = [...prepared.messages];
+    activeChatUsage = estimateChatUsage(activeChatRequestMessages);
+    activeChatProviderUsage = undefined;
+    activeChatReply = '';
+    activeChatRequestId = requestId;
+    historyRepaired = prepared.removedAttachmentIds.length > 0;
+    if (historyRepaired) {
+      renderChatMessages();
+    } else {
+      const currentMessage = prepared.messages.at(-1);
+      if (currentMessage?.role === 'user') {
+        const mount = appendChatMessage('user', currentMessage.content);
+        pendingUserArticle = mount.closest('article') as HTMLElement | undefined;
+      }
+    }
+    renderChatUsage();
+    activeChatReplyElement = appendChatMessage('assistant', '正在连接模型…', false);
+    pendingAssistantArticle = activeChatReplyElement.closest('article') as HTMLElement | undefined;
+    setChatBusy(true);
+
+    const accepted = await window.controlPanel.startChat({
+      draftId: activeChatAttachmentDraftId,
+      messages: prepared.messages,
+      requestId,
+    });
+    activeChatRequestMessages = [...accepted.messages];
+    chatMessages.splice(0, chatMessages.length, ...accepted.messages);
+    if (accepted.removedAttachmentIds.length > prepared.removedAttachmentIds.length) {
+      historyRepaired = true;
+      renderChatMessages();
+      activeChatReplyElement = appendChatMessage('assistant', '正在连接模型…', false);
+    }
+    if (accepted.warning && accepted.warning !== prepared.warning) {
+      showToast(accepted.warning);
+    }
+    activeChatAttachmentDraftId = undefined;
+    pendingChatAttachments.splice(0);
+    chatInput.value = '';
+    renderPendingChatAttachments();
+    await persistActiveChat();
   } catch (error) {
     const message = error instanceof Error ? error.message : '无法启动独立对话请求。';
-    if (activeChatReplyElement) {
-      activeChatReplyElement.textContent = `请求失败：${message}`;
+    if (previousMessages && activeChatRequestId === requestId) {
+      chatMessages.splice(0, chatMessages.length, ...previousMessages);
+      activeChatUsage = previousUsage ?? estimateChatUsage(previousMessages);
+      activeChatProviderUsage = previousProviderUsage;
+      if (historyRepaired) {
+        renderChatMessages();
+      } else {
+        pendingUserArticle?.remove();
+        pendingAssistantArticle?.remove();
+        chatEmptyState.hidden = chatMessages.length > 0;
+      }
+      renderChatUsage();
+      finishChatRequest();
     }
     showToast(message, 'error');
-    finishChatRequest();
+  } finally {
+    chatSubmissionInFlight = false;
+    setChatBusy(Boolean(activeChatRequestId));
   }
 };
 
@@ -1702,7 +2357,7 @@ async function resumeStoredConversation(
     }
     const label = session.sessionName || session.sessionId.slice(0, 8);
     showToast(`已在新对话中恢复 ${label}`);
-    scheduleActiveTerminalFit();
+    retryTerminalFitUntilMeasured();
     requestComposerFocus(result.state.activeSessionId);
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
@@ -2925,6 +3580,137 @@ const setWorkbenchOpen = (open: boolean): void => {
   }
 };
 
+interface TerminalMaskState {
+  depth: number;
+  focusBeforeMask: HTMLElement | null;
+  label: HTMLElement;
+  overlay: HTMLDivElement;
+  view: TerminalView;
+}
+
+const terminalMasks = new Map<string, TerminalMaskState>();
+
+const releaseTerminalMask = (sessionId: string, state: TerminalMaskState): void => {
+  state.depth -= 1;
+  if (state.depth > 0 || terminalMasks.get(sessionId) !== state) {
+    return;
+  }
+  terminalMasks.delete(sessionId);
+  state.overlay.remove();
+  state.view.container.inert = false;
+  const restore = state.focusBeforeMask;
+  if (restore?.isConnected) {
+    restore.focus({ preventScroll: true });
+  } else if (workspaceState.activeSessionId === sessionId) {
+    focusComposer();
+  }
+};
+
+const copyTerminalCanvasLayers = (source: HTMLElement, target: HTMLElement): boolean => {
+  const sourceCanvases = [...source.querySelectorAll<HTMLCanvasElement>('canvas')];
+  const targetCanvases = [...target.querySelectorAll<HTMLCanvasElement>('canvas')];
+  let copied = 0;
+  for (const [index, sourceCanvas] of sourceCanvases.entries()) {
+    const targetCanvas = targetCanvases[index];
+    if (!targetCanvas) {
+      continue;
+    }
+    targetCanvas.width = sourceCanvas.width;
+    targetCanvas.height = sourceCanvas.height;
+    try {
+      targetCanvas.getContext('2d')?.drawImage(sourceCanvas, 0, 0);
+      copied += 1;
+    } catch {
+      // A GPU driver can reject readback after context loss; the text fallback below stays usable.
+    }
+  }
+  return copied > 0;
+};
+
+/**
+ * Freezes what the user sees while keeping the real xterm alive behind it. Permission-mode changes
+ * depend on xterm consuming screen deltas, so pausing the output queue here would deadlock the
+ * before/after badge probe. A copied visual layer gives the requested frozen blur without breaking
+ * that state machine.
+ */
+const beginTerminalMask = (sessionId: string, label: string): (() => void) => {
+  const existing = terminalMasks.get(sessionId);
+  if (existing) {
+    existing.depth += 1;
+    existing.label.textContent = label;
+    let disposed = false;
+    return () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      releaseTerminalMask(sessionId, existing);
+    };
+  }
+
+  const view = terminalViews.get(sessionId);
+  if (!view) {
+    return () => undefined;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'terminal-mask';
+  overlay.tabIndex = -1;
+  overlay.setAttribute('role', 'status');
+  overlay.setAttribute('aria-live', 'polite');
+
+  const snapshot = view.container.cloneNode(true) as HTMLDivElement;
+  snapshot.className = 'terminal-mask__snapshot';
+  snapshot.removeAttribute('data-session-id');
+  snapshot.setAttribute('aria-hidden', 'true');
+  snapshot.inert = true;
+  if (!copyTerminalCanvasLayers(view.container, snapshot)) {
+    const fallback = document.createElement('pre');
+    fallback.className = 'terminal-mask__fallback';
+    const buffer = view.terminal.buffer.active;
+    const firstRow = Math.max(0, buffer.baseY);
+    const rows: string[] = [];
+    for (
+      let index = firstRow;
+      index < Math.min(buffer.length, firstRow + view.terminal.rows);
+      index++
+    ) {
+      rows.push(buffer.getLine(index)?.translateToString(true) ?? '');
+    }
+    fallback.textContent = rows.join('\n');
+    snapshot.replaceChildren(fallback);
+  }
+  const veil = document.createElement('div');
+  veil.className = 'terminal-mask__veil';
+  const message = document.createElement('strong');
+  message.className = 'terminal-mask__label';
+  message.textContent = label;
+  veil.append(message);
+  overlay.append(snapshot, veil);
+  terminalStage.append(overlay);
+
+  const focusBeforeMask =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  view.container.inert = true;
+  overlay.focus({ preventScroll: true });
+  const state: TerminalMaskState = {
+    depth: 1,
+    focusBeforeMask,
+    label: message,
+    overlay,
+    view,
+  };
+  terminalMasks.set(sessionId, state);
+
+  let disposed = false;
+  return () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    releaseTerminalMask(sessionId, state);
+  };
+};
+
 /**
  * Restarts the PTY and reattaches with `--continue`. Used by both cross-endpoint model switches and
  * by 「仅预批准」, which Claude Code only accepts as a launch argument. Compaction is offered because
@@ -2953,6 +3739,7 @@ const relaunchClaudeSession = async (
   if (known) {
     renderClaudeState(known);
   }
+  const endMask = beginTerminalMask(status.id, '正在压缩上下文并恢复会话');
   try {
     const result = await window.controlPanel.relaunchClaudeSession(status.id, {
       ...input,
@@ -2966,6 +3753,7 @@ const relaunchClaudeSession = async (
   } catch {
     showToast('重启会话时发生异常。', 'error');
   } finally {
+    endMask();
     launchInProgress = false;
     void loadClaudeState(status.id);
   }
@@ -2987,6 +3775,7 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
   modelSwitchInProgress = true;
   footerModel.disabled = true;
   footerModel.setAttribute('aria-busy', 'true');
+  const endMask = beginTerminalMask(status.id, '正在切换模型');
   try {
     const result = await window.controlPanel.switchClaudeModel(status.id, option.id);
     renderClaudeState(result.state);
@@ -2996,6 +3785,7 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
   } catch {
     showToast('切换模型时发生异常。', 'error');
   } finally {
+    endMask();
     modelSwitchInProgress = false;
     footerModel.disabled = false;
     footerModel.setAttribute('aria-busy', 'false');
@@ -3019,6 +3809,7 @@ const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> =
 
   modeSwitchInProgress = true;
   footerMode.disabled = true;
+  const endMask = beginTerminalMask(status.id, '正在切换权限模式');
   try {
     const result = await window.controlPanel.setClaudePermissionMode(status.id, mode);
     renderClaudeState(result.state);
@@ -3028,6 +3819,7 @@ const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> =
   } catch {
     showToast('切换权限模式时发生异常。', 'error');
   } finally {
+    endMask();
     modeSwitchInProgress = false;
     void loadClaudeState(status.id);
   }
@@ -3181,7 +3973,7 @@ const applyRailTab = (tab?: string): void => {
     void loadPluginCatalog(false);
   }
   if (!chatVisible) {
-    scheduleActiveTerminalFit();
+    retryTerminalFitUntilMeasured();
   }
 };
 
@@ -3830,7 +4622,7 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
   container.dataset.sessionId = sessionId;
   terminalStage.prepend(container);
 
-  const terminal = new Terminal(terminalOptions);
+  const terminal = new Terminal(buildTerminalOptions());
   const fitAddon = new FitAddon();
   const unicode11Addon = new Unicode11Addon();
   terminal.loadAddon(fitAddon);
@@ -4032,7 +4824,7 @@ const fitActiveTerminal = (): boolean => {
  * leaving an unbounded timer running.
  */
 let terminalFitGeneration = 0;
-const scheduleActiveTerminalFit = (): void => {
+const retryTerminalFitUntilMeasured = (): void => {
   const expectedSessionId = workspaceState.activeSessionId;
   const generation = ++terminalFitGeneration;
   let attemptsRemaining = 4;
@@ -4056,6 +4848,34 @@ const scheduleActiveTerminalFit = (): void => {
   window.requestAnimationFrame(fitOnNextFrame);
 };
 
+const TERMINAL_FIT_DEBOUNCE_MS = 100;
+let terminalFitDebounceTimer: number | undefined;
+let terminalFitDirty = false;
+let isDraggingLayout = false;
+
+const flushDebouncedTerminalFit = (): void => {
+  if (terminalFitDebounceTimer !== undefined) {
+    window.clearTimeout(terminalFitDebounceTimer);
+    terminalFitDebounceTimer = undefined;
+  }
+  if (!terminalFitDirty || isDraggingLayout) {
+    return;
+  }
+  terminalFitDirty = false;
+  fitActiveTerminal();
+};
+
+const debounceTerminalFit = (): void => {
+  terminalFitDirty = true;
+  if (isDraggingLayout) {
+    return;
+  }
+  if (terminalFitDebounceTimer !== undefined) {
+    window.clearTimeout(terminalFitDebounceTimer);
+  }
+  terminalFitDebounceTimer = window.setTimeout(flushDebouncedTerminalFit, TERMINAL_FIT_DEBOUNCE_MS);
+};
+
 const clamp = (value: number, minimum: number, maximum: number): number =>
   Math.min(maximum, Math.max(minimum, value));
 
@@ -4069,7 +4889,7 @@ const setPanelWidth = (value: number): void => {
   );
   document.documentElement.style.setProperty('--rail-w', `${width}px`);
   localStorage.setItem('claudedock.panelWidth', String(width));
-  scheduleActiveTerminalFit();
+  debounceTerminalFit();
 };
 
 const setDrawerWidth = (value: number): void => {
@@ -4077,7 +4897,6 @@ const setDrawerWidth = (value: number): void => {
   const width = clamp(value, minimum, Math.max(minimum, Math.min(760, window.innerWidth - 140)));
   document.documentElement.style.setProperty('--drawer-w', `${width}px`);
   localStorage.setItem('claudedock.drawerWidth', String(width));
-  scheduleActiveTerminalFit();
 };
 
 const activeResizeCleanups = new Set<() => void>();
@@ -4106,6 +4925,7 @@ const installResizer = (
     const startWidth = current();
     const pointerId = event.pointerId;
     let finished = false;
+    isDraggingLayout = true;
     const move = (moveEvent: PointerEvent): void => {
       if (moveEvent.pointerId !== pointerId) {
         return;
@@ -4131,8 +4951,9 @@ const installResizer = (
       } finally {
         if (activeResizeCleanups.size === 0) {
           document.body.classList.remove('is-resizing');
+          isDraggingLayout = false;
+          flushDebouncedTerminalFit();
         }
-        scheduleActiveTerminalFit();
       }
     };
 
@@ -4638,7 +5459,7 @@ const activateProject = async (sessionId: string): Promise<void> => {
     return;
   }
   renderWorkspace(result.state);
-  scheduleActiveTerminalFit();
+  retryTerminalFitUntilMeasured();
   requestComposerFocus(result.state.activeSessionId);
 };
 
@@ -4672,7 +5493,7 @@ const openConversation = async (projectPath: string): Promise<void> => {
     return;
   }
   showToast(`已在 ${projectNameFromPath(projectPath)} 新开一个对话`);
-  scheduleActiveTerminalFit();
+  retryTerminalFitUntilMeasured();
   requestComposerFocus(result.state.activeSessionId);
 };
 
@@ -5100,6 +5921,8 @@ function renderProjectList(): void {
 }
 
 function renderWorkspace(state: WorkspaceState): void {
+  const previousActiveSessionId = workspaceState.activeSessionId;
+  const activeViewAlreadyExists = terminalViews.has(state.activeSessionId);
   syncConversationTitles(state);
   workspaceState = state;
   const validSessionIds = new Set(state.sessions.map((status) => status.id));
@@ -5123,6 +5946,8 @@ function renderWorkspace(state: WorkspaceState): void {
         cancelAnimationFrame(view.pendingFrame);
       }
       rejectPermissionModeProbes(sessionId, view);
+      terminalMasks.get(sessionId)?.overlay.remove();
+      terminalMasks.delete(sessionId);
       view.terminal.dispose();
       view.container.remove();
       terminalViews.delete(sessionId);
@@ -5178,7 +6003,12 @@ function renderWorkspace(state: WorkspaceState): void {
       renderConnectionHistory();
     }
   }
-  scheduleActiveTerminalFit();
+  if (
+    state.activeSessionId &&
+    (state.activeSessionId !== previousActiveSessionId || !activeViewAlreadyExists)
+  ) {
+    retryTerminalFitUntilMeasured();
+  }
 }
 
 const applyTerminalStatus = (status: TerminalStatus): void => {
@@ -5225,7 +6055,7 @@ const addProject = async (directoryPath: string): Promise<void> => {
   try {
     const result = await window.controlPanel.addProject(directoryPath);
     if (handleWorkspaceResult(result, directoryPath)) {
-      scheduleActiveTerminalFit();
+      retryTerminalFitUntilMeasured();
       requestComposerFocus(result.state.activeSessionId);
     }
   } catch (error) {
@@ -5720,6 +6550,12 @@ chatComposer.addEventListener('submit', (event) => {
   event.preventDefault();
   void submitChatMessage();
 });
+chatAttachButton.addEventListener('click', () => {
+  chatAttachmentInput.click();
+});
+chatAttachmentInput.addEventListener('change', () => {
+  queueChatAttachmentImport(Array.from(chatAttachmentInput.files ?? []));
+});
 chatInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -5735,6 +6571,38 @@ stopChatButton.addEventListener('click', () => {
 newChatButton.addEventListener('click', () => {
   resetChatConversation();
   chatInput.focus();
+});
+artifactDetailsButton.addEventListener('click', () => {
+  setArtifactDetailsOpen(artifactDetailsButton.getAttribute('aria-expanded') !== 'true');
+});
+artifactDetailsClose.addEventListener('click', () => {
+  setArtifactDetailsOpen(false);
+});
+artifactDetailsScrim.addEventListener('click', () => {
+  setArtifactDetailsOpen(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && artifactDetailsButton.getAttribute('aria-expanded') === 'true') {
+    event.preventDefault();
+    setArtifactDetailsOpen(false);
+  }
+});
+artifactNetworkAllowed.addEventListener('change', () => {
+  artifactNetworkAllowed.disabled = true;
+  void window.controlPanel
+    .setArtifactNetworkAllowed(artifactNetworkAllowed.checked)
+    .then((state) => {
+      artifactNetworkState = state;
+      renderArtifactNetworkLog();
+      showToast(state.allowed ? 'Artifact 联网已开启' : 'Artifact 联网已关闭');
+    })
+    .catch(() => {
+      artifactNetworkAllowed.checked = artifactNetworkState.allowed;
+      showToast('无法保存 Artifact 联网设置。', 'error');
+    })
+    .finally(() => {
+      artifactNetworkAllowed.disabled = false;
+    });
 });
 footerConnection.addEventListener('click', () => {
   if (connectionTestInProgress) {
@@ -6034,7 +6902,7 @@ restartButton.addEventListener('click', async () => {
   const result = await window.controlPanel.restartTerminal(status.id);
   terminalViews.get(status.id)?.terminal.clear();
   if (handleOperation(result, result.ok ? '终端已重启' : undefined)) {
-    scheduleActiveTerminalFit();
+    retryTerminalFitUntilMeasured();
     requestComposerFocus(status.id);
   }
 });
@@ -6049,7 +6917,7 @@ toggleButton.addEventListener('click', async () => {
   } else {
     const result = await window.controlPanel.startTerminal(status.id);
     if (handleOperation(result, '终端已启动')) {
-      scheduleActiveTerminalFit();
+      retryTerminalFitUntilMeasured();
       requestComposerFocus(status.id);
     }
   }
@@ -6210,13 +7078,13 @@ window.addEventListener('focus', () => {
   // Tray restoration is a fresh layout/focus boundary even when Chromium missed the earlier blur.
   cancelActiveResizes();
   void reconcileWorkspaceAfterActivation();
-  scheduleActiveTerminalFit();
+  retryTerminalFitUntilMeasured();
   flushPendingComposerFocus();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     void reconcileWorkspaceAfterActivation();
-    scheduleActiveTerminalFit();
+    retryTerminalFitUntilMeasured();
     flushPendingComposerFocus();
   } else {
     cancelActiveResizes();
@@ -6226,6 +7094,15 @@ document.addEventListener('visibilitychange', () => {
 document.addEventListener('dragenter', (event) => {
   event.preventDefault();
   dragDepth += 1;
+  const title = dropOverlay.querySelector('strong');
+  const detail = dropOverlay.querySelector('span');
+  if (title && detail) {
+    title.textContent = mainView === 'chat' ? '松开以添加到当前消息' : '松开以添加项目';
+    detail.textContent =
+      mainView === 'chat'
+        ? '支持图片、PDF、CSV 与纯文本；文件只会复制到本机应用数据目录'
+        : '将为该项目创建独立终端会话';
+  }
   dropOverlay.classList.add('drop-overlay--visible');
 });
 document.addEventListener('dragover', (event) => {
@@ -6246,13 +7123,18 @@ document.addEventListener('drop', (event) => {
   dragDepth = 0;
   dropOverlay.classList.remove('drop-overlay--visible');
 
-  const file = event.dataTransfer?.files[0];
+  const files = Array.from(event.dataTransfer?.files ?? []);
+  const file = files[0];
   if (!file) {
     showToast('没有检测到文件夹。', 'error');
     return;
   }
 
   try {
+    if (mainView === 'chat') {
+      queueChatAttachmentImport(files);
+      return;
+    }
     const directoryPath = window.controlPanel.getDroppedPath(file);
     if (!directoryPath) {
       showToast('无法读取拖入项目的路径。', 'error');
@@ -6264,14 +7146,32 @@ document.addEventListener('drop', (event) => {
   }
 });
 
-const resizeObserver = new ResizeObserver(() => {
-  scheduleActiveTerminalFit();
+let observedTerminalWidth = -1;
+let observedTerminalHeight = -1;
+const resizeObserver = new ResizeObserver(([entry]) => {
+  if (!entry) {
+    return;
+  }
+  const width = Math.round(entry.contentRect.width);
+  const height = Math.round(entry.contentRect.height);
+  if (width === observedTerminalWidth && height === observedTerminalHeight) {
+    return;
+  }
+  observedTerminalWidth = width;
+  observedTerminalHeight = height;
+  debounceTerminalFit();
 });
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
   cancelActiveResizes();
+  activeChatReplyStream?.destroy();
+  artifactController?.stopAll();
+  markdownHighlighter?.dispose();
   terminalFitGeneration += 1;
+  if (terminalFitDebounceTimer !== undefined) {
+    window.clearTimeout(terminalFitDebounceTimer);
+  }
   resizeObserver.disconnect();
   if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
@@ -6281,11 +7181,30 @@ window.addEventListener('beforeunload', () => {
       cancelAnimationFrame(view.pendingFrame);
     }
     rejectPermissionModeProbes(sessionId, view);
+    terminalMasks.get(sessionId)?.overlay.remove();
     view.terminal.dispose();
   }
+  terminalMasks.clear();
 });
 
 void (async () => {
+  try {
+    const initialSettings = await window.controlPanel.getAppSettings();
+    const reportedWindowsBuild = initialSettings.windowsBuildNumber;
+    windowsBuildNumber =
+      typeof reportedWindowsBuild === 'number' &&
+      Number.isInteger(reportedWindowsBuild) &&
+      reportedWindowsBuild > 0
+        ? reportedWindowsBuild
+        : undefined;
+    artifactNetworkState.allowed = initialSettings.artifactNetworkAllowed ?? true;
+    renderArtifactNetworkLog();
+    if (initialSettings.theme !== activeTerminalTheme) {
+      applyTerminalTheme(initialSettings.theme, false);
+    }
+  } catch {
+    // The terminal still works without Windows-specific reflow hints; settings can be retried later.
+  }
   renderWorkspace(await window.controlPanel.getWorkspace());
   // Let first paint and workspace hydration complete, then check all update sources without
   // blocking terminal startup or requiring the user to open the connection/plugins pages.
@@ -6303,6 +7222,6 @@ void (async () => {
     handleOperation(await window.controlPanel.startTerminal(status.id));
   }
   void loadConnectionHistory();
-  scheduleActiveTerminalFit();
+  retryTerminalFitUntilMeasured();
   requestComposerFocus(status.id);
 })();

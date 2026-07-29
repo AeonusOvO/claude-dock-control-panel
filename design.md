@@ -1,25 +1,28 @@
 # ClaudeDock 设计规范
 
-## 设计令牌系统（2026-07-28 更新）
+## 设计令牌系统（2026-07-29 更新）
 
 所有样式使用 CSS 自定义属性管理，禁止硬编码颜色、间距、圆角或时长。
 
 `:root` 是唯一允许出现字面值的地方；文件其余部分只能引用令牌。`tests/design-tokens.test.ts`
 把这一点变成可检查的不变式：`:root` 之外不允许 `#rrggbb`、不允许带色相的 `rgb()`/`rgba()`
 （只放行 `0 0 0` 与 `255 255 255` 的中性透明度）、`font-family` 只能是
-`var(--font-ui)` / `var(--font-mono)` / `inherit`、不允许写死 `font-size: <n>px`。
+`var(--font-ui)` / `var(--font-display)` / `var(--font-mono)` / `inherit`、不允许写死
+`font-size: <n>px`。
 这条不变式同时是「全局主题真的生效」的保证——主题只需覆写令牌，不需要逐条改样式。
 批量替换的工具与感知色差（CIE76）报告见 `scripts/tokenize-colors.cjs`。
 
 ### 字体族
 
-- **界面**：`--font-ui` 随外观变化。Claude / Telegram 明亮主题加载项目内置的
-  `Open Sans Variable`，中文依次回退 `Microsoft YaHei UI`、`Segoe UI`；石墨 / 深海蓝
-  继续以 `Segoe UI Variable` 为首选。字体文件来自 `@fontsource-variable/open-sans`，
-  应用离线时也不向第三方字体站点发请求。
+- **界面正文**：`--font-ui` 随主题人格变化。Claude 使用本地 `Inter Variable`，Telegram
+  使用本地 `Open Sans Variable`；石墨 / 深海蓝以 `Segoe UI Variable` 为首选。中文依次
+  回退 `Microsoft YaHei UI`、`Segoe UI`。
+- **品牌标题**：`--font-display` 是第三种职责明确的字体槽。Claude 使用本地
+  `Source Serif 4 Variable` 表达温和编辑感；Telegram 与两套工程主题让它等于各自正文
+  字体。仅消息标题、空状态标题和 Artifact 抽屉标题可使用，不得把长正文改成衬线。
 - **等宽**：`--font-mono`（`Cascadia Mono` → `Consolas`）
-- 整个界面只有这两种字体族，第三种写法即视为回归。图标按钮继承上下文字体（`inherit`），
-  不再单独指定 `Arial`。
+- 三个字体槽均由本地包或系统字体提供，离线时不访问第三方字体站点。其他字体写法视为回归；
+  图标按钮继承上下文字体（`inherit`），不单独指定字族。
 
 ### 颜色令牌
 
@@ -29,8 +32,11 @@
 - **主色**：`--accent-solid` (实心填充) / `--accent-text` (文字图标)；Claude 明亮使用陶土色，
   Telegram 明亮使用克制蓝色，深色主题沿用青蓝。
 - **状态三色**：`--ok-*` (绿) / `--warn-*` (琥珀) / `--bad-*` (红)，每色包含 solid/text/tint/line 四槽
+- **代码语义色**：Shiki 只负责识别 token 的色相类别，最终颜色映射到
+  `--syntax-red/blue/cyan/green/magenta/yellow/neutral`。因此切主题不需要重建已显示代码，
+  语法色会随 xterm palette 即时重绘。
 - **主题作用域是全局的**：字体、表面阶梯、文字层级、交互层、发丝描边、主色、状态色、
-  阴影与高光共 41 个令牌由
+  阴影、高光、主题排版、圆角、按压、进退场曲线和终端遮罩由
   `src/shared/terminal-themes.ts` 的 `shell` 字段驱动，映射表是同文件的 `SHELL_CSS_VARIABLES`。
   切换主题时渲染层遍历该映射写到 `documentElement.style`，主进程同步
   `setBackgroundColor` / `setTitleBarOverlay`（原生窗口边框由 Windows 绘制，CSS 管不到），
@@ -63,8 +69,12 @@
 ### 动效令牌
 
 - **曲线**：`--ease-standard` (微交互) / `--ease-decel` (进场) / `--ease-accel` (退场) /
-  `--ease-telegram`（快速滑入，`cubic-bezier(0.25, 1, 0.5, 1)`）
+  `--ease-telegram`（通用快速滑入）；人格覆盖层使用 `--ease-enter` / `--ease-exit` /
+  `--ease-spring`。
 - **时长**：`--dur-1` (90ms 必须配 standard) / `--dur-2` (140ms) / `--dur-3` (200ms) / `--dur-4` (280ms 抽屉进) / `--dur-exit` (180ms 抽屉出)
+- **主题节奏**：Claude 消息以 240ms 舒缓减速进入，Telegram 以 340ms 的
+  `easeOutCirc` 人格进入，两套深色主题为 200ms 中性节奏；按压缩放走
+  `--press-theme`。抽屉和按钮使用可中断 `transition`，一次性消息入场可以使用 keyframes。
 - **刷新反馈**：`--dur-refresh` (900ms) 仅用于标题栏刷新图标的匀速旋转；减少动态效果时
   由全局规则收敛为一次近乎静止的反馈。
 - **规则**：90ms 级微交互禁用 emphasized 曲线（会感知为迟滞）
@@ -80,7 +90,7 @@
   克制的两段式阴影，不是把深色主题的十六进制值简单反转。
 - `--sheen` 由主题提供：深色是内侧高光，明亮是低强度纸面投影。仅用于卡片层，嵌套卡片
   不重复叠加，避免层级发灰。
-- 遮罩层刻意不用 `backdrop-filter`（终端 canvas 持续刷新，模糊会每帧强制 GPU 合成）
+- 遮罩层只模糊一次性 canvas 快照，不对持续刷新的真实终端使用 `backdrop-filter`
 
 ### 单一强调色原则
 
@@ -90,9 +100,10 @@
 
 ## 设计目标
 
-界面支持两种完整视觉语言：明亮主题是克制的桌面工作台，使用清晰纸面、可见层级和温和阴影；
-深色主题保持运维面板气质。终端或独立对话始终是视觉主体，左侧控制区呈现配置、项目与历史；
-Claude 工作台从终端右侧按需滑入。避免拟物化、过度渐变和大面积高饱和色。
+界面支持四套完整人格：Claude 温和编辑感、Telegram 紧凑通讯感，以及石墨/深海蓝的中性工程
+气质。差异覆盖字体、行高、圆角、消息结构和动效，不能只换色。终端或独立对话始终是视觉
+主体，左侧控制区呈现配置、项目与历史；Claude 工作台从终端右侧按需滑入。避免拟物化、
+过度渐变和大面积高饱和色。
 
 ## 视觉语言
 
@@ -105,9 +116,8 @@ Claude 工作台从终端右侧按需滑入。避免拟物化、过度渐变和�
   `--accent-tint` 微光反馈“原始 PowerShell 已接管输入”。效果只响应 `:focus-within`，不改变
   布局、不持续呼吸，也不能压过错误/警告状态。
 - 主色和状态色都由主题提供，但“正常 / 警告 / 错误”的色相与含义保持不变。
-- 字体：界面使用 `--font-ui`（明亮主题以 `Open Sans Variable` 起，深色主题以
-  `Segoe UI Variable` 起）；终端与路径、命令等技术标识使用
-  `--font-mono`（`Cascadia Mono`、`Consolas` 回退）。
+- 字体：正文使用 `--font-ui`，品牌标题使用 `--font-display`，终端与路径、命令等技术标识
+  使用 `--font-mono`。Claude / Telegram 的正文、标题和行高必须在并排截图中明显不同。
 - 圆角：卡片 14px (`--r-xl`)，嵌套卡片 10px (`--r-lg`)，按钮 8px (`--r-md`)，状态胶囊为全圆角 (`--r-pill`)。
 - 阴影：只用于窗口内浮层与拖放激活态，避免装饰性重阴影。
 - 图标：使用一致的 1.8px 线性 SVG，禁止字形充当图标；应用图标以终端提示符和状态灯为核心。
@@ -210,7 +220,17 @@ Claude 工作台从终端右侧按需滑入。避免拟物化、过度渐变和�
 - 工具栏持续显示当前模型、“实时上下文”和输入/输出 Token。输入框草稿立即计入估算值；
   流式过程中逐段刷新；供应商返回 usage 后显示精确值。估算值必须带“约”，不能伪装成精确计费。
 - 用户消息靠右并使用强调色浅底，模型消息靠左使用普通卡片底；标签同时显示“你 / 模型”，
-  不仅依赖左右位置区分角色。消息正文保留换行、允许选择复制，长模型输出自然断行。
+  不仅依赖左右位置区分角色。Claude 的模型标题使用衬线且卡片宽松；Telegram 把角色标签
+  变成紧凑圆形头像并使用更小气泡圆角。结构差异只用 `data-theme`，颜色仍只走 token。
+- 模型正文按正常文档流排版 `h1-h6 / p / ul / ol / blockquote / table / pre / code / a /
+img`；表格横向滚动，代码块显示语言与复制按钮，公式居中且保留 MathML。流式尾部每帧重建，
+  已稳定前缀不闪烁，未闭合围栏保持不稳定直到闭合。
+- HTML 代码块下方可出现“运行此可视化”，但不得自动执行。运行区域有固定工具栏、加载/
+  错误/停止状态与受限高度 iframe；“详细信息”从右侧可中断滑入，含联网总开关、运行实例和
+  请求审计，打开时消息区和输入区设为 `inert`，`Esc` 与遮罩点击都可关闭。
+- 输入区的回形针位于 textarea 左侧；待发送附件在上方横向卡片队列显示缩略图、文件名、
+  大小和移除按钮。已发送图片显示主进程生成的小预览，PDF/CSV/文本显示文件卡，缺失附件要
+  明确标成不可用而不是留下空白。
 - 输入区是真正的多行 `<textarea>`，`Enter` 发送、`Shift+Enter` 换行，IME 组合期间不拦截。
   生成时禁用重复发送并显示独立“停止”按钮；工具栏“新对话”开启空白记录，不删除旧历史，
   也不影响项目或 Claude Code session。
@@ -218,7 +238,9 @@ Claude 工作台从终端右侧按需滑入。避免拟物化、过度渐变和�
   Token。最多 50 个对话、每个 100 条消息。删除按钮具有包含标题的 `aria-label`，并复用
   应用内“永久删除、无法恢复”确认框；历史正文是明文本地数据，界面与文档必须披露。
 - 空状态居中解释独立边界；错误直接写入对应模型消息并用 toast 补充，已收到的部分文本保留。
-  流式增量只更新 `textContent`，不把模型输出当 HTML 注入。
+  Markdown 只从 lexer token 创建白名单 DOM，原始 HTML 降级为文本；Artifact 是唯一显式的
+  HTML 执行入口。远程 Markdown 图片显示带隐私说明的占位卡，不生成会自动请求的 `<img>`；
+  用户可用卡片按钮显式交给系统浏览器打开。`data:` 图片仍可在消息内显示。
 
 ## 全局设置
 
@@ -242,15 +264,17 @@ Claude 工作台从终端右侧按需滑入。避免拟物化、过度渐变和�
 
 - xterm 使用 WebGL 渲染器（`@xterm/addon-webgl`），并监听 `onContextLoss` → dispose
   回退 DOM 渲染器，不让丢失上下文变成白屏。
-- 新建活动终端必须先把容器设为可见再调用 `terminal.open()`；切换会话、调整宽度、窗口恢复
-  或可见性变化后，在有限个连续绘制帧内重新 `fit()`，避免隐藏容器测得 0 尺寸后画布无法点击
-  或布局错位。
+- 新建活动终端必须先把容器设为可见再调用 `terminal.open()`；冷启动和会话首次可见时最多
+  连续四帧重试 `fit()`。窗口、侧栏和抽屉的连续尺寸变化只走 100ms 尾沿防抖；拖拽期间只
+  标脏，释放后恰好 fit 一次，`ResizeObserver` 对相同整数宽高短路。
 - 输出写入在两侧都做合并：主进程按会话攒 8ms 或 64KB 发一次 IPC，渲染层按
   `requestAnimationFrame` 合并成一次 `terminal.write`（缓冲上限 512KB，超限丢弃最旧的
   分块）。逐块 `send`/`write` 是输入卡顿的真实来源——每块都会触发一次 xterm 重排。
 - 主进程的合并只影响发给渲染层的消息；`consumeTerminalOutput` 仍然逐块接收，因为它跨块
   跟踪退出标记，喂给它合并后的缓冲会漏判。
-- 遮罩层刻意不用 `backdrop-filter`（终端画布持续刷新，模糊会每帧强制 GPU 合成）。
+- 终端操作遮罩复制当前 xterm canvas 作为冻结快照并只模糊快照，真实 xterm 在下层继续消费
+  输出和完成权限探测；遮罩引用计数且必须在 `finally` 释放。禁止暂停 `terminal.write()`，
+  也不用 `backdrop-filter`，否则既会让探测超时，也会持续强制 GPU 合成。
 
 ## Claude 工作台
 

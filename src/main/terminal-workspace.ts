@@ -1,14 +1,23 @@
 import path from 'node:path';
 import type { TerminalStatus, TerminalWorkspaceState } from '../shared/contracts';
+import { DEFAULT_TERMINAL_THEME, type TerminalThemeId } from '../shared/terminal-themes';
 import { normalizeClaudeSessionTitle } from './claude-session-manager';
 import { TerminalSession, type TerminalEnvironmentOverrides } from './terminal-session';
 
 export interface ManagedTerminal {
   getStatus: () => TerminalStatus;
   resize: (cols: number, rows: number) => { cols: number; rows: number };
-  restart: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
+  restart: (
+    cwd?: string,
+    environment?: TerminalEnvironmentOverrides,
+    themeId?: TerminalThemeId,
+  ) => TerminalStatus;
   setTitle: (title: string) => TerminalStatus;
-  start: (cwd?: string, environment?: TerminalEnvironmentOverrides) => TerminalStatus;
+  start: (
+    cwd?: string,
+    environment?: TerminalEnvironmentOverrides,
+    themeId?: TerminalThemeId,
+  ) => TerminalStatus;
   stop: (emitStatus?: boolean) => TerminalStatus;
   write: (data: string) => void;
 }
@@ -41,6 +50,7 @@ export const sameDirectory = (left: string, right: string): boolean =>
 export class TerminalWorkspace {
   private activeSessionId = '';
   private readonly claudeSessionTitles = new Map<string, string>();
+  private currentThemeId: TerminalThemeId;
   private nextSessionNumber = 1;
   private readonly sessions = new Map<string, ManagedTerminal>();
 
@@ -48,7 +58,10 @@ export class TerminalWorkspace {
     private readonly onData: (sessionId: string, data: string) => void,
     private readonly onState: (state: TerminalWorkspaceState) => void,
     private readonly terminalFactory: TerminalFactory = defaultFactory,
-  ) {}
+    initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
+  ) {
+    this.currentThemeId = initialThemeId;
+  }
 
   public activate(sessionId: string): TerminalWorkspaceState {
     this.requireSession(sessionId);
@@ -130,7 +143,7 @@ export class TerminalWorkspace {
       const status = existing.getStatus();
       this.activeSessionId = status.id;
       if (status.phase === 'stopped' || status.phase === 'error') {
-        existing.start(status.cwd);
+        existing.start(status.cwd, {}, this.currentThemeId);
       } else {
         this.emitState();
       }
@@ -145,7 +158,7 @@ export class TerminalWorkspace {
     const sessionId = this.createSession(cwd, title ?? this.nextConversationTitle(cwd));
     this.activeSessionId = sessionId;
     this.emitState();
-    this.requireSession(sessionId).start(cwd);
+    this.requireSession(sessionId).start(cwd, {}, this.currentThemeId);
     return this.getState();
   }
 
@@ -183,7 +196,12 @@ export class TerminalWorkspace {
     sessionId: string,
     environment: TerminalEnvironmentOverrides = {},
   ): TerminalStatus {
-    return this.requireSession(sessionId).restart(undefined, environment);
+    return this.requireSession(sessionId).restart(undefined, environment, this.currentThemeId);
+  }
+
+  /** Updates the palette used by future starts/restarts without mutating a live PowerShell line. */
+  public setTheme(themeId: TerminalThemeId): void {
+    this.currentThemeId = themeId;
   }
 
   public shutdown(): void {
@@ -193,7 +211,7 @@ export class TerminalWorkspace {
   }
 
   public start(sessionId: string): TerminalStatus {
-    return this.requireSession(sessionId).start();
+    return this.requireSession(sessionId).start(undefined, {}, this.currentThemeId);
   }
 
   public stop(sessionId: string): TerminalStatus {

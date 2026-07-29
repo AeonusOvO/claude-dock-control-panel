@@ -30,9 +30,9 @@ describe('design tokens', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('uses only the two font families of the design system', () => {
+  it('uses only the three font families of the design system', () => {
     const offenders = withLineNumbers(/font-family:/).filter(
-      (line) => !/font-family:\s*(var\(--font-(ui|mono)\)|inherit);/.test(line),
+      (line) => !/font-family:\s*(var\(--font-(ui|mono|display)\)|inherit);/.test(line),
     );
     expect(offenders).toEqual([]);
   });

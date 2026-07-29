@@ -3,6 +3,14 @@ import path from 'node:path';
 import type { IPty } from '@lydell/node-pty';
 import * as pty from '@lydell/node-pty';
 import type { TerminalStatus } from '../shared/contracts';
+import {
+  ansiBackground,
+  ansiForeground,
+  DEFAULT_TERMINAL_THEME,
+  TERMINAL_THEMES,
+  type TerminalThemeId,
+  type TerminalThemePalette,
+} from '../shared/terminal-themes';
 import { normalizeTerminalSize } from './directory';
 
 type DataListener = (data: string) => void;
@@ -49,24 +57,51 @@ const resolvePowerShell = (): string => {
   return existsSync(absolutePath) ? absolutePath : 'powershell.exe';
 };
 
-export const powershellStartup = [
-  '$utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $global:OutputEncoding = $utf8',
-  'Import-Module PSReadLine -ErrorAction SilentlyContinue',
+const quotedAnsiForeground = (hex: string): string => `"${ansiForeground(hex)}"`;
+const quotedAnsiBackground = (hex: string): string => `"${ansiBackground(hex)}"`;
+
+/**
+ * Builds the startup script for one PowerShell spawn. Keeping palette selection at this boundary
+ * avoids injecting commands into a live PSReadLine/Claude TUI when the application theme changes.
+ */
+export const buildPowershellStartup = (palette: TerminalThemePalette): string =>
   [
-    'if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {',
-    "Set-PSReadLineKeyHandler -Chord 'Ctrl+j' -Function AddLine;",
-    'Set-PSReadLineOption -Colors @{ Command = [ConsoleColor]::Cyan; Parameter = [ConsoleColor]::DarkGray; Operator = [ConsoleColor]::Magenta; Variable = [ConsoleColor]::Yellow; String = [ConsoleColor]::Green; Number = [ConsoleColor]::Blue; Type = [ConsoleColor]::Cyan; Comment = [ConsoleColor]::DarkGray };',
-    "Set-PSReadLineKeyHandler -Chord 'Backspace' -ScriptBlock {",
-    "$line = ''; $cursor = 0;",
-    '[Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor);',
-    'if ($cursor -gt 0 -and $line[$cursor - 1] -eq "`n") {',
-    "[Microsoft.PowerShell.PSConsoleReadLine]::Replace($cursor - 1, 1, '');",
-    '[Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor - 1);',
-    '} else { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($null, $null) }',
-    '}',
-    '}',
-  ].join(' '),
-].join('; ');
+    '$utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $global:OutputEncoding = $utf8',
+    'Import-Module PSReadLine -ErrorAction SilentlyContinue',
+    [
+      'if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {',
+      "Set-PSReadLineKeyHandler -Chord 'Ctrl+j' -Function AddLine;",
+      [
+        'Set-PSReadLineOption -Colors @{',
+        `Command = ${quotedAnsiForeground(palette.brightCyan)};`,
+        `Parameter = ${quotedAnsiForeground(palette.brightBlack)};`,
+        `Operator = ${quotedAnsiForeground(palette.magenta)};`,
+        `Variable = ${quotedAnsiForeground(palette.yellow)};`,
+        `String = ${quotedAnsiForeground(palette.green)};`,
+        `Number = ${quotedAnsiForeground(palette.blue)};`,
+        `Type = ${quotedAnsiForeground(palette.cyan)};`,
+        `Comment = ${quotedAnsiForeground(palette.brightBlack)};`,
+        `Default = ${quotedAnsiForeground(palette.foreground)};`,
+        `Error = ${quotedAnsiForeground(palette.red)};`,
+        `Selection = ${quotedAnsiBackground(palette.selectionBackground)}`,
+        '};',
+      ].join(' '),
+      "Set-PSReadLineKeyHandler -Chord 'Backspace' -ScriptBlock {",
+      "$line = ''; $cursor = 0;",
+      '[Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor);',
+      'if ($cursor -gt 0 -and $line[$cursor - 1] -eq "`n") {',
+      "[Microsoft.PowerShell.PSConsoleReadLine]::Replace($cursor - 1, 1, '');",
+      '[Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor - 1);',
+      '} else { [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteChar($null, $null) }',
+      '}',
+      '}',
+    ].join(' '),
+  ].join('; ');
+
+/** Backward-compatible default-theme script for existing imports and syntax checks. */
+export const powershellStartup = buildPowershellStartup(
+  TERMINAL_THEMES[DEFAULT_TERMINAL_THEME].palette,
+);
 
 export class TerminalSession {
   private cols = 100;
@@ -123,14 +158,16 @@ export class TerminalSession {
   public restart(
     cwd = this.status.cwd,
     environment: TerminalEnvironmentOverrides = {},
+    themeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
   ): TerminalStatus {
     this.stop(false);
-    return this.start(cwd, environment);
+    return this.start(cwd, environment, themeId);
   }
 
   public start(
     cwd = this.status.cwd,
     environment: TerminalEnvironmentOverrides = {},
+    themeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
   ): TerminalStatus {
     if (this.process) {
       return this.getStatus();
@@ -147,9 +184,10 @@ export class TerminalSession {
     const generation = ++this.generation;
 
     try {
+      const startup = buildPowershellStartup(TERMINAL_THEMES[themeId].palette);
       const terminalProcess = pty.spawn(
         resolvePowerShell(),
-        ['-NoLogo', '-NoExit', '-Command', powershellStartup],
+        ['-NoLogo', '-NoExit', '-Command', startup],
         {
           cols: this.cols,
           cwd,

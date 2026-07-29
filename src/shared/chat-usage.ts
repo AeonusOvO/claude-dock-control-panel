@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatTokenUsage } from './contracts';
+import type { ChatContentBlock, ChatMessage, ChatTokenUsage } from './contracts';
 
 /**
  * A deliberately conservative fallback for gateways that omit usage metadata. CJK characters tend
@@ -18,12 +18,22 @@ export const estimateTextTokens = (value: string): number => {
   return Math.max(0, Math.ceil(asciiCharacters / 4 + nonAsciiCharacters));
 };
 
+export const chatMessageText = (message: ChatMessage): string =>
+  typeof message.content === 'string'
+    ? message.content
+    : message.content
+        .filter(
+          (block): block is Extract<ChatContentBlock, { type: 'text' }> => block.type === 'text',
+        )
+        .map((block) => block.text)
+        .join('\n');
+
 export const estimateChatUsage = (
   inputMessages: ChatMessage[],
   activeOutput = '',
 ): ChatTokenUsage => {
   const inputTokens = inputMessages.reduce(
-    (total, message) => total + estimateTextTokens(message.content) + 4,
+    (total, message) => total + estimateTextTokens(chatMessageText(message)) + 4,
     0,
   );
   const outputTokens = estimateTextTokens(activeOutput);

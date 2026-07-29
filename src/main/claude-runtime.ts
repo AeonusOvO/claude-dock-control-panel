@@ -27,6 +27,11 @@ import type {
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import { findClaudeProvider } from '../shared/claude-providers';
+import {
+  DEFAULT_TERMINAL_THEME,
+  TERMINAL_THEMES,
+  type TerminalThemeId,
+} from '../shared/terminal-themes';
 import { AsyncRefreshCache } from './async-refresh-cache';
 import {
   BackgroundTaskCoordinator,
@@ -451,6 +456,9 @@ const describeEndpoint = (entry: ClaudeConnectionHistoryEntry): string => {
   }
 };
 
+export const claudeCodeThemeForTerminalTheme = (themeId: TerminalThemeId): 'dark' | 'light' =>
+  TERMINAL_THEMES[themeId].appearance === 'light' ? 'light' : 'dark';
+
 export class ClaudeRuntime {
   private readonly backgroundTasks = new BackgroundTaskCoordinator(2);
   private readonly installationCache = new AsyncRefreshCache<ClaudeInstallationStatus>(
@@ -474,6 +482,7 @@ export class ClaudeRuntime {
   private readonly routerManager: ClaudeRouterManager;
   private readonly runtimeRoot: string;
   private readonly sessions = new Map<string, RuntimeSession>();
+  private currentThemeId: TerminalThemeId;
 
   public constructor(
     userDataPath: string,
@@ -484,11 +493,13 @@ export class ClaudeRuntime {
     private readonly readPermissionModeFromScreen: (
       sessionId: string,
     ) => Promise<ClaudePermissionMode | undefined>,
+    initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
     this.routerManager = new ClaudeRouterManager(userDataPath);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
+    this.currentThemeId = initialThemeId;
     this.metricsTimer = setInterval(() => {
       this.pollMetrics();
     }, 1000);
@@ -497,6 +508,11 @@ export class ClaudeRuntime {
 
   public closeSession(sessionId: string): void {
     this.sessions.delete(sessionId);
+  }
+
+  /** Applies to the next Claude launch; a live Ink TUI is never mutated underneath the user. */
+  public setTheme(themeId: TerminalThemeId): void {
+    this.currentThemeId = themeId;
   }
 
   public consumeTerminalOutput(sessionId: string, data: string): string {
@@ -801,6 +817,7 @@ export class ClaudeRuntime {
       },
       model: config.model,
       skipWebFetchPreflight: true,
+      theme: claudeCodeThemeForTerminalTheme(this.currentThemeId),
       statusLine: {
         command: buildStatusLineCommand(this.statusLineScriptPath, metricsPath),
         refreshInterval: 1,

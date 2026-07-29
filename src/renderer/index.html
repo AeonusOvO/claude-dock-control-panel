@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-src claudedock-artifact:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ClaudeDock 控制面板</title>
@@ -1287,12 +1287,22 @@
               <strong id="chat-token-usage">输入 — · 输出 —</strong>
             </div>
           </div>
-          <button class="button button--quiet" id="new-chat" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            新对话
-          </button>
+          <div class="chat-toolbar__actions">
+            <button
+              class="button button--quiet"
+              id="chat-artifact-details"
+              type="button"
+              aria-expanded="false"
+            >
+              详细信息
+            </button>
+            <button class="button button--quiet" id="new-chat" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              新对话
+            </button>
+          </div>
         </header>
         <div class="chat-messages" id="chat-messages" aria-live="polite">
           <div class="chat-empty-state" id="chat-empty-state">
@@ -1302,6 +1312,30 @@
           </div>
         </div>
         <form class="chat-composer" id="chat-composer">
+          <div
+            class="chat-attachment-queue"
+            id="chat-attachment-queue"
+            aria-label="待发送附件"
+            hidden
+          ></div>
+          <input
+            id="chat-attachment-input"
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.tsv,.txt,.md,.json"
+            multiple
+            hidden
+          />
+          <button
+            class="chat-attach"
+            id="chat-attach"
+            type="button"
+            aria-label="添加图片、PDF 或表格附件"
+            title="添加附件"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8.5 12.5 15 6a3.5 3.5 0 0 1 5 5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8-8" />
+            </svg>
+          </button>
           <textarea
             id="chat-input"
             rows="2"
@@ -1312,6 +1346,41 @@
           <button class="chat-stop" id="stop-chat" type="button" hidden>停止</button>
           <button class="chat-send" id="send-chat" type="submit">发送</button>
         </form>
+        <div class="artifact-details-scrim" id="artifact-details-scrim" hidden></div>
+        <aside
+          class="artifact-details"
+          id="artifact-details-panel"
+          aria-hidden="true"
+          aria-label="Artifact 详细信息"
+          inert
+        >
+          <header class="artifact-details__header">
+            <div>
+              <span>会话审计</span>
+              <strong>Artifact 详细信息</strong>
+            </div>
+            <button id="artifact-details-close" type="button" aria-label="关闭 Artifact 详细信息">
+              ×
+            </button>
+          </header>
+          <div class="artifact-details__body">
+            <label class="artifact-network-toggle">
+              <span>
+                <strong>允许 artifact 联网</strong>
+                <small>关闭后，新请求会被主进程立即拦截；内置可视化库仍可离线使用。</small>
+              </span>
+              <input id="artifact-network-allowed" type="checkbox" />
+            </label>
+            <section aria-labelledby="artifact-running-title">
+              <h3 id="artifact-running-title">正在运行</h3>
+              <div id="artifact-active-list" class="artifact-active-list"></div>
+            </section>
+            <section aria-labelledby="artifact-network-title">
+              <h3 id="artifact-network-title">网络请求</h3>
+              <ol id="artifact-network-log" class="artifact-network-log"></ol>
+            </section>
+          </div>
+        </aside>
       </section>
     </main>
 

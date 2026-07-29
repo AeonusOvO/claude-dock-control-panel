@@ -23,4 +23,25 @@ describe('chat token usage fallback', () => {
       totalTokens: 14,
     });
   });
+
+  it('counts only text blocks while keeping attachment messages in the per-message estimate', () => {
+    expect(
+      estimateChatUsage([
+        {
+          content: [
+            {
+              mediaType: 'image/png',
+              source: {
+                attachmentId: '8f9aa605-adb6-4e2b-a25a-607e14bad666',
+                type: 'local',
+              },
+              type: 'image',
+            },
+            { text: '你好', type: 'text' },
+          ],
+          role: 'user',
+        },
+      ]),
+    ).toMatchObject({ inputTokens: 6, outputTokens: 0, totalTokens: 6 });
+  });
 });

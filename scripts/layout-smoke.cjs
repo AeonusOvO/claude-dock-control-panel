@@ -38,8 +38,10 @@ const inspectLayout = `
     return true;
   };
   const openDialog = document.querySelector('dialog[open]');
-  const inspectionRoot = openDialog || document;
-  const selector = 'button, input, select, textarea, [role="separator"]';
+  const openArtifactDetails = document.querySelector(".artifact-details[data-open='true']");
+  const inspectionRoot = openDialog || openArtifactDetails || document;
+  const selector =
+    'button, input, select, textarea, a[href], iframe, [role="separator"], [tabindex]:not([tabindex="-1"])';
   const controls = [...inspectionRoot.querySelectorAll(selector)].filter(
     (element) => visible(element) && !element.classList.contains('workbench-scrim'),
   );
@@ -77,8 +79,11 @@ const inspectLayout = `
       }
     }
   }
+  // chat-shell intentionally clips the translated, closed artifact drawer, so its scrollWidth
+  // includes off-canvas geometry. Inspect every user-facing child instead of treating that
+  // deliberate clipping container as content overflow.
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-shell, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
@@ -102,10 +107,27 @@ const inspectLayout = `
     }
   }
 
+  const mask = document.querySelector('.terminal-mask');
+  const stage = document.querySelector('#terminal-stage');
+  const maskNeutral =
+    !mask ||
+    !stage ||
+    (() => {
+      const maskRect = mask.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      return (
+        Math.abs(maskRect.left - stageRect.left) <= 1 &&
+        Math.abs(maskRect.top - stageRect.top) <= 1 &&
+        Math.abs(maskRect.width - stageRect.width) <= 1 &&
+        Math.abs(maskRect.height - stageRect.height) <= 1
+      );
+    })();
+
   return {
     covered,
     documentOverflow: document.documentElement.scrollWidth > innerWidth + 2,
     hitTargetMisses,
+    maskNeutral,
     overlaps,
     overflow,
   };
@@ -271,6 +293,189 @@ const addChatStressFixture = `
   })()
 `;
 
+const addRichChatStressFixture = `
+  (() => {
+    const messages = document.querySelector('#chat-messages');
+    messages.replaceChildren();
+
+    const user = document.createElement('article');
+    user.className = 'chat-message chat-message--user';
+    const userLabel = document.createElement('strong');
+    userLabel.textContent = '你';
+    const userBody = document.createElement('div');
+    userBody.className = 'chat-message__content';
+    userBody.textContent = '请同时解释架构、比较方案，并给出可以复制运行的示例。';
+    user.append(userLabel, userBody);
+
+    const assistant = document.createElement('article');
+    assistant.className = 'chat-message chat-message--assistant';
+    const assistantLabel = document.createElement('strong');
+    assistantLabel.textContent = '模型';
+    const body = document.createElement('div');
+    body.className = 'chat-message__content chat-message__markdown';
+    const heading = document.createElement('h1');
+    heading.textContent = '富文本与附件布局验收';
+    const intro = document.createElement('p');
+    intro.append('这段内容同时覆盖 ', document.createElement('strong'), '、链接、列表和长表格。');
+    intro.querySelector('strong').textContent = 'Markdown';
+    const remoteImage = document.createElement('span');
+    remoteImage.className = 'markdown-remote-image';
+    remoteImage.setAttribute('role', 'group');
+    const remoteImageLabel = document.createElement('span');
+    remoteImageLabel.className = 'markdown-remote-image__label';
+    remoteImageLabel.textContent =
+      'architecture-diagram-with-a-long-private-query.png（为保护隐私，未自动加载）';
+    const remoteImageOpen = document.createElement('button');
+    remoteImageOpen.className = 'button button--quiet markdown-remote-image__open';
+    remoteImageOpen.type = 'button';
+    remoteImageOpen.textContent = '在外部浏览器打开图片';
+    remoteImage.append(remoteImageLabel, remoteImageOpen);
+    const quote = document.createElement('blockquote');
+    quote.textContent = '任何宽度下都不能遮挡工具栏、输入区或右侧审计抽屉。';
+    const list = document.createElement('ul');
+    for (const text of ['安全 DOM 白名单', '稳定前缀流式渲染', 'HTML Artifact 显式运行']) {
+      const item = document.createElement('li');
+      item.textContent = text;
+      list.append(item);
+    }
+    const table = document.createElement('table');
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const text of ['能力', '安全边界', '特别长的验证说明列']) {
+      const cell = document.createElement('th');
+      cell.textContent = text;
+      headRow.append(cell);
+    }
+    head.append(headRow);
+    const tableBody = document.createElement('tbody');
+    const row = document.createElement('tr');
+    for (const text of [
+      'Markdown / KaTeX / Shiki',
+      '不执行原始 HTML；危险 URL 降级为文本',
+      'provider/a-very-long-model-and-artifact-description-that-must-scroll-inside-the-table',
+    ]) {
+      const cell = document.createElement('td');
+      cell.textContent = text;
+      row.append(cell);
+    }
+    tableBody.append(row);
+    table.append(head, tableBody);
+    const code = document.createElement('pre');
+    code.className = 'markdown-code';
+    code.dataset.language = 'typescript';
+    const copy = document.createElement('button');
+    copy.className = 'markdown-code__copy';
+    copy.type = 'button';
+    copy.textContent = '复制';
+    const codeBody = document.createElement('code');
+    codeBody.textContent =
+      "const result = await renderArtifactWithAnIntentionallyLongFunctionName({ network: false });";
+    code.append(copy, codeBody);
+    const run = document.createElement('button');
+    run.className = 'markdown-artifact-run';
+    run.type = 'button';
+    run.textContent = '运行此可视化';
+    const artifact = document.createElement('div');
+    artifact.className = 'artifact-view';
+    artifact.dataset.state = 'idle';
+    const attachments = document.createElement('div');
+    attachments.className = 'chat-message__attachments';
+    for (const [kind, name, meta] of [
+      ['image', 'terminal-theme-preview.png', 'image/png · 2.4 MB'],
+      ['document', 'architecture-review.pdf', 'application/pdf · 8.7 MB'],
+      ['document', 'benchmark-results.csv', 'text/csv · 128 KB'],
+    ]) {
+      const card = document.createElement('div');
+      card.className = 'chat-attachment-card chat-attachment-card--' + kind;
+      const preview = document.createElement('span');
+      preview.className = 'chat-attachment-card__preview';
+      preview.textContent = kind === 'image' ? 'IMG' : name.endsWith('.pdf') ? 'PDF' : 'CSV';
+      const copy = document.createElement('span');
+      const title = document.createElement('strong');
+      title.textContent = name;
+      const detail = document.createElement('small');
+      detail.textContent = meta;
+      copy.append(title, detail);
+      card.append(preview, copy);
+      attachments.append(card);
+    }
+    body.append(
+      attachments,
+      heading,
+      intro,
+      remoteImage,
+      quote,
+      list,
+      table,
+      code,
+      run,
+      artifact,
+    );
+    assistant.append(assistantLabel, body);
+    messages.append(user, assistant);
+    messages.scrollTop = 0;
+  })()
+`;
+
+const addTerminalMaskFixture = `
+  (() => {
+    document.querySelector('.terminal-mask')?.remove();
+    const stage = document.querySelector('#terminal-stage');
+    const empty = document.querySelector('#terminal-empty-state');
+    empty.style.display = 'none';
+    const mask = document.createElement('div');
+    mask.className = 'terminal-mask';
+    mask.dataset.staticFixture = 'layout-only';
+    const snapshot = document.createElement('div');
+    snapshot.className = 'terminal-mask__snapshot';
+    const fallback = document.createElement('pre');
+    fallback.className = 'terminal-mask__fallback';
+    fallback.textContent =
+      'PS D:\\\\Projects\\\\ClaudeDock> claude\\n正在处理不会改变终端网格的静态布局 fixture…';
+    snapshot.append(fallback);
+    const veil = document.createElement('div');
+    veil.className = 'terminal-mask__veil';
+    const label = document.createElement('span');
+    label.className = 'terminal-mask__label';
+    label.textContent = '正在执行操作';
+    veil.append(label);
+    mask.append(snapshot, veil);
+    stage.append(mask);
+  })()
+`;
+
+const addArtifactDetailsStressFixture = `
+  (() => {
+    const active = document.querySelector('#artifact-active-list');
+    active.replaceChildren();
+    const activeRow = document.createElement('div');
+    activeRow.className = 'artifact-active-list__item';
+    const activeId = document.createElement('code');
+    activeId.textContent = 'artifact-00000000-0000-4000-8000-000000000001';
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.textContent = '停止运行';
+    activeRow.append(activeId, stop);
+    active.append(activeRow);
+
+    const log = document.querySelector('#artifact-network-log');
+    log.replaceChildren();
+    for (const [method, url, result] of [
+      ['GET', 'https://api.example.com/a/very/long/path/to/visualization/data.json?range=all', '200 · 48 KB'],
+      ['POST', 'https://telemetry.example.com/blocked/by-the-user-network-toggle', '已拦截'],
+    ]) {
+      const item = document.createElement('li');
+      item.className = 'artifact-network-log__item';
+      const title = document.createElement('strong');
+      title.textContent = method + ' · ' + result;
+      const address = document.createElement('code');
+      address.textContent = url;
+      item.append(title, address);
+      log.append(item);
+    }
+  })()
+`;
+
 app.whenReady().then(async () => {
   const results = [];
   const window = new BrowserWindow({
@@ -286,6 +491,8 @@ app.whenReady().then(async () => {
   await window.loadFile(path.join(__dirname, '..', 'dist', 'renderer', 'index.html'));
   await window.webContents.executeJavaScript(addConnectionHistoryStressFixture);
   await window.webContents.executeJavaScript(addChatStressFixture);
+  await window.webContents.executeJavaScript(addRichChatStressFixture);
+  await window.webContents.executeJavaScript(addArtifactDetailsStressFixture);
 
   for (const [width, height] of sizes) {
     window.setSize(width, height);
@@ -311,6 +518,19 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript(
       `document.querySelector('#claude-workbench').classList.remove('claude-workbench--open')`,
     );
+    await window.webContents.executeJavaScript(selectRailPage('projects'));
+    await window.webContents.executeJavaScript(addTerminalMaskFixture);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    results.push({
+      height,
+      page: 'terminal:mask-static-fixture',
+      width,
+      ...(await window.webContents.executeJavaScript(inspectLayout)),
+    });
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.terminal-mask')?.remove();
+      document.querySelector('#terminal-empty-state').style.display = '';
+    `);
     await window.webContents.executeJavaScript(`
       document.querySelector('.workspace').classList.add('workspace--rail-collapsed');
     `);
@@ -350,16 +570,62 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript(`
       document.querySelector('#connection-advanced-dialog').close();
     `);
+    await window.webContents.executeJavaScript(selectRailPage('chat'));
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const artifactDetailsPanel = document.querySelector('#artifact-details-panel');
+        artifactDetailsPanel.dataset.open = 'true';
+        artifactDetailsPanel.setAttribute('aria-hidden', 'false');
+        artifactDetailsPanel.inert = false;
+        artifactDetailsPanel.removeAttribute('inert');
+        document.querySelector('#artifact-details-scrim').hidden = false;
+        document.querySelector('#chat-artifact-details').setAttribute('aria-expanded', 'true');
+      })()
+    `);
+    // Drawer entrance tokens run as long as 340 ms (Telegram); inspect only after
+    // the geometry and pointer target have reached their final positions.
+    await new Promise((resolve) => setTimeout(resolve, 420));
+    results.push({
+      height,
+      page: 'chat:artifact-details',
+      width,
+      ...(await window.webContents.executeJavaScript(inspectLayout)),
+    });
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const artifactDetailsPanel = document.querySelector('#artifact-details-panel');
+        artifactDetailsPanel.dataset.open = 'false';
+        artifactDetailsPanel.setAttribute('aria-hidden', 'true');
+        artifactDetailsPanel.inert = true;
+        artifactDetailsPanel.setAttribute('inert', '');
+        document.querySelector('#artifact-details-scrim').hidden = true;
+        document.querySelector('#chat-artifact-details').setAttribute('aria-expanded', 'false');
+      })()
+    `);
   }
 
+  const expectedScenarios = sizes.length * 14;
   const failures = results.filter(
     (result) =>
       result.documentOverflow ||
       result.hitTargetMisses.length > 0 ||
+      !result.maskNeutral ||
       result.overlaps.length > 0 ||
       result.overflow.length > 0 ||
       result.covered.length > 0,
   );
-  console.log(JSON.stringify({ failures, sizes: results.length }, null, 2));
-  app.exit(failures.length === 0 ? 0 : 1);
+  console.log(
+    JSON.stringify(
+      {
+        expectedScenarios,
+        failures,
+        scenarios: results.length,
+        staticFixtureNotice:
+          'terminal:mask-static-fixture only verifies layout geometry; it is not a ConPTY resize test.',
+      },
+      null,
+      2,
+    ),
+  );
+  app.exit(failures.length === 0 && results.length === expectedScenarios ? 0 : 1);
 });

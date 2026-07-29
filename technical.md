@@ -8,7 +8,12 @@
   原生模块。
 - xterm.js 6 + `@xterm/addon-unicode11` + `@xterm/addon-webgl`：终端渲染、键盘输入与中文
   宽字符计算；WebGL 渲染器负责大量输出时的绘制性能，丢失上下文时回退 DOM 渲染器。
-- `@fontsource-variable/open-sans`：把 Open Sans 可变字体随应用本地打包，供明亮主题离线使用。
+- `@fontsource-variable/inter`、`open-sans`、`source-serif-4`：把四套主题需要的正文与标题
+  字体随应用离线打包。
+- `marked`（只使用 lexer token）、Shiki core + 精细语言包、KaTeX：安全 Markdown DOM、
+  主题化代码高亮与公式；Shiki 的 Oniguruma WASM 和九种语法按 chunk 延迟加载。
+- d3、Plotly、Mermaid、KaTeX：由 `claudedock-artifact://libs/` 作为 Artifact 离线资源提供，
+  不注入宿主页面。
 - Vitest、ESLint、Prettier：测试和静态检查。
 - electron-builder：Windows NSIS 安装包。
 
@@ -31,8 +36,10 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │        └── ClaudeConfigStore ── safeStorage / 项目级接入配置
         ├── ClaudeSessionManager ── 当前项目 JSONL 元数据 / 定向恢复与删除
         ├── ChatConfigStore ── safeStorage / 全局独立对话配置
-        ├── ChatHistoryStore ── 独立对话正文 / Token 快照 / 原子 JSON
-        ├── ChatService ── Anthropic/OpenAI HTTP + SSE / usage / 测试 / 取消
+        ├── ChatHistoryStore ── version 2 block 历史 / Token 快照 / 附件引用回收
+        ├── ChatAttachmentStore ── 文件校验 / 应用数据副本 / 主进程 base64 与缩略图
+        ├── ChatService ── Anthropic/OpenAI 多模态 HTTP + typed SSE / usage / 测试 / 取消
+        ├── ArtifactService ── 自定义协议 / iframe CSP / 离线库 / webRequest 审计与断网
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
@@ -63,7 +70,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 #### 主题令牌桥
 
 主题的作用域是**整个外壳**，不只是 xterm palette。`src/shared/terminal-themes.ts` 的每套主题
-除 `palette`（22 个 xterm 字段）外还有 `appearance` 与 `shell`（41 个外壳字段），
+除 `palette`（22 个 xterm 字段）外还有 `appearance` 与 `shell`（颜色、字体、排版、动效、
+形状、按压和遮罩字段），
 `SHELL_CSS_VARIABLES` 是「shell 字段 → CSS 自定义属性」的映射表，是这套机制唯一的接线点：
 
 1. `applyTerminalTheme`（`src/renderer/main.ts`）遍历映射表写
@@ -82,15 +90,16 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
 并要求该属性在 `styles.css` 正文里至少被引用一次（否则是死令牌）。
 
 `tests/design-tokens.test.ts` 同时守住「主题能生效」的前提：`:root` 之外不允许 hex 字面量、
-不允许带色相的 `rgb()`/`rgba()`、`font-family` 只能是两个字体令牌或 `inherit`、不允许写死
+不允许带色相的 `rgb()`/`rgba()`、`font-family` 只能是三个职责字体令牌或 `inherit`、不允许写死
 `font-size`。半透明色用 `color-mix(in srgb, var(--token) n%, transparent)`。
 一次性的批量替换脚本保留在 `scripts/tokenize-colors.cjs`（按 CSS 属性判角色、
 alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`--write` 才落盘）。
 
 `letterSpacing: 0` 是 TUI 边框对齐的必需值。状态三色（`--ok-*` / `--warn-*` / `--bad-*`）
 的语义跨主题保持一致，但浅底需要更深的文字与描边，所以实际令牌随 `appearance` 调整并逐主题
-做 WCAG 对比度测试。Claude / Telegram 明亮主题的 `fontUi` 指向本地 Open Sans Variable；
-深色主题保留 Segoe UI Variable。
+做 WCAG 对比度测试。Claude 的 `fontUi/fontDisplay` 分别是本地 Inter / Source Serif 4，
+Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。Shiki 输出的字面色只
+用于判别色相类别，最终写成 `--syntax-*` CSS 变量，因此已经渲染的代码也能即时换主题。
 
 #### 终端输出与输入的性能路径
 
@@ -104,11 +113,15 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   `requestAnimationFrame` 把队列合成一次 `terminal.write`，缓冲上限 512KB（超限丢弃最旧
   分块，xterm 的 scrollback 随后也会丢掉它们）。销毁视图的两处（`renderWorkspace` 清理过期
   会话、`beforeunload`）都要 `cancelAnimationFrame(view.pendingFrame)`。
-- **可见后布局**：活动 xterm 的容器在 `terminal.open()` 前就带
-  `project-terminal--active`；会话切换、宽度变化、`ResizeObserver`、窗口重新获得焦点或从
-  后台恢复时，`scheduleActiveTerminalFit` 会用带 generation 的四个连续绘制帧做有界重试。
-  `fitActiveTerminal` 在容器未连接、未激活或矩形为 0 时直接返回，避免把隐藏态的错误网格
-  回传给 PTY。
+- **创建与持续布局分流**：活动 xterm 的容器在 `terminal.open()` 前就带
+  `project-terminal--active`。`retryTerminalFitUntilMeasured` 只在冷启动/首次可见时用带
+  generation 的四帧有界重试；窗口与分隔条的持续变化走 100ms 尾沿
+  `debounceTerminalFit`。拖拽期间只记 dirty，释放后一次 fit；`ResizeObserver` 对相同整数
+  宽高短路。`terminal:size` 无条件回传最终尺寸，xterm 还从 `os.release()` 获得 ConPTY build
+  hint，避免内部重复 reflow。
+- **主题从 spawn 生效**：`TerminalWorkspace.setTheme()` 只更新后续 start/restart 使用的
+  当前主题，不向运行中的 PowerShell 注入命令。`buildPowershellStartup()` 把 palette 转成
+  PSReadLine 24-bit ANSI；`ClaudeRuntime` 的临时 `settings.json` 同步写 `light/dark`。
 - **全局指针捕获收口**：两个宽度分隔条共用 `activeResizeCleanups`。正常抬起、系统取消、
   `lostpointercapture`、窗口失焦、页面隐藏和重新聚焦都会调用幂等清理，显式
   `releasePointerCapture` 并移除 `body.is-resizing`。这是窗口内所有按钮、下拉框、textarea
@@ -132,7 +145,10 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 ### 关键取舍
 
 - **拒绝 Win11 `backgroundMaterial: 'mica'/'acrylic'`**：半透明桌面色调与需要接近纯黑对比度的终端直接冲突，且在非 Win11 上降级不可预测。
-- **遮罩层不用 `backdrop-filter`**：遮罩覆盖在持续刷新的 xterm canvas 上，背景模糊会在 Claude 流式输出时每帧强制 GPU 合成，造成性能问题。
+- **遮罩冻结视觉、不冻结输出**：`beginTerminalMask()` 复制当前 canvas；只对快照做 CSS blur，
+  veil 与标签走主题 token。真实 xterm 在下层继续 `write()` 并推进输出 revision，所以权限模式
+  probe 不会超时；幂等引用计数 disposer 在所有操作的 `finally` 释放。禁止使用
+  `backdrop-filter` 或暂停队列。
 - **输入用 `<textarea>` 而不是在 xterm 里做行编辑**：`Ctrl+A`、`Shift+←/→`、拖选、`Ctrl+Z`、
   IME 全部由浏览器免费提供且行为正确；在终端画布里模拟它们意味着自己实现一个编辑器，
   并且要和 PSReadLine 抢同一批按键。代价是终端不再是唯一输入入口，需要为 Claude Code 的
@@ -186,13 +202,20 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   URL 用户信息、查询和片段。模型名、凭据长度与换行、credential action 均在主进程重验。
 - `ChatService`（`src/main/chat-service.ts`）只在 Electron 主进程使用 Node `fetch`。Anthropic
   协议补全 `/v1/messages`、发送 `x-api-key` 和 `anthropic-version`，并解析
-  `content_block_delta`；OpenAI 兼容协议补全 `/v1/chat/completions`、支持 Bearer，并解析
+  `content_block_delta`；附件块按 document/image → text 排序，本地 UUID 在发请求前才
+  base64 编码，Files API 引用自动带 beta header。OpenAI 兼容协议补全
+  `/v1/chat/completions`、支持 Bearer，并解析
   `choices[0].delta.content`。OpenAI 流默认请求 `stream_options.include_usage`；遇到拒绝该扩展
   的 400/422 兼容网关会自动重试一次普通流。两种协议都解析供应商 usage 并沿流事件回传；
   中转若返回非 SSE JSON，则提取对应协议的普通文本与 usage。
-- renderer 通过 `chat:start` 发起，主进程用 `requestId → AbortController` Map 管理 120 秒
-  超时与 `chat:stop`；`chat:stream` 只推送 start/delta/done/error/aborted，不推送请求头或
-  凭据。每次最多 100 条消息、单条 200,000 字符、请求合计 1,000,000 字符、响应
+- renderer 先调用 `chat:preflight`，再通过 `chat:start` 发起；两处都在主进程修复失效的
+  旧附件并重新校验当前草稿。启动失败会回滚临时消息、保留输入与附件，不把不可发送状态写入
+  历史。主进程用 `requestId → AbortController` Map 管理 120 秒空闲超时（每个响应块重置）、
+  15 分钟总上限与 `chat:stop`；`chat:stream` 明确区分 `manual` / `timeout` 终止原因，并支持
+  `thinking/input-json/refusal/stopReason`，不推送
+  请求头或凭据。Anthropic 流请求 `thinking: {type:'adaptive', display:'summarized'}`，若
+  400/422 不兼容则丢弃首个响应体并安全重试无 thinking 版本。每次最多 100 条消息、单个文本
+  块 200,000 字符、文本合计 1,000,000 字符、响应
   2,000,000 字符；错误文案再次替换可能回显的凭据。
 - `chat:test-connection` 使用当前未保存表单草稿解析运行期配置，发送最多 1-token、15 秒超时、
   64 KiB 响应上限的非流式最小请求；不会顺带保存草稿。结果包含成功状态、净化后的说明、
@@ -202,13 +225,62 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
   终止事件上更新显示；估算数据使用 `source: 'estimated'` 并在 UI 标“约”，供应商数据使用
   `source: 'provider'`。
 - `ChatHistoryStore`（`src/main/chat-history-store.ts`）把正文、标题、时间与 Token 快照以
-  明文原子写入 `userData/claude/chat-history.json`：先写权限 `0600` 的 `.tmp` 再重命名。
-  最多保留最近 50 个对话、每个 100 条消息，单条与总长度复用请求上限；对话 ID 只接受 v4 UUID。
-  损坏或版本未知的文件只读为空，不在读取阶段覆盖原文件。每次发送前和生成完成/停止/失败后
-  更新历史；新对话只清空当前视图，逐条删除要经过 renderer 的应用内危险确认。
+  version 2 明文原子写入 `userData/claude/chat-history.json`：先写权限 `0600` 的 `.tmp`
+  再重命名。1.x version 1 字符串消息在读取时规范化成 text block，只有显式 save 才升级磁盘。
+  base64 禁止落进历史，未知字段和无效 source 被拒绝。最多保留最近 50 个对话、每个 100 条
+  消息；对话 ID 只接受 v4 UUID。只有 `ENOENT` 视为空历史；JSON 损坏、版本未知或权限/
+  读取错误会尝试保留 `chat-history.json.corrupt.bak`，随后 fail-closed 抛错，禁止保存覆盖与
+  orphan GC。
+  每次发送前和生成完成/停止/失败后更新历史；新对话只清空当前视图，逐条删除要经过 renderer
+  的应用内危险确认。
+- `ChatAttachmentStore` 把白名单普通文件原子复制到
+  `userData/claude/chat-attachments/<uuid>/{payload,metadata.json}`，拒绝符号链接、目录、
+  空文件、未知扩展和超限输入；`draftId` 的所有变更经主进程 mutation queue 串行，同一消息
+  跨批次/并发累计最多 10 个、32 MiB，preflight/start 时还要与当前消息的本地 UUID 集合精确
+  匹配。复制、读取与 base64 文件 I/O 使用异步 API；base64 编码和大 JSON 序列化的 CPU 工作
+  仍在 Electron 主进程，本版未引入 worker/utility process。图片预览经
+  `nativeImage.resize(240×160)` 后才跨 IPC。草稿移除立即删除未被历史引用的副本；删除会话
+  和 50 条裁剪会按 retained reference set 回收附件；崩溃残留由带宽限期的
+  `collectOrphans()` 维护，且历史不可读时绝不运行。
+- renderer 用 `marked.lexer()` 的 token 树自行创建白名单元素，原 HTML 降级为文本；HTTP(S)/
+  mailto 外链由 `markdown:open-external` 重验后交给系统浏览器。远程 Markdown 图片只显示
+  隐私占位与显式外部打开按钮，不创建带远程 `src` 的 `<img>`，因此不会绕开 Artifact 审计
+  自动外发；`data:` 图片仍可内嵌。Shiki 只用精细 core bundle 的 9 种语言，代码 token 映射
+  到主题 CSS 变量；KaTeX 使用 `trust:false`、`strict:'error'` 和 HTML+MathML。流渲染只从
+  已提交稳定边界重新 lexer 尾部并复用稳定 DOM；超过 4 KiB 的长不稳定尾部按
+  `max(256, tailLength / 16)` 增长阈值动态降频，奇数个 fence 时把未闭合围栏及其尾部保持
+  为不稳定，`finish()` 始终执行一次完整解析。
 - 独立对话仍不读取项目文件，也不创建 PTY。历史正文没有使用 `safeStorage` 加密，因为其
   数据体量与可检索性不同于凭据；README 与界面将其明确为本机明文记录。凭据继续只存在
   `chat-profile.json` 的 Windows 安全存储密文中。
+
+### Artifact 隔离与联网审计
+
+- `registerArtifactScheme()` 在 `app.whenReady()` 前只注册一次
+  `claudedock-artifact`；ready 后 `ArtifactService.install()` 接管 protocol。每段 HTML 上限
+  2 MiB、使用随机 `artifact-<uuid>` 内存记录，renderer 只能得到 ID 与自定义 URL。
+- iframe 固定 `sandbox="allow-scripts"`，不带 `allow-same-origin`，因此是 opaque origin，
+  不能访问宿主 DOM、preload、cookie 或 localStorage。主页面 CSP 只放行该 frame scheme；
+  Artifact 响应有独立 CSP，允许可视化常见的 inline/eval，但禁止 object、表单提交和宿主
+  导航。d3/Plotly/Mermaid/KaTeX 与 KaTeX 字体走严格 allowlist 的
+  `claudedock-artifact://libs/`。
+- JSON-RPC 2.0 postMessage 只实现 `claudedock/theme`、`artifact/ready` 与
+  `artifact/resize`。宿主先验证 `event.source === iframe.contentWindow`，不使用始终为
+  `"null"` 的 sandbox origin 做身份判断；消息最大 64 KiB，高度夹在 240–1200px。
+- Electron 普通 sandbox iframe 没有独立 `Session`/partition，项目不把它宣称为独立分区。
+  首次加载时把 live Artifact 绑定到 `WebContents.id + WebFrameMain.frameTreeNodeId`；该身份跨
+  渲染进程导航保持稳定。`will-frame-navigate` 会拒绝离开原 Artifact host 的跳转并写入
+  `NAVIGATE` 拦截日志；`session.defaultSession.webRequest` 也优先按稳定 frame 身份归因和
+  断网，URL/referrer 只作为首次绑定兜底。日志最多 500 条，记录时间、方法、完整 URL、状态、
+  拦截/错误和响应头可可靠提供时的 `Content-Length`；缺失时保持 `responseBytes` 未定义，
+  不伪造实际下载字节数。开关原子持久化到 `artifact-settings.json`：仅文件不存在时默认
+  允许，损坏/权限错误会 fail-closed，保存失败不会先改变内存策略。
+- renderer 的 `ArtifactController` 只有用户点击 HTML 代码块下方按钮才创建 iframe；维护
+  active ID Map，切主题向全部实例推 CSS 变量，停止时先将 frame 导向 blank 并移除，再请求
+  主进程清理记录。pending create 使用取消 token；流式重绘移除 mount、`forceCleanup()` 或
+  controller dispose 后，即使异步 create 稍后才返回也会立即 destroy 主进程记录。
+  MutationObserver 同时清理已断开 DOM 的 active 实例。详情抽屉从
+  `getArtifactNetworkState` 取快照，再用 `artifact:network-log` 增量更新。
 
 ## Claude Code 接入与会话
 
@@ -695,8 +767,11 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 ## 安全策略
 
 - `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`。
-- 内容安全策略只允许本地脚本和样式；开发模式额外允许本机 Vite 连接。
-- 禁止任意页面跳转、弹窗和未授权 IPC 通道。
+- 主页面 CSP 只允许本地脚本、样式、字体和本地/data 图片；Markdown 远程图片不自动加载，
+  只提供显式外部打开入口。frame 只允许 `claudedock-artifact:`，开发模式额外允许本机
+  Vite 连接。Artifact 使用独立响应 CSP。
+- 禁止任意页面跳转、弹窗和未授权 IPC 通道；`validateSender` 同时要求目标
+  `webContents` 与 `senderFrame === mainFrame`，sandbox 子 frame 不能调用 preload IPC。
 - 不保存终端输入或命令历史；API 密钥只以 Windows `safeStorage` 密文持久化，终端不会收到
   含密钥的文本命令。PowerShell 自身行为不在应用持久化范围内。
 - 原生 `node-pty` 只在主进程加载；`node-pty` 与需要由外部 PowerShell 执行的
@@ -717,15 +792,16 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
   PowerShell 启动脚本语法和软件语义版本比较；独立对话测试额外覆盖凭据密文落盘、URL
-  安全边界、未保存草稿连接测试、credential keep/clear、Token 估算、Anthropic/OpenAI
-  两类 SSE usage、OpenAI 兼容回退、端点补全和认证头，以及历史创建/更新/排序/删除、UUID/
-  长度/50 条上限与损坏文件恢复。
+  安全边界、未保存草稿连接测试、credential keep/clear、Token 估算、多模态协议线格式、
+  typed thinking/refusal、Anthropic/OpenAI 两类 SSE usage 与兼容回退、附件原子导入/
+  UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
+  和流式稳定前缀。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
   汉化的终端、接入与插件文案回退为英文或重新出现“英文原文”面板。
 - `tests/design-tokens.test.ts` 是「全局主题真的生效」的守栏：`styles.css` 的 `:root` 之外不得
-  出现 hex 字面量、带色相的 `rgb()`/`rgba()`、第三种 `font-family` 或写死的 `font-size`；
+  出现 hex 字面量、带色相的 `rgb()`/`rgba()`、三个职责槽之外的 `font-family` 或写死的 `font-size`；
   每个 `SHELL_CSS_VARIABLES` 属性都必须既有 `:root` 默认值又在正文里被引用；同时按 WCAG
   相对亮度校验四套明暗主题的画布、正文、强调色与语义状态色对比度
   （`textHi`/canvas > 7，其余正文级文字 > 4.5）。
@@ -785,18 +861,21 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
   `tests/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
   轮换项目/对话/接入、插件的已安装/可安装/市场三个面板、工作台三页、收起控制栏和全局设置
-  两个分类，共 36 个场景；检查交互控件矩形相交、`elementFromPoint` 命中对象、关键容器
+  两个分类，并加入富文本长内容、附件与 Artifact 抽屉压力态，共 42 个场景；检查交互控件
+  矩形相交、`elementFromPoint` 命中对象、关键容器
   横向溢出和文档级 overflow。扫描会识别滚动裁剪祖先，避免把模态内容区外不可见的控件误判
   为覆盖固定底栏；遮罩层与抽屉的有意叠放不计为控件重叠。此外单独断言输入框不被底栏或
   已打开的工作台抽屉覆盖——两者都不是可聚焦控件，通用相交扫描发现不了。插件页额外注入
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。
-- `npm run test:visual` 在本地生成 820px 插件页、1180px 单组展开服务商向导、1180px 历史
-  配置组件、1180px 全局设置两个分类、带历史/Token/连接测试结果的 Claude 明亮独立对话、
-  终端聚焦态与重命名弹窗 PNG 到
-  `dist/visual-qa/`，用于
-  人工核对主题选择器、窄宽响应式、服务商卡片、认证设置、聚焦微光、历史参数和弹窗层级；
-  隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
+- `npm run test:visual` 保留插件、服务商向导、历史配置、全局设置、连接测试、终端聚焦态与
+  重命名弹窗回归图，并新增四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵 PNG 到
+  `dist/visual-qa/`。人工核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、
+  窄宽响应式和遮罩无重排；隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
+- `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY，输出
+  24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow，并在最终
+  PTY size 确认行后捕获 `dist/visual-qa/conpty-resize-live.png`。该 Windows 专用烟测补足
+  静态终端 fixture 无法证明 PTY resize/reflow 的边界，结束后删除临时用户目录。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
@@ -813,8 +892,10 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 
 CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不发布安装包。
 
-`npm audit --omit=dev` 当前为 0 个生产依赖漏洞。完整审计仍会报告 electron-builder 最新版
-依赖树中的构建期问题；这些开发依赖不会进入生产 ASAR，后续应随打包器上游修复升级。
+`npm audit --omit=dev` 当前为 0 个生产依赖漏洞。完整审计仍会报告锁定的
+electron-builder 26.15.3 依赖树中 16 个 high 构建期问题，集中在 glob/minimatch/
+brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25.1.8，因此本版不采用该
+破坏性变更。这些开发依赖不会进入生产 ASAR，后续应随打包器上游修复升级并重新跑完整审计。
 
 ## 关键取舍与限制
 

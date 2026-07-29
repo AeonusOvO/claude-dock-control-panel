@@ -31,7 +31,8 @@ export type ClaudeRouterProviderProtocol =
 export type ChatProtocol = 'anthropic' | 'openai';
 export type ChatAuthMode = 'apiKey' | 'bearer' | 'none';
 export type ChatMessageRole = 'assistant' | 'system' | 'user';
-export type ChatStreamEventType = 'aborted' | 'delta' | 'done' | 'error' | 'start';
+export type ChatStreamEventType =
+  'aborted' | 'delta' | 'done' | 'error' | 'input-json' | 'refusal' | 'start' | 'thinking';
 export type ChatTokenUsageSource = 'estimated' | 'provider';
 
 export interface ChatConfigView {
@@ -51,9 +52,54 @@ export interface SaveChatConfigInput {
   protocol: ChatProtocol;
 }
 
+export type ChatAttachmentSource =
+  | { attachmentId: string; type: 'local' }
+  | { data: string; type: 'base64' }
+  | { fileId: string; type: 'file' };
+
+export type ChatContentBlock =
+  | { text: string; type: 'text' }
+  | {
+      fileName?: string;
+      mediaType: string;
+      source: ChatAttachmentSource;
+      type: 'document' | 'image';
+    };
+
 export interface ChatMessage {
-  content: string;
+  /**
+   * Strings are accepted only as the 1.x compatibility/input path. Main-process validation
+   * normalizes every newly persisted or transmitted message to content blocks.
+   */
+  content: ChatContentBlock[] | string;
   role: ChatMessageRole;
+}
+
+export interface ChatAttachmentView {
+  attachmentId: string;
+  fileName: string;
+  mediaType: string;
+  /** Small renderer-safe image preview. Full attachment bytes never cross IPC. */
+  previewDataUrl?: string;
+  sizeBytes: number;
+  type: 'document' | 'image';
+}
+
+export interface ChatAttachmentImportError {
+  message: string;
+  path: string;
+}
+
+export interface ChatAttachmentImportResult {
+  attachments: ChatAttachmentView[];
+  draftId?: string;
+  errors: ChatAttachmentImportError[];
+  ok: boolean;
+}
+
+export interface ChatAttachmentImportInput {
+  draftId?: string;
+  paths: string[];
 }
 
 export interface ChatTokenUsage {
@@ -64,16 +110,50 @@ export interface ChatTokenUsage {
 }
 
 export interface ChatStartInput {
+  draftId?: string;
   messages: ChatMessage[];
   requestId: string;
 }
 
+export interface ChatPreflightResult {
+  messages: ChatMessage[];
+  removedAttachmentIds: string[];
+  warning?: string;
+}
+
 export interface ChatStreamEvent {
+  abortReason?: 'manual' | 'timeout';
   delta?: string;
   error?: string;
+  refusal?: string;
   requestId: string;
+  stopReason?: string;
   type: ChatStreamEventType;
   usage?: ChatTokenUsage;
+}
+
+export interface ArtifactNetworkLogEntry {
+  artifactId: string;
+  blocked: boolean;
+  completedAt?: number;
+  error?: string;
+  id: string;
+  method: string;
+  /** Best-effort Content-Length; absent when Chromium cannot report a reliable size. */
+  responseBytes?: number;
+  startedAt: number;
+  status?: number;
+  url: string;
+}
+
+export interface ArtifactNetworkState {
+  allowed: boolean;
+  entries: ArtifactNetworkLogEntry[];
+}
+
+export interface ArtifactCreateResult {
+  artifactId: string;
+  url: string;
 }
 
 export interface ChatConversationSummary {
@@ -103,10 +183,13 @@ export interface ChatConnectionTestResult {
 }
 
 export interface AppSettingsView {
+  artifactNetworkAllowed?: boolean;
   language: 'zh-CN';
   launchAtLogin: boolean;
   theme: TerminalThemeId;
   version: string;
+  /** Windows kernel build passed to xterm's ConPTY compatibility layer. */
+  windowsBuildNumber?: number;
 }
 
 export interface ClaudeConfigView {
@@ -517,16 +600,27 @@ export type Unsubscribe = () => void;
 export interface ControlPanelApi {
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
+  createArtifact: (html: string) => Promise<ArtifactCreateResult>;
+  destroyArtifact: (artifactId: string) => Promise<boolean>;
+  getArtifactNetworkState: () => Promise<ArtifactNetworkState>;
+  setArtifactNetworkAllowed: (allowed: boolean) => Promise<ArtifactNetworkState>;
+  onArtifactNetworkLog: (listener: (entry: ArtifactNetworkLogEntry) => void) => Unsubscribe;
   getChatConfig: () => Promise<ChatConfigView>;
   saveChatConfig: (input: SaveChatConfigInput) => Promise<ChatConfigView>;
   testChatConnection: (input: SaveChatConfigInput) => Promise<ChatConnectionTestResult>;
+  importChatAttachments: (input: ChatAttachmentImportInput) => Promise<ChatAttachmentImportResult>;
+  readChatAttachment: (attachmentId: string) => Promise<ChatAttachmentView | undefined>;
+  deleteChatDraftAttachment: (draftId: string, attachmentId: string) => Promise<boolean>;
+  releaseChatAttachmentDraft: (draftId: string) => Promise<number>;
   getChatConversations: () => Promise<ChatConversationSummary[]>;
   getChatConversation: (conversationId: string) => Promise<ChatConversation | undefined>;
   saveChatConversation: (input: SaveChatConversationInput) => Promise<ChatConversation>;
   deleteChatConversation: (conversationId: string) => Promise<boolean>;
-  startChat: (input: ChatStartInput) => Promise<void>;
+  preflightChat: (input: ChatStartInput) => Promise<ChatPreflightResult>;
+  startChat: (input: ChatStartInput) => Promise<ChatPreflightResult>;
   stopChat: (requestId: string) => Promise<void>;
   onChatStream: (listener: (event: ChatStreamEvent) => void) => Unsubscribe;
+  openMarkdownExternal: (url: string) => Promise<boolean>;
   activateProject: (sessionId: string) => Promise<WorkspaceResult>;
   addProject: (directoryPath: string) => Promise<WorkspaceResult>;
   chooseDirectory: () => Promise<DirectoryChoiceResult>;

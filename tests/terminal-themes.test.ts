@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ansiBackground,
+  ansiForeground,
   DEFAULT_TERMINAL_THEME,
   isTerminalThemeId,
+  SHELL_CSS_VARIABLES,
   TERMINAL_THEMES,
 } from '../src/shared/terminal-themes';
 
@@ -47,5 +50,33 @@ describe('terminal themes', () => {
     expect(isTerminalThemeId('telegram')).toBe(true);
     expect(isTerminalThemeId('pure-white')).toBe(false);
     expect(isTerminalThemeId(null)).toBe(false);
+  });
+
+  it('ships a complete personality contract for every theme', () => {
+    for (const [id, theme] of Object.entries(TERMINAL_THEMES)) {
+      for (const field of Object.keys(SHELL_CSS_VARIABLES)) {
+        expect(theme.shell[field as keyof typeof theme.shell], `${id}.${field}`).toBeTruthy();
+      }
+    }
+
+    expect(TERMINAL_THEMES.claude.shell.fontUi).toContain('Inter Variable');
+    expect(TERMINAL_THEMES.claude.shell.fontDisplay).toContain('Source Serif 4 Variable');
+    expect(TERMINAL_THEMES.telegram.shell.fontUi).toContain('Open Sans Variable');
+    expect(TERMINAL_THEMES.telegram.shell.fontDisplay).toBe(TERMINAL_THEMES.telegram.shell.fontUi);
+    expect(TERMINAL_THEMES.claude.shell.radiusBubble).not.toBe(
+      TERMINAL_THEMES.telegram.shell.radiusBubble,
+    );
+    expect(TERMINAL_THEMES.claude.shell.lineHeightBody).not.toBe(
+      TERMINAL_THEMES.telegram.shell.lineHeightBody,
+    );
+    expect(TERMINAL_THEMES.graphite.shell.fontUi).toContain('Segoe UI Variable');
+    expect(TERMINAL_THEMES.midnight.shell.fontUi).toContain('Segoe UI Variable');
+  });
+
+  it('converts strict hex palette values to PowerShell ANSI true colour', () => {
+    expect(ansiForeground('#246c72')).toBe('$([char]0x1b)[38;2;36;108;114m');
+    expect(ansiBackground('#EAD8CF')).toBe('$([char]0x1b)[48;2;234;216;207m');
+    expect(() => ansiForeground('#fff')).toThrow(/#RRGGBB/);
+    expect(() => ansiBackground('red')).toThrow(/#RRGGBB/);
   });
 });

@@ -42,17 +42,36 @@ export interface TerminalThemeShell {
   badSolid: string;
   badText: string;
   badTint: string;
+  durEnter: string;
+  durExit: string;
+  durMicro: string;
+  easeEnter: string;
+  easeExit: string;
+  easeSpring: string;
+  fontDisplay: string;
+  fontMono: string;
   fontUi: string;
+  fontWeightStrong: string;
   layerActive: string;
   layerHover: string;
+  letterSpacingTitle: string;
+  lineHeightBody: string;
   line: string;
   lineHover: string;
   lineStrong: string;
   lineSubtle: string;
+  maskBlur: string;
+  maskVeil: string;
   okLine: string;
   okSolid: string;
   okText: string;
   okTint: string;
+  pressScale: string;
+  radiusBubble: string;
+  radiusLg: string;
+  radiusMd: string;
+  radiusPill: string;
+  radiusSm: string;
   shadowDrawer: string;
   shadowOverlay: string;
   sheen: string;
@@ -94,17 +113,36 @@ export const SHELL_CSS_VARIABLES: Record<keyof TerminalThemeShell, string> = {
   badSolid: '--bad-solid',
   badText: '--bad-text',
   badTint: '--bad-tint',
+  durEnter: '--dur-enter',
+  durExit: '--dur-exit-theme',
+  durMicro: '--dur-micro',
+  easeEnter: '--ease-enter',
+  easeExit: '--ease-exit',
+  easeSpring: '--ease-spring',
+  fontDisplay: '--font-display',
+  fontMono: '--font-mono',
   fontUi: '--font-ui',
+  fontWeightStrong: '--fw-strong',
   layerActive: '--layer-active',
   layerHover: '--layer-hover',
+  letterSpacingTitle: '--ls-title',
+  lineHeightBody: '--lh-body',
   line: '--line',
   lineHover: '--line-hover',
   lineStrong: '--line-strong',
   lineSubtle: '--line-subtle',
+  maskBlur: '--mask-blur',
+  maskVeil: '--mask-veil',
   okLine: '--ok-line',
   okSolid: '--ok-solid',
   okText: '--ok-text',
   okTint: '--ok-tint',
+  pressScale: '--press-theme',
+  radiusBubble: '--r-bubble',
+  radiusLg: '--r-theme-lg',
+  radiusMd: '--r-theme-md',
+  radiusPill: '--r-theme-pill',
+  radiusSm: '--r-theme-sm',
   shadowDrawer: '--shadow-drawer',
   shadowOverlay: '--shadow-overlay',
   sheen: '--sheen',
@@ -131,7 +169,6 @@ const DARK_CHROME = {
   badSolid: '#d8434f',
   badText: '#f58c95',
   badTint: 'rgb(216 67 79 / 12%)',
-  fontUi: "'Segoe UI Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
   layerActive: 'rgb(255 255 255 / 7%)',
   layerHover: 'rgb(255 255 255 / 4%)',
   line: 'rgb(255 255 255 / 9%)',
@@ -156,7 +193,6 @@ const LIGHT_CHROME = {
   badSolid: '#a73d39',
   badText: '#7f2c28',
   badTint: 'rgb(167 61 57 / 9%)',
-  fontUi: "'Open Sans Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
   layerActive: 'rgb(20 20 19 / 7%)',
   layerHover: 'rgb(20 20 19 / 4%)',
   line: 'rgb(31 30 29 / 16%)',
@@ -177,6 +213,9 @@ const LIGHT_CHROME = {
 } as const;
 
 export const DEFAULT_TERMINAL_THEME: TerminalThemeId = 'claude';
+
+const MONO_FONT = "'Cascadia Mono', 'Cascadia Code', Consolas, 'Microsoft YaHei UI', monospace";
+const SEGOE_FONT = "'Segoe UI Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif";
 
 export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> = {
   claude: {
@@ -215,6 +254,26 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#91462f',
       accentTint: 'rgb(184 91 61 / 10%)',
       ...LIGHT_CHROME,
+      durEnter: '240ms',
+      durExit: '180ms',
+      durMicro: '120ms',
+      easeEnter: 'cubic-bezier(0.05, 0.7, 0.1, 1)',
+      easeExit: 'cubic-bezier(0.3, 0, 0.8, 0.15)',
+      easeSpring: 'cubic-bezier(0.16, 1, 0.3, 1)',
+      fontDisplay: "'Source Serif 4 Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif",
+      fontMono: MONO_FONT,
+      fontUi: "'Inter Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+      fontWeightStrong: '600',
+      letterSpacingTitle: '-0.012em',
+      lineHeightBody: '1.7',
+      maskBlur: '8px',
+      maskVeil: 'rgb(250 249 245 / 58%)',
+      pressScale: '0.985',
+      radiusBubble: '18px',
+      radiusLg: '16px',
+      radiusMd: '12px',
+      radiusPill: '999px',
+      radiusSm: '8px',
       surface1: '#ffffff',
       surface2: '#faf9f5',
       surface3: '#ffffff',
@@ -265,6 +324,26 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#7cd4f0',
       accentTint: 'rgb(46 168 216 / 10%)',
       ...DARK_CHROME,
+      durEnter: '200ms',
+      durExit: '160ms',
+      durMicro: '100ms',
+      easeEnter: 'cubic-bezier(0.2, 0, 0, 1)',
+      easeExit: 'cubic-bezier(0.3, 0, 0.8, 0.15)',
+      easeSpring: 'cubic-bezier(0.2, 0, 0, 1)',
+      fontDisplay: SEGOE_FONT,
+      fontMono: MONO_FONT,
+      fontUi: SEGOE_FONT,
+      fontWeightStrong: '600',
+      letterSpacingTitle: '-0.003em',
+      lineHeightBody: '1.55',
+      maskBlur: '6px',
+      maskVeil: 'rgb(5 7 10 / 62%)',
+      pressScale: '0.985',
+      radiusBubble: '14px',
+      radiusLg: '10px',
+      radiusMd: '8px',
+      radiusPill: '999px',
+      radiusSm: '6px',
       surface1: '#0b0e13',
       surface2: '#101419',
       surface3: '#151a20',
@@ -315,6 +394,26 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#7ed8e2',
       accentTint: 'rgb(56 176 196 / 12%)',
       ...DARK_CHROME,
+      durEnter: '200ms',
+      durExit: '160ms',
+      durMicro: '100ms',
+      easeEnter: 'cubic-bezier(0.2, 0, 0, 1)',
+      easeExit: 'cubic-bezier(0.3, 0, 0.8, 0.15)',
+      easeSpring: 'cubic-bezier(0.2, 0, 0, 1)',
+      fontDisplay: SEGOE_FONT,
+      fontMono: MONO_FONT,
+      fontUi: SEGOE_FONT,
+      fontWeightStrong: '600',
+      letterSpacingTitle: '-0.003em',
+      lineHeightBody: '1.55',
+      maskBlur: '6px',
+      maskVeil: 'rgb(7 17 28 / 62%)',
+      pressScale: '0.985',
+      radiusBubble: '14px',
+      radiusLg: '10px',
+      radiusMd: '8px',
+      radiusPill: '999px',
+      radiusSm: '6px',
       surface1: '#0b1725',
       surface2: '#101f30',
       surface3: '#16283b',
@@ -365,6 +464,26 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#1267a8',
       accentTint: 'rgb(35 123 196 / 10%)',
       ...LIGHT_CHROME,
+      durEnter: '340ms',
+      durExit: '180ms',
+      durMicro: '150ms',
+      easeEnter: 'cubic-bezier(0.075, 0.82, 0.165, 1)',
+      easeExit: 'cubic-bezier(0.4, 0, 1, 1)',
+      easeSpring: 'cubic-bezier(0.23, 1, 0.32, 1)',
+      fontDisplay: "'Open Sans Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+      fontMono: MONO_FONT,
+      fontUi: "'Open Sans Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+      fontWeightStrong: '600',
+      letterSpacingTitle: '-0.006em',
+      lineHeightBody: '1.45',
+      maskBlur: '6px',
+      maskVeil: 'rgb(255 255 255 / 54%)',
+      pressScale: '0.975',
+      radiusBubble: '12px',
+      radiusLg: '10px',
+      radiusMd: '8px',
+      radiusPill: '999px',
+      radiusSm: '6px',
       surface1: '#ffffff',
       surface2: '#f4f4f5',
       surface3: '#ffffff',
@@ -383,3 +502,19 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
 
 export const isTerminalThemeId = (value: unknown): value is TerminalThemeId =>
   typeof value === 'string' && Object.hasOwn(TERMINAL_THEMES, value);
+
+const ansiColor = (hex: string, channel: 38 | 48): string => {
+  if (!/^#[0-9a-f]{6}$/iu.test(hex)) {
+    throw new Error(`ANSI 颜色必须使用 #RRGGBB 格式：${hex}`);
+  }
+  const red = Number.parseInt(hex.slice(1, 3), 16);
+  const green = Number.parseInt(hex.slice(3, 5), 16);
+  const blue = Number.parseInt(hex.slice(5, 7), 16);
+  return `$([char]0x1b)[${channel};2;${red};${green};${blue}m`;
+};
+
+/** Converts a palette colour into the PowerShell-expanded ANSI true-colour foreground sequence. */
+export const ansiForeground = (hex: string): string => ansiColor(hex, 38);
+
+/** Converts a palette colour into the PowerShell-expanded ANSI true-colour background sequence. */
+export const ansiBackground = (hex: string): string => ansiColor(hex, 48);

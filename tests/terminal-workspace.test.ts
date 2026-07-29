@@ -141,6 +141,23 @@ describe('TerminalWorkspace', () => {
     expect(dataListener).toHaveBeenNthCalledWith(2, 'session-2', 'beta output');
   });
 
+  it('uses the current theme for future starts and restarts without touching live sessions', () => {
+    const { factory, terminals } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory, 'graphite');
+
+    workspace.openProject('D:\\Project Alpha');
+    const terminal = terminals.get('session-1');
+    expect(terminal?.start).toHaveBeenCalledWith('D:\\Project Alpha', {}, 'graphite');
+
+    workspace.setTheme('telegram');
+    expect(terminal?.start).toHaveBeenCalledTimes(1);
+
+    workspace.restart('session-1');
+    expect(terminal?.restart).toHaveBeenCalledWith(undefined, {}, 'telegram');
+    workspace.start('session-1');
+    expect(terminal?.start).toHaveBeenLastCalledWith(undefined, {}, 'telegram');
+  });
+
   it('reuses an already-open project without creating a duplicate session', () => {
     const { factory } = createFakeFactory();
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);

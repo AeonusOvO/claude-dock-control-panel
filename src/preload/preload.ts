@@ -16,6 +16,7 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeSessionMetadata,
+  ArtifactNetworkLogEntry,
   ChatStreamEvent,
   ControlPanelApi,
   DirectoryChoiceResult,
@@ -28,16 +29,37 @@ import type {
 const api: ControlPanelApi = {
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
+  createArtifact: (html) => ipcRenderer.invoke('artifact:create', html),
+  destroyArtifact: (artifactId) => ipcRenderer.invoke('artifact:destroy', artifactId),
+  getArtifactNetworkState: () => ipcRenderer.invoke('artifact:get-network-state'),
+  setArtifactNetworkAllowed: (allowed) =>
+    ipcRenderer.invoke('artifact:set-network-allowed', allowed),
+  onArtifactNetworkLog: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, entry: ArtifactNetworkLogEntry): void => {
+      listener(entry);
+    };
+    ipcRenderer.on('artifact:network-log', callback);
+    return () => {
+      ipcRenderer.removeListener('artifact:network-log', callback);
+    };
+  },
   getChatConfig: () => ipcRenderer.invoke('chat:get-config'),
   saveChatConfig: (input) => ipcRenderer.invoke('chat:save-config', input),
   testChatConnection: (input) => ipcRenderer.invoke('chat:test-connection', input),
+  importChatAttachments: (input) => ipcRenderer.invoke('chat:import-attachments', input),
+  readChatAttachment: (attachmentId) => ipcRenderer.invoke('chat:read-attachment', attachmentId),
+  deleteChatDraftAttachment: (draftId, attachmentId) =>
+    ipcRenderer.invoke('chat:delete-draft-attachment', draftId, attachmentId),
+  releaseChatAttachmentDraft: (draftId) =>
+    ipcRenderer.invoke('chat:release-attachment-draft', draftId),
   getChatConversations: () => ipcRenderer.invoke('chat:list-conversations'),
   getChatConversation: (conversationId) =>
     ipcRenderer.invoke('chat:get-conversation', conversationId),
   saveChatConversation: (input) => ipcRenderer.invoke('chat:save-conversation', input),
   deleteChatConversation: (conversationId) =>
     ipcRenderer.invoke('chat:delete-conversation', conversationId),
-  startChat: (input) => ipcRenderer.invoke('chat:start', input) as Promise<void>,
+  preflightChat: (input) => ipcRenderer.invoke('chat:preflight', input),
+  startChat: (input) => ipcRenderer.invoke('chat:start', input),
   stopChat: (requestId) => ipcRenderer.invoke('chat:stop', requestId) as Promise<void>,
   onChatStream: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, streamEvent: ChatStreamEvent): void => {
@@ -48,6 +70,7 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('chat:stream', callback);
     };
   },
+  openMarkdownExternal: (url) => ipcRenderer.invoke('markdown:open-external', url),
   activateProject: (sessionId: string) =>
     ipcRenderer.invoke('project:activate', sessionId) as Promise<WorkspaceResult>,
   addProject: (directoryPath: string) =>

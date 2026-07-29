@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatConfigStore } from '../src/main/chat-config-store';
-import { ChatService } from '../src/main/chat-service';
+import type { ChatAttachmentStore } from '../src/main/chat-attachment-store';
+import {
+  ChatService,
+  serializeChatRequestBody,
+  validateChatRequest,
+} from '../src/main/chat-service';
 import type { ChatStreamEvent } from '../src/shared/contracts';
 
 const streamResponse = (chunks: string[]): Response => {
@@ -218,5 +223,226 @@ describe('independent chat service', () => {
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('•••');
     expect(JSON.stringify(result)).not.toContain('draft-secret');
+  });
+
+  it('serializes Anthropic attachments before text and OpenAI images as data URLs', () => {
+    const messages = validateChatRequest({
+      messages: [
+        { content: 'system text', role: 'system' },
+        {
+          content: [
+            { text: 'describe this', type: 'text' },
+            {
+              fileName: 'pixel.png',
+              mediaType: 'image/png',
+              source: { data: 'iVBORw==', type: 'base64' },
+              type: 'image',
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      requestId: 'request-serialize',
+    });
+    const anthropic = serializeChatRequestBody(
+      {
+        authMode: 'apiKey',
+        baseUrl: 'https://api.anthropic.com',
+        credential: 'secret',
+        model: 'claude-test',
+        protocol: 'anthropic',
+      },
+      messages,
+      { includeUsage: true, stream: true, thinking: true },
+    );
+    expect(anthropic).toMatchObject({
+      system: 'system text',
+      thinking: { display: 'summarized', type: 'adaptive' },
+    });
+    expect((anthropic.messages as Array<{ content: unknown[] }>)[0]?.content).toEqual([
+      {
+        source: {
+          data: 'iVBORw==',
+          media_type: 'image/png',
+          type: 'base64',
+        },
+        type: 'image',
+      },
+      { text: 'describe this', type: 'text' },
+    ]);
+
+    const openai = serializeChatRequestBody(
+      {
+        authMode: 'bearer',
+        baseUrl: 'https://api.openai.com',
+        credential: 'secret',
+        model: 'gpt-test',
+        protocol: 'openai',
+      },
+      messages,
+      { includeUsage: true, stream: true },
+    );
+    expect((openai.messages as Array<{ content: unknown[] }>)[1]?.content).toEqual([
+      { text: 'describe this', type: 'text' },
+      {
+        image_url: { url: 'data:image/png;base64,iVBORw==' },
+        type: 'image_url',
+      },
+    ]);
+  });
+
+  it('emits typed thinking, input-json and refusal events and retries without incompatible thinking', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('thinking unsupported', { status: 400 }))
+      .mockResolvedValueOnce(
+        streamResponse([
+          'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"分析"}}\n\n',
+          'data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\"x\\":"}}\n\n',
+          'data: {"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":3}}\n\n',
+          'data: {"type":"message_stop"}\n\n',
+        ]),
+      );
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'apiKey' as const,
+        baseUrl: 'https://api.anthropic.com',
+        credential: 'secret',
+        model: 'claude-test',
+        protocol: 'anthropic' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock);
+
+    service.start({
+      messages: [{ content: 'run', role: 'user' }],
+      requestId: 'request-thinking-fallback',
+    });
+
+    await vi.waitFor(() => {
+      expect(events.at(-1)?.type).toBe('done');
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toHaveProperty('thinking');
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).not.toHaveProperty('thinking');
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ delta: '分析', type: 'thinking' }),
+        expect.objectContaining({ delta: '{"x":', type: 'input-json' }),
+        expect.objectContaining({
+          refusal: '模型拒绝了此请求。',
+          stopReason: 'refusal',
+          type: 'refusal',
+        }),
+        expect.objectContaining({ stopReason: 'refusal', type: 'done' }),
+      ]),
+    );
+  });
+
+  it('removes an unavailable attachment from an older turn without poisoning the conversation', () => {
+    const missingId = '8f9aa605-adb6-4e2b-a25a-607e14bad666';
+    const attachmentStore = {
+      get: () => {
+        throw new Error('missing');
+      },
+    } as unknown as ChatAttachmentStore;
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'none' as const,
+        baseUrl: 'https://gateway.example.com',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, () => undefined, vi.fn<typeof fetch>(), attachmentStore);
+
+    const prepared = service.preflight({
+      messages: [
+        {
+          content: [
+            {
+              fileName: 'missing.txt',
+              mediaType: 'text/plain',
+              source: { attachmentId: missingId, type: 'local' },
+              type: 'document',
+            },
+            { text: '旧问题', type: 'text' },
+          ],
+          role: 'user',
+        },
+        { content: '旧回答', role: 'assistant' },
+        { content: '继续', role: 'user' },
+      ],
+      requestId: 'request-repair',
+    });
+
+    expect(prepared.removedAttachmentIds).toEqual([missingId]);
+    expect(prepared.warning).toContain('自动移除');
+    expect(prepared.messages[0]?.content).toEqual([{ text: '旧问题', type: 'text' }]);
+  });
+
+  it('distinguishes a manual stop from an idle timeout', async () => {
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'none' as const,
+        baseUrl: 'https://gateway.example.com',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const stalledFetch = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          if (init?.signal?.aborted) {
+            reject(new DOMException('aborted', 'AbortError'));
+            return;
+          }
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('aborted', 'AbortError')),
+            { once: true },
+          );
+        }),
+    );
+
+    const timeoutEvents: ChatStreamEvent[] = [];
+    const timeoutService = new ChatService(
+      store,
+      (event) => timeoutEvents.push(event),
+      stalledFetch,
+      undefined,
+      { idleTimeoutMs: 15, totalTimeoutMs: 100 },
+    );
+    timeoutService.start({
+      messages: [{ content: 'timeout', role: 'user' }],
+      requestId: 'request-timeout',
+    });
+    await vi.waitFor(() => {
+      expect(timeoutEvents.at(-1)).toMatchObject({
+        abortReason: 'timeout',
+        type: 'aborted',
+      });
+    });
+
+    const manualEvents: ChatStreamEvent[] = [];
+    const manualService = new ChatService(
+      store,
+      (event) => manualEvents.push(event),
+      stalledFetch,
+      undefined,
+      { idleTimeoutMs: 1_000, totalTimeoutMs: 2_000 },
+    );
+    manualService.start({
+      messages: [{ content: 'manual', role: 'user' }],
+      requestId: 'request-manual',
+    });
+    manualService.stop('request-manual');
+    await vi.waitFor(() => {
+      expect(manualEvents.at(-1)).toMatchObject({
+        abortReason: 'manual',
+        type: 'aborted',
+      });
+    });
   });
 });

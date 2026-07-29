@@ -14,12 +14,14 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('cancelActiveResizes();');
   });
 
-  it('opens the active xterm visibly and retries fitting across paint frames', () => {
+  it('opens the active xterm visibly, retries cold fits and debounces live resizes', () => {
     expect(rendererSource).toMatch(
       /container\.className = active\s*\?\s*'project-terminal project-terminal--active'/,
     );
-    expect(rendererSource).toContain('const scheduleActiveTerminalFit = (): void => {');
+    expect(rendererSource).toContain('const retryTerminalFitUntilMeasured = (): void => {');
     expect(rendererSource).toContain('let attemptsRemaining = 4;');
+    expect(rendererSource).toContain('const debounceTerminalFit = (): void => {');
+    expect(rendererSource).toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
     expect(rendererSource).toContain('view?.container.getBoundingClientRect()');
     expect(rendererStyles).toContain('.project-terminal--active:focus-within');
     expect(rendererStyles).toMatch(
@@ -286,7 +288,7 @@ describe('renderer interaction lifecycle contract', () => {
       /modelSwitchInProgress = true;\s+footerModel\.disabled = true;\s+footerModel\.setAttribute\('aria-busy', 'true'\);/,
     );
     expect(switchHandler).toMatch(
-      /finally \{\s+modelSwitchInProgress = false;\s+footerModel\.disabled = false;\s+footerModel\.setAttribute\('aria-busy', 'false'\);/,
+      /finally \{\s+endMask\(\);\s+modelSwitchInProgress = false;\s+footerModel\.disabled = false;\s+footerModel\.setAttribute\('aria-busy', 'false'\);/,
     );
     expect(switchHandler).toContain('renderClaudeState(knownState);');
   });
@@ -335,7 +337,7 @@ describe('renderer interaction lifecycle contract', () => {
   it('types Claude-generated titles in place and skips the animation for manual renames', () => {
     expect(rendererSource).toContain('const syncConversationTitles = (state: WorkspaceState)');
     expect(rendererSource).toMatch(
-      /function renderWorkspace\(state: WorkspaceState\): void \{\s+syncConversationTitles\(state\);/,
+      /function renderWorkspace\(state: WorkspaceState\): void \{[\s\S]*?syncConversationTitles\(state\);/,
     );
     // The animation continues from the frame on screen when the sidebar is rebuilt mid-typing.
     expect(rendererSource).toContain('const chars = existing ? existing.chars : [...fromTitle];');

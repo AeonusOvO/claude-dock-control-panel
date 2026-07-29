@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "1.7.0",
+  "version": "2.0.0",
   "description": "Windows 项目终端与 Claude Code 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,
@@ -22,6 +22,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
     "test": "vitest run",
+    "test:conpty": "npm run build && electron scripts/conpty-resize-smoke.cjs",
     "test:layout": "npm run build:renderer && electron scripts/layout-smoke.cjs",
     "test:visual": "npm run build:renderer && electron scripts/visual-smoke.cjs",
     "test:coverage": "vitest run --coverage",
@@ -34,12 +35,23 @@
     "verify": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/open-sans": "5.3.0",
+    "@fontsource-variable/source-serif-4": "^5.3.0",
     "@lydell/node-pty": "1.2.0-beta.14",
+    "@shikijs/engine-oniguruma": "^4.3.1",
+    "@shikijs/langs": "^4.3.1",
+    "@shikijs/themes": "^4.3.1",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-unicode11": "0.9.0",
     "@xterm/addon-webgl": "0.19.0",
-    "@xterm/xterm": "6.0.0"
+    "@xterm/xterm": "6.0.0",
+    "d3": "^7.9.0",
+    "katex": "^0.18.1",
+    "marked": "^18.0.7",
+    "mermaid": "^11.16.0",
+    "plotly.js-dist-min": "^3.7.0",
+    "shiki": "^4.3.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -50,6 +62,7 @@
     "electron": "43.2.0",
     "electron-builder": "26.15.3",
     "eslint": "10.8.0",
+    "jsdom": "^30.0.0",
     "png-to-ico": "3.0.2",
     "prettier": "3.9.6",
     "sharp": "0.35.3",

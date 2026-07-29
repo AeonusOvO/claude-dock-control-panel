@@ -11,7 +11,7 @@ import {
 } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, release } from 'node:os';
 import path from 'node:path';
 import type {
   ClaudeConfigResult,
@@ -26,6 +26,8 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterOperationResult,
   ClaudeRouterInstallSource,
+  ChatAttachmentImportInput,
+  ChatMessage,
   ChatStartInput,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
@@ -60,13 +62,16 @@ import {
   normalizeClaudeSessionTitle,
 } from './claude-session-manager';
 import { ChatConfigStore } from './chat-config-store';
+import { ChatAttachmentStore, isChatAttachmentId } from './chat-attachment-store';
 import { ChatHistoryStore } from './chat-history-store';
 import { ChatService } from './chat-service';
+import { ArtifactService, registerArtifactScheme } from './artifact-service';
 import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
 app.enableSandbox();
+registerArtifactScheme();
 
 let isQuitting = false;
 let claudeRuntime: ClaudeRuntime | null = null;
@@ -184,13 +189,40 @@ const workspace = new TerminalWorkspace(
 );
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
+workspace.setTheme(workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
 const sessionManager = new ClaudeSessionManager();
 const pluginManager = new ClaudePluginManager(homedir());
 const chatConfigStore = new ChatConfigStore(app.getPath('userData'));
-const chatHistoryStore = new ChatHistoryStore(app.getPath('userData'));
-const chatService = new ChatService(chatConfigStore, (event) => {
-  mainWindow?.webContents.send('chat:stream', event);
+const chatAttachmentStore = new ChatAttachmentStore(app.getPath('userData'));
+const chatHistoryStore = new ChatHistoryStore(app.getPath('userData'), chatAttachmentStore);
+try {
+  chatAttachmentStore.collectOrphans(chatHistoryStore.referencedAttachmentIds());
+} catch {
+  // Fail closed: unreadable history must never be interpreted as an empty attachment reference set.
+}
+const chatService = new ChatService(
+  chatConfigStore,
+  (event) => {
+    mainWindow?.webContents.send('chat:stream', event);
+  },
+  fetch,
+  chatAttachmentStore,
+);
+const artifactService = new ArtifactService(app.getPath('userData'), (entry) => {
+  mainWindow?.webContents.send('artifact:network-log', entry);
 });
+
+const currentTurnLocalAttachmentIds = (messages: ChatMessage[]): Set<string> => {
+  const message = messages.at(-1);
+  if (!message || !Array.isArray(message.content)) {
+    return new Set();
+  }
+  return new Set(
+    message.content.flatMap((block) =>
+      block.type !== 'text' && block.source.type === 'local' ? [block.source.attachmentId] : [],
+    ),
+  );
+};
 
 /**
  * Merges the live terminal sessions with the folders remembered on disk. A folder stays in the
@@ -492,7 +524,11 @@ function updateTray(state = describeWorkspace()): void {
 }
 
 const validateSender = (event: IpcMainEvent | IpcMainInvokeEvent): void => {
-  if (!mainWindow || event.sender !== mainWindow.webContents) {
+  if (
+    !mainWindow ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
     throw new Error('Rejected IPC from an unknown renderer.');
   }
 };
@@ -675,6 +711,23 @@ const validateExternalUrl = (value: unknown): string => {
   return parsed.toString();
 };
 
+const validateMarkdownExternalUrl = (value: unknown): string => {
+  if (typeof value !== 'string' || value.length > 4096 || /[\r\n]/u.test(value)) {
+    throw new Error('对话链接格式无效。');
+  }
+  const parsed = new URL(value);
+  if (
+    (parsed.protocol !== 'https:' &&
+      parsed.protocol !== 'http:' &&
+      parsed.protocol !== 'mailto:') ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error('只允许打开 HTTP、HTTPS 或邮件链接。');
+  }
+  return parsed.toString();
+};
+
 const claudeCommands = new Map<string, boolean>([
   ['/agents', false],
   ['/clear', false],
@@ -780,6 +833,11 @@ const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Pr
 const routerInstallSources = new Set<ClaudeRouterInstallSource>(['github', 'npm', 'npmmirror']);
 const claudeInstallSources = new Set<ClaudeCodeInstallSource>(['native', 'npm', 'npmmirror']);
 
+const windowsBuildNumber = (): number => {
+  const value = Number(release().split('.')[2]);
+  return Number.isInteger(value) && value > 0 ? value : 0;
+};
+
 const launchRouterInstaller = async (): Promise<ClaudeRouterOperationResult> => {
   const runtime = requireClaudeRuntime();
   try {
@@ -804,8 +862,10 @@ const registerIpc = (): void => {
     return {
       language: 'zh-CN',
       launchAtLogin: app.getLoginItemSettings().openAtLogin,
+      artifactNetworkAllowed: artifactService.getState().allowed,
       theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
       version: app.getVersion(),
+      windowsBuildNumber: windowsBuildNumber(),
     };
   });
   ipcMain.handle('app:set-launch-at-login', (event, enabled: unknown) => {
@@ -821,9 +881,45 @@ const registerIpc = (): void => {
     return {
       language: 'zh-CN',
       launchAtLogin: app.getLoginItemSettings().openAtLogin,
+      artifactNetworkAllowed: artifactService.getState().allowed,
       theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
       version: app.getVersion(),
+      windowsBuildNumber: windowsBuildNumber(),
     };
+  });
+  ipcMain.handle('artifact:create', (event, html: unknown) => {
+    validateSender(event);
+    if (typeof html !== 'string') {
+      throw new Error('Artifact 内容格式无效。');
+    }
+    return artifactService.create(html);
+  });
+  ipcMain.handle('artifact:destroy', (event, artifactId: unknown) => {
+    validateSender(event);
+    if (typeof artifactId !== 'string') {
+      throw new Error('Artifact 标识无效。');
+    }
+    return artifactService.destroy(artifactId);
+  });
+  ipcMain.handle('artifact:get-network-state', (event) => {
+    validateSender(event);
+    return artifactService.getState();
+  });
+  ipcMain.handle('artifact:set-network-allowed', (event, allowed: unknown) => {
+    validateSender(event);
+    if (typeof allowed !== 'boolean') {
+      throw new Error('Artifact 联网开关取值无效。');
+    }
+    return artifactService.setNetworkAllowed(allowed);
+  });
+  ipcMain.handle('markdown:open-external', async (event, url: unknown) => {
+    validateSender(event);
+    try {
+      await shell.openExternal(validateMarkdownExternalUrl(url));
+      return true;
+    } catch {
+      return false;
+    }
   });
   ipcMain.handle('chat:get-config', (event) => {
     validateSender(event);
@@ -842,6 +938,79 @@ const registerIpc = (): void => {
       throw new Error('对话接入测试参数无效。');
     }
     return chatService.test(input as SaveChatConfigInput);
+  });
+  ipcMain.handle('chat:import-attachments', async (event, input: unknown) => {
+    validateSender(event);
+    const record =
+      input && typeof input === 'object'
+        ? (input as Partial<ChatAttachmentImportInput>)
+        : undefined;
+    const paths = record?.paths;
+    if (
+      !Array.isArray(paths) ||
+      paths.some((filePath) => typeof filePath !== 'string') ||
+      paths.length === 0 ||
+      (record?.draftId !== undefined && typeof record.draftId !== 'string')
+    ) {
+      throw new Error('附件路径列表无效。');
+    }
+    try {
+      const imported = await chatAttachmentStore.importDraftFiles(paths, record?.draftId);
+      return {
+        attachments: imported.attachments,
+        draftId: imported.draftId,
+        errors: [],
+        ok: true,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法导入附件。';
+      return {
+        attachments: [],
+        errors: paths.map((filePath) => ({ message, path: String(filePath) })),
+        ok: false,
+      };
+    }
+  });
+  ipcMain.handle(
+    'chat:delete-draft-attachment',
+    async (event, draftId: unknown, attachmentId: unknown) => {
+      validateSender(event);
+      if (typeof draftId !== 'string' || typeof attachmentId !== 'string') {
+        throw new Error('附件草稿或附件标识无效。');
+      }
+      return chatAttachmentStore.removeDraftAttachment(
+        draftId,
+        attachmentId,
+        chatHistoryStore.referencedAttachmentIds(),
+      );
+    },
+  );
+  ipcMain.handle('chat:release-attachment-draft', async (event, draftId: unknown) => {
+    validateSender(event);
+    if (typeof draftId !== 'string') {
+      throw new Error('附件草稿标识无效。');
+    }
+    return chatAttachmentStore.releaseDraft(draftId, chatHistoryStore.referencedAttachmentIds());
+  });
+  ipcMain.handle('chat:read-attachment', (event, attachmentId: unknown) => {
+    validateSender(event);
+    if (!isChatAttachmentId(attachmentId)) {
+      throw new Error('附件标识无效。');
+    }
+    const attachment = chatAttachmentStore.get(attachmentId);
+    if (attachment.type !== 'image') {
+      return attachment;
+    }
+    const resolved = chatAttachmentStore.resolve(attachmentId);
+    const image = nativeImage.createFromPath(resolved.filePath);
+    if (image.isEmpty()) {
+      return attachment;
+    }
+    const resized = image.resize({ height: 160, quality: 'good', width: 240 });
+    return {
+      ...attachment,
+      previewDataUrl: resized.toDataURL(),
+    };
   });
   ipcMain.handle('chat:list-conversations', (event) => {
     validateSender(event);
@@ -868,12 +1037,31 @@ const registerIpc = (): void => {
     }
     return chatHistoryStore.delete(conversationId);
   });
+  ipcMain.handle('chat:preflight', (event, input: unknown) => {
+    validateSender(event);
+    if (!input || typeof input !== 'object') {
+      throw new Error('对话请求格式无效。');
+    }
+    const request = input as ChatStartInput;
+    const prepared = chatService.preflight(request);
+    chatAttachmentStore.assertDraftMatches(
+      request.draftId,
+      currentTurnLocalAttachmentIds(prepared.messages),
+    );
+    return prepared;
+  });
   ipcMain.handle('chat:start', (event, input: unknown) => {
     validateSender(event);
     if (!input || typeof input !== 'object') {
       throw new Error('对话请求格式无效。');
     }
-    chatService.start(input as ChatStartInput);
+    const request = input as ChatStartInput;
+    return chatService.start(request, (prepared) => {
+      chatAttachmentStore.commitDraft(
+        request.draftId,
+        currentTurnLocalAttachmentIds(prepared.messages),
+      );
+    });
   });
   ipcMain.handle('chat:stop', (event, requestId: unknown) => {
     validateSender(event);
@@ -1602,14 +1790,7 @@ const registerIpc = (): void => {
        * so xterm disagreeing with ConPTY by even one row makes that repaint overwrite the wrong
        * line and leaves the previous screen visible underneath.
        */
-      if (applied.cols !== cols || applied.rows !== rows) {
-        mainWindow?.webContents.send(
-          'terminal:size',
-          validatedSessionId,
-          applied.cols,
-          applied.rows,
-        );
-      }
+      mainWindow?.webContents.send('terminal:size', validatedSessionId, applied.cols, applied.rows);
     } catch {
       // A ResizeObserver callback can race with project closure.
     }
@@ -1631,6 +1812,8 @@ const registerIpc = (): void => {
       throw new Error('主题标识无效。');
     }
     workspaceStore.setTheme(themeId);
+    workspace.setTheme(themeId);
+    claudeRuntime?.setTheme(themeId);
     applyWindowTheme(themeId);
   });
   ipcMain.handle('claude:get-sessions', async (event, sessionId: unknown) => {
@@ -1848,6 +2031,7 @@ if (!hasSingleInstanceLock) {
   app.on('second-instance', showMainWindow);
   app.whenReady().then(async () => {
     app.setAppUserModelId('cn.cheng.claudedock');
+    artifactService.install();
     claudeRuntime = new ClaudeRuntime(
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
@@ -1867,6 +2051,7 @@ if (!hasSingleInstanceLock) {
         workspace.write(sessionId, data);
       },
       requestPermissionModeFromScreen,
+      workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
     );
     registerIpc();
     createTray();

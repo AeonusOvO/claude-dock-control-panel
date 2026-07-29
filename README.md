@@ -4,7 +4,31 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code 模型/API 接入、会话上下文与常用斜杠命令，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2026-07-28）
+## 当前版本重点（2.0.0 · 2026-07-29）
+
+- 终端主题现在从创建实例开始就由 ClaudeDock 接管：当前 xterm 调色板、后续新建终端、
+  PSReadLine 24-bit 语法色和 Claude Code 自身的明暗主题保持一致。亮色主题不再出现黑底、
+  黑边或低对比度 dim 文本。
+- 窗口连续缩放和左右分隔条拖动改为 100ms 尾沿防抖；只有冷启动继续执行四帧有界测量。
+  主进程无条件确认最终行列数，xterm 获得 Windows ConPTY build hint，避免重复重排造成的
+  输出重影和重复行。
+- 切模型、切权限模式与压缩重启期间，终端显示冻结快照、主题化 veil 和居中状态标签；底层
+  xterm 仍继续消费 PTY 输出和权限徽标探测，操作结束后一次恢复，不丢输出也不改变面板尺寸。
+- 独立对话升级为安全富文本：Markdown 由 token 树逐节点构造 DOM，不使用 `innerHTML`；
+  支持标题、列表、表格、引用、链接、图片、KaTeX 公式、Shiki 语法高亮和代码复制。流式回复
+  按动画帧合并，并只追加稳定 token 前缀，未闭合代码围栏不会先渲染成错误段落。
+- 模型给出的 HTML 代码默认保持高亮文本，只有用户点击“运行此可视化”后才创建
+  `sandbox="allow-scripts"` 且无同源权限的 Artifact iframe。内置 d3、Plotly、Mermaid 和
+  KaTeX 可离线加载；“详细信息”抽屉显示完整网络请求、状态与可可靠取得的响应字节数，并提供
+  持久化总断网开关和逐个停止入口。
+- 独立对话支持 PNG/JPEG/GIF/WebP、PDF、CSV、TSV 和纯文本附件。文件由主进程校验并复制到
+  `userData/claude/chat-attachments/`，历史 JSON 只保存 UUID 与元数据；图片以缩略图、
+  文档以文件卡片显示。Anthropic 与 OpenAI 线格式分别序列化，1.x 纯字符串历史可透明读取。
+- 四套主题开始表达不同人格，而不只是换色：Claude 使用 Inter 正文、Source Serif 4 标题、
+  宽松行高与柔和圆角；Telegram 使用 Open Sans、紧凑行高、较小气泡圆角和自己的缓动；
+  石墨与深海蓝保持中性工程风格。主题还控制按压、进退场、遮罩和 Artifact CSS 变量。
+
+## 1.7.0 版本重点（2026-07-28）
 
 - “项目与对话”的每条历史对话新增可见删除按钮，右键菜单也提供同一操作。删除前使用应用内
   对话框明确提示永久且不可恢复；若该 Claude conversation 正在运行，会先关闭对应终端，
@@ -55,7 +79,7 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - “仅预批准”不在快捷键循环里，只能在启动时设定，选择后走与跨端点换模型完全相同的
   “压缩 → 重启 → `--continue`”流程。
 
-## 上一版本重点（2026-07-27）
+## 更早版本重点（2026-07-27）
 
 - “接入”页改为“环境准备 → 选择服务商 → 填写凭据与模型 → 测试并接入”三步主流程。
   Anthropic、DeepSeek、GLM、Kimi、通义千问、MiniMax、豆包、MiMo、StepFun、
@@ -145,9 +169,9 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - 关闭主窗口后驻留系统托盘，可从托盘恢复、切换/添加项目或控制当前终端。
 - “对话”是独立于项目终端的通用模型聊天页，配置保存在
   `userData/claude/chat-profile.json`；支持 Anthropic Messages 与 OpenAI Chat Completions
-  兼容接口。消息历史以明文 JSON 保存在 `userData/claude/chat-history.json`，最多保留最近
-  50 个对话、每个 100 条消息；可逐条永久删除。输入草稿会实时计入估算上下文，接口返回
-  usage 后改用供应商给出的精确 Token。
+  兼容接口。消息历史以 version 2 明文 JSON 保存在 `userData/claude/chat-history.json`，
+  最多保留最近 50 个对话、每个 100 条消息；可逐条永久删除。附件正文独立存放，历史只记录
+  引用。输入草稿会实时计入估算上下文，接口返回 usage 后改用供应商给出的精确 Token。
 - 左下角“设置”统一承载应用级设置；开机启动即时写入 Windows 登录项，主题与终端工具栏
   使用同一配置，当前版本只提供简体中文。高级接入工具位于“设置 → 接入”。
 - 每个项目可以独立选择 Anthropic 官方接入、Anthropic Messages API 兼容服务或本地
@@ -247,6 +271,7 @@ npm run lint
 npm run format:check
 npm run typecheck
 npm test
+npm run test:conpty
 npm run test:layout
 npm run test:visual
 npm run build
@@ -254,12 +279,15 @@ npm run dist
 ```
 
 `npm run test:layout` 会在隐藏的 Electron 窗口中检查 820×640、900×640 和 1180×760，
-覆盖项目、对话、接入、插件四个分组、工作台三页、收起的左栏和全局设置两个分类；若交互组件被
-透明层挡住、彼此重叠或关键容器横向溢出则失败。
-`npm run test:visual` 会生成 820px 插件页、1180px 单组展开接入向导、1180px 历史配置组件、
-1180px 全局设置两个分类、带历史/Token/连接测试状态的 Claude 明亮独立对话、终端聚焦态和
-重命名弹窗的本地视觉检查图到
-`dist/visual-qa/`。
+覆盖项目、对话、接入、插件四个分组、工作台三页、收起的左栏、全局设置两个分类，以及富文本
+长内容、附件和 Artifact 抽屉压力态；共运行 42 个场景。若交互组件被透明层挡住、彼此重叠或
+关键容器横向溢出则失败。
+`npm run test:visual` 除保留插件页、接入向导、历史配置、全局设置、连接测试、终端聚焦态和
+重命名弹窗的回归图外，还生成 `claude`、`telegram`、`graphite`、`midnight` 四主题乘以
+富文本对话、终端和终端遮罩三种状态的 12 张矩阵图，统一写入 `dist/visual-qa/`。
+`npm run test:conpty` 使用一次性用户目录启动真实 PowerShell ConPTY，在 820→1400→900→
+1280→1180px 间往返缩放并把最终终端截图写到
+`dist/visual-qa/conpty-resize-live.png`；它只在 Windows 上运行，不会读取或修改日常用户数据。
 
 `npm run dist` 在 `outputs/` 完成 Windows x64 打包，最终安装程序固定为
 `outputs/ClaudeDock-Setup-<version>-x64.exe`。后续安装包、校验元数据和解包产物均只放在该
@@ -345,8 +373,10 @@ npm run dist
 需要通用模型聊天时，点击活动栏最上方的“对话”，在左侧填写独立协议、接口、模型和凭据；
 可以先点“测试连接”验证当前草稿，再保存并发送。这里的模型与项目“接入”可以完全不同；
 工具栏会随输入和流式回复更新上下文/Token，“停止”只中断当前生成，“新对话”开启空白记录，
-旧记录仍在左侧历史中，可恢复或永久删除，不影响任何项目或 Claude Code session。全局主题、
-开机启动和版本信息位于左下角“设置 → 总设置”。
+旧记录仍在左侧历史中，可恢复或永久删除，不影响任何项目或 Claude Code session。回形针或
+拖放可添加图片、PDF 和文本/表格文件；模型回复会渲染 Markdown、公式与代码。HTML 代码要由
+用户点击“运行此可视化”才会进入隔离 Artifact；右上角“详细信息”可审计联网并立即断网。
+全局主题、开机启动和版本信息位于左下角“设置 → 总设置”。
 
 安装时可自行选择 `D:\ClaudeDock` 等目标路径，并可在“安装选项”页面勾选或取消
 “在桌面创建快捷方式”（默认勾选）。
@@ -384,6 +414,20 @@ roadmap.md           本轮产品任务的实施结论、调研依据与后续�
   临时文件加重命名写入）；这是本机可恢复历史，不是加密保险箱。每次发送及生成结束都会更新，
   最多保留最近 50 个对话、每个 100 条消息。共享 Windows 账户或设备时应在历史列表中删除
   敏感对话；删除不可撤销。
+- 独立对话附件复制到 `userData/claude/chat-attachments/<uuid>/`；图片预览是主进程缩小后的
+  data URL，完整附件字节不会为预览跨 IPC。删除或裁剪历史会回收不再引用的附件。同一消息
+  草稿跨多次/并发导入累计最多 10 个、32 MiB，并在发送前由主进程再次校验；不支持目录、
+  符号链接和未列入白名单的扩展名。
+- Markdown 原始 HTML 永远不会直接注入宿主 DOM；外链经主进程协议校验后交给系统浏览器，
+  远程图片也不会在消息出现时自动加载或静默外发。
+  Artifact 是显式执行边界：iframe 没有 `allow-same-origin`，也不能访问宿主 preload、
+  cookie 或 localStorage。主进程把 Artifact 绑定到 `WebContents + frameTreeNodeId` 稳定身份，
+  阻止 iframe 导航逃离自定义协议，并按该身份归因默认 session 中的外部请求；
+  Chromium 未提供可靠响应体长度时界面明确显示“字节数未知”，不把 `Content-Length` 猜成
+  实际下载量。
+- 历史文件只在确实不存在时视为空；JSON 损坏、权限或读取错误会保留
+  `chat-history.json.corrupt.bak` 并停止覆盖历史和附件回收，在界面报告错误，不把损坏误当
+  成“用户清空了历史”。
 - 第三方接入固定 `ANTHROPIC_BASE_URL` 与主/小模型别名，同时关闭遥测、错误上报、反馈、
   调查问卷以及 WebFetch 的 Anthropic 域名预检；这能阻断已知的非必要 Anthropic 流量，
   但不能替用户审计第三方网关，也不能证明网关没有在服务端替换模型。
