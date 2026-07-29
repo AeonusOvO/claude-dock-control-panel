@@ -1,6 +1,7 @@
 import type { NetworkPreflightAction, NetworkProviderId } from './contracts';
 
 export interface ProviderEndpointProfile {
+  allowedRedirectDomains?: string[];
   id: string;
   kind: 'api' | 'https' | 'oauth' | 'websocket';
   label: string;
@@ -133,6 +134,7 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
     displayName: 'OpenAI Codex',
     endpoints: [
       {
+        allowedRedirectDomains: ['auth0.openai.com', 'challenges.cloudflare.com', 'chatgpt.com'],
         id: 'openai-auth',
         kind: 'oauth',
         label: 'ChatGPT 官方认证',
@@ -141,6 +143,12 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         url: 'https://auth.openai.com/',
       },
       {
+        allowedRedirectDomains: [
+          'auth.openai.com',
+          'auth0.openai.com',
+          'challenges.cloudflare.com',
+          'openai.com',
+        ],
         id: 'openai-chatgpt',
         kind: 'https',
         label: 'ChatGPT 服务',
@@ -343,7 +351,14 @@ export const validateProviderProfile = (profile: ProviderProfile): void => {
   }
   const endpointIds = new Set<string>();
   for (const endpoint of profile.endpoints) {
-    if (!endpoint.id || endpointIds.has(endpoint.id) || !isHttpsOrWss(endpoint.url)) {
+    if (
+      !endpoint.id ||
+      endpointIds.has(endpoint.id) ||
+      !isHttpsOrWss(endpoint.url) ||
+      endpoint.allowedRedirectDomains?.some(
+        (domain) => !/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/i.test(domain),
+      )
+    ) {
       throw new Error(`服务商配置 ${profile.id} 的端点无效。`);
     }
     endpointIds.add(endpoint.id);

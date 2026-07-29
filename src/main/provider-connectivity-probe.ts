@@ -20,6 +20,14 @@ import { NetworkPathResolver, type ResolveProxy } from './network-path-resolver'
 
 type AppFetch = (url: string, init: RequestInit) => Promise<Response>;
 
+export interface ApplicationEndpointResponse {
+  contentType: string;
+  redirects: Array<{ host: string; statusCode: number }>;
+  status: number;
+}
+
+export type ApplicationEndpointRequest = (url: string) => Promise<ApplicationEndpointResponse>;
+
 export interface ConnectivityObservation {
   egress?: NetworkEgressSummary;
   paths: NetworkPathView[];
@@ -40,6 +48,7 @@ type DnsLookup = (hostname: string) => Promise<Array<{ address: string; family: 
 
 export interface ProviderConnectivityProbeOptions {
   appFetch: AppFetch;
+  applicationRequest?: ApplicationEndpointRequest;
   cliRequest?: (url: string, websocket: boolean, cwd?: string) => Promise<string>;
   clientVersion?: (provider: NetworkProviderId, cwd?: string) => Promise<string | undefined>;
   dnsLookup?: DnsLookup;
@@ -247,6 +256,7 @@ const defaultCliRequest = async (
 
 export class ProviderConnectivityProbe {
   private readonly appFetch: AppFetch;
+  private readonly applicationRequest: ApplicationEndpointRequest;
   private readonly cliRequest: (url: string, websocket: boolean, cwd?: string) => Promise<string>;
   private readonly clientVersion: (
     provider: NetworkProviderId,
@@ -258,6 +268,27 @@ export class ProviderConnectivityProbe {
 
   public constructor(options: ProviderConnectivityProbeOptions) {
     this.appFetch = options.appFetch;
+    this.applicationRequest =
+      options.applicationRequest ??
+      (async (url) => {
+        const timeout = abortAfter();
+        try {
+          const response = await this.appFetch(url, {
+            cache: 'no-store',
+            credentials: 'omit',
+            method: 'HEAD',
+            redirect: 'follow',
+            signal: timeout.signal,
+          });
+          return {
+            contentType: response.headers.get('content-type') ?? '',
+            redirects: [],
+            status: response.status,
+          };
+        } finally {
+          timeout.stop();
+        }
+      });
     this.cliRequest = options.cliRequest ?? defaultCliRequest;
     this.clientVersion = options.clientVersion ?? defaultClientVersion;
     this.dnsLookup =
@@ -280,7 +311,9 @@ export class ProviderConnectivityProbe {
     const pathsPromise = this.pathResolver.resolve(provider, profile.endpoints[0]?.url ?? '');
     const dnsProbesPromise = this.probeDns(profile, action);
     const endpointProbesPromise = Promise.all(
-      profile.endpoints.map((endpoint) => this.probeEndpoint(provider, endpoint, action, cwd)),
+      profile.endpoints.map((endpoint) =>
+        this.probeEndpoint(provider, profile, endpoint, action, cwd),
+      ),
     );
     const versionProbePromise = this.probeClientVersion(provider, action, cwd);
     const egressPromise = enhancedPrivacyMode
@@ -352,6 +385,7 @@ export class ProviderConnectivityProbe {
 
   private async probeEndpoint(
     provider: NetworkProviderId,
+    profile: ProviderProfile,
     endpoint: ProviderEndpointProfile,
     action: NetworkPreflightAction,
     cwd?: string,
@@ -360,7 +394,11 @@ export class ProviderConnectivityProbe {
     const applicationProbe =
       endpoint.kind === 'websocket'
         ? undefined
-        : await this.probeApplicationEndpoint(endpoint, required && endpoint.process !== 'cli');
+        : await this.probeApplicationEndpoint(
+            profile,
+            endpoint,
+            required && endpoint.process !== 'cli',
+          );
     const cliProbe =
       endpoint.process === 'cli' || endpoint.kind === 'websocket'
         ? await this.probeCliEndpoint(provider, endpoint, required, cwd)
@@ -371,20 +409,13 @@ export class ProviderConnectivityProbe {
   }
 
   private async probeApplicationEndpoint(
+    profile: ProviderProfile,
     endpoint: ProviderEndpointProfile,
     required: boolean,
   ): Promise<NetworkProbeResult> {
     const checkedAt = this.now();
-    const timeout = abortAfter();
     try {
-      const response = await this.appFetch(endpoint.url, {
-        cache: 'no-store',
-        credentials: 'omit',
-        method: 'HEAD',
-        redirect: 'manual',
-        signal: timeout.signal,
-      });
-      const location = response.headers.get('location');
+      const response = await this.applicationRequest(endpoint.url);
       let status: NetworkProbeResult['status'] = REACHABLE_HTTP_STATUS(response.status)
         ? 'passed'
         : 'warning';
@@ -392,24 +423,28 @@ export class ProviderConnectivityProbe {
       const unexpectedApiHtml =
         endpoint.kind === 'api' &&
         response.status === 200 &&
-        response.headers.get('content-type')?.toLowerCase().includes('text/html');
+        response.contentType.toLowerCase().includes('text/html');
       if (unexpectedApiHtml) {
         status = 'failed';
         detail = 'API 端点返回非预期 HTML，可能存在认证门户或内容劫持。';
       }
-      if (location) {
-        const redirectHost = new URL(location, endpoint.url).hostname;
-        const sourceHost = new URL(endpoint.url).hostname;
-        if (
-          redirectHost !== sourceHost &&
-          !redirectHost.endsWith(`.${sourceHost}`) &&
-          !sourceHost.endsWith(`.${redirectHost}`)
-        ) {
-          status = 'failed';
-          detail = `检测到跨域重定向：${redirectHost}。`;
-        } else {
-          detail = `HTTP ${response.status}，同域重定向可达。`;
-        }
+      const trustedRedirectDomains = new Set([
+        new URL(endpoint.url).hostname,
+        ...profile.authDomains,
+        ...profile.requiredDomains,
+        ...(endpoint.allowedRedirectDomains ?? []),
+      ]);
+      const unexpectedRedirect = response.redirects.find(
+        ({ host }) =>
+          ![...trustedRedirectDomains].some(
+            (domain) => host === domain || host.endsWith(`.${domain}`),
+          ),
+      );
+      if (unexpectedRedirect) {
+        status = 'failed';
+        detail = `检测到非预期跨域重定向：${unexpectedRedirect.host}。`;
+      } else if (response.redirects.length > 0 && !unexpectedApiHtml) {
+        detail = `跟随 ${response.redirects.length} 次受信任重定向后返回 HTTP ${response.status}，官方端点可达。`;
       }
       return {
         checkedAt,
@@ -423,19 +458,21 @@ export class ProviderConnectivityProbe {
         target: safeTarget(endpoint.url),
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const redirectCancelled = /redirect was cancelled/i.test(message);
       return {
         checkedAt,
-        detail: classifyNetworkError(error),
+        detail: redirectCancelled
+          ? '应用探测器取消了重定向；这不证明网络失败，请结合 CLI 真实端点结果判断。'
+          : classifyNetworkError(error),
         id: `app:${endpoint.id}`,
         kind: endpoint.kind,
         label: `${endpoint.label}（应用）`,
         process: endpoint.kind === 'oauth' ? 'oauth-browser' : 'application',
         required,
-        status: 'failed',
+        status: redirectCancelled ? 'warning' : 'failed',
         target: safeTarget(endpoint.url),
       };
-    } finally {
-      timeout.stop();
     }
   }
 

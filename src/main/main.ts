@@ -89,6 +89,7 @@ import { NetworkDiagnosticsStore } from './network-diagnostics-store';
 import { NetworkPreflightService } from './network-preflight-service';
 import { NetworkPreflightSettingsStore } from './network-preflight-settings-store';
 import { ProviderAccessGuard } from './provider-access-guard';
+import { createElectronApplicationRequest } from './electron-application-request';
 import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RollbackCoordinator } from './rollback-coordinator';
 app.enableSandbox();
@@ -2526,6 +2527,9 @@ if (!hasSingleInstanceLock) {
       },
       probe: new ProviderConnectivityProbe({
         appFetch: (url, init) => net.fetch(url, init),
+        applicationRequest: createElectronApplicationRequest((options) =>
+          net.request({ ...options, session: session.defaultSession }),
+        ),
         resolveProxy: (url) => session.defaultSession.resolveProxy(url),
       }),
       settingsStore: networkPreflightSettingsStore,

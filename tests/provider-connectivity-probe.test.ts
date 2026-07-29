@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ProviderConnectivityProbe } from '../src/main/provider-connectivity-probe';
+import {
+  ProviderConnectivityProbe,
+  type ApplicationEndpointRequest,
+} from '../src/main/provider-connectivity-probe';
 
-const createProbe = (cliRequest?: (url: string, websocket: boolean) => Promise<string>) => {
+const createProbe = (
+  cliRequest?: (url: string, websocket: boolean) => Promise<string>,
+  applicationRequest?: ApplicationEndpointRequest,
+) => {
   const appFetch = vi.fn(
     async (_url: string, _init: RequestInit) => new Response(null, { status: 204 }),
   );
@@ -9,6 +15,7 @@ const createProbe = (cliRequest?: (url: string, websocket: boolean) => Promise<s
     appFetch,
     probe: new ProviderConnectivityProbe({
       appFetch,
+      applicationRequest,
       cliRequest:
         cliRequest ??
         (async (url, websocket) =>
@@ -35,9 +42,60 @@ describe('ProviderConnectivityProbe', () => {
     expect(appFetch).toHaveBeenCalled();
     expect(
       appFetch.mock.calls.every(
-        ([, init]) => init.method === 'HEAD' && init.credentials === 'omit',
+        ([, init]) =>
+          init.method === 'HEAD' && init.credentials === 'omit' && init.redirect === 'follow',
       ),
     ).toBe(true);
+  });
+
+  it('follows and validates trusted application redirect chains', async () => {
+    const applicationRequest = vi.fn(async (url: string) => ({
+      contentType: 'text/html',
+      redirects: url.includes('chatgpt.com')
+        ? [
+            { host: 'auth.openai.com', statusCode: 302 },
+            { host: 'chatgpt.com', statusCode: 302 },
+          ]
+        : [],
+      status: 200,
+    }));
+    const { probe } = createProbe(undefined, applicationRequest);
+    const result = await probe.run('openai-codex', 'background', true);
+    const chatgptProbe = result.probes.find((item) => item.id === 'app:openai-chatgpt');
+
+    expect(chatgptProbe).toMatchObject({
+      status: 'passed',
+      detail: expect.stringContaining('2 次受信任重定向'),
+    });
+  });
+
+  it('flags application redirects outside the provider allowlist', async () => {
+    const { probe } = createProbe(undefined, async (url) => ({
+      contentType: 'text/html',
+      redirects: url.includes('chatgpt.com') ? [{ host: 'portal.example', statusCode: 302 }] : [],
+      status: 200,
+    }));
+    const result = await probe.run('openai-codex', 'background', true);
+    const chatgptProbe = result.probes.find((item) => item.id === 'app:openai-chatgpt');
+
+    expect(chatgptProbe).toMatchObject({
+      status: 'failed',
+      detail: expect.stringContaining('portal.example'),
+    });
+  });
+
+  it('treats a legacy redirect cancellation as inconclusive instead of unreachable', async () => {
+    const { probe } = createProbe(undefined, async () => {
+      throw new Error('Redirect was cancelled');
+    });
+    const result = await probe.run('openai-codex', 'background', true);
+    const chatgptProbe = result.probes.find((item) => item.id === 'app:openai-chatgpt');
+
+    expect(chatgptProbe).toMatchObject({
+      required: true,
+      status: 'warning',
+      detail: expect.stringContaining('不证明网络失败'),
+    });
   });
 
   it('detects captive-portal HTML on the required CLI API path', async () => {

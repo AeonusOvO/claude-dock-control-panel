@@ -52,6 +52,23 @@ const evaluate = (action: NetworkPreflightAction, input: ConnectivityObservation
   new RiskDecisionEngine().evaluate('openai-codex', action, input, 1, 2);
 
 describe('RiskDecisionEngine', () => {
+  it('does not block when only the application redirect probe is inconclusive', () => {
+    const result = evaluate(
+      'background',
+      observation([
+        probe('app:openai-chatgpt', {
+          detail: '应用探测器取消了重定向；这不证明网络失败。',
+          status: 'warning',
+        }),
+      ]),
+    );
+
+    expect(result.featureAccess.find((access) => access.action === 'background')?.allowed).toBe(
+      true,
+    );
+    expect(result.status).not.toBe('blocked');
+  });
+
   it('does not block solely because a proxy or virtual interface exists', () => {
     const result = evaluate(
       'cli-launch',

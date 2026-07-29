@@ -1045,7 +1045,9 @@ const renderNetworkPreflightDetails = (result?: NetworkPreflightResult): void =>
     networkPreflightPaths,
     result.paths.map(
       (pathView) =>
-        `${pathView.detail} ${pathView.proxyConfigured ? `代理：${pathView.proxyKind}` : '直连'}${
+        `${pathView.detail} ${
+          pathView.proxyConfigured ? `可见代理第一跳：${pathView.proxyKind}` : '未发现本机显式代理'
+        }${
           pathView.virtualInterfaces.length > 0
             ? `；虚拟接口：${pathView.virtualInterfaces.join('、')}`
             : ''

@@ -868,9 +868,13 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 
 1. `NetworkPathResolver` 读取活动网卡、IPv4/IPv6 可用性、DNS 服务器、虚拟接口名称、
    Electron `session.resolveProxy()` 与 CLI 标准代理环境；不记录代理 URL、用户名或密码。
+   解析结果只代表进程可见的显式代理第一跳，`DIRECT` 或缺少代理环境变量不等于公网直连。
 2. `ProviderConnectivityProbe` 并行执行官方域名 DNS、Electron 无凭据 `HEAD`、CLI
-   `curl.exe` HTTPS/TLS、Codex WebSocket Upgrade 和 CLI `--version`。401/403/405 表示端点
-   可达而不是认证成功；不附带现有登录令牌、API Key，不调用模型接口正文。
+   `curl.exe` HTTPS/TLS、Codex WebSocket Upgrade 和 CLI `--version`。应用请求由
+   `electron-application-request.ts` 使用 Electron `ClientRequest` 的 `manual` 模式实现：
+   在 `redirect` 事件内同步调用 `followRedirect()`，最多跟随 8 次，只允许 HTTPS，并将每一跳
+   主机名与服务商配置中的认证/必需/端点白名单核对。401/403/405 表示端点可达而不是认证成功；
+   不附带现有登录令牌、API Key，不调用模型接口正文，也不保存跳转 URL 的路径或查询参数。
 3. 非增强隐私模式下，ipapi.co 与 ipwho.is 提供两路地区/ASN 情报；ipwho.is 可用时还读取
    VPN、公共代理、Tor、托管/数据中心与匿名网络辅助标签，但标签本身只产生提示。api4/api6.ipify.org
    分别补充公网 IPv4/IPv6。原始地址只存在于单次探测内存，进入结果前转换为 IPv4 `/24` 或
@@ -893,8 +897,25 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   inactive；只有已经尝试销毁并重启 PTY 后发生错误才进入 inactive 状态。
 - WebSocket 单独失败时基础 HTTPS/CLI 功能仍为 `partially_available`，但 `cloud-task`
   动作被拒绝。未知或跳过的关键探测按 fail-closed 处理；公网情报未知只降级，不单独阻止。
+- Electron 文档规定：`ClientRequest` 使用 `redirect: manual` 时，如果没有在重定向事件中
+  同步执行 `followRedirect()`，请求会被取消。2.2.0 的应用探测遗漏了该调用，因而会在
+  ChatGPT 可正常跳转、Codex CLI 可用时误报 `Redirect was cancelled`。2.2.1 修复事件处理，
+  并把遗留同类错误降为“探测未确认”警告；非白名单跨域、HTTP 降级、TLS 或真实连接失败仍失败。
 - 本实现不修改系统代理、DNS、路由表、Codex/Claude Code 配置文件或官方登录存储，也不自动
   关闭 VPN。Claude Code 官方不支持 SOCKS，因此只对 Claude CLI 的 SOCKS 环境做硬阻止。
+
+### 链式代理与软路由判定边界
+
+- Mihomo/Clash 的 `dialer-proxy`、Xray 的 `dialerProxy`/出站转发以及 sing-box 的路由出站，
+  都能在代理内核内部继续选择下一跳；应用侧通常只能看到本机监听端口这一跳。PAC 返回的多个
+  指令通常是回退顺序，也不能被当成串行链路。
+- TUN、WinDivert/透明代理以及 OpenWrt 等软路由可以在系统显式代理之后或完全绕过显式代理
+  设置接管流量。此时 Electron `resolveProxy()` 和 CLI 环境变量可能都显示无代理，但实际出口
+  仍经过一条或多条代理链。
+- 因此 ClaudeDock 不扫描或解析 Clash/Mihomo、V2Ray/Xray、sing-box 的本地配置，也不尝试从
+  品牌名猜测拓扑。配置可能位于其他用户、容器、远端网关或软路由，读取它既不完整也会扩大隐私
+  和权限范围。判定以“应用进程真实官方端点 + CLI 真实官方端点 + 可选出口共识”为准，路径卡
+  只展示可见第一跳和可能存在的透明接管边界。
 
 ### 隐私、历史与第三方边界
 
@@ -921,6 +942,18 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - Claude Code 企业代理、CA、必需域名和隐私流量说明：
   <https://code.claude.com/docs/en/network-config>
 - Claude Code 官方安全公告：<https://github.com/anthropics/claude-code/security/advisories>
+- Electron `ClientRequest` 重定向语义：
+  <https://www.electronjs.org/docs/latest/api/client-request>
+- Electron Chromium 网络栈与系统代理能力：<https://www.electronjs.org/docs/latest/api/net>
+- Mihomo 链式代理 `dialer-proxy` 与已弃用 Relay：
+  <https://wiki.metacubex.one/en/config/proxies/>、
+  <https://wiki.metacubex.one/config/proxy-groups/relay/>
+- Xray 出站转发与 `dialerProxy`：
+  <https://xtls.github.io/en/config/outbound.html>、
+  <https://xtls.github.io/en/config/transports/sockopt.html>
+- sing-box 路由出站与 TUN：
+  <https://sing-box.sagernet.org/configuration/route/rule_action/>、
+  <https://sing-box.sagernet.org/configuration/inbound/tun/>
 - 公开出口诊断服务：<https://ipapi.co/>、<https://ipwho.is/>、<https://www.ipify.org/>
 
 维护服务商规则时必须同步更新 `updatedAt` / `sources[].retrievedAt`、相关测试和本节；支持地区

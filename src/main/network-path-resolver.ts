@@ -136,14 +136,34 @@ export class NetworkPathResolver {
     });
 
     const paths = [
-      makePath('application', applicationProxy, '使用 Electron 会话的系统代理解析结果。'),
+      makePath(
+        'application',
+        applicationProxy,
+        applicationProxy.proxyConfigured
+          ? '使用 Electron 会话解析出的本机可见代理第一跳；后续链路由代理内核决定。'
+          : '未解析到本机显式代理；TUN、透明代理或软路由链路仍可能接管后续流量。',
+      ),
       makePath(
         'oauth-browser',
         applicationProxy,
-        '登录页交由系统浏览器打开，代理解析仅用于风险提示。',
+        applicationProxy.proxyConfigured
+          ? '登录页交由系统浏览器打开；这里只显示 Electron 可见的代理第一跳，浏览器实际路径可能不同。'
+          : '登录页交由系统浏览器打开；未发现本机显式代理不代表公网直连，浏览器仍可能经过 TUN 或网关。',
       ),
-      makePath(cliProcess, cliProxy, '继承启动时的 HTTP(S)_PROXY / ALL_PROXY 环境。'),
-      makePath('terminal', cliProxy, '继承项目终端环境，不改写系统或 CLI 路由。'),
+      makePath(
+        cliProcess,
+        cliProxy,
+        cliProxy.proxyConfigured
+          ? '继承启动时 HTTP(S)_PROXY / ALL_PROXY 指定的可见第一跳；代理内核可继续链式转发。'
+          : '未发现代理环境变量；CLI 仍可能经过 TUN、透明代理或软路由链路。',
+      ),
+      makePath(
+        'terminal',
+        cliProxy,
+        cliProxy.proxyConfigured
+          ? '继承项目终端的代理环境第一跳，不改写系统或 CLI 路由。'
+          : '未发现代理环境变量，不据此断言公网直连。',
+      ),
       makePath('renderer', applicationProxy, '无直接网络权限，所有探测均由主进程执行。'),
     ];
     return provider === 'openai-api'
