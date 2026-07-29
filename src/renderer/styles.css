@@ -6005,8 +6005,16 @@ button:disabled {
   text-align: center;
 }
 
+/*
+ * The entrance has to land on the card's *resting* opacity, not on a hard 1. The generic `cardEnter`
+ * ends at full opacity, so a card that rests dimmed faded in bright and then snapped grey the moment
+ * the animation released it — the fade read as running backwards. Routing the rest value through a
+ * custom property lets the keyframe end exactly where the card actually lives.
+ */
 .plugin-card {
-  animation: cardEnter var(--dur-3) var(--ease-decel);
+  --card-rest-opacity: 1;
+
+  animation: pluginCardEnter var(--dur-3) var(--ease-decel);
   background: var(--surface-3);
   border: 1px solid var(--line-subtle);
   border-radius: var(--r-lg);
@@ -6014,11 +6022,25 @@ button:disabled {
   gap: var(--s-2);
   max-width: 100%;
   min-width: 0;
+  opacity: var(--card-rest-opacity);
   overflow: hidden;
   padding: var(--s-3);
   transition:
     border-color var(--dur-2) var(--ease-standard),
-    box-shadow var(--dur-2) var(--ease-standard);
+    box-shadow var(--dur-2) var(--ease-standard),
+    opacity var(--dur-2) var(--ease-standard);
+}
+
+@keyframes pluginCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: var(--card-rest-opacity);
+    transform: translateY(0);
+  }
 }
 
 .plugin-card:hover {
@@ -6027,7 +6049,7 @@ button:disabled {
 }
 
 .plugin-card[data-enabled='false'] {
-  opacity: 0.72;
+  --card-rest-opacity: 0.72;
 }
 
 .plugin-card__header {
@@ -7804,13 +7826,24 @@ body.is-resizing * {
     background-color var(--dur-2) var(--ease-standard),
     border-color var(--dur-2) var(--ease-standard),
     box-shadow var(--dur-2) var(--ease-standard),
-    color var(--dur-2) var(--ease-standard);
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
   width: 100%;
 }
 
-.select__trigger:hover:not(:disabled) {
+.select__trigger:hover:not(:disabled),
+.select:not([data-disabled='true']):hover .select__trigger {
   background: var(--layer-hover);
   border-color: var(--line-hover);
+}
+
+/*
+ * The press. The native element covers the trigger, so `:active` never reaches the trigger itself —
+ * the shell's own active state is what has to drive it, otherwise the one control in the kit that is
+ * pressed most often is also the only one that never answers a press.
+ */
+.select:not([data-disabled='true']):active .select__trigger {
+  transform: scale(var(--press-sm));
 }
 
 /*
@@ -7896,6 +7929,33 @@ body.is-resizing * {
   to {
     opacity: 1;
     transform: scaleY(1) translateY(0);
+  }
+}
+
+/*
+ * The dismissal is the entrance reversed, on the exit curve and the shorter exit duration: a popup
+ * that animates open but blinks out reads as a glitch rather than a close. It collapses back toward
+ * the same edge it grew from, so the motion still points at the trigger.
+ */
+.select__listbox[data-closing='true'] {
+  animation: selectListboxOut var(--dur-exit) var(--ease-accel) forwards;
+  pointer-events: none;
+  transform-origin: top center;
+}
+
+.select__listbox[data-closing='true'][data-placement='above'] {
+  transform-origin: bottom center;
+}
+
+@keyframes selectListboxOut {
+  from {
+    opacity: 1;
+    transform: scaleY(1) translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: scaleY(0.96) translateY(-3px);
   }
 }
 

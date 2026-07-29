@@ -24,6 +24,8 @@
     "test": "vitest run",
     "test:conpty": "npm run build && electron scripts/conpty-resize-smoke.cjs",
     "test:layout": "npm run build:renderer && electron scripts/layout-smoke.cjs",
+    "test:select": "npm run build:renderer && electron scripts/select-interaction-smoke.cjs",
+    "test:select-theme": "npm run build:renderer && electron scripts/select-theme-smoke.cjs",
     "test:visual": "npm run build:renderer && electron scripts/visual-smoke.cjs",
     "test:coverage": "vitest run --coverage",
     "build:main": "tsc -p tsconfig.main.json",

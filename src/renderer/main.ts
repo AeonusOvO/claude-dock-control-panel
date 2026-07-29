@@ -4949,14 +4949,23 @@ const runPluginMutation = async (
   pluginStatus.textContent = `${busyLabel}这一步会调用 claude 命令行，可能需要几十秒。`;
   try {
     const result = await operation();
+    /*
+     * The flag has to be cleared *before* the catalogue is re-rendered. Rendering replaces every card,
+     * and each freshly built button takes its initial `disabled` from this flag — so clearing it
+     * afterwards left the whole panel dead until the tab was reopened and reloaded the catalogue.
+     */
+    pluginMutationInProgress = false;
     renderPluginCatalog(result.catalog);
     showToast(result.message, result.ok ? 'success' : 'error');
   } catch {
     showToast('插件操作发生异常。', 'error');
   } finally {
     pluginMutationInProgress = false;
-    button.textContent = originalLabel;
-    button.disabled = false;
+    // On the success path the button was discarded by the re-render; only the failure path still owns it.
+    if (button.isConnected) {
+      button.textContent = originalLabel;
+      button.disabled = false;
+    }
   }
 };
 

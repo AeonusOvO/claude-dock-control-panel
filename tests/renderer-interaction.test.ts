@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+const componentKit = readFileSync(
+  new URL('../src/renderer/components.ts', import.meta.url),
+  'utf8',
+);
 
 describe('renderer interaction lifecycle contract', () => {
   it('always releases resize pointer capture across interrupted window lifecycles', () => {
@@ -519,5 +523,100 @@ describe('renderer interaction lifecycle contract', () => {
       const token = /var\((--[\w-]+)\)/.exec(usage)?.[1] ?? '';
       expect(rendererStyles).toContain(`${token}:`);
     }
+  });
+});
+
+describe('the themed select is the control the pointer actually reaches', () => {
+  /*
+   * The native `<select>` is layered over the visual trigger so it keeps focus and assistive-tech
+   * reach. That makes it — not the trigger — the element under the pointer, so binding the open
+   * gesture to the trigger left Chromium's own Win32 popup to answer the click instead: the one thing
+   * the kit exists to prevent. The gesture must therefore live on the shell.
+   */
+  it('opens from the shell rather than the trigger, so the OS popup never answers a press', () => {
+    expect(componentKit).toMatch(/shell\.addEventListener\('mousedown'/);
+    expect(componentKit).not.toMatch(/trigger\.addEventListener\('click'/);
+    // Chromium still opens its native popup on the select's own click unless that default is killed.
+    expect(componentKit).toMatch(
+      /select\.addEventListener\('click', \(event\) => \{\s+event\.preventDefault\(\);/,
+    );
+    // Dismissal has to hit-test the shell too, or the press that opens also immediately closes.
+    expect(componentKit).toContain('!controller.shell.contains(target)');
+    // Rows are buttons; letting one take focus would blur the select and close before the commit.
+    expect(componentKit).toMatch(/listbox\.addEventListener\('mousedown'/);
+  });
+
+  it('answers hover and press on the trigger through the shell', () => {
+    expect(rendererStyles).toMatch(
+      /\.select:not\(\[data-disabled='true'\]\):hover \.select__trigger/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.select:not\(\[data-disabled='true'\]\):active \.select__trigger\s*\{\s*transform: scale\(var\(--press-sm\)\);/,
+    );
+    // A press cannot animate unless transform is in the trigger's own transition list.
+    const trigger = rendererStyles.slice(
+      rendererStyles.indexOf('.select__trigger {'),
+      rendererStyles.indexOf('.select__trigger:hover'),
+    );
+    expect(trigger).toContain('transform var(--dur-1) var(--ease-decel)');
+  });
+
+  it('animates the dropdown out instead of blinking it away', () => {
+    expect(rendererStyles).toContain('@keyframes selectListboxOut');
+    expect(rendererStyles).toMatch(
+      /\.select__listbox\[data-closing='true'\]\s*\{[\s\S]*?selectListboxOut var\(--dur-exit\) var\(--ease-accel\)/,
+    );
+    // The exit collapses back toward the trigger, mirroring the entrance on both placements.
+    expect(rendererStyles).toMatch(
+      /\.select__listbox\[data-closing='true'\]\[data-placement='above'\]\s*\{\s*transform-origin: bottom center;/,
+    );
+    // `hidden` may only land after the animation, and a dropped animationend must not strand it.
+    expect(componentKit).toContain("listbox.dataset.closing = 'true'");
+    expect(componentKit).toMatch(
+      /listbox\.addEventListener\('animationend', finish, \{ once: true \}\)/,
+    );
+    expect(componentKit).toContain('exitTimer = window.setTimeout(finish, EXIT_FALLBACK_MS)');
+    // Openness must be read from state, not from `hidden`, which now lags the close by the exit.
+    expect(componentKit).toContain("const isOpen = (): boolean => listbox.dataset.open === 'true'");
+    expect(componentKit).not.toMatch(/if \(listbox\.hidden\) \{\s+open\(true\)/);
+  });
+});
+
+describe('plugin panel feedback', () => {
+  /*
+   * The catalogue re-render rebuilds every card, and each new button reads its initial `disabled`
+   * from the in-progress flag. Clearing the flag after the render therefore left the whole panel
+   * dead until the tab was reopened — the reported "停用 leaves the buttons stuck" bug.
+   */
+  it('clears the in-progress flag before re-rendering, so rebuilt buttons come back enabled', () => {
+    const mutation = rendererSource.slice(
+      rendererSource.indexOf('const runPluginMutation'),
+      rendererSource.indexOf('const pluginActionButton'),
+    );
+    const cleared = mutation.indexOf('pluginMutationInProgress = false;');
+    const rendered = mutation.indexOf('renderPluginCatalog(result.catalog);');
+    expect(cleared).toBeGreaterThan(-1);
+    expect(rendered).toBeGreaterThan(-1);
+    expect(cleared).toBeLessThan(rendered);
+    // The success path discards the button, so only a still-connected one may be restored.
+    expect(mutation).toContain('if (button.isConnected) {');
+  });
+
+  /*
+   * `cardEnter` ends at `opacity: 1`, but a not-installed card rests dimmed — so the card faded in
+   * bright and snapped grey when the animation released it, which reads as the fade running backwards.
+   */
+  it('lands the card entrance on the resting opacity rather than a hard 1', () => {
+    expect(rendererStyles).toMatch(/\.plugin-card\s*\{[\s\S]*?--card-rest-opacity: 1;/);
+    expect(rendererStyles).toMatch(
+      /\.plugin-card\s*\{[\s\S]*?animation: pluginCardEnter[\s\S]*?opacity: var\(--card-rest-opacity\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /@keyframes pluginCardEnter\s*\{[\s\S]*?to \{\s*opacity: var\(--card-rest-opacity\);/,
+    );
+    // The dimmed state must move the rest value, not re-declare a competing opacity.
+    expect(rendererStyles).toMatch(
+      /\.plugin-card\[data-enabled='false'\]\s*\{\s*--card-rest-opacity: 0\.72;\s*\}/,
+    );
   });
 });

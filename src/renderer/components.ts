@@ -22,8 +22,16 @@ let openController: SelectController | undefined;
 interface SelectController {
   close: () => void;
   readonly listbox: HTMLElement;
+  /** The wrapper holding both the native element and the visual trigger. */
+  readonly shell: HTMLElement;
   readonly trigger: HTMLButtonElement;
 }
+
+/**
+ * Upper bound for the exit animation, used only as the safety net for a dropped `animationend` —
+ * the real duration is the theme's `--dur-exit`, which JS never needs to read.
+ */
+const EXIT_FALLBACK_MS = 600;
 
 const REDUCED_MOTION = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -95,6 +103,14 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   listbox.className = 'select__listbox';
   listbox.setAttribute('role', 'listbox');
   listbox.hidden = true;
+  /*
+   * Rows are `<button>`s, so pressing one would take focus off the native select and fire its `blur`
+   * — closing the popup before the row's own `click` could commit. Refusing the focus shift keeps the
+   * select the focus owner for the whole interaction, which is also what the focus ring assumes.
+   */
+  listbox.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+  });
 
   select.replaceWith(shell);
   shell.append(select, trigger);
@@ -110,6 +126,8 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   };
 
   let activeIndex = -1;
+  /** Pending exit-animation timer, so a reopen mid-close cancels the teardown instead of racing it. */
+  let exitTimer: number | undefined;
 
   const optionButtons = (): HTMLButtonElement[] =>
     Array.from(listbox.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
@@ -166,11 +184,17 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     listbox.replaceChildren(...rows);
   };
 
+  /**
+   * Hides the popup. The listbox plays a closing animation on its way out rather than vanishing, so
+   * dismissing a dropdown reads as the reverse of opening it; `hidden` is only applied once that
+   * animation has finished. State that other code observes — `data-open`, `aria-expanded`, the
+   * controller registration — is cleared immediately, so a close is synchronous as far as callers and
+   * the reopen path are concerned.
+   */
   function close(): void {
-    if (listbox.hidden) {
+    if (listbox.hidden || listbox.dataset.closing === 'true') {
       return;
     }
-    listbox.hidden = true;
     listbox.dataset.open = 'false';
     trigger.setAttribute('aria-expanded', 'false');
     shell.dataset.open = 'false';
@@ -178,6 +202,27 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     if (openController?.listbox === listbox) {
       openController = undefined;
     }
+
+    const finish = (): void => {
+      // A reopen during the exit clears the flag; finishing then would hide a popup that is open.
+      if (listbox.dataset.closing !== 'true') {
+        return;
+      }
+      delete listbox.dataset.closing;
+      listbox.hidden = true;
+      window.clearTimeout(exitTimer);
+      exitTimer = undefined;
+    };
+
+    if (REDUCED_MOTION()) {
+      listbox.hidden = true;
+      return;
+    }
+
+    listbox.dataset.closing = 'true';
+    listbox.addEventListener('animationend', finish, { once: true });
+    // An interrupted or never-fired animation must not leave the popup stranded on screen.
+    exitTimer = window.setTimeout(finish, EXIT_FALLBACK_MS);
   }
 
   const open = (focusSelected: boolean): void => {
@@ -185,13 +230,17 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
       return;
     }
     closeOpenSelect();
+    // Cancel any exit in flight on this listbox so the entrance restarts from a clean state.
+    delete listbox.dataset.closing;
+    window.clearTimeout(exitTimer);
+    exitTimer = undefined;
     renderOptions();
     listbox.hidden = false;
     listbox.dataset.open = 'true';
     trigger.setAttribute('aria-expanded', 'true');
     shell.dataset.open = 'true';
     positionListbox(trigger, listbox);
-    openController = { close, listbox, trigger };
+    openController = { close, listbox, shell, trigger };
     if (focusSelected) {
       const selectedIndex = optionButtons().findIndex(
         (button) => button.dataset.value === select.value,
@@ -200,20 +249,37 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     }
   };
 
+  /** True while the popup is on screen, including the frames it spends animating out. */
+  const isOpen = (): boolean => listbox.dataset.open === 'true';
+
   const toggle = (): void => {
-    if (listbox.hidden) {
-      open(true);
-    } else {
+    if (isOpen()) {
       close();
+    } else {
+      open(true);
     }
   };
 
-  trigger.addEventListener('click', (event) => {
+  /*
+   * The whole shell is the click target, not just the visual trigger. The native `<select>` covers
+   * the shell so it can keep focus, which means it — not the trigger — is what the pointer actually
+   * lands on; binding to the trigger alone left the control looking pressable but doing nothing on
+   * the majority of its surface.
+   */
+  shell.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     // Keep the native element as the focus owner so the focus ring lands on the shell.
     select.focus({ preventScroll: true });
     toggle();
+  });
+
+  // Chromium still opens its own popup on a native select's click, so that default is suppressed too.
+  select.addEventListener('click', (event) => {
+    event.preventDefault();
   });
 
   /*
@@ -223,7 +289,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
    */
   select.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      if (!listbox.hidden) {
+      if (isOpen()) {
         event.preventDefault();
         event.stopPropagation();
         close();
@@ -233,7 +299,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
 
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      if (listbox.hidden) {
+      if (!isOpen()) {
         open(true);
         return;
       }
@@ -248,7 +314,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      if (listbox.hidden) {
+      if (!isOpen()) {
         open(true);
         return;
       }
@@ -256,7 +322,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
       return;
     }
 
-    if (event.key === 'Tab' && !listbox.hidden) {
+    if (event.key === 'Tab' && isOpen()) {
       close();
     }
   });
@@ -267,7 +333,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   // repopulating options, so the trigger and rows are rebuilt from the live DOM instead.
   new MutationObserver(() => {
     syncTrigger();
-    if (!listbox.hidden) {
+    if (isOpen()) {
       renderOptions();
       positionListbox(trigger, listbox);
     }
@@ -316,7 +382,8 @@ export const installSelectDismissHandlers = (): void => {
         return;
       }
       const target = event.target as Node;
-      if (!controller.listbox.contains(target) && !controller.trigger.contains(target)) {
+      // The native select sits over the trigger, so the shell is what a press actually hits.
+      if (!controller.listbox.contains(target) && !controller.shell.contains(target)) {
         controller.close();
       }
     },
