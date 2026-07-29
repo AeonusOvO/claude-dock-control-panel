@@ -59,9 +59,9 @@ describe('terminal themes', () => {
       }
     }
 
-    expect(TERMINAL_THEMES.claude.shell.fontUi).toContain('Inter Variable');
-    expect(TERMINAL_THEMES.claude.shell.fontDisplay).toContain('Source Serif 4 Variable');
-    expect(TERMINAL_THEMES.telegram.shell.fontUi).toContain('Open Sans Variable');
+    expect(TERMINAL_THEMES.claude.shell.fontUi).toContain('Hanken Grotesk Variable');
+    expect(TERMINAL_THEMES.claude.shell.fontDisplay).toContain('Newsreader Variable');
+    expect(TERMINAL_THEMES.telegram.shell.fontUi).toContain('Roboto Variable');
     expect(TERMINAL_THEMES.telegram.shell.fontDisplay).toBe(TERMINAL_THEMES.telegram.shell.fontUi);
     expect(TERMINAL_THEMES.claude.shell.radiusBubble).not.toBe(
       TERMINAL_THEMES.telegram.shell.radiusBubble,
@@ -69,8 +69,23 @@ describe('terminal themes', () => {
     expect(TERMINAL_THEMES.claude.shell.lineHeightBody).not.toBe(
       TERMINAL_THEMES.telegram.shell.lineHeightBody,
     );
-    expect(TERMINAL_THEMES.graphite.shell.fontUi).toContain('Segoe UI Variable');
-    expect(TERMINAL_THEMES.midnight.shell.fontUi).toContain('Segoe UI Variable');
+    expect(TERMINAL_THEMES.graphite.shell.fontUi).toContain('Inter Variable');
+    expect(TERMINAL_THEMES.midnight.shell.fontUi).toContain('Inter Variable');
+
+    // The two dark themes used to ship byte-identical motion and typography, which made a switch
+    // between them look like a palette swap. Each personality axis must actually differ.
+    expect(TERMINAL_THEMES.graphite.shell.easeEnter).not.toBe(
+      TERMINAL_THEMES.midnight.shell.easeEnter,
+    );
+    expect(TERMINAL_THEMES.graphite.shell.easeSpring).not.toBe(
+      TERMINAL_THEMES.midnight.shell.easeSpring,
+    );
+    expect(TERMINAL_THEMES.graphite.shell.durEnter).not.toBe(
+      TERMINAL_THEMES.midnight.shell.durEnter,
+    );
+    expect(TERMINAL_THEMES.graphite.shell.lineHeightBody).not.toBe(
+      TERMINAL_THEMES.midnight.shell.lineHeightBody,
+    );
   });
 
   it('converts strict hex palette values to PowerShell ANSI true colour', () => {

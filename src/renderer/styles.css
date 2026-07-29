@@ -6,8 +6,13 @@
   text-rendering: optimizeLegibility;
 
   /* 字体族：界面正文、品牌标题与技术内容各自有明确职责。 */
-  --font-ui: 'Inter Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
-  --font-display: 'Source Serif 4 Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif;
+  /*
+   * These mirror the Claude theme, which is the default; the renderer overwrites all three the
+   * moment a theme is applied. Anthropic's Styrene/Tiempos are undistributable, so Hanken Grotesk
+   * and Newsreader stand in for them.
+   */
+  --font-ui: 'Hanken Grotesk Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Newsreader Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif;
   --font-mono: 'Cascadia Mono', Consolas, monospace;
   --lh-body: 1.7;
   --ls-title: -0.012em;
@@ -128,6 +133,14 @@
   --drawer-w: 468px;
   --terminal-min: 256px;
   --composer-max: 168px;
+  /*
+   * The composer standard: both the terminal and chat composers use this as the height floor for
+   * the textarea and for the send cluster, which is what keeps the button flush with the input.
+   * --composer-ring scales the focus halo off the theme's press depth, so a springier theme blooms
+   * wider without any per-theme rule.
+   */
+  --composer-row-h: 52px;
+  --composer-ring: calc(3px + (1 - var(--press-theme)) * 40px);
   /* Measured live by the renderer so the workbench drawer never covers the input box. */
   --composer-h: 57px;
 
@@ -1606,7 +1619,8 @@ body[data-phase='error'] .status-pill {
 }
 
 .chat-settings-trigger:active {
-  transform: scale(var(--press-scale));
+  /* Was --press-scale, which is not a token: the press silently did nothing. */
+  transform: scale(var(--press-sm));
 }
 
 .chat-settings-trigger svg {
@@ -2160,14 +2174,250 @@ body[data-phase='error'] .status-pill {
   grid-row: 1;
 }
 
+/*
+ * COMPOSER STANDARD
+ *
+ * The terminal and chat composers are the same component with different payloads, so they share one
+ * geometry contract: `align-items: stretch` plus a common `--composer-row-h` floor, which is what
+ * makes the send button stay flush with the top and bottom of the textarea as it grows instead of
+ * floating beside it. Chat previously used `align-items: end` with a shorter button, so the two
+ * surfaces read as unrelated widgets — the focus treatment below is likewise shared.
+ */
+.terminal-composer,
 .chat-composer {
-  align-items: end;
+  align-items: stretch;
   background: var(--surface-1);
   border-top: 1px solid var(--line);
   display: grid;
   gap: var(--s-2);
+}
+
+.terminal-composer {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 13px;
+}
+
+.chat-composer {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   padding: var(--s-3) max(var(--s-4), calc((100% - 860px) / 2));
+}
+
+/*
+ * The shared focus treatment. `--composer-ring` scales the halo with the theme's own press depth so
+ * a springier theme also gets a wider bloom, and the keyframe overshoots once on focus — the
+ * "flourish" the terminal input had and chat lacked.
+ */
+.terminal-composer textarea,
+.chat-composer textarea {
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  color: var(--text-hi);
+  max-height: var(--composer-max);
+  min-height: var(--composer-row-h);
+  outline: none;
+  overflow-y: auto;
+  /* Autosized by the renderer; a drag handle would fight the measured --composer-h. */
+  resize: none;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-3) var(--ease-standard);
+  width: 100%;
+}
+
+.terminal-composer textarea {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: var(--ls-body);
+  line-height: 21px;
+  padding: 14px 13px;
+}
+
+.chat-composer textarea {
+  font: inherit;
+  line-height: var(--lh-note);
+  padding: var(--s-3);
+}
+
+.terminal-composer textarea::placeholder,
+.chat-composer textarea::placeholder {
+  color: var(--text-mute);
+  font-family: var(--font-ui);
+}
+
+.terminal-composer textarea:focus,
+.chat-composer textarea:focus {
+  animation: composerFocusIn var(--dur-4) var(--ease-decel);
+  background: color-mix(in srgb, var(--surface-inset) 94%, var(--accent-solid));
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 var(--composer-ring) var(--accent-tint);
+}
+
+.terminal-composer textarea:disabled,
+.chat-composer textarea:disabled {
+  color: var(--text-mute);
+  cursor: not-allowed;
+}
+
+@keyframes composerFocusIn {
+  from {
+    box-shadow: 0 0 0 0 var(--accent-tint);
+  }
+
+  65% {
+    box-shadow: 0 0 0 calc(var(--composer-ring) + 2px) var(--accent-tint);
+  }
+
+  to {
+    box-shadow: 0 0 0 var(--composer-ring) var(--accent-tint);
+  }
+}
+
+/*
+ * The send/stop cluster. `align-self: stretch` is the other half of the flush geometry: these track
+ * the textarea's height rather than sitting at a fixed 40px as chat's did.
+ */
+#composer-send,
+.chat-send,
+.chat-stop,
+.chat-attach {
+  align-items: center;
+  align-self: stretch;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  min-height: var(--composer-row-h);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+#composer-send,
+.chat-send {
+  background: var(--accent-solid);
+  color: var(--accent-fg);
+}
+
+#composer-send {
+  width: 56px;
+}
+
+.chat-send,
+.chat-stop {
+  padding: 0 var(--s-4);
+}
+
+.chat-stop {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+
+.chat-attach {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--text-lo);
+  padding: 0;
+  width: 44px;
+}
+
+#composer-send:hover:not(:disabled),
+.chat-send:hover:not(:disabled) {
+  background: var(--accent-solid-hover);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.chat-stop:hover:not(:disabled) {
+  border-color: var(--bad-solid);
+  box-shadow: 0 0 0 3px var(--bad-tint);
+}
+
+.chat-attach:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+  color: var(--accent-text);
+}
+
+#composer-send:active:not(:disabled),
+.chat-send:active:not(:disabled),
+.chat-stop:active:not(:disabled),
+.chat-attach:active:not(:disabled) {
+  transform: scale(var(--press-lg));
+}
+
+#composer-send:disabled,
+.chat-send:disabled,
+.chat-stop:disabled,
+.chat-attach:disabled {
+  background: var(--surface-4);
+  border-color: var(--line-subtle);
+  color: var(--text-mute);
+  cursor: not-allowed;
+}
+
+#composer-send svg {
+  height: 19px;
+  stroke-width: 2;
+  width: 19px;
+}
+
+.chat-attach svg {
+  height: 18px;
+  stroke-width: 1.7;
+  width: 18px;
+}
+
+/*
+ * The send animation: a copy of the prompt lifts out of the composer and fades toward the
+ * transcript, the way an iMessage bubble does. It is a throwaway node on `body`, positioned over
+ * the textarea by the renderer, so it never participates in layout. Both composers use it.
+ */
+.composer-send-bubble {
+  animation: composer-send-lift var(--dur-progress) var(--ease-accel) forwards;
+  background: var(--accent-solid);
+  border-radius: var(--r-lg);
+  color: var(--accent-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: var(--ls-body);
+  line-height: 21px;
+  overflow: hidden;
+  padding: 14px 13px;
+  pointer-events: none;
+  position: fixed;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  z-index: 60;
+}
+
+.composer-send-bubble--chat {
+  font-family: var(--font-ui);
+  line-height: var(--lh-note);
+  padding: var(--s-3);
+}
+
+@keyframes composer-send-lift {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-64px) scale(0.94);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-send-bubble {
+    display: none;
+  }
 }
 
 .chat-attachment-queue {
@@ -2233,96 +2483,24 @@ body[data-phase='error'] .status-pill {
   align-self: start;
   background: transparent;
   border: 0;
+  border-radius: var(--r-xs);
   color: var(--text-dim);
   cursor: pointer;
   min-height: auto;
   padding: var(--s-1);
-}
-
-.chat-composer textarea {
-  background: var(--surface-inset);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-lg);
-  color: var(--text-hi);
-  font: inherit;
-  line-height: var(--lh-note);
-  max-height: var(--composer-max);
-  min-height: 44px;
-  outline: none;
-  padding: var(--s-3);
-  resize: vertical;
   transition:
-    background-color var(--dur-micro) var(--ease-enter),
-    border-color var(--dur-micro) var(--ease-enter),
-    box-shadow var(--dur-enter) var(--ease-enter);
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
 }
 
-.chat-composer textarea:focus {
-  animation: chatComposerFocusIn var(--dur-enter) var(--ease-enter);
-  background: color-mix(in srgb, var(--surface-inset) 94%, var(--accent-solid));
-  border-color: var(--accent-ring);
-  box-shadow: 0 0 0 3px var(--accent-tint);
-}
-
-@keyframes chatComposerFocusIn {
-  from {
-    box-shadow: 0 0 0 0 var(--accent-tint);
-  }
-  65% {
-    box-shadow: 0 0 0 5px var(--accent-tint);
-  }
-  to {
-    box-shadow: 0 0 0 3px var(--accent-tint);
-  }
-}
-
-.chat-composer button {
-  border-radius: var(--r-theme-md);
-  cursor: pointer;
-  min-height: 40px;
-  padding: 0 var(--s-4);
-  transition:
-    background var(--dur-micro) var(--ease-enter),
-    border-color var(--dur-micro) var(--ease-enter),
-    transform var(--dur-micro) var(--ease-spring);
-}
-
-.chat-attach {
-  align-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--text-lo);
-  display: flex;
-  justify-content: center;
-  padding: 0;
-  width: 40px;
-}
-
-.chat-attach svg {
-  fill: none;
-  height: 18px;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
-  width: 18px;
-}
-
-.chat-send {
-  background: var(--accent-solid);
-  border: 1px solid transparent;
-  color: var(--accent-fg);
-}
-
-.chat-stop {
+.chat-attachment-draft button:hover {
   background: var(--bad-tint);
-  border: 1px solid var(--bad-line);
   color: var(--bad-text);
 }
 
-.chat-composer button:disabled {
-  cursor: wait;
-  opacity: 0.6;
+.chat-attachment-draft button:active {
+  transform: scale(var(--press-sm));
 }
 
 .artifact-view[data-state='idle'] {
@@ -2758,16 +2936,23 @@ body[data-phase='error'] .status-pill {
   flex: 0 0 auto;
 }
 
-.terminal-theme-picker select {
-  appearance: none;
+/*
+ * The picker is compact chrome, so its trigger overrides the kit's default 36px field geometry.
+ * Everything else — the popup, the chevron rotation, the focus halo — comes from the kit.
+ */
+.terminal-theme-picker .select {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.terminal-theme-picker .select__trigger {
   background: var(--surface-3);
-  border: 0;
   border-radius: var(--r-xs);
   color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  height: 22px;
-  padding: 0 18px 0 6px;
+  font-size: var(--text-2xs);
+  gap: var(--s-1);
+  min-height: 22px;
+  padding: 0 4px 0 6px;
   white-space: nowrap;
 }
 
@@ -2919,153 +3104,6 @@ body[data-phase='error'] .status-pill {
   letter-spacing: var(--ls-body);
   line-height: 19px;
   margin-top: 5px;
-}
-
-/*
- * The composer is the primary way prompts are typed: a real textarea, so Ctrl+A, Shift+arrow
- * selection, drag-select, undo and IME composition are all native browser behaviour rather than
- * key handlers emulating an editor inside the terminal canvas.
- *
- * `align-items: stretch` is what lets the send button match the textarea's height as it grows,
- * instead of the button floating next to a caption. The keyboard hints that used to sit under the
- * button now live in the textarea's placeholder, where they disappear as soon as typing starts.
- */
-.terminal-composer {
-  align-items: stretch;
-  background: var(--surface-1);
-  border-top: 1px solid var(--line);
-  display: grid;
-  gap: var(--s-2);
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 10px 13px;
-}
-
-.terminal-composer textarea {
-  background: var(--surface-inset);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  letter-spacing: var(--ls-body);
-  line-height: 21px;
-  max-height: var(--composer-max);
-  min-height: 52px;
-  outline: none;
-  overflow-y: auto;
-  padding: 14px 13px;
-  resize: none;
-  transition:
-    border-color var(--dur-2) var(--ease-standard),
-    box-shadow var(--dur-2) var(--ease-standard);
-  width: 100%;
-}
-
-.terminal-composer textarea::placeholder {
-  color: var(--text-mute);
-  font-family: var(--font-ui);
-}
-
-.terminal-composer textarea:focus {
-  border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px var(--accent-tint);
-}
-
-.terminal-composer textarea:disabled {
-  color: var(--text-mute);
-  cursor: not-allowed;
-}
-
-#composer-send {
-  align-items: center;
-  align-self: stretch;
-  background: var(--accent-solid);
-  border: 1px solid transparent;
-  border-radius: var(--r-lg);
-  color: var(--accent-fg);
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
-  min-height: 52px;
-  transition:
-    background-color var(--dur-2) var(--ease-standard),
-    transform var(--dur-1) var(--ease-standard);
-  width: 56px;
-}
-
-#composer-send:hover:not(:disabled) {
-  background: var(--accent-solid-hover);
-}
-
-#composer-send:active:not(:disabled) {
-  transform: scale(var(--press-lg));
-}
-
-#composer-send:disabled {
-  background: var(--surface-4);
-  color: var(--text-mute);
-  cursor: not-allowed;
-}
-
-#composer-send svg {
-  height: 19px;
-  stroke-width: 2;
-  width: 19px;
-}
-
-/*
- * The send animation: a copy of the prompt lifts out of the composer and fades toward the
- * terminal, the way an iMessage bubble does. It is a throwaway node on `body`, positioned over the
- * textarea by the renderer, so it never participates in layout.
- */
-.composer-send-bubble {
-  background: var(--accent-solid);
-  border-radius: var(--r-lg);
-  color: var(--accent-fg);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  letter-spacing: var(--ls-body);
-  line-height: 21px;
-  overflow: hidden;
-  padding: 14px 13px;
-  pointer-events: none;
-  position: fixed;
-  text-overflow: ellipsis;
-  white-space: pre-wrap;
-  z-index: 60;
-  animation: composer-send-lift var(--dur-progress) var(--ease-accel) forwards;
-}
-
-@keyframes composer-send-lift {
-  0% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-
-  100% {
-    opacity: 0;
-    transform: translateY(-64px) scale(0.94);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .composer-send-bubble {
-    display: none;
-  }
-}
-
-#composer-send:hover:not(:disabled) {
-  background: var(--accent-solid-hover);
-}
-
-#composer-send:active:not(:disabled) {
-  transform: scale(var(--press-sm));
-}
-
-#composer-send:disabled {
-  background: var(--surface-4);
-  color: var(--text-mute);
-  cursor: not-allowed;
 }
 
 .terminal-footer {
@@ -4006,7 +4044,7 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
 }
 
 .field input,
-.field select {
+.field .select__trigger {
   background: var(--surface-1);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
@@ -4018,12 +4056,20 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   min-height: 36px;
   outline: none;
   padding: 0 10px;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
 }
 
-.field input:focus,
-.field select:focus {
+/* Text inputs get the same halo as the composers and the dropdown trigger, so focus reads alike. */
+.field input:focus {
   border-color: var(--accent-ring);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-text) 8%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.field input:hover:not(:focus):not(:disabled) {
+  border-color: var(--line-hover);
 }
 
 .field small {
@@ -5546,17 +5592,151 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   }
 }
 
-/* Button states */
+/*
+ * BUTTON STATES — the interaction-feedback floor.
+ *
+ * Every button answers a press, so no control can feel dead: the baseline is one `:active` scale on
+ * the element itself rather than a rule per family, which is what let roughly thirty buttons ship
+ * with a hover but no press. `--press-sm` is the small step, appropriate for the chrome-sized
+ * controls this catches; the large surfaces (composer send, provider cards) override it below with
+ * `--press-lg`, and the ripple adds a second layer on the primary actions.
+ *
+ * Transform is animated on the spring curve while colour stays on the standard curve — a press
+ * should feel like it has give, a tint change should not.
+ */
 button {
   transition:
     background-color var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard),
-    opacity var(--dur-1) var(--ease-standard);
+    opacity var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+button:active:not(:disabled) {
+  transform: scale(var(--press-sm));
+}
+
+/*
+ * Row-shaped and full-width controls are excluded: scaling a list row shifts its text against the
+ * neighbours it is aligned with, and these all already answer with a background change on
+ * `:hover`/`[data-active]`. The resizers are drag handles, where a scale would fight the drag.
+ */
+.conversation-item__select:active:not(:disabled),
+.history-item__select:active:not(:disabled),
+.chat-history__item:active:not(:disabled),
+.connection-history__item:active:not(:disabled),
+.footer-menu button:active:not(:disabled),
+.terminal-context-menu button:active:not(:disabled),
+.conversation-context-menu button:active:not(:disabled),
+.select__listbox button:active:not(:disabled),
+.provider-group__toggle:active:not(:disabled),
+.project-folder__disclosure:active:not(:disabled) {
+  transform: none;
 }
 
 button:disabled {
   opacity: 0.5;
+}
+
+/*
+ * The tint-button family: a dozen action clusters that shipped with a background and no hover at
+ * all. They share one base look (accent tint + accent line), so they share one response.
+ */
+.codex-readiness button,
+.codex-secondary-actions button,
+.codex-device-login button,
+.connection-remedy button,
+.connection-test > button,
+.curl-analysis__actions button,
+.environment-check-footer button,
+.gateway-candidate__actions button,
+.help-link-grid button,
+.install-source-row button,
+.provider-setup__links button,
+.router-actions button,
+.router-provider-card__actions button,
+.router-provider-form__actions button,
+.router-provider-heading button,
+.router-remediation button {
+  transition:
+    background-color var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+.codex-readiness button:hover:not(:disabled),
+.codex-secondary-actions button:hover:not(:disabled),
+.codex-device-login button:hover:not(:disabled),
+.connection-remedy button:hover:not(:disabled),
+.connection-test > button:hover:not(:disabled),
+.curl-analysis__actions button:hover:not(:disabled),
+.environment-check-footer button:hover:not(:disabled),
+.gateway-candidate__actions button:hover:not(:disabled),
+.help-link-grid button:hover:not(:disabled),
+.install-source-row button:hover:not(:disabled),
+.provider-setup__links button:hover:not(:disabled),
+.router-actions button:hover:not(:disabled),
+.router-provider-card__actions button:hover:not(:disabled),
+.router-provider-form__actions button:hover:not(:disabled),
+.router-provider-heading button:hover:not(:disabled),
+.router-remediation button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
+  border-color: var(--accent-ring);
+  color: var(--accent-text);
+}
+
+/* The neutral-surface family: dialog footers, artifact chrome, preflight cards. */
+.artifact-details__header button:hover:not(:disabled),
+.confirmation-dialog footer button:hover:not(:disabled),
+.connection-advanced-dialog footer button:hover:not(:disabled),
+.conversation-rename-dialog footer button:hover:not(:disabled),
+.network-preflight-card__actions button:hover:not(:disabled),
+.network-preflight-dialog button:hover:not(:disabled),
+.route-health > button:hover:not(:disabled) {
+  background: var(--layer-active);
+  border-color: var(--line-hover);
+  color: var(--text-hi);
+}
+
+/* Destructive chrome answers in the bad hue, so the tone is legible before the click. */
+.artifact-active-list__item button:hover:not(:disabled),
+.artifact-view__toolbar button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad-tint) 60%, var(--bad-solid) 14%);
+  border-color: var(--bad-solid);
+  color: var(--bad-text);
+}
+
+/* The primary actions keep their halo but take the deeper press, matching the composer send. */
+.button--primary:active:not(:disabled),
+.dialog-primary:active:not(:disabled),
+.launch-primary:active:not(:disabled),
+.launch-secondary:active:not(:disabled) {
+  transform: scale(var(--press-lg));
+}
+
+.dialog-primary,
+.launch-primary,
+.launch-secondary {
+  transition:
+    background-color var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+.dialog-primary:hover:not(:disabled),
+.launch-primary:hover:not(:disabled),
+.button--primary:hover:not(:disabled) {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.launch-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
+  border-color: var(--accent-ring);
 }
 
 /* Gateway candidates staggered entrance */
@@ -6944,7 +7124,7 @@ body.is-resizing * {
 }
 
 .field input,
-.field select,
+.field .select,
 .field textarea {
   max-width: 100%;
   min-width: 0;
@@ -7251,7 +7431,7 @@ body.is-resizing * {
   line-height: var(--lh-tight);
 }
 
-.settings-row select {
+.settings-row .select__trigger {
   background: var(--surface-inset);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
@@ -7512,7 +7692,7 @@ body.is-resizing * {
     display: grid;
   }
 
-  .settings-row select {
+  .settings-row .select {
     width: 100%;
   }
 }
@@ -7565,6 +7745,317 @@ body.is-resizing * {
 
   .tray-note {
     padding-top: 8px;
+  }
+}
+
+/* ==========================================================================================
+ * THE STANDARD COMPONENT KIT
+ *
+ * One set of rules for the controls that used to be native. Everything here is expressed purely in
+ * theme tokens — face, radius, easing, duration, press depth — so all four themes get a consistent
+ * kit without a single per-theme override. Telegram's long springy curves and Claude's softer
+ * decelerate both fall out of the same declarations.
+ * ========================================================================================== */
+
+/*
+ * SELECT. The native element stays in the DOM as the value and event source of truth, but it is
+ * collapsed to the shell's own box so it can still take focus and be reached by assistive tech; the
+ * visible trigger and popup are ours. `opacity: 0` rather than `display: none` is what keeps it
+ * focusable.
+ */
+.select {
+  display: block;
+  position: relative;
+}
+
+.select-native {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  padding: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.select-native:disabled {
+  cursor: not-allowed;
+}
+
+.select__trigger {
+  align-items: center;
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--text-sm);
+  gap: var(--s-2);
+  justify-content: space-between;
+  letter-spacing: var(--ls-body);
+  line-height: 19px;
+  min-height: 36px;
+  padding: 0 10px;
+  text-align: left;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+  width: 100%;
+}
+
+.select__trigger:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+}
+
+/*
+ * The focus ring is driven by the hidden native element, because that is what actually holds focus.
+ * This is the same halo the composers use, so a focused dropdown and a focused input read as one
+ * family — the inconsistency called out between the project and chat inputs.
+ */
+.select-native:focus-visible + .select__trigger,
+.select[data-open='true'] .select__trigger {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.select__trigger:disabled,
+.select[data-disabled='true'] .select__trigger {
+  background: var(--surface-2);
+  color: var(--text-mute);
+  cursor: not-allowed;
+}
+
+.select__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select__label[data-placeholder='true'] {
+  color: var(--text-mute);
+}
+
+.select__chevron {
+  align-items: center;
+  color: var(--text-dim);
+  display: flex;
+  flex: 0 0 auto;
+  /* The rotation is the affordance: it confirms the popup opened even before it is read. */
+  transition:
+    transform var(--dur-3) var(--ease-decel),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.select__chevron svg {
+  height: 15px;
+  stroke-width: 2;
+  width: 15px;
+}
+
+.select[data-open='true'] .select__chevron {
+  color: var(--accent-text);
+  transform: rotate(180deg);
+}
+
+.select__listbox {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-overlay);
+  display: grid;
+  gap: 1px;
+  max-width: 420px;
+  overflow-y: auto;
+  padding: 5px;
+  position: fixed;
+  z-index: 70;
+}
+
+/* The popup grows out of the edge nearest its trigger, so the motion points back at its source. */
+.select__listbox[data-open='true'] {
+  animation: selectListboxIn var(--dur-4) var(--ease-decel);
+  transform-origin: top center;
+}
+
+.select__listbox[data-open='true'][data-placement='above'] {
+  transform-origin: bottom center;
+}
+
+@keyframes selectListboxIn {
+  from {
+    opacity: 0;
+    transform: scaleY(0.94) translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleY(1) translateY(0);
+  }
+}
+
+.select__listbox button {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  letter-spacing: var(--ls-body);
+  line-height: 19px;
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  text-align: left;
+  transition:
+    background-color var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+
+/* Pointer hover and keyboard arrows land on the same highlight, so the two never disagree. */
+.select__listbox button:hover:not(:disabled),
+.select__listbox button[data-active='true'] {
+  background: var(--layer-hover);
+  color: var(--text-hi);
+}
+
+.select__listbox button[data-selected='true'] {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  font-weight: var(--fw-semi);
+}
+
+.select__listbox button:disabled {
+  color: var(--text-mute);
+  cursor: not-allowed;
+}
+
+/*
+ * CHECKBOX AND RADIO. These need no JS: `appearance: none` hands us the box, and the glyph is drawn
+ * with a pseudo-element that scales in on the theme's own spring curve.
+ */
+input[type='checkbox'],
+input[type='radio'] {
+  appearance: none;
+  background: var(--surface-1);
+  border: 1.5px solid var(--line-hover);
+  cursor: pointer;
+  display: inline-grid;
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0;
+  place-content: center;
+  position: relative;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+  width: 16px;
+}
+
+input[type='checkbox'] {
+  border-radius: max(3px, calc(var(--r-theme-sm) * 0.4));
+}
+
+input[type='radio'] {
+  border-radius: var(--r-pill);
+}
+
+input[type='checkbox']::before,
+input[type='radio']::before {
+  content: '';
+  transform: scale(0);
+  transition: transform var(--dur-3) var(--ease-decel);
+}
+
+/* The tick is a rotated corner rather than a glyph, so it stays crisp at every theme's radius. */
+input[type='checkbox']::before {
+  border-bottom: 2px solid var(--accent-fg);
+  border-right: 2px solid var(--accent-fg);
+  height: 9px;
+  margin-top: -2px;
+  rotate: 40deg;
+  width: 5px;
+}
+
+input[type='radio']::before {
+  background: var(--accent-fg);
+  border-radius: var(--r-pill);
+  height: 6px;
+  width: 6px;
+}
+
+input[type='checkbox']:hover:not(:disabled),
+input[type='radio']:hover:not(:disabled) {
+  border-color: var(--accent-ring);
+}
+
+input[type='checkbox']:checked,
+input[type='radio']:checked {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+}
+
+input[type='checkbox']:checked::before,
+input[type='radio']:checked::before {
+  transform: scale(1);
+}
+
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+  outline: none;
+}
+
+input[type='checkbox']:disabled,
+input[type='radio']:disabled {
+  background: var(--surface-2);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+input[type='checkbox']:disabled:checked,
+input[type='radio']:disabled:checked {
+  background: var(--text-mute);
+  border-color: var(--text-mute);
+}
+
+/*
+ * PRESS RIPPLE, for targets large enough that a scale alone reads as a no-op. The wave is sized and
+ * positioned from the pointer by the renderer.
+ *
+ * The standard primary-action classes opt in by name so buttons built at runtime get the feedback
+ * without every call site remembering to ask for it; `data-ripple` stays available for one-offs. This
+ * list is mirrored by RIPPLE_SELECTOR in components.ts — keep the two in step.
+ */
+#composer-send,
+.button--primary,
+.chat-send,
+.dialog-primary,
+.launch-primary,
+[data-ripple] {
+  overflow: hidden;
+  position: relative;
+}
+
+.ripple {
+  animation: rippleOut calc(var(--dur-enter) * 2) var(--ease-accel) forwards;
+  background: currentColor;
+  border-radius: var(--r-pill);
+  opacity: 0.22;
+  pointer-events: none;
+  position: absolute;
+  transform: scale(0);
+}
+
+@keyframes rippleOut {
+  to {
+    opacity: 0;
+    transform: scale(1);
   }
 }
 

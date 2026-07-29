@@ -215,7 +215,19 @@ const LIGHT_CHROME = {
 export const DEFAULT_TERMINAL_THEME: TerminalThemeId = 'claude';
 
 const MONO_FONT = "'Cascadia Mono', 'Cascadia Code', Consolas, 'Microsoft YaHei UI', monospace";
-const SEGOE_FONT = "'Segoe UI Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif";
+const CJK_FALLBACK = "'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif";
+
+/**
+ * Per-theme faces. Anthropic's own Styrene/Tiempos pairing is licensed and undistributable, so
+ * Claude uses the closest free equivalents: Hanken Grotesk for the geometric sans and Newsreader
+ * for the editorial serif. Telegram uses Roboto because that is what Telegram Desktop itself
+ * renders in. The two dark themes stay on Inter — a neutral face suits tooling chrome — but take
+ * different display faces from each other so they stop looking like one theme in two colours.
+ */
+const CLAUDE_UI_FONT = `'Hanken Grotesk Variable', ${CJK_FALLBACK}`;
+const CLAUDE_DISPLAY_FONT = `'Newsreader Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif`;
+const TELEGRAM_FONT = `'Roboto Variable', ${CJK_FALLBACK}`;
+const INTER_FONT = `'Inter Variable', ${CJK_FALLBACK}`;
 
 export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> = {
   claude: {
@@ -260,9 +272,9 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       easeEnter: 'cubic-bezier(0.05, 0.7, 0.1, 1)',
       easeExit: 'cubic-bezier(0.3, 0, 0.8, 0.15)',
       easeSpring: 'cubic-bezier(0.16, 1, 0.3, 1)',
-      fontDisplay: "'Source Serif 4 Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif",
+      fontDisplay: CLAUDE_DISPLAY_FONT,
       fontMono: MONO_FONT,
-      fontUi: "'Inter Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+      fontUi: CLAUDE_UI_FONT,
       fontWeightStrong: '600',
       letterSpacingTitle: '-0.012em',
       lineHeightBody: '1.7',
@@ -324,18 +336,19 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#7cd4f0',
       accentTint: 'rgb(46 168 216 / 10%)',
       ...DARK_CHROME,
-      durEnter: '200ms',
-      durExit: '160ms',
-      durMicro: '100ms',
-      easeEnter: 'cubic-bezier(0.2, 0, 0, 1)',
-      easeExit: 'cubic-bezier(0.3, 0, 0.8, 0.15)',
-      easeSpring: 'cubic-bezier(0.2, 0, 0, 1)',
-      fontDisplay: SEGOE_FONT,
+      durEnter: '190ms',
+      durExit: '150ms',
+      durMicro: '95ms',
+      /* Graphite reads as tooling: short, near-linear settles with no overshoot at all. */
+      easeEnter: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+      easeExit: 'cubic-bezier(0.55, 0.06, 0.68, 0.19)',
+      easeSpring: 'cubic-bezier(0.3, 0.8, 0.4, 1)',
+      fontDisplay: INTER_FONT,
       fontMono: MONO_FONT,
-      fontUi: SEGOE_FONT,
-      fontWeightStrong: '600',
-      letterSpacingTitle: '-0.003em',
-      lineHeightBody: '1.55',
+      fontUi: INTER_FONT,
+      fontWeightStrong: '650',
+      letterSpacingTitle: '-0.008em',
+      lineHeightBody: '1.5',
       maskBlur: '6px',
       maskVeil: 'rgb(5 7 10 / 62%)',
       pressScale: '0.985',
@@ -394,18 +407,19 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#7ed8e2',
       accentTint: 'rgb(56 176 196 / 12%)',
       ...DARK_CHROME,
-      durEnter: '200ms',
-      durExit: '160ms',
-      durMicro: '100ms',
-      easeEnter: 'cubic-bezier(0.2, 0, 0, 1)',
-      easeExit: 'cubic-bezier(0.3, 0, 0.8, 0.15)',
-      easeSpring: 'cubic-bezier(0.2, 0, 0, 1)',
-      fontDisplay: SEGOE_FONT,
+      durEnter: '250ms',
+      durExit: '175ms',
+      durMicro: '115ms',
+      /* Midnight is the calm dark theme: longer, softly-decelerating settles, a hint of give. */
+      easeEnter: 'cubic-bezier(0.16, 0.84, 0.24, 1)',
+      easeExit: 'cubic-bezier(0.4, 0.05, 0.72, 0.15)',
+      easeSpring: 'cubic-bezier(0.18, 0.96, 0.28, 1.02)',
+      fontDisplay: INTER_FONT,
       fontMono: MONO_FONT,
-      fontUi: SEGOE_FONT,
+      fontUi: INTER_FONT,
       fontWeightStrong: '600',
-      letterSpacingTitle: '-0.003em',
-      lineHeightBody: '1.55',
+      letterSpacingTitle: '-0.004em',
+      lineHeightBody: '1.62',
       maskBlur: '6px',
       maskVeil: 'rgb(7 17 28 / 62%)',
       pressScale: '0.985',
@@ -470,9 +484,9 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       easeEnter: 'cubic-bezier(0.075, 0.82, 0.165, 1)',
       easeExit: 'cubic-bezier(0.4, 0, 1, 1)',
       easeSpring: 'cubic-bezier(0.23, 1, 0.32, 1)',
-      fontDisplay: "'Open Sans Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+      fontDisplay: TELEGRAM_FONT,
       fontMono: MONO_FONT,
-      fontUi: "'Open Sans Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif",
+      fontUi: TELEGRAM_FONT,
       fontWeightStrong: '600',
       letterSpacingTitle: '-0.006em',
       lineHeightBody: '1.45',

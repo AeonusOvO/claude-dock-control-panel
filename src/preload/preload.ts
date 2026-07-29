@@ -244,6 +244,18 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeRouterOperationResult>,
   launchClaude: (sessionId, mode) =>
     ipcRenderer.invoke('claude:launch', sessionId, mode) as Promise<ClaudeOperationResult>,
+  confirmQuit: (confirmed) => {
+    ipcRenderer.send('app:confirm-quit', confirmed);
+  },
+  onAppQuitRequested: (listener) => {
+    const callback = (): void => {
+      listener();
+    };
+    ipcRenderer.on('app:quit-requested', callback);
+    return () => {
+      ipcRenderer.removeListener('app:quit-requested', callback);
+    };
+  },
   onAppWindowRestored: (listener) => {
     const callback = (): void => {
       listener();

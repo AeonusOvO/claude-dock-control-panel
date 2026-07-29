@@ -96,6 +96,13 @@ app.enableSandbox();
 registerArtifactScheme();
 
 let isQuitting = false;
+/*
+ * Quitting is a two-step handshake when work is in flight. `before-quit` cannot wait on a promise, so
+ * instead of blocking there we cancel the quit, ask the renderer to raise its own themed
+ * confirmation, and quit for real only when it answers yes. `quitConfirmationPending` keeps a second
+ * quit attempt (tray menu clicked twice, Alt+F4 while the dialog is up) from stacking dialogs.
+ */
+let quitConfirmationPending = false;
 let claudeRuntime: ClaudeRuntime | null = null;
 let codexRuntime: CodexRuntime | null = null;
 let networkPreflightService: NetworkPreflightService | null = null;
@@ -351,6 +358,39 @@ const showMainWindow = (): void => {
   }
 };
 
+/**
+ * Starts a quit. The renderer knows whether a conversation is streaming, so it owns the decision: it
+ * either confirms with the user and calls back through `app:confirm-quit`, or answers immediately when
+ * nothing is in flight. If there is nobody able to answer — no window, still loading, or a crashed
+ * renderer — we quit outright rather than trapping the user in a process they cannot close.
+ */
+const requestQuit = (): void => {
+  if (isQuitting) {
+    return;
+  }
+  const window = mainWindow;
+  const canAsk =
+    window !== null &&
+    !window.isDestroyed() &&
+    !window.webContents.isLoading() &&
+    !window.webContents.isCrashed();
+  /*
+   * A second quit attempt while the question is still outstanding forces the issue. No timer is used
+   * here on purpose: the pending state normally means a modal is up waiting for the user, and a
+   * timeout would quit out from under someone who is still reading it. Asking again is the escape
+   * hatch for a renderer that is wedged rather than waiting.
+   */
+  if (!canAsk || quitConfirmationPending) {
+    quitConfirmationPending = false;
+    isQuitting = true;
+    app.quit();
+    return;
+  }
+  quitConfirmationPending = true;
+  showMainWindow();
+  window.webContents.send('app:quit-requested');
+};
+
 const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
   const defaultPath = directoryDialogDefaultPath(
     workspace.getActiveStatus()?.cwd ?? homedir(),
@@ -546,10 +586,7 @@ function updateTray(state = describeWorkspace()): void {
       },
       { type: 'separator' },
       {
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
+        click: requestQuit,
         label: '退出 ClaudeDock',
       },
     ]),
@@ -2225,6 +2262,15 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.on('app:confirm-quit', (event, confirmed: unknown) => {
+    validateSender(event);
+    quitConfirmationPending = false;
+    if (confirmed !== true) {
+      return;
+    }
+    isQuitting = true;
+    app.quit();
+  });
   ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
     validateSender(event);
     if (typeof data !== 'string' || data.length > 65_536) {
@@ -2457,6 +2503,15 @@ const createWindow = async (): Promise<void> => {
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  /*
+   * The OS is logging out or shutting down. Windows gives an app very little time here and kills it
+   * regardless, so this is the one quit that must not be questioned: latch the flag so the following
+   * `before-quit` runs its teardown straight through instead of asking.
+   */
+  mainWindow.on('session-end', () => {
+    isQuitting = true;
+    quitConfirmationPending = false;
+  });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== mainWindow?.webContents.getURL()) {
       event.preventDefault();
@@ -2496,6 +2551,8 @@ const createWindow = async (): Promise<void> => {
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
+  // A duplicate launch has nothing to protect and no window to ask through: leave immediately.
+  isQuitting = true;
   app.quit();
 } else {
   app.on('second-instance', showMainWindow);
@@ -2569,8 +2626,17 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on('activate', showMainWindow);
-app.on('before-quit', () => {
-  isQuitting = true;
+app.on('before-quit', (event) => {
+  /*
+   * Anything that can reach here without going through `requestQuit` — Alt+F4 on a visible window,
+   * `Cmd/Ctrl+Q`, an installer restart — is bounced back through the same confirmation. `isQuitting`
+   * is the one-way latch that lets the real quit through on the second pass.
+   */
+  if (!isQuitting) {
+    event.preventDefault();
+    requestQuit();
+    return;
+  }
   for (const buffer of outputBuffers.values()) {
     if (buffer.timer) {
       clearTimeout(buffer.timer);

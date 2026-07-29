@@ -3,9 +3,16 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+/*
+ * Every theme's UI and display face ships self-hosted, because a theme switch is meant to change
+ * typography as visibly as it changes colour. Claude pairs Hanken Grotesk with the Newsreader
+ * serif (the closest free stand-ins for Anthropic's Styrene/Tiempos); Telegram uses Roboto, the
+ * face its own desktop client uses; the dark themes keep Inter so they read as tooling.
+ */
+import '@fontsource-variable/hanken-grotesk';
+import '@fontsource-variable/newsreader';
+import '@fontsource-variable/roboto';
 import '@fontsource-variable/inter';
-import '@fontsource-variable/open-sans';
-import '@fontsource-variable/source-serif-4';
 import 'katex/dist/katex.css';
 import katex from 'katex';
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
@@ -96,12 +103,28 @@ import {
 import { deriveUpdateActionState } from '../shared/update-actions';
 import { ArtifactController } from './artifact';
 import {
+  closeOpenSelect,
+  enhanceAllSelects,
+  installPressRipples,
+  installSelectDismissHandlers,
+} from './components';
+import {
   createKatexMathRenderer,
   createMarkdownRenderer,
   type MarkdownDomRenderer,
   type MarkdownStreamRenderer,
 } from './markdown';
 import './styles.css';
+
+/*
+ * The component kit is installed at module scope, before anything touches `window.controlPanel`, so
+ * a native `<select>` is never painted by the OS — not even for the frame the bridge takes to come
+ * up, and not if some later initialisation throws. Options populated afterwards are picked up by the
+ * per-select MutationObserver.
+ */
+enhanceAllSelects();
+installSelectDismissHandlers();
+installPressRipples();
 
 interface TerminalView {
   /** Latest PTY-output revision fully applied to xterm's screen buffer. */
@@ -452,6 +475,22 @@ const chatAttachButton = requiredElement<HTMLButtonElement>('#chat-attach');
 const sendChatButton = requiredElement<HTMLButtonElement>('#send-chat');
 const stopChatButton = requiredElement<HTMLButtonElement>('#stop-chat');
 const newChatButton = requiredElement<HTMLButtonElement>('#new-chat');
+
+/**
+ * Grows the chat textarea with its content up to `--composer-max`, mirroring `resizeComposer` for
+ * the terminal. Chat used to rely on a native `resize: vertical` handle, which meant the send button
+ * and the input drifted out of alignment the moment the draft wrapped.
+ */
+const resizeChatComposer = (): void => {
+  chatInput.style.height = 'auto';
+  const maxHeight = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--composer-max'),
+  );
+  const height = Number.isFinite(maxHeight)
+    ? Math.min(chatInput.scrollHeight, maxHeight)
+    : chatInput.scrollHeight;
+  chatInput.style.height = `${height}px`;
+};
 const artifactDetailsButton = requiredElement<HTMLButtonElement>('#chat-artifact-details');
 const artifactDetailsClose = requiredElement<HTMLButtonElement>('#artifact-details-close');
 const artifactDetailsPanel = requiredElement<HTMLElement>('#artifact-details-panel');
@@ -794,6 +833,7 @@ const renderArtifactNetworkLog = (): void => {
 };
 
 const setArtifactDetailsOpen = (open: boolean): void => {
+  closeOpenSelect();
   artifactDetailsButton.setAttribute('aria-expanded', String(open));
   artifactDetailsPanel.setAttribute('aria-hidden', String(!open));
   artifactDetailsPanel.dataset.open = String(open);
@@ -1545,6 +1585,7 @@ function resetChatConversation(): void {
   chatMessagesElement.replaceChildren(chatEmptyState);
   chatEmptyState.hidden = false;
   chatInput.value = '';
+  resizeChatComposer();
   const discardedDraftId = activeChatAttachmentDraftId;
   activeChatAttachmentDraftId = undefined;
   pendingChatAttachments.splice(0);
@@ -2110,6 +2151,11 @@ const submitChatMessage = async (): Promise<void> => {
     previousMessages = [...chatMessages];
     previousUsage = { ...activeChatUsage };
     previousProviderUsage = activeChatProviderUsage ? { ...activeChatProviderUsage } : undefined;
+    // The draft is committed here, so this is where the bubble should lift — same confirmation the
+    // terminal composer gives. Clearing the textarea now keeps the lift and the empty input in sync.
+    playSendAnimation(content, chatInput, 'chat');
+    chatInput.value = '';
+    resizeChatComposer();
     chatMessages.splice(0, chatMessages.length, ...prepared.messages);
     activeChatRequestMessages = [...prepared.messages];
     activeChatUsage = estimateChatUsage(activeChatRequestMessages);
@@ -2148,7 +2194,6 @@ const submitChatMessage = async (): Promise<void> => {
     }
     activeChatAttachmentDraftId = undefined;
     pendingChatAttachments.splice(0);
-    chatInput.value = '';
     renderPendingChatAttachments();
     await persistActiveChat();
   } catch (error) {
@@ -4342,6 +4387,9 @@ const rerunAutomaticConnectionTestForActiveProject = (): void => {
 };
 
 const setWorkbenchOpen = (open: boolean): void => {
+  // The listbox is a fixed-position popup on `body`, so closing the panel underneath it has to
+  // dismiss it explicitly or it would hang over the terminal.
+  closeOpenSelect();
   claudeWorkbench.classList.toggle('claude-workbench--open', open);
   claudeWorkbench.setAttribute('aria-hidden', String(!open));
   workbenchScrim.classList.toggle('workbench-scrim--visible', open);
@@ -5902,18 +5950,24 @@ const requestComposerFocus = (sessionId = workspaceState.activeSessionId): void 
 
 /**
  * The iMessage-style send: a bubble holding what was typed lifts out of the composer and fades into
- * the terminal. It is a throwaway element positioned over the textarea, so it never affects layout,
- * and it is skipped entirely when the user has asked for reduced motion.
+ * the transcript. It is a throwaway element positioned over the textarea, so it never affects
+ * layout, and it is skipped entirely when the user has asked for reduced motion. Both the terminal
+ * and chat composers call this, so the two surfaces confirm a send the same way.
  */
-const playSendAnimation = (text: string): void => {
+const playSendAnimation = (
+  text: string,
+  source: HTMLTextAreaElement = composerInput,
+  variant: 'terminal' | 'chat' = 'terminal',
+): void => {
   const trimmed = text.trim();
   if (!trimmed || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     return;
   }
 
-  const rect = composerInput.getBoundingClientRect();
+  const rect = source.getBoundingClientRect();
   const bubble = document.createElement('div');
-  bubble.className = 'composer-send-bubble';
+  bubble.className =
+    variant === 'chat' ? 'composer-send-bubble composer-send-bubble--chat' : 'composer-send-bubble';
   // A very long prompt would make an unreadable bubble; the first lines carry the meaning.
   bubble.textContent = trimmed.length > 220 ? `${trimmed.slice(0, 220)}…` : trimmed;
   bubble.style.left = `${rect.left}px`;
@@ -7387,6 +7441,40 @@ window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
 const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
   rerunAutomaticConnectionTestForActiveProject();
 });
+/*
+ * The main process has cancelled its own quit and handed the decision here, because only the renderer
+ * knows whether a reply is still streaming. A running terminal deliberately does not count: those keep
+ * running in the tray by design, and the tray balloon already says so, so warning about them would
+ * turn every quit into a prompt. What is worth protecting is work that dies with the process — a
+ * streaming reply, a submission in flight, or attachments still being read.
+ *
+ * Every path must answer, including the cancelling one, or the app becomes impossible to close.
+ */
+const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested(() => {
+  const streaming = Boolean(activeChatRequestId);
+  const preparing = chatSubmissionInFlight || queuedChatAttachmentImports > 0;
+  if (!streaming && !preparing) {
+    window.controlPanel.confirmQuit(true);
+    return;
+  }
+
+  if (confirmationDialog.open) {
+    // Another confirmation owns the modal; treat the quit as declined rather than dropping it.
+    window.controlPanel.confirmQuit(false);
+    return;
+  }
+
+  void requestConfirmation({
+    confirmLabel: '退出',
+    message: streaming
+      ? '当前对话正在生成回复，退出会中断这次回复且无法恢复。确认要退出 ClaudeDock 吗？'
+      : '当前对话正在准备发送，退出会丢弃这次发送。确认要退出 ClaudeDock 吗？',
+    title: '对话正在进行中',
+    tone: 'danger',
+  }).then((confirmed) => {
+    window.controlPanel.confirmQuit(confirmed);
+  });
+});
 window.controlPanel.onClaudeState(renderClaudeState);
 window.controlPanel.onCodexState((state) => {
   renderCodexState(state);
@@ -7652,7 +7740,10 @@ chatInput.addEventListener('keydown', (event) => {
     void submitChatMessage();
   }
 });
-chatInput.addEventListener('input', renderChatUsage);
+chatInput.addEventListener('input', () => {
+  renderChatUsage();
+  resizeChatComposer();
+});
 chatInput.addEventListener('paste', (event) => {
   const clipboard = event.clipboardData;
   if (!clipboard) {
@@ -8420,6 +8511,7 @@ const resizeObserver = new ResizeObserver(([entry]) => {
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
+  unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);

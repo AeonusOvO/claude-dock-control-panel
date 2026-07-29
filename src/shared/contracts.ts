@@ -905,6 +905,13 @@ export interface ControlPanelApi {
   uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
   openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
+  /**
+   * The main process asks before it quits, so a streaming conversation or a busy terminal can be
+   * protected by a themed dialog instead of dying silently. The renderer must answer every request
+   * through `confirmQuit`, including the cancelling answer — the quit stays blocked until it does.
+   */
+  onAppQuitRequested: (listener: () => void) => Unsubscribe;
+  confirmQuit: (confirmed: boolean) => void;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
   onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;

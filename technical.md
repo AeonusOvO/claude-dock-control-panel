@@ -8,8 +8,8 @@
   原生模块。
 - xterm.js 6 + `@xterm/addon-unicode11` + `@xterm/addon-webgl`：终端渲染、键盘输入与中文
   宽字符计算；WebGL 渲染器负责大量输出时的绘制性能，丢失上下文时回退 DOM 渲染器。
-- `@fontsource-variable/inter`、`open-sans`、`source-serif-4`：把四套主题需要的正文与标题
-  字体随应用离线打包。
+- `@fontsource-variable/hanken-grotesk`、`newsreader`、`roboto`、`inter`：把四套主题需要的
+  正文与标题字体随应用离线打包，全部为可变字重、无外部请求。
 - `marked`（只使用 lexer token）、Shiki core + 精细语言包、KaTeX：安全 Markdown DOM、
   主题化代码高亮与公式；Shiki 的 Oniguruma WASM 和九种语法按 chunk 延迟加载。
 - d3、Plotly、Mermaid、KaTeX：由 `claudedock-artifact://libs/` 作为 Artifact 离线资源提供，
@@ -101,9 +101,44 @@ alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`
 
 `letterSpacing: 0` 是 TUI 边框对齐的必需值。状态三色（`--ok-*` / `--warn-*` / `--bad-*`）
 的语义跨主题保持一致，但浅底需要更深的文字与描边，所以实际令牌随 `appearance` 调整并逐主题
-做 WCAG 对比度测试。Claude 的 `fontUi/fontDisplay` 分别是本地 Inter / Source Serif 4，
-Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。Shiki 输出的字面色只
+做 WCAG 对比度测试。字体也是主题人格的一部分而不是全局常量：Claude 的 `fontUi/fontDisplay`
+分别是 Hanken Grotesk Variable / Newsreader Variable（Anthropic 品牌使用的 Styrene 与
+Tiempos 需商业授权、不能随应用分发，这两款是最接近的可自由分发替代）；Telegram 两者都是
+Roboto Variable，与其桌面客户端一致；两套深色主题使用 Inter Variable。四套字体栈都以
+`'Microsoft YaHei UI'` 起头的 CJK 回退结尾，因为拉丁字体不含中文字形。Shiki 输出的字面色只
 用于判别色相类别，最终写成 `--syntax-*` CSS 变量，因此已经渲染的代码也能即时换主题。
+
+动效同样逐主题定义而不是复制：`--dur-micro`/`--dur-enter`/`--ease-enter`/`--ease-spring`/
+`--ease-exit`/`--press-theme` 是主题字面量，`styles.css` 的 `:root` 再从它们派生 `--dur-1..4`、
+`--ease-standard`/`--ease-decel`/`--ease-accel` 和 `--press-lg`/`--press-sm` 阶梯。因此
+Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests/design-tokens.test.ts` 禁止
+`:root` 之外出现字面 `ms` 或 `cubic-bezier(`，防止任何组件绕过主题写死时长。
+
+#### 标准组件套件
+
+原生表单控件由操作系统绘制而不是我们绘制：一个 `<select>` 会在 Windows 上弹出 Segoe UI 白底
+的 Win32 列表框，它读不到任何主题令牌。`src/renderer/components.ts` 因此替换这些控件的**呈现**，
+但保留原生元素作为取值、校验与 `change` 事件的唯一事实来源：
+
+- `enhanceSelect()` 把原生 `<select>` 视觉隐藏（仍可被辅助技术聚焦）留在 DOM 内，并在旁边渲染
+  一个由主题令牌绘制的 trigger + `position: fixed` listbox。选择行为写回原生元素并派发真实的
+  `change`/`input`，所以十余处既有的 `select.value` 读写和 `change` 监听全部不需要改动——这正是
+  不做成完整自绘控件的原因，纯视觉目标不值得让整个应用面临回归风险。键盘处理挂在原生
+  select 上（它才是真正持有焦点的元素）；`MutationObserver` 覆盖「代码直接赋 `value` 或重建
+  `<option>`」这种不触发事件的路径。listbox 挂在 `body` 上以逃出滚动容器与弹窗，滚动/缩放时
+  重新定位，trigger 消失时自动关闭。
+- 复选框与单选框不需要 JS：`appearance: none` 加令牌驱动的 CSS 就够，完全在样式表内实现。
+- `installPressRipples()` 为主要操作按钮提供从指针位置扩散的涟漪。目标由类名而不是逐个
+  `data-ripple` 标记决定（`RIPPLE_SELECTOR` 与 `styles.css` 中对应规则互为镜像），因为相当多
+  按钮是运行时创建的，逐处标注必然遗漏；`data-ripple` 保留给词汇表之外的一次性控件。
+  `prefers-reduced-motion` 下直接不生成涟漪节点。
+
+交互反馈有一条地板规则：`button:active:not(:disabled)` 全局给出 `--press-sm` 缩放。此前约三十个
+按钮只有 hover 甚至毫无状态，逐族补规则必然继续遗漏，所以基线放在元素本身。行状按钮（会话/
+历史列表项、上下文菜单、listbox 行）与拖拽把手显式豁免：缩放会让行内文字相对相邻行错位，
+而它们本就用背景色回应。全局 `transform` 需要确认不会影响 `position: fixed` 后代的包含块——
+所有弹层（`.footer-menu`、两个上下文菜单、`.select__listbox`、`.toast`、`.drop-overlay`、
+`.composer-send-bubble`）都是 `body` 的兄弟节点而不是按钮的子节点，因此安全。
 
 #### 终端输出与输入的性能路径
 
@@ -185,6 +220,28 @@ Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。S
   version 保持 1。
 - 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
 
+### 退出确认握手
+
+`before-quit` 是同步事件，等不了 promise，而确认框必须是渲染进程画的主题化弹窗（不能用原生
+`dialog.showMessageBox`，那又会引入一个不随主题变化的系统控件）。因此退出是一次两步握手：
+
+1. 任何退出入口（托盘菜单、Alt+F4、`Cmd/Ctrl+Q`、安装器重启）最终都到 `before-quit`。若
+   `isQuitting` 这个单向闩未置位，就 `preventDefault()` 并转交 `requestQuit()`。
+2. `requestQuit()` 显示窗口并发 `app:quit-requested`；渲染进程判断是否值得拦截，然后必须
+   通过 `app:confirm-quit` 回答——包括否定回答，否则应用将永远关不掉。
+3. 主进程只在收到 `true` 时置 `isQuitting = true` 并 `app.quit()`，第二趟才执行真正的清理。
+
+逃生口都是必需的，缺一个要么丢失回复、要么留下关不掉的进程：窗口不存在/正在加载/已崩溃时
+（`canAsk` 为假）直接退出，因为没人能回答；`quitConfirmationPending` 期间再次请求退出即强制
+通过，这是渲染进程卡死时的出路。这里**故意不设超时**——pending 通常意味着弹窗正等着用户读，
+定时器会在用户面前把应用关掉。`session-end`（Windows 关机/注销，是 `BaseWindow` 事件而非
+`app` 事件）直接置闩：系统无论如何都会杀进程，弹窗只是推迟丢失同样的工作。单实例锁失败的
+重复启动没有窗口也没有要保护的东西，立即退出。
+
+渲染进程只对随进程一起消失的工作发问：正在流式生成的回复、发送中的提交、仍在读取的附件。
+运行中的终端刻意不算——它们按设计继续在托盘后台运行（托盘气泡也是这么说的），为它们发问会
+让每次退出都变成一次询问。确认框已被其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
+
 ### 全局设置 IPC
 
 - `app:get-settings` 从真实运行时读取 `app.getVersion()`、Windows 登录项状态和
@@ -263,10 +320,12 @@ Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。S
 - 活动栏点击路径在 `toggleRailTab('chat')` 完成主视图和侧栏布局后，通过
   `requestAnimationFrame` 聚焦 `#chat-input`。聚焦前重新核对主视图、`hidden`、输入框禁用、
   composer `inert`、设置模态窗和 Artifact 详情抽屉，避免导航抢走更高层界面的焦点。
-- 独立对话输入框显式关闭浏览器默认 outline；`:focus` 的描边、背景和一次收敛式
-  `chatComposerFocusIn` 微光只引用 `--accent-ring`、`--accent-solid`、`--accent-tint` 以及
-  主题时长/缓动令牌。因此四套主题在焦点持续期间和主题切换后都使用自身强调色，全局
-  `prefers-reduced-motion` 规则仍会把动画压缩到 `0.01ms`。
+- 独立对话与项目终端共用同一套 composer 契约：`.terminal-composer textarea:focus` 与
+  `.chat-composer textarea:focus` 是同一条规则，发送按钮与输入框底边齐平并随其高度伸缩，
+  聚焦时的一次收敛式 `composerFocusIn` 微光只引用 `--accent-ring`、`--accent-solid`、
+  `--accent-tint` 以及主题时长/缓动令牌。两者曾各写一套（对话缺少聚焦动效、按钮不齐平），
+  现已合并，避免同类控件在两处发散。全局 `prefers-reduced-motion` 规则仍会把动画压缩到
+  `0.01ms`。
 - Artifact 详情抽屉的 body 使用 `align-content: start` 和 `grid-auto-rows: max-content`，
   防止少量内容被网格默认 stretch 拉成巨块；正文按说明、网络策略、运行状态、请求审计组成
   紧凑卡片，网络开关仍是可聚焦的原生 checkbox，审计与停止逻辑没有改变。
@@ -1041,7 +1100,16 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `Shift+Tab` 必须转发 CBT 序列，而模式回读必须发生在 xterm 应用屏幕差量之后；主动 probe
   还要受输出修订号屏障保护并扫描完整活动缓冲区，不能在仍有待写数据时回复旧快照。
   独立对话契约还锁定活动栏点击后的下一帧聚焦、焦点请求的禁用/模态边界、四主题强调色焦点
-  动画、历史区占满侧栏并独立滚动，以及详情抽屉禁止网格拉伸的紧凑分区结构。
+  动画、历史区占满侧栏并独立滚动，以及详情抽屉禁止网格拉伸的紧凑分区结构。交互反馈地板也
+  在这里锁定：`.terminal-composer` 与 `.chat-composer` 的聚焦规则必须是同一条（不得再出现
+  只服务对话的 `chatComposerFocusIn`），每个按钮都必须有按压响应，且任何 `scale(var(--…))`
+  引用的令牌都必须真实存在——`.chat-settings-trigger` 曾引用不存在的 `--press-scale`，按压
+  静默失效。
+- `tests/quit-confirmation.test.ts` 固化退出握手的每一个逃生口：`before-quit` 必须在执行
+  teardown 之前把未置闩的退出退回 `requestQuit()`；`canAsk` 健康检查、二次请求强制通过和
+  单实例锁失败必须无条件退出；`session-end` 必须直接置闩不发问；`app:confirm-quit` 只在
+  收到 `true` 时退出且两种回答都清除 pending；托盘退出必须走同一函数而不是内联 `app.quit()`；
+  桥接的两个方向都必须在契约里声明。
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行

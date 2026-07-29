@@ -195,7 +195,10 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('window.controlPanel.saveChatConversation({');
     expect(rendererSource).toContain('window.controlPanel.getChatConversations()');
     expect(rendererSource).toContain('window.controlPanel.deleteChatConversation(conversation.id)');
-    expect(rendererSource).toContain("chatInput.addEventListener('input', renderChatUsage);");
+    // Typing updates the usage readout and re-measures the composer: it autosizes like the terminal's.
+    expect(rendererSource).toMatch(
+      /chatInput\.addEventListener\('input', \(\) => \{\s+renderChatUsage\(\);\s+resizeChatComposer\(\);/,
+    );
     expect(rendererSource).toContain(
       "estimateChatUsage([...chatMessages, { content: draft, role: 'user' }])",
     );
@@ -207,10 +210,16 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /const toggleRailTab[\s\S]*?if \(tab === 'chat'\) \{\s+focusChatInputAfterNavigation\(\);/,
     );
+    /*
+     * The focus flourish is now one shared rule for both composers rather than a chat-only keyframe:
+     * they are the same control, so they must answer focus the same way. Asserting the shared selector
+     * is what keeps chat from drifting back to a plainer treatment than the terminal's.
+     */
     expect(rendererStyles).toMatch(
-      /\.chat-composer textarea:focus\s*\{[\s\S]*?chatComposerFocusIn[\s\S]*?var\(--accent-ring\)[\s\S]*?var\(--accent-tint\)/,
+      /\.terminal-composer textarea:focus,\s*\.chat-composer textarea:focus\s*\{[\s\S]*?composerFocusIn[\s\S]*?var\(--accent-ring\)[\s\S]*?var\(--accent-tint\)/,
     );
-    expect(rendererStyles).toContain('@keyframes chatComposerFocusIn');
+    expect(rendererStyles).toContain('@keyframes composerFocusIn');
+    expect(rendererStyles).not.toContain('chatComposerFocusIn');
   });
 
   it('gives chat history the full rail and keeps artifact details compact and structured', () => {
@@ -230,7 +239,9 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('uses theme-aware typography and glow feedback without hover lift', () => {
-    expect(rendererSource).toContain("import '@fontsource-variable/open-sans';");
+    expect(rendererSource).toContain("import '@fontsource-variable/roboto';");
+    expect(rendererSource).toContain("import '@fontsource-variable/hanken-grotesk';");
+    expect(rendererSource).toContain("import '@fontsource-variable/newsreader';");
     expect(rendererSource).toContain(
       'document.documentElement.style.colorScheme = definition.appearance;',
     );
@@ -466,5 +477,47 @@ describe('renderer interaction lifecycle contract', () => {
       'view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });',
     );
     expect(rendererSource).toContain('window.controlPanel.reportClaudePermissionModeProbe(');
+  });
+
+  it('answers every quit request and only questions the ones that would lose work', () => {
+    // The main process cancels its own quit and waits, so a path that fails to answer would make the
+    // app impossible to close. All three branches must call confirmQuit.
+    expect(rendererSource).toContain('window.controlPanel.onAppQuitRequested(() => {');
+    expect(rendererSource).toContain('window.controlPanel.confirmQuit(true);');
+    expect(rendererSource).toContain('window.controlPanel.confirmQuit(false);');
+    expect(rendererSource).toContain('window.controlPanel.confirmQuit(confirmed);');
+    expect(rendererSource).toMatch(
+      /const streaming = Boolean\(activeChatRequestId\);[\s\S]*?if \(!streaming && !preparing\) \{\s+window\.controlPanel\.confirmQuit\(true\);/,
+    );
+    // A running terminal is the documented background state, so it must not trigger the prompt: the
+    // decision is made from the chat in-flight flags alone.
+    expect(rendererSource).toMatch(
+      /const preparing = chatSubmissionInFlight \|\| queuedChatAttachmentImports > 0;/,
+    );
+    expect(rendererSource).toContain("title: '对话正在进行中',");
+    expect(rendererSource).toContain('unsubscribeAppQuitRequested();');
+  });
+
+  it('gives every button a press response and no dead interaction states', () => {
+    // The floor: one :active scale on the element itself, so a new button cannot ship without
+    // feedback simply because nobody wrote a rule for its family.
+    expect(rendererStyles).toMatch(
+      /button:active:not\(:disabled\)\s*\{\s*transform: scale\(var\(--press-sm\)\);/,
+    );
+    // Row-shaped controls opt out: scaling a list row shifts its text against its neighbours.
+    expect(rendererStyles).toMatch(
+      /\.conversation-item__select:active:not\(:disabled\),[\s\S]*?\{\s*transform: none;/,
+    );
+    // The tint-button family used to have a background and no hover at all.
+    expect(rendererStyles).toMatch(
+      /\.router-actions button:hover:not\(:disabled\)[\s\S]*?\{[\s\S]*?var\(--accent-ring\)/,
+    );
+    // A press that references an undefined token silently does nothing, so no scale may name one.
+    const pressTokens = rendererStyles.match(/scale\(var\((--[\w-]+)\)\)/g) ?? [];
+    expect(pressTokens.length).toBeGreaterThan(0);
+    for (const usage of pressTokens) {
+      const token = /var\((--[\w-]+)\)/.exec(usage)?.[1] ?? '';
+      expect(rendererStyles).toContain(`${token}:`);
+    }
   });
 });
