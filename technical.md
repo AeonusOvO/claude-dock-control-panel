@@ -622,7 +622,8 @@ Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。S
 
 - `ClaudeConnectionTest` 根据基址追加 `/v1/messages`；用户若粘贴完整
   `/v1/messages`，保存时会先规范化为基址。测试请求固定 `max_tokens: 1`、非流式和
-  单字符提示，只有用户点击后才执行。
+  单字符提示。未保存表单只在用户点击“测试并接入”时执行；当前项目的已保存配置会在
+  Claude 状态首次载入、窗口从托盘隐藏态恢复，以及用户点击底栏连接按钮时执行。
 - Bearer 对应 `Authorization: Bearer`，API Key 对应 `x-api-key`。返回标准
   `msg_` ID 和 `content` 数组才算三项全部通过；`401/403` 定位为认证错误，
   `404` 提示可能误填 OpenAI 地址，`400/422` 作为“端点与认证基本可用、模型或字段需处理”
@@ -641,6 +642,15 @@ Telegram 两者都是本地 Open Sans；深色主题保留 Segoe UI Variable。S
   `syncConnectionInteractivity` 按最新环境重算 disabled。这样成功、失败、异常和保存后的重绘
   都不会把测试前快照中的 disabled 状态永久写回。测试期间跳过 6 秒轮询并禁用服务商/配置
   控件，但不阻断导航或 PowerShell 输入。
+- renderer 用 `automaticConnectionTestSessions` 按 session ID 去重：`renderClaudeState`
+  在当前项目与开发引擎确认是 Claude 后调度一次已保存配置实测。主进程仅在窗口从隐藏或最小化
+  状态经 `showMainWindow()` 恢复时发送 `app:window-restored`；preload 暴露受限订阅，renderer
+  清除当前项目的去重标记后再调度一次。窗口一直可见时的 focus、Alt+Tab、visibility 事件不
+  清除标记，避免反复消耗 token。若测试队列正忙，自动任务延后重试而不并发。
+- `claude:test-connection` 在主进程重新校验输入。`provider === 'anthropic'` 时先执行
+  `ProviderAccessGuard.assertAllowed('anthropic-claude', 'first-request', cwd)`，通过后才向
+  官方模型接口发出最小请求；`gateway`（中转站、自定义网关和本地转换器）跳过官方服务商
+  预检并直接验证自己的已保存端点。预检是额外防护，不替代真实连接测试。
 - 每次测试按“规范化配置 + 凭据 SHA-256”生成内存指纹，只在当前项目保存的配置与凭据完全
   匹配时显示到会话页；不会持久化凭据摘要。最小请求通过是一个时间点信号，不能证明上游
   持续在线，也不能覆盖 Claude Code 后续的流式内容、工具调用和更大请求。
@@ -886,8 +896,8 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 5. `NetworkPreflightService` 按“服务商 + 动作 + 项目”执行 single-flight 和两分钟缓存。
    网络或设置变化通过 generation 失效旧结果；失效期间完成的旧请求不会写入缓存或历史。
 6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 接入保存/历史恢复/
-   启动/重启、开发引擎切换和官方独立对话首次请求都必须先通过。自定义网关和普通本地终端
-   不被官方服务状态误伤。
+   启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过。自定义网关和
+   普通本地终端不被官方服务状态误伤；它们的连接按钮和自动测试直接请求自身端点。
 
 ### 回滚与故障边界
 
@@ -901,6 +911,8 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   同步执行 `followRedirect()`，请求会被取消。2.2.0 的应用探测遗漏了该调用，因而会在
   ChatGPT 可正常跳转、Codex CLI 可用时误报 `Redirect was cancelled`。2.2.1 修复事件处理，
   并把遗留同类错误降为“探测未确认”警告；非白名单跨域、HTTP 降级、TLS 或真实连接失败仍失败。
+- 2.2.2 恢复预检上线前的真实路由测试职责：官方预检只在官方模型请求前增加防护，不再覆盖
+  Claude 底栏的 `routeHealth`，也不再把中转站的真实测试替换成官方预检详情。
 - 本实现不修改系统代理、DNS、路由表、Codex/Claude Code 配置文件或官方登录存储，也不自动
   关闭 VPN。Claude Code 官方不支持 SOCKS，因此只对 Claude CLI 的 SOCKS 环境做硬阻止。
 
@@ -1020,7 +1032,9 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   连接测试、历史保存/恢复/删除入口、Claude/Telegram 主题外观和禁止 hover 上浮，
   以及活动栏二次点击收起也作为源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须
   用保存配置原地测试、不得跳转
-  “接入”页，且忙态分支必须排在健康色分支之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
+  “接入”页；当前 Claude 项目首次载入及窗口从托盘恢复时必须各自动实测一次，同一显示周期
+  按 session 去重，普通 focus/visibility 不得重复消耗 token；忙态分支必须排在健康色分支
+  之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
   模型/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上、900px 以下一起隐藏，六种
   权限模式必须全部出现在目录里，模型切换的 `disabled` / `aria-busy` 必须在 `finally` 中
   直接恢复，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
@@ -1035,7 +1049,8 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`。
 - `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
   4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
-  完整徽标；闭环源码契约还覆盖首次按键前主动取样、单步失败即停止、已访问模式绕环检测、
+  完整徽标；闭环源码契约还覆盖官方真实连接测试先经过访问守卫、隐藏窗口恢复事件只从
+  main 经 preload 受限转发，以及首次按键前主动取样、单步失败即停止、已访问模式绕环检测、
   xterm 双向 probe 回报入口、per-session 互斥锁、切不到时报明确文案、`dontAsk` 与未预置的
   `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、模型/压缩/命令页不再拼接尾随
   回车而是进入 per-session 提交队列、PostCompact 信号只在已有 metrics 轮询里读且只认未消费

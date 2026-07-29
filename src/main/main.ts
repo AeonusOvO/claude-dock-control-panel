@@ -340,11 +340,15 @@ const showMainWindow = (): void => {
     return;
   }
 
+  const wasVisible = mainWindow.isVisible() && !mainWindow.isMinimized();
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
   }
   mainWindow.show();
   mainWindow.focus();
+  if (!wasVisible && !mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.send('app:window-restored');
+  }
 };
 
 const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
@@ -2086,10 +2090,15 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
-        return await requireClaudeRuntime().testConnection(
-          status.cwd,
-          validateClaudeConfigInput(input),
-        );
+        const validatedInput = validateClaudeConfigInput(input);
+        if (validatedInput.provider === 'anthropic') {
+          await requireProviderAccessGuard().assertAllowed(
+            'anthropic-claude',
+            'first-request',
+            status.cwd,
+          );
+        }
+        return await requireClaudeRuntime().testConnection(status.cwd, validatedInput);
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法测试 Claude 接入。';
         return {

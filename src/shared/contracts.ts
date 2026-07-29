@@ -905,6 +905,7 @@ export interface ControlPanelApi {
   uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
   openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
+  onAppWindowRestored: (listener: () => void) => Unsubscribe;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
   onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;
   /**

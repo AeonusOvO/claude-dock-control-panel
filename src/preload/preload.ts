@@ -244,6 +244,15 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeRouterOperationResult>,
   launchClaude: (sessionId, mode) =>
     ipcRenderer.invoke('claude:launch', sessionId, mode) as Promise<ClaudeOperationResult>,
+  onAppWindowRestored: (listener) => {
+    const callback = (): void => {
+      listener();
+    };
+    ipcRenderer.on('app:window-restored', callback);
+    return () => {
+      ipcRenderer.removeListener('app:window-restored', callback);
+    };
+  },
   onClaudeState: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, state: ClaudeProjectState): void => {
       listener(state);

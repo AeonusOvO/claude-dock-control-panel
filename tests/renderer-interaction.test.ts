@@ -281,15 +281,16 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
   });
 
-  it('opens the zero-quota network preflight from the footer and keeps manual tests explicit', () => {
-    expect(rendererSource).toMatch(
-      /footerConnection\.addEventListener\('click', \(\) => \{\s+void openNetworkPreflightDialog\(\);[\s\S]*?void runActiveNetworkPreflight\(false\);/,
-    );
+  it('keeps official preflight separate while the footer runs the saved real connection test', () => {
     const footerHandler = rendererSource.slice(
       rendererSource.indexOf("footerConnection.addEventListener('click'"),
       rendererSource.indexOf("footerModel.addEventListener('click'"),
     );
-    expect(footerHandler).not.toContain('runConnectionTest(');
+    expect(footerHandler).toContain("if (activeDevelopmentRuntime() === 'codex')");
+    expect(footerHandler).toContain('openNetworkPreflightDialog()');
+    expect(footerHandler).toContain(
+      'runConnectionTest(false, savedClaudeConfigInput(state.config))',
+    );
     expect(footerHandler).not.toContain("selectRailTab('connection')");
     expect(footerHandler).not.toContain('setWorkbenchOpen(false)');
     expect(rendererSource).toContain('window.controlPanel.onNetworkPreflight((result) => {');
@@ -315,6 +316,26 @@ describe('renderer interaction lifecycle contract', () => {
     );
     expect(rendererStyles).toContain('#footer-connection:disabled {');
     expect(rendererMarkup).toContain('<span id="footer-connection-label">连接待测试</span>');
+  });
+
+  it('runs one real test for the active saved Claude connection on each app opening', () => {
+    expect(rendererSource).toContain('const automaticConnectionTestSessions = new Set<string>();');
+    expect(rendererSource).toMatch(
+      /const scheduleAutomaticConnectionTest = \(state: ClaudeProjectState\): void => \{[\s\S]*?automaticConnectionTestSessions\.add\(state\.sessionId\);[\s\S]*?window\.setTimeout\(\(\) => \{[\s\S]*?runConnectionTest\(false, savedClaudeConfigInput\(currentState\.config\)\);/,
+    );
+    expect(rendererSource).toMatch(
+      /renderActiveNetworkPreflight\(\);\s+scheduleAutomaticConnectionTest\(state\);/,
+    );
+    expect(rendererSource).toMatch(
+      /const rerunAutomaticConnectionTestForActiveProject = \(\): void => \{[\s\S]*?automaticConnectionTestSessions\.delete\(state\.sessionId\);\s+scheduleAutomaticConnectionTest\(state\);/,
+    );
+    expect(rendererSource).toContain(
+      'const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {',
+    );
+    expect(rendererSource).toContain('unsubscribeAppWindowRestored();');
+    expect(rendererSource).toMatch(
+      /if \(!provider \|\| networkPreflightInProgress\) \{\s+if \(!provider && force\) \{/,
+    );
   });
 
   it('turns the footer model and mode readouts into real menu triggers', () => {

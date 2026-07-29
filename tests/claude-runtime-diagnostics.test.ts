@@ -230,6 +230,33 @@ describe('Claude runtime permission mode observation', () => {
     expect(runtimeSource).toContain('if (!MODEL_NAME_PATTERN.test(option.model))');
   });
 
+  it('runs the official network guard before a real Anthropic connection test', () => {
+    const testHandler = mainSource.slice(
+      mainSource.indexOf("'claude:test-connection'"),
+      mainSource.indexOf("ipcMain.handle('app:open-external'"),
+    );
+    expect(testHandler).toContain('const validatedInput = validateClaudeConfigInput(input);');
+    expect(testHandler).toMatch(
+      /if \(validatedInput\.provider === 'anthropic'\) \{[\s\S]*?assertAllowed\(\s*'anthropic-claude',\s*'first-request',\s*status\.cwd,\s*\);/,
+    );
+    expect(testHandler.indexOf('assertAllowed(')).toBeLessThan(
+      testHandler.indexOf('requireClaudeRuntime().testConnection('),
+    );
+  });
+
+  it('requests a fresh saved connection test when the hidden app window is restored', () => {
+    const showWindow = mainSource.slice(
+      mainSource.indexOf('const showMainWindow ='),
+      mainSource.indexOf('const chooseDirectory ='),
+    );
+    expect(showWindow).toContain(
+      'const wasVisible = mainWindow.isVisible() && !mainWindow.isMinimized();',
+    );
+    expect(showWindow).toContain("mainWindow.webContents.send('app:window-restored');");
+    expect(preloadSource).toContain("ipcRenderer.on('app:window-restored', callback);");
+    expect(preloadSource).toContain("ipcRenderer.removeListener('app:window-restored', callback);");
+  });
+
   it('submits every main-process slash command as queued body and return writes', () => {
     expect(runtimeSource).toContain(
       'private readonly commandSubmissionQueues = new Map<string, Promise<void>>();',

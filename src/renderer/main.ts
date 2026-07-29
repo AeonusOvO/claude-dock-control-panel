@@ -527,6 +527,7 @@ let codexRequestGeneration = 0;
 let runtimeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
+const automaticConnectionTestSessions = new Set<string>();
 let networkPreflightInProgress = false;
 let networkPreflightDialogProvider: NetworkProviderId | undefined;
 let connectionEnvironmentReady = false;
@@ -958,6 +959,17 @@ const activeNetworkProvider = (): NetworkProviderId | undefined => {
   return state?.config.provider === 'gateway' ? undefined : 'anthropic-claude';
 };
 
+const savedClaudeConfigInput = (config: ClaudeProjectState['config']): SaveClaudeConfigInput => ({
+  apiKeyHelperPolicy: config.apiKeyHelperPolicy,
+  authMode: config.authMode,
+  baseUrl: config.baseUrl,
+  credentialAction: 'keep',
+  model: config.model,
+  modelFast: config.modelFast,
+  preset: config.preset,
+  provider: config.provider,
+});
+
 const networkPreflightTone = (
   result: NetworkPreflightResult | undefined,
 ): 'error' | 'pending' | 'success' | 'unknown' | 'warning' => {
@@ -1097,13 +1109,12 @@ const renderActiveNetworkPreflight = (): void => {
     (provider === 'openai-codex' ? 'OpenAI Codex' : 'Anthropic Claude Code');
   networkPreflightSummary.textContent = result?.summary ?? '等待首次无额度探测';
   networkPreflightRecheck.disabled = networkPreflightInProgress || result?.status === 'testing';
-  if (connectionTestInProgress && activeDevelopmentRuntime() === 'claude') {
-    return;
+  if (activeDevelopmentRuntime() === 'codex') {
+    footerConnection.dataset.tone = tone === 'unknown' ? 'warning' : tone;
+    footerConnection.disabled = result?.status === 'testing';
+    footerConnection.setAttribute('aria-busy', String(result?.status === 'testing'));
+    footerConnectionLabel.textContent = result ? networkStatusLabel(result) : '官方网络待检测';
   }
-  footerConnection.dataset.tone = tone === 'unknown' ? 'warning' : tone;
-  footerConnection.disabled = result?.status === 'testing';
-  footerConnection.setAttribute('aria-busy', String(result?.status === 'testing'));
-  footerConnectionLabel.textContent = result ? networkStatusLabel(result) : '官方网络待检测';
   if (result?.status === 'blocked') {
     runClaudeButton.disabled = true;
     runClaudeButton.title = result.reasons[0] ?? result.summary;
@@ -1126,7 +1137,7 @@ const runActiveNetworkPreflight = async (
 ): Promise<void> => {
   const provider = providerOverride ?? activeNetworkProvider();
   if (!provider || networkPreflightInProgress) {
-    if (!provider) {
+    if (!provider && force) {
       showToast('当前 Claude 配置使用自定义网关，不需要官方服务预检。');
     }
     return;
@@ -3039,6 +3050,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   }
   updateSmartGuidance();
   renderActiveNetworkPreflight();
+  scheduleAutomaticConnectionTest(state);
 };
 
 const loadClaudeState = async (sessionId: string): Promise<void> => {
@@ -4289,6 +4301,44 @@ const runConnectionTest = async (
       renderClaudeState(latestState);
     }
   }
+};
+
+const scheduleAutomaticConnectionTest = (state: ClaudeProjectState): void => {
+  if (
+    state.sessionId !== workspaceState.activeSessionId ||
+    developmentRuntimeStates.get(state.sessionId)?.runtime !== 'claude' ||
+    automaticConnectionTestSessions.has(state.sessionId)
+  ) {
+    return;
+  }
+  automaticConnectionTestSessions.add(state.sessionId);
+  window.setTimeout(() => {
+    const currentState = claudeStates.get(state.sessionId);
+    if (
+      !currentState ||
+      workspaceState.activeSessionId !== state.sessionId ||
+      developmentRuntimeStates.get(state.sessionId)?.runtime !== 'claude'
+    ) {
+      automaticConnectionTestSessions.delete(state.sessionId);
+      return;
+    }
+    if (connectionTestInProgress) {
+      automaticConnectionTestSessions.delete(state.sessionId);
+      window.setTimeout(() => scheduleAutomaticConnectionTest(currentState), 250);
+      return;
+    }
+    void runConnectionTest(false, savedClaudeConfigInput(currentState.config));
+  }, 0);
+};
+
+const rerunAutomaticConnectionTestForActiveProject = (): void => {
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (!state || developmentRuntimeStates.get(state.sessionId)?.runtime !== 'claude') {
+    return;
+  }
+  automaticConnectionTestSessions.delete(state.sessionId);
+  scheduleAutomaticConnectionTest(state);
 };
 
 const setWorkbenchOpen = (open: boolean): void => {
@@ -6713,6 +6763,7 @@ function renderWorkspace(state: WorkspaceState): void {
   for (const sessionId of claudeStates.keys()) {
     if (!validSessionIds.has(sessionId)) {
       claudeStates.delete(sessionId);
+      automaticConnectionTestSessions.delete(sessionId);
     }
   }
   for (const sessionId of codexStates.keys()) {
@@ -7333,6 +7384,9 @@ window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
     // A resize can race with the terminal being disposed.
   }
 });
+const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
+  rerunAutomaticConnectionTestForActiveProject();
+});
 window.controlPanel.onClaudeState(renderClaudeState);
 window.controlPanel.onCodexState((state) => {
   renderCodexState(state);
@@ -7656,11 +7710,24 @@ artifactNetworkAllowed.addEventListener('change', () => {
     });
 });
 footerConnection.addEventListener('click', () => {
-  void openNetworkPreflightDialog();
-  const provider = activeNetworkProvider();
-  if (provider && !networkPreflightResults.has(provider)) {
-    void runActiveNetworkPreflight(false);
+  if (activeDevelopmentRuntime() === 'codex') {
+    void openNetworkPreflightDialog();
+    const provider = activeNetworkProvider();
+    if (provider && !networkPreflightResults.has(provider)) {
+      void runActiveNetworkPreflight(false);
+    }
+    return;
   }
+  if (connectionTestInProgress) {
+    return;
+  }
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (!state) {
+    showToast('无法读取当前接入配置。', 'error');
+    return;
+  }
+  void runConnectionTest(false, savedClaudeConfigInput(state.config));
 });
 networkPreflightDetails.addEventListener('click', () => {
   void openNetworkPreflightDialog();
@@ -8353,6 +8420,7 @@ const resizeObserver = new ResizeObserver(([entry]) => {
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
+  unsubscribeAppWindowRestored();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
