@@ -7,6 +7,8 @@ import type {
   ClaudeConnectionAdvice,
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
+  ClaudeEffortLevel,
+  ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
   ClaudeCodeInstallSource,
@@ -25,6 +27,7 @@ import type {
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
+import { CLAUDE_EFFORT_LEVELS, CLAUDE_EFFORT_REQUESTS } from '../shared/claude-effort';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import { findClaudeProvider } from '../shared/claude-providers';
 import {
@@ -66,6 +69,8 @@ interface RuntimeSession {
   active: boolean;
   cwd: string;
   diagnosticBuffer: string;
+  /** Effort last requested from the status bar, until the status line reports what was applied. */
+  effortRequest?: ClaudeEffortRequest;
   exitMarker?: string;
   expectedModel?: string;
   lastApiError?: {
@@ -132,6 +137,11 @@ const optionalFiniteNumber = (value: unknown): number | undefined =>
 
 const optionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.length <= 1000 ? value : undefined;
+
+const optionalEffortLevel = (value: unknown): ClaudeEffortLevel | undefined =>
+  typeof value === 'string' && CLAUDE_EFFORT_LEVELS.has(value as ClaudeEffortLevel)
+    ? (value as ClaudeEffortLevel)
+    : undefined;
 
 const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
 
@@ -390,6 +400,7 @@ export const parseClaudeMetrics = (raw: string): ClaudeMetrics | undefined => {
       capturedAt,
       contextWindowSize: optionalFiniteNumber(parsed.contextWindowSize),
       contextWindowUsed: optionalFiniteNumber(parsed.contextWindowUsed),
+      effortLevel: optionalEffortLevel(parsed.effortLevel),
       inputTokens: optionalFiniteNumber(parsed.inputTokens),
       linesAdded: optionalFiniteNumber(parsed.linesAdded),
       linesRemoved: optionalFiniteNumber(parsed.linesRemoved),
@@ -579,6 +590,7 @@ export class ClaudeRuntime {
       allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
       config: this.configStore.getView(cwd),
       cwd,
+      effortRequest: runtime.effortRequest,
       expectedModel: runtime.expectedModel,
       installation,
       metrics: runtime.metrics,
@@ -846,6 +858,8 @@ export class ClaudeRuntime {
     const runtime = this.ensureSession(sessionId, cwd);
     runtime.active = true;
     runtime.diagnosticBuffer = '';
+    // A relaunch re-reads the persisted effort setting, so a session-only request no longer holds.
+    runtime.effortRequest = undefined;
     runtime.expectedModel = config.model;
     runtime.exitMarker = `\u001b]9;claudedock-exit:${sessionId}:${Date.now()}\u0007`;
     runtime.markerRemainder = '';
@@ -979,6 +993,32 @@ export class ClaudeRuntime {
 
     await this.submitClaudeCommand(runtime, `/model ${option.model}`);
     runtime.expectedModel = option.model;
+    const state = await this.getState(sessionId, cwd);
+    this.onState(state);
+    return state;
+  }
+
+  /**
+   * `/effort` applies inside the running conversation, so no relaunch is needed for any level. The
+   * requested value is remembered until the status line reports what Claude Code actually applied:
+   * a model that does not support the level silently falls back to the highest one it does support,
+   * and `ultracode` reports back as plain `xhigh`.
+   */
+  public async setEffort(
+    sessionId: string,
+    cwd: string,
+    effort: ClaudeEffortRequest,
+  ): Promise<ClaudeProjectState> {
+    const runtime = this.ensureSession(sessionId, cwd);
+    if (!runtime.active) {
+      throw new Error('Claude Code 尚未运行，无法调整思考程度。');
+    }
+    if (!CLAUDE_EFFORT_REQUESTS.has(effort)) {
+      throw new Error('思考程度标识不合法，拒绝写入终端。');
+    }
+
+    await this.submitClaudeCommand(runtime, `/effort ${effort}`);
+    runtime.effortRequest = effort;
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return state;

@@ -5,6 +5,7 @@ import type {
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionHistoryResult,
   ClaudeConnectionTestResult,
+  ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeModelOptions,
   ClaudeOperationResult,
@@ -154,6 +155,8 @@ const api: ControlPanelApi = {
       sessionId,
       mode,
     ) as Promise<ClaudeOperationResult>,
+  setClaudeEffortLevel: (sessionId: string, effort: ClaudeEffortRequest) =>
+    ipcRenderer.invoke('claude:set-effort', sessionId, effort) as Promise<ClaudeOperationResult>,
   observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => {
     ipcRenderer.send('claude:permission-mode-observed', sessionId, mode);
   },

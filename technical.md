@@ -199,7 +199,8 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 
 - 渲染进程不启用 Node.js，只能调用 preload 暴露的固定方法。
 - 主进程验证 IPC 发送方、会话标识、字符串长度、终端尺寸和目录是否真实存在。权限模式只接受
-  六个已知取值，模型选项 ID 只接受 `current` 或 `history:<id>` 形态，重启入参逐字段校验；
+  六个已知取值，思考程度只接受 `CLAUDE_EFFORT_REQUESTS` 里的七个取值，模型选项 ID 只接受
+  `current` 或 `history:<id>` 形态，重启入参逐字段校验；
   这些值最终都会影响启动命令或写进运行中的终端，所以一律在主进程重新核对，不信任 renderer。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
 - `TerminalWorkspace` 构造出来是空的，也允许一直是空的：会话总是属于用户选定的文件夹，
@@ -770,7 +771,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
-  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间和改动行数。
+  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数和
+  `effort.level`。`effort` 只在当前模型带思考程度参数时出现，缺失时 `effortLevel` 写入 null，
+  由渲染层回落到本次请求值，而不是伪造默认档。
   stdin 必须显式按 UTF-8 解码（`StreamReader` + `UTF8Encoding`），不能用 `[Console]::In`：
   中文 Windows 的控制台代码页是 GBK，多字节 `session_name` 会被解错，双字节读还可能吞掉
   JSON 的结尾引号导致整个解析失败——症状是恢复带 AI 标题的历史会话后完全没有指标，而全新
@@ -783,7 +786,7 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   也可能为空或不准确。网关在服务端替换模型无法由客户端进行密码学证明；界面只能核对
   statusLine 报告的运行模型与锁定模型是否一致。
 
-### 运行中换模型与权限模式
+### 运行中换模型、权限模式与思考程度
 
 **模式真值来自终端徽标。** Claude Code 的 statusLine JSON 里没有 `permission_mode` 这个
 字段（逐条核对过官方字段表），SessionStart hook 的载荷也不带它。唯一持续可读的来源是
@@ -840,6 +843,20 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 `claude:switch-model` 是独立 IPC，不放宽 `/model` 的斜杠命令白名单（仍是
 `['/model', false]`，不接受参数）。handler 收到的只是一个选项 ID，主进程重新生成一次选项
 列表核对，模型串再过一遍 `MODEL_NAME_PATTERN`，才写进终端；渲染层给不出任意字符串。
+
+**思考程度只走 `/effort`，永不重启。** `src/shared/claude-effort.ts` 是唯一目录，主进程校验和
+底栏菜单共用它：`auto`、`low`、`medium`、`high`、`xhigh`、`max`、`ultracode`，按推理深度升序。
+`--effort` 启动标志不接受 `auto`（CLI 自己报 `Unknown --effort value 'auto' — ignoring it`），
+所以 `auto` 只作为 `/effort` 的参数存在，这也是这里不复用启动标志的原因。`ClaudeRuntime.setEffort`
+复用 `submitClaudeCommand` 的 per-session 队列提交 `/effort <level>`，与换模型同一套「正文 →
+40ms → `\r`」写法；任何档位都在运行中的对话里生效，不需要新 PTY，这是它与 `dontAsk` 和跨端点
+换模型的根本区别。
+
+生效值与请求值必须分开存。模型不支持某档时会静默降级到它支持的最高档，`ultracode` 也只会
+回报 `xhigh`，所以 `ClaudeMetrics.effortLevel`（状态行真值）优先，`ClaudeProjectState.effortRequest`
+只在状态行还没刷新前顶一下；`prepareLaunchInternal` 重启时清空 `effortRequest`，因为新 PTY 会
+重新读取持久化的思考程度设置，`max` / `ultracode` 这类仅本次会话的请求不再成立。
+`optionalEffortLevel` 只接受五个真实档位，`auto` 和 `ultracode` 不可能从状态行回来。
 
 **一个重启机制，两个调用方。** 跨端点换模型和 `dontAsk` 都走 `ClaudeRuntime.relaunch()`：
 可选 `/compact` → 可选 `applyConnectionHistory` → `prepareLaunch(..., 'continue', startMode)`

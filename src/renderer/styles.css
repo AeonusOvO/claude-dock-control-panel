@@ -6644,7 +6644,8 @@ body.is-resizing * {
 }
 
 #footer-model,
-#footer-mode {
+#footer-mode,
+#footer-effort {
   background: transparent;
   border: 0;
   border-radius: var(--r-sm);
@@ -6660,18 +6661,24 @@ body.is-resizing * {
 }
 
 #footer-model:hover:not(:disabled),
-#footer-mode:hover:not(:disabled) {
+#footer-mode:hover:not(:disabled),
+#footer-effort:hover:not(:disabled) {
   background: var(--layer-hover);
   color: var(--text);
 }
 
 #footer-model:disabled,
-#footer-mode:disabled {
+#footer-mode:disabled,
+#footer-effort:disabled {
   cursor: progress;
 }
 
 #footer-mode {
   max-width: 130px;
+}
+
+#footer-effort {
+  max-width: 140px;
 }
 
 #footer-mode[data-mode='bypassPermissions'],
@@ -6680,6 +6687,12 @@ body.is-resizing * {
 }
 
 #footer-mode[data-mode='plan'] {
+  color: var(--accent-text);
+}
+
+/* The two deepest levels burn tokens fastest, so they read as a deliberate, visible choice. */
+#footer-effort[data-effort='max'],
+#footer-effort[data-effort='ultracode'] {
   color: var(--accent-text);
 }
 
@@ -7637,6 +7650,7 @@ body.is-resizing * {
 
   .terminal-footer #footer-status,
   #footer-mode,
+  #footer-effort,
   #footer-model {
     display: none;
   }

@@ -31,6 +31,9 @@ describe('ClaudeDock status-line helper', () => {
         total_lines_added: 12,
         total_lines_removed: 3,
       },
+      effort: {
+        level: 'xhigh',
+      },
       model: {
         display_name: 'DeepSeek Chat',
         id: 'deepseek-chat',
@@ -70,6 +73,7 @@ describe('ClaudeDock status-line helper', () => {
     expect(metrics).toMatchObject({
       contextWindowSize: 200_000,
       contextWindowUsed: 55_000,
+      effortLevel: 'xhigh',
       inputTokens: 52_000,
       modelId: 'deepseek-chat',
       outputTokens: 3_000,
@@ -77,6 +81,41 @@ describe('ClaudeDock status-line helper', () => {
       sessionId: 'session-fixture',
       sessionName: 'api-visualization',
     });
+  });
+
+  it('omits the effort level for a model that does not report one', () => {
+    // `effort` is absent whenever the active model has no reasoning-effort parameter, so the
+    // footer must fall back to the requested level rather than showing a stale one.
+    const outputPath = path.join(fixtureRoot, 'metrics-no-effort.json');
+    const scriptPath = path.resolve('assets/runtime/claude-statusline.ps1');
+    const result = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptPath,
+        '-OutputPath',
+        outputPath,
+      ],
+      {
+        encoding: 'utf8',
+        input: JSON.stringify({
+          model: { display_name: 'Some Gateway Model', id: 'gateway-model' },
+          session_id: 'session-no-effort',
+        }),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const metrics = JSON.parse(readFileSync(outputPath, 'utf8').replace(/^\uFEFF/, '')) as Record<
+      string,
+      unknown
+    >;
+    expect(metrics.effortLevel).toBeNull();
+    expect(metrics.modelId).toBe('gateway-model');
   });
 
   it('decodes multi-byte session names as UTF-8 regardless of the console codepage', () => {

@@ -8,6 +8,10 @@ const componentKit = readFileSync(
   new URL('../src/renderer/components.ts', import.meta.url),
   'utf8',
 );
+const effortSource = readFileSync(
+  new URL('../src/shared/claude-effort.ts', import.meta.url),
+  'utf8',
+);
 
 describe('renderer interaction lifecycle contract', () => {
   it('always releases resize pointer capture across interrupted window lifecycles', () => {
@@ -353,12 +357,19 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
-  it('turns the footer model and mode readouts into real menu triggers', () => {
+  it('turns the footer model, mode and effort readouts into real menu triggers', () => {
     expect(rendererMarkup).toMatch(
       /<button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">/,
     );
     expect(rendererMarkup).toMatch(
       /<button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    );
+    expect(rendererMarkup).toMatch(
+      /<button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    );
+    // Effort sits immediately right of the permission mode readout.
+    expect(rendererMarkup.indexOf('id="footer-mode"')).toBeLessThan(
+      rendererMarkup.indexOf('id="footer-effort"'),
     );
     expect(rendererMarkup).toContain(
       '<div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden>',
@@ -366,17 +377,53 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toMatch(
       /id="footer-mode-menu"\s+role="menu"\s+aria-label="切换权限模式"\s+hidden/,
     );
-    // Both menus join the one dismissal path rather than starting a second one.
+    expect(rendererMarkup).toMatch(
+      /id="footer-effort-menu"\s+role="menu"\s+aria-label="切换思考程度"\s+hidden/,
+    );
+    // All three menus join the one dismissal path rather than starting a second one.
     expect(rendererSource).toMatch(
-      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\)/,
+      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\) &&\s+!footerEffortMenu\.contains\(event\.target as Node\)/,
+    );
+    expect(rendererSource).toMatch(
+      /\[footerModeMenu, footerMode\],\s+\[footerEffortMenu, footerEffort\],/,
     );
     expect(rendererSource).toMatch(
       /window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/,
     );
-    // Narrow windows drop both readouts together, so the footer cannot overflow.
+    // Narrow windows drop all readouts together, so the footer cannot overflow.
     expect(rendererStyles).toMatch(
-      /@media \(max-width: 900px\)[\s\S]*?#footer-mode,\s+#footer-model \{\s+display: none;/,
+      /@media \(max-width: 900px\)[\s\S]*?#footer-mode,\s+#footer-effort,\s+#footer-model \{\s+display: none;/,
     );
+  });
+
+  it('offers every adjustable effort level and applies it without a relaunch', () => {
+    // Every level `/effort` accepts, plus the two Claude Code-only session settings.
+    for (const effort of ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']) {
+      expect(effortSource).toContain(`id: '${effort}',`);
+    }
+    // Ascending depth, so the menu reads as one scale rather than an arbitrary list.
+    const order = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'].map((effort) =>
+      effortSource.indexOf(`id: '${effort}',`),
+    );
+    expect(order).toEqual([...order].sort((first, second) => first - second));
+    // `max` and `ultracode` cannot be persisted by Claude Code, so they are marked session-only.
+    expect(effortSource).toMatch(/id: 'max',\s+label: '[^']+',\s+persists: false,/);
+    expect(effortSource).toMatch(/id: 'ultracode',\s+label: '[^']+',\s+persists: false,/);
+
+    // `/effort` applies inside the live conversation: no path may reach for a relaunch.
+    const switchHandler = rendererSource.slice(
+      rendererSource.indexOf('const switchEffortLevel = async'),
+      rendererSource.indexOf('const openModelMenu = async'),
+    );
+    expect(switchHandler).toContain('window.controlPanel.setClaudeEffortLevel(status.id, effort)');
+    expect(switchHandler).not.toContain('relaunchClaudeSession');
+    // The trigger is always released, even when the terminal write throws.
+    expect(switchHandler).toMatch(
+      /finally \{\s+endMask\(\);\s+effortSwitchInProgress = false;\s+footerEffort\.disabled = false;\s+footerEffort\.setAttribute\('aria-busy', 'false'\);/,
+    );
+    // The level the status line reports wins over a request the model may have capped.
+    expect(rendererSource).toContain('const effortApplied = state.metrics?.effortLevel;');
+    expect(rendererSource).toContain('const effortShown = effortApplied ?? state.effortRequest;');
   });
 
   it('always releases the model switch trigger after the IPC operation settles', () => {

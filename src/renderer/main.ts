@@ -24,6 +24,7 @@ import type {
   ClaudeConnectionAdviceAction,
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
+  ClaudeEffortRequest,
   ClaudeGatewayCandidate,
   ClaudeGatewayDiagnostics,
   ClaudeLaunchMode,
@@ -69,6 +70,7 @@ import type {
 } from '../shared/contracts';
 import { estimateChatUsage } from '../shared/chat-usage';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
+import { CLAUDE_EFFORT_OPTIONS, claudeEffortLabel } from '../shared/claude-effort';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import {
   CLAUDE_PROVIDER_GROUPS,
@@ -268,6 +270,8 @@ const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
 const footerModelMenu = requiredElement<HTMLElement>('#footer-model-menu');
 const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
 const footerModeMenu = requiredElement<HTMLElement>('#footer-mode-menu');
+const footerEffort = requiredElement<HTMLButtonElement>('#footer-effort');
+const footerEffortMenu = requiredElement<HTMLElement>('#footer-effort-menu');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
 const gatewayCandidates = requiredElement<HTMLElement>('#gateway-candidates');
 const gatewayCheckedAt = requiredElement<HTMLElement>('#gateway-checked-at');
@@ -595,6 +599,7 @@ let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 /** Set while a status-bar switch is in flight, so a second click cannot stack terminal writes. */
 let modeSwitchInProgress = false;
 let modelSwitchInProgress = false;
+let effortSwitchInProgress = false;
 const guardedButtons = new WeakSet<HTMLButtonElement>();
 let chatConfig: ChatConfigView | undefined;
 let chatConfigLoadPromise: Promise<void> | undefined;
@@ -2650,6 +2655,7 @@ const hideFooterMenus = (): void => {
   for (const [menu, trigger] of [
     [footerModelMenu, footerModel],
     [footerModeMenu, footerMode],
+    [footerEffortMenu, footerEffort],
   ] as const) {
     menu.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
@@ -2895,6 +2901,8 @@ const renderCodexState = (state: CodexProjectState): void => {
   footerModel.disabled = true;
   footerMode.textContent = '模式 工作区写入';
   footerMode.disabled = true;
+  footerEffort.textContent = '思考 Codex 自动';
+  footerEffort.disabled = true;
   codexBoundaryNote.textContent = state.warning
     ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
     : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
@@ -3063,6 +3071,18 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   footerMode.title = state.active
     ? '点击切换权限模式，或在终端按 Shift+Tab'
     : '启动 Claude Code 后可切换权限模式';
+  // The status line reports what Claude Code applied, which can sit below a request the model caps.
+  const effortApplied = state.metrics?.effortLevel;
+  const effortShown = effortApplied ?? state.effortRequest;
+  footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
+  footerEffort.dataset.effort = effortShown ?? 'unknown';
+  footerEffort.disabled = effortSwitchInProgress;
+  footerEffort.setAttribute('aria-busy', String(effortSwitchInProgress));
+  footerEffort.title = !state.active
+    ? '启动 Claude Code 后可调整思考程度'
+    : effortApplied === undefined
+      ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
+      : '点击调整思考程度，或在终端运行 /effort';
   allowBypassPermissions.checked = state.allowBypassPermissions;
 
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
@@ -4649,6 +4669,41 @@ const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> =
   }
 };
 
+/**
+ * `/effort` lands inside the running conversation, so every level — including the session-only
+ * `max` and `ultracode` — applies without a relaunch.
+ */
+const switchEffortLevel = async (effort: ClaudeEffortRequest): Promise<void> => {
+  const status = activeStatus();
+  if (!status || effortSwitchInProgress) {
+    return;
+  }
+
+  effortSwitchInProgress = true;
+  footerEffort.disabled = true;
+  footerEffort.setAttribute('aria-busy', 'true');
+  const endMask = beginTerminalMask(status.id, '正在调整思考程度');
+  try {
+    const result = await window.controlPanel.setClaudeEffortLevel(status.id, effort);
+    renderClaudeState(result.state);
+    if (!result.ok) {
+      showToast(result.error ?? '无法调整思考程度。', 'error');
+    }
+  } catch {
+    showToast('调整思考程度时发生异常。', 'error');
+  } finally {
+    endMask();
+    effortSwitchInProgress = false;
+    footerEffort.disabled = false;
+    footerEffort.setAttribute('aria-busy', 'false');
+    const knownState = claudeStates.get(status.id);
+    if (knownState) {
+      renderClaudeState(knownState);
+    }
+    void loadClaudeState(status.id);
+  }
+};
+
 const openModelMenu = async (): Promise<void> => {
   const status = activeStatus();
   if (!status) {
@@ -4718,6 +4773,43 @@ const openModeMenu = (): void => {
     footerModeMenu.append(hint);
   }
   openFooterMenu(footerModeMenu, footerMode);
+};
+
+const openEffortMenu = (): void => {
+  const status = activeStatus();
+  if (!status) {
+    return;
+  }
+
+  const state = claudeStates.get(status.id);
+  const running = state?.active ?? false;
+  // The applied level is authoritative; the pending request only shows until the status line ticks.
+  const current = state?.metrics?.effortLevel ?? state?.effortRequest;
+  footerEffortMenu.replaceChildren(
+    ...CLAUDE_EFFORT_OPTIONS.map((option) =>
+      buildFooterMenuItem(
+        option.label,
+        option.detail,
+        option.id === current,
+        () => {
+          void switchEffortLevel(option.id);
+        },
+        !running,
+      ),
+    ),
+  );
+  if (!running) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = '请先在工作台启动 Claude Code 会话。';
+    footerEffortMenu.append(hint);
+  } else if (state?.metrics?.effortLevel === undefined) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = '当前模型没有上报思考档位，可能不支持该参数；选择后仍会按所选档位下发。';
+    footerEffortMenu.append(hint);
+  }
+  openFooterMenu(footerEffortMenu, footerEffort);
 };
 
 /**
@@ -7889,6 +7981,13 @@ footerMode.addEventListener('click', () => {
     hideFooterMenus();
   }
 });
+footerEffort.addEventListener('click', () => {
+  if (footerEffortMenu.hidden) {
+    openEffortMenu();
+  } else {
+    hideFooterMenus();
+  }
+});
 allowBypassPermissions.addEventListener('change', () => {
   const status = activeStatus();
   if (!status) {
@@ -8385,8 +8484,10 @@ document.addEventListener('pointerdown', (event) => {
   if (
     !footerModelMenu.contains(event.target as Node) &&
     !footerModeMenu.contains(event.target as Node) &&
+    !footerEffortMenu.contains(event.target as Node) &&
     !footerModel.contains(event.target as Node) &&
-    !footerMode.contains(event.target as Node)
+    !footerMode.contains(event.target as Node) &&
+    !footerEffort.contains(event.target as Node)
   ) {
     hideFooterMenus();
   }

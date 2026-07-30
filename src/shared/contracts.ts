@@ -15,6 +15,14 @@ export type CodexLoginMethod = 'browser' | 'device-code';
  */
 export type ClaudePermissionMode =
   'acceptEdits' | 'auto' | 'bypassPermissions' | 'default' | 'dontAsk' | 'plan';
+/**
+ * Reasoning effort levels Claude Code accepts. `low`…`max` are real model effort levels; `auto`
+ * resets to the active model's default, and `ultracode` is a Claude Code setting that sends `xhigh`
+ * plus workflow orchestration. Only the five real levels can ever come back from the status line —
+ * `auto` resolves to a concrete level, and `ultracode` reports as `xhigh`.
+ */
+export type ClaudeEffortLevel = 'high' | 'low' | 'max' | 'medium' | 'xhigh';
+export type ClaudeEffortRequest = ClaudeEffortLevel | 'auto' | 'ultracode';
 export type ClaudePreset = ClaudeProviderId;
 export type ClaudeProvider = 'anthropic' | 'gateway';
 export type ClaudeSecurityStatus =
@@ -437,6 +445,8 @@ export interface ClaudeMetrics {
   capturedAt: number;
   contextWindowSize?: number;
   contextWindowUsed?: number;
+  /** Live `effort.level` from the status line; absent when the model has no effort parameter. */
+  effortLevel?: ClaudeEffortLevel;
   inputTokens?: number;
   linesAdded?: number;
   linesRemoved?: number;
@@ -466,6 +476,11 @@ export interface ClaudeProjectState {
   allowBypassPermissions: boolean;
   config: ClaudeConfigView;
   cwd: string;
+  /**
+   * Effort last requested from the status bar this session. Shown until the status line reports the
+   * level Claude Code actually applied, which can be lower when the model caps it.
+   */
+  effortRequest?: ClaudeEffortRequest;
   expectedModel?: string;
   installation: ClaudeInstallationStatus;
   metrics?: ClaudeMetrics;
@@ -854,6 +869,11 @@ export interface ControlPanelApi {
   setClaudePermissionMode: (
     sessionId: string,
     mode: ClaudePermissionMode,
+  ) => Promise<ClaudeOperationResult>;
+  /** Applies a reasoning effort level to the live conversation with `/effort`. */
+  setClaudeEffortLevel: (
+    sessionId: string,
+    effort: ClaudeEffortRequest,
   ) => Promise<ClaudeOperationResult>;
   /** Reports the complete mode badge after xterm has applied PTY screen-delta output. */
   observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;

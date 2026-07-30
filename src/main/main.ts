@@ -20,6 +20,7 @@ import type {
   ClaudeConnectionTestResult,
   ClaudeConnectionHistoryResult,
   ClaudeCodeInstallSource,
+  ClaudeEffortRequest,
   ClaudeLaunchMode,
   ClaudeOperationResult,
   ClaudePermissionMode,
@@ -62,6 +63,7 @@ import {
   type TerminalThemeId,
 } from '../shared/terminal-themes';
 import { CLAUDE_PROVIDER_EXTERNAL_HOSTS, claudeProviderIdSet } from '../shared/claude-providers';
+import { CLAUDE_EFFORT_REQUESTS } from '../shared/claude-effort';
 import {
   ClaudePluginManager,
   isValidMarketplaceName,
@@ -722,6 +724,13 @@ const validateClaudePermissionMode = (mode: unknown): ClaudePermissionMode => {
     throw new Error('权限模式标识无效。');
   }
   return mode as ClaudePermissionMode;
+};
+
+const validateClaudeEffortRequest = (effort: unknown): ClaudeEffortRequest => {
+  if (typeof effort !== 'string' || !CLAUDE_EFFORT_REQUESTS.has(effort as ClaudeEffortRequest)) {
+    throw new Error('思考程度标识无效。');
+  }
+  return effort as ClaudeEffortRequest;
 };
 
 /** Option identifiers are minted by `getModelOptions`; anything else never reaches the terminal. */
@@ -2047,6 +2056,26 @@ const registerIpc = (): void => {
             validatedSessionId,
             status.cwd,
             validateClaudePermissionMode(mode),
+          ),
+        };
+      } catch (error) {
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:set-effort',
+    async (event, sessionId: unknown, effort: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        return {
+          ok: true,
+          state: await requireClaudeRuntime().setEffort(
+            validatedSessionId,
+            status.cwd,
+            validateClaudeEffortRequest(effort),
           ),
         };
       } catch (error) {
