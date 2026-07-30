@@ -4990,6 +4990,12 @@ const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
   const card = document.createElement('article');
   card.className = 'plugin-card';
   card.dataset.enabled = String(plugin.enabled);
+  /*
+   * The dimmed treatment means "installed but switched off", so it needs the installation state as
+   * well: a plugin in the 可安装 list is also `enabled: false`, and keying the dimming on that alone
+   * greyed out the entire catalogue of things the user had not installed yet.
+   */
+  card.dataset.installed = String(plugin.installed);
 
   const header = document.createElement('div');
   header.className = 'plugin-card__header';

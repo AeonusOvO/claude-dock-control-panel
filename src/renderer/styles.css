@@ -6048,7 +6048,7 @@ button:disabled {
   box-shadow: var(--sheen);
 }
 
-.plugin-card[data-enabled='false'] {
+.plugin-card[data-enabled='false'][data-installed='true'] {
   --card-rest-opacity: 0.72;
 }
 

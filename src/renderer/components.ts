@@ -35,6 +35,20 @@ const EXIT_FALLBACK_MS = 600;
 
 const REDUCED_MOTION = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+/**
+ * The element the popup must be parented to so it is actually visible.
+ *
+ * A modal `<dialog>` is promoted to the browser's top layer, which sits above every `z-index` on the
+ * page, and everything outside it is made inert — so a popup on `body` is both painted underneath the
+ * dialog and unreachable by the pointer. Neither a higher `z-index` nor the popover API escapes that
+ * (inert wins over the top layer for hit-testing), so the popup has to live *inside* the dialog. Any
+ * other trigger keeps `body`, where the popup escapes scroll containers and clipping as before.
+ */
+const popupHost = (trigger: HTMLElement): HTMLElement => {
+  const dialog = trigger.closest('dialog');
+  return dialog?.hasAttribute('open') ? dialog : document.body;
+};
+
 /** Closes any open listbox. Safe to call when nothing is open. */
 export const closeOpenSelect = (): void => {
   openController?.close();
@@ -114,7 +128,6 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
 
   select.replaceWith(shell);
   shell.append(select, trigger);
-  document.body.append(listbox);
 
   /** Mirrors the native element's current option text and disabled state onto the trigger. */
   const syncTrigger = (): void => {
@@ -235,6 +248,12 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     window.clearTimeout(exitTimer);
     exitTimer = undefined;
     renderOptions();
+    /*
+     * Re-parented on every open, not once at construction: a select inside a dialog needs its popup
+     * in the dialog's top-layer subtree, and `enhanceSelect` runs long before any dialog is open. The
+     * host is therefore resolved from the trigger's live position each time.
+     */
+    popupHost(trigger).append(listbox);
     listbox.hidden = false;
     listbox.dataset.open = 'true';
     trigger.setAttribute('aria-expanded', 'true');

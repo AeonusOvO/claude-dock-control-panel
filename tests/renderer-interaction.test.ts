@@ -580,6 +580,28 @@ describe('the themed select is the control the pointer actually reaches', () => 
     expect(componentKit).toContain("const isOpen = (): boolean => listbox.dataset.open === 'true'");
     expect(componentKit).not.toMatch(/if \(listbox\.hidden\) \{\s+open\(true\)/);
   });
+
+  /*
+   * A modal `<dialog>` is promoted to the browser's top layer and makes everything outside it inert,
+   * so a popup parented to `body` was painted under the settings dialog and could not be clicked —
+   * the reported "主题切换框没有了". Neither a higher z-index nor the popover API escapes that, so the
+   * popup has to be parented into the dialog itself.
+   */
+  it('parents the popup into an open dialog so it is not buried by the top layer', () => {
+    expect(componentKit).toContain("const dialog = trigger.closest('dialog');");
+    expect(componentKit).toContain("return dialog?.hasAttribute('open') ? dialog : document.body;");
+    // Resolved per open, not once at construction — no dialog is open when `enhanceSelect` runs.
+    expect(componentKit).toContain('popupHost(trigger).append(listbox);');
+    expect(componentKit).not.toContain('document.body.append(listbox);');
+    const open = componentKit.slice(
+      componentKit.indexOf('const open = (focusSelected: boolean)'),
+      componentKit.indexOf('const isOpen ='),
+    );
+    // The re-parent must happen before the popup is measured, or it is positioned against the wrong box.
+    expect(open.indexOf('popupHost(trigger).append(listbox);')).toBeLessThan(
+      open.indexOf('positionListbox(trigger, listbox);'),
+    );
+  });
 });
 
 describe('plugin panel feedback', () => {
@@ -616,7 +638,20 @@ describe('plugin panel feedback', () => {
     );
     // The dimmed state must move the rest value, not re-declare a competing opacity.
     expect(rendererStyles).toMatch(
-      /\.plugin-card\[data-enabled='false'\]\s*\{\s*--card-rest-opacity: 0\.72;\s*\}/,
+      /\.plugin-card\[data-enabled='false'\]\[data-installed='true'\]\s*\{\s*--card-rest-opacity: 0\.72;\s*\}/,
+    );
+  });
+
+  /*
+   * A plugin in the 可安装 list is also `enabled: false`, so keying the dimming on that alone greyed
+   * out the whole catalogue of things not installed yet — text and buttons included. The dimming means
+   * "installed but switched off", so it needs the installation state too.
+   */
+  it('dims only installed-but-disabled plugins, never the ones on offer', () => {
+    expect(rendererSource).toContain('card.dataset.installed = String(plugin.installed);');
+    // No rule may dim on `data-enabled` alone, or a not-installed card inherits it again.
+    expect(rendererStyles).not.toMatch(
+      /\.plugin-card\[data-enabled='false'\]\s*\{[^}]*--card-rest-opacity/,
     );
   });
 });
