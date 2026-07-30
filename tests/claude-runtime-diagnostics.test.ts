@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 import {
+  parseClaudeEffortThinkingDisabledError,
   parseClaudeMetrics,
   parseClaudeRuntimeApiError,
   routerRepairInputForProject,
@@ -94,6 +95,27 @@ describe('Claude runtime route diagnostics', () => {
     expect(result).not.toContain('sk-example-sensitive-token');
   });
 
+  it('recognizes wrapped effort errors only when high effort conflicts with disabled thinking', () => {
+    const wrappedMax =
+      "API Error: 400 output_config.effort 'max' is not supported when thinking is\r\n" +
+      'disabled on this model. Use effort high or below, or enable thinking.';
+    const wrappedXhigh =
+      "API Error: 400 output_config.effort 'xhigh' is not supported when thinking is\n" +
+      'disabled on this model.';
+
+    expect(parseClaudeEffortThinkingDisabledError(wrappedMax)).toBe('max');
+    expect(parseClaudeEffortThinkingDisabledError(wrappedXhigh)).toBe('xhigh');
+    expect(parseClaudeRuntimeApiError(wrappedMax)).toContain('自动降到“均衡”');
+    expect(
+      parseClaudeEffortThinkingDisabledError(
+        "API Error: 400 output_config.effort 'high' is not supported by this relay.",
+      ),
+    ).toBeUndefined();
+    expect(
+      parseClaudeEffortThinkingDisabledError('API Error: 500 upstream unavailable'),
+    ).toBeUndefined();
+  });
+
   it('blocks a project that points at CCR while its Provider list is empty', () => {
     expect(usesDefaultClaudeRouter(routerConfig)).toBe(true);
     expect(routerBlockingDetail(routerConfig, routerState)).toContain('没有任何服务提供方');
@@ -140,6 +162,16 @@ describe('Claude runtime route diagnostics', () => {
       "shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}",
     );
     expect(runtimeSource).toContain('apiKeyHelperPolicy: config.apiKeyHelperPolicy');
+  });
+
+  it('keeps every effort level and narrowly recovers the disabled-thinking compatibility error', () => {
+    expect(runtimeSource).toContain('alwaysThinkingEnabled: true');
+    expect(runtimeSource).toContain("await this.submitClaudeCommand(runtime, '/effort high');");
+    expect(runtimeSource).toContain("runtime.effortRequest = 'high';");
+    expect(runtimeSource).toContain(
+      'parseClaudeEffortThinkingDisabledError(runtime.diagnosticBuffer)',
+    );
+    expect(runtimeSource).toContain('isClaudeEffortSafeAfterThinkingDisabledError(effort)');
   });
 });
 

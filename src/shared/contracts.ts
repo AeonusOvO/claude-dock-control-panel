@@ -23,6 +23,16 @@ export type ClaudePermissionMode =
  */
 export type ClaudeEffortLevel = 'high' | 'low' | 'max' | 'medium' | 'xhigh';
 export type ClaudeEffortRequest = ClaudeEffortLevel | 'auto' | 'ultracode';
+export interface ClaudeEffortCompatibility {
+  /**
+   * Claude Code sent a high effort value while the request had thinking disabled. The current
+   * session stays capped until a model switch or relaunch gives the new request path a fresh try.
+   */
+  maximum: 'high';
+  detectedAt: number;
+  rejectedLevel: 'max' | 'xhigh';
+  recovery: 'failed' | 'pending' | 'recovered';
+}
 export type ClaudePreset = ClaudeProviderId;
 export type ClaudeProvider = 'anthropic' | 'gateway';
 export type ClaudeSecurityStatus =
@@ -481,6 +491,8 @@ export interface ClaudeProjectState {
    * level Claude Code actually applied, which can be lower when the model caps it.
    */
   effortRequest?: ClaudeEffortRequest;
+  /** Runtime compatibility cap installed after Claude Code rejects high effort without thinking. */
+  effortCompatibility?: ClaudeEffortCompatibility;
   expectedModel?: string;
   installation: ClaudeInstallationStatus;
   metrics?: ClaudeMetrics;

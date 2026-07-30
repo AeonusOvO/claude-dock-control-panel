@@ -1,12 +1,20 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
   ClaudeConnectionAdvice,
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
+  ClaudeEffortCompatibility,
   ClaudeEffortLevel,
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
@@ -27,7 +35,11 @@ import type {
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
-import { CLAUDE_EFFORT_LEVELS, CLAUDE_EFFORT_REQUESTS } from '../shared/claude-effort';
+import {
+  CLAUDE_EFFORT_LEVELS,
+  CLAUDE_EFFORT_REQUESTS,
+  isClaudeEffortSafeAfterThinkingDisabledError,
+} from '../shared/claude-effort';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import { findClaudeProvider } from '../shared/claude-providers';
 import {
@@ -69,11 +81,14 @@ interface RuntimeSession {
   active: boolean;
   cwd: string;
   diagnosticBuffer: string;
+  /** Session-local cap installed after Claude Code combines high effort with disabled thinking. */
+  effortCompatibility?: ClaudeEffortCompatibility;
   /** Effort last requested from the status bar, until the status line reports what was applied. */
   effortRequest?: ClaudeEffortRequest;
   exitMarker?: string;
   expectedModel?: string;
   lastApiError?: {
+    category: 'effort-thinking-disabled' | 'general';
     detectedAt: number;
     detail: string;
   };
@@ -89,6 +104,8 @@ interface RuntimeSession {
   /** Latest `signaledAt` consumed from signal.json, so each signal is only acted on once. */
   signalSeenAt?: number;
   signalPath?: string;
+  settingsPath?: string;
+  thinkingEnabledForHighEffort: boolean;
   /** Resolved by the next PostCompact signal; lets a relaunch wait for compaction to finish. */
   waitingForCompact?: (signaledAt: number) => void;
 }
@@ -236,13 +253,18 @@ const normalizedRuntimeError = (value: string): string => {
   if (/model.+(?:not found|invalid|unsupported)|unknown model/i.test(compact)) {
     return 'Claude Code 的真实会话未被当前模型接受；请核对最终接口中的模型标识。';
   }
+  if (
+    /output_config\.effort.+(?:xhigh|max).+not supported when thinking is disabled/i.test(compact)
+  ) {
+    return 'Claude Code 在 thinking 关闭的请求中发送了过高的思考档位；ClaudeDock 正在自动降到“均衡”。';
+  }
   return compact
     ? 'Claude Code 的接口请求失败；请检查接入地址、认证方式和模型配置。原始错误已保留在终端输出中。'
     : 'Claude Code 的真实会话请求失败。';
 };
 
-export const parseClaudeRuntimeApiError = (value: string): string | undefined => {
-  const withoutAnsi = value
+const withoutTerminalControls = (value: string): string =>
+  value
     .replace(
       // ANSI CSI / OSC control sequences emitted by the terminal renderer.
       // eslint-disable-next-line no-control-regex
@@ -250,8 +272,35 @@ export const parseClaudeRuntimeApiError = (value: string): string | undefined =>
       '',
     )
     .replace(/\r/g, '\n');
-  const matches = [...withoutAnsi.matchAll(/API Error:\s*([^\n]{1,500})/gi)];
-  const latest = matches.at(-1)?.[1];
+
+const latestClaudeRuntimeApiError = (value: string): string | undefined => {
+  const withoutAnsi = withoutTerminalControls(value);
+  const marker = 'api error:';
+  const markerAt = withoutAnsi.toLowerCase().lastIndexOf(marker);
+  if (markerAt < 0) {
+    return undefined;
+  }
+  return withoutAnsi
+    .slice(markerAt + marker.length, markerAt + marker.length + 800)
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+export const parseClaudeEffortThinkingDisabledError = (
+  value: string,
+): 'max' | 'xhigh' | undefined => {
+  const latest = latestClaudeRuntimeApiError(value);
+  if (!latest || !/output_config\.effort/i.test(latest) || !/thinking is disabled/i.test(latest)) {
+    return undefined;
+  }
+  const rejected = /output_config\.effort\s*['"]?(xhigh|max)['"]?/i
+    .exec(latest)?.[1]
+    ?.toLowerCase();
+  return rejected === 'max' || rejected === 'xhigh' ? rejected : undefined;
+};
+
+export const parseClaudeRuntimeApiError = (value: string): string | undefined => {
+  const latest = latestClaudeRuntimeApiError(value);
   return latest ? normalizedRuntimeError(latest) : undefined;
 };
 
@@ -550,9 +599,20 @@ export class ClaudeRuntime {
     }
 
     runtime.diagnosticBuffer = `${runtime.diagnosticBuffer}${data}`.slice(-4_000);
+    const rejectedEffort = parseClaudeEffortThinkingDisabledError(runtime.diagnosticBuffer);
+    if (rejectedEffort && !runtime.effortCompatibility) {
+      runtime.effortCompatibility = {
+        detectedAt: Date.now(),
+        maximum: 'high',
+        recovery: 'pending',
+        rejectedLevel: rejectedEffort,
+      };
+      void this.recoverEffortAfterThinkingDisabled(runtime);
+    }
     const detectedError = parseClaudeRuntimeApiError(runtime.diagnosticBuffer);
     if (detectedError && detectedError !== runtime.lastApiError?.detail) {
       runtime.lastApiError = {
+        category: rejectedEffort ? 'effort-thinking-disabled' : 'general',
         detail: detectedError,
         detectedAt: Date.now(),
       };
@@ -590,6 +650,7 @@ export class ClaudeRuntime {
       allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
       config: this.configStore.getView(cwd),
       cwd,
+      effortCompatibility: runtime.effortCompatibility,
       effortRequest: runtime.effortRequest,
       expectedModel: runtime.expectedModel,
       installation,
@@ -858,6 +919,7 @@ export class ClaudeRuntime {
     const runtime = this.ensureSession(sessionId, cwd);
     runtime.active = true;
     runtime.diagnosticBuffer = '';
+    runtime.effortCompatibility = undefined;
     // A relaunch re-reads the persisted effort setting, so a session-only request no longer holds.
     runtime.effortRequest = undefined;
     runtime.expectedModel = config.model;
@@ -867,6 +929,8 @@ export class ClaudeRuntime {
     runtime.launchedConfigFingerprint = connectionFingerprint(config, credential);
     runtime.metrics = undefined;
     runtime.metricsPath = metricsPath;
+    runtime.settingsPath = settingsPath;
+    runtime.thinkingEnabledForHighEffort = false;
     // A relaunch paints a fresh TUI, so nothing observed in the previous one still holds.
     runtime.permissionMode = startMode;
     runtime.permissionModeCycle = startMode ? [startMode] : [];
@@ -993,6 +1057,10 @@ export class ClaudeRuntime {
 
     await this.submitClaudeCommand(runtime, `/model ${option.model}`);
     runtime.expectedModel = option.model;
+    runtime.effortCompatibility = undefined;
+    if (runtime.lastApiError?.category === 'effort-thinking-disabled') {
+      runtime.lastApiError = undefined;
+    }
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return state;
@@ -1016,9 +1084,23 @@ export class ClaudeRuntime {
     if (!CLAUDE_EFFORT_REQUESTS.has(effort)) {
       throw new Error('思考程度标识不合法，拒绝写入终端。');
     }
+    if (runtime.effortCompatibility && !isClaudeEffortSafeAfterThinkingDisabledError(effort)) {
+      throw new Error(
+        '当前会话已检测到高档思考与 thinking 关闭冲突；为避免请求再次失败，只能选择“均衡”或更低档位。',
+      );
+    }
+    if (!isClaudeEffortSafeAfterThinkingDisabledError(effort)) {
+      this.enableThinkingForHighEffort(runtime);
+    }
 
     await this.submitClaudeCommand(runtime, `/effort ${effort}`);
     runtime.effortRequest = effort;
+    if (runtime.effortCompatibility) {
+      runtime.effortCompatibility = {
+        ...runtime.effortCompatibility,
+        recovery: 'recovered',
+      };
+    }
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return state;
@@ -1320,6 +1402,61 @@ export class ClaudeRuntime {
     this.commandSubmissionQueues.clear();
   }
 
+  /**
+   * High effort is only useful when Claude Code keeps thinking enabled for the request. The
+   * command-line settings file is session-local and contains no credential, so it can be updated
+   * without changing the user's Claude Code configuration.
+   */
+  private enableThinkingForHighEffort(runtime: RuntimeSession): void {
+    if (runtime.thinkingEnabledForHighEffort || !runtime.settingsPath) {
+      return;
+    }
+
+    const temporaryPath = `${runtime.settingsPath}.thinking-${process.pid}.tmp`;
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(runtime.settingsPath, 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return;
+      }
+      const settings = parsed as Record<string, unknown>;
+      if (settings.alwaysThinkingEnabled !== true) {
+        writeFileSync(
+          temporaryPath,
+          `${JSON.stringify({ ...settings, alwaysThinkingEnabled: true }, null, 2)}\n`,
+          'utf8',
+        );
+        renameSync(temporaryPath, runtime.settingsPath);
+      }
+      runtime.thinkingEnabledForHighEffort = true;
+    } catch {
+      if (existsSync(temporaryPath)) {
+        unlinkSync(temporaryPath);
+      }
+      // The runtime fallback still catches the precise API error and safely lowers effort.
+    }
+  }
+
+  private async recoverEffortAfterThinkingDisabled(runtime: RuntimeSession): Promise<void> {
+    try {
+      await this.submitClaudeCommand(runtime, '/effort high');
+      runtime.effortRequest = 'high';
+      if (runtime.effortCompatibility) {
+        runtime.effortCompatibility = {
+          ...runtime.effortCompatibility,
+          recovery: 'recovered',
+        };
+      }
+    } catch {
+      if (runtime.effortCompatibility) {
+        runtime.effortCompatibility = {
+          ...runtime.effortCompatibility,
+          recovery: 'failed',
+        };
+      }
+    }
+    await this.emitState(runtime);
+  }
+
   private async getRouteHealth(
     runtime: RuntimeSession,
     config: NormalizedClaudeConfig,
@@ -1486,6 +1623,7 @@ export class ClaudeRuntime {
       markerRemainder: '',
       permissionModeCycle: [],
       sessionId,
+      thinkingEnabledForHighEffort: false,
     };
     this.sessions.set(sessionId, created);
     return created;
@@ -1502,6 +1640,9 @@ export class ClaudeRuntime {
         const metrics = parseClaudeMetrics(readFileSync(runtime.metricsPath, 'utf8'));
         if (!metrics || metrics.capturedAt === runtime.metrics?.capturedAt) {
           continue;
+        }
+        if (metrics.effortLevel === 'xhigh' || metrics.effortLevel === 'max') {
+          this.enableThinkingForHighEffort(runtime);
         }
         runtime.metrics = metrics;
         if (runtime.lastApiError && metrics.capturedAt > runtime.lastApiError.detectedAt) {

@@ -480,8 +480,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
    通过 Claude Code 官方 `--settings` 参数临时合并，不改变用户、项目或系统设置。命令行
    settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
    与模型，并把 `ANTHROPIC_API_BASE_URL`、`CLAUDE_AGENT_API_BASE_URL`、
-   `CCR_CLAUDE_CODE_MODEL`、`CODEXL_CLAUDE_CODE_MODEL` 和 Router 模型发现开关清空，防止
-   旧 CCR profile 把真实会话重新指向已停止的 `3456`。项目级 `apiKeyHelperPolicy` 默认为
+   `CCR_CLAUDE_CODE_MODEL`、`CODEXL_CLAUDE_CODE_MODEL`、Router 模型发现开关以及
+   `CLAUDE_CODE_DISABLE_THINKING`、`CLAUDE_CODE_EFFORT_LEVEL`、`MAX_THINKING_TOKENS`
+   清空，防止旧 CCR profile 把真实会话重新指向已停止的 `3456`，也防止父进程环境覆盖底栏
+   的 thinking / effort 选择。项目级 `apiKeyHelperPolicy` 默认为
    `prefer-claudedock`：仅当认证方式是显式 API Key / Auth Token 时，在该临时高优先级 settings
    写入空 `apiKeyHelper`，让本次 ClaudeDock 会话只使用安全存储中解密后注入的凭据；`inherit`
    则不写覆盖，保留 Claude Code 自己的 helper。现有登录和无认证模式不会停用 helper。
@@ -852,10 +854,25 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 40ms → `\r`」写法；任何档位都在运行中的对话里生效，不需要新 PTY，这是它与 `dontAsk` 和跨端点
 换模型的根本区别。
 
+高档位不能靠删除选项“修复”。`setEffort` 在提交 `auto` / `xhigh` / `max` / `ultracode`
+前，原子更新本会话命令行 settings（临时文件 → `renameSync`），写入
+`alwaysThinkingEnabled: true`；metrics 发现继承来的 `xhigh` / `max` 时也执行同一准备。
+这个 settings 文件不含凭据，不会改写用户的 `~/.claude/settings.json`。同时，受管环境清空
+三个会覆盖 thinking / effort 的继承变量，避免界面显示能调、子进程却继续被父环境锁死。
+
+Claude Code 仍可能在特定模型或网关组合中发送 `output_config.effort 'xhigh'/'max'`，却把
+thinking 关闭。`parseClaudeEffortThinkingDisabledError` 只在最新一段 `API Error:` 同时含有
+这两个条件时命中，并能跨 PTY 软换行识别；普通 401、404、连接失败或其他 400 均不进入兼容
+恢复。命中后 `ClaudeEffortCompatibility` 记录被拒档位、检测时间与 `pending/recovered/failed`
+状态，per-session 命令队列自动提交 `/effort high`。恢复成功后当前会话只开放
+`low/medium/high`，`auto` 也暂时关闭，因为它可能再次解析成高档；renderer 显示一次成功提示，
+要求用户重试刚才的 WebSearch。换模型或重启 PTY 会清除该上限，完整七档重新开放。
+
 生效值与请求值必须分开存。模型不支持某档时会静默降级到它支持的最高档，`ultracode` 也只会
 回报 `xhigh`，所以 `ClaudeMetrics.effortLevel`（状态行真值）优先，`ClaudeProjectState.effortRequest`
-只在状态行还没刷新前顶一下；`prepareLaunchInternal` 重启时清空 `effortRequest`，因为新 PTY 会
-重新读取持久化的思考程度设置，`max` / `ultracode` 这类仅本次会话的请求不再成立。
+只在状态行还没刷新前顶一下；兼容恢复刚完成时则优先显示请求值 `high`，避免旧 metrics 继续
+显示已失败的高档。`prepareLaunchInternal` 重启时清空 `effortRequest`，因为新 PTY 会重新读取
+持久化的思考程度设置，`max` / `ultracode` 这类仅本次会话的请求不再成立。
 `optionalEffortLevel` 只接受五个真实档位，`auto` 和 `ultracode` 不可能从状态行回来。
 
 **一个重启机制，两个调用方。** 跨端点换模型和 `dontAsk` 都走 `ClaudeRuntime.relaunch()`：
@@ -1075,7 +1092,8 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - `npm run typecheck`：分别检查渲染端和主进程类型。
 - `npm test`：运行目录/工作区、项目级开发引擎持久化、Codex 官方 Release 元数据与
   SHA-256 约束、账号/额度响应白名单、沙箱启动命令、Claude 配置与版本门禁、cURL 协议识别、Router 配置
-  定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、连接测试
+  定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、高档 thinking
+  环境清理、跨行 400 识别与精确回退、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
@@ -1292,6 +1310,8 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
   <https://code.claude.com/docs/en/sessions>
 - Claude Code commands：
   <https://code.claude.com/docs/en/commands>
+- Claude Code 高档 effort 与 disabled thinking 的已知兼容问题：
+  <https://github.com/anthropics/claude-code/issues/76689>
 - Claude Code changelog（`/theme` 与自定义主题）：
   <https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md>
 - Claude Code 官方安装与更新：

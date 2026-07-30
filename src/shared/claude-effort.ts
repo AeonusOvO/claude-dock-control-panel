@@ -73,5 +73,13 @@ export const CLAUDE_EFFORT_REQUESTS: ReadonlySet<ClaudeEffortRequest> = new Set(
   CLAUDE_EFFORT_OPTIONS.map((option) => option.id),
 );
 
+/**
+ * The API error for a request with thinking disabled explicitly permits `high` or below. `auto`
+ * cannot be treated as safe because the active model may resolve it back to `xhigh` or `max`.
+ */
+export const isClaudeEffortSafeAfterThinkingDisabledError = (
+  effort: ClaudeEffortRequest,
+): boolean => effort === 'low' || effort === 'medium' || effort === 'high';
+
 export const claudeEffortLabel = (effort?: ClaudeEffortRequest): string =>
   CLAUDE_EFFORT_OPTIONS.find((option) => option.id === effort)?.label ?? '—';

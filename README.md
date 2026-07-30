@@ -4,7 +4,16 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2.3.3 · 2026-07-30）
+## 当前版本重点（2.3.4 · 2026-07-30）
+
+- 修复高档思考与 Claude Code `thinking` 状态冲突时，WebSearch 等工具直接返回
+  `output_config.effort ... thinking is disabled` 400 的问题。七个思考档位全部保留；
+  选择高档位时，ClaudeDock 只在本会话的临时 settings 中显式开启 thinking，不修改用户的
+  Claude Code 设置。
+- 启动会话时会清除继承来的 `CLAUDE_CODE_DISABLE_THINKING`、
+  `CLAUDE_CODE_EFFORT_LEVEL` 与 `MAX_THINKING_TOKENS`，让底栏档位成为本次会话的真实控制源。
+  如果上游仍命中这条已知兼容性错误，客户端只把当前模型会话自动降到“均衡”，提示重试刚才的
+  WebSearch，并临时锁住会重复失败的高档位；换模型或重启会话后会重新开放，不影响其他模型。
 
 - 底栏「模式」右侧新增「思考」，一次列全 Claude Code 能调的所有思考程度：跟随模型默认
   （`auto`）、最低、较低、均衡、更深、最深，以及 Claude Code 自身的「最深 + 工作流」
@@ -14,8 +23,9 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   和跨端点换模型不同。命令正文与回车仍按会话串行提交，避免 Claude Code 把整块输入当粘贴。
 - 底栏显示以 `statusLine` 上报的 `effort.level` 为准，也就是 Claude Code 实际生效的档位：
   模型不支持所选档位时会静默降到它支持的最高档，`ultracode` 也只会回报为 `xhigh`。状态行
-  尚未刷新前先显示本次请求值，重启会话后请求值作废。模型完全没有思考参数时状态行不含该
-  字段，此时菜单和悬停提示都会说明这一点，而不是显示一个假档位。
+  尚未刷新前先显示本次请求值；已执行兼容回退时也立即显示“均衡”，不等待旧状态行刷新。
+  重启会话后请求值作废。模型完全没有思考参数时状态行不含该字段，此时菜单和悬停提示都会
+  说明这一点，而不是显示一个假档位。
 
 ## 2.3.0 版本重点（2026-07-30）
 
@@ -585,9 +595,10 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
   但不能替用户审计第三方网关，也不能证明网关没有在服务端替换模型。
 - Claude Code 会按优先级合并用户、项目和命令行设置。ClaudeDock 的临时 settings 会明确
   覆盖 `ANTHROPIC_API_BASE_URL`、`CLAUDE_AGENT_API_BASE_URL`、`CCR_CLAUDE_CODE_MODEL`
-  等第三方 Router 遗留别名；使用推荐的“ClaudeDock 单一凭据”策略时还会用空覆盖停用继承的
-  `apiKeyHelper`，避免与显式 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 并存。临时文件只含
-  地址、模型和空覆盖值，不含 API 凭据，也不修改用户或项目设置。
+  等第三方 Router 遗留别名，以及继承的 thinking / effort 环境覆盖；使用推荐的
+  “ClaudeDock 单一凭据”策略时还会用空覆盖停用继承的 `apiKeyHelper`，避免与显式
+  `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 并存。临时文件只含地址、模型、会话级 thinking
+  开关和空覆盖值，不含 API 凭据，也不修改用户或项目设置。
 - ClaudeDock 拒绝受保护启动已披露含隐藏地区/代理检测逻辑的 Claude Code
   2.1.91–2.1.196。Anthropic 当前仍不向中国大陆/香港及受不支持地区控制的实体提供官方
   服务；ClaudeDock 不会伪造位置、绕过地区限制或保证官方账号可用。

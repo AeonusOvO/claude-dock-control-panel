@@ -95,11 +95,31 @@ describe('Claude Code configuration', () => {
       ANTHROPIC_MODEL: 'deepseek-chat',
       CCR_CLAUDE_CODE_MODEL: '',
       CLAUDE_AGENT_API_BASE_URL: '',
+      CLAUDE_CODE_DISABLE_THINKING: '',
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '',
+      CLAUDE_CODE_EFFORT_LEVEL: '',
       CODEXL_CLAUDE_CODE_MODEL: '',
+      MAX_THINKING_TOKENS: '',
     });
     expect(environment).not.toHaveProperty('ANTHROPIC_API_KEY');
     expect(JSON.stringify(environment)).not.toContain('encrypted-at-rest-secret');
+  });
+
+  it('clears inherited thinking overrides so the live effort control owns the session', () => {
+    const config = normalizeClaudeConfig(gatewayInput);
+    const environment = buildClaudeSettingsEnvironment(config);
+    const launchEnvironment = buildClaudeEnvironment(config, 'encrypted-at-rest-secret');
+
+    expect(environment).toMatchObject({
+      CLAUDE_CODE_DISABLE_THINKING: '',
+      CLAUDE_CODE_EFFORT_LEVEL: '',
+      MAX_THINKING_TOKENS: '',
+    });
+    expect(launchEnvironment).toMatchObject({
+      CLAUDE_CODE_DISABLE_THINKING: null,
+      CLAUDE_CODE_EFFORT_LEVEL: null,
+      MAX_THINKING_TOKENS: null,
+    });
   });
 
   it('disables an inherited apiKeyHelper only for an explicit ClaudeDock credential', () => {

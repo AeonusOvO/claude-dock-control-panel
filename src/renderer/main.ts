@@ -70,7 +70,11 @@ import type {
 } from '../shared/contracts';
 import { estimateChatUsage } from '../shared/chat-usage';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
-import { CLAUDE_EFFORT_OPTIONS, claudeEffortLabel } from '../shared/claude-effort';
+import {
+  CLAUDE_EFFORT_OPTIONS,
+  claudeEffortLabel,
+  isClaudeEffortSafeAfterThinkingDisabledError,
+} from '../shared/claude-effort';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
 import {
   CLAUDE_PROVIDER_GROUPS,
@@ -589,6 +593,7 @@ let launchInProgress = false;
 let codexOperationInProgress = false;
 let codexAutoLaunchSessionId = '';
 const routeHealthNotifications = new Map<string, string>();
+const effortRecoveryNotifications = new Map<string, number>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerOperationInProgress = false;
 /** Set after a successful purge so the “pick a new source” hint only appears when it applies. */
@@ -3073,16 +3078,34 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     : '启动 Claude Code 后可切换权限模式';
   // The status line reports what Claude Code applied, which can sit below a request the model caps.
   const effortApplied = state.metrics?.effortLevel;
-  const effortShown = effortApplied ?? state.effortRequest;
+  const effortShown =
+    state.effortCompatibility?.recovery === 'recovered'
+      ? (state.effortRequest ?? effortApplied)
+      : (effortApplied ?? state.effortRequest);
   footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
   footerEffort.dataset.effort = effortShown ?? 'unknown';
-  footerEffort.disabled = effortSwitchInProgress;
-  footerEffort.setAttribute('aria-busy', String(effortSwitchInProgress));
+  footerEffort.disabled =
+    effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending';
+  footerEffort.setAttribute(
+    'aria-busy',
+    String(effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending'),
+  );
   footerEffort.title = !state.active
     ? '启动 Claude Code 后可调整思考程度'
-    : effortApplied === undefined
-      ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
-      : '点击调整思考程度，或在终端运行 /effort';
+    : state.effortCompatibility
+      ? state.effortCompatibility.recovery === 'failed'
+        ? '自动回退失败；请打开菜单手动选择“均衡”或更低档位'
+        : '已检测到高档思考与 thinking 关闭冲突；本会话限制为“均衡”或更低档位'
+      : effortApplied === undefined
+        ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
+        : '点击调整思考程度，或在终端运行 /effort';
+  if (
+    state.effortCompatibility?.recovery === 'recovered' &&
+    effortRecoveryNotifications.get(state.sessionId) !== state.effortCompatibility.detectedAt
+  ) {
+    effortRecoveryNotifications.set(state.sessionId, state.effortCompatibility.detectedAt);
+    showToast('思考档位已自动降到“均衡”，请重试刚才的 WebSearch。');
+  }
   allowBypassPermissions.checked = state.allowBypassPermissions;
 
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
@@ -4783,18 +4806,25 @@ const openEffortMenu = (): void => {
 
   const state = claudeStates.get(status.id);
   const running = state?.active ?? false;
+  const compatibility = state?.effortCompatibility;
   // The applied level is authoritative; the pending request only shows until the status line ticks.
-  const current = state?.metrics?.effortLevel ?? state?.effortRequest;
+  const current =
+    compatibility?.recovery === 'recovered'
+      ? (state?.effortRequest ?? state?.metrics?.effortLevel)
+      : (state?.metrics?.effortLevel ?? state?.effortRequest);
   footerEffortMenu.replaceChildren(
     ...CLAUDE_EFFORT_OPTIONS.map((option) =>
       buildFooterMenuItem(
         option.label,
-        option.detail,
+        compatibility && !isClaudeEffortSafeAfterThinkingDisabledError(option.id)
+          ? `${option.detail} 当前会话已检测到 thinking 兼容错误，此档位暂不可用。`
+          : option.detail,
         option.id === current,
         () => {
           void switchEffortLevel(option.id);
         },
-        !running,
+        !running ||
+          Boolean(compatibility && !isClaudeEffortSafeAfterThinkingDisabledError(option.id)),
       ),
     ),
   );
@@ -4802,6 +4832,16 @@ const openEffortMenu = (): void => {
     const hint = document.createElement('p');
     hint.className = 'footer-menu__hint';
     hint.textContent = '请先在工作台启动 Claude Code 会话。';
+    footerEffortMenu.append(hint);
+  } else if (compatibility) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent =
+      compatibility.recovery === 'pending'
+        ? '检测到高档思考与 thinking 关闭冲突，正在自动切换到“均衡”…'
+        : compatibility.recovery === 'recovered'
+          ? '已自动切到“均衡”；请重试刚才的 WebSearch。本会话暂不再使用更高档位。'
+          : '自动切换失败；请手动选择“均衡”或更低档位后重试。';
     footerEffortMenu.append(hint);
   } else if (state?.metrics?.effortLevel === undefined) {
     const hint = document.createElement('p');
@@ -6925,6 +6965,7 @@ function renderWorkspace(state: WorkspaceState): void {
     if (!validSessionIds.has(sessionId)) {
       claudeStates.delete(sessionId);
       automaticConnectionTestSessions.delete(sessionId);
+      effortRecoveryNotifications.delete(sessionId);
     }
   }
   for (const sessionId of codexStates.keys()) {

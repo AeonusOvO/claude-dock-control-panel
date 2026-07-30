@@ -421,9 +421,12 @@ describe('renderer interaction lifecycle contract', () => {
     expect(switchHandler).toMatch(
       /finally \{\s+endMask\(\);\s+effortSwitchInProgress = false;\s+footerEffort\.disabled = false;\s+footerEffort\.setAttribute\('aria-busy', 'false'\);/,
     );
-    // The level the status line reports wins over a request the model may have capped.
+    // The status line normally wins, but recovery immediately reflects the fallback command while
+    // Claude Code's status-line file catches up.
     expect(rendererSource).toContain('const effortApplied = state.metrics?.effortLevel;');
-    expect(rendererSource).toContain('const effortShown = effortApplied ?? state.effortRequest;');
+    expect(rendererSource).toContain("state.effortCompatibility?.recovery === 'recovered'");
+    expect(rendererSource).toContain('思考档位已自动降到“均衡”，请重试刚才的 WebSearch。');
+    expect(rendererSource).toContain('!isClaudeEffortSafeAfterThinkingDisabledError(option.id)');
   });
 
   it('always releases the model switch trigger after the IPC operation settles', () => {
