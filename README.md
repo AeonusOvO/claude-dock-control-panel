@@ -4,7 +4,19 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2.4.0 · 2026-07-31）
+## 当前版本重点（2.5.0 · 2026-07-31）
+
+- “自定义 Anthropic 接口”已改为“自定义中转站接口”，模型与凭据表单新增 Anthropic / OpenAI
+  协议切换。Anthropic 兼容接口由 Claude Code 直接访问；OpenAI Chat Completions / Responses
+  会自动写入本地 Claude Code Router、启动 3456 网关并转换为 Claude Code 使用的 Messages 请求。
+- 中转站地址支持智能识别和补全：可只填 `.com` 域名、带前导/尾随斜杠的地址、`/v1`、完整
+  `/v1/messages`、`/v1/chat/completions` 或 `/v1/responses`。远程地址自动补 `https://`，本机
+  回环地址自动使用 `http://`；切换协议时会替换已知接口后缀。
+- OpenAI 转换连接在项目配置与历史记录中仍展示原始中转站地址、模型、认证和凭据状态，同时单独
+  标明本机 Router 转换路径；恢复历史时按 Router Provider ID 复用上游，不把 3456 误当成用户
+  填写的接口。
+
+## 2.4.0 版本重点（2026-07-31）
 
 - 项目级 Claude 接入现在把 Anthropic Messages 直连与经 Claude Code Router 转换的 OpenAI
   Chat Completions / Responses 统一记入连接历史。每条记录显示真实上游协议标签，并另以
@@ -242,7 +254,7 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 - “接入”页改为“环境准备 → 选择服务商 → 填写凭据与模型 → 测试并接入”三步主流程。
   Anthropic、DeepSeek、GLM、Kimi、通义千问、MiniMax、豆包、MiMo、StepFun、
   SiliconFlow、OpenRouter 和 Ollama 等入口由同一份服务商目录预填官方兼容基址、认证方式、
-  主模型与快速模型；自定义 Anthropic、Router 和 cURL 路径完整保留在高级方式中。
+   主模型与快速模型；自定义中转站、Router 和 cURL 路径完整保留在高级方式中。
 - 服务商类别都可点击标题展开或收起，并带箭头与过渡效果；服务商卡片根据侧栏实际宽度自动
   切换一、二、三列。再次点击已选服务商会取消选择，此时后续配置与测试步骤整体收起，页面只
   保留服务商选择、高级设置入口和可复用的历史配置。

@@ -84,6 +84,40 @@ describe('Claude project profile store', () => {
     expect(store.getView(CWD).apiKeyHelperPolicy).toBe('inherit');
   });
 
+  it('keeps the original OpenAI relay fields separate from the effective local Router route', () => {
+    const { profilePath, store } = createStore();
+    store.save(
+      CWD,
+      {
+        ...gatewayInput,
+        authMode: 'authToken',
+        baseUrl: 'http://127.0.0.1:3456',
+        model: 'relay-example/gpt-5.4',
+        preset: 'custom',
+      },
+      {
+        protocol: 'openai',
+        routerProviderId: 'relay-example',
+        sourceAuthMode: 'authToken',
+        sourceBaseUrl: 'https://relay.example.com/v1/chat/completions',
+        sourceCredentialConfigured: true,
+        sourceModel: 'gpt-5.4',
+        sourceModelFast: 'gpt-5-mini',
+      },
+    );
+
+    const reopened = new ClaudeConfigStore(path.dirname(path.dirname(profilePath)));
+    expect(reopened.getView(CWD)).toMatchObject({
+      baseUrl: 'http://127.0.0.1:3456',
+      model: 'relay-example/gpt-5.4',
+      protocol: 'openai',
+      routerProviderId: 'relay-example',
+      sourceBaseUrl: 'https://relay.example.com/v1/chat/completions',
+      sourceCredentialConfigured: true,
+      sourceModel: 'gpt-5.4',
+    });
+  });
+
   it('remembers the switch for a project that has no saved route yet', () => {
     const { store } = createStore();
 

@@ -23,6 +23,7 @@ import type {
   ClaudeRouterProviderView,
   SaveClaudeRouterProviderInput,
 } from '../shared/contracts';
+import { completeConnectionEndpoint } from '../shared/connection-endpoint';
 import { runWindowsCommand } from './windows-command';
 
 const execFileAsync = promisify(execFile);
@@ -294,27 +295,11 @@ const readJsonFile = (filePath: string, maximumBytes = 2 * 1024 * 1024): unknown
   return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
 };
 
-const normalizeProviderBaseUrl = (value: string): string => {
-  let parsed: URL;
-  try {
-    parsed = new URL(value.trim());
-  } catch {
-    throw new Error('路由器上游地址不是有效网址。');
-  }
-  const hostname = parsed.hostname.toLowerCase();
-  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('路由器上游地址不能包含用户名、密码、查询参数或片段。');
-  }
-  if (
-    parsed.protocol !== 'https:' &&
-    !(parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(hostname))
-  ) {
-    throw new Error('路由器的远程上游必须使用 HTTPS；仅本机地址允许 HTTP。');
-  }
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
-  const normalized = parsed.toString();
-  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
-};
+const normalizeProviderBaseUrl = (
+  value: string,
+  protocol: ClaudeRouterProviderProtocol,
+): string =>
+  completeConnectionEndpoint(value, protocol === 'anthropic_messages' ? 'anthropic' : 'openai');
 
 export const normalizeRouterProviderInput = (
   input: SaveClaudeRouterProviderInput,
@@ -348,7 +333,7 @@ export const normalizeRouterProviderInput = (
   }
   return {
     apiKey,
-    baseUrl: normalizeProviderBaseUrl(input.baseUrl),
+    baseUrl: normalizeProviderBaseUrl(input.baseUrl, input.protocol),
     credentialAction: input.credentialAction,
     id: input.id,
     makePreferred: Boolean(input.makePreferred),
@@ -513,6 +498,11 @@ export const buildUpdatedRouterConfig = (
     next.api_key = input.apiKey ?? '';
     delete next.apiKey;
     delete next.apikey;
+  } else if (input.credentialAction === 'clear') {
+    delete next.api_key;
+    delete next.apiKey;
+    delete next.apikey;
+    delete next.credentials;
   }
 
   if (existingIndex >= 0) {

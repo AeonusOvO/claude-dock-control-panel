@@ -166,11 +166,11 @@ describe('renderer interaction lifecycle contract', () => {
     expect(historyIndex).toBeGreaterThan(0);
     expect(configIndex).toBeGreaterThan(historyIndex);
     expect(rendererSource).toContain(
-      "appendParameter('接口 / 网关', entry.baseUrl || 'Anthropic 官方端点')",
+      "appendParameter('接口 / 网关', displayedBaseUrl || 'Anthropic 官方端点')",
     );
-    expect(rendererSource).toContain("appendParameter('主模型', entry.model || '默认模型')");
+    expect(rendererSource).toContain("appendParameter('主模型', displayedModel || '默认模型')");
     expect(rendererSource).toContain(
-      "appendParameter('快速模型', entry.modelFast || entry.model || '跟随主模型')",
+      "appendParameter('快速模型', displayedModelFast || displayedModel || '跟随主模型')",
     );
     expect(rendererSource).not.toContain('connectionHistorySection');
   });
@@ -185,6 +185,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('window.controlPanel.renameClaudeConnectionHistory(');
     expect(rendererStyles).toContain(".connection-history__tag[data-protocol='anthropic']");
     expect(rendererStyles).toContain(".connection-history__tag[data-protocol='openai']");
+    expect(rendererMarkup).toContain('id="claude-protocol"');
+    expect(rendererMarkup).toContain('OpenAI 对话补全 / Responses');
+    expect(rendererMarkup).toContain('inputmode="url"');
   });
 
   it('provides independently configured model chat with a separate workspace', () => {

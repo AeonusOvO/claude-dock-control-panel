@@ -1,7 +1,12 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { safeStorage } from 'electron';
-import type { ClaudeConfigView, SaveClaudeConfigInput } from '../shared/contracts';
+import type {
+  ClaudeAuthMode,
+  ClaudeConfigView,
+  ClaudeEndpointProtocol,
+  SaveClaudeConfigInput,
+} from '../shared/contracts';
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 import {
   DEFAULT_CLAUDE_CONFIG,
@@ -16,6 +21,23 @@ interface StoredClaudeConfig extends NormalizedClaudeConfig {
    */
   allowBypassPermissions?: boolean;
   encryptedCredential?: string;
+  protocol?: ClaudeEndpointProtocol;
+  routerProviderId?: string;
+  sourceAuthMode?: ClaudeAuthMode;
+  sourceBaseUrl?: string;
+  sourceCredentialConfigured?: boolean;
+  sourceModel?: string;
+  sourceModelFast?: string;
+}
+
+export interface ClaudeConfigPresentation {
+  protocol: ClaudeEndpointProtocol;
+  routerProviderId?: string;
+  sourceAuthMode?: ClaudeAuthMode;
+  sourceBaseUrl?: string;
+  sourceCredentialConfigured?: boolean;
+  sourceModel?: string;
+  sourceModelFast?: string;
 }
 
 export interface ClaudeConfigSnapshot {
@@ -53,7 +75,21 @@ const isStoredConfig = (value: unknown): value is StoredClaudeConfig => {
     typeof record.preset === 'string' &&
     (record.allowBypassPermissions === undefined ||
       typeof record.allowBypassPermissions === 'boolean') &&
-    (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string')
+    (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string') &&
+    (record.protocol === undefined ||
+      record.protocol === 'anthropic' ||
+      record.protocol === 'openai' ||
+      record.protocol === 'unknown') &&
+    (record.routerProviderId === undefined || typeof record.routerProviderId === 'string') &&
+    (record.sourceAuthMode === undefined ||
+      record.sourceAuthMode === 'apiKey' ||
+      record.sourceAuthMode === 'authToken' ||
+      record.sourceAuthMode === 'none') &&
+    (record.sourceBaseUrl === undefined || typeof record.sourceBaseUrl === 'string') &&
+    (record.sourceCredentialConfigured === undefined ||
+      typeof record.sourceCredentialConfigured === 'boolean') &&
+    (record.sourceModel === undefined || typeof record.sourceModel === 'string') &&
+    (record.sourceModelFast === undefined || typeof record.sourceModelFast === 'string')
   );
 };
 
@@ -111,6 +147,15 @@ export class ClaudeConfigStore {
     return {
       ...config,
       credentialConfigured: Boolean(stored?.encryptedCredential),
+      protocol:
+        stored?.protocol ??
+        (config.provider === 'anthropic' || config.preset !== 'gateway' ? 'anthropic' : 'unknown'),
+      routerProviderId: stored?.routerProviderId,
+      sourceAuthMode: stored?.sourceAuthMode,
+      sourceBaseUrl: stored?.sourceBaseUrl,
+      sourceCredentialConfigured: stored?.sourceCredentialConfigured,
+      sourceModel: stored?.sourceModel,
+      sourceModelFast: stored?.sourceModelFast,
     };
   }
 
@@ -151,7 +196,11 @@ export class ClaudeConfigStore {
     this.persist(store);
   }
 
-  public save(cwd: string, input: SaveClaudeConfigInput): ClaudeConfigView {
+  public save(
+    cwd: string,
+    input: SaveClaudeConfigInput,
+    presentation?: ClaudeConfigPresentation,
+  ): ClaudeConfigView {
     const config = normalizeClaudeConfig(input);
     const store = this.load();
     const key = projectKey(cwd);
@@ -180,6 +229,16 @@ export class ClaudeConfigStore {
       // Saving a route must not silently re-arm (or disarm) the permission switch.
       allowBypassPermissions: store.projects[key]?.allowBypassPermissions,
       encryptedCredential,
+      protocol:
+        presentation?.protocol ??
+        input.protocol ??
+        (config.provider === 'anthropic' || config.preset !== 'gateway' ? 'anthropic' : 'unknown'),
+      routerProviderId: presentation?.routerProviderId,
+      sourceAuthMode: presentation?.sourceAuthMode,
+      sourceBaseUrl: presentation?.sourceBaseUrl,
+      sourceCredentialConfigured: presentation?.sourceCredentialConfigured,
+      sourceModel: presentation?.sourceModel,
+      sourceModelFast: presentation?.sourceModelFast,
     };
     this.persist(store);
     return this.getView(cwd);

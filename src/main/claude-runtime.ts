@@ -36,6 +36,10 @@ import type {
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import {
+  completeConnectionEndpoint,
+  routerProtocolForOpenAiEndpoint,
+} from '../shared/connection-endpoint';
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
 import {
   CLAUDE_EFFORT_LEVELS,
@@ -69,7 +73,7 @@ import {
 } from './claude-configuration';
 import { claudeMessagesEndpoint, testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
-import type { ClaudeConfigSnapshot } from './claude-config-store';
+import type { ClaudeConfigPresentation, ClaudeConfigSnapshot } from './claude-config-store';
 import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import {
@@ -115,6 +119,16 @@ interface RuntimeSession {
 interface ConnectionHistoryMetadata {
   name?: string;
   protocol: ClaudeEndpointProtocol;
+  routerProviderId?: string;
+  sourceConfig?: SaveClaudeConfigInput;
+  sourceCredential?: string;
+  sourceCredentialConfigured?: boolean;
+}
+
+interface PreparedOpenAiConnection {
+  effectiveInput: SaveClaudeConfigInput;
+  historyMetadata: ConnectionHistoryMetadata;
+  presentation: ClaudeConfigPresentation;
 }
 
 export const connectionProtocolForRouterProvider = (
@@ -520,6 +534,17 @@ const endpointKey = (value: {
   provider: string;
 }): string =>
   `${value.provider}|${value.preset}|${value.authMode}|${value.apiKeyHelperPolicy}|${value.baseUrl}`;
+
+const customRouterProviderName = (endpoint: string): string => {
+  const hostname =
+    new URL(endpoint).hostname
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'openai-relay';
+  const suffix = createHash('sha256').update(endpoint).digest('hex').slice(0, 8);
+  return `claudedock-${hostname}-${suffix}`;
+};
 
 const describeEndpoint = (entry: ClaudeConnectionHistoryEntry): string => {
   const providerLabel = findClaudeProvider(entry.preset)?.label ?? '自定义接入';
@@ -991,13 +1016,39 @@ export class ClaudeRuntime {
     cwd: string,
     input: Parameters<ClaudeConfigStore['save']>[1],
     historyMetadata?: ConnectionHistoryMetadata,
+    presentation?: ClaudeConfigPresentation,
   ): Promise<ClaudeProjectState> {
-    this.configStore.save(cwd, input);
+    this.configStore.save(cwd, input, presentation);
     await this.recordConnectionHistory(cwd, input, historyMetadata);
     const runtime = this.ensureSession(sessionId, cwd);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return { ...state, active: runtime.active };
+  }
+
+  public async saveConnectionConfig(
+    sessionId: string,
+    cwd: string,
+    input: SaveClaudeConfigInput,
+    historyName?: string,
+  ): Promise<ClaudeProjectState> {
+    if (input.protocol !== 'openai') {
+      return this.saveConfig(sessionId, cwd, input, {
+        protocol: input.protocol ?? defaultConnectionProtocolForPreset(input.preset),
+      });
+    }
+
+    const prepared = await this.prepareOpenAiConnection(input);
+    if (historyName) {
+      prepared.historyMetadata.name = historyName;
+    }
+    return this.saveConfig(
+      sessionId,
+      cwd,
+      prepared.effectiveInput,
+      prepared.historyMetadata,
+      prepared.presentation,
+    );
   }
 
   public getConnectionHistory(cwd: string): ClaudeConnectionHistoryEntry[] {
@@ -1027,6 +1078,9 @@ export class ClaudeRuntime {
     entryId: string,
   ): Promise<ClaudeProjectState> {
     const replay = this.historyStore.toReplayInput(cwd, entryId);
+    if (replay.config.protocol === 'openai') {
+      return this.saveConnectionConfig(sessionId, cwd, replay.config, replay.name);
+    }
     return this.saveConfig(sessionId, cwd, replay.config, {
       name: replay.name,
       protocol: replay.protocol,
@@ -1392,10 +1446,127 @@ export class ClaudeRuntime {
     });
   }
 
-  /**
-   * Snapshots what was saved together with the gateway state at that moment, so a record restores
-   * the situation and not just the form fields. A history failure must never fail the save itself.
-   */
+  /** Builds the real Claude Code route for an OpenAI-compatible upstream. */
+  private async prepareOpenAiConnection(
+    input: SaveClaudeConfigInput,
+  ): Promise<PreparedOpenAiConnection> {
+    if (input.authMode !== 'authToken' && input.authMode !== 'none') {
+      throw new Error('OpenAI 协议请选择 Bearer 密钥或无需认证。');
+    }
+    const model = input.model.trim();
+    const modelFast = input.modelFast?.trim() || model;
+    if (!MODEL_NAME_PATTERN.test(model) || !MODEL_NAME_PATTERN.test(modelFast)) {
+      throw new Error('模型标识只能包含字母、数字以及 . _ : / @ [ ] ~ -。');
+    }
+    const endpoint = completeConnectionEndpoint(input.baseUrl, 'openai');
+    const protocol = routerProtocolForOpenAiEndpoint(endpoint);
+
+    let routerState = await this.routerManager.getState();
+    if (!routerState.managementAvailable) {
+      let startError: unknown;
+      try {
+        routerState = await this.routerManager.start();
+      } catch (error) {
+        startError = error;
+        routerState = await this.routerManager.getState();
+      }
+      if (!routerState.managementAvailable) {
+        throw new Error(
+          startError instanceof Error
+            ? `OpenAI 协议需要本地 Router 完成格式转换：${startError.message}`
+            : 'OpenAI 协议需要先安装并启动本地 Router。',
+        );
+      }
+    }
+
+    const sameEndpoint = (candidate: ClaudeRouterManagementState['providers'][number]): boolean => {
+      if (candidate.protocol !== protocol) {
+        return false;
+      }
+      try {
+        return completeConnectionEndpoint(candidate.baseUrl, 'openai') === endpoint;
+      } catch {
+        return false;
+      }
+    };
+    const existing =
+      routerState.providers.find((candidate) => candidate.id === input.routerProviderId) ??
+      routerState.providers.find(sameEndpoint);
+    const enteredCredential = input.credential?.trim();
+    const credentialAction =
+      input.authMode === 'none' || input.credentialAction === 'clear'
+        ? 'clear'
+        : enteredCredential
+          ? 'replace'
+          : 'keep';
+    if (
+      credentialAction === 'keep' &&
+      input.authMode !== 'none' &&
+      !existing?.credentialConfigured
+    ) {
+      throw new Error('这个 OpenAI 中转站还没有保存接口密钥，请填写后再继续。');
+    }
+
+    const saved = await this.routerManager.saveProvider({
+      apiKey: enteredCredential,
+      baseUrl: endpoint,
+      credentialAction,
+      id: existing?.id,
+      makePreferred: true,
+      models: [...new Set([model, modelFast])],
+      name: existing?.name ?? customRouterProviderName(endpoint),
+      protocol,
+      useForCurrentProject: false,
+    });
+    routerState = await this.routerManager.start();
+    this.routerHealthCache.set(routerState);
+    if (routerState.gatewayState !== 'running') {
+      throw new Error(`本地 Router 未能启动模型网关：${routerState.message}`);
+    }
+
+    const sourceCredentialConfigured =
+      credentialAction === 'replace' ||
+      (credentialAction === 'keep' && Boolean(existing?.credentialConfigured));
+    const sourceConfig: SaveClaudeConfigInput = {
+      ...input,
+      baseUrl: endpoint,
+      credential: undefined,
+      credentialAction: 'keep',
+      protocol: 'openai',
+      routerProviderId: saved.provider.id,
+    };
+    return {
+      effectiveInput: {
+        apiKeyHelperPolicy: input.apiKeyHelperPolicy,
+        authMode: 'authToken',
+        baseUrl: saved.connection.baseUrl,
+        credential: saved.connection.apiKey,
+        credentialAction: 'replace',
+        model: `${saved.provider.name}/${model}`,
+        modelFast: `${saved.provider.name}/${modelFast}`,
+        preset: 'custom',
+        provider: 'gateway',
+      },
+      historyMetadata: {
+        name: saved.provider.name,
+        protocol: 'openai',
+        routerProviderId: saved.provider.id,
+        sourceConfig,
+        sourceCredential: credentialAction === 'replace' ? enteredCredential : undefined,
+        sourceCredentialConfigured,
+      },
+      presentation: {
+        protocol: 'openai',
+        routerProviderId: saved.provider.id,
+        sourceAuthMode: input.authMode,
+        sourceBaseUrl: endpoint,
+        sourceCredentialConfigured,
+        sourceModel: model,
+        sourceModelFast: modelFast,
+      },
+    };
+  }
+
   private async recordConnectionHistory(
     cwd: string,
     input: SaveClaudeConfigInput,
@@ -1405,11 +1576,16 @@ export class ClaudeRuntime {
       const router = await this.getRouterHealthState();
       this.historyStore.record(cwd, {
         config: input,
-        credential: this.configStore.getCredential(cwd),
+        credential: metadata?.sourceConfig
+          ? metadata.sourceCredential
+          : this.configStore.getCredential(cwd),
         gatewayEndpoint: router.endpoint,
         gatewayState: router.gatewayState,
         name: metadata?.name,
         protocol: metadata?.protocol ?? defaultConnectionProtocolForPreset(input.preset),
+        routerProviderId: metadata?.routerProviderId,
+        sourceConfig: metadata?.sourceConfig,
+        sourceCredentialConfigured: metadata?.sourceCredentialConfigured,
       });
     } catch {
       // The configuration is already saved; a missing history entry is not worth failing over.
@@ -1420,8 +1596,10 @@ export class ClaudeRuntime {
     cwd: string,
     input: SaveClaudeConfigInput,
   ): Promise<ClaudeConnectionTestResult> {
-    const config = normalizeClaudeConfig(input);
-    const enteredCredential = input.credential?.trim();
+    const prepared = input.protocol === 'openai' ? await this.prepareOpenAiConnection(input) : undefined;
+    const testInput = prepared?.effectiveInput ?? input;
+    const config = normalizeClaudeConfig(testInput);
+    const enteredCredential = testInput.credential?.trim();
     const credential = enteredCredential || this.configStore.getCredential(cwd);
     const fingerprint = connectionFingerprint(config, credential);
     const result = await this.backgroundTasks.run(

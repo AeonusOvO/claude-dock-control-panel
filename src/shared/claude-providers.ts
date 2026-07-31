@@ -283,11 +283,11 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
   {
     authMode: 'authToken',
     baseUrl: 'https://gateway.example.com',
-    description: '手动填写提供 Anthropic /v1/messages 的第三方服务。',
+    description: '手动填写 Anthropic 或 OpenAI 兼容的第三方中转站。',
     editableBaseUrl: true,
     group: 'advanced',
     id: 'custom',
-    label: '自定义 Anthropic 接口',
+    label: '自定义中转站接口',
     model: 'default',
   },
   {

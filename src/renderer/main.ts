@@ -71,6 +71,10 @@ import type {
 import { estimateChatUsage } from '../shared/chat-usage';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import {
+  completeConnectionEndpoint,
+  type ConfigurableEndpointProtocol,
+} from '../shared/connection-endpoint';
+import {
   CLAUDE_EFFORT_OPTIONS,
   claudeEffortLabel,
   isClaudeEffortSafeAfterThinkingDisabledError,
@@ -166,7 +170,9 @@ interface AdvancedConnectionSnapshot {
   credential: string;
   model: string;
   modelFast: string;
+  protocol: ConfigurableEndpointProtocol;
   providerId?: ClaudeProviderId;
+  routerProviderId?: string;
 }
 
 const requiredElement = <T extends HTMLElement>(selector: string): T => {
@@ -198,6 +204,7 @@ const claudeLiveIndicator = requiredElement<HTMLElement>('#claude-live-indicator
 const claudeModel = requiredElement<HTMLInputElement>('#claude-model');
 const claudeModelFast = requiredElement<HTMLInputElement>('#claude-model-fast');
 const claudePreset = requiredElement<HTMLSelectElement>('#claude-preset');
+const claudeProtocol = requiredElement<HTMLSelectElement>('#claude-protocol');
 const claudeRouteEndpoint = requiredElement<HTMLElement>('#claude-route-endpoint');
 const claudeRouteModel = requiredElement<HTMLElement>('#claude-route-model');
 const claudeRouteName = requiredElement<HTMLElement>('#claude-route-name');
@@ -206,6 +213,8 @@ const claudeSecurityBanner = requiredElement<HTMLElement>('#claude-security-bann
 const claudeWorkbench = requiredElement<HTMLElement>('#claude-workbench');
 const brandLogo = requiredElement<HTMLImageElement>('#brand-logo');
 const baseUrlField = requiredElement<HTMLElement>('#base-url-field');
+const protocolField = requiredElement<HTMLElement>('#protocol-field');
+const protocolHelp = requiredElement<HTMLElement>('#protocol-help');
 const clearTerminalButton = requiredElement<HTMLButtonElement>('#clear-terminal');
 const clearCredentialButton = requiredElement<HTMLButtonElement>('#clear-credential');
 const configurationHints = requiredElement<HTMLElement>('#configuration-hints');
@@ -586,6 +595,7 @@ let networkPreflightDialogProvider: NetworkProviderId | undefined;
 let connectionEnvironmentReady = false;
 let providerGroupExpansionPending = false;
 let selectedProviderId: ClaudeProviderId | undefined;
+let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let selectedRailTab: string | undefined = 'projects';
 let selectedSettingsTab: 'connection' | 'general' = 'general';
@@ -1017,13 +1027,15 @@ const activeNetworkProvider = (): NetworkProviderId | undefined => {
 
 const savedClaudeConfigInput = (config: ClaudeProjectState['config']): SaveClaudeConfigInput => ({
   apiKeyHelperPolicy: config.apiKeyHelperPolicy,
-  authMode: config.authMode,
-  baseUrl: config.baseUrl,
+  authMode: config.sourceAuthMode ?? config.authMode,
+  baseUrl: config.sourceBaseUrl ?? config.baseUrl,
   credentialAction: 'keep',
-  model: config.model,
-  modelFast: config.modelFast,
+  model: config.sourceModel ?? config.model,
+  modelFast: config.sourceModelFast ?? config.modelFast,
   preset: config.preset,
+  protocol: config.protocol === 'openai' ? 'openai' : 'anthropic',
   provider: config.provider,
+  routerProviderId: config.routerProviderId,
 });
 
 const networkPreflightTone = (
@@ -2345,7 +2357,9 @@ const syncConnectionInteractivity = (): void => {
   }
   if (connectionEnvironmentReady && !connectionTestInProgress) {
     const config = claudeStates.get(workspaceState.activeSessionId)?.config;
-    clearCredentialButton.disabled = !config?.credentialConfigured;
+    clearCredentialButton.disabled = !(
+      config?.sourceCredentialConfigured ?? config?.credentialConfigured
+    );
   }
   syncApiKeyHelperPolicyUi();
 };
@@ -2370,6 +2384,7 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
 
 const clearProviderSelection = (clearDraft = true): void => {
   selectedProviderId = undefined;
+  selectedRouterProviderId = undefined;
   claudePreset.value = '';
   providerSetup.hidden = true;
   claudeConfigForm.hidden = true;
@@ -2490,15 +2505,27 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   const isOfficialLogin = provider.id === 'anthropic';
   const isAdvanced =
     provider.id === 'custom' || provider.id === 'gateway' || provider.id === 'curl';
+  const supportsProtocolSwitch = provider.id === 'custom';
+  if (!preserveValues || !supportsProtocolSwitch) {
+    claudeProtocol.value = 'anthropic';
+    selectedRouterProviderId = undefined;
+  }
+  const protocol = claudeProtocol.value as ConfigurableEndpointProtocol;
+  protocolField.hidden = !supportsProtocolSwitch;
   baseUrlField.hidden = !provider.editableBaseUrl;
 
   if (isAdvanced) {
     setAuthOptions(
-      [
-        { label: '接口密钥（X-Api-Key）', value: 'apiKey' },
-        { label: '持有者令牌（Authorization / Bearer）', value: 'authToken' },
-        { label: '无需认证（仅建议本机网关）', value: 'none' },
-      ],
+      supportsProtocolSwitch && protocol === 'openai'
+        ? [
+            { label: '接口密钥（Authorization / Bearer）', value: 'authToken' },
+            { label: '无需认证（仅建议本机网关）', value: 'none' },
+          ]
+        : [
+            { label: '接口密钥（X-Api-Key）', value: 'apiKey' },
+            { label: '持有者令牌（Authorization / Bearer）', value: 'authToken' },
+            { label: '无需认证（仅建议本机网关）', value: 'none' },
+          ],
       preserveValues
         ? (claudeAuthMode.value as SaveClaudeConfigInput['authMode'])
         : provider.authMode,
@@ -2521,9 +2548,17 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     claudeModelFast.value = provider.modelFast ?? provider.model;
   }
   baseUrlHelp.textContent =
-    provider.id === 'gateway'
+    supportsProtocolSwitch
+      ? protocol === 'openai'
+        ? '可填域名、/v1、/v1/chat/completions 或 /v1/responses；保存时会自动补全，并由本地 Router 转换。'
+        : '可填域名、/v1 或 /v1/messages；保存时会自动补全成 Anthropic Messages 接口。'
+      : provider.id === 'gateway'
       ? '填写路由器真正的模型接口；默认 3456 是模型接口，3458 是管理页。'
       : '接口必须提供 Anthropic /v1/messages，且不能直接使用 OpenAI /chat/completions。';
+  protocolHelp.textContent =
+    protocol === 'openai'
+      ? 'OpenAI 请求会自动写入并启动本地 Router，再转换为 Claude Code 使用的 Anthropic Messages 请求。'
+      : 'Anthropic Messages 接口由 Claude Code 直接访问，不经过协议转换。';
   modelHelp.textContent = `主模型会同时用于默认、Opus 与 Sonnet 路由；当前推荐 ${provider.model}。`;
   authModeHelp.textContent =
     provider.authMode === 'existing'
@@ -2531,12 +2566,22 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
       : provider.authMode === 'apiKey'
         ? '该服务商使用 x-api-key 请求头。'
         : '该服务商使用 Authorization: Bearer 请求头。';
-  authModeLabel.textContent = isOfficialLogin ? '官方认证方式' : 'Claude Code 到接口的认证方式';
+  authModeLabel.textContent = isOfficialLogin
+    ? '官方认证方式'
+    : supportsProtocolSwitch && protocol === 'openai'
+      ? '中转站认证方式'
+      : 'Claude Code 到接口的认证方式';
   credentialLabel.textContent =
-    provider.id === 'gateway' ? '路由器访问密钥（不是上游密钥）' : `${provider.label} 凭据`;
+    provider.id === 'gateway'
+      ? '路由器访问密钥（不是上游密钥）'
+      : supportsProtocolSwitch && protocol === 'openai'
+        ? 'OpenAI 中转站密钥'
+        : `${provider.label} 凭据`;
   claudeCredential.placeholder = provider.keyHint ?? '留空则保留已保存的凭据';
   credentialField.hidden =
-    provider.authMode === 'existing' || provider.authMode === 'none' || provider.id === 'ollama';
+    claudeAuthMode.value === 'existing' ||
+    claudeAuthMode.value === 'none' ||
+    provider.id === 'ollama';
 
   providerSetup.hidden = false;
   providerTitle.textContent = provider.label;
@@ -2561,21 +2606,40 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
     claudePreset.append(option);
   }
   claudePreset.value = config.preset;
+  claudeProtocol.value = config.protocol === 'openai' ? 'openai' : 'anthropic';
   claudeApiKeyHelperPolicy.value = config.apiKeyHelperPolicy;
   applyPresetUi(config.preset, true);
-  claudeBaseUrl.value = config.baseUrl;
-  claudeModel.value = config.model;
-  claudeModelFast.value = config.modelFast ?? config.model;
-  claudeAuthMode.value = config.authMode;
-  credentialField.hidden = config.authMode === 'existing' || config.authMode === 'none';
+  const displayedBaseUrl = config.sourceBaseUrl ?? config.baseUrl;
+  claudeBaseUrl.value = displayedBaseUrl;
+  if (config.preset === 'custom' && displayedBaseUrl) {
+    try {
+      claudeBaseUrl.value = completeConnectionEndpoint(
+        displayedBaseUrl,
+        config.protocol === 'openai' ? 'openai' : 'anthropic',
+      );
+    } catch {
+      // Keep a manually edited legacy value visible so the user can repair it in the form.
+    }
+  }
+  claudeModel.value = config.sourceModel ?? config.model;
+  claudeModelFast.value =
+    config.sourceModelFast ?? config.sourceModel ?? config.modelFast ?? config.model;
+  claudeAuthMode.value = config.sourceAuthMode ?? config.authMode;
+  credentialField.hidden =
+    claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
   if (config.preset === 'ollama') {
     credentialField.hidden = true;
   }
   claudeCredential.value = '';
-  credentialStatus.textContent = config.credentialConfigured
-    ? '已使用 Windows 安全存储加密保存；留空将继续使用'
+  const credentialConfigured =
+    config.sourceCredentialConfigured ?? config.credentialConfigured;
+  credentialStatus.textContent = credentialConfigured
+    ? config.protocol === 'openai'
+      ? '已由本地 Router 保存；留空将继续使用'
+      : '已使用 Windows 安全存储加密保存；留空将继续使用'
     : '当前项目未保存凭据';
-  clearCredentialButton.disabled = !config.credentialConfigured;
+  clearCredentialButton.disabled = !credentialConfigured;
+  selectedRouterProviderId = config.routerProviderId;
   configFormSessionId = state.sessionId;
   renderProviderPicker();
 };
@@ -2593,10 +2657,13 @@ const captureAdvancedConnectionSnapshot = (): AdvancedConnectionSnapshot => ({
   credential: claudeCredential.value,
   model: claudeModel.value,
   modelFast: claudeModelFast.value,
+  protocol: claudeProtocol.value as ConfigurableEndpointProtocol,
   providerId: selectedProviderId,
+  routerProviderId: selectedRouterProviderId,
 });
 
 const restoreAdvancedConnectionSnapshot = (snapshot: AdvancedConnectionSnapshot): void => {
+  claudeProtocol.value = snapshot.protocol;
   if (snapshot.providerId) {
     applyPresetUi(snapshot.providerId, true);
   } else {
@@ -2605,6 +2672,7 @@ const restoreAdvancedConnectionSnapshot = (snapshot: AdvancedConnectionSnapshot)
   claudeBaseUrl.value = snapshot.baseUrl;
   claudeModel.value = snapshot.model;
   claudeModelFast.value = snapshot.modelFast;
+  selectedRouterProviderId = snapshot.routerProviderId;
   claudeAuthMode.value = snapshot.authMode;
   claudeCredential.value = snapshot.credential;
   credentialField.hidden =
@@ -4388,13 +4456,14 @@ const runConnectionTest = async (
     } else {
       void loadClaudeState(status.id);
     }
-  } catch {
+  } catch (error) {
     connectionTestResult.dataset.tone = 'error';
     connectionTestTitle.textContent = '连接测试发生异常';
-    connectionTestSummary.textContent = '后台测试已结束，请稍后重试。';
+    connectionTestSummary.textContent =
+      error instanceof Error ? error.message : '后台测试已结束，请稍后重试。';
     connectionTestStages.replaceChildren();
     connectionRemedy.hidden = true;
-    showToast('连接测试发生异常。', 'error');
+    showToast(error instanceof Error ? error.message : '连接测试发生异常。', 'error');
   } finally {
     connectionTestInProgress = false;
     connectionTestResult.setAttribute('aria-busy', 'false');
@@ -7383,18 +7452,52 @@ const currentConfigInput = (
   credentialAction: SaveClaudeConfigInput['credentialAction'],
 ): SaveClaudeConfigInput => {
   const preset = claudePreset.value as ClaudePreset;
+  const protocol: ConfigurableEndpointProtocol =
+    preset === 'custom'
+      ? (claudeProtocol.value as ConfigurableEndpointProtocol)
+      : 'anthropic';
+  const baseUrl =
+    preset === 'custom' && claudeBaseUrl.value.trim()
+      ? completeConnectionEndpoint(claudeBaseUrl.value, protocol)
+      : claudeBaseUrl.value;
+  if (preset === 'custom') {
+    claudeBaseUrl.value = baseUrl;
+  }
   return {
     apiKeyHelperPolicy:
       claudeApiKeyHelperPolicy.value as SaveClaudeConfigInput['apiKeyHelperPolicy'],
     authMode: claudeAuthMode.value as SaveClaudeConfigInput['authMode'],
-    baseUrl: claudeBaseUrl.value,
+    baseUrl,
     credential: claudeCredential.value,
     credentialAction,
     model: claudeModel.value,
     modelFast: claudeModelFast.value,
     preset,
+    protocol,
     provider: providerForPreset(preset),
+    routerProviderId: protocol === 'openai' ? selectedRouterProviderId : undefined,
   };
+};
+
+const completeVisibleConnectionEndpoint = (reportError: boolean): void => {
+  if (claudePreset.value !== 'custom' || !claudeBaseUrl.value.trim()) {
+    claudeBaseUrl.setCustomValidity('');
+    return;
+  }
+  try {
+    claudeBaseUrl.value = completeConnectionEndpoint(
+      claudeBaseUrl.value,
+      claudeProtocol.value as ConfigurableEndpointProtocol,
+    );
+    claudeBaseUrl.setCustomValidity('');
+  } catch (error) {
+    claudeBaseUrl.setCustomValidity(
+      error instanceof Error ? error.message : '无法识别这个接口地址。',
+    );
+    if (reportError) {
+      claudeBaseUrl.reportValidity();
+    }
+  }
 };
 
 const saveClaudeConfig = async (
@@ -7424,8 +7527,8 @@ const saveClaudeConfig = async (
         showToast('当前项目的模型与接口接入已保存');
         void loadConnectionHistory();
         return true;
-      } catch {
-        showToast('无法保存接入配置。', 'error');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '无法保存接入配置。', 'error');
         return false;
       }
     })) ?? false
@@ -7433,7 +7536,7 @@ const saveClaudeConfig = async (
 };
 
 const presetLabel = (preset: ClaudePreset): string =>
-  findClaudeProvider(preset)?.label ?? '自定义 Anthropic 服务';
+  findClaudeProvider(preset)?.label ?? '自定义中转站接口';
 
 const GATEWAY_STATE_LABELS: Record<ClaudeConnectionHistoryEntry['gatewayState'], string> = {
   error: '网关出错',
@@ -7471,7 +7574,8 @@ const historyDisplayName = (entry: ClaudeConnectionHistoryEntry): string => {
   if (entry.preset === 'custom' || entry.preset === 'gateway') {
     try {
       return (
-        new URL(entry.baseUrl || entry.gatewayEndpoint || '').host || presetLabel(entry.preset)
+        new URL(entry.sourceBaseUrl || entry.baseUrl || entry.gatewayEndpoint || '').host ||
+        presetLabel(entry.preset)
       );
     } catch {
       return presetLabel(entry.preset);
@@ -7553,18 +7657,23 @@ const renderConnectionHistory = (): void => {
       parameter.append(label, value);
       parameters.append(parameter);
     };
-    appendParameter('接口 / 网关', entry.baseUrl || 'Anthropic 官方端点');
-    if (entry.gatewayEndpoint && entry.gatewayEndpoint !== entry.baseUrl) {
+    const displayedBaseUrl = entry.sourceBaseUrl ?? entry.baseUrl;
+    const displayedModel = entry.sourceModel ?? entry.model;
+    const displayedModelFast = entry.sourceModelFast ?? entry.modelFast ?? displayedModel;
+    appendParameter('接口 / 网关', displayedBaseUrl || 'Anthropic 官方端点');
+    if (entry.protocol === 'openai' && entry.baseUrl !== displayedBaseUrl) {
+      appendParameter('本地转换', entry.baseUrl);
+    } else if (entry.gatewayEndpoint && entry.gatewayEndpoint !== displayedBaseUrl) {
       appendParameter('检测网关', entry.gatewayEndpoint);
     }
-    appendParameter('主模型', entry.model || '默认模型');
-    appendParameter('快速模型', entry.modelFast || entry.model || '跟随主模型');
+    appendParameter('主模型', displayedModel || '默认模型');
+    appendParameter('快速模型', displayedModelFast || displayedModel || '跟随主模型');
     const meta = document.createElement('span');
     meta.className = 'connection-history__meta';
     meta.textContent = [
       formatHistoryTimestamp(entry.savedAt),
-      historyAuthModeLabel(entry.authMode),
-      entry.credentialConfigured ? '含凭据' : '无凭据',
+      historyAuthModeLabel(entry.sourceAuthMode ?? entry.authMode),
+      (entry.sourceCredentialConfigured ?? entry.credentialConfigured) ? '含凭据' : '无凭据',
       entry.apiKeyHelperPolicy === 'inherit' ? '保留 apiKeyHelper' : 'ClaudeDock 单一凭据',
       GATEWAY_STATE_LABELS[entry.gatewayState],
     ].join(' · ');
@@ -8288,9 +8397,19 @@ codexLaunchResume.addEventListener('click', () => {
   void launchCodex('resume');
 });
 claudePreset.addEventListener('change', () => {
+  selectedRouterProviderId = undefined;
   applyPresetUi(claudePreset.value as ClaudePreset, false);
   connectionTestResult.hidden = true;
   connectionRemedy.hidden = true;
+});
+claudeProtocol.addEventListener('change', () => {
+  completeVisibleConnectionEndpoint(false);
+  applyPresetUi('custom', true);
+  connectionTestResult.hidden = true;
+  connectionRemedy.hidden = true;
+});
+claudeBaseUrl.addEventListener('blur', () => {
+  completeVisibleConnectionEndpoint(true);
 });
 claudeAuthMode.addEventListener('change', () => {
   credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
@@ -8459,7 +8578,7 @@ clearCredentialButton.addEventListener('click', async () => {
   if (
     await requestConfirmation({
       confirmLabel: '清除凭据',
-      message: '清除当前项目已加密保存的接口凭据？',
+      message: '清除当前连接已保存的接口凭据？',
       title: '清除接口凭据',
       tone: 'danger',
     })
@@ -8469,6 +8588,9 @@ clearCredentialButton.addEventListener('click', async () => {
 });
 for (const field of [claudeBaseUrl, claudeModel, claudeModelFast, claudeCredential]) {
   field.addEventListener('input', () => {
+    if (field === claudeBaseUrl) {
+      claudeBaseUrl.setCustomValidity('');
+    }
     connectionTestResult.hidden = true;
     connectionRemedy.hidden = true;
   });

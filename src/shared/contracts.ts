@@ -353,7 +353,14 @@ export interface ClaudeConfigView {
   model: string;
   modelFast?: string;
   preset: ClaudePreset;
+  protocol: ClaudeEndpointProtocol;
   provider: ClaudeProvider;
+  routerProviderId?: string;
+  sourceAuthMode?: ClaudeAuthMode;
+  sourceBaseUrl?: string;
+  sourceCredentialConfigured?: boolean;
+  sourceModel?: string;
+  sourceModelFast?: string;
 }
 
 export interface SaveClaudeConfigInput {
@@ -365,7 +372,9 @@ export interface SaveClaudeConfigInput {
   model: string;
   modelFast?: string;
   preset: ClaudePreset;
+  protocol?: Exclude<ClaudeEndpointProtocol, 'unknown'>;
   provider: ClaudeProvider;
+  routerProviderId?: string;
 }
 
 /**
@@ -386,7 +395,13 @@ export interface ClaudeConnectionHistoryEntry {
   preset: ClaudePreset;
   protocol: ClaudeEndpointProtocol;
   provider: ClaudeProvider;
+  routerProviderId?: string;
   savedAt: number;
+  sourceAuthMode?: ClaudeAuthMode;
+  sourceBaseUrl?: string;
+  sourceCredentialConfigured?: boolean;
+  sourceModel?: string;
+  sourceModelFast?: string;
 }
 
 export interface ClaudeConnectionHistoryResult {
@@ -645,7 +660,7 @@ export interface ClaudeRouterManagementState {
 export interface SaveClaudeRouterProviderInput {
   apiKey?: string;
   baseUrl: string;
-  credentialAction: 'keep' | 'replace';
+  credentialAction: 'clear' | 'keep' | 'replace';
   id?: string;
   makePreferred: boolean;
   models: string[];

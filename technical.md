@@ -451,18 +451,20 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `userData/claude/connection-history.json` 按项目保存最近 20 条接入配置，写入同样是
   临时文件加 `renameSync`、权限 `0600`；文件损坏时 `load()` 回落到空存储而不是抛错。
   项目键用小写后的绝对路径，因为 Windows 路径大小写不敏感。
-  凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
+  Anthropic 直连凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
   `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
-- 历史文件为 version 2，每条额外保存可选 `name` 和必填 `protocol`（`anthropic | openai |
-unknown`）。version 1 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机
-  Router 地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 2 原子落盘。
+- 历史文件为 version 3，每条保存可选 `name`、必填 `protocol`（`anthropic | openai |
+  unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模型、凭据状态与 Router Provider
+  ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
+  地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
 - 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/快速模型、预设、provider 和上游协议的
   SHA-256 指纹，
   只和最新一条比较：相同就不新增。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
   机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
   网关状态仍然逐条存下来，恢复时能看到当时的情况。
 - `saveConfig` 成功后才记历史，且整个记录过程包在 try/catch 里：配置已经保存了，
-  少一条历史不值得让保存失败。`applyConnectionHistory` 走的是同一个 `saveConfig`，
+  少一条历史不值得让保存失败。`applyConnectionHistory` 对 OpenAI 记录重新走协议转换准备，
+  其余记录走同一个 `saveConfig`，
   所以恢复和手工保存的路径完全一致；回放对象同时携带名称和协议，不能在恢复后退化为默认
   Anthropic。保存/修复 Router Provider 并用于当前项目时，`anthropic_messages` 映射为
   `anthropic`，`openai_chat_completions` 与 `openai_responses` 都映射为 `openai`，Provider 名
@@ -485,6 +487,10 @@ unknown`）。version 1 读取时，已知直连预设迁移为 Anthropic；旧 
 - 带 `/v1/chat/completions` 的服务是 OpenAI Chat Completions 格式，不能直接满足
   Claude Code 的 Anthropic `/v1/messages`、流式内容块和工具调用语义，必须经
   Claude Code Router、LiteLLM 或服务商自己的协议转换层。
+- 自定义表单选择 OpenAI 时，`ClaudeRuntime.prepareOpenAiConnection` 规范化上游端点，以保存的
+  Provider ID 或规范化端点复用 CCR Provider，写入模型和上游密钥并启动 3456 网关；项目运行
+  配置只保存 Router 客户端密钥和 `Provider/Model` 路由。`ClaudeConfigStore` 另存不含秘密的
+  presentation 字段，使 renderer 重开后仍显示原始上游而不是内部 3456 路由。
 - DeepSeek 官方目前另行提供 Anthropic 格式，基址为
   `https://api.deepseek.com/anthropic`；因此 DeepSeek 官方预设可以直连。官方兼容表仍列出
   图片、文档、部分 MCP/代码执行结果等不支持
@@ -537,6 +543,11 @@ unknown`）。version 1 读取时，已知直连预设迁移为 Anthropic；旧 
   与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
 - `normalizeClaudeConfig` 用目录分组推导 `provider`：官方组进入 `anthropic`，其余进入
   `gateway`；未知的旧预设按可验证配置迁移到 `custom`，无效基址或模型则安全回到默认配置。
+- `src/shared/connection-endpoint.ts` 是自定义连接地址补全的单一事实来源，renderer 失焦/切换
+  协议时调用一次，主进程配置与 Router Provider 校验时再次调用。它接受省略 scheme、单/双
+  前导斜杠、反斜杠、`/v1` 和完整端点；远程默认 HTTPS，本机回环默认 HTTP，拒绝用户信息、
+  查询参数、片段和远程 HTTP。OpenAI `/responses` 会映射为 CCR `openai_responses`，其他
+  OpenAI 输入默认补为 `/v1/chat/completions`。
 - renderer 用 `selectedProviderId | undefined` 驱动三步 UI。点击不同服务商会清空未保存
   凭据、旧测试结果与修复建议；再次点击同一服务商进入 `undefined`，同时隐藏服务商说明、
   配置表单、测试结果和修复卡。Router/cURL 选择把原有完整工具节点移动到第二步，其他时候
@@ -706,6 +717,9 @@ unknown`）。version 1 读取时，已知直连预设迁移为 Anthropic；旧 
   `/v1/messages`，保存时会先规范化为基址。测试请求固定 `max_tokens: 1`、非流式和
   单字符提示。未保存表单只在用户点击“测试并接入”时执行；当前项目的已保存配置会在
   Claude 状态首次载入、窗口从托盘隐藏态恢复，以及用户点击底栏连接按钮时执行。
+- OpenAI 表单测试先创建或更新 CCR Provider 并启动本机 Router，再对最终 3456
+  `/v1/messages` 路由执行同一套单令牌测试；因此测试覆盖的不只是上游 HTTP 存活，而是 Claude
+  Code 实际会使用的完整协议转换路径。测试成功后 renderer 才保存项目配置。
 - Bearer 对应 `Authorization: Bearer`，API Key 对应 `x-api-key`。返回标准
   `msg_` ID 和 `content` 数组才算三项全部通过；`401/403` 定位为认证错误，
   `404` 提示可能误填 OpenAI 地址，`400/422` 作为“端点与认证基本可用、模型或字段需处理”
@@ -1096,8 +1110,10 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   Vite 连接。Artifact 使用独立响应 CSP。
 - 禁止任意页面跳转、弹窗和未授权 IPC 通道；`validateSender` 同时要求目标
   `webContents` 与 `senderFrame === mainFrame`，sandbox 子 frame 不能调用 preload IPC。
-- 不保存终端输入或命令历史；API 密钥只以 Windows `safeStorage` 密文持久化，终端不会收到
-  含密钥的文本命令。PowerShell 自身行为不在应用持久化范围内。
+- 不保存终端输入或命令历史；项目直连密钥与 Router 客户端密钥只以 Windows `safeStorage`
+  密文持久化，OpenAI 上游密钥交给本机 CCR Provider 存储；为支持历史完整恢复，用户本次新填的
+  上游密钥还会以 `safeStorage` 密文进入历史，renderer 始终只接收“是否已配置”的布尔值。
+  终端不会收到含密钥的文本命令。PowerShell 自身行为不在应用持久化范围内。
 - 原生 `node-pty` 只在主进程加载；`node-pty` 与需要由外部 PowerShell 执行的
   `assets/runtime/claude-statusline.ps1`、`assets/runtime/claude-runtime-signal.ps1`
   均在打包时从 ASAR 解包。
@@ -1193,7 +1209,7 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据、helper 策略和协议）变化就新增、只有网关状态变化不新增、
-  version 1 记录迁移为安全策略与可解释协议、OpenAI Router 名称/协议可回放、重命名校验与持久化、
+  version 1 记录迁移为安全策略与可解释协议、OpenAI 原始上游字段与 Router ID 可回放、重命名校验与持久化、
   明文密钥不得出现在磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、
   Windows 路径大小写不敏感、条数上限、文件损坏后回落到空列表。
 - `tests/claude-providers.test.ts` 锁定目录 ID 唯一、分组完整、远程 HTTPS/本机 HTTP 边界、

@@ -5,6 +5,7 @@ import type {
   ClaudePermissionMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { completeConnectionEndpoint } from '../shared/connection-endpoint';
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 import {
   blockingVersionRuleFor,
@@ -65,7 +66,6 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
   ...CLAUDE_ROUTE_ALIAS_ENVIRONMENT_KEYS,
 ] as const;
 
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 export const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]~]{1,200}$/;
 export const parseClaudeVersion = (output: string): [number, number, number] | undefined => {
   const match = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(output);
@@ -126,32 +126,12 @@ export const evaluateClaudeInstallation = (
 };
 
 const normalizeBaseUrl = (value: string): string => {
-  const trimmed = value.trim();
-  let parsed: URL;
-
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error('接口地址不是有效网址。');
-  }
-
-  if (parsed.username || parsed.password) {
-    throw new Error('接口地址不能内嵌用户名或密码。');
-  }
-  if (parsed.search || parsed.hash) {
-    throw new Error('接口地址不能包含查询参数或片段。');
-  }
-  if (
-    parsed.protocol !== 'https:' &&
-    !(parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase()))
-  ) {
-    throw new Error('中转地址必须使用 HTTPS；仅本机回环地址允许 HTTP。');
-  }
-  if (/\/(?:v1\/)?chat\/completions\/?$/i.test(parsed.pathname)) {
+  if (/\/(?:v1\/)?(?:chat\/completions|responses)\/?$/i.test(value.replaceAll('\\', '/'))) {
     throw new Error(
-      '这是 OpenAI /chat/completions 地址，不能直接用于 Claude Code；请先选用本地转换器。',
+      '这是 OpenAI 接口地址，不能直接用于 Claude Code；请在自定义中转站中选择 OpenAI 协议。',
     );
   }
+  const parsed = new URL(completeConnectionEndpoint(value, 'anthropic'));
   parsed.pathname = parsed.pathname.replace(/\/v1\/messages\/?$/i, '') || '/';
 
   const normalized = parsed.toString();

@@ -626,22 +626,33 @@
                 <option value="anthropic">Anthropic 官方</option>
                 <option value="gateway">本机转换器 / 模型网关</option>
                 <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
-                <option value="custom">其他 Anthropic /v1/messages 服务</option>
+                <option value="custom">自定义中转站接口</option>
               </select>
             </label>
 
+            <label class="field" id="protocol-field" for="claude-protocol">
+              <span>接口协议</span>
+              <select id="claude-protocol">
+                <option value="anthropic">Anthropic 消息接口</option>
+                <option value="openai">OpenAI 对话补全 / Responses</option>
+              </select>
+              <small id="protocol-help"
+                >Claude Code 可直接连接 Anthropic 协议；OpenAI 协议会由本地 Router 自动转换。</small
+              >
+            </label>
+
             <label class="field" id="base-url-field" for="claude-base-url">
-              <span>Claude 接口基址</span>
+              <span>中转站接口地址</span>
               <input
                 id="claude-base-url"
-                type="url"
+                type="text"
+                inputmode="url"
                 maxlength="2048"
-                placeholder="https://gateway.example.com"
+                placeholder="gateway.example.com"
                 spellcheck="false"
               />
               <small id="base-url-help"
-                >这里填 Claude Code 最终访问的基址，不要填 /v1/chat/completions；接口必须提供
-                /v1/messages。</small
+                >可只填域名、/v1 或完整接口地址，ClaudeDock 会自动补全协议和路径。</small
               >
             </label>
 

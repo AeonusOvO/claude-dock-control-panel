@@ -132,6 +132,20 @@ describe('Claude Code Router management', () => {
     expect(updated.config.profile).toEqual(baseConfig.profile);
   });
 
+  it('clears an existing upstream key for a no-auth relay', () => {
+    const updated = buildUpdatedRouterConfig(baseConfig, {
+      ...providerInput,
+      apiKey: undefined,
+      credentialAction: 'clear',
+      id: 'existing',
+      name: 'existing',
+    });
+    const provider = (updated.config.Providers as Array<Record<string, unknown>>)[0];
+
+    expect(provider).not.toHaveProperty('api_key');
+    expect(sanitizeRouterConfig(updated.config)[0]?.credentialConfigured).toBe(false);
+  });
+
   it('recognizes and migrates a legacy preferred Provider ID to its current name', () => {
     const legacyConfig = {
       ...baseConfig,

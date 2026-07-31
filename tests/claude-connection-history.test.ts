@@ -89,6 +89,74 @@ describe('ClaudeConnectionHistoryStore', () => {
     });
   });
 
+  it('replays an OpenAI history entry with its original relay fields instead of the local route', () => {
+    const { store } = createStore();
+    const sourceConfig = {
+      authMode: 'authToken' as const,
+      baseUrl: 'https://relay.example.com/v1/chat/completions',
+      credentialAction: 'keep' as const,
+      model: 'gpt-5.4',
+      modelFast: 'gpt-5-mini',
+      preset: 'custom' as const,
+      protocol: 'openai' as const,
+      provider: 'gateway' as const,
+      routerProviderId: 'relay-example',
+    };
+    const [entry] = store.record(CWD, {
+      ...gatewayConfig({
+        authMode: 'authToken',
+        model: 'relay-example/gpt-5.4',
+        modelFast: 'relay-example/gpt-5-mini',
+        preset: 'custom',
+      }),
+      credential: undefined,
+      protocol: 'openai',
+      routerProviderId: 'relay-example',
+      sourceConfig,
+      sourceCredentialConfigured: true,
+    });
+
+    expect(entry).toMatchObject({
+      sourceBaseUrl: sourceConfig.baseUrl,
+      sourceCredentialConfigured: true,
+      sourceModel: 'gpt-5.4',
+    });
+    expect(store.toSaveInput(CWD, entry?.id ?? '')).toMatchObject(sourceConfig);
+  });
+
+  it('inherits a kept OpenAI upstream key for deduplication and records a rotation', () => {
+    const { historyPath, store } = createStore();
+    const sourceConfig = {
+      authMode: 'authToken' as const,
+      baseUrl: 'https://relay.example.com/v1/chat/completions',
+      credentialAction: 'keep' as const,
+      model: 'gpt-5.4',
+      preset: 'custom' as const,
+      protocol: 'openai' as const,
+      provider: 'gateway' as const,
+      routerProviderId: 'relay-example',
+    };
+    const input = {
+      ...gatewayConfig({ model: 'relay-example/gpt-5.4', preset: 'custom' }),
+      protocol: 'openai' as const,
+      routerProviderId: 'relay-example',
+      sourceConfig,
+      sourceCredentialConfigured: true,
+    };
+
+    store.record(CWD, { ...input, credential: 'sk-openai-one' });
+    expect(store.record(CWD, { ...input, credential: undefined })).toHaveLength(1);
+    const entries = store.record(CWD, { ...input, credential: 'sk-openai-two' });
+
+    expect(entries).toHaveLength(2);
+    expect(store.toSaveInput(CWD, entries[0]?.id ?? '')).toMatchObject({
+      credential: 'sk-openai-two',
+      credentialAction: 'replace',
+    });
+    expect(readFileSync(historyPath, 'utf8')).not.toContain('sk-openai-one');
+    expect(readFileSync(historyPath, 'utf8')).not.toContain('sk-openai-two');
+  });
+
   it('does not add a record when the save repeats the newest one', () => {
     const { store } = createStore();
 
@@ -152,7 +220,7 @@ describe('ClaudeConnectionHistoryStore', () => {
     });
 
     migratedStore.rename(CWD, migrated?.id ?? '', '旧中转连接');
-    expect(JSON.parse(readFileSync(historyPath, 'utf8'))).toMatchObject({ version: 2 });
+    expect(JSON.parse(readFileSync(historyPath, 'utf8'))).toMatchObject({ version: 3 });
   });
 
   it('adds a record when only the credential changed', () => {

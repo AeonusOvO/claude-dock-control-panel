@@ -784,7 +784,9 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
     typeof value.baseUrl !== 'string' ||
     typeof value.model !== 'string' ||
     (value.modelFast !== undefined && typeof value.modelFast !== 'string') ||
-    (value.credential !== undefined && typeof value.credential !== 'string')
+    (value.credential !== undefined && typeof value.credential !== 'string') ||
+    (value.protocol !== undefined && value.protocol !== 'anthropic' && value.protocol !== 'openai') ||
+    (value.routerProviderId !== undefined && typeof value.routerProviderId !== 'string')
   ) {
     throw new Error('Claude 接入配置包含无效字段。');
   }
@@ -798,7 +800,9 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
     model: value.model,
     modelFast: value.modelFast,
     preset: value.preset as SaveClaudeConfigInput['preset'],
+    protocol: value.protocol as SaveClaudeConfigInput['protocol'],
     provider: value.provider,
+    routerProviderId: value.routerProviderId,
   };
 };
 
@@ -816,7 +820,9 @@ const validateClaudeRouterProviderInput = (input: unknown): SaveClaudeRouterProv
     (value.protocol !== 'anthropic_messages' &&
       value.protocol !== 'openai_chat_completions' &&
       value.protocol !== 'openai_responses') ||
-    (value.credentialAction !== 'keep' && value.credentialAction !== 'replace') ||
+    (value.credentialAction !== 'clear' &&
+      value.credentialAction !== 'keep' &&
+      value.credentialAction !== 'replace') ||
     (value.apiKey !== undefined && typeof value.apiKey !== 'string') ||
     typeof value.makePreferred !== 'boolean' ||
     typeof value.useForCurrentProject !== 'boolean'
@@ -1882,7 +1888,7 @@ const registerIpc = (): void => {
       const rollback = new RollbackCoordinator();
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        if (validatedInput.provider === 'anthropic') {
+        if (validatedInput.provider === 'anthropic' && validatedInput.protocol !== 'openai') {
           await requireProviderAccessGuard().assertAllowed(
             'anthropic-claude',
             'provider-switch',
@@ -1891,7 +1897,11 @@ const registerIpc = (): void => {
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
-        const state = await runtime.saveConfig(validatedSessionId, status.cwd, validatedInput);
+        const state = await runtime.saveConnectionConfig(
+          validatedSessionId,
+          status.cwd,
+          validatedInput,
+        );
         rollback.commit();
         return {
           ok: true,
@@ -2190,7 +2200,7 @@ const registerIpc = (): void => {
       const status = workspace.getStatus(validatedSessionId);
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        if (validatedInput.provider === 'anthropic') {
+        if (validatedInput.provider === 'anthropic' && validatedInput.protocol !== 'openai') {
           await requireProviderAccessGuard().assertAllowed(
             'anthropic-claude',
             'first-request',

@@ -23,12 +23,18 @@ interface StoredHistoryEntry extends NormalizedClaudeConfig {
   id: string;
   name?: string;
   protocol: ClaudeEndpointProtocol;
+  routerProviderId?: string;
   savedAt: number;
+  sourceAuthMode?: SaveClaudeConfigInput['authMode'];
+  sourceBaseUrl?: string;
+  sourceCredentialConfigured?: boolean;
+  sourceModel?: string;
+  sourceModelFast?: string;
 }
 
 interface StoredHistoryFile {
   projects: Record<string, StoredHistoryEntry[]>;
-  version: 2;
+  version: 3;
 }
 
 /** Enough to cover a session of trial and error without letting the file grow without bound. */
@@ -36,7 +42,7 @@ export const MAX_HISTORY_ENTRIES = 20;
 
 const EMPTY_STORE: StoredHistoryFile = {
   projects: {},
-  version: 2,
+  version: 3,
 };
 
 const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
@@ -90,7 +96,15 @@ const parseStoredEntry = (value: unknown): StoredHistoryEntry | undefined => {
     claudeProviderIdSet.has(record.preset) &&
     GATEWAY_STATES.has(record.gatewayState as ClaudeRouterGatewayState) &&
     (record.gatewayEndpoint === undefined || typeof record.gatewayEndpoint === 'string') &&
-    (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string')
+    (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string') &&
+    (record.routerProviderId === undefined || typeof record.routerProviderId === 'string') &&
+    (record.sourceAuthMode === undefined ||
+      (typeof record.sourceAuthMode === 'string' && AUTH_MODES.has(record.sourceAuthMode))) &&
+    (record.sourceBaseUrl === undefined || typeof record.sourceBaseUrl === 'string') &&
+    (record.sourceCredentialConfigured === undefined ||
+      typeof record.sourceCredentialConfigured === 'boolean') &&
+    (record.sourceModel === undefined || typeof record.sourceModel === 'string') &&
+    (record.sourceModelFast === undefined || typeof record.sourceModelFast === 'string')
   ) {
     const protocol = HISTORY_PROTOCOLS.has(record.protocol as ClaudeEndpointProtocol)
       ? (record.protocol as ClaudeEndpointProtocol)
@@ -110,7 +124,13 @@ const parseStoredEntry = (value: unknown): StoredHistoryEntry | undefined => {
       preset: record.preset as NormalizedClaudeConfig['preset'],
       protocol,
       provider: record.provider,
+      routerProviderId: record.routerProviderId as string | undefined,
       savedAt: record.savedAt,
+      sourceAuthMode: record.sourceAuthMode as SaveClaudeConfigInput['authMode'] | undefined,
+      sourceBaseUrl: record.sourceBaseUrl as string | undefined,
+      sourceCredentialConfigured: record.sourceCredentialConfigured as boolean | undefined,
+      sourceModel: record.sourceModel as string | undefined,
+      sourceModelFast: record.sourceModelFast as string | undefined,
     };
   }
   return undefined;
@@ -125,6 +145,14 @@ const entryFingerprint = (
   config: NormalizedClaudeConfig,
   credential: string | undefined,
   protocol: ClaudeEndpointProtocol,
+  source?: {
+    authMode?: SaveClaudeConfigInput['authMode'];
+    baseUrl?: string;
+    model?: string;
+    modelFast?: string;
+    routerProviderId?: string;
+    sourceCredentialConfigured?: boolean;
+  },
 ): string =>
   createHash('sha256')
     .update(
@@ -138,6 +166,7 @@ const entryFingerprint = (
         preset: config.preset,
         protocol,
         provider: config.provider,
+        source,
       }),
     )
     .digest('hex');
@@ -149,6 +178,9 @@ export interface RecordConnectionInput {
   gatewayState: ClaudeRouterGatewayState;
   name?: string;
   protocol?: ClaudeEndpointProtocol;
+  routerProviderId?: string;
+  sourceConfig?: SaveClaudeConfigInput;
+  sourceCredentialConfigured?: boolean;
 }
 
 export interface ConnectionHistoryReplay {
@@ -183,7 +215,13 @@ export class ClaudeConnectionHistoryStore {
       preset: entry.preset,
       protocol: entry.protocol,
       provider: entry.provider,
+      routerProviderId: entry.routerProviderId,
       savedAt: entry.savedAt,
+      sourceAuthMode: entry.sourceAuthMode,
+      sourceBaseUrl: entry.sourceBaseUrl,
+      sourceCredentialConfigured: entry.sourceCredentialConfigured,
+      sourceModel: entry.sourceModel,
+      sourceModelFast: entry.sourceModelFast,
     }));
   }
 
@@ -193,15 +231,36 @@ export class ClaudeConnectionHistoryStore {
    */
   public record(cwd: string, input: RecordConnectionInput): ClaudeConnectionHistoryEntry[] {
     const config = normalizeClaudeConfig(input.config);
-    const credential = input.credential?.trim() || undefined;
     const store = this.load();
     const key = projectKey(cwd);
     const entries = store.projects[key] ?? [];
     const newest = entries[0];
     const protocol = input.protocol ?? 'anthropic';
     const name = input.name ? normalizeHistoryName(input.name) : undefined;
+    let credential = input.credential?.trim() || undefined;
+    if (!credential && input.sourceConfig && input.sourceCredentialConfigured) {
+      const previous = entries.find(
+        (entry) =>
+          entry.protocol === 'openai' && entry.routerProviderId === input.routerProviderId,
+      );
+      credential = this.decrypt(previous?.encryptedCredential);
+    }
 
-    if (newest && this.fingerprintOf(newest) === entryFingerprint(config, credential, protocol)) {
+    const sourceIdentity = input.sourceConfig
+      ? {
+          authMode: input.sourceConfig.authMode,
+          baseUrl: input.sourceConfig.baseUrl,
+          model: input.sourceConfig.model,
+          modelFast: input.sourceConfig.modelFast || input.sourceConfig.model,
+          routerProviderId: input.routerProviderId,
+          sourceCredentialConfigured: input.sourceCredentialConfigured,
+        }
+      : undefined;
+    if (
+      newest &&
+      this.fingerprintOf(newest) ===
+        entryFingerprint(config, credential, protocol, sourceIdentity)
+    ) {
       return this.list(cwd);
     }
 
@@ -214,7 +273,13 @@ export class ClaudeConnectionHistoryStore {
       id: `history-${Date.now().toString(36)}-${this.sequence.toString(36)}`,
       name,
       protocol,
+      routerProviderId: input.routerProviderId,
       savedAt: Date.now(),
+      sourceAuthMode: input.sourceConfig?.authMode,
+      sourceBaseUrl: input.sourceConfig?.baseUrl,
+      sourceCredentialConfigured: input.sourceCredentialConfigured,
+      sourceModel: input.sourceConfig?.model,
+      sourceModelFast: input.sourceConfig?.modelFast,
     };
 
     store.projects[key] = [entry, ...entries].slice(0, MAX_HISTORY_ENTRIES);
@@ -270,6 +335,22 @@ export class ClaudeConnectionHistoryStore {
     }
 
     const credential = this.decrypt(entry.encryptedCredential);
+    const sourceConfig =
+      entry.protocol === 'openai' && entry.sourceBaseUrl && entry.sourceModel
+        ? {
+            apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
+            authMode: entry.sourceAuthMode ?? ('authToken' as const),
+            baseUrl: entry.sourceBaseUrl,
+            credential,
+            credentialAction: credential ? ('replace' as const) : ('keep' as const),
+            model: entry.sourceModel,
+            modelFast: entry.sourceModelFast || entry.sourceModel,
+            preset: 'custom' as const,
+            protocol: 'openai' as const,
+            provider: 'gateway' as const,
+            routerProviderId: entry.routerProviderId,
+          }
+        : undefined;
     return {
       config: {
         apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
@@ -282,6 +363,7 @@ export class ClaudeConnectionHistoryStore {
         modelFast: entry.modelFast || entry.model,
         preset: entry.preset,
         provider: entry.provider,
+        ...sourceConfig,
       },
       name: entry.name,
       protocol: entry.protocol,
@@ -301,6 +383,16 @@ export class ClaudeConnectionHistoryStore {
       },
       this.decrypt(entry.encryptedCredential),
       entry.protocol,
+      entry.sourceBaseUrl
+        ? {
+            authMode: entry.sourceAuthMode,
+            baseUrl: entry.sourceBaseUrl,
+            model: entry.sourceModel,
+            modelFast: entry.sourceModelFast || entry.sourceModel,
+            routerProviderId: entry.routerProviderId,
+            sourceCredentialConfigured: entry.sourceCredentialConfigured,
+          }
+        : undefined,
     );
   }
 
@@ -330,7 +422,7 @@ export class ClaudeConnectionHistoryStore {
         version?: unknown;
       };
       if (
-        (parsed.version !== 1 && parsed.version !== 2) ||
+        (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) ||
         !parsed.projects ||
         typeof parsed.projects !== 'object'
       ) {
@@ -349,7 +441,7 @@ export class ClaudeConnectionHistoryStore {
           }
         }
       }
-      return { projects, version: 2 };
+      return { projects, version: 3 };
     } catch {
       return structuredClone(EMPTY_STORE);
     }
