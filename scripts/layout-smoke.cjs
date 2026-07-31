@@ -45,6 +45,17 @@ const inspectLayout = `
   const controls = [...inspectionRoot.querySelectorAll(selector)].filter(
     (element) => visible(element) && !element.classList.contains('workbench-scrim'),
   );
+  /*
+   * An enhanced select deliberately has two coincident interactive layers: the transparent native
+   * select owns focus, accessibility and pointer input, while the aria-hidden button paints the
+   * control. They are one composite control, not two controls obscuring each other. Keep this
+   * exception scoped to the same shell so overlaps between separate selects still fail the smoke.
+   */
+  const compositeControl = (element) => element.closest('.select');
+  const shareCompositeControl = (left, right) => {
+    const owner = compositeControl(left);
+    return Boolean(owner && owner === compositeControl(right));
+  };
   const hitTargetMisses = controls
     .filter((element) => {
       const rect = element.getBoundingClientRect();
@@ -58,7 +69,7 @@ const inspectLayout = `
         rect.left + rect.width / 2,
         rect.top + rect.height / 2,
       );
-      return !hit || !element.contains(hit);
+      return !hit || (!element.contains(hit) && !shareCompositeControl(element, hit));
     })
     .map((element) => element.id || element.textContent.trim().slice(0, 24));
   const overlaps = [];
@@ -68,6 +79,7 @@ const inspectLayout = `
     for (let rightIndex = leftIndex + 1; rightIndex < controls.length; rightIndex += 1) {
       const right = controls[rightIndex];
       if (left.contains(right) || right.contains(left)) continue;
+      if (shareCompositeControl(left, right)) continue;
       const rightRect = right.getBoundingClientRect();
       const overlapWidth = Math.min(leftRect.right, rightRect.right) - Math.max(leftRect.left, rightRect.left);
       const overlapHeight = Math.min(leftRect.bottom, rightRect.bottom) - Math.max(leftRect.top, rightRect.top);
@@ -131,6 +143,21 @@ const inspectLayout = `
     overlaps,
     overflow,
   };
+})()
+`;
+
+const addDetectorCalibrationFixture = `
+(() => {
+  const fixture = document.createElement('div');
+  fixture.id = 'layout-detector-calibration';
+  for (const id of ['layout-detector-calibration-back', 'layout-detector-calibration-front']) {
+    const button = document.createElement('button');
+    button.id = id;
+    button.style.cssText =
+      'position: fixed; left: 8px; top: 8px; width: 40px; height: 40px; z-index: 2147483646;';
+    fixture.append(button);
+  }
+  document.body.append(fixture);
 })()
 `;
 
@@ -493,6 +520,18 @@ app.whenReady().then(async () => {
   await window.webContents.executeJavaScript(addChatStressFixture);
   await window.webContents.executeJavaScript(addRichChatStressFixture);
   await window.webContents.executeJavaScript(addArtifactDetailsStressFixture);
+  await window.webContents.executeJavaScript(addDetectorCalibrationFixture);
+  const detectorCalibration = await window.webContents.executeJavaScript(inspectLayout);
+  await window.webContents.executeJavaScript(
+    `document.querySelector('#layout-detector-calibration')?.remove()`,
+  );
+  const detectorCalibrationPassed =
+    detectorCalibration.hitTargetMisses.includes('layout-detector-calibration-back') &&
+    detectorCalibration.overlaps.some(
+      ([left, right]) =>
+        left === 'layout-detector-calibration-back' &&
+        right === 'layout-detector-calibration-front',
+    );
 
   for (const [width, height] of sizes) {
     window.setSize(width, height);
@@ -617,6 +656,7 @@ app.whenReady().then(async () => {
   console.log(
     JSON.stringify(
       {
+        detectorCalibrationPassed,
         expectedScenarios,
         failures,
         scenarios: results.length,
@@ -627,5 +667,9 @@ app.whenReady().then(async () => {
       2,
     ),
   );
-  app.exit(failures.length === 0 && results.length === expectedScenarios ? 0 : 1);
+  app.exit(
+    detectorCalibrationPassed && failures.length === 0 && results.length === expectedScenarios
+      ? 0
+      : 1,
+  );
 });
