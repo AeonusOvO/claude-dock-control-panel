@@ -1206,6 +1206,9 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - `tests/claude-runtime-signal.test.ts` 真实 spawn `claude-runtime-signal.ps1`：能在 stdin
   有 hook 载荷时正常写出 `{event, signaledAt}`、载荷内容不泄漏进文件、目录不存在时自建、
   再次触发时时间戳前进（否则主进程会把旧信号当成新信号）、成功后不留 `.tmp`。
+- `tests/claude-statusline.test.ts` 真实 spawn `powershell.exe` 验证状态行 JSON；Windows runner
+  首次冷启动可超过 Vitest 默认 5 秒，因此每个子进程使用 10 秒硬超时、测试使用 15 秒上限，
+  既容纳冷启动又防止脚本挂死拖住 CI。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖

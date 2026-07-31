@@ -8,6 +8,8 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 
 - 统一双协议中转、连接历史与端点补全相关文件的 Prettier 格式，修复 GitHub Actions 在
   `npm run format:check` 阶段退出的问题；本次维护不改变接口、存储格式或用户可见行为。
+- 状态行 PowerShell 集成测试为子进程设置 10 秒硬上限，并把单项测试上限调整为 15 秒，容纳
+  GitHub Windows runner 约 6 秒的首次冷启动，同时仍能及时终止真正挂起的脚本。
 
 ## 2.5.1 版本重点（2026-07-31）
 

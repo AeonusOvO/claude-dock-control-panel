@@ -5,6 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'claudedock-statusline-'));
+const STATUSLINE_PROCESS_TIMEOUT_MS = 10_000;
+const STATUSLINE_TEST_TIMEOUT_MS = 15_000;
+const statusLineIt = (name: string, test: () => void): void => {
+  it(name, test, STATUSLINE_TEST_TIMEOUT_MS);
+};
 
 afterAll(() => {
   const safePrefix = path.join(tmpdir(), 'claudedock-statusline-');
@@ -15,7 +20,7 @@ afterAll(() => {
 });
 
 describe('ClaudeDock status-line helper', () => {
-  it('captures context, token, cost, model, and session metrics', () => {
+  statusLineIt('captures context, token, cost, model, and session metrics', () => {
     const outputPath = path.join(fixtureRoot, 'metrics.json');
     const scriptPath = path.resolve('assets/runtime/claude-statusline.ps1');
     const input = {
@@ -61,6 +66,7 @@ describe('ClaudeDock status-line helper', () => {
       {
         encoding: 'utf8',
         input: JSON.stringify(input),
+        timeout: STATUSLINE_PROCESS_TIMEOUT_MS,
       },
     );
 
@@ -83,7 +89,7 @@ describe('ClaudeDock status-line helper', () => {
     });
   });
 
-  it('omits the effort level for a model that does not report one', () => {
+  statusLineIt('omits the effort level for a model that does not report one', () => {
     // `effort` is absent whenever the active model has no reasoning-effort parameter, so the
     // footer must fall back to the requested level rather than showing a stale one.
     const outputPath = path.join(fixtureRoot, 'metrics-no-effort.json');
@@ -106,6 +112,7 @@ describe('ClaudeDock status-line helper', () => {
           model: { display_name: 'Some Gateway Model', id: 'gateway-model' },
           session_id: 'session-no-effort',
         }),
+        timeout: STATUSLINE_PROCESS_TIMEOUT_MS,
       },
     );
 
@@ -118,7 +125,7 @@ describe('ClaudeDock status-line helper', () => {
     expect(metrics.modelId).toBe('gateway-model');
   });
 
-  it('decodes multi-byte session names as UTF-8 regardless of the console codepage', () => {
+  statusLineIt('decodes UTF-8 session names on non-UTF-8 consoles', () => {
     // On Chinese Windows the console codepage is GBK. Claude Code writes UTF-8, so reading stdin
     // through [Console]::In mangled multi-byte titles — a double-byte read could even swallow the
     // closing quote and break the whole JSON, which is why resumed sessions with AI titles
@@ -151,6 +158,7 @@ describe('ClaudeDock status-line helper', () => {
       ],
       {
         input: Buffer.from(JSON.stringify(input), 'utf8'),
+        timeout: STATUSLINE_PROCESS_TIMEOUT_MS,
       },
     );
 
