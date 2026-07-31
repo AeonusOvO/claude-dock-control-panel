@@ -2547,12 +2547,11 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     claudeModel.value = provider.model;
     claudeModelFast.value = provider.modelFast ?? provider.model;
   }
-  baseUrlHelp.textContent =
-    supportsProtocolSwitch
-      ? protocol === 'openai'
-        ? '可填域名、/v1、/v1/chat/completions 或 /v1/responses；保存时会自动补全，并由本地 Router 转换。'
-        : '可填域名、/v1 或 /v1/messages；保存时会自动补全成 Anthropic Messages 接口。'
-      : provider.id === 'gateway'
+  baseUrlHelp.textContent = supportsProtocolSwitch
+    ? protocol === 'openai'
+      ? '可填域名、/v1、/v1/chat/completions 或 /v1/responses；保存时会自动补全，并由本地 Router 转换。'
+      : '可填域名、/v1 或 /v1/messages；保存时会自动补全成 Anthropic Messages 接口。'
+    : provider.id === 'gateway'
       ? '填写路由器真正的模型接口；默认 3456 是模型接口，3458 是管理页。'
       : '接口必须提供 Anthropic /v1/messages，且不能直接使用 OpenAI /chat/completions。';
   protocolHelp.textContent =
@@ -2625,14 +2624,12 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
   claudeModelFast.value =
     config.sourceModelFast ?? config.sourceModel ?? config.modelFast ?? config.model;
   claudeAuthMode.value = config.sourceAuthMode ?? config.authMode;
-  credentialField.hidden =
-    claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
   if (config.preset === 'ollama') {
     credentialField.hidden = true;
   }
   claudeCredential.value = '';
-  const credentialConfigured =
-    config.sourceCredentialConfigured ?? config.credentialConfigured;
+  const credentialConfigured = config.sourceCredentialConfigured ?? config.credentialConfigured;
   credentialStatus.textContent = credentialConfigured
     ? config.protocol === 'openai'
       ? '已由本地 Router 保存；留空将继续使用'
@@ -7453,9 +7450,7 @@ const currentConfigInput = (
 ): SaveClaudeConfigInput => {
   const preset = claudePreset.value as ClaudePreset;
   const protocol: ConfigurableEndpointProtocol =
-    preset === 'custom'
-      ? (claudeProtocol.value as ConfigurableEndpointProtocol)
-      : 'anthropic';
+    preset === 'custom' ? (claudeProtocol.value as ConfigurableEndpointProtocol) : 'anthropic';
   const baseUrl =
     preset === 'custom' && claudeBaseUrl.value.trim()
       ? completeConnectionEndpoint(claudeBaseUrl.value, protocol)

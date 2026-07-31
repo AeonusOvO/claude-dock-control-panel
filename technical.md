@@ -458,7 +458,7 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   Anthropic 直连凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
   `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
 - 历史文件为 version 3，每条保存可选 `name`、必填 `protocol`（`anthropic | openai |
-  unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模型、凭据状态与 Router Provider
+unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模型、凭据状态与 Router Provider
   ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
   地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
 - 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/快速模型、预设、provider 和上游协议的

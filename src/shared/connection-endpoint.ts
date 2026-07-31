@@ -20,15 +20,16 @@ const withInferredScheme = (value: string): string => {
   }
   if (value.startsWith('//')) {
     const hostname =
-      (/^\/\/\[([^\]]+)\]/.exec(value)?.[1] ?? value.slice(2).split(/[/:]/, 1)[0])
-        ?.toLowerCase() ?? '';
+      (/^\/\/\[([^\]]+)\]/.exec(value)?.[1] ?? value.slice(2).split(/[/:]/, 1)[0])?.toLowerCase() ??
+      '';
     return `${LOOPBACK_HOSTS.has(hostname) ? 'http' : 'https'}:${value}`;
   }
 
   const withoutLeadingSlash = value.replace(/^\/(?!\/)/, '');
   const hostname =
-    (/^\[([^\]]+)\]/.exec(withoutLeadingSlash)?.[1] ?? withoutLeadingSlash.split(/[/:]/, 1)[0])
-      ?.toLowerCase() ?? '';
+    (
+      /^\[([^\]]+)\]/.exec(withoutLeadingSlash)?.[1] ?? withoutLeadingSlash.split(/[/:]/, 1)[0]
+    )?.toLowerCase() ?? '';
   const scheme = LOOPBACK_HOSTS.has(hostname) || /^\[?::1\]?$/i.test(hostname) ? 'http' : 'https';
   return `${scheme}://${withoutLeadingSlash}`;
 };
@@ -84,9 +85,7 @@ export const completeConnectionEndpoint = (
 
   const basePath = pathname.replace(KNOWN_ENDPOINT_SUFFIX, '').replace(/\/+$/, '');
   if (protocol === 'anthropic') {
-    parsed.pathname = /\/v1$/i.test(basePath)
-      ? `${basePath}/messages`
-      : `${basePath}/v1/messages`;
+    parsed.pathname = /\/v1$/i.test(basePath) ? `${basePath}/messages` : `${basePath}/v1/messages`;
   } else {
     parsed.pathname = /\/v1$/i.test(basePath)
       ? `${basePath}/chat/completions`

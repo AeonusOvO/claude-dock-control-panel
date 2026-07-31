@@ -22,19 +22,16 @@ describe('connection endpoint completion', () => {
     ['//api.example.com/', 'https://api.example.com/v1/chat/completions'],
     ['//localhost:3456/', 'http://localhost:3456/v1/chat/completions'],
     ['api.example.com/v1', 'https://api.example.com/v1/chat/completions'],
-    [
-      'https://api.example.com/v1/chat/completions',
-      'https://api.example.com/v1/chat/completions',
-    ],
+    ['https://api.example.com/v1/chat/completions', 'https://api.example.com/v1/chat/completions'],
     ['https://api.example.com/v1/responses', 'https://api.example.com/v1/responses'],
   ])('completes OpenAI input %s', (input, expected) => {
     expect(completeConnectionEndpoint(input, 'openai')).toBe(expected);
   });
 
   it('replaces a known endpoint when the selected protocol changes', () => {
-    expect(
-      completeConnectionEndpoint('https://api.example.com/v1/messages', 'openai'),
-    ).toBe('https://api.example.com/v1/chat/completions');
+    expect(completeConnectionEndpoint('https://api.example.com/v1/messages', 'openai')).toBe(
+      'https://api.example.com/v1/chat/completions',
+    );
     expect(
       completeConnectionEndpoint('https://api.example.com/v1/chat/completions', 'anthropic'),
     ).toBe('https://api.example.com/v1/messages');

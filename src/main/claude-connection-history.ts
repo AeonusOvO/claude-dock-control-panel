@@ -240,8 +240,7 @@ export class ClaudeConnectionHistoryStore {
     let credential = input.credential?.trim() || undefined;
     if (!credential && input.sourceConfig && input.sourceCredentialConfigured) {
       const previous = entries.find(
-        (entry) =>
-          entry.protocol === 'openai' && entry.routerProviderId === input.routerProviderId,
+        (entry) => entry.protocol === 'openai' && entry.routerProviderId === input.routerProviderId,
       );
       credential = this.decrypt(previous?.encryptedCredential);
     }
@@ -258,8 +257,7 @@ export class ClaudeConnectionHistoryStore {
       : undefined;
     if (
       newest &&
-      this.fingerprintOf(newest) ===
-        entryFingerprint(config, credential, protocol, sourceIdentity)
+      this.fingerprintOf(newest) === entryFingerprint(config, credential, protocol, sourceIdentity)
     ) {
       return this.list(cwd);
     }

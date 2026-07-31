@@ -295,10 +295,7 @@ const readJsonFile = (filePath: string, maximumBytes = 2 * 1024 * 1024): unknown
   return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
 };
 
-const normalizeProviderBaseUrl = (
-  value: string,
-  protocol: ClaudeRouterProviderProtocol,
-): string =>
+const normalizeProviderBaseUrl = (value: string, protocol: ClaudeRouterProviderProtocol): string =>
   completeConnectionEndpoint(value, protocol === 'anthropic_messages' ? 'anthropic' : 'openai');
 
 export const normalizeRouterProviderInput = (

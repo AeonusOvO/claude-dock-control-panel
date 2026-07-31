@@ -785,7 +785,9 @@ const validateClaudeConfigInput = (input: unknown): SaveClaudeConfigInput => {
     typeof value.model !== 'string' ||
     (value.modelFast !== undefined && typeof value.modelFast !== 'string') ||
     (value.credential !== undefined && typeof value.credential !== 'string') ||
-    (value.protocol !== undefined && value.protocol !== 'anthropic' && value.protocol !== 'openai') ||
+    (value.protocol !== undefined &&
+      value.protocol !== 'anthropic' &&
+      value.protocol !== 'openai') ||
     (value.routerProviderId !== undefined && typeof value.routerProviderId !== 'string')
   ) {
     throw new Error('Claude 接入配置包含无效字段。');

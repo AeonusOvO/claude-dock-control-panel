@@ -1596,7 +1596,8 @@ export class ClaudeRuntime {
     cwd: string,
     input: SaveClaudeConfigInput,
   ): Promise<ClaudeConnectionTestResult> {
-    const prepared = input.protocol === 'openai' ? await this.prepareOpenAiConnection(input) : undefined;
+    const prepared =
+      input.protocol === 'openai' ? await this.prepareOpenAiConnection(input) : undefined;
     const testInput = prepared?.effectiveInput ?? input;
     const config = normalizeClaudeConfig(testInput);
     const enteredCredential = testInput.credential?.trim();
