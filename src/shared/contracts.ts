@@ -53,7 +53,16 @@ export type ChatProtocol = 'anthropic' | 'openai';
 export type ChatAuthMode = 'apiKey' | 'bearer' | 'none';
 export type ChatMessageRole = 'assistant' | 'system' | 'user';
 export type ChatStreamEventType =
-  'aborted' | 'delta' | 'done' | 'error' | 'input-json' | 'refusal' | 'start' | 'thinking';
+  | 'aborted'
+  | 'delta'
+  | 'done'
+  | 'error'
+  | 'input-json'
+  | 'refusal'
+  | 'retrying'
+  | 'start'
+  | 'thinking';
+export type ChatRetryReason = 'http-status' | 'network' | 'stream-incomplete';
 export type ChatTokenUsageSource = 'estimated' | 'provider';
 export type NetworkProviderId = 'anthropic-claude' | 'openai-api' | 'openai-codex';
 export type NetworkPreflightAction =
@@ -259,11 +268,17 @@ export interface ChatPreflightResult {
 
 export interface ChatStreamEvent {
   abortReason?: 'manual' | 'timeout';
+  attempt?: number;
   delta?: string;
+  detail?: string;
   error?: string;
+  maxAttempts?: number;
   refusal?: string;
   requestId: string;
+  retryAfterMs?: number;
+  retryReason?: ChatRetryReason;
   stopReason?: string;
+  status?: number;
   type: ChatStreamEventType;
   usage?: ChatTokenUsage;
 }

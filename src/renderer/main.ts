@@ -1835,6 +1835,17 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     }
     return;
   }
+  if (event.type === 'retrying') {
+    if (activeChatReplyElement && !activeChatReply) {
+      const attempt = event.attempt ?? 2;
+      const maximum = event.maxAttempts ?? attempt;
+      const wait = event.retryAfterMs
+        ? `，约 ${Math.max(1, Math.ceil(event.retryAfterMs / 1000))} 秒后`
+        : '';
+      activeChatReplyElement.textContent = `${event.detail ?? '连接暂时中断，正在自动重试。'}${wait}（${attempt}/${maximum}）`;
+    }
+    return;
+  }
   if (event.type === 'refusal') {
     const refusal = event.refusal || '模型拒绝了这项请求。';
     activeChatReply = activeChatReply ? `${activeChatReply}\n\n> ${refusal}` : `> ${refusal}`;
@@ -1866,14 +1877,14 @@ const handleChatStream = (event: ChatStreamEvent): void => {
   if (event.type === 'aborted') {
     const timedOut = event.abortReason === 'timeout';
     const notice = timedOut ? '请求长时间没有返回数据，已超时停止。' : '已停止生成。';
+    const visibleReply = activeChatReply ? `${activeChatReply}\n\n> ${notice}` : `> ${notice}`;
     if (activeChatReplyElement && !activeChatReply) {
       activeChatReplyElement.textContent = notice;
     } else if (timedOut && activeChatReply) {
-      activeChatReply = `${activeChatReply}\n\n> ${notice}`;
       activeChatReplyStream ??= activeChatReplyElement
         ? markdownRenderer.createStream(activeChatReplyElement)
         : undefined;
-      void activeChatReplyStream?.update(activeChatReply);
+      void activeChatReplyStream?.update(visibleReply);
     }
     if (activeChatReply) {
       chatMessages.push({
@@ -1889,18 +1900,18 @@ const handleChatStream = (event: ChatStreamEvent): void => {
       showToast(notice, 'error');
     }
     void (async () => {
-      await activeChatReplyStream?.finish(activeChatReply);
+      await activeChatReplyStream?.finish(visibleReply);
       await persistActiveChat();
     })().finally(finishChatRequest);
     return;
   }
   if (event.type === 'error') {
+    const notice = activeChatReply
+      ? `${activeChatReply}\n\n> 生成中断：${event.error ?? '请求失败'}`
+      : `> 请求失败：${event.error ?? '未知错误'}`;
     if (activeChatReplyElement) {
-      activeChatReply = activeChatReply
-        ? `${activeChatReply}\n\n> 生成中断：${event.error ?? '请求失败'}`
-        : `> 请求失败：${event.error ?? '未知错误'}`;
       activeChatReplyStream ??= markdownRenderer.createStream(activeChatReplyElement);
-      void activeChatReplyStream.update(activeChatReply);
+      void activeChatReplyStream.update(notice);
     }
     if (activeChatReply) {
       chatMessages.push({
@@ -1914,7 +1925,7 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     renderChatUsage();
     showToast(event.error ?? '独立对话请求失败。', 'error');
     void (async () => {
-      await activeChatReplyStream?.finish(activeChatReply);
+      await activeChatReplyStream?.finish(notice);
       await persistActiveChat();
     })().finally(finishChatRequest);
   }

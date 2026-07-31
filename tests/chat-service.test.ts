@@ -447,6 +447,304 @@ describe('independent chat service', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).not.toHaveProperty('thinking');
   });
 
+  it('retries transient HTTP failures with Retry-After before any stream output', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response('bad gateway', { headers: { 'retry-after': '0' }, status: 502 }),
+      )
+      .mockResolvedValueOnce(
+        streamResponse([
+          'data: {"choices":[{"delta":{"content":"恢复"},"finish_reason":null}]}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+      );
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'bearer' as const,
+        baseUrl: 'https://gateway.example.com',
+        credential: 'token',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock, undefined, {
+      maxTransientRetries: 2,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+    });
+
+    service.start({
+      messages: [{ content: 'retry', role: 'user' }],
+      requestId: 'request-http-retry',
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          attempt: 2,
+          retryAfterMs: 0,
+          retryReason: 'http-status',
+          status: 502,
+          type: 'retrying',
+        }),
+      ]),
+    );
+    expect(events.some((event) => event.delta === '恢复')).toBe(true);
+  });
+
+  it('returns the final transient HTTP response after the retry budget is exhausted', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Promise.resolve(new Response('upstream unavailable', { status: 502 })),
+    );
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'none' as const,
+        baseUrl: 'https://gateway.example.com',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock, undefined, {
+      maxTransientRetries: 2,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+    });
+
+    service.start({
+      messages: [{ content: 'retry', role: 'user' }],
+      requestId: 'request-http-exhausted',
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(events.filter((event) => event.type === 'retrying')).toHaveLength(2);
+    expect(events.at(-1)?.error).toContain('接口返回 502：upstream unavailable');
+    expect(events.at(-1)?.error).toContain('已自动重试 2 次');
+  });
+
+  it('retries a network failure and reports exhaustion without leaking the credential', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('fetch failed for network-secret');
+    });
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'bearer' as const,
+        baseUrl: 'https://gateway.example.com',
+        credential: 'network-secret',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock, undefined, {
+      maxTransientRetries: 2,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+    });
+
+    service.start({
+      messages: [{ content: 'retry', role: 'user' }],
+      requestId: 'request-network-retry',
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(events.filter((event) => event.type === 'retrying')).toHaveLength(2);
+    expect(events.at(-1)?.error).toContain('已自动重试 2 次');
+    expect(JSON.stringify(events)).not.toContain('network-secret');
+  });
+
+  it('retries an incomplete stream only before model output starts', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(streamResponse([]))
+      .mockResolvedValueOnce(
+        streamResponse([
+          'data: {"choices":[{"delta":{"content":"完整"},"finish_reason":null}]}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+      );
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'none' as const,
+        baseUrl: 'https://gateway.example.com',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock, undefined, {
+      maxTransientRetries: 1,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+    });
+
+    service.start({
+      messages: [{ content: 'retry', role: 'user' }],
+      requestId: 'request-empty-stream',
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ retryReason: 'stream-incomplete', type: 'retrying' }),
+      ]),
+    );
+  });
+
+  it('marks a partial stream as interrupted instead of duplicating it or reporting done', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      streamResponse([
+        'data: {"choices":[{"delta":{"content":"部分回答"},"finish_reason":null}]}\n\n',
+      ]),
+    );
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'none' as const,
+        baseUrl: 'https://gateway.example.com',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock, undefined, {
+      maxTransientRetries: 2,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+    });
+
+    service.start({
+      messages: [{ content: 'partial', role: 'user' }],
+      requestId: 'request-partial-stream',
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.type === 'delta').map((event) => event.delta)).toEqual([
+      '部分回答',
+    ]);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+    expect(events.at(-1)?.error).toContain('结束标记前断开');
+  });
+
+  it('rejects ambiguous and cross-origin redirects but follows same-origin 307 safely', async () => {
+    const config = {
+      authMode: 'bearer' as const,
+      baseUrl: 'https://gateway.example.com',
+      credential: 'redirect-secret',
+      model: 'model',
+      protocol: 'openai' as const,
+    };
+    const store = { getRuntimeConfig: () => config } as unknown as ChatConfigStore;
+
+    const ambiguousEvents: ChatStreamEvent[] = [];
+    const ambiguousFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(null, {
+          headers: { location: 'https://login.example.com/session' },
+          status: 302,
+        }),
+    );
+    new ChatService(store, (event) => ambiguousEvents.push(event), ambiguousFetch).start({
+      messages: [{ content: 'redirect', role: 'user' }],
+      requestId: 'request-redirect-302',
+    });
+    await vi.waitFor(() => expect(ambiguousEvents.at(-1)?.type).toBe('error'));
+    expect(ambiguousFetch).toHaveBeenCalledTimes(1);
+    expect(ambiguousEvents.at(-1)?.error).toContain('HTTP 302');
+    expect(ambiguousFetch.mock.calls[0]?.[1]?.redirect).toBe('manual');
+
+    const crossOriginEvents: ChatStreamEvent[] = [];
+    const crossOriginFetch = vi.fn<typeof fetch>(
+      async () =>
+        new Response(null, {
+          headers: { location: 'https://other.example.com/v1/chat/completions' },
+          status: 307,
+        }),
+    );
+    new ChatService(store, (event) => crossOriginEvents.push(event), crossOriginFetch).start({
+      messages: [{ content: 'redirect', role: 'user' }],
+      requestId: 'request-cross-origin-307',
+    });
+    await vi.waitFor(() => expect(crossOriginEvents.at(-1)?.type).toBe('error'));
+    expect(crossOriginFetch).toHaveBeenCalledTimes(1);
+    expect(crossOriginEvents.at(-1)?.error).toContain('避免凭据泄漏');
+    expect(JSON.stringify(crossOriginEvents)).not.toContain('redirect-secret');
+
+    const sameOriginEvents: ChatStreamEvent[] = [];
+    const sameOriginFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          headers: { location: '/edge/chat/completions' },
+          status: 307,
+        }),
+      )
+      .mockResolvedValueOnce(
+        streamResponse([
+          'data: {"choices":[{"delta":{"content":"重定向成功"},"finish_reason":null}]}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+      );
+    new ChatService(store, (event) => sameOriginEvents.push(event), sameOriginFetch).start({
+      messages: [{ content: 'redirect', role: 'user' }],
+      requestId: 'request-same-origin-307',
+    });
+    await vi.waitFor(() => expect(sameOriginEvents.at(-1)?.type).toBe('done'));
+    expect(sameOriginFetch).toHaveBeenCalledTimes(2);
+    expect(sameOriginFetch.mock.calls[1]?.[0]).toBe(
+      'https://gateway.example.com/edge/chat/completions',
+    );
+    expect(
+      (sameOriginFetch.mock.calls[1]?.[1]?.headers as Record<string, string>).authorization,
+    ).toBe('Bearer redirect-secret');
+  });
+
+  it('retries retryable provider error events before output begins', async () => {
+    const events: ChatStreamEvent[] = [];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        streamResponse([
+          'data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}\n\n',
+        ]),
+      )
+      .mockResolvedValueOnce(streamResponse(['data: {"type":"message_stop"}\n\n']));
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'apiKey' as const,
+        baseUrl: 'https://api.anthropic.com',
+        credential: 'secret',
+        model: 'claude-test',
+        protocol: 'anthropic' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, (event) => events.push(event), fetchMock, undefined, {
+      maxTransientRetries: 1,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+    });
+
+    service.start({
+      messages: [{ content: 'overload', role: 'user' }],
+      requestId: 'request-stream-overload',
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ retryReason: 'stream-incomplete', type: 'retrying' }),
+      ]),
+    );
+  });
+
   it('distinguishes a manual stop from an idle timeout', async () => {
     const store = {
       getRuntimeConfig: () => ({

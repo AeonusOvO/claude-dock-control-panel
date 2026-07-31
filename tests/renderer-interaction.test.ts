@@ -182,6 +182,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toContain('id="chat-composer"');
     expect(rendererSource).toContain('window.controlPanel.startChat({');
     expect(rendererSource).toContain('window.controlPanel.onChatStream(handleChatStream);');
+    expect(rendererSource).toContain("event.type === 'retrying'");
+    expect(rendererSource).toContain('const visibleReply = activeChatReply');
+    expect(rendererSource).toContain('activeChatReplyStream.update(notice)');
     expect(rendererSource).toContain("mainView = 'chat';");
     expect(rendererStyles).toContain('.chat-message--user');
   });

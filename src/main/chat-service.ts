@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatPreflightResult,
   ChatProtocol,
+  ChatRetryReason,
   ChatStartInput,
   ChatStreamEvent,
   ChatTokenUsage,
@@ -23,6 +24,9 @@ interface ActiveChatRequest {
 
 export interface ChatServiceTimeouts {
   idleTimeoutMs?: number;
+  maxTransientRetries?: number;
+  retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
   totalTimeoutMs?: number;
 }
 
@@ -53,9 +57,17 @@ const MAX_RESPONSE_LENGTH = 2_000_000;
 const MAX_TEST_RESPONSE_LENGTH = 64 * 1024;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
-const REQUEST_IDLE_TIMEOUT_MS = 120_000;
-const REQUEST_TOTAL_TIMEOUT_MS = 15 * 60_000;
+const REQUEST_IDLE_TIMEOUT_MS = 5 * 60_000;
+const REQUEST_TOTAL_TIMEOUT_MS = 60 * 60_000;
 const TEST_TIMEOUT_MS = 15_000;
+const MAX_TRANSIENT_RETRIES = 4;
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 10_000;
+const RETRY_AFTER_MAX_DELAY_MS = 60_000;
+const MAX_CHAT_REDIRECTS = 3;
+const TRANSIENT_HTTP_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+const REDIRECT_HTTP_STATUSES = new Set([301, 302, 303, 307, 308]);
+const RETRYABLE_STREAM_ERROR_TYPES = new Set(['api_error', 'overloaded_error', 'rate_limit_error']);
 /**
  * The generation ceiling for one reply. 4096 silently truncated long answers, which read as the
  * model being "dumber" than the same gateway used from Claude Code. Gateways that cap lower reject
@@ -432,6 +444,63 @@ const responseError = async (response: Response): Promise<Error> => {
   return new Error(`接口返回 ${response.status}：${detail || response.statusText}`);
 };
 
+class ChatRedirectError extends Error {}
+
+class ChatProtocolError extends Error {}
+
+class ChatStreamProviderError extends Error {
+  public constructor(
+    message: string,
+    public readonly retryable: boolean,
+  ) {
+    super(message);
+  }
+}
+
+class IncompleteChatStreamError extends Error {
+  public constructor(
+    message: string,
+    public readonly emittedOutput: boolean,
+  ) {
+    super(message);
+  }
+}
+
+const retryAfterMilliseconds = (response: Response): number | undefined => {
+  const value = response.headers.get('retry-after')?.trim();
+  if (!value) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(RETRY_AFTER_MAX_DELAY_MS, Math.round(seconds * 1000));
+  }
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) {
+    return undefined;
+  }
+  return Math.min(RETRY_AFTER_MAX_DELAY_MS, Math.max(0, date - Date.now()));
+};
+
+const waitForRetry = (delayMs: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('aborted', 'AbortError'));
+      return;
+    }
+    const finish = (): void => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    const abort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      reject(new DOMException('aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+
 interface DirectChatResponse {
   refusal?: string;
   stopReason?: string;
@@ -534,13 +603,20 @@ export const parseChatStreamDelta = (
   const record = value as Record<string, unknown>;
   if (record.type === 'error') {
     const error = record.error;
+    const errorType =
+      error && typeof error === 'object' && typeof (error as { type?: unknown }).type === 'string'
+        ? (error as { type: string }).type
+        : undefined;
     const detail =
       error &&
       typeof error === 'object' &&
       typeof (error as { message?: unknown }).message === 'string'
         ? (error as { message: string }).message
         : '接口流返回错误。';
-    throw new Error(detail);
+    throw new ChatStreamProviderError(
+      detail,
+      Boolean(errorType && RETRYABLE_STREAM_ERROR_TYPES.has(errorType)),
+    );
   }
   const usage = usageFromPayload(protocol, value);
   if (protocol === 'anthropic') {
@@ -635,6 +711,9 @@ const discardResponse = async (response: Response): Promise<void> => {
 export class ChatService {
   private readonly active = new Map<string, ActiveChatRequest>();
   private readonly idleTimeoutMs: number;
+  private readonly maxTransientRetries: number;
+  private readonly retryBaseDelayMs: number;
+  private readonly retryMaxDelayMs: number;
   private readonly totalTimeoutMs: number;
 
   public constructor(
@@ -645,10 +724,19 @@ export class ChatService {
     timeouts: ChatServiceTimeouts = {},
   ) {
     this.idleTimeoutMs = timeouts.idleTimeoutMs ?? REQUEST_IDLE_TIMEOUT_MS;
+    this.maxTransientRetries = timeouts.maxTransientRetries ?? MAX_TRANSIENT_RETRIES;
+    this.retryBaseDelayMs = timeouts.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
+    this.retryMaxDelayMs = timeouts.retryMaxDelayMs ?? RETRY_MAX_DELAY_MS;
     this.totalTimeoutMs = timeouts.totalTimeoutMs ?? REQUEST_TOTAL_TIMEOUT_MS;
     if (
       !Number.isFinite(this.idleTimeoutMs) ||
       this.idleTimeoutMs <= 0 ||
+      !Number.isInteger(this.maxTransientRetries) ||
+      this.maxTransientRetries < 0 ||
+      !Number.isFinite(this.retryBaseDelayMs) ||
+      this.retryBaseDelayMs <= 0 ||
+      !Number.isFinite(this.retryMaxDelayMs) ||
+      this.retryMaxDelayMs < this.retryBaseDelayMs ||
       !Number.isFinite(this.totalTimeoutMs) ||
       this.totalTimeoutMs < this.idleTimeoutMs
     ) {
@@ -692,17 +780,20 @@ export class ChatService {
         messages: [{ content: '.', role: 'user' }],
         requestId: 'connection-test',
       });
-      const response = await this.fetchImpl(endpointFor(config.baseUrl, config.protocol), {
-        body: JSON.stringify(
-          serializeChatRequestBody(config, messages, {
-            includeUsage: false,
-            stream: false,
-          }),
-        ),
-        headers: requestHeaders(config, messages),
-        method: 'POST',
-        signal: controller.signal,
-      });
+      const response = await this.fetchWithRedirectPolicy(
+        endpointFor(config.baseUrl, config.protocol),
+        {
+          body: JSON.stringify(
+            serializeChatRequestBody(config, messages, {
+              includeUsage: false,
+              stream: false,
+            }),
+          ),
+          headers: requestHeaders(config, messages),
+          method: 'POST',
+          signal: controller.signal,
+        },
+      );
       if (!response.ok) {
         throw await responseError(response);
       }
@@ -757,6 +848,63 @@ export class ChatService {
     }
   }
 
+  private async fetchWithRedirectPolicy(url: string, init: RequestInit): Promise<Response> {
+    let currentUrl = new URL(url);
+    for (let redirectCount = 0; ; redirectCount += 1) {
+      const response = await this.fetchImpl(currentUrl.toString(), {
+        ...init,
+        redirect: 'manual',
+      });
+      if (!REDIRECT_HTTP_STATUSES.has(response.status)) {
+        return response;
+      }
+
+      const location = response.headers.get('location');
+      if (!location) {
+        await discardResponse(response);
+        throw new ChatRedirectError(
+          `接口返回 HTTP ${response.status} 重定向，但没有提供 Location。`,
+        );
+      }
+
+      let target: URL;
+      try {
+        target = new URL(location, currentUrl);
+      } catch {
+        await discardResponse(response);
+        throw new ChatRedirectError(`接口返回 HTTP ${response.status}，但重定向地址无效。`);
+      }
+
+      if (response.status !== 307 && response.status !== 308) {
+        await discardResponse(response);
+        throw new ChatRedirectError(
+          `接口返回 HTTP ${response.status}（目标 ${target.host}）；为避免 POST 被改写，已拒绝跟随。请改用最终消息接口地址。`,
+        );
+      }
+      if (target.origin !== currentUrl.origin || target.username || target.password) {
+        await discardResponse(response);
+        throw new ChatRedirectError(
+          `接口返回跨站 HTTP ${response.status} 重定向（目标 ${target.host}）；为避免凭据泄漏，已拒绝跟随。`,
+        );
+      }
+      if (redirectCount >= MAX_CHAT_REDIRECTS) {
+        await discardResponse(response);
+        throw new ChatRedirectError(`接口重定向次数超过 ${MAX_CHAT_REDIRECTS} 次上限。`);
+      }
+
+      await discardResponse(response);
+      currentUrl = target;
+    }
+  }
+
+  private retryDelay(retryNumber: number): number {
+    const ceiling = Math.min(
+      this.retryMaxDelayMs,
+      this.retryBaseDelayMs * 2 ** Math.max(0, retryNumber - 1),
+    );
+    return Math.max(1, Math.round(ceiling * (0.5 + Math.random() * 0.5)));
+  }
+
   private async run(
     requestId: string,
     messages: ChatMessage[],
@@ -784,18 +932,19 @@ export class ChatService {
       if (controller.signal.aborted) {
         throw new Error('对话请求已停止。');
       }
-      const fetchStream = (
-        includeUsage: boolean,
-        thinking: boolean,
-        maxTokens?: number,
-      ): Promise<Response> =>
-        this.fetchImpl(endpointFor(config.baseUrl, config.protocol), {
+      const endpoint = endpointFor(config.baseUrl, config.protocol);
+      const fetchStream = (attempt: {
+        includeUsage: boolean;
+        maxTokens?: number;
+        thinking: boolean;
+      }): Promise<Response> =>
+        this.fetchWithRedirectPolicy(endpoint, {
           body: JSON.stringify(
             serializeChatRequestBody(config, providerMessages, {
-              includeUsage,
-              maxTokens,
+              includeUsage: attempt.includeUsage,
+              maxTokens: attempt.maxTokens,
               stream: true,
-              thinking,
+              thinking: attempt.thinking,
             }),
           ),
           headers: requestHeaders(config, providerMessages),
@@ -816,130 +965,274 @@ export class ChatService {
               { includeUsage: true, thinking: false },
               { includeUsage: false, thinking: false },
             ];
-      let response = await fetchStream(
-        attempts[0]!.includeUsage,
-        attempts[0]!.thinking,
-        attempts[0]!.maxTokens,
-      );
-      touchIdleTimeout();
-      for (let attempt = 1; attempt < attempts.length; attempt += 1) {
+      let transientRetries = 0;
+      const scheduleRetry = async (
+        retryReason: ChatRetryReason,
+        detail: string,
+        diagnostic: { retryAfterMs?: number; status?: number } = {},
+      ): Promise<boolean> => {
+        if (transientRetries >= this.maxTransientRetries) {
+          return false;
+        }
+        transientRetries += 1;
+        const retryAfterMs = diagnostic.retryAfterMs ?? this.retryDelay(transientRetries);
+        this.emit({
+          attempt: transientRetries + 1,
+          detail,
+          maxAttempts: this.maxTransientRetries + 1,
+          requestId,
+          retryAfterMs,
+          retryReason,
+          status: diagnostic.status,
+          type: 'retrying',
+        });
+        touchIdleTimeout();
+        await waitForRetry(retryAfterMs, controller.signal);
+        touchIdleTimeout();
+        return true;
+      };
+
+      const fetchResilient = async (attempt: (typeof attempts)[number]): Promise<Response> => {
+        while (true) {
+          let response: Response;
+          try {
+            response = await fetchStream(attempt);
+          } catch (error) {
+            if (controller.signal.aborted || error instanceof ChatRedirectError) {
+              throw error;
+            }
+            const retrying = await scheduleRetry('network', '网络连接失败，正在重新连接。');
+            if (retrying) {
+              continue;
+            }
+            const detail = error instanceof Error ? error.message : '未知网络错误';
+            throw new Error(`网络连接失败，已自动重试 ${transientRetries} 次：${detail}`, {
+              cause: error,
+            });
+          }
+          touchIdleTimeout();
+          if (!TRANSIENT_HTTP_STATUSES.has(response.status)) {
+            return response;
+          }
+          if (transientRetries >= this.maxTransientRetries) {
+            return response;
+          }
+          const status = response.status;
+          const retryAfter = retryAfterMilliseconds(response);
+          await discardResponse(response);
+          await scheduleRetry('http-status', `接口暂时返回 HTTP ${status}，正在自动重试。`, {
+            retryAfterMs: retryAfter,
+            status,
+          });
+        }
+      };
+
+      let selectedAttempt = attempts[0]!;
+      let response = await fetchResilient(selectedAttempt);
+      for (
+        let compatibilityIndex = 1;
+        compatibilityIndex < attempts.length;
+        compatibilityIndex += 1
+      ) {
         if (response.status !== 400 && response.status !== 422) {
           break;
         }
         await discardResponse(response);
-        const next = attempts[attempt]!;
-        response = await fetchStream(next.includeUsage, next.thinking, next.maxTokens);
-        touchIdleTimeout();
-      }
-      if (!response.ok) {
-        throw await responseError(response);
+        selectedAttempt = attempts[compatibilityIndex]!;
+        response = await fetchResilient(selectedAttempt);
       }
 
-      if (!response.headers.get('content-type')?.includes('text/event-stream')) {
-        const raw = await readResponseText(response, MAX_RESPONSE_LENGTH);
-        const value = JSON.parse(raw) as unknown;
-        const direct = directChatResponse(config.protocol, value);
-        if (!direct.text && !direct.refusal) {
-          throw new Error('接口响应中没有可显示的模型文本。');
+      while (true) {
+        if (!response.ok) {
+          const error = await responseError(response);
+          if (TRANSIENT_HTTP_STATUSES.has(response.status) && transientRetries > 0) {
+            throw new Error(`${error.message}（已自动重试 ${transientRetries} 次）`);
+          }
+          throw error;
         }
-        const usage = mergeUsage(undefined, usageFromPayload(config.protocol, value));
-        if (direct.text) {
-          this.emit({ delta: direct.text, requestId, type: 'delta', usage });
-        }
-        if (direct.refusal) {
-          this.emit({
-            delta: direct.refusal,
-            refusal: direct.refusal,
-            requestId,
-            stopReason: direct.stopReason ?? 'refusal',
-            type: 'refusal',
-          });
-        }
-        this.emit({
-          requestId,
-          stopReason: direct.stopReason,
-          type: 'done',
-          usage,
-        });
-        return;
-      }
-      if (!response.body) {
-        throw new Error('接口未返回可读取的响应流。');
-      }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let responseLength = 0;
-      let doneEvent = false;
-      let providerUsage: ChatTokenUsage | undefined;
-      let stopReason: string | undefined;
-      while (!doneEvent) {
-        const chunk = await reader.read();
-        if (!chunk.done) {
-          touchIdleTimeout();
-        }
-        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-        const lines = buffer.split(/\r?\n/);
-        buffer = chunk.done ? '' : (lines.pop() ?? '');
-        for (const line of lines) {
-          if (!line.startsWith('data:')) {
+        let emittedOutput = false;
+        let streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        try {
+          if (!response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+            let raw: string;
+            try {
+              raw = await readResponseText(response, MAX_RESPONSE_LENGTH);
+            } catch {
+              throw new IncompleteChatStreamError('接口响应在读取完成前断开。', false);
+            }
+            let value: unknown;
+            try {
+              value = JSON.parse(raw) as unknown;
+            } catch {
+              throw new ChatProtocolError(
+                '接口返回了非 SSE、非 JSON 的响应，请检查协议与最终接口地址。',
+              );
+            }
+            const direct = directChatResponse(config.protocol, value);
+            if (!direct.text && !direct.refusal) {
+              throw new ChatProtocolError('接口响应中没有可显示的模型文本。');
+            }
+            const usage = mergeUsage(undefined, usageFromPayload(config.protocol, value));
+            if (direct.text) {
+              emittedOutput = true;
+              this.emit({ delta: direct.text, requestId, type: 'delta', usage });
+            }
+            if (direct.refusal) {
+              emittedOutput = true;
+              this.emit({
+                delta: direct.refusal,
+                refusal: direct.refusal,
+                requestId,
+                stopReason: direct.stopReason ?? 'refusal',
+                type: 'refusal',
+              });
+            }
+            this.emit({
+              requestId,
+              stopReason: direct.stopReason,
+              type: 'done',
+              usage,
+            });
+            return;
+          }
+          if (!response.body) {
+            throw new IncompleteChatStreamError('接口未返回可读取的响应流。', false);
+          }
+
+          streamReader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let responseLength = 0;
+          let doneEvent = false;
+          let providerUsage: ChatTokenUsage | undefined;
+          let stopReason: string | undefined;
+          while (!doneEvent) {
+            let chunk: ReadableStreamReadResult<Uint8Array>;
+            try {
+              chunk = await streamReader.read();
+            } catch {
+              throw new IncompleteChatStreamError(
+                emittedOutput
+                  ? '响应流在生成过程中断开；已保留收到的部分回答。'
+                  : '响应流在首个有效内容到达前断开。',
+                emittedOutput,
+              );
+            }
+            if (!chunk.done) {
+              touchIdleTimeout();
+            }
+            buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+            const lines = buffer.split(/\r?\n/);
+            buffer = chunk.done ? '' : (lines.pop() ?? '');
+            for (const line of lines) {
+              if (!line.startsWith('data:')) {
+                continue;
+              }
+              const data = line.slice(5).trim();
+              if (!data) {
+                continue;
+              }
+              if (data === '[DONE]') {
+                doneEvent = true;
+                break;
+              }
+              let delta: ParsedChatStreamDelta;
+              try {
+                delta = parseChatStreamDelta(config.protocol, JSON.parse(data));
+              } catch (error) {
+                if (error instanceof ChatStreamProviderError && error.retryable) {
+                  throw new IncompleteChatStreamError(error.message, emittedOutput);
+                }
+                throw error;
+              }
+              providerUsage = mergeUsage(providerUsage, delta.usage);
+              stopReason = delta.stopReason ?? stopReason;
+              for (const value of [delta.text, delta.thinking, delta.inputJson, delta.refusal]) {
+                responseLength += value?.length ?? 0;
+              }
+              if (responseLength > MAX_RESPONSE_LENGTH) {
+                await streamReader.cancel();
+                throw new ChatProtocolError('模型响应超过安全长度限制，已停止接收。');
+              }
+              if (delta.text) {
+                emittedOutput = true;
+                this.emit({
+                  delta: delta.text,
+                  requestId,
+                  type: 'delta',
+                  usage: providerUsage,
+                });
+              }
+              if (delta.thinking) {
+                emittedOutput = true;
+                this.emit({ delta: delta.thinking, requestId, type: 'thinking' });
+              }
+              if (delta.inputJson) {
+                emittedOutput = true;
+                this.emit({ delta: delta.inputJson, requestId, type: 'input-json' });
+              }
+              if (delta.refusal) {
+                emittedOutput = true;
+                this.emit({
+                  delta: delta.refusal,
+                  refusal: delta.refusal,
+                  requestId,
+                  stopReason: delta.stopReason ?? 'refusal',
+                  type: 'refusal',
+                });
+              }
+              if (
+                !delta.text &&
+                !delta.thinking &&
+                !delta.inputJson &&
+                !delta.refusal &&
+                delta.usage
+              ) {
+                this.emit({ requestId, type: 'start', usage: providerUsage });
+              }
+              if (delta.done) {
+                doneEvent = true;
+                break;
+              }
+            }
+            if (chunk.done) {
+              break;
+            }
+          }
+          if (!doneEvent) {
+            throw new IncompleteChatStreamError(
+              emittedOutput
+                ? '响应流在结束标记前断开；已保留收到的部分回答。'
+                : '响应流结束但没有返回协议结束标记。',
+              emittedOutput,
+            );
+          }
+          try {
+            await streamReader.cancel();
+          } catch {
+            // A completed provider stream may already have closed its body.
+          }
+          this.emit({ requestId, stopReason, type: 'done', usage: providerUsage });
+          return;
+        } catch (error) {
+          try {
+            await streamReader?.cancel();
+          } catch {
+            // A broken provider stream may reject cancellation after the read failure.
+          }
+          if (
+            !controller.signal.aborted &&
+            error instanceof IncompleteChatStreamError &&
+            !error.emittedOutput &&
+            (await scheduleRetry('stream-incomplete', '响应尚未开始便已断开，正在重新请求。'))
+          ) {
+            response = await fetchResilient(selectedAttempt);
             continue;
           }
-          const data = line.slice(5).trim();
-          if (!data) {
-            continue;
-          }
-          if (data === '[DONE]') {
-            doneEvent = true;
-            break;
-          }
-          const delta = parseChatStreamDelta(config.protocol, JSON.parse(data));
-          providerUsage = mergeUsage(providerUsage, delta.usage);
-          stopReason = delta.stopReason ?? stopReason;
-          for (const value of [delta.text, delta.thinking, delta.inputJson, delta.refusal]) {
-            responseLength += value?.length ?? 0;
-          }
-          if (responseLength > MAX_RESPONSE_LENGTH) {
-            await reader.cancel();
-            throw new Error('模型响应超过安全长度限制，已停止接收。');
-          }
-          if (delta.text) {
-            this.emit({
-              delta: delta.text,
-              requestId,
-              type: 'delta',
-              usage: providerUsage,
-            });
-          }
-          if (delta.thinking) {
-            this.emit({ delta: delta.thinking, requestId, type: 'thinking' });
-          }
-          if (delta.inputJson) {
-            this.emit({ delta: delta.inputJson, requestId, type: 'input-json' });
-          }
-          if (delta.refusal) {
-            this.emit({
-              delta: delta.refusal,
-              refusal: delta.refusal,
-              requestId,
-              stopReason: delta.stopReason ?? 'refusal',
-              type: 'refusal',
-            });
-          }
-          if (!delta.text && !delta.thinking && !delta.inputJson && !delta.refusal && delta.usage) {
-            this.emit({ requestId, type: 'start', usage: providerUsage });
-          }
-          if (delta.done) {
-            doneEvent = true;
-            break;
-          }
-        }
-        if (chunk.done) {
-          break;
+          throw error;
         }
       }
-      this.emit({ requestId, stopReason, type: 'done', usage: providerUsage });
     } catch (error) {
       this.emit({
         ...(controller.signal.aborted

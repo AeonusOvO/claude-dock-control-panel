@@ -270,11 +270,20 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `choices[0].delta.content`。OpenAI 流默认请求 `stream_options.include_usage`；遇到拒绝该扩展
   的 400/422 兼容网关会自动重试一次普通流。两种协议都解析供应商 usage 并沿流事件回传；
   中转若返回非 SSE JSON，则提取对应协议的普通文本与 usage。
+- 瞬时恢复使用一个跨兼容降级步骤共享的预算：首个有效模型输出前，网络失败以及
+  408/409/425/429/500/502/503/504/529 最多自动重试 4 次，采用 500ms 起步、10 秒封顶的
+  带抖动指数退避，并接受最长 60 秒的 `Retry-After`。typed `retrying` 事件只回传次数、等待、
+  原因和可选状态码，不含请求头、正文或凭据。SSE 必须以 Anthropic `message_stop` 或 OpenAI
+  `[DONE]` 正式结束；首个有效输出前的 EOF、读失败和可重试 provider error 可复用剩余预算，
+  已有任何输出后则不重放非幂等请求，以避免重复扣费与重复文本，并把干净的部分回答留在历史。
+- 所有消息 POST 使用 `redirect: manual`：301/302/303 因可能改写方法而拒绝，跨源 307/308 因
+  可能外带认证头而拒绝，只跟随最多 3 次同源且无 URL 用户信息的 307/308。连接测试复用同一
+  重定向边界。
 - renderer 先调用 `chat:preflight`，再通过 `chat:start` 发起；两处都在主进程修复失效的
   旧附件并重新校验当前草稿。启动失败会回滚临时消息、保留输入与附件，不把不可发送状态写入
-  历史。主进程用 `requestId → AbortController` Map 管理 120 秒空闲超时（每个响应块重置）、
-  15 分钟总上限与 `chat:stop`；`chat:stream` 明确区分 `manual` / `timeout` 终止原因，并支持
-  `thinking/input-json/refusal/stopReason`，不推送
+  历史。主进程用 `requestId → AbortController` Map 管理 5 分钟空闲超时（每个响应块和重试阶段
+  重置）、60 分钟总上限与 `chat:stop`；`chat:stream` 明确区分 `manual` / `timeout` 终止原因，
+  并支持 `retrying/thinking/input-json/refusal/stopReason`，不推送
   请求头或凭据。Anthropic 流请求 `thinking: {type:'adaptive', display:'summarized'}`，若
   400/422 不兼容则丢弃首个响应体并安全重试无 thinking 版本。每次最多 100 条消息、单个文本
   块 200,000 字符、文本合计 1,000,000 字符、响应
@@ -1099,7 +1108,8 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
   PowerShell 启动脚本语法和软件语义版本比较；独立对话测试额外覆盖凭据密文落盘、URL
   安全边界、未保存草稿连接测试、credential keep/clear、Token 估算、多模态协议线格式、
-  typed thinking/refusal、Anthropic/OpenAI 两类 SSE usage 与兼容回退、附件原子导入/
+  typed thinking/refusal/retrying、Anthropic/OpenAI 两类 SSE usage、瞬时 HTTP/网络重试、
+  严格结束标记、部分输出不重放、重定向安全与兼容回退、附件原子导入/
   UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
   和流式稳定前缀。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
