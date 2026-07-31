@@ -1970,6 +1970,39 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.handle(
+    'claude:connection-history-rename',
+    async (
+      event,
+      sessionId: unknown,
+      entryId: unknown,
+      name: unknown,
+    ): Promise<ClaudeConnectionHistoryResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      try {
+        if (typeof name !== 'string') {
+          throw new Error('连接名称格式无效。');
+        }
+        return {
+          entries: runtime.renameConnectionHistory(
+            status.cwd,
+            validateHistoryEntryId(entryId),
+            name,
+          ),
+          ok: true,
+        };
+      } catch (error) {
+        return {
+          entries: runtime.getConnectionHistory(status.cwd),
+          error: error instanceof Error ? error.message : '无法重命名这条接入记录。',
+          ok: false,
+        };
+      }
+    },
+  );
   ipcMain.handle('claude:model-options', async (event, sessionId: unknown) => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);

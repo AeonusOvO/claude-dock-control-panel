@@ -204,6 +204,13 @@ const api: ControlPanelApi = {
       sessionId,
       entryId,
     ) as Promise<ClaudeConnectionHistoryResult>,
+  renameClaudeConnectionHistory: (sessionId: string, entryId: string, name: string) =>
+    ipcRenderer.invoke(
+      'claude:connection-history-rename',
+      sessionId,
+      entryId,
+      name,
+    ) as Promise<ClaudeConnectionHistoryResult>,
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   getWorkspace: () => ipcRenderer.invoke('workspace:get-state') as Promise<WorkspaceState>,
   getDevelopmentRuntime: (sessionId) => ipcRenderer.invoke('runtime:get', sessionId),

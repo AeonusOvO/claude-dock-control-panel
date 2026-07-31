@@ -14,6 +14,7 @@ import type {
   ClaudeConnectionAdvice,
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
+  ClaudeEndpointProtocol,
   ClaudeEffortCompatibility,
   ClaudeEffortLevel,
   ClaudeEffortRequest,
@@ -29,6 +30,7 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouteHealth,
   ClaudeRouterManagementState,
+  ClaudeRouterProviderProtocol,
   ClaudeRouterInstallSource,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
@@ -109,6 +111,20 @@ interface RuntimeSession {
   /** Resolved by the next PostCompact signal; lets a relaunch wait for compaction to finish. */
   waitingForCompact?: (signaledAt: number) => void;
 }
+
+interface ConnectionHistoryMetadata {
+  name?: string;
+  protocol: ClaudeEndpointProtocol;
+}
+
+export const connectionProtocolForRouterProvider = (
+  protocol: ClaudeRouterProviderProtocol,
+): Exclude<ClaudeEndpointProtocol, 'unknown'> =>
+  protocol === 'anthropic_messages' ? 'anthropic' : 'openai';
+
+export const defaultConnectionProtocolForPreset = (
+  preset: SaveClaudeConfigInput['preset'],
+): ClaudeEndpointProtocol => (preset === 'gateway' ? 'unknown' : 'anthropic');
 
 /**
  * Terminal writes that drive Claude Code's own UI. `ESC [Z` is the CBT sequence xterm already sends
@@ -777,15 +793,23 @@ export class ClaudeRuntime {
     if (!input.useForCurrentProject) {
       return { saved };
     }
-    const projectState = await this.saveConfig(sessionId, cwd, {
-      authMode: 'authToken',
-      baseUrl: saved.connection.baseUrl,
-      credential: saved.connection.apiKey,
-      credentialAction: 'replace',
-      model: saved.connection.model,
-      preset: 'gateway',
-      provider: 'gateway',
-    });
+    const projectState = await this.saveConfig(
+      sessionId,
+      cwd,
+      {
+        authMode: 'authToken',
+        baseUrl: saved.connection.baseUrl,
+        credential: saved.connection.apiKey,
+        credentialAction: 'replace',
+        model: saved.connection.model,
+        preset: 'gateway',
+        provider: 'gateway',
+      },
+      {
+        name: saved.provider.name,
+        protocol: connectionProtocolForRouterProvider(saved.provider.protocol),
+      },
+    );
     return { projectState, saved };
   }
 
@@ -813,15 +837,23 @@ export class ClaudeRuntime {
     if (routerState.gatewayState !== 'running') {
       throw new Error(routerState.message);
     }
-    const projectState = await this.saveConfig(sessionId, cwd, {
-      authMode: 'authToken',
-      baseUrl: saved.connection.baseUrl,
-      credential: saved.connection.apiKey,
-      credentialAction: 'replace',
-      model: saved.connection.model,
-      preset: 'gateway',
-      provider: 'gateway',
-    });
+    const projectState = await this.saveConfig(
+      sessionId,
+      cwd,
+      {
+        authMode: 'authToken',
+        baseUrl: saved.connection.baseUrl,
+        credential: saved.connection.apiKey,
+        credentialAction: 'replace',
+        model: saved.connection.model,
+        preset: 'gateway',
+        provider: 'gateway',
+      },
+      {
+        name: saved.provider.name,
+        protocol: connectionProtocolForRouterProvider(saved.provider.protocol),
+      },
+    );
     return {
       projectState,
       saved: { ...saved, state: routerState },
@@ -958,9 +990,10 @@ export class ClaudeRuntime {
     sessionId: string,
     cwd: string,
     input: Parameters<ClaudeConfigStore['save']>[1],
+    historyMetadata?: ConnectionHistoryMetadata,
   ): Promise<ClaudeProjectState> {
     this.configStore.save(cwd, input);
-    await this.recordConnectionHistory(cwd, input);
+    await this.recordConnectionHistory(cwd, input, historyMetadata);
     const runtime = this.ensureSession(sessionId, cwd);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
@@ -975,6 +1008,14 @@ export class ClaudeRuntime {
     return this.historyStore.remove(cwd, entryId);
   }
 
+  public renameConnectionHistory(
+    cwd: string,
+    entryId: string,
+    name: string,
+  ): ClaudeConnectionHistoryEntry[] {
+    return this.historyStore.rename(cwd, entryId, name);
+  }
+
   /**
    * Replays a saved setup. It goes through `saveConfig`, so restoring a record is indistinguishable
    * from having typed it again — including the deduplication that keeps the list from growing when
@@ -985,7 +1026,11 @@ export class ClaudeRuntime {
     cwd: string,
     entryId: string,
   ): Promise<ClaudeProjectState> {
-    return this.saveConfig(sessionId, cwd, this.historyStore.toSaveInput(cwd, entryId));
+    const replay = this.historyStore.toReplayInput(cwd, entryId);
+    return this.saveConfig(sessionId, cwd, replay.config, {
+      name: replay.name,
+      protocol: replay.protocol,
+    });
   }
 
   /**
@@ -1351,7 +1396,11 @@ export class ClaudeRuntime {
    * Snapshots what was saved together with the gateway state at that moment, so a record restores
    * the situation and not just the form fields. A history failure must never fail the save itself.
    */
-  private async recordConnectionHistory(cwd: string, input: SaveClaudeConfigInput): Promise<void> {
+  private async recordConnectionHistory(
+    cwd: string,
+    input: SaveClaudeConfigInput,
+    metadata?: ConnectionHistoryMetadata,
+  ): Promise<void> {
     try {
       const router = await this.getRouterHealthState();
       this.historyStore.record(cwd, {
@@ -1359,6 +1408,8 @@ export class ClaudeRuntime {
         credential: this.configStore.getCredential(cwd),
         gatewayEndpoint: router.endpoint,
         gatewayState: router.gatewayState,
+        name: metadata?.name,
+        protocol: metadata?.protocol ?? defaultConnectionProtocolForPreset(input.preset),
       });
     } catch {
       // The configuration is already saved; a missing history entry is not worth failing over.

@@ -175,6 +175,18 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).not.toContain('connectionHistorySection');
   });
 
+  it('labels connection protocol and route while supporting contextual renaming', () => {
+    expect(rendererMarkup).toContain('data-history-context-action="rename"');
+    expect(rendererMarkup).toContain('id="conversation-rename-dialog-description"');
+    expect(rendererMarkup).toContain('id="conversation-rename-field-label"');
+    expect(rendererSource).toContain('protocolTag.dataset.protocol = entry.protocol;');
+    expect(rendererSource).toContain("return 'Router 转换';");
+    expect(rendererSource).toContain("return '本地直连';");
+    expect(rendererSource).toContain('window.controlPanel.renameClaudeConnectionHistory(');
+    expect(rendererStyles).toContain(".connection-history__tag[data-protocol='anthropic']");
+    expect(rendererStyles).toContain(".connection-history__tag[data-protocol='openai']");
+  });
+
   it('provides independently configured model chat with a separate workspace', () => {
     expect(rendererMarkup).toMatch(/data-rail-tab="chat"[\s\S]*?>\s*对话\s*</);
     expect(rendererMarkup).toContain('id="chat-config-form"');

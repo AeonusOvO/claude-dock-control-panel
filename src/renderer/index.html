@@ -1517,6 +1517,7 @@
     </div>
 
     <div class="conversation-context-menu" id="history-context-menu" role="menu" hidden>
+      <button data-history-context-action="rename" role="menuitem" type="button">重命名连接</button>
       <button data-history-context-action="apply" role="menuitem" type="button">
         恢复这条配置
       </button>
@@ -1747,10 +1748,12 @@
       <form method="dialog">
         <header>
           <strong id="conversation-rename-dialog-title">重命名对话</strong>
-          <span>名称会同步显示在项目列表和历史对话中。</span>
+          <span id="conversation-rename-dialog-description"
+            >名称会同步显示在项目列表和历史对话中。</span
+          >
         </header>
         <label class="field" for="conversation-rename-input">
-          <span>对话名称</span>
+          <span id="conversation-rename-field-label">对话名称</span>
           <input
             id="conversation-rename-input"
             type="text"

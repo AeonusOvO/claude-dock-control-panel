@@ -69,6 +69,23 @@ describe('ClaudeConnectionHistoryStore', () => {
       gatewayState: 'running',
       model: 'glm-4.6',
       preset: 'gateway',
+      protocol: 'anthropic',
+    });
+  });
+
+  it('preserves an OpenAI router provider name and protocol when replaying it', () => {
+    const { store } = createStore();
+
+    const [entry] = store.record(CWD, {
+      ...gatewayConfig(),
+      name: 'yunmai-openai',
+      protocol: 'openai',
+    });
+
+    expect(entry).toMatchObject({ name: 'yunmai-openai', protocol: 'openai' });
+    expect(store.toReplayInput(CWD, entry?.id ?? '')).toMatchObject({
+      name: 'yunmai-openai',
+      protocol: 'openai',
     });
   });
 
@@ -91,6 +108,16 @@ describe('ClaudeConnectionHistoryStore', () => {
     expect(entries[0]?.model).toBe('glm-4.6-air');
   });
 
+  it('treats the upstream protocol as part of the saved connection', () => {
+    const { store } = createStore();
+
+    store.record(CWD, { ...gatewayConfig(), protocol: 'anthropic' });
+    const entries = store.record(CWD, { ...gatewayConfig(), protocol: 'openai' });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.protocol)).toEqual(['openai', 'anthropic']);
+  });
+
   it('records and restores a changed apiKeyHelper policy as a distinct setup', () => {
     const { store } = createStore();
 
@@ -104,19 +131,28 @@ describe('ClaudeConnectionHistoryStore', () => {
     });
   });
 
-  it('loads pre-policy history with the safe single-credential default', () => {
+  it('migrates version 1 gateway history with safe defaults and an unknown protocol', () => {
     const { fixtureRoot, historyPath, store } = createStore();
     store.record(CWD, gatewayConfig());
     const persisted = JSON.parse(readFileSync(historyPath, 'utf8')) as {
       projects: Record<string, Array<Record<string, unknown>>>;
+      version: number;
     };
     const [entries] = Object.values(persisted.projects);
     delete entries?.[0]?.apiKeyHelperPolicy;
+    delete entries?.[0]?.protocol;
+    persisted.version = 1;
     writeFileSync(historyPath, JSON.stringify(persisted), 'utf8');
 
-    expect(new ClaudeConnectionHistoryStore(fixtureRoot).list(CWD)[0]?.apiKeyHelperPolicy).toBe(
-      'prefer-claudedock',
-    );
+    const migratedStore = new ClaudeConnectionHistoryStore(fixtureRoot);
+    const [migrated] = migratedStore.list(CWD);
+    expect(migrated).toMatchObject({
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      protocol: 'unknown',
+    });
+
+    migratedStore.rename(CWD, migrated?.id ?? '', '旧中转连接');
+    expect(JSON.parse(readFileSync(historyPath, 'utf8'))).toMatchObject({ version: 2 });
   });
 
   it('adds a record when only the credential changed', () => {
@@ -198,6 +234,27 @@ describe('ClaudeConnectionHistoryStore', () => {
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.model).toBe('glm-4.6');
     expect(() => store.toSaveInput(CWD, newestId)).toThrow(/已被删除/);
+  });
+
+  it('renames a record without changing its connection metadata', () => {
+    const { fixtureRoot, store } = createStore();
+    const [entry] = store.record(CWD, { ...gatewayConfig(), protocol: 'openai' });
+
+    const renamed = store.rename(CWD, entry?.id ?? '', '  生产 OpenAI 中转  ');
+
+    expect(renamed[0]).toMatchObject({
+      name: '生产 OpenAI 中转',
+      protocol: 'openai',
+    });
+    expect(new ClaudeConnectionHistoryStore(fixtureRoot).list(CWD)[0]).toMatchObject({
+      name: '生产 OpenAI 中转',
+      protocol: 'openai',
+    });
+    expect(() => store.rename(CWD, entry?.id ?? '', '   ')).toThrow(/1-60/);
+    expect(() => store.rename(CWD, entry?.id ?? '', `坏名称${String.fromCharCode(7)}`)).toThrow(
+      /控制字符/,
+    );
+    expect(() => store.rename(CWD, entry?.id ?? '', '名'.repeat(61))).toThrow(/1-60/);
   });
 
   it('treats Windows paths case-insensitively', () => {

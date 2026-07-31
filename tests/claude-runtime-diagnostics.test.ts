@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 import {
+  connectionProtocolForRouterProvider,
+  defaultConnectionProtocolForPreset,
   parseClaudeEffortThinkingDisabledError,
   parseClaudeMetrics,
   parseClaudeRuntimeApiError,
@@ -29,6 +31,16 @@ const feedChunks = (chunks: readonly string[]): string => {
   }
   return buffer;
 };
+
+describe('connection history protocol metadata', () => {
+  it('maps both OpenAI router variants without guessing unknown manual router state', () => {
+    expect(connectionProtocolForRouterProvider('anthropic_messages')).toBe('anthropic');
+    expect(connectionProtocolForRouterProvider('openai_chat_completions')).toBe('openai');
+    expect(connectionProtocolForRouterProvider('openai_responses')).toBe('openai');
+    expect(defaultConnectionProtocolForPreset('gateway')).toBe('unknown');
+    expect(defaultConnectionProtocolForPreset('custom')).toBe('anthropic');
+  });
+});
 
 const routerConfig: NormalizedClaudeConfig = {
   apiKeyHelperPolicy: 'prefer-claudedock',

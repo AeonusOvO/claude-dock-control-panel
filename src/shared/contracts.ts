@@ -382,7 +382,9 @@ export interface ClaudeConnectionHistoryEntry {
   id: string;
   model: string;
   modelFast?: string;
+  name?: string;
   preset: ClaudePreset;
+  protocol: ClaudeEndpointProtocol;
   provider: ClaudeProvider;
   savedAt: number;
 }
@@ -925,6 +927,11 @@ export interface ControlPanelApi {
   deleteClaudeConnectionHistory: (
     sessionId: string,
     entryId: string,
+  ) => Promise<ClaudeConnectionHistoryResult>;
+  renameClaudeConnectionHistory: (
+    sessionId: string,
+    entryId: string,
+    name: string,
   ) => Promise<ClaudeConnectionHistoryResult>;
   getDroppedPath: (file: File) => string;
   getWorkspace: () => Promise<WorkspaceState>;

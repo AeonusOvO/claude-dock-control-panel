@@ -4,6 +4,7 @@ import path from 'node:path';
 import { safeStorage } from 'electron';
 import type {
   ClaudeConnectionHistoryEntry,
+  ClaudeEndpointProtocol,
   ClaudeRouterGatewayState,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
@@ -20,12 +21,14 @@ interface StoredHistoryEntry extends NormalizedClaudeConfig {
   gatewayEndpoint?: string;
   gatewayState: ClaudeRouterGatewayState;
   id: string;
+  name?: string;
+  protocol: ClaudeEndpointProtocol;
   savedAt: number;
 }
 
 interface StoredHistoryFile {
   projects: Record<string, StoredHistoryEntry[]>;
-  version: 1;
+  version: 2;
 }
 
 /** Enough to cover a session of trial and error without letting the file grow without bound. */
@@ -33,7 +36,7 @@ export const MAX_HISTORY_ENTRIES = 20;
 
 const EMPTY_STORE: StoredHistoryFile = {
   projects: {},
-  version: 1,
+  version: 2,
 };
 
 const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
@@ -45,20 +48,41 @@ const GATEWAY_STATES = new Set<ClaudeRouterGatewayState>([
   'stopped',
   'unknown',
 ]);
+const AUTH_MODES = new Set(['apiKey', 'authToken', 'existing', 'none']);
+const HISTORY_PROTOCOLS = new Set<ClaudeEndpointProtocol>(['anthropic', 'openai', 'unknown']);
 
-const isStoredEntry = (value: unknown): value is StoredHistoryEntry => {
+const hasControlCharacter = (value: string): boolean =>
+  [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+
+const normalizeHistoryName = (value: string): string => {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 60 || hasControlCharacter(normalized)) {
+    throw new Error('连接名称需为 1-60 个字符，且不能包含控制字符。');
+  }
+  return normalized;
+};
+
+const legacyProtocol = (preset: string, provider: string): ClaudeEndpointProtocol =>
+  provider === 'gateway' && preset === 'gateway' ? 'unknown' : 'anthropic';
+
+const parseStoredEntry = (value: unknown): StoredHistoryEntry | undefined => {
   if (!value || typeof value !== 'object') {
-    return false;
+    return undefined;
   }
   const record = value as Record<string, unknown>;
-  return (
+  if (
     typeof record.id === 'string' &&
     typeof record.savedAt === 'number' &&
     Number.isFinite(record.savedAt) &&
     (record.provider === 'anthropic' || record.provider === 'gateway') &&
     typeof record.model === 'string' &&
+    (record.modelFast === undefined || typeof record.modelFast === 'string') &&
     typeof record.baseUrl === 'string' &&
     typeof record.authMode === 'string' &&
+    AUTH_MODES.has(record.authMode) &&
     (record.apiKeyHelperPolicy === undefined ||
       record.apiKeyHelperPolicy === 'inherit' ||
       record.apiKeyHelperPolicy === 'prefer-claudedock') &&
@@ -67,7 +91,29 @@ const isStoredEntry = (value: unknown): value is StoredHistoryEntry => {
     GATEWAY_STATES.has(record.gatewayState as ClaudeRouterGatewayState) &&
     (record.gatewayEndpoint === undefined || typeof record.gatewayEndpoint === 'string') &&
     (record.encryptedCredential === undefined || typeof record.encryptedCredential === 'string')
-  );
+  ) {
+    const protocol = HISTORY_PROTOCOLS.has(record.protocol as ClaudeEndpointProtocol)
+      ? (record.protocol as ClaudeEndpointProtocol)
+      : legacyProtocol(record.preset, record.provider);
+    const rawName = typeof record.name === 'string' ? record.name.trim() : '';
+    return {
+      apiKeyHelperPolicy: record.apiKeyHelperPolicy === 'inherit' ? 'inherit' : 'prefer-claudedock',
+      authMode: record.authMode as NormalizedClaudeConfig['authMode'],
+      baseUrl: record.baseUrl,
+      encryptedCredential: record.encryptedCredential as string | undefined,
+      gatewayEndpoint: record.gatewayEndpoint as string | undefined,
+      gatewayState: record.gatewayState as ClaudeRouterGatewayState,
+      id: record.id,
+      model: record.model,
+      modelFast: record.modelFast as string | undefined,
+      name: rawName && rawName.length <= 60 && !hasControlCharacter(rawName) ? rawName : undefined,
+      preset: record.preset as NormalizedClaudeConfig['preset'],
+      protocol,
+      provider: record.provider,
+      savedAt: record.savedAt,
+    };
+  }
+  return undefined;
 };
 
 /**
@@ -75,7 +121,11 @@ const isStoredEntry = (value: unknown): value is StoredHistoryEntry => {
  * machine at save time, not the configuration, and a router that flaps between `running` and
  * `stopped` must not turn one unchanged setup into a wall of near-identical records.
  */
-const entryFingerprint = (config: NormalizedClaudeConfig, credential?: string): string =>
+const entryFingerprint = (
+  config: NormalizedClaudeConfig,
+  credential: string | undefined,
+  protocol: ClaudeEndpointProtocol,
+): string =>
   createHash('sha256')
     .update(
       JSON.stringify({
@@ -86,6 +136,7 @@ const entryFingerprint = (config: NormalizedClaudeConfig, credential?: string): 
         model: config.model,
         modelFast: config.modelFast || config.model,
         preset: config.preset,
+        protocol,
         provider: config.provider,
       }),
     )
@@ -96,6 +147,14 @@ export interface RecordConnectionInput {
   credential?: string;
   gatewayEndpoint?: string;
   gatewayState: ClaudeRouterGatewayState;
+  name?: string;
+  protocol?: ClaudeEndpointProtocol;
+}
+
+export interface ConnectionHistoryReplay {
+  config: SaveClaudeConfigInput;
+  name?: string;
+  protocol: ClaudeEndpointProtocol;
 }
 
 export class ClaudeConnectionHistoryStore {
@@ -120,7 +179,9 @@ export class ClaudeConnectionHistoryStore {
       id: entry.id,
       model: entry.model,
       modelFast: entry.modelFast || entry.model,
+      name: entry.name,
       preset: entry.preset,
+      protocol: entry.protocol,
       provider: entry.provider,
       savedAt: entry.savedAt,
     }));
@@ -137,8 +198,10 @@ export class ClaudeConnectionHistoryStore {
     const key = projectKey(cwd);
     const entries = store.projects[key] ?? [];
     const newest = entries[0];
+    const protocol = input.protocol ?? 'anthropic';
+    const name = input.name ? normalizeHistoryName(input.name) : undefined;
 
-    if (newest && this.fingerprintOf(newest) === entryFingerprint(config, credential)) {
+    if (newest && this.fingerprintOf(newest) === entryFingerprint(config, credential, protocol)) {
       return this.list(cwd);
     }
 
@@ -149,6 +212,8 @@ export class ClaudeConnectionHistoryStore {
       gatewayEndpoint: input.gatewayEndpoint,
       gatewayState: input.gatewayState,
       id: `history-${Date.now().toString(36)}-${this.sequence.toString(36)}`,
+      name,
+      protocol,
       savedAt: Date.now(),
     };
 
@@ -179,8 +244,24 @@ export class ClaudeConnectionHistoryStore {
     return this.list(cwd);
   }
 
+  public rename(cwd: string, entryId: string, name: string): ClaudeConnectionHistoryEntry[] {
+    const store = this.load();
+    const key = projectKey(cwd);
+    const entry = store.projects[key]?.find((candidate) => candidate.id === entryId);
+    if (!entry) {
+      throw new Error('这条接入记录已被删除。');
+    }
+    entry.name = normalizeHistoryName(name);
+    this.persist(store);
+    return this.list(cwd);
+  }
+
   /** The input needed to reapply a record, credential included, ready for `ClaudeConfigStore`. */
   public toSaveInput(cwd: string, entryId: string): SaveClaudeConfigInput {
+    return this.toReplayInput(cwd, entryId).config;
+  }
+
+  public toReplayInput(cwd: string, entryId: string): ConnectionHistoryReplay {
     const entry = (this.load().projects[projectKey(cwd)] ?? []).find(
       (candidate) => candidate.id === entryId,
     );
@@ -190,16 +271,20 @@ export class ClaudeConnectionHistoryStore {
 
     const credential = this.decrypt(entry.encryptedCredential);
     return {
-      apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
-      authMode: entry.authMode,
-      baseUrl: entry.baseUrl,
-      credential,
-      // Without a credential there is nothing to restore, so leave whatever is stored untouched.
-      credentialAction: credential ? 'replace' : 'keep',
-      model: entry.model,
-      modelFast: entry.modelFast || entry.model,
-      preset: entry.preset,
-      provider: entry.provider,
+      config: {
+        apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
+        authMode: entry.authMode,
+        baseUrl: entry.baseUrl,
+        credential,
+        // Without a credential there is nothing to restore, so leave whatever is stored untouched.
+        credentialAction: credential ? 'replace' : 'keep',
+        model: entry.model,
+        modelFast: entry.modelFast || entry.model,
+        preset: entry.preset,
+        provider: entry.provider,
+      },
+      name: entry.name,
+      protocol: entry.protocol,
     };
   }
 
@@ -215,6 +300,7 @@ export class ClaudeConnectionHistoryStore {
         provider: entry.provider,
       },
       this.decrypt(entry.encryptedCredential),
+      entry.protocol,
     );
   }
 
@@ -243,20 +329,27 @@ export class ClaudeConnectionHistoryStore {
         projects?: unknown;
         version?: unknown;
       };
-      if (parsed.version !== 1 || !parsed.projects || typeof parsed.projects !== 'object') {
+      if (
+        (parsed.version !== 1 && parsed.version !== 2) ||
+        !parsed.projects ||
+        typeof parsed.projects !== 'object'
+      ) {
         return structuredClone(EMPTY_STORE);
       }
 
       const projects: Record<string, StoredHistoryEntry[]> = {};
       for (const [key, value] of Object.entries(parsed.projects)) {
         if (Array.isArray(value)) {
-          const entries = value.filter(isStoredEntry).slice(0, MAX_HISTORY_ENTRIES);
+          const entries = value
+            .map(parseStoredEntry)
+            .filter((entry): entry is StoredHistoryEntry => Boolean(entry))
+            .slice(0, MAX_HISTORY_ENTRIES);
           if (entries.length > 0) {
             projects[key] = entries;
           }
         }
       }
-      return { projects, version: 1 };
+      return { projects, version: 2 };
     } catch {
       return structuredClone(EMPTY_STORE);
     }

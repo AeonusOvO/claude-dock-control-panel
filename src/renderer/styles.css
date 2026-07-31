@@ -5175,6 +5175,55 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   line-height: 19px;
 }
 
+.connection-history__restore .connection-history__title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.connection-history__restore .connection-history__tags {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.connection-history__restore .connection-history__tag {
+  background: var(--warn-tint);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-pill);
+  color: var(--warn-text);
+  font-size: var(--text-3xs);
+  font-weight: var(--fw-medium);
+  line-height: 16px;
+  padding: 0 var(--s-2);
+}
+
+.connection-history__restore .connection-history__tag[data-protocol='anthropic'] {
+  background: var(--ok-tint);
+  border-color: var(--ok-line);
+  color: var(--ok-text);
+}
+
+.connection-history__restore .connection-history__tag[data-protocol='openai'] {
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+
+.connection-history__restore .connection-history__tag.connection-history__tag--route {
+  background: var(--surface-4);
+  border-color: var(--line);
+  color: var(--text-lo);
+}
+
 .connection-history__restore span {
   color: var(--text-lo);
   font-size: var(--text-xs);

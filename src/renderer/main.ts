@@ -437,6 +437,12 @@ const conversationRenameDialog = requiredElement<HTMLDialogElement>('#conversati
 const conversationRenameDialogTitle = requiredElement<HTMLElement>(
   '#conversation-rename-dialog-title',
 );
+const conversationRenameDialogDescription = requiredElement<HTMLElement>(
+  '#conversation-rename-dialog-description',
+);
+const conversationRenameFieldLabel = requiredElement<HTMLElement>(
+  '#conversation-rename-field-label',
+);
 const conversationRenameCancel = requiredElement<HTMLButtonElement>('#conversation-rename-cancel');
 const conversationRenameInput = requiredElement<HTMLInputElement>('#conversation-rename-input');
 const confirmationDialog = requiredElement<HTMLDialogElement>('#confirmation-dialog');
@@ -5540,13 +5546,21 @@ const hideConversationContextMenu = (): void => {
   conversationContextTarget = undefined;
 };
 
-const requestConversationTitle = (
-  currentTitle: string,
-  historical: boolean,
+interface RenameDialogCopy {
+  description: string;
+  fieldLabel: string;
+  title: string;
+}
+
+const requestRenamedValue = (
+  currentValue: string,
+  copy: RenameDialogCopy,
 ): Promise<string | null> =>
   new Promise((resolve) => {
-    conversationRenameDialogTitle.textContent = historical ? '重命名历史对话' : '重命名运行中对话';
-    conversationRenameInput.value = currentTitle;
+    conversationRenameDialogTitle.textContent = copy.title;
+    conversationRenameDialogDescription.textContent = copy.description;
+    conversationRenameFieldLabel.textContent = copy.fieldLabel;
+    conversationRenameInput.value = currentValue;
     conversationRenameDialog.returnValue = 'cancel';
     conversationRenameDialog.addEventListener(
       'close',
@@ -5556,7 +5570,7 @@ const requestConversationTitle = (
           return;
         }
         const title = conversationRenameInput.value.trim();
-        resolve(title && title !== currentTitle ? title : null);
+        resolve(title && title !== currentValue ? title : null);
       },
       { once: true },
     );
@@ -5565,6 +5579,23 @@ const requestConversationTitle = (
       conversationRenameInput.focus();
       conversationRenameInput.select();
     });
+  });
+
+const requestConversationTitle = (
+  currentTitle: string,
+  historical: boolean,
+): Promise<string | null> =>
+  requestRenamedValue(currentTitle, {
+    description: '名称会同步显示在项目列表和历史对话中。',
+    fieldLabel: '对话名称',
+    title: historical ? '重命名历史对话' : '重命名运行中对话',
+  });
+
+const requestConnectionHistoryName = (currentName: string): Promise<string | null> =>
+  requestRenamedValue(currentName, {
+    description: '名称只用于区分当前项目的连接历史，不会修改实际接口配置。',
+    fieldLabel: '连接名称',
+    title: '重命名连接',
   });
 
 const showConversationContextMenu = (
@@ -7433,6 +7464,49 @@ const historyAuthModeLabel = (authMode: ClaudeConnectionHistoryEntry['authMode']
   }
 };
 
+const historyDisplayName = (entry: ClaudeConnectionHistoryEntry): string => {
+  if (entry.name) {
+    return entry.name;
+  }
+  if (entry.preset === 'custom' || entry.preset === 'gateway') {
+    try {
+      return (
+        new URL(entry.baseUrl || entry.gatewayEndpoint || '').host || presetLabel(entry.preset)
+      );
+    } catch {
+      return presetLabel(entry.preset);
+    }
+  }
+  return presetLabel(entry.preset);
+};
+
+const historyProtocolLabel = (protocol: ClaudeConnectionHistoryEntry['protocol']): string => {
+  switch (protocol) {
+    case 'anthropic':
+      return 'Anthropic';
+    case 'openai':
+      return 'OpenAI';
+    case 'unknown':
+      return '协议待确认';
+  }
+};
+
+const historyRouteLabel = (entry: ClaudeConnectionHistoryEntry): string => {
+  if (entry.preset === 'anthropic') {
+    return '官方直连';
+  }
+  if (entry.protocol === 'openai') {
+    return 'Router 转换';
+  }
+  if (entry.preset === 'gateway') {
+    return '本机转换器';
+  }
+  if (findClaudeProvider(entry.preset)?.group === 'local') {
+    return '本地直连';
+  }
+  return '中转直连';
+};
+
 const renderConnectionHistory = (): void => {
   connectionHistoryList.replaceChildren();
   connectionHistoryEmpty.hidden = connectionHistoryEntries.length > 0;
@@ -7449,10 +7523,24 @@ const renderConnectionHistory = (): void => {
     const restore = document.createElement('button');
     restore.className = 'connection-history__restore';
     restore.type = 'button';
-    restore.title = '恢复这条接入配置';
+    const displayName = historyDisplayName(entry);
+    restore.title = `恢复连接：${displayName}`;
 
+    const titleRow = document.createElement('span');
+    titleRow.className = 'connection-history__title-row';
     const title = document.createElement('strong');
-    title.textContent = presetLabel(entry.preset);
+    title.textContent = displayName;
+    const tags = document.createElement('span');
+    tags.className = 'connection-history__tags';
+    const protocolTag = document.createElement('span');
+    protocolTag.className = 'connection-history__tag';
+    protocolTag.dataset.protocol = entry.protocol;
+    protocolTag.textContent = historyProtocolLabel(entry.protocol);
+    const routeTag = document.createElement('span');
+    routeTag.className = 'connection-history__tag connection-history__tag--route';
+    routeTag.textContent = historyRouteLabel(entry);
+    tags.append(protocolTag, routeTag);
+    titleRow.append(title, tags);
     const parameters = document.createElement('span');
     parameters.className = 'connection-history__parameters';
     const appendParameter = (labelText: string, valueText: string): void => {
@@ -7480,7 +7568,7 @@ const renderConnectionHistory = (): void => {
       entry.apiKeyHelperPolicy === 'inherit' ? '保留 apiKeyHelper' : 'ClaudeDock 单一凭据',
       GATEWAY_STATE_LABELS[entry.gatewayState],
     ].join(' · ');
-    restore.append(title, parameters, meta);
+    restore.append(titleRow, parameters, meta);
 
     const remove = document.createElement('button');
     remove.className = 'connection-history__delete';
@@ -7491,6 +7579,37 @@ const renderConnectionHistory = (): void => {
 
     item.append(restore, remove);
     connectionHistoryList.append(item);
+  }
+};
+
+const renameConnectionHistory = async (entryId: string): Promise<void> => {
+  const status = activeStatus();
+  const entry = connectionHistoryEntries.find((candidate) => candidate.id === entryId);
+  if (!status || !entry || connectionHistoryMutationInProgress) {
+    return;
+  }
+  const nextName = await requestConnectionHistoryName(historyDisplayName(entry));
+  if (!nextName) {
+    return;
+  }
+  connectionHistoryMutationInProgress = true;
+  try {
+    const result = await window.controlPanel.renameClaudeConnectionHistory(
+      status.id,
+      entryId,
+      nextName,
+    );
+    connectionHistoryEntries = result.entries;
+    renderConnectionHistory();
+    if (!result.ok) {
+      showToast(result.error ?? '无法重命名这条接入记录。', 'error');
+      return;
+    }
+    showToast('连接名称已更新。');
+  } catch {
+    showToast('无法重命名这条接入记录。', 'error');
+  } finally {
+    connectionHistoryMutationInProgress = false;
   }
 };
 
@@ -8516,7 +8635,9 @@ for (const button of historyContextMenu.querySelectorAll<HTMLButtonElement>(
     if (!entryId) {
       return;
     }
-    if (action === 'apply') {
+    if (action === 'rename') {
+      void renameConnectionHistory(entryId);
+    } else if (action === 'apply') {
       void applyConnectionHistory(entryId);
     } else if (action === 'delete') {
       void deleteConnectionHistory(entryId);
