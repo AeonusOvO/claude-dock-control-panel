@@ -961,10 +961,9 @@ export class ClaudeRouterManager {
     const access = await this.requireActiveService();
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
     const updated = buildUpdatedRouterConfig(current, input);
-    const saved = await this.rpcWithAccess<CcrAppConfig>(
+    const saved = await this.saveConfigWithoutProfileTakeover(
       access,
-      'saveConfig',
-      [updated.config, { applyProfile: false }],
+      updated.config,
       [input.apiKey ?? ''],
     );
     const state = await this.getState();
@@ -987,7 +986,7 @@ export class ClaudeRouterManager {
     const access = await this.requireActiveService();
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
     const updated = buildDeletedRouterConfig(current, providerId);
-    await this.rpcWithAccess(access, 'saveConfig', [updated, { applyProfile: false }]);
+    await this.saveConfigWithoutProfileTakeover(access, updated);
     return this.getState();
   }
 
@@ -1339,6 +1338,23 @@ export class ClaudeRouterManager {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     throw new Error('等待 CCR 管理服务启动超时。');
+  }
+
+  /**
+   * The only allowed CCR saveConfig call. ClaudeDock manages CLI routing only, so profile takeover
+   * is forced off here instead of relying on every caller to remember a security-sensitive flag.
+   */
+  private saveConfigWithoutProfileTakeover(
+    access: CcrServiceAccess,
+    config: CcrAppConfig,
+    secrets: string[] = [],
+  ): Promise<CcrAppConfig> {
+    return this.rpcWithAccess<CcrAppConfig>(
+      access,
+      'saveConfig',
+      [config, { applyProfile: false }],
+      secrets,
+    );
   }
 
   private async rpcWithAccess<T>(
