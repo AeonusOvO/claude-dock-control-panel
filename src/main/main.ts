@@ -2696,6 +2696,19 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     app.setAppUserModelId('cn.cheng.claudedock');
     artifactService.install();
+    busyRegistry = new BusyRegistry((leases) => {
+      mainWindow?.webContents.send('busy:changed', leases);
+    });
+    downloadEngine = new DownloadEngine(
+      session.defaultSession as unknown as DownloadSession,
+      busyRegistry,
+      app.getPath('userData'),
+      (tasks) => {
+        mainWindow?.webContents.send('download:changed', tasks);
+      },
+    );
+    downloadEngine.install();
+    downloadEngine.restoreInterrupted();
     claudeRuntime = new ClaudeRuntime(
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
@@ -2717,6 +2730,7 @@ if (!hasSingleInstanceLock) {
         workspace.write(sessionId, data);
       },
       requestPermissionModeFromScreen,
+      downloadEngine,
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
     );
     codexRuntime = new CodexRuntime(app.getPath('userData'), (state) => {
@@ -2740,19 +2754,6 @@ if (!hasSingleInstanceLock) {
       settingsStore: networkPreflightSettingsStore,
     });
     providerAccessGuard = new ProviderAccessGuard(networkPreflightService);
-    busyRegistry = new BusyRegistry((leases) => {
-      mainWindow?.webContents.send('busy:changed', leases);
-    });
-    downloadEngine = new DownloadEngine(
-      session.defaultSession as unknown as DownloadSession,
-      busyRegistry,
-      app.getPath('userData'),
-      (tasks) => {
-        mainWindow?.webContents.send('download:changed', tasks);
-      },
-    );
-    downloadEngine.install();
-    downloadEngine.restoreInterrupted();
     registerIpc();
     createTray();
 

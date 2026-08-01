@@ -8,6 +8,10 @@ const contractsSource = readFileSync(
 const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
 const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
+const routerManagerSource = readFileSync(
+  new URL('../src/main/claude-router-manager.ts', import.meta.url),
+  'utf8',
+);
 
 describe('download IPC surface', () => {
   it('keeps list, commands and changed subscription wired across the process boundary', () => {
@@ -34,5 +38,11 @@ describe('download IPC surface', () => {
         ),
       );
     }
+  });
+
+  it('routes the CCR installer through the shared verified download engine', () => {
+    expect(routerManagerSource).toContain('await this.downloadEngine.start({');
+    expect(routerManagerSource).toContain("label: 'Claude Code Router 安装包'");
+    expect(routerManagerSource).not.toContain('response.body.getReader()');
   });
 });

@@ -87,6 +87,7 @@ import {
   type DownloadedRouterInstaller,
   type SavedRouterProvider,
 } from './claude-router-manager';
+import type { DownloadEngine } from './download-engine';
 import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-updates';
 
 interface RuntimeSession {
@@ -613,11 +614,12 @@ export class ClaudeRuntime {
     private readonly readPermissionModeFromScreen: (
       sessionId: string,
     ) => Promise<ClaudePermissionMode | undefined>,
+    downloadEngine: DownloadEngine,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
-    this.routerManager = new ClaudeRouterManager(userDataPath);
+    this.routerManager = new ClaudeRouterManager(userDataPath, downloadEngine);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
     this.currentThemeId = initialThemeId;
     this.metricsTimer = setInterval(() => {

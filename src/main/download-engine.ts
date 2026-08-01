@@ -239,6 +239,12 @@ export class DownloadEngine {
     if (!this.isAllowedUrl(request, url)) {
       throw new Error('下载地址不在允许的来源与路径范围内。');
     }
+    if (
+      request.allowedHosts.length === 0 ||
+      request.allowedHosts.length !== request.allowedPathPrefixes.length
+    ) {
+      throw new Error('下载来源白名单配置无效。');
+    }
     if (!Number.isFinite(request.maxBytes) || request.maxBytes <= 0) {
       throw new Error('下载大小上限无效。');
     }
@@ -263,7 +269,10 @@ export class DownloadEngine {
     request: DownloadRequest,
     journalEntry?: DownloadJournalEntry,
   ): { completion: Promise<DownloadResult>; task: ActiveDownload } {
-    if (this.tasks.has(request.id)) {
+    const existing = this.tasks.get(request.id);
+    if (existing?.settled) {
+      this.tasks.delete(request.id);
+    } else if (existing) {
       throw new Error(`下载任务 ${request.id} 已存在。`);
     }
     mkdirSync(path.dirname(request.finalPath), { recursive: true });
@@ -442,8 +451,11 @@ export class DownloadEngine {
         url.protocol === 'https:' &&
         !url.username &&
         !url.password &&
-        request.allowedHosts.includes(url.hostname) &&
-        request.allowedPathPrefixes.some((prefix) => url.pathname.startsWith(prefix))
+        request.allowedHosts.some(
+          (host, index) =>
+            host === url.hostname &&
+            url.pathname.startsWith(request.allowedPathPrefixes[index] ?? ''),
+        )
       );
     } catch {
       return false;

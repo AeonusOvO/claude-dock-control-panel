@@ -33,6 +33,7 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
     !entry.allowedHosts.every((host) => typeof host === 'string' && host.length > 0) ||
     !Array.isArray(entry.allowedPathPrefixes) ||
     entry.allowedPathPrefixes.length === 0 ||
+    entry.allowedHosts.length !== entry.allowedPathPrefixes.length ||
     !entry.allowedPathPrefixes.every(
       (prefix) => typeof prefix === 'string' && prefix.startsWith('/'),
     ) ||

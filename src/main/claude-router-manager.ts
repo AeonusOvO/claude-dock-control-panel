@@ -1,13 +1,10 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
 import {
   createReadStream,
-  createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -24,6 +21,7 @@ import type {
   SaveClaudeRouterProviderInput,
 } from '../shared/contracts';
 import { completeConnectionEndpoint } from '../shared/connection-endpoint';
+import type { DownloadEngine } from './download-engine';
 import { runWindowsCommand } from './windows-command';
 
 const execFileAsync = promisify(execFile);
@@ -631,7 +629,10 @@ export class ClaudeRouterManager {
   private readonly installerDirectory: string;
   private serviceRuntimeCache?: { pid: number; usesAppRuntime: boolean };
 
-  public constructor(userDataPath: string) {
+  public constructor(
+    userDataPath: string,
+    private readonly downloadEngine: DownloadEngine,
+  ) {
     this.installerDirectory = path.join(userDataPath, 'claude', 'router-installers');
   }
 
@@ -1021,70 +1022,21 @@ export class ClaudeRouterManager {
       return { filePath: finalPath, version: release.version };
     }
 
-    const temporaryPath = `${finalPath}.${process.pid}.${Date.now()}.download`;
-    try {
-      await this.downloadInstaller(release, temporaryPath);
-      if (existsSync(finalPath)) {
-        unlinkSync(finalPath);
-      }
-      renameSync(temporaryPath, finalPath);
-    } catch (error) {
-      if (existsSync(temporaryPath)) {
-        unlinkSync(temporaryPath);
-      }
-      throw error;
-    }
-    return { filePath: finalPath, version: release.version };
-  }
-
-  private async downloadInstaller(
-    release: RouterInstallerRelease,
-    destination: string,
-  ): Promise<void> {
-    const response = await fetch(release.downloadUrl, {
-      headers: { 'user-agent': 'ClaudeDock/1.0' },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(10 * 60_000),
+    await this.downloadEngine.start({
+      allowedHosts: ['github.com', 'release-assets.githubusercontent.com'],
+      allowedPathPrefixes: [
+        `/musistudio/claude-code-router/releases/download/v${release.version}/`,
+        '/',
+      ],
+      expectedBytes: release.size,
+      expectedSha256: release.digest,
+      finalPath,
+      id: `ccr-installer-${release.version}`,
+      label: 'Claude Code Router 安装包',
+      maxBytes: MAX_INSTALLER_BYTES,
+      url: release.downloadUrl,
     });
-    if (!response.ok || !response.body) {
-      throw new Error(`下载 CCR 官方安装包失败：HTTP ${response.status}。`);
-    }
-    const contentLength = Number(response.headers.get('content-length') ?? 0);
-    if (contentLength > MAX_INSTALLER_BYTES) {
-      throw new Error('CCR 安装包超过允许大小。');
-    }
-
-    const output = createWriteStream(destination, { flags: 'wx' });
-    const reader = response.body.getReader();
-    const hash = createHash('sha256');
-    let written = 0;
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) {
-          break;
-        }
-        const buffer = Buffer.from(chunk.value);
-        written += buffer.length;
-        if (written > MAX_INSTALLER_BYTES) {
-          throw new Error('CCR 安装包超过允许大小。');
-        }
-        hash.update(buffer);
-        if (!output.write(buffer)) {
-          await once(output, 'drain');
-        }
-      }
-      output.end();
-      await once(output, 'finish');
-    } catch (error) {
-      output.destroy();
-      throw error;
-    } finally {
-      reader.releaseLock();
-    }
-    if (written !== release.size || hash.digest('hex') !== release.digest) {
-      throw new Error('CCR 官方安装包大小或 SHA-256 校验失败，已拒绝启动。');
-    }
+    return { filePath: finalPath, version: release.version };
   }
 
   private async findCliInstallation(): Promise<CcrCliInstallation | undefined> {
