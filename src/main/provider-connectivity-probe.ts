@@ -49,6 +49,7 @@ type DnsLookup = (hostname: string) => Promise<Array<{ address: string; family: 
 export interface ProviderConnectivityProbeOptions {
   appFetch: AppFetch;
   applicationRequest?: ApplicationEndpointRequest;
+  builtInProxyUrl?: () => string | undefined;
   cliRequest?: (url: string, websocket: boolean, cwd?: string) => Promise<string>;
   clientVersion?: (provider: NetworkProviderId, cwd?: string) => Promise<string | undefined>;
   dnsLookup?: DnsLookup;
@@ -298,7 +299,7 @@ export class ProviderConnectivityProbe {
           Array<{ address: string; family: 4 | 6 }>
         >);
     this.now = options.now ?? Date.now;
-    this.pathResolver = new NetworkPathResolver(options.resolveProxy);
+    this.pathResolver = new NetworkPathResolver(options.resolveProxy, options.builtInProxyUrl);
   }
 
   public async run(

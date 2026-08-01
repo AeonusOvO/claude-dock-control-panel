@@ -124,6 +124,17 @@ export class RiskDecisionEngine {
         'official-network-policy',
       );
     }
+    if (cliPath?.proxyKind === 'claudedock') {
+      addSignal(
+        'built-in-cli-proxy',
+        '已由内置代理适配 CLI',
+        'CLI 使用 ClaudeDock 的本地 HTTP 入站；即使上游节点是 SOCKS，Claude Code 也只会看到受支持的 HTTP 代理。',
+        0,
+        'info',
+        'high',
+        'claudedock-proxy',
+      );
+    }
     if (observation.paths.some((path) => path.proxyKind === 'unknown')) {
       addSignal(
         'proxy-resolution-unknown',

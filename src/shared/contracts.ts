@@ -196,7 +196,7 @@ export interface NetworkPathView {
   ipv6Available: boolean;
   process: NetworkProcessKind;
   proxyConfigured: boolean;
-  proxyKind: 'direct' | 'environment' | 'pac' | 'socks' | 'system' | 'unknown';
+  proxyKind: 'claudedock' | 'direct' | 'environment' | 'pac' | 'socks' | 'system' | 'unknown';
   virtualInterfaces: string[];
 }
 

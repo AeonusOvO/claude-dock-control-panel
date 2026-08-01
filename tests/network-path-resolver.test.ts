@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { NetworkPathResolver } from '../src/main/network-path-resolver';
 
 describe('NetworkPathResolver', () => {
+  it('labels the loopback HTTP adapter as ClaudeDock built-in proxy', async () => {
+    const paths = await new NetworkPathResolver(
+      async () => 'DIRECT',
+      () => 'http://127.0.0.1:43123',
+    ).resolve('anthropic-claude', 'https://api.anthropic.com');
+    expect(paths.find(({ process }) => process === 'claude-cli')).toMatchObject({
+      proxyConfigured: true,
+      proxyKind: 'claudedock',
+    });
+  });
+
   it('does not equate a missing explicit proxy with public direct access', async () => {
     const paths = await new NetworkPathResolver(async () => 'DIRECT').resolve(
       'openai-codex',
