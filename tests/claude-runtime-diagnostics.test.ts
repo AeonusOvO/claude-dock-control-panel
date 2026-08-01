@@ -196,6 +196,14 @@ describe('Claude runtime route diagnostics', () => {
 });
 
 describe('Claude runtime permission mode observation', () => {
+  it('surfaces the provider model error instead of misclassifying or silently falling back', () => {
+    expect(
+      parseClaudeRuntimeApiError(
+        'API Error: 404 {"error":{"message":"model deepseek-does-not-exist not found"}}',
+      ),
+    ).toContain('model deepseek-does-not-exist not found');
+  });
+
   it('reads the badge even when a repaint straddles two PTY chunks', () => {
     expect(parseClaudePermissionMode(feedChunks(['⏵⏵ accept ', 'edits on']))).toBe('acceptEdits');
     expect(

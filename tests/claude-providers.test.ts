@@ -11,6 +11,16 @@ import {
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 
 describe('Claude provider catalog', () => {
+  it('matches the current official DeepSeek Claude Code integration variables', () => {
+    const provider = CLAUDE_PROVIDERS.find(({ id }) => id === 'deepseek');
+    expect(provider).toMatchObject({
+      authMode: 'authToken',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      model: 'deepseek-v4-pro[1m]',
+      modelFast: 'deepseek-v4-flash',
+    });
+  });
+
   it('keeps identifiers unique and every entry in a declared group', () => {
     expect(new Set(CLAUDE_PROVIDERS.map((provider) => provider.id)).size).toBe(
       CLAUDE_PROVIDERS.length,

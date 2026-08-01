@@ -290,11 +290,11 @@ const normalizedRuntimeError = (value: string): string => {
   if (/\b(?:401|403)\b|unauthori[sz]ed|invalid (?:api )?key|authentication/i.test(compact)) {
     return 'Claude Code 的真实会话被接口拒绝认证。请重新核对认证方式与当前保存的密钥。';
   }
+  if (/model.+(?:not found|invalid|unsupported|does not exist)|unknown model/i.test(compact)) {
+    return `Claude Code 的真实会话未被当前模型接受。供应商原始错误：${compact}`;
+  }
   if (/\b404\b|not found/i.test(compact)) {
     return 'Claude Code 没有找到消息接口；请确认当前基址最终提供 /v1/messages。';
-  }
-  if (/model.+(?:not found|invalid|unsupported)|unknown model/i.test(compact)) {
-    return 'Claude Code 的真实会话未被当前模型接受；请核对最终接口中的模型标识。';
   }
   if (
     /output_config\.effort.+(?:xhigh|max).+not supported when thinking is disabled/i.test(compact)
