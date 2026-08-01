@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AdvancedSettings } from '../shared/contracts';
+import type { AdvancedSettings, ChatIdleTimeoutMinutes } from '../shared/contracts';
 
 /**
  * Everything here is off by default. These switches work around relay-side protocol quirks, and a
@@ -9,8 +9,12 @@ import type { AdvancedSettings } from '../shared/contracts';
  * actually refuses web search at higher effort levels.
  */
 const DEFAULT_SETTINGS: AdvancedSettings = {
+  chatIdleTimeoutMinutes: 0,
   webResearchIsolation: false,
 };
+
+const isChatIdleTimeoutMinutes = (value: unknown): value is ChatIdleTimeoutMinutes =>
+  value === 0 || value === 5 || value === 10 || value === 30;
 
 export class AdvancedSettingsStore {
   private readonly directory: string;
@@ -24,11 +28,17 @@ export class AdvancedSettingsStore {
   public get(): AdvancedSettings {
     try {
       const parsed = JSON.parse(readFileSync(this.storagePath, 'utf8')) as {
+        chatIdleTimeoutMinutes?: unknown;
         version?: unknown;
         webResearchIsolation?: unknown;
       };
       if (parsed.version === 1 && typeof parsed.webResearchIsolation === 'boolean') {
-        return { webResearchIsolation: parsed.webResearchIsolation };
+        return {
+          chatIdleTimeoutMinutes: isChatIdleTimeoutMinutes(parsed.chatIdleTimeoutMinutes)
+            ? parsed.chatIdleTimeoutMinutes
+            : 0,
+          webResearchIsolation: parsed.webResearchIsolation,
+        };
       }
     } catch {
       // Missing or malformed settings fall back to the documented defaults.
@@ -37,7 +47,10 @@ export class AdvancedSettingsStore {
   }
 
   public set(settings: AdvancedSettings): AdvancedSettings {
-    if (typeof settings.webResearchIsolation !== 'boolean') {
+    if (
+      !isChatIdleTimeoutMinutes(settings.chatIdleTimeoutMinutes) ||
+      typeof settings.webResearchIsolation !== 'boolean'
+    ) {
       throw new Error('高级设置无效。');
     }
     mkdirSync(this.directory, { recursive: true });

@@ -829,4 +829,54 @@ describe('independent chat service', () => {
       });
     });
   });
+
+  it('only aborts at the second idle threshold when the local setting opts in', async () => {
+    const events: ChatStreamEvent[] = [];
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'none' as const,
+        baseUrl: 'https://gateway.example.com',
+        model: 'model',
+        protocol: 'openai' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        async (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('aborted', 'AbortError')),
+              { once: true },
+            );
+          }),
+      )
+      .mockResolvedValue(
+        new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+          status: 200,
+        }),
+      );
+    const service = new ChatService(
+      store,
+      (event) => events.push(event),
+      fetchMock,
+      undefined,
+      { idleRepeatMs: 5, idleTimeoutMs: 50, probeTimeoutMs: 20 },
+      () => 15,
+    );
+
+    service.start({
+      messages: [{ content: 'slow', role: 'user' }],
+      requestId: 'request-local-timeout',
+    });
+
+    await vi.waitFor(() => {
+      expect(events.at(-1)).toMatchObject({
+        abortReason: 'local-timeout',
+        type: 'aborted',
+      });
+    });
+    expect(events.some((event) => event.type === 'idle')).toBe(true);
+  });
 });

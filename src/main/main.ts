@@ -248,6 +248,8 @@ const chatService = new ChatService(
   },
   fetch,
   chatAttachmentStore,
+  {},
+  () => advancedSettingsStore.get().chatIdleTimeoutMinutes * 60_000,
 );
 const artifactService = new ArtifactService(app.getPath('userData'), (entry) => {
   mainWindow?.webContents.send('artifact:network-log', entry);
@@ -1109,10 +1111,16 @@ const registerIpc = (): void => {
       settings && typeof settings === 'object'
         ? (settings as Partial<AdvancedSettings>)
         : undefined;
-    if (typeof record?.webResearchIsolation !== 'boolean') {
+    if (
+      ![0, 5, 10, 30].includes(record?.chatIdleTimeoutMinutes ?? -1) ||
+      typeof record?.webResearchIsolation !== 'boolean'
+    ) {
       throw new Error('高级设置无效。');
     }
-    advancedSettingsStore.set({ webResearchIsolation: record.webResearchIsolation });
+    advancedSettingsStore.set({
+      chatIdleTimeoutMinutes: record.chatIdleTimeoutMinutes as 0 | 5 | 10 | 30,
+      webResearchIsolation: record.webResearchIsolation,
+    });
     return appSettingsView();
   });
   ipcMain.handle('app:set-launch-at-login', (event, enabled: unknown) => {

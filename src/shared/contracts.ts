@@ -51,6 +51,7 @@ export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
 export type ChatProtocol = 'anthropic' | 'openai';
 export type ChatAuthMode = 'apiKey' | 'bearer' | 'none';
+export type ChatIdleTimeoutMinutes = 0 | 5 | 10 | 30;
 export type ChatMessageRole = 'assistant' | 'system' | 'user';
 export type ChatStreamEventType =
   | 'aborted'
@@ -268,7 +269,7 @@ export interface ChatPreflightResult {
 }
 
 export interface ChatStreamEvent {
-  abortReason?: 'manual';
+  abortReason?: 'local-timeout' | 'manual';
   attempt?: number;
   delta?: string;
   detail?: string;
@@ -348,6 +349,8 @@ export interface ChatConnectionTestResult {
  * behaves correctly must not carry the cost of a fix it does not need.
  */
 export interface AdvancedSettings {
+  /** Zero leaves slow conversations running until the user stops them. */
+  chatIdleTimeoutMinutes: ChatIdleTimeoutMinutes;
   /**
    * Routes WebSearch and WebFetch through a dedicated subagent instead of the main conversation.
    * Turn this on when the relay refuses web search once the model is raised to high effort.

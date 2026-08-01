@@ -18,7 +18,7 @@ type EmitChatEvent = (event: ChatStreamEvent) => void;
 type ChatFetch = typeof fetch;
 
 interface ActiveChatRequest {
-  abortReason?: 'manual';
+  abortReason?: 'local-timeout' | 'manual';
   controller: AbortController;
 }
 
@@ -724,6 +724,7 @@ export class ChatService {
     private readonly fetchImpl: ChatFetch = fetch,
     private readonly attachmentStore?: ChatAttachmentStore,
     timeouts: ChatServiceTimeouts = {},
+    private readonly readHardIdleTimeoutMs: () => number = () => 0,
   ) {
     this.idleRepeatMs = timeouts.idleRepeatMs ?? IDLE_PROBE_REPEAT_MS;
     this.idleTimeoutMs = timeouts.idleTimeoutMs ?? REQUEST_IDLE_TIMEOUT_MS;
@@ -924,6 +925,12 @@ export class ChatService {
     active: ActiveChatRequest,
   ): Promise<void> {
     const { controller } = active;
+    const configuredHardIdleTimeoutMs = this.readHardIdleTimeoutMs();
+    const hardIdleTimeoutMs =
+      Number.isFinite(configuredHardIdleTimeoutMs) && configuredHardIdleTimeoutMs > 0
+        ? configuredHardIdleTimeoutMs
+        : 0;
+    const idleNoticeThresholdMs = hardIdleTimeoutMs || this.idleTimeoutMs;
     let idleTimeout: NodeJS.Timeout | undefined;
     let activityGeneration = 0;
     let lastActivityAt = Date.now();
@@ -941,7 +948,12 @@ export class ChatService {
         return;
       }
       const generation = activityGeneration;
-      const idleMs = Math.max(this.idleTimeoutMs, Date.now() - lastActivityAt);
+      const idleMs = Math.max(idleNoticeThresholdMs, Date.now() - lastActivityAt);
+      if (hardIdleTimeoutMs > 0 && idleMs >= hardIdleTimeoutMs * 2) {
+        active.abortReason = 'local-timeout';
+        controller.abort('local-timeout');
+        return;
+      }
       this.emit({
         idleMs,
         probe: { detail: '正在旁路探测当前接口。' },
@@ -958,7 +970,7 @@ export class ChatService {
             activityGeneration === generation
           ) {
             this.emit({
-              idleMs: Math.max(this.idleTimeoutMs, Date.now() - lastActivityAt),
+              idleMs: Math.max(idleNoticeThresholdMs, Date.now() - lastActivityAt),
               probe: { detail: result.detail, ok: result.ok },
               requestId,
               type: 'idle',
@@ -979,7 +991,7 @@ export class ChatService {
     const touchIdleTimeout = (): void => {
       activityGeneration += 1;
       lastActivityAt = Date.now();
-      scheduleIdleThreshold(this.idleTimeoutMs);
+      scheduleIdleThreshold(idleNoticeThresholdMs);
     };
     touchIdleTimeout();
     try {

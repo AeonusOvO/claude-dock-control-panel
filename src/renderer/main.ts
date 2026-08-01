@@ -330,6 +330,7 @@ const completeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#complete-connection-advanced',
 );
 const settingsLaunchAtLogin = requiredElement<HTMLInputElement>('#settings-launch-at-login');
+const settingsChatIdleTimeout = requiredElement<HTMLSelectElement>('#settings-chat-idle-timeout');
 const settingsWebResearchIsolation = requiredElement<HTMLInputElement>(
   '#settings-web-research-isolation',
 );
@@ -1925,10 +1926,16 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     return;
   }
   if (event.type === 'aborted') {
-    const notice = '已停止生成。';
+    const localTimeout = event.abortReason === 'local-timeout';
+    const notice = localTimeout ? '已按本地静默超时设置停止生成。' : '已停止生成。';
     const visibleReply = activeChatReply ? `${activeChatReply}\n\n> ${notice}` : `> ${notice}`;
     if (activeChatReplyElement && !activeChatReply) {
       activeChatReplyElement.textContent = notice;
+    } else if (localTimeout && activeChatReply) {
+      activeChatReplyStream ??= activeChatReplyElement
+        ? markdownRenderer.createStream(activeChatReplyElement)
+        : undefined;
+      void activeChatReplyStream?.update(visibleReply);
     }
     if (activeChatReply) {
       chatMessages.push({
@@ -1940,6 +1947,9 @@ const handleChatStream = (event: ChatStreamEvent): void => {
       ? { ...activeChatProviderUsage }
       : estimateChatUsage(activeChatRequestMessages, activeChatReply);
     renderChatUsage();
+    if (localTimeout) {
+      showToast(notice, 'error');
+    }
     void (async () => {
       await activeChatReplyStream?.finish(visibleReply);
       await persistActiveChat();
@@ -2843,6 +2853,7 @@ const loadAppSettings = async (): Promise<void> => {
   try {
     const settings = await window.controlPanel.getAppSettings();
     settingsLaunchAtLogin.checked = settings.launchAtLogin;
+    settingsChatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
     settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
     settingsLanguage.value = settings.language;
     settingsVersion.value = settings.version;
@@ -8042,7 +8053,10 @@ settingsWebResearchIsolation.addEventListener('change', () => {
   const requested = settingsWebResearchIsolation.checked;
   settingsWebResearchIsolation.disabled = true;
   void window.controlPanel
-    .setAdvancedSettings({ webResearchIsolation: requested })
+    .setAdvancedSettings({
+      chatIdleTimeoutMinutes: Number(settingsChatIdleTimeout.value) as 0 | 5 | 10 | 30,
+      webResearchIsolation: requested,
+    })
     .then((settings) => {
       settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
       showToast(
@@ -8057,6 +8071,34 @@ settingsWebResearchIsolation.addEventListener('change', () => {
     })
     .finally(() => {
       settingsWebResearchIsolation.disabled = false;
+    });
+});
+settingsChatIdleTimeout.addEventListener('change', () => {
+  const requested = Number(settingsChatIdleTimeout.value);
+  if (requested !== 0 && requested !== 5 && requested !== 10 && requested !== 30) {
+    settingsChatIdleTimeout.value = '0';
+    return;
+  }
+  settingsChatIdleTimeout.disabled = true;
+  void window.controlPanel
+    .setAdvancedSettings({
+      chatIdleTimeoutMinutes: requested,
+      webResearchIsolation: settingsWebResearchIsolation.checked,
+    })
+    .then((settings) => {
+      settingsChatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
+      showToast(
+        settings.advanced.chatIdleTimeoutMinutes === 0
+          ? '对话不会因静默自动停止'
+          : `已设置 ${settings.advanced.chatIdleTimeoutMinutes} 分钟静默提示，第二个阈值后停止`,
+      );
+    })
+    .catch(() => {
+      void loadAppSettings();
+      showToast('无法修改对话静默超时设置。', 'error');
+    })
+    .finally(() => {
+      settingsChatIdleTimeout.disabled = false;
     });
 });
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {

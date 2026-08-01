@@ -1651,9 +1651,23 @@
             </section>
             <section class="settings-panel" data-settings-panel="advanced">
               <div class="settings-section-heading">
-                <strong>中转站兼容</strong>
-                <span>默认全部关闭；只有中转站确实存在协议缺陷时才需要开启。</span>
+                <strong>对话与中转站兼容</strong>
+                <span>对话默认不自动停止；中转站兼容功能也默认关闭。</span>
               </div>
+              <label class="settings-row settings-row--select" for="settings-chat-idle-timeout">
+                <span>
+                  <strong>对话静默超时</strong>
+                  <small>
+                    默认只提示并探测连接，不自动中断。选择时长后，会先提示，再在第二个同等时长到达时停止。
+                  </small>
+                </span>
+                <select id="settings-chat-idle-timeout">
+                  <option value="0">不超时</option>
+                  <option value="5">5 分钟</option>
+                  <option value="10">10 分钟</option>
+                  <option value="30">30 分钟</option>
+                </select>
+              </label>
               <label class="settings-row" for="settings-web-research-isolation">
                 <span>
                   <strong>联网检索隔离</strong>
