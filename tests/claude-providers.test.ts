@@ -29,6 +29,38 @@ describe('Claude provider catalog', () => {
     expect(CLAUDE_PROVIDERS.every((provider) => groupIds.has(provider.group))).toBe(true);
   });
 
+  it('tracks the current official Claude Code integration presets', () => {
+    expect(findClaudeProvider('anthropic-api')).toMatchObject({
+      authMode: 'apiKey',
+      model: 'claude-sonnet-5',
+      modelFast: 'claude-haiku-4-5',
+    });
+    expect(findClaudeProvider('glm-cn')).toMatchObject({
+      authMode: 'authToken',
+      baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+      model: 'glm-5.2[1m]',
+    });
+    expect(findClaudeProvider('glm-global')).toMatchObject({
+      baseUrl: 'https://api.z.ai/api/anthropic',
+      model: 'glm-5.2',
+    });
+    expect(findClaudeProvider('kimi-code')).toMatchObject({
+      authMode: 'apiKey',
+      baseUrl: 'https://api.kimi.com/coding',
+      model: 'kimi-for-coding',
+    });
+    expect(findClaudeProvider('qwen-global')).toMatchObject({
+      baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/apps/anthropic',
+      model: 'qwen3.7-plus',
+    });
+    for (const providerId of ['minimax-cn', 'minimax-global']) {
+      expect(findClaudeProvider(providerId)).toMatchObject({
+        authMode: 'authToken',
+        model: 'MiniMax-M3[1m]',
+      });
+    }
+  });
+
   it('only permits HTTPS remote endpoints and explicit loopback HTTP endpoints', () => {
     for (const provider of CLAUDE_PROVIDERS) {
       if (!provider.baseUrl) {
