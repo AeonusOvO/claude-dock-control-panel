@@ -3177,7 +3177,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     : state.effortCompatibility
       ? state.effortCompatibility.recovery === 'failed'
         ? '自动回退失败；请打开菜单手动选择“均衡”或更低档位'
-        : '已检测到高档思考与 thinking 关闭冲突；本会话限制为“均衡”或更低档位'
+        : '搜索兼容重试期间暂用“均衡”；成功后会自动恢复原思考档位'
       : effortApplied === undefined
         ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
         : '点击调整思考程度，或在终端运行 /effort';
@@ -3186,7 +3186,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     effortRecoveryNotifications.get(state.sessionId) !== state.effortCompatibility.detectedAt
   ) {
     effortRecoveryNotifications.set(state.sessionId, state.effortCompatibility.detectedAt);
-    showToast('思考档位已自动降到“均衡”，请重试刚才的 WebSearch。');
+    showToast('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
   }
   allowBypassPermissions.checked = state.allowBypassPermissions;
 
@@ -4923,7 +4923,7 @@ const openEffortMenu = (): void => {
       compatibility.recovery === 'pending'
         ? '检测到高档思考与 thinking 关闭冲突，正在自动切换到“均衡”…'
         : compatibility.recovery === 'recovered'
-          ? '已自动切到“均衡”；请重试刚才的 WebSearch。本会话暂不再使用更高档位。'
+          ? '已临时切到“均衡”；请重试刚才的搜索，成功后会自动恢复原思考档位。'
           : '自动切换失败；请手动选择“均衡”或更低档位后重试。';
     footerEffortMenu.append(hint);
   } else if (state?.metrics?.effortLevel === undefined) {

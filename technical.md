@@ -517,8 +517,9 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
    `prefer-claudedock`：仅当认证方式是显式 API Key / Auth Token 时，在该临时高优先级 settings
    写入空 `apiKeyHelper`，让本次 ClaudeDock 会话只使用安全存储中解密后注入的凭据；`inherit`
    则不写覆盖，保留 Claude Code 自己的 helper。现有登录和无认证模式不会停用 helper。
-   同一份 settings 里注册两个本地脚本：
-   statusLine 指标采集和 `PostCompact` 完成信号，都只写本地 JSON，不外发。
+   同一份 settings 里注册三个本地能力：statusLine 指标采集、`PostCompact`/顶层 `Stop`
+   完成信号，以及 WebSearch/WebFetch 主线程路由守卫；它们只读 hook stdin、写会话目录 JSON
+   或返回本地 hook 决策，不外发。
 3. 主进程重建当前 PowerShell，并在 PTY 创建时注入路由与解密后的凭据；密钥不会出现在
    命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。认证策略属于端点指纹的一部分，
    修改后必须重启 PTY，不能把旧会话当作同一端点热切模型；Claude 退出后命令会清理所有受管
@@ -898,13 +899,28 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 这个 settings 文件不含凭据，不会改写用户的 `~/.claude/settings.json`。同时，受管环境清空
 三个会覆盖 thinking / effort 的继承变量，避免界面显示能调、子进程却继续被父环境锁死。
 
+**Web 研究与主推理解耦。** `src/main/claude-web-research.ts` 为每次 Claude Code 启动提供一个
+CLI-defined `claudedock-web-research` 子代理，经官方 `--agents` 传入，仅在该进程存活期间有效；
+它 `model: inherit`、`effort: high`、`tools: [WebSearch, WebFetch]`，没有文件写入和再次委派能力。
+`--append-system-prompt` 要求主线程在需要在线资料时先用 Agent 工具委派完整搜索任务，子代理只
+返回带来源的检索结论，主线程再以用户原档位综合。这里不使用 `--agent`，因此不会替换 Claude
+Code 默认系统提示；也不创建项目/用户级 agents 文件，不改变用户配置或 API 路由。
+
+临时 settings 的 `PreToolUse` 对 `WebSearch|WebFetch` 调用
+`assets/runtime/claude-web-search-guard.ps1`。脚本解析 hook 的 `agent_type`：专用子代理内放行，
+主线程直调返回 exit 2，并把“改用 `claudedock-web-research`”作为工具拒绝原因交给 Claude；hook
+JSON 无法解析时 fail-open，避免脚本兼容问题把所有联网能力锁死。提示负责常规主动路由，guard
+负责遗漏时的确定性守栏，两者都不尝试从 hook 内发送 `/effort`，因此没有 PTY 命令竞态。
+
 Claude Code 仍可能在特定模型或网关组合中发送 `output_config.effort 'xhigh'/'max'`，却把
 thinking 关闭。`parseClaudeEffortThinkingDisabledError` 只在最新一段 `API Error:` 同时含有
 这两个条件时命中，并能跨 PTY 软换行识别；普通 401、404、连接失败或其他 400 均不进入兼容
 恢复。命中后 `ClaudeEffortCompatibility` 记录被拒档位、检测时间与 `pending/recovered/failed`
-状态，per-session 命令队列自动提交 `/effort high`。恢复成功后当前会话只开放
-`low/medium/high`，`auto` 也暂时关闭，因为它可能再次解析成高档；renderer 显示一次成功提示，
-要求用户重试刚才的 WebSearch。换模型或重启 PTY 会清除该上限，完整七档重新开放。
+状态，per-session 命令队列自动提交 `/effort high`，并记住错误前的请求档位。回退期间只开放
+`low/medium/high`，renderer 提示重试；下一次顶层 `Stop` 信号到达后自动提交
+`/effort <原档位>`、清除临时上限和旧错误。子代理完成产生的 Stop 带 `agent_id`，信号脚本会
+忽略，不能在父任务仍处理搜索结果时提前恢复。恢复或换模型时同步清空旧 API Error 诊断片段，
+避免后续普通终端输出把同一个 400 再次识别。换模型或重启 PTY 同样清除待恢复状态。
 
 生效值与请求值必须分开存。模型不支持某档时会静默降级到它支持的最高档，`ultracode` 也只会
 回报 `xhigh`，所以 `ClaudeMetrics.effortLevel`（状态行真值）优先，`ClaudeProjectState.effortRequest`
@@ -918,14 +934,14 @@ thinking 关闭。`parseClaudeEffortThinkingDisabledError` 只在最新一段 `A
 → `workspace.restart` → 写入启动命令。`--continue` 恢复当前目录最近的会话，所以对话不丢；
 压缩是为了切到上下文窗口更窄的模型时不溢出。
 
-**压缩完成靠 hook 通知。** per-session `settings.json` 里注册唯一一个 hook：`PostCompact`
-执行 `assets/runtime/claude-runtime-signal.ps1`，脚本先把 stdin 读干（否则 CLI 可能阻塞在
-写管道上），再原子写 `signal.json`（`$OutputPath.$PID.tmp` → `Move-Item -Force`），内容只有
-`{event, signaledAt}`，不回写任何 hook 载荷。脚本吞掉所有异常：丢一个信号最多让调用方等到
-超时，不能弄坏对话。主进程在已有的 1 秒 `pollMetrics` 循环里顺带读它，只处理没消费过的
-`signaledAt`，避免上一次压缩的旧文件提前放行这一次重启；120 秒超时后不挂起，直接不压缩
-继续重启。Windows PowerShell 的 `Set-Content -Encoding UTF8` 会写 BOM，`JSON.parse` 不接受，
-读取时要先剥掉。
+**压缩与顶层响应完成靠 hook 通知。** per-session `settings.json` 的 `PostCompact` 与 `Stop`
+都执行 `assets/runtime/claude-runtime-signal.ps1`，分别原子写 `signal.json` 和 `turn-stop.json`
+（`$OutputPath.$PID.tmp` → `Move-Item -Force`），内容只有 `{event, signaledAt}`，不回写 hook 载荷。
+Stop 载荷含 `agent_id` 时直接退出，保证只报告主线程完成。脚本吞掉所有异常：丢一个信号最多
+保留临时 high 或让压缩等到超时，不能弄坏对话。主进程在已有的 1 秒 `pollMetrics` 循环里读取
+两个文件，持续消费时间戳；只有晚于本次 thinking/effort 错误的顶层 Stop 才能触发档位恢复，
+旧响应留下的 Stop 不会让临时 high 立即失效。PostCompact 仍有 120 秒非阻塞超时。Windows
+PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 
 **`Shift+Tab` 不改按键行为。** xterm 本来就把 `Shift+Tab` 编码成 `ESC [Z` 发给 PTY，
 `attachCustomKeyEventHandler` 没有拦它，所以终端里这个快捷键一直是通的，缺的只是状态栏
@@ -1133,7 +1149,7 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - `npm test`：运行目录/工作区、项目级开发引擎持久化、Codex 官方 Release 元数据与
   SHA-256 约束、账号/额度响应白名单、沙箱启动命令、Claude 配置与版本门禁、cURL 协议识别、Router 配置
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、高档 thinking
-  环境清理、跨行 400 识别与精确回退、连接测试
+  环境清理、跨行 400 识别、WebSearch 高档子代理隔离、顶层 Stop 后原档位恢复、连接测试
   结果映射、工作区持久化、当前项目会话解析与删除边界，并在 Windows PowerShell 中用模拟
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
@@ -1190,22 +1206,28 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
   拆开、同一快照多次出现时取最后一次，以及未绘制徽标时返回 `undefined`；同时覆盖只有
-  显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`。
+  显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`；同时锁定会话级 `--agents`、
+  `--append-system-prompt` 与 WebSearch guard 命令的 PowerShell 引号。
 - `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
   4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
   完整徽标；闭环源码契约还覆盖官方真实连接测试先经过访问守卫、隐藏窗口恢复事件只从
   main 经 preload 受限转发，以及首次按键前主动取样、单步失败即停止、已访问模式绕环检测、
   xterm 双向 probe 回报入口、per-session 互斥锁、切不到时报明确文案、`dontAsk` 与未预置的
   `bypassPermissions` 一律拒绝、模型选项在主进程重新核对、模型/压缩/命令页不再拼接尾随
-  回车而是进入 per-session 提交队列、PostCompact 信号只在已有 metrics 轮询里读且只认未消费
-  时间戳。
+  回车而是进入 per-session 提交队列、PostCompact/顶层 Stop 信号只在已有 metrics 轮询里读且
+  只认未消费时间戳，以及 WebSearch/WebFetch 必须绑定专用 high 子代理。
 - `tests/claude-config-store.test.ts` 覆盖 `allowBypassPermissions` 与 `apiKeyHelperPolicy`
   的持久化：权限默认开启、认证来源默认 ClaudeDock 单一凭据、单独写入不动凭据、保存接入
   配置不会静默重置、没有配置过路由的项目也能记住、重开 store 后仍在且 Windows 路径
   大小写不敏感。
 - `tests/claude-runtime-signal.test.ts` 真实 spawn `claude-runtime-signal.ps1`：能在 stdin
   有 hook 载荷时正常写出 `{event, signaledAt}`、载荷内容不泄漏进文件、目录不存在时自建、
-  再次触发时时间戳前进（否则主进程会把旧信号当成新信号）、成功后不留 `.tmp`。
+  再次触发时时间戳前进（否则主进程会把旧信号当成新信号）、成功后不留 `.tmp`，并确认
+  顶层 Stop 会写信号而带 `agent_id` 的子代理 Stop 被忽略。
+- `tests/claude-web-research.test.ts` 锁定搜索子代理继承当前模型、固定 high、只开放
+  WebSearch/WebFetch，以及主线程委派规则不改变原 effort；
+  `tests/claude-web-search-guard.test.ts` 真实 spawn PowerShell guard，验证主线程直搜被拒、专用
+  子代理放行和畸形 hook JSON fail-open。
 - `tests/claude-statusline.test.ts` 真实 spawn `powershell.exe` 验证状态行 JSON；Windows runner
   首次冷启动/安全扫描可超过 10 秒，因此每个子进程使用 30 秒硬超时、测试使用 45 秒上限，
   既容纳冷启动又防止脚本挂死拖住 CI。

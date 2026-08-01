@@ -523,7 +523,7 @@ export interface ClaudeProjectState {
    * level Claude Code actually applied, which can be lower when the model caps it.
    */
   effortRequest?: ClaudeEffortRequest;
-  /** Runtime compatibility cap installed after Claude Code rejects high effort without thinking. */
+  /** Temporary retry cap installed after Claude Code rejects high effort without thinking. */
   effortCompatibility?: ClaudeEffortCompatibility;
   expectedModel?: string;
   installation: ClaudeInstallationStatus;

@@ -88,4 +88,30 @@ describe('ClaudeDock runtime signal helper', () => {
     // The atomic staging file must never survive a successful write.
     expect(existsSync(`${outputPath}.tmp`)).toBe(false);
   });
+
+  it('records only a main-thread Stop and ignores search-subagent completion', () => {
+    const mainOutputPath = path.join(fixtureRoot, 'main-stop.json');
+    const mainResult = runSignal(
+      mainOutputPath,
+      'Stop',
+      JSON.stringify({ hook_event_name: 'Stop', stop_hook_active: false }),
+    );
+
+    expect(mainResult.status).toBe(0);
+    expect(readSignal(mainOutputPath).event).toBe('Stop');
+
+    const subagentOutputPath = path.join(fixtureRoot, 'subagent-stop.json');
+    const subagentResult = runSignal(
+      subagentOutputPath,
+      'Stop',
+      JSON.stringify({
+        agent_id: 'agent-web-1',
+        agent_type: 'claudedock-web-research',
+        hook_event_name: 'Stop',
+      }),
+    );
+
+    expect(subagentResult.status).toBe(0);
+    expect(existsSync(subagentOutputPath)).toBe(false);
+  });
 });

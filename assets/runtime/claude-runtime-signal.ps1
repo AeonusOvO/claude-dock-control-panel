@@ -8,12 +8,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Claude Code hooks feed their payload on stdin. Nothing here needs it, but the stream has to be
-# drained or the CLI can block waiting for this process to consume it.
+# Claude Code hooks feed their payload on stdin. Stop signals are only useful for the main thread:
+# a search subagent finishing must not restore the parent's effort while the parent is still working.
+$hookPayload = $null
 try {
-  [Console]::In.ReadToEnd() | Out-Null
+  $rawInput = [Console]::In.ReadToEnd()
+  if (-not [string]::IsNullOrWhiteSpace($rawInput)) {
+    $hookPayload = $rawInput | ConvertFrom-Json
+  }
 } catch {
-  # A hook invoked without a piped stdin is fine; the event alone is the signal.
+  # A hook invoked without valid piped input is fine; non-Stop events only need the event name.
+}
+
+if ($Event -eq 'Stop' -and $null -ne $hookPayload.agent_id) {
+  exit 0
 }
 
 try {

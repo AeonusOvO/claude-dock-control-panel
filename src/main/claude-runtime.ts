@@ -64,6 +64,7 @@ import {
   buildClaudeSettingsEnvironment,
   buildRuntimeSignalCommand,
   buildStatusLineCommand,
+  buildWebSearchGuardCommand,
   evaluateClaudeInstallation,
   MODEL_NAME_PATTERN,
   normalizeClaudeConfig,
@@ -71,6 +72,11 @@ import {
   type ClaudeEnvironmentOverrides,
   type NormalizedClaudeConfig,
 } from './claude-configuration';
+import {
+  CLAUDEDOCK_WEB_RESEARCH_AGENTS,
+  CLAUDEDOCK_WEB_RESEARCH_AGENT_NAME,
+  CLAUDEDOCK_WEB_RESEARCH_SYSTEM_PROMPT,
+} from './claude-web-research';
 import { claudeMessagesEndpoint, testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
 import type { ClaudeConfigPresentation, ClaudeConfigSnapshot } from './claude-config-store';
@@ -87,8 +93,11 @@ interface RuntimeSession {
   active: boolean;
   cwd: string;
   diagnosticBuffer: string;
-  /** Session-local cap installed after Claude Code combines high effort with disabled thinking. */
+  /** Temporary retry cap installed after Claude Code combines high effort with disabled thinking. */
   effortCompatibility?: ClaudeEffortCompatibility;
+  /** Main-conversation effort restored after one successful compatibility retry finishes. */
+  effortRestoreAfterTurn?: ClaudeEffortRequest;
+  effortRestoreInProgress: boolean;
   /** Effort last requested from the status bar, until the status line reports what was applied. */
   effortRequest?: ClaudeEffortRequest;
   exitMarker?: string;
@@ -112,6 +121,9 @@ interface RuntimeSession {
   signalPath?: string;
   settingsPath?: string;
   thinkingEnabledForHighEffort: boolean;
+  /** Top-level Stop hook signal; subagent completions are deliberately filtered by the helper. */
+  turnStopPath?: string;
+  turnStopSeenAt?: number;
   /** Resolved by the next PostCompact signal; lets a relaunch wait for compaction to finish. */
   waitingForCompact?: (signaledAt: number) => void;
 }
@@ -590,6 +602,7 @@ export class ClaudeRuntime {
     userDataPath: string,
     private readonly statusLineScriptPath: string,
     private readonly signalScriptPath: string,
+    private readonly webSearchGuardScriptPath: string,
     private readonly onState: (state: ClaudeProjectState) => void,
     private readonly writeToTerminal: (sessionId: string, data: string) => void,
     private readonly readPermissionModeFromScreen: (
@@ -648,7 +661,7 @@ export class ClaudeRuntime {
         recovery: 'pending',
         rejectedLevel: rejectedEffort,
       };
-      void this.recoverEffortAfterThinkingDisabled(runtime);
+      void this.recoverEffortAfterThinkingDisabled(runtime, rejectedEffort);
     }
     const detectedError = parseClaudeRuntimeApiError(runtime.diagnosticBuffer);
     if (detectedError && detectedError !== runtime.lastApiError?.detail) {
@@ -931,6 +944,7 @@ export class ClaudeRuntime {
     const metricsPath = path.join(sessionDirectory, 'metrics.json');
     const settingsPath = path.join(sessionDirectory, 'settings.json');
     const signalPath = path.join(sessionDirectory, 'signal.json');
+    const turnStopPath = path.join(sessionDirectory, 'turn-stop.json');
     mkdirSync(sessionDirectory, { recursive: true });
     if (existsSync(metricsPath)) {
       unlinkSync(metricsPath);
@@ -938,13 +952,15 @@ export class ClaudeRuntime {
     if (existsSync(signalPath)) {
       unlinkSync(signalPath);
     }
+    if (existsSync(turnStopPath)) {
+      unlinkSync(turnStopPath);
+    }
 
     const settings = {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
       ...(shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}),
       env: buildClaudeSettingsEnvironment(config),
-      // The only hook we install: it reports that a `/compact` issued before a cross-endpoint
-      // relaunch has actually finished, so the restart never cuts the summary short.
+      // Hooks remain session-local because this file is passed through Claude Code's --settings.
       hooks: {
         PostCompact: [
           {
@@ -955,6 +971,32 @@ export class ClaudeRuntime {
                   signalPath,
                   'PostCompact',
                 ),
+                shell: 'powershell',
+                type: 'command',
+              },
+            ],
+          },
+        ],
+        PreToolUse: [
+          {
+            matcher: 'WebSearch|WebFetch',
+            hooks: [
+              {
+                command: buildWebSearchGuardCommand(
+                  this.webSearchGuardScriptPath,
+                  CLAUDEDOCK_WEB_RESEARCH_AGENT_NAME,
+                ),
+                shell: 'powershell',
+                type: 'command',
+              },
+            ],
+          },
+        ],
+        Stop: [
+          {
+            hooks: [
+              {
+                command: buildRuntimeSignalCommand(this.signalScriptPath, turnStopPath, 'Stop'),
                 shell: 'powershell',
                 type: 'command',
               },
@@ -977,6 +1019,8 @@ export class ClaudeRuntime {
     runtime.active = true;
     runtime.diagnosticBuffer = '';
     runtime.effortCompatibility = undefined;
+    runtime.effortRestoreAfterTurn = undefined;
+    runtime.effortRestoreInProgress = false;
     // A relaunch re-reads the persisted effort setting, so a session-only request no longer holds.
     runtime.effortRequest = undefined;
     runtime.expectedModel = config.model;
@@ -988,6 +1032,8 @@ export class ClaudeRuntime {
     runtime.metricsPath = metricsPath;
     runtime.settingsPath = settingsPath;
     runtime.thinkingEnabledForHighEffort = false;
+    runtime.turnStopPath = turnStopPath;
+    runtime.turnStopSeenAt = undefined;
     // A relaunch paints a fresh TUI, so nothing observed in the previous one still holds.
     runtime.permissionMode = startMode;
     runtime.permissionModeCycle = startMode ? [startMode] : [];
@@ -1002,6 +1048,10 @@ export class ClaudeRuntime {
       runtime.exitMarker,
       resumeSessionId,
       { allowBypass: this.configStore.getAllowBypassPermissions(cwd), startMode },
+      {
+        agents: CLAUDEDOCK_WEB_RESEARCH_AGENTS,
+        appendSystemPrompt: CLAUDEDOCK_WEB_RESEARCH_SYSTEM_PROMPT,
+      },
     );
     const state = await this.getState(sessionId, cwd);
     return {
@@ -1156,7 +1206,9 @@ export class ClaudeRuntime {
 
     await this.submitClaudeCommand(runtime, `/model ${option.model}`);
     runtime.expectedModel = option.model;
+    runtime.diagnosticBuffer = '';
     runtime.effortCompatibility = undefined;
+    runtime.effortRestoreAfterTurn = undefined;
     if (runtime.lastApiError?.category === 'effort-thinking-disabled') {
       runtime.lastApiError = undefined;
     }
@@ -1666,7 +1718,11 @@ export class ClaudeRuntime {
     }
   }
 
-  private async recoverEffortAfterThinkingDisabled(runtime: RuntimeSession): Promise<void> {
+  private async recoverEffortAfterThinkingDisabled(
+    runtime: RuntimeSession,
+    rejectedEffort: 'max' | 'xhigh',
+  ): Promise<void> {
+    runtime.effortRestoreAfterTurn = runtime.effortRequest ?? rejectedEffort;
     try {
       await this.submitClaudeCommand(runtime, '/effort high');
       runtime.effortRequest = 'high';
@@ -1677,6 +1733,7 @@ export class ClaudeRuntime {
         };
       }
     } catch {
+      runtime.effortRestoreAfterTurn = undefined;
       if (runtime.effortCompatibility) {
         runtime.effortCompatibility = {
           ...runtime.effortCompatibility,
@@ -1685,6 +1742,33 @@ export class ClaudeRuntime {
       }
     }
     await this.emitState(runtime);
+  }
+
+  private async restoreEffortAfterCompatibilityTurn(runtime: RuntimeSession): Promise<void> {
+    const restoreTo = runtime.effortRestoreAfterTurn;
+    if (!restoreTo || runtime.effortRestoreInProgress) {
+      return;
+    }
+
+    runtime.effortRestoreInProgress = true;
+    try {
+      if (!isClaudeEffortSafeAfterThinkingDisabledError(restoreTo)) {
+        this.enableThinkingForHighEffort(runtime);
+      }
+      await this.submitClaudeCommand(runtime, `/effort ${restoreTo}`);
+      runtime.diagnosticBuffer = '';
+      runtime.effortRequest = restoreTo;
+      runtime.effortCompatibility = undefined;
+      runtime.effortRestoreAfterTurn = undefined;
+      if (runtime.lastApiError?.category === 'effort-thinking-disabled') {
+        runtime.lastApiError = undefined;
+      }
+    } catch {
+      // Keep the recovered high cap in place. A later successful Stop signal retries restoration.
+    } finally {
+      runtime.effortRestoreInProgress = false;
+      await this.emitState(runtime);
+    }
   }
 
   private async getRouteHealth(
@@ -1839,6 +1923,40 @@ export class ClaudeRuntime {
     }
   }
 
+  private pollTurnStopSignal(runtime: RuntimeSession): void {
+    if (
+      runtime.effortRestoreInProgress ||
+      !runtime.turnStopPath ||
+      !existsSync(runtime.turnStopPath)
+    ) {
+      return;
+    }
+
+    try {
+      const raw = readFileSync(runtime.turnStopPath, 'utf8');
+      const parsed = JSON.parse(
+        raw.startsWith(BYTE_ORDER_MARK) ? raw.slice(BYTE_ORDER_MARK.length) : raw,
+      ) as {
+        event?: unknown;
+        signaledAt?: unknown;
+      };
+      const signaledAt = optionalFiniteNumber(parsed.signaledAt);
+      if (parsed.event !== 'Stop' || !signaledAt || signaledAt === runtime.turnStopSeenAt) {
+        return;
+      }
+      runtime.turnStopSeenAt = signaledAt;
+      if (
+        !runtime.effortRestoreAfterTurn ||
+        (runtime.effortCompatibility && signaledAt <= runtime.effortCompatibility.detectedAt)
+      ) {
+        return;
+      }
+      void this.restoreEffortAfterCompatibilityTurn(runtime);
+    } catch {
+      // The helper replaces the file atomically; retry on the next poll.
+    }
+  }
+
   private ensureSession(sessionId: string, cwd: string): RuntimeSession {
     const existing = this.sessions.get(sessionId);
     if (existing) {
@@ -1850,6 +1968,7 @@ export class ClaudeRuntime {
       active: false,
       cwd,
       diagnosticBuffer: '',
+      effortRestoreInProgress: false,
       markerRemainder: '',
       permissionModeCycle: [],
       sessionId,
@@ -1862,6 +1981,7 @@ export class ClaudeRuntime {
   private pollMetrics(): void {
     for (const runtime of this.sessions.values()) {
       this.pollRuntimeSignal(runtime);
+      this.pollTurnStopSignal(runtime);
       if (!runtime.metricsPath || !existsSync(runtime.metricsPath)) {
         continue;
       }

@@ -285,6 +285,13 @@ export interface ClaudeLaunchPermissions {
   startMode?: ClaudePermissionMode;
 }
 
+export interface ClaudeLaunchExtensions {
+  /** CLI-defined subagents exist only for this Claude Code process and never touch user settings. */
+  agents?: Readonly<Record<string, unknown>>;
+  /** Appended to Claude Code's default prompt; unlike `--agent`, this preserves native behavior. */
+  appendSystemPrompt?: string;
+}
+
 export const buildClaudeLaunchCommand = (
   settingsPath: string,
   model: string,
@@ -292,6 +299,7 @@ export const buildClaudeLaunchCommand = (
   exitMarker: string,
   resumeSessionId?: string,
   permissions?: ClaudeLaunchPermissions,
+  extensions?: ClaudeLaunchExtensions,
 ): string => {
   const argumentsList = [
     '--settings',
@@ -308,6 +316,15 @@ export const buildClaudeLaunchCommand = (
   // explicitly, so arming it here does not change how the session behaves on its own.
   if (permissions?.allowBypass && permissions.startMode !== 'bypassPermissions') {
     argumentsList.push('--allow-dangerously-skip-permissions');
+  }
+  if (extensions?.agents && Object.keys(extensions.agents).length > 0) {
+    argumentsList.push('--agents', quotePowerShellArgument(JSON.stringify(extensions.agents)));
+  }
+  if (extensions?.appendSystemPrompt) {
+    argumentsList.push(
+      '--append-system-prompt',
+      quotePowerShellArgument(extensions.appendSystemPrompt),
+    );
   }
 
   if (mode === 'continue') {
@@ -354,4 +371,9 @@ export const buildRuntimeSignalCommand = (
   const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
   const normalizedOutputPath = path.resolve(outputPath).replaceAll('\\', '/');
   return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -OutputPath "${normalizedOutputPath}" -Event "${event}"`;
+};
+
+export const buildWebSearchGuardCommand = (scriptPath: string, allowedAgent: string): string => {
+  const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
+  return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -AllowedAgent "${allowedAgent}"`;
 };

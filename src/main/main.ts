@@ -2637,6 +2637,7 @@ if (!hasSingleInstanceLock) {
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
       runtimeAssetPath('claude-runtime-signal.ps1'),
+      runtimeAssetPath('claude-web-search-guard.ps1'),
       (state) => {
         const claudeTitle = state.metrics?.sessionName;
         if (claudeTitle && workspace.hasSession(state.sessionId)) {

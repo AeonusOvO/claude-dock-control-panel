@@ -4,7 +4,18 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2.5.2 · 2026-07-31）
+## 当前版本重点（2.5.3 · 2026-08-01）
+
+- Claude Code 会话新增仅随本次进程存在的 `claudedock-web-research` 子代理：主会话遇到在线
+  检索、WebSearch 或 WebFetch 时，把完整搜索子任务委派给该子代理；子代理继承当前模型但固定
+  使用 `high`，只开放 WebSearch/WebFetch。搜索结果返回后，主会话继续用用户原先选择的
+  `xhigh`、`max` 或其他档位分析，不再为了搜索永久降低整场对话的思考程度。
+- 会话级系统提示负责主动委派，`PreToolUse` 本地钩子拦住遗漏的主线程直搜并要求改走专用
+  子代理；定义通过 Claude Code 官方 `--agents` / `--append-system-prompt` 注入，不写用户或
+  项目的 `.claude` 配置。若特定网关仍返回 thinking/effort 400，兼容回退只临时使用 `high`
+  完成一次重试，顶层响应结束后自动恢复原档位。
+
+## 2.5.2 版本重点（2026-07-31）
 
 - 统一双协议中转、连接历史与端点补全相关文件的 Prettier 格式，修复 GitHub Actions 在
   `npm run format:check` 阶段退出的问题；本次维护不改变接口、存储格式或用户可见行为。
@@ -574,7 +585,9 @@ Codex 会直接复用自己的登录态。若选择 **Claude Code**，继续按�
     输入框里按 `Shift+Tab` 切换，PowerShell 里的徽标与底栏显示保持一致。想使用“完全允许”时，
     需要工作台的“允许「完全允许」模式”开关处于开启状态（默认开启），首次进入时 Claude Code
     会弹一次自己的免责确认。“模式”右边的“思考”列出全部思考程度，选中即通过 `/effort` 应用到
-    当前对话，不重启会话；也可以直接在终端运行 `/effort`，底栏会跟随状态行更新。
+    当前对话，不重启会话；也可以直接在终端运行 `/effort`，底栏会跟随状态行更新。需要联网
+    搜索时，ClaudeDock 会让会话级搜索子代理以 `high` 执行 WebSearch/WebFetch，主会话保留
+    当前思考档位负责后续分析；刚升级的已运行会话需要重启一次，才会载入该子代理。
 14. 点击窗口关闭按钮只会隐藏面板，所有会话继续在后台运行；右键系统托盘图标可以恢复
     窗口、切换/添加项目、控制当前终端或彻底退出。
 
@@ -601,7 +614,7 @@ src/preload/         受限的渲染进程桥接 API
 src/renderer/        控制面板界面与 xterm.js 终端
 src/shared/          跨进程类型和纯函数
 tests/               单元测试
-assets/runtime/      Claude Code statusLine 本地指标采集脚本与 PostCompact 完成信号脚本
+assets/runtime/      Claude Code statusLine、运行期信号与 WebSearch 子代理路由钩子脚本
 outputs/             安装包、校验元数据与解包产物，不纳入 Git
 roadmap.md           本轮产品任务的实施结论、调研依据与后续演进项
 THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代码声明
@@ -653,6 +666,9 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
   “ClaudeDock 单一凭据”策略时还会用空覆盖停用继承的 `apiKeyHelper`，避免与显式
   `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 并存。临时文件只含地址、模型、会话级 thinking
   开关和空覆盖值，不含 API 凭据，也不修改用户或项目设置。
+- WebSearch/WebFetch 隔离通过启动命令中的会话级 `--agents` 定义、追加系统规则与临时
+  `PreToolUse` 钩子完成；不会创建或改写项目 `.claude/agents`、用户 `~/.claude/agents` 或系统
+  API 路由。搜索子代理只拿到 WebSearch/WebFetch，不能编辑项目文件或继续生成子代理。
 - ClaudeDock 拒绝受保护启动已披露含隐藏地区/代理检测逻辑的 Claude Code
   2.1.91–2.1.196。Anthropic 当前仍不向中国大陆/香港及受不支持地区控制的实体提供官方
   服务；ClaudeDock 不会伪造位置、绕过地区限制或保证官方账号可用。

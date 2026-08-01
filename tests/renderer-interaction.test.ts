@@ -443,7 +443,7 @@ describe('renderer interaction lifecycle contract', () => {
     // Claude Code's status-line file catches up.
     expect(rendererSource).toContain('const effortApplied = state.metrics?.effortLevel;');
     expect(rendererSource).toContain("state.effortCompatibility?.recovery === 'recovered'");
-    expect(rendererSource).toContain('思考档位已自动降到“均衡”，请重试刚才的 WebSearch。');
+    expect(rendererSource).toContain('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
     expect(rendererSource).toContain('!isClaudeEffortSafeAfterThinkingDisabledError(option.id)');
   });
 

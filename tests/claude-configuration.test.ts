@@ -5,6 +5,7 @@ import {
   buildClaudeLaunchCommand,
   buildClaudeSettingsEnvironment,
   buildRuntimeSignalCommand,
+  buildWebSearchGuardCommand,
   evaluateClaudeInstallation,
   normalizeClaudeConfig,
   shouldDisableInheritedApiKeyHelper,
@@ -187,6 +188,34 @@ describe('Claude Code configuration', () => {
     expect(command).not.toContain(marker);
   });
 
+  it('adds session-local web research agent configuration without replacing Claude Code', () => {
+    const command = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'continue',
+      '\u001b]9;claudedock-exit:session-web\u0007',
+      undefined,
+      { allowBypass: false },
+      {
+        agents: {
+          'claudedock-web-research': {
+            effort: 'high',
+            tools: ['WebSearch', 'WebFetch'],
+          },
+        },
+        appendSystemPrompt: "Delegate today's web research.",
+      },
+    );
+
+    expect(command).toContain('--agents');
+    expect(command).toContain('claudedock-web-research');
+    expect(command).toContain('"effort":"high"');
+    expect(command).toContain('"WebSearch","WebFetch"');
+    expect(command).toContain('--append-system-prompt');
+    expect(command).toContain("Delegate today''s web research.");
+    expect(command).not.toContain('--agent ');
+  });
+
   it('arms the bypass cycle without starting in it', () => {
     const command = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
@@ -254,6 +283,17 @@ describe('Claude Code configuration', () => {
     expect(command).toContain('claude-runtime-signal.ps1"');
     expect(command).toContain('-Event "PostCompact"');
     expect(command).not.toContain('\\');
+  });
+
+  it('quotes the web-search guard helper and allowed session agent', () => {
+    const command = buildWebSearchGuardCommand(
+      'C:\\Program Files\\ClaudeDock\\assets\\runtime\\claude-web-search-guard.ps1',
+      'claudedock-web-research',
+    );
+
+    expect(command).toContain('-NoProfile');
+    expect(command).toContain('claude-web-search-guard.ps1"');
+    expect(command).toContain('-AllowedAgent "claudedock-web-research"');
   });
 });
 

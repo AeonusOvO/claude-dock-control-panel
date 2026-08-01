@@ -180,10 +180,18 @@ describe('Claude runtime route diagnostics', () => {
     expect(runtimeSource).toContain('alwaysThinkingEnabled: true');
     expect(runtimeSource).toContain("await this.submitClaudeCommand(runtime, '/effort high');");
     expect(runtimeSource).toContain("runtime.effortRequest = 'high';");
+    expect(runtimeSource).toContain('runtime.effortRestoreAfterTurn = runtime.effortRequest');
+    expect(runtimeSource).toContain('restoreEffortAfterCompatibilityTurn(runtime)');
+    expect(runtimeSource).toContain('runtime.effortCompatibility = undefined;');
+    expect(runtimeSource).toContain("runtime.diagnosticBuffer = '';");
+    expect(runtimeSource).toContain('signaledAt <= runtime.effortCompatibility.detectedAt');
     expect(runtimeSource).toContain(
       'parseClaudeEffortThinkingDisabledError(runtime.diagnosticBuffer)',
     );
     expect(runtimeSource).toContain('isClaudeEffortSafeAfterThinkingDisabledError(effort)');
+    expect(runtimeSource).toContain("matcher: 'WebSearch|WebFetch'");
+    expect(runtimeSource).toContain('CLAUDEDOCK_WEB_RESEARCH_AGENTS');
+    expect(runtimeSource).toContain('CLAUDEDOCK_WEB_RESEARCH_SYSTEM_PROMPT');
   });
 });
 
