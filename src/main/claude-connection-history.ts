@@ -226,15 +226,15 @@ export class ClaudeConnectionHistoryStore {
   }
 
   /**
-   * Appends a record unless it repeats the newest one. Returns the list as the UI should show it,
-   * so the caller does not need a second read to find out whether anything changed.
+   * Records a save unless the same setup is already stored. A repeat moves the record it matches
+   * back to the top instead of appending — replaying an older entry is what the list is for, and
+   * doing that must not turn one setup into a wall of identical records.
    */
   public record(cwd: string, input: RecordConnectionInput): ClaudeConnectionHistoryEntry[] {
     const config = normalizeClaudeConfig(input.config);
     const store = this.load();
     const key = projectKey(cwd);
     const entries = store.projects[key] ?? [];
-    const newest = entries[0];
     const protocol = input.protocol ?? 'anthropic';
     const name = input.name ? normalizeHistoryName(input.name) : undefined;
     let credential = input.credential?.trim() || undefined;
@@ -255,10 +255,16 @@ export class ClaudeConnectionHistoryStore {
           sourceCredentialConfigured: input.sourceCredentialConfigured,
         }
       : undefined;
-    if (
-      newest &&
-      this.fingerprintOf(newest) === entryFingerprint(config, credential, protocol, sourceIdentity)
-    ) {
+    const fingerprint = entryFingerprint(config, credential, protocol, sourceIdentity);
+    const existing = entries.find((entry) => this.fingerprintOf(entry) === fingerprint);
+    if (existing) {
+      // The id stays, so a rename or a pending reference to this record survives the replay.
+      existing.savedAt = Date.now();
+      if (name) {
+        existing.name = name;
+      }
+      store.projects[key] = [existing, ...entries.filter((entry) => entry !== existing)];
+      this.persist(store);
       return this.list(cwd);
     }
 
@@ -277,7 +283,10 @@ export class ClaudeConnectionHistoryStore {
       sourceBaseUrl: input.sourceConfig?.baseUrl,
       sourceCredentialConfigured: input.sourceCredentialConfigured,
       sourceModel: input.sourceConfig?.model,
-      sourceModelFast: input.sourceConfig?.modelFast,
+      // Stored the way the fingerprint reads it, so a blank fast model cannot look like a change.
+      sourceModelFast: input.sourceConfig
+        ? input.sourceConfig.modelFast || input.sourceConfig.model
+        : undefined,
     };
 
     store.projects[key] = [entry, ...entries].slice(0, MAX_HISTORY_ENTRIES);

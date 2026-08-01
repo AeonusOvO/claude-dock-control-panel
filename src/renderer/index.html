@@ -1592,6 +1592,14 @@
             </button>
             <button
               class="settings-tab"
+              data-settings-tab="advanced"
+              type="button"
+              aria-selected="false"
+            >
+              高级设置
+            </button>
+            <button
+              class="settings-tab"
               data-settings-tab="connection"
               type="button"
               aria-selected="false"
@@ -1640,6 +1648,22 @@
                 </span>
                 <output id="settings-version">—</output>
               </div>
+            </section>
+            <section class="settings-panel" data-settings-panel="advanced">
+              <div class="settings-section-heading">
+                <strong>中转站兼容</strong>
+                <span>默认全部关闭；只有中转站确实存在协议缺陷时才需要开启。</span>
+              </div>
+              <label class="settings-row" for="settings-web-research-isolation">
+                <span>
+                  <strong>联网检索隔离</strong>
+                  <small>
+                    把 WebSearch、WebFetch 交给专用子代理执行。用于修复部分中转站在模型调到 high
+                    以上档位后无法联网检索的问题；开启后每个新会话都会附加子代理定义与相应提示词。
+                  </small>
+                </span>
+                <input id="settings-web-research-isolation" type="checkbox" />
+              </label>
             </section>
             <section class="settings-panel" data-settings-panel="connection">
               <p class="connection-advanced-dialog__notice">

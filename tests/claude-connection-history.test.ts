@@ -176,6 +176,45 @@ describe('ClaudeConnectionHistoryStore', () => {
     expect(entries[0]?.model).toBe('glm-4.6-air');
   });
 
+  /*
+   * Restoring an older record is what the list is for. Comparing only against the newest record
+   * turned every such click into a duplicate, so the list filled up with the same few setups.
+   */
+  it('moves an older record back to the top instead of duplicating it', () => {
+    const { store } = createStore();
+    store.record(CWD, gatewayConfig());
+    store.record(CWD, gatewayConfig({ model: 'glm-4.6-air' }));
+    const [, older] = store.list(CWD);
+    const replay = store.toSaveInput(CWD, older?.id ?? '');
+
+    const entries = store.record(CWD, {
+      config: replay,
+      credential: replay.credential,
+      gatewayEndpoint: 'http://127.0.0.1:3456',
+      gatewayState: 'running',
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.id).toBe(older?.id);
+    expect(entries.map((entry) => entry.model)).toEqual(['glm-4.6', 'glm-4.6-air']);
+  });
+
+  it('keeps a blank fast model from looking like a different setup on replay', () => {
+    const { store } = createStore();
+    const [entry] = store.record(CWD, gatewayConfig({ modelFast: '' }));
+    const replay = store.toSaveInput(CWD, entry?.id ?? '');
+
+    const entries = store.record(CWD, {
+      config: replay,
+      credential: replay.credential,
+      gatewayEndpoint: 'http://127.0.0.1:3456',
+      gatewayState: 'running',
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.modelFast).toBe('glm-4.6');
+  });
+
   it('treats the upstream protocol as part of the saved connection', () => {
     const { store } = createStore();
 

@@ -16,6 +16,8 @@ import { existsSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
 import type {
+  AdvancedSettings,
+  AppSettingsView,
   ClaudeConfigResult,
   ClaudeConnectionTestResult,
   ClaudeConnectionHistoryResult,
@@ -87,6 +89,7 @@ import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
+import { AdvancedSettingsStore } from './advanced-settings-store';
 import { NetworkDiagnosticsStore } from './network-diagnostics-store';
 import { NetworkPreflightService } from './network-preflight-service';
 import { NetworkPreflightSettingsStore } from './network-preflight-settings-store';
@@ -225,6 +228,7 @@ const workspace = new TerminalWorkspace(
 );
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
+const advancedSettingsStore = new AdvancedSettingsStore(app.getPath('userData'));
 const agentRuntimeStore = new AgentRuntimeStore(app.getPath('userData'));
 workspace.setTheme(workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
 const sessionManager = new ClaudeSessionManager();
@@ -1086,16 +1090,30 @@ const registerIpc = (): void => {
     validateSender(event);
     return requireNetworkPreflightService().clearHistory();
   });
+  const appSettingsView = (): AppSettingsView => ({
+    advanced: advancedSettingsStore.get(),
+    artifactNetworkAllowed: artifactService.getState().allowed,
+    language: 'zh-CN',
+    launchAtLogin: app.getLoginItemSettings().openAtLogin,
+    theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
+    version: app.getVersion(),
+    windowsBuildNumber: windowsBuildNumber(),
+  });
   ipcMain.handle('app:get-settings', (event) => {
     validateSender(event);
-    return {
-      language: 'zh-CN',
-      launchAtLogin: app.getLoginItemSettings().openAtLogin,
-      artifactNetworkAllowed: artifactService.getState().allowed,
-      theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
-      version: app.getVersion(),
-      windowsBuildNumber: windowsBuildNumber(),
-    };
+    return appSettingsView();
+  });
+  ipcMain.handle('app:set-advanced-settings', (event, settings: unknown) => {
+    validateSender(event);
+    const record =
+      settings && typeof settings === 'object'
+        ? (settings as Partial<AdvancedSettings>)
+        : undefined;
+    if (typeof record?.webResearchIsolation !== 'boolean') {
+      throw new Error('高级设置无效。');
+    }
+    advancedSettingsStore.set({ webResearchIsolation: record.webResearchIsolation });
+    return appSettingsView();
   });
   ipcMain.handle('app:set-launch-at-login', (event, enabled: unknown) => {
     validateSender(event);
@@ -1107,14 +1125,7 @@ const registerIpc = (): void => {
       openAtLogin: enabled,
       path: process.execPath,
     });
-    return {
-      language: 'zh-CN',
-      launchAtLogin: app.getLoginItemSettings().openAtLogin,
-      artifactNetworkAllowed: artifactService.getState().allowed,
-      theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
-      version: app.getVersion(),
-      windowsBuildNumber: windowsBuildNumber(),
-    };
+    return appSettingsView();
   });
   ipcMain.handle('artifact:create', (event, html: unknown) => {
     validateSender(event);
@@ -2638,6 +2649,7 @@ if (!hasSingleInstanceLock) {
       runtimeAssetPath('claude-statusline.ps1'),
       runtimeAssetPath('claude-runtime-signal.ps1'),
       runtimeAssetPath('claude-web-search-guard.ps1'),
+      () => advancedSettingsStore.get().webResearchIsolation,
       (state) => {
         const claudeTitle = state.metrics?.sessionName;
         if (claudeTitle && workspace.hasSession(state.sessionId)) {

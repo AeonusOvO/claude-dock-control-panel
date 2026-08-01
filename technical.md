@@ -250,8 +250,16 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 
 ### 全局设置 IPC
 
-- `app:get-settings` 从真实运行时读取 `app.getVersion()`、Windows 登录项状态和
-  `WorkspaceStore` 主题；语言当前固定为唯一已提供的 `zh-CN`。renderer 不维护版本常量。
+- `app:get-settings` 从真实运行时读取 `app.getVersion()`、Windows 登录项状态、
+  `WorkspaceStore` 主题和 `AdvancedSettingsStore` 的开关；语言当前固定为唯一已提供的
+  `zh-CN`。renderer 不维护版本常量。`app:get-settings`、`app:set-launch-at-login` 和
+  `app:set-advanced-settings` 返回同一个 `appSettingsView()`，避免三处各拼一份视图导致漂移。
+- `app:set-advanced-settings` 逐个字段校验类型，非布尔值直接抛「高级设置无效。」，不做
+  truthy 转换。`AdvancedSettingsStore` 写 `userData/advanced/settings.json`（version 1，临时
+  文件加 `renameSync`，权限 `0600`）；文件损坏、版本不符或字段缺失时回落到全部关闭的默认值。
+  开关的语义是「修复某个中转站缺陷」，所以默认必须是关，行为正常的中转站不为用不上的修复
+  付出代价。`ClaudeRuntime` 通过注入的读取函数在每次启动会话时现读，改开关不需要重启应用，
+  也不影响已经运行的 PTY。
 - `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
@@ -332,6 +340,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - 独立对话左栏只有一个可增长的历史区：`.rail-page--chat` 与 `.chat-history` 依次占满
   `control-panel` 剩余高度，`.chat-history__list` 取消固定 `248px` 上限并独立滚动；空列表时
   `:empty` 取消弹性占位，使说明仍靠近标题。模型配置 DOM 只存在于右上角齿轮模态窗。
+- 其余 `.rail-page` 与它们的直接子块显式 `flex-shrink: 0`，由 `control-panel` 承担整页滚动。
+  `control-panel` 是定高 flex 列，而 `overflow-y: auto` 的元素自动最小尺寸为 0，因此不加这条
+  规则时，接入历史列表会在记录变多时第一个被压扁到几乎不可见，而不是在自己的 360px
+  区域里滚动。规则用 `:not(.rail-page--chat)` 排除独立对话左栏，那里的历史区依赖 `flex: 1`
+  增长。
 - 活动栏点击路径在 `toggleRailTab('chat')` 完成主视图和侧栏布局后，通过
   `requestAnimationFrame` 聚焦 `#chat-input`。聚焦前重新核对主视图、`hidden`、输入框禁用、
   composer `inert`、设置模态窗和 Artifact 详情抽屉，避免导航抢走更高层界面的焦点。
@@ -462,8 +475,10 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
   地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
 - 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/快速模型、预设、provider 和上游协议的
-  SHA-256 指纹，
-  只和最新一条比较：相同就不新增。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
+  SHA-256 指纹，与**全部**记录比较而不只是最新一条：命中就把那条记录移到最前面并刷新
+  `savedAt`，`id` 与名称保持不变，因此恢复一条较早的记录不会变成一条重复记录，指向它的重命名
+  或待处理引用也不会失效。空白的快速模型在写入时就归一为主模型，自动补全不能让同一份配置
+  读起来像变了。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
   机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
   网关状态仍然逐条存下来，恢复时能看到当时的情况。
 - `saveConfig` 成功后才记历史，且整个记录过程包在 try/catch 里：配置已经保存了，
@@ -548,11 +563,19 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
 - `normalizeClaudeConfig` 用目录分组推导 `provider`：官方组进入 `anthropic`，其余进入
   `gateway`；未知的旧预设按可验证配置迁移到 `custom`，无效基址或模型则安全回到默认配置。
-- `src/shared/connection-endpoint.ts` 是自定义连接地址补全的单一事实来源，renderer 失焦/切换
-  协议时调用一次，主进程配置与 Router Provider 校验时再次调用。它接受省略 scheme、单/双
-  前导斜杠、反斜杠、`/v1` 和完整端点；远程默认 HTTPS，本机回环默认 HTTP，拒绝用户信息、
-  查询参数、片段和远程 HTTP。OpenAI `/responses` 会映射为 CCR `openai_responses`，其他
-  OpenAI 输入默认补为 `/v1/chat/completions`。
+- `src/shared/connection-endpoint.ts` 是自定义连接地址处理的单一事实来源，renderer 失焦/切换
+  协议时调用一次，主进程配置与 Router Provider 校验时再次调用。解析部分对两种协议一致：接受
+  省略 scheme、单/双前导斜杠、反斜杠、`/v1` 和完整端点；远程默认 HTTPS，本机回环默认 HTTP，
+  拒绝用户信息、查询参数、片段和远程 HTTP。
+- 两种协议之后的处理必须分开，混用是 2.6.0 修掉的接不上问题的根因。CCR Provider 的
+  `api_base_url` 要的是完整请求地址，所以 OpenAI 走 `completeConnectionEndpoint`：`/responses`
+  映射为 CCR `openai_responses`，其他 OpenAI 输入补为 `/v1/chat/completions`。而
+  `ANTHROPIC_BASE_URL` 是**基址**，Claude Code 自己会追加 `/v1/messages`，所以 Anthropic 走
+  `normalizeConnectionBaseUrl`：中转站发布的路径原样保留（`https://host/v1` 保持
+  `https://host/v1`，`/relay/v1`、`/proxy/anthropic` 同理），只有整段粘贴 `/v1/messages` 时才
+  还原回它所属的基址，粘进来的 OpenAI 端点直接报错并指向协议开关。此前把 Anthropic 也补成
+  `/v1/messages` 再剥掉后缀，等于把 `/v1` 从基址里抹掉，按 `/v1` 发布的中转站因此在别的软件能
+  连、在 ClaudeDock 连不上。
 - renderer 用 `selectedProviderId | undefined` 驱动三步 UI。点击不同服务商会清空未保存
   凭据、旧测试结果与修复建议；再次点击同一服务商进入 `undefined`，同时隐藏服务商说明、
   配置表单、测试结果和修复卡。Router/cURL 选择把原有完整工具节点移动到第二步，其他时候
@@ -899,7 +922,16 @@ renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`�
 这个 settings 文件不含凭据，不会改写用户的 `~/.claude/settings.json`。同时，受管环境清空
 三个会覆盖 thinking / effort 的继承变量，避免界面显示能调、子进程却继续被父环境锁死。
 
-**Web 研究与主推理解耦。** `src/main/claude-web-research.ts` 为每次 Claude Code 启动提供一个
+**Web 研究与主推理解耦（可选，默认关闭）。** 这套机制是给「模型调到 high 以上就无法联网检索」
+的缺陷中转站用的兼容开关，位于全局设置的“高级设置”页，由 `AdvancedSettingsStore`
+（`userData/advanced/settings.json`，version 1，0o600 原子写）持久化，`ClaudeRuntime` 在每次
+启动会话时现读一次，因此改开关不需要重启应用，也不影响已经跑起来的 PTY。关闭时
+`--agents`、`--append-system-prompt` 与 `PreToolUse` 守栏一概不下发，会话就是一个原样的
+Claude Code。`PostCompact` 与 `Stop` 两个运行时信号钩子不受开关影响：`Stop` 驱动
+`pollTurnStopSignal` → `restoreEffortAfterCompatibilityTurn`，属于下文的 effort 400 兼容恢复
+链路，与联网检索是两件事。以下描述的是开启后的行为。
+
+`src/main/claude-web-research.ts` 为每次 Claude Code 启动提供一个
 CLI-defined `claudedock-web-research` 子代理，经官方 `--agents` 传入，仅在该进程存活期间有效；
 它 `model: inherit`、`effort: high`、`tools: [WebSearch, WebFetch]`，没有文件写入和再次委派能力。
 `--append-system-prompt` 要求主线程在需要在线资料时先用 Agent 工具委派完整搜索任务，子代理只
@@ -913,7 +945,7 @@ PowerShell 单引号只能保护 shell 解析，不能保证 `claude.exe` 最终
 直接安装的 `claude.exe` 都能收到可解析的完整 JSON；普通路径、模型和系统提示仍沿用原转义，
 不会多出反斜杠。
 
-临时 settings 的 `PreToolUse` 对 `WebSearch|WebFetch` 调用
+临时 settings 的 `PreToolUse` 只在联网检索隔离开启时写入，对 `WebSearch|WebFetch` 调用
 `assets/runtime/claude-web-search-guard.ps1`。脚本解析 hook 的 `agent_type`：专用子代理内放行，
 主线程直调返回 exit 2，并把“改用 `claudedock-web-research`”作为工具拒绝原因交给 Claude；hook
 JSON 无法解析时 fail-open，避免脚本兼容问题把所有联网能力锁死。提示负责常规主动路由，guard
@@ -1213,10 +1245,17 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
   拆开、同一快照多次出现时取最后一次，以及未绘制徽标时返回 `undefined`；同时覆盖只有
-  显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`；同时锁定会话级 `--agents`、
-  `--append-system-prompt` 与 WebSearch guard 命令的 PowerShell 引号，并在 Windows 上把完整
+  显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`，以及中转站基址按发布形态原样
+  存下（`/v1`、`/relay/v1`、`/proxy/anthropic` 都不被抹掉）；同时锁定会话级 `--agents`、
+  `--append-system-prompt` 与 WebSearch guard 命令的 PowerShell 引号，反过来也断言联网检索
+  隔离关闭时这三样都不出现、命令仍是一个原样的 `& claude`，并在 Windows 上把完整
   启动命令交给真实 `powershell.exe` 和 argv 探针，确认包含反斜杠与嵌套引号的 agents JSON
   到达原生进程后仍可解析且内容不变。
+- `tests/advanced-settings-store.test.ts` 锁定高级设置默认全关、开关往返持久化并以 version 1
+  落盘、非布尔值被拒，以及文件损坏/版本不符/字段缺失时回落到默认值。
+- `tests/connection-endpoint.test.ts` 分开覆盖两条路径：`completeConnectionEndpoint` 补出完整
+  请求地址，`normalizeConnectionBaseUrl` 保留中转站发布的基址路径、只把整段 `/v1/messages`
+  还原回基址、把粘进来的 OpenAI 端点指向协议开关，两者共用同一套不安全输入拒绝规则。
 - `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
   4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
   完整徽标；闭环源码契约还覆盖官方真实连接测试先经过访问守卫、隐藏窗口恢复事件只从
@@ -1247,6 +1286,7 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据、helper 策略和协议）变化就新增、只有网关状态变化不新增、
+  重放一条较早的记录把它移回最前面而不是新增一条、留空的快速模型在回放时不被当成改动、
   version 1 记录迁移为安全策略与可解释协议、OpenAI 原始上游字段与 Router ID 可回放、重命名校验与持久化、
   明文密钥不得出现在磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、
   Windows 路径大小写不敏感、条数上限、文件损坏后回落到空列表。

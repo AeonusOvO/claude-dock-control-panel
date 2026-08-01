@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   completeConnectionEndpoint,
+  normalizeConnectionBaseUrl,
   routerProtocolForOpenAiEndpoint,
 } from '../src/shared/connection-endpoint';
 
@@ -54,5 +55,54 @@ describe('connection endpoint completion', () => {
     'http://api.example.com',
   ])('rejects unsafe or incomplete input %s', (input) => {
     expect(() => completeConnectionEndpoint(input, 'anthropic')).toThrow();
+  });
+});
+
+/*
+ * Claude Code appends `/v1/messages` to `ANTHROPIC_BASE_URL` itself. Collapsing a relay's own path
+ * here is what made working relays unreachable, so the base URL is left exactly as published.
+ */
+describe('connection base URL normalization', () => {
+  it.each([
+    ['api.example.com', 'https://api.example.com'],
+    ['api.example.com/', 'https://api.example.com'],
+    ['api.example.com/v1', 'https://api.example.com/v1'],
+    ['https://api.example.com/v1/', 'https://api.example.com/v1'],
+    ['api.example.com/relay/v1', 'https://api.example.com/relay/v1'],
+    ['api.example.com/proxy/anthropic', 'https://api.example.com/proxy/anthropic'],
+    ['api.example.com/openai/v1', 'https://api.example.com/openai/v1'],
+    ['https:\\api.example.com\\relay\\v1', 'https://api.example.com/relay/v1'],
+    ['localhost:3456', 'http://localhost:3456'],
+    ['[::1]:3456', 'http://[::1]:3456'],
+  ])('keeps the published path of %s', (input, expected) => {
+    expect(normalizeConnectionBaseUrl(input)).toBe(expected);
+  });
+
+  it('reduces a pasted Messages endpoint back to the base it belongs to', () => {
+    expect(normalizeConnectionBaseUrl('https://api.example.com/v1/messages')).toBe(
+      'https://api.example.com',
+    );
+    expect(normalizeConnectionBaseUrl('https://api.example.com/relay/v1/messages')).toBe(
+      'https://api.example.com/relay',
+    );
+  });
+
+  it('points an OpenAI endpoint at the protocol switch instead of silently accepting it', () => {
+    expect(() => normalizeConnectionBaseUrl('https://api.example.com/v1/chat/completions')).toThrow(
+      /OpenAI 协议/,
+    );
+    expect(() => normalizeConnectionBaseUrl('https://api.example.com/v1/responses')).toThrow(
+      /OpenAI 协议/,
+    );
+  });
+
+  it.each([
+    '',
+    '/',
+    'https://user:secret@example.com',
+    'https://api.example.com/v1?token=secret',
+    'http://api.example.com',
+  ])('rejects unsafe or incomplete input %s', (input) => {
+    expect(() => normalizeConnectionBaseUrl(input)).toThrow();
   });
 });

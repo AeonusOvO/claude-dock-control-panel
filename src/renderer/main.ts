@@ -72,6 +72,7 @@ import { estimateChatUsage } from '../shared/chat-usage';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import {
   completeConnectionEndpoint,
+  normalizeConnectionBaseUrl,
   type ConfigurableEndpointProtocol,
 } from '../shared/connection-endpoint';
 import {
@@ -329,6 +330,9 @@ const completeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#complete-connection-advanced',
 );
 const settingsLaunchAtLogin = requiredElement<HTMLInputElement>('#settings-launch-at-login');
+const settingsWebResearchIsolation = requiredElement<HTMLInputElement>(
+  '#settings-web-research-isolation',
+);
 const settingsTheme = requiredElement<HTMLSelectElement>('#settings-theme');
 const settingsLanguage = requiredElement<HTMLSelectElement>('#settings-language');
 const settingsVersion = requiredElement<HTMLOutputElement>('#settings-version');
@@ -598,7 +602,8 @@ let selectedProviderId: ClaudeProviderId | undefined;
 let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let selectedRailTab: string | undefined = 'projects';
-let selectedSettingsTab: 'connection' | 'general' = 'general';
+type SettingsTab = 'advanced' | 'connection' | 'general';
+let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
 let gatewayRefreshInProgress = false;
@@ -2550,7 +2555,7 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   baseUrlHelp.textContent = supportsProtocolSwitch
     ? protocol === 'openai'
       ? '可填域名、/v1、/v1/chat/completions 或 /v1/responses；保存时会自动补全，并由本地 Router 转换。'
-      : '可填域名、/v1 或 /v1/messages；保存时会自动补全成 Anthropic Messages 接口。'
+      : '按服务商给出的基址填写（含 /v1 等路径都会保留）；Claude Code 会自己追加 /v1/messages。'
     : provider.id === 'gateway'
       ? '填写路由器真正的模型接口；默认 3456 是模型接口，3458 是管理页。'
       : '接口必须提供 Anthropic /v1/messages，且不能直接使用 OpenAI /chat/completions。';
@@ -2596,6 +2601,17 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   syncConnectionInteractivity();
 };
 
+/**
+ * What the connection field should hold once it is tidied up. The OpenAI path targets the local
+ * Router, which stores a complete request URL, so the endpoint is completed there. The Anthropic
+ * path stays the base URL Claude Code expects: the CLI appends `/v1/messages` itself, and rewriting
+ * the field would silently drop path segments some relays require.
+ */
+const resolveConnectionAddress = (value: string, protocol: ConfigurableEndpointProtocol): string =>
+  protocol === 'openai'
+    ? completeConnectionEndpoint(value, 'openai')
+    : normalizeConnectionBaseUrl(value);
+
 const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
   const { config } = state;
   if (!claudePreset.querySelector(`option[value="${config.preset}"]`)) {
@@ -2612,7 +2628,7 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
   claudeBaseUrl.value = displayedBaseUrl;
   if (config.preset === 'custom' && displayedBaseUrl) {
     try {
-      claudeBaseUrl.value = completeConnectionEndpoint(
+      claudeBaseUrl.value = resolveConnectionAddress(
         displayedBaseUrl,
         config.protocol === 'openai' ? 'openai' : 'anthropic',
       );
@@ -2788,7 +2804,7 @@ const buildFooterMenuItem = (
   return item;
 };
 
-const selectSettingsTab = (tab: 'connection' | 'general'): void => {
+const selectSettingsTab = (tab: SettingsTab): void => {
   selectedSettingsTab = tab;
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
     const selected = button.dataset.settingsTab === tab;
@@ -2809,6 +2825,7 @@ const loadAppSettings = async (): Promise<void> => {
   try {
     const settings = await window.controlPanel.getAppSettings();
     settingsLaunchAtLogin.checked = settings.launchAtLogin;
+    settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
     settingsLanguage.value = settings.language;
     settingsVersion.value = settings.version;
     settingsVersion.textContent = settings.version;
@@ -7453,7 +7470,7 @@ const currentConfigInput = (
     preset === 'custom' ? (claudeProtocol.value as ConfigurableEndpointProtocol) : 'anthropic';
   const baseUrl =
     preset === 'custom' && claudeBaseUrl.value.trim()
-      ? completeConnectionEndpoint(claudeBaseUrl.value, protocol)
+      ? resolveConnectionAddress(claudeBaseUrl.value, protocol)
       : claudeBaseUrl.value;
   if (preset === 'custom') {
     claudeBaseUrl.value = baseUrl;
@@ -7480,7 +7497,7 @@ const completeVisibleConnectionEndpoint = (reportError: boolean): void => {
     return;
   }
   try {
-    claudeBaseUrl.value = completeConnectionEndpoint(
+    claudeBaseUrl.value = resolveConnectionAddress(
       claudeBaseUrl.value,
       claudeProtocol.value as ConfigurableEndpointProtocol,
     );
@@ -8003,9 +8020,33 @@ settingsLaunchAtLogin.addEventListener('change', () => {
       settingsLaunchAtLogin.disabled = false;
     });
 });
+settingsWebResearchIsolation.addEventListener('change', () => {
+  const requested = settingsWebResearchIsolation.checked;
+  settingsWebResearchIsolation.disabled = true;
+  void window.controlPanel
+    .setAdvancedSettings({ webResearchIsolation: requested })
+    .then((settings) => {
+      settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
+      showToast(
+        settings.advanced.webResearchIsolation
+          ? '已开启联网检索隔离，下次启动会话时生效'
+          : '已关闭联网检索隔离，下次启动会话时生效',
+      );
+    })
+    .catch(() => {
+      settingsWebResearchIsolation.checked = !requested;
+      showToast('无法修改高级设置。', 'error');
+    })
+    .finally(() => {
+      settingsWebResearchIsolation.disabled = false;
+    });
+});
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
   button.addEventListener('click', () => {
-    selectSettingsTab(button.dataset.settingsTab === 'connection' ? 'connection' : 'general');
+    const requested = button.dataset.settingsTab;
+    selectSettingsTab(
+      requested === 'advanced' || requested === 'connection' ? requested : 'general',
+    );
   });
 }
 conversationRenameCancel.addEventListener('click', () => {

@@ -31,6 +31,7 @@ import type {
 const api: ControlPanelApi = {
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
+  setAdvancedSettings: (settings) => ipcRenderer.invoke('app:set-advanced-settings', settings),
   createArtifact: (html) => ipcRenderer.invoke('artifact:create', html),
   destroyArtifact: (artifactId) => ipcRenderer.invoke('artifact:destroy', artifactId),
   getArtifactNetworkState: () => ipcRenderer.invoke('artifact:get-network-state'),

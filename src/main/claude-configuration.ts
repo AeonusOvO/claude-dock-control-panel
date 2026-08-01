@@ -5,7 +5,7 @@ import type {
   ClaudePermissionMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
-import { completeConnectionEndpoint } from '../shared/connection-endpoint';
+import { normalizeConnectionBaseUrl } from '../shared/connection-endpoint';
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 import {
   blockingVersionRuleFor,
@@ -125,18 +125,11 @@ export const evaluateClaudeInstallation = (
   };
 };
 
-const normalizeBaseUrl = (value: string): string => {
-  if (/\/(?:v1\/)?(?:chat\/completions|responses)\/?$/i.test(value.replaceAll('\\', '/'))) {
-    throw new Error(
-      '这是 OpenAI 接口地址，不能直接用于 Claude Code；请在自定义中转站中选择 OpenAI 协议。',
-    );
-  }
-  const parsed = new URL(completeConnectionEndpoint(value, 'anthropic'));
-  parsed.pathname = parsed.pathname.replace(/\/v1\/messages\/?$/i, '') || '/';
-
-  const normalized = parsed.toString();
-  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
-};
+/**
+ * Claude Code appends `/v1/messages` to `ANTHROPIC_BASE_URL` itself, so the stored value stays the
+ * base the relay published — including a trailing `/v1`, which several relays require.
+ */
+const normalizeBaseUrl = (value: string): string => normalizeConnectionBaseUrl(value);
 
 export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedClaudeConfig => {
   const apiKeyHelperPolicy =

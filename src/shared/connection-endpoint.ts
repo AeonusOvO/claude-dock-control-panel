@@ -34,15 +34,18 @@ const withInferredScheme = (value: string): string => {
   return `${scheme}://${withoutLeadingSlash}`;
 };
 
+interface ParsedConnectionAddress {
+  /** Path with duplicate and trailing slashes removed; an empty string for the site root. */
+  path: string;
+  url: URL;
+}
+
 /**
- * Accepts the address forms people normally paste into a settings field and returns the complete
- * protocol endpoint. The main process calls the same function again, so renderer convenience never
- * becomes the security boundary.
+ * Accepts the address forms people normally paste into a settings field and validates them once,
+ * without yet deciding whether the caller wants a base URL or a complete protocol endpoint. The
+ * main process calls the same parser again, so renderer convenience never becomes the boundary.
  */
-export const completeConnectionEndpoint = (
-  value: string,
-  protocol: ConfigurableEndpointProtocol,
-): string => {
+const parseConnectionAddress = (value: string): ParsedConnectionAddress => {
   let raw = stripMatchingQuotes(value.trim()).replaceAll('\\', '/');
   raw = raw.replace(/^([a-z][a-z\d+.-]*):\/(?!\/)/i, '$1://');
   if (!raw || raw === '/') {
@@ -73,26 +76,60 @@ export const completeConnectionEndpoint = (
     throw new Error('远程接口必须使用 HTTPS；仅本机回环地址允许 HTTP。');
   }
 
-  const pathname = parsed.pathname.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+  return { path: parsed.pathname.replace(/\/{2,}/g, '/').replace(/\/+$/, ''), url: parsed };
+};
+
+const addressWithPath = (url: URL, path: string): string => {
+  url.pathname = path.replace(/\/{2,}/g, '/') || '/';
+  const normalized = url.toString();
+  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+};
+
+/**
+ * Returns the complete protocol endpoint. Used where a full request URL is genuinely required —
+ * the local Router's provider entries and the connectivity probe — never for `ANTHROPIC_BASE_URL`.
+ */
+export const completeConnectionEndpoint = (
+  value: string,
+  protocol: ConfigurableEndpointProtocol,
+): string => {
+  const { path, url } = parseConnectionAddress(value);
   const selectedEndpoint =
     protocol === 'anthropic'
-      ? /\/v1\/messages$/i.test(pathname)
-      : /\/(?:v1\/)?(?:chat\/completions|responses)$/i.test(pathname);
+      ? /\/v1\/messages$/i.test(path)
+      : /\/(?:v1\/)?(?:chat\/completions|responses)$/i.test(path);
   if (selectedEndpoint) {
-    parsed.pathname = pathname;
-    return parsed.toString();
+    url.pathname = path;
+    return url.toString();
   }
 
-  const basePath = pathname.replace(KNOWN_ENDPOINT_SUFFIX, '').replace(/\/+$/, '');
-  if (protocol === 'anthropic') {
-    parsed.pathname = /\/v1$/i.test(basePath) ? `${basePath}/messages` : `${basePath}/v1/messages`;
-  } else {
-    parsed.pathname = /\/v1$/i.test(basePath)
-      ? `${basePath}/chat/completions`
-      : `${basePath}/v1/chat/completions`;
+  const basePath = path.replace(KNOWN_ENDPOINT_SUFFIX, '').replace(/\/+$/, '');
+  const completed =
+    protocol === 'anthropic'
+      ? /\/v1$/i.test(basePath)
+        ? `${basePath}/messages`
+        : `${basePath}/v1/messages`
+      : /\/v1$/i.test(basePath)
+        ? `${basePath}/chat/completions`
+        : `${basePath}/v1/chat/completions`;
+  url.pathname = completed.replace(/\/{2,}/g, '/');
+  return url.toString();
+};
+
+/**
+ * `ANTHROPIC_BASE_URL` as Claude Code actually consumes it: the CLI appends `/v1/messages` on its
+ * own, so every path segment the relay published has to survive verbatim — a relay documented as
+ * `https://host/v1` must stay `https://host/v1`, exactly like it would in any other client. Only a
+ * complete Messages endpoint pasted into the field is reduced back to the base it belongs to.
+ */
+export const normalizeConnectionBaseUrl = (value: string): string => {
+  const { path, url } = parseConnectionAddress(value);
+  if (/\/(?:v1\/)?(?:chat\/completions|responses)$/i.test(path)) {
+    throw new Error(
+      '这是 OpenAI 接口地址，不能直接用于 Claude Code；请在自定义中转站中选择 OpenAI 协议。',
+    );
   }
-  parsed.pathname = parsed.pathname.replace(/\/{2,}/g, '/');
-  return parsed.toString();
+  return addressWithPath(url, path.replace(/\/v1\/messages$/i, ''));
 };
 
 export const routerProtocolForOpenAiEndpoint = (

@@ -5138,6 +5138,7 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   margin: 0;
   max-height: 360px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0;
 }
 
@@ -7219,6 +7220,17 @@ body.is-resizing * {
 .rail-page > * {
   max-width: 100%;
   min-width: 0;
+}
+
+/*
+ * The control panel is the scroll container for every page except chat, so those pages keep their
+ * natural height instead of shrinking to fit. Without this the connection history list — whose own
+ * `overflow-y` gives it an automatic minimum size of zero — is the first thing squeezed flat as the
+ * list fills up, instead of scrolling inside its own box.
+ */
+.rail-page:not(.rail-page--chat),
+.rail-page:not(.rail-page--chat) > * {
+  flex-shrink: 0;
 }
 
 .plugin-card__badge[data-update='true'] {

@@ -603,6 +603,11 @@ export class ClaudeRuntime {
     private readonly statusLineScriptPath: string,
     private readonly signalScriptPath: string,
     private readonly webSearchGuardScriptPath: string,
+    /**
+     * Read per launch, so toggling the workaround in settings takes effect on the next session
+     * without a restart.
+     */
+    private readonly isWebResearchIsolationEnabled: () => boolean,
     private readonly onState: (state: ClaudeProjectState) => void,
     private readonly writeToTerminal: (sessionId: string, data: string) => void,
     private readonly readPermissionModeFromScreen: (
@@ -956,6 +961,12 @@ export class ClaudeRuntime {
       unlinkSync(turnStopPath);
     }
 
+    /*
+     * Off unless the user turned it on: the guard hook, the subagent definition and the appended
+     * system prompt are a workaround for relays that reject web search at higher effort levels, and
+     * a relay without that fault should get a plain Claude Code session.
+     */
+    const webResearchIsolation = this.isWebResearchIsolationEnabled();
     const settings = {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
       ...(shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}),
@@ -977,21 +988,25 @@ export class ClaudeRuntime {
             ],
           },
         ],
-        PreToolUse: [
-          {
-            matcher: 'WebSearch|WebFetch',
-            hooks: [
-              {
-                command: buildWebSearchGuardCommand(
-                  this.webSearchGuardScriptPath,
-                  CLAUDEDOCK_WEB_RESEARCH_AGENT_NAME,
-                ),
-                shell: 'powershell',
-                type: 'command',
-              },
-            ],
-          },
-        ],
+        ...(webResearchIsolation
+          ? {
+              PreToolUse: [
+                {
+                  matcher: 'WebSearch|WebFetch',
+                  hooks: [
+                    {
+                      command: buildWebSearchGuardCommand(
+                        this.webSearchGuardScriptPath,
+                        CLAUDEDOCK_WEB_RESEARCH_AGENT_NAME,
+                      ),
+                      shell: 'powershell',
+                      type: 'command',
+                    },
+                  ],
+                },
+              ],
+            }
+          : {}),
         Stop: [
           {
             hooks: [
@@ -1048,10 +1063,12 @@ export class ClaudeRuntime {
       runtime.exitMarker,
       resumeSessionId,
       { allowBypass: this.configStore.getAllowBypassPermissions(cwd), startMode },
-      {
-        agents: CLAUDEDOCK_WEB_RESEARCH_AGENTS,
-        appendSystemPrompt: CLAUDEDOCK_WEB_RESEARCH_SYSTEM_PROMPT,
-      },
+      webResearchIsolation
+        ? {
+            agents: CLAUDEDOCK_WEB_RESEARCH_AGENTS,
+            appendSystemPrompt: CLAUDEDOCK_WEB_RESEARCH_SYSTEM_PROMPT,
+          }
+        : {},
     );
     const state = await this.getState(sessionId, cwd);
     return {

@@ -64,6 +64,19 @@ describe('Claude Code configuration', () => {
     ).toThrow('不能直接用于 Claude Code');
   });
 
+  /*
+   * Claude Code appends `/v1/messages` to whatever it is given, so a relay documented as ending in
+   * `/v1` breaks the moment that segment is normalized away.
+   */
+  it.each([
+    ['https://relay.example.com/v1', 'https://relay.example.com/v1'],
+    ['https://relay.example.com/relay/v1', 'https://relay.example.com/relay/v1'],
+    ['https://relay.example.com/proxy/anthropic', 'https://relay.example.com/proxy/anthropic'],
+    ['relay.example.com/v1', 'https://relay.example.com/v1'],
+  ])('stores the relay base URL %s as published', (baseUrl, expected) => {
+    expect(normalizeClaudeConfig({ ...gatewayInput, baseUrl }).baseUrl).toBe(expected);
+  });
+
   it('pins every Claude model alias to the selected gateway model', () => {
     const config = normalizeClaudeConfig({ ...gatewayInput, modelFast: 'deepseek-fast' });
     const environment = buildClaudeEnvironment(config, 'encrypted-at-rest-secret');
@@ -218,6 +231,27 @@ describe('Claude Code configuration', () => {
     expect(command).toContain('--append-system-prompt');
     expect(command).toContain("Delegate today''s web research.");
     expect(command).not.toContain('--agent ');
+  });
+
+  /*
+   * The isolation workaround is opt-in, so a session launched without it must look like a plain
+   * Claude Code session — no injected subagent, no appended system prompt.
+   */
+  it('launches without web research extensions when the workaround is off', () => {
+    const command = buildClaudeLaunchCommand(
+      'C:\\Users\\Tester\\settings.json',
+      'claude-model',
+      'continue',
+      '\u001b]9;claudedock-exit:session-plain\u0007',
+      undefined,
+      { allowBypass: false },
+      {},
+    );
+
+    expect(command).not.toContain('--agents');
+    expect(command).not.toContain('--append-system-prompt');
+    expect(command).not.toContain('claudedock-web-research');
+    expect(command).toContain('& claude ');
   });
 
   const itWindows = process.platform === 'win32' ? it : it.skip;

@@ -335,7 +335,20 @@ export interface ChatConnectionTestResult {
   usage?: ChatTokenUsage;
 }
 
+/**
+ * Opt-in workarounds for relay-side protocol quirks. Every switch is off by default: a relay that
+ * behaves correctly must not carry the cost of a fix it does not need.
+ */
+export interface AdvancedSettings {
+  /**
+   * Routes WebSearch and WebFetch through a dedicated subagent instead of the main conversation.
+   * Turn this on when the relay refuses web search once the model is raised to high effort.
+   */
+  webResearchIsolation: boolean;
+}
+
 export interface AppSettingsView {
+  advanced: AdvancedSettings;
   artifactNetworkAllowed?: boolean;
   language: 'zh-CN';
   launchAtLogin: boolean;
@@ -842,6 +855,7 @@ export type Unsubscribe = () => void;
 export interface ControlPanelApi {
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
+  setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   createArtifact: (html: string) => Promise<ArtifactCreateResult>;
   destroyArtifact: (artifactId: string) => Promise<boolean>;
   getArtifactNetworkState: () => Promise<ArtifactNetworkState>;
