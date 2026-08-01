@@ -118,7 +118,8 @@ describe('quit confirmation handshake', () => {
     expect(contractsSource).toContain('minimizeToTray: () => void;');
     expect(preloadSource).toContain("ipcRenderer.send('app:minimize-to-tray');");
     expect(mainSource).toMatch(
-      /ipcMain\.on\('app:minimize-to-tray', \(event\) => \{\s+validateSender\(event\);\s+mainWindow\?\.hide\(\);/,
+      /ipcMain\.on\('app:minimize-to-tray', \(event\) => \{\s+validateSender\(event\);\s+hideMainWindowToTray\(\);/,
     );
+    expect(mainSource).toContain("if (appPreferencesStore.get().closeBehavior === 'exit') {");
   });
 });

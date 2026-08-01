@@ -558,20 +558,15 @@ describe('renderer interaction lifecycle contract', () => {
 
   it('answers every quit request and only questions the ones that would lose work', () => {
     // The main process cancels its own quit and waits, so a path that fails to answer would make the
-    // app impossible to close. All three branches must call confirmQuit.
-    expect(rendererSource).toContain('window.controlPanel.onAppQuitRequested(() => {');
-    expect(rendererSource).toContain('window.controlPanel.confirmQuit(true);');
-    expect(rendererSource).toContain('window.controlPanel.confirmQuit(false);');
+    // app impossible to close. The task-aware dialog must answer every branch.
+    expect(rendererSource).toContain(
+      'window.controlPanel.onAppQuitRequested(renderQuitConfirmation)',
+    );
     expect(rendererSource).toContain('window.controlPanel.confirmQuit(confirmed);');
-    expect(rendererSource).toMatch(
-      /const streaming = Boolean\(activeChatRequestId\);[\s\S]*?if \(!streaming && !preparing\) \{\s+window\.controlPanel\.confirmQuit\(true\);/,
-    );
-    // A running terminal is the documented background state, so it must not trigger the prompt: the
-    // decision is made from the chat in-flight flags alone.
-    expect(rendererSource).toMatch(
-      /const preparing = chatSubmissionInFlight \|\| queuedChatAttachmentImports > 0;/,
-    );
-    expect(rendererSource).toContain("title: '对话正在进行中',");
+    expect(rendererSource).toContain('closeQuitConfirmation(true);');
+    expect(rendererSource).toContain('closeQuitConfirmation(false);');
+    expect(rendererSource).toContain('pendingQuitRequest = request;');
+    expect(rendererSource).toContain('request.leases.map((lease) => {');
     expect(rendererSource).toContain('unsubscribeAppQuitRequested();');
   });
 

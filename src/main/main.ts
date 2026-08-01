@@ -35,6 +35,7 @@ import type {
   ChatAttachmentImportInput,
   ChatMessage,
   ChatStartInput,
+  CloseBehavior,
   CodexLaunchMode,
   CodexLoginMethod,
   CodexLoginStartResult,
@@ -99,6 +100,7 @@ import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
+import { AppPreferencesStore } from './app-preferences-store';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -116,7 +118,6 @@ let codexRuntime: CodexRuntime | null = null;
 let networkPreflightService: NetworkPreflightService | null = null;
 let providerAccessGuard: ProviderAccessGuard | null = null;
 let mainWindow: BrowserWindow | null = null;
-let minimizedNoticeShown = false;
 let tray: Tray | null = null;
 let busyRegistry: BusyRegistry | null = null;
 let downloadEngine: DownloadEngine | null = null;
@@ -235,6 +236,7 @@ const workspace = new TerminalWorkspace(
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
 const advancedSettingsStore = new AdvancedSettingsStore(app.getPath('userData'));
+const appPreferencesStore = new AppPreferencesStore(app.getPath('userData'));
 const agentRuntimeStore = new AgentRuntimeStore(app.getPath('userData'));
 workspace.setTheme(workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
 const sessionManager = new ClaudeSessionManager();
@@ -369,6 +371,19 @@ const showMainWindow = (): void => {
   mainWindow.focus();
   if (!wasVisible && !mainWindow.webContents.isLoading()) {
     mainWindow.webContents.send('app:window-restored');
+  }
+};
+
+const hideMainWindowToTray = (): void => {
+  mainWindow?.hide();
+  const preferences = appPreferencesStore.get();
+  if (!preferences.closeToTrayNoticeShown && tray) {
+    tray.displayBalloon({
+      content: 'ClaudeDock 已最小化到托盘，后台继续运行。可在 设置 → 通用 中修改关闭行为。',
+      iconType: 'info',
+      title: 'ClaudeDock 仍在后台运行',
+    });
+    appPreferencesStore.set({ closeToTrayNoticeShown: true });
   }
 };
 
@@ -1177,6 +1192,7 @@ const registerIpc = (): void => {
   const appSettingsView = (): AppSettingsView => ({
     advanced: advancedSettingsStore.get(),
     artifactNetworkAllowed: artifactService.getState().allowed,
+    closeBehavior: appPreferencesStore.get().closeBehavior,
     language: 'zh-CN',
     launchAtLogin: app.getLoginItemSettings().openAtLogin,
     theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
@@ -1215,6 +1231,14 @@ const registerIpc = (): void => {
       openAtLogin: enabled,
       path: process.execPath,
     });
+    return appSettingsView();
+  });
+  ipcMain.handle('app:set-close-behavior', (event, behavior: unknown) => {
+    validateSender(event);
+    if (behavior !== 'exit' && behavior !== 'tray') {
+      throw new Error('关闭按钮行为无效。');
+    }
+    appPreferencesStore.set({ closeBehavior: behavior as CloseBehavior });
     return appSettingsView();
   });
   ipcMain.handle('artifact:create', (event, html: unknown) => {
@@ -2459,7 +2483,7 @@ const registerIpc = (): void => {
   });
   ipcMain.on('app:minimize-to-tray', (event) => {
     validateSender(event);
-    mainWindow?.hide();
+    hideMainWindowToTray();
   });
   ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
     validateSender(event);
@@ -2718,16 +2742,11 @@ const createWindow = async (): Promise<void> => {
     }
 
     event.preventDefault();
-    mainWindow?.hide();
-
-    if (!minimizedNoticeShown && tray) {
-      minimizedNoticeShown = true;
-      tray.displayBalloon({
-        content: '所有项目终端仍在后台运行，可从托盘恢复窗口。',
-        iconType: 'info',
-        title: 'ClaudeDock 已进入后台',
-      });
+    if (appPreferencesStore.get().closeBehavior === 'exit') {
+      requestQuit();
+      return;
     }
+    hideMainWindowToTray();
   });
   mainWindow.on('closed', () => {
     mainWindow = null;

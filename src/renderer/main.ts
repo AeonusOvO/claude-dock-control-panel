@@ -332,6 +332,7 @@ const completeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#complete-connection-advanced',
 );
 const settingsLaunchAtLogin = requiredElement<HTMLInputElement>('#settings-launch-at-login');
+const settingsCloseBehavior = requiredElement<HTMLSelectElement>('#settings-close-behavior');
 const settingsChatIdleTimeout = requiredElement<HTMLSelectElement>('#settings-chat-idle-timeout');
 const settingsWebResearchIsolation = requiredElement<HTMLInputElement>(
   '#settings-web-research-isolation',
@@ -3087,6 +3088,7 @@ const loadAppSettings = async (): Promise<void> => {
   try {
     const settings = await window.controlPanel.getAppSettings();
     settingsLaunchAtLogin.checked = settings.launchAtLogin;
+    settingsCloseBehavior.value = settings.closeBehavior;
     settingsChatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
     settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
     settingsLanguage.value = settings.language;
@@ -8335,6 +8337,25 @@ settingsLaunchAtLogin.addEventListener('change', () => {
       settingsLaunchAtLogin.disabled = false;
     });
 });
+settingsCloseBehavior.addEventListener('change', () => {
+  const requested = settingsCloseBehavior.value === 'exit' ? 'exit' : 'tray';
+  settingsCloseBehavior.disabled = true;
+  void window.controlPanel
+    .setCloseBehavior(requested)
+    .then((settings) => {
+      settingsCloseBehavior.value = settings.closeBehavior;
+      showToast(
+        settings.closeBehavior === 'exit' ? '关闭按钮将直接退出' : '关闭按钮将最小化到托盘',
+      );
+    })
+    .catch(() => {
+      showToast('无法修改关闭按钮行为。', 'error');
+      void loadAppSettings();
+    })
+    .finally(() => {
+      settingsCloseBehavior.disabled = false;
+    });
+});
 settingsWebResearchIsolation.addEventListener('change', () => {
   const requested = settingsWebResearchIsolation.checked;
   settingsWebResearchIsolation.disabled = true;
@@ -9349,6 +9370,7 @@ void (async () => {
         ? reportedWindowsBuild
         : undefined;
     artifactNetworkState.allowed = initialSettings.artifactNetworkAllowed ?? true;
+    settingsCloseBehavior.value = initialSettings.closeBehavior;
     renderArtifactNetworkLog();
     if (initialSettings.theme !== activeTerminalTheme) {
       applyTerminalTheme(initialSettings.theme, false);

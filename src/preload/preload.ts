@@ -35,6 +35,7 @@ const api: ControlPanelApi = {
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
   setAdvancedSettings: (settings) => ipcRenderer.invoke('app:set-advanced-settings', settings),
+  setCloseBehavior: (behavior) => ipcRenderer.invoke('app:set-close-behavior', behavior),
   listBusyLeases: () => ipcRenderer.invoke('busy:list') as Promise<BusyLease[]>,
   onBusyChanged: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, leases: BusyLease[]): void => {

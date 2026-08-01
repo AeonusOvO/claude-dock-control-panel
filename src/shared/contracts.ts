@@ -9,6 +9,7 @@ export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
 export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
 export type CodexLaunchMode = ClaudeLaunchMode;
 export type CodexLoginMethod = 'browser' | 'device-code';
+export type CloseBehavior = 'exit' | 'tray';
 export type BusyKind =
   'configure' | 'conversation' | 'download' | 'install' | 'proxy' | 'uninstall';
 export type BusySeverity = 'blocking' | 'resumable';
@@ -392,6 +393,7 @@ export interface AdvancedSettings {
 export interface AppSettingsView {
   advanced: AdvancedSettings;
   artifactNetworkAllowed?: boolean;
+  closeBehavior: CloseBehavior;
   language: 'zh-CN';
   launchAtLogin: boolean;
   theme: TerminalThemeId;
@@ -899,6 +901,7 @@ export interface ControlPanelApi {
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
+  setCloseBehavior: (behavior: CloseBehavior) => Promise<AppSettingsView>;
   listBusyLeases: () => Promise<BusyLease[]>;
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
   setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;
