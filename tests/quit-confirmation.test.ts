@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
 const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
+const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
+const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 const contractsSource = readFileSync(
   new URL('../src/shared/contracts.ts', import.meta.url),
   'utf8',
@@ -89,6 +92,33 @@ describe('quit confirmation handshake', () => {
     expect(preloadSource).toContain("ipcRenderer.invoke('busy:set-conversation', busy)");
     expect(contractsSource).toContain(
       'setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;',
+    );
+  });
+
+  it('presents a task-aware, keyboard-safe dialog with the safe action first', () => {
+    expect(rendererMarkup).toContain('id="quit-confirmation-dialog"');
+    expect(rendererMarkup).toContain('可以直接关闭窗口，后台会继续运行。');
+    const minimizeIndex = rendererMarkup.indexOf('id="quit-minimize"');
+    const forceIndex = rendererMarkup.indexOf('id="quit-force"');
+    const cancelIndex = rendererMarkup.indexOf('id="quit-cancel"');
+    expect(minimizeIndex).toBeGreaterThan(0);
+    expect(forceIndex).toBeGreaterThan(minimizeIndex);
+    expect(cancelIndex).toBeGreaterThan(forceIndex);
+    expect(rendererMarkup).toMatch(/id="quit-minimize"[^>]*autofocus/);
+    expect(rendererSource).toContain("? '有操作正在进行，不建议退出'");
+    expect(rendererSource).toContain(": '还有下载未完成';");
+    expect(rendererSource).toContain("? '中断会留下不完整状态' : '可稍后继续'");
+    expect(rendererSource).toContain("confirmLabel: '仍要退出'");
+    expect(rendererStyles).toContain('.confirmation-dialog[open]');
+    expect(rendererStyles).toContain('.quit-confirmation-dialog');
+    expect(rendererStyles).toContain('var(--dur-3) var(--ease-decel)');
+  });
+
+  it('keeps minimize-to-tray inside the validated bridge', () => {
+    expect(contractsSource).toContain('minimizeToTray: () => void;');
+    expect(preloadSource).toContain("ipcRenderer.send('app:minimize-to-tray');");
+    expect(mainSource).toMatch(
+      /ipcMain\.on\('app:minimize-to-tray', \(event\) => \{\s+validateSender\(event\);\s+mainWindow\?\.hide\(\);/,
     );
   });
 });

@@ -37,4 +37,16 @@ describe('Chinese interface contract', () => {
     expect(rendererSource).not.toContain('plugin-card__original');
     expect(rendererSource).not.toContain('localized.originalDescription');
   });
+
+  it('keeps quit protection actions and severity copy in Chinese', () => {
+    for (const copy of [
+      '有操作正在进行，不建议退出',
+      '还有下载未完成',
+      '可以直接关闭窗口，后台会继续运行。',
+      '最小化到托盘，继续运行',
+      '仍要退出',
+    ]) {
+      expect(`${rendererHtml}\n${rendererSource}`).toContain(copy);
+    }
+  });
 });

@@ -2457,6 +2457,10 @@ const registerIpc = (): void => {
       quitConfirmationTimer = undefined;
     }
   });
+  ipcMain.on('app:minimize-to-tray', (event) => {
+    validateSender(event);
+    mainWindow?.hide();
+  });
   ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
     validateSender(event);
     if (typeof data !== 'string' || data.length > 65_536) {

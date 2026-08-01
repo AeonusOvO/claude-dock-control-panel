@@ -1046,6 +1046,7 @@ export interface ControlPanelApi {
    */
   onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;
   confirmQuit: (confirmed: boolean) => void;
+  minimizeToTray: () => void;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
   onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;

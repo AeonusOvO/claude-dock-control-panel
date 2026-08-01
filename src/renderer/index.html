@@ -1905,6 +1905,29 @@
     </dialog>
 
     <dialog
+      class="confirmation-dialog quit-confirmation-dialog"
+      id="quit-confirmation-dialog"
+      aria-labelledby="quit-confirmation-title"
+      aria-describedby="quit-confirmation-message"
+    >
+      <form method="dialog">
+        <header>
+          <span class="step-kicker">退出保护</span>
+          <strong id="quit-confirmation-title">有操作正在进行，不建议退出</strong>
+        </header>
+        <p id="quit-confirmation-message">可以直接关闭窗口，后台会继续运行。</p>
+        <ul class="quit-confirmation-list" id="quit-confirmation-list"></ul>
+        <footer>
+          <button class="dialog-primary" id="quit-minimize" type="button" autofocus>
+            最小化到托盘，继续运行
+          </button>
+          <button id="quit-force" type="button">仍要退出</button>
+          <button id="quit-cancel" type="button">取消</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
       class="network-preflight-dialog"
       id="network-preflight-dialog"
       aria-labelledby="network-preflight-dialog-title"

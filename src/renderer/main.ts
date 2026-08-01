@@ -18,6 +18,7 @@ import katex from 'katex';
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
 import type {
+  AppQuitRequest,
   ArtifactNetworkLogEntry,
   ArtifactNetworkState,
   ClaudeConnectionAdvice,
@@ -466,6 +467,12 @@ const confirmationDialogMessage = requiredElement<HTMLElement>('#confirmation-di
 const confirmationDialogConfirm = requiredElement<HTMLButtonElement>(
   '#confirmation-dialog-confirm',
 );
+const quitConfirmationDialog = requiredElement<HTMLDialogElement>('#quit-confirmation-dialog');
+const quitConfirmationTitle = requiredElement<HTMLElement>('#quit-confirmation-title');
+const quitConfirmationList = requiredElement<HTMLUListElement>('#quit-confirmation-list');
+const quitMinimizeButton = requiredElement<HTMLButtonElement>('#quit-minimize');
+const quitForceButton = requiredElement<HTMLButtonElement>('#quit-force');
+const quitCancelButton = requiredElement<HTMLButtonElement>('#quit-cancel');
 const connectionHistoryList = requiredElement<HTMLElement>('#connection-history-list');
 const connectionHistoryEmpty = requiredElement<HTMLElement>('#connection-history-empty');
 const connectionHistoryCount = requiredElement<HTMLElement>('#connection-history-count');
@@ -838,6 +845,7 @@ let chatAttachmentImportQueue: Promise<void> = Promise.resolve();
 let queuedChatAttachmentImports = 0;
 let chatSubmissionInFlight = false;
 let conversationBusyLeaseActive = false;
+let pendingQuitRequest: AppQuitRequest | undefined;
 let artifactNetworkState: ArtifactNetworkState = { allowed: true, entries: [] };
 let markdownRenderer: MarkdownDomRenderer;
 let markdownHighlighter: HighlighterCore | undefined;
@@ -8095,38 +8103,73 @@ window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
 const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
   rerunAutomaticConnectionTestForActiveProject();
 });
-/*
- * The main process has cancelled its own quit and handed the decision here, because only the renderer
- * knows whether a reply is still streaming. A running terminal deliberately does not count: those keep
- * running in the tray by design, and the tray balloon already says so, so warning about them would
- * turn every quit into a prompt. What is worth protecting is work that dies with the process — a
- * streaming reply, a submission in flight, or attachments still being read.
- *
- * Every path must answer, including the cancelling one, or the app becomes impossible to close.
- */
-const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested((request) => {
-  const streaming = Boolean(activeChatRequestId);
-  const preparing = chatSubmissionInFlight || queuedChatAttachmentImports > 0;
-  if (!request.leases.length && !streaming && !preparing) {
-    window.controlPanel.confirmQuit(true);
+const closeQuitConfirmation = (confirmed: boolean): void => {
+  pendingQuitRequest = undefined;
+  if (quitConfirmationDialog.open) {
+    quitConfirmationDialog.close(confirmed ? 'quit' : 'cancel');
+  }
+  window.controlPanel.confirmQuit(confirmed);
+};
+
+const renderQuitConfirmation = (request: AppQuitRequest): void => {
+  pendingQuitRequest = request;
+  quitConfirmationTitle.textContent = request.hasBlocking
+    ? '有操作正在进行，不建议退出'
+    : '还有下载未完成';
+  quitForceButton.dataset.tone = request.hasBlocking ? 'danger' : 'neutral';
+  quitConfirmationList.replaceChildren(
+    ...request.leases.map((lease) => {
+      const item = document.createElement('li');
+      const label = document.createElement('strong');
+      const badge = document.createElement('span');
+      item.dataset.severity = lease.severity;
+      label.textContent = lease.label;
+      badge.textContent = lease.severity === 'blocking' ? '中断会留下不完整状态' : '可稍后继续';
+      item.append(label, badge);
+      return item;
+    }),
+  );
+  if (!quitConfirmationDialog.open) {
+    quitConfirmationDialog.showModal();
+  }
+  quitMinimizeButton.focus();
+};
+
+/* Every path answers the main-process handshake, including Esc and the default safe action. */
+const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested(renderQuitConfirmation);
+quitMinimizeButton.addEventListener('click', () => {
+  closeQuitConfirmation(false);
+  window.controlPanel.minimizeToTray();
+});
+quitCancelButton.addEventListener('click', () => {
+  closeQuitConfirmation(false);
+});
+quitConfirmationDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeQuitConfirmation(false);
+});
+quitConfirmationDialog.addEventListener('click', (event) => {
+  if (event.target === quitConfirmationDialog) {
+    closeQuitConfirmation(false);
+  }
+});
+quitForceButton.addEventListener('click', () => {
+  const request = pendingQuitRequest;
+  if (!request) {
     return;
   }
-
-  if (confirmationDialog.open) {
-    // Another confirmation owns the modal; treat the quit as declined rather than dropping it.
-    window.controlPanel.confirmQuit(false);
+  quitConfirmationDialog.close('force-requested');
+  if (!request.hasBlocking) {
+    closeQuitConfirmation(true);
     return;
   }
-
   void requestConfirmation({
-    confirmLabel: '退出',
-    message: streaming
-      ? '当前对话正在生成回复，退出会中断这次回复且无法恢复。确认要退出 ClaudeDock 吗？'
-      : '当前对话正在准备发送，退出会丢弃这次发送。确认要退出 ClaudeDock 吗？',
-    title: '对话正在进行中',
+    confirmLabel: '仍要退出',
+    message: '退出会中断不可恢复的安装或配置操作，并可能留下不完整状态。确认仍要退出吗？',
+    title: '确认中断关键操作',
     tone: 'danger',
   }).then((confirmed) => {
-    window.controlPanel.confirmQuit(confirmed);
+    closeQuitConfirmation(confirmed);
   });
 });
 window.controlPanel.onClaudeState(renderClaudeState);

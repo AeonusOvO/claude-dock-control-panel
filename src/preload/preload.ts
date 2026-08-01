@@ -285,6 +285,9 @@ const api: ControlPanelApi = {
   confirmQuit: (confirmed) => {
     ipcRenderer.send('app:confirm-quit', confirmed);
   },
+  minimizeToTray: () => {
+    ipcRenderer.send('app:minimize-to-tray');
+  },
   onAppQuitRequested: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, request: AppQuitRequest): void => {
       ipcRenderer.send('app:quit-request-received');
