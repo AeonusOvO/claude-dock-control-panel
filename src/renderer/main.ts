@@ -64,6 +64,9 @@ import type {
   SaveClaudeConfigInput,
   SaveChatConfigInput,
   OperationResult,
+  ProxyAuditRecord,
+  ProxyControlView,
+  ProxyImportPreview,
   TerminalPhase,
   TerminalStatus,
   WorkspaceProjectView,
@@ -340,6 +343,29 @@ const settingsWebResearchIsolation = requiredElement<HTMLInputElement>(
 const settingsTheme = requiredElement<HTMLSelectElement>('#settings-theme');
 const settingsLanguage = requiredElement<HTMLSelectElement>('#settings-language');
 const settingsVersion = requiredElement<HTMLOutputElement>('#settings-version');
+const proxyProfileSelect = requiredElement<HTMLSelectElement>('#proxy-profile-select');
+const proxyRemoveProfile = requiredElement<HTMLButtonElement>('#proxy-remove-profile');
+const proxyImportText = requiredElement<HTMLTextAreaElement>('#proxy-import-text');
+const proxySubscriptionUrl = requiredElement<HTMLInputElement>('#proxy-subscription-url');
+const proxyPreviewImport = requiredElement<HTMLButtonElement>('#proxy-preview-import');
+const proxyPreviewSubscription = requiredElement<HTMLButtonElement>('#proxy-preview-subscription');
+const proxyImportIssues = requiredElement<HTMLElement>('#proxy-import-issues');
+const proxyImportPreview = requiredElement<HTMLElement>('#proxy-import-preview');
+const proxySaveSelected = requiredElement<HTMLButtonElement>('#proxy-save-selected');
+const proxyManualCorePath = requiredElement<HTMLInputElement>('#proxy-manual-core-path');
+const proxyStart = requiredElement<HTMLButtonElement>('#proxy-start');
+const proxyStop = requiredElement<HTMLButtonElement>('#proxy-stop');
+const proxyRuntimeStatus = requiredElement<HTMLElement>('#proxy-runtime-status');
+const proxyRuntimeLog = requiredElement<HTMLElement>('#proxy-runtime-log');
+const proxyScopeCli = requiredElement<HTMLInputElement>('#proxy-scope-cli');
+const proxyScopeApplication = requiredElement<HTMLInputElement>('#proxy-scope-application');
+const proxyRunAudit = requiredElement<HTMLButtonElement>('#proxy-run-audit');
+const proxyAuditSummary = requiredElement<HTMLElement>('#proxy-audit-summary');
+const proxyAuditHistory = requiredElement<HTMLOListElement>('#proxy-audit-history');
+const proxyAuditDialog = requiredElement<HTMLDialogElement>('#proxy-audit-dialog');
+const proxyAuditItems = requiredElement<HTMLElement>('#proxy-audit-items');
+const proxyAuditReturn = requiredElement<HTMLButtonElement>('#proxy-audit-return');
+const proxyAuditAccept = requiredElement<HTMLButtonElement>('#proxy-audit-accept');
 const curlOnboarding = requiredElement<HTMLElement>('#curl-onboarding');
 const converterHelp = requiredElement<HTMLElement>('#converter-help');
 const addRouterProviderButton = requiredElement<HTMLButtonElement>('#add-router-provider');
@@ -698,7 +724,141 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
   renderDownloads(tasks);
 };
 
+const PROXY_RUNTIME_LABELS: Record<ProxyControlView['runtime']['status'], string> = {
+  error: '内置代理发生错误',
+  ready: '内置代理已就绪',
+  starting: '正在启动内置代理…',
+  stopped: '内置代理已停止',
+  stopping: '正在停止内置代理…',
+};
+
+const openProxyAuditReport = (record: ProxyAuditRecord): void => {
+  pendingProxyAudit = record;
+  proxyAuditItems.replaceChildren(
+    ...record.report.items.map((item) => {
+      const card = document.createElement('article');
+      card.className = 'proxy-audit-item';
+      card.dataset.verdict = item.verdict;
+      const heading = document.createElement('header');
+      const name = document.createElement('strong');
+      const verdict = document.createElement('span');
+      name.textContent = item.name;
+      verdict.textContent =
+        item.verdict === 'passed' ? '通过' : item.verdict === 'risk' ? '风险' : '提示';
+      heading.append(name, verdict);
+      const evidence = document.createElement('ul');
+      evidence.className = 'proxy-audit-item__evidence';
+      evidence.append(
+        ...item.evidence.map((entry) => {
+          const line = document.createElement('li');
+          line.textContent = entry;
+          return line;
+        }),
+      );
+      const explanation = document.createElement('p');
+      explanation.textContent = item.explanation;
+      const advice = document.createElement('p');
+      advice.className = 'proxy-audit-item__advice';
+      advice.textContent = `建议：${item.advice}`;
+      card.append(heading, evidence, explanation, advice);
+      return card;
+    }),
+  );
+  proxyAuditAccept.hidden = record.report.summary !== 'risk' || Boolean(record.acceptedAt);
+  if (!proxyAuditDialog.open) {
+    proxyAuditDialog.showModal();
+  }
+  proxyAuditReturn.focus();
+};
+
+const renderProxyImportPreview = (preview: ProxyImportPreview): void => {
+  pendingProxyImport = preview;
+  proxyImportIssues.textContent = preview.issues.map(({ message }) => message).join(' ');
+  proxyImportPreview.replaceChildren(
+    ...preview.profiles.map((profile, index) => {
+      const label = document.createElement('label');
+      label.className = 'proxy-import-item';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.dataset.proxyImportIndex = String(index);
+      const summary = document.createElement('span');
+      const name = document.createElement('strong');
+      const detail = document.createElement('small');
+      name.textContent = profile.remark || `${profile.protocol} · ${profile.address}`;
+      detail.textContent = `${profile.protocol.toUpperCase()} · ${profile.address}:${profile.port}`;
+      summary.append(name, detail);
+      label.append(checkbox, summary);
+      checkbox.addEventListener('change', () => {
+        proxySaveSelected.disabled = !proxyImportPreview.querySelector<HTMLInputElement>(
+          'input[type="checkbox"]:checked',
+        );
+      });
+      return label;
+    }),
+  );
+  proxySaveSelected.disabled = true;
+};
+
+const renderProxyState = (state: ProxyControlView): void => {
+  const selectedId = state.store.state.selectedProfileId ?? '';
+  proxyProfileSelect.replaceChildren(
+    ...[
+      Object.assign(document.createElement('option'), {
+        disabled: true,
+        textContent: state.store.profiles.length > 0 ? '选择代理节点' : '尚未导入节点',
+        value: '',
+      }),
+      ...state.store.profiles.map((profile) =>
+        Object.assign(document.createElement('option'), {
+          textContent: `${profile.remark} · ${profile.protocol.toUpperCase()}`,
+          value: profile.id,
+        }),
+      ),
+    ],
+  );
+  proxyProfileSelect.value = selectedId;
+  proxyProfileSelect.disabled = state.runtime.status !== 'stopped';
+  proxyRemoveProfile.disabled = !selectedId || state.runtime.status !== 'stopped';
+  proxyScopeCli.checked = state.store.scope.cli;
+  proxyScopeApplication.checked = state.store.scope.application;
+  proxyRuntimeStatus.textContent = state.runtime.error
+    ? `${PROXY_RUNTIME_LABELS[state.runtime.status]}：${state.runtime.error}`
+    : `${PROXY_RUNTIME_LABELS[state.runtime.status]}${state.runtime.httpProxyUrl ? ` · ${state.runtime.httpProxyUrl}` : ''}`;
+  proxyRuntimeStatus.dataset.status = state.runtime.status;
+  proxyRuntimeLog.textContent = state.runtime.logs.slice(-30).join('\n') || '暂无诊断日志。';
+  proxyStart.disabled = !selectedId || state.runtime.status !== 'stopped';
+  proxyStop.disabled = !['ready', 'error'].includes(state.runtime.status);
+  proxyRunAudit.disabled = state.runtime.status !== 'ready' || !selectedId;
+  const latest = state.audits[0];
+  proxyAuditSummary.textContent = latest
+    ? `${new Date(latest.report.checkedAt).toLocaleString()} · ${latest.report.summary === 'passed' ? '通过' : latest.report.summary === 'risk' ? '有风险' : '有提示'}`
+    : '尚未体检。';
+  proxyAuditHistory.replaceChildren(
+    ...state.audits.slice(0, 8).map((record) => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.summary = record.report.summary;
+      button.textContent = `${new Date(record.report.checkedAt).toLocaleString()} · ${record.report.summary === 'passed' ? '通过' : record.report.summary === 'risk' ? '风险' : '提示'}${record.acceptedAt ? ' · 已确认继续' : ''}`;
+      button.addEventListener('click', () => openProxyAuditReport(record));
+      item.append(button);
+      return item;
+    }),
+  );
+};
+
+const loadProxyState = async (): Promise<void> => {
+  try {
+    renderProxyState(await window.controlPanel.getProxyState());
+  } catch {
+    showToast('无法读取内置代理状态。', 'error');
+  }
+};
+
 const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
+const unsubscribeProxyStateChanged = window.controlPanel.onProxyStateChanged(renderProxyState);
+const unsubscribeProxyAuditRequired =
+  window.controlPanel.onProxyAuditRequired(openProxyAuditReport);
 const openDownloadCenter = (): void => {
   if (!downloadCenterDialog.open) {
     downloadCenterDialog.showModal();
@@ -808,7 +968,7 @@ let selectedProviderId: ClaudeProviderId | undefined;
 let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let selectedRailTab: string | undefined = 'projects';
-type SettingsTab = 'advanced' | 'connection' | 'general';
+type SettingsTab = 'advanced' | 'connection' | 'general' | 'proxy';
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
@@ -826,6 +986,8 @@ let routerOperationInProgress = false;
 /** Set after a successful purge so the “pick a new source” hint only appears when it applies. */
 let routerPurgeCompleted = false;
 let routerRefreshInProgress = false;
+let pendingProxyImport: ProxyImportPreview | undefined;
+let pendingProxyAudit: ProxyAuditRecord | undefined;
 let toastTimer: number | undefined;
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 /** Set while a status-bar switch is in flight, so a second click cannot stack terminal writes. */
@@ -3089,6 +3251,9 @@ const selectSettingsTab = (tab: SettingsTab): void => {
     setConnectionPolling(true);
   } else {
     setConnectionPolling(selectedRailTab === 'connection');
+  }
+  if (tab === 'proxy') {
+    void loadProxyState();
   }
 };
 
@@ -8413,11 +8578,165 @@ settingsChatIdleTimeout.addEventListener('change', () => {
       settingsChatIdleTimeout.disabled = false;
     });
 });
+proxyPreviewImport.addEventListener('click', () => {
+  proxyPreviewImport.disabled = true;
+  void window.controlPanel
+    .previewProxyImport(proxyImportText.value)
+    .then(renderProxyImportPreview)
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '无法解析代理导入内容。', 'error');
+    })
+    .finally(() => {
+      proxyPreviewImport.disabled = false;
+    });
+});
+proxyPreviewSubscription.addEventListener('click', () => {
+  proxyPreviewSubscription.disabled = true;
+  void window.controlPanel
+    .previewProxySubscription(proxySubscriptionUrl.value)
+    .then(renderProxyImportPreview)
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '无法下载代理订阅。', 'error');
+    })
+    .finally(() => {
+      proxyPreviewSubscription.disabled = false;
+    });
+});
+proxySaveSelected.addEventListener('click', () => {
+  if (!pendingProxyImport) {
+    return;
+  }
+  const selected = [...proxyImportPreview.querySelectorAll<HTMLInputElement>('input:checked')]
+    .map((input) => Number.parseInt(input.dataset.proxyImportIndex ?? '', 10))
+    .flatMap((index) => pendingProxyImport?.profiles[index] ?? []);
+  proxySaveSelected.disabled = true;
+  void window.controlPanel
+    .saveProxyProfiles(selected)
+    .then((state) => {
+      renderProxyState(state);
+      pendingProxyImport = undefined;
+      proxyImportPreview.replaceChildren();
+      proxyImportIssues.textContent = '';
+      showToast(`已安全保存 ${selected.length} 个代理节点`);
+    })
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '无法保存代理节点。', 'error');
+    })
+    .finally(() => {
+      proxySaveSelected.disabled = false;
+    });
+});
+proxyProfileSelect.addEventListener('change', () => {
+  proxyProfileSelect.disabled = true;
+  void window.controlPanel
+    .selectProxyProfile(proxyProfileSelect.value)
+    .then(renderProxyState)
+    .catch(() => {
+      showToast('无法切换代理节点。', 'error');
+      void loadProxyState();
+    });
+});
+proxyRemoveProfile.addEventListener('click', () => {
+  if (!proxyProfileSelect.value) {
+    return;
+  }
+  proxyRemoveProfile.disabled = true;
+  void window.controlPanel
+    .removeProxyProfile(proxyProfileSelect.value)
+    .then(renderProxyState)
+    .catch(() => showToast('无法删除代理节点。', 'error'));
+});
+const saveProxyScope = (): void => {
+  proxyScopeCli.disabled = true;
+  proxyScopeApplication.disabled = true;
+  void window.controlPanel
+    .setProxyScope({ application: proxyScopeApplication.checked, cli: proxyScopeCli.checked })
+    .then((state) => {
+      renderProxyState(state);
+      showToast('代理作用域已更新');
+    })
+    .catch(() => {
+      showToast('无法修改代理作用域。', 'error');
+      void loadProxyState();
+    })
+    .finally(() => {
+      proxyScopeCli.disabled = false;
+      proxyScopeApplication.disabled = false;
+    });
+};
+proxyScopeCli.addEventListener('change', saveProxyScope);
+proxyScopeApplication.addEventListener('change', saveProxyScope);
+proxyStart.addEventListener('click', () => {
+  proxyStart.disabled = true;
+  void window.controlPanel
+    .startBuiltInProxy(proxyManualCorePath.value.trim() || undefined)
+    .then((state) => {
+      renderProxyState(state);
+      showToast('内置代理已启动并完成体检');
+    })
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '内置代理启动失败。', 'error');
+      void loadProxyState();
+    });
+});
+proxyStop.addEventListener('click', () => {
+  proxyStop.disabled = true;
+  void window.controlPanel
+    .stopBuiltInProxy()
+    .then((state) => {
+      renderProxyState(state);
+      showToast('内置代理已停止');
+    })
+    .catch(() => showToast('无法停止内置代理。', 'error'));
+});
+proxyRunAudit.addEventListener('click', () => {
+  proxyRunAudit.disabled = true;
+  void window.controlPanel
+    .runProxyLeakAudit()
+    .then((record) => {
+      openProxyAuditReport(record);
+      void loadProxyState();
+    })
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '代理体检失败。', 'error');
+    })
+    .finally(() => {
+      proxyRunAudit.disabled = false;
+    });
+});
+proxyAuditReturn.addEventListener('click', () => {
+  pendingProxyAudit = undefined;
+  proxyAuditDialog.close('adjust');
+});
+proxyAuditDialog.addEventListener('cancel', () => {
+  pendingProxyAudit = undefined;
+});
+proxyAuditAccept.addEventListener('click', () => {
+  const record = pendingProxyAudit;
+  if (!record) {
+    return;
+  }
+  proxyAuditAccept.disabled = true;
+  void window.controlPanel
+    .acceptProxyLeakAudit(record.id)
+    .then(() => {
+      pendingProxyAudit = undefined;
+      proxyAuditDialog.close('accepted');
+      showToast('已记录本次知情继续决定');
+      void loadProxyState();
+    })
+    .catch(() => showToast('无法记录体检决定。', 'error'))
+    .finally(() => {
+      proxyAuditAccept.disabled = false;
+    });
+});
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
   button.addEventListener('click', () => {
     const requested = button.dataset.settingsTab;
     selectSettingsTab(
-      requested === 'advanced' || requested === 'connection' ? requested : 'general',
+      requested === 'advanced' || requested === 'connection' || requested === 'proxy'
+        ? requested
+        : 'general',
     );
   });
 }
@@ -9334,6 +9653,8 @@ window.addEventListener('beforeunload', () => {
   unsubscribeAppWindowRestored();
   unsubscribeDownloadsChanged();
   unsubscribeOpenDownloadCenterRequested();
+  unsubscribeProxyStateChanged();
+  unsubscribeProxyAuditRequired();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
@@ -9366,6 +9687,7 @@ void (async () => {
   } catch {
     handleDownloadsChanged([]);
   }
+  void loadProxyState();
   try {
     const initialSettings = await window.controlPanel.getAppSettings();
     const reportedWindowsBuild = initialSettings.windowsBuildNumber;

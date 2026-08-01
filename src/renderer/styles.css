@@ -8035,6 +8035,252 @@ body.is-resizing * {
   color: var(--accent-text);
 }
 
+.proxy-settings {
+  gap: var(--s-4);
+}
+
+.proxy-boundary-notice {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  color: var(--accent-text);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+  padding: var(--s-3);
+}
+
+.proxy-settings__section {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-4);
+}
+
+.proxy-node-controls,
+.proxy-import-actions,
+.proxy-runtime-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.proxy-node-controls .select,
+.proxy-node-controls .select__trigger,
+.proxy-import-actions input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.proxy-settings button,
+.proxy-audit-dialog button,
+.proxy-audit-history button {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 12px;
+}
+
+.proxy-settings button:hover:not(:disabled),
+.proxy-audit-dialog button:hover:not(:disabled),
+.proxy-audit-history button:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--accent-line);
+}
+
+.proxy-settings button:disabled,
+.proxy-audit-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.proxy-import-preview {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.proxy-import-item {
+  align-items: center;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  display: flex;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+}
+
+.proxy-import-item > span {
+  display: grid;
+  gap: 2px;
+}
+
+.proxy-import-item strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.proxy-import-item small,
+.proxy-import-issues {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+}
+
+.proxy-import-issues:not(:empty) {
+  color: var(--warn-text);
+}
+
+.proxy-runtime-log {
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--text-lo);
+  font: var(--text-xs) / var(--lh-note) var(--font-mono);
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: var(--s-3);
+  white-space: pre-wrap;
+}
+
+.proxy-audit-history {
+  display: grid;
+  gap: var(--s-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.proxy-audit-history button {
+  text-align: left;
+  width: 100%;
+}
+
+.proxy-audit-history button[data-summary='risk'] {
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+
+.proxy-audit-dialog {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  max-height: min(88vh, 860px);
+  max-width: min(820px, calc(100vw - 32px));
+  padding: 0;
+  width: 820px;
+}
+
+.proxy-audit-dialog::backdrop {
+  backdrop-filter: blur(6px);
+  background: rgb(0 0 0 / 64%);
+}
+
+.proxy-audit-dialog[open] {
+  animation: dialog-enter var(--dur-3) var(--ease-decel);
+}
+
+.proxy-audit-dialog__shell {
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-overlay);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(88vh, 860px);
+  overflow: hidden;
+}
+
+.proxy-audit-dialog__shell > header,
+.proxy-audit-dialog__shell > footer {
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--line);
+  padding: var(--s-4) var(--s-5);
+}
+
+.proxy-audit-dialog__shell > header strong,
+.proxy-audit-dialog__shell > header p {
+  display: block;
+}
+
+.proxy-audit-dialog__shell > header p {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  margin: var(--s-1) 0 0;
+}
+
+.proxy-audit-dialog__shell > footer {
+  border-bottom: 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: var(--s-2);
+  justify-content: flex-end;
+}
+
+.proxy-audit-items {
+  display: grid;
+  gap: var(--s-3);
+  overflow-y: auto;
+  padding: var(--s-4) var(--s-5);
+}
+
+.proxy-audit-item {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+}
+
+.proxy-audit-item > header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.proxy-audit-item > header span {
+  border-radius: var(--r-pill);
+  color: var(--ok-text);
+  font-size: var(--text-xs);
+  padding: 3px 8px;
+}
+
+.proxy-audit-item[data-verdict='warning'] {
+  border-color: var(--warn-line);
+}
+
+.proxy-audit-item[data-verdict='warning'] > header span {
+  color: var(--warn-text);
+}
+
+.proxy-audit-item[data-verdict='risk'] {
+  border-color: var(--bad-line);
+}
+
+.proxy-audit-item[data-verdict='risk'] > header span {
+  color: var(--bad-text);
+}
+
+.proxy-audit-item p,
+.proxy-audit-item__evidence {
+  color: var(--text-lo);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+}
+
+.proxy-audit-item__advice {
+  color: var(--accent-text) !important;
+}
+
 .conversation-rename-dialog,
 .confirmation-dialog {
   background: var(--surface-3);

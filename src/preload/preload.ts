@@ -25,6 +25,9 @@ import type {
   ControlPanelApi,
   DirectoryChoiceResult,
   DownloadTaskView,
+  ProxyAuditRecord,
+  ProxyControlView,
+  ProxyImportPreview,
   OperationResult,
   WorkspaceProject,
   WorkspaceResult,
@@ -60,6 +63,33 @@ const api: ControlPanelApi = {
   },
   pauseDownload: (taskId) => ipcRenderer.invoke('download:pause', taskId),
   resumeDownload: (taskId) => ipcRenderer.invoke('download:resume', taskId),
+  getProxyState: () => ipcRenderer.invoke('proxy:get-state') as Promise<ProxyControlView>,
+  previewProxyImport: (text) =>
+    ipcRenderer.invoke('proxy:preview-import', text) as Promise<ProxyImportPreview>,
+  previewProxySubscription: (url) =>
+    ipcRenderer.invoke('proxy:preview-subscription', url) as Promise<ProxyImportPreview>,
+  saveProxyProfiles: (profiles) => ipcRenderer.invoke('proxy:save-profiles', profiles),
+  removeProxyProfile: (profileId) => ipcRenderer.invoke('proxy:remove-profile', profileId),
+  selectProxyProfile: (profileId) => ipcRenderer.invoke('proxy:select-profile', profileId),
+  setProxyScope: (scope) => ipcRenderer.invoke('proxy:set-scope', scope),
+  startBuiltInProxy: (manualCorePath) => ipcRenderer.invoke('proxy:start', manualCorePath),
+  stopBuiltInProxy: () => ipcRenderer.invoke('proxy:stop'),
+  runProxyLeakAudit: () => ipcRenderer.invoke('proxy:run-audit'),
+  acceptProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:accept-audit', recordId),
+  onProxyStateChanged: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, state: ProxyControlView): void => {
+      listener(state);
+    };
+    ipcRenderer.on('proxy:state-changed', callback);
+    return () => ipcRenderer.removeListener('proxy:state-changed', callback);
+  },
+  onProxyAuditRequired: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, record: ProxyAuditRecord): void => {
+      listener(record);
+    };
+    ipcRenderer.on('proxy:audit-required', callback);
+    return () => ipcRenderer.removeListener('proxy:audit-required', callback);
+  },
   createArtifact: (html) => ipcRenderer.invoke('artifact:create', html),
   destroyArtifact: (artifactId) => ipcRenderer.invoke('artifact:destroy', artifactId),
   getArtifactNetworkState: () => ipcRenderer.invoke('artifact:get-network-state'),

@@ -50,6 +50,10 @@ import type {
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
+  ProxyAuditRecord,
+  ProxyControlView,
+  ProxyProfileInput,
+  ProxyScopeSettings,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   SaveChatConfigInput,
@@ -105,6 +109,11 @@ import { AppPreferencesStore } from './app-preferences-store';
 import { ProxyStore } from './proxy/proxy-store';
 import { XraySidecar } from './proxy/xray-sidecar';
 import { buildCliProxyEnvironment, builtInProxyRules } from './proxy/proxy-environment';
+import { parseProxyImportText } from './proxy/proxy-parser';
+import { downloadProxySubscription } from './proxy/proxy-subscription';
+import { LeakAuditService } from './proxy/leak-audit';
+import { LeakAuditStore } from './proxy/leak-audit-store';
+import { auditWebRtc } from './proxy/webrtc-audit';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -127,6 +136,7 @@ let busyRegistry: BusyRegistry | null = null;
 let downloadEngine: DownloadEngine | null = null;
 let proxyStore: ProxyStore | null = null;
 let xraySidecar: XraySidecar | null = null;
+let proxyLeakAuditService: LeakAuditService | null = null;
 let releaseConversationBusy: (() => void) | undefined;
 
 interface PendingPermissionModeProbe {
@@ -721,6 +731,69 @@ const applyApplicationProxyScope = async (): Promise<void> => {
   await session.defaultSession.closeAllConnections();
 };
 
+const requireProxyServices = (): {
+  audit: LeakAuditService;
+  sidecar: XraySidecar;
+  store: ProxyStore;
+} => {
+  if (!proxyStore || !xraySidecar || !proxyLeakAuditService) {
+    throw new Error('内置代理服务尚未初始化。');
+  }
+  return { audit: proxyLeakAuditService, sidecar: xraySidecar, store: proxyStore };
+};
+
+const proxyControlView = (): ProxyControlView => {
+  const { audit, sidecar, store } = requireProxyServices();
+  return { audits: audit.list(), runtime: sidecar.getView(), store: store.getView() };
+};
+
+const selectedProxyProfile = () => {
+  const { store } = requireProxyServices();
+  const profileId = store.getView().state.selectedProfileId;
+  const profile = profileId ? store.getProfile(profileId) : undefined;
+  if (!profile) {
+    throw new Error('请先选择一个代理节点。');
+  }
+  return profile;
+};
+
+const runSelectedProxyAudit = async (): Promise<ProxyAuditRecord> => {
+  const { audit, sidecar, store } = requireProxyServices();
+  const profile = selectedProxyProfile();
+  const record = await audit.run(profile, sidecar.getView());
+  store.setState({
+    lastAuditAt: record.report.checkedAt,
+    lastAuditConclusion: record.report.summary,
+  });
+  mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+  return record;
+};
+
+const validateProxyProfileId = (value: unknown): string => {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)) {
+    throw new Error('代理节点标识无效。');
+  }
+  return value;
+};
+
+const assertOfficialProviderAllowed = async (
+  provider: NetworkProviderId,
+  action: NetworkPreflightAction,
+  cwd?: string,
+): Promise<void> => {
+  if (proxyStore && xraySidecar && proxyLeakAuditService) {
+    const scope = proxyStore.getView().scope;
+    const proxyAffectsAction =
+      (action === 'cli-launch' && scope.cli) ||
+      (['background', 'cloud-task', 'first-request', 'provider-switch'].includes(action) &&
+        scope.application);
+    if (proxyAffectsAction && xraySidecar.getView().status === 'ready') {
+      proxyLeakAuditService.assertAccessAccepted(selectedProxyProfile());
+    }
+  }
+  await requireProviderAccessGuard().assertAllowed(provider, action, cwd);
+};
+
 const validateDownloadTaskId = (taskId: unknown): string => {
   if (typeof taskId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(taskId)) {
     throw new Error('下载任务标识无效。');
@@ -1182,6 +1255,124 @@ const registerIpc = (): void => {
     validateSender(event);
     return requireDownloadEngine().cancel(validateDownloadTaskId(taskId));
   });
+  ipcMain.handle('proxy:get-state', (event) => {
+    validateSender(event);
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:preview-import', (event, text: unknown) => {
+    validateSender(event);
+    if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 2 * 1024 * 1024) {
+      throw new Error('代理导入内容必须小于 2 MiB。');
+    }
+    return parseProxyImportText(text);
+  });
+  ipcMain.handle('proxy:preview-subscription', async (event, url: unknown) => {
+    validateSender(event);
+    if (typeof url !== 'string' || url.length > 2048) {
+      throw new Error('代理订阅地址无效。');
+    }
+    return downloadProxySubscription(requireDownloadEngine(), app.getPath('userData'), url);
+  });
+  ipcMain.handle('proxy:save-profiles', (event, profiles: unknown) => {
+    validateSender(event);
+    if (!Array.isArray(profiles) || profiles.length === 0 || profiles.length > 100) {
+      throw new Error('请选择 1–100 个代理节点导入。');
+    }
+    const { store } = requireProxyServices();
+    for (const profile of profiles) {
+      if (!profile || typeof profile !== 'object') {
+        throw new Error('代理节点格式无效。');
+      }
+      store.saveProfile(profile as ProxyProfileInput);
+    }
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:remove-profile', async (event, profileId: unknown) => {
+    validateSender(event);
+    const { sidecar, store } = requireProxyServices();
+    const validatedId = validateProxyProfileId(profileId);
+    if (sidecar.getView().profileId === validatedId) {
+      await sidecar.stop();
+    }
+    store.removeProfile(validatedId);
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:select-profile', async (event, profileId: unknown) => {
+    validateSender(event);
+    const { sidecar, store } = requireProxyServices();
+    const validatedId = validateProxyProfileId(profileId);
+    if (sidecar.getView().status !== 'stopped') {
+      await sidecar.stop();
+    }
+    store.setState({ selectedProfileId: validatedId });
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:set-scope', async (event, scope: unknown) => {
+    validateSender(event);
+    const record =
+      scope && typeof scope === 'object' ? (scope as Partial<ProxyScopeSettings>) : undefined;
+    if (typeof record?.cli !== 'boolean' || typeof record.application !== 'boolean') {
+      throw new Error('代理作用域设置无效。');
+    }
+    requireProxyServices().store.setScope({
+      application: record.application,
+      cli: record.cli,
+    });
+    await applyApplicationProxyScope();
+    requireNetworkPreflightService().invalidate('built-in-proxy-scope-changed');
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:start', async (event, manualCorePath: unknown) => {
+    validateSender(event);
+    if (
+      manualCorePath !== undefined &&
+      (typeof manualCorePath !== 'string' || manualCorePath.length > 4096)
+    ) {
+      throw new Error('Xray-core 路径无效。');
+    }
+    const { sidecar, store } = requireProxyServices();
+    const profile = selectedProxyProfile();
+    store.setState({ runtimeStatus: 'starting' });
+    try {
+      await sidecar.start(profile, manualCorePath || undefined);
+      store.setState({ runtimeStatus: 'ready' });
+      requireNetworkPreflightService().invalidate('built-in-proxy-started');
+      await runSelectedProxyAudit();
+    } catch (error) {
+      store.setState({ runtimeStatus: 'error' });
+      throw error;
+    } finally {
+      mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    }
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:stop', async (event) => {
+    validateSender(event);
+    const { sidecar, store } = requireProxyServices();
+    await sidecar.stop();
+    store.setState({ runtimeStatus: 'stopped' });
+    await applyApplicationProxyScope();
+    requireNetworkPreflightService().invalidate('built-in-proxy-stopped');
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:run-audit', async (event) => {
+    validateSender(event);
+    return runSelectedProxyAudit();
+  });
+  ipcMain.handle('proxy:accept-audit', (event, recordId: unknown) => {
+    validateSender(event);
+    if (typeof recordId !== 'string' || !/^[a-f0-9-]{36}$/i.test(recordId)) {
+      throw new Error('代理体检记录标识无效。');
+    }
+    const record = requireProxyServices().audit.accept(recordId);
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return record;
+  });
   ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
     validateSender(event);
     return requireNetworkPreflightService().get(validateNetworkProvider(provider));
@@ -1498,7 +1689,7 @@ const registerIpc = (): void => {
     const request = input as ChatStartInput;
     const officialProvider = officialProviderForChat();
     if (officialProvider) {
-      await requireProviderAccessGuard().assertAllowed(officialProvider, 'first-request');
+      await assertOfficialProviderAllowed(officialProvider, 'first-request');
     }
     return chatService.start(request, (prepared) => {
       chatAttachmentStore.commitDraft(
@@ -1551,7 +1742,7 @@ const registerIpc = (): void => {
           selected === 'codex' ||
           (selected === 'claude' && requireClaudeRuntime().usesOfficialProvider(status.cwd))
         ) {
-          await requireProviderAccessGuard().assertAllowed(
+          await assertOfficialProviderAllowed(
             selected === 'codex' ? 'openai-codex' : 'anthropic-claude',
             'provider-switch',
             status.cwd,
@@ -1780,7 +1971,7 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
-        await requireProviderAccessGuard().assertAllowed('openai-codex', 'login', status.cwd);
+        await assertOfficialProviderAllowed('openai-codex', 'login', status.cwd);
         const prepared = await requireCodexRuntime().startLogin(
           validatedSessionId,
           status.cwd,
@@ -1841,7 +2032,7 @@ const registerIpc = (): void => {
         if (agentRuntimeStore.get(status.cwd) !== 'codex') {
           throw new Error('当前项目尚未选择 Codex 开发引擎。');
         }
-        await requireProviderAccessGuard().assertAllowed('openai-codex', 'cli-launch', status.cwd);
+        await assertOfficialProviderAllowed('openai-codex', 'cli-launch', status.cwd);
         const prepared = await runtime.prepareLaunch(
           validatedSessionId,
           status.cwd,
@@ -2057,11 +2248,7 @@ const registerIpc = (): void => {
       try {
         const validatedInput = validateClaudeConfigInput(input);
         if (validatedInput.provider === 'anthropic' && validatedInput.protocol !== 'openai') {
-          await requireProviderAccessGuard().assertAllowed(
-            'anthropic-claude',
-            'provider-switch',
-            status.cwd,
-          );
+          await assertOfficialProviderAllowed('anthropic-claude', 'provider-switch', status.cwd);
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
@@ -2102,11 +2289,7 @@ const registerIpc = (): void => {
       try {
         const validatedEntryId = validateHistoryEntryId(entryId);
         if (runtime.connectionHistoryUsesOfficialProvider(status.cwd, validatedEntryId)) {
-          await requireProviderAccessGuard().assertAllowed(
-            'anthropic-claude',
-            'provider-switch',
-            status.cwd,
-          );
+          await assertOfficialProviderAllowed('anthropic-claude', 'provider-switch', status.cwd);
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
@@ -2225,11 +2408,7 @@ const registerIpc = (): void => {
             runtime.connectionHistoryUsesOfficialProvider(status.cwd, validatedInput.entryId),
           );
         if (targetUsesOfficialProvider) {
-          await requireProviderAccessGuard().assertAllowed(
-            'anthropic-claude',
-            'cli-launch',
-            status.cwd,
-          );
+          await assertOfficialProviderAllowed('anthropic-claude', 'cli-launch', status.cwd);
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
@@ -2369,11 +2548,7 @@ const registerIpc = (): void => {
       try {
         const validatedInput = validateClaudeConfigInput(input);
         if (validatedInput.provider === 'anthropic' && validatedInput.protocol !== 'openai') {
-          await requireProviderAccessGuard().assertAllowed(
-            'anthropic-claude',
-            'first-request',
-            status.cwd,
-          );
+          await assertOfficialProviderAllowed('anthropic-claude', 'first-request', status.cwd);
         }
         return await requireClaudeRuntime().testConnection(status.cwd, validatedInput);
       } catch (error) {
@@ -2431,11 +2606,7 @@ const registerIpc = (): void => {
           throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
         }
         if (runtime.usesOfficialProvider(status.cwd)) {
-          await requireProviderAccessGuard().assertAllowed(
-            'anthropic-claude',
-            'cli-launch',
-            status.cwd,
-          );
+          await assertOfficialProviderAllowed('anthropic-claude', 'cli-launch', status.cwd);
         }
         const prepared = await runtime.prepareLaunch(
           validatedSessionId,
@@ -2633,11 +2804,7 @@ const registerIpc = (): void => {
           throw new Error('会话标识无效。');
         }
         if (runtime.usesOfficialProvider(status.cwd)) {
-          await requireProviderAccessGuard().assertAllowed(
-            'anthropic-claude',
-            'cli-launch',
-            status.cwd,
-          );
+          await assertOfficialProviderAllowed('anthropic-claude', 'cli-launch', status.cwd);
         }
         const prepared = await runtime.prepareLaunchWithSession(
           validatedSessionId,
@@ -2834,7 +3001,32 @@ if (!hasSingleInstanceLock) {
     proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
     xraySidecar = new XraySidecar(app.getPath('userData'), downloadEngine, busyRegistry, (view) => {
       mainWindow?.webContents.send('proxy:runtime-changed', view);
+      if (proxyLeakAuditService) {
+        mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+      }
       void applyApplicationProxyScope();
+    });
+    const directAuditSession = session.fromPartition('claudedock-proxy-audit-direct');
+    const proxiedAuditSession = session.fromPartition('claudedock-proxy-audit-tunnel');
+    await directAuditSession.setProxy({ mode: 'direct' });
+    proxyLeakAuditService = new LeakAuditService({
+      auditStore: new LeakAuditStore(app.getPath('userData')),
+      directFetch: (url, init) => directAuditSession.fetch(url, init),
+      onReport: (record) => {
+        if (record.report.summary === 'risk' && !record.acceptedAt) {
+          mainWindow?.webContents.send('proxy:audit-required', record);
+        }
+      },
+      proxiedFetch: (proxyUrl) => async (url, init) => {
+        await proxiedAuditSession.setProxy({
+          mode: 'fixed_servers',
+          proxyBypassRules: '127.0.0.1,localhost,[::1]',
+          proxyRules: proxyUrl,
+        });
+        await proxiedAuditSession.closeAllConnections();
+        return proxiedAuditSession.fetch(url, init);
+      },
+      webRtcAudit: auditWebRtc,
     });
     workspace.setEnvironmentProvider(() =>
       proxyStore && xraySidecar

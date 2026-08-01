@@ -1667,6 +1667,14 @@
             >
               接入
             </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="proxy"
+              type="button"
+              aria-selected="false"
+            >
+              代理
+            </button>
           </nav>
           <div class="settings-panels">
             <section class="settings-panel settings-panel--active" data-settings-panel="general">
@@ -1756,12 +1764,133 @@
               </p>
               <div id="connection-advanced-content"></div>
             </section>
+            <section class="settings-panel proxy-settings" data-settings-panel="proxy">
+              <p class="proxy-boundary-notice">
+                仅对 ClaudeDock 启动的 CLI 生效；不修改系统代理，不影响 Claude / Codex 桌面版。
+              </p>
+              <section class="proxy-settings__section" aria-labelledby="proxy-node-title">
+                <div class="settings-section-heading">
+                  <strong id="proxy-node-title">节点与订阅</strong>
+                  <span>先预览并勾选，再保存到本机；凭据由 Windows DPAPI 加密。</span>
+                </div>
+                <div class="proxy-node-controls">
+                  <select id="proxy-profile-select" aria-label="当前代理节点"></select>
+                  <button id="proxy-remove-profile" type="button">删除节点</button>
+                </div>
+                <label class="field" for="proxy-import-text">
+                  <span>分享链接或 Clash proxies 段</span>
+                  <textarea
+                    id="proxy-import-text"
+                    rows="4"
+                    maxlength="2097152"
+                    spellcheck="false"
+                    placeholder="粘贴 vmess://、vless://、trojan://、ss://、socks://、http:// 或 proxies:"
+                  ></textarea>
+                </label>
+                <div class="proxy-import-actions">
+                  <button id="proxy-preview-import" type="button">预览导入</button>
+                  <input
+                    id="proxy-subscription-url"
+                    type="url"
+                    maxlength="2048"
+                    placeholder="https://example.com/subscription"
+                    aria-label="订阅地址"
+                  />
+                  <button id="proxy-preview-subscription" type="button">下载并预览订阅</button>
+                </div>
+                <p id="proxy-import-issues" class="proxy-import-issues" role="status"></p>
+                <div id="proxy-import-preview" class="proxy-import-preview"></div>
+                <button class="dialog-primary" id="proxy-save-selected" type="button" disabled>
+                  保存勾选节点
+                </button>
+              </section>
+              <section class="proxy-settings__section" aria-labelledby="proxy-runtime-title">
+                <div class="settings-section-heading">
+                  <strong id="proxy-runtime-title">当前状态</strong>
+                  <span id="proxy-runtime-status">内置代理已停止。</span>
+                </div>
+                <label class="field" for="proxy-manual-core-path">
+                  <span>手动 Xray-core（可选）</span>
+                  <input
+                    id="proxy-manual-core-path"
+                    type="text"
+                    maxlength="4096"
+                    spellcheck="false"
+                    placeholder="留空则按需下载已固定并校验的官方版本"
+                  />
+                </label>
+                <div class="proxy-runtime-actions">
+                  <button class="dialog-primary" id="proxy-start" type="button">
+                    启动内置代理
+                  </button>
+                  <button id="proxy-stop" type="button">停止</button>
+                </div>
+                <pre
+                  id="proxy-runtime-log"
+                  class="proxy-runtime-log"
+                  aria-label="Xray 诊断日志"
+                ></pre>
+              </section>
+              <section class="proxy-settings__section" aria-labelledby="proxy-scope-title">
+                <div class="settings-section-heading">
+                  <strong id="proxy-scope-title">作用域</strong>
+                  <span>系统代理始终不在可选范围内。</span>
+                </div>
+                <label class="settings-row" for="proxy-scope-cli">
+                  <span
+                    ><strong>CLI 进程</strong><small>Claude Code、Codex 与项目终端。</small></span
+                  >
+                  <input id="proxy-scope-cli" type="checkbox" checked />
+                </label>
+                <label class="settings-row" for="proxy-scope-application">
+                  <span
+                    ><strong>ClaudeDock 自身网络</strong
+                    ><small>更新、目录与订阅拉取；默认关闭。</small></span
+                  >
+                  <input id="proxy-scope-application" type="checkbox" />
+                </label>
+              </section>
+              <section class="proxy-settings__section" aria-labelledby="proxy-audit-title">
+                <div class="settings-section-heading">
+                  <strong id="proxy-audit-title">泄露体检</strong>
+                  <span id="proxy-audit-summary">尚未体检。</span>
+                </div>
+                <button id="proxy-run-audit" type="button">立即体检</button>
+                <ol id="proxy-audit-history" class="proxy-audit-history"></ol>
+              </section>
+            </section>
           </div>
         </div>
         <footer>
           <button id="cancel-connection-advanced" type="button">取消</button>
           <button class="dialog-primary" id="complete-connection-advanced" type="button">
             完成
+          </button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog
+      class="proxy-audit-dialog"
+      id="proxy-audit-dialog"
+      aria-labelledby="proxy-audit-dialog-title"
+      aria-describedby="proxy-audit-dialog-description"
+    >
+      <div class="proxy-audit-dialog__shell">
+        <header>
+          <div>
+            <span class="step-kicker">接入前检查</span>
+            <strong id="proxy-audit-dialog-title">代理泄露体检报告</strong>
+            <p id="proxy-audit-dialog-description">
+              风险只会暂停接入动作，不会关闭已经运行的代理隧道。
+            </p>
+          </div>
+        </header>
+        <div id="proxy-audit-items" class="proxy-audit-items"></div>
+        <footer>
+          <button id="proxy-audit-return" type="button" autofocus>返回调整</button>
+          <button class="dialog-primary" id="proxy-audit-accept" type="button">
+            我已知晓，仍要继续接入
           </button>
         </footer>
       </div>

@@ -132,6 +132,11 @@ export interface ProxyAuditRecord {
   id: string;
   report: ProxyLeakAuditReport;
 }
+export interface ProxyControlView {
+  audits: ProxyAuditRecord[];
+  runtime: ProxyRuntimeView;
+  store: ProxyStoreView;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
@@ -1002,6 +1007,19 @@ export interface ControlPanelApi {
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
   pauseDownload: (taskId: string) => Promise<DownloadTaskView>;
   resumeDownload: (taskId: string) => Promise<DownloadTaskView>;
+  getProxyState: () => Promise<ProxyControlView>;
+  previewProxyImport: (text: string) => Promise<ProxyImportPreview>;
+  previewProxySubscription: (url: string) => Promise<ProxyImportPreview>;
+  saveProxyProfiles: (profiles: ProxyProfileInput[]) => Promise<ProxyControlView>;
+  removeProxyProfile: (profileId: string) => Promise<ProxyControlView>;
+  selectProxyProfile: (profileId: string) => Promise<ProxyControlView>;
+  setProxyScope: (scope: ProxyScopeSettings) => Promise<ProxyControlView>;
+  startBuiltInProxy: (manualCorePath?: string) => Promise<ProxyControlView>;
+  stopBuiltInProxy: () => Promise<ProxyControlView>;
+  runProxyLeakAudit: () => Promise<ProxyAuditRecord>;
+  acceptProxyLeakAudit: (recordId: string) => Promise<ProxyAuditRecord>;
+  onProxyStateChanged: (listener: (state: ProxyControlView) => void) => Unsubscribe;
+  onProxyAuditRequired: (listener: (record: ProxyAuditRecord) => void) => Unsubscribe;
   createArtifact: (html: string) => Promise<ArtifactCreateResult>;
   destroyArtifact: (artifactId: string) => Promise<boolean>;
   getArtifactNetworkState: () => Promise<ArtifactNetworkState>;
