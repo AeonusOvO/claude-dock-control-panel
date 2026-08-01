@@ -44,6 +44,7 @@ export type ProxyProtocol = 'http' | 'shadowsocks' | 'socks' | 'trojan' | 'vless
 export type ProxyTransport = 'grpc' | 'http' | 'tcp' | 'ws';
 export type ProxyRuntimeStatus = 'error' | 'starting' | 'stopped' | 'stopping' | 'ready';
 export interface ProxyCredentialInput {
+  alterId?: number;
   method?: string;
   password?: string;
   username?: string;
@@ -60,6 +61,7 @@ export interface ProxyProfileInput {
   subscriptionId?: string;
   tls?: boolean;
   transport?: ProxyTransport;
+  transportPath?: string;
 }
 export interface ProxyProfileView {
   address: string;
@@ -72,7 +74,16 @@ export interface ProxyProfileView {
   subscriptionId?: string;
   tls: boolean;
   transport: ProxyTransport;
+  transportPath?: string;
   updatedAt: number;
+}
+export interface ProxyImportIssue {
+  index: number;
+  message: string;
+}
+export interface ProxyImportPreview {
+  issues: ProxyImportIssue[];
+  profiles: ProxyProfileInput[];
 }
 export interface ProxyScopeSettings {
   /** Applies only to processes spawned by ClaudeDock. */

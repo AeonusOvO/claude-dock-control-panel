@@ -77,6 +77,8 @@ const normalizeCredentials = (
   input?: ProxyCredentialInput,
 ): ProxyCredentialInput | undefined => {
   const credentials: ProxyCredentialInput = {
+    alterId:
+      Number.isInteger(input?.alterId) && (input?.alterId ?? -1) >= 0 ? input?.alterId : undefined,
     method: optionalText(input?.method, '加密方式', 64),
     password: optionalText(input?.password, '密码', 4096),
     username: optionalText(input?.username, '用户名', 256),
@@ -131,6 +133,7 @@ export const normalizeProxyProfile = (
       subscriptionId: optionalText(input.subscriptionId, '订阅标识', 128),
       tls: input.tls === true,
       transport,
+      transportPath: optionalText(input.transportPath, '传输路径', 1024),
       updatedAt: now,
     },
   };
