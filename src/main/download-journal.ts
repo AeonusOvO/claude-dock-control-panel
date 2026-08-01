@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import path from 'node:path';
 
 export interface DownloadJournalEntry {
+  allowedHosts: string[];
+  allowedPathPrefixes: string[];
   eTag?: string;
   expectedBytes?: number;
   expectedSha256?: string;
@@ -10,6 +12,7 @@ export interface DownloadJournalEntry {
   label: string;
   lastModified?: string;
   length: number;
+  maxBytes: number;
   receivedBytes: number;
   savePath: string;
   startTime: number;
@@ -25,6 +28,14 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
   }
   const entry = value as Partial<DownloadJournalEntry>;
   if (
+    !Array.isArray(entry.allowedHosts) ||
+    entry.allowedHosts.length === 0 ||
+    !entry.allowedHosts.every((host) => typeof host === 'string' && host.length > 0) ||
+    !Array.isArray(entry.allowedPathPrefixes) ||
+    entry.allowedPathPrefixes.length === 0 ||
+    !entry.allowedPathPrefixes.every(
+      (prefix) => typeof prefix === 'string' && prefix.startsWith('/'),
+    ) ||
     typeof entry.finalPath !== 'string' ||
     !path.isAbsolute(entry.finalPath) ||
     typeof entry.id !== 'string' ||
@@ -32,6 +43,8 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
     typeof entry.label !== 'string' ||
     !entry.label ||
     !isNonNegativeNumber(entry.length) ||
+    !isNonNegativeNumber(entry.maxBytes) ||
+    entry.maxBytes <= 0 ||
     !isNonNegativeNumber(entry.receivedBytes) ||
     typeof entry.savePath !== 'string' ||
     !path.isAbsolute(entry.savePath) ||
@@ -51,6 +64,8 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
       ? entry.expectedSha256.toLowerCase()
       : undefined;
   return {
+    allowedHosts: [...entry.allowedHosts],
+    allowedPathPrefixes: [...entry.allowedPathPrefixes],
     eTag: typeof entry.eTag === 'string' && entry.eTag ? entry.eTag : undefined,
     expectedBytes,
     expectedSha256,
@@ -62,6 +77,7 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
         ? entry.lastModified
         : undefined,
     length: entry.length,
+    maxBytes: entry.maxBytes,
     receivedBytes: entry.receivedBytes,
     savePath: entry.savePath,
     startTime: entry.startTime,
@@ -81,6 +97,8 @@ export class DownloadJournal {
   public list(): DownloadJournalEntry[] {
     return [...this.entries.values()].map((entry) => ({
       ...entry,
+      allowedHosts: [...entry.allowedHosts],
+      allowedPathPrefixes: [...entry.allowedPathPrefixes],
       urlChain: [...entry.urlChain],
     }));
   }
@@ -98,13 +116,23 @@ export class DownloadJournal {
   public replace(entries: DownloadJournalEntry[]): void {
     this.entries.clear();
     for (const entry of entries) {
-      this.entries.set(entry.id, { ...entry, urlChain: [...entry.urlChain] });
+      this.entries.set(entry.id, {
+        ...entry,
+        allowedHosts: [...entry.allowedHosts],
+        allowedPathPrefixes: [...entry.allowedPathPrefixes],
+        urlChain: [...entry.urlChain],
+      });
     }
     this.write();
   }
 
   public upsert(entry: DownloadJournalEntry): void {
-    this.entries.set(entry.id, { ...entry, urlChain: [...entry.urlChain] });
+    this.entries.set(entry.id, {
+      ...entry,
+      allowedHosts: [...entry.allowedHosts],
+      allowedPathPrefixes: [...entry.allowedPathPrefixes],
+      urlChain: [...entry.urlChain],
+    });
     this.write();
   }
 

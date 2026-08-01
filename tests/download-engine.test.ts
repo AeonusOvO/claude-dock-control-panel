@@ -63,9 +63,12 @@ describe('download engine', () => {
     const finalPath = path.join(userDataPath, 'outputs', 'test-tool.exe');
     const completion = engine
       .start({
+        allowedHosts: ['downloads.example.com'],
+        allowedPathPrefixes: ['/tool.exe'],
         finalPath,
         id: 'tool',
         label: '测试工具',
+        maxBytes: 10_000,
         url: 'https://downloads.example.com/tool.exe',
       })
       .catch(() => undefined);

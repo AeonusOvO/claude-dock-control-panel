@@ -14,6 +14,8 @@ describe('download journal recovery', () => {
     mkdirSync(path.dirname(savePath), { recursive: true });
     writeFileSync(savePath, 'data', { encoding: 'utf8', mode: 0o600 });
     new DownloadJournal(userDataPath).upsert({
+      allowedHosts: ['downloads.example.com'],
+      allowedPathPrefixes: ['/tool.exe'],
       eTag: '"release-1"',
       expectedBytes: 4,
       expectedSha256: '0'.repeat(64),
@@ -22,6 +24,7 @@ describe('download journal recovery', () => {
       label: '恢复工具',
       lastModified: 'Mon, 01 Jan 2024 00:00:00 GMT',
       length: 10,
+      maxBytes: 100,
       receivedBytes: 4,
       savePath,
       startTime: 1_700_000_000,
@@ -57,10 +60,13 @@ describe('download journal recovery', () => {
     mkdirSync(path.dirname(savePath), { recursive: true });
     writeFileSync(savePath, 'short', { encoding: 'utf8', mode: 0o600 });
     new DownloadJournal(userDataPath).upsert({
+      allowedHosts: ['downloads.example.com'],
+      allowedPathPrefixes: ['/tool.exe'],
       finalPath,
       id: 'invalid-tool',
       label: '损坏工具',
       length: 20,
+      maxBytes: 100,
       receivedBytes: 10,
       savePath,
       startTime: 1_700_000_000,

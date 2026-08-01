@@ -1,16 +1,21 @@
 import type { DownloadItem, Event } from 'electron';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import type { DownloadTaskState, DownloadTaskView } from '../shared/contracts';
 import type { BusyRegistry } from './busy-registry';
 import { DownloadJournal, type DownloadJournalEntry } from './download-journal';
 
 export interface DownloadRequest {
+  allowedHosts: string[];
+  allowedPathPrefixes: string[];
   expectedBytes?: number;
   expectedSha256?: string;
   finalPath: string;
   id: string;
   label: string;
+  maxBytes: number;
   url: string;
 }
 
@@ -193,11 +198,14 @@ export class DownloadEngine {
       try {
         const { completion, task } = this.createTask(
           {
+            allowedHosts: entry.allowedHosts,
+            allowedPathPrefixes: entry.allowedPathPrefixes,
             expectedBytes: entry.expectedBytes,
             expectedSha256: entry.expectedSha256,
             finalPath: entry.finalPath,
             id: entry.id,
             label: entry.label,
+            maxBytes: entry.maxBytes,
             url: entry.urlChain[0]!,
           },
           entry,
@@ -227,6 +235,12 @@ export class DownloadEngine {
     const url = new URL(request.url);
     if (url.protocol !== 'https:') {
       throw new Error('下载地址必须使用 HTTPS。');
+    }
+    if (!this.isAllowedUrl(request, url)) {
+      throw new Error('下载地址不在允许的来源与路径范围内。');
+    }
+    if (!Number.isFinite(request.maxBytes) || request.maxBytes <= 0) {
+      throw new Error('下载大小上限无效。');
     }
     if (!this.isPathWithinUserData(request.finalPath)) {
       throw new Error('下载目标必须位于 ClaudeDock 用户数据目录。');
@@ -318,15 +332,26 @@ export class DownloadEngine {
       event.preventDefault();
       return;
     }
+    if (!item.getURLChain().every((candidate) => this.isAllowedUrl(task.request, candidate))) {
+      item.cancel();
+      this.fail(task, new Error('下载重定向链包含未获允许的来源，任务已取消。'));
+      return;
+    }
     task.item = item;
     item.setSavePath(`${task.request.finalPath}.partial`);
+    if (item.getTotalBytes() > task.request.maxBytes) {
+      item.cancel();
+      this.deletePartial(task);
+      this.fail(task, new Error('下载内容超过安全上限，文件已删除。'));
+      return;
+    }
     this.updateFromItem(task, task.restored ? 'interrupted' : 'progressing');
     item.on('updated', (_updatedEvent, state) => {
       this.updateFromItem(task, state);
     });
     item.on('done', (_doneEvent, state) => {
       if (state === 'completed') {
-        this.complete(task);
+        void this.complete(task);
       } else if (state === 'cancelled') {
         this.settleCancelled(task);
       } else if (item.canResume()) {
@@ -337,11 +362,22 @@ export class DownloadEngine {
     });
   }
 
-  private complete(task: ActiveDownload): void {
+  private async complete(task: ActiveDownload): Promise<void> {
     if (task.settled) {
       return;
     }
     try {
+      task.view = {
+        ...task.view,
+        canPause: false,
+        canResume: false,
+        state: 'verifying',
+      };
+      this.notify();
+      await this.verifyPartial(task);
+      if (existsSync(task.request.finalPath)) {
+        unlinkSync(task.request.finalPath);
+      }
       renameSync(`${task.request.finalPath}.partial`, task.request.finalPath);
       task.settled = true;
       task.view = {
@@ -358,7 +394,9 @@ export class DownloadEngine {
       task.resolve({ filePath: task.request.finalPath, id: task.request.id });
       this.notify();
     } catch (error) {
-      this.fail(task, error instanceof Error ? error : new Error('无法保存下载文件。'));
+      this.deletePartial(task);
+      const detail = error instanceof Error ? error.message : '无法校验下载文件。';
+      this.fail(task, new Error(`校验未通过，文件已删除：${detail}`));
     }
   }
 
@@ -397,6 +435,21 @@ export class DownloadEngine {
     return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
   }
 
+  private isAllowedUrl(request: DownloadRequest, candidate: string | URL): boolean {
+    try {
+      const url = candidate instanceof URL ? candidate : new URL(candidate);
+      return (
+        url.protocol === 'https:' &&
+        !url.username &&
+        !url.password &&
+        request.allowedHosts.includes(url.hostname) &&
+        request.allowedPathPrefixes.some((prefix) => url.pathname.startsWith(prefix))
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private isRecoverableEntry(entry: DownloadJournalEntry): boolean {
     if (
       !this.isPathWithinUserData(entry.finalPath) ||
@@ -426,6 +479,8 @@ export class DownloadEngine {
     }
     const item = task.item;
     const entry: DownloadJournalEntry = {
+      allowedHosts: [...task.request.allowedHosts],
+      allowedPathPrefixes: [...task.request.allowedPathPrefixes],
       eTag: item?.getETag() || task.journalEntry?.eTag,
       expectedBytes: task.request.expectedBytes,
       expectedSha256: task.request.expectedSha256,
@@ -434,6 +489,7 @@ export class DownloadEngine {
       label: task.request.label,
       lastModified: item?.getLastModifiedTime() || task.journalEntry?.lastModified,
       length: Math.max(0, item?.getTotalBytes() ?? task.view.totalBytes),
+      maxBytes: task.request.maxBytes,
       receivedBytes: Math.max(0, item?.getReceivedBytes() ?? task.view.receivedBytes),
       savePath: `${task.request.finalPath}.partial`,
       startTime: item?.getStartTime() || task.startedAt / 1000,
@@ -465,11 +521,7 @@ export class DownloadEngine {
       return;
     }
     task.settled = true;
-    try {
-      unlinkSync(`${task.request.finalPath}.partial`);
-    } catch {
-      // A queued cancellation or Chromium cleanup may leave no partial file.
-    }
+    this.deletePartial(task);
     task.view = {
       ...task.view,
       canPause: false,
@@ -493,6 +545,16 @@ export class DownloadEngine {
     }
     const now = Date.now();
     const receivedBytes = Math.max(0, task.item.getReceivedBytes());
+    if (receivedBytes > task.request.maxBytes || task.item.getTotalBytes() > task.request.maxBytes) {
+      task.item.cancel();
+      this.deletePartial(task);
+      this.fail(task, new Error('下载内容超过安全上限，文件已删除。'));
+      return;
+    }
+    if (task.restored && receivedBytes < task.lastSampleBytes) {
+      task.restored = false;
+      task.view.errorMessage = '服务端文件已更新，已重新开始下载。';
+    }
     if (now - task.lastSampleAt >= SPEED_SAMPLE_MINIMUM_MS) {
       task.view.bytesPerSecond = exponentialMovingAverage(
         task.view.bytesPerSecond,
@@ -529,5 +591,33 @@ export class DownloadEngine {
     }
     this.persistTask(task);
     this.notify();
+  }
+
+  private deletePartial(task: ActiveDownload): void {
+    try {
+      unlinkSync(`${task.request.finalPath}.partial`);
+    } catch {
+      // Queued cancellation and Chromium cleanup can both leave no partial file.
+    }
+  }
+
+  private async verifyPartial(task: ActiveDownload): Promise<void> {
+    const partialPath = `${task.request.finalPath}.partial`;
+    const actualBytes = statSync(partialPath).size;
+    if (actualBytes > task.request.maxBytes) {
+      throw new Error('下载内容超过安全上限。');
+    }
+    if (task.request.expectedBytes !== undefined && actualBytes !== task.request.expectedBytes) {
+      throw new Error('文件字节数与发布信息不一致。');
+    }
+    if (task.request.expectedSha256) {
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(partialPath)) {
+        hash.update(chunk);
+      }
+      if (hash.digest('hex') !== task.request.expectedSha256.toLowerCase()) {
+        throw new Error('SHA-256 与发布信息不一致。');
+      }
+    }
   }
 }
