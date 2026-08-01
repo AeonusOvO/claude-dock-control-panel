@@ -274,6 +274,20 @@ export const buildClaudeSettingsEnvironment = (
 
 const quotePowerShellArgument = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
+/**
+ * Windows PowerShell 5 removes unescaped JSON quotes while rebuilding a native command line.
+ * Escape every quote and double the backslash run before it so the native argv parser receives
+ * the exact JSON text, including strings that themselves contain quotes or end in a backslash.
+ */
+const quotePowerShellNativeJsonArgument = (value: Readonly<Record<string, unknown>>): string => {
+  const serialized = JSON.stringify(value);
+  const nativeSafe = serialized.replace(
+    /(\\*)"/g,
+    (_match, backslashes: string) => `${backslashes}${backslashes}\\"`,
+  );
+  return quotePowerShellArgument(nativeSafe);
+};
+
 export interface ClaudeLaunchPermissions {
   /**
    * Adds `bypassPermissions` to the Shift+Tab cycle without starting in it. Claude Code refuses to
@@ -318,7 +332,7 @@ export const buildClaudeLaunchCommand = (
     argumentsList.push('--allow-dangerously-skip-permissions');
   }
   if (extensions?.agents && Object.keys(extensions.agents).length > 0) {
-    argumentsList.push('--agents', quotePowerShellArgument(JSON.stringify(extensions.agents)));
+    argumentsList.push('--agents', quotePowerShellNativeJsonArgument(extensions.agents));
   }
   if (extensions?.appendSystemPrompt) {
     argumentsList.push(

@@ -4,7 +4,16 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2.5.3 · 2026-08-01）
+## 当前版本重点（2.5.4 · 2026-08-01）
+
+- 修复 Windows PowerShell 5 启动 Claude Code 时剥掉 `--agents` JSON 双引号、导致
+  `Agent type 'claudedock-web-research' not found` 的问题。启动命令现在按 Windows 原生参数
+  规则转义 JSON 的结构引号、字符串内引号与相邻反斜杠，Claude Code 能真实注册会话级搜索
+  子代理。
+- 新增 PowerShell → 原生进程参数链路回归测试：启动一个 argv 探针并重新解析收到的
+  `--agents` JSON，不再只检查生成命令中是否出现代理名字。
+
+## 2.5.3 版本重点（2026-08-01）
 
 - Claude Code 会话新增仅随本次进程存在的 `claudedock-web-research` 子代理：主会话遇到在线
   检索、WebSearch 或 WebFetch 时，把完整搜索子任务委派给该子代理；子代理继承当前模型但固定

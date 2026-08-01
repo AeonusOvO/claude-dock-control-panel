@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { SaveClaudeConfigInput } from '../src/shared/contracts';
 import {
@@ -209,11 +213,59 @@ describe('Claude Code configuration', () => {
 
     expect(command).toContain('--agents');
     expect(command).toContain('claudedock-web-research');
-    expect(command).toContain('"effort":"high"');
-    expect(command).toContain('"WebSearch","WebFetch"');
+    expect(command).toContain('\\"effort\\":\\"high\\"');
+    expect(command).toContain('\\"WebSearch\\",\\"WebFetch\\"');
     expect(command).toContain('--append-system-prompt');
     expect(command).toContain("Delegate today''s web research.");
     expect(command).not.toContain('--agent ');
+  });
+
+  const itWindows = process.platform === 'win32' ? it : it.skip;
+
+  itWindows('preserves the --agents JSON through Windows PowerShell native argv handling', () => {
+    const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'claudedock-argv-'));
+    const probePath = path.join(temporaryDirectory, 'argv-probe.cjs');
+    const agents = {
+      'claudedock-web-research': {
+        effort: 'high',
+        prompt: 'Inspect C:\\research\\ and preserve "quoted evidence".',
+        tools: ['WebSearch', 'WebFetch'],
+      },
+    };
+
+    try {
+      writeFileSync(
+        probePath,
+        'process.stdout.write(JSON.stringify(process.argv.slice(2)));',
+        'utf8',
+      );
+      const launchCommand = buildClaudeLaunchCommand(
+        'C:\\Users\\Tester\\settings.json',
+        'claude-model',
+        'continue',
+        '',
+        undefined,
+        { allowBypass: false },
+        { agents },
+      );
+      const quotePowerShell = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+      const probeCommand = launchCommand.replace(
+        '& claude ',
+        `& ${quotePowerShell(process.execPath)} ${quotePowerShell(probePath)} `,
+      );
+      const output = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', probeCommand],
+        { encoding: 'utf8' },
+      );
+      const argv = JSON.parse(output) as string[];
+      const agentsIndex = argv.indexOf('--agents');
+
+      expect(agentsIndex).toBeGreaterThan(-1);
+      expect(JSON.parse(argv[agentsIndex + 1] ?? '')).toEqual(agents);
+    } finally {
+      rmSync(temporaryDirectory, { force: true, recursive: true });
+    }
   });
 
   it('arms the bypass cycle without starting in it', () => {

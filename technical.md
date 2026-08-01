@@ -906,6 +906,13 @@ CLI-defined `claudedock-web-research` 子代理，经官方 `--agents` 传入，
 返回带来源的检索结论，主线程再以用户原档位综合。这里不使用 `--agent`，因此不会替换 Claude
 Code 默认系统提示；也不创建项目/用户级 agents 文件，不改变用户配置或 API 路由。
 
+Windows PowerShell 5 在把参数对象重建为原生命令行时会移除未转义的 JSON 双引号；普通的
+PowerShell 单引号只能保护 shell 解析，不能保证 `claude.exe` 最终收到的 argv。启动器因此对
+`--agents` 使用专用编码：每个双引号前增加反斜杠，并按 Windows 原生 argv 规则把该引号前已有
+的反斜杠成倍保留，再执行 PowerShell 单引号转义。这样 npm 安装产生的 `claude.ps1` 转发器和
+直接安装的 `claude.exe` 都能收到可解析的完整 JSON；普通路径、模型和系统提示仍沿用原转义，
+不会多出反斜杠。
+
 临时 settings 的 `PreToolUse` 对 `WebSearch|WebFetch` 调用
 `assets/runtime/claude-web-search-guard.ps1`。脚本解析 hook 的 `agent_type`：专用子代理内放行，
 主线程直调返回 exit 2，并把“改用 `claudedock-web-research`”作为工具拒绝原因交给 Claude；hook
@@ -1207,7 +1214,9 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
   拆开、同一快照多次出现时取最后一次，以及未绘制徽标时返回 `undefined`；同时覆盖只有
   显式凭据 + `prefer-claudedock` 才停用继承的 `apiKeyHelper`；同时锁定会话级 `--agents`、
-  `--append-system-prompt` 与 WebSearch guard 命令的 PowerShell 引号。
+  `--append-system-prompt` 与 WebSearch guard 命令的 PowerShell 引号，并在 Windows 上把完整
+  启动命令交给真实 `powershell.exe` 和 argv 探针，确认包含反斜杠与嵌套引号的 agents JSON
+  到达原生进程后仍可解析且内容不变。
 - `tests/claude-runtime-diagnostics.test.ts` 额外按 PTY 分块喂入徽标（跨 chunk 边界、
   4,000 字符滚动缓冲已经把旧徽标挤出去的情况），并用真实形状的光标差量确认残片不会被误当
   完整徽标；闭环源码契约还覆盖官方真实连接测试先经过访问守卫、隐藏窗口恢复事件只从
