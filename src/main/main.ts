@@ -13,6 +13,7 @@ import {
   Tray,
 } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
@@ -49,6 +50,13 @@ import type {
   NetworkPreflightRunInput,
   NetworkPreflightSettings,
   NetworkProviderId,
+  McpCatalog,
+  McpBackupView,
+  McpInstallInput,
+  McpOperationResult,
+  McpRemoveInput,
+  McpScope,
+  McpTogglePreview,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
@@ -109,6 +117,7 @@ import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
 import { CcSwitchAdapter } from './cc-switch-adapter';
+import { McpManager } from './mcp-manager';
 import { AppPreferencesStore } from './app-preferences-store';
 import { ProxyStore } from './proxy/proxy-store';
 import { XraySidecar } from './proxy/xray-sidecar';
@@ -137,6 +146,7 @@ let providerAccessGuard: ProviderAccessGuard | null = null;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let busyRegistry: BusyRegistry | null = null;
+let mcpManager: McpManager | null = null;
 let downloadEngine: DownloadEngine | null = null;
 let ccSwitchAdapter: CcSwitchAdapter | null = null;
 let proxyStore: ProxyStore | null = null;
@@ -733,6 +743,13 @@ const requireCcSwitchAdapter = (): CcSwitchAdapter => {
   return ccSwitchAdapter;
 };
 
+const requireMcpManager = (): McpManager => {
+  if (!mcpManager) {
+    throw new Error('MCP 管理器尚未初始化。');
+  }
+  return mcpManager;
+};
+
 const getRouterKernelState = async (): Promise<RouterKernelState> => {
   const [ccr, ccSwitch] = await Promise.all([
     requireClaudeRuntime().getRouterManagementState(),
@@ -1193,6 +1210,62 @@ const validatePluginId = (value: unknown): string => {
 const refreshedPluginCatalog = async (): Promise<ClaudePluginCatalog> => {
   pluginManager.invalidate();
   return pluginManager.getCatalog(true);
+};
+
+const mcpScopes = new Set<McpScope>(['local', 'project', 'user']);
+const validateMcpScope = (value: unknown): McpScope => {
+  if (typeof value !== 'string' || !mcpScopes.has(value as McpScope)) {
+    throw new Error('MCP 作用域无效。');
+  }
+  return value as McpScope;
+};
+
+const validateMcpInstallInput = (value: unknown): McpInstallInput => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('MCP 安装参数无效。');
+  }
+  const input = value as Record<string, unknown>;
+  if (typeof input.catalogId !== 'string' || input.catalogId.length > 240) {
+    throw new Error('MCP 目录条目标识无效。');
+  }
+  return {
+    catalogId: input.catalogId,
+    cwd: validateProjectPath(input.cwd),
+    scope: validateMcpScope(input.scope),
+  };
+};
+
+const validateMcpRemoveInput = (value: unknown): McpRemoveInput => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('MCP 卸载参数无效。');
+  }
+  const input = value as Record<string, unknown>;
+  if (typeof input.name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(input.name)) {
+    throw new Error('MCP 名称无效。');
+  }
+  return {
+    cwd: validateProjectPath(input.cwd),
+    name: input.name,
+    scope: validateMcpScope(input.scope),
+  };
+};
+
+const runMcpMutation = async (
+  cwd: string,
+  operation: () => Promise<string>,
+): Promise<McpOperationResult> => {
+  try {
+    const message = await operation();
+    return { catalog: await requireMcpManager().getCatalog(cwd, true), message, ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'MCP 操作失败。';
+    return {
+      catalog: await requireMcpManager().getCatalog(cwd, true),
+      error: message,
+      message,
+      ok: false,
+    };
+  }
 };
 
 /** Every plugin mutation shares the same validate → run → refresh → report shape. */
@@ -2979,9 +3052,82 @@ const registerIpc = (): void => {
   for (const [channel, run] of pluginMutations) {
     ipcMain.handle(channel, async (event, argument: unknown, flag: unknown) => {
       validateSender(event);
-      return runPluginMutation(() => run(argument, flag));
+      return runPluginMutation(async () => {
+        const identity =
+          typeof argument === 'string'
+            ? createHash('sha256').update(argument).digest('hex').slice(0, 16)
+            : 'global';
+        const release = busyRegistry?.acquire({
+          cancellable: false,
+          id: `plugin:${channel}:${identity}`,
+          kind:
+            channel.includes('uninstall') || channel.includes('remove') ? 'uninstall' : 'install',
+          label: channel.includes('uninstall')
+            ? '正在卸载 Claude Code 插件'
+            : '正在修改 Claude Code 插件',
+          severity: 'blocking',
+        });
+        try {
+          return await run(argument, flag);
+        } finally {
+          release?.();
+        }
+      });
     });
   }
+  ipcMain.handle(
+    'mcp:get-catalog',
+    async (event, cwd: unknown, refresh: unknown): Promise<McpCatalog> => {
+      validateSender(event);
+      return requireMcpManager().getCatalog(validateProjectPath(cwd), refresh === true);
+    },
+  );
+  ipcMain.handle('mcp:install', async (event, rawInput: unknown): Promise<McpOperationResult> => {
+    validateSender(event);
+    const input = validateMcpInstallInput(rawInput);
+    return runMcpMutation(input.cwd, () => requireMcpManager().install(input));
+  });
+  ipcMain.handle('mcp:remove', async (event, rawInput: unknown): Promise<McpOperationResult> => {
+    validateSender(event);
+    const input = validateMcpRemoveInput(rawInput);
+    return runMcpMutation(input.cwd, () => requireMcpManager().remove(input));
+  });
+  ipcMain.handle(
+    'mcp:toggle-preview',
+    async (event, cwd: unknown, name: unknown, enabled: unknown): Promise<McpTogglePreview> => {
+      validateSender(event);
+      if (typeof name !== 'string' || typeof enabled !== 'boolean') {
+        throw new Error('MCP 启停参数无效。');
+      }
+      return requireMcpManager().previewToggle(validateProjectPath(cwd), name, enabled);
+    },
+  );
+  ipcMain.handle(
+    'mcp:toggle-apply',
+    async (event, previewId: unknown, cwd: unknown): Promise<McpOperationResult> => {
+      validateSender(event);
+      if (typeof previewId !== 'string' || !/^[0-9a-f-]{36}$/i.test(previewId)) {
+        throw new Error('MCP 改动预览标识无效。');
+      }
+      const validatedCwd = validateProjectPath(cwd);
+      return runMcpMutation(validatedCwd, () => requireMcpManager().applyToggle(previewId));
+    },
+  );
+  ipcMain.handle('mcp:backups', (event): McpBackupView[] => {
+    validateSender(event);
+    return requireMcpManager().listBackups();
+  });
+  ipcMain.handle(
+    'mcp:backup-restore',
+    async (event, backupId: unknown, cwd: unknown): Promise<McpOperationResult> => {
+      validateSender(event);
+      if (typeof backupId !== 'string') throw new Error('MCP 备份标识无效。');
+      const validatedCwd = validateProjectPath(cwd);
+      return runMcpMutation(validatedCwd, () =>
+        requireMcpManager().restoreBackup(backupId, validatedCwd),
+      );
+    },
+  );
   ipcMain.handle('software:updates-get', async (event, refresh: unknown) => {
     validateSender(event);
     return requireClaudeRuntime().getSoftwareUpdates(refresh === true);
@@ -3131,6 +3277,7 @@ if (!hasSingleInstanceLock) {
       mainWindow?.webContents.send('busy:changed', leases);
       updateTray();
     });
+    mcpManager = new McpManager(homedir(), app.getPath('userData'), busyRegistry);
     downloadEngine = new DownloadEngine(
       session.defaultSession as unknown as DownloadSession,
       busyRegistry,

@@ -954,6 +954,75 @@ export interface ClaudePluginOperationResult {
   ok: boolean;
 }
 
+export type McpHealth = 'connected' | 'disabled' | 'failed' | 'unknown';
+export type McpScope = 'local' | 'project' | 'user';
+export type McpTransport = 'http' | 'sse' | 'stdio';
+
+export interface McpServerView {
+  client: 'claude' | 'codex';
+  configPath: string;
+  enabled: boolean;
+  health: McpHealth;
+  healthDetail?: string;
+  name: string;
+  scope: McpScope;
+  toggleSupported: boolean;
+  transport: McpTransport;
+}
+
+export interface McpCatalogEntry {
+  config: Record<string, unknown>;
+  description: string;
+  featured: boolean;
+  id: string;
+  name: string;
+  officialUrl?: string;
+  requiresCredential: boolean;
+  transport: McpTransport;
+}
+
+export interface McpCatalog {
+  available: McpCatalogEntry[];
+  checkedAt: number;
+  installed: McpServerView[];
+  message: string;
+  registryAvailable: boolean;
+}
+
+export interface McpBackupView {
+  createdAt: number;
+  id: string;
+  path: string;
+}
+
+export interface McpInstallInput {
+  catalogId: string;
+  cwd: string;
+  scope: McpScope;
+}
+
+export interface McpRemoveInput {
+  cwd: string;
+  name: string;
+  scope: McpScope;
+}
+
+export interface McpTogglePreview {
+  after: string;
+  before: string;
+  enabled: boolean;
+  id: string;
+  name: string;
+  targetPath: string;
+}
+
+export interface McpOperationResult {
+  catalog: McpCatalog;
+  error?: string;
+  message: string;
+  ok: boolean;
+}
+
 export interface SoftwareUpdateTarget {
   currentVersion?: string;
   installed: boolean;
@@ -1182,9 +1251,7 @@ export interface ControlPanelApi {
   getRouterKernelState: (sessionId: string) => Promise<RouterKernelState>;
   installCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
   uninstallCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
-  exportCurrentProviderToCcSwitch: (
-    sessionId: string,
-  ) => Promise<RouterKernelOperationResult>;
+  exportCurrentProviderToCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
   openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   /**
@@ -1261,6 +1328,13 @@ export interface ControlPanelApi {
   removeClaudePluginMarketplace: (name: string) => Promise<ClaudePluginOperationResult>;
   refreshClaudePluginMarketplaces: () => Promise<ClaudePluginOperationResult>;
   updateAllClaudePlugins: () => Promise<ClaudePluginOperationResult>;
+  getMcpCatalog: (cwd: string, refresh?: boolean) => Promise<McpCatalog>;
+  installMcpServer: (input: McpInstallInput) => Promise<McpOperationResult>;
+  removeMcpServer: (input: McpRemoveInput) => Promise<McpOperationResult>;
+  previewMcpToggle: (cwd: string, name: string, enabled: boolean) => Promise<McpTogglePreview>;
+  applyMcpToggle: (previewId: string, cwd: string) => Promise<McpOperationResult>;
+  getMcpBackups: () => Promise<McpBackupView[]>;
+  restoreMcpBackup: (backupId: string, cwd: string) => Promise<McpOperationResult>;
   getSoftwareUpdates: (refresh?: boolean) => Promise<SoftwareUpdateState>;
   installOrUpdateClaudeCode: (
     source: ClaudeCodeInstallSource,

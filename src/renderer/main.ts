@@ -59,6 +59,10 @@ import type {
   DevelopmentRuntime,
   DevelopmentRuntimeState,
   DownloadTaskView,
+  McpCatalog,
+  McpCatalogEntry,
+  McpScope,
+  McpServerView,
   NetworkPreflightResult,
   NetworkProviderId,
   SoftwareUpdateState,
@@ -497,6 +501,16 @@ const pluginMarketplaceList = requiredElement<HTMLElement>('#plugin-marketplace-
 const pluginMarketplaceForm = requiredElement<HTMLFormElement>('#plugin-marketplace-form');
 const pluginMarketplaceSource = requiredElement<HTMLInputElement>('#plugin-marketplace-source');
 const addPluginMarketplaceButton = requiredElement<HTMLButtonElement>('#add-plugin-marketplace');
+const mcpScopeFilter = requiredElement<HTMLSelectElement>('#mcp-scope-filter');
+const mcpSearch = requiredElement<HTMLInputElement>('#mcp-search');
+const mcpRefresh = requiredElement<HTMLButtonElement>('#mcp-refresh');
+const mcpStatus = requiredElement<HTMLElement>('#mcp-status');
+const mcpInstalledCount = requiredElement<HTMLElement>('#mcp-installed-count');
+const mcpInstalledList = requiredElement<HTMLElement>('#mcp-installed-list');
+const mcpBackupSelect = requiredElement<HTMLSelectElement>('#mcp-backup-select');
+const mcpBackupRestore = requiredElement<HTMLButtonElement>('#mcp-backup-restore');
+const mcpInstallScope = requiredElement<HTMLSelectElement>('#mcp-install-scope');
+const mcpCatalogList = requiredElement<HTMLElement>('#mcp-catalog-list');
 const claudeUpdateDetail = requiredElement<HTMLElement>('#claude-update-detail');
 const claudeUpdateVersion = requiredElement<HTMLElement>('#claude-update-version');
 const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-checked-at');
@@ -1140,6 +1154,9 @@ let connectionHistoryMutationInProgress = false;
 let pluginCatalog: ClaudePluginCatalog | undefined;
 let pluginLoadPromise: Promise<void> | undefined;
 let pluginMutationInProgress = false;
+let mcpCatalog: McpCatalog | undefined;
+let mcpLoadPromise: Promise<void> | undefined;
+let mcpMutationInProgress = false;
 let softwareUpdates: SoftwareUpdateState | undefined;
 let softwareUpdateInProgress = false;
 let softwareUpdatePromise: Promise<void> | undefined;
@@ -5826,6 +5843,9 @@ const applyRailTab = (tab?: string): void => {
   if (tab === 'plugins') {
     void loadPluginCatalog(false);
   }
+  if (tab === 'mcp') {
+    void loadMcpCatalog(false);
+  }
   if (!chatVisible) {
     retryTerminalFitUntilMeasured();
   }
@@ -6268,6 +6288,289 @@ function loadPluginCatalog(refresh: boolean): Promise<void> {
     }
   })();
   return pluginLoadPromise;
+}
+
+const mcpScopeLabel = (scope: McpScope): string =>
+  scope === 'user'
+    ? 'user · 用户级'
+    : scope === 'project'
+      ? 'project · 项目共享'
+      : 'local · 项目私有';
+
+const mcpMatchesSearch = (
+  value: Pick<McpServerView, 'configPath' | 'name'> | Pick<McpCatalogEntry, 'description' | 'name'>,
+  needle: string,
+): boolean =>
+  needle === '' ||
+  Object.values(value).some(
+    (field) => typeof field === 'string' && field.toLowerCase().includes(needle),
+  );
+
+const runMcpMutation = async (
+  button: HTMLButtonElement,
+  busyLabel: string,
+  operation: () => ReturnType<typeof window.controlPanel.installMcpServer>,
+): Promise<void> => {
+  if (mcpMutationInProgress) return;
+  mcpMutationInProgress = true;
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = busyLabel;
+  mcpStatus.textContent = `${busyLabel} 配置写入期间退出保护已开启。`;
+  try {
+    const result = await operation();
+    mcpMutationInProgress = false;
+    renderMcpCatalog(result.catalog);
+    void loadMcpBackups();
+    showToast(result.message, result.ok ? 'success' : 'error');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'MCP 操作发生异常。', 'error');
+  } finally {
+    mcpMutationInProgress = false;
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+};
+
+const renderMcpInstalledCard = (server: McpServerView, cwd: string): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'plugin-card';
+  card.dataset.enabled = String(server.enabled);
+  card.dataset.installed = 'true';
+  const header = document.createElement('div');
+  header.className = 'plugin-card__header';
+  const title = document.createElement('strong');
+  title.textContent = server.name;
+  const badge = document.createElement('span');
+  badge.className = 'plugin-card__badge';
+  badge.textContent = `${server.client === 'claude' ? 'Claude' : 'Codex'} · ${server.transport}`;
+  header.append(title, badge);
+
+  const health = document.createElement('p');
+  health.className = 'mcp-card__health';
+  health.dataset.health = server.health;
+  health.textContent = `${
+    server.health === 'connected'
+      ? '已连接'
+      : server.health === 'failed'
+        ? '连接失败'
+        : server.health === 'disabled'
+          ? '已停用'
+          : '状态未知'
+  } · ${server.healthDetail ?? '尚未执行健康检查。'}`;
+  const meta = document.createElement('div');
+  meta.className = 'plugin-card__meta';
+  const scope = document.createElement('span');
+  scope.textContent = mcpScopeLabel(server.scope);
+  const pathLabel = document.createElement('code');
+  pathLabel.className = 'mcp-card__path';
+  pathLabel.textContent = server.configPath;
+  meta.append(scope);
+
+  const actions = document.createElement('div');
+  actions.className = 'plugin-card__actions';
+  if (server.toggleSupported) {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'button button--secondary button--small';
+    toggle.textContent = server.enabled ? '停用' : '启用';
+    toggle.disabled = mcpMutationInProgress;
+    toggle.addEventListener('click', async () => {
+      try {
+        const preview = await window.controlPanel.previewMcpToggle(
+          cwd,
+          server.name,
+          !server.enabled,
+        );
+        if (
+          !(await requestConfirmation({
+            confirmLabel: server.enabled ? '确认停用' : '确认启用',
+            message: `目标文件：${preview.targetPath}\n\n改动预览：\n- ${preview.before}\n+ ${preview.after}\n\n写入前会创建可逐字节还原的备份。`,
+            title: `${server.enabled ? '停用' : '启用'} MCP ${server.name}`,
+            tone: 'danger',
+          }))
+        ) {
+          return;
+        }
+        void runMcpMutation(toggle, '正在写入…', () =>
+          window.controlPanel.applyMcpToggle(preview.id, cwd),
+        );
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '无法生成 MCP 改动预览。', 'error');
+      }
+    });
+    actions.append(toggle);
+  }
+  if (server.client === 'claude') {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'button button--quiet button--small plugin-card__danger';
+    remove.textContent = '卸载';
+    remove.disabled = mcpMutationInProgress;
+    remove.addEventListener('click', async () => {
+      if (
+        !(await requestConfirmation({
+          confirmLabel: '卸载',
+          message: `从 ${mcpScopeLabel(server.scope)} 移除 MCP“${server.name}”？\n\n配置来源：${server.configPath}`,
+          title: '卸载 MCP',
+          tone: 'danger',
+        }))
+      ) {
+        return;
+      }
+      void runMcpMutation(remove, '正在卸载…', () =>
+        window.controlPanel.removeMcpServer({
+          cwd,
+          name: server.name,
+          scope: server.scope,
+        }),
+      );
+    });
+    actions.append(remove);
+  }
+  card.append(header, health, meta, pathLabel, actions);
+  return card;
+};
+
+const renderMcpCatalogCard = (
+  entry: McpCatalogEntry,
+  cwd: string,
+  installedNames: ReadonlySet<string>,
+): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'plugin-card';
+  card.dataset.installed = String(installedNames.has(entry.name));
+  const header = document.createElement('div');
+  header.className = 'plugin-card__header';
+  const title = document.createElement('strong');
+  title.textContent = entry.name;
+  const badge = document.createElement('span');
+  badge.className = 'plugin-card__badge';
+  badge.textContent = entry.featured ? `精选 · ${entry.transport}` : `注册表 · ${entry.transport}`;
+  header.append(title, badge);
+  const description = document.createElement('p');
+  description.textContent = entry.description;
+  const actions = document.createElement('div');
+  actions.className = 'plugin-card__actions';
+  const install = document.createElement('button');
+  install.type = 'button';
+  install.className = 'button button--primary button--small';
+  install.textContent = installedNames.has(entry.name) ? '已安装' : '安装';
+  install.disabled =
+    mcpMutationInProgress || installedNames.has(entry.name) || entry.requiresCredential;
+  install.title = entry.requiresCredential ? '该条目需要凭据，不能自动写入明文配置。' : '';
+  install.addEventListener('click', () => {
+    void runMcpMutation(install, '正在安装…', () =>
+      window.controlPanel.installMcpServer({
+        catalogId: entry.id,
+        cwd,
+        scope: mcpInstallScope.value as McpScope,
+      }),
+    );
+  });
+  actions.append(install);
+  card.append(header, description, actions);
+  return card;
+};
+
+function renderMcpCatalog(catalog: McpCatalog): void {
+  mcpCatalog = catalog;
+  const status = activeStatus();
+  const cwd = status?.cwd;
+  const needle = mcpSearch.value.trim().toLowerCase();
+  const scopeFilter = mcpScopeFilter.value;
+  const installed = catalog.installed.filter(
+    (server) =>
+      (scopeFilter === 'all' || server.scope === scopeFilter) && mcpMatchesSearch(server, needle),
+  );
+  const available = catalog.available.filter((entry) => mcpMatchesSearch(entry, needle));
+  mcpInstalledCount.textContent = String(installed.length);
+  mcpStatus.textContent = `${catalog.message} · 上次读取 ${new Date(catalog.checkedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+  mcpInstalledList.replaceChildren();
+  if (!cwd || installed.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'plugin-empty';
+    empty.textContent = cwd
+      ? needle || scopeFilter !== 'all'
+        ? '没有匹配当前筛选条件的 MCP。'
+        : '当前没有发现 MCP。可以从下方精选目录定向安装一个。'
+      : '请先打开一个项目，再发现或安装 MCP。';
+    if (cwd && !needle && scopeFilter === 'all') {
+      const browse = document.createElement('button');
+      browse.type = 'button';
+      browse.textContent = '去目录看看';
+      browse.addEventListener('click', () =>
+        mcpCatalogList.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      );
+      empty.append(document.createElement('br'), browse);
+    }
+    mcpInstalledList.append(empty);
+  } else {
+    mcpInstalledList.append(...installed.map((server) => renderMcpInstalledCard(server, cwd)));
+  }
+  mcpCatalogList.replaceChildren();
+  if (!cwd || available.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'plugin-empty';
+    empty.textContent = cwd ? '目录中没有匹配项。' : '打开项目后即可安装精选 MCP。';
+    mcpCatalogList.append(empty);
+  } else {
+    const installedNames = new Set(catalog.installed.map((server) => server.name));
+    mcpCatalogList.append(
+      ...available.map((entry) => renderMcpCatalogCard(entry, cwd, installedNames)),
+    );
+  }
+}
+
+const loadMcpBackups = async (): Promise<void> => {
+  try {
+    const backups = await window.controlPanel.getMcpBackups();
+    mcpBackupSelect.replaceChildren(
+      ...(backups.length > 0
+        ? backups.map((backup) => {
+            const option = document.createElement('option');
+            option.value = backup.id;
+            option.textContent = `${new Date(backup.createdAt).toLocaleString('zh-CN')} · ${backup.path}`;
+            return option;
+          })
+        : [
+            (() => {
+              const option = document.createElement('option');
+              option.value = '';
+              option.textContent = '暂无可还原备份';
+              return option;
+            })(),
+          ]),
+    );
+    mcpBackupRestore.disabled = backups.length === 0 || mcpMutationInProgress;
+  } catch {
+    mcpBackupRestore.disabled = true;
+  }
+};
+
+function loadMcpCatalog(refresh: boolean): Promise<void> {
+  if (mcpLoadPromise) return mcpLoadPromise;
+  const status = activeStatus();
+  if (!status) {
+    mcpStatus.textContent = '请先打开一个项目以发现 MCP。';
+    return Promise.resolve();
+  }
+  mcpLoadPromise = (async () => {
+    mcpRefresh.disabled = true;
+    if (refresh || !mcpCatalog) mcpStatus.textContent = '正在发现 MCP 并执行受限健康检查…';
+    try {
+      renderMcpCatalog(await window.controlPanel.getMcpCatalog(status.cwd, refresh));
+      await loadMcpBackups();
+    } catch (error) {
+      mcpStatus.textContent = error instanceof Error ? error.message : '无法读取 MCP 配置。';
+    } finally {
+      mcpLoadPromise = undefined;
+      mcpRefresh.disabled = false;
+    }
+  })();
+  return mcpLoadPromise;
 }
 
 const refreshPluginUpdates = async (): Promise<boolean> => {
@@ -8813,6 +9116,33 @@ pluginSearch.addEventListener('input', () => {
   if (pluginCatalog) {
     renderPluginCatalog(pluginCatalog);
   }
+});
+mcpSearch.addEventListener('input', () => {
+  if (mcpCatalog) renderMcpCatalog(mcpCatalog);
+});
+mcpScopeFilter.addEventListener('change', () => {
+  if (mcpCatalog) renderMcpCatalog(mcpCatalog);
+});
+mcpRefresh.addEventListener('click', () => {
+  void loadMcpCatalog(true);
+});
+mcpBackupRestore.addEventListener('click', async () => {
+  const status = activeStatus();
+  const backupId = mcpBackupSelect.value;
+  if (!status || !backupId || mcpMutationInProgress) return;
+  if (
+    !(await requestConfirmation({
+      confirmLabel: '还原备份',
+      message: `将用备份 ${backupId} 逐字节替换 ~/.claude.json。\n\n当前文件会先另存为新的安全备份，失败时自动回滚。`,
+      title: '还原 MCP 配置备份',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+  void runMcpMutation(mcpBackupRestore, '正在还原…', () =>
+    window.controlPanel.restoreMcpBackup(backupId, status.cwd),
+  ).then(() => loadMcpBackups());
 });
 pluginMarketplaceForm.addEventListener('submit', (event) => {
   event.preventDefault();

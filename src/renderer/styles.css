@@ -8139,6 +8139,53 @@ body.is-resizing * {
   color: var(--danger-text);
 }
 
+.mcp-toolbar {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  margin-block: var(--s-4);
+}
+
+.mcp-toolbar > button {
+  grid-column: 1 / -1;
+}
+
+.mcp-section {
+  display: grid;
+  gap: var(--s-3);
+  margin-block-start: var(--s-5);
+}
+
+.mcp-install-scope {
+  margin-block-end: var(--s-2);
+}
+
+.mcp-backups {
+  align-items: end;
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mcp-card__path {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.mcp-card__health[data-health='connected'] {
+  color: var(--success-text);
+}
+
+.mcp-card__health[data-health='failed'] {
+  color: var(--danger-text);
+}
+
+.mcp-card__health[data-health='disabled'] {
+  color: var(--text-dim);
+}
+
 .router-capability-list {
   display: grid;
   gap: var(--s-2);

@@ -120,6 +120,23 @@
           <span class="activity-rail__dot" id="plugin-rail-dot" hidden></span>
         </button>
         <button
+          class="activity-rail__button"
+          data-rail-tab="mcp"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
+          aria-pressed="false"
+          title="MCP"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="18" cy="6" r="2.5" />
+            <circle cx="12" cy="18" r="2.5" />
+            <path d="M8.2 7.3 10.8 16M15.8 7.3 13.2 16M8.5 6h7" />
+          </svg>
+          <span>MCP</span>
+        </button>
+        <button
           class="activity-rail__button activity-rail__button--settings"
           id="open-connection-advanced"
           type="button"
@@ -858,6 +875,70 @@
               <button id="add-plugin-marketplace" type="submit">添加市场</button>
             </form>
           </div>
+        </section>
+
+        <section class="rail-page" data-rail-page="mcp">
+          <div class="connection-heading">
+            <strong>MCP 管理</strong>
+            <span>发现 Claude Code 与 Codex CLI 的服务器；安装操作只定向写入 Claude Code。</span>
+          </div>
+
+          <div class="mcp-toolbar">
+            <label class="field" for="mcp-scope-filter">
+              <span>作用域</span>
+              <select id="mcp-scope-filter">
+                <option value="all">全部</option>
+                <option value="user">user · 用户级</option>
+                <option value="project">project · 项目共享</option>
+                <option value="local">local · 当前项目私有</option>
+              </select>
+            </label>
+            <label class="field" for="mcp-search">
+              <span>搜索</span>
+              <input
+                id="mcp-search"
+                type="search"
+                maxlength="120"
+                placeholder="名称、说明或配置路径"
+                spellcheck="false"
+              />
+            </label>
+            <button id="mcp-refresh" type="button">全部刷新</button>
+          </div>
+          <p class="plugin-status" id="mcp-status">请选择一个项目以发现 MCP。</p>
+
+          <section class="mcp-section" aria-labelledby="mcp-installed-title">
+            <div class="settings-section-heading">
+              <strong id="mcp-installed-title">已安装</strong>
+              <span id="mcp-installed-count">0</span>
+            </div>
+            <div id="mcp-installed-list" class="plugin-list" aria-live="polite"></div>
+            <div class="mcp-backups">
+              <label class="field" for="mcp-backup-select">
+                <span>配置备份</span>
+                <select id="mcp-backup-select">
+                  <option value="">暂无可还原备份</option>
+                </select>
+              </label>
+              <button id="mcp-backup-restore" type="button" disabled>还原所选备份</button>
+            </div>
+          </section>
+
+          <section class="mcp-section" aria-labelledby="mcp-catalog-title">
+            <div class="settings-section-heading">
+              <strong id="mcp-catalog-title">精选与官方注册表</strong>
+              <span>每次只安装你明确选择的一项；默认 user 作用域。</span>
+            </div>
+            <label class="field mcp-install-scope" for="mcp-install-scope">
+              <span>新安装作用域</span>
+              <select id="mcp-install-scope">
+                <option value="user">user · 用户级（默认）</option>
+                <option value="project">project · 项目共享</option>
+                <option value="local">local · 当前项目私有</option>
+              </select>
+            </label>
+            <div id="mcp-catalog-list" class="plugin-list" aria-live="polite"></div>
+          </section>
         </section>
       </aside>
 

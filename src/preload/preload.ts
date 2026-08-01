@@ -27,6 +27,10 @@ import type {
   ControlPanelApi,
   DirectoryChoiceResult,
   DownloadTaskView,
+  McpCatalog,
+  McpBackupView,
+  McpOperationResult,
+  McpTogglePreview,
   ProxyAuditRecord,
   ProxyControlView,
   ProxyImportPreview,
@@ -316,9 +320,15 @@ const api: ControlPanelApi = {
   getRouterKernelState: (sessionId) =>
     ipcRenderer.invoke('router:kernel-state', sessionId) as Promise<RouterKernelState>,
   installCcSwitch: (sessionId) =>
-    ipcRenderer.invoke('router:cc-switch-install', sessionId) as Promise<RouterKernelOperationResult>,
+    ipcRenderer.invoke(
+      'router:cc-switch-install',
+      sessionId,
+    ) as Promise<RouterKernelOperationResult>,
   uninstallCcSwitch: (sessionId) =>
-    ipcRenderer.invoke('router:cc-switch-uninstall', sessionId) as Promise<RouterKernelOperationResult>,
+    ipcRenderer.invoke(
+      'router:cc-switch-uninstall',
+      sessionId,
+    ) as Promise<RouterKernelOperationResult>,
   exportCurrentProviderToCcSwitch: (sessionId) =>
     ipcRenderer.invoke(
       'router:cc-switch-export-current',
@@ -516,6 +526,19 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudePluginOperationResult>,
   updateAllClaudePlugins: () =>
     ipcRenderer.invoke('claude:plugins-update-all') as Promise<ClaudePluginOperationResult>,
+  getMcpCatalog: (cwd, refresh) =>
+    ipcRenderer.invoke('mcp:get-catalog', cwd, refresh ?? false) as Promise<McpCatalog>,
+  installMcpServer: (input) =>
+    ipcRenderer.invoke('mcp:install', input) as Promise<McpOperationResult>,
+  removeMcpServer: (input) =>
+    ipcRenderer.invoke('mcp:remove', input) as Promise<McpOperationResult>,
+  previewMcpToggle: (cwd, name, enabled) =>
+    ipcRenderer.invoke('mcp:toggle-preview', cwd, name, enabled) as Promise<McpTogglePreview>,
+  applyMcpToggle: (previewId, cwd) =>
+    ipcRenderer.invoke('mcp:toggle-apply', previewId, cwd) as Promise<McpOperationResult>,
+  getMcpBackups: () => ipcRenderer.invoke('mcp:backups') as Promise<McpBackupView[]>,
+  restoreMcpBackup: (backupId, cwd) =>
+    ipcRenderer.invoke('mcp:backup-restore', backupId, cwd) as Promise<McpOperationResult>,
   getSoftwareUpdates: (refresh) => ipcRenderer.invoke('software:updates-get', refresh ?? false),
   installOrUpdateClaudeCode: (source) =>
     ipcRenderer.invoke('software:claude-install-update', source),
