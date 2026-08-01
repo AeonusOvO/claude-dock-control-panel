@@ -40,6 +40,57 @@ export interface DownloadTaskView {
   state: DownloadTaskState;
   totalBytes: number;
 }
+export type ProxyProtocol = 'http' | 'shadowsocks' | 'socks' | 'trojan' | 'vless' | 'vmess';
+export type ProxyTransport = 'grpc' | 'http' | 'tcp' | 'ws';
+export type ProxyRuntimeStatus = 'error' | 'starting' | 'stopped' | 'stopping' | 'ready';
+export interface ProxyCredentialInput {
+  method?: string;
+  password?: string;
+  username?: string;
+  uuid?: string;
+}
+export interface ProxyProfileInput {
+  address: string;
+  credentials?: ProxyCredentialInput;
+  id?: string;
+  port: number;
+  protocol: ProxyProtocol;
+  remark?: string;
+  serverName?: string;
+  subscriptionId?: string;
+  tls?: boolean;
+  transport?: ProxyTransport;
+}
+export interface ProxyProfileView {
+  address: string;
+  hasCredentials: boolean;
+  id: string;
+  port: number;
+  protocol: ProxyProtocol;
+  remark: string;
+  serverName?: string;
+  subscriptionId?: string;
+  tls: boolean;
+  transport: ProxyTransport;
+  updatedAt: number;
+}
+export interface ProxyScopeSettings {
+  /** Applies only to processes spawned by ClaudeDock. */
+  cli: boolean;
+  /** Applies to Electron's own session. This is opt-in and never changes the system proxy. */
+  application: boolean;
+}
+export interface ProxyStoredState {
+  lastAuditConclusion?: 'passed' | 'risk' | 'warning';
+  lastAuditAt?: number;
+  runtimeStatus: ProxyRuntimeStatus;
+  selectedProfileId?: string;
+}
+export interface ProxyStoreView {
+  profiles: ProxyProfileView[];
+  scope: ProxyScopeSettings;
+  state: ProxyStoredState;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
