@@ -18,6 +18,7 @@ import type {
   ClaudeRouterOperationResult,
   ClaudeSessionMetadata,
   ArtifactNetworkLogEntry,
+  AppQuitRequest,
   BusyLease,
   ChatStreamEvent,
   CodexProjectState,
@@ -44,6 +45,7 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('busy:changed', callback);
     };
   },
+  setConversationBusy: (busy) => ipcRenderer.invoke('busy:set-conversation', busy),
   cancelDownload: (taskId) => ipcRenderer.invoke('download:cancel', taskId),
   listDownloads: () => ipcRenderer.invoke('download:list') as Promise<DownloadTaskView[]>,
   onDownloadsChanged: (listener) => {
@@ -284,8 +286,9 @@ const api: ControlPanelApi = {
     ipcRenderer.send('app:confirm-quit', confirmed);
   },
   onAppQuitRequested: (listener) => {
-    const callback = (): void => {
-      listener();
+    const callback = (_event: Electron.IpcRendererEvent, request: AppQuitRequest): void => {
+      ipcRenderer.send('app:quit-request-received');
+      listener(request);
     };
     ipcRenderer.on('app:quit-requested', callback);
     return () => {

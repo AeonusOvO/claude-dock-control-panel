@@ -110,6 +110,7 @@ let isQuitting = false;
  * quit attempt (tray menu clicked twice, Alt+F4 while the dialog is up) from stacking dialogs.
  */
 let quitConfirmationPending = false;
+let quitConfirmationTimer: NodeJS.Timeout | undefined;
 let claudeRuntime: ClaudeRuntime | null = null;
 let codexRuntime: CodexRuntime | null = null;
 let networkPreflightService: NetworkPreflightService | null = null;
@@ -119,6 +120,7 @@ let minimizedNoticeShown = false;
 let tray: Tray | null = null;
 let busyRegistry: BusyRegistry | null = null;
 let downloadEngine: DownloadEngine | null = null;
+let releaseConversationBusy: (() => void) | undefined;
 
 interface PendingPermissionModeProbe {
   resolve: (mode: ClaudePermissionMode | undefined) => void;
@@ -371,28 +373,35 @@ const showMainWindow = (): void => {
 };
 
 /**
- * Starts a quit. The renderer knows whether a conversation is streaming, so it owns the decision: it
- * either confirms with the user and calls back through `app:confirm-quit`, or answers immediately when
- * nothing is in flight. If there is nobody able to answer — no window, still loading, or a crashed
- * renderer — we quit outright rather than trapping the user in a process they cannot close.
+ * Starts a quit. The main-process busy registry is authoritative; when it is non-empty, the renderer
+ * presents the themed decision and answers through `app:confirm-quit`.
  */
 const requestQuit = (): void => {
   if (isQuitting) {
     return;
   }
   const window = mainWindow;
+  const leases = busyRegistry?.list() ?? [];
+  if (leases.length === 0) {
+    isQuitting = true;
+    app.quit();
+    return;
+  }
   const canAsk =
     window !== null &&
     !window.isDestroyed() &&
     !window.webContents.isLoading() &&
     !window.webContents.isCrashed();
   /*
-   * A second quit attempt while the question is still outstanding forces the issue. No timer is used
-   * here on purpose: the pending state normally means a modal is up waiting for the user, and a
-   * timeout would quit out from under someone who is still reading it. Asking again is the escape
-   * hatch for a renderer that is wedged rather than waiting.
+   * A second quit attempt while the question is outstanding forces the issue. The short timer below
+   * only covers delivery to the renderer; preload acknowledges receipt before the themed dialog is
+   * shown, so it never quits out from under someone who is reading that dialog.
    */
   if (!canAsk || quitConfirmationPending) {
+    if (quitConfirmationTimer) {
+      clearTimeout(quitConfirmationTimer);
+      quitConfirmationTimer = undefined;
+    }
     quitConfirmationPending = false;
     isQuitting = true;
     app.quit();
@@ -400,7 +409,20 @@ const requestQuit = (): void => {
   }
   quitConfirmationPending = true;
   showMainWindow();
-  window.webContents.send('app:quit-requested');
+  window.webContents.send('app:quit-requested', {
+    hasBlocking: leases.some(({ severity }) => severity === 'blocking'),
+    leases,
+  });
+  quitConfirmationTimer = setTimeout(() => {
+    if (!quitConfirmationPending) {
+      return;
+    }
+    quitConfirmationPending = false;
+    quitConfirmationTimer = undefined;
+    isQuitting = true;
+    app.quit();
+  }, 3_000);
+  quitConfirmationTimer.unref();
 };
 
 const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
@@ -1066,6 +1088,25 @@ const registerIpc = (): void => {
     validateSender(event);
     if (!busyRegistry) {
       throw new Error('忙碌任务登记表尚未初始化。');
+    }
+    return busyRegistry.list();
+  });
+  ipcMain.handle('busy:set-conversation', (event, busy: unknown) => {
+    validateSender(event);
+    if (typeof busy !== 'boolean' || !busyRegistry) {
+      throw new Error('对话忙碌状态无效。');
+    }
+    if (busy && !releaseConversationBusy) {
+      releaseConversationBusy = busyRegistry.acquire({
+        cancellable: true,
+        id: 'conversation:renderer',
+        kind: 'conversation',
+        label: '独立对话正在生成或准备发送',
+        severity: 'blocking',
+      });
+    } else if (!busy && releaseConversationBusy) {
+      releaseConversationBusy();
+      releaseConversationBusy = undefined;
     }
     return busyRegistry.list();
   });
@@ -2398,12 +2439,23 @@ const registerIpc = (): void => {
   );
   ipcMain.on('app:confirm-quit', (event, confirmed: unknown) => {
     validateSender(event);
+    if (quitConfirmationTimer) {
+      clearTimeout(quitConfirmationTimer);
+      quitConfirmationTimer = undefined;
+    }
     quitConfirmationPending = false;
     if (confirmed !== true) {
       return;
     }
     isQuitting = true;
     app.quit();
+  });
+  ipcMain.on('app:quit-request-received', (event) => {
+    validateSender(event);
+    if (quitConfirmationTimer) {
+      clearTimeout(quitConfirmationTimer);
+      quitConfirmationTimer = undefined;
+    }
   });
   ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
     validateSender(event);
@@ -2643,6 +2695,11 @@ const createWindow = async (): Promise<void> => {
    * `before-quit` runs its teardown straight through instead of asking.
    */
   mainWindow.on('session-end', () => {
+    downloadEngine?.flushJournal();
+    if (quitConfirmationTimer) {
+      clearTimeout(quitConfirmationTimer);
+      quitConfirmationTimer = undefined;
+    }
     isQuitting = true;
     quitConfirmationPending = false;
   });
@@ -2792,6 +2849,7 @@ app.on('before-quit', (event) => {
     requestQuit();
     return;
   }
+  downloadEngine?.flushJournal();
   for (const buffer of outputBuffers.values()) {
     if (buffer.timer) {
       clearTimeout(buffer.timer);

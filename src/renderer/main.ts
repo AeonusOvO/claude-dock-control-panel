@@ -691,6 +691,7 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
 };
 
 const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
+void window.controlPanel.setConversationBusy(false);
 
 /**
  * Grows the chat textarea with its content up to `--composer-max`, mirroring `resizeComposer` for
@@ -836,6 +837,7 @@ let activeChatAttachmentDraftId: string | undefined;
 let chatAttachmentImportQueue: Promise<void> = Promise.resolve();
 let queuedChatAttachmentImports = 0;
 let chatSubmissionInFlight = false;
+let conversationBusyLeaseActive = false;
 let artifactNetworkState: ArtifactNetworkState = { allowed: true, entries: [] };
 let markdownRenderer: MarkdownDomRenderer;
 let markdownHighlighter: HighlighterCore | undefined;
@@ -1968,6 +1970,13 @@ const appendChatMessage = (
 
 const setChatBusy = (busy: boolean): void => {
   const preparing = queuedChatAttachmentImports > 0 || chatSubmissionInFlight;
+  const protectsConversation = busy || preparing;
+  if (protectsConversation !== conversationBusyLeaseActive) {
+    conversationBusyLeaseActive = protectsConversation;
+    void window.controlPanel.setConversationBusy(protectsConversation).catch(() => {
+      conversationBusyLeaseActive = !protectsConversation;
+    });
+  }
   chatInput.disabled = busy;
   chatAttachButton.disabled = busy || preparing;
   sendChatButton.disabled = busy || preparing;
@@ -8095,10 +8104,10 @@ const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() 
  *
  * Every path must answer, including the cancelling one, or the app becomes impossible to close.
  */
-const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested(() => {
+const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested((request) => {
   const streaming = Boolean(activeChatRequestId);
   const preparing = chatSubmissionInFlight || queuedChatAttachmentImports > 0;
-  if (!streaming && !preparing) {
+  if (!request.leases.length && !streaming && !preparing) {
     window.controlPanel.confirmQuit(true);
     return;
   }

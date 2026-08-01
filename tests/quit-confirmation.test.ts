@@ -34,7 +34,10 @@ describe('quit confirmation handshake', () => {
     );
     // A second attempt while the question is outstanding forces it through.
     expect(mainSource).toMatch(
-      /if \(!canAsk \|\| quitConfirmationPending\) \{\s+quitConfirmationPending = false;\s+isQuitting = true;\s+app\.quit\(\);/,
+      /if \(!canAsk \|\| quitConfirmationPending\) \{[\s\S]*?quitConfirmationPending = false;\s+isQuitting = true;\s+app\.quit\(\);/,
+    );
+    expect(mainSource).toMatch(
+      /if \(leases\.length === 0\) \{\s+isQuitting = true;\s+app\.quit\(\);/,
     );
     // A duplicate launch has no window and nothing to protect.
     expect(mainSource).toMatch(
@@ -45,13 +48,13 @@ describe('quit confirmation handshake', () => {
   it('never questions an OS shutdown', () => {
     // Windows kills the process regardless, so a dialog here would only delay losing the same work.
     expect(mainSource).toMatch(
-      /\.on\('session-end', \(\) => \{\s+isQuitting = true;\s+quitConfirmationPending = false;\s+\}\);/,
+      /\.on\('session-end', \(\) => \{[\s\S]*?downloadEngine\?\.flushJournal\(\);[\s\S]*?isQuitting = true;\s+quitConfirmationPending = false;\s+\}\);/,
     );
   });
 
   it('quits only on an affirmative reply and clears the pending flag either way', () => {
     expect(mainSource).toMatch(
-      /ipcMain\.on\('app:confirm-quit', \(event, confirmed: unknown\) => \{\s+validateSender\(event\);\s+quitConfirmationPending = false;\s+if \(confirmed !== true\) \{\s+return;\s+\}\s+isQuitting = true;\s+app\.quit\(\);/,
+      /ipcMain\.on\('app:confirm-quit', \(event, confirmed: unknown\) => \{[\s\S]*?validateSender\(event\);[\s\S]*?quitConfirmationPending = false;\s+if \(confirmed !== true\) \{\s+return;\s+\}\s+isQuitting = true;\s+app\.quit\(\);/,
     );
   });
 
@@ -61,9 +64,31 @@ describe('quit confirmation handshake', () => {
   });
 
   it('exposes the handshake on the bridge in both directions', () => {
-    expect(contractsSource).toContain('onAppQuitRequested: (listener: () => void) => Unsubscribe;');
+    expect(contractsSource).toContain(
+      'onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;',
+    );
     expect(contractsSource).toContain('confirmQuit: (confirmed: boolean) => void;');
     expect(preloadSource).toContain("ipcRenderer.on('app:quit-requested', callback);");
     expect(preloadSource).toContain("ipcRenderer.send('app:confirm-quit', confirmed);");
+    expect(preloadSource).toContain("ipcRenderer.send('app:quit-request-received');");
+  });
+
+  it('summarizes blocking leases and still exits if the renderer never receives the request', () => {
+    expect(mainSource).toContain('const leases = busyRegistry?.list() ?? [];');
+    expect(mainSource).toContain(
+      "hasBlocking: leases.some(({ severity }) => severity === 'blocking')",
+    );
+    expect(mainSource).toMatch(
+      /quitConfirmationTimer = setTimeout\(\(\) => \{[\s\S]*?isQuitting = true;\s+app\.quit\(\);[\s\S]*?\}, 3_000\);/,
+    );
+  });
+
+  it('registers renderer conversation work in the authoritative busy registry', () => {
+    expect(mainSource).toContain("ipcMain.handle('busy:set-conversation'");
+    expect(mainSource).toContain("id: 'conversation:renderer'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('busy:set-conversation', busy)");
+    expect(contractsSource).toContain(
+      'setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;',
+    );
   });
 });

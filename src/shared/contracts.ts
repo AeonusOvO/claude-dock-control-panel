@@ -19,6 +19,10 @@ export interface BusyLease {
   readonly label: string;
   readonly severity: BusySeverity;
 }
+export interface AppQuitRequest {
+  hasBlocking: boolean;
+  leases: BusyLease[];
+}
 export type DownloadTaskState =
   'cancelled' | 'completed' | 'failed' | 'paused' | 'progressing' | 'queued' | 'verifying';
 export interface DownloadTaskView {
@@ -897,6 +901,7 @@ export interface ControlPanelApi {
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   listBusyLeases: () => Promise<BusyLease[]>;
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
+  setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;
   cancelDownload: (taskId: string) => Promise<DownloadTaskView>;
   listDownloads: () => Promise<DownloadTaskView[]>;
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
@@ -1039,7 +1044,7 @@ export interface ControlPanelApi {
    * protected by a themed dialog instead of dying silently. The renderer must answer every request
    * through `confirmQuit`, including the cancelling answer — the quit stays blocked until it does.
    */
-  onAppQuitRequested: (listener: () => void) => Unsubscribe;
+  onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;
   confirmQuit: (confirmed: boolean) => void;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
