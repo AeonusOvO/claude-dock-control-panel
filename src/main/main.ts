@@ -568,12 +568,11 @@ function updateTray(state = describeWorkspace()): void {
 
   const activeStatus =
     state.sessions.find((session) => session.id === state.activeSessionId) ?? state.sessions[0];
-  if (!activeStatus) {
-    return;
-  }
-
   const runningCount = state.sessions.filter((session) => session.phase === 'running').length;
   const openProjects = state.projects.filter((project) => project.open);
+  const leases = busyRegistry?.list() ?? [];
+  const downloadLeases = leases.filter(({ kind }) => kind === 'download');
+  const blockingLeases = leases.filter(({ severity }) => severity === 'blocking');
   // One submenu per folder so a project with several conversations reads as one project.
   const projectMenu: MenuItemConstructorOptions[] = openProjects.map((project) => ({
     label: project.name,
@@ -593,8 +592,18 @@ function updateTray(state = describeWorkspace()): void {
 
   const icon = nativeImage.createFromPath(trayIconForState(state));
   tray.setImage(icon);
+  const workSummary =
+    leases.length === 0
+      ? '后台空闲'
+      : `${leases.length} 项后台任务${blockingLeases.length > 0 ? `，${blockingLeases.length} 项不可中断` : ''}`;
   tray.setToolTip(
-    `ClaudeDock · ${openProjects.length} 个项目 · ${runningCount}/${state.sessions.length} 个对话运行中\n${activeStatus.cwd}`,
+    [
+      `ClaudeDock · ${openProjects.length} 个项目 · ${runningCount}/${state.sessions.length} 个对话运行中`,
+      workSummary,
+      activeStatus?.cwd,
+    ]
+      .filter(Boolean)
+      .join('\n'),
   );
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -603,6 +612,7 @@ function updateTray(state = describeWorkspace()): void {
         label: `项目：${openProjects.length} 个 · 对话：${state.sessions.length} 个 · 运行中：${runningCount} 个`,
       },
       {
+        enabled: projectMenu.length > 0,
         label: '切换对话',
         submenu: projectMenu,
       },
@@ -617,22 +627,37 @@ function updateTray(state = describeWorkspace()): void {
         click: showMainWindow,
         label: '显示控制面板',
       },
-      {
-        click: () => {
-          workspace.restart(activeStatus.id);
-        },
-        label: `重启 ${sessionLabel(activeStatus)}`,
-      },
-      {
-        click: () => {
-          if (activeStatus.phase === 'running') {
-            workspace.stop(activeStatus.id);
-          } else {
-            workspace.start(activeStatus.id);
-          }
-        },
-        label: activeStatus.phase === 'running' ? '停止当前终端' : '启动当前终端',
-      },
+      ...(downloadLeases.length > 0
+        ? [
+            {
+              click: () => {
+                showMainWindow();
+                mainWindow?.webContents.send('app:open-download-center');
+              },
+              label: `打开下载中心（${downloadLeases.length}）`,
+            } satisfies MenuItemConstructorOptions,
+          ]
+        : []),
+      ...(activeStatus
+        ? [
+            {
+              click: () => {
+                workspace.restart(activeStatus.id);
+              },
+              label: `重启 ${sessionLabel(activeStatus)}`,
+            } satisfies MenuItemConstructorOptions,
+            {
+              click: () => {
+                if (activeStatus.phase === 'running') {
+                  workspace.stop(activeStatus.id);
+                } else {
+                  workspace.start(activeStatus.id);
+                }
+              },
+              label: activeStatus.phase === 'running' ? '停止当前终端' : '启动当前终端',
+            } satisfies MenuItemConstructorOptions,
+          ]
+        : []),
       { type: 'separator' },
       {
         click: requestQuit,
@@ -2775,6 +2800,7 @@ if (!hasSingleInstanceLock) {
     artifactService.install();
     busyRegistry = new BusyRegistry((leases) => {
       mainWindow?.webContents.send('busy:changed', leases);
+      updateTray();
     });
     downloadEngine = new DownloadEngine(
       session.defaultSession as unknown as DownloadSession,

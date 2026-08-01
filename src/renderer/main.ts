@@ -699,6 +699,14 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
 };
 
 const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
+const openDownloadCenter = (): void => {
+  if (!downloadCenterDialog.open) {
+    downloadCenterDialog.showModal();
+  }
+  closeDownloadCenterButton.focus();
+};
+const unsubscribeOpenDownloadCenterRequested =
+  window.controlPanel.onOpenDownloadCenterRequested(openDownloadCenter);
 void window.controlPanel.setConversationBusy(false);
 
 /**
@@ -8256,10 +8264,7 @@ refreshUpdatesButton.addEventListener('click', () => {
   void refreshAvailableUpdates(true);
 });
 openDownloadCenterButton.addEventListener('click', () => {
-  if (!downloadCenterDialog.open) {
-    downloadCenterDialog.showModal();
-    closeDownloadCenterButton.focus();
-  }
+  openDownloadCenter();
 });
 closeDownloadCenterButton.addEventListener('click', () => {
   downloadCenterDialog.close('close');
@@ -9328,6 +9333,7 @@ window.addEventListener('beforeunload', () => {
   unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
   unsubscribeDownloadsChanged();
+  unsubscribeOpenDownloadCenterRequested();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);

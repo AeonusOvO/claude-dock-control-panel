@@ -289,6 +289,15 @@ const api: ControlPanelApi = {
   minimizeToTray: () => {
     ipcRenderer.send('app:minimize-to-tray');
   },
+  onOpenDownloadCenterRequested: (listener) => {
+    const callback = (): void => {
+      listener();
+    };
+    ipcRenderer.on('app:open-download-center', callback);
+    return () => {
+      ipcRenderer.removeListener('app:open-download-center', callback);
+    };
+  },
   onAppQuitRequested: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, request: AppQuitRequest): void => {
       ipcRenderer.send('app:quit-request-received');
