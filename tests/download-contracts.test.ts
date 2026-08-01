@@ -12,6 +12,14 @@ const routerManagerSource = readFileSync(
   new URL('../src/main/claude-router-manager.ts', import.meta.url),
   'utf8',
 );
+const codexInstallerSource = readFileSync(
+  new URL('../src/main/codex-installer.ts', import.meta.url),
+  'utf8',
+);
+const windowsCommandSource = readFileSync(
+  new URL('../src/main/windows-command.ts', import.meta.url),
+  'utf8',
+);
 
 describe('download IPC surface', () => {
   it('keeps list, commands and changed subscription wired across the process boundary', () => {
@@ -44,5 +52,15 @@ describe('download IPC surface', () => {
     expect(routerManagerSource).toContain('await this.downloadEngine.start({');
     expect(routerManagerSource).toContain("label: 'Claude Code Router 安装包'");
     expect(routerManagerSource).not.toContain('response.body.getReader()');
+  });
+
+  it('routes Codex downloads through the engine and streams installer output', () => {
+    expect(codexInstallerSource).toContain('await this.downloadEngine.start({');
+    expect(codexInstallerSource).toContain("label: 'Codex 官方安装脚本'");
+    expect(codexInstallerSource).not.toContain(
+      'this.fetchImplementation(release.downloadUrl',
+    );
+    expect(codexInstallerSource).toContain('onLine: this.onInstallLine');
+    expect(windowsCommandSource).toContain("options.onLine?.(line, stream)");
   });
 });

@@ -529,6 +529,7 @@ export interface CodexProjectState {
   cwd: string;
   installation: CodexInstallationStatus;
   login: CodexLoginView;
+  operationMessage?: string;
   rateLimits?: CodexRateLimitsView;
   requiresOpenaiAuth: boolean;
   sessionId: string;

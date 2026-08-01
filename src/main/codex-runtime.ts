@@ -10,8 +10,10 @@ import type {
   CodexRateLimitsView,
 } from '../shared/contracts';
 import { AsyncRefreshCache } from './async-refresh-cache';
+import type { BusyRegistry } from './busy-registry';
 import { CodexAppServerClient, type CodexAppServerNotification } from './codex-app-server';
 import { CodexInstaller, compareVersions } from './codex-installer';
+import type { DownloadEngine } from './download-engine';
 import {
   resolveWindowsCommandInvocation,
   runProcess,
@@ -149,6 +151,8 @@ export class CodexRuntime {
     INSTALLATION_CACHE_MS,
   );
   private readonly installer: CodexInstaller;
+  private installProgress: string | undefined;
+  private lastInstallProgressEmitAt = 0;
   private login: CodexLoginView = { phase: 'idle' };
   private rateLimits: CodexRateLimitsView | undefined;
   private readonly sessions = new Map<string, CodexRuntimeSession>();
@@ -156,8 +160,26 @@ export class CodexRuntime {
   public constructor(
     userDataPath: string,
     private readonly onState: (state: CodexProjectState) => void,
+    downloadEngine: DownloadEngine,
+    busyRegistry: BusyRegistry,
   ) {
-    this.installer = new CodexInstaller(userDataPath);
+    this.installer = new CodexInstaller(
+      userDataPath,
+      downloadEngine,
+      busyRegistry,
+      (line, stream) => {
+        const detail = line.trim();
+        if (!detail) {
+          return;
+        }
+        this.installProgress = `${stream === 'stderr' ? '安装提示' : '正在安装'}：${detail.slice(0, 300)}`;
+        const now = Date.now();
+        if (now - this.lastInstallProgressEmitAt >= 200) {
+          this.lastInstallProgressEmitAt = now;
+          void this.emitAllStates();
+        }
+      },
+    );
     this.appServer = new CodexAppServerClient(() => this.resolveCodexInvocation());
     this.appServer.onNotification((notification) => {
       this.handleNotification(notification);
@@ -235,6 +257,7 @@ export class CodexRuntime {
       cwd,
       installation,
       login: { ...this.login },
+      operationMessage: this.installProgress,
       rateLimits: this.rateLimits,
       requiresOpenaiAuth: accountResult.requiresOpenaiAuth,
       sessionId,
@@ -243,10 +266,17 @@ export class CodexRuntime {
   }
 
   public async installOrUpdate(sessionId: string, cwd: string): Promise<CodexProjectState> {
-    await this.installer.installLatest();
-    this.appServer.stop();
-    this.installationCache.clear();
-    this.accountCache.clear();
+    this.installProgress = '准备下载 Codex 官方安装脚本…';
+    await this.emitAllStates();
+    try {
+      await this.installer.installLatest();
+      this.appServer.stop();
+      this.installationCache.clear();
+      this.accountCache.clear();
+    } finally {
+      this.installProgress = undefined;
+      await this.emitAllStates();
+    }
     return this.getState(sessionId, cwd);
   }
 

@@ -2982,7 +2982,7 @@ const renderCodexState = (state: CodexProjectState): void => {
   codexInstallTitle.textContent = installed
     ? `Codex CLI ${installation.version ?? '已安装'}`
     : '需要安装 Codex CLI';
-  codexInstallDetail.textContent = installation.message;
+  codexInstallDetail.textContent = state.operationMessage ?? installation.message;
   codexInstallButton.hidden = installed && !installation.updateAvailable;
   codexInstallButton.textContent = installation.updateAvailable ? '更新' : '安装';
   codexInstallButton.disabled = codexOperationInProgress;

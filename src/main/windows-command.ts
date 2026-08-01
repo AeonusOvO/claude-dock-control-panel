@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 const COMMAND_ENV = 'CLAUDEDOCK_COMMAND_NAME';
 const RESOLVE_COMMAND = `$command = Get-Command $env:${COMMAND_ENV} -ErrorAction Stop | Select-Object -First 1; [Console]::Out.Write($command.Source)`;
@@ -8,6 +9,7 @@ const RESOLVE_COMMAND = `$command = Get-Command $env:${COMMAND_ENV} -ErrorAction
 export interface WindowsCommandOptions {
   cwd?: string;
   maxBuffer?: number;
+  onLine?: (line: string, stream: 'stderr' | 'stdout') => void;
   timeout?: number;
 }
 
@@ -32,9 +34,33 @@ export const runProcess = (
     const maximumBytes = options.maxBuffer ?? 1024 * 1024;
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const decoders = {
+      stderr: new StringDecoder('utf8'),
+      stdout: new StringDecoder('utf8'),
+    };
+    const lineRemainders = { stderr: '', stdout: '' };
     let outputBytes = 0;
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    const emitLines = (stream: 'stderr' | 'stdout', text: string, flush = false): void => {
+      const combined = `${lineRemainders[stream]}${text}`;
+      const lines = combined.split(/\r?\n/);
+      const remainder = lines.pop() ?? '';
+      lineRemainders[stream] = flush ? '' : remainder;
+      if (flush && lines.at(-1) === '') {
+        lines.pop();
+      }
+      if (flush && remainder) {
+        lines.push(remainder);
+      }
+      for (const line of lines) {
+        try {
+          options.onLine?.(line, stream);
+        } catch {
+          // Progress observers must never be able to break the child process lifecycle.
+        }
+      }
+    };
     const finish = (error?: Error): void => {
       if (settled) {
         return;
@@ -43,6 +69,8 @@ export const runProcess = (
       if (timer) {
         clearTimeout(timer);
       }
+      emitLines('stdout', decoders.stdout.end(), true);
+      emitLines('stderr', decoders.stderr.end(), true);
       const standardOutput = Buffer.concat(stdout).toString('utf8');
       const standardError = Buffer.concat(stderr).toString('utf8');
       if (error) {
@@ -53,7 +81,7 @@ export const runProcess = (
       }
     };
     const capture =
-      (target: Buffer[]) =>
+      (target: Buffer[], stream: 'stderr' | 'stdout') =>
       (chunk: Buffer): void => {
         outputBytes += chunk.length;
         if (outputBytes > maximumBytes) {
@@ -62,9 +90,10 @@ export const runProcess = (
           return;
         }
         target.push(chunk);
+        emitLines(stream, decoders[stream].write(chunk));
       };
-    child.stdout.on('data', capture(stdout));
-    child.stderr.on('data', capture(stderr));
+    child.stdout.on('data', capture(stdout, 'stdout'));
+    child.stderr.on('data', capture(stderr, 'stderr'));
     child.on('error', finish);
     child.on('close', (code, signal) => {
       if (code === 0) {

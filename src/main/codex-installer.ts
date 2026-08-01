@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { BusyRegistry } from './busy-registry';
+import type { DownloadEngine } from './download-engine';
 import { runProcess } from './windows-command';
 
 interface GitHubAsset {
@@ -112,6 +112,9 @@ export const compareVersions = (left: string, right: string): number => {
 export class CodexInstaller {
   public constructor(
     private readonly userDataPath: string,
+    private readonly downloadEngine: DownloadEngine,
+    private readonly busyRegistry: BusyRegistry,
+    private readonly onInstallLine: (line: string, stream: 'stderr' | 'stdout') => void,
     private readonly fetchImplementation: FetchLike = fetch,
   ) {}
 
@@ -130,26 +133,22 @@ export class CodexInstaller {
 
   public async installLatest(): Promise<{ message: string; version: string }> {
     const release = await this.latest();
-    const response = await this.fetchImplementation(release.downloadUrl, {
-      headers: { 'User-Agent': 'ClaudeDock' },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(60_000),
-    });
-    const script = await readLimitedResponse(response, MAX_INSTALLER_BYTES);
-    if (script.length !== release.size) {
-      throw new Error('Codex 安装脚本大小与官方发布信息不一致。');
-    }
-    const digest = createHash('sha256').update(script).digest('hex');
-    if (digest !== release.digest) {
-      throw new Error('Codex 安装脚本 SHA-256 校验失败，已停止执行。');
-    }
-
     const directory = path.join(this.userDataPath, 'claude', 'codex-installers', release.version);
-    mkdirSync(directory, { recursive: true });
     const installerPath = path.join(directory, 'install.ps1');
-    const temporaryPath = `${installerPath}.tmp`;
-    writeFileSync(temporaryPath, script, { mode: 0o600 });
-    renameSync(temporaryPath, installerPath);
+    await this.downloadEngine.start({
+      allowedHosts: ['github.com', 'release-assets.githubusercontent.com'],
+      allowedPathPrefixes: [
+        `/openai/codex/releases/download/rust-v${release.version}/install.ps1`,
+        '/',
+      ],
+      expectedBytes: release.size,
+      expectedSha256: release.digest,
+      finalPath: installerPath,
+      id: `codex-installer-${release.version}`,
+      label: 'Codex 官方安装脚本',
+      maxBytes: MAX_INSTALLER_BYTES,
+      url: release.downloadUrl,
+    });
 
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -158,20 +157,36 @@ export class CodexInstaller {
       CODEX_RELEASE: release.version,
     };
     delete environment.ELECTRON_RUN_AS_NODE;
-    const output = await runProcess(
-      'powershell.exe',
-      [
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        installerPath,
-      ],
-      environment,
-      { maxBuffer: 2 * 1024 * 1024, timeout: 15 * 60_000 },
-    );
+    const releaseBusy = this.busyRegistry.acquire({
+      cancellable: false,
+      id: `install:codex-${release.version}`,
+      kind: 'install',
+      label: `安装 Codex CLI ${release.version}`,
+      severity: 'blocking',
+    });
+    let output: Awaited<ReturnType<typeof runProcess>>;
+    try {
+      output = await runProcess(
+        'powershell.exe',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          installerPath,
+        ],
+        environment,
+        {
+          maxBuffer: 2 * 1024 * 1024,
+          onLine: this.onInstallLine,
+          timeout: 15 * 60_000,
+        },
+      );
+    } finally {
+      releaseBusy();
+    }
     const lastLine = output.stdout
       .split(/\r?\n/)
       .map((line) => line.trim())

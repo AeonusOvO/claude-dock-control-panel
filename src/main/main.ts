@@ -2733,9 +2733,14 @@ if (!hasSingleInstanceLock) {
       downloadEngine,
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
     );
-    codexRuntime = new CodexRuntime(app.getPath('userData'), (state) => {
-      mainWindow?.webContents.send('codex:state', state);
-    });
+    codexRuntime = new CodexRuntime(
+      app.getPath('userData'),
+      (state) => {
+        mainWindow?.webContents.send('codex:state', state);
+      },
+      downloadEngine,
+      busyRegistry,
+    );
     const networkPreflightSettingsStore = new NetworkPreflightSettingsStore(
       app.getPath('userData'),
     );
