@@ -630,6 +630,7 @@ describe('independent chat service', () => {
       '部分回答',
     ]);
     expect(events.some((event) => event.type === 'done')).toBe(false);
+    expect(events.at(-1)?.continuable).toBe(true);
     expect(events.at(-1)?.error).toContain('结束标记前断开');
   });
 

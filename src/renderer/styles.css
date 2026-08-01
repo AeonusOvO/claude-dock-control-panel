@@ -2149,6 +2149,29 @@ body[data-phase='error'] .status-pill {
   background: var(--warn-solid);
 }
 
+.chat-message__continue {
+  background: var(--surface-1);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-theme-pill);
+  color: var(--accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--fw-strong);
+  justify-self: start;
+  margin-left: var(--s-4);
+  padding: var(--s-1) var(--s-3);
+}
+
+.chat-message__continue:disabled {
+  cursor: wait;
+  opacity: var(--opacity-disabled);
+}
+
+.chat-message__continue:not(:disabled):hover {
+  background: var(--accent-tint);
+}
+
 [data-theme='claude'] .chat-message--assistant > strong {
   font-family: var(--font-display);
   letter-spacing: var(--ls-title);

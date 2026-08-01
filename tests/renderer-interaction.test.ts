@@ -198,6 +198,11 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('window.controlPanel.startChat({');
     expect(rendererSource).toContain('window.controlPanel.onChatStream(handleChatStream);');
     expect(rendererSource).toContain("event.type === 'retrying'");
+    expect(rendererSource).toContain("button.textContent = '继续生成';");
+    expect(rendererSource).toContain(
+      "chatInput.value = '请从上一条回答中断处继续，不要重复已经给出的内容。';",
+    );
+    expect(rendererStyles).toContain('.chat-message__continue');
     expect(rendererSource).toContain('const visibleReply = activeChatReply');
     expect(rendererSource).toContain('activeChatReplyStream.update(notice)');
     expect(rendererSource).toContain("mainView = 'chat';");

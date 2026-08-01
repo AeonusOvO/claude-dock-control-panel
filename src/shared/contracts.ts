@@ -271,6 +271,7 @@ export interface ChatPreflightResult {
 export interface ChatStreamEvent {
   abortReason?: 'local-timeout' | 'manual';
   attempt?: number;
+  continuable?: boolean;
   delta?: string;
   detail?: string;
   error?: string;

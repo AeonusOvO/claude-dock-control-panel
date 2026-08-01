@@ -933,6 +933,7 @@ export class ChatService {
     const idleNoticeThresholdMs = hardIdleTimeoutMs || this.idleTimeoutMs;
     let idleTimeout: NodeJS.Timeout | undefined;
     let activityGeneration = 0;
+    let idleNoticeEmitted = false;
     let lastActivityAt = Date.now();
     let probeInFlight = false;
     const scheduleIdleThreshold = (delayMs: number): void => {
@@ -949,11 +950,12 @@ export class ChatService {
       }
       const generation = activityGeneration;
       const idleMs = Math.max(idleNoticeThresholdMs, Date.now() - lastActivityAt);
-      if (hardIdleTimeoutMs > 0 && idleMs >= hardIdleTimeoutMs * 2) {
+      if (hardIdleTimeoutMs > 0 && idleNoticeEmitted && idleMs >= hardIdleTimeoutMs * 2) {
         active.abortReason = 'local-timeout';
         controller.abort('local-timeout');
         return;
       }
+      idleNoticeEmitted = true;
       this.emit({
         idleMs,
         probe: { detail: '正在旁路探测当前接口。' },
@@ -990,6 +992,7 @@ export class ChatService {
     };
     const touchIdleTimeout = (): void => {
       activityGeneration += 1;
+      idleNoticeEmitted = false;
       lastActivityAt = Date.now();
       scheduleIdleThreshold(idleNoticeThresholdMs);
     };
@@ -1308,6 +1311,10 @@ export class ChatService {
               type: 'aborted' as const,
             }
           : {
+              continuable:
+                error instanceof IncompleteChatStreamError && error.emittedOutput
+                  ? true
+                  : undefined,
               error: sanitizeError(error, config.credential, '独立对话请求失败。'),
               type: 'error' as const,
             }),

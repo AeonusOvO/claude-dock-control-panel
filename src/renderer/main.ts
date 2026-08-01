@@ -1804,6 +1804,26 @@ const finishChatRequest = (): void => {
   chatInput.focus();
 };
 
+const appendChatContinuationButton = (replyElement: HTMLElement): HTMLButtonElement | undefined => {
+  const article = replyElement.closest('article');
+  if (!article) {
+    return undefined;
+  }
+  const button = document.createElement('button');
+  button.className = 'chat-message__continue';
+  button.disabled = true;
+  button.textContent = '继续生成';
+  button.type = 'button';
+  button.addEventListener('click', () => {
+    button.remove();
+    chatInput.value = '请从上一条回答中断处继续，不要重复已经给出的内容。';
+    resizeChatComposer();
+    void submitChatMessage();
+  });
+  article.append(button);
+  return button;
+};
+
 const handleChatStream = (event: ChatStreamEvent): void => {
   if (event.requestId !== activeChatRequestId) {
     return;
@@ -1957,6 +1977,10 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     return;
   }
   if (event.type === 'error') {
+    const continuationButton =
+      event.continuable && activeChatReply && activeChatReplyElement
+        ? appendChatContinuationButton(activeChatReplyElement)
+        : undefined;
     const notice = activeChatReply
       ? `${activeChatReply}\n\n> 生成中断：${event.error ?? '请求失败'}`
       : `> 请求失败：${event.error ?? '未知错误'}`;
@@ -1978,7 +2002,12 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     void (async () => {
       await activeChatReplyStream?.finish(notice);
       await persistActiveChat();
-    })().finally(finishChatRequest);
+    })().finally(() => {
+      finishChatRequest();
+      if (continuationButton?.isConnected) {
+        continuationButton.disabled = false;
+      }
+    });
   }
 };
 
