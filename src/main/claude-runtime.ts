@@ -54,6 +54,7 @@ import {
   type TerminalThemeId,
 } from '../shared/terminal-themes';
 import { AsyncRefreshCache } from './async-refresh-cache';
+import type { CcSwitchProviderExportInput } from './cc-switch-adapter';
 import {
   BackgroundTaskCoordinator,
   type BackgroundTaskPriority,
@@ -634,6 +635,25 @@ export class ClaudeRuntime {
 
   public usesOfficialProvider(cwd: string): boolean {
     return this.configStore.getConfig(cwd).provider === 'anthropic';
+  }
+
+  public currentProviderForCcSwitch(cwd: string): CcSwitchProviderExportInput {
+    const config = this.configStore.getConfig(cwd);
+    const view = this.configStore.getView(cwd);
+    if (view.protocol === 'openai' || view.routerProviderId) {
+      throw new Error(
+        '当前上游凭据由 CCR 保存且不会回显；请改用一键接入向导重新填写 Key 后再导出。',
+      );
+    }
+    const provider = findClaudeProvider(config.preset);
+    return {
+      authMode: config.authMode,
+      baseUrl: config.baseUrl,
+      credential: this.configStore.getCredential(cwd),
+      model: config.model,
+      modelFast: config.modelFast,
+      name: provider?.label ?? config.preset,
+    };
   }
 
   public connectionHistoryUsesOfficialProvider(cwd: string, entryId: string): boolean {

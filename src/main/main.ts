@@ -32,6 +32,8 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterOperationResult,
   ClaudeRouterInstallSource,
+  RouterKernelOperationResult,
+  RouterKernelState,
   ChatAttachmentBytesImportInput,
   ChatAttachmentImportInput,
   ChatMessage,
@@ -105,6 +107,7 @@ import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
+import { CcSwitchAdapter } from './cc-switch-adapter';
 import { AppPreferencesStore } from './app-preferences-store';
 import { ProxyStore } from './proxy/proxy-store';
 import { XraySidecar } from './proxy/xray-sidecar';
@@ -134,6 +137,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let busyRegistry: BusyRegistry | null = null;
 let downloadEngine: DownloadEngine | null = null;
+let ccSwitchAdapter: CcSwitchAdapter | null = null;
 let proxyStore: ProxyStore | null = null;
 let xraySidecar: XraySidecar | null = null;
 let proxyLeakAuditService: LeakAuditService | null = null;
@@ -719,6 +723,41 @@ const requireDownloadEngine = (): DownloadEngine => {
     throw new Error('下载引擎尚未初始化。');
   }
   return downloadEngine;
+};
+
+const requireCcSwitchAdapter = (): CcSwitchAdapter => {
+  if (!ccSwitchAdapter) {
+    throw new Error('CC Switch 适配器尚未初始化。');
+  }
+  return ccSwitchAdapter;
+};
+
+const getRouterKernelState = async (): Promise<RouterKernelState> => {
+  const [ccr, ccSwitch] = await Promise.all([
+    requireClaudeRuntime().getRouterManagementState(),
+    requireCcSwitchAdapter().getState(),
+  ]);
+  const ccrActive = ccr.gatewayState === 'running' || ccr.serviceRunning;
+  return {
+    active: ccrActive ? 'ccr' : ccSwitch.running ? 'cc-switch' : 'none',
+    ccSwitch,
+    checkedAt: Date.now(),
+    conflict: ccrActive && ccSwitch.running,
+    ccr,
+  };
+};
+
+const routerKernelFailure = async (
+  error: unknown,
+  fallback: string,
+): Promise<RouterKernelOperationResult> => {
+  const message = error instanceof Error ? error.message : fallback;
+  return {
+    error: message,
+    message,
+    ok: false,
+    state: await getRouterKernelState(),
+  };
 };
 
 const applyApplicationProxyScope = async (): Promise<void> => {
@@ -2068,6 +2107,72 @@ const registerIpc = (): void => {
     validateSessionId(sessionId);
     return requireClaudeRuntime().getRouterManagementState();
   });
+  ipcMain.handle('router:kernel-state', async (event, sessionId: unknown) => {
+    validateSender(event);
+    validateSessionId(sessionId);
+    return getRouterKernelState();
+  });
+  ipcMain.handle(
+    'router:cc-switch-install',
+    async (event, sessionId: unknown): Promise<RouterKernelOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      try {
+        const ccSwitch = await requireCcSwitchAdapter().install();
+        const state = await getRouterKernelState();
+        return {
+          message: ccSwitch.installed
+            ? 'CC Switch 官方 MSI 已校验并安装。'
+            : 'CC Switch 安装程序已结束，但尚未检测到安装状态。',
+          ok: ccSwitch.installed,
+          state,
+        };
+      } catch (error) {
+        return routerKernelFailure(error, '无法安装 CC Switch。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'router:cc-switch-uninstall',
+    async (event, sessionId: unknown): Promise<RouterKernelOperationResult> => {
+      validateSender(event);
+      validateSessionId(sessionId);
+      try {
+        const ccSwitch = await requireCcSwitchAdapter().uninstall(true);
+        const state = await getRouterKernelState();
+        return {
+          message:
+            !ccSwitch.installed && ccSwitch.residuals.length === 0
+              ? 'CC Switch 已卸载，程序、协议注册与已知数据目录均无残留。'
+              : `卸载后仍检测到残留：${ccSwitch.residuals.join('、') || ccSwitch.message}`,
+          ok: !ccSwitch.installed && ccSwitch.residuals.length === 0,
+          state,
+        };
+      } catch (error) {
+        return routerKernelFailure(error, '无法卸载 CC Switch。');
+      }
+    },
+  );
+  ipcMain.handle(
+    'router:cc-switch-export-current',
+    async (event, sessionId: unknown): Promise<RouterKernelOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        await requireCcSwitchAdapter().exportProvider(
+          requireClaudeRuntime().currentProviderForCcSwitch(status.cwd),
+        );
+        return {
+          message: '已通过 ccswitch:// 打开单向导入确认；请在 CC Switch 中确认。',
+          ok: true,
+          state: await getRouterKernelState(),
+        };
+      } catch (error) {
+        return routerKernelFailure(error, '无法导出当前供应商。');
+      }
+    },
+  );
   ipcMain.handle(
     'claude:router-install',
     async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
@@ -2999,6 +3104,12 @@ if (!hasSingleInstanceLock) {
     );
     downloadEngine.install();
     downloadEngine.restoreInterrupted();
+    ccSwitchAdapter = new CcSwitchAdapter(
+      app.getPath('userData'),
+      downloadEngine,
+      busyRegistry,
+      (url) => shell.openExternal(url),
+    );
     proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
     xraySidecar = new XraySidecar(app.getPath('userData'), downloadEngine, busyRegistry, (view) => {
       mainWindow?.webContents.send('proxy:runtime-changed', view);

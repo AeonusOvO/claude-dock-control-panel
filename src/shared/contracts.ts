@@ -812,6 +812,35 @@ export interface ClaudeRouterManagementState {
   version?: string;
 }
 
+export type RouterKernelId = 'cc-switch' | 'ccr' | 'none';
+
+export interface CcSwitchInstallationState {
+  checkedAt: number;
+  executable?: string;
+  installed: boolean;
+  message: string;
+  protocolRegistered: boolean;
+  residuals: string[];
+  running: boolean;
+  uninstallable: boolean;
+  version?: string;
+}
+
+export interface RouterKernelState {
+  active: RouterKernelId;
+  ccSwitch: CcSwitchInstallationState;
+  checkedAt: number;
+  conflict: boolean;
+  ccr: ClaudeRouterManagementState;
+}
+
+export interface RouterKernelOperationResult {
+  error?: string;
+  message: string;
+  ok: boolean;
+  state: RouterKernelState;
+}
+
 export interface SaveClaudeRouterProviderInput {
   apiKey?: string;
   baseUrl: string;
@@ -1150,6 +1179,12 @@ export interface ControlPanelApi {
     source: ClaudeRouterInstallSource,
   ) => Promise<ClaudeRouterOperationResult>;
   uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
+  getRouterKernelState: (sessionId: string) => Promise<RouterKernelState>;
+  installCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
+  uninstallCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
+  exportCurrentProviderToCcSwitch: (
+    sessionId: string,
+  ) => Promise<RouterKernelOperationResult>;
   launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
   openClaudeRouterManagement: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   /**

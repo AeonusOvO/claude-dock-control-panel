@@ -16,6 +16,8 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
+  RouterKernelOperationResult,
+  RouterKernelState,
   ClaudeSessionMetadata,
   ArtifactNetworkLogEntry,
   AppQuitRequest,
@@ -311,6 +313,17 @@ const api: ControlPanelApi = {
       'claude:router-uninstall',
       sessionId,
     ) as Promise<ClaudeRouterOperationResult>,
+  getRouterKernelState: (sessionId) =>
+    ipcRenderer.invoke('router:kernel-state', sessionId) as Promise<RouterKernelState>,
+  installCcSwitch: (sessionId) =>
+    ipcRenderer.invoke('router:cc-switch-install', sessionId) as Promise<RouterKernelOperationResult>,
+  uninstallCcSwitch: (sessionId) =>
+    ipcRenderer.invoke('router:cc-switch-uninstall', sessionId) as Promise<RouterKernelOperationResult>,
+  exportCurrentProviderToCcSwitch: (sessionId) =>
+    ipcRenderer.invoke(
+      'router:cc-switch-export-current',
+      sessionId,
+    ) as Promise<RouterKernelOperationResult>,
   launchClaude: (sessionId, mode) =>
     ipcRenderer.invoke('claude:launch', sessionId, mode) as Promise<ClaudeOperationResult>,
   confirmQuit: (confirmed) => {

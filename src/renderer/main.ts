@@ -42,6 +42,8 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
   ClaudeRouterProviderView,
+  RouterKernelOperationResult,
+  RouterKernelState,
   ClaudeSessionMetadata,
   ChatConfigView,
   ChatAttachmentImportResult,
@@ -325,6 +327,11 @@ const connectionAdvancedContent = requiredElement<HTMLElement>('#connection-adva
 const routerSettingsContent = requiredElement<HTMLElement>('#router-settings-content');
 const routerCapabilityList = requiredElement<HTMLElement>('#router-capability-list');
 const openRouterSettingsButton = requiredElement<HTMLButtonElement>('#open-router-settings');
+const routerKernelStatus = requiredElement<HTMLElement>('#router-kernel-status');
+const installCcSwitchButton = requiredElement<HTMLButtonElement>('#install-cc-switch');
+const exportCcSwitchButton = requiredElement<HTMLButtonElement>('#export-cc-switch');
+const uninstallCcSwitchButton = requiredElement<HTMLButtonElement>('#uninstall-cc-switch');
+const ccSwitchResiduals = requiredElement<HTMLOListElement>('#cc-switch-residuals');
 const connectionAdvancedDialog = requiredElement<HTMLDialogElement>('#connection-advanced-dialog');
 const openConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#open-connection-advanced',
@@ -1023,6 +1030,7 @@ let codexAutoLaunchSessionId = '';
 const routeHealthNotifications = new Map<string, string>();
 const effortRecoveryNotifications = new Map<string, number>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
+let routerKernelState: RouterKernelState | undefined;
 let routerOperationInProgress = false;
 /** Set after a successful purge so the “pick a new source” hint only appears when it applies. */
 let routerPurgeCompleted = false;
@@ -3297,6 +3305,7 @@ const selectSettingsTab = (tab: SettingsTab): void => {
   }
   if (tab === 'router') {
     void loadRouterManagement();
+    void loadRouterKernelState();
   }
 };
 
@@ -4438,6 +4447,74 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   updateSmartGuidance();
 }
 
+const renderRouterKernelState = (state: RouterKernelState): void => {
+  routerKernelState = state;
+  const activeLabel =
+    state.active === 'ccr' ? 'CCR' : state.active === 'cc-switch' ? 'CC Switch' : '无';
+  routerKernelStatus.textContent = state.conflict
+    ? '检测到 CCR 与 CC Switch 同时运行；请停止其中一个，避免接入状态相互覆盖。'
+    : `当前活跃内核：${activeLabel}。${state.ccSwitch.message}`;
+  routerKernelStatus.dataset.tone = state.conflict ? 'danger' : 'neutral';
+  installCcSwitchButton.disabled = routerOperationInProgress || state.ccSwitch.installed;
+  exportCcSwitchButton.disabled =
+    routerOperationInProgress ||
+    !state.ccSwitch.installed ||
+    !state.ccSwitch.protocolRegistered ||
+    !activeStatus();
+  uninstallCcSwitchButton.disabled =
+    routerOperationInProgress ||
+    (!state.ccSwitch.installed && state.ccSwitch.residuals.length === 0);
+  ccSwitchResiduals.replaceChildren(
+    ...state.ccSwitch.residuals.map((residual) => {
+      const item = document.createElement('li');
+      item.textContent = residual;
+      return item;
+    }),
+  );
+};
+
+const loadRouterKernelState = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status || routerOperationInProgress) {
+    return;
+  }
+  try {
+    const state = await window.controlPanel.getRouterKernelState(status.id);
+    renderRouterKernelState(state);
+    renderRouterManagement(state.ccr);
+  } catch {
+    routerKernelStatus.textContent = '无法读取路由内核状态。';
+    routerKernelStatus.dataset.tone = 'danger';
+  }
+};
+
+const runKernelOperation = async (
+  action: (sessionId: string) => Promise<RouterKernelOperationResult>,
+  busyLabel: string,
+  button: HTMLButtonElement,
+): Promise<void> => {
+  const status = activeStatus();
+  if (!status || routerOperationInProgress) {
+    return;
+  }
+  routerOperationInProgress = true;
+  await runGuarded(button, busyLabel, async () => {
+    try {
+      const result = await action(status.id);
+      renderRouterKernelState(result.state);
+      renderRouterManagement(result.state.ccr);
+      showToast(result.error ?? result.message, result.ok ? 'success' : 'error');
+    } catch {
+      showToast('路由内核操作发生异常。', 'error');
+    } finally {
+      routerOperationInProgress = false;
+      if (routerKernelState) {
+        renderRouterKernelState(routerKernelState);
+      }
+    }
+  });
+};
+
 const loadRouterManagement = async (): Promise<void> => {
   const status = activeStatus();
   if (!status || routerRefreshInProgress || routerOperationInProgress) {
@@ -4477,6 +4554,7 @@ const runRouterOperation = async (
       if (routerManagementState) {
         renderRouterManagement(routerManagementState);
       }
+      void loadRouterKernelState();
     }
   });
 };
@@ -8791,6 +8869,41 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-setting
 openRouterSettingsButton.addEventListener('click', () => {
   openAdvancedConnectionDialog();
   selectSettingsTab('router');
+});
+installCcSwitchButton.addEventListener('click', () => {
+  void runKernelOperation(
+    (sessionId) => window.controlPanel.installCcSwitch(sessionId),
+    '正在安装…',
+    installCcSwitchButton,
+  );
+});
+exportCcSwitchButton.addEventListener('click', () => {
+  void runKernelOperation(
+    (sessionId) => window.controlPanel.exportCurrentProviderToCcSwitch(sessionId),
+    '正在导出…',
+    exportCcSwitchButton,
+  );
+});
+uninstallCcSwitchButton.addEventListener('click', async () => {
+  const residuals = routerKernelState?.ccSwitch.residuals ?? [];
+  if (
+    !(await requestConfirmation({
+      confirmLabel: '彻底卸载',
+      message:
+        '将通过 Windows Installer 卸载 CC Switch，并删除以下已知数据目录：\n' +
+        (residuals.length > 0 ? residuals.join('\n') : '卸载后扫描到的 CC Switch 专属数据目录') +
+        '\n\n不会读取或修改 CC Switch 的 SQLite 内容；目录将整体删除且无法恢复。',
+      title: '彻底卸载 CC Switch',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+  void runKernelOperation(
+    (sessionId) => window.controlPanel.uninstallCcSwitch(sessionId),
+    '正在卸载…',
+    uninstallCcSwitchButton,
+  );
 });
 conversationRenameCancel.addEventListener('click', () => {
   conversationRenameDialog.close('cancel');

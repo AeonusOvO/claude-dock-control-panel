@@ -8058,6 +8058,36 @@ body.is-resizing * {
   padding: var(--s-3);
 }
 
+.cc-switch-boundary {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0 0 var(--s-3);
+}
+
+.cc-switch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.cc-switch-residuals {
+  color: var(--danger-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  margin: var(--s-2) 0 0;
+  overflow-wrap: anywhere;
+  padding-left: var(--s-5);
+}
+
+.cc-switch-residuals:empty {
+  display: none;
+}
+
+#router-kernel-status[data-tone='danger'] {
+  color: var(--danger-text);
+}
+
 .router-capability-list {
   display: grid;
   gap: var(--s-2);
