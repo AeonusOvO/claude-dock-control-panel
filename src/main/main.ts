@@ -2811,6 +2811,9 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', showMainWindow);
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+  });
   app.whenReady().then(async () => {
     app.setAppUserModelId('cn.cheng.claudedock');
     artifactService.install();

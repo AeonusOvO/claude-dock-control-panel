@@ -15,6 +15,7 @@ export interface EgressEvidence {
 const MAX_EGRESS_RESPONSE_BYTES = 64 * 1024;
 export const LEAK_AUDIT_ALLOWED_HOSTS = Object.freeze([
   'bash.ws',
+  'stun.cloudflare.com',
   'www.cloudflare.com',
   'ipinfo.io',
 ]);
