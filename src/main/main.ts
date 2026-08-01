@@ -2720,11 +2720,13 @@ if (!hasSingleInstanceLock) {
     downloadEngine = new DownloadEngine(
       session.defaultSession as unknown as DownloadSession,
       busyRegistry,
+      app.getPath('userData'),
       (tasks) => {
         mainWindow?.webContents.send('download:changed', tasks);
       },
     );
     downloadEngine.install();
+    downloadEngine.restoreInterrupted();
     registerIpc();
     createTray();
 

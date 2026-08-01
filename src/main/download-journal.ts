@@ -1,0 +1,140 @@
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+export interface DownloadJournalEntry {
+  eTag?: string;
+  expectedBytes?: number;
+  expectedSha256?: string;
+  finalPath: string;
+  id: string;
+  label: string;
+  lastModified?: string;
+  length: number;
+  receivedBytes: number;
+  savePath: string;
+  startTime: number;
+  urlChain: string[];
+}
+
+const isNonNegativeNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const entry = value as Partial<DownloadJournalEntry>;
+  if (
+    typeof entry.finalPath !== 'string' ||
+    !path.isAbsolute(entry.finalPath) ||
+    typeof entry.id !== 'string' ||
+    !entry.id ||
+    typeof entry.label !== 'string' ||
+    !entry.label ||
+    !isNonNegativeNumber(entry.length) ||
+    !isNonNegativeNumber(entry.receivedBytes) ||
+    typeof entry.savePath !== 'string' ||
+    !path.isAbsolute(entry.savePath) ||
+    entry.savePath !== `${entry.finalPath}.partial` ||
+    !isNonNegativeNumber(entry.startTime) ||
+    !Array.isArray(entry.urlChain) ||
+    entry.urlChain.length === 0 ||
+    !entry.urlChain.every((url) => typeof url === 'string' && url.startsWith('https://'))
+  ) {
+    return undefined;
+  }
+  const expectedBytes = isNonNegativeNumber(entry.expectedBytes)
+    ? entry.expectedBytes
+    : undefined;
+  const expectedSha256 =
+    typeof entry.expectedSha256 === 'string' && /^[0-9a-f]{64}$/i.test(entry.expectedSha256)
+      ? entry.expectedSha256.toLowerCase()
+      : undefined;
+  return {
+    eTag: typeof entry.eTag === 'string' && entry.eTag ? entry.eTag : undefined,
+    expectedBytes,
+    expectedSha256,
+    finalPath: entry.finalPath,
+    id: entry.id,
+    label: entry.label,
+    lastModified:
+      typeof entry.lastModified === 'string' && entry.lastModified
+        ? entry.lastModified
+        : undefined,
+    length: entry.length,
+    receivedBytes: entry.receivedBytes,
+    savePath: entry.savePath,
+    startTime: entry.startTime,
+    urlChain: [...entry.urlChain],
+  };
+};
+
+export class DownloadJournal {
+  private readonly entries = new Map<string, DownloadJournalEntry>();
+  private readonly storagePath: string;
+
+  public constructor(userDataPath: string) {
+    this.storagePath = path.join(userDataPath, 'download-journal.json');
+    this.load();
+  }
+
+  public list(): DownloadJournalEntry[] {
+    return [...this.entries.values()].map((entry) => ({
+      ...entry,
+      urlChain: [...entry.urlChain],
+    }));
+  }
+
+  public flush(): void {
+    this.write();
+  }
+
+  public remove(id: string): void {
+    if (this.entries.delete(id)) {
+      this.write();
+    }
+  }
+
+  public replace(entries: DownloadJournalEntry[]): void {
+    this.entries.clear();
+    for (const entry of entries) {
+      this.entries.set(entry.id, { ...entry, urlChain: [...entry.urlChain] });
+    }
+    this.write();
+  }
+
+  public upsert(entry: DownloadJournalEntry): void {
+    this.entries.set(entry.id, { ...entry, urlChain: [...entry.urlChain] });
+    this.write();
+  }
+
+  private write(): void {
+    mkdirSync(path.dirname(this.storagePath), { recursive: true });
+    const temporaryPath = `${this.storagePath}.tmp`;
+    writeFileSync(temporaryPath, `${JSON.stringify(this.list(), null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, this.storagePath);
+  }
+
+  private load(): void {
+    if (!existsSync(this.storagePath)) {
+      return;
+    }
+    try {
+      const value = JSON.parse(readFileSync(this.storagePath, 'utf8')) as unknown;
+      if (!Array.isArray(value)) {
+        return;
+      }
+      for (const candidate of value) {
+        const entry = parseEntry(candidate);
+        if (entry) {
+          this.entries.set(entry.id, entry);
+        }
+      }
+    } catch {
+      // A corrupt journal is ignored; partial files are never executed as final artifacts.
+    }
+  }
+}
