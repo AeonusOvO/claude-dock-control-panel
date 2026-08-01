@@ -98,6 +98,7 @@ import { createElectronApplicationRequest } from './electron-application-request
 import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
+import { DownloadEngine, type DownloadSession } from './download-engine';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -117,6 +118,7 @@ let mainWindow: BrowserWindow | null = null;
 let minimizedNoticeShown = false;
 let tray: Tray | null = null;
 let busyRegistry: BusyRegistry | null = null;
+let downloadEngine: DownloadEngine | null = null;
 
 interface PendingPermissionModeProbe {
   resolve: (mode: ClaudePermissionMode | undefined) => void;
@@ -1052,6 +1054,13 @@ const registerIpc = (): void => {
       throw new Error('忙碌任务登记表尚未初始化。');
     }
     return busyRegistry.list();
+  });
+  ipcMain.handle('download:list', (event) => {
+    validateSender(event);
+    if (!downloadEngine) {
+      throw new Error('下载引擎尚未初始化。');
+    }
+    return downloadEngine.list();
   });
   ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
     validateSender(event);
@@ -2708,6 +2717,14 @@ if (!hasSingleInstanceLock) {
     busyRegistry = new BusyRegistry((leases) => {
       mainWindow?.webContents.send('busy:changed', leases);
     });
+    downloadEngine = new DownloadEngine(
+      session.defaultSession as unknown as DownloadSession,
+      busyRegistry,
+      (tasks) => {
+        mainWindow?.webContents.send('download:changed', tasks);
+      },
+    );
+    downloadEngine.install();
     registerIpc();
     createTray();
 
