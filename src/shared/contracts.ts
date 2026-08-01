@@ -111,6 +111,22 @@ export interface ProxyRuntimeView {
   socksProxyUrl?: string;
   status: ProxyRuntimeStatus;
 }
+export type ProxyAuditVerdict = 'passed' | 'risk' | 'warning';
+export interface ProxyAuditItem {
+  advice: string;
+  evidence: string[];
+  explanation: string;
+  name: string;
+  verdict: ProxyAuditVerdict;
+}
+export interface ProxyLeakAuditReport {
+  checkedAt: number;
+  directIp?: string;
+  items: ProxyAuditItem[];
+  nodeFingerprint: string;
+  proxyIp?: string;
+  summary: ProxyAuditVerdict;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
