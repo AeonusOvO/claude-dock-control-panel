@@ -525,6 +525,22 @@ main.ts:583-584 已经在写 `document.documentElement.dataset.theme` 与 `.data
 | `package.json` / `package-lock.json`                        | 版本 → `2.0.0`；新增 `marked`、`shiki`、字体、可视化库                                                                                                                   |
 | `README.md` / `design.md` / `technical.md`                  | AGENTS.md:4,7 要求同步                                                                                                                                                   |
 
+### 3.0.0 扩展文件（2026-08-02）
+
+| 文件/目录                                                | 3.0.0 新职责                                                                     |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `src/main/busy-registry.ts`                              | 下载、安装、卸载、配置、代理与对话的幂等忙碌租约真值                             |
+| `src/main/download-engine.ts` / `download-journal.ts`    | DownloadItem 断点续传、EMA/ETA、崩溃恢复、来源/尺寸/SHA-256 完整性闸门           |
+| `src/main/proxy/`                                        | 节点加密存储、自研导入、Xray sidecar、IP/DNS/WebRTC/环境泄露审计                 |
+| `src/main/cc-switch-adapter.ts`                          | 官方 MSI 生命周期、注册表/进程只读检测、官方 deep link 单向导出、残留清理牢笼    |
+| `src/main/mcp-manager.ts` / `src/shared/mcp-catalog.ts`  | Claude/Codex CLI MCP 发现、离线精选、官方 Registry、健康检查、定向变更与备份回滚 |
+| `src/shared/router-capabilities.ts` / `router-kernel.ts` | 全供应商直连/路由能力矩阵与 CCR/CC Switch 冲突真值                               |
+| `src/main/chat-service.ts` / `src/renderer/main.ts`      | 删除总时长上限、静默提示+旁路探活、TCP keepalive、可选本地静默上限与继续生成     |
+| `src/renderer/index.html` / `styles.css` / `main.ts`     | 下载中心、忙碌退出、代理/路由设置与第 5 个 MCP 页；全部复用四主题 token          |
+| `tests/cli-only-guard.test.ts` / `chat-timeout.test.ts`  | CLI-only 与无隐式 timeout 的跨模块源码不变量                                     |
+| `scripts/visual-smoke.cjs`                               | 四主题 MCP、代理、路由截图矩阵                                                   |
+| `package.json` / `package-lock.json`                     | 单次大版本升级到 `3.0.0`，安装产物仍只输出到 `outputs/`                          |
+
 ---
 
 ## §6 验证
@@ -539,6 +555,20 @@ npm run build
 npm run test:layout    # scripts/layout-smoke.cjs：820/900/1180 三档宽度无遮挡
 npm run test:visual    # scripts/visual-smoke.cjs：截图落到 dist/visual-qa/
 ```
+
+3.0.0 在上述基线上再要求以下命令全部通过；`npm run verify` 必须无 warning：
+
+```bash
+npm run verify
+npm run test:select-theme
+npm run test:dialog-select
+npm run test:conpty
+npm run dist
+```
+
+发布前还要核对 `tests/cli-only-guard.test.ts`、`tests/chat-timeout.test.ts`、下载完整性/恢复、
+泄露阻断不关隧道、路由能力矩阵和 MCP 逐字节备份还原守栏，以及
+`outputs/ClaudeDock-Setup-3.0.0-x64.exe`、对应 blockmap、`latest.yml` 与 `win-unpacked/`。
 
 ### 6.2 Codex 视觉验收清单（逐条截图比对）
 

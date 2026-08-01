@@ -347,6 +347,83 @@ app
       (await captureSettledPage()).toPNG(),
     );
 
+    const mcpFixtureScript = `
+    ${activateRailPage('mcp')}
+    (() => {
+      try {
+      document.querySelector('#mcp-status').textContent =
+        '发现 3 个 MCP · 官方注册表已连接 · 上次读取 14:30';
+      document.querySelector('#mcp-installed-count').textContent = '3';
+      const installed = document.querySelector('#mcp-installed-list');
+      installed.replaceChildren();
+      for (const fixture of [
+        ['filesystem', 'Claude · stdio', '已连接 · MCP initialize 握手成功。', 'project · 项目共享', 'D:/Program/ClaudeDesk/.mcp.json'],
+        ['context7', 'Claude · http', '连接失败 · 初始化请求返回 HTTP 401。', 'user · 用户级', 'C:/Users/Cheng/.claude.json'],
+        ['node_repl', 'Codex · stdio', '状态未知 · 来自 Codex CLI；ClaudeDock 仅只读发现。', 'user · 用户级', 'C:/Users/Cheng/.codex/config.toml'],
+      ]) {
+        const card = document.createElement('article');
+        card.className = 'plugin-card';
+        card.dataset.installed = 'true';
+        const header = document.createElement('div');
+        header.className = 'plugin-card__header';
+        const title = document.createElement('strong');
+        title.textContent = fixture[0];
+        const badge = document.createElement('span');
+        badge.className = 'plugin-card__badge';
+        badge.textContent = fixture[1];
+        header.append(title, badge);
+        const health = document.createElement('p');
+        health.className = 'mcp-card__health';
+        health.dataset.health = fixture[2].startsWith('已连接') ? 'connected' : fixture[2].startsWith('连接失败') ? 'failed' : 'unknown';
+        health.textContent = fixture[2];
+        const meta = document.createElement('div');
+        meta.className = 'plugin-card__meta';
+        meta.textContent = fixture[3];
+        const source = document.createElement('code');
+        source.className = 'mcp-card__path';
+        source.textContent = fixture[4];
+        card.append(header, health, meta, source);
+        installed.append(card);
+      }
+      const catalog = document.querySelector('#mcp-catalog-list');
+      catalog.replaceChildren();
+      const card = document.createElement('article');
+      card.className = 'plugin-card';
+      const header = document.createElement('div');
+      header.className = 'plugin-card__header';
+      const title = document.createElement('strong');
+      title.textContent = 'sequential-thinking';
+      const badge = document.createElement('span');
+      badge.className = 'plugin-card__badge';
+      badge.textContent = '精选 · stdio';
+      header.append(title, badge);
+      const description = document.createElement('p');
+      description.textContent = '提供结构化、可修订的顺序思考工具。';
+      const install = document.createElement('button');
+      install.textContent = '安装';
+      card.append(header, description, install);
+      catalog.append(card);
+      return 'ok';
+      } catch (error) {
+        return error instanceof Error ? error.stack : String(error);
+      }
+    })();
+  `;
+    new vm.Script(mcpFixtureScript);
+    const mcpFixtureResult = await window.webContents.executeJavaScript(mcpFixtureScript);
+    if (mcpFixtureResult !== 'ok') {
+      throw new Error(`MCP visual fixture failed: ${mcpFixtureResult}`);
+    }
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      writeFileSync(
+        path.join(outputDirectory, `mcp-${themeId}-820.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+    }
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
+
     window.setSize(1180, 760);
     await window.webContents.executeJavaScript(`
     ${activateRailPage('connection')}
@@ -493,6 +570,31 @@ app
       path.join(outputDirectory, 'global-settings-connection-1180.png'),
       (await captureSettledPage()).toPNG(),
     );
+    for (const settingsPage of ['proxy', 'router']) {
+      await window.webContents.executeJavaScript(`
+      for (const tab of document.querySelectorAll('[data-settings-tab]')) {
+        const selected = tab.dataset.settingsTab === '${settingsPage}';
+        tab.classList.toggle('settings-tab--active', selected);
+        tab.setAttribute('aria-selected', String(selected));
+      }
+      for (const panel of document.querySelectorAll('[data-settings-panel]')) {
+        panel.classList.toggle(
+          'settings-panel--active',
+          panel.dataset.settingsPanel === '${settingsPage}',
+        );
+      }
+      document.querySelector('.settings-panels').scrollTop = 0;
+    `);
+      for (const themeId of themeOrder) {
+        await window.webContents.executeJavaScript(applyQaTheme(themeId));
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        writeFileSync(
+          path.join(outputDirectory, `global-settings-${settingsPage}-${themeId}-1180.png`),
+          (await captureSettledPage()).toPNG(),
+        );
+      }
+    }
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
     await window.webContents.executeJavaScript(`
     document.querySelector('#connection-advanced-dialog').close();
     document.documentElement.style.setProperty('--rail-w', '360px');

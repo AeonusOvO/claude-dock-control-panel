@@ -4,7 +4,30 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（2.6.0 · 2026-08-01）
+## 当前版本重点（3.0.0 · 2026-08-02）
+
+- 新增统一下载中心：CCR、Codex、Xray 与 CC Switch 安装资源共用可暂停、继续、取消和崩溃恢复的
+  下载内核；显示真实百分比、速度、已用/剩余时间，并在完成前核对来源、尺寸与 SHA-256。
+- 退出与窗口关闭改为忙碌感知。可续传下载会提示可后台继续，安装、卸载和配置写入会明确标注
+  中断风险；托盘与窗口 × 使用同一套状态真相，不会静默杀掉正在生成的对话。
+- 独立对话取消固定总时长上限；默认静默只提示并旁路探活，不结束慢回复。可选的本地静默上限默认
+  关闭，中途断流会保留正文并提供“继续生成”。
+- 「设置 → 代理」可导入分享链接、Clash `proxies` 子集和 HTTPS 订阅，以 Windows DPAPI 保存
+  凭据，并用受管 Xray sidecar 只为 ClaudeDock 启动的 CLI 提供代理；不会写 Windows 系统代理。
+  IP、DNS、WebRTC 与环境变量泄露体检会在有风险时阻断新接入但保持隧道运行，决定权留给用户。
+- 「设置 → 路由」集中管理 CCR、CC Switch 和供应商能力矩阵。一键向导只问供应商、Key 与可选模型，
+  原生 Anthropic 兼容供应商优先直连，需要 OpenAI 协议转换时才安装/启动 CCR；全过程展示阶段与
+  下载进度。CC Switch 只使用官方 MSI 与 `ccswitch://` 单向导出，绝不读写其 SQLite。
+- 左栏新增第 5 个「MCP」页：直接发现 Claude Code 的 user/project/local 三种作用域与 Codex CLI
+  配置，显示真实来源文件和受限健康检查；目录离线提供精选条目，联网合并官方 MCP Registry。
+  安装/卸载走 Claude CLI；项目共享 MCP 的启停必须先展示目标文件和 diff，再原子写入、备份，且
+  可逐字节还原。没有“一键全装”。
+- DeepSeek 与整张 Claude 供应商目录按当前官方集成文档复核；供应商“模型不存在”等原始错误不再
+  被快速模型静默降级遮住。CCR 的所有写配置调用机器强制 `applyProfile: false`，只服务 CLI。
+- 4 套主题继续驱动颜色、字体、几何、动效时长和缓动；新增下载、代理、路由、MCP、退出界面全部
+  使用既有 token 与 `prefers-reduced-motion` 降级。
+
+## 2.6.0 版本重点（2026-08-01）
 
 - 修复部分中转站接不进去的问题。Claude Code 自己会在 `ANTHROPIC_BASE_URL` 后面追加
   `/v1/messages`，此前的“智能补全”却把用户填写的 `/v1`、`/relay/v1`、`/proxy/anthropic`
@@ -403,7 +426,12 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   最多保留最近 50 个对话、每个 100 条消息；可逐条永久删除。附件正文独立存放，历史只记录
   引用。输入草稿会实时计入估算上下文，接口返回 usage 后改用供应商给出的精确 Token。
 - 左下角“设置”统一承载应用级设置；开机启动即时写入 Windows 登录项，主题与终端工具栏
-  使用同一配置，当前版本只提供简体中文。高级接入工具位于“设置 → 接入”。
+  使用同一配置，当前版本只提供简体中文。高级接入工具位于“设置 → 接入”，内置代理与路由
+  分别位于“设置 → 代理 / 路由”。
+- 标题栏下载入口集中显示受管资源的真实进度、速度、已用/剩余时间和校验阶段；可暂停、继续、
+  取消并在崩溃后恢复。退出时会区分可恢复下载与安装/卸载/配置写入风险，默认引导最小化到托盘。
+- 左栏 MCP 页按 user/project/local 作用域显示 Claude Code 配置，并只读显示 Codex CLI MCP；
+  安装/卸载为单项操作，项目共享启停必须先看目标文件与 diff，并可从完整备份还原。
 - 每个项目可以独立选择 Anthropic 官方接入、Anthropic Messages API 兼容服务或本地
   模型转换器。OpenAI Chat Completions / Responses 上游由 Claude Code Router 转换后接入，
   Anthropic Messages 上游可以直连或经过 Router；两类协议都显示在项目连接历史中。带
@@ -423,9 +451,12 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   避免网关反复启停刷出一堆几乎一样的条目。卡片显示自定义名称、协议与连接方式标签、接口/网关、
   主模型和快速模型，点击一键恢复当时的接入配置（含安全存储中的密钥和协议元数据）；右键可以
   重命名、恢复或删除，记录右侧的 `×` 也可删除单条。
-- 可在“接入”页一键获取 Claude Code Router 官方 Windows 安装程序、启动/停止模型网关、
+- 可在“设置 → 路由”一键获取 Claude Code Router 官方 Windows 安装程序、启动/停止模型网关、
   通过 npm 或 npmmirror 安装、卸载/替换旧版、打开完整管理页，并可视化新增、编辑、删除
   Provider。OpenAI cURL 可一键写入 Router，同时把 Router 路由接入当前 ClaudeDock 项目。
+- 同一页提供供应商一键接入向导和 CC Switch 适配器：向导优先选择原生 Anthropic 直连，只在
+  OpenAI 协议转换需要时使用 CCR；CC Switch 仅通过官方 MSI 安装/卸载和官方 `ccswitch://`
+  导入协议单向导出，不读取或修改其 SQLite。
 - CCR 管理服务已运行但 Provider 为空时，不再只显示 `No available models`：界面会解释
   当前项目是否受影响、禁止无意义的重复启动，并提供“用当前项目配置一键修复”或手动添加
   第一个 Provider。自动修复只在远程 Anthropic 直连和 API Key 已安全保存时可用。
@@ -635,7 +666,7 @@ Codex 会直接复用自己的登录态。若选择 **Claude Code**，继续按�
 assets/              图标矢量源及生成图标
 build/               electron-builder/NSIS 安装器自定义脚本
 scripts/             清理、图标生成等工程脚本
-src/main/            Electron 主进程、项目工作区、Claude/Codex 运行时与 PowerShell 会话管理
+src/main/            Electron 主进程、下载/代理/MCP/路由服务、项目工作区与 CLI 运行时
 src/preload/         受限的渲染进程桥接 API
 src/renderer/        控制面板界面与 xterm.js 终端
 src/shared/          跨进程类型和纯函数
@@ -715,6 +746,14 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
 - Router 管理凭据只在 Electron 主进程读取并用于本机回环 RPC，不会传给 renderer。
   Provider 列表只显示“是否已配置密钥”。保存 Provider 时只改 CCR 的 `Providers` 和
   `preferredProvider`，不会应用或改写 CCR 中的 Codex profile、Claude profile 或系统代理。
+- 代理节点凭据只以 `safeStorage` 密文写入 `userData/proxy/`。Xray 配置在启动前临时生成，停止后
+  删除；作用域开关默认只注入 Claude/Codex CLI 子进程。应用代理只影响 Electron 自己的 session，
+  任何路径都不写 Windows Internet Settings、路由表或桌面客户端配置。
+- MCP 发现只读 `~/.claude.json`、项目 `.mcp.json` 与 `~/.codex/config.toml`，明确不读取 Claude
+  Desktop 配置。安装/卸载通过 `claude mcp` argv 执行；项目共享启停写入前校验文件未被并发修改，
+  保留最近 10 份完整备份并支持逐字节还原。Codex MCP 在本版只读显示，避免越权改写其配置。
+- 官方 MCP Registry 当前仍是 preview；在线目录失败时自动退回内置精选，不影响本地发现与已安装
+  MCP。远程健康检查只接受 HTTPS，stdio 健康检查会启动一次进程完成 `initialize` 后立即终止。
 - Router 的 GitHub 安装方式只接受官方仓库当前 Release 中命名匹配的 Windows `.exe`，
   限制最大 250 MiB，并在打开前校验文件大小与 SHA-256。网络受限时可改用 npm 官方源或
   npmmirror；镜像仅作为包下载源，不代替代码签名或供应链审查。

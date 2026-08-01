@@ -1,9 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import {
-  buildCcSwitchProviderDeepLink,
-  parseCcSwitchRelease,
-} from '../src/main/cc-switch-adapter';
+import { buildCcSwitchProviderDeepLink, parseCcSwitchRelease } from '../src/main/cc-switch-adapter';
 
 const adapterSource = readFileSync(
   new URL('../src/main/cc-switch-adapter.ts', import.meta.url),

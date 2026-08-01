@@ -45,9 +45,14 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ChatAttachmentStore ── 文件校验 / 应用数据副本 / 主进程 base64 与缩略图
         ├── ChatService ── Anthropic/OpenAI 多模态 HTTP + typed SSE / usage / 测试 / 取消
         ├── ArtifactService ── 自定义协议 / iframe CSP / 离线库 / webRequest 审计与断网
+        ├── BusyRegistry ── 下载/安装/卸载/配置/代理/对话的唯一忙碌租约真值
+        ├── DownloadEngine + DownloadJournal ── 续传 / 进度 / 来源、尺寸与 SHA-256 闸门
+        ├── ProxyStore + XraySidecar + LeakAuditService ── DPAPI / CLI 代理 / 泄露裁决
+        ├── McpManager ── 多作用域发现 / CLI 变更 / 健康检查 / 备份回滚
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
+        ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
         ├── SoftwareUpdates ── Claude Code / Router 版本检测与安装源
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
@@ -244,9 +249,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 `app` 事件）直接置闩：系统无论如何都会杀进程，弹窗只是推迟丢失同样的工作。单实例锁失败的
 重复启动没有窗口也没有要保护的东西，立即退出。
 
-渲染进程只对随进程一起消失的工作发问：正在流式生成的回复、发送中的提交、仍在读取的附件。
-运行中的终端刻意不算——它们按设计继续在托盘后台运行（托盘气泡也是这么说的），为它们发问会
-让每次退出都变成一次询问。确认框已被其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
+`BusyRegistry` 是聊天之外的唯一事实来源：下载登记为 `resumable`，安装、卸载和配置写入登记为
+`blocking`，释放函数幂等且所有调用点都在 `finally` 执行。它的快照同时驱动托盘 tooltip、下载
+中心与退出确认；渲染进程再把正在流式生成的回复、发送中的提交和附件读取合并进退出清单。确认框
+把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘。运行中的终端刻意不算；确认框已被
+其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
 
 ### 全局设置 IPC
 
@@ -266,6 +273,35 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - 主题继续复用 `ui:set-theme` 与 `WorkspaceStore.terminalTheme`，全局设置和终端工具栏只
   是两个 UI 入口。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
   快照与即时操作边界，没有新增第二套 Router/诊断状态。
+
+### 3.0 共享下载、代理与 MCP 服务
+
+- `DownloadEngine` 只接受 HTTPS、成对的 host/path 白名单、`userData` 内目标、尺寸上限与可选
+  精确字节/SHA-256。它基于 Electron `DownloadItem` 计算 EMA 速度、ETA 和真实百分比；未知
+  `Content-Length` 以 `-1` 表达不确定态。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
+  `.partial` 原子改名为最终文件；失败或取消不会留下可执行的最终路径。
+- `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
+  `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界记录
+  只会被丢弃，部分文件从不当作完成产物执行。CCR、Codex、Xray 和 CC Switch 的受管资源共用
+  此内核；下载的 `resumable` 租约与后续安装的 `blocking` 租约严格分离。
+- `ProxyStore` 把 vmess/vless/ss/trojan 节点结构和作用域写入 `userData/proxy/`，秘密字段只以
+  Electron `safeStorage` 密文保存。分享链接、Clash `proxies` 子集和 HTTPS 订阅由项目自研解析器
+  处理；不引入或复制 GPL 代理实现。`XraySidecar` 只使用 MPL-2.0 的独立 Xray-core 进程，在
+  `127.0.0.1` 暴露本机 HTTP 入站，运行配置为临时文件并在停止后清理。
+- CLI 作用域只给 ClaudeDock 启动的 Claude/Codex 子进程注入 `HTTP_PROXY` / `HTTPS_PROXY`，
+  `NO_PROXY` 固定包含 `127.0.0.1,localhost,::1`。应用作用域是显式 opt-in 的 Electron session
+  `setProxy()`；不存在系统代理模式，不调用注册表写入、`setx` 或路由表命令，也不读取/修改
+  Claude/Codex 桌面版配置。
+- `LeakAuditService` 并行比较直连/代理出口、ASN/机房启发式、DNS、WebRTC 和进程环境；结论与
+  用户接受风险的决定写入不含节点秘密的审计记录。风险只阻断新的接入动作，已经运行的隧道保持
+  运行。ASN/机房属于启发式证据，界面不得写成确定封号结论。
+- `McpManager` 从 `~/.claude.json` 根级 user、项目记录 local、当前项目 `.mcp.json` project 和
+  `~/.codex/config.toml` 只读发现 MCP，明确不读取 Claude Desktop 配置。在线目录以 10 秒、
+  有界响应读取官方 MCP Registry preview，失败时保留离线精选；后台健康任务并发上限为 2。
+- Claude MCP 安装/卸载只调用 `claude mcp add-json/remove --scope ...` 的 argv；Codex MCP 本版
+  只读。项目共享启停先保存含目标路径的预览和原文件摘要，确认时若摘要变化则拒绝写入；随后
+  完整备份、原子写入 `enabledMcpjsonServers` / `disabledMcpjsonServers`，失败由
+  `RollbackCoordinator` 恢复。只保留最近 10 份完整备份，恢复操作逐字节复制并先保存当前状态。
 
 ### 独立模型对话
 
@@ -294,10 +330,15 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   重定向边界。
 - renderer 先调用 `chat:preflight`，再通过 `chat:start` 发起；两处都在主进程修复失效的
   旧附件并重新校验当前草稿。启动失败会回滚临时消息、保留输入与附件，不把不可发送状态写入
-  历史。主进程用 `requestId → AbortController` Map 管理 5 分钟空闲超时（每个响应块和重试阶段
-  重置）、60 分钟总上限与 `chat:stop`；`chat:stream` 明确区分 `manual` / `timeout` 终止原因，
-  并支持 `retrying/thinking/input-json/refusal/stopReason`，不推送
-  请求头或凭据。Anthropic 流请求 `thinking: {type:'adaptive', display:'summarized'}`，若
+  历史。主进程用 `requestId → AbortController` Map 管理 `chat:stop`，不存在总时长上限。默认
+  静默 5 分钟只发 `idle` 事件并用同一运行期配置做一次 15 秒旁路探活，之后约每分钟复查；它
+  不会取消仍在思考或没有 SSE ping 的请求。高级设置的本地静默上限默认关闭；显式选用
+  5/10/30 分钟时先提示，只在第二个阈值以 `local-timeout` 终止，并明确说明来自本地设置。
+  对话 fetch 使用 Undici 的 TCP keepalive，半开连接失败后继续进入既有网络重试阶梯；
+  `chat:stream` 的终止原因只有 `manual` / `local-timeout`。中途 EOF 保留部分正文并标记
+  `continuable`，renderer 提供“继续生成”发起诚实的上下文续写，而不宣称流级断点续传。
+  事件还支持 `retrying/thinking/input-json/refusal/stopReason`，不推送请求头或凭据。
+  Anthropic 流请求 `thinking: {type:'adaptive', display:'summarized'}`，若
   400/422 不兼容则丢弃首个响应体并安全重试无 thinking 版本。每次最多 100 条消息、单个文本
   块 200,000 字符、文本合计 1,000,000 字符、响应
   2,000,000 字符；错误文案再次替换可能回显的凭据。
@@ -700,6 +741,25 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   触及不到（符合「不得修改 Codex、Claude Code 或系统级 API 路由」）。
 - `canUninstall` 是 `Boolean(cli || desktop || 数据目录存在)`：程序已经没了、只剩孤立配置目录
   时，清理入口依然可达。
+
+### 3.0 路由决策与 CC Switch 边界
+
+- `src/shared/router-capabilities.ts` 为供应商目录的每个 ID 明确记录 `direct-anthropic`、
+  `router-optional` 或 `router-required`、认证方式、默认模型和 `verifiedAt`。一键接入向导先展示
+  决策，再按能力选择直连或 CCR；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
+  官方 Claude Code 集成指南使用 Anthropic 兼容 `authToken`、`https://api.deepseek.com/anthropic`
+  与当前模型标识，供应商原始“模型不存在”等错误不再被静默快速模型降级覆盖。
+- 向导阶段固定为决策、检查/安装内核、启动、写 Provider/项目配置和 1-token 连通校验；每个
+  阶段通过 BusyRegistry 与下载内核暴露真实状态。CCR 的所有配置写入只能经过
+  `saveConfigWithoutProfileTakeover()`，唯一 `saveConfig` 调用永久传 `applyProfile: false`，
+  源码守栏测试禁止桌面 profile takeover 和系统代理写入。
+- `CcSwitchAdapter` 只从官方 GitHub Release 元数据接受带尺寸与 SHA-256 的 Windows MSI，安装/
+  卸载交给 `msiexec` argv。检测只查询卸载注册表、`ccswitch://` 协议和进程，不打开数据库；
+  Provider 互操作只调用官方 `ccswitch://v1/import` 单向深链。清理仅限 APPDATA/LOCALAPPDATA 下
+  已知 CC Switch 专属目录，路径不在牢笼内即拒绝。
+- `src/shared/router-kernel.ts` 以纯状态计算 CCR 与 CC Switch 的 installed/running/conflict 真值。
+  两者同时运行时界面阻断新的路由接入并要求用户显式保留一个；安装、卸载、导出和残留清理均为
+  可验证的显式操作，不伪造 CC Switch 不存在的管理 API，也不读写其 SQLite。
 
 ### 软件与插件更新
 
@@ -1198,6 +1258,11 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   严格结束标记、部分输出不重放、重定向安全与兼容回退、附件原子导入/
   UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
   和流式稳定前缀。
+- 3.0 守栏补充覆盖 BusyRegistry 租约释放、下载 EMA/ETA/恢复日志/来源与完整性、退出和托盘忙态、
+  四种代理导入与 Xray 生命周期、IP/DNS/WebRTC/环境泄露裁决、供应商能力矩阵、CCR CLI-only、
+  CC Switch MSI/深链/清理牢笼、MCP 三作用域发现/diff/备份/逐字节还原，以及对话无总时长上限、
+  静默探活和可选 `local-timeout`。`tests/cli-only-guard.test.ts` 与
+  `tests/chat-timeout.test.ts` 作为跨模块源码不变量，避免未来调用点绕过局部单测。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
@@ -1305,9 +1370,10 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   超长插件名、市场名、仓库 URL 与多按钮操作区，把内容最小宽度导致的遮挡变成 820px 下的
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。
 - `npm run test:visual` 保留插件、服务商向导、历史配置、全局设置、连接测试、终端聚焦态、
-  Codex 三步工作台、
+  Codex 三步工作台、代理/路由设置页与 MCP 管理页，
   独立对话详情抽屉与重命名弹窗回归图，并生成四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵
-  PNG 到 `dist/visual-qa/`。富文本对话矩阵主动聚焦输入框，用于人工核对四主题的焦点颜色；
+  PNG，以及四主题 MCP、代理和路由截图到 `dist/visual-qa/`。富文本对话矩阵主动聚焦输入框，
+  用于人工核对四主题的焦点颜色；
   其余继续核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、窄宽响应式和
   遮罩无重排。隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY，输出
@@ -1410,6 +1476,14 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
   <https://learn.chatgpt.com/docs/auth>
 - CC Switch 官方开源仓库（配置管理能力与非官方代理边界）：
   <https://github.com/farion1231/cc-switch>
+- CC Switch 官方 Releases 与 deep link 导入协议：
+  <https://github.com/farion1231/cc-switch/releases>、
+  <https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/5-faq/5.3-deeplink.md>
+- MCP Registry 官方说明与 preview API 文档：
+  <https://modelcontextprotocol.io/registry/about>、
+  <https://registry.modelcontextprotocol.io/docs>
+- Xray-core 官方仓库与 MPL-2.0 许可：
+  <https://github.com/XTLS/Xray-core>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：
@@ -1442,8 +1516,8 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
   <https://code.claude.com/docs/en/data-usage>
 - LiteLLM Anthropic `/v1/messages` 统一端点：
   <https://docs.litellm.ai/docs/anthropic_unified/>
-- DeepSeek 官方 Anthropic API：
-  <https://api-docs.deepseek.com/guides/anthropic_api/>
+- DeepSeek 官方 Coding Agents / Claude Code 接入指南：
+  <https://api-docs.deepseek.com/guides/coding_agents/>
 - Claude Code Router 仓库、Windows 图形版与默认端口：
   <https://github.com/musistudio/claude-code-router>
 - Claude Code Router 官方 Releases：

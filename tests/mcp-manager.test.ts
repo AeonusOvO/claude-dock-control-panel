@@ -1,8 +1,10 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { discoverMcpServers } from '../src/main/mcp-manager';
+import { McpManager } from '../src/main/mcp-manager';
+import { BusyRegistry } from '../src/main/busy-registry';
 import { CURATED_MCP_SERVERS } from '../src/shared/mcp-catalog';
 
 const temporaryDirectories: string[] = [];
@@ -74,5 +76,49 @@ describe('MCP discovery', () => {
     expect(CURATED_MCP_SERVERS.length).toBeGreaterThanOrEqual(3);
     expect(CURATED_MCP_SERVERS.every((entry) => entry.featured)).toBe(true);
     expect(CURATED_MCP_SERVERS.every((entry) => !entry.requiresCredential)).toBe(true);
+  });
+
+  it('exposes no install-all or sync-all MCP entry point', () => {
+    const renderer = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+    expect(renderer).not.toMatch(/install-all-mcp|sync-all-mcp|一键全装|同步全部 MCP/i);
+  });
+
+  it('previews, backs up, atomically toggles and byte-restores project MCP state', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-mcp-toggle-'));
+    temporaryDirectories.push(root);
+    const home = path.join(root, 'home');
+    const cwd = path.join(root, 'project');
+    const userData = path.join(root, 'user-data');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    const configPath = path.join(home, '.claude.json');
+    const original = Buffer.from(
+      `${JSON.stringify({
+        projects: {
+          [cwd.replaceAll('\\', '/')]: {
+            disabledMcpjsonServers: [],
+            enabledMcpjsonServers: ['sharedServer'],
+          },
+        },
+      })}\n`,
+    );
+    writeFileSync(configPath, original);
+    const manager = new McpManager(home, userData, new BusyRegistry());
+
+    const preview = manager.previewToggle(cwd, 'sharedServer', false);
+    expect(preview.targetPath).toBe(configPath);
+    expect(preview.after).toContain('disabledMcpjsonServers');
+    await manager.applyToggle(preview.id);
+    expect(
+      JSON.parse(readFileSync(configPath, 'utf8')).projects[cwd.replaceAll('\\', '/')],
+    ).toMatchObject({
+      disabledMcpjsonServers: ['sharedServer'],
+      enabledMcpjsonServers: [],
+    });
+
+    const [backup] = manager.listBackups();
+    expect(backup).toBeDefined();
+    await manager.restoreBackup(backup!.id, cwd);
+    expect(readFileSync(configPath)).toEqual(original);
   });
 });

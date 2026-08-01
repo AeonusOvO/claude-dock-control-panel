@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 
 app.setPath('userData', path.join(__dirname, '..', 'dist', '.electron-layout-smoke'));
@@ -504,6 +504,28 @@ const addArtifactDetailsStressFixture = `
 `;
 
 app.whenReady().then(async () => {
+  const emptyWorkspace = { activeSessionId: '', projects: [], sessions: [] };
+  ipcMain.handle('busy:set-conversation', () => []);
+  ipcMain.handle('download:list', () => []);
+  ipcMain.handle('proxy:get-state', () => ({
+    audits: [],
+    runtime: { coreVersion: '', logs: [], status: 'stopped' },
+    store: {
+      profiles: [],
+      scope: { application: false, cli: true },
+      state: { runtimeStatus: 'stopped' },
+    },
+  }));
+  ipcMain.handle('app:get-settings', () => ({
+    advanced: { chatIdleTimeoutMinutes: 0, webResearchIsolation: false },
+    closeBehavior: 'tray',
+    language: 'zh-CN',
+    launchAtLogin: false,
+    theme: 'claude',
+    version: 'layout-smoke',
+  }));
+  ipcMain.handle('ui:set-theme', () => undefined);
+  ipcMain.handle('workspace:get-state', () => emptyWorkspace);
   const results = [];
   const window = new BrowserWindow({
     height: 640,

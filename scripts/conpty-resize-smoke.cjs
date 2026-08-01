@@ -191,11 +191,13 @@ const run = async () => {
 run()
   .then(() => {
     scheduleTemporaryUserDataCleanup();
-    app.quit();
+    // This is a one-shot test host. `app.quit()` enters ClaudeDock's user-facing busy/tray
+    // handshake and can keep the harness alive after the screenshot has already passed. Exiting the
+    // harness directly closes the ConPTY handles; the detached helper then removes its temp data.
+    app.exit(0);
   })
   .catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     scheduleTemporaryUserDataCleanup();
-    process.exitCode = 1;
-    app.quit();
+    app.exit(1);
   });

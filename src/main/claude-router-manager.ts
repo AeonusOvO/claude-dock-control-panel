@@ -961,11 +961,9 @@ export class ClaudeRouterManager {
     const access = await this.requireActiveService();
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
     const updated = buildUpdatedRouterConfig(current, input);
-    const saved = await this.saveConfigWithoutProfileTakeover(
-      access,
-      updated.config,
-      [input.apiKey ?? ''],
-    );
+    const saved = await this.saveConfigWithoutProfileTakeover(access, updated.config, [
+      input.apiKey ?? '',
+    ]);
     const state = await this.getState();
     const provider = state.providers.find((item) => item.id === updated.providerId);
     if (!provider) {
