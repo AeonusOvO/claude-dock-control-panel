@@ -55,6 +55,7 @@ import type {
   CodexProjectState,
   DevelopmentRuntime,
   DevelopmentRuntimeState,
+  DownloadTaskView,
   NetworkPreflightResult,
   NetworkProviderId,
   SoftwareUpdateState,
@@ -126,6 +127,13 @@ import {
   type MarkdownStreamRenderer,
 } from './markdown';
 import './styles.css';
+
+const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
+  const active = tasks.some(({ state }) => state === 'progressing' || state === 'verifying');
+  document.body.dataset.downloading = String(active);
+};
+
+const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
 
 /*
  * The component kit is installed at module scope, before anything touches `window.controlPanel`, so
@@ -9049,6 +9057,7 @@ resizeObserver.observe(terminalStage);
 window.addEventListener('beforeunload', () => {
   unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
+  unsubscribeDownloadsChanged();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
@@ -9077,6 +9086,7 @@ window.addEventListener('beforeunload', () => {
 
 void (async () => {
   try {
+    handleDownloadsChanged(await window.controlPanel.listDownloads());
     const initialSettings = await window.controlPanel.getAppSettings();
     const reportedWindowsBuild = initialSettings.windowsBuildNumber;
     windowsBuildNumber =

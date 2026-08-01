@@ -636,6 +636,23 @@ const requireCodexRuntime = (): CodexRuntime => {
   return codexRuntime;
 };
 
+const requireDownloadEngine = (): DownloadEngine => {
+  if (!downloadEngine) {
+    throw new Error('下载引擎尚未初始化。');
+  }
+  return downloadEngine;
+};
+
+const validateDownloadTaskId = (taskId: unknown): string => {
+  if (
+    typeof taskId !== 'string' ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(taskId)
+  ) {
+    throw new Error('下载任务标识无效。');
+  }
+  return taskId;
+};
+
 const requireNetworkPreflightService = (): NetworkPreflightService => {
   if (!networkPreflightService) {
     throw new Error('网络预检服务尚未初始化。');
@@ -1057,10 +1074,19 @@ const registerIpc = (): void => {
   });
   ipcMain.handle('download:list', (event) => {
     validateSender(event);
-    if (!downloadEngine) {
-      throw new Error('下载引擎尚未初始化。');
-    }
-    return downloadEngine.list();
+    return requireDownloadEngine().list();
+  });
+  ipcMain.handle('download:pause', (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().pause(validateDownloadTaskId(taskId));
+  });
+  ipcMain.handle('download:resume', (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().resume(validateDownloadTaskId(taskId));
+  });
+  ipcMain.handle('download:cancel', (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().cancel(validateDownloadTaskId(taskId));
   });
   ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
     validateSender(event);
