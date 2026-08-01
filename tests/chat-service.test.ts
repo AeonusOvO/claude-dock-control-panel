@@ -658,6 +658,7 @@ describe('independent chat service', () => {
     await vi.waitFor(() => expect(ambiguousEvents.at(-1)?.type).toBe('error'));
     expect(ambiguousFetch).toHaveBeenCalledTimes(1);
     expect(ambiguousEvents.at(-1)?.error).toContain('HTTP 302');
+    expect(ambiguousFetch.mock.calls[0]?.[1]?.keepalive).toBe(true);
     expect(ambiguousFetch.mock.calls[0]?.[1]?.redirect).toBe('manual');
 
     const crossOriginEvents: ChatStreamEvent[] = [];

@@ -862,6 +862,9 @@ export class ChatService {
     for (let redirectCount = 0; ; redirectCount += 1) {
       const response = await this.fetchImpl(currentUrl.toString(), {
         ...init,
+        // Node's built-in fetch uses Undici, whose connector enables TCP keepalive. Keep the
+        // request persistence hint explicit on every initial request and accepted redirect hop.
+        keepalive: true,
         redirect: 'manual',
       });
       if (!REDIRECT_HTTP_STATUSES.has(response.status)) {
