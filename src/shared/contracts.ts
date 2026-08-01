@@ -9,6 +9,21 @@ export type ClaudeCredentialAction = 'clear' | 'keep' | 'replace';
 export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
 export type CodexLaunchMode = ClaudeLaunchMode;
 export type CodexLoginMethod = 'browser' | 'device-code';
+export type BusyKind =
+  | 'configure'
+  | 'conversation'
+  | 'download'
+  | 'install'
+  | 'proxy'
+  | 'uninstall';
+export type BusySeverity = 'blocking' | 'resumable';
+export interface BusyLease {
+  readonly cancellable: boolean;
+  readonly id: string;
+  readonly kind: BusyKind;
+  readonly label: string;
+  readonly severity: BusySeverity;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
@@ -868,6 +883,8 @@ export interface ControlPanelApi {
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
+  listBusyLeases: () => Promise<BusyLease[]>;
+  onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
   createArtifact: (html: string) => Promise<ArtifactCreateResult>;
   destroyArtifact: (artifactId: string) => Promise<boolean>;
   getArtifactNetworkState: () => Promise<ArtifactNetworkState>;

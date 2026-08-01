@@ -97,6 +97,7 @@ import { ProviderAccessGuard } from './provider-access-guard';
 import { createElectronApplicationRequest } from './electron-application-request';
 import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RollbackCoordinator } from './rollback-coordinator';
+import { BusyRegistry } from './busy-registry';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -115,6 +116,7 @@ let providerAccessGuard: ProviderAccessGuard | null = null;
 let mainWindow: BrowserWindow | null = null;
 let minimizedNoticeShown = false;
 let tray: Tray | null = null;
+let busyRegistry: BusyRegistry | null = null;
 
 interface PendingPermissionModeProbe {
   resolve: (mode: ClaudePermissionMode | undefined) => void;
@@ -1044,6 +1046,13 @@ const launchRouterInstaller = async (): Promise<ClaudeRouterOperationResult> => 
 };
 
 const registerIpc = (): void => {
+  ipcMain.handle('busy:list', (event) => {
+    validateSender(event);
+    if (!busyRegistry) {
+      throw new Error('忙碌任务登记表尚未初始化。');
+    }
+    return busyRegistry.list();
+  });
   ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
     validateSender(event);
     return requireNetworkPreflightService().get(validateNetworkProvider(provider));
@@ -2696,6 +2705,9 @@ if (!hasSingleInstanceLock) {
       settingsStore: networkPreflightSettingsStore,
     });
     providerAccessGuard = new ProviderAccessGuard(networkPreflightService);
+    busyRegistry = new BusyRegistry((leases) => {
+      mainWindow?.webContents.send('busy:changed', leases);
+    });
     registerIpc();
     createTray();
 

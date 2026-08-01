@@ -18,6 +18,7 @@ import type {
   ClaudeRouterOperationResult,
   ClaudeSessionMetadata,
   ArtifactNetworkLogEntry,
+  BusyLease,
   ChatStreamEvent,
   CodexProjectState,
   ControlPanelApi,
@@ -32,6 +33,16 @@ const api: ControlPanelApi = {
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
   setAdvancedSettings: (settings) => ipcRenderer.invoke('app:set-advanced-settings', settings),
+  listBusyLeases: () => ipcRenderer.invoke('busy:list') as Promise<BusyLease[]>,
+  onBusyChanged: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, leases: BusyLease[]): void => {
+      listener(leases);
+    };
+    ipcRenderer.on('busy:changed', callback);
+    return () => {
+      ipcRenderer.removeListener('busy:changed', callback);
+    };
+  },
   createArtifact: (html) => ipcRenderer.invoke('artifact:create', html),
   destroyArtifact: (artifactId) => ipcRenderer.invoke('artifact:destroy', artifactId),
   getArtifactNetworkState: () => ipcRenderer.invoke('artifact:get-network-state'),
