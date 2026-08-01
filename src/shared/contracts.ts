@@ -102,6 +102,15 @@ export interface ProxyStoreView {
   scope: ProxyScopeSettings;
   state: ProxyStoredState;
 }
+export interface ProxyRuntimeView {
+  coreVersion: string;
+  error?: string;
+  httpProxyUrl?: string;
+  logs: string[];
+  profileId?: string;
+  socksProxyUrl?: string;
+  status: ProxyRuntimeStatus;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
