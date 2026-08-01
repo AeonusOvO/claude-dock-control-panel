@@ -95,6 +95,7 @@ import {
   type ClaudeProviderGroupId,
   type ClaudeProviderId,
 } from '../shared/claude-providers';
+import { ROUTER_CAPABILITIES } from '../shared/router-capabilities';
 import {
   diagnoseClaudeConnection,
   type ClaudeConnectionRemedyAction,
@@ -321,6 +322,9 @@ const providerSpecialSetup = requiredElement<HTMLElement>('#connection-provider-
 const openProviderConsoleButton = requiredElement<HTMLButtonElement>('#open-provider-console');
 const openProviderDocsButton = requiredElement<HTMLButtonElement>('#open-provider-docs');
 const connectionAdvancedContent = requiredElement<HTMLElement>('#connection-advanced-content');
+const routerSettingsContent = requiredElement<HTMLElement>('#router-settings-content');
+const routerCapabilityList = requiredElement<HTMLElement>('#router-capability-list');
+const openRouterSettingsButton = requiredElement<HTMLButtonElement>('#open-router-settings');
 const connectionAdvancedDialog = requiredElement<HTMLDialogElement>('#connection-advanced-dialog');
 const openConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#open-connection-advanced',
@@ -938,9 +942,34 @@ connectionAdvancedContent.append(
   connectionAdvice,
   gatewayDiscoverySection,
   curlOnboarding,
-  routerManager,
   converterHelp,
   connectionGlossary,
+);
+routerSettingsContent.append(routerManager);
+routerCapabilityList.replaceChildren(
+  ...CLAUDE_PROVIDERS.map((provider) => {
+    const capability = ROUTER_CAPABILITIES[provider.id];
+    const card = document.createElement('article');
+    card.className = 'router-capability-card';
+    card.dataset.mode = capability.mode;
+    const heading = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = provider.label;
+    const badge = document.createElement('span');
+    badge.textContent =
+      capability.mode === 'direct'
+        ? '直连'
+        : capability.mode === 'router-required'
+          ? '必须路由'
+          : '路由可选';
+    heading.append(title, badge);
+    const detail = document.createElement('p');
+    detail.textContent = capability.reason;
+    const verified = document.createElement('small');
+    verified.textContent = `复核：${capability.verifiedAt}`;
+    card.append(heading, detail, verified);
+    return card;
+  }),
 );
 claudePreset.replaceChildren(
   ...CLAUDE_PROVIDERS.map((provider) => {
@@ -980,7 +1009,7 @@ let selectedProviderId: ClaudeProviderId | undefined;
 let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let selectedRailTab: string | undefined = 'projects';
-type SettingsTab = 'advanced' | 'connection' | 'general' | 'proxy';
+type SettingsTab = 'advanced' | 'connection' | 'general' | 'proxy' | 'router';
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
@@ -2819,7 +2848,6 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     connectionAdvice,
     gatewayDiscoverySection,
     curlOnboarding,
-    routerManager,
     converterHelp,
     connectionGlossary,
   );
@@ -2828,7 +2856,7 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     return;
   }
   if (providerId === 'gateway') {
-    providerSpecialSetup.append(gatewayDiscoverySection, routerManager);
+    providerSpecialSetup.append(gatewayDiscoverySection);
   }
 };
 
@@ -3259,13 +3287,16 @@ const selectSettingsTab = (tab: SettingsTab): void => {
   for (const panel of document.querySelectorAll<HTMLElement>('[data-settings-panel]')) {
     panel.classList.toggle('settings-panel--active', panel.dataset.settingsPanel === tab);
   }
-  if (tab === 'connection') {
+  if (tab === 'connection' || tab === 'router') {
     setConnectionPolling(true);
   } else {
     setConnectionPolling(selectedRailTab === 'connection');
   }
   if (tab === 'proxy') {
     void loadProxyState();
+  }
+  if (tab === 'router') {
+    void loadRouterManagement();
   }
 };
 
@@ -5468,7 +5499,9 @@ const applyRailTab = (tab?: string): void => {
   chatShell.hidden = !chatVisible;
   workspace.classList.toggle('workspace--chat', chatVisible);
   setConnectionPolling(
-    tab === 'connection' || (connectionAdvancedDialog.open && selectedSettingsTab === 'connection'),
+    tab === 'connection' ||
+      (connectionAdvancedDialog.open &&
+        (selectedSettingsTab === 'connection' || selectedSettingsTab === 'router')),
   );
   if (tab === 'chat') {
     void loadChatConfig();
@@ -8746,12 +8779,19 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-setting
   button.addEventListener('click', () => {
     const requested = button.dataset.settingsTab;
     selectSettingsTab(
-      requested === 'advanced' || requested === 'connection' || requested === 'proxy'
+      requested === 'advanced' ||
+        requested === 'connection' ||
+        requested === 'proxy' ||
+        requested === 'router'
         ? requested
         : 'general',
     );
   });
 }
+openRouterSettingsButton.addEventListener('click', () => {
+  openAdvancedConnectionDialog();
+  selectSettingsTab('router');
+});
 conversationRenameCancel.addEventListener('click', () => {
   conversationRenameDialog.close('cancel');
 });

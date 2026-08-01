@@ -4217,6 +4217,32 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   padding: 12px;
 }
 
+.router-settings-entry {
+  align-items: center;
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-xl);
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+  margin-top: 11px;
+  padding: var(--s-3);
+}
+
+.router-settings-entry > div {
+  display: grid;
+  gap: var(--s-1);
+}
+
+.router-settings-entry strong {
+  color: var(--text-hi);
+}
+
+.router-settings-entry span {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
 .gateway-discovery__heading,
 .step-heading {
   align-items: flex-start;
@@ -8007,6 +8033,83 @@ body.is-resizing * {
 }
 
 #connection-advanced-content > * {
+  margin-top: 0;
+}
+
+.router-settings {
+  align-content: start;
+}
+
+.router-boundary-notice {
+  background: var(--warn-tint);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  color: var(--warn-text);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+}
+
+.router-settings__section {
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: var(--s-3);
+}
+
+.router-capability-list {
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.router-capability-card {
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-3);
+}
+
+.router-capability-card > div {
+  align-items: center;
+  display: flex;
+  gap: var(--s-2);
+  justify-content: space-between;
+}
+
+.router-capability-card > div span {
+  background: var(--success-tint);
+  border: 1px solid var(--success-line);
+  border-radius: var(--r-pill);
+  color: var(--success-text);
+  font-size: var(--text-xs);
+  padding: 2px var(--s-2);
+}
+
+.router-capability-card[data-mode='router-required'] > div span {
+  background: var(--danger-tint);
+  border-color: var(--danger-line);
+  color: var(--danger-text);
+}
+
+.router-capability-card[data-mode='router-optional'] > div span {
+  background: var(--warn-tint);
+  border-color: var(--warn-line);
+  color: var(--warn-text);
+}
+
+.router-capability-card p,
+.router-capability-card small {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+}
+
+#router-settings-content > .router-manager {
   margin-top: 0;
 }
 

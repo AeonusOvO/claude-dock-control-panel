@@ -429,6 +429,14 @@
             </div>
           </section>
 
+          <section class="router-settings-entry" aria-labelledby="router-settings-entry-title">
+            <div>
+              <strong id="router-settings-entry-title">路由器已迁入全局设置</strong>
+              <span>统一管理内核、服务提供方、模型与卸载；这里不再保留第二份表单。</span>
+            </div>
+            <button id="open-router-settings" type="button">打开路由设置</button>
+          </section>
+
           <section
             class="router-manager"
             id="router-manager"
@@ -1675,6 +1683,14 @@
             >
               代理
             </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="router"
+              type="button"
+              aria-selected="false"
+            >
+              路由
+            </button>
           </nav>
           <div class="settings-panels">
             <section class="settings-panel settings-panel--active" data-settings-panel="general">
@@ -1858,6 +1874,19 @@
                 <button id="proxy-run-audit" type="button">立即体检</button>
                 <ol id="proxy-audit-history" class="proxy-audit-history"></ol>
               </section>
+            </section>
+            <section class="settings-panel router-settings" data-settings-panel="router">
+              <p class="router-boundary-notice">
+                路由操作点击后立即生效；只配置 Claude Code CLI，不接管 Claude / Codex 桌面版。
+              </p>
+              <section class="router-settings__section" aria-labelledby="router-capabilities-title">
+                <div class="settings-section-heading">
+                  <strong id="router-capabilities-title">供应商路由能力</strong>
+                  <span>优先直连；只有协议转换需要时才启用路由内核。</span>
+                </div>
+                <div id="router-capability-list" class="router-capability-list"></div>
+              </section>
+              <div id="router-settings-content"></div>
             </section>
           </div>
         </div>
