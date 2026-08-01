@@ -35,4 +35,11 @@ describe('built-in proxy integration contract', () => {
     expect(main).toContain("xraySidecar.getView().status === 'ready'");
     expect(main).not.toMatch(/assertAccessAccepted[\s\S]{0,200}xraySidecar\.stop/);
   });
+
+  it('re-runs environment checks when the built-in proxy changes', () => {
+    expect(main).toContain("invalidate('built-in-proxy-profile-changed')");
+    expect(renderer).toContain("invalidateNetworkPreflight('built-in-proxy-state-changed')");
+    expect(renderer).toContain('runActiveNetworkPreflight(true)');
+    expect(main).toContain('cliEnvironment: () =>');
+  });
 });

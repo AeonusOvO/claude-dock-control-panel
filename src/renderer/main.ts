@@ -856,7 +856,19 @@ const loadProxyState = async (): Promise<void> => {
 };
 
 const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
-const unsubscribeProxyStateChanged = window.controlPanel.onProxyStateChanged(renderProxyState);
+let previousProxyRuntimeStatus: ProxyControlView['runtime']['status'] | undefined;
+const unsubscribeProxyStateChanged = window.controlPanel.onProxyStateChanged((state) => {
+  const changed =
+    previousProxyRuntimeStatus !== undefined && previousProxyRuntimeStatus !== state.runtime.status;
+  previousProxyRuntimeStatus = state.runtime.status;
+  renderProxyState(state);
+  if (changed) {
+    void window.controlPanel
+      .invalidateNetworkPreflight('built-in-proxy-state-changed')
+      .then(() => runActiveNetworkPreflight(true))
+      .catch(() => showToast('代理状态已变化，但环境复检未能启动。', 'error'));
+  }
+});
 const unsubscribeProxyAuditRequired =
   window.controlPanel.onProxyAuditRequired(openProxyAuditReport);
 const openDownloadCenter = (): void => {

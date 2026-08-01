@@ -50,6 +50,7 @@ export interface ProviderConnectivityProbeOptions {
   appFetch: AppFetch;
   applicationRequest?: ApplicationEndpointRequest;
   builtInProxyUrl?: () => string | undefined;
+  cliEnvironment?: () => Record<string, null | string>;
   cliRequest?: (url: string, websocket: boolean, cwd?: string) => Promise<string>;
   clientVersion?: (provider: NetworkProviderId, cwd?: string) => Promise<string | undefined>;
   dnsLookup?: DnsLookup;
@@ -200,6 +201,7 @@ const defaultCliRequest = async (
   url: string,
   websocket: boolean,
   cwd?: string,
+  overrides: Record<string, null | string> = {},
 ): Promise<string> => {
   const requestUrl = url.replace(/^wss:/, 'https:');
   const argumentsList = [
@@ -233,6 +235,13 @@ const defaultCliRequest = async (
     requestUrl,
   );
   const environment = { ...process.env };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === null) {
+      delete environment[key];
+    } else {
+      environment[key] = value;
+    }
+  }
   delete environment.ELECTRON_RUN_AS_NODE;
   try {
     const result = await runProcess('curl.exe', argumentsList, environment, {
@@ -290,7 +299,9 @@ export class ProviderConnectivityProbe {
           timeout.stop();
         }
       });
-    this.cliRequest = options.cliRequest ?? defaultCliRequest;
+    this.cliRequest =
+      options.cliRequest ??
+      ((url, websocket, cwd) => defaultCliRequest(url, websocket, cwd, options.cliEnvironment?.()));
     this.clientVersion = options.clientVersion ?? defaultClientVersion;
     this.dnsLookup =
       options.dnsLookup ??

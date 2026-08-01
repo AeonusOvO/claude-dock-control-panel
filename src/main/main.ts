@@ -1307,6 +1307,7 @@ const registerIpc = (): void => {
       await sidecar.stop();
     }
     store.setState({ selectedProfileId: validatedId });
+    requireNetworkPreflightService().invalidate('built-in-proxy-profile-changed');
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return proxyControlView();
   });
@@ -3078,6 +3079,10 @@ if (!hasSingleInstanceLock) {
         applicationRequest: createElectronApplicationRequest((options) =>
           net.request({ ...options, session: session.defaultSession }),
         ),
+        cliEnvironment: () =>
+          proxyStore && xraySidecar
+            ? buildCliProxyEnvironment(xraySidecar.getView(), proxyStore.getView().scope)
+            : {},
         resolveProxy: (url) => session.defaultSession.resolveProxy(url),
         builtInProxyUrl: () => xraySidecar?.getView().httpProxyUrl,
       }),
