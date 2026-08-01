@@ -27,7 +27,6 @@ export interface ChatServiceTimeouts {
   maxTransientRetries?: number;
   retryBaseDelayMs?: number;
   retryMaxDelayMs?: number;
-  totalTimeoutMs?: number;
 }
 
 interface UsagePatch {
@@ -58,7 +57,6 @@ const MAX_TEST_RESPONSE_LENGTH = 64 * 1024;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
 const REQUEST_IDLE_TIMEOUT_MS = 5 * 60_000;
-const REQUEST_TOTAL_TIMEOUT_MS = 60 * 60_000;
 const TEST_TIMEOUT_MS = 15_000;
 const MAX_TRANSIENT_RETRIES = 4;
 const RETRY_BASE_DELAY_MS = 500;
@@ -714,7 +712,6 @@ export class ChatService {
   private readonly maxTransientRetries: number;
   private readonly retryBaseDelayMs: number;
   private readonly retryMaxDelayMs: number;
-  private readonly totalTimeoutMs: number;
 
   public constructor(
     private readonly store: ChatConfigStore,
@@ -727,7 +724,6 @@ export class ChatService {
     this.maxTransientRetries = timeouts.maxTransientRetries ?? MAX_TRANSIENT_RETRIES;
     this.retryBaseDelayMs = timeouts.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
     this.retryMaxDelayMs = timeouts.retryMaxDelayMs ?? RETRY_MAX_DELAY_MS;
-    this.totalTimeoutMs = timeouts.totalTimeoutMs ?? REQUEST_TOTAL_TIMEOUT_MS;
     if (
       !Number.isFinite(this.idleTimeoutMs) ||
       this.idleTimeoutMs <= 0 ||
@@ -736,9 +732,7 @@ export class ChatService {
       !Number.isFinite(this.retryBaseDelayMs) ||
       this.retryBaseDelayMs <= 0 ||
       !Number.isFinite(this.retryMaxDelayMs) ||
-      this.retryMaxDelayMs < this.retryBaseDelayMs ||
-      !Number.isFinite(this.totalTimeoutMs) ||
-      this.totalTimeoutMs < this.idleTimeoutMs
+      this.retryMaxDelayMs < this.retryBaseDelayMs
     ) {
       throw new Error('对话超时配置无效。');
     }
@@ -925,7 +919,6 @@ export class ChatService {
       }
       idleTimeout = setTimeout(abortForTimeout, this.idleTimeoutMs);
     };
-    const totalTimeout = setTimeout(abortForTimeout, this.totalTimeoutMs);
     touchIdleTimeout();
     try {
       const providerMessages = await materializeLocalAttachments(messages, this.attachmentStore);
@@ -1250,7 +1243,6 @@ export class ChatService {
       if (idleTimeout) {
         clearTimeout(idleTimeout);
       }
-      clearTimeout(totalTimeout);
       if (this.active.get(requestId) === active) {
         this.active.delete(requestId);
       }

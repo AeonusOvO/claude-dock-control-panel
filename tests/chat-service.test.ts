@@ -775,7 +775,7 @@ describe('independent chat service', () => {
       (event) => timeoutEvents.push(event),
       stalledFetch,
       undefined,
-      { idleTimeoutMs: 15, totalTimeoutMs: 100 },
+      { idleTimeoutMs: 15 },
     );
     timeoutService.start({
       messages: [{ content: 'timeout', role: 'user' }],
@@ -794,7 +794,7 @@ describe('independent chat service', () => {
       (event) => manualEvents.push(event),
       stalledFetch,
       undefined,
-      { idleTimeoutMs: 1_000, totalTimeoutMs: 2_000 },
+      { idleTimeoutMs: 1_000 },
     );
     manualService.start({
       messages: [{ content: 'manual', role: 'user' }],
