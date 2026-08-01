@@ -7,6 +7,7 @@ import {
   Menu,
   nativeImage,
   net,
+  safeStorage,
   session,
   shell,
   Tray,
@@ -101,6 +102,9 @@ import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
 import { AppPreferencesStore } from './app-preferences-store';
+import { ProxyStore } from './proxy/proxy-store';
+import { XraySidecar } from './proxy/xray-sidecar';
+import { buildCliProxyEnvironment, builtInProxyRules } from './proxy/proxy-environment';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -121,6 +125,8 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let busyRegistry: BusyRegistry | null = null;
 let downloadEngine: DownloadEngine | null = null;
+let proxyStore: ProxyStore | null = null;
+let xraySidecar: XraySidecar | null = null;
 let releaseConversationBusy: (() => void) | undefined;
 
 interface PendingPermissionModeProbe {
@@ -703,6 +709,16 @@ const requireDownloadEngine = (): DownloadEngine => {
     throw new Error('下载引擎尚未初始化。');
   }
   return downloadEngine;
+};
+
+const applyApplicationProxyScope = async (): Promise<void> => {
+  if (!proxyStore || !xraySidecar) {
+    return;
+  }
+  await session.defaultSession.setProxy(
+    builtInProxyRules(xraySidecar.getView(), proxyStore.getView().scope),
+  );
+  await session.defaultSession.closeAllConnections();
 };
 
 const validateDownloadTaskId = (taskId: unknown): string => {
@@ -2812,6 +2828,16 @@ if (!hasSingleInstanceLock) {
     );
     downloadEngine.install();
     downloadEngine.restoreInterrupted();
+    proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
+    xraySidecar = new XraySidecar(app.getPath('userData'), downloadEngine, busyRegistry, (view) => {
+      mainWindow?.webContents.send('proxy:runtime-changed', view);
+      void applyApplicationProxyScope();
+    });
+    workspace.setEnvironmentProvider(() =>
+      proxyStore && xraySidecar
+        ? buildCliProxyEnvironment(xraySidecar.getView(), proxyStore.getView().scope)
+        : {},
+    );
     claudeRuntime = new ClaudeRuntime(
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
@@ -2858,6 +2884,7 @@ if (!hasSingleInstanceLock) {
           net.request({ ...options, session: session.defaultSession }),
         ),
         resolveProxy: (url) => session.defaultSession.resolveProxy(url),
+        builtInProxyUrl: () => xraySidecar?.getView().httpProxyUrl,
       }),
       settingsStore: networkPreflightSettingsStore,
     });
@@ -2911,6 +2938,7 @@ app.on('before-quit', (event) => {
   }
   pendingPermissionModeProbes.clear();
   chatService.shutdown();
+  void xraySidecar?.stop();
   claudeRuntime?.shutdown();
   codexRuntime?.dispose();
   workspace.shutdown();

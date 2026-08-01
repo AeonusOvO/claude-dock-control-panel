@@ -53,6 +53,7 @@ export class TerminalWorkspace {
   private currentThemeId: TerminalThemeId;
   private nextSessionNumber = 1;
   private readonly sessions = new Map<string, ManagedTerminal>();
+  private environmentProvider: () => TerminalEnvironmentOverrides = () => ({});
 
   public constructor(
     private readonly onData: (sessionId: string, data: string) => void,
@@ -143,7 +144,7 @@ export class TerminalWorkspace {
       const status = existing.getStatus();
       this.activeSessionId = status.id;
       if (status.phase === 'stopped' || status.phase === 'error') {
-        existing.start(status.cwd, {}, this.currentThemeId);
+        existing.start(status.cwd, this.withDefaultEnvironment(), this.currentThemeId);
       } else {
         this.emitState();
       }
@@ -158,7 +159,7 @@ export class TerminalWorkspace {
     const sessionId = this.createSession(cwd, title ?? this.nextConversationTitle(cwd));
     this.activeSessionId = sessionId;
     this.emitState();
-    this.requireSession(sessionId).start(cwd, {}, this.currentThemeId);
+    this.requireSession(sessionId).start(cwd, this.withDefaultEnvironment(), this.currentThemeId);
     return this.getState();
   }
 
@@ -196,7 +197,15 @@ export class TerminalWorkspace {
     sessionId: string,
     environment: TerminalEnvironmentOverrides = {},
   ): TerminalStatus {
-    return this.requireSession(sessionId).restart(undefined, environment, this.currentThemeId);
+    return this.requireSession(sessionId).restart(
+      undefined,
+      this.withDefaultEnvironment(environment),
+      this.currentThemeId,
+    );
+  }
+
+  public setEnvironmentProvider(provider: () => TerminalEnvironmentOverrides): void {
+    this.environmentProvider = provider;
   }
 
   /** Updates the palette used by future starts/restarts without mutating a live PowerShell line. */
@@ -211,7 +220,11 @@ export class TerminalWorkspace {
   }
 
   public start(sessionId: string): TerminalStatus {
-    return this.requireSession(sessionId).start(undefined, {}, this.currentThemeId);
+    return this.requireSession(sessionId).start(
+      undefined,
+      this.withDefaultEnvironment(),
+      this.currentThemeId,
+    );
   }
 
   public stop(sessionId: string): TerminalStatus {
@@ -224,6 +237,12 @@ export class TerminalWorkspace {
 
   private nextConversationTitle(cwd: string): string {
     return `对话 ${this.sessionIdsForDirectory(cwd).length + 1}`;
+  }
+
+  private withDefaultEnvironment(
+    environment: TerminalEnvironmentOverrides = {},
+  ): TerminalEnvironmentOverrides {
+    return { ...this.environmentProvider(), ...environment };
   }
 
   private createSession(cwd: string, title = '对话 1'): string {
