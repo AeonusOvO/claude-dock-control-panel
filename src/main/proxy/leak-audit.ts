@@ -13,10 +13,78 @@ export interface EgressEvidence {
 }
 
 const MAX_EGRESS_RESPONSE_BYTES = 64 * 1024;
-export const LEAK_AUDIT_ALLOWED_HOSTS = Object.freeze(['www.cloudflare.com', 'ipinfo.io']);
+export const LEAK_AUDIT_ALLOWED_HOSTS = Object.freeze([
+  'bash.ws',
+  'www.cloudflare.com',
+  'ipinfo.io',
+]);
 
 const DATACENTER_ORGANIZATION_PATTERN =
   /(amazon|aws|google|digitalocean|hetzner|ovh|linode|akamai|vultr|m247|leaseweb|choopa|oracle cloud|azure|microsoft hosting)/i;
+
+const isPrivateDnsServer = (address: string): boolean => {
+  const normalized =
+    address
+      .toLowerCase()
+      .replace(/^\[|\]$/g, '')
+      .split('%', 1)[0] ?? '';
+  if (normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd')) {
+    return true;
+  }
+  const parts = normalized.split('.').map(Number);
+  return (
+    parts.length === 4 &&
+    (parts[0] === 10 ||
+      parts[0] === 127 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && (parts[1] ?? 0) >= 16 && (parts[1] ?? 0) <= 31) ||
+      (parts[0] === 192 && parts[1] === 168))
+  );
+};
+
+export const evaluateDns = (
+  dnsServers: string[],
+  proxyReady: boolean,
+  onlineResolvers?: string[],
+): ProxyAuditItem => {
+  const localResolvers = dnsServers.filter(isPrivateDnsServer);
+  const onlineAvailable = onlineResolvers !== undefined;
+  const evidence = [
+    `系统解析器：${dnsServers.length > 0 ? dnsServers.join('、') : '未读取到'}`,
+    onlineAvailable
+      ? `在线观测：${onlineResolvers.length > 0 ? onlineResolvers.join('、') : '未发现解析器'}`
+      : '在线探测不可用，仅采用本地判据',
+    proxyReady
+      ? 'CLI 使用 HTTP CONNECT host:443，Xray domainStrategy=AsIs，目标域名由代理链路远端解析'
+      : '内置代理未就绪，无法提供远端解析保障',
+  ];
+  if (!proxyReady) {
+    return {
+      advice: '先启动内置代理，再运行完整 DNS 体检。',
+      evidence,
+      explanation: '未启用内置代理，无法确认 CLI 域名是否经代理远端解析。',
+      name: 'DNS 泄露',
+      verdict: 'warning',
+    };
+  }
+  if (localResolvers.length > 0) {
+    return {
+      advice: 'CLI 流量已由远端解析保护；其他未代理应用仍可能使用这些本地解析器。',
+      evidence,
+      explanation:
+        '系统存在内网/本地 DNS，属于“可能本地解析”的提示；ClaudeDock 启动的 CLI 通过本地 HTTP 入站发送域名，Xray 保持 AsIs 并在代理链路远端解析。',
+      name: 'DNS 泄露',
+      verdict: onlineAvailable && onlineResolvers.length === 0 ? 'passed' : 'warning',
+    };
+  }
+  return {
+    advice: '切换网络、节点或 DNS 后重新检测。',
+    evidence,
+    explanation: '未发现私网 DNS，且 CLI 的代理请求使用远端域名解析机制。',
+    name: 'DNS 泄露',
+    verdict: onlineAvailable ? 'passed' : 'warning',
+  };
+};
 
 const readLimitedText = async (response: Response): Promise<string> => {
   const declaredLength = Number(response.headers.get('content-length'));
