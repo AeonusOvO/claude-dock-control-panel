@@ -24,6 +24,28 @@ export interface BusyLease {
   readonly label: string;
   readonly severity: BusySeverity;
 }
+export type DownloadTaskState =
+  | 'cancelled'
+  | 'completed'
+  | 'failed'
+  | 'paused'
+  | 'progressing'
+  | 'queued'
+  | 'verifying';
+export interface DownloadTaskView {
+  bytesPerSecond: number;
+  canPause: boolean;
+  canResume: boolean;
+  elapsedMs: number;
+  errorMessage?: string;
+  id: string;
+  label: string;
+  percent: number;
+  receivedBytes: number;
+  remainingMs: number;
+  state: DownloadTaskState;
+  totalBytes: number;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.
@@ -885,6 +907,11 @@ export interface ControlPanelApi {
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   listBusyLeases: () => Promise<BusyLease[]>;
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
+  cancelDownload: (taskId: string) => Promise<DownloadTaskView>;
+  listDownloads: () => Promise<DownloadTaskView[]>;
+  onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
+  pauseDownload: (taskId: string) => Promise<DownloadTaskView>;
+  resumeDownload: (taskId: string) => Promise<DownloadTaskView>;
   createArtifact: (html: string) => Promise<ArtifactCreateResult>;
   destroyArtifact: (artifactId: string) => Promise<boolean>;
   getArtifactNetworkState: () => Promise<ArtifactNetworkState>;

@@ -23,6 +23,7 @@ import type {
   CodexProjectState,
   ControlPanelApi,
   DirectoryChoiceResult,
+  DownloadTaskView,
   OperationResult,
   WorkspaceProject,
   WorkspaceResult,
@@ -43,6 +44,19 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('busy:changed', callback);
     };
   },
+  cancelDownload: (taskId) => ipcRenderer.invoke('download:cancel', taskId),
+  listDownloads: () => ipcRenderer.invoke('download:list') as Promise<DownloadTaskView[]>,
+  onDownloadsChanged: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, tasks: DownloadTaskView[]): void => {
+      listener(tasks);
+    };
+    ipcRenderer.on('download:changed', callback);
+    return () => {
+      ipcRenderer.removeListener('download:changed', callback);
+    };
+  },
+  pauseDownload: (taskId) => ipcRenderer.invoke('download:pause', taskId),
+  resumeDownload: (taskId) => ipcRenderer.invoke('download:resume', taskId),
   createArtifact: (html) => ipcRenderer.invoke('artifact:create', html),
   destroyArtifact: (artifactId) => ipcRenderer.invoke('artifact:destroy', artifactId),
   getArtifactNetworkState: () => ipcRenderer.invoke('artifact:get-network-state'),
