@@ -644,10 +644,7 @@ const requireDownloadEngine = (): DownloadEngine => {
 };
 
 const validateDownloadTaskId = (taskId: unknown): string => {
-  if (
-    typeof taskId !== 'string' ||
-    !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(taskId)
-  ) {
+  if (typeof taskId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(taskId)) {
     throw new Error('下载任务标识无效。');
   }
   return taskId;

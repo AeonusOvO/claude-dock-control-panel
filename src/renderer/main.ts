@@ -128,13 +128,6 @@ import {
 } from './markdown';
 import './styles.css';
 
-const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
-  const active = tasks.some(({ state }) => state === 'progressing' || state === 'verifying');
-  document.body.dataset.downloading = String(active);
-};
-
-const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
-
 /*
  * The component kit is installed at module scope, before anything touches `window.controlPanel`, so
  * a native `<select>` is never painted by the OS — not even for the frame the bridge takes to come
@@ -511,6 +504,193 @@ const chatAttachButton = requiredElement<HTMLButtonElement>('#chat-attach');
 const sendChatButton = requiredElement<HTMLButtonElement>('#send-chat');
 const stopChatButton = requiredElement<HTMLButtonElement>('#stop-chat');
 const newChatButton = requiredElement<HTMLButtonElement>('#new-chat');
+const openDownloadCenterButton = requiredElement<HTMLButtonElement>('#open-download-center');
+const downloadActiveCount = requiredElement<HTMLElement>('#download-active-count');
+const downloadCenterDialog = requiredElement<HTMLDialogElement>('#download-center-dialog');
+const closeDownloadCenterButton = requiredElement<HTMLButtonElement>('#close-download-center');
+const downloadCenterEmpty = requiredElement<HTMLElement>('#download-center-empty');
+const downloadTaskList = requiredElement<HTMLElement>('#download-task-list');
+const downloadProgressTemplate = requiredElement<HTMLTemplateElement>(
+  '#download-progress-template',
+);
+
+const DOWNLOAD_STATE_LABELS: Record<DownloadTaskView['state'], string> = {
+  cancelled: '已取消',
+  completed: '已完成',
+  failed: '失败',
+  paused: '已暂停',
+  progressing: '下载中',
+  queued: '排队中',
+  verifying: '正在校验',
+};
+
+const formatDownloadBytes = (bytes: number): string => {
+  if (bytes <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unitIndex;
+  return `${value.toLocaleString('zh-CN', {
+    maximumFractionDigits: unitIndex === 0 ? 0 : 1,
+  })} ${units[unitIndex]}`;
+};
+
+const formatDownloadDuration = (milliseconds: number): string => {
+  if (milliseconds < 0) {
+    return '计算中…';
+  }
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
+};
+
+const runDownloadAction = async (
+  taskId: string,
+  action: 'cancel' | 'pause' | 'resume',
+): Promise<void> => {
+  try {
+    if (action === 'cancel') {
+      await window.controlPanel.cancelDownload(taskId);
+    } else if (action === 'pause') {
+      await window.controlPanel.pauseDownload(taskId);
+    } else {
+      await window.controlPanel.resumeDownload(taskId);
+    }
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法更新下载任务。', 'error');
+  }
+};
+
+const appendDownloadAction = (
+  container: HTMLElement,
+  task: DownloadTaskView,
+  action: 'cancel' | 'pause' | 'resume',
+  label: string,
+): void => {
+  const button = document.createElement('button');
+  button.className = `download-task__action download-task__action--${action}`;
+  button.textContent = label;
+  button.type = 'button';
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    void runDownloadAction(task.id, action);
+  });
+  container.append(button);
+};
+
+const renderDownloads = (tasks: DownloadTaskView[]): void => {
+  downloadTaskList.replaceChildren();
+  downloadCenterEmpty.hidden = tasks.length > 0;
+  for (const task of tasks) {
+    const card = document.createElement('article');
+    card.className = 'download-task';
+    card.dataset.state = task.state;
+    const heading = document.createElement('header');
+    const identity = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = task.label;
+    const state = document.createElement('span');
+    state.className = 'download-task__state';
+    state.textContent = DOWNLOAD_STATE_LABELS[task.state];
+    identity.append(title, state);
+
+    const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
+      HTMLElement | undefined;
+    if (!progress) {
+      continue;
+    }
+    const indeterminate = task.percent < 0;
+    progress.dataset.indeterminate = String(indeterminate);
+    progress.style.setProperty('--download-progress', `${Math.max(0, task.percent)}%`);
+    const ringValue = progress.querySelector<HTMLElement>('.download-progress__value');
+    const linearValue = progress.querySelector<HTMLElement>('.download-progress__linear > span');
+    if (ringValue) {
+      ringValue.textContent = indeterminate ? '…' : `${Math.round(task.percent)}%`;
+    }
+    if (linearValue) {
+      linearValue.style.width = indeterminate ? '42%' : `${Math.max(0, task.percent)}%`;
+    }
+    heading.append(identity, progress);
+
+    const metrics = document.createElement('dl');
+    metrics.className = 'download-task__metrics';
+    const appendMetric = (label: string, value: string): void => {
+      const wrapper = document.createElement('div');
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = label;
+      detail.textContent = value;
+      wrapper.append(term, detail);
+      metrics.append(wrapper);
+    };
+    appendMetric(
+      '进度',
+      task.totalBytes > 0
+        ? `${formatDownloadBytes(task.receivedBytes)} / ${formatDownloadBytes(task.totalBytes)}`
+        : `${formatDownloadBytes(task.receivedBytes)} / 计算中…`,
+    );
+    appendMetric(
+      '速度',
+      task.bytesPerSecond > 0 ? `${formatDownloadBytes(task.bytesPerSecond)}/s` : '计算中…',
+    );
+    appendMetric('已用', formatDownloadDuration(task.elapsedMs));
+    appendMetric('剩余', formatDownloadDuration(task.remainingMs));
+
+    if (task.errorMessage) {
+      const error = document.createElement('p');
+      error.className = 'download-task__error';
+      error.textContent = task.errorMessage;
+      card.append(heading, metrics, error);
+    } else {
+      card.append(heading, metrics);
+    }
+    const actions = document.createElement('footer');
+    if (task.canPause) {
+      appendDownloadAction(actions, task, 'pause', '暂停');
+    }
+    if (task.canResume) {
+      appendDownloadAction(actions, task, 'resume', '继续');
+    }
+    if (!['cancelled', 'completed', 'failed'].includes(task.state)) {
+      appendDownloadAction(actions, task, 'cancel', '取消');
+    }
+    if (actions.childElementCount > 0) {
+      card.append(actions);
+    }
+    downloadTaskList.append(card);
+  }
+};
+
+const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
+  const active = tasks.filter(({ state }) =>
+    ['paused', 'progressing', 'queued', 'verifying'].includes(state),
+  );
+  const running = active.some(({ state }) => state === 'progressing' || state === 'verifying');
+  const aggregatePercent =
+    active.length > 0 && active.every(({ totalBytes }) => totalBytes > 0)
+      ? (active.reduce((sum, task) => sum + task.receivedBytes, 0) /
+          active.reduce((sum, task) => sum + task.totalBytes, 0)) *
+        100
+      : -1;
+  document.body.dataset.downloading = String(running);
+  openDownloadCenterButton.dataset.active = String(active.length > 0);
+  openDownloadCenterButton.dataset.indeterminate = String(aggregatePercent < 0);
+  openDownloadCenterButton.style.setProperty(
+    '--download-progress',
+    `${Math.max(0, aggregatePercent)}%`,
+  );
+  openDownloadCenterButton.setAttribute(
+    'aria-label',
+    active.length > 0 ? `打开下载中心，${active.length} 项未完成` : '打开下载中心',
+  );
+  downloadActiveCount.hidden = active.length === 0;
+  downloadActiveCount.textContent = String(active.length);
+  renderDownloads(tasks);
+};
+
+const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
 
 /**
  * Grows the chat textarea with its content up to `--composer-max`, mirroring `resizeComposer` for
@@ -8021,6 +8201,23 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-
 refreshUpdatesButton.addEventListener('click', () => {
   void refreshAvailableUpdates(true);
 });
+openDownloadCenterButton.addEventListener('click', () => {
+  if (!downloadCenterDialog.open) {
+    downloadCenterDialog.showModal();
+    closeDownloadCenterButton.focus();
+  }
+});
+closeDownloadCenterButton.addEventListener('click', () => {
+  downloadCenterDialog.close('close');
+});
+downloadCenterDialog.addEventListener('click', (event) => {
+  if (event.target === downloadCenterDialog) {
+    downloadCenterDialog.close('backdrop');
+  }
+});
+downloadCenterDialog.addEventListener('close', () => {
+  openDownloadCenterButton.focus();
+});
 updateAllPluginsButton.addEventListener('click', () => {
   void runPluginMutation(
     () => window.controlPanel.updateAllClaudePlugins(),
@@ -9087,6 +9284,10 @@ window.addEventListener('beforeunload', () => {
 void (async () => {
   try {
     handleDownloadsChanged(await window.controlPanel.listDownloads());
+  } catch {
+    handleDownloadsChanged([]);
+  }
+  try {
     const initialSettings = await window.controlPanel.getAppSettings();
     const reportedWindowsBuild = initialSettings.windowsBuildNumber;
     windowsBuildNumber =

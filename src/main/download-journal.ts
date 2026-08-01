@@ -57,9 +57,7 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
   ) {
     return undefined;
   }
-  const expectedBytes = isNonNegativeNumber(entry.expectedBytes)
-    ? entry.expectedBytes
-    : undefined;
+  const expectedBytes = isNonNegativeNumber(entry.expectedBytes) ? entry.expectedBytes : undefined;
   const expectedSha256 =
     typeof entry.expectedSha256 === 'string' && /^[0-9a-f]{64}$/i.test(entry.expectedSha256)
       ? entry.expectedSha256.toLowerCase()
@@ -74,9 +72,7 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
     id: entry.id,
     label: entry.label,
     lastModified:
-      typeof entry.lastModified === 'string' && entry.lastModified
-        ? entry.lastModified
-        : undefined,
+      typeof entry.lastModified === 'string' && entry.lastModified ? entry.lastModified : undefined,
     length: entry.length,
     maxBytes: entry.maxBytes,
     receivedBytes: entry.receivedBytes,

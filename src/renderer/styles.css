@@ -212,6 +212,7 @@
 
   /* 字体特性 */
   --font-tabular: 'tnum' 1;
+  --opacity-disabled: 0.6;
 }
 
 * {
@@ -401,6 +402,74 @@ svg {
 
 .titlebar__refresh--busy svg {
   animation: refreshRotate var(--dur-refresh) linear infinite;
+}
+
+.titlebar__downloads {
+  --download-progress: 0%;
+  align-items: center;
+  background: conic-gradient(
+    from 0deg,
+    var(--accent-solid) var(--download-progress),
+    var(--line) 0
+  );
+  border: 0;
+  border-radius: var(--r-pill);
+  color: var(--text-lo);
+  cursor: pointer;
+  display: inline-flex;
+  height: var(--s-8);
+  justify-content: center;
+  padding: 2px;
+  position: relative;
+  transition: color var(--dur-2) var(--ease-standard);
+  width: var(--s-8);
+}
+
+.titlebar__downloads::before {
+  background: var(--surface-1);
+  border-radius: inherit;
+  content: '';
+  inset: 2px;
+  position: absolute;
+}
+
+.titlebar__downloads:hover {
+  color: var(--accent-text);
+}
+
+.titlebar__downloads[data-indeterminate='true'][data-active='true'] {
+  animation: downloadRingSpin var(--dur-progress) linear infinite;
+}
+
+.titlebar__downloads svg {
+  height: var(--s-4);
+  position: relative;
+  width: var(--s-4);
+}
+
+.titlebar__downloads-badge {
+  align-items: center;
+  background: var(--accent-solid);
+  border: 2px solid var(--surface-1);
+  border-radius: var(--r-pill);
+  color: var(--accent-fg);
+  display: inline-flex;
+  font-size: var(--text-3xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-heavy);
+  height: var(--s-4);
+  justify-content: center;
+  min-width: var(--s-4);
+  padding: 0 3px;
+  position: absolute;
+  right: calc(var(--s-1) * -1);
+  top: calc(var(--s-1) * -1);
+}
+
+@keyframes downloadRingSpin {
+  to {
+    rotate: 1turn;
+  }
 }
 
 .workspace {
@@ -7373,6 +7442,340 @@ body.is-resizing * {
   font-size: var(--text-2xs);
 }
 
+.download-center-dialog {
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text);
+  max-height: calc(100vh - var(--s-8));
+  padding: 0;
+  width: min(720px, calc(100vw - var(--s-8)));
+}
+
+.download-center-dialog[open] {
+  animation: advancedDialogEnter var(--dur-3) var(--ease-decel);
+}
+
+.download-center-dialog > form {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: min(720px, calc(100vh - var(--s-8)));
+}
+
+.download-center-dialog header {
+  align-items: start;
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: var(--s-4);
+  justify-content: space-between;
+  padding: var(--s-5);
+}
+
+.download-center-dialog header > div {
+  display: grid;
+  gap: var(--s-1);
+}
+
+.download-center-dialog header strong {
+  color: var(--text-hi);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  letter-spacing: var(--ls-title);
+}
+
+.download-center-dialog header p {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+}
+
+.download-center-dialog__close {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  width: 36px;
+}
+
+.download-center-dialog__close:hover {
+  background: var(--layer-hover);
+  border-color: var(--line);
+  color: var(--text-hi);
+}
+
+.download-center-dialog__close svg {
+  height: 18px;
+  width: 18px;
+}
+
+.download-center-dialog__body {
+  min-height: 220px;
+  overflow-y: auto;
+  padding: var(--s-4);
+}
+
+.download-center-empty {
+  align-content: center;
+  color: var(--text-dim);
+  display: grid;
+  gap: var(--s-2);
+  min-height: 188px;
+  padding: var(--s-6);
+  text-align: center;
+}
+
+.download-center-empty strong {
+  color: var(--text-hi);
+  font-size: var(--text-md);
+}
+
+.download-center-empty span {
+  font-size: var(--text-xs);
+}
+
+.download-task-list {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.download-task {
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-4);
+}
+
+.download-task > header {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0;
+}
+
+.download-task > header > div:first-child {
+  display: grid;
+  gap: var(--s-1);
+}
+
+.download-task > header strong {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  letter-spacing: var(--ls-body);
+}
+
+.download-task__state {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.download-task[data-state='completed'] .download-task__state {
+  color: var(--ok-text);
+}
+
+.download-task[data-state='failed'] .download-task__state,
+.download-task[data-state='cancelled'] .download-task__state {
+  color: var(--bad-text);
+}
+
+.download-task[data-state='paused'] .download-task__state,
+.download-task[data-state='verifying'] .download-task__state {
+  color: var(--warn-text);
+}
+
+.download-progress {
+  --download-progress: 0%;
+  align-items: center;
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: 44px minmax(84px, 132px);
+}
+
+.download-progress__ring {
+  align-items: center;
+  background: conic-gradient(var(--accent-solid) var(--download-progress), var(--line-subtle) 0);
+  border-radius: var(--r-pill);
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  position: relative;
+  width: 44px;
+}
+
+.download-progress__ring::before {
+  background: var(--surface-3);
+  border-radius: inherit;
+  content: '';
+  inset: var(--s-1);
+  position: absolute;
+}
+
+.download-progress__value {
+  color: var(--text-lo);
+  font-size: var(--text-3xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-strong);
+  position: relative;
+}
+
+.download-progress__linear {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-pill);
+  height: var(--s-2);
+  overflow: hidden;
+}
+
+.download-progress__linear > span {
+  background: var(--accent-solid);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width var(--dur-3) var(--ease-standard);
+}
+
+.download-progress[data-indeterminate='true'] .download-progress__ring {
+  animation: downloadRingSpin var(--dur-progress) linear infinite;
+  background: conic-gradient(var(--accent-solid), transparent 42%);
+}
+
+.download-progress[data-indeterminate='true'] .download-progress__linear > span {
+  animation: downloadProgressIndeterminate var(--dur-progress) var(--ease-standard) infinite;
+}
+
+@keyframes downloadProgressIndeterminate {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+.download-task__metrics {
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.download-task__metrics > div {
+  background: var(--surface-inset);
+  border-radius: var(--r-md);
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--s-2);
+}
+
+.download-task__metrics dt {
+  color: var(--text-dim);
+  font-size: var(--text-3xs);
+}
+
+.download-task__metrics dd {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-task__error {
+  background: var(--bad-tint);
+  border: 1px solid var(--bad-line);
+  border-radius: var(--r-md);
+  color: var(--bad-text);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+}
+
+.download-task > footer {
+  display: flex;
+  gap: var(--s-2);
+  justify-content: flex-end;
+}
+
+.download-task__action {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  min-width: 64px;
+  padding: var(--s-2) var(--s-3);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+.download-task__action:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+}
+
+.download-task__action--resume {
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+
+.download-task__action--cancel {
+  color: var(--bad-text);
+}
+
+.download-task__action:disabled {
+  cursor: wait;
+  opacity: var(--opacity-disabled);
+}
+
+@media (max-width: 620px) {
+  .download-progress {
+    grid-template-columns: 40px minmax(64px, 96px);
+  }
+
+  .download-progress__ring {
+    height: 40px;
+    width: 40px;
+  }
+
+  .download-task__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .download-progress[data-indeterminate='true'] .download-progress__linear > span,
+  .download-progress[data-indeterminate='true'] .download-progress__ring,
+  .titlebar__downloads[data-indeterminate='true'][data-active='true'] {
+    animation: none;
+  }
+
+  .download-progress__linear > span,
+  .titlebar__downloads {
+    transition: none;
+  }
+}
+
 .connection-advanced-dialog {
   background: var(--surface-2);
   border: 1px solid var(--line-strong);
@@ -7389,6 +7792,7 @@ body.is-resizing * {
 }
 
 .connection-advanced-dialog::backdrop,
+.download-center-dialog::backdrop,
 .conversation-rename-dialog::backdrop,
 .confirmation-dialog::backdrop {
   background: rgb(0 0 0 / 58%);

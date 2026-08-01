@@ -35,11 +35,7 @@ describe('download journal recovery', () => {
       downloadURL: vi.fn(),
       on: vi.fn(),
     } satisfies DownloadSession;
-    const engine = new DownloadEngine(
-      electronSession,
-      new BusyRegistry(),
-      userDataPath,
-    );
+    const engine = new DownloadEngine(electronSession, new BusyRegistry(), userDataPath);
 
     engine.restoreInterrupted();
 
@@ -77,11 +73,7 @@ describe('download journal recovery', () => {
       downloadURL: vi.fn(),
       on: vi.fn(),
     } satisfies DownloadSession;
-    const engine = new DownloadEngine(
-      electronSession,
-      new BusyRegistry(),
-      userDataPath,
-    );
+    const engine = new DownloadEngine(electronSession, new BusyRegistry(), userDataPath);
 
     engine.restoreInterrupted();
 

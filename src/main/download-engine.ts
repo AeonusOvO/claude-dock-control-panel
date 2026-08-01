@@ -37,10 +37,7 @@ export interface DownloadSession {
     urlChain: string[];
   }) => void;
   downloadURL: (url: string) => void;
-  on: (
-    event: 'will-download',
-    listener: (event: Event, item: DownloadItem) => void,
-  ) => unknown;
+  on: (event: 'will-download', listener: (event: Event, item: DownloadItem) => void) => unknown;
 }
 
 interface ActiveDownload {
@@ -86,9 +83,7 @@ export const calculateDownloadProgress = (
   }
   const percent = Math.min(100, Math.max(0, (receivedBytes / totalBytes) * 100));
   const remainingMs =
-    bytesPerSecond > 0
-      ? Math.max(0, ((totalBytes - receivedBytes) / bytesPerSecond) * 1000)
-      : -1;
+    bytesPerSecond > 0 ? Math.max(0, ((totalBytes - receivedBytes) / bytesPerSecond) * 1000) : -1;
   return { percent, remainingMs };
 };
 
@@ -548,16 +543,16 @@ export class DownloadEngine {
     this.notify();
   }
 
-  private updateFromItem(
-    task: ActiveDownload,
-    state: 'interrupted' | 'progressing',
-  ): void {
+  private updateFromItem(task: ActiveDownload, state: 'interrupted' | 'progressing'): void {
     if (task.settled || !task.item) {
       return;
     }
     const now = Date.now();
     const receivedBytes = Math.max(0, task.item.getReceivedBytes());
-    if (receivedBytes > task.request.maxBytes || task.item.getTotalBytes() > task.request.maxBytes) {
+    if (
+      receivedBytes > task.request.maxBytes ||
+      task.item.getTotalBytes() > task.request.maxBytes
+    ) {
       task.item.cancel();
       this.deletePartial(task);
       this.fail(task, new Error('下载内容超过安全上限，文件已删除。'));
@@ -577,16 +572,8 @@ export class DownloadEngine {
       task.lastSampleBytes = receivedBytes;
     }
     const totalBytes = Math.max(0, task.item.getTotalBytes());
-    const progress = calculateDownloadProgress(
-      receivedBytes,
-      totalBytes,
-      task.view.bytesPerSecond,
-    );
-    const mappedState = mapDownloadItemState(
-      state,
-      task.item.isPaused(),
-      task.item.canResume(),
-    );
+    const progress = calculateDownloadProgress(receivedBytes, totalBytes, task.view.bytesPerSecond);
+    const mappedState = mapDownloadItemState(state, task.item.isPaused(), task.item.canResume());
     task.view = {
       ...task.view,
       ...progress,

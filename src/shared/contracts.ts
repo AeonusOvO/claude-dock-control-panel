@@ -10,12 +10,7 @@ export type ClaudeLaunchMode = 'continue' | 'new' | 'resume';
 export type CodexLaunchMode = ClaudeLaunchMode;
 export type CodexLoginMethod = 'browser' | 'device-code';
 export type BusyKind =
-  | 'configure'
-  | 'conversation'
-  | 'download'
-  | 'install'
-  | 'proxy'
-  | 'uninstall';
+  'configure' | 'conversation' | 'download' | 'install' | 'proxy' | 'uninstall';
 export type BusySeverity = 'blocking' | 'resumable';
 export interface BusyLease {
   readonly cancellable: boolean;
@@ -25,13 +20,7 @@ export interface BusyLease {
   readonly severity: BusySeverity;
 }
 export type DownloadTaskState =
-  | 'cancelled'
-  | 'completed'
-  | 'failed'
-  | 'paused'
-  | 'progressing'
-  | 'queued'
-  | 'verifying';
+  'cancelled' | 'completed' | 'failed' | 'paused' | 'progressing' | 'queued' | 'verifying';
 export interface DownloadTaskView {
   bytesPerSecond: number;
   canPause: boolean;

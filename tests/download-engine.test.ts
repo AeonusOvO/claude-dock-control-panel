@@ -74,9 +74,7 @@ describe('download engine', () => {
       .catch(() => undefined);
     session.emit('will-download', { preventDefault: vi.fn() }, item);
 
-    expect(item.setSavePath).toHaveBeenCalledWith(
-      `${finalPath}.partial`,
-    );
+    expect(item.setSavePath).toHaveBeenCalledWith(`${finalPath}.partial`);
     expect(engine.list()[0]).toMatchObject({ percent: 10, state: 'progressing' });
     engine.pause('tool');
     expect(item.pause).toHaveBeenCalledOnce();

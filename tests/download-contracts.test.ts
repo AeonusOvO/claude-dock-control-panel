@@ -20,6 +20,8 @@ const windowsCommandSource = readFileSync(
   new URL('../src/main/windows-command.ts', import.meta.url),
   'utf8',
 );
+const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 
 describe('download IPC surface', () => {
   it('keeps list, commands and changed subscription wired across the process boundary', () => {
@@ -57,10 +59,21 @@ describe('download IPC surface', () => {
   it('routes Codex downloads through the engine and streams installer output', () => {
     expect(codexInstallerSource).toContain('await this.downloadEngine.start({');
     expect(codexInstallerSource).toContain("label: 'Codex 官方安装脚本'");
-    expect(codexInstallerSource).not.toContain(
-      'this.fetchImplementation(release.downloadUrl',
-    );
+    expect(codexInstallerSource).not.toContain('this.fetchImplementation(release.downloadUrl');
     expect(codexInstallerSource).toContain('onLine: this.onInstallLine');
-    expect(windowsCommandSource).toContain("options.onLine?.(line, stream)");
+    expect(windowsCommandSource).toContain('options.onLine?.(line, stream)');
+  });
+
+  it('renders a themed download center with determinate and indeterminate progress', () => {
+    expect(rendererMarkup).toContain('id="download-center-dialog"');
+    expect(rendererMarkup).toContain('id="download-progress-template"');
+    expect(rendererSource).toContain(
+      "appendMetric('已用', formatDownloadDuration(task.elapsedMs))",
+    );
+    expect(rendererSource).toContain("appendDownloadAction(actions, task, 'pause', '暂停')");
+    expect(rendererSource).toContain("appendDownloadAction(actions, task, 'resume', '继续')");
+    expect(rendererSource).toContain("appendDownloadAction(actions, task, 'cancel', '取消')");
+    expect(rendererStyles).toContain(".download-progress[data-indeterminate='true']");
+    expect(rendererStyles).toContain('var(--dur-progress)');
   });
 });

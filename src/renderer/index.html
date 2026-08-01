@@ -35,6 +35,19 @@
             <path d="M18.1 15a7 7 0 1 1-.9-7.9L20 11" />
           </svg>
         </button>
+        <button
+          class="titlebar__downloads"
+          id="open-download-center"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="download-center-dialog"
+          title="打开下载中心"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
+          </svg>
+          <span class="titlebar__downloads-badge" id="download-active-count" hidden>0</span>
+        </button>
       </div>
     </header>
 
@@ -1552,6 +1565,54 @@
       aria-label="切换思考程度"
       hidden
     ></div>
+
+    <dialog
+      class="download-center-dialog"
+      id="download-center-dialog"
+      aria-labelledby="download-center-title"
+      aria-describedby="download-center-description"
+    >
+      <form method="dialog">
+        <header>
+          <div>
+            <span class="step-kicker">后台任务</span>
+            <strong id="download-center-title">下载中心</strong>
+            <p id="download-center-description">
+              下载可暂停、继续或取消；意外退出后，可恢复的半包会保留在这里。
+            </p>
+          </div>
+          <button
+            class="download-center-dialog__close"
+            id="close-download-center"
+            type="button"
+            aria-label="关闭下载中心"
+            title="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <section class="download-center-dialog__body" aria-live="polite">
+          <div class="download-center-empty" id="download-center-empty">
+            <strong>还没有下载任务</strong>
+            <span>安装路由、Codex 或其他组件时，实时进度会显示在这里。</span>
+          </div>
+          <div class="download-task-list" id="download-task-list"></div>
+        </section>
+      </form>
+    </dialog>
+
+    <template id="download-progress-template">
+      <div class="download-progress" data-indeterminate="false">
+        <div class="download-progress__ring" aria-hidden="true">
+          <span class="download-progress__value">0%</span>
+        </div>
+        <div class="download-progress__linear" aria-hidden="true">
+          <span></span>
+        </div>
+      </div>
+    </template>
 
     <dialog
       class="connection-advanced-dialog"
