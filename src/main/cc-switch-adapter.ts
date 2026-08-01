@@ -214,6 +214,9 @@ export class CcSwitchAdapter {
   }
 
   public async install(): Promise<CcSwitchInstallationState> {
+    // DownloadEngine owns a resumable lease while the MSI is transferred. Only the irreversible
+    // Windows Installer phase blocks application exit.
+    const installer = await this.downloadLatestInstaller();
     const release = this.busyRegistry.acquire({
       cancellable: false,
       id: 'router:cc-switch-install',
@@ -222,7 +225,6 @@ export class CcSwitchAdapter {
       severity: 'blocking',
     });
     try {
-      const installer = await this.downloadLatestInstaller();
       await execFileAsync('msiexec.exe', ['/i', installer, '/passive', '/norestart'], {
         timeout: 10 * 60_000,
         windowsHide: true,
@@ -259,9 +261,7 @@ export class CcSwitchAdapter {
       ])}`;
       const command = registryValue(output, 'UninstallString');
       const productCode = command
-        ? /\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}/i.exec(
-            command,
-          )?.[0]
+        ? /\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}/i.exec(command)?.[0]
         : undefined;
       if (productCode) {
         await execFileAsync('msiexec.exe', ['/x', productCode, '/passive', '/norestart'], {
@@ -319,10 +319,7 @@ export class CcSwitchAdapter {
     }
     await this.downloadEngine.start({
       allowedHosts: ['github.com', 'release-assets.githubusercontent.com'],
-      allowedPathPrefixes: [
-        `/farion1231/cc-switch/releases/download/v${release.version}/`,
-        '/',
-      ],
+      allowedPathPrefixes: [`/farion1231/cc-switch/releases/download/v${release.version}/`, '/'],
       expectedBytes: release.size,
       expectedSha256: release.digest,
       finalPath,
@@ -335,8 +332,8 @@ export class CcSwitchAdapter {
   }
 
   private residualPaths(): string[] {
-    const roots = [process.env.APPDATA, process.env.LOCALAPPDATA].filter(
-      (value): value is string => Boolean(value),
+    const roots = [process.env.APPDATA, process.env.LOCALAPPDATA].filter((value): value is string =>
+      Boolean(value),
     );
     return roots.flatMap((root) => DATA_DIRECTORY_NAMES.map((name) => path.join(root, name)));
   }

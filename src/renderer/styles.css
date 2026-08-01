@@ -8058,6 +8058,57 @@ body.is-resizing * {
   padding: var(--s-3);
 }
 
+.router-wizard-form {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.router-wizard-route,
+.router-wizard-decision,
+.router-wizard-form > button {
+  grid-column: 1 / -1;
+}
+
+.router-wizard-decision {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  color: var(--accent-text);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+}
+
+.router-operation-progress {
+  background: var(--surface-3);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-xl);
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+}
+
+.router-operation-progress[hidden] {
+  display: none;
+}
+
+.router-operation-progress > div {
+  display: grid;
+  gap: var(--s-1);
+}
+
+.router-operation-progress span {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.router-operation-progress progress {
+  accent-color: var(--accent);
+  width: 100%;
+}
+
 .cc-switch-boundary {
   color: var(--text-dim);
   font-size: var(--text-xs);

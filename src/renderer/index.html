@@ -1879,6 +1879,68 @@
               <p class="router-boundary-notice">
                 路由操作点击后立即生效；只配置 Claude Code CLI，不接管 Claude / Codex 桌面版。
               </p>
+              <section class="router-settings__section" aria-labelledby="router-wizard-title">
+                <div class="settings-section-heading">
+                  <strong id="router-wizard-title">一键接入向导</strong>
+                  <span>选择供应商、填写 Key，可选覆盖模型；ClaudeDock 自动决定直连或路由。</span>
+                </div>
+                <form id="router-wizard-form" class="router-wizard-form">
+                  <label class="field" for="router-wizard-provider">
+                    <span>供应商</span>
+                    <select id="router-wizard-provider"></select>
+                  </label>
+                  <label
+                    class="field"
+                    id="router-wizard-base-url-field"
+                    for="router-wizard-base-url"
+                    hidden
+                  >
+                    <span>上游 Base URL</span>
+                    <input id="router-wizard-base-url" type="url" maxlength="2048" />
+                  </label>
+                  <label
+                    class="field"
+                    id="router-wizard-credential-field"
+                    for="router-wizard-credential"
+                  >
+                    <span>API Key</span>
+                    <input
+                      id="router-wizard-credential"
+                      type="password"
+                      maxlength="4096"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="field" for="router-wizard-model">
+                    <span>模型（可选覆盖）</span>
+                    <input
+                      id="router-wizard-model"
+                      type="text"
+                      maxlength="160"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="settings-row router-wizard-route" for="router-wizard-use-route">
+                    <span>
+                      <strong>使用 CCR 路由增强</strong>
+                      <small>仅在供应商支持可选路由时开放；必须路由的协议会自动开启。</small>
+                    </span>
+                    <input id="router-wizard-use-route" type="checkbox" />
+                  </label>
+                  <p id="router-wizard-decision" class="router-wizard-decision"></p>
+                  <button class="dialog-primary" id="router-wizard-submit" type="submit">
+                    自动配置并校验
+                  </button>
+                </form>
+              </section>
+              <section class="router-operation-progress" id="router-operation-progress" hidden>
+                <div>
+                  <strong id="router-operation-stage">准备</strong>
+                  <span id="router-operation-detail">正在准备路由操作…</span>
+                </div>
+                <progress id="router-operation-meter" max="100"></progress>
+              </section>
               <section class="router-settings__section" aria-labelledby="router-capabilities-title">
                 <div class="settings-section-heading">
                   <strong id="router-capabilities-title">供应商路由能力</strong>
@@ -1892,8 +1954,8 @@
                   <span id="router-kernel-status">正在检测当前路由内核…</span>
                 </div>
                 <p class="cc-switch-boundary">
-                  CC Switch 没有管理 API。ClaudeDock 只通过官方 MSI 安装/卸载，并使用
-                  ccswitch:// 单向导出；绝不读取或修改它的 SQLite 数据库。
+                  CC Switch 没有管理 API。ClaudeDock 只通过官方 MSI 安装/卸载，并使用 ccswitch://
+                  单向导出；绝不读取或修改它的 SQLite 数据库。
                 </p>
                 <div class="cc-switch-actions">
                   <button id="install-cc-switch" type="button">安装 CC Switch</button>

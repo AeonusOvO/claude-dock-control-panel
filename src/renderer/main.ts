@@ -327,6 +327,20 @@ const connectionAdvancedContent = requiredElement<HTMLElement>('#connection-adva
 const routerSettingsContent = requiredElement<HTMLElement>('#router-settings-content');
 const routerCapabilityList = requiredElement<HTMLElement>('#router-capability-list');
 const openRouterSettingsButton = requiredElement<HTMLButtonElement>('#open-router-settings');
+const routerWizardForm = requiredElement<HTMLFormElement>('#router-wizard-form');
+const routerWizardProvider = requiredElement<HTMLSelectElement>('#router-wizard-provider');
+const routerWizardBaseUrlField = requiredElement<HTMLElement>('#router-wizard-base-url-field');
+const routerWizardBaseUrl = requiredElement<HTMLInputElement>('#router-wizard-base-url');
+const routerWizardCredentialField = requiredElement<HTMLElement>('#router-wizard-credential-field');
+const routerWizardCredential = requiredElement<HTMLInputElement>('#router-wizard-credential');
+const routerWizardModel = requiredElement<HTMLInputElement>('#router-wizard-model');
+const routerWizardUseRoute = requiredElement<HTMLInputElement>('#router-wizard-use-route');
+const routerWizardDecision = requiredElement<HTMLElement>('#router-wizard-decision');
+const routerWizardSubmit = requiredElement<HTMLButtonElement>('#router-wizard-submit');
+const routerOperationProgress = requiredElement<HTMLElement>('#router-operation-progress');
+const routerOperationStage = requiredElement<HTMLElement>('#router-operation-stage');
+const routerOperationDetail = requiredElement<HTMLElement>('#router-operation-detail');
+const routerOperationMeter = requiredElement<HTMLProgressElement>('#router-operation-meter');
 const routerKernelStatus = requiredElement<HTMLElement>('#router-kernel-status');
 const installCcSwitchButton = requiredElement<HTMLButtonElement>('#install-cc-switch');
 const exportCcSwitchButton = requiredElement<HTMLButtonElement>('#export-cc-switch');
@@ -732,6 +746,20 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
   );
   downloadActiveCount.hidden = active.length === 0;
   downloadActiveCount.textContent = String(active.length);
+  const routerDownload = active.find((task) =>
+    /CCR|CC Switch|Claude Code Router|路由器/i.test(task.label),
+  );
+  if (routerDownload && routerOperationInProgress) {
+    setRouterOperationStage(
+      routerDownload.state === 'verifying' ? '校验下载' : '下载组件',
+      `${routerDownload.label} · ${
+        routerDownload.totalBytes > 0 ? `${Math.round(routerDownload.percent)}%` : '正在接收…'
+      }`,
+      routerDownload.totalBytes > 0
+        ? Math.max(5, Math.min(70, routerDownload.percent * 0.7))
+        : undefined,
+    );
+  }
   renderDownloads(tasks);
 };
 
@@ -977,6 +1005,16 @@ routerCapabilityList.replaceChildren(
     card.append(heading, detail, verified);
     return card;
   }),
+);
+routerWizardProvider.replaceChildren(
+  ...CLAUDE_PROVIDERS.filter((provider) => provider.id !== 'curl' && provider.id !== 'gateway').map(
+    (provider) => {
+      const option = document.createElement('option');
+      option.value = provider.id;
+      option.textContent = provider.label;
+      return option;
+    },
+  ),
 );
 claudePreset.replaceChildren(
   ...CLAUDE_PROVIDERS.map((provider) => {
@@ -4447,6 +4485,196 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   updateSmartGuidance();
 }
 
+const setRouterOperationStage = (stage: string, detail: string, percent?: number): void => {
+  routerOperationProgress.hidden = false;
+  routerOperationStage.textContent = stage;
+  routerOperationDetail.textContent = detail;
+  if (percent === undefined) {
+    routerOperationMeter.removeAttribute('value');
+  } else {
+    routerOperationMeter.value = Math.max(0, Math.min(100, percent));
+  }
+};
+
+const syncRouterWizard = (): void => {
+  const provider = findClaudeProvider(routerWizardProvider.value);
+  if (!provider) {
+    return;
+  }
+  const capability = ROUTER_CAPABILITIES[provider.id];
+  const needsCredential = provider.authMode === 'apiKey' || provider.authMode === 'authToken';
+  routerWizardBaseUrlField.hidden = !provider.editableBaseUrl;
+  routerWizardBaseUrl.required = provider.editableBaseUrl;
+  if (!provider.editableBaseUrl || !routerWizardBaseUrl.value.trim()) {
+    routerWizardBaseUrl.value = provider.editableBaseUrl ? '' : provider.baseUrl;
+  }
+  routerWizardCredentialField.hidden = !needsCredential;
+  routerWizardCredential.required = needsCredential && provider.id !== 'ollama';
+  routerWizardCredential.placeholder = provider.keyHint ?? '仅在提交时交给主进程安全保存';
+  routerWizardModel.placeholder = provider.model;
+  if (capability.mode === 'direct') {
+    routerWizardUseRoute.checked = false;
+    routerWizardUseRoute.disabled = true;
+  } else if (capability.mode === 'router-required') {
+    routerWizardUseRoute.checked = true;
+    routerWizardUseRoute.disabled = true;
+  } else {
+    routerWizardUseRoute.disabled = false;
+  }
+  const routed = routerWizardUseRoute.checked;
+  routerWizardDecision.dataset.mode = routed ? 'router' : 'direct';
+  routerWizardDecision.textContent = `${routed ? '将使用 CCR 完成协议转换' : '将直接写入 Claude Code CLI 配置'}：${capability.reason}`;
+};
+
+const wizardDirectInput = (): SaveClaudeConfigInput => {
+  const provider = findClaudeProvider(routerWizardProvider.value);
+  if (!provider) {
+    throw new Error('请选择有效的服务提供方。');
+  }
+  const credential =
+    provider.id === 'ollama'
+      ? routerWizardCredential.value.trim() || 'ollama'
+      : routerWizardCredential.value.trim();
+  const needsCredential = provider.authMode === 'apiKey' || provider.authMode === 'authToken';
+  return {
+    apiKeyHelperPolicy: 'prefer-claudedock',
+    authMode: provider.authMode,
+    baseUrl: provider.editableBaseUrl ? routerWizardBaseUrl.value.trim() : provider.baseUrl,
+    credential: needsCredential ? credential : undefined,
+    credentialAction: needsCredential ? 'replace' : 'clear',
+    model: routerWizardModel.value.trim() || provider.model,
+    modelFast: provider.modelFast,
+    preset: provider.id,
+    protocol: 'anthropic',
+    provider: providerForPreset(provider.id),
+  };
+};
+
+const verifySavedRouterConfiguration = async (
+  sessionId: string,
+  projectState: ClaudeProjectState | undefined,
+): Promise<ClaudeConnectionTestResult | undefined> => {
+  const config = projectState?.config;
+  if (!config) {
+    return undefined;
+  }
+  return window.controlPanel.testClaudeConnection(sessionId, {
+    apiKeyHelperPolicy: config.apiKeyHelperPolicy,
+    authMode: config.authMode,
+    baseUrl: config.baseUrl,
+    credentialAction: 'keep',
+    model: config.model,
+    modelFast: config.modelFast,
+    preset: config.preset,
+    protocol: config.protocol === 'unknown' ? 'anthropic' : config.protocol,
+    provider: config.provider,
+    routerProviderId: config.routerProviderId,
+  });
+};
+
+const runRouterWizard = async (): Promise<void> => {
+  const status = activeStatus();
+  const provider = findClaudeProvider(routerWizardProvider.value);
+  if (!status || !provider || routerOperationInProgress || !routerWizardForm.reportValidity()) {
+    return;
+  }
+  const capability = ROUTER_CAPABILITIES[provider.id];
+  const routed = capability.mode === 'router-required' || routerWizardUseRoute.checked;
+  routerOperationInProgress = true;
+  setRouterOperationStage('准备', `正在校验 ${provider.label} 接入参数…`, 5);
+  await runGuarded(routerWizardSubmit, '正在自动配置…', async () => {
+    try {
+      if (!routed) {
+        const input = wizardDirectInput();
+        setRouterOperationStage('连通性校验', '先验证端点、认证与模型，避免写入不可用配置。', 55);
+        const test = await window.controlPanel.testClaudeConnection(status.id, input);
+        renderConnectionTest(test);
+        if (!test.ok) {
+          throw new Error(test.message);
+        }
+        setRouterOperationStage('写入配置', '正在保存项目级 Claude Code CLI 接入配置…', 80);
+        const saved = await window.controlPanel.saveClaudeConfig(status.id, input);
+        renderClaudeState(saved.state);
+        if (!saved.ok) {
+          throw new Error(saved.error ?? '无法保存接入配置。');
+        }
+        populateClaudeConfigForm(saved.state);
+      } else {
+        setRouterOperationStage('检查路由内核', '正在确认 CCR 已安装且管理接口可用…', 15);
+        let management = await window.controlPanel.getClaudeRouterManagementState(status.id);
+        if (!management.installed) {
+          setRouterOperationStage('安装路由内核', '正在通过受管下载与 npm 安装 CCR…', 25);
+          const installed = await window.controlPanel.installClaudeRouterFromSource(
+            status.id,
+            'npm',
+          );
+          renderRouterManagement(installed.routerState);
+          if (!installed.ok) {
+            throw new Error(installed.message);
+          }
+          management = installed.routerState;
+        }
+        if (!management.managementAvailable) {
+          setRouterOperationStage('启动路由内核', '正在启动 CCR 并等待本地管理端点…', 65);
+          const started = await window.controlPanel.startClaudeRouter(status.id);
+          renderRouterManagement(started.routerState);
+          if (!started.ok || !started.routerState.managementAvailable) {
+            throw new Error(started.message);
+          }
+          management = started.routerState;
+        }
+        setRouterOperationStage('写入路由配置', '正在写入上游、模型与当前项目绑定…', 80);
+        const baseUrl = provider.editableBaseUrl
+          ? routerWizardBaseUrl.value.trim()
+          : provider.baseUrl;
+        const existing = management.providers.find((item) => item.name === `wizard-${provider.id}`);
+        const saved = await window.controlPanel.saveClaudeRouterProvider(status.id, {
+          apiKey:
+            provider.id === 'ollama'
+              ? routerWizardCredential.value.trim() || 'ollama'
+              : routerWizardCredential.value.trim(),
+          baseUrl,
+          credentialAction: 'replace',
+          id: existing?.id,
+          makePreferred: true,
+          models: [routerWizardModel.value.trim() || provider.model],
+          name: `wizard-${provider.id}`,
+          protocol: 'openai_chat_completions',
+          useForCurrentProject: true,
+        });
+        renderRouterManagement(saved.routerState);
+        if (saved.projectState) {
+          renderClaudeState(saved.projectState);
+          populateClaudeConfigForm(saved.projectState);
+        }
+        if (!saved.ok) {
+          throw new Error(saved.message);
+        }
+        setRouterOperationStage('连通性校验', '正在通过本地路由验证端点、认证与模型…', 92);
+        const test = await verifySavedRouterConfiguration(status.id, saved.projectState);
+        if (test) {
+          renderConnectionTest(test);
+          if (!test.ok) {
+            throw new Error(test.message);
+          }
+        }
+      }
+      routerWizardCredential.value = '';
+      setRouterOperationStage('完成', `${provider.label} 已配置并通过真实连接校验。`, 100);
+      showToast(`${provider.label} 接入已完成`);
+      void loadConnectionHistory();
+      void loadGatewayDiagnostics();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '自动配置失败。';
+      setRouterOperationStage('未完成', message, 100);
+      showToast(message, 'error');
+    } finally {
+      routerOperationInProgress = false;
+      void loadRouterKernelState();
+    }
+  });
+};
+
 const renderRouterKernelState = (state: RouterKernelState): void => {
   routerKernelState = state;
   const activeLabel =
@@ -4498,13 +4726,17 @@ const runKernelOperation = async (
     return;
   }
   routerOperationInProgress = true;
+  setRouterOperationStage('准备', busyLabel || '正在准备路由内核操作…', 5);
   await runGuarded(button, busyLabel, async () => {
     try {
+      setRouterOperationStage('执行', busyLabel || '正在执行路由内核操作…', 70);
       const result = await action(status.id);
       renderRouterKernelState(result.state);
       renderRouterManagement(result.state.ccr);
+      setRouterOperationStage(result.ok ? '完成' : '未完成', result.error ?? result.message, 100);
       showToast(result.error ?? result.message, result.ok ? 'success' : 'error');
     } catch {
+      setRouterOperationStage('未完成', '路由内核操作发生异常。', 100);
       showToast('路由内核操作发生异常。', 'error');
     } finally {
       routerOperationInProgress = false;
@@ -4542,12 +4774,17 @@ const runRouterOperation = async (
     return;
   }
   routerOperationInProgress = true;
+  setRouterOperationStage('准备', busyLabel || '正在准备路由器操作…', 5);
   await runGuarded(button, busyLabel, async () => {
     try {
-      handleRouterResult(await action(status.id));
+      setRouterOperationStage('执行', busyLabel || '正在执行路由器操作…', 70);
+      const result = await action(status.id);
+      handleRouterResult(result);
+      setRouterOperationStage(result.ok ? '完成' : '未完成', result.message, 100);
       void loadGatewayDiagnostics();
       void loadSoftwareUpdates(false);
     } catch {
+      setRouterOperationStage('未完成', '路由器操作发生异常。', 100);
       showToast('路由器操作发生异常。', 'error');
     } finally {
       routerOperationInProgress = false;
@@ -8870,6 +9107,17 @@ openRouterSettingsButton.addEventListener('click', () => {
   openAdvancedConnectionDialog();
   selectSettingsTab('router');
 });
+routerWizardProvider.addEventListener('change', () => {
+  routerWizardBaseUrl.value = '';
+  routerWizardModel.value = '';
+  syncRouterWizard();
+});
+routerWizardUseRoute.addEventListener('change', syncRouterWizard);
+routerWizardForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void runRouterWizard();
+});
+syncRouterWizard();
 installCcSwitchButton.addEventListener('click', () => {
   void runKernelOperation(
     (sessionId) => window.controlPanel.installCcSwitch(sessionId),

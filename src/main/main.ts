@@ -73,6 +73,7 @@ import {
   type TerminalThemeId,
 } from '../shared/terminal-themes';
 import { CLAUDE_PROVIDER_EXTERNAL_HOSTS, claudeProviderIdSet } from '../shared/claude-providers';
+import { selectRouterKernelState } from '../shared/router-kernel';
 import { CLAUDE_EFFORT_REQUESTS } from '../shared/claude-effort';
 import {
   ClaudePluginManager,
@@ -737,14 +738,31 @@ const getRouterKernelState = async (): Promise<RouterKernelState> => {
     requireClaudeRuntime().getRouterManagementState(),
     requireCcSwitchAdapter().getState(),
   ]);
-  const ccrActive = ccr.gatewayState === 'running' || ccr.serviceRunning;
-  return {
-    active: ccrActive ? 'ccr' : ccSwitch.running ? 'cc-switch' : 'none',
-    ccSwitch,
-    checkedAt: Date.now(),
-    conflict: ccrActive && ccSwitch.running,
-    ccr,
-  };
+  return selectRouterKernelState(ccr, ccSwitch);
+};
+
+const withBlockingRouterTask = async <T>(
+  id: string,
+  label: string,
+  action: () => Promise<T>,
+): Promise<T> => {
+  const release = busyRegistry?.acquire({
+    cancellable: false,
+    id,
+    kind:
+      id.includes('uninstall') || id.includes('delete')
+        ? 'uninstall'
+        : id.includes('install')
+          ? 'install'
+          : 'configure',
+    label,
+    severity: 'blocking',
+  });
+  try {
+    return await action();
+  } finally {
+    release?.();
+  }
 };
 
 const routerKernelFailure = async (
@@ -2196,8 +2214,13 @@ const registerIpc = (): void => {
         return launchRouterInstaller();
       }
       try {
-        const result = await requireClaudeRuntime().installRouterPackage(
-          source as Exclude<ClaudeRouterInstallSource, 'github'>,
+        const result = await withBlockingRouterTask(
+          'router:ccr-install',
+          '正在安装 Claude Code Router',
+          () =>
+            requireClaudeRuntime().installRouterPackage(
+              source as Exclude<ClaudeRouterInstallSource, 'github'>,
+            ),
         );
         return { message: result.message, ok: true, routerState: result.state };
       } catch (error) {
@@ -2211,7 +2234,11 @@ const registerIpc = (): void => {
       validateSender(event);
       validateSessionId(sessionId);
       try {
-        const result = await requireClaudeRuntime().uninstallRouter();
+        const result = await withBlockingRouterTask(
+          'router:ccr-uninstall',
+          '正在彻底卸载 Claude Code Router',
+          () => requireClaudeRuntime().uninstallRouter(),
+        );
         return { message: result.message, ok: true, routerState: result.state };
       } catch (error) {
         return routerFailure(error, '无法卸载路由器。');
@@ -2278,9 +2305,10 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
-        const result = await requireClaudeRuntime().repairRouterFromProject(
-          validatedSessionId,
-          status.cwd,
+        const result = await withBlockingRouterTask(
+          'router:ccr-repair',
+          '正在修复 Claude Code Router 配置',
+          () => requireClaudeRuntime().repairRouterFromProject(validatedSessionId, status.cwd),
         );
         return {
           message: `已用当前项目配置创建服务提供方 ${result.saved.provider.name}，启动 3456，并将当前项目安全切换到路由器。`,
@@ -2301,10 +2329,15 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
-        const result = await requireClaudeRuntime().saveRouterProvider(
-          validatedSessionId,
-          status.cwd,
-          validateClaudeRouterProviderInput(input),
+        const result = await withBlockingRouterTask(
+          'router:ccr-save-provider',
+          '正在保存 Claude Code Router 服务提供方',
+          () =>
+            requireClaudeRuntime().saveRouterProvider(
+              validatedSessionId,
+              status.cwd,
+              validateClaudeRouterProviderInput(input),
+            ),
         );
         return {
           message: result.projectState
@@ -2336,7 +2369,11 @@ const registerIpc = (): void => {
         return {
           message: '服务提供方已从路由器删除。',
           ok: true,
-          routerState: await requireClaudeRuntime().deleteRouterProvider(providerId),
+          routerState: await withBlockingRouterTask(
+            'router:ccr-delete-provider',
+            '正在删除 Claude Code Router 服务提供方',
+            () => requireClaudeRuntime().deleteRouterProvider(providerId),
+          ),
         };
       } catch (error) {
         return routerFailure(error, '无法删除路由器服务提供方。');
