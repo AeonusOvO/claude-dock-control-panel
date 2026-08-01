@@ -289,9 +289,9 @@ describe('Claude runtime permission mode observation', () => {
     );
     expect(testHandler).toContain('const validatedInput = validateClaudeConfigInput(input);');
     expect(testHandler).toMatch(
-      /if \(validatedInput\.provider === 'anthropic' && validatedInput\.protocol !== 'openai'\) \{[\s\S]*?assertAllowed\(\s*'anthropic-claude',\s*'first-request',\s*status\.cwd,\s*\);/,
+      /if \(validatedInput\.provider === 'anthropic' && validatedInput\.protocol !== 'openai'\) \{[\s\S]*?assertOfficialProviderAllowed\(\s*'anthropic-claude',\s*'first-request',\s*status\.cwd,\s*\);/,
     );
-    expect(testHandler.indexOf('assertAllowed(')).toBeLessThan(
+    expect(testHandler.indexOf('assertOfficialProviderAllowed(')).toBeLessThan(
       testHandler.indexOf('requireClaudeRuntime().testConnection('),
     );
   });
