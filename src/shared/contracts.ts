@@ -127,6 +127,11 @@ export interface ProxyLeakAuditReport {
   proxyIp?: string;
   summary: ProxyAuditVerdict;
 }
+export interface ProxyAuditRecord {
+  acceptedAt?: number;
+  id: string;
+  report: ProxyLeakAuditReport;
+}
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
  * `dontAsk` never appears in the Shift+Tab cycle and can only be selected at launch.

@@ -1,5 +1,16 @@
+import { createHash } from 'node:crypto';
+import { getServers } from 'node:dns';
 import { isIP } from 'node:net';
-import type { ProxyAuditItem } from '../../shared/contracts';
+import type {
+  ProxyAuditItem,
+  ProxyAuditRecord,
+  ProxyLeakAuditReport,
+  ProxyProfileView,
+  ProxyRuntimeView,
+} from '../../shared/contracts';
+import { interfaceFacts } from '../network-path-resolver';
+import { evaluateEnvironment } from './environment-audit';
+import type { LeakAuditStore } from './leak-audit-store';
 
 export type AuditFetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -244,3 +255,112 @@ export const evaluateEgress = (
   });
   return items;
 };
+
+export const proxyNodeFingerprint = (profile: ProxyProfileView): string =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        address: profile.address.toLowerCase(),
+        port: profile.port,
+        protocol: profile.protocol,
+        serverName: profile.serverName?.toLowerCase(),
+        transport: profile.transport,
+      }),
+    )
+    .digest('hex');
+
+export const summarizeAudit = (items: ProxyAuditItem[]): ProxyLeakAuditReport['summary'] =>
+  items.some(({ verdict }) => verdict === 'risk')
+    ? 'risk'
+    : items.some(({ verdict }) => verdict === 'warning')
+      ? 'warning'
+      : 'passed';
+
+export interface LeakAuditServiceOptions {
+  auditStore: LeakAuditStore;
+  directFetch: AuditFetch;
+  now?: () => number;
+  onReport?: (record: ProxyAuditRecord) => void;
+  proxiedFetch: (proxyUrl: string) => AuditFetch;
+  webRtcAudit: (expectedProxyIp?: string) => Promise<ProxyAuditItem>;
+}
+
+const allowedAuditFetch =
+  (fetcher: AuditFetch): AuditFetch =>
+  async (url, init) => {
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.username ||
+      parsed.password ||
+      !LEAK_AUDIT_ALLOWED_HOSTS.includes(parsed.hostname)
+    ) {
+      throw new Error('泄露检测目标不在固定 HTTPS 白名单中。');
+    }
+    return fetcher(parsed.toString(), init);
+  };
+
+export class LeakAuditService {
+  private readonly now: () => number;
+
+  public constructor(private readonly options: LeakAuditServiceOptions) {
+    this.now = options.now ?? Date.now;
+  }
+
+  public async run(
+    profile: ProxyProfileView,
+    runtime: ProxyRuntimeView,
+  ): Promise<ProxyAuditRecord> {
+    const proxyReady = runtime.status === 'ready' && Boolean(runtime.httpProxyUrl);
+    const [directResult, proxyResult] = await Promise.allSettled([
+      probeEgress(allowedAuditFetch(this.options.directFetch)),
+      proxyReady && runtime.httpProxyUrl
+        ? probeEgress(allowedAuditFetch(this.options.proxiedFetch(runtime.httpProxyUrl)))
+        : Promise.reject(new Error('内置代理未就绪。')),
+    ]);
+    const direct = directResult.status === 'fulfilled' ? directResult.value : undefined;
+    const proxied = proxyResult.status === 'fulfilled' ? proxyResult.value : undefined;
+    const interfaces = interfaceFacts();
+    const items = [
+      ...evaluateEgress(direct, proxied, interfaces.ipv6Available),
+      evaluateDns(getServers(), proxyReady),
+      await this.options.webRtcAudit(proxied?.ip),
+      ...evaluateEnvironment({
+        builtInProxyUrl: runtime.httpProxyUrl,
+        countryCode: proxied?.countryCode,
+        virtualInterfaces: interfaces.virtualInterfaces,
+      }),
+    ];
+    const report: ProxyLeakAuditReport = {
+      checkedAt: this.now(),
+      directIp: direct?.ip,
+      items,
+      nodeFingerprint: proxyNodeFingerprint(profile),
+      proxyIp: proxied?.ip,
+      summary: summarizeAudit(items),
+    };
+    const record = this.options.auditStore.add(report);
+    this.options.onReport?.(record);
+    return record;
+  }
+
+  public accept(recordId: string): ProxyAuditRecord {
+    const record = this.options.auditStore.accept(recordId, this.now());
+    this.options.onReport?.(record);
+    return record;
+  }
+
+  public list(): ProxyAuditRecord[] {
+    return this.options.auditStore.list();
+  }
+
+  public assertAccessAccepted(profile: ProxyProfileView): void {
+    const latest = this.options.auditStore.latestForFingerprint(proxyNodeFingerprint(profile));
+    if (!latest) {
+      throw new Error('内置代理尚未完成体检，请先运行体检。');
+    }
+    if (latest.report.summary === 'risk' && !latest.acceptedAt) {
+      throw new Error('代理体检发现风险，接入已暂停；请返回调整，或在体检报告中明确选择仍要继续。');
+    }
+  }
+}
