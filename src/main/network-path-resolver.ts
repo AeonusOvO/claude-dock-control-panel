@@ -4,7 +4,7 @@ import type { NetworkPathView, NetworkProcessKind, NetworkProviderId } from '../
 
 export type ResolveProxy = (url: string) => Promise<string>;
 
-const PROXY_ENVIRONMENT_KEYS = [
+export const PROXY_ENVIRONMENT_KEYS = [
   'HTTPS_PROXY',
   'https_proxy',
   'HTTP_PROXY',
@@ -13,10 +13,10 @@ const PROXY_ENVIRONMENT_KEYS = [
   'all_proxy',
 ] as const;
 
-const VIRTUAL_INTERFACE_PATTERN =
+export const VIRTUAL_INTERFACE_PATTERN =
   /(vpn|wireguard|wintun|tap|tun|tailscale|zerotier|hyper-v|vmware|virtualbox|docker|wsl)/i;
 
-const virtualInterfaceCategory = (name: string): string => {
+export const virtualInterfaceCategory = (name: string): string => {
   if (/(wireguard|wintun|tap|tun|vpn)/i.test(name)) {
     return 'VPN / 隧道接口';
   }
@@ -64,7 +64,7 @@ export const classifyEnvironmentProxy = (
   };
 };
 
-const interfaceFacts = (): {
+export const interfaceFacts = (): {
   ipv4Available: boolean;
   ipv6Available: boolean;
   virtualInterfaces: string[];
