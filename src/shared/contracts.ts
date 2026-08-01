@@ -57,6 +57,7 @@ export type ChatStreamEventType =
   | 'delta'
   | 'done'
   | 'error'
+  | 'idle'
   | 'input-json'
   | 'refusal'
   | 'retrying'
@@ -267,12 +268,14 @@ export interface ChatPreflightResult {
 }
 
 export interface ChatStreamEvent {
-  abortReason?: 'manual' | 'timeout';
+  abortReason?: 'manual';
   attempt?: number;
   delta?: string;
   detail?: string;
   error?: string;
+  idleMs?: number;
   maxAttempts?: number;
+  probe?: ChatIdleProbeResult;
   refusal?: string;
   requestId: string;
   retryAfterMs?: number;
@@ -281,6 +284,11 @@ export interface ChatStreamEvent {
   status?: number;
   type: ChatStreamEventType;
   usage?: ChatTokenUsage;
+}
+
+export interface ChatIdleProbeResult {
+  detail: string;
+  ok?: boolean;
 }
 
 export interface ArtifactNetworkLogEntry {

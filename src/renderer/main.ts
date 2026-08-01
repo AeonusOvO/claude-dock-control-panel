@@ -639,6 +639,7 @@ let activeChatRequestId = '';
 let activeChatReply = '';
 let activeChatReplyElement: HTMLElement | undefined;
 let activeChatReplyStream: MarkdownStreamRenderer | undefined;
+let activeChatIdleNoticeElement: HTMLElement | undefined;
 let activeChatThinking = '';
 let activeChatThinkingElement: HTMLElement | undefined;
 const pendingChatAttachments: ChatAttachmentView[] = [];
@@ -1794,6 +1795,7 @@ const finishChatRequest = (): void => {
   activeChatReply = '';
   activeChatReplyElement = undefined;
   activeChatReplyStream = undefined;
+  activeChatIdleNoticeElement = undefined;
   activeChatThinking = '';
   activeChatThinkingElement = undefined;
   activeChatRequestMessages = [];
@@ -1810,7 +1812,32 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     activeChatUsage = { ...event.usage };
     renderChatUsage();
   }
+  if (event.type === 'idle') {
+    const article = activeChatReplyElement?.closest('article');
+    if (article && !activeChatIdleNoticeElement) {
+      activeChatIdleNoticeElement = document.createElement('p');
+      activeChatIdleNoticeElement.className = 'chat-message__idle-notice';
+      activeChatIdleNoticeElement.setAttribute('role', 'status');
+      article.append(activeChatIdleNoticeElement);
+    }
+    const minutes = Math.max(1, Math.floor((event.idleMs ?? 0) / 60_000));
+    const probe =
+      event.probe?.ok === true
+        ? '接口连通正常'
+        : event.probe?.ok === false
+          ? '接口探测失败'
+          : '正在探测接口…';
+    if (activeChatIdleNoticeElement) {
+      activeChatIdleNoticeElement.textContent = `已 ${minutes} 分钟未收到数据 · ${probe}`;
+      activeChatIdleNoticeElement.dataset.tone =
+        event.probe?.ok === false ? 'warning' : event.probe?.ok === true ? 'success' : 'pending';
+      activeChatIdleNoticeElement.title = event.probe?.detail ?? '';
+    }
+    return;
+  }
   if (event.type === 'delta' && event.delta) {
+    activeChatIdleNoticeElement?.remove();
+    activeChatIdleNoticeElement = undefined;
     activeChatReply += event.delta;
     if (activeChatReplyElement) {
       if (!activeChatReplyStream) {
@@ -1898,16 +1925,10 @@ const handleChatStream = (event: ChatStreamEvent): void => {
     return;
   }
   if (event.type === 'aborted') {
-    const timedOut = event.abortReason === 'timeout';
-    const notice = timedOut ? '请求长时间没有返回数据，已超时停止。' : '已停止生成。';
+    const notice = '已停止生成。';
     const visibleReply = activeChatReply ? `${activeChatReply}\n\n> ${notice}` : `> ${notice}`;
     if (activeChatReplyElement && !activeChatReply) {
       activeChatReplyElement.textContent = notice;
-    } else if (timedOut && activeChatReply) {
-      activeChatReplyStream ??= activeChatReplyElement
-        ? markdownRenderer.createStream(activeChatReplyElement)
-        : undefined;
-      void activeChatReplyStream?.update(visibleReply);
     }
     if (activeChatReply) {
       chatMessages.push({
@@ -1919,9 +1940,6 @@ const handleChatStream = (event: ChatStreamEvent): void => {
       ? { ...activeChatProviderUsage }
       : estimateChatUsage(activeChatRequestMessages, activeChatReply);
     renderChatUsage();
-    if (timedOut) {
-      showToast(notice, 'error');
-    }
     void (async () => {
       await activeChatReplyStream?.finish(visibleReply);
       await persistActiveChat();

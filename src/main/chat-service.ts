@@ -18,13 +18,15 @@ type EmitChatEvent = (event: ChatStreamEvent) => void;
 type ChatFetch = typeof fetch;
 
 interface ActiveChatRequest {
-  abortReason?: 'manual' | 'timeout';
+  abortReason?: 'manual';
   controller: AbortController;
 }
 
 export interface ChatServiceTimeouts {
+  idleRepeatMs?: number;
   idleTimeoutMs?: number;
   maxTransientRetries?: number;
+  probeTimeoutMs?: number;
   retryBaseDelayMs?: number;
   retryMaxDelayMs?: number;
 }
@@ -56,6 +58,7 @@ const MAX_RESPONSE_LENGTH = 2_000_000;
 const MAX_TEST_RESPONSE_LENGTH = 64 * 1024;
 const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4;
+const IDLE_PROBE_REPEAT_MS = 60_000;
 const REQUEST_IDLE_TIMEOUT_MS = 5 * 60_000;
 const TEST_TIMEOUT_MS = 15_000;
 const MAX_TRANSIENT_RETRIES = 4;
@@ -708,8 +711,10 @@ const discardResponse = async (response: Response): Promise<void> => {
 
 export class ChatService {
   private readonly active = new Map<string, ActiveChatRequest>();
+  private readonly idleRepeatMs: number;
   private readonly idleTimeoutMs: number;
   private readonly maxTransientRetries: number;
+  private readonly probeTimeoutMs: number;
   private readonly retryBaseDelayMs: number;
   private readonly retryMaxDelayMs: number;
 
@@ -720,15 +725,21 @@ export class ChatService {
     private readonly attachmentStore?: ChatAttachmentStore,
     timeouts: ChatServiceTimeouts = {},
   ) {
+    this.idleRepeatMs = timeouts.idleRepeatMs ?? IDLE_PROBE_REPEAT_MS;
     this.idleTimeoutMs = timeouts.idleTimeoutMs ?? REQUEST_IDLE_TIMEOUT_MS;
     this.maxTransientRetries = timeouts.maxTransientRetries ?? MAX_TRANSIENT_RETRIES;
+    this.probeTimeoutMs = timeouts.probeTimeoutMs ?? TEST_TIMEOUT_MS;
     this.retryBaseDelayMs = timeouts.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
     this.retryMaxDelayMs = timeouts.retryMaxDelayMs ?? RETRY_MAX_DELAY_MS;
     if (
+      !Number.isFinite(this.idleRepeatMs) ||
+      this.idleRepeatMs <= 0 ||
       !Number.isFinite(this.idleTimeoutMs) ||
       this.idleTimeoutMs <= 0 ||
       !Number.isInteger(this.maxTransientRetries) ||
       this.maxTransientRetries < 0 ||
+      !Number.isFinite(this.probeTimeoutMs) ||
+      this.probeTimeoutMs <= 0 ||
       !Number.isFinite(this.retryBaseDelayMs) ||
       this.retryBaseDelayMs <= 0 ||
       !Number.isFinite(this.retryMaxDelayMs) ||
@@ -766,8 +777,12 @@ export class ChatService {
   public async test(input: SaveChatConfigInput): Promise<ChatConnectionTestResult> {
     const config = this.store.resolveRuntimeConfig(input);
     this.validateRuntimeConfig(config);
+    return this.probeRuntimeConfig(config);
+  }
+
+  private async probeRuntimeConfig(config: ChatRuntimeConfig): Promise<ChatConnectionTestResult> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), this.probeTimeoutMs);
     const startedAt = Date.now();
     try {
       const messages = validateChatRequest({
@@ -907,17 +922,61 @@ export class ChatService {
   ): Promise<void> {
     const { controller } = active;
     let idleTimeout: NodeJS.Timeout | undefined;
-    const abortForTimeout = (): void => {
-      if (!controller.signal.aborted) {
-        active.abortReason = 'timeout';
-        controller.abort('timeout');
-      }
-    };
-    const touchIdleTimeout = (): void => {
+    let activityGeneration = 0;
+    let lastActivityAt = Date.now();
+    let probeInFlight = false;
+    const scheduleIdleThreshold = (delayMs: number): void => {
       if (idleTimeout) {
         clearTimeout(idleTimeout);
       }
-      idleTimeout = setTimeout(abortForTimeout, this.idleTimeoutMs);
+      idleTimeout = setTimeout(() => {
+        void onIdleThreshold();
+      }, delayMs);
+    };
+    const onIdleThreshold = async (): Promise<void> => {
+      if (controller.signal.aborted || this.active.get(requestId) !== active) {
+        return;
+      }
+      const generation = activityGeneration;
+      const idleMs = Math.max(this.idleTimeoutMs, Date.now() - lastActivityAt);
+      this.emit({
+        idleMs,
+        probe: { detail: '正在旁路探测当前接口。' },
+        requestId,
+        type: 'idle',
+      });
+      if (!probeInFlight) {
+        probeInFlight = true;
+        try {
+          const result = await this.probeRuntimeConfig(config);
+          if (
+            !controller.signal.aborted &&
+            this.active.get(requestId) === active &&
+            activityGeneration === generation
+          ) {
+            this.emit({
+              idleMs: Math.max(this.idleTimeoutMs, Date.now() - lastActivityAt),
+              probe: { detail: result.detail, ok: result.ok },
+              requestId,
+              type: 'idle',
+            });
+          }
+        } finally {
+          probeInFlight = false;
+        }
+      }
+      if (
+        !controller.signal.aborted &&
+        this.active.get(requestId) === active &&
+        activityGeneration === generation
+      ) {
+        scheduleIdleThreshold(this.idleRepeatMs);
+      }
+    };
+    const touchIdleTimeout = (): void => {
+      activityGeneration += 1;
+      lastActivityAt = Date.now();
+      scheduleIdleThreshold(this.idleTimeoutMs);
     };
     touchIdleTimeout();
     try {

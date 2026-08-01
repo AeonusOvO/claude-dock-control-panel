@@ -2124,6 +2124,31 @@ body[data-phase='error'] .status-pill {
   white-space: pre-wrap;
 }
 
+.chat-message__idle-notice {
+  align-items: center;
+  color: var(--text-lo);
+  display: flex;
+  font-size: var(--text-xs);
+  gap: var(--s-2);
+  margin: 0;
+}
+
+.chat-message__idle-notice::before {
+  background: var(--accent-solid);
+  border-radius: var(--r-pill);
+  content: '';
+  height: var(--s-2);
+  width: var(--s-2);
+}
+
+.chat-message__idle-notice[data-tone='success']::before {
+  background: var(--ok-solid);
+}
+
+.chat-message__idle-notice[data-tone='warning']::before {
+  background: var(--warn-solid);
+}
+
 [data-theme='claude'] .chat-message--assistant > strong {
   font-family: var(--font-display);
   letter-spacing: var(--ls-title);

@@ -745,7 +745,7 @@ describe('independent chat service', () => {
     );
   });
 
-  it('distinguishes a manual stop from an idle timeout', async () => {
+  it('reports idle state with a side probe without aborting the active request', async () => {
     const store = {
       getRuntimeConfig: () => ({
         authMode: 'none' as const,
@@ -754,45 +754,65 @@ describe('independent chat service', () => {
         protocol: 'openai' as const,
       }),
     } as unknown as ChatConfigStore;
-    const stalledFetch = vi.fn<typeof fetch>(
-      async (_input, init) =>
-        new Promise<Response>((_resolve, reject) => {
-          if (init?.signal?.aborted) {
-            reject(new DOMException('aborted', 'AbortError'));
-            return;
-          }
-          init?.signal?.addEventListener(
-            'abort',
-            () => reject(new DOMException('aborted', 'AbortError')),
-            { once: true },
-          );
+    const stalledRequest = (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+      new Promise<Response>((_resolve, reject) => {
+        if (init?.signal?.aborted) {
+          reject(new DOMException('aborted', 'AbortError'));
+          return;
+        }
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('aborted', 'AbortError')),
+          { once: true },
+        );
+      });
+    const stalledFetch = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(stalledRequest)
+      .mockResolvedValue(
+        new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
         }),
-    );
+      );
 
-    const timeoutEvents: ChatStreamEvent[] = [];
-    const timeoutService = new ChatService(
+    const idleEvents: ChatStreamEvent[] = [];
+    const idleService = new ChatService(
       store,
-      (event) => timeoutEvents.push(event),
+      (event) => idleEvents.push(event),
       stalledFetch,
       undefined,
-      { idleTimeoutMs: 15 },
+      { idleRepeatMs: 100, idleTimeoutMs: 15, probeTimeoutMs: 50 },
     );
-    timeoutService.start({
-      messages: [{ content: 'timeout', role: 'user' }],
-      requestId: 'request-timeout',
+    idleService.start({
+      messages: [{ content: 'slow', role: 'user' }],
+      requestId: 'request-idle',
     });
     await vi.waitFor(() => {
-      expect(timeoutEvents.at(-1)).toMatchObject({
-        abortReason: 'timeout',
+      expect(idleEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            probe: expect.objectContaining({ ok: true }),
+            type: 'idle',
+          }),
+        ]),
+      );
+    });
+    expect(idleEvents.some((event) => event.type === 'aborted')).toBe(false);
+    idleService.stop('request-idle');
+    await vi.waitFor(() => {
+      expect(idleEvents.at(-1)).toMatchObject({
+        abortReason: 'manual',
         type: 'aborted',
       });
     });
 
     const manualEvents: ChatStreamEvent[] = [];
+    const manualFetch = vi.fn<typeof fetch>(stalledRequest);
     const manualService = new ChatService(
       store,
       (event) => manualEvents.push(event),
-      stalledFetch,
+      manualFetch,
       undefined,
       { idleTimeoutMs: 1_000 },
     );
