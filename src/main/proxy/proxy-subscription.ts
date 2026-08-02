@@ -1,6 +1,6 @@
 import { readFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ProxyImportPreview } from '../../shared/contracts';
 import type { DownloadEngine } from '../download-engine';
 import { parseProxyImportText } from './proxy-parser';
@@ -16,19 +16,27 @@ export const downloadProxySubscription = async (
   if (url.protocol !== 'https:' || url.username || url.password) {
     throw new Error('订阅地址必须是无内嵌凭据的 HTTPS URL。');
   }
-  const id = `proxy-subscription-${randomUUID()}`;
-  const finalPath = path.join(userDataPath, 'proxy', 'subscriptions', `${id}.txt`);
+  const downloadId = `proxy-subscription-${randomUUID()}`;
+  const subscriptionId = `subscription-${createHash('sha256').update(url.toString()).digest('hex').slice(0, 24)}`;
+  const finalPath = path.join(userDataPath, 'proxy', 'subscriptions', `${downloadId}.txt`);
   await engine.start({
     allowedHosts: [url.hostname],
     allowedPathPrefixes: [url.pathname],
     finalPath,
-    id,
+    id: downloadId,
     label: '下载代理订阅',
     maxBytes: MAX_SUBSCRIPTION_BYTES,
     url: url.toString(),
   });
   try {
-    return parseProxyImportText(readFileSync(finalPath, 'utf8'));
+    return {
+      ...parseProxyImportText(readFileSync(finalPath, 'utf8')),
+      subscription: {
+        id: subscriptionId,
+        label: url.hostname,
+        url: url.toString(),
+      },
+    };
   } finally {
     try {
       unlinkSync(finalPath);

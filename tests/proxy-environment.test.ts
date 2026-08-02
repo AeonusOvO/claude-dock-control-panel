@@ -16,7 +16,11 @@ const runtime = {
 describe('CLI-only built-in proxy scope', () => {
   it('injects an HTTP loopback adapter and always bypasses local services', () => {
     expect(
-      buildCliProxyEnvironment(runtime, { application: false, cli: true }, 'example.test'),
+      buildCliProxyEnvironment(
+        runtime,
+        { application: false, cli: true, conversation: false },
+        'example.test',
+      ),
     ).toMatchObject({
       ALL_PROXY: null,
       CLAUDEDOCK_BUILT_IN_PROXY: '1',
@@ -27,10 +31,14 @@ describe('CLI-only built-in proxy scope', () => {
   });
 
   it('keeps application proxying opt-in and never overrides the Windows proxy setting', () => {
-    expect(builtInProxyRules(runtime, { application: false, cli: true })).toEqual({
+    expect(
+      builtInProxyRules(runtime, { application: false, cli: true, conversation: false }),
+    ).toEqual({
       mode: 'system',
     });
-    expect(builtInProxyRules(runtime, { application: true, cli: true })).toEqual({
+    expect(
+      builtInProxyRules(runtime, { application: true, cli: true, conversation: false }),
+    ).toEqual({
       mode: 'fixed_servers',
       proxyBypassRules: '127.0.0.1,localhost,[::1]',
       proxyRules: 'http://127.0.0.1:43123',
@@ -45,8 +53,8 @@ describe('CLI-only built-in proxy scope', () => {
    */
   it('resolves a starting tunnel to the same rules as a stopped one', () => {
     for (const scope of [
-      { application: false, cli: true },
-      { application: true, cli: true },
+      { application: false, cli: true, conversation: false },
+      { application: true, cli: true, conversation: false },
     ]) {
       const stopped = builtInProxyRules({ coreVersion: '', logs: [], status: 'stopped' }, scope);
 
@@ -64,7 +72,12 @@ describe('CLI-only built-in proxy scope', () => {
    * live tunnel still outranks it, or turning the built-in proxy on would silently do nothing.
    */
   it('uses the bootstrap proxy only while the tunnel is not carrying traffic', () => {
-    const scope = { application: false, bootstrapProxyUrl: 'http://127.0.0.1:10808', cli: true };
+    const scope = {
+      application: false,
+      bootstrapProxyUrl: 'http://127.0.0.1:10808',
+      cli: true,
+      conversation: false,
+    };
     expect(builtInProxyRules({ coreVersion: '', logs: [], status: 'stopped' }, scope)).toEqual({
       mode: 'fixed_servers',
       proxyBypassRules: '127.0.0.1,localhost,[::1]',
@@ -75,11 +88,18 @@ describe('CLI-only built-in proxy scope', () => {
       proxyBypassRules: '127.0.0.1,localhost,[::1]',
       proxyRules: 'http://127.0.0.1:43123',
     });
-    expect(builtInProxyRules(runtime, { application: false, cli: true })).toEqual({
+    expect(
+      builtInProxyRules(runtime, { application: false, cli: true, conversation: false }),
+    ).toEqual({
       mode: 'system',
     });
     expect(
-      builtInProxyRules(runtime, { application: false, bootstrapProxyUrl: '   ', cli: true }),
+      builtInProxyRules(runtime, {
+        application: false,
+        bootstrapProxyUrl: '   ',
+        cli: true,
+        conversation: false,
+      }),
     ).toEqual({ mode: 'system' });
   });
 

@@ -316,7 +316,7 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('checks all update sources after first paint and only reveals detected update actions', () => {
-    expect(rendererMarkup).toMatch(/id="refresh-updates"[\s\S]*?aria-label="检查软件与插件更新"/);
+    expect(rendererMarkup).toMatch(/id="refresh-updates"[\s\S]*?aria-label="检查全部更新"/);
     expect(rendererMarkup).toMatch(/id="install-update-claude"[^>]*hidden/);
     expect(rendererMarkup).toMatch(/id="install-router"[^>]*hidden/);
     expect(rendererMarkup).toMatch(/id="update-all-plugins"[^>]*hidden/);
@@ -325,6 +325,21 @@ describe('renderer interaction lifecycle contract', () => {
       /window\.setTimeout\(\(\) => \{\s+void refreshAvailableUpdates\(false\);/,
     );
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
+  });
+
+  it('stages non-immediate settings and never persists the fallback theme during first paint', () => {
+    expect(rendererMarkup).toContain('id="settings-unsaved-indicator"');
+    expect(rendererSource).toContain('const updateSettingsUnsavedIndicator = (): number =>');
+    expect(rendererSource).toContain('void savePendingAppSettings();');
+    expect(rendererSource).toContain('applyTerminalTheme(activeTerminalTheme, false, false);');
+    expect(rendererSource).toContain('applyTerminalTheme(initialSettings.theme, false, false);');
+  });
+
+  it('queues a forced history refresh behind an older in-flight read', () => {
+    expect(rendererSource).toContain('const historyReloadRequested = new Set<string>();');
+    expect(rendererSource).toContain('if (force) historyReloadRequested.add(key);');
+    expect(rendererSource).toContain('if (historyReloadRequested.delete(key))');
+    expect(rendererSource).toContain('await loadFolderHistory(projectPath, true);');
   });
 
   it('keeps official preflight separate while the footer runs the saved real connection test', () => {
@@ -759,7 +774,7 @@ describe('MCP panel theming and motion', () => {
    * builds, so the two pages cannot drift apart and neither can fall back to the native paint.
    */
   it('paints the MCP toolbar refresh button with the shared plugin-toolbar treatment', () => {
-    expect(rendererMarkup).toContain('<button id="mcp-refresh" type="button">全部刷新</button>');
+    expect(rendererMarkup).toContain('<button id="mcp-refresh" type="button">检查更新</button>');
     // The refresh button has to be inside the shared toolbar, not a one-off MCP container.
     expect(rendererMarkup).toMatch(
       /<div class="plugin-toolbar">[\s\S]*?id="mcp-search"[\s\S]*?id="mcp-scope-filter"[\s\S]*?id="mcp-refresh"[\s\S]*?<\/div>/,
@@ -1022,7 +1037,8 @@ describe('kernel drop zone versus the document-wide project drag', () => {
     expect(rendererSource).toContain('.installProxyCore()');
     expect(rendererSource).toContain("showToast('已通过最快可用线路安装 Xray-core')");
     expect(rendererMarkup).toContain('id="proxy-scope-summary"');
-    expect(rendererSource).toContain('IPv6 出站已拦截');
+    expect(rendererMarkup).toContain('id="proxy-ipv6-toggle"');
+    expect(rendererSource).toContain('.setWindowsIpv6Disabled(disabling)');
   });
 });
 

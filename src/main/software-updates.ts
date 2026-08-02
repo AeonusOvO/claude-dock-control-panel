@@ -10,6 +10,8 @@ const OFFICIAL_REGISTRY = 'https://registry.npmjs.org';
 const CHINA_REGISTRY = 'https://registry.npmmirror.com';
 const CLAUDE_PACKAGE = '@anthropic-ai/claude-code';
 const ROUTER_PACKAGE = '@musistudio/claude-code-router';
+const APPLICATION_RELEASE_API =
+  'https://api.github.com/repos/AeonusOvO/claude-dock-control-panel/releases/latest';
 
 const parseVersion = (value: string | undefined): number[] | undefined => {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value?.trim() ?? '');
@@ -62,17 +64,54 @@ const fetchLatestVersion = async (packageName: string): Promise<string | undefin
   return undefined;
 };
 
+const fetchLatestApplicationVersion = async (): Promise<string | undefined> => {
+  try {
+    const response = await fetch(APPLICATION_RELEASE_API, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'ClaudeDock/update-check',
+        'x-github-api-version': '2022-11-28',
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok || Number(response.headers.get('content-length') ?? 0) > 1024 * 1024) {
+      return undefined;
+    }
+    const payload = (await response.json()) as { tag_name?: unknown };
+    return typeof payload.tag_name === 'string' && parseVersion(payload.tag_name)
+      ? payload.tag_name.replace(/^v/, '')
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const checkSoftwareUpdates = async (
   installation: ClaudeInstallationStatus,
   router: ClaudeRouterManagementState,
+  applicationVersion?: string,
 ): Promise<SoftwareUpdateState> => {
-  const [latestClaude, latestRouter] = await Promise.all([
+  const [latestApplication, latestClaude, latestRouter] = await Promise.all([
+    fetchLatestApplicationVersion(),
     fetchLatestVersion(CLAUDE_PACKAGE),
     fetchLatestVersion(ROUTER_PACKAGE),
   ]);
   const claudeUpdateAvailable = isNewerVersion(latestClaude, installation.version);
   const routerUpdateAvailable = isNewerVersion(latestRouter, router.version);
+  const applicationUpdateAvailable = isNewerVersion(latestApplication, applicationVersion);
   return {
+    application: {
+      currentVersion: applicationVersion,
+      installed: true,
+      latestVersion: latestApplication,
+      message: latestApplication
+        ? applicationUpdateAvailable
+          ? `发现 ClaudeDock ${latestApplication}。`
+          : 'ClaudeDock 已是当前可检测到的最新版本。'
+        : '暂时无法从发行通道读取 ClaudeDock 最新版本。',
+      updateAvailable: applicationUpdateAvailable,
+    },
     checkedAt: Date.now(),
     claudeCode: {
       currentVersion: installation.version,

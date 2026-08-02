@@ -62,5 +62,8 @@ describe('proxy leak-audit decision semantics', () => {
     expect(() => service.assertAccessAccepted(profile)).not.toThrow();
     const disk = readFileSync(path.join(userDataPath, 'proxy', 'audits.json'), 'utf8');
     expect(disk).not.toContain('password');
+    service.delete(record.id);
+    expect(service.list()).toEqual([]);
+    expect(() => service.delete(record.id)).toThrow(/不存在/);
   });
 });

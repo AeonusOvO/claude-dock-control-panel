@@ -65,10 +65,12 @@ export const classifyEnvironmentProxy = (
 };
 
 export const interfaceFacts = (): {
+  globalIpv6Available: boolean;
   ipv4Available: boolean;
   ipv6Available: boolean;
   virtualInterfaces: string[];
 } => {
+  let globalIpv6Available = false;
   let ipv4Available = false;
   let ipv6Available = false;
   const virtualInterfaces: string[] = [];
@@ -81,8 +83,14 @@ export const interfaceFacts = (): {
     }
     ipv4Available ||= addresses.some((address) => !address.internal && address.family === 'IPv4');
     ipv6Available ||= addresses.some((address) => !address.internal && address.family === 'IPv6');
+    globalIpv6Available ||= addresses.some((address) => {
+      if (address.internal || address.family !== 'IPv6') return false;
+      const normalized = address.address.toLowerCase().split('%', 1)[0] ?? '';
+      return !/^(?:fe[89ab]|f[cd]|ff|::ffff:|::1$|::$)/i.test(normalized);
+    });
   }
   return {
+    globalIpv6Available,
     ipv4Available,
     ipv6Available,
     virtualInterfaces: [...new Set(virtualInterfaces)].sort(),

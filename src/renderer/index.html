@@ -27,8 +27,8 @@
           class="titlebar__refresh"
           id="refresh-updates"
           type="button"
-          title="检查软件与插件更新"
-          aria-label="检查软件与插件更新"
+          title="检查全部更新"
+          aria-label="检查全部更新"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20 6v5h-5" />
@@ -291,6 +291,13 @@
             </div>
             <div class="software-update-row">
               <div>
+                <strong>ClaudeDock</strong>
+                <span id="application-update-detail">正在检查应用发行版本…</span>
+              </div>
+              <span class="version-pill" id="application-update-version">检测中</span>
+            </div>
+            <div class="software-update-row">
+              <div>
                 <strong>Claude Code</strong>
                 <span id="claude-update-detail">正在检查本机版本与最新版本…</span>
               </div>
@@ -309,6 +316,7 @@
             </div>
             <div class="environment-check-footer">
               <span id="software-update-checked-at">等待首次检查</span>
+              <button id="refresh-software-updates" type="button">检查软件更新</button>
             </div>
           </section>
 
@@ -832,7 +840,8 @@
                 <option value="all">全部</option>
               </select>
             </label>
-            <div class="plugin-toolbar__actions" id="plugin-update-actions" hidden>
+            <div class="plugin-toolbar__actions" id="plugin-update-actions">
+              <button id="refresh-plugins" type="button">检查更新</button>
               <button id="update-all-plugins" type="button" hidden>更新全部</button>
             </div>
           </div>
@@ -902,7 +911,7 @@
               </select>
             </label>
             <div class="plugin-toolbar__actions">
-              <button id="mcp-refresh" type="button">全部刷新</button>
+              <button id="mcp-refresh" type="button">检查更新</button>
             </div>
           </div>
           <p class="plugin-status" id="mcp-status">请选择一个项目以发现 MCP。</p>
@@ -1868,12 +1877,14 @@
             </section>
             <section class="settings-panel proxy-settings" data-settings-panel="proxy">
               <p class="proxy-boundary-notice">
-                仅对 ClaudeDock 启动的 CLI 生效；不修改系统代理，不影响 Claude / Codex 桌面版。
+                仅对勾选的 CLI、对话或 ClaudeDock 自身网络生效；不修改系统代理，不影响 Claude /
+                Codex 桌面版。
               </p>
               <section class="proxy-settings__section" aria-labelledby="proxy-node-title">
                 <div class="settings-section-heading">
                   <strong id="proxy-node-title">节点与订阅</strong>
                   <span>先预览并勾选，再保存到本机；凭据由 Windows DPAPI 加密。</span>
+                  <button id="proxy-refresh-subscriptions" type="button">更新订阅</button>
                 </div>
                 <div class="proxy-node-controls">
                   <select id="proxy-profile-select" aria-label="当前代理节点"></select>
@@ -2016,6 +2027,24 @@
                   >
                   <input id="proxy-scope-application" type="checkbox" />
                 </label>
+                <label class="settings-row" for="proxy-scope-conversation">
+                  <span
+                    ><strong>对话工作台</strong
+                    ><small>“对话”选项卡的接口请求；默认关闭。</small></span
+                  >
+                  <input id="proxy-scope-conversation" type="checkbox" />
+                </label>
+                <div class="settings-row settings-row--action">
+                  <span>
+                    <strong>Windows IPv6 防旁路</strong>
+                    <small id="proxy-ipv6-status">正在读取网卡绑定状态…</small>
+                  </span>
+                  <button id="proxy-ipv6-toggle" type="button">禁用 IPv6（建议开启）</button>
+                </div>
+                <p class="settings-help">
+                  此操作需要管理员授权，可能短暂断网；只恢复 ClaudeDock 本次禁用的网卡绑定。Windows
+                  通常建议保留 IPv6，请仅在节点不支持 IPv6 且体检提示旁路时使用。
+                </p>
                 <p id="proxy-scope-summary" class="settings-help">
                   正在确认代理作用域与 IPv4 策略…
                 </p>
@@ -2124,9 +2153,12 @@
         </div>
         <footer>
           <button id="cancel-connection-advanced" type="button">取消</button>
-          <button class="dialog-primary" id="complete-connection-advanced" type="button">
-            完成
-          </button>
+          <span class="settings-save-state">
+            <button class="dialog-primary" id="complete-connection-advanced" type="button">
+              完成
+            </button>
+            <small id="settings-unsaved-indicator" hidden>*0 项未保存</small>
+          </span>
         </footer>
       </div>
     </dialog>
@@ -2143,7 +2175,7 @@
             <span class="step-kicker">接入前检查</span>
             <strong id="proxy-audit-dialog-title">代理泄露体检报告</strong>
             <p id="proxy-audit-dialog-description">
-              风险只会暂停接入动作，不会关闭已经运行的代理隧道。
+              发现风险时，“返回调整”会先断开正在运行的代理隧道。
             </p>
           </div>
         </header>

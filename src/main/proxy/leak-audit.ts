@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getServers } from 'node:dns';
 import { isIP } from 'node:net';
 import type {
@@ -24,15 +24,22 @@ export interface EgressEvidence {
 }
 
 const MAX_EGRESS_RESPONSE_BYTES = 64 * 1024;
+const AUDIT_REQUEST_TIMEOUT_MS = 10_000;
 export const LEAK_AUDIT_ALLOWED_HOSTS = Object.freeze([
   'bash.ws',
   'stun.cloudflare.com',
   'www.cloudflare.com',
   'ipinfo.io',
+  'www.dnsleaktest.com',
 ]);
 
 const DATACENTER_ORGANIZATION_PATTERN =
   /(amazon|aws|google|digitalocean|hetzner|ovh|linode|akamai|vultr|m247|leaseweb|choopa|oracle cloud|azure|microsoft hosting)/i;
+
+const withAuditTimeout = (init: RequestInit): RequestInit => ({
+  ...init,
+  signal: init.signal ?? AbortSignal.timeout(AUDIT_REQUEST_TIMEOUT_MS),
+});
 
 const isPrivateDnsServer = (address: string): boolean => {
   const normalized =
@@ -58,14 +65,18 @@ export const evaluateDns = (
   dnsServers: string[],
   proxyReady: boolean,
   onlineResolvers?: string[],
+  directOnlineResolvers?: string[],
 ): ProxyAuditItem => {
   const localResolvers = dnsServers.filter(isPrivateDnsServer);
   const onlineAvailable = onlineResolvers !== undefined;
   const evidence = [
     `系统解析器：${dnsServers.length > 0 ? dnsServers.join('、') : '未读取到'}`,
     onlineAvailable
-      ? `在线观测：${onlineResolvers.length > 0 ? onlineResolvers.join('、') : '未发现解析器'}`
+      ? `代理链路权威观测：${onlineResolvers.length > 0 ? onlineResolvers.join('、') : '未发现解析器'}`
       : '在线探测不可用，仅采用本地判据',
+    directOnlineResolvers !== undefined
+      ? `直连链路权威观测：${directOnlineResolvers.length > 0 ? directOnlineResolvers.join('、') : '未发现解析器'}`
+      : '直连链路未形成在线对照',
     proxyReady
       ? 'CLI 使用 HTTP CONNECT host:443，Xray domainStrategy=AsIs，目标域名由代理链路远端解析'
       : '内置代理未就绪，无法提供远端解析保障',
@@ -79,6 +90,40 @@ export const evaluateDns = (
       verdict: 'warning',
     };
   }
+  if (onlineAvailable && onlineResolvers.length === 0) {
+    return {
+      advice: '在线权威源未返回解析器，请稍后重试或切换网络后复检。',
+      evidence,
+      explanation: '在线探测已完成但没有形成有效解析器证据，不能据此宣称没有 DNS 泄露。',
+      name: 'DNS 泄露',
+      verdict: 'warning',
+    };
+  }
+  const resolverIp = (resolver: string): string => resolver.split(' · ', 1)[0] ?? resolver;
+  const directSet = new Set((directOnlineResolvers ?? []).map(resolverIp));
+  const overlapsDirect = (onlineResolvers ?? []).some((resolver) =>
+    directSet.has(resolverIp(resolver)),
+  );
+  if (onlineAvailable && onlineResolvers.length > 0 && overlapsDirect) {
+    return {
+      advice: '代理链路仍观察到与直连相同的解析器；请检查节点 DNS 策略，切换节点后重新体检。',
+      evidence,
+      explanation: '权威测试域名在代理链路与直连链路观察到相同解析器，存在本地 DNS 旁路风险。',
+      name: 'DNS 泄露',
+      verdict: 'risk',
+    };
+  }
+  if (onlineAvailable && onlineResolvers.length > 0) {
+    return {
+      advice: '切换节点、网络或 DNS 策略后重新运行权威观测。',
+      evidence,
+      explanation: directOnlineResolvers
+        ? '代理链路观测到的解析器与直连链路不同，当前没有发现 DNS 旁路证据。'
+        : '代理链路已由权威测试域名观察到解析器，但缺少直连对照，结论保持谨慎。',
+      name: 'DNS 泄露',
+      verdict: directOnlineResolvers ? 'passed' : 'warning',
+    };
+  }
   if (localResolvers.length > 0) {
     return {
       advice: 'CLI 流量已由远端解析保护；其他未代理应用仍可能使用这些本地解析器。',
@@ -86,7 +131,7 @@ export const evaluateDns = (
       explanation:
         '系统存在内网/本地 DNS，属于“可能本地解析”的提示；ClaudeDock 启动的 CLI 通过本地 HTTP 入站发送域名，Xray 保持 AsIs 并在代理链路远端解析。',
       name: 'DNS 泄露',
-      verdict: onlineAvailable && onlineResolvers.length === 0 ? 'passed' : 'warning',
+      verdict: 'warning',
     };
   }
   return {
@@ -94,8 +139,159 @@ export const evaluateDns = (
     evidence,
     explanation: '未发现私网 DNS，且 CLI 的代理请求使用远端域名解析机制。',
     name: 'DNS 泄露',
-    verdict: onlineAvailable ? 'passed' : 'warning',
+    verdict: 'warning',
   };
+};
+
+interface DnsLeakServer {
+  country_name?: unknown;
+  ip?: unknown;
+  isp?: unknown;
+}
+
+interface BashDnsLeakServer extends DnsLeakServer {
+  type?: unknown;
+}
+
+const dnsLeakFetch = async (
+  fetcher: AuditFetch,
+  url: string,
+  init: RequestInit,
+): Promise<Response> => {
+  const parsed = new URL(url);
+  const isApi = parsed.protocol === 'https:' && parsed.hostname === 'www.dnsleaktest.com';
+  const isBeacon =
+    parsed.protocol === 'http:' &&
+    /^[0-9a-f-]{36}\.test\.dnsleaktest\.com$/i.test(parsed.hostname) &&
+    parsed.pathname === '/';
+  if (parsed.username || parsed.password || (!isApi && !isBeacon)) {
+    throw new Error('DNS 泄露检测目标不在固定白名单中。');
+  }
+  return fetcher(parsed.toString(), withAuditTimeout(init));
+};
+
+const resolverLabels = (servers: DnsLeakServer[]): string[] => [
+  ...new Set(
+    servers.flatMap((server) => {
+      const ip = typeof server.ip === 'string' && isIP(server.ip) ? server.ip : undefined;
+      if (!ip) return [];
+      const isp = typeof server.isp === 'string' ? server.isp.slice(0, 96) : '';
+      const country =
+        typeof server.country_name === 'string' ? server.country_name.slice(0, 64) : '';
+      return [`${ip}${isp ? ` · ${isp}` : ''}${country ? ` · ${country}` : ''}`];
+    }),
+  ),
+];
+
+const probeDnsLeakTest = async (fetcher: AuditFetch): Promise<string[]> => {
+  const identifiers = Array.from({ length: 4 }, () => randomUUID());
+  const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+  const registration = await dnsLeakFetch(
+    fetcher,
+    'https://www.dnsleaktest.com/api/v1/identifiers',
+    {
+      body: JSON.stringify({ identifiers }),
+      cache: 'no-store',
+      credentials: 'omit',
+      headers,
+      method: 'POST',
+      redirect: 'error',
+    },
+  );
+  if (!registration.ok) throw new Error(`DNS 权威探测初始化返回 HTTP ${registration.status}。`);
+  await Promise.allSettled(
+    identifiers.map((identifier) =>
+      dnsLeakFetch(fetcher, `http://${identifier}.test.dnsleaktest.com/`, {
+        cache: 'no-store',
+        credentials: 'omit',
+        method: 'GET',
+        redirect: 'manual',
+      }),
+    ),
+  );
+  const result = await dnsLeakFetch(
+    fetcher,
+    'https://www.dnsleaktest.com/api/v1/servers-for-result',
+    {
+      body: JSON.stringify({ queries: identifiers }),
+      cache: 'no-store',
+      credentials: 'omit',
+      headers,
+      method: 'POST',
+      redirect: 'error',
+    },
+  );
+  if (!result.ok) throw new Error(`DNS 权威探测结果返回 HTTP ${result.status}。`);
+  const payload = JSON.parse(await readLimitedText(result)) as
+    DnsLeakServer[] | { servers?: unknown };
+  const servers = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload.servers)
+      ? (payload.servers as DnsLeakServer[])
+      : undefined;
+  if (!Array.isArray(servers)) throw new Error('DNS 权威探测返回格式无效。');
+  const labels = resolverLabels(servers);
+  if (labels.length === 0) throw new Error('DNSLeakTest 未观察到解析器。');
+  return labels;
+};
+
+const bashWsFetch = async (
+  fetcher: AuditFetch,
+  url: string,
+  init: RequestInit,
+): Promise<Response> => {
+  const parsed = new URL(url);
+  const isApi = parsed.protocol === 'https:' && parsed.hostname === 'bash.ws';
+  const isBeacon =
+    parsed.protocol === 'http:' && /^\d{1,2}\.\d{1,20}\.bash\.ws$/i.test(parsed.hostname);
+  if (parsed.username || parsed.password || (!isApi && !isBeacon)) {
+    throw new Error('备用 DNS 泄露检测目标不在固定白名单中。');
+  }
+  return fetcher(parsed.toString(), withAuditTimeout(init));
+};
+
+const probeBashWs = async (fetcher: AuditFetch): Promise<string[]> => {
+  const idResponse = await bashWsFetch(fetcher, 'https://bash.ws/id', {
+    cache: 'no-store',
+    credentials: 'omit',
+    method: 'GET',
+    redirect: 'error',
+  });
+  if (!idResponse.ok) throw new Error(`备用 DNS 探测初始化返回 HTTP ${idResponse.status}。`);
+  const id = (await readLimitedText(idResponse)).trim();
+  if (!/^\d{1,20}$/.test(id)) throw new Error('备用 DNS 探测标识无效。');
+  await Promise.allSettled(
+    Array.from({ length: 6 }, (_, index) =>
+      bashWsFetch(fetcher, `http://${index}.${id}.bash.ws/`, {
+        cache: 'no-store',
+        credentials: 'omit',
+        method: 'GET',
+        redirect: 'manual',
+      }),
+    ),
+  );
+  const result = await bashWsFetch(fetcher, `https://bash.ws/dnsleak/test/${id}?json`, {
+    cache: 'no-store',
+    credentials: 'omit',
+    method: 'GET',
+    redirect: 'error',
+  });
+  if (!result.ok) throw new Error(`备用 DNS 探测结果返回 HTTP ${result.status}。`);
+  const payload = JSON.parse(await readLimitedText(result)) as BashDnsLeakServer[];
+  if (!Array.isArray(payload)) throw new Error('备用 DNS 探测返回格式无效。');
+  const labels = resolverLabels(
+    payload.filter(({ type }) => typeof type !== 'string' || type.toLowerCase() === 'dns'),
+  );
+  if (labels.length === 0) throw new Error('备用 DNS 探测未观察到解析器。');
+  return labels;
+};
+
+export const probeDnsLeak = async (fetcher: AuditFetch): Promise<string[]> => {
+  try {
+    return await probeDnsLeakTest(fetcher);
+  } catch {
+    return probeBashWs(fetcher);
+  }
 };
 
 const readLimitedText = async (response: Response): Promise<string> => {
@@ -297,7 +493,7 @@ const allowedAuditFetch =
     ) {
       throw new Error('泄露检测目标不在固定 HTTPS 白名单中。');
     }
-    return fetcher(parsed.toString(), init);
+    return fetcher(parsed.toString(), withAuditTimeout(init));
   };
 
 export class LeakAuditService {
@@ -312,18 +508,30 @@ export class LeakAuditService {
     runtime: ProxyRuntimeView,
   ): Promise<ProxyAuditRecord> {
     const proxyReady = runtime.status === 'ready' && Boolean(runtime.httpProxyUrl);
-    const [directResult, proxyResult] = await Promise.allSettled([
-      probeEgress(allowedAuditFetch(this.options.directFetch)),
+    const directFetcher = allowedAuditFetch(this.options.directFetch);
+    const proxiedFetcher =
       proxyReady && runtime.httpProxyUrl
-        ? probeEgress(allowedAuditFetch(this.options.proxiedFetch(runtime.httpProxyUrl)))
+        ? allowedAuditFetch(this.options.proxiedFetch(runtime.httpProxyUrl))
+        : undefined;
+    const [directResult, proxyResult, directDnsResult, proxyDnsResult] = await Promise.allSettled([
+      probeEgress(directFetcher),
+      proxiedFetcher ? probeEgress(proxiedFetcher) : Promise.reject(new Error('内置代理未就绪。')),
+      probeDnsLeak(this.options.directFetch),
+      proxyReady && runtime.httpProxyUrl
+        ? probeDnsLeak(this.options.proxiedFetch(runtime.httpProxyUrl))
         : Promise.reject(new Error('内置代理未就绪。')),
     ]);
     const direct = directResult.status === 'fulfilled' ? directResult.value : undefined;
     const proxied = proxyResult.status === 'fulfilled' ? proxyResult.value : undefined;
     const interfaces = interfaceFacts();
     const items = [
-      ...evaluateEgress(direct, proxied, interfaces.ipv6Available),
-      evaluateDns(getServers(), proxyReady),
+      ...evaluateEgress(direct, proxied, interfaces.globalIpv6Available),
+      evaluateDns(
+        getServers(),
+        proxyReady,
+        proxyDnsResult.status === 'fulfilled' ? proxyDnsResult.value : undefined,
+        directDnsResult.status === 'fulfilled' ? directDnsResult.value : undefined,
+      ),
       await this.options.webRtcAudit(proxied?.ip),
       ...evaluateEnvironment({
         builtInProxyUrl: runtime.httpProxyUrl,
@@ -352,6 +560,10 @@ export class LeakAuditService {
 
   public list(): ProxyAuditRecord[] {
     return this.options.auditStore.list();
+  }
+
+  public delete(recordId: string): void {
+    this.options.auditStore.delete(recordId);
   }
 
   public assertAccessAccepted(profile: ProxyProfileView): void {

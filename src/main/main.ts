@@ -12,7 +12,12 @@ import {
   shell,
   Tray,
 } from 'electron';
-import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
+import type {
+  IpcMainEvent,
+  IpcMainInvokeEvent,
+  MenuItemConstructorOptions,
+  Session,
+} from 'electron';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir, release } from 'node:os';
@@ -64,6 +69,7 @@ import type {
   ProxyControlView,
   ProxyProfileInput,
   ProxyScopeSettings,
+  ProxySubscriptionInput,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   SaveChatConfigInput,
@@ -131,6 +137,7 @@ import { downloadProxySubscription } from './proxy/proxy-subscription';
 import { LeakAuditService } from './proxy/leak-audit';
 import { LeakAuditStore } from './proxy/leak-audit-store';
 import { auditWebRtc } from './proxy/webrtc-audit';
+import { WindowsIpv6Service } from './windows-ipv6';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -169,6 +176,8 @@ let ccSwitchAdapter: CcSwitchAdapter | null = null;
 let proxyStore: ProxyStore | null = null;
 let xraySidecar: XraySidecar | null = null;
 let proxyLeakAuditService: LeakAuditService | null = null;
+let conversationNetworkSession: Session | null = null;
+let chatFetch: typeof fetch = fetch;
 let releaseConversationBusy: (() => void) | undefined;
 
 interface PendingPermissionModeProbe {
@@ -302,7 +311,7 @@ const chatService = new ChatService(
   (event) => {
     mainWindow?.webContents.send('chat:stream', event);
   },
-  fetch,
+  (url, init) => chatFetch(url, init),
   chatAttachmentStore,
   {},
   () => advancedSettingsStore.get().chatIdleTimeoutMinutes * 60_000,
@@ -827,6 +836,8 @@ const routerKernelFailure = async (
  * killing the very download that startup is waiting on.
  */
 let appliedProxyRules = '';
+let appliedConversationProxyRules = '';
+const windowsIpv6Service = new WindowsIpv6Service(app.getPath('userData'));
 
 const applyApplicationProxyScope = async (): Promise<void> => {
   if (!proxyStore || !xraySidecar) {
@@ -840,6 +851,25 @@ const applyApplicationProxyScope = async (): Promise<void> => {
   appliedProxyRules = signature;
   await session.defaultSession.setProxy(rules);
   await session.defaultSession.closeAllConnections();
+};
+
+const applyConversationProxyScope = async (): Promise<void> => {
+  if (!proxyStore || !xraySidecar || !conversationNetworkSession) return;
+  const runtime = xraySidecar.getView();
+  const enabled = proxyStore.getView().scope.conversation;
+  const rules =
+    enabled && runtime.status === 'ready' && runtime.httpProxyUrl
+      ? {
+          mode: 'fixed_servers' as const,
+          proxyBypassRules: '127.0.0.1,localhost,[::1]',
+          proxyRules: runtime.httpProxyUrl,
+        }
+      : { mode: 'direct' as const };
+  const signature = JSON.stringify(rules);
+  if (signature === appliedConversationProxyRules) return;
+  appliedConversationProxyRules = signature;
+  await conversationNetworkSession.setProxy(rules);
+  await conversationNetworkSession.closeAllConnections();
 };
 
 const requireProxyServices = (): {
@@ -931,12 +961,14 @@ const startBuiltInProxy = async (manualCorePath?: string): Promise<void> => {
     await sidecar.start(profile, manualCorePath);
     store.setState({ autoStart: true, runtimeStatus: 'ready' });
     await applyApplicationProxyScope();
+    await applyConversationProxyScope();
     requireNetworkPreflightService().invalidate('built-in-proxy-started');
     await runSelectedProxyAudit();
   } catch (error) {
     // A cancelled or failed start leaves nothing running: report 已停止 so 启动 becomes available again.
     store.setState({ autoStart: false, runtimeStatus: 'stopped' });
     await applyApplicationProxyScope();
+    await applyConversationProxyScope();
     throw error;
   } finally {
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
@@ -948,6 +980,7 @@ const stopBuiltInProxy = async (): Promise<void> => {
   await sidecar.stop();
   store.setState({ autoStart: false, runtimeStatus: 'stopped' });
   await applyApplicationProxyScope();
+  await applyConversationProxyScope();
   requireNetworkPreflightService().invalidate('built-in-proxy-stopped');
   mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
 };
@@ -963,13 +996,16 @@ const assertOfficialProviderAllowed = async (
   provider: NetworkProviderId,
   action: NetworkPreflightAction,
   cwd?: string,
+  networkScope?: 'conversation',
 ): Promise<void> => {
   if (proxyStore && xraySidecar && proxyLeakAuditService) {
     const scope = proxyStore.getView().scope;
     const proxyAffectsAction =
-      (action === 'cli-launch' && scope.cli) ||
-      (['background', 'cloud-task', 'first-request', 'provider-switch'].includes(action) &&
-        scope.application);
+      networkScope === 'conversation'
+        ? scope.conversation
+        : (action === 'cli-launch' && scope.cli) ||
+          (['background', 'cloud-task', 'first-request', 'provider-switch'].includes(action) &&
+            scope.application);
     if (proxyAffectsAction && xraySidecar.getView().status === 'ready') {
       proxyLeakAuditService.assertAccessAccepted(selectedProxyProfile());
     }
@@ -1512,12 +1548,26 @@ const registerIpc = (): void => {
     }
     return downloadProxySubscription(requireDownloadEngine(), app.getPath('userData'), url);
   });
-  ipcMain.handle('proxy:save-profiles', (event, profiles: unknown) => {
+  ipcMain.handle('proxy:save-profiles', (event, profiles: unknown, subscription: unknown) => {
     validateSender(event);
     if (!Array.isArray(profiles) || profiles.length === 0 || profiles.length > 100) {
       throw new Error('请选择 1–100 个代理节点导入。');
     }
     const { store } = requireProxyServices();
+    if (subscription !== undefined) {
+      const source = subscription as Partial<ProxySubscriptionInput>;
+      if (
+        !source ||
+        typeof source.id !== 'string' ||
+        typeof source.label !== 'string' ||
+        typeof source.url !== 'string'
+      ) {
+        throw new Error('代理订阅来源无效。');
+      }
+      store.replaceSubscription(source as ProxySubscriptionInput, profiles as ProxyProfileInput[]);
+      mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+      return proxyControlView();
+    }
     for (const profile of profiles) {
       if (!profile || typeof profile !== 'object') {
         throw new Error('代理节点格式无效。');
@@ -1526,6 +1576,43 @@ const registerIpc = (): void => {
     }
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return proxyControlView();
+  });
+  ipcMain.handle('proxy:refresh-subscriptions', async (event) => {
+    validateSender(event);
+    const { sidecar, store } = requireProxyServices();
+    const sources = store.getSubscriptionSources();
+    if (sources.length === 0) throw new Error('尚未保存可更新的代理订阅。');
+    const runtimeStatus = sidecar.getView().status;
+    if (runtimeStatus === 'starting' || runtimeStatus === 'stopping') {
+      throw new Error('代理正在切换状态，请等待启动或停止完成后再更新订阅。');
+    }
+    const wasRunning = runtimeStatus === 'ready';
+    if (wasRunning) await stopBuiltInProxy();
+    const failures: string[] = [];
+    let updated = 0;
+    for (const source of sources) {
+      try {
+        const preview = await downloadProxySubscription(
+          requireDownloadEngine(),
+          app.getPath('userData'),
+          source.url,
+        );
+        if (preview.profiles.length === 0) throw new Error('订阅没有可导入节点。');
+        store.replaceSubscription(source, preview.profiles);
+        updated += 1;
+      } catch (error) {
+        failures.push(`${source.label}：${error instanceof Error ? error.message : '更新失败'}`);
+      }
+    }
+    if (wasRunning) {
+      try {
+        await startBuiltInProxy();
+      } catch (error) {
+        failures.push(`代理恢复：${error instanceof Error ? error.message : '启动失败'}`);
+      }
+    }
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return { failures, state: proxyControlView(), updated };
   });
   ipcMain.handle('proxy:remove-profile', async (event, profileId: unknown) => {
     validateSender(event);
@@ -1554,7 +1641,11 @@ const registerIpc = (): void => {
     validateSender(event);
     const record =
       scope && typeof scope === 'object' ? (scope as Partial<ProxyScopeSettings>) : undefined;
-    if (typeof record?.cli !== 'boolean' || typeof record.application !== 'boolean') {
+    if (
+      typeof record?.cli !== 'boolean' ||
+      typeof record.application !== 'boolean' ||
+      typeof record.conversation !== 'boolean'
+    ) {
       throw new Error('代理作用域设置无效。');
     }
     if (
@@ -1575,9 +1666,11 @@ const registerIpc = (): void => {
       application: record.application,
       bootstrapProxyUrl: record.bootstrapProxyUrl,
       cli: record.cli,
+      conversation: record.conversation,
       extraCoreSources: record.extraCoreSources,
     });
     await applyApplicationProxyScope();
+    await applyConversationProxyScope();
     requireNetworkPreflightService().invalidate('built-in-proxy-scope-changed');
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return proxyControlView();
@@ -1647,6 +1740,26 @@ const registerIpc = (): void => {
     const record = requireProxyServices().audit.accept(recordId);
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return record;
+  });
+  ipcMain.handle('proxy:delete-audit', (event, recordId: unknown) => {
+    validateSender(event);
+    if (typeof recordId !== 'string' || !/^[a-f0-9-]{36}$/i.test(recordId)) {
+      throw new Error('代理体检记录标识无效。');
+    }
+    requireProxyServices().audit.delete(recordId);
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('network:get-ipv6-state', (event) => {
+    validateSender(event);
+    return windowsIpv6Service.getState();
+  });
+  ipcMain.handle('network:set-ipv6-disabled', async (event, disabled: unknown) => {
+    validateSender(event);
+    if (typeof disabled !== 'boolean') throw new Error('IPv6 设置无效。');
+    const state = await windowsIpv6Service.setDisabled(disabled);
+    requireNetworkPreflightService().invalidate('windows-ipv6-changed');
+    return state;
   });
   ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
     validateSender(event);
@@ -1964,7 +2077,12 @@ const registerIpc = (): void => {
     const request = input as ChatStartInput;
     const officialProvider = officialProviderForChat();
     if (officialProvider) {
-      await assertOfficialProviderAllowed(officialProvider, 'first-request');
+      await assertOfficialProviderAllowed(
+        officialProvider,
+        'first-request',
+        undefined,
+        'conversation',
+      );
     }
     return chatService.start(request, (prepared) => {
       chatAttachmentStore.commitDraft(
@@ -3439,6 +3557,9 @@ if (!hasSingleInstanceLock) {
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
     );
     proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
+    conversationNetworkSession = session.fromPartition('claudedock-conversation-network');
+    chatFetch = (url, init) =>
+      conversationNetworkSession!.fetch(url instanceof URL ? url.toString() : url, init);
     xraySidecar = new XraySidecar({
       busyRegistry,
       downloadEngine,
@@ -3455,6 +3576,7 @@ if (!hasSingleInstanceLock) {
           mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
         }
         void applyApplicationProxyScope();
+        void applyConversationProxyScope();
       },
       userDataPath: app.getPath('userData'),
     });
@@ -3467,6 +3589,7 @@ if (!hasSingleInstanceLock) {
      * signature is primed the whole startup path is a no-op until the tunnel is genuinely ready.
      */
     await applyApplicationProxyScope();
+    await applyConversationProxyScope();
     // Recreating a journalled DownloadItem before setProxy settles lets the first proxy refresh
     // close its socket at zero bytes. Restore only after the application network path is stable.
     downloadEngine.restoreInterrupted();
@@ -3521,6 +3644,7 @@ if (!hasSingleInstanceLock) {
       downloadEngine,
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
+      app.getVersion(),
     );
     codexRuntime = new CodexRuntime(
       app.getPath('userData'),

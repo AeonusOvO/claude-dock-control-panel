@@ -19,6 +19,7 @@ import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
 import type {
   AppQuitRequest,
+  AppSettingsView,
   ArtifactNetworkLogEntry,
   ArtifactNetworkState,
   ClaudeConnectionAdvice,
@@ -365,6 +366,7 @@ const cancelConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
 const completeConnectionAdvancedButton = requiredElement<HTMLButtonElement>(
   '#complete-connection-advanced',
 );
+const settingsUnsavedIndicator = requiredElement<HTMLElement>('#settings-unsaved-indicator');
 const settingsLaunchAtLogin = requiredElement<HTMLInputElement>('#settings-launch-at-login');
 const settingsCloseBehavior = requiredElement<HTMLSelectElement>('#settings-close-behavior');
 const settingsChatIdleTimeout = requiredElement<HTMLSelectElement>('#settings-chat-idle-timeout');
@@ -380,6 +382,9 @@ const proxyImportText = requiredElement<HTMLTextAreaElement>('#proxy-import-text
 const proxySubscriptionUrl = requiredElement<HTMLInputElement>('#proxy-subscription-url');
 const proxyPreviewImport = requiredElement<HTMLButtonElement>('#proxy-preview-import');
 const proxyPreviewSubscription = requiredElement<HTMLButtonElement>('#proxy-preview-subscription');
+const proxyRefreshSubscriptions = requiredElement<HTMLButtonElement>(
+  '#proxy-refresh-subscriptions',
+);
 const proxyImportIssues = requiredElement<HTMLElement>('#proxy-import-issues');
 const proxyImportPreview = requiredElement<HTMLElement>('#proxy-import-preview');
 const proxySaveSelected = requiredElement<HTMLButtonElement>('#proxy-save-selected');
@@ -405,6 +410,9 @@ const proxyRuntimeStatus = requiredElement<HTMLElement>('#proxy-runtime-status')
 const proxyRuntimeLog = requiredElement<HTMLElement>('#proxy-runtime-log');
 const proxyScopeCli = requiredElement<HTMLInputElement>('#proxy-scope-cli');
 const proxyScopeApplication = requiredElement<HTMLInputElement>('#proxy-scope-application');
+const proxyScopeConversation = requiredElement<HTMLInputElement>('#proxy-scope-conversation');
+const proxyIpv6Status = requiredElement<HTMLElement>('#proxy-ipv6-status');
+const proxyIpv6Toggle = requiredElement<HTMLButtonElement>('#proxy-ipv6-toggle');
 const proxyScopeSummary = requiredElement<HTMLElement>('#proxy-scope-summary');
 const proxyRunAudit = requiredElement<HTMLButtonElement>('#proxy-run-audit');
 const proxyAuditSummary = requiredElement<HTMLElement>('#proxy-audit-summary');
@@ -509,6 +517,7 @@ const pluginSearch = requiredElement<HTMLInputElement>('#plugin-search');
 const pluginCategoryFilter = requiredElement<HTMLSelectElement>('#plugin-category-filter');
 const refreshUpdatesButton = requiredElement<HTMLButtonElement>('#refresh-updates');
 const updateAllPluginsButton = requiredElement<HTMLButtonElement>('#update-all-plugins');
+const refreshPluginsButton = requiredElement<HTMLButtonElement>('#refresh-plugins');
 const pluginUpdateActions = requiredElement<HTMLElement>('#plugin-update-actions');
 const pluginStatus = requiredElement<HTMLElement>('#plugin-status');
 const pluginRailDot = requiredElement<HTMLElement>('#plugin-rail-dot');
@@ -533,7 +542,12 @@ const mcpCatalogList = requiredElement<HTMLElement>('#mcp-catalog-list');
 const mcpCatalogCount = requiredElement<HTMLElement>('#mcp-catalog-count');
 const claudeUpdateDetail = requiredElement<HTMLElement>('#claude-update-detail');
 const claudeUpdateVersion = requiredElement<HTMLElement>('#claude-update-version');
+const applicationUpdateDetail = requiredElement<HTMLElement>('#application-update-detail');
+const applicationUpdateVersion = requiredElement<HTMLElement>('#application-update-version');
 const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-checked-at');
+const refreshSoftwareUpdatesButton = requiredElement<HTMLButtonElement>(
+  '#refresh-software-updates',
+);
 const conversationContextMenu = requiredElement<HTMLElement>('#conversation-context-menu');
 const conversationRenameDialog = requiredElement<HTMLDialogElement>('#conversation-rename-dialog');
 const conversationRenameDialogTitle = requiredElement<HTMLElement>(
@@ -924,7 +938,12 @@ const formatProxyCoreRate = (bytesPerSecond: number): string =>
  * Mirrors whatever the store last handed back, so editing one scope field never blanks the ones the
  * user did not touch — `setProxyScope` persists the object wholesale.
  */
-let proxyScopeSnapshot: ProxyScopeSettings = { application: false, cli: true };
+let proxyScopeSnapshot: ProxyScopeSettings = {
+  application: false,
+  cli: true,
+  conversation: false,
+};
+let windowsIpv6Disabled = false;
 /** An installed kernel collapses the block to a single line; reinstalling reopens it. */
 let proxyCoreExpanded = false;
 
@@ -937,6 +956,7 @@ const applyProxyScope = (
       ...proxyScopeSnapshot,
       application: proxyScopeApplication.checked,
       cli: proxyScopeCli.checked,
+      conversation: proxyScopeConversation.checked,
       ...overrides,
     })
     .then((state) => {
@@ -1097,10 +1117,16 @@ const renderProxyState = (state: ProxyControlView): void => {
   proxyRemoveProfile.disabled = !selectedId || !idle;
   proxyScopeCli.checked = state.store.scope.cli;
   proxyScopeApplication.checked = state.store.scope.application;
+  proxyScopeConversation.checked = state.store.scope.conversation;
   proxyScopeSnapshot = { ...state.store.scope };
+  proxyRefreshSubscriptions.disabled = state.store.subscriptions.length === 0;
+  proxyRefreshSubscriptions.textContent =
+    state.store.subscriptions.length > 0
+      ? `更新订阅（${state.store.subscriptions.length}）`
+      : '更新订阅';
   proxyScopeSummary.textContent =
     state.runtime.status === 'ready'
-      ? `内置代理已就绪；CLI ${state.store.scope.cli ? '已接入' : '未接入'}，ClaudeDock 自身网络 ${state.store.scope.application ? '已接入' : '未接入'}。隧道仅使用 IPv4，IPv6 出站已拦截。`
+      ? `内置代理已就绪；CLI ${state.store.scope.cli ? '已接入' : '未接入'}，对话 ${state.store.scope.conversation ? '已接入' : '未接入'}，ClaudeDock 自身网络 ${state.store.scope.application ? '已接入' : '未接入'}。隧道仅使用 IPv4。`
       : '内置代理未运行；勾选项会在启动后生效。内置隧道仅使用 IPv4，不会修改 Windows 的全局 IPv6 设置。';
   renderProxyCore(state.core, state.store.scope);
   proxyRuntimeStatus.textContent = state.runtime.error
@@ -1124,10 +1150,50 @@ const renderProxyState = (state: ProxyControlView): void => {
       button.dataset.summary = record.report.summary;
       button.textContent = `${new Date(record.report.checkedAt).toLocaleString()} · ${record.report.summary === 'passed' ? '通过' : record.report.summary === 'risk' ? '风险' : '提示'}${record.acceptedAt ? ' · 已确认继续' : ''}`;
       button.addEventListener('click', () => openProxyAuditReport(record));
-      item.append(button);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'proxy-audit-history__delete';
+      remove.textContent = '删除';
+      remove.setAttribute(
+        'aria-label',
+        `删除 ${new Date(record.report.checkedAt).toLocaleString()} 的体检报告`,
+      );
+      remove.addEventListener('click', async () => {
+        if (
+          !(await requestConfirmation({
+            confirmLabel: '删除报告',
+            message: '删除这份代理泄露体检报告？该操作无法撤销。',
+            title: '删除体检报告',
+            tone: 'danger',
+          }))
+        )
+          return;
+        remove.disabled = true;
+        try {
+          renderProxyState(await window.controlPanel.deleteProxyLeakAudit(record.id));
+          showToast('体检报告已删除');
+        } catch {
+          remove.disabled = false;
+          showToast('无法删除体检报告。', 'error');
+        }
+      });
+      item.append(button, remove);
       return item;
     }),
   );
+};
+
+const loadWindowsIpv6State = async (): Promise<void> => {
+  proxyIpv6Toggle.disabled = true;
+  try {
+    const state = await window.controlPanel.getWindowsIpv6State();
+    windowsIpv6Disabled = state.disabled;
+    proxyIpv6Status.textContent = state.message;
+    proxyIpv6Toggle.textContent = state.disabled ? '重新启用 IPv6' : '禁用 IPv6（建议开启）';
+    proxyIpv6Toggle.disabled = !state.available;
+  } catch {
+    proxyIpv6Status.textContent = '无法读取 Windows IPv6 状态。';
+  }
 };
 
 const loadProxyState = async (): Promise<void> => {
@@ -1283,6 +1349,7 @@ const expandedFolders = new Set<string>();
 const historyScrollPositions = new Map<string, number>();
 const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
 const historyLoadsInFlight = new Set<string>();
+const historyReloadRequested = new Set<string>();
 let dragDepth = 0;
 let claudeRequestGeneration = 0;
 let codexRequestGeneration = 0;
@@ -1298,6 +1365,7 @@ let providerGroupExpansionPending = false;
 let selectedProviderId: ClaudeProviderId | undefined;
 let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
+let savedAppSettings: AppSettingsView | undefined;
 let selectedRailTab: string | undefined = 'projects';
 type SettingsTab = 'advanced' | 'connection' | 'general' | 'proxy' | 'router';
 let selectedSettingsTab: SettingsTab = 'general';
@@ -1678,11 +1746,11 @@ window.controlPanel.onArtifactNetworkLog((entry: ArtifactNetworkLogEntry) => {
   renderArtifactNetworkLog();
 });
 
-const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => {
+const applyTerminalTheme = (themeId: TerminalThemeId, announce = true, persist = true): void => {
   activeTerminalTheme = themeId;
   terminalThemeSelect.value = themeId;
   settingsTheme.value = themeId;
-  localStorage.setItem('claudedock.terminalTheme', themeId);
+  if (persist) localStorage.setItem('claudedock.terminalTheme', themeId);
   const definition = TERMINAL_THEMES[themeId];
   // The shell steps are written onto the root element so every `var(--…)` in styles.css follows the
   // theme; without this the terminal recolours but the frame around it stays graphite.
@@ -1709,9 +1777,11 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
     }
   }
   // The native titlebar and window background live outside the document and need the main process.
-  void window.controlPanel.setAppTheme(themeId).catch(() => {
-    // A repaint failure is cosmetic only; the CSS side has already switched.
-  });
+  if (persist) {
+    void window.controlPanel.setAppTheme(themeId).catch(() => {
+      // A repaint failure is cosmetic only; the CSS side has already switched.
+    });
+  }
   if (announce) {
     showToast(`主题已切换为“${definition.label}”`);
   }
@@ -1719,7 +1789,7 @@ const applyTerminalTheme = (themeId: TerminalThemeId, announce = true): void => 
   artifactController?.updateTheme();
 };
 
-applyTerminalTheme(activeTerminalTheme, false);
+applyTerminalTheme(activeTerminalTheme, false, false);
 
 const projectNameFromPath = (directoryPath: string): string => {
   const parts = directoryPath.split(/[\\/]/).filter(Boolean);
@@ -3605,6 +3675,7 @@ const selectSettingsTab = (tab: SettingsTab): void => {
   }
   if (tab === 'proxy') {
     void loadProxyState();
+    void loadWindowsIpv6State();
   }
   if (tab === 'router') {
     void loadRouterManagement();
@@ -3612,17 +3683,55 @@ const selectSettingsTab = (tab: SettingsTab): void => {
   }
 };
 
+const pendingAppSettings = (): Pick<
+  AppSettingsView,
+  'advanced' | 'closeBehavior' | 'launchAtLogin' | 'theme'
+> => ({
+  advanced: {
+    chatIdleTimeoutMinutes: Number(settingsChatIdleTimeout.value) as 0 | 5 | 10 | 30,
+    webResearchIsolation: settingsWebResearchIsolation.checked,
+  },
+  closeBehavior: settingsCloseBehavior.value === 'exit' ? 'exit' : 'tray',
+  launchAtLogin: settingsLaunchAtLogin.checked,
+  theme: isTerminalThemeId(settingsTheme.value) ? settingsTheme.value : DEFAULT_TERMINAL_THEME,
+});
+
+const updateSettingsUnsavedIndicator = (): number => {
+  if (!savedAppSettings) {
+    settingsUnsavedIndicator.hidden = true;
+    return 0;
+  }
+  const pending = pendingAppSettings();
+  const count = [
+    pending.launchAtLogin !== savedAppSettings.launchAtLogin,
+    pending.closeBehavior !== savedAppSettings.closeBehavior,
+    pending.theme !== savedAppSettings.theme,
+    pending.advanced.chatIdleTimeoutMinutes !== savedAppSettings.advanced.chatIdleTimeoutMinutes,
+    pending.advanced.webResearchIsolation !== savedAppSettings.advanced.webResearchIsolation,
+  ].filter(Boolean).length;
+  settingsUnsavedIndicator.hidden = count === 0;
+  settingsUnsavedIndicator.textContent = `*${count} 项未保存`;
+  return count;
+};
+
+const applyAppSettingsToControls = (settings: AppSettingsView): void => {
+  settingsLaunchAtLogin.checked = settings.launchAtLogin;
+  settingsCloseBehavior.value = settings.closeBehavior;
+  settingsChatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
+  settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
+  settingsLanguage.value = settings.language;
+  settingsVersion.value = settings.version;
+  settingsVersion.textContent = settings.version;
+  settingsTheme.value = settings.theme;
+  applyTerminalTheme(settings.theme, false, false);
+};
+
 const loadAppSettings = async (): Promise<void> => {
   try {
     const settings = await window.controlPanel.getAppSettings();
-    settingsLaunchAtLogin.checked = settings.launchAtLogin;
-    settingsCloseBehavior.value = settings.closeBehavior;
-    settingsChatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
-    settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
-    settingsLanguage.value = settings.language;
-    settingsVersion.value = settings.version;
-    settingsVersion.textContent = settings.version;
-    settingsTheme.value = settings.theme;
+    savedAppSettings = settings;
+    applyAppSettingsToControls(settings);
+    updateSettingsUnsavedIndicator();
   } catch {
     showToast('无法读取全局设置。', 'error');
   }
@@ -3645,10 +3754,54 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   if (!complete && advancedConnectionSnapshot) {
     restoreAdvancedConnectionSnapshot(advancedConnectionSnapshot);
   }
+  if (!complete && savedAppSettings) {
+    applyAppSettingsToControls(savedAppSettings);
+  }
   advancedConnectionSnapshot = undefined;
+  savedAppSettings = undefined;
+  settingsUnsavedIndicator.hidden = true;
   connectionAdvancedDialog.close(complete ? 'complete' : 'cancel');
   setConnectionPolling(selectedRailTab === 'connection');
   openConnectionAdvancedButton.focus();
+};
+
+const savePendingAppSettings = async (): Promise<void> => {
+  const saved = savedAppSettings;
+  if (!saved || updateSettingsUnsavedIndicator() === 0) {
+    closeAdvancedConnectionDialog(true);
+    return;
+  }
+  const pending = pendingAppSettings();
+  completeConnectionAdvancedButton.disabled = true;
+  cancelConnectionAdvancedButton.disabled = true;
+  completeConnectionAdvancedButton.textContent = '正在保存…';
+  try {
+    if (pending.launchAtLogin !== saved.launchAtLogin) {
+      await window.controlPanel.setLaunchAtLogin(pending.launchAtLogin);
+    }
+    if (pending.closeBehavior !== saved.closeBehavior) {
+      await window.controlPanel.setCloseBehavior(pending.closeBehavior);
+    }
+    if (
+      pending.advanced.chatIdleTimeoutMinutes !== saved.advanced.chatIdleTimeoutMinutes ||
+      pending.advanced.webResearchIsolation !== saved.advanced.webResearchIsolation
+    ) {
+      await window.controlPanel.setAdvancedSettings(pending.advanced);
+    }
+    if (pending.theme !== saved.theme) {
+      await window.controlPanel.setAppTheme(pending.theme);
+      localStorage.setItem('claudedock.terminalTheme', pending.theme);
+    }
+    showToast('设置已保存');
+    closeAdvancedConnectionDialog(true);
+  } catch {
+    showToast('部分设置未能保存，已重新读取当前值。', 'error');
+    await loadAppSettings();
+  } finally {
+    completeConnectionAdvancedButton.disabled = false;
+    cancelConnectionAdvancedButton.disabled = false;
+    completeConnectionAdvancedButton.textContent = '完成';
+  }
 };
 
 const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => {
@@ -4419,13 +4572,13 @@ const syncUpdateActionVisibility = (): void => {
   installRouterButton.hidden = !routerActionVisible;
   installRouterButton.textContent = actions.router === 'update' ? '一键更新' : '一键安装';
 
-  pluginUpdateActions.hidden = !actions.plugins;
+  pluginUpdateActions.hidden = false;
   updateAllPluginsButton.hidden = !actions.plugins;
 
   const refreshLabel =
     actions.totalAvailable > 0
-      ? `检查软件与插件更新，当前发现 ${actions.totalAvailable} 项可更新`
-      : '检查软件与插件更新';
+      ? `检查全部更新，当前发现 ${actions.totalAvailable} 项可更新`
+      : '检查全部更新';
   refreshUpdatesButton.dataset.update = String(actions.totalAvailable > 0);
   refreshUpdatesButton.title = refreshLabel;
   refreshUpdatesButton.setAttribute('aria-label', refreshLabel);
@@ -6231,6 +6384,11 @@ const selectMcpTab = (tab: string): void => {
 
 const renderSoftwareUpdates = (state: SoftwareUpdateState): void => {
   softwareUpdates = state;
+  applicationUpdateDetail.textContent = state.application.message;
+  applicationUpdateVersion.textContent = `v${state.application.currentVersion ?? '未知'}${
+    state.application.updateAvailable ? ` → ${state.application.latestVersion}` : ''
+  }`;
+  applicationUpdateVersion.dataset.update = String(state.application.updateAvailable);
   const target = state.claudeCode;
   claudeUpdateDetail.textContent = target.message;
   claudeUpdateVersion.textContent = target.installed
@@ -6979,18 +7137,29 @@ const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
   refreshUpdatesButton.setAttribute('aria-busy', 'true');
 
   try {
-    const [, pluginsOk] = await Promise.all([
+    const project = activeStatus();
+    const results = await Promise.allSettled([
       loadSoftwareUpdates(manual),
       // Plugin update flags are only trustworthy after the local marketplace checkout is refreshed.
       // This remains a background CLI task on first load and only becomes user-visible through the
       // titlebar busy state.
       refreshPluginUpdates(),
+      project ? loadMcpCatalog(true) : Promise.resolve(),
+      window.controlPanel
+        .getProxyState()
+        .then((state) =>
+          state.store.subscriptions.length > 0
+            ? window.controlPanel.refreshProxySubscriptions()
+            : undefined,
+        ),
     ]);
+    const pluginsOk = results[1]?.status === 'fulfilled' && results[1].value;
+    const failedSources = results.filter(({ status }) => status === 'rejected').length;
     syncUpdateActionVisibility();
     if (manual) {
       const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
-      if (!pluginsOk) {
-        showToast('软件检查已完成，但插件市场暂时无法刷新。', 'error');
+      if (!pluginsOk || failedSources > 0) {
+        showToast('全局检查已完成，但至少一个更新来源暂时不可用。', 'error');
       } else if (actions.totalAvailable > 0) {
         showToast(`检查完成，发现 ${actions.totalAvailable} 项可更新。`);
       } else {
@@ -8088,7 +8257,7 @@ const closeProject = async (status: TerminalStatus): Promise<void> => {
   }
   renderWorkspace(result.state);
   expandedFolders.add(projectPath.toLowerCase());
-  void loadFolderHistory(projectPath, true);
+  await loadFolderHistory(projectPath, true);
   showToast(`已关闭“${status.title}”，可在历史对话中恢复`);
 };
 
@@ -8124,8 +8293,8 @@ const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> 
   if (
     project.sessionIds.length > 0 &&
     !(await requestConfirmation({
-      confirmLabel: '全部关闭',
-      message: `关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？`,
+      confirmLabel: '关闭并归档',
+      message: `关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？终端会停止，对话会归档到“历史对话”。`,
       title: '关闭项目对话',
       tone: 'danger',
     }))
@@ -8138,7 +8307,9 @@ const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> 
     showToast(result.error ?? '无法关闭这个项目。', 'error');
     return;
   }
-  showToast(`已关闭 ${project.name}，项目仍然会被记住`);
+  expandedFolders.add(project.path.toLowerCase());
+  await loadFolderHistory(project.path, true);
+  showToast(`已关闭 ${project.name}，对话已归档到历史记录`);
 };
 
 const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
@@ -8166,7 +8337,11 @@ const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
 /** Loads a folder's Claude conversation history without requiring a live terminal for it. */
 async function loadFolderHistory(projectPath: string, force = false): Promise<void> {
   const key = projectPath.toLowerCase();
-  if (historyLoadsInFlight.has(key) || (!force && storedConversations.has(key))) {
+  if (historyLoadsInFlight.has(key)) {
+    if (force) historyReloadRequested.add(key);
+    return;
+  }
+  if (!force && storedConversations.has(key)) {
     return;
   }
   historyLoadsInFlight.add(key);
@@ -8177,6 +8352,9 @@ async function loadFolderHistory(projectPath: string, force = false): Promise<vo
     storedConversations.set(key, []);
   } finally {
     historyLoadsInFlight.delete(key);
+    if (historyReloadRequested.delete(key)) {
+      void loadFolderHistory(projectPath, true);
+    }
   }
 }
 
@@ -9489,6 +9667,18 @@ updateAllPluginsButton.addEventListener('click', () => {
     updateAllPluginsButton,
   );
 });
+refreshPluginsButton.addEventListener('click', () => {
+  refreshPluginsButton.disabled = true;
+  void refreshPluginUpdates().finally(() => {
+    refreshPluginsButton.disabled = false;
+  });
+});
+refreshSoftwareUpdatesButton.addEventListener('click', () => {
+  refreshSoftwareUpdatesButton.disabled = true;
+  void loadSoftwareUpdates(true).finally(() => {
+    refreshSoftwareUpdatesButton.disabled = false;
+  });
+});
 pluginSearch.addEventListener('input', () => {
   if (pluginCatalog) {
     renderPluginCatalog(pluginCatalog);
@@ -9559,96 +9749,25 @@ terminalThemeSelect.addEventListener('change', () => {
 settingsTheme.addEventListener('change', () => {
   const themeId = settingsTheme.value;
   if (isTerminalThemeId(themeId)) {
-    applyTerminalTheme(themeId);
+    applyTerminalTheme(themeId, false, false);
   }
+  updateSettingsUnsavedIndicator();
 });
 settingsLaunchAtLogin.addEventListener('change', () => {
-  const requested = settingsLaunchAtLogin.checked;
-  settingsLaunchAtLogin.disabled = true;
-  void window.controlPanel
-    .setLaunchAtLogin(requested)
-    .then((settings) => {
-      settingsLaunchAtLogin.checked = settings.launchAtLogin;
-      showToast(settings.launchAtLogin ? '已开启开机启动' : '已关闭开机启动');
-    })
-    .catch(() => {
-      settingsLaunchAtLogin.checked = !requested;
-      showToast('无法修改开机启动设置。', 'error');
-    })
-    .finally(() => {
-      settingsLaunchAtLogin.disabled = false;
-    });
+  updateSettingsUnsavedIndicator();
 });
 settingsCloseBehavior.addEventListener('change', () => {
-  const requested = settingsCloseBehavior.value === 'exit' ? 'exit' : 'tray';
-  settingsCloseBehavior.disabled = true;
-  void window.controlPanel
-    .setCloseBehavior(requested)
-    .then((settings) => {
-      settingsCloseBehavior.value = settings.closeBehavior;
-      showToast(
-        settings.closeBehavior === 'exit' ? '关闭按钮将直接退出' : '关闭按钮将最小化到托盘',
-      );
-    })
-    .catch(() => {
-      showToast('无法修改关闭按钮行为。', 'error');
-      void loadAppSettings();
-    })
-    .finally(() => {
-      settingsCloseBehavior.disabled = false;
-    });
+  updateSettingsUnsavedIndicator();
 });
 settingsWebResearchIsolation.addEventListener('change', () => {
-  const requested = settingsWebResearchIsolation.checked;
-  settingsWebResearchIsolation.disabled = true;
-  void window.controlPanel
-    .setAdvancedSettings({
-      chatIdleTimeoutMinutes: Number(settingsChatIdleTimeout.value) as 0 | 5 | 10 | 30,
-      webResearchIsolation: requested,
-    })
-    .then((settings) => {
-      settingsWebResearchIsolation.checked = settings.advanced.webResearchIsolation;
-      showToast(
-        settings.advanced.webResearchIsolation
-          ? '已开启联网检索隔离，下次启动会话时生效'
-          : '已关闭联网检索隔离，下次启动会话时生效',
-      );
-    })
-    .catch(() => {
-      settingsWebResearchIsolation.checked = !requested;
-      showToast('无法修改高级设置。', 'error');
-    })
-    .finally(() => {
-      settingsWebResearchIsolation.disabled = false;
-    });
+  updateSettingsUnsavedIndicator();
 });
 settingsChatIdleTimeout.addEventListener('change', () => {
   const requested = Number(settingsChatIdleTimeout.value);
   if (requested !== 0 && requested !== 5 && requested !== 10 && requested !== 30) {
     settingsChatIdleTimeout.value = '0';
-    return;
   }
-  settingsChatIdleTimeout.disabled = true;
-  void window.controlPanel
-    .setAdvancedSettings({
-      chatIdleTimeoutMinutes: requested,
-      webResearchIsolation: settingsWebResearchIsolation.checked,
-    })
-    .then((settings) => {
-      settingsChatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
-      showToast(
-        settings.advanced.chatIdleTimeoutMinutes === 0
-          ? '对话不会因静默自动停止'
-          : `已设置 ${settings.advanced.chatIdleTimeoutMinutes} 分钟静默提示，第二个阈值后停止`,
-      );
-    })
-    .catch(() => {
-      void loadAppSettings();
-      showToast('无法修改对话静默超时设置。', 'error');
-    })
-    .finally(() => {
-      settingsChatIdleTimeout.disabled = false;
-    });
+  updateSettingsUnsavedIndicator();
 });
 proxyPreviewImport.addEventListener('click', () => {
   proxyPreviewImport.disabled = true;
@@ -9683,7 +9802,7 @@ proxySaveSelected.addEventListener('click', () => {
     .flatMap((index) => pendingProxyImport?.profiles[index] ?? []);
   proxySaveSelected.disabled = true;
   void window.controlPanel
-    .saveProxyProfiles(selected)
+    .saveProxyProfiles(selected, pendingProxyImport.subscription)
     .then((state) => {
       renderProxyState(state);
       pendingProxyImport = undefined;
@@ -9721,13 +9840,68 @@ proxyRemoveProfile.addEventListener('click', () => {
 const saveProxyScope = (): void => {
   proxyScopeCli.disabled = true;
   proxyScopeApplication.disabled = true;
+  proxyScopeConversation.disabled = true;
   void applyProxyScope({}, () => showToast('代理作用域已更新')).finally(() => {
     proxyScopeCli.disabled = false;
     proxyScopeApplication.disabled = false;
+    proxyScopeConversation.disabled = false;
   });
 };
 proxyScopeCli.addEventListener('change', saveProxyScope);
 proxyScopeApplication.addEventListener('change', saveProxyScope);
+proxyScopeConversation.addEventListener('change', saveProxyScope);
+proxyRefreshSubscriptions.addEventListener('click', () => {
+  proxyRefreshSubscriptions.disabled = true;
+  const original = proxyRefreshSubscriptions.textContent;
+  proxyRefreshSubscriptions.textContent = '正在更新…';
+  void window.controlPanel
+    .refreshProxySubscriptions()
+    .then((result) => {
+      renderProxyState(result.state);
+      if (result.failures.length > 0) {
+        showToast(`已更新 ${result.updated} 个订阅；${result.failures.join('；')}`, 'error');
+      } else {
+        showToast(`已更新 ${result.updated} 个代理订阅`);
+      }
+    })
+    .catch((error: unknown) =>
+      showToast(error instanceof Error ? error.message : '无法更新代理订阅。', 'error'),
+    )
+    .finally(() => {
+      proxyRefreshSubscriptions.textContent = original;
+      void loadProxyState();
+    });
+});
+proxyIpv6Toggle.addEventListener('click', async () => {
+  const disabling = !windowsIpv6Disabled;
+  if (
+    !(await requestConfirmation({
+      confirmLabel: disabling ? '禁用 IPv6' : '重新启用',
+      message: disabling
+        ? '将请求 Windows 管理员授权，并禁用当前启用的 IPv6 网卡绑定。网络可能短暂断开；ClaudeDock 会记录这些网卡以便安全恢复。'
+        : '将请求 Windows 管理员授权，只重新启用此前由 ClaudeDock 禁用的 IPv6 网卡绑定。网络可能短暂断开。',
+      title: disabling ? '启用 IPv6 防旁路' : '恢复 IPv6',
+      tone: 'default',
+    }))
+  )
+    return;
+  proxyIpv6Toggle.disabled = true;
+  proxyIpv6Status.textContent = disabling
+    ? '等待管理员授权并禁用 IPv6…'
+    : '等待管理员授权并恢复 IPv6…';
+  try {
+    const state = await window.controlPanel.setWindowsIpv6Disabled(disabling);
+    windowsIpv6Disabled = state.disabled;
+    proxyIpv6Status.textContent = state.message;
+    proxyIpv6Toggle.textContent = state.disabled ? '重新启用 IPv6' : '禁用 IPv6（建议开启）';
+    showToast(state.disabled ? 'IPv6 防旁路已开启' : 'IPv6 已恢复');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法修改 IPv6 设置。', 'error');
+    await loadWindowsIpv6State();
+  } finally {
+    proxyIpv6Toggle.disabled = false;
+  }
+});
 proxyCoreToggle.addEventListener('click', () => {
   proxyCoreExpanded = !proxyCoreExpanded;
   void loadProxyState();
@@ -9881,11 +10055,29 @@ proxyRunAudit.addEventListener('click', () => {
       proxyRunAudit.disabled = false;
     });
 });
-proxyAuditReturn.addEventListener('click', () => {
-  pendingProxyAudit = undefined;
-  proxyAuditDialog.close('adjust');
+proxyAuditReturn.addEventListener('click', async () => {
+  const shouldDisconnect = pendingProxyAudit?.report.summary === 'risk';
+  proxyAuditReturn.disabled = true;
+  proxyAuditReturn.textContent = shouldDisconnect ? '正在断开…' : '返回调整';
+  try {
+    if (shouldDisconnect) {
+      renderProxyState(await window.controlPanel.stopBuiltInProxy());
+    }
+    pendingProxyAudit = undefined;
+    proxyAuditDialog.close('adjust');
+  } catch {
+    showToast('无法断开内置代理，请先手动停止。', 'error');
+  } finally {
+    proxyAuditReturn.disabled = false;
+    proxyAuditReturn.textContent = '返回调整';
+  }
 });
-proxyAuditDialog.addEventListener('cancel', () => {
+proxyAuditDialog.addEventListener('cancel', (event) => {
+  if (pendingProxyAudit?.report.summary === 'risk') {
+    event.preventDefault();
+    proxyAuditReturn.click();
+    return;
+  }
   pendingProxyAudit = undefined;
 });
 proxyAuditAccept.addEventListener('click', () => {
@@ -9971,7 +10163,7 @@ conversationRenameCancel.addEventListener('click', () => {
 });
 openConnectionAdvancedButton.addEventListener('click', openAdvancedConnectionDialog);
 completeConnectionAdvancedButton.addEventListener('click', () => {
-  closeAdvancedConnectionDialog(true);
+  void savePendingAppSettings();
 });
 cancelConnectionAdvancedButton.addEventListener('click', () => {
   closeAdvancedConnectionDialog(false);
@@ -10955,7 +11147,7 @@ void (async () => {
     settingsCloseBehavior.value = initialSettings.closeBehavior;
     renderArtifactNetworkLog();
     if (initialSettings.theme !== activeTerminalTheme) {
-      applyTerminalTheme(initialSettings.theme, false);
+      applyTerminalTheme(initialSettings.theme, false, false);
     }
   } catch {
     // The terminal still works without Windows-specific reflow hints; settings can be retried later.

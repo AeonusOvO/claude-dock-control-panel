@@ -3,6 +3,7 @@ import type { ClaudePluginCatalog, SoftwareUpdateState } from './contracts';
 export type SoftwareUpdateAction = 'hidden' | 'install' | 'update';
 
 export interface UpdateActionState {
+  application: boolean;
   claudeCode: SoftwareUpdateAction;
   plugins: boolean;
   router: SoftwareUpdateAction;
@@ -29,10 +30,12 @@ export const deriveUpdateActionState = (
   software: SoftwareUpdateState | undefined,
   plugins: ClaudePluginCatalog | undefined,
 ): UpdateActionState => ({
+  application: software?.application.updateAvailable ?? false,
   claudeCode: softwareAction(software?.claudeCode),
   plugins: (plugins?.updatesAvailable ?? 0) > 0,
   router: softwareAction(software?.router),
   totalAvailable:
+    Number(software?.application.updateAvailable ?? false) +
     Number(software?.claudeCode.updateAvailable ?? false) +
     Number(software?.router.updateAvailable ?? false) +
     (plugins?.updatesAvailable ?? 0),

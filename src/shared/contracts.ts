@@ -112,12 +112,27 @@ export interface ProxyImportIssue {
 export interface ProxyImportPreview {
   issues: ProxyImportIssue[];
   profiles: ProxyProfileInput[];
+  subscription?: ProxySubscriptionInput;
+}
+export interface ProxySubscriptionInput {
+  id: string;
+  label: string;
+  url: string;
+}
+export interface ProxySubscriptionView {
+  host: string;
+  id: string;
+  label: string;
+  profileCount: number;
+  updatedAt: number;
 }
 export interface ProxyScopeSettings {
   /** Applies only to processes spawned by ClaudeDock. */
   cli: boolean;
   /** Applies to Electron's own session. This is opt-in and never changes the system proxy. */
   application: boolean;
+  /** Applies to the independent conversation workspace's dedicated Electron session. */
+  conversation: boolean;
   /**
    * Optional proxy used for ClaudeDock's own network calls while the built-in tunnel is not running
    * — chiefly the Xray-core download, which otherwise has to reach GitHub without help. Empty means
@@ -145,6 +160,19 @@ export interface ProxyStoreView {
   profiles: ProxyProfileView[];
   scope: ProxyScopeSettings;
   state: ProxyStoredState;
+  subscriptions: ProxySubscriptionView[];
+}
+export interface ProxySubscriptionRefreshResult {
+  failures: string[];
+  state: ProxyControlView;
+  updated: number;
+}
+export interface WindowsIpv6View {
+  available: boolean;
+  disabled: boolean;
+  disabledAdapters: string[];
+  enabledAdapters: string[];
+  message: string;
 }
 export interface ProxyRuntimeView {
   coreVersion: string;
@@ -1105,6 +1133,7 @@ export interface SoftwareUpdateTarget {
 }
 
 export interface SoftwareUpdateState {
+  application: SoftwareUpdateTarget;
   checkedAt: number;
   claudeCode: SoftwareUpdateTarget;
   router: SoftwareUpdateTarget;
@@ -1181,7 +1210,11 @@ export interface ControlPanelApi {
   getProxyState: () => Promise<ProxyControlView>;
   previewProxyImport: (text: string) => Promise<ProxyImportPreview>;
   previewProxySubscription: (url: string) => Promise<ProxyImportPreview>;
-  saveProxyProfiles: (profiles: ProxyProfileInput[]) => Promise<ProxyControlView>;
+  saveProxyProfiles: (
+    profiles: ProxyProfileInput[],
+    subscription?: ProxySubscriptionInput,
+  ) => Promise<ProxyControlView>;
+  refreshProxySubscriptions: () => Promise<ProxySubscriptionRefreshResult>;
   removeProxyProfile: (profileId: string) => Promise<ProxyControlView>;
   selectProxyProfile: (profileId: string) => Promise<ProxyControlView>;
   setProxyScope: (scope: ProxyScopeSettings) => Promise<ProxyControlView>;
@@ -1193,6 +1226,9 @@ export interface ControlPanelApi {
   stopBuiltInProxy: () => Promise<ProxyControlView>;
   runProxyLeakAudit: () => Promise<ProxyAuditRecord>;
   acceptProxyLeakAudit: (recordId: string) => Promise<ProxyAuditRecord>;
+  deleteProxyLeakAudit: (recordId: string) => Promise<ProxyControlView>;
+  getWindowsIpv6State: () => Promise<WindowsIpv6View>;
+  setWindowsIpv6Disabled: (disabled: boolean) => Promise<WindowsIpv6View>;
   onProxyStateChanged: (listener: (state: ProxyControlView) => void) => Unsubscribe;
   onProxyAuditRequired: (listener: (record: ProxyAuditRecord) => void) => Unsubscribe;
   createArtifact: (html: string) => Promise<ArtifactCreateResult>;

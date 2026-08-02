@@ -631,6 +631,7 @@ export class ClaudeRuntime {
     downloadEngine: DownloadEngine,
     fetchImplementation: typeof fetch = fetch,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
+    private readonly applicationVersion?: string,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
@@ -823,7 +824,7 @@ export class ClaudeRuntime {
         this.getRouterHealthState(force),
       ]);
       return this.backgroundTasks.run('software-updates', 'background', () =>
-        checkSoftwareUpdates(installation, router),
+        checkSoftwareUpdates(installation, router, this.applicationVersion),
       );
     }, force);
   }

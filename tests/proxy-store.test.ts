@@ -39,7 +39,7 @@ describe('proxy profile store', () => {
       remark: '示例节点',
       tls: true,
     });
-    expect(view.scope).toEqual({ application: false, cli: true });
+    expect(view.scope).toEqual({ application: false, cli: true, conversation: false });
     expect(view.profiles[0]?.hasCredentials).toBe(true);
     const metadata = readFileSync(path.join(userDataPath, 'proxy', 'profiles.json'), 'utf8');
     expect(metadata).not.toContain('synthetic-secret');
@@ -83,6 +83,33 @@ describe('proxy profile store', () => {
         security: 'reality',
       }),
     ).toThrow(/公钥/);
+  });
+
+  it('encrypts subscription URLs and atomically replaces the subscription node set', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-proxy-store-'));
+    const store = new ProxyStore(userDataPath, fakeSecretStorage);
+    const subscription = {
+      id: 'subscription-example',
+      label: '示例订阅',
+      url: 'https://subscription.example/feed?token=private-token',
+    };
+    let view = store.replaceSubscription(subscription, [
+      { address: 'one.example', id: 'node-one', port: 443, protocol: 'http' },
+      { address: 'two.example', id: 'node-two', port: 443, protocol: 'socks' },
+    ]);
+    expect(view.subscriptions).toEqual([
+      expect.objectContaining({ id: subscription.id, profileCount: 2 }),
+    ]);
+    const metadata = readFileSync(path.join(userDataPath, 'proxy', 'profiles.json'), 'utf8');
+    expect(metadata).not.toContain('private-token');
+    expect(metadata).not.toContain(subscription.url);
+    expect(store.getSubscriptionSources()).toEqual([subscription]);
+
+    view = store.replaceSubscription(subscription, [
+      { address: 'three.example', id: 'node-three', port: 443, protocol: 'http' },
+    ]);
+    expect(view.profiles.map(({ id }) => id)).toEqual(['node-three']);
+    expect(view.subscriptions[0]?.profileCount).toBe(1);
   });
 
   it('fails closed when OS encryption is unavailable', () => {

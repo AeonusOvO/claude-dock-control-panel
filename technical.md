@@ -54,7 +54,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
         ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
-        ├── SoftwareUpdates ── Claude Code / Router 版本检测与安装源
+        ├── SoftwareUpdates ── ClaudeDock / Claude Code / Router 版本检测与安装源
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── Tray 聚合状态与项目菜单
@@ -341,7 +341,15 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   stderr：把子进程自己的抱怨丢掉，正是这个 bug 能长期伪装成不透明退出码的原因。
 - Xray 临时配置采用 IPv4-only：DNS `queryStrategy=UseIPv4`，选中节点 outbound 的
   `sockopt.domainStrategy=UseIPv4`，freedom 出站同样 `UseIPv4`，路由首条规则把 `::/0` 送入
-  blackhole。该边界只约束 ClaudeDock 管理的隧道，不修改 Windows IPv6、DNS、路由表或系统代理。
+  blackhole。`routing.domainStrategy=AsIs`，避免为 HTTP CONNECT/SOCKS 目标在本机预解析；目标域名
+  保持到所选节点再解析。默认边界只约束 ClaudeDock 管理的隧道，不修改 Windows DNS、路由表或
+  系统代理。
+- `WindowsIpv6Service` 提供显式的系统 IPv6 防旁路开关。读取使用
+  `Get-NetAdapterBinding -ComponentID ms_tcpip6`；修改通过隐藏的 UAC PowerShell 调用
+  `Disable/Enable-NetAdapterBinding`。命令正文用 UTF-16LE `EncodedCommand`，网卡名通过环境变量
+  JSON 传入，不拼接 shell 文本。禁用成功后只把本次原本启用的网卡名写入
+  `userData/network/ipv6-managed.json`，恢复只操作这份名单，避免开启用户本来就关闭的绑定。
+  该操作可能重启网卡连接，UI 必须保留 Windows 通常建议启用 IPv6 的提示。
 - 本地入站健康检查会重试。Xray 在 `spawn` 返回后才绑定入站，第一次连接几乎必然 `ECONNREFUSED`；
   把它当结论会让一次正确的下载在 49 ms 内报「启动失败」——比内核解析配置还快。`probeHttpInbound`
   改为在 8 秒截止时间内每 120 ms 敲一次，只对重试改变不了的答案提前结束：真实 HTTP 状态码，
@@ -360,11 +368,23 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   路径在隧道真正 `ready` 之前不会再碰 Chromium 的代理设置——下载内核本身不需要任何代理。
   `tests/proxy-environment.test.ts` 锁定这条不变量与构造处的登记调用；
   `scripts/xray-download-race-smoke.cjs` 是需要联网的复现用具。
+- 对话作用域使用独立的 `claudedock-conversation-network` Electron session；未勾选时固定
+  `mode: direct`，勾选且 Xray `ready` 时切为回环 `fixed_servers`。`ChatService` 通过动态 fetch
+  适配器使用该 session，和应用默认 session/CLI 环境互不串联；规则签名去重，变化时关闭旧连接。
+- 订阅预览会生成基于规范化 HTTPS URL SHA-256 的稳定 subscription ID。节点元数据只保存
+  `subscriptionId/host/label/updatedAt`，完整 URL（含 query token）写入 DPAPI 加密的
+  `credentials.json`，绝不进入 `profiles.json`。更新订阅按 ID 原子替换该来源的节点集合；隧道
+  原本在运行时先停止，更新后重新启动并重新体检，避免 runtime 指向已被替换的 profile ID。
 - 隧道就绪时写入 `autoStart`，停止或启动失败时立即清除，因此下次启动能区分「代理运行中被直接
   退出」与「用户主动停止」，只对前者自动恢复。恢复动作在窗口创建后触发且不阻塞启动。
-- `LeakAuditService` 并行比较直连/代理出口、ASN/机房启发式、DNS、WebRTC 和进程环境；结论与
-  用户接受风险的决定写入不含节点秘密的审计记录。风险只阻断新的接入动作，已经运行的隧道保持
-  运行。ASN/机房属于启发式证据，界面不得写成确定封号结论。
+- `LeakAuditService` 并行比较直连/代理出口、ASN/机房启发式、DNS、WebRTC 和进程环境。DNS 不再
+  只看 `dns.getServers()`：每条路径先向 `dnsleaktest.com/api/v1/identifiers` 注册 4 个随机 UUID，
+  请求对应 `<uuid>.test.dnsleaktest.com` 权威域名，再从 `servers-for-result` 读取实际递归解析器。
+  每个在线请求有 10 秒上限；主站失败会按 `bash.ws/id` → `0..5.<id>.bash.ws` →
+  `/dnsleak/test/<id>?json` 协议回退。代理与
+  直连观察到相同解析器 IP 判为风险，不同则通过；两站都失败或返回空结果时保守降级为 warning。
+  结论与用户接受风险的决定写入不含节点秘密的审计记录，最多 50 条且支持逐条删除。风险阻断新
+  接入；用户点击“返回调整”或在风险报告按 Esc 会先停止隧道，只有显式接受才保持连接。
 - `McpManager` 从 `~/.claude.json` 根级 user、项目记录 local、当前项目 `.mcp.json` project 和
   `~/.codex/config.toml` 只读发现 MCP，明确不读取 Claude Desktop 配置。在线目录以 10 秒、
   有界响应读取官方 MCP Registry preview，失败时保留离线精选；后台健康任务并发上限为 2。
@@ -381,7 +401,8 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   降级。该文件和项目级 `project-profiles.json` 没有共享键或联动逻辑。
 - 基址校验只允许远程 HTTPS，本机 `localhost` / `127.0.0.1` / `::1` 可以使用 HTTP；拒绝
   URL 用户信息、查询和片段。模型名、凭据长度与换行、credential action 均在主进程重验。
-- `ChatService`（`src/main/chat-service.ts`）只在 Electron 主进程使用 Node `fetch`。Anthropic
+- `ChatService`（`src/main/chat-service.ts`）只在 Electron 主进程运行，通过专属 Electron session
+  的动态 fetch 适配器发请求，使“对话”作用域可以独立接入/退出内置代理。Anthropic
   协议补全 `/v1/messages`、发送 `x-api-key` 和 `anthropic-version`，并解析
   `content_block_delta`；附件块按 document/image → text 排序，本地 UUID 在发请求前才
   base64 编码，Files API 引用自动带 beta header。OpenAI 兼容协议补全
@@ -703,6 +724,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   “完成”保留当前输入。Router 安装/卸载/启停与 Provider 保存仍走既有即时 IPC，不能伪装
   成可回滚事务，界面在操作区上方明确说明这一边界。接入历史不属于高级诊断工具，因此不进入
   快照范围，也不会随 Router/cURL 工具节点移动。
+- 应用级非即时设置另有 `savedAppSettings` 基线。renderer 只在控件变化时比较开机启动、关闭行为、
+  主题、对话静默超时与联网检索隔离五个字段，实时计算 `*N 项未保存`；主题可本地预览但不调用
+  IPC。点击“完成”才按变化字段调用现有 setter，取消/关闭/Esc 恢复基线。首帧
+  `applyTerminalTheme(..., persist=false)` 只绘制 localStorage 里的预览，主进程设置返回后再覆盖，
+  因此渲染器默认值不会反向写掉上次主题。
 - Kimi 开放平台与 Kimi Code 会员分为两个目录项，明确阻止密钥/基址混用；SiliconFlow 按其
   Claude Code 文档使用 `apiKey`（`x-api-key`）；Ollama 使用不落盘的 `ollama` 占位令牌。
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
@@ -713,9 +739,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   后台刷新之前；`AsyncRefreshCache` 让安装、Router 和更新检查在 TTL 内复用结果，并防止旧
   请求覆盖操作后的新状态。这些工作本身是异步网络/子进程 I/O，采用限流队列比额外占用
   Worker Thread 更合适。
-- renderer 完成首屏工作区 hydration 后用零延时任务启动统一更新检查，不阻塞终端启动：
-  `SoftwareUpdates` 读取 Claude Code/Router 元数据，插件侧在独立 Claude CLI 子进程中先刷新
-  marketplace 再读取目录。标题栏按钮复用同一路径并强制刷新；两条路径都不会调用模型。
+- renderer 完成首屏工作区 hydration 后用零延时任务启动统一更新检查，不阻塞终端启动。标题栏
+  聚合 ClaudeDock Release、Claude Code/Router npm 元数据、插件 marketplace、保存的代理订阅与
+  当前项目 MCP 目录/健康刷新；各 Promise 隔离失败，单一来源不可用不抹掉其余结果。软件、插件、
+  代理和 MCP 页同时保留独立入口。新增任何 update source 必须同时注册全局聚合与领域入口，
+  并在 README/design/technical 中说明“检查”是否会应用更新；两条路径都不会调用模型。
 - CCR 的识别依据包括 `ccr` 命令、旧版
   `~/.claude-code-router/config.json`、新版 Windows
   `%APPDATA%/claude-code-router/{config.sqlite,gateway.config.json}`，以及默认端口状态。
@@ -833,15 +861,17 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 
 ### 软件与插件更新
 
-- `SoftwareUpdates` 从 npm 官方 registry 读取 Claude Code 与 Router 的 `latest` 元数据；
+- `SoftwareUpdates` 从固定 GitHub Releases API 检查 ClaudeDock，从 npm 官方 registry 读取 Claude
+  Code 与 Router 的 `latest` 元数据；
   官方源失败时再读 npmmirror。结果缓存 5 分钟，接入页轮询只在缓存到期后产生网络请求。
 - `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
   返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
   插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
   `updateAvailable` 控制。
-- 标题栏 `refresh-updates` 是唯一的主动更新检查入口。首屏自动检查和用户点击均并行检查
-  软件与插件，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现数量；
-  检查本身不安装任何内容。
+- 标题栏 `refresh-updates` 是全局主动检查入口，不是唯一入口。首屏自动检查和用户点击会并行
+  处理全部已注册来源，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现
+  数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；代理订阅刷新会替换该来源节点并在
+  原隧道运行时安全重启、重新体检，界面必须使用“更新订阅”而不是模糊的“检查”。
 - Claude Code 的官方原生路径使用固定的 `claude update`；未安装时使用固定 winget ID
   `Anthropic.ClaudeCode`。npm 与 npmmirror 路径使用固定包名，均不拼接用户输入到 shell。
 - `ClaudePluginManager` 调用 `claude plugin list --json --available` 与 marketplace JSON
@@ -1523,8 +1553,9 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
 - 保存或切换 Claude 接入不会热修改已运行 PowerShell 的环境；受保护启动会重建当前项目
   终端。这是避免把密钥写入可见终端输入和历史的有意取舍。
 - Windows 10 1809 之前没有所需 ConPTY API，不在支持范围；最小窗口为 820 × 640。
-- 应用自身的自动更新、代码签名和退出后的 PTY 恢复尚未实现；Claude Code、Router 与插件
-  的检测/更新已经实现，但不等同于 ClaudeDock 安装包自更新。
+- 应用自身的自动下载/安装更新、代码签名和退出后的 PTY 恢复尚未实现；ClaudeDock 发行版本检查
+  已纳入统一入口，Claude Code、Router 与插件的检测/更新已经实现，但仍不等同于 ClaudeDock
+  安装包自更新。
 
 ## 地区限制与“降智”调研结论（截至 2026-07-25）
 
@@ -1597,6 +1628,11 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
   <https://registry.modelcontextprotocol.io/docs>
 - Xray-core 官方仓库与 MPL-2.0 许可：
   <https://github.com/XTLS/Xray-core>
+- DNSLeakTest 权威解析器观测接口与 bash.ws 开源检测协议：
+  <https://www.dnsleaktest.com/>、<https://github.com/macvk/dnsleaktest>
+- Microsoft IPv6 配置与网卡绑定命令（微软建议优先保留 IPv6；绑定变更可能影响连接）：
+  <https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/configure-ipv6-in-windows>、
+  <https://learn.microsoft.com/en-us/powershell/module/netadapter/disable-netadapterbinding>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：

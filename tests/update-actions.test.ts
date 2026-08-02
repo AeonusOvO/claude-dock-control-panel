@@ -8,6 +8,7 @@ const softwareState = (
   routerInstalled: boolean,
   routerUpdate: boolean,
 ): SoftwareUpdateState => ({
+  application: { installed: true, message: '', updateAvailable: false },
   checkedAt: 1,
   claudeCode: {
     installed: claudeInstalled,
@@ -34,6 +35,7 @@ const pluginCatalog = (updatesAvailable: number): ClaudePluginCatalog => ({
 describe('conditional update actions', () => {
   it('hides every update action before the first background check completes', () => {
     expect(deriveUpdateActionState(undefined, undefined)).toEqual({
+      application: false,
       claudeCode: 'hidden',
       plugins: false,
       router: 'hidden',
@@ -45,6 +47,7 @@ describe('conditional update actions', () => {
     expect(
       deriveUpdateActionState(softwareState(false, false, false, false), pluginCatalog(0)),
     ).toEqual({
+      application: false,
       claudeCode: 'install',
       plugins: false,
       router: 'install',
@@ -56,6 +59,7 @@ describe('conditional update actions', () => {
     expect(
       deriveUpdateActionState(softwareState(true, false, true, false), pluginCatalog(0)),
     ).toEqual({
+      application: false,
       claudeCode: 'hidden',
       plugins: false,
       router: 'hidden',
@@ -67,10 +71,23 @@ describe('conditional update actions', () => {
     expect(
       deriveUpdateActionState(softwareState(true, true, true, false), pluginCatalog(3)),
     ).toEqual({
+      application: false,
       claudeCode: 'update',
       plugins: true,
       router: 'hidden',
       totalAvailable: 4,
+    });
+  });
+
+  it('counts an application release without inventing an in-app install action', () => {
+    const state = softwareState(true, false, true, false);
+    state.application.updateAvailable = true;
+    expect(deriveUpdateActionState(state, pluginCatalog(0))).toEqual({
+      application: true,
+      claudeCode: 'hidden',
+      plugins: false,
+      router: 'hidden',
+      totalAvailable: 1,
     });
   });
 });

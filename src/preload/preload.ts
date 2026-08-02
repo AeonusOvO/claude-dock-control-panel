@@ -74,7 +74,9 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('proxy:preview-import', text) as Promise<ProxyImportPreview>,
   previewProxySubscription: (url) =>
     ipcRenderer.invoke('proxy:preview-subscription', url) as Promise<ProxyImportPreview>,
-  saveProxyProfiles: (profiles) => ipcRenderer.invoke('proxy:save-profiles', profiles),
+  saveProxyProfiles: (profiles, subscription) =>
+    ipcRenderer.invoke('proxy:save-profiles', profiles, subscription),
+  refreshProxySubscriptions: () => ipcRenderer.invoke('proxy:refresh-subscriptions'),
   removeProxyProfile: (profileId) => ipcRenderer.invoke('proxy:remove-profile', profileId),
   selectProxyProfile: (profileId) => ipcRenderer.invoke('proxy:select-profile', profileId),
   setProxyScope: (scope) => ipcRenderer.invoke('proxy:set-scope', scope),
@@ -87,6 +89,9 @@ const api: ControlPanelApi = {
   stopBuiltInProxy: () => ipcRenderer.invoke('proxy:stop'),
   runProxyLeakAudit: () => ipcRenderer.invoke('proxy:run-audit'),
   acceptProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:accept-audit', recordId),
+  deleteProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:delete-audit', recordId),
+  getWindowsIpv6State: () => ipcRenderer.invoke('network:get-ipv6-state'),
+  setWindowsIpv6Disabled: (disabled) => ipcRenderer.invoke('network:set-ipv6-disabled', disabled),
   onProxyStateChanged: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, state: ProxyControlView): void => {
       listener(state);

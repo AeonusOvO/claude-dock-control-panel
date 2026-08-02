@@ -22,14 +22,22 @@ describe('built-in proxy integration contract', () => {
     expect(preload).toContain("ipcRenderer.invoke('proxy:set-scope', scope)");
     expect(preload).toContain("ipcRenderer.on('proxy:audit-required', callback)");
     expect(main).toContain("requireNetworkPreflightService().invalidate('built-in-proxy-started')");
+    expect(preload).toContain("ipcRenderer.invoke('proxy:delete-audit', recordId)");
+    expect(preload).toContain("ipcRenderer.invoke('network:set-ipv6-disabled', disabled)");
+    expect(contracts).toMatch(
+      /export interface ProxyScopeSettings \{[\s\S]*?conversation: boolean;/,
+    );
+    expect(main).toContain("session.fromPartition('claudedock-conversation-network')");
+    expect(main).toContain("ipcMain.handle('proxy:refresh-subscriptions'");
   });
 
   it('uses the required boundary copy and a safe default audit action', () => {
-    expect(markup).toContain(
-      '仅对 ClaudeDock 启动的 CLI 生效；不修改系统代理，不影响 Claude / Codex 桌面版。',
+    expect(markup.replace(/\s+/g, ' ')).toContain(
+      '仅对勾选的 CLI、对话或 ClaudeDock 自身网络生效；不修改系统代理，不影响 Claude / Codex 桌面版。',
     );
     expect(markup).toMatch(/id="proxy-audit-return"[^>]*autofocus/);
-    expect(markup).toContain('风险只会暂停接入动作，不会关闭已经运行的代理隧道。');
+    expect(markup).toContain('“返回调整”会先断开正在运行的代理隧道。');
+    expect(renderer).toContain('renderProxyState(await window.controlPanel.stopBuiltInProxy())');
   });
 
   it('gates access rather than tearing down the running tunnel', () => {

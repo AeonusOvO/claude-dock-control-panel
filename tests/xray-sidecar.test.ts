@@ -101,7 +101,7 @@ describe('Xray sidecar configuration', () => {
     expect(config.outbounds).toContainEqual(
       expect.objectContaining({ protocol: 'blackhole', tag: 'block' }),
     );
-    expect(config.routing.domainStrategy).toBe('IPIfNonMatch');
+    expect(config.routing.domainStrategy).toBe('AsIs');
     expect(config.routing.rules[0]).toEqual({ ip: ['::/0'], outboundTag: 'block', type: 'field' });
   });
 

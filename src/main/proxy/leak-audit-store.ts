@@ -43,6 +43,14 @@ export class LeakAuditStore {
     return structuredClone(this.load().records);
   }
 
+  public delete(recordId: string): void {
+    const store = this.load();
+    const next = store.records.filter(({ id }) => id !== recordId);
+    if (next.length === store.records.length) throw new Error('代理体检记录不存在。');
+    store.records = next;
+    this.persist(store);
+  }
+
   public latestForFingerprint(fingerprint: string): ProxyAuditRecord | undefined {
     const record = this.load().records.find(({ report }) => report.nodeFingerprint === fingerprint);
     return record ? structuredClone(record) : undefined;

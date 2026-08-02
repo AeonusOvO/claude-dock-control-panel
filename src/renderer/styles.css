@@ -259,7 +259,9 @@ kbd,
 
 button {
   color: inherit;
-  font: inherit;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--lh-compact);
 }
 
 /*
@@ -8467,6 +8469,20 @@ body.is-resizing * {
   color: var(--accent-text);
 }
 
+.settings-save-state {
+  align-items: center;
+  display: grid;
+  gap: var(--s-1);
+  justify-items: stretch;
+}
+
+.settings-save-state small {
+  color: var(--warn-text);
+  font-size: var(--text-xs);
+  line-height: var(--lh-tight);
+  text-align: center;
+}
+
 .proxy-settings {
   gap: var(--s-4);
 }
@@ -8515,7 +8531,9 @@ body.is-resizing * {
   border-radius: var(--r-md);
   color: var(--text);
   cursor: pointer;
-  font: inherit;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--lh-compact);
   padding: 8px 12px;
 }
 
@@ -8766,6 +8784,17 @@ body.is-resizing * {
 .proxy-audit-history button {
   text-align: left;
   width: 100%;
+}
+
+.proxy-audit-history li {
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.proxy-audit-history .proxy-audit-history__delete {
+  color: var(--bad-text);
+  width: auto;
 }
 
 .proxy-audit-history button[data-summary='risk'] {
@@ -9460,6 +9489,80 @@ body.is-resizing * {
  * CHECKBOX AND RADIO. These need no JS: `appearance: none` hands us the box, and the glyph is drawn
  * with a pseudo-element that scales in on the theme's own spring curve.
  */
+input:is(
+  [type='email'],
+  [type='number'],
+  [type='password'],
+  [type='search'],
+  [type='text'],
+  [type='url']
+) {
+  appearance: none;
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--lh-compact);
+  min-height: calc(var(--s-8) + var(--s-1));
+  outline: none;
+  padding: 0 var(--s-3);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  ):hover:not(:focus):not(:disabled) {
+  border-color: var(--line-hover);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  ):focus {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 var(--s-1) var(--accent-tint);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  )::placeholder {
+  color: var(--text-mute);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  ):disabled {
+  background: var(--surface-inset);
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: var(--opacity-disabled);
+}
+
 input[type='checkbox'],
 input[type='radio'] {
   appearance: none;

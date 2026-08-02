@@ -11,6 +11,8 @@ import type {
   ProxySecurity,
   ProxyStoreView,
   ProxyStoredState,
+  ProxySubscriptionInput,
+  ProxySubscriptionView,
   ProxyTransport,
 } from '../../shared/contracts';
 import { normalizeBootstrapProxyUrl } from './proxy-environment';
@@ -30,6 +32,7 @@ interface StoredProfiles {
   profiles: StoredProfile[];
   scope: ProxyScopeSettings;
   state: ProxyStoredState;
+  subscriptions?: Array<Omit<ProxySubscriptionView, 'profileCount'>>;
   version: 1;
 }
 
@@ -55,7 +58,7 @@ const RUNTIME_STATUSES = new Set<ProxyRuntimeStatus>([
   'stopped',
   'stopping',
 ]);
-const DEFAULT_SCOPE: ProxyScopeSettings = { application: false, cli: true };
+const DEFAULT_SCOPE: ProxyScopeSettings = { application: false, cli: true, conversation: false };
 const DEFAULT_STATE: ProxyStoredState = { runtimeStatus: 'stopped' };
 const MAX_EXTRA_CORE_SOURCES = 16;
 
@@ -75,6 +78,7 @@ const normalizeScope = (scope: ProxyScopeSettings): ProxyScopeSettings => {
   return {
     application: scope.application,
     cli: scope.cli,
+    conversation: scope.conversation === true,
     ...(bootstrapProxyUrl ? { bootstrapProxyUrl } : {}),
     ...(extraCoreSources.length > 0 ? { extraCoreSources } : {}),
   };
@@ -217,6 +221,12 @@ export class ProxyStore {
       })),
       scope: { ...store.scope },
       state: { ...store.state, runtimeStatus: 'stopped' },
+      subscriptions: (store.subscriptions ?? []).map((subscription) => ({
+        ...subscription,
+        profileCount: store.profiles.filter(
+          ({ subscriptionId }) => subscriptionId === subscription.id,
+        ).length,
+      })),
     };
   }
 
@@ -252,6 +262,77 @@ export class ProxyStore {
     return this.getView();
   }
 
+  public replaceSubscription(
+    subscription: ProxySubscriptionInput,
+    inputs: ProxyProfileInput[],
+  ): ProxyStoreView {
+    if (!this.secretStorage.isEncryptionAvailable()) {
+      throw new Error('Windows 凭据加密当前不可用，未保存代理订阅。');
+    }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(subscription.id)) {
+      throw new Error('代理订阅标识无效。');
+    }
+    const url = new URL(subscription.url);
+    if (url.protocol !== 'https:' || url.username || url.password || url.toString().length > 2048) {
+      throw new Error('订阅地址必须是无内嵌凭据的 HTTPS URL。');
+    }
+    const label = requiredText(subscription.label, '订阅名称', 128);
+    const normalized = inputs.map((input) =>
+      normalizeProxyProfile({ ...input, subscriptionId: subscription.id }),
+    );
+    if (normalized.length === 0 || normalized.length > 100) {
+      throw new Error('代理订阅必须包含 1–100 个有效节点。');
+    }
+    const store = this.loadProfiles();
+    const credentials = this.loadCredentials();
+    const removed = store.profiles.filter(
+      ({ subscriptionId }) => subscriptionId === subscription.id,
+    );
+    for (const profile of removed) {
+      if (profile.credentialRef) delete credentials.entries[profile.credentialRef];
+    }
+    store.profiles = store.profiles.filter(
+      ({ subscriptionId }) => subscriptionId !== subscription.id,
+    );
+    for (const entry of normalized) {
+      store.profiles.push(entry.profile);
+      if (entry.profile.credentialRef && entry.credentials) {
+        credentials.entries[entry.profile.credentialRef] = this.encryptJson(entry.credentials);
+      }
+    }
+    credentials.entries[`proxy-subscription:${subscription.id}`] = this.encryptJson({
+      url: url.toString(),
+    });
+    store.subscriptions = [
+      ...(store.subscriptions ?? []).filter(({ id }) => id !== subscription.id),
+      {
+        host: url.hostname,
+        id: subscription.id,
+        label,
+        updatedAt: Date.now(),
+      },
+    ];
+    if (
+      !store.state.selectedProfileId ||
+      !store.profiles.some(({ id }) => id === store.state.selectedProfileId)
+    ) {
+      store.state.selectedProfileId = normalized[0]?.profile.id;
+    }
+    this.persistCredentials(credentials);
+    this.persistProfiles(store);
+    return this.getView();
+  }
+
+  public getSubscriptionSources(): ProxySubscriptionInput[] {
+    const store = this.loadProfiles();
+    return (store.subscriptions ?? []).flatMap((subscription) => {
+      const secret = this.readJson<{ url?: unknown }>(`proxy-subscription:${subscription.id}`);
+      return typeof secret?.url === 'string'
+        ? [{ id: subscription.id, label: subscription.label, url: secret.url }]
+        : [];
+    });
+  }
+
   public removeProfile(id: string): ProxyStoreView {
     const store = this.loadProfiles();
     const profile = store.profiles.find((candidate) => candidate.id === id);
@@ -269,7 +350,11 @@ export class ProxyStore {
   }
 
   public setScope(scope: ProxyScopeSettings): ProxyStoreView {
-    if (typeof scope.cli !== 'boolean' || typeof scope.application !== 'boolean') {
+    if (
+      typeof scope.cli !== 'boolean' ||
+      typeof scope.application !== 'boolean' ||
+      typeof scope.conversation !== 'boolean'
+    ) {
       throw new Error('代理作用域设置无效。');
     }
     const store = this.loadProfiles();
@@ -309,10 +394,17 @@ export class ProxyStore {
         profiles: parsed.profiles.map(hydrateProfile),
         scope: normalizeScope(parsed.scope),
         state: { ...parsed.state, runtimeStatus: 'stopped' },
+        subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [],
         version: 1,
       };
     } catch {
-      return { profiles: [], scope: { ...DEFAULT_SCOPE }, state: { ...DEFAULT_STATE }, version: 1 };
+      return {
+        profiles: [],
+        scope: { ...DEFAULT_SCOPE },
+        state: { ...DEFAULT_STATE },
+        subscriptions: [],
+        version: 1,
+      };
     }
   }
 
@@ -328,14 +420,16 @@ export class ProxyStore {
   }
 
   private readCredential(reference: string): ProxyCredentialInput | undefined {
+    return this.readJson<ProxyCredentialInput>(reference);
+  }
+
+  private readJson<T>(reference: string): T | undefined {
     const encrypted = this.loadCredentials().entries[reference];
     if (!encrypted || !this.secretStorage.isEncryptionAvailable()) {
       return undefined;
     }
     try {
-      return JSON.parse(
-        this.secretStorage.decryptString(Buffer.from(encrypted, 'base64')),
-      ) as ProxyCredentialInput;
+      return JSON.parse(this.secretStorage.decryptString(Buffer.from(encrypted, 'base64'))) as T;
     } catch {
       return undefined;
     }
@@ -346,10 +440,12 @@ export class ProxyStore {
       throw new Error('Windows 凭据加密当前不可用，未保存代理节点。');
     }
     const store = this.loadCredentials();
-    store.entries[reference] = this.secretStorage
-      .encryptString(JSON.stringify(credential))
-      .toString('base64');
+    store.entries[reference] = this.encryptJson(credential);
     this.persistCredentials(store);
+  }
+
+  private encryptJson(value: unknown): string {
+    return this.secretStorage.encryptString(JSON.stringify(value)).toString('base64');
   }
 
   private persistProfiles(store: StoredProfiles): void {

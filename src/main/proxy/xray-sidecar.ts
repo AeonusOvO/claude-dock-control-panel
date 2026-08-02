@@ -271,7 +271,9 @@ export const buildXrayConfig = (
     { protocol: 'blackhole', tag: 'block' },
   ],
   routing: {
-    domainStrategy: 'IPIfNonMatch',
+    // Keep destination hostnames intact until they reach the selected proxy. Resolving them here
+    // would send local DNS queries before the tunnel and defeat the DNS-leak audit's guarantee.
+    domainStrategy: 'AsIs',
     rules: [
       { ip: ['::/0'], outboundTag: 'block', type: 'field' },
       { ip: ['geoip:private'], outboundTag: 'direct', type: 'field' },
