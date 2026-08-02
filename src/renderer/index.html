@@ -446,14 +446,6 @@
             </div>
           </section>
 
-          <section class="router-settings-entry" aria-labelledby="router-settings-entry-title">
-            <div>
-              <strong id="router-settings-entry-title">路由器已迁入全局设置</strong>
-              <span>统一管理内核、服务提供方、模型与卸载；这里不再保留第二份表单。</span>
-            </div>
-            <button id="open-router-settings" type="button">打开路由设置</button>
-          </section>
-
           <section
             class="router-manager"
             id="router-manager"
@@ -834,6 +826,12 @@
                 spellcheck="false"
               />
             </label>
+            <label class="field" for="plugin-category-filter">
+              <span>分类</span>
+              <select id="plugin-category-filter">
+                <option value="all">全部</option>
+              </select>
+            </label>
             <div class="plugin-toolbar__actions" id="plugin-update-actions" hidden>
               <button id="update-all-plugins" type="button" hidden>更新全部</button>
             </div>
@@ -860,7 +858,7 @@
           </div>
           <div class="plugin-panel" data-plugin-panel="marketplaces">
             <div id="plugin-marketplace-list" class="plugin-list" aria-live="polite"></div>
-            <form id="plugin-marketplace-form">
+            <form class="plugin-form-panel" id="plugin-marketplace-form">
               <label class="field" for="plugin-marketplace-source">
                 <span>添加插件市场</span>
                 <input
@@ -883,7 +881,17 @@
             <span>发现 Claude Code 与 Codex CLI 的服务器；安装操作只定向写入 Claude Code。</span>
           </div>
 
-          <div class="mcp-toolbar">
+          <div class="plugin-toolbar">
+            <label class="field" for="mcp-search">
+              <span>搜索 MCP</span>
+              <input
+                id="mcp-search"
+                type="search"
+                maxlength="120"
+                placeholder="名称、说明或配置路径"
+                spellcheck="false"
+              />
+            </label>
             <label class="field" for="mcp-scope-filter">
               <span>作用域</span>
               <select id="mcp-scope-filter">
@@ -893,42 +901,26 @@
                 <option value="local">local · 当前项目私有</option>
               </select>
             </label>
-            <label class="field" for="mcp-search">
-              <span>搜索</span>
-              <input
-                id="mcp-search"
-                type="search"
-                maxlength="120"
-                placeholder="名称、说明或配置路径"
-                spellcheck="false"
-              />
-            </label>
-            <button id="mcp-refresh" type="button">全部刷新</button>
+            <div class="plugin-toolbar__actions">
+              <button id="mcp-refresh" type="button">全部刷新</button>
+            </div>
           </div>
           <p class="plugin-status" id="mcp-status">请选择一个项目以发现 MCP。</p>
 
-          <section class="mcp-section" aria-labelledby="mcp-installed-title">
-            <div class="settings-section-heading">
-              <strong id="mcp-installed-title">已安装</strong>
-              <span id="mcp-installed-count">0</span>
-            </div>
-            <div id="mcp-installed-list" class="plugin-list" aria-live="polite"></div>
-            <div class="mcp-backups">
-              <label class="field" for="mcp-backup-select">
-                <span>配置备份</span>
-                <select id="mcp-backup-select">
-                  <option value="">暂无可还原备份</option>
-                </select>
-              </label>
-              <button id="mcp-backup-restore" type="button" disabled>还原所选备份</button>
-            </div>
-          </section>
+          <nav class="plugin-tabs" aria-label="MCP 分组">
+            <button class="plugin-tab plugin-tab--active" data-mcp-tab="installed" type="button">
+              已安装 <span id="mcp-installed-count">0</span>
+            </button>
+            <button class="plugin-tab" data-mcp-tab="catalog" type="button">
+              可安装 <span id="mcp-catalog-count">0</span>
+            </button>
+            <button class="plugin-tab" data-mcp-tab="backups" type="button">配置备份</button>
+          </nav>
 
-          <section class="mcp-section" aria-labelledby="mcp-catalog-title">
-            <div class="settings-section-heading">
-              <strong id="mcp-catalog-title">精选与官方注册表</strong>
-              <span>每次只安装你明确选择的一项；默认 user 作用域。</span>
-            </div>
+          <div class="plugin-panel plugin-panel--active" data-mcp-panel="installed">
+            <div id="mcp-installed-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-mcp-panel="catalog">
             <label class="field mcp-install-scope" for="mcp-install-scope">
               <span>新安装作用域</span>
               <select id="mcp-install-scope">
@@ -936,9 +928,22 @@
                 <option value="project">project · 项目共享</option>
                 <option value="local">local · 当前项目私有</option>
               </select>
+              <small>每次只安装你明确选择的一项；默认 user 作用域。</small>
             </label>
             <div id="mcp-catalog-list" class="plugin-list" aria-live="polite"></div>
-          </section>
+          </div>
+          <div class="plugin-panel" data-mcp-panel="backups">
+            <div class="plugin-form-panel mcp-backups">
+              <label class="field" for="mcp-backup-select">
+                <span>配置备份</span>
+                <select id="mcp-backup-select">
+                  <option value="">暂无可还原备份</option>
+                </select>
+                <small>每次写入前都会留下可逐字节还原的备份。</small>
+              </label>
+              <button id="mcp-backup-restore" type="button" disabled>还原所选备份</button>
+            </div>
+          </div>
         </section>
       </aside>
 

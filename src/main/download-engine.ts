@@ -1,6 +1,6 @@
 import type { DownloadItem, Event } from 'electron';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import type { DownloadTaskState, DownloadTaskView } from '../shared/contracts';
@@ -41,16 +41,23 @@ export interface DownloadSession {
 }
 
 interface ActiveDownload {
+  /** How many automatic continuations this task has already spent. */
+  autoResumeAttempts: number;
+  autoResumeTimer?: ReturnType<typeof setTimeout>;
   item?: DownloadItem;
   journalEntry?: DownloadJournalEntry;
   lastJournalAt: number;
   lastSampleAt: number;
   lastSampleBytes: number;
+  /** Set while an automatic continuation is in flight, so stalls are not counted twice. */
+  pendingAutoResume: boolean;
   releaseBusy: () => void;
   reject: (error: Error) => void;
   request: DownloadRequest;
   resolve: (result: DownloadResult) => void;
   restored: boolean;
+  /** Set when the next item bound to this task should start itself instead of waiting for the user. */
+  resumeOnBind: boolean;
   settled: boolean;
   stallBytes: number;
   stallTimer?: ReturnType<typeof setTimeout>;
@@ -62,11 +69,24 @@ const SPEED_EMA_ALPHA = 0.3;
 const SPEED_SAMPLE_MINIMUM_MS = 500;
 const JOURNAL_WRITE_INTERVAL_MS = 1_000;
 /**
- * How long a running download may receive zero bytes before it is declared dead. Without this a
- * blocked or blackholed connection never emits `done`, so the task sits at 0% forever and whatever
- * is awaiting it — the Xray-core bootstrap, for one — hangs with no way to recover.
+ * How long a running download may receive zero bytes before the connection is treated as dead.
+ * Blocked or blackholed sockets never emit `done`, so without this the task sits at 0% forever and
+ * whatever is awaiting it — the Xray-core bootstrap, for one — hangs with no way to recover.
+ * Hitting the timeout no longer fails the task: it triggers an automatic continuation instead.
  */
-const STALL_TIMEOUT_MS = 60_000;
+const STALL_TIMEOUT_MS = 45_000;
+/**
+ * Large assets on throttled routes routinely die several times mid-transfer, each attempt moving the
+ * file a few megabytes further. Retrying that many times is what turns "core download always fails"
+ * into a download that eventually finishes, because every attempt resumes from the bytes on disk.
+ */
+const MAX_AUTO_RESUME_ATTEMPTS = 12;
+const AUTO_RESUME_BASE_DELAY_MS = 1_000;
+const AUTO_RESUME_MAX_DELAY_MS = 15_000;
+/** Chromium clears a cancelled item's staging file asynchronously; let that land before rebinding. */
+const REBIND_SETTLE_MS = 400;
+/** Suffix for the prefix snapshot taken before a cancel, so cancellation cannot erase progress. */
+const RESUME_SNAPSHOT_SUFFIX = '.resume';
 
 export const exponentialMovingAverage = (
   previous: number,
@@ -131,9 +151,13 @@ export class DownloadEngine {
     if (task.settled) {
       return { ...task.view };
     }
-    if (task.item) {
+    // A cancel during an automatic continuation has no live item to stop, so settle it directly.
+    const wasRetrying = task.pendingAutoResume;
+    this.clearAutoResumeTimer(task);
+    if (task.item && !wasRetrying) {
       task.item.cancel();
     } else {
+      task.item?.cancel();
       this.settleCancelled(task);
     }
     return { ...task.view };
@@ -177,6 +201,12 @@ export class DownloadEngine {
 
   public resume(taskId: string): DownloadTaskView {
     const task = this.requireActiveTask(taskId);
+    if (task.pendingAutoResume) {
+      // Asking to continue during the backoff window just runs the pending attempt right now.
+      this.clearAutoResumeTimer(task);
+      this.runAutoResume(task);
+      return { ...task.view };
+    }
     if (!task.item || !task.item.canResume()) {
       throw new Error('当前下载不能继续。');
     }
@@ -277,23 +307,189 @@ export class DownloadEngine {
    */
   private armStallTimer(task: ActiveDownload): void {
     this.clearStallTimer(task);
-    if (task.settled) {
+    if (task.settled || task.pendingAutoResume) {
       return;
     }
     task.stallTimer = setTimeout(() => {
-      if (task.settled) {
-        return;
-      }
+      this.scheduleAutoResume(task, `${Math.round(STALL_TIMEOUT_MS / 1000)} 秒内没有收到任何数据`);
+    }, STALL_TIMEOUT_MS);
+    task.stallTimer.unref?.();
+  }
+
+  /**
+   * Single entry point for every recoverable interruption: stalls, resets and non-resumable aborts.
+   * Progress already on disk is always preserved, so each attempt starts where the last one died.
+   */
+  private scheduleAutoResume(task: ActiveDownload, reason: string): void {
+    if (task.settled || task.pendingAutoResume) {
+      return;
+    }
+    this.clearStallTimer(task);
+    if (task.autoResumeAttempts >= MAX_AUTO_RESUME_ATTEMPTS) {
+      // The journal is kept so the next app start can still offer to continue from these bytes.
       this.fail(
         task,
         new Error(
-          `${Math.round(STALL_TIMEOUT_MS / 1000)} 秒内没有收到任何数据，下载已停止。请检查网络连接或系统代理设置后重试。`,
+          `${reason}；已自动续传 ${MAX_AUTO_RESUME_ATTEMPTS} 次仍未完成，请检查网络或代理设置后重试。`,
         ),
+        true,
       );
-      task.item?.cancel();
-      this.deletePartial(task);
-    }, STALL_TIMEOUT_MS);
-    task.stallTimer.unref?.();
+      return;
+    }
+    task.autoResumeAttempts += 1;
+    task.pendingAutoResume = true;
+    const delay = Math.min(
+      AUTO_RESUME_MAX_DELAY_MS,
+      AUTO_RESUME_BASE_DELAY_MS * 2 ** (task.autoResumeAttempts - 1),
+    );
+    task.view = {
+      ...task.view,
+      canPause: false,
+      canResume: false,
+      errorMessage: `${reason}，正在自动续传（第 ${task.autoResumeAttempts}/${MAX_AUTO_RESUME_ATTEMPTS} 次）…`,
+      state: 'paused',
+    };
+    this.notify();
+    task.autoResumeTimer = setTimeout(() => {
+      this.runAutoResume(task);
+    }, delay);
+    task.autoResumeTimer.unref?.();
+  }
+
+  private runAutoResume(task: ActiveDownload): void {
+    if (task.settled) {
+      return;
+    }
+    const item = task.item;
+    if (item && item.getState() === 'interrupted' && item.canResume()) {
+      // Chromium still owns a resumable request: continuing it re-issues a ranged GET by itself.
+      task.pendingAutoResume = false;
+      item.resume();
+      task.view = {
+        ...task.view,
+        canPause: true,
+        canResume: false,
+        errorMessage: undefined,
+        state: 'progressing',
+      };
+      this.armStallTimer(task);
+      this.notify();
+      return;
+    }
+    this.rebindFromDisk(task);
+  }
+
+  /**
+   * Drops the current item and rebuilds the request from whatever is already on disk. A cancel wipes
+   * Chromium's staging file, so a prefix snapshot is taken first — downloads only ever append, which
+   * makes any prefix a valid resume point even if the copy races the writer.
+   */
+  private rebindFromDisk(task: ActiveDownload): void {
+    const savePath = `${task.request.finalPath}.partial`;
+    const snapshotPath = `${savePath}${RESUME_SNAPSHOT_SUFFIX}`;
+    let offset = 0;
+    try {
+      copyFileSync(savePath, snapshotPath);
+      offset = statSync(snapshotPath).size;
+    } catch {
+      offset = 0;
+    }
+    const item = task.item;
+    task.item = undefined;
+    if (item && item.getState() !== 'completed' && item.getState() !== 'cancelled') {
+      item.cancel();
+    }
+    task.autoResumeTimer = setTimeout(() => {
+      this.relaunchFromSnapshot(task, savePath, snapshotPath, offset);
+    }, REBIND_SETTLE_MS);
+    task.autoResumeTimer.unref?.();
+  }
+
+  private relaunchFromSnapshot(
+    task: ActiveDownload,
+    savePath: string,
+    snapshotPath: string,
+    snapshotBytes: number,
+  ): void {
+    if (task.settled) {
+      return;
+    }
+    task.pendingAutoResume = false;
+    let offset = snapshotBytes;
+    try {
+      if (existsSync(snapshotPath)) {
+        if (existsSync(savePath)) {
+          unlinkSync(savePath);
+        }
+        renameSync(snapshotPath, savePath);
+      } else {
+        offset = 0;
+      }
+    } catch {
+      offset = 0;
+    }
+
+    const entry = task.journalEntry;
+    if (offset > 0 && entry && entry.length > offset && entry.urlChain.length > 0) {
+      task.restored = true;
+      task.resumeOnBind = true;
+      task.lastSampleAt = Date.now();
+      task.lastSampleBytes = offset;
+      task.stallBytes = offset;
+      task.view = {
+        ...task.view,
+        errorMessage: undefined,
+        receivedBytes: offset,
+        state: 'paused',
+      };
+      this.pendingRestores.push(task);
+      try {
+        this.electronSession.createInterruptedDownload({
+          eTag: entry.eTag,
+          lastModified: entry.lastModified,
+          length: entry.length,
+          offset,
+          path: savePath,
+          startTime: entry.startTime,
+          urlChain: entry.urlChain,
+        });
+        this.armStallTimer(task);
+        this.notify();
+        return;
+      } catch {
+        // A rejected recovery record just means this attempt starts over from the original URL.
+        const index = this.pendingRestores.indexOf(task);
+        if (index >= 0) {
+          this.pendingRestores.splice(index, 1);
+        }
+      }
+    }
+
+    this.deletePartial(task);
+    task.restored = false;
+    task.resumeOnBind = false;
+    task.lastSampleAt = Date.now();
+    task.lastSampleBytes = 0;
+    task.stallBytes = 0;
+    task.view = { ...task.view, bytesPerSecond: 0, percent: -1, receivedBytes: 0, state: 'queued' };
+    const pending = this.pendingByUrl.get(task.request.url) ?? [];
+    pending.push(task);
+    this.pendingByUrl.set(task.request.url, pending);
+    this.notify();
+    try {
+      this.electronSession.downloadURL(task.request.url);
+      this.armStallTimer(task);
+    } catch (error) {
+      this.fail(task, error instanceof Error ? error : new Error('无法重新启动下载。'));
+    }
+  }
+
+  private clearAutoResumeTimer(task: ActiveDownload): void {
+    if (task.autoResumeTimer) {
+      clearTimeout(task.autoResumeTimer);
+      task.autoResumeTimer = undefined;
+    }
+    task.pendingAutoResume = false;
   }
 
   private clearStallTimer(task: ActiveDownload): void {
@@ -329,15 +525,18 @@ export class DownloadEngine {
       severity: 'resumable',
     });
     const task: ActiveDownload = {
+      autoResumeAttempts: 0,
       journalEntry,
       lastJournalAt: 0,
       lastSampleAt: startedAt,
       lastSampleBytes: journalEntry?.receivedBytes ?? 0,
+      pendingAutoResume: false,
       reject,
       releaseBusy,
       request: { ...request },
       resolve,
       restored: Boolean(journalEntry),
+      resumeOnBind: false,
       settled: false,
       stallBytes: journalEntry?.receivedBytes ?? 0,
       startedAt,
@@ -395,19 +594,35 @@ export class DownloadEngine {
     }
     this.updateFromItem(task, task.restored ? 'interrupted' : 'progressing');
     item.on('updated', (_updatedEvent, state) => {
+      // A rebound task keeps older items alive for a moment; only the current one owns the view.
+      if (task.item !== item) {
+        return;
+      }
       this.updateFromItem(task, state);
     });
     item.on('done', (_doneEvent, state) => {
+      if (task.item !== item) {
+        return;
+      }
       if (state === 'completed') {
         void this.complete(task);
       } else if (state === 'cancelled') {
         this.settleCancelled(task);
       } else if (item.canResume()) {
         this.updateFromItem(task, 'interrupted');
+        this.scheduleAutoResume(task, '连接已中断');
       } else {
-        this.fail(task, new Error('下载已中断，且服务器不支持继续下载。'));
+        // Chromium discarded its staging file, so the next attempt starts over from the source.
+        this.scheduleAutoResume(task, '连接已中断且无法就地续传');
       }
     });
+    if (task.resumeOnBind) {
+      task.resumeOnBind = false;
+      if (item.canResume()) {
+        item.resume();
+        this.armStallTimer(task);
+      }
+    }
   }
 
   private async complete(task: ActiveDownload): Promise<void> {
@@ -415,6 +630,7 @@ export class DownloadEngine {
       return;
     }
     this.clearStallTimer(task);
+    this.clearAutoResumeTimer(task);
     try {
       task.view = {
         ...task.view,
@@ -454,6 +670,7 @@ export class DownloadEngine {
       return;
     }
     this.clearStallTimer(task);
+    this.clearAutoResumeTimer(task);
     task.settled = true;
     task.view = {
       ...task.view,
@@ -574,6 +791,7 @@ export class DownloadEngine {
       return;
     }
     this.clearStallTimer(task);
+    this.clearAutoResumeTimer(task);
     task.settled = true;
     this.deletePartial(task);
     task.view = {
@@ -638,7 +856,7 @@ export class DownloadEngine {
       totalBytes,
     };
     if (mappedState === 'failed') {
-      this.fail(task, new Error('下载已中断；重启 ClaudeDock 后可以从日志尝试恢复。'), true);
+      this.scheduleAutoResume(task, '连接已中断');
       return;
     }
     this.persistTask(task);
@@ -646,10 +864,12 @@ export class DownloadEngine {
   }
 
   private deletePartial(task: ActiveDownload): void {
-    try {
-      unlinkSync(`${task.request.finalPath}.partial`);
-    } catch {
-      // Queued cancellation and Chromium cleanup can both leave no partial file.
+    for (const suffix of ['.partial', `.partial${RESUME_SNAPSHOT_SUFFIX}`]) {
+      try {
+        unlinkSync(`${task.request.finalPath}${suffix}`);
+      } catch {
+        // Queued cancellation and Chromium cleanup can both leave no partial file.
+      }
     }
   }
 

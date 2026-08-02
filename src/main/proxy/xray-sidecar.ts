@@ -24,6 +24,16 @@ export const XRAY_CORE_RELEASE = Object.freeze({
   version: 'v26.3.27',
 });
 
+/*
+ * The safety ceiling deliberately is not `XRAY_CORE_RELEASE.bytes`. `maxBytes` exists to stop an
+ * unbounded or hostile response from filling the disk, and it is enforced mid-transfer against
+ * `getTotalBytes()`; pinning it to the exact asset size means a release republished even one byte
+ * larger fails instantly and unrecoverably, which reads to the user as "the core never downloads".
+ * Exactness is already guaranteed at the end by `expectedBytes` plus `expectedSha256`, so the
+ * in-flight ceiling only needs to be tight enough to bound the damage.
+ */
+const MAX_CORE_ARCHIVE_BYTES = 64 * 1024 * 1024;
+
 interface XrayProfile extends ProxyProfileView {
   credentials?: ProxyCredentialInput;
 }
@@ -469,7 +479,7 @@ export class XraySidecar {
       finalPath: archivePath,
       id: `xray-core-${XRAY_CORE_RELEASE.version}`,
       label: `Xray-core ${XRAY_CORE_RELEASE.version}`,
-      maxBytes: XRAY_CORE_RELEASE.bytes,
+      maxBytes: MAX_CORE_ARCHIVE_BYTES,
       url: `https://github.com/XTLS/Xray-core/releases/download/${XRAY_CORE_RELEASE.version}/${XRAY_CORE_RELEASE.fileName}`,
     });
     mkdirSync(this.coreDirectory, { recursive: true });

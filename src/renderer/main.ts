@@ -330,7 +330,6 @@ const openProviderDocsButton = requiredElement<HTMLButtonElement>('#open-provide
 const connectionAdvancedContent = requiredElement<HTMLElement>('#connection-advanced-content');
 const routerSettingsContent = requiredElement<HTMLElement>('#router-settings-content');
 const routerCapabilityList = requiredElement<HTMLElement>('#router-capability-list');
-const openRouterSettingsButton = requiredElement<HTMLButtonElement>('#open-router-settings');
 const routerWizardForm = requiredElement<HTMLFormElement>('#router-wizard-form');
 const routerWizardProvider = requiredElement<HTMLSelectElement>('#router-wizard-provider');
 const routerWizardBaseUrlField = requiredElement<HTMLElement>('#router-wizard-base-url-field');
@@ -488,6 +487,7 @@ const routerManager = requiredElement<HTMLElement>('#router-manager');
 const routerActions = requiredElement<HTMLElement>('#router-actions');
 const workbenchScope = requiredElement<HTMLElement>('#workbench-scope');
 const pluginSearch = requiredElement<HTMLInputElement>('#plugin-search');
+const pluginCategoryFilter = requiredElement<HTMLSelectElement>('#plugin-category-filter');
 const refreshUpdatesButton = requiredElement<HTMLButtonElement>('#refresh-updates');
 const updateAllPluginsButton = requiredElement<HTMLButtonElement>('#update-all-plugins');
 const pluginUpdateActions = requiredElement<HTMLElement>('#plugin-update-actions');
@@ -511,6 +511,7 @@ const mcpBackupSelect = requiredElement<HTMLSelectElement>('#mcp-backup-select')
 const mcpBackupRestore = requiredElement<HTMLButtonElement>('#mcp-backup-restore');
 const mcpInstallScope = requiredElement<HTMLSelectElement>('#mcp-install-scope');
 const mcpCatalogList = requiredElement<HTMLElement>('#mcp-catalog-list');
+const mcpCatalogCount = requiredElement<HTMLElement>('#mcp-catalog-count');
 const claudeUpdateDetail = requiredElement<HTMLElement>('#claude-update-detail');
 const claudeUpdateVersion = requiredElement<HTMLElement>('#claude-update-version');
 const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-checked-at');
@@ -757,6 +758,14 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
       : -1;
   document.body.dataset.downloading = String(running);
   openDownloadCenterButton.dataset.active = String(active.length > 0);
+  /*
+   * The frame morphs square → circle while work is in flight, so "active" has to mean the same
+   * thing here as it does to the user: queued, running, paused or verifying. A queue that is
+   * entirely paused keeps the circle but freezes and recolours the arc instead of spinning it.
+   */
+  openDownloadCenterButton.dataset.paused = String(
+    active.length > 0 && !running && active.every(({ state }) => state === 'paused'),
+  );
   openDownloadCenterButton.dataset.indeterminate = String(aggregatePercent < 0);
   openDownloadCenterButton.style.setProperty(
     '--download-progress',
@@ -1177,6 +1186,13 @@ let connectionHistoryMutationInProgress = false;
 let pluginCatalog: ClaudePluginCatalog | undefined;
 let pluginLoadPromise: Promise<void> | undefined;
 let pluginMutationInProgress = false;
+/*
+ * Mirrors the MCP page: the plugin lists are rebuilt wholesale on every keystroke and every mutation,
+ * so without a memory of what was already on screen every card replayed its entrance animation and
+ * typing in the search box read as the whole panel strobing. Only genuinely new cards animate.
+ */
+let pluginRenderedContext: string | null = null;
+let pluginRenderedKeys: ReadonlySet<string> = new Set<string>();
 let mcpCatalog: McpCatalog | undefined;
 let mcpLoadPromise: Promise<void> | undefined;
 let mcpMutationInProgress = false;
@@ -5928,12 +5944,49 @@ const pluginMatchesSearch = (plugin: ClaudePluginView, needle: string): boolean 
     ].some((field) => field.toLowerCase().includes(needle));
   })();
 
+const pluginCategory = (plugin: ClaudePluginView): string => localizePluginCopy(plugin).category;
+
+/**
+ * The category dropdown mirrors MCP's 作用域 filter: same control, same position in the toolbar, same
+ * "全部" default. Its options are derived from the catalogue rather than hard-coded, so a market that
+ * ships plugins in a category the localizer has not seen before is still reachable, and a category
+ * nobody has installed does not sit in the list as a dead end. The current pick survives a refresh
+ * whenever it still matches something.
+ */
+const syncPluginCategoryOptions = (catalog: ClaudePluginCatalog): void => {
+  const categories = [
+    ...new Set([...catalog.installed, ...catalog.available].map(pluginCategory)),
+  ].sort((left, right) => left.localeCompare(right, 'zh-CN'));
+  const previous = pluginCategoryFilter.value;
+  const options = [
+    Object.assign(document.createElement('option'), { textContent: '全部', value: 'all' }),
+    ...categories.map((category) =>
+      Object.assign(document.createElement('option'), {
+        textContent: category,
+        value: category,
+      }),
+    ),
+  ];
+  pluginCategoryFilter.replaceChildren(...options);
+  pluginCategoryFilter.value = categories.includes(previous) ? previous : 'all';
+};
+
 const selectPluginTab = (tab: string): void => {
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-tab]')) {
     button.classList.toggle('plugin-tab--active', button.dataset.pluginTab === tab);
   }
   for (const panel of document.querySelectorAll<HTMLElement>('[data-plugin-panel]')) {
     panel.classList.toggle('plugin-panel--active', panel.dataset.pluginPanel === tab);
+  }
+};
+
+/** Same tab machinery as the plugins page, pointed at the MCP page's data attributes. */
+const selectMcpTab = (tab: string): void => {
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-mcp-tab]')) {
+    button.classList.toggle('plugin-tab--active', button.dataset.mcpTab === tab);
+  }
+  for (const panel of document.querySelectorAll<HTMLElement>('[data-mcp-panel]')) {
+    panel.classList.toggle('plugin-panel--active', panel.dataset.mcpPanel === tab);
   }
 };
 
@@ -6059,10 +6112,11 @@ const pluginActionButton = (
   return button;
 };
 
-const renderPluginCard = (plugin: ClaudePluginView): HTMLElement => {
+const renderPluginCard = (plugin: ClaudePluginView, fresh: boolean): HTMLElement => {
   const card = document.createElement('article');
   card.className = 'plugin-card';
   card.dataset.enabled = String(plugin.enabled);
+  card.dataset.fresh = String(fresh);
   /*
    * The dimmed treatment means "installed but switched off", so it needs the installation state as
    * well: a plugin in the 可安装 list is also `enabled: false`, and keying the dimming on that alone
@@ -6177,6 +6231,7 @@ const renderPluginList = (
   container: HTMLElement,
   plugins: ClaudePluginView[],
   emptyMessage: string,
+  isFresh: (plugin: ClaudePluginView) => boolean,
 ): void => {
   container.replaceChildren();
   if (plugins.length === 0) {
@@ -6187,18 +6242,30 @@ const renderPluginList = (
     return;
   }
   for (const plugin of plugins) {
-    container.append(renderPluginCard(plugin));
+    container.append(renderPluginCard(plugin, isFresh(plugin)));
   }
 };
 
 function renderPluginCatalog(catalog: ClaudePluginCatalog): void {
   pluginCatalog = catalog;
+  syncPluginCategoryOptions(catalog);
   const needle = pluginSearch.value.trim().toLowerCase();
-  const installed = catalog.installed.filter((plugin) => pluginMatchesSearch(plugin, needle));
+  const categoryFilter = pluginCategoryFilter.value;
+  const matches = (plugin: ClaudePluginView): boolean =>
+    (categoryFilter === 'all' || pluginCategory(plugin) === categoryFilter) &&
+    pluginMatchesSearch(plugin, needle);
+  const installed = catalog.installed.filter(matches);
   const installedKeys = new Set(catalog.installed.map(pluginKey));
   const available = catalog.available
     .filter((plugin) => !installedKeys.has(pluginKey(plugin)))
-    .filter((plugin) => pluginMatchesSearch(plugin, needle));
+    .filter(matches);
+
+  const renderContext = `${categoryFilter}|${needle}`;
+  const previousKeys = pluginRenderedContext === renderContext ? pluginRenderedKeys : null;
+  const isFresh = (plugin: ClaudePluginView): boolean =>
+    previousKeys === null || !previousKeys.has(pluginKey(plugin));
+  pluginRenderedContext = renderContext;
+  pluginRenderedKeys = new Set([...catalog.installed, ...catalog.available].map(pluginKey));
 
   pluginInstalledCount.textContent = String(installed.length);
   pluginAvailableCount.textContent = String(available.length);
@@ -6215,17 +6282,20 @@ function renderPluginCatalog(catalog: ClaudePluginCatalog): void {
       })}`
     : catalog.message;
 
+  const filtered = needle !== '' || categoryFilter !== 'all';
   renderPluginList(
     pluginInstalledList,
     installed,
-    needle ? '没有匹配的已安装插件。' : '还没有安装任何插件。到“可安装”里挑一个吧。',
+    filtered ? '没有匹配当前筛选条件的已安装插件。' : '还没有安装任何插件。到“可安装”里挑一个吧。',
+    isFresh,
   );
   renderPluginList(
     pluginAvailableList,
     available,
-    needle
-      ? '没有匹配的可安装插件。'
+    filtered
+      ? '没有匹配当前筛选条件的可安装插件。'
       : '当前插件市场里没有更多可安装的插件；可以在下面添加新的市场。',
+    isFresh,
   );
 
   pluginMarketplaceList.replaceChildren();
@@ -6236,7 +6306,7 @@ function renderPluginCatalog(catalog: ClaudePluginCatalog): void {
     pluginMarketplaceList.append(empty);
   }
   for (const marketplace of catalog.marketplaces) {
-    pluginMarketplaceList.append(renderMarketplaceCard(marketplace));
+    pluginMarketplaceList.append(renderMarketplaceCard(marketplace, previousKeys === null));
   }
   addPluginMarketplaceButton.disabled = pluginMutationInProgress || !catalog.cliAvailable;
   updateAllPluginsButton.disabled =
@@ -6244,9 +6314,13 @@ function renderPluginCatalog(catalog: ClaudePluginCatalog): void {
   syncUpdateActionVisibility();
 }
 
-const renderMarketplaceCard = (marketplace: ClaudePluginMarketplaceView): HTMLElement => {
+const renderMarketplaceCard = (
+  marketplace: ClaudePluginMarketplaceView,
+  fresh: boolean,
+): HTMLElement => {
   const card = document.createElement('article');
   card.className = 'plugin-card plugin-card--marketplace';
+  card.dataset.fresh = String(fresh);
 
   const header = document.createElement('div');
   header.className = 'plugin-card__header';
@@ -6536,6 +6610,7 @@ function renderMcpCatalog(catalog: McpCatalog): void {
   mcpRenderedContext = renderContext;
   mcpRenderedKeys = new Set(catalog.installed.map(mcpServerKey));
   mcpInstalledCount.textContent = String(installed.length);
+  mcpCatalogCount.textContent = String(available.length);
   mcpStatus.textContent = `${catalog.message} · 上次读取 ${new Date(catalog.checkedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
   mcpInstalledList.replaceChildren();
   if (!cwd || installed.length === 0) {
@@ -6544,15 +6619,13 @@ function renderMcpCatalog(catalog: McpCatalog): void {
     empty.textContent = cwd
       ? needle || scopeFilter !== 'all'
         ? '没有匹配当前筛选条件的 MCP。'
-        : '当前没有发现 MCP。可以从下方精选目录定向安装一个。'
+        : '当前没有发现 MCP。可以从“可安装”里定向安装一个。'
       : '请先打开一个项目，再发现或安装 MCP。';
     if (cwd && !needle && scopeFilter === 'all') {
       const browse = document.createElement('button');
       browse.type = 'button';
       browse.textContent = '去目录看看';
-      browse.addEventListener('click', () =>
-        mcpCatalogList.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      );
+      browse.addEventListener('click', () => selectMcpTab('catalog'));
       empty.append(document.createElement('br'), browse);
     }
     mcpInstalledList.append(empty);
@@ -7750,26 +7823,34 @@ const activateProject = async (sessionId: string): Promise<void> => {
   requestComposerFocus(result.state.activeSessionId);
 };
 
+/**
+ * Closing a running conversation is an archive, not a deletion: the terminal process stops, and the
+ * conversation itself stays on disk under 历史对话. The folder is expanded and its history re-read
+ * afterwards so the row visibly lands there instead of appearing to vanish.
+ */
 const closeProject = async (status: TerminalStatus): Promise<void> => {
   if (
     status.phase === 'running' &&
     !(await requestConfirmation({
-      confirmLabel: '关闭对话',
-      message: `关闭“${status.title}”会终止它的终端进程，是否继续？`,
+      confirmLabel: '关闭并归档',
+      message: `“${status.title}”还在运行。关闭会先停止它的终端进程，对话本身会归档到“历史对话”，随时可以恢复。`,
       title: '关闭正在运行的对话',
-      tone: 'danger',
+      tone: 'default',
     }))
   ) {
     return;
   }
 
+  const projectPath = status.cwd;
   const result = await window.controlPanel.closeProject(status.id);
   if (!result.ok) {
     showToast(result.error ?? '无法关闭这个对话。', 'error');
     return;
   }
   renderWorkspace(result.state);
-  showToast(`已关闭 ${status.title}`);
+  expandedFolders.add(projectPath.toLowerCase());
+  void loadFolderHistory(projectPath, true);
+  showToast(`已关闭“${status.title}”，可在历史对话中恢复`);
 };
 
 const openConversation = async (projectPath: string): Promise<void> => {
@@ -7976,8 +8057,8 @@ const renderConversationRow = (status: TerminalStatus): HTMLElement => {
   closeButton.className = 'conversation-item__action conversation-item__action--close';
   closeButton.type = 'button';
   closeButton.textContent = '×';
-  closeButton.title = `关闭 ${status.title}`;
-  closeButton.setAttribute('aria-label', `关闭对话 ${status.title}`);
+  closeButton.title = `关闭并归档 ${status.title}`;
+  closeButton.setAttribute('aria-label', `关闭对话 ${status.title}，归档到历史对话`);
   closeButton.addEventListener('click', () => {
     void closeProject(status);
   });
@@ -7991,7 +8072,6 @@ const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): 
   row.className = 'history-item';
   row.setAttribute('role', 'listitem');
   row.title = `恢复或删除历史对话：${session.sessionId}`;
-
   const selectButton = document.createElement('button');
   selectButton.className = 'history-item__select';
   selectButton.type = 'button';
@@ -9141,6 +9221,11 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-
     selectPluginTab(button.dataset.pluginTab ?? 'installed');
   });
 }
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-mcp-tab]')) {
+  button.addEventListener('click', () => {
+    selectMcpTab(button.dataset.mcpTab ?? 'installed');
+  });
+}
 refreshUpdatesButton.addEventListener('click', () => {
   void refreshAvailableUpdates(true);
 });
@@ -9166,6 +9251,11 @@ updateAllPluginsButton.addEventListener('click', () => {
   );
 });
 pluginSearch.addEventListener('input', () => {
+  if (pluginCatalog) {
+    renderPluginCatalog(pluginCatalog);
+  }
+});
+pluginCategoryFilter.addEventListener('change', () => {
   if (pluginCatalog) {
     renderPluginCatalog(pluginCatalog);
   }
@@ -9486,10 +9576,6 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-setting
     );
   });
 }
-openRouterSettingsButton.addEventListener('click', () => {
-  openAdvancedConnectionDialog();
-  selectSettingsTab('router');
-});
 routerWizardProvider.addEventListener('change', () => {
   routerWizardBaseUrl.value = '';
   routerWizardModel.value = '';

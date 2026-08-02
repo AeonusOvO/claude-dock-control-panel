@@ -130,6 +130,19 @@ import { auditWebRtc } from './proxy/webrtc-audit';
 app.enableSandbox();
 registerArtifactScheme();
 
+/*
+ * Electron's default handler turns any stray main-process rejection into a modal
+ * "A JavaScript error occurred in the main process" dialog, which is a far worse outcome than a
+ * degraded feature. Background work (tray balloons, journal writes, sidecar teardown) is logged and
+ * swallowed instead; a genuinely fatal failure still takes the app down through the normal paths.
+ */
+process.on('uncaughtException', (error) => {
+  console.error('[main] 未捕获异常。', error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] 未处理的 Promise 拒绝。', reason);
+});
+
 let isQuitting = false;
 /*
  * Quitting is a two-step handshake when work is in flight. `before-quit` cannot wait on a promise, so
@@ -407,14 +420,23 @@ const showMainWindow = (): void => {
 
 const hideMainWindowToTray = (): void => {
   mainWindow?.hide();
-  const preferences = appPreferencesStore.get();
-  if (!preferences.closeToTrayNoticeShown && tray) {
-    tray.displayBalloon({
-      content: 'ClaudeDock 已最小化到托盘，后台继续运行。可在 设置 → 通用 中修改关闭行为。',
-      iconType: 'info',
-      title: 'ClaudeDock 仍在后台运行',
-    });
-    appPreferencesStore.set({ closeToTrayNoticeShown: true });
+  /*
+   * Hiding to the tray must never surface as a crash dialog. The balloon and the "already told you"
+   * flag are both conveniences, so a storage failure downgrades to a log line instead of an
+   * uncaught exception in the main process.
+   */
+  try {
+    const preferences = appPreferencesStore.get();
+    if (!preferences.closeToTrayNoticeShown && tray) {
+      tray.displayBalloon({
+        content: 'ClaudeDock 已最小化到托盘，后台继续运行。可在 设置 → 通用 中修改关闭行为。',
+        iconType: 'info',
+        title: 'ClaudeDock 仍在后台运行',
+      });
+      appPreferencesStore.set({ closeToTrayNoticeShown: true });
+    }
+  } catch (error) {
+    console.error('[tray] 记录托盘提示状态失败。', error);
   }
 };
 

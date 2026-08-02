@@ -732,17 +732,78 @@ describe('MCP panel theming and motion', () => {
   /*
    * `全部刷新` was the last button in the panel that no project selector ever matched, so Chromium
    * painted it with the user-agent default — a grey native Windows button in the middle of a themed
-   * toolbar. It joins the tint-button family rather than getting a one-off rule.
+   * toolbar. It now sits in the shared `.plugin-toolbar`, which is the same toolbar the plugins page
+   * builds, so the two pages cannot drift apart and neither can fall back to the native paint.
    */
-  it('paints the MCP toolbar refresh button with the shared tint-button treatment', () => {
+  it('paints the MCP toolbar refresh button with the shared plugin-toolbar treatment', () => {
     expect(rendererMarkup).toContain('<button id="mcp-refresh" type="button">全部刷新</button>');
-    const tintFamily = [...rendererStyles.matchAll(/\.mcp-toolbar > button[^,{]*[,{]/g)].map(
-      (match) => match[0],
+    // The refresh button has to be inside the shared toolbar, not a one-off MCP container.
+    expect(rendererMarkup).toMatch(
+      /<div class="plugin-toolbar">[\s\S]*?id="mcp-search"[\s\S]*?id="mcp-scope-filter"[\s\S]*?id="mcp-refresh"[\s\S]*?<\/div>/,
     );
+    expect(rendererStyles).not.toContain('.mcp-toolbar');
 
-    // Base paint, hover response and transition all have to list the selector.
-    expect(tintFamily.length).toBeGreaterThanOrEqual(3);
-    expect(rendererStyles).toContain('.mcp-toolbar > button:hover:not(:disabled),');
+    // Base paint, hover response and transition all have to reach the button.
+    expect(rendererStyles).toMatch(
+      /\n\.plugin-toolbar button \{[\s\S]*?background: var\(--surface-3\);[\s\S]*?border: 1px solid var\(--line-strong\);[\s\S]*?transition:/,
+    );
+    expect(rendererStyles).toContain('.plugin-toolbar button:hover:not(:disabled) {');
+  });
+
+  /*
+   * 「视觉一致性」 is only real if both pages instantiate the same components. MCP used stacked
+   * `.mcp-section` blocks while plugins used a tab strip, so the same content read as two different
+   * products. Both now build `.plugin-tabs` + `.plugin-panel`, which also hands MCP the panel
+   * entrance animation for free.
+   */
+  it('gives the MCP page the same tabbed layout as the plugins page', () => {
+    for (const tab of ['installed', 'catalog', 'backups']) {
+      expect(rendererMarkup).toContain(`data-mcp-tab="${tab}"`);
+      expect(rendererMarkup).toContain(`data-mcp-panel="${tab}"`);
+    }
+    expect(rendererMarkup).toContain(
+      'class="plugin-tab plugin-tab--active" data-mcp-tab="installed"',
+    );
+    expect(rendererMarkup).toContain(
+      'class="plugin-panel plugin-panel--active" data-mcp-panel="installed"',
+    );
+    expect(rendererSource).toContain('const selectMcpTab = (tab: string): void => {');
+    // Both pages close out with the same inset panel rather than two bespoke ones.
+    expect(rendererMarkup).toContain('class="plugin-form-panel" id="plugin-marketplace-form"');
+    expect(rendererMarkup).toContain('class="plugin-form-panel mcp-backups"');
+  });
+
+  /*
+   * The plugins page gained the category dropdown MCP already had for 作用域: same control, same slot
+   * in the same toolbar, same 全部 default. Options come from the catalogue so a category nobody ships
+   * never appears as a dead end.
+   */
+  it('filters plugins by category with the same control MCP uses for scope', () => {
+    expect(rendererMarkup).toMatch(
+      /<div class="plugin-toolbar">[\s\S]*?id="plugin-search"[\s\S]*?id="plugin-category-filter"[\s\S]*?<\/div>/,
+    );
+    expect(rendererMarkup).toContain('<option value="all">全部</option>');
+    expect(rendererSource).toContain(
+      'const syncPluginCategoryOptions = (catalog: ClaudePluginCatalog): void => {',
+    );
+    expect(rendererSource).toContain(
+      "categoryFilter === 'all' || pluginCategory(plugin) === categoryFilter",
+    );
+    expect(rendererSource).toContain('pluginCategoryFilter.addEventListener');
+  });
+
+  /*
+   * The plugins page reused the MCP freshness guard: its lists are rebuilt on every keystroke, so
+   * without it every card replayed the entrance animation and typing read as the panel strobing.
+   */
+  it('animates only the plugin cards that are genuinely new', () => {
+    expect(rendererSource).toContain(
+      'const previousKeys = pluginRenderedContext === renderContext ? pluginRenderedKeys : null;',
+    );
+    expect(rendererSource).toContain(
+      'previousKeys === null || !previousKeys.has(pluginKey(plugin))',
+    );
+    expect(rendererSource).toContain('card.dataset.fresh = String(fresh);');
   });
 
   /*
@@ -779,6 +840,83 @@ describe('MCP panel theming and motion', () => {
     );
     expect(rendererStyles).toMatch(
       /@keyframes mcpCardArrive\s*\{[\s\S]*?var\(--accent-tint\)[\s\S]*?var\(--surface-3\)/,
+    );
+  });
+});
+
+describe('sidebar conversation list affordances', () => {
+  /*
+   * `overflow-y: auto` computes `overflow-x` to `auto` too, so before this a single long conversation
+   * title grew a horizontal scrollbar under the entire project list. Both scrollers must clip
+   * sideways; the rows ellipsize themselves instead.
+   */
+  it('never lets the conversation scrollers grow a horizontal scrollbar', () => {
+    expect(rendererStyles).toMatch(/\n\.project-list \{[^}]*?overflow-x: hidden;[^}]*?\}/);
+    expect(rendererStyles).toMatch(
+      /\n\.project-folder__history \{[^}]*?overflow-x: hidden;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.history-item__label \{[^}]*?text-overflow: ellipsis;[^}]*?white-space: nowrap;[^}]*?\}/,
+    );
+  });
+
+  /*
+   * Hovering a history row crossfades 「时间戳 → 删除」 inside one slot. The delete button is absolutely
+   * positioned over the timestamp so nothing reflows, and the timestamp only fades — keeping its
+   * layout width is what stops a long title from sliding under the button mid-hover.
+   */
+  it('crossfades the timestamp into a delete button without reflowing the row', () => {
+    expect(rendererStyles).toMatch(/\n\.history-item \{[^}]*?position: relative;[^}]*?\}/);
+    expect(rendererStyles).toMatch(
+      /\n\.history-item__delete \{[^}]*?opacity: 0;[^}]*?pointer-events: none;[^}]*?position: absolute;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.history-item:hover \.history-item__delete,\s*\.history-item:focus-within \.history-item__delete \{\s*opacity: 1;\s*pointer-events: auto;\s*\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.history-item:hover \.history-item__time,\s*\.history-item:focus-within \.history-item__time \{\s*opacity: 0;\s*\}/,
+    );
+    expect(rendererSource).toContain("deleteButton.className = 'history-item__delete';");
+  });
+
+  /*
+   * The micro tempo is theme-driven (95–150ms) and reads as a flicker for a crossfade this large.
+   * `--dur-hover` keeps each theme's relative personality but clamps every one of them into the
+   * 150–200ms band these hover reveals were specified at.
+   */
+  it('runs every hover reveal inside the 150-200ms band', () => {
+    expect(rendererStyles).toContain(
+      '--dur-hover: clamp(150ms, calc(var(--dur-micro) * 1.35), 200ms);',
+    );
+    for (const selector of [
+      '.history-item__delete',
+      '.history-item__time',
+      '.conversation-item__action',
+    ]) {
+      expect(rendererStyles).toMatch(
+        new RegExp(
+          `\\n\\${selector} \\{[^}]*?transition: opacity var\\(--dur-hover\\) var\\(--ease-standard\\);[^}]*?\\}`,
+        ),
+      );
+    }
+    expect(rendererStyles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.history-item__delete,\s*\.history-item__time \{\s*transition-duration: 0\.01ms;/,
+    );
+  });
+
+  /*
+   * A running conversation offers 关闭 and 重命名 but never 删除: closing stops the process and files the
+   * conversation under 历史对话, so the folder is expanded and re-read to make the row visibly land
+   * there rather than appear to vanish.
+   */
+  it('frames closing a running conversation as an archive rather than a deletion', () => {
+    expect(rendererSource).toContain("confirmLabel: '关闭并归档',");
+    expect(rendererSource).toContain('对话本身会归档到“历史对话”，随时可以恢复');
+    expect(rendererSource).toContain('expandedFolders.add(projectPath.toLowerCase());');
+    expect(rendererSource).toContain('void loadFolderHistory(projectPath, true);');
+    expect(rendererSource).toContain('已关闭“${status.title}”，可在历史对话中恢复');
+    expect(rendererSource).toContain(
+      "closeButton.setAttribute('aria-label', `关闭对话 ${status.title}，归档到历史对话`);",
     );
   });
 });

@@ -87,4 +87,67 @@ describe('download engine', () => {
     expect(engine.list()[0]?.state).toBe('cancelled');
     rmSync(userDataPath, { force: true, recursive: true });
   });
+
+  it('continues a resumable interruption automatically instead of failing the task', async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new EventEmitter() as EventEmitter & { downloadURL: (url: string) => void };
+      session.downloadURL = vi.fn();
+      Object.assign(session, { createInterruptedDownload: vi.fn() });
+      const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-download-'));
+      let state: 'progressing' | 'completed' | 'cancelled' | 'interrupted' = 'progressing';
+      const item = Object.assign(new EventEmitter(), {
+        canResume: vi.fn(() => true),
+        cancel: vi.fn(),
+        getReceivedBytes: vi.fn(() => 100),
+        getETag: vi.fn(() => '"fixture"'),
+        getLastModifiedTime: vi.fn(() => 'Mon, 01 Jan 2024 00:00:00 GMT'),
+        getStartTime: vi.fn(() => Date.now() / 1000),
+        getState: vi.fn(() => state),
+        getTotalBytes: vi.fn(() => 1_000),
+        getURL: vi.fn(() => 'https://downloads.example.com/tool.exe'),
+        getURLChain: vi.fn(() => ['https://downloads.example.com/tool.exe']),
+        isPaused: vi.fn(() => false),
+        pause: vi.fn(),
+        resume: vi.fn(),
+        setSavePath: vi.fn(),
+      });
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+      const finalPath = path.join(userDataPath, 'outputs', 'test-tool.exe');
+      const completion = engine
+        .start({
+          allowedHosts: ['downloads.example.com'],
+          allowedPathPrefixes: ['/tool.exe'],
+          finalPath,
+          id: 'tool',
+          label: '测试工具',
+          maxBytes: 10_000,
+          url: 'https://downloads.example.com/tool.exe',
+        })
+        .catch(() => undefined);
+      session.emit('will-download', { preventDefault: vi.fn() }, item);
+
+      state = 'interrupted';
+      item.emit('done', {}, 'interrupted');
+      expect(engine.list()[0]).toMatchObject({ state: 'paused' });
+      expect(engine.list()[0]?.errorMessage).toContain('自动续传');
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(item.resume).toHaveBeenCalledOnce();
+      expect(engine.list()[0]).toMatchObject({ errorMessage: undefined, state: 'progressing' });
+
+      engine.cancel('tool');
+      state = 'cancelled';
+      item.emit('done', {}, 'cancelled');
+      await completion;
+      expect(engine.list()[0]?.state).toBe('cancelled');
+      rmSync(userDataPath, { force: true, recursive: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildXrayConfig, redactProxyLog, XRAY_CORE_RELEASE } from '../src/main/proxy/xray-sidecar';
 
@@ -44,6 +45,26 @@ describe('Xray sidecar configuration', () => {
       sha256: 'd004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad',
       version: 'v26.3.27',
     });
+  });
+
+  /*
+   * The in-flight ceiling used to be the pinned asset size exactly, so a release republished even a
+   * byte larger tripped 「下载内容超过安全上限」 immediately and unrecoverably — the download never got a
+   * chance to auto-resume, which is what "the core always fails to download" actually looked like.
+   * Exactness belongs to expectedBytes + expectedSha256 at completion; the ceiling only bounds damage.
+   */
+  it('gives the core download headroom over the pinned asset size', () => {
+    const source = readFileSync(
+      new URL('../src/main/proxy/xray-sidecar.ts', import.meta.url),
+      'utf8',
+    );
+    expect(source).toContain('maxBytes: MAX_CORE_ARCHIVE_BYTES,');
+    expect(source).not.toContain('maxBytes: XRAY_CORE_RELEASE.bytes,');
+    expect(source).toContain('expectedBytes: XRAY_CORE_RELEASE.bytes,');
+    expect(source).toContain('expectedSha256: XRAY_CORE_RELEASE.sha256,');
+    const ceiling = /const MAX_CORE_ARCHIVE_BYTES = (\d+) \* 1024 \* 1024;/.exec(source);
+    expect(ceiling).not.toBeNull();
+    expect(Number(ceiling?.[1]) * 1024 * 1024).toBeGreaterThan(XRAY_CORE_RELEASE.bytes * 2);
   });
 
   it('binds both inbounds only to loopback and keeps remote DNS resolution', () => {

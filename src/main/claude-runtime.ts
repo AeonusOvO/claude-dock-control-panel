@@ -83,6 +83,7 @@ import { ClaudeConfigStore } from './claude-config-store';
 import type { ClaudeConfigPresentation, ClaudeConfigSnapshot } from './claude-config-store';
 import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
+import { ConversationPreferencesStore, isConversationId } from './conversation-preferences-store';
 import {
   ClaudeRouterManager,
   type DownloadedRouterInstaller,
@@ -93,6 +94,8 @@ import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-upda
 
 interface RuntimeSession {
   active: boolean;
+  /** Claude Code conversation this PTY is attached to, once the status line has reported it. */
+  conversationId?: string;
   cwd: string;
   diagnosticBuffer: string;
   /** Temporary retry cap installed after Claude Code combines high effort with disabled thinking. */
@@ -113,6 +116,10 @@ interface RuntimeSession {
   markerRemainder: string;
   metrics?: ClaudeMetrics;
   metricsPath?: string;
+  /** Depth remembered for the resumed conversation, replayed once its TUI accepts commands. */
+  pendingEffortRestore?: ClaudeEffortRequest;
+  /** Earliest moment `pendingEffortRestore` may be submitted; a fresh TUI ignores instant input. */
+  pendingEffortRestoreAt?: number;
   /** Live mode read off the TUI badge; undefined until the badge has been painted once. */
   permissionMode?: ClaudePermissionMode;
   /** Modes this session has actually shown, in first-seen order. */
@@ -166,6 +173,11 @@ const PERMISSION_MODE_STEP_TIMEOUT_MS = 2_000;
 /** On-demand xterm snapshots are cheap, but leave enough time for PTY output to traverse both IPC hops. */
 const PERMISSION_MODE_PROBE_INTERVAL_MS = 50;
 const COMPACT_TIMEOUT_MS = 120_000;
+/**
+ * How long a resumed conversation gets to paint its TUI before the remembered thinking depth is
+ * replayed. A `/effort` written into a terminal that is still booting is simply swallowed.
+ */
+const EFFORT_RESTORE_DELAY_MS = 2_500;
 const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
 const COMPACT_INSTRUCTION = '请保留：当前任务目标、已完成的修改、待办的下一步。';
 
@@ -591,6 +603,7 @@ export class ClaudeRuntime {
   /** Serialises complete body/return submissions so two UI actions cannot interleave PTY bytes. */
   private readonly commandSubmissionQueues = new Map<string, Promise<void>>();
   private readonly gatewayDetector = new ClaudeGatewayDetector();
+  private readonly conversationPreferences: ConversationPreferencesStore;
   private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly metricsTimer: NodeJS.Timeout;
   /** Serialises Shift+Tab stepping per session so two clicks can never interleave presses. */
@@ -620,6 +633,7 @@ export class ClaudeRuntime {
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
+    this.conversationPreferences = new ConversationPreferencesStore(userDataPath);
     this.routerManager = new ClaudeRouterManager(userDataPath, downloadEngine);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
     this.currentThemeId = initialThemeId;
@@ -967,6 +981,35 @@ export class ClaudeRuntime {
       }
     }
 
+    const allowBypass = this.configStore.getAllowBypassPermissions(cwd);
+    /*
+     * Reopening a stored conversation should feel like it never stopped, so the model, permission
+     * mode and thinking depth it was last running with win over the project defaults. Bypass is the
+     * one exception: it stays gated on the project's own opt-in no matter what was remembered.
+     *
+     * A `--continue` relaunch keeps the same conversation, so its depth and mode are restored too —
+     * but never its model, because a relaunch is how an explicit cross-endpoint switch is applied.
+     */
+    const resumedConversationId =
+      resumeSessionId && isConversationId(resumeSessionId)
+        ? resumeSessionId
+        : mode === 'continue'
+          ? this.sessions.get(sessionId)?.conversationId
+          : undefined;
+    const remembered = resumedConversationId
+      ? this.conversationPreferences.get(resumedConversationId)
+      : undefined;
+    const rememberedMode =
+      remembered?.permissionMode &&
+      (remembered.permissionMode !== 'bypassPermissions' || allowBypass)
+        ? remembered.permissionMode
+        : undefined;
+    const effectiveStartMode = startMode ?? rememberedMode;
+    const launchModel =
+      mode !== 'continue' && remembered?.model && MODEL_NAME_PATTERN.test(remembered.model)
+        ? remembered.model
+        : config.model;
+
     const sessionDirectory = path.join(this.runtimeRoot, sessionId);
     const metricsPath = path.join(sessionDirectory, 'metrics.json');
     const settingsPath = path.join(sessionDirectory, 'settings.json');
@@ -1041,7 +1084,7 @@ export class ClaudeRuntime {
           },
         ],
       },
-      model: config.model,
+      model: launchModel,
       skipWebFetchPreflight: true,
       theme: claudeCodeThemeForTerminalTheme(this.currentThemeId),
       statusLine: {
@@ -1054,37 +1097,43 @@ export class ClaudeRuntime {
 
     const runtime = this.ensureSession(sessionId, cwd);
     runtime.active = true;
+    runtime.conversationId = resumedConversationId;
     runtime.diagnosticBuffer = '';
     runtime.effortCompatibility = undefined;
     runtime.effortRestoreAfterTurn = undefined;
     runtime.effortRestoreInProgress = false;
     // A relaunch re-reads the persisted effort setting, so a session-only request no longer holds.
     runtime.effortRequest = undefined;
-    runtime.expectedModel = config.model;
+    runtime.expectedModel = launchModel;
     runtime.exitMarker = `\u001b]9;claudedock-exit:${sessionId}:${Date.now()}\u0007`;
     runtime.markerRemainder = '';
     runtime.lastApiError = undefined;
     runtime.launchedConfigFingerprint = connectionFingerprint(config, credential);
     runtime.metrics = undefined;
     runtime.metricsPath = metricsPath;
+    // `/effort` cannot ride the launch command, so it is replayed once the new TUI is listening.
+    runtime.pendingEffortRestore = remembered?.effort;
+    runtime.pendingEffortRestoreAt = remembered?.effort
+      ? Date.now() + EFFORT_RESTORE_DELAY_MS
+      : undefined;
     runtime.settingsPath = settingsPath;
     runtime.thinkingEnabledForHighEffort = false;
     runtime.turnStopPath = turnStopPath;
     runtime.turnStopSeenAt = undefined;
     // A relaunch paints a fresh TUI, so nothing observed in the previous one still holds.
-    runtime.permissionMode = startMode;
-    runtime.permissionModeCycle = startMode ? [startMode] : [];
+    runtime.permissionMode = effectiveStartMode;
+    runtime.permissionModeCycle = effectiveStartMode ? [effectiveStartMode] : [];
     runtime.signalPath = signalPath;
     runtime.signalSeenAt = undefined;
     runtime.waitingForCompact = undefined;
 
     const command = buildClaudeLaunchCommand(
       settingsPath,
-      config.model,
+      launchModel,
       mode,
       runtime.exitMarker,
       resumeSessionId,
-      { allowBypass: this.configStore.getAllowBypassPermissions(cwd), startMode },
+      { allowBypass, startMode: effectiveStartMode },
       webResearchIsolation
         ? {
             agents: CLAUDEDOCK_WEB_RESEARCH_AGENTS,
@@ -1251,6 +1300,7 @@ export class ClaudeRuntime {
     if (runtime.lastApiError?.category === 'effort-thinking-disabled') {
       runtime.lastApiError = undefined;
     }
+    this.captureConversationPreferences(runtime);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return state;
@@ -1285,12 +1335,16 @@ export class ClaudeRuntime {
 
     await this.submitClaudeCommand(runtime, `/effort ${effort}`);
     runtime.effortRequest = effort;
+    // A relaunch of this conversation should come back at the depth just chosen, not the default.
+    runtime.pendingEffortRestore = undefined;
+    runtime.pendingEffortRestoreAt = undefined;
     if (runtime.effortCompatibility) {
       runtime.effortCompatibility = {
         ...runtime.effortCompatibility,
         recovery: 'recovered',
       };
     }
+    this.captureConversationPreferences(runtime);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return state;
@@ -1446,7 +1500,57 @@ export class ClaudeRuntime {
     if (!runtime.permissionModeCycle.includes(mode)) {
       runtime.permissionModeCycle.push(mode);
     }
+    this.captureConversationPreferences(runtime);
     void this.emitState(runtime);
+  }
+
+  /**
+   * Mirrors the live status bar into per-conversation storage. Reopening the conversation from the
+   * history list then restores exactly what it was running with, instead of the project defaults.
+   */
+  private captureConversationPreferences(runtime: RuntimeSession): void {
+    const conversationId = runtime.metrics?.sessionId ?? runtime.conversationId;
+    if (!conversationId || !isConversationId(conversationId)) {
+      return;
+    }
+    runtime.conversationId = conversationId;
+    this.conversationPreferences.record(conversationId, {
+      effort: runtime.effortRequest ?? runtime.metrics?.effortLevel,
+      model: runtime.metrics?.modelId ?? runtime.expectedModel,
+      permissionMode: runtime.permissionMode,
+    });
+  }
+
+  /**
+   * Sends the depth remembered for a resumed conversation, once and only once the status line proves
+   * the TUI is alive and reports something different from what was asked for.
+   */
+  private replayRememberedEffort(runtime: RuntimeSession): void {
+    const desired = runtime.pendingEffortRestore;
+    if (!desired || !runtime.active) {
+      return;
+    }
+    if (runtime.pendingEffortRestoreAt && Date.now() < runtime.pendingEffortRestoreAt) {
+      return;
+    }
+    runtime.pendingEffortRestore = undefined;
+    runtime.pendingEffortRestoreAt = undefined;
+    if (runtime.metrics?.effortLevel === desired) {
+      runtime.effortRequest = desired;
+      return;
+    }
+    void (async () => {
+      try {
+        if (!isClaudeEffortSafeAfterThinkingDisabledError(desired)) {
+          this.enableThinkingForHighEffort(runtime);
+        }
+        await this.submitClaudeCommand(runtime, `/effort ${desired}`);
+        runtime.effortRequest = desired;
+        await this.emitState(runtime);
+      } catch {
+        // Restoring the remembered depth is best effort; the session still runs at its default.
+      }
+    })();
   }
 
   private waitForPermissionModeChange(
@@ -2037,6 +2141,8 @@ export class ClaudeRuntime {
         if (runtime.lastApiError && metrics.capturedAt > runtime.lastApiError.detectedAt) {
           runtime.lastApiError = undefined;
         }
+        this.captureConversationPreferences(runtime);
+        this.replayRememberedEffort(runtime);
         void this.emitState(runtime);
       } catch {
         // The status-line helper replaces the file atomically; retry on the next poll.

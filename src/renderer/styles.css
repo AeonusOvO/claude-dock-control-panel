@@ -173,9 +173,18 @@
   --dur-exit: var(--dur-exit-theme);
   --dur-progress: calc(var(--dur-enter) * 1.7);
   --dur-refresh: calc(var(--dur-enter) * 3.75);
+  /* Square ⇄ circle morph on the download button: long enough to read as a shape change. */
+  --dur-shape: calc(var(--dur-enter) * 0.8);
   /* Per-item offset for staggered list entrances, and the typewriter caret's blink half-period. */
   --dur-stagger: calc(var(--dur-micro) * 0.33);
   --dur-blink: calc(var(--dur-micro) * 6);
+  /*
+   * Hover-revealed row affordances live in a deliberately slower band than the rest of the micro
+   * ladder: swapping a timestamp for a delete button has to read as a crossfade, and at the theme's
+   * 95–120ms micro tempo it reads as a flicker instead. Scaled off the theme so a springy theme is
+   * still slower than a crisp one, but clamped so every theme lands in the 150–200ms comfort zone.
+   */
+  --dur-hover: clamp(150ms, calc(var(--dur-micro) * 1.35), 200ms);
   --dur-enter: 240ms;
   --dur-exit-theme: 180ms;
   --dur-micro: 120ms;
@@ -401,18 +410,13 @@ svg {
 }
 
 /*
- * The busy indicator is a ring drawn around the button, never the glyph inside it: a refresh arrow,
- * a download arrow or a percentage all have a fixed reading direction, and spinning them reads as a
- * rendering bug rather than as progress.
+ * Loading spins the glyph and nothing else. The button is a rounded square and has to stay one:
+ * an animated ring drawn on the frame reads as the control itself deforming, which is exactly the
+ * feedback the shape of the download button is reserved for.
  */
-.titlebar__refresh--busy::before {
-  animation: spinnerRingSpin var(--dur-refresh) linear infinite;
-  border: 2px solid var(--accent-tint);
-  border-radius: var(--r-pill);
-  border-top-color: var(--accent-solid);
-  content: '';
-  inset: -3px;
-  position: absolute;
+.titlebar__refresh--busy svg {
+  animation: titlebarGlyphSpin var(--dur-refresh) linear infinite;
+  transform-origin: 50% 50%;
 }
 
 .titlebar__downloads {
@@ -424,7 +428,12 @@ svg {
     var(--line) 0
   );
   border: 0;
-  border-radius: var(--r-pill);
+  /*
+   * The frame carries the task state. At rest it matches the refresh button exactly; the moment a
+   * download is live it eases into a true circle so the progress arc has a ring to sit on, then
+   * eases back once the task completes, cancels or fails.
+   */
+  border-radius: var(--r-md);
   color: var(--text-lo);
   cursor: pointer;
   display: inline-flex;
@@ -432,8 +441,21 @@ svg {
   justify-content: center;
   padding: 2px;
   position: relative;
-  transition: color var(--dur-2) var(--ease-standard);
+  transition:
+    border-radius var(--dur-shape) var(--ease-spring),
+    color var(--dur-2) var(--ease-standard);
   width: var(--s-8);
+}
+
+/* Idle hides the arc entirely so the rounded square reads as a plain icon button. */
+.titlebar__downloads:not([data-active='true']) {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  padding: calc(var(--s-2) - 1px);
+}
+
+.titlebar__downloads[data-active='true'] {
+  border-radius: var(--r-pill);
 }
 
 .titlebar__downloads::before {
@@ -444,8 +466,17 @@ svg {
   position: absolute;
 }
 
+.titlebar__downloads:not([data-active='true'])::before {
+  inset: 0;
+}
+
 .titlebar__downloads:hover {
   color: var(--accent-text);
+}
+
+.titlebar__downloads:not([data-active='true']):hover {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
 }
 
 /* Only the arc turns; the glyph and the unread badge stay upright. */
@@ -457,6 +488,16 @@ svg {
   content: '';
   inset: 0;
   position: absolute;
+}
+
+/* A paused queue holds its arc still and desaturates it, so "stopped" is legible at a glance. */
+.titlebar__downloads[data-paused='true'] {
+  background: conic-gradient(from 0deg, var(--warn-solid) var(--download-progress), var(--line) 0);
+}
+
+.titlebar__downloads[data-paused='true'][data-indeterminate='true'][data-active='true']::after {
+  animation: none;
+  border-top-color: var(--warn-solid);
 }
 
 .titlebar__downloads svg {
@@ -486,6 +527,12 @@ svg {
 }
 
 @keyframes spinnerRingSpin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes titlebarGlyphSpin {
   to {
     rotate: 1turn;
   }
@@ -892,6 +939,12 @@ body[data-phase='error'] .status-pill {
   display: grid;
   gap: 6px;
   max-height: 340px;
+  /*
+   * `overflow-y: auto` alone computes `overflow-x` to `auto` as well, so a single long conversation
+   * title used to grow a horizontal scrollbar under the whole project list. Rows clip and ellipsize
+   * themselves; the container must never scroll sideways.
+   */
+  overflow-x: hidden;
   overflow-y: auto;
   padding-right: 2px;
   scrollbar-color: var(--line-strong) transparent;
@@ -1172,7 +1225,7 @@ body[data-phase='error'] .status-pill {
   line-height: 1;
   opacity: 0;
   padding: 0;
-  transition: opacity var(--dur-2) var(--ease-standard);
+  transition: opacity var(--dur-hover) var(--ease-standard);
   width: 22px;
 }
 
@@ -1200,6 +1253,8 @@ body[data-phase='error'] .status-pill {
   gap: 2px;
   /* Roughly six rows; running conversations above stay fixed while this list scrolls. */
   max-height: 170px;
+  /* Same reason as .project-list: vertical scrolling must not imply horizontal scrolling. */
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 2px;
@@ -1217,6 +1272,8 @@ body[data-phase='error'] .status-pill {
   display: flex;
   gap: 7px;
   padding: 0;
+  /* Anchors the delete button so it can occupy the timestamp's slot instead of a column of its own. */
+  position: relative;
   text-align: left;
   transition:
     background-color var(--dur-2) var(--ease-standard),
@@ -1242,25 +1299,35 @@ body[data-phase='error'] .status-pill {
   text-align: left;
 }
 
+/*
+ * The delete button is laid over the timestamp rather than given a column beside it: hovering a row
+ * crossfades 「时间戳 → 删除」 in one slot, so the list keeps a single clean right edge and nothing
+ * reflows on hover. The timestamp keeps its layout width while faded out, which is also what stops
+ * a long title from sliding underneath the button.
+ */
 .history-item__delete {
   align-items: center;
-  align-self: stretch;
   background: transparent;
   border: 0;
   border-radius: var(--r-md);
   color: var(--text-mute);
   cursor: pointer;
   display: flex;
-  flex: 0 0 auto;
   font-size: var(--text-md);
+  inset-block: 2px;
   justify-content: center;
   opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 2px;
+  transition: opacity var(--dur-hover) var(--ease-standard);
   width: var(--s-6);
 }
 
 .history-item:hover .history-item__delete,
-.history-item__delete:focus-visible {
+.history-item:focus-within .history-item__delete {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .history-item__delete:hover {
@@ -1288,6 +1355,19 @@ body[data-phase='error'] .status-pill {
   color: var(--text-mute);
   flex: 0 0 auto;
   font-size: var(--text-2xs);
+  transition: opacity var(--dur-hover) var(--ease-standard);
+}
+
+.history-item:hover .history-item__time,
+.history-item:focus-within .history-item__time {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-item__delete,
+  .history-item__time {
+    transition-duration: 0.01ms;
+  }
 }
 
 .button {
@@ -4236,32 +4316,6 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   padding: 12px;
 }
 
-.router-settings-entry {
-  align-items: center;
-  background: var(--accent-tint);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-xl);
-  display: flex;
-  gap: var(--s-3);
-  justify-content: space-between;
-  margin-top: 11px;
-  padding: var(--s-3);
-}
-
-.router-settings-entry > div {
-  display: grid;
-  gap: var(--s-1);
-}
-
-.router-settings-entry strong {
-  color: var(--text-hi);
-}
-
-.router-settings-entry span {
-  color: var(--text-dim);
-  font-size: var(--text-xs);
-}
-
 .gateway-discovery__heading,
 .step-heading {
   align-items: flex-start;
@@ -4447,14 +4501,11 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
 .analyze-curl,
 .cc-switch-actions button,
 .connection-test > button,
-.mcp-backups button,
-.mcp-toolbar > button,
 .router-actions button,
 .router-remediation button,
 .router-provider-heading button,
 .router-provider-card__actions button,
-.router-provider-form__actions button,
-.router-settings-entry button {
+.router-provider-form__actions button {
   background: var(--accent-tint);
   border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
@@ -5869,15 +5920,12 @@ button:disabled {
 .gateway-candidate__actions button,
 .help-link-grid button,
 .install-source-row button,
-.mcp-backups button,
-.mcp-toolbar > button,
 .provider-setup__links button,
 .router-actions button,
 .router-provider-card__actions button,
 .router-provider-form__actions button,
 .router-provider-heading button,
-.router-remediation button,
-.router-settings-entry button {
+.router-remediation button {
   transition:
     background-color var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard),
@@ -5897,15 +5945,12 @@ button:disabled {
 .gateway-candidate__actions button:hover:not(:disabled),
 .help-link-grid button:hover:not(:disabled),
 .install-source-row button:hover:not(:disabled),
-.mcp-backups button:hover:not(:disabled),
-.mcp-toolbar > button:hover:not(:disabled),
 .provider-setup__links button:hover:not(:disabled),
 .router-actions button:hover:not(:disabled),
 .router-provider-card__actions button:hover:not(:disabled),
 .router-provider-form__actions button:hover:not(:disabled),
 .router-provider-heading button:hover:not(:disabled),
-.router-remediation button:hover:not(:disabled),
-.router-settings-entry button:hover:not(:disabled) {
+.router-remediation button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
   border-color: var(--accent-ring);
   color: var(--accent-text);
@@ -6143,11 +6188,16 @@ button:disabled {
   justify-items: start;
 }
 
+/*
+ * One toolbar shape for 插件 and MCP: a search box, a filter dropdown beside it, and any bulk action
+ * on its own full-width row underneath. Both pages instantiate the same classes so they stay in sync
+ * by construction rather than by two lists of rules drifting apart.
+ */
 .plugin-toolbar {
-  align-items: stretch;
+  align-items: end;
   display: grid;
   gap: var(--s-3);
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
 }
 
 .plugin-toolbar .field {
@@ -6163,6 +6213,10 @@ button:disabled {
   cursor: pointer;
   font-size: var(--text-xs);
   padding: 8px 12px;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
 }
 
 .plugin-toolbar button:hover:not(:disabled) {
@@ -6409,7 +6463,11 @@ button:disabled {
   color: var(--bad-text);
 }
 
-#plugin-marketplace-form {
+/*
+ * The inset panel that closes out a tab: 添加插件市场 on the plugins page, 配置备份 on the MCP page.
+ * Same surface, same padding, same accent submit button, so the two pages end the same way.
+ */
+.plugin-form-panel {
   background: var(--surface-inset);
   border: 1px solid var(--line-subtle);
   border-radius: var(--r-lg);
@@ -6421,7 +6479,7 @@ button:disabled {
   padding: var(--s-3);
 }
 
-#plugin-marketplace-form button {
+.plugin-form-panel button {
   background: var(--accent-tint);
   border: 1px solid var(--accent-line);
   border-radius: var(--r-md);
@@ -6433,16 +6491,24 @@ button:disabled {
   max-width: 100%;
   min-width: 0;
   padding: 8px 14px;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
 }
 
-#plugin-marketplace-form .field {
+.plugin-form-panel .field {
   margin-bottom: 0;
   max-width: 100%;
   min-width: 0;
 }
 
-#plugin-marketplace-form button:hover:not(:disabled) {
+.plugin-form-panel button:hover:not(:disabled) {
   background: var(--accent-line);
+}
+
+.plugin-form-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* Unified scrollbars: the same low-contrast track and cyan-hover thumb in every scroll context. */
@@ -7429,6 +7495,7 @@ body.is-resizing * {
 .plugin-toolbar__actions {
   display: grid;
   gap: var(--s-2);
+  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
 }
@@ -7887,7 +7954,7 @@ body.is-resizing * {
   .download-progress[data-indeterminate='true'] .download-progress__linear > span,
   .download-progress[data-indeterminate='true'] .download-progress__ring::after,
   .titlebar__downloads[data-indeterminate='true'][data-active='true']::after,
-  .titlebar__refresh--busy::before {
+  .titlebar__refresh--busy svg {
     animation: none;
   }
 
@@ -8234,31 +8301,13 @@ body.is-resizing * {
   color: var(--danger-text);
 }
 
-.mcp-toolbar {
-  display: grid;
-  gap: var(--s-3);
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  margin-block: var(--s-4);
-}
-
-.mcp-toolbar > button {
-  grid-column: 1 / -1;
-}
-
-.mcp-section {
-  display: grid;
-  gap: var(--s-3);
-  margin-block-start: var(--s-5);
-}
-
 .mcp-install-scope {
-  margin-block-end: var(--s-2);
+  margin-block-end: 0;
 }
 
+/* Inherits the shared .plugin-form-panel surface; only the select/button pairing is MCP-specific. */
 .mcp-backups {
   align-items: end;
-  display: grid;
-  gap: var(--s-2);
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
