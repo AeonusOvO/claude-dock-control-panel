@@ -674,16 +674,24 @@ const renderDownloads = (tasks: DownloadTaskView[]): void => {
     if (!progress) {
       continue;
     }
-    const indeterminate = task.percent < 0;
+    /*
+     * A settled task has no motion left to report. `percent` stays at -1 whenever the server never
+     * sent a length, so keying the spinner off the number alone left a failed or cancelled download
+     * animating forever as if it were still trying.
+     */
+    const settled =
+      task.state === 'cancelled' || task.state === 'completed' || task.state === 'failed';
+    const percent = Math.max(0, task.percent);
+    const indeterminate = !settled && task.percent < 0;
     progress.dataset.indeterminate = String(indeterminate);
-    progress.style.setProperty('--download-progress', `${Math.max(0, task.percent)}%`);
+    progress.style.setProperty('--download-progress', `${percent}%`);
     const ringValue = progress.querySelector<HTMLElement>('.download-progress__value');
     const linearValue = progress.querySelector<HTMLElement>('.download-progress__linear > span');
     if (ringValue) {
-      ringValue.textContent = indeterminate ? '…' : `${Math.round(task.percent)}%`;
+      ringValue.textContent = indeterminate ? '…' : `${Math.round(percent)}%`;
     }
     if (linearValue) {
-      linearValue.style.width = indeterminate ? '42%' : `${Math.max(0, task.percent)}%`;
+      linearValue.style.width = indeterminate ? '42%' : `${percent}%`;
     }
     heading.append(identity, progress);
 
@@ -6312,6 +6320,19 @@ const mcpScopeLabel = (scope: McpScope): string =>
       ? 'project · 项目共享'
       : 'local · 项目私有';
 
+/*
+ * Every MCP render rebuilds both lists from scratch, so without a memory of what was on screen the
+ * card entrance replays for every row and an install looks like the whole panel blinking. Keying the
+ * previous render lets a card that survived sit still while a genuinely new server animates in.
+ * `null` means "no comparable previous render" (first paint, project switch) — then everything is new
+ * and the list arrives as a whole, which is what it actually is.
+ */
+const mcpServerKey = (server: McpServerView): string =>
+  `${server.client} ${server.scope} ${server.name}`;
+
+let mcpRenderedContext: string | null = null;
+let mcpRenderedKeys: ReadonlySet<string> = new Set<string>();
+
 const mcpMatchesSearch = (
   value: Pick<McpServerView, 'configPath' | 'name'> | Pick<McpCatalogEntry, 'description' | 'name'>,
   needle: string,
@@ -6349,10 +6370,15 @@ const runMcpMutation = async (
   }
 };
 
-const renderMcpInstalledCard = (server: McpServerView, cwd: string): HTMLElement => {
+const renderMcpInstalledCard = (
+  server: McpServerView,
+  cwd: string,
+  fresh: boolean,
+): HTMLElement => {
   const card = document.createElement('article');
   card.className = 'plugin-card';
   card.dataset.enabled = String(server.enabled);
+  card.dataset.fresh = String(fresh);
   card.dataset.installed = 'true';
   const header = document.createElement('div');
   header.className = 'plugin-card__header';
@@ -6453,9 +6479,11 @@ const renderMcpCatalogCard = (
   entry: McpCatalogEntry,
   cwd: string,
   installedNames: ReadonlySet<string>,
+  fresh: boolean,
 ): HTMLElement => {
   const card = document.createElement('article');
   card.className = 'plugin-card';
+  card.dataset.fresh = String(fresh);
   card.dataset.installed = String(installedNames.has(entry.name));
   const header = document.createElement('div');
   header.className = 'plugin-card__header';
@@ -6501,6 +6529,12 @@ function renderMcpCatalog(catalog: McpCatalog): void {
       (scopeFilter === 'all' || server.scope === scopeFilter) && mcpMatchesSearch(server, needle),
   );
   const available = catalog.available.filter((entry) => mcpMatchesSearch(entry, needle));
+  const renderContext = `${cwd ?? ''}|${scopeFilter}|${needle}`;
+  const previousKeys = mcpRenderedContext === renderContext ? mcpRenderedKeys : null;
+  const isFresh = (server: McpServerView): boolean =>
+    previousKeys === null || !previousKeys.has(mcpServerKey(server));
+  mcpRenderedContext = renderContext;
+  mcpRenderedKeys = new Set(catalog.installed.map(mcpServerKey));
   mcpInstalledCount.textContent = String(installed.length);
   mcpStatus.textContent = `${catalog.message} · 上次读取 ${new Date(catalog.checkedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
   mcpInstalledList.replaceChildren();
@@ -6523,7 +6557,9 @@ function renderMcpCatalog(catalog: McpCatalog): void {
     }
     mcpInstalledList.append(empty);
   } else {
-    mcpInstalledList.append(...installed.map((server) => renderMcpInstalledCard(server, cwd)));
+    mcpInstalledList.append(
+      ...installed.map((server) => renderMcpInstalledCard(server, cwd, isFresh(server))),
+    );
   }
   mcpCatalogList.replaceChildren();
   if (!cwd || available.length === 0) {
@@ -6534,7 +6570,9 @@ function renderMcpCatalog(catalog: McpCatalog): void {
   } else {
     const installedNames = new Set(catalog.installed.map((server) => server.name));
     mcpCatalogList.append(
-      ...available.map((entry) => renderMcpCatalogCard(entry, cwd, installedNames)),
+      ...available.map((entry) =>
+        renderMcpCatalogCard(entry, cwd, installedNames, previousKeys === null),
+      ),
     );
   }
 }

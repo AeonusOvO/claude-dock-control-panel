@@ -33,6 +33,38 @@ describe('CLI-only built-in proxy scope', () => {
     });
   });
 
+  /*
+   * The Xray-core bootstrap downloads through Chromium's default session, and `setProxy` +
+   * `closeAllConnections()` kills that socket. main.ts only skips the call when the new rules match
+   * the last ones applied, so a sidecar that is merely `starting` must resolve to the same rules as
+   * a stopped one — otherwise every first start tears down its own bootstrap download at 0 bytes.
+   */
+  it('resolves a starting tunnel to the same rules as a stopped one', () => {
+    for (const scope of [
+      { application: false, cli: true },
+      { application: true, cli: true },
+    ]) {
+      const stopped = builtInProxyRules({ coreVersion: '', logs: [], status: 'stopped' }, scope);
+
+      for (const status of ['starting', 'stopping', 'error'] as const) {
+        expect(builtInProxyRules({ coreVersion: '', logs: [], status }, scope)).toEqual(stopped);
+      }
+      expect(builtInProxyRules(undefined, scope)).toEqual(stopped);
+      expect(stopped).toEqual({ mode: 'system' });
+    }
+  });
+
+  it('primes the applied proxy rules before anything can start the tunnel', () => {
+    const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    const constructorIndex = mainSource.indexOf('xraySidecar = new XraySidecar(');
+
+    expect(constructorIndex).toBeGreaterThan(-1);
+    // The priming call sits with the constructor, not inside the start/stop paths further up.
+    expect(mainSource.slice(constructorIndex, constructorIndex + 1200)).toContain(
+      'await applyApplicationProxyScope();',
+    );
+  });
+
   it('contains no write path for system or desktop-app proxy configuration', () => {
     const files = [
       '../src/main/proxy/proxy-environment.ts',

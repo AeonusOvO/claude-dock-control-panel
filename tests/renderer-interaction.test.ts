@@ -727,3 +727,58 @@ describe('plugin panel feedback', () => {
     );
   });
 });
+
+describe('MCP panel theming and motion', () => {
+  /*
+   * `全部刷新` was the last button in the panel that no project selector ever matched, so Chromium
+   * painted it with the user-agent default — a grey native Windows button in the middle of a themed
+   * toolbar. It joins the tint-button family rather than getting a one-off rule.
+   */
+  it('paints the MCP toolbar refresh button with the shared tint-button treatment', () => {
+    expect(rendererMarkup).toContain('<button id="mcp-refresh" type="button">全部刷新</button>');
+    const tintFamily = [...rendererStyles.matchAll(/\.mcp-toolbar > button[^,{]*[,{]/g)].map(
+      (match) => match[0],
+    );
+
+    // Base paint, hover response and transition all have to list the selector.
+    expect(tintFamily.length).toBeGreaterThanOrEqual(3);
+    expect(rendererStyles).toContain('.mcp-toolbar > button:hover:not(:disabled),');
+  });
+
+  /*
+   * `.dialog-primary` only ever got a background from dialog-scoped selectors, so the router wizard's
+   * submit button carried the class and still rendered as a native button. The class now paints
+   * itself wherever it is used.
+   */
+  it('gives .dialog-primary its own paint outside dialog footers', () => {
+    expect(rendererStyles).toMatch(
+      /\n\.dialog-primary \{[\s\S]*?background: var\(--accent-tint\);[\s\S]*?border: 1px solid var\(--accent-line\);[\s\S]*?color: var\(--accent-text\);/,
+    );
+    expect(rendererMarkup).toContain('class="dialog-primary" id="router-wizard-submit"');
+  });
+
+  /*
+   * Both MCP lists are rebuilt from scratch on every render, so the shared card entrance replayed on
+   * every row at once and installing a server read as the whole panel blinking. Only a server that
+   * was not on screen a moment ago animates, and it lands with an accent sweep.
+   */
+  it('animates only the MCP cards that are genuinely new', () => {
+    expect(rendererSource).toContain('const mcpServerKey = (server: McpServerView): string =>');
+    expect(rendererSource).toContain(
+      'const previousKeys = mcpRenderedContext === renderContext ? mcpRenderedKeys : null;',
+    );
+    expect(rendererSource).toContain(
+      'previousKeys === null || !previousKeys.has(mcpServerKey(server))',
+    );
+    expect(rendererSource).toContain('card.dataset.fresh = String(fresh);');
+    expect(rendererStyles).toMatch(
+      /\.plugin-card\[data-fresh='false'\]\s*\{\s*animation: none;\s*\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.plugin-card\[data-fresh='true'\]\s*\{[\s\S]*?pluginCardEnter[\s\S]*?mcpCardArrive/,
+    );
+    expect(rendererStyles).toMatch(
+      /@keyframes mcpCardArrive\s*\{[\s\S]*?var\(--accent-tint\)[\s\S]*?var\(--surface-3\)/,
+    );
+  });
+});

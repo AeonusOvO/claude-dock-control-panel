@@ -76,4 +76,17 @@ describe('download IPC surface', () => {
     expect(rendererStyles).toContain(".download-progress[data-indeterminate='true']");
     expect(rendererStyles).toContain('var(--dur-progress)');
   });
+
+  /*
+   * `percent` stays at -1 for the whole life of a download whose server never sent a length, so a
+   * spinner keyed on the number alone kept sweeping after the task had already failed — the download
+   * center claimed it was still trying while the card underneath read 下载失败.
+   */
+  it('stops the progress animation once a download reaches a terminal state', () => {
+    expect(rendererSource).toMatch(
+      /const settled =\s*task\.state === 'cancelled' \|\| task\.state === 'completed' \|\| task\.state === 'failed';/,
+    );
+    expect(rendererSource).toContain('const indeterminate = !settled && task.percent < 0;');
+    expect(rendererSource).not.toContain('const indeterminate = task.percent < 0;');
+  });
 });

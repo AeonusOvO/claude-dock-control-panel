@@ -271,13 +271,19 @@ const quotePowerShellArgument = (value: string): string => `'${value.replaceAll(
  * Windows PowerShell 5 removes unescaped JSON quotes while rebuilding a native command line.
  * Escape every quote and double the backslash run before it so the native argv parser receives
  * the exact JSON text, including strings that themselves contain quotes or end in a backslash.
+ *
+ * Escaping the quotes is necessary but not sufficient. Once the value contains a `"`, PowerShell 5
+ * hands the string to the native command *verbatim*, without wrapping it in quotes of its own — so
+ * the MSVCRT argv parser splits the JSON on every space and Claude Code receives dozens of garbage
+ * arguments instead of one agent definition (68 argv entries for the web-research agent, and the
+ * agent silently never registered). Encoding each literal space as ` ` keeps the payload
+ * whitespace-free, and since it is a JSON string escape the parsed object is byte-identical.
  */
 const quotePowerShellNativeJsonArgument = (value: Readonly<Record<string, unknown>>): string => {
   const serialized = JSON.stringify(value);
-  const nativeSafe = serialized.replace(
-    /(\\*)"/g,
-    (_match, backslashes: string) => `${backslashes}${backslashes}\\"`,
-  );
+  const nativeSafe = serialized
+    .replace(/(\\*)"/g, (_match, backslashes: string) => `${backslashes}${backslashes}\\"`)
+    .replaceAll(' ', '\\u0020');
   return quotePowerShellArgument(nativeSafe);
 };
 

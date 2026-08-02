@@ -14,6 +14,7 @@ import {
   normalizeClaudeConfig,
   shouldDisableInheritedApiKeyHelper,
 } from '../src/main/claude-configuration';
+import { CLAUDEDOCK_WEB_RESEARCH_AGENTS } from '../src/main/claude-web-research';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 
 const gatewayInput: SaveClaudeConfigInput = {
@@ -256,51 +257,67 @@ describe('Claude Code configuration', () => {
 
   const itWindows = process.platform === 'win32' ? it : it.skip;
 
-  itWindows('preserves the --agents JSON through Windows PowerShell native argv handling', () => {
-    const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'claudedock-argv-'));
-    const probePath = path.join(temporaryDirectory, 'argv-probe.cjs');
-    const agents = {
-      'claudedock-web-research': {
-        effort: 'high',
-        prompt: 'Inspect C:\\research\\ and preserve "quoted evidence".',
-        tools: ['WebSearch', 'WebFetch'],
+  /*
+   * This is the guard that replaces probing a live session by hand. Whether PowerShell 5 mangles a
+   * native argument depends on the payload, so the shipped definition is the one under test: an
+   * invented fixture survived the old escaping while the real agent arrived as 75 separate argv
+   * entries and Claude Code reported `Agent type 'claudedock-web-research' not found`.
+   */
+  itWindows.each([
+    ['the shipped web research definition', CLAUDEDOCK_WEB_RESEARCH_AGENTS],
+    [
+      'quotes and trailing backslashes',
+      {
+        'claudedock-web-research': {
+          effort: 'high',
+          prompt: 'Inspect C:\\research\\ and preserve "quoted evidence".',
+          tools: ['WebSearch', 'WebFetch'],
+        },
       },
-    };
+    ],
+  ])(
+    'preserves --agents through Windows PowerShell native argv handling: %s',
+    (_name, agents: Readonly<Record<string, unknown>>) => {
+      const temporaryDirectory = mkdtempSync(path.join(tmpdir(), 'claudedock-argv-'));
+      const probePath = path.join(temporaryDirectory, 'argv-probe.cjs');
 
-    try {
-      writeFileSync(
-        probePath,
-        'process.stdout.write(JSON.stringify(process.argv.slice(2)));',
-        'utf8',
-      );
-      const launchCommand = buildClaudeLaunchCommand(
-        'C:\\Users\\Tester\\settings.json',
-        'claude-model',
-        'continue',
-        '',
-        undefined,
-        { allowBypass: false },
-        { agents },
-      );
-      const quotePowerShell = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-      const probeCommand = launchCommand.replace(
-        '& claude ',
-        `& ${quotePowerShell(process.execPath)} ${quotePowerShell(probePath)} `,
-      );
-      const output = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', probeCommand],
-        { encoding: 'utf8' },
-      );
-      const argv = JSON.parse(output) as string[];
-      const agentsIndex = argv.indexOf('--agents');
+      try {
+        writeFileSync(
+          probePath,
+          'process.stdout.write(JSON.stringify(process.argv.slice(2)));',
+          'utf8',
+        );
+        const launchCommand = buildClaudeLaunchCommand(
+          'C:\\Users\\Tester\\settings.json',
+          'claude-model',
+          'continue',
+          '',
+          undefined,
+          { allowBypass: false },
+          { agents },
+        );
+        const quotePowerShell = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+        const probeCommand = launchCommand.replace(
+          '& claude ',
+          `& ${quotePowerShell(process.execPath)} ${quotePowerShell(probePath)} `,
+        );
+        const output = execFileSync(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-Command', probeCommand],
+          { encoding: 'utf8' },
+        );
+        const argv = JSON.parse(output) as string[];
+        const agentsIndex = argv.indexOf('--agents');
 
-      expect(agentsIndex).toBeGreaterThan(-1);
-      expect(JSON.parse(argv[agentsIndex + 1] ?? '')).toEqual(agents);
-    } finally {
-      rmSync(temporaryDirectory, { force: true, recursive: true });
-    }
-  });
+        // One argument, not a spray of whitespace-split fragments.
+        expect(argv.filter((value) => value.includes('claudedock-web-research'))).toHaveLength(1);
+        expect(agentsIndex).toBeGreaterThan(-1);
+        expect(JSON.parse(argv[agentsIndex + 1] ?? '')).toEqual(agents);
+      } finally {
+        rmSync(temporaryDirectory, { force: true, recursive: true });
+      }
+    },
+  );
 
   it('arms the bypass cycle without starting in it', () => {
     const command = buildClaudeLaunchCommand(

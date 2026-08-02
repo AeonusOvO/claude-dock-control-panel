@@ -4448,6 +4448,7 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
 .cc-switch-actions button,
 .connection-test > button,
 .mcp-backups button,
+.mcp-toolbar > button,
 .router-actions button,
 .router-remediation button,
 .router-provider-heading button,
@@ -5869,6 +5870,7 @@ button:disabled {
 .help-link-grid button,
 .install-source-row button,
 .mcp-backups button,
+.mcp-toolbar > button,
 .provider-setup__links button,
 .router-actions button,
 .router-provider-card__actions button,
@@ -5896,6 +5898,7 @@ button:disabled {
 .help-link-grid button:hover:not(:disabled),
 .install-source-row button:hover:not(:disabled),
 .mcp-backups button:hover:not(:disabled),
+.mcp-toolbar > button:hover:not(:disabled),
 .provider-setup__links button:hover:not(:disabled),
 .router-actions button:hover:not(:disabled),
 .router-provider-card__actions button:hover:not(:disabled),
@@ -5935,6 +5938,28 @@ button:disabled {
 .launch-primary:active:not(:disabled),
 .launch-secondary:active:not(:disabled) {
   transform: scale(var(--press-lg));
+}
+
+/*
+ * `.dialog-primary` only ever got painted by dialog-scoped rules, so the same class used outside a
+ * dialog footer (the router wizard's submit) fell through to the Chromium button default. The class
+ * now carries its own look; the scoped rules just restate it at higher specificity.
+ */
+.dialog-primary {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  color: var(--accent-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  min-height: 34px;
+  padding: 8px 15px;
+}
+
+.dialog-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
+  border-color: var(--accent-ring);
 }
 
 .dialog-primary,
@@ -6260,6 +6285,42 @@ button:disabled {
   to {
     opacity: var(--card-rest-opacity);
     transform: translateY(0);
+  }
+}
+
+/*
+ * The MCP lists are rebuilt wholesale on every refresh, so the shared card entrance replayed on
+ * every card at once and an install read as the whole list flickering rather than one row arriving.
+ * Cards that survived the rerender hold still; only a server that is genuinely new plays the
+ * entrance, and it lands with an accent sweep so the eye goes to the row that actually changed.
+ */
+.plugin-card[data-fresh='false'] {
+  animation: none;
+}
+
+.plugin-card[data-fresh='true'] {
+  animation:
+    pluginCardEnter var(--dur-3) var(--ease-decel),
+    mcpCardArrive calc(var(--dur-3) * 4) var(--ease-standard);
+}
+
+@keyframes mcpCardArrive {
+  0% {
+    background: var(--accent-tint);
+    border-color: var(--accent-ring);
+    box-shadow: 0 0 0 3px var(--accent-tint);
+  }
+
+  55% {
+    background: var(--accent-tint);
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 0 transparent;
+  }
+
+  100% {
+    background: var(--surface-3);
+    border-color: var(--line-subtle);
+    box-shadow: 0 0 0 0 transparent;
   }
 }
 

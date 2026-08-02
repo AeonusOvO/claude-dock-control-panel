@@ -307,7 +307,14 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   Xray-core，写 `direct` 会顶掉用户已有的系统代理并让引导过程永远停在 0%。仍然不存在系统代理
   写入模式，不调用注册表写入、`setx` 或路由表命令，也不读取/修改 Claude/Codex 桌面版配置。
   `applyApplicationProxyScope()` 以规则签名去重，避免每条运行日志都触发一次
-  `closeAllConnections()` 把在途下载打断。
+  `closeAllConnections()` 把在途下载打断。签名必须在构造 `XraySidecar` 时就用当前规则登记为
+  「已应用」：它以空串起步时，sidecar 刚进入 `starting` 就被当成规则变化，于是在
+  `downloadURL()` 打开套接字之后几毫秒真的执行了一次 `setProxy` + `closeAllConnections()`，
+  把 Xray-core 引导下载掐死在 0 字节，界面报「60 秒内没有收到任何数据」。`starting`、
+  `stopping`、`error` 与 `stopped` 解析出的规则本就同为 `{ mode: 'system' }`，登记之后整个启动
+  路径在隧道真正 `ready` 之前不会再碰 Chromium 的代理设置——下载内核本身不需要任何代理。
+  `tests/proxy-environment.test.ts` 锁定这条不变量与构造处的登记调用；
+  `scripts/xray-download-race-smoke.cjs` 是需要联网的复现用具。
 - 隧道就绪时写入 `autoStart`，停止或启动失败时立即清除，因此下次启动能区分「代理运行中被直接
   退出」与「用户主动停止」，只对前者自动恢复。恢复动作在窗口创建后触发且不阻塞启动。
 - `LeakAuditService` 并行比较直连/代理出口、ASN/机房启发式、DNS、WebRTC 和进程环境；结论与
@@ -1023,6 +1030,18 @@ PowerShell 单引号只能保护 shell 解析，不能保证 `claude.exe` 最终
 直接安装的 `claude.exe` 都能收到可解析的完整 JSON；普通路径、模型和系统提示仍沿用原转义，
 不会多出反斜杠。
 
+只转义引号还不够。一旦参数里含有 `"`，PowerShell 5 就把这段字符串**原样**交给原生命令、
+不再补自己的外层引号，于是 MSVCRT 的 argv 解析按空格拆分——实测下发的子代理定义会变成 75 个
+参数，Claude Code 因此一直报 `Agent type 'claudedock-web-research' not found`。编码的最后一步
+把 JSON 里剩余的字面空格换成 ` `：它是合法的 JSON 字符串转义，解析结果与原对象逐字节相同，
+但参数里不再有可供拆分的空白。空格只会出现在 `JSON.stringify` 产生的字符串字面量内部
+（输出无缩进），因此这步替换不会碰到结构字符。
+
+这条链路是否出问题取决于具体载荷，所以 `tests/claude-configuration.test.ts` 的 argv 回归测试
+直接使用实际下发的 `CLAUDEDOCK_WEB_RESEARCH_AGENTS`：此前那个自造载荷恰好能通过旧编码，测试
+因此在缺陷存在时仍然是绿的。测试启动 argv 探针、重新解析 `--agents`，并断言 argv 中只有一个
+参数包含代理名。验证不依赖每次新开对话手动发一条联网请求。
+
 临时 settings 的 `PreToolUse` 只在联网检索隔离开启时写入，对 `WebSearch|WebFetch` 调用
 `assets/runtime/claude-web-search-guard.ps1`。脚本解析 hook 的 `agent_type`：专用子代理内放行，
 主线程直调返回 exit 2，并把“改用 `claudedock-web-research`”作为工具拒绝原因交给 Claude；hook
@@ -1318,7 +1337,10 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   在这里锁定：`.terminal-composer` 与 `.chat-composer` 的聚焦规则必须是同一条（不得再出现
   只服务对话的 `chatComposerFocusIn`），每个按钮都必须有按压响应，且任何 `scale(var(--…))`
   引用的令牌都必须真实存在——`.chat-settings-trigger` 曾引用不存在的 `--press-scale`，按压
-  静默失效。
+  静默失效。同一文件还锁定 MCP 面板的两处外观契约：`.mcp-toolbar > button` 必须落在共享
+  tint 按钮族的底色、过渡与悬停三条规则里（「全部刷新」正是漏掉后退回 Chromium 原生外观的
+  那个），`.dialog-primary` 必须自带底色而不是只靠弹窗内的作用域规则上色；以及卡片入场只能
+  由 `data-fresh` 驱动，`renderMcpCatalog` 必须比对上一次渲染的服务器键集合。
 - `tests/quit-confirmation.test.ts` 固化退出握手的每一个逃生口：`before-quit` 必须在执行
   teardown 之前把未置闩的退出退回 `requestQuit()`；`canAsk` 健康检查、二次请求强制通过和
   单实例锁失败必须无条件退出；`session-end` 必须直接置闩不发问；`app:confirm-quit` 只在
@@ -1333,7 +1355,10 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   `--append-system-prompt` 与 WebSearch guard 命令的 PowerShell 引号，反过来也断言联网检索
   隔离关闭时这三样都不出现、命令仍是一个原样的 `& claude`，并在 Windows 上把完整
   启动命令交给真实 `powershell.exe` 和 argv 探针，确认包含反斜杠与嵌套引号的 agents JSON
-  到达原生进程后仍可解析且内容不变。
+  到达原生进程后仍可解析且内容不变。这条 Windows 用例按载荷参数化，第一组就是实际下发的
+  `CLAUDEDOCK_WEB_RESEARCH_AGENTS`：旧的自造夹具恰好躲过了 PowerShell 5 的拆分，而真实定义
+  会被切成 75 段，因此除了 JSON 往返还断言 argv 里只出现一个含 `claudedock-web-research`
+  的条目。
 - `tests/advanced-settings-store.test.ts` 锁定高级设置默认全关、开关往返持久化并以 version 1
   落盘、非布尔值被拒，以及文件损坏/版本不符/字段缺失时回落到默认值。
 - `tests/connection-endpoint.test.ts` 分开覆盖两条路径：`completeConnectionEndpoint` 补出完整
@@ -1364,6 +1389,10 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   既容纳冷启动又防止脚本挂死拖住 CI。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
+- `tests/download-contracts.test.ts` 锁定下载 IPC 三件套（列表、命令、变更订阅）跨进程连通、
+  每个改动前都校验发送方与任务 ID、CCR 与 Codex 都走共享的校验下载内核，以及下载中心的
+  进度呈现：不确定态只属于仍在推进的任务，`cancelled` / `completed` / `failed` 必须立刻停下
+  转圈动画——`percent` 在服务端没给长度时一直是 `-1`，只看这个数字会让失败的下载永远转下去。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
@@ -1398,6 +1427,13 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow，并在最终
   PTY size 确认行后捕获 `dist/visual-qa/conpty-resize-live.png`。该 Windows 专用烟测补足
   静态终端 fixture 无法证明 PTY resize/reflow 的边界，结束后删除临时用户目录。
+- `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
+  `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
+  几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 160 个按钮全部命中
+  主题。
+- `npm run test:xray-download` 运行 `scripts/xray-download-race-smoke.cjs` 的 `control` 变体，
+  用真实 GitHub 资产验证默认 session 不经任何代理也能取到 Xray-core；`teardown` 变体复现修复
+  前的竞态。它需要联网，不进 CI；离线守栏是上文的 `tests/proxy-environment.test.ts` 不变量。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`

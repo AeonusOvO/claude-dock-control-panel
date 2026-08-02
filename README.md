@@ -4,7 +4,31 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（3.0.1 · 2026-08-02）
+## 当前版本重点（3.0.2 · 2026-08-02）
+
+- 修复联网检索隔离始终报 `Agent type 'claudedock-web-research' not found`。2.5.4 只转义了引号，
+  但 Windows PowerShell 5 见到含引号的原生参数就原样传下去、不再补外层引号，于是 MSVCRT 按
+  空格把这段 JSON 拆成 75 个参数，子代理从未注册成功。现在把 JSON 里的空格一并编码成
+  ` `——它本身就是合法的 JSON 转义，解析结果逐字节一致，参数里则不再有可拆分的空白。
+- 修复 2.5.4 那条回归测试放过真实缺陷：它用的是自造载荷，恰好能通过旧转义。测试改为直接跑
+  实际下发的 `claudedock-web-research` 定义，并断言 argv 中只有一个包含代理名的参数。这样验证
+  不再依赖每次新开对话手动发一条联网请求。
+- 修复未挂任何代理时启动内置代理必定下载失败（「60 秒内没有收到任何数据」）。`setProxy` +
+  `closeAllConnections()` 的去重签名以空串起步，因此 sidecar 刚进入 `starting` 就被当成规则变化，
+  真的执行了一次连接清空，正好掐断刚刚建立的 Xray-core 引导下载。现在在构造 sidecar 时先把当前
+  规则登记为已应用；`starting` 与 `stopped` 解析出的规则本就相同，整个启动路径在隧道真正就绪前
+  不会再碰 Chromium 的代理设置。下载核心不需要先有代理。
+- 修复下载失败后进度条继续转圈。服务器没给长度时 `percent` 全程是 -1，只看这个数字的话
+  已失败、已取消的任务会永远保持不确定态动画；现在终态一律停止动画并显示确定进度。
+- 修复 MCP「全部刷新」与路由向导提交按钮仍是 Chromium 原生按钮。`.dialog-primary` 此前只由对话框
+  作用域的选择器上色，类名本身没有外观；现在这两个控件分别并入主题的浅色按钮套件和
+  `.dialog-primary` 自带外观，新增 `npm run test:control-theme` 遍历全部 160 个按钮，任何一个落回
+  原生样式都会失败。
+- 修复新增 MCP 没有契合主题的动效。两个 MCP 列表每次渲染都整体重建，卡片入场动画因此在所有行上
+  同时重放，安装一个服务器看起来像整块面板闪一下。现在只有本次渲染中真正新出现的服务器才播放
+  入场动画，并带一段主题强调色的落定过渡。
+
+## 3.0.1 版本重点（2026-08-02）
 
 - 修复内置代理对自建节点完全不可用的问题。此前解析器只认 `security=tls`，REALITY 分享链接的
   `pbk` / `sid` / `spx` / `fp` / `flow` / `alpn` 等参数全部被丢弃，节点被静默降级成明文 TCP，
@@ -560,6 +584,7 @@ npm run format:check
 npm run typecheck
 npm test
 npm run test:conpty
+npm run test:control-theme
 npm run test:layout
 npm run test:visual
 npm run build
@@ -578,6 +603,11 @@ npm run dist
 `npm run test:conpty` 使用一次性用户目录启动真实 PowerShell ConPTY，在 820→1400→900→
 1280→1180px 间往返缩放并把最终终端截图写到
 `dist/visual-qa/conpty-resize-live.png`；它只在 Windows 上运行，不会读取或修改日常用户数据。
+`npm run test:control-theme` 在隐藏窗口里读取全部按钮的计算样式，任何一个仍是 Chromium
+用户代理默认外观（`border-style: outset`）的控件都会让它失败——主题里没有任何规则会产生
+`outset`，所以这等价于「这个按钮从未被项目选择器命中」。
+`npm run test:xray-download` 需要联网，它复现内置代理引导下载被自身代理清空掐断的竞态；
+对应的离线保证是 `tests/proxy-environment.test.ts` 中 `starting` 与 `stopped` 规则一致的断言。
 
 `npm run dist` 在 `outputs/` 完成 Windows x64 打包，最终安装程序固定为
 `outputs/ClaudeDock-Setup-<version>-x64.exe`。后续安装包、校验元数据和解包产物均只放在该

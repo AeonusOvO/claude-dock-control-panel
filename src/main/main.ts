@@ -3331,6 +3331,15 @@ if (!hasSingleInstanceLock) {
       }
       void applyApplicationProxyScope();
     });
+    /*
+     * Record the resting rules before anything can start the tunnel. Without this the cached
+     * signature is the empty string, so the first `setView({ status: 'starting' })` looked like a
+     * change and fired a real `setProxy` + `closeAllConnections()` — landing milliseconds after
+     * `downloadURL()` opened the socket for the Xray-core bootstrap and killing it at 0 bytes. A
+     * starting sidecar resolves to the same `{ mode: 'system' }` as a stopped one, so once the
+     * signature is primed the whole startup path is a no-op until the tunnel is genuinely ready.
+     */
+    await applyApplicationProxyScope();
     const directAuditSession = session.fromPartition('claudedock-proxy-audit-direct');
     const proxiedAuditSession = session.fromPartition('claudedock-proxy-audit-tunnel');
     await directAuditSession.setProxy({ mode: 'direct' });
