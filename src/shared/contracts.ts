@@ -42,6 +42,12 @@ export interface DownloadTaskView {
 }
 export type ProxyProtocol = 'http' | 'shadowsocks' | 'socks' | 'trojan' | 'vless' | 'vmess';
 export type ProxyTransport = 'grpc' | 'http' | 'tcp' | 'ws';
+/**
+ * The transport-security modes Xray accepts on `streamSettings.security`. `reality` is its own mode
+ * rather than a flavour of `tls`: it carries a public key and short id instead of a certificate, so
+ * folding it into a boolean silently downgrades a REALITY node to plaintext.
+ */
+export type ProxySecurity = 'none' | 'reality' | 'tls';
 export type ProxyRuntimeStatus = 'error' | 'starting' | 'stopped' | 'stopping' | 'ready';
 export interface ProxyCredentialInput {
   alterId?: number;
@@ -50,7 +56,28 @@ export interface ProxyCredentialInput {
   username?: string;
   uuid?: string;
 }
-export interface ProxyProfileInput {
+/** Stream-layer options shared by every protocol, mirroring v2rayN's share-link query parameters. */
+export interface ProxyStreamOptions {
+  allowInsecure?: boolean;
+  alpn?: string;
+  /** VLESS `encryption`; Xray requires the literal `none` when the node does not negotiate one. */
+  encryption?: string;
+  fingerprint?: string;
+  /** VLESS flow control, e.g. `xtls-rprx-vision`. */
+  flow?: string;
+  /** TCP obfuscation header, e.g. `http`. */
+  headerType?: string;
+  /** Host header for ws/http transports, and the TCP HTTP-header host list. */
+  host?: string;
+  /** REALITY public key (`pbk`). */
+  publicKey?: string;
+  security?: ProxySecurity;
+  /** REALITY short id (`sid`). */
+  shortId?: string;
+  /** REALITY spider path (`spx`). */
+  spiderX?: string;
+}
+export interface ProxyProfileInput extends ProxyStreamOptions {
   address: string;
   credentials?: ProxyCredentialInput;
   id?: string;
@@ -63,13 +90,14 @@ export interface ProxyProfileInput {
   transport?: ProxyTransport;
   transportPath?: string;
 }
-export interface ProxyProfileView {
+export interface ProxyProfileView extends ProxyStreamOptions {
   address: string;
   hasCredentials: boolean;
   id: string;
   port: number;
   protocol: ProxyProtocol;
   remark: string;
+  security: ProxySecurity;
   serverName?: string;
   subscriptionId?: string;
   tls: boolean;
@@ -92,6 +120,13 @@ export interface ProxyScopeSettings {
   application: boolean;
 }
 export interface ProxyStoredState {
+  /**
+   * Whether the user last left the built-in proxy running. It survives an unexpected exit — a tray
+   * quit, Alt+F4, a crash — so the next launch can bring the tunnel back up on its own. Stopping the
+   * proxy explicitly clears it; `runtimeStatus` is deliberately not used for this because it is a
+   * live process state and is reset to `stopped` on every load.
+   */
+  autoStart?: boolean;
   lastAuditConclusion?: 'passed' | 'risk' | 'warning';
   lastAuditAt?: number;
   runtimeStatus: ProxyRuntimeStatus;

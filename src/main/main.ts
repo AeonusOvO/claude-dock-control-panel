@@ -795,13 +795,24 @@ const routerKernelFailure = async (
   };
 };
 
+/**
+ * The last rules handed to Chromium. `setProxy` + `closeAllConnections` tears down every live socket,
+ * so replaying identical rules on each runtime-view change (every log line during startup) would keep
+ * killing the very download that startup is waiting on.
+ */
+let appliedProxyRules = '';
+
 const applyApplicationProxyScope = async (): Promise<void> => {
   if (!proxyStore || !xraySidecar) {
     return;
   }
-  await session.defaultSession.setProxy(
-    builtInProxyRules(xraySidecar.getView(), proxyStore.getView().scope),
-  );
+  const rules = builtInProxyRules(xraySidecar.getView(), proxyStore.getView().scope);
+  const signature = JSON.stringify(rules);
+  if (signature === appliedProxyRules) {
+    return;
+  }
+  appliedProxyRules = signature;
+  await session.defaultSession.setProxy(rules);
   await session.defaultSession.closeAllConnections();
 };
 
@@ -841,6 +852,40 @@ const runSelectedProxyAudit = async (): Promise<ProxyAuditRecord> => {
   });
   mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
   return record;
+};
+
+/**
+ * Shared by the IPC handler and the launch-time restore. `autoStart` is only written once the tunnel
+ * is genuinely up, and cleared the moment it is not, so an unexpected exit can be told apart from a
+ * deliberate stop or a start that never succeeded.
+ */
+const startBuiltInProxy = async (manualCorePath?: string): Promise<void> => {
+  const { sidecar, store } = requireProxyServices();
+  const profile = selectedProxyProfile();
+  store.setState({ runtimeStatus: 'starting' });
+  try {
+    await sidecar.start(profile, manualCorePath);
+    store.setState({ autoStart: true, runtimeStatus: 'ready' });
+    await applyApplicationProxyScope();
+    requireNetworkPreflightService().invalidate('built-in-proxy-started');
+    await runSelectedProxyAudit();
+  } catch (error) {
+    // A cancelled or failed start leaves nothing running: report 已停止 so 启动 becomes available again.
+    store.setState({ autoStart: false, runtimeStatus: 'stopped' });
+    await applyApplicationProxyScope();
+    throw error;
+  } finally {
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+  }
+};
+
+const stopBuiltInProxy = async (): Promise<void> => {
+  const { sidecar, store } = requireProxyServices();
+  await sidecar.stop();
+  store.setState({ autoStart: false, runtimeStatus: 'stopped' });
+  await applyApplicationProxyScope();
+  requireNetworkPreflightService().invalidate('built-in-proxy-stopped');
+  mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
 };
 
 const validateProxyProfileId = (value: unknown): string => {
@@ -1465,30 +1510,14 @@ const registerIpc = (): void => {
     ) {
       throw new Error('Xray-core 路径无效。');
     }
-    const { sidecar, store } = requireProxyServices();
-    const profile = selectedProxyProfile();
-    store.setState({ runtimeStatus: 'starting' });
-    try {
-      await sidecar.start(profile, manualCorePath || undefined);
-      store.setState({ runtimeStatus: 'ready' });
-      requireNetworkPreflightService().invalidate('built-in-proxy-started');
-      await runSelectedProxyAudit();
-    } catch (error) {
-      store.setState({ runtimeStatus: 'error' });
-      throw error;
-    } finally {
-      mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    }
+    await startBuiltInProxy(
+      typeof manualCorePath === 'string' ? manualCorePath || undefined : undefined,
+    );
     return proxyControlView();
   });
   ipcMain.handle('proxy:stop', async (event) => {
     validateSender(event);
-    const { sidecar, store } = requireProxyServices();
-    await sidecar.stop();
-    store.setState({ runtimeStatus: 'stopped' });
-    await applyApplicationProxyScope();
-    requireNetworkPreflightService().invalidate('built-in-proxy-stopped');
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    await stopBuiltInProxy();
     return proxyControlView();
   });
   ipcMain.handle('proxy:run-audit', async (event) => {
@@ -3405,6 +3434,15 @@ if (!hasSingleInstanceLock) {
     }
 
     await createWindow();
+
+    /*
+     * If the tunnel was up when ClaudeDock last went away — tray quit, Alt+F4, a crash — bring it
+     * back on its own. It runs after the window exists so the panel shows 启动中 and the failure
+     * message, and it is deliberately not awaited: a slow core download must not block startup.
+     */
+    if (proxyStore?.getView().state.autoStart) {
+      void startBuiltInProxy().catch(() => undefined);
+    }
   });
 }
 

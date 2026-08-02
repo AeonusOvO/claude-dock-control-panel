@@ -833,12 +833,23 @@ const renderProxyImportPreview = (preview: ProxyImportPreview): void => {
       label.className = 'proxy-import-item';
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
+      // Previewing is already the "I want these" gesture; unticked boxes only make 保存所选节点 look
+      // broken when a single pasted link is on screen.
+      checkbox.checked = true;
       checkbox.dataset.proxyImportIndex = String(index);
       const summary = document.createElement('span');
       const name = document.createElement('strong');
       const detail = document.createElement('small');
       name.textContent = profile.remark || `${profile.protocol} · ${profile.address}`;
-      detail.textContent = `${profile.protocol.toUpperCase()} · ${profile.address}:${profile.port}`;
+      detail.textContent = [
+        `${profile.protocol.toUpperCase()} · ${profile.address}:${profile.port}`,
+        profile.security && profile.security !== 'none'
+          ? profile.security.toUpperCase()
+          : undefined,
+        profile.flow,
+      ]
+        .filter(Boolean)
+        .join(' · ');
       summary.append(name, detail);
       label.append(checkbox, summary);
       checkbox.addEventListener('change', () => {
@@ -849,7 +860,7 @@ const renderProxyImportPreview = (preview: ProxyImportPreview): void => {
       return label;
     }),
   );
-  proxySaveSelected.disabled = true;
+  proxySaveSelected.disabled = preview.profiles.length === 0;
 };
 
 const renderProxyState = (state: ProxyControlView): void => {
@@ -870,8 +881,11 @@ const renderProxyState = (state: ProxyControlView): void => {
     ],
   );
   proxyProfileSelect.value = selectedId;
-  proxyProfileSelect.disabled = state.runtime.status !== 'stopped';
-  proxyRemoveProfile.disabled = !selectedId || state.runtime.status !== 'stopped';
+  // `error` means the tunnel died on its own — nothing is running, so switching nodes and starting
+  // again has to stay available; only a live or in-flight tunnel locks the selection.
+  const idle = state.runtime.status === 'stopped' || state.runtime.status === 'error';
+  proxyProfileSelect.disabled = !idle;
+  proxyRemoveProfile.disabled = !selectedId || !idle;
   proxyScopeCli.checked = state.store.scope.cli;
   proxyScopeApplication.checked = state.store.scope.application;
   proxyRuntimeStatus.textContent = state.runtime.error
@@ -879,8 +893,9 @@ const renderProxyState = (state: ProxyControlView): void => {
     : `${PROXY_RUNTIME_LABELS[state.runtime.status]}${state.runtime.httpProxyUrl ? ` · ${state.runtime.httpProxyUrl}` : ''}`;
   proxyRuntimeStatus.dataset.status = state.runtime.status;
   proxyRuntimeLog.textContent = state.runtime.logs.slice(-30).join('\n') || '暂无诊断日志。';
-  proxyStart.disabled = !selectedId || state.runtime.status !== 'stopped';
-  proxyStop.disabled = !['ready', 'error'].includes(state.runtime.status);
+  proxyStart.disabled = !selectedId || !idle;
+  // 停止 doubles as the abort for a start that is still fetching the core.
+  proxyStop.disabled = !['ready', 'error', 'starting'].includes(state.runtime.status);
   proxyRunAudit.disabled = state.runtime.status !== 'ready' || !selectedId;
   const latest = state.audits[0];
   proxyAuditSummary.textContent = latest

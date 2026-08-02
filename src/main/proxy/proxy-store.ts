@@ -8,6 +8,7 @@ import type {
   ProxyProtocol,
   ProxyRuntimeStatus,
   ProxyScopeSettings,
+  ProxySecurity,
   ProxyStoreView,
   ProxyStoredState,
   ProxyTransport,
@@ -44,6 +45,7 @@ const PROTOCOLS = new Set<ProxyProtocol>([
   'vmess',
 ]);
 const TRANSPORTS = new Set<ProxyTransport>(['grpc', 'http', 'tcp', 'ws']);
+const SECURITIES = new Set<ProxySecurity>(['none', 'reality', 'tls']);
 const RUNTIME_STATUSES = new Set<ProxyRuntimeStatus>([
   'error',
   'ready',
@@ -96,6 +98,15 @@ const normalizeCredentials = (
   return Object.values(credentials).some(Boolean) ? credentials : undefined;
 };
 
+/**
+ * Profiles saved before REALITY support recorded only the `tls` boolean. Reading them back through
+ * this keeps `security` authoritative everywhere else, so no call site has to branch on "old shape".
+ */
+const hydrateProfile = (profile: StoredProfile): StoredProfile => ({
+  ...profile,
+  security: SECURITIES.has(profile.security) ? profile.security : profile.tls ? 'tls' : 'none',
+});
+
 export const normalizeProxyProfile = (
   input: ProxyProfileInput,
   now = Date.now(),
@@ -114,6 +125,15 @@ export const normalizeProxyProfile = (
   if (!TRANSPORTS.has(transport)) {
     throw new Error('代理传输层不受支持。');
   }
+  // `security` wins when present; `tls` is the legacy spelling of `security: 'tls'`.
+  const security = input.security ?? (input.tls === true ? 'tls' : 'none');
+  if (!SECURITIES.has(security)) {
+    throw new Error('代理传输安全模式不受支持。');
+  }
+  const publicKey = optionalText(input.publicKey, 'REALITY 公钥', 128);
+  if (security === 'reality' && !publicKey) {
+    throw new Error('REALITY 节点缺少公钥（pbk）。');
+  }
   const id = input.id ? requiredText(input.id, '节点标识', 128) : randomUUID();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(id)) {
     throw new Error('节点标识格式无效。');
@@ -124,14 +144,25 @@ export const normalizeProxyProfile = (
     credentials,
     profile: {
       address,
+      allowInsecure: input.allowInsecure === true ? true : undefined,
+      alpn: optionalText(input.alpn, 'ALPN', 64),
       credentialRef,
+      encryption: optionalText(input.encryption, '加密方式', 64),
+      fingerprint: optionalText(input.fingerprint, 'TLS 指纹', 64),
+      flow: optionalText(input.flow, '流控方式', 64),
+      headerType: optionalText(input.headerType, '伪装类型', 64),
+      host: optionalText(input.host, '伪装域名', 1024),
       id,
       port: input.port,
       protocol: input.protocol,
+      publicKey,
       remark: optionalText(input.remark, '备注', 256) ?? `${input.protocol} · ${address}`,
+      security,
       serverName: optionalText(input.serverName, 'SNI', 253),
+      shortId: optionalText(input.shortId, 'REALITY Short ID', 128),
+      spiderX: optionalText(input.spiderX, 'REALITY SpiderX', 1024),
       subscriptionId: optionalText(input.subscriptionId, '订阅标识', 128),
-      tls: input.tls === true,
+      tls: security !== 'none',
       transport,
       transportPath: optionalText(input.transportPath, '传输路径', 1024),
       updatedAt: now,
@@ -251,7 +282,7 @@ export class ProxyStore {
         throw new Error('invalid');
       }
       return {
-        profiles: parsed.profiles,
+        profiles: parsed.profiles.map(hydrateProfile),
         scope: parsed.scope,
         state: { ...parsed.state, runtimeStatus: 'stopped' },
         version: 1,

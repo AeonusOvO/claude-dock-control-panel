@@ -52,6 +52,8 @@ interface ActiveDownload {
   resolve: (result: DownloadResult) => void;
   restored: boolean;
   settled: boolean;
+  stallBytes: number;
+  stallTimer?: ReturnType<typeof setTimeout>;
   startedAt: number;
   view: DownloadTaskView;
 }
@@ -59,6 +61,12 @@ interface ActiveDownload {
 const SPEED_EMA_ALPHA = 0.3;
 const SPEED_SAMPLE_MINIMUM_MS = 500;
 const JOURNAL_WRITE_INTERVAL_MS = 1_000;
+/**
+ * How long a running download may receive zero bytes before it is declared dead. Without this a
+ * blocked or blackholed connection never emits `done`, so the task sits at 0% forever and whatever
+ * is awaiting it — the Xray-core bootstrap, for one — hangs with no way to recover.
+ */
+const STALL_TIMEOUT_MS = 60_000;
 
 export const exponentialMovingAverage = (
   previous: number,
@@ -162,6 +170,7 @@ export class DownloadEngine {
       throw new Error('当前下载不能暂停。');
     }
     task.item.pause();
+    this.clearStallTimer(task);
     this.updateFromItem(task, 'progressing');
     return { ...task.view };
   }
@@ -172,6 +181,7 @@ export class DownloadEngine {
       throw new Error('当前下载不能继续。');
     }
     task.item.resume();
+    this.armStallTimer(task);
     this.updateFromItem(task, 'progressing');
     return { ...task.view };
   }
@@ -254,10 +264,43 @@ export class DownloadEngine {
     this.notify();
     try {
       this.electronSession.downloadURL(task.request.url);
+      this.armStallTimer(task);
     } catch (error) {
       this.fail(task, error instanceof Error ? error : new Error('无法启动下载。'));
     }
     return completion;
+  }
+
+  /**
+   * (Re)starts the zero-progress watchdog. Called whenever the task makes progress or resumes, so
+   * the timeout measures silence rather than total duration — a slow but live download is fine.
+   */
+  private armStallTimer(task: ActiveDownload): void {
+    this.clearStallTimer(task);
+    if (task.settled) {
+      return;
+    }
+    task.stallTimer = setTimeout(() => {
+      if (task.settled) {
+        return;
+      }
+      this.fail(
+        task,
+        new Error(
+          `${Math.round(STALL_TIMEOUT_MS / 1000)} 秒内没有收到任何数据，下载已停止。请检查网络连接或系统代理设置后重试。`,
+        ),
+      );
+      task.item?.cancel();
+      this.deletePartial(task);
+    }, STALL_TIMEOUT_MS);
+    task.stallTimer.unref?.();
+  }
+
+  private clearStallTimer(task: ActiveDownload): void {
+    if (task.stallTimer) {
+      clearTimeout(task.stallTimer);
+      task.stallTimer = undefined;
+    }
   }
 
   private createTask(
@@ -296,6 +339,7 @@ export class DownloadEngine {
       resolve,
       restored: Boolean(journalEntry),
       settled: false,
+      stallBytes: journalEntry?.receivedBytes ?? 0,
       startedAt,
       view: {
         bytesPerSecond: 0,
@@ -370,6 +414,7 @@ export class DownloadEngine {
     if (task.settled) {
       return;
     }
+    this.clearStallTimer(task);
     try {
       task.view = {
         ...task.view,
@@ -408,6 +453,7 @@ export class DownloadEngine {
     if (task.settled) {
       return;
     }
+    this.clearStallTimer(task);
     task.settled = true;
     task.view = {
       ...task.view,
@@ -527,6 +573,7 @@ export class DownloadEngine {
     if (task.settled) {
       return;
     }
+    this.clearStallTimer(task);
     task.settled = true;
     this.deletePartial(task);
     task.view = {
@@ -561,6 +608,12 @@ export class DownloadEngine {
     if (task.restored && receivedBytes < task.lastSampleBytes) {
       task.restored = false;
       task.view.errorMessage = '服务端文件已更新，已重新开始下载。';
+    }
+    if (receivedBytes !== task.stallBytes) {
+      task.stallBytes = receivedBytes;
+      this.armStallTimer(task);
+    } else if (task.item.isPaused()) {
+      this.clearStallTimer(task);
     }
     if (now - task.lastSampleAt >= SPEED_SAMPLE_MINIMUM_MS) {
       task.view.bytesPerSecond = exponentialMovingAverage(

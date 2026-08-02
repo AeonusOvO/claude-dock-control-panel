@@ -16,6 +16,7 @@ const profile = {
   port: 443,
   protocol: 'trojan' as const,
   remark: 'Synthetic',
+  security: 'tls' as const,
   tls: true,
   transport: 'tcp' as const,
   updatedAt: 1,

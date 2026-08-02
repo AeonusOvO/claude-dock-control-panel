@@ -15,5 +15,8 @@ outputs/*
 !outputs/.gitkeep
 work/
 
+# Upstream reference checkouts kept locally for cross-checking protocol behaviour.
+v2rayN-*/
+
 .DS_Store
 Thumbs.db

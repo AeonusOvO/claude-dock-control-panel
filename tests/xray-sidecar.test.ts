@@ -9,10 +9,30 @@ const profile = {
   port: 443,
   protocol: 'trojan' as const,
   remark: 'Synthetic',
+  security: 'tls' as const,
   serverName: 'sni.example',
   tls: true,
   transport: 'ws' as const,
   transportPath: '/socket',
+  updatedAt: 1,
+};
+
+/** The user-reported self-hosted node: VLESS + REALITY + XTLS vision over plain TCP. */
+const realityProfile = {
+  address: '64.64.253.190',
+  credentials: { uuid: 'cdd66f7e-3d8e-4751-c22f-069f198f7539' },
+  fingerprint: 'firefox',
+  flow: 'xtls-rprx-vision',
+  hasCredentials: true,
+  id: 'vless-reality',
+  port: 443,
+  protocol: 'vless' as const,
+  publicKey: '21GGhV4uBlCJ16U3-i8dTvR6S88dhp2qkBKqbR3xLy4',
+  remark: 'vless-reality',
+  security: 'reality' as const,
+  serverName: 'iosapps.itunes.apple.com',
+  tls: true,
+  transport: 'tcp' as const,
   updatedAt: 1,
 };
 
@@ -44,5 +64,33 @@ describe('Xray sidecar configuration', () => {
     expect(
       redactProxyLog('failed synthetic-secret synthetic%2Dsecret', ['synthetic-secret']),
     ).not.toContain('synthetic-secret');
+  });
+
+  it('emits realitySettings (never tlsSettings) and keeps XTLS flow for a REALITY node', () => {
+    const config = buildXrayConfig(realityProfile, 41001, 41002) as {
+      outbounds: Array<{
+        settings: { vnext: Array<{ users: Array<{ encryption: string; flow?: string }> }> };
+        streamSettings: Record<string, unknown>;
+      }>;
+    };
+    const outbound = config.outbounds[0]!;
+    expect(outbound.streamSettings).toEqual({
+      network: 'tcp',
+      realitySettings: {
+        fingerprint: 'firefox',
+        publicKey: '21GGhV4uBlCJ16U3-i8dTvR6S88dhp2qkBKqbR3xLy4',
+        serverName: 'iosapps.itunes.apple.com',
+        shortId: '',
+        show: false,
+        spiderX: '',
+      },
+      security: 'reality',
+    });
+    expect(outbound.streamSettings.tlsSettings).toBeUndefined();
+    expect(outbound.settings.vnext[0]!.users[0]).toEqual({
+      encryption: 'none',
+      flow: 'xtls-rprx-vision',
+      id: 'cdd66f7e-3d8e-4751-c22f-069f198f7539',
+    });
   });
 });

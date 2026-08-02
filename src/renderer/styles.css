@@ -400,8 +400,19 @@ svg {
   width: var(--s-2);
 }
 
-.titlebar__refresh--busy svg {
-  animation: refreshRotate var(--dur-refresh) linear infinite;
+/*
+ * The busy indicator is a ring drawn around the button, never the glyph inside it: a refresh arrow,
+ * a download arrow or a percentage all have a fixed reading direction, and spinning them reads as a
+ * rendering bug rather than as progress.
+ */
+.titlebar__refresh--busy::before {
+  animation: spinnerRingSpin var(--dur-refresh) linear infinite;
+  border: 2px solid var(--accent-tint);
+  border-radius: var(--r-pill);
+  border-top-color: var(--accent-solid);
+  content: '';
+  inset: -3px;
+  position: absolute;
 }
 
 .titlebar__downloads {
@@ -437,8 +448,15 @@ svg {
   color: var(--accent-text);
 }
 
-.titlebar__downloads[data-indeterminate='true'][data-active='true'] {
-  animation: downloadRingSpin var(--dur-progress) linear infinite;
+/* Only the arc turns; the glyph and the unread badge stay upright. */
+.titlebar__downloads[data-indeterminate='true'][data-active='true']::after {
+  animation: spinnerRingSpin var(--dur-progress) linear infinite;
+  border: 2px solid transparent;
+  border-radius: var(--r-pill);
+  border-top-color: var(--accent-solid);
+  content: '';
+  inset: 0;
+  position: absolute;
 }
 
 .titlebar__downloads svg {
@@ -464,9 +482,10 @@ svg {
   position: absolute;
   right: calc(var(--s-1) * -1);
   top: calc(var(--s-1) * -1);
+  z-index: 1;
 }
 
-@keyframes downloadRingSpin {
+@keyframes spinnerRingSpin {
   to {
     rotate: 1turn;
   }
@@ -4426,12 +4445,15 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
 .curl-analysis__actions button,
 .help-link-grid button,
 .analyze-curl,
+.cc-switch-actions button,
 .connection-test > button,
+.mcp-backups button,
 .router-actions button,
 .router-remediation button,
 .router-provider-heading button,
 .router-provider-card__actions button,
-.router-provider-form__actions button {
+.router-provider-form__actions button,
+.router-settings-entry button {
   background: var(--accent-tint);
   border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
@@ -5279,7 +5301,12 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   gap: 6px;
   list-style: none;
   margin: 0;
-  max-height: 360px;
+  /*
+   * A flat pixel cap is taller than the panel itself on a short or half-height window, so a long
+   * history still swallowed everything below it. Tying the cap to the viewport keeps the list
+   * scrolling inside its own box no matter how many setups have been saved.
+   */
+  max-height: min(360px, 42vh);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0;
@@ -5472,12 +5499,6 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   }
   100% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok-text) 0%, transparent);
-  }
-}
-
-@keyframes refreshRotate {
-  to {
-    transform: rotate(360deg);
   }
 }
 
@@ -5839,6 +5860,7 @@ button:disabled {
 .codex-readiness button,
 .codex-secondary-actions button,
 .codex-device-login button,
+.cc-switch-actions button,
 .connection-remedy button,
 .connection-test > button,
 .curl-analysis__actions button,
@@ -5846,12 +5868,14 @@ button:disabled {
 .gateway-candidate__actions button,
 .help-link-grid button,
 .install-source-row button,
+.mcp-backups button,
 .provider-setup__links button,
 .router-actions button,
 .router-provider-card__actions button,
 .router-provider-form__actions button,
 .router-provider-heading button,
-.router-remediation button {
+.router-remediation button,
+.router-settings-entry button {
   transition:
     background-color var(--dur-1) var(--ease-standard),
     border-color var(--dur-1) var(--ease-standard),
@@ -5863,6 +5887,7 @@ button:disabled {
 .codex-readiness button:hover:not(:disabled),
 .codex-secondary-actions button:hover:not(:disabled),
 .codex-device-login button:hover:not(:disabled),
+.cc-switch-actions button:hover:not(:disabled),
 .connection-remedy button:hover:not(:disabled),
 .connection-test > button:hover:not(:disabled),
 .curl-analysis__actions button:hover:not(:disabled),
@@ -5870,12 +5895,14 @@ button:disabled {
 .gateway-candidate__actions button:hover:not(:disabled),
 .help-link-grid button:hover:not(:disabled),
 .install-source-row button:hover:not(:disabled),
+.mcp-backups button:hover:not(:disabled),
 .provider-setup__links button:hover:not(:disabled),
 .router-actions button:hover:not(:disabled),
 .router-provider-card__actions button:hover:not(:disabled),
 .router-provider-form__actions button:hover:not(:disabled),
 .router-provider-heading button:hover:not(:disabled),
-.router-remediation button:hover:not(:disabled) {
+.router-remediation button:hover:not(:disabled),
+.router-settings-entry button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
   border-color: var(--accent-ring);
   color: var(--accent-text);
@@ -7673,9 +7700,15 @@ body.is-resizing * {
   transition: width var(--dur-3) var(--ease-standard);
 }
 
-.download-progress[data-indeterminate='true'] .download-progress__ring {
-  animation: downloadRingSpin var(--dur-progress) linear infinite;
-  background: conic-gradient(var(--accent-solid), transparent 42%);
+/* The percentage / ellipsis in the middle must stay readable, so only this overlay arc turns. */
+.download-progress[data-indeterminate='true'] .download-progress__ring::after {
+  animation: spinnerRingSpin var(--dur-progress) linear infinite;
+  border: var(--s-1) solid transparent;
+  border-radius: inherit;
+  border-top-color: var(--accent-solid);
+  content: '';
+  inset: 0;
+  position: absolute;
 }
 
 .download-progress[data-indeterminate='true'] .download-progress__linear > span {
@@ -7791,8 +7824,9 @@ body.is-resizing * {
 
 @media (prefers-reduced-motion: reduce) {
   .download-progress[data-indeterminate='true'] .download-progress__linear > span,
-  .download-progress[data-indeterminate='true'] .download-progress__ring,
-  .titlebar__downloads[data-indeterminate='true'][data-active='true'] {
+  .download-progress[data-indeterminate='true'] .download-progress__ring::after,
+  .titlebar__downloads[data-indeterminate='true'][data-active='true']::after,
+  .titlebar__refresh--busy::before {
     animation: none;
   }
 
@@ -8331,9 +8365,16 @@ body.is-resizing * {
   opacity: 0.55;
 }
 
+/*
+ * A pasted subscription can hold dozens of nodes. Without a ceiling the list pushes the save button
+ * and the runtime controls out of the panel instead of scrolling inside itself.
+ */
 .proxy-import-preview {
   display: grid;
   gap: var(--s-2);
+  max-height: min(280px, 36vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .proxy-import-item {
@@ -8386,6 +8427,9 @@ body.is-resizing * {
   gap: var(--s-2);
   list-style: none;
   margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0;
 }
 

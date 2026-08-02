@@ -279,7 +279,8 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `DownloadEngine` 只接受 HTTPS、成对的 host/path 白名单、`userData` 内目标、尺寸上限与可选
   精确字节/SHA-256。它基于 Electron `DownloadItem` 计算 EMA 速度、ETA 和真实百分比；未知
   `Content-Length` 以 `-1` 表达不确定态。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
-  `.partial` 原子改名为最终文件；失败或取消不会留下可执行的最终路径。
+  `.partial` 原子改名为最终文件；失败或取消不会留下可执行的最终路径。任务在 60 秒内没有收到
+  任何字节即判定停滞，主动取消、删除残片并给出可读原因，避免界面无限停在 0%。
 - `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
   `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界记录
   只会被丢弃，部分文件从不当作完成产物执行。CCR、Codex、Xray 和 CC Switch 的受管资源共用
@@ -288,10 +289,27 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   Electron `safeStorage` 密文保存。分享链接、Clash `proxies` 子集和 HTTPS 订阅由项目自研解析器
   处理；不引入或复制 GPL 代理实现。`XraySidecar` 只使用 MPL-2.0 的独立 Xray-core 进程，在
   `127.0.0.1` 暴露本机 HTTP 入站，运行配置为临时文件并在停止后清理。
+- 传输安全是三态 `ProxySecurity`（`none` / `tls` / `reality`），不是布尔量。解析器按 v2rayN
+  `VLESSFmt` + `BaseFmt.ResolveUriQuery` 的字段语义保留 `flow`、`encryption`、`fp`、`pbk`、
+  `sid`、`spx`、`alpn`、`host`、`headerType` 与 `allowInsecure`，Clash 侧读取等价的
+  `public-key` / `short-id` / `client-fingerprint` / `skip-cert-verify`。旧版存档在加载时按
+  `tls` 布尔补全 `security`。REALITY 节点缺少公钥在 `normalizeProxyProfile` 阶段即拒绝。
+- 生成配置对齐 `V2rayOutboundService.FillBoundStreamSettings`：`security` 只选择
+  `realitySettings` 或 `tlsSettings` 之一，两者不同时出现（给 REALITY 节点发 `tls` 会以证书
+  错误告终而不是回退）；REALITY 的空 `fingerprint` 回落到 `chrome`；XTLS `flow` 只在
+  `security !== 'none'` 时写入；VLESS 的 `encryption` 缺省为字面量 `none`。
+- 启动带世代号：`stop()` 自增世代并连带取消它正在等待的 Xray-core 下载，`start()` 在每个
+  await 边界比对世代，因此在下载界面取消后不会有旧的启动尝试继续跑完并静默进入 `ready`。
+  失败或取消的终态是 `stopped` 而非 `error`，界面据此重新提供「启动」。
 - CLI 作用域只给 ClaudeDock 启动的 Claude/Codex 子进程注入 `HTTP_PROXY` / `HTTPS_PROXY`，
   `NO_PROXY` 固定包含 `127.0.0.1,localhost,::1`。应用作用域是显式 opt-in 的 Electron session
-  `setProxy()`；不存在系统代理模式，不调用注册表写入、`setx` 或路由表命令，也不读取/修改
-  Claude/Codex 桌面版配置。
+  `setProxy()`；未启用时回落到 `mode: 'system'` 而非 `direct`——`defaultSession` 同时用于下载
+  Xray-core，写 `direct` 会顶掉用户已有的系统代理并让引导过程永远停在 0%。仍然不存在系统代理
+  写入模式，不调用注册表写入、`setx` 或路由表命令，也不读取/修改 Claude/Codex 桌面版配置。
+  `applyApplicationProxyScope()` 以规则签名去重，避免每条运行日志都触发一次
+  `closeAllConnections()` 把在途下载打断。
+- 隧道就绪时写入 `autoStart`，停止或启动失败时立即清除，因此下次启动能区分「代理运行中被直接
+  退出」与「用户主动停止」，只对前者自动恢复。恢复动作在窗口创建后触发且不阻塞启动。
 - `LeakAuditService` 并行比较直连/代理出口、ASN/机房启发式、DNS、WebRTC 和进程环境；结论与
   用户接受风险的决定写入不含节点秘密的审计记录。风险只阻断新的接入动作，已经运行的隧道保持
   运行。ASN/机房属于启发式证据，界面不得写成确定封号结论。

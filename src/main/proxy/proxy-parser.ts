@@ -3,6 +3,8 @@ import type {
   ProxyImportPreview,
   ProxyProfileInput,
   ProxyProtocol,
+  ProxySecurity,
+  ProxyStreamOptions,
   ProxyTransport,
 } from '../../shared/contracts';
 import { normalizeProxyProfile } from './proxy-store';
@@ -19,9 +21,62 @@ const booleanValue = (value: unknown): boolean =>
 const numberValue = (value: unknown): number =>
   typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
 
+/**
+ * v2rayN accepts `raw` as the modern alias of the `tcp` transport, and treats anything it does not
+ * recognise as `tcp` rather than rejecting the node.
+ */
 const transportValue = (value: unknown): ProxyTransport => {
   const normalized = String(value ?? 'tcp').toLowerCase();
   return normalized === 'ws' || normalized === 'grpc' || normalized === 'http' ? normalized : 'tcp';
+};
+
+/**
+ * `security` is a mode, not a flag: v2rayN stores `reality` alongside `tls` and `none`. Older links
+ * still write `security=1`/`true`, which mean TLS.
+ */
+const securityValue = (value: unknown): ProxySecurity => {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized === 'reality') {
+    return 'reality';
+  }
+  return normalized === 'tls' || booleanValue(normalized) ? 'tls' : 'none';
+};
+
+const queryText = (
+  parameters: URLSearchParams,
+  ...names: readonly string[]
+): string | undefined => {
+  for (const name of names) {
+    const value = parameters.get(name);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The stream-layer half of a share link, mirroring `BaseFmt.ResolveUriQuery` in v2rayN: everything a
+ * REALITY or XTLS node needs beyond host/port/uuid lives here, and dropping any of it turns the node
+ * into a plaintext TCP connection that no server will answer.
+ */
+const streamOptionsFromQuery = (parameters: URLSearchParams): ProxyStreamOptions => {
+  const security = securityValue(parameters.get('security'));
+  return {
+    allowInsecure: booleanValue(
+      queryText(parameters, 'allowInsecure', 'allow_insecure', 'insecure') ?? '',
+    ),
+    alpn: queryText(parameters, 'alpn'),
+    encryption: queryText(parameters, 'encryption'),
+    fingerprint: queryText(parameters, 'fp'),
+    flow: queryText(parameters, 'flow'),
+    headerType: queryText(parameters, 'headerType'),
+    host: queryText(parameters, 'host', 'authority'),
+    publicKey: queryText(parameters, 'pbk'),
+    security,
+    shortId: queryText(parameters, 'sid'),
+    spiderX: queryText(parameters, 'spx'),
+  };
 };
 
 const decodedRemark = (value: string): string | undefined => {
@@ -39,12 +94,23 @@ const validatedInput = (input: ProxyProfileInput): ProxyProfileInput => {
   const { credentials, profile } = normalizeProxyProfile(input);
   return {
     address: profile.address,
+    allowInsecure: profile.allowInsecure,
+    alpn: profile.alpn,
     credentials,
+    encryption: profile.encryption,
+    fingerprint: profile.fingerprint,
+    flow: profile.flow,
+    headerType: profile.headerType,
+    host: profile.host,
     id: profile.id,
     port: profile.port,
     protocol: profile.protocol,
+    publicKey: profile.publicKey,
     remark: profile.remark,
+    security: profile.security,
     serverName: profile.serverName,
+    shortId: profile.shortId,
+    spiderX: profile.spiderX,
     subscriptionId: profile.subscriptionId,
     tls: profile.tls,
     transport: profile.transport,
@@ -56,16 +122,20 @@ const parseVmess = (link: string): ProxyProfileInput => {
   const raw = JSON.parse(decodeBase64(link.slice('vmess://'.length))) as Record<string, unknown>;
   return validatedInput({
     address: String(raw.add ?? ''),
+    alpn: String(raw.alpn ?? '') || undefined,
     credentials: {
       alterId: numberValue(raw.aid) || 0,
       method: String(raw.scy ?? raw.security ?? 'auto'),
       uuid: String(raw.id ?? ''),
     },
+    fingerprint: String(raw.fp ?? '') || undefined,
+    headerType: String(raw.type ?? '') || undefined,
+    host: String(raw.host ?? '') || undefined,
     port: numberValue(raw.port),
     protocol: 'vmess',
     remark: String(raw.ps ?? ''),
+    security: securityValue(raw.tls),
     serverName: String(raw.sni ?? raw.host ?? '') || undefined,
-    tls: booleanValue(raw.tls),
     transport: transportValue(raw.net),
     transportPath: String(raw.path ?? '') || undefined,
   });
@@ -86,13 +156,13 @@ const parseUrlProfile = (link: string): ProxyProfileInput => {
         ? { password: user || password }
         : { password: password || undefined, username: user || undefined };
   return validatedInput({
+    ...streamOptionsFromQuery(url.searchParams),
     address: url.hostname,
     credentials,
     port: numberValue(url.port),
     protocol,
     remark: decodedRemark(url.hash.slice(1)),
     serverName: url.searchParams.get('sni') ?? url.searchParams.get('host') ?? undefined,
-    tls: booleanValue(url.searchParams.get('security')),
     transport: transportValue(url.searchParams.get('type')),
     transportPath: url.searchParams.get('path') ?? url.searchParams.get('serviceName') ?? undefined,
   });
@@ -184,14 +254,23 @@ const clashRecordToProfile = (record: Record<string, unknown>): ProxyProfileInpu
               password: record.password ? String(record.password) : undefined,
               username: record.username ? String(record.username) : undefined,
             };
+  // Clash flattens REALITY under `reality-opts:`; the line reader above hoists its keys to the node.
+  const publicKey = String(record['public-key'] ?? '') || undefined;
   return validatedInput({
     address: String(record.server ?? ''),
+    allowInsecure: booleanValue(record['skip-cert-verify']),
+    alpn: String(record.alpn ?? '') || undefined,
     credentials,
+    fingerprint: String(record['client-fingerprint'] ?? '') || undefined,
+    flow: String(record.flow ?? '') || undefined,
+    host: String(record.host ?? '') || undefined,
     port: numberValue(record.port),
     protocol,
+    publicKey,
     remark: String(record.name ?? ''),
+    security: publicKey ? 'reality' : securityValue(record.tls),
     serverName: String(record.sni ?? record.servername ?? '') || undefined,
-    tls: booleanValue(record.tls),
+    shortId: String(record['short-id'] ?? '') || undefined,
     transport: transportValue(record.network),
     transportPath: String(record.path ?? record['ws-path'] ?? '') || undefined,
   });

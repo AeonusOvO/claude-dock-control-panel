@@ -50,6 +50,41 @@ describe('proxy profile store', () => {
     });
   });
 
+  it('round-trips REALITY transport options and rejects a REALITY node without a public key', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-proxy-store-'));
+    const store = new ProxyStore(userDataPath, fakeSecretStorage);
+    const view = store.saveProfile({
+      address: '64.64.253.190',
+      credentials: { uuid: 'cdd66f7e-3d8e-4751-c22f-069f198f7539' },
+      fingerprint: 'firefox',
+      flow: 'xtls-rprx-vision',
+      id: 'vless-reality',
+      port: 443,
+      protocol: 'vless',
+      publicKey: '21GGhV4uBlCJ16U3-i8dTvR6S88dhp2qkBKqbR3xLy4',
+      remark: 'vless-reality',
+      security: 'reality',
+      serverName: 'iosapps.itunes.apple.com',
+      transport: 'tcp',
+    });
+    expect(view.profiles[0]).toMatchObject({
+      fingerprint: 'firefox',
+      flow: 'xtls-rprx-vision',
+      publicKey: '21GGhV4uBlCJ16U3-i8dTvR6S88dhp2qkBKqbR3xLy4',
+      security: 'reality',
+      serverName: 'iosapps.itunes.apple.com',
+    });
+    expect(() =>
+      store.saveProfile({
+        address: 'proxy.example',
+        credentials: { uuid: 'cdd66f7e-3d8e-4751-c22f-069f198f7539' },
+        port: 443,
+        protocol: 'vless',
+        security: 'reality',
+      }),
+    ).toThrow(/公钥/);
+  });
+
   it('fails closed when OS encryption is unavailable', () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-proxy-store-'));
     const store = new ProxyStore(userDataPath, {

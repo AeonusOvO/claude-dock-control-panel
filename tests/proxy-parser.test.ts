@@ -26,6 +26,25 @@ describe('proxy import parser', () => {
     ).toMatchObject({ protocol: 'shadowsocks', port: 8388 });
   });
 
+  it('keeps every REALITY parameter from a self-hosted vless link', () => {
+    expect(
+      parseProxyShareLink(
+        'vless://cdd66f7e-3d8e-4751-c22f-069f198f7539@64.64.253.190:443?flow=xtls-rprx-vision&fp=firefox&pbk=21GGhV4uBlCJ16U3-i8dTvR6S88dhp2qkBKqbR3xLy4&security=reality&sni=iosapps.itunes.apple.com&type=tcp#vless-reality',
+      ),
+    ).toMatchObject({
+      address: '64.64.253.190',
+      fingerprint: 'firefox',
+      flow: 'xtls-rprx-vision',
+      port: 443,
+      protocol: 'vless',
+      publicKey: '21GGhV4uBlCJ16U3-i8dTvR6S88dhp2qkBKqbR3xLy4',
+      remark: 'vless-reality',
+      security: 'reality',
+      serverName: 'iosapps.itunes.apple.com',
+      transport: 'tcp',
+    });
+  });
+
   it('parses only the Clash proxies section and reports malformed entries', () => {
     const preview = parseClashProxies(`
 proxies:

@@ -29,14 +29,20 @@ export const buildCliProxyEnvironment = (
   };
 };
 
+/**
+ * When the built-in tunnel is not applied to the app itself, ClaudeDock falls back to Windows' own
+ * proxy settings rather than `direct`. `direct` would override a working system proxy for our own
+ * network calls — including the Xray-core bootstrap download, which then stalls at 0% on machines
+ * that can only reach GitHub through that proxy. Reading the OS setting is not modifying it.
+ */
 export const builtInProxyRules = (
   runtime: ProxyRuntimeView | undefined,
   scope: ProxyScopeSettings,
-): { mode: 'direct' | 'fixed_servers'; proxyBypassRules?: string; proxyRules?: string } =>
+): { mode: 'system' | 'fixed_servers'; proxyBypassRules?: string; proxyRules?: string } =>
   scope.application && runtime?.status === 'ready' && runtime.httpProxyUrl
     ? {
         mode: 'fixed_servers',
         proxyBypassRules: '127.0.0.1,localhost,[::1]',
         proxyRules: runtime.httpProxyUrl,
       }
-    : { mode: 'direct' };
+    : { mode: 'system' };

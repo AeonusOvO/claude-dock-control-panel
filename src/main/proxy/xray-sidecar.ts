@@ -50,20 +50,67 @@ const reserveLoopbackPort = (): Promise<number> =>
     });
   });
 
+/** Share links pack comma-separated lists (`alpn`, `host`) into a single query value. */
+const commaList = (value?: string): string[] =>
+  (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+/**
+ * Mirrors v2rayN's `V2rayOutboundService.FillBoundStreamSettings`. `security` picks exactly one of
+ * `realitySettings` / `tlsSettings` — Xray ignores the other, and emitting `tls` for a REALITY node
+ * makes the handshake fail with a certificate error instead of negotiating.
+ */
 const streamSettings = (profile: XrayProfile): Record<string, unknown> => {
-  const settings: Record<string, unknown> = {
-    network: profile.transport,
-    security: profile.tls ? 'tls' : 'none',
-  };
-  if (profile.tls) {
-    settings.tlsSettings = { serverName: profile.serverName || profile.address };
+  const security = profile.security ?? (profile.tls ? 'tls' : 'none');
+  const hosts = commaList(profile.host);
+  const serverName = profile.serverName || hosts[0] || profile.address;
+  const settings: Record<string, unknown> = { network: profile.transport, security };
+  if (security === 'reality') {
+    settings.realitySettings = {
+      // Xray rejects an empty fingerprint; v2rayN falls back to chrome for the same reason.
+      fingerprint: profile.fingerprint || 'chrome',
+      publicKey: profile.publicKey ?? '',
+      serverName,
+      shortId: profile.shortId ?? '',
+      show: false,
+      spiderX: profile.spiderX ?? '',
+    };
+  } else if (security === 'tls') {
+    const alpn = commaList(profile.alpn);
+    settings.tlsSettings = {
+      allowInsecure: profile.allowInsecure === true,
+      alpn: alpn.length > 0 ? alpn : undefined,
+      fingerprint: profile.fingerprint || undefined,
+      serverName,
+    };
   }
   if (profile.transport === 'ws') {
-    settings.wsSettings = { path: profile.transportPath || '/' };
+    settings.wsSettings = {
+      headers: hosts[0] ? { Host: hosts[0] } : undefined,
+      path: profile.transportPath || '/',
+    };
   } else if (profile.transport === 'grpc') {
-    settings.grpcSettings = { serviceName: profile.transportPath || '' };
+    settings.grpcSettings = {
+      multiMode: profile.headerType === 'multi',
+      serviceName: profile.transportPath || '',
+    };
   } else if (profile.transport === 'http') {
-    settings.httpSettings = { path: [profile.transportPath || '/'] };
+    settings.httpSettings = {
+      host: hosts.length > 0 ? hosts : undefined,
+      path: profile.transportPath || '/',
+    };
+  } else if (profile.headerType === 'http') {
+    settings.tcpSettings = {
+      header: {
+        request: {
+          headers: { Host: hosts.length > 0 ? hosts : [serverName] },
+          path: [profile.transportPath || '/'],
+        },
+        type: 'http',
+      },
+    };
   }
   return settings;
 };
@@ -93,7 +140,15 @@ const outboundSettings = (profile: XrayProfile): Record<string, unknown> => {
           {
             address: profile.address,
             port: profile.port,
-            users: [{ encryption: 'none', id: credentials.uuid }],
+            users: [
+              {
+                // Xray requires the literal `none` when the node negotiates no VLESS encryption.
+                encryption: profile.encryption || 'none',
+                // XTLS flow only exists on top of a TLS or REALITY handshake.
+                flow: profile.security !== 'none' ? profile.flow || undefined : undefined,
+                id: credentials.uuid,
+              },
+            ],
           },
         ],
       };
@@ -229,6 +284,12 @@ export class XraySidecar {
   private readonly logs: string[] = [];
   private readonly pidPath: string;
   private readonly runtimeDirectory: string;
+  /**
+   * Bumped by every `stop()`. A start that is still fetching or extracting the core compares it
+   * across each await, so pressing 停止 mid-download actually abandons the attempt instead of
+   * letting it finish and silently re-enter `ready`.
+   */
+  private startGeneration = 0;
   private view: ProxyRuntimeView = {
     coreVersion: XRAY_CORE_RELEASE.version,
     logs: [],
@@ -269,14 +330,17 @@ export class XraySidecar {
     });
     try {
       await this.stop();
+      const generation = ++this.startGeneration;
       this.setView({ error: undefined, profileId: profile.id, status: 'starting' });
       const corePath = manualCorePath
         ? this.validateManualCorePath(manualCorePath)
         : await this.ensureCore();
+      this.assertCurrentStart(generation);
       const [httpPort, socksPort] = await Promise.all([
         reserveLoopbackPort(),
         reserveLoopbackPort(),
       ]);
+      this.assertCurrentStart(generation);
       mkdirSync(this.runtimeDirectory, { recursive: true });
       const configPath = path.join(this.runtimeDirectory, 'config.json');
       this.atomicWrite(configPath, buildXrayConfig(profile, httpPort, socksPort));
@@ -315,6 +379,7 @@ export class XraySidecar {
         this.atomicWrite(this.pidPath, { pid: child.pid, version: 1 });
       }
       await probeHttpInbound(httpPort);
+      this.assertCurrentStart(generation);
       this.setView({
         httpProxyUrl: `http://127.0.0.1:${httpPort}`,
         socksProxyUrl: `socks5://127.0.0.1:${socksPort}`,
@@ -322,10 +387,12 @@ export class XraySidecar {
       });
       return this.getView();
     } catch (error) {
+      // A failed or cancelled start leaves nothing running, so the state has to say `stopped` — the
+      // error text is kept for the log, but the panel must offer 启动 again rather than 停止.
       await this.stop();
       this.setView({
         error: error instanceof Error ? error.message : '内置代理启动失败。',
-        status: 'error',
+        status: 'stopped',
       });
       throw error;
     } finally {
@@ -334,6 +401,16 @@ export class XraySidecar {
   }
 
   public async stop(): Promise<ProxyRuntimeView> {
+    const wasStarting = this.view.status === 'starting';
+    this.startGeneration += 1;
+    if (wasStarting) {
+      // Abandoning a start also means abandoning the core download it is waiting on.
+      try {
+        this.downloadEngine.cancel(`xray-core-${XRAY_CORE_RELEASE.version}`);
+      } catch {
+        // No download in flight is the common case when the core is already installed.
+      }
+    }
     const child = this.child;
     if (!child) {
       this.removePidFile();
@@ -365,6 +442,12 @@ export class XraySidecar {
       status: 'stopped',
     });
     return this.getView();
+  }
+
+  private assertCurrentStart(generation: number): void {
+    if (this.startGeneration !== generation) {
+      throw new Error('内置代理启动已取消。');
+    }
   }
 
   private async ensureCore(): Promise<string> {

@@ -22,9 +22,9 @@ describe('CLI-only built-in proxy scope', () => {
     });
   });
 
-  it('keeps application proxying opt-in and has no system-proxy mode', () => {
+  it('keeps application proxying opt-in and never overrides the Windows proxy setting', () => {
     expect(builtInProxyRules(runtime, { application: false, cli: true })).toEqual({
-      mode: 'direct',
+      mode: 'system',
     });
     expect(builtInProxyRules(runtime, { application: true, cli: true })).toEqual({
       mode: 'fixed_servers',
