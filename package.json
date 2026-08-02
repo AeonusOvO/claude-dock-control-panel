@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,
@@ -30,6 +30,8 @@
     "test:select-theme": "npm run build:renderer && electron scripts/select-theme-smoke.cjs",
     "test:visual": "npm run build:renderer && electron scripts/visual-smoke.cjs",
     "test:xray-download": "electron scripts/xray-download-race-smoke.cjs",
+    "test:xray-probe": "npm run build:main && electron scripts/xray-core-probe-smoke.cjs",
+    "test:xray-install": "npm run build:main && electron scripts/xray-core-install-smoke.cjs",
     "test:coverage": "vitest run --coverage",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",

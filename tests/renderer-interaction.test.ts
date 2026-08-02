@@ -919,4 +919,132 @@ describe('sidebar conversation list affordances', () => {
       "closeButton.setAttribute('aria-label', `关闭对话 ${status.title}，归档到历史对话`);",
     );
   });
+
+  /*
+   * The delete button crossfades in over the timestamp, and both used to sit 2px from the scroller's
+   * padding edge — directly under the vertical scrollbar's gutter, so hovering a row put the button
+   * beneath the thumb. It now shares the timestamp's own 7px inset, which both aligns the two states
+   * of the crossfade and leaves the scrollbar a visible gap.
+   */
+  it('keeps the delete button clear of the vertical scrollbar in every history scroller', () => {
+    expect(rendererStyles).toMatch(/\n\.history-item__delete \{[^}]*?right: 7px;[^}]*?\}/);
+    expect(rendererStyles).toMatch(/\n\.history-item__select \{[^}]*?padding: 5px 7px;[^}]*?\}/);
+    for (const scroller of ['.project-list', '.project-folder__history']) {
+      expect(rendererStyles).toMatch(
+        new RegExp(`\\n\\${scroller} \\{[^}]*?padding-right: 4px;[^}]*?\\}`),
+      );
+    }
+    // The chat-history card has its own 32px delete column, which needs the same clearance.
+    expect(rendererStyles).toMatch(
+      /\n\.chat-history__list \{[^}]*?padding-right: var\(--s-2\);[^}]*?\}/,
+    );
+  });
+});
+
+describe('kernel drop zone versus the document-wide project drag', () => {
+  /*
+   * All four drag listeners are on `document` and share one `dragDepth` counter plus the full-screen
+   * overlay. A component-level listener calling `stopPropagation` would swallow `dragleave` without
+   * its matching `dragenter` decrement, leaving the counter positive and the overlay stranded on
+   * screen forever. So the zone is a branch inside the existing handlers, not a listener of its own.
+   */
+  it('branches inside the shared document handlers instead of adding a listener', () => {
+    expect(rendererMarkup).toContain('data-drop-zone="proxy-core"');
+    expect(rendererSource).toContain('const proxyCoreDropTarget = (event: DragEvent)');
+    expect(rendererSource).toContain(
+      'event.target.closest<HTMLElement>(\'[data-drop-zone="proxy-core"]\')',
+    );
+    // No zone-scoped listener, and nothing anywhere may stop a drag event from reaching document.
+    expect(rendererSource).not.toMatch(/proxyCoreDrop\.addEventListener\('drag/);
+    expect(rendererSource).not.toMatch(/drag\w*[\s\S]{0,400}?stopPropagation\(\)/);
+  });
+
+  it('returns from every drag handler before touching dragDepth or the overlay', () => {
+    for (const type of ['dragenter', 'dragleave', 'drop'] as const) {
+      const handler = rendererSource.slice(
+        rendererSource.indexOf(`document.addEventListener('${type}', (event) => {`),
+      );
+      const body = handler.slice(0, handler.indexOf('\n});'));
+      expect(body).toContain('const coreZone = proxyCoreDropTarget(event);');
+      // The early return has to precede the counter, or the zone still moves it.
+      expect(body.indexOf('return;')).toBeLessThan(body.indexOf('dragDepth'));
+    }
+    // `dragover` fires continuously and has no counter, so it only re-asserts the highlight —
+    // moving between the zone's own children fires `dragleave` first and would drop it.
+    const over = rendererSource.slice(
+      rendererSource.indexOf("document.addEventListener('dragover', (event) => {"),
+    );
+    expect(over.slice(0, over.indexOf('\n});'))).toContain(
+      "proxyCoreDropTarget(event)?.classList.add('proxy-core__drop--active')",
+    );
+  });
+
+  it('installs the kernel on a zone drop and never falls through to adding a project', () => {
+    const drop = rendererSource.slice(
+      rendererSource.indexOf("document.addEventListener('drop', (event) => {"),
+    );
+    const body = drop.slice(0, drop.indexOf('\n});'));
+    expect(body).toContain('installProxyCoreFromFile(event.dataTransfer?.files[0]);');
+    expect(body.indexOf('installProxyCoreFromFile')).toBeLessThan(body.indexOf('addProject'));
+    expect(body.indexOf('installProxyCoreFromFile')).toBeLessThan(
+      body.indexOf('queueChatAttachmentImport'),
+    );
+    // The same install path backs 「选择文件…」, so both routes resolve the real path identically.
+    expect(rendererSource).toContain('const filePath = window.controlPanel.getDroppedPath(file);');
+    expect(rendererSource).toContain('installProxyCoreFromFile(proxyCoreFile.files?.[0]);');
+  });
+});
+
+describe('view switching motion', () => {
+  /*
+   * Terminal ⇄ chat stays a `hidden` toggle so xterm is never unmounted (that would re-fit and flash
+   * the WebGL canvas). A CSS animation restarts on its own when an element leaves `display: none`,
+   * which is what turns the hard swap into a fade without touching the switch logic at all.
+   */
+  it('animates the terminal/chat swap without remounting either shell', () => {
+    expect(rendererStyles).toMatch(
+      /\.terminal-shell:not\(\[hidden\]\),\s*\.chat-shell:not\(\[hidden\]\)\s*\{[\s\S]*?animation: workspaceShellEnter var\(--dur-3\) var\(--ease-decel\)/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.settings-panel--active\s*\{[\s\S]*?animation: settingsPanelEnter var\(--dur-3\) var\(--ease-decel\)/,
+    );
+    // The dead class had no rule anywhere; keeping it would imply a swap style that does not exist.
+    expect(rendererSource).not.toContain("workspace.classList.toggle('workspace--chat'");
+  });
+
+  /*
+   * Both entrances run on the copy that is already live and clickable, so they are bound by the same
+   * rule as `railPageEnter`: transforming an interactive layer moves every control's hit-test box for
+   * the length of the animation. `.workbench-page` is allowed to translate only because it transforms
+   * the outgoing, `pointer-events: none` copy instead — a shape a `hidden` swap cannot reproduce.
+   */
+  it('fades the switch surfaces rather than transforming a live hit-test layer', () => {
+    for (const name of ['workspaceShellEnter', 'settingsPanelEnter']) {
+      const body = new RegExp(`@keyframes ${name}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`).exec(
+        rendererStyles,
+      )?.groups?.body;
+      expect(body).toBeDefined();
+      expect(body).toContain('opacity:');
+      expect(body).not.toContain('transform:');
+    }
+    expect(rendererStyles).toMatch(
+      /\.workbench-page:not\(\.workbench-page--active\)\s*\{[\s\S]*?pointer-events: none;[\s\S]*?transform: translateY/,
+    );
+  });
+
+  /*
+   * The collapse animates `grid-template-columns`, so the terminal is measured mid-flight and would
+   * settle at the wrong size; the fit is re-run once the track has actually landed. Dragging the
+   * splitter sets `is-resizing` and must opt out, or every pointer move fights a 150ms transition.
+   */
+  it('transitions the sidebar collapse and re-fits the terminal once it settles', () => {
+    expect(rendererStyles).toMatch(
+      /\n\.workspace \{[^}]*?transition: grid-template-columns var\(--dur-2\) var\(--ease-standard\);[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(/body\.is-resizing \.workspace \{\s*transition: none;\s*\}/);
+    expect(rendererSource).toContain("document.body.classList.add('is-resizing')");
+    expect(rendererSource).toMatch(
+      /workspace\.addEventListener\('transitionend', \(event\) => \{[\s\S]*?event\.propertyName === 'grid-template-columns'[\s\S]*?retryTerminalFitUntilMeasured\(\);/,
+    );
+  });
 });

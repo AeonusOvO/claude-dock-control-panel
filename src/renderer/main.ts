@@ -72,7 +72,10 @@ import type {
   OperationResult,
   ProxyAuditRecord,
   ProxyControlView,
+  ProxyCoreSourceView,
+  ProxyCoreView,
   ProxyImportPreview,
+  ProxyScopeSettings,
   TerminalPhase,
   TerminalStatus,
   WorkspaceProjectView,
@@ -381,6 +384,20 @@ const proxyImportIssues = requiredElement<HTMLElement>('#proxy-import-issues');
 const proxyImportPreview = requiredElement<HTMLElement>('#proxy-import-preview');
 const proxySaveSelected = requiredElement<HTMLButtonElement>('#proxy-save-selected');
 const proxyManualCorePath = requiredElement<HTMLInputElement>('#proxy-manual-core-path');
+const proxyCore = requiredElement<HTMLElement>('#proxy-core');
+const proxyCoreStatus = requiredElement<HTMLElement>('#proxy-core-status');
+const proxyCoreToggle = requiredElement<HTMLButtonElement>('#proxy-core-toggle');
+const proxyCoreDrop = requiredElement<HTMLElement>('#proxy-core-drop');
+const proxyCorePick = requiredElement<HTMLButtonElement>('#proxy-core-pick');
+const proxyCoreFile = requiredElement<HTMLInputElement>('#proxy-core-file');
+const proxyCoreProbe = requiredElement<HTMLButtonElement>('#proxy-core-probe');
+const proxyCoreProbeHint = requiredElement<HTMLElement>('#proxy-core-probe-hint');
+const proxyCoreSourceList = requiredElement<HTMLUListElement>('#proxy-core-source-list');
+const proxyCoreMirrorHost = requiredElement<HTMLInputElement>('#proxy-core-mirror-host');
+const proxyCoreMirrorAdd = requiredElement<HTMLButtonElement>('#proxy-core-mirror-add');
+const proxyBootstrapUrl = requiredElement<HTMLInputElement>('#proxy-bootstrap-url');
+const proxyBootstrapDetect = requiredElement<HTMLButtonElement>('#proxy-bootstrap-detect');
+const proxyBootstrapHint = requiredElement<HTMLElement>('#proxy-bootstrap-hint');
 const proxyStart = requiredElement<HTMLButtonElement>('#proxy-start');
 const proxyStop = requiredElement<HTMLButtonElement>('#proxy-stop');
 const proxyRuntimeStatus = requiredElement<HTMLElement>('#proxy-runtime-status');
@@ -880,6 +897,169 @@ const renderProxyImportPreview = (preview: ProxyImportPreview): void => {
   proxySaveSelected.disabled = preview.profiles.length === 0;
 };
 
+const PROXY_CORE_SOURCE_STATUS_LABELS: Record<ProxyCoreSourceView['status'], string> = {
+  blocked: '已拦截',
+  failed: '不通',
+  ok: '可用',
+  unknown: '未测试',
+};
+const PROXY_CORE_SOURCE_KIND_LABELS: Record<ProxyCoreSourceView['kind'], string> = {
+  custom: '自定义',
+  mirror: '内置镜像',
+  official: '官方',
+};
+
+/**
+ * Measured transfer rate, which is what actually decides the route — a mirror can answer the probe
+ * in 800 ms and still deliver the 21 MB archive at 13 KB/s, so latency alone hides the slow ones.
+ */
+const formatProxyCoreRate = (bytesPerSecond: number): string =>
+  bytesPerSecond < 1024 * 1024
+    ? `${(bytesPerSecond / 1024).toFixed(0)} KB/s`
+    : `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+
+/**
+ * Mirrors whatever the store last handed back, so editing one scope field never blanks the ones the
+ * user did not touch — `setProxyScope` persists the object wholesale.
+ */
+let proxyScopeSnapshot: ProxyScopeSettings = { application: false, cli: true };
+/** An installed kernel collapses the block to a single line; reinstalling reopens it. */
+let proxyCoreExpanded = false;
+
+const applyProxyScope = (
+  overrides: Partial<ProxyScopeSettings>,
+  onSaved: (state: ProxyControlView) => void,
+): Promise<void> =>
+  window.controlPanel
+    .setProxyScope({
+      ...proxyScopeSnapshot,
+      application: proxyScopeApplication.checked,
+      cli: proxyScopeCli.checked,
+      ...overrides,
+    })
+    .then((state) => {
+      renderProxyState(state);
+      onSaved(state);
+    })
+    .catch(() => {
+      showToast('无法修改代理作用域。', 'error');
+      return loadProxyState();
+    });
+
+const installProxyCoreFromPath = (filePath: string): void => {
+  proxyCoreDrop.classList.remove('proxy-core__drop--active');
+  proxyCoreStatus.textContent = '正在安装内核…';
+  void window.controlPanel
+    .installProxyCoreFile(filePath)
+    .then(() => {
+      proxyCoreExpanded = false;
+      showToast('Xray-core 内核已安装');
+    })
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '内核安装失败。', 'error');
+    })
+    .finally(() => {
+      void loadProxyState();
+    });
+};
+
+const installProxyCoreFromFile = (file: File | undefined): void => {
+  if (!file) {
+    return;
+  }
+  try {
+    const filePath = window.controlPanel.getDroppedPath(file);
+    if (!filePath) {
+      showToast('无法读取该文件的路径，请改用「选择文件…」。', 'error');
+      return;
+    }
+    installProxyCoreFromPath(filePath);
+  } catch {
+    showToast('无法读取该文件的路径，请改用「选择文件…」。', 'error');
+  }
+};
+
+const buildProxyCoreSource = (source: ProxyCoreSourceView): HTMLLIElement => {
+  const item = document.createElement('li');
+  item.className = 'proxy-core__source';
+  item.dataset.status = source.status;
+  const name = document.createElement('span');
+  name.className = 'proxy-core__source-name';
+  name.textContent = source.label;
+  const kind = document.createElement('small');
+  kind.className = 'proxy-core__source-kind';
+  kind.textContent = PROXY_CORE_SOURCE_KIND_LABELS[source.kind];
+  const status = document.createElement('small');
+  status.className = 'proxy-core__source-status';
+  const statusLabel = PROXY_CORE_SOURCE_STATUS_LABELS[source.status];
+  // Only the top few routes get sampled, so a missing rate means "not measured", not "zero".
+  const measurements =
+    source.status === 'ok'
+      ? [
+          source.latencyMs === undefined ? undefined : `${source.latencyMs} ms`,
+          source.throughputBps === undefined
+            ? undefined
+            : formatProxyCoreRate(source.throughputBps),
+        ].filter((part): part is string => part !== undefined)
+      : [];
+  status.textContent = [statusLabel, source.detail, ...measurements].filter(Boolean).join(' · ');
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.textContent = '打开';
+  open.title = source.url;
+  open.addEventListener('click', () => void openExternal(source.url));
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.textContent = '复制';
+  copy.addEventListener('click', () => {
+    void window.controlPanel
+      .writeClipboardText(source.url)
+      .then(() => showToast('下载地址已复制'))
+      .catch(() => showToast('无法复制下载地址。', 'error'));
+  });
+  item.append(name, kind, status, open, copy);
+  if (source.kind === 'custom') {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '移除';
+    remove.addEventListener('click', () => {
+      const host = new URL(source.url).hostname;
+      void applyProxyScope(
+        {
+          extraCoreSources: (proxyScopeSnapshot.extraCoreSources ?? []).filter(
+            (entry) => entry !== host,
+          ),
+        },
+        () => showToast(`已移除镜像 ${host}`),
+      );
+    });
+    item.append(remove);
+  }
+  return item;
+};
+
+const renderProxyCore = (core: ProxyCoreView, scope: ProxyScopeSettings): void => {
+  proxyCoreStatus.textContent = core.installed
+    ? `已安装 ${core.installedVersion ?? core.requiredVersion}`
+    : `未检测到内核 · 需要 ${core.requiredVersion}`;
+  proxyCoreStatus.dataset.installed = String(core.installed);
+  proxyCoreToggle.hidden = !core.installed;
+  proxyCoreToggle.textContent = proxyCoreExpanded ? '收起' : '重新安装';
+  // A missing kernel is the one thing that blocks 启动, so that case never collapses.
+  proxyCore.hidden = core.installed && !proxyCoreExpanded;
+  proxyCoreProbe.disabled = core.probing;
+  proxyCoreProbeHint.textContent = core.probing
+    ? '正在测试各条下载线路…'
+    : core.lastProbedAt
+      ? `上次测试 ${new Date(core.lastProbedAt).toLocaleTimeString()} · 下载时自动选用最快的可用线路。`
+      : '下载前会自动测速，只用探得通的线路。';
+  proxyCoreSourceList.replaceChildren(...core.sources.map(buildProxyCoreSource));
+  // Never overwrite a field the user is in the middle of typing into.
+  if (document.activeElement !== proxyBootstrapUrl) {
+    proxyBootstrapUrl.value = scope.bootstrapProxyUrl ?? '';
+  }
+};
+
 const renderProxyState = (state: ProxyControlView): void => {
   const selectedId = state.store.state.selectedProfileId ?? '';
   proxyProfileSelect.replaceChildren(
@@ -905,6 +1085,8 @@ const renderProxyState = (state: ProxyControlView): void => {
   proxyRemoveProfile.disabled = !selectedId || !idle;
   proxyScopeCli.checked = state.store.scope.cli;
   proxyScopeApplication.checked = state.store.scope.application;
+  proxyScopeSnapshot = { ...state.store.scope };
+  renderProxyCore(state.core, state.store.scope);
   proxyRuntimeStatus.textContent = state.runtime.error
     ? `${PROXY_RUNTIME_LABELS[state.runtime.status]}：${state.runtime.error}`
     : `${PROXY_RUNTIME_LABELS[state.runtime.status]}${state.runtime.httpProxyUrl ? ` · ${state.runtime.httpProxyUrl}` : ''}`;
@@ -5868,7 +6050,6 @@ const applyRailTab = (tab?: string): void => {
   const chatVisible = mainView === 'chat';
   terminalShell.hidden = chatVisible;
   chatShell.hidden = !chatVisible;
-  workspace.classList.toggle('workspace--chat', chatVisible);
   setConnectionPolling(
     tab === 'connection' ||
       (connectionAdvancedDialog.open &&
@@ -5889,6 +6070,17 @@ const applyRailTab = (tab?: string): void => {
     retryTerminalFitUntilMeasured();
   }
 };
+
+/**
+ * The sidebar column eases open and closed now, so the fit `applyRailTab` schedules lands while the
+ * grid is still moving. One more pass once the transition ends settles xterm on the final width —
+ * and doing it here rather than per animation frame keeps ConPTY from being resized dozens of times.
+ */
+workspace.addEventListener('transitionend', (event) => {
+  if (event.target === workspace && event.propertyName === 'grid-template-columns') {
+    retryTerminalFitUntilMeasured();
+  }
+});
 
 const focusChatInputAfterNavigation = (): void => {
   window.requestAnimationFrame(() => {
@@ -9482,23 +9674,110 @@ proxyRemoveProfile.addEventListener('click', () => {
 const saveProxyScope = (): void => {
   proxyScopeCli.disabled = true;
   proxyScopeApplication.disabled = true;
-  void window.controlPanel
-    .setProxyScope({ application: proxyScopeApplication.checked, cli: proxyScopeCli.checked })
-    .then((state) => {
-      renderProxyState(state);
-      showToast('代理作用域已更新');
-    })
-    .catch(() => {
-      showToast('无法修改代理作用域。', 'error');
-      void loadProxyState();
-    })
-    .finally(() => {
-      proxyScopeCli.disabled = false;
-      proxyScopeApplication.disabled = false;
-    });
+  void applyProxyScope({}, () => showToast('代理作用域已更新')).finally(() => {
+    proxyScopeCli.disabled = false;
+    proxyScopeApplication.disabled = false;
+  });
 };
 proxyScopeCli.addEventListener('change', saveProxyScope);
 proxyScopeApplication.addEventListener('change', saveProxyScope);
+proxyCoreToggle.addEventListener('click', () => {
+  proxyCoreExpanded = !proxyCoreExpanded;
+  void loadProxyState();
+});
+proxyCorePick.addEventListener('click', () => proxyCoreFile.click());
+proxyCoreFile.addEventListener('change', () => {
+  installProxyCoreFromFile(proxyCoreFile.files?.[0]);
+  // Cleared so picking the same file twice in a row still fires `change`.
+  proxyCoreFile.value = '';
+});
+proxyCoreProbe.addEventListener('click', () => {
+  proxyCoreProbe.disabled = true;
+  proxyCoreProbeHint.textContent = '正在测试各条下载线路…';
+  void window.controlPanel
+    .probeProxyCoreSources()
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '无法测试下载线路。', 'error');
+    })
+    .finally(() => {
+      void loadProxyState();
+    });
+});
+proxyCoreMirrorAdd.addEventListener('click', () => {
+  const candidate = proxyCoreMirrorHost.value.trim();
+  if (!candidate) {
+    return;
+  }
+  const before = proxyScopeSnapshot.extraCoreSources?.length ?? 0;
+  proxyCoreMirrorAdd.disabled = true;
+  void applyProxyScope(
+    { extraCoreSources: [...(proxyScopeSnapshot.extraCoreSources ?? []), candidate] },
+    (state) => {
+      // The main process is the only authority on what a valid host is; a silently dropped entry
+      // means it rejected the value, and saying so beats pretending the mirror was added.
+      if ((state.store.scope.extraCoreSources?.length ?? 0) > before) {
+        proxyCoreMirrorHost.value = '';
+        showToast('已添加镜像域名，可点「测试下载线路」验证');
+      } else {
+        showToast('镜像域名无效或已存在。只填域名，不要带端口或路径。', 'error');
+      }
+    },
+  ).finally(() => {
+    proxyCoreMirrorAdd.disabled = false;
+  });
+});
+const saveProxyBootstrapUrl = (value: string, onInvalid: () => void): void => {
+  void applyProxyScope({ bootstrapProxyUrl: value }, (state) => {
+    if (!value.trim()) {
+      showToast('已改为直连下载内核');
+      return;
+    }
+    if (state.store.scope.bootstrapProxyUrl) {
+      showToast('引导代理已保存，仅用于下载内核');
+    } else {
+      onInvalid();
+    }
+  });
+};
+proxyBootstrapUrl.addEventListener('change', () => {
+  saveProxyBootstrapUrl(proxyBootstrapUrl.value, () =>
+    showToast(
+      '引导代理地址无效，需形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080。',
+      'error',
+    ),
+  );
+});
+proxyBootstrapDetect.addEventListener('click', () => {
+  proxyBootstrapDetect.disabled = true;
+  void window.controlPanel
+    .detectBootstrapProxyCandidates()
+    .then((candidates) => {
+      if (candidates.length === 0) {
+        proxyBootstrapHint.textContent = '没有检测到可用的本机代理，可手动填写。';
+        return;
+      }
+      // Listed, never applied: what one machine happens to run says nothing about the next one's.
+      proxyBootstrapHint.replaceChildren(
+        Object.assign(document.createElement('span'), {
+          textContent: '检测到以下候选，点选即填入：',
+        }),
+        ...candidates.map((candidate) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = candidate;
+          button.addEventListener('click', () => {
+            proxyBootstrapUrl.value = candidate;
+            saveProxyBootstrapUrl(candidate, () => showToast('该候选地址无法使用。', 'error'));
+          });
+          return button;
+        }),
+      );
+    })
+    .catch(() => showToast('无法检测本机代理。', 'error'))
+    .finally(() => {
+      proxyBootstrapDetect.disabled = false;
+    });
+});
 proxyStart.addEventListener('click', () => {
   proxyStart.disabled = true;
   void window.controlPanel
@@ -10436,8 +10715,23 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+/**
+ * All four drag listeners live on `document` and share `dragDepth` plus the full-screen overlay, so
+ * the kernel drop zone cannot use `stopPropagation` — that would unbalance the counter and strand
+ * the overlay on screen. Each handler branches here instead and returns before touching either.
+ */
+const proxyCoreDropTarget = (event: DragEvent): HTMLElement | null =>
+  event.target instanceof Element
+    ? event.target.closest<HTMLElement>('[data-drop-zone="proxy-core"]')
+    : null;
+
 document.addEventListener('dragenter', (event) => {
   event.preventDefault();
+  const coreZone = proxyCoreDropTarget(event);
+  if (coreZone) {
+    coreZone.classList.add('proxy-core__drop--active');
+    return;
+  }
   dragDepth += 1;
   const title = dropOverlay.querySelector('strong');
   const detail = dropOverlay.querySelector('span');
@@ -10455,9 +10749,16 @@ document.addEventListener('dragover', (event) => {
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy';
   }
+  // Re-asserts the highlight: moving between the zone's own children fires `dragleave` first.
+  proxyCoreDropTarget(event)?.classList.add('proxy-core__drop--active');
 });
 document.addEventListener('dragleave', (event) => {
   event.preventDefault();
+  const coreZone = proxyCoreDropTarget(event);
+  if (coreZone) {
+    coreZone.classList.remove('proxy-core__drop--active');
+    return;
+  }
   dragDepth = Math.max(0, dragDepth - 1);
   if (dragDepth === 0) {
     dropOverlay.classList.remove('drop-overlay--visible');
@@ -10465,6 +10766,12 @@ document.addEventListener('dragleave', (event) => {
 });
 document.addEventListener('drop', (event) => {
   event.preventDefault();
+  const coreZone = proxyCoreDropTarget(event);
+  if (coreZone) {
+    coreZone.classList.remove('proxy-core__drop--active');
+    installProxyCoreFromFile(event.dataTransfer?.files[0]);
+    return;
+  }
   dragDepth = 0;
   dropOverlay.classList.remove('drop-overlay--visible');
 

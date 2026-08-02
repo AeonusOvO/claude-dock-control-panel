@@ -13,6 +13,8 @@ import type {
   ProxyStoredState,
   ProxyTransport,
 } from '../../shared/contracts';
+import { normalizeBootstrapProxyUrl } from './proxy-environment';
+import { normalizeMirrorHost } from './xray-core-sources';
 
 export interface ProxySecretStorage {
   decryptString(value: Buffer): string;
@@ -55,6 +57,28 @@ const RUNTIME_STATUSES = new Set<ProxyRuntimeStatus>([
 ]);
 const DEFAULT_SCOPE: ProxyScopeSettings = { application: false, cli: true };
 const DEFAULT_STATE: ProxyStoredState = { runtimeStatus: 'stopped' };
+const MAX_EXTRA_CORE_SOURCES = 16;
+
+/**
+ * The two optional fields are dropped rather than stored empty, so a profile written by an older
+ * build and one where the user cleared the field read back identically.
+ */
+const normalizeScope = (scope: ProxyScopeSettings): ProxyScopeSettings => {
+  const bootstrapProxyUrl = normalizeBootstrapProxyUrl(scope.bootstrapProxyUrl);
+  const extraCoreSources = [
+    ...new Set(
+      (Array.isArray(scope.extraCoreSources) ? scope.extraCoreSources : [])
+        .map((entry) => (typeof entry === 'string' ? normalizeMirrorHost(entry) : undefined))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  ].slice(0, MAX_EXTRA_CORE_SOURCES);
+  return {
+    application: scope.application,
+    cli: scope.cli,
+    ...(bootstrapProxyUrl ? { bootstrapProxyUrl } : {}),
+    ...(extraCoreSources.length > 0 ? { extraCoreSources } : {}),
+  };
+};
 
 const optionalText = (value: unknown, field: string, maximum = 256): string | undefined => {
   if (value === undefined || value === '') {
@@ -249,7 +273,7 @@ export class ProxyStore {
       throw new Error('代理作用域设置无效。');
     }
     const store = this.loadProfiles();
-    store.scope = { ...scope };
+    store.scope = normalizeScope(scope);
     this.persistProfiles(store);
     return this.getView();
   }
@@ -283,7 +307,7 @@ export class ProxyStore {
       }
       return {
         profiles: parsed.profiles.map(hydrateProfile),
-        scope: parsed.scope,
+        scope: normalizeScope(parsed.scope),
         state: { ...parsed.state, runtimeStatus: 'stopped' },
         version: 1,
       };

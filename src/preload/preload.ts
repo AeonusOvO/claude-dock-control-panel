@@ -78,6 +78,10 @@ const api: ControlPanelApi = {
   removeProxyProfile: (profileId) => ipcRenderer.invoke('proxy:remove-profile', profileId),
   selectProxyProfile: (profileId) => ipcRenderer.invoke('proxy:select-profile', profileId),
   setProxyScope: (scope) => ipcRenderer.invoke('proxy:set-scope', scope),
+  probeProxyCoreSources: () => ipcRenderer.invoke('proxy:probe-core-sources'),
+  installProxyCoreFile: (filePath) => ipcRenderer.invoke('proxy:install-core-file', filePath),
+  detectBootstrapProxyCandidates: () =>
+    ipcRenderer.invoke('proxy:detect-bootstrap-proxy') as Promise<string[]>,
   startBuiltInProxy: (manualCorePath) => ipcRenderer.invoke('proxy:start', manualCorePath),
   stopBuiltInProxy: () => ipcRenderer.invoke('proxy:stop'),
   runProxyLeakAudit: () => ipcRenderer.invoke('proxy:run-audit'),

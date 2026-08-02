@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { buildCliProxyEnvironment, builtInProxyRules } from '../src/main/proxy/proxy-environment';
+import {
+  buildCliProxyEnvironment,
+  builtInProxyRules,
+  normalizeBootstrapProxyUrl,
+} from '../src/main/proxy/proxy-environment';
 
 const runtime = {
   coreVersion: 'test',
@@ -54,13 +58,66 @@ describe('CLI-only built-in proxy scope', () => {
     }
   });
 
+  /*
+   * The bootstrap proxy exists purely so a user who already has working connectivity can point the
+   * kernel download at it. It is never inferred: an empty field has to stay `{mode:'system'}`, and a
+   * live tunnel still outranks it, or turning the built-in proxy on would silently do nothing.
+   */
+  it('uses the bootstrap proxy only while the tunnel is not carrying traffic', () => {
+    const scope = { application: false, bootstrapProxyUrl: 'http://127.0.0.1:10808', cli: true };
+    expect(builtInProxyRules({ coreVersion: '', logs: [], status: 'stopped' }, scope)).toEqual({
+      mode: 'fixed_servers',
+      proxyBypassRules: '127.0.0.1,localhost,[::1]',
+      proxyRules: 'http://127.0.0.1:10808',
+    });
+    expect(builtInProxyRules(runtime, { ...scope, application: true })).toEqual({
+      mode: 'fixed_servers',
+      proxyBypassRules: '127.0.0.1,localhost,[::1]',
+      proxyRules: 'http://127.0.0.1:43123',
+    });
+    expect(builtInProxyRules(runtime, { application: false, cli: true })).toEqual({
+      mode: 'system',
+    });
+    expect(
+      builtInProxyRules(runtime, { application: false, bootstrapProxyUrl: '   ', cli: true }),
+    ).toEqual({ mode: 'system' });
+  });
+
+  it('refuses bootstrap URLs that Chromium cannot use or that would leak a secret', () => {
+    expect(normalizeBootstrapProxyUrl('http://127.0.0.1:10808')).toBe('http://127.0.0.1:10808');
+    expect(normalizeBootstrapProxyUrl(' socks5://127.0.0.1:1080/ ')).toBe(
+      'socks5://127.0.0.1:1080',
+    );
+    // Credentials would end up verbatim in the diagnostic ring and in audit records.
+    expect(normalizeBootstrapProxyUrl('http://user:pass@127.0.0.1:10808')).toBeUndefined();
+    expect(normalizeBootstrapProxyUrl('https://127.0.0.1:10808')).toBeUndefined();
+    expect(normalizeBootstrapProxyUrl('socks5://127.0.0.1')).toBeUndefined();
+    expect(normalizeBootstrapProxyUrl('127.0.0.1:10808')).toBeUndefined();
+    expect(normalizeBootstrapProxyUrl('')).toBeUndefined();
+    expect(normalizeBootstrapProxyUrl(undefined)).toBeUndefined();
+  });
+
+  /*
+   * Whatever proxy this machine happens to run says nothing about the next user's machine, so the
+   * detector may only ever produce a list of candidates for the panel to offer.
+   */
+  it('detects bootstrap candidates without ever applying one', () => {
+    const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    const start = mainSource.indexOf('const detectBootstrapProxyCandidates');
+    expect(start).toBeGreaterThan(-1);
+    const body = mainSource.slice(start, mainSource.indexOf('\n};', start));
+    expect(body).toContain("resolveProxy('https://github.com')");
+    expect(body).not.toContain('setScope');
+    expect(body).not.toContain('bootstrapProxyUrl:');
+  });
+
   it('primes the applied proxy rules before anything can start the tunnel', () => {
     const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const constructorIndex = mainSource.indexOf('xraySidecar = new XraySidecar(');
 
     expect(constructorIndex).toBeGreaterThan(-1);
     // The priming call sits with the constructor, not inside the start/stop paths further up.
-    expect(mainSource.slice(constructorIndex, constructorIndex + 1200)).toContain(
+    expect(mainSource.slice(constructorIndex, constructorIndex + 1800)).toContain(
       'await applyApplicationProxyScope();',
     );
   });

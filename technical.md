@@ -301,6 +301,41 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - 启动带世代号：`stop()` 自增世代并连带取消它正在等待的 Xray-core 下载，`start()` 在每个
   await 边界比对世代，因此在下载界面取消后不会有旧的启动尝试继续跑完并静默进入 `ready`。
   失败或取消的终态是 `stopped` 而非 `error`，界面据此重新提供「启动」。
+- 内核引导是多源的：`src/main/proxy/xray-core-sources.ts` 维护 8 条国内前缀反代镜像加官方直连，
+  镜像形态是把完整 GitHub URL（含 `https://`）拼在镜像域名之后。每条源自带成对的
+  `allowedHosts` / `allowedPathPrefixes`，因为 `DownloadEngine` 逐跳校验整条重定向链；官方源必须
+  同时放行 `github.com` 与 `release-assets.githubusercontent.com`。用户在面板添加的镜像域名存进
+  `ProxyStoreView.extraCoreSources`，与内置源一起参与探测——这些域名 churn 极高，源表必须能不发版更新。
+- 探测分两段，都用 `session.defaultSession.fetch()`（与真实下载同一条网络路径）：
+  第一段 GET 同目录下 299 字节的 `.dgst`，用 `/^SHA2-256=\s*([0-9a-f]{64})$/m` 取值（该文件是四行
+  `ALGO= hex`、**没有文件名字段**，不能按列切分），并要求它等于代码里固定的
+  `XRAY_CORE_RELEASE.sha256`。这一段把连通性与镜像完整性合成一次请求，任何返回错误摘要的镜像当场
+  出局；而 zip 的校验值始终取自代码常量，不采信镜像给的摘要，避开「同一条信道既发文件又发校验值」。
+  第二段只对第一段里最快的 4 条发 `Range: bytes=0-262143` 实测速率，3 秒或 256 KiB 先到先止，
+  单轮探测总流量不超过 1 MB。
+- **排序以实测速率为主键，延迟只是没测到速率时的回退**（`pickFastestSource` 的秩是
+  `throughputBps ?? -latencyMs`）。这不是调优：实测中 `gh.ddlc.top` 以 789 ms 的最低延迟胜出，
+  真实吞吐却只有约 13 KB/s，21 MB 的内核要下 25 分钟——只看延迟等于稳定选中一条永远下不完的线路。
+  全部源都不通时 `ensureCore()` 立即抛出带线路报告的可执行文案，不让 12 次自动续传空转三分钟。
+- 引导代理是用户显式配置的 `ProxyStoreView.bootstrapProxyUrl`，**默认为空即直连**，代码里不预设
+  任何端口。它落在 `builtInProxyRules()` 的第三个分支：内置代理未就绪且用户配了值时返回
+  `fixed_servers`，因此 `applyApplicationProxyScope()` 的签名去重照常生效，不新增竞态面。
+  `proxy:detect-bootstrap-proxy` 只把 `HTTPS_PROXY` / `HTTP_PROXY` 与 `session.resolveProxy()`
+  的候选**列给用户点选**，绝不自动启用——这是发布给所有用户的软件，不能按开发机的环境做假设。
+- 新增三条 IPC：`proxy:probe-core-sources`、`proxy:install-core-file`（绝对路径、≤4096 字符）、
+  `proxy:detect-bootstrap-proxy`；`bootstrapProxyUrl` 与 `extraCoreSources` 复用 `proxy:set-scope`
+  持久化。三者结束后都广播 `proxy:state-changed`。`installCoreFromFile` 只接受 `.zip` 或
+  `xray.exe`，先解到 staging 跑一次 `xray.exe version`，通过才 rename 进 `core/`——名字对但跑不起来
+  的文件不能顶掉一个能用的内核。
+- 解压的路径经**环境变量**传给 PowerShell，不经参数：`powershell.exe -Command <string>` 会把后面的
+  参数追加到命令文本里而不填充 `$args`，所以 `Expand-Archive -LiteralPath $args[0]` 每次都栽在参数
+  校验上——内核解压其实一次都没成功过，只表现为一句「退出码 1」。`$env:` 查找是按字面值代入而非
+  重新解析，也顺带挡住含引号或 `;` 的路径变成第二条语句。`waitForProcess` 现在捕获并回传子进程
+  stderr：把子进程自己的抱怨丢掉，正是这个 bug 能长期伪装成不透明退出码的原因。
+- 本地入站健康检查会重试。Xray 在 `spawn` 返回后才绑定入站，第一次连接几乎必然 `ECONNREFUSED`；
+  把它当结论会让一次正确的下载在 49 ms 内报「启动失败」——比内核解析配置还快。`probeHttpInbound`
+  改为在 8 秒截止时间内每 120 ms 敲一次，只对重试改变不了的答案提前结束：真实 HTTP 状态码，
+  或子进程已退出。`npm run test:xray-probe` / `npm run test:xray-install` 是这条链路的联网复现用具。
 - CLI 作用域只给 ClaudeDock 启动的 Claude/Codex 子进程注入 `HTTP_PROXY` / `HTTPS_PROXY`，
   `NO_PROXY` 固定包含 `127.0.0.1,localhost,::1`。应用作用域是显式 opt-in 的 Electron session
   `setProxy()`；未启用时回落到 `mode: 'system'` 而非 `direct`——`defaultSession` 同时用于下载
@@ -1434,6 +1469,15 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - `npm run test:xray-download` 运行 `scripts/xray-download-race-smoke.cjs` 的 `control` 变体，
   用真实 GitHub 资产验证默认 session 不经任何代理也能取到 Xray-core；`teardown` 变体复现修复
   前的竞态。它需要联网，不进 CI；离线守栏是上文的 `tests/proxy-environment.test.ts` 不变量。
+- `npm run test:xray-probe` 运行 `scripts/xray-core-probe-smoke.cjs`，打印内置源表每条线路当前的
+  通断、延迟与实测速率，并指出这次会选中哪条；带一个参数可改从引导代理探测。镜像域名 churn 极高，
+  发布前和收到「所有下载线路都不可用」时都该跑一次，这是判断「源表该更新了」的唯一手段。
+- `npm run test:xray-install` 运行 `scripts/xray-core-install-smoke.cjs`，在一次性 `userData` 下跑完
+  探测 → 下载 → 解压 → 启动整条链路，失败时连同内核状态与最近 25 行隧道日志一起打印。它有意每次
+  从零开始；只调试启动那一段时用 `KEEP_CORE=1` 复用上次下好的内核。**结束时不删临时目录**：
+  Chromium 在进程存活期间仍持有句柄，删除只会得到一个 EPERM 并把真实结果埋掉，清理点在下一次启动时。
+  这两条都需要联网，不进 CI；离线守栏分别是 `tests/xray-core-sources.test.ts` 与
+  `tests/xray-sidecar.test.ts`。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`

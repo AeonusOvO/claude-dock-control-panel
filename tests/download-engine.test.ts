@@ -150,4 +150,73 @@ describe('download engine', () => {
       vi.useRealTimers();
     }
   });
+
+  /*
+   * The China-reachable Xray-core routes are prefix reverse proxies, so the whole GitHub URL —
+   * scheme and all — ends up inside the mirror's path. `acceptItem` claims a `will-download` event
+   * by exact URL string, and the engine validates every hop against `url.hostname` +
+   * `url.pathname`. If Chromium normalized that empty `https://` segment differently on the way
+   * out and back, the event would be claimed by nothing and silently dropped by `preventDefault`.
+   */
+  it('claims a prefix-proxy mirror download whose path contains a full https URL', async () => {
+    const mirrorUrl =
+      'https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip';
+    expect(new URL(mirrorUrl).toString()).toBe(mirrorUrl);
+    const session = new EventEmitter() as EventEmitter & { downloadURL: (url: string) => void };
+    session.downloadURL = vi.fn();
+    Object.assign(session, { createInterruptedDownload: vi.fn() });
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-download-'));
+    const item = Object.assign(new EventEmitter(), {
+      canResume: vi.fn(() => true),
+      cancel: vi.fn(),
+      getReceivedBytes: vi.fn(() => 0),
+      getETag: vi.fn(() => '"fixture"'),
+      getLastModifiedTime: vi.fn(() => 'Mon, 01 Jan 2024 00:00:00 GMT'),
+      getStartTime: vi.fn(() => Date.now() / 1000),
+      getTotalBytes: vi.fn(() => 20_913_304),
+      getURL: vi.fn(() => mirrorUrl),
+      // The mirror answers with a 302 back to the origin, so both hops must pass the whitelist.
+      getURLChain: vi.fn(() => [
+        mirrorUrl,
+        'https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
+      ]),
+      isPaused: vi.fn(() => false),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      setSavePath: vi.fn(),
+    });
+    const engine = new DownloadEngine(
+      session as unknown as DownloadSession,
+      new BusyRegistry(),
+      userDataPath,
+    );
+    const finalPath = path.join(userDataPath, 'core', 'Xray-windows-64.zip');
+    const preventDefault = vi.fn();
+    const completion = engine
+      .start({
+        allowedHosts: ['ghproxy.net', 'github.com', 'release-assets.githubusercontent.com'],
+        allowedPathPrefixes: [
+          '/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/',
+          '/XTLS/Xray-core/releases/download/v26.3.27/',
+          '/',
+        ],
+        finalPath,
+        id: 'xray-core',
+        label: 'Xray-core',
+        maxBytes: 64 * 1024 * 1024,
+        url: mirrorUrl,
+      })
+      .catch(() => undefined);
+    session.emit('will-download', { preventDefault }, item);
+
+    expect(session.downloadURL).toHaveBeenCalledWith(mirrorUrl);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(item.setSavePath).toHaveBeenCalledWith(`${finalPath}.partial`);
+    expect(engine.list()[0]).toMatchObject({ id: 'xray-core', state: 'progressing' });
+
+    engine.cancel('xray-core');
+    item.emit('done', {}, 'cancelled');
+    await completion;
+    rmSync(userDataPath, { force: true, recursive: true });
+  });
 });

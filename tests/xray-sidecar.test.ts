@@ -1,6 +1,18 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { buildXrayConfig, redactProxyLog, XRAY_CORE_RELEASE } from '../src/main/proxy/xray-sidecar';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:net';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { BusyRegistry } from '../src/main/busy-registry';
+import type { DownloadEngine } from '../src/main/download-engine';
+import {
+  buildXrayConfig,
+  probeHttpInbound,
+  redactProxyLog,
+  XraySidecar,
+  XRAY_CORE_RELEASE,
+} from '../src/main/proxy/xray-sidecar';
 
 const profile = {
   address: 'proxy.example',
@@ -113,5 +125,195 @@ describe('Xray sidecar configuration', () => {
       flow: 'xtls-rprx-vision',
       id: 'cdd66f7e-3d8e-4751-c22f-069f198f7539',
     });
+  });
+});
+
+const temporaryRoots: string[] = [];
+
+const makeSidecar = (
+  fetchImpl: (url: string) => Promise<Response>,
+): { sidecar: XraySidecar; userDataPath: string } => {
+  const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-xray-'));
+  temporaryRoots.push(userDataPath);
+  return {
+    sidecar: new XraySidecar({
+      busyRegistry: new BusyRegistry(),
+      downloadEngine: {
+        cancel: () => undefined,
+        start: async () => {
+          throw new Error('该测试不应触发真实下载。');
+        },
+      } as unknown as DownloadEngine,
+      fetchImpl,
+      userDataPath,
+    }),
+    userDataPath,
+  };
+};
+
+const unreachable = async (): Promise<Response> => {
+  throw new Error('getaddrinfo ENOTFOUND');
+};
+
+describe('Xray core installation and route selection', () => {
+  afterEach(() => {
+    for (const root of temporaryRoots.splice(0)) {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it('reports a missing core with every built-in route listed but untested', () => {
+    const { sidecar } = makeSidecar(unreachable);
+    const view = sidecar.getCoreView();
+    expect(view).toMatchObject({
+      installed: false,
+      installedVersion: undefined,
+      probing: false,
+      requiredVersion: XRAY_CORE_RELEASE.version,
+    });
+    expect(view.lastProbedAt).toBeUndefined();
+    expect(view.sources.length).toBeGreaterThan(1);
+    expect(view.sources.every((source) => source.status === 'unknown')).toBe(true);
+    expect(view.sources.at(-1)?.kind).toBe('official');
+  });
+
+  it('adds user mirrors to the probe list without touching the built-in ones', () => {
+    const { sidecar } = makeSidecar(unreachable);
+    const builtIn = sidecar.getCoreView().sources.length;
+    const withCustom = new XraySidecar({
+      busyRegistry: new BusyRegistry(),
+      downloadEngine: { cancel: () => undefined } as unknown as DownloadEngine,
+      fetchImpl: unreachable,
+      mirrorHosts: () => ['gh.example.com', 'not a host'],
+      userDataPath: mkdtempSync(path.join(tmpdir(), 'claudedock-xray-')),
+    }).getCoreView().sources;
+    expect(withCustom).toHaveLength(builtIn + 1);
+    expect(withCustom.at(-1)).toMatchObject({ kind: 'custom', status: 'unknown' });
+  });
+
+  it('records why each route failed after a probe instead of leaving them unknown', async () => {
+    const { sidecar } = makeSidecar(unreachable);
+    const view = await sidecar.probeSources();
+    expect(view.probing).toBe(false);
+    expect(typeof view.lastProbedAt).toBe('number');
+    expect(view.sources.every((source) => source.status === 'failed')).toBe(true);
+    expect(view.sources[0]?.detail).toContain('ENOTFOUND');
+  });
+
+  /*
+   * The old behaviour was 12 automatic resume attempts against a single unreachable host, which read
+   * to the user as a three-minute hang ending in 「下载失败」. When no route answers there is nothing
+   * to retry, so the start has to stop immediately and say what to do instead.
+   */
+  it('fails a start with an actionable route report rather than retrying a dead download', async () => {
+    const { sidecar } = makeSidecar(unreachable);
+    await expect(sidecar.start({ ...profile, hasCredentials: false })).rejects.toThrow(
+      '所有 Xray-core 下载线路都不可用',
+    );
+    const runtime = sidecar.getView();
+    expect(runtime.status).toBe('stopped');
+    expect(runtime.error).toContain('引导代理');
+    expect(runtime.error).toContain('拖入');
+  });
+
+  it('refuses files that cannot be an Xray-core kernel', async () => {
+    const { sidecar, userDataPath } = makeSidecar(unreachable);
+    const junk = path.join(userDataPath, 'notes.txt');
+    writeFileSync(junk, 'not a kernel');
+    await expect(sidecar.installCoreFromFile(junk)).rejects.toThrow(
+      '只接受 Xray-core 的 .zip 安装包或名为 xray.exe 的可执行文件。',
+    );
+    await expect(
+      sidecar.installCoreFromFile(path.join(userDataPath, 'absent.zip')),
+    ).rejects.toThrow('找不到该文件。');
+    expect(sidecar.getCoreView().installed).toBe(false);
+  });
+
+  /*
+   * Staging matters: a file that is named right but cannot run must not replace a kernel that works,
+   * so the swap only happens after `xray.exe version` succeeds.
+   */
+  it('leaves no kernel behind when the dropped executable cannot run', async () => {
+    const { sidecar, userDataPath } = makeSidecar(unreachable);
+    const fake = path.join(userDataPath, 'xray.exe');
+    writeFileSync(fake, 'MZ-but-not-really');
+    await expect(sidecar.installCoreFromFile(fake)).rejects.toThrow(
+      '该文件无法作为 Xray-core 运行，可能已损坏或架构不匹配。',
+    );
+    const view = sidecar.getCoreView();
+    expect(view.installed).toBe(false);
+    expect(view.executablePath).toBeUndefined();
+  });
+
+  it('stages installs and only swaps a proven kernel into place', () => {
+    const source = readFileSync(
+      new URL('../src/main/proxy/xray-sidecar.ts', import.meta.url),
+      'utf8',
+    );
+    const start = source.indexOf('public async installCoreFromFile');
+    const body = source.slice(start, source.indexOf('\n  public async start', start));
+    expect(body.indexOf('await readCoreVersion(stagedExecutable)')).toBeLessThan(
+      body.indexOf('renameSync(staging, this.coreDirectory)'),
+    );
+    expect(body).toContain('（官方固定版本）');
+    expect(body).toContain('（用户自备）');
+  });
+});
+
+/*
+ * Xray binds its inbound well after `spawn` resolves, so the health check races the process it is
+ * checking. Taking the first `ECONNREFUSED` as the answer made 启动 fail in under 50 ms — before the
+ * kernel had even parsed its config — which reads to the user as "the proxy still doesn't work".
+ */
+describe('local inbound health check', () => {
+  const listeners: Server[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      listeners.splice(0).map((server) => new Promise((resolve) => server.close(resolve))),
+    );
+  });
+
+  /** A stand-in for Xray's HTTP inbound, which answers CONNECT before it dials the outbound. */
+  const listen = (port: number, status: string): Promise<void> =>
+    new Promise((resolve) => {
+      const server = createServer((socket) => {
+        socket.on('data', () => socket.end(`HTTP/1.1 ${status}\r\n\r\n`));
+      });
+      listeners.push(server);
+      server.listen(port, '127.0.0.1', () => resolve());
+    });
+
+  const freePort = (): Promise<number> =>
+    new Promise((resolve) => {
+      const probe = createServer();
+      probe.listen(0, '127.0.0.1', () => {
+        const port = (probe.address() as AddressInfo).port;
+        probe.close(() => resolve(port));
+      });
+    });
+
+  it('keeps knocking until the inbound comes up instead of failing on the first refusal', async () => {
+    const port = await freePort();
+    const pending = probeHttpInbound(port, () => true, 4_000);
+    setTimeout(() => void listen(port, '200 Connection established'), 400);
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it('stops immediately once the kernel it is waiting for has exited', async () => {
+    const port = await freePort();
+    await expect(probeHttpInbound(port, () => false, 4_000)).rejects.toThrow(
+      'Xray 在完成健康检查前就退出了，请查看下方日志。',
+    );
+  });
+
+  it('does not retry an answer that retrying cannot change', async () => {
+    const port = await freePort();
+    await listen(port, '502 Bad Gateway');
+    const startedAt = Date.now();
+    await expect(probeHttpInbound(port, () => true, 4_000)).rejects.toThrow(
+      '本地代理已启动，但选中节点未通过联网探测。',
+    );
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 });

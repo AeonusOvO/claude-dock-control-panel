@@ -118,6 +118,15 @@ export interface ProxyScopeSettings {
   cli: boolean;
   /** Applies to Electron's own session. This is opt-in and never changes the system proxy. */
   application: boolean;
+  /**
+   * Optional proxy used for ClaudeDock's own network calls while the built-in tunnel is not running
+   * — chiefly the Xray-core download, which otherwise has to reach GitHub without help. Empty means
+   * direct, and it is never filled in automatically: what exists on one user's machine says nothing
+   * about the next one's.
+   */
+  bootstrapProxyUrl?: string;
+  /** Extra kernel-download mirror hostnames, so a dead default can be worked around without a release. */
+  extraCoreSources?: string[];
 }
 export interface ProxyStoredState {
   /**
@@ -167,8 +176,35 @@ export interface ProxyAuditRecord {
   id: string;
   report: ProxyLeakAuditReport;
 }
+export type ProxyCoreSourceStatus = 'blocked' | 'failed' | 'ok' | 'unknown';
+export interface ProxyCoreSourceView {
+  /** Chinese failure reason, shown as-is next to the route. */
+  detail?: string;
+  id: string;
+  kind: 'custom' | 'mirror' | 'official';
+  label: string;
+  latencyMs?: number;
+  status: ProxyCoreSourceStatus;
+  /** Measured transfer rate in bytes/second. Absent when the route was not sampled or stalled. */
+  throughputBps?: number;
+  url: string;
+}
+/**
+ * Kernel state, surfaced before the user presses 启动. Without it, a missing Xray-core could only be
+ * discovered as an error message after a failed start, with nowhere to go from there.
+ */
+export interface ProxyCoreView {
+  executablePath?: string;
+  installed: boolean;
+  installedVersion?: string;
+  lastProbedAt?: number;
+  probing: boolean;
+  requiredVersion: string;
+  sources: ProxyCoreSourceView[];
+}
 export interface ProxyControlView {
   audits: ProxyAuditRecord[];
+  core: ProxyCoreView;
   runtime: ProxyRuntimeView;
   store: ProxyStoreView;
 }
@@ -1147,6 +1183,9 @@ export interface ControlPanelApi {
   removeProxyProfile: (profileId: string) => Promise<ProxyControlView>;
   selectProxyProfile: (profileId: string) => Promise<ProxyControlView>;
   setProxyScope: (scope: ProxyScopeSettings) => Promise<ProxyControlView>;
+  probeProxyCoreSources: () => Promise<ProxyControlView>;
+  installProxyCoreFile: (filePath: string) => Promise<ProxyControlView>;
+  detectBootstrapProxyCandidates: () => Promise<string[]>;
   startBuiltInProxy: (manualCorePath?: string) => Promise<ProxyControlView>;
   stopBuiltInProxy: () => Promise<ProxyControlView>;
   runProxyLeakAudit: () => Promise<ProxyAuditRecord>;

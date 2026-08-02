@@ -642,6 +642,11 @@ svg {
   display: flex;
 }
 
+/*
+ * Opacity only, deliberately. A `transform` on this layer moves the hit-test box of every control
+ * inside it for the length of the animation, which is a regression this repo has already paid for
+ * once; see the rail-page assertion in tests/renderer-interaction.test.ts.
+ */
 @keyframes railPageEnter {
   from {
     opacity: 0;
@@ -946,7 +951,7 @@ body[data-phase='error'] .status-pill {
    */
   overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: 4px;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
@@ -1257,7 +1262,7 @@ body[data-phase='error'] .status-pill {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-right: 2px;
+  padding-right: 4px;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
@@ -1319,7 +1324,12 @@ body[data-phase='error'] .status-pill {
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  right: 2px;
+  /*
+   * 7px, not 2px: it lines the button up with the timestamp it crossfades with (whose own right
+   * inset comes from `.history-item__select`'s 7px padding) and keeps it clear of the scrollbar
+   * these lists always show.
+   */
+  right: 7px;
   transition: opacity var(--dur-hover) var(--ease-standard);
   width: var(--s-6);
 }
@@ -1482,6 +1492,31 @@ body[data-phase='error'] .status-pill {
   grid-row: 1;
 }
 
+/*
+ * 终端 ⇄ 聊天 keeps switching by the `hidden` attribute — remounting xterm would cost a fit and a
+ * WebGL context every time — so the entry animation rides on the display change instead of a
+ * transition. An element leaving `display: none` starts its animations fresh, which is exactly the
+ * one frame we want to fade in on.
+ *
+ * Opacity only: an animation that runs on the *active* copy is animating a live hit-test layer, so
+ * a `transform` here would offset the composer and every terminal control for its whole duration.
+ * (`.workbench-page` may translate because it only ever transforms the outgoing, `pointer-events:
+ * none` copy — a shape that needs both pages in the layout, which `hidden` deliberately does not.)
+ */
+.terminal-shell:not([hidden]),
+.chat-shell:not([hidden]) {
+  animation: workspaceShellEnter var(--dur-3) var(--ease-decel);
+}
+
+@keyframes workspaceShellEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .chat-config-form {
   display: grid;
   gap: var(--s-3);
@@ -1506,7 +1541,8 @@ body[data-phase='error'] .status-pill {
   gap: var(--s-2);
   min-height: 0;
   overflow-y: auto;
-  padding-right: var(--s-1);
+  /* Keeps the 32px delete column off the scrollbar, matching the project history lists. */
+  padding-right: var(--s-2);
 }
 
 .chat-history__list:empty {
@@ -6548,6 +6584,16 @@ button:disabled {
   grid-template-columns:
     var(--activity-rail-w) minmax(270px, var(--rail-w)) 5px
     minmax(0, 1fr);
+  /*
+   * The sidebar already fades its contents; without this the column itself snapped to zero, so the
+   * fade played against a gap that had already closed and the collapse read as a hard cut.
+   */
+  transition: grid-template-columns var(--dur-2) var(--ease-standard);
+}
+
+/* Dragging the splitter rewrites the same property every frame; easing it would rubber-band. */
+body.is-resizing .workspace {
+  transition: none;
 }
 
 .workspace.workspace--rail-collapsed {
@@ -8119,8 +8165,19 @@ body.is-resizing * {
 
 .settings-panel--active {
   align-content: start;
+  animation: settingsPanelEnter var(--dur-3) var(--ease-decel);
   display: grid;
   gap: var(--s-3);
+}
+
+/* Opacity only, for the same hit-test reason as `railPageEnter`: the panel is already interactive. */
+@keyframes settingsPanelEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .settings-section-heading {
@@ -8530,6 +8587,162 @@ body.is-resizing * {
   overflow: auto;
   padding: var(--s-3);
   white-space: pre-wrap;
+}
+
+.proxy-core {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.settings-section-heading:has(#proxy-core-status) {
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+#proxy-core-status[data-installed='true'] {
+  color: var(--ok-text);
+}
+
+#proxy-core-status[data-installed='false'] {
+  color: var(--warn-text);
+}
+
+/*
+ * The drop zone is deliberately large: it is the escape hatch for users whose network cannot reach
+ * any download route at all, so it has to read as a target rather than as decoration.
+ */
+.proxy-core__drop {
+  align-content: center;
+  background: var(--surface-inset);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-2);
+  justify-items: center;
+  padding: var(--s-5) var(--s-4);
+  text-align: center;
+  transition:
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+.proxy-core__drop--active {
+  background: var(--accent-tint);
+  border-color: var(--accent-ring);
+}
+
+.proxy-core__drop strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.proxy-core__drop small,
+.proxy-core__sources-head span,
+.proxy-core__bootstrap-actions span {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+}
+
+.proxy-core__sources {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.proxy-core__sources-head,
+.proxy-core__mirror-add,
+.proxy-core__bootstrap-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.proxy-core__mirror-add input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.proxy-core__bootstrap-actions button {
+  flex: 0 0 auto;
+}
+
+.proxy-core__source-list {
+  display: grid;
+  gap: var(--s-1);
+  list-style: none;
+  margin: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0;
+}
+
+.proxy-core__source {
+  align-items: center;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, auto) repeat(2, auto);
+  padding: var(--s-2) var(--s-3);
+}
+
+.proxy-core__source[data-status='ok'] {
+  border-left-color: var(--ok-line);
+}
+
+.proxy-core__source[data-status='failed'],
+.proxy-core__source[data-status='blocked'] {
+  border-left-color: var(--bad-line);
+}
+
+.proxy-core__source-name {
+  color: var(--text);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-core__source-kind {
+  background: var(--surface-4);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  padding: 1px 6px;
+}
+
+.proxy-core__source-status {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-core__source[data-status='ok'] .proxy-core__source-status {
+  color: var(--ok-text);
+}
+
+.proxy-core__source[data-status='failed'] .proxy-core__source-status,
+.proxy-core__source[data-status='blocked'] .proxy-core__source-status {
+  color: var(--bad-text);
+}
+
+.proxy-settings .proxy-core__source button,
+.proxy-settings .proxy-core__bootstrap-actions span button {
+  font-size: var(--text-xs);
+  padding: 4px 8px;
+}
+
+.proxy-core__bootstrap-actions span {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
 }
 
 .proxy-audit-history {

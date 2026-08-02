@@ -1906,21 +1906,83 @@
                   保存勾选节点
                 </button>
               </section>
+              <section class="proxy-settings__section" aria-labelledby="proxy-core-title">
+                <div class="settings-section-heading">
+                  <strong id="proxy-core-title">Xray-core 内核</strong>
+                  <span id="proxy-core-status">正在检查内核…</span>
+                  <button id="proxy-core-toggle" type="button" hidden>重新安装</button>
+                </div>
+                <div class="proxy-core" id="proxy-core">
+                  <div
+                    class="proxy-core__drop"
+                    id="proxy-core-drop"
+                    data-drop-zone="proxy-core"
+                    role="group"
+                    aria-label="拖入 Xray-core 内核文件"
+                  >
+                    <strong>把 Xray-windows-64.zip 或 xray.exe 拖到这里</strong>
+                    <small>无法联网时，可在别的机器上下载后拖进来；安装前会校验能否运行。</small>
+                    <button id="proxy-core-pick" type="button">选择文件…</button>
+                    <input
+                      id="proxy-core-file"
+                      type="file"
+                      accept=".zip,.exe"
+                      hidden
+                      aria-hidden="true"
+                      tabindex="-1"
+                    />
+                  </div>
+                  <div class="proxy-core__sources">
+                    <div class="proxy-core__sources-head">
+                      <button id="proxy-core-probe" type="button">测试下载线路</button>
+                      <span id="proxy-core-probe-hint">下载前会自动测速，只用探得通的线路。</span>
+                    </div>
+                    <ul id="proxy-core-source-list" class="proxy-core__source-list"></ul>
+                    <div class="proxy-core__mirror-add">
+                      <input
+                        id="proxy-core-mirror-host"
+                        type="text"
+                        maxlength="253"
+                        spellcheck="false"
+                        placeholder="添加镜像域名，如 gh.example.com"
+                        aria-label="添加自定义镜像域名"
+                      />
+                      <button id="proxy-core-mirror-add" type="button">添加</button>
+                    </div>
+                  </div>
+                  <label class="field" for="proxy-bootstrap-url">
+                    <span>内核下载引导代理（可选）</span>
+                    <input
+                      id="proxy-bootstrap-url"
+                      type="text"
+                      maxlength="512"
+                      spellcheck="false"
+                      placeholder="http://127.0.0.1:端口 或 socks5://127.0.0.1:端口"
+                    />
+                  </label>
+                  <div class="proxy-core__bootstrap-actions">
+                    <button id="proxy-bootstrap-detect" type="button">检测本机代理</button>
+                    <span id="proxy-bootstrap-hint"
+                      >留空即直连。仅用于下载内核，检测结果需你点选后才会填入。</span
+                    >
+                  </div>
+                  <label class="field" for="proxy-manual-core-path">
+                    <span>手动指定 xray.exe 路径（可选）</span>
+                    <input
+                      id="proxy-manual-core-path"
+                      type="text"
+                      maxlength="4096"
+                      spellcheck="false"
+                      placeholder="留空则使用上面已安装的内核"
+                    />
+                  </label>
+                </div>
+              </section>
               <section class="proxy-settings__section" aria-labelledby="proxy-runtime-title">
                 <div class="settings-section-heading">
                   <strong id="proxy-runtime-title">当前状态</strong>
                   <span id="proxy-runtime-status">内置代理已停止。</span>
                 </div>
-                <label class="field" for="proxy-manual-core-path">
-                  <span>手动 Xray-core（可选）</span>
-                  <input
-                    id="proxy-manual-core-path"
-                    type="text"
-                    maxlength="4096"
-                    spellcheck="false"
-                    placeholder="留空则按需下载已固定并校验的官方版本"
-                  />
-                </label>
                 <div class="proxy-runtime-actions">
                   <button class="dialog-primary" id="proxy-start" type="button">
                     启动内置代理

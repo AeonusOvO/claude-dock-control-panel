@@ -121,7 +121,11 @@ import { McpManager } from './mcp-manager';
 import { AppPreferencesStore } from './app-preferences-store';
 import { ProxyStore } from './proxy/proxy-store';
 import { XraySidecar } from './proxy/xray-sidecar';
-import { buildCliProxyEnvironment, builtInProxyRules } from './proxy/proxy-environment';
+import {
+  buildCliProxyEnvironment,
+  builtInProxyRules,
+  normalizeBootstrapProxyUrl,
+} from './proxy/proxy-environment';
 import { parseProxyImportText } from './proxy/proxy-parser';
 import { downloadProxySubscription } from './proxy/proxy-subscription';
 import { LeakAuditService } from './proxy/leak-audit';
@@ -851,7 +855,45 @@ const requireProxyServices = (): {
 
 const proxyControlView = (): ProxyControlView => {
   const { audit, sidecar, store } = requireProxyServices();
-  return { audits: audit.list(), runtime: sidecar.getView(), store: store.getView() };
+  return {
+    audits: audit.list(),
+    core: sidecar.getCoreView(),
+    runtime: sidecar.getView(),
+    store: store.getView(),
+  };
+};
+
+/**
+ * Lists what a bootstrap proxy *could* be on this machine — the standard proxy environment variables
+ * and whatever Windows itself is configured to use. It only ever suggests: the user picks one and
+ * confirms, because a port that exists here says nothing about the next machine this ships to.
+ */
+const detectBootstrapProxyCandidates = async (): Promise<string[]> => {
+  const candidates = new Set<string>();
+  for (const variable of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY']) {
+    const normalized = normalizeBootstrapProxyUrl(process.env[variable]);
+    if (normalized) {
+      candidates.add(normalized);
+    }
+  }
+  try {
+    // `resolveProxy` reports the PAC/system decision for a real destination without changing it.
+    const resolved = await session.defaultSession.resolveProxy('https://github.com');
+    for (const entry of resolved.split(';')) {
+      const [scheme, endpoint] = entry.trim().split(/\s+/);
+      if (!endpoint) {
+        continue;
+      }
+      const prefix = scheme === 'SOCKS5' || scheme === 'SOCKS' ? 'socks5' : 'http';
+      const normalized = normalizeBootstrapProxyUrl(`${prefix}://${endpoint}`);
+      if (normalized) {
+        candidates.add(normalized);
+      }
+    }
+  } catch {
+    // No system proxy configured is a perfectly normal answer.
+  }
+  return [...candidates];
 };
 
 const selectedProxyProfile = () => {
@@ -1515,14 +1557,58 @@ const registerIpc = (): void => {
     if (typeof record?.cli !== 'boolean' || typeof record.application !== 'boolean') {
       throw new Error('代理作用域设置无效。');
     }
+    if (
+      record.bootstrapProxyUrl !== undefined &&
+      (typeof record.bootstrapProxyUrl !== 'string' || record.bootstrapProxyUrl.length > 512)
+    ) {
+      throw new Error('引导代理地址无效。');
+    }
+    if (
+      record.extraCoreSources !== undefined &&
+      (!Array.isArray(record.extraCoreSources) ||
+        record.extraCoreSources.length > 16 ||
+        record.extraCoreSources.some((entry) => typeof entry !== 'string' || entry.length > 253))
+    ) {
+      throw new Error('自定义镜像来源无效。');
+    }
     requireProxyServices().store.setScope({
       application: record.application,
+      bootstrapProxyUrl: record.bootstrapProxyUrl,
       cli: record.cli,
+      extraCoreSources: record.extraCoreSources,
     });
     await applyApplicationProxyScope();
     requireNetworkPreflightService().invalidate('built-in-proxy-scope-changed');
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return proxyControlView();
+  });
+  ipcMain.handle('proxy:probe-core-sources', async (event) => {
+    validateSender(event);
+    /*
+     * The bootstrap proxy has to be live before the probe runs, or the probe measures a network path
+     * the download will not take. `applyApplicationProxyScope` is a no-op when the rules are already
+     * current, so this costs nothing on the common path.
+     */
+    await applyApplicationProxyScope();
+    await requireProxyServices().sidecar.probeSources();
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:install-core-file', async (event, filePath: unknown) => {
+    validateSender(event);
+    if (typeof filePath !== 'string' || !filePath || filePath.length > 4096) {
+      throw new Error('内核文件路径无效。');
+    }
+    if (!path.isAbsolute(filePath)) {
+      throw new Error('内核文件路径必须是绝对路径。');
+    }
+    await requireProxyServices().sidecar.installCoreFromFile(filePath);
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:detect-bootstrap-proxy', async (event) => {
+    validateSender(event);
+    return detectBootstrapProxyCandidates();
   });
   ipcMain.handle('proxy:start', async (event, manualCorePath: unknown) => {
     validateSender(event);
@@ -3346,12 +3432,24 @@ if (!hasSingleInstanceLock) {
       (url) => shell.openExternal(url),
     );
     proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
-    xraySidecar = new XraySidecar(app.getPath('userData'), downloadEngine, busyRegistry, (view) => {
-      mainWindow?.webContents.send('proxy:runtime-changed', view);
-      if (proxyLeakAuditService) {
-        mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-      }
-      void applyApplicationProxyScope();
+    xraySidecar = new XraySidecar({
+      busyRegistry,
+      downloadEngine,
+      /*
+       * Route probes travel the app session, so they inherit whatever `applyApplicationProxyScope`
+       * has in force — including the user's bootstrap proxy. A route that probes green is therefore
+       * a route the download can actually use, rather than one that merely exists.
+       */
+      fetchImpl: (url, init) => session.defaultSession.fetch(url, init),
+      mirrorHosts: () => proxyStore?.getView().scope.extraCoreSources ?? [],
+      onChange: (view) => {
+        mainWindow?.webContents.send('proxy:runtime-changed', view);
+        if (proxyLeakAuditService) {
+          mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+        }
+        void applyApplicationProxyScope();
+      },
+      userDataPath: app.getPath('userData'),
     });
     /*
      * Record the resting rules before anything can start the tunnel. Without this the cached
