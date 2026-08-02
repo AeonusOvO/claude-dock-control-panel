@@ -162,6 +162,7 @@ export class CodexRuntime {
     private readonly onState: (state: CodexProjectState) => void,
     downloadEngine: DownloadEngine,
     busyRegistry: BusyRegistry,
+    fetchImplementation: typeof fetch = fetch,
   ) {
     this.installer = new CodexInstaller(
       userDataPath,
@@ -179,6 +180,7 @@ export class CodexRuntime {
           void this.emitAllStates();
         }
       },
+      fetchImplementation,
     );
     this.appServer = new CodexAppServerClient(() => this.resolveCodexInvocation());
     this.appServer.onNotification((notification) => {

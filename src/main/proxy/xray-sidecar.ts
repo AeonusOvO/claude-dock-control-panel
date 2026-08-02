@@ -114,7 +114,12 @@ const streamSettings = (profile: XrayProfile): Record<string, unknown> => {
   const security = profile.security ?? (profile.tls ? 'tls' : 'none');
   const hosts = commaList(profile.host);
   const serverName = profile.serverName || hosts[0] || profile.address;
-  const settings: Record<string, unknown> = { network: profile.transport, security };
+  const settings: Record<string, unknown> = {
+    network: profile.transport,
+    security,
+    // Resolve proxy-node hostnames through IPv4 as well, so the tunnel cannot bootstrap over IPv6.
+    sockopt: { domainStrategy: 'UseIPv4' },
+  };
   if (security === 'reality') {
     settings.realitySettings = {
       // Xray rejects an empty fingerprint; v2rayN falls back to chrome for the same reason.
@@ -237,6 +242,7 @@ export const buildXrayConfig = (
   httpPort: number,
   socksPort: number,
 ): Record<string, unknown> => ({
+  dns: { queryStrategy: 'UseIPv4' },
   inbounds: [
     {
       listen: '127.0.0.1',
@@ -261,11 +267,15 @@ export const buildXrayConfig = (
       streamSettings: streamSettings(profile),
       tag: 'selected-proxy',
     },
-    { protocol: 'freedom', settings: { domainStrategy: 'AsIs' }, tag: 'direct' },
+    { protocol: 'freedom', settings: { domainStrategy: 'UseIPv4' }, tag: 'direct' },
+    { protocol: 'blackhole', tag: 'block' },
   ],
   routing: {
-    domainStrategy: 'AsIs',
-    rules: [{ ip: ['geoip:private'], outboundTag: 'direct', type: 'field' }],
+    domainStrategy: 'IPIfNonMatch',
+    rules: [
+      { ip: ['::/0'], outboundTag: 'block', type: 'field' },
+      { ip: ['geoip:private'], outboundTag: 'direct', type: 'field' },
+    ],
   },
 });
 
@@ -423,6 +433,7 @@ export const probeHttpInbound = async (
 export class XraySidecar {
   private readonly busyRegistry: BusyRegistry;
   private child?: ChildProcessWithoutNullStreams;
+  private coreInstallPromise?: Promise<string>;
   private readonly coreDirectory: string;
   private readonly downloadEngine: DownloadEngine;
   private readonly fetchImpl: XrayCoreFetch;
@@ -498,6 +509,7 @@ export class XraySidecar {
       executablePath: installed ? executablePath : undefined,
       installed,
       installedVersion: installed ? this.installedVersion : undefined,
+      installing: Boolean(this.coreInstallPromise),
       lastProbedAt: this.probedAt,
       probing: this.probing,
       requiredVersion: XRAY_CORE_RELEASE.version,
@@ -524,6 +536,12 @@ export class XraySidecar {
       this.probing = false;
       this.notify();
     }
+    return this.getCoreView();
+  }
+
+  /** Downloads and installs the integrity-pinned core without requiring a proxy profile first. */
+  public async installCoreFromFastestSource(): Promise<ProxyCoreView> {
+    await this.ensureCore(true);
     return this.getCoreView();
   }
 
@@ -780,12 +798,29 @@ export class XraySidecar {
    * first also means a dead route fails in four seconds with a list of what was tried, instead of
    * burning twelve auto-resume attempts against a host that was never going to answer.
    */
-  private async ensureCore(): Promise<string> {
+  private async ensureCore(force = false): Promise<string> {
     const executablePath = path.join(this.coreDirectory, 'xray.exe');
-    if (existsSync(executablePath)) {
+    if (!force && existsSync(executablePath)) {
       await this.refreshInstalledVersion();
       return executablePath;
     }
+    if (this.coreInstallPromise) {
+      return this.coreInstallPromise;
+    }
+    const install = this.downloadAndInstallCore(executablePath);
+    this.coreInstallPromise = install;
+    this.notify();
+    try {
+      return await install;
+    } finally {
+      if (this.coreInstallPromise === install) {
+        this.coreInstallPromise = undefined;
+        this.notify();
+      }
+    }
+  }
+
+  private async downloadAndInstallCore(executablePath: string): Promise<string> {
     const fresh =
       this.probedAt !== undefined &&
       Date.now() - this.probedAt < PROBE_CACHE_MS &&

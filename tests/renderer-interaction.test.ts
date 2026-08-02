@@ -384,6 +384,29 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
+  it('locks the complete connection remedy surface and preserves the provider draft', () => {
+    expect(rendererSource).toContain('let connectionRemedyInProgress = false;');
+    expect(rendererSource).toMatch(
+      /connectionRemedyInProgress = true;[\s\S]*?connectionRemedy\.setAttribute\('aria-busy', 'true'\);[\s\S]*?syncConnectionInteractivity\(\);[\s\S]*?finally \{[\s\S]*?connectionRemedyInProgress = false;/,
+    );
+    expect(rendererSource).toContain('providerPicker.inert = !connectionEnvironmentReady || busy;');
+    expect(rendererSource).toContain(
+      'claudeConfigForm.inert = !connectionEnvironmentReady || busy;',
+    );
+    const installCase = rendererSource.slice(
+      rendererSource.indexOf(
+        "case 'install-router':",
+        rendererSource.indexOf('handleConnectionRemedyAction'),
+      ),
+      rendererSource.indexOf(
+        "case 'start-router':",
+        rendererSource.indexOf('handleConnectionRemedyAction'),
+      ),
+    );
+    expect(installCase).not.toContain("selectedProviderId = 'gateway'");
+    expect(installCase).not.toContain("applyPresetUi('gateway'");
+  });
+
   it('turns the footer model, mode and effort readouts into real menu triggers', () => {
     expect(rendererMarkup).toMatch(
       /<button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">/,
@@ -992,6 +1015,14 @@ describe('kernel drop zone versus the document-wide project drag', () => {
     // The same install path backs 「选择文件…」, so both routes resolve the real path identically.
     expect(rendererSource).toContain('const filePath = window.controlPanel.getDroppedPath(file);');
     expect(rendererSource).toContain('installProxyCoreFromFile(proxyCoreFile.files?.[0]);');
+  });
+
+  it('offers in-app fastest-route installation without requiring the browser escape hatch', () => {
+    expect(rendererMarkup).toContain('id="proxy-core-install"');
+    expect(rendererSource).toContain('.installProxyCore()');
+    expect(rendererSource).toContain("showToast('已通过最快可用线路安装 Xray-core')");
+    expect(rendererMarkup).toContain('id="proxy-scope-summary"');
+    expect(rendererSource).toContain('IPv6 出站已拦截');
   });
 });
 

@@ -144,14 +144,21 @@ export const diagnoseClaudeConnection = (
   }
 
   if (result.failureKind === 'response-shape') {
+    const openAiResponse = result.observedProtocol === 'openai';
     return {
       actions: [
-        { kind: 'install-router', label: '用本地路由器转换' },
+        ...(openAiResponse
+          ? [{ kind: 'install-router' as const, label: '安装本地路由器' }]
+          : providerLinks(provider)),
         { kind: 'switch-provider', label: '改用其他服务商' },
         retry,
       ],
-      cause: '接口返回了成功状态，但正文不是 Claude Code 需要的 Anthropic Messages 格式。',
-      fix: '使用真正的 Anthropic 兼容端点，或通过本地路由器转换响应格式。',
+      cause: openAiResponse
+        ? '接口返回的是 OpenAI Chat Completions 格式，不是 Claude Code 直连需要的 Anthropic Messages 格式。'
+        : '接口返回了成功状态，但正文缺少 Anthropic Messages 所需字段；这也可能是兼容服务使用了不同的消息编号。',
+      fix: openAiResponse
+        ? '安装路由器后，在“自定义接口”中选择 OpenAI 协议，由 ClaudeDock 完成上游配置与转换。'
+        : '先核对服务商的 Anthropic 兼容地址；无法识别协议时不会盲目启动路由转换。',
       title: '响应格式不兼容',
     };
   }

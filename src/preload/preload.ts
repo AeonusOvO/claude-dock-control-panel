@@ -79,6 +79,7 @@ const api: ControlPanelApi = {
   selectProxyProfile: (profileId) => ipcRenderer.invoke('proxy:select-profile', profileId),
   setProxyScope: (scope) => ipcRenderer.invoke('proxy:set-scope', scope),
   probeProxyCoreSources: () => ipcRenderer.invoke('proxy:probe-core-sources'),
+  installProxyCore: () => ipcRenderer.invoke('proxy:install-core'),
   installProxyCoreFile: (filePath) => ipcRenderer.invoke('proxy:install-core-file', filePath),
   detectBootstrapProxyCandidates: () =>
     ipcRenderer.invoke('proxy:detect-bootstrap-proxy') as Promise<string[]>,

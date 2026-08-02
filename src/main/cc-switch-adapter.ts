@@ -150,6 +150,7 @@ export class CcSwitchAdapter {
     private readonly downloadEngine: DownloadEngine,
     private readonly busyRegistry: BusyRegistry,
     private readonly openExternal: (url: string) => Promise<void>,
+    private readonly fetchImplementation: typeof fetch = fetch,
   ) {
     this.installerDirectory = path.join(userDataPath, 'installers', 'cc-switch');
   }
@@ -291,7 +292,7 @@ export class CcSwitchAdapter {
   }
 
   private async downloadLatestInstaller(): Promise<string> {
-    const response = await fetch(RELEASE_API, {
+    const response = await this.fetchImplementation(RELEASE_API, {
       headers: {
         accept: 'application/vnd.github+json',
         'user-agent': 'ClaudeDock/3',

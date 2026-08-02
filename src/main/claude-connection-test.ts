@@ -181,12 +181,24 @@ export const testClaudeConnection = async (
   const latencyMs = Date.now() - startedAt;
   if (response.ok) {
     let validMessage: boolean;
+    let observedProtocol: ClaudeConnectionTestResult['observedProtocol'] = 'unknown';
     try {
-      const parsed = JSON.parse(raw) as { content?: unknown; id?: unknown };
+      const parsed = JSON.parse(raw) as {
+        choices?: unknown;
+        content?: unknown;
+        id?: unknown;
+        object?: unknown;
+      };
       validMessage =
         typeof parsed.id === 'string' &&
-        parsed.id.startsWith('msg_') &&
+        parsed.id.trim().length > 0 &&
         Array.isArray(parsed.content);
+      observedProtocol = validMessage
+        ? 'anthropic'
+        : Array.isArray(parsed.choices) ||
+            (typeof parsed.object === 'string' && parsed.object.startsWith('chat.completion'))
+          ? 'openai'
+          : 'unknown';
     } catch {
       validMessage = false;
     }
@@ -196,6 +208,7 @@ export const testClaudeConnection = async (
         httpStatus: response.status,
         latencyMs,
         message: '端点、认证和模型响应全部通过，可以保存并启动 Claude Code。',
+        observedProtocol: 'anthropic',
         ok: true,
         stages: [
           stage('endpoint', '接口地址', 'passed', `${response.status} · /v1/messages 可访问`),
@@ -212,11 +225,19 @@ export const testClaudeConnection = async (
       httpStatus: response.status,
       latencyMs,
       message: '接口返回成功状态，但响应不是标准 Anthropic 消息格式。',
+      observedProtocol,
       ok: false,
       stages: [
         stage('endpoint', '接口地址', 'passed', `${response.status} · 已收到响应`),
         stage('authentication', '身份认证', 'passed', '请求未被拒绝。'),
-        stage('model', '模型响应', 'failed', '缺少以 msg_ 开头的标识或 content 数组。'),
+        stage(
+          'model',
+          '模型响应',
+          'failed',
+          observedProtocol === 'openai'
+            ? '检测到 OpenAI 响应格式，需要协议转换。'
+            : '缺少非空消息标识或 content 数组。',
+        ),
       ],
       testedAt,
       tone: 'error',

@@ -197,6 +197,7 @@ export interface ProxyCoreView {
   executablePath?: string;
   installed: boolean;
   installedVersion?: string;
+  installing: boolean;
   lastProbedAt?: number;
   probing: boolean;
   requiredVersion: string;
@@ -790,6 +791,7 @@ export interface ClaudeConnectionTestResult {
   httpStatus?: number;
   latencyMs?: number;
   message: string;
+  observedProtocol?: 'anthropic' | 'openai' | 'unknown';
   ok: boolean;
   stages: ClaudeConnectionTestStage[];
   testedAt: number;
@@ -1184,6 +1186,7 @@ export interface ControlPanelApi {
   selectProxyProfile: (profileId: string) => Promise<ProxyControlView>;
   setProxyScope: (scope: ProxyScopeSettings) => Promise<ProxyControlView>;
   probeProxyCoreSources: () => Promise<ProxyControlView>;
+  installProxyCore: () => Promise<ProxyControlView>;
   installProxyCoreFile: (filePath: string) => Promise<ProxyControlView>;
   detectBootstrapProxyCandidates: () => Promise<string[]>;
   startBuiltInProxy: (manualCorePath?: string) => Promise<ProxyControlView>;

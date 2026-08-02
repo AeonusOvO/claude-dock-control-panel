@@ -1594,6 +1594,13 @@ const registerIpc = (): void => {
     mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return proxyControlView();
   });
+  ipcMain.handle('proxy:install-core', async (event) => {
+    validateSender(event);
+    await applyApplicationProxyScope();
+    await requireProxyServices().sidecar.installCoreFromFastestSource();
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    return proxyControlView();
+  });
   ipcMain.handle('proxy:install-core-file', async (event, filePath: unknown) => {
     validateSender(event);
     if (typeof filePath !== 'string' || !filePath || filePath.length > 4096) {
@@ -3424,12 +3431,12 @@ if (!hasSingleInstanceLock) {
       },
     );
     downloadEngine.install();
-    downloadEngine.restoreInterrupted();
     ccSwitchAdapter = new CcSwitchAdapter(
       app.getPath('userData'),
       downloadEngine,
       busyRegistry,
       (url) => shell.openExternal(url),
+      (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
     );
     proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
     xraySidecar = new XraySidecar({
@@ -3460,6 +3467,9 @@ if (!hasSingleInstanceLock) {
      * signature is primed the whole startup path is a no-op until the tunnel is genuinely ready.
      */
     await applyApplicationProxyScope();
+    // Recreating a journalled DownloadItem before setProxy settles lets the first proxy refresh
+    // close its socket at zero bytes. Restore only after the application network path is stable.
+    downloadEngine.restoreInterrupted();
     const directAuditSession = session.fromPartition('claudedock-proxy-audit-direct');
     const proxiedAuditSession = session.fromPartition('claudedock-proxy-audit-tunnel');
     await directAuditSession.setProxy({ mode: 'direct' });
@@ -3509,6 +3519,7 @@ if (!hasSingleInstanceLock) {
       },
       requestPermissionModeFromScreen,
       downloadEngine,
+      (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
     );
     codexRuntime = new CodexRuntime(
@@ -3518,6 +3529,7 @@ if (!hasSingleInstanceLock) {
       },
       downloadEngine,
       busyRegistry,
+      (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
     );
     const networkPreflightSettingsStore = new NetworkPreflightSettingsStore(
       app.getPath('userData'),

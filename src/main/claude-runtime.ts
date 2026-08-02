@@ -629,12 +629,13 @@ export class ClaudeRuntime {
       sessionId: string,
     ) => Promise<ClaudePermissionMode | undefined>,
     downloadEngine: DownloadEngine,
+    fetchImplementation: typeof fetch = fetch,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
     this.conversationPreferences = new ConversationPreferencesStore(userDataPath);
-    this.routerManager = new ClaudeRouterManager(userDataPath, downloadEngine);
+    this.routerManager = new ClaudeRouterManager(userDataPath, downloadEngine, fetchImplementation);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
     this.currentThemeId = initialThemeId;
     this.metricsTimer = setInterval(() => {

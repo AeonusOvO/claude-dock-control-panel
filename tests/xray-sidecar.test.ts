@@ -79,18 +79,30 @@ describe('Xray sidecar configuration', () => {
     expect(Number(ceiling?.[1]) * 1024 * 1024).toBeGreaterThan(XRAY_CORE_RELEASE.bytes * 2);
   });
 
-  it('binds both inbounds only to loopback and keeps remote DNS resolution', () => {
+  it('binds both inbounds to loopback and blocks IPv6 egress inside the tunnel', () => {
     const config = buildXrayConfig(profile, 41001, 41002) as {
+      dns: { queryStrategy: string };
       inbounds: Array<{ listen: string; port: number; protocol: string }>;
-      outbounds: Array<{ settings: unknown }>;
-      routing: { domainStrategy: string };
+      outbounds: Array<{
+        protocol: string;
+        settings: unknown;
+        streamSettings?: Record<string, unknown>;
+        tag: string;
+      }>;
+      routing: { domainStrategy: string; rules: Array<{ ip: string[]; outboundTag: string }> };
     };
     expect(config.inbounds).toEqual([
       expect.objectContaining({ listen: '127.0.0.1', port: 41001, protocol: 'http' }),
       expect.objectContaining({ listen: '127.0.0.1', port: 41002, protocol: 'socks' }),
     ]);
     expect(JSON.stringify(config)).not.toContain('0.0.0.0');
-    expect(config.routing.domainStrategy).toBe('AsIs');
+    expect(config.dns.queryStrategy).toBe('UseIPv4');
+    expect(config.outbounds[0]?.streamSettings?.sockopt).toEqual({ domainStrategy: 'UseIPv4' });
+    expect(config.outbounds).toContainEqual(
+      expect.objectContaining({ protocol: 'blackhole', tag: 'block' }),
+    );
+    expect(config.routing.domainStrategy).toBe('IPIfNonMatch');
+    expect(config.routing.rules[0]).toEqual({ ip: ['::/0'], outboundTag: 'block', type: 'field' });
   });
 
   it('redacts raw and URL-encoded credentials from the diagnostic ring', () => {
@@ -118,6 +130,7 @@ describe('Xray sidecar configuration', () => {
         spiderX: '',
       },
       security: 'reality',
+      sockopt: { domainStrategy: 'UseIPv4' },
     });
     expect(outbound.streamSettings.tlsSettings).toBeUndefined();
     expect(outbound.settings.vnext[0]!.users[0]).toEqual({

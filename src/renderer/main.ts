@@ -391,6 +391,7 @@ const proxyCoreDrop = requiredElement<HTMLElement>('#proxy-core-drop');
 const proxyCorePick = requiredElement<HTMLButtonElement>('#proxy-core-pick');
 const proxyCoreFile = requiredElement<HTMLInputElement>('#proxy-core-file');
 const proxyCoreProbe = requiredElement<HTMLButtonElement>('#proxy-core-probe');
+const proxyCoreInstall = requiredElement<HTMLButtonElement>('#proxy-core-install');
 const proxyCoreProbeHint = requiredElement<HTMLElement>('#proxy-core-probe-hint');
 const proxyCoreSourceList = requiredElement<HTMLUListElement>('#proxy-core-source-list');
 const proxyCoreMirrorHost = requiredElement<HTMLInputElement>('#proxy-core-mirror-host');
@@ -404,6 +405,7 @@ const proxyRuntimeStatus = requiredElement<HTMLElement>('#proxy-runtime-status')
 const proxyRuntimeLog = requiredElement<HTMLElement>('#proxy-runtime-log');
 const proxyScopeCli = requiredElement<HTMLInputElement>('#proxy-scope-cli');
 const proxyScopeApplication = requiredElement<HTMLInputElement>('#proxy-scope-application');
+const proxyScopeSummary = requiredElement<HTMLElement>('#proxy-scope-summary');
 const proxyRunAudit = requiredElement<HTMLButtonElement>('#proxy-run-audit');
 const proxyAuditSummary = requiredElement<HTMLElement>('#proxy-audit-summary');
 const proxyAuditHistory = requiredElement<HTMLOListElement>('#proxy-audit-history');
@@ -992,7 +994,7 @@ const buildProxyCoreSource = (source: ProxyCoreSourceView): HTMLLIElement => {
   const status = document.createElement('small');
   status.className = 'proxy-core__source-status';
   const statusLabel = PROXY_CORE_SOURCE_STATUS_LABELS[source.status];
-  // Only the top few routes get sampled, so a missing rate means "not measured", not "zero".
+  // Every verified route is sampled; a missing rate means the sample failed, not zero throughput.
   const measurements =
     source.status === 'ok'
       ? [
@@ -1039,20 +1041,30 @@ const buildProxyCoreSource = (source: ProxyCoreSourceView): HTMLLIElement => {
 };
 
 const renderProxyCore = (core: ProxyCoreView, scope: ProxyScopeSettings): void => {
-  proxyCoreStatus.textContent = core.installed
-    ? `已安装 ${core.installedVersion ?? core.requiredVersion}`
-    : `未检测到内核 · 需要 ${core.requiredVersion}`;
+  proxyCoreStatus.textContent = core.installing
+    ? '正在测速、下载并校验内核…'
+    : core.installed
+      ? `已安装 ${core.installedVersion ?? core.requiredVersion}`
+      : `未检测到内核 · 需要 ${core.requiredVersion}`;
   proxyCoreStatus.dataset.installed = String(core.installed);
   proxyCoreToggle.hidden = !core.installed;
   proxyCoreToggle.textContent = proxyCoreExpanded ? '收起' : '重新安装';
   // A missing kernel is the one thing that blocks 启动, so that case never collapses.
   proxyCore.hidden = core.installed && !proxyCoreExpanded;
-  proxyCoreProbe.disabled = core.probing;
-  proxyCoreProbeHint.textContent = core.probing
-    ? '正在测试各条下载线路…'
-    : core.lastProbedAt
-      ? `上次测试 ${new Date(core.lastProbedAt).toLocaleTimeString()} · 下载时自动选用最快的可用线路。`
-      : '下载前会自动测速，只用探得通的线路。';
+  proxyCoreProbe.disabled = core.probing || core.installing;
+  proxyCoreInstall.disabled = core.probing || core.installing;
+  proxyCoreInstall.textContent = core.installing
+    ? '正在安装…'
+    : core.installed
+      ? '重新测速并安装'
+      : '测速并安装';
+  proxyCoreProbeHint.textContent = core.installing
+    ? '正在对全部可用线路测速，随后会在软件内完成下载、校验与安装。'
+    : core.probing
+      ? '正在测试各条下载线路…'
+      : core.lastProbedAt
+        ? `上次测试 ${new Date(core.lastProbedAt).toLocaleTimeString()} · 下载时自动选用最快的可用线路。`
+        : '下载前会自动测速，只用探得通的线路。';
   proxyCoreSourceList.replaceChildren(...core.sources.map(buildProxyCoreSource));
   // Never overwrite a field the user is in the middle of typing into.
   if (document.activeElement !== proxyBootstrapUrl) {
@@ -1086,6 +1098,10 @@ const renderProxyState = (state: ProxyControlView): void => {
   proxyScopeCli.checked = state.store.scope.cli;
   proxyScopeApplication.checked = state.store.scope.application;
   proxyScopeSnapshot = { ...state.store.scope };
+  proxyScopeSummary.textContent =
+    state.runtime.status === 'ready'
+      ? `内置代理已就绪；CLI ${state.store.scope.cli ? '已接入' : '未接入'}，ClaudeDock 自身网络 ${state.store.scope.application ? '已接入' : '未接入'}。隧道仅使用 IPv4，IPv6 出站已拦截。`
+      : '内置代理未运行；勾选项会在启动后生效。内置隧道仅使用 IPv4，不会修改 Windows 的全局 IPv6 设置。';
   renderProxyCore(state.core, state.store.scope);
   proxyRuntimeStatus.textContent = state.runtime.error
     ? `${PROXY_RUNTIME_LABELS[state.runtime.status]}：${state.runtime.error}`
@@ -1273,6 +1289,7 @@ let codexRequestGeneration = 0;
 let runtimeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
+let connectionRemedyInProgress = false;
 const automaticConnectionTestSessions = new Set<string>();
 let networkPreflightInProgress = false;
 let networkPreflightDialogProvider: NetworkProviderId | undefined;
@@ -3089,7 +3106,10 @@ const syncApiKeyHelperPolicyUi = (): void => {
   const usesExplicitCredential =
     claudeAuthMode.value === 'apiKey' || claudeAuthMode.value === 'authToken';
   claudeApiKeyHelperPolicy.disabled =
-    !connectionEnvironmentReady || connectionTestInProgress || !usesExplicitCredential;
+    !connectionEnvironmentReady ||
+    connectionTestInProgress ||
+    connectionRemedyInProgress ||
+    !usesExplicitCredential;
   const helperSources =
     gatewayDiagnostics?.configurationHints
       .filter((hint) => hint.apiKeyHelperConfigured)
@@ -3109,16 +3129,23 @@ const syncApiKeyHelperPolicyUi = (): void => {
 };
 
 const syncConnectionInteractivity = (): void => {
-  providerPicker.setAttribute('aria-disabled', String(!connectionEnvironmentReady));
+  const busy = connectionTestInProgress || connectionRemedyInProgress;
+  providerPicker.setAttribute('aria-disabled', String(!connectionEnvironmentReady || busy));
+  providerPicker.inert = !connectionEnvironmentReady || busy;
+  claudeConfigForm.inert = !connectionEnvironmentReady || busy;
+  connectionRemedyActions.inert = busy;
   for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('.provider-card')) {
-    button.disabled = !connectionEnvironmentReady || connectionTestInProgress;
+    button.disabled = !connectionEnvironmentReady || busy;
   }
   for (const control of claudeConfigForm.querySelectorAll<
     HTMLButtonElement | HTMLInputElement | HTMLSelectElement
   >('button, input, select')) {
-    control.disabled = !connectionEnvironmentReady || connectionTestInProgress;
+    control.disabled = !connectionEnvironmentReady || busy;
   }
-  if (connectionEnvironmentReady && !connectionTestInProgress) {
+  for (const button of connectionRemedyActions.querySelectorAll<HTMLButtonElement>('button')) {
+    button.disabled = busy;
+  }
+  if (connectionEnvironmentReady && !busy) {
     const config = claudeStates.get(workspaceState.activeSessionId)?.config;
     clearCredentialButton.disabled = !(
       config?.sourceCredentialConfigured ?? config?.credentialConfigured
@@ -5388,9 +5415,31 @@ const renderConnectionTest = (result: ClaudeConnectionTestResult): void => {
     button.type = 'button';
     button.textContent = action.label;
     button.addEventListener('click', () => {
-      void runGuarded(button, '处理中…', () => handleConnectionRemedyAction(action));
+      void runConnectionRemedyAction(button, action);
     });
     connectionRemedyActions.append(button);
+  }
+};
+
+const runConnectionRemedyAction = async (
+  button: HTMLButtonElement,
+  action: ClaudeConnectionRemedyAction,
+): Promise<void> => {
+  if (connectionRemedyInProgress || connectionTestInProgress) {
+    return;
+  }
+  connectionRemedyInProgress = true;
+  connectionRemedy.setAttribute('aria-busy', 'true');
+  const originalLabel = button.textContent;
+  button.textContent = '处理中…';
+  syncConnectionInteractivity();
+  try {
+    await handleConnectionRemedyAction(action);
+  } finally {
+    connectionRemedyInProgress = false;
+    connectionRemedy.setAttribute('aria-busy', 'false');
+    button.textContent = originalLabel;
+    syncConnectionInteractivity();
   }
 };
 
@@ -5436,8 +5485,6 @@ const handleConnectionRemedyAction = async (
       await runClaudeInstallUpdate();
       break;
     case 'install-router':
-      selectedProviderId = 'gateway';
-      applyPresetUi('gateway', false);
       await runRouterOperation(
         (sessionId) =>
           window.controlPanel.installClaudeRouterFromSource(
@@ -9698,6 +9745,24 @@ proxyCoreProbe.addEventListener('click', () => {
     .probeProxyCoreSources()
     .catch((error: unknown) => {
       showToast(error instanceof Error ? error.message : '无法测试下载线路。', 'error');
+    })
+    .finally(() => {
+      void loadProxyState();
+    });
+});
+proxyCoreInstall.addEventListener('click', () => {
+  proxyCoreExpanded = true;
+  proxyCoreInstall.disabled = true;
+  proxyCoreInstall.textContent = '正在安装…';
+  void window.controlPanel
+    .installProxyCore()
+    .then((state) => {
+      proxyCoreExpanded = false;
+      renderProxyState(state);
+      showToast('已通过最快可用线路安装 Xray-core');
+    })
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : '无法安装 Xray-core。', 'error');
     })
     .finally(() => {
       void loadProxyState();

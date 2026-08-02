@@ -51,7 +51,7 @@ describe('built-in proxy integration contract', () => {
    * through the same isolated bridge as everything else — a direct `ipcRenderer` reach would work in
    * development and break under contextIsolation in the packaged app.
    */
-  it('carries kernel state and its three channels through the existing bridge', () => {
+  it('carries kernel state and its install channels through the existing bridge', () => {
     expect(contracts).toMatch(/export interface ProxyControlView \{[\s\S]*?core: ProxyCoreView;/);
     expect(contracts).toMatch(
       /export interface ProxyCoreView \{[\s\S]*?installed: boolean;[\s\S]*?requiredVersion: string;[\s\S]*?sources: ProxyCoreSourceView\[\];/,
@@ -60,6 +60,7 @@ describe('built-in proxy integration contract', () => {
     expect(main).toContain('core: sidecar.getCoreView(),');
     for (const channel of [
       'proxy:probe-core-sources',
+      'proxy:install-core',
       'proxy:install-core-file',
       'proxy:detect-bootstrap-proxy',
     ]) {

@@ -201,7 +201,7 @@ describe('Xray-core download sources', () => {
     ).toBeUndefined();
   });
 
-  it('samples only the most promising verified routes, not every one that answered', async () => {
+  it('samples every verified route so latency cannot hide a faster mirror', async () => {
     const sources = buildXrayCoreSources(release).slice(0, 6);
     const slowHosts = new Set([sources[4]!.host, sources[5]!.host]);
     const archiveRequests: string[] = [];
@@ -219,12 +219,8 @@ describe('Xray-core download sources', () => {
       release,
     });
     expect(results.every((result) => result.status === 'ok')).toBe(true);
-    expect(archiveRequests).toHaveLength(4);
-    expect(results.filter((result) => result.throughputBps !== undefined)).toHaveLength(4);
-    // The two deliberately slow routes lost the latency cut, so they were never sampled.
-    for (const source of [sources[4]!, sources[5]!]) {
-      expect(results.find((result) => result.id === source.id)?.throughputBps).toBeUndefined();
-    }
+    expect(archiveRequests).toHaveLength(6);
+    expect(results.filter((result) => result.throughputBps !== undefined)).toHaveLength(6);
   });
 
   it('picks the fastest verified route and nothing at all when every route fails', () => {

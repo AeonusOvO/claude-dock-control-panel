@@ -51,6 +51,43 @@ describe('Claude connection test', () => {
     );
   });
 
+  it('accepts an Anthropic-compatible response whose non-empty id uses a provider prefix', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ content: [], id: 'deepseek-response-1', type: 'message' }), {
+          status: 200,
+        }),
+      ),
+    );
+
+    const result = await testClaudeConnection(gatewayConfig, 'router-client-key');
+
+    expect(result.ok).toBe(true);
+    expect(result.observedProtocol).toBe('anthropic');
+  });
+
+  it('identifies an OpenAI success body instead of blindly treating every 200 as convertible', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: 'x', role: 'assistant' } }] }),
+          {
+            status: 200,
+          },
+        ),
+      ),
+    );
+
+    const result = await testClaudeConnection(gatewayConfig, 'router-client-key');
+
+    expect(result.ok).toBe(false);
+    expect(result.failureKind).toBe('response-shape');
+    expect(result.observedProtocol).toBe('openai');
+    expect(result.stages.at(-1)?.detail).toContain('OpenAI');
+  });
+
   it('builds the current DeepSeek Anthropic endpoint from its documented base URL', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

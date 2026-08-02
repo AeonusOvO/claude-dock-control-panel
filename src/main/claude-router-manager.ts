@@ -632,6 +632,7 @@ export class ClaudeRouterManager {
   public constructor(
     userDataPath: string,
     private readonly downloadEngine: DownloadEngine,
+    private readonly fetchImplementation: typeof fetch = fetch,
   ) {
     this.installerDirectory = path.join(userDataPath, 'claude', 'router-installers');
   }
@@ -989,7 +990,7 @@ export class ClaudeRouterManager {
   }
 
   public async downloadLatestInstaller(): Promise<DownloadedRouterInstaller> {
-    const releaseResponse = await fetch(ROUTER_RELEASE_API, {
+    const releaseResponse = await this.fetchImplementation(ROUTER_RELEASE_API, {
       headers: {
         accept: 'application/vnd.github+json',
         'user-agent': 'ClaudeDock/1.0',

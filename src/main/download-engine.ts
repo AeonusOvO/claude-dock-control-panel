@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { DownloadTaskState, DownloadTaskView } from '../shared/contracts';
 import type { BusyRegistry } from './busy-registry';
 import { DownloadJournal, type DownloadJournalEntry } from './download-journal';
+import { pickFastestGitHubReleaseRoute } from './github-release-routes';
 
 export interface DownloadRequest {
   allowedHosts: string[];
@@ -37,6 +38,7 @@ export interface DownloadSession {
     urlChain: string[];
   }) => void;
   downloadURL: (url: string) => void;
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   on: (event: 'will-download', listener: (event: Event, item: DownloadItem) => void) => unknown;
 }
 
@@ -286,7 +288,37 @@ export class DownloadEngine {
     if (!this.isPathWithinUserData(request.finalPath)) {
       throw new Error('下载目标必须位于 ClaudeDock 用户数据目录。');
     }
-    const { completion, task } = this.createTask({ ...request, url: url.toString() });
+    if (
+      this.electronSession.fetch &&
+      url.hostname === 'github.com' &&
+      /^\/[^/]+\/[^/]+\/releases\/download\//.test(url.pathname)
+    ) {
+      return this.startGitHubRelease(request, url);
+    }
+    return this.launch({ ...request, url: url.toString() });
+  }
+
+  private async startGitHubRelease(
+    request: DownloadRequest,
+    officialUrl: URL,
+  ): Promise<DownloadResult> {
+    const route = await pickFastestGitHubReleaseRoute(officialUrl.toString(), (url, init) =>
+      this.electronSession.fetch!(url, init),
+    );
+    if (!route) {
+      return this.launch({ ...request, url: officialUrl.toString() });
+    }
+    return this.launch({
+      ...request,
+      allowedHosts: route.allowedHosts,
+      allowedPathPrefixes: route.allowedPathPrefixes,
+      label: `${request.label} · ${route.label}`,
+      url: route.url,
+    });
+  }
+
+  private launch(request: DownloadRequest): Promise<DownloadResult> {
+    const { completion, task } = this.createTask(request);
     this.persistTask(task, true);
     const pending = this.pendingByUrl.get(task.request.url) ?? [];
     pending.push(task);

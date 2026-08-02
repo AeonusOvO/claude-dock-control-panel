@@ -56,6 +56,21 @@ describe('Claude connection remedy', () => {
     expect(remedy?.actions).toContainEqual(expect.objectContaining({ kind: 'use-fast-model' }));
   });
 
+  it('offers router installation only when the successful body is recognizably OpenAI', () => {
+    expect(
+      diagnoseClaudeConnection(
+        failedResult({ failureKind: 'response-shape', observedProtocol: 'openai' }),
+        { provider: findClaudeProvider('custom') },
+      )?.actions.map((action) => action.kind),
+    ).toContain('install-router');
+    expect(
+      diagnoseClaudeConnection(
+        failedResult({ failureKind: 'response-shape', observedProtocol: 'unknown' }),
+        { provider: findClaudeProvider('custom') },
+      )?.actions.map((action) => action.kind),
+    ).not.toContain('install-router');
+  });
+
   it('prioritizes environment repair and router lifecycle remedies', () => {
     expect(
       diagnoseClaudeConnection(failedResult(), {

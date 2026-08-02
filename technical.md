@@ -279,8 +279,13 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `DownloadEngine` 只接受 HTTPS、成对的 host/path 白名单、`userData` 内目标、尺寸上限与可选
   精确字节/SHA-256。它基于 Electron `DownloadItem` 计算 EMA 速度、ETA 和真实百分比；未知
   `Content-Length` 以 `-1` 表达不确定态。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
-  `.partial` 原子改名为最终文件；失败或取消不会留下可执行的最终路径。任务在 60 秒内没有收到
-  任何字节即判定停滞，主动取消、删除残片并给出可读原因，避免界面无限停在 0%。
+  `.partial` 原子改名为最终文件；失败或取消不会留下可执行的最终路径。任务连续 45 秒没有收到
+  字节会进入自动续传（最多 12 次、指数退避），并先保留磁盘前缀，避免慢线路每次从零开始。
+- `src/main/github-release-routes.ts` 对受管 GitHub Release 资产构造 8 条前缀镜像加官方直连，全部
+  通过 `session.defaultSession.fetch()` 做 128 KiB Range 吞吐采样，最快者才交给同一 session 的
+  `DownloadItem`。CCR、Codex、CC Switch 的 GitHub API 元数据读取也注入这一 Electron fetch，因而
+  继承 Windows 系统代理/PAC；不再由 Node 全局 `fetch` 绕开用户代理。恢复日志在初始 `setProxy()`
+  完成后才调用 `createInterruptedDownload()`，避免代理规则刷新关闭刚恢复的连接。
 - `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
   `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界记录
   只会被丢弃，部分文件从不当作完成产物执行。CCR、Codex、Xray 和 CC Switch 的受管资源共用
@@ -311,8 +316,8 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `ALGO= hex`、**没有文件名字段**，不能按列切分），并要求它等于代码里固定的
   `XRAY_CORE_RELEASE.sha256`。这一段把连通性与镜像完整性合成一次请求，任何返回错误摘要的镜像当场
   出局；而 zip 的校验值始终取自代码常量，不采信镜像给的摘要，避开「同一条信道既发文件又发校验值」。
-  第二段只对第一段里最快的 4 条发 `Range: bytes=0-262143` 实测速率，3 秒或 256 KiB 先到先止，
-  单轮探测总流量不超过 1 MB。
+  第二段对第一段里**全部通过**的线路发 `Range: bytes=0-262143` 实测速率，3 秒或 256 KiB 先到先止；
+  只有这样才能避免用摘要延迟预筛时错过真正高吞吐的镜像。
 - **排序以实测速率为主键，延迟只是没测到速率时的回退**（`pickFastestSource` 的秩是
   `throughputBps ?? -latencyMs`）。这不是调优：实测中 `gh.ddlc.top` 以 789 ms 的最低延迟胜出，
   真实吞吐却只有约 13 KB/s，21 MB 的内核要下 25 分钟——只看延迟等于稳定选中一条永远下不完的线路。
@@ -322,7 +327,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `fixed_servers`，因此 `applyApplicationProxyScope()` 的签名去重照常生效，不新增竞态面。
   `proxy:detect-bootstrap-proxy` 只把 `HTTPS_PROXY` / `HTTP_PROXY` 与 `session.resolveProxy()`
   的候选**列给用户点选**，绝不自动启用——这是发布给所有用户的软件，不能按开发机的环境做假设。
-- 新增三条 IPC：`proxy:probe-core-sources`、`proxy:install-core-file`（绝对路径、≤4096 字符）、
+- 内核可以通过 `proxy:install-core` 在未选择节点时独立安装；`XraySidecar` 用共享 Promise 合并并发
+  安装请求，界面读取 `ProxyCoreView.installing` 锁定“测速”和“安装”。连同
+  `proxy:probe-core-sources`、`proxy:install-core-file`（绝对路径、≤4096 字符）、
   `proxy:detect-bootstrap-proxy`；`bootstrapProxyUrl` 与 `extraCoreSources` 复用 `proxy:set-scope`
   持久化。三者结束后都广播 `proxy:state-changed`。`installCoreFromFile` 只接受 `.zip` 或
   `xray.exe`，先解到 staging 跑一次 `xray.exe version`，通过才 rename 进 `core/`——名字对但跑不起来
@@ -332,6 +339,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   校验上——内核解压其实一次都没成功过，只表现为一句「退出码 1」。`$env:` 查找是按字面值代入而非
   重新解析，也顺带挡住含引号或 `;` 的路径变成第二条语句。`waitForProcess` 现在捕获并回传子进程
   stderr：把子进程自己的抱怨丢掉，正是这个 bug 能长期伪装成不透明退出码的原因。
+- Xray 临时配置采用 IPv4-only：DNS `queryStrategy=UseIPv4`，选中节点 outbound 的
+  `sockopt.domainStrategy=UseIPv4`，freedom 出站同样 `UseIPv4`，路由首条规则把 `::/0` 送入
+  blackhole。该边界只约束 ClaudeDock 管理的隧道，不修改 Windows IPv6、DNS、路由表或系统代理。
 - 本地入站健康检查会重试。Xray 在 `spawn` 返回后才绑定入站，第一次连接几乎必然 `ECONNREFUSED`；
   把它当结论会让一次正确的下载在 49 ms 内报「启动失败」——比内核解析配置还快。`probeHttpInbound`
   改为在 8 秒截止时间内每 120 ms 敲一次，只对重试改变不了的答案提前结束：真实 HTTP 状态码，
@@ -868,8 +878,10 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - OpenAI 表单测试先创建或更新 CCR Provider 并启动本机 Router，再对最终 3456
   `/v1/messages` 路由执行同一套单令牌测试；因此测试覆盖的不只是上游 HTTP 存活，而是 Claude
   Code 实际会使用的完整协议转换路径。测试成功后 renderer 才保存项目配置。
-- Bearer 对应 `Authorization: Bearer`，API Key 对应 `x-api-key`。返回标准
-  `msg_` ID 和 `content` 数组才算三项全部通过；`401/403` 定位为认证错误，
+- Bearer 对应 `Authorization: Bearer`，API Key 对应 `x-api-key`。返回非空 ID 和 `content` 数组
+  即按 Anthropic Messages 兼容响应通过，不再要求服务商复制 Anthropic 的 `msg_` 编号前缀；
+  明确出现 `choices` / `chat.completion` 才标记为 OpenAI，未知 200 正文不自动建议协议转换。
+  `401/403` 定位为认证错误，
   `404` 提示可能误填 OpenAI 地址，`400/422` 作为“端点与认证基本可用、模型或字段需处理”
   的警告。
 - 主进程通过 `ReadableStream` 最多读取 64 KiB 响应体，达到上限立即取消余下正文；只抽取
@@ -880,6 +892,9 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - `src/shared/claude-connection-remedy.ts` 把安装门禁、Router 生命周期、401/403、404、
   400/422、超时/网络、200 非标准响应和 Kimi 密钥族不匹配映射为结构化原因、建议与动作；
   renderer 只负责执行打开控制台/文档、切认证、用快速模型、安装/启动 Router、重试或重选。
+- 补救动作由 `connectionRemedyInProgress` 串行化；开始后 provider picker、配置表单和补救动作区
+  全部 inert/disabled，容器设置 `aria-busy`，唯一 `finally` 恢复。Router 安装不改变当前服务商
+  和未保存草稿，避免“处理中”期间配置被静默替换。
 - “测试并接入”严格串行：真实测试 `ok` 后才调用保存；“跳过测试并保存”是明确的次操作。
   该按钮不用通用 `runGuarded` 包裹，因为成功路径会嵌套保存并重新渲染控件；它由
   `connectionTestInProgress` 单独防重，并在唯一 `finally` 中先清 busy 状态和原文案，再让

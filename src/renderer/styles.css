@@ -8644,6 +8644,13 @@ body.is-resizing * {
   line-height: var(--lh-note);
 }
 
+.settings-help {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+}
+
 .proxy-core__sources {
   display: grid;
   gap: var(--s-2);

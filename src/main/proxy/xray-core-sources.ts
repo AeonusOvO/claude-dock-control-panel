@@ -67,12 +67,11 @@ const DEFAULT_PROBE_TIMEOUT_MS = 4_000;
  * byte and then took twenty minutes to pull 21 MB through it at ~13 KB/s. So the routes that pass
  * the digest check are sampled against the real archive before one is chosen.
  *
- * 256 KiB separates a trickle from a usable route, and sampling only the four best-latency routes
- * keeps the whole probe under a megabyte — small enough to run every time the panel asks.
+ * 256 KiB separates a trickle from a usable route. Every digest-verified route is sampled because
+ * latency is a poor predictor of sustained transfer speed, especially across mainland mirrors.
  */
 const THROUGHPUT_SAMPLE_BYTES = 256 * 1024;
 const THROUGHPUT_TIMEOUT_MS = 3_000;
-const THROUGHPUT_SAMPLE_LIMIT = 4;
 
 /**
  * The `.dgst` file is 299 bytes. Anything materially larger is a captive-portal page or an error
@@ -335,15 +334,7 @@ export const probeXrayCoreSources = async (
     return results;
   }
   const sampled = new Set(
-    results
-      .filter((result) => result.status === 'ok')
-      .sort(
-        (first, second) =>
-          (first.latencyMs ?? Number.MAX_SAFE_INTEGER) -
-          (second.latencyMs ?? Number.MAX_SAFE_INTEGER),
-      )
-      .slice(0, THROUGHPUT_SAMPLE_LIMIT)
-      .map((result) => result.id),
+    results.filter((result) => result.status === 'ok').map((result) => result.id),
   );
   const byId = new Map(sources.map((source) => [source.id, source]));
   const throughputs = await Promise.all(
