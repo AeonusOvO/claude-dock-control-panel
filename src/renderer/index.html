@@ -1,0 +1,2387 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-src claudedock-artifact:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClaudeDock 控制面板</title>
+  </head>
+  <body data-phase="stopped">
+    <header class="titlebar">
+      <div class="brand">
+        <img id="brand-logo" alt="" class="brand__icon" />
+        <div>
+          <span class="brand__name">ClaudeDock</span>
+          <span class="brand__descriptor">项目终端控制台</span>
+        </div>
+      </div>
+      <div class="titlebar__actions">
+        <div class="titlebar__status" aria-live="polite">
+          <span class="status-dot status-dot--small" aria-hidden="true"></span>
+          <span id="title-status">准备连接</span>
+        </div>
+        <button
+          class="titlebar__refresh"
+          id="refresh-updates"
+          type="button"
+          title="检查全部更新"
+          aria-label="检查全部更新"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 6v5h-5" />
+            <path d="M18.1 15a7 7 0 1 1-.9-7.9L20 11" />
+          </svg>
+        </button>
+        <button
+          class="titlebar__downloads"
+          id="open-download-center"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="download-center-dialog"
+          title="打开下载中心"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
+          </svg>
+          <span class="titlebar__downloads-badge" id="download-active-count" hidden>0</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace" id="workspace">
+      <nav class="activity-rail" id="activity-rail" aria-label="主导航">
+        <button
+          class="activity-rail__button"
+          data-rail-tab="chat"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
+          aria-pressed="false"
+          title="对话"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3h-1a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"
+            />
+            <path d="M8 10h8M8 13.5h5" />
+          </svg>
+          <span>对话</span>
+        </button>
+        <button
+          class="activity-rail__button activity-rail__button--active"
+          data-rail-tab="projects"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="true"
+          aria-pressed="true"
+          title="项目（再次点击可收起侧栏）"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
+            />
+          </svg>
+          <span>项目</span>
+        </button>
+        <button
+          class="activity-rail__button"
+          data-rail-tab="connection"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
+          aria-pressed="false"
+          title="接入"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10 14a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.3 7" />
+            <path d="M14 10a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7L12.7 17" />
+          </svg>
+          <span>接入</span>
+          <span class="activity-rail__dot" id="connection-rail-dot" hidden></span>
+        </button>
+        <button
+          class="activity-rail__button"
+          data-rail-tab="plugins"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
+          aria-pressed="false"
+          title="插件"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M9 4v3H6.2A1.2 1.2 0 0 0 5 8.2V11h2.4a2.6 2.6 0 1 1 0 5.2H5v2.6A1.2 1.2 0 0 0 6.2 20H9v-2.4a2.6 2.6 0 1 1 5.2 0V20h3.6a1.2 1.2 0 0 0 1.2-1.2V15h-2.4a2.6 2.6 0 1 1 0-5.2H19V8.2A1.2 1.2 0 0 0 17.8 7H15V4Z"
+            />
+          </svg>
+          <span>插件</span>
+          <span class="activity-rail__dot" id="plugin-rail-dot" hidden></span>
+        </button>
+        <button
+          class="activity-rail__button"
+          data-rail-tab="mcp"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="false"
+          aria-pressed="false"
+          title="MCP"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="18" cy="6" r="2.5" />
+            <circle cx="12" cy="18" r="2.5" />
+            <path d="M8.2 7.3 10.8 16M15.8 7.3 13.2 16M8.5 6h7" />
+          </svg>
+          <span>MCP</span>
+        </button>
+        <button
+          class="activity-rail__button activity-rail__button--settings"
+          id="open-connection-advanced"
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="connection-advanced-dialog"
+          title="全局设置"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path
+              d="M19 13.5v-3l-2-.6a7 7 0 0 0-.7-1.6l1-1.9-2.1-2.1-1.9 1A7 7 0 0 0 11.5 5L11 3H8l-.6 2a7 7 0 0 0-1.7.7l-1.9-1-2.1 2.1 1 1.9A7 7 0 0 0 2 10.5l-2 .5v3l2 .6a7 7 0 0 0 .7 1.7l-1 1.9 2.1 2.1 1.9-1a7 7 0 0 0 1.7.7l.6 2h3l.6-2a7 7 0 0 0 1.7-.7l1.9 1 2.1-2.1-1-1.9a7 7 0 0 0 .7-1.7Z"
+              transform="translate(1 -1)"
+            />
+          </svg>
+          <span>设置</span>
+        </button>
+      </nav>
+
+      <aside class="control-panel" id="control-panel">
+        <section class="rail-page rail-page--active" data-rail-page="projects">
+          <section class="session-card" aria-labelledby="session-heading">
+            <div class="section-label">
+              <span>当前对话状态</span>
+              <span class="status-pill" id="status-pill">已停止</span>
+            </div>
+            <div class="session-card__heading">
+              <span class="status-dot" aria-hidden="true"></span>
+              <div>
+                <h1 id="session-heading">Windows 终端</h1>
+                <p id="session-detail">等待启动终端</p>
+              </div>
+            </div>
+            <div class="session-meta">
+              <span>伪终端</span>
+              <span id="session-pid">进程号 —</span>
+            </div>
+          </section>
+
+          <fieldset class="runtime-picker" id="runtime-picker">
+            <legend>当前项目开发引擎</legend>
+            <label class="runtime-option" for="runtime-claude">
+              <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
+              <span>
+                <strong>Claude Code</strong>
+                <small>原生体验与现有路由接入</small>
+              </span>
+            </label>
+            <label class="runtime-option" for="runtime-codex">
+              <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
+              <span>
+                <strong>Codex</strong>
+                <small>官方 ChatGPT 订阅登录</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <section class="project-section" aria-labelledby="project-heading">
+            <div class="section-label">
+              <span id="project-heading">项目与对话</span>
+              <span id="project-count">1 个对话</span>
+            </div>
+            <div class="project-list" id="project-list" aria-label="项目文件夹与对话"></div>
+            <button class="drop-zone" id="choose-directory" type="button">
+              <span class="drop-zone__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
+                  <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+                  <path d="M12 10v7m-3-3 3 3 3-3" />
+                </svg>
+              </span>
+              <span class="drop-zone__title">＋ 添加项目</span>
+              <span class="drop-zone__hint">点击选择，或把项目文件夹拖到这里</span>
+            </button>
+          </section>
+
+          <section class="actions" aria-labelledby="actions-heading">
+            <div class="section-label">
+              <span id="actions-heading">快捷操作</span>
+              <span>当前对话</span>
+            </div>
+            <button class="button button--primary" id="run-claude" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m8 6 6 6-6 6" />
+                <path d="M15 18h3" />
+              </svg>
+              <span id="run-agent-label">新建安全会话</span>
+            </button>
+            <div class="button-row">
+              <button class="button button--quiet" id="restart-terminal" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
+                </svg>
+                重启
+              </button>
+              <button class="button button--quiet" id="toggle-terminal" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="5" y="5" width="14" height="14" rx="2" />
+                </svg>
+                <span id="toggle-terminal-label">启动</span>
+              </button>
+            </div>
+          </section>
+
+          <div class="tray-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
+              <path d="M10 20h4" />
+            </svg>
+            <p>关闭窗口后所有对话继续在托盘运行。项目会被记住，下次打开还在。</p>
+          </div>
+        </section>
+
+        <section class="rail-page rail-page--chat" data-rail-page="chat">
+          <section class="chat-history" aria-labelledby="chat-history-heading">
+            <div class="section-label">
+              <span id="chat-history-heading">对话历史</span>
+              <span id="chat-history-count">0 条</span>
+            </div>
+            <div class="chat-history__list" id="chat-history-list"></div>
+            <p class="chat-history__empty" id="chat-history-empty">
+              发送第一条消息后，对话会保存在这台电脑上。
+            </p>
+          </section>
+        </section>
+
+        <section class="rail-page" data-rail-page="connection">
+          <div class="connection-heading">
+            <strong>选择服务商，三步完成接入</strong>
+            <span>ClaudeDock 会填好官方兼容参数；高级方式和旧工具仍可随时展开。</span>
+          </div>
+
+          <section class="connection-advice" id="connection-advice" data-tone="info">
+            <div class="connection-advice__icon" aria-hidden="true">💡</div>
+            <div class="connection-advice__body">
+              <strong id="connection-advice-title">正在判断当前项目怎么连</strong>
+              <p id="connection-advice-detail">读取当前项目的接入配置与本机路由器状态…</p>
+            </div>
+            <div class="connection-advice__actions" id="connection-advice-actions"></div>
+          </section>
+
+          <section
+            class="environment-setup"
+            id="environment-setup"
+            aria-labelledby="environment-setup-title"
+          >
+            <div class="step-heading">
+              <span class="step-number">0</span>
+              <div>
+                <strong id="environment-setup-title">准备 Claude Code 环境</strong>
+                <span>自动判断当前电脑缺少什么，也可以直接检查并更新已有安装。</span>
+              </div>
+            </div>
+            <div class="software-update-row">
+              <div>
+                <strong>ClaudeDock</strong>
+                <span id="application-update-detail">正在检查应用发行版本…</span>
+              </div>
+              <div class="software-update-row__actions">
+                <span class="version-pill" id="application-update-version">检测中</span>
+                <button id="application-update-action" type="button" hidden>下载更新</button>
+              </div>
+            </div>
+            <div class="software-update-row">
+              <div>
+                <strong>Claude Code</strong>
+                <span id="claude-update-detail">正在检查本机版本与最新版本…</span>
+              </div>
+              <span class="version-pill" id="claude-update-version">检测中</span>
+            </div>
+            <div class="install-source-row" id="claude-install-actions" hidden>
+              <p class="install-source-row__hint">
+                自动保留当前安装方式；npm 安装会用小流量样本在官方源与国内镜像间择优，避免重复安装。
+              </p>
+              <button id="install-update-claude" type="button" hidden>一键安装</button>
+            </div>
+            <div class="environment-check-footer">
+              <span id="software-update-checked-at">等待首次检查</span>
+              <button id="refresh-software-updates" type="button">检查软件更新</button>
+            </div>
+          </section>
+
+          <section class="provider-picker" id="connection-provider-picker">
+            <div class="step-heading">
+              <span class="step-number">1</span>
+              <div>
+                <strong>选择你的服务商</strong>
+                <span>按密钥所属平台选择；不要混用不同平台的密钥和地址。</span>
+              </div>
+            </div>
+            <div class="provider-groups" id="connection-provider-groups" aria-live="polite"></div>
+          </section>
+
+          <section class="provider-setup" id="connection-provider-setup" hidden>
+            <div class="provider-setup__heading">
+              <div>
+                <span class="step-kicker">已选择</span>
+                <strong id="connection-provider-title">选择服务商后继续</strong>
+              </div>
+              <div class="provider-setup__links">
+                <button id="open-provider-console" type="button" hidden>打开密钥控制台</button>
+                <button id="open-provider-docs" type="button" hidden>查看官方文档</button>
+              </div>
+            </div>
+            <p id="connection-provider-description"></p>
+            <p class="provider-caveat" id="connection-provider-caveat" hidden></p>
+            <div id="connection-provider-special"></div>
+          </section>
+
+          <section
+            class="credential-source-settings"
+            id="credential-source-settings"
+            aria-labelledby="credential-source-settings-title"
+          >
+            <div class="step-heading">
+              <span class="step-number">A</span>
+              <div>
+                <strong id="credential-source-settings-title">认证来源与密钥冲突</strong>
+                <span>控制 ClaudeDock 密钥与 Claude Code apiKeyHelper 同时存在时的行为。</span>
+              </div>
+            </div>
+            <label class="field" for="claude-api-key-helper-policy">
+              <span>显式凭据的优先策略</span>
+              <select id="claude-api-key-helper-policy">
+                <option value="prefer-claudedock">只使用 ClaudeDock 保存的凭据（推荐）</option>
+                <option value="inherit">保留 Claude Code 的 apiKeyHelper</option>
+              </select>
+              <small id="claude-api-key-helper-status">
+                推荐模式只覆盖本次 ClaudeDock 会话，不修改 Claude Code 用户或项目设置。
+              </small>
+            </label>
+          </section>
+
+          <section
+            class="gateway-discovery"
+            id="gateway-discovery"
+            aria-labelledby="gateway-discovery-title"
+          >
+            <div class="gateway-discovery__heading">
+              <div>
+                <span class="step-kicker">自动检测</span>
+                <strong id="gateway-discovery-title">这台电脑现在有什么？</strong>
+              </div>
+              <button id="refresh-gateways" type="button">重新检测</button>
+            </div>
+            <p id="gateway-diagnostics-summary">正在检查常见本地端口、命令和 Claude 设置…</p>
+            <div id="gateway-candidates" class="gateway-candidates" aria-live="polite"></div>
+            <div id="configuration-hints" class="configuration-hints" hidden></div>
+            <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
+          </section>
+
+          <section
+            class="curl-onboarding"
+            id="curl-onboarding"
+            aria-labelledby="curl-onboarding-title"
+          >
+            <div class="step-heading">
+              <span class="step-number">1</span>
+              <div>
+                <strong id="curl-onboarding-title">把服务商给你的 cURL 粘进来</strong>
+                <span>ClaudeDock 只做本地识别，不会自动发送，也不会记录到日志。</span>
+              </div>
+            </div>
+            <label class="field" for="curl-input">
+              <span>cURL 命令或接口地址</span>
+              <textarea
+                id="curl-input"
+                maxlength="50000"
+                rows="5"
+                spellcheck="false"
+                placeholder='curl https://example.com/v1/chat/completions -H "Authorization: Bearer 新密钥" -d &apos;{"model":"模型名",...}&apos;'
+              ></textarea>
+            </label>
+            <button class="analyze-curl" id="analyze-curl" type="button">识别这是什么接口</button>
+            <div class="curl-analysis" id="curl-analysis" hidden>
+              <div class="curl-analysis__headline">
+                <span id="curl-protocol-badge">等待识别</span>
+                <strong id="curl-analysis-title">—</strong>
+              </div>
+              <p id="curl-analysis-detail"></p>
+              <dl>
+                <div>
+                  <dt>接口</dt>
+                  <dd id="curl-analysis-endpoint">—</dd>
+                </div>
+                <div>
+                  <dt>模型</dt>
+                  <dd id="curl-analysis-model">—</dd>
+                </div>
+                <div>
+                  <dt>认证</dt>
+                  <dd id="curl-analysis-auth">—</dd>
+                </div>
+              </dl>
+              <div class="curl-next-step" id="curl-next-step"></div>
+              <div class="curl-analysis__actions">
+                <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
+                <button id="import-curl-router" type="button" hidden>
+                  一键写入路由器并接入当前项目
+                </button>
+                <button id="use-detected-router" type="button" hidden>选用已发现的路由器</button>
+                <button id="open-detected-router" type="button" hidden>打开路由器管理页</button>
+              </div>
+            </div>
+
+            <!-- Smart guidance hints -->
+            <div class="smart-guidance" id="smart-guidance" hidden>
+              <div class="smart-guidance__icon" aria-hidden="true">💡</div>
+              <div>
+                <strong id="smart-guidance-title">智能提示</strong>
+                <p id="smart-guidance-detail"></p>
+              </div>
+              <div class="smart-guidance__actions" id="smart-guidance-actions"></div>
+            </div>
+          </section>
+
+          <section
+            class="router-manager"
+            id="router-manager"
+            aria-labelledby="router-manager-title"
+          >
+            <div class="step-heading">
+              <span class="step-number">2</span>
+              <div>
+                <strong id="router-manager-title">安装与管理 Claude Code 路由器</strong>
+                <span>只管理 Claude Code 接入；不会修改 Codex 配置或系统代理。</span>
+              </div>
+            </div>
+            <div class="router-status" id="router-status" data-state="unknown">
+              <div>
+                <strong id="router-status-title">正在读取路由器状态…</strong>
+                <span id="router-status-detail">等待首次检测</span>
+              </div>
+              <span id="router-version">未检测</span>
+            </div>
+            <div class="router-remediation" id="router-remediation" hidden>
+              <strong id="router-remediation-title">路由器需要完成配置</strong>
+              <span id="router-remediation-detail"></span>
+              <div>
+                <button id="repair-router-from-project" type="button">
+                  用当前项目配置一键修复
+                </button>
+                <button id="configure-router-provider" type="button">
+                  手动添加第一个服务提供方
+                </button>
+              </div>
+            </div>
+            <div class="router-actions" id="router-actions">
+              <label
+                class="field field--compact"
+                id="router-install-source-field"
+                for="router-install-source"
+                hidden
+              >
+                <span>安装来源</span>
+                <select id="router-install-source">
+                  <option value="github">官方 GitHub 安装包</option>
+                  <option value="npm">npm 官方源</option>
+                  <option value="npmmirror">npmmirror 国内镜像</option>
+                </select>
+              </label>
+              <button id="install-router" type="button" hidden>一键安装</button>
+              <button id="uninstall-router" type="button">彻底卸载并清除数据</button>
+              <button id="start-router" type="button">启动路由器</button>
+              <button id="stop-router" type="button">停止网关</button>
+              <button id="open-router-management" type="button">打开完整管理页</button>
+            </div>
+            <p class="router-swap-hint" id="router-swap-hint" hidden>
+              已恢复到未安装状态。现在可以选择新的安装来源，再点“一键安装”换成另一个网关。
+            </p>
+            <p class="router-install-note">
+              官方安装包会核对发布包的 SHA-256；npm 与 npmmirror 只在本次安装命令中指定源，
+              不会修改用户的全局 npm 配置。
+            </p>
+
+            <div class="router-provider-heading">
+              <div>
+                <strong>服务提供方配置</strong>
+                <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
+              </div>
+              <button id="add-router-provider" type="button">添加服务提供方</button>
+            </div>
+            <div id="router-provider-list" class="router-provider-list" aria-live="polite"></div>
+
+            <form id="router-provider-form" hidden>
+              <input id="router-provider-id" type="hidden" />
+              <div class="router-provider-form__heading">
+                <strong id="router-provider-form-title">添加服务提供方</strong>
+                <span>OpenAI cURL 通常选择“对话补全”协议。</span>
+              </div>
+              <label class="field" for="router-provider-name">
+                <span>服务提供方名称</span>
+                <input
+                  id="router-provider-name"
+                  type="text"
+                  maxlength="80"
+                  pattern="[A-Za-z0-9._-]+"
+                  placeholder="aancn-relay"
+                  spellcheck="false"
+                />
+                <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型标识。</small>
+              </label>
+              <label class="field" for="router-provider-protocol">
+                <span>上游协议</span>
+                <select id="router-provider-protocol">
+                  <option value="openai_chat_completions">OpenAI 对话补全协议</option>
+                  <option value="openai_responses">OpenAI 响应协议</option>
+                  <option value="anthropic_messages">Anthropic 消息协议</option>
+                </select>
+              </label>
+              <label class="field" for="router-provider-base-url">
+                <span>上游接口地址</span>
+                <input
+                  id="router-provider-base-url"
+                  type="url"
+                  maxlength="2048"
+                  placeholder="https://example.com/v1/chat/completions"
+                  spellcheck="false"
+                />
+              </label>
+              <label class="field" for="router-provider-models">
+                <span>模型标识（每行一个）</span>
+                <textarea
+                  id="router-provider-models"
+                  maxlength="10000"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="claude-fable-5"
+                ></textarea>
+              </label>
+              <label class="field" for="router-provider-api-key">
+                <span>上游接口密钥</span>
+                <input
+                  id="router-provider-api-key"
+                  type="password"
+                  maxlength="20000"
+                  autocomplete="new-password"
+                  placeholder="编辑时留空可保留 CCR 中的原密钥"
+                />
+              </label>
+              <label class="router-choice" for="router-provider-preferred">
+                <input id="router-provider-preferred" type="checkbox" checked />
+                <span>设为路由器首选服务提供方</span>
+              </label>
+              <label class="router-choice" for="router-provider-use-project">
+                <input id="router-provider-use-project" type="checkbox" checked />
+                <span>同时安全接入当前 ClaudeDock 项目</span>
+              </label>
+              <small class="router-project-note"
+                >启用后，路由器本机访问密钥会在主进程内直接进入 Windows
+                安全存储，不会传回界面。</small
+              >
+              <div class="router-provider-form__actions">
+                <button id="save-router-provider" type="submit">保存服务提供方</button>
+                <button id="cancel-router-provider" type="button">取消</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="converter-help" id="converter-help">
+            <div class="step-heading">
+              <span class="step-number">3</span>
+              <div>
+                <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
+                <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
+              </div>
+            </div>
+            <p>
+              推荐新手使用 Claude Code 路由器图形版；它默认用
+              <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
+              更适合熟悉配置文件和 Python 的用户。
+            </p>
+            <div class="help-link-grid">
+              <button
+                type="button"
+                data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
+              >
+                获取路由器图形版
+              </button>
+              <button
+                type="button"
+                data-external-url="https://docs.litellm.ai/docs/anthropic_unified/"
+              >
+                查看 LiteLLM 教程
+              </button>
+              <button
+                type="button"
+                data-external-url="https://code.claude.com/docs/en/llm-gateway-connect"
+              >
+                Claude 官方网关说明
+              </button>
+            </div>
+          </section>
+
+          <section
+            class="connection-history"
+            id="connection-history"
+            aria-labelledby="connection-history-title"
+          >
+            <div class="connection-history__heading">
+              <strong id="connection-history-title">选择历史配置</strong>
+              <span id="connection-history-count">
+                记录曾填写的接口、网关和模型参数，点击即可一键恢复。
+              </span>
+            </div>
+            <p class="connection-history__empty" id="connection-history-empty">
+              还没有历史配置；完成一次保存后，这里会记录接口、网关和模型参数。
+            </p>
+            <ul class="connection-history__list" id="connection-history-list"></ul>
+          </section>
+
+          <form id="claude-config-form" hidden>
+            <div class="step-heading">
+              <span class="step-number">2</span>
+              <div>
+                <strong>选择模型并填写凭据</strong>
+                <span>密钥只交给主进程加密保存，界面不会回显已保存内容。</span>
+              </div>
+            </div>
+
+            <label class="field" for="claude-preset" hidden>
+              <span>最终连接方式</span>
+              <select id="claude-preset">
+                <option value="anthropic">Anthropic 官方</option>
+                <option value="gateway">本机转换器 / 模型网关</option>
+                <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
+                <option value="custom">自定义中转站接口</option>
+              </select>
+            </label>
+
+            <label class="field" id="protocol-field" for="claude-protocol">
+              <span>接口协议</span>
+              <select id="claude-protocol">
+                <option value="anthropic">Anthropic 消息接口</option>
+                <option value="openai">OpenAI 对话补全 / Responses</option>
+              </select>
+              <small id="protocol-help"
+                >Claude Code 可直接连接 Anthropic 协议；OpenAI 协议会由本地 Router 自动转换。</small
+              >
+            </label>
+
+            <label class="field" id="base-url-field" for="claude-base-url">
+              <span>中转站接口地址</span>
+              <input
+                id="claude-base-url"
+                type="text"
+                inputmode="url"
+                maxlength="2048"
+                placeholder="gateway.example.com"
+                spellcheck="false"
+              />
+              <small id="base-url-help"
+                >可只填域名、/v1 或完整接口地址，ClaudeDock 会自动补全协议和路径。</small
+              >
+            </label>
+
+            <label class="field" for="claude-model">
+              <span>模型标识</span>
+              <input
+                id="claude-model"
+                type="text"
+                maxlength="200"
+                value="default"
+                spellcheck="false"
+              />
+              <small id="model-help">必须与最终网关中可用的模型标识完全一致。</small>
+            </label>
+
+            <label class="field" for="claude-model-fast">
+              <span>快速模型标识</span>
+              <input
+                id="claude-model-fast"
+                type="text"
+                maxlength="200"
+                value="default"
+                spellcheck="false"
+              />
+              <small>用于 Haiku 与小型快速任务；留空时跟随主模型。</small>
+            </label>
+
+            <label class="field" for="claude-auth-mode">
+              <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
+              <select id="claude-auth-mode">
+                <option value="existing">使用 Claude Code 现有登录</option>
+                <option value="apiKey">接口密钥（X-Api-Key）</option>
+              </select>
+              <small id="auth-mode-help"
+                >服务商要求 Authorization / Bearer 时选择“持有者令牌”；要求 x-api-key
+                时选择“接口密钥”。</small
+              >
+            </label>
+
+            <label class="field" id="credential-field" for="claude-credential">
+              <span id="credential-label">接口凭据</span>
+              <input
+                id="claude-credential"
+                type="password"
+                maxlength="4096"
+                autocomplete="new-password"
+                placeholder="留空则保留已保存的凭据"
+              />
+              <small id="credential-status">未保存凭据</small>
+            </label>
+
+            <div class="connection-test">
+              <div class="step-heading">
+                <span class="step-number">3</span>
+                <div>
+                  <strong>测试并接入</strong>
+                  <span>先真实验证端点、认证和模型，通过后再保存。</span>
+                </div>
+              </div>
+              <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
+            </div>
+            <div
+              class="connection-test-result"
+              id="connection-test-result"
+              aria-live="polite"
+              hidden
+            >
+              <strong id="connection-test-title">等待测试</strong>
+              <span id="connection-test-summary"></span>
+              <div id="connection-test-stages"></div>
+            </div>
+            <section class="connection-remedy" id="connection-remedy" hidden>
+              <strong id="connection-remedy-title">接入建议</strong>
+              <p id="connection-remedy-cause"></p>
+              <p id="connection-remedy-fix"></p>
+              <div id="connection-remedy-actions"></div>
+            </section>
+
+            <div class="privacy-shield">
+              <span class="privacy-shield__icon" aria-hidden="true">◆</span>
+              <div>
+                <strong>严格防护始终启用</strong>
+                <span
+                  >锁定端点和模型；关闭遥测、错误上报、反馈与网页抓取功能的 Anthropic 预检。</span
+                >
+              </div>
+            </div>
+
+            <div class="config-actions">
+              <button class="save-config" id="test-claude-connection" type="submit">
+                测试并接入
+              </button>
+              <button class="skip-test" id="save-claude-config" type="button">
+                跳过测试并保存
+              </button>
+              <button class="clear-credential" id="clear-credential" type="button">清除密钥</button>
+            </div>
+          </form>
+
+          <details class="connection-glossary">
+            <summary>还是看不懂？展开术语解释</summary>
+            <dl>
+              <div>
+                <dt>上游接口</dt>
+                <dd>服务商给你的模型地址，例如带 /v1/chat/completions 的中转。</dd>
+              </div>
+              <div>
+                <dt>本地转换器 / 模型网关</dt>
+                <dd>把 OpenAI 格式翻译成 Claude Code 需要的 Anthropic 格式。</dd>
+              </div>
+              <div>
+                <dt>管理页 3458</dt>
+                <dd>用浏览器配置路由器，不是 Claude Code 应连接的模型接口。</dd>
+              </div>
+              <div>
+                <dt>模型接口 3456</dt>
+                <dd>路由器默认给 Claude Code 使用的地址，通常填到接口基址。</dd>
+              </div>
+              <div>
+                <dt>两种密钥</dt>
+                <dd>上游密钥交给路由器访问服务商；路由器访问密钥交给 ClaudeDock。两者可能不同。</dd>
+              </div>
+            </dl>
+          </details>
+        </section>
+
+        <section class="rail-page" data-rail-page="plugins">
+          <div class="connection-heading">
+            <strong>插件管理</strong>
+            <span>浏览、安装、启停和卸载 Claude Code 插件，无需记住命令。</span>
+          </div>
+
+          <div class="plugin-toolbar">
+            <label class="field" for="plugin-search">
+              <span>搜索插件</span>
+              <input
+                id="plugin-search"
+                type="search"
+                maxlength="120"
+                placeholder="按名称、说明或市场筛选"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field" for="plugin-category-filter">
+              <span>分类</span>
+              <select id="plugin-category-filter">
+                <option value="all">全部</option>
+              </select>
+            </label>
+            <div class="plugin-toolbar__actions" id="plugin-update-actions">
+              <button id="refresh-plugins" type="button">检查更新</button>
+              <button id="update-all-plugins" type="button" hidden>更新全部</button>
+            </div>
+          </div>
+          <p class="plugin-status" id="plugin-status">正在读取插件列表…</p>
+
+          <nav class="plugin-tabs" aria-label="插件分组">
+            <button class="plugin-tab plugin-tab--active" data-plugin-tab="installed" type="button">
+              已安装 <span id="plugin-installed-count">0</span>
+            </button>
+            <button class="plugin-tab" data-plugin-tab="available" type="button">
+              可安装 <span id="plugin-available-count">0</span>
+            </button>
+            <button class="plugin-tab" data-plugin-tab="marketplaces" type="button">
+              插件市场
+            </button>
+          </nav>
+
+          <div class="plugin-panel plugin-panel--active" data-plugin-panel="installed">
+            <div id="plugin-installed-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-plugin-panel="available">
+            <div id="plugin-available-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-plugin-panel="marketplaces">
+            <div id="plugin-marketplace-list" class="plugin-list" aria-live="polite"></div>
+            <form class="plugin-form-panel" id="plugin-marketplace-form">
+              <label class="field" for="plugin-marketplace-source">
+                <span>添加插件市场</span>
+                <input
+                  id="plugin-marketplace-source"
+                  type="text"
+                  maxlength="400"
+                  placeholder="仓库所有者/仓库名、HTTPS 地址或本机路径"
+                  spellcheck="false"
+                />
+                <small>支持 GitHub 仓库、HTTPS 地址或本机绝对路径。</small>
+              </label>
+              <button id="add-plugin-marketplace" type="submit">添加市场</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="rail-page" data-rail-page="mcp">
+          <div class="connection-heading">
+            <strong>MCP 管理</strong>
+            <span>发现 Claude Code 与 Codex CLI 的服务器；安装操作只定向写入 Claude Code。</span>
+          </div>
+
+          <div class="plugin-toolbar">
+            <label class="field" for="mcp-search">
+              <span>搜索 MCP</span>
+              <input
+                id="mcp-search"
+                type="search"
+                maxlength="120"
+                placeholder="名称、说明或配置路径"
+                spellcheck="false"
+              />
+            </label>
+            <label class="field" for="mcp-scope-filter">
+              <span>作用域</span>
+              <select id="mcp-scope-filter">
+                <option value="all">全部</option>
+                <option value="user">user · 用户级</option>
+                <option value="project">project · 项目共享</option>
+                <option value="local">local · 当前项目私有</option>
+              </select>
+            </label>
+            <div class="plugin-toolbar__actions">
+              <button id="mcp-refresh" type="button">检查更新</button>
+            </div>
+          </div>
+          <p class="plugin-status" id="mcp-status">请选择一个项目以发现 MCP。</p>
+
+          <nav class="plugin-tabs" aria-label="MCP 分组">
+            <button class="plugin-tab plugin-tab--active" data-mcp-tab="installed" type="button">
+              已安装 <span id="mcp-installed-count">0</span>
+            </button>
+            <button class="plugin-tab" data-mcp-tab="catalog" type="button">
+              可安装 <span id="mcp-catalog-count">0</span>
+            </button>
+            <button class="plugin-tab" data-mcp-tab="backups" type="button">配置备份</button>
+          </nav>
+
+          <div class="plugin-panel plugin-panel--active" data-mcp-panel="installed">
+            <div id="mcp-installed-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-mcp-panel="catalog">
+            <label class="field mcp-install-scope" for="mcp-install-scope">
+              <span>新安装作用域</span>
+              <select id="mcp-install-scope">
+                <option value="user">user · 用户级（默认）</option>
+                <option value="project">project · 项目共享</option>
+                <option value="local">local · 当前项目私有</option>
+              </select>
+              <small>每次只安装你明确选择的一项；默认 user 作用域。</small>
+            </label>
+            <div id="mcp-catalog-list" class="plugin-list" aria-live="polite"></div>
+          </div>
+          <div class="plugin-panel" data-mcp-panel="backups">
+            <div class="plugin-form-panel mcp-backups">
+              <label class="field" for="mcp-backup-select">
+                <span>配置备份</span>
+                <select id="mcp-backup-select">
+                  <option value="">暂无可还原备份</option>
+                </select>
+                <small>每次写入前都会留下可逐字节还原的备份。</small>
+              </label>
+              <button id="mcp-backup-restore" type="button" disabled>还原所选备份</button>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <div
+        class="panel-resizer"
+        id="panel-resizer"
+        role="separator"
+        aria-label="调整侧栏宽度"
+        aria-orientation="vertical"
+        tabindex="0"
+      ></div>
+
+      <section class="terminal-shell" id="terminal-shell" aria-label="项目终端">
+        <div class="terminal-toolbar">
+          <div class="terminal-title">
+            <span>终端</span>
+            <strong id="terminal-project">项目终端</strong>
+          </div>
+          <div class="terminal-toolbar__actions">
+            <button
+              class="workbench-trigger"
+              id="workbench-trigger"
+              type="button"
+              title="Claude 工作台"
+              aria-expanded="false"
+              aria-controls="claude-workbench"
+            >
+              <span class="workbench-trigger__dot" aria-hidden="true"></span>
+              <span id="workbench-trigger-label">Claude 工作台</span>
+            </button>
+            <label class="terminal-theme-picker" for="terminal-theme">
+              <span>主题</span>
+              <select id="terminal-theme" aria-label="切换终端主题">
+                <option value="claude">Claude 明亮</option>
+                <option value="telegram">Telegram 明亮</option>
+                <option value="graphite">石墨深色</option>
+                <option value="midnight">深海蓝</option>
+              </select>
+            </label>
+            <button
+              class="icon-button"
+              id="workbench-shortcuts"
+              type="button"
+              title="查看终端快捷键"
+              aria-label="查看终端快捷键"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 11v6M12 7.5h.01" />
+              </svg>
+            </button>
+            <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7" />
+              </svg>
+              <span class="sr-only">清空终端显示</span>
+            </button>
+          </div>
+        </div>
+        <div class="terminal-stage" id="terminal-stage">
+          <div class="terminal-empty-state" id="terminal-empty-state" aria-hidden="false">
+            <span class="empty-prompt">&gt;_</span>
+            <strong id="empty-state-title">终端尚未运行</strong>
+            <span id="empty-state-hint">点击左侧“启动”创建终端会话</span>
+          </div>
+        </div>
+        <form class="terminal-composer" id="terminal-composer">
+          <textarea
+            id="composer-input"
+            rows="1"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="输入提示词　·　Enter 发送　·　Shift+Enter 换行　·　↑↓ 翻阅历史"
+            aria-label="终端输入框"
+            aria-describedby="composer-hint"
+          ></textarea>
+          <button id="composer-send" type="submit" title="发送到终端（Enter）">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 12h13M12 6l6 6-6 6" />
+            </svg>
+            <span class="sr-only">发送到终端</span>
+          </button>
+          <span class="sr-only" id="composer-hint"
+            >Enter 发送，Shift+Enter 换行，上下方向键翻阅历史记录</span
+          >
+        </form>
+        <footer class="terminal-footer">
+          <button id="footer-connection" type="button">
+            <span class="footer-connection-dot" aria-hidden="true"></span>
+            <span id="footer-connection-label">连接待测试</span>
+          </button>
+          <span class="footer-context">
+            <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
+            <span id="footer-context-label">上下文 —</span>
+          </span>
+          <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
+            模型 —
+          </button>
+          <button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">
+            模式 —
+          </button>
+          <button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">
+            思考 —
+          </button>
+          <span id="footer-status">后台待命</span>
+        </footer>
+
+        <button
+          class="workbench-scrim"
+          id="workbench-scrim"
+          type="button"
+          aria-label="关闭 Claude 工作台"
+          tabindex="-1"
+        ></button>
+        <aside
+          class="claude-workbench"
+          id="claude-workbench"
+          aria-label="Claude 可视化工作台"
+          aria-hidden="true"
+        >
+          <div
+            class="drawer-resizer"
+            id="drawer-resizer"
+            role="separator"
+            aria-label="调整工作台宽度"
+            aria-orientation="vertical"
+            tabindex="0"
+          ></div>
+          <header class="workbench-header">
+            <div>
+              <span class="workbench-eyebrow" id="workbench-scope">当前对话</span>
+              <h2 id="workbench-title">Claude 工作台</h2>
+            </div>
+            <button
+              class="workbench-close"
+              id="workbench-close"
+              type="button"
+              aria-label="关闭工作台"
+            >
+              ×
+            </button>
+          </header>
+
+          <nav class="workbench-tabs" id="workbench-tabs" aria-label="Claude 工作台页面">
+            <button
+              class="workbench-tab workbench-tab--active"
+              data-workbench-tab="session"
+              type="button"
+            >
+              会话
+            </button>
+            <button class="workbench-tab" data-workbench-tab="commands" type="button">命令</button>
+            <button class="workbench-tab" data-workbench-tab="shortcuts" type="button">
+              快捷键
+            </button>
+          </nav>
+
+          <section
+            class="network-preflight-card"
+            id="network-preflight-card"
+            data-tone="unknown"
+            aria-live="polite"
+          >
+            <div class="network-preflight-card__status">
+              <span class="network-preflight-card__dot" aria-hidden="true"></span>
+              <div>
+                <strong id="network-preflight-provider">官方网络预检</strong>
+                <span id="network-preflight-summary">等待首次无额度探测</span>
+              </div>
+            </div>
+            <div class="network-preflight-card__actions">
+              <button id="network-preflight-recheck" type="button">重新检测</button>
+              <button id="network-preflight-details" type="button">详情</button>
+            </div>
+          </section>
+
+          <div class="workbench-pages workbench-pages--claude">
+            <section class="workbench-page workbench-page--active" data-workbench-page="session">
+              <div class="security-banner" id="claude-security-banner" data-tone="checking">
+                <span class="security-banner__icon" aria-hidden="true">✓</span>
+                <div>
+                  <strong id="claude-installation-title">正在检查 Claude Code</strong>
+                  <span id="claude-installation-detail">核对版本与已知风险范围</span>
+                </div>
+              </div>
+
+              <div class="route-card">
+                <div class="route-card__topline">
+                  <span>当前路由</span>
+                  <span class="route-lock">端点锁定</span>
+                </div>
+                <strong id="claude-route-name">Anthropic 官方</strong>
+                <code id="claude-route-model">默认</code>
+                <span id="claude-route-endpoint">使用官方登录与默认端点</span>
+              </div>
+
+              <section class="route-health" id="route-health" hidden aria-live="polite">
+                <div class="route-health__heading">
+                  <span id="route-health-badge">接入状态</span>
+                  <strong id="route-health-title">正在检查当前路由</strong>
+                </div>
+                <p id="route-health-detail"></p>
+                <button id="route-health-action" type="button">前往接入排查</button>
+              </section>
+
+              <div class="context-card">
+                <div class="context-card__heading">
+                  <div>
+                    <span>实时上下文</span>
+                    <strong id="context-percentage">等待首个响应</strong>
+                  </div>
+                  <span class="live-indicator" id="claude-live-indicator">未运行</span>
+                </div>
+                <div
+                  class="context-progress"
+                  role="progressbar"
+                  aria-label="Claude 上下文占用"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                >
+                  <span id="context-progress-bar"></span>
+                </div>
+                <div class="context-scale">
+                  <span id="context-used">— 已用</span>
+                  <span id="context-size">窗口 —</span>
+                </div>
+              </div>
+
+              <div class="metrics-grid">
+                <div>
+                  <span>输入令牌</span>
+                  <strong id="metric-input">—</strong>
+                </div>
+                <div>
+                  <span>输出令牌</span>
+                  <strong id="metric-output">—</strong>
+                </div>
+                <div>
+                  <span>会话估算</span>
+                  <strong id="metric-cost">—</strong>
+                </div>
+                <div>
+                  <span>持续时间</span>
+                  <strong id="metric-duration">—</strong>
+                </div>
+              </div>
+
+              <dl class="session-facts">
+                <div>
+                  <dt>运行模型</dt>
+                  <dd id="metric-model">等待状态行</dd>
+                </div>
+                <div>
+                  <dt>会话编号</dt>
+                  <dd id="metric-session">新会话尚未创建</dd>
+                </div>
+              </dl>
+              <p class="workbench-warning" id="claude-runtime-warning" hidden></p>
+
+              <div class="launch-actions">
+                <button class="launch-primary" id="launch-new" type="button">新建安全会话</button>
+                <div>
+                  <button class="launch-secondary" id="launch-continue" type="button">
+                    继续最近会话
+                  </button>
+                  <button class="launch-secondary" id="launch-resume" type="button">
+                    选择历史会话
+                  </button>
+                </div>
+              </div>
+              <label class="launch-toggle" for="allow-bypass-permissions">
+                <input id="allow-bypass-permissions" type="checkbox" />
+                <span>
+                  <strong>允许「完全允许」模式</strong>
+                  <small
+                    >启动时预置但不激活，之后可用 Shift+Tab
+                    或状态栏切入。关闭后需重新启动会话。</small
+                  >
+                </span>
+              </label>
+              <p class="session-explainer">
+                这些按钮只作用于当前这一个对话。想同时跑多个，请到左侧“项目”里给同一个文件夹再开一个对话。
+              </p>
+            </section>
+
+            <section class="workbench-page" data-workbench-page="commands">
+              <div class="command-intro">
+                <strong>斜杠命令，可视化执行</strong>
+                <span>只有由工作台启动的 Claude 会话才会接收这些命令。</span>
+              </div>
+              <label class="field" for="command-argument">
+                <span>可选参数</span>
+                <input
+                  id="command-argument"
+                  type="text"
+                  maxlength="500"
+                  placeholder="例如：保留 API 设计与测试结论"
+                />
+              </label>
+              <div class="command-grid">
+                <button data-claude-command="/context" data-default-argument="all" type="button">
+                  <code>/context</code><span>上下文构成</span>
+                </button>
+                <button data-claude-command="/usage" type="button">
+                  <code>/usage</code><span>令牌与用量</span>
+                </button>
+                <button data-claude-command="/status" type="button">
+                  <code>/status</code><span>配置与状态</span>
+                </button>
+                <button data-claude-command="/model" type="button">
+                  <code>/model</code><span>查看运行模型</span>
+                </button>
+                <button data-claude-command="/permissions" type="button">
+                  <code>/permissions</code><span>权限策略</span>
+                </button>
+                <button data-claude-command="/mcp" type="button">
+                  <code>/mcp</code><span>MCP 服务</span>
+                </button>
+                <button data-claude-command="/agents" type="button">
+                  <code>/agents</code><span>子代理管理</span>
+                </button>
+                <button data-claude-command="/hooks" type="button">
+                  <code>/hooks</code><span>钩子检查</span>
+                </button>
+                <button data-claude-command="/memory" type="button">
+                  <code>/memory</code><span>项目记忆</span>
+                </button>
+                <button data-claude-command="/resume" type="button">
+                  <code>/resume</code><span>切换会话</span>
+                </button>
+                <button data-claude-command="/compact" data-uses-argument="true" type="button">
+                  <code>/compact</code><span>压缩上下文</span>
+                </button>
+                <button data-claude-command="/rename" data-uses-argument="true" type="button">
+                  <code>/rename</code><span>命名会话</span>
+                </button>
+                <button data-claude-command="/theme" type="button">
+                  <code>/theme</code><span>Claude 主题</span>
+                </button>
+                <button data-claude-command="/doctor" type="button">
+                  <code>/doctor</code><span>诊断安装</span>
+                </button>
+                <button data-claude-command="/help" type="button">
+                  <code>/help</code><span>全部帮助</span>
+                </button>
+                <button class="command-danger" data-claude-command="/clear" type="button">
+                  <code>/clear</code><span>清空并新开会话</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="workbench-page" data-workbench-page="shortcuts">
+              <div class="command-intro">
+                <strong>终端快捷键</strong>
+                <span>这些映射只在 ClaudeDock 的终端窗口内生效，不修改系统配置。</span>
+              </div>
+              <dl class="shortcut-list">
+                <div>
+                  <dt><kbd>Enter</kbd></dt>
+                  <dd>把输入框里的内容发送到终端</dd>
+                </div>
+                <div>
+                  <dt><kbd>Shift</kbd> + <kbd>Enter</kbd></dt>
+                  <dd>在输入框里换行，多行内容仍作为一条命令发送</dd>
+                </div>
+                <div>
+                  <dt><kbd>↑</kbd> / <kbd>↓</kbd></dt>
+                  <dd>在输入框里翻阅发送过的历史</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>A</kbd></dt>
+                  <dd>输入框内全选文本；终端内全选输出</dd>
+                </div>
+                <div>
+                  <dt><kbd>Shift</kbd> + <kbd>←</kbd> / <kbd>→</kbd></dt>
+                  <dd>在输入框里逐字选择，配合 <kbd>Ctrl</kbd> 可逐词选择</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>Z</kbd></dt>
+                  <dd>撤销输入框里的编辑</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>C</kbd></dt>
+                  <dd>有选区时复制；无选区时中断命令</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>V</kbd></dt>
+                  <dd>粘贴剪贴板文本</dd>
+                </div>
+                <div>
+                  <dt><kbd>Ctrl</kbd> + <kbd>L</kbd></dt>
+                  <dd>清空当前终端显示</dd>
+                </div>
+                <div>
+                  <dt><kbd>Esc</kbd></dt>
+                  <dd>清空输入框</dd>
+                </div>
+                <div>
+                  <dt>鼠标右键</dt>
+                  <dd>打开复制、粘贴、全选和清屏菜单</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+
+          <div class="codex-workbench-page" id="codex-workbench-page">
+            <section class="codex-hero" aria-labelledby="codex-hero-title">
+              <span class="step-kicker">官方 ChatGPT 订阅通道</span>
+              <h3 id="codex-hero-title">从账号登录直接开始开发</h3>
+              <p>
+                ClaudeDock 负责安装、登录和项目启动；账号令牌、续期与执行沙箱仍由官方 Codex 管理。
+              </p>
+              <button class="launch-primary" id="codex-primary-action" type="button">
+                一键准备并启动
+              </button>
+            </section>
+
+            <ol class="codex-readiness" aria-label="Codex 准备进度">
+              <li id="codex-install-step" data-state="pending">
+                <span class="codex-readiness__index">1</span>
+                <div>
+                  <strong id="codex-install-title">正在检查 Codex CLI</strong>
+                  <small id="codex-install-detail">核对官方 Windows 安装与版本</small>
+                </div>
+                <button id="codex-install" type="button">安装</button>
+              </li>
+              <li id="codex-account-step" data-state="pending">
+                <span class="codex-readiness__index">2</span>
+                <div>
+                  <strong id="codex-account-title">等待 ChatGPT 登录</strong>
+                  <small id="codex-account-detail"
+                    >支持 Plus、Pro、Business、Edu 与 Enterprise</small
+                  >
+                </div>
+                <button id="codex-login" type="button">登录</button>
+              </li>
+              <li id="codex-project-step" data-state="pending">
+                <span class="codex-readiness__index">3</span>
+                <div>
+                  <strong id="codex-project-title">项目尚未就绪</strong>
+                  <small id="codex-project-detail">完成前两步后即可在当前目录开发</small>
+                </div>
+              </li>
+            </ol>
+
+            <section class="codex-device-login" id="codex-device-login" hidden>
+              <div>
+                <span>设备验证码</span>
+                <strong id="codex-device-code">—</strong>
+              </div>
+              <button id="codex-copy-device-code" type="button">复制验证码</button>
+            </section>
+
+            <section class="codex-usage-card" id="codex-usage-card" hidden>
+              <div>
+                <span>当前账号</span>
+                <strong id="codex-plan">ChatGPT</strong>
+              </div>
+              <div class="codex-usage-meter">
+                <span
+                  ><span id="codex-quota-label">当前窗口</span><b id="codex-quota-value">—</b></span
+                >
+                <div aria-hidden="true"><i id="codex-quota-bar"></i></div>
+              </div>
+            </section>
+
+            <div class="codex-secondary-actions">
+              <button id="codex-device-login-action" type="button">改用设备码登录</button>
+              <button id="codex-cancel-login" type="button" hidden>取消登录</button>
+              <button id="codex-logout" type="button" hidden>退出 Codex 账号</button>
+            </div>
+
+            <div class="launch-actions codex-launch-actions">
+              <button class="launch-primary" id="codex-launch-new" type="button">
+                新建安全会话
+              </button>
+              <div>
+                <button class="launch-secondary" id="codex-launch-continue" type="button">
+                  继续最近会话
+                </button>
+                <button class="launch-secondary" id="codex-launch-resume" type="button">
+                  选择历史会话
+                </button>
+              </div>
+            </div>
+
+            <p class="codex-boundary-note" id="codex-boundary-note">
+              首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。
+              App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="chat-shell" id="chat-shell" aria-label="独立对话" hidden>
+        <header class="chat-toolbar">
+          <div class="chat-toolbar__identity">
+            <span>独立对话</span>
+            <strong id="chat-active-model">尚未配置模型</strong>
+          </div>
+          <div class="chat-toolbar__metrics" aria-live="polite">
+            <div class="chat-metric">
+              <span class="chat-metric__live" aria-hidden="true"></span>
+              <span>实时上下文</span>
+              <strong id="chat-context-total">—</strong>
+            </div>
+            <div class="chat-metric">
+              <span>Token</span>
+              <strong id="chat-token-usage">输入 — · 输出 —</strong>
+            </div>
+          </div>
+          <div class="chat-toolbar__actions">
+            <button
+              class="button button--quiet"
+              id="chat-artifact-details"
+              type="button"
+              aria-expanded="false"
+            >
+              详细信息
+            </button>
+            <button class="button button--quiet" id="new-chat" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              新对话
+            </button>
+            <button
+              class="chat-settings-trigger"
+              id="open-chat-settings"
+              type="button"
+              aria-label="模型接入设置"
+              title="模型接入设置"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="3.1" />
+                <path
+                  d="M19.4 13.2a7.7 7.7 0 0 0 0-2.4l1.9-1.4-1.9-3.3-2.3.8a7.6 7.6 0 0 0-2-1.2L14.7 3h-3.8l-.4 2.4a7.6 7.6 0 0 0-2 1.2l-2.3-.8L4.3 9.1l1.9 1.4a7.7 7.7 0 0 0 0 2.4l-1.9 1.4 1.9 3.3 2.3-.8a7.6 7.6 0 0 0 2 1.2l.4 2.4h3.8l.4-2.4a7.6 7.6 0 0 0 2-1.2l2.3.8 1.9-3.3-1.9-1.4Z"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div class="chat-messages" id="chat-messages" aria-live="polite">
+          <div class="chat-empty-state" id="chat-empty-state">
+            <span aria-hidden="true">✦</span>
+            <strong>开始一段独立对话</strong>
+            <p>这里使用单独配置的模型，不会复用或改动项目终端的模型。</p>
+          </div>
+        </div>
+        <form class="chat-composer" id="chat-composer">
+          <div
+            class="chat-attachment-queue"
+            id="chat-attachment-queue"
+            aria-label="待发送附件"
+            hidden
+          ></div>
+          <input
+            id="chat-attachment-input"
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.tsv,.txt,.md,.json"
+            multiple
+            hidden
+          />
+          <button
+            class="chat-attach"
+            id="chat-attach"
+            type="button"
+            aria-label="添加图片、PDF 或表格附件"
+            title="添加附件"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8.5 12.5 15 6a3.5 3.5 0 0 1 5 5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8-8" />
+            </svg>
+          </button>
+          <textarea
+            id="chat-input"
+            rows="1"
+            maxlength="200000"
+            placeholder="输入消息 · Enter 发送 · Shift+Enter 换行"
+            aria-label="独立对话输入框"
+          ></textarea>
+          <button class="chat-stop" id="stop-chat" type="button" hidden>停止</button>
+          <button class="chat-send" id="send-chat" type="submit">发送</button>
+        </form>
+        <div class="artifact-details-scrim" id="artifact-details-scrim" hidden></div>
+        <aside
+          class="artifact-details"
+          id="artifact-details-panel"
+          aria-hidden="true"
+          aria-label="Artifact 详细信息"
+          inert
+        >
+          <header class="artifact-details__header">
+            <div>
+              <span>会话审计</span>
+              <strong>Artifact 详细信息</strong>
+            </div>
+            <button id="artifact-details-close" type="button" aria-label="关闭 Artifact 详细信息">
+              ×
+            </button>
+          </header>
+          <div class="artifact-details__body">
+            <div class="artifact-details__intro">
+              <strong>集中查看可视化的运行边界</strong>
+              <p>这里仅展示你手动启动的 HTML 可视化，以及它们发起的外部网络请求。</p>
+            </div>
+            <section class="artifact-details__section" aria-labelledby="artifact-network-title">
+              <div class="artifact-details__section-heading">
+                <div>
+                  <span class="artifact-details__eyebrow">网络策略</span>
+                  <h3 id="artifact-network-title">外部网络访问</h3>
+                </div>
+                <label class="artifact-network-toggle">
+                  <input id="artifact-network-allowed" type="checkbox" />
+                  <span>允许联网</span>
+                </label>
+              </div>
+              <p class="artifact-details__section-description">
+                关闭后会立即拦截新的外部请求；内置可视化库仍可离线使用。
+              </p>
+            </section>
+            <section class="artifact-details__section" aria-labelledby="artifact-running-title">
+              <div class="artifact-details__section-heading">
+                <div>
+                  <span class="artifact-details__eyebrow">运行状态</span>
+                  <h3 id="artifact-running-title">正在运行</h3>
+                </div>
+              </div>
+              <p class="artifact-details__section-description">
+                可在这里单独停止已经启动的可视化，不会影响对话内容。
+              </p>
+              <div id="artifact-active-list" class="artifact-active-list"></div>
+            </section>
+            <section class="artifact-details__section" aria-labelledby="artifact-request-title">
+              <div class="artifact-details__section-heading">
+                <div>
+                  <span class="artifact-details__eyebrow">审计记录</span>
+                  <h3 id="artifact-request-title">网络请求</h3>
+                </div>
+              </div>
+              <p class="artifact-details__section-description">
+                按时间记录请求地址、响应状态和可可靠取得的响应大小。
+              </p>
+              <ol id="artifact-network-log" class="artifact-network-log"></ol>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+      <div>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
+          <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+          <path d="M12 10v7m-3-3 3 3 3-3" />
+        </svg>
+        <strong>松开以添加项目</strong>
+        <span>将为该项目创建独立终端会话</span>
+      </div>
+    </div>
+
+    <div class="terminal-context-menu" id="terminal-context-menu" role="menu" hidden>
+      <button data-terminal-context-action="copy" role="menuitem" type="button">
+        复制 <span>Ctrl+C</span>
+      </button>
+      <button data-terminal-context-action="paste" role="menuitem" type="button">
+        粘贴 <span>Ctrl+V</span>
+      </button>
+      <button data-terminal-context-action="select-all" role="menuitem" type="button">全选</button>
+      <button data-terminal-context-action="clear" role="menuitem" type="button">
+        清空显示 <span>Ctrl+L</span>
+      </button>
+    </div>
+
+    <div class="conversation-context-menu" id="conversation-context-menu" role="menu" hidden>
+      <button data-conversation-context-action="rename" role="menuitem" type="button">
+        重命名对话
+      </button>
+      <button
+        class="conversation-context-menu__danger"
+        data-conversation-context-action="delete"
+        role="menuitem"
+        type="button"
+      >
+        删除历史对话
+      </button>
+    </div>
+
+    <div class="conversation-context-menu" id="history-context-menu" role="menu" hidden>
+      <button data-history-context-action="rename" role="menuitem" type="button">重命名连接</button>
+      <button data-history-context-action="apply" role="menuitem" type="button">
+        恢复这条配置
+      </button>
+      <button data-history-context-action="delete" role="menuitem" type="button">删除记录</button>
+    </div>
+
+    <div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden></div>
+
+    <div
+      class="footer-menu"
+      id="footer-mode-menu"
+      role="menu"
+      aria-label="切换权限模式"
+      hidden
+    ></div>
+
+    <div
+      class="footer-menu"
+      id="footer-effort-menu"
+      role="menu"
+      aria-label="切换思考程度"
+      hidden
+    ></div>
+
+    <dialog
+      class="download-center-dialog"
+      id="download-center-dialog"
+      aria-labelledby="download-center-title"
+      aria-describedby="download-center-description"
+    >
+      <form method="dialog">
+        <header>
+          <div>
+            <span class="step-kicker">后台任务</span>
+            <strong id="download-center-title">下载中心</strong>
+            <p id="download-center-description">
+              下载可暂停、继续或取消；意外退出后，可恢复的半包会保留在这里。
+            </p>
+          </div>
+          <button
+            class="download-center-dialog__close"
+            id="close-download-center"
+            type="button"
+            aria-label="关闭下载中心"
+            title="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <section class="download-center-dialog__body" aria-live="polite">
+          <div class="download-center-empty" id="download-center-empty">
+            <strong>还没有下载任务</strong>
+            <span>安装路由、Codex 或其他组件时，实时进度会显示在这里。</span>
+          </div>
+          <div class="download-task-list" id="download-task-list"></div>
+        </section>
+      </form>
+    </dialog>
+
+    <template id="download-progress-template">
+      <div class="download-progress" data-indeterminate="false">
+        <div class="download-progress__ring" aria-hidden="true">
+          <span class="download-progress__value">0%</span>
+        </div>
+        <div class="download-progress__linear" aria-hidden="true">
+          <span></span>
+        </div>
+      </div>
+    </template>
+
+    <dialog
+      class="connection-advanced-dialog"
+      id="connection-advanced-dialog"
+      aria-labelledby="connection-advanced-dialog-title"
+      aria-describedby="connection-advanced-dialog-description"
+    >
+      <div class="connection-advanced-dialog__shell">
+        <header>
+          <div>
+            <span class="step-kicker">ClaudeDock</span>
+            <strong id="connection-advanced-dialog-title">全局设置</strong>
+            <p id="connection-advanced-dialog-description">
+              调整应用级偏好，或进入接入分类使用高级诊断工具。
+            </p>
+          </div>
+          <button
+            class="connection-advanced-dialog__close"
+            id="close-connection-advanced"
+            type="button"
+            aria-label="取消并关闭全局设置"
+            title="取消并关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <div class="settings-layout">
+          <nav class="settings-tabs" aria-label="设置分类">
+            <button
+              class="settings-tab settings-tab--active"
+              data-settings-tab="general"
+              type="button"
+              aria-selected="true"
+            >
+              总设置
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="advanced"
+              type="button"
+              aria-selected="false"
+            >
+              高级设置
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="connection"
+              type="button"
+              aria-selected="false"
+            >
+              接入
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="proxy"
+              type="button"
+              aria-selected="false"
+            >
+              代理
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="router"
+              type="button"
+              aria-selected="false"
+            >
+              路由
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="legal"
+              type="button"
+              aria-selected="false"
+            >
+              隐私与合规
+            </button>
+          </nav>
+          <div class="settings-panels">
+            <section class="settings-panel settings-panel--active" data-settings-panel="general">
+              <div class="settings-section-heading">
+                <strong>应用偏好</strong>
+                <span>控制 ClaudeDock 自身的启动方式和外观。</span>
+              </div>
+              <label class="settings-row" for="settings-launch-at-login">
+                <span>
+                  <strong>开机启动</strong>
+                  <small>登录 Windows 后自动启动 ClaudeDock。</small>
+                </span>
+                <input id="settings-launch-at-login" type="checkbox" />
+              </label>
+              <label class="settings-row settings-row--select" for="settings-close-behavior">
+                <span>
+                  <strong>点击关闭按钮时</strong>
+                  <small>直接退出仍会检查正在进行的下载、安装和对话。</small>
+                </span>
+                <select id="settings-close-behavior">
+                  <option value="tray">最小化到托盘</option>
+                  <option value="exit">直接退出</option>
+                </select>
+              </label>
+              <label class="settings-row settings-row--select" for="settings-theme">
+                <span>
+                  <strong>主题</strong>
+                  <small>同步调整应用外观与终端配色。</small>
+                </span>
+                <select id="settings-theme">
+                  <option value="claude">Claude 明亮</option>
+                  <option value="telegram">Telegram 明亮</option>
+                  <option value="graphite">石墨深色</option>
+                  <option value="midnight">深海蓝</option>
+                </select>
+              </label>
+              <label class="settings-row settings-row--select" for="settings-language">
+                <span>
+                  <strong>语言</strong>
+                  <small>当前版本暂提供简体中文。</small>
+                </span>
+                <select id="settings-language" disabled>
+                  <option value="zh-CN">简体中文</option>
+                </select>
+              </label>
+              <div class="settings-row">
+                <span>
+                  <strong>当前版本</strong>
+                  <small>安装包与应用版本。</small>
+                </span>
+                <output id="settings-version">—</output>
+              </div>
+            </section>
+            <section class="settings-panel" data-settings-panel="advanced">
+              <div class="settings-section-heading">
+                <strong>对话与中转站兼容</strong>
+                <span>对话默认不自动停止；中转站兼容功能也默认关闭。</span>
+              </div>
+              <label class="settings-row settings-row--select" for="settings-chat-idle-timeout">
+                <span>
+                  <strong>对话静默超时</strong>
+                  <small>
+                    默认只提示并探测连接，不自动中断。选择时长后，会先提示，再在第二个同等时长到达时停止。
+                  </small>
+                </span>
+                <select id="settings-chat-idle-timeout">
+                  <option value="0">不超时</option>
+                  <option value="5">5 分钟</option>
+                  <option value="10">10 分钟</option>
+                  <option value="30">30 分钟</option>
+                </select>
+              </label>
+              <label class="settings-row" for="settings-web-research-isolation">
+                <span>
+                  <strong>联网检索隔离</strong>
+                  <small>
+                    把 WebSearch、WebFetch 交给专用子代理执行。用于修复部分中转站在模型调到 high
+                    以上档位后无法联网检索的问题；开启后每个新会话都会附加子代理定义与相应提示词。
+                  </small>
+                </span>
+                <input id="settings-web-research-isolation" type="checkbox" />
+              </label>
+            </section>
+            <section class="settings-panel" data-settings-panel="connection">
+              <p class="connection-advanced-dialog__notice">
+                “取消”会恢复本次打开窗口前尚未保存的输入；安装、卸载、启动、停止、保存路由器服务商等已执行操作会立即生效。
+              </p>
+              <div id="connection-advanced-content"></div>
+            </section>
+            <section class="settings-panel proxy-settings" data-settings-panel="proxy">
+              <p class="proxy-boundary-notice">
+                <strong>仅连接用户已有代理：</strong>
+                ClaudeDock 只保存并传递用户明确填写的 HTTP / SOCKS5
+                连接参数，不提供任何第三方网络服务。请只填写你有权使用且符合所在地法律及服务条款的地址。
+              </p>
+              <p class="proxy-boundary-notice">
+                配置只作用于勾选的 ClaudeDock 进程与会话；不修改 Windows 系统代理、路由表、DNS、
+                网卡或其他软件，也不会读取或迁移旧版网络配置。
+              </p>
+              <section class="proxy-settings__section" aria-labelledby="application-proxy-title">
+                <div class="settings-section-heading">
+                  <strong id="application-proxy-title">应用代理</strong>
+                  <span>适用于已经运行并提供本机端口或组织授权地址的 HTTP / SOCKS5 代理。</span>
+                </div>
+                <label class="settings-row" for="application-proxy-enabled">
+                  <span
+                    ><strong>启用应用代理</strong
+                    ><small>关闭时恢复各作用域原有的系统代理或直连策略。</small></span
+                  >
+                  <input id="application-proxy-enabled" type="checkbox" />
+                </label>
+                <div class="proxy-import-actions">
+                  <label class="field" for="application-proxy-protocol">
+                    <span>协议</span>
+                    <select id="application-proxy-protocol">
+                      <option value="http">HTTP</option>
+                      <option value="socks5">SOCKS5</option>
+                    </select>
+                  </label>
+                  <label class="field" for="application-proxy-host">
+                    <span>地址</span>
+                    <input
+                      id="application-proxy-host"
+                      type="text"
+                      maxlength="253"
+                      spellcheck="false"
+                      placeholder="127.0.0.1 或代理主机名"
+                    />
+                  </label>
+                  <label class="field" for="application-proxy-port">
+                    <span>端口</span>
+                    <input
+                      id="application-proxy-port"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      inputmode="numeric"
+                      placeholder="例如 7890"
+                    />
+                  </label>
+                </div>
+                <div class="proxy-import-actions">
+                  <label class="field" for="application-proxy-username">
+                    <span>账号（可选）</span>
+                    <input
+                      id="application-proxy-username"
+                      type="text"
+                      maxlength="256"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <label class="field" for="application-proxy-password">
+                    <span>密码（可选）</span>
+                    <input
+                      id="application-proxy-password"
+                      type="password"
+                      maxlength="4096"
+                      autocomplete="new-password"
+                      placeholder="留空则保留已保存密码"
+                    />
+                  </label>
+                </div>
+                <p id="application-proxy-credential-status" class="settings-help">
+                  未保存代理凭据。
+                </p>
+                <div class="proxy-runtime-actions">
+                  <button id="application-proxy-detect" type="button">检测本机代理</button>
+                  <button class="dialog-primary" id="application-proxy-save" type="button">
+                    保存并应用
+                  </button>
+                  <button id="application-proxy-test" type="button">测试 GitHub 连接</button>
+                </div>
+                <div id="application-proxy-candidates" class="proxy-performance" hidden></div>
+                <p id="application-proxy-test-result" class="settings-help" role="status">
+                  保存后可通过独立会话测试该端口，不会发送模型请求。
+                </p>
+              </section>
+              <section
+                class="proxy-settings__section"
+                aria-labelledby="application-proxy-scope-title"
+              >
+                <div class="settings-section-heading">
+                  <strong id="application-proxy-scope-title">作用域</strong>
+                  <span>系统代理始终不在可选范围内。</span>
+                </div>
+                <label class="settings-row" for="application-proxy-scope-cli">
+                  <span
+                    ><strong>CLI 进程</strong
+                    ><small>Claude Code、Codex 与项目终端；仅支持 HTTP 代理。</small></span
+                  >
+                  <input id="application-proxy-scope-cli" type="checkbox" checked />
+                </label>
+                <label class="settings-row" for="application-proxy-scope-application">
+                  <span
+                    ><strong>ClaudeDock 自身网络</strong
+                    ><small>应用更新、目录与安装包下载；默认关闭。</small></span
+                  >
+                  <input id="application-proxy-scope-application" type="checkbox" />
+                </label>
+                <label class="settings-row" for="application-proxy-scope-conversation">
+                  <span
+                    ><strong>对话工作台</strong
+                    ><small>“对话”选项卡的接口请求；默认关闭。</small></span
+                  >
+                  <input id="application-proxy-scope-conversation" type="checkbox" />
+                </label>
+                <p id="application-proxy-scope-summary" class="settings-help">代理尚未启用。</p>
+              </section>
+            </section>
+            <section class="settings-panel router-settings" data-settings-panel="router">
+              <p class="router-boundary-notice">
+                路由操作点击后立即生效；只配置 Claude Code CLI，不接管 Claude / Codex 桌面版。
+              </p>
+              <section class="router-settings__section" aria-labelledby="router-wizard-title">
+                <div class="settings-section-heading">
+                  <strong id="router-wizard-title">一键接入向导</strong>
+                  <span>选择供应商、填写 Key，可选覆盖模型；ClaudeDock 自动决定直连或路由。</span>
+                </div>
+                <form id="router-wizard-form" class="router-wizard-form">
+                  <label class="field" for="router-wizard-provider">
+                    <span>供应商</span>
+                    <select id="router-wizard-provider"></select>
+                  </label>
+                  <label
+                    class="field"
+                    id="router-wizard-base-url-field"
+                    for="router-wizard-base-url"
+                    hidden
+                  >
+                    <span>上游 Base URL</span>
+                    <input id="router-wizard-base-url" type="url" maxlength="2048" />
+                  </label>
+                  <label
+                    class="field"
+                    id="router-wizard-credential-field"
+                    for="router-wizard-credential"
+                  >
+                    <span>API Key</span>
+                    <input
+                      id="router-wizard-credential"
+                      type="password"
+                      maxlength="4096"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="field" for="router-wizard-model">
+                    <span>模型（可选覆盖）</span>
+                    <input
+                      id="router-wizard-model"
+                      type="text"
+                      maxlength="160"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="settings-row router-wizard-route" for="router-wizard-use-route">
+                    <span>
+                      <strong>使用 CCR 路由增强</strong>
+                      <small>仅在供应商支持可选路由时开放；必须路由的协议会自动开启。</small>
+                    </span>
+                    <input id="router-wizard-use-route" type="checkbox" />
+                  </label>
+                  <p id="router-wizard-decision" class="router-wizard-decision"></p>
+                  <button class="dialog-primary" id="router-wizard-submit" type="submit">
+                    自动配置并校验
+                  </button>
+                </form>
+              </section>
+              <section class="router-operation-progress" id="router-operation-progress" hidden>
+                <div>
+                  <strong id="router-operation-stage">准备</strong>
+                  <span id="router-operation-detail">正在准备路由操作…</span>
+                </div>
+                <progress id="router-operation-meter" max="100"></progress>
+              </section>
+              <section class="router-settings__section" aria-labelledby="router-capabilities-title">
+                <div class="settings-section-heading">
+                  <strong id="router-capabilities-title">供应商路由能力</strong>
+                  <span>优先直连；只有协议转换需要时才启用路由内核。</span>
+                </div>
+                <div id="router-capability-list" class="router-capability-list"></div>
+              </section>
+              <section class="router-settings__section" aria-labelledby="cc-switch-title">
+                <div class="settings-section-heading">
+                  <strong id="cc-switch-title">CC Switch 适配器</strong>
+                  <span id="router-kernel-status">正在检测当前路由内核…</span>
+                </div>
+                <p class="cc-switch-boundary">
+                  CC Switch 没有管理 API。ClaudeDock 只通过官方 MSI 安装/卸载，并使用 ccswitch://
+                  单向导出；绝不读取或修改它的 SQLite 数据库。
+                </p>
+                <div class="cc-switch-actions">
+                  <button id="install-cc-switch" type="button">安装 CC Switch</button>
+                  <button id="export-cc-switch" type="button">导出当前供应商</button>
+                  <button id="uninstall-cc-switch" type="button">彻底卸载并清除数据</button>
+                </div>
+                <ol id="cc-switch-residuals" class="cc-switch-residuals"></ol>
+              </section>
+              <div id="router-settings-content"></div>
+            </section>
+            <section class="settings-panel legal-settings" data-settings-panel="legal">
+              <div class="settings-section-heading">
+                <strong>隐私与联网说明</strong>
+                <span>联网功能的接收方、供应链校验和用户边界会持续公开。</span>
+              </div>
+              <div class="legal-card">
+                <strong>本机保存</strong>
+                <p>
+                  ClaudeDock 不要求注册账号，也不内置遥测。项目记录、对话历史和诊断记录保存在当前
+                  Windows 用户目录；服务密钥使用 Windows DPAPI 加密。删除本地记录即可停止相应处理。
+                </p>
+              </div>
+              <div class="legal-card">
+                <strong>会发送到哪里</strong>
+                <p>
+                  应用更新会访问 GitHub Release 或维护者的 HTTPS IP 镜像，并先验证独立签名的发布
+                  清单；工具更新还可能访问 npm 或
+                  npmmirror。对话内容、附件和终端请求只会发送到你选择的 AI
+                  服务或中转端点。境外服务可能构成个人信息跨境处理，请勿提交无权处理的个人信息、秘密或受限数据。
+                </p>
+              </div>
+              <div class="legal-card">
+                <strong>AI 内容提示</strong>
+                <p>
+                  对话区的模型回复会标记为“AI
+                  生成”。生成内容可能不准确，涉及医疗、法律、金融或对外发布时必须人工核验；不得移除依法需要保留的生成内容标识。
+                </p>
+              </div>
+              <div class="legal-card legal-card--risk">
+                <strong>外部代理仍需合法使用</strong>
+                <p>
+                  ClaudeDock 只把用户填写的 HTTP / SOCKS5
+                  地址作为所选进程的连接参数；这不代表该地址当然合法或已获授权。用户应自行确认服务来源、合同权限，并遵守所在地法律与服务条款。
+                </p>
+              </div>
+              <div class="legal-links">
+                <button
+                  type="button"
+                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/blob/main/docs/PRIVACY.md"
+                >
+                  完整隐私说明
+                </button>
+                <button
+                  type="button"
+                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/blob/main/docs/LEGAL_COMPLIANCE.md"
+                >
+                  合规评估与官方依据
+                </button>
+                <button
+                  type="button"
+                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/security/advisories/new"
+                >
+                  私密报告安全漏洞
+                </button>
+              </div>
+              <p class="settings-help">
+                维护者：AeonusOvO；公开联系电话：13585928550。一般联系与权利请求使用公开仓库 GitHub
+                Issues；安全漏洞请使用上方私密报告渠道。
+              </p>
+            </section>
+          </div>
+        </div>
+        <footer>
+          <button id="cancel-connection-advanced" type="button">取消</button>
+          <span class="settings-save-state">
+            <button class="dialog-primary" id="complete-connection-advanced" type="button">
+              完成
+            </button>
+            <small id="settings-unsaved-indicator" hidden>*0 项未保存</small>
+          </span>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog
+      class="chat-settings-dialog"
+      id="chat-settings-dialog"
+      aria-labelledby="chat-settings-dialog-title"
+    >
+      <form class="chat-config-form" id="chat-config-form">
+        <header>
+          <div>
+            <strong id="chat-settings-dialog-title">独立模型接入</strong>
+            <span>此处配置只用于“对话”页，不会修改项目终端和 Claude Code 的接入。</span>
+          </div>
+          <button
+            class="chat-settings-dialog__close"
+            id="close-chat-settings"
+            type="button"
+            aria-label="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <div class="chat-settings-dialog__body">
+          <label class="field" for="chat-protocol">
+            <span>接口协议</span>
+            <select id="chat-protocol">
+              <option value="anthropic">Anthropic 消息接口</option>
+              <option value="openai">OpenAI 对话补全接口</option>
+            </select>
+          </label>
+          <label class="field" for="chat-base-url">
+            <span>接口地址</span>
+            <input
+              id="chat-base-url"
+              type="url"
+              maxlength="2048"
+              spellcheck="false"
+              placeholder="https://api.anthropic.com"
+              required
+            />
+            <small>会自动补全对应的 /v1/messages 或 /v1/chat/completions。</small>
+          </label>
+          <label class="field" for="chat-model">
+            <span>模型名称</span>
+            <input
+              id="chat-model"
+              type="text"
+              maxlength="256"
+              spellcheck="false"
+              placeholder="填写接口实际支持的模型 ID"
+              required
+            />
+          </label>
+          <label class="field" for="chat-auth-mode">
+            <span>认证方式</span>
+            <select id="chat-auth-mode">
+              <option value="apiKey">x-api-key</option>
+              <option value="bearer">Bearer Token</option>
+              <option value="none">无需认证</option>
+            </select>
+          </label>
+          <label class="field" for="chat-credential">
+            <span>接口凭据</span>
+            <input
+              id="chat-credential"
+              type="password"
+              maxlength="4096"
+              autocomplete="new-password"
+              placeholder="填写新凭据，留空则保留已保存凭据"
+            />
+            <small id="chat-credential-status">尚未保存凭据。</small>
+          </label>
+          <label class="router-choice" for="chat-clear-credential">
+            <input id="chat-clear-credential" type="checkbox" />
+            <span>保存时清除已有凭据</span>
+          </label>
+          <div
+            class="chat-connection-test"
+            id="chat-connection-test"
+            role="status"
+            aria-live="polite"
+          >
+            尚未测试当前配置。
+          </div>
+          <p class="chat-config-status" id="chat-config-status" role="status"></p>
+        </div>
+        <footer class="chat-config-actions">
+          <button class="button button--secondary" id="test-chat-connection" type="button">
+            测试连接
+          </button>
+          <button class="button button--primary" id="save-chat-config" type="submit">
+            保存独立接入
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="conversation-rename-dialog" id="conversation-rename-dialog">
+      <form method="dialog">
+        <header>
+          <strong id="conversation-rename-dialog-title">重命名对话</strong>
+          <span id="conversation-rename-dialog-description"
+            >名称会同步显示在项目列表和历史对话中。</span
+          >
+        </header>
+        <label class="field" for="conversation-rename-input">
+          <span id="conversation-rename-field-label">对话名称</span>
+          <input
+            id="conversation-rename-input"
+            type="text"
+            maxlength="60"
+            required
+            autocomplete="off"
+          />
+        </label>
+        <footer>
+          <button id="conversation-rename-cancel" type="button">取消</button>
+          <button class="dialog-primary" type="submit" value="confirm">保存</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
+      class="confirmation-dialog"
+      id="confirmation-dialog"
+      aria-labelledby="confirmation-dialog-title"
+      aria-describedby="confirmation-dialog-message"
+    >
+      <form method="dialog">
+        <header>
+          <strong id="confirmation-dialog-title">确认操作</strong>
+        </header>
+        <p id="confirmation-dialog-message"></p>
+        <footer>
+          <button type="submit" value="cancel" autofocus>取消</button>
+          <button
+            class="dialog-primary"
+            id="confirmation-dialog-confirm"
+            type="submit"
+            value="confirm"
+          >
+            确认
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
+      class="confirmation-dialog quit-confirmation-dialog"
+      id="quit-confirmation-dialog"
+      aria-labelledby="quit-confirmation-title"
+      aria-describedby="quit-confirmation-message"
+    >
+      <form method="dialog">
+        <header>
+          <span class="step-kicker">退出保护</span>
+          <strong id="quit-confirmation-title">有操作正在进行，不建议退出</strong>
+        </header>
+        <p id="quit-confirmation-message">可以直接关闭窗口，后台会继续运行。</p>
+        <ul class="quit-confirmation-list" id="quit-confirmation-list"></ul>
+        <footer>
+          <button class="dialog-primary" id="quit-minimize" type="button" autofocus>
+            最小化到托盘，继续运行
+          </button>
+          <button id="quit-force" type="button">仍要退出</button>
+          <button id="quit-cancel" type="button">取消</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
+      class="network-preflight-dialog"
+      id="network-preflight-dialog"
+      aria-labelledby="network-preflight-dialog-title"
+    >
+      <form method="dialog">
+        <header class="network-preflight-dialog__header">
+          <div>
+            <span>官方 AI 服务安全检查</span>
+            <strong id="network-preflight-dialog-title">网络预检详情</strong>
+          </div>
+          <button id="network-preflight-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <section class="network-preflight-dialog__summary" data-tone="unknown">
+          <strong id="network-preflight-dialog-summary">尚无探测结果</strong>
+          <span id="network-preflight-dialog-meta"
+            >探测不调用模型、不读取登录令牌，也不修改系统代理。</span
+          >
+        </section>
+        <div class="network-preflight-dialog__grid">
+          <section>
+            <h3>风险与结论</h3>
+            <ul id="network-preflight-reasons"></ul>
+          </section>
+          <section>
+            <h3>进程网络路径</h3>
+            <ul id="network-preflight-paths"></ul>
+          </section>
+        </div>
+        <section>
+          <h3>逐项探测</h3>
+          <div class="network-preflight-probes" id="network-preflight-probes"></div>
+        </section>
+        <footer class="network-preflight-dialog__footer">
+          <span>诊断历史仅保留 7 天 / 40 条，地址只保存掩码网段，凭据会脱敏。</span>
+          <div>
+            <button id="network-preflight-clear-history" type="button">清除诊断历史</button>
+            <button class="dialog-primary" id="network-preflight-dialog-recheck" type="button">
+              立即重新检测
+            </button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

@@ -1,39 +1,79 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "1.0.0",
-  "description": "A Windows PowerShell control panel with drag-and-drop project switching and tray status.",
+  "version": "4.1.0",
+  "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,
-  "author": "Cheng",
-  "license": "UNLICENSED",
+  "author": {
+    "name": "AeonusOvO",
+    "url": "https://github.com/AeonusOvO"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/AeonusOvO/claude-dock-control-panel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AeonusOvO/claude-dock-control-panel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AeonusOvO/claude-dock-control-panel/issues"
+  },
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
+    "postinstall": "electron-builder install-app-deps",
     "dev": "npm run generate:icons && concurrently -k \"npm:dev:main\" \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:main": "tsc -p tsconfig.main.json --watch --preserveWatchOutput",
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron": "wait-on tcp:5173 dist/main/main.js dist/preload/preload.js && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .",
     "generate:icons": "node scripts/generate-icons.mjs",
+    "generate:licenses": "node scripts/generate-third-party-licenses.mjs",
+    "check:licenses": "node scripts/generate-third-party-licenses.mjs --check",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" vite.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
     "test": "vitest run",
+    "test:conpty": "npm run build && electron scripts/conpty-resize-smoke.cjs",
+    "test:control-theme": "npm run build:renderer && electron scripts/control-theme-smoke.cjs",
+    "test:dialog-select": "npm run build:renderer && electron scripts/dialog-select-smoke.cjs",
+    "test:layout": "npm run build:renderer && electron scripts/layout-smoke.cjs",
+    "test:select": "npm run build:renderer && electron scripts/select-interaction-smoke.cjs",
+    "test:select-theme": "npm run build:renderer && electron scripts/select-theme-smoke.cjs",
+    "test:visual": "npm run build:renderer && electron scripts/visual-smoke.cjs",
     "test:coverage": "vitest run --coverage",
+    "test:release-security": "vitest run tests/application-update-manifest.test.ts tests/application-update-sources.test.ts tests/application-updater.test.ts",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "npm run clean && npm run generate:icons && npm run typecheck && npm run build:main && npm run build:renderer",
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis",
-    "verify": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run build"
+    "release:manifest": "node scripts/generate-release-manifest.mjs outputs",
+    "release:verify": "node scripts/verify-release-bundle.mjs outputs",
+    "verify": "npm run check:licenses && npm run lint && npm run format:check && npm run typecheck && npm test && npm run test:layout && npm run test:control-theme && npm run build"
   },
   "dependencies": {
+    "@fontsource-variable/hanken-grotesk": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/newsreader": "^5.3.0",
+    "@fontsource-variable/roboto": "^5.3.0",
+    "@lydell/node-pty": "1.2.0-beta.14",
+    "@shikijs/engine-oniguruma": "^4.3.1",
+    "@shikijs/langs": "^4.3.1",
+    "@shikijs/themes": "^4.3.1",
     "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-unicode11": "0.9.0",
+    "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "6.0.0",
-    "node-pty": "1.1.0"
+    "d3": "^7.9.0",
+    "electron-updater": "^6.8.9",
+    "katex": "^0.18.1",
+    "marked": "^18.0.7",
+    "mermaid": "^11.16.0",
+    "plotly.js-dist-min": "^3.7.0",
+    "shiki": "^4.3.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -44,6 +84,7 @@
     "electron": "43.2.0",
     "electron-builder": "26.15.3",
     "eslint": "10.8.0",
+    "jsdom": "^30.0.0",
     "png-to-ico": "3.0.2",
     "prettier": "3.9.6",
     "sharp": "0.35.3",
@@ -54,22 +95,42 @@
     "wait-on": "9.1.0"
   },
   "build": {
-    "appId": "cn.cheng.claudedock",
+    "appId": "io.github.aeonusovo.claudedock",
+    "copyright": "Copyright © 2026 AeonusOvO",
     "productName": "ClaudeDock 控制面板",
     "artifactName": "ClaudeDock-Setup-${version}-${arch}.${ext}",
     "directories": {
-      "output": "release"
+      "output": "outputs"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "AeonusOvO",
+      "repo": "claude-dock-control-panel",
+      "releaseType": "release"
     },
     "files": [
       "dist/**/*",
       "assets/generated/**/*",
+      "assets/runtime/**/*",
+      "LICENSE",
+      "NOTICE",
+      "THIRD_PARTY_NOTICES.md",
+      "THIRD_PARTY_LICENSES.txt",
       "package.json"
     ],
     "asarUnpack": [
-      "node_modules/node-pty/**/*"
+      "assets/runtime/**/*",
+      "node_modules/@lydell/node-pty/**/*",
+      "node_modules/@lydell/node-pty-*/**/*"
     ],
     "win": {
       "icon": "assets/generated/app-icon.ico",
+      "signtoolOptions": {
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      },
       "target": [
         {
           "target": "nsis",
@@ -82,10 +143,13 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "include": "build/installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "ClaudeDock 控制面板"
     }
   }
 }
-

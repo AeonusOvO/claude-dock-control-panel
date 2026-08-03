@@ -1,0 +1,8 @@
+[Unit]
+Description=Validate the ClaudeDock short-lived IP certificate and HTTPS endpoint
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/claudedock-cert-monitor

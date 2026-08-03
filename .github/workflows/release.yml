@@ -1,0 +1,220 @@
+name: Release signed Windows installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+      UPDATE_MIRROR_HOST: ${{ secrets.UPDATE_MIRROR_HOST }}
+      UPDATE_MIRROR_PORT: ${{ secrets.UPDATE_MIRROR_PORT }}
+      UPDATE_MIRROR_USER: ${{ secrets.UPDATE_MIRROR_USER }}
+      WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify release identity and protected inputs
+        shell: pwsh
+        env:
+          EXPECTED_SIGNING_SUBJECT: ${{ secrets.WINDOWS_SIGNING_SUBJECT }}
+          MANIFEST_KEY: ${{ secrets.RELEASE_MANIFEST_PRIVATE_KEY }}
+          MIRROR_KEY: ${{ secrets.UPDATE_MIRROR_SSH_KEY }}
+          MIRROR_KNOWN_HOSTS: ${{ secrets.UPDATE_MIRROR_KNOWN_HOSTS }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Stable releases require an exact major.minor.patch version."
+          }
+          if ("v$version" -ne $env:TAG) {
+            throw "Tag $env:TAG does not match package version $version."
+          }
+          git fetch --no-tags origin main
+          if ((git rev-parse HEAD) -ne (git rev-parse origin/main)) {
+            throw "The stable tag must point at the current main commit."
+          }
+          $required = @{
+            RELEASE_MANIFEST_PRIVATE_KEY = $env:MANIFEST_KEY
+            UPDATE_MIRROR_HOST = $env:UPDATE_MIRROR_HOST
+            UPDATE_MIRROR_KNOWN_HOSTS = $env:MIRROR_KNOWN_HOSTS
+            UPDATE_MIRROR_PORT = $env:UPDATE_MIRROR_PORT
+            UPDATE_MIRROR_SSH_KEY = $env:MIRROR_KEY
+            UPDATE_MIRROR_USER = $env:UPDATE_MIRROR_USER
+            WINDOWS_CERTIFICATE_BASE64 = $env:WIN_CSC_LINK
+            WINDOWS_CERTIFICATE_PASSWORD = $env:WIN_CSC_KEY_PASSWORD
+            WINDOWS_SIGNING_SUBJECT = $env:EXPECTED_SIGNING_SUBJECT
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Value) })
+          if ($missing.Count -gt 0) {
+            throw "Stable release credentials are incomplete: $($missing.Name -join ', ')."
+          }
+          "VERSION=$version" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+          "EXPECTED_SIGNING_SUBJECT=$env:EXPECTED_SIGNING_SUBJECT" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+          "RELEASE_PUBLISHED_AT=$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'))" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run complete verification suite
+        run: npm run verify
+
+      - name: Build and Authenticode-sign NSIS artifacts once
+        shell: pwsh
+        run: |
+          npm run dist -- --config.forceCodeSigning=true "--config.win.publisherName=$env:EXPECTED_SIGNING_SUBJECT" --publish never
+
+      - name: Verify installer, application, uninstaller, chain and timestamp
+        shell: pwsh
+        run: |
+          $audit = ./scripts/verify-authenticode.ps1 -OutputDirectory outputs -ExpectedSubject $env:EXPECTED_SIGNING_SUBJECT -InstallSmoke
+          $audit | Set-Content -Encoding utf8 outputs/authenticode-audit.json
+          $audit | Write-Output
+
+      - name: Generate and verify signed release manifest
+        env:
+          RELEASE_MANIFEST_PRIVATE_KEY: ${{ secrets.RELEASE_MANIFEST_PRIVATE_KEY }}
+        run: |
+          npm run release:manifest
+          npm run release:verify
+
+      - name: Create immutable draft release and upload final bytes
+        shell: pwsh
+        run: |
+          $notes = "docs/releases/$env:VERSION.md"
+          if (!(Test-Path -LiteralPath $notes)) {
+            throw "Release notes are missing: $notes"
+          }
+          if (gh release view $env:TAG 2>$null) {
+            throw "Release $env:TAG already exists; stable assets are immutable."
+          }
+          gh release create $env:TAG --draft --verify-tag --title "ClaudeDock $env:VERSION" --notes-file $notes
+          $files = @(
+            "outputs/ClaudeDock-Setup-$env:VERSION-x64.exe",
+            "outputs/ClaudeDock-Setup-$env:VERSION-x64.exe.blockmap",
+            "outputs/latest.yml",
+            "outputs/release-manifest.json",
+            "outputs/release-manifest.sig"
+          )
+          gh release upload $env:TAG @files
+          $download = Join-Path $env:RUNNER_TEMP "github-release-bundle"
+          New-Item -ItemType Directory -Path $download | Out-Null
+          gh release download $env:TAG --dir $download
+          node scripts/verify-release-bundle.mjs outputs --against $download
+
+      - name: Stage and verify the identical mirror bundle
+        shell: pwsh
+        env:
+          MIRROR_KEY: ${{ secrets.UPDATE_MIRROR_SSH_KEY }}
+          MIRROR_KNOWN_HOSTS: ${{ secrets.UPDATE_MIRROR_KNOWN_HOSTS }}
+        run: |
+          $sshDirectory = Join-Path $env:RUNNER_TEMP ".ssh"
+          New-Item -ItemType Directory -Path $sshDirectory | Out-Null
+          $keyPath = Join-Path $sshDirectory "claudedock-deploy"
+          $knownHostsPath = Join-Path $sshDirectory "known_hosts"
+          Set-Content -LiteralPath $keyPath -Value $env:MIRROR_KEY -NoNewline
+          Set-Content -LiteralPath $knownHostsPath -Value $env:MIRROR_KNOWN_HOSTS
+          icacls $keyPath /inheritance:r /grant:r "$($env:USERNAME):(R)" | Out-Null
+          $target = $env:UPDATE_MIRROR_USER + "@" + $env:UPDATE_MIRROR_HOST
+          $remoteDirectory = "/srv/claudedock/incoming/$env:VERSION-${{ github.run_id }}"
+          $ssh = @("-i", $keyPath, "-p", $env:UPDATE_MIRROR_PORT, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=$knownHostsPath")
+          & ssh @ssh $target "mkdir -m 700 $remoteDirectory"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to create the versioned incoming directory." }
+          $files = @(
+            "outputs/ClaudeDock-Setup-$env:VERSION-x64.exe",
+            "outputs/ClaudeDock-Setup-$env:VERSION-x64.exe.blockmap",
+            "outputs/latest.yml",
+            "outputs/release-manifest.json",
+            "outputs/release-manifest.sig"
+          )
+          foreach ($file in $files) {
+            & scp -i $keyPath -P $env:UPDATE_MIRROR_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$knownHostsPath" $file ($target + ":" + $remoteDirectory + "/")
+            if ($LASTEXITCODE -ne 0) { throw "Mirror upload failed for $file." }
+          }
+          & ssh @ssh $target "/usr/bin/node /usr/local/lib/claudedock/verify-release-bundle.mjs $remoteDirectory --public-key /etc/claudedock/release-manifest-public-key.pem --expected-version $env:VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "The staged mirror bundle failed verification." }
+          $previous = (& ssh @ssh $target "readlink /srv/claudedock/current").Trim()
+          if ($previous -notmatch '^releases/(bootstrap|\d+\.\d+\.\d+)$') {
+            throw "The mirror current pointer has an unexpected target."
+          }
+          "MIRROR_KEY_PATH=$keyPath" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+          "MIRROR_KNOWN_HOSTS_PATH=$knownHostsPath" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+          "PREVIOUS_MIRROR_VERSION=$($previous.Substring(9))" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Publish both stable pointers and verify both channels
+        shell: pwsh
+        run: |
+          gh release edit $env:TAG --draft=false --latest
+          "GITHUB_RELEASE_PUBLISHED=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+          $target = $env:UPDATE_MIRROR_USER + "@" + $env:UPDATE_MIRROR_HOST
+          $ssh = @("-i", $env:MIRROR_KEY_PATH, "-p", $env:UPDATE_MIRROR_PORT, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=$env:MIRROR_KNOWN_HOSTS_PATH")
+          & ssh @ssh $target "sudo -n /usr/local/sbin/claudedock-promote $env:VERSION ${{ github.run_id }}"
+          if ($LASTEXITCODE -ne 0) { throw "Atomic mirror promotion failed." }
+          "MIRROR_PROMOTED=true" | Add-Content -Encoding utf8 $env:GITHUB_ENV
+          $channelAudit = node scripts/verify-release-channels.mjs $env:VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Public release channel verification failed." }
+          $channelAudit | Set-Content -Encoding utf8 outputs/channel-audit.json
+          $channelAudit | Write-Output
+
+      - name: Roll back public pointers after a publication failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if ($env:MIRROR_PROMOTED -eq "true" -and $env:PREVIOUS_MIRROR_VERSION) {
+            $target = $env:UPDATE_MIRROR_USER + "@" + $env:UPDATE_MIRROR_HOST
+            $ssh = @("-i", $env:MIRROR_KEY_PATH, "-p", $env:UPDATE_MIRROR_PORT, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=$env:MIRROR_KNOWN_HOSTS_PATH")
+            & ssh @ssh $target "sudo -n /usr/local/sbin/claudedock-rollback $env:PREVIOUS_MIRROR_VERSION"
+          }
+          if (gh release view $env:TAG 2>$null) {
+            if ($env:GITHUB_RELEASE_PUBLISHED -eq "true") {
+              gh release edit $env:TAG --draft=true
+            }
+            gh release delete $env:TAG --yes
+          }
+
+      - name: Remove ephemeral deployment credentials
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:MIRROR_KEY_PATH -and (Test-Path -LiteralPath $env:MIRROR_KEY_PATH)) {
+            Remove-Item -LiteralPath $env:MIRROR_KEY_PATH -Force
+          }
+          if ($env:MIRROR_KNOWN_HOSTS_PATH -and (Test-Path -LiteralPath $env:MIRROR_KNOWN_HOSTS_PATH)) {
+            Remove-Item -LiteralPath $env:MIRROR_KNOWN_HOSTS_PATH -Force
+          }
+
+      - name: Upload release audit evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-audit-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 30
+          path: |
+            outputs/release-manifest.json
+            outputs/release-manifest.sig
+            outputs/latest.yml
+            outputs/authenticode-audit.json
+            outputs/channel-audit.json

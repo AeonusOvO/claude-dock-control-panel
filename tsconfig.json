@@ -3,11 +3,7 @@
     "target": "ES2022",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
@@ -18,17 +14,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
-    "types": [
-      "vite/client",
-      "node",
-      "vitest/globals"
-    ]
+    "types": ["vite/client", "node", "vitest/globals"]
   },
-  "include": [
-    "src/renderer/**/*.ts",
-    "src/shared/**/*.ts",
-    "tests/**/*.ts",
-    "vite.config.ts"
-  ]
+  "include": ["src/renderer/**/*.ts", "src/shared/**/*.ts", "tests/**/*.ts", "vite.config.ts"]
 }
-

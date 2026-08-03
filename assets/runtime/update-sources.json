@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "sources": [
+    {
+      "id": "github",
+      "label": "GitHub 官方发布",
+      "provider": "github",
+      "owner": "AeonusOvO",
+      "repo": "claude-dock-control-panel"
+    },
+    {
+      "id": "mirror",
+      "label": "中国大陆 HTTPS 兜底镜像",
+      "provider": "generic",
+      "baseUrl": "https://124.221.158.247/claudedock/windows/x64/",
+      "allowedHosts": ["124.221.158.247"]
+    }
+  ]
+}
