@@ -13,6 +13,7 @@
 *.nsh text eol=lf
 *.svg text eol=lf
 *.ts text eol=lf
+*.txt text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
 
