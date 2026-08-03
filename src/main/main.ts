@@ -12,6 +12,7 @@ import {
   shell,
   Tray,
 } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import type {
   IpcMainEvent,
   IpcMainInvokeEvent,
@@ -28,7 +29,6 @@ import type {
   ClaudeConfigResult,
   ClaudeConnectionTestResult,
   ClaudeConnectionHistoryResult,
-  ClaudeCodeInstallSource,
   ClaudeEffortRequest,
   ClaudeLaunchMode,
   ClaudeOperationResult,
@@ -146,6 +146,7 @@ import {
 import { testProxyPerformance } from './proxy/performance-test';
 import { interfaceFacts } from './network-path-resolver';
 import { WindowsIpv6Service } from './windows-ipv6';
+import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from './application-updater';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -190,6 +191,7 @@ let proxyExternalEnvironment: ProxyExternalEnvironmentView | undefined;
 let proxyPerformance: ProxyPerformanceView | undefined;
 let chatFetch: typeof fetch = fetch;
 let releaseConversationBusy: (() => void) | undefined;
+let applicationUpdaterService: ApplicationUpdaterService | null = null;
 
 interface PendingPermissionModeProbe {
   resolve: (mode: ClaudePermissionMode | undefined) => void;
@@ -1510,7 +1512,6 @@ const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Pr
 ]);
 
 const routerInstallSources = new Set<ClaudeRouterInstallSource>(['github', 'npm', 'npmmirror']);
-const claudeInstallSources = new Set<ClaudeCodeInstallSource>(['native', 'npm', 'npmmirror']);
 
 const windowsBuildNumber = (): number => {
   const value = Number(release().split('.')[2]);
@@ -3486,23 +3487,11 @@ const registerIpc = (): void => {
   });
   ipcMain.handle(
     'software:claude-install-update',
-    async (event, source: unknown): Promise<SoftwareUpdateOperationResult> => {
+    async (event): Promise<SoftwareUpdateOperationResult> => {
       validateSender(event);
       const runtime = requireClaudeRuntime();
-      if (
-        typeof source !== 'string' ||
-        !claudeInstallSources.has(source as ClaudeCodeInstallSource)
-      ) {
-        const message = 'Claude Code 安装源无效。';
-        return {
-          error: message,
-          message,
-          ok: false,
-          state: await runtime.getSoftwareUpdates(),
-        };
-      }
       try {
-        const result = await runtime.installOrUpdateClaudeCode(source as ClaudeCodeInstallSource);
+        const result = await runtime.installOrUpdateClaudeCode();
         return { message: result.message, ok: true, state: result.state };
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法安装或更新 Claude Code。';
@@ -3515,6 +3504,30 @@ const registerIpc = (): void => {
       }
     },
   );
+  ipcMain.handle('software:application-updater-get', (event) => {
+    validateSender(event);
+    if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
+    return applicationUpdaterService.getState();
+  });
+  ipcMain.handle('software:application-updater-download', async (event) => {
+    validateSender(event);
+    if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
+    return applicationUpdaterService.checkAndDownload();
+  });
+  ipcMain.handle('software:application-updater-install', (event) => {
+    validateSender(event);
+    if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
+    if (applicationUpdaterService.getState().phase !== 'downloaded') {
+      throw new Error('更新安装包尚未下载完成。');
+    }
+    isQuitting = true;
+    try {
+      applicationUpdaterService.installDownloaded();
+    } catch (error) {
+      isQuitting = false;
+      throw error;
+    }
+  });
 };
 
 const createTray = (): void => {
@@ -3769,6 +3782,14 @@ if (!hasSingleInstanceLock) {
       settingsStore: networkPreflightSettingsStore,
     });
     providerAccessGuard = new ProviderAccessGuard(networkPreflightService);
+    applicationUpdaterService = new ApplicationUpdaterService({
+      currentVersion: app.getVersion(),
+      driver: autoUpdater as unknown as ApplicationUpdaterDriver,
+      enabled: app.isPackaged && process.platform === 'win32',
+      onChange: (state) => {
+        mainWindow?.webContents.send('software:application-updater-changed', state);
+      },
+    });
     registerIpc();
     createTray();
 

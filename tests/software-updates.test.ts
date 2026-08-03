@@ -3,7 +3,11 @@ import type {
   ClaudeInstallationStatus,
   ClaudeRouterManagementState,
 } from '../src/shared/contracts';
-import { checkSoftwareUpdates, isNewerVersion } from '../src/main/software-updates';
+import {
+  checkSoftwareUpdates,
+  isNewerVersion,
+  selectFastestClaudeRegistry,
+} from '../src/main/software-updates';
 
 describe('software update version comparison', () => {
   it('compares semantic versions without lexical ordering errors', () => {
@@ -33,6 +37,7 @@ describe('software update version comparison', () => {
       return new Promise<Response>(() => undefined);
     });
     const installation: ClaudeInstallationStatus = {
+      installationKind: 'npm',
       installed: true,
       message: '',
       security: 'ready',
@@ -50,5 +55,35 @@ describe('software update version comparison', () => {
     expect(result.router.latestVersion).toBe('9.9.9');
     expect(requested.some((url) => url.includes('registry.npmjs.org'))).toBe(true);
     expect(requested.some((url) => url.includes('registry.npmmirror.com'))).toBe(true);
+  });
+
+  it('uses a small tarball sample to choose the faster compatible npm registry', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes('/-/')) {
+        return new Response(new Uint8Array(128 * 1024), { status: 206 });
+      }
+      const registry = url.includes('npmmirror')
+        ? 'https://registry.npmmirror.com'
+        : 'https://registry.npmjs.org';
+      return new Response(
+        JSON.stringify({
+          dist: url.includes('npmmirror')
+            ? { tarball: `${registry}/@anthropic-ai/claude-code/-/claude-code-9.9.9.tgz` }
+            : undefined,
+          version: '9.9.9',
+        }),
+        { status: 200 },
+      );
+    });
+
+    const selected = await selectFastestClaudeRegistry(fetchMock);
+
+    expect(selected.label).toBe('npmmirror 国内镜像');
+    expect(selected.bytesPerSecond).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('claude-code-9.9.9.tgz'),
+      expect.objectContaining({ headers: expect.objectContaining({ range: expect.any(String) }) }),
+    );
   });
 });

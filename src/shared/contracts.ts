@@ -205,8 +205,6 @@ export interface ProxyPerformanceEndpointView {
 }
 export interface ProxyPerformanceView {
   checkedAt: number;
-  downloadBytes: number;
-  downloadBps?: number;
   endpoints: ProxyPerformanceEndpointView[];
   error?: string;
 }
@@ -303,7 +301,7 @@ export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
 export type ClaudeRouterGatewayState = 'error' | 'running' | 'starting' | 'stopped' | 'unknown';
 export type ClaudeRouterInstallationKind = 'desktop' | 'mixed' | 'npm' | 'unknown';
 export type ClaudeRouterInstallSource = 'github' | 'npm' | 'npmmirror';
-export type ClaudeCodeInstallSource = 'native' | 'npm' | 'npmmirror';
+export type ClaudeCodeInstallationKind = 'native' | 'npm' | 'unknown';
 export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
 export type ChatProtocol = 'anthropic' | 'openai';
@@ -697,6 +695,7 @@ export interface ClaudeConnectionHistoryResult {
 
 export interface ClaudeInstallationStatus {
   executable?: string;
+  installationKind: ClaudeCodeInstallationKind;
   installed: boolean;
   message: string;
   security: ClaudeSecurityStatus;
@@ -1175,6 +1174,27 @@ export interface SoftwareUpdateOperationResult {
   state: SoftwareUpdateState;
 }
 
+export type ApplicationUpdaterPhase =
+  | 'available'
+  | 'checking'
+  | 'disabled'
+  | 'downloaded'
+  | 'downloading'
+  | 'error'
+  | 'idle'
+  | 'up-to-date';
+
+export interface ApplicationUpdaterState {
+  bytesPerSecond?: number;
+  currentVersion: string;
+  downloadedBytes?: number;
+  latestVersion?: string;
+  message: string;
+  percent?: number;
+  phase: ApplicationUpdaterPhase;
+  totalBytes?: number;
+}
+
 export type ClaudeConnectionAdviceTone = 'error' | 'info' | 'success' | 'warning';
 export type ClaudeConnectionAdviceAction =
   | 'install-router'
@@ -1482,9 +1502,11 @@ export interface ControlPanelApi {
   getMcpBackups: () => Promise<McpBackupView[]>;
   restoreMcpBackup: (backupId: string, cwd: string) => Promise<McpOperationResult>;
   getSoftwareUpdates: (refresh?: boolean) => Promise<SoftwareUpdateState>;
-  installOrUpdateClaudeCode: (
-    source: ClaudeCodeInstallSource,
-  ) => Promise<SoftwareUpdateOperationResult>;
+  installOrUpdateClaudeCode: () => Promise<SoftwareUpdateOperationResult>;
+  getApplicationUpdaterState: () => Promise<ApplicationUpdaterState>;
+  downloadApplicationUpdate: () => Promise<ApplicationUpdaterState>;
+  installApplicationUpdate: () => Promise<void>;
+  onApplicationUpdaterChanged: (listener: (state: ApplicationUpdaterState) => void) => () => void;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<boolean>;
 }

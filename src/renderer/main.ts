@@ -18,6 +18,7 @@ import katex from 'katex';
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
 import type {
+  ApplicationUpdaterState,
   AppQuitRequest,
   AppSettingsView,
   ArtifactNetworkLogEntry,
@@ -214,7 +215,6 @@ const claudeApiKeyHelperStatus = requiredElement<HTMLElement>('#claude-api-key-h
 const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
 const claudeCredential = requiredElement<HTMLInputElement>('#claude-credential');
-const claudeInstallSource = requiredElement<HTMLSelectElement>('#claude-install-source');
 const claudeInstallationDetail = requiredElement<HTMLElement>('#claude-installation-detail');
 const claudeInstallationTitle = requiredElement<HTMLElement>('#claude-installation-title');
 const claudeLiveIndicator = requiredElement<HTMLElement>('#claude-live-indicator');
@@ -552,6 +552,7 @@ const mcpCatalogCount = requiredElement<HTMLElement>('#mcp-catalog-count');
 const claudeUpdateDetail = requiredElement<HTMLElement>('#claude-update-detail');
 const claudeUpdateVersion = requiredElement<HTMLElement>('#claude-update-version');
 const applicationUpdateDetail = requiredElement<HTMLElement>('#application-update-detail');
+const applicationUpdateAction = requiredElement<HTMLButtonElement>('#application-update-action');
 const applicationUpdateVersion = requiredElement<HTMLElement>('#application-update-version');
 const softwareUpdateCheckedAt = requiredElement<HTMLElement>('#software-update-checked-at');
 const refreshSoftwareUpdatesButton = requiredElement<HTMLButtonElement>(
@@ -1175,10 +1176,12 @@ const renderProxyState = (state: ProxyControlView): void => {
   proxyTestPerformance.disabled = state.runtime.status !== 'ready';
   proxyPerformance.hidden = !state.performance;
   if (state.performance) {
-    const speed = state.performance.downloadBps;
-    proxyPerformanceSummary.textContent = speed
-      ? `节点实测 ${formatProxyCoreRate(speed)} · ${new Date(state.performance.checkedAt).toLocaleTimeString()}`
-      : `测速未完成：${state.performance.error ?? '未知错误'}`;
+    const realPing = state.performance.endpoints.find((endpoint) =>
+      endpoint.label.startsWith('节点真实延迟'),
+    );
+    proxyPerformanceSummary.textContent = realPing?.ok
+      ? `节点真实延迟 ${realPing.latencyMs ?? '—'} ms · ${new Date(state.performance.checkedAt).toLocaleTimeString()}`
+      : `真实延迟未完成：${state.performance.error ?? realPing?.detail ?? '未知错误'}`;
     proxyPerformanceDetails.replaceChildren(
       ...state.performance.endpoints.map((endpoint) => {
         const item = document.createElement('li');
@@ -1419,7 +1422,7 @@ let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let savedAppSettings: AppSettingsView | undefined;
 let selectedRailTab: string | undefined = 'projects';
-type SettingsTab = 'advanced' | 'connection' | 'general' | 'proxy' | 'router';
+type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | 'router';
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
@@ -1516,6 +1519,7 @@ let mcpCatalog: McpCatalog | undefined;
 let mcpLoadPromise: Promise<void> | undefined;
 let mcpMutationInProgress = false;
 let softwareUpdates: SoftwareUpdateState | undefined;
+let applicationUpdaterState: ApplicationUpdaterState | undefined;
 let softwareUpdateInProgress = false;
 let softwareUpdatePromise: Promise<void> | undefined;
 let updateRefreshInProgress = false;
@@ -2577,7 +2581,7 @@ const appendChatMessage = (
   const article = document.createElement('article');
   article.className = `chat-message chat-message--${role}`;
   const label = document.createElement('strong');
-  label.textContent = role === 'user' ? '你' : '模型';
+  label.textContent = role === 'user' ? '你' : 'AI 生成';
   const body = document.createElement('div');
   body.className = 'chat-message__content';
   const blocks = normalizedChatBlocks(content);
@@ -6434,6 +6438,68 @@ const selectMcpTab = (tab: string): void => {
   }
 };
 
+const renderApplicationUpdater = (state: ApplicationUpdaterState): void => {
+  applicationUpdaterState = state;
+  const active = ['available', 'checking', 'downloaded', 'downloading', 'error'].includes(
+    state.phase,
+  );
+  if (active || state.phase === 'up-to-date') {
+    applicationUpdateDetail.textContent = state.message;
+  }
+  if (state.latestVersion) {
+    applicationUpdateVersion.textContent = `v${state.currentVersion} → ${state.latestVersion}`;
+  }
+  const softwareReportsUpdate = softwareUpdates?.application.updateAvailable === true;
+  applicationUpdateAction.hidden =
+    state.phase === 'disabled' ||
+    state.phase === 'up-to-date' ||
+    (state.phase === 'idle' && !softwareReportsUpdate);
+  applicationUpdateAction.disabled = state.phase === 'checking' || state.phase === 'downloading';
+  applicationUpdateAction.textContent =
+    state.phase === 'downloaded'
+      ? '重启并安装'
+      : state.phase === 'checking'
+        ? '正在检查…'
+        : state.phase === 'downloading'
+          ? `正在下载${state.percent === undefined ? '…' : ` ${Math.round(state.percent)}%`}`
+          : state.phase === 'error'
+            ? '重试下载'
+            : '下载更新';
+  applicationUpdateVersion.dataset.update = String(
+    state.phase === 'downloaded' || state.phase === 'downloading' || softwareReportsUpdate,
+  );
+};
+
+const runApplicationUpdateAction = async (): Promise<void> => {
+  if (applicationUpdaterState?.phase === 'downloaded') {
+    const confirmed = await requestConfirmation({
+      confirmLabel: '重启并安装',
+      message:
+        'ClaudeDock 将关闭当前窗口并启动已校验的更新安装包。请先保存终端中尚未写入磁盘的内容。',
+      title: '安装 ClaudeDock 更新',
+    });
+    if (!confirmed) return;
+    try {
+      await window.controlPanel.installApplicationUpdate();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法启动更新安装。', 'error');
+    }
+    return;
+  }
+  applicationUpdateAction.disabled = true;
+  applicationUpdateAction.textContent = '正在检查…';
+  try {
+    renderApplicationUpdater(await window.controlPanel.downloadApplicationUpdate());
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法下载应用更新。', 'error');
+  } finally {
+    if (applicationUpdaterState) renderApplicationUpdater(applicationUpdaterState);
+  }
+};
+
+const unsubscribeApplicationUpdaterChanged =
+  window.controlPanel.onApplicationUpdaterChanged(renderApplicationUpdater);
+
 const renderSoftwareUpdates = (state: SoftwareUpdateState): void => {
   softwareUpdates = state;
   applicationUpdateDetail.textContent = state.application.message;
@@ -6441,6 +6507,9 @@ const renderSoftwareUpdates = (state: SoftwareUpdateState): void => {
     state.application.updateAvailable ? ` → ${state.application.latestVersion}` : ''
   }`;
   applicationUpdateVersion.dataset.update = String(state.application.updateAvailable);
+  if (applicationUpdaterState) {
+    renderApplicationUpdater(applicationUpdaterState);
+  }
   const target = state.claudeCode;
   claudeUpdateDetail.textContent = target.message;
   claudeUpdateVersion.textContent = target.installed
@@ -6468,7 +6537,12 @@ const loadSoftwareUpdates = (refresh = false): Promise<void> => {
   softwareUpdateInProgress = true;
   softwareUpdatePromise = (async () => {
     try {
-      renderSoftwareUpdates(await window.controlPanel.getSoftwareUpdates(refresh));
+      const [updates, updater] = await Promise.all([
+        window.controlPanel.getSoftwareUpdates(refresh),
+        window.controlPanel.getApplicationUpdaterState(),
+      ]);
+      applicationUpdaterState = updater;
+      renderSoftwareUpdates(updates);
     } catch {
       claudeUpdateDetail.textContent = '暂时无法读取软件版本，请检查网络后重试。';
     } finally {
@@ -6490,9 +6564,7 @@ const runClaudeInstallUpdate = async (): Promise<void> => {
   const original = installUpdateClaudeButton.textContent;
   installUpdateClaudeButton.textContent = '正在安装，请稍候…';
   try {
-    const result = await window.controlPanel.installOrUpdateClaudeCode(
-      claudeInstallSource.value as 'native' | 'npm' | 'npmmirror',
-    );
+    const result = await window.controlPanel.installOrUpdateClaudeCode();
     renderSoftwareUpdates(result.state);
     showToast(result.message, result.ok ? 'success' : 'error');
     const status = activeStatus();
@@ -9731,6 +9803,9 @@ refreshSoftwareUpdatesButton.addEventListener('click', () => {
     refreshSoftwareUpdatesButton.disabled = false;
   });
 });
+applicationUpdateAction.addEventListener('click', () => {
+  void runApplicationUpdateAction();
+});
 pluginSearch.addEventListener('input', () => {
   if (pluginCatalog) {
     renderPluginCatalog(pluginCatalog);
@@ -10095,13 +10170,18 @@ proxyExternalRefresh.addEventListener('click', () => {
 proxyTestPerformance.addEventListener('click', () => {
   proxyTestPerformance.disabled = true;
   const original = proxyTestPerformance.textContent;
-  proxyTestPerformance.textContent = '正在测速 10 MB…';
+  proxyTestPerformance.textContent = '正在测真实延迟…';
   void window.controlPanel
     .testBuiltInProxyPerformance()
     .then((state) => {
       renderProxyState(state);
-      const speed = state.performance?.downloadBps;
-      showToast(speed ? `节点实测 ${formatProxyCoreRate(speed)}` : '测速来源暂时不可用');
+      const realPing = state.performance?.endpoints.find((endpoint) =>
+        endpoint.label.startsWith('节点真实延迟'),
+      );
+      showToast(
+        realPing?.ok ? `节点真实延迟 ${realPing.latencyMs ?? '—'} ms` : '测速来源暂时不可用',
+        realPing?.ok ? 'success' : 'error',
+      );
     })
     .catch((error: unknown) =>
       showToast(error instanceof Error ? error.message : '代理测速失败。', 'error'),
@@ -10210,11 +10290,18 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-setting
     selectSettingsTab(
       requested === 'advanced' ||
         requested === 'connection' ||
+        requested === 'legal' ||
         requested === 'proxy' ||
         requested === 'router'
         ? requested
         : 'general',
     );
+  });
+}
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-legal-url]')) {
+  button.addEventListener('click', () => {
+    const url = button.dataset.legalUrl;
+    if (url) void openExternal(url);
   });
 }
 routerWizardProvider.addEventListener('change', () => {
@@ -11203,6 +11290,7 @@ window.addEventListener('beforeunload', () => {
   unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
   unsubscribeDownloadsChanged();
+  unsubscribeApplicationUpdaterChanged();
   unsubscribeOpenDownloadCenterRequested();
   unsubscribeProxyStateChanged();
   unsubscribeProxyAuditRequired();

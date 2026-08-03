@@ -1,5 +1,4 @@
 import type {
-  ClaudeCodeInstallSource,
   ClaudeInstallationStatus,
   ClaudeRouterManagementState,
   SoftwareUpdateState,
@@ -13,6 +12,24 @@ const ROUTER_PACKAGE = '@musistudio/claude-code-router';
 const APPLICATION_RELEASE_API =
   'https://api.github.com/repos/AeonusOvO/claude-dock-control-panel/releases/latest';
 type SoftwareUpdateFetch = typeof fetch;
+const CLAUDE_REGISTRY_SAMPLE_BYTES = 128 * 1024;
+
+interface ClaudeRegistryCandidate {
+  label: string;
+  registry: string;
+}
+
+export interface ClaudeRegistryProbe {
+  bytesPerSecond?: number;
+  label: string;
+  latencyMs: number;
+  registry: string;
+}
+
+const CLAUDE_REGISTRIES: readonly ClaudeRegistryCandidate[] = Object.freeze([
+  { label: 'npm 官方源', registry: OFFICIAL_REGISTRY },
+  { label: 'npmmirror 国内镜像', registry: CHINA_REGISTRY },
+]);
 
 const parseVersion = (value: string | undefined): number[] | undefined => {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value?.trim() ?? '');
@@ -149,17 +166,10 @@ export const checkSoftwareUpdates = async (
 };
 
 export const installOrUpdateClaudeCode = async (
-  source: ClaudeCodeInstallSource,
-  installed: boolean,
+  installation: ClaudeInstallationStatus,
+  fetchImpl: SoftwareUpdateFetch = fetch,
 ): Promise<string> => {
-  if (source === 'native') {
-    if (installed) {
-      await runWindowsCommand('claude', ['update'], {
-        maxBuffer: 16 * 1024 * 1024,
-        timeout: 10 * 60_000,
-      });
-      return 'Claude Code 原生安装已更新。';
-    }
+  if (!installation.installed) {
     await runWindowsCommand(
       'winget',
       [
@@ -175,19 +185,115 @@ export const installOrUpdateClaudeCode = async (
         timeout: 10 * 60_000,
       },
     );
-    return 'Claude Code 原生版已安装。';
+    return '已通过 Anthropic 的 WinGet 包安装 Claude Code 原生版。';
   }
 
-  const registry = source === 'npmmirror' ? CHINA_REGISTRY : OFFICIAL_REGISTRY;
+  if (installation.installationKind !== 'npm') {
+    await runWindowsCommand('claude', ['update'], {
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 10 * 60_000,
+    });
+    return installation.installationKind === 'native'
+      ? 'Claude Code 原生安装已通过官方更新器更新。'
+      : '已沿用当前 Claude Code 安装方式执行官方更新；未创建重复安装。';
+  }
+
+  const selected = await selectFastestClaudeRegistry(fetchImpl);
   await runWindowsCommand(
     'npm',
-    ['install', '--global', `${CLAUDE_PACKAGE}@latest`, '--registry', registry],
+    ['install', '--global', `${CLAUDE_PACKAGE}@latest`, '--registry', selected.registry],
     {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 10 * 60_000,
     },
   );
-  return source === 'npmmirror'
-    ? '已通过 npmmirror 安装或更新 Claude Code。'
-    : '已通过 npm 官方源安装或更新 Claude Code。';
+  const rate = selected.bytesPerSecond
+    ? `，采样速度 ${(selected.bytesPerSecond / 1024 / 1024).toFixed(1)} MiB/s`
+    : `，响应延迟 ${selected.latencyMs} ms`;
+  return `已自动选择 ${selected.label}${rate}，并完成 Claude Code npm 安装更新。`;
+};
+
+const probeClaudeRegistry = async (
+  candidate: ClaudeRegistryCandidate,
+  fetchImpl: SoftwareUpdateFetch,
+): Promise<ClaudeRegistryProbe> => {
+  const startedAt = performance.now();
+  const metadataResponse = await fetchImpl(registryPackageUrl(candidate.registry, CLAUDE_PACKAGE), {
+    headers: { accept: 'application/json', 'user-agent': 'ClaudeDock/registry-speed-test' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(6_000),
+  });
+  const latencyMs = Math.max(0, Math.round(performance.now() - startedAt));
+  if (
+    !metadataResponse.ok ||
+    Number(metadataResponse.headers.get('content-length') ?? 0) > 1024 * 1024
+  ) {
+    throw new Error(`${candidate.label} 元数据不可用。`);
+  }
+  const metadata = (await metadataResponse.json()) as {
+    dist?: { tarball?: unknown };
+    version?: unknown;
+  };
+  if (typeof metadata.version !== 'string' || !parseVersion(metadata.version)) {
+    throw new Error(`${candidate.label} 返回了无效版本。`);
+  }
+  if (typeof metadata.dist?.tarball !== 'string') {
+    return { label: candidate.label, latencyMs, registry: candidate.registry };
+  }
+  const tarball = new URL(metadata.dist.tarball);
+  const registryHost = new URL(candidate.registry).hostname;
+  if (tarball.protocol !== 'https:' || tarball.hostname !== registryHost) {
+    return { label: candidate.label, latencyMs, registry: candidate.registry };
+  }
+
+  const sampleStartedAt = performance.now();
+  const sampleResponse = await fetchImpl(tarball.toString(), {
+    headers: {
+      accept: 'application/octet-stream',
+      range: `bytes=0-${CLAUDE_REGISTRY_SAMPLE_BYTES - 1}`,
+      'user-agent': 'ClaudeDock/registry-speed-test',
+    },
+    redirect: 'error',
+    signal: AbortSignal.timeout(6_000),
+  });
+  if (!sampleResponse.ok || !sampleResponse.body) {
+    await sampleResponse.body?.cancel().catch(() => undefined);
+    return { label: candidate.label, latencyMs, registry: candidate.registry };
+  }
+  const reader = sampleResponse.body.getReader();
+  let bytes = 0;
+  try {
+    while (bytes < CLAUDE_REGISTRY_SAMPLE_BYTES) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += Math.min(chunk.value.byteLength, CLAUDE_REGISTRY_SAMPLE_BYTES - bytes);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const seconds = Math.max((performance.now() - sampleStartedAt) / 1000, 0.001);
+  return {
+    bytesPerSecond: bytes > 0 ? Math.round(bytes / seconds) : undefined,
+    label: candidate.label,
+    latencyMs,
+    registry: candidate.registry,
+  };
+};
+
+export const selectFastestClaudeRegistry = async (
+  fetchImpl: SoftwareUpdateFetch = fetch,
+): Promise<ClaudeRegistryProbe> => {
+  const probes = await Promise.all(
+    CLAUDE_REGISTRIES.map((candidate) =>
+      probeClaudeRegistry(candidate, fetchImpl).catch(() => undefined),
+    ),
+  );
+  const available = probes.filter((probe): probe is ClaudeRegistryProbe => Boolean(probe));
+  if (available.length === 0) {
+    throw new Error('npm 官方源与 npmmirror 均无法通过安全测速，请检查网络后重试。');
+  }
+  return available.sort((left, right) => {
+    const speedDifference = (right.bytesPerSecond ?? 0) - (left.bytesPerSecond ?? 0);
+    return speedDifference || left.latencyMs - right.latencyMs;
+  })[0]!;
 };

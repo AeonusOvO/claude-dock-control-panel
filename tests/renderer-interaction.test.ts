@@ -134,11 +134,12 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toMatch(/id="open-connection-advanced"[\s\S]*?aria-haspopup="dialog"/);
     expect(rendererMarkup).toContain('activity-rail__button--settings');
     expect(rendererMarkup).toMatch(
-      /data-settings-tab="general"[\s\S]*?data-settings-tab="advanced"[\s\S]*?data-settings-tab="connection"[\s\S]*?data-settings-tab="proxy"[\s\S]*?data-settings-tab="router"/,
+      /data-settings-tab="general"[\s\S]*?data-settings-tab="advanced"[\s\S]*?data-settings-tab="connection"[\s\S]*?data-settings-tab="proxy"[\s\S]*?data-settings-tab="router"[\s\S]*?data-settings-tab="legal"/,
     );
     expect(rendererSource).toContain(
-      "type SettingsTab = 'advanced' | 'connection' | 'general' | 'proxy' | 'router';",
+      "type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | 'router';",
     );
+    expect(rendererMarkup).toContain('data-settings-panel="legal"');
     expect(rendererSource).toContain("requested === 'proxy'");
     expect(rendererMarkup).toMatch(
       /id="settings-launch-at-login"[\s\S]*?id="settings-theme"[\s\S]*?id="settings-language"[\s\S]*?id="settings-version"/,

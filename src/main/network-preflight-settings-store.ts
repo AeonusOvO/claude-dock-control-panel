@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { NetworkPreflightSettings } from '../shared/contracts';
 
 const DEFAULT_SETTINGS: NetworkPreflightSettings = {
-  enhancedPrivacyMode: false,
+  enhancedPrivacyMode: true,
 };
 
 export class NetworkPreflightSettingsStore {

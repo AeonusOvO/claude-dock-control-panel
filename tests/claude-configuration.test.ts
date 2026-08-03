@@ -171,6 +171,17 @@ describe('Claude Code configuration', () => {
     expect(evaluateClaudeInstallation('unparseable').security).toBe('unknown');
   });
 
+  it('preserves the detected installation method during updates', () => {
+    expect(
+      evaluateClaudeInstallation('2.1.220', 'C:\\Program Files\\Claude\\claude.exe')
+        .installationKind,
+    ).toBe('native');
+    expect(
+      evaluateClaudeInstallation('2.1.220', 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd')
+        .installationKind,
+    ).toBe('npm');
+  });
+
   it('quotes launch inputs and hides the exit marker from the visible command', () => {
     const marker = '\u001b]9;claudedock-exit:session-1\u0007';
     const command = buildClaudeLaunchCommand(

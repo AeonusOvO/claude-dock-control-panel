@@ -76,14 +76,34 @@ export const parseClaudeVersion = (output: string): [number, number, number] | u
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 };
 
+export const detectClaudeInstallationKind = (
+  executable?: string,
+): ClaudeInstallationStatus['installationKind'] => {
+  const normalized = executable?.replaceAll('\\', '/').toLowerCase() ?? '';
+  if (!normalized) {
+    return 'unknown';
+  }
+  if (
+    normalized.endsWith('.cmd') ||
+    normalized.endsWith('.ps1') ||
+    normalized.includes('/node_modules/') ||
+    normalized.includes('/npm/')
+  ) {
+    return 'npm';
+  }
+  return normalized.endsWith('.exe') ? 'native' : 'unknown';
+};
+
 export const evaluateClaudeInstallation = (
   output: string,
   executable?: string,
 ): ClaudeInstallationStatus => {
+  const installationKind = detectClaudeInstallationKind(executable);
   const version = parseClaudeVersion(output);
   if (!version) {
     return {
       executable,
+      installationKind,
       installed: true,
       message: '已找到 Claude Code，但无法识别版本；受保护启动已停用。',
       security: 'unknown',
@@ -96,6 +116,7 @@ export const evaluateClaudeInstallation = (
   if (blockingRule) {
     return {
       executable,
+      installationKind,
       installed: true,
       message: `版本 ${versionText} 命中安全规则：${blockingRule.reason}`,
       security: 'blocked-version',
@@ -109,6 +130,7 @@ export const evaluateClaudeInstallation = (
   ) {
     return {
       executable,
+      installationKind,
       installed: true,
       message: `版本 ${versionText} 过旧；受保护启动要求 ${policy.minimumSecureClientVersion} 或更高版本。`,
       security: 'update-required',
@@ -118,6 +140,7 @@ export const evaluateClaudeInstallation = (
 
   return {
     executable,
+    installationKind,
     installed: true,
     message: `Claude Code ${versionText} 已通过已知风险版本检查。`,
     security: 'ready',

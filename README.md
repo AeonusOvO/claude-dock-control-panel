@@ -4,7 +4,24 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（3.5.0 · 2026-08-03）
+## 当前版本重点（3.6.0 · 2026-08-03）
+
+- 新增 ClaudeDock 安装版应用内更新：环境卡可以直接从 GitHub Releases 下载正式版，显示进度，
+  `electron-updater` 按 `latest.yml`/blockmap 校验完成后才开放“重启并安装”。`v*` 标签会触发
+  Windows Release 工作流，自动上传安装包、blockmap 和更新元数据；开发版不会误触安装器。
+- Claude Code 不再把原生、npm 官方源和 npmmirror 当作可随意互换的三种来源。原生安装沿用
+  Anthropic 官方更新器，未安装时使用官方 WinGet 包；只有检测为 npm 安装时，才分别拉取不超过
+  128 KiB 的真实包样本，在 npm 与 npmmirror 中自动选择当前更快的一条，避免重复安装和 PATH 冲突。
+- 代理“节点与更新源测速”取消 10 MB 下载，改为通过专属 Electron session 和当前内置 Xray 做
+  v2rayN real-ping 同类的轻量 HTTP 真实延迟，并同时检查 GitHub/npm/npmmirror。实现未复制或链接
+  v2rayN 的 GPL 源码。
+- 新安装默认开启增强隐私模式；独立对话的模型回复标记为“AI 生成”。全局设置新增“隐私与合规”页，
+  持续披露本地保存、第三方端点、跨境处理与代理风险；详细隐私说明和中国大陆公开发行评估位于
+  `docs/PRIVACY.md` 与 `docs/LEGAL_COMPLIANCE.md`。
+- 当前 GitHub 仓库仍是私有仓库，普通用户无法读取 Release；对外发布前必须公开仓库或改用公开的
+  自建 HTTPS 更新源。当前安装包也尚无受信任 Windows 代码签名，不应忽略 SmartScreen 风险。
+
+## 3.5.0 版本重点（2026-08-03）
 
 - 修复独立对话的 DeepSeek 连接测试仍报“接口响应格式与所选协议不一致”。最小的 1-token
   Anthropic 请求可能只返回 thinking 块而没有可见正文；测试现在按协议 envelope 判定兼容，真正
@@ -759,6 +776,12 @@ npm run dist
 `npm run dist`，将对应版本的安装程序、blockmap、`latest.yml` 与 `win-unpacked/` 生成到
 `outputs/`。
 
+正式发布使用 `v<package version>` 标签触发 `.github/workflows/release.yml`。工作流会核对标签与
+`package.json`，运行完整验证，再用 `electron-builder --publish always` 把 NSIS 安装包、blockmap
+和 `latest.yml` 发布到 GitHub Release。自动更新要求仓库/Release 对最终用户公开；私有仓库不能把
+`GH_TOKEN` 嵌入客户端。发布前还应在 GitHub Secrets 配置 `WINDOWS_CERTIFICATE_BASE64` 与
+`WINDOWS_CERTIFICATE_PASSWORD`，使用稳定的 Windows 代码签名主体。
+
 ## 日常使用
 
 标题栏右上角的刷新图标是统一更新检查入口。页面首次完成加载后也会自动在后台执行同样的
@@ -770,7 +793,9 @@ MCP 目录/健康状态，单个来源失败不会抹掉其他结果。每个可
 使用内置代理时，在“设置 → 代理”导入并选择节点，再选择 IP 策略和作用域。若 V2RayN 只开启了
 系统代理/PAC，可直接并行；若面板显示外部 TUN/VPN，则建议先关闭外部软件的 TUN，或明确确认接受
 “外部 TUN → ClaudeDock Xray → 节点”的潜在链式路径。启动后点击“节点与更新源测速”可验证真实
-10 MB 吞吐及 GitHub/npm 来源连通性；该测试会消耗约 10 MB 流量，不代表磁盘或局域网速度。
+HTTP 延迟及 GitHub/npm 来源连通性；测试到响应头后即停止，不再下载 10 MB 测速文件。中国大陆
+公开发行时，通用节点/订阅/出口能力仍是高风险项；请先阅读
+`docs/LEGAL_COMPLIANCE.md` 并决定移除模块，或改为依法取得的受控企业线路模式。
 
 如果要使用 ChatGPT 订阅开发，添加项目后在“当前项目开发引擎”选择 **Codex**，再点击
 “一键准备 Codex”。应用会在需要时下载并校验官方安装器、打开官方 ChatGPT 登录页，登录完成
@@ -985,6 +1010,9 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
   使用已有的严格兼容路径，只接受项目路径加合法 UUID 并删除对应 JSONL；绝不调用会清空整个
   项目的 `claude project purge`，也不把这一兼容路径描述为 Claude Code 官方 API。
 - 本地构建默认没有代码签名，Windows SmartScreen 可能显示未知发布者提示。
+- 当前 GitHub 更新通道只有在仓库和 Release 对用户公开时可用；私有仓库普通用户无法自动更新。
+- 中国大陆公开发行前必须决定通用代理模块的处理方式，并把实际发行主体与联系方式写入
+  `docs/PRIVACY.md` 和应用内“隐私与合规”；当前文档不是正式法律意见。
 - 当前仅打包 Windows x64。
 - 自动发现覆盖 Claude Code Router 的默认 `3456/3458`、LiteLLM 的常用 `4000` 和当前
   项目已保存的本机端口；自定义端口或改名进程可能需要手动填写。

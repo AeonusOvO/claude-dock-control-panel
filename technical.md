@@ -15,7 +15,7 @@
 - d3、Plotly、Mermaid、KaTeX：由 `claudedock-artifact://libs/` 作为 Artifact 离线资源提供，
   不注入宿主页面。
 - Vitest、ESLint、Prettier：测试和静态检查。
-- electron-builder：Windows NSIS 安装包。
+- electron-builder + electron-updater：Windows NSIS 安装包、GitHub Release 元数据和应用内更新。
 
 依赖版本以 `package.json` 和 `package-lock.json` 为唯一事实来源。
 
@@ -55,6 +55,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
         ├── SoftwareUpdates ── ClaudeDock / Claude Code / Router 版本检测与安装源
+        ├── ApplicationUpdaterService ── GitHub Releases / NSIS 差分下载 / 重启安装
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── Tray 聚合状态与项目菜单
@@ -379,9 +380,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   接管而形成链式代理。实现不结束外部进程、不切换其模式。已确认且正在运行的隧道因 IP 策略或订阅
   更新而重启时沿用本次运行的确认；冷启动自动恢复仍重新守门。
 - `performance-test.ts` 使用专属 `claudedock-proxy-performance` session，并在测试前强制设置为当前
-  回环 HTTP 入站，所以 GitHub API、npm 官方源、npmmirror 和 10 MB 吞吐样本不能旁路内置 Xray。吞吐先用
-  Cloudflare `__down`，失败再用 CacheFly；单响应上限 12 MiB、最少 1 MiB、20 秒截止。该诊断借鉴
-  v2rayN 将 real ping 与 speed download 分开的原则，但属于 ClaudeDock 自研实现，不复制其 GPL 代码。
+  回环 HTTP 入站，所以节点真实延迟、GitHub API、npm 官方源和 npmmirror 不能旁路内置 Xray。测速
+  请求 Apple 的小型成功页并在响应头到达后取消 body，不再下载 10 MB 文件；这对应 v2rayN
+  `ConnectionHandler.GetRealPingTime` 的“通过临时本地代理发真实 HTTP 请求”行为原则，但属于
+  ClaudeDock 自研实现，不复制、链接或分发 v2rayN 的 GPL 代码。
 - 本轮对照的本地 v2rayN 7.24.4 源码锚点为
   `ServiceLib/Handler/SysProxy/SysProxyHandler.cs`、`ProxySettingWindows.cs`（系统代理模式与 Windows
   写入边界）、`Services/CoreConfig/V2ray/V2rayDnsService.cs`（socket IP 策略与 Happy Eyeballs）及
@@ -884,6 +886,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   先等慢官方源再等镜像。所有请求使用 `ClaudeRuntime` 注入的 `session.defaultSession.fetch()`，
   因此“ClaudeDock 自身网络”作用域启用时会经过内置代理，未启用时继承 Windows system proxy；
   不再由 Node 全局 `fetch` 绕开两者。结果缓存 5 分钟，轮询只在缓存到期后产生请求。
+- `ApplicationUpdaterService` 包装 `electron-updater` 的 NSIS updater。仅 `app.isPackaged && win32`
+  启用，`autoDownload/autoInstallOnAppQuit` 均关闭：用户点击后检查并下载，下载进度通过 IPC 推送，
+  `update-downloaded` 后才允许 `quitAndInstall(false, true)`。`package.json.build.publish` 固定 GitHub
+  owner/repo；`latest.yml` 提供版本、文件和 SHA-512，blockmap 支持差分下载。私有仓库的 Release
+  不能服务匿名客户端，客户端也不得内置 GitHub Token。
 - `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
   返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
   插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
@@ -892,8 +899,10 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   处理全部已注册来源，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现
   数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；代理订阅刷新会替换该来源节点并在
   原隧道运行时安全重启、重新体检，界面必须使用“更新订阅”而不是模糊的“检查”。
-- Claude Code 的官方原生路径使用固定的 `claude update`；未安装时使用固定 winget ID
-  `Anthropic.ClaudeCode`。npm 与 npmmirror 路径使用固定包名，均不拼接用户输入到 shell。
+- Claude Code 先按 `Get-Command claude` 的可执行文件判断 `native/npm/unknown`。官方原生路径使用
+  固定 `claude update`；未安装时使用固定 winget ID `Anthropic.ClaudeCode`。只有 npm 安装才并发
+  请求两条 registry 的结构化元数据，并对同主机 HTTPS tarball 发 `Range: bytes=0-131071` 小样本；
+  按样本字节率、再按元数据延迟选择 npm 或 npmmirror，固定包名和 registry 均不含用户输入。
 - `ClaudePluginManager` 调用 `claude plugin list --json --available` 与 marketplace JSON
   接口。插件标识、市场名和市场来源分别经过格式校验；变更后强制刷新目录。CLI 返回版本或
   source SHA 时与市场记录比较并标记更新；统一刷新会先执行官方 marketplace update，确认
@@ -1314,15 +1323,21 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 
 ### 隐私、历史与第三方边界
 
+- 设置页的“隐私与合规”面板是打包进 renderer 的静态可达说明；完整规则和中国大陆产品风险分别
+  维护在 `docs/PRIVACY.md`、`docs/LEGAL_COMPLIANCE.md`。模型消息角色显示“AI 生成”。这不等于
+  为未来导出文件添加了机器可读元数据；若新增导出，必须单独实现适用的生成内容标识。
+- 当前通用代理可导入任意节点/订阅并形成用户可配置出口，在中国大陆公开发行属于待发行者决定的
+  高风险模块。默认关闭、回环端口、不写系统代理和风险提示都是安全边界，但不构成电信业务许可；
+  工程上暂不擅自删除，公开版应优先移除，或收敛为端点白名单化的单位授权专线模式。
 - `NetworkDiagnosticsStore` 只保留 7 天、最多 40 条；写盘前再次移除 Bearer、`sk-*` 和 URL
   查询凭据。记录包含时间、服务商、掩码出口、风险、进程路径和逐项结论，不包含 cwd、完整 IP、
   请求/响应正文、OAuth Token、API Key 或代理凭据；用户可在详情弹窗立即清空。
-- 增强隐私模式持久化在 `userData/network-preflight/settings.json`。开启后完全跳过 ipapi.co、
+- 增强隐私模式持久化在 `userData/network-preflight/settings.json`，新安装默认开启。开启后完全跳过 ipapi.co、
   ipwho.is 和 ipify，官方 DNS/HTTPS/TLS/CLI 探测仍运行，地区情报显示不可用但不据此封锁。
 - `userData/network-preflight/history.json` 和设置文件使用 `0600` 意图、临时文件 +
   `rename` 原子替换。Windows 的最终 ACL 仍由当前用户配置和 Electron `userData` 目录继承。
-- 本轮没有复制 CheckCC、CC Switch 或其他开源项目的代码、图标、文案或数据文件，也没有新增
-  npm 依赖，因此无新增代码许可证归属。ipapi.co、ipwho.is 与 ipify 仅作为可关闭的远程诊断
+- 本轮没有复制 CheckCC、CC Switch、v2rayN 或其他开源项目的代码、图标、文案或数据文件；新增
+  `electron-updater` 依赖按其 MIT 许可证使用。ipapi.co、ipwho.is 与 ipify 仅作为可关闭的远程诊断
   服务，产品文档明确列出其用途；不得把它们的返回作为唯一封锁依据。
 
 ### 维护与外部依据（核对日期 2026-07-29）
@@ -1559,12 +1574,15 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
   electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
-CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建，不发布安装包。
+CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建。推送 `v*` 标签另触发
+`.github/workflows/release.yml`：标签必须等于 `v${package.version}`，验证通过后执行
+`electron-builder --publish always`，向 GitHub Release 上传 NSIS 安装包、blockmap 和
+`latest.yml`。`GH_TOKEN` 使用 Actions 临时令牌；代码签名读取可选的
+`WINDOWS_CERTIFICATE_BASE64/WINDOWS_CERTIFICATE_PASSWORD` Secrets，客户端不接触这些秘密。
 
 `npm audit --omit=dev` 当前为 0 个生产依赖漏洞。完整审计仍会报告锁定的
-electron-builder 26.15.3 依赖树中 16 个 high 构建期问题，集中在 glob/minimatch/
-brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25.1.8，因此本版不采用该
-破坏性变更。这些开发依赖不会进入生产 ASAR，后续应随打包器上游修复升级并重新跑完整审计。
+electron-builder 26.15.3 依赖树中 1 个 high 构建期问题，位于多份旧 `brace-expansion`；
+这些开发依赖不会进入生产 ASAR，后续应随打包器上游修复升级并重新跑完整审计。
 
 ## 关键取舍与限制
 
@@ -1575,9 +1593,8 @@ brace-expansion 等打包工具链；npm 建议的自动修复反而降级到 25
 - 保存或切换 Claude 接入不会热修改已运行 PowerShell 的环境；受保护启动会重建当前项目
   终端。这是避免把密钥写入可见终端输入和历史的有意取舍。
 - Windows 10 1809 之前没有所需 ConPTY API，不在支持范围；最小窗口为 820 × 640。
-- 应用自身的自动下载/安装更新、代码签名和退出后的 PTY 恢复尚未实现；ClaudeDock 发行版本检查
-  已纳入统一入口，Claude Code、Router 与插件的检测/更新已经实现，但仍不等同于 ClaudeDock
-  安装包自更新。
+- 应用自身的 GitHub Release 下载和 NSIS 重启安装已经实现；仍未配置受信任 Windows 代码签名，
+  且当前仓库为私有，二者都是公开发行前置项。退出后的 PTY 恢复仍未实现。
 
 ## 地区限制与“降智”调研结论（截至 2026-07-25）
 

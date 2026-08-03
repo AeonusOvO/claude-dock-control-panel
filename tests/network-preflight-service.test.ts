@@ -55,6 +55,12 @@ const successfulObservation = (): ConnectivityObservation => ({
 });
 
 describe('NetworkPreflightService', () => {
+  it('defaults new installations to enhanced privacy mode', () => {
+    expect(new NetworkPreflightSettingsStore(createRoot()).get()).toEqual({
+      enhancedPrivacyMode: true,
+    });
+  });
+
   it('deduplicates concurrent checks and reuses a fresh cache', async () => {
     const root = createRoot();
     let release: ((value: ConnectivityObservation) => void) | undefined;

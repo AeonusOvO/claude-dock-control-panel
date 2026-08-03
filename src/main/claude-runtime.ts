@@ -20,7 +20,6 @@ import type {
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
-  ClaudeCodeInstallSource,
   ClaudeLaunchMode,
   ClaudeMetrics,
   ClaudeModelOption,
@@ -200,6 +199,7 @@ const SOFTWARE_UPDATE_CACHE_MS = 5 * 60_000;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 
 const noInstallation = (message: string): ClaudeInstallationStatus => ({
+  installationKind: 'unknown',
   installed: false,
   message,
   security: 'not-installed',
@@ -836,11 +836,12 @@ export class ClaudeRuntime {
     }, force);
   }
 
-  public async installOrUpdateClaudeCode(
-    source: ClaudeCodeInstallSource,
-  ): Promise<{ message: string; state: SoftwareUpdateState }> {
+  public async installOrUpdateClaudeCode(): Promise<{
+    message: string;
+    state: SoftwareUpdateState;
+  }> {
     const installation = await this.diagnoseInstallation(true);
-    const message = await installOrUpdateClaudeCode(source, installation.installed);
+    const message = await installOrUpdateClaudeCode(installation, this.fetchImplementation);
     this.installationCache.clear();
     this.softwareUpdatesCache.clear();
     return { message, state: await this.getSoftwareUpdates(true) };

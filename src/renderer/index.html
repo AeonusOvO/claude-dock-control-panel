@@ -294,7 +294,10 @@
                 <strong>ClaudeDock</strong>
                 <span id="application-update-detail">正在检查应用发行版本…</span>
               </div>
-              <span class="version-pill" id="application-update-version">检测中</span>
+              <div class="software-update-row__actions">
+                <span class="version-pill" id="application-update-version">检测中</span>
+                <button id="application-update-action" type="button" hidden>下载更新</button>
+              </div>
             </div>
             <div class="software-update-row">
               <div>
@@ -304,14 +307,9 @@
               <span class="version-pill" id="claude-update-version">检测中</span>
             </div>
             <div class="install-source-row" id="claude-install-actions" hidden>
-              <label class="field field--compact" for="claude-install-source">
-                <span>安装 / 更新来源</span>
-                <select id="claude-install-source">
-                  <option value="native">官方原生安装（推荐）</option>
-                  <option value="npm">npm 官方源</option>
-                  <option value="npmmirror">npmmirror 国内镜像</option>
-                </select>
-              </label>
+              <p class="install-source-row__hint">
+                自动保留当前安装方式；npm 安装会用小流量样本在官方源与国内镜像间择优，避免重复安装。
+              </p>
               <button id="install-update-claude" type="button" hidden>一键安装</button>
             </div>
             <div class="environment-check-footer">
@@ -1786,6 +1784,14 @@
             >
               路由
             </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="legal"
+              type="button"
+              aria-selected="false"
+            >
+              隐私与合规
+            </button>
           </nav>
           <div class="settings-panels">
             <section class="settings-panel settings-panel--active" data-settings-panel="general">
@@ -1876,6 +1882,10 @@
               <div id="connection-advanced-content"></div>
             </section>
             <section class="settings-panel proxy-settings" data-settings-panel="proxy">
+              <p class="proxy-legal-risk-notice">
+                <strong>中国大陆公开发行提示：</strong>
+                通用节点、订阅与跨境出口能力存在较高合规风险；仅可使用依法取得且获授权的网络线路，免责声明不能代替许可。发布中国大陆版本前，维护者仍需决定移除此模块或改为受控企业专线模式。
+              </p>
               <p class="proxy-boundary-notice">
                 仅对勾选的 CLI、对话或 ClaudeDock 自身网络生效；不修改系统代理，不影响 Claude /
                 Codex 桌面版。
@@ -2171,6 +2181,59 @@
                 <ol id="cc-switch-residuals" class="cc-switch-residuals"></ol>
               </section>
               <div id="router-settings-content"></div>
+            </section>
+            <section class="settings-panel legal-settings" data-settings-panel="legal">
+              <div class="settings-section-heading">
+                <strong>隐私与联网说明</strong>
+                <span>公开发行前必须让用户在使用联网功能前能够持续访问这些信息。</span>
+              </div>
+              <div class="legal-card">
+                <strong>本机保存</strong>
+                <p>
+                  ClaudeDock 不要求注册账号，也不内置遥测。项目记录、对话历史和诊断记录保存在当前
+                  Windows 用户目录；服务密钥使用 Windows DPAPI 加密。删除本地记录即可停止相应处理。
+                </p>
+              </div>
+              <div class="legal-card">
+                <strong>会发送到哪里</strong>
+                <p>
+                  检查更新会访问 GitHub、npm 或
+                  npmmirror；对话内容、附件和终端请求只会发送到你选择的 AI
+                  服务或中转端点。境外服务可能构成个人信息跨境处理，请勿提交无权处理的个人信息、秘密或受限数据。
+                </p>
+              </div>
+              <div class="legal-card">
+                <strong>AI 内容提示</strong>
+                <p>
+                  对话区的模型回复会标记为“AI
+                  生成”。生成内容可能不准确，涉及医疗、法律、金融或对外发布时必须人工核验；不得移除依法需要保留的生成内容标识。
+                </p>
+              </div>
+              <div class="legal-card legal-card--risk">
+                <strong>代理功能不是普通加速器免责项</strong>
+                <p>
+                  ClaudeDock
+                  不提供节点，但当前通用节点/订阅功能能够形成用户可配置的网络出口。在中国大陆公开分发前，建议移除该模块；如仅供单位内部使用，应限制为依法取得、合同授权的企业线路与用途。
+                </p>
+              </div>
+              <div class="legal-links">
+                <button
+                  type="button"
+                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/blob/main/docs/PRIVACY.md"
+                >
+                  完整隐私说明
+                </button>
+                <button
+                  type="button"
+                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/blob/main/docs/LEGAL_COMPLIANCE.md"
+                >
+                  合规评估与官方依据
+                </button>
+              </div>
+              <p class="settings-help">
+                维护者：Cheng / ClaudeDock 项目。发布后的联系与权利请求渠道为公开仓库 GitHub
+                Issues；若改用其他主体发布，应在发行前替换为实际主体名称、地址和联系方式。
+              </p>
             </section>
           </div>
         </div>

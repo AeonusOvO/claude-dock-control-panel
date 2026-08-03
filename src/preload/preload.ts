@@ -552,8 +552,20 @@ const api: ControlPanelApi = {
   restoreMcpBackup: (backupId, cwd) =>
     ipcRenderer.invoke('mcp:backup-restore', backupId, cwd) as Promise<McpOperationResult>,
   getSoftwareUpdates: (refresh) => ipcRenderer.invoke('software:updates-get', refresh ?? false),
-  installOrUpdateClaudeCode: (source) =>
-    ipcRenderer.invoke('software:claude-install-update', source),
+  installOrUpdateClaudeCode: () => ipcRenderer.invoke('software:claude-install-update'),
+  getApplicationUpdaterState: () => ipcRenderer.invoke('software:application-updater-get'),
+  downloadApplicationUpdate: () => ipcRenderer.invoke('software:application-updater-download'),
+  installApplicationUpdate: () => ipcRenderer.invoke('software:application-updater-install'),
+  onApplicationUpdaterChanged: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      state: Parameters<typeof listener>[0],
+    ): void => {
+      listener(state);
+    };
+    ipcRenderer.on('software:application-updater-changed', callback);
+    return () => ipcRenderer.removeListener('software:application-updater-changed', callback);
+  },
   readClipboardText: () => ipcRenderer.invoke('app:clipboard-read') as Promise<string>,
   writeClipboardText: (text) => ipcRenderer.invoke('app:clipboard-write', text) as Promise<boolean>,
 };

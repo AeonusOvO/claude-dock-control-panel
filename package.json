@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,
@@ -55,6 +55,7 @@
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "6.0.0",
     "d3": "^7.9.0",
+    "electron-updater": "^6.8.9",
     "katex": "^0.18.1",
     "marked": "^18.0.7",
     "mermaid": "^11.16.0",
@@ -86,6 +87,12 @@
     "artifactName": "ClaudeDock-Setup-${version}-${arch}.${ext}",
     "directories": {
       "output": "outputs"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "AeonusOvO",
+      "repo": "claude-dock-control-panel",
+      "releaseType": "release"
     },
     "files": [
       "dist/**/*",
