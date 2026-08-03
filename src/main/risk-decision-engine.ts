@@ -124,15 +124,15 @@ export class RiskDecisionEngine {
         'official-network-policy',
       );
     }
-    if (cliPath?.proxyKind === 'claudedock') {
+    if (cliPath?.proxyKind === 'application-proxy') {
       addSignal(
-        'built-in-cli-proxy',
-        '已由内置代理适配 CLI',
-        'CLI 使用 ClaudeDock 的本地 HTTP 入站；即使上游节点是 SOCKS，Claude Code 也只会看到受支持的 HTTP 代理。',
+        'external-application-proxy',
+        'CLI 使用外部应用代理',
+        'CLI 使用用户填写的 HTTP 代理；ClaudeDock 不创建代理、隧道、节点或网络出口。',
         0,
         'info',
         'high',
-        'claudedock-proxy',
+        'application-proxy',
       );
     }
     if (observation.paths.some((path) => path.proxyKind === 'unknown')) {

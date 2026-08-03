@@ -980,66 +980,31 @@ describe('sidebar conversation list affordances', () => {
   });
 });
 
-describe('kernel drop zone versus the document-wide project drag', () => {
-  /*
-   * All four drag listeners are on `document` and share one `dragDepth` counter plus the full-screen
-   * overlay. A component-level listener calling `stopPropagation` would swallow `dragleave` without
-   * its matching `dragenter` decrement, leaving the counter positive and the overlay stranded on
-   * screen forever. So the zone is a branch inside the existing handlers, not a listener of its own.
-   */
-  it('branches inside the shared document handlers instead of adding a listener', () => {
-    expect(rendererMarkup).toContain('data-drop-zone="proxy-core"');
-    expect(rendererSource).toContain('const proxyCoreDropTarget = (event: DragEvent)');
-    expect(rendererSource).toContain(
-      'event.target.closest<HTMLElement>(\'[data-drop-zone="proxy-core"]\')',
-    );
-    // No zone-scoped listener, and nothing anywhere may stop a drag event from reaching document.
-    expect(rendererSource).not.toMatch(/proxyCoreDrop\.addEventListener\('drag/);
-    expect(rendererSource).not.toMatch(/drag\w*[\s\S]{0,400}?stopPropagation\(\)/);
+describe('external application proxy settings', () => {
+  it('keeps project dragging independent from the removed proxy-kernel drop zone', () => {
+    expect(rendererMarkup).not.toContain('data-drop-zone="proxy-core"');
+    expect(rendererSource).not.toContain('const proxyCoreDropTarget = (event: DragEvent)');
+    expect(rendererSource).toContain("document.addEventListener('drop', (event) => {");
+    expect(rendererSource).toContain('queueChatAttachmentImport(files);');
   });
 
-  it('returns from every drag handler before touching dragDepth or the overlay', () => {
-    for (const type of ['dragenter', 'dragleave', 'drop'] as const) {
-      const handler = rendererSource.slice(
-        rendererSource.indexOf(`document.addEventListener('${type}', (event) => {`),
-      );
-      const body = handler.slice(0, handler.indexOf('\n});'));
-      expect(body).toContain('const coreZone = proxyCoreDropTarget(event);');
-      // The early return has to precede the counter, or the zone still moves it.
-      expect(body.indexOf('return;')).toBeLessThan(body.indexOf('dragDepth'));
+  it('offers explicit detection, save, and connection-test actions', () => {
+    for (const id of [
+      'application-proxy-detect',
+      'application-proxy-save',
+      'application-proxy-test',
+    ]) {
+      expect(rendererMarkup).toContain(`id="${id}"`);
     }
-    // `dragover` fires continuously and has no counter, so it only re-asserts the highlight —
-    // moving between the zone's own children fires `dragleave` first and would drop it.
-    const over = rendererSource.slice(
-      rendererSource.indexOf("document.addEventListener('dragover', (event) => {"),
-    );
-    expect(over.slice(0, over.indexOf('\n});'))).toContain(
-      "proxyCoreDropTarget(event)?.classList.add('proxy-core__drop--active')",
-    );
+    expect(rendererSource).toContain('.detectApplicationProxyCandidates()');
+    expect(rendererSource).toContain('.saveApplicationProxy({');
+    expect(rendererSource).toContain('.testApplicationProxy()');
   });
 
-  it('installs the kernel on a zone drop and never falls through to adding a project', () => {
-    const drop = rendererSource.slice(
-      rendererSource.indexOf("document.addEventListener('drop', (event) => {"),
-    );
-    const body = drop.slice(0, drop.indexOf('\n});'));
-    expect(body).toContain('installProxyCoreFromFile(event.dataTransfer?.files[0]);');
-    expect(body.indexOf('installProxyCoreFromFile')).toBeLessThan(body.indexOf('addProject'));
-    expect(body.indexOf('installProxyCoreFromFile')).toBeLessThan(
-      body.indexOf('queueChatAttachmentImport'),
-    );
-    // The same install path backs 「选择文件…」, so both routes resolve the real path identically.
-    expect(rendererSource).toContain('const filePath = window.controlPanel.getDroppedPath(file);');
-    expect(rendererSource).toContain('installProxyCoreFromFile(proxyCoreFile.files?.[0]);');
-  });
-
-  it('offers in-app fastest-route installation without requiring the browser escape hatch', () => {
-    expect(rendererMarkup).toContain('id="proxy-core-install"');
-    expect(rendererSource).toContain('.installProxyCore()');
-    expect(rendererSource).toContain("showToast('已通过最快可用线路安装 Xray-core')");
-    expect(rendererMarkup).toContain('id="proxy-scope-summary"');
-    expect(rendererMarkup).toContain('id="proxy-ipv6-toggle"');
-    expect(rendererSource).toContain('.setWindowsIpv6Disabled(disabling)');
+  it('disables the unsupported CLI scope when SOCKS5 is selected', () => {
+    expect(rendererSource).toContain("applicationProxyProtocol.value === 'http'");
+    expect(rendererSource).toContain('applicationProxyScopeCli.disabled = !cliSupported;');
+    expect(rendererSource).toContain('applicationProxyScopeCli.checked = false;');
   });
 });
 

@@ -21,6 +21,7 @@ const createDriver = (): ApplicationUpdaterDriver & {
       listeners.set(event, [...(listeners.get(event) ?? []), listener]);
     },
     quitAndInstall: vi.fn(),
+    setFeedURL: vi.fn(),
   };
 };
 
@@ -47,11 +48,27 @@ describe('ApplicationUpdaterService', () => {
       driver,
       enabled: true,
       onChange: ({ phase }) => changes.push(phase),
+      selectSource: async () => ({
+        feed: { provider: 'generic', url: 'https://updates.example.com/' },
+        id: 'china',
+        label: '中国大陆更新镜像',
+        throughputBps: 2_000_000,
+      }),
     });
 
     const state = await service.checkAndDownload();
 
-    expect(state).toMatchObject({ latestVersion: '3.6.0', percent: 100, phase: 'downloaded' });
+    expect(state).toMatchObject({
+      latestVersion: '3.6.0',
+      percent: 100,
+      phase: 'downloaded',
+      sourceId: 'china',
+      sourceThroughputBps: 2_000_000,
+    });
+    expect(driver.setFeedURL).toHaveBeenCalledWith({
+      provider: 'generic',
+      url: 'https://updates.example.com/',
+    });
     expect(changes).toContain('downloading');
     expect(driver.autoDownload).toBe(false);
     expect(driver.autoInstallOnAppQuit).toBe(false);

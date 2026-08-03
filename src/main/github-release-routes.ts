@@ -1,5 +1,3 @@
-import { DEFAULT_XRAY_CORE_MIRRORS } from './proxy/xray-core-sources';
-
 export type GitHubReleaseFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface GitHubReleaseRoute {
@@ -27,21 +25,15 @@ export const buildGitHubReleaseRoutes = (candidate: string): GitHubReleaseRoute[
     return [];
   }
   const officialPrefix = official.pathname.slice(0, official.pathname.lastIndexOf('/') + 1);
-  const routes = DEFAULT_XRAY_CORE_MIRRORS.map(({ host, label }) => ({
-    allowedHosts: [host, GITHUB_HOST, RELEASE_ASSET_HOST],
-    allowedPathPrefixes: [`/https://${GITHUB_HOST}${officialPrefix}`, officialPrefix, '/'],
-    host,
-    label,
-    url: `https://${host}/${official.toString()}`,
-  }));
-  routes.push({
-    allowedHosts: [GITHUB_HOST, RELEASE_ASSET_HOST],
-    allowedPathPrefixes: [officialPrefix, '/'],
-    host: GITHUB_HOST,
-    label: '官方直连 · github.com',
-    url: official.toString(),
-  });
-  return routes;
+  return [
+    {
+      allowedHosts: [GITHUB_HOST, RELEASE_ASSET_HOST],
+      allowedPathPrefixes: [officialPrefix, '/'],
+      host: GITHUB_HOST,
+      label: '官方直连 · github.com',
+      url: official.toString(),
+    },
+  ];
 };
 
 const finalUrlAllowed = (route: GitHubReleaseRoute, candidate: string): boolean => {

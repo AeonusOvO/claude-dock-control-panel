@@ -1,4 +1,5 @@
 import type { ApplicationUpdaterState } from '../shared/contracts';
+import type { ApplicationUpdateSourceSelection } from './application-update-sources';
 
 interface UpdateInfoView {
   version?: unknown;
@@ -24,6 +25,7 @@ export interface ApplicationUpdaterDriver {
   downloadUpdate: () => Promise<string[]>;
   on: (event: string, listener: (payload?: unknown) => void) => unknown;
   quitAndInstall: (isSilent?: boolean, isForceRunAfter?: boolean) => void;
+  setFeedURL: (options: Record<string, unknown>) => void;
 }
 
 interface ApplicationUpdaterOptions {
@@ -31,6 +33,7 @@ interface ApplicationUpdaterOptions {
   driver: ApplicationUpdaterDriver;
   enabled: boolean;
   onChange: (state: ApplicationUpdaterState) => void;
+  selectSource?: () => Promise<ApplicationUpdateSourceSelection>;
 }
 
 const errorMessage = (value: unknown): string =>
@@ -78,10 +81,24 @@ export class ApplicationUpdaterService {
     this.operation = (async () => {
       this.updateState({
         currentVersion: this.options.currentVersion,
-        message: '正在从发布通道检查更新…',
+        message: '正在测试 GitHub 与可信 HTTPS 更新源…',
         phase: 'checking',
       });
       try {
+        const source = await this.options.selectSource?.();
+        if (source) {
+          this.options.driver.setFeedURL(source.feed);
+          this.updateState({
+            currentVersion: this.options.currentVersion,
+            message: source.throughputBps
+              ? `已选择 ${source.label}，正在检查更新…`
+              : `使用 ${source.label} 检查更新…`,
+            phase: 'checking',
+            sourceId: source.id,
+            sourceLabel: source.label,
+            sourceThroughputBps: source.throughputBps,
+          });
+        }
         const result = await this.options.driver.checkForUpdates();
         if (!result) {
           throw new Error('更新服务未返回检查结果。');
@@ -95,6 +112,9 @@ export class ApplicationUpdaterService {
               latestVersion,
               message: 'ClaudeDock 已是当前发布通道的最新版本。',
               phase: 'up-to-date',
+              sourceId: this.state.sourceId,
+              sourceLabel: this.state.sourceLabel,
+              sourceThroughputBps: this.state.sourceThroughputBps,
             });
           }
           return this.getState();
@@ -104,6 +124,9 @@ export class ApplicationUpdaterService {
           latestVersion,
           message: latestVersion ? `正在下载 ClaudeDock ${latestVersion}…` : '正在下载更新…',
           phase: 'downloading',
+          sourceId: this.state.sourceId,
+          sourceLabel: this.state.sourceLabel,
+          sourceThroughputBps: this.state.sourceThroughputBps,
         });
         await this.options.driver.downloadUpdate();
         return this.getState();
@@ -113,6 +136,9 @@ export class ApplicationUpdaterService {
           latestVersion: this.state.latestVersion,
           message: `应用更新失败：${errorMessage(error)}`,
           phase: 'error',
+          sourceId: this.state.sourceId,
+          sourceLabel: this.state.sourceLabel,
+          sourceThroughputBps: this.state.sourceThroughputBps,
         });
         return this.getState();
       } finally {
@@ -139,6 +165,9 @@ export class ApplicationUpdaterService {
         latestVersion,
         message: latestVersion ? `发现 ClaudeDock ${latestVersion}。` : '发现可用更新。',
         phase: 'available',
+        sourceId: this.state.sourceId,
+        sourceLabel: this.state.sourceLabel,
+        sourceThroughputBps: this.state.sourceThroughputBps,
       });
     });
     driver.on('update-not-available', (payload) => {
@@ -149,6 +178,9 @@ export class ApplicationUpdaterService {
         latestVersion,
         message: 'ClaudeDock 已是当前发布通道的最新版本。',
         phase: 'up-to-date',
+        sourceId: this.state.sourceId,
+        sourceLabel: this.state.sourceLabel,
+        sourceThroughputBps: this.state.sourceThroughputBps,
       });
     });
     driver.on('download-progress', (payload) => {
@@ -162,6 +194,9 @@ export class ApplicationUpdaterService {
         message: `正在下载更新${percent === undefined ? '' : ` · ${Math.round(percent)}%`}…`,
         percent,
         phase: 'downloading',
+        sourceId: this.state.sourceId,
+        sourceLabel: this.state.sourceLabel,
+        sourceThroughputBps: this.state.sourceThroughputBps,
         totalBytes: numericValue(progress?.total),
       });
     });
@@ -175,6 +210,9 @@ export class ApplicationUpdaterService {
         message: `ClaudeDock ${latestVersion ?? '新版本'} 已下载并完成校验，可以重启安装。`,
         percent: 100,
         phase: 'downloaded',
+        sourceId: this.state.sourceId,
+        sourceLabel: this.state.sourceLabel,
+        sourceThroughputBps: this.state.sourceThroughputBps,
       });
     });
     driver.on('error', (payload) => {
@@ -183,6 +221,9 @@ export class ApplicationUpdaterService {
         latestVersion: this.state.latestVersion,
         message: `应用更新失败：${errorMessage(payload)}`,
         phase: 'error',
+        sourceId: this.state.sourceId,
+        sourceLabel: this.state.sourceLabel,
+        sourceThroughputBps: this.state.sourceThroughputBps,
       });
     });
   }

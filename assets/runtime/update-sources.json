@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "github",
+      "label": "GitHub 官方发布",
+      "provider": "github",
+      "owner": "AeonusOvO",
+      "repo": "claude-dock-control-panel"
+    }
+  ]
+}

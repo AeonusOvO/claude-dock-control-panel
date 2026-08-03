@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  ApplicationProxyState,
   ClaudeConfigResult,
   ClaudeConnectionAdvice,
   ClaudeConnectionHistoryEntry,
@@ -31,9 +32,6 @@ import type {
   McpBackupView,
   McpOperationResult,
   McpTogglePreview,
-  ProxyAuditRecord,
-  ProxyControlView,
-  ProxyImportPreview,
   OperationResult,
   WorkspaceProject,
   WorkspaceResult,
@@ -69,44 +67,16 @@ const api: ControlPanelApi = {
   },
   pauseDownload: (taskId) => ipcRenderer.invoke('download:pause', taskId),
   resumeDownload: (taskId) => ipcRenderer.invoke('download:resume', taskId),
-  getProxyState: () => ipcRenderer.invoke('proxy:get-state') as Promise<ProxyControlView>,
-  previewProxyImport: (text) =>
-    ipcRenderer.invoke('proxy:preview-import', text) as Promise<ProxyImportPreview>,
-  previewProxySubscription: (url) =>
-    ipcRenderer.invoke('proxy:preview-subscription', url) as Promise<ProxyImportPreview>,
-  saveProxyProfiles: (profiles, subscription) =>
-    ipcRenderer.invoke('proxy:save-profiles', profiles, subscription),
-  refreshProxySubscriptions: () => ipcRenderer.invoke('proxy:refresh-subscriptions'),
-  removeProxyProfile: (profileId) => ipcRenderer.invoke('proxy:remove-profile', profileId),
-  selectProxyProfile: (profileId) => ipcRenderer.invoke('proxy:select-profile', profileId),
-  setProxyScope: (scope) => ipcRenderer.invoke('proxy:set-scope', scope),
-  probeProxyCoreSources: () => ipcRenderer.invoke('proxy:probe-core-sources'),
-  installProxyCore: () => ipcRenderer.invoke('proxy:install-core'),
-  installProxyCoreFile: (filePath) => ipcRenderer.invoke('proxy:install-core-file', filePath),
-  detectBootstrapProxyCandidates: () =>
-    ipcRenderer.invoke('proxy:detect-bootstrap-proxy') as Promise<string[]>,
-  startBuiltInProxy: (manualCorePath, acceptExternalTunnelChain) =>
-    ipcRenderer.invoke('proxy:start', manualCorePath, acceptExternalTunnelChain),
-  stopBuiltInProxy: () => ipcRenderer.invoke('proxy:stop'),
-  testBuiltInProxyPerformance: () => ipcRenderer.invoke('proxy:test-performance'),
-  runProxyLeakAudit: () => ipcRenderer.invoke('proxy:run-audit'),
-  acceptProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:accept-audit', recordId),
-  deleteProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:delete-audit', recordId),
-  getWindowsIpv6State: () => ipcRenderer.invoke('network:get-ipv6-state'),
-  setWindowsIpv6Disabled: (disabled) => ipcRenderer.invoke('network:set-ipv6-disabled', disabled),
-  onProxyStateChanged: (listener) => {
-    const callback = (_event: Electron.IpcRendererEvent, state: ProxyControlView): void => {
+  getApplicationProxyState: () => ipcRenderer.invoke('application-proxy:get'),
+  saveApplicationProxy: (input) => ipcRenderer.invoke('application-proxy:save', input),
+  testApplicationProxy: () => ipcRenderer.invoke('application-proxy:test'),
+  detectApplicationProxyCandidates: () => ipcRenderer.invoke('application-proxy:detect'),
+  onApplicationProxyChanged: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, state: ApplicationProxyState): void => {
       listener(state);
     };
-    ipcRenderer.on('proxy:state-changed', callback);
-    return () => ipcRenderer.removeListener('proxy:state-changed', callback);
-  },
-  onProxyAuditRequired: (listener) => {
-    const callback = (_event: Electron.IpcRendererEvent, record: ProxyAuditRecord): void => {
-      listener(record);
-    };
-    ipcRenderer.on('proxy:audit-required', callback);
-    return () => ipcRenderer.removeListener('proxy:audit-required', callback);
+    ipcRenderer.on('application-proxy:changed', callback);
+    return () => ipcRenderer.removeListener('application-proxy:changed', callback);
   },
   createArtifact: (html) => ipcRenderer.invoke('artifact:create', html),
   destroyArtifact: (artifactId) => ipcRenderer.invoke('artifact:destroy', artifactId),

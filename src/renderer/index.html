@@ -1882,213 +1882,124 @@
               <div id="connection-advanced-content"></div>
             </section>
             <section class="settings-panel proxy-settings" data-settings-panel="proxy">
-              <p class="proxy-legal-risk-notice">
-                <strong>中国大陆公开发行提示：</strong>
-                通用节点、订阅与跨境出口能力存在较高合规风险；仅可使用依法取得且获授权的网络线路，免责声明不能代替许可。发布中国大陆版本前，维护者仍需决定移除此模块或改为受控企业专线模式。
+              <p class="proxy-boundary-notice">
+                <strong>仅连接用户已有代理：</strong>
+                ClaudeDock
+                不再提供节点、订阅、代理内核、隧道或跨境线路，也不会创建或销售网络出口。请只填写你有权使用且符合所在地法律及服务条款的
+                HTTP / SOCKS5 代理。
               </p>
               <p class="proxy-boundary-notice">
-                仅对勾选的 CLI、对话或 ClaudeDock 自身网络生效；不修改系统代理，不影响 Claude /
-                Codex 桌面版。
+                配置只作用于勾选的 ClaudeDock 进程与会话；不修改 Windows 系统代理、路由表、DNS、
+                网卡或其他软件。旧版本保存的节点与 Xray 数据不会被启用，也不会在此处读取。
               </p>
-              <section class="proxy-settings__section" aria-labelledby="proxy-node-title">
+              <section class="proxy-settings__section" aria-labelledby="application-proxy-title">
                 <div class="settings-section-heading">
-                  <strong id="proxy-node-title">节点与订阅</strong>
-                  <span>先预览并勾选，再保存到本机；凭据由 Windows DPAPI 加密。</span>
-                  <button id="proxy-refresh-subscriptions" type="button">更新订阅</button>
+                  <strong id="application-proxy-title">应用代理</strong>
+                  <span>适用于 V2RayN、Clash、单位网关等已经运行并提供本机或授权端口的代理。</span>
                 </div>
-                <div class="proxy-node-controls">
-                  <select id="proxy-profile-select" aria-label="当前代理节点"></select>
-                  <button id="proxy-remove-profile" type="button">删除节点</button>
-                </div>
-                <label class="field" for="proxy-import-text">
-                  <span>分享链接或 Clash proxies 段</span>
-                  <textarea
-                    id="proxy-import-text"
-                    rows="4"
-                    maxlength="2097152"
-                    spellcheck="false"
-                    placeholder="粘贴 vmess://、vless://、trojan://、ss://、socks://、http:// 或 proxies:"
-                  ></textarea>
+                <label class="settings-row" for="application-proxy-enabled">
+                  <span
+                    ><strong>启用应用代理</strong
+                    ><small>关闭时恢复各作用域原有的系统代理或直连策略。</small></span
+                  >
+                  <input id="application-proxy-enabled" type="checkbox" />
                 </label>
                 <div class="proxy-import-actions">
-                  <button id="proxy-preview-import" type="button">预览导入</button>
-                  <input
-                    id="proxy-subscription-url"
-                    type="url"
-                    maxlength="2048"
-                    placeholder="https://example.com/subscription"
-                    aria-label="订阅地址"
-                  />
-                  <button id="proxy-preview-subscription" type="button">下载并预览订阅</button>
-                </div>
-                <p id="proxy-import-issues" class="proxy-import-issues" role="status"></p>
-                <div id="proxy-import-preview" class="proxy-import-preview"></div>
-                <button class="dialog-primary" id="proxy-save-selected" type="button" disabled>
-                  保存勾选节点
-                </button>
-              </section>
-              <section class="proxy-settings__section" aria-labelledby="proxy-core-title">
-                <div class="settings-section-heading">
-                  <strong id="proxy-core-title">Xray-core 内核</strong>
-                  <span id="proxy-core-status">正在检查内核…</span>
-                  <button id="proxy-core-toggle" type="button" hidden>重新安装</button>
-                </div>
-                <div class="proxy-core" id="proxy-core">
-                  <div
-                    class="proxy-core__drop"
-                    id="proxy-core-drop"
-                    data-drop-zone="proxy-core"
-                    role="group"
-                    aria-label="拖入 Xray-core 内核文件"
-                  >
-                    <strong>把 Xray-windows-64.zip 或 xray.exe 拖到这里</strong>
-                    <small>无法联网时，可在别的机器上下载后拖进来；安装前会校验能否运行。</small>
-                    <button id="proxy-core-pick" type="button">选择文件…</button>
+                  <label class="field" for="application-proxy-protocol">
+                    <span>协议</span>
+                    <select id="application-proxy-protocol">
+                      <option value="http">HTTP</option>
+                      <option value="socks5">SOCKS5</option>
+                    </select>
+                  </label>
+                  <label class="field" for="application-proxy-host">
+                    <span>地址</span>
                     <input
-                      id="proxy-core-file"
-                      type="file"
-                      accept=".zip,.exe"
-                      hidden
-                      aria-hidden="true"
-                      tabindex="-1"
-                    />
-                  </div>
-                  <div class="proxy-core__sources">
-                    <div class="proxy-core__sources-head">
-                      <button id="proxy-core-probe" type="button">测试下载线路</button>
-                      <button id="proxy-core-install" class="dialog-primary" type="button">
-                        测速并安装
-                      </button>
-                      <span id="proxy-core-probe-hint">下载前会自动测速，只用探得通的线路。</span>
-                    </div>
-                    <ul id="proxy-core-source-list" class="proxy-core__source-list"></ul>
-                    <div class="proxy-core__mirror-add">
-                      <input
-                        id="proxy-core-mirror-host"
-                        type="text"
-                        maxlength="253"
-                        spellcheck="false"
-                        placeholder="添加镜像域名，如 gh.example.com"
-                        aria-label="添加自定义镜像域名"
-                      />
-                      <button id="proxy-core-mirror-add" type="button">添加</button>
-                    </div>
-                  </div>
-                  <label class="field" for="proxy-bootstrap-url">
-                    <span>内核下载引导代理（可选）</span>
-                    <input
-                      id="proxy-bootstrap-url"
+                      id="application-proxy-host"
                       type="text"
-                      maxlength="512"
+                      maxlength="253"
                       spellcheck="false"
-                      placeholder="http://127.0.0.1:端口 或 socks5://127.0.0.1:端口"
+                      placeholder="127.0.0.1 或代理主机名"
                     />
                   </label>
-                  <div class="proxy-core__bootstrap-actions">
-                    <button id="proxy-bootstrap-detect" type="button">检测本机代理</button>
-                    <span id="proxy-bootstrap-hint"
-                      >留空即直连。仅用于下载内核，检测结果需你点选后才会填入。</span
-                    >
-                  </div>
-                  <label class="field" for="proxy-manual-core-path">
-                    <span>手动指定 xray.exe 路径（可选）</span>
+                  <label class="field" for="application-proxy-port">
+                    <span>端口</span>
                     <input
-                      id="proxy-manual-core-path"
+                      id="application-proxy-port"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      inputmode="numeric"
+                      placeholder="例如 7890"
+                    />
+                  </label>
+                </div>
+                <div class="proxy-import-actions">
+                  <label class="field" for="application-proxy-username">
+                    <span>账号（可选）</span>
+                    <input
+                      id="application-proxy-username"
                       type="text"
+                      maxlength="256"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <label class="field" for="application-proxy-password">
+                    <span>密码（可选）</span>
+                    <input
+                      id="application-proxy-password"
+                      type="password"
                       maxlength="4096"
-                      spellcheck="false"
-                      placeholder="留空则使用上面已安装的内核"
+                      autocomplete="new-password"
+                      placeholder="留空则保留已保存密码"
                     />
                   </label>
                 </div>
-              </section>
-              <section class="proxy-settings__section" aria-labelledby="proxy-runtime-title">
-                <div class="settings-section-heading">
-                  <strong id="proxy-runtime-title">当前状态</strong>
-                  <span id="proxy-runtime-status">内置代理已停止。</span>
-                </div>
+                <p id="application-proxy-credential-status" class="settings-help">
+                  未保存代理凭据。
+                </p>
                 <div class="proxy-runtime-actions">
-                  <button class="dialog-primary" id="proxy-start" type="button">
-                    启动内置代理
+                  <button id="application-proxy-detect" type="button">检测本机代理</button>
+                  <button class="dialog-primary" id="application-proxy-save" type="button">
+                    保存并应用
                   </button>
-                  <button id="proxy-stop" type="button">停止</button>
-                  <button id="proxy-test-performance" type="button">节点与更新源测速</button>
+                  <button id="application-proxy-test" type="button">测试 GitHub 连接</button>
                 </div>
-                <div class="proxy-external-environment" data-mode="none">
-                  <div>
-                    <strong>外部代理协同</strong>
-                    <span id="proxy-external-status">正在检测 V2RayN、系统代理与 TUN…</span>
-                  </div>
-                  <button id="proxy-external-refresh" type="button">重新检测</button>
-                  <p id="proxy-external-detail" class="settings-help"></p>
-                </div>
-                <div class="proxy-performance" id="proxy-performance" hidden>
-                  <strong id="proxy-performance-summary">尚未测速。</strong>
-                  <ul id="proxy-performance-details"></ul>
-                </div>
-                <pre
-                  id="proxy-runtime-log"
-                  class="proxy-runtime-log"
-                  aria-label="Xray 诊断日志"
-                ></pre>
+                <div id="application-proxy-candidates" class="proxy-performance" hidden></div>
+                <p id="application-proxy-test-result" class="settings-help" role="status">
+                  保存后可通过独立会话测试该端口，不会发送模型请求。
+                </p>
               </section>
-              <section class="proxy-settings__section" aria-labelledby="proxy-scope-title">
+              <section
+                class="proxy-settings__section"
+                aria-labelledby="application-proxy-scope-title"
+              >
                 <div class="settings-section-heading">
-                  <strong id="proxy-scope-title">作用域</strong>
+                  <strong id="application-proxy-scope-title">作用域</strong>
                   <span>系统代理始终不在可选范围内。</span>
                 </div>
-                <label class="settings-row" for="proxy-scope-cli">
+                <label class="settings-row" for="application-proxy-scope-cli">
                   <span
-                    ><strong>CLI 进程</strong><small>Claude Code、Codex 与项目终端。</small></span
+                    ><strong>CLI 进程</strong
+                    ><small>Claude Code、Codex 与项目终端；仅支持 HTTP 代理。</small></span
                   >
-                  <input id="proxy-scope-cli" type="checkbox" checked />
+                  <input id="application-proxy-scope-cli" type="checkbox" checked />
                 </label>
-                <label class="settings-row" for="proxy-scope-application">
+                <label class="settings-row" for="application-proxy-scope-application">
                   <span
                     ><strong>ClaudeDock 自身网络</strong
-                    ><small>更新、目录与订阅拉取；默认关闭。</small></span
+                    ><small>应用更新、目录与安装包下载；默认关闭。</small></span
                   >
-                  <input id="proxy-scope-application" type="checkbox" />
+                  <input id="application-proxy-scope-application" type="checkbox" />
                 </label>
-                <label class="settings-row" for="proxy-scope-conversation">
+                <label class="settings-row" for="application-proxy-scope-conversation">
                   <span
                     ><strong>对话工作台</strong
                     ><small>“对话”选项卡的接口请求；默认关闭。</small></span
                   >
-                  <input id="proxy-scope-conversation" type="checkbox" />
+                  <input id="application-proxy-scope-conversation" type="checkbox" />
                 </label>
-                <label class="field" for="proxy-ip-mode">
-                  <span>内置隧道 IP 策略</span>
-                  <select id="proxy-ip-mode">
-                    <option value="ipv4_only">仅 IPv4（默认稳妥）</option>
-                    <option value="dual_stack">IPv4 / IPv6 自动择优</option>
-                    <option value="prefer_ipv6">双栈并优先 IPv6</option>
-                  </select>
-                  <small>只重启 ClaudeDock 内置 Xray；不会修改 Windows 网卡或其他代理软件。</small>
-                </label>
-                <details class="proxy-ipv6-advanced">
-                  <summary>Windows 全局 IPv6（高级，不建议日常修改）</summary>
-                  <div class="settings-row settings-row--action">
-                    <span>
-                      <strong>系统网卡 IPv6 绑定</strong>
-                      <small id="proxy-ipv6-status">正在读取当前开关状态…</small>
-                    </span>
-                    <button id="proxy-ipv6-toggle" type="button">读取中…</button>
-                  </div>
-                  <p class="settings-help">
-                    这会请求管理员授权并可能短暂断网。Windows 通常建议保留
-                    IPv6；仅在泄露体检明确提示、且隧道“仅 IPv4”仍不足时使用。
-                  </p>
-                </details>
-                <p id="proxy-scope-summary" class="settings-help">正在确认代理作用域与 IP 策略…</p>
-              </section>
-              <section class="proxy-settings__section" aria-labelledby="proxy-audit-title">
-                <div class="settings-section-heading">
-                  <strong id="proxy-audit-title">泄露体检</strong>
-                  <span id="proxy-audit-summary">尚未体检。</span>
-                </div>
-                <button id="proxy-run-audit" type="button">立即体检</button>
-                <ol id="proxy-audit-history" class="proxy-audit-history"></ol>
+                <p id="application-proxy-scope-summary" class="settings-help">代理尚未启用。</p>
               </section>
             </section>
             <section class="settings-panel router-settings" data-settings-panel="router">
@@ -2210,10 +2121,10 @@
                 </p>
               </div>
               <div class="legal-card legal-card--risk">
-                <strong>代理功能不是普通加速器免责项</strong>
+                <strong>外部代理仍需合法使用</strong>
                 <p>
-                  ClaudeDock
-                  不提供节点，但当前通用节点/订阅功能能够形成用户可配置的网络出口。在中国大陆公开分发前，建议移除该模块；如仅供单位内部使用，应限制为依法取得、合同授权的企业线路与用途。
+                  ClaudeDock 只连接用户已有的 HTTP / SOCKS5
+                  代理，不提供节点、订阅、内核、隧道或出口；这不代表代理用途当然合法。用户仍应确认代理来自依法取得、合同授权的企业线路、本机工具或其他合法网络服务，并遵守所在地法律与服务条款。
                 </p>
               </div>
               <div class="legal-links">
@@ -2245,32 +2156,6 @@
             </button>
             <small id="settings-unsaved-indicator" hidden>*0 项未保存</small>
           </span>
-        </footer>
-      </div>
-    </dialog>
-
-    <dialog
-      class="proxy-audit-dialog"
-      id="proxy-audit-dialog"
-      aria-labelledby="proxy-audit-dialog-title"
-      aria-describedby="proxy-audit-dialog-description"
-    >
-      <div class="proxy-audit-dialog__shell">
-        <header>
-          <div>
-            <span class="step-kicker">接入前检查</span>
-            <strong id="proxy-audit-dialog-title">代理泄露体检报告</strong>
-            <p id="proxy-audit-dialog-description">
-              发现风险时，“返回调整”会先断开正在运行的代理隧道。
-            </p>
-          </div>
-        </header>
-        <div id="proxy-audit-items" class="proxy-audit-items"></div>
-        <footer>
-          <button id="proxy-audit-return" type="button" autofocus>返回调整</button>
-          <button class="dialog-primary" id="proxy-audit-accept" type="button">
-            我已知晓，仍要继续接入
-          </button>
         </footer>
       </div>
     </dialog>

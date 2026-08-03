@@ -1,5 +1,8 @@
 # ClaudeDock 技术说明
 
+当前架构版本：4.0.0（2026-08-03）。4.0.0 删除通用代理运行栈，改为用户已有外部代理配置，
+并加入 GitHub / 自建 HTTPS 应用更新源自动择优。
+
 ## 技术栈
 
 - Electron 43：桌面窗口、系统托盘、目录选择与进程生命周期。
@@ -47,7 +50,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ArtifactService ── 自定义协议 / iframe CSP / 离线库 / webRequest 审计与断网
         ├── BusyRegistry ── 下载/安装/卸载/配置/代理/对话的唯一忙碌租约真值
         ├── DownloadEngine + DownloadJournal ── 续传 / 进度 / 来源、尺寸与 SHA-256 闸门
-        ├── ProxyStore + XraySidecar + LeakAuditService ── DPAPI / CLI 代理 / 泄露裁决
+        ├── ApplicationProxyStore ── DPAPI / 外部 HTTP-SOCKS5 代理作用域
         ├── McpManager ── 多作用域发现 / CLI 变更 / 健康检查 / 备份回滚
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
@@ -55,7 +58,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
         ├── SoftwareUpdates ── ClaudeDock / Claude Code / Router 版本检测与安装源
-        ├── ApplicationUpdaterService ── GitHub Releases / NSIS 差分下载 / 重启安装
+        ├── ApplicationUpdaterService + SourceSelector ── GitHub/HTTPS 镜像择优 / NSIS 更新
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── Tray 聚合状态与项目菜单
@@ -275,141 +278,44 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   是两个 UI 入口。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
   快照与即时操作边界，没有新增第二套 Router/诊断状态。
 
-### 3.0 共享下载、代理与 MCP 服务
+### 4.0 共享下载、外部应用代理与 MCP 服务
 
-- `DownloadEngine` 只接受 HTTPS、成对的 host/path 白名单、`userData` 内目标、尺寸上限与可选
+- `DownloadEngine` 只接受 HTTPS、成对 host/path 白名单、`userData` 内目标、尺寸上限与可选
   精确字节/SHA-256。它基于 Electron `DownloadItem` 计算 EMA 速度、ETA 和真实百分比；未知
-  `Content-Length` 以 `-1` 表达不确定态。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
-  `.partial` 原子改名为最终文件；失败或取消不会留下可执行的最终路径。任务连续 45 秒没有收到
-  字节会进入自动续传（最多 12 次、指数退避），并先保留磁盘前缀，避免慢线路每次从零开始。
-- `src/main/github-release-routes.ts` 对受管 GitHub Release 资产构造 8 条前缀镜像加官方直连，全部
-  通过 `session.defaultSession.fetch()` 做 128 KiB Range 吞吐采样，最快者才交给同一 session 的
-  `DownloadItem`。CCR、Codex、CC Switch 的 GitHub API 元数据读取也注入这一 Electron fetch，因而
-  继承 Windows 系统代理/PAC；不再由 Node 全局 `fetch` 绕开用户代理。恢复日志在初始 `setProxy()`
-  完成后才调用 `createInterruptedDownload()`，避免代理规则刷新关闭刚恢复的连接。
+  `Content-Length` 以 `-1` 表达。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
+  `.partial` 原子改名；失败或取消不会留下可执行的最终路径。连续 45 秒无字节会进入最多 12 次
+  指数退避续传，并保留磁盘前缀。
+- `src/main/github-release-routes.ts` 现在只为受管 GitHub Release 资产建立官方
+  `github.com → release-assets.githubusercontent.com` 白名单路径，不再把第三方前缀反代作为
+  默认下载安装线路。请求使用 `session.defaultSession`，因此继承 Windows system proxy 或用户
+  明确配置的 ClaudeDock 应用代理。
 - `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
-  `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界记录
-  只会被丢弃，部分文件从不当作完成产物执行。CCR、Codex、Xray 和 CC Switch 的受管资源共用
-  此内核；下载的 `resumable` 租约与后续安装的 `blocking` 租约严格分离。
-- `ProxyStore` 把 vmess/vless/ss/trojan 节点结构和作用域写入 `userData/proxy/`，秘密字段只以
-  Electron `safeStorage` 密文保存。分享链接、Clash `proxies` 子集和 HTTPS 订阅由项目自研解析器
-  处理；不引入或复制 GPL 代理实现。`XraySidecar` 只使用 MPL-2.0 的独立 Xray-core 进程，在
-  `127.0.0.1` 暴露本机 HTTP 入站，运行配置为临时文件并在停止后清理。
-- 传输安全是三态 `ProxySecurity`（`none` / `tls` / `reality`），不是布尔量。解析器按 v2rayN
-  `VLESSFmt` + `BaseFmt.ResolveUriQuery` 的字段语义保留 `flow`、`encryption`、`fp`、`pbk`、
-  `sid`、`spx`、`alpn`、`host`、`headerType` 与 `allowInsecure`，Clash 侧读取等价的
-  `public-key` / `short-id` / `client-fingerprint` / `skip-cert-verify`。旧版存档在加载时按
-  `tls` 布尔补全 `security`。REALITY 节点缺少公钥在 `normalizeProxyProfile` 阶段即拒绝。
-- 生成配置对齐 `V2rayOutboundService.FillBoundStreamSettings`：`security` 只选择
-  `realitySettings` 或 `tlsSettings` 之一，两者不同时出现（给 REALITY 节点发 `tls` 会以证书
-  错误告终而不是回退）；REALITY 的空 `fingerprint` 回落到 `chrome`；XTLS `flow` 只在
-  `security !== 'none'` 时写入；VLESS 的 `encryption` 缺省为字面量 `none`。
-- 启动带世代号：`stop()` 自增世代并连带取消它正在等待的 Xray-core 下载，`start()` 在每个
-  await 边界比对世代，因此在下载界面取消后不会有旧的启动尝试继续跑完并静默进入 `ready`。
-  失败或取消的终态是 `stopped` 而非 `error`，界面据此重新提供「启动」。
-- 内核引导是多源的：`src/main/proxy/xray-core-sources.ts` 维护 8 条国内前缀反代镜像加官方直连，
-  镜像形态是把完整 GitHub URL（含 `https://`）拼在镜像域名之后。每条源自带成对的
-  `allowedHosts` / `allowedPathPrefixes`，因为 `DownloadEngine` 逐跳校验整条重定向链；官方源必须
-  同时放行 `github.com` 与 `release-assets.githubusercontent.com`。用户在面板添加的镜像域名存进
-  `ProxyStoreView.extraCoreSources`，与内置源一起参与探测——这些域名 churn 极高，源表必须能不发版更新。
-- 探测分两段，都用 `session.defaultSession.fetch()`（与真实下载同一条网络路径）：
-  第一段 GET 同目录下 299 字节的 `.dgst`，用 `/^SHA2-256=\s*([0-9a-f]{64})$/m` 取值（该文件是四行
-  `ALGO= hex`、**没有文件名字段**，不能按列切分），并要求它等于代码里固定的
-  `XRAY_CORE_RELEASE.sha256`。这一段把连通性与镜像完整性合成一次请求，任何返回错误摘要的镜像当场
-  出局；而 zip 的校验值始终取自代码常量，不采信镜像给的摘要，避开「同一条信道既发文件又发校验值」。
-  第二段对第一段里**全部通过**的线路发 `Range: bytes=0-262143` 实测速率，3 秒或 256 KiB 先到先止；
-  只有这样才能避免用摘要延迟预筛时错过真正高吞吐的镜像。
-- **排序以实测速率为主键，延迟只是没测到速率时的回退**（`pickFastestSource` 的秩是
-  `throughputBps ?? -latencyMs`）。这不是调优：实测中 `gh.ddlc.top` 以 789 ms 的最低延迟胜出，
-  真实吞吐却只有约 13 KB/s，21 MB 的内核要下 25 分钟——只看延迟等于稳定选中一条永远下不完的线路。
-  全部源都不通时 `ensureCore()` 立即抛出带线路报告的可执行文案，不让 12 次自动续传空转三分钟。
-- 引导代理是用户显式配置的 `ProxyStoreView.bootstrapProxyUrl`，**默认为空即直连**，代码里不预设
-  任何端口。它落在 `builtInProxyRules()` 的第三个分支：内置代理未就绪且用户配了值时返回
-  `fixed_servers`，因此 `applyApplicationProxyScope()` 的签名去重照常生效，不新增竞态面。
-  `proxy:detect-bootstrap-proxy` 只把 `HTTPS_PROXY` / `HTTP_PROXY` 与 `session.resolveProxy()`
-  的候选**列给用户点选**，绝不自动启用——这是发布给所有用户的软件，不能按开发机的环境做假设。
-- 内核可以通过 `proxy:install-core` 在未选择节点时独立安装；`XraySidecar` 用共享 Promise 合并并发
-  安装请求，界面读取 `ProxyCoreView.installing` 锁定“测速”和“安装”。连同
-  `proxy:probe-core-sources`、`proxy:install-core-file`（绝对路径、≤4096 字符）、
-  `proxy:detect-bootstrap-proxy`；`bootstrapProxyUrl` 与 `extraCoreSources` 复用 `proxy:set-scope`
-  持久化。三者结束后都广播 `proxy:state-changed`。`installCoreFromFile` 只接受 `.zip` 或
-  `xray.exe`，先解到 staging 跑一次 `xray.exe version`，通过才 rename 进 `core/`——名字对但跑不起来
-  的文件不能顶掉一个能用的内核。
-- 解压的路径经**环境变量**传给 PowerShell，不经参数：`powershell.exe -Command <string>` 会把后面的
-  参数追加到命令文本里而不填充 `$args`，所以 `Expand-Archive -LiteralPath $args[0]` 每次都栽在参数
-  校验上——内核解压其实一次都没成功过，只表现为一句「退出码 1」。`$env:` 查找是按字面值代入而非
-  重新解析，也顺带挡住含引号或 `;` 的路径变成第二条语句。`waitForProcess` 现在捕获并回传子进程
-  stderr：把子进程自己的抱怨丢掉，正是这个 bug 能长期伪装成不透明退出码的原因。
-- `ProxyScopeSettings.ipMode` 提供 `ipv4_only / dual_stack / prefer_ipv6` 三档 Xray 策略。
-  `ipv4_only` 仍是兼容默认值：DNS、节点 outbound 与 freedom 均为 `UseIPv4`，`::/0` 送入
-  blackhole。双栈两档使用 `UseIP`，并按 v2rayN 的 socket 级思路配置 Happy Eyeballs
-  (`tryDelayMs=250`、`interleave=1`、`maxConcurrentTry=2`)；只有 `prefer_ipv6` 设置
-  `prioritizeIPv6=true`。`routing.domainStrategy=AsIs` 保持 HTTP CONNECT/SOCKS 目标到节点再解析。
-  切换策略只重启 ClaudeDock 管理的 Xray，不修改 Windows DNS、路由表、系统代理或外部代理配置。
-- `WindowsIpv6Service` 提供显式的系统 IPv6 防旁路开关。读取使用
-  `Get-NetAdapterBinding -ComponentID ms_tcpip6`；修改通过隐藏的 UAC PowerShell 调用
-  `Disable/Enable-NetAdapterBinding`。命令正文用 UTF-16LE `EncodedCommand`，网卡名通过环境变量
-  JSON 传入，不拼接 shell 文本。禁用成功后只把本次原本启用的网卡名写入
-  `userData/network/ipv6-managed.json`，恢复只操作这份名单，避免开启用户本来就关闭的绑定。
-  该操作可能重启网卡连接，UI 必须保留 Windows 通常建议启用 IPv6 的提示。
-- 本地入站健康检查会重试。Xray 在 `spawn` 返回后才绑定入站，第一次连接几乎必然 `ECONNREFUSED`；
-  把它当结论会让一次正确的下载在 49 ms 内报「启动失败」——比内核解析配置还快。`probeHttpInbound`
-  改为在 8 秒截止时间内每 120 ms 敲一次，只对重试改变不了的答案提前结束：真实 HTTP 状态码，
-  或子进程已退出。`npm run test:xray-probe` / `npm run test:xray-install` 是这条链路的联网复现用具。
-- CLI 作用域只给 ClaudeDock 启动的 Claude/Codex 子进程注入 `HTTP_PROXY` / `HTTPS_PROXY`，
-  `NO_PROXY` 固定包含 `127.0.0.1,localhost,::1`。应用作用域是显式 opt-in 的 Electron session
-  `setProxy()`；未启用时回落到 `mode: 'system'` 而非 `direct`——`defaultSession` 同时用于下载
-  Xray-core，写 `direct` 会顶掉用户已有的系统代理并让引导过程永远停在 0%。仍然不存在系统代理
-  写入模式，不调用注册表写入、`setx` 或路由表命令，也不读取/修改 Claude/Codex 桌面版配置。
-  `applyApplicationProxyScope()` 以规则签名去重，避免每条运行日志都触发一次
-  `closeAllConnections()` 把在途下载打断。签名必须在构造 `XraySidecar` 时就用当前规则登记为
-  「已应用」：它以空串起步时，sidecar 刚进入 `starting` 就被当成规则变化，于是在
-  `downloadURL()` 打开套接字之后几毫秒真的执行了一次 `setProxy` + `closeAllConnections()`，
-  把 Xray-core 引导下载掐死在 0 字节，界面报「60 秒内没有收到任何数据」。`starting`、
-  `stopping`、`error` 与 `stopped` 解析出的规则本就同为 `{ mode: 'system' }`，登记之后整个启动
-  路径在隧道真正 `ready` 之前不会再碰 Chromium 的代理设置——下载内核本身不需要任何代理。
-  `tests/proxy-environment.test.ts` 锁定这条不变量与构造处的登记调用；
-  `scripts/xray-download-race-smoke.cjs` 是需要联网的复现用具。
-- 对话作用域使用独立的 `claudedock-conversation-network` Electron session；未勾选时固定
-  `mode: direct`，勾选且 Xray `ready` 时切为回环 `fixed_servers`。`ChatService` 通过动态 fetch
-  适配器使用该 session，和应用默认 session/CLI 环境互不串联；规则签名去重，变化时关闭旧连接。
-- `external-proxy.ts` 只读检查常见代理进程、Electron system proxy 决策和网卡类别。显式系统代理/
-  PAC 与外部代理进程但无 TUN 证据时标为 `parallel-safe`：随机 `reserveLoopbackPort()` 让端口不与
-  V2RayN 固定入站争用，且 ClaudeDock 从不写 Windows 系统代理。发现 TUN/VPN 接口时标为
-  `chain-risk`，首次启动必须由 renderer 明确确认；这是因为内置 Xray 的出口可能再次被外部 TUN
-  接管而形成链式代理。实现不结束外部进程、不切换其模式。已确认且正在运行的隧道因 IP 策略或订阅
-  更新而重启时沿用本次运行的确认；冷启动自动恢复仍重新守门。
-- `performance-test.ts` 使用专属 `claudedock-proxy-performance` session，并在测试前强制设置为当前
-  回环 HTTP 入站，所以节点真实延迟、GitHub API、npm 官方源和 npmmirror 不能旁路内置 Xray。测速
-  请求 Apple 的小型成功页并在响应头到达后取消 body，不再下载 10 MB 文件；这对应 v2rayN
-  `ConnectionHandler.GetRealPingTime` 的“通过临时本地代理发真实 HTTP 请求”行为原则，但属于
-  ClaudeDock 自研实现，不复制、链接或分发 v2rayN 的 GPL 代码。
-- 本轮对照的本地 v2rayN 7.24.4 源码锚点为
-  `ServiceLib/Handler/SysProxy/SysProxyHandler.cs`、`ProxySettingWindows.cs`（系统代理模式与 Windows
-  写入边界）、`Services/CoreConfig/V2ray/V2rayDnsService.cs`（socket IP 策略与 Happy Eyeballs）及
-  `Services/SpeedtestService.cs`（本地 SOCKS、real ping、speed download 分层）。ClaudeDock 只吸收
-  可独立描述的行为原则，仍坚持随机回环端口、作用域注入和不写系统代理的产品边界。
-- 订阅预览会生成基于规范化 HTTPS URL SHA-256 的稳定 subscription ID。节点元数据只保存
-  `subscriptionId/host/label/updatedAt`，完整 URL（含 query token）写入 DPAPI 加密的
-  `credentials.json`，绝不进入 `profiles.json`。更新订阅按 ID 原子替换该来源的节点集合；隧道
-  原本在运行时先停止，更新后重新启动并重新体检，避免 runtime 指向已被替换的 profile ID。
-- 隧道就绪时写入 `autoStart`，停止或启动失败时立即清除，因此下次启动能区分「代理运行中被直接
-  退出」与「用户主动停止」，只对前者自动恢复。恢复动作在窗口创建后触发且不阻塞启动。
-- `LeakAuditService` 并行比较直连/代理出口、ASN/机房启发式、DNS、WebRTC 和进程环境。DNS 不再
-  只看 `dns.getServers()`：每条路径先向 `dnsleaktest.com/api/v1/identifiers` 注册 4 个随机 UUID，
-  请求对应 `<uuid>.test.dnsleaktest.com` 权威域名，再从 `servers-for-result` 读取实际递归解析器。
-  每个在线请求有 10 秒上限；主站失败会按 `bash.ws/id` → `0..5.<id>.bash.ws` →
-  `/dnsleak/test/<id>?json` 协议回退。代理与
-  直连观察到相同解析器 IP 判为风险，不同则通过；两站都失败或返回空结果时保守降级为 warning。
-  结论与用户接受风险的决定写入不含节点秘密的审计记录，最多 50 条且支持逐条删除。风险阻断新
-  接入；用户点击“返回调整”或在风险报告按 Esc 会先停止隧道，只有显式接受才保持连接。
-- `McpManager` 从 `~/.claude.json` 根级 user、项目记录 local、当前项目 `.mcp.json` project 和
-  `~/.codex/config.toml` 只读发现 MCP，明确不读取 Claude Desktop 配置。在线目录以 10 秒、
-  有界响应读取官方 MCP Registry preview，失败时保留离线精选；后台健康任务并发上限为 2。
+  `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界
+  记录丢弃，部分文件从不当作完成产物执行。
+- 4.0.0 删除 `ProxyStore`、节点/订阅解析器、`XraySidecar`、内核源、泄露体检、代理测速、
+  外部 TUN 推断和 `WindowsIpv6Service`，同时删除对应 IPC、preload API、renderer 控件、脚本和
+  发行测试。旧版 `userData/proxy` 文件不读取、不启用，也不在升级时擅自删除。
+- `ApplicationProxyStore`（`src/main/proxy/application-proxy-store.ts`）只持久化一个用户已有
+  HTTP/SOCKS5 代理：主机、端口、协议、账号、作用域与 DPAPI 密文密码。主机只接受域名/IP，
+  端口限制 1–65535，禁止 URL、换行和明文降级。密码留空保留原密文；账号清空会同时清除密码。
+- `application-proxy.ts` 负责三类派生：Electron `ProxyConfig`、CLI 环境和无凭据候选解析。
+  应用作用域未启用时为 `system`，独立对话未启用时为 `direct`；启用时为
+  `fixed_servers` 且旁路 `127.0.0.1,localhost,[::1]`。CLI 只接受 HTTP，并设置大小写两套
+  `HTTP_PROXY/HTTPS_PROXY/NO_PROXY`；SOCKS5 + CLI 在存储层和 UI 都拒绝。
+- 代理密码不放入 Electron `proxyRules`。全局 `app.on('login')` 只在
+  `authInfo.isProxy` 且 host/port 与当前已启用配置完全匹配时 `preventDefault()` 并从 DPAPI
+  取账号密码回调，避免向任意 HTTP 认证挑战泄露凭据。CLI 环境中的凭据使用 URL 编码。
+- IPC 仅保留 `application-proxy:get/save/test/detect`。保存后分别重算 default session 和
+  `claudedock-conversation-network` session 的规则、关闭旧连接并使官方网络预检失效。
+  测试使用独立 `claudedock-application-proxy-test` session 对 GitHub 发 HEAD 请求，12 秒超时，
+  不调用模型。检测只读取代理环境变量与 `resolveProxy()` 结果，拒绝带凭据、路径、query 或
+  fragment 的候选；点选仍需用户保存。
+- `McpManager` 从 `~/.claude.json`、当前项目 `.mcp.json` 和 `~/.codex/config.toml`
+  发现 MCP，明确不读取 Claude Desktop 配置。在线目录以有界响应读取官方 MCP Registry preview，
+  失败时保留离线精选；后台健康任务并发上限为 2。
 - Claude MCP 安装/卸载只调用 `claude mcp add-json/remove --scope ...` 的 argv；Codex MCP 本版
-  只读。项目共享启停先保存含目标路径的预览和原文件摘要，确认时若摘要变化则拒绝写入；随后
-  完整备份、原子写入 `enabledMcpjsonServers` / `disabledMcpjsonServers`，失败由
-  `RollbackCoordinator` 恢复。只保留最近 10 份完整备份，恢复操作逐字节复制并先保存当前状态。
+  只读。项目共享启停先保存目标路径预览和原文件摘要，确认时若摘要变化则拒绝；随后完整备份、
+  原子写入并由 `RollbackCoordinator` 在失败时恢复。
 
 ### 独立模型对话
 
@@ -420,7 +326,7 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - 基址校验只允许远程 HTTPS，本机 `localhost` / `127.0.0.1` / `::1` 可以使用 HTTP；拒绝
   URL 用户信息、查询和片段。模型名、凭据长度与换行、credential action 均在主进程重验。
 - `ChatService`（`src/main/chat-service.ts`）只在 Electron 主进程运行，通过专属 Electron session
-  的动态 fetch 适配器发请求，使“对话”作用域可以独立接入/退出内置代理。Anthropic
+  的动态 fetch 适配器发请求，使“对话”作用域可以独立接入/退出用户配置的外部代理。Anthropic
   协议补全 `/v1/messages`、发送 `x-api-key` 和 `anthropic-version`，并解析
   `content_block_delta`；附件块按 document/image → text 排序，本地 UUID 在发请求前才
   base64 编码，Files API 引用自动带 beta header。OpenAI 兼容协议补全
@@ -760,9 +666,9 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   请求覆盖操作后的新状态。这些工作本身是异步网络/子进程 I/O，采用限流队列比额外占用
   Worker Thread 更合适。
 - renderer 完成首屏工作区 hydration 后用零延时任务启动统一更新检查，不阻塞终端启动。标题栏
-  聚合 ClaudeDock Release、Claude Code/Router npm 元数据、插件 marketplace、保存的代理订阅与
-  当前项目 MCP 目录/健康刷新；各 Promise 隔离失败，单一来源不可用不抹掉其余结果。软件、插件、
-  代理和 MCP 页同时保留独立入口。新增任何 update source 必须同时注册全局聚合与领域入口，
+  聚合 ClaudeDock Release、Claude Code/Router npm 元数据、插件 marketplace 与当前项目 MCP
+  目录/健康刷新；各 Promise 隔离失败，单一来源不可用不抹掉其余结果。软件、插件和 MCP 页同时
+  保留独立入口。新增任何 update source 必须同时注册全局聚合与领域入口，
   并在 README/design/technical 中说明“检查”是否会应用更新；两条路径都不会调用模型。
 - CCR 的识别依据包括 `ccr` 命令、旧版
   `~/.claude-code-router/config.json`、新版 Windows
@@ -884,21 +790,27 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - `SoftwareUpdates` 从固定 GitHub Releases API 检查 ClaudeDock，并发读取 npm 官方 registry 与
   npmmirror 的 Claude Code/Router `latest` 元数据，接受首个结构有效的版本；单源上限 8 秒，避免
   先等慢官方源再等镜像。所有请求使用 `ClaudeRuntime` 注入的 `session.defaultSession.fetch()`，
-  因此“ClaudeDock 自身网络”作用域启用时会经过内置代理，未启用时继承 Windows system proxy；
+  因此“ClaudeDock 自身网络”作用域启用时会经过用户配置的外部代理，未启用时继承 Windows system proxy；
   不再由 Node 全局 `fetch` 绕开两者。结果缓存 5 分钟，轮询只在缓存到期后产生请求。
 - `ApplicationUpdaterService` 包装 `electron-updater` 的 NSIS updater。仅 `app.isPackaged && win32`
   启用，`autoDownload/autoInstallOnAppQuit` 均关闭：用户点击后检查并下载，下载进度通过 IPC 推送，
-  `update-downloaded` 后才允许 `quitAndInstall(false, true)`。`package.json.build.publish` 固定 GitHub
-  owner/repo；`latest.yml` 提供版本、文件和 SHA-512，blockmap 支持差分下载。私有仓库的 Release
-  不能服务匿名客户端，客户端也不得内置 GitHub Token。
+  `update-downloaded` 后才允许 `quitAndInstall(false, true)`。每次检查前调用
+  `selectApplicationUpdateSource()` 并用 `setFeedURL()` 切换 feed；选择结果和实测速率写入状态供 UI
+  展示。`latest.yml` 提供版本、文件和 SHA-512，blockmap 支持差分下载。
+- `application-update-sources.ts` 从打包的 `assets/runtime/update-sources.json` 读取 GitHub 与 generic
+  HTTPS 源。配置拒绝 HTTP、用户信息、query/fragment 和非法 host；元数据最多 64 KiB，每条请求
+  6 秒。GitHub `latest.yml` 是信任锚，镜像只有在 version/path/SHA-512 完全一致时才参与真实安装包
+  256 KiB Range 采样，以字节率选择最快 feed。镜像宣称更高版本、摘要不一致、重定向到非白名单
+  主机或 GitHub 规范元数据不可用时全部 fail closed 到 GitHub。当前配置尚无 HTTPS 域名，只启用
+  GitHub；部署约束记录在 `docs/UPDATE_MIRROR.md`。
 - `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
   返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
   插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
   `updateAvailable` 控制。
 - 标题栏 `refresh-updates` 是全局主动检查入口，不是唯一入口。首屏自动检查和用户点击会并行
   处理全部已注册来源，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现
-  数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；代理订阅刷新会替换该来源节点并在
-  原隧道运行时安全重启、重新体检，界面必须使用“更新订阅”而不是模糊的“检查”。
+  数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；应用代理测试是独立动作，不属于
+  全局更新聚合，也不会调用模型。
 - Claude Code 先按 `Get-Command claude` 的可执行文件判断 `native/npm/unknown`。官方原生路径使用
   固定 `claude update`；未安装时使用固定 winget ID `Anthropic.ClaudeCode`。只有 npm 安装才并发
   请求两条 registry 的结构化元数据，并对同主机 HTTPS tarball 发 `Range: bytes=0-131071` 小样本；
@@ -1305,8 +1217,9 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   并把遗留同类错误降为“探测未确认”警告；非白名单跨域、HTTP 降级、TLS 或真实连接失败仍失败。
 - 2.2.2 恢复预检上线前的真实路由测试职责：官方预检只在官方模型请求前增加防护，不再覆盖
   Claude 底栏的 `routeHealth`，也不再把中转站的真实测试替换成官方预检详情。
-- 本实现不修改系统代理、DNS、路由表、Codex/Claude Code 配置文件或官方登录存储，也不自动
-  关闭 VPN。Claude Code 官方不支持 SOCKS，因此只对 Claude CLI 的 SOCKS 环境做硬阻止。
+- 本实现不修改系统代理、DNS、路由表、网卡、Codex/Claude Code 配置文件或官方登录存储，也不自动
+  关闭 VPN。Claude Code 官方不支持 SOCKS，因此外部应用代理存储层拒绝 SOCKS5 + CLI 作用域；
+  对继承环境中已有的 SOCKS 仍在预检中硬阻止。
 
 ### 链式代理与软路由判定边界
 
@@ -1326,9 +1239,9 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - 设置页的“隐私与合规”面板是打包进 renderer 的静态可达说明；完整规则和中国大陆产品风险分别
   维护在 `docs/PRIVACY.md`、`docs/LEGAL_COMPLIANCE.md`。模型消息角色显示“AI 生成”。这不等于
   为未来导出文件添加了机器可读元数据；若新增导出，必须单独实现适用的生成内容标识。
-- 当前通用代理可导入任意节点/订阅并形成用户可配置出口，在中国大陆公开发行属于待发行者决定的
-  高风险模块。默认关闭、回环端口、不写系统代理和风险提示都是安全边界，但不构成电信业务许可；
-  工程上暂不擅自删除，公开版应优先移除，或收敛为端点白名单化的单位授权专线模式。
+- 4.0.0 已删除通用节点/订阅/隧道/出口模块。外部应用代理只连接用户已有端口，这一技术边界显著
+  降低发行风险，但不验证后端资质或用途合法性；工程、应用内文案和法律说明都不得把它描述为
+  ToDesk/QQ 类产品带来的当然豁免。
 - `NetworkDiagnosticsStore` 只保留 7 天、最多 40 条；写盘前再次移除 Bearer、`sk-*` 和 URL
   查询凭据。记录包含时间、服务商、掩码出口、风险、进程路径和逐项结论，不包含 cwd、完整 IP、
   请求/响应正文、OAuth Token、API Key 或代理凭据；用户可在详情弹窗立即清空。
@@ -1336,9 +1249,10 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   ipwho.is 和 ipify，官方 DNS/HTTPS/TLS/CLI 探测仍运行，地区情报显示不可用但不据此封锁。
 - `userData/network-preflight/history.json` 和设置文件使用 `0600` 意图、临时文件 +
   `rename` 原子替换。Windows 的最终 ACL 仍由当前用户配置和 Electron `userData` 目录继承。
-- 本轮没有复制 CheckCC、CC Switch、v2rayN 或其他开源项目的代码、图标、文案或数据文件；新增
-  `electron-updater` 依赖按其 MIT 许可证使用。ipapi.co、ipwho.is 与 ipify 仅作为可关闭的远程诊断
-  服务，产品文档明确列出其用途；不得把它们的返回作为唯一封锁依据。
+- 本轮没有复制 CheckCC、CC Switch、v2rayN 或其他开源项目的代码、图标、文案或数据文件；4.0.0
+  也不下载、启动或链接 Xray/v2rayN。`electron-updater` 等第三方依赖保留自身许可，项目按
+  Apache-2.0 开源并用 `THIRD_PARTY_NOTICES.md` 维护发行检查。ipapi.co、ipwho.is 与 ipify 仅作为
+  可关闭的远程诊断服务，不得把其返回作为唯一封锁依据。
 
 ### 维护与外部依据（核对日期 2026-07-29）
 
@@ -1411,9 +1325,9 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   严格结束标记、部分输出不重放、重定向安全与兼容回退、附件原子导入/
   UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
   和流式稳定前缀。
-- 3.0 守栏补充覆盖 BusyRegistry 租约释放、下载 EMA/ETA/恢复日志/来源与完整性、退出和托盘忙态、
-  四种代理导入与 Xray 生命周期、三档 IP 策略、外部代理/TUN 协同裁决、节点/更新源测速、
-  IP/DNS/WebRTC/环境泄露裁决、供应商能力矩阵、CCR CLI-only、
+- 4.0 守栏覆盖 BusyRegistry 租约释放、下载 EMA/ETA/恢复日志/来源与完整性、退出和托盘忙态、
+  外部应用代理 DPAPI 存储/作用域/候选解析、移除旧代理 IPC、应用双更新源信任与测速选择、
+  供应商能力矩阵、CCR CLI-only、
   CC Switch MSI/深链/清理牢笼、MCP 三作用域发现/diff/备份/逐字节还原，以及对话无总时长上限、
   静默探活和可选 `local-timeout`。`tests/cli-only-guard.test.ts` 与
   `tests/chat-timeout.test.ts` 作为跨模块源码不变量，避免未来调用点绕过局部单测。
@@ -1546,20 +1460,13 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   静态终端 fixture 无法证明 PTY resize/reflow 的边界，结束后删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
   `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
-  几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 160 个按钮全部命中
+  几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 162 个按钮全部命中
   主题。
-- `npm run test:xray-download` 运行 `scripts/xray-download-race-smoke.cjs` 的 `control` 变体，
-  用真实 GitHub 资产验证默认 session 不经任何代理也能取到 Xray-core；`teardown` 变体复现修复
-  前的竞态。它需要联网，不进 CI；离线守栏是上文的 `tests/proxy-environment.test.ts` 不变量。
-- `npm run test:xray-probe` 运行 `scripts/xray-core-probe-smoke.cjs`，打印内置源表每条线路当前的
-  通断、延迟与实测速率，并指出这次会选中哪条；带一个参数可改从引导代理探测。镜像域名 churn 极高，
-  发布前和收到「所有下载线路都不可用」时都该跑一次，这是判断「源表该更新了」的唯一手段。
-- `npm run test:xray-install` 运行 `scripts/xray-core-install-smoke.cjs`，在一次性 `userData` 下跑完
-  探测 → 下载 → 解压 → 启动整条链路，失败时连同内核状态与最近 25 行隧道日志一起打印。它有意每次
-  从零开始；只调试启动那一段时用 `KEEP_CORE=1` 复用上次下好的内核。**结束时不删临时目录**：
-  Chromium 在进程存活期间仍持有句柄，删除只会得到一个 EPERM 并把真实结果埋掉，清理点在下一次启动时。
-  这两条都需要联网，不进 CI；离线守栏分别是 `tests/xray-core-sources.test.ts` 与
-  `tests/xray-sidecar.test.ts`。
+- `tests/application-proxy.test.ts` 用临时目录和可逆安全存储替身验证密码不落明文、留空保留、清空
+  账号删除、SOCKS5 CLI 拒绝、IPv6 URL 编码、Electron 规则、CLI 环境和候选解析。
+- `tests/application-update-sources.test.ts` 使用完全注入的 fetch/stream 验证 HTTP 镜像拒绝、相同
+  GitHub 元数据下选择更快 HTTPS 镜像、SHA-512 不一致排除和规范元数据不可用时 fail closed；测试
+  不访问真实网络。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
@@ -1665,13 +1572,12 @@ electron-builder 26.15.3 依赖树中 1 个 high 构建期问题，位于多份�
 - MCP Registry 官方说明与 preview API 文档：
   <https://modelcontextprotocol.io/registry/about>、
   <https://registry.modelcontextprotocol.io/docs>
-- Xray-core 官方仓库与 MPL-2.0 许可：
-  <https://github.com/XTLS/Xray-core>
-- DNSLeakTest 权威解析器观测接口与 bash.ws 开源检测协议：
-  <https://www.dnsleaktest.com/>、<https://github.com/macvk/dnsleaktest>
-- Microsoft IPv6 配置与网卡绑定命令（微软建议优先保留 IPv6；绑定变更可能影响连接）：
-  <https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/configure-ipv6-in-windows>、
-  <https://learn.microsoft.com/en-us/powershell/module/netadapter/disable-netadapterbinding>
+- Electron `ProxyConfig` 与代理认证回调：
+  <https://www.electronjs.org/docs/latest/api/structures/proxy-config>、
+  <https://www.electronjs.org/docs/latest/api/app#event-login>
+- electron-builder 自动更新与运行时 feed：
+  <https://www.electron.build/docs/features/auto-update/>、
+  <https://www.electron.build/docs/api/electron-updater.class.appupdater/#setfeedurl>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：

@@ -49,10 +49,10 @@ const classifyResolvedProxy = (
 };
 
 export const classifyEnvironmentProxy = (
-  builtInProxyUrl?: string,
+  applicationProxyUrl?: string,
 ): Pick<NetworkPathView, 'proxyConfigured' | 'proxyKind'> => {
-  if (/^http:\/\/127\.0\.0\.1:\d{1,5}$/i.test(builtInProxyUrl ?? '')) {
-    return { proxyConfigured: true, proxyKind: 'claudedock' };
+  if (/^https?:\/\//i.test(applicationProxyUrl ?? '')) {
+    return { proxyConfigured: true, proxyKind: 'application-proxy' };
   }
   const configured = PROXY_ENVIRONMENT_KEYS.map((key) => process.env[key]?.trim()).find(Boolean);
   if (!configured) {
@@ -117,7 +117,7 @@ const processLabel = (processKind: NetworkProcessKind): string => {
 export class NetworkPathResolver {
   public constructor(
     private readonly resolveProxy: ResolveProxy,
-    private readonly builtInProxyUrl: () => string | undefined = () => undefined,
+    private readonly applicationProxyUrl: () => string | undefined = () => undefined,
   ) {}
 
   public async resolve(provider: NetworkProviderId, targetUrl: string): Promise<NetworkPathView[]> {
@@ -136,7 +136,7 @@ export class NetworkPathResolver {
       resolvedProxy === 'UNKNOWN'
         ? { proxyConfigured: false, proxyKind: 'unknown' as const }
         : classifyResolvedProxy(resolvedProxy);
-    const cliProxy = classifyEnvironmentProxy(this.builtInProxyUrl());
+    const cliProxy = classifyEnvironmentProxy(this.applicationProxyUrl());
     const cliProcess: NetworkProcessKind =
       provider === 'anthropic-claude' ? 'claude-cli' : 'codex-cli';
     const makePath = (
@@ -169,8 +169,8 @@ export class NetworkPathResolver {
       makePath(
         cliProcess,
         cliProxy,
-        cliProxy.proxyKind === 'claudedock'
-          ? '经 ClaudeDock 本地 HTTP 入站转发；CLI 不需要理解 SOCKS，上游域名由 Xray 远端解析。'
+        cliProxy.proxyKind === 'application-proxy'
+          ? '经用户配置的外部 HTTP 代理转发；ClaudeDock 不提供该代理或其后续线路。'
           : cliProxy.proxyConfigured
             ? '继承启动时 HTTP(S)_PROXY / ALL_PROXY 指定的可见第一跳；代理内核可继续链式转发。'
             : '未发现代理环境变量；CLI 仍可能经过 TUN、透明代理或软路由链路。',
@@ -178,8 +178,8 @@ export class NetworkPathResolver {
       makePath(
         'terminal',
         cliProxy,
-        cliProxy.proxyKind === 'claudedock'
-          ? '经 ClaudeDock 内置代理转发；仅影响由 ClaudeDock 启动的项目终端。'
+        cliProxy.proxyKind === 'application-proxy'
+          ? '经用户配置的外部 HTTP 代理转发；仅影响由 ClaudeDock 启动的项目终端。'
           : cliProxy.proxyConfigured
             ? '继承项目终端的代理环境第一跳，不改写系统或 CLI 路由。'
             : '未发现代理环境变量，不据此断言公网直连。',

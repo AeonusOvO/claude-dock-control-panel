@@ -507,13 +507,14 @@ app.whenReady().then(async () => {
   const emptyWorkspace = { activeSessionId: '', projects: [], sessions: [] };
   ipcMain.handle('busy:set-conversation', () => []);
   ipcMain.handle('download:list', () => []);
-  ipcMain.handle('proxy:get-state', () => ({
-    audits: [],
-    runtime: { coreVersion: '', logs: [], status: 'stopped' },
-    store: {
-      profiles: [],
-      scope: { application: false, cli: true },
-      state: { runtimeStatus: 'stopped' },
+  ipcMain.handle('application-proxy:get', () => ({
+    config: {
+      enabled: false,
+      host: '',
+      passwordConfigured: false,
+      protocol: 'http',
+      scope: { application: false, cli: true, conversation: false },
+      username: '',
     },
   }));
   ipcMain.handle('app:get-settings', () => ({

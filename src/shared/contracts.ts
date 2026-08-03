@@ -40,229 +40,53 @@ export interface DownloadTaskView {
   state: DownloadTaskState;
   totalBytes: number;
 }
-export type ProxyProtocol = 'http' | 'shadowsocks' | 'socks' | 'trojan' | 'vless' | 'vmess';
-export type ProxyTransport = 'grpc' | 'http' | 'tcp' | 'ws';
 /**
- * The transport-security modes Xray accepts on `streamSettings.security`. `reality` is its own mode
- * rather than a flavour of `tls`: it carries a public key and short id instead of a certificate, so
- * folding it into a boolean silently downgrades a REALITY node to plaintext.
+ * A user-owned proxy that already exists outside ClaudeDock (for example a local V2RayN HTTP
+ * inbound or an organisation-managed proxy). ClaudeDock only points selected application traffic
+ * at it; it never creates a tunnel, imports nodes, downloads a proxy core or edits Windows proxy
+ * settings.
  */
-export type ProxySecurity = 'none' | 'reality' | 'tls';
-export type ProxyRuntimeStatus = 'error' | 'starting' | 'stopped' | 'stopping' | 'ready';
-export type ProxyIpMode = 'dual_stack' | 'ipv4_only' | 'prefer_ipv6';
-export interface ProxyCredentialInput {
-  alterId?: number;
-  method?: string;
-  password?: string;
-  username?: string;
-  uuid?: string;
-}
-/** Stream-layer options shared by every protocol, mirroring v2rayN's share-link query parameters. */
-export interface ProxyStreamOptions {
-  allowInsecure?: boolean;
-  alpn?: string;
-  /** VLESS `encryption`; Xray requires the literal `none` when the node does not negotiate one. */
-  encryption?: string;
-  fingerprint?: string;
-  /** VLESS flow control, e.g. `xtls-rprx-vision`. */
-  flow?: string;
-  /** TCP obfuscation header, e.g. `http`. */
-  headerType?: string;
-  /** Host header for ws/http transports, and the TCP HTTP-header host list. */
-  host?: string;
-  /** REALITY public key (`pbk`). */
-  publicKey?: string;
-  security?: ProxySecurity;
-  /** REALITY short id (`sid`). */
-  shortId?: string;
-  /** REALITY spider path (`spx`). */
-  spiderX?: string;
-}
-export interface ProxyProfileInput extends ProxyStreamOptions {
-  address: string;
-  credentials?: ProxyCredentialInput;
-  id?: string;
-  port: number;
-  protocol: ProxyProtocol;
-  remark?: string;
-  serverName?: string;
-  subscriptionId?: string;
-  tls?: boolean;
-  transport?: ProxyTransport;
-  transportPath?: string;
-}
-export interface ProxyProfileView extends ProxyStreamOptions {
-  address: string;
-  hasCredentials: boolean;
-  id: string;
-  port: number;
-  protocol: ProxyProtocol;
-  remark: string;
-  security: ProxySecurity;
-  serverName?: string;
-  subscriptionId?: string;
-  tls: boolean;
-  transport: ProxyTransport;
-  transportPath?: string;
-  updatedAt: number;
-}
-export interface ProxyImportIssue {
-  index: number;
-  message: string;
-}
-export interface ProxyImportPreview {
-  issues: ProxyImportIssue[];
-  profiles: ProxyProfileInput[];
-  subscription?: ProxySubscriptionInput;
-}
-export interface ProxySubscriptionInput {
-  id: string;
-  label: string;
-  url: string;
-}
-export interface ProxySubscriptionView {
-  host: string;
-  id: string;
-  label: string;
-  profileCount: number;
-  updatedAt: number;
-}
-export interface ProxyScopeSettings {
-  /** Applies only to processes spawned by ClaudeDock. */
-  cli: boolean;
-  /** Applies to Electron's own session. This is opt-in and never changes the system proxy. */
+export type ApplicationProxyProtocol = 'http' | 'socks5';
+export interface ApplicationProxyScope {
   application: boolean;
-  /** Applies to the independent conversation workspace's dedicated Electron session. */
+  cli: boolean;
   conversation: boolean;
-  /** Xray-only address-family policy. It never changes Windows adapter bindings. */
-  ipMode?: ProxyIpMode;
-  /**
-   * Optional proxy used for ClaudeDock's own network calls while the built-in tunnel is not running
-   * — chiefly the Xray-core download, which otherwise has to reach GitHub without help. Empty means
-   * direct, and it is never filled in automatically: what exists on one user's machine says nothing
-   * about the next one's.
-   */
-  bootstrapProxyUrl?: string;
-  /** Extra kernel-download mirror hostnames, so a dead default can be worked around without a release. */
-  extraCoreSources?: string[];
 }
-export interface ProxyStoredState {
-  /**
-   * Whether the user last left the built-in proxy running. It survives an unexpected exit — a tray
-   * quit, Alt+F4, a crash — so the next launch can bring the tunnel back up on its own. Stopping the
-   * proxy explicitly clears it; `runtimeStatus` is deliberately not used for this because it is a
-   * live process state and is reset to `stopped` on every load.
-   */
-  autoStart?: boolean;
-  lastAuditConclusion?: 'passed' | 'risk' | 'warning';
-  lastAuditAt?: number;
-  runtimeStatus: ProxyRuntimeStatus;
-  selectedProfileId?: string;
+export interface ApplicationProxyView {
+  enabled: boolean;
+  host: string;
+  passwordConfigured: boolean;
+  port?: number;
+  protocol: ApplicationProxyProtocol;
+  scope: ApplicationProxyScope;
+  updatedAt?: number;
+  username: string;
 }
-export interface ProxyStoreView {
-  profiles: ProxyProfileView[];
-  scope: ProxyScopeSettings;
-  state: ProxyStoredState;
-  subscriptions: ProxySubscriptionView[];
+export interface SaveApplicationProxyInput {
+  enabled: boolean;
+  host: string;
+  /** Empty keeps the existing encrypted password; clearing username clears both credentials. */
+  password?: string;
+  port?: number;
+  protocol: ApplicationProxyProtocol;
+  scope: ApplicationProxyScope;
+  username?: string;
 }
-export interface ProxySubscriptionRefreshResult {
-  failures: string[];
-  state: ProxyControlView;
-  updated: number;
-}
-export interface WindowsIpv6View {
-  available: boolean;
-  disabled: boolean;
-  disabledAdapters: string[];
-  enabledAdapters: string[];
-  message: string;
-}
-export interface ProxyRuntimeView {
-  coreVersion: string;
-  error?: string;
-  httpProxyUrl?: string;
-  ipMode?: ProxyIpMode;
-  logs: string[];
-  profileId?: string;
-  socksProxyUrl?: string;
-  status: ProxyRuntimeStatus;
-}
-export type ProxyExternalEnvironmentMode = 'chain-risk' | 'none' | 'parallel-safe';
-export interface ProxyExternalEnvironmentView {
-  advice: string;
+export interface ApplicationProxyTestResult {
   checkedAt: number;
-  externalProcesses: string[];
-  mode: ProxyExternalEnvironmentMode;
-  resolvedSystemProxy?: string;
-  summary: string;
-  virtualInterfaces: string[];
-}
-export interface ProxyPerformanceEndpointView {
-  detail: string;
-  label: string;
   latencyMs?: number;
+  message: string;
   ok: boolean;
 }
-export interface ProxyPerformanceView {
-  checkedAt: number;
-  endpoints: ProxyPerformanceEndpointView[];
-  error?: string;
+export interface ApplicationProxyState {
+  config: ApplicationProxyView;
+  test?: ApplicationProxyTestResult;
 }
-export type ProxyAuditVerdict = 'passed' | 'risk' | 'warning';
-export interface ProxyAuditItem {
-  advice: string;
-  evidence: string[];
-  explanation: string;
-  name: string;
-  verdict: ProxyAuditVerdict;
-}
-export interface ProxyLeakAuditReport {
-  checkedAt: number;
-  directIp?: string;
-  items: ProxyAuditItem[];
-  nodeFingerprint: string;
-  proxyIp?: string;
-  summary: ProxyAuditVerdict;
-}
-export interface ProxyAuditRecord {
-  acceptedAt?: number;
-  id: string;
-  report: ProxyLeakAuditReport;
-}
-export type ProxyCoreSourceStatus = 'blocked' | 'failed' | 'ok' | 'unknown';
-export interface ProxyCoreSourceView {
-  /** Chinese failure reason, shown as-is next to the route. */
-  detail?: string;
-  id: string;
-  kind: 'custom' | 'mirror' | 'official';
+export interface ApplicationProxyCandidate {
+  host: string;
   label: string;
-  latencyMs?: number;
-  status: ProxyCoreSourceStatus;
-  /** Measured transfer rate in bytes/second. Absent when the route was not sampled or stalled. */
-  throughputBps?: number;
-  url: string;
-}
-/**
- * Kernel state, surfaced before the user presses 启动. Without it, a missing Xray-core could only be
- * discovered as an error message after a failed start, with nowhere to go from there.
- */
-export interface ProxyCoreView {
-  executablePath?: string;
-  installed: boolean;
-  installedVersion?: string;
-  installing: boolean;
-  lastProbedAt?: number;
-  probing: boolean;
-  requiredVersion: string;
-  sources: ProxyCoreSourceView[];
-}
-export interface ProxyControlView {
-  audits: ProxyAuditRecord[];
-  core: ProxyCoreView;
-  externalEnvironment?: ProxyExternalEnvironmentView;
-  performance?: ProxyPerformanceView;
-  runtime: ProxyRuntimeView;
-  store: ProxyStoreView;
+  port: number;
+  protocol: ApplicationProxyProtocol;
 }
 /**
  * Claude Code's own permission-mode identifiers. `default` is the mode the CLI labels 「手动确认」;
@@ -349,7 +173,8 @@ export interface NetworkPathView {
   ipv6Available: boolean;
   process: NetworkProcessKind;
   proxyConfigured: boolean;
-  proxyKind: 'claudedock' | 'direct' | 'environment' | 'pac' | 'socks' | 'system' | 'unknown';
+  proxyKind:
+    'application-proxy' | 'direct' | 'environment' | 'pac' | 'socks' | 'system' | 'unknown';
   virtualInterfaces: string[];
 }
 
@@ -1192,6 +1017,9 @@ export interface ApplicationUpdaterState {
   message: string;
   percent?: number;
   phase: ApplicationUpdaterPhase;
+  sourceId?: string;
+  sourceLabel?: string;
+  sourceThroughputBps?: number;
   totalBytes?: number;
 }
 
@@ -1256,34 +1084,11 @@ export interface ControlPanelApi {
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
   pauseDownload: (taskId: string) => Promise<DownloadTaskView>;
   resumeDownload: (taskId: string) => Promise<DownloadTaskView>;
-  getProxyState: () => Promise<ProxyControlView>;
-  previewProxyImport: (text: string) => Promise<ProxyImportPreview>;
-  previewProxySubscription: (url: string) => Promise<ProxyImportPreview>;
-  saveProxyProfiles: (
-    profiles: ProxyProfileInput[],
-    subscription?: ProxySubscriptionInput,
-  ) => Promise<ProxyControlView>;
-  refreshProxySubscriptions: () => Promise<ProxySubscriptionRefreshResult>;
-  removeProxyProfile: (profileId: string) => Promise<ProxyControlView>;
-  selectProxyProfile: (profileId: string) => Promise<ProxyControlView>;
-  setProxyScope: (scope: ProxyScopeSettings) => Promise<ProxyControlView>;
-  probeProxyCoreSources: () => Promise<ProxyControlView>;
-  installProxyCore: () => Promise<ProxyControlView>;
-  installProxyCoreFile: (filePath: string) => Promise<ProxyControlView>;
-  detectBootstrapProxyCandidates: () => Promise<string[]>;
-  startBuiltInProxy: (
-    manualCorePath?: string,
-    acceptExternalTunnelChain?: boolean,
-  ) => Promise<ProxyControlView>;
-  stopBuiltInProxy: () => Promise<ProxyControlView>;
-  testBuiltInProxyPerformance: () => Promise<ProxyControlView>;
-  runProxyLeakAudit: () => Promise<ProxyAuditRecord>;
-  acceptProxyLeakAudit: (recordId: string) => Promise<ProxyAuditRecord>;
-  deleteProxyLeakAudit: (recordId: string) => Promise<ProxyControlView>;
-  getWindowsIpv6State: () => Promise<WindowsIpv6View>;
-  setWindowsIpv6Disabled: (disabled: boolean) => Promise<WindowsIpv6View>;
-  onProxyStateChanged: (listener: (state: ProxyControlView) => void) => Unsubscribe;
-  onProxyAuditRequired: (listener: (record: ProxyAuditRecord) => void) => Unsubscribe;
+  getApplicationProxyState: () => Promise<ApplicationProxyState>;
+  saveApplicationProxy: (input: SaveApplicationProxyInput) => Promise<ApplicationProxyState>;
+  testApplicationProxy: () => Promise<ApplicationProxyState>;
+  detectApplicationProxyCandidates: () => Promise<ApplicationProxyCandidate[]>;
+  onApplicationProxyChanged: (listener: (state: ApplicationProxyState) => void) => Unsubscribe;
   createArtifact: (html: string) => Promise<ArtifactCreateResult>;
   destroyArtifact: (artifactId: string) => Promise<boolean>;
   getArtifactNetworkState: () => Promise<ArtifactNetworkState>;

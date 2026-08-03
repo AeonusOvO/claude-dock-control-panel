@@ -4,22 +4,22 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（3.6.0 · 2026-08-03）
+## 当前版本重点（4.0.0 · 2026-08-03）
 
-- 新增 ClaudeDock 安装版应用内更新：环境卡可以直接从 GitHub Releases 下载正式版，显示进度，
-  `electron-updater` 按 `latest.yml`/blockmap 校验完成后才开放“重启并安装”。`v*` 标签会触发
-  Windows Release 工作流，自动上传安装包、blockmap 和更新元数据；开发版不会误触安装器。
-- Claude Code 不再把原生、npm 官方源和 npmmirror 当作可随意互换的三种来源。原生安装沿用
-  Anthropic 官方更新器，未安装时使用官方 WinGet 包；只有检测为 npm 安装时，才分别拉取不超过
-  128 KiB 的真实包样本，在 npm 与 npmmirror 中自动选择当前更快的一条，避免重复安装和 PATH 冲突。
-- 代理“节点与更新源测速”取消 10 MB 下载，改为通过专属 Electron session 和当前内置 Xray 做
-  v2rayN real-ping 同类的轻量 HTTP 真实延迟，并同时检查 GitHub/npm/npmmirror。实现未复制或链接
-  v2rayN 的 GPL 源码。
-- 新安装默认开启增强隐私模式；独立对话的模型回复标记为“AI 生成”。全局设置新增“隐私与合规”页，
-  持续披露本地保存、第三方端点、跨境处理与代理风险；详细隐私说明和中国大陆公开发行评估位于
-  `docs/PRIVACY.md` 与 `docs/LEGAL_COMPLIANCE.md`。
-- 当前 GitHub 仓库仍是私有仓库，普通用户无法读取 Release；对外发布前必须公开仓库或改用公开的
-  自建 HTTPS 更新源。当前安装包也尚无受信任 Windows 代码签名，不应忽略 SmartScreen 风险。
+- ClaudeDock 改为 Apache-2.0 开源项目，仓库内新增 `LICENSE`、`NOTICE` 与第三方许可维护说明。
+  npm 的 `private: true` 只用于防止误发布到 npm，不代表闭源；GitHub 仓库在正式公开前仍需由维护者
+  确认可见性、Release 读取权限、签名证书与联系方式。
+- 安装版更新支持 GitHub Release 与自建 HTTPS 镜像自动择优。每次下载前只采样各源最多 256 KiB；
+  自建镜像的版本、文件名和 SHA-512 必须与 GitHub `latest.yml` 完全一致才有资格参与测速，GitHub
+  元数据不可验证时拒绝信任镜像并回落到官方 feed。当前尚未配置可公开访问的 HTTPS 镜像域名，
+  因此发行配置只启用 GitHub；部署要求见 `docs/UPDATE_MIRROR.md`。
+- Claude Code 原生安装继续使用 Anthropic 官方更新器，未安装时使用官方 WinGet 包；仅当现有安装
+  确认为 npm 版时，才对 npm 官方源与 npmmirror 各采样最多 128 KiB 并自动选择更快来源。
+- 中国大陆公开版移除了节点/订阅导入、Xray 下载与启动、隧道、出口、泄露体检和 Windows IPv6
+  修改入口及其发行代码。代理页现在只连接用户已有的 HTTP/SOCKS5 地址、端口和可选账号密码；
+  密码由 Windows DPAPI 加密，可分别作用于 CLI、ClaudeDock 应用网络与独立对话。
+- 外部代理模式不提供线路，也不是任何网络用途的法律豁免。用户必须确认代理服务和用途合法；
+  详细边界、个人信息处理与官方法规依据见 `docs/PRIVACY.md` 与 `docs/LEGAL_COMPLIANCE.md`。
 
 ## 3.5.0 版本重点（2026-08-03）
 
@@ -621,9 +621,9 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
   兼容接口。消息历史以 version 2 明文 JSON 保存在 `userData/claude/chat-history.json`，
   最多保留最近 50 个对话、每个 100 条消息；可逐条永久删除。附件正文独立存放，历史只记录
   引用。输入草稿会实时计入估算上下文，接口返回 usage 后改用供应商给出的精确 Token。
-- 左下角“设置”统一承载应用级设置；代理等即时控制直接生效，开机启动、关闭行为、主题与高级
+- 左下角“设置”统一承载应用级设置；应用代理保存后立即生效，开机启动、关闭行为、主题与高级
   选项先形成草稿，显示未保存项数并在“完成”时一次确认。终端工具栏的主题切换仍即时生效，
-  当前版本只提供简体中文。高级接入工具位于“设置 → 接入”，内置代理与路由分别位于
+  当前版本只提供简体中文。高级接入工具位于“设置 → 接入”，外部应用代理与路由分别位于
   “设置 → 代理 / 路由”。
 - 标题栏下载入口集中显示受管资源的真实进度、速度、已用/剩余时间和校验阶段；可暂停、继续、
   取消并在崩溃后恢复。退出时会区分可恢复下载与安装/卸载/配置写入风险，默认引导最小化到托盘。
@@ -757,15 +757,7 @@ npm run dist
 `npm run test:control-theme` 在隐藏窗口里读取全部按钮的计算样式，任何一个仍是 Chromium
 用户代理默认外观（`border-style: outset`）的控件都会让它失败——主题里没有任何规则会产生
 `outset`，所以这等价于「这个按钮从未被项目选择器命中」。
-`npm run test:xray-download` 需要联网，它复现内置代理引导下载被自身代理清空掐断的竞态；
-对应的离线保证是 `tests/proxy-environment.test.ts` 中 `starting` 与 `stopped` 规则一致的断言。
-`npm run test:xray-probe` 需要联网，打印内置镜像表里每条线路当前的通断、延迟与实测速率，
-并指出这次会从哪条下载。镜像域名 churn 极高，发布前和收到「所有下载线路都不可用」时都该跑一次；
-加一个参数（如 `http://127.0.0.1:10808`）可以改从引导代理探测。
-`npm run test:xray-install` 需要联网，用一次性 userData 跑完整的探测 → 下载 → 解压 →
-启动链路，失败时会连同内核状态与最近 25 行隧道日志一起打印。它有意每次从零开始；
-只想反复调试启动那一段时用 `KEEP_CORE=1` 复用上次下好的内核。这两个脚本的离线保证分别是
-`tests/xray-core-sources.test.ts` 与 `tests/xray-sidecar.test.ts`。
+应用更新源和外部应用代理都有离线单元测试；测试不会访问真实 GitHub、镜像或代理服务。
 
 `npm run dist` 在 `outputs/` 完成 Windows x64 打包，最终安装程序固定为
 `outputs/ClaudeDock-Setup-<version>-x64.exe`。后续安装包、校验元数据和解包产物均只放在该
@@ -779,23 +771,23 @@ npm run dist
 正式发布使用 `v<package version>` 标签触发 `.github/workflows/release.yml`。工作流会核对标签与
 `package.json`，运行完整验证，再用 `electron-builder --publish always` 把 NSIS 安装包、blockmap
 和 `latest.yml` 发布到 GitHub Release。自动更新要求仓库/Release 对最终用户公开；私有仓库不能把
-`GH_TOKEN` 嵌入客户端。发布前还应在 GitHub Secrets 配置 `WINDOWS_CERTIFICATE_BASE64` 与
-`WINDOWS_CERTIFICATE_PASSWORD`，使用稳定的 Windows 代码签名主体。
+`GH_TOKEN` 嵌入客户端。可选自建镜像必须由同一发布流水线同步这三个文件，并按
+`docs/UPDATE_MIRROR.md` 配置 HTTPS、缓存和回源校验。发布前还应在 GitHub Secrets 配置
+`WINDOWS_CERTIFICATE_BASE64` 与 `WINDOWS_CERTIFICATE_PASSWORD`，使用稳定的 Windows 代码签名主体。
 
 ## 日常使用
 
 标题栏右上角的刷新图标是统一更新检查入口。页面首次完成加载后也会自动在后台执行同样的
-检查；它聚合 ClaudeDock 发行版本、Claude Code、Router、插件市场、已保存代理订阅和当前项目
-MCP 目录/健康状态，单个来源失败不会抹掉其他结果。每个可更新领域还必须在自己的页面提供独立
+检查；它聚合 ClaudeDock 发行版本、Claude Code、Router、插件市场和当前项目 MCP
+目录/健康状态，单个来源失败不会抹掉其他结果。每个可更新领域还必须在自己的页面提供独立
 “检查更新”入口；新增可更新模块时必须同时注册全局聚合与领域入口。没有发现可安装软件更新时，
 对应安装/批量更新按钮保持隐藏，检查按钮仍然可达。
 
-使用内置代理时，在“设置 → 代理”导入并选择节点，再选择 IP 策略和作用域。若 V2RayN 只开启了
-系统代理/PAC，可直接并行；若面板显示外部 TUN/VPN，则建议先关闭外部软件的 TUN，或明确确认接受
-“外部 TUN → ClaudeDock Xray → 节点”的潜在链式路径。启动后点击“节点与更新源测速”可验证真实
-HTTP 延迟及 GitHub/npm 来源连通性；测试到响应头后即停止，不再下载 10 MB 测速文件。中国大陆
-公开发行时，通用节点/订阅/出口能力仍是高风险项；请先阅读
-`docs/LEGAL_COMPLIANCE.md` 并决定移除模块，或改为依法取得的受控企业线路模式。
+使用已有代理时，在“设置 → 代理”填写 HTTP/SOCKS5 地址、端口与可选账号密码，选择作用域后保存。
+“检测本机代理”只列出系统代理和环境变量中的无凭据候选，不会自动启用；“测试 GitHub 连接”使用
+独立 Electron session 发出 HEAD 请求，不调用模型。Claude Code CLI 只支持 HTTP/HTTPS 代理，
+因此 SOCKS5 模式不能勾选 CLI。ClaudeDock 不修改 Windows 系统代理、DNS、路由表、网卡或其他软件，
+也不提供节点、订阅、内核、隧道或出口。
 
 如果要使用 ChatGPT 订阅开发，添加项目后在“当前项目开发引擎”选择 **Codex**，再点击
 “一键准备 Codex”。应用会在需要时下载并校验官方安装器、打开官方 ChatGPT 登录页，登录完成
@@ -892,15 +884,17 @@ Codex 会直接复用自己的登录态。若选择 **Claude Code**，继续按�
 assets/              图标矢量源及生成图标
 build/               electron-builder/NSIS 安装器自定义脚本
 scripts/             清理、图标生成等工程脚本
-src/main/            Electron 主进程、下载/代理/MCP/路由服务、项目工作区与 CLI 运行时
+src/main/            Electron 主进程、下载/外部应用代理/MCP/路由服务、项目工作区与 CLI 运行时
 src/preload/         受限的渲染进程桥接 API
 src/renderer/        控制面板界面与 xterm.js 终端
 src/shared/          跨进程类型和纯函数
 tests/               单元测试
-assets/runtime/      Claude Code statusLine、运行期信号与 WebSearch 子代理路由钩子脚本
+assets/runtime/      运行期脚本与应用更新源配置
 outputs/             安装包、校验元数据与解包产物，不纳入 Git
 roadmap.md           本轮产品任务的实施结论、调研依据与后续演进项
-THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代码声明
+LICENSE / NOTICE     Apache-2.0 许可与版权通知
+THIRD_PARTY_NOTICES.md 第三方依赖许可维护要求
+docs/UPDATE_MIRROR.md 自建 HTTPS 更新镜像部署与校验要求
 ```
 
 ## 安全与限制
@@ -972,10 +966,9 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
 - Router 管理凭据只在 Electron 主进程读取并用于本机回环 RPC，不会传给 renderer。
   Provider 列表只显示“是否已配置密钥”。保存 Provider 时只改 CCR 的 `Providers` 和
   `preferredProvider`，不会应用或改写 CCR 中的 Codex profile、Claude profile 或系统代理。
-- 代理节点凭据只以 `safeStorage` 密文写入 `userData/proxy/`。Xray 配置在启动前临时生成，停止后
-  删除；作用域开关默认只注入 Claude/Codex CLI 子进程。应用代理只影响 Electron 自己的 session，
-  任何路径都不写 Windows Internet Settings、路由表或桌面客户端配置。外部代理检测只读取进程名、
-  代理决策和虚拟网卡类别；检测到 TUN 时只要求确认，不自动关闭 V2RayN/Clash/sing-box。
+- 外部应用代理的账号与地址保存在 `userData/proxy/application-proxy.json`，密码只以 `safeStorage`
+  密文保存，renderer 只能看到“是否已配置”。作用域只影响 ClaudeDock 启动的 CLI 或指定 Electron
+  session；任何路径都不写 Windows Internet Settings、DNS、路由表、网卡或桌面客户端配置。
 - MCP 发现只读 `~/.claude.json`、项目 `.mcp.json` 与 `~/.codex/config.toml`，明确不读取 Claude
   Desktop 配置。安装/卸载通过 `claude mcp` argv 执行；项目共享启停写入前校验文件未被并发修改，
   保留最近 10 份完整备份并支持逐字节还原。Codex MCP 在本版只读显示，避免越权改写其配置。
@@ -1011,8 +1004,9 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
   项目的 `claude project purge`，也不把这一兼容路径描述为 Claude Code 官方 API。
 - 本地构建默认没有代码签名，Windows SmartScreen 可能显示未知发布者提示。
 - 当前 GitHub 更新通道只有在仓库和 Release 对用户公开时可用；私有仓库普通用户无法自动更新。
-- 中国大陆公开发行前必须决定通用代理模块的处理方式，并把实际发行主体与联系方式写入
-  `docs/PRIVACY.md` 和应用内“隐私与合规”；当前文档不是正式法律意见。
+  自建源必须使用 HTTPS 域名，裸 IP/HTTP 不会被客户端接受；双源更新仍不替代 Windows 代码签名。
+- 中国大陆公开版已移除通用节点/订阅/隧道/出口能力，但外部代理配置仍需由发行者结合实际运营方式
+  做正式法律审查，并把真实主体与联系方式写入 `docs/PRIVACY.md` 和应用内“隐私与合规”。
 - 当前仅打包 Windows x64。
 - 自动发现覆盖 Claude Code Router 的默认 `3456/3458`、LiteLLM 的常用 `4000` 和当前
   项目已保存的本机端口；自定义端口或改名进程可能需要手动填写。
@@ -1020,3 +1014,8 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
   Visual Studio C++ 构建组件。
 
 项目面向公开用户使用与评审；维护信息以仓库提交记录和后续发布说明为准。
+
+## 开源许可
+
+ClaudeDock 源代码按 [Apache License 2.0](LICENSE) 开放。第三方依赖保留各自许可；发布前检查要求见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。贡献者提交代码即表示其有权按项目许可提供该贡献。

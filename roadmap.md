@@ -187,8 +187,8 @@ workspace trust 和 advanced 作为可筛选类别；Windows 也长期将系统�
   `workspace-write + on-request`，不向无代码用户暴露危险的全权限捷径。
 - 本版让 ChatGPT 官方订阅进入 ClaudeDock 的开发流程，但运行的客户端是 Codex，不宣称
   “ChatGPT 订阅原生进入 Claude Code”。OAuth 令牌仍只归官方 Codex 管理。
-- 3.0 已建立统一 BusyRegistry 与可恢复下载内核，CCR、Codex、Xray 和 CC Switch 的受管资源
-  共用进度、恢复和完整性闸门；安装/卸载/配置写入纳入忙碌退出确认。
+- 3.0 已建立统一 BusyRegistry 与可恢复下载内核；4.0 移除 Xray 后，CCR、Codex 与 CC Switch 的
+  受管资源继续共用进度、恢复和完整性闸门，安装/卸载/配置写入纳入忙碌退出确认。
 - Provider Adapter 已以显式能力矩阵区分 Anthropic 直连、可选 CCR 与必须协议转换；一键向导
   在 ClaudeDock 内完成决策、安装、启动、写配置和连通校验。CC Switch 只做官方 MSI 与 deep
   link 互操作，不触碰其 SQLite。

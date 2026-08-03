@@ -25,6 +25,8 @@ import { homedir, release } from 'node:os';
 import path from 'node:path';
 import type {
   AdvancedSettings,
+  ApplicationProxyCandidate,
+  ApplicationProxyState,
   AppSettingsView,
   ClaudeConfigResult,
   ClaudeConnectionTestResult,
@@ -65,13 +67,7 @@ import type {
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
-  ProxyAuditRecord,
-  ProxyControlView,
-  ProxyExternalEnvironmentView,
-  ProxyPerformanceView,
-  ProxyProfileInput,
-  ProxyScopeSettings,
-  ProxySubscriptionInput,
+  SaveApplicationProxyInput,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
   SaveChatConfigInput,
@@ -127,26 +123,18 @@ import { DownloadEngine, type DownloadSession } from './download-engine';
 import { CcSwitchAdapter } from './cc-switch-adapter';
 import { McpManager } from './mcp-manager';
 import { AppPreferencesStore } from './app-preferences-store';
-import { ProxyStore } from './proxy/proxy-store';
-import { XraySidecar } from './proxy/xray-sidecar';
 import {
-  buildCliProxyEnvironment,
-  builtInProxyRules,
-  normalizeBootstrapProxyUrl,
-} from './proxy/proxy-environment';
-import { parseProxyImportText } from './proxy/proxy-parser';
-import { downloadProxySubscription } from './proxy/proxy-subscription';
-import { LeakAuditService } from './proxy/leak-audit';
-import { LeakAuditStore } from './proxy/leak-audit-store';
-import { auditWebRtc } from './proxy/webrtc-audit';
-import {
-  detectExternalProxyProcesses,
-  evaluateExternalProxyEnvironment,
-} from './proxy/external-proxy';
-import { testProxyPerformance } from './proxy/performance-test';
-import { interfaceFacts } from './network-path-resolver';
-import { WindowsIpv6Service } from './windows-ipv6';
+  applicationProxyRules,
+  applicationProxyUrl,
+  buildApplicationProxyEnvironment,
+  parseApplicationProxyCandidate,
+} from './proxy/application-proxy';
+import { ApplicationProxyStore } from './proxy/application-proxy-store';
 import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from './application-updater';
+import {
+  loadApplicationUpdateSources,
+  selectApplicationUpdateSource,
+} from './application-update-sources';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -182,13 +170,10 @@ let busyRegistry: BusyRegistry | null = null;
 let mcpManager: McpManager | null = null;
 let downloadEngine: DownloadEngine | null = null;
 let ccSwitchAdapter: CcSwitchAdapter | null = null;
-let proxyStore: ProxyStore | null = null;
-let xraySidecar: XraySidecar | null = null;
-let proxyLeakAuditService: LeakAuditService | null = null;
+let applicationProxyStore: ApplicationProxyStore | null = null;
+let applicationProxyState: ApplicationProxyState | undefined;
 let conversationNetworkSession: Session | null = null;
-let proxyPerformanceSession: Session | null = null;
-let proxyExternalEnvironment: ProxyExternalEnvironmentView | undefined;
-let proxyPerformance: ProxyPerformanceView | undefined;
+let applicationProxyTestSession: Session | null = null;
 let chatFetch: typeof fetch = fetch;
 let releaseConversationBusy: (() => void) | undefined;
 let applicationUpdaterService: ApplicationUpdaterService | null = null;
@@ -843,41 +828,39 @@ const routerKernelFailure = async (
   };
 };
 
-/**
- * The last rules handed to Chromium. `setProxy` + `closeAllConnections` tears down every live socket,
- * so replaying identical rules on each runtime-view change (every log line during startup) would keep
- * killing the very download that startup is waiting on.
- */
-let appliedProxyRules = '';
+/** Chromium closes live sockets whenever proxy rules change, so identical rules are de-duplicated. */
+let appliedApplicationProxyRules = '';
 let appliedConversationProxyRules = '';
-const windowsIpv6Service = new WindowsIpv6Service(app.getPath('userData'));
+
+const requireApplicationProxyStore = (): ApplicationProxyStore => {
+  if (!applicationProxyStore) throw new Error('应用代理服务尚未初始化。');
+  return applicationProxyStore;
+};
+
+const applicationProxyView = (): ApplicationProxyState => ({
+  config: requireApplicationProxyStore().getView(),
+  test: applicationProxyState?.test,
+});
+
+const publishApplicationProxyState = (): ApplicationProxyState => {
+  applicationProxyState = applicationProxyView();
+  mainWindow?.webContents.send('application-proxy:changed', applicationProxyState);
+  return applicationProxyState;
+};
 
 const applyApplicationProxyScope = async (): Promise<void> => {
-  if (!proxyStore || !xraySidecar) {
-    return;
-  }
-  const rules = builtInProxyRules(xraySidecar.getView(), proxyStore.getView().scope);
+  if (!applicationProxyStore) return;
+  const rules = applicationProxyRules(applicationProxyStore.getView(), 'application');
   const signature = JSON.stringify(rules);
-  if (signature === appliedProxyRules) {
-    return;
-  }
-  appliedProxyRules = signature;
+  if (signature === appliedApplicationProxyRules) return;
+  appliedApplicationProxyRules = signature;
   await session.defaultSession.setProxy(rules);
   await session.defaultSession.closeAllConnections();
 };
 
 const applyConversationProxyScope = async (): Promise<void> => {
-  if (!proxyStore || !xraySidecar || !conversationNetworkSession) return;
-  const runtime = xraySidecar.getView();
-  const enabled = proxyStore.getView().scope.conversation;
-  const rules =
-    enabled && runtime.status === 'ready' && runtime.httpProxyUrl
-      ? {
-          mode: 'fixed_servers' as const,
-          proxyBypassRules: '127.0.0.1,localhost,[::1]',
-          proxyRules: runtime.httpProxyUrl,
-        }
-      : { mode: 'direct' as const };
+  if (!applicationProxyStore || !conversationNetworkSession) return;
+  const rules = applicationProxyRules(applicationProxyStore.getView(), 'conversation');
   const signature = JSON.stringify(rules);
   if (signature === appliedConversationProxyRules) return;
   appliedConversationProxyRules = signature;
@@ -885,161 +868,73 @@ const applyConversationProxyScope = async (): Promise<void> => {
   await conversationNetworkSession.closeAllConnections();
 };
 
-const requireProxyServices = (): {
-  audit: LeakAuditService;
-  sidecar: XraySidecar;
-  store: ProxyStore;
-} => {
-  if (!proxyStore || !xraySidecar || !proxyLeakAuditService) {
-    throw new Error('内置代理服务尚未初始化。');
-  }
-  return { audit: proxyLeakAuditService, sidecar: xraySidecar, store: proxyStore };
-};
-
-const proxyControlView = (): ProxyControlView => {
-  const { audit, sidecar, store } = requireProxyServices();
-  return {
-    audits: audit.list(),
-    core: sidecar.getCoreView(),
-    externalEnvironment: proxyExternalEnvironment,
-    performance: proxyPerformance,
-    runtime: sidecar.getView(),
-    store: store.getView(),
+const detectApplicationProxyCandidates = async (): Promise<ApplicationProxyCandidate[]> => {
+  const candidates = new Map<string, ApplicationProxyCandidate>();
+  const addCandidate = (candidate: ApplicationProxyCandidate | undefined): void => {
+    if (candidate) {
+      candidates.set(`${candidate.protocol}:${candidate.host}:${candidate.port}`, candidate);
+    }
   };
-};
-
-const refreshExternalProxyEnvironment = async (): Promise<ProxyExternalEnvironmentView> => {
-  let resolvedSystemProxy: string | undefined;
+  for (const variable of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY']) {
+    addCandidate(parseApplicationProxyCandidate(process.env[variable], `环境变量 ${variable}`));
+  }
   try {
     const detectionSession = session.fromPartition('claudedock-system-proxy-detection');
     await detectionSession.setProxy({ mode: 'system' });
-    resolvedSystemProxy = await detectionSession.resolveProxy('https://github.com');
-  } catch {
-    // Process and interface evidence still distinguishes the important TUN case.
-  }
-  if (!resolvedSystemProxy || resolvedSystemProxy.trim().toUpperCase() === 'DIRECT') {
-    const inherited = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY']
-      .map((key) => normalizeBootstrapProxyUrl(process.env[key]))
-      .find(Boolean);
-    resolvedSystemProxy = inherited ? `环境变量 ${inherited}` : resolvedSystemProxy;
-  }
-  proxyExternalEnvironment = evaluateExternalProxyEnvironment({
-    externalProcesses: await detectExternalProxyProcesses(),
-    resolvedSystemProxy,
-    virtualInterfaces: interfaceFacts().virtualInterfaces,
-  });
-  return proxyExternalEnvironment;
-};
-
-/**
- * Lists what a bootstrap proxy *could* be on this machine — the standard proxy environment variables
- * and whatever Windows itself is configured to use. It only ever suggests: the user picks one and
- * confirms, because a port that exists here says nothing about the next machine this ships to.
- */
-const detectBootstrapProxyCandidates = async (): Promise<string[]> => {
-  const candidates = new Set<string>();
-  for (const variable of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY']) {
-    const normalized = normalizeBootstrapProxyUrl(process.env[variable]);
-    if (normalized) {
-      candidates.add(normalized);
-    }
-  }
-  try {
-    // `resolveProxy` reports the PAC/system decision for a real destination without changing it.
-    const resolved = await session.defaultSession.resolveProxy('https://github.com');
+    const resolved = await detectionSession.resolveProxy('https://github.com');
     for (const entry of resolved.split(';')) {
       const [scheme, endpoint] = entry.trim().split(/\s+/);
-      if (!endpoint) {
-        continue;
-      }
+      if (!endpoint || scheme === 'DIRECT') continue;
       const prefix = scheme === 'SOCKS5' || scheme === 'SOCKS' ? 'socks5' : 'http';
-      const normalized = normalizeBootstrapProxyUrl(`${prefix}://${endpoint}`);
-      if (normalized) {
-        candidates.add(normalized);
-      }
+      addCandidate(parseApplicationProxyCandidate(`${prefix}://${endpoint}`, 'Windows 系统代理'));
     }
   } catch {
     // No system proxy configured is a perfectly normal answer.
   }
-  return [...candidates];
+  return [...candidates.values()];
 };
 
-const selectedProxyProfile = () => {
-  const { store } = requireProxyServices();
-  const profileId = store.getView().state.selectedProfileId;
-  const profile = profileId ? store.getProfile(profileId) : undefined;
-  if (!profile) {
-    throw new Error('请先选择一个代理节点。');
+const testApplicationProxy = async (): Promise<ApplicationProxyState> => {
+  const store = requireApplicationProxyStore();
+  const config = store.getView();
+  if (!config.enabled || !applicationProxyTestSession) {
+    throw new Error('请先保存并启用应用代理。');
   }
-  return profile;
-};
-
-const runSelectedProxyAudit = async (): Promise<ProxyAuditRecord> => {
-  const { audit, sidecar, store } = requireProxyServices();
-  const profile = selectedProxyProfile();
-  const record = await audit.run(profile, sidecar.getView());
-  store.setState({
-    lastAuditAt: record.report.checkedAt,
-    lastAuditConclusion: record.report.summary,
-  });
-  mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-  return record;
-};
-
-/**
- * Shared by the IPC handler and the launch-time restore. `autoStart` is only written once the tunnel
- * is genuinely up, and cleared the moment it is not, so an unexpected exit can be told apart from a
- * deliberate stop or a start that never succeeded.
- */
-const startBuiltInProxy = async (
-  manualCorePath?: string,
-  acceptExternalTunnelChain = false,
-): Promise<void> => {
-  const { sidecar, store } = requireProxyServices();
-  const profile = selectedProxyProfile();
-  const external = await refreshExternalProxyEnvironment();
-  if (external.mode === 'chain-risk' && !acceptExternalTunnelChain) {
-    store.setState({ autoStart: false, runtimeStatus: 'stopped' });
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    throw new Error(
-      '检测到外部 TUN/VPN 仍在接管网络。请在代理面板确认链式代理风险后再启动，或先关闭外部 TUN 模式。',
-    );
-  }
-  proxyPerformance = undefined;
-  store.setState({ runtimeStatus: 'starting' });
+  const testConfig = { ...config, scope: { ...config.scope, application: true } };
+  await applicationProxyTestSession.setProxy(applicationProxyRules(testConfig, 'application'));
+  await applicationProxyTestSession.closeAllConnections();
+  const startedAt = Date.now();
   try {
-    await sidecar.start(profile, manualCorePath, store.getView().scope.ipMode ?? 'ipv4_only');
-    store.setState({ autoStart: true, runtimeStatus: 'ready' });
-    await applyApplicationProxyScope();
-    await applyConversationProxyScope();
-    requireNetworkPreflightService().invalidate('built-in-proxy-started');
-    await runSelectedProxyAudit();
+    const response = await applicationProxyTestSession.fetch('https://github.com/', {
+      cache: 'no-store',
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12_000),
+    });
+    const latencyMs = Date.now() - startedAt;
+    applicationProxyState = {
+      config,
+      test: {
+        checkedAt: Date.now(),
+        latencyMs,
+        message: response.ok
+          ? `已通过该代理访问 GitHub（HTTP ${response.status}）。`
+          : `代理已响应，但 GitHub 返回 HTTP ${response.status}。`,
+        ok: response.ok,
+      },
+    };
   } catch (error) {
-    // A cancelled or failed start leaves nothing running: report 已停止 so 启动 becomes available again.
-    store.setState({ autoStart: false, runtimeStatus: 'stopped' });
-    await applyApplicationProxyScope();
-    await applyConversationProxyScope();
-    throw error;
-  } finally {
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    applicationProxyState = {
+      config,
+      test: {
+        checkedAt: Date.now(),
+        message: `代理连接失败：${error instanceof Error ? error.message : '未知网络错误'}`,
+        ok: false,
+      },
+    };
   }
-};
-
-const stopBuiltInProxy = async (): Promise<void> => {
-  const { sidecar, store } = requireProxyServices();
-  await sidecar.stop();
-  store.setState({ autoStart: false, runtimeStatus: 'stopped' });
-  await applyApplicationProxyScope();
-  await applyConversationProxyScope();
-  requireNetworkPreflightService().invalidate('built-in-proxy-stopped');
-  mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-};
-
-const validateProxyProfileId = (value: unknown): string => {
-  if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)) {
-    throw new Error('代理节点标识无效。');
-  }
-  return value;
+  mainWindow?.webContents.send('application-proxy:changed', applicationProxyState);
+  return applicationProxyState;
 };
 
 const assertOfficialProviderAllowed = async (
@@ -1048,18 +943,7 @@ const assertOfficialProviderAllowed = async (
   cwd?: string,
   networkScope?: 'conversation',
 ): Promise<void> => {
-  if (proxyStore && xraySidecar && proxyLeakAuditService) {
-    const scope = proxyStore.getView().scope;
-    const proxyAffectsAction =
-      networkScope === 'conversation'
-        ? scope.conversation
-        : (action === 'cli-launch' && scope.cli) ||
-          (['background', 'cloud-task', 'first-request', 'provider-switch'].includes(action) &&
-            scope.application);
-    if (proxyAffectsAction && xraySidecar.getView().status === 'ready') {
-      proxyLeakAuditService.assertAccessAccepted(selectedProxyProfile());
-    }
-  }
+  void networkScope;
   await requireProviderAccessGuard().assertAllowed(provider, action, cwd);
 };
 
@@ -1579,278 +1463,26 @@ const registerIpc = (): void => {
     validateSender(event);
     return requireDownloadEngine().cancel(validateDownloadTaskId(taskId));
   });
-  ipcMain.handle('proxy:get-state', async (event) => {
+  ipcMain.handle('application-proxy:get', (event) => {
     validateSender(event);
-    await refreshExternalProxyEnvironment();
-    return proxyControlView();
+    return applicationProxyView();
   });
-  ipcMain.handle('proxy:preview-import', (event, text: unknown) => {
+  ipcMain.handle('application-proxy:save', async (event, input: unknown) => {
     validateSender(event);
-    if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 2 * 1024 * 1024) {
-      throw new Error('代理导入内容必须小于 2 MiB。');
-    }
-    return parseProxyImportText(text);
-  });
-  ipcMain.handle('proxy:preview-subscription', async (event, url: unknown) => {
-    validateSender(event);
-    if (typeof url !== 'string' || url.length > 2048) {
-      throw new Error('代理订阅地址无效。');
-    }
-    return downloadProxySubscription(requireDownloadEngine(), app.getPath('userData'), url);
-  });
-  ipcMain.handle('proxy:save-profiles', (event, profiles: unknown, subscription: unknown) => {
-    validateSender(event);
-    if (!Array.isArray(profiles) || profiles.length === 0 || profiles.length > 100) {
-      throw new Error('请选择 1–100 个代理节点导入。');
-    }
-    const { store } = requireProxyServices();
-    if (subscription !== undefined) {
-      const source = subscription as Partial<ProxySubscriptionInput>;
-      if (
-        !source ||
-        typeof source.id !== 'string' ||
-        typeof source.label !== 'string' ||
-        typeof source.url !== 'string'
-      ) {
-        throw new Error('代理订阅来源无效。');
-      }
-      store.replaceSubscription(source as ProxySubscriptionInput, profiles as ProxyProfileInput[]);
-      mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-      return proxyControlView();
-    }
-    for (const profile of profiles) {
-      if (!profile || typeof profile !== 'object') {
-        throw new Error('代理节点格式无效。');
-      }
-      store.saveProfile(profile as ProxyProfileInput);
-    }
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:refresh-subscriptions', async (event) => {
-    validateSender(event);
-    const { sidecar, store } = requireProxyServices();
-    const sources = store.getSubscriptionSources();
-    if (sources.length === 0) throw new Error('尚未保存可更新的代理订阅。');
-    const runtimeStatus = sidecar.getView().status;
-    if (runtimeStatus === 'starting' || runtimeStatus === 'stopping') {
-      throw new Error('代理正在切换状态，请等待启动或停止完成后再更新订阅。');
-    }
-    const wasRunning = runtimeStatus === 'ready';
-    if (wasRunning) await stopBuiltInProxy();
-    const failures: string[] = [];
-    let updated = 0;
-    for (const source of sources) {
-      try {
-        const preview = await downloadProxySubscription(
-          requireDownloadEngine(),
-          app.getPath('userData'),
-          source.url,
-        );
-        if (preview.profiles.length === 0) throw new Error('订阅没有可导入节点。');
-        store.replaceSubscription(source, preview.profiles);
-        updated += 1;
-      } catch (error) {
-        failures.push(`${source.label}：${error instanceof Error ? error.message : '更新失败'}`);
-      }
-    }
-    if (wasRunning) {
-      try {
-        // A running tunnel has already passed the external-TUN confirmation gate. Refreshing its
-        // subscription should not strand it merely because the same external adapter still exists.
-        await startBuiltInProxy(undefined, true);
-      } catch (error) {
-        failures.push(`代理恢复：${error instanceof Error ? error.message : '启动失败'}`);
-      }
-    }
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return { failures, state: proxyControlView(), updated };
-  });
-  ipcMain.handle('proxy:remove-profile', async (event, profileId: unknown) => {
-    validateSender(event);
-    const { sidecar, store } = requireProxyServices();
-    const validatedId = validateProxyProfileId(profileId);
-    if (sidecar.getView().profileId === validatedId) {
-      await sidecar.stop();
-    }
-    store.removeProfile(validatedId);
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:select-profile', async (event, profileId: unknown) => {
-    validateSender(event);
-    const { sidecar, store } = requireProxyServices();
-    const validatedId = validateProxyProfileId(profileId);
-    if (sidecar.getView().status !== 'stopped') {
-      await sidecar.stop();
-    }
-    store.setState({ selectedProfileId: validatedId });
-    requireNetworkPreflightService().invalidate('built-in-proxy-profile-changed');
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:set-scope', async (event, scope: unknown) => {
-    validateSender(event);
-    const record =
-      scope && typeof scope === 'object' ? (scope as Partial<ProxyScopeSettings>) : undefined;
-    if (
-      typeof record?.cli !== 'boolean' ||
-      typeof record.application !== 'boolean' ||
-      typeof record.conversation !== 'boolean' ||
-      (record.ipMode !== undefined &&
-        !['dual_stack', 'ipv4_only', 'prefer_ipv6'].includes(record.ipMode))
-    ) {
-      throw new Error('代理作用域设置无效。');
-    }
-    if (
-      record.bootstrapProxyUrl !== undefined &&
-      (typeof record.bootstrapProxyUrl !== 'string' || record.bootstrapProxyUrl.length > 512)
-    ) {
-      throw new Error('引导代理地址无效。');
-    }
-    if (
-      record.extraCoreSources !== undefined &&
-      (!Array.isArray(record.extraCoreSources) ||
-        record.extraCoreSources.length > 16 ||
-        record.extraCoreSources.some((entry) => typeof entry !== 'string' || entry.length > 253))
-    ) {
-      throw new Error('自定义镜像来源无效。');
-    }
-    const services = requireProxyServices();
-    const previousIpMode = services.store.getView().scope.ipMode ?? 'ipv4_only';
-    const wasRunning = services.sidecar.getView().status === 'ready';
-    services.store.setScope({
-      application: record.application,
-      bootstrapProxyUrl: record.bootstrapProxyUrl,
-      cli: record.cli,
-      conversation: record.conversation,
-      extraCoreSources: record.extraCoreSources,
-      ipMode: record.ipMode,
-    });
-    const nextIpMode = services.store.getView().scope.ipMode ?? 'ipv4_only';
-    if (wasRunning && previousIpMode !== nextIpMode) {
-      await stopBuiltInProxy();
-      await startBuiltInProxy(undefined, true);
-    }
+    requireApplicationProxyStore().save(input as SaveApplicationProxyInput);
+    applicationProxyState = undefined;
     await applyApplicationProxyScope();
     await applyConversationProxyScope();
-    requireNetworkPreflightService().invalidate('built-in-proxy-scope-changed');
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
+    requireNetworkPreflightService().invalidate('application-proxy-changed');
+    return publishApplicationProxyState();
   });
-  ipcMain.handle('proxy:probe-core-sources', async (event) => {
+  ipcMain.handle('application-proxy:test', async (event) => {
     validateSender(event);
-    /*
-     * The bootstrap proxy has to be live before the probe runs, or the probe measures a network path
-     * the download will not take. `applyApplicationProxyScope` is a no-op when the rules are already
-     * current, so this costs nothing on the common path.
-     */
-    await applyApplicationProxyScope();
-    await requireProxyServices().sidecar.probeSources();
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
+    return testApplicationProxy();
   });
-  ipcMain.handle('proxy:install-core', async (event) => {
+  ipcMain.handle('application-proxy:detect', async (event) => {
     validateSender(event);
-    await applyApplicationProxyScope();
-    await requireProxyServices().sidecar.installCoreFromFastestSource();
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:install-core-file', async (event, filePath: unknown) => {
-    validateSender(event);
-    if (typeof filePath !== 'string' || !filePath || filePath.length > 4096) {
-      throw new Error('内核文件路径无效。');
-    }
-    if (!path.isAbsolute(filePath)) {
-      throw new Error('内核文件路径必须是绝对路径。');
-    }
-    await requireProxyServices().sidecar.installCoreFromFile(filePath);
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:detect-bootstrap-proxy', async (event) => {
-    validateSender(event);
-    return detectBootstrapProxyCandidates();
-  });
-  ipcMain.handle(
-    'proxy:start',
-    async (event, manualCorePath: unknown, acceptExternalTunnelChain: unknown) => {
-      validateSender(event);
-      if (
-        manualCorePath !== undefined &&
-        (typeof manualCorePath !== 'string' || manualCorePath.length > 4096)
-      ) {
-        throw new Error('Xray-core 路径无效。');
-      }
-      if (
-        acceptExternalTunnelChain !== undefined &&
-        typeof acceptExternalTunnelChain !== 'boolean'
-      ) {
-        throw new Error('外部代理风险确认参数无效。');
-      }
-      await startBuiltInProxy(
-        typeof manualCorePath === 'string' ? manualCorePath || undefined : undefined,
-        acceptExternalTunnelChain === true,
-      );
-      return proxyControlView();
-    },
-  );
-  ipcMain.handle('proxy:stop', async (event) => {
-    validateSender(event);
-    await stopBuiltInProxy();
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:test-performance', async (event) => {
-    validateSender(event);
-    const runtime = requireProxyServices().sidecar.getView();
-    if (runtime.status !== 'ready' || !runtime.httpProxyUrl || !proxyPerformanceSession) {
-      throw new Error('请先启动内置代理，再测试节点速度与更新来源。');
-    }
-    await proxyPerformanceSession.setProxy({
-      mode: 'fixed_servers',
-      proxyBypassRules: '127.0.0.1,localhost,[::1]',
-      proxyRules: runtime.httpProxyUrl,
-    });
-    await proxyPerformanceSession.closeAllConnections();
-    proxyPerformance = await testProxyPerformance((url, init) =>
-      proxyPerformanceSession!.fetch(url, init),
-    );
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('proxy:run-audit', async (event) => {
-    validateSender(event);
-    return runSelectedProxyAudit();
-  });
-  ipcMain.handle('proxy:accept-audit', (event, recordId: unknown) => {
-    validateSender(event);
-    if (typeof recordId !== 'string' || !/^[a-f0-9-]{36}$/i.test(recordId)) {
-      throw new Error('代理体检记录标识无效。');
-    }
-    const record = requireProxyServices().audit.accept(recordId);
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return record;
-  });
-  ipcMain.handle('proxy:delete-audit', (event, recordId: unknown) => {
-    validateSender(event);
-    if (typeof recordId !== 'string' || !/^[a-f0-9-]{36}$/i.test(recordId)) {
-      throw new Error('代理体检记录标识无效。');
-    }
-    requireProxyServices().audit.delete(recordId);
-    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-    return proxyControlView();
-  });
-  ipcMain.handle('network:get-ipv6-state', (event) => {
-    validateSender(event);
-    return windowsIpv6Service.getState();
-  });
-  ipcMain.handle('network:set-ipv6-disabled', async (event, disabled: unknown) => {
-    validateSender(event);
-    if (typeof disabled !== 'boolean') throw new Error('IPv6 设置无效。');
-    const state = await windowsIpv6Service.setDisabled(disabled);
-    requireNetworkPreflightService().invalidate('windows-ipv6-changed');
-    return state;
+    return detectApplicationProxyCandidates();
   });
   ipcMain.handle('network-preflight:get', (event, provider: unknown) => {
     validateSender(event);
@@ -3635,6 +3267,21 @@ if (!hasSingleInstanceLock) {
   app.on('web-contents-created', (_event, contents) => {
     contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
   });
+  app.on('login', (event, _webContents, _details, authInfo, callback) => {
+    if (!authInfo.isProxy || !applicationProxyStore) return;
+    const config = applicationProxyStore.getView();
+    const credentials = applicationProxyStore.getCredentials();
+    if (
+      !config.enabled ||
+      !credentials ||
+      authInfo.host.toLowerCase() !== config.host.toLowerCase() ||
+      authInfo.port !== config.port
+    ) {
+      return;
+    }
+    event.preventDefault();
+    callback(credentials.username, credentials.password);
+  });
   app.whenReady().then(async () => {
     app.setAppUserModelId('cn.cheng.claudedock');
     artifactService.install();
@@ -3659,69 +3306,21 @@ if (!hasSingleInstanceLock) {
       (url) => shell.openExternal(url),
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
     );
-    proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
+    applicationProxyStore = new ApplicationProxyStore(app.getPath('userData'), safeStorage);
     conversationNetworkSession = session.fromPartition('claudedock-conversation-network');
-    proxyPerformanceSession = session.fromPartition('claudedock-proxy-performance');
+    applicationProxyTestSession = session.fromPartition('claudedock-application-proxy-test');
     chatFetch = (url, init) =>
       conversationNetworkSession!.fetch(url instanceof URL ? url.toString() : url, init);
-    xraySidecar = new XraySidecar({
-      busyRegistry,
-      downloadEngine,
-      /*
-       * Route probes travel the app session, so they inherit whatever `applyApplicationProxyScope`
-       * has in force — including the user's bootstrap proxy. A route that probes green is therefore
-       * a route the download can actually use, rather than one that merely exists.
-       */
-      fetchImpl: (url, init) => session.defaultSession.fetch(url, init),
-      mirrorHosts: () => proxyStore?.getView().scope.extraCoreSources ?? [],
-      onChange: (view) => {
-        mainWindow?.webContents.send('proxy:runtime-changed', view);
-        if (proxyLeakAuditService) {
-          mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
-        }
-        void applyApplicationProxyScope();
-        void applyConversationProxyScope();
-      },
-      userDataPath: app.getPath('userData'),
-    });
-    /*
-     * Record the resting rules before anything can start the tunnel. Without this the cached
-     * signature is the empty string, so the first `setView({ status: 'starting' })` looked like a
-     * change and fired a real `setProxy` + `closeAllConnections()` — landing milliseconds after
-     * `downloadURL()` opened the socket for the Xray-core bootstrap and killing it at 0 bytes. A
-     * starting sidecar resolves to the same `{ mode: 'system' }` as a stopped one, so once the
-     * signature is primed the whole startup path is a no-op until the tunnel is genuinely ready.
-     */
     await applyApplicationProxyScope();
     await applyConversationProxyScope();
-    // Recreating a journalled DownloadItem before setProxy settles lets the first proxy refresh
-    // close its socket at zero bytes. Restore only after the application network path is stable.
+    // Restore only after the selected application network path is stable.
     downloadEngine.restoreInterrupted();
-    const directAuditSession = session.fromPartition('claudedock-proxy-audit-direct');
-    const proxiedAuditSession = session.fromPartition('claudedock-proxy-audit-tunnel');
-    await directAuditSession.setProxy({ mode: 'direct' });
-    proxyLeakAuditService = new LeakAuditService({
-      auditStore: new LeakAuditStore(app.getPath('userData')),
-      directFetch: (url, init) => directAuditSession.fetch(url, init),
-      onReport: (record) => {
-        if (record.report.summary === 'risk' && !record.acceptedAt) {
-          mainWindow?.webContents.send('proxy:audit-required', record);
-        }
-      },
-      proxiedFetch: (proxyUrl) => async (url, init) => {
-        await proxiedAuditSession.setProxy({
-          mode: 'fixed_servers',
-          proxyBypassRules: '127.0.0.1,localhost,[::1]',
-          proxyRules: proxyUrl,
-        });
-        await proxiedAuditSession.closeAllConnections();
-        return proxiedAuditSession.fetch(url, init);
-      },
-      webRtcAudit: auditWebRtc,
-    });
     workspace.setEnvironmentProvider(() =>
-      proxyStore && xraySidecar
-        ? buildCliProxyEnvironment(xraySidecar.getView(), proxyStore.getView().scope)
+      applicationProxyStore
+        ? buildApplicationProxyEnvironment(
+            applicationProxyStore.getView(),
+            applicationProxyStore.getCredentials(),
+          )
         : {},
     );
     claudeRuntime = new ClaudeRuntime(
@@ -3773,11 +3372,15 @@ if (!hasSingleInstanceLock) {
           net.request({ ...options, session: session.defaultSession }),
         ),
         cliEnvironment: () =>
-          proxyStore && xraySidecar
-            ? buildCliProxyEnvironment(xraySidecar.getView(), proxyStore.getView().scope)
+          applicationProxyStore
+            ? buildApplicationProxyEnvironment(
+                applicationProxyStore.getView(),
+                applicationProxyStore.getCredentials(),
+              )
             : {},
         resolveProxy: (url) => session.defaultSession.resolveProxy(url),
-        builtInProxyUrl: () => xraySidecar?.getView().httpProxyUrl,
+        applicationProxyUrl: () =>
+          applicationProxyStore ? applicationProxyUrl(applicationProxyStore.getView()) : undefined,
       }),
       settingsStore: networkPreflightSettingsStore,
     });
@@ -3789,6 +3392,11 @@ if (!hasSingleInstanceLock) {
       onChange: (state) => {
         mainWindow?.webContents.send('software:application-updater-changed', state);
       },
+      selectSource: () =>
+        selectApplicationUpdateSource(
+          loadApplicationUpdateSources(runtimeAssetPath('update-sources.json')),
+          (url, init) => session.defaultSession.fetch(url, init),
+        ),
     });
     registerIpc();
     createTray();
@@ -3811,15 +3419,6 @@ if (!hasSingleInstanceLock) {
     }
 
     await createWindow();
-
-    /*
-     * If the tunnel was up when ClaudeDock last went away — tray quit, Alt+F4, a crash — bring it
-     * back on its own. It runs after the window exists so the panel shows 启动中 and the failure
-     * message, and it is deliberately not awaited: a slow core download must not block startup.
-     */
-    if (proxyStore?.getView().state.autoStart) {
-      void startBuiltInProxy().catch(() => undefined);
-    }
   });
 }
 
@@ -3848,7 +3447,6 @@ app.on('before-quit', (event) => {
   }
   pendingPermissionModeProbes.clear();
   chatService.shutdown();
-  void xraySidecar?.stop();
   claudeRuntime?.shutdown();
   codexRuntime?.dispose();
   workspace.shutdown();

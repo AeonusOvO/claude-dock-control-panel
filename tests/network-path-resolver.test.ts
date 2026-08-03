@@ -9,7 +9,7 @@ describe('NetworkPathResolver', () => {
     ).resolve('anthropic-claude', 'https://api.anthropic.com');
     expect(paths.find(({ process }) => process === 'claude-cli')).toMatchObject({
       proxyConfigured: true,
-      proxyKind: 'claudedock',
+      proxyKind: 'application-proxy',
     });
   });
 

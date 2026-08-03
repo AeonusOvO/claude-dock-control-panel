@@ -25,11 +25,10 @@ const responseAt = (target: string, chunks: number): Response => {
 };
 
 describe('GitHub release route selection', () => {
-  it('builds mirror and official routes with redirect-chain whitelists', () => {
+  it('builds an official route with redirect-chain whitelists', () => {
     const routes = buildGitHubReleaseRoutes(url);
-    expect(routes.length).toBeGreaterThan(1);
-    expect(routes[0]?.url).toContain('/https://github.com/');
-    expect(routes.at(-1)).toMatchObject({ host: 'github.com', url });
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ host: 'github.com', url });
     expect(
       routes.every((route) => route.allowedHosts.length === route.allowedPathPrefixes.length),
     ).toBe(true);
@@ -39,13 +38,13 @@ describe('GitHub release route selection', () => {
   it('chooses a reachable measured route through the injected app-session fetch', async () => {
     const selected = await pickFastestGitHubReleaseRoute(url, async (candidate) => {
       const target = String(candidate);
-      if (target.includes('gh.zwy.one')) {
+      if (target === url) {
         return responseAt(target, 2);
       }
       throw new Error('unreachable');
     });
 
-    expect(selected?.host).toBe('gh.zwy.one');
+    expect(selected?.host).toBe('github.com');
     expect(selected?.throughputBps).toBeGreaterThan(0);
   });
 });
