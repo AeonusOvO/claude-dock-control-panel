@@ -73,7 +73,7 @@ const JOURNAL_WRITE_INTERVAL_MS = 1_000;
 /**
  * How long a running download may receive zero bytes before the connection is treated as dead.
  * Blocked or blackholed sockets never emit `done`, so without this the task sits at 0% forever and
- * whatever is awaiting it — the Xray-core bootstrap, for one — hangs with no way to recover.
+ * whatever is awaiting it hangs with no way to recover.
  * Hitting the timeout no longer fails the task: it triggers an automatic continuation instead.
  */
 const STALL_TIMEOUT_MS = 45_000;

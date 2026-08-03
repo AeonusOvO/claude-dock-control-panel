@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+certificate=/etc/letsencrypt/live/124.221.158.247/fullchain.pem
+if ! /usr/bin/openssl x509 -checkend 172800 -noout -in "$certificate"; then
+  /usr/bin/logger -p daemon.err -t claudedock-cert-monitor \
+    "ClaudeDock IP certificate expires in less than 48 hours."
+  exit 1
+fi
+
+if ! /usr/bin/openssl x509 -in "$certificate" -noout -ext subjectAltName |
+  /usr/bin/grep -Fq "IP Address:124.221.158.247"; then
+  /usr/bin/logger -p daemon.err -t claudedock-cert-monitor \
+    "ClaudeDock certificate does not contain the required IP SAN."
+  exit 1
+fi
+
+/usr/sbin/nginx -t
+/usr/bin/curl --fail --silent --show-error \
+  --resolve 124.221.158.247:443:127.0.0.1 \
+  --connect-timeout 10 \
+  --max-time 20 \
+  https://124.221.158.247/claudedock/health >/dev/null

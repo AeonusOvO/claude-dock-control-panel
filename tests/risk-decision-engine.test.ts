@@ -35,14 +35,6 @@ const observation = (
   probes: NetworkProbeResult[],
   overrides: Partial<ConnectivityObservation> = {},
 ): ConnectivityObservation => ({
-  egress: {
-    countryCode: 'US',
-    countryName: 'United States',
-    ipv4: '203.0.113.0/24',
-    sourceCount: 2,
-    sourcesAgree: true,
-    stability: 'unknown',
-  },
   paths: [directPath()],
   probes,
   ...overrides,
@@ -77,7 +69,7 @@ describe('RiskDecisionEngine', () => {
           directPath({
             proxyConfigured: true,
             proxyKind: 'environment',
-            virtualInterfaces: ['WireGuard Tunnel'],
+            virtualInterfaces: ['Example virtual adapter'],
           }),
         ],
       }),
@@ -89,62 +81,6 @@ describe('RiskDecisionEngine', () => {
     );
     expect(result.signals.map((signal) => signal.id)).toEqual(
       expect.arrayContaining(['proxy-present', 'virtual-interface-present']),
-    );
-  });
-
-  it('blocks only after two egress sources agree on an unsupported region', () => {
-    const agreed = evaluate(
-      'cli-launch',
-      observation([probe('cli:openai-codex-api')], {
-        egress: {
-          countryCode: 'CN',
-          countryName: 'China',
-          ipv4: '203.0.113.0/24',
-          sourceCount: 2,
-          sourcesAgree: true,
-          stability: 'unknown',
-        },
-      }),
-    );
-    const disputed = evaluate(
-      'cli-launch',
-      observation([probe('cli:openai-codex-api')], {
-        egress: {
-          countryCode: 'CN',
-          countryName: 'China',
-          ipv4: '203.0.113.0/24',
-          sourceCount: 1,
-          sourcesAgree: false,
-          stability: 'unknown',
-        },
-      }),
-    );
-
-    expect(agreed.status).toBe('blocked');
-    expect(disputed.status).toBe('warning');
-  });
-
-  it('treats VPN and hosting intelligence labels as notices rather than blockers', () => {
-    const result = evaluate(
-      'cli-launch',
-      observation([probe('cli:openai-codex-api')], {
-        egress: {
-          countryCode: 'US',
-          countryName: 'United States',
-          ipv4: '203.0.113.0/24',
-          riskFlags: ['VPN', '托管/数据中心'],
-          sourceCount: 2,
-          sources: ['source-a', 'source-b'],
-          sourcesAgree: true,
-          stability: 'unknown',
-        },
-      }),
-    );
-
-    expect(result.status).toBe('allowed_with_notice');
-    expect(result.signals.map((signal) => signal.id)).toContain('egress-reputation-flags');
-    expect(result.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(
-      true,
     );
   });
 

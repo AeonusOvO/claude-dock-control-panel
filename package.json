@@ -1,11 +1,22 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,
-  "author": "Cheng",
+  "author": {
+    "name": "AeonusOvO",
+    "url": "https://github.com/AeonusOvO"
+  },
   "license": "Apache-2.0",
+  "homepage": "https://github.com/AeonusOvO/claude-dock-control-panel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AeonusOvO/claude-dock-control-panel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AeonusOvO/claude-dock-control-panel/issues"
+  },
   "engines": {
     "node": ">=24"
   },
@@ -17,6 +28,8 @@
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron": "wait-on tcp:5173 dist/main/main.js dist/preload/preload.js && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .",
     "generate:icons": "node scripts/generate-icons.mjs",
+    "generate:licenses": "node scripts/generate-third-party-licenses.mjs",
+    "check:licenses": "node scripts/generate-third-party-licenses.mjs --check",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" vite.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -30,13 +43,16 @@
     "test:select-theme": "npm run build:renderer && electron scripts/select-theme-smoke.cjs",
     "test:visual": "npm run build:renderer && electron scripts/visual-smoke.cjs",
     "test:coverage": "vitest run --coverage",
+    "test:release-security": "vitest run tests/application-update-manifest.test.ts tests/application-update-sources.test.ts tests/application-updater.test.ts",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "npm run clean && npm run generate:icons && npm run typecheck && npm run build:main && npm run build:renderer",
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis",
-    "verify": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run build"
+    "release:manifest": "node scripts/generate-release-manifest.mjs outputs",
+    "release:verify": "node scripts/verify-release-bundle.mjs outputs",
+    "verify": "npm run check:licenses && npm run lint && npm run format:check && npm run typecheck && npm test && npm run test:layout && npm run test:control-theme && npm run build"
   },
   "dependencies": {
     "@fontsource-variable/hanken-grotesk": "^5.3.0",
@@ -79,7 +95,8 @@
     "wait-on": "9.1.0"
   },
   "build": {
-    "appId": "cn.cheng.claudedock",
+    "appId": "io.github.aeonusovo.claudedock",
+    "copyright": "Copyright © 2026 AeonusOvO",
     "productName": "ClaudeDock 控制面板",
     "artifactName": "ClaudeDock-Setup-${version}-${arch}.${ext}",
     "directories": {
@@ -98,6 +115,7 @@
       "LICENSE",
       "NOTICE",
       "THIRD_PARTY_NOTICES.md",
+      "THIRD_PARTY_LICENSES.txt",
       "package.json"
     ],
     "asarUnpack": [
@@ -107,6 +125,12 @@
     ],
     "win": {
       "icon": "assets/generated/app-icon.ico",
+      "signtoolOptions": {
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      },
       "target": [
         {
           "target": "nsis",

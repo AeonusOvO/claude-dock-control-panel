@@ -152,7 +152,7 @@ describe('download engine', () => {
   });
 
   /*
-   * The China-reachable Xray-core routes are prefix reverse proxies, so the whole GitHub URL —
+   * Some regional download mirrors are prefix reverse proxies, so the whole GitHub URL —
    * scheme and all — ends up inside the mirror's path. `acceptItem` claims a `will-download` event
    * by exact URL string, and the engine validates every hop against `url.hostname` +
    * `url.pathname`. If Chromium normalized that empty `https://` segment differently on the way
@@ -160,7 +160,7 @@ describe('download engine', () => {
    */
   it('claims a prefix-proxy mirror download whose path contains a full https URL', async () => {
     const mirrorUrl =
-      'https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip';
+      'https://ghproxy.net/https://github.com/example/project/releases/download/v1.2.3/Example-Tool.zip';
     expect(new URL(mirrorUrl).toString()).toBe(mirrorUrl);
     const session = new EventEmitter() as EventEmitter & { downloadURL: (url: string) => void };
     session.downloadURL = vi.fn();
@@ -178,7 +178,7 @@ describe('download engine', () => {
       // The mirror answers with a 302 back to the origin, so both hops must pass the whitelist.
       getURLChain: vi.fn(() => [
         mirrorUrl,
-        'https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip',
+        'https://github.com/example/project/releases/download/v1.2.3/Example-Tool.zip',
       ]),
       isPaused: vi.fn(() => false),
       pause: vi.fn(),
@@ -190,19 +190,19 @@ describe('download engine', () => {
       new BusyRegistry(),
       userDataPath,
     );
-    const finalPath = path.join(userDataPath, 'core', 'Xray-windows-64.zip');
+    const finalPath = path.join(userDataPath, 'downloads', 'Example-Tool.zip');
     const preventDefault = vi.fn();
     const completion = engine
       .start({
         allowedHosts: ['ghproxy.net', 'github.com', 'release-assets.githubusercontent.com'],
         allowedPathPrefixes: [
-          '/https://github.com/XTLS/Xray-core/releases/download/v26.3.27/',
-          '/XTLS/Xray-core/releases/download/v26.3.27/',
+          '/https://github.com/example/project/releases/download/v1.2.3/',
+          '/example/project/releases/download/v1.2.3/',
           '/',
         ],
         finalPath,
-        id: 'xray-core',
-        label: 'Xray-core',
+        id: 'release-fixture',
+        label: 'Release fixture',
         maxBytes: 64 * 1024 * 1024,
         url: mirrorUrl,
       })
@@ -212,9 +212,9 @@ describe('download engine', () => {
     expect(session.downloadURL).toHaveBeenCalledWith(mirrorUrl);
     expect(preventDefault).not.toHaveBeenCalled();
     expect(item.setSavePath).toHaveBeenCalledWith(`${finalPath}.partial`);
-    expect(engine.list()[0]).toMatchObject({ id: 'xray-core', state: 'progressing' });
+    expect(engine.list()[0]).toMatchObject({ id: 'release-fixture', state: 'progressing' });
 
-    engine.cancel('xray-core');
+    engine.cancel('release-fixture');
     item.emit('done', {}, 'cancelled');
     await completion;
     rmSync(userDataPath, { force: true, recursive: true });

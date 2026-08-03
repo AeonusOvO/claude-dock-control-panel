@@ -20,8 +20,7 @@ describe('official provider profiles', () => {
     expect(profile.versionRules).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          maximum: '2.1.196',
-          minimum: '2.1.91',
+          maximum: '2.1.162',
           severity: 'block',
         }),
       ]),
@@ -41,14 +40,11 @@ describe('official provider profiles', () => {
     ).toEqual(['cloud-task']);
   });
 
-  it('preserves provider-specific region differences from the official lists', () => {
-    expect(getProviderProfile('openai-codex').supportedCountryCodes).toEqual(
-      expect.arrayContaining(['AF', 'AX', 'GF', 'TW', 'WF']),
-    );
-    expect(getProviderProfile('anthropic-claude').supportedCountryCodes).not.toContain('AF');
-    expect(getProviderProfile('anthropic-claude').supportedCountryCodes).not.toContain('CN');
-    expect(getProviderProfile('openai-api').supportedCountryCodes).not.toContain('AX');
-    expect(getProviderProfile('openai-api').supportedCountryCodes).toContain('AF');
-    expect(getProviderProfile('anthropic-claude').regionCaveats?.UA).toContain('Crimea');
+  it('does not embed location or public-address intelligence policy', () => {
+    for (const profile of Object.values(PROVIDER_PROFILES)) {
+      expect(profile).not.toHaveProperty('supportedCountryCodes');
+      expect(profile).not.toHaveProperty('regionCaveats');
+      expect(profile.hardBlockRules).not.toContain('unsupported-region');
+    }
   });
 });

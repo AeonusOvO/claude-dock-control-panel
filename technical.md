@@ -1,7 +1,7 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.0.0（2026-08-03）。4.0.0 删除通用代理运行栈，改为用户已有外部代理配置，
-并加入 GitHub / 自建 HTTPS 应用更新源自动择优。
+当前架构版本：4.1.0（2026-08-03）。4.1.0 在 4.0.0 的外部代理边界上加入独立签名发布清单、
+可脱离 GitHub 验证的 HTTPS 公网 IP 兜底镜像、原子双渠道发布和严格的更新防降级/重定向边界。
 
 ## 技术栈
 
@@ -577,8 +577,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 
 ### 安全启动
 
-1. 主进程用固定 PowerShell 诊断命令解析 `claude --version`。2.1.91–2.1.196 直接阻止，
-   其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.220。
+1. 主进程用固定 PowerShell 诊断命令解析 `claude --version`。命中 Claude Code 官方安全公告的
+   版本直接阻止，其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.220。
 2. `ClaudeRuntime` 为项目会话生成 `userData/claude/runtime/<session-id>/settings.json`，
    通过 Claude Code 官方 `--settings` 参数临时合并，不改变用户、项目或系统设置。命令行
    settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
@@ -794,15 +794,21 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   不再由 Node 全局 `fetch` 绕开两者。结果缓存 5 分钟，轮询只在缓存到期后产生请求。
 - `ApplicationUpdaterService` 包装 `electron-updater` 的 NSIS updater。仅 `app.isPackaged && win32`
   启用，`autoDownload/autoInstallOnAppQuit` 均关闭：用户点击后检查并下载，下载进度通过 IPC 推送，
-  `update-downloaded` 后才允许 `quitAndInstall(false, true)`。每次检查前调用
+  `update-downloaded` 只是传输完成事件；只有完整安装器的长度和 SHA-512 再验证通过后才允许
+  `quitAndInstall(false, true)`。每次检查前调用
   `selectApplicationUpdateSource()` 并用 `setFeedURL()` 切换 feed；选择结果和实测速率写入状态供 UI
-  展示。`latest.yml` 提供版本、文件和 SHA-512，blockmap 支持差分下载。
-- `application-update-sources.ts` 从打包的 `assets/runtime/update-sources.json` 读取 GitHub 与 generic
-  HTTPS 源。配置拒绝 HTTP、用户信息、query/fragment 和非法 host；元数据最多 64 KiB，每条请求
-  6 秒。GitHub `latest.yml` 是信任锚，镜像只有在 version/path/SHA-512 完全一致时才参与真实安装包
-  256 KiB Range 采样，以字节率选择最快 feed。镜像宣称更高版本、摘要不一致、重定向到非白名单
-  主机或 GitHub 规范元数据不可用时全部 fail closed 到 GitHub。当前配置尚无 HTTPS 域名，只启用
-  GitHub；部署约束记录在 `docs/UPDATE_MIRROR.md`。
+  展示。显式关闭 `allowDowngrade`、prerelease 与 web installer；blockmap 仍支持差分下载。
+- `application-update-manifest.ts` 定义 64 KiB 上限的规范 JSON 清单和 256 字节上限的 detached
+  Ed25519 签名。客户端从 `assets/runtime/release-manifest-public-key.pem` 固定公钥，严格校验稳定
+  SemVer、key id `f724eb3fcaa7f4c5`、版本时间、每个文件的路径/长度/完整 SHA-512/样本 SHA-512，
+  以及固定 GitHub tag
+  和公网 IP URL。本地 `userData` 保存最高已接受版本，低于当前应用或该版本下限的清单被拒绝。
+- `application-update-sources.ts` 只接受固定 GitHub 仓库与
+  `https://124.221.158.247/claudedock/windows/x64/`。配置拒绝 HTTP、用户信息、query、fragment、
+  非默认端口与未授权 IP；手动处理最多 3 次重定向，镜像不允许跨主机或变更路径。两个源分别读取并
+  验证 manifest、签名和 `latest.yml`，任一源可独立建立信任；若两边已签名 manifest 字节不一致则
+  失败关闭。只有状态 206、`Content-Range`、`Content-Length` 和样本摘要同时匹配的 256 KiB
+  Range 响应才能参与测速。选中源后 Electron session 的 `webRequest` 再限制精确主机和无 query URL。
 - `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
   返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
   插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
@@ -1171,9 +1177,9 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 
 ### 模块与数据流
 
-`src/shared/provider-profiles.ts` 是版本化服务商配置源，集中维护官方端点、动作需求、支持地区、
-缓存 TTL、风险阈值、隐私环境变量、版本规则和检索日期。Schema 在模块加载时校验；端点只允许
-HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启动，避免静默使用损坏规则。
+`src/shared/provider-profiles.ts` 是版本化服务商配置源，集中维护官方端点、动作需求、缓存 TTL、
+风险阈值、隐私环境变量、版本规则和检索日期。Schema 在模块加载时校验；端点只允许 HTTPS/WSS，
+重复端点 ID 或空来源会阻止应用启动，避免静默使用损坏规则。
 配置随经过构建/发布流程的应用版本更新，不接受运行时下载的无签名规则；这样牺牲即时热更新，
 但避免网络中间人替换封锁策略。规则损坏时 fail-closed 并要求安装修复版本，不回退到陈旧的
 隐藏常量。
@@ -1189,16 +1195,14 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
    在 `redirect` 事件内同步调用 `followRedirect()`，最多跟随 8 次，只允许 HTTPS，并将每一跳
    主机名与服务商配置中的认证/必需/端点白名单核对。401/403/405 表示端点可达而不是认证成功；
    不附带现有登录令牌、API Key，不调用模型接口正文，也不保存跳转 URL 的路径或查询参数。
-3. 非增强隐私模式下，ipapi.co 与 ipwho.is 提供两路地区/ASN 情报；ipwho.is 可用时还读取
-   VPN、公共代理、Tor、托管/数据中心与匿名网络辅助标签，但标签本身只产生提示。api4/api6.ipify.org
-   分别补充公网 IPv4/IPv6。原始地址只存在于单次探测内存，进入结果前转换为 IPv4 `/24` 或
-   IPv6 `/64`。单源、冲突或服务不可用不能形成地区封锁。
+3. 网络预检不请求公网地址、地区、ASN 或网络信誉服务，也不根据用户位置作判断。它的联网范围
+   仅限所选服务商配置中明确列出的官方端点；版本规则随已签名应用发布，不从网络下载策略。
 4. `RiskDecisionEngine` 把观测转换为 `allowed`、`allowed_with_notice`、`warning`、
    `degraded`、`partially_available` 或 `blocked`，同时生成按动作的 `featureAccess`。
-   代理/VPN/虚拟网卡只加提示；双源一致的非支持地区、活动所需 DNS/API/CLI 路径失败、关键
-   TLS/跨域重定向异常、离线、危险版本和 Claude SOCKS 路径才会阻止对应高风险动作。
+   显式代理和虚拟网卡只加提示；活动所需 DNS/API/CLI 路径失败、关键 TLS/跨域重定向异常、
+   离线、危险版本和 Claude SOCKS 路径才会阻止对应高风险动作。
 5. `NetworkPreflightService` 按“服务商 + 动作 + 项目”执行 single-flight 和两分钟缓存。
-   网络或设置变化通过 generation 失效旧结果；失效期间完成的旧请求不会写入缓存或历史。
+   网络变化通过 generation 失效旧结果；失效期间完成的旧请求不会写入缓存或历史。
 6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 接入保存/历史恢复/
    启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过。自定义网关和
    普通本地终端不被官方服务状态误伤；它们的连接按钮和自动测试直接请求自身端点。
@@ -1210,7 +1214,7 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - 访问守卫在任何配置或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
   inactive；只有已经尝试销毁并重启 PTY 后发生错误才进入 inactive 状态。
 - WebSocket 单独失败时基础 HTTPS/CLI 功能仍为 `partially_available`，但 `cloud-task`
-  动作被拒绝。未知或跳过的关键探测按 fail-closed 处理；公网情报未知只降级，不单独阻止。
+  动作被拒绝。未知或跳过的关键探测按 fail-closed 处理。
 - Electron 文档规定：`ClientRequest` 使用 `redirect: manual` 时，如果没有在重定向事件中
   同步执行 `followRedirect()`，请求会被取消。2.2.0 的应用探测遗漏了该调用，因而会在
   ChatGPT 可正常跳转、Codex CLI 可用时误报 `Redirect was cancelled`。2.2.1 修复事件处理，
@@ -1221,71 +1225,40 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   关闭 VPN。Claude Code 官方不支持 SOCKS，因此外部应用代理存储层拒绝 SOCKS5 + CLI 作用域；
   对继承环境中已有的 SOCKS 仍在预检中硬阻止。
 
-### 链式代理与软路由判定边界
+### 网络路径判定边界
 
-- Mihomo/Clash 的 `dialer-proxy`、Xray 的 `dialerProxy`/出站转发以及 sing-box 的路由出站，
-  都能在代理内核内部继续选择下一跳；应用侧通常只能看到本机监听端口这一跳。PAC 返回的多个
-  指令通常是回退顺序，也不能被当成串行链路。
-- TUN、WinDivert/透明代理以及 OpenWrt 等软路由可以在系统显式代理之后或完全绕过显式代理
-  设置接管流量。此时 Electron `resolveProxy()` 和 CLI 环境变量可能都显示无代理，但实际出口
-  仍经过一条或多条代理链。
-- 因此 ClaudeDock 不扫描或解析 Clash/Mihomo、V2Ray/Xray、sing-box 的本地配置，也不尝试从
-  品牌名猜测拓扑。配置可能位于其他用户、容器、远端网关或软路由，读取它既不完整也会扩大隐私
-  和权限范围。判定以“应用进程真实官方端点 + CLI 真实官方端点 + 可选出口共识”为准，路径卡
-  只展示可见第一跳和可能存在的透明接管边界。
+- Electron `resolveProxy()` 和 CLI 环境变量只能说明进程可见的第一跳，不能证明端到端拓扑。
+- ClaudeDock 不扫描、解析或迁移其他网络工具的配置，也不根据进程品牌、虚拟网卡名称或位置
+  猜测网络结构。路径卡只展示本机可验证事实和服务商官方端点的实测结果。
+- 网络预检不调用第三方公网地址或位置服务；因此不会保存完整或掩码公网地址，也不会作地区封锁。
 
 ### 隐私、历史与第三方边界
 
 - 设置页的“隐私与合规”面板是打包进 renderer 的静态可达说明；完整规则和中国大陆产品风险分别
   维护在 `docs/PRIVACY.md`、`docs/LEGAL_COMPLIANCE.md`。模型消息角色显示“AI 生成”。这不等于
   为未来导出文件添加了机器可读元数据；若新增导出，必须单独实现适用的生成内容标识。
-- 4.0.0 已删除通用节点/订阅/隧道/出口模块。外部应用代理只连接用户已有端口，这一技术边界显著
-  降低发行风险，但不验证后端资质或用途合法性；工程、应用内文案和法律说明都不得把它描述为
-  ToDesk/QQ 类产品带来的当然豁免。
+- 外部应用代理只把用户填写的 HTTP/SOCKS5 地址传给勾选的进程，不提供远程网络服务，也不验证
+  地址提供方资质或用途合法性；工程、应用内文案和法律说明都不得把这一边界描述为当然豁免。
 - `NetworkDiagnosticsStore` 只保留 7 天、最多 40 条；写盘前再次移除 Bearer、`sk-*` 和 URL
-  查询凭据。记录包含时间、服务商、掩码出口、风险、进程路径和逐项结论，不包含 cwd、完整 IP、
+  查询凭据。记录包含时间、服务商、风险、进程路径和逐项结论，不包含 cwd、公网 IP、
   请求/响应正文、OAuth Token、API Key 或代理凭据；用户可在详情弹窗立即清空。
-- 增强隐私模式持久化在 `userData/network-preflight/settings.json`，新安装默认开启。开启后完全跳过 ipapi.co、
-  ipwho.is 和 ipify，官方 DNS/HTTPS/TLS/CLI 探测仍运行，地区情报显示不可用但不据此封锁。
-- `userData/network-preflight/history.json` 和设置文件使用 `0600` 意图、临时文件 +
+- `userData/network-preflight/history.json` 使用 `0600` 意图、临时文件 +
   `rename` 原子替换。Windows 的最终 ACL 仍由当前用户配置和 Electron `userData` 目录继承。
-- 本轮没有复制 CheckCC、CC Switch、v2rayN 或其他开源项目的代码、图标、文案或数据文件；4.0.0
-  也不下载、启动或链接 Xray/v2rayN。`electron-updater` 等第三方依赖保留自身许可，项目按
-  Apache-2.0 开源并用 `THIRD_PARTY_NOTICES.md` 维护发行检查。ipapi.co、ipwho.is 与 ipify 仅作为
-  可关闭的远程诊断服务，不得把其返回作为唯一封锁依据。
+- 项目没有复制其他桌面网络工具的代码、图标、文案或数据文件。`electron-updater` 等第三方依赖
+  保留自身许可，项目按 Apache-2.0 开源并用 `THIRD_PARTY_NOTICES.md` 维护发行检查。
 
 ### 维护与外部依据（核对日期 2026-07-29）
 
-- OpenAI ChatGPT 支持地区：
-  <https://help.openai.com/en/articles/7947663-chatgpt-supported-countries>
-- OpenAI API 支持地区：
-  <https://help.openai.com/en/articles/5347006-openai-api-supported-countries-and-territories>
 - OpenAI ChatGPT/Codex 网络与 WebSocket 端点：
   <https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps>
-- Anthropic API/Claude.ai 支持地区：<https://www.anthropic.com/supported-countries>
 - Claude Code 企业代理、CA、必需域名和隐私流量说明：
   <https://code.claude.com/docs/en/network-config>
 - Claude Code 官方安全公告：<https://github.com/anthropics/claude-code/security/advisories>
 - Electron `ClientRequest` 重定向语义：
   <https://www.electronjs.org/docs/latest/api/client-request>
 - Electron Chromium 网络栈与系统代理能力：<https://www.electronjs.org/docs/latest/api/net>
-- Mihomo 链式代理 `dialer-proxy` 与已弃用 Relay：
-  <https://wiki.metacubex.one/en/config/proxies/>、
-  <https://wiki.metacubex.one/config/proxy-groups/relay/>
-- Xray 出站转发与 `dialerProxy`：
-  <https://xtls.github.io/en/config/outbound.html>、
-  <https://xtls.github.io/en/config/transports/sockopt.html>
-- sing-box 路由出站与 TUN：
-  <https://sing-box.sagernet.org/configuration/route/rule_action/>、
-  <https://sing-box.sagernet.org/configuration/inbound/tun/>
-- 公开出口诊断服务：<https://ipapi.co/>、<https://ipwho.is/>、<https://www.ipify.org/>
-
-维护服务商规则时必须同步更新 `updatedAt` / `sources[].retrievedAt`、相关测试和本节；支持地区
-发生变化时不能只改界面文案。媒体披露规则与官方安全公告必须保留独立 source，不能把媒体信息
-伪装成官方产品政策。
-
-地区情报目前只能可靠到国家/地区代码，无法判定官方列表中类似 Ukraine 特定州的细粒度例外；
-对这类国家级命中只显示“官方列表包含例外”的维护限制，不能把城市级推断包装成确定结论。
+  维护服务商规则时必须同步更新 `updatedAt` / `sources[].retrievedAt`、相关测试和本节。版本阻断规则
+  必须有可追溯的官方安全公告，不能把媒体信息伪装成官方产品政策。
 
 ## 安全策略
 
@@ -1464,14 +1437,15 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   主题。
 - `tests/application-proxy.test.ts` 用临时目录和可逆安全存储替身验证密码不落明文、留空保留、清空
   账号删除、SOCKS5 CLI 拒绝、IPv6 URL 编码、Electron 规则、CLI 环境和候选解析。
-- `tests/application-update-sources.test.ts` 使用完全注入的 fetch/stream 验证 HTTP 镜像拒绝、相同
-  GitHub 元数据下选择更快 HTTPS 镜像、SHA-512 不一致排除和规范元数据不可用时 fail closed；测试
-  不访问真实网络。
+- `tests/application-update-manifest.test.ts` 与 `tests/application-update-sources.test.ts` 使用完全
+  注入的密钥、fetch/stream 和临时目录验证签名/文件篡改、元数据上限、版本回退、GitHub 不可用时
+  镜像更新、跨渠道不一致、伪造 Range、跨主机重定向和最终安装器摘要；测试不访问真实网络。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
   固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行
-  二次复制或向项目根目录发布。
+  二次复制或向项目根目录发布。公开应用标识固定为 `io.github.aeonusovo.claudedock`，不得继续使用
+  旧维护者命名空间。
 - 发布版本结合 SemVer 与项目发布尺度，且每轮完成的项目修改都必须产生新版本：不兼容或
   架构级 API/数据/交互变更升主版本，有明确发布价值的成组/重大新功能升次版本，小功能优化、
   修复、文档、构建与维护改动升修订版本；避免因单个细小行为变化机械升次版本。版本必须同时
@@ -1481,15 +1455,24 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
 - `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
   electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
-CI 在 `windows-latest` 上执行 lint、格式、类型、测试和构建。推送 `v*` 标签另触发
-`.github/workflows/release.yml`：标签必须等于 `v${package.version}`，验证通过后执行
-`electron-builder --publish always`，向 GitHub Release 上传 NSIS 安装包、blockmap 和
-`latest.yml`。`GH_TOKEN` 使用 Actions 临时令牌；代码签名读取可选的
-`WINDOWS_CERTIFICATE_BASE64/WINDOWS_CERTIFICATE_PASSWORD` Secrets，客户端不接触这些秘密。
+CI 的 security job 在 Ubuntu 上检出完整历史，运行 gitleaks、`npm ci` 和全依赖 audit；Windows job
+执行 lint、格式、类型、全部单元/布局/主题测试和 build。推送 `v*` 标签另触发
+`.github/workflows/release.yml`：标签必须等于 `v${package.version}` 且提交必须是当前 `main`，所有
+代码签名与镜像 Secrets 都是强制门禁。流水线只执行一次 NSIS 构建，依次验证受信任 Authenticode、
+安装/卸载、签名 manifest、本地 bundle、GitHub draft Release 回读和服务器版本化 staging；GitHub
+发布后才让服务器原子切换 `current`。最终从两个渠道比较 GET/HEAD/Range、缓存头、大小、SHA-512
+和清单签名，失败时回滚镜像并撤销错误 Release。
+`.github/workflows/mirror-monitor.yml` 每 6 小时从 GitHub 托管节点验证公网 TLS、精确 IP SAN、至少
+48 小时剩余有效期和健康端点；失败时创建或更新不含服务器管理信息的告警 Issue，恢复后自动关闭。
 
-`npm audit --omit=dev` 当前为 0 个生产依赖漏洞。完整审计仍会报告锁定的
-electron-builder 26.15.3 依赖树中 1 个 high 构建期问题，位于多份旧 `brace-expansion`；
-这些开发依赖不会进入生产 ASAR，后续应随打包器上游修复升级并重新跑完整审计。
+Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert 时间戳。标准可信证书通过
+`WINDOWS_CERTIFICATE_BASE64`、`WINDOWS_CERTIFICATE_PASSWORD` 与期望主体 Secret 提供；稳定工作流
+设置 `forceCodeSigning`，未签名、主体不符、时间戳缺失或验证链失败即终止。SignPath Foundation
+申请材料和角色/构建政策见 `CODE_SIGNING_POLICY.md`；其免费工作流能否顺序签署 Electron NSIS 内部
+应用、动态生成的卸载器及外层安装器，仍须 SignPath 人工确认，不能以自签名替代。
+
+`npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件通过 `npm audit fix`
+更新了构建期 `brace-expansion` 间接依赖。每次公开发布仍须重新执行完整审计和许可检查。
 
 ## 关键取舍与限制
 
@@ -1500,25 +1483,8 @@ electron-builder 26.15.3 依赖树中 1 个 high 构建期问题，位于多份�
 - 保存或切换 Claude 接入不会热修改已运行 PowerShell 的环境；受保护启动会重建当前项目
   终端。这是避免把密钥写入可见终端输入和历史的有意取舍。
 - Windows 10 1809 之前没有所需 ConPTY API，不在支持范围；最小窗口为 820 × 640。
-- 应用自身的 GitHub Release 下载和 NSIS 重启安装已经实现；仍未配置受信任 Windows 代码签名，
-  且当前仓库为私有，二者都是公开发行前置项。退出后的 PTY 恢复仍未实现。
-
-## 地区限制与“降智”调研结论（截至 2026-07-25）
-
-- Anthropic 于 2025-09-04 明确扩大地区限制：不只限制不支持地区内的使用，也限制由中国等
-  不支持地区实体直接或间接控股超过 50% 的组织。当前支持地区页面仍未列出中国大陆和香港；
-  因此“现在已完全取消封禁风险”不成立。
-- 2026 年 7 月披露的逆向分析显示，Claude Code 2.1.91–2.1.196 在检测到自定义代理时检查
-  `Asia/Shanghai` / `Asia/Urumqi` 时区及部分中国域名/AI 实验室标识，并把结果编码进发送给
-  模型的系统提示。Anthropic 工程师称这是打击未授权转售和模型蒸馏的实验；相关逻辑随后被
-  移除，报道和中国国家漏洞库均建议升级到 2.1.196 之后的版本。
-- 没有找到可复现证据证明 Anthropic 曾按中国用户或中国模型定向降低回答能力。原始披露者
-  把“未来可能定向降级”作为风险推测，而非已验证行为。Anthropic 另有一次公开复盘，确认
-  2025 年的服务端路由、输出损坏和编译器问题曾导致广泛质量下降，但未称其针对中国用户，
-  且其中部分问题未影响第三方平台。
-- 因此项目把“官方地区/账号限制”“已确认的隐藏检测”“通用质量问题”和“未证实的定向降智”
-  分开处理：版本门禁应对已确认检测，严格路由与非必要流量关闭缩小外传面，模型/上下文显示
-  帮助发现不一致；项目不会通过伪造时区、IP、身份或其他方式规避服务条款。
+- 应用自身的签名双源 Release 下载和 NSIS 重启安装已经实现；正式稳定版仍以受信任 Windows 代码
+  签名、公开仓库、双渠道公网验收和适用接入合规确认为发布门禁。退出后的 PTY 恢复仍未实现。
 
 ## 外部依据
 
@@ -1578,6 +1544,14 @@ electron-builder 26.15.3 依赖树中 1 个 high 构建期问题，位于多份�
 - electron-builder 自动更新与运行时 feed：
   <https://www.electron.build/docs/features/auto-update/>、
   <https://www.electron.build/docs/api/electron-updater.class.appupdater/#setfeedurl>
+- electron-builder Windows 代码签名与自定义签名钩子：
+  <https://www.electron.build/docs/features/code-signing/code-signing-win/>、
+  <https://www.electron.build/docs/features/hooks/>
+- Let’s Encrypt short-lived 与公网 IP 证书、Certbot 5.4+：
+  <https://letsencrypt.org/2026/03/11/shorter-certs-certbot>、
+  <https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html>
+- SignPath Foundation 开源项目条件与 GitHub 构建集成：
+  <https://signpath.org/>、<https://docs.signpath.io/trusted-build-systems/github>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：

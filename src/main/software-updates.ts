@@ -76,8 +76,8 @@ const fetchLatestVersion = async (
     return payload.version;
   };
   try {
-    // V2RayN's source tests do not wait for a known-slow route before trying the next one. Start both
-    // trusted registries together and accept the first valid version envelope.
+    // Start both trusted registries together and accept the first valid version envelope so a known-
+    // slow route cannot delay the healthy source.
     return await Promise.any([fetchRegistry(OFFICIAL_REGISTRY), fetchRegistry(CHINA_REGISTRY)]);
   } catch {
     return undefined;

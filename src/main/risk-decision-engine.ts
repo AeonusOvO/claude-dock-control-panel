@@ -45,7 +45,6 @@ export class RiskDecisionEngine {
     observation: ConnectivityObservation,
     startedAt: number,
     checkedAt: number,
-    previousEgress?: NetworkPreflightResult['egress'],
   ): NetworkPreflightResult {
     const profile = getProviderProfile(provider);
     const signals: NetworkRiskSignal[] = [];
@@ -128,7 +127,7 @@ export class RiskDecisionEngine {
       addSignal(
         'external-application-proxy',
         'CLI 使用外部应用代理',
-        'CLI 使用用户填写的 HTTP 代理；ClaudeDock 不创建代理、隧道、节点或网络出口。',
+        'CLI 使用用户明确填写的 HTTP 代理；ClaudeDock 只把它作为连接参数传给所选进程。',
         0,
         'info',
         'high',
@@ -183,86 +182,6 @@ export class RiskDecisionEngine {
       );
     }
 
-    const egress = observation.egress
-      ? {
-          ...observation.egress,
-          stability:
-            previousEgress?.countryCode && observation.egress.countryCode
-              ? previousEgress.countryCode === observation.egress.countryCode &&
-                previousEgress.ipv4 === observation.egress.ipv4 &&
-                previousEgress.ipv6 === observation.egress.ipv6
-                ? ('stable' as const)
-                : ('changed' as const)
-              : ('unknown' as const),
-        }
-      : undefined;
-    const regionCaveat = egress?.countryCode
-      ? profile.regionCaveats?.[egress.countryCode]
-      : undefined;
-    if (!egress) {
-      addSignal(
-        'egress-intelligence-unavailable',
-        '出口地区情报不可用',
-        '外部出口情报未启用或两路服务均不可用；该项不会单独封锁。',
-        12,
-        'notice',
-        'low',
-        'egress-intelligence',
-      );
-    } else if (!egress.sourcesAgree) {
-      addSignal(
-        'egress-sources-disagree',
-        '出口情报未形成双源共识',
-        `仅有 ${egress.sourceCount} 个有效来源或来源结果不一致，不据此判断地区风险。`,
-        20,
-        'warning',
-        'medium',
-        egress.sources?.join(' + ') || 'egress-intelligence',
-      );
-    } else if (egress.countryCode && !profile.supportedCountryCodes.includes(egress.countryCode)) {
-      addSignal(
-        'unsupported-region',
-        '出口地区不在官方支持列表',
-        `两个独立来源一致判定出口为 ${egress.countryName ?? egress.countryCode}（${egress.countryCode}）。`,
-        100,
-        'critical',
-        'high',
-        egress.sources?.join(' + ') || 'official-region-policy',
-      );
-    } else if (regionCaveat) {
-      addSignal(
-        'region-caveat',
-        '官方地区列表包含细粒度例外',
-        regionCaveat,
-        12,
-        'notice',
-        'high',
-        'official-region-policy',
-      );
-    }
-    if (egress?.riskFlags && egress.riskFlags.length > 0) {
-      addSignal(
-        'egress-reputation-flags',
-        '出口情报包含辅助网络标签',
-        `情报源标记：${egress.riskFlags.join('、')}。这些标签只用于说明网络类型，不会单独阻止使用。`,
-        12,
-        'notice',
-        'low',
-        egress.sources?.join(' + ') || 'egress-intelligence',
-      );
-    }
-    if (egress?.stability === 'changed') {
-      addSignal(
-        'egress-changed',
-        '出口路径发生变化',
-        '本次出口网段或地区与上次有效探测不同，建议重新确认连接环境。',
-        25,
-        'warning',
-        'medium',
-        'local-history',
-      );
-    }
-
     const featureAccess: NetworkFeatureAccess[] = ACTIONS.map((candidateAction) => {
       const requiredEndpointIds = new Set(
         profile.endpoints
@@ -282,7 +201,6 @@ export class RiskDecisionEngine {
       const globalBlock = signals.some(
         (signal) =>
           signal.id === 'offline' ||
-          signal.id === 'unsupported-region' ||
           signal.id === 'unsupported-cli-proxy' ||
           (signal.severity === 'critical' &&
             (signal.id.startsWith('tls-invalid:') || signal.id.startsWith('unexpected-redirect:'))),
@@ -325,9 +243,7 @@ export class RiskDecisionEngine {
     }
     const recommendations = new Set<string>();
     for (const signal of signals) {
-      if (signal.id === 'unsupported-region') {
-        recommendations.add('建议：仅在服务商官方支持的实际使用地区登录或发起请求。');
-      } else if (signal.id === 'unsupported-cli-proxy') {
+      if (signal.id === 'unsupported-cli-proxy') {
         recommendations.add('建议：为 Claude Code 改用受信任的 HTTP/HTTPS 代理或直连。');
       } else if (signal.id.startsWith('tls-invalid:')) {
         recommendations.add('建议：核对系统时间、企业根 CA 和 TLS 检查策略，不要关闭证书校验。');
@@ -340,8 +256,6 @@ export class RiskDecisionEngine {
         recommendations.add('建议：通过官方发布渠道更新对应 CLI，再重新检测。');
       } else if (signal.id.startsWith('probe-failed:')) {
         recommendations.add('建议：按详情中的失败进程核对官方域名白名单、DNS 和对应代理路径。');
-      } else if (signal.id === 'egress-sources-disagree') {
-        recommendations.add('建议：网络稳定后重新检测；未形成双源共识前不会据此封锁地区。');
       }
     }
     if (websocketUnavailable) {
@@ -366,7 +280,6 @@ export class RiskDecisionEngine {
     return {
       cacheExpiresAt: checkedAt + profile.cacheTtlMs,
       checkedAt,
-      egress,
       featureAccess,
       paths: observation.paths,
       probes: observation.probes,

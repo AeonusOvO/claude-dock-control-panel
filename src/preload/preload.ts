@@ -126,9 +126,6 @@ const api: ControlPanelApi = {
   runNetworkPreflight: (input) => ipcRenderer.invoke('network-preflight:run', input),
   invalidateNetworkPreflight: (reason) =>
     ipcRenderer.invoke('network-preflight:invalidate', reason),
-  getNetworkPreflightSettings: () => ipcRenderer.invoke('network-preflight:get-settings'),
-  setNetworkPreflightSettings: (settings) =>
-    ipcRenderer.invoke('network-preflight:set-settings', settings),
   getNetworkPreflightHistory: () => ipcRenderer.invoke('network-preflight:get-history'),
   clearNetworkPreflightHistory: () => ipcRenderer.invoke('network-preflight:clear-history'),
   onNetworkPreflight: (listener) => {

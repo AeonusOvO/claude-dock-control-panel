@@ -1,0 +1,70 @@
+name: Monitor update mirror TLS
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: mirror-certificate-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      MIRROR_IP: 124.221.158.247
+
+    steps:
+      - name: Validate public TLS, IP SAN and health endpoint
+        id: check
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          certificate=$(mktemp)
+          trap 'rm -f "$certificate"' EXIT
+          timeout 30 openssl s_client -connect "$MIRROR_IP:443" -showcerts </dev/null 2>/dev/null |
+            openssl x509 -outform PEM >"$certificate"
+          openssl x509 -checkend 172800 -noout -in "$certificate"
+          openssl x509 -noout -ext subjectAltName -in "$certificate" |
+            grep -Fq "IP Address:$MIRROR_IP"
+          curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 20 \
+            --proto '=https' \
+            "https://$MIRROR_IP/claudedock/health" |
+            grep -Fxq 'ok'
+
+      - name: Open or update a private-data-free alert issue
+        if: steps.check.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='[monitor] ClaudeDock 更新镜像 TLS/续期异常'
+          existing=$(gh issue list --state open --search "in:title $title" --json number --jq '.[0].number // empty')
+          body="自动公网探测失败：HTTPS 健康端点、IP SAN 或证书 48 小时有效期门禁未通过。时间：$(date -u +'%Y-%m-%dT%H:%M:%SZ')。请检查 Certbot renewal、deploy hook、Nginx 和公网 443；不要在 Issue 中粘贴密钥或服务器管理信息。"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+          exit 1
+
+      - name: Close a recovered monitor alert
+        if: steps.check.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='[monitor] ClaudeDock 更新镜像 TLS/续期异常'
+          existing=$(gh issue list --state open --search "in:title $title" --json number --jq '.[0].number // empty')
+          if [[ -n "$existing" ]]; then
+            gh issue close "$existing" --comment "公网 TLS、IP SAN、48 小时有效期和健康端点已恢复。"
+          fi

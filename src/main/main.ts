@@ -20,7 +20,7 @@ import type {
   Session,
 } from 'electron';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
 import type {
@@ -55,7 +55,6 @@ import type {
   DevelopmentRuntimeState,
   NetworkPreflightAction,
   NetworkPreflightRunInput,
-  NetworkPreflightSettings,
   NetworkProviderId,
   McpCatalog,
   McpBackupView,
@@ -113,7 +112,6 @@ import { WorkspaceStore } from './workspace-store';
 import { AdvancedSettingsStore } from './advanced-settings-store';
 import { NetworkDiagnosticsStore } from './network-diagnostics-store';
 import { NetworkPreflightService } from './network-preflight-service';
-import { NetworkPreflightSettingsStore } from './network-preflight-settings-store';
 import { ProviderAccessGuard } from './provider-access-guard';
 import { createElectronApplicationRequest } from './electron-application-request';
 import { ProviderConnectivityProbe } from './provider-connectivity-probe';
@@ -132,9 +130,16 @@ import {
 import { ApplicationProxyStore } from './proxy/application-proxy-store';
 import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from './application-updater';
 import {
+  isApplicationUpdateRequestAllowed,
   loadApplicationUpdateSources,
   selectApplicationUpdateSource,
+  type ApplicationUpdateSourceSelection,
 } from './application-update-sources';
+import {
+  readHighestTrustedVersion,
+  recordHighestTrustedVersion,
+  updateVersionFloorPath,
+} from './application-update-manifest';
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -1506,23 +1511,6 @@ const registerIpc = (): void => {
     requireNetworkPreflightService().invalidate(
       typeof reason === 'string' ? reason.slice(0, 120) : 'renderer-request',
     );
-  });
-  ipcMain.handle('network-preflight:get-settings', (event) => {
-    validateSender(event);
-    return requireNetworkPreflightService().getSettings();
-  });
-  ipcMain.handle('network-preflight:set-settings', (event, settings: unknown) => {
-    validateSender(event);
-    const record =
-      settings && typeof settings === 'object'
-        ? (settings as Partial<NetworkPreflightSettings>)
-        : undefined;
-    if (typeof record?.enhancedPrivacyMode !== 'boolean') {
-      throw new Error('网络预检隐私设置无效。');
-    }
-    return requireNetworkPreflightService().setSettings({
-      enhancedPrivacyMode: record.enhancedPrivacyMode,
-    });
   });
   ipcMain.handle('network-preflight:get-history', (event) => {
     validateSender(event);
@@ -3283,7 +3271,7 @@ if (!hasSingleInstanceLock) {
     callback(credentials.username, credentials.password);
   });
   app.whenReady().then(async () => {
-    app.setAppUserModelId('cn.cheng.claudedock');
+    app.setAppUserModelId('io.github.aeonusovo.claudedock');
     artifactService.install();
     busyRegistry = new BusyRegistry((leases) => {
       mainWindow?.webContents.send('busy:changed', leases);
@@ -3358,9 +3346,6 @@ if (!hasSingleInstanceLock) {
       busyRegistry,
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
     );
-    const networkPreflightSettingsStore = new NetworkPreflightSettingsStore(
-      app.getPath('userData'),
-    );
     networkPreflightService = new NetworkPreflightService({
       diagnosticsStore: new NetworkDiagnosticsStore(app.getPath('userData')),
       onResult: (result) => {
@@ -3382,21 +3367,48 @@ if (!hasSingleInstanceLock) {
         applicationProxyUrl: () =>
           applicationProxyStore ? applicationProxyUrl(applicationProxyStore.getView()) : undefined,
       }),
-      settingsStore: networkPreflightSettingsStore,
     });
     providerAccessGuard = new ProviderAccessGuard(networkPreflightService);
+    const updateFloorFile = updateVersionFloorPath(app.getPath('userData'));
+    let activeApplicationUpdateSource: ApplicationUpdateSourceSelection | undefined;
+    const applicationUpdateSession = session.fromPartition('electron-updater', {
+      cache: false,
+    });
+    applicationUpdateSession.webRequest.onBeforeRequest((details, callback) => {
+      callback({
+        cancel:
+          !activeApplicationUpdateSource ||
+          !isApplicationUpdateRequestAllowed(activeApplicationUpdateSource, details.url),
+      });
+    });
     applicationUpdaterService = new ApplicationUpdaterService({
+      configureSource: (source) => {
+        activeApplicationUpdateSource = source;
+      },
       currentVersion: app.getVersion(),
       driver: autoUpdater as unknown as ApplicationUpdaterDriver,
       enabled: app.isPackaged && process.platform === 'win32',
       onChange: (state) => {
         mainWindow?.webContents.send('software:application-updater-changed', state);
       },
-      selectSource: () =>
-        selectApplicationUpdateSource(
+      onTrustedVersion: (version) => {
+        recordHighestTrustedVersion(updateFloorFile, version);
+      },
+      selectSource: () => {
+        const publicKeyPem = readFileSync(
+          runtimeAssetPath('release-manifest-public-key.pem'),
+          'utf8',
+        );
+        return selectApplicationUpdateSource(
           loadApplicationUpdateSources(runtimeAssetPath('update-sources.json')),
           (url, init) => session.defaultSession.fetch(url, init),
-        ),
+          {
+            currentVersion: app.getVersion(),
+            highestTrustedVersion: readHighestTrustedVersion(updateFloorFile),
+            publicKeyPem,
+          },
+        );
+      },
     });
     registerIpc();
     createTray();

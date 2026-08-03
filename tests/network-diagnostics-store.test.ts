@@ -28,7 +28,7 @@ const resultAt = (checkedAt: number): NetworkPreflightResult => ({
       process: 'application',
       proxyConfigured: false,
       proxyKind: 'direct',
-      virtualInterfaces: ['VPN / 隧道接口'],
+      virtualInterfaces: ['虚拟网络接口'],
     },
   ],
   probes: [

@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a focused improvement within ClaudeDock's product boundary
+title: '[Feature] '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Explain the user need without including private data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Product boundary
+      options:
+        - label: This does not require ClaudeDock to provide proxy nodes, tunnels or network exits.
+          required: true
+        - label: This does not require modifying Codex, Claude Code or system-level API routing.
+          required: true

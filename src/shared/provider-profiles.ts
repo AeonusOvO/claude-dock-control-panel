@@ -30,53 +30,15 @@ export interface ProviderProfile {
   optionalDomains: string[];
   privacyModeEnvironment: Record<string, string>;
   profileVersion: number;
-  regionCaveats?: Record<string, string>;
   requiredDomains: string[];
   riskThresholds: {
     blocked: number;
     warning: number;
   };
   sources: Array<{ label: string; retrievedAt: string; url: string }>;
-  supportedCountryCodes: string[];
   updatedAt: string;
   versionRules: ProviderVersionRule[];
 }
-
-const OPENAI_SUPPORTED_COUNTRIES = `
-AD AE AF AG AL AM AO AR AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BR BS BT BW BZ
-CA CD CF CG CH CI CL CM CO CR CV CY CZ DE DJ DK DM DO DZ EC EE EG ER ES ET FI FJ
-FM FO FR GA GB GD GE GF GH GL GM GN GP GQ GR GT GW GY HN HR HT HU ID IE IL IN IQ IS IT JM JO
-JP KE KG KH KI KM KN KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH
-MK ML MM MN MQ MR MT MU MV MW MX MY MZ NA NC NE NG NI NL NO NP NR NZ OM PA PE PF PG PH PK
-PL PM PS PT PW PY QA RE RO RS RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SZ TD
-TF TG TH TJ TL TM TN TO TR TT TV TW TZ UA UG US UY UZ VA VC VN VU WF WS YE YT ZA ZM ZW
-`
-  .trim()
-  .split(/\s+/);
-
-const OPENAI_API_SUPPORTED_COUNTRIES = `
-AD AE AF AG AL AM AO AR AT AU AZ BA BB BD BE BF BG BH BI BJ BN BO BR BS BT BW BZ
-CA CD CF CG CH CI CL CM CO CR CV CY CZ DE DJ DK DM DO DZ EC EE EG ER ES ET FI FJ
-FM FR GA GB GD GE GH GM GN GQ GR GT GW GY HN HR HT HU ID IE IL IN IQ IS IT JM JO
-JP KE KG KH KI KM KN KR KW KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MG MH
-MK ML MM MN MR MT MU MV MW MX MY MZ NA NE NG NI NL NO NP NR NZ OM PA PE PG PH PK
-PL PS PT PW PY QA RO RS RW SA SB SC SD SE SG SI SK SL SM SN SO SR SS ST SV SZ TD
-TG TH TJ TL TM TN TO TR TT TV TW TZ UA UG US UY UZ VA VC VN VU WS YE ZA ZM ZW
-`
-  .trim()
-  .split(/\s+/);
-
-const ANTHROPIC_SUPPORTED_COUNTRIES = `
-AD AE AG AL AM AO AR AT AU AZ BA BB BD BE BF BG BH BI BJ BN BO BR BS BT BW BZ CA
-CF CG CH CI CL CM CO CR CV CY CZ DE DJ DK DM DO DZ EC EE EG ER ES ET FI FJ FM FR
-GA GB GD GE GH GM GN GQ GR GT GW GY HN HR HT HU ID IE IL IN IQ IS IT JM JO JP KE
-KG KH KI KM KN KR KW KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MG MH MK ML
-MN MR MT MU MV MW MX MY MZ NA NE NG NI NL NO NP NR NZ OM PA PE PG PH PK PL PS PT
-PW PY QA RO RS RW SA SB SC SD SE SG SI SK SL SM SN SO SR SS ST SV SZ TD TG TH TJ
-TL TM TN TO TR TT TV TW TZ UA UG US UY UZ VA VC VN VU WS ZA ZM ZW
-`
-  .trim()
-  .split(/\s+/);
 
 const OFFICIAL_ACTIONS: NetworkPreflightAction[] = [
   'background',
@@ -102,7 +64,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
       },
     ],
     hardBlockRules: [
-      'unsupported-region',
       'required-api-unreachable',
       'tls-invalid',
       'unexpected-redirect',
@@ -112,9 +73,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
     optionalDomains: ['platform.openai.com', 'status.openai.com'],
     privacyModeEnvironment: {},
     profileVersion: 1,
-    regionCaveats: {
-      UA: '官方支持列表注明 Ukraine 存在特定地区例外；国家级出口情报无法判定更细位置。',
-    },
     requiredDomains: ['api.openai.com'],
     riskThresholds: { blocked: 80, warning: 35 },
     sources: [
@@ -124,7 +82,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         url: 'https://help.openai.com/en/articles/5347006-openai-api-supported-countries-and-territories',
       },
     ],
-    supportedCountryCodes: OPENAI_API_SUPPORTED_COUNTRIES,
     updatedAt: '2026-07-29',
     versionRules: [],
   },
@@ -174,7 +131,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
       },
     ],
     hardBlockRules: [
-      'unsupported-region',
       'official-auth-unreachable',
       'required-api-unreachable',
       'tls-invalid',
@@ -201,9 +157,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
     ],
     privacyModeEnvironment: {},
     profileVersion: 1,
-    regionCaveats: {
-      UA: '官方支持列表注明 Ukraine 存在特定地区例外；国家级出口情报无法判定更细位置。',
-    },
     requiredDomains: ['auth.openai.com', 'chatgpt.com', 'openai.com'],
     riskThresholds: { blocked: 80, warning: 35 },
     sources: [
@@ -218,7 +171,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         url: 'https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps',
       },
     ],
-    supportedCountryCodes: OPENAI_SUPPORTED_COUNTRIES,
     updatedAt: '2026-07-29',
     versionRules: [],
   },
@@ -253,7 +205,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
       },
     ],
     hardBlockRules: [
-      'unsupported-region',
       'official-auth-unreachable',
       'required-api-unreachable',
       'tls-invalid',
@@ -284,9 +235,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
       DO_NOT_TRACK: '1',
     },
     profileVersion: 1,
-    regionCaveats: {
-      UA: 'Anthropic 官方列表排除 Crimea、Donetsk、Kherson、Luhansk 与 Zaporizhzhia；国家级出口情报无法判定这些地区。',
-    },
     requiredDomains: ['api.anthropic.com', 'claude.ai', 'claude.com', 'platform.claude.com'],
     riskThresholds: { blocked: 80, warning: 35 },
     sources: [
@@ -306,7 +254,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         url: 'https://github.com/anthropics/claude-code/security/advisories',
       },
     ],
-    supportedCountryCodes: ANTHROPIC_SUPPORTED_COUNTRIES,
     updatedAt: '2026-07-29',
     versionRules: [
       {
@@ -315,15 +262,6 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         reason: '命中 Claude Code 官方仓库已公开修复的高风险安全公告范围。',
         severity: 'block',
         source: 'https://github.com/anthropics/claude-code/security/advisories',
-      },
-      {
-        id: 'disclosed-hidden-region-signals',
-        maximum: '2.1.196',
-        minimum: '2.1.91',
-        reason: '命中已披露的隐藏地区/代理信号影响范围。',
-        severity: 'block',
-        source:
-          'https://www.washingtonpost.com/national-security/2026/07/06/why-anthropic-alleges-chinese-firms-are-distilling-knowledge-claude/',
       },
     ],
   },
@@ -344,8 +282,7 @@ export const validateProviderProfile = (profile: ProviderProfile): void => {
     profile.cacheTtlMs < 10_000 ||
     profile.updatedAt.length !== 10 ||
     profile.endpoints.length === 0 ||
-    profile.sources.length === 0 ||
-    profile.supportedCountryCodes.some((code) => !/^[A-Z]{2}$/.test(code))
+    profile.sources.length === 0
   ) {
     throw new Error(`服务商配置 ${profile.id} 的 Schema 校验失败。`);
   }

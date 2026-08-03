@@ -1884,18 +1884,17 @@
             <section class="settings-panel proxy-settings" data-settings-panel="proxy">
               <p class="proxy-boundary-notice">
                 <strong>仅连接用户已有代理：</strong>
-                ClaudeDock
-                不再提供节点、订阅、代理内核、隧道或跨境线路，也不会创建或销售网络出口。请只填写你有权使用且符合所在地法律及服务条款的
-                HTTP / SOCKS5 代理。
+                ClaudeDock 只保存并传递用户明确填写的 HTTP / SOCKS5
+                连接参数，不提供任何第三方网络服务。请只填写你有权使用且符合所在地法律及服务条款的地址。
               </p>
               <p class="proxy-boundary-notice">
                 配置只作用于勾选的 ClaudeDock 进程与会话；不修改 Windows 系统代理、路由表、DNS、
-                网卡或其他软件。旧版本保存的节点与 Xray 数据不会被启用，也不会在此处读取。
+                网卡或其他软件，也不会读取或迁移旧版网络配置。
               </p>
               <section class="proxy-settings__section" aria-labelledby="application-proxy-title">
                 <div class="settings-section-heading">
                   <strong id="application-proxy-title">应用代理</strong>
-                  <span>适用于 V2RayN、Clash、单位网关等已经运行并提供本机或授权端口的代理。</span>
+                  <span>适用于已经运行并提供本机端口或组织授权地址的 HTTP / SOCKS5 代理。</span>
                 </div>
                 <label class="settings-row" for="application-proxy-enabled">
                   <span
@@ -2096,7 +2095,7 @@
             <section class="settings-panel legal-settings" data-settings-panel="legal">
               <div class="settings-section-heading">
                 <strong>隐私与联网说明</strong>
-                <span>公开发行前必须让用户在使用联网功能前能够持续访问这些信息。</span>
+                <span>联网功能的接收方、供应链校验和用户边界会持续公开。</span>
               </div>
               <div class="legal-card">
                 <strong>本机保存</strong>
@@ -2108,8 +2107,9 @@
               <div class="legal-card">
                 <strong>会发送到哪里</strong>
                 <p>
-                  检查更新会访问 GitHub、npm 或
-                  npmmirror；对话内容、附件和终端请求只会发送到你选择的 AI
+                  应用更新会访问 GitHub Release 或维护者的 HTTPS IP 镜像，并先验证独立签名的发布
+                  清单；工具更新还可能访问 npm 或
+                  npmmirror。对话内容、附件和终端请求只会发送到你选择的 AI
                   服务或中转端点。境外服务可能构成个人信息跨境处理，请勿提交无权处理的个人信息、秘密或受限数据。
                 </p>
               </div>
@@ -2123,8 +2123,8 @@
               <div class="legal-card legal-card--risk">
                 <strong>外部代理仍需合法使用</strong>
                 <p>
-                  ClaudeDock 只连接用户已有的 HTTP / SOCKS5
-                  代理，不提供节点、订阅、内核、隧道或出口；这不代表代理用途当然合法。用户仍应确认代理来自依法取得、合同授权的企业线路、本机工具或其他合法网络服务，并遵守所在地法律与服务条款。
+                  ClaudeDock 只把用户填写的 HTTP / SOCKS5
+                  地址作为所选进程的连接参数；这不代表该地址当然合法或已获授权。用户应自行确认服务来源、合同权限，并遵守所在地法律与服务条款。
                 </p>
               </div>
               <div class="legal-links">
@@ -2140,10 +2140,16 @@
                 >
                   合规评估与官方依据
                 </button>
+                <button
+                  type="button"
+                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/security/advisories/new"
+                >
+                  私密报告安全漏洞
+                </button>
               </div>
               <p class="settings-help">
-                维护者：Cheng / ClaudeDock 项目。发布后的联系与权利请求渠道为公开仓库 GitHub
-                Issues；若改用其他主体发布，应在发行前替换为实际主体名称、地址和联系方式。
+                维护者：AeonusOvO；公开联系电话：13585928550。一般联系与权利请求使用公开仓库 GitHub
+                Issues；安全漏洞请使用上方私密报告渠道。
               </p>
             </section>
           </div>
@@ -2349,13 +2355,6 @@
             >探测不调用模型、不读取登录令牌，也不修改系统代理。</span
           >
         </section>
-        <label class="network-preflight-privacy" for="network-preflight-privacy">
-          <span>
-            <strong>增强隐私模式</strong>
-            <small>不请求第三方公网出口情报；官方 DNS、HTTPS、TLS 与 CLI 路径仍会检查。</small>
-          </span>
-          <input id="network-preflight-privacy" type="checkbox" />
-        </label>
         <div class="network-preflight-dialog__grid">
           <section>
             <h3>风险与结论</h3>

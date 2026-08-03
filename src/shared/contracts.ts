@@ -41,10 +41,9 @@ export interface DownloadTaskView {
   totalBytes: number;
 }
 /**
- * A user-owned proxy that already exists outside ClaudeDock (for example a local V2RayN HTTP
- * inbound or an organisation-managed proxy). ClaudeDock only points selected application traffic
- * at it; it never creates a tunnel, imports nodes, downloads a proxy core or edits Windows proxy
- * settings.
+ * A user-owned proxy that already exists outside ClaudeDock, such as an organisation-managed
+ * gateway. ClaudeDock only passes the address to selected application processes and never edits
+ * Windows proxy settings.
  */
 export type ApplicationProxyProtocol = 'http' | 'socks5';
 export interface ApplicationProxyScope {
@@ -161,11 +160,6 @@ export type NetworkProbeStatus = 'failed' | 'passed' | 'skipped' | 'unknown' | '
 export type NetworkProcessKind =
   'application' | 'claude-cli' | 'codex-cli' | 'oauth-browser' | 'renderer' | 'terminal';
 
-export interface NetworkPreflightSettings {
-  /** Omits third-party public-egress intelligence. Official connectivity checks still run. */
-  enhancedPrivacyMode: boolean;
-}
-
 export interface NetworkPathView {
   detail: string;
   dnsServers: string[];
@@ -207,24 +201,9 @@ export interface NetworkFeatureAccess {
   reason?: string;
 }
 
-export interface NetworkEgressSummary {
-  asn?: string;
-  countryCode?: string;
-  countryName?: string;
-  ipv4?: string;
-  ipv6?: string;
-  organization?: string;
-  riskFlags?: string[];
-  sourceCount: number;
-  sources?: string[];
-  sourcesAgree: boolean;
-  stability: 'changed' | 'stable' | 'unknown';
-}
-
 export interface NetworkPreflightResult {
   cacheExpiresAt?: number;
   checkedAt?: number;
-  egress?: NetworkEgressSummary;
   featureAccess: NetworkFeatureAccess[];
   paths: NetworkPathView[];
   probes: NetworkProbeResult[];
@@ -1119,10 +1098,6 @@ export interface ControlPanelApi {
   getNetworkPreflight: (provider: NetworkProviderId) => Promise<NetworkPreflightResult>;
   runNetworkPreflight: (input: NetworkPreflightRunInput) => Promise<NetworkPreflightResult>;
   invalidateNetworkPreflight: (reason: string) => Promise<void>;
-  getNetworkPreflightSettings: () => Promise<NetworkPreflightSettings>;
-  setNetworkPreflightSettings: (
-    settings: NetworkPreflightSettings,
-  ) => Promise<NetworkPreflightSettings>;
   getNetworkPreflightHistory: () => Promise<NetworkPreflightHistoryView>;
   clearNetworkPreflightHistory: () => Promise<NetworkPreflightHistoryView>;
   onNetworkPreflight: (listener: (result: NetworkPreflightResult) => void) => Unsubscribe;

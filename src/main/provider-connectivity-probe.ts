@@ -2,7 +2,6 @@ import { lookup } from 'node:dns/promises';
 import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import type {
-  NetworkEgressSummary,
   NetworkPathView,
   NetworkPreflightAction,
   NetworkProbeResult,
@@ -29,19 +28,8 @@ export interface ApplicationEndpointResponse {
 export type ApplicationEndpointRequest = (url: string) => Promise<ApplicationEndpointResponse>;
 
 export interface ConnectivityObservation {
-  egress?: NetworkEgressSummary;
   paths: NetworkPathView[];
   probes: NetworkProbeResult[];
-}
-
-interface PublicEgressFact {
-  asn?: string;
-  countryCode?: string;
-  countryName?: string;
-  riskFlags?: string[];
-  ip?: string;
-  organization?: string;
-  source: string;
 }
 
 type DnsLookup = (hostname: string) => Promise<Array<{ address: string; family: 4 | 6 }>>;
@@ -61,22 +49,6 @@ export interface ProviderConnectivityProbeOptions {
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REACHABLE_HTTP_STATUS = (status: number): boolean => status >= 200 && status < 500;
-
-const readLimitedJsonObject = async (response: Response): Promise<Record<string, unknown>> => {
-  const declaredLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-    throw new Error('诊断服务响应超过 64 KiB 上限');
-  }
-  const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
-    throw new Error('诊断服务响应超过 64 KiB 上限');
-  }
-  const value = JSON.parse(text) as unknown;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('诊断服务返回的 JSON 结构无效');
-  }
-  return value as Record<string, unknown>;
-};
 
 const isPrivateAddress = (address: string): boolean => {
   const version = isIP(address);
@@ -121,25 +93,6 @@ const abortAfter = (): { signal: AbortSignal; stop: () => void } => {
 const safeTarget = (rawUrl: string): string => {
   const parsed = new URL(rawUrl.replace(/^wss:/, 'https:'));
   return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
-};
-
-const maskIp = (value: string | undefined): Pick<NetworkEgressSummary, 'ipv4' | 'ipv6'> => {
-  const version = value ? isIP(value) : 0;
-  if (!value || version === 0) {
-    return {};
-  }
-  if (version === 6) {
-    const [leftRaw = '', rightRaw = ''] = value.split('::');
-    const left = leftRaw ? leftRaw.split(':') : [];
-    const right = rightRaw ? rightRaw.split(':') : [];
-    const fillCount = Math.max(0, 8 - left.length - right.length);
-    const pieces = [...left, ...Array<string>(fillCount).fill('0'), ...right].map(
-      (piece) => piece || '0',
-    );
-    return { ipv6: `${pieces.slice(0, 4).join(':')}::/64` };
-  }
-  const pieces = value.split('.');
-  return { ipv4: `${pieces.slice(0, 3).join('.')}.0/24` };
 };
 
 const classifyNetworkError = (error: unknown): string => {
@@ -316,7 +269,6 @@ export class ProviderConnectivityProbe {
   public async run(
     provider: NetworkProviderId,
     action: NetworkPreflightAction,
-    enhancedPrivacyMode: boolean,
     cwd?: string,
   ): Promise<ConnectivityObservation> {
     const profile = getProviderProfile(provider);
@@ -328,18 +280,13 @@ export class ProviderConnectivityProbe {
       ),
     );
     const versionProbePromise = this.probeClientVersion(provider, action, cwd);
-    const egressPromise = enhancedPrivacyMode
-      ? Promise.resolve(undefined)
-      : this.probePublicEgress();
-    const [paths, dnsProbes, endpointProbes, versionProbe, egress] = await Promise.all([
+    const [paths, dnsProbes, endpointProbes, versionProbe] = await Promise.all([
       pathsPromise,
       dnsProbesPromise,
       endpointProbesPromise,
       versionProbePromise,
-      egressPromise,
     ]);
     return {
-      egress,
       paths,
       probes: [...dnsProbes, versionProbe, ...endpointProbes.flat()],
     };
@@ -617,147 +564,6 @@ export class ProviderConnectivityProbe {
         required,
         status: required ? 'failed' : 'warning',
       };
-    }
-  }
-
-  private async probePublicEgress(): Promise<NetworkEgressSummary | undefined> {
-    const [sources, addressSources] = await Promise.all([
-      Promise.allSettled([
-        this.fetchEgressFact('https://ipapi.co/json/', 'ipapi.co'),
-        this.fetchEgressFact('https://ipwho.is/', 'ipwho.is'),
-      ]),
-      Promise.allSettled([
-        this.fetchPublicAddress('https://api4.ipify.org?format=json', 4),
-        this.fetchPublicAddress('https://api6.ipify.org?format=json', 6),
-      ]),
-    ]);
-    const facts = sources
-      .filter(
-        (result): result is PromiseFulfilledResult<PublicEgressFact> =>
-          result.status === 'fulfilled',
-      )
-      .map((result) => result.value);
-    const publicAddresses = addressSources
-      .filter(
-        (result): result is PromiseFulfilledResult<{ ip: string; version: 4 | 6 }> =>
-          result.status === 'fulfilled',
-      )
-      .map((result) => result.value);
-    const ipv4 = publicAddresses.find((address) => address.version === 4)?.ip;
-    const ipv6 = publicAddresses.find((address) => address.version === 6)?.ip;
-    if (facts.length === 0) {
-      return publicAddresses.length > 0
-        ? {
-            ...maskIp(ipv4),
-            ...maskIp(ipv6),
-            sourceCount: 0,
-            sources: [],
-            sourcesAgree: false,
-            stability: 'unknown',
-          }
-        : undefined;
-    }
-    const first = facts[0];
-    if (!first) {
-      return undefined;
-    }
-    const sourcesAgree =
-      facts.length >= 2 && facts.every((fact) => fact.countryCode === first.countryCode);
-    const riskFlags = [...new Set(facts.flatMap((fact) => fact.riskFlags ?? []))];
-    return {
-      ...maskIp(first.ip),
-      ...maskIp(ipv4),
-      ...maskIp(ipv6),
-      asn: first.asn,
-      countryCode: first.countryCode,
-      countryName: first.countryName,
-      organization: first.organization,
-      riskFlags,
-      sourceCount: facts.length,
-      sources: facts.map((fact) => fact.source),
-      sourcesAgree,
-      stability: 'unknown',
-    };
-  }
-
-  private async fetchPublicAddress(
-    url: string,
-    version: 4 | 6,
-  ): Promise<{ ip: string; version: 4 | 6 }> {
-    const timeout = abortAfter();
-    try {
-      const response = await this.appFetch(url, {
-        cache: 'no-store',
-        credentials: 'omit',
-        method: 'GET',
-        redirect: 'error',
-        signal: timeout.signal,
-      });
-      if (!response.ok) {
-        throw new Error(`公网 IPv${version} 探测返回 HTTP ${response.status}`);
-      }
-      const body = await readLimitedJsonObject(response);
-      const ip = typeof body.ip === 'string' ? body.ip.trim() : '';
-      if (!ip || ip.length > 64 || isIP(ip) !== version) {
-        throw new Error(`公网 IPv${version} 探测结果无效`);
-      }
-      return { ip, version };
-    } finally {
-      timeout.stop();
-    }
-  }
-
-  private async fetchEgressFact(url: string, source: string): Promise<PublicEgressFact> {
-    const timeout = abortAfter();
-    try {
-      const response = await this.appFetch(url, {
-        cache: 'no-store',
-        credentials: 'omit',
-        method: 'GET',
-        redirect: 'error',
-        signal: timeout.signal,
-      });
-      if (!response.ok) {
-        throw new Error(`${source} 返回 HTTP ${response.status}`);
-      }
-      const body = await readLimitedJsonObject(response);
-      const countryCode = String(body.country_code ?? body.country_code2 ?? '').toUpperCase();
-      const ip = String(body.ip ?? '');
-      if (!/^[A-Z]{2}$/.test(countryCode) || !ip || ip.length > 64) {
-        throw new Error(`${source} 数据不完整`);
-      }
-      const security =
-        typeof body.security === 'object' && body.security
-          ? (body.security as Record<string, unknown>)
-          : undefined;
-      const riskFlags = [
-        security?.vpn === true ? 'VPN' : undefined,
-        security?.proxy === true ? '公共代理' : undefined,
-        security?.tor === true ? 'Tor' : undefined,
-        security?.hosting === true ? '托管/数据中心' : undefined,
-        security?.anonymous === true ? '匿名网络' : undefined,
-      ].filter((flag): flag is string => Boolean(flag));
-      return {
-        asn: typeof body.asn === 'string' ? body.asn.slice(0, 80) : undefined,
-        countryCode,
-        countryName:
-          typeof body.country_name === 'string'
-            ? body.country_name.slice(0, 80)
-            : typeof body.country === 'string'
-              ? body.country.slice(0, 80)
-              : undefined,
-        ip,
-        organization:
-          typeof body.org === 'string'
-            ? body.org.slice(0, 120)
-            : typeof body.connection === 'object' && body.connection
-              ? String((body.connection as Record<string, unknown>).org ?? '').slice(0, 120)
-              : undefined,
-        riskFlags,
-        source,
-      };
-    } finally {
-      timeout.stop();
     }
   }
 }

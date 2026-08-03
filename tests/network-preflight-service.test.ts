@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectivityObservation } from '../src/main/provider-connectivity-probe';
 import { NetworkDiagnosticsStore } from '../src/main/network-diagnostics-store';
 import { NetworkPreflightService } from '../src/main/network-preflight-service';
-import { NetworkPreflightSettingsStore } from '../src/main/network-preflight-settings-store';
 
 const roots: string[] = [];
 
@@ -22,12 +21,6 @@ const createRoot = (): string => {
 };
 
 const successfulObservation = (): ConnectivityObservation => ({
-  egress: {
-    countryCode: 'US',
-    sourceCount: 2,
-    sourcesAgree: true,
-    stability: 'unknown',
-  },
   paths: [
     {
       detail: 'direct',
@@ -55,12 +48,6 @@ const successfulObservation = (): ConnectivityObservation => ({
 });
 
 describe('NetworkPreflightService', () => {
-  it('defaults new installations to enhanced privacy mode', () => {
-    expect(new NetworkPreflightSettingsStore(createRoot()).get()).toEqual({
-      enhancedPrivacyMode: true,
-    });
-  });
-
   it('deduplicates concurrent checks and reuses a fresh cache', async () => {
     const root = createRoot();
     let release: ((value: ConnectivityObservation) => void) | undefined;
@@ -73,7 +60,6 @@ describe('NetworkPreflightService', () => {
     const service = new NetworkPreflightService({
       diagnosticsStore: new NetworkDiagnosticsStore(root),
       probe: { run },
-      settingsStore: new NetworkPreflightSettingsStore(root),
     });
     const input = { action: 'background' as const, provider: 'openai-codex' as const };
 
@@ -101,7 +87,6 @@ describe('NetworkPreflightService', () => {
     const service = new NetworkPreflightService({
       diagnosticsStore,
       probe: { run },
-      settingsStore: new NetworkPreflightSettingsStore(root),
     });
     const operation = service.run({
       action: 'background',

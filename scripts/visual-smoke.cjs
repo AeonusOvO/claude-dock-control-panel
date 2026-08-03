@@ -358,8 +358,8 @@ app
       installed.replaceChildren();
       for (const fixture of [
         ['filesystem', 'Claude · stdio', '已连接 · MCP initialize 握手成功。', 'project · 项目共享', 'D:/Program/ClaudeDesk/.mcp.json'],
-        ['context7', 'Claude · http', '连接失败 · 初始化请求返回 HTTP 401。', 'user · 用户级', 'C:/Users/Cheng/.claude.json'],
-        ['node_repl', 'Codex · stdio', '状态未知 · 来自 Codex CLI；ClaudeDock 仅只读发现。', 'user · 用户级', 'C:/Users/Cheng/.codex/config.toml'],
+        ['context7', 'Claude · http', '连接失败 · 初始化请求返回 HTTP 401。', 'user · 用户级', 'C:/Users/ExampleUser/.claude.json'],
+        ['node_repl', 'Codex · stdio', '状态未知 · 来自 Codex CLI；ClaudeDock 仅只读发现。', 'user · 用户级', 'C:/Users/ExampleUser/.codex/config.toml'],
       ]) {
         const card = document.createElement('article');
         card.className = 'plugin-card';

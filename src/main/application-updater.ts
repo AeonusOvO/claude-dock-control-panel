@@ -1,5 +1,8 @@
 import type { ApplicationUpdaterState } from '../shared/contracts';
-import type { ApplicationUpdateSourceSelection } from './application-update-sources';
+import {
+  type ApplicationUpdateSourceSelection,
+  verifyDownloadedApplicationUpdate,
+} from './application-update-sources';
 
 interface UpdateInfoView {
   version?: unknown;
@@ -18,21 +21,25 @@ interface DownloadProgressView {
 }
 
 export interface ApplicationUpdaterDriver {
+  allowDowngrade: boolean;
   allowPrerelease: boolean;
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
   checkForUpdates: () => Promise<UpdateCheckResultView | null>;
   downloadUpdate: () => Promise<string[]>;
+  disableWebInstaller: boolean;
   on: (event: string, listener: (payload?: unknown) => void) => unknown;
   quitAndInstall: (isSilent?: boolean, isForceRunAfter?: boolean) => void;
   setFeedURL: (options: Record<string, unknown>) => void;
 }
 
 interface ApplicationUpdaterOptions {
+  configureSource?: (source: ApplicationUpdateSourceSelection) => void;
   currentVersion: string;
   driver: ApplicationUpdaterDriver;
   enabled: boolean;
   onChange: (state: ApplicationUpdaterState) => void;
+  onTrustedVersion?: (version: string) => void;
   selectSource?: () => Promise<ApplicationUpdateSourceSelection>;
 }
 
@@ -44,12 +51,15 @@ const numericValue = (value: unknown): number | undefined =>
 
 export class ApplicationUpdaterService {
   private operation: Promise<ApplicationUpdaterState> | undefined;
+  private selection: ApplicationUpdateSourceSelection | undefined;
   private state: ApplicationUpdaterState;
 
   public constructor(private readonly options: ApplicationUpdaterOptions) {
     options.driver.autoDownload = false;
     options.driver.autoInstallOnAppQuit = false;
     options.driver.allowPrerelease = false;
+    options.driver.allowDowngrade = false;
+    options.driver.disableWebInstaller = true;
     this.state = options.enabled
       ? {
           currentVersion: options.currentVersion,
@@ -86,25 +96,33 @@ export class ApplicationUpdaterService {
       });
       try {
         const source = await this.options.selectSource?.();
-        if (source) {
-          this.options.driver.setFeedURL(source.feed);
-          this.updateState({
-            currentVersion: this.options.currentVersion,
-            message: source.throughputBps
-              ? `已选择 ${source.label}，正在检查更新…`
-              : `使用 ${source.label} 检查更新…`,
-            phase: 'checking',
-            sourceId: source.id,
-            sourceLabel: source.label,
-            sourceThroughputBps: source.throughputBps,
-          });
-        }
+        if (!source) throw new Error('没有可验证的应用更新源。');
+        this.selection = source;
+        this.options.configureSource?.(source);
+        this.options.onTrustedVersion?.(source.releaseVersion);
+        this.options.driver.setFeedURL(source.feed);
+        this.updateState({
+          currentVersion: this.options.currentVersion,
+          latestVersion: source.releaseVersion,
+          message: source.throughputBps
+            ? `已选择 ${source.label}，正在检查更新…`
+            : `使用 ${source.label} 检查更新…`,
+          phase: 'checking',
+          sourceId: source.id,
+          sourceLabel: source.label,
+          sourceThroughputBps: source.throughputBps,
+        });
         const result = await this.options.driver.checkForUpdates();
         if (!result) {
           throw new Error('更新服务未返回检查结果。');
         }
         const latestVersion =
           typeof result.updateInfo?.version === 'string' ? result.updateInfo.version : undefined;
+        if (latestVersion && latestVersion !== source.releaseVersion) {
+          throw new Error(
+            `更新器返回版本 ${latestVersion}，签名发布清单声明 ${source.releaseVersion}。`,
+          );
+        }
         if (result.isUpdateAvailable === false || this.state.phase === 'up-to-date') {
           if (this.state.phase !== 'up-to-date') {
             this.updateState({
@@ -128,7 +146,18 @@ export class ApplicationUpdaterService {
           sourceLabel: this.state.sourceLabel,
           sourceThroughputBps: this.state.sourceThroughputBps,
         });
-        await this.options.driver.downloadUpdate();
+        const downloadedPaths = await this.options.driver.downloadUpdate();
+        await verifyDownloadedApplicationUpdate(downloadedPaths, source);
+        this.updateState({
+          currentVersion: this.options.currentVersion,
+          latestVersion: source.releaseVersion,
+          message: `ClaudeDock ${source.releaseVersion} 已通过签名清单、大小和 SHA-512 终检，可重启安装。`,
+          percent: 100,
+          phase: 'downloaded',
+          sourceId: source.id,
+          sourceLabel: source.label,
+          sourceThroughputBps: source.throughputBps,
+        });
         return this.getState();
       } catch (error) {
         this.updateState({
@@ -203,13 +232,15 @@ export class ApplicationUpdaterService {
     driver.on('update-downloaded', (payload) => {
       const info = payload as UpdateInfoView | undefined;
       const latestVersion =
-        typeof info?.version === 'string' ? info.version : this.state.latestVersion;
+        typeof info?.version === 'string'
+          ? info.version
+          : (this.selection?.releaseVersion ?? this.state.latestVersion);
       this.updateState({
         currentVersion: this.options.currentVersion,
         latestVersion,
-        message: `ClaudeDock ${latestVersion ?? '新版本'} 已下载并完成校验，可以重启安装。`,
+        message: `ClaudeDock ${latestVersion ?? '新版本'} 已下载，正在按签名发布清单执行终检…`,
         percent: 100,
-        phase: 'downloaded',
+        phase: 'downloading',
         sourceId: this.state.sourceId,
         sourceLabel: this.state.sourceLabel,
         sourceThroughputBps: this.state.sourceThroughputBps,

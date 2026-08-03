@@ -2,12 +2,10 @@ import type {
   NetworkPreflightHistoryView,
   NetworkPreflightResult,
   NetworkPreflightRunInput,
-  NetworkPreflightSettings,
   NetworkProviderId,
 } from '../shared/contracts';
 import { getProviderProfile } from '../shared/provider-profiles';
 import { NetworkDiagnosticsStore } from './network-diagnostics-store';
-import { NetworkPreflightSettingsStore } from './network-preflight-settings-store';
 import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RiskDecisionEngine } from './risk-decision-engine';
 
@@ -20,7 +18,6 @@ interface NetworkPreflightServiceOptions {
   onResult?: (result: NetworkPreflightResult) => void;
   probe: Pick<ProviderConnectivityProbe, 'run'>;
   riskEngine?: RiskDecisionEngine;
-  settingsStore: NetworkPreflightSettingsStore;
 }
 
 const cacheKey = (input: NetworkPreflightRunInput): string =>
@@ -48,7 +45,6 @@ export class NetworkPreflightService {
   private readonly cache = new Map<string, CachedResult>();
   private generation = 0;
   private readonly inFlight = new Map<string, Promise<NetworkPreflightResult>>();
-  private readonly lastEgress = new Map<NetworkProviderId, NetworkPreflightResult['egress']>();
   private readonly riskEngine: RiskDecisionEngine;
 
   public constructor(private readonly options: NetworkPreflightServiceOptions) {
@@ -74,12 +70,7 @@ export class NetworkPreflightService {
     const startedAt = now;
     this.options.onResult?.(testingResult(input, startedAt));
     const operation = this.options.probe
-      .run(
-        input.provider,
-        input.action,
-        this.options.settingsStore.get().enhancedPrivacyMode,
-        input.cwd,
-      )
+      .run(input.provider, input.action, input.cwd)
       .then((observation) => {
         const checkedAt = Date.now();
         const result = this.riskEngine.evaluate(
@@ -88,11 +79,9 @@ export class NetworkPreflightService {
           observation,
           startedAt,
           checkedAt,
-          this.lastEgress.get(input.provider),
         );
         if (generationAtStart === this.generation) {
           this.cache.set(key, { result });
-          this.lastEgress.set(input.provider, result.egress);
           this.options.diagnosticsStore.append(result);
           this.options.onResult?.(result);
         }
@@ -154,22 +143,11 @@ export class NetworkPreflightService {
     this.cache.clear();
   }
 
-  public getSettings(): NetworkPreflightSettings {
-    return this.options.settingsStore.get();
-  }
-
-  public setSettings(settings: NetworkPreflightSettings): NetworkPreflightSettings {
-    const saved = this.options.settingsStore.set(settings);
-    this.invalidate('settings-changed');
-    return saved;
-  }
-
   public getHistory(): NetworkPreflightHistoryView {
     return this.options.diagnosticsStore.getView();
   }
 
   public clearHistory(): NetworkPreflightHistoryView {
-    this.lastEgress.clear();
     return this.options.diagnosticsStore.clear();
   }
 }

@@ -28,11 +28,10 @@ const createProbe = (
 };
 
 describe('ProviderConnectivityProbe', () => {
-  it('uses only metadata requests and controlled CLI probes in privacy mode', async () => {
+  it('uses only metadata requests and controlled CLI probes', async () => {
     const { appFetch, probe } = createProbe();
-    const result = await probe.run('openai-codex', 'background', true);
+    const result = await probe.run('openai-codex', 'background');
 
-    expect(result.egress).toBeUndefined();
     expect(result.probes.some((item) => item.kind === 'dns' && item.status === 'passed')).toBe(
       true,
     );
@@ -60,7 +59,7 @@ describe('ProviderConnectivityProbe', () => {
       status: 200,
     }));
     const { probe } = createProbe(undefined, applicationRequest);
-    const result = await probe.run('openai-codex', 'background', true);
+    const result = await probe.run('openai-codex', 'background');
     const chatgptProbe = result.probes.find((item) => item.id === 'app:openai-chatgpt');
 
     expect(chatgptProbe).toMatchObject({
@@ -75,7 +74,7 @@ describe('ProviderConnectivityProbe', () => {
       redirects: url.includes('chatgpt.com') ? [{ host: 'portal.example', statusCode: 302 }] : [],
       status: 200,
     }));
-    const result = await probe.run('openai-codex', 'background', true);
+    const result = await probe.run('openai-codex', 'background');
     const chatgptProbe = result.probes.find((item) => item.id === 'app:openai-chatgpt');
 
     expect(chatgptProbe).toMatchObject({
@@ -88,7 +87,7 @@ describe('ProviderConnectivityProbe', () => {
     const { probe } = createProbe(undefined, async () => {
       throw new Error('Redirect was cancelled');
     });
-    const result = await probe.run('openai-codex', 'background', true);
+    const result = await probe.run('openai-codex', 'background');
     const chatgptProbe = result.probes.find((item) => item.id === 'app:openai-chatgpt');
 
     expect(chatgptProbe).toMatchObject({
@@ -102,7 +101,7 @@ describe('ProviderConnectivityProbe', () => {
     const { probe } = createProbe(async (url, websocket) =>
       websocket ? `101|${url.replace(/^wss:/, 'https:')}|0|` : `200|${url}|0|text/html`,
     );
-    const result = await probe.run('openai-codex', 'cli-launch', true);
+    const result = await probe.run('openai-codex', 'cli-launch');
     const apiProbe = result.probes.find((item) => item.id === 'cli:openai-codex-api');
 
     expect(apiProbe?.status).toBe('failed');
@@ -118,7 +117,7 @@ describe('ProviderConnectivityProbe', () => {
       dnsLookup: async () => [{ address: '192.168.1.1', family: 4 }],
       resolveProxy: async () => 'DIRECT',
     });
-    const result = await probe.run('openai-codex', 'background', true);
+    const result = await probe.run('openai-codex', 'background');
 
     expect(result.probes.filter((item) => item.kind === 'dns')).toEqual(
       expect.arrayContaining([
@@ -128,48 +127,5 @@ describe('ProviderConnectivityProbe', () => {
         }),
       ]),
     );
-  });
-
-  it('caps third-party JSON and keeps reputation flags auxiliary', async () => {
-    const appFetch = vi.fn(async (url: string, init: RequestInit) => {
-      if (init.method === 'HEAD') {
-        return new Response(null, { status: 204 });
-      }
-      if (url.includes('ipapi.co')) {
-        return new Response('{}', {
-          headers: { 'content-length': String(64 * 1024 + 1) },
-          status: 200,
-        });
-      }
-      if (url.includes('ipwho.is')) {
-        return Response.json({
-          connection: { org: 'Example Hosting' },
-          country: 'United States',
-          country_code: 'US',
-          ip: '203.0.113.10',
-          security: { hosting: true, vpn: true },
-        });
-      }
-      return Response.json({
-        ip: url.includes('api6') ? '2001:db8::10' : '203.0.113.10',
-      });
-    });
-    const probe = new ProviderConnectivityProbe({
-      appFetch,
-      cliRequest: async (url, websocket) =>
-        websocket ? `101|${url.replace(/^wss:/, 'https:')}|0|` : `401|${url}|0|application/json`,
-      clientVersion: async () => '0.146.0',
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      resolveProxy: async () => 'DIRECT',
-    });
-
-    const result = await probe.run('openai-codex', 'background', false);
-
-    expect(result.egress).toMatchObject({
-      riskFlags: ['VPN', '托管/数据中心'],
-      sourceCount: 1,
-      sources: ['ipwho.is'],
-      sourcesAgree: false,
-    });
   });
 });

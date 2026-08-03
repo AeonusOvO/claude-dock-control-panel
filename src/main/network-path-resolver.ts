@@ -18,7 +18,7 @@ export const VIRTUAL_INTERFACE_PATTERN =
 
 export const virtualInterfaceCategory = (name: string): string => {
   if (/(wireguard|wintun|tap|tun|vpn)/i.test(name)) {
-    return 'VPN / 隧道接口';
+    return '虚拟网络接口';
   }
   if (/(tailscale|zerotier)/i.test(name)) {
     return '覆盖网络接口';

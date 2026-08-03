@@ -279,7 +279,6 @@ const networkPreflightDialogMeta = requiredElement<HTMLElement>('#network-prefli
 const networkPreflightDialogTone = requiredElement<HTMLElement>(
   '.network-preflight-dialog__summary',
 );
-const networkPreflightPrivacy = requiredElement<HTMLInputElement>('#network-preflight-privacy');
 const networkPreflightReasons = requiredElement<HTMLUListElement>('#network-preflight-reasons');
 const networkPreflightPaths = requiredElement<HTMLUListElement>('#network-preflight-paths');
 const networkPreflightProbes = requiredElement<HTMLElement>('#network-preflight-probes');
@@ -828,7 +827,7 @@ const renderApplicationProxyState = (state: ApplicationProxyState): void => {
   ].filter(Boolean);
   applicationProxyScopeSummary.textContent = config.enabled
     ? `${config.protocol.toUpperCase()} ${config.host}:${config.port} 已启用；作用域：${enabledScopes.join('、') || '无'}。`
-    : '应用代理已关闭；ClaudeDock 不会启动任何代理内核或隧道。';
+    : '应用代理已关闭；所有受支持的进程均使用各自的默认连接设置。';
   applicationProxyTestResult.dataset.ok = String(test?.ok ?? false);
   applicationProxyTestResult.textContent = test
     ? `${test.message}${test.latencyMs === undefined ? '' : ` · ${test.latencyMs} ms`} · ${new Date(test.checkedAt).toLocaleTimeString()}`
@@ -1542,20 +1541,7 @@ const renderNetworkPreflightDetails = (result?: NetworkPreflightResult): void =>
         timeStyle: 'medium',
       }).format(result.checkedAt)
     : '正在检测';
-  const egress = result.egress;
-  const egressDetail = egress
-    ? [
-        egress.countryCode,
-        egress.ipv4 ?? egress.ipv6,
-        `${egress.sourceCount} 个出口来源`,
-        egress.sources?.join(' + '),
-        egress.riskFlags?.length ? `辅助标签：${egress.riskFlags.join('、')}` : undefined,
-        egress.sourcesAgree ? '双源一致' : '未形成双源共识',
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : '出口情报未启用或不可用';
-  networkPreflightDialogMeta.textContent = `${checkedAt} · 风险 ${result.riskScore}/100 · ${egressDetail}`;
+  networkPreflightDialogMeta.textContent = `${checkedAt} · 风险 ${result.riskScore}/100 · 仅检查本机路径与服务商官方端点`;
   replaceList(networkPreflightReasons, result.reasons, '没有需要用户处理的风险信号。');
   replaceList(
     networkPreflightPaths,
@@ -1673,13 +1659,6 @@ const openNetworkPreflightDialog = async (providerOverride?: NetworkProviderId):
   const provider = providerOverride ?? activeNetworkProvider();
   networkPreflightDialogProvider = provider;
   renderNetworkPreflightDetails(provider ? networkPreflightResults.get(provider) : undefined);
-  try {
-    networkPreflightPrivacy.checked = (
-      await window.controlPanel.getNetworkPreflightSettings()
-    ).enhancedPrivacyMode;
-  } catch {
-    networkPreflightPrivacy.checked = false;
-  }
   if (!networkPreflightDialog.open) {
     networkPreflightDialog.showModal();
   }
@@ -6519,7 +6498,7 @@ const mcpScopeLabel = (scope: McpScope): string =>
  * and the list arrives as a whole, which is what it actually is.
  */
 const mcpServerKey = (server: McpServerView): string =>
-  `${server.client} ${server.scope} ${server.name}`;
+  `${server.client}\\u0000${server.scope}\\u0000${server.name}`;
 
 let mcpRenderedContext: string | null = null;
 let mcpRenderedKeys: ReadonlySet<string> = new Set<string>();
@@ -9821,20 +9800,6 @@ networkPreflightDialogRecheck.addEventListener('click', () => {
 });
 networkPreflightClose.addEventListener('click', () => {
   networkPreflightDialog.close();
-});
-networkPreflightPrivacy.addEventListener('change', () => {
-  networkPreflightPrivacy.disabled = true;
-  void window.controlPanel
-    .setNetworkPreflightSettings({
-      enhancedPrivacyMode: networkPreflightPrivacy.checked,
-    })
-    .then(() => runActiveNetworkPreflight(true, networkPreflightDialogProvider))
-    .catch((error: unknown) => {
-      showToast(error instanceof Error ? error.message : '无法保存网络预检隐私设置。', 'error');
-    })
-    .finally(() => {
-      networkPreflightPrivacy.disabled = false;
-    });
 });
 networkPreflightClearHistory.addEventListener('click', () => {
   networkPreflightClearHistory.disabled = true;

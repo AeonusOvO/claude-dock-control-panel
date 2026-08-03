@@ -6,6 +6,10 @@ const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8
 const preload = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
 const renderer = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const markup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+const connectivityProbe = readFileSync(
+  new URL('../src/main/provider-connectivity-probe.ts', import.meta.url),
+  'utf8',
+);
 
 describe('external application proxy integration contract', () => {
   it('exposes only host, port, credentials, and application scopes', () => {
@@ -55,7 +59,14 @@ describe('external application proxy integration contract', () => {
 
   it('states the product boundary next to the controls', () => {
     const compactMarkup = markup.replace(/\s+/g, ' ');
-    expect(compactMarkup).toContain('ClaudeDock 不再提供节点、订阅、代理内核、隧道或跨境线路');
-    expect(compactMarkup).toContain('旧版本保存的节点与 Xray 数据不会被启用');
+    expect(compactMarkup).toContain('ClaudeDock 只保存并传递用户明确填写的 HTTP / SOCKS5');
+    expect(compactMarkup).toContain('不会读取或迁移旧版网络配置');
+    expect(compactMarkup).not.toMatch(/Xray|节点|隧道/iu);
+  });
+
+  it('does not contact public-address intelligence services', () => {
+    expect(connectivityProbe).not.toMatch(/ipapi\.co|ipwho\.is|ipify\.org/iu);
+    expect(contracts).not.toContain('NetworkEgressSummary');
+    expect(contracts).not.toContain('NetworkPreflightSettings');
   });
 });

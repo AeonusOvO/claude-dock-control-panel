@@ -163,9 +163,9 @@ describe('Claude Code configuration', () => {
     ).toBe(false);
   });
 
-  it('classifies the disclosed tracking versions and protected versions', () => {
+  it('classifies official advisory and below-baseline versions', () => {
     expect(evaluateClaudeInstallation('2.1.91 (Claude Code)').security).toBe('blocked-version');
-    expect(evaluateClaudeInstallation('2.1.196 (Claude Code)').security).toBe('blocked-version');
+    expect(evaluateClaudeInstallation('2.1.196 (Claude Code)').security).toBe('update-required');
     expect(evaluateClaudeInstallation('2.1.197 (Claude Code)').security).toBe('ready');
     expect(evaluateClaudeInstallation('2.1.220 (Claude Code)').security).toBe('ready');
     expect(evaluateClaudeInstallation('unparseable').security).toBe('unknown');

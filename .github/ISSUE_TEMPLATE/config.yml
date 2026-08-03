@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://github.com/AeonusOvO/claude-dock-control-panel/security/advisories/new
+    about: Report an unpatched vulnerability privately.
