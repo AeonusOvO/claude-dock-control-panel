@@ -18,7 +18,10 @@ describe('built-in proxy integration contract', () => {
   });
 
   it('exposes start, stop, scope, and audit only through the isolated bridge', () => {
-    expect(preload).toContain("ipcRenderer.invoke('proxy:start', manualCorePath)");
+    expect(preload).toContain(
+      "ipcRenderer.invoke('proxy:start', manualCorePath, acceptExternalTunnelChain)",
+    );
+    expect(preload).toContain("ipcRenderer.invoke('proxy:test-performance')");
     expect(preload).toContain("ipcRenderer.invoke('proxy:set-scope', scope)");
     expect(preload).toContain("ipcRenderer.on('proxy:audit-required', callback)");
     expect(main).toContain("requireNetworkPreflightService().invalidate('built-in-proxy-started')");

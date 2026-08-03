@@ -49,6 +49,7 @@ export type ProxyTransport = 'grpc' | 'http' | 'tcp' | 'ws';
  */
 export type ProxySecurity = 'none' | 'reality' | 'tls';
 export type ProxyRuntimeStatus = 'error' | 'starting' | 'stopped' | 'stopping' | 'ready';
+export type ProxyIpMode = 'dual_stack' | 'ipv4_only' | 'prefer_ipv6';
 export interface ProxyCredentialInput {
   alterId?: number;
   method?: string;
@@ -133,6 +134,8 @@ export interface ProxyScopeSettings {
   application: boolean;
   /** Applies to the independent conversation workspace's dedicated Electron session. */
   conversation: boolean;
+  /** Xray-only address-family policy. It never changes Windows adapter bindings. */
+  ipMode?: ProxyIpMode;
   /**
    * Optional proxy used for ClaudeDock's own network calls while the built-in tunnel is not running
    * — chiefly the Xray-core download, which otherwise has to reach GitHub without help. Empty means
@@ -178,10 +181,34 @@ export interface ProxyRuntimeView {
   coreVersion: string;
   error?: string;
   httpProxyUrl?: string;
+  ipMode?: ProxyIpMode;
   logs: string[];
   profileId?: string;
   socksProxyUrl?: string;
   status: ProxyRuntimeStatus;
+}
+export type ProxyExternalEnvironmentMode = 'chain-risk' | 'none' | 'parallel-safe';
+export interface ProxyExternalEnvironmentView {
+  advice: string;
+  checkedAt: number;
+  externalProcesses: string[];
+  mode: ProxyExternalEnvironmentMode;
+  resolvedSystemProxy?: string;
+  summary: string;
+  virtualInterfaces: string[];
+}
+export interface ProxyPerformanceEndpointView {
+  detail: string;
+  label: string;
+  latencyMs?: number;
+  ok: boolean;
+}
+export interface ProxyPerformanceView {
+  checkedAt: number;
+  downloadBytes: number;
+  downloadBps?: number;
+  endpoints: ProxyPerformanceEndpointView[];
+  error?: string;
 }
 export type ProxyAuditVerdict = 'passed' | 'risk' | 'warning';
 export interface ProxyAuditItem {
@@ -234,6 +261,8 @@ export interface ProxyCoreView {
 export interface ProxyControlView {
   audits: ProxyAuditRecord[];
   core: ProxyCoreView;
+  externalEnvironment?: ProxyExternalEnvironmentView;
+  performance?: ProxyPerformanceView;
   runtime: ProxyRuntimeView;
   store: ProxyStoreView;
 }
@@ -1222,8 +1251,12 @@ export interface ControlPanelApi {
   installProxyCore: () => Promise<ProxyControlView>;
   installProxyCoreFile: (filePath: string) => Promise<ProxyControlView>;
   detectBootstrapProxyCandidates: () => Promise<string[]>;
-  startBuiltInProxy: (manualCorePath?: string) => Promise<ProxyControlView>;
+  startBuiltInProxy: (
+    manualCorePath?: string,
+    acceptExternalTunnelChain?: boolean,
+  ) => Promise<ProxyControlView>;
   stopBuiltInProxy: () => Promise<ProxyControlView>;
+  testBuiltInProxyPerformance: () => Promise<ProxyControlView>;
   runProxyLeakAudit: () => Promise<ProxyAuditRecord>;
   acceptProxyLeakAudit: (recordId: string) => Promise<ProxyAuditRecord>;
   deleteProxyLeakAudit: (recordId: string) => Promise<ProxyControlView>;

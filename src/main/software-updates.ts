@@ -12,6 +12,7 @@ const CLAUDE_PACKAGE = '@anthropic-ai/claude-code';
 const ROUTER_PACKAGE = '@musistudio/claude-code-router';
 const APPLICATION_RELEASE_API =
   'https://api.github.com/repos/AeonusOvO/claude-dock-control-panel/releases/latest';
+type SoftwareUpdateFetch = typeof fetch;
 
 const parseVersion = (value: string | undefined): number[] | undefined => {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value?.trim() ?? '');
@@ -38,42 +39,46 @@ export const isNewerVersion = (
 const registryPackageUrl = (registry: string, packageName: string): string =>
   `${registry}/${packageName.replace('/', '%2f')}/latest`;
 
-const fetchLatestVersion = async (packageName: string): Promise<string | undefined> => {
-  for (const registry of [OFFICIAL_REGISTRY, CHINA_REGISTRY]) {
-    try {
-      const response = await fetch(registryPackageUrl(registry, packageName), {
-        headers: { accept: 'application/json', 'user-agent': 'ClaudeDock/1.0' },
-        redirect: 'error',
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!response.ok) {
-        continue;
-      }
-      const contentLength = Number(response.headers.get('content-length') ?? 0);
-      if (contentLength > 1024 * 1024) {
-        continue;
-      }
-      const payload = (await response.json()) as { version?: unknown };
-      if (typeof payload.version === 'string' && parseVersion(payload.version)) {
-        return payload.version;
-      }
-    } catch {
-      // Try the other trusted registry before reporting that the latest version is unknown.
+const fetchLatestVersion = async (
+  packageName: string,
+  fetchImpl: SoftwareUpdateFetch,
+): Promise<string | undefined> => {
+  const fetchRegistry = async (registry: string): Promise<string> => {
+    const response = await fetchImpl(registryPackageUrl(registry, packageName), {
+      headers: { accept: 'application/json', 'user-agent': 'ClaudeDock/1.0' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok || Number(response.headers.get('content-length') ?? 0) > 1024 * 1024) {
+      throw new Error(`${registry} unavailable`);
     }
+    const payload = (await response.json()) as { version?: unknown };
+    if (typeof payload.version !== 'string' || !parseVersion(payload.version)) {
+      throw new Error(`${registry} returned an invalid version`);
+    }
+    return payload.version;
+  };
+  try {
+    // V2RayN's source tests do not wait for a known-slow route before trying the next one. Start both
+    // trusted registries together and accept the first valid version envelope.
+    return await Promise.any([fetchRegistry(OFFICIAL_REGISTRY), fetchRegistry(CHINA_REGISTRY)]);
+  } catch {
+    return undefined;
   }
-  return undefined;
 };
 
-const fetchLatestApplicationVersion = async (): Promise<string | undefined> => {
+const fetchLatestApplicationVersion = async (
+  fetchImpl: SoftwareUpdateFetch,
+): Promise<string | undefined> => {
   try {
-    const response = await fetch(APPLICATION_RELEASE_API, {
+    const response = await fetchImpl(APPLICATION_RELEASE_API, {
       headers: {
         accept: 'application/vnd.github+json',
         'user-agent': 'ClaudeDock/update-check',
         'x-github-api-version': '2022-11-28',
       },
       redirect: 'error',
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(8_000),
     });
     if (!response.ok || Number(response.headers.get('content-length') ?? 0) > 1024 * 1024) {
       return undefined;
@@ -91,11 +96,12 @@ export const checkSoftwareUpdates = async (
   installation: ClaudeInstallationStatus,
   router: ClaudeRouterManagementState,
   applicationVersion?: string,
+  fetchImpl: SoftwareUpdateFetch = fetch,
 ): Promise<SoftwareUpdateState> => {
   const [latestApplication, latestClaude, latestRouter] = await Promise.all([
-    fetchLatestApplicationVersion(),
-    fetchLatestVersion(CLAUDE_PACKAGE),
-    fetchLatestVersion(ROUTER_PACKAGE),
+    fetchLatestApplicationVersion(fetchImpl),
+    fetchLatestVersion(CLAUDE_PACKAGE, fetchImpl),
+    fetchLatestVersion(ROUTER_PACKAGE, fetchImpl),
   ]);
   const claudeUpdateAvailable = isNewerVersion(latestClaude, installation.version);
   const routerUpdateAvailable = isNewerVersion(latestRouter, router.version);

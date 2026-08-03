@@ -67,6 +67,8 @@ import type {
   OperationResult,
   ProxyAuditRecord,
   ProxyControlView,
+  ProxyExternalEnvironmentView,
+  ProxyPerformanceView,
   ProxyProfileInput,
   ProxyScopeSettings,
   ProxySubscriptionInput,
@@ -137,6 +139,12 @@ import { downloadProxySubscription } from './proxy/proxy-subscription';
 import { LeakAuditService } from './proxy/leak-audit';
 import { LeakAuditStore } from './proxy/leak-audit-store';
 import { auditWebRtc } from './proxy/webrtc-audit';
+import {
+  detectExternalProxyProcesses,
+  evaluateExternalProxyEnvironment,
+} from './proxy/external-proxy';
+import { testProxyPerformance } from './proxy/performance-test';
+import { interfaceFacts } from './network-path-resolver';
 import { WindowsIpv6Service } from './windows-ipv6';
 app.enableSandbox();
 registerArtifactScheme();
@@ -177,6 +185,9 @@ let proxyStore: ProxyStore | null = null;
 let xraySidecar: XraySidecar | null = null;
 let proxyLeakAuditService: LeakAuditService | null = null;
 let conversationNetworkSession: Session | null = null;
+let proxyPerformanceSession: Session | null = null;
+let proxyExternalEnvironment: ProxyExternalEnvironmentView | undefined;
+let proxyPerformance: ProxyPerformanceView | undefined;
 let chatFetch: typeof fetch = fetch;
 let releaseConversationBusy: (() => void) | undefined;
 
@@ -888,9 +899,34 @@ const proxyControlView = (): ProxyControlView => {
   return {
     audits: audit.list(),
     core: sidecar.getCoreView(),
+    externalEnvironment: proxyExternalEnvironment,
+    performance: proxyPerformance,
     runtime: sidecar.getView(),
     store: store.getView(),
   };
+};
+
+const refreshExternalProxyEnvironment = async (): Promise<ProxyExternalEnvironmentView> => {
+  let resolvedSystemProxy: string | undefined;
+  try {
+    const detectionSession = session.fromPartition('claudedock-system-proxy-detection');
+    await detectionSession.setProxy({ mode: 'system' });
+    resolvedSystemProxy = await detectionSession.resolveProxy('https://github.com');
+  } catch {
+    // Process and interface evidence still distinguishes the important TUN case.
+  }
+  if (!resolvedSystemProxy || resolvedSystemProxy.trim().toUpperCase() === 'DIRECT') {
+    const inherited = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY']
+      .map((key) => normalizeBootstrapProxyUrl(process.env[key]))
+      .find(Boolean);
+    resolvedSystemProxy = inherited ? `环境变量 ${inherited}` : resolvedSystemProxy;
+  }
+  proxyExternalEnvironment = evaluateExternalProxyEnvironment({
+    externalProcesses: await detectExternalProxyProcesses(),
+    resolvedSystemProxy,
+    virtualInterfaces: interfaceFacts().virtualInterfaces,
+  });
+  return proxyExternalEnvironment;
 };
 
 /**
@@ -953,12 +989,24 @@ const runSelectedProxyAudit = async (): Promise<ProxyAuditRecord> => {
  * is genuinely up, and cleared the moment it is not, so an unexpected exit can be told apart from a
  * deliberate stop or a start that never succeeded.
  */
-const startBuiltInProxy = async (manualCorePath?: string): Promise<void> => {
+const startBuiltInProxy = async (
+  manualCorePath?: string,
+  acceptExternalTunnelChain = false,
+): Promise<void> => {
   const { sidecar, store } = requireProxyServices();
   const profile = selectedProxyProfile();
+  const external = await refreshExternalProxyEnvironment();
+  if (external.mode === 'chain-risk' && !acceptExternalTunnelChain) {
+    store.setState({ autoStart: false, runtimeStatus: 'stopped' });
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
+    throw new Error(
+      '检测到外部 TUN/VPN 仍在接管网络。请在代理面板确认链式代理风险后再启动，或先关闭外部 TUN 模式。',
+    );
+  }
+  proxyPerformance = undefined;
   store.setState({ runtimeStatus: 'starting' });
   try {
-    await sidecar.start(profile, manualCorePath);
+    await sidecar.start(profile, manualCorePath, store.getView().scope.ipMode ?? 'ipv4_only');
     store.setState({ autoStart: true, runtimeStatus: 'ready' });
     await applyApplicationProxyScope();
     await applyConversationProxyScope();
@@ -1530,8 +1578,9 @@ const registerIpc = (): void => {
     validateSender(event);
     return requireDownloadEngine().cancel(validateDownloadTaskId(taskId));
   });
-  ipcMain.handle('proxy:get-state', (event) => {
+  ipcMain.handle('proxy:get-state', async (event) => {
     validateSender(event);
+    await refreshExternalProxyEnvironment();
     return proxyControlView();
   });
   ipcMain.handle('proxy:preview-import', (event, text: unknown) => {
@@ -1606,7 +1655,9 @@ const registerIpc = (): void => {
     }
     if (wasRunning) {
       try {
-        await startBuiltInProxy();
+        // A running tunnel has already passed the external-TUN confirmation gate. Refreshing its
+        // subscription should not strand it merely because the same external adapter still exists.
+        await startBuiltInProxy(undefined, true);
       } catch (error) {
         failures.push(`代理恢复：${error instanceof Error ? error.message : '启动失败'}`);
       }
@@ -1644,7 +1695,9 @@ const registerIpc = (): void => {
     if (
       typeof record?.cli !== 'boolean' ||
       typeof record.application !== 'boolean' ||
-      typeof record.conversation !== 'boolean'
+      typeof record.conversation !== 'boolean' ||
+      (record.ipMode !== undefined &&
+        !['dual_stack', 'ipv4_only', 'prefer_ipv6'].includes(record.ipMode))
     ) {
       throw new Error('代理作用域设置无效。');
     }
@@ -1662,13 +1715,22 @@ const registerIpc = (): void => {
     ) {
       throw new Error('自定义镜像来源无效。');
     }
-    requireProxyServices().store.setScope({
+    const services = requireProxyServices();
+    const previousIpMode = services.store.getView().scope.ipMode ?? 'ipv4_only';
+    const wasRunning = services.sidecar.getView().status === 'ready';
+    services.store.setScope({
       application: record.application,
       bootstrapProxyUrl: record.bootstrapProxyUrl,
       cli: record.cli,
       conversation: record.conversation,
       extraCoreSources: record.extraCoreSources,
+      ipMode: record.ipMode,
     });
+    const nextIpMode = services.store.getView().scope.ipMode ?? 'ipv4_only';
+    if (wasRunning && previousIpMode !== nextIpMode) {
+      await stopBuiltInProxy();
+      await startBuiltInProxy(undefined, true);
+    }
     await applyApplicationProxyScope();
     await applyConversationProxyScope();
     requireNetworkPreflightService().invalidate('built-in-proxy-scope-changed');
@@ -1710,22 +1772,50 @@ const registerIpc = (): void => {
     validateSender(event);
     return detectBootstrapProxyCandidates();
   });
-  ipcMain.handle('proxy:start', async (event, manualCorePath: unknown) => {
-    validateSender(event);
-    if (
-      manualCorePath !== undefined &&
-      (typeof manualCorePath !== 'string' || manualCorePath.length > 4096)
-    ) {
-      throw new Error('Xray-core 路径无效。');
-    }
-    await startBuiltInProxy(
-      typeof manualCorePath === 'string' ? manualCorePath || undefined : undefined,
-    );
-    return proxyControlView();
-  });
+  ipcMain.handle(
+    'proxy:start',
+    async (event, manualCorePath: unknown, acceptExternalTunnelChain: unknown) => {
+      validateSender(event);
+      if (
+        manualCorePath !== undefined &&
+        (typeof manualCorePath !== 'string' || manualCorePath.length > 4096)
+      ) {
+        throw new Error('Xray-core 路径无效。');
+      }
+      if (
+        acceptExternalTunnelChain !== undefined &&
+        typeof acceptExternalTunnelChain !== 'boolean'
+      ) {
+        throw new Error('外部代理风险确认参数无效。');
+      }
+      await startBuiltInProxy(
+        typeof manualCorePath === 'string' ? manualCorePath || undefined : undefined,
+        acceptExternalTunnelChain === true,
+      );
+      return proxyControlView();
+    },
+  );
   ipcMain.handle('proxy:stop', async (event) => {
     validateSender(event);
     await stopBuiltInProxy();
+    return proxyControlView();
+  });
+  ipcMain.handle('proxy:test-performance', async (event) => {
+    validateSender(event);
+    const runtime = requireProxyServices().sidecar.getView();
+    if (runtime.status !== 'ready' || !runtime.httpProxyUrl || !proxyPerformanceSession) {
+      throw new Error('请先启动内置代理，再测试节点速度与更新来源。');
+    }
+    await proxyPerformanceSession.setProxy({
+      mode: 'fixed_servers',
+      proxyBypassRules: '127.0.0.1,localhost,[::1]',
+      proxyRules: runtime.httpProxyUrl,
+    });
+    await proxyPerformanceSession.closeAllConnections();
+    proxyPerformance = await testProxyPerformance((url, init) =>
+      proxyPerformanceSession!.fetch(url, init),
+    );
+    mainWindow?.webContents.send('proxy:state-changed', proxyControlView());
     return proxyControlView();
   });
   ipcMain.handle('proxy:run-audit', async (event) => {
@@ -3558,6 +3648,7 @@ if (!hasSingleInstanceLock) {
     );
     proxyStore = new ProxyStore(app.getPath('userData'), safeStorage);
     conversationNetworkSession = session.fromPartition('claudedock-conversation-network');
+    proxyPerformanceSession = session.fromPartition('claudedock-proxy-performance');
     chatFetch = (url, init) =>
       conversationNetworkSession!.fetch(url instanceof URL ? url.toString() : url, init);
     xraySidecar = new XraySidecar({

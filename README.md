@@ -4,7 +4,23 @@ ClaudeDock 是一个面向 Windows 的桌面控制面板，用于在图形界面
 真实 PowerShell 伪终端、项目级 Claude Code / Codex 开发会话、模型/API 接入与常用操作，
 并通过系统托盘查看后台状态。
 
-## 当前版本重点（3.4.0 · 2026-08-02）
+## 当前版本重点（3.5.0 · 2026-08-03）
+
+- 修复独立对话的 DeepSeek 连接测试仍报“接口响应格式与所选协议不一致”。最小的 1-token
+  Anthropic 请求可能只返回 thinking 块而没有可见正文；测试现在按协议 envelope 判定兼容，真正
+  发送消息时仍要求存在可见文本，避免把空回复写进对话。
+- 代理页会在启动前检查 V2RayN、Clash、sing-box 等常见进程、Windows 显式代理与 TUN/VPN 接口。
+  普通系统代理模式可与 ClaudeDock 并行：内置 Xray 使用随机回环端口且不写系统代理；发现 TUN 时
+  则先解释链式代理风险并由用户确认，ClaudeDock 不会擅自结束外部软件或修改其配置。
+- “IPv6 开关”拆成清楚的两层：日常使用的是内置隧道 IP 策略（仅 IPv4、双栈自动择优、双栈并
+  优先 IPv6），后两者使用 Happy Eyeballs 并发尝试；可能短暂断网的 Windows 网卡 IPv6 开关移入
+  高级折叠区，不再把“当前是开还是关”藏在含混按钮里。
+- 新增“节点与更新源测速”：所有探测都强制经过当前内置 Xray，分别检查 GitHub API、npm 官方源和
+  npmmirror，再从 Cloudflare/CacheFly 下载 10 MB 测真实吞吐，便于区分节点慢、更新源慢和连接失败。
+- 修复软件更新检查没有继承 ClaudeDock 应用代理的问题：版本请求改用 Electron 默认 session；
+  npm 官方源与 npmmirror 同时发起并接受首个有效结果，单条慢源不再串行拖满两次超时。
+
+## 3.4.0 版本重点（2026-08-02）
 
 - 代理泄露体检改为完整的双路径检查：出口 IP 继续由 Cloudflare 与 IPinfo 交叉验证，DNS 则通过
   `dnsleaktest.com` 的唯一权威测试域名分别观察直连和代理解析器，失败时回退到 `bash.ws`；Xray
@@ -751,6 +767,11 @@ MCP 目录/健康状态，单个来源失败不会抹掉其他结果。每个可
 “检查更新”入口；新增可更新模块时必须同时注册全局聚合与领域入口。没有发现可安装软件更新时，
 对应安装/批量更新按钮保持隐藏，检查按钮仍然可达。
 
+使用内置代理时，在“设置 → 代理”导入并选择节点，再选择 IP 策略和作用域。若 V2RayN 只开启了
+系统代理/PAC，可直接并行；若面板显示外部 TUN/VPN，则建议先关闭外部软件的 TUN，或明确确认接受
+“外部 TUN → ClaudeDock Xray → 节点”的潜在链式路径。启动后点击“节点与更新源测速”可验证真实
+10 MB 吞吐及 GitHub/npm 来源连通性；该测试会消耗约 10 MB 流量，不代表磁盘或局域网速度。
+
 如果要使用 ChatGPT 订阅开发，添加项目后在“当前项目开发引擎”选择 **Codex**，再点击
 “一键准备 Codex”。应用会在需要时下载并校验官方安装器、打开官方 ChatGPT 登录页，登录完成
 后自动回到当前项目启动。浏览器登录不方便时可在 Codex 工作台选择设备码；已经登录的官方
@@ -928,7 +949,8 @@ THIRD_PARTY_NOTICES.md 外部规则/远程诊断来源与未引入第三方代�
   `preferredProvider`，不会应用或改写 CCR 中的 Codex profile、Claude profile 或系统代理。
 - 代理节点凭据只以 `safeStorage` 密文写入 `userData/proxy/`。Xray 配置在启动前临时生成，停止后
   删除；作用域开关默认只注入 Claude/Codex CLI 子进程。应用代理只影响 Electron 自己的 session，
-  任何路径都不写 Windows Internet Settings、路由表或桌面客户端配置。
+  任何路径都不写 Windows Internet Settings、路由表或桌面客户端配置。外部代理检测只读取进程名、
+  代理决策和虚拟网卡类别；检测到 TUN 时只要求确认，不自动关闭 V2RayN/Clash/sing-box。
 - MCP 发现只读 `~/.claude.json`、项目 `.mcp.json` 与 `~/.codex/config.toml`，明确不读取 Claude
   Desktop 配置。安装/卸载通过 `claude mcp` argv 执行；项目共享启停写入前校验文件未被并发修改，
   保留最近 10 份完整备份并支持逐字节还原。Codex MCP 在本版只读显示，避免越权改写其配置。

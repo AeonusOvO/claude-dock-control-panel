@@ -2002,6 +2002,19 @@
                     启动内置代理
                   </button>
                   <button id="proxy-stop" type="button">停止</button>
+                  <button id="proxy-test-performance" type="button">节点与更新源测速</button>
+                </div>
+                <div class="proxy-external-environment" data-mode="none">
+                  <div>
+                    <strong>外部代理协同</strong>
+                    <span id="proxy-external-status">正在检测 V2RayN、系统代理与 TUN…</span>
+                  </div>
+                  <button id="proxy-external-refresh" type="button">重新检测</button>
+                  <p id="proxy-external-detail" class="settings-help"></p>
+                </div>
+                <div class="proxy-performance" id="proxy-performance" hidden>
+                  <strong id="proxy-performance-summary">尚未测速。</strong>
+                  <ul id="proxy-performance-details"></ul>
                 </div>
                 <pre
                   id="proxy-runtime-log"
@@ -2034,20 +2047,30 @@
                   >
                   <input id="proxy-scope-conversation" type="checkbox" />
                 </label>
-                <div class="settings-row settings-row--action">
-                  <span>
-                    <strong>Windows IPv6 防旁路</strong>
-                    <small id="proxy-ipv6-status">正在读取网卡绑定状态…</small>
-                  </span>
-                  <button id="proxy-ipv6-toggle" type="button">禁用 IPv6（建议开启）</button>
-                </div>
-                <p class="settings-help">
-                  此操作需要管理员授权，可能短暂断网；只恢复 ClaudeDock 本次禁用的网卡绑定。Windows
-                  通常建议保留 IPv6，请仅在节点不支持 IPv6 且体检提示旁路时使用。
-                </p>
-                <p id="proxy-scope-summary" class="settings-help">
-                  正在确认代理作用域与 IPv4 策略…
-                </p>
+                <label class="field" for="proxy-ip-mode">
+                  <span>内置隧道 IP 策略</span>
+                  <select id="proxy-ip-mode">
+                    <option value="ipv4_only">仅 IPv4（默认稳妥）</option>
+                    <option value="dual_stack">IPv4 / IPv6 自动择优</option>
+                    <option value="prefer_ipv6">双栈并优先 IPv6</option>
+                  </select>
+                  <small>只重启 ClaudeDock 内置 Xray；不会修改 Windows 网卡或其他代理软件。</small>
+                </label>
+                <details class="proxy-ipv6-advanced">
+                  <summary>Windows 全局 IPv6（高级，不建议日常修改）</summary>
+                  <div class="settings-row settings-row--action">
+                    <span>
+                      <strong>系统网卡 IPv6 绑定</strong>
+                      <small id="proxy-ipv6-status">正在读取当前开关状态…</small>
+                    </span>
+                    <button id="proxy-ipv6-toggle" type="button">读取中…</button>
+                  </div>
+                  <p class="settings-help">
+                    这会请求管理员授权并可能短暂断网。Windows 通常建议保留
+                    IPv6；仅在泄露体检明确提示、且隧道“仅 IPv4”仍不足时使用。
+                  </p>
+                </details>
+                <p id="proxy-scope-summary" class="settings-help">正在确认代理作用域与 IP 策略…</p>
               </section>
               <section class="proxy-settings__section" aria-labelledby="proxy-audit-title">
                 <div class="settings-section-heading">

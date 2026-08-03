@@ -85,8 +85,10 @@ const api: ControlPanelApi = {
   installProxyCoreFile: (filePath) => ipcRenderer.invoke('proxy:install-core-file', filePath),
   detectBootstrapProxyCandidates: () =>
     ipcRenderer.invoke('proxy:detect-bootstrap-proxy') as Promise<string[]>,
-  startBuiltInProxy: (manualCorePath) => ipcRenderer.invoke('proxy:start', manualCorePath),
+  startBuiltInProxy: (manualCorePath, acceptExternalTunnelChain) =>
+    ipcRenderer.invoke('proxy:start', manualCorePath, acceptExternalTunnelChain),
   stopBuiltInProxy: () => ipcRenderer.invoke('proxy:stop'),
+  testBuiltInProxyPerformance: () => ipcRenderer.invoke('proxy:test-performance'),
   runProxyLeakAudit: () => ipcRenderer.invoke('proxy:run-audit'),
   acceptProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:accept-audit', recordId),
   deleteProxyLeakAudit: (recordId) => ipcRenderer.invoke('proxy:delete-audit', recordId),

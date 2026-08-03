@@ -8523,6 +8523,79 @@ body.is-resizing * {
   min-width: 0;
 }
 
+.proxy-external-environment,
+.proxy-performance,
+.proxy-ipv6-advanced {
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+}
+
+.proxy-external-environment {
+  align-items: start;
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.proxy-external-environment > div,
+.proxy-performance {
+  display: grid;
+  gap: 3px;
+}
+
+.proxy-external-environment strong,
+.proxy-performance strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.proxy-external-environment span {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+}
+
+.proxy-external-environment[data-mode='chain-risk'] {
+  background: var(--warn-tint);
+  border-color: var(--warn-line);
+}
+
+.proxy-external-environment[data-mode='parallel-safe'] {
+  border-color: var(--ok-line);
+}
+
+.proxy-external-environment .settings-help {
+  grid-column: 1 / -1;
+}
+
+.proxy-performance ul {
+  color: var(--text-dim);
+  display: grid;
+  font-size: var(--text-xs);
+  gap: var(--s-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.proxy-performance li[data-ok='false'] {
+  color: var(--warn-text);
+}
+
+.proxy-ipv6-advanced summary {
+  color: var(--text-lo);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--fw-medium);
+}
+
+.proxy-ipv6-advanced[open] {
+  display: grid;
+  gap: var(--s-3);
+}
+
 .proxy-settings button,
 .proxy-audit-dialog button,
 .proxy-audit-history button {

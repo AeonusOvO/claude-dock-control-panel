@@ -408,9 +408,18 @@ const proxyStart = requiredElement<HTMLButtonElement>('#proxy-start');
 const proxyStop = requiredElement<HTMLButtonElement>('#proxy-stop');
 const proxyRuntimeStatus = requiredElement<HTMLElement>('#proxy-runtime-status');
 const proxyRuntimeLog = requiredElement<HTMLElement>('#proxy-runtime-log');
+const proxyExternalContainer = requiredElement<HTMLElement>('.proxy-external-environment');
+const proxyExternalStatus = requiredElement<HTMLElement>('#proxy-external-status');
+const proxyExternalDetail = requiredElement<HTMLElement>('#proxy-external-detail');
+const proxyExternalRefresh = requiredElement<HTMLButtonElement>('#proxy-external-refresh');
+const proxyTestPerformance = requiredElement<HTMLButtonElement>('#proxy-test-performance');
+const proxyPerformance = requiredElement<HTMLElement>('#proxy-performance');
+const proxyPerformanceSummary = requiredElement<HTMLElement>('#proxy-performance-summary');
+const proxyPerformanceDetails = requiredElement<HTMLUListElement>('#proxy-performance-details');
 const proxyScopeCli = requiredElement<HTMLInputElement>('#proxy-scope-cli');
 const proxyScopeApplication = requiredElement<HTMLInputElement>('#proxy-scope-application');
 const proxyScopeConversation = requiredElement<HTMLInputElement>('#proxy-scope-conversation');
+const proxyIpMode = requiredElement<HTMLSelectElement>('#proxy-ip-mode');
 const proxyIpv6Status = requiredElement<HTMLElement>('#proxy-ipv6-status');
 const proxyIpv6Toggle = requiredElement<HTMLButtonElement>('#proxy-ipv6-toggle');
 const proxyScopeSummary = requiredElement<HTMLElement>('#proxy-scope-summary');
@@ -942,8 +951,10 @@ let proxyScopeSnapshot: ProxyScopeSettings = {
   application: false,
   cli: true,
   conversation: false,
+  ipMode: 'ipv4_only',
 };
 let windowsIpv6Disabled = false;
+let proxyExternalMode: NonNullable<ProxyControlView['externalEnvironment']>['mode'] = 'none';
 /** An installed kernel collapses the block to a single line; reinstalling reopens it. */
 let proxyCoreExpanded = false;
 
@@ -1092,6 +1103,12 @@ const renderProxyCore = (core: ProxyCoreView, scope: ProxyScopeSettings): void =
   }
 };
 
+const PROXY_IP_MODE_LABELS: Record<NonNullable<ProxyScopeSettings['ipMode']>, string> = {
+  dual_stack: 'IPv4 / IPv6 自动择优',
+  ipv4_only: '仅 IPv4',
+  prefer_ipv6: '双栈并优先 IPv6',
+};
+
 const renderProxyState = (state: ProxyControlView): void => {
   const selectedId = state.store.state.selectedProfileId ?? '';
   proxyProfileSelect.replaceChildren(
@@ -1118,26 +1135,61 @@ const renderProxyState = (state: ProxyControlView): void => {
   proxyScopeCli.checked = state.store.scope.cli;
   proxyScopeApplication.checked = state.store.scope.application;
   proxyScopeConversation.checked = state.store.scope.conversation;
+  proxyIpMode.value = state.store.scope.ipMode ?? 'ipv4_only';
   proxyScopeSnapshot = { ...state.store.scope };
   proxyRefreshSubscriptions.disabled = state.store.subscriptions.length === 0;
   proxyRefreshSubscriptions.textContent =
     state.store.subscriptions.length > 0
       ? `更新订阅（${state.store.subscriptions.length}）`
       : '更新订阅';
+  const ipMode = state.store.scope.ipMode ?? 'ipv4_only';
   proxyScopeSummary.textContent =
     state.runtime.status === 'ready'
-      ? `内置代理已就绪；CLI ${state.store.scope.cli ? '已接入' : '未接入'}，对话 ${state.store.scope.conversation ? '已接入' : '未接入'}，ClaudeDock 自身网络 ${state.store.scope.application ? '已接入' : '未接入'}。隧道仅使用 IPv4。`
-      : '内置代理未运行；勾选项会在启动后生效。内置隧道仅使用 IPv4，不会修改 Windows 的全局 IPv6 设置。';
+      ? `内置代理已就绪；CLI ${state.store.scope.cli ? '已接入' : '未接入'}，对话 ${state.store.scope.conversation ? '已接入' : '未接入'}，ClaudeDock 自身网络 ${state.store.scope.application ? '已接入' : '未接入'}。IP 策略：${PROXY_IP_MODE_LABELS[ipMode]}。`
+      : `内置代理未运行；勾选项会在启动后生效。当前 IP 策略：${PROXY_IP_MODE_LABELS[ipMode]}，不会修改 Windows 全局 IPv6。`;
   renderProxyCore(state.core, state.store.scope);
   proxyRuntimeStatus.textContent = state.runtime.error
     ? `${PROXY_RUNTIME_LABELS[state.runtime.status]}：${state.runtime.error}`
     : `${PROXY_RUNTIME_LABELS[state.runtime.status]}${state.runtime.httpProxyUrl ? ` · ${state.runtime.httpProxyUrl}` : ''}`;
   proxyRuntimeStatus.dataset.status = state.runtime.status;
   proxyRuntimeLog.textContent = state.runtime.logs.slice(-30).join('\n') || '暂无诊断日志。';
+  const external = state.externalEnvironment;
+  proxyExternalMode = external?.mode ?? 'none';
+  proxyExternalContainer.dataset.mode = proxyExternalMode;
+  proxyExternalStatus.textContent = external?.summary ?? '尚未完成外部代理检测。';
+  proxyExternalDetail.textContent = external
+    ? [
+        external.advice,
+        external.resolvedSystemProxy ? `系统代理决策：${external.resolvedSystemProxy}` : undefined,
+        external.virtualInterfaces.length > 0
+          ? `虚拟接口：${external.virtualInterfaces.join('、')}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : '';
   proxyStart.disabled = !selectedId || !idle;
   // 停止 doubles as the abort for a start that is still fetching the core.
   proxyStop.disabled = !['ready', 'error', 'starting'].includes(state.runtime.status);
   proxyRunAudit.disabled = state.runtime.status !== 'ready' || !selectedId;
+  proxyTestPerformance.disabled = state.runtime.status !== 'ready';
+  proxyPerformance.hidden = !state.performance;
+  if (state.performance) {
+    const speed = state.performance.downloadBps;
+    proxyPerformanceSummary.textContent = speed
+      ? `节点实测 ${formatProxyCoreRate(speed)} · ${new Date(state.performance.checkedAt).toLocaleTimeString()}`
+      : `测速未完成：${state.performance.error ?? '未知错误'}`;
+    proxyPerformanceDetails.replaceChildren(
+      ...state.performance.endpoints.map((endpoint) => {
+        const item = document.createElement('li');
+        item.dataset.ok = String(endpoint.ok);
+        item.textContent = `${endpoint.label} · ${endpoint.ok ? '可用' : '失败'}${endpoint.latencyMs === undefined ? '' : ` · ${endpoint.latencyMs} ms`} · ${endpoint.detail}`;
+        return item;
+      }),
+    );
+  } else {
+    proxyPerformanceDetails.replaceChildren();
+  }
   const latest = state.audits[0];
   proxyAuditSummary.textContent = latest
     ? `${new Date(latest.report.checkedAt).toLocaleString()} · ${latest.report.summary === 'passed' ? '通过' : latest.report.summary === 'risk' ? '有风险' : '有提示'}`
@@ -1189,7 +1241,7 @@ const loadWindowsIpv6State = async (): Promise<void> => {
     const state = await window.controlPanel.getWindowsIpv6State();
     windowsIpv6Disabled = state.disabled;
     proxyIpv6Status.textContent = state.message;
-    proxyIpv6Toggle.textContent = state.disabled ? '重新启用 IPv6' : '禁用 IPv6（建议开启）';
+    proxyIpv6Toggle.textContent = state.disabled ? '恢复 Windows IPv6' : '高级：禁用 Windows IPv6';
     proxyIpv6Toggle.disabled = !state.available;
   } catch {
     proxyIpv6Status.textContent = '无法读取 Windows IPv6 状态。';
@@ -9841,15 +9893,31 @@ const saveProxyScope = (): void => {
   proxyScopeCli.disabled = true;
   proxyScopeApplication.disabled = true;
   proxyScopeConversation.disabled = true;
+  proxyIpMode.disabled = true;
   void applyProxyScope({}, () => showToast('代理作用域已更新')).finally(() => {
     proxyScopeCli.disabled = false;
     proxyScopeApplication.disabled = false;
     proxyScopeConversation.disabled = false;
+    proxyIpMode.disabled = false;
   });
 };
 proxyScopeCli.addEventListener('change', saveProxyScope);
 proxyScopeApplication.addEventListener('change', saveProxyScope);
 proxyScopeConversation.addEventListener('change', saveProxyScope);
+proxyIpMode.addEventListener('change', () => {
+  proxyIpMode.disabled = true;
+  void applyProxyScope(
+    { ipMode: proxyIpMode.value as NonNullable<ProxyScopeSettings['ipMode']> },
+    (state) =>
+      showToast(
+        state.runtime.status === 'ready'
+          ? 'IP 策略已更新，内置 Xray 已重启并复检'
+          : '内置隧道 IP 策略已保存',
+      ),
+  ).finally(() => {
+    proxyIpMode.disabled = false;
+  });
+});
 proxyRefreshSubscriptions.addEventListener('click', () => {
   proxyRefreshSubscriptions.disabled = true;
   const original = proxyRefreshSubscriptions.textContent;
@@ -9876,11 +9944,11 @@ proxyIpv6Toggle.addEventListener('click', async () => {
   const disabling = !windowsIpv6Disabled;
   if (
     !(await requestConfirmation({
-      confirmLabel: disabling ? '禁用 IPv6' : '重新启用',
+      confirmLabel: disabling ? '禁用 Windows IPv6' : '恢复 Windows IPv6',
       message: disabling
         ? '将请求 Windows 管理员授权，并禁用当前启用的 IPv6 网卡绑定。网络可能短暂断开；ClaudeDock 会记录这些网卡以便安全恢复。'
         : '将请求 Windows 管理员授权，只重新启用此前由 ClaudeDock 禁用的 IPv6 网卡绑定。网络可能短暂断开。',
-      title: disabling ? '启用 IPv6 防旁路' : '恢复 IPv6',
+      title: disabling ? '高级操作：禁用 Windows IPv6' : '恢复 Windows IPv6',
       tone: 'default',
     }))
   )
@@ -9893,8 +9961,8 @@ proxyIpv6Toggle.addEventListener('click', async () => {
     const state = await window.controlPanel.setWindowsIpv6Disabled(disabling);
     windowsIpv6Disabled = state.disabled;
     proxyIpv6Status.textContent = state.message;
-    proxyIpv6Toggle.textContent = state.disabled ? '重新启用 IPv6' : '禁用 IPv6（建议开启）';
-    showToast(state.disabled ? 'IPv6 防旁路已开启' : 'IPv6 已恢复');
+    proxyIpv6Toggle.textContent = state.disabled ? '恢复 Windows IPv6' : '高级：禁用 Windows IPv6';
+    showToast(state.disabled ? 'Windows IPv6 已全局禁用' : 'Windows IPv6 已恢复');
   } catch (error) {
     showToast(error instanceof Error ? error.message : '无法修改 IPv6 设置。', 'error');
     await loadWindowsIpv6State();
@@ -10017,10 +10085,47 @@ proxyBootstrapDetect.addEventListener('click', () => {
       proxyBootstrapDetect.disabled = false;
     });
 });
-proxyStart.addEventListener('click', () => {
+proxyExternalRefresh.addEventListener('click', () => {
+  proxyExternalRefresh.disabled = true;
+  proxyExternalStatus.textContent = '正在重新检测外部代理与 TUN…';
+  void loadProxyState().finally(() => {
+    proxyExternalRefresh.disabled = false;
+  });
+});
+proxyTestPerformance.addEventListener('click', () => {
+  proxyTestPerformance.disabled = true;
+  const original = proxyTestPerformance.textContent;
+  proxyTestPerformance.textContent = '正在测速 10 MB…';
+  void window.controlPanel
+    .testBuiltInProxyPerformance()
+    .then((state) => {
+      renderProxyState(state);
+      const speed = state.performance?.downloadBps;
+      showToast(speed ? `节点实测 ${formatProxyCoreRate(speed)}` : '测速来源暂时不可用');
+    })
+    .catch((error: unknown) =>
+      showToast(error instanceof Error ? error.message : '代理测速失败。', 'error'),
+    )
+    .finally(() => {
+      proxyTestPerformance.textContent = original;
+      void loadProxyState();
+    });
+});
+proxyStart.addEventListener('click', async () => {
+  let acceptExternalTunnelChain = false;
+  if (proxyExternalMode === 'chain-risk') {
+    acceptExternalTunnelChain = await requestConfirmation({
+      confirmLabel: '继续并行',
+      message:
+        '检测到外部 TUN/VPN。ClaudeDock 不会关闭 V2RayN、Clash 或修改系统代理；继续后内置 Xray 的出口可能再次经过外部隧道，形成链式代理。若不希望链式，请取消并先关闭外部 TUN 模式。',
+      title: '确认外部代理并行方式',
+      tone: 'default',
+    });
+    if (!acceptExternalTunnelChain) return;
+  }
   proxyStart.disabled = true;
   void window.controlPanel
-    .startBuiltInProxy(proxyManualCorePath.value.trim() || undefined)
+    .startBuiltInProxy(proxyManualCorePath.value.trim() || undefined, acceptExternalTunnelChain)
     .then((state) => {
       renderProxyState(state);
       showToast('内置代理已启动并完成体检');

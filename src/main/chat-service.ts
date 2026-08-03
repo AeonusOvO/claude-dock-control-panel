@@ -503,6 +503,7 @@ const waitForRetry = (delayMs: number, signal: AbortSignal): Promise<void> =>
   });
 
 interface DirectChatResponse {
+  recognized: boolean;
   refusal?: string;
   stopReason?: string;
   text?: string;
@@ -510,7 +511,7 @@ interface DirectChatResponse {
 
 export const directChatResponse = (protocol: ChatProtocol, value: unknown): DirectChatResponse => {
   if (!value || typeof value !== 'object') {
-    return {};
+    return { recognized: false };
   }
   const record = value as Record<string, unknown>;
   if (protocol === 'anthropic' && Array.isArray(record.content)) {
@@ -518,6 +519,7 @@ export const directChatResponse = (protocol: ChatProtocol, value: unknown): Dire
       Boolean(item && typeof item === 'object'),
     );
     return {
+      recognized: true,
       refusal:
         blocks
           .filter((item) => item.type === 'refusal' && typeof item.refusal === 'string')
@@ -540,13 +542,15 @@ export const directChatResponse = (protocol: ChatProtocol, value: unknown): Dire
           ? (choice.message as Record<string, unknown>)
           : undefined;
       return {
+        recognized: true,
         refusal: typeof message?.refusal === 'string' ? message.refusal : undefined,
         stopReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : undefined,
         text: typeof message?.content === 'string' ? message.content : undefined,
       };
     }
+    return { recognized: true };
   }
-  return {};
+  return { recognized: false };
 };
 
 const finiteToken = (value: unknown): number | undefined =>
@@ -810,11 +814,14 @@ export class ChatService {
       const raw = await readResponseText(response, MAX_TEST_RESPONSE_LENGTH);
       const value = JSON.parse(raw) as unknown;
       const direct = directChatResponse(config.protocol, value);
-      if (direct.text === undefined && direct.refusal === undefined) {
+      if (!direct.recognized) {
         throw new Error('接口响应格式与所选协议不一致。');
       }
       return {
-        detail: '连接成功，接口、认证与模型响应均可用。',
+        detail:
+          direct.text === undefined && direct.refusal === undefined
+            ? '连接成功；接口返回了有效协议结构，最小响应没有可见文本。'
+            : '连接成功，接口、认证与模型响应均可用。',
         latencyMs: Date.now() - startedAt,
         ok: true,
         usage: mergeUsage(undefined, usageFromPayload(config.protocol, value)),

@@ -599,6 +599,7 @@ export class ClaudeRuntime {
     SOFTWARE_UPDATE_CACHE_MS,
   );
   private readonly configStore: ClaudeConfigStore;
+  private readonly fetchImplementation: typeof fetch;
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   /** Serialises complete body/return submissions so two UI actions cannot interleave PTY bytes. */
   private readonly commandSubmissionQueues = new Map<string, Promise<void>>();
@@ -635,6 +636,7 @@ export class ClaudeRuntime {
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
+    this.fetchImplementation = fetchImplementation;
     this.conversationPreferences = new ConversationPreferencesStore(userDataPath);
     this.routerManager = new ClaudeRouterManager(userDataPath, downloadEngine, fetchImplementation);
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
@@ -824,7 +826,12 @@ export class ClaudeRuntime {
         this.getRouterHealthState(force),
       ]);
       return this.backgroundTasks.run('software-updates', 'background', () =>
-        checkSoftwareUpdates(installation, router, this.applicationVersion),
+        checkSoftwareUpdates(
+          installation,
+          router,
+          this.applicationVersion,
+          this.fetchImplementation,
+        ),
       );
     }, force);
   }

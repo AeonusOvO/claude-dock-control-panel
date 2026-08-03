@@ -18,6 +18,7 @@ import type {
   ProxyCoreSourceView,
   ProxyCoreView,
   ProxyCredentialInput,
+  ProxyIpMode,
   ProxyProfileView,
   ProxyRuntimeView,
 } from '../../shared/contracts';
@@ -110,15 +111,29 @@ const commaList = (value?: string): string[] =>
  * `realitySettings` / `tlsSettings` — Xray ignores the other, and emitting `tls` for a REALITY node
  * makes the handshake fail with a certificate error instead of negotiating.
  */
-const streamSettings = (profile: XrayProfile): Record<string, unknown> => {
+const ipSockopt = (ipMode: ProxyIpMode): Record<string, unknown> =>
+  ipMode === 'ipv4_only'
+    ? { domainStrategy: 'UseIPv4' }
+    : {
+        domainStrategy: 'UseIP',
+        happyEyeballs: {
+          interleave: 1,
+          maxConcurrentTry: 2,
+          prioritizeIPv6: ipMode === 'prefer_ipv6',
+          tryDelayMs: 250,
+        },
+      };
+
+const streamSettings = (profile: XrayProfile, ipMode: ProxyIpMode): Record<string, unknown> => {
   const security = profile.security ?? (profile.tls ? 'tls' : 'none');
   const hosts = commaList(profile.host);
   const serverName = profile.serverName || hosts[0] || profile.address;
   const settings: Record<string, unknown> = {
     network: profile.transport,
     security,
-    // Resolve proxy-node hostnames through IPv4 as well, so the tunnel cannot bootstrap over IPv6.
-    sockopt: { domainStrategy: 'UseIPv4' },
+    // V2RayN applies address-family selection at socket dial time. UseIP keeps both families and
+    // Happy Eyeballs races them; IPv4-only remains the conservative default for existing installs.
+    sockopt: ipSockopt(ipMode),
   };
   if (security === 'reality') {
     settings.realitySettings = {
@@ -241,8 +256,9 @@ export const buildXrayConfig = (
   profile: XrayProfile,
   httpPort: number,
   socksPort: number,
+  ipMode: ProxyIpMode = 'ipv4_only',
 ): Record<string, unknown> => ({
-  dns: { queryStrategy: 'UseIPv4' },
+  dns: { queryStrategy: ipMode === 'ipv4_only' ? 'UseIPv4' : 'UseIP' },
   inbounds: [
     {
       listen: '127.0.0.1',
@@ -264,10 +280,15 @@ export const buildXrayConfig = (
     {
       protocol: profile.protocol,
       settings: outboundSettings(profile),
-      streamSettings: streamSettings(profile),
+      streamSettings: streamSettings(profile, ipMode),
       tag: 'selected-proxy',
     },
-    { protocol: 'freedom', settings: { domainStrategy: 'UseIPv4' }, tag: 'direct' },
+    {
+      protocol: 'freedom',
+      settings: { domainStrategy: ipMode === 'ipv4_only' ? 'UseIPv4' : 'UseIP' },
+      streamSettings: { sockopt: ipSockopt(ipMode) },
+      tag: 'direct',
+    },
     { protocol: 'blackhole', tag: 'block' },
   ],
   routing: {
@@ -275,7 +296,7 @@ export const buildXrayConfig = (
     // would send local DNS queries before the tunnel and defeat the DNS-leak audit's guarantee.
     domainStrategy: 'AsIs',
     rules: [
-      { ip: ['::/0'], outboundTag: 'block', type: 'field' },
+      ...(ipMode === 'ipv4_only' ? [{ ip: ['::/0'], outboundTag: 'block', type: 'field' }] : []),
       { ip: ['geoip:private'], outboundTag: 'direct', type: 'field' },
     ],
   },
@@ -606,7 +627,11 @@ export class XraySidecar {
     }
   }
 
-  public async start(profile: XrayProfile, manualCorePath?: string): Promise<ProxyRuntimeView> {
+  public async start(
+    profile: XrayProfile,
+    manualCorePath?: string,
+    ipMode: ProxyIpMode = 'ipv4_only',
+  ): Promise<ProxyRuntimeView> {
     const releaseBusy = this.busyRegistry.acquire({
       cancellable: false,
       id: 'proxy:sidecar',
@@ -617,7 +642,7 @@ export class XraySidecar {
     try {
       await this.stop();
       const generation = ++this.startGeneration;
-      this.setView({ error: undefined, profileId: profile.id, status: 'starting' });
+      this.setView({ error: undefined, ipMode, profileId: profile.id, status: 'starting' });
       const corePath = manualCorePath
         ? this.validateManualCorePath(manualCorePath)
         : await this.ensureCore();
@@ -629,7 +654,7 @@ export class XraySidecar {
       this.assertCurrentStart(generation);
       mkdirSync(this.runtimeDirectory, { recursive: true });
       const configPath = path.join(this.runtimeDirectory, 'config.json');
-      this.atomicWrite(configPath, buildXrayConfig(profile, httpPort, socksPort));
+      this.atomicWrite(configPath, buildXrayConfig(profile, httpPort, socksPort, ipMode));
       const child = spawn(corePath, ['run', '-config', configPath], {
         cwd: this.runtimeDirectory,
         env: { ...process.env },

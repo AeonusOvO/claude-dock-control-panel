@@ -193,6 +193,47 @@ describe('independent chat service', () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 1, stream: false });
   });
 
+  it('accepts a valid DeepSeek Anthropic envelope when the one-token probe only returns thinking', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            content: [{ thinking: 'x', type: 'thinking' }],
+            id: 'deepseek-message-1',
+            stop_reason: 'max_tokens',
+            type: 'message',
+          }),
+          { headers: { 'content-type': 'application/json' }, status: 200 },
+        ),
+      ),
+    );
+    const store = {
+      resolveRuntimeConfig: () => ({
+        authMode: 'apiKey' as const,
+        baseUrl: 'https://api.deepseek.com/anthropic',
+        credential: 'deepseek-key',
+        model: 'deepseek-v4-pro',
+        protocol: 'anthropic' as const,
+      }),
+    } as unknown as ChatConfigStore;
+
+    const result = await new ChatService(store, () => undefined, fetchMock).test({
+      authMode: 'apiKey',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      credential: 'deepseek-key',
+      credentialAction: 'replace',
+      model: 'deepseek-v4-pro',
+      protocol: 'anthropic',
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).toContain('有效协议结构');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.deepseek.com/anthropic/v1/messages',
+      expect.any(Object),
+    );
+  });
+
   it('sanitizes a rejected connection test so credentials never return to the renderer', async () => {
     const fetchMock = vi.fn<typeof fetch>(
       async () =>

@@ -39,7 +39,12 @@ describe('proxy profile store', () => {
       remark: '示例节点',
       tls: true,
     });
-    expect(view.scope).toEqual({ application: false, cli: true, conversation: false });
+    expect(view.scope).toEqual({
+      application: false,
+      cli: true,
+      conversation: false,
+      ipMode: 'ipv4_only',
+    });
     expect(view.profiles[0]?.hasCredentials).toBe(true);
     const metadata = readFileSync(path.join(userDataPath, 'proxy', 'profiles.json'), 'utf8');
     expect(metadata).not.toContain('synthetic-secret');

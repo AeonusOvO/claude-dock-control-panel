@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {
   ProxyCredentialInput,
+  ProxyIpMode,
   ProxyProfileInput,
   ProxyProfileView,
   ProxyProtocol,
@@ -58,7 +59,13 @@ const RUNTIME_STATUSES = new Set<ProxyRuntimeStatus>([
   'stopped',
   'stopping',
 ]);
-const DEFAULT_SCOPE: ProxyScopeSettings = { application: false, cli: true, conversation: false };
+const IP_MODES = new Set<ProxyIpMode>(['dual_stack', 'ipv4_only', 'prefer_ipv6']);
+const DEFAULT_SCOPE: ProxyScopeSettings = {
+  application: false,
+  cli: true,
+  conversation: false,
+  ipMode: 'ipv4_only',
+};
 const DEFAULT_STATE: ProxyStoredState = { runtimeStatus: 'stopped' };
 const MAX_EXTRA_CORE_SOURCES = 16;
 
@@ -79,6 +86,7 @@ const normalizeScope = (scope: ProxyScopeSettings): ProxyScopeSettings => {
     application: scope.application,
     cli: scope.cli,
     conversation: scope.conversation === true,
+    ipMode: IP_MODES.has(scope.ipMode as ProxyIpMode) ? scope.ipMode : 'ipv4_only',
     ...(bootstrapProxyUrl ? { bootstrapProxyUrl } : {}),
     ...(extraCoreSources.length > 0 ? { extraCoreSources } : {}),
   };
@@ -353,7 +361,8 @@ export class ProxyStore {
     if (
       typeof scope.cli !== 'boolean' ||
       typeof scope.application !== 'boolean' ||
-      typeof scope.conversation !== 'boolean'
+      typeof scope.conversation !== 'boolean' ||
+      (scope.ipMode !== undefined && !IP_MODES.has(scope.ipMode))
     ) {
       throw new Error('代理作用域设置无效。');
     }

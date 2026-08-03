@@ -339,11 +339,12 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   校验上——内核解压其实一次都没成功过，只表现为一句「退出码 1」。`$env:` 查找是按字面值代入而非
   重新解析，也顺带挡住含引号或 `;` 的路径变成第二条语句。`waitForProcess` 现在捕获并回传子进程
   stderr：把子进程自己的抱怨丢掉，正是这个 bug 能长期伪装成不透明退出码的原因。
-- Xray 临时配置采用 IPv4-only：DNS `queryStrategy=UseIPv4`，选中节点 outbound 的
-  `sockopt.domainStrategy=UseIPv4`，freedom 出站同样 `UseIPv4`，路由首条规则把 `::/0` 送入
-  blackhole。`routing.domainStrategy=AsIs`，避免为 HTTP CONNECT/SOCKS 目标在本机预解析；目标域名
-  保持到所选节点再解析。默认边界只约束 ClaudeDock 管理的隧道，不修改 Windows DNS、路由表或
-  系统代理。
+- `ProxyScopeSettings.ipMode` 提供 `ipv4_only / dual_stack / prefer_ipv6` 三档 Xray 策略。
+  `ipv4_only` 仍是兼容默认值：DNS、节点 outbound 与 freedom 均为 `UseIPv4`，`::/0` 送入
+  blackhole。双栈两档使用 `UseIP`，并按 v2rayN 的 socket 级思路配置 Happy Eyeballs
+  (`tryDelayMs=250`、`interleave=1`、`maxConcurrentTry=2`)；只有 `prefer_ipv6` 设置
+  `prioritizeIPv6=true`。`routing.domainStrategy=AsIs` 保持 HTTP CONNECT/SOCKS 目标到节点再解析。
+  切换策略只重启 ClaudeDock 管理的 Xray，不修改 Windows DNS、路由表、系统代理或外部代理配置。
 - `WindowsIpv6Service` 提供显式的系统 IPv6 防旁路开关。读取使用
   `Get-NetAdapterBinding -ComponentID ms_tcpip6`；修改通过隐藏的 UAC PowerShell 调用
   `Disable/Enable-NetAdapterBinding`。命令正文用 UTF-16LE `EncodedCommand`，网卡名通过环境变量
@@ -371,6 +372,21 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - 对话作用域使用独立的 `claudedock-conversation-network` Electron session；未勾选时固定
   `mode: direct`，勾选且 Xray `ready` 时切为回环 `fixed_servers`。`ChatService` 通过动态 fetch
   适配器使用该 session，和应用默认 session/CLI 环境互不串联；规则签名去重，变化时关闭旧连接。
+- `external-proxy.ts` 只读检查常见代理进程、Electron system proxy 决策和网卡类别。显式系统代理/
+  PAC 与外部代理进程但无 TUN 证据时标为 `parallel-safe`：随机 `reserveLoopbackPort()` 让端口不与
+  V2RayN 固定入站争用，且 ClaudeDock 从不写 Windows 系统代理。发现 TUN/VPN 接口时标为
+  `chain-risk`，首次启动必须由 renderer 明确确认；这是因为内置 Xray 的出口可能再次被外部 TUN
+  接管而形成链式代理。实现不结束外部进程、不切换其模式。已确认且正在运行的隧道因 IP 策略或订阅
+  更新而重启时沿用本次运行的确认；冷启动自动恢复仍重新守门。
+- `performance-test.ts` 使用专属 `claudedock-proxy-performance` session，并在测试前强制设置为当前
+  回环 HTTP 入站，所以 GitHub API、npm 官方源、npmmirror 和 10 MB 吞吐样本不能旁路内置 Xray。吞吐先用
+  Cloudflare `__down`，失败再用 CacheFly；单响应上限 12 MiB、最少 1 MiB、20 秒截止。该诊断借鉴
+  v2rayN 将 real ping 与 speed download 分开的原则，但属于 ClaudeDock 自研实现，不复制其 GPL 代码。
+- 本轮对照的本地 v2rayN 7.24.4 源码锚点为
+  `ServiceLib/Handler/SysProxy/SysProxyHandler.cs`、`ProxySettingWindows.cs`（系统代理模式与 Windows
+  写入边界）、`Services/CoreConfig/V2ray/V2rayDnsService.cs`（socket IP 策略与 Happy Eyeballs）及
+  `Services/SpeedtestService.cs`（本地 SOCKS、real ping、speed download 分层）。ClaudeDock 只吸收
+  可独立描述的行为原则，仍坚持随机回环端口、作用域注入和不写系统代理的产品边界。
 - 订阅预览会生成基于规范化 HTTPS URL SHA-256 的稳定 subscription ID。节点元数据只保存
   `subscriptionId/host/label/updatedAt`，完整 URL（含 query token）写入 DPAPI 加密的
   `credentials.json`，绝不进入 `profiles.json`。更新订阅按 ID 原子替换该来源的节点集合；隧道
@@ -435,7 +451,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   2,000,000 字符；错误文案再次替换可能回显的凭据。
 - `chat:test-connection` 使用当前未保存表单草稿解析运行期配置，发送最多 1-token、15 秒超时、
   64 KiB 响应上限的非流式最小请求；不会顺带保存草稿。结果包含成功状态、净化后的说明、
-  延迟和供应商可用时的 usage。
+  延迟和供应商可用时的 usage。协议兼容按 envelope 判定：Anthropic `content` 数组或 OpenAI
+  `choices` 数组即为已识别；DeepSeek 思考模型在 1-token 探针中只返回 thinking、没有可见正文时
+  仍可通过。真实发送的非流式兼容回退仍要求可见文本，不能因此保存空回复。
 - `src/shared/chat-usage.ts` 是供应商未返回 usage 时的显式回退：ASCII 约 4 字符/token，
   非 ASCII 按 1 字符/token，加上每条消息固定开销。renderer 在输入事件、发送、流式增量及
   终止事件上更新显示；估算数据使用 `source: 'estimated'` 并在 UI 标“约”，供应商数据使用
@@ -861,9 +879,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 
 ### 软件与插件更新
 
-- `SoftwareUpdates` 从固定 GitHub Releases API 检查 ClaudeDock，从 npm 官方 registry 读取 Claude
-  Code 与 Router 的 `latest` 元数据；
-  官方源失败时再读 npmmirror。结果缓存 5 分钟，接入页轮询只在缓存到期后产生网络请求。
+- `SoftwareUpdates` 从固定 GitHub Releases API 检查 ClaudeDock，并发读取 npm 官方 registry 与
+  npmmirror 的 Claude Code/Router `latest` 元数据，接受首个结构有效的版本；单源上限 8 秒，避免
+  先等慢官方源再等镜像。所有请求使用 `ClaudeRuntime` 注入的 `session.defaultSession.fetch()`，
+  因此“ClaudeDock 自身网络”作用域启用时会经过内置代理，未启用时继承 Windows system proxy；
+  不再由 Node 全局 `fetch` 绕开两者。结果缓存 5 分钟，轮询只在缓存到期后产生请求。
 - `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
   返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
   插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
@@ -1370,13 +1390,15 @@ HTTPS/WSS，重复端点 ID、空来源或非法国家代码会阻止应用启�
   statusLine JSON 验证指标采集脚本；同时覆盖插件目录合并、输入校验、会话标题优先级与
   `custom-title` 写入、自动标题同步与手动重命名竞态、目录选择器默认路径回退、终端主题约束、
   PowerShell 启动脚本语法和软件语义版本比较；独立对话测试额外覆盖凭据密文落盘、URL
-  安全边界、未保存草稿连接测试、credential keep/clear、Token 估算、多模态协议线格式、
+  安全边界、未保存草稿连接测试、DeepSeek thinking-only 协议 envelope、credential keep/clear、
+  Token 估算、多模态协议线格式、
   typed thinking/refusal/retrying、Anthropic/OpenAI 两类 SSE usage、瞬时 HTTP/网络重试、
   严格结束标记、部分输出不重放、重定向安全与兼容回退、附件原子导入/
   UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
   和流式稳定前缀。
 - 3.0 守栏补充覆盖 BusyRegistry 租约释放、下载 EMA/ETA/恢复日志/来源与完整性、退出和托盘忙态、
-  四种代理导入与 Xray 生命周期、IP/DNS/WebRTC/环境泄露裁决、供应商能力矩阵、CCR CLI-only、
+  四种代理导入与 Xray 生命周期、三档 IP 策略、外部代理/TUN 协同裁决、节点/更新源测速、
+  IP/DNS/WebRTC/环境泄露裁决、供应商能力矩阵、CCR CLI-only、
   CC Switch MSI/深链/清理牢笼、MCP 三作用域发现/diff/备份/逐字节还原，以及对话无总时长上限、
   静默探活和可选 `local-timeout`。`tests/cli-only-guard.test.ts` 与
   `tests/chat-timeout.test.ts` 作为跨模块源码不变量，避免未来调用点绕过局部单测。

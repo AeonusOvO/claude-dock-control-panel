@@ -105,6 +105,32 @@ describe('Xray sidecar configuration', () => {
     expect(config.routing.rules[0]).toEqual({ ip: ['::/0'], outboundTag: 'block', type: 'field' });
   });
 
+  it('uses V2RayN-style Happy Eyeballs for dual stack without blocking IPv6', () => {
+    const automatic = buildXrayConfig(profile, 41001, 41002, 'dual_stack') as {
+      dns: { queryStrategy: string };
+      outbounds: Array<{ streamSettings?: { sockopt?: Record<string, unknown> } }>;
+      routing: { rules: Array<{ ip?: string[] }> };
+    };
+    expect(automatic.dns.queryStrategy).toBe('UseIP');
+    expect(automatic.outbounds[0]?.streamSettings?.sockopt).toEqual({
+      domainStrategy: 'UseIP',
+      happyEyeballs: {
+        interleave: 1,
+        maxConcurrentTry: 2,
+        prioritizeIPv6: false,
+        tryDelayMs: 250,
+      },
+    });
+    expect(automatic.routing.rules).not.toContainEqual(expect.objectContaining({ ip: ['::/0'] }));
+
+    const preferIpv6 = buildXrayConfig(profile, 41001, 41002, 'prefer_ipv6') as {
+      outbounds: Array<{ streamSettings?: { sockopt?: { happyEyeballs?: unknown } } }>;
+    };
+    expect(preferIpv6.outbounds[0]?.streamSettings?.sockopt?.happyEyeballs).toEqual(
+      expect.objectContaining({ prioritizeIPv6: true }),
+    );
+  });
+
   it('redacts raw and URL-encoded credentials from the diagnostic ring', () => {
     expect(
       redactProxyLog('failed synthetic-secret synthetic%2Dsecret', ['synthetic-secret']),
