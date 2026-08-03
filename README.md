@@ -82,8 +82,10 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
 部分响应或完整安装包摘要不符，更新会失败关闭并保留当前可运行版本。
 
 镜像只接受精确的 HTTPS 公网 IP，拒绝 HTTP、用户信息、query、fragment、未授权 IP 与跨主机
-重定向。公网 IP 的受信任 TLS 证书并不规避备案、接入商政策或其他适用监管要求。部署、原子切换、
-回滚和验收细节见 [docs/UPDATE_MIRROR.md](docs/UPDATE_MIRROR.md)。
+重定向。公网 IP 的受信任 TLS 证书并不规避备案、接入商政策或其他适用监管要求。腾讯云现行规则
+明确要求仅通过公网 IP 提供的中国内地互联网信息服务办理 ICP 备案，但其备案系统暂不支持直接使用
+IP 备案；在维护者从属地通信管理局取得可执行结论前，该地址只保留 TLS 与健康检查，不公开稳定安装
+包。部署、原子切换、回滚和验收细节见 [docs/UPDATE_MIRROR.md](docs/UPDATE_MIRROR.md)。
 
 ## 开发环境
 

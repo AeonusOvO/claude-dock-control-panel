@@ -596,7 +596,9 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript(`
       document.querySelector('.workspace').classList.add('workspace--rail-collapsed');
     `);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // The rail grid transition lasts 120 ms. Slower Windows CI hosts can otherwise inspect the
+    // main-pane controls while their hit targets are still moving between animation frames.
+    await new Promise((resolve) => setTimeout(resolve, 180));
     results.push({
       height,
       page: 'rail:collapsed',

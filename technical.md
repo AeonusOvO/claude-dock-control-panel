@@ -1433,7 +1433,7 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   静态终端 fixture 无法证明 PTY resize/reflow 的边界，结束后删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
   `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
-  几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 162 个按钮全部命中
+  几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 163 个按钮全部命中
   主题。
 - `tests/application-proxy.test.ts` 用临时目录和可逆安全存储替身验证密码不落明文、留空保留、清空
   账号删除、SOCKS5 CLI 拒绝、IPv6 URL 编码、Electron 规则、CLI 环境和候选解析。
@@ -1464,6 +1464,10 @@ CI 的 security job 在 Ubuntu 上检出完整历史，运行 gitleaks、`npm ci
 和清单签名，失败时回滚镜像并撤销错误 Release。
 `.github/workflows/mirror-monitor.yml` 每 6 小时从 GitHub 托管节点验证公网 TLS、精确 IP SAN、至少
 48 小时剩余有效期和健康端点；失败时创建或更新不含服务器管理信息的告警 Issue，恢复后自动关闭。
+服务器的 443 连通性、Nginx、short-lived IP 证书、自动续期和健康端点已经完成工程验证，但腾讯云
+现行[备案场景说明](https://cloud.tencent.com/document/product/243/18910)同时明确：仅通过公网 IP
+提供的中国内地互联网信息服务也需要 ICP 备案，而腾讯云备案系统暂不支持直接使用 IP 备案。取得
+属地通信管理局认可的办理路径前，服务器不公开稳定安装包；不得以 HTTP 或自签名证书绕过该门禁。
 
 Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert 时间戳。标准可信证书通过
 `WINDOWS_CERTIFICATE_BASE64`、`WINDOWS_CERTIFICATE_PASSWORD` 与期望主体 Secret 提供；稳定工作流
