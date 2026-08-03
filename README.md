@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.1.0**，许可证为 **Apache-2.0**。4.1.0 的正式稳定版必须同时通过可信
+当前代码版本为 **4.1.2**，许可证为 **Apache-2.0**。4.1.2 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -148,8 +148,15 @@ outputs/win-unpacked/
    都阻止稳定发布并回滚。
 
 工作流 Secret 只保存独立镜像部署身份、manifest 私钥和代码签名凭据，任何私钥、Token、证书密码
-或管理凭据都不得进入仓库、安装包或客户端源码。代码签名政策及当前审批状态见
-[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)。
+或管理凭据都不得进入仓库、安装包或客户端源码。
+
+### Code signing policy
+
+完整的 [Code signing policy](CODE_SIGNING_POLICY.md) 记录团队角色、构建来源、逐版本人工批准、
+事故响应和当前审批状态。SignPath Foundation 批准后采用其要求的公开归属语：Free code signing
+provided by [SignPath.io](https://signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/)。批准前的本地构建仍是未受信任签名的开发产物，不能据此
+宣称正式签名已经完成。
 
 ## 目录
 

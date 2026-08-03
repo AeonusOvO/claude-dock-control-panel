@@ -328,6 +328,8 @@ describe('Claude Code configuration', () => {
         rmSync(temporaryDirectory, { force: true, recursive: true });
       }
     },
+    // A cold Windows runner can spend more than Vitest's default five seconds starting PowerShell.
+    45_000,
   );
 
   it('arms the bypass cycle without starting in it', () => {
