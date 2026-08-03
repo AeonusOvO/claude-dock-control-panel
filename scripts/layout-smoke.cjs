@@ -594,11 +594,15 @@ app.whenReady().then(async () => {
       document.querySelector('#terminal-empty-state').style.display = '';
     `);
     await window.webContents.executeJavaScript(`
-      document.querySelector('.workspace').classList.add('workspace--rail-collapsed');
+      (() => {
+        const workspace = document.querySelector('.workspace');
+        // Hidden CI windows can throttle CSS transitions indefinitely. This scenario verifies the
+        // collapsed end-state geometry, so settle it synchronously without changing app CSS.
+        workspace.style.transition = 'none';
+        workspace.classList.add('workspace--rail-collapsed');
+        void workspace.offsetWidth;
+      })()
     `);
-    // The rail grid transition lasts 120 ms. Slower Windows CI hosts can otherwise inspect the
-    // main-pane controls while their hit targets are still moving between animation frames.
-    await new Promise((resolve) => setTimeout(resolve, 180));
     results.push({
       height,
       page: 'rail:collapsed',
@@ -606,8 +610,13 @@ app.whenReady().then(async () => {
       ...(await window.webContents.executeJavaScript(inspectLayout)),
     });
     await window.webContents.executeJavaScript(`
-      document.querySelector('.workspace').classList.remove('workspace--rail-collapsed');
-      document.querySelector('#connection-advanced-dialog').showModal();
+      (() => {
+        const workspace = document.querySelector('.workspace');
+        workspace.classList.remove('workspace--rail-collapsed');
+        void workspace.offsetWidth;
+        workspace.style.removeProperty('transition');
+        document.querySelector('#connection-advanced-dialog').showModal();
+      })()
     `);
     for (const settingsPage of ['general', 'connection']) {
       await window.webContents.executeJavaScript(`
