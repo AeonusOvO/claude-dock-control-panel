@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.1.1**，许可证为 **Apache-2.0**。4.1.1 的正式稳定版必须同时通过可信
+当前代码版本为 **4.1.2**，许可证为 **Apache-2.0**。4.1.2 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
