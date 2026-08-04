@@ -1335,11 +1335,34 @@ const managedChatGptConfigInput = (
   provider: 'gateway',
 });
 
+const resumeClaudeAfterManagedCutover = async (
+  runtime: ClaudeRuntime,
+  sessionId: string,
+  cwd: string,
+): Promise<ClaudeProjectState> => {
+  try {
+    const prepared = await runtime.prepareLaunch(sessionId, cwd, 'continue');
+    const terminalStatus = workspace.restart(sessionId, prepared.environment);
+    if (terminalStatus.phase === 'error') {
+      throw new Error(terminalStatus.message ?? '无法在新接入上恢复 Claude Code 会话。');
+    }
+    workspace.write(sessionId, `${prepared.command}\r`);
+    return runtime.getState(sessionId, cwd);
+  } catch (error) {
+    // Once the saved route changes, falling back to the old live PTY would silently keep billing
+    // the previous relay. Fail closed even when preparing or starting the replacement TUI fails.
+    workspace.stop(sessionId);
+    runtime.setInactive(sessionId);
+    throw error;
+  }
+};
+
 const verifyAndSaveManagedChatGptProject = async (
   sessionId: string,
   cwd: string,
   managed: ManagedChatGptGatewayProjectConfig,
   requestedModel?: string,
+  resumeAfterSave = false,
 ): Promise<{ connectionTest: ClaudeConnectionTestResult; projectState?: ClaudeProjectState }> => {
   const runtime = requireClaudeRuntime();
   const current = await runtime.getState(sessionId, cwd);
@@ -1370,9 +1393,12 @@ const verifyAndSaveManagedChatGptProject = async (
     return { connectionTest };
   }
   emitManagedChatGptProgress(sessionId, 'saving', 8, '连接已通过，正在保存当前项目配置。');
+  const savedState = await runtime.saveConfig(sessionId, cwd, input);
   return {
     connectionTest,
-    projectState: await runtime.saveConfig(sessionId, cwd, input),
+    projectState: resumeAfterSave
+      ? await resumeClaudeAfterManagedCutover(runtime, sessionId, cwd)
+      : savedState,
   };
 };
 
@@ -2322,15 +2348,28 @@ const registerIpc = (): void => {
         throw new Error('托管网关登录参数无效。');
       }
       const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      const resumeAfterSetup = runtime.isActive(validatedSessionId);
       let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
+        if (resumeAfterSetup) {
+          emitManagedChatGptProgress(
+            validatedSessionId,
+            'detecting',
+            1,
+            '检测到运行中的 Claude 会话；已先停止旧路由，防止登录期间继续消耗原中转站额度。',
+          );
+          workspace.stop(validatedSessionId);
+          runtime.setInactive(validatedSessionId);
+        }
         emitManagedChatGptProgress(
           validatedSessionId,
           'detecting',
           1,
-          '正在检测 Claude Code、登录网关与本机端口。',
+          resumeAfterSetup
+            ? '旧路由已停止，正在检测 Claude Code、登录网关与本机端口。'
+            : '正在检测 Claude Code、登录网关与本机端口。',
         );
-        const runtime = requireClaudeRuntime();
         let environment = await runtime.getSoftwareUpdates(true);
         if (!environment.claudeCode.installed) {
           emitManagedChatGptProgress(
@@ -2366,6 +2405,8 @@ const registerIpc = (): void => {
           validatedSessionId,
           status.cwd,
           managed,
+          undefined,
+          resumeAfterSetup,
         );
         connectionTest = applied.connectionTest;
         const state = await requireManagedChatGptGateway().getState();
@@ -2389,12 +2430,16 @@ const registerIpc = (): void => {
           validatedSessionId,
           'complete',
           8,
-          `接入成功，已自动选择并验证模型 ${applied.projectState.config.model}。`,
+          resumeAfterSetup
+            ? `接入成功；旧路由已切断，最近会话已在新路由恢复，模型为 ${applied.projectState.config.model}。`
+            : `接入成功，已自动选择并验证模型 ${applied.projectState.config.model}。`,
           false,
         );
         return {
           connectionTest,
-          message: `环境、网关和模型已全部自动配置；当前使用 ${applied.projectState.config.model}。`,
+          message: resumeAfterSetup
+            ? `环境、网关和模型已全部自动配置；旧路由已停止，最近会话已在新路由恢复。`
+            : `环境、网关和模型已全部自动配置；当前使用 ${applied.projectState.config.model}。`,
           ok: true,
           projectState: applied.projectState,
           state,
@@ -2406,7 +2451,9 @@ const registerIpc = (): void => {
         return {
           connectionTest,
           error: message,
-          message: '未能完成 ChatGPT 订阅的一键接入。',
+          message: resumeAfterSetup
+            ? '未能完成 ChatGPT 订阅的一键接入；旧路由会话已保持停止，不会继续消耗原中转站额度。'
+            : '未能完成 ChatGPT 订阅的一键接入。',
           ok: false,
           state,
         };
@@ -2429,6 +2476,8 @@ const registerIpc = (): void => {
         throw new Error('托管网关模型标识无效。');
       }
       const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      const resumeAfterModelChange = runtime.isActive(validatedSessionId);
       let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
         emitManagedChatGptProgress(
@@ -2443,6 +2492,7 @@ const registerIpc = (): void => {
           status.cwd,
           managed,
           requestedModel,
+          resumeAfterModelChange,
         );
         connectionTest = applied.connectionTest;
         const state = await requireManagedChatGptGateway().getState();

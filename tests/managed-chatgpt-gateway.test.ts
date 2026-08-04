@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BusyRegistry } from '../src/main/busy-registry';
 import {
   archiveEntriesAreSafe,
+  buildManagedGatewayEnvironment,
   buildManagedGatewayConfig,
   ManagedChatGptGateway,
   parseCliProxyApiRelease,
@@ -27,6 +28,23 @@ const releasePayload = (overrides: Record<string, unknown> = {}): Record<string,
 });
 
 describe('managed ChatGPT gateway', () => {
+  it('removes inherited provider routes and credentials but keeps transport proxies', () => {
+    expect(
+      buildManagedGatewayEnvironment({
+        ANTHROPIC_BASE_URL: 'https://old-relay.example.com',
+        CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+        CODEX_ACCESS_TOKEN: 'old-codex-token',
+        ELECTRON_RUN_AS_NODE: '1',
+        HTTPS_PROXY: 'http://127.0.0.1:7890',
+        OpenAi_Api_Key: 'old-openai-key',
+        PATH: 'C:\\Windows\\System32',
+      }),
+    ).toEqual({
+      HTTPS_PROXY: 'http://127.0.0.1:7890',
+      PATH: 'C:\\Windows\\System32',
+    });
+  });
+
   it('selects a usable chat model from the live catalog instead of assuming a fixed identifier', () => {
     expect(recommendedChatModel(['text-embedding-3-large', 'gpt-5.4-mini', 'gpt-5.6-sol'])).toBe(
       'gpt-5.6-sol',

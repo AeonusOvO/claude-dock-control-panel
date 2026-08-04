@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.4.1**，许可证为 **Apache-2.0**。4.4.1 的正式稳定版必须同时通过可信
+当前代码版本为 **4.4.2**，许可证为 **Apache-2.0**。4.4.2 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -92,6 +92,10 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
    配置。以后从 ClaudeDock 启动该项目时会按需启动受管网关；切换到不需要它的直连/中转或 Codex
    CLI 后会自动停止，无需写 `~/.zshrc`、
    `~/.bashrc`、PowerShell 配置或系统级路由。
+4. 如果当前项目已有 Claude Code 会话正在运行，托管接入会先终止该 PTY，避免安装或登录期间继续
+   使用启动时的旧中转站并消耗额度；接入成功后以 `--continue` 在新路由恢复最近会话。接入或恢复
+   失败时会话保持停止，不会静默退回旧路由。该切换只作用于当前项目；其他项目的后台会话仍保持
+   各自的项目级配置。
 
 受管配置中的本地客户端密钥是 Claude Code 与 CLIProxyAPI 之间的随机访问密钥，不是 ChatGPT
 凭据；项目配置副本用 Windows DPAPI 加密。CLIProxyAPI 自身必须在其权限受限的 `config.yaml` 中
@@ -103,7 +107,9 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
 GitHub Release 会从 `github.com` 跳转到 `release-assets.githubusercontent.com`，下载器会用完整 URL
 chain 认领同一任务，避免链式代理下 Electron 把最终地址报告为当前 URL 时误取消下载。ClaudeDock
 只知道用户配置的第一跳，无法识别或改写代理软件内部的后续链路；后续节点仍需正确支持 HTTPS 与
-Range 续传。
+Range 续传。网关的登录、解压和运行子进程会保留这些普通传输代理，但会清除继承的
+`OPENAI_*`、`CODEX_*`、`ANTHROPIC_*`、CCR 等模型基址与凭据变量，确保上游只由 ClaudeDock
+私有配置和专用 OAuth 目录决定。
 
 ### CCR CLI 自动路由与中断恢复
 

@@ -109,9 +109,35 @@ const recommendedFastModel = (models: readonly string[], fallback: string): stri
   models.find((candidate) => !nonChatModel.test(candidate) && /mini|nano|flash/i.test(candidate)) ??
   fallback;
 
-const cleanEnvironment = (): NodeJS.ProcessEnv => {
-  const environment = { ...process.env };
-  delete environment.ELECTRON_RUN_AS_NODE;
+const MANAGED_GATEWAY_ROUTE_ENVIRONMENT_PREFIXES = [
+  'ANTHROPIC_',
+  'CLAUDE_AGENT_',
+  'CLAUDE_CODE_',
+  'CODEX_',
+  'CODEXL_',
+  'CCR_',
+  'OPENAI_',
+] as const;
+
+/**
+ * The managed gateway must authenticate and route with its app-owned config/auth directory only.
+ * Transport proxy variables remain available because they describe how to reach the official
+ * endpoint, while provider credentials and base-URL overrides could silently send the request to
+ * a relay inherited from the process that launched ClaudeDock.
+ */
+export const buildManagedGatewayEnvironment = (
+  inherited: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv => {
+  const environment = { ...inherited };
+  for (const key of Object.keys(environment)) {
+    const normalized = key.toUpperCase();
+    if (
+      normalized === 'ELECTRON_RUN_AS_NODE' ||
+      MANAGED_GATEWAY_ROUTE_ENVIRONMENT_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+    ) {
+      delete environment[key];
+    }
+  }
   return environment;
 };
 
@@ -505,7 +531,7 @@ export class ManagedChatGptGateway {
   }
 
   private async extractRelease(archivePath: string, version: string): Promise<string> {
-    const environment = cleanEnvironment();
+    const environment = buildManagedGatewayEnvironment();
     const list = await runProcess('tar.exe', ['-tf', archivePath], environment, {
       maxBuffer: 512 * 1024,
       timeout: 30_000,
@@ -604,7 +630,7 @@ export class ManagedChatGptGateway {
       output = await runProcess(
         executable,
         ['-config', this.configPath, '-codex-login', '-oauth-callback-port', String(callbackPort)],
-        cleanEnvironment(),
+        buildManagedGatewayEnvironment(),
         {
           cwd: path.dirname(executable),
           maxBuffer: 512 * 1024,
@@ -637,7 +663,7 @@ export class ManagedChatGptGateway {
     const executable = this.executablePath(state);
     this.process = spawn(executable, ['-config', this.configPath], {
       cwd: path.dirname(executable),
-      env: cleanEnvironment(),
+      env: buildManagedGatewayEnvironment(),
       stdio: 'ignore',
       windowsHide: true,
     });

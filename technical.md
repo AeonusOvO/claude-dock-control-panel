@@ -1,6 +1,10 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.4.1（2026-08-04）。4.4.1 把受管 ChatGPT 接入收敛为一次后台事务：自动补齐
+当前架构版本：4.4.2（2026-08-04）。4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
+PTY 仍携带旧中转站环境继续请求的问题：接入开始即停止当前项目的旧会话，成功后用 `--continue`
+和新环境恢复，任何失败都保持停止而不回退；CLIProxyAPI 登录、解压与运行子进程还会清除继承的
+OpenAI/Codex/Anthropic/CCR 路由和凭据变量，同时保留显式 HTTP 传输代理。4.4.1 把受管 ChatGPT
+接入收敛为一次后台事务：自动补齐
 Claude Code、启动网关、读取实时模型目录、执行真实模型请求并仅在成功后保存；renderer 使用主进程
 8 阶段事件持续反馈，并以实时模型选择框取代手填标识。首次 CCR Provider 保存也会自动启动并确认
 3456，而不再要求用户打开管理页。4.4.0 把 CCR 接入收敛为 CLI-only 的全自动生命周期：后台 npm
@@ -568,6 +572,16 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
   是否出现凭据文件和上游成功标记。授权前在 `1455–1465` 中自动选择空闲回调端口并通过上游官方
   参数传入；授权最长等待 10 分钟，错误文本会移除 Bearer、本地回调地址和疑似密钥。
+- 托管接入开始时若 `ClaudeRuntime.isActive(sessionId)` 为真，主进程先 `workspace.stop()` 并把
+  runtime 标为 inactive；这是计费安全边界，不允许旧 PTY 在最长 10 分钟的授权窗口里继续使用启动
+  时的中转环境。真实测试与保存成功后，主进程以 `prepareLaunch(..., 'continue')` 重新生成临时
+  settings 和环境、重启 PTY 并恢复最近会话；准备、spawn 或写入失败都会再次停止 PTY，绝不回落到
+  旧路由。模型下拉切换对活动会话复用同一恢复路径。其他项目 session 不在该事务范围内。
+- `buildManagedGatewayEnvironment()` 是 CLIProxyAPI 安装、OAuth 登录和常驻 sidecar 的统一进程净室：
+  按大小写不敏感规则删除 `OPENAI_*`、`CODEX_*`、`ANTHROPIC_*`、`CLAUDE_AGENT_*`、
+  `CLAUDE_CODE_*`、`CCR_*`、`CODEXL_*` 与 `ELECTRON_RUN_AS_NODE`，防止父进程的旧基址或密钥
+  改变上游；`HTTP_PROXY`、
+  `HTTPS_PROXY` 和 `NO_PROXY` 继续保留，因为它们只描述到官方端点的传输路径。
 - `setupInFlight` 是整个安装、校验、授权、启动周期的单例 Promise；重复 IPC 直接等待同一 Promise，
   不会再次获取 BusyRegistry 租约或启动第二个下载。公开状态在此期间返回 `busy: true` 与
   `phase: installing`；renderer 另用本地同步锁覆盖 IPC 往返窗口，任何指南重建都保持主按钮禁用。
@@ -1360,6 +1374,8 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 ## 构建、测试与调试
 
 - `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
+- Vitest 在默认排除项之外固定忽略 `**/.claude/worktrees/**`；Claude CLI 留在仓库内的辅助工作树
+  可能包含同名旧测试，但它们不是当前提交的测试事实来源，不能让本机残留副本污染门禁结果。
 - `npm run lint`：检查 TypeScript 源码。
 - `npm run typecheck`：分别检查渲染端和主进程类型。
 - `npm test`：运行目录/工作区、项目级开发引擎持久化、Codex 官方 Release 元数据与
@@ -1384,7 +1400,9 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   `tests/chat-timeout.test.ts` 作为跨模块源码不变量，避免未来调用点绕过局部单测。
 - `tests/managed-chatgpt-gateway.test.ts` 锁定 CLIProxyAPI 最新发行元数据的仓库/tag/资产名/大小/
   SHA-256 验证、ZIP 路径穿越拒绝，以及仅监听回环地址、关闭远程管理和使用独立认证目录的配置；
-  renderer 源码守栏同时要求受管状态 IPC、OpenAI 官方浏览器授权文案和一键安装入口保持存在。
+  同时验证网关进程净室删除继承的供应商路由/凭据变量但保留 HTTP 传输代理。renderer/main 源码
+  守栏要求受管状态 IPC、OpenAI 官方浏览器授权文案、一键安装入口，以及“旧 PTY 先停、成功后在
+  新路由恢复、失败不回落”的切换顺序保持存在。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
