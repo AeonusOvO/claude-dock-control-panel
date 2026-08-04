@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.3.0**，许可证为 **Apache-2.0**。4.3.0 的正式稳定版必须同时通过可信
+当前代码版本为 **4.3.1**，许可证为 **Apache-2.0**。4.3.1 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -75,7 +75,9 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
 1. 在“接入 → 订阅接入（实验性）”选择“ChatGPT 订阅（ClaudeDock 托管）”，点击“一键安装并登录”。
 2. ClaudeDock 查询 CLIProxyAPI 官方 GitHub Release，只接受预期仓库、版本、Windows x64 ZIP 与
    GitHub 提供的 SHA-256 摘要；校验后解压到应用 `userData` 私有目录，生成仅监听
-   `127.0.0.1` 的本地配置并隐藏启动进程。用户不需要打开终端、CLIProxyAPI 控制台或 CC Switch。
+   `127.0.0.1` 的本地配置并隐藏启动进程。下载、校验、授权和配置完成前按钮持续锁定；即使界面
+   刷新或重复触发 IPC，主进程也只复用同一个安装任务。用户不需要打开终端、CLIProxyAPI 控制台或
+   CC Switch。
 3. 浏览器会打开 OpenAI 官方授权页。这一步需要用户本人确认，ClaudeDock 不读取密码、Cookie 或
    OAuth Token；CLIProxyAPI 将自己的 OAuth 文件保存在 ClaudeDock 为它划定的私有认证目录。
 4. 授权成功后，ClaudeDock 自动启动网关、验证 `/v1/models`、为当前项目保存回环地址与本地访问
@@ -86,6 +88,12 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
 凭据；项目配置副本用 Windows DPAPI 加密。CLIProxyAPI 自身必须在其权限受限的 `config.yaml` 中
 读取该密钥，因此该受管文件包含一份本机明文。用户可在界面中重新登录；上游发行版更新则在再次执行
 托管接入时下载和校验，不要求用户自行维护命令行工具。
+
+受管下载继承 ClaudeDock“应用自身网络”作用域中的显式代理；未指定时继承 Windows 系统代理。
+GitHub Release 会从 `github.com` 跳转到 `release-assets.githubusercontent.com`，下载器会用完整 URL
+chain 认领同一任务，避免链式代理下 Electron 把最终地址报告为当前 URL 时误取消下载。ClaudeDock
+只知道用户配置的第一跳，无法识别或改写代理软件内部的后续链路；后续节点仍需正确支持 HTTPS 与
+Range 续传。
 
 ## 双通道安全更新
 

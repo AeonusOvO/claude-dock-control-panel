@@ -1,6 +1,8 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.3.0（2026-08-04）。4.3.0 把项目级“ChatGPT 订阅”实验性预设升级为
+当前架构版本：4.3.1（2026-08-04）。4.3.1 修复 GitHub Release 重定向后 Electron
+`DownloadItem.getURL()` 返回最终资产地址、而下载任务仍按原始地址等待所造成的 45 秒零字节假停滞；
+同时把受管安装的忙碌状态提升为主进程真值并跨 renderer 重绘锁定按钮。4.3.0 把项目级“ChatGPT 订阅”实验性预设升级为
 ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、安装、启动、OpenAI 浏览器授权引导、
 回环网关配置与项目模型映射，用户不再操作终端或第三方控制台。该路径仍是第三方协议桥，不是 OpenAI
 或 Anthropic 官方 Claude Code 集成。4.2.0 首次加入外部 CLIProxyAPI 发现和严格回环地址边界，并把
@@ -293,6 +295,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `Content-Length` 以 `-1` 表达。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
   `.partial` 原子改名；失败或取消不会留下可执行的最终路径。连续 45 秒无字节会进入最多 12 次
   指数退避续传，并保留磁盘前缀。
+- `downloadURL()` 的请求地址与 `DownloadItem.getURL()` 不保证相同：GitHub 重定向后后者可能直接
+  返回带短期签名的 `release-assets.githubusercontent.com` 地址。`claimPendingTask()` 会规范化
+  `getURL()` 与完整 `getURLChain()`，用链中任一已登记 URL 认领任务，再对每一跳执行原有 host/path
+  白名单检查；恢复任务也必须与 journal URL chain 相交，不再让无关下载按队列顺序误领恢复项。
 - `src/main/github-release-routes.ts` 现在只为受管 GitHub Release 资产建立官方
   `github.com → release-assets.githubusercontent.com` 白名单路径，不再把第三方前缀反代作为
   默认下载安装线路。请求使用 `session.defaultSession`，因此继承 Windows system proxy 或用户
@@ -548,6 +554,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
   是否出现凭据文件和上游成功标记。授权前在 `1455–1465` 中自动选择空闲回调端口并通过上游官方
   参数传入；授权最长等待 10 分钟，错误文本会移除 Bearer、本地回调地址和疑似密钥。
+- `setupInFlight` 是整个安装、校验、授权、启动周期的单例 Promise；重复 IPC 直接等待同一 Promise，
+  不会再次获取 BusyRegistry 租约或启动第二个下载。公开状态在此期间返回 `busy: true` 与
+  `phase: installing`；renderer 另用本地同步锁覆盖 IPC 往返窗口，任何指南重建都保持主按钮禁用。
 - 授权后主进程隐藏启动 sidecar，并携带随机本地密钥探测 `GET /v1/models`。安装、登录、启动、
   项目配置保存和模型默认值写入在同一操作完成；renderer 不暴露地址、认证和凭据输入，只保留模型
   映射与连接测试。`ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用

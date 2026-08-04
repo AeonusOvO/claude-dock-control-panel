@@ -601,12 +601,7 @@ export class DownloadEngine {
   }
 
   private acceptItem(event: Event, item: DownloadItem): void {
-    const url = new URL(item.getURL()).toString();
-    const pending = this.pendingByUrl.get(url);
-    const task = pending?.shift() ?? this.pendingRestores.shift();
-    if (pending?.length === 0) {
-      this.pendingByUrl.delete(url);
-    }
+    const task = this.claimPendingTask(item);
     if (!task || task.settled) {
       event.preventDefault();
       return;
@@ -655,6 +650,47 @@ export class DownloadEngine {
         this.armStallTimer(task);
       }
     }
+  }
+
+  /**
+   * Electron may report the final redirected asset URL from DownloadItem#getURL even though
+   * downloadURL was called with the original GitHub release URL. Match every normalized hop in the
+   * item URL chain so a legitimate redirect is not mistaken for an unrelated browser download and
+   * cancelled before its first byte arrives.
+   */
+  private claimPendingTask(item: DownloadItem): ActiveDownload | undefined {
+    const candidates: string[] = [];
+    for (const candidate of [item.getURL(), ...item.getURLChain()]) {
+      try {
+        const normalized = new URL(candidate).toString();
+        if (!candidates.includes(normalized)) {
+          candidates.push(normalized);
+        }
+      } catch {
+        // Invalid redirect hops fail the whitelist check if a task is otherwise claimed.
+      }
+    }
+    for (const candidate of candidates) {
+      const pending = this.pendingByUrl.get(candidate);
+      const task = pending?.shift();
+      if (pending?.length === 0) {
+        this.pendingByUrl.delete(candidate);
+      }
+      if (task) {
+        return task;
+      }
+    }
+    const restoredIndex = this.pendingRestores.findIndex((task) => {
+      const knownUrls = [task.request.url, ...(task.journalEntry?.urlChain ?? [])];
+      return knownUrls.some((known) => {
+        try {
+          return candidates.includes(new URL(known).toString());
+        } catch {
+          return false;
+        }
+      });
+    });
+    return restoredIndex >= 0 ? this.pendingRestores.splice(restoredIndex, 1)[0] : undefined;
   }
 
   private async complete(task: ActiveDownload): Promise<void> {

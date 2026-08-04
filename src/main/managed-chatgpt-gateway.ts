@@ -233,6 +233,7 @@ export class ManagedChatGptGateway {
   private readonly statePath: string;
   private readonly versionsDirectory: string;
   private process?: ChildProcess;
+  private setupInFlight?: Promise<ManagedChatGptGatewayProjectConfig>;
 
   public constructor(
     userDataPath: string,
@@ -250,31 +251,37 @@ export class ManagedChatGptGateway {
   }
 
   public async getState(): Promise<ManagedChatGptGatewayState> {
+    const busy = Boolean(this.setupInFlight);
     const persisted = this.loadState();
     const installed = Boolean(persisted && this.executableIsValid(persisted));
     const authenticated = this.hasAuthentication();
     const clientKey = persisted ? this.decryptClientKey(persisted) : undefined;
     const running = Boolean(
-      persisted && clientKey && (await this.probe(persisted.port, clientKey)),
+      !busy && persisted && clientKey && (await this.probe(persisted.port, clientKey)),
     );
     const endpoint = `http://127.0.0.1:${persisted?.port ?? DEFAULT_PORT}`;
-    const phase = !installed
-      ? 'not-installed'
-      : !authenticated
-        ? 'login-required'
-        : running
-          ? 'ready'
-          : 'stopped';
+    const phase = busy
+      ? 'installing'
+      : !installed
+        ? 'not-installed'
+        : !authenticated
+          ? 'login-required'
+          : running
+            ? 'ready'
+            : 'stopped';
     const message =
-      phase === 'not-installed'
-        ? '尚未安装 ClaudeDock 托管网关。'
-        : phase === 'login-required'
-          ? `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已安装，等待 OpenAI 授权。`
-          : phase === 'ready'
-            ? `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已在本机安全运行。`
-            : `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已授权，启动 Claude Code 时会自动运行。`;
+      phase === 'installing'
+        ? '正在下载、校验并配置托管网关；完成前无需重复点击。'
+        : phase === 'not-installed'
+          ? '尚未安装 ClaudeDock 托管网关。'
+          : phase === 'login-required'
+            ? `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已安装，等待 OpenAI 授权。`
+            : phase === 'ready'
+              ? `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已在本机安全运行。`
+              : `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已授权，启动 Claude Code 时会自动运行。`;
     return {
       authenticated,
+      busy,
       checkedAt: Date.now(),
       endpoint,
       installed,
@@ -286,6 +293,21 @@ export class ManagedChatGptGateway {
   }
 
   public async setup(forceLogin = false): Promise<ManagedChatGptGatewayProjectConfig> {
+    if (this.setupInFlight) {
+      return this.setupInFlight;
+    }
+    const operation = this.setupInternal(forceLogin);
+    this.setupInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.setupInFlight === operation) {
+        this.setupInFlight = undefined;
+      }
+    }
+  }
+
+  private async setupInternal(forceLogin: boolean): Promise<ManagedChatGptGatewayProjectConfig> {
     const releaseBusy = this.busyRegistry.acquire({
       cancellable: false,
       id: 'managed-gateway:chatgpt-setup',

@@ -1026,6 +1026,7 @@ let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
 let managedChatGptGatewayState: ManagedChatGptGatewayState | undefined;
+let managedChatGptSetupInProgress = false;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
@@ -2889,9 +2890,11 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
 
   const renderState = (state: ManagedChatGptGatewayState): void => {
     managedChatGptGatewayState = state;
+    const operationBusy = state.busy || managedChatGptSetupInProgress;
     statusCard.dataset.phase = state.phase;
-    statusTitle.textContent =
-      state.phase === 'ready'
+    statusTitle.textContent = operationBusy
+      ? '正在安装并配置托管网关'
+      : state.phase === 'ready'
         ? 'ChatGPT 托管网关已就绪'
         : state.phase === 'stopped'
           ? '授权已完成，等待启用'
@@ -2899,9 +2902,10 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
             ? '安装完成，等待 OpenAI 授权'
             : '尚未安装托管网关';
     statusDetail.textContent = state.message;
-    action.disabled = false;
-    action.textContent =
-      state.phase === 'not-installed'
+    action.disabled = operationBusy;
+    action.textContent = operationBusy
+      ? '安装进行中…'
+      : state.phase === 'not-installed'
         ? '一键安装并登录'
         : state.phase === 'login-required'
           ? '登录 OpenAI 并自动配置'
@@ -2909,7 +2913,7 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
             ? '启动并用于当前项目'
             : '用于当前项目';
     secondaryActions.replaceChildren();
-    if (state.authenticated) {
+    if (state.authenticated && !operationBusy) {
       const relogin = document.createElement('button');
       relogin.type = 'button';
       relogin.textContent = '重新登录 OpenAI';
@@ -2924,20 +2928,30 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
   };
 
   const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
+    if (managedChatGptSetupInProgress) {
+      showToast('托管网关正在安装或配置，请等待当前操作完成。');
+      return;
+    }
     const sessionId = workspaceState.activeSessionId;
     if (!sessionId) {
       showToast('请先选择一个项目。', 'error');
       return;
     }
+    managedChatGptSetupInProgress = true;
     button.disabled = true;
     const original = button.textContent;
     let restoreOriginalLabel = true;
+    let resultStateRendered = false;
+    statusCard.dataset.phase = 'installing';
+    statusTitle.textContent = '正在安装并配置托管网关';
     button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
     statusDetail.textContent =
       '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
     try {
       const result = await window.controlPanel.setupManagedChatGptGateway(sessionId, forceLogin);
+      managedChatGptSetupInProgress = false;
       renderState(result.state);
+      resultStateRendered = true;
       if (!result.ok) {
         statusCard.dataset.phase = 'error';
         statusTitle.textContent = '配置未完成';
@@ -2963,11 +2977,14 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
       }
       showToast('无法完成 ChatGPT 托管网关配置。', 'error');
     } finally {
+      managedChatGptSetupInProgress = false;
       if (button.isConnected) {
         button.disabled = false;
-        if (restoreOriginalLabel) {
+        if (restoreOriginalLabel && !resultStateRendered) {
           button.textContent = original;
         }
+      } else if (selectedProviderId === 'chatgpt-subscription') {
+        applyPresetUi('chatgpt-subscription', true);
       }
     }
   };

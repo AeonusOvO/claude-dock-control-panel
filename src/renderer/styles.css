@@ -7460,6 +7460,15 @@ body.is-resizing * {
   color: var(--ok-text);
 }
 
+.subscription-gateway-status[data-phase='installing'] {
+  background: var(--warn-tint);
+  border-color: var(--warn-line);
+}
+
+.subscription-gateway-status[data-phase='installing'] > div strong {
+  color: var(--warn-text);
+}
+
 .subscription-gateway-status[data-phase='error'] {
   background: var(--bad-tint);
   border-color: var(--bad-line);

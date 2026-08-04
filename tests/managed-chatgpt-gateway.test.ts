@@ -1,10 +1,15 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { BusyRegistry } from '../src/main/busy-registry';
 import {
   archiveEntriesAreSafe,
   buildManagedGatewayConfig,
+  ManagedChatGptGateway,
   parseCliProxyApiRelease,
 } from '../src/main/managed-chatgpt-gateway';
+import type { DownloadEngine } from '../src/main/download-engine';
 
 const releasePayload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   assets: [
@@ -73,5 +78,47 @@ describe('managed ChatGPT gateway', () => {
     expect(config).toContain('usage-statistics-enabled: false');
     expect(config).toContain(`sk-claudedock-${'x'.repeat(43)}`);
     expect(config).not.toMatch(/oauth|cookie|password/i);
+  });
+
+  it('shares one in-flight setup and reports a busy public state', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-'));
+    let resolveFetch!: (response: Response) => void;
+    const pendingFetch = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchImplementation = vi.fn(() => pendingFetch);
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      fetchImplementation as unknown as typeof fetch,
+    );
+    try {
+      const first = manager.setup();
+      const state = await manager.getState();
+      const second = manager.setup(true);
+
+      expect(state).toMatchObject({ busy: true, phase: 'installing' });
+      expect(fetchImplementation).toHaveBeenCalledOnce();
+
+      resolveFetch(
+        new Response('{}', {
+          headers: { 'content-type': 'application/json' },
+          status: 200,
+        }),
+      );
+      const results = await Promise.allSettled([first, second]);
+      expect(results.map(({ status }) => status)).toEqual(['rejected', 'rejected']);
+      expect(fetchImplementation).toHaveBeenCalledOnce();
+      expect((await manager.getState()).busy).toBe(false);
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
   });
 });

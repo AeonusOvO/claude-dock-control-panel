@@ -155,6 +155,8 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('不要求你打开终端或第三方控制台');
     expect(rendererSource).toContain('.setupManagedChatGptGateway(sessionId, forceLogin)');
     expect(rendererSource).toContain('.getManagedChatGptGatewayState()');
+    expect(rendererSource).toContain('state.busy || managedChatGptSetupInProgress');
+    expect(rendererSource).toContain("? '安装进行中…'");
     expect(rendererSource).toContain("const preset: ClaudePreset = 'gateway'");
     expect(rendererStyles).toContain('.subscription-gateway-guide');
     expect(rendererStyles).toContain('.subscription-gateway-status');

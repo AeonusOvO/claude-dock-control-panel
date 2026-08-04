@@ -719,7 +719,8 @@ export interface ClaudeGatewayDiagnostics {
   message: string;
 }
 
-export type ManagedChatGptGatewayPhase = 'login-required' | 'not-installed' | 'ready' | 'stopped';
+export type ManagedChatGptGatewayPhase =
+  'installing' | 'login-required' | 'not-installed' | 'ready' | 'stopped';
 
 /**
  * Public state for the ClaudeDock-owned CLIProxyAPI sidecar. OAuth files and the generated local
@@ -727,6 +728,7 @@ export type ManagedChatGptGatewayPhase = 'login-required' | 'not-installed' | 'r
  */
 export interface ManagedChatGptGatewayState {
   authenticated: boolean;
+  busy: boolean;
   checkedAt: number;
   endpoint: string;
   installed: boolean;
