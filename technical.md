@@ -1,7 +1,8 @@
 # ClaudeDock 技术说明
 
 当前架构版本：4.2.0（2026-08-04）。4.2.0 新增项目级“ChatGPT 订阅（本地网关）”实验性预设、
-CLIProxyAPI 默认端口发现和严格回环地址边界；OAuth 仍完全由用户选择的外部网关管理。4.1.2 不改变
+CLIProxyAPI 默认端口发现和严格回环地址边界；OAuth 仍完全由用户选择的外部网关管理。本版本同时把
+构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
 运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
 的冷启动抖动。4.1.1 在项目主页补齐 SignPath
 Foundation 要求的英文 Code signing policy 入口、归属语和未获批前的状态限定。4.1.0 在 4.0.0 的外部代理边界上加入独立签名发布清单、
@@ -1494,8 +1495,9 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
 申请材料和角色/构建政策见 `CODE_SIGNING_POLICY.md`；其免费工作流能否顺序签署 Electron NSIS 内部
 应用、动态生成的卸载器及外层安装器，仍须 SignPath 人工确认，不能以自签名替代。
 
-`npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件通过 `npm audit fix`
-更新了构建期 `brace-expansion` 间接依赖。每次公开发布仍须重新执行完整审计和许可检查。
+`npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件中的构建期
+`brace-expansion` 与 `fast-uri` 间接依赖已更新到修复版本。每次公开发布仍须重新执行完整审计和
+许可检查。
 
 ## 关键取舍与限制
 
