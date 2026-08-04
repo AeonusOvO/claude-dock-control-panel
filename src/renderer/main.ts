@@ -67,6 +67,7 @@ import type {
   McpScope,
   McpServerView,
   ManagedChatGptGatewayState,
+  ManagedChatGptSetupProgress,
   NetworkPreflightResult,
   NetworkProviderId,
   SoftwareUpdateState,
@@ -131,6 +132,7 @@ import { ArtifactController } from './artifact';
 import {
   closeOpenSelect,
   enhanceAllSelects,
+  enhanceSelect,
   installPressRipples,
   installSelectDismissHandlers,
 } from './components';
@@ -340,7 +342,7 @@ const routerWizardBaseUrlField = requiredElement<HTMLElement>('#router-wizard-ba
 const routerWizardBaseUrl = requiredElement<HTMLInputElement>('#router-wizard-base-url');
 const routerWizardCredentialField = requiredElement<HTMLElement>('#router-wizard-credential-field');
 const routerWizardCredential = requiredElement<HTMLInputElement>('#router-wizard-credential');
-const routerWizardModel = requiredElement<HTMLInputElement>('#router-wizard-model');
+const routerWizardModel = requiredElement<HTMLSelectElement>('#router-wizard-model');
 const routerWizardUseRoute = requiredElement<HTMLInputElement>('#router-wizard-use-route');
 const routerWizardDecision = requiredElement<HTMLElement>('#router-wizard-decision');
 const routerWizardSubmit = requiredElement<HTMLButtonElement>('#router-wizard-submit');
@@ -1031,8 +1033,8 @@ type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | '
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
-let managedChatGptGatewayState: ManagedChatGptGatewayState | undefined;
 let managedChatGptSetupInProgress = false;
+let renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
@@ -2840,12 +2842,12 @@ const syncApiKeyHelperPolicyUi = (): void => {
 
 const syncConnectionInteractivity = (): void => {
   const busy = connectionTestInProgress || connectionRemedyInProgress;
-  providerPicker.setAttribute('aria-disabled', String(!connectionEnvironmentReady || busy));
-  providerPicker.inert = !connectionEnvironmentReady || busy;
+  providerPicker.setAttribute('aria-disabled', String(busy));
+  providerPicker.inert = busy;
   claudeConfigForm.inert = !connectionEnvironmentReady || busy;
   connectionRemedyActions.inert = busy;
   for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('.provider-card')) {
-    button.disabled = !connectionEnvironmentReady || busy;
+    button.disabled = busy;
   }
   for (const control of claudeConfigForm.querySelectorAll<
     HTMLButtonElement | HTMLInputElement | HTMLSelectElement
@@ -2876,6 +2878,7 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
     'Thibault “Tibo” Sottiaux 公开分享了 CLIProxyAPI 接入 Claude Code 的实践。ClaudeDock 把安装、配置和后台运行收进一个界面，不要求你打开终端或第三方控制台。';
   const statusCard = document.createElement('div');
   statusCard.className = 'subscription-gateway-status';
+  statusCard.setAttribute('aria-live', 'polite');
   const statusText = document.createElement('div');
   const statusTitle = document.createElement('strong');
   statusTitle.textContent = '正在检查托管网关';
@@ -2884,30 +2887,94 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
   statusText.append(statusTitle, statusDetail);
   const action = document.createElement('button');
   action.type = 'button';
+  action.dataset.ripple = '';
   action.textContent = '一键安装并登录';
   action.disabled = true;
   statusCard.append(statusText, action);
+  const progressCard = document.createElement('div');
+  progressCard.className = 'subscription-gateway-progress';
+  progressCard.setAttribute('aria-live', 'polite');
+  progressCard.hidden = true;
+  const progressTitle = document.createElement('strong');
+  const progressDetail = document.createElement('span');
+  const progressMeter = document.createElement('progress');
+  progressMeter.setAttribute('aria-label', 'ChatGPT 自动接入进度');
+  progressMeter.max = 8;
+  progressCard.append(progressTitle, progressDetail, progressMeter);
+  const modelField = document.createElement('label');
+  modelField.className = 'field subscription-gateway-model';
+  modelField.hidden = true;
+  const modelLabel = document.createElement('span');
+  modelLabel.textContent = '当前模型';
+  const modelSelect = document.createElement('select');
+  const modelHelpText = document.createElement('small');
+  modelHelpText.textContent = '列表来自本机网关实时接口；切换后会自动复测并保存，无需再点接入。';
+  modelField.append(modelLabel, modelSelect, modelHelpText);
+  enhanceSelect(modelSelect);
   const secondaryActions = document.createElement('div');
   secondaryActions.className = 'subscription-gateway-actions';
   const boundary = document.createElement('small');
   boundary.textContent =
-    '点击后只会自动打开 OpenAI 官方授权页供你确认账号。ClaudeDock 校验并安装上游发布包、强制只监听本机、自动生成访问密钥并配置当前项目；不会读取 OAuth Token 内容，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
+    '一次点击会自动检测 Claude Code、补齐缺失组件、打开 OpenAI 官方授权、读取模型列表、真实测试并保存。此方式不需要 CCR；不会读取 OAuth Token 内容，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
 
-  const renderState = (state: ManagedChatGptGatewayState): void => {
-    managedChatGptGatewayState = state;
+  const renderModels = (models: readonly string[], preferredModel?: string): void => {
+    const currentModel = claudeStates.get(workspaceState.activeSessionId)?.config.model;
+    const selected = models.includes(modelSelect.value)
+      ? modelSelect.value
+      : preferredModel && models.includes(preferredModel)
+        ? preferredModel
+        : currentModel && models.includes(currentModel)
+          ? currentModel
+          : models[0];
+    modelSelect.replaceChildren(
+      ...models.map((model) => {
+        const option = document.createElement('option');
+        option.value = model;
+        option.textContent = model;
+        return option;
+      }),
+    );
+    if (selected) {
+      modelSelect.value = selected;
+    }
+    modelField.hidden = models.length === 0;
+  };
+
+  renderManagedChatGptProgress = (progress): void => {
+    if (progress.sessionId !== workspaceState.activeSessionId) {
+      return;
+    }
+    managedChatGptSetupInProgress = progress.active;
+    progressCard.hidden = false;
+    progressTitle.textContent = `第 ${progress.step}/${progress.totalSteps} 步`;
+    progressDetail.textContent = progress.detail;
+    progressMeter.max = progress.totalSteps;
+    progressMeter.value = progress.step;
+    action.disabled = progress.active;
+    action.setAttribute('aria-busy', String(progress.active));
+    modelSelect.disabled = progress.active;
+    if (progress.active) {
+      action.textContent = '正在自动接入…';
+    }
+  };
+
+  const renderState = (state: ManagedChatGptGatewayState, preferredModel?: string): void => {
     const operationBusy = state.busy || managedChatGptSetupInProgress;
     statusCard.dataset.phase = state.phase;
     statusTitle.textContent = operationBusy
-      ? '正在安装并配置托管网关'
+      ? '正在自动检测并接入'
       : state.phase === 'ready'
-        ? 'ChatGPT 托管网关已就绪'
+        ? 'ChatGPT 一键接入已就绪'
         : state.phase === 'stopped'
           ? '授权已完成，等待启用'
           : state.phase === 'login-required'
             ? '安装完成，等待 OpenAI 授权'
             : '尚未安装托管网关';
     statusDetail.textContent = state.message;
+    renderModels(state.availableModels, preferredModel);
     action.disabled = operationBusy;
+    action.setAttribute('aria-busy', String(operationBusy));
+    modelSelect.disabled = operationBusy;
     action.textContent = operationBusy
       ? '安装进行中…'
       : state.phase === 'not-installed'
@@ -2916,7 +2983,7 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
           ? '登录 OpenAI 并自动配置'
           : state.phase === 'stopped'
             ? '启动并用于当前项目'
-            : '用于当前项目';
+            : '检查并自动修复';
     secondaryActions.replaceChildren();
     if (state.authenticated && !operationBusy) {
       const relogin = document.createElement('button');
@@ -2927,9 +2994,7 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
       });
       secondaryActions.append(relogin);
     }
-    if (selectedProviderId === 'chatgpt-subscription') {
-      claudeConfigForm.hidden = !(state.installed && state.authenticated);
-    }
+    claudeConfigForm.hidden = selectedProviderId === 'chatgpt-subscription';
   };
 
   const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
@@ -2944,6 +3009,7 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
     }
     managedChatGptSetupInProgress = true;
     button.disabled = true;
+    modelSelect.disabled = true;
     const original = button.textContent;
     let restoreOriginalLabel = true;
     let resultStateRendered = false;
@@ -2955,7 +3021,7 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
     try {
       const result = await window.controlPanel.setupManagedChatGptGateway(sessionId, forceLogin);
       managedChatGptSetupInProgress = false;
-      renderState(result.state);
+      renderState(result.state, result.projectState?.config.model);
       resultStateRendered = true;
       if (!result.ok) {
         statusCard.dataset.phase = 'error';
@@ -2970,6 +3036,9 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
       }
       if (result.projectState) {
         renderClaudeState(result.projectState);
+      }
+      if (result.connectionTest) {
+        statusDetail.textContent = result.connectionTest.message;
       }
       showToast(result.message);
     } catch {
@@ -2991,11 +3060,58 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
       } else if (selectedProviderId === 'chatgpt-subscription') {
         applyPresetUi('chatgpt-subscription', true);
       }
+      if (guide.isConnected) {
+        modelSelect.disabled = false;
+      }
     }
   };
 
   action.addEventListener('click', () => {
     void runSetup(false, action);
+  });
+  modelSelect.addEventListener('change', () => {
+    const sessionId = workspaceState.activeSessionId;
+    const previousModel = claudeStates.get(sessionId)?.config.model;
+    const requestedModel = modelSelect.value;
+    if (!sessionId || !requestedModel || managedChatGptSetupInProgress) {
+      return;
+    }
+    managedChatGptSetupInProgress = true;
+    modelSelect.disabled = true;
+    void window.controlPanel
+      .setManagedChatGptGatewayModel(sessionId, requestedModel)
+      .then((result) => {
+        renderState(result.state, result.projectState?.config.model);
+        if (!result.ok) {
+          if (previousModel && result.state.availableModels.includes(previousModel)) {
+            modelSelect.value = previousModel;
+          }
+          statusCard.dataset.phase = 'error';
+          statusTitle.textContent = '模型切换未完成';
+          statusDetail.textContent = result.error ?? result.message;
+          showToast(result.error ?? result.message, 'error');
+          return;
+        }
+        if (result.projectState) {
+          renderClaudeState(result.projectState);
+        }
+        statusTitle.textContent = '模型已验证并切换';
+        statusDetail.textContent = result.message;
+        showToast(result.message);
+      })
+      .catch(() => {
+        if (previousModel) {
+          modelSelect.value = previousModel;
+        }
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '模型切换未完成';
+        statusDetail.textContent = '无法验证并切换所选模型。';
+        showToast('无法验证并切换所选模型。', 'error');
+      })
+      .finally(() => {
+        managedChatGptSetupInProgress = false;
+        modelSelect.disabled = false;
+      });
   });
   void window.controlPanel
     .getManagedChatGptGatewayState()
@@ -3010,11 +3126,12 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
       statusDetail.textContent = '请稍后重试。';
       action.disabled = false;
     });
-  guide.append(title, source, statusCard, secondaryActions, boundary);
+  guide.append(title, source, statusCard, progressCard, modelField, secondaryActions, boundary);
   return guide;
 };
 
 const moveProviderTools = (providerId?: ClaudeProviderId): void => {
+  renderManagedChatGptProgress = undefined;
   providerSpecialSetup.replaceChildren();
   connectionAdvancedContent.append(
     connectionAdvice,
@@ -3024,7 +3141,7 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     connectionGlossary,
   );
   if (providerId === 'chatgpt-subscription') {
-    providerSpecialSetup.append(buildChatGptSubscriptionGuide(), gatewayDiscoverySection);
+    providerSpecialSetup.append(buildChatGptSubscriptionGuide());
     return;
   }
   if (providerId === 'curl') {
@@ -3100,7 +3217,7 @@ function renderProviderPicker(): void {
       card.dataset.providerId = provider.id;
       card.classList.toggle('provider-card--selected', provider.id === selectedProviderId);
       card.setAttribute('aria-pressed', String(provider.id === selectedProviderId));
-      card.disabled = !connectionEnvironmentReady || connectionTestInProgress;
+      card.disabled = connectionTestInProgress || connectionRemedyInProgress;
 
       const title = document.createElement('strong');
       title.textContent = provider.label;
@@ -3118,7 +3235,7 @@ function renderProviderPicker(): void {
         card.append(badge);
       }
       card.addEventListener('click', () => {
-        if (!connectionEnvironmentReady) {
+        if (!connectionEnvironmentReady && provider.id !== 'chatgpt-subscription') {
           showToast('请先安装或更新 Claude Code。', 'error');
           return;
         }
@@ -3161,9 +3278,8 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   selectedProviderId = provider.id;
   claudePreset.value = provider.id;
   const isManagedChatGpt = provider.id === 'chatgpt-subscription';
-  claudeConfigForm.hidden =
-    isManagedChatGpt &&
-    !(managedChatGptGatewayState?.installed && managedChatGptGatewayState.authenticated);
+  environmentSetup.hidden = isManagedChatGpt || connectionEnvironmentReady;
+  claudeConfigForm.hidden = isManagedChatGpt;
   const isOfficialLogin = provider.id === 'anthropic';
   const isAdvanced =
     provider.id === 'custom' || provider.id === 'gateway' || provider.id === 'curl';
@@ -3518,7 +3634,6 @@ const loadAdvancedRouterBackends = async (): Promise<void> => {
   }
 
   if (gatewayResult.status === 'fulfilled') {
-    managedChatGptGatewayState = gatewayResult.value;
     settingsChatGptGatewayStatus.textContent = gatewayResult.value.message;
     settingsOpenChatGptGateway.disabled = !gatewayResult.value.managementAvailable;
   } else {
@@ -4796,6 +4911,15 @@ const setRouterOperationStage = (stage: string, detail: string, percent?: number
   }
 };
 
+const unsubscribeManagedChatGptSetupProgress = window.controlPanel.onManagedChatGptSetupProgress(
+  (progress) => {
+    if (progress.sessionId === workspaceState.activeSessionId) {
+      managedChatGptSetupInProgress = progress.active;
+      renderManagedChatGptProgress?.(progress);
+    }
+  },
+);
+
 const unsubscribeRouterOperationProgress = window.controlPanel.onRouterOperationProgress(
   (progress) => {
     lastRouterOperationProgress = progress;
@@ -4821,6 +4945,22 @@ const unsubscribeRouterOperationProgress = window.controlPanel.onRouterOperation
   },
 );
 
+const setRouterWizardModels = (models: readonly string[], preferred?: string): void => {
+  const unique = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
+  const selected = preferred && unique.includes(preferred) ? preferred : unique[0];
+  routerWizardModel.replaceChildren(
+    ...unique.map((model) => {
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = model;
+      return option;
+    }),
+  );
+  if (selected) {
+    routerWizardModel.value = selected;
+  }
+};
+
 const syncRouterWizard = (): void => {
   const provider = findClaudeProvider(routerWizardProvider.value);
   if (!provider) {
@@ -4836,16 +4976,27 @@ const syncRouterWizard = (): void => {
   routerWizardCredentialField.hidden = !needsCredential;
   routerWizardCredential.required = needsCredential && provider.id !== 'ollama';
   routerWizardCredential.placeholder = provider.keyHint ?? '仅在提交时交给主进程安全保存';
-  routerWizardModel.placeholder = provider.model;
+  const previousProvider = routerWizardModel.dataset.providerId;
+  const existingModels = routerManagementState?.providers.find(
+    (item) => item.name === `wizard-${provider.id}`,
+  )?.models;
+  setRouterWizardModels(
+    [
+      ...(existingModels ?? []),
+      provider.model,
+      ...(provider.modelFast ? [provider.modelFast] : []),
+    ],
+    previousProvider === provider.id ? routerWizardModel.value : provider.model,
+  );
+  routerWizardModel.dataset.providerId = provider.id;
   if (capability.mode === 'direct') {
     routerWizardUseRoute.checked = false;
-    routerWizardUseRoute.disabled = true;
   } else if (capability.mode === 'router-required') {
     routerWizardUseRoute.checked = true;
-    routerWizardUseRoute.disabled = true;
   } else {
-    routerWizardUseRoute.disabled = false;
+    routerWizardUseRoute.checked = false;
   }
+  routerWizardUseRoute.disabled = true;
   const routed = routerWizardUseRoute.checked;
   routerWizardDecision.dataset.mode = routed ? 'router' : 'direct';
   routerWizardDecision.textContent = `${routed ? '将使用 CCR 完成协议转换' : '将直接写入 Claude Code CLI 配置'}：${capability.reason}`;
@@ -4904,7 +5055,7 @@ const runRouterWizard = async (): Promise<void> => {
     return;
   }
   const capability = ROUTER_CAPABILITIES[provider.id];
-  const routed = capability.mode === 'router-required' || routerWizardUseRoute.checked;
+  const routed = capability.mode === 'router-required';
   routerOperationInProgress = true;
   setRouterOperationStage('准备', `正在校验 ${provider.label} 接入参数…`, 5);
   await runGuarded(routerWizardSubmit, '正在自动配置…', async () => {
@@ -4925,6 +5076,30 @@ const runRouterWizard = async (): Promise<void> => {
         }
         populateClaudeConfigForm(saved.state);
       } else {
+        const upstreamBaseUrl = provider.editableBaseUrl
+          ? routerWizardBaseUrl.value.trim()
+          : provider.baseUrl;
+        const upstreamCredential =
+          provider.id === 'ollama' ? undefined : routerWizardCredential.value.trim() || undefined;
+        setRouterOperationStage(
+          '发现模型',
+          '正在读取当前接口的实时模型列表；这一步同时验证地址与密钥。',
+          10,
+        );
+        const discovery = await window.controlPanel.discoverClaudeProviderModels({
+          baseUrl: upstreamBaseUrl,
+          credential: upstreamCredential,
+        });
+        if (!discovery.ok || discovery.models.length === 0) {
+          throw new Error(discovery.error ?? discovery.message);
+        }
+        const selectedBeforeDiscovery = routerWizardModel.value;
+        setRouterWizardModels(
+          discovery.models,
+          discovery.models.includes(selectedBeforeDiscovery)
+            ? selectedBeforeDiscovery
+            : discovery.models[0],
+        );
         setRouterOperationStage('检查路由内核', '正在确认 CCR 已安装且管理接口可用…', 15);
         let management = await window.controlPanel.getClaudeRouterManagementState(status.id);
         if (!management.installed) {
@@ -4943,15 +5118,13 @@ const runRouterWizard = async (): Promise<void> => {
           setRouterOperationStage('启动路由内核', '正在启动 CCR 并等待本地管理端点…', 65);
           const started = await window.controlPanel.startClaudeRouter(status.id);
           renderRouterManagement(started.routerState);
-          if (!started.ok || !started.routerState.managementAvailable) {
+          if (!started.routerState.managementAvailable) {
             throw new Error(started.message);
           }
           management = started.routerState;
         }
         setRouterOperationStage('写入路由配置', '正在写入上游、模型与当前项目绑定…', 80);
-        const baseUrl = provider.editableBaseUrl
-          ? routerWizardBaseUrl.value.trim()
-          : provider.baseUrl;
+        const baseUrl = upstreamBaseUrl;
         const existing = management.providers.find((item) => item.name === `wizard-${provider.id}`);
         const saved = await window.controlPanel.saveClaudeRouterProvider(status.id, {
           apiKey:
@@ -4962,7 +5135,7 @@ const runRouterWizard = async (): Promise<void> => {
           credentialAction: 'replace',
           id: existing?.id,
           makePreferred: true,
-          models: [routerWizardModel.value.trim() || provider.model],
+          models: [routerWizardModel.value],
           name: `wizard-${provider.id}`,
           protocol: 'openai_chat_completions',
           useForCurrentProject: true,
@@ -9848,7 +10021,6 @@ routerWizardProvider.addEventListener('change', () => {
   routerWizardModel.value = '';
   syncRouterWizard();
 });
-routerWizardUseRoute.addEventListener('change', syncRouterWizard);
 routerWizardForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void runRouterWizard();
@@ -10788,6 +10960,7 @@ window.addEventListener('beforeunload', () => {
   unsubscribeApplicationUpdaterChanged();
   unsubscribeOpenDownloadCenterRequested();
   unsubscribeApplicationProxyChanged();
+  unsubscribeManagedChatGptSetupProgress();
   unsubscribeRouterOperationProgress();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);

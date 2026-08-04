@@ -154,21 +154,54 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('一键安装并登录');
     expect(rendererSource).toContain('不要求你打开终端或第三方控制台');
     expect(rendererSource).toContain('.setupManagedChatGptGateway(sessionId, forceLogin)');
+    expect(rendererSource).toContain('.setManagedChatGptGatewayModel(sessionId, requestedModel)');
+    expect(rendererSource).toContain('此方式不需要 CCR');
+    expect(rendererMarkup).toContain('选择服务商，一次完成接入');
+    expect(rendererSource).toContain(
+      'environmentSetup.hidden = isManagedChatGpt || connectionEnvironmentReady;',
+    );
+    expect(rendererSource).toContain('renderModels(state.availableModels, preferredModel);');
+    expect(rendererSource).toContain('enhanceSelect(modelSelect);');
+    expect(rendererSource).toContain("progressCard.setAttribute('aria-live', 'polite');");
+    expect(rendererSource).toContain("action.setAttribute('aria-busy', String(progress.active));");
+    expect(rendererSource).toContain('列表来自本机网关实时接口');
+    expect(rendererSource).not.toContain(
+      'providerSpecialSetup.append(buildChatGptSubscriptionGuide(), gatewayDiscoverySection)',
+    );
     expect(rendererSource).toContain('.getManagedChatGptGatewayState()');
     expect(rendererSource).toContain('state.busy || managedChatGptSetupInProgress');
     expect(rendererSource).toContain("? '安装进行中…'");
     expect(rendererSource).toContain("const preset: ClaudePreset = 'gateway'");
     expect(rendererStyles).toContain('.subscription-gateway-guide');
     expect(rendererStyles).toContain('.subscription-gateway-status');
+    expect(rendererStyles).toMatch(
+      /\.subscription-gateway-progress\s*\{[\s\S]*?animation: cardEnter/,
+    );
+    expect(rendererStyles).toContain(
+      '.subscription-gateway-progress progress::-webkit-progress-value',
+    );
     expect(gatewayDiagnosticsSource).toContain('probePort(8317)');
     expect(gatewayDiagnosticsSource).toContain("kind: 'cliproxyapi'");
     expect(gatewayDiagnosticsSource).toContain('http://127.0.0.1:8317/v1/models');
+  });
+
+  it('decides whether CCR is required without asking the user to configure routing', () => {
+    expect(rendererMarkup).toMatch(
+      /class="settings-row router-wizard-route"[\s\S]*?for="router-wizard-use-route"[\s\S]*?hidden/,
+    );
+    expect(rendererSource).toContain("const routed = capability.mode === 'router-required';");
+    expect(rendererSource).toContain('routerWizardUseRoute.disabled = true;');
+    expect(rendererSource).not.toContain(
+      "routerWizardUseRoute.addEventListener('change', syncRouterWizard)",
+    );
   });
 
   it('keeps managed gateway operations behind the isolated main-process bridge', () => {
     for (const channel of [
       'claude:managed-chatgpt-gateway-state',
       'claude:managed-chatgpt-gateway-setup',
+      'claude:managed-chatgpt-gateway-model',
+      'claude:managed-chatgpt-setup-progress',
       'claude:managed-chatgpt-gateway-open-management',
     ]) {
       expect(mainSource).toContain(`'${channel}'`);
@@ -457,7 +490,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /connectionRemedyInProgress = true;[\s\S]*?connectionRemedy\.setAttribute\('aria-busy', 'true'\);[\s\S]*?syncConnectionInteractivity\(\);[\s\S]*?finally \{[\s\S]*?connectionRemedyInProgress = false;/,
     );
-    expect(rendererSource).toContain('providerPicker.inert = !connectionEnvironmentReady || busy;');
+    expect(rendererSource).toContain('providerPicker.inert = busy;');
     expect(rendererSource).toContain(
       'claudeConfigForm.inert = !connectionEnvironmentReady || busy;',
     );

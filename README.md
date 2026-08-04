@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.4.0**，许可证为 **Apache-2.0**。4.4.0 的正式稳定版必须同时通过可信
+当前代码版本为 **4.4.1**，许可证为 **Apache-2.0**。4.4.1 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -31,9 +31,10 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 
 - 多项目终端、托盘后台运行、项目/对话历史与终端主题。
 - Claude Code 官方安装、版本门禁、项目级服务商接入、连接实测和会话状态。
-- 实验性的“ChatGPT 订阅（ClaudeDock 托管）”预设：用户一次点击后，ClaudeDock 从
-  CLIProxyAPI 官方 GitHub Release 下载并校验 Windows x64 版本，在应用私有目录安装、打开
-  OpenAI 官方授权页、启动仅监听回环地址的网关，并自动完成当前项目的模型映射。
+- 实验性的“ChatGPT 订阅（ClaudeDock 托管）”预设：用户一次点击后，ClaudeDock 自动检测并补齐
+  Claude Code，从 CLIProxyAPI 官方 GitHub Release 下载并校验 Windows x64 版本，在应用私有目录
+  安装、打开 OpenAI 官方授权页、启动仅监听回环地址的网关，再从实时模型列表选择、实测并保存当前
+  项目配置。
 - Codex 官方 CLI/App Server 登录状态与项目启动；ChatGPT 登录凭据仍由 Codex 自身管理。
 - 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
@@ -74,17 +75,22 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
 接入：CLIProxyAPI 是独立的 MIT 许可第三方项目，当前条款、套餐限制与模型可用性仍然适用，并可能
 随上游变化失效。
 
-1. 在“接入 → 订阅接入（实验性）”选择“ChatGPT 订阅（ClaudeDock 托管）”，点击“一键安装并登录”。
-2. ClaudeDock 查询 CLIProxyAPI 官方 GitHub Release，只接受预期仓库、版本、Windows x64 ZIP 与
+普通用户只需要在“接入 → 订阅接入（实验性）”选择“ChatGPT 订阅（ClaudeDock 托管）”，再点击一次
+“一键安装并登录”。ClaudeDock 随后自动完成环境检测、缺失组件安装、授权、模型发现、真实测试和项目
+保存；界面用 8 个实时阶段持续反馈，操作结束前主按钮保持锁定。
+
+1. ClaudeDock 查询 CLIProxyAPI 官方 GitHub Release，只接受预期仓库、版本、Windows x64 ZIP 与
    GitHub 提供的 SHA-256 摘要；校验后解压到应用 `userData` 私有目录，生成仅监听
    `127.0.0.1` 的本地配置并隐藏启动进程。下载、校验、授权和配置完成前按钮持续锁定；即使界面
    刷新或重复触发 IPC，主进程也只复用同一个安装任务。用户不需要打开终端、CLIProxyAPI 控制台或
    CC Switch。
-3. 浏览器会打开 OpenAI 官方授权页。这一步需要用户本人确认，ClaudeDock 不读取密码、Cookie 或
+2. 浏览器会打开 OpenAI 官方授权页。这一步需要用户本人确认，ClaudeDock 不读取密码、Cookie 或
    OAuth Token；CLIProxyAPI 将自己的 OAuth 文件保存在 ClaudeDock 为它划定的私有认证目录。
-4. 授权成功后，ClaudeDock 自动启动网关、验证 `/v1/models`、为当前项目保存回环地址与本地访问
-   密钥，并默认映射 `gpt-5.6-sol` / `gpt-5.4-mini`。以后从 ClaudeDock 启动该项目时会按需启动
-   受管网关；切换到不需要它的直连/中转或 Codex CLI 后会自动停止，无需写 `~/.zshrc`、
+3. 授权成功后，ClaudeDock 自动启动网关并读取 `/v1/models`；这个实时结果同时完成地址、密钥和
+   模型目录的联通检查。界面只显示确实可用的模型下拉框，自动推荐其中的聊天模型，再执行最多
+   1 token 的真实请求。只有实测成功才保存项目；切换下拉模型也会自动复测并保存，失败则保留原
+   配置。以后从 ClaudeDock 启动该项目时会按需启动受管网关；切换到不需要它的直连/中转或 Codex
+   CLI 后会自动停止，无需写 `~/.zshrc`、
    `~/.bashrc`、PowerShell 配置或系统级路由。
 
 受管配置中的本地客户端密钥是 Claude Code 与 CLIProxyAPI 之间的随机访问密钥，不是 ChatGPT
@@ -101,8 +107,9 @@ Range 续传。
 
 ### CCR CLI 自动路由与中断恢复
 
-- OpenAI 协议上游需要格式转换时，ClaudeDock 在后台以固定包名安装 CCR CLI、隐藏启动管理服务、
-  写入 Provider/模型并验证网关；普通用户不再选择或操作 CCR 桌面安装器。
+- OpenAI 协议上游需要格式转换时，ClaudeDock 自动决定使用 CCR，在后台以固定包名安装 CCR CLI、
+  隐藏启动管理服务、读取上游实时模型、写入 Provider，然后主动启动并轮询确认 3456 模型接口，
+  最后完成真实连接验证；普通用户不选择路由内核，也不操作 CCR 桌面安装器或管理页。
 - 一键安装按“检查环境 → 下载 → 安装定位 → 校验 → 完成”实时更新按钮上方的状态卡和阶段进度；
   重复点击只等待同一个主进程任务。npm 官方源未完成时会显示原因并自动改用 npmmirror 重试。
 - 安装会把不含 URL、代理、密钥或 Token 的最小阶段日志原子写入

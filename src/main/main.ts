@@ -37,6 +37,7 @@ import type {
   ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginOperationResult,
+  ClaudeProjectState,
   ClaudeRelaunchInput,
   ClaudeRouterOperationResult,
   ClaudeRouterInstallSource,
@@ -64,6 +65,9 @@ import type {
   McpScope,
   McpTogglePreview,
   ManagedChatGptGatewayOperationResult,
+  ManagedChatGptSetupStage,
+  ClaudeProviderModelDiscoveryInput,
+  ClaudeProviderModelDiscoveryResult,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
@@ -120,7 +124,10 @@ import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
 import { CcSwitchAdapter } from './cc-switch-adapter';
-import { ManagedChatGptGateway } from './managed-chatgpt-gateway';
+import {
+  ManagedChatGptGateway,
+  type ManagedChatGptGatewayProjectConfig,
+} from './managed-chatgpt-gateway';
 import { McpManager } from './mcp-manager';
 import { AppPreferencesStore } from './app-preferences-store';
 import {
@@ -1294,6 +1301,81 @@ const routerFailure = async (
   };
 };
 
+const emitManagedChatGptProgress = (
+  sessionId: string,
+  stage: ManagedChatGptSetupStage,
+  step: number,
+  detail: string,
+  active = true,
+): void => {
+  mainWindow?.webContents.send('claude:managed-chatgpt-setup-progress', {
+    active,
+    detail,
+    sessionId,
+    stage,
+    step,
+    totalSteps: 8,
+  });
+};
+
+const managedChatGptConfigInput = (
+  managed: ManagedChatGptGatewayProjectConfig,
+  model = managed.model,
+  modelFast = managed.modelFast,
+): SaveClaudeConfigInput => ({
+  apiKeyHelperPolicy: 'prefer-claudedock',
+  authMode: 'authToken',
+  baseUrl: managed.baseUrl,
+  credential: managed.credential,
+  credentialAction: 'replace',
+  model,
+  modelFast,
+  preset: 'chatgpt-subscription',
+  protocol: 'anthropic',
+  provider: 'gateway',
+});
+
+const verifyAndSaveManagedChatGptProject = async (
+  sessionId: string,
+  cwd: string,
+  managed: ManagedChatGptGatewayProjectConfig,
+  requestedModel?: string,
+): Promise<{ connectionTest: ClaudeConnectionTestResult; projectState?: ClaudeProjectState }> => {
+  const runtime = requireClaudeRuntime();
+  const current = await runtime.getState(sessionId, cwd);
+  const model =
+    requestedModel ??
+    (current.config.preset === 'chatgpt-subscription' &&
+    managed.availableModels.includes(current.config.model)
+      ? current.config.model
+      : managed.model);
+  const modelFast =
+    current.config.preset === 'chatgpt-subscription' &&
+    current.config.modelFast &&
+    managed.availableModels.includes(current.config.modelFast)
+      ? current.config.modelFast
+      : managed.modelFast;
+  const input = managedChatGptConfigInput(managed, model, modelFast);
+  emitManagedChatGptProgress(sessionId, 'testing', 7, `正在真实验证模型 ${model}。`);
+  let connectionTest = await runtime.testConnection(cwd, input);
+  if (
+    !connectionTest.ok &&
+    (connectionTest.failureKind === 'network' || connectionTest.failureKind === 'timeout')
+  ) {
+    emitManagedChatGptProgress(sessionId, 'testing', 7, '连接首次失败，正在自动重启网关并复检。');
+    await requireManagedChatGptGateway().ensureRunning();
+    connectionTest = await runtime.testConnection(cwd, input);
+  }
+  if (!connectionTest.ok) {
+    return { connectionTest };
+  }
+  emitManagedChatGptProgress(sessionId, 'saving', 8, '连接已通过，正在保存当前项目配置。');
+  return {
+    connectionTest,
+    projectState: await runtime.saveConfig(sessionId, cwd, input),
+  };
+};
+
 const validatePluginId = (value: unknown): string => {
   if (!isValidPluginId(value)) {
     throw new Error('插件标识无效。');
@@ -1411,6 +1493,22 @@ const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Pr
 ]);
 
 const routerInstallSources = new Set<ClaudeRouterInstallSource>(['npm', 'npmmirror']);
+
+const validateProviderModelDiscoveryInput = (value: unknown): ClaudeProviderModelDiscoveryInput => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('模型发现参数无效。');
+  }
+  const input = value as Partial<ClaudeProviderModelDiscoveryInput>;
+  if (
+    typeof input.baseUrl !== 'string' ||
+    input.baseUrl.length > 2048 ||
+    (input.credential !== undefined &&
+      (typeof input.credential !== 'string' || input.credential.length > 20_000))
+  ) {
+    throw new Error('模型发现参数包含无效字段。');
+  }
+  return { baseUrl: input.baseUrl, credential: input.credential };
+};
 
 const windowsBuildNumber = (): number => {
   const value = Number(release().split('.')[2]);
@@ -2171,6 +2269,27 @@ const registerIpc = (): void => {
     return requireManagedChatGptGateway().getState();
   });
   ipcMain.handle(
+    'claude:provider-models-discover',
+    async (event, rawInput: unknown): Promise<ClaudeProviderModelDiscoveryResult> => {
+      validateSender(event);
+      try {
+        const input = validateProviderModelDiscoveryInput(rawInput);
+        const models = await requireClaudeRuntime().discoverProviderModels(
+          input.baseUrl,
+          input.credential,
+        );
+        return {
+          message: `已从当前接口读取 ${models.length} 个可用模型。`,
+          models,
+          ok: true,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法读取当前接口的模型列表。';
+        return { error: message, message, models: [], ok: false };
+      }
+    },
+  );
+  ipcMain.handle(
     'claude:managed-chatgpt-gateway-open-management',
     async (event): Promise<OperationResult> => {
       validateSender(event);
@@ -2203,36 +2322,162 @@ const registerIpc = (): void => {
         throw new Error('托管网关登录参数无效。');
       }
       const status = workspace.getStatus(validatedSessionId);
+      let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
-        const managed = await requireManagedChatGptGateway().setup(forceLogin);
-        const projectState = await requireClaudeRuntime().saveConfig(
+        emitManagedChatGptProgress(
+          validatedSessionId,
+          'detecting',
+          1,
+          '正在检测 Claude Code、登录网关与本机端口。',
+        );
+        const runtime = requireClaudeRuntime();
+        let environment = await runtime.getSoftwareUpdates(true);
+        if (!environment.claudeCode.installed) {
+          emitManagedChatGptProgress(
+            validatedSessionId,
+            'installing-claude',
+            2,
+            '未检测到 Claude Code，正在通过官方安装方式补齐。',
+          );
+          environment = (await runtime.installOrUpdateClaudeCode()).state;
+        } else {
+          emitManagedChatGptProgress(
+            validatedSessionId,
+            'installing-claude',
+            2,
+            'Claude Code 已就绪，无需重复安装。',
+          );
+        }
+        if (!environment.claudeCode.installed) {
+          throw new Error('Claude Code 自动安装结束后仍未通过环境检测。');
+        }
+        emitManagedChatGptProgress(
+          validatedSessionId,
+          'installing-gateway',
+          3,
+          'Claude Code 已就绪，正在检查并配置 ChatGPT 本地网关；此方式不需要 CCR。',
+        );
+        const managed = await requireManagedChatGptGateway().setup(forceLogin, (step, detail) => {
+          const stage: ManagedChatGptSetupStage =
+            step === 5 ? 'logging-in' : step >= 6 ? 'discovering-models' : 'installing-gateway';
+          emitManagedChatGptProgress(validatedSessionId, stage, step, detail);
+        });
+        const applied = await verifyAndSaveManagedChatGptProject(
           validatedSessionId,
           status.cwd,
-          {
-            apiKeyHelperPolicy: 'prefer-claudedock',
-            authMode: 'authToken',
-            baseUrl: managed.baseUrl,
-            credential: managed.credential,
-            credentialAction: 'replace',
-            model: 'gpt-5.6-sol',
-            modelFast: 'gpt-5.4-mini',
-            preset: 'chatgpt-subscription',
-            protocol: 'anthropic',
-            provider: 'gateway',
-          },
+          managed,
         );
+        connectionTest = applied.connectionTest;
         const state = await requireManagedChatGptGateway().getState();
+        if (!applied.projectState) {
+          emitManagedChatGptProgress(
+            validatedSessionId,
+            'error',
+            8,
+            `自动接入未通过：${connectionTest.message}`,
+            false,
+          );
+          return {
+            connectionTest,
+            error: connectionTest.message,
+            message: '环境与模型列表已准备好，但真实连接测试未通过。',
+            ok: false,
+            state,
+          };
+        }
+        emitManagedChatGptProgress(
+          validatedSessionId,
+          'complete',
+          8,
+          `接入成功，已自动选择并验证模型 ${applied.projectState.config.model}。`,
+          false,
+        );
         return {
-          message: 'CLIProxyAPI 已安装并授权，当前项目已自动接入 ChatGPT 订阅。',
+          connectionTest,
+          message: `环境、网关和模型已全部自动配置；当前使用 ${applied.projectState.config.model}。`,
           ok: true,
-          projectState,
+          projectState: applied.projectState,
           state,
         };
       } catch (error) {
         const state = await requireManagedChatGptGateway().getState();
+        const message = error instanceof Error ? error.message : '托管网关配置失败。';
+        emitManagedChatGptProgress(validatedSessionId, 'error', 8, message, false);
         return {
-          error: error instanceof Error ? error.message : '托管网关配置失败。',
+          connectionTest,
+          error: message,
           message: '未能完成 ChatGPT 订阅的一键接入。',
+          ok: false,
+          state,
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    'claude:managed-chatgpt-gateway-model',
+    async (
+      event,
+      sessionId: unknown,
+      requestedModel: unknown,
+    ): Promise<ManagedChatGptGatewayOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      if (
+        typeof requestedModel !== 'string' ||
+        !/^[-A-Za-z0-9._:/@[\]]{1,200}$/.test(requestedModel)
+      ) {
+        throw new Error('托管网关模型标识无效。');
+      }
+      const status = workspace.getStatus(validatedSessionId);
+      let connectionTest: ClaudeConnectionTestResult | undefined;
+      try {
+        emitManagedChatGptProgress(
+          validatedSessionId,
+          'discovering-models',
+          6,
+          '正在刷新网关模型列表并校验你的选择。',
+        );
+        const managed = await requireManagedChatGptGateway().configurationForModel(requestedModel);
+        const applied = await verifyAndSaveManagedChatGptProject(
+          validatedSessionId,
+          status.cwd,
+          managed,
+          requestedModel,
+        );
+        connectionTest = applied.connectionTest;
+        const state = await requireManagedChatGptGateway().getState();
+        if (!applied.projectState) {
+          emitManagedChatGptProgress(validatedSessionId, 'error', 8, connectionTest.message, false);
+          return {
+            connectionTest,
+            error: connectionTest.message,
+            message: '所选模型未通过真实连接测试，原配置保持不变。',
+            ok: false,
+            state,
+          };
+        }
+        emitManagedChatGptProgress(
+          validatedSessionId,
+          'complete',
+          8,
+          `模型 ${requestedModel} 已验证并切换完成。`,
+          false,
+        );
+        return {
+          connectionTest,
+          message: `已切换并验证模型 ${requestedModel}。`,
+          ok: true,
+          projectState: applied.projectState,
+          state,
+        };
+      } catch (error) {
+        const state = await requireManagedChatGptGateway().getState();
+        const message = error instanceof Error ? error.message : '无法切换托管网关模型。';
+        emitManagedChatGptProgress(validatedSessionId, 'error', 8, message, false);
+        return {
+          connectionTest,
+          error: message,
+          message: '无法完成模型切换。',
           ok: false,
           state,
         };

@@ -7396,6 +7396,7 @@ body.is-resizing * {
 }
 
 .subscription-gateway-guide {
+  animation: cardEnter var(--dur-3) var(--ease-decel);
   background: var(--surface-inset);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-lg);
@@ -7426,6 +7427,10 @@ body.is-resizing * {
   gap: var(--s-3);
   justify-content: space-between;
   padding: var(--s-3);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
 }
 
 .subscription-gateway-status > div {
@@ -7465,6 +7470,52 @@ body.is-resizing * {
 
 .subscription-gateway-status[data-phase='error'] > div strong {
   color: var(--bad-text);
+}
+
+.subscription-gateway-progress {
+  animation: cardEnter var(--dur-2) var(--ease-decel);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-3);
+}
+
+.subscription-gateway-progress[hidden] {
+  display: none;
+}
+
+.subscription-gateway-progress span {
+  color: var(--text-dim);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-note);
+}
+
+.subscription-gateway-progress progress {
+  appearance: none;
+  accent-color: var(--accent-solid);
+  background: var(--surface-inset);
+  border: 0;
+  border-radius: var(--r-pill);
+  block-size: 6px;
+  inline-size: 100%;
+  overflow: hidden;
+}
+
+.subscription-gateway-progress progress::-webkit-progress-bar {
+  background: var(--surface-inset);
+}
+
+.subscription-gateway-progress progress::-webkit-progress-value {
+  background: var(--accent-solid);
+  border-radius: var(--r-pill);
+  transition: inline-size var(--dur-3) var(--ease-decel);
+}
+
+.subscription-gateway-model {
+  animation: cardEnter var(--dur-2) var(--ease-decel);
+  margin: 0;
 }
 
 .subscription-gateway-status button,

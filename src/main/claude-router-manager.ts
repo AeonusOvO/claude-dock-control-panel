@@ -1127,13 +1127,38 @@ export class ClaudeRouterManager {
     rawInput: SaveClaudeRouterProviderInput,
   ): Promise<SavedRouterProvider> {
     const input = normalizeRouterProviderInput(rawInput);
-    const access = await this.requireActiveService();
+    let access = await this.getActiveServiceAccess();
+    if (!access) {
+      try {
+        await this.startInternal();
+      } catch (error) {
+        // Some CCR builds report “no models” as an error even though their CLI management service
+        // is now healthy. That state is exactly what the first Provider save is meant to repair.
+        access = await this.getActiveServiceAccess();
+        if (!access) {
+          throw error;
+        }
+      }
+      access ??= await this.requireActiveService();
+    }
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
     const updated = buildUpdatedRouterConfig(current, input);
     const saved = await this.saveConfigWithoutProfileTakeover(access, updated.config, [
       input.apiKey ?? '',
     ]);
-    const state = await this.getState();
+    // A fresh CCR service intentionally keeps port 3456 stopped until its first provider exists.
+    // Start it here, after the provider is valid, so the one-click path never sends users to the
+    // management page to perform the missing middle step themselves.
+    await this.rpcWithAccess(access, 'startGateway');
+    let state = await this.getState();
+    const gatewayDeadline = Date.now() + 10_000;
+    while (state.gatewayState !== 'running' && Date.now() < gatewayDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      state = await this.getState();
+    }
+    if (state.gatewayState !== 'running') {
+      throw new Error(`服务提供方已保存，但 CCR 模型接口自动启动失败：${state.message}`);
+    }
     const provider = state.providers.find((item) => item.id === updated.providerId);
     if (!provider) {
       throw new Error('CCR 已保存配置，但没有返回对应服务提供方。');

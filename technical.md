@@ -1,6 +1,9 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.4.0（2026-08-04）。4.4.0 把 CCR 接入收敛为 CLI-only 的全自动生命周期：后台 npm
+当前架构版本：4.4.1（2026-08-04）。4.4.1 把受管 ChatGPT 接入收敛为一次后台事务：自动补齐
+Claude Code、启动网关、读取实时模型目录、执行真实模型请求并仅在成功后保存；renderer 使用主进程
+8 阶段事件持续反馈，并以实时模型选择框取代手填标识。首次 CCR Provider 保存也会自动启动并确认
+3456，而不再要求用户打开管理页。4.4.0 把 CCR 接入收敛为 CLI-only 的全自动生命周期：后台 npm
 安装、真实阶段事件、原子中断日志与启动续装、Provider/模型自动写入、按活动会话自动启停，以及只在
 服务运行时开放的高级后台入口。npm 子进程继承显式 CLI HTTP 代理，官方源失败会可见地回退镜像；
 桌面 CCR 只检测、不接管、不终止、不卸载，配置继续固定 `applyProfile: false`。CLIProxyAPI 另加入
@@ -559,7 +562,8 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `ClaudeConfigStore` 加密。CLIProxyAPI 运行时必须读取的 `config.yaml` 含本机明文副本，因此该文件
   用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。只有高级入口被点击时主进程才把管理密钥写入
   剪贴板并打开 `/management.html`，密钥不返回 renderer。
-- “一键安装并登录”IPC 只返回净化后的状态。主进程以隐藏窗口运行
+- “一键安装并登录”IPC 只返回净化后的状态。操作先检查 Claude Code；缺失时调用项目已有的官方
+  安装路径补齐，再以隐藏窗口运行
   `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；
   ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
   是否出现凭据文件和上游成功标记。授权前在 `1455–1465` 中自动选择空闲回调端口并通过上游官方
@@ -567,9 +571,13 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `setupInFlight` 是整个安装、校验、授权、启动周期的单例 Promise；重复 IPC 直接等待同一 Promise，
   不会再次获取 BusyRegistry 租约或启动第二个下载。公开状态在此期间返回 `busy: true` 与
   `phase: installing`；renderer 另用本地同步锁覆盖 IPC 往返窗口，任何指南重建都保持主按钮禁用。
-- 授权后主进程隐藏启动 sidecar，持久化其 PID，并携带随机本地密钥探测 `GET /v1/models`。安装、登录、启动、
-  项目配置保存和模型默认值写入在同一操作完成；renderer 不暴露地址、认证和凭据输入，只保留模型
-  映射与连接测试。`ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用
+- 授权后主进程隐藏启动 sidecar，持久化其 PID，并携带随机本地密钥探测 `GET /v1/models`。
+  `provider-model-discovery.ts` 从根地址、`/v1`、Chat Completions 或 Responses 地址推导模型端点，
+  拒绝跨站重定向，把响应限制为 1 MiB / 500 个安全模型标识。实时目录同时验证端点、Bearer 密钥和
+  账号可见模型；主进程据此推荐聊天/快速模型，再执行最多 1 token 的真实请求。网络或超时失败会
+  自动重启 sidecar 并复检一次，仍失败则不改原项目配置。renderer 只显示实时模型选择框；切换模型
+  会重新获取目录、实测并事务性保存，不暴露地址、认证或凭据输入。
+  `ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用
   完全退出或活动 CLI 路由不再需要它时终止 sidecar；进程重启后若 PID 仍在，先用 WMI/CIM 核对
   `ExecutablePath` 与私有版本目录完全一致才终止，拒绝按名称批量杀进程。不会修改 shell profile、
   Claude Code 用户设置、Codex 凭据或 Windows 系统级代理/API 路由。
@@ -621,7 +629,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
 - `chatgpt-subscription` 预设仍属于 `gateway`，但它的地址、认证方式和客户端密钥只由
   `ManagedChatGptGateway` 生成：`ANTHROPIC_BASE_URL` 指向实际分配的 `127.0.0.1:8317–8327`，
-  主/快速模型默认映射为 `gpt-5.6-sol` / `gpt-5.4-mini`，随机 `api-keys` 值以
+  主/快速模型从实时 `/v1/models` 目录中选择，优先匹配可用的 GPT 聊天与 mini/nano 类模型；随机
+  `api-keys` 值以
   `ANTHROPIC_AUTH_TOKEN`/Bearer 注入当前项目子进程，而不是被误当成 ChatGPT OAuth Token。
   `normalizeClaudeConfig` 继续把该预设限定在 `localhost/127.0.0.1/::1`，避免把 OAuth 转换路径
   扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由上游网关与账号决定。
@@ -820,8 +829,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   不含 URL、代理、凭据或模型。成功校验 CLI 后删除；断电/崩溃后窗口创建完成即调用
   `recoverInterruptedInstall()`，幂等重跑 npm 安装并再次校验。恢复失败保留 journal，不删除缓存、
   Provider 或共享数据，也不给小白用户展示技术清理选择。
-- OpenAI 上游保存时若 CLI 未安装会先自动安装，再启动后台、以 `applyProfile: false` 保存 Provider/
-  模型并启动网关。`RuntimeSession.routeKind` 记录真实活动路径；最后一个 `ccr` 会话结束、切到不需要
+- OpenAI 上游保存时若 CLI 未安装会先自动安装；向导先通过上游 `/v1/models` 获取可选模型，随后
+  启动管理后台、以 `applyProfile: false` 保存 Provider，再显式调用 `startGateway` 并轮询确认 3456
+  已运行。管理页 3458 可用但首个 Provider 尚未写入不再被视为失败，也不会提示用户去后台手动启动。
+  最终项目配置只有在真实请求通过后才保存。`RuntimeSession.routeKind` 记录真实活动路径；最后一个
+  `ccr` 会话结束、切到不需要
   路由的直连/中转或切换项目到 Codex CLI 后自动停止 CCR，仍有其他活动 CCR 会话时保持运行。
 - 卸载只针对检测到的 npm CLI：先用固定包名执行全局卸载，再针对原安装 prefix 重试，最后只清理
   已验证的包目录与同目录 shim。若同时存在桌面版，完整保留共享 CCR 数据；只有机器没有桌面版时才
@@ -832,8 +844,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 ### 3.0 路由决策与 CC Switch 边界
 
 - `src/shared/router-capabilities.ts` 为供应商目录的每个 ID 明确记录 `direct-anthropic`、
-  `router-optional` 或 `router-required`、认证方式、默认模型和 `verifiedAt`。一键接入向导先展示
-  决策，再按能力选择直连或 CCR；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
+  `router-optional` 或 `router-required`、认证方式、默认模型和 `verifiedAt`。自动接入向导按能力直接
+  选择直连或 CCR，不把路由开关交给普通用户；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
   官方 Claude Code 集成指南使用 Anthropic 兼容 `authToken`、`https://api.deepseek.com/anthropic`
   与当前模型标识，供应商原始“模型不存在”等错误不再被静默快速模型降级覆盖。
 - `chatgpt-subscription` 的能力值为 `direct` 只表示 ClaudeDock 不再叠加 CCR；真正的协议转换仍由

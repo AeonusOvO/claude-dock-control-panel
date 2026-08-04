@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import type { ManagedChatGptGatewayState } from '../shared/contracts';
 import type { BusyRegistry } from './busy-registry';
 import type { DownloadEngine } from './download-engine';
+import { discoverOpenAiModels } from './provider-model-discovery';
 import { runProcess } from './windows-command';
 
 const RELEASE_API = 'https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest';
@@ -69,9 +70,14 @@ export interface CliProxyApiRelease {
 }
 
 export interface ManagedChatGptGatewayProjectConfig {
+  availableModels: string[];
   baseUrl: string;
   credential: string;
+  model: string;
+  modelFast: string;
 }
+
+export type ManagedChatGptSetupReporter = (step: number, detail: string) => void;
 
 export interface ManagedChatGptGatewayManagementAccess {
   managementKey: string;
@@ -83,6 +89,25 @@ const delay = (milliseconds: number): Promise<void> =>
 
 const sha256File = (filePath: string): string =>
   createHash('sha256').update(readFileSync(filePath)).digest('hex');
+
+const nonChatModel = /(?:audio|embedding|image|moderation|realtime|speech|transcri|tts|whisper)/i;
+
+export const recommendedChatModel = (models: readonly string[]): string => {
+  if (models.length === 0) {
+    throw new Error('网关没有返回可用模型。');
+  }
+  const preferred = ['gpt-5.6-sol', 'gpt-5.6', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'];
+  return (
+    preferred.find((candidate) => models.includes(candidate)) ??
+    models.find((candidate) => !nonChatModel.test(candidate) && !/mini|nano/i.test(candidate)) ??
+    models.find((candidate) => !nonChatModel.test(candidate)) ??
+    models[0]!
+  );
+};
+
+const recommendedFastModel = (models: readonly string[], fallback: string): string =>
+  models.find((candidate) => !nonChatModel.test(candidate) && /mini|nano|flash/i.test(candidate)) ??
+  fallback;
 
 const cleanEnvironment = (): NodeJS.ProcessEnv => {
   const environment = { ...process.env };
@@ -271,9 +296,11 @@ export class ManagedChatGptGateway {
     const authenticated = this.hasAuthentication();
     const clientKey = persisted ? this.decryptClientKey(persisted) : undefined;
     const managementKey = persisted ? this.decryptManagementKey(persisted) : undefined;
-    const running = Boolean(
-      !busy && persisted && clientKey && (await this.probe(persisted.port, clientKey)),
-    );
+    const availableModels =
+      !busy && persisted && clientKey
+        ? await this.availableModels(persisted, clientKey).catch(() => [])
+        : [];
+    const running = availableModels.length > 0;
     const endpoint = `http://127.0.0.1:${persisted?.port ?? DEFAULT_PORT}`;
     const phase = busy
       ? 'installing'
@@ -295,6 +322,7 @@ export class ManagedChatGptGateway {
               ? `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已在本机安全运行。`
               : `CLIProxyAPI ${persisted?.installedVersion ?? ''} 已授权，启动 Claude Code 时会自动运行。`;
     return {
+      availableModels,
       authenticated,
       busy,
       checkedAt: Date.now(),
@@ -308,11 +336,14 @@ export class ManagedChatGptGateway {
     };
   }
 
-  public async setup(forceLogin = false): Promise<ManagedChatGptGatewayProjectConfig> {
+  public async setup(
+    forceLogin = false,
+    report?: ManagedChatGptSetupReporter,
+  ): Promise<ManagedChatGptGatewayProjectConfig> {
     if (this.setupInFlight) {
       return this.setupInFlight;
     }
-    const operation = this.setupInternal(forceLogin);
+    const operation = this.setupInternal(forceLogin, report);
     this.setupInFlight = operation;
     try {
       return await operation;
@@ -323,7 +354,10 @@ export class ManagedChatGptGateway {
     }
   }
 
-  private async setupInternal(forceLogin: boolean): Promise<ManagedChatGptGatewayProjectConfig> {
+  private async setupInternal(
+    forceLogin: boolean,
+    report?: ManagedChatGptSetupReporter,
+  ): Promise<ManagedChatGptGatewayProjectConfig> {
     const releaseBusy = this.busyRegistry.acquire({
       cancellable: false,
       id: 'managed-gateway:chatgpt-setup',
@@ -332,23 +366,30 @@ export class ManagedChatGptGateway {
       severity: 'blocking',
     });
     try {
-      let persisted = await this.installLatest();
+      report?.(3, '正在检查 CLIProxyAPI 的受信任上游版本。');
+      let persisted = await this.installLatest(report);
+      report?.(4, '正在生成仅限本机的网关配置与独立访问密钥。');
       persisted = await this.ensureConfiguration(persisted);
       if (forceLogin || !this.hasAuthentication()) {
+        report?.(5, '正在等待你在 OpenAI 官方页面完成授权。');
         await this.login(persisted);
       }
+      report?.(6, '授权已确认，正在启动本机模型接口并读取可用模型。');
       await this.start(persisted);
-      const credential = this.decryptClientKey(persisted);
-      if (!credential) {
-        throw new Error('托管网关本地访问密钥无法解密，请重新执行一键配置。');
-      }
-      return {
-        baseUrl: `http://127.0.0.1:${persisted.port}`,
-        credential,
-      };
+      return this.projectConfiguration(persisted);
     } finally {
       releaseBusy();
     }
+  }
+
+  public async configurationForModel(model?: string): Promise<ManagedChatGptGatewayProjectConfig> {
+    const persisted = this.loadState();
+    if (!persisted || !this.executableIsValid(persisted) || !this.hasAuthentication()) {
+      throw new Error('ChatGPT 托管网关尚未完成一键安装与 OpenAI 授权。');
+    }
+    const configured = await this.ensureConfiguration(persisted);
+    await this.start(configured);
+    return this.projectConfiguration(configured, model);
   }
 
   public async ensureRunning(): Promise<void> {
@@ -411,7 +452,9 @@ export class ManagedChatGptGateway {
     return parseCliProxyApiRelease(JSON.parse(body.toString('utf8')) as unknown);
   }
 
-  private async installLatest(): Promise<PersistedGatewayState | undefined> {
+  private async installLatest(
+    report?: ManagedChatGptSetupReporter,
+  ): Promise<PersistedGatewayState | undefined> {
     const current = this.loadState();
     let release: CliProxyApiRelease;
     try {
@@ -423,8 +466,10 @@ export class ManagedChatGptGateway {
       throw error;
     }
     if (current?.installedVersion === release.version && this.executableIsValid(current)) {
+      report?.(3, `CLIProxyAPI ${release.version} 已安装，正在复用现有文件。`);
       return current;
     }
+    report?.(3, `正在下载并校验 CLIProxyAPI ${release.version}。`);
     mkdirSync(this.downloadsDirectory, { recursive: true });
     mkdirSync(this.versionsDirectory, { recursive: true });
     const archivePath = path.join(this.downloadsDirectory, release.fileName);
@@ -455,6 +500,7 @@ export class ManagedChatGptGateway {
       version: 1,
     };
     this.persistState(next);
+    report?.(4, `CLIProxyAPI ${release.version} 已校验并安装完成。`);
     return next;
   }
 
@@ -628,16 +674,42 @@ export class ManagedChatGptGateway {
   }
 
   private async probe(port: number, credential: string): Promise<boolean> {
-    try {
-      const response = await this.fetchImplementation(`http://127.0.0.1:${port}/v1/models`, {
-        headers: { Authorization: `Bearer ${credential}` },
-        redirect: 'error',
-        signal: AbortSignal.timeout(1_500),
-      });
-      return response.ok;
-    } catch {
-      return false;
+    return (await this.availableModels({ port }, credential).catch(() => [])).length > 0;
+  }
+
+  private availableModels(
+    state: Pick<PersistedGatewayState, 'port'>,
+    credential: string,
+    timeoutMs = 1_500,
+  ): Promise<string[]> {
+    return discoverOpenAiModels(
+      `http://127.0.0.1:${state.port}`,
+      credential,
+      this.fetchImplementation,
+      timeoutMs,
+    );
+  }
+
+  private async projectConfiguration(
+    state: PersistedGatewayState,
+    requestedModel?: string,
+  ): Promise<ManagedChatGptGatewayProjectConfig> {
+    const credential = this.decryptClientKey(state);
+    if (!credential) {
+      throw new Error('托管网关本地访问密钥无法解密，请重新执行一键配置。');
     }
+    const availableModels = await this.availableModels(state, credential, 15_000);
+    if (requestedModel && !availableModels.includes(requestedModel)) {
+      throw new Error('所选模型已不在网关实时模型列表中，请重新选择。');
+    }
+    const model = requestedModel ?? recommendedChatModel(availableModels);
+    return {
+      availableModels,
+      baseUrl: `http://127.0.0.1:${state.port}`,
+      credential,
+      model,
+      modelFast: recommendedFastModel(availableModels, model),
+    };
   }
 
   private hasAuthentication(): boolean {

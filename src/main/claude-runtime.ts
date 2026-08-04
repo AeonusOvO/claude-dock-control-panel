@@ -85,6 +85,7 @@ import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import { ConversationPreferencesStore, isConversationId } from './conversation-preferences-store';
 import { ClaudeRouterManager, type SavedRouterProvider } from './claude-router-manager';
+import { discoverOpenAiModels } from './provider-model-discovery';
 import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-updates';
 
 interface RuntimeSession {
@@ -864,6 +865,10 @@ export class ClaudeRuntime {
     this.installationCache.clear();
     this.softwareUpdatesCache.clear();
     return { message, state: await this.getSoftwareUpdates(true) };
+  }
+
+  public discoverProviderModels(baseUrl: string, credential?: string): Promise<string[]> {
+    return discoverOpenAiModels(baseUrl, credential, this.fetchImplementation);
   }
 
   public async startRouter(): Promise<ClaudeRouterManagementState> {

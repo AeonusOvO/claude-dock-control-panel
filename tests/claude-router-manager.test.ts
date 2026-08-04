@@ -29,6 +29,11 @@ const providerInput: SaveClaudeRouterProviderInput = {
   useForCurrentProject: true,
 };
 
+const routerManagerSource = readFileSync(
+  new URL('../src/main/claude-router-manager.ts', import.meta.url),
+  'utf8',
+);
+
 const baseConfig = {
   APIKEY: 'sk-ccr-local-example',
   APIKEYS: [
@@ -244,6 +249,14 @@ describe('Claude Code Router management', () => {
     expect(message).toContain('还没有配置服务提供方和模型');
     expect(message).toContain('解决办法');
     expect(message).not.toContain('No available models');
+  });
+
+  it('starts both the CLI management service and port 3456 as part of saving the first provider', () => {
+    expect(routerManagerSource).toMatch(
+      /let access = await this\.getActiveServiceAccess\(\);[\s\S]*?await this\.startInternal\(\);[\s\S]*?saveConfigWithoutProfileTakeover[\s\S]*?rpcWithAccess\(access, 'startGateway'\)/,
+    );
+    expect(routerManagerSource).toContain("state.gatewayState !== 'running'");
+    expect(routerManagerSource).toContain('CCR 模型接口自动启动失败');
   });
 
   it('launches the CCR CLI with its compatible system Node instead of Electron', () => {

@@ -8,6 +8,7 @@ import {
   buildManagedGatewayConfig,
   ManagedChatGptGateway,
   parseCliProxyApiRelease,
+  recommendedChatModel,
 } from '../src/main/managed-chatgpt-gateway';
 import type { DownloadEngine } from '../src/main/download-engine';
 
@@ -26,6 +27,14 @@ const releasePayload = (overrides: Record<string, unknown> = {}): Record<string,
 });
 
 describe('managed ChatGPT gateway', () => {
+  it('selects a usable chat model from the live catalog instead of assuming a fixed identifier', () => {
+    expect(recommendedChatModel(['text-embedding-3-large', 'gpt-5.4-mini', 'gpt-5.6-sol'])).toBe(
+      'gpt-5.6-sol',
+    );
+    expect(recommendedChatModel(['audio-preview', 'team-coder', 'team-mini'])).toBe('team-coder');
+    expect(() => recommendedChatModel([])).toThrow('没有返回可用模型');
+  });
+
   it('accepts only the matching upstream Windows x64 release asset', () => {
     expect(parseCliProxyApiRelease(releasePayload())).toEqual({
       digest: 'a'.repeat(64),

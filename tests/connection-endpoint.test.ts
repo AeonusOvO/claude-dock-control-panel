@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   completeConnectionEndpoint,
   normalizeConnectionBaseUrl,
+  openAiModelsEndpoint,
   routerProtocolForOpenAiEndpoint,
 } from '../src/shared/connection-endpoint';
 
@@ -45,6 +46,15 @@ describe('connection endpoint completion', () => {
     expect(routerProtocolForOpenAiEndpoint('https://api.example.com/v1/chat/completions')).toBe(
       'openai_chat_completions',
     );
+  });
+
+  it.each([
+    ['api.example.com', 'https://api.example.com/v1/models'],
+    ['api.example.com/v1', 'https://api.example.com/v1/models'],
+    ['api.example.com/openai/v1/chat/completions', 'https://api.example.com/openai/v1/models'],
+    ['http://127.0.0.1:8317/v1/models', 'http://127.0.0.1:8317/v1/models'],
+  ])('derives the model catalog for %s', (input, expected) => {
+    expect(openAiModelsEndpoint(input)).toBe(expected);
   });
 
   it.each([

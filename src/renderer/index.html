@@ -264,8 +264,8 @@
 
         <section class="rail-page" data-rail-page="connection">
           <div class="connection-heading">
-            <strong>选择服务商，三步完成接入</strong>
-            <span>ClaudeDock 会填好官方兼容参数；高级方式和旧工具仍可随时展开。</span>
+            <strong>选择服务商，一次完成接入</strong>
+            <span>ClaudeDock 会自动检测环境、补齐组件、发现模型、验证连接并保存。</span>
           </div>
 
           <section class="connection-advice" id="connection-advice" data-tone="info">
@@ -2063,15 +2063,15 @@
                     />
                   </label>
                   <label class="field" for="router-wizard-model">
-                    <span>模型（可选覆盖）</span>
-                    <input
-                      id="router-wizard-model"
-                      type="text"
-                      maxlength="160"
-                      spellcheck="false"
-                    />
+                    <span>模型</span>
+                    <select id="router-wizard-model"></select>
+                    <small>自动读取当前接口的可用模型；首次接入会选择并验证推荐项。</small>
                   </label>
-                  <label class="settings-row router-wizard-route" for="router-wizard-use-route">
+                  <label
+                    class="settings-row router-wizard-route"
+                    for="router-wizard-use-route"
+                    hidden
+                  >
                     <span>
                       <strong>使用 CCR 路由增强</strong>
                       <small>仅在供应商支持可选路由时开放；必须路由的协议会自动开启。</small>

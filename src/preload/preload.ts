@@ -19,6 +19,8 @@ import type {
   ClaudeRouterOperationResult,
   ManagedChatGptGatewayOperationResult,
   ManagedChatGptGatewayState,
+  ManagedChatGptSetupProgress,
+  ClaudeProviderModelDiscoveryResult,
   RouterKernelOperationResult,
   RouterKernelState,
   RouterOperationProgress,
@@ -309,6 +311,18 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke(
       'claude:managed-chatgpt-gateway-open-management',
     ) as Promise<OperationResult>,
+  onManagedChatGptSetupProgress: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      progress: ManagedChatGptSetupProgress,
+    ): void => {
+      listener(progress);
+    };
+    ipcRenderer.on('claude:managed-chatgpt-setup-progress', callback);
+    return () => {
+      ipcRenderer.removeListener('claude:managed-chatgpt-setup-progress', callback);
+    };
+  },
   onRouterOperationProgress: (listener) => {
     const callback = (
       _event: Electron.IpcRendererEvent,
@@ -327,6 +341,17 @@ const api: ControlPanelApi = {
       sessionId,
       forceLogin ?? false,
     ) as Promise<ManagedChatGptGatewayOperationResult>,
+  setManagedChatGptGatewayModel: (sessionId, model) =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-model',
+      sessionId,
+      model,
+    ) as Promise<ManagedChatGptGatewayOperationResult>,
+  discoverClaudeProviderModels: (input) =>
+    ipcRenderer.invoke(
+      'claude:provider-models-discover',
+      input,
+    ) as Promise<ClaudeProviderModelDiscoveryResult>,
   installCcSwitch: (sessionId) =>
     ipcRenderer.invoke(
       'router:cc-switch-install',

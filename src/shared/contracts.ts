@@ -728,6 +728,7 @@ export type ManagedChatGptGatewayPhase =
  * access key never cross the main/renderer boundary.
  */
 export interface ManagedChatGptGatewayState {
+  availableModels: string[];
   authenticated: boolean;
   busy: boolean;
   checkedAt: number;
@@ -741,11 +742,44 @@ export interface ManagedChatGptGatewayState {
 }
 
 export interface ManagedChatGptGatewayOperationResult {
+  connectionTest?: ClaudeConnectionTestResult;
   error?: string;
   message: string;
   ok: boolean;
   projectState?: ClaudeProjectState;
   state: ManagedChatGptGatewayState;
+}
+
+export type ManagedChatGptSetupStage =
+  | 'complete'
+  | 'detecting'
+  | 'discovering-models'
+  | 'error'
+  | 'installing-claude'
+  | 'installing-gateway'
+  | 'logging-in'
+  | 'saving'
+  | 'testing';
+
+export interface ManagedChatGptSetupProgress {
+  active: boolean;
+  detail: string;
+  sessionId: string;
+  stage: ManagedChatGptSetupStage;
+  step: number;
+  totalSteps: number;
+}
+
+export interface ClaudeProviderModelDiscoveryInput {
+  baseUrl: string;
+  credential?: string;
+}
+
+export interface ClaudeProviderModelDiscoveryResult {
+  error?: string;
+  message: string;
+  models: string[];
+  ok: boolean;
 }
 
 export interface ClaudeRouterProviderView {
@@ -1252,7 +1286,17 @@ export interface ControlPanelApi {
   getRouterKernelState: (sessionId: string) => Promise<RouterKernelState>;
   getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
   openManagedChatGptGatewayManagement: () => Promise<OperationResult>;
+  onManagedChatGptSetupProgress: (
+    listener: (progress: ManagedChatGptSetupProgress) => void,
+  ) => Unsubscribe;
   onRouterOperationProgress: (listener: (progress: RouterOperationProgress) => void) => Unsubscribe;
+  discoverClaudeProviderModels: (
+    input: ClaudeProviderModelDiscoveryInput,
+  ) => Promise<ClaudeProviderModelDiscoveryResult>;
+  setManagedChatGptGatewayModel: (
+    sessionId: string,
+    model: string,
+  ) => Promise<ManagedChatGptGatewayOperationResult>;
   setupManagedChatGptGateway: (
     sessionId: string,
     forceLogin?: boolean,
