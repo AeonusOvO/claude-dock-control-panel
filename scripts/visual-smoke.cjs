@@ -431,17 +431,48 @@ app
     document.querySelector('#environment-setup').hidden = true;
     document.querySelector('#connection-provider-picker').setAttribute('aria-disabled', 'false');
     document.querySelector('#connection-provider-setup').hidden = false;
-    document.querySelector('#connection-provider-title').textContent = 'DeepSeek';
+    document.querySelector('#connection-provider-title').textContent = 'ChatGPT 订阅（本地网关）';
     document.querySelector('#connection-provider-description').textContent =
-      'DeepSeek 官方 Anthropic 兼容接口，适合国内网络环境。';
-    document.querySelector('#connection-provider-caveat').hidden = true;
+      '使用 ChatGPT 的 Codex 订阅授权，经用户自行运行的本地兼容网关转换为 Anthropic Messages。';
+    document.querySelector('#connection-provider-caveat').hidden = false;
+    document.querySelector('#connection-provider-caveat').textContent =
+      'OpenAI Codex 负责人曾公开介绍这种实践；CLIProxyAPI 仍是第三方本地网关，不是官方产品接入。';
     document.querySelector('#claude-config-form').hidden = false;
+    document.querySelector('#claude-base-url').value = 'http://127.0.0.1:8317';
+    document.querySelector('#claude-model').value = 'gpt-5.6-sol';
+    document.querySelector('#claude-model-fast').value = 'gpt-5.4-mini';
+    document.querySelector('#credential-label').textContent =
+      '本地网关访问密钥（不是 ChatGPT 凭据）';
+    document.querySelector('#protocol-help').textContent =
+      'Claude Code 访问本机 Anthropic Messages 入口；本地网关再完成 Codex OAuth 请求与协议转换。';
+    const specialSetup = document.querySelector('#connection-provider-special');
+    const subscriptionGuide = document.createElement('section');
+    subscriptionGuide.className = 'subscription-gateway-guide';
+    const subscriptionTitle = document.createElement('strong');
+    subscriptionTitle.textContent = '先在 ClaudeDock 外完成本地网关授权';
+    const subscriptionSteps = document.createElement('ol');
+    for (const copy of [
+      '安装并启动 CLIProxyAPI，在外部工具中完成 ChatGPT / Codex 登录。',
+      '1455 是 OAuth 回调端口，不是 Claude Code 的模型接口。',
+      '确认 127.0.0.1:8317 与 config.yaml 的本地 api-keys 客户端密钥。',
+    ]) {
+      const item = document.createElement('li');
+      item.textContent = copy;
+      subscriptionSteps.append(item);
+    }
+    const subscriptionBoundary = document.createElement('small');
+    subscriptionBoundary.textContent =
+      'ClaudeDock 采用项目级 claudex 环境注入，不改 shell 配置，也不读取 OAuth 登录文件。';
+    subscriptionGuide.append(subscriptionTitle, subscriptionSteps, subscriptionBoundary);
+    specialSetup.replaceChildren(subscriptionGuide);
     const groups = document.querySelector('#connection-provider-groups');
     groups.replaceChildren();
     for (const fixture of [
       ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], true],
-      ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], false],
+      ['订阅转换（实验性）', ['ChatGPT 订阅（本地网关）'], false],
+      ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], true],
       ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], true],
+      ['本地服务', ['Ollama 本地模型'], true],
       ['高级方式', ['从 cURL 识别', '本机转换器 / 模型网关', '自定义接口'], true],
     ]) {
       const section = document.createElement('section');
@@ -468,13 +499,21 @@ app
       for (const label of fixture[1]) {
         const card = document.createElement('button');
         card.className = 'provider-card';
-        card.classList.toggle('provider-card--selected', label === 'DeepSeek');
+        card.classList.toggle('provider-card--selected', label === 'ChatGPT 订阅（本地网关）');
         card.type = 'button';
         const title = document.createElement('strong');
         title.textContent = label;
         const detail = document.createElement('span');
-        detail.textContent = '由服务商目录自动填入兼容端点、认证方式与推荐模型。';
+        detail.textContent =
+          label === 'ChatGPT 订阅（本地网关）'
+            ? '使用 ChatGPT 的 Codex 订阅授权，经本地网关转换协议。'
+            : '由服务商目录自动填入兼容端点、认证方式与推荐模型。';
         card.append(title, detail);
+        if (label === 'ChatGPT 订阅（本地网关）') {
+          const badge = document.createElement('small');
+          badge.textContent = '本地转换 · 非官方直连';
+          card.append(badge);
+        }
         grid.append(card);
       }
       content.append(grid);
@@ -532,6 +571,15 @@ app
     await new Promise((resolve) => setTimeout(resolve, 80));
     writeFileSync(
       path.join(outputDirectory, 'connection-1180.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+
+    await window.webContents.executeJavaScript(`
+    document.querySelector('#connection-provider-special').scrollIntoView({ block: 'start' });
+  `);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    writeFileSync(
+      path.join(outputDirectory, 'connection-subscription-setup-1180.png'),
       (await captureSettledPage()).toPNG(),
     );
 

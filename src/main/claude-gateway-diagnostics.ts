@@ -19,6 +19,7 @@ const INSTALLATION_CACHE_MS = 30_000;
 interface InstallationFlags {
   ccr: boolean;
   ccrConfig: boolean;
+  cliProxyApi: boolean;
   litellm: boolean;
 }
 
@@ -154,9 +155,10 @@ export class ClaudeGatewayDetector {
       return this.cachedDiagnostics.value;
     }
 
-    const [ccrApiOpen, ccrUiOpen, liteLlmOpen, installations] = await Promise.all([
+    const [ccrApiOpen, ccrUiOpen, cliProxyApiOpen, liteLlmOpen, installations] = await Promise.all([
       probePort(3456),
       probePort(3458),
+      probePort(8317),
       probePort(4000),
       this.getInstallationFlags(),
     ]);
@@ -212,11 +214,37 @@ export class ClaudeGatewayDetector {
       });
     }
 
+    if (cliProxyApiOpen || installations.cliProxyApi) {
+      const modelStatus = cliProxyApiOpen
+        ? await probeHttpStatus('http://127.0.0.1:8317/v1/models')
+        : undefined;
+      const endpointRecognized = modelStatus === 200 || modelStatus === 401 || modelStatus === 403;
+      candidates.push({
+        apiBaseUrl: 'http://127.0.0.1:8317',
+        authRequired: authRequiredFromStatus(modelStatus),
+        detail: !cliProxyApiOpen
+          ? '已找到 CLIProxyAPI 命令，但默认模型端口 8317 当前没有运行。'
+          : endpointRecognized
+            ? authRequiredFromStatus(modelStatus)
+              ? '本地兼容接口已运行，并要求 config.yaml 中 api-keys 的客户端访问密钥。'
+              : '本地兼容接口已运行；仍需用真实 Anthropic Messages 请求确认 Codex OAuth 与模型映射。'
+            : '8317 端口已监听，但未识别为可用模型接口；请检查 CLIProxyAPI 配置。',
+        detectedBy: [
+          ...(cliProxyApiOpen ? ['8317 模型接口正在监听'] : []),
+          ...(installations.cliProxyApi ? ['已找到 CLIProxyAPI 命令'] : []),
+        ],
+        id: 'cliproxyapi',
+        kind: 'cliproxyapi',
+        label: 'CLIProxyAPI 本地网关',
+        status: !cliProxyApiOpen ? 'offline' : endpointRecognized ? 'ready' : 'partial',
+      });
+    }
+
     const configuredLoopback = loopbackLocation(config.baseUrl);
     if (
       config.provider === 'gateway' &&
       configuredLoopback &&
-      ![3456, 4000].includes(configuredLoopback.port)
+      ![3456, 4000, 8317].includes(configuredLoopback.port)
     ) {
       const open = await probePort(configuredLoopback.port, configuredLoopback.host);
       candidates.push({
@@ -262,7 +290,12 @@ export class ClaudeGatewayDetector {
       process.env.APPDATA ?? process.env.LOCALAPPDATA ?? path.join(homedir(), 'AppData', 'Roaming');
     const currentCcrRoot = path.join(appData, 'claude-code-router');
     const legacyCcrRoot = path.join(homedir(), '.claude-code-router');
-    const [ccr, litellm] = await Promise.all([commandExists('ccr'), commandExists('litellm')]);
+    const [ccr, cliProxyApi, cliProxyApiLegacy, litellm] = await Promise.all([
+      commandExists('ccr'),
+      commandExists('cli-proxy-api'),
+      commandExists('CLIProxyAPI'),
+      commandExists('litellm'),
+    ]);
     const value = {
       ccr,
       ccrConfig: [
@@ -270,6 +303,7 @@ export class ClaudeGatewayDetector {
         path.join(currentCcrRoot, 'gateway.config.json'),
         path.join(legacyCcrRoot, 'config.json'),
       ].some((candidate) => existsSync(candidate)),
+      cliProxyApi: cliProxyApi || cliProxyApiLegacy,
       litellm,
     };
     this.cachedInstallations = { checkedAt: Date.now(), value };

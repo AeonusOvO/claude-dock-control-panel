@@ -12,6 +12,14 @@ const effortSource = readFileSync(
   new URL('../src/shared/claude-effort.ts', import.meta.url),
   'utf8',
 );
+const gatewayDiagnosticsSource = readFileSync(
+  new URL('../src/main/claude-gateway-diagnostics.ts', import.meta.url),
+  'utf8',
+);
+const providerCatalogSource = readFileSync(
+  new URL('../src/shared/claude-providers.ts', import.meta.url),
+  'utf8',
+);
 
 describe('renderer interaction lifecycle contract', () => {
   it('always releases resize pointer capture across interrupted window lifecycles', () => {
@@ -128,6 +136,23 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toMatch(
       /@container provider-picker \(min-width: 470px\)[\s\S]*?repeat\(3,/,
     );
+  });
+
+  it('presents ChatGPT subscription routing as a local experimental conversion', () => {
+    expect(providerCatalogSource).toContain('ChatGPT 订阅（本地网关）');
+    expect(rendererSource).toContain('本地转换 · 非官方直连');
+    expect(rendererSource).toContain("provider.id === 'chatgpt-subscription'");
+    expect(rendererSource).toContain("? '本机网关'");
+    expect(rendererSource).toContain('本地网关再完成 Codex OAuth 请求与协议转换');
+    expect(rendererSource).toContain('1455 是 OAuth 回调端口');
+    expect(rendererSource).toContain('公开方案里的 claudex 别名本质是作用域受限的环境变量');
+    expect(rendererSource).toContain("candidate.kind === 'cliproxyapi' ? 'authToken'");
+    expect(rendererSource).toContain("candidate.kind === 'cliproxyapi'");
+    expect(rendererSource).toContain("? 'chatgpt-subscription'");
+    expect(rendererStyles).toContain('.subscription-gateway-guide');
+    expect(gatewayDiagnosticsSource).toContain('probePort(8317)');
+    expect(gatewayDiagnosticsSource).toContain("kind: 'cliproxyapi'");
+    expect(gatewayDiagnosticsSource).toContain('http://127.0.0.1:8317/v1/models');
   });
 
   it('opens global settings from the bottom rail and keeps advanced connection tools categorized', () => {

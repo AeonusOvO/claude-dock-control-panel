@@ -67,6 +67,7 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
 ] as const;
 
 export const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]~]{1,200}$/;
+const LOOPBACK_GATEWAY_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 export const parseClaudeVersion = (output: string): [number, number, number] | undefined => {
   const match = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(output);
   if (!match) {
@@ -192,10 +193,21 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
     throw new Error('中转接入的认证方式无效。');
   }
 
+  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  if (
+    preset === 'chatgpt-subscription' &&
+    !LOOPBACK_GATEWAY_HOSTS.has(new URL(baseUrl).hostname.toLowerCase())
+  ) {
+    throw new Error('ChatGPT 订阅转换只接受本机回环网关地址。');
+  }
+  if (preset === 'chatgpt-subscription' && input.authMode !== 'authToken') {
+    throw new Error('ChatGPT 订阅转换必须使用本地网关 Bearer Token。');
+  }
+
   return {
     apiKeyHelperPolicy,
     authMode: input.authMode,
-    baseUrl: normalizeBaseUrl(input.baseUrl),
+    baseUrl,
     model,
     modelFast,
     preset,

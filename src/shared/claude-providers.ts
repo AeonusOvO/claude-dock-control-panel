@@ -1,4 +1,5 @@
-export type ClaudeProviderGroupId = 'advanced' | 'domestic' | 'local' | 'official' | 'overseas';
+export type ClaudeProviderGroupId =
+  'advanced' | 'domestic' | 'local' | 'official' | 'overseas' | 'subscription';
 
 export interface ClaudeProviderDefinition {
   authMode: 'apiKey' | 'authToken' | 'existing' | 'none';
@@ -12,6 +13,7 @@ export interface ClaudeProviderDefinition {
   id:
     | 'anthropic'
     | 'anthropic-api'
+    | 'chatgpt-subscription'
     | 'curl'
     | 'custom'
     | 'deepseek'
@@ -40,6 +42,7 @@ export type ClaudeProviderId = ClaudeProviderDefinition['id'];
 
 export const CLAUDE_PROVIDER_GROUPS = [
   { id: 'official', label: '官方接入' },
+  { id: 'subscription', label: '订阅转换（实验性）' },
   { id: 'domestic', label: '国内服务' },
   { id: 'overseas', label: '海外与聚合服务' },
   { id: 'local', label: '本地服务' },
@@ -76,6 +79,23 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     label: 'Anthropic API Key',
     model: 'claude-sonnet-5',
     modelFast: 'claude-haiku-4-5',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'http://127.0.0.1:8317',
+    caveat:
+      'OpenAI Codex 负责人曾公开介绍 CLIProxyAPI / claudex 实践，但它仍是第三方本地网关，不是 OpenAI 或 Anthropic 官方产品接入；当前条款、套餐限制与模型可用性仍然适用。',
+    consoleUrl: 'https://github.com/router-for-me/CLIProxyAPI',
+    description:
+      '使用 ChatGPT 的 Codex 订阅授权，经用户自行运行的本地兼容网关转换为 Anthropic Messages。',
+    docsUrl: 'https://learn.chatgpt.com/docs/auth',
+    editableBaseUrl: true,
+    group: 'subscription',
+    id: 'chatgpt-subscription',
+    keyHint: '填写本地网关 api-keys 中的一项，不要填写 ChatGPT 密码或 OAuth Token',
+    label: 'ChatGPT 订阅（本地网关）',
+    model: 'gpt-5.6-sol',
+    modelFast: 'gpt-5.4-mini',
   },
   {
     authMode: 'authToken',

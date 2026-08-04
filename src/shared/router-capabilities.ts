@@ -6,7 +6,7 @@ export interface RouterCapability {
   verifiedAt: string;
 }
 
-const VERIFIED_AT = '2026-08-02';
+const VERIFIED_AT = '2026-08-04';
 
 export const ROUTER_CAPABILITIES: Readonly<Record<ClaudeProviderId, RouterCapability>> = {
   anthropic: {
@@ -17,6 +17,11 @@ export const ROUTER_CAPABILITIES: Readonly<Record<ClaudeProviderId, RouterCapabi
   'anthropic-api': {
     mode: 'direct',
     reason: 'Anthropic API Key 直接调用官方 Messages API。',
+    verifiedAt: VERIFIED_AT,
+  },
+  'chatgpt-subscription': {
+    mode: 'direct',
+    reason: '不需要 CCR；必须由用户另行运行能输出 Anthropic Messages 的本地订阅网关。',
     verifiedAt: VERIFIED_AT,
   },
   curl: {

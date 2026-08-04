@@ -1,7 +1,10 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.1.2（2026-08-03）。4.1.2 不改变运行时架构，仅把真实 PowerShell argv 回归测试的
-单例时限提升到 45 秒，以覆盖 GitHub Windows runner 的冷启动抖动。4.1.1 在项目主页补齐 SignPath
+当前架构版本：4.2.0（2026-08-04）。4.2.0 新增项目级“ChatGPT 订阅（本地网关）”实验性预设、
+CLIProxyAPI 默认端口发现和严格回环地址边界；OAuth 仍完全由用户选择的外部网关管理。本版本同时把
+构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
+运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
+的冷启动抖动。4.1.1 在项目主页补齐 SignPath
 Foundation 要求的英文 Code signing policy 入口、归属语和未获批前的状态限定。4.1.0 在 4.0.0 的外部代理边界上加入独立签名发布清单、
 可脱离 GitHub 验证的 HTTPS 公网 IP 兜底镜像、原子双渠道发布和严格的更新防降级/重定向边界。
 
@@ -515,8 +518,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   继续把所有功能堆进 Claude 路由表。
 - 其 Codex OAuth → Claude 路径本质是本地反向代理与 Anthropic/OpenAI 协议转换，不会让
   Claude Code 原生获得 ChatGPT 订阅。CC Switch 自身文档也明确标记服务条款、账号与长期
-  可用性风险。ClaudeDock 当前先提供官方 Codex 客户端通道，不复制 OAuth 凭据、不默认安装
-  该代理、不把高风险兼容路径描述成官方集成。
+  可用性风险。2026-07-12 的公开帖子中，OpenAI Codex 负责人 Tibo 转引 Theo 的三步
+  CLIProxyAPI/`claudex` 方案，构成明确的公开实践认可；但 OpenAI 当前帮助页列出的 Codex 客户端
+  仍不包含 Claude Code，CLIProxyAPI 也不是 OpenAI 或 Anthropic 产品。ClaudeDock 提供的实验性
+  预设只配置用户自行运行的回环网关，不复制 OAuth 凭据、
+  不默认安装或启动该代理、不把高风险兼容路径描述成官方集成；官方 Codex 客户端通道继续独立存在。
 
 ## Claude Code 接入与会话
 
@@ -559,6 +565,12 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   长地址和模型名允许断行。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
+- `chatgpt-subscription` 预设仍属于 `gateway`：默认把 `ANTHROPIC_BASE_URL` 指向
+  `http://127.0.0.1:8317`，主/快速模型映射为 `gpt-5.6-sol` / `gpt-5.4-mini`，认证字段只接受网关
+  自己的 `api-keys` 客户端密钥，并以 `ANTHROPIC_AUTH_TOKEN`/Bearer 发送，而不是把它误当成 ChatGPT
+  OAuth Token。`normalizeClaudeConfig` 对该预设额外限定 `localhost/127.0.0.1/::1`，避免把
+  高风险 OAuth 转换路径悄然扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由外部
+  网关和上游账号决定。
 - 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
   `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；快速模型写入
   `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少快速模型时
@@ -617,7 +629,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 
 ### 自动发现与新手接入
 
-- `src/shared/claude-providers.ts` 是接入目录的单一事实来源：21 个预设统一声明分组、基址、
+- `src/shared/claude-providers.ts` 是接入目录的单一事实来源：22 个预设统一声明分组、基址、
   认证方式、主/快速模型、控制台、文档、密钥提示和风险说明。`ClaudePreset` 直接派生自目录
   ID；主进程 IPC 用目录 ID 集合校验，外链白名单从目录 URL 主机派生，避免 renderer、主进程
   与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
@@ -640,7 +652,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   凭据、旧测试结果与修复建议；再次点击同一服务商进入 `undefined`，同时隐藏服务商说明、
   配置表单、测试结果和修复卡。Router/cURL 选择把原有完整工具节点移动到第二步，其他时候
   移回“全局设置 → 接入”，没有缩减或复制原功能。
-- 五个服务商分组由独立 `Set<ClaudeProviderGroupId>` 保存折叠状态；每次切换只更新当前分组
+- 六个服务商分组由独立 `Set<ClaudeProviderGroupId>` 保存折叠状态；每次切换只更新当前分组
   的 `data-collapsed`、ARIA 与 `inert`，CSS 用可插值的网格行和透明度过渡。服务商卡片网格
   用命名容器查询在 `<290 / 290–469 / >=470px` 切换一、二、三列，因此响应侧栏实际拖拽
   宽度，而不依赖整个窗口的媒体查询。进入“接入”页时调用纯函数
@@ -660,7 +672,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - Kimi 开放平台与 Kimi Code 会员分为两个目录项，明确阻止密钥/基址混用；SiliconFlow 按其
   Claude Code 文档使用 `apiKey`（`x-api-key`）；Ollama 使用不落盘的 `ollama` 占位令牌。
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
-  短连接检查 Claude Code Router 默认 `3456/3458` 与 LiteLLM 常用 `4000`，不会枚举或扫描
+  短连接检查 Claude Code Router 默认 `3456/3458`、CLIProxyAPI 默认 `8317` 与 LiteLLM 常用
+  `4000`，不会枚举或扫描
   全部本机端口。
 - `BackgroundTaskCoordinator` 为安装检测、Router 状态、网关扫描、软件更新和连接实测提供
   两个并发槽。相同 key 的并发请求共用同一个 Promise，用户触发的连接实测会排在尚未开始的
@@ -676,7 +689,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   `~/.claude-code-router/config.json`、新版 Windows
   `%APPDATA%/claude-code-router/{config.sqlite,gateway.config.json}`，以及默认端口状态。
   只检查配置文件是否存在，不读取 SQLite 中的密钥或上游凭据。
-- 对 `3456/4000` 的后台探测只执行不带凭据的 `GET /v1/models`：`200` 表示可访问，
+- 对 `3456/4000/8317` 的后台探测只执行不带凭据的 `GET /v1/models`：`200` 表示可访问，
   `401/403` 表示接口已运行但需要网关访问密钥。管理页 `3458` 只做 TCP 存活判断。
 - 检测会只读解析用户 `~/.claude/settings.json`、项目 `.claude/settings.json` 和
   `.claude/settings.local.json` 的 `env` 块与 `apiKeyHelper` 是否为非空字符串，只向 renderer
@@ -775,6 +788,9 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   决策，再按能力选择直连或 CCR；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
   官方 Claude Code 集成指南使用 Anthropic 兼容 `authToken`、`https://api.deepseek.com/anthropic`
   与当前模型标识，供应商原始“模型不存在”等错误不再被静默快速模型降级覆盖。
+- `chatgpt-subscription` 的能力值为 `direct` 只表示 ClaudeDock 不再叠加 CCR；真正的协议转换仍由
+  用户自行运行的 CLIProxyAPI/CC Switch 回环网关完成。界面和技术文档必须同时保留“非官方直连”
+  标签，不能从该枚举值推导为 OpenAI 或 Anthropic 官方支持。
 - 向导阶段固定为决策、检查/安装内核、启动、写 Provider/项目配置和 1-token 连通校验；每个
   阶段通过 BusyRegistry 与下载内核暴露真实状态。CCR 的所有配置写入只能经过
   `saveConfigWithoutProfileTakeover()`，唯一 `saveConfig` 调用永久传 `applyProfile: false`，
@@ -1479,8 +1495,9 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
 申请材料和角色/构建政策见 `CODE_SIGNING_POLICY.md`；其免费工作流能否顺序签署 Electron NSIS 内部
 应用、动态生成的卸载器及外层安装器，仍须 SignPath 人工确认，不能以自签名替代。
 
-`npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件通过 `npm audit fix`
-更新了构建期 `brace-expansion` 间接依赖。每次公开发布仍须重新执行完整审计和许可检查。
+`npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件中的构建期
+`brace-expansion` 与 `fast-uri` 间接依赖已更新到修复版本。每次公开发布仍须重新执行完整审计和
+许可检查。
 
 ## 关键取舍与限制
 
@@ -1538,8 +1555,19 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
   <https://learn.chatgpt.com/docs/app-server>
 - Codex 官方认证说明：
   <https://learn.chatgpt.com/docs/auth>
+- OpenAI 官方论坛对 Tibo 的 Codex 负责人身份说明：
+  <https://forum.openai.com/public/events/codex-is-for-everyone-why-codex-matters-beyond-code-fa40puy7wi>
+- Tibo 转引 Theo 的 CLIProxyAPI / `claudex` 三步公开实践：
+  <https://x.com/thsottiaux/status/2076119366647894371>
+- OpenAI 当前 ChatGPT 订阅支持的 Codex 客户端与适用条款：
+  <https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan>、
+  <https://openai.com/policies/terms-of-use/>
 - CC Switch 官方开源仓库（配置管理能力与非官方代理边界）：
   <https://github.com/farion1231/cc-switch>
+- CC Switch Codex OAuth 反向代理说明与风险披露：
+  <https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/2-providers/2.1-add.md>
+- CLIProxyAPI 官方仓库（Codex OAuth 与 Claude 兼容端点）：
+  <https://github.com/router-for-me/CLIProxyAPI>
 - CC Switch 官方 Releases 与 deep link 导入协议：
   <https://github.com/farion1231/cc-switch/releases>、
   <https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/5-faq/5.3-deeplink.md>
