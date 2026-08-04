@@ -17,6 +17,8 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
+  ManagedChatGptGatewayOperationResult,
+  ManagedChatGptGatewayState,
   RouterKernelOperationResult,
   RouterKernelState,
   ClaudeSessionMetadata,
@@ -298,6 +300,16 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeRouterOperationResult>,
   getRouterKernelState: (sessionId) =>
     ipcRenderer.invoke('router:kernel-state', sessionId) as Promise<RouterKernelState>,
+  getManagedChatGptGatewayState: () =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-state',
+    ) as Promise<ManagedChatGptGatewayState>,
+  setupManagedChatGptGateway: (sessionId, forceLogin) =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-setup',
+      sessionId,
+      forceLogin ?? false,
+    ) as Promise<ManagedChatGptGatewayOperationResult>,
   installCcSwitch: (sessionId) =>
     ipcRenderer.invoke(
       'router:cc-switch-install',

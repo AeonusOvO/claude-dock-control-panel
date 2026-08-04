@@ -651,8 +651,10 @@
             <div class="step-heading">
               <span class="step-number">2</span>
               <div>
-                <strong>选择模型并填写凭据</strong>
-                <span>密钥只交给主进程加密保存，界面不会回显已保存内容。</span>
+                <strong id="claude-config-step-title">选择模型并填写凭据</strong>
+                <span id="claude-config-step-description"
+                  >密钥只交给主进程加密保存，界面不会回显已保存内容。</span
+                >
               </div>
             </div>
 
@@ -716,7 +718,7 @@
               <small>用于 Haiku 与小型快速任务；留空时跟随主模型。</small>
             </label>
 
-            <label class="field" for="claude-auth-mode">
+            <label class="field" id="auth-mode-field" for="claude-auth-mode">
               <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
               <select id="claude-auth-mode">
                 <option value="existing">使用 Claude Code 现有登录</option>

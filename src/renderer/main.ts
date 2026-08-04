@@ -65,6 +65,7 @@ import type {
   McpCatalogEntry,
   McpScope,
   McpServerView,
+  ManagedChatGptGatewayState,
   NetworkPreflightResult,
   NetworkProviderId,
   SoftwareUpdateState,
@@ -203,6 +204,7 @@ const applyCurlDirectButton = requiredElement<HTMLButtonElement>('#apply-curl-di
 const importCurlRouterButton = requiredElement<HTMLButtonElement>('#import-curl-router');
 const authModeHelp = requiredElement<HTMLElement>('#auth-mode-help');
 const authModeLabel = requiredElement<HTMLElement>('#auth-mode-label');
+const authModeField = requiredElement<HTMLElement>('#auth-mode-field');
 const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
 const claudeApiKeyHelperPolicy = requiredElement<HTMLSelectElement>(
   '#claude-api-key-helper-policy',
@@ -210,6 +212,8 @@ const claudeApiKeyHelperPolicy = requiredElement<HTMLSelectElement>(
 const claudeApiKeyHelperStatus = requiredElement<HTMLElement>('#claude-api-key-helper-status');
 const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
+const claudeConfigStepTitle = requiredElement<HTMLElement>('#claude-config-step-title');
+const claudeConfigStepDescription = requiredElement<HTMLElement>('#claude-config-step-description');
 const claudeCredential = requiredElement<HTMLInputElement>('#claude-credential');
 const claudeInstallationDetail = requiredElement<HTMLElement>('#claude-installation-detail');
 const claudeInstallationTitle = requiredElement<HTMLElement>('#claude-installation-title');
@@ -1021,6 +1025,7 @@ type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | '
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
+let managedChatGptGatewayState: ManagedChatGptGatewayState | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
@@ -2856,24 +2861,134 @@ const syncConnectionInteractivity = (): void => {
 const buildChatGptSubscriptionGuide = (): HTMLElement => {
   const guide = document.createElement('section');
   guide.className = 'subscription-gateway-guide';
-  guide.setAttribute('aria-label', 'ChatGPT 订阅本地网关接入步骤');
+  guide.setAttribute('aria-label', 'ChatGPT 订阅托管网关');
 
   const title = document.createElement('strong');
-  title.textContent = '先在 ClaudeDock 外完成本地网关授权';
-  const steps = document.createElement('ol');
-  for (const copy of [
-    '安装并启动 CLIProxyAPI，或在 CC Switch 中启用 Codex OAuth 本地路由；OAuth Token 始终由该工具管理。',
-    '在外部工具中完成 ChatGPT / Codex 登录。1455 是 OAuth 回调端口，不是 Claude Code 的模型接口。',
-    '确认模型接口地址与本地访问密钥；CLIProxyAPI 默认可使用 127.0.0.1:8317，CC Switch 请复制它实际显示的 Claude 路由地址。',
-  ]) {
-    const item = document.createElement('li');
-    item.textContent = copy;
-    steps.append(item);
-  }
+  title.textContent = 'OpenAI Codex 负责人公开分享的 claudex 路径';
+  const source = document.createElement('p');
+  source.textContent =
+    'Thibault “Tibo” Sottiaux 公开分享了 CLIProxyAPI 接入 Claude Code 的实践。ClaudeDock 把安装、配置和后台运行收进一个界面，不要求你打开终端或第三方控制台。';
+  const statusCard = document.createElement('div');
+  statusCard.className = 'subscription-gateway-status';
+  const statusText = document.createElement('div');
+  const statusTitle = document.createElement('strong');
+  statusTitle.textContent = '正在检查托管网关';
+  const statusDetail = document.createElement('span');
+  statusDetail.textContent = '请稍候…';
+  statusText.append(statusTitle, statusDetail);
+  const action = document.createElement('button');
+  action.type = 'button';
+  action.textContent = '一键安装并登录';
+  action.disabled = true;
+  statusCard.append(statusText, action);
+  const secondaryActions = document.createElement('div');
+  secondaryActions.className = 'subscription-gateway-actions';
   const boundary = document.createElement('small');
   boundary.textContent =
-    '公开方案里的 claudex 别名本质是作用域受限的环境变量；ClaudeDock 只把同类回环地址、模型和本地访问密钥注入当前项目子进程，不改 shell 配置，不读取 OAuth 登录文件，也不修改系统级路由。';
-  guide.append(title, steps, boundary);
+    '点击后只会自动打开 OpenAI 官方授权页供你确认账号。ClaudeDock 校验并安装上游发布包、强制只监听本机、自动生成访问密钥并配置当前项目；不会读取 OAuth Token 内容，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
+
+  const renderState = (state: ManagedChatGptGatewayState): void => {
+    managedChatGptGatewayState = state;
+    statusCard.dataset.phase = state.phase;
+    statusTitle.textContent =
+      state.phase === 'ready'
+        ? 'ChatGPT 托管网关已就绪'
+        : state.phase === 'stopped'
+          ? '授权已完成，等待启用'
+          : state.phase === 'login-required'
+            ? '安装完成，等待 OpenAI 授权'
+            : '尚未安装托管网关';
+    statusDetail.textContent = state.message;
+    action.disabled = false;
+    action.textContent =
+      state.phase === 'not-installed'
+        ? '一键安装并登录'
+        : state.phase === 'login-required'
+          ? '登录 OpenAI 并自动配置'
+          : state.phase === 'stopped'
+            ? '启动并用于当前项目'
+            : '用于当前项目';
+    secondaryActions.replaceChildren();
+    if (state.authenticated) {
+      const relogin = document.createElement('button');
+      relogin.type = 'button';
+      relogin.textContent = '重新登录 OpenAI';
+      relogin.addEventListener('click', () => {
+        void runSetup(true, relogin);
+      });
+      secondaryActions.append(relogin);
+    }
+    if (selectedProviderId === 'chatgpt-subscription') {
+      claudeConfigForm.hidden = !(state.installed && state.authenticated);
+    }
+  };
+
+  const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
+    const sessionId = workspaceState.activeSessionId;
+    if (!sessionId) {
+      showToast('请先选择一个项目。', 'error');
+      return;
+    }
+    button.disabled = true;
+    const original = button.textContent;
+    let restoreOriginalLabel = true;
+    button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
+    statusDetail.textContent =
+      '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
+    try {
+      const result = await window.controlPanel.setupManagedChatGptGateway(sessionId, forceLogin);
+      renderState(result.state);
+      if (!result.ok) {
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '配置未完成';
+        statusDetail.textContent = result.error ?? result.message;
+        if (button === action) {
+          action.textContent = '重试';
+          restoreOriginalLabel = false;
+        }
+        showToast(result.error ?? result.message, 'error');
+        return;
+      }
+      if (result.projectState) {
+        renderClaudeState(result.projectState);
+      }
+      showToast(result.message);
+    } catch {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '配置未完成';
+      statusDetail.textContent = '无法完成 ChatGPT 托管网关配置，请稍后重试。';
+      if (button === action) {
+        action.textContent = '重试';
+        restoreOriginalLabel = false;
+      }
+      showToast('无法完成 ChatGPT 托管网关配置。', 'error');
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        if (restoreOriginalLabel) {
+          button.textContent = original;
+        }
+      }
+    }
+  };
+
+  action.addEventListener('click', () => {
+    void runSetup(false, action);
+  });
+  void window.controlPanel
+    .getManagedChatGptGatewayState()
+    .then((state) => {
+      if (guide.isConnected) {
+        renderState(state);
+      }
+    })
+    .catch(() => {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '无法读取托管网关状态';
+      statusDetail.textContent = '请稍后重试。';
+      action.disabled = false;
+    });
+  guide.append(title, source, statusCard, secondaryActions, boundary);
   return guide;
 };
 
@@ -3023,7 +3138,10 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   }
   selectedProviderId = provider.id;
   claudePreset.value = provider.id;
-  claudeConfigForm.hidden = false;
+  const isManagedChatGpt = provider.id === 'chatgpt-subscription';
+  claudeConfigForm.hidden =
+    isManagedChatGpt &&
+    !(managedChatGptGatewayState?.installed && managedChatGptGatewayState.authenticated);
   const isOfficialLogin = provider.id === 'anthropic';
   const isAdvanced =
     provider.id === 'custom' || provider.id === 'gateway' || provider.id === 'curl';
@@ -3034,7 +3152,13 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   }
   const protocol = claudeProtocol.value as ConfigurableEndpointProtocol;
   protocolField.hidden = !supportsProtocolSwitch;
-  baseUrlField.hidden = !provider.editableBaseUrl;
+  baseUrlField.hidden = isManagedChatGpt || !provider.editableBaseUrl;
+  authModeField.hidden = isManagedChatGpt;
+  credentialSourceSettings.hidden = isManagedChatGpt;
+  claudeConfigStepTitle.textContent = isManagedChatGpt ? '选择托管网关模型' : '选择模型并填写凭据';
+  claudeConfigStepDescription.textContent = isManagedChatGpt
+    ? '地址和本地访问密钥由 ClaudeDock 自动配置；你只需要按需调整模型。'
+    : '密钥只交给主进程加密保存，界面不会回显已保存内容。';
 
   if (isAdvanced) {
     setAuthOptions(
@@ -3111,6 +3235,7 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
           : `${provider.label} 凭据`;
   claudeCredential.placeholder = provider.keyHint ?? '留空则保留已保存的凭据';
   credentialField.hidden =
+    isManagedChatGpt ||
     claudeAuthMode.value === 'existing' ||
     claudeAuthMode.value === 'none' ||
     provider.id === 'ollama';
@@ -3123,11 +3248,11 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   openProviderConsoleButton.hidden = !provider.consoleUrl;
   openProviderConsoleButton.dataset.externalUrl = provider.consoleUrl ?? '';
   openProviderConsoleButton.textContent =
-    provider.id === 'chatgpt-subscription' ? '查看网关项目' : '打开密钥控制台';
+    provider.id === 'chatgpt-subscription' ? '查看公开原帖' : '打开密钥控制台';
   openProviderDocsButton.hidden = !provider.docsUrl;
   openProviderDocsButton.dataset.externalUrl = provider.docsUrl ?? '';
   openProviderDocsButton.textContent =
-    provider.id === 'chatgpt-subscription' ? '查看官方登录说明' : '查看官方文档';
+    provider.id === 'chatgpt-subscription' ? '查看上游源码' : '查看官方文档';
   moveProviderTools(provider.id);
   renderProviderPicker();
   syncConnectionInteractivity();
@@ -3172,7 +3297,10 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
   claudeModelFast.value =
     config.sourceModelFast ?? config.sourceModel ?? config.modelFast ?? config.model;
   claudeAuthMode.value = config.sourceAuthMode ?? config.authMode;
-  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+  credentialField.hidden =
+    config.preset === 'chatgpt-subscription' ||
+    claudeAuthMode.value === 'existing' ||
+    claudeAuthMode.value === 'none';
   if (config.preset === 'ollama') {
     credentialField.hidden = true;
   }
@@ -3223,6 +3351,7 @@ const restoreAdvancedConnectionSnapshot = (snapshot: AdvancedConnectionSnapshot)
   credentialField.hidden =
     snapshot.authMode === 'existing' ||
     snapshot.authMode === 'none' ||
+    snapshot.providerId === 'chatgpt-subscription' ||
     snapshot.providerId === 'ollama';
   for (const state of snapshot.controls) {
     state.control.value = state.value;
@@ -3917,27 +4046,21 @@ const openExternal = async (url: string): Promise<void> => {
 };
 
 const applyGatewayCandidate = (candidate: ClaudeGatewayCandidate): void => {
-  const preset: ClaudePreset =
-    candidate.kind === 'cliproxyapi' ? 'chatgpt-subscription' : 'gateway';
+  const preset: ClaudePreset = 'gateway';
   claudePreset.value = preset;
   applyPresetUi(preset, false);
   claudeBaseUrl.value = candidate.apiBaseUrl;
-  if (candidate.kind !== 'cliproxyapi') {
-    claudeModel.value =
-      lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
-    claudeModelFast.value = claudeModel.value;
-  }
-  claudeAuthMode.value =
-    candidate.kind === 'cliproxyapi' ? 'authToken' : candidate.authRequired ? 'authToken' : 'none';
+  claudeModel.value =
+    lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
+  claudeModelFast.value = claudeModel.value;
+  claudeAuthMode.value = candidate.authRequired ? 'authToken' : 'none';
   claudeCredential.value = '';
   credentialField.hidden = claudeAuthMode.value === 'none';
   connectionTestResult.hidden = true;
   showToast(
-    candidate.kind === 'cliproxyapi'
-      ? '已选用 CLIProxyAPI；请填写本地 api-keys 访问密钥，再执行真实连接测试'
-      : candidate.authRequired
-        ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
-        : `已选用 ${candidate.label}；下一步执行真实连接测试`,
+    candidate.authRequired
+      ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
+      : `已选用 ${candidate.label}；下一步执行真实连接测试`,
   );
   claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -10038,7 +10161,10 @@ claudeBaseUrl.addEventListener('blur', () => {
   completeVisibleConnectionEndpoint(true);
 });
 claudeAuthMode.addEventListener('change', () => {
-  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+  credentialField.hidden =
+    selectedProviderId === 'chatgpt-subscription' ||
+    claudeAuthMode.value === 'existing' ||
+    claudeAuthMode.value === 'none';
   connectionTestResult.hidden = true;
   connectionRemedy.hidden = true;
   syncApiKeyHelperPolicyUi();

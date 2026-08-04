@@ -20,6 +20,12 @@ const providerCatalogSource = readFileSync(
   new URL('../src/shared/claude-providers.ts', import.meta.url),
   'utf8',
 );
+const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
+const claudeRuntimeSource = readFileSync(
+  new URL('../src/main/claude-runtime.ts', import.meta.url),
+  'utf8',
+);
 
 describe('renderer interaction lifecycle contract', () => {
   it('always releases resize pointer capture across interrupted window lifecycles', () => {
@@ -138,21 +144,37 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
-  it('presents ChatGPT subscription routing as a local experimental conversion', () => {
-    expect(providerCatalogSource).toContain('ChatGPT 订阅（本地网关）');
+  it('presents ChatGPT subscription routing as a ClaudeDock-managed flow', () => {
+    expect(providerCatalogSource).toContain('ChatGPT 订阅（ClaudeDock 托管）');
+    expect(providerCatalogSource).toContain('OpenAI Codex 负责人 Thibault “Tibo” Sottiaux');
     expect(rendererSource).toContain('本地转换 · 非官方直连');
     expect(rendererSource).toContain("provider.id === 'chatgpt-subscription'");
     expect(rendererSource).toContain("? '本机网关'");
     expect(rendererSource).toContain('本地网关再完成 Codex OAuth 请求与协议转换');
-    expect(rendererSource).toContain('1455 是 OAuth 回调端口');
-    expect(rendererSource).toContain('公开方案里的 claudex 别名本质是作用域受限的环境变量');
-    expect(rendererSource).toContain("candidate.kind === 'cliproxyapi' ? 'authToken'");
-    expect(rendererSource).toContain("candidate.kind === 'cliproxyapi'");
-    expect(rendererSource).toContain("? 'chatgpt-subscription'");
+    expect(rendererSource).toContain('一键安装并登录');
+    expect(rendererSource).toContain('不要求你打开终端或第三方控制台');
+    expect(rendererSource).toContain('.setupManagedChatGptGateway(sessionId, forceLogin)');
+    expect(rendererSource).toContain('.getManagedChatGptGatewayState()');
+    expect(rendererSource).toContain("const preset: ClaudePreset = 'gateway'");
     expect(rendererStyles).toContain('.subscription-gateway-guide');
+    expect(rendererStyles).toContain('.subscription-gateway-status');
     expect(gatewayDiagnosticsSource).toContain('probePort(8317)');
     expect(gatewayDiagnosticsSource).toContain("kind: 'cliproxyapi'");
     expect(gatewayDiagnosticsSource).toContain('http://127.0.0.1:8317/v1/models');
+  });
+
+  it('keeps managed gateway operations behind the isolated main-process bridge', () => {
+    for (const channel of [
+      'claude:managed-chatgpt-gateway-state',
+      'claude:managed-chatgpt-gateway-setup',
+    ]) {
+      expect(mainSource).toContain(`'${channel}'`);
+      expect(preloadSource).toContain(`'${channel}'`);
+    }
+    expect(preloadSource).toContain('setupManagedChatGptGateway: (sessionId, forceLogin)');
+    expect(claudeRuntimeSource).toMatch(
+      /private async prepareLaunchInternal[\s\S]*?config\.preset === 'chatgpt-subscription'[\s\S]*?ensureManagedChatGptGatewayReady\(\)/,
+    );
   });
 
   it('opens global settings from the bottom rail and keeps advanced connection tools categorized', () => {

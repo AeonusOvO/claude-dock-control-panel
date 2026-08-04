@@ -7420,14 +7420,89 @@ body.is-resizing * {
   font-size: var(--text-sm);
 }
 
-.subscription-gateway-guide ol {
+.subscription-gateway-guide > p {
   color: var(--text-lo);
-  display: grid;
   font-size: var(--text-xs);
-  gap: var(--s-1);
   line-height: var(--lh-note);
   margin: 0;
-  padding-left: var(--s-5);
+}
+
+.subscription-gateway-status {
+  align-items: center;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  justify-content: space-between;
+  padding: var(--s-3);
+}
+
+.subscription-gateway-status > div {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.subscription-gateway-status > div span {
+  color: var(--text-dim);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-note);
+}
+
+.subscription-gateway-status[data-phase='ready'] {
+  background: var(--ok-tint);
+  border-color: var(--ok-line);
+}
+
+.subscription-gateway-status[data-phase='ready'] > div strong {
+  color: var(--ok-text);
+}
+
+.subscription-gateway-status[data-phase='error'] {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+}
+
+.subscription-gateway-status[data-phase='error'] > div strong {
+  color: var(--bad-text);
+}
+
+.subscription-gateway-status button,
+.subscription-gateway-actions button {
+  background: var(--accent-solid);
+  border: 1px solid var(--accent-solid);
+  border-radius: var(--r-md);
+  color: var(--accent-fg);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  min-height: 34px;
+  padding: 0 var(--s-3);
+}
+
+.subscription-gateway-status button:hover:not(:disabled),
+.subscription-gateway-actions button:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.subscription-gateway-status button:disabled,
+.subscription-gateway-actions button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.subscription-gateway-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.subscription-gateway-actions button {
+  background: var(--surface-3);
+  border-color: var(--line-strong);
+  color: var(--text-lo);
 }
 
 .subscription-gateway-guide small {

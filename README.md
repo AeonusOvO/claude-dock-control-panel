@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.2.0**，许可证为 **Apache-2.0**。4.2.0 的正式稳定版必须同时通过可信
+当前代码版本为 **4.3.0**，许可证为 **Apache-2.0**。4.3.0 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -29,8 +29,9 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 
 - 多项目终端、托盘后台运行、项目/对话历史与终端主题。
 - Claude Code 官方安装、版本门禁、项目级服务商接入、连接实测和会话状态。
-- 实验性的“ChatGPT 订阅（本地网关）”预设：识别用户自行运行的 CLIProxyAPI 默认端口，按项目
-  注入 Anthropic Messages 兼容地址与模型映射，不接触 ChatGPT OAuth 登录态。
+- 实验性的“ChatGPT 订阅（ClaudeDock 托管）”预设：用户一次点击后，ClaudeDock 从
+  CLIProxyAPI 官方 GitHub Release 下载并校验 Windows x64 版本，在应用私有目录安装、打开
+  OpenAI 官方授权页、启动仅监听回环地址的网关，并自动完成当前项目的模型映射。
 - Codex 官方 CLI/App Server 登录状态与项目启动；ChatGPT 登录凭据仍由 Codex 自身管理。
 - 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
@@ -65,21 +66,26 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
 
 ### ChatGPT 订阅接入 Claude Code（实验性）
 
-2026-07-12，OpenAI Codex 负责人 Tibo 在公开 X 帖中转引 Theo 的做法，概括了安装
-CLIProxyAPI、连接 Claude/Codex 鉴权并用环境变量定义 `claudex` 别名的三步路径。这是很强的公开
-实践认可，但仍不是 OpenAI 或 Anthropic 产品文档列出的 Claude Code 官方接入：协议桥由独立第三方
-项目维护，当前条款、套餐限制与模型可用性仍然适用，并可能随上游变化失效。
+2026-07-12，OpenAI Codex 负责人 Tibo 在公开 X 帖中分享了 Theo 使用 CLIProxyAPI 连接
+Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别名的做法。ClaudeDock 把这条
+公开实践收敛成图形化托管流程，但它仍不是 OpenAI 或 Anthropic 产品文档列出的 Claude Code 官方
+接入：CLIProxyAPI 是独立的 MIT 许可第三方项目，当前条款、套餐限制与模型可用性仍然适用，并可能
+随上游变化失效。
 
-1. 在外部网关中完成 ChatGPT / Codex 登录；OAuth Token 只由该网关保存和刷新。
-2. 在“接入 → 订阅转换（实验性）”选择“ChatGPT 订阅（本地网关）”。CLIProxyAPI 默认模型接口为
-   `http://127.0.0.1:8317`；`1455` 通常是 OAuth 回调端口，不能填作模型接口。
-3. 填写网关自己的本地客户端访问密钥（例如 CLIProxyAPI `config.yaml` 的 `api-keys`），不要填写
-   ChatGPT 密码、Cookie 或 OAuth Token。该密钥按 Bearer Token 发送；主模型与快速模型默认映射为
-   `gpt-5.6-sol` / `gpt-5.4-mini`，
-   但应以网关实时公布的可用模型为准。
-4. 执行真实连接测试。ClaudeDock 只接受该预设的本机回环地址，并只把地址、模型和本地访问密钥
-   注入当前项目子进程；这相当于项目级 `claudex`，但不会改 shell 配置、安装网关、读取登录文件
-   或修改系统级路由。
+1. 在“接入 → 订阅接入（实验性）”选择“ChatGPT 订阅（ClaudeDock 托管）”，点击“一键安装并登录”。
+2. ClaudeDock 查询 CLIProxyAPI 官方 GitHub Release，只接受预期仓库、版本、Windows x64 ZIP 与
+   GitHub 提供的 SHA-256 摘要；校验后解压到应用 `userData` 私有目录，生成仅监听
+   `127.0.0.1` 的本地配置并隐藏启动进程。用户不需要打开终端、CLIProxyAPI 控制台或 CC Switch。
+3. 浏览器会打开 OpenAI 官方授权页。这一步需要用户本人确认，ClaudeDock 不读取密码、Cookie 或
+   OAuth Token；CLIProxyAPI 将自己的 OAuth 文件保存在 ClaudeDock 为它划定的私有认证目录。
+4. 授权成功后，ClaudeDock 自动启动网关、验证 `/v1/models`、为当前项目保存回环地址与本地访问
+   密钥，并默认映射 `gpt-5.6-sol` / `gpt-5.4-mini`。以后从 ClaudeDock 启动该项目时会按需启动
+   受管网关，无需写 `~/.zshrc`、`~/.bashrc`、PowerShell 配置或系统级路由。
+
+受管配置中的本地客户端密钥是 Claude Code 与 CLIProxyAPI 之间的随机访问密钥，不是 ChatGPT
+凭据；项目配置副本用 Windows DPAPI 加密。CLIProxyAPI 自身必须在其权限受限的 `config.yaml` 中
+读取该密钥，因此该受管文件包含一份本机明文。用户可在界面中重新登录；上游发行版更新则在再次执行
+托管接入时下载和校验，不要求用户自行维护命令行工具。
 
 ## 双通道安全更新
 

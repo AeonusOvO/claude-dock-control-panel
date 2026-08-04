@@ -719,6 +719,31 @@ export interface ClaudeGatewayDiagnostics {
   message: string;
 }
 
+export type ManagedChatGptGatewayPhase = 'login-required' | 'not-installed' | 'ready' | 'stopped';
+
+/**
+ * Public state for the ClaudeDock-owned CLIProxyAPI sidecar. OAuth files and the generated local
+ * access key never cross the main/renderer boundary.
+ */
+export interface ManagedChatGptGatewayState {
+  authenticated: boolean;
+  checkedAt: number;
+  endpoint: string;
+  installed: boolean;
+  message: string;
+  phase: ManagedChatGptGatewayPhase;
+  running: boolean;
+  version?: string;
+}
+
+export interface ManagedChatGptGatewayOperationResult {
+  error?: string;
+  message: string;
+  ok: boolean;
+  projectState?: ClaudeProjectState;
+  state: ManagedChatGptGatewayState;
+}
+
 export interface ClaudeRouterProviderView {
   baseUrl: string;
   credentialConfigured: boolean;
@@ -1195,6 +1220,11 @@ export interface ControlPanelApi {
   ) => Promise<ClaudeRouterOperationResult>;
   uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   getRouterKernelState: (sessionId: string) => Promise<RouterKernelState>;
+  getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
+  setupManagedChatGptGateway: (
+    sessionId: string,
+    forceLogin?: boolean,
+  ) => Promise<ManagedChatGptGatewayOperationResult>;
   installCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
   uninstallCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
   exportCurrentProviderToCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;

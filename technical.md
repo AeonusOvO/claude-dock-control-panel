@@ -1,7 +1,9 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.2.0（2026-08-04）。4.2.0 新增项目级“ChatGPT 订阅（本地网关）”实验性预设、
-CLIProxyAPI 默认端口发现和严格回环地址边界；OAuth 仍完全由用户选择的外部网关管理。本版本同时把
+当前架构版本：4.3.0（2026-08-04）。4.3.0 把项目级“ChatGPT 订阅”实验性预设升级为
+ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、安装、启动、OpenAI 浏览器授权引导、
+回环网关配置与项目模型映射，用户不再操作终端或第三方控制台。该路径仍是第三方协议桥，不是 OpenAI
+或 Anthropic 官方 Claude Code 集成。4.2.0 首次加入外部 CLIProxyAPI 发现和严格回环地址边界，并把
 构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
 运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
 的冷启动抖动。4.1.1 在项目主页补齐 SignPath
@@ -59,6 +61,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── McpManager ── 多作用域发现 / CLI 变更 / 健康检查 / 备份回滚
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
+        ├── ManagedChatGptGateway ── CLIProxyAPI 验证下载 / OAuth 引导 / 回环 sidecar 生命周期
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
         ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
@@ -518,11 +521,42 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   继续把所有功能堆进 Claude 路由表。
 - 其 Codex OAuth → Claude 路径本质是本地反向代理与 Anthropic/OpenAI 协议转换，不会让
   Claude Code 原生获得 ChatGPT 订阅。CC Switch 自身文档也明确标记服务条款、账号与长期
-  可用性风险。2026-07-12 的公开帖子中，OpenAI Codex 负责人 Tibo 转引 Theo 的三步
+  可用性风险。2026-07-12 的公开帖子中，OpenAI Codex 负责人 Tibo 分享了 Theo 的三步
   CLIProxyAPI/`claudex` 方案，构成明确的公开实践认可；但 OpenAI 当前帮助页列出的 Codex 客户端
-  仍不包含 Claude Code，CLIProxyAPI 也不是 OpenAI 或 Anthropic 产品。ClaudeDock 提供的实验性
-  预设只配置用户自行运行的回环网关，不复制 OAuth 凭据、
-  不默认安装或启动该代理、不把高风险兼容路径描述成官方集成；官方 Codex 客户端通道继续独立存在。
+  仍不包含 Claude Code，CLIProxyAPI 也不是 OpenAI 或 Anthropic 产品。4.3.0 在用户显式点击后
+  托管这个独立进程的安装与生命周期，不把它伪装成官方集成；官方 Codex 客户端通道继续独立存在，
+  CC Switch 也不是这条受管流程的依赖或中间操作界面。
+
+### ChatGPT 订阅受管网关
+
+- `ManagedChatGptGateway`（`src/main/managed-chatgpt-gateway.ts`）只从
+  `router-for-me/CLIProxyAPI` 的 GitHub `releases/latest` 查询发行元数据。版本必须是严格 SemVer，
+  资产名必须精确匹配 `CLIProxyAPI_<version>_windows_amd64.zip`，下载地址必须位于预期仓库/tag，
+  size 必须小于 128 MiB，digest 必须是 GitHub 提供的 SHA-256。`DownloadEngine` 再验证最终字节数
+  与摘要；元数据响应限制为 2 MiB 并拒绝重定向。
+- 安装根目录固定为 `userData/managed-gateways/cliproxyapi/`；版本文件进入 `versions/<version>/`，
+  OAuth 文件进入专用 `auth/`，下载缓存进入 `downloads/`。解压前最多接受 500 个归档条目并拒绝
+  绝对路径、盘符和 `..` 路径；暂存目录只有通过可执行文件位置检查后才原子改名。递归清理函数只
+  接受 `versions/` 的直接子目录，不能扩大到 `userData` 或项目目录。解压后记录可执行文件自己的
+  SHA-256，状态检查与每次启动前重新计算；本地文件被替换时拒绝运行并要求重新安装。
+- 首次配置在 `8317–8327` 中选择空闲端口，强制 `host: 127.0.0.1`、关闭 TLS（仅限本机回环）、
+  远程管理、控制面板、文件日志和用量统计。随机 `sk-claudedock-*` 客户端密钥以 DPAPI 密文写入
+  `state.json`，项目配置副本也由 `ClaudeConfigStore` 加密；CLIProxyAPI 运行时必须读取的
+  `config.yaml` 含一份本机明文密钥，因此该文件用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。
+- “一键安装并登录”IPC 只返回净化后的状态。主进程以隐藏窗口运行
+  `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；
+  ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
+  是否出现凭据文件和上游成功标记。授权前在 `1455–1465` 中自动选择空闲回调端口并通过上游官方
+  参数传入；授权最长等待 10 分钟，错误文本会移除 Bearer、本地回调地址和疑似密钥。
+- 授权后主进程隐藏启动 sidecar，并携带随机本地密钥探测 `GET /v1/models`。安装、登录、启动、
+  项目配置保存和模型默认值写入在同一操作完成；renderer 不暴露地址、认证和凭据输入，只保留模型
+  映射与连接测试。`ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用
+  完全退出时终止由本进程启动的 sidecar；不会修改 shell profile、Claude Code 用户设置、Codex
+  凭据或 Windows 系统级代理/API 路由。
+- `setup()` 每次都会尝试查询最新上游 Release；版本未变则复用已验证安装，版本变化则下载新版本并
+  保留认证目录、随机本地密钥和端口。GitHub 暂时不可达但本机副本完整时允许离线启动已有版本；首次
+  安装或本机哈希异常时仍失败关闭。外部检测到的 CLIProxyAPI 继续按高级通用 Gateway 呈现，不读取、
+  迁移或接管其配置与 OAuth 文件，避免两套所有权边界混合。
 
 ## Claude Code 接入与会话
 
@@ -565,12 +599,12 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   长地址和模型名允许断行。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
-- `chatgpt-subscription` 预设仍属于 `gateway`：默认把 `ANTHROPIC_BASE_URL` 指向
-  `http://127.0.0.1:8317`，主/快速模型映射为 `gpt-5.6-sol` / `gpt-5.4-mini`，认证字段只接受网关
-  自己的 `api-keys` 客户端密钥，并以 `ANTHROPIC_AUTH_TOKEN`/Bearer 发送，而不是把它误当成 ChatGPT
-  OAuth Token。`normalizeClaudeConfig` 对该预设额外限定 `localhost/127.0.0.1/::1`，避免把
-  高风险 OAuth 转换路径悄然扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由外部
-  网关和上游账号决定。
+- `chatgpt-subscription` 预设仍属于 `gateway`，但它的地址、认证方式和客户端密钥只由
+  `ManagedChatGptGateway` 生成：`ANTHROPIC_BASE_URL` 指向实际分配的 `127.0.0.1:8317–8327`，
+  主/快速模型默认映射为 `gpt-5.6-sol` / `gpt-5.4-mini`，随机 `api-keys` 值以
+  `ANTHROPIC_AUTH_TOKEN`/Bearer 注入当前项目子进程，而不是被误当成 ChatGPT OAuth Token。
+  `normalizeClaudeConfig` 继续把该预设限定在 `localhost/127.0.0.1/::1`，避免把 OAuth 转换路径
+  扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由上游网关与账号决定。
 - 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
   `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；快速模型写入
   `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少快速模型时
@@ -674,7 +708,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
   短连接检查 Claude Code Router 默认 `3456/3458`、CLIProxyAPI 默认 `8317` 与 LiteLLM 常用
   `4000`，不会枚举或扫描
-  全部本机端口。
+  全部本机端口。这个探测器只描述外部工具；受管 CLIProxyAPI 的状态由
+  `ManagedChatGptGateway.getState()` 携带随机本地密钥定向探测，二者不共享配置所有权。
 - `BackgroundTaskCoordinator` 为安装检测、Router 状态、网关扫描、软件更新和连接实测提供
   两个并发槽。相同 key 的并发请求共用同一个 Promise，用户触发的连接实测会排在尚未开始的
   后台刷新之前；`AsyncRefreshCache` 让安装、Router 和更新检查在 TTL 内复用结果，并防止旧
@@ -789,8 +824,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   官方 Claude Code 集成指南使用 Anthropic 兼容 `authToken`、`https://api.deepseek.com/anthropic`
   与当前模型标识，供应商原始“模型不存在”等错误不再被静默快速模型降级覆盖。
 - `chatgpt-subscription` 的能力值为 `direct` 只表示 ClaudeDock 不再叠加 CCR；真正的协议转换仍由
-  用户自行运行的 CLIProxyAPI/CC Switch 回环网关完成。界面和技术文档必须同时保留“非官方直连”
-  标签，不能从该枚举值推导为 OpenAI 或 Anthropic 官方支持。
+  ClaudeDock 下载并管理的独立 CLIProxyAPI 回环 sidecar 完成。CC Switch 不参与这条流程。界面和
+  技术文档必须同时保留“非官方直连”标签，不能从该枚举值推导为 OpenAI 或 Anthropic 官方支持。
 - 向导阶段固定为决策、检查/安装内核、启动、写 Provider/项目配置和 1-token 连通校验；每个
   阶段通过 BusyRegistry 与下载内核暴露真实状态。CCR 的所有配置写入只能经过
   `saveConfigWithoutProfileTakeover()`，唯一 `saveConfig` 调用永久传 `applyProfile: false`，
@@ -1322,6 +1357,9 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   CC Switch MSI/深链/清理牢笼、MCP 三作用域发现/diff/备份/逐字节还原，以及对话无总时长上限、
   静默探活和可选 `local-timeout`。`tests/cli-only-guard.test.ts` 与
   `tests/chat-timeout.test.ts` 作为跨模块源码不变量，避免未来调用点绕过局部单测。
+- `tests/managed-chatgpt-gateway.test.ts` 锁定 CLIProxyAPI 最新发行元数据的仓库/tag/资产名/大小/
+  SHA-256 验证、ZIP 路径穿越拒绝，以及仅监听回环地址、关闭远程管理和使用独立认证目录的配置；
+  renderer 源码守栏同时要求受管状态 IPC、OpenAI 官方浏览器授权文案和一键安装入口保持存在。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已

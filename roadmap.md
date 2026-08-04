@@ -187,6 +187,9 @@ workspace trust 和 advanced 作为可筛选类别；Windows 也长期将系统�
   `workspace-write + on-request`，不向无代码用户暴露危险的全权限捷径。
 - 本版让 ChatGPT 官方订阅进入 ClaudeDock 的开发流程，但运行的客户端是 Codex，不宣称
   “ChatGPT 订阅原生进入 Claude Code”。OAuth 令牌仍只归官方 Codex 管理。
+- 4.3.0 另在明确标记的实验区加入 ClaudeDock 托管 CLIProxyAPI 的 Claude Code 兼容路径：来源介绍
+  为 OpenAI Codex 负责人 Tibo 公开分享的实践，应用吸收下载、校验、浏览器授权引导、回环配置和
+  生命周期；它仍是第三方协议桥，与上面的官方 Codex runtime 完全分层。
 - 3.0 已建立统一 BusyRegistry 与可恢复下载内核；4.0 移除 Xray 后，CCR、Codex 与 CC Switch 的
   受管资源继续共用进度、恢复和完整性闸门，安装/卸载/配置写入纳入忙碌退出确认。
 - Provider Adapter 已以显式能力矩阵区分 Anthropic 直连、可选 CCR 与必须协议转换；一键向导
@@ -213,9 +216,10 @@ workspace trust 和 advanced 作为可筛选类别；Windows 也长期将系统�
 2. **继续扩展统一安装中心**：复用 3.0 下载内核的 checksum、版本、来源和命令调用边界，评估
    Gemini CLI / OpenCode；每个工具拥有独立 adapter，不共享任意 shell 字符串。
 3. **Skills 跨工具预览**：沿用 MCP 的目标文件、diff、备份和回滚边界，不允许“同步全部”成为默认。
-4. **协议转换实验区**：只有用户明确开启、看过风险并可随时恢复官方配置时，才评估
-   OpenAI Responses ↔ Anthropic Messages 本地转换。Codex OAuth → Claude 的反向代理有
-   服务条款、账号和长期可用性风险，不进入默认安装，不承诺账号安全，也不保存可复用 token。
+4. **协议转换实验区**：4.3.0 已在用户明确点击后托管 CLIProxyAPI sidecar，强制回环监听并把手动
+   命令收进图形流程。Codex OAuth → Claude 的反向代理仍有服务条款、账号和长期可用性风险，不作为
+   默认接入，不承诺账号安全；OAuth 文件只由独立 sidecar 保存在划定的应用数据目录，ClaudeDock
+   不解析 Token 内容。后续应补齐上游变更兼容、可视化清理与失效恢复演练。
 
 ### 本轮调研结论
 

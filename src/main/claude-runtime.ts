@@ -630,6 +630,7 @@ export class ClaudeRuntime {
       sessionId: string,
     ) => Promise<ClaudePermissionMode | undefined>,
     downloadEngine: DownloadEngine,
+    private readonly ensureManagedChatGptGatewayReady: () => Promise<void>,
     fetchImplementation: typeof fetch = fetch,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
     private readonly applicationVersion?: string,
@@ -979,6 +980,9 @@ export class ClaudeRuntime {
     }
 
     const config = this.configStore.getConfig(cwd);
+    if (config.preset === 'chatgpt-subscription') {
+      await this.ensureManagedChatGptGatewayReady();
+    }
     const credential = this.configStore.getCredential(cwd);
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
       throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');

@@ -63,6 +63,7 @@ import type {
   McpRemoveInput,
   McpScope,
   McpTogglePreview,
+  ManagedChatGptGatewayOperationResult,
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
@@ -119,6 +120,7 @@ import { RollbackCoordinator } from './rollback-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
 import { CcSwitchAdapter } from './cc-switch-adapter';
+import { ManagedChatGptGateway } from './managed-chatgpt-gateway';
 import { McpManager } from './mcp-manager';
 import { AppPreferencesStore } from './app-preferences-store';
 import {
@@ -175,6 +177,7 @@ let busyRegistry: BusyRegistry | null = null;
 let mcpManager: McpManager | null = null;
 let downloadEngine: DownloadEngine | null = null;
 let ccSwitchAdapter: CcSwitchAdapter | null = null;
+let managedChatGptGateway: ManagedChatGptGateway | null = null;
 let applicationProxyStore: ApplicationProxyStore | null = null;
 let applicationProxyState: ApplicationProxyState | undefined;
 let conversationNetworkSession: Session | null = null;
@@ -779,6 +782,13 @@ const requireCcSwitchAdapter = (): CcSwitchAdapter => {
     throw new Error('CC Switch 适配器尚未初始化。');
   }
   return ccSwitchAdapter;
+};
+
+const requireManagedChatGptGateway = (): ManagedChatGptGateway => {
+  if (!managedChatGptGateway) {
+    throw new Error('ChatGPT 托管网关尚未初始化。');
+  }
+  return managedChatGptGateway;
 };
 
 const requireMcpManager = (): McpManager => {
@@ -2171,6 +2181,59 @@ const registerIpc = (): void => {
     validateSessionId(sessionId);
     return requireClaudeRuntime().getRouterManagementState();
   });
+  ipcMain.handle('claude:managed-chatgpt-gateway-state', async (event) => {
+    validateSender(event);
+    return requireManagedChatGptGateway().getState();
+  });
+  ipcMain.handle(
+    'claude:managed-chatgpt-gateway-setup',
+    async (
+      event,
+      sessionId: unknown,
+      forceLogin: unknown,
+    ): Promise<ManagedChatGptGatewayOperationResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      if (typeof forceLogin !== 'boolean') {
+        throw new Error('托管网关登录参数无效。');
+      }
+      const status = workspace.getStatus(validatedSessionId);
+      try {
+        const managed = await requireManagedChatGptGateway().setup(forceLogin);
+        const projectState = await requireClaudeRuntime().saveConfig(
+          validatedSessionId,
+          status.cwd,
+          {
+            apiKeyHelperPolicy: 'prefer-claudedock',
+            authMode: 'authToken',
+            baseUrl: managed.baseUrl,
+            credential: managed.credential,
+            credentialAction: 'replace',
+            model: 'gpt-5.6-sol',
+            modelFast: 'gpt-5.4-mini',
+            preset: 'chatgpt-subscription',
+            protocol: 'anthropic',
+            provider: 'gateway',
+          },
+        );
+        const state = await requireManagedChatGptGateway().getState();
+        return {
+          message: 'CLIProxyAPI 已安装并授权，当前项目已自动接入 ChatGPT 订阅。',
+          ok: true,
+          projectState,
+          state,
+        };
+      } catch (error) {
+        const state = await requireManagedChatGptGateway().getState();
+        return {
+          error: error instanceof Error ? error.message : '托管网关配置失败。',
+          message: '未能完成 ChatGPT 订阅的一键接入。',
+          ok: false,
+          state,
+        };
+      }
+    },
+  );
   ipcMain.handle('router:kernel-state', async (event, sessionId: unknown) => {
     validateSender(event);
     validateSessionId(sessionId);
@@ -3294,6 +3357,13 @@ if (!hasSingleInstanceLock) {
       (url) => shell.openExternal(url),
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
     );
+    managedChatGptGateway = new ManagedChatGptGateway(
+      app.getPath('userData'),
+      downloadEngine,
+      busyRegistry,
+      safeStorage,
+      (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
+    );
     applicationProxyStore = new ApplicationProxyStore(app.getPath('userData'), safeStorage);
     conversationNetworkSession = session.fromPartition('claudedock-conversation-network');
     applicationProxyTestSession = session.fromPartition('claudedock-application-proxy-test');
@@ -3333,6 +3403,7 @@ if (!hasSingleInstanceLock) {
       },
       requestPermissionModeFromScreen,
       downloadEngine,
+      () => requireManagedChatGptGateway().ensureRunning(),
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
       app.getVersion(),
@@ -3460,6 +3531,7 @@ app.on('before-quit', (event) => {
   pendingPermissionModeProbes.clear();
   chatService.shutdown();
   claudeRuntime?.shutdown();
+  managedChatGptGateway?.shutdown();
   codexRuntime?.dispose();
   workspace.shutdown();
 });

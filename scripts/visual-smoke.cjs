@@ -431,45 +431,50 @@ app
     document.querySelector('#environment-setup').hidden = true;
     document.querySelector('#connection-provider-picker').setAttribute('aria-disabled', 'false');
     document.querySelector('#connection-provider-setup').hidden = false;
-    document.querySelector('#connection-provider-title').textContent = 'ChatGPT 订阅（本地网关）';
+    document.querySelector('#connection-provider-title').textContent =
+      'ChatGPT 订阅（ClaudeDock 托管）';
     document.querySelector('#connection-provider-description').textContent =
-      '使用 ChatGPT 的 Codex 订阅授权，经用户自行运行的本地兼容网关转换为 Anthropic Messages。';
+      '由 ClaudeDock 一键安装、授权并托管本机网关，把 ChatGPT Codex 订阅接入当前 Claude Code 项目。';
     document.querySelector('#connection-provider-caveat').hidden = false;
     document.querySelector('#connection-provider-caveat').textContent =
-      'OpenAI Codex 负责人曾公开介绍这种实践；CLIProxyAPI 仍是第三方本地网关，不是官方产品接入。';
-    document.querySelector('#claude-config-form').hidden = false;
-    document.querySelector('#claude-base-url').value = 'http://127.0.0.1:8317';
-    document.querySelector('#claude-model').value = 'gpt-5.6-sol';
-    document.querySelector('#claude-model-fast').value = 'gpt-5.4-mini';
-    document.querySelector('#credential-label').textContent =
-      '本地网关访问密钥（不是 ChatGPT 凭据）';
-    document.querySelector('#protocol-help').textContent =
-      'Claude Code 访问本机 Anthropic Messages 入口；本地网关再完成 Codex OAuth 请求与协议转换。';
+      '这条路径由 OpenAI Codex 负责人 Tibo 公开分享；CLIProxyAPI 仍是第三方开源网关，不是 OpenAI 或 Anthropic 官方产品。';
+    document.querySelector('#claude-config-form').hidden = true;
     const specialSetup = document.querySelector('#connection-provider-special');
     const subscriptionGuide = document.createElement('section');
     subscriptionGuide.className = 'subscription-gateway-guide';
     const subscriptionTitle = document.createElement('strong');
-    subscriptionTitle.textContent = '先在 ClaudeDock 外完成本地网关授权';
-    const subscriptionSteps = document.createElement('ol');
-    for (const copy of [
-      '安装并启动 CLIProxyAPI，在外部工具中完成 ChatGPT / Codex 登录。',
-      '1455 是 OAuth 回调端口，不是 Claude Code 的模型接口。',
-      '确认 127.0.0.1:8317 与 config.yaml 的本地 api-keys 客户端密钥。',
-    ]) {
-      const item = document.createElement('li');
-      item.textContent = copy;
-      subscriptionSteps.append(item);
-    }
+    subscriptionTitle.textContent = 'OpenAI Codex 负责人公开分享的 claudex 路径';
+    const subscriptionSource = document.createElement('p');
+    subscriptionSource.textContent =
+      'ClaudeDock 把 CLIProxyAPI 的安装、配置和后台运行收进一个界面，不要求用户打开终端或第三方控制台。';
+    const subscriptionStatus = document.createElement('div');
+    subscriptionStatus.className = 'subscription-gateway-status';
+    subscriptionStatus.dataset.phase = 'not-installed';
+    const subscriptionStatusText = document.createElement('div');
+    const subscriptionStatusTitle = document.createElement('strong');
+    subscriptionStatusTitle.textContent = '尚未安装托管网关';
+    const subscriptionStatusDetail = document.createElement('span');
+    subscriptionStatusDetail.textContent = '点击一次即可校验下载、安装并打开 OpenAI 授权页。';
+    subscriptionStatusText.append(subscriptionStatusTitle, subscriptionStatusDetail);
+    const subscriptionAction = document.createElement('button');
+    subscriptionAction.type = 'button';
+    subscriptionAction.textContent = '一键安装并登录';
+    subscriptionStatus.append(subscriptionStatusText, subscriptionAction);
     const subscriptionBoundary = document.createElement('small');
     subscriptionBoundary.textContent =
-      'ClaudeDock 采用项目级 claudex 环境注入，不改 shell 配置，也不读取 OAuth 登录文件。';
-    subscriptionGuide.append(subscriptionTitle, subscriptionSteps, subscriptionBoundary);
+      '只自动打开 OpenAI 官方授权页；ClaudeDock 不读取 OAuth Token 内容，也不修改 shell、Codex、Claude Code 用户设置或系统路由。';
+    subscriptionGuide.append(
+      subscriptionTitle,
+      subscriptionSource,
+      subscriptionStatus,
+      subscriptionBoundary,
+    );
     specialSetup.replaceChildren(subscriptionGuide);
     const groups = document.querySelector('#connection-provider-groups');
     groups.replaceChildren();
     for (const fixture of [
       ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], true],
-      ['订阅转换（实验性）', ['ChatGPT 订阅（本地网关）'], false],
+      ['订阅接入（实验性）', ['ChatGPT 订阅（ClaudeDock 托管）'], false],
       ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], true],
       ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], true],
       ['本地服务', ['Ollama 本地模型'], true],
