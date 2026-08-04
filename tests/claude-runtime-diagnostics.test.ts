@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 import {
+  claudeResourceUsage,
   connectionProtocolForRouterProvider,
   defaultConnectionProtocolForPreset,
+  effectiveClaudeMetrics,
+  mergeClaudeResourceUsage,
   parseClaudeEffortThinkingDisabledError,
+  parseClaudeContextWindowError,
   parseClaudeMetrics,
   parseClaudeRuntimeApiError,
   routerRepairInputForProject,
@@ -67,6 +71,85 @@ const routerState: ClaudeRouterManagementState = {
 };
 
 describe('Claude runtime route diagnostics', () => {
+  it('keeps live context metrics when provider balance data is merged', () => {
+    const checkedAt = Date.now();
+    const merged = mergeClaudeResourceUsage(
+      {
+        availability: 'available',
+        autoCompactAtTokens: 206_720,
+        capabilities: { balance: false, context: true, windows: true },
+        checkedAt,
+        contextUsedPercent: 25,
+        contextUsedTokens: 64_600,
+        contextWindowTokens: 258_400,
+        source: 'claude-statusline',
+        windows: [{ label: '5 hours', usedPercent: 30 }],
+      },
+      {
+        availability: 'available',
+        balance: { balances: [{ amount: 12.5, currency: 'USD' }] },
+        capabilities: { balance: true, context: false, windows: false },
+        checkedAt: checkedAt + 1,
+        source: 'openrouter-key',
+      },
+    );
+
+    expect(merged).toMatchObject({
+      autoCompactAtTokens: 206_720,
+      balance: { balances: [{ amount: 12.5, currency: 'USD' }] },
+      capabilities: { balance: true, context: true, windows: true },
+      contextUsedPercent: 25,
+      contextUsedTokens: 64_600,
+      contextWindowTokens: 258_400,
+      source: 'openrouter-key',
+      windows: [{ label: '5 hours', usedPercent: 30 }],
+    });
+  });
+
+  it('reports the Codex 95% effective window only for the matching managed model', () => {
+    const metrics = { capturedAt: Date.now(), contextWindowSize: 272_000 };
+    const managed: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      model: 'gpt-5.6-sol',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    };
+
+    expect(effectiveClaudeMetrics(metrics, managed)?.contextWindowSize).toBe(258_400);
+    expect(
+      effectiveClaudeMetrics({ ...metrics, contextWindowSize: 1_050_000 }, managed, 'extended')
+        ?.contextWindowSize,
+    ).toBe(997_500);
+    expect(
+      effectiveClaudeMetrics(metrics, { ...managed, model: 'gpt-5.4-mini' })?.contextWindowSize,
+    ).toBe(272_000);
+  });
+
+  it('uses the live smaller window when Claude Code does not accept the requested override', () => {
+    const managed: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      model: 'gpt-5.6-sol',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    };
+
+    expect(
+      claudeResourceUsage(
+        { capturedAt: Date.now(), contextWindowSize: 200_000, contextWindowUsed: 50_000 },
+        managed,
+        'extended',
+      ),
+    ).toMatchObject({
+      autoCompactAtTokens: 160_000,
+      contextUsedPercent: 25,
+      contextWindowTokens: 200_000,
+    });
+  });
+
   it('keeps the official status-line session title for workspace synchronization', () => {
     const metrics = parseClaudeMetrics(
       JSON.stringify({
@@ -105,6 +188,15 @@ describe('Claude runtime route diagnostics', () => {
     expect(result).toContain('接口请求失败');
     expect(result).not.toContain('upstream rejected');
     expect(result).not.toContain('sk-example-sensitive-token');
+  });
+
+  it('classifies an upstream context overflow and gives a recoverable next step', () => {
+    const error =
+      'Error during compaction: API Error: 400 Your input exceeds the context window of this model. Please adjust your input and try again.';
+
+    expect(parseClaudeContextWindowError(error)).toBe(true);
+    expect(parseClaudeRuntimeApiError(error)).toContain('新建对话');
+    expect(parseClaudeRuntimeApiError(error)).toContain('按模型与窗口模式');
   });
 
   it('recognizes wrapped effort errors only when high effort conflicts with disabled thinking', () => {
@@ -290,14 +382,17 @@ describe('Claude runtime permission mode observation', () => {
     expect(runtimeSource).toContain('if (!MODEL_NAME_PATTERN.test(option.model))');
   });
 
-  it('runs the official network guard before a real Anthropic connection test', () => {
+  it('runs the matching official network guard before a real connection test', () => {
     const testHandler = mainSource.slice(
       mainSource.indexOf("'claude:test-connection'"),
       mainSource.indexOf("ipcMain.handle('app:open-external'"),
     );
     expect(testHandler).toContain('const validatedInput = validateClaudeConfigInput(input);');
+    expect(testHandler).toContain(
+      'const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);',
+    );
     expect(testHandler).toMatch(
-      /if \(validatedInput\.provider === 'anthropic' && validatedInput\.protocol !== 'openai'\) \{[\s\S]*?assertOfficialProviderAllowed\(\s*'anthropic-claude',\s*'first-request',\s*status\.cwd,?\s*\);/,
+      /if \(officialProvider\) \{[\s\S]*?assertOfficialProviderAllowed\(officialProvider, 'first-request', status\.cwd\);/,
     );
     expect(testHandler.indexOf('assertOfficialProviderAllowed(')).toBeLessThan(
       testHandler.indexOf('requireClaudeRuntime().testConnection('),

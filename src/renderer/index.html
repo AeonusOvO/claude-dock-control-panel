@@ -1028,10 +1028,10 @@
             <span class="footer-connection-dot" aria-hidden="true"></span>
             <span id="footer-connection-label">连接待测试</span>
           </button>
-          <span class="footer-context">
+          <button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">
             <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
-            <span id="footer-context-label">上下文 —</span>
-          </span>
+            <span id="footer-context-label">资源 —</span>
+          </button>
           <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
             模型 —
           </button>
@@ -1635,6 +1635,43 @@
       <button data-history-context-action="delete" role="menuitem" type="button">删除记录</button>
     </div>
 
+    <div
+      class="footer-menu footer-resource-menu"
+      id="footer-resource-menu"
+      role="menu"
+      aria-label="资源详情"
+      hidden
+    >
+      <div class="footer-resource-menu__details" id="footer-resource-details"></div>
+      <button type="button" role="menuitemradio" data-resource-preference="auto">自动</button>
+      <button type="button" role="menuitemradio" data-resource-preference="context">
+        上下文优先
+      </button>
+      <button type="button" role="menuitemradio" data-resource-preference="quota">额度优先</button>
+      <div
+        class="footer-resource-menu__context"
+        id="footer-context-window-options"
+        role="group"
+        aria-label="托管 GPT-5.6 上下文窗口"
+        hidden
+      >
+        <p><strong>托管 GPT-5.6 窗口</strong><span>下次新建或重启会话生效</span></p>
+        <button type="button" role="menuitemradio" data-context-window-mode="standard">
+          <strong>标准 · 约 25.84 万有效</strong>
+          <small>默认；约 20.67 万时提前压缩，和当前 Codex 产品会话一致。</small>
+        </button>
+        <button type="button" role="menuitemradio" data-context-window-mode="extended">
+          <strong>扩展（实验）· 约 99.75 万有效</strong>
+          <small>约 79.8 万时提前压缩；当前 ChatGPT 订阅后端可能仍在 27.2 万附近拒绝。</small>
+        </button>
+        <p class="footer-menu__hint">
+          扩展窗口不等于模型一定更聪明。OpenAI 仅明确公布 105 万容量及长上下文计价；超过 27.2
+          万输入后 API 整次请求进入更高计价区间，ChatGPT
+          订阅的实际额度消耗仍以官方策略为准。容量可用性与更长会话中早期信息能否稳定利用，均应按真实任务验证。
+        </p>
+      </div>
+    </div>
+
     <div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden></div>
 
     <div
@@ -1927,60 +1964,67 @@
                   >
                   <input id="application-proxy-enabled" type="checkbox" />
                 </label>
-                <div class="proxy-import-actions">
-                  <label class="field" for="application-proxy-protocol">
-                    <span>协议</span>
-                    <select id="application-proxy-protocol">
-                      <option value="http">HTTP</option>
-                      <option value="socks5">SOCKS5</option>
-                    </select>
-                  </label>
-                  <label class="field" for="application-proxy-host">
-                    <span>地址</span>
-                    <input
-                      id="application-proxy-host"
-                      type="text"
-                      maxlength="253"
-                      spellcheck="false"
-                      placeholder="127.0.0.1 或代理主机名"
-                    />
-                  </label>
-                  <label class="field" for="application-proxy-port">
-                    <span>端口</span>
-                    <input
-                      id="application-proxy-port"
-                      type="number"
-                      min="1"
-                      max="65535"
-                      inputmode="numeric"
-                      placeholder="例如 7890"
-                    />
-                  </label>
+                <div
+                  class="proxy-settings__dependent"
+                  id="application-proxy-configuration"
+                  aria-disabled="true"
+                  inert
+                >
+                  <div class="proxy-import-actions">
+                    <label class="field" for="application-proxy-protocol">
+                      <span>协议</span>
+                      <select id="application-proxy-protocol">
+                        <option value="http">HTTP</option>
+                        <option value="socks5">SOCKS5</option>
+                      </select>
+                    </label>
+                    <label class="field" for="application-proxy-host">
+                      <span>地址</span>
+                      <input
+                        id="application-proxy-host"
+                        type="text"
+                        maxlength="253"
+                        spellcheck="false"
+                        placeholder="127.0.0.1 或代理主机名"
+                      />
+                    </label>
+                    <label class="field" for="application-proxy-port">
+                      <span>端口</span>
+                      <input
+                        id="application-proxy-port"
+                        type="number"
+                        min="1"
+                        max="65535"
+                        inputmode="numeric"
+                        placeholder="例如 7890"
+                      />
+                    </label>
+                  </div>
+                  <div class="proxy-import-actions">
+                    <label class="field" for="application-proxy-username">
+                      <span>账号（可选）</span>
+                      <input
+                        id="application-proxy-username"
+                        type="text"
+                        maxlength="256"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="field" for="application-proxy-password">
+                      <span>密码（可选）</span>
+                      <input
+                        id="application-proxy-password"
+                        type="password"
+                        maxlength="4096"
+                        autocomplete="new-password"
+                        placeholder="留空则保留已保存密码"
+                      />
+                    </label>
+                  </div>
+                  <p id="application-proxy-credential-status" class="settings-help">
+                    未保存代理凭据。
+                  </p>
                 </div>
-                <div class="proxy-import-actions">
-                  <label class="field" for="application-proxy-username">
-                    <span>账号（可选）</span>
-                    <input
-                      id="application-proxy-username"
-                      type="text"
-                      maxlength="256"
-                      autocomplete="off"
-                    />
-                  </label>
-                  <label class="field" for="application-proxy-password">
-                    <span>密码（可选）</span>
-                    <input
-                      id="application-proxy-password"
-                      type="password"
-                      maxlength="4096"
-                      autocomplete="new-password"
-                      placeholder="留空则保留已保存密码"
-                    />
-                  </label>
-                </div>
-                <p id="application-proxy-credential-status" class="settings-help">
-                  未保存代理凭据。
-                </p>
                 <div class="proxy-runtime-actions">
                   <button id="application-proxy-detect" type="button">检测本机代理</button>
                   <button class="dialog-primary" id="application-proxy-save" type="button">
@@ -1994,8 +2038,11 @@
                 </p>
               </section>
               <section
-                class="proxy-settings__section"
+                class="proxy-settings__section proxy-settings__dependent"
+                id="application-proxy-scope"
                 aria-labelledby="application-proxy-scope-title"
+                aria-disabled="true"
+                inert
               >
                 <div class="settings-section-heading">
                   <strong id="application-proxy-scope-title">作用域</strong>

@@ -46,6 +46,10 @@ import type {
 const api: ControlPanelApi = {
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
+  setFooterResourcePreference: (preference) =>
+    ipcRenderer.invoke('app:set-footer-resource-preference', preference),
+  setManagedChatGptContextWindowMode: (mode) =>
+    ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode),
   setAdvancedSettings: (settings) => ipcRenderer.invoke('app:set-advanced-settings', settings),
   setCloseBehavior: (behavior) => ipcRenderer.invoke('app:set-close-behavior', behavior),
   listBusyLeases: () => ipcRenderer.invoke('busy:list') as Promise<BusyLease[]>,

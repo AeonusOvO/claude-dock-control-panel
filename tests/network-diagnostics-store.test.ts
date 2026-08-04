@@ -23,6 +23,7 @@ const resultAt = (checkedAt: number): NetworkPreflightResult => ({
     {
       detail: 'application path',
       dnsServers: ['10.2.3.4'],
+      globalIpv6Available: false,
       ipv4Available: true,
       ipv6Available: false,
       process: 'application',

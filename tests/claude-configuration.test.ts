@@ -11,6 +11,7 @@ import {
   buildRuntimeSignalCommand,
   buildWebSearchGuardCommand,
   evaluateClaudeInstallation,
+  managedChatGptContextProfile,
   normalizeClaudeConfig,
   shouldDisableInheritedApiKeyHelper,
 } from '../src/main/claude-configuration';
@@ -82,6 +83,33 @@ describe('Claude Code configuration', () => {
       modelFast: 'gpt-5.4-mini',
       preset: 'chatgpt-subscription',
       provider: 'gateway',
+    });
+    const normalized = normalizeClaudeConfig(subscriptionInput);
+    expect(managedChatGptContextProfile(normalized)?.autoCompactAtTokens).toBe(206_720);
+    expect(buildClaudeEnvironment(normalized, 'local-gateway-token')).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '258400',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
+      DISABLE_AUTO_COMPACT: null,
+      DISABLE_COMPACT: null,
+    });
+    expect(buildClaudeSettingsEnvironment(normalized)).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '258400',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
+      DISABLE_AUTO_COMPACT: '',
+      DISABLE_COMPACT: '',
+    });
+    expect(buildClaudeSettingsEnvironment(normalized, 'extended')).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '997500',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1050000',
+    });
+    const otherModel = normalizeClaudeConfig({ ...subscriptionInput, model: 'gpt-5.4-mini' });
+    expect(buildClaudeSettingsEnvironment(otherModel, 'extended')).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '',
     });
     expect(() =>
       normalizeClaudeConfig({
@@ -170,6 +198,8 @@ describe('Claude Code configuration', () => {
       CLAUDE_CODE_DISABLE_THINKING: null,
       CLAUDE_CODE_EFFORT_LEVEL: null,
       MAX_THINKING_TOKENS: null,
+      DISABLE_AUTO_COMPACT: null,
+      DISABLE_COMPACT: null,
     });
   });
 

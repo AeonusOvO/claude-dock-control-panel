@@ -40,7 +40,7 @@ describe('external application proxy integration contract', () => {
       expect(preload).toContain(`ipcRenderer.invoke('${channel}'`);
     }
     expect(preload).toContain("ipcRenderer.on('application-proxy:changed', callback)");
-    expect(renderer).toContain('.saveApplicationProxy({');
+    expect(renderer).toContain('.saveApplicationProxy(pendingApplicationProxyInput())');
   });
 
   it('does not ship runtime entry points for nodes, subscriptions, tunnels, or Xray', () => {

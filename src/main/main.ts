@@ -54,6 +54,8 @@ import type {
   CodexOperationResult,
   DevelopmentRuntime,
   DevelopmentRuntimeState,
+  FooterResourcePreference,
+  ManagedChatGptContextWindowMode,
   NetworkPreflightAction,
   NetworkPreflightRunInput,
   NetworkProviderId,
@@ -88,7 +90,11 @@ import {
   TERMINAL_THEMES,
   type TerminalThemeId,
 } from '../shared/terminal-themes';
-import { CLAUDE_PROVIDER_EXTERNAL_HOSTS, claudeProviderIdSet } from '../shared/claude-providers';
+import {
+  CLAUDE_PROVIDER_EXTERNAL_HOSTS,
+  claudeProviderIdSet,
+  officialNetworkProviderForClaudePreset,
+} from '../shared/claude-providers';
 import { selectRouterKernelState } from '../shared/router-kernel';
 import { CLAUDE_EFFORT_REQUESTS } from '../shared/claude-effort';
 import {
@@ -1640,6 +1646,8 @@ const registerIpc = (): void => {
     advanced: advancedSettingsStore.get(),
     artifactNetworkAllowed: artifactService.getState().allowed,
     closeBehavior: appPreferencesStore.get().closeBehavior,
+    footerResourcePreference: appPreferencesStore.get().footerResourcePreference,
+    managedChatGptContextWindowMode: appPreferencesStore.get().managedChatGptContextWindowMode,
     language: 'zh-CN',
     launchAtLogin: app.getLoginItemSettings().openAtLogin,
     theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
@@ -1665,6 +1673,24 @@ const registerIpc = (): void => {
     advancedSettingsStore.set({
       chatIdleTimeoutMinutes: record.chatIdleTimeoutMinutes as 0 | 5 | 10 | 30,
       webResearchIsolation: record.webResearchIsolation,
+    });
+    return appSettingsView();
+  });
+  ipcMain.handle('app:set-footer-resource-preference', (event, preference: unknown) => {
+    validateSender(event);
+    if (preference !== 'auto' && preference !== 'context' && preference !== 'quota') {
+      throw new Error('底栏资源偏好无效。');
+    }
+    appPreferencesStore.set({ footerResourcePreference: preference as FooterResourcePreference });
+    return appSettingsView();
+  });
+  ipcMain.handle('app:set-managed-chatgpt-context-window-mode', (event, mode: unknown) => {
+    validateSender(event);
+    if (mode !== 'standard' && mode !== 'extended') {
+      throw new Error('ChatGPT 上下文窗口模式无效。');
+    }
+    appPreferencesStore.set({
+      managedChatGptContextWindowMode: mode as ManagedChatGptContextWindowMode,
     });
     return appSettingsView();
   });
@@ -1958,15 +1984,12 @@ const registerIpc = (): void => {
         if (projectHasActiveAgent) {
           throw new Error('请先结束当前开发会话，再切换开发引擎。');
         }
-        if (
-          selected === 'codex' ||
-          (selected === 'claude' && requireClaudeRuntime().usesOfficialProvider(status.cwd))
-        ) {
-          await assertOfficialProviderAllowed(
-            selected === 'codex' ? 'openai-codex' : 'anthropic-claude',
-            'provider-switch',
-            status.cwd,
-          );
+        const officialProvider =
+          selected === 'codex'
+            ? 'openai-codex'
+            : requireClaudeRuntime().officialNetworkProvider(status.cwd);
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'provider-switch', status.cwd);
         }
         const rollback = new RollbackCoordinator();
         rollback.add(() => agentRuntimeStore.set(status.cwd, current));
@@ -2352,6 +2375,7 @@ const registerIpc = (): void => {
       const resumeAfterSetup = runtime.isActive(validatedSessionId);
       let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
+        await assertOfficialProviderAllowed('openai-codex', 'login', status.cwd);
         if (resumeAfterSetup) {
           emitManagedChatGptProgress(
             validatedSessionId,
@@ -2480,6 +2504,7 @@ const registerIpc = (): void => {
       const resumeAfterModelChange = runtime.isActive(validatedSessionId);
       let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
+        await assertOfficialProviderAllowed('openai-codex', 'first-request', status.cwd);
         emitManagedChatGptProgress(
           validatedSessionId,
           'discovering-models',
@@ -2802,8 +2827,9 @@ const registerIpc = (): void => {
       const rollback = new RollbackCoordinator();
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        if (validatedInput.provider === 'anthropic' && validatedInput.protocol !== 'openai') {
-          await assertOfficialProviderAllowed('anthropic-claude', 'provider-switch', status.cwd);
+        const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'provider-switch', status.cwd);
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
@@ -2843,8 +2869,12 @@ const registerIpc = (): void => {
       const rollback = new RollbackCoordinator();
       try {
         const validatedEntryId = validateHistoryEntryId(entryId);
-        if (runtime.connectionHistoryUsesOfficialProvider(status.cwd, validatedEntryId)) {
-          await assertOfficialProviderAllowed('anthropic-claude', 'provider-switch', status.cwd);
+        const officialProvider = runtime.connectionHistoryOfficialNetworkProvider(
+          status.cwd,
+          validatedEntryId,
+        );
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'provider-switch', status.cwd);
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
@@ -2956,14 +2986,11 @@ const registerIpc = (): void => {
       let restartAttempted = false;
       try {
         const validatedInput = validateClaudeRelaunchInput(input);
-        const targetUsesOfficialProvider =
-          runtime.usesOfficialProvider(status.cwd) ||
-          Boolean(
-            validatedInput.entryId &&
-            runtime.connectionHistoryUsesOfficialProvider(status.cwd, validatedInput.entryId),
-          );
-        if (targetUsesOfficialProvider) {
-          await assertOfficialProviderAllowed('anthropic-claude', 'cli-launch', status.cwd);
+        const officialProvider = validatedInput.entryId
+          ? runtime.connectionHistoryOfficialNetworkProvider(status.cwd, validatedInput.entryId)
+          : runtime.officialNetworkProvider(status.cwd);
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
         }
         const snapshot = runtime.createConfigSnapshot(status.cwd);
         rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
@@ -3102,8 +3129,9 @@ const registerIpc = (): void => {
       const status = workspace.getStatus(validatedSessionId);
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        if (validatedInput.provider === 'anthropic' && validatedInput.protocol !== 'openai') {
-          await assertOfficialProviderAllowed('anthropic-claude', 'first-request', status.cwd);
+        const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'first-request', status.cwd);
         }
         return await requireClaudeRuntime().testConnection(status.cwd, validatedInput);
       } catch (error) {
@@ -3160,8 +3188,9 @@ const registerIpc = (): void => {
         if (agentRuntimeStore.get(status.cwd) !== 'claude') {
           throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
         }
-        if (runtime.usesOfficialProvider(status.cwd)) {
-          await assertOfficialProviderAllowed('anthropic-claude', 'cli-launch', status.cwd);
+        const officialProvider = runtime.officialNetworkProvider(status.cwd);
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
         }
         const prepared = await runtime.prepareLaunch(
           validatedSessionId,
@@ -3358,8 +3387,9 @@ const registerIpc = (): void => {
         if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
           throw new Error('会话标识无效。');
         }
-        if (runtime.usesOfficialProvider(status.cwd)) {
-          await assertOfficialProviderAllowed('anthropic-claude', 'cli-launch', status.cwd);
+        const officialProvider = runtime.officialNetworkProvider(status.cwd);
+        if (officialProvider) {
+          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
         }
         const prepared = await runtime.prepareLaunchWithSession(
           validatedSessionId,
@@ -3690,6 +3720,7 @@ if (!hasSingleInstanceLock) {
       runtimeAssetPath('claude-runtime-signal.ps1'),
       runtimeAssetPath('claude-web-search-guard.ps1'),
       () => advancedSettingsStore.get().webResearchIsolation,
+      () => appPreferencesStore.get().managedChatGptContextWindowMode,
       (state) => {
         const claudeTitle = state.metrics?.sessionName;
         if (claudeTitle && workspace.hasSession(state.sessionId)) {

@@ -510,6 +510,16 @@ describe('renderer interaction lifecycle contract', () => {
 
   it('turns the footer model, mode and effort readouts into real menu triggers', () => {
     expect(rendererMarkup).toMatch(
+      /<button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    );
+    expect(rendererMarkup).toContain('data-context-window-mode="standard"');
+    expect(rendererMarkup).toContain('data-context-window-mode="extended"');
+    expect(rendererMarkup).toContain('扩展（实验）· 约 99.75 万有效');
+    expect(rendererSource).toContain('.setManagedChatGptContextWindowMode(contextWindowMode)');
+    expect(preloadSource).toContain(
+      "ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode)",
+    );
+    expect(rendererMarkup).toMatch(
       /<button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">/,
     );
     expect(rendererMarkup).toMatch(
@@ -541,9 +551,10 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/,
     );
-    // Narrow windows drop all readouts together, so the footer cannot overflow.
+    // Narrow windows always keep the resource control while progressively dropping lower-value
+    // labels, so quota/context and the context-window choice do not disappear.
     expect(rendererStyles).toMatch(
-      /@media \(max-width: 900px\)[\s\S]*?#footer-mode,\s+#footer-effort,\s+#footer-model \{\s+display: none;/,
+      /@media \(max-width: 1040px\) \{\s+#footer-model,\s+#footer-mode \{\s+display: none;/,
     );
   });
 
@@ -1082,13 +1093,32 @@ describe('external application proxy settings', () => {
       expect(rendererMarkup).toContain(`id="${id}"`);
     }
     expect(rendererSource).toContain('.detectApplicationProxyCandidates()');
-    expect(rendererSource).toContain('.saveApplicationProxy({');
+    expect(rendererSource).toContain('.saveApplicationProxy(pendingApplicationProxyInput())');
     expect(rendererSource).toContain('.testApplicationProxy()');
   });
 
+  it('treats the proxy editor as one staged setting with saved-only testing', () => {
+    expect(rendererMarkup).toMatch(
+      /id="application-proxy-configuration"[\s\S]*?aria-disabled="true"[\s\S]*?inert/,
+    );
+    expect(rendererMarkup).toMatch(
+      /id="application-proxy-scope"[\s\S]*?aria-disabled="true"[\s\S]*?inert/,
+    );
+    expect(rendererSource).toContain('applicationProxyIsDirty()');
+    expect(rendererSource).toContain(
+      'applicationProxyCancelBaseline = captureApplicationProxyDraft();',
+    );
+    expect(rendererSource).toContain('applyApplicationProxyDraft(applicationProxyCancelBaseline);');
+    expect(rendererSource).toContain('await savePendingApplicationProxy();');
+    expect(rendererSource).toContain('!savedApplicationProxy?.enabled ||');
+    expect(rendererSource).toContain('applicationProxyIsDirty();');
+    expect(rendererSource).not.toContain("applicationProxyProtocol.value === 'http'");
+    expect(rendererStyles).toContain(".proxy-settings__dependent[aria-disabled='true']");
+  });
+
   it('disables the unsupported CLI scope when SOCKS5 is selected', () => {
-    expect(rendererSource).toContain("applicationProxyProtocol.value === 'http'");
-    expect(rendererSource).toContain('applicationProxyScopeCli.disabled = !cliSupported;');
+    expect(rendererSource).toContain("applicationProxyProtocol.value === 'socks5'");
+    expect(rendererSource).toContain('applicationProxyScopeCli.disabled = true;');
     expect(rendererSource).toContain('applicationProxyScopeCli.checked = false;');
   });
 });

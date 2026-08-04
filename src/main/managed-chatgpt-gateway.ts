@@ -358,6 +358,7 @@ export class ManagedChatGptGateway {
       message,
       phase,
       running,
+      usageStatisticsEnabled: false,
       version: installed ? persisted?.installedVersion : undefined,
     };
   }

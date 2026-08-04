@@ -3,6 +3,7 @@ import type {
   ClaudeInstallationStatus,
   ClaudeLaunchMode,
   ClaudePermissionMode,
+  ManagedChatGptContextWindowMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import { normalizeConnectionBaseUrl } from '../shared/connection-endpoint';
@@ -58,13 +59,79 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
   'ANTHROPIC_VERTEX_BASE_URL',
   'CLAUDE_CODE_DISABLE_THINKING',
   'CLAUDE_CODE_EFFORT_LEVEL',
+  'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
+  'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+  'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
   'CLAUDE_CODE_USE_ANTHROPIC_AWS',
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_FOUNDRY',
   'CLAUDE_CODE_USE_VERTEX',
+  'DISABLE_AUTO_COMPACT',
+  'DISABLE_COMPACT',
   'MAX_THINKING_TOKENS',
   ...CLAUDE_ROUTE_ALIAS_ENVIRONMENT_KEYS,
 ] as const;
+
+/**
+ * The managed ChatGPT bridge exposes a non-Claude model name, so Claude Code cannot infer its
+ * context capacity. Codex currently exposes 272k raw tokens and reserves 5%, which its UI reports
+ * as about 258.4k usable. Keep the raw window explicit, but calculate automatic compaction against
+ * that effective window. 258.4k x 80% starts around 206.7k and leaves enough headroom for a large
+ * tool or subagent result before the upstream hard limit.
+ */
+export const MANAGED_CHATGPT_CONTEXT_WINDOW_TOKENS = 272_000;
+export const MANAGED_CHATGPT_EFFECTIVE_CONTEXT_WINDOW_TOKENS = 258_400;
+export const MANAGED_CHATGPT_AUTO_COMPACT_PERCENT = 80;
+export const MANAGED_CHATGPT_EXTENDED_CONTEXT_WINDOW_TOKENS = 1_050_000;
+export const MANAGED_CHATGPT_EXTENDED_EFFECTIVE_CONTEXT_WINDOW_TOKENS = 997_500;
+
+export interface ManagedChatGptContextProfile {
+  autoCompactAtTokens: number;
+  autoCompactPercent: number;
+  contextWindowTokens: number;
+  effectiveContextWindowTokens: number;
+  mode: ManagedChatGptContextWindowMode;
+}
+
+export const managedChatGptContextProfile = (
+  config: NormalizedClaudeConfig,
+  mode: ManagedChatGptContextWindowMode = 'standard',
+): ManagedChatGptContextProfile | undefined => {
+  if (!usesManagedChatGptCodexContextProfile(config)) return undefined;
+  const contextWindowTokens =
+    mode === 'extended'
+      ? MANAGED_CHATGPT_EXTENDED_CONTEXT_WINDOW_TOKENS
+      : MANAGED_CHATGPT_CONTEXT_WINDOW_TOKENS;
+  const effectiveContextWindowTokens =
+    mode === 'extended'
+      ? MANAGED_CHATGPT_EXTENDED_EFFECTIVE_CONTEXT_WINDOW_TOKENS
+      : MANAGED_CHATGPT_EFFECTIVE_CONTEXT_WINDOW_TOKENS;
+  return {
+    autoCompactAtTokens:
+      (effectiveContextWindowTokens * MANAGED_CHATGPT_AUTO_COMPACT_PERCENT) / 100,
+    autoCompactPercent: MANAGED_CHATGPT_AUTO_COMPACT_PERCENT,
+    contextWindowTokens,
+    effectiveContextWindowTokens,
+    mode,
+  };
+};
+
+const managedChatGptContextEnvironment = (
+  config: NormalizedClaudeConfig,
+  mode: ManagedChatGptContextWindowMode,
+): Record<string, string> => {
+  const profile = managedChatGptContextProfile(config, mode);
+  if (!profile) return {};
+  return {
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(profile.autoCompactPercent),
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(profile.effectiveContextWindowTokens),
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(profile.contextWindowTokens),
+  };
+};
+
+export const usesManagedChatGptCodexContextProfile = (config: NormalizedClaudeConfig): boolean =>
+  config.preset === 'chatgpt-subscription' &&
+  (config.model.toLowerCase() === 'gpt-5.6-sol' || config.model.toLowerCase() === 'gpt-5.6');
 
 export const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]~]{1,200}$/;
 const LOOPBACK_GATEWAY_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
@@ -227,6 +294,7 @@ export const shouldDisableInheritedApiKeyHelper = (config: NormalizedClaudeConfi
 export const buildClaudeEnvironment = (
   config: NormalizedClaudeConfig,
   credential?: string,
+  contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
 ): ClaudeEnvironmentOverrides => {
   const environment: ClaudeEnvironmentOverrides = {};
   for (const key of MANAGED_CLAUDE_ENVIRONMENT_KEYS) {
@@ -265,11 +333,14 @@ export const buildClaudeEnvironment = (
     environment.DISABLE_AUTOUPDATER = '1';
   }
 
+  Object.assign(environment, managedChatGptContextEnvironment(config, contextWindowMode));
+
   return environment;
 };
 
 export const buildClaudeSettingsEnvironment = (
   config: NormalizedClaudeConfig,
+  contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
 ): Record<string, string> => {
   const desiredCredentialKey =
     config.authMode === 'apiKey'
@@ -296,6 +367,8 @@ export const buildClaudeSettingsEnvironment = (
   if (config.provider === 'gateway') {
     environment.ANTHROPIC_BASE_URL = config.baseUrl;
   }
+
+  Object.assign(environment, managedChatGptContextEnvironment(config, contextWindowMode));
 
   return environment;
 };

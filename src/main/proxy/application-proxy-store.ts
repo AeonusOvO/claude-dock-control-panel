@@ -129,11 +129,12 @@ export class ApplicationProxyStore {
     if (enabled && (!host || !port)) {
       throw new Error('启用代理前必须填写地址和端口。');
     }
-    if (input.protocol === 'socks5' && scope.cli) {
+    if (enabled && input.protocol === 'socks5' && scope.cli) {
       throw new Error(
         'Claude Code CLI 不支持 SOCKS；请改用代理软件提供的 HTTP 端口，或关闭 CLI 作用域。',
       );
     }
+    if (input.protocol === 'socks5') scope.cli = false;
     if (password && !username) throw new Error('填写代理密码时必须同时填写账号。');
 
     let encryptedPassword = username ? this.stored.encryptedPassword : undefined;

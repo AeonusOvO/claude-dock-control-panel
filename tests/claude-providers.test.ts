@@ -5,6 +5,7 @@ import {
   CLAUDE_PROVIDERS,
   collapsedClaudeProviderGroups,
   findClaudeProvider,
+  officialNetworkProviderForClaudePreset,
   providerForPreset,
 } from '../src/shared/claude-providers';
 
@@ -76,6 +77,17 @@ describe('Claude provider catalog', () => {
     expect(findClaudeProvider('chatgpt-subscription')?.consoleUrl).toContain('thsottiaux/status');
     expect(providerForPreset('chatgpt-subscription')).toBe('gateway');
     expect(collapsedClaudeProviderGroups('chatgpt-subscription')).not.toContain('subscription');
+  });
+
+  it('maps only official and subscription presets to their matching official profiles', () => {
+    expect(officialNetworkProviderForClaudePreset('anthropic')).toBe('anthropic-claude');
+    expect(officialNetworkProviderForClaudePreset('anthropic-api')).toBe('anthropic-claude');
+    expect(officialNetworkProviderForClaudePreset('chatgpt-subscription')).toBe('openai-codex');
+    for (const provider of CLAUDE_PROVIDERS.filter(
+      ({ group }) => !['official', 'subscription'].includes(group),
+    )) {
+      expect(officialNetworkProviderForClaudePreset(provider.id)).toBeUndefined();
+    }
   });
 
   it('only permits HTTPS remote endpoints and explicit loopback HTTP endpoints', () => {

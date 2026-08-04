@@ -1,6 +1,9 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.4.2（2026-08-04）。4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
+当前架构版本：4.5.0（2026-08-04）。4.5.0 为受管 ChatGPT 的 `gpt-5.6-sol` 增加标准/扩展上下文
+档位、提前自动压缩、真实当前窗口读数与溢出恢复提示，并把 Claude/Codex 的上下文、官方额度窗口和
+受支持供应商余额统一到可配置的底栏资源菜单；同时完成代理启用草稿的统一保存与禁用态隔离、受管
+ChatGPT 官方 OpenAI 网络预检和本机全局 IPv6 路径提示。4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
 PTY 仍携带旧中转站环境继续请求的问题：接入开始即停止当前项目的旧会话，成功后用 `--continue`
 和新环境恢复，任何失败都保持停止而不回退；CLIProxyAPI 登录、解压与运行子进程还会清除继承的
 OpenAI/Codex/Anthropic/CCR 路由和凭据变量，同时保留显式 HTTP 传输代理。4.4.1 把受管 ChatGPT
@@ -327,6 +330,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `ApplicationProxyStore`（`src/main/proxy/application-proxy-store.ts`）只持久化一个用户已有
   HTTP/SOCKS5 代理：主机、端口、协议、账号、作用域与 DPAPI 密文密码。主机只接受域名/IP，
   端口限制 1–65535，禁止 URL、换行和明文降级。密码留空保留原密文；账号清空会同时清除密码。
+- renderer 把 `enabled` 与其余代理字段放入同一设置草稿、脏值计数和“完成”提交事务。关闭时依赖
+  区域设置 `inert`/disabled，但不丢弃地址与作用域草稿；重新开启可继续编辑。存储层允许保留未启用
+  的 SOCKS5 端点草稿；未启用时若旧草稿仍携带 CLI 作用域，会在保存时清除该无效作用域，只有实际
+  启用 SOCKS5 + CLI 组合时才拒绝，避免关闭代理仍无法保存历史配置或出现重启前后状态不一致。
 - `application-proxy.ts` 负责三类派生：Electron `ProxyConfig`、CLI 环境和无凭据候选解析。
   应用作用域未启用时为 `system`，独立对话未启用时为 `direct`；启用时为
   `fixed_servers` 且旁路 `127.0.0.1,localhost,[::1]`。CLI 只接受 HTTP，并设置大小写两套
@@ -669,7 +676,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 ### 安全启动
 
 1. 主进程用固定 PowerShell 诊断命令解析 `claude --version`。命中 Claude Code 官方安全公告的
-   版本直接阻止，其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.220。
+   版本直接阻止，其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.221。
 2. `ClaudeRuntime` 为项目会话生成 `userData/claude/runtime/<session-id>/settings.json`，
    通过 Claude Code 官方 `--settings` 参数临时合并，不改变用户、项目或系统设置。命令行
    settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
@@ -1047,9 +1054,29 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   JSON 的结尾引号导致整个解析失败——症状是恢复带 AI 标题的历史会话后完全没有指标，而全新
   （未命名）会话正常。主进程每秒读取变更，通过受限 IPC 推送，同时把有效的 1–60 字符
   session name 同步到工作区标签。
-- 上下文占用使用 `context_window.used_percentage × context_window_size`，而不是累计所有
-  历史请求。Claude Code 会在接近窗口上限时自动 compact；界面的“实时”表示每次 statusLine
-  刷新后的最新状态，不代表逐 token 流式计数。
+- 上下文占用优先累加 `context_window.current_usage` 的 `input_tokens`、
+  `cache_creation_input_tokens` 和 `cache_read_input_tokens`，并限制在当前窗口内；官方
+  `used_percentage` 只计算这三项，因此 `output_tokens` 不加入占用百分比。仅在这些字段全部
+  缺失时才回退到 `used_percentage × context_window_size`。不使用累计 `total_input_tokens`，避免把
+  已压缩的历史反复计入，也避免取整后的百分比让底栏长期误显 100%。界面的“实时”表示每次
+  statusLine 刷新后的最新状态，不代表逐 token 流式计数。
+- 受管 ChatGPT 仅在模型为 `gpt-5.6-sol`（或兼容别名 `gpt-5.6`）时注入窗口 profile。标准档
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000`，按 Codex 产品的 95% 有效留量显示 258400，并用
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW=258400` 与 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` 在 206720
+  左右提前压缩；扩展实验档对应 1050000 / 997500 / 798000。启动环境同时显式清除继承的 `DISABLE_AUTO_COMPACT`
+  与 `DISABLE_COMPACT`，偏好由 `AppPreferencesStore` 保存并只在下次启动会话时取值。
+- Claude Code 2.1.221 对非 Claude 模型标识会在未禁用 compact 时读取
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`；官方环境变量页的通用描述仍写着该变量需配合
+  `DISABLE_COMPACT`。因此 ClaudeDock 不把偏好值直接冒充实测：只有 statusLine 真正上报
+  272000/1050000 时才换算 95% 有效窗口；若仍上报 200000，界面保留 200000，并按这个较小实测
+  窗口计算约 160000 的提前压缩线。该兼容性需要随 Claude Code 升级持续回归。
+- `parseClaudeContextWindowError` 专门识别压缩期间及普通请求的 400 上下文溢出；运行态错误不回显
+  原始请求或凭据，标准档提示新建会话，扩展档额外说明订阅后端可能仍按较小产品窗口拒绝并建议
+  切回标准档。已经越界后再发 `/compact` 仍可能被上游拒绝，因此不能把手动压缩描述为保证恢复。
+- `ResourceUsageView` 统一表达上下文、重置窗口和余额能力。Claude 用 statusLine 获取上下文及其
+  已上报的 5 小时/7 天窗口，并只对 DeepSeek 官方 `/user/balance` 与 OpenRouter 官方 `/api/v1/key`
+  做有界、缓存的余额读取；Codex 从官方 App Server 的 rate limits 映射 5 小时/7 天窗口。受管
+  ChatGPT 网关的本地请求统计保持禁用，不能当成官方订阅剩余额度。
 - 费用是 Claude Code 客户端本地估算：订阅用户不等同于账单，第三方模型若缺少定价元数据
   也可能为空或不准确。网关在服务端替换模型无法由客户端进行密码学证明；界面只能核对
   statusLine 报告的运行模型与锁定模型是否一致。
@@ -1291,12 +1318,14 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
    仅限所选服务商配置中明确列出的官方端点；版本规则随已签名应用发布，不从网络下载策略。
 4. `RiskDecisionEngine` 把观测转换为 `allowed`、`allowed_with_notice`、`warning`、
    `degraded`、`partially_available` 或 `blocked`，同时生成按动作的 `featureAccess`。
-   显式代理和虚拟网卡只加提示；活动所需 DNS/API/CLI 路径失败、关键 TLS/跨域重定向异常、
+   显式代理、虚拟网卡和“本机存在全局 IPv6、但模型进程没有显式代理”只加提示；该 IPv6 信号仅
+   来自本机网卡，不推断公网出口。活动所需 DNS/API/CLI 路径失败、关键 TLS/跨域重定向异常、
    离线、危险版本和 Claude SOCKS 路径才会阻止对应高风险动作。
 5. `NetworkPreflightService` 按“服务商 + 动作 + 项目”执行 single-flight 和两分钟缓存。
    网络变化通过 generation 失效旧结果；失效期间完成的旧请求不会写入缓存或历史。
-6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 接入保存/历史恢复/
-   启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过。自定义网关和
+6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 与受管 ChatGPT 接入保存/
+   历史恢复/启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过匹配的
+   Anthropic/OpenAI 官方端点预检。自定义网关和
    普通本地终端不被官方服务状态误伤；它们的连接按钮和自动测试直接请求自身端点。
 
 ### 回滚与故障边界

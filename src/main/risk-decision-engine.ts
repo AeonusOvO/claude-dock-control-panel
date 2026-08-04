@@ -81,6 +81,26 @@ export class RiskDecisionEngine {
         'local-network',
       );
     }
+    if (
+      observation.paths.some((path) => path.globalIpv6Available) &&
+      observation.paths.some(
+        (path) =>
+          (path.process === 'application' ||
+            path.process === 'claude-cli' ||
+            path.process === 'codex-cli') &&
+          !path.proxyConfigured,
+      )
+    ) {
+      addSignal(
+        'global-ipv6-path-unconfirmed',
+        '全局 IPv6 路径未确认',
+        '本机存在可路由 IPv6，且至少一个模型相关进程未发现显式代理；TUN、透明代理或网关仍可能接管，但本机信息不能证明 IPv6 与预期代理使用同一路径。',
+        6,
+        'notice',
+        'medium',
+        'local-network',
+      );
+    }
     if (observation.paths.some((path) => path.proxyConfigured)) {
       addSignal(
         'proxy-present',

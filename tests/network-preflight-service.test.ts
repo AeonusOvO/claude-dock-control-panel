@@ -25,6 +25,7 @@ const successfulObservation = (): ConnectivityObservation => ({
     {
       detail: 'direct',
       dnsServers: ['1.1.1.1'],
+      globalIpv6Available: false,
       ipv4Available: true,
       ipv6Available: false,
       process: 'application',

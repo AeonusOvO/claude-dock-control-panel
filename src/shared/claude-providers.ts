@@ -354,6 +354,20 @@ export const claudeProviderIdSet = new Set<string>(CLAUDE_PROVIDERS.map((provide
 export const providerForPreset = (id: ClaudeProviderId): 'anthropic' | 'gateway' =>
   findClaudeProvider(id)?.group === 'official' ? 'anthropic' : 'gateway';
 
+/**
+ * Only first-party presets inherit an official network profile. Anthropic presets use the Claude
+ * profile; the managed subscription bridge uses the OpenAI/Codex profile behind that bridge.
+ * Overseas, domestic, local and advanced providers retain their own endpoint semantics.
+ */
+export const officialNetworkProviderForClaudePreset = (
+  id: ClaudeProviderId,
+): 'anthropic-claude' | 'openai-codex' | undefined => {
+  const group = findClaudeProvider(id)?.group;
+  if (group === 'official') return 'anthropic-claude';
+  if (group === 'subscription') return 'openai-codex';
+  return undefined;
+};
+
 export const CLAUDE_PROVIDER_EXTERNAL_HOSTS = new Set(
   CLAUDE_PROVIDERS.flatMap((provider) => [provider.consoleUrl, provider.docsUrl])
     .filter((url): url is string => Boolean(url))

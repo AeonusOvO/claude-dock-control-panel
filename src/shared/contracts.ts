@@ -164,6 +164,7 @@ export type NetworkProcessKind =
 export interface NetworkPathView {
   detail: string;
   dnsServers: string[];
+  globalIpv6Available: boolean;
   ipv4Available: boolean;
   ipv6Available: boolean;
   process: NetworkProcessKind;
@@ -419,10 +420,15 @@ export interface AdvancedSettings {
   webResearchIsolation: boolean;
 }
 
+export type FooterResourcePreference = 'auto' | 'context' | 'quota';
+export type ManagedChatGptContextWindowMode = 'extended' | 'standard';
+
 export interface AppSettingsView {
   advanced: AdvancedSettings;
   artifactNetworkAllowed?: boolean;
   closeBehavior: CloseBehavior;
+  footerResourcePreference: FooterResourcePreference;
+  managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
   language: 'zh-CN';
   launchAtLogin: boolean;
   theme: TerminalThemeId;
@@ -539,6 +545,54 @@ export interface CodexRateLimitsView {
   secondary?: CodexRateLimitWindow;
 }
 
+export type ResourceAvailability = 'available' | 'stale' | 'unavailable';
+export type ResourceUsageSource =
+  | 'claude-statusline'
+  | 'codex-app-server'
+  | 'deepseek-balance'
+  | 'openrouter-key'
+  | 'managed-chatgpt-gateway';
+
+export interface ResourceCapabilities {
+  balance: boolean;
+  context: boolean;
+  windows: boolean;
+}
+
+export interface ResourceWindow {
+  label: string;
+  resetsAt?: number;
+  usedPercent?: number;
+  windowDurationMins?: number;
+}
+
+export interface ResourceBalanceEntry {
+  amount: number;
+  currency: string;
+}
+
+export interface ResourceBalance {
+  balances?: ResourceBalanceEntry[];
+  limit?: number;
+  unlimited?: boolean;
+  used?: number;
+}
+
+export interface ResourceUsageView {
+  availability: ResourceAvailability;
+  autoCompactAtTokens?: number;
+  balance?: ResourceBalance;
+  capabilities: ResourceCapabilities;
+  checkedAt: number;
+  contextUsedPercent?: number;
+  contextUsedTokens?: number;
+  contextWindowTokens?: number;
+  detail?: string;
+  source: ResourceUsageSource;
+  staleAt?: number;
+  windows?: ResourceWindow[];
+}
+
 export interface CodexLoginView {
   error?: string;
   loginId?: string;
@@ -556,6 +610,7 @@ export interface CodexProjectState {
   login: CodexLoginView;
   operationMessage?: string;
   rateLimits?: CodexRateLimitsView;
+  resourceUsage?: ResourceUsageView;
   requiresOpenaiAuth: boolean;
   sessionId: string;
   warning?: string;
@@ -584,7 +639,9 @@ export interface ClaudeMetrics {
   modelId?: string;
   outputTokens?: number;
   rateLimitFiveHour?: number;
+  rateLimitFiveHourResetsAt?: number;
   rateLimitSevenDay?: number;
+  rateLimitSevenDayResetsAt?: number;
   sessionCostUsd?: number;
   sessionDurationMs?: number;
   sessionId?: string;
@@ -621,6 +678,7 @@ export interface ClaudeProjectState {
   permissionMode?: ClaudePermissionMode;
   /** Modes actually observed in this session, in the order Shift+Tab visited them. */
   permissionModeCycle?: ClaudePermissionMode[];
+  resourceUsage?: ResourceUsageView;
   routeHealth?: ClaudeRouteHealth;
   sessionId: string;
   warning?: string;
@@ -738,6 +796,7 @@ export interface ManagedChatGptGatewayState {
   message: string;
   phase: ManagedChatGptGatewayPhase;
   running: boolean;
+  usageStatisticsEnabled: false;
   version?: string;
 }
 
@@ -1142,6 +1201,10 @@ export type Unsubscribe = () => void;
 export interface ControlPanelApi {
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
+  setFooterResourcePreference: (preference: FooterResourcePreference) => Promise<AppSettingsView>;
+  setManagedChatGptContextWindowMode: (
+    mode: ManagedChatGptContextWindowMode,
+  ) => Promise<AppSettingsView>;
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   setCloseBehavior: (behavior: CloseBehavior) => Promise<AppSettingsView>;
   listBusyLeases: () => Promise<BusyLease[]>;

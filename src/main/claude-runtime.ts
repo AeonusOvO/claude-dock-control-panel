@@ -31,7 +31,10 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterProviderProtocol,
   ClaudeRouterInstallSource,
+  ManagedChatGptContextWindowMode,
+  NetworkProviderId,
   RouterOperationProgress,
+  ResourceUsageView,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -47,13 +50,17 @@ import {
   isClaudeEffortSafeAfterThinkingDisabledError,
 } from '../shared/claude-effort';
 import { parseClaudePermissionMode } from '../shared/claude-permission-mode';
-import { findClaudeProvider } from '../shared/claude-providers';
+import {
+  findClaudeProvider,
+  officialNetworkProviderForClaudePreset,
+} from '../shared/claude-providers';
 import {
   DEFAULT_TERMINAL_THEME,
   TERMINAL_THEMES,
   type TerminalThemeId,
 } from '../shared/terminal-themes';
 import { AsyncRefreshCache } from './async-refresh-cache';
+import { ProviderResourceUsageService } from './provider-resource-usage';
 import type { CcSwitchProviderExportInput } from './cc-switch-adapter';
 import {
   BackgroundTaskCoordinator,
@@ -63,6 +70,7 @@ import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
   buildClaudeSettingsEnvironment,
+  managedChatGptContextProfile,
   buildRuntimeSignalCommand,
   buildStatusLineCommand,
   buildWebSearchGuardCommand,
@@ -92,6 +100,7 @@ interface RuntimeSession {
   active: boolean;
   /** Claude Code conversation this PTY is attached to, once the status line has reported it. */
   conversationId?: string;
+  contextWindowMode?: ManagedChatGptContextWindowMode;
   cwd: string;
   diagnosticBuffer: string;
   /** Temporary retry cap installed after Claude Code combines high effort with disabled thinking. */
@@ -104,7 +113,7 @@ interface RuntimeSession {
   exitMarker?: string;
   expectedModel?: string;
   lastApiError?: {
-    category: 'effort-thinking-disabled' | 'general';
+    category: 'context-window-exceeded' | 'effort-thinking-disabled' | 'general';
     detectedAt: number;
     detail: string;
   };
@@ -298,6 +307,13 @@ const normalizedRuntimeError = (value: string): string => {
   if (/ConnectionRefused/i.test(compact)) {
     return 'Claude Code 无法连接到当前接口地址。端点可能已停止、被代理拒绝，或保存后的路由已经变化。';
   }
+  if (
+    /input exceeds the context window|context window of this model|maximum context length|too many input tokens/i.test(
+      compact,
+    )
+  ) {
+    return '当前对话已超过模型上下文上限，连压缩请求也无法送达。请新建对话继续；ClaudeDock 已改为按模型与窗口模式设置容量，并在后续托管 ChatGPT 会话中提前自动压缩。';
+  }
   if (/\b(?:401|403)\b|unauthori[sz]ed|invalid (?:api )?key|authentication/i.test(compact)) {
     return 'Claude Code 的真实会话被接口拒绝认证。请重新核对认证方式与当前保存的密钥。';
   }
@@ -356,6 +372,16 @@ export const parseClaudeEffortThinkingDisabledError = (
 export const parseClaudeRuntimeApiError = (value: string): string | undefined => {
   const latest = latestClaudeRuntimeApiError(value);
   return latest ? normalizedRuntimeError(latest) : undefined;
+};
+
+export const parseClaudeContextWindowError = (value: string): boolean => {
+  const latest = latestClaudeRuntimeApiError(value);
+  return Boolean(
+    latest &&
+    /input exceeds the context window|context window of this model|maximum context length|too many input tokens/i.test(
+      latest,
+    ),
+  );
 };
 
 export const routerBlockingDetail = (
@@ -491,6 +517,96 @@ export const computeClaudeConnectionAdvice = (
   };
 };
 
+export const claudeResourceUsage = (
+  metrics: ClaudeMetrics | undefined,
+  config: NormalizedClaudeConfig,
+  contextWindowMode: ManagedChatGptContextWindowMode,
+): ResourceUsageView => {
+  const contextProfile = managedChatGptContextProfile(config, contextWindowMode);
+  const checkedAt = metrics?.capturedAt ?? Date.now();
+  const autoCompactAtTokens = contextProfile
+    ? ((metrics?.contextWindowSize
+        ? Math.min(metrics.contextWindowSize, contextProfile.effectiveContextWindowTokens)
+        : contextProfile.effectiveContextWindowTokens) *
+        contextProfile.autoCompactPercent) /
+      100
+    : undefined;
+  const contextUsedPercent =
+    metrics?.contextWindowUsed !== undefined && metrics.contextWindowSize
+      ? Math.min(100, Math.max(0, (metrics.contextWindowUsed / metrics.contextWindowSize) * 100))
+      : undefined;
+  const windows = [
+    metrics?.rateLimitFiveHour === undefined
+      ? undefined
+      : {
+          label: '5 小时',
+          resetsAt: metrics.rateLimitFiveHourResetsAt,
+          usedPercent: Math.min(100, Math.max(0, metrics.rateLimitFiveHour)),
+          windowDurationMins: 300,
+        },
+    metrics?.rateLimitSevenDay === undefined
+      ? undefined
+      : {
+          label: '7 天',
+          resetsAt: metrics.rateLimitSevenDayResetsAt,
+          usedPercent: Math.min(100, Math.max(0, metrics.rateLimitSevenDay)),
+          windowDurationMins: 10_080,
+        },
+  ].filter((window): window is NonNullable<typeof window> => Boolean(window));
+  const available = contextUsedPercent !== undefined || windows.length > 0;
+  return {
+    availability: available ? 'available' : 'unavailable',
+    autoCompactAtTokens,
+    capabilities: { balance: false, context: true, windows: true },
+    checkedAt,
+    contextUsedPercent,
+    contextUsedTokens: metrics?.contextWindowUsed,
+    contextWindowTokens: metrics?.contextWindowSize,
+    detail: available ? undefined : '等待 Claude Code 状态行上报。',
+    source: 'claude-statusline',
+    staleAt: metrics ? metrics.capturedAt + METRICS_MAX_AGE_MS : undefined,
+    windows: windows.length > 0 ? windows : undefined,
+  };
+};
+
+export const effectiveClaudeMetrics = (
+  metrics: ClaudeMetrics | undefined,
+  config: NormalizedClaudeConfig,
+  contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
+): ClaudeMetrics | undefined => {
+  const profile = managedChatGptContextProfile(config, contextWindowMode);
+  return profile && metrics?.contextWindowSize === profile.contextWindowTokens
+    ? { ...metrics, contextWindowSize: profile.effectiveContextWindowTokens }
+    : metrics;
+};
+
+export const mergeClaudeResourceUsage = (
+  context: ResourceUsageView,
+  provider: ResourceUsageView | undefined,
+): ResourceUsageView =>
+  provider
+    ? {
+        ...provider,
+        availability:
+          provider.availability === 'available' || context.availability === 'available'
+            ? 'available'
+            : provider.availability === 'stale' || context.availability === 'stale'
+              ? 'stale'
+              : 'unavailable',
+        autoCompactAtTokens: context.autoCompactAtTokens,
+        capabilities: {
+          balance: provider.capabilities.balance || context.capabilities.balance,
+          context: provider.capabilities.context || context.capabilities.context,
+          windows: provider.capabilities.windows || context.capabilities.windows,
+        },
+        checkedAt: Math.max(provider.checkedAt, context.checkedAt),
+        contextUsedPercent: context.contextUsedPercent,
+        contextUsedTokens: context.contextUsedTokens,
+        contextWindowTokens: context.contextWindowTokens,
+        windows: context.windows ?? provider.windows,
+      }
+    : context;
+
 export const parseClaudeMetrics = (raw: string): ClaudeMetrics | undefined => {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as Record<string, unknown>;
@@ -511,7 +627,9 @@ export const parseClaudeMetrics = (raw: string): ClaudeMetrics | undefined => {
       modelId: optionalString(parsed.modelId),
       outputTokens: optionalFiniteNumber(parsed.outputTokens),
       rateLimitFiveHour: optionalFiniteNumber(parsed.rateLimitFiveHour),
+      rateLimitFiveHourResetsAt: optionalFiniteNumber(parsed.rateLimitFiveHourResetsAt),
       rateLimitSevenDay: optionalFiniteNumber(parsed.rateLimitSevenDay),
+      rateLimitSevenDayResetsAt: optionalFiniteNumber(parsed.rateLimitSevenDayResetsAt),
       sessionCostUsd: optionalFiniteNumber(parsed.sessionCostUsd),
       sessionDurationMs: optionalFiniteNumber(parsed.sessionDurationMs),
       sessionId: optionalString(parsed.sessionId),
@@ -605,6 +723,7 @@ export class ClaudeRuntime {
   private readonly conversationPreferences: ConversationPreferencesStore;
   private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly metricsTimer: NodeJS.Timeout;
+  private readonly resourceUsageService: ProviderResourceUsageService;
   /** Serialises Shift+Tab stepping per session so two clicks can never interleave presses. */
   private readonly modeSwitchLocks = new Set<string>();
   private readonly routerManager: ClaudeRouterManager;
@@ -622,6 +741,7 @@ export class ClaudeRuntime {
      * without a restart.
      */
     private readonly isWebResearchIsolationEnabled: () => boolean,
+    private readonly managedChatGptContextWindowMode: () => ManagedChatGptContextWindowMode,
     private readonly onState: (state: ClaudeProjectState) => void,
     private readonly writeToTerminal: (sessionId: string, data: string) => void,
     private readonly readPermissionModeFromScreen: (
@@ -638,6 +758,7 @@ export class ClaudeRuntime {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
     this.fetchImplementation = fetchImplementation;
+    this.resourceUsageService = new ProviderResourceUsageService(fetchImplementation);
     this.conversationPreferences = new ConversationPreferencesStore(userDataPath);
     this.routerManager = new ClaudeRouterManager(
       userDataPath,
@@ -660,8 +781,8 @@ export class ClaudeRuntime {
     }
   }
 
-  public usesOfficialProvider(cwd: string): boolean {
-    return this.configStore.getConfig(cwd).provider === 'anthropic';
+  public officialNetworkProvider(cwd: string): NetworkProviderId | undefined {
+    return officialNetworkProviderForClaudePreset(this.configStore.getConfig(cwd).preset);
   }
 
   public currentProviderForCcSwitch(cwd: string): CcSwitchProviderExportInput {
@@ -683,8 +804,13 @@ export class ClaudeRuntime {
     };
   }
 
-  public connectionHistoryUsesOfficialProvider(cwd: string, entryId: string): boolean {
-    return this.historyStore.toSaveInput(cwd, entryId).provider === 'anthropic';
+  public connectionHistoryOfficialNetworkProvider(
+    cwd: string,
+    entryId: string,
+  ): NetworkProviderId | undefined {
+    return officialNetworkProviderForClaudePreset(
+      this.historyStore.toSaveInput(cwd, entryId).preset,
+    );
   }
 
   public createConfigSnapshot(cwd: string): ClaudeConfigSnapshot {
@@ -718,10 +844,19 @@ export class ClaudeRuntime {
       void this.recoverEffortAfterThinkingDisabled(runtime, rejectedEffort);
     }
     const detectedError = parseClaudeRuntimeApiError(runtime.diagnosticBuffer);
-    if (detectedError && detectedError !== runtime.lastApiError?.detail) {
+    const contextWindowExceeded = parseClaudeContextWindowError(runtime.diagnosticBuffer);
+    const contextualError =
+      detectedError && contextWindowExceeded && runtime.contextWindowMode === 'extended'
+        ? `${detectedError} 当前会话启用了实验性的 105 万扩展窗口；这通常表示 ChatGPT 订阅后端仍按较小的产品窗口拒绝请求，请切回标准窗口后新建会话。`
+        : detectedError;
+    if (contextualError && contextualError !== runtime.lastApiError?.detail) {
       runtime.lastApiError = {
-        category: rejectedEffort ? 'effort-thinking-disabled' : 'general',
-        detail: detectedError,
+        category: rejectedEffort
+          ? 'effort-thinking-disabled'
+          : contextWindowExceeded
+            ? 'context-window-exceeded'
+            : 'general',
+        detail: contextualError,
         detectedAt: Date.now(),
       };
       void this.emitState(runtime);
@@ -756,6 +891,21 @@ export class ClaudeRuntime {
     const installation = await this.diagnoseInstallation();
     const matches = modelMatches(runtime.expectedModel, runtime.metrics?.modelId);
     const config = this.configStore.getConfig(cwd);
+    const metricsConfig = runtime.expectedModel
+      ? { ...config, model: runtime.expectedModel }
+      : config;
+    const contextWindowMode = runtime.contextWindowMode ?? this.managedChatGptContextWindowMode();
+    const displayMetrics = effectiveClaudeMetrics(
+      runtime.metrics,
+      metricsConfig,
+      contextWindowMode,
+    );
+    const contextUsage = claudeResourceUsage(displayMetrics, metricsConfig, contextWindowMode);
+    const providerUsage = await this.resourceUsageService.read(
+      projectKey(cwd),
+      config.preset,
+      this.configStore.getCredential(cwd),
+    );
     return {
       active: runtime.active,
       allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
@@ -765,10 +915,11 @@ export class ClaudeRuntime {
       effortRequest: runtime.effortRequest,
       expectedModel: runtime.expectedModel,
       installation,
-      metrics: runtime.metrics,
+      metrics: displayMetrics,
       modelMatches: matches,
       permissionMode: runtime.permissionMode,
       permissionModeCycle: [...runtime.permissionModeCycle],
+      resourceUsage: mergeClaudeResourceUsage(contextUsage, providerUsage),
       routeHealth: await this.getRouteHealth(runtime, config),
       sessionId,
       warning: matches
@@ -1110,6 +1261,8 @@ export class ClaudeRuntime {
       mode !== 'continue' && remembered?.model && MODEL_NAME_PATTERN.test(remembered.model)
         ? remembered.model
         : config.model;
+    const launchConfig = { ...config, model: launchModel };
+    const contextWindowMode = this.managedChatGptContextWindowMode();
 
     const sessionDirectory = path.join(this.runtimeRoot, sessionId);
     const metricsPath = path.join(sessionDirectory, 'metrics.json');
@@ -1136,7 +1289,7 @@ export class ClaudeRuntime {
     const settings = {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
       ...(shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}),
-      env: buildClaudeSettingsEnvironment(config),
+      env: buildClaudeSettingsEnvironment(launchConfig, contextWindowMode),
       // Hooks remain session-local because this file is passed through Claude Code's --settings.
       hooks: {
         PostCompact: [
@@ -1200,6 +1353,7 @@ export class ClaudeRuntime {
     runtime.active = true;
     runtime.routeKind = routeKind;
     runtime.conversationId = resumedConversationId;
+    runtime.contextWindowMode = contextWindowMode;
     runtime.diagnosticBuffer = '';
     runtime.effortCompatibility = undefined;
     runtime.effortRestoreAfterTurn = undefined;
@@ -1246,7 +1400,7 @@ export class ClaudeRuntime {
     const state = await this.getState(sessionId, cwd);
     return {
       command,
-      environment: buildClaudeEnvironment(config, credential),
+      environment: buildClaudeEnvironment(launchConfig, credential, contextWindowMode),
       state,
     };
   }
@@ -2056,13 +2210,16 @@ export class ClaudeRuntime {
     }
 
     if (runtime.lastApiError && runtime.launchedConfigFingerprint === fingerprint) {
+      const contextWindowExceeded = runtime.lastApiError.category === 'context-window-exceeded';
       return {
         blocking: false,
         checkedAt: runtime.lastApiError.detectedAt,
         detail: matchingCheck?.ok
           ? `${runtime.lastApiError.detail} 此配置此前的单令牌测试通过，但真实 Claude Code 会话随后失败；测试成功不代表端点会持续可用或完整支持 Claude Code。`
           : runtime.lastApiError.detail,
-        headline: 'Claude Code 的真实对话请求失败',
+        headline: contextWindowExceeded
+          ? '当前对话已超过上下文上限'
+          : 'Claude Code 的真实对话请求失败',
         source: 'runtime',
         tone: 'error',
       };

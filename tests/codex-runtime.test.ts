@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCodexLaunchCommand,
+  codexResourceUsage,
   parseCodexAccountRead,
   parseCodexRateLimits,
 } from '../src/main/codex-runtime';
@@ -50,6 +51,25 @@ describe('Codex runtime protocol adapters', () => {
     ).toEqual({
       primary: { resetsAt: 2_000, usedPercent: 100, windowDurationMins: 300 },
       secondary: { resetsAt: undefined, usedPercent: 0, windowDurationMins: undefined },
+    });
+  });
+
+  it('exposes official ChatGPT quota windows with their real durations', () => {
+    expect(
+      codexResourceUsage(
+        { email: 'member@example.com', planType: 'plus', type: 'chatgpt' },
+        {
+          primary: { usedPercent: 26, windowDurationMins: 300 },
+          secondary: { usedPercent: 8, windowDurationMins: 10_080 },
+        },
+      ),
+    ).toMatchObject({
+      availability: 'available',
+      capabilities: { windows: true },
+      windows: [
+        { label: '5 小时', usedPercent: 26 },
+        { label: '7 天', usedPercent: 8 },
+      ],
     });
   });
 

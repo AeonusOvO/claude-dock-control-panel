@@ -8,6 +8,7 @@ import type {
   CodexLoginView,
   CodexProjectState,
   CodexRateLimitsView,
+  ResourceUsageView,
 } from '../shared/contracts';
 import { AsyncRefreshCache } from './async-refresh-cache';
 import type { BusyRegistry } from './busy-registry';
@@ -105,6 +106,45 @@ export const parseCodexRateLimits = (value: unknown): CodexRateLimitsView | unde
   const primary = parseRateLimitWindow(value.rateLimits.primary);
   const secondary = parseRateLimitWindow(value.rateLimits.secondary);
   return primary || secondary ? { primary, secondary } : undefined;
+};
+
+export const codexResourceUsage = (
+  account: CodexAccountView | undefined,
+  rateLimits: CodexRateLimitsView | undefined,
+): ResourceUsageView => {
+  const windows = [rateLimits?.primary, rateLimits?.secondary].flatMap((window, index) =>
+    window
+      ? [
+          {
+            label:
+              window.windowDurationMins === 300
+                ? '5 小时'
+                : window.windowDurationMins === 10_080
+                  ? '7 天'
+                  : index === 0
+                    ? '主要窗口'
+                    : '次要窗口',
+            resetsAt: window.resetsAt,
+            usedPercent: window.usedPercent,
+            windowDurationMins: window.windowDurationMins,
+          },
+        ]
+      : [],
+  );
+  const available = account?.type === 'chatgpt' && windows.length > 0;
+  return {
+    availability: available ? 'available' : 'unavailable',
+    capabilities: { balance: false, context: false, windows: account?.type === 'chatgpt' },
+    checkedAt: Date.now(),
+    detail:
+      account?.type !== 'chatgpt'
+        ? 'API Key 账号没有订阅额度窗口。'
+        : available
+          ? undefined
+          : 'Codex 官方状态源暂未返回额度。',
+    source: 'codex-app-server',
+    windows: windows.length > 0 ? windows : undefined,
+  };
 };
 
 const quotePowerShellLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
@@ -261,6 +301,7 @@ export class CodexRuntime {
       login: { ...this.login },
       operationMessage: this.installProgress,
       rateLimits: this.rateLimits,
+      resourceUsage: codexResourceUsage(accountResult.account, this.rateLimits),
       requiresOpenaiAuth: accountResult.requiresOpenaiAuth,
       sessionId,
       warning,

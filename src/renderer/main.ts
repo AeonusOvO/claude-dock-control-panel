@@ -66,6 +66,8 @@ import type {
   McpCatalogEntry,
   McpScope,
   McpServerView,
+  FooterResourcePreference,
+  ManagedChatGptContextWindowMode,
   ManagedChatGptGatewayState,
   ManagedChatGptSetupProgress,
   NetworkPreflightResult,
@@ -77,6 +79,8 @@ import type {
   OperationResult,
   ApplicationProxyCandidate,
   ApplicationProxyState,
+  ApplicationProxyView,
+  SaveApplicationProxyInput,
   TerminalPhase,
   TerminalStatus,
   WorkspaceProjectView,
@@ -179,6 +183,19 @@ interface AdvancedDraftControlState {
   checked?: boolean;
   control: AdvancedDraftControl;
   value: string;
+}
+
+interface ApplicationProxyDraftSnapshot {
+  enabled: boolean;
+  host: string;
+  port: string;
+  protocol: 'http' | 'socks5';
+  scope: {
+    application: boolean;
+    cli: boolean;
+    conversation: boolean;
+  };
+  username: string;
 }
 
 interface AdvancedConnectionSnapshot {
@@ -298,6 +315,10 @@ const networkPreflightDialogRecheck = requiredElement<HTMLButtonElement>(
 const networkPreflightClose = requiredElement<HTMLButtonElement>('#network-preflight-close');
 const footerContextLabel = requiredElement<HTMLElement>('#footer-context-label');
 const footerContextRing = requiredElement<HTMLElement>('#footer-context-ring');
+const footerResource = requiredElement<HTMLButtonElement>('#footer-resource');
+const footerResourceMenu = requiredElement<HTMLElement>('#footer-resource-menu');
+const footerResourceDetails = requiredElement<HTMLElement>('#footer-resource-details');
+const footerContextWindowOptions = requiredElement<HTMLElement>('#footer-context-window-options');
 const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
 const footerModelMenu = requiredElement<HTMLElement>('#footer-model-menu');
 const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
@@ -387,6 +408,10 @@ const settingsTheme = requiredElement<HTMLSelectElement>('#settings-theme');
 const settingsLanguage = requiredElement<HTMLSelectElement>('#settings-language');
 const settingsVersion = requiredElement<HTMLOutputElement>('#settings-version');
 const applicationProxyEnabled = requiredElement<HTMLInputElement>('#application-proxy-enabled');
+const applicationProxyConfiguration = requiredElement<HTMLElement>(
+  '#application-proxy-configuration',
+);
+const applicationProxyScope = requiredElement<HTMLElement>('#application-proxy-scope');
 const applicationProxyProtocol = requiredElement<HTMLSelectElement>('#application-proxy-protocol');
 const applicationProxyHost = requiredElement<HTMLInputElement>('#application-proxy-host');
 const applicationProxyPort = requiredElement<HTMLInputElement>('#application-proxy-port');
@@ -814,24 +839,106 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
   renderDownloads(tasks);
 };
 
-const renderApplicationProxyState = (state: ApplicationProxyState): void => {
-  const { config, test } = state;
-  applicationProxyEnabled.checked = config.enabled;
-  applicationProxyProtocol.value = config.protocol;
-  applicationProxyHost.value = config.host;
-  applicationProxyPort.value = config.port ? String(config.port) : '';
-  applicationProxyUsername.value = config.username;
+const captureApplicationProxyDraft = (): ApplicationProxyDraftSnapshot => ({
+  enabled: applicationProxyEnabled.checked,
+  host: applicationProxyHost.value,
+  port: applicationProxyPort.value,
+  protocol: applicationProxyProtocol.value === 'socks5' ? 'socks5' : 'http',
+  scope: {
+    application: applicationProxyScopeApplication.checked,
+    cli: applicationProxyScopeCli.checked,
+    conversation: applicationProxyScopeConversation.checked,
+  },
+  username: applicationProxyUsername.value,
+});
+
+const applicationProxyViewSnapshot = (
+  config: ApplicationProxyView,
+): ApplicationProxyDraftSnapshot => ({
+  enabled: config.enabled,
+  host: config.host,
+  port: config.port ? String(config.port) : '',
+  protocol: config.protocol,
+  scope: { ...config.scope },
+  username: config.username,
+});
+
+const applicationProxyDraftMatches = (
+  left: ApplicationProxyDraftSnapshot,
+  right: ApplicationProxyDraftSnapshot,
+): boolean =>
+  left.enabled === right.enabled &&
+  left.host === right.host &&
+  left.port === right.port &&
+  left.protocol === right.protocol &&
+  left.username === right.username &&
+  left.scope.application === right.scope.application &&
+  left.scope.cli === right.scope.cli &&
+  left.scope.conversation === right.scope.conversation;
+
+const applicationProxyIsDirty = (): boolean =>
+  Boolean(
+    savedApplicationProxy &&
+    !applicationProxyDraftMatches(
+      captureApplicationProxyDraft(),
+      applicationProxyViewSnapshot(savedApplicationProxy),
+    ),
+  ) || applicationProxyPassword.value.length > 0;
+
+const syncApplicationProxyInteractivity = (): void => {
+  const enabled = applicationProxyEnabled.checked;
+  for (const container of [applicationProxyConfiguration, applicationProxyScope]) {
+    container.inert = !enabled;
+    container.setAttribute('aria-disabled', String(!enabled));
+    for (const control of container.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+      'input, select',
+    )) {
+      control.disabled = !enabled;
+    }
+  }
+  if (enabled && applicationProxyProtocol.value === 'socks5') {
+    applicationProxyScopeCli.checked = false;
+    applicationProxyScopeCli.disabled = true;
+  }
+  applicationProxyTest.disabled =
+    applicationProxyTestInProgress || !savedApplicationProxy?.enabled || applicationProxyIsDirty();
+};
+
+const applyApplicationProxyDraft = (draft: ApplicationProxyDraftSnapshot): void => {
+  applicationProxyEnabled.checked = draft.enabled;
+  applicationProxyProtocol.value = draft.protocol;
+  applicationProxyHost.value = draft.host;
+  applicationProxyPort.value = draft.port;
+  applicationProxyUsername.value = draft.username;
   applicationProxyPassword.value = '';
+  applicationProxyScopeCli.checked = draft.scope.cli;
+  applicationProxyScopeApplication.checked = draft.scope.application;
+  applicationProxyScopeConversation.checked = draft.scope.conversation;
+  syncApplicationProxyInteractivity();
+};
+
+const renderApplicationProxyState = (
+  state: ApplicationProxyState,
+  preserveDirtyDraft = true,
+): void => {
+  const { config, test } = state;
+  const draft = captureApplicationProxyDraft();
+  const preserveDraft =
+    preserveDirtyDraft && connectionAdvancedDialog.open && applicationProxyIsDirty();
+  savedApplicationProxy = config;
+  if (!preserveDraft) {
+    applyApplicationProxyDraft(applicationProxyViewSnapshot(config));
+  } else {
+    const password = applicationProxyPassword.value;
+    applyApplicationProxyDraft(draft);
+    applicationProxyPassword.value = password;
+    syncApplicationProxyInteractivity();
+  }
   applicationProxyCredentialStatus.textContent = config.username
     ? config.passwordConfigured
       ? `账号 ${config.username} · 密码已由 Windows DPAPI 加密保存；密码框留空会保留。`
       : `账号 ${config.username} · 未保存密码。`
     : '未配置代理账号密码。';
-  applicationProxyScopeCli.checked = config.scope.cli;
-  applicationProxyScopeCli.disabled = config.protocol === 'socks5';
-  applicationProxyScopeApplication.checked = config.scope.application;
-  applicationProxyScopeConversation.checked = config.scope.conversation;
-  applicationProxyTest.disabled = !config.enabled;
   const enabledScopes = [
     config.scope.cli ? 'CLI' : undefined,
     config.scope.application ? 'ClaudeDock 自身网络' : undefined,
@@ -844,11 +951,15 @@ const renderApplicationProxyState = (state: ApplicationProxyState): void => {
   applicationProxyTestResult.textContent = test
     ? `${test.message}${test.latencyMs === undefined ? '' : ` · ${test.latencyMs} ms`} · ${new Date(test.checkedAt).toLocaleTimeString()}`
     : '保存后可通过独立会话测试该端口，不会发送模型请求。';
+  updateSettingsUnsavedIndicator();
 };
 
-const loadApplicationProxyState = async (): Promise<void> => {
+const loadApplicationProxyState = async (preserveDirtyDraft = true): Promise<void> => {
   try {
-    renderApplicationProxyState(await window.controlPanel.getApplicationProxyState());
+    renderApplicationProxyState(
+      await window.controlPanel.getApplicationProxyState(),
+      preserveDirtyDraft,
+    );
   } catch {
     showToast('无法读取应用代理设置。', 'error');
   }
@@ -866,7 +977,8 @@ const renderApplicationProxyCandidates = (candidates: ApplicationProxyCandidate[
         applicationProxyHost.value = candidate.host;
         applicationProxyPort.value = String(candidate.port);
         if (candidate.protocol === 'socks5') applicationProxyScopeCli.checked = false;
-        applicationProxyScopeCli.disabled = candidate.protocol === 'socks5';
+        syncApplicationProxyInteractivity();
+        updateSettingsUnsavedIndicator();
         showToast('已填入候选代理；请确认作用域后保存');
       });
       return button;
@@ -1028,6 +1140,12 @@ let selectedProviderId: ClaudeProviderId | undefined;
 let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let savedAppSettings: AppSettingsView | undefined;
+let footerResourcePreference: FooterResourcePreference = 'auto';
+let managedChatGptContextWindowMode: ManagedChatGptContextWindowMode = 'standard';
+let savedApplicationProxy: ApplicationProxyView | undefined;
+let applicationProxyCancelBaseline: ApplicationProxyDraftSnapshot | undefined;
+let applicationProxySaveInProgress = false;
+let applicationProxyTestInProgress = false;
 let selectedRailTab: string | undefined = 'projects';
 type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | 'router';
 let selectedSettingsTab: SettingsTab = 'general';
@@ -3555,6 +3673,7 @@ const permissionModeLabel = (mode?: ClaudePermissionMode): string =>
 
 const hideFooterMenus = (): void => {
   for (const [menu, trigger] of [
+    [footerResourceMenu, footerResource],
     [footerModelMenu, footerModel],
     [footerModeMenu, footerMode],
     [footerEffortMenu, footerEffort],
@@ -3601,6 +3720,125 @@ const buildFooterMenuItem = (
     onChoose();
   });
   return item;
+};
+
+const formatResourceAmount = (amount: number, currency: string): string =>
+  currency.toUpperCase() === 'USD'
+    ? `$${amount.toFixed(amount < 10 ? 2 : 0)}`
+    : `${amount.toFixed(amount < 10 ? 2 : 0)} ${currency}`;
+
+const formatResetTime = (resetsAt: number | undefined): string => {
+  if (resetsAt === undefined) return '重置时间未提供';
+  const milliseconds = resetsAt < 10_000_000_000 ? resetsAt * 1000 : resetsAt;
+  const remaining = milliseconds - Date.now();
+  if (remaining <= 0) return '正在重置';
+  const minutes = Math.ceil(remaining / 60_000);
+  return minutes >= 1440
+    ? `${Math.ceil(minutes / 1440)} 天后重置`
+    : minutes >= 60
+      ? `${Math.ceil(minutes / 60)} 小时后重置`
+      : `${minutes} 分钟后重置`;
+};
+
+const resourceSourceLabel = (
+  source: NonNullable<ClaudeProjectState['resourceUsage']>['source'],
+): string =>
+  ({
+    'claude-statusline': 'Claude Code 状态行',
+    'codex-app-server': 'Codex 官方 App Server',
+    'deepseek-balance': 'DeepSeek 官方余额接口',
+    'managed-chatgpt-gateway': '受管 ChatGPT 本地网关',
+    'openrouter-key': 'OpenRouter 官方密钥接口',
+  })[source];
+
+const managedContextWindowSelectable = (state: ClaudeProjectState | undefined): boolean =>
+  Boolean(
+    state?.config.preset === 'chatgpt-subscription' &&
+    (state.config.model.toLowerCase() === 'gpt-5.6-sol' ||
+      state.config.model.toLowerCase() === 'gpt-5.6'),
+  );
+
+const syncManagedChatGptContextWindowSelection = (): void => {
+  for (const button of footerContextWindowOptions.querySelectorAll<HTMLButtonElement>(
+    '[data-context-window-mode]',
+  )) {
+    button.setAttribute(
+      'aria-checked',
+      String(button.dataset.contextWindowMode === managedChatGptContextWindowMode),
+    );
+  }
+};
+
+const renderFooterResource = (
+  usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
+  contextWindowSelectable = false,
+): void => {
+  const preference = footerResourcePreference;
+  const context = usage?.contextUsedPercent;
+  const window = usage?.windows?.[0];
+  const balance = usage?.balance?.balances?.[0];
+  const quotaText =
+    window?.usedPercent === undefined ? undefined : `额度 ${window.usedPercent.toFixed(0)}%`;
+  const contextText = context === undefined ? undefined : `上下文 ${context.toFixed(0)}%`;
+  const balanceText = balance
+    ? `余额 ${formatResourceAmount(balance.amount, balance.currency)}`
+    : undefined;
+  const selected =
+    usage?.availability === 'stale'
+      ? { percent: window?.usedPercent ?? context, text: '资源 已过期' }
+      : usage?.availability === 'unavailable'
+        ? { percent: undefined, text: '资源 不可用' }
+        : preference === 'context'
+          ? {
+              percent: context ?? window?.usedPercent,
+              text: contextText ?? quotaText ?? balanceText ?? '资源 —',
+            }
+          : {
+              percent: window?.usedPercent ?? context,
+              text: quotaText ?? balanceText ?? contextText ?? '资源 —',
+            };
+  footerContextLabel.textContent = selected.text;
+  footerContextRing.hidden = selected.percent === undefined;
+  footerContextRing.style.setProperty('--context-progress', `${selected.percent ?? 0}%`);
+  footerContextRing.dataset.level =
+    selected.percent !== undefined && selected.percent >= 85
+      ? 'danger'
+      : selected.percent !== undefined && selected.percent >= 65
+        ? 'warning'
+        : 'normal';
+  footerResource.dataset.availability = usage?.availability ?? 'unavailable';
+  footerResource.title = '点击查看上下文、订阅窗口、余额和显示偏好';
+  footerResourceDetails.replaceChildren();
+  const lines = [
+    usage?.contextUsedTokens === undefined || usage.contextWindowTokens === undefined
+      ? contextText
+      : `上下文：${formatTokenCount(usage.contextUsedTokens)} / ${formatTokenCount(usage.contextWindowTokens)}（${context?.toFixed(1) ?? '—'}%）`,
+    usage?.autoCompactAtTokens === undefined
+      ? undefined
+      : `自动压缩线：约 ${formatTokenCount(usage.autoCompactAtTokens)}`,
+    ...(usage?.windows ?? []).map(
+      (item) =>
+        `${item.label}：${item.usedPercent === undefined ? '缺失' : `已用 ${item.usedPercent.toFixed(0)}%`} · ${formatResetTime(item.resetsAt)}`,
+    ),
+    ...(usage?.balance?.balances ?? []).map(
+      (item) => `余额：${formatResourceAmount(item.amount, item.currency)}`,
+    ),
+    usage?.balance?.used === undefined ? undefined : `累计用量：$${usage.balance.used.toFixed(2)}`,
+    usage?.detail,
+    usage ? `来源：${resourceSourceLabel(usage.source)}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+  for (const line of lines.length > 0 ? lines : ['尚无资源数据。']) {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = line;
+    footerResourceDetails.append(paragraph);
+  }
+  for (const button of footerResourceMenu.querySelectorAll<HTMLButtonElement>(
+    '[data-resource-preference]',
+  )) {
+    button.setAttribute('aria-checked', String(button.dataset.resourcePreference === preference));
+  }
+  footerContextWindowOptions.hidden = !contextWindowSelectable;
+  syncManagedChatGptContextWindowSelection();
 };
 
 const loadAdvancedRouterBackends = async (): Promise<void> => {
@@ -3683,8 +3921,10 @@ const pendingAppSettings = (): Pick<
 
 const updateSettingsUnsavedIndicator = (): number => {
   if (!savedAppSettings) {
-    settingsUnsavedIndicator.hidden = true;
-    return 0;
+    const count = applicationProxyIsDirty() ? 1 : 0;
+    settingsUnsavedIndicator.hidden = count === 0;
+    settingsUnsavedIndicator.textContent = `*${count} 项未保存`;
+    return count;
   }
   const pending = pendingAppSettings();
   const count = [
@@ -3693,6 +3933,7 @@ const updateSettingsUnsavedIndicator = (): number => {
     pending.theme !== savedAppSettings.theme,
     pending.advanced.chatIdleTimeoutMinutes !== savedAppSettings.advanced.chatIdleTimeoutMinutes,
     pending.advanced.webResearchIsolation !== savedAppSettings.advanced.webResearchIsolation,
+    applicationProxyIsDirty(),
   ].filter(Boolean).length;
   settingsUnsavedIndicator.hidden = count === 0;
   settingsUnsavedIndicator.textContent = `*${count} 项未保存`;
@@ -3715,6 +3956,8 @@ const loadAppSettings = async (): Promise<void> => {
   try {
     const settings = await window.controlPanel.getAppSettings();
     savedAppSettings = settings;
+    footerResourcePreference = settings.footerResourcePreference;
+    managedChatGptContextWindowMode = settings.managedChatGptContextWindowMode;
     applyAppSettingsToControls(settings);
     updateSettingsUnsavedIndicator();
   } catch {
@@ -3727,8 +3970,12 @@ const openAdvancedConnectionDialog = (): void => {
     return;
   }
   advancedConnectionSnapshot = captureAdvancedConnectionSnapshot();
+  applicationProxyCancelBaseline = captureApplicationProxyDraft();
   selectSettingsTab('general');
-  void loadAppSettings();
+  void Promise.all([loadAppSettings(), loadApplicationProxyState(false)]).then(() => {
+    applicationProxyCancelBaseline = captureApplicationProxyDraft();
+    updateSettingsUnsavedIndicator();
+  });
   connectionAdvancedDialog.showModal();
 };
 
@@ -3742,7 +3989,11 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   if (!complete && savedAppSettings) {
     applyAppSettingsToControls(savedAppSettings);
   }
+  if (!complete && applicationProxyCancelBaseline) {
+    applyApplicationProxyDraft(applicationProxyCancelBaseline);
+  }
   advancedConnectionSnapshot = undefined;
+  applicationProxyCancelBaseline = undefined;
   savedAppSettings = undefined;
   settingsUnsavedIndicator.hidden = true;
   connectionAdvancedDialog.close(complete ? 'complete' : 'cancel');
@@ -3750,9 +4001,49 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   openConnectionAdvancedButton.focus();
 };
 
+const pendingApplicationProxyInput = (): SaveApplicationProxyInput => {
+  const port = Number.parseInt(applicationProxyPort.value, 10);
+  return {
+    enabled: applicationProxyEnabled.checked,
+    host: applicationProxyHost.value,
+    password: applicationProxyPassword.value || undefined,
+    port: Number.isInteger(port) ? port : undefined,
+    protocol: applicationProxyProtocol.value === 'socks5' ? 'socks5' : 'http',
+    scope: {
+      application: applicationProxyScopeApplication.checked,
+      cli: applicationProxyScopeCli.checked,
+      conversation: applicationProxyScopeConversation.checked,
+    },
+    username: applicationProxyUsername.value,
+  };
+};
+
+const savePendingApplicationProxy = async (): Promise<boolean> => {
+  if (!applicationProxyIsDirty() || applicationProxySaveInProgress) return false;
+  applicationProxySaveInProgress = true;
+  applicationProxySave.disabled = true;
+  try {
+    const state = await window.controlPanel.saveApplicationProxy(pendingApplicationProxyInput());
+    renderApplicationProxyState(state, false);
+    applicationProxyCancelBaseline = captureApplicationProxyDraft();
+    await window.controlPanel.invalidateNetworkPreflight('application-proxy-change');
+    void runActiveNetworkPreflight(true);
+    return true;
+  } finally {
+    applicationProxySaveInProgress = false;
+    applicationProxySave.disabled = false;
+  }
+};
+
 const savePendingAppSettings = async (): Promise<void> => {
   const saved = savedAppSettings;
-  if (!saved || updateSettingsUnsavedIndicator() === 0) {
+  if (!saved) {
+    showToast('全局设置仍在读取，请稍后重试。', 'error');
+    return;
+  }
+  const proxyDirty = applicationProxyIsDirty();
+  const appSettingsDirty = updateSettingsUnsavedIndicator() > (proxyDirty ? 1 : 0);
+  if (!appSettingsDirty && !proxyDirty) {
     closeAdvancedConnectionDialog(true);
     return;
   }
@@ -3761,6 +4052,9 @@ const savePendingAppSettings = async (): Promise<void> => {
   cancelConnectionAdvancedButton.disabled = true;
   completeConnectionAdvancedButton.textContent = '正在保存…';
   try {
+    if (proxyDirty) {
+      await savePendingApplicationProxy();
+    }
     if (pending.launchAtLogin !== saved.launchAtLogin) {
       await window.controlPanel.setLaunchAtLogin(pending.launchAtLogin);
     }
@@ -3781,7 +4075,7 @@ const savePendingAppSettings = async (): Promise<void> => {
     closeAdvancedConnectionDialog(true);
   } catch {
     showToast('部分设置未能保存，已重新读取当前值。', 'error');
-    await loadAppSettings();
+    await Promise.all([loadAppSettings(), loadApplicationProxyState(false)]);
   } finally {
     completeConnectionAdvancedButton.disabled = false;
     cancelConnectionAdvancedButton.disabled = false;
@@ -3930,8 +4224,9 @@ const renderCodexState = (state: CodexProjectState): void => {
       ? 'ChatGPT 已连接'
       : 'Codex 已连接'
     : 'Codex 待准备';
-  footerContextLabel.textContent = quota ? `额度 ${quota.usedPercent.toFixed(0)}%` : '额度 —';
-  footerContextRing.style.setProperty('--context-progress', `${quota?.usedPercent ?? 0}%`);
+  footerContextLabel.textContent = '上下文 —';
+  footerContextRing.style.setProperty('--context-progress', '0%');
+  renderFooterResource(state.resourceUsage);
   footerModel.textContent = '模型 Codex 自动';
   footerModel.disabled = true;
   footerMode.textContent = '模式 工作区写入';
@@ -4096,6 +4391,7 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   footerContextRing.dataset.level = contextProgress.dataset.level;
   footerContextLabel.textContent =
     percentage === undefined ? '上下文 —' : `上下文 ${percentage.toFixed(0)}%`;
+  renderFooterResource(state.resourceUsage, managedContextWindowSelectable(state));
   footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
   footerModel.disabled = modelSwitchInProgress;
   footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
@@ -9931,39 +10227,42 @@ settingsChatIdleTimeout.addEventListener('change', () => {
   }
   updateSettingsUnsavedIndicator();
 });
-applicationProxyProtocol.addEventListener('change', () => {
-  const cliSupported = applicationProxyProtocol.value === 'http';
-  applicationProxyScopeCli.disabled = !cliSupported;
-  if (!cliSupported) applicationProxyScopeCli.checked = false;
+applicationProxyEnabled.addEventListener('change', () => {
+  syncApplicationProxyInteractivity();
+  updateSettingsUnsavedIndicator();
 });
+applicationProxyProtocol.addEventListener('change', () => {
+  syncApplicationProxyInteractivity();
+  updateSettingsUnsavedIndicator();
+});
+for (const control of [
+  applicationProxyHost,
+  applicationProxyPort,
+  applicationProxyUsername,
+  applicationProxyPassword,
+]) {
+  control.addEventListener('input', () => {
+    syncApplicationProxyInteractivity();
+    updateSettingsUnsavedIndicator();
+  });
+}
+for (const control of [
+  applicationProxyScopeCli,
+  applicationProxyScopeApplication,
+  applicationProxyScopeConversation,
+]) {
+  control.addEventListener('change', () => {
+    syncApplicationProxyInteractivity();
+    updateSettingsUnsavedIndicator();
+  });
+}
 applicationProxySave.addEventListener('click', () => {
-  const port = Number.parseInt(applicationProxyPort.value, 10);
-  applicationProxySave.disabled = true;
-  void window.controlPanel
-    .saveApplicationProxy({
-      enabled: applicationProxyEnabled.checked,
-      host: applicationProxyHost.value,
-      password: applicationProxyPassword.value || undefined,
-      port: Number.isInteger(port) ? port : undefined,
-      protocol: applicationProxyProtocol.value === 'socks5' ? 'socks5' : 'http',
-      scope: {
-        application: applicationProxyScopeApplication.checked,
-        cli: applicationProxyScopeCli.checked,
-        conversation: applicationProxyScopeConversation.checked,
-      },
-      username: applicationProxyUsername.value,
-    })
-    .then((state) => {
-      renderApplicationProxyState(state);
-      void window.controlPanel.invalidateNetworkPreflight('application-proxy-change');
-      void runActiveNetworkPreflight(true);
-      showToast('应用代理设置已保存');
+  void savePendingApplicationProxy()
+    .then((saved) => {
+      if (saved) showToast('应用代理设置已保存');
     })
     .catch((error: unknown) => {
       showToast(error instanceof Error ? error.message : '无法保存应用代理设置。', 'error');
-    })
-    .finally(() => {
-      applicationProxySave.disabled = false;
     });
 });
 applicationProxyDetect.addEventListener('click', () => {
@@ -9980,7 +10279,8 @@ applicationProxyDetect.addEventListener('click', () => {
     });
 });
 applicationProxyTest.addEventListener('click', () => {
-  applicationProxyTest.disabled = true;
+  applicationProxyTestInProgress = true;
+  syncApplicationProxyInteractivity();
   applicationProxyTest.textContent = '正在测试…';
   void window.controlPanel
     .testApplicationProxy()
@@ -9992,8 +10292,9 @@ applicationProxyTest.addEventListener('click', () => {
       showToast(error instanceof Error ? error.message : '应用代理测试失败。', 'error');
     })
     .finally(() => {
+      applicationProxyTestInProgress = false;
       applicationProxyTest.textContent = '测试 GitHub 连接';
-      applicationProxyTest.disabled = false;
+      syncApplicationProxyInteractivity();
     });
 });
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
@@ -10280,6 +10581,50 @@ networkPreflightClearHistory.addEventListener('click', () => {
     .finally(() => {
       networkPreflightClearHistory.disabled = false;
     });
+});
+footerResource.addEventListener('click', () => {
+  if (footerResourceMenu.hidden) {
+    openFooterMenu(footerResourceMenu, footerResource);
+  } else {
+    hideFooterMenus();
+  }
+});
+footerResourceMenu.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    '[data-resource-preference], [data-context-window-mode]',
+  );
+  const contextWindowMode = button?.dataset.contextWindowMode as
+    ManagedChatGptContextWindowMode | undefined;
+  if (contextWindowMode) {
+    void window.controlPanel
+      .setManagedChatGptContextWindowMode(contextWindowMode)
+      .then((settings) => {
+        managedChatGptContextWindowMode = settings.managedChatGptContextWindowMode;
+        syncManagedChatGptContextWindowSelection();
+        hideFooterMenus();
+        showToast('上下文窗口选择已保存；下次新建或重启托管 ChatGPT 会话生效。');
+      })
+      .catch(() => showToast('无法保存 ChatGPT 上下文窗口选择。', 'error'));
+    return;
+  }
+  const preference = button?.dataset.resourcePreference as FooterResourcePreference | undefined;
+  if (!preference) return;
+  void window.controlPanel
+    .setFooterResourcePreference(preference)
+    .then((settings) => {
+      footerResourcePreference = settings.footerResourcePreference;
+      const status = activeStatus();
+      const codexSelected = activeDevelopmentRuntime() === 'codex';
+      const claudeState = status && !codexSelected ? claudeStates.get(status.id) : undefined;
+      const usage = status
+        ? codexSelected
+          ? codexStates.get(status.id)?.resourceUsage
+          : claudeState?.resourceUsage
+        : undefined;
+      renderFooterResource(usage, managedContextWindowSelectable(claudeState));
+      hideFooterMenus();
+    })
+    .catch(() => showToast('无法保存底栏资源偏好。', 'error'));
 });
 footerModel.addEventListener('click', () => {
   if (footerModelMenu.hidden) {
@@ -10809,9 +11154,11 @@ document.addEventListener('pointerdown', (event) => {
     hideHistoryContextMenu();
   }
   if (
+    !footerResourceMenu.contains(event.target as Node) &&
     !footerModelMenu.contains(event.target as Node) &&
     !footerModeMenu.contains(event.target as Node) &&
     !footerEffortMenu.contains(event.target as Node) &&
+    !footerResource.contains(event.target as Node) &&
     !footerModel.contains(event.target as Node) &&
     !footerMode.contains(event.target as Node) &&
     !footerEffort.contains(event.target as Node)
@@ -11005,6 +11352,8 @@ void (async () => {
         ? reportedWindowsBuild
         : undefined;
     artifactNetworkState.allowed = initialSettings.artifactNetworkAllowed ?? true;
+    footerResourcePreference = initialSettings.footerResourcePreference;
+    managedChatGptContextWindowMode = initialSettings.managedChatGptContextWindowMode;
     settingsCloseBehavior.value = initialSettings.closeBehavior;
     renderArtifactNetworkLog();
     if (initialSettings.theme !== activeTerminalTheme) {

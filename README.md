@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.4.2**，许可证为 **Apache-2.0**。4.4.2 的正式稳定版必须同时通过可信
+当前代码版本为 **4.5.0**，许可证为 **Apache-2.0**。4.5.0 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -36,6 +36,8 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   安装、打开 OpenAI 官方授权页、启动仅监听回环地址的网关，再从实时模型列表选择、实测并保存当前
   项目配置。
 - Codex 官方 CLI/App Server 登录状态与项目启动；ChatGPT 登录凭据仍由 Codex 自身管理。
+- 终端底栏把上下文、官方额度窗口和受支持供应商余额收拢为“资源”菜单；用户可选择自动、
+  上下文优先或额度优先。ClaudeDock 不用本地网关请求次数伪造 ChatGPT 订阅剩余额度。
 - 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
 - 应用更新、依赖许可清单、安全报告与可重复 CI 门禁。
@@ -96,6 +98,21 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
    使用启动时的旧中转站并消耗额度；接入成功后以 `--continue` 在新路由恢复最近会话。接入或恢复
    失败时会话保持停止，不会静默退回旧路由。该切换只作用于当前项目；其他项目的后台会话仍保持
    各自的项目级配置。
+
+`gpt-5.6-sol` 的 OpenAI API 模型规格允许约 105 万 token，但当前 Codex 产品会话配置使用
+27.2 万原始窗口，并按 95% 留量显示约 25.84 万有效窗口。ClaudeDock 因而在底栏资源菜单提供：
+
+- “标准”默认档：约 25.84 万有效窗口，在约 20.67 万时请求 Claude Code 自动压缩，避免等到
+  200k/272k 边界后连压缩请求本身也被上游以 400 拒绝。
+- “扩展（实验）”档：约 99.75 万有效窗口，在约 79.8 万时提前压缩。该档只对受管 ChatGPT 的
+  `gpt-5.6-sol` 生效，并从下一次新建或重启会话开始使用；ChatGPT 订阅后端仍可能在 27.2 万附近
+  拒绝，因此不是容量承诺。API 输入超过 27.2 万会进入更高计价区间，订阅额度如何计算仍以官方
+  策略为准。更大窗口也不等于回答必然更聪明，长会话中早期信息的稳定利用需要按真实任务验证。
+
+状态栏优先按 Claude Code 官方公式累加 `context_window.current_usage` 的当前输入与缓存 token，
+只在这些字段缺失时才用取整后的百分比回退，因此不会再因 `used_percentage` 的粗粒度读数长期显示
+100%。若上游仍返回 `Your input exceeds the context window`，ClaudeDock 会明确提示新建会话；
+继续在已经溢出的会话里手动 `/compact` 不能保证恢复。
 
 受管配置中的本地客户端密钥是 Claude Code 与 CLIProxyAPI 之间的随机访问密钥，不是 ChatGPT
 凭据；项目配置副本用 Windows DPAPI 加密。CLIProxyAPI 自身必须在其权限受限的 `config.yaml` 中
