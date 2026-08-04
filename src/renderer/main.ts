@@ -950,11 +950,13 @@ routerCapabilityList.replaceChildren(
     title.textContent = provider.label;
     const badge = document.createElement('span');
     badge.textContent =
-      capability.mode === 'direct'
-        ? '直连'
-        : capability.mode === 'router-required'
-          ? '必须路由'
-          : '路由可选';
+      provider.id === 'chatgpt-subscription'
+        ? '本机网关'
+        : capability.mode === 'direct'
+          ? '直连'
+          : capability.mode === 'router-required'
+            ? '必须路由'
+            : '路由可选';
     heading.append(title, badge);
     const detail = document.createElement('p');
     detail.textContent = capability.reason;
@@ -2851,7 +2853,32 @@ const syncConnectionInteractivity = (): void => {
   syncApiKeyHelperPolicyUi();
 };
 
+const buildChatGptSubscriptionGuide = (): HTMLElement => {
+  const guide = document.createElement('section');
+  guide.className = 'subscription-gateway-guide';
+  guide.setAttribute('aria-label', 'ChatGPT 订阅本地网关接入步骤');
+
+  const title = document.createElement('strong');
+  title.textContent = '先在 ClaudeDock 外完成本地网关授权';
+  const steps = document.createElement('ol');
+  for (const copy of [
+    '安装并启动 CLIProxyAPI，或在 CC Switch 中启用 Codex OAuth 本地路由；OAuth Token 始终由该工具管理。',
+    '在外部工具中完成 ChatGPT / Codex 登录。1455 是 OAuth 回调端口，不是 Claude Code 的模型接口。',
+    '确认模型接口地址与本地访问密钥；CLIProxyAPI 默认可使用 127.0.0.1:8317，CC Switch 请复制它实际显示的 Claude 路由地址。',
+  ]) {
+    const item = document.createElement('li');
+    item.textContent = copy;
+    steps.append(item);
+  }
+  const boundary = document.createElement('small');
+  boundary.textContent =
+    '公开方案里的 claudex 别名本质是作用域受限的环境变量；ClaudeDock 只把同类回环地址、模型和本地访问密钥注入当前项目子进程，不改 shell 配置，不读取 OAuth 登录文件，也不修改系统级路由。';
+  guide.append(title, steps, boundary);
+  return guide;
+};
+
 const moveProviderTools = (providerId?: ClaudeProviderId): void => {
+  providerSpecialSetup.replaceChildren();
   connectionAdvancedContent.append(
     connectionAdvice,
     gatewayDiscoverySection,
@@ -2859,6 +2886,10 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     converterHelp,
     connectionGlossary,
   );
+  if (providerId === 'chatgpt-subscription') {
+    providerSpecialSetup.append(buildChatGptSubscriptionGuide(), gatewayDiscoverySection);
+    return;
+  }
   if (providerId === 'curl') {
     providerSpecialSetup.append(curlOnboarding);
     return;
@@ -2939,6 +2970,11 @@ function renderProviderPicker(): void {
       const detail = document.createElement('span');
       detail.textContent = provider.description;
       card.append(title, detail);
+      if (provider.group === 'subscription') {
+        const badge = document.createElement('small');
+        badge.textContent = '本地转换 · 非官方直连';
+        card.append(badge);
+      }
       if (provider.id === configuredPreset) {
         const badge = document.createElement('small');
         badge.textContent = '当前配置';
@@ -3037,31 +3073,42 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     ? protocol === 'openai'
       ? '可填域名、/v1、/v1/chat/completions 或 /v1/responses；保存时会自动补全，并由本地 Router 转换。'
       : '按服务商给出的基址填写（含 /v1 等路径都会保留）；Claude Code 会自己追加 /v1/messages。'
-    : provider.id === 'gateway'
-      ? '填写路由器真正的模型接口；默认 3456 是模型接口，3458 是管理页。'
-      : '接口必须提供 Anthropic /v1/messages，且不能直接使用 OpenAI /chat/completions。';
+    : provider.id === 'chatgpt-subscription'
+      ? '填写本机 Anthropic Messages 兼容网关的基址；CLIProxyAPI 默认是 127.0.0.1:8317。不要填写 OAuth 回调端口 1455 或管理页地址。'
+      : provider.id === 'gateway'
+        ? '填写路由器真正的模型接口；默认 3456 是模型接口，3458 是管理页。'
+        : '接口必须提供 Anthropic /v1/messages，且不能直接使用 OpenAI /chat/completions。';
   protocolHelp.textContent =
-    protocol === 'openai'
-      ? 'OpenAI 请求会自动写入并启动本地 Router，再转换为 Claude Code 使用的 Anthropic Messages 请求。'
-      : 'Anthropic Messages 接口由 Claude Code 直接访问，不经过协议转换。';
-  modelHelp.textContent = `主模型会同时用于默认、Opus 与 Sonnet 路由；当前推荐 ${provider.model}。`;
+    provider.id === 'chatgpt-subscription'
+      ? 'Claude Code 访问本机 Anthropic Messages 入口；本地网关再完成 Codex OAuth 请求与协议转换，这不是官方直连。'
+      : protocol === 'openai'
+        ? 'OpenAI 请求会自动写入并启动本地 Router，再转换为 Claude Code 使用的 Anthropic Messages 请求。'
+        : 'Anthropic Messages 接口由 Claude Code 直接访问，不经过协议转换。';
+  modelHelp.textContent =
+    provider.id === 'chatgpt-subscription'
+      ? `默认映射为主模型 ${provider.model}、快速模型 ${provider.modelFast ?? provider.model}；请以本地网关实时可用模型为准，可在这里修改。`
+      : `主模型会同时用于默认、Opus 与 Sonnet 路由；当前推荐 ${provider.model}。`;
   authModeHelp.textContent =
-    provider.authMode === 'existing'
-      ? 'ClaudeDock 不读取或复用 Claude Code 的登录令牌。'
-      : provider.authMode === 'apiKey'
-        ? '该服务商使用 x-api-key 请求头。'
-        : '该服务商使用 Authorization: Bearer 请求头。';
+    provider.id === 'chatgpt-subscription'
+      ? '这里填写本地网关 config.yaml 的 api-keys 客户端密钥，并以 Bearer Token 发送；不要粘贴 ChatGPT 密码、Cookie 或 OAuth Token。'
+      : provider.authMode === 'existing'
+        ? 'ClaudeDock 不读取或复用 Claude Code 的登录令牌。'
+        : provider.authMode === 'apiKey'
+          ? '该服务商使用 x-api-key 请求头。'
+          : '该服务商使用 Authorization: Bearer 请求头。';
   authModeLabel.textContent = isOfficialLogin
     ? '官方认证方式'
     : supportsProtocolSwitch && protocol === 'openai'
       ? '中转站认证方式'
       : 'Claude Code 到接口的认证方式';
   credentialLabel.textContent =
-    provider.id === 'gateway'
-      ? '路由器访问密钥（不是上游密钥）'
-      : supportsProtocolSwitch && protocol === 'openai'
-        ? 'OpenAI 中转站密钥'
-        : `${provider.label} 凭据`;
+    provider.id === 'chatgpt-subscription'
+      ? '本地网关访问密钥（不是 ChatGPT 凭据）'
+      : provider.id === 'gateway'
+        ? '路由器访问密钥（不是上游密钥）'
+        : supportsProtocolSwitch && protocol === 'openai'
+          ? 'OpenAI 中转站密钥'
+          : `${provider.label} 凭据`;
   claudeCredential.placeholder = provider.keyHint ?? '留空则保留已保存的凭据';
   credentialField.hidden =
     claudeAuthMode.value === 'existing' ||
@@ -3075,8 +3122,12 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   providerCaveat.textContent = provider.caveat ?? '';
   openProviderConsoleButton.hidden = !provider.consoleUrl;
   openProviderConsoleButton.dataset.externalUrl = provider.consoleUrl ?? '';
+  openProviderConsoleButton.textContent =
+    provider.id === 'chatgpt-subscription' ? '查看网关项目' : '打开密钥控制台';
   openProviderDocsButton.hidden = !provider.docsUrl;
   openProviderDocsButton.dataset.externalUrl = provider.docsUrl ?? '';
+  openProviderDocsButton.textContent =
+    provider.id === 'chatgpt-subscription' ? '查看官方登录说明' : '查看官方文档';
   moveProviderTools(provider.id);
   renderProviderPicker();
   syncConnectionInteractivity();
@@ -3866,20 +3917,27 @@ const openExternal = async (url: string): Promise<void> => {
 };
 
 const applyGatewayCandidate = (candidate: ClaudeGatewayCandidate): void => {
-  claudePreset.value = 'gateway';
-  applyPresetUi('gateway', false);
+  const preset: ClaudePreset =
+    candidate.kind === 'cliproxyapi' ? 'chatgpt-subscription' : 'gateway';
+  claudePreset.value = preset;
+  applyPresetUi(preset, false);
   claudeBaseUrl.value = candidate.apiBaseUrl;
-  claudeModel.value =
-    lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
-  claudeModelFast.value = claudeModel.value;
-  claudeAuthMode.value = candidate.authRequired ? 'authToken' : 'none';
+  if (candidate.kind !== 'cliproxyapi') {
+    claudeModel.value =
+      lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
+    claudeModelFast.value = claudeModel.value;
+  }
+  claudeAuthMode.value =
+    candidate.kind === 'cliproxyapi' ? 'authToken' : candidate.authRequired ? 'authToken' : 'none';
   claudeCredential.value = '';
   credentialField.hidden = claudeAuthMode.value === 'none';
   connectionTestResult.hidden = true;
   showToast(
-    candidate.authRequired
-      ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
-      : `已选用 ${candidate.label}；下一步执行真实连接测试`,
+    candidate.kind === 'cliproxyapi'
+      ? '已选用 CLIProxyAPI；请填写本地 api-keys 访问密钥，再执行真实连接测试'
+      : candidate.authRequired
+        ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
+        : `已选用 ${candidate.label}；下一步执行真实连接测试`,
   );
   claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -3896,7 +3954,7 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
   if (diagnostics.candidates.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'gateway-empty';
-    empty.textContent = '没有发现 CCR、LiteLLM 或当前项目保存的本机服务。';
+    empty.textContent = '没有发现 CCR、CLIProxyAPI、LiteLLM 或当前项目保存的本机服务。';
     gatewayCandidates.append(empty);
   }
 

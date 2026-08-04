@@ -61,6 +61,20 @@ describe('Claude provider catalog', () => {
     }
   });
 
+  it('keeps ChatGPT subscription conversion explicit, local and separate from official access', () => {
+    expect(findClaudeProvider('chatgpt-subscription')).toMatchObject({
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      group: 'subscription',
+      model: 'gpt-5.6-sol',
+      modelFast: 'gpt-5.4-mini',
+    });
+    expect(findClaudeProvider('chatgpt-subscription')?.caveat).toContain('第三方本地网关');
+    expect(findClaudeProvider('chatgpt-subscription')?.keyHint).toContain('本地网关');
+    expect(providerForPreset('chatgpt-subscription')).toBe('gateway');
+    expect(collapsedClaudeProviderGroups('chatgpt-subscription')).not.toContain('subscription');
+  });
+
   it('only permits HTTPS remote endpoints and explicit loopback HTTP endpoints', () => {
     for (const provider of CLAUDE_PROVIDERS) {
       if (!provider.baseUrl) {
@@ -106,6 +120,7 @@ describe('Claude provider catalog', () => {
 
   it('opens only the group containing the last provider selection', () => {
     expect(collapsedClaudeProviderGroups('anthropic')).not.toContain('official');
+    expect(collapsedClaudeProviderGroups('chatgpt-subscription')).not.toContain('subscription');
     expect(collapsedClaudeProviderGroups('deepseek')).not.toContain('domestic');
     expect(collapsedClaudeProviderGroups('custom')).not.toContain('advanced');
     expect(collapsedClaudeProviderGroups('custom')).toHaveLength(CLAUDE_PROVIDER_GROUPS.length - 1);

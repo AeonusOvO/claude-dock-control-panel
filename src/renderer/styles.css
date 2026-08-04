@@ -7406,6 +7406,36 @@ body.is-resizing * {
   margin-top: 0;
 }
 
+.subscription-gateway-guide {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+}
+
+.subscription-gateway-guide strong {
+  color: var(--text-hi);
+  font-size: var(--text-sm);
+}
+
+.subscription-gateway-guide ol {
+  color: var(--text-lo);
+  display: grid;
+  font-size: var(--text-xs);
+  gap: var(--s-1);
+  line-height: var(--lh-note);
+  margin: 0;
+  padding-left: var(--s-5);
+}
+
+.subscription-gateway-guide small {
+  color: var(--text-dim);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-note);
+}
+
 .connection-remedy {
   background: var(--warn-tint);
   border: 1px solid var(--warn-line);

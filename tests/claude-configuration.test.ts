@@ -65,6 +65,38 @@ describe('Claude Code configuration', () => {
     ).toThrow('不能直接用于 Claude Code');
   });
 
+  it('accepts the ChatGPT subscription preset only through a loopback gateway', () => {
+    const subscriptionInput: SaveClaudeConfigInput = {
+      ...gatewayInput,
+      authMode: 'authToken',
+      baseUrl: 'http://localhost:8317/',
+      model: 'gpt-5.6-sol',
+      modelFast: 'gpt-5.4-mini',
+      preset: 'chatgpt-subscription',
+    };
+
+    expect(normalizeClaudeConfig(subscriptionInput)).toMatchObject({
+      authMode: 'authToken',
+      baseUrl: 'http://localhost:8317',
+      model: 'gpt-5.6-sol',
+      modelFast: 'gpt-5.4-mini',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    });
+    expect(() =>
+      normalizeClaudeConfig({
+        ...subscriptionInput,
+        baseUrl: 'https://gateway.example.com',
+      }),
+    ).toThrow('只接受本机回环网关地址');
+    expect(() =>
+      normalizeClaudeConfig({
+        ...subscriptionInput,
+        authMode: 'apiKey',
+      }),
+    ).toThrow('必须使用本地网关 Bearer Token');
+  });
+
   /*
    * Claude Code appends `/v1/messages` to whatever it is given, so a relay documented as ending in
    * `/v1` breaks the moment that segment is normalized away.

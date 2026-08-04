@@ -17,5 +17,10 @@ describe('router capability matrix', () => {
   it('records DeepSeek as direct and the local gateway as router-required', () => {
     expect(ROUTER_CAPABILITIES.deepseek.mode).toBe('direct');
     expect(ROUTER_CAPABILITIES.gateway.mode).toBe('router-required');
+    expect(ROUTER_CAPABILITIES['chatgpt-subscription']).toMatchObject({
+      mode: 'direct',
+      verifiedAt: '2026-08-04',
+    });
+    expect(ROUTER_CAPABILITIES['chatgpt-subscription'].reason).toContain('本地订阅网关');
   });
 });
