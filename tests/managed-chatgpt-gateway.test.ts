@@ -64,17 +64,21 @@ describe('managed ChatGPT gateway', () => {
     expect(archiveEntriesAreSafe(['/absolute/tool.exe'])).toBe(false);
   });
 
-  it('writes a loopback-only configuration without remote management or control panel', () => {
+  it('writes a loopback-only, key-protected local management configuration', () => {
     const authDirectory = path.resolve('C:\\Users\\Tester\\ClaudeDock\\gateway-auth');
     const config = buildManagedGatewayConfig({
       authDirectory,
       clientKey: `sk-claudedock-${'x'.repeat(43)}`,
+      managementKey: `mgmt-claudedock-${'y'.repeat(43)}`,
       port: 8317,
     });
     expect(config).toContain('host: "127.0.0.1"');
     expect(config).toContain('port: 8317');
     expect(config).toContain('allow-remote: false');
-    expect(config).toContain('disable-control-panel: true');
+    expect(config).toContain(`secret-key: "mgmt-claudedock-${'y'.repeat(43)}"`);
+    expect(config).toContain('disable-control-panel: false');
+    expect(config).toContain('disable-auto-update-panel: true');
+    expect(config).toContain('router-for-me/Cli-Proxy-API-Management-Center');
     expect(config).toContain('usage-statistics-enabled: false');
     expect(config).toContain(`sk-claudedock-${'x'.repeat(43)}`);
     expect(config).not.toMatch(/oauth|cookie|password/i);

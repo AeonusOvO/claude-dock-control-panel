@@ -31,6 +31,7 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterProviderProtocol,
   ClaudeRouterInstallSource,
+  RouterOperationProgress,
   SoftwareUpdateState,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -83,12 +84,7 @@ import type { ClaudeConfigPresentation, ClaudeConfigSnapshot } from './claude-co
 import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import { ConversationPreferencesStore, isConversationId } from './conversation-preferences-store';
-import {
-  ClaudeRouterManager,
-  type DownloadedRouterInstaller,
-  type SavedRouterProvider,
-} from './claude-router-manager';
-import type { DownloadEngine } from './download-engine';
+import { ClaudeRouterManager, type SavedRouterProvider } from './claude-router-manager';
 import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-updates';
 
 interface RuntimeSession {
@@ -123,6 +119,7 @@ interface RuntimeSession {
   permissionMode?: ClaudePermissionMode;
   /** Modes this session has actually shown, in first-seen order. */
   permissionModeCycle: ClaudePermissionMode[];
+  routeKind?: 'ccr' | 'direct' | 'managed-chatgpt';
   sessionId: string;
   /** Latest `signaledAt` consumed from signal.json, so each signal is only acted on once. */
   signalSeenAt?: number;
@@ -629,17 +626,23 @@ export class ClaudeRuntime {
     private readonly readPermissionModeFromScreen: (
       sessionId: string,
     ) => Promise<ClaudePermissionMode | undefined>,
-    downloadEngine: DownloadEngine,
     private readonly ensureManagedChatGptGatewayReady: () => Promise<void>,
     fetchImplementation: typeof fetch = fetch,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
     private readonly applicationVersion?: string,
+    onRouterOperationProgress: (progress: RouterOperationProgress) => void = () => {},
+    private readonly stopManagedChatGptGateway: () => Promise<void> | void = () => {},
+    routerCommandEnvironment: () => Record<string, null | string | undefined> = () => ({}),
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
     this.fetchImplementation = fetchImplementation;
     this.conversationPreferences = new ConversationPreferencesStore(userDataPath);
-    this.routerManager = new ClaudeRouterManager(userDataPath, downloadEngine, fetchImplementation);
+    this.routerManager = new ClaudeRouterManager(
+      userDataPath,
+      onRouterOperationProgress,
+      routerCommandEnvironment,
+    );
     this.runtimeRoot = path.join(userDataPath, 'claude', 'runtime');
     this.currentThemeId = initialThemeId;
     this.metricsTimer = setInterval(() => {
@@ -649,7 +652,11 @@ export class ClaudeRuntime {
   }
 
   public closeSession(sessionId: string): void {
+    const previousRoute = this.sessions.get(sessionId)?.routeKind;
     this.sessions.delete(sessionId);
+    if (previousRoute) {
+      void this.stopUnusedRoute(previousRoute).catch(() => {});
+    }
   }
 
   public usesOfficialProvider(cwd: string): boolean {
@@ -726,6 +733,9 @@ export class ClaudeRuntime {
       combined = combined.replaceAll(runtime.exitMarker, '');
       runtime.active = false;
       runtime.exitMarker = undefined;
+      if (runtime.routeKind) {
+        void this.stopUnusedRoute(runtime.routeKind).catch(() => {});
+      }
       void this.emitState(runtime);
     }
 
@@ -797,17 +807,25 @@ export class ClaudeRuntime {
     );
   }
 
-  public downloadRouterInstaller(): Promise<DownloadedRouterInstaller> {
-    return this.routerManager.downloadLatestInstaller();
-  }
-
   public async installRouterPackage(
-    source: Exclude<ClaudeRouterInstallSource, 'github'>,
+    source: ClaudeRouterInstallSource,
   ): Promise<{ message: string; state: ClaudeRouterManagementState }> {
     const result = await this.routerManager.installFromNpm(source);
     this.routerHealthCache.set(result.state);
     this.softwareUpdatesCache.clear();
     return result;
+  }
+
+  public async recoverInterruptedRouterInstall(): Promise<void> {
+    const result = await this.routerManager.recoverInterruptedInstall();
+    if (result) {
+      this.routerHealthCache.set(result.state);
+      this.softwareUpdatesCache.clear();
+    }
+  }
+
+  public async stopUnusedRoutingServices(): Promise<void> {
+    await Promise.all([this.stopUnusedRoute('ccr'), this.stopUnusedRoute('managed-chatgpt')]);
   }
 
   public async uninstallRouter(): Promise<{
@@ -950,6 +968,71 @@ export class ClaudeRuntime {
     };
   }
 
+  private routeKindForConfig(config: NormalizedClaudeConfig): 'ccr' | 'direct' | 'managed-chatgpt' {
+    if (config.preset === 'chatgpt-subscription') {
+      return 'managed-chatgpt';
+    }
+    return usesDefaultClaudeRouter(config) ? 'ccr' : 'direct';
+  }
+
+  private hasActiveRoute(
+    routeKind: 'ccr' | 'direct' | 'managed-chatgpt',
+    excludedSessionId?: string,
+  ): boolean {
+    return [...this.sessions.values()].some(
+      (session) =>
+        session.sessionId !== excludedSessionId &&
+        session.active &&
+        session.routeKind === routeKind,
+    );
+  }
+
+  private async stopUnusedRoute(
+    routeKind: 'ccr' | 'direct' | 'managed-chatgpt',
+    excludedSessionId?: string,
+  ): Promise<void> {
+    if (routeKind === 'ccr' && !this.hasActiveRoute('ccr', excludedSessionId)) {
+      const state = await this.routerManager.getState();
+      if (state.serviceRunning) {
+        await this.routerManager.stop();
+        this.routerHealthCache.clear();
+      }
+    }
+    if (
+      routeKind === 'managed-chatgpt' &&
+      !this.hasActiveRoute('managed-chatgpt', excludedSessionId)
+    ) {
+      await this.stopManagedChatGptGateway();
+    }
+  }
+
+  private async prepareRouteServices(
+    routeKind: 'ccr' | 'direct' | 'managed-chatgpt',
+    sessionId: string,
+  ): Promise<void> {
+    if (routeKind === 'managed-chatgpt') {
+      await this.ensureManagedChatGptGatewayReady();
+      await this.stopUnusedRoute('ccr', sessionId);
+      return;
+    }
+    if (routeKind === 'ccr') {
+      let state = await this.routerManager.getState();
+      if (!state.installed) {
+        state = (await this.routerManager.installFromNpm('npm')).state;
+      }
+      if (!state.managementAvailable || state.gatewayState !== 'running') {
+        state = await this.routerManager.start();
+      }
+      this.routerHealthCache.set(state);
+      await this.stopUnusedRoute('managed-chatgpt', sessionId);
+      return;
+    }
+    await Promise.all([
+      this.stopUnusedRoute('ccr', sessionId),
+      this.stopUnusedRoute('managed-chatgpt', sessionId),
+    ]);
+  }
+
   public async prepareLaunch(
     sessionId: string,
     cwd: string,
@@ -980,9 +1063,8 @@ export class ClaudeRuntime {
     }
 
     const config = this.configStore.getConfig(cwd);
-    if (config.preset === 'chatgpt-subscription') {
-      await this.ensureManagedChatGptGatewayReady();
-    }
+    const routeKind = this.routeKindForConfig(config);
+    await this.prepareRouteServices(routeKind, sessionId);
     const credential = this.configStore.getCredential(cwd);
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
       throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
@@ -1111,6 +1193,7 @@ export class ClaudeRuntime {
 
     const runtime = this.ensureSession(sessionId, cwd);
     runtime.active = true;
+    runtime.routeKind = routeKind;
     runtime.conversationId = resumedConversationId;
     runtime.diagnosticBuffer = '';
     runtime.effortCompatibility = undefined;
@@ -1173,6 +1256,12 @@ export class ClaudeRuntime {
     this.configStore.save(cwd, input, presentation);
     await this.recordConnectionHistory(cwd, input, historyMetadata);
     const runtime = this.ensureSession(sessionId, cwd);
+    if (!runtime.active) {
+      await this.prepareRouteServices(
+        this.routeKindForConfig(this.configStore.getConfig(cwd)),
+        sessionId,
+      );
+    }
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
     return { ...state, active: runtime.active };
@@ -1671,6 +1760,11 @@ export class ClaudeRuntime {
     const protocol = routerProtocolForOpenAiEndpoint(endpoint);
 
     let routerState = await this.routerManager.getState();
+    if (!routerState.installed) {
+      const installed = await this.routerManager.installFromNpm('npm');
+      routerState = installed.state;
+      this.softwareUpdatesCache.clear();
+    }
     if (!routerState.managementAvailable) {
       let startError: unknown;
       try {
@@ -1832,6 +1926,9 @@ export class ClaudeRuntime {
     runtime.active = false;
     runtime.exitMarker = undefined;
     runtime.markerRemainder = '';
+    if (runtime.routeKind) {
+      void this.stopUnusedRoute(runtime.routeKind).catch(() => {});
+    }
     void this.emitState(runtime);
   }
 

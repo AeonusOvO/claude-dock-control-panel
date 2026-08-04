@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import type { SaveClaudeRouterProviderInput } from '../src/shared/contracts';
 import {
   buildDeletedRouterConfig,
   buildUpdatedRouterConfig,
   normalizeRouterProviderInput,
-  parseRouterInstallerRelease,
   routerCliStartSpec,
   routerDataDirectory,
   routerGatewayErrorMessage,
@@ -13,6 +15,7 @@ import {
   sanitizeRouterConfig,
   tasklistImageNames,
   ROUTER_DATA_ENTRIES,
+  ClaudeRouterManager,
 } from '../src/main/claude-router-manager';
 
 const providerInput: SaveClaudeRouterProviderInput = {
@@ -61,6 +64,59 @@ const baseConfig = {
 };
 
 describe('Claude Code Router management', () => {
+  it('deduplicates installs and leaves a secret-free journal for automatic recovery', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-router-recovery-'));
+    let rejectInstall!: (error: Error) => void;
+    const pendingInstall = new Promise<string>((_resolve, reject) => {
+      rejectInstall = reject;
+    });
+    const runCommand = vi.fn(() => pendingInstall);
+    const progress: string[] = [];
+    const manager = new ClaudeRouterManager(
+      userDataPath,
+      (event) => progress.push(`${event.operation}:${event.stage}`),
+      () => ({ HTTPS_PROXY: 'http://127.0.0.1:7890' }),
+      runCommand,
+    );
+    try {
+      const first = manager.installFromNpm('npm');
+      const second = manager.installFromNpm('npm');
+      await Promise.resolve();
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(runCommand).toHaveBeenCalledWith(
+        'npm',
+        expect.arrayContaining(['install', '--global']),
+        expect.objectContaining({ env: { HTTPS_PROXY: 'http://127.0.0.1:7890' } }),
+      );
+
+      rejectInstall(new Error('simulated power loss'));
+      await expect(first).rejects.toThrow('simulated power loss');
+      await expect(second).rejects.toThrow('simulated power loss');
+
+      const journalPath = path.join(userDataPath, 'claude', 'router-operation.json');
+      expect(existsSync(journalPath)).toBe(true);
+      const journal = readFileSync(journalPath, 'utf8');
+      expect(journal).toContain('"source": "npmmirror"');
+      expect(journal).not.toMatch(/proxy|token|key|secret/i);
+      expect(progress).toContain('install:error');
+
+      const recoveryProgress: string[] = [];
+      const recoveryCommand = vi.fn(() => Promise.reject(new Error('still offline')));
+      const recoveredManager = new ClaudeRouterManager(
+        userDataPath,
+        (event) => recoveryProgress.push(`${event.operation}:${event.stage}`),
+        () => ({}),
+        recoveryCommand,
+      );
+      await expect(recoveredManager.recoverInterruptedInstall()).rejects.toThrow('still offline');
+      expect(recoveryCommand).toHaveBeenCalledOnce();
+      expect(recoveryProgress).toContain('recover:recovering');
+      expect(recoveryProgress).toContain('recover:error');
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
   it('validates a provider without accepting insecure remote endpoints', () => {
     expect(normalizeRouterProviderInput(providerInput)).toMatchObject({
       baseUrl: 'https://relay.example.com/v1/chat/completions',
@@ -177,36 +233,6 @@ describe('Claude Code Router management', () => {
     expect(sanitizeRouterConfig(deleted).map((provider) => provider.id)).toEqual(['relay-example']);
     expect(deleted.preferredProvider).toBe('relay-example');
     expect(deleted.profile).toEqual(baseConfig.profile);
-  });
-
-  it('accepts only the official Windows release asset with a GitHub SHA-256 digest', () => {
-    const release = {
-      assets: [
-        {
-          browser_download_url:
-            'https://github.com/musistudio/claude-code-router/releases/download/v3.0.15/Claude-Code-Router_3.0.15.exe',
-          digest: `sha256:${'a'.repeat(64)}`,
-          name: 'Claude-Code-Router_3.0.15.exe',
-          size: 101_072_836,
-        },
-      ],
-      tag_name: 'v3.0.15',
-    };
-
-    expect(parseRouterInstallerRelease(release)).toEqual({
-      digest: 'a'.repeat(64),
-      downloadUrl:
-        'https://github.com/musistudio/claude-code-router/releases/download/v3.0.15/Claude-Code-Router_3.0.15.exe',
-      fileName: 'Claude-Code-Router_3.0.15.exe',
-      size: 101_072_836,
-      version: '3.0.15',
-    });
-    expect(() =>
-      parseRouterInstallerRelease({
-        ...release,
-        assets: [{ ...release.assets[0], digest: undefined }],
-      }),
-    ).toThrow('未通过来源、版本、大小或 SHA-256');
   });
 
   it('turns an empty Router startup error into a Chinese actionable solution', () => {

@@ -1,6 +1,11 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.3.1（2026-08-04）。4.3.1 修复 GitHub Release 重定向后 Electron
+当前架构版本：4.4.0（2026-08-04）。4.4.0 把 CCR 接入收敛为 CLI-only 的全自动生命周期：后台 npm
+安装、真实阶段事件、原子中断日志与启动续装、Provider/模型自动写入、按活动会话自动启停，以及只在
+服务运行时开放的高级后台入口。npm 子进程继承显式 CLI HTTP 代理，官方源失败会可见地回退镜像；
+桌面 CCR 只检测、不接管、不终止、不卸载，配置继续固定 `applyProfile: false`。CLIProxyAPI 另加入
+本机密钥保护的管理页和可验证 PID 生命周期，切换到不需要网关的路由时可安全停止孤儿 sidecar。
+4.3.1 修复 GitHub Release 重定向后 Electron
 `DownloadItem.getURL()` 返回最终资产地址、而下载任务仍按原始地址等待所造成的 45 秒零字节假停滞；
 同时把受管安装的忙碌状态提升为主进程真值并跨 renderer 重绘锁定按钮。4.3.0 把项目级“ChatGPT 订阅”实验性预设升级为
 ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、安装、启动、OpenAI 浏览器授权引导、
@@ -281,6 +286,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   开关的语义是「修复某个中转站缺陷」，所以默认必须是关，行为正常的中转站不为用不上的修复
   付出代价。`ClaudeRuntime` 通过注入的读取函数在每次启动会话时现读，改开关不需要重启应用，
   也不影响已经运行的 PTY。
+- 高级设置另有两个只读运行态入口：CCR CLI 管理页与受管 ChatGPT 网关管理页。renderer 每次进入
+  该页重新查询主进程；只有对应后台真实运行且管理能力可用时才启用按钮，点击入口本身不启动服务。
+  ChatGPT 管理密钥只由主进程写入剪贴板，不通过 preload 返回 renderer。
 - `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
@@ -546,9 +554,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   接受 `versions/` 的直接子目录，不能扩大到 `userData` 或项目目录。解压后记录可执行文件自己的
   SHA-256，状态检查与每次启动前重新计算；本地文件被替换时拒绝运行并要求重新安装。
 - 首次配置在 `8317–8327` 中选择空闲端口，强制 `host: 127.0.0.1`、关闭 TLS（仅限本机回环）、
-  远程管理、控制面板、文件日志和用量统计。随机 `sk-claudedock-*` 客户端密钥以 DPAPI 密文写入
-  `state.json`，项目配置副本也由 `ClaudeConfigStore` 加密；CLIProxyAPI 运行时必须读取的
-  `config.yaml` 含一份本机明文密钥，因此该文件用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。
+  远程管理、文件日志、用量统计和面板自更新。管理页只允许本机访问并要求独立随机
+  `mgmt-claudedock-*` 密钥；随机客户端/管理密钥以 DPAPI 密文写入 `state.json`，项目配置副本也由
+  `ClaudeConfigStore` 加密。CLIProxyAPI 运行时必须读取的 `config.yaml` 含本机明文副本，因此该文件
+  用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。只有高级入口被点击时主进程才把管理密钥写入
+  剪贴板并打开 `/management.html`，密钥不返回 renderer。
 - “一键安装并登录”IPC 只返回净化后的状态。主进程以隐藏窗口运行
   `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；
   ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
@@ -557,11 +567,12 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `setupInFlight` 是整个安装、校验、授权、启动周期的单例 Promise；重复 IPC 直接等待同一 Promise，
   不会再次获取 BusyRegistry 租约或启动第二个下载。公开状态在此期间返回 `busy: true` 与
   `phase: installing`；renderer 另用本地同步锁覆盖 IPC 往返窗口，任何指南重建都保持主按钮禁用。
-- 授权后主进程隐藏启动 sidecar，并携带随机本地密钥探测 `GET /v1/models`。安装、登录、启动、
+- 授权后主进程隐藏启动 sidecar，持久化其 PID，并携带随机本地密钥探测 `GET /v1/models`。安装、登录、启动、
   项目配置保存和模型默认值写入在同一操作完成；renderer 不暴露地址、认证和凭据输入，只保留模型
   映射与连接测试。`ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用
-  完全退出时终止由本进程启动的 sidecar；不会修改 shell profile、Claude Code 用户设置、Codex
-  凭据或 Windows 系统级代理/API 路由。
+  完全退出或活动 CLI 路由不再需要它时终止 sidecar；进程重启后若 PID 仍在，先用 WMI/CIM 核对
+  `ExecutablePath` 与私有版本目录完全一致才终止，拒绝按名称批量杀进程。不会修改 shell profile、
+  Claude Code 用户设置、Codex 凭据或 Windows 系统级代理/API 路由。
 - `setup()` 每次都会尝试查询最新上游 Release；版本未变则复用已验证安装，版本变化则下载新版本并
   保留认证目录、随机本地密钥和端口。GitHub 暂时不可达但本机副本完整时允许离线启动已有版本；首次
   安装或本机哈希异常时仍失败关闭。外部检测到的 CLIProxyAPI 继续按高级通用 Gateway 呈现，不读取、
@@ -792,38 +803,31 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   ClaudeDock/Electron 可执行文件完全相同时才提前标记 `runtimeMismatch`，官方 CCR 桌面
   进程和系统 `node.exe` 不受影响。`tasklist` 原始字节同时尝试 UTF-8 与 Windows
   GB18030 解码，以覆盖中文产品名；结果按 PID 缓存，避免轮询重复创建进程。
-- 启动操作优先复用现有管理服务并调用 `startGateway`；服务未运行时用检测到的官方 CLI
-  或桌面程序启动。停止只调用 `stopGateway`，保留管理服务，便于继续编辑 Provider。
-- 一键安装从 `api.github.com/repos/musistudio/claude-code-router/releases/latest` 读取
-  官方发布元数据，只接受标签版本与文件名一致的 Windows `.exe`。下载限制 250 MiB、最长
-  10 分钟，并按 Release 的 `size` 与 `sha256:` digest 校验后缓存到
-  `userData/claude/router-installers/`；随后仅打开标准安装向导，Windows UAC、SmartScreen
-  和安装确认仍由用户处理。
-- 另一条安装路径通过固定包名 `@musistudio/claude-code-router@latest` 调用 npm；来源只能
-  是 `https://registry.npmjs.org` 或 `https://registry.npmmirror.com`，registry 以本次
-  argv 参数传入，不写入用户 npm 配置。安装状态区分 desktop/npm/mixed。
-- 卸载是「彻底清除」，目的是把机器恢复到真正未安装的状态，让用户可以换来源重装。步骤固定：
-  1. 只停止经 `service.json` token 与 identity 校验的 CCR 服务（`stopGateway` +
-     对该 PID 发 `SIGTERM`），等待 600ms 让守护进程释放 SQLite 句柄。
-  2. npm 版走 `removeCliInstallation`：先按固定包名 `npm uninstall --global`；包目录仍存在时
-     再按检测到的安装目录 `npm uninstall --global --prefix <installDirectory>`；仍存在才直接
-     `rmSync(packageRoot)` 并删除同目录的 `ccr` / `ccr.cmd` / `ccr.ps1` shim。
-     **`npm uninstall --global` 只能触及当前 npm prefix 下的包**，CCR 装在
-     `D:\ClaudeCode` 而 prefix 是 `%APPDATA%\npm` 时前两步都无效，第三步才是必需的。
-  3. 桌面版找到已知卸载程序就 detached 启动；找不到不再抛错中断整个流程，改为继续清数据并
-     在返回消息里引导用户去 Windows“已安装的应用”移除。
-  4. 删除 `%APPDATA%\claude-code-router` 整个目录（内容清单见 `ROUTER_DATA_ENTRIES`：
-     `config.sqlite` / `api-keys.sqlite` / `usage.sqlite` / `gateway.config.json` /
-     `service.json` / `gateway-proxy-preload.cjs` / `claude-app-gateway-backup.json` /
-     `global-profile-takeover.json` / `bin` / `provider-icons` / `raw-trace-spool`），
-     以及本应用的安装包缓存，并失效 `serviceRuntimeCache`。
-     **Provider 配置与上游密钥由此不可恢复**，renderer 的确认弹窗必须明说这一点。
-- 递归删除的路径由 `routerDataDirectory(appData)` 计算：非绝对路径、basename 不是
-  `claude-code-router`、或父目录不等于传入的 APPDATA 时返回 `undefined` 而不删除。这样被
-  篡改的 `APPDATA` 无法扩大删除范围，`~/.claude` 下 Claude Code 与 Codex 自己的配置也永远
-  触及不到（符合「不得修改 Codex、Claude Code 或系统级 API 路由」）。
-- `canUninstall` 是 `Boolean(cli || desktop || 数据目录存在)`：程序已经没了、只剩孤立配置目录
-  时，清理入口依然可达。
+- 启动只接受系统 `node.exe` 承载的 CLI 后台；检测到 CCR 桌面进程或无法确认的进程时拒绝接管。
+  受支持的 CLI 启动参数固定为 `ccr start --no-open --gateway`。停止先调用 `stopGateway`，再只对
+  经 `service.json` token/identity、PID 和映像核验的 `node.exe`/旧 ClaudeDock CLI 子进程发送
+  `SIGTERM` 并等待最多 10 秒；永不结束 CCR、Claude 或 Codex 桌面 App。
+- 一键安装只通过固定包名 `@musistudio/claude-code-router@latest` 调用 npm，不再下载或打开 Windows
+  桌面安装器。首选 `https://registry.npmjs.org`，命令失败且 npm 本身存在时可见地回退
+  `https://registry.npmmirror.com`；registry 只作为本次 argv 传入，不写入用户 npm 配置。
+  `WindowsCommandOptions.env` 合并 ClaudeDock 为 CLI 配置的 HTTP 代理并显式删除 null 覆盖，
+  因而 npm 能沿用用户第一跳代理，同时保留 `NO_PROXY` 的本机回环地址。
+- `installInFlight` 把并发安装调用合并为一个 Promise。主进程按检查、下载、安装定位、验证、完成/
+  错误广播 `RouterOperationProgress`，renderer 同时更新阶段面板和安装按钮上方状态卡；阶段号来自
+  主进程，不用静态灰按钮猜测进度。
+- 每次 npm 写入前把最小 `RouterOperationJournal` 原子保存到
+  `userData/claude/router-operation.json`。记录仅含 schema、操作、npm/npmmirror 来源、阶段和时间戳，
+  不含 URL、代理、凭据或模型。成功校验 CLI 后删除；断电/崩溃后窗口创建完成即调用
+  `recoverInterruptedInstall()`，幂等重跑 npm 安装并再次校验。恢复失败保留 journal，不删除缓存、
+  Provider 或共享数据，也不给小白用户展示技术清理选择。
+- OpenAI 上游保存时若 CLI 未安装会先自动安装，再启动后台、以 `applyProfile: false` 保存 Provider/
+  模型并启动网关。`RuntimeSession.routeKind` 记录真实活动路径；最后一个 `ccr` 会话结束、切到不需要
+  路由的直连/中转或切换项目到 Codex CLI 后自动停止 CCR，仍有其他活动 CCR 会话时保持运行。
+- 卸载只针对检测到的 npm CLI：先用固定包名执行全局卸载，再针对原安装 prefix 重试，最后只清理
+  已验证的包目录与同目录 shim。若同时存在桌面版，完整保留共享 CCR 数据；只有机器没有桌面版时才
+  允许按 `routerDataDirectory()` 路径牢笼删除共享数据。`canUninstall` 仅由 CLI 是否存在决定。
+- 标准桌面安装位置仅用于显示 `desktop/mixed` 与进程保护状态。ClaudeDock 不启动桌面可执行文件，
+  不查找/打开卸载器，不写 App profile；这条边界另由 `AGENTS.md` 和源码守栏测试固定。
 
 ### 3.0 路由决策与 CC Switch 边界
 

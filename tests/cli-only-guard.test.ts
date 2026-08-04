@@ -21,11 +21,23 @@ const claudeSettingsDiagnostics = readFileSync(
   path.join(mainDirectory, 'claude-gateway-diagnostics.ts'),
   'utf8',
 );
+const claudeRouterSource = readFileSync(
+  path.join(mainDirectory, 'claude-router-manager.ts'),
+  'utf8',
+);
 
 describe('CLI-only integration guard', () => {
   it('forbids CCR profile takeover and Claude Desktop configuration access', () => {
     expect(mainSources).not.toMatch(/applyProfile:\s*true/);
     expect(mainSources.toLowerCase()).not.toContain('claude_desktop_config.json');
+  });
+
+  it('never installs, starts, uninstalls, or terminates the CCR desktop app', () => {
+    expect(claudeRouterSource).not.toContain('downloadLatestInstaller');
+    expect(claudeRouterSource).not.toContain('findDesktopUninstaller');
+    expect(claudeRouterSource).not.toMatch(/spawn\([^\n]*desktop/i);
+    expect(claudeRouterSource).toContain("kind = 'desktop'");
+    expect(claudeRouterSource).toContain('applyProfile: false');
   });
 
   it('has no Windows system proxy mutation path', () => {

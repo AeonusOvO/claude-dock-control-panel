@@ -50,10 +50,13 @@ describe('download IPC surface', () => {
     }
   });
 
-  it('routes the CCR installer through the shared verified download engine', () => {
-    expect(routerManagerSource).toContain('await this.downloadEngine.start({');
-    expect(routerManagerSource).toContain("label: 'Claude Code Router 安装包'");
-    expect(routerManagerSource).not.toContain('response.body.getReader()');
+  it('installs CCR as a deduplicated CLI task with a recoverable journal', () => {
+    expect(routerManagerSource).toContain("'@musistudio/claude-code-router@latest'");
+    expect(routerManagerSource).toContain('private installInFlight?');
+    expect(routerManagerSource).toContain("'router-operation.json'");
+    expect(routerManagerSource).toContain('recoverInterruptedInstall()');
+    expect(routerManagerSource).not.toContain('Claude Code Router 安装包');
+    expect(preloadSource).toContain("ipcRenderer.on('router:operation-progress', callback)");
   });
 
   it('routes Codex downloads through the engine and streams installer output', () => {

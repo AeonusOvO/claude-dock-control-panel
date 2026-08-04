@@ -169,14 +169,17 @@ describe('renderer interaction lifecycle contract', () => {
     for (const channel of [
       'claude:managed-chatgpt-gateway-state',
       'claude:managed-chatgpt-gateway-setup',
+      'claude:managed-chatgpt-gateway-open-management',
     ]) {
       expect(mainSource).toContain(`'${channel}'`);
       expect(preloadSource).toContain(`'${channel}'`);
     }
     expect(preloadSource).toContain('setupManagedChatGptGateway: (sessionId, forceLogin)');
     expect(claudeRuntimeSource).toMatch(
-      /private async prepareLaunchInternal[\s\S]*?config\.preset === 'chatgpt-subscription'[\s\S]*?ensureManagedChatGptGatewayReady\(\)/,
+      /private async prepareRouteServices[\s\S]*?routeKind === 'managed-chatgpt'[\s\S]*?ensureManagedChatGptGatewayReady\(\)/,
     );
+    expect(rendererMarkup).toContain('id="settings-open-chatgpt-gateway"');
+    expect(rendererSource).toContain('.openManagedChatGptGatewayManagement()');
   });
 
   it('opens global settings from the bottom rail and keeps advanced connection tools categorized', () => {

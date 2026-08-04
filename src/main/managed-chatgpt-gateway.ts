@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   existsSync,
@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { ManagedChatGptGatewayState } from '../shared/contracts';
 import type { BusyRegistry } from './busy-registry';
 import type { DownloadEngine } from './download-engine';
@@ -27,6 +28,7 @@ const OAUTH_DEFAULT_PORT = 1455;
 const OAUTH_LAST_PORT = 1465;
 const START_TIMEOUT_MS = 20_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
+const execFileAsync = promisify(execFile);
 
 interface SafeStorageLike {
   decryptString: (encrypted: Buffer) => string;
@@ -36,10 +38,12 @@ interface SafeStorageLike {
 
 interface PersistedGatewayState {
   encryptedClientKey: string;
+  encryptedManagementKey?: string;
   executableRelativePath: string;
   executableSha256: string;
   installedVersion: string;
   port: number;
+  processId?: number;
   releaseDigest: string;
   version: 1;
 }
@@ -67,6 +71,11 @@ export interface CliProxyApiRelease {
 export interface ManagedChatGptGatewayProjectConfig {
   baseUrl: string;
   credential: string;
+}
+
+export interface ManagedChatGptGatewayManagementAccess {
+  managementKey: string;
+  url: string;
 }
 
 const delay = (milliseconds: number): Promise<void> =>
@@ -160,11 +169,13 @@ export const archiveEntriesAreSafe = (entries: string[]): boolean =>
 export const buildManagedGatewayConfig = (input: {
   authDirectory: string;
   clientKey: string;
+  managementKey: string;
   port: number;
 }): string => {
   if (
     !path.isAbsolute(input.authDirectory) ||
     !/^sk-claudedock-[A-Za-z0-9_-]{32,}$/.test(input.clientKey) ||
+    !/^mgmt-claudedock-[A-Za-z0-9_-]{32,}$/.test(input.managementKey) ||
     !Number.isInteger(input.port) ||
     input.port < DEFAULT_PORT ||
     input.port > LAST_PORT
@@ -178,8 +189,10 @@ export const buildManagedGatewayConfig = (input: {
     '  enable: false',
     'remote-management:',
     '  allow-remote: false',
-    '  secret-key: ""',
-    '  disable-control-panel: true',
+    `  secret-key: ${JSON.stringify(input.managementKey)}`,
+    '  disable-control-panel: false',
+    '  disable-auto-update-panel: true',
+    '  panel-github-repository: "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"',
     `auth-dir: ${JSON.stringify(input.authDirectory.replaceAll('\\', '/'))}`,
     'api-keys:',
     `  - ${JSON.stringify(input.clientKey)}`,
@@ -217,6 +230,7 @@ const safeErrorMessage = (error: unknown): string => {
   const raw = error instanceof Error ? error.message : String(error);
   return raw
     .replace(/sk-[A-Za-z0-9_-]{8,}/gi, '[已隐藏]')
+    .replace(/mgmt-claudedock-[A-Za-z0-9_-]{8,}/gi, '[已隐藏]')
     .replace(/Bearer\s+[^\s"'`]+/gi, 'Bearer [已隐藏]')
     .replace(/https?:\/\/localhost:\d+\/[^\s]+/gi, '[本机回调地址]')
     .replace(/https?:\/\/127\.0\.0\.1:\d+\/[^\s]+/gi, '[本机回调地址]')
@@ -256,6 +270,7 @@ export class ManagedChatGptGateway {
     const installed = Boolean(persisted && this.executableIsValid(persisted));
     const authenticated = this.hasAuthentication();
     const clientKey = persisted ? this.decryptClientKey(persisted) : undefined;
+    const managementKey = persisted ? this.decryptManagementKey(persisted) : undefined;
     const running = Boolean(
       !busy && persisted && clientKey && (await this.probe(persisted.port, clientKey)),
     );
@@ -285,6 +300,7 @@ export class ManagedChatGptGateway {
       checkedAt: Date.now(),
       endpoint,
       installed,
+      managementAvailable: Boolean(running && managementKey),
       message,
       phase,
       running,
@@ -340,11 +356,45 @@ export class ManagedChatGptGateway {
     if (!persisted || !this.executableIsValid(persisted) || !this.hasAuthentication()) {
       throw new Error('ChatGPT 托管网关尚未完成一键安装与 OpenAI 授权。');
     }
-    await this.start(persisted);
+    await this.start(await this.ensureConfiguration(persisted));
+  }
+
+  public async managementAccess(): Promise<ManagedChatGptGatewayManagementAccess> {
+    const persisted = this.loadState();
+    const managementKey = persisted ? this.decryptManagementKey(persisted) : undefined;
+    const clientKey = persisted ? this.decryptClientKey(persisted) : undefined;
+    if (
+      !persisted ||
+      !managementKey ||
+      !clientKey ||
+      !this.executableIsValid(persisted) ||
+      !(await this.probe(persisted.port, clientKey))
+    ) {
+      throw new Error('ChatGPT 托管网关当前没有运行，无法打开后台。');
+    }
+    return {
+      managementKey,
+      url: `http://127.0.0.1:${persisted.port}/management.html`,
+    };
+  }
+
+  public async stop(): Promise<void> {
+    const state = this.loadState();
+    const trackedPid = this.process?.pid;
+    const processId = trackedPid ?? state?.processId;
+    this.stopProcess();
+    if (processId && processId !== trackedPid && state) {
+      await this.stopPersistedProcess(state, processId);
+    }
+    if (state?.processId) {
+      this.persistState({ ...state, processId: undefined });
+    }
   }
 
   public shutdown(): void {
+    const processId = this.process?.pid;
     this.stopProcess();
+    this.clearPersistedProcessId(processId);
   }
 
   private async latest(): Promise<CliProxyApiRelease> {
@@ -396,6 +446,7 @@ export class ManagedChatGptGateway {
     const executableSha256 = sha256File(path.resolve(this.rootDirectory, relativeExecutable));
     const next: PersistedGatewayState = {
       encryptedClientKey: current?.encryptedClientKey ?? '',
+      encryptedManagementKey: current?.encryptedManagementKey,
       executableRelativePath: relativeExecutable,
       executableSha256,
       installedVersion: release.version,
@@ -468,17 +519,26 @@ export class ManagedChatGptGateway {
       throw new Error('Windows 安全存储当前不可用，拒绝生成或保存托管网关访问密钥。');
     }
     const existingKey = this.decryptClientKey(current);
+    const existingManagementKey = this.decryptManagementKey(current);
     const clientKey = existingKey ?? `sk-claudedock-${randomBytes(32).toString('base64url')}`;
+    const managementKey =
+      existingManagementKey ?? `mgmt-claudedock-${randomBytes(32).toString('base64url')}`;
     const port = current.port || (await findAvailablePort(DEFAULT_PORT, LAST_PORT, '启动托管网关'));
     const next: PersistedGatewayState = {
       ...current,
       encryptedClientKey: this.safeStorage.encryptString(clientKey).toString('base64'),
+      encryptedManagementKey: this.safeStorage.encryptString(managementKey).toString('base64'),
       port,
     };
     mkdirSync(this.authDirectory, { recursive: true });
     writeFileSync(
       this.configPath,
-      buildManagedGatewayConfig({ authDirectory: this.authDirectory, clientKey, port }),
+      buildManagedGatewayConfig({
+        authDirectory: this.authDirectory,
+        clientKey,
+        managementKey,
+        port,
+      }),
       { encoding: 'utf8', mode: 0o600 },
     );
     this.persistState(next);
@@ -536,15 +596,22 @@ export class ManagedChatGptGateway {
       windowsHide: true,
     });
     const child = this.process;
+    if (!child.pid) {
+      this.stopProcess();
+      throw new Error('CLIProxyAPI 后台没有返回有效进程标识。');
+    }
+    this.persistState({ ...state, processId: child.pid });
     child.once('exit', () => {
       if (this.process === child) {
         this.process = undefined;
       }
+      this.clearPersistedProcessId(child.pid);
     });
     child.once('error', () => {
       if (this.process === child) {
         this.process = undefined;
       }
+      this.clearPersistedProcessId(child.pid);
     });
     const deadline = Date.now() + START_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -591,7 +658,11 @@ export class ManagedChatGptGateway {
       if (
         parsed.version !== 1 ||
         typeof parsed.encryptedClientKey !== 'string' ||
+        (parsed.encryptedManagementKey !== undefined &&
+          typeof parsed.encryptedManagementKey !== 'string') ||
         typeof parsed.executableRelativePath !== 'string' ||
+        (parsed.processId !== undefined &&
+          (!Number.isInteger(parsed.processId) || parsed.processId! <= 0)) ||
         !/^[0-9a-f]{64}$/.test(parsed.executableSha256 ?? '') ||
         !/^\d+\.\d+\.\d+$/.test(parsed.installedVersion ?? '') ||
         !/^[0-9a-f]{64}$/.test(parsed.releaseDigest ?? '') ||
@@ -625,6 +696,20 @@ export class ManagedChatGptGateway {
     try {
       const value = this.safeStorage.decryptString(Buffer.from(state.encryptedClientKey, 'base64'));
       return /^sk-claudedock-[A-Za-z0-9_-]{32,}$/.test(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private decryptManagementKey(state: PersistedGatewayState): string | undefined {
+    if (!state.encryptedManagementKey || !this.safeStorage.isEncryptionAvailable()) {
+      return undefined;
+    }
+    try {
+      const value = this.safeStorage.decryptString(
+        Buffer.from(state.encryptedManagementKey, 'base64'),
+      );
+      return /^mgmt-claudedock-[A-Za-z0-9_-]{32,}$/.test(value) ? value : undefined;
     } catch {
       return undefined;
     }
@@ -666,6 +751,71 @@ export class ManagedChatGptGateway {
       throw new Error('拒绝清理不在托管网关版本目录内的路径。');
     }
     rmSync(resolved, { force: true, maxRetries: 3, recursive: true, retryDelay: 200 });
+  }
+
+  private clearPersistedProcessId(expectedProcessId?: number): void {
+    const current = this.loadState();
+    if (
+      current?.processId &&
+      (expectedProcessId === undefined || current.processId === expectedProcessId)
+    ) {
+      this.persistState({ ...current, processId: undefined });
+    }
+  }
+
+  private processIsRunning(processId: number): boolean {
+    try {
+      process.kill(processId, 0);
+      return true;
+    } catch (error) {
+      return (
+        typeof error === 'object' && error !== null && 'code' in error && error.code === 'EPERM'
+      );
+    }
+  }
+
+  private async stopPersistedProcess(
+    state: PersistedGatewayState,
+    processId: number,
+  ): Promise<void> {
+    if (!this.processIsRunning(processId)) {
+      return;
+    }
+    const expectedExecutable = path.resolve(this.executablePath(state));
+    const result = await execFileAsync(
+      'powershell.exe',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        '$p = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $env:CLAUDEDOCK_GATEWAY_PID); if ($p) { [Console]::Out.Write($p.ExecutablePath) }',
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, CLAUDEDOCK_GATEWAY_PID: String(processId) },
+        maxBuffer: 64 * 1024,
+        timeout: 5_000,
+        windowsHide: true,
+      },
+    );
+    const actualExecutable = result.stdout.trim();
+    if (
+      !actualExecutable ||
+      path.resolve(actualExecutable).toLowerCase() !== expectedExecutable.toLowerCase()
+    ) {
+      throw new Error('托管网关进程身份无法安全确认，已拒绝终止该进程。');
+    }
+    process.kill(processId, 'SIGTERM');
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && this.processIsRunning(processId)) {
+      await delay(100);
+    }
+    if (this.processIsRunning(processId)) {
+      throw new Error('ChatGPT 本地网关没有在 10 秒内停止。');
+    }
   }
 
   private stopProcess(): void {

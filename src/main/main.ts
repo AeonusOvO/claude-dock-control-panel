@@ -1410,29 +1410,11 @@ const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Pr
   ['claude:plugins-update-all', () => pluginManager.updateAll()],
 ]);
 
-const routerInstallSources = new Set<ClaudeRouterInstallSource>(['github', 'npm', 'npmmirror']);
+const routerInstallSources = new Set<ClaudeRouterInstallSource>(['npm', 'npmmirror']);
 
 const windowsBuildNumber = (): number => {
   const value = Number(release().split('.')[2]);
   return Number.isInteger(value) && value > 0 ? value : 0;
-};
-
-const launchRouterInstaller = async (): Promise<ClaudeRouterOperationResult> => {
-  const runtime = requireClaudeRuntime();
-  try {
-    const installer = await runtime.downloadRouterInstaller();
-    const launchError = await shell.openPath(installer.filePath);
-    if (launchError) {
-      throw new Error(`安装包已校验，但无法启动：${launchError}`);
-    }
-    return {
-      message: `CCR ${installer.version} 官方安装程序已通过 SHA-256 校验并启动，请完成安装向导。`,
-      ok: true,
-      routerState: await runtime.getRouterManagementState(),
-    };
-  } catch (error) {
-    return routerFailure(error, '无法下载或启动 CCR 官方安装程序。');
-  }
 };
 
 const registerIpc = (): void => {
@@ -1866,6 +1848,9 @@ const registerIpc = (): void => {
         rollback.add(() => agentRuntimeStore.set(status.cwd, current));
         try {
           agentRuntimeStore.set(status.cwd, selected);
+          if (selected === 'codex') {
+            await requireClaudeRuntime().stopUnusedRoutingServices();
+          }
           rollback.commit();
         } catch (error) {
           await rollback.rollback();
@@ -2186,6 +2171,26 @@ const registerIpc = (): void => {
     return requireManagedChatGptGateway().getState();
   });
   ipcMain.handle(
+    'claude:managed-chatgpt-gateway-open-management',
+    async (event): Promise<OperationResult> => {
+      validateSender(event);
+      try {
+        const access = await requireManagedChatGptGateway().managementAccess();
+        clipboard.writeText(access.managementKey);
+        await shell.openExternal(access.url);
+        return {
+          message: '已打开 ChatGPT 网关本机后台，管理密钥已复制到剪贴板供登录使用。',
+          ok: true,
+        };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : '无法打开 ChatGPT 网关后台。',
+          ok: false,
+        };
+      }
+    },
+  );
+  ipcMain.handle(
     'claude:managed-chatgpt-gateway-setup',
     async (
       event,
@@ -2305,7 +2310,16 @@ const registerIpc = (): void => {
     async (event, sessionId: unknown): Promise<ClaudeRouterOperationResult> => {
       validateSender(event);
       validateSessionId(sessionId);
-      return launchRouterInstaller();
+      try {
+        const result = await withBlockingRouterTask(
+          'router:ccr-install',
+          '正在后台安装 Claude Code Router CLI',
+          () => requireClaudeRuntime().installRouterPackage('npm'),
+        );
+        return { message: result.message, ok: true, routerState: result.state };
+      } catch (error) {
+        return routerFailure(error, '无法安装或更新路由器 CLI。');
+      }
     },
   );
   ipcMain.handle(
@@ -2319,17 +2333,11 @@ const registerIpc = (): void => {
       ) {
         return routerFailure(new Error('路由器安装源无效。'), '无法安装路由器。');
       }
-      if (source === 'github') {
-        return launchRouterInstaller();
-      }
       try {
         const result = await withBlockingRouterTask(
           'router:ccr-install',
           '正在安装 Claude Code Router',
-          () =>
-            requireClaudeRuntime().installRouterPackage(
-              source as Exclude<ClaudeRouterInstallSource, 'github'>,
-            ),
+          () => requireClaudeRuntime().installRouterPackage(source as ClaudeRouterInstallSource),
         );
         return { message: result.message, ok: true, routerState: result.state };
       } catch (error) {
@@ -2345,7 +2353,7 @@ const registerIpc = (): void => {
       try {
         const result = await withBlockingRouterTask(
           'router:ccr-uninstall',
-          '正在彻底卸载 Claude Code Router',
+          '正在卸载 Claude Code Router CLI',
           () => requireClaudeRuntime().uninstallRouter(),
         );
         return { message: result.message, ok: true, routerState: result.state };
@@ -2380,8 +2388,8 @@ const registerIpc = (): void => {
       try {
         const routerState = await requireClaudeRuntime().stopRouter();
         return {
-          message: '路由器网关已停止，管理服务仍可用于修改配置。',
-          ok: routerState.gatewayState === 'stopped',
+          message: 'ClaudeDock 管理的 CCR CLI 后台与模型网关已停止。',
+          ok: !routerState.serviceRunning,
           routerState,
         };
       } catch (error) {
@@ -3402,11 +3410,21 @@ if (!hasSingleInstanceLock) {
         workspace.write(sessionId, data);
       },
       requestPermissionModeFromScreen,
-      downloadEngine,
       () => requireManagedChatGptGateway().ensureRunning(),
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
       app.getVersion(),
+      (progress) => {
+        mainWindow?.webContents.send('router:operation-progress', progress);
+      },
+      () => requireManagedChatGptGateway().stop(),
+      () =>
+        applicationProxyStore
+          ? buildApplicationProxyEnvironment(
+              applicationProxyStore.getView(),
+              applicationProxyStore.getCredentials(),
+            )
+          : {},
     );
     codexRuntime = new CodexRuntime(
       app.getPath('userData'),
@@ -3502,6 +3520,9 @@ if (!hasSingleInstanceLock) {
     }
 
     await createWindow();
+    void claudeRuntime.recoverInterruptedRouterInstall().catch(() => {
+      // The journal is intentionally retained; the next launch or install click retries safely.
+    });
   });
 }
 

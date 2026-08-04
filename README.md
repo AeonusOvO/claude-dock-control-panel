@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.3.1**，许可证为 **Apache-2.0**。4.3.1 的正式稳定版必须同时通过可信
+当前代码版本为 **4.4.0**，许可证为 **Apache-2.0**。4.4.0 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -12,6 +12,8 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - 每个项目拥有独立的 Windows PowerShell/ConPTY 会话，可以同时在后台运行。
 - 每个项目可选择 Claude Code 或 Codex。ClaudeDock 只负责启动与显示必要状态，不读取或改写
   Codex 的 OAuth 凭据，也不修改 Codex、Claude Code 或 Windows 的系统级 API 路由。
+- 路由功能只服务于 ClaudeDock 启动的 CLI 会话。应用不会安装、卸载、终止或改写 Claude、Codex、
+  CCR 的桌面 App；检测到桌面版后台时会拒绝接管，CCR 配置保存固定使用 `applyProfile: false`。
 - 模型/API 配置只注入 ClaudeDock 为当前项目启动的子进程。保存的密钥使用 Electron
   `safeStorage`（Windows 上为 DPAPI）加密，不写入项目、命令行或终端历史。
 - “对话”工作台支持 Anthropic Messages 与 OpenAI Chat Completions 兼容接口；模型输出在界面中
@@ -82,18 +84,34 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
    OAuth Token；CLIProxyAPI 将自己的 OAuth 文件保存在 ClaudeDock 为它划定的私有认证目录。
 4. 授权成功后，ClaudeDock 自动启动网关、验证 `/v1/models`、为当前项目保存回环地址与本地访问
    密钥，并默认映射 `gpt-5.6-sol` / `gpt-5.4-mini`。以后从 ClaudeDock 启动该项目时会按需启动
-   受管网关，无需写 `~/.zshrc`、`~/.bashrc`、PowerShell 配置或系统级路由。
+   受管网关；切换到不需要它的直连/中转或 Codex CLI 后会自动停止，无需写 `~/.zshrc`、
+   `~/.bashrc`、PowerShell 配置或系统级路由。
 
 受管配置中的本地客户端密钥是 Claude Code 与 CLIProxyAPI 之间的随机访问密钥，不是 ChatGPT
 凭据；项目配置副本用 Windows DPAPI 加密。CLIProxyAPI 自身必须在其权限受限的 `config.yaml` 中
-读取该密钥，因此该受管文件包含一份本机明文。用户可在界面中重新登录；上游发行版更新则在再次执行
-托管接入时下载和校验，不要求用户自行维护命令行工具。
+读取客户端密钥和仅限本机的管理密钥，因此该受管文件包含本机明文副本。日常流程不会打开后台；只有
+网关正在运行时，“高级设置”才允许打开本机管理页，并把管理密钥复制到剪贴板供用户粘贴登录。用户可
+在界面中重新登录；上游发行版更新则在再次执行托管接入时下载和校验，不要求自行维护命令行工具。
 
 受管下载继承 ClaudeDock“应用自身网络”作用域中的显式代理；未指定时继承 Windows 系统代理。
 GitHub Release 会从 `github.com` 跳转到 `release-assets.githubusercontent.com`，下载器会用完整 URL
 chain 认领同一任务，避免链式代理下 Electron 把最终地址报告为当前 URL 时误取消下载。ClaudeDock
 只知道用户配置的第一跳，无法识别或改写代理软件内部的后续链路；后续节点仍需正确支持 HTTPS 与
 Range 续传。
+
+### CCR CLI 自动路由与中断恢复
+
+- OpenAI 协议上游需要格式转换时，ClaudeDock 在后台以固定包名安装 CCR CLI、隐藏启动管理服务、
+  写入 Provider/模型并验证网关；普通用户不再选择或操作 CCR 桌面安装器。
+- 一键安装按“检查环境 → 下载 → 安装定位 → 校验 → 完成”实时更新按钮上方的状态卡和阶段进度；
+  重复点击只等待同一个主进程任务。npm 官方源未完成时会显示原因并自动改用 npmmirror 重试。
+- 安装会把不含 URL、代理、密钥或 Token 的最小阶段日志原子写入
+  `userData/claude/router-operation.json`。断电或进程崩溃后，下次启动会幂等重跑 npm 安装、校验 CLI，
+  成功后清除日志；失败则保留日志供下次重试，不清空 Provider、桌面版数据或 npm 缓存。
+- 为 CLI 勾选的 ClaudeDock HTTP 应用代理会传给 npm；链式代理的后续跳仍由用户的代理软件负责。
+  当前 CLI 会话切换到不需要 CCR 的直连/中转或 Codex 后，ClaudeDock 会停止自己管理的 CCR 后台。
+- “高级设置”只有在 CCR CLI/ChatGPT 网关确实运行时才启用对应后台按钮；停止时按钮保持灰色，
+  点击后台入口本身不会偷偷启动服务。
 
 ## 双通道安全更新
 

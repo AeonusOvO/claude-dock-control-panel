@@ -4713,17 +4713,6 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   font-family: var(--font-mono);
 }
 
-.router-swap-hint {
-  background: color-mix(in srgb, var(--ok-solid) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ok-solid) 32%, transparent);
-  border-radius: var(--r-md);
-  color: var(--ok-text);
-  font-size: var(--text-xs);
-  line-height: var(--lh-note);
-  margin: 0;
-  padding: 7px 10px;
-}
-
 .router-provider-heading {
   align-items: center;
   border-top: 1px solid var(--line);
@@ -8424,6 +8413,16 @@ body.is-resizing * {
   color: var(--accent-text);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+}
+
+.settings-row--backend button {
+  flex: 0 0 auto;
+  min-width: 126px;
+}
+
+.settings-row--backend button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .settings-panel[data-settings-panel='connection'] {

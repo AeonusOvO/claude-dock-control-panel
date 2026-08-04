@@ -484,31 +484,15 @@
               </div>
             </div>
             <div class="router-actions" id="router-actions">
-              <label
-                class="field field--compact"
-                id="router-install-source-field"
-                for="router-install-source"
-                hidden
-              >
-                <span>安装来源</span>
-                <select id="router-install-source">
-                  <option value="github">官方 GitHub 安装包</option>
-                  <option value="npm">npm 官方源</option>
-                  <option value="npmmirror">npmmirror 国内镜像</option>
-                </select>
-              </label>
               <button id="install-router" type="button" hidden>一键安装</button>
-              <button id="uninstall-router" type="button">彻底卸载并清除数据</button>
+              <button id="uninstall-router" type="button">卸载 CLI 路由</button>
               <button id="start-router" type="button">启动路由器</button>
               <button id="stop-router" type="button">停止网关</button>
               <button id="open-router-management" type="button">打开完整管理页</button>
             </div>
-            <p class="router-swap-hint" id="router-swap-hint" hidden>
-              已恢复到未安装状态。现在可以选择新的安装来源，再点“一键安装”换成另一个网关。
-            </p>
             <p class="router-install-note">
-              官方安装包会核对发布包的 SHA-256；npm 与 npmmirror 只在本次安装命令中指定源，
-              不会修改用户的全局 npm 配置。
+              ClaudeDock 只在后台安装和管理 CCR CLI，不打开 CCR 桌面窗口，也不会改写 Claude 或 Codex
+              App。 npm 源只作用于本次安装命令，不会修改用户的全局 npm 配置。
             </p>
 
             <div class="router-provider-heading">
@@ -1876,6 +1860,44 @@
                 </span>
                 <input id="settings-web-research-isolation" type="checkbox" />
               </label>
+              <div class="settings-section-heading">
+                <strong>CLI 路由后台</strong>
+                <span
+                  >这里只提供高级入口；服务未运行时按钮保持灰色，不会为了打开面板而自动启动。</span
+                >
+              </div>
+              <div class="settings-row settings-row--backend">
+                <span>
+                  <strong>CCR CLI 管理后台</strong>
+                  <small id="settings-ccr-backend-status">正在检查后台状态…</small>
+                </span>
+                <button
+                  class="dialog-primary"
+                  id="settings-open-ccr-backend"
+                  type="button"
+                  disabled
+                >
+                  打开 CCR 后台
+                </button>
+              </div>
+              <div class="settings-row settings-row--backend">
+                <span>
+                  <strong>ChatGPT 本地网关后台</strong>
+                  <small id="settings-chatgpt-gateway-status">正在检查网关状态…</small>
+                </span>
+                <button
+                  class="dialog-primary"
+                  id="settings-open-chatgpt-gateway"
+                  type="button"
+                  disabled
+                >
+                  打开网关后台
+                </button>
+              </div>
+              <p class="settings-help">
+                两个后台都只绑定本机地址。ChatGPT 网关面板需要管理密钥；打开时 ClaudeDock
+                会把密钥复制到剪贴板，不会在 ClaudeDock 页面中显示明文。
+              </p>
             </section>
             <section class="settings-panel" data-settings-panel="connection">
               <p class="connection-advanced-dialog__notice">

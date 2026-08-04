@@ -21,6 +21,7 @@ import type {
   ManagedChatGptGatewayState,
   RouterKernelOperationResult,
   RouterKernelState,
+  RouterOperationProgress,
   ClaudeSessionMetadata,
   ArtifactNetworkLogEntry,
   AppQuitRequest,
@@ -304,6 +305,22 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke(
       'claude:managed-chatgpt-gateway-state',
     ) as Promise<ManagedChatGptGatewayState>,
+  openManagedChatGptGatewayManagement: () =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-open-management',
+    ) as Promise<OperationResult>,
+  onRouterOperationProgress: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      progress: RouterOperationProgress,
+    ): void => {
+      listener(progress);
+    };
+    ipcRenderer.on('router:operation-progress', callback);
+    return () => {
+      ipcRenderer.removeListener('router:operation-progress', callback);
+    };
+  },
   setupManagedChatGptGateway: (sessionId, forceLogin) =>
     ipcRenderer.invoke(
       'claude:managed-chatgpt-gateway-setup',

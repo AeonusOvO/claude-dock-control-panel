@@ -46,6 +46,7 @@ import type {
   ClaudeRouterProviderView,
   RouterKernelOperationResult,
   RouterKernelState,
+  RouterOperationProgress,
   ClaudeSessionMetadata,
   ChatConfigView,
   ChatAttachmentImportResult,
@@ -372,6 +373,14 @@ const settingsChatIdleTimeout = requiredElement<HTMLSelectElement>('#settings-ch
 const settingsWebResearchIsolation = requiredElement<HTMLInputElement>(
   '#settings-web-research-isolation',
 );
+const settingsCcrBackendStatus = requiredElement<HTMLElement>('#settings-ccr-backend-status');
+const settingsChatGptGatewayStatus = requiredElement<HTMLElement>(
+  '#settings-chatgpt-gateway-status',
+);
+const settingsOpenCcrBackend = requiredElement<HTMLButtonElement>('#settings-open-ccr-backend');
+const settingsOpenChatGptGateway = requiredElement<HTMLButtonElement>(
+  '#settings-open-chatgpt-gateway',
+);
 const settingsTheme = requiredElement<HTMLSelectElement>('#settings-theme');
 const settingsLanguage = requiredElement<HTMLSelectElement>('#settings-language');
 const settingsVersion = requiredElement<HTMLOutputElement>('#settings-version');
@@ -434,15 +443,12 @@ const routerProviderName = requiredElement<HTMLInputElement>('#router-provider-n
 const routerProviderPreferred = requiredElement<HTMLInputElement>('#router-provider-preferred');
 const routerProviderProtocol = requiredElement<HTMLSelectElement>('#router-provider-protocol');
 const routerProviderUseProject = requiredElement<HTMLInputElement>('#router-provider-use-project');
-const routerInstallSource = requiredElement<HTMLSelectElement>('#router-install-source');
-const routerInstallSourceField = requiredElement<HTMLElement>('#router-install-source-field');
 const routerRemediation = requiredElement<HTMLElement>('#router-remediation');
 const routerRemediationDetail = requiredElement<HTMLElement>('#router-remediation-detail');
 const routerRemediationTitle = requiredElement<HTMLElement>('#router-remediation-title');
 const routerStatus = requiredElement<HTMLElement>('#router-status');
 const routerStatusDetail = requiredElement<HTMLElement>('#router-status-detail');
 const routerStatusTitle = requiredElement<HTMLElement>('#router-status-title');
-const routerSwapHint = requiredElement<HTMLElement>('#router-swap-hint');
 const routerVersion = requiredElement<HTMLElement>('#router-version');
 const uninstallRouterButton = requiredElement<HTMLButtonElement>('#uninstall-router');
 const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-router-provider');
@@ -1038,9 +1044,8 @@ const routeHealthNotifications = new Map<string, string>();
 const effortRecoveryNotifications = new Map<string, number>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerKernelState: RouterKernelState | undefined;
+let lastRouterOperationProgress: RouterOperationProgress | undefined;
 let routerOperationInProgress = false;
-/** Set after a successful purge so the “pick a new source” hint only appears when it applies. */
-let routerPurgeCompleted = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
@@ -3482,6 +3487,45 @@ const buildFooterMenuItem = (
   return item;
 };
 
+const loadAdvancedRouterBackends = async (): Promise<void> => {
+  const status = activeStatus();
+  settingsCcrBackendStatus.textContent = status
+    ? '正在检查 CCR CLI 后台状态…'
+    : '请先打开一个项目后再检查 CCR CLI 后台。';
+  settingsChatGptGatewayStatus.textContent = '正在检查 ChatGPT 本地网关状态…';
+  settingsOpenCcrBackend.disabled = true;
+  settingsOpenChatGptGateway.disabled = true;
+
+  const [routerResult, gatewayResult] = await Promise.allSettled([
+    status
+      ? window.controlPanel.getClaudeRouterManagementState(status.id)
+      : Promise.resolve(undefined),
+    window.controlPanel.getManagedChatGptGatewayState(),
+  ]);
+  if (routerResult.status === 'fulfilled' && routerResult.value) {
+    const state = routerResult.value;
+    routerManagementState = state;
+    settingsCcrBackendStatus.textContent = state.serviceRunning
+      ? state.managementAvailable
+        ? `运行中 · ${state.version ? `v${state.version}` : '版本待识别'}`
+        : '检测到后台进程，但不是可安全接管的 CCR CLI。'
+      : state.installed
+        ? 'CCR CLI 已安装，后台当前未运行。'
+        : 'CCR CLI 尚未安装。';
+    settingsOpenCcrBackend.disabled = !state.serviceRunning || !state.managementAvailable;
+  } else if (status) {
+    settingsCcrBackendStatus.textContent = '无法读取 CCR CLI 后台状态。';
+  }
+
+  if (gatewayResult.status === 'fulfilled') {
+    managedChatGptGatewayState = gatewayResult.value;
+    settingsChatGptGatewayStatus.textContent = gatewayResult.value.message;
+    settingsOpenChatGptGateway.disabled = !gatewayResult.value.managementAvailable;
+  } else {
+    settingsChatGptGatewayStatus.textContent = '无法读取 ChatGPT 本地网关状态。';
+  }
+};
+
 const selectSettingsTab = (tab: SettingsTab): void => {
   selectedSettingsTab = tab;
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
@@ -3499,6 +3543,9 @@ const selectSettingsTab = (tab: SettingsTab): void => {
   }
   if (tab === 'proxy') {
     void loadApplicationProxyState();
+  }
+  if (tab === 'advanced') {
+    void loadAdvancedRouterBackends();
   }
   if (tab === 'router') {
     void loadRouterManagement();
@@ -4155,9 +4202,9 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
       // Swapping gateways starts here, where the user actually sees what is installed.
       const purgeButton = document.createElement('button');
       purgeButton.type = 'button';
-      purgeButton.textContent = '彻底清除这个路由器';
+      purgeButton.textContent = '卸载 CLI 路由';
       purgeButton.addEventListener('click', () => {
-        void purgeRouter(purgeButton);
+        void uninstallRouterCli(purgeButton);
       });
       actions.append(purgeButton);
     }
@@ -4210,11 +4257,6 @@ const routerProtocolLabel = (protocol: ClaudeRouterProviderView['protocol']): st
     : protocol === 'openai_responses'
       ? 'OpenAI 响应协议'
       : 'OpenAI 对话补全协议';
-
-const routerInstallationKindLabel = (
-  kind: ClaudeRouterManagementState['installationKind'],
-): string =>
-  kind === 'desktop' ? '桌面版' : kind === 'npm' ? '命令行版' : kind === 'mixed' ? '混合' : '未知';
 
 const routerProviderInput = (
   provider: ClaudeRouterProviderView,
@@ -4392,7 +4434,6 @@ const syncUpdateActionVisibility = (): void => {
   installUpdateClaudeButton.hidden = !claudeActionVisible;
   installUpdateClaudeButton.textContent = actions.claudeCode === 'update' ? '一键更新' : '一键安装';
 
-  routerInstallSourceField.hidden = !routerActionVisible;
   installRouterButton.hidden = !routerActionVisible;
   installRouterButton.textContent = actions.router === 'update' ? '一键更新' : '一键安装';
 
@@ -4551,6 +4592,22 @@ const loadConnectionAdvice = async (): Promise<void> => {
   }
 };
 
+const routerOperationLabel = (progress: RouterOperationProgress): string => {
+  const labels: Record<RouterOperationProgress['stage'], string> = {
+    checking: '检查环境',
+    complete: '操作完成',
+    configuring: '写入配置',
+    downloading: '下载 CLI',
+    error: '操作未完成',
+    installing: '安装 CLI',
+    recovering: '恢复中断任务',
+    starting: '启动后台',
+    stopping: '停止后台',
+    verifying: '校验安装',
+  };
+  return labels[progress.stage];
+};
+
 function renderRouterManagement(state: ClaudeRouterManagementState): void {
   routerManagementState = state;
   const displayState = state.installed ? state.gatewayState : 'not-installed';
@@ -4563,6 +4620,12 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
         ? '路由器管理服务已运行'
         : '路由器已安装但未运行';
   routerStatusDetail.textContent = state.message;
+  const progress = lastRouterOperationProgress;
+  if (progress && (progress.active || Date.now() - progress.updatedAt < 6_000)) {
+    routerStatus.dataset.state = progress.stage === 'error' ? 'error' : 'starting';
+    routerStatusTitle.textContent = `${routerOperationLabel(progress)} · 第 ${progress.step}/${progress.totalSteps} 步`;
+    routerStatusDetail.textContent = progress.detail;
+  }
   routerVersion.textContent = state.version ? `v${state.version}` : '版本待识别';
   renderRouterRemediation(state);
   applyRouterRelevance();
@@ -4571,10 +4634,8 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   syncUpdateActionVisibility();
   uninstallRouterButton.disabled = routerOperationInProgress || !state.canUninstall;
   uninstallRouterButton.title = state.canUninstall
-    ? `彻底卸载当前${routerInstallationKindLabel(state.installationKind)}安装并删除全部配置数据`
-    : '未检测到需要清除的路由器程序或配置';
-  // Only offer the swap guidance once the purge actually left a clean slate.
-  routerSwapHint.hidden = state.installed || !routerPurgeCompleted;
+    ? '只卸载 ClaudeDock 管理的 CCR CLI；不会卸载桌面版或改写 Claude/Codex App'
+    : '未检测到可由 ClaudeDock 卸载的 CCR CLI';
   startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动路由器';
   startRouterButton.disabled =
     routerOperationInProgress ||
@@ -4616,10 +4677,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
         (sessionId) =>
           state.installed
             ? window.controlPanel.startClaudeRouter(sessionId)
-            : window.controlPanel.installClaudeRouterFromSource(
-                sessionId,
-                routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
-              ),
+            : window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
         state.installed ? '正在启动…' : '正在安装…',
         action,
       );
@@ -4737,6 +4795,31 @@ const setRouterOperationStage = (stage: string, detail: string, percent?: number
     routerOperationMeter.value = Math.max(0, Math.min(100, percent));
   }
 };
+
+const unsubscribeRouterOperationProgress = window.controlPanel.onRouterOperationProgress(
+  (progress) => {
+    lastRouterOperationProgress = progress;
+    routerOperationInProgress = progress.active;
+    setRouterOperationStage(
+      `${routerOperationLabel(progress)} · 第 ${progress.step}/${progress.totalSteps} 步`,
+      progress.detail,
+      (progress.step / Math.max(1, progress.totalSteps)) * 100,
+    );
+    if (routerManagementState) {
+      renderRouterManagement(routerManagementState);
+    }
+    if (!progress.active) {
+      window.setTimeout(() => {
+        if (
+          lastRouterOperationProgress?.updatedAt === progress.updatedAt &&
+          routerManagementState
+        ) {
+          renderRouterManagement(routerManagementState);
+        }
+      }, 6_100);
+    }
+  },
+);
 
 const syncRouterWizard = (): void => {
   const provider = findClaudeProvider(routerWizardProvider.value);
@@ -5038,20 +5121,15 @@ const runRouterOperation = async (
   });
 };
 
-/**
- * The purge is irreversible — CCR keeps the upstream keys inside the data directory that gets
- * deleted — so the confirmation spells out exactly what disappears before anything runs.
- */
-const purgeRouter = async (button: HTMLButtonElement): Promise<void> => {
+const uninstallRouterCli = async (button: HTMLButtonElement): Promise<void> => {
   if (
     !(await requestConfirmation({
-      confirmLabel: '彻底清除',
+      confirmLabel: '卸载 CLI',
       message:
-        '彻底卸载路由器并清除全部数据？\n\n' +
-        '将删除：路由器程序、全部服务提供方配置、保存在其中的上游密钥与用量记录。\n' +
-        '不会改动：Claude Code 与 Codex 自己的配置。\n\n' +
-        '删除后无法恢复；完成后可以选择新的安装来源重新安装。',
-      title: '彻底清除路由器',
+        '卸载 ClaudeDock 管理的 CCR CLI？\n\n' +
+        '不会卸载 CCR 桌面版，不会改写 Claude/Codex App，也不会删除桌面版可能使用的共享配置。\n' +
+        '以后需要时，可在 ClaudeDock 中一键重新安装。',
+      title: '卸载 CLI 路由',
       tone: 'danger',
     }))
   ) {
@@ -5059,11 +5137,9 @@ const purgeRouter = async (button: HTMLButtonElement): Promise<void> => {
   }
   void runRouterOperation(
     async (sessionId) => {
-      const result = await window.controlPanel.uninstallClaudeRouter(sessionId);
-      routerPurgeCompleted = result.ok;
-      return result;
+      return window.controlPanel.uninstallClaudeRouter(sessionId);
     },
-    '正在清除…',
+    '正在卸载…',
     button,
   );
 };
@@ -5463,11 +5539,7 @@ const handleConnectionRemedyAction = async (
       break;
     case 'install-router':
       await runRouterOperation(
-        (sessionId) =>
-          window.controlPanel.installClaudeRouterFromSource(
-            sessionId,
-            routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
-          ),
+        (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
         '正在安装…',
         installRouterButton,
       );
@@ -9655,6 +9727,30 @@ settingsCloseBehavior.addEventListener('change', () => {
 settingsWebResearchIsolation.addEventListener('change', () => {
   updateSettingsUnsavedIndicator();
 });
+settingsOpenCcrBackend.addEventListener('click', () => {
+  const status = activeStatus();
+  if (!status || settingsOpenCcrBackend.disabled) {
+    return;
+  }
+  void runGuarded(settingsOpenCcrBackend, '正在打开…', async () => {
+    const result = await window.controlPanel.openClaudeRouterManagement(status.id);
+    handleRouterResult(result);
+    await loadAdvancedRouterBackends();
+  });
+});
+settingsOpenChatGptGateway.addEventListener('click', () => {
+  if (settingsOpenChatGptGateway.disabled) {
+    return;
+  }
+  void runGuarded(settingsOpenChatGptGateway, '正在打开…', async () => {
+    const result = await window.controlPanel.openManagedChatGptGatewayManagement();
+    showToast(
+      result.message ?? result.error ?? '无法打开 ChatGPT 网关后台。',
+      result.ok ? 'success' : 'error',
+    );
+    await loadAdvancedRouterBackends();
+  });
+});
 settingsChatIdleTimeout.addEventListener('change', () => {
   const requested = Number(settingsChatIdleTimeout.value);
   if (requested !== 0 && requested !== 5 && requested !== 10 && requested !== 30) {
@@ -10220,19 +10316,14 @@ refreshGatewaysButton.addEventListener('click', () => {
   });
 });
 installRouterButton.addEventListener('click', () => {
-  routerPurgeCompleted = false;
   void runRouterOperation(
-    (sessionId) =>
-      window.controlPanel.installClaudeRouterFromSource(
-        sessionId,
-        routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
-      ),
-    routerInstallSource.value === 'github' ? '正在下载并校验…' : '正在安装…',
+    (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
+    '正在安装…',
     installRouterButton,
   );
 });
 uninstallRouterButton.addEventListener('click', () => {
-  void purgeRouter(uninstallRouterButton);
+  void uninstallRouterCli(uninstallRouterButton);
 });
 installUpdateClaudeButton.addEventListener('click', () => {
   void runClaudeInstallUpdate();
@@ -10697,6 +10788,7 @@ window.addEventListener('beforeunload', () => {
   unsubscribeApplicationUpdaterChanged();
   unsubscribeOpenDownloadCenterRequested();
   unsubscribeApplicationProxyChanged();
+  unsubscribeRouterOperationProgress();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);

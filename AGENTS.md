@@ -1,6 +1,8 @@
 # ClaudeDock 项目规则
 
 - 项目定位：Windows 桌面 PowerShell 控制面板；不得修改 Codex、Claude Code 或系统级 API 路由。
+- 路由接管边界：只管理 Claude Code / Codex 的 CLI 会话。不得安装、卸载、终止或改写 Claude、Codex、
+  CCR 的桌面 App；CCR RPC 保存配置必须保持 `applyProfile: false`，由 ClaudeDock 启动 CLI 时注入本机路由。
 - 必读文档：`README.md`、`design.md`、`technical.md`。
 - 入口：`src/main/main.ts`、`src/preload/preload.ts`、`src/renderer/main.ts`。
 - 修改后至少运行：`npm run lint`、`npm run format:check`、`npm run typecheck`、`npm test`、

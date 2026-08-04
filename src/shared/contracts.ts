@@ -123,7 +123,8 @@ export type GatewayCandidateKind = 'claude-code-router' | 'cliproxyapi' | 'custo
 export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
 export type ClaudeRouterGatewayState = 'error' | 'running' | 'starting' | 'stopped' | 'unknown';
 export type ClaudeRouterInstallationKind = 'desktop' | 'mixed' | 'npm' | 'unknown';
-export type ClaudeRouterInstallSource = 'github' | 'npm' | 'npmmirror';
+/** ClaudeDock only manages the CCR command-line package; desktop installers are out of scope. */
+export type ClaudeRouterInstallSource = 'npm' | 'npmmirror';
 export type ClaudeCodeInstallationKind = 'native' | 'npm' | 'unknown';
 export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
@@ -732,6 +733,7 @@ export interface ManagedChatGptGatewayState {
   checkedAt: number;
   endpoint: string;
   installed: boolean;
+  managementAvailable: boolean;
   message: string;
   phase: ManagedChatGptGatewayPhase;
   running: boolean;
@@ -770,6 +772,31 @@ export interface ClaudeRouterManagementState {
   runtimeMismatch?: boolean;
   serviceRunning: boolean;
   version?: string;
+}
+
+export type RouterOperationKind = 'configure' | 'install' | 'recover' | 'start' | 'stop';
+
+export type RouterOperationStage =
+  | 'checking'
+  | 'complete'
+  | 'configuring'
+  | 'downloading'
+  | 'error'
+  | 'installing'
+  | 'recovering'
+  | 'starting'
+  | 'stopping'
+  | 'verifying';
+
+/** A secret-free, main-process-authored snapshot of a long-running router operation. */
+export interface RouterOperationProgress {
+  active: boolean;
+  detail: string;
+  operation: RouterOperationKind;
+  stage: RouterOperationStage;
+  step: number;
+  totalSteps: number;
+  updatedAt: number;
 }
 
 export type RouterKernelId = 'cc-switch' | 'ccr' | 'none';
@@ -1053,6 +1080,7 @@ export interface ClaudeConnectionAdvice {
 
 export interface OperationResult {
   error?: string;
+  message?: string;
   ok: boolean;
   /** Absent when the workspace has no conversation to report on — e.g. before a project is opened. */
   status?: TerminalStatus;
@@ -1223,6 +1251,8 @@ export interface ControlPanelApi {
   uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   getRouterKernelState: (sessionId: string) => Promise<RouterKernelState>;
   getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
+  openManagedChatGptGatewayManagement: () => Promise<OperationResult>;
+  onRouterOperationProgress: (listener: (progress: RouterOperationProgress) => void) => Unsubscribe;
   setupManagedChatGptGateway: (
     sessionId: string,
     forceLogin?: boolean,

@@ -1,13 +1,13 @@
-import { execFile, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import {
-  createReadStream,
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -18,10 +18,11 @@ import type {
   ClaudeRouterManagementState,
   ClaudeRouterProviderProtocol,
   ClaudeRouterProviderView,
+  RouterOperationKind,
+  RouterOperationProgress,
   SaveClaudeRouterProviderInput,
 } from '../shared/contracts';
 import { completeConnectionEndpoint } from '../shared/connection-endpoint';
-import type { DownloadEngine } from './download-engine';
 import { runWindowsCommand } from './windows-command';
 
 const execFileAsync = promisify(execFile);
@@ -36,10 +37,6 @@ const PROVIDER_PROTOCOL_VALUES = new Set([
   'openai_chat_completions',
   'openai_responses',
 ]);
-const ROUTER_RELEASE_API =
-  'https://api.github.com/repos/musistudio/claude-code-router/releases/latest';
-const MAX_RELEASE_RESPONSE_BYTES = 2 * 1024 * 1024;
-const MAX_INSTALLER_BYTES = 250 * 1024 * 1024;
 const MAX_RPC_RESPONSE_BYTES = 8 * 1024 * 1024;
 const SERVICE_WAIT_MS = 20_000;
 
@@ -92,19 +89,6 @@ interface CcrRpcFailure {
   ok: false;
 }
 
-interface RouterInstallerRelease {
-  digest: string;
-  downloadUrl: string;
-  fileName: string;
-  size: number;
-  version: string;
-}
-
-export interface DownloadedRouterInstaller {
-  filePath: string;
-  version: string;
-}
-
 export interface SavedRouterProvider {
   connection: {
     apiKey: string;
@@ -118,6 +102,15 @@ export interface SavedRouterProvider {
 export interface RouterPackageOperation {
   message: string;
   state: ClaudeRouterManagementState;
+}
+
+interface RouterOperationJournal {
+  operation: 'install';
+  phase: RouterOperationProgress['stage'];
+  schemaVersion: 1;
+  source: ClaudeRouterInstallSource;
+  startedAt: number;
+  updatedAt: number;
 }
 
 interface NormalizedRouterProviderInput extends Omit<
@@ -142,7 +135,7 @@ const appDataRoot = (): string =>
 const localAppDataRoot = (): string =>
   process.env.LOCALAPPDATA ?? path.join(homedir(), 'AppData', 'Local');
 
-/** Every file CCR keeps under `%APPDATA%\claude-code-router`, for the purge confirmation copy. */
+/** CCR shared files that CLI uninstall may remove only when no desktop installation exists. */
 export const ROUTER_DATA_ENTRIES = [
   'config.sqlite',
   'api-keys.sqlite',
@@ -181,8 +174,6 @@ export const routerDataDirectory = (appData: string): string | undefined => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const delay = (milliseconds: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
 const optionalString = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
@@ -561,80 +552,103 @@ const readGatewayApiKey = (config: CcrAppConfig): string => {
   throw new Error('CCR 没有可用于本机网关的访问密钥。');
 };
 
-export const parseRouterInstallerRelease = (value: unknown): RouterInstallerRelease => {
-  if (!isRecord(value)) {
-    throw new Error('CCR 发布包元数据格式无效。');
-  }
-  const tag = optionalString(value.tag_name);
-  const assets = Array.isArray(value.assets) ? value.assets : [];
-  const asset = assets.find(
-    (candidate) =>
-      isRecord(candidate) &&
-      typeof candidate.name === 'string' &&
-      /^Claude-Code-Router_\d+\.\d+\.\d+\.exe$/.test(candidate.name),
-  );
-  if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag) || !asset || !isRecord(asset)) {
-    throw new Error('CCR 最新发布包没有可验证的 Windows 安装包。');
-  }
-  const fileName = optionalString(asset.name) ?? '';
-  const version = tag.slice(1);
-  const downloadUrl = optionalString(asset.browser_download_url) ?? '';
-  const digestText = optionalString(asset.digest) ?? '';
-  const digestMatch = /^sha256:([a-f0-9]{64})$/i.exec(digestText);
-  const digest = digestMatch?.[1]?.toLowerCase();
-  const size = typeof asset.size === 'number' ? asset.size : 0;
-  let parsedDownload: URL;
-  try {
-    parsedDownload = new URL(downloadUrl);
-  } catch {
-    throw new Error('CCR 安装包下载地址无效。');
-  }
-  if (
-    fileName !== `Claude-Code-Router_${version}.exe` ||
-    parsedDownload.protocol !== 'https:' ||
-    parsedDownload.hostname !== 'github.com' ||
-    !parsedDownload.pathname.startsWith(
-      `/musistudio/claude-code-router/releases/download/${tag}/`,
-    ) ||
-    !digest ||
-    !Number.isInteger(size) ||
-    size <= 0 ||
-    size > MAX_INSTALLER_BYTES
-  ) {
-    throw new Error('CCR Windows 安装包未通过来源、版本、大小或 SHA-256 元数据检查。');
-  }
-  return {
-    digest,
-    downloadUrl,
-    fileName,
-    size,
-    version,
-  };
-};
-
-const fileSha256 = async (filePath: string): Promise<string> => {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(filePath)) {
-    hash.update(chunk);
-  }
-  return hash.digest('hex');
-};
-
 const versionMajor = (version: string | undefined): number | undefined => {
   const match = /^(\d+)\./.exec(version ?? '');
   return match ? Number(match[1]) : undefined;
 };
 
 export class ClaudeRouterManager {
-  private readonly installerDirectory: string;
-  private serviceRuntimeCache?: { pid: number; usesAppRuntime: boolean };
+  private installInFlight?: Promise<RouterPackageOperation>;
+  private readonly operationJournalPath: string;
+  private serviceRuntimeCache?: {
+    kind: 'claudedock' | 'cli' | 'desktop' | 'unknown';
+    pid: number;
+  };
 
   public constructor(
     userDataPath: string,
-    private readonly downloadEngine: DownloadEngine,
-    private readonly fetchImplementation: typeof fetch = fetch,
+    private readonly onOperationProgress: (progress: RouterOperationProgress) => void = () => {},
+    private readonly commandEnvironment: () => Record<
+      string,
+      null | string | undefined
+    > = () => ({}),
+    private readonly runCommand: typeof runWindowsCommand = runWindowsCommand,
   ) {
-    this.installerDirectory = path.join(userDataPath, 'claude', 'router-installers');
+    this.operationJournalPath = path.join(userDataPath, 'claude', 'router-operation.json');
+  }
+
+  private emitProgress(
+    operation: RouterOperationKind,
+    stage: RouterOperationProgress['stage'],
+    step: number,
+    totalSteps: number,
+    detail: string,
+    active = true,
+  ): void {
+    this.onOperationProgress({
+      active,
+      detail,
+      operation,
+      stage,
+      step,
+      totalSteps,
+      updatedAt: Date.now(),
+    });
+  }
+
+  private readOperationJournal(): RouterOperationJournal | undefined {
+    if (!existsSync(this.operationJournalPath)) {
+      return undefined;
+    }
+    try {
+      const value = JSON.parse(readFileSync(this.operationJournalPath, 'utf8')) as unknown;
+      if (
+        !isRecord(value) ||
+        value.schemaVersion !== 1 ||
+        value.operation !== 'install' ||
+        (value.source !== 'npm' && value.source !== 'npmmirror') ||
+        typeof value.startedAt !== 'number' ||
+        typeof value.updatedAt !== 'number' ||
+        typeof value.phase !== 'string'
+      ) {
+        return undefined;
+      }
+      return value as unknown as RouterOperationJournal;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private writeOperationJournal(journal: RouterOperationJournal): void {
+    mkdirSync(path.dirname(this.operationJournalPath), { recursive: true });
+    const temporaryPath = `${this.operationJournalPath}.tmp`;
+    writeFileSync(temporaryPath, `${JSON.stringify(journal, undefined, 2)}\n`, 'utf8');
+    renameSync(temporaryPath, this.operationJournalPath);
+  }
+
+  private updateOperationJournal(phase: RouterOperationProgress['stage']): void {
+    const current = this.readOperationJournal();
+    if (!current) {
+      return;
+    }
+    this.writeOperationJournal({ ...current, phase, updatedAt: Date.now() });
+  }
+
+  private updateOperationJournalSource(source: ClaudeRouterInstallSource): void {
+    const current = this.readOperationJournal();
+    if (current) {
+      this.writeOperationJournal({ ...current, source, updatedAt: Date.now() });
+    }
+  }
+
+  private clearOperationJournal(): void {
+    for (const journalPath of [this.operationJournalPath, `${this.operationJournalPath}.tmp`]) {
+      try {
+        unlinkSync(journalPath);
+      } catch {
+        // It is safe for an already-cleared journal to be absent.
+      }
+    }
   }
 
   public async getState(): Promise<ClaudeRouterManagementState> {
@@ -644,18 +658,19 @@ export class ClaudeRouterManager {
       Promise.resolve(this.findDesktopExecutable()),
     ]);
     const access = await this.getActiveServiceAccess();
+    const accessKind = access ? await this.serviceRuntimeKind(access, desktop) : undefined;
+    const cliAccess = accessKind === 'cli' || accessKind === 'claudedock';
     const installationKind =
       cli && desktop ? 'mixed' : cli ? 'npm' : desktop ? 'desktop' : 'unknown';
-    const dataDirectory = routerDataDirectory(appDataRoot());
     const installation = {
-      // Leftover configuration alone is still worth clearing, so the purge stays reachable.
-      canUninstall: Boolean(cli || desktop || (dataDirectory && existsSync(dataDirectory))),
+      // Desktop CCR and its shared data are never uninstall targets for ClaudeDock's CLI-only path.
+      canUninstall: Boolean(cli),
       installationKind,
     } as const;
-    if (!access) {
-      const installed = Boolean(cli || desktop);
+    if (!access || !cliAccess) {
+      const installed = Boolean(cli);
       const cliManageable = Boolean(cli?.nodeExecutable && (versionMajor(cli.version) ?? 0) >= 3);
-      const manageable = Boolean(desktop || cliManageable);
+      const manageable = cliManageable;
       return {
         ...installation,
         checkedAt,
@@ -664,20 +679,25 @@ export class ClaudeRouterManager {
         installed,
         manageable,
         managementAvailable: false,
-        message: installed
-          ? manageable
-            ? 'Claude Code 路由器已安装，但管理服务当前未运行。'
-            : cli && (versionMajor(cli.version) ?? 0) >= 3
-              ? '检测到 CCR 3.x，但没有找到能加载其 better-sqlite3 的系统 Node.js；请安装或更新官方版路由器。'
-              : '检测到旧版路由器；请安装或升级到 3.x 后使用可视化管理。'
-          : '尚未检测到 Claude Code 路由器，可下载并启动官方 Windows 安装程序。',
+        message:
+          access && !cliAccess
+            ? '检测到 CCR 桌面版服务正在运行；ClaudeDock 不会接管或改写桌面 App，请关闭该服务后再启用独立 CLI 路由。'
+            : installed
+              ? manageable
+                ? 'Claude Code Router CLI 已安装，但后台服务当前未运行。'
+                : cli && (versionMajor(cli.version) ?? 0) >= 3
+                  ? '检测到 CCR CLI 3.x，但没有找到能加载其 better-sqlite3 的系统 Node.js；请安装或更新 Node.js。'
+                  : '检测到旧版 CCR CLI；请在 ClaudeDock 中一键更新后继续。'
+              : desktop
+                ? '仅检测到 CCR 桌面版；ClaudeDock 不会操作它，可在后台另行安装 CLI 路由。'
+                : '尚未检测到 Claude Code Router CLI，可由 ClaudeDock 在后台自动安装。',
         providers: [],
         serviceRunning: false,
         version: cli?.version,
       };
     }
 
-    if (cli?.nodeExecutable && (await this.serviceUsesAppRuntime(access))) {
+    if (cli?.nodeExecutable && accessKind === 'claudedock') {
       return {
         ...installation,
         checkedAt,
@@ -751,80 +771,187 @@ export class ClaudeRouterManager {
     }
   }
 
-  public async installFromNpm(
-    source: Exclude<ClaudeRouterInstallSource, 'github'>,
-  ): Promise<RouterPackageOperation> {
-    const registry =
-      source === 'npmmirror' ? 'https://registry.npmmirror.com' : 'https://registry.npmjs.org';
-    await runWindowsCommand(
-      'npm',
-      ['install', '--global', '@musistudio/claude-code-router@latest', '--registry', registry],
-      {
-        maxBuffer: 16 * 1024 * 1024,
-        timeout: 10 * 60_000,
-      },
-    );
-    return {
-      message:
-        source === 'npmmirror'
-          ? '已通过 npmmirror 安装或更新 Claude Code 路由器。'
-          : '已通过 npm 官方源安装或更新 Claude Code 路由器。',
-      state: await this.getState(),
-    };
+  public async installFromNpm(source: ClaudeRouterInstallSource): Promise<RouterPackageOperation> {
+    return this.runInstallOnce(source, 'install');
   }
 
-  /**
-   * Restores the machine to a genuinely not-installed state: the program is removed and every
-   * CCR data file is deleted, so the user can pick a different install source afterwards.
-   * Provider configuration and upstream keys are unrecoverable by design — the renderer states
-   * that in its confirmation before calling this.
-   */
+  /** Replays an interrupted npm install. npm's global install is idempotent, so no data is reset. */
+  public async recoverInterruptedInstall(): Promise<RouterPackageOperation | undefined> {
+    const journal = this.readOperationJournal();
+    if (!journal) {
+      // A torn or obsolete journal is not trustworthy. Clear it and let the next install start cleanly.
+      if (existsSync(this.operationJournalPath) || existsSync(`${this.operationJournalPath}.tmp`)) {
+        this.clearOperationJournal();
+      }
+      return undefined;
+    }
+    this.emitProgress(
+      'recover',
+      'recovering',
+      1,
+      5,
+      '检测到上次安装意外中断，正在自动校验并续装。',
+    );
+    return this.runInstallOnce(journal.source, 'recover');
+  }
+
+  private runInstallOnce(
+    source: ClaudeRouterInstallSource,
+    operation: 'install' | 'recover',
+  ): Promise<RouterPackageOperation> {
+    if (this.installInFlight) {
+      return this.installInFlight;
+    }
+    this.installInFlight = this.installFromNpmInternal(source, operation).finally(() => {
+      this.installInFlight = undefined;
+    });
+    return this.installInFlight;
+  }
+
+  private async installFromNpmInternal(
+    source: ClaudeRouterInstallSource,
+    operation: 'install' | 'recover',
+  ): Promise<RouterPackageOperation> {
+    let effectiveSource = source;
+    const registry =
+      source === 'npmmirror' ? 'https://registry.npmmirror.com' : 'https://registry.npmjs.org';
+    const commandEnvironment = this.commandEnvironment();
+    const proxyNote =
+      typeof commandEnvironment.HTTPS_PROXY === 'string' ||
+      typeof commandEnvironment.https_proxy === 'string'
+        ? '已使用 ClaudeDock 为 CLI 配置的应用代理。'
+        : '将使用 npm 当前可用的网络环境。';
+    const startedAt = this.readOperationJournal()?.startedAt ?? Date.now();
+    try {
+      this.writeOperationJournal({
+        operation: 'install',
+        phase: operation === 'recover' ? 'recovering' : 'checking',
+        schemaVersion: 1,
+        source,
+        startedAt,
+        updatedAt: Date.now(),
+      });
+      this.emitProgress(operation, 'checking', 1, 5, '正在检查 Node.js、npm 与现有 CCR CLI。');
+
+      this.updateOperationJournal('downloading');
+      this.emitProgress(
+        operation,
+        'downloading',
+        2,
+        5,
+        source === 'npmmirror'
+          ? `正在从 npmmirror 获取 CCR CLI；${proxyNote}`
+          : `正在从 npm 官方源获取 CCR CLI；${proxyNote}`,
+      );
+      const installFromRegistry = (registryUrl: string): Promise<string> =>
+        this.runCommand(
+          'npm',
+          [
+            'install',
+            '--global',
+            '@musistudio/claude-code-router@latest',
+            '--registry',
+            registryUrl,
+          ],
+          {
+            env: commandEnvironment,
+            maxBuffer: 16 * 1024 * 1024,
+            timeout: 10 * 60_000,
+          },
+        );
+      try {
+        await installFromRegistry(registry);
+      } catch (error) {
+        if (source !== 'npm' || /未找到 npm 命令/.test(safeMessage(error))) {
+          throw error;
+        }
+        effectiveSource = 'npmmirror';
+        this.updateOperationJournalSource(effectiveSource);
+        this.emitProgress(
+          operation,
+          'downloading',
+          2,
+          5,
+          `npm 官方源未完成，正在自动改用 npmmirror 续传；${proxyNote}`,
+        );
+        await installFromRegistry('https://registry.npmmirror.com');
+      }
+
+      this.updateOperationJournal('installing');
+      this.emitProgress(
+        operation,
+        'installing',
+        3,
+        5,
+        'npm 已完成写入，正在定位 CLI 与配套 Node.js。',
+      );
+      const cli = await this.findCliInstallation();
+      if (!cli) {
+        throw new Error('npm 命令已结束，但没有找到 CCR CLI；可重新点击安装进行修复。');
+      }
+
+      this.updateOperationJournal('verifying');
+      this.emitProgress(operation, 'verifying', 4, 5, '正在验证 CLI 版本和后台运行环境。');
+      const state = await this.getState();
+      if (!state.installed) {
+        throw new Error('CCR CLI 安装校验未通过；已保留恢复记录供下次自动重试。');
+      }
+      this.clearOperationJournal();
+      this.emitProgress(
+        operation,
+        'complete',
+        5,
+        5,
+        operation === 'recover' ? '中断的安装已自动恢复并验证完成。' : 'CCR CLI 已安装并验证完成。',
+        false,
+      );
+      return {
+        message:
+          operation === 'recover'
+            ? '上次中断的 CCR CLI 安装已自动恢复。'
+            : effectiveSource === 'npmmirror'
+              ? '已通过 npmmirror 安装或更新 Claude Code Router CLI。'
+              : '已通过 npm 官方源安装或更新 Claude Code Router CLI。',
+        state,
+      };
+    } catch (error) {
+      this.emitProgress(
+        operation,
+        'error',
+        5,
+        5,
+        `安装未完成：${safeMessage(error)}。恢复记录已保留，可再次点击安装或重启后自动续装。`,
+        false,
+      );
+      throw error;
+    }
+  }
+
+  /** Removes only the CLI package. A detected desktop installation and its shared data are kept. */
   public async uninstall(): Promise<RouterPackageOperation> {
     const cli = await this.findCliInstallation();
     const desktop = this.findDesktopExecutable();
-    const desktopUninstaller = this.findDesktopUninstaller(desktop);
     const dataDirectory = routerDataDirectory(appDataRoot());
     const hadData = Boolean(dataDirectory && existsSync(dataDirectory));
-    if (!cli && !desktop && !hadData) {
-      return { message: '当前没有检测到可卸载的路由器。', state: await this.getState() };
+    if (!cli) {
+      return {
+        message: desktop
+          ? '仅检测到 CCR 桌面版；ClaudeDock 不会卸载或修改它。'
+          : '当前没有检测到可卸载的 CCR CLI。',
+        state: await this.getState(),
+      };
     }
 
     const access = await this.getActiveServiceAccess();
     if (access) {
-      try {
-        await this.rpcWithAccess(access, 'stopGateway');
-      } catch {
-        // Continue with application removal even if the gateway is already unavailable.
-      }
-      if (access.pid !== process.pid) {
-        try {
-          process.kill(access.pid, 'SIGTERM');
-        } catch {
-          // The service may have exited after the gateway stopped.
-        }
-      }
-      // Give the daemon a moment to release its SQLite handles before the directory is deleted.
-      await delay(600);
+      await this.stopCliService(access, desktop);
     }
 
-    const notes: string[] = [];
-    if (cli) {
-      notes.push(await this.removeCliInstallation(cli));
-    }
+    const notes: string[] = [await this.removeCliInstallation(cli)];
 
-    if (desktopUninstaller) {
-      const child = spawn(desktopUninstaller, [], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: false,
-      });
-      child.unref();
-      notes.push('已打开桌面版卸载程序，请按向导完成移除');
-    } else if (desktop) {
-      notes.push('检测到桌面版路由器但找不到它的卸载程序，请在 Windows“已安装的应用”中移除');
-    }
-
-    if (dataDirectory) {
+    if (desktop) {
+      notes.push('已保留桌面版 CCR 及其共享配置，未改写 Claude/Codex App');
+    } else if (dataDirectory) {
       try {
         rmSync(dataDirectory, { force: true, maxRetries: 3, recursive: true, retryDelay: 200 });
         if (hadData) {
@@ -835,11 +962,6 @@ export class ClaudeRouterManager {
       }
     }
 
-    try {
-      rmSync(this.installerDirectory, { force: true, maxRetries: 2, recursive: true });
-    } catch {
-      // A leftover installer cache is harmless; it is re-created on the next download.
-    }
     this.serviceRuntimeCache = undefined;
 
     return {
@@ -901,12 +1023,37 @@ export class ClaudeRouterManager {
   }
 
   public async start(): Promise<ClaudeRouterManagementState> {
+    this.emitProgress('start', 'checking', 1, 3, '正在检查 CCR CLI 后台状态。');
+    try {
+      const state = await this.startInternal();
+      const detail =
+        state.gatewayState === 'running'
+          ? 'CCR CLI 后台与模型网关已就绪。'
+          : state.managementAvailable
+            ? 'CCR CLI 管理后台已就绪；模型网关正在等待服务商配置。'
+            : state.message;
+      this.emitProgress('start', 'complete', 3, 3, detail, false);
+      return state;
+    } catch (error) {
+      this.emitProgress('start', 'error', 3, 3, `启动失败：${safeMessage(error)}`, false);
+      throw error;
+    }
+  }
+
+  private async startInternal(): Promise<ClaudeRouterManagementState> {
     const cli = await this.findCliInstallation();
+    const desktop = this.findDesktopExecutable();
     const existing = await this.getActiveServiceAccess();
     if (existing) {
-      if (cli?.nodeExecutable && (await this.serviceUsesAppRuntime(existing))) {
+      const runtimeKind = await this.serviceRuntimeKind(existing, desktop);
+      if (cli?.nodeExecutable && runtimeKind === 'claudedock') {
         await this.restartCliService(cli, existing);
         return this.getState();
+      }
+      if (runtimeKind !== 'cli') {
+        throw new Error(
+          '检测到非 CLI 的 CCR 后台正在运行；为保护 Claude/Codex App，ClaudeDock 不会接管或终止它。',
+        );
       }
       try {
         await this.rpcWithAccess(existing, 'startGateway');
@@ -924,17 +1071,9 @@ export class ClaudeRouterManager {
         throw new Error('一键管理要求 Claude Code 路由器 3.x，请先升级。');
       }
       await this.startCliService(cli);
+      this.emitProgress('start', 'starting', 2, 3, 'CCR CLI 管理服务已启动，正在启动模型网关。');
     } else {
-      const desktop = this.findDesktopExecutable();
-      if (!desktop) {
-        throw new Error('未找到 Claude Code 路由器，请先下载安装。');
-      }
-      const child = spawn(desktop, [], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      child.unref();
+      throw new Error('未找到 Claude Code Router CLI，请先由 ClaudeDock 在后台安装。');
     }
 
     const access = await this.waitForActiveService();
@@ -943,21 +1082,50 @@ export class ClaudeRouterManager {
   }
 
   public async stop(): Promise<ClaudeRouterManagementState> {
-    const access = await this.requireActiveService();
-    await this.rpcWithAccess(access, 'stopGateway');
-    return this.getState();
+    this.emitProgress('stop', 'stopping', 1, 2, '正在停止 ClaudeDock 管理的 CCR CLI 后台。');
+    const access = await this.getActiveServiceAccess();
+    if (!access) {
+      const state = await this.getState();
+      this.emitProgress('stop', 'complete', 2, 2, 'CCR CLI 后台已经停止。', false);
+      return state;
+    }
+    try {
+      await this.stopCliService(access, this.findDesktopExecutable());
+      const state = await this.getState();
+      this.emitProgress('stop', 'complete', 2, 2, 'CCR CLI 后台与网关已停止。', false);
+      return state;
+    } catch (error) {
+      this.emitProgress('stop', 'error', 2, 2, `停止失败：${safeMessage(error)}`, false);
+      throw error;
+    }
   }
 
   public async managementUrl(): Promise<string> {
-    let access = await this.getActiveServiceAccess();
-    if (!access) {
-      await this.start();
-      access = await this.requireActiveService();
+    const access = await this.getActiveServiceAccess();
+    if (
+      !access ||
+      (await this.serviceRuntimeKind(access, this.findDesktopExecutable())) !== 'cli'
+    ) {
+      throw new Error('CCR CLI 后台没有运行，无法打开管理页。');
     }
     return access.managementUrl;
   }
 
   public async saveProvider(rawInput: SaveClaudeRouterProviderInput): Promise<SavedRouterProvider> {
+    this.emitProgress('configure', 'configuring', 1, 2, '正在写入服务提供方与模型映射（仅 CLI）。');
+    try {
+      const result = await this.saveProviderInternal(rawInput);
+      this.emitProgress('configure', 'complete', 2, 2, 'CLI 路由配置已保存并校验。', false);
+      return result;
+    } catch (error) {
+      this.emitProgress('configure', 'error', 2, 2, `配置失败：${safeMessage(error)}`, false);
+      throw error;
+    }
+  }
+
+  private async saveProviderInternal(
+    rawInput: SaveClaudeRouterProviderInput,
+  ): Promise<SavedRouterProvider> {
     const input = normalizeRouterProviderInput(rawInput);
     const access = await this.requireActiveService();
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
@@ -987,54 +1155,6 @@ export class ClaudeRouterManager {
     const updated = buildDeletedRouterConfig(current, providerId);
     await this.saveConfigWithoutProfileTakeover(access, updated);
     return this.getState();
-  }
-
-  public async downloadLatestInstaller(): Promise<DownloadedRouterInstaller> {
-    const releaseResponse = await this.fetchImplementation(ROUTER_RELEASE_API, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        'user-agent': 'ClaudeDock/1.0',
-        'x-github-api-version': '2022-11-28',
-      },
-      redirect: 'error',
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!releaseResponse.ok) {
-      throw new Error(`无法读取 CCR 官方发布信息：请求状态 ${releaseResponse.status}。`);
-    }
-    const releaseBytes = Buffer.from(await releaseResponse.arrayBuffer());
-    if (releaseBytes.length > MAX_RELEASE_RESPONSE_BYTES) {
-      throw new Error('CCR 发布包元数据超过允许大小。');
-    }
-    const release = parseRouterInstallerRelease(
-      JSON.parse(releaseBytes.toString('utf8')) as unknown,
-    );
-
-    mkdirSync(this.installerDirectory, { recursive: true });
-    const finalPath = path.join(this.installerDirectory, release.fileName);
-    if (
-      existsSync(finalPath) &&
-      statSync(finalPath).size === release.size &&
-      (await fileSha256(finalPath)) === release.digest
-    ) {
-      return { filePath: finalPath, version: release.version };
-    }
-
-    await this.downloadEngine.start({
-      allowedHosts: ['github.com', 'release-assets.githubusercontent.com'],
-      allowedPathPrefixes: [
-        `/musistudio/claude-code-router/releases/download/v${release.version}/`,
-        '/',
-      ],
-      expectedBytes: release.size,
-      expectedSha256: release.digest,
-      finalPath,
-      id: `ccr-installer-${release.version}`,
-      label: 'Claude Code Router 安装包',
-      maxBytes: MAX_INSTALLER_BYTES,
-      url: release.downloadUrl,
-    });
-    return { filePath: finalPath, version: release.version };
   }
 
   private async findCliInstallation(): Promise<CcrCliInstallation | undefined> {
@@ -1155,11 +1275,14 @@ export class ClaudeRouterManager {
     return environment;
   }
 
-  private async serviceUsesAppRuntime(access: CcrServiceAccess): Promise<boolean> {
+  private async serviceRuntimeKind(
+    access: CcrServiceAccess,
+    desktopExecutable?: string,
+  ): Promise<'claudedock' | 'cli' | 'desktop' | 'unknown'> {
     if (this.serviceRuntimeCache?.pid === access.pid) {
-      return this.serviceRuntimeCache.usesAppRuntime;
+      return this.serviceRuntimeCache.kind;
     }
-    let usesAppRuntime: boolean;
+    let kind: 'claudedock' | 'cli' | 'desktop' | 'unknown' = 'unknown';
     try {
       const result = await execFileAsync(
         'tasklist.exe',
@@ -1172,14 +1295,60 @@ export class ClaudeRouterManager {
         },
       );
       const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
-      usesAppRuntime = tasklistImageNames(bytes).some((imageName) =>
-        routerServiceRunsInAppRuntime(imageName, process.execPath),
+      const images = tasklistImageNames(bytes).map((imageName) =>
+        path.basename(imageName).toLowerCase(),
       );
+      const appImage = path.basename(process.execPath).toLowerCase();
+      const desktopImage = desktopExecutable
+        ? path.basename(desktopExecutable).toLowerCase()
+        : undefined;
+      if (images.includes('node.exe')) {
+        kind = 'cli';
+      } else if (appImage !== 'node.exe' && images.includes(appImage)) {
+        kind = 'claudedock';
+      } else if (desktopImage && images.includes(desktopImage)) {
+        kind = 'desktop';
+      }
     } catch {
-      usesAppRuntime = false;
+      kind = 'unknown';
     }
-    this.serviceRuntimeCache = { pid: access.pid, usesAppRuntime };
-    return usesAppRuntime;
+    this.serviceRuntimeCache = { kind, pid: access.pid };
+    return kind;
+  }
+
+  private async stopCliService(
+    access: CcrServiceAccess,
+    desktopExecutable?: string,
+  ): Promise<void> {
+    const runtimeKind = await this.serviceRuntimeKind(access, desktopExecutable);
+    if (runtimeKind !== 'cli' && runtimeKind !== 'claudedock') {
+      throw new Error(
+        '检测到的 CCR 后台不是 ClaudeDock 管理的 CLI 进程；为保护 Claude/Codex App，已拒绝终止。',
+      );
+    }
+    if (access.pid === process.pid) {
+      throw new Error('拒绝终止 ClaudeDock 主进程；请完全退出旧版本后重试。');
+    }
+    try {
+      await this.rpcWithAccess(access, 'stopGateway');
+    } catch {
+      // The service process can still be terminated when the gateway RPC is unavailable.
+    }
+    try {
+      process.kill(access.pid, 'SIGTERM');
+    } catch (error) {
+      if (!isRecord(error) || (error.code !== 'ESRCH' && error.code !== 'EINVAL')) {
+        throw error;
+      }
+    }
+    const stoppedAt = Date.now();
+    while (Date.now() - stoppedAt < 10_000 && this.processIsRunning(access.pid)) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this.processIsRunning(access.pid)) {
+      throw new Error('CCR CLI 后台没有在 10 秒内退出，请完全退出相关 CLI 进程后重试。');
+    }
+    this.serviceRuntimeCache = undefined;
   }
 
   private async startCliService(cli: CcrCliInstallation): Promise<void> {
@@ -1242,20 +1411,6 @@ export class ClaudeRouterManager {
       path.join(root, 'Programs', 'claude-code-router', 'Claude Code Router.exe'),
       path.join(root, 'Programs', 'Claude Code Router', 'Claude Code Router.exe'),
       path.join(root, 'Claude Code Router', 'Claude Code Router.exe'),
-    ];
-    return candidates.find((candidate) => existsSync(candidate));
-  }
-
-  private findDesktopUninstaller(desktopExecutable?: string): string | undefined {
-    if (!desktopExecutable) {
-      return undefined;
-    }
-    const directory = path.dirname(desktopExecutable);
-    const candidates = [
-      path.join(directory, 'Uninstall Claude Code Router.exe'),
-      path.join(directory, 'Uninstall.exe'),
-      path.join(directory, 'uninstall.exe'),
-      path.join(directory, 'unins000.exe'),
     ];
     return candidates.find((candidate) => existsSync(candidate));
   }
