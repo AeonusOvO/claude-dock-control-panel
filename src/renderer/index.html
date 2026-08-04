@@ -1668,6 +1668,52 @@
     ></div>
 
     <dialog
+      class="update-center-dialog"
+      id="update-center-dialog"
+      aria-labelledby="update-center-title"
+      aria-describedby="update-center-description"
+    >
+      <div class="update-center-dialog__shell">
+        <header>
+          <div>
+            <span class="step-kicker">统一更新</span>
+            <strong id="update-center-title">可用更新</strong>
+            <p id="update-center-description">
+              逐项更新，或一次处理全部项目；ClaudeDock 安装包下载完成后仍需确认重启安装。
+            </p>
+          </div>
+          <button
+            class="update-center-dialog__close"
+            id="close-update-center"
+            type="button"
+            aria-label="关闭可用更新"
+            title="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <section class="update-center-dialog__body" aria-live="polite">
+          <div class="update-center-empty" id="update-center-empty" hidden>
+            <strong>当前没有发现可用更新</strong>
+            <span>各更新来源均已检查；稍后可从右上角重新检查。</span>
+          </div>
+          <div class="update-center-list" id="update-center-list"></div>
+        </section>
+        <footer>
+          <span id="update-center-summary">等待检查结果</span>
+          <div>
+            <button class="update-center-cancel" id="cancel-update-center" type="button">
+              取消
+            </button>
+            <button class="update-center-all" id="update-center-all" type="button">全部更新</button>
+          </div>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog
       class="download-center-dialog"
       id="download-center-dialog"
       aria-labelledby="download-center-title"
@@ -1699,7 +1745,24 @@
             <strong>还没有下载任务</strong>
             <span>安装路由、Codex 或其他组件时，实时进度会显示在这里。</span>
           </div>
-          <div class="download-task-list" id="download-task-list"></div>
+          <section class="download-center-section" id="download-active-section" hidden>
+            <div class="download-center-section__heading">
+              <strong>当前任务</strong>
+              <span id="download-active-summary"></span>
+            </div>
+            <div class="download-operation-list" id="download-operation-list"></div>
+            <div class="download-task-list" id="download-task-list"></div>
+          </section>
+          <section class="download-center-section" id="download-history-section" hidden>
+            <div class="download-center-section__heading">
+              <div>
+                <strong>下载历史</strong>
+                <span id="download-history-summary"></span>
+              </div>
+              <button id="clear-download-history" type="button">清空历史</button>
+            </div>
+            <div class="download-task-list" id="download-history-list"></div>
+          </section>
         </section>
       </form>
     </dialog>

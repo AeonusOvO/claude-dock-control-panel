@@ -1,31 +1,25 @@
-# Security policy
+# 安全策略
 
-## Supported versions
+## 支持版本
 
-Security fixes are made on the current stable line and the main branch. After 4.1.0 is formally
-released, 4.1.x is the supported binary line. Older installers and source snapshots receive fixes
-only when the maintainer explicitly says so in a security advisory.
+安全修复应用于当前稳定版本线和 `main` 分支。4.2.0 正式发布后，4.2.x 为受支持的二进制版本线；
+更早的安装包和源码快照仅在维护者通过安全公告明确说明时继续获得修复。
 
-## Private reporting
+## 私密报告
 
-Do not open a public issue with an exploit, private data, credentials or an unpatched vulnerability.
-Use the repository's **Security → Report a vulnerability** form. It creates a private GitHub security
-advisory visible to the maintainer.
+不要在公开 Issue 中提交利用代码、个人数据、凭据或尚未修复的漏洞。请使用仓库的
+**Security → Report a vulnerability** 表单，它会创建只有维护者可见的 GitHub 私密安全公告。
 
-If GitHub private reporting is unavailable, contact the maintainer AeonusOvO by telephone or SMS at
-13585928550 and ask for a private reporting channel. Do not send secrets, proof-of-concept payloads or
-personal data in the first SMS.
+如果 GitHub 私密报告不可用，请通过电话或短信联系维护者 AeonusOvO：13585928550，并先请求建立
+私密报告渠道。首次短信不要发送秘密、概念验证载荷或个人数据。
 
-Please include the affected version and operating system, impact, reproduction conditions, whether
-the issue is already public, and a safe way to contact you. You should receive an acknowledgement
-within seven calendar days. Fix and disclosure timing depends on severity and coordination needs.
+报告请包含受影响版本和操作系统、影响、复现条件、问题是否已经公开，以及安全的联系方式。维护者
+应在七个自然日内确认收到；修复和披露时间取决于严重程度与协调需要。
 
-## Scope
+## 范围
 
-ClaudeDock does not modify Codex, Claude Code or system-level API routing. Reports about the app's
-privilege boundary, updater, release signatures, local credential handling, renderer isolation,
-command execution or dependency chain are in scope. Service-provider account disputes and
-vulnerabilities in an unmodified third-party CLI should be sent to that upstream vendor.
+ClaudeDock 不修改 Codex、Claude Code 或系统级 API 路由。应用权限边界、更新器、发布签名、本地
+凭据处理、渲染器隔离、命令执行和依赖链问题均在安全报告范围内。服务商账号争议和未经修改的
+第三方 CLI 漏洞应报告给对应上游厂商。
 
-Never include real AI tokens, SSH keys, certificate keys or user files in a report. Test only systems
-and accounts you are authorized to use.
+报告中不得包含真实 AI Token、SSH 密钥、证书私钥或用户文件。只测试你有权使用的系统与账号。

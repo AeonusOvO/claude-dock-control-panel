@@ -1,25 +1,21 @@
-# Contributing to ClaudeDock
+# 为 ClaudeDock 贡献代码
 
-Thank you for helping improve ClaudeDock. The project is an Apache-2.0 Windows desktop application
-and accepts focused bug fixes, tests, documentation and features that preserve its product boundary.
+感谢你帮助改进 ClaudeDock。本项目是采用 Apache-2.0 许可证的 Windows 桌面应用，欢迎提交范围
+清晰的缺陷修复、测试、文档和功能改进，但必须保持既定产品边界。
 
-## Before opening a pull request
+## 提交 Pull Request 前
 
-1. Discuss large behavioral or architectural changes in an issue first.
-2. Create a short-lived branch from the current main branch.
-3. Keep one topic per branch and avoid generated output, credentials, local databases and installer
-   files.
-4. Update tests and the relevant root documentation when behavior, design or architecture changes.
-5. Run npm ci, npm run verify and npm run dist on Windows.
-6. Describe the purpose, important changes, verification results, risks and remaining questions in
-   the pull request.
+1. 较大的行为或架构变更请先通过 Issue 讨论。
+2. 从最新 `main` 创建短生命周期分支。
+3. 一个分支只处理一个主题，不要提交生成产物、凭据、本地数据库或安装包。
+4. 行为、设计或架构变化时，同步更新测试及对应的根目录文档。
+5. 在 Windows 上运行 `npm ci`、`npm run verify` 和 `npm run dist`。
+6. 在 Pull Request 中写明目的、主要变更、验证结果、风险和待确认项。
 
-The maintainer assigns the release version. Do not add private keys, tokens, certificate passwords,
-real AI credentials or personal test data. Use example.com hosts and clearly synthetic placeholders
-in tests.
+版本号由维护者确定。不得提交私钥、Token、证书密码、真实 AI 凭据或个人测试数据；测试应使用
+`example.com` 域名和明确的虚构占位值。
 
-All contributions are made under Apache License 2.0. By submitting a contribution, you confirm that
-you have the right to provide it under that license and that third-party material is identified with
-its applicable license.
+所有贡献均按 Apache License 2.0 提供。提交贡献即表示你有权按该许可证提供相关内容，并已为
+第三方材料标注适用许可证。
 
-Security vulnerabilities must follow [SECURITY.md](SECURITY.md), not a public issue.
+安全漏洞必须按 [SECURITY.md](SECURITY.md) 私密报告，不要创建公开 Issue。

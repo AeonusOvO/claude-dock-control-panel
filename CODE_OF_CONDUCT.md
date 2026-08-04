@@ -1,20 +1,15 @@
-# Community code of conduct
+# 社区行为准则
 
-ClaudeDock contributors and maintainers commit to a respectful, harassment-free project community.
-Be constructive, assume good faith, respect privacy and technical boundaries, and focus criticism on
-the work rather than the person.
+ClaudeDock 的贡献者和维护者共同维护一个尊重他人、免受骚扰的项目社区。请保持建设性、善意
+沟通、尊重隐私和技术边界，并把批评集中在工作本身。
 
-Unacceptable behavior includes harassment, threats, discriminatory language, sexualized attention,
-publishing another person's private information, deliberate disruption, or pressuring anyone to
-disclose credentials or identity documents.
+不可接受的行为包括骚扰、威胁、歧视性语言、性化关注、公开他人隐私、蓄意干扰，以及强迫他人
+披露凭据或身份证明。
 
-The maintainer may edit, hide or remove content; close discussions; reject contributions; or
-temporarily or permanently restrict participation when behavior harms the community or project.
-Enforcement decisions should be proportionate, documented privately where possible, and avoid
-unnecessary disclosure of reporters or affected people.
+当行为损害社区或项目时，维护者可以编辑、隐藏或删除内容，关闭讨论，拒绝贡献，或临时、永久
+限制参与。处理措施应与影响相称，尽可能保留私密记录，并避免不必要地披露举报人或受影响人员。
 
-Report conduct concerns privately to AeonusOvO by telephone or SMS at 13585928550. In the first
-message, ask for a private channel and do not include sensitive evidence. Good-faith reporters will
-not face retaliation from the project.
+如需私密报告行为问题，请通过电话或短信联系 AeonusOvO：13585928550。首次联系只请求建立私密
+沟通渠道，不要直接发送敏感证据。善意举报者不会因举报受到报复。
 
-This policy applies in repository spaces and when someone publicly represents the ClaudeDock project.
+本准则适用于仓库空间，以及任何人公开代表 ClaudeDock 项目的场景。

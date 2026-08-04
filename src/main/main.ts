@@ -1468,6 +1468,14 @@ const registerIpc = (): void => {
     validateSender(event);
     return requireDownloadEngine().cancel(validateDownloadTaskId(taskId));
   });
+  ipcMain.handle('download:history-delete', (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().deleteHistory(validateDownloadTaskId(taskId));
+  });
+  ipcMain.handle('download:history-clear', (event) => {
+    validateSender(event);
+    return requireDownloadEngine().clearHistory();
+  });
   ipcMain.handle('application-proxy:get', (event) => {
     validateSender(event);
     return applicationProxyView();
@@ -3110,6 +3118,13 @@ const registerIpc = (): void => {
     async (event): Promise<SoftwareUpdateOperationResult> => {
       validateSender(event);
       const runtime = requireClaudeRuntime();
+      const release = busyRegistry?.acquire({
+        cancellable: false,
+        id: 'software:claude-install-update',
+        kind: 'install',
+        label: '正在安装或更新 Claude Code',
+        severity: 'blocking',
+      });
       try {
         const result = await runtime.installOrUpdateClaudeCode();
         return { message: result.message, ok: true, state: result.state };
@@ -3121,6 +3136,8 @@ const registerIpc = (): void => {
           ok: false,
           state: await runtime.getSoftwareUpdates(true),
         };
+      } finally {
+        release?.();
       }
     },
   );

@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.1.2**，许可证为 **Apache-2.0**。4.1.2 的正式稳定版必须同时通过可信
+当前代码版本为 **4.2.0**，许可证为 **Apache-2.0**。4.2.0 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -32,6 +32,7 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - Codex 官方 CLI/App Server 登录状态与项目启动；ChatGPT 登录凭据仍由 Codex 自身管理。
 - 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
+- 聚合更新窗口、逐项/全部更新、下载与安装状态、可删除的本机下载历史。
 - 应用更新、依赖许可清单、安全报告与可重复 CI 门禁。
 
 设计和交互约束见 [design.md](design.md)，架构、安全与发布实现见
@@ -60,6 +61,11 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
    可能产生少量供应商费用。
 4. Codex 项目使用官方 ChatGPT 浏览器登录或设备码登录；ClaudeDock 不接触登录令牌。
 5. 关闭主窗口默认只隐藏到系统托盘；从托盘菜单可彻底退出。
+
+右上角“检查所有更新”会检查 ClaudeDock、Claude Code、Router 和插件，并始终打开结果窗口。
+发现新版时可逐项更新或“全部更新”；开始操作后，下载中心会区分下载、校验和安装状态。已完成、
+失败或取消的下载最多保留 100 条本机历史，可逐条删除或清空；历史只保存状态与时间等元数据，
+不保存下载地址、最终文件路径或安装凭据。
 
 ## 双通道安全更新
 
@@ -193,6 +199,17 @@ outputs/                 本地安装包和解包产物（忽略）
 [SECURITY.md](SECURITY.md) 私密报告。
 
 维护者：**AeonusOvO**；公开联系电话：**13585928550**。
+
+### 仓库语言与源码下载
+
+项目面向中文用户，README、Issue/PR 模板、贡献指南、安全说明和行为准则以简体中文为主。代码标识、
+第三方协议、许可证以及 SignPath 要求的 `CODE_SIGNING_POLICY.md` 保留英文，以避免破坏工具兼容性或
+外部审核语义。
+
+完整源代码持续提交在默认分支 `main`，可直接浏览或克隆。GitHub 只有在创建 Release 后才会自动为
+该标签附加 `Source code (zip)` 和 `Source code (tar.gz)`；这些源码压缩包不是 Windows 安装器。若
+Releases 页面暂时没有版本，表示可信签名、双渠道一致性或合规门禁尚未全部完成，项目不会把本地
+未签名构建提前冒充正式下载包。
 
 ## 开源许可
 

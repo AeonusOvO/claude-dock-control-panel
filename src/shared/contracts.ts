@@ -32,11 +32,13 @@ export interface DownloadTaskView {
   canResume: boolean;
   elapsedMs: number;
   errorMessage?: string;
+  finishedAt?: number;
   id: string;
   label: string;
   percent: number;
   receivedBytes: number;
   remainingMs: number;
+  startedAt?: number;
   state: DownloadTaskState;
   totalBytes: number;
 }
@@ -1059,6 +1061,8 @@ export interface ControlPanelApi {
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
   setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;
   cancelDownload: (taskId: string) => Promise<DownloadTaskView>;
+  clearDownloadHistory: () => Promise<DownloadTaskView[]>;
+  deleteDownloadHistory: (taskId: string) => Promise<DownloadTaskView[]>;
   listDownloads: () => Promise<DownloadTaskView[]>;
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
   pauseDownload: (taskId: string) => Promise<DownloadTaskView>;

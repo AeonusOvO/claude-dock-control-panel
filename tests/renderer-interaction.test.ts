@@ -326,6 +326,13 @@ describe('renderer interaction lifecycle contract', () => {
       /window\.setTimeout\(\(\) => \{\s+void refreshAvailableUpdates\(false\);/,
     );
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
+    expect(rendererMarkup).toContain('id="update-center-dialog"');
+    expect(rendererMarkup).toContain('id="update-center-list"');
+    expect(rendererMarkup).toContain('id="update-center-all"');
+    expect(rendererSource).toContain(
+      'if (!updateCenterDialog.open) updateCenterDialog.showModal()',
+    );
+    expect(rendererSource).toContain('const runAllUpdates = async');
   });
 
   it('stages non-immediate settings and never persists the fallback theme during first paint', () => {

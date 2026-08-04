@@ -1,30 +1,30 @@
-name: Feature request
-description: Propose a focused improvement within ClaudeDock's product boundary
-title: '[Feature] '
+name: 功能建议
+description: 在 ClaudeDock 产品边界内提出聚焦改进
+title: '[功能] '
 body:
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: Explain the user need without including private data.
+      label: 问题
+      description: 说明用户需求，请勿包含个人数据。
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed behavior
+      label: 建议行为
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives and tradeoffs
+      label: 替代方案与取舍
   - type: checkboxes
     id: boundaries
     attributes:
-      label: Product boundary
+      label: 产品边界
       options:
-        - label: This does not require ClaudeDock to provide proxy nodes, tunnels or network exits.
+        - label: 此建议不要求 ClaudeDock 提供代理节点、隧道或网络出口。
           required: true
-        - label: This does not require modifying Codex, Claude Code or system-level API routing.
+        - label: 此建议不要求修改 Codex、Claude Code 或系统级 API 路由。
           required: true

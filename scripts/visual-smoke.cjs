@@ -793,6 +793,137 @@ app
     document.querySelector('#terminal-empty-state').classList.remove('terminal-empty-state--hidden');
   `);
 
+    await window.webContents.executeJavaScript(`
+    (() => {
+      for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+      const list = document.querySelector('#update-center-list');
+      list.replaceChildren();
+      for (const [titleText, versionText, detailText, actionText] of [
+        ['ClaudeDock', 'v4.1.2 → 4.2.0', '可信来源已确认；下载完成后仍需重启安装。', '下载更新'],
+        ['Claude Code', 'v2.1.220 → 2.1.224', '沿用当前官方安装方式，不创建重复安装。', '更新'],
+        ['Claude Code Router', 'v3.4.1 → 3.5.0', '使用当前项目与已选择的安装来源。', '更新'],
+        ['security-guidance', 'v1.2.0 → 1.3.0', '官方市场 · 安全审查与依赖建议', '更新'],
+      ]) {
+        const row = document.createElement('article');
+        row.className = 'update-center-item';
+        const copy = document.createElement('div');
+        copy.className = 'update-center-item__copy';
+        const title = document.createElement('strong');
+        title.textContent = titleText;
+        const version = document.createElement('span');
+        version.textContent = versionText;
+        const detail = document.createElement('small');
+        detail.textContent = detailText;
+        const action = document.createElement('button');
+        action.className = 'update-center-item__action';
+        action.type = 'button';
+        action.textContent = actionText;
+        copy.append(title, version, detail);
+        row.append(copy, action);
+        list.append(row);
+      }
+      document.querySelector('#update-center-empty').hidden = true;
+      document.querySelector('#update-center-summary').textContent = '共 4 项可更新';
+      document.querySelector('#update-center-all').hidden = false;
+      const dialog = document.querySelector('#update-center-dialog');
+      dialog.style.animation = 'none';
+      dialog.showModal();
+    })();
+  `);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const updateDialogState = await window.webContents.executeJavaScript(
+      `(() => {
+        const dialogs = [...document.querySelectorAll('dialog[open]')];
+        const style = getComputedStyle(document.querySelector('#update-center-dialog'));
+        return { background: style.backgroundColor, ids: dialogs.map((dialog) => dialog.id), opacity: style.opacity };
+      })()`,
+    );
+    if (
+      updateDialogState.ids.length !== 1 ||
+      updateDialogState.ids[0] !== 'update-center-dialog' ||
+      Number(updateDialogState.opacity) < 0.99
+    ) {
+      throw new Error(
+        `Unexpected update-center dialog state: ${JSON.stringify(updateDialogState)}`,
+      );
+    }
+    writeFileSync(
+      path.join(outputDirectory, 'update-center-1180.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+    document.querySelector('#update-center-dialog').close();
+    (() => {
+      const active = document.querySelector('#download-task-list');
+      const operations = document.querySelector('#download-operation-list');
+      const history = document.querySelector('#download-history-list');
+      const makeTask = (titleText, stateText, percentText, historyText) => {
+        const card = document.createElement('article');
+        card.className = 'download-task';
+        card.dataset.state = historyText
+          ? stateText === '下载失败'
+            ? 'failed'
+            : 'completed'
+          : stateText === '安装中'
+            ? 'installing'
+            : 'progressing';
+        const heading = document.createElement('header');
+        const identity = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = titleText;
+        const state = document.createElement('span');
+        state.className = 'download-task__state';
+        state.textContent = stateText;
+        const progress = document
+          .querySelector('#download-progress-template')
+          .content.firstElementChild.cloneNode(true);
+        progress.dataset.indeterminate = String(percentText === '…');
+        progress.style.setProperty('--download-progress', percentText === '…' ? '0%' : percentText);
+        progress.querySelector('.download-progress__value').textContent = percentText;
+        progress.querySelector('.download-progress__linear > span').style.width =
+          percentText === '…' ? '42%' : percentText;
+        identity.append(title, state);
+        heading.append(identity, progress);
+        card.append(heading);
+        if (historyText) {
+          const footer = document.createElement('footer');
+          const time = document.createElement('span');
+          time.className = 'download-task__history-time';
+          time.textContent = historyText;
+          const remove = document.createElement('button');
+          remove.className = 'download-task__delete';
+          remove.type = 'button';
+          remove.textContent = '删除记录';
+          footer.append(time, remove);
+          card.append(footer);
+        }
+        return card;
+      };
+      active.replaceChildren(makeTask('ClaudeDock 4.2.0 应用更新', '下载中', '64%'));
+      operations.replaceChildren(makeTask('正在安装或更新 Claude Code', '安装中', '…'));
+      history.replaceChildren(
+        makeTask('Claude Code Router 安装器', '已完成', '100%', '2026/8/4 10:32:18'),
+        makeTask('Codex 安装器', '下载失败', '18%', '2026/8/3 21:46:02'),
+      );
+      document.querySelector('#download-center-empty').hidden = true;
+      document.querySelector('#download-active-section').hidden = false;
+      document.querySelector('#download-history-section').hidden = false;
+      document.querySelector('#download-active-summary').textContent = '2 项进行中';
+      document.querySelector('#download-history-summary').textContent = '2 条记录';
+      const dialog = document.querySelector('#download-center-dialog');
+      dialog.style.animation = 'none';
+      dialog.showModal();
+    })();
+  `);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    writeFileSync(
+      path.join(outputDirectory, 'download-center-history-1180.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+    document.querySelector('#download-center-dialog').close();
+  `);
+
     window.setSize(1000, 720);
     await window.webContents.executeJavaScript(`
     ${activateRailPage('projects')}

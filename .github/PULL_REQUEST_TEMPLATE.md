@@ -1,22 +1,22 @@
-## Purpose
+## 目的
 
-Describe the problem and intended outcome.
+说明问题和预期结果。
 
-## Changes
+## 主要变更
 
-List the focused changes and any user-visible behavior.
+列出本次聚焦修改及用户可见行为。
 
-## Verification
+## 验证
 
-List the exact commands and smoke tests run, including failures or skipped checks.
+列出实际运行的命令和烟测，包括失败或跳过的检查。
 
-## Risk and rollback
+## 风险与回滚
 
-Describe security, data, compatibility, release and rollback considerations.
+说明安全、数据、兼容性、发布和回滚考虑。
 
-## Documentation
+## 文档
 
-- [ ] README.md checked and updated if needed
-- [ ] design.md checked and updated if needed
-- [ ] technical.md checked and updated if needed
-- [ ] No secrets, credentials, generated installers or unrelated changes included
+- [ ] 已检查 `README.md`，需要时已更新
+- [ ] 已检查 `design.md`，需要时已更新
+- [ ] 已检查 `technical.md`，需要时已更新
+- [ ] 未包含秘密、凭据、生成的安装包或无关改动

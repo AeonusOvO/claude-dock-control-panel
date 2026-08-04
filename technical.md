@@ -1,7 +1,8 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.1.2（2026-08-03）。4.1.2 不改变运行时架构，仅把真实 PowerShell argv 回归测试的
-单例时限提升到 45 秒，以覆盖 GitHub Windows runner 的冷启动抖动。4.1.1 在项目主页补齐 SignPath
+当前架构版本：4.2.0（2026-08-04）。4.2.0 新增可执行的聚合更新窗口、下载/安装统一状态与持久化
+下载历史；4.1.2 只把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows
+runner 的冷启动抖动。4.1.1 在项目主页补齐 SignPath
 Foundation 要求的英文 Code signing policy 入口、归属语和未获批前的状态限定。4.1.0 在 4.0.0 的外部代理边界上加入独立签名发布清单、
 可脱离 GitHub 验证的 HTTPS 公网 IP 兜底镜像、原子双渠道发布和严格的更新防降级/重定向边界。
 
@@ -51,7 +52,8 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ChatService ── Anthropic/OpenAI 多模态 HTTP + typed SSE / usage / 测试 / 取消
         ├── ArtifactService ── 自定义协议 / iframe CSP / 离线库 / webRequest 审计与断网
         ├── BusyRegistry ── 下载/安装/卸载/配置/代理/对话的唯一忙碌租约真值
-        ├── DownloadEngine + DownloadJournal ── 续传 / 进度 / 来源、尺寸与 SHA-256 闸门
+        ├── DownloadEngine + DownloadJournal + DownloadHistoryStore
+        │                                    └─ 续传 / 进度 / 终态历史 / 完整性闸门
         ├── ApplicationProxyStore ── DPAPI / 外部 HTTP-SOCKS5 代理作用域
         ├── McpManager ── 多作用域发现 / CLI 变更 / 健康检查 / 备份回滚
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
@@ -294,6 +296,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
   `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界
   记录丢弃，部分文件从不当作完成产物执行。
+- `DownloadHistoryStore` 把 `completed / failed / cancelled` 终态原子写入
+  `userData/download-history.json`，按完成时间倒序最多保留 100 条。记录只有任务 ID、标签、字节、
+  进度、时间与净化后的错误，不含 URL、最终路径、下载字节或凭据；损坏、未知版本和非终态条目
+  安全忽略。renderer 可逐条删除或清空，下载内核同时清理仍受其管理的 journal/partial，但不会删除
+  已完成的最终产物。
 - 4.0.0 删除 `ProxyStore`、节点/订阅解析器、`XraySidecar`、内核源、泄露体检、代理测速、
   外部 TUN 推断和 `WindowsIpv6Service`，同时删除对应 IPC、preload API、renderer 控件、脚本和
   发行测试。旧版 `userData/proxy` 文件不读取、不启用，也不在升级时擅自删除。
@@ -672,6 +679,10 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   目录/健康刷新；各 Promise 隔离失败，单一来源不可用不抹掉其余结果。软件、插件和 MCP 页同时
   保留独立入口。新增任何 update source 必须同时注册全局聚合与领域入口，
   并在 README/design/technical 中说明“检查”是否会应用更新；两条路径都不会调用模型。
+- 首屏自动检查仍只刷新状态；用户主动点击标题栏入口时，无论结果数量都打开 `update-center-dialog`。
+  renderer 从已验证状态构建 ClaudeDock、Claude Code、Router 与插件行，逐项按钮复用各领域原操作，
+  “全部更新”按应用下载、Claude、Router、插件顺序执行并隔离单项失败。开始操作后打开下载中心；
+  Router 没有当前项目时保留禁用行和解释，不猜测安装作用域。
 - CCR 的识别依据包括 `ccr` 命令、旧版
   `~/.claude-code-router/config.json`、新版 Windows
   `%APPDATA%/claude-code-router/{config.sqlite,gateway.config.json}`，以及默认端口状态。
@@ -817,8 +828,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   `updateAvailable` 控制。
 - 标题栏 `refresh-updates` 是全局主动检查入口，不是唯一入口。首屏自动检查和用户点击会并行
   处理全部已注册来源，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现
-  数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；应用代理测试是独立动作，不属于
-  全局更新聚合，也不会调用模型。
+  数量；主动检查结束后打开更新窗口，由用户逐项或批量确认后才执行。各领域页仍可单独刷新；
+  应用代理测试是独立动作，不属于全局更新聚合，也不会调用模型。
+- 下载中心把 `DownloadEngine` 活跃任务、`ApplicationUpdaterService` 下载进度和 BusyRegistry 的
+  install/uninstall 租约合并为“正在进行”，因此应用更新、Claude Code、Router 与插件都能显示
+  “下载中/校验中/安装中”。下载终态进入独立历史列表，历史删除通过受限 IPC 校验发送方和任务 ID。
 - Claude Code 先按 `Get-Command claude` 的可执行文件判断 `native/npm/unknown`。官方原生路径使用
   固定 `claude update`；未安装时使用固定 winget ID `Anthropic.ClaudeCode`。只有 npm 安装才并发
   请求两条 registry 的结构化元数据，并对同主机 HTTPS tarball 发 `Range: bytes=0-131071` 小样本；
@@ -1399,6 +1413,11 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   每个改动前都校验发送方与任务 ID、CCR 与 Codex 都走共享的校验下载内核，以及下载中心的
   进度呈现：不确定态只属于仍在推进的任务，`cancelled` / `completed` / `failed` 必须立刻停下
   转圈动画——`percent` 在服务端没给长度时一直是 `-1`，只看这个数字会让失败的下载永远转下去。
+- `tests/download-history.test.ts` 覆盖终态历史的持久化、倒序、100 条上限、删除/清空、损坏文件与
+  非终态过滤，并断言落盘数据不包含 URL 或最终可执行路径；renderer 契约测试同时锁定更新窗口、
+  “全部更新”、安装租约以及历史 IPC/删除入口。
+- `npm run test:visual` 的静态 renderer fixture 额外生成更新中心和带安装状态/历史记录的下载中心
+  截图，用于人工检查最小层级、按钮显隐和长列表滚动；它不替代真实网络下载或安装烟测。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
@@ -1480,7 +1499,8 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
 应用、动态生成的卸载器及外层安装器，仍须 SignPath 人工确认，不能以自签名替代。
 
 `npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件通过 `npm audit fix`
-更新了构建期 `brace-expansion` 间接依赖。每次公开发布仍须重新执行完整审计和许可检查。
+更新了间接依赖 `brace-expansion` 与 `fast-uri` 的安全修订。每次公开发布仍须重新执行完整审计和
+许可检查。
 
 ## 关键取舍与限制
 

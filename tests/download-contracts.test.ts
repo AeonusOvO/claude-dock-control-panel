@@ -38,6 +38,10 @@ describe('download IPC surface', () => {
     expect(contractsSource).toContain(
       'onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;',
     );
+    expect(mainSource).toContain("ipcMain.handle('download:history-delete'");
+    expect(mainSource).toContain("ipcMain.handle('download:history-clear'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('download:history-delete'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('download:history-clear'");
   });
 
   it('validates the sender and task id before every download mutation', () => {
@@ -73,6 +77,13 @@ describe('download IPC surface', () => {
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'pause', '暂停')");
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'resume', '继续')");
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'cancel', '取消')");
+    expect(rendererSource).toContain(
+      "state.textContent = lease.kind === 'uninstall' ? '卸载中' : '安装中'",
+    );
+    expect(rendererSource).toContain('window.controlPanel.deleteDownloadHistory(task.id)');
+    expect(rendererSource).toContain('window.controlPanel.clearDownloadHistory()');
+    expect(rendererMarkup).toContain('id="download-history-list"');
+    expect(rendererMarkup).toContain('id="clear-download-history"');
     expect(rendererStyles).toContain(".download-progress[data-indeterminate='true']");
     expect(rendererStyles).toContain('var(--dur-progress)');
   });

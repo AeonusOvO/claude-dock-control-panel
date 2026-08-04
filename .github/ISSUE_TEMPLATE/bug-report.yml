@@ -1,49 +1,49 @@
-name: Bug report
-description: Report a reproducible ClaudeDock defect
-title: '[Bug] '
+name: 缺陷报告
+description: 报告可稳定复现的 ClaudeDock 问题
+title: '[缺陷] '
 body:
   - type: markdown
     attributes:
-      value: Do not report security vulnerabilities here. Use the private process in SECURITY.md.
+      value: 不要在这里报告安全漏洞；请使用 SECURITY.md 中的私密流程。
   - type: input
     id: version
     attributes:
-      label: ClaudeDock version
-      placeholder: 4.1.0
+      label: ClaudeDock 版本
+      placeholder: 4.2.0
     validations:
       required: true
   - type: input
     id: windows
     attributes:
-      label: Windows version
+      label: Windows 版本
       placeholder: Windows 11 24H2 x64
     validations:
       required: true
   - type: textarea
     id: steps
     attributes:
-      label: Reproduction steps
-      description: Use synthetic data and remove credentials and personal information.
+      label: 复现步骤
+      description: 请使用虚构数据，并移除凭据和个人信息。
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: 预期行为
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior and safe logs
+      label: 实际行为与安全日志
     validations:
       required: true
   - type: checkboxes
     id: checks
     attributes:
-      label: Safety checks
+      label: 安全检查
       options:
-        - label: I removed tokens, private keys, full IP addresses and personal files.
+        - label: 我已移除 Token、私钥、完整 IP 地址和个人文件。
           required: true
-        - label: This is not an unpatched security vulnerability.
+        - label: 这不是尚未修复的安全漏洞。
           required: true

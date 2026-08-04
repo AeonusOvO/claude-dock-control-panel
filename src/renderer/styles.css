@@ -7741,7 +7741,8 @@ body.is-resizing * {
   font-size: var(--text-2xs);
 }
 
-.download-center-dialog {
+.download-center-dialog,
+.update-center-dialog {
   background: var(--surface-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-xl);
@@ -7752,7 +7753,8 @@ body.is-resizing * {
   width: min(720px, calc(100vw - var(--s-8)));
 }
 
-.download-center-dialog[open] {
+.download-center-dialog[open],
+.update-center-dialog[open] {
   animation: advancedDialogEnter var(--dur-3) var(--ease-decel);
 }
 
@@ -7762,7 +7764,14 @@ body.is-resizing * {
   max-height: min(720px, calc(100vh - var(--s-8)));
 }
 
-.download-center-dialog header {
+.update-center-dialog__shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(720px, calc(100vh - var(--s-8)));
+}
+
+.download-center-dialog header,
+.update-center-dialog header {
   align-items: start;
   background: var(--surface-3);
   border-bottom: 1px solid var(--line);
@@ -7772,26 +7781,30 @@ body.is-resizing * {
   padding: var(--s-5);
 }
 
-.download-center-dialog header > div {
+.download-center-dialog header > div,
+.update-center-dialog header > div {
   display: grid;
   gap: var(--s-1);
 }
 
-.download-center-dialog header strong {
+.download-center-dialog header strong,
+.update-center-dialog header strong {
   color: var(--text-hi);
   font-family: var(--font-display);
   font-size: var(--text-xl);
   letter-spacing: var(--ls-title);
 }
 
-.download-center-dialog header p {
+.download-center-dialog header p,
+.update-center-dialog header p {
   color: var(--text-dim);
   font-size: var(--text-xs);
   line-height: var(--lh-note);
   margin: 0;
 }
 
-.download-center-dialog__close {
+.download-center-dialog__close,
+.update-center-dialog__close {
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
@@ -7806,13 +7819,15 @@ body.is-resizing * {
   width: 36px;
 }
 
-.download-center-dialog__close:hover {
+.download-center-dialog__close:hover,
+.update-center-dialog__close:hover {
   background: var(--layer-hover);
   border-color: var(--line);
   color: var(--text-hi);
 }
 
-.download-center-dialog__close svg {
+.download-center-dialog__close svg,
+.update-center-dialog__close svg {
   height: 18px;
   width: 18px;
 }
@@ -7821,6 +7836,134 @@ body.is-resizing * {
   min-height: 220px;
   overflow-y: auto;
   padding: var(--s-4);
+}
+
+.update-center-dialog__body {
+  min-height: calc(var(--s-10) * 5.5);
+  overflow-y: auto;
+  padding: var(--s-4);
+}
+
+.update-center-list {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.update-center-item {
+  align-items: center;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: var(--s-4);
+}
+
+.update-center-item__copy {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.update-center-item__copy strong {
+  color: var(--text-hi);
+  font-size: var(--text-base);
+}
+
+.update-center-item__copy span,
+.update-center-item__copy small {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  line-height: var(--lh-note);
+  overflow-wrap: anywhere;
+}
+
+.update-center-item__action,
+.update-center-cancel,
+.update-center-all,
+#clear-download-history,
+.download-task__delete {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  padding: var(--s-2) var(--s-3);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.update-center-item__action,
+.update-center-all {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-fg);
+}
+
+.update-center-item__action:hover:not(:disabled),
+.update-center-all:hover:not(:disabled) {
+  background: var(--accent-solid-hover);
+  border-color: var(--accent-solid-hover);
+}
+
+.update-center-cancel:hover:not(:disabled),
+#clear-download-history:hover:not(:disabled),
+.download-task__delete:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+}
+
+.update-center-item__action:disabled,
+.update-center-cancel:disabled,
+.update-center-all:disabled,
+#clear-download-history:disabled,
+.download-task__delete:disabled {
+  cursor: wait;
+  opacity: var(--opacity-disabled);
+}
+
+.update-center-dialog > .update-center-dialog__shell > footer {
+  align-items: center;
+  background: var(--surface-3);
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+  padding: var(--s-4) var(--s-5);
+}
+
+.update-center-dialog > .update-center-dialog__shell > footer > span {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.update-center-dialog > .update-center-dialog__shell > footer > div {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.update-center-empty {
+  align-content: center;
+  color: var(--text-dim);
+  display: grid;
+  gap: var(--s-2);
+  min-height: calc(var(--s-10) * 4.7);
+  padding: var(--s-6);
+  text-align: center;
+}
+
+.update-center-empty strong {
+  color: var(--text-hi);
+  font-size: var(--text-md);
+}
+
+.update-center-empty span {
+  font-size: var(--text-xs);
 }
 
 .download-center-empty {
@@ -7843,6 +7986,45 @@ body.is-resizing * {
 }
 
 .download-task-list {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.download-center-section {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.download-center-section + .download-center-section {
+  border-top: 1px solid var(--line);
+  margin-top: var(--s-5);
+  padding-top: var(--s-5);
+}
+
+.download-center-section__heading {
+  align-items: center;
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+}
+
+.download-center-section__heading > div,
+.download-center-section__heading:not(:has(> div)) {
+  min-width: 0;
+}
+
+.download-center-section__heading strong {
+  color: var(--text-hi);
+  font-size: var(--text-base);
+}
+
+.download-center-section__heading span {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  margin-left: var(--s-2);
+}
+
+.download-operation-list {
   display: grid;
   gap: var(--s-3);
 }
@@ -7891,8 +8073,18 @@ body.is-resizing * {
 }
 
 .download-task[data-state='paused'] .download-task__state,
-.download-task[data-state='verifying'] .download-task__state {
+.download-task[data-state='verifying'] .download-task__state,
+.download-task[data-state='installing'] .download-task__state {
   color: var(--warn-text);
+}
+
+.download-task__history-time {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.download-task__delete {
+  color: var(--bad-text);
 }
 
 .download-progress {
@@ -8099,6 +8291,7 @@ body.is-resizing * {
 
 .connection-advanced-dialog::backdrop,
 .download-center-dialog::backdrop,
+.update-center-dialog::backdrop,
 .conversation-rename-dialog::backdrop,
 .confirmation-dialog::backdrop {
   background: rgb(0 0 0 / 58%);
