@@ -1770,7 +1770,9 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   preload 的权威 `terminal:size`，不靠固定睡眠。截图后连续执行三轮 restart → stop → start，再让最终
   generation 输出唯一 sentinel 并立即 `exit`，断言 data 先于 `stopped`、停止后没有同 generation
   迟到数据、旧 generation 的 `stopped/error` 不会覆盖最终运行状态。该 Windows 专用烟测已作为
-  production build 后的 `verify` 门禁，结束后删除临时用户目录。
+  production build 后的 `verify` 门禁；首次命令、最终尺寸和 sentinel 输出都使用 30 秒硬上限，
+  以容纳 GitHub Windows Runner 上 Electron/node-pty/PowerShell/Defender 的冷启动，但仍按 50ms
+  探测立即继续而不是固定等待。结束后删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
   `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
   几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 163 个按钮全部命中

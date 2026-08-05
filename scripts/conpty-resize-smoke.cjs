@@ -9,6 +9,10 @@ const outputDirectory = path.join(repositoryRoot, 'dist', 'visual-qa');
 const userDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'claudedock-conpty-'));
 const workspaceDirectory = path.join(userDataDirectory, 'claude');
 const now = Date.now();
+// GitHub-hosted Windows runners can spend more than ten seconds on the first real PowerShell
+// command after Electron, node-pty, and Defender all cold-start. This is an output deadline, not a
+// fixed sleep: healthy runs still continue immediately, while a hung ConPTY remains bounded.
+const terminalOutputTimeoutMilliseconds = 30_000;
 
 app.setPath('userData', userDataDirectory);
 fs.mkdirSync(workspaceDirectory, { recursive: true });
@@ -292,7 +296,11 @@ const run = async () => {
   }
 
   await submitComposerCommand(window, `1..24 | ForEach-Object { 'resize-proof-' + $_ }`);
-  await waitFor(() => terminalOutputContains(window, 'resize-proof-24'), 10_000, '缩放测试输出');
+  await waitFor(
+    () => terminalOutputContains(window, 'resize-proof-24'),
+    terminalOutputTimeoutMilliseconds,
+    '缩放测试输出',
+  );
 
   const resizeSequence = [
     { height: 720, width: 820 },
@@ -315,7 +323,11 @@ const run = async () => {
     window,
     `'RESIZE-COMPLETE ' + $Host.UI.RawUI.WindowSize.Width + 'x' + $Host.UI.RawUI.WindowSize.Height`,
   );
-  await waitFor(() => terminalOutputContains(window, 'RESIZE-COMPLETE'), 10_000, '最终尺寸输出');
+  await waitFor(
+    () => terminalOutputContains(window, 'RESIZE-COMPLETE'),
+    terminalOutputTimeoutMilliseconds,
+    '最终尺寸输出',
+  );
 
   const state = await window.webContents.executeJavaScript(
     `(() => {
@@ -424,7 +436,7 @@ const run = async () => {
     async () =>
       (await terminalOutputContains(window, sentinel, finalStatus.id, finalStatus.ptyGeneration)) &&
       (await lifecycleStateObserved(window, finalStatus.id, finalStatus.ptyGeneration, 'stopped')),
-    10_000,
+    terminalOutputTimeoutMilliseconds,
     'sentinel 输出和最终 stopped 状态',
   );
 
