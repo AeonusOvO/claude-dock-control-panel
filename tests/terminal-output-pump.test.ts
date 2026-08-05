@@ -127,6 +127,35 @@ describe('TerminalOutputPump', () => {
     expect(harness.applied).toEqual([2]);
   });
 
+  it('buffers a cross-revision surrogate when the later revision exceeds the remaining quantum', () => {
+    const harness = createHarness(3);
+    harness.pump.enqueue('ab\ud83d');
+    harness.pump.enqueue('\ude00xxxx');
+
+    harness.runFrame();
+    expect(harness.writes).toEqual(['ab']);
+    harness.completeWrite();
+    expect(harness.applied).toEqual([]);
+
+    harness.runFrame();
+    expect(harness.writes).toEqual(['ab', '😀']);
+    harness.completeWrite();
+    expect(harness.applied).toEqual([1]);
+
+    while (harness.frames.size > 0 || harness.callbacks.length > 0) {
+      if (harness.frames.size > 0) {
+        harness.runFrame();
+      }
+      if (harness.callbacks.length > 0) {
+        harness.completeWrite();
+      }
+    }
+
+    expect(harness.writes).toEqual(['ab', '😀', 'xxx', 'x']);
+    expect(harness.writes.join('')).toBe('ab😀xxxx');
+    expect(harness.applied).toEqual([1, 2]);
+  });
+
   it('advances applied revisions only after their complete data reaches xterm', () => {
     const harness = createHarness(3);
     harness.pump.enqueue('abc');

@@ -870,17 +870,20 @@ export class ClaudeRuntime {
     this.conversationPreferences.remove(conversationId);
   }
 
-  public sessionIdsForConversation(cwd: string, conversationId: string): string[] {
+  public sessionOwnsConversation(sessionId: string, cwd: string, conversationId: string): boolean {
+    const runtime = this.sessions.get(sessionId);
+    if (!runtime?.active || projectKey(runtime.cwd) !== projectKey(cwd)) {
+      return false;
+    }
     const normalizedConversationId = conversationId.toLocaleLowerCase();
-    const cwdKey = projectKey(cwd);
+    return [runtime.conversationId, runtime.metrics?.sessionId].some(
+      (candidate) => candidate?.toLocaleLowerCase() === normalizedConversationId,
+    );
+  }
+
+  public sessionIdsForConversation(cwd: string, conversationId: string): string[] {
     return [...this.sessions.values()]
-      .filter(
-        (runtime) =>
-          projectKey(runtime.cwd) === cwdKey &&
-          [runtime.conversationId, runtime.metrics?.sessionId].some(
-            (candidate) => candidate?.toLocaleLowerCase() === normalizedConversationId,
-          ),
-      )
+      .filter(({ sessionId }) => this.sessionOwnsConversation(sessionId, cwd, conversationId))
       .map(({ sessionId }) => sessionId);
   }
 

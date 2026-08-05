@@ -53,6 +53,21 @@ beforeEach(() => {
 });
 
 describe('TerminalSession PTY generation ownership', () => {
+  it('starts the live ConPTY without loading PowerShell profiles', () => {
+    const session = new TerminalSession('session-profile', 'D:\\Project', '对话', vi.fn(), vi.fn());
+
+    session.start();
+
+    expect(ptyHarness.spawn).toHaveBeenCalledWith(
+      expect.stringMatching(/powershell\.exe$/i),
+      ['-NoLogo', '-NoProfile', '-NoExit', '-Command', expect.any(String)],
+      expect.objectContaining({
+        useConpty: true,
+        useConptyDll: true,
+      }),
+    );
+  });
+
   it('ignores late data and exit callbacks from a replaced node-pty process', () => {
     const data: Array<{ data: string; ptyGeneration: PtyGeneration }> = [];
     const statuses: TerminalStatus[] = [];

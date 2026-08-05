@@ -50,6 +50,62 @@ export class SessionOperationCoordinator {
     if (this.leases.has(sessionId)) {
       throw new Error(this.busyMessage);
     }
+    return this.execute(sessionId, this.reserve(sessionId), operation);
+  }
+
+  /**
+   * Synchronously reserves the replacement intent, aborts the predecessor, and keeps the new lease
+   * exclusive while predecessor cleanup unwinds. This is used by destructive main-owned operations
+   * that must revalidate and close a session without a new launch slipping into the handoff gap.
+   */
+  public runLatest<T>(
+    sessionId: string,
+    operation: (assertCurrent: SessionOperationAssertion, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const predecessor = this.leases.get(sessionId);
+    if (predecessor) {
+      this.cancel(predecessor);
+    }
+    const lease = this.reserve(sessionId);
+    return this.execute(sessionId, lease, async (assertCurrent, signal) => {
+      await predecessor?.completed;
+      assertCurrent();
+      return operation(assertCurrent, signal);
+    });
+  }
+
+  private assertion(sessionId: string, lease: SessionOperationLease): SessionOperationAssertion {
+    return () => {
+      const current = this.leases.get(sessionId);
+      if (
+        lease.cancelled ||
+        current !== lease ||
+        current.generation !== lease.generation ||
+        !this.hasSession(sessionId)
+      ) {
+        const reason = lease.controller.signal.reason;
+        throw reason instanceof Error ? reason : new Error(this.cancelledMessage);
+      }
+    };
+  }
+
+  private async execute<T>(
+    sessionId: string,
+    lease: SessionOperationLease,
+    operation: (assertCurrent: SessionOperationAssertion, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const assertCurrent = this.assertion(sessionId, lease);
+    try {
+      return await operation(assertCurrent, lease.controller.signal);
+    } finally {
+      if (this.leases.get(sessionId) === lease) {
+        this.leases.delete(sessionId);
+      }
+      lease.resolveCompleted();
+    }
+  }
+
+  private reserve(sessionId: string): SessionOperationLease {
     let resolveCompleted!: () => void;
     const completed = new Promise<void>((resolve) => {
       resolveCompleted = resolve;
@@ -62,27 +118,7 @@ export class SessionOperationCoordinator {
       resolveCompleted,
     };
     this.leases.set(sessionId, lease);
-    const assertCurrent = (): void => {
-      const current = this.leases.get(sessionId);
-      if (
-        lease.cancelled ||
-        current !== lease ||
-        current.generation !== lease.generation ||
-        !this.hasSession(sessionId)
-      ) {
-        const reason = lease.controller.signal.reason;
-        throw reason instanceof Error ? reason : new Error(this.cancelledMessage);
-      }
-    };
-
-    try {
-      return await operation(assertCurrent, lease.controller.signal);
-    } finally {
-      if (this.leases.get(sessionId) === lease) {
-        this.leases.delete(sessionId);
-      }
-      lease.resolveCompleted();
-    }
+    return lease;
   }
 
   private cancel(lease: SessionOperationLease): void {

@@ -53,7 +53,9 @@ interface ManagedGatewayInternals {
   probe: (port: number, credential: string) => Promise<boolean>;
   processMatchesState: (state: TestGatewayState, processId: number) => Promise<boolean>;
   start: (state: TestGatewayState) => Promise<void>;
+  stopPersistedProcess: (state: TestGatewayState, processId: number) => Promise<boolean>;
   stopProcessesForState: (state: TestGatewayState, occupiedPortMessage: string) => Promise<void>;
+  waitForPortAvailability: (port: number) => Promise<boolean>;
 }
 
 describe('managed ChatGPT gateway', () => {
@@ -268,6 +270,80 @@ describe('managed ChatGPT gateway', () => {
     vi.spyOn(internals, 'probe').mockResolvedValue(true);
     try {
       await expect(internals.start(state)).rejects.toThrow('进程身份或运行版本无法确认');
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('does not require an unowned remembered port to become available during stop', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-stop-'));
+    const root = path.join(userDataPath, 'managed-gateways', 'cliproxyapi');
+    mkdirSync(root, { recursive: true });
+    const state: TestGatewayState = {
+      encryptedClientKey: '',
+      executableRelativePath: path.join('versions', '7.2.117', 'cli-proxy-api.exe'),
+      executableSha256: 'a'.repeat(64),
+      installedVersion: '7.2.117',
+      port: 8317,
+      releaseDigest: 'b'.repeat(64),
+      version: 1,
+    };
+    writeFileSync(path.join(root, 'state.json'), JSON.stringify(state), 'utf8');
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    const waitForPortAvailability = vi
+      .spyOn(internals, 'waitForPortAvailability')
+      .mockResolvedValue(false);
+    try {
+      await expect(manager.stop()).resolves.toBeUndefined();
+      expect(waitForPortAvailability).not.toHaveBeenCalled();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('still requires port release after stopping a verified managed process', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-owned-stop-'));
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    const state: TestGatewayState = {
+      encryptedClientKey: '',
+      executableRelativePath: path.join('versions', '7.2.117', 'cli-proxy-api.exe'),
+      executableSha256: 'a'.repeat(64),
+      installedVersion: '7.2.117',
+      port: 8317,
+      processId: 42,
+      releaseDigest: 'b'.repeat(64),
+      version: 1,
+    };
+    vi.spyOn(internals, 'stopPersistedProcess').mockResolvedValue(true);
+    vi.spyOn(internals, 'waitForPortAvailability').mockResolvedValue(false);
+    try {
+      await expect(internals.stopProcessesForState(state, 'port still occupied')).rejects.toThrow(
+        'port still occupied',
+      );
     } finally {
       manager.shutdown();
       rmSync(userDataPath, { force: true, recursive: true });

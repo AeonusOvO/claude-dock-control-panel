@@ -956,8 +956,10 @@ export class ManagedChatGptGateway {
     if (state.processId) {
       processIds.add(state.processId);
     }
+    let stoppedOwnedProcess = false;
     for (const processId of processIds) {
-      await this.stopPersistedProcess(state, processId);
+      stoppedOwnedProcess =
+        (await this.stopPersistedProcess(state, processId)) || stoppedOwnedProcess;
     }
     if (this.process?.pid && processIds.has(this.process.pid)) {
       this.process = undefined;
@@ -965,7 +967,9 @@ export class ManagedChatGptGateway {
     for (const processId of processIds) {
       this.clearPersistedProcessId(processId);
     }
-    if (!(await this.waitForPortAvailability(state.port))) {
+    // A remembered port is not proof of ownership. If no verified managed process was alive, another
+    // application may legitimately own that port and must not block switching to a route that does not use it.
+    if (stoppedOwnedProcess && !(await this.waitForPortAvailability(state.port))) {
       throw new Error(occupiedPortMessage);
     }
   }
@@ -984,15 +988,15 @@ export class ManagedChatGptGateway {
   private async stopPersistedProcess(
     state: PersistedGatewayState,
     processId: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.processIsRunning(processId)) {
-      return;
+      return false;
     }
     const expectedExecutable = path.resolve(this.executablePath(state));
     const actualExecutable = await this.processExecutablePath(processId);
     if (!actualExecutable) {
       if (!this.processIsRunning(processId)) {
-        return;
+        return false;
       }
       throw new Error('托管网关进程身份无法安全确认，已拒绝终止该进程。');
     }
@@ -1007,6 +1011,7 @@ export class ManagedChatGptGateway {
     if (this.processIsRunning(processId)) {
       throw new Error('ChatGPT 本地网关没有在 10 秒内停止。');
     }
+    return true;
   }
 
   private stopProcess(): void {

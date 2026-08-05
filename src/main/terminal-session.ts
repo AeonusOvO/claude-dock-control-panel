@@ -188,7 +188,7 @@ export class TerminalSession {
       const startup = buildPowershellStartup(TERMINAL_THEMES[themeId].palette);
       const terminalProcess = pty.spawn(
         resolvePowerShell(),
-        ['-NoLogo', '-NoExit', '-Command', startup],
+        ['-NoLogo', '-NoProfile', '-NoExit', '-Command', startup],
         {
           cols: this.cols,
           cwd,

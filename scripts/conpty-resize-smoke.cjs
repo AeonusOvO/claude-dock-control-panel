@@ -406,12 +406,17 @@ const run = async () => {
     '最终 running 状态',
   );
 
-  const sentinel = `CLAUDEDOCK-CONPTY-SENTINEL-${process.pid}`;
+  const sentinelPrefix = 'CLAUDEDOCK-CONPTY-SENTINEL-';
+  const sentinel = `${sentinelPrefix}${process.pid}`;
+  const sentinelCommand = `Write-Output ('${sentinelPrefix}' + ${process.pid}); exit\r`;
+  if (sentinelCommand.includes(sentinel)) {
+    throw new Error('ConPTY sentinel 命令不得包含最终 sentinel 原文。');
+  }
   await window.webContents.executeJavaScript(
     `window.controlPanel.writeTerminal(
       ${JSON.stringify(finalStatus.id)},
       ${finalStatus.ptyGeneration},
-      ${JSON.stringify(`Write-Output '${sentinel}'; exit\r`)}
+      ${JSON.stringify(sentinelCommand)}
     )`,
     true,
   );

@@ -201,11 +201,21 @@ describe('Claude runtime PTY ownership', () => {
         cwd: 'D:\\Other Project',
         sessionId: 'other-project',
       });
+      internals.sessions.set('inactive-owner', {
+        ...session,
+        active: false,
+        conversationId: CONVERSATION_A,
+        metrics: { capturedAt: 1, sessionId: CONVERSATION_A },
+        sessionId: 'inactive-owner',
+      });
 
       expect(runtime.sessionIdsForConversation('D:\\PROJECT', CONVERSATION_A)).toEqual([
         'session-1',
         'metrics-owner',
       ]);
+      expect(runtime.sessionOwnsConversation('inactive-owner', 'D:\\PROJECT', CONVERSATION_A)).toBe(
+        false,
+      );
     } finally {
       runtime.shutdown();
     }

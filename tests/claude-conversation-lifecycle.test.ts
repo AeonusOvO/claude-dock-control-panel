@@ -113,14 +113,14 @@ describe('ClaudeConversationLifecycleCoordinator', () => {
     await expect(otherResume).resolves.toBe('other');
   });
 
-  it('waits for a cancelled resume to unwind before unlinking its transcript', async () => {
+  it('waits for a cancelled resume but preserves the unrelated conversation still in that session', async () => {
     const coordinator = new ClaudeConversationLifecycleCoordinator();
     const resumeGate = deferred();
     const events: string[] = [];
     const resume = coordinator.runResume(
       'D:\\Project Alpha',
       CONVERSATION_A,
-      'pending-resume',
+      'session-running-b',
       async (ownership) => {
         await resumeGate.promise;
         ownership.assertCurrent();
@@ -139,70 +139,76 @@ describe('ClaudeConversationLifecycleCoordinator', () => {
         events.push('delete-transcript');
         return true;
       },
-      invalidateAndWait: async (sessionId) => {
-        events.push(`invalidate:${sessionId}`);
-        resumeGate.resolve();
-        await resumeSettled;
-        events.push(`unwound:${sessionId}`);
-      },
       isSessionInDirectory: () => true,
       readState: () => 'workspace-state',
       removePreferences: () => events.push('remove-preferences'),
+      runWithSessionOwnership: async (sessionId, operation) => {
+        events.push(`reserve:${sessionId}`);
+        resumeGate.resolve();
+        await resumeSettled;
+        events.push(`unwound:${sessionId}`);
+        operation();
+      },
       sessionIdsForConversation: () => [],
+      sessionOwnsConversation: () => false,
     });
 
     await resumeRejection;
     expect(result).toEqual({ deleted: true, state: 'workspace-state' });
     expect(events).toEqual([
-      'invalidate:pending-resume',
-      'unwound:pending-resume',
-      'close-runtime:pending-resume',
-      'close-workspace:pending-resume',
+      'reserve:session-running-b',
+      'unwound:session-running-b',
       'delete-transcript',
       'remove-preferences',
     ]);
   });
 
-  it('re-snapshots owners that bind while cancellation is unwinding', async () => {
+  it('closes an exact active owner only while its replacement session lease is held', async () => {
     const coordinator = new ClaudeConversationLifecycleCoordinator();
-    let runtimeSessionIds = ['runtime-owner'];
-    const invalidated: string[] = [];
-    const closedRuntime: string[] = [];
-    const closedWorkspace: string[] = [];
+    const events: string[] = [];
+    let leaseHeld = false;
 
     const result = await runOwnedClaudeConversationDeletion({
-      closeRuntimeSession: (sessionId) => closedRuntime.push(sessionId),
-      closeWorkspaceSession: (sessionId) => closedWorkspace.push(sessionId),
+      closeRuntimeSession: (sessionId) => {
+        expect(leaseHeld).toBe(true);
+        events.push(`close-runtime:${sessionId}`);
+      },
+      closeWorkspaceSession: (sessionId) => {
+        expect(leaseHeld).toBe(true);
+        events.push(`close-workspace:${sessionId}`);
+      },
       conversationId: CONVERSATION_A,
       coordinator,
       cwd: 'D:\\Project Alpha',
       deleteTranscript: () => {
-        expect(() =>
-          coordinator.runResume(
-            'D:\\Project Alpha',
-            CONVERSATION_A,
-            'replacement-resume',
-            async () => undefined,
-          ),
-        ).toThrow(/正在永久删除/);
+        events.push('delete-transcript');
         return true;
-      },
-      invalidateAndWait: async (sessionId) => {
-        invalidated.push(sessionId);
-        if (sessionId === 'runtime-owner') {
-          runtimeSessionIds = ['runtime-owner', 'late-bound-owner'];
-        }
       },
       isSessionInDirectory: () => true,
       readState: () => ({ open: false }),
       removePreferences: vi.fn(),
-      sessionIdsForConversation: () => runtimeSessionIds,
+      runWithSessionOwnership: async (sessionId, operation) => {
+        events.push(`reserve:${sessionId}`);
+        leaseHeld = true;
+        try {
+          operation();
+        } finally {
+          leaseHeld = false;
+          events.push(`release:${sessionId}`);
+        }
+      },
+      sessionIdsForConversation: () => ['runtime-owner'],
+      sessionOwnsConversation: (sessionId) => sessionId === 'runtime-owner',
     });
 
     expect(result).toEqual({ deleted: true, state: { open: false } });
-    expect(invalidated).toEqual(['runtime-owner', 'late-bound-owner']);
-    expect(closedRuntime).toEqual(['runtime-owner', 'late-bound-owner']);
-    expect(closedWorkspace).toEqual(['runtime-owner', 'late-bound-owner']);
+    expect(events).toEqual([
+      'reserve:runtime-owner',
+      'close-runtime:runtime-owner',
+      'close-workspace:runtime-owner',
+      'release:runtime-owner',
+      'delete-transcript',
+    ]);
   });
 
   it('preserves conversation preferences when transcript deletion fails', async () => {
@@ -217,11 +223,12 @@ describe('ClaudeConversationLifecycleCoordinator', () => {
         coordinator,
         cwd: 'D:\\Project Alpha',
         deleteTranscript: () => false,
-        invalidateAndWait: async () => undefined,
         isSessionInDirectory: () => false,
         readState: () => 'unchanged',
         removePreferences,
+        runWithSessionOwnership: async (_sessionId, operation) => operation(),
         sessionIdsForConversation: () => [],
+        sessionOwnsConversation: () => false,
       }),
     ).resolves.toEqual({ deleted: false, state: 'unchanged' });
     expect(removePreferences).not.toHaveBeenCalled();

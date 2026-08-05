@@ -53,13 +53,20 @@ export const createTerminalWritePlan = (
       continue;
     }
     const remaining = maximumUnits - units;
-    if (index > 0 && output.data.length > remaining) {
+    const completesCrossRevisionSurrogate =
+      index > 0 &&
+      output.data.length > remaining &&
+      isHighSurrogate(parts[parts.length - 1]?.slice(-1)) &&
+      isLowSurrogate(output.data[0]);
+    if (index > 0 && output.data.length > remaining && !completesCrossRevisionSurrogate) {
       // Do not start a later revision unless this plan can finish it. A probe waiting for an earlier
       // revision must never inspect a screen containing only the first half of a later IPC batch.
       break;
     }
 
-    let take = Math.min(output.data.length, remaining);
+    // A low surrogate belongs to the preceding revision's trailing high surrogate. Consume only that
+    // continuation here so the pair stays intact without exposing any other partial later-revision data.
+    let take = completesCrossRevisionSurrogate ? 1 : Math.min(output.data.length, remaining);
     if (
       take < output.data.length &&
       isHighSurrogate(output.data[take - 1]) &&

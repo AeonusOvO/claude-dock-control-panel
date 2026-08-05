@@ -105,8 +105,13 @@ describe('main-process session operation ownership', () => {
     expect(mainSource).toContain(
       'sessionIdsForConversation: () => runtime.sessionIdsForConversation(cwd, conversationId),',
     );
+    expect(mainSource).toContain('runWithSessionOwnership: async (sessionId, operation) => {');
     expect(mainSource).toContain(
-      'invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,',
+      'await developmentSessionOperations.runLatest(sessionId, async (assertCurrent) => {',
+    );
+    expect(mainSource).toContain('sessionOwnsConversation: (sessionId) =>');
+    expect(mainSource).toContain(
+      'runtime.sessionOwnsConversation(sessionId, cwd, conversationId),',
     );
     expect(mainSource).toContain(
       'removePreferences: () => runtime.removeConversationPreferences(conversationId),',

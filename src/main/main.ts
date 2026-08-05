@@ -705,13 +705,30 @@ const deleteClaudeConversation = async (
     coordinator: claudeConversationLifecycle,
     cwd,
     deleteTranscript: () => sessionManager.deleteSession(cwd, conversationId),
-    invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,
     isSessionInDirectory: (sessionId, targetCwd) =>
       workspace.hasSession(sessionId) &&
       sameDirectory(workspace.getStatus(sessionId).cwd, targetCwd),
     readState: describeWorkspace,
     removePreferences: () => runtime.removeConversationPreferences(conversationId),
+    runWithSessionOwnership: async (sessionId, operation) => {
+      if (!workspace.hasSession(sessionId)) {
+        return;
+      }
+      try {
+        await developmentSessionOperations.runLatest(sessionId, async (assertCurrent) => {
+          assertCurrent();
+          operation();
+        });
+      } catch (error) {
+        if (!workspace.hasSession(sessionId)) {
+          return;
+        }
+        throw error;
+      }
+    },
     sessionIdsForConversation: () => runtime.sessionIdsForConversation(cwd, conversationId),
+    sessionOwnsConversation: (sessionId) =>
+      runtime.sessionOwnsConversation(sessionId, cwd, conversationId),
   });
   return result.deleted
     ? { deleted: true, ok: true, state: result.state }

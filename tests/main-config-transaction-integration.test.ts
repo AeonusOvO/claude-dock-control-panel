@@ -126,9 +126,11 @@ describe('main project-config transaction integration', () => {
     expect(preparedCommit).not.toContain('await ');
     expect(bypassCommit).toContain('this.configStore.setAllowBypassPermissions(');
     expect(bypassCommit).not.toContain('await ');
-    expect(routerRepair.indexOf('this.configStore.createLaunchSnapshot(cwd)')).toBeLessThan(
-      routerRepair.indexOf('await this.getRouterHealthState(true)'),
-    );
+    const snapshotIndex = routerRepair.indexOf('this.configStore.createLaunchSnapshot(cwd)');
+    const healthIndex = routerRepair.indexOf('await this.getRouterHealthState(true)');
+    expect(snapshotIndex).toBeGreaterThanOrEqual(0);
+    expect(healthIndex).toBeGreaterThanOrEqual(0);
+    expect(snapshotIndex).toBeLessThan(healthIndex);
 
     expect(runtimeSource.match(/this\.configStore\.save\(/g)).toHaveLength(1);
     expect(runtimeSource.match(/this\.configStore\.setAllowBypassPermissions\(/g)).toHaveLength(1);

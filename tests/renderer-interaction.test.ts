@@ -444,6 +444,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('window.controlPanel.deleteClaudeSession(');
     expect(rendererSource).toContain('renderWorkspace(result.state);');
     expect(rendererSource).toContain('if (!result.ok || !result.deleted) {');
+    expect(rendererSource).toMatch(
+      /const deleteStoredConversation = async[\s\S]*?const result = await window\.controlPanel\.deleteClaudeSession\(projectPath, session\.sessionId\);[\s\S]*?if \(!result\.ok \|\| !result\.deleted\) \{[\s\S]*?\}\s+await loadFolderHistory\(projectPath, true\);\s+showToast\(`已删除历史对话/,
+    );
     expect(rendererSource).not.toContain('const runningMatches = workspaceState.sessions.filter');
     expect(rendererSource).toContain("deleteButton.className = 'history-item__delete';");
     expect(rendererSource).toContain("confirmLabel: '永久删除'");
@@ -488,7 +491,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('folderHistoryLoads.invalidate(key);');
     expect(rendererSource).toContain('storedConversations.delete(key);');
     expect(rendererSource).toContain('const token = folderHistoryLoads.request(key, force);');
-    expect(rendererSource).toContain('folderHistoryLoads.isCurrent(token)');
+    expect(rendererSource).toMatch(
+      /const conversations = await window\.controlPanel\.getClaudeSessionsForPath\(projectPath\);\s+if \(!folderHistoryLoads\.isCurrent\(token\) \|\| !workspaceContainsProject\(key\)\) \{\s+return;\s+\}\s+storedConversations\.set\(key, conversations\);/,
+    );
     expect(rendererSource).toContain('completion.current && completion.reloadRequested');
   });
 
@@ -901,6 +906,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(terminalOutputPumpSource).toContain('private inFlight = false;');
     expect(terminalOutputPumpSource).toContain('this.consume(plan);');
     expect(terminalOutputPumpSource).toContain('this.options.onAppliedRevision(');
+    expect(rendererSource).toMatch(
+      /onAppliedRevision: \(\) => \{\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);\s+\},\s+scheduleFrame:/,
+    );
     expect(rendererSource).toContain('probe.requiredRevision <= view.outputPump.appliedRevision');
     expect(rendererSource).toContain(
       'window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {',

@@ -26,6 +26,9 @@ describe('managed ChatGPT route cutover', () => {
     expect(mainSource).toMatch(
       /runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>\(\{[\s\S]*?commit: \(prepared\) => runtime\.commitPreparedConfig\(cwd, prepared\)[\s\S]*?complete: async \(prepared\)[\s\S]*?runtime\.completePreparedConfigSave\(sessionId, cwd, prepared\)[\s\S]*?prepare: \(\) => runtime\.prepareConnectionConfig\(input, undefined, assertCurrent\)/,
     );
+    expect(mainSource).toMatch(
+      /const verifyAndSaveManagedChatGptProject[\s\S]*?complete: async \(prepared\) => \{[\s\S]*?const savedState = await runtime\.completePreparedConfigSave\(sessionId, cwd, prepared\);[\s\S]*?assertCurrent\(\);[\s\S]*?return resumeAfterSave\s*\?\s*resumeClaudeAfterManagedCutover\(runtime, sessionId, cwd, assertCurrent\)\s*:\s*savedState;/,
+    );
     expect(mainSource).toContain('publishRestoredState: publishRestoredClaudeProjectState');
     expect(mainSource).toContain('const projectState = configTransactionState(error);');
     expect(coordinatorSource).toMatch(

@@ -222,11 +222,12 @@ export interface OwnedClaudeConversationDeletionOptions<TState> {
   coordinator: ClaudeConversationLifecycleCoordinator;
   cwd: string;
   deleteTranscript: () => boolean;
-  invalidateAndWait: (sessionId: string) => Promise<void>;
   isSessionInDirectory: (sessionId: string, cwd: string) => boolean;
   readState: () => TState;
   removePreferences: () => void;
+  runWithSessionOwnership: (sessionId: string, operation: () => void) => Promise<void>;
   sessionIdsForConversation: () => readonly string[];
+  sessionOwnsConversation: (sessionId: string) => boolean;
 }
 
 export interface OwnedClaudeConversationDeletionResult<TState> {
@@ -234,39 +235,32 @@ export interface OwnedClaudeConversationDeletionResult<TState> {
   state: TState;
 }
 
-/** Stops every authoritative or pending owner before unlinking the transcript and its preferences. */
+/** Stops only exact active owners before unlinking the transcript and its preferences. */
 export const runOwnedClaudeConversationDeletion = <TState>(
   options: OwnedClaudeConversationDeletionOptions<TState>,
 ): Promise<OwnedClaudeConversationDeletionResult<TState>> =>
   options.coordinator.runDeletion(options.cwd, options.conversationId, async (ownership) => {
-    const sessionIds = new Set([
+    const candidateSessionIds = new Set([
       ...ownership.pendingResumeSessionIds(),
       ...options.sessionIdsForConversation(),
     ]);
-    await Promise.all([...sessionIds].map(options.invalidateAndWait));
-    ownership.assertCurrent();
-
-    // A cancelled resume can bind its runtime immediately before observing cancellation. Re-snapshot
-    // after unwind; the deletion reservation blocks every new matching resume until commit finishes.
-    const newlyBoundSessionIds = options
-      .sessionIdsForConversation()
-      .filter((sessionId) => !sessionIds.has(sessionId));
-    if (newlyBoundSessionIds.length > 0) {
-      newlyBoundSessionIds.forEach((sessionId) => sessionIds.add(sessionId));
-      await Promise.all(newlyBoundSessionIds.map(options.invalidateAndWait));
-      ownership.assertCurrent();
-    }
-
-    for (const sessionId of sessionIds) {
-      ownership.assertCurrent();
-      options.closeRuntimeSession(sessionId);
-    }
-    for (const sessionId of sessionIds) {
-      ownership.assertCurrent();
-      if (options.isSessionInDirectory(sessionId, options.cwd)) {
-        options.closeWorkspaceSession(sessionId);
-      }
-    }
+    await Promise.all(
+      [...candidateSessionIds].map((sessionId) =>
+        options.runWithSessionOwnership(sessionId, () => {
+          ownership.assertCurrent();
+          // A cancelled resume may leave another conversation running in the same workspace session.
+          // Revalidate exact active ownership while the replacement lease prevents a new launch from
+          // entering between this check and the synchronous close.
+          if (!options.sessionOwnsConversation(sessionId)) {
+            return;
+          }
+          options.closeRuntimeSession(sessionId);
+          if (options.isSessionInDirectory(sessionId, options.cwd)) {
+            options.closeWorkspaceSession(sessionId);
+          }
+        }),
+      ),
+    );
 
     ownership.assertCurrent();
     const deleted = options.deleteTranscript();

@@ -42,6 +42,54 @@ describe('SessionOperationCoordinator', () => {
     );
   });
 
+  it('reserves a latest-intent replacement before cancelled cleanup unwinds', async () => {
+    const coordinator = new SessionOperationCoordinator(() => true);
+    const firstEntered = deferred();
+    const cleanupEntered = deferred();
+    const releaseCleanup = deferred();
+    const replacementEntered = deferred();
+    const releaseReplacement = deferred();
+
+    const first = coordinator.run('session-a', async (assertCurrent, signal) => {
+      firstEntered.resolve();
+      await new Promise<void>((resolve) => {
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      try {
+        assertCurrent();
+      } finally {
+        cleanupEntered.resolve();
+        await releaseCleanup.promise;
+      }
+    });
+    await firstEntered.promise;
+
+    const replacement = coordinator.runLatest('session-a', async (assertCurrent) => {
+      assertCurrent();
+      replacementEntered.resolve();
+      await releaseReplacement.promise;
+      assertCurrent();
+      return 'replacement';
+    });
+    await cleanupEntered.promise;
+    let replacementStarted = false;
+    void replacementEntered.promise.then(() => {
+      replacementStarted = true;
+    });
+    await Promise.resolve();
+    expect(replacementStarted).toBe(false);
+    expect(coordinator.isBusy('session-a')).toBe(true);
+    await expect(coordinator.run('session-a', async () => undefined)).rejects.toThrow('尚未完成');
+
+    releaseCleanup.resolve();
+    await expect(first).rejects.toThrow('已被新的终端或会话操作取消');
+    await replacementEntered.promise;
+    expect(coordinator.isBusy('session-a')).toBe(true);
+    releaseReplacement.resolve();
+    await expect(replacement).resolves.toBe('replacement');
+    expect(coordinator.isBusy('session-a')).toBe(false);
+  });
+
   it('aborts a lease synchronously but waits for cancelled cleanup to unwind', async () => {
     const coordinator = new SessionOperationCoordinator(() => true);
     const entered = deferred();
