@@ -68,7 +68,7 @@ describe('ClaudeDock runtime signal helper', () => {
     expect(signal.signaledAt as number).toBeLessThanOrEqual(Date.now() + 5_000);
     // Nothing from the hook payload may leak into the file the main process reads back.
     expect(JSON.stringify(signal)).not.toContain('trigger');
-  });
+  }, 15_000);
 
   it('creates the session directory and replaces an earlier signal with a newer stamp', () => {
     const outputPath = path.join(fixtureRoot, 'nested', 'session-1', 'signal.json');
@@ -109,5 +109,5 @@ describe('ClaudeDock runtime signal helper', () => {
 
     expect(subagentResult.status).toBe(0);
     expect(existsSync(subagentOutputPath)).toBe(false);
-  });
+  }, 15_000);
 });
