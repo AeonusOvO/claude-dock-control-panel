@@ -863,12 +863,16 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).not.toContain("event.code === 'Tab'");
   });
 
-  it('confirms high-risk composer permission modes through the shared switch path', () => {
+  it('keeps model, permission, and effort controls in the footer instead of above the composer', () => {
     expect(rendererSource).toMatch(
       /const switchPermissionMode[\s\S]*?mode === 'dontAsk' \|\| mode === 'bypassPermissions'[\s\S]*?await requestConfirmation/,
     );
-    expect(rendererSource).toContain("? '/plan ' : '/permissions '");
-    expect(rendererSource).toContain("composeNativeCommand('/model ')");
+    expect(rendererMarkup).toContain('id="footer-model"');
+    expect(rendererMarkup).toContain('id="footer-mode"');
+    expect(rendererMarkup).toContain('id="footer-effort"');
+    expect(rendererMarkup).not.toContain('id="composer-control-strip"');
+    expect(rendererMarkup).not.toContain('id="composer-model-control"');
+    expect(rendererStyles).not.toContain('.composer-control-strip');
   });
 
   it('scrolls a folder’s full conversation history without moving the running rows', () => {

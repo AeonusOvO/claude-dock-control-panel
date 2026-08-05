@@ -522,10 +522,6 @@ const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const composerForm = requiredElement<HTMLFormElement>('#terminal-composer');
 const composerInput = requiredElement<HTMLTextAreaElement>('#composer-input');
 const composerSendButton = requiredElement<HTMLButtonElement>('#composer-send');
-const composerPermissionMode = requiredElement<HTMLSelectElement>('#composer-permission-mode');
-const composerEffortLevel = requiredElement<HTMLSelectElement>('#composer-effort-level');
-const composerModelControl = requiredElement<HTMLButtonElement>('#composer-model-control');
-const composerControlStatus = requiredElement<HTMLElement>('#composer-control-status');
 const runtimeActivityTrigger = requiredElement<HTMLButtonElement>('#runtime-activity-trigger');
 const runtimeActivityLabel = requiredElement<HTMLElement>('#runtime-activity-label');
 const runtimeActivityPanel = requiredElement<HTMLElement>('#runtime-activity-panel');
@@ -1919,44 +1915,6 @@ const loadActiveRuntimeActivity = async (): Promise<void> => {
   } catch {
     runtimeActivityTrigger.hidden = true;
   }
-};
-
-const composeNativeCommand = (command: string): void => {
-  composerInput.value = command;
-  resizeComposer();
-  focusComposer();
-  composerInput.setSelectionRange(command.length, command.length);
-  showToast(`已填入 ${command.trim()}，确认后按 Enter 发送`);
-};
-
-const renderComposerControls = (claudeState?: ClaudeProjectState): void => {
-  const status = activeStatus();
-  const isCodex = activeDevelopmentRuntime() === 'codex';
-  const running = status?.phase === 'running';
-  composerPermissionMode.disabled = !running;
-  composerEffortLevel.disabled = !running;
-  composerModelControl.disabled = !running;
-  if (isCodex) {
-    setEnhancedSelectValue(composerPermissionMode, 'default');
-    setEnhancedSelectValue(composerEffortLevel, 'auto');
-    composerModelControl.textContent = '模型 /model';
-    composerControlStatus.textContent = 'Codex 保留原生 TUI 权限确认；控件仅填入命令';
-    return;
-  }
-  const state = claudeState ?? (status ? claudeStates.get(status.id) : undefined);
-  if (state?.permissionModeRequest ?? state?.permissionMode) {
-    setEnhancedSelectValue(
-      composerPermissionMode,
-      state.permissionModeRequest ?? state.permissionMode ?? 'default',
-    );
-  }
-  const appliedEffort = state?.metrics?.effortLevel;
-  const requestedEffort = state?.effortRequest;
-  setEnhancedSelectValue(composerEffortLevel, requestedEffort ?? appliedEffort ?? 'auto');
-  composerModelControl.textContent = `模型 ${state?.metrics?.modelDisplayName ?? state?.metrics?.modelId ?? '—'}`;
-  composerControlStatus.textContent = state
-    ? `请求：${permissionModeLabel(state.permissionModeRequest)} / ${claudeEffortLabel(requestedEffort)} · 实际：${permissionModeLabel(state.permissionMode)} / ${claudeEffortLabel(appliedEffort)}`
-    : '等待 Claude 运行时状态';
 };
 
 const renderClaudePermissionRequest = (): void => {
@@ -4779,7 +4737,6 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
   footerMode.disabled = true;
   footerEffort.textContent = '思考 Codex 自动';
   footerEffort.disabled = true;
-  renderComposerControls();
   codexBoundaryNote.textContent = state.warning
     ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
     : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
@@ -5055,11 +5012,15 @@ const renderClaudeState = (
     speedOperationActive || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
   footerSpeed.setAttribute('aria-busy', String(speedOperationActive));
   footerSpeed.title = state.speed.detail;
+  const requestedPermissionMode = state.permissionModeRequest ?? state.permissionMode;
   footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
   footerMode.dataset.mode = state.permissionMode ?? 'unknown';
+  footerMode.dataset.requestedMode = requestedPermissionMode ?? 'unknown';
   footerMode.disabled = modeSwitchInProgress;
   footerMode.title = state.active
-    ? '点击切换权限模式，或在终端按 Shift+Tab'
+    ? requestedPermissionMode !== state.permissionMode
+      ? `请求：${permissionModeLabel(requestedPermissionMode)} · 实际：${permissionModeLabel(state.permissionMode)}；点击切换权限模式`
+      : '点击切换权限模式，或在终端按 Shift+Tab'
     : '启动 Claude Code 后可切换权限模式';
   // The status line reports what Claude Code applied, which can sit below a request the model caps.
   const effortApplied = state.metrics?.effortLevel;
@@ -5069,6 +5030,8 @@ const renderClaudeState = (
       : (effortApplied ?? state.effortRequest);
   footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
   footerEffort.dataset.effort = effortShown ?? 'unknown';
+  footerEffort.dataset.requestedEffort = state.effortRequest ?? 'unknown';
+  footerEffort.dataset.appliedEffort = effortApplied ?? 'unknown';
   footerEffort.disabled =
     effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending';
   footerEffort.setAttribute(
@@ -5092,8 +5055,6 @@ const renderClaudeState = (
     showToast('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
   }
   allowBypassPermissions.checked = state.allowBypassPermissions;
-  renderComposerControls(state);
-
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
   metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
   metricCost.textContent =
@@ -7180,7 +7141,6 @@ const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> =
       tone: 'danger',
     });
     if (!confirmed) {
-      renderComposerControls(claudeStates.get(status.id));
       return;
     }
   }
@@ -9882,7 +9842,6 @@ const renderNoActiveSession = (): void => {
   runtimeCodex.checked = false;
   document.body.dataset.agentRuntime = 'claude';
   setComposerEnabled(false);
-  renderComposerControls();
   runtimeActivityTrigger.hidden = true;
   runtimeActivityPanel.hidden = true;
 };
@@ -10502,7 +10461,6 @@ function renderWorkspace(state: WorkspaceState): void {
   ) {
     retryTerminalFitUntilMeasured();
   }
-  renderComposerControls();
   renderRuntimeActivity(runtimeActivityStates.get(state.activeSessionId));
 }
 
@@ -11988,27 +11946,6 @@ runtimeActivityClose.addEventListener('click', () => {
   runtimeActivityPanel.hidden = true;
   runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
   runtimeActivityTrigger.focus({ preventScroll: true });
-});
-composerPermissionMode.addEventListener('change', () => {
-  if (activeDevelopmentRuntime() === 'codex') {
-    composeNativeCommand(composerPermissionMode.value === 'plan' ? '/plan ' : '/permissions ');
-    return;
-  }
-  void switchPermissionMode(composerPermissionMode.value as ClaudePermissionMode);
-});
-composerEffortLevel.addEventListener('change', () => {
-  if (activeDevelopmentRuntime() === 'codex') {
-    composeNativeCommand('/model ');
-    return;
-  }
-  void switchEffortLevel(composerEffortLevel.value as ClaudeEffortRequest);
-});
-composerModelControl.addEventListener('click', () => {
-  if (activeDevelopmentRuntime() === 'codex') {
-    composeNativeCommand('/model ');
-  } else {
-    void openModelMenu(composerModelControl);
-  }
 });
 claudePermissionFallback.addEventListener('click', () => {
   void respondToClaudePermission({ behavior: 'fallback' });

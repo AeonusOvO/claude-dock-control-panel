@@ -32,7 +32,7 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - 多项目终端、托盘后台运行、项目/对话历史与终端主题。
 - 顶栏按会话显示后台任务、子代理、恢复阶段和当前 PTY 派生的 Web 监听进程；受控进程只能通过
   主进程签发的不透明键结束，正常退出会先清理并复查这些进程。
-- Claude 提示词区可直接切换模式、思考程度与模型，并通过会话级 `PermissionRequest` Hook 显示
+- Claude 终端底部状态栏可直接切换模式、思考程度与模型，并通过会话级 `PermissionRequest` Hook 显示
   权限确认；任何 Hook/界面/代次异常都回退 Claude 原生确认而不是自动放行。Codex 保留原生 TUI
   审批，界面控件只生成 `/plan`、`/permissions`、`/model` 命令骨架。
 - Claude/Codex 工作台共用静态指令注册表；完整调用名及版本边界见

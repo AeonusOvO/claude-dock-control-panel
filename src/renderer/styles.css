@@ -2451,50 +2451,6 @@ body[data-phase='error'] .status-pill {
   padding: 10px 13px;
 }
 
-.composer-control-strip {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-  grid-column: 1 / -1;
-}
-
-.composer-control-strip > label {
-  align-items: center;
-  display: inline-flex;
-  gap: var(--s-1);
-}
-
-.composer-control-strip > label > span,
-#composer-control-status {
-  color: var(--text-dim);
-  font-size: var(--text-2xs);
-}
-
-.composer-control-strip .select {
-  min-width: 118px;
-  width: auto;
-}
-
-.composer-control-strip .select__trigger,
-#composer-model-control {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  color: var(--text-lo);
-  font: inherit;
-  min-height: 28px;
-  padding-inline: var(--s-3);
-}
-
-#composer-model-control {
-  cursor: pointer;
-}
-
-#composer-control-status {
-  margin-left: auto;
-}
-
 .chat-composer {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   padding: var(--s-3) max(var(--s-4), calc((100% - 860px) / 2));
