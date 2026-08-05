@@ -30,7 +30,7 @@ describe('quit confirmation handshake', () => {
     );
   });
 
-  it('quits without asking when nobody can answer', () => {
+  it('always asks when the renderer can answer and only bypasses a missing renderer', () => {
     // No window, still loading, or a crashed renderer: asking would hang the quit forever.
     expect(mainSource).toMatch(
       /const canAsk =\s+window !== null &&\s+!window\.isDestroyed\(\) &&\s+!window\.webContents\.isLoading\(\) &&\s+!window\.webContents\.isCrashed\(\);/,
@@ -39,9 +39,9 @@ describe('quit confirmation handshake', () => {
     expect(mainSource).toMatch(
       /if \(!canAsk \|\| quitConfirmationPending\) \{[\s\S]*?quitConfirmationPending = false;\s+void beginControlledQuit\(true\);/,
     );
-    expect(mainSource).toMatch(
-      /if \(leases\.length === 0\) \{\s+void beginControlledQuit\(false\);/,
-    );
+    expect(mainSource).not.toMatch(/if \(leases\.length === 0\)/);
+    expect(mainSource).toContain('id: `terminal:${id}`');
+    expect(mainSource).toContain("phase === 'running' || phase === 'starting'");
     // A duplicate launch has no window and nothing to protect.
     expect(mainSource).toMatch(
       /if \(!hasSingleInstanceLock\) \{[\s\S]*?isQuitting = true;\s+app\.quit\(\);/,
@@ -115,7 +115,8 @@ describe('quit confirmation handshake', () => {
     expect(cancelIndex).toBeGreaterThan(forceIndex);
     expect(rendererMarkup).toMatch(/id="quit-minimize"[^>]*autofocus/);
     expect(rendererSource).toContain("? '有操作正在进行，不建议退出'");
-    expect(rendererSource).toContain(": '还有下载未完成';");
+    expect(rendererSource).toContain(": '确认退出 ClaudeDock？';");
+    expect(rendererSource).toContain('quitConfirmationList.hidden = request.leases.length === 0;');
     expect(rendererSource).toContain("? '中断会留下不完整状态' : '可稍后继续'");
     expect(rendererSource).toContain("confirmLabel: '仍要退出'");
     expect(rendererSource).toContain("? '重试安全清理'");

@@ -557,19 +557,25 @@ const hideMainWindowToTray = (): void => {
 };
 
 /**
- * Starts a quit. The main-process busy registry is authoritative; when it is non-empty, the renderer
- * presents the themed decision and answers through `app:confirm-quit`.
+ * Starts a quit. An explicit quit is always confirmed when the renderer can answer. Busy operations
+ * and live terminals are included so the decision explains exactly what will be interrupted.
  */
 const requestQuit = (): void => {
   if (isQuitting) {
     return;
   }
   const window = mainWindow;
-  const leases = busyRegistry?.list() ?? [];
-  if (leases.length === 0) {
-    void beginControlledQuit(false);
-    return;
-  }
+  const terminalLeases = workspace
+    .getState()
+    .sessions.filter(({ phase }) => phase === 'running' || phase === 'starting')
+    .map(({ id, phase, title }) => ({
+      cancellable: false,
+      id: `terminal:${id}`,
+      kind: 'conversation' as const,
+      label: `终端“${title}”仍在${phase === 'starting' ? '启动' : '运行'}`,
+      severity: 'blocking' as const,
+    }));
+  const leases = [...(busyRegistry?.list() ?? []), ...terminalLeases];
   const canAsk =
     window !== null &&
     !window.isDestroyed() &&
@@ -2076,6 +2082,14 @@ const registerIpc = (): void => {
   ipcMain.handle('download:cancel', (event, taskId: unknown) => {
     validateSender(event);
     return requireDownloadEngine().cancel(validateDownloadTaskId(taskId));
+  });
+  ipcMain.handle('download:history-delete', (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().deleteHistory(validateDownloadTaskId(taskId));
+  });
+  ipcMain.handle('download:history-clear', (event) => {
+    validateSender(event);
+    return requireDownloadEngine().clearHistory();
   });
   ipcMain.handle('application-proxy:get', (event) => {
     validateSender(event);
@@ -4525,6 +4539,13 @@ const registerIpc = (): void => {
     async (event): Promise<SoftwareUpdateOperationResult> => {
       validateSender(event);
       const runtime = requireClaudeRuntime();
+      const release = busyRegistry?.acquire({
+        cancellable: false,
+        id: 'software:claude-install-update',
+        kind: 'install',
+        label: '正在安装或更新 Claude Code',
+        severity: 'blocking',
+      });
       try {
         const result = await runtime.installOrUpdateClaudeCode();
         return { message: result.message, ok: true, state: result.state };
@@ -4536,6 +4557,8 @@ const registerIpc = (): void => {
           ok: false,
           state: await runtime.getSoftwareUpdates(true),
         };
+      } finally {
+        release?.();
       }
     },
   );

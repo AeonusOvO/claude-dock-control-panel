@@ -21,6 +21,7 @@ import type {
   ApplicationUpdaterState,
   AppQuitRequest,
   AppSettingsView,
+  BusyLease,
   ArtifactNetworkLogEntry,
   ArtifactNetworkState,
   ClaudeConnectionAdvice,
@@ -619,6 +620,7 @@ const confirmationDialogConfirm = requiredElement<HTMLButtonElement>(
 );
 const quitConfirmationDialog = requiredElement<HTMLDialogElement>('#quit-confirmation-dialog');
 const quitConfirmationTitle = requiredElement<HTMLElement>('#quit-confirmation-title');
+const quitConfirmationMessage = requiredElement<HTMLElement>('#quit-confirmation-message');
 const quitConfirmationList = requiredElement<HTMLUListElement>('#quit-confirmation-list');
 const quitMinimizeButton = requiredElement<HTMLButtonElement>('#quit-minimize');
 const quitForceButton = requiredElement<HTMLButtonElement>('#quit-force');
@@ -673,12 +675,26 @@ const chatAttachButton = requiredElement<HTMLButtonElement>('#chat-attach');
 const sendChatButton = requiredElement<HTMLButtonElement>('#send-chat');
 const stopChatButton = requiredElement<HTMLButtonElement>('#stop-chat');
 const newChatButton = requiredElement<HTMLButtonElement>('#new-chat');
+const updateCenterDialog = requiredElement<HTMLDialogElement>('#update-center-dialog');
+const closeUpdateCenterButton = requiredElement<HTMLButtonElement>('#close-update-center');
+const cancelUpdateCenterButton = requiredElement<HTMLButtonElement>('#cancel-update-center');
+const updateCenterAllButton = requiredElement<HTMLButtonElement>('#update-center-all');
+const updateCenterEmpty = requiredElement<HTMLElement>('#update-center-empty');
+const updateCenterList = requiredElement<HTMLElement>('#update-center-list');
+const updateCenterSummary = requiredElement<HTMLElement>('#update-center-summary');
 const openDownloadCenterButton = requiredElement<HTMLButtonElement>('#open-download-center');
 const downloadActiveCount = requiredElement<HTMLElement>('#download-active-count');
 const downloadCenterDialog = requiredElement<HTMLDialogElement>('#download-center-dialog');
 const closeDownloadCenterButton = requiredElement<HTMLButtonElement>('#close-download-center');
 const downloadCenterEmpty = requiredElement<HTMLElement>('#download-center-empty');
+const downloadActiveSection = requiredElement<HTMLElement>('#download-active-section');
+const downloadActiveSummary = requiredElement<HTMLElement>('#download-active-summary');
+const downloadOperationList = requiredElement<HTMLElement>('#download-operation-list');
 const downloadTaskList = requiredElement<HTMLElement>('#download-task-list');
+const downloadHistorySection = requiredElement<HTMLElement>('#download-history-section');
+const downloadHistorySummary = requiredElement<HTMLElement>('#download-history-summary');
+const downloadHistoryList = requiredElement<HTMLElement>('#download-history-list');
+const clearDownloadHistoryButton = requiredElement<HTMLButtonElement>('#clear-download-history');
 const downloadProgressTemplate = requiredElement<HTMLTemplateElement>(
   '#download-progress-template',
 );
@@ -749,117 +765,208 @@ const appendDownloadAction = (
   container.append(button);
 };
 
-const renderDownloads = (tasks: DownloadTaskView[]): void => {
-  downloadTaskList.replaceChildren();
-  downloadCenterEmpty.hidden = tasks.length > 0;
-  for (const task of tasks) {
-    const card = document.createElement('article');
-    card.className = 'download-task';
-    card.dataset.state = task.state;
-    const heading = document.createElement('header');
-    const identity = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = task.label;
-    const state = document.createElement('span');
-    state.className = 'download-task__state';
-    state.textContent = DOWNLOAD_STATE_LABELS[task.state];
-    identity.append(title, state);
+const ACTIVE_DOWNLOAD_STATES = new Set<DownloadTaskView['state']>([
+  'paused',
+  'progressing',
+  'queued',
+  'verifying',
+]);
 
-    const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
-      HTMLElement | undefined;
-    if (!progress) {
-      continue;
-    }
-    /*
-     * A settled task has no motion left to report. `percent` stays at -1 whenever the server never
-     * sent a length, so keying the spinner off the number alone left a failed or cancelled download
-     * animating forever as if it were still trying.
-     */
-    const settled =
-      task.state === 'cancelled' || task.state === 'completed' || task.state === 'failed';
-    const percent = Math.max(0, task.percent);
-    const indeterminate = !settled && task.percent < 0;
-    progress.dataset.indeterminate = String(indeterminate);
-    progress.style.setProperty('--download-progress', `${percent}%`);
-    const ringValue = progress.querySelector<HTMLElement>('.download-progress__value');
-    const linearValue = progress.querySelector<HTMLElement>('.download-progress__linear > span');
-    if (ringValue) {
-      ringValue.textContent = indeterminate ? '…' : `${Math.round(percent)}%`;
-    }
-    if (linearValue) {
-      linearValue.style.width = indeterminate ? '42%' : `${percent}%`;
-    }
-    heading.append(identity, progress);
+const createDownloadTaskCard = (task: DownloadTaskView, historical: boolean): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'download-task';
+  card.dataset.state = task.state;
+  const heading = document.createElement('header');
+  const identity = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = task.label;
+  const state = document.createElement('span');
+  state.className = 'download-task__state';
+  state.textContent = DOWNLOAD_STATE_LABELS[task.state];
+  identity.append(title, state);
 
-    const metrics = document.createElement('dl');
-    metrics.className = 'download-task__metrics';
-    const appendMetric = (label: string, value: string): void => {
-      const wrapper = document.createElement('div');
-      const term = document.createElement('dt');
-      const detail = document.createElement('dd');
-      term.textContent = label;
-      detail.textContent = value;
-      wrapper.append(term, detail);
-      metrics.append(wrapper);
-    };
-    appendMetric(
-      '进度',
-      task.totalBytes > 0
-        ? `${formatDownloadBytes(task.receivedBytes)} / ${formatDownloadBytes(task.totalBytes)}`
-        : `${formatDownloadBytes(task.receivedBytes)} / 计算中…`,
-    );
-    appendMetric(
-      '速度',
-      task.bytesPerSecond > 0 ? `${formatDownloadBytes(task.bytesPerSecond)}/s` : '计算中…',
-    );
-    appendMetric('已用', formatDownloadDuration(task.elapsedMs));
-    appendMetric('剩余', formatDownloadDuration(task.remainingMs));
+  const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
+    HTMLElement | undefined;
+  if (!progress) return card;
+  const settled =
+    task.state === 'cancelled' || task.state === 'completed' || task.state === 'failed';
+  const percent = Math.max(0, task.percent);
+  const indeterminate = !settled && task.percent < 0;
+  progress.dataset.indeterminate = String(indeterminate);
+  progress.setAttribute('role', 'progressbar');
+  progress.setAttribute('aria-label', `${task.label}下载进度`);
+  progress.setAttribute('aria-busy', String(indeterminate));
+  if (!indeterminate) progress.setAttribute('aria-valuenow', String(Math.round(percent)));
+  progress.setAttribute('aria-valuemin', '0');
+  progress.setAttribute('aria-valuemax', '100');
+  progress.style.setProperty('--download-progress', `${percent}%`);
+  const ringValue = progress.querySelector<HTMLElement>('.download-progress__value');
+  const linearValue = progress.querySelector<HTMLElement>('.download-progress__linear > span');
+  if (ringValue) ringValue.textContent = indeterminate ? '…' : `${Math.round(percent)}%`;
+  if (linearValue) linearValue.style.width = indeterminate ? '42%' : `${percent}%`;
+  heading.append(identity, progress);
 
-    if (task.errorMessage) {
-      const error = document.createElement('p');
-      error.className = 'download-task__error';
-      error.textContent = task.errorMessage;
-      card.append(heading, metrics, error);
-    } else {
-      card.append(heading, metrics);
-    }
-    const actions = document.createElement('footer');
-    if (task.canPause) {
-      appendDownloadAction(actions, task, 'pause', '暂停');
-    }
-    if (task.canResume) {
-      appendDownloadAction(actions, task, 'resume', '继续');
-    }
-    if (!['cancelled', 'completed', 'failed'].includes(task.state)) {
-      appendDownloadAction(actions, task, 'cancel', '取消');
-    }
-    if (actions.childElementCount > 0) {
-      card.append(actions);
-    }
-    downloadTaskList.append(card);
+  const metrics = document.createElement('dl');
+  metrics.className = 'download-task__metrics';
+  const appendMetric = (label: string, value: string): void => {
+    const wrapper = document.createElement('div');
+    const term = document.createElement('dt');
+    const detail = document.createElement('dd');
+    term.textContent = label;
+    detail.textContent = value;
+    wrapper.append(term, detail);
+    metrics.append(wrapper);
+  };
+  appendMetric(
+    '进度',
+    task.totalBytes > 0
+      ? `${formatDownloadBytes(task.receivedBytes)} / ${formatDownloadBytes(task.totalBytes)}`
+      : `${formatDownloadBytes(task.receivedBytes)} / 计算中…`,
+  );
+  appendMetric(
+    '速度',
+    task.bytesPerSecond > 0 ? `${formatDownloadBytes(task.bytesPerSecond)}/s` : '计算中…',
+  );
+  appendMetric('已用', formatDownloadDuration(task.elapsedMs));
+  appendMetric('剩余', formatDownloadDuration(task.remainingMs));
+
+  if (task.errorMessage) {
+    const error = document.createElement('p');
+    error.className = 'download-task__error';
+    error.textContent = task.errorMessage;
+    card.append(heading, metrics, error);
+  } else {
+    card.append(heading, metrics);
   }
+  const actions = document.createElement('footer');
+  if (!historical && task.canPause) appendDownloadAction(actions, task, 'pause', '暂停');
+  if (!historical && task.canResume) appendDownloadAction(actions, task, 'resume', '继续');
+  if (!historical && !settled) appendDownloadAction(actions, task, 'cancel', '取消');
+  if (historical) {
+    const finishedAt = document.createElement('span');
+    finishedAt.className = 'download-task__history-time';
+    finishedAt.textContent = task.finishedAt
+      ? new Date(task.finishedAt).toLocaleString('zh-CN')
+      : '本次运行';
+    const remove = document.createElement('button');
+    remove.className = 'download-task__delete';
+    remove.type = 'button';
+    remove.textContent = '删除记录';
+    remove.addEventListener('click', () => {
+      void (async () => {
+        const confirmed = await requestConfirmation({
+          confirmLabel: '删除记录',
+          message: `删除“${task.label}”的下载历史？这不会删除已经安装的软件。`,
+          title: '删除下载历史',
+          tone: 'danger',
+        });
+        if (!confirmed) return;
+        remove.disabled = true;
+        try {
+          handleDownloadsChanged(await window.controlPanel.deleteDownloadHistory(task.id));
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : '无法删除下载历史。', 'error');
+          remove.disabled = false;
+        }
+      })();
+    });
+    actions.append(finishedAt, remove);
+  }
+  if (actions.childElementCount > 0) card.append(actions);
+  return card;
 };
 
-const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
-  const active = tasks.filter(({ state }) =>
-    ['paused', 'progressing', 'queued', 'verifying'].includes(state),
+const createBusyOperationCard = (lease: BusyLease): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'download-task';
+  card.dataset.state = 'installing';
+  const heading = document.createElement('header');
+  const identity = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = lease.label;
+  const state = document.createElement('span');
+  state.className = 'download-task__state';
+  state.textContent = lease.kind === 'uninstall' ? '卸载中' : '安装中';
+  identity.append(title, state);
+  const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
+    HTMLElement | undefined;
+  if (progress) {
+    progress.dataset.indeterminate = 'true';
+    progress.setAttribute('role', 'progressbar');
+    progress.setAttribute('aria-label', `${lease.label}进度`);
+    progress.setAttribute('aria-busy', 'true');
+    progress.querySelector<HTMLElement>('.download-progress__value')!.textContent = '…';
+    progress.querySelector<HTMLElement>('.download-progress__linear > span')!.style.width = '42%';
+    heading.append(identity, progress);
+  } else {
+    heading.append(identity);
+  }
+  card.append(heading);
+  return card;
+};
+
+const applicationDownloadView = (): DownloadTaskView | undefined => {
+  const updater = applicationUpdaterState;
+  if (!updater || updater.phase !== 'downloading') return undefined;
+  const totalBytes = updater.totalBytes ?? 0;
+  const receivedBytes = updater.downloadedBytes ?? 0;
+  return {
+    bytesPerSecond: updater.bytesPerSecond ?? 0,
+    canPause: false,
+    canResume: false,
+    elapsedMs: 0,
+    id: 'application-update-download',
+    label: `ClaudeDock ${updater.latestVersion ?? ''} 应用更新`,
+    percent: updater.percent ?? -1,
+    receivedBytes,
+    remainingMs:
+      updater.bytesPerSecond && totalBytes > receivedBytes
+        ? ((totalBytes - receivedBytes) / updater.bytesPerSecond) * 1_000
+        : -1,
+    state: 'progressing',
+    totalBytes,
+  };
+};
+
+const renderDownloadCenter = (): void => {
+  const activeDownloads = downloadTasks.filter(({ state }) => ACTIVE_DOWNLOAD_STATES.has(state));
+  const history = downloadTasks
+    .filter(({ state }) => !ACTIVE_DOWNLOAD_STATES.has(state))
+    .sort((left, right) => (right.finishedAt ?? 0) - (left.finishedAt ?? 0));
+  const applicationDownload = applicationDownloadView();
+  const operations = busyLeases.filter(({ kind }) => kind === 'install' || kind === 'uninstall');
+  const visibleActive = applicationDownload
+    ? [applicationDownload, ...activeDownloads]
+    : activeDownloads;
+
+  downloadTaskList.replaceChildren(
+    ...visibleActive.map((task) => createDownloadTaskCard(task, false)),
   );
-  const running = active.some(({ state }) => state === 'progressing' || state === 'verifying');
+  downloadOperationList.replaceChildren(...operations.map(createBusyOperationCard));
+  downloadHistoryList.replaceChildren(...history.map((task) => createDownloadTaskCard(task, true)));
+  downloadActiveSection.hidden = visibleActive.length === 0 && operations.length === 0;
+  downloadHistorySection.hidden = history.length === 0;
+  downloadCenterEmpty.hidden =
+    visibleActive.length > 0 || operations.length > 0 || history.length > 0;
+  downloadActiveSummary.textContent = `${visibleActive.length + operations.length} 项进行中`;
+  downloadHistorySummary.textContent = `${history.length} 条记录`;
+  clearDownloadHistoryButton.disabled = history.length === 0;
+
+  const activeCount = visibleActive.length + operations.length;
   const aggregatePercent =
-    active.length > 0 && active.every(({ totalBytes }) => totalBytes > 0)
-      ? (active.reduce((sum, task) => sum + task.receivedBytes, 0) /
-          active.reduce((sum, task) => sum + task.totalBytes, 0)) *
+    operations.length === 0 &&
+    visibleActive.length > 0 &&
+    visibleActive.every(({ totalBytes }) => totalBytes > 0)
+      ? (visibleActive.reduce((sum, task) => sum + task.receivedBytes, 0) /
+          visibleActive.reduce((sum, task) => sum + task.totalBytes, 0)) *
         100
       : -1;
-  document.body.dataset.downloading = String(running);
-  openDownloadCenterButton.dataset.active = String(active.length > 0);
-  /*
-   * The frame morphs square → circle while work is in flight, so "active" has to mean the same
-   * thing here as it does to the user: queued, running, paused or verifying. A queue that is
-   * entirely paused keeps the circle but freezes and recolours the arc instead of spinning it.
-   */
+  document.body.dataset.downloading = String(activeCount > 0);
+  openDownloadCenterButton.dataset.active = String(activeCount > 0);
   openDownloadCenterButton.dataset.paused = String(
-    active.length > 0 && !running && active.every(({ state }) => state === 'paused'),
+    activeCount > 0 &&
+      operations.length === 0 &&
+      visibleActive.every(({ state }) => state === 'paused'),
   );
   openDownloadCenterButton.dataset.indeterminate = String(aggregatePercent < 0);
   openDownloadCenterButton.style.setProperty(
@@ -868,12 +975,19 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
   );
   openDownloadCenterButton.setAttribute(
     'aria-label',
-    active.length > 0 ? `打开下载中心，${active.length} 项未完成` : '打开下载中心',
+    activeCount > 0 ? `打开下载中心，${activeCount} 项未完成` : '打开下载中心',
   );
-  downloadActiveCount.hidden = active.length === 0;
-  downloadActiveCount.textContent = String(active.length);
-  const routerDownload = active.find((task) =>
-    /CCR|CC Switch|Claude Code Router|路由器/i.test(task.label),
+  downloadActiveCount.hidden = activeCount === 0;
+  downloadActiveCount.textContent = String(activeCount);
+};
+
+const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
+  downloadTasks = tasks;
+  renderDownloadCenter();
+  const routerDownload = tasks.find(
+    (task) =>
+      ACTIVE_DOWNLOAD_STATES.has(task.state) &&
+      /CCR|CC Switch|Claude Code Router|路由器/i.test(task.label),
   );
   if (routerDownload && routerOperationInProgress) {
     setRouterOperationStage(
@@ -886,7 +1000,6 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
         : undefined,
     );
   }
-  renderDownloads(tasks);
 };
 
 const captureApplicationProxyDraft = (): ApplicationProxyDraftSnapshot => ({
@@ -1052,6 +1165,10 @@ const renderApplicationProxyCandidates = (candidates: ApplicationProxyCandidate[
 };
 
 const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
+const unsubscribeBusyChanged = window.controlPanel.onBusyChanged((leases) => {
+  busyLeases = leases;
+  renderDownloadCenter();
+});
 const unsubscribeApplicationProxyChanged = window.controlPanel.onApplicationProxyChanged(
   (state) => {
     renderApplicationProxyState(state);
@@ -1324,6 +1441,9 @@ let applicationUpdaterState: ApplicationUpdaterState | undefined;
 let softwareUpdateInProgress = false;
 let softwareUpdatePromise: Promise<void> | undefined;
 let updateRefreshInProgress = false;
+let updateCenterOperationInProgress = false;
+let downloadTasks: DownloadTaskView[] = [];
+let busyLeases: BusyLease[] = [];
 let pendingComposerFocusSessionId = '';
 let conversationContextTarget:
   | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
@@ -7620,6 +7740,8 @@ const renderApplicationUpdater = (state: ApplicationUpdaterState): void => {
   applicationUpdateVersion.dataset.update = String(
     state.phase === 'downloaded' || state.phase === 'downloading' || softwareReportsUpdate,
   );
+  renderDownloadCenter();
+  if (updateCenterDialog.open) renderUpdateCenter();
 };
 
 const runApplicationUpdateAction = async (): Promise<void> => {
@@ -8403,6 +8525,175 @@ const refreshPluginUpdates = async (): Promise<boolean> => {
   }
 };
 
+interface UpdateCenterItem {
+  actionLabel: string;
+  detail: string;
+  disabled?: boolean;
+  id: string;
+  run: () => Promise<void>;
+  title: string;
+  version: string;
+}
+
+const updateCenterItems = (): UpdateCenterItem[] => {
+  const items: UpdateCenterItem[] = [];
+  if (softwareUpdates?.application.updateAvailable) {
+    const updaterDisabled = applicationUpdaterState?.phase === 'disabled';
+    items.push({
+      actionLabel: applicationUpdaterState?.phase === 'downloaded' ? '重启并安装' : '下载更新',
+      detail: softwareUpdates.application.message,
+      disabled:
+        updateCenterOperationInProgress ||
+        updaterDisabled ||
+        applicationUpdaterState?.phase === 'checking' ||
+        applicationUpdaterState?.phase === 'downloading',
+      id: 'application',
+      run: runApplicationUpdateAction,
+      title: 'ClaudeDock',
+      version: `v${softwareUpdates.application.currentVersion ?? '未知'} → ${softwareUpdates.application.latestVersion ?? '未知'}`,
+    });
+  }
+  if (softwareUpdates?.claudeCode.updateAvailable) {
+    items.push({
+      actionLabel: '更新',
+      detail: softwareUpdates.claudeCode.message,
+      disabled: updateCenterOperationInProgress || softwareUpdateInProgress,
+      id: 'claude-code',
+      run: runClaudeInstallUpdate,
+      title: 'Claude Code',
+      version: `v${softwareUpdates.claudeCode.currentVersion ?? '未知'} → ${softwareUpdates.claudeCode.latestVersion ?? '未知'}`,
+    });
+  }
+  if (softwareUpdates?.router.updateAvailable) {
+    const status = activeStatus();
+    items.push({
+      actionLabel: status ? '更新' : '先打开项目',
+      detail: status
+        ? softwareUpdates.router.message
+        : `${softwareUpdates.router.message} 路由器操作需要一个已打开项目作为安全作用域。`,
+      disabled: updateCenterOperationInProgress || routerOperationInProgress || !status,
+      id: 'router',
+      run: async () => {
+        await runRouterOperation(
+          (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
+          '正在更新…',
+          installRouterButton,
+        );
+      },
+      title: 'Claude Code Router',
+      version: `v${softwareUpdates.router.currentVersion ?? '未知'} → ${softwareUpdates.router.latestVersion ?? '未知'}`,
+    });
+  }
+  for (const plugin of pluginCatalog?.installed.filter(({ updateAvailable }) => updateAvailable) ??
+    []) {
+    items.push({
+      actionLabel: '更新',
+      detail: `${plugin.marketplaceName} · ${localizePluginCopy(plugin).description}`,
+      disabled: updateCenterOperationInProgress || pluginMutationInProgress,
+      id: `plugin:${plugin.pluginId}`,
+      run: async () => {
+        await runPluginMutation(
+          () => window.controlPanel.updateClaudePlugin(plugin.pluginId),
+          '正在更新…',
+          updateAllPluginsButton,
+        );
+      },
+      title: plugin.name,
+      version: `v${plugin.version ?? '未知'} → ${plugin.latestVersion ?? '最新'}`,
+    });
+  }
+  return items;
+};
+
+const renderUpdateCenter = (): void => {
+  const items = updateCenterItems();
+  updateCenterList.replaceChildren(
+    ...items.map((item) => {
+      const row = document.createElement('article');
+      row.className = 'update-center-item';
+      row.dataset.updateId = item.id;
+      const copy = document.createElement('div');
+      copy.className = 'update-center-item__copy';
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const version = document.createElement('span');
+      version.textContent = item.version;
+      const detail = document.createElement('small');
+      detail.textContent = item.detail;
+      copy.append(title, version, detail);
+      const action = document.createElement('button');
+      action.className = 'update-center-item__action';
+      action.type = 'button';
+      action.textContent = item.actionLabel;
+      action.disabled = item.disabled === true;
+      action.addEventListener('click', () => {
+        void runUpdateCenterAction(item);
+      });
+      row.append(copy, action);
+      return row;
+    }),
+  );
+  updateCenterEmpty.hidden = items.length > 0;
+  updateCenterSummary.textContent =
+    items.length > 0 ? `共 ${items.length} 项可更新` : '全部项目均为当前可检测到的最新版本';
+  updateCenterAllButton.hidden = items.length === 0;
+  updateCenterAllButton.disabled =
+    updateCenterOperationInProgress || items.every(({ disabled }) => disabled);
+};
+
+const runUpdateCenterAction = async (item: UpdateCenterItem): Promise<void> => {
+  if (updateCenterOperationInProgress || item.disabled) return;
+  updateCenterOperationInProgress = true;
+  renderUpdateCenter();
+  updateCenterDialog.close('start-update');
+  openDownloadCenter();
+  try {
+    await item.run();
+  } finally {
+    updateCenterOperationInProgress = false;
+    await loadSoftwareUpdates(true);
+    renderUpdateCenter();
+  }
+};
+
+const runAllUpdates = async (): Promise<void> => {
+  if (updateCenterOperationInProgress) return;
+  const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
+  const hasProject = Boolean(activeStatus());
+  updateCenterOperationInProgress = true;
+  renderUpdateCenter();
+  updateCenterDialog.close('start-all-updates');
+  openDownloadCenter();
+  try {
+    if (actions.application && applicationUpdaterState?.phase !== 'downloaded') {
+      try {
+        renderApplicationUpdater(await window.controlPanel.downloadApplicationUpdate());
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '无法下载 ClaudeDock 更新。', 'error');
+      }
+    }
+    if (actions.claudeCode === 'update') await runClaudeInstallUpdate();
+    if (actions.router === 'update' && hasProject) {
+      await runRouterOperation(
+        (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
+        '正在更新…',
+        installRouterButton,
+      );
+    }
+    if (actions.plugins) {
+      await runPluginMutation(
+        () => window.controlPanel.updateAllClaudePlugins(),
+        '正在更新…',
+        updateAllPluginsButton,
+      );
+    }
+  } finally {
+    updateCenterOperationInProgress = false;
+    await loadSoftwareUpdates(true);
+    renderUpdateCenter();
+  }
+};
+
 const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
   if (updateRefreshInProgress) {
     return;
@@ -8429,10 +8720,16 @@ const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
       const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
       if (!pluginsOk || failedSources > 0) {
         showToast('全局检查已完成，但至少一个更新来源暂时不可用。', 'error');
-      } else if (actions.totalAvailable > 0) {
-        showToast(`检查完成，发现 ${actions.totalAvailable} 项可更新。`);
-      } else {
-        showToast('检查完成，当前没有发现可用更新。');
+      }
+      renderUpdateCenter();
+      if (!updateCenterDialog.open) updateCenterDialog.showModal();
+      closeUpdateCenterButton.focus();
+      if (pluginsOk && failedSources === 0) {
+        showToast(
+          actions.totalAvailable > 0
+            ? `检查完成，发现 ${actions.totalAvailable} 项可更新。`
+            : '检查完成，当前没有发现可用更新。',
+        );
       }
     }
   } finally {
@@ -10930,12 +11227,20 @@ const renderQuitConfirmation = (request: AppQuitRequest): void => {
     ? '仍有派生 Web 进程未能安全结束'
     : request.hasBlocking
       ? '有操作正在进行，不建议退出'
-      : '还有下载未完成';
+      : request.leases.length > 0
+        ? '还有后台任务未完成'
+        : '确认退出 ClaudeDock？';
+  quitConfirmationMessage.textContent = request.runtimeCleanupFailed
+    ? '安全清理尚未完成。请重试；只有明确强制退出才会留下列出的进程。'
+    : request.leases.length > 0
+      ? '退出会结束下列会话或任务；也可以最小化到托盘，让它们继续运行。'
+      : '确认要彻底退出吗？所有 ClaudeDock 窗口和终端都会关闭。';
   quitMinimizeButton.textContent = request.runtimeCleanupFailed
     ? '重试安全清理'
     : '最小化到托盘，继续运行';
   quitCancelButton.hidden = request.runtimeCleanupFailed === true;
   quitForceButton.dataset.tone = request.hasBlocking ? 'danger' : 'neutral';
+  quitConfirmationList.hidden = request.leases.length === 0;
   quitConfirmationList.replaceChildren(
     ...request.leases.map((lease) => {
       const item = document.createElement('li');
@@ -11117,6 +11422,21 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-mcp-tab
 refreshUpdatesButton.addEventListener('click', () => {
   void refreshAvailableUpdates(true);
 });
+closeUpdateCenterButton.addEventListener('click', () => {
+  updateCenterDialog.close('close');
+});
+cancelUpdateCenterButton.addEventListener('click', () => {
+  updateCenterDialog.close('cancel');
+});
+updateCenterAllButton.addEventListener('click', () => {
+  void runAllUpdates();
+});
+updateCenterDialog.addEventListener('click', (event) => {
+  if (event.target === updateCenterDialog) updateCenterDialog.close('backdrop');
+});
+updateCenterDialog.addEventListener('close', () => {
+  if (!downloadCenterDialog.open) refreshUpdatesButton.focus();
+});
 openDownloadCenterButton.addEventListener('click', () => {
   openDownloadCenter();
 });
@@ -11130,6 +11450,24 @@ downloadCenterDialog.addEventListener('click', (event) => {
 });
 downloadCenterDialog.addEventListener('close', () => {
   openDownloadCenterButton.focus();
+});
+clearDownloadHistoryButton.addEventListener('click', () => {
+  void (async () => {
+    const confirmed = await requestConfirmation({
+      confirmLabel: '清空历史',
+      message: '清空全部下载历史？这不会删除已经下载或安装的软件。',
+      title: '清空下载历史',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    clearDownloadHistoryButton.disabled = true;
+    try {
+      handleDownloadsChanged(await window.controlPanel.clearDownloadHistory());
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法清空下载历史。', 'error');
+      clearDownloadHistoryButton.disabled = false;
+    }
+  })();
 });
 updateAllPluginsButton.addEventListener('click', () => {
   void runPluginMutation(
@@ -12463,6 +12801,7 @@ window.addEventListener('beforeunload', () => {
   unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
   unsubscribeDownloadsChanged();
+  unsubscribeBusyChanged();
   unsubscribeApplicationUpdaterChanged();
   unsubscribeOpenDownloadCenterRequested();
   unsubscribeApplicationProxyChanged();
@@ -12499,6 +12838,12 @@ void (async () => {
     handleDownloadsChanged(await window.controlPanel.listDownloads());
   } catch {
     handleDownloadsChanged([]);
+  }
+  try {
+    busyLeases = await window.controlPanel.listBusyLeases();
+    renderDownloadCenter();
+  } catch {
+    busyLeases = [];
   }
   void loadApplicationProxyState();
   try {

@@ -91,6 +91,8 @@ const api: ControlPanelApi = {
   terminateRuntimeProcess: (sessionId, processKey) =>
     ipcRenderer.invoke('runtime:terminate-process', sessionId, processKey),
   cancelDownload: (taskId) => ipcRenderer.invoke('download:cancel', taskId),
+  clearDownloadHistory: () => ipcRenderer.invoke('download:history-clear'),
+  deleteDownloadHistory: (taskId) => ipcRenderer.invoke('download:history-delete', taskId),
   listDownloads: () => ipcRenderer.invoke('download:list') as Promise<DownloadTaskView[]>,
   onDownloadsChanged: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, tasks: DownloadTaskView[]): void => {

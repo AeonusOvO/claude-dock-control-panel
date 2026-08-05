@@ -477,6 +477,13 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /window\.setTimeout\(\(\) => \{\s+void refreshAvailableUpdates\(false\);/,
     );
+    expect(rendererMarkup).toContain('id="update-center-dialog"');
+    expect(rendererMarkup).toContain('id="update-center-list"');
+    expect(rendererMarkup).toContain('id="update-center-all"');
+    expect(rendererSource).toContain(
+      'if (!updateCenterDialog.open) updateCenterDialog.showModal()',
+    );
+    expect(rendererSource).toContain('const runAllUpdates = async');
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
   });
 

@@ -89,7 +89,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ChatService ── Anthropic/OpenAI 多模态 HTTP + typed SSE / usage / 测试 / 取消
         ├── ArtifactService ── 自定义协议 / iframe CSP / 离线库 / webRequest 审计与断网
         ├── BusyRegistry ── 下载/安装/卸载/配置/代理/对话的唯一忙碌租约真值
-        ├── DownloadEngine + DownloadJournal ── 续传 / 进度 / 来源、尺寸与 SHA-256 闸门
+        ├── DownloadEngine + Journal/History ── 续传 / 进度 / 终态历史 / 完整性闸门
         ├── ApplicationProxyStore ── DPAPI / 外部 HTTP-SOCKS5 代理作用域
         ├── McpManager ── 多作用域发现 / CLI 变更 / 健康检查 / 备份回滚
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
@@ -341,8 +341,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 
 1. 任何退出入口（托盘菜单、Alt+F4、`Cmd/Ctrl+Q`、安装器重启）最终都到 `before-quit`。若
    `isQuitting` 这个单向闩未置位，就 `preventDefault()` 并转交 `requestQuit()`。
-2. `requestQuit()` 显示窗口并发 `app:quit-requested`；渲染进程判断是否值得拦截，然后必须
-   通过 `app:confirm-quit` 回答——包括否定回答，否则应用将永远关不掉。
+2. `requestQuit()` 只要渲染窗口能应答就始终显示窗口并发 `app:quit-requested`；工作区里 phase 为
+   `starting/running` 的会话会被合成为仅用于退出确认的 terminal blocking 项，再与 `BusyRegistry`
+   快照一同发送。渲染进程必须通过 `app:confirm-quit` 回答——包括否定回答，否则应用将永远关不掉。
 3. 主进程只在收到 `true` 后进入 `beginControlledQuit()`：停止新的权限等待，按登记所有权清理
    派生 Web 子树并复查；无残留才置 `isQuitting = true` 并 `app.quit()`，第二趟进入真正退出。
 
@@ -354,11 +355,12 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 `app` 事件）直接置闩：系统无论如何都会杀进程，弹窗只是推迟丢失同样的工作。单实例锁失败的
 重复启动没有窗口也没有要保护的东西，立即退出。
 
-`BusyRegistry` 是聊天之外的唯一事实来源：下载登记为 `resumable`，安装、卸载和配置写入登记为
+`BusyRegistry` 是聊天之外的长期操作事实来源：下载登记为 `resumable`，安装、卸载和配置写入登记为
 `blocking`，释放函数幂等且所有调用点都在 `finally` 执行。它的快照同时驱动托盘 tooltip、下载
 中心与退出确认；渲染进程再把正在流式生成的回复、发送中的提交和附件读取合并进退出清单。确认框
-把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘。运行中的终端刻意不算；确认框已被
-其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
+把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘；没有活动项时仍显示一般退出确认。
+工作区终端不注册长期租约，避免把普通 shell 永久标成忙碌，但在退出握手时以精确 session 快照加入
+清单。确认框已被其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
 
 ### 后台活动、权限 Hook、流故障与派生进程
 
@@ -432,6 +434,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
   `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界
   记录丢弃，部分文件从不当作完成产物执行。
+- `DownloadHistoryStore` 把 completed/failed/cancelled 终态按完成时间倒序原子写入
+  `userData/download-history.json`，最多保留 100 条。历史只含任务 ID、显示名称、来源标签、字节数、
+  时间和错误摘要，不保存 URL chain、最终路径、代理或凭据；删除历史只移除元数据，绝不删除用户
+  已下载的最终文件。损坏文件按空历史处理，不能阻止下载内核启动。
 - 4.0.0 删除 `ProxyStore`、节点/订阅解析器、`XraySidecar`、内核源、泄露体检、代理测速、
   外部 TUN 推断和 `WindowsIpv6Service`，同时删除对应 IPC、preload API、renderer 控件、脚本和
   发行测试。旧版 `userData/proxy` 文件不读取、不启用，也不在升级时擅自删除。
@@ -1054,7 +1060,10 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   `updateAvailable` 控制。
 - 标题栏 `refresh-updates` 是全局主动检查入口，不是唯一入口。首屏自动检查和用户点击会并行
   处理全部已注册来源，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现
-  数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；应用代理测试是独立动作，不属于
+  数量；用户主动检查完成后始终打开统一更新对话框，按 ClaudeDock、Claude Code、Router 与插件
+  生成可执行行，支持逐项或全部执行，没有更新时显示明确空状态。单一来源失败只禁用对应行，
+  其他结果仍可操作；操作开始后与 `BusyRegistry`、下载内核和应用更新器状态一起汇入下载中心。
+  各领域页仍可单独刷新。软件/插件/MCP 检查本身不安装内容；应用代理测试是独立动作，不属于
   全局更新聚合，也不会调用模型。
 - Claude Code 先按 `Get-Command claude` 的可执行文件判断 `native/npm/unknown`。官方原生路径使用
   固定 `claude update`；未安装时使用固定 winget ID `Anthropic.ClaudeCode`。只有 npm 安装才并发
@@ -1644,7 +1653,7 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   确认框必须是可取消的应用内 `<dialog>`，窗口 focus/visibility 恢复路径必须重新读取工作区；
   活动终端的 `focus-within` 必须有主题色聚焦反馈；连接实测必须显示后台状态、在唯一
   `finally` 恢复测试按钮并让定时轮询避让；统一刷新必须在首屏后异步启动，三类更新入口默认
-  隐藏；服务商反选、按上次选择单组展开、
+  隐藏，用户主动检查必须打开含空状态、逐项操作和全部更新的结果对话框；服务商反选、按上次选择单组展开、
   1/2/3 列容器查询、全局设置分类与接入快照式取消、独立聊天导航顺序、实时草稿 Token、
   连接测试、历史保存/恢复/删除入口、Claude/Telegram 主题外观和禁止 hover 上浮，
   以及活动栏二次点击收起也作为源码/结构契约锁定。底栏交互同样在这里锁定：连接按钮必须
@@ -1673,7 +1682,8 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   teardown 之前把未置闩的退出退回 `requestQuit()`；`canAsk` 健康检查、二次请求强制通过和
   单实例锁失败必须无条件退出；`session-end` 必须直接置闩不发问；`app:confirm-quit` 只在
   收到 `true` 时退出且两种回答都清除 pending；托盘退出必须走同一函数而不是内联 `app.quit()`；
-  桥接的两个方向都必须在契约里声明。
+  可应答窗口不能因租约为空绕过确认，`starting/running` 会话必须合成为退出清单；桥接的两个方向
+  都必须在契约里声明。
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
@@ -1717,10 +1727,12 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   既容纳冷启动又防止脚本挂死拖住 CI。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
-- `tests/download-contracts.test.ts` 锁定下载 IPC 三件套（列表、命令、变更订阅）跨进程连通、
+- `tests/download-contracts.test.ts` 锁定下载 IPC（列表、命令、历史清理与变更订阅）跨进程连通、
   每个改动前都校验发送方与任务 ID、CCR 与 Codex 都走共享的校验下载内核，以及下载中心的
   进度呈现：不确定态只属于仍在推进的任务，`cancelled` / `completed` / `failed` 必须立刻停下
   转圈动画——`percent` 在服务端没给长度时一直是 `-1`，只看这个数字会让失败的下载永远转下去。
+- `tests/download-history.test.ts` 覆盖终态历史的持久化、倒序、100 条上限、逐条删除、全部清空、
+  损坏文件降级和敏感字段缺席；非终态任务不能进入历史，清理元数据不得删除最终下载文件。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。

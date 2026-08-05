@@ -53,6 +53,8 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   上下文优先或额度优先。ClaudeDock 不用本地网关请求次数伪造 ChatGPT 订阅剩余额度。
 - 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
+- 标题栏统一更新中心聚合 ClaudeDock、Claude Code、Router 与插件更新，支持逐项或全部执行；
+  下载中心同时展示进行中任务、安装/卸载操作和可删除的本机下载历史。
 - 应用更新、依赖许可清单、安全报告与可重复 CI 门禁。
 
 设计和交互约束见 [design.md](design.md)，架构、安全与发布实现见
@@ -80,7 +82,11 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
 3. Claude Code 项目在“接入”中选择服务商、模型和认证方式；真实测试最多请求 1 个输出 token，
    可能产生少量供应商费用。
 4. Codex 项目使用官方 ChatGPT 浏览器登录或设备码登录；ClaudeDock 不接触登录令牌。
-5. 关闭主窗口默认只隐藏到系统托盘；从托盘菜单可彻底退出。
+5. 关闭主窗口默认只隐藏到系统托盘；从托盘菜单可彻底退出。托盘“退出”始终先显示应用内确认，
+   正在启动或运行的终端以及下载、安装等忙碌操作会逐项列出。
+6. 点击标题栏的“检查所有更新”会打开统一结果窗口；即使没有更新也会给出明确空状态。执行更新后
+   可在下载中心查看传输或安装进度。下载历史最多保留 100 条终态元数据，不保存下载 URL、输出路径
+   或凭据，并可逐条删除或全部清空。
 
 ### 模型服务速度
 

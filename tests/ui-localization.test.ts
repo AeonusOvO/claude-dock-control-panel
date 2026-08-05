@@ -41,7 +41,8 @@ describe('Chinese interface contract', () => {
   it('keeps quit protection actions and severity copy in Chinese', () => {
     for (const copy of [
       '有操作正在进行，不建议退出',
-      '还有下载未完成',
+      '还有后台任务未完成',
+      '确认退出 ClaudeDock？',
       '可以直接关闭窗口，后台会继续运行。',
       '最小化到托盘，继续运行',
       '仍要退出',
