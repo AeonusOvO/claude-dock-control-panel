@@ -138,6 +138,14 @@ describe('managed ChatGPT gateway', () => {
     expect(config).toContain('disable-auto-update-panel: true');
     expect(config).toContain('router-for-me/Cli-Proxy-API-Management-Center');
     expect(config).toContain('usage-statistics-enabled: false');
+    expect(config).toContain('request-retry: 5');
+    expect(config).toContain('max-retry-credentials: 0');
+    expect(config).toContain('max-retry-interval: 60');
+    expect(config).toContain('strategy: "round-robin"');
+    expect(config).toContain('session-affinity: true');
+    expect(config).toContain('session-affinity-ttl: "36h"');
+    expect(config).toContain('keepalive-seconds: 15');
+    expect(config).toContain('bootstrap-retries: 2');
     expect(config).toContain(`sk-claudedock-${'x'.repeat(43)}`);
     expect(config).not.toMatch(/oauth|cookie|password/i);
   });

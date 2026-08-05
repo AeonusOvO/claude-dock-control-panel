@@ -250,6 +250,16 @@ export const buildManagedGatewayConfig = (input: {
     'debug: false',
     'logging-to-file: false',
     'usage-statistics-enabled: false',
+    'request-retry: 5',
+    'max-retry-credentials: 0',
+    'max-retry-interval: 60',
+    'routing:',
+    '  strategy: "round-robin"',
+    '  session-affinity: true',
+    '  session-affinity-ttl: "36h"',
+    'streaming:',
+    '  keepalive-seconds: 15',
+    '  bootstrap-retries: 2',
     '',
   ].join('\n');
 };

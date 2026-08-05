@@ -23,7 +23,11 @@ export interface BusyLease {
 export interface AppQuitRequest {
   hasBlocking: boolean;
   leases: BusyLease[];
+  /** Cleanup could not prove that every verified PTY descendant stopped; only retry/force are safe. */
+  runtimeCleanupFailed?: boolean;
 }
+
+export type AppQuitDecision = boolean | 'retry';
 export type DownloadTaskState =
   'cancelled' | 'completed' | 'failed' | 'paused' | 'progressing' | 'queued' | 'verifying';
 export interface DownloadTaskView {
@@ -692,6 +696,8 @@ export interface ClaudeProjectState {
   modelMatches?: boolean;
   /** Parsed from the live Claude Code badge; absent until the badge has been seen once. */
   permissionMode?: ClaudePermissionMode;
+  /** Last mode requested through ClaudeDock; the live badge remains the applied truth. */
+  permissionModeRequest?: ClaudePermissionMode;
   /** Modes actually observed in this session, in the order Shift+Tab visited them. */
   permissionModeCycle?: ClaudePermissionMode[];
   /** Exact PowerShell/ConPTY generation that owns the active runtime; absent while inactive/unbound. */
@@ -1206,6 +1212,68 @@ export interface OperationResult {
   status?: TerminalStatus;
 }
 
+export type RuntimeActivityPhase =
+  'stopped' | 'cli-idle' | 'foreground-running' | 'waiting-background' | 'resuming' | 'failed';
+export type RuntimeTaskKind =
+  'subagent' | 'shell' | 'monitor' | 'workflow' | 'teammate' | 'mcp' | 'cron' | 'web';
+export type RuntimeTaskStatus =
+  'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'orphaned';
+export type RuntimeTriState = boolean | 'unknown';
+
+export interface RuntimeTaskView {
+  agentType?: string;
+  description: string;
+  id: string;
+  kind: RuntimeTaskKind;
+  status: RuntimeTaskStatus;
+  tokenUse: 'likely' | 'none' | 'unknown';
+  updatedAt: number;
+  willWakeParent: RuntimeTriState;
+}
+
+export interface RuntimeWebProcessView {
+  commandSummary: string;
+  exposureWarning?: string;
+  name: string;
+  pid: number;
+  ports: number[];
+  processKey: string;
+  startedAt: number;
+  status: 'running' | 'stopping';
+  urls: Array<{ confirmed: boolean; url: string }>;
+}
+
+export interface RuntimeActivitySnapshot {
+  launchGeneration: number;
+  observedAt: number;
+  phase: RuntimeActivityPhase;
+  ptyGeneration: PtyGeneration;
+  sessionId: string;
+  subagentCount: number;
+  tasks: RuntimeTaskView[];
+  webProcesses: RuntimeWebProcessView[];
+  willResumeConversation: RuntimeTriState;
+}
+
+export interface ClaudePermissionSuggestionView {
+  id: string;
+  label: string;
+}
+
+export interface ClaudePermissionRequestView {
+  description: string;
+  expiresAt: number;
+  requestId: string;
+  sessionId: string;
+  suggestions: ClaudePermissionSuggestionView[];
+  toolName: string;
+}
+
+export type ClaudePermissionDecision =
+  | { behavior: 'allow'; suggestionId?: string }
+  | { behavior: 'deny'; message?: string }
+  | { behavior: 'fallback' };
+
 export interface WorkspaceResult {
   error?: string;
   ok: boolean;
@@ -1241,6 +1309,19 @@ export interface ControlPanelApi {
   listBusyLeases: () => Promise<BusyLease[]>;
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
   setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;
+  getRuntimeActivity: (sessionId: string) => Promise<RuntimeActivitySnapshot>;
+  onRuntimeActivityChanged: (listener: (state: RuntimeActivitySnapshot) => void) => Unsubscribe;
+  onClaudePermissionRequest: (
+    listener: (request: ClaudePermissionRequestView) => void,
+  ) => Unsubscribe;
+  respondClaudePermission: (
+    requestId: string,
+    decision: ClaudePermissionDecision,
+  ) => Promise<boolean>;
+  terminateRuntimeProcess: (
+    sessionId: string,
+    processKey: string,
+  ) => Promise<RuntimeActivitySnapshot>;
   cancelDownload: (taskId: string) => Promise<DownloadTaskView>;
   listDownloads: () => Promise<DownloadTaskView[]>;
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
@@ -1413,7 +1494,7 @@ export interface ControlPanelApi {
    * through `confirmQuit`, including the cancelling answer — the quit stays blocked until it does.
    */
   onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;
-  confirmQuit: (confirmed: boolean) => void;
+  confirmQuit: (decision: AppQuitDecision) => void;
   minimizeToTray: () => void;
   onOpenDownloadCenterRequested: (listener: () => void) => Unsubscribe;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;

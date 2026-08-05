@@ -657,6 +657,48 @@ describe('Claude runtime launch configuration snapshots', () => {
 });
 
 describe('Claude runtime launch-owned artifacts', () => {
+  it('writes launch-scoped activity and PermissionRequest hooks with a bounded native fallback', async () => {
+    const { root, runtime, session } = createRuntime();
+    const activityEvents: string[] = [];
+    runtime.setRuntimeActivityHandler(path.join(root, 'activity.ps1'), (event) => {
+      activityEvents.push(event.event);
+    });
+    runtime.setPermissionRequestHook(path.join(root, 'permission.ps1'), () => ({
+      pipeName: 'claudedock-test-pipe',
+      token: 'test-token',
+    }));
+    try {
+      await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
+      const settings = JSON.parse(readFileSync(launchArtifacts(session).settingsPath, 'utf8')) as {
+        hooks: Record<
+          string,
+          Array<{ hooks: Array<{ command: string; timeout?: number; type: string }> }>
+        >;
+      };
+      for (const event of [
+        'PermissionRequest',
+        'SessionEnd',
+        'Stop',
+        'StopFailure',
+        'SubagentStart',
+        'SubagentStop',
+        'TaskCreated',
+        'TaskCompleted',
+        'UserPromptSubmit',
+      ]) {
+        expect(settings.hooks[event]).toBeDefined();
+      }
+      const permission = settings.hooks.PermissionRequest?.[0]?.hooks[0];
+      expect(permission).toMatchObject({ timeout: 600, type: 'command' });
+      expect(permission?.command).toContain('-PipeName "claudedock-test-pipe"');
+      expect(permission?.command).toContain(`-LaunchGeneration ${session.launchGeneration}`);
+      runtime.bindPty(session.sessionId, 15);
+      expect(activityEvents).toContain('SessionStart');
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
   it('keeps delayed G1 signal, turn-stop, and metrics writes isolated from bound G2', async () => {
     const { internals, runtime, session } = createRuntime();
     try {

@@ -82,6 +82,10 @@ import type {
   ApplicationProxyState,
   ApplicationProxyView,
   SaveApplicationProxyInput,
+  RuntimeActivitySnapshot,
+  RuntimeTaskView,
+  ClaudePermissionRequestView,
+  ClaudePermissionDecision,
   PtyGeneration,
   TerminalPhase,
   TerminalStatus,
@@ -91,6 +95,11 @@ import type {
 } from '../shared/contracts';
 import { claudeStateOwnershipIsCurrent } from '../shared/claude-state-ownership';
 import { estimateChatUsage } from '../shared/chat-usage';
+import {
+  CLAUDE_COMMAND_CATALOG,
+  CODEX_COMMAND_CATALOG,
+  type CliCommandDefinition,
+} from '../shared/cli-command-catalog';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import {
   completeConnectionEndpoint,
@@ -151,6 +160,7 @@ import {
   enhanceSelect,
   installPressRipples,
   installSelectDismissHandlers,
+  setEnhancedSelectValue,
 } from './components';
 import {
   createKatexMathRenderer,
@@ -276,6 +286,8 @@ const connectionRemedyCause = requiredElement<HTMLElement>('#connection-remedy-c
 const connectionRemedyFix = requiredElement<HTMLElement>('#connection-remedy-fix');
 const connectionRemedyActions = requiredElement<HTMLElement>('#connection-remedy-actions');
 const commandArgument = requiredElement<HTMLInputElement>('#command-argument');
+const claudeCommandGrid = requiredElement<HTMLElement>('#claude-command-grid');
+const codexCommandGrid = requiredElement<HTMLElement>('#codex-command-grid');
 const contextPercentage = requiredElement<HTMLElement>('#context-percentage');
 const contextProgress = requiredElement<HTMLElement>('.context-progress');
 const contextProgressBar = requiredElement<HTMLElement>('#context-progress-bar');
@@ -338,6 +350,8 @@ const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
 const footerModeMenu = requiredElement<HTMLElement>('#footer-mode-menu');
 const footerEffort = requiredElement<HTMLButtonElement>('#footer-effort');
 const footerEffortMenu = requiredElement<HTMLElement>('#footer-effort-menu');
+const footerMore = requiredElement<HTMLButtonElement>('#footer-more');
+const footerSecondaryStatus = requiredElement<HTMLElement>('#footer-secondary-status');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
 const gatewayCandidates = requiredElement<HTMLElement>('#gateway-candidates');
 const gatewayCheckedAt = requiredElement<HTMLElement>('#gateway-checked-at');
@@ -507,6 +521,17 @@ const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const composerForm = requiredElement<HTMLFormElement>('#terminal-composer');
 const composerInput = requiredElement<HTMLTextAreaElement>('#composer-input');
 const composerSendButton = requiredElement<HTMLButtonElement>('#composer-send');
+const composerPermissionMode = requiredElement<HTMLSelectElement>('#composer-permission-mode');
+const composerEffortLevel = requiredElement<HTMLSelectElement>('#composer-effort-level');
+const composerModelControl = requiredElement<HTMLButtonElement>('#composer-model-control');
+const composerControlStatus = requiredElement<HTMLElement>('#composer-control-status');
+const runtimeActivityTrigger = requiredElement<HTMLButtonElement>('#runtime-activity-trigger');
+const runtimeActivityLabel = requiredElement<HTMLElement>('#runtime-activity-label');
+const runtimeActivityPanel = requiredElement<HTMLElement>('#runtime-activity-panel');
+const runtimeActivitySummary = requiredElement<HTMLElement>('#runtime-activity-summary');
+const runtimeActivityClose = requiredElement<HTMLButtonElement>('#runtime-activity-close');
+const runtimeTaskList = requiredElement<HTMLUListElement>('#runtime-task-list');
+const runtimeProcessList = requiredElement<HTMLUListElement>('#runtime-process-list');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
 const testClaudeConnectionButton = requiredElement<HTMLButtonElement>('#test-claude-connection');
@@ -607,6 +632,18 @@ const terminalShell = requiredElement<HTMLElement>('#terminal-shell');
 const chatShell = requiredElement<HTMLElement>('#chat-shell');
 const chatConfigForm = requiredElement<HTMLFormElement>('#chat-config-form');
 const chatSettingsDialog = requiredElement<HTMLDialogElement>('#chat-settings-dialog');
+const claudePermissionDialog = requiredElement<HTMLDialogElement>('#claude-permission-dialog');
+const claudePermissionTool = requiredElement<HTMLElement>('#claude-permission-tool');
+const claudePermissionDescription = requiredElement<HTMLElement>('#claude-permission-description');
+const claudePermissionSuggestions = requiredElement<HTMLFieldSetElement>(
+  '#claude-permission-suggestions',
+);
+const claudePermissionDenyReason = requiredElement<HTMLInputElement>(
+  '#claude-permission-deny-reason',
+);
+const claudePermissionFallback = requiredElement<HTMLButtonElement>('#claude-permission-fallback');
+const claudePermissionDeny = requiredElement<HTMLButtonElement>('#claude-permission-deny');
+const claudePermissionAllow = requiredElement<HTMLButtonElement>('#claude-permission-allow');
 const openChatSettingsButton = requiredElement<HTMLButtonElement>('#open-chat-settings');
 const closeChatSettingsButton = requiredElement<HTMLButtonElement>('#close-chat-settings');
 const chatProtocol = requiredElement<HTMLSelectElement>('#chat-protocol');
@@ -890,16 +927,16 @@ const applicationProxyDraftMatches = (
   left.scope.conversation === right.scope.conversation;
 
 const applicationProxyIsDirty = (): boolean =>
-  Boolean(
-    savedApplicationProxy &&
-    !applicationProxyDraftMatches(
-      captureApplicationProxyDraft(),
-      applicationProxyViewSnapshot(savedApplicationProxy),
-    ),
-  ) || applicationProxyPassword.value.length > 0;
+  (savedApplicationProxy
+    ? !applicationProxyDraftMatches(
+        captureApplicationProxyDraft(),
+        applicationProxyViewSnapshot(savedApplicationProxy),
+      )
+    : applicationProxyDraftEdited) || applicationProxyPassword.value.length > 0;
 
 const syncApplicationProxyInteractivity = (): void => {
-  const enabled = applicationProxyEnabled.checked;
+  const enabled = applicationProxyEnabled.checked && !applicationProxyInitialLoadPending;
+  applicationProxyEnabled.disabled = applicationProxyInitialLoadPending;
   for (const container of [applicationProxyConfiguration, applicationProxyScope]) {
     container.inert = !enabled;
     container.setAttribute('aria-disabled', String(!enabled));
@@ -913,8 +950,14 @@ const syncApplicationProxyInteractivity = (): void => {
     applicationProxyScopeCli.checked = false;
     applicationProxyScopeCli.disabled = true;
   }
+  applicationProxySave.disabled =
+    applicationProxyInitialLoadPending || applicationProxySaveInProgress;
+  applicationProxyDetect.disabled = applicationProxyInitialLoadPending;
   applicationProxyTest.disabled =
-    applicationProxyTestInProgress || !savedApplicationProxy?.enabled || applicationProxyIsDirty();
+    applicationProxyInitialLoadPending ||
+    applicationProxyTestInProgress ||
+    !savedApplicationProxy?.enabled ||
+    applicationProxyIsDirty();
 };
 
 const applyApplicationProxyDraft = (draft: ApplicationProxyDraftSnapshot): void => {
@@ -937,7 +980,9 @@ const renderApplicationProxyState = (
   const { config, test } = state;
   const draft = captureApplicationProxyDraft();
   const preserveDraft =
-    preserveDirtyDraft && connectionAdvancedDialog.open && applicationProxyIsDirty();
+    preserveDirtyDraft &&
+    connectionAdvancedDialog.open &&
+    (applicationProxyDraftEdited || applicationProxyIsDirty());
   savedApplicationProxy = config;
   if (!preserveDraft) {
     applyApplicationProxyDraft(applicationProxyViewSnapshot(config));
@@ -967,14 +1012,20 @@ const renderApplicationProxyState = (
   updateSettingsUnsavedIndicator();
 };
 
-const loadApplicationProxyState = async (preserveDirtyDraft = true): Promise<void> => {
+const loadApplicationProxyState = async (
+  preserveDirtyDraft = true,
+  loadGeneration = applicationProxyLoadGeneration,
+): Promise<boolean> => {
   try {
-    renderApplicationProxyState(
-      await window.controlPanel.getApplicationProxyState(),
-      preserveDirtyDraft,
-    );
+    const state = await window.controlPanel.getApplicationProxyState();
+    if (loadGeneration !== applicationProxyLoadGeneration) return false;
+    renderApplicationProxyState(state, preserveDirtyDraft);
+    return true;
   } catch {
-    showToast('无法读取应用代理设置。', 'error');
+    if (loadGeneration === applicationProxyLoadGeneration) {
+      showToast('无法读取应用代理设置。', 'error');
+    }
+    return false;
   }
 };
 
@@ -986,6 +1037,7 @@ const renderApplicationProxyCandidates = (candidates: ApplicationProxyCandidate[
       button.type = 'button';
       button.textContent = `${candidate.label} · ${candidate.protocol.toUpperCase()} ${candidate.host}:${candidate.port}`;
       button.addEventListener('click', () => {
+        applicationProxyDraftEdited = true;
         applicationProxyProtocol.value = candidate.protocol;
         applicationProxyHost.value = candidate.host;
         applicationProxyPort.value = String(candidate.port);
@@ -1128,6 +1180,7 @@ const terminalViews = new Map<string, TerminalView>();
 const claudeStates = new Map<string, ClaudeProjectState>();
 const codexStates = new Map<string, CodexProjectState>();
 const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
+const runtimeActivityStates = new Map<string, RuntimeActivitySnapshot>();
 const claudeStateLoadGenerations = new SessionGenerationRegistry();
 const codexStateLoadGenerations = new SessionGenerationRegistry();
 const runtimeStateLoadGenerations = new SessionGenerationRegistry();
@@ -1158,7 +1211,12 @@ let savedApplicationProxy: ApplicationProxyView | undefined;
 let applicationProxyCancelBaseline: ApplicationProxyDraftSnapshot | undefined;
 let applicationProxySaveInProgress = false;
 let applicationProxyTestInProgress = false;
+let applicationProxyLoadGeneration = 0;
+let applicationProxyInitialLoadPending = false;
+let applicationProxyDraftEdited = false;
 let selectedRailTab: string | undefined = 'projects';
+let previewRailTab: string | undefined;
+let railPreviewCloseTimer: number | undefined;
 type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | 'router';
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
@@ -1211,6 +1269,10 @@ let queuedChatAttachmentImports = 0;
 let chatSubmissionInFlight = false;
 let conversationBusyLeaseActive = false;
 let pendingQuitRequest: AppQuitRequest | undefined;
+const claudePermissionQueue: ClaudePermissionRequestView[] = [];
+let activeClaudePermissionRequest: ClaudePermissionRequestView | undefined;
+let claudePermissionResponsePending = false;
+let claudePermissionExpiryTimer: number | undefined;
 let artifactNetworkState: ArtifactNetworkState = { allowed: true, entries: [] };
 let markdownRenderer: MarkdownDomRenderer;
 let markdownHighlighter: HighlighterCore | undefined;
@@ -1543,8 +1605,8 @@ window.controlPanel.onArtifactNetworkLog((entry: ArtifactNetworkLogEntry) => {
 
 const applyTerminalTheme = (themeId: TerminalThemeId, announce = true, persist = true): void => {
   activeTerminalTheme = themeId;
-  terminalThemeSelect.value = themeId;
-  settingsTheme.value = themeId;
+  setEnhancedSelectValue(terminalThemeSelect, themeId);
+  setEnhancedSelectValue(settingsTheme, themeId);
   if (persist) localStorage.setItem('claudedock.terminalTheme', themeId);
   const definition = TERMINAL_THEMES[themeId];
   // The shell steps are written onto the root element so every `var(--…)` in styles.css follows the
@@ -1598,6 +1660,248 @@ const activeDevelopmentRuntime = (): DevelopmentRuntime => {
   const status = activeStatus();
   return status ? (developmentRuntimeStates.get(status.id)?.runtime ?? 'claude') : 'claude';
 };
+
+const RUNTIME_PHASE_LABELS: Record<RuntimeActivitySnapshot['phase'], string> = {
+  'cli-idle': 'CLI 空闲',
+  failed: '需要处理',
+  'foreground-running': '前台响应中',
+  resuming: '正在恢复对话',
+  stopped: '已停止',
+  'waiting-background': '等待后台唤醒',
+};
+
+const runtimeTaskIsUnfinished = (task: RuntimeTaskView): boolean =>
+  task.status === 'queued' || task.status === 'running' || task.status === 'waiting';
+
+const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
+  const activeSessionId = workspaceState.activeSessionId;
+  const state = snapshot ?? runtimeActivityStates.get(activeSessionId);
+  if (state) runtimeActivityStates.set(state.sessionId, state);
+  if (!state || state.sessionId !== activeSessionId) {
+    runtimeActivityTrigger.hidden = true;
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  const unfinished = state.tasks.filter(runtimeTaskIsUnfinished);
+  const visible = unfinished.length > 0 || state.webProcesses.length > 0;
+  runtimeActivityTrigger.hidden = !visible;
+  runtimeActivityTrigger.dataset.phase = state.phase;
+  runtimeActivityLabel.textContent = `后台任务 ${unfinished.length} · ${RUNTIME_PHASE_LABELS[state.phase]}`;
+  runtimeActivitySummary.textContent = `${RUNTIME_PHASE_LABELS[state.phase]} · 子代理 ${state.subagentCount} · ${
+    state.willResumeConversation === true
+      ? '完成后会恢复主对话'
+      : state.willResumeConversation === false
+        ? '不会自动恢复主对话'
+        : '是否恢复待确认'
+  }`;
+  if (state.phase === 'waiting-background' || state.phase === 'resuming') {
+    titleStatus.textContent =
+      state.phase === 'waiting-background'
+        ? `后台任务仍在运行 · ${unfinished.length} 项`
+        : '后台任务已返回 · 正在恢复主对话';
+    footerStatus.textContent = RUNTIME_PHASE_LABELS[state.phase];
+  } else if (state.phase === 'failed') {
+    titleStatus.textContent = '本轮响应失败 · 终端上下文已保留';
+    footerStatus.textContent = '需要手动继续';
+  }
+
+  runtimeTaskList.replaceChildren(
+    ...state.tasks.map((task) => {
+      const item = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = task.description;
+      const details = document.createElement('span');
+      const tokenLabel =
+        task.tokenUse === 'likely'
+          ? '可能持续消耗 token'
+          : task.tokenUse === 'none'
+            ? '不消耗模型 token'
+            : 'token 状态未知';
+      const wakeLabel =
+        task.willWakeParent === true
+          ? '完成后唤醒主对话'
+          : task.willWakeParent === false
+            ? '不唤醒主对话'
+            : '唤醒状态未知';
+      details.textContent = `${task.kind} · ${task.status} · ${tokenLabel} · ${wakeLabel}`;
+      item.append(title, details);
+      return item;
+    }),
+  );
+  if (state.tasks.length === 0) {
+    const empty = document.createElement('li');
+    empty.textContent = '暂无任务记录';
+    runtimeTaskList.append(empty);
+  }
+
+  runtimeProcessList.replaceChildren(
+    ...state.webProcesses.map((process) => {
+      const item = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = `${process.name} · PID ${process.pid}`;
+      const command = document.createElement('span');
+      command.textContent = process.commandSummary;
+      item.append(title, command);
+      for (const target of process.urls) {
+        const link = document.createElement('a');
+        link.href = target.url;
+        link.textContent = `${target.url}（${target.confirmed ? '已确认' : '由监听端口推断'}）`;
+        link.addEventListener('click', (event) => {
+          event.preventDefault();
+          void openExternal(target.url);
+        });
+        item.append(link);
+      }
+      if (process.exposureWarning) {
+        const warning = document.createElement('span');
+        warning.textContent = process.exposureWarning;
+        item.append(warning);
+      }
+      const terminate = document.createElement('button');
+      terminate.type = 'button';
+      terminate.textContent = process.status === 'stopping' ? '正在结束…' : '结束进程';
+      terminate.disabled = process.status === 'stopping';
+      terminate.addEventListener('click', () => {
+        terminate.disabled = true;
+        void window.controlPanel
+          .terminateRuntimeProcess(state.sessionId, process.processKey)
+          .then(renderRuntimeActivity)
+          .catch(() => showToast('无法结束该 Web 进程；所有权可能已经变化。', 'error'));
+      });
+      item.append(terminate);
+      return item;
+    }),
+  );
+  if (state.webProcesses.length === 0) {
+    const empty = document.createElement('li');
+    empty.textContent = '未发现当前会话派生的 Web 监听进程';
+    runtimeProcessList.append(empty);
+  }
+
+  if (!visible) {
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  }
+};
+
+const loadActiveRuntimeActivity = async (): Promise<void> => {
+  const sessionId = workspaceState.activeSessionId;
+  if (!sessionId) {
+    runtimeActivityTrigger.hidden = true;
+    runtimeActivityPanel.hidden = true;
+    return;
+  }
+  try {
+    const state = await window.controlPanel.getRuntimeActivity(sessionId);
+    if (workspaceState.activeSessionId === sessionId) renderRuntimeActivity(state);
+  } catch {
+    runtimeActivityTrigger.hidden = true;
+  }
+};
+
+const composeNativeCommand = (command: string): void => {
+  composerInput.value = command;
+  resizeComposer();
+  focusComposer();
+  composerInput.setSelectionRange(command.length, command.length);
+  showToast(`已填入 ${command.trim()}，确认后按 Enter 发送`);
+};
+
+const renderComposerControls = (claudeState?: ClaudeProjectState): void => {
+  const status = activeStatus();
+  const isCodex = activeDevelopmentRuntime() === 'codex';
+  const running = status?.phase === 'running';
+  composerPermissionMode.disabled = !running;
+  composerEffortLevel.disabled = !running;
+  composerModelControl.disabled = !running;
+  if (isCodex) {
+    setEnhancedSelectValue(composerPermissionMode, 'default');
+    setEnhancedSelectValue(composerEffortLevel, 'auto');
+    composerModelControl.textContent = '模型 /model';
+    composerControlStatus.textContent = 'Codex 保留原生 TUI 权限确认；控件仅填入命令';
+    return;
+  }
+  const state = claudeState ?? (status ? claudeStates.get(status.id) : undefined);
+  if (state?.permissionModeRequest ?? state?.permissionMode) {
+    setEnhancedSelectValue(
+      composerPermissionMode,
+      state.permissionModeRequest ?? state.permissionMode ?? 'default',
+    );
+  }
+  const appliedEffort = state?.metrics?.effortLevel;
+  const requestedEffort = state?.effortRequest;
+  setEnhancedSelectValue(composerEffortLevel, requestedEffort ?? appliedEffort ?? 'auto');
+  composerModelControl.textContent = `模型 ${state?.metrics?.modelDisplayName ?? state?.metrics?.modelId ?? '—'}`;
+  composerControlStatus.textContent = state
+    ? `请求：${permissionModeLabel(state.permissionModeRequest)} / ${claudeEffortLabel(requestedEffort)} · 实际：${permissionModeLabel(state.permissionMode)} / ${claudeEffortLabel(appliedEffort)}`
+    : '等待 Claude 运行时状态';
+};
+
+const renderClaudePermissionRequest = (): void => {
+  const request = activeClaudePermissionRequest;
+  if (!request || claudePermissionResponsePending) return;
+  claudePermissionTool.textContent = request.toolName;
+  claudePermissionDescription.textContent = request.description;
+  claudePermissionDenyReason.value = '';
+  claudePermissionSuggestions.replaceChildren();
+  claudePermissionSuggestions.hidden = request.suggestions.length === 0;
+  for (const suggestion of request.suggestions) {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'claude-permission-suggestion';
+    radio.value = suggestion.id;
+    label.append(radio, document.createTextNode(suggestion.label));
+    claudePermissionSuggestions.append(label);
+  }
+  claudePermissionAllow.textContent = '本次允许';
+  claudePermissionSuggestions.addEventListener(
+    'change',
+    () => {
+      claudePermissionAllow.textContent = '允许并保存所选范围';
+    },
+    { once: true },
+  );
+  claudePermissionDialog.returnValue = '';
+  if (!claudePermissionDialog.open) claudePermissionDialog.showModal();
+  if (claudePermissionExpiryTimer !== undefined) window.clearTimeout(claudePermissionExpiryTimer);
+  claudePermissionExpiryTimer = window.setTimeout(
+    () => void respondToClaudePermission({ behavior: 'fallback' }),
+    Math.max(0, request.expiresAt - Date.now()),
+  );
+};
+
+const showNextClaudePermissionRequest = (): void => {
+  if (activeClaudePermissionRequest || claudePermissionQueue.length === 0) return;
+  activeClaudePermissionRequest = claudePermissionQueue.shift();
+  renderClaudePermissionRequest();
+};
+
+async function respondToClaudePermission(decision: ClaudePermissionDecision): Promise<void> {
+  const request = activeClaudePermissionRequest;
+  if (!request || claudePermissionResponsePending) return;
+  claudePermissionResponsePending = true;
+  claudePermissionAllow.disabled = true;
+  claudePermissionDeny.disabled = true;
+  claudePermissionFallback.disabled = true;
+  if (claudePermissionExpiryTimer !== undefined) {
+    window.clearTimeout(claudePermissionExpiryTimer);
+    claudePermissionExpiryTimer = undefined;
+  }
+  try {
+    await window.controlPanel.respondClaudePermission(request.requestId, decision);
+  } finally {
+    activeClaudePermissionRequest = undefined;
+    claudePermissionResponsePending = false;
+    claudePermissionAllow.disabled = false;
+    claudePermissionDeny.disabled = false;
+    claudePermissionFallback.disabled = false;
+    if (claudePermissionDialog.open) claudePermissionDialog.close();
+    window.setTimeout(showNextClaudePermissionRequest, 0);
+  }
+}
 
 const activeNetworkProvider = (): NetworkProviderId | undefined => {
   if (activeDevelopmentRuntime() === 'codex') {
@@ -3738,6 +4042,13 @@ const hideFooterMenus = (): void => {
   }
 };
 
+const setFooterSecondaryOpen = (open: boolean): void => {
+  const compact = window.matchMedia('(max-width: 1040px)').matches;
+  const next = open && compact;
+  footerSecondaryStatus.dataset.open = String(next);
+  footerMore.setAttribute('aria-expanded', String(next));
+};
+
 /**
  * Anchors a footer menu above its button. The footer sits at the very bottom, so the menu always
  * opens upward; both axes are still clamped so a narrow window cannot push it off-screen.
@@ -4016,7 +4327,7 @@ const applyAppSettingsToControls = (settings: AppSettingsView): void => {
   settingsLanguage.value = settings.language;
   settingsVersion.value = settings.version;
   settingsVersion.textContent = settings.version;
-  settingsTheme.value = settings.theme;
+  setEnhancedSelectValue(settingsTheme, settings.theme);
   applyTerminalTheme(settings.theme, false, false);
 };
 
@@ -4037,13 +4348,25 @@ const openAdvancedConnectionDialog = (): void => {
   if (connectionAdvancedDialog.open) {
     return;
   }
+  closeRailPreview();
   advancedConnectionSnapshot = captureAdvancedConnectionSnapshot();
   applicationProxyCancelBaseline = captureApplicationProxyDraft();
+  const loadGeneration = ++applicationProxyLoadGeneration;
+  applicationProxyInitialLoadPending = true;
+  applicationProxyDraftEdited = false;
+  syncApplicationProxyInteractivity();
+  completeConnectionAdvancedButton.disabled = true;
   selectSettingsTab('general');
-  void Promise.all([loadAppSettings(), loadApplicationProxyState(false)]).then(() => {
-    applicationProxyCancelBaseline = captureApplicationProxyDraft();
-    updateSettingsUnsavedIndicator();
-  });
+  void Promise.all([loadAppSettings(), loadApplicationProxyState(false, loadGeneration)]).then(
+    ([, proxyLoaded]) => {
+      if (loadGeneration !== applicationProxyLoadGeneration) return;
+      applicationProxyInitialLoadPending = false;
+      if (proxyLoaded) applicationProxyCancelBaseline = captureApplicationProxyDraft();
+      syncApplicationProxyInteractivity();
+      completeConnectionAdvancedButton.disabled = false;
+      updateSettingsUnsavedIndicator();
+    },
+  );
   connectionAdvancedDialog.showModal();
 };
 
@@ -4062,6 +4385,9 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   }
   advancedConnectionSnapshot = undefined;
   applicationProxyCancelBaseline = undefined;
+  applicationProxyLoadGeneration += 1;
+  applicationProxyInitialLoadPending = false;
+  applicationProxyDraftEdited = false;
   savedAppSettings = undefined;
   settingsUnsavedIndicator.hidden = true;
   connectionAdvancedDialog.close(complete ? 'complete' : 'cancel');
@@ -4093,6 +4419,7 @@ const savePendingApplicationProxy = async (): Promise<boolean> => {
   try {
     const state = await window.controlPanel.saveApplicationProxy(pendingApplicationProxyInput());
     renderApplicationProxyState(state, false);
+    applicationProxyDraftEdited = false;
     applicationProxyCancelBaseline = captureApplicationProxyDraft();
     await window.controlPanel.invalidateNetworkPreflight('application-proxy-change');
     void runActiveNetworkPreflight(true);
@@ -4332,6 +4659,7 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
   footerMode.disabled = true;
   footerEffort.textContent = '思考 Codex 自动';
   footerEffort.disabled = true;
+  renderComposerControls();
   codexBoundaryNote.textContent = state.warning
     ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
     : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
@@ -4644,6 +4972,7 @@ const renderClaudeState = (
     showToast('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
   }
   allowBypassPermissions.checked = state.allowBypassPermissions;
+  renderComposerControls(state);
 
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
   metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
@@ -6363,6 +6692,7 @@ const rerunAutomaticConnectionTestForActiveProject = (): void => {
 };
 
 const setWorkbenchOpen = (open: boolean): void => {
+  if (open) closeRailPreview();
   // The listbox is a fixed-position popup on `body`, so closing the panel underneath it has to
   // dismiss it explicitly or it would hang over the terminal.
   closeOpenSelect();
@@ -6719,6 +7049,21 @@ const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> =
   if (!status || modeSwitchInProgress) {
     return;
   }
+  if (mode === 'dontAsk' || mode === 'bypassPermissions') {
+    const confirmed = await requestConfirmation({
+      confirmLabel: mode === 'bypassPermissions' ? '确认完全允许' : '确认仅预批准',
+      message:
+        mode === 'bypassPermissions'
+          ? '“完全允许”会跳过 Claude 的权限确认。仅在你信任当前项目及其指令时启用。'
+          : '“仅预批准”会重启并恢复当前会话，未预先批准的工具请求将直接被拒绝。确认继续吗？',
+      title: mode === 'bypassPermissions' ? '确认高风险权限模式' : '确认严格权限模式',
+      tone: 'danger',
+    });
+    if (!confirmed) {
+      renderComposerControls(claudeStates.get(status.id));
+      return;
+    }
+  }
   if (mode === 'dontAsk') {
     await relaunchClaudeSession('「仅预批准」只能在会话启动时设定。', { permissionMode: mode });
     return;
@@ -6777,7 +7122,7 @@ const switchEffortLevel = async (effort: ClaudeEffortRequest): Promise<void> => 
   }
 };
 
-const openModelMenu = async (): Promise<void> => {
+const openModelMenu = async (trigger = footerModel): Promise<void> => {
   const status = activeStatus();
   if (!status) {
     return;
@@ -6815,7 +7160,7 @@ const openModelMenu = async (): Promise<void> => {
     hint.textContent = '请先在工作台启动 Claude Code 会话。';
     footerModelMenu.append(hint);
   }
-  openFooterMenu(footerModelMenu, footerModel);
+  openFooterMenu(footerModelMenu, trigger);
 };
 
 const openSpeedMenu = (): void => {
@@ -6987,31 +7332,38 @@ const setConnectionPolling = (enabled: boolean): void => {
   }
 };
 
-const applyRailTab = (tab?: string): void => {
-  const enteringConnection = tab === 'connection' && selectedRailTab !== 'connection';
+const prepareRailTab = (tab: string): void => {
   if (tab === 'chat') {
-    mainView = 'chat';
-  } else if (tab !== undefined) {
-    mainView = 'terminal';
-  }
-  selectedRailTab = tab;
-  if (enteringConnection) {
+    void loadChatConfig();
+    void loadChatHistory();
+    renderChatUsage();
+  } else if (tab === 'connection') {
     const lastProvider =
       selectedProviderId ?? claudeStates.get(workspaceState.activeSessionId)?.config.preset;
     applyDefaultProviderGroupExpansion(lastProvider);
     providerGroupExpansionPending = Boolean(workspaceState.activeSessionId && !lastProvider);
     renderProviderPicker();
+  } else if (tab === 'plugins') {
+    void loadPluginCatalog(false);
+  } else if (tab === 'mcp') {
+    void loadMcpCatalog(false);
   }
-  const collapsed = tab === undefined;
+};
+
+const renderRailPresentation = (tab: string | undefined, preview: boolean): void => {
+  const collapsed = selectedRailTab === undefined;
   workspace.classList.toggle('workspace--rail-collapsed', collapsed);
+  workspace.classList.toggle('workspace--rail-preview', preview && tab !== undefined);
   workspace.dataset.railPanel = tab ?? 'collapsed';
-  controlPanel.inert = collapsed;
-  controlPanel.setAttribute('aria-hidden', String(collapsed));
+  controlPanel.inert = tab === undefined;
+  controlPanel.setAttribute('aria-hidden', String(tab === undefined));
   panelResizer.tabIndex = collapsed ? -1 : 0;
   for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
-    const selected = button.dataset.railTab === tab;
+    const selected = button.dataset.railTab === selectedRailTab;
+    const transient = preview && button.dataset.railTab === tab;
     button.classList.toggle('activity-rail__button--active', selected);
-    button.setAttribute('aria-expanded', String(selected));
+    button.classList.toggle('activity-rail__button--preview', transient);
+    button.setAttribute('aria-expanded', String(selected || transient));
     button.setAttribute('aria-pressed', String(selected));
     const label = button.querySelector<HTMLElement>('span:not(.activity-rail__dot)')?.textContent;
     button.title = selected ? `${label ?? '侧栏'}（再次点击可收起侧栏）` : (label ?? '打开侧栏');
@@ -7027,20 +7379,58 @@ const applyRailTab = (tab?: string): void => {
       (connectionAdvancedDialog.open &&
         (selectedSettingsTab === 'connection' || selectedSettingsTab === 'router')),
   );
-  if (tab === 'chat') {
-    void loadChatConfig();
-    void loadChatHistory();
-    renderChatUsage();
-  }
-  if (tab === 'plugins') {
-    void loadPluginCatalog(false);
-  }
-  if (tab === 'mcp') {
-    void loadMcpCatalog(false);
-  }
-  if (!chatVisible) {
+  if (!chatVisible && !preview) {
     retryTerminalFitUntilMeasured();
   }
+};
+
+const cancelRailPreviewClose = (): void => {
+  window.clearTimeout(railPreviewCloseTimer);
+  railPreviewCloseTimer = undefined;
+};
+
+const closeRailPreview = (): void => {
+  cancelRailPreviewClose();
+  if (previewRailTab === undefined) return;
+  previewRailTab = undefined;
+  renderRailPresentation(selectedRailTab, false);
+};
+
+const railPreviewDialogObserver = new MutationObserver((records) => {
+  if (
+    previewRailTab !== undefined &&
+    records.some(({ target }) => target instanceof HTMLDialogElement && target.hasAttribute('open'))
+  ) {
+    closeRailPreview();
+  }
+});
+railPreviewDialogObserver.observe(document.body, {
+  attributeFilter: ['open'],
+  attributes: true,
+  subtree: true,
+});
+
+const scheduleRailPreviewClose = (delay = 120): void => {
+  cancelRailPreviewClose();
+  railPreviewCloseTimer = window.setTimeout(closeRailPreview, delay);
+};
+
+const showRailPreview = (tab: string): void => {
+  if (selectedRailTab !== undefined) return;
+  cancelRailPreviewClose();
+  if (previewRailTab !== tab) prepareRailTab(tab);
+  previewRailTab = tab;
+  renderRailPresentation(tab, true);
+};
+
+const applyRailTab = (tab?: string): void => {
+  closeRailPreview();
+  if (tab === 'chat') mainView = 'chat';
+  else if (tab !== undefined) mainView = 'terminal';
+  const entering = tab !== undefined && tab !== selectedRailTab;
+  selectedRailTab = tab;
+  if (entering && tab) prepareRailTab(tab);
+  renderRailPresentation(tab, false);
 };
 
 /**
@@ -7090,6 +7480,47 @@ const selectWorkbenchPage = (page: string): void => {
     panel.classList.toggle('workbench-page--active', panel.dataset.workbenchPage === page);
   }
 };
+
+const renderCliCommandCatalog = (grid: HTMLElement, entries: CliCommandDefinition[]): void => {
+  const nodes: HTMLElement[] = [];
+  let previousCategory = '';
+  for (const entry of entries) {
+    if (entry.category !== previousCategory) {
+      const heading = document.createElement('h4');
+      heading.className = 'command-grid__category';
+      heading.textContent = entry.category;
+      nodes.push(heading);
+      previousCategory = entry.category;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.commandAction = entry.action;
+    button.dataset.commandRuntime = entry.runtime;
+    button.dataset.commandValue = entry.command;
+    button.dataset.commandRisk = entry.risk;
+    if (entry.runtime === 'claude' && entry.action === 'run') {
+      button.dataset.claudeCommand = entry.command;
+      if (entry.syntax.includes('[参数]')) button.dataset.usesArgument = 'true';
+    }
+    if (entry.risk === 'destructive') button.classList.add('command-danger');
+    const code = document.createElement('code');
+    code.textContent = entry.command;
+    const description = document.createElement('span');
+    description.textContent = entry.aliases.length
+      ? `${entry.description} · 别名 ${entry.aliases.join('、')}`
+      : entry.description;
+    const requirements = entry.requirements.length
+      ? ` · 条件：${entry.requirements.join('；')}`
+      : '';
+    button.title = `${entry.syntax} · ${entry.documentedVersion} · ${entry.platforms.join('/')} · ${entry.action === 'run' ? '可视化执行' : '填入输入框确认'}${requirements}`;
+    button.append(code, description);
+    nodes.push(button);
+  }
+  grid.replaceChildren(...nodes);
+};
+
+renderCliCommandCatalog(claudeCommandGrid, CLAUDE_COMMAND_CATALOG);
+renderCliCommandCatalog(codexCommandGrid, CODEX_COMMAND_CATALOG);
 
 const pluginKey = (plugin: ClaudePluginView): string =>
   `${plugin.marketplaceName}/${plugin.name}`.toLowerCase();
@@ -9154,6 +9585,9 @@ const renderNoActiveSession = (): void => {
   runtimeCodex.checked = false;
   document.body.dataset.agentRuntime = 'claude';
   setComposerEnabled(false);
+  renderComposerControls();
+  runtimeActivityTrigger.hidden = true;
+  runtimeActivityPanel.hidden = true;
 };
 
 const activateProject = async (sessionId: string): Promise<void> => {
@@ -9771,6 +10205,8 @@ function renderWorkspace(state: WorkspaceState): void {
   ) {
     retryTerminalFitUntilMeasured();
   }
+  renderComposerControls();
+  renderRuntimeActivity(runtimeActivityStates.get(state.activeSessionId));
 }
 
 const applyTerminalStatus = (status: TerminalStatus): void => {
@@ -10480,19 +10916,25 @@ window.controlPanel.onTerminalSize((sessionId, ptyGeneration, cols, rows) => {
 const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
   rerunAutomaticConnectionTestForActiveProject();
 });
-const closeQuitConfirmation = (confirmed: boolean): void => {
+const closeQuitConfirmation = (decision: boolean | 'retry'): void => {
   pendingQuitRequest = undefined;
   if (quitConfirmationDialog.open) {
-    quitConfirmationDialog.close(confirmed ? 'quit' : 'cancel');
+    quitConfirmationDialog.close(decision === true ? 'quit' : String(decision));
   }
-  window.controlPanel.confirmQuit(confirmed);
+  window.controlPanel.confirmQuit(decision);
 };
 
 const renderQuitConfirmation = (request: AppQuitRequest): void => {
   pendingQuitRequest = request;
-  quitConfirmationTitle.textContent = request.hasBlocking
-    ? '有操作正在进行，不建议退出'
-    : '还有下载未完成';
+  quitConfirmationTitle.textContent = request.runtimeCleanupFailed
+    ? '仍有派生 Web 进程未能安全结束'
+    : request.hasBlocking
+      ? '有操作正在进行，不建议退出'
+      : '还有下载未完成';
+  quitMinimizeButton.textContent = request.runtimeCleanupFailed
+    ? '重试安全清理'
+    : '最小化到托盘，继续运行';
+  quitCancelButton.hidden = request.runtimeCleanupFailed === true;
   quitForceButton.dataset.tone = request.hasBlocking ? 'danger' : 'neutral';
   quitConfirmationList.replaceChildren(
     ...request.leases.map((lease) => {
@@ -10515,18 +10957,24 @@ const renderQuitConfirmation = (request: AppQuitRequest): void => {
 /* Every path answers the main-process handshake, including Esc and the default safe action. */
 const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested(renderQuitConfirmation);
 quitMinimizeButton.addEventListener('click', () => {
+  if (pendingQuitRequest?.runtimeCleanupFailed) {
+    closeQuitConfirmation('retry');
+    return;
+  }
   closeQuitConfirmation(false);
   window.controlPanel.minimizeToTray();
 });
 quitCancelButton.addEventListener('click', () => {
+  if (pendingQuitRequest?.runtimeCleanupFailed) return;
   closeQuitConfirmation(false);
 });
 quitConfirmationDialog.addEventListener('cancel', (event) => {
   event.preventDefault();
+  if (pendingQuitRequest?.runtimeCleanupFailed) return;
   closeQuitConfirmation(false);
 });
 quitConfirmationDialog.addEventListener('click', (event) => {
-  if (event.target === quitConfirmationDialog) {
+  if (event.target === quitConfirmationDialog && !pendingQuitRequest?.runtimeCleanupFailed) {
     closeQuitConfirmation(false);
   }
 });
@@ -10542,8 +10990,10 @@ quitForceButton.addEventListener('click', () => {
   }
   void requestConfirmation({
     confirmLabel: '仍要退出',
-    message: '退出会中断不可恢复的安装或配置操作，并可能留下不完整状态。确认仍要退出吗？',
-    title: '确认中断关键操作',
+    message: request.runtimeCleanupFailed
+      ? '安全清理仍未完成。强制退出可能留下上方列出的派生 Web 进程，确认仍要退出吗？'
+      : '退出会中断不可恢复的安装或配置操作，并可能留下不完整状态。确认仍要退出吗？',
+    title: request.runtimeCleanupFailed ? '确认带残留强制退出' : '确认中断关键操作',
     tone: 'danger',
   }).then((confirmed) => {
     closeQuitConfirmation(confirmed);
@@ -10590,7 +11040,27 @@ window.controlPanel.onNetworkPreflight((result) => {
     }
   }
 });
-window.controlPanel.onWorkspaceState(renderWorkspace);
+const unsubscribeRuntimeActivityChanged = window.controlPanel.onRuntimeActivityChanged((state) => {
+  runtimeActivityStates.set(state.sessionId, state);
+  if (state.sessionId === workspaceState.activeSessionId) renderRuntimeActivity(state);
+});
+const unsubscribeClaudePermissionRequest = window.controlPanel.onClaudePermissionRequest(
+  (request) => {
+    if (
+      request.expiresAt <= Date.now() ||
+      request.requestId === activeClaudePermissionRequest?.requestId ||
+      claudePermissionQueue.some((queued) => queued.requestId === request.requestId)
+    ) {
+      return;
+    }
+    claudePermissionQueue.push(request);
+    showNextClaudePermissionRequest();
+  },
+);
+window.controlPanel.onWorkspaceState((state) => {
+  renderWorkspace(state);
+  void loadActiveRuntimeActivity();
+});
 window.controlPanel.onChatStream(handleChatStream);
 
 chooseDirectoryButton.addEventListener('click', () => {
@@ -10618,10 +11088,22 @@ routeHealthAction.addEventListener('click', () => {
   selectRailTab('connection');
 });
 for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
+  const railTab = button.dataset.railTab ?? 'projects';
   button.addEventListener('click', () => {
-    toggleRailTab(button.dataset.railTab ?? 'projects');
+    toggleRailTab(railTab);
   });
+  button.addEventListener('pointerenter', () => showRailPreview(railTab));
+  button.addEventListener('focusin', () => showRailPreview(railTab));
+  button.addEventListener('pointerleave', () => scheduleRailPreviewClose());
 }
+controlPanel.addEventListener('pointerenter', cancelRailPreviewClose);
+controlPanel.addEventListener('pointerleave', () => scheduleRailPreviewClose());
+controlPanel.addEventListener('focusin', cancelRailPreviewClose);
+controlPanel.addEventListener('focusout', (event) => {
+  const next = event.relatedTarget as Node | null;
+  if (next && (controlPanel.contains(next) || activityRail.contains(next))) return;
+  scheduleRailPreviewClose(0);
+});
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-tab]')) {
   button.addEventListener('click', () => {
     selectPluginTab(button.dataset.pluginTab ?? 'installed');
@@ -10786,10 +11268,12 @@ settingsChatIdleTimeout.addEventListener('change', () => {
   updateSettingsUnsavedIndicator();
 });
 applicationProxyEnabled.addEventListener('change', () => {
+  applicationProxyDraftEdited = true;
   syncApplicationProxyInteractivity();
   updateSettingsUnsavedIndicator();
 });
 applicationProxyProtocol.addEventListener('change', () => {
+  applicationProxyDraftEdited = true;
   syncApplicationProxyInteractivity();
   updateSettingsUnsavedIndicator();
 });
@@ -10800,6 +11284,7 @@ for (const control of [
   applicationProxyPassword,
 ]) {
   control.addEventListener('input', () => {
+    applicationProxyDraftEdited = true;
     syncApplicationProxyInteractivity();
     updateSettingsUnsavedIndicator();
   });
@@ -10810,6 +11295,7 @@ for (const control of [
   applicationProxyScopeConversation,
 ]) {
   control.addEventListener('change', () => {
+    applicationProxyDraftEdited = true;
     syncApplicationProxyInteractivity();
     updateSettingsUnsavedIndicator();
   });
@@ -10965,12 +11451,6 @@ openChatSettingsButton.addEventListener('click', () => {
 closeChatSettingsButton.addEventListener('click', () => {
   chatSettingsDialog.close('cancel');
 });
-chatSettingsDialog.addEventListener('click', (event) => {
-  // A click that lands on the dialog element itself (not its form) is a click on the backdrop area.
-  if (event.target === chatSettingsDialog) {
-    chatSettingsDialog.close('cancel');
-  }
-});
 chatSettingsDialog.addEventListener('close', () => {
   chatCredential.value = '';
   chatClearCredential.checked = false;
@@ -11076,6 +11556,19 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     setArtifactDetailsOpen(false);
   }
+  if (event.key === 'Escape' && footerSecondaryStatus.dataset.open === 'true') {
+    event.preventDefault();
+    setFooterSecondaryOpen(false);
+    footerMore.focus();
+  }
+  if (event.key === 'Escape' && previewRailTab !== undefined) {
+    event.preventDefault();
+    const trigger = activityRail.querySelector<HTMLButtonElement>(
+      `[data-rail-tab="${previewRailTab}"]`,
+    );
+    closeRailPreview();
+    trigger?.focus();
+  }
 });
 artifactNetworkAllowed.addEventListener('change', () => {
   artifactNetworkAllowed.disabled = true;
@@ -11146,6 +11639,64 @@ footerResource.addEventListener('click', () => {
   } else {
     hideFooterMenus();
   }
+});
+runtimeActivityTrigger.addEventListener('click', () => {
+  const opening = runtimeActivityPanel.hidden;
+  runtimeActivityPanel.hidden = !opening;
+  runtimeActivityTrigger.setAttribute('aria-expanded', String(opening));
+  if (opening) runtimeActivityClose.focus({ preventScroll: true });
+});
+runtimeActivityClose.addEventListener('click', () => {
+  runtimeActivityPanel.hidden = true;
+  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  runtimeActivityTrigger.focus({ preventScroll: true });
+});
+composerPermissionMode.addEventListener('change', () => {
+  if (activeDevelopmentRuntime() === 'codex') {
+    composeNativeCommand(composerPermissionMode.value === 'plan' ? '/plan ' : '/permissions ');
+    return;
+  }
+  void switchPermissionMode(composerPermissionMode.value as ClaudePermissionMode);
+});
+composerEffortLevel.addEventListener('change', () => {
+  if (activeDevelopmentRuntime() === 'codex') {
+    composeNativeCommand('/model ');
+    return;
+  }
+  void switchEffortLevel(composerEffortLevel.value as ClaudeEffortRequest);
+});
+composerModelControl.addEventListener('click', () => {
+  if (activeDevelopmentRuntime() === 'codex') {
+    composeNativeCommand('/model ');
+  } else {
+    void openModelMenu(composerModelControl);
+  }
+});
+claudePermissionFallback.addEventListener('click', () => {
+  void respondToClaudePermission({ behavior: 'fallback' });
+});
+claudePermissionDeny.addEventListener('click', () => {
+  const message = claudePermissionDenyReason.value.trim();
+  void respondToClaudePermission({
+    behavior: 'deny',
+    ...(message ? { message } : {}),
+  });
+});
+claudePermissionAllow.addEventListener('click', () => {
+  const selected = claudePermissionSuggestions.querySelector<HTMLInputElement>(
+    'input[name="claude-permission-suggestion"]:checked',
+  );
+  void respondToClaudePermission({
+    behavior: 'allow',
+    ...(selected?.value ? { suggestionId: selected.value } : {}),
+  });
+});
+claudePermissionDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  void respondToClaudePermission({ behavior: 'fallback' });
+});
+footerMore.addEventListener('click', () => {
+  setFooterSecondaryOpen(footerSecondaryStatus.dataset.open !== 'true');
 });
 footerResourceMenu.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -11537,37 +12088,53 @@ for (const field of [claudeBaseUrl, claudeModel, claudeModelFast, claudeCredenti
     connectionRemedy.hidden = true;
   });
 }
-for (const button of document.querySelectorAll<HTMLButtonElement>('[data-claude-command]')) {
-  button.addEventListener('click', async () => {
-    const status = activeStatus();
-    const command = button.dataset.claudeCommand;
-    if (!status || !command) {
-      return;
-    }
-    if (
-      command === '/clear' &&
-      !(await requestConfirmation({
-        confirmLabel: '开启新会话',
-        message: '/clear 会结束当前上下文并开启新会话，是否继续？',
-        title: '清空当前上下文',
-        tone: 'danger',
-      }))
-    ) {
-      return;
-    }
-    const argument = button.dataset.usesArgument
-      ? commandArgument.value
-      : button.dataset.defaultArgument;
-    const result = await window.controlPanel.runClaudeCommand(status.id, command, argument);
-    renderClaudeState(result.state);
-    if (!result.ok) {
-      showToast(result.error ?? '无法执行 Claude 命令。', 'error');
-      return;
-    }
-    showToast(`已执行 ${command}`);
-    focusComposer();
-  });
-}
+const composeWorkbenchCommand = async (button: HTMLButtonElement): Promise<void> => {
+  const command = button.dataset.commandValue;
+  if (!command) return;
+  if (
+    button.dataset.commandRisk === 'destructive' &&
+    !(await requestConfirmation({
+      confirmLabel: '填入命令',
+      message: `${command} 可能结束、删除或清空当前状态。ClaudeDock 只会填入输入框，不会自动发送。`,
+      title: '确认高风险命令',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+  composerInput.value = `${command}${button.title.includes('[参数]') ? ' ' : ''}`;
+  resizeComposer();
+  composerInput.focus();
+  composerInput.setSelectionRange(composerInput.value.length, composerInput.value.length);
+  setWorkbenchOpen(false);
+  showToast(`已填入 ${command}，确认后按 Enter 发送`);
+};
+
+claudeCommandGrid.addEventListener('click', async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command-value]');
+  const status = activeStatus();
+  if (!button || !status) return;
+  if (button.dataset.commandAction !== 'run') {
+    await composeWorkbenchCommand(button);
+    return;
+  }
+  const command = button.dataset.claudeCommand;
+  if (!command) return;
+  const argument = button.dataset.usesArgument === 'true' ? commandArgument.value : undefined;
+  const result = await window.controlPanel.runClaudeCommand(status.id, command, argument);
+  renderClaudeState(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '无法执行 Claude 命令。', 'error');
+    return;
+  }
+  showToast(`已执行 ${command}`);
+  focusComposer();
+});
+
+codexCommandGrid.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command-value]');
+  if (button) void composeWorkbenchCommand(button);
+});
 restartButton.addEventListener('click', async () => {
   const status = activeStatus();
   if (!status) {
@@ -11734,6 +12301,20 @@ document.addEventListener('pointerdown', (event) => {
   ) {
     hideFooterMenus();
   }
+  if (
+    !footerSecondaryStatus.contains(event.target as Node) &&
+    !footerMore.contains(event.target as Node)
+  ) {
+    setFooterSecondaryOpen(false);
+  }
+  if (
+    !runtimeActivityPanel.hidden &&
+    !runtimeActivityPanel.contains(event.target as Node) &&
+    !runtimeActivityTrigger.contains(event.target as Node)
+  ) {
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  }
 });
 window.addEventListener('blur', () => {
   cancelActiveResizes();
@@ -11741,6 +12322,14 @@ window.addEventListener('blur', () => {
   hideConversationContextMenu();
   hideHistoryContextMenu();
   hideFooterMenus();
+  setFooterSecondaryOpen(false);
+  runtimeActivityPanel.hidden = true;
+  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  closeRailPreview();
+});
+window.addEventListener('resize', () => {
+  setFooterSecondaryOpen(false);
+  closeRailPreview();
 });
 
 let workspaceActivationSyncInProgress = false;
@@ -11870,6 +12459,7 @@ const resizeObserver = new ResizeObserver(([entry]) => {
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
+  railPreviewDialogObserver.disconnect();
   unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
   unsubscribeDownloadsChanged();
@@ -11878,6 +12468,8 @@ window.addEventListener('beforeunload', () => {
   unsubscribeApplicationProxyChanged();
   unsubscribeManagedChatGptSetupProgress();
   unsubscribeRouterOperationProgress();
+  unsubscribeRuntimeActivityChanged();
+  unsubscribeClaudePermissionRequest();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
@@ -11892,6 +12484,9 @@ window.addEventListener('beforeunload', () => {
   resizeObserver.disconnect();
   if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
+  }
+  if (claudePermissionExpiryTimer !== undefined) {
+    window.clearTimeout(claudePermissionExpiryTimer);
   }
   for (const [sessionId, view] of [...terminalViews]) {
     disposeTerminalView(sessionId, view);
@@ -11927,6 +12522,7 @@ void (async () => {
     // The terminal still works without Windows-specific reflow hints; settings can be retried later.
   }
   renderWorkspace(await window.controlPanel.getWorkspace());
+  void loadActiveRuntimeActivity();
   window.setTimeout(() => {
     void runActiveNetworkPreflight(false);
   }, 0);

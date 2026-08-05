@@ -188,7 +188,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('content.inert = nextCollapsed;');
     expect(rendererSource).toContain('collapsedClaudeProviderGroups(providerId)');
     expect(rendererSource).toMatch(
-      /const enteringConnection = tab === 'connection'[\s\S]*?applyDefaultProviderGroupExpansion\(lastProvider\)/,
+      /const prepareRailTab = \(tab: string\)[\s\S]*?tab === 'connection'[\s\S]*?applyDefaultProviderGroupExpansion\(lastProvider\)/,
     );
     expect(rendererStyles).toContain('container-type: inline-size;');
     expect(rendererStyles).toMatch(
@@ -457,7 +457,11 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain(
       "workspace.classList.toggle('workspace--rail-collapsed', collapsed)",
     );
-    expect(rendererSource).toContain('controlPanel.inert = collapsed;');
+    expect(rendererSource).toContain('controlPanel.inert = tab === undefined;');
+    expect(rendererSource).toContain('const showRailPreview = (tab: string): void =>');
+    expect(rendererSource).toContain('workspace--rail-preview');
+    expect(rendererSource).toContain('if (!chatVisible && !preview)');
+    expect(rendererSource).toContain('const railPreviewDialogObserver = new MutationObserver');
     expect(rendererStyles).toContain('.workspace.workspace--rail-collapsed');
     expect(rendererStyles).toContain(
       'grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);',
@@ -622,10 +626,14 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/,
     );
-    // Narrow windows always keep the resource control while progressively dropping lower-value
-    // labels, so quota/context and the context-window choice do not disappear.
+    // Narrow windows keep the same controls reachable inside one responsive secondary panel.
+    expect(rendererMarkup).toContain('id="footer-more"');
+    expect(rendererMarkup).toContain('id="footer-secondary-status"');
     expect(rendererStyles).toMatch(
-      /@media \(max-width: 1040px\) \{\s+#footer-model,\s+#footer-speed,\s+#footer-mode \{\s+display: none;/,
+      /@media \(max-width: 1040px\)[\s\S]*?\.terminal-footer__secondary\[data-open='true'\]/,
+    );
+    expect(rendererStyles).not.toMatch(
+      /#footer-model,\s*#footer-speed,\s*#footer-mode[^}]*display:\s*none/,
     );
   });
 
@@ -848,6 +856,14 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).not.toContain("event.code === 'Tab'");
   });
 
+  it('confirms high-risk composer permission modes through the shared switch path', () => {
+    expect(rendererSource).toMatch(
+      /const switchPermissionMode[\s\S]*?mode === 'dontAsk' \|\| mode === 'bypassPermissions'[\s\S]*?await requestConfirmation/,
+    );
+    expect(rendererSource).toContain("? '/plan ' : '/permissions '");
+    expect(rendererSource).toContain("composeNativeCommand('/model ')");
+  });
+
   it('scrolls a folder’s full conversation history without moving the running rows', () => {
     // No truncation: every stored conversation is rendered into the dedicated scroller.
     expect(rendererSource).not.toContain('history.slice(0, 6)');
@@ -931,9 +947,10 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain(
       'window.controlPanel.onAppQuitRequested(renderQuitConfirmation)',
     );
-    expect(rendererSource).toContain('window.controlPanel.confirmQuit(confirmed);');
+    expect(rendererSource).toContain('window.controlPanel.confirmQuit(decision);');
     expect(rendererSource).toContain('closeQuitConfirmation(true);');
     expect(rendererSource).toContain('closeQuitConfirmation(false);');
+    expect(rendererSource).toContain("closeQuitConfirmation('retry');");
     expect(rendererSource).toContain('pendingQuitRequest = request;');
     expect(rendererSource).toContain('request.leases.map((lease) => {');
     expect(rendererSource).toContain('unsubscribeAppQuitRequested();');
@@ -1346,10 +1363,38 @@ describe('external application proxy settings', () => {
     expect(rendererStyles).toContain(".proxy-settings__dependent[aria-disabled='true']");
   });
 
+  it('generation-fences delayed proxy loads and never overwrites an edited draft', () => {
+    expect(rendererSource).toContain('let applicationProxyLoadGeneration = 0;');
+    expect(rendererSource).toContain('let applicationProxyDraftEdited = false;');
+    expect(rendererSource).toMatch(
+      /const state = await window\.controlPanel\.getApplicationProxyState\(\);\s+if \(loadGeneration !== applicationProxyLoadGeneration\) return false;/,
+    );
+    expect(rendererSource).toMatch(
+      /preserveDirtyDraft &&\s+connectionAdvancedDialog\.open &&\s+\(applicationProxyDraftEdited \|\| applicationProxyIsDirty\(\)\)/,
+    );
+    expect(rendererSource).toContain(
+      'applicationProxyEnabled.disabled = applicationProxyInitialLoadPending;',
+    );
+    expect(rendererSource).toContain('completeConnectionAdvancedButton.disabled = true;');
+    expect(rendererSource).toContain('const loadGeneration = ++applicationProxyLoadGeneration;');
+  });
+
   it('disables the unsupported CLI scope when SOCKS5 is selected', () => {
     expect(rendererSource).toContain("applicationProxyProtocol.value === 'socks5'");
     expect(rendererSource).toContain('applicationProxyScopeCli.disabled = true;');
     expect(rendererSource).toContain('applicationProxyScopeCli.checked = false;');
+  });
+});
+
+describe('model configuration dialog', () => {
+  it('does not discard its draft when a pointer is released on the backdrop', () => {
+    expect(rendererMarkup).toContain('id="chat-settings-dialog"');
+    expect(rendererMarkup).toContain('id="close-chat-settings"');
+    expect(rendererSource).not.toMatch(
+      /chatSettingsDialog\.addEventListener\('click',[\s\S]*?event\.target === chatSettingsDialog/,
+    );
+    expect(rendererSource).toContain("chatSettingsDialog.close('cancel');");
+    expect(rendererSource).toContain("chatSettingsDialog.close('saved');");
   });
 });
 

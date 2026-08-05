@@ -538,6 +538,30 @@ export const buildRuntimeSignalCommand = (
   return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -OutputPath "${normalizedOutputPath}" -Event "${event}"`;
 };
 
+export const buildRuntimeActivityCommand = (
+  scriptPath: string,
+  outputDirectory: string,
+  event: string,
+  sessionId: string,
+  launchGeneration: number,
+  ptyGeneration: number,
+): string => {
+  const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
+  const normalizedOutputDirectory = path.resolve(outputDirectory).replaceAll('\\', '/');
+  return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -OutputDirectory "${normalizedOutputDirectory}" -Event "${event}" -SessionId "${sessionId}" -LaunchGeneration ${launchGeneration} -PtyGeneration ${ptyGeneration}`;
+};
+
+export const buildClaudePermissionHookCommand = (
+  scriptPath: string,
+  pipeName: string,
+  token: string,
+  sessionId: string,
+  launchGeneration: number,
+): string => {
+  const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
+  return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -PipeName "${pipeName}" -Token "${token}" -SessionId "${sessionId}" -LaunchGeneration ${launchGeneration}`;
+};
+
 export const buildWebSearchGuardCommand = (scriptPath: string, allowedAgent: string): string => {
   const normalizedScriptPath = path.resolve(scriptPath).replaceAll('\\', '/');
   return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${normalizedScriptPath}" -AllowedAgent "${allowedAgent}"`;

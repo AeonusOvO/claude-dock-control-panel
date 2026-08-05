@@ -162,6 +162,7 @@ export class ProjectDirectoryLifecycleCoordinator {
 }
 
 export interface OwnedProjectDirectoryClosureOptions<TState> {
+  beforeCloseSession?: (sessionId: string) => Promise<void>;
   captureSessionIds: () => readonly string[];
   closeRuntimeSession: (sessionId: string) => void;
   closeWorkspaceSession: (sessionId: string) => void;
@@ -185,6 +186,11 @@ export const runOwnedProjectDirectoryClosure = <TState>(
     const sessionIds = [...new Set(options.captureSessionIds())];
     await Promise.all(sessionIds.map(options.invalidateAndWait));
     ownership.assertCurrent();
+
+    if (options.beforeCloseSession) {
+      await Promise.all(sessionIds.map(options.beforeCloseSession));
+      ownership.assertCurrent();
+    }
 
     for (const sessionId of sessionIds) {
       ownership.assertCurrent();

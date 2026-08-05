@@ -10,7 +10,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
@@ -74,7 +74,9 @@ import {
 import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
+  buildClaudePermissionHookCommand,
   buildClaudeSettingsEnvironment,
+  buildRuntimeActivityCommand,
   buildClaudeSpeedSettings,
   managedChatGptContextProfile,
   buildRuntimeSignalCommand,
@@ -88,6 +90,11 @@ import {
   type ClaudeServingSpeedProfile,
   type NormalizedClaudeConfig,
 } from './claude-configuration';
+import type { ClaudeRuntimeActivityEvent } from './runtime-activity-registry';
+import {
+  classifyClaudeStreamFailure,
+  type ClaudeStreamFailureKind,
+} from './claude-stream-diagnostics-store';
 import {
   CLAUDEDOCK_WEB_RESEARCH_AGENTS,
   CLAUDEDOCK_WEB_RESEARCH_AGENT_NAME,
@@ -117,6 +124,7 @@ import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-upda
 
 interface RuntimeSession {
   active: boolean;
+  activityEventsPath?: string;
   /** Directory containing only this launch's settings and filesystem side-channel artifacts. */
   artifactDirectory?: string;
   /** Claude Code conversation this PTY is attached to, once the status line has reported it. */
@@ -139,6 +147,8 @@ interface RuntimeSession {
     detail: string;
   };
   launchedConfigFingerprint?: string;
+  launchedAt?: number;
+  launchedCliVersion?: string;
   /** Monotonic owner of the settings, hooks, status line, and artifacts for this launch. */
   launchGeneration?: number;
   /** Serving-speed preference baked into this PTY launch, before any manual TUI changes. */
@@ -154,6 +164,8 @@ interface RuntimeSession {
   pendingEffortRestoreAt?: number;
   /** Live mode read off the TUI badge; undefined until the badge has been painted once. */
   permissionMode?: ClaudePermissionMode;
+  /** Last ClaudeDock request, kept separate while the TUI still reports the previous mode. */
+  permissionModeRequest?: ClaudePermissionMode;
   /** Modes this session has actually shown, in first-seen order. */
   permissionModeCycle: ClaudePermissionMode[];
   /** Exact PowerShell/ConPTY instance this runtime may observe or mutate. */
@@ -771,6 +783,21 @@ export const claudeCodeThemeForTerminalTheme = (themeId: TerminalThemeId): 'dark
   TERMINAL_THEMES[themeId].appearance === 'light' ? 'light' : 'dark';
 
 export class ClaudeRuntime {
+  private activityScriptPath?: string;
+  private onActivityEvent?: (event: ClaudeRuntimeActivityEvent) => void;
+  private onStreamFailure?: (observation: {
+    cliVersion?: string;
+    gatewayVersion?: string;
+    kind: ClaudeStreamFailureKind;
+    occurredAt: number;
+    sessionId: string;
+    sessionRuntimeMs: number;
+  }) => void;
+  private permissionHookScriptPath?: string;
+  private createPermissionEndpoint?: (
+    sessionId: string,
+    launchGeneration: number,
+  ) => { pipeName: string; token: string };
   private readonly backgroundTasks = new BackgroundTaskCoordinator(2);
   private readonly installationCache = new AsyncRefreshCache<ClaudeInstallationStatus>(
     INSTALLATION_CACHE_MS,
@@ -858,8 +885,35 @@ export class ClaudeRuntime {
     this.metricsTimer.unref();
   }
 
+  public setRuntimeActivityHandler(
+    scriptPath: string,
+    handler: (event: ClaudeRuntimeActivityEvent) => void,
+  ): void {
+    this.activityScriptPath = scriptPath;
+    this.onActivityEvent = handler;
+  }
+
+  public setPermissionRequestHook(
+    scriptPath: string,
+    createEndpoint: (
+      sessionId: string,
+      launchGeneration: number,
+    ) => { pipeName: string; token: string },
+  ): void {
+    this.permissionHookScriptPath = scriptPath;
+    this.createPermissionEndpoint = createEndpoint;
+  }
+
+  public setStreamFailureHandler(handler: NonNullable<ClaudeRuntime['onStreamFailure']>): void {
+    this.onStreamFailure = handler;
+  }
+
   public closeSession(sessionId: string): void {
-    const previousRoute = this.sessions.get(sessionId)?.routeKind;
+    const previous = this.sessions.get(sessionId);
+    const previousRoute = previous?.routeKind;
+    if (previous?.launchGeneration !== undefined && previous.ptyGeneration !== undefined) {
+      this.emitSyntheticSessionEnd(previous);
+    }
     this.sessions.delete(sessionId);
     if (previousRoute) {
       void this.stopUnusedRoute(previousRoute).catch(() => {});
@@ -966,6 +1020,7 @@ export class ClaudeRuntime {
         ? `${detectedError} 当前会话启用了实验性的 105 万扩展窗口；这通常表示 ChatGPT 订阅后端仍按较小的产品窗口拒绝请求，请切回标准窗口后新建会话。`
         : detectedError;
     if (contextualError && contextualError !== runtime.lastApiError?.detail) {
+      const detectedAt = Date.now();
       runtime.lastApiError = {
         category: rejectedEffort
           ? 'effort-thinking-disabled'
@@ -973,8 +1028,19 @@ export class ClaudeRuntime {
             ? 'context-window-exceeded'
             : 'general',
         detail: contextualError,
-        detectedAt: Date.now(),
+        detectedAt,
       };
+      const streamFailure = classifyClaudeStreamFailure(contextualError);
+      if (streamFailure) {
+        this.onStreamFailure?.({
+          ...(runtime.launchedCliVersion ? { cliVersion: runtime.launchedCliVersion } : {}),
+          ...(this.managedGatewayVersion() ? { gatewayVersion: this.managedGatewayVersion() } : {}),
+          kind: streamFailure,
+          occurredAt: detectedAt,
+          sessionId,
+          sessionRuntimeMs: Math.max(0, detectedAt - (runtime.launchedAt ?? detectedAt)),
+        });
+      }
       void this.emitState(runtime);
     }
     this.observePermissionModeFromRawOutput(runtime);
@@ -1200,6 +1266,7 @@ export class ClaudeRuntime {
         metrics: displayMetrics,
         modelMatches: matches,
         permissionMode: runtime.permissionMode,
+        permissionModeRequest: runtime.permissionModeRequest,
         permissionModeCycle: [...runtime.permissionModeCycle],
         ptyGeneration: runtime.ptyGeneration,
         resourceUsage: mergeClaudeResourceUsage(contextUsage, providerUsage),
@@ -1224,6 +1291,11 @@ export class ClaudeRuntime {
     return this.sessions.get(sessionId)?.active ?? false;
   }
 
+  public ownsLaunch(sessionId: string, launchGeneration: number): boolean {
+    const runtime = this.sessions.get(sessionId);
+    return Boolean(runtime?.active && runtime.launchGeneration === launchGeneration);
+  }
+
   public bindPty(sessionId: string, ptyGeneration: PtyGeneration): void {
     const runtime = this.sessions.get(sessionId);
     if (!runtime?.active) {
@@ -1233,6 +1305,14 @@ export class ClaudeRuntime {
       throw new Error('Claude Code 已绑定到其他终端，这次启动结果已失效。');
     }
     runtime.ptyGeneration = ptyGeneration;
+    this.onActivityEvent?.({
+      event: 'SessionStart',
+      eventId: `launch-${runtime.launchGeneration ?? 0}`,
+      launchGeneration: runtime.launchGeneration ?? 0,
+      ptyGeneration,
+      sessionId,
+      signaledAt: Date.now(),
+    });
   }
 
   public isBoundToPty(sessionId: string, ptyGeneration: PtyGeneration): boolean {
@@ -1657,7 +1737,53 @@ export class ClaudeRuntime {
     const settingsPath = path.join(artifactDirectory, 'settings.json');
     const signalPath = path.join(artifactDirectory, 'signal.json');
     const turnStopPath = path.join(artifactDirectory, 'turn-stop.json');
+    const activityEventsPath = path.join(artifactDirectory, 'events');
     mkdirSync(artifactDirectory, { recursive: true });
+    if (this.activityScriptPath) mkdirSync(activityEventsPath, { recursive: true });
+
+    const activityHook = (
+      event: string,
+    ): { command: string; shell: string; type: string } | undefined =>
+      this.activityScriptPath
+        ? {
+            command: buildRuntimeActivityCommand(
+              this.activityScriptPath,
+              activityEventsPath,
+              event,
+              sessionId,
+              launchGeneration,
+              0,
+            ),
+            shell: 'powershell',
+            type: 'command',
+          }
+        : undefined;
+    const activityHookGroup = (
+      event: string,
+    ): Array<{ hooks: Array<{ command: string; shell: string; type: string }> }> => {
+      const hook = activityHook(event);
+      return hook ? [{ hooks: [hook] }] : [];
+    };
+    const stopActivityHook = activityHook('Stop');
+    const permissionEndpoint =
+      this.permissionHookScriptPath && this.createPermissionEndpoint
+        ? this.createPermissionEndpoint(sessionId, launchGeneration)
+        : undefined;
+    const permissionRequestHook =
+      permissionEndpoint && this.permissionHookScriptPath
+        ? {
+            command: buildClaudePermissionHookCommand(
+              this.permissionHookScriptPath,
+              permissionEndpoint.pipeName,
+              permissionEndpoint.token,
+              sessionId,
+              launchGeneration,
+            ),
+            shell: 'powershell',
+            timeout: 600,
+            type: 'command',
+          }
+        : undefined;
 
     /*
      * Off unless the user turned it on: the guard hook, the subagent definition and the appended
@@ -1672,6 +1798,22 @@ export class ClaudeRuntime {
       env: buildClaudeSettingsEnvironment(launchConfig, contextWindowMode, speed.profile),
       // Hooks remain session-local because this file is passed through Claude Code's --settings.
       hooks: {
+        ...(this.activityScriptPath
+          ? {
+              SessionEnd: activityHookGroup('SessionEnd'),
+              StopFailure: activityHookGroup('StopFailure'),
+              SubagentStart: activityHookGroup('SubagentStart'),
+              SubagentStop: activityHookGroup('SubagentStop'),
+              TaskCompleted: activityHookGroup('TaskCompleted'),
+              TaskCreated: activityHookGroup('TaskCreated'),
+              UserPromptSubmit: activityHookGroup('UserPromptSubmit'),
+            }
+          : {}),
+        ...(permissionRequestHook
+          ? {
+              PermissionRequest: [{ hooks: [permissionRequestHook] }],
+            }
+          : {}),
         PostCompact: [
           {
             hooks: [
@@ -1714,6 +1856,7 @@ export class ClaudeRuntime {
                 shell: 'powershell',
                 type: 'command',
               },
+              ...(stopActivityHook ? [stopActivityHook] : []),
             ],
           },
         ],
@@ -1756,6 +1899,7 @@ export class ClaudeRuntime {
     const runtime = this.ensureSession(sessionId, cwd);
     const predecessorPtyGeneration = runtime.active ? runtime.ptyGeneration : undefined;
     runtime.active = true;
+    runtime.activityEventsPath = this.activityScriptPath ? activityEventsPath : undefined;
     runtime.artifactDirectory = artifactDirectory;
     runtime.ptyGeneration = undefined;
     runtime.routeKind = routeKind;
@@ -1772,6 +1916,8 @@ export class ClaudeRuntime {
     runtime.markerRemainder = '';
     runtime.lastApiError = undefined;
     runtime.launchedConfigFingerprint = connectionFingerprint(config, credential);
+    runtime.launchedAt = Date.now();
+    runtime.launchedCliVersion = installation.version;
     runtime.launchGeneration = launchGeneration;
     runtime.launchedSpeedPreference = speed.preference;
     runtime.launchedSpeedSignature = speed.signature;
@@ -1789,6 +1935,7 @@ export class ClaudeRuntime {
     runtime.turnStopSeenAt = undefined;
     // A relaunch paints a fresh TUI, so nothing observed in the previous one still holds.
     runtime.permissionMode = effectiveStartMode;
+    runtime.permissionModeRequest = effectiveStartMode;
     runtime.permissionModeCycle = effectiveStartMode ? [effectiveStartMode] : [];
     runtime.signalPath = signalPath;
     runtime.signalSeenAt = undefined;
@@ -2244,6 +2391,8 @@ export class ClaudeRuntime {
     }
 
     this.modeSwitchLocks.add(sessionId);
+    runtime.permissionModeRequest = mode;
+    void this.emitState(runtime);
     try {
       const current = await this.readPermissionModeFromScreen(sessionId, ptyGeneration);
       this.assertRuntimePty(runtime, ptyGeneration);
@@ -2286,6 +2435,10 @@ export class ClaudeRuntime {
       }
       throw new Error('该模式不在当前会话的可用循环中。');
     } finally {
+      if (runtime.permissionMode !== mode) {
+        runtime.permissionModeRequest = undefined;
+        void this.emitState(runtime);
+      }
       this.modeSwitchLocks.delete(sessionId);
     }
   }
@@ -2736,8 +2889,10 @@ export class ClaudeRuntime {
 
   private deactivateRuntime(runtime: RuntimeSession): boolean {
     const waitingForCompact = runtime.waitingForCompact;
+    this.emitSyntheticSessionEnd(runtime);
     runtime.active = false;
     runtime.launchGeneration = undefined;
+    runtime.permissionModeRequest = undefined;
     runtime.ptyGeneration = undefined;
     runtime.exitMarker = undefined;
     runtime.markerRemainder = '';
@@ -2748,6 +2903,18 @@ export class ClaudeRuntime {
     }
     void this.emitState(runtime);
     return true;
+  }
+
+  private emitSyntheticSessionEnd(runtime: RuntimeSession): void {
+    if (runtime.launchGeneration === undefined || runtime.ptyGeneration === undefined) return;
+    this.onActivityEvent?.({
+      event: 'SessionEnd',
+      eventId: `session-end-${Date.now()}`,
+      launchGeneration: runtime.launchGeneration,
+      ptyGeneration: runtime.ptyGeneration,
+      sessionId: runtime.sessionId,
+      signaledAt: Date.now(),
+    });
   }
 
   public shutdown(): void {
@@ -3079,6 +3246,73 @@ export class ClaudeRuntime {
     }
   }
 
+  private async pollRuntimeActivityEvents(runtime: RuntimeSession): Promise<void> {
+    const eventsPath = runtime.activityEventsPath;
+    const launchGeneration = runtime.launchGeneration;
+    const ptyGeneration = runtime.ptyGeneration;
+    const handler = this.onActivityEvent;
+    if (
+      !eventsPath ||
+      !handler ||
+      launchGeneration === undefined ||
+      ptyGeneration === undefined ||
+      !this.isRuntimeLaunchPtyCurrent(runtime, launchGeneration, ptyGeneration)
+    ) {
+      return;
+    }
+    try {
+      const files = (await readdir(eventsPath))
+        .filter((name) => /^event-\d+-[a-f0-9]{32}\.json$/i.test(name))
+        .sort()
+        .slice(0, 100);
+      for (const name of files) {
+        const eventPath = path.join(eventsPath, name);
+        try {
+          const raw = await readFile(eventPath, 'utf8');
+          if (!this.isRuntimeLaunchPtyCurrent(runtime, launchGeneration, ptyGeneration)) return;
+          const parsed = JSON.parse(
+            raw.startsWith(BYTE_ORDER_MARK) ? raw.slice(1) : raw,
+          ) as Partial<ClaudeRuntimeActivityEvent>;
+          if (
+            typeof parsed.event !== 'string' ||
+            typeof parsed.eventId !== 'string' ||
+            parsed.sessionId !== runtime.sessionId ||
+            parsed.launchGeneration !== launchGeneration ||
+            typeof parsed.signaledAt !== 'number'
+          ) {
+            await unlink(eventPath);
+            continue;
+          }
+          handler({
+            agentId: optionalString(parsed.agentId),
+            agentType: optionalString(parsed.agentType),
+            backgroundTasks: Array.isArray(parsed.backgroundTasks)
+              ? parsed.backgroundTasks.slice(0, 50).map((task) => ({
+                  description: optionalString(task?.description),
+                  id: optionalString(task?.id),
+                  kind: optionalString(task?.kind),
+                }))
+              : undefined,
+            description: optionalString(parsed.description),
+            event: parsed.event,
+            eventId: parsed.eventId,
+            failureKind: optionalString(parsed.failureKind),
+            launchGeneration,
+            ptyGeneration,
+            sessionId: runtime.sessionId,
+            signaledAt: parsed.signaledAt,
+            taskId: optionalString(parsed.taskId),
+          });
+          await unlink(eventPath);
+        } catch {
+          // A file may still be completing or temporarily locked; retry it on the next poll.
+        }
+      }
+    } catch {
+      // The event directory is optional and can disappear during generation cleanup.
+    }
+  }
+
   private ensureSession(sessionId: string, cwd: string): RuntimeSession {
     const existing = this.sessions.get(sessionId);
     if (existing) {
@@ -3148,6 +3382,7 @@ export class ClaudeRuntime {
     await Promise.all(
       [...this.sessions.values()].map(async (runtime) => {
         await Promise.all([
+          this.pollRuntimeActivityEvents(runtime),
           this.pollRuntimeSignal(runtime),
           this.pollTurnStopSignal(runtime),
           this.pollRuntimeMetrics(runtime),

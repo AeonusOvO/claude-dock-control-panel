@@ -40,6 +40,8 @@
     "test:control-theme": "npm run build:renderer && electron scripts/control-theme-smoke.cjs",
     "test:dialog-select": "npm run build:renderer && electron scripts/dialog-select-smoke.cjs",
     "test:layout": "npm run build:renderer && electron scripts/layout-smoke.cjs",
+    "test:runtime-soak": "node scripts/runtime-soak.cjs",
+    "test:runtime-soak:accelerated": "node scripts/runtime-soak.cjs --hours=24 --accelerated",
     "test:select": "npm run build:renderer && electron scripts/select-interaction-smoke.cjs",
     "test:select-theme": "npm run build:renderer && electron scripts/select-theme-smoke.cjs",
     "test:visual": "npm run build:renderer && electron scripts/visual-smoke.cjs",

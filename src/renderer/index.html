@@ -957,6 +957,16 @@
           <div class="terminal-title">
             <span>终端</span>
             <strong id="terminal-project">项目终端</strong>
+            <button
+              class="runtime-activity-trigger"
+              id="runtime-activity-trigger"
+              type="button"
+              aria-controls="runtime-activity-panel"
+              aria-expanded="false"
+              hidden
+            >
+              <span aria-hidden="true"></span><b id="runtime-activity-label">后台任务 0</b>
+            </button>
           </div>
           <div class="terminal-toolbar__actions">
             <button
@@ -1007,6 +1017,33 @@
           </div>
         </div>
         <form class="terminal-composer" id="terminal-composer">
+          <div class="composer-control-strip" id="composer-control-strip">
+            <label for="composer-permission-mode">
+              <span>模式</span>
+              <select id="composer-permission-mode" aria-label="切换权限与 Plan 模式">
+                <option value="default">手动确认</option>
+                <option value="acceptEdits">自动编辑</option>
+                <option value="auto">自动模式</option>
+                <option value="plan">Plan 模式</option>
+                <option value="dontAsk">仅预批准</option>
+                <option value="bypassPermissions">完全允许</option>
+              </select>
+            </label>
+            <label for="composer-effort-level">
+              <span>思考</span>
+              <select id="composer-effort-level" aria-label="切换模型思考程度">
+                <option value="auto">自动</option>
+                <option value="low">轻量</option>
+                <option value="medium">均衡</option>
+                <option value="high">深入</option>
+                <option value="xhigh">极深</option>
+                <option value="max">最大</option>
+                <option value="ultracode">Ultra</option>
+              </select>
+            </label>
+            <button id="composer-model-control" type="button">模型</button>
+            <span id="composer-control-status" aria-live="polite">等待运行时状态</span>
+          </div>
           <textarea
             id="composer-input"
             rows="1"
@@ -1027,28 +1064,68 @@
           >
         </form>
         <footer class="terminal-footer">
-          <button id="footer-connection" type="button">
-            <span class="footer-connection-dot" aria-hidden="true"></span>
-            <span id="footer-connection-label">连接待测试</span>
+          <div class="terminal-footer__core">
+            <button id="footer-connection" type="button">
+              <span class="footer-connection-dot" aria-hidden="true"></span>
+              <span id="footer-connection-label">连接待测试</span>
+            </button>
+            <button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">
+              <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
+              <span id="footer-context-label">资源 —</span>
+            </button>
+          </div>
+          <button
+            class="terminal-footer__more"
+            id="footer-more"
+            type="button"
+            aria-controls="footer-secondary-status"
+            aria-expanded="false"
+            aria-haspopup="true"
+          >
+            <span>更多状态</span><span aria-hidden="true">4</span>
           </button>
-          <button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">
-            <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
-            <span id="footer-context-label">资源 —</span>
-          </button>
-          <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
-            模型 —
-          </button>
-          <button id="footer-speed" type="button" aria-haspopup="menu" aria-expanded="false">
-            速度 —
-          </button>
-          <button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">
-            模式 —
-          </button>
-          <button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">
-            思考 —
-          </button>
-          <span id="footer-status">后台待命</span>
+          <div class="terminal-footer__secondary" id="footer-secondary-status" data-open="false">
+            <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
+              模型 —
+            </button>
+            <button id="footer-speed" type="button" aria-haspopup="menu" aria-expanded="false">
+              速度 —
+            </button>
+            <button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">
+              模式 —
+            </button>
+            <button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">
+              思考 —
+            </button>
+            <span id="footer-status">后台待命</span>
+          </div>
         </footer>
+
+        <aside
+          class="runtime-activity-panel"
+          id="runtime-activity-panel"
+          aria-label="后台任务详情"
+          hidden
+        >
+          <header>
+            <div>
+              <strong>后台活动</strong><span id="runtime-activity-summary">暂无后台任务</span>
+            </div>
+            <button id="runtime-activity-close" type="button" aria-label="关闭后台任务详情">
+              ×
+            </button>
+          </header>
+          <div class="runtime-activity-panel__body">
+            <section>
+              <h3>任务与子代理</h3>
+              <ul id="runtime-task-list"></ul>
+            </section>
+            <section>
+              <h3>派生 Web 进程</h3>
+              <ul id="runtime-process-list"></ul>
+            </section>
+          </div>
+        </aside>
 
         <button
           class="workbench-scrim"
@@ -1243,7 +1320,7 @@
                   placeholder="例如：保留 API 设计与测试结论"
                 />
               </label>
-              <div class="command-grid">
+              <div class="command-grid" id="claude-command-grid">
                 <button data-claude-command="/context" data-default-argument="all" type="button">
                   <code>/context</code><span>上下文构成</span>
                 </button>
@@ -1434,6 +1511,15 @@
               首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。
               App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。
             </p>
+            <section class="codex-command-catalog" aria-labelledby="codex-command-title">
+              <div class="command-intro">
+                <strong id="codex-command-title">Codex 斜杠指令</strong>
+                <span
+                  >点击只会填入下方提示词输入框，由你确认后发送；动态指令以原生 / 列表为准。</span
+                >
+              </div>
+              <div class="command-grid" id="codex-command-grid"></div>
+            </section>
           </div>
         </aside>
       </section>
@@ -2343,6 +2429,31 @@
           </button>
           <button class="button button--primary" id="save-chat-config" type="submit">
             保存独立接入
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="claude-permission-dialog" id="claude-permission-dialog">
+      <form method="dialog">
+        <header>
+          <div>
+            <span>Claude 权限确认</span><strong id="claude-permission-tool">工具请求</strong>
+          </div>
+        </header>
+        <p id="claude-permission-description">Claude 正在等待你的确认。</p>
+        <fieldset id="claude-permission-suggestions" hidden>
+          <legend>Claude 建议的持续允许范围</legend>
+        </fieldset>
+        <label class="field" for="claude-permission-deny-reason">
+          <span>拒绝原因（可选）</span>
+          <input id="claude-permission-deny-reason" type="text" maxlength="300" />
+        </label>
+        <footer>
+          <button id="claude-permission-fallback" type="button">返回原生确认</button>
+          <button id="claude-permission-deny" type="button">拒绝</button>
+          <button class="dialog-primary" id="claude-permission-allow" type="button">
+            本次允许
           </button>
         </footer>
       </form>

@@ -1,9 +1,12 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.6.0（2026-08-05）。4.6.0 增加按接入与模型隔离的 Claude Code 服务速度 profile：
-官方 Claude 使用原生 Fast 并以 statusLine `fast_mode` 验证，受管 GPT 只请求 `service_tier=fast`；
-同时以 renderer generation 锁和主进程 per-session operation coordinator 把安全会话启动、终端重启、
-开发引擎切换与受管路由恢复收敛成可取消且不会迟到写入的生命周期。4.5.0 为受管 ChatGPT 的
+当前架构版本：4.6.0（2026-08-05）。4.6.0 在原有按接入/模型隔离的服务速度 profile 和会话
+generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
+登记与受控退出清理；流中断诊断只保存脱敏分类并禁止对部分输出自动重放。Claude/Codex 工作台改用
+共享静态指令注册表，提示词区新增模式/模型/思考控制，窄底栏和收起侧栏均采用不复制状态源的响应式
+浮层。代理草稿加载使用代次与用户编辑锁，增强选择器提供显式值同步；接入历史按规范化指纹在全表
+去重。官方 Claude 使用原生 Fast 并以 statusLine `fast_mode` 验证，受管 GPT 只请求
+`service_tier=fast`。4.5.0 为受管 ChatGPT 的
 `gpt-5.6-sol` 增加标准/扩展上下文档位、提前自动压缩、真实当前窗口读数与溢出恢复提示，并把
 Claude/Codex 的上下文、官方额度窗口和受支持供应商余额统一到可配置的底栏资源菜单；同时完成代理
 启用草稿的统一保存与禁用态隔离、受管 ChatGPT 官方 OpenAI 网络预检和本机全局 IPv6 路径提示。
@@ -70,7 +73,12 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        ├── ClaudeConfigStore ── safeStorage / 项目级接入配置
         │        ├── ClaudeConnectionHistoryStore ── version 3 名称 / 协议 / 加密回放
-        │        └── ModelSpeedPreferencesStore ── 去凭据目标哈希 / 标准或快速偏好
+        │        ├── ModelSpeedPreferencesStore ── 去凭据目标哈希 / 标准或快速偏好
+        │        └── launch-owned Hooks ── 活动事件 / PermissionRequest named pipe
+        ├── RuntimeActivityRegistry ── session / launch / PTY 代次隔离的任务状态机
+        ├── RuntimeProcessRegistry ── PTY 后代 / TCP 监听 / 不透明终止键 / 退出清理
+        ├── ClaudePermissionBridge ── 会话队列 / 600 秒 fail-closed 权限响应
+        ├── ClaudeStreamDiagnosticsStore ── 14 天 / 200 条 / 2 MiB 脱敏流故障
         ├── CodexRuntime ─┬─ 官方 CLI 检测 / 工作区沙箱 TUI 启动
         │                 ├─ CodexInstaller ── GitHub Release / size + SHA-256
         │                 └─ CodexAppServer ── JSONL / ChatGPT 登录与账号额度
@@ -94,6 +102,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ApplicationUpdaterService + SourceSelector ── GitHub/HTTPS 镜像择优 / NSIS 更新
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
+        ├── CliCommandCatalog ── Claude / Codex 命令元数据、执行策略与主进程白名单
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
 ```
@@ -334,12 +343,14 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
    `isQuitting` 这个单向闩未置位，就 `preventDefault()` 并转交 `requestQuit()`。
 2. `requestQuit()` 显示窗口并发 `app:quit-requested`；渲染进程判断是否值得拦截，然后必须
    通过 `app:confirm-quit` 回答——包括否定回答，否则应用将永远关不掉。
-3. 主进程只在收到 `true` 时置 `isQuitting = true` 并 `app.quit()`，第二趟才执行真正的清理。
+3. 主进程只在收到 `true` 后进入 `beginControlledQuit()`：停止新的权限等待，按登记所有权清理
+   派生 Web 子树并复查；无残留才置 `isQuitting = true` 并 `app.quit()`，第二趟进入真正退出。
 
 逃生口都是必需的，缺一个要么丢失回复、要么留下关不掉的进程：窗口不存在/正在加载/已崩溃时
-（`canAsk` 为假）直接退出，因为没人能回答；`quitConfirmationPending` 期间再次请求退出即强制
-通过，这是渲染进程卡死时的出路。这里**故意不设超时**——pending 通常意味着弹窗正等着用户读，
-定时器会在用户面前把应用关掉。`session-end`（Windows 关机/注销，是 `BaseWindow` 事件而非
+（`canAsk` 为假）仍先执行受控清理；`quitConfirmationPending` 期间再次请求退出或残留对话框中的
+“强制退出”才绕过残留阻塞，这是渲染进程卡死或 Windows 检查失败时的出路。普通路径会把精确的
+已验证 PID 列表交给界面，允许重试而不是按名称误杀。这里**故意不设确认超时**——pending 通常
+意味着弹窗正等着用户读，定时器会在用户面前把应用关掉。`session-end`（Windows 关机/注销，是 `BaseWindow` 事件而非
 `app` 事件）直接置闩：系统无论如何都会杀进程，弹窗只是推迟丢失同样的工作。单实例锁失败的
 重复启动没有窗口也没有要保护的东西，立即退出。
 
@@ -348,6 +359,33 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 中心与退出确认；渲染进程再把正在流式生成的回复、发送中的提交和附件读取合并进退出清单。确认框
 把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘。运行中的终端刻意不算；确认框已被
 其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
+
+### 后台活动、权限 Hook、流故障与派生进程
+
+- `RuntimeActivityRegistry` 以 `{sessionId, launchGeneration, ptyGeneration}` 作为所有权键，阶段为
+  `stopped`、`cli-idle`、`foreground-running`、`waiting-background`、`resuming`、`failed`。
+  `Stop.background_tasks` 让顶层回答进入等待后台而不是误报结束；最后一个任务完成后进入
+  `resuming`，直到新的顶层 `Stop` / `StopFailure`。任务完成记录最多保留 10 分钟和 20 条，token
+  只表达 `likely` / `none` / `unknown`。
+- 每次 Claude launch 的临时 settings 注入 `UserPromptSubmit`、`SubagentStart/Stop`、
+  `TaskCreated/Completed`、顶层 `Stop`、`StopFailure` 与 `SessionEnd`。PowerShell Hook 只把白名单
+  字段写成唯一原子事件文件，不持久化 prompt、回复、工具参数或凭据；轮询消费前后均校验 launch
+  与 PTY 代次，旧事件不能唤醒替代会话。
+- `ClaudePermissionBridge` 为每次 launch 建立随机 token 的 Windows named pipe，按会话串行处理
+  `PermissionRequest`。Hook 最多等待 600 秒，只把工具名与上游建议交给界面；允许/拒绝结果按官方
+  Hook JSON 返回。管道、renderer、代次或超时失败都不给出 allow 决策，让 Claude 回到原生交互。
+  请求与建议只驻留内存，preload 只暴露类型化 request ID 和 suggestion ID。
+- `RuntimeProcessRegistry` 约每 2 秒读取 Windows 进程父子关系和 TCP 监听，只登记当前 PTY 的已验证
+  后代且属于常见 Web 可执行程序。`processKey` 绑定目标/根 PID、创建时间与三重会话代次；终止前
+  重新捕获和校验，先温和停止、限时后再强制结束精确子树。浏览器、Docker daemon、系统服务以及
+  Claude/Codex/CCR 桌面程序永不进入可终止集合。终端明确打印的 URL 标为确认，监听端口推导的
+  `http://127.0.0.1:<port>` 标为推断，通配监听额外显示局域网暴露警告。
+- 托管 CLIProxyAPI 明确使用 `request-retry: 5`、`max-retry-credentials: 0`、
+  `max-retry-interval: 60`、round-robin + 36h session affinity、15 秒 streaming keepalive 和两次
+  bootstrap retry。这些设置只覆盖未输出首字节前的安全重试与半开保活；ClaudeDock 不在已经产生
+  部分响应后重放请求。缺少 `response.completed`、408/429/5xx、EOF 等只写入时间、分类、版本、
+  会话运行时长和任务数，按 14 天、200 条、2 MiB 有界裁剪，并把会话标为 `failed` 供用户在原生
+  终端手动继续。
 
 ### 全局设置 IPC
 
@@ -367,8 +405,13 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
+- 外部代理编辑使用单调递增的加载代次和 `proxyDraftEdited`。首次代理状态回读完成前禁用提交；
+  迟到响应只有在代次仍为当前且用户尚未修改草稿时才能回填，避免取消勾选后被旧启用值覆盖。
+  “完成”在同一保存路径提交应用设置与代理草稿，再以主进程持久化结果回填 UI。
 - 主题继续复用 `ui:set-theme` 与 `WorkspaceStore.terminalTheme`，全局设置和终端工具栏只
-  是两个 UI 入口。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
+  是两个 UI 入口。`src/renderer/components.ts` 的增强选择器控制器同时维护原生 `select.value`、
+  trigger 文本与选中态；启动恢复、工具栏切换和设置回填统一调用显式 `sync()`，不依赖伪造
+  `change` 事件。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
   快照与即时操作边界，没有新增第二套 Router/诊断状态。
 
 ### 4.0 共享下载、外部应用代理与 MCP 服务
@@ -1340,12 +1383,17 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 
 ### 斜杠命令可视化
 
-渲染进程提交命令名称与可选参数，主进程只接受固定白名单：
-`/context`、`/usage`、`/status`、`/model`、`/permissions`、`/mcp`、`/agents`、`/hooks`、
-`/memory`、`/resume`、`/compact`、`/rename`、`/theme`、`/doctor`、`/help`、`/clear`。参数最长
-500 字符且禁止换行；只有工作台已知正在运行的 Claude 会话可以接收。`/clear` 的二次确认
-在渲染层完成。验证后的命令不由 IPC handler 直接拼接 `\r` 写 PTY，而交给
-`ClaudeRuntime.runCommand`，与换模型和压缩共享同一分段提交与 per-session 队列。
+`src/shared/cli-command-catalog.ts` 是主进程执行白名单、Claude/Codex 工作台和测试的共同事实来源。
+Claude 基准含 101 个有效表项、展开别名后 120 个调用名；Codex 含 50 行、展开组合别名后 53 个
+调用名。每项记录 runtime、命令/别名、语法、分类、来源、版本/平台/功能条件、风险与
+`run` / `compose` 动作；完整快照写入 `docs/cli-command-catalog.md`。动态 Skills、Plugins 和 MCP
+命令不进入静态清单，界面引导用户查看 CLI 原生 `/` 列表。
+
+Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.runCommand`，仍经过参数 500 字符、
+禁止换行、会话运行状态和 per-session 分段提交队列；清理、退出、外部操作或需要参数的条目只生成
+输入骨架并按目录要求确认。Codex 全部为 `compose`，ClaudeDock 不自动向 TUI 发送。`/clear` 的二次
+确认保留在渲染层；验证后的 Claude 命令不由 IPC handler 直接拼接 `\r` 写 PTY，而与换模型和压缩
+共享“正文 → 40ms → 回车”的队列。
 
 ### PowerShell 键盘与剪贴板
 
@@ -1536,6 +1584,14 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   严格结束标记、部分输出不重放、重定向安全与兼容回退、附件原子导入/
   UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
   和流式稳定前缀。
+- `tests/runtime-activity-registry.test.ts` 覆盖后台任务/子代理的 waiting→resuming→stop/failure 状态机
+  与代次隔离；`tests/claude-permission-bridge.test.ts` 在 Windows named pipe 上验证排队、允许、拒绝、
+  超时/代次失效回退；`tests/runtime-process-registry.test.ts` 覆盖进程树、TCP 监听、PID 创建时间复用、
+  不透明键、禁终止程序和温和/强制清理；`tests/claude-stream-diagnostics-store.test.ts` 锁定脱敏分类与
+  14 天/200 条/2 MiB 裁剪。`tests/cli-command-catalog.test.ts` 锁定 101/120 与 50/53 的完整调用集合。
+- `npm run test:runtime-soak:accelerated` 在数秒内模拟 24 小时的 1,440 个 Hook 事件和 57 次本地 Web
+  进程创建/回收；`npm run test:runtime-soak` 运行真实 24 小时的同类无付费模型合成测试。它们验证
+  ClaudeDock 自身有界状态与回收路径，不承诺上游模型或网关连续 24 小时无故障。
 - 4.0 守栏覆盖 BusyRegistry 租约释放、下载 EMA/ETA/恢复日志/来源与完整性、退出和托盘忙态、
   外部应用代理 DPAPI 存储/作用域/候选解析、移除旧代理 IPC、应用双更新源信任与测速选择、
   供应商能力矩阵、CCR CLI-only、

@@ -30,6 +30,14 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 ## 主要能力
 
 - 多项目终端、托盘后台运行、项目/对话历史与终端主题。
+- 顶栏按会话显示后台任务、子代理、恢复阶段和当前 PTY 派生的 Web 监听进程；受控进程只能通过
+  主进程签发的不透明键结束，正常退出会先清理并复查这些进程。
+- Claude 提示词区可直接切换模式、思考程度与模型，并通过会话级 `PermissionRequest` Hook 显示
+  权限确认；任何 Hook/界面/代次异常都回退 Claude 原生确认而不是自动放行。Codex 保留原生 TUI
+  审批，界面控件只生成 `/plan`、`/permissions`、`/model` 命令骨架。
+- Claude/Codex 工作台共用静态指令注册表；完整调用名及版本边界见
+  [CLI 指令清单](docs/cli-command-catalog.md)，动态 Skills、Plugins 与 MCP 指令仍以 CLI 原生 `/`
+  列表为准。
 - Claude Code 官方安装、版本门禁、项目级服务商接入、连接实测和会话状态。
 - 实验性的“ChatGPT 订阅（ClaudeDock 托管）”预设：用户一次点击后，ClaudeDock 自动检测并补齐
   Claude Code，从 CLIProxyAPI 官方 GitHub Release 下载并校验 Windows x64 版本，在应用私有目录
@@ -248,6 +256,7 @@ npm run typecheck
 npm test
 npm run test:layout
 npm run test:control-theme
+npm run test:runtime-soak:accelerated
 npm run build
 npm run dist
 ```
@@ -258,6 +267,7 @@ npm run dist
 npm run test:conpty
 npm run test:release-security
 npm run test:visual
+npm run test:runtime-soak        # 默认 24 小时、无付费模型依赖的真实时间合成测试
 npm run check:licenses
 npm audit
 ```

@@ -23,6 +23,7 @@ const runtimeSource = readFileSync(
   'utf8',
 );
 const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
 
 /** Mirrors the rolling window `consumeTerminalOutput` keeps for diagnostics. */
@@ -355,6 +356,9 @@ describe('Claude runtime permission mode observation', () => {
     expect(runtimeSource).toContain('private readonly modeSwitchLocks = new Set<string>();');
     expect(runtimeSource).toContain('this.modeSwitchLocks.add(sessionId);');
     expect(runtimeSource).toContain('this.modeSwitchLocks.delete(sessionId);');
+    expect(runtimeSource).toContain('runtime.permissionModeRequest = mode;');
+    expect(runtimeSource).toContain('permissionModeRequest: runtime.permissionModeRequest,');
+    expect(rendererSource).toContain('state.permissionModeRequest ?? state.permissionMode');
     expect(runtimeSource).toContain('public observePermissionModeFromScreen(');
     expect(runtimeSource).toContain('this.recordPermissionMode(runtime, mode);');
     expect(mainSource).toContain(

@@ -34,6 +34,7 @@ import type {
   ClaudeEffortRequest,
   ClaudeLaunchMode,
   ClaudeOperationResult,
+  ClaudePermissionDecision,
   ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginOperationResult,
@@ -76,6 +77,7 @@ import type {
   DirectoryChoiceResult,
   OperationResult,
   PtyGeneration,
+  RuntimeActivitySnapshot,
   SaveApplicationProxyInput,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -101,6 +103,11 @@ import {
 } from '../shared/claude-providers';
 import { selectRouterKernelState } from '../shared/router-kernel';
 import { CLAUDE_EFFORT_REQUESTS } from '../shared/claude-effort';
+import { claudeRunnableCommands } from '../shared/cli-command-catalog';
+import { RuntimeActivityRegistry } from './runtime-activity-registry';
+import { ClaudePermissionBridge } from './claude-permission-bridge';
+import { ClaudeStreamDiagnosticsStore } from './claude-stream-diagnostics-store';
+import { RuntimeProcessRegistry } from './runtime-process-registry';
 import {
   ClaudePluginManager,
   isValidMarketplaceName,
@@ -205,6 +212,9 @@ let isQuitting = false;
  */
 let quitConfirmationPending = false;
 let quitConfirmationTimer: NodeJS.Timeout | undefined;
+let quitCleanupInProgress = false;
+let quitResidualConfirmationPending = false;
+let runtimeShutdownForQuitDone = false;
 let claudeRuntime: ClaudeRuntime | null = null;
 let codexRuntime: CodexRuntime | null = null;
 let networkPreflightService: NetworkPreflightService | null = null;
@@ -223,6 +233,12 @@ let applicationProxyTestSession: Session | null = null;
 let chatFetch: typeof fetch = fetch;
 let releaseConversationBusy: (() => void) | undefined;
 let applicationUpdaterService: ApplicationUpdaterService | null = null;
+let claudePermissionBridge: ClaudePermissionBridge | null = null;
+let claudeStreamDiagnosticsStore: ClaudeStreamDiagnosticsStore | null = null;
+let runtimeProcessRegistry: RuntimeProcessRegistry | null = null;
+const runtimeActivityRegistry = new RuntimeActivityRegistry((state) => {
+  mainWindow?.webContents.send('runtime:activity-changed', state);
+});
 
 interface PendingPermissionModeProbe {
   ptyGeneration: PtyGeneration;
@@ -325,6 +341,7 @@ const publishedClaudeStateRevisions = new Map<string, number>();
 
 const workspace = new TerminalWorkspace(
   (sessionId, ptyGeneration, data) => {
+    runtimeProcessRegistry?.observeTerminalOutput(sessionId, ptyGeneration, data);
     const claudeFiltered =
       claudeRuntime?.consumeTerminalOutput(sessionId, ptyGeneration, data) ?? data;
     const filtered =
@@ -550,8 +567,7 @@ const requestQuit = (): void => {
   const window = mainWindow;
   const leases = busyRegistry?.list() ?? [];
   if (leases.length === 0) {
-    isQuitting = true;
-    app.quit();
+    void beginControlledQuit(false);
     return;
   }
   const canAsk =
@@ -570,8 +586,7 @@ const requestQuit = (): void => {
       quitConfirmationTimer = undefined;
     }
     quitConfirmationPending = false;
-    isQuitting = true;
-    app.quit();
+    void beginControlledQuit(true);
     return;
   }
   quitConfirmationPending = true;
@@ -586,11 +601,77 @@ const requestQuit = (): void => {
     }
     quitConfirmationPending = false;
     quitConfirmationTimer = undefined;
-    isQuitting = true;
-    app.quit();
+    void beginControlledQuit(true);
   }, 3_000);
   quitConfirmationTimer.unref();
 };
+
+async function beginControlledQuit(forceWithResidualProcesses: boolean): Promise<void> {
+  if (isQuitting || quitCleanupInProgress) return;
+  quitCleanupInProgress = true;
+  // Closing the per-launch pipe endpoints both releases existing requests to Claude's native
+  // prompt and prevents a new permission request from entering while the quit barrier runs.
+  claudePermissionBridge?.shutdown();
+  try {
+    let processCleanupFailed = false;
+    try {
+      await runtimeProcessRegistry?.terminateAll();
+    } catch {
+      processCleanupFailed = true;
+    }
+    const residual = runtimeProcessRegistry?.list() ?? [];
+    if ((processCleanupFailed || residual.length > 0) && !forceWithResidualProcesses) {
+      const target = mainWindow?.webContents;
+      if (target && !target.isDestroyed() && !target.isCrashed()) {
+        quitResidualConfirmationPending = true;
+        quitConfirmationPending = true;
+        showMainWindow();
+        target.send('app:quit-requested', {
+          hasBlocking: true,
+          leases: [
+            ...residual.map(({ sessionId, view }) => ({
+              cancellable: false,
+              id: `runtime-process:${view.processKey}`,
+              kind: 'conversation' as const,
+              label: `${view.name}（PID ${view.pid}，会话 ${sessionId}）仍在运行`,
+              severity: 'blocking' as const,
+            })),
+            ...(processCleanupFailed
+              ? [
+                  {
+                    cancellable: false,
+                    id: 'runtime-process:scan-failed',
+                    kind: 'conversation' as const,
+                    label: '无法复查当前终端的派生 Web 进程；默认退出已阻止',
+                    severity: 'blocking' as const,
+                  },
+                ]
+              : []),
+          ],
+          runtimeCleanupFailed: true,
+        });
+        return;
+      }
+    }
+    shutdownRuntimeForQuit();
+    runtimeProcessRegistry?.stop();
+    isQuitting = true;
+    app.quit();
+  } finally {
+    quitCleanupInProgress = false;
+  }
+}
+
+function shutdownRuntimeForQuit(): void {
+  if (runtimeShutdownForQuitDone) return;
+  runtimeShutdownForQuitDone = true;
+  claudePermissionBridge?.shutdown();
+  chatService.shutdown();
+  claudeRuntime?.shutdown();
+  managedChatGptGateway?.shutdown();
+  codexRuntime?.dispose();
+  workspace.shutdown();
+}
 
 const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
   const defaultPath = directoryDialogDefaultPath(
@@ -1390,24 +1471,7 @@ const validateMarkdownExternalUrl = (value: unknown): string => {
   return parsed.toString();
 };
 
-const claudeCommands = new Map<string, boolean>([
-  ['/agents', false],
-  ['/clear', false],
-  ['/compact', true],
-  ['/context', true],
-  ['/doctor', false],
-  ['/help', false],
-  ['/hooks', false],
-  ['/mcp', false],
-  ['/memory', false],
-  ['/model', false],
-  ['/permissions', false],
-  ['/rename', true],
-  ['/resume', false],
-  ['/status', false],
-  ['/theme', false],
-  ['/usage', false],
-]);
+const claudeCommands = claudeRunnableCommands();
 
 const claudeFailure = async (sessionId: string, error: unknown): Promise<ClaudeOperationResult> => {
   const runtime = requireClaudeRuntime();
@@ -1908,6 +1972,37 @@ const validateProviderModelDiscoveryInput = (value: unknown): ClaudeProviderMode
   return { baseUrl: input.baseUrl, credential: input.credential };
 };
 
+const validateClaudePermissionDecision = (value: unknown): ClaudePermissionDecision => {
+  if (!value || typeof value !== 'object') throw new Error('权限确认结果无效。');
+  const decision = value as Partial<ClaudePermissionDecision> & {
+    message?: unknown;
+    suggestionId?: unknown;
+  };
+  if (decision.behavior === 'fallback') return { behavior: 'fallback' };
+  if (decision.behavior === 'allow') {
+    if (
+      decision.suggestionId !== undefined &&
+      (typeof decision.suggestionId !== 'string' || decision.suggestionId.length > 200)
+    ) {
+      throw new Error('权限范围无效。');
+    }
+    return {
+      behavior: 'allow',
+      ...(decision.suggestionId ? { suggestionId: decision.suggestionId } : {}),
+    };
+  }
+  if (decision.behavior === 'deny') {
+    if (decision.message !== undefined && typeof decision.message !== 'string') {
+      throw new Error('拒绝原因无效。');
+    }
+    return {
+      behavior: 'deny',
+      ...(decision.message ? { message: decision.message.slice(0, 300) } : {}),
+    };
+  }
+  throw new Error('权限确认结果无效。');
+};
+
 const windowsBuildNumber = (): number => {
   const value = Number(release().split('.')[2]);
   return Number.isInteger(value) && value > 0 ? value : 0;
@@ -1921,6 +2016,32 @@ const registerIpc = (): void => {
     }
     return busyRegistry.list();
   });
+  ipcMain.handle('runtime:get-activity', (event, sessionId: unknown): RuntimeActivitySnapshot => {
+    validateSender(event);
+    return runtimeActivityRegistry.get(validateSessionId(sessionId));
+  });
+  ipcMain.handle(
+    'claude:permission-response',
+    (event, requestId: unknown, decision: unknown): boolean => {
+      validateSender(event);
+      if (typeof requestId !== 'string' || requestId.length > 200 || !claudePermissionBridge) {
+        throw new Error('权限请求已失效。');
+      }
+      return claudePermissionBridge.respond(requestId, validateClaudePermissionDecision(decision));
+    },
+  );
+  ipcMain.handle(
+    'runtime:terminate-process',
+    async (event, sessionId: unknown, processKey: unknown): Promise<RuntimeActivitySnapshot> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      if (typeof processKey !== 'string' || processKey.length > 200 || !runtimeProcessRegistry) {
+        throw new Error('进程控制请求无效。');
+      }
+      await runtimeProcessRegistry.terminate(validatedSessionId, processKey);
+      return runtimeActivityRegistry.get(validatedSessionId);
+    },
+  );
   ipcMain.handle('busy:set-conversation', (event, busy: unknown) => {
     validateSender(event);
     if (typeof busy !== 'boolean' || !busyRegistry) {
@@ -2373,6 +2494,7 @@ const registerIpc = (): void => {
     try {
       const validatedSessionId = validateSessionId(sessionId);
       await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId);
+      await runtimeProcessRegistry?.terminateSession(validatedSessionId);
       requireClaudeRuntime().closeSession(validatedSessionId);
       requireCodexRuntime().closeSession(validatedSessionId);
       // The folder stays remembered: closing one conversation is not "forget this project".
@@ -2409,6 +2531,8 @@ const registerIpc = (): void => {
     try {
       const target = validateProjectPath(projectPath);
       const state = await runOwnedProjectDirectoryClosure({
+        beforeCloseSession: (sessionId) =>
+          runtimeProcessRegistry?.terminateSession(sessionId) ?? Promise.resolve(),
         captureSessionIds: () => workspace.sessionIdsForDirectory(target),
         closeRuntimeSession: (sessionId) => {
           claudeRuntime?.closeSession(sessionId);
@@ -2435,6 +2559,8 @@ const registerIpc = (): void => {
     try {
       const target = validateProjectPath(projectPath);
       const state = await runOwnedProjectDirectoryClosure({
+        beforeCloseSession: (sessionId) =>
+          runtimeProcessRegistry?.terminateSession(sessionId) ?? Promise.resolve(),
         captureSessionIds: () => workspace.sessionIdsForDirectory(target),
         closeRuntimeSession: (sessionId) => {
           claudeRuntime?.closeSession(sessionId);
@@ -4090,11 +4216,18 @@ const registerIpc = (): void => {
       quitConfirmationTimer = undefined;
     }
     quitConfirmationPending = false;
-    if (confirmed !== true) {
+    if (confirmed === 'retry' && quitResidualConfirmationPending) {
+      quitResidualConfirmationPending = false;
+      void beginControlledQuit(false);
       return;
     }
-    isQuitting = true;
-    app.quit();
+    if (confirmed !== true) {
+      quitResidualConfirmationPending = false;
+      return;
+    }
+    const forceWithResidualProcesses = quitResidualConfirmationPending;
+    quitResidualConfirmationPending = false;
+    void beginControlledQuit(forceWithResidualProcesses);
   });
   ipcMain.on('app:quit-request-received', (event) => {
     validateSender(event);
@@ -4416,12 +4549,15 @@ const registerIpc = (): void => {
     if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
     return applicationUpdaterService.checkAndDownload();
   });
-  ipcMain.handle('software:application-updater-install', (event) => {
+  ipcMain.handle('software:application-updater-install', async (event) => {
     validateSender(event);
     if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
     if (applicationUpdaterService.getState().phase !== 'downloaded') {
       throw new Error('更新安装包尚未下载完成。');
     }
+    claudePermissionBridge?.shutdown();
+    await runtimeProcessRegistry?.terminateAll();
+    runtimeProcessRegistry?.stop();
     isQuitting = true;
     try {
       applicationUpdaterService.installDownloaded();
@@ -4481,6 +4617,9 @@ const createWindow = async (): Promise<void> => {
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('render-process-gone', () => {
+    claudePermissionBridge?.fallbackPending();
+  });
   /*
    * The OS is logging out or shutting down. Windows gives an app very little time here and kills it
    * regardless, so this is the one quit that must not be questioned: latch the flag so the following
@@ -4600,6 +4739,19 @@ if (!hasSingleInstanceLock) {
           )
         : {},
     );
+    runtimeProcessRegistry = new RuntimeProcessRegistry((sessionId, processes) => {
+      if (!workspace.hasSession(sessionId)) return;
+      const status = workspace.getStatus(sessionId);
+      const activity = runtimeActivityRegistry.get(sessionId);
+      if (activity.ptyGeneration !== status.ptyGeneration) {
+        runtimeActivityRegistry.beginLaunch(
+          sessionId,
+          activity.launchGeneration,
+          status.ptyGeneration,
+        );
+      }
+      runtimeActivityRegistry.setWebProcesses(sessionId, processes);
+    });
     claudeRuntime = new ClaudeRuntime(
       app.getPath('userData'),
       runtimeAssetPath('claude-statusline.ps1'),
@@ -4628,6 +4780,42 @@ if (!hasSingleInstanceLock) {
               applicationProxyStore.getCredentials(),
             )
           : {},
+    );
+    claudePermissionBridge = new ClaudePermissionBridge(
+      (request) => {
+        const target = mainWindow?.webContents;
+        if (!target || target.isDestroyed() || target.isCrashed()) return false;
+        target.send('claude:permission-request', request);
+        return true;
+      },
+      (sessionId, launchGeneration) =>
+        claudeRuntime?.ownsLaunch(sessionId, launchGeneration) ?? false,
+    );
+    claudeRuntime.setPermissionRequestHook(
+      runtimeAssetPath('claude-permission-hook.ps1'),
+      (sessionId, launchGeneration) =>
+        claudePermissionBridge!.createEndpoint(sessionId, launchGeneration),
+    );
+    claudeStreamDiagnosticsStore = new ClaudeStreamDiagnosticsStore(app.getPath('userData'));
+    claudeRuntime.setStreamFailureHandler((observation) => {
+      const activity = runtimeActivityRegistry.get(observation.sessionId);
+      claudeStreamDiagnosticsStore?.append({
+        ...observation,
+        backgroundTaskCount: activity.tasks.filter(
+          (task) =>
+            task.status === 'queued' || task.status === 'running' || task.status === 'waiting',
+        ).length,
+      });
+      runtimeActivityRegistry.setPhase(observation.sessionId, 'failed');
+    });
+    claudeRuntime.setRuntimeActivityHandler(
+      runtimeAssetPath('claude-runtime-event.ps1'),
+      (event) => {
+        if (event.event === 'SessionEnd') {
+          claudePermissionBridge?.closeLaunch(event.sessionId, event.launchGeneration);
+        }
+        runtimeActivityRegistry.consume(event);
+      },
     );
     claudeRuntime.setConversationLaunchGuard((cwd, mode, conversationId) => {
       claudeConversationLifecycle.assertLaunchAllowed(cwd, mode, conversationId);
@@ -4667,6 +4855,19 @@ if (!hasSingleInstanceLock) {
       }),
     });
     providerAccessGuard = new ProviderAccessGuard(networkPreflightService);
+    runtimeProcessRegistry.start(() =>
+      workspace
+        .getState()
+        .sessions.filter((status): status is TerminalStatus & { pid: number } =>
+          Boolean(status.phase === 'running' && status.pid),
+        )
+        .map((status) => ({
+          launchGeneration: runtimeActivityRegistry.get(status.id).launchGeneration,
+          ptyGeneration: status.ptyGeneration,
+          rootPid: status.pid,
+          sessionId: status.id,
+        })),
+    );
     const updateFloorFile = updateVersionFloorPath(app.getPath('userData'));
     let activeApplicationUpdateSource: ApplicationUpdateSourceSelection | undefined;
     const applicationUpdateSession = session.fromPartition('electron-updater', {
@@ -4754,9 +4955,7 @@ app.on('before-quit', (event) => {
     pending.resolve(undefined);
   }
   pendingPermissionModeProbes.clear();
-  chatService.shutdown();
-  claudeRuntime?.shutdown();
-  managedChatGptGateway?.shutdown();
-  codexRuntime?.dispose();
-  workspace.shutdown();
+  claudePermissionBridge?.shutdown();
+  runtimeProcessRegistry?.stop();
+  shutdownRuntimeForQuit();
 });

@@ -65,6 +65,31 @@ const api: ControlPanelApi = {
     };
   },
   setConversationBusy: (busy) => ipcRenderer.invoke('busy:set-conversation', busy),
+  getRuntimeActivity: (sessionId) => ipcRenderer.invoke('runtime:get-activity', sessionId),
+  onRuntimeActivityChanged: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      state: Parameters<typeof listener>[0],
+    ): void => {
+      listener(state);
+    };
+    ipcRenderer.on('runtime:activity-changed', callback);
+    return () => ipcRenderer.removeListener('runtime:activity-changed', callback);
+  },
+  onClaudePermissionRequest: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      request: Parameters<typeof listener>[0],
+    ): void => {
+      listener(request);
+    };
+    ipcRenderer.on('claude:permission-request', callback);
+    return () => ipcRenderer.removeListener('claude:permission-request', callback);
+  },
+  respondClaudePermission: (requestId, decision) =>
+    ipcRenderer.invoke('claude:permission-response', requestId, decision),
+  terminateRuntimeProcess: (sessionId, processKey) =>
+    ipcRenderer.invoke('runtime:terminate-process', sessionId, processKey),
   cancelDownload: (taskId) => ipcRenderer.invoke('download:cancel', taskId),
   listDownloads: () => ipcRenderer.invoke('download:list') as Promise<DownloadTaskView[]>,
   onDownloadsChanged: (listener) => {
