@@ -44,10 +44,59 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('let attemptsRemaining = 4;');
     expect(rendererSource).toContain('const debounceTerminalFit = (): void => {');
     expect(rendererSource).toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
-    expect(rendererSource).toContain('view?.container.getBoundingClientRect()');
+    expect(rendererSource).toContain('view.container.getBoundingClientRect()');
     expect(rendererStyles).toContain('.project-terminal--active:focus-within');
     expect(rendererStyles).toMatch(
       /\.project-terminal--active:focus-within\s*\{[\s\S]*?var\(--accent-line\)[\s\S]*?var\(--accent-tint\)/,
+    );
+  });
+
+  it('owns xterm views and asynchronous terminal work by exact PTY generation', () => {
+    expect(rendererSource).toContain('readonly ptyGeneration: PtyGeneration;');
+    expect(rendererSource).toContain('const ownsTerminalGeneration = (');
+    expect(rendererSource).toMatch(
+      /terminalViews\.get\(sessionId\) === view[\s\S]*?view\.ptyGeneration === ptyGeneration[\s\S]*?status\?\.ptyGeneration === ptyGeneration/,
+    );
+    expect(rendererSource).toMatch(
+      /if \(existing\) \{\s+disposeTerminalView\(status\.id, existing\);\s+\}\s+return createTerminalView\(status, active\);/,
+    );
+    expect(rendererSource).toMatch(
+      /view\.terminal\.write\(chunk, \(\) => \{\s+if \(!ownsTerminalGeneration\(sessionId, ptyGeneration, view\)\)/,
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.onTerminalData((sessionId, ptyGeneration, data) => {',
+    );
+    expect(rendererSource).toContain('queueTerminalOutput(sessionId, ptyGeneration, data);');
+    expect(rendererSource).toContain(
+      'window.controlPanel.writeTerminal(sessionId, ptyGeneration, data);',
+    );
+    expect(rendererSource.match(/window\.controlPanel\.writeTerminal\(/g)).toHaveLength(1);
+    expect(rendererSource).toMatch(
+      /window\.controlPanel\.resizeTerminal\(\s+sessionId,\s+ptyGeneration,/,
+    );
+  });
+
+  it('fences terminal interaction and permission probes after generation replacement', () => {
+    expect(rendererSource).toContain(
+      'void pasteIntoTerminalGeneration(sessionId, ptyGeneration, view);',
+    );
+    expect(rendererSource).toContain(
+      "writeToTerminalGeneration(sessionId, ptyGeneration, view, '\\x0a');",
+    );
+    expect(rendererSource).toContain(
+      "writeToTerminalGeneration(status.id, status.ptyGeneration, view, '\\x1b[Z')",
+    );
+    expect(rendererSource).toContain(
+      '() => writableTerminalGeneration(status.id, ptyGeneration, view)',
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);',
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {',
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);',
     );
   });
 
@@ -209,7 +258,7 @@ describe('renderer interaction lifecycle contract', () => {
     }
     expect(preloadSource).toContain('setupManagedChatGptGateway: (sessionId, forceLogin)');
     expect(claudeRuntimeSource).toMatch(
-      /private async prepareRouteServices[\s\S]*?routeKind === 'managed-chatgpt'[\s\S]*?ensureManagedChatGptGatewayReady\(\)/,
+      /private async prepareRouteServices[\s\S]*?routeKind === 'managed-chatgpt'[\s\S]*?runExclusive\(this\.ensureManagedChatGptGatewayReady\)/,
     );
     expect(rendererMarkup).toContain('id="settings-open-chatgpt-gateway"');
     expect(rendererSource).toContain('.openManagedChatGptGatewayManagement()');
@@ -260,8 +309,10 @@ describe('renderer interaction lifecycle contract', () => {
     );
     expect(rendererSource).toContain("appendParameter('主模型', displayedModel || '默认模型')");
     expect(rendererSource).toContain(
-      "appendParameter('快速模型', displayedModelFast || displayedModel || '跟随主模型')",
+      "appendParameter('小型/备用模型', displayedModelFast || displayedModel || '跟随主模型')",
     );
+    expect(rendererMarkup).toContain('<span>小型/备用模型标识</span>');
+    expect(rendererMarkup).toContain('这是另一个模型，不是服务速度档位');
     expect(rendererSource).not.toContain('connectionHistorySection');
   });
 
@@ -444,7 +495,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toContain('id="network-preflight-dialog"');
     expect(rendererMarkup).toContain('id="network-preflight-recheck"');
     expect(rendererSource).toMatch(
-      /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState\);/,
+      /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState, true, false\);/,
     );
     const testHandler = rendererSource.slice(
       rendererSource.indexOf('const runConnectionTest = async'),
@@ -508,7 +559,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(installCase).not.toContain("applyPresetUi('gateway'");
   });
 
-  it('turns the footer model, mode and effort readouts into real menu triggers', () => {
+  it('turns the footer model, speed, mode and effort readouts into real menu triggers', () => {
     expect(rendererMarkup).toMatch(
       /<button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">/,
     );
@@ -519,21 +570,23 @@ describe('renderer interaction lifecycle contract', () => {
     expect(preloadSource).toContain(
       "ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode)",
     );
-    expect(rendererMarkup).toMatch(
-      /<button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    for (const id of ['model', 'speed', 'mode', 'effort']) {
+      expect(rendererMarkup).toMatch(
+        new RegExp(
+          `<button id="footer-${id}" type="button" aria-haspopup="menu" aria-expanded="false">`,
+        ),
+      );
+    }
+    // Speed sits between the model identity and permission mode; effort stays immediately to the right.
+    const footerOrder = ['model', 'speed', 'mode', 'effort'].map((id) =>
+      rendererMarkup.indexOf(`id="footer-${id}"`),
     );
-    expect(rendererMarkup).toMatch(
-      /<button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">/,
-    );
-    expect(rendererMarkup).toMatch(
-      /<button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">/,
-    );
-    // Effort sits immediately right of the permission mode readout.
-    expect(rendererMarkup.indexOf('id="footer-mode"')).toBeLessThan(
-      rendererMarkup.indexOf('id="footer-effort"'),
-    );
+    expect(footerOrder).toEqual([...footerOrder].sort((first, second) => first - second));
     expect(rendererMarkup).toContain(
       '<div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden>',
+    );
+    expect(rendererMarkup).toMatch(
+      /id="footer-speed-menu"\s+role="menu"\s+aria-label="切换服务速度"\s+hidden/,
     );
     expect(rendererMarkup).toMatch(
       /id="footer-mode-menu"\s+role="menu"\s+aria-label="切换权限模式"\s+hidden/,
@@ -541,12 +594,12 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toMatch(
       /id="footer-effort-menu"\s+role="menu"\s+aria-label="切换思考程度"\s+hidden/,
     );
-    // All three menus join the one dismissal path rather than starting a second one.
+    // Every popup joins the one dismissal path rather than starting a second one.
     expect(rendererSource).toMatch(
-      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\) &&\s+!footerEffortMenu\.contains\(event\.target as Node\)/,
+      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerSpeedMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\) &&\s+!footerEffortMenu\.contains\(event\.target as Node\)/,
     );
     expect(rendererSource).toMatch(
-      /\[footerModeMenu, footerMode\],\s+\[footerEffortMenu, footerEffort\],/,
+      /\[footerSpeedMenu, footerSpeed\],\s+\[footerModeMenu, footerMode\],\s+\[footerEffortMenu, footerEffort\],/,
     );
     expect(rendererSource).toMatch(
       /window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/,
@@ -554,8 +607,39 @@ describe('renderer interaction lifecycle contract', () => {
     // Narrow windows always keep the resource control while progressively dropping lower-value
     // labels, so quota/context and the context-window choice do not disappear.
     expect(rendererStyles).toMatch(
-      /@media \(max-width: 1040px\) \{\s+#footer-model,\s+#footer-mode \{\s+display: none;/,
+      /@media \(max-width: 1040px\) \{\s+#footer-model,\s+#footer-speed,\s+#footer-mode \{\s+display: none;/,
     );
+  });
+
+  it('keeps serving speed model-specific and truthful across Claude, GPT and native Codex', () => {
+    for (const label of [
+      '速度 标准',
+      '速度 已请求 Claude Fast',
+      '速度 Claude Fast 已开启',
+      '速度 Claude Fast 未生效',
+      '速度 已请求 GPT 1.5x',
+      '速度 不支持',
+      '速度 未验证',
+    ]) {
+      expect(rendererSource).toContain(label);
+    }
+    expect(rendererSource).toContain("footerSpeed.textContent = '速度 Codex 内管理';");
+    expect(rendererSource).toContain("item.role = 'menuitemradio';");
+    expect(rendererSource).toContain("item.setAttribute('aria-checked', String(selected));");
+
+    const speedHandler = rendererSource.slice(
+      rendererSource.indexOf('const switchClaudeModelSpeed = async'),
+      rendererSource.indexOf('const switchPermissionMode = async'),
+    );
+    expect(speedHandler).toContain(
+      'const attempt = state.active ? beginClaudeLaunchAttempt(status, state) : undefined;',
+    );
+    expect(speedHandler).toContain('window.controlPanel.setClaudeModelSpeed(status.id, mode)');
+    expect(speedHandler).toContain('service_tier=fast');
+    expect(speedHandler).toContain('无法确认 ChatGPT 上游最终采用');
+    expect(speedHandler).toContain('不会压缩上下文');
+    expect(speedHandler).not.toContain('compactFirst');
+    expect(preloadSource).toContain("'claude:set-model-speed'");
   });
 
   it('offers every adjustable effort level and applies it without a relaunch', () => {
@@ -594,7 +678,7 @@ describe('renderer interaction lifecycle contract', () => {
   it('always releases the model switch trigger after the IPC operation settles', () => {
     const switchHandler = rendererSource.slice(
       rendererSource.indexOf('const switchClaudeModel = async'),
-      rendererSource.indexOf('const switchPermissionMode = async'),
+      rendererSource.indexOf('const switchClaudeModelSpeed = async'),
     );
     expect(switchHandler).toMatch(
       /modelSwitchInProgress = true;\s+footerModel\.disabled = true;\s+footerModel\.setAttribute\('aria-busy', 'true'\);/,
@@ -602,7 +686,90 @@ describe('renderer interaction lifecycle contract', () => {
     expect(switchHandler).toMatch(
       /finally \{\s+endMask\(\);\s+modelSwitchInProgress = false;\s+footerModel\.disabled = false;\s+footerModel\.setAttribute\('aria-busy', 'false'\);/,
     );
-    expect(switchHandler).toContain('renderClaudeState(knownState);');
+    expect(switchHandler).toContain('renderClaudeState(knownState, true, false);');
+  });
+
+  it('routes every Claude launch continuation through exact-generation orchestration', () => {
+    expect(rendererSource).toContain('terminalPtyGeneration: status.ptyGeneration');
+    expect(rendererSource.match(/await orchestrateClaudeLaunchAttempt\(\{/g)).toHaveLength(3);
+    const launchHandler = rendererSource.slice(
+      rendererSource.indexOf('const launchClaude = async'),
+      rendererSource.indexOf('const launchCodex = async'),
+    );
+    expect(launchHandler.indexOf('beginClaudeLaunchAttempt(status)')).toBeLessThan(
+      launchHandler.indexOf('await orchestrateClaudeLaunchAttempt'),
+    );
+    expect(launchHandler).toContain(
+      'start: () => window.controlPanel.launchClaude(status.id, mode)',
+    );
+    expect(launchHandler).toContain(
+      "renderClaudeLaunchResult(attempt, result.state, result.ok ? 'success' : 'failure')",
+    );
+    expect(launchHandler).toContain("if (outcome.status === 'rejected')");
+
+    const relaunchHandler = rendererSource.slice(
+      rendererSource.indexOf('const relaunchClaudeSession = async'),
+      rendererSource.indexOf('const switchClaudeModel = async'),
+    );
+    expect(relaunchHandler.indexOf('beginClaudeLaunchAttempt(status)')).toBeLessThan(
+      relaunchHandler.indexOf('await orchestrateClaudeLaunchAttempt'),
+    );
+    expect(relaunchHandler).toContain('confirmation: () =>');
+    expect(relaunchHandler).toContain('requestConfirmation({');
+    expect(relaunchHandler).toContain('window.controlPanel.relaunchClaudeSession(status.id');
+    expect(relaunchHandler).toContain(
+      'onRelease: () => refreshClaudeLaunchControls(attempt.sessionId)',
+    );
+
+    const speedHandler = rendererSource.slice(
+      rendererSource.indexOf('const switchClaudeModelSpeed = async'),
+      rendererSource.indexOf('const switchPermissionMode = async'),
+    );
+    expect(speedHandler.indexOf('beginClaudeLaunchAttempt(status, state)')).toBeLessThan(
+      speedHandler.indexOf('await orchestrateClaudeLaunchAttempt'),
+    );
+    expect(speedHandler).toContain('confirmation: () =>');
+    expect(speedHandler).toContain('window.controlPanel.setClaudeModelSpeed(status.id, mode)');
+    expect(speedHandler).toContain(
+      'onRelease: () => refreshClaudeLaunchControls(attempt.sessionId)',
+    );
+
+    expect(rendererSource).toContain('claudeLaunchAttempts.acceptResult(token, disposition)');
+    expect(rendererSource).not.toContain('current && !claudeLaunchAttempts.isCurrent(token)');
+  });
+
+  it('fences state loads and Codex launches with per-session generations', () => {
+    for (const registry of [
+      'claudeStateLoadGenerations',
+      'codexStateLoadGenerations',
+      'runtimeStateLoadGenerations',
+    ]) {
+      expect(rendererSource).toContain(`const ${registry} = new SessionGenerationRegistry();`);
+      expect(rendererSource).toContain(`${registry}.begin(sessionId)`);
+      expect(rendererSource).toContain(`${registry}.finish(request)`);
+      expect(rendererSource).toContain(`${registry}.prune(validSessionIds)`);
+    }
+    expect(rendererSource).not.toMatch(/let (?:claude|codex|runtime)RequestGeneration = 0;/);
+
+    const workspaceRenderer = rendererSource.slice(
+      rendererSource.indexOf('function renderWorkspace(state: WorkspaceState)'),
+      rendererSource.indexOf('const applyTerminalStatus'),
+    );
+    expect(workspaceRenderer).toContain('claudeLaunchAttempts.observeTerminal(status)');
+    expect(workspaceRenderer).toContain('claudeLaunchAttempts.prune(validSessionIds)');
+    expect(workspaceRenderer).toContain('codexLaunchAttempts.invalidate(status.id)');
+    expect(workspaceRenderer).toContain('codexLaunchAttempts.prune(validSessionIds)');
+
+    const codexLaunchHandler = rendererSource.slice(
+      rendererSource.indexOf('const launchCodex = async'),
+      rendererSource.indexOf('const installOrUpdateCodex = async'),
+    );
+    expect(codexLaunchHandler).toContain('const attempt = codexLaunchAttempts.begin(status.id);');
+    expect(codexLaunchHandler).toContain('codexLaunchAttempts.isCurrent(attempt)');
+    expect(codexLaunchHandler).toMatch(
+      /finally \{\s+if \(codexLaunchAttempts\.finish\(attempt\)\)/,
+    );
+    expect(rendererSource).not.toContain('let codexLaunchInProgress = false;');
   });
 
   it('lists every permission mode and routes the un-cyclable one through a relaunch', () => {
@@ -613,9 +780,13 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /if \(mode === 'dontAsk'\) \{\s+await relaunchClaudeSession\('「仅预批准」只能在会话启动时设定。', \{ permissionMode: mode \}\);/,
     );
-    // Cross-endpoint models reuse the same relaunch instead of a second mechanism.
-    expect(rendererSource).toMatch(
-      /if \(!option\.sameEndpoint\) \{\s+await relaunchClaudeSession\(/,
+    // Connection and per-model speed-profile changes reuse the same relaunch instead of inheriting
+    // a stale launch environment.
+    expect(rendererSource).toContain('if (option.requiresRelaunch)');
+    expect(rendererSource).toContain("option.relaunchReason === 'connection'");
+    expect(rendererSource).toContain("option.relaunchReason === 'speed-profile'");
+    expect(rendererSource).toContain(
+      'await relaunchClaudeSession(summary, { entryId: option.entryId });',
     );
     expect(rendererSource).toContain('compactFirst: true,');
     expect(rendererSource).toContain('对话历史会通过 --continue 恢复');
@@ -625,10 +796,16 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('forwards Shift+Tab from the composer so the shortcut does not depend on terminal focus', () => {
-    expect(rendererSource).toMatch(
-      /if \(event\.key === 'Tab' && event\.shiftKey && !event\.ctrlKey && !event\.altKey\) \{\s+const status = activeStatus\(\);\s+if \(status\) \{\s+event\.preventDefault\(\);\s+window\.controlPanel\.writeTerminal\(status\.id, '\\x1b\[Z'\);/,
+    expect(rendererSource).toContain(
+      "if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey) {",
     );
-    // xterm already emits the same CBT sequence, so its key handler stays untouched.
+    expect(rendererSource).toContain(
+      'const view = status ? terminalViewForStatus(status) : undefined;',
+    );
+    expect(rendererSource).toContain(
+      "writeToTerminalGeneration(status.id, status.ptyGeneration, view, '\\x1b[Z')",
+    );
+    // xterm already emits the same CBT sequence; its onData ownership fence covers that path.
     expect(rendererSource).not.toContain("event.code === 'Tab'");
   });
 
@@ -679,18 +856,18 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('for (let row = buffer.baseY; row < end; row += 1) {');
     expect(rendererSource).toContain("buffer.getLine(row)?.translateToString(true) ?? ''");
     expect(rendererSource).toContain(
-      'window.controlPanel.observeClaudePermissionMode(sessionId, mode);',
+      'window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);',
     );
     expect(rendererSource).toMatch(
-      /view\.terminal\.write\(chunk, \(\) => \{\s+view\.appliedOutputRevision = Math\.max\(view\.appliedOutputRevision, revision\);\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);/,
+      /view\.terminal\.write\(chunk, \(\) => \{\s+if \(!ownsTerminalGeneration\(sessionId, ptyGeneration, view\)\) \{\s+return;\s+\}\s+view\.appliedOutputRevision = Math\.max\(view\.appliedOutputRevision, revision\);\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);/,
     );
-    expect(rendererSource).toContain('requiredRevision <= view.appliedOutputRevision');
+    expect(rendererSource).toContain('probe.requiredRevision <= view.appliedOutputRevision');
     expect(rendererSource).toContain(
-      'window.controlPanel.onClaudePermissionModeProbe((sessionId, probeId) => {',
+      'window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {',
     );
     expect(rendererSource).toContain('view.appliedOutputRevision >= view.outputRevision');
-    expect(rendererSource).toContain(
-      'view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });',
+    expect(rendererSource).toMatch(
+      /view\.permissionModeProbes\.push\(\{\s+probeId,\s+ptyGeneration,\s+requiredRevision: view\.outputRevision,/,
     );
     expect(rendererSource).toContain('window.controlPanel.reportClaudePermissionModeProbe(');
   });

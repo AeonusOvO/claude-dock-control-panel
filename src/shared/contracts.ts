@@ -422,6 +422,20 @@ export interface AdvancedSettings {
 
 export type FooterResourcePreference = 'auto' | 'context' | 'quota';
 export type ManagedChatGptContextWindowMode = 'extended' | 'standard';
+export type ModelSpeedMode = 'fast' | 'standard';
+export type ModelSpeedMechanism = 'claude-native-fast' | 'gpt-service-tier' | 'none';
+export type ModelSpeedAvailability = 'available' | 'unsupported' | 'unverified' | 'update-required';
+export type ModelSpeedStatus = 'active' | 'not-active' | 'requested' | 'standard';
+
+export interface ModelSpeedState {
+  availability: ModelSpeedAvailability;
+  canSelectFast: boolean;
+  detail: string;
+  mechanism: ModelSpeedMechanism;
+  model: string;
+  preference: ModelSpeedMode;
+  status: ModelSpeedStatus;
+}
 
 export interface AppSettingsView {
   advanced: AdvancedSettings;
@@ -632,6 +646,8 @@ export interface ClaudeMetrics {
   contextWindowUsed?: number;
   /** Live `effort.level` from the status line; absent when the model has no effort parameter. */
   effortLevel?: ClaudeEffortLevel;
+  /** Native Claude Code serving-speed state; unrelated to the alternate small-model route. */
+  fastMode?: boolean;
   inputTokens?: number;
   linesAdded?: number;
   linesRemoved?: number;
@@ -681,6 +697,7 @@ export interface ClaudeProjectState {
   resourceUsage?: ResourceUsageView;
   routeHealth?: ClaudeRouteHealth;
   sessionId: string;
+  speed: ModelSpeedState;
   warning?: string;
 }
 
@@ -729,6 +746,9 @@ export interface ClaudeModelOption {
   label: string;
   model: string;
   providerLabel: string;
+  /** A different connection or serving-speed profile is baked into the PTY and needs a relaunch. */
+  requiresRelaunch: boolean;
+  relaunchReason?: 'connection' | 'speed-profile';
   sameEndpoint: boolean;
 }
 
@@ -942,12 +962,15 @@ export interface ClaudeRouterOperationResult {
   routerState: ClaudeRouterManagementState;
 }
 
+export type PtyGeneration = number;
+
 export interface TerminalStatus {
   cwd: string;
   id: string;
   message?: string;
   phase: TerminalPhase;
   pid?: number;
+  ptyGeneration: PtyGeneration;
   shell: string;
   title: string;
 }
@@ -1293,17 +1316,24 @@ export interface ControlPanelApi {
     sessionId: string,
     effort: ClaudeEffortRequest,
   ) => Promise<ClaudeOperationResult>;
+  /** Persists a per-model serving-speed preference and relaunches the exact live conversation if needed. */
+  setClaudeModelSpeed: (sessionId: string, mode: ModelSpeedMode) => Promise<ClaudeOperationResult>;
   /** Reports the complete mode badge after xterm has applied PTY screen-delta output. */
-  observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;
+  observeClaudePermissionMode: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    mode: ClaudePermissionMode,
+  ) => void;
   /** Answers a main-process probe with the mode currently visible in xterm's complete screen. */
   reportClaudePermissionModeProbe: (
     sessionId: string,
+    ptyGeneration: PtyGeneration,
     probeId: number,
     mode?: ClaudePermissionMode,
   ) => void;
   /** Receives an on-demand request to read the current xterm screen, even if no new PTY data arrived. */
   onClaudePermissionModeProbe: (
-    listener: (sessionId: string, probeId: number) => void,
+    listener: (sessionId: string, ptyGeneration: PtyGeneration, probeId: number) => void,
   ) => Unsubscribe;
   setClaudeAllowBypassPermissions: (
     sessionId: string,
@@ -1380,17 +1410,27 @@ export interface ControlPanelApi {
   onOpenDownloadCenterRequested: (listener: () => void) => Unsubscribe;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
-  onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;
+  onTerminalData: (
+    listener: (sessionId: string, ptyGeneration: PtyGeneration, data: string) => void,
+  ) => Unsubscribe;
   /**
    * The size the PTY actually adopted after clamping. xterm must follow it: PSReadLine repaints
    * with absolute cursor moves, so a size disagreement leaves the previous screen on top.
    */
   onTerminalSize: (
-    listener: (sessionId: string, cols: number, rows: number) => void,
+    listener: (sessionId: string, ptyGeneration: PtyGeneration, cols: number, rows: number) => void,
   ) => Unsubscribe;
   onWorkspaceState: (listener: (state: WorkspaceState) => void) => Unsubscribe;
-  resizeTerminal: (sessionId: string, cols: number, rows: number) => void;
-  restartTerminal: (sessionId: string) => Promise<OperationResult>;
+  resizeTerminal: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    cols: number,
+    rows: number,
+  ) => void;
+  restartTerminal: (
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+  ) => Promise<OperationResult>;
   runClaudeCommand: (
     sessionId: string,
     command: string,
@@ -1412,9 +1452,9 @@ export interface ControlPanelApi {
     input: SaveClaudeConfigInput,
   ) => Promise<ClaudeConnectionTestResult>;
   openExternal: (url: string) => Promise<boolean>;
-  startTerminal: (sessionId: string) => Promise<OperationResult>;
-  stopTerminal: (sessionId: string) => Promise<OperationResult>;
-  writeTerminal: (sessionId: string, data: string) => void;
+  startTerminal: (sessionId: string, expectedGeneration: PtyGeneration) => Promise<OperationResult>;
+  stopTerminal: (sessionId: string, expectedGeneration: PtyGeneration) => Promise<OperationResult>;
+  writeTerminal: (sessionId: string, ptyGeneration: PtyGeneration, data: string) => void;
   getStoredProjects: () => Promise<WorkspaceProject[]>;
   removeStoredProject: (projectPath: string) => Promise<void>;
   /** Repaints the native frame and remembers the choice for the next cold start. */

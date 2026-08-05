@@ -4,6 +4,8 @@ import type {
   ClaudeLaunchMode,
   ClaudePermissionMode,
   ManagedChatGptContextWindowMode,
+  ModelSpeedMechanism,
+  ModelSpeedMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
 import { normalizeConnectionBaseUrl } from '../shared/connection-endpoint';
@@ -59,6 +61,7 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
   'ANTHROPIC_VERTEX_BASE_URL',
   'CLAUDE_CODE_DISABLE_THINKING',
   'CLAUDE_CODE_EFFORT_LEVEL',
+  'CLAUDE_CODE_EXTRA_BODY',
   'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
   'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
   'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
@@ -231,7 +234,7 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
   }
   const modelFast = input.modelFast?.trim() || model;
   if (!MODEL_NAME_PATTERN.test(modelFast)) {
-    throw new Error('快速模型标识只能包含字母、数字以及 . _ : / @ [ ] ~ -。');
+    throw new Error('小型/备用模型标识只能包含字母、数字以及 . _ : / @ [ ] ~ -。');
   }
 
   const providerDefinition = findClaudeProvider(input.preset);
@@ -291,10 +294,44 @@ export const shouldDisableInheritedApiKeyHelper = (config: NormalizedClaudeConfi
   config.apiKeyHelperPolicy === 'prefer-claudedock' &&
   (config.authMode === 'apiKey' || config.authMode === 'authToken');
 
+export interface ClaudeServingSpeedProfile {
+  mechanism: ModelSpeedMechanism;
+  mode: ModelSpeedMode;
+}
+
+export const STANDARD_CLAUDE_SPEED_PROFILE: ClaudeServingSpeedProfile = {
+  mechanism: 'none',
+  mode: 'standard',
+};
+
+export const buildClaudeSpeedSettings = (
+  speed: ClaudeServingSpeedProfile = STANDARD_CLAUDE_SPEED_PROFILE,
+): { fastMode: boolean; fastModePerSessionOptIn: boolean } => {
+  const nativeFast = speed.mode === 'fast' && speed.mechanism === 'claude-native-fast';
+  return {
+    fastMode: nativeFast,
+    fastModePerSessionOptIn: !nativeFast,
+  };
+};
+
+const applyServingSpeedEnvironment = (
+  environment: ClaudeEnvironmentOverrides,
+  speed: ClaudeServingSpeedProfile,
+): void => {
+  if (speed.mode === 'fast' && speed.mechanism === 'claude-native-fast') {
+    // Claude Code must perform its normal organization, credit, and model eligibility checks.
+    environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = null;
+  }
+  if (speed.mode === 'fast' && speed.mechanism === 'gpt-service-tier') {
+    environment.CLAUDE_CODE_EXTRA_BODY = JSON.stringify({ service_tier: 'fast' });
+  }
+};
+
 export const buildClaudeEnvironment = (
   config: NormalizedClaudeConfig,
   credential?: string,
   contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
+  speed: ClaudeServingSpeedProfile = STANDARD_CLAUDE_SPEED_PROFILE,
 ): ClaudeEnvironmentOverrides => {
   const environment: ClaudeEnvironmentOverrides = {};
   for (const key of MANAGED_CLAUDE_ENVIRONMENT_KEYS) {
@@ -334,6 +371,7 @@ export const buildClaudeEnvironment = (
   }
 
   Object.assign(environment, managedChatGptContextEnvironment(config, contextWindowMode));
+  applyServingSpeedEnvironment(environment, speed);
 
   return environment;
 };
@@ -341,6 +379,7 @@ export const buildClaudeEnvironment = (
 export const buildClaudeSettingsEnvironment = (
   config: NormalizedClaudeConfig,
   contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
+  speed: ClaudeServingSpeedProfile = STANDARD_CLAUDE_SPEED_PROFILE,
 ): Record<string, string> => {
   const desiredCredentialKey =
     config.authMode === 'apiKey'
@@ -369,6 +408,11 @@ export const buildClaudeSettingsEnvironment = (
   }
 
   Object.assign(environment, managedChatGptContextEnvironment(config, contextWindowMode));
+  environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC =
+    speed.mode === 'fast' && speed.mechanism === 'claude-native-fast' ? '' : '1';
+  if (speed.mode === 'fast' && speed.mechanism === 'gpt-service-tier') {
+    environment.CLAUDE_CODE_EXTRA_BODY = JSON.stringify({ service_tier: 'fast' });
+  }
 
   return environment;
 };

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TerminalStatus } from '../src/shared/contracts';
+import type { PtyGeneration, TerminalStatus } from '../src/shared/contracts';
 import type { ManagedTerminal } from '../src/main/terminal-workspace';
 import { TerminalWorkspace } from '../src/main/terminal-workspace';
 import { normalizeTerminalSize } from '../src/main/directory';
 
 interface FakeTerminal extends ManagedTerminal {
-  emitData: (data: string) => void;
+  emitData: (ptyGeneration: PtyGeneration, data: string) => void;
 }
 
 const createFakeFactory = () => {
@@ -15,13 +15,15 @@ const createFakeFactory = () => {
     id: string,
     initialCwd: string,
     initialTitle: string,
-    onData: (data: string) => void,
+    onData: (ptyGeneration: PtyGeneration, data: string) => void,
     onStatus: (status: TerminalStatus) => void,
   ): FakeTerminal => {
+    let processGeneration: PtyGeneration | undefined;
     let status: TerminalStatus = {
       cwd: initialCwd,
       id,
       phase: 'stopped',
+      ptyGeneration: 0,
       shell: 'Windows PowerShell',
       title: initialTitle,
     };
@@ -30,46 +32,58 @@ const createFakeFactory = () => {
       onStatus({ ...status });
       return { ...status };
     };
+    const startTerminal = (pid: number): TerminalStatus => {
+      if (processGeneration !== undefined) {
+        return { ...status };
+      }
+      const ptyGeneration = status.ptyGeneration + 1;
+      processGeneration = ptyGeneration;
+      return update({
+        cwd: status.cwd,
+        id,
+        phase: 'running',
+        pid,
+        ptyGeneration,
+        shell: status.shell,
+        title: status.title,
+      });
+    };
+    const stopTerminal = (emitStatus = true): TerminalStatus => {
+      processGeneration = undefined;
+      if (emitStatus) {
+        return update({
+          cwd: status.cwd,
+          id,
+          phase: 'stopped',
+          ptyGeneration: status.ptyGeneration,
+          shell: status.shell,
+          title: status.title,
+        });
+      }
+      return { ...status };
+    };
     const terminal: FakeTerminal = {
-      emitData: onData,
+      emitData: (ptyGeneration, data) => {
+        if (ptyGeneration === processGeneration) {
+          onData(ptyGeneration, data);
+        }
+      },
       getStatus: () => ({ ...status }),
       resize: vi.fn((cols: number, rows: number) => ({ cols, rows })),
-      restart: vi.fn(() =>
-        update({
-          cwd: status.cwd,
-          id,
-          phase: 'running',
-          pid: 200 + terminals.size,
-          shell: status.shell,
-          title: status.title,
-        }),
-      ),
-      setTitle: vi.fn((title: string) => update({ ...status, title })),
-      start: vi.fn(() =>
-        update({
-          cwd: status.cwd,
-          id,
-          phase: 'running',
-          pid: 100 + terminals.size,
-          shell: status.shell,
-          title: status.title,
-        }),
-      ),
-      stop: vi.fn((emitStatus = true) => {
-        const next = {
-          cwd: status.cwd,
-          id,
-          phase: 'stopped' as const,
-          shell: status.shell,
-          title: status.title,
-        };
-        if (emitStatus) {
-          return update(next);
-        }
-        status = next;
-        return { ...status };
+      restart: vi.fn(() => {
+        stopTerminal(false);
+        return startTerminal(200 + terminals.size);
       }),
-      write: vi.fn(),
+      setTitle: vi.fn((title: string) => update({ ...status, title })),
+      start: vi.fn(() => startTerminal(100 + terminals.size)),
+      stop: vi.fn(stopTerminal),
+      stopIfGeneration: vi.fn((expectedGeneration, emitStatus = true) =>
+        expectedGeneration === status.ptyGeneration ? stopTerminal(emitStatus) : undefined,
+      ),
+      write: vi.fn(
+        (expectedGeneration, _data) =>
+          expectedGeneration === processGeneration && status.phase === 'running',
+      ),
     };
     terminals.set(id, terminal);
     return terminal;
@@ -96,8 +110,30 @@ describe('terminal size reconciliation', () => {
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
     workspace.openProject('D:\\Project Alpha');
     const sessionId = workspace.getState().activeSessionId;
+    const { ptyGeneration } = workspace.getStatus(sessionId);
 
-    expect(workspace.resize(sessionId, 120, 40)).toEqual({ cols: 120, rows: 40 });
+    expect(workspace.resize(sessionId, ptyGeneration, 120, 40)).toEqual({
+      cols: 120,
+      rows: 40,
+    });
+  });
+
+  it('rejects a resize owned by a stale PTY generation', () => {
+    const { factory, terminals } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+    const sessionId = workspace.getState().activeSessionId;
+    const staleGeneration = workspace.getStatus(sessionId).ptyGeneration;
+    const restarted = workspace.restart(sessionId);
+    const terminal = terminals.get(sessionId);
+
+    expect(workspace.resize(sessionId, staleGeneration, 120, 40)).toBeUndefined();
+    expect(terminal?.resize).not.toHaveBeenCalled();
+    expect(workspace.resize(sessionId, restarted.ptyGeneration, 120, 40)).toEqual({
+      cols: 120,
+      rows: 40,
+    });
+    expect(terminal?.resize).toHaveBeenCalledOnce();
   });
 });
 
@@ -135,10 +171,28 @@ describe('TerminalWorkspace', () => {
       title: '对话 1',
     });
 
-    terminals.get('session-1')?.emitData('alpha output');
-    terminals.get('session-2')?.emitData('beta output');
-    expect(dataListener).toHaveBeenNthCalledWith(1, 'session-1', 'alpha output');
-    expect(dataListener).toHaveBeenNthCalledWith(2, 'session-2', 'beta output');
+    const alphaGeneration = workspace.getStatus('session-1').ptyGeneration;
+    const betaGeneration = workspace.getStatus('session-2').ptyGeneration;
+    terminals.get('session-1')?.emitData(alphaGeneration, 'alpha output');
+    terminals.get('session-2')?.emitData(betaGeneration, 'beta output');
+    expect(dataListener).toHaveBeenNthCalledWith(1, 'session-1', alphaGeneration, 'alpha output');
+    expect(dataListener).toHaveBeenNthCalledWith(2, 'session-2', betaGeneration, 'beta output');
+  });
+
+  it('rejects terminal data from an obsolete PTY generation', () => {
+    const dataListener = vi.fn();
+    const { factory, terminals } = createFakeFactory();
+    const workspace = new TerminalWorkspace(dataListener, vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+    const staleGeneration = workspace.getStatus('session-1').ptyGeneration;
+    const restarted = workspace.restart('session-1');
+    const terminal = terminals.get('session-1');
+
+    terminal?.emitData(staleGeneration, 'stale output');
+    expect(dataListener).not.toHaveBeenCalled();
+    terminal?.emitData(restarted.ptyGeneration, 'fresh output');
+    expect(dataListener).toHaveBeenCalledOnce();
+    expect(dataListener).toHaveBeenCalledWith('session-1', restarted.ptyGeneration, 'fresh output');
   });
 
   it('uses the current theme for future starts and restarts without touching live sessions', () => {
@@ -156,6 +210,54 @@ describe('TerminalWorkspace', () => {
     expect(terminal?.restart).toHaveBeenCalledWith(undefined, {}, 'telegram');
     workspace.start('session-1');
     expect(terminal?.start).toHaveBeenLastCalledWith(undefined, {}, 'telegram');
+  });
+
+  it('rejects writes owned by a stale PTY generation', () => {
+    const { factory, terminals } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+    const staleGeneration = workspace.getStatus('session-1').ptyGeneration;
+    const restarted = workspace.restart('session-1');
+    const terminal = terminals.get('session-1');
+
+    expect(workspace.write('session-1', staleGeneration, 'stale input')).toBe(false);
+    expect(workspace.write('session-1', restarted.ptyGeneration, 'fresh input')).toBe(true);
+    expect(terminal?.write).toHaveBeenNthCalledWith(1, staleGeneration, 'stale input');
+    expect(terminal?.write).toHaveBeenNthCalledWith(2, restarted.ptyGeneration, 'fresh input');
+  });
+
+  it('rejects stops owned by a stale PTY generation', () => {
+    const { factory, terminals } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+    const staleGeneration = workspace.getStatus('session-1').ptyGeneration;
+    const restarted = workspace.restart('session-1');
+
+    expect(workspace.stopIfGeneration('session-1', staleGeneration)).toBeUndefined();
+    expect(workspace.getStatus('session-1')).toMatchObject({
+      phase: 'running',
+      ptyGeneration: restarted.ptyGeneration,
+    });
+    expect(terminals.get('session-1')?.stopIfGeneration).toHaveBeenCalledWith(
+      staleGeneration,
+      true,
+    );
+  });
+
+  it('advances the PTY generation once on restart and not at all on stop', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    workspace.openProject('D:\\Project Alpha');
+    const started = workspace.getStatus('session-1');
+
+    const restarted = workspace.restart('session-1');
+    expect(restarted.ptyGeneration).toBe(started.ptyGeneration + 1);
+
+    const stopped = workspace.stop('session-1');
+    expect(stopped).toMatchObject({
+      phase: 'stopped',
+      ptyGeneration: restarted.ptyGeneration,
+    });
   });
 
   it('reuses an already-open project without creating a duplicate session', () => {

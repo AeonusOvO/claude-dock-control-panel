@@ -363,6 +363,11 @@ export class ManagedChatGptGateway {
     };
   }
 
+  /** Reads only ClaudeDock's validated state file; it never starts or probes the gateway. */
+  public getInstalledVersion(): string | undefined {
+    return this.loadState()?.installedVersion;
+  }
+
   public async setup(
     forceLogin = false,
     report?: ManagedChatGptSetupReporter,

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -109,6 +109,44 @@ describe('managed ChatGPT gateway', () => {
     expect(config).toContain('usage-statistics-enabled: false');
     expect(config).toContain(`sk-claudedock-${'x'.repeat(43)}`);
     expect(config).not.toMatch(/oauth|cookie|password/i);
+  });
+
+  it('reads the installed version without starting or probing the gateway', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-version-'));
+    const root = path.join(userDataPath, 'managed-gateways', 'cliproxyapi');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      path.join(root, 'state.json'),
+      JSON.stringify({
+        encryptedClientKey: '',
+        executableRelativePath: path.join('versions', '7.2.117', 'cli-proxy-api.exe'),
+        executableSha256: 'a'.repeat(64),
+        installedVersion: '7.2.117',
+        port: 8317,
+        releaseDigest: 'b'.repeat(64),
+        version: 1,
+      }),
+      'utf8',
+    );
+    const fetchImplementation = vi.fn();
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      fetchImplementation as unknown as typeof fetch,
+    );
+    try {
+      expect(manager.getInstalledVersion()).toBe('7.2.117');
+      expect(fetchImplementation).not.toHaveBeenCalled();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
   });
 
   it('shares one in-flight setup and reports a busy public state', async () => {

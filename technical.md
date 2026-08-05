@@ -1,9 +1,13 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.5.0（2026-08-04）。4.5.0 为受管 ChatGPT 的 `gpt-5.6-sol` 增加标准/扩展上下文
-档位、提前自动压缩、真实当前窗口读数与溢出恢复提示，并把 Claude/Codex 的上下文、官方额度窗口和
-受支持供应商余额统一到可配置的底栏资源菜单；同时完成代理启用草稿的统一保存与禁用态隔离、受管
-ChatGPT 官方 OpenAI 网络预检和本机全局 IPv6 路径提示。4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
+当前架构版本：4.6.0（2026-08-05）。4.6.0 增加按接入与模型隔离的 Claude Code 服务速度 profile：
+官方 Claude 使用原生 Fast 并以 statusLine `fast_mode` 验证，受管 GPT 只请求 `service_tier=fast`；
+同时以 renderer generation 锁和主进程 per-session operation coordinator 把安全会话启动、终端重启、
+开发引擎切换与受管路由恢复收敛成可取消且不会迟到写入的生命周期。4.5.0 为受管 ChatGPT 的
+`gpt-5.6-sol` 增加标准/扩展上下文档位、提前自动压缩、真实当前窗口读数与溢出恢复提示，并把
+Claude/Codex 的上下文、官方额度窗口和受支持供应商余额统一到可配置的底栏资源菜单；同时完成代理
+启用草稿的统一保存与禁用态隔离、受管 ChatGPT 官方 OpenAI 网络预检和本机全局 IPv6 路径提示。
+4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
 PTY 仍携带旧中转站环境继续请求的问题：接入开始即停止当前项目的旧会话，成功后用 `--continue`
 和新环境恢复，任何失败都保持停止而不回退；CLIProxyAPI 登录、解压与运行子进程还会清除继承的
 OpenAI/Codex/Anthropic/CCR 路由和凭据变量，同时保留显式 HTTP 传输代理。4.4.1 把受管 ChatGPT
@@ -50,6 +54,8 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 
 ```text
 Renderer (xterm.js / UI)
+        ├── ClaudeLaunchAttemptRegistry ── per-session generation / 真实事件解锁
+        │
         │ 受限 IPC
         ▼
 Preload contextBridge
@@ -60,9 +66,11 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │                           └─ …
         │
         ├── AgentRuntimeStore ── 项目路径 → Claude Code / Codex 选择
+        ├── SessionOperationCoordinator ── per-session PTY 变更租约 / 取消后等待 unwind
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        ├── ClaudeConfigStore ── safeStorage / 项目级接入配置
-        │        └── ClaudeConnectionHistoryStore ── version 2 名称 / 协议 / 加密回放
+        │        ├── ClaudeConnectionHistoryStore ── version 3 名称 / 协议 / 加密回放
+        │        └── ModelSpeedPreferencesStore ── 去凭据目标哈希 / 标准或快速偏好
         ├── CodexRuntime ─┬─ 官方 CLI 检测 / 工作区沙箱 TUI 启动
         │                 ├─ CodexInstaller ── GitHub Release / size + SHA-256
         │                 └─ CodexAppServer ── JSONL / ChatGPT 登录与账号额度
@@ -183,14 +191,18 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 
 - xterm 在 `createTerminalView` 里 try/catch 加载 `@xterm/addon-webgl`，并监听
   `onContextLoss` → `dispose()` 回退 DOM 渲染器。加载失败不影响会话可用性。
-- **主进程侧合并**：`queueTerminalOutput`（`main.ts:105`）按会话攒 8ms（`OUTPUT_FLUSH_MS`）
-  或 64KB（`OUTPUT_FLUSH_BYTES`）发一次 `terminal:data`。IPC 往返次数是卡顿主因。
-  `consumeTerminalOutput` 仍逐块调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。
-  `before-quit` 清理全部待发定时器。
-- **渲染层侧合并**：同名的 `queueTerminalOutput`（`src/renderer/main.ts:2341`）按
-  `requestAnimationFrame` 把队列合成一次 `terminal.write`，缓冲上限 512KB（超限丢弃最旧
-  分块，xterm 的 scrollback 随后也会丢掉它们）。销毁视图的两处（`renderWorkspace` 清理过期
-  会话、`beforeunload`）都要 `cancelAnimationFrame(view.pendingFrame)`。
+- **主进程侧合并**：`TerminalOutputBatcher` 按 session 与精确 `ptyGeneration` 攒 8ms
+  （`TERMINAL_OUTPUT_FLUSH_MS`）或 64KB（`TERMINAL_OUTPUT_FLUSH_BYTES`）发一次 `terminal:data`。
+  每个 session 只有一个带 generation 的待发缓冲：较旧 generation 的新数据直接忽略，较新 generation
+  才能替换旧缓冲。timer 闭包固定捕获 generation 与缓冲对象身份；即使已取消的旧 timer 被手动触发，
+  也不能 emit 或删除替代缓冲。flush 同时检查缓冲身份、expected generation 与 workspace 当前
+  generation；`discard(sessionId, generation)` 也只删除精确目标。`consumeTerminalOutput` 仍逐块
+  调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。`before-quit` dispose 全部 timer 和缓冲。
+- **渲染层侧合并**：同名的 `queueTerminalOutput` 按 `requestAnimationFrame` 把队列合成一次
+  `terminal.write`，缓冲上限 512KB（超限丢弃最旧分块，xterm 的 scrollback 随后也会丢掉它们）。
+  `TerminalView` 固定拥有创建时的 `ptyGeneration`；排队、RAF callback 和 xterm write callback
+  都同时核对 view 对象与 generation。generation 改变时取消旧 RAF、probe、遮罩与 pending write，
+  dispose 并移除旧实例，再创建空白的新视图；迟到 IPC 无法渲染或推进替代视图的输出 revision。
 - **创建与持续布局分流**：活动 xterm 的容器在 `terminal.open()` 前就带
   `project-terminal--active`。`retryTerminalFitUntilMeasured` 只在冷启动/首次可见时用带
   generation 的四帧有界重试；窗口与分隔条的持续变化走 100ms 尾沿
@@ -242,6 +254,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `current` 或 `history:<id>` 形态，重启入参逐字段校验；
   这些值最终都会影响启动命令或写进运行中的终端，所以一律在主进程重新核对，不信任 renderer。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
+  `TerminalSession` 从 generation 0 开始，只在一次真实 spawn 尝试前递增一次；`stop()` 保留
+  generation，`restart()` 先停后启但只因新的 spawn 递增一次。状态、输出、尺寸、写入、resize、
+  permission probe 与停止请求都携带精确 generation，`stopIfGeneration()` 和 generation-aware
+  `write()` / `resize()` 对旧实例直接拒绝。node-pty 的 data/exit callback 还要同时匹配当时捕获的
+  `IPty` 对象，防止旧 ConPTY 回调在 session ID 已复用时污染新进程。
 - `TerminalWorkspace` 构造出来是空的，也允许一直是空的：会话总是属于用户选定的文件夹，
   冷启动和关掉最后一个对话之后都没有活动会话。`getActiveStatus()` 因此返回
   `TerminalStatus | undefined`，`OperationResult.status` 也是可选字段，渲染层要判空。
@@ -259,6 +276,49 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `isTerminalThemeId` 校验后才采用，因此写入未知主题 ID 只会回退到默认主题而不破坏文件，
   version 保持 1。
 - 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
+
+### 会话启动互斥与事件锁
+
+- `SessionOperationCoordinator`（`src/main/session-operation-coordinator.ts`）按 workspace session
+  串行化会重启或写入 PTY 的 Claude/Codex 启动、历史恢复、模型/速度重启和受管 ChatGPT 切换。
+  `run()` 交给回调一个 `assertCurrent()`；它同时核对 generation、取消标记和 session 是否仍存在。
+  `invalidate()` 只标记取消，**不会提前删除 lease**；lease 必须保持 busy，直到旧异步回调在
+  `finally` 中真正 unwind，之后替代操作才能取得所有权。
+- 终端 stop/restart、项目关闭/忘记与开发引擎切换会取消对应操作；关闭或忘记项目还会等待
+  `invalidateAndWait()` 完成后才删除 runtime session。`runDirectTerminalTransition` 对直接
+  start/restart/stop 固定执行七步，顺序不能交换：
+  1. 在改变任何状态前预检 renderer 提交的 expected generation；
+  2. invalidate 当前 per-session 操作并取得它的 unwind Promise；
+  3. 立即解除只属于 expected generation 的 permission probe；
+  4. await 被取消 lease 真正 unwind；
+  5. 再次核对 workspace generation；
+  6. 只 discard expected generation 的输出，并只把绑定该 generation 的 Claude/Codex runtime 设为
+     inactive；
+  7. 在 `withoutTerminalOperationInvalidation` 中同步执行 PTY start/restart/stop。
+     probe 必须在 await 前解除，因为旧操作可能正等待 renderer 回报该 probe 才能 unwind。入口预检失败
+     不做 invalidate 或 cleanup；等待期间若出现替代 PTY，第二次检查也会在 cleanup 和 PTY mutation 前
+     取消请求。`enteredTerminalFailure()` 只把某一 generation 第一次进入 `stopped/error` 视为真实
+     转换；重复状态快照不会再次取消操作，真实失败只按同一 generation 对账 runtime。
+- `ClaudeRuntime` / `CodexRuntime` 在 prepare 提交点清空旧绑定，由 main 在 restart 返回后调用
+  `bindPty()` 绑定唯一 generation。启动命令、退出标记、permission probe、Shift+Tab、模型/思考命令
+  与 `/compact` 都只经绑定 generation 写入；每个异步边界后再次核对 ownership。命令正文和 40ms 后
+  回车分两次写时沿用同一捕获 generation，替代 PowerShell 出现后迟到回车会被丢弃。失败清理只调用
+  `workspace.stopIfGeneration(sessionId, ownedGeneration)` 与 runtime 的精确 `setInactive()`，旧启动的
+  `catch/finally` 不能停止或清空新启动。
+- 项目级 `runtime:set` 在 provider policy 等待前后都重新检查该项目所有 session 是否存在活动 agent；
+  直接启动在异步准备完成、重启 PTY 之前再次核对 `AgentRuntimeStore`。由于最后检查、runtime 提交与
+  同步 restart/write 之间没有 `await`，开发引擎切换和启动只能有一个先完成：切换先完成时旧引擎启动
+  取消，启动先写入时切换因活动 agent 拒绝。
+- renderer 的 `ClaudeLaunchAttemptRegistry`（`src/renderer/claude-launch-attempt.ts`）按 session 保存
+  generation、初始 conversation UUID、Claude active、PowerShell PID 与精确 `ptyGeneration`。点击主入口
+  或任何 relaunch 在第一个 `await` 前登记并立即重绘 `disabled`/`aria-busy`；冷状态第一次观察只建立
+  baseline，不把已有 UUID 误判成新会话。确认、prepare、IPC settlement 与结果应用都通过同一 token
+  的纯 orchestration；旧确认恢复或旧 IPC 拒绝不能发起请求、toast、刷新控件或改写替代尝试。
+- IPC 成功返回不释放 renderer 锁。只有新的 conversation UUID、新的运行中 `ptyGeneration`（即使
+  Windows 复用同一 PID）、新的运行中 PowerShell PID、已观察 active 后变 inactive 且 PowerShell
+  仍运行，或明确 IPC 失败、terminal `stopped/error`、session 删除时才释放。删除会话同时裁剪对应
+  launch-result tombstone，避免长期创建不同 session 造成无界增长。这里故意没有 timeout：超时不能
+  取消仍在主进程执行的 restart，提前解锁反而允许重复启动。Codex 保留独立 renderer 启动状态。
 
 ### 退出确认握手
 
@@ -595,7 +655,7 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - 授权后主进程隐藏启动 sidecar，持久化其 PID，并携带随机本地密钥探测 `GET /v1/models`。
   `provider-model-discovery.ts` 从根地址、`/v1`、Chat Completions 或 Responses 地址推导模型端点，
   拒绝跨站重定向，把响应限制为 1 MiB / 500 个安全模型标识。实时目录同时验证端点、Bearer 密钥和
-  账号可见模型；主进程据此推荐聊天/快速模型，再执行最多 1 token 的真实请求。网络或超时失败会
+  账号可见模型；主进程据此推荐聊天/小型模型，再执行最多 1 token 的真实请求。网络或超时失败会
   自动重启 sidecar 并复检一次，仍失败则不改原项目配置。renderer 只显示实时模型选择框；切换模型
   会重新获取目录、实测并事务性保存，不暴露地址、认证或凭据输入。
   `ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用
@@ -620,13 +680,13 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   Anthropic 直连凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
   `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
 - 历史文件为 version 3，每条保存可选 `name`、必填 `protocol`（`anthropic | openai |
-unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模型、凭据状态与 Router Provider
+unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（备用）模型、凭据状态与 Router Provider
   ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
   地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
-- 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/快速模型、预设、provider 和上游协议的
+- 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/小型（备用）模型、预设、provider 和上游协议的
   SHA-256 指纹，与**全部**记录比较而不只是最新一条：命中就把那条记录移到最前面并刷新
   `savedAt`，`id` 与名称保持不变，因此恢复一条较早的记录不会变成一条重复记录，指向它的重命名
-  或待处理引用也不会失效。空白的快速模型在写入时就归一为主模型，自动补全不能让同一份配置
+  或待处理引用也不会失效。空白的小型/备用模型在写入时就归一为主模型，自动补全不能让同一份配置
   读起来像变了。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
   机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
   网关状态仍然逐条存下来，恢复时能看到当时的情况。
@@ -650,14 +710,14 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
 - `chatgpt-subscription` 预设仍属于 `gateway`，但它的地址、认证方式和客户端密钥只由
   `ManagedChatGptGateway` 生成：`ANTHROPIC_BASE_URL` 指向实际分配的 `127.0.0.1:8317–8327`，
-  主/快速模型从实时 `/v1/models` 目录中选择，优先匹配可用的 GPT 聊天与 mini/nano 类模型；随机
+  主/小型（备用）模型从实时 `/v1/models` 目录中选择，优先匹配可用的 GPT 聊天与 mini/nano 类模型；随机
   `api-keys` 值以
   `ANTHROPIC_AUTH_TOKEN`/Bearer 注入当前项目子进程，而不是被误当成 ChatGPT OAuth Token。
   `normalizeClaudeConfig` 继续把该预设限定在 `localhost/127.0.0.1/::1`，避免把 OAuth 转换路径
   扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由上游网关与账号决定。
 - 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
-  `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；快速模型写入
-  `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少快速模型时
+  `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；小型/备用模型写入
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少该字段时
   自动回落到主模型；启动时同时使用 `--model` 提高可观察性。
 - 带 `/v1/chat/completions` 的服务是 OpenAI Chat Completions 格式，不能直接满足
   Claude Code 的 Anthropic `/v1/messages`、流式内容块和工具调用语义，必须经
@@ -672,6 +732,34 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   或忽略字段，界面不会把“Anthropic 格式兼容”描述成完整 Claude 功能等价。
 - 远程中转只接受 HTTPS；HTTP 仅允许 `localhost`、`127.0.0.1` 或 `::1`，URL 不允许嵌入
   用户名、密码、查询参数或片段。
+
+### 模型服务速度
+
+- `modelFast` 继续表示接入配置中的“小型/备用模型”，会改变模型身份；服务速度是独立的
+  `ModelSpeedMode = standard | fast`，不能复用或迁移该字段。`model-speed-capabilities.ts` 是唯一
+  能力判定入口，renderer 只消费结构化 availability/mechanism/status，不按模型名自行猜测。
+- 官方 Anthropic 接入只有 Claude Code `>= 2.1.219` 且实际/目标模型明确属于 Opus 5 或
+  Opus 4.8 时开放 `claude-native-fast`。Fast profile 在会话专用 settings 写
+  `fastMode: true`、`fastModePerSessionOptIn: false`；标准 profile 写 `fastMode: false`、
+  `fastModePerSessionOptIn: true`。ClaudeDock 不设置 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`；只有
+  statusLine 的 `fast_mode` 严格布尔值为 `true` 才报告 active，资格或额度拒绝时报告 not-active。
+- 受管 ChatGPT 只有已安装 CLIProxyAPI `>= 7.2.117` 且模型为 `gpt-5.4`、`gpt-5.5`、
+  `gpt-5.6`、`gpt-5.6-sol`、`gpt-5.6-terra` 或 `gpt-5.6-luna` 时开放
+  `gpt-service-tier`；`gpt-5.4-mini` 和未知未来模型保持 unverified。Fast profile 在 PTY 环境与
+  settings `env` 注入精确的 `CLAUDE_CODE_EXTRA_BODY={"service_tier":"fast"}`。该路径只能报告
+  requested，不能从 Claude statusLine 推断 OpenAI 上游已经采用 priority tier。
+- 标准 profile 总是显式清除继承的 `CLAUDE_CODE_EXTRA_BODY`，防止上一会话的服务档位串到新模型。
+  Claude 原生 Fast 不设置 service tier；GPT Fast 关闭 Claude 原生 `fastMode`。模型切换只有端点和
+  speed signature 都一致时才允许运行中 `/model`，否则必须重建 PTY。
+- `ModelSpeedPreferencesStore` 把偏好原子写入
+  `userData/claude/model-speed-preferences.json`，权限 `0600`、损坏时回落为空、最多保留 400 条。
+  target key 由 runtime、provider、preset、认证方式、去凭据端点身份和规范化模型生成 SHA-256；
+  官方与受管回环分别使用稳定身份 `anthropic://official`、`managed-chatgpt://local`。文件只含哈希、
+  mode 和时间戳，不保存 API Key、OAuth Token、Bearer Token 或它们的哈希。
+- 活动会话切换速度要求 statusLine 已给出真实 conversation UUID，随后用精确
+  `--resume <uuid>` 重启同一对话，不执行 `/compact`。PowerShell restart/write 成功后才提交偏好；
+  失败保留原偏好并把 runtime 对账为 inactive。未活动时只保存下次启动使用的偏好。
+- 原生 Codex runtime 不进入这套存储和 IPC，renderer 明确显示“速度 Codex 内管理”。
 
 ### 安全启动
 
@@ -695,10 +783,12 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
    命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。认证策略属于端点指纹的一部分，
    修改后必须重启 PTY，不能把旧会话当作同一端点热切模型；Claude 退出后命令会清理所有受管
    环境变量与第三方路由别名。
-4. 非必要流量保护固定启用：
+4. 标准和网关 profile 启用非必要流量保护：
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`DISABLE_TELEMETRY=1`、
    `DISABLE_ERROR_REPORTING=1`、`DISABLE_FEEDBACK_COMMAND=1`、
-   `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` 和 `DO_NOT_TRACK=1`。网关模式还关闭自动更新。
+   `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` 和 `DO_NOT_TRACK=1`。网关模式还关闭自动更新。官方
+   Claude Fast 只清除 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`，让 Claude Code 执行官方组织
+   资格检查；其余遥测/反馈保护保持不变，也不加入任何资格绕过变量。
 5. 临时 settings 设置 `skipWebFetchPreflight: true`，避免 WebFetch 在第三方模型接入时仍把
    域名发往 `api.anthropic.com`。这会同时取消 Anthropic 的域名安全块列表检查，因此
    WebFetch 的最终风险仍由 Claude Code 权限提示和用户判断承担。
@@ -714,7 +804,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 ### 自动发现与新手接入
 
 - `src/shared/claude-providers.ts` 是接入目录的单一事实来源：22 个预设统一声明分组、基址、
-  认证方式、主/快速模型、控制台、文档、密钥提示和风险说明。`ClaudePreset` 直接派生自目录
+  认证方式、主/小型（备用）模型、控制台、文档、密钥提示和风险说明。`ClaudePreset` 直接派生自目录
   ID；主进程 IPC 用目录 ID 集合校验，外链白名单从目录 URL 主机派生，避免 renderer、主进程
   与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
 - `normalizeClaudeConfig` 用目录分组推导 `provider`：官方组进入 `anthropic`，其余进入
@@ -868,7 +958,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   `router-optional` 或 `router-required`、认证方式、默认模型和 `verifiedAt`。自动接入向导按能力直接
   选择直连或 CCR，不把路由开关交给普通用户；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
   官方 Claude Code 集成指南使用 Anthropic 兼容 `authToken`、`https://api.deepseek.com/anthropic`
-  与当前模型标识，供应商原始“模型不存在”等错误不再被静默快速模型降级覆盖。
+  与当前模型标识，供应商原始“模型不存在”等错误不再被静默小型/备用模型降级覆盖。
 - `chatgpt-subscription` 的能力值为 `direct` 只表示 ClaudeDock 不再叠加 CCR；真正的协议转换仍由
   ClaudeDock 下载并管理的独立 CLIProxyAPI 回环 sidecar 完成。CC Switch 不参与这条流程。界面和
   技术文档必须同时保留“非官方直连”标签，不能从该枚举值推导为 OpenAI 或 Anthropic 官方支持。
@@ -967,7 +1057,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   不包含凭据或模型回复文本。
 - `src/shared/claude-connection-remedy.ts` 把安装门禁、Router 生命周期、401/403、404、
   400/422、超时/网络、200 非标准响应和 Kimi 密钥族不匹配映射为结构化原因、建议与动作；
-  renderer 只负责执行打开控制台/文档、切认证、用快速模型、安装/启动 Router、重试或重选。
+  renderer 只负责执行打开控制台/文档、切认证、用小型/备用模型、安装/启动 Router、重试或重选。
 - 补救动作由 `connectionRemedyInProgress` 串行化；开始后 provider picker、配置表单和补救动作区
   全部 inert/disabled，容器设置 `aria-busy`，唯一 `finally` 恢复。Router 安装不改变当前服务商
   和未保存草稿，避免“处理中”期间配置被静默替换。
@@ -1031,7 +1121,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   先通过现有 `project:close` 停掉对应 PTY，成功后才删除。
 - Claude Code 2.1.220 的公开 CLI 没有单会话删除命令；`claude project purge` 会清空整个
   项目范围，不能用于本功能。因此当前实现明确属于现有的严格兼容删除路径，不宣称为官方 API。
-- Claude Code 2.1.196+ 会用小型/快速模型根据首条提示词生成短标题；官方 statusLine 的
+- Claude Code 2.1.196+ 会用小型模型根据首条提示词生成短标题；官方 statusLine 的
   `session_name` 在存在 `/rename`/`--name` 自定义名称时返回自定义名称，否则返回该 AI 标题。
   ClaudeDock 已要求 2.1.197+，因此直接把这个字段同步到对应 `TerminalWorkspace` 标题，不再
   额外运行 `claude -p`、不注入隐藏提示词，也不解析终端绘制文本。工作区记录每个 PTY 最近
@@ -1046,8 +1136,9 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
-  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数和
-  `effort.level`。`effort` 只在当前模型带思考程度参数时出现，缺失时 `effortLevel` 写入 null，
+  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数、
+  `effort.level` 和 `fast_mode`。解析层只接受 `fast_mode` 的真实布尔值；字符串或数字不会被当成
+  Fast 已开启。`effort` 只在当前模型带思考程度参数时出现，缺失时 `effortLevel` 写入 null，
   由渲染层回落到本次请求值，而不是伪造默认档。
   stdin 必须显式按 UTF-8 解码（`StreamReader` + `UTF8Encoding`），不能用 `[Console]::In`：
   中文 Windows 的控制台代码页是 GBK，多字节 `session_name` 会被解错，双字节读还可能吞掉
@@ -1118,20 +1209,22 @@ sessionId 串行化，两次快速点击不会把按键叠在一起。渲染层�
 原样带过去，不能被静默重置。`dontAsk` 永远不在循环里，只能 `--permission-mode dontAsk`
 启动，因此它走重启路径。
 
-**换模型分同端点与跨端点。** `getClaudeModelOptions` 合并当前配置与该项目的接入历史，
-按 `provider|preset|authMode|apiKeyHelperPolicy|baseUrl` 判定 `sameEndpoint`。同端点直接向
-运行中的会话提交 `/model <model>`，对话不中断，随后由既有的 `expectedModel` /
-`modelMatches` 漂移检测核对 statusLine 报回的真实模型。模型列表的 `activeModel` 优先取本次
-会话已提交的 `expectedModel`，其次取 statusLine 的 `modelId`，最后才回落到项目默认配置。
-跨端点必须重启：`ANTHROPIC_BASE_URL`、凭据和 helper 策略是 PTY spawn 时定死的环境/临时设置，
-运行中改不了。
+**换模型分同 profile 与需重启。** `getClaudeModelOptions` 合并当前配置与该项目的接入历史，
+先按 `provider|preset|authMode|apiKeyHelperPolicy|baseUrl` 判定 `sameEndpoint`，再比较目标模型解析出的
+speed mechanism/mode signature。只有端点和速度 profile 都相同才向运行中的会话提交
+`/model <model>`；否则必须重建 PTY，因为 `ANTHROPIC_BASE_URL`、凭据、helper 策略、
+`CLAUDE_CODE_EXTRA_BODY` 与 Claude `fastMode` 都是在 spawn/settings 阶段定死的。
+热切模型后由既有的 `expectedModel` / `modelMatches` 漂移检测核对 statusLine 报回的真实模型。
+模型列表的 `activeModel` 优先取本次会话已提交的 `expectedModel`，其次取 statusLine 的 `modelId`，
+最后才回落到项目默认配置。
 
 Claude Code 的 TUI 会把同一 PTY 写入中的命令正文和尾随回车视为一次粘贴，可能吞掉回车。
 `switchModel` 因此不能写 `` `/model ${model}\r` ``：它与 `/compact`、命令页白名单动作一起
 进入 `commandSubmissionQueues` 的 per-session 队列，再复用
 `writeTerminalSubmission(buildTerminalSubmission(...))` 先写正文、等待 40ms、单独写 `\r`。
-队列防止快速操作把两条命令的字节交错；间隔两侧都检查 session 对象仍是当前且 `active`，
-会话停止或重启时不向替代 shell 写迟到的回车。只有两段均成功写入后才更新 `expectedModel`。
+队列防止快速操作把两条命令的字节交错；间隔两侧都检查 session 对象仍是当前且 `active`，并
+执行 `SessionOperationCoordinator` 传入的 ownership assertion。会话停止、重启或被更新的操作取消时
+不向替代 shell 写迟到的正文/回车。只有两段均成功写入后才更新 `expectedModel`。
 renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`，结束时先直接恢复并重绘
 已有状态，再异步刷新，因此状态读取延迟或失败不会把按钮永久锁住。
 
@@ -1216,8 +1309,16 @@ thinking 关闭。`parseClaudeEffortThinkingDisabledError` 只在最新一段 `A
 → `workspace.restart` → 写入启动命令。`--continue` 恢复当前目录最近的会话，所以对话不丢；
 压缩是为了切到上下文窗口更窄的模型时不溢出。
 
-**压缩与顶层响应完成靠 hook 通知。** per-session `settings.json` 的 `PostCompact` 与 `Stop`
-都执行 `assets/runtime/claude-runtime-signal.ps1`，分别原子写 `signal.json` 和 `turn-stop.json`
+**每次 launch 独占自己的 runtime artifacts。** `ClaudeRuntime` 为每次准备分配
+`userData/claude/runtime/<session-id>/launch-<runtime-token>-<launch-generation>/`，其中同时存放
+`settings.json`、`metrics.json`、`signal.json` 与 `turn-stop.json`；statusLine 与 hooks 只指向该目录。
+异步读取完成后必须再次核对 runtime instance、launch generation、精确 `ptyGeneration` 与路径，旧
+launch 的慢磁盘读取不能消费替代会话的 compact/Stop 信号、覆盖 metrics 或清除新的 effort 恢复状态。
+清理只保留当前和紧邻的前一次目录，其余过期 artifacts 有界回收。
+
+**压缩与顶层响应完成靠 hook 通知。** launch-owned `settings.json` 的 `PostCompact` 与 `Stop`
+都执行 `assets/runtime/claude-runtime-signal.ps1`，分别原子写同目录的 `signal.json` 和
+`turn-stop.json`
 （`$OutputPath.$PID.tmp` → `Move-Item -Force`），内容只有 `{event, signaledAt}`，不回写 hook 载荷。
 Stop 载荷含 `agent_id` 时直接退出，保证只报告主线程完成。脚本吞掉所有异常：丢一个信号最多
 保留临时 high 或让压缩等到超时，不能弄坏对话。主进程在已有的 1 秒 `pollMetrics` 循环里读取
@@ -1432,6 +1533,28 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   同时验证网关进程净室删除继承的供应商路由/凭据变量但保留 HTTP 传输代理。renderer/main 源码
   守栏要求受管状态 IPC、OpenAI 官方浏览器授权文案、一键安装入口，以及“旧 PTY 先停、成功后在
   新路由恢复、失败不回落”的切换顺序保持存在。
+- `tests/model-speed-capabilities.test.ts` 锁定 Claude/GPT 支持矩阵、最低 Claude Code/CLIProxyAPI
+  版本、未知模型和第三方路由的 fail-closed 分类；`tests/model-speed-preferences-store.test.ts` 覆盖
+  默认标准、按目标隔离、原子裁剪、损坏文件回退和磁盘中不得出现凭据；
+  `tests/claude-configuration.test.ts` 与 `tests/claude-statusline.test.ts` 继续验证三种速度 profile、
+  `CLAUDE_CODE_EXTRA_BODY` 清理以及 `fast_mode` 严格布尔解析。
+- `tests/claude-launch-attempt.test.ts` 覆盖 per-session generation、冷状态 baseline、conversation/PID/
+  `ptyGeneration`/active→inactive 释放路径、同 PID 新 PTY、显式失败、terminal failure、session 删除、
+  tombstone 裁剪，以及确认挂起或 IPC 迟到时被删除/失效/替代的 executable interleaving；
+  `tests/session-operation-coordinator.test.ts` 验证被取消 lease 在 callback unwind 前仍独占，
+  `invalidateAndWait()` 等待完成且不同 session 可并行；`tests/session-operation-integration.test.ts`
+  固化 main 进程真实 stopped/error 转换、Codex/受管切换租约、runtime switch 检查与延迟命令 ownership。
+- `tests/terminal-workspace.test.ts` 以可替换假 PTY 执行 stale write/resize/stop/data 拒绝，并锁定 restart
+  generation 只递增一次、stop 不递增；`tests/terminal-session-generation.test.ts` mock 真实 node-pty spawn，
+  在 G2 已运行后触发 G1 的迟到 data/exit callback，验证生产 `TerminalSession` 的进程对象与 generation
+  双重围栏，并覆盖 spawn 失败、stop 与再次 start 的递增语义；`tests/terminal-lifecycle.test.ts` 用延迟
+  Promise 执行 start/restart/stop 的七步顺序、入口 stale、unwind 期间替代和失败 cleanup ownership；
+  `tests/terminal-output-batcher.test.ts` 执行 generation 替换、迟到数据、手动触发已取消 timer、scoped
+  discard、live-generation flush 与 dispose。`tests/claude-runtime-pty.test.ts`、`tests/codex-runtime.test.ts`
+  验证精确绑定、
+  冲突重绑、旧输出/退出标记/cleanup 失效，以及 PTY 替换发生在正文与延迟回车之间时不会把回车写进
+  新 shell。renderer 源码守栏还要求 TerminalView、RAF 缓冲、xterm write queue、resize 与 permission
+  probe 全部携带 generation。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
@@ -1454,13 +1577,16 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   隐藏；服务商反选、按上次选择单组展开、
   1/2/3 列容器查询、全局设置分类与接入快照式取消、独立聊天导航顺序、实时草稿 Token、
   连接测试、历史保存/恢复/删除入口、Claude/Telegram 主题外观和禁止 hover 上浮，
-  以及活动栏二次点击收起也作为源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须
+  以及活动栏二次点击收起也作为源码/结构契约锁定。底栏交互同样在这里锁定：连接按钮必须
   用保存配置原地测试、不得跳转
   “接入”页；当前 Claude 项目首次载入及窗口从托盘恢复时必须各自动实测一次，同一显示周期
   按 session 去重，普通 focus/visibility 不得重复消耗 token；忙态分支必须排在健康色分支
   之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
-  模型/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上、900px 以下一起隐藏，六种
-  权限模式必须全部出现在目录里，模型切换的 `disabled` / `aria-busy` 必须在 `finally` 中
+  模型/速度/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上并按响应式层级隐藏，六种
+  权限模式必须全部出现在目录里；Claude 启动 generation 必须在首个 `await` 前建立并捕获
+  `ptyGeneration`，冷状态用 `hydrateClaude` 建 baseline，launch/relaunch/速度切换必须共用 exact-token
+  orchestrator，迟到确认或 IPC 结果不能释放、toast 或改写新 generation；模型切换的 `disabled` /
+  `aria-busy` 必须在 `finally` 中
   直接恢复，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
   `Shift+Tab` 必须转发 CBT 序列，而模式回读必须发生在 xterm 应用屏幕差量之后；主动 probe
   还要受输出修订号屏障保护并扫描完整活动缓冲区，不能在仍有待写数据时回复旧快照。
@@ -1530,7 +1656,7 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据、helper 策略和协议）变化就新增、只有网关状态变化不新增、
-  重放一条较早的记录把它移回最前面而不是新增一条、留空的快速模型在回放时不被当成改动、
+  重放一条较早的记录把它移回最前面而不是新增一条、留空的小型/备用模型在回放时不被当成改动、
   version 1 记录迁移为安全策略与可解释协议、OpenAI 原始上游字段与 Router ID 可回放、重命名校验与持久化、
   明文密钥不得出现在磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、
   Windows 路径大小写不敏感、条数上限、文件损坏后回落到空列表。
@@ -1706,6 +1832,16 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
   <https://code.claude.com/docs/en/llm-gateway-protocol>
 - Claude Code 环境变量：
   <https://code.claude.com/docs/en/env-vars>
+- Claude Code Fast mode：
+  <https://code.claude.com/docs/en/fast-mode>
+- OpenAI API Fast mode / service tier：
+  <https://developers.openai.com/api/docs/guides/fast-mode>
+- OpenAI Codex speed：
+  <https://learn.chatgpt.com/codex/agent-configuration/speed>
+- Codex 模型 service-tier 目录：
+  <https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json>
+- CLIProxyAPI 7.2.117 Claude→Codex translator：
+  <https://github.com/router-for-me/CLIProxyAPI/blob/v7.2.117/internal/translator/codex/claude/codex_claude_request.go>
 - Claude Code settings 与 `--settings` 优先级：
   <https://code.claude.com/docs/en/settings>
 - Claude Code 模型配置：

@@ -45,6 +45,7 @@ describe('ClaudeDock status-line helper', () => {
       effort: {
         level: 'xhigh',
       },
+      fast_mode: true,
       model: {
         display_name: 'DeepSeek Chat',
         id: 'deepseek-chat',
@@ -86,6 +87,7 @@ describe('ClaudeDock status-line helper', () => {
       contextWindowSize: 200_000,
       contextWindowUsed: 53_000,
       effortLevel: 'xhigh',
+      fastMode: true,
       inputTokens: 53_000,
       modelId: 'deepseek-chat',
       outputTokens: 3_000,

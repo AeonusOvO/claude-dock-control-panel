@@ -64,6 +64,7 @@ try {
     contextWindowSize   = $contextSize
     contextWindowUsed   = $contextUsed
     effortLevel         = $status.effort.level
+    fastMode            = $status.fast_mode
     inputTokens         = $status.context_window.total_input_tokens
     linesAdded          = $status.cost.total_lines_added
     linesRemoved        = $status.cost.total_lines_removed

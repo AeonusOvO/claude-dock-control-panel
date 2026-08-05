@@ -20,6 +20,7 @@ import type {
   ManagedChatGptGatewayOperationResult,
   ManagedChatGptGatewayState,
   ManagedChatGptSetupProgress,
+  ModelSpeedMode,
   ClaudeProviderModelDiscoveryResult,
   RouterKernelOperationResult,
   RouterKernelState,
@@ -210,28 +211,36 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeOperationResult>,
   setClaudeEffortLevel: (sessionId: string, effort: ClaudeEffortRequest) =>
     ipcRenderer.invoke('claude:set-effort', sessionId, effort) as Promise<ClaudeOperationResult>,
-  observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => {
-    ipcRenderer.send('claude:permission-mode-observed', sessionId, mode);
+  setClaudeModelSpeed: (sessionId: string, mode: ModelSpeedMode) =>
+    ipcRenderer.invoke('claude:set-model-speed', sessionId, mode) as Promise<ClaudeOperationResult>,
+  observeClaudePermissionMode: (sessionId, ptyGeneration, mode) => {
+    ipcRenderer.send('claude:permission-mode-observed', sessionId, ptyGeneration, mode);
   },
-  reportClaudePermissionModeProbe: (
-    sessionId: string,
-    probeId: number,
-    mode?: ClaudePermissionMode,
-  ) => {
-    ipcRenderer.send('claude:permission-mode-probe-result', sessionId, probeId, mode);
+  reportClaudePermissionModeProbe: (sessionId, ptyGeneration, probeId, mode) => {
+    ipcRenderer.send(
+      'claude:permission-mode-probe-result',
+      sessionId,
+      ptyGeneration,
+      probeId,
+      mode,
+    );
   },
   onClaudePermissionModeProbe: (listener) => {
     const callback = (
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
+      ptyGeneration: unknown,
       probeId: unknown,
     ): void => {
       if (
         typeof sessionId === 'string' &&
+        typeof ptyGeneration === 'number' &&
+        Number.isSafeInteger(ptyGeneration) &&
+        ptyGeneration >= 0 &&
         typeof probeId === 'number' &&
         Number.isSafeInteger(probeId)
       ) {
-        listener(sessionId, probeId);
+        listener(sessionId, ptyGeneration, probeId);
       }
     };
     ipcRenderer.on('claude:permission-mode-probe', callback);
@@ -420,10 +429,17 @@ const api: ControlPanelApi = {
     const callback = (
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
+      ptyGeneration: unknown,
       data: unknown,
     ): void => {
-      if (typeof sessionId === 'string' && typeof data === 'string') {
-        listener(sessionId, data);
+      if (
+        typeof sessionId === 'string' &&
+        typeof ptyGeneration === 'number' &&
+        Number.isSafeInteger(ptyGeneration) &&
+        ptyGeneration >= 0 &&
+        typeof data === 'string'
+      ) {
+        listener(sessionId, ptyGeneration, data);
       }
     };
     ipcRenderer.on('terminal:data', callback);
@@ -435,11 +451,19 @@ const api: ControlPanelApi = {
     const callback = (
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
+      ptyGeneration: unknown,
       cols: unknown,
       rows: unknown,
     ): void => {
-      if (typeof sessionId === 'string' && typeof cols === 'number' && typeof rows === 'number') {
-        listener(sessionId, cols, rows);
+      if (
+        typeof sessionId === 'string' &&
+        typeof ptyGeneration === 'number' &&
+        Number.isSafeInteger(ptyGeneration) &&
+        ptyGeneration >= 0 &&
+        typeof cols === 'number' &&
+        typeof rows === 'number'
+      ) {
+        listener(sessionId, ptyGeneration, cols, rows);
       }
     };
     ipcRenderer.on('terminal:size', callback);
@@ -456,11 +480,15 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('workspace:state', callback);
     };
   },
-  resizeTerminal: (sessionId, cols, rows) => {
-    ipcRenderer.send('terminal:resize', sessionId, cols, rows);
+  resizeTerminal: (sessionId, ptyGeneration, cols, rows) => {
+    ipcRenderer.send('terminal:resize', sessionId, ptyGeneration, cols, rows);
   },
-  restartTerminal: (sessionId) =>
-    ipcRenderer.invoke('terminal:restart', sessionId) as Promise<OperationResult>,
+  restartTerminal: (sessionId, expectedGeneration) =>
+    ipcRenderer.invoke(
+      'terminal:restart',
+      sessionId,
+      expectedGeneration,
+    ) as Promise<OperationResult>,
   runClaudeCommand: (sessionId, command, argument) =>
     ipcRenderer.invoke(
       'claude:command',
@@ -497,12 +525,12 @@ const api: ControlPanelApi = {
       input,
     ) as Promise<ClaudeConnectionTestResult>,
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url) as Promise<boolean>,
-  startTerminal: (sessionId) =>
-    ipcRenderer.invoke('terminal:start', sessionId) as Promise<OperationResult>,
-  stopTerminal: (sessionId) =>
-    ipcRenderer.invoke('terminal:stop', sessionId) as Promise<OperationResult>,
-  writeTerminal: (sessionId, data) => {
-    ipcRenderer.send('terminal:write', sessionId, data);
+  startTerminal: (sessionId, expectedGeneration) =>
+    ipcRenderer.invoke('terminal:start', sessionId, expectedGeneration) as Promise<OperationResult>,
+  stopTerminal: (sessionId, expectedGeneration) =>
+    ipcRenderer.invoke('terminal:stop', sessionId, expectedGeneration) as Promise<OperationResult>,
+  writeTerminal: (sessionId, ptyGeneration, data) => {
+    ipcRenderer.send('terminal:write', sessionId, ptyGeneration, data);
   },
   getStoredProjects: () =>
     ipcRenderer.invoke('workspace:get-stored-projects') as Promise<WorkspaceProject[]>,

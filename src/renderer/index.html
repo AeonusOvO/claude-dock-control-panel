@@ -691,7 +691,7 @@
             </label>
 
             <label class="field" for="claude-model-fast">
-              <span>快速模型标识</span>
+              <span>小型/备用模型标识</span>
               <input
                 id="claude-model-fast"
                 type="text"
@@ -699,7 +699,10 @@
                 value="default"
                 spellcheck="false"
               />
-              <small>用于 Haiku 与小型快速任务；留空时跟随主模型。</small>
+              <small
+                >用于 Haiku
+                与小型/备用任务；这是另一个模型，不是服务速度档位。留空时跟随主模型。</small
+              >
             </label>
 
             <label class="field" id="auth-mode-field" for="claude-auth-mode">
@@ -1034,6 +1037,9 @@
           </button>
           <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
             模型 —
+          </button>
+          <button id="footer-speed" type="button" aria-haspopup="menu" aria-expanded="false">
+            速度 —
           </button>
           <button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">
             模式 —
@@ -1673,6 +1679,14 @@
     </div>
 
     <div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden></div>
+
+    <div
+      class="footer-menu footer-speed-menu"
+      id="footer-speed-menu"
+      role="menu"
+      aria-label="切换服务速度"
+      hidden
+    ></div>
 
     <div
       class="footer-menu"

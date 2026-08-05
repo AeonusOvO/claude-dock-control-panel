@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.5.0**，许可证为 **Apache-2.0**。4.5.0 的正式稳定版必须同时通过可信
+当前代码版本为 **4.6.0**，许可证为 **Apache-2.0**。4.6.0 的正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -36,6 +36,11 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   安装、打开 OpenAI 官方授权页、启动仅监听回环地址的网关，再从实时模型列表选择、实测并保存当前
   项目配置。
 - Codex 官方 CLI/App Server 登录状态与项目启动；ChatGPT 登录凭据仍由 Codex 自身管理。
+- Claude Code 底栏提供按接入和模型隔离的“速度”菜单：官方 Claude 使用原生 Fast，受管 GPT
+  请求 `service_tier=fast`；默认始终为标准速度，原生 Codex 的速度仍由 Codex 自己管理。
+- “新建安全会话”在点击后的同一事件循环内立即锁定，直到观察到新对话、新的运行中
+  `ptyGeneration`（即使 Windows 复用了同一 PID）、新 PowerShell PID、Claude 退出回到原
+  PowerShell，或明确失败/关闭事件，避免准备期间重复重启终端。
 - 终端底栏把上下文、官方额度窗口和受支持供应商余额收拢为“资源”菜单；用户可选择自动、
   上下文优先或额度优先。ClaudeDock 不用本地网关请求次数伪造 ChatGPT 订阅剩余额度。
 - 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
@@ -68,6 +73,56 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
    可能产生少量供应商费用。
 4. Codex 项目使用官方 ChatGPT 浏览器登录或设备码登录；ClaudeDock 不接触登录令牌。
 5. 关闭主窗口默认只隐藏到系统托盘；从托盘菜单可彻底退出。
+
+### 模型服务速度
+
+“速度”与接入配置中的“小型/备用模型标识”是两件事：后者会切换到另一个模型，前者只选择同一
+模型的服务档位。ClaudeDock 按开发引擎、接入、模型、认证方式和不含凭据的端点身份隔离保存速度
+偏好；没有显式选择时始终使用“标准”，不会把一个模型的快速档泄漏到另一个模型或连接。
+
+- **官方 Claude Fast**：仅向官方 Anthropic 接入、Claude Code 2.1.219+ 和已确认支持的
+  Opus 5 / Opus 4.8 模型开放。选择后通过会话专用 `--settings` 请求 Claude Code 原生 Fast；只有
+  statusLine 明确上报 `fast_mode: true` 才显示“Claude Fast 已开启”。组织资格、额度、最高约
+  2.5x 的速度和更高单价均由 Anthropic 决定，ClaudeDock 不绕过组织检查；请求被拒时会如实显示
+  “未生效”，并保留终端中的官方说明。
+- **受管 GPT 1.5x**：CLIProxyAPI 7.2.117+ 且模型属于已验证的 GPT-5.4/5.5/5.6 系列时，
+  ClaudeDock 向 Claude Code 会话注入
+  `CLAUDE_CODE_EXTRA_BODY={"service_tier":"fast"}`。界面只显示“已请求 GPT 1.5x”，因为
+  ClaudeDock 无法确认 ChatGPT 订阅上游最终是否采用 priority tier；该档可能更快，也会消耗更多
+  额度，实际可用性和计费以 OpenAI/订阅策略为准。
+- **原生 Codex**：本版不代管 Codex 自己的速度设置，底栏显示“速度 Codex 内管理”。
+
+运行中的 Claude Code 会话切换速度时会重建当前 PowerShell，并用精确的
+`--resume <conversation UUID>` 恢复同一对话；速度切换不会运行 `/compact`。切换模型时如果新的
+模型需要不同速度 profile，也会走同一重启边界，避免继承旧模型的环境。
+
+### 安全会话启动锁
+
+点击“新建安全会话”“继续最近”或“选择历史”后，主按钮与三个入口会在第一个异步等待之前同步
+禁用并设置 `aria-busy`；即使该项目尚无 Claude 状态缓存也一样生效。锁按 session 和 generation
+隔离，旧请求的迟到成功或失败不能释放后来一次启动。
+
+IPC 返回成功并不代表新的终端生命周期已经可见，因此 renderer 不使用超时自动解锁。只有观察到
+以下事实之一才恢复操作：新的 conversation UUID、新的运行中 `ptyGeneration`（即使 Windows 复用
+了同一 PowerShell PID）、新的运行中 PowerShell/ConPTY PID、Claude 已活动后退出且原 PowerShell
+仍在运行；明确的启动 IPC 失败、终端 `stopped/error`、会话关闭或删除也会释放对应锁。Codex 保持
+独立启动状态，不与 Claude 的锁互相污染。
+
+### 会话并发与运行时所有权
+
+- 每次真实 PowerShell/ConPTY spawn 都由 `TerminalSession` 生成新的 `ptyGeneration`；停止不递增，
+  重启只因一次新 spawn 递增一次。主进程 8ms / 64KiB 与 renderer 每帧 / 512KiB 的输出合并都绑定
+  精确 generation 和缓冲/视图身份，旧定时器、RAF 或写入完成回调不能清空或渲染替代终端。
+- 每次 Claude Code launch 独占
+  `userData/claude/runtime/<session-id>/launch-<runtime-token>-<launch-generation>/`，其中同时存放
+  `settings.json`、`metrics.json`、`signal.json` 与 `turn-stop.json`。异步读取完成后还会复核该 launch
+  与精确 PTY 的所有权，不复用前一次启动的状态或信号文件。
+- 直接 start/restart/stop 固定按“预检 → 失效旧操作 → 解除精确 generation 的 probe → 等待 unwind →
+  复检 → generation-scoped 清理 → 同步 PTY 动作”执行。同一规范化项目目录的开发引擎切换会整体
+  保留所有权，配置 snapshot/save/resume/rollback 按目录 FIFO；其他项目目录仍可并行。
+- renderer 的 Claude、Codex 与开发引擎状态请求，以及 Claude 启动的确认和 IPC 结果，都由 per-session
+  generation 隔离；删除会话时同步裁剪结果 tombstone。可执行竞态测试用假定时器、延迟 Promise、
+  可控 PTY 回调和真实临时文件验证旧完成路径不能影响替代会话。
 
 ### ChatGPT 订阅接入 Claude Code（实验性）
 

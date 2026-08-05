@@ -39,6 +39,7 @@ const runSignal = (outputPath: string, event: string, input: string) =>
 
 /** Windows PowerShell writes UTF-8 with a BOM; JSON.parse rejects it, exactly as the main process handles. */
 const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+const timestampWaitSignal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 const readSignal = (outputPath: string): Record<string, unknown> => {
   const raw = readFileSync(outputPath, 'utf8');
@@ -76,18 +77,13 @@ describe('ClaudeDock runtime signal helper', () => {
 
     // The main process only acts on a stamp it has not consumed yet, so a second compaction has to
     // move the value forward rather than leave the previous one in place.
-    const wait = spawnSync('powershell.exe', [
-      '-NoProfile',
-      '-Command',
-      'Start-Sleep -Milliseconds 30',
-    ]);
-    expect(wait.status).toBe(0);
+    Atomics.wait(timestampWaitSignal, 0, 0, 30);
     expect(runSignal(outputPath, 'PostCompact', '{}').status).toBe(0);
 
     expect(readSignal(outputPath).signaledAt as number).toBeGreaterThan(first);
     // The atomic staging file must never survive a successful write.
     expect(existsSync(`${outputPath}.tmp`)).toBe(false);
-  });
+  }, 15_000);
 
   it('records only a main-thread Stop and ignores search-subagent completion', () => {
     const mainOutputPath = path.join(fixtureRoot, 'main-stop.json');

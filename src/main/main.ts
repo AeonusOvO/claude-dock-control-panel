@@ -56,6 +56,7 @@ import type {
   DevelopmentRuntimeState,
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
+  ModelSpeedMode,
   NetworkPreflightAction,
   NetworkPreflightRunInput,
   NetworkProviderId,
@@ -73,6 +74,7 @@ import type {
   SoftwareUpdateOperationResult,
   DirectoryChoiceResult,
   OperationResult,
+  PtyGeneration,
   SaveApplicationProxyInput,
   SaveClaudeRouterProviderInput,
   SaveClaudeConfigInput,
@@ -118,6 +120,12 @@ import { ChatService } from './chat-service';
 import { ArtifactService, registerArtifactScheme } from './artifact-service';
 import { resolveDirectory } from './directory';
 import { directoryDialogDefaultPath, directoryDialogError } from './directory-picker';
+import {
+  cleanupFailedRuntimeLaunch,
+  enteredTerminalFailure,
+  runDirectTerminalTransition,
+} from './terminal-lifecycle';
+import { TerminalOutputBatcher } from './terminal-output-batcher';
 import { sameDirectory, TerminalWorkspace } from './terminal-workspace';
 import { WorkspaceStore } from './workspace-store';
 import { AdvancedSettingsStore } from './advanced-settings-store';
@@ -127,6 +135,13 @@ import { ProviderAccessGuard } from './provider-access-guard';
 import { createElectronApplicationRequest } from './electron-application-request';
 import { ProviderConnectivityProbe } from './provider-connectivity-probe';
 import { RollbackCoordinator } from './rollback-coordinator';
+import {
+  OwnedConfigTransactionError,
+  ProjectRuntimeSwitchCoordinator,
+  runOwnedConfigTransaction,
+  SessionConfigTransactionCoordinator,
+} from './main-process-operation-coordinator';
+import { SessionOperationCoordinator } from './session-operation-coordinator';
 import { BusyRegistry } from './busy-registry';
 import { DownloadEngine, type DownloadSession } from './download-engine';
 import { CcSwitchAdapter } from './cc-switch-adapter';
@@ -200,6 +215,7 @@ let releaseConversationBusy: (() => void) | undefined;
 let applicationUpdaterService: ApplicationUpdaterService | null = null;
 
 interface PendingPermissionModeProbe {
+  ptyGeneration: PtyGeneration;
   resolve: (mode: ClaudePermissionMode | undefined) => void;
   sessionId: string;
   timer: NodeJS.Timeout;
@@ -209,6 +225,23 @@ const PERMISSION_MODE_PROBE_TIMEOUT_MS = 300;
 let nextPermissionModeProbeId = 1;
 const pendingPermissionModeProbes = new Map<number, PendingPermissionModeProbe>();
 
+const resolvePendingPermissionModeProbes = (
+  sessionId: string,
+  ptyGeneration?: PtyGeneration,
+): void => {
+  for (const [probeId, pending] of pendingPermissionModeProbes) {
+    if (
+      pending.sessionId !== sessionId ||
+      (ptyGeneration !== undefined && pending.ptyGeneration !== ptyGeneration)
+    ) {
+      continue;
+    }
+    clearTimeout(pending.timer);
+    pendingPermissionModeProbes.delete(probeId);
+    pending.resolve(undefined);
+  }
+};
+
 /**
  * Requests a synchronous fact from the renderer's xterm buffer. Passive PTY output reports keep the
  * footer current, while this request/reply path gives a mode-switch step a fresh before/after
@@ -216,8 +249,16 @@ const pendingPermissionModeProbes = new Map<number, PendingPermissionModeProbe>(
  */
 const requestPermissionModeFromScreen = (
   sessionId: string,
+  ptyGeneration: PtyGeneration,
 ): Promise<ClaudePermissionMode | undefined> =>
   new Promise((resolve) => {
+    if (
+      !workspace.hasSession(sessionId) ||
+      workspace.getStatus(sessionId).ptyGeneration !== ptyGeneration
+    ) {
+      resolve(undefined);
+      return;
+    }
     const target = mainWindow?.webContents;
     if (!target || target.isDestroyed()) {
       resolve(undefined);
@@ -231,9 +272,14 @@ const requestPermissionModeFromScreen = (
       pendingPermissionModeProbes.delete(probeId);
       resolve(undefined);
     }, PERMISSION_MODE_PROBE_TIMEOUT_MS);
-    pendingPermissionModeProbes.set(probeId, { resolve, sessionId, timer });
+    pendingPermissionModeProbes.set(probeId, {
+      ptyGeneration,
+      resolve,
+      sessionId,
+      timer,
+    });
     try {
-      target.send('claude:permission-mode-probe', sessionId, probeId);
+      target.send('claude:permission-mode-probe', sessionId, ptyGeneration, probeId);
     } catch {
       clearTimeout(timer);
       pendingPermissionModeProbes.delete(probeId);
@@ -254,56 +300,55 @@ const runtimeAssetPath = (fileName: string): string =>
  * message. `consumeTerminalOutput` still sees every chunk individually — it tracks exit markers
  * across chunk boundaries and must not be fed a merged buffer.
  */
-const OUTPUT_FLUSH_MS = 8;
-const OUTPUT_FLUSH_BYTES = 64 * 1024;
+const terminalOutputBatcher = new TerminalOutputBatcher({
+  emit: (sessionId, ptyGeneration, data) => {
+    mainWindow?.webContents.send('terminal:data', sessionId, ptyGeneration, data);
+  },
+  isCurrentGeneration: (sessionId, ptyGeneration) =>
+    workspace.hasSession(sessionId) &&
+    workspace.getStatus(sessionId).ptyGeneration === ptyGeneration,
+});
 
-interface OutputBuffer {
-  chunks: string[];
-  length: number;
-  timer: NodeJS.Timeout | undefined;
-}
-
-const outputBuffers = new Map<string, OutputBuffer>();
-
-const flushTerminalOutput = (sessionId: string): void => {
-  const buffer = outputBuffers.get(sessionId);
-  if (!buffer) {
-    return;
-  }
-  if (buffer.timer) {
-    clearTimeout(buffer.timer);
-  }
-  outputBuffers.delete(sessionId);
-  if (buffer.chunks.length > 0) {
-    mainWindow?.webContents.send('terminal:data', sessionId, buffer.chunks.join(''));
-  }
-};
-
-const queueTerminalOutput = (sessionId: string, data: string): void => {
-  const buffer = outputBuffers.get(sessionId) ?? { chunks: [], length: 0, timer: undefined };
-  buffer.chunks.push(data);
-  buffer.length += data.length;
-  outputBuffers.set(sessionId, buffer);
-
-  if (buffer.length >= OUTPUT_FLUSH_BYTES) {
-    flushTerminalOutput(sessionId);
-    return;
-  }
-  buffer.timer ??= setTimeout(() => {
-    flushTerminalOutput(sessionId);
-  }, OUTPUT_FLUSH_MS);
-};
+const terminalStatusBaselines = new Map<string, Pick<TerminalStatus, 'phase' | 'ptyGeneration'>>();
 
 const workspace = new TerminalWorkspace(
-  (sessionId, data) => {
-    const claudeFiltered = claudeRuntime?.consumeTerminalOutput(sessionId, data) ?? data;
+  (sessionId, ptyGeneration, data) => {
+    const claudeFiltered =
+      claudeRuntime?.consumeTerminalOutput(sessionId, ptyGeneration, data) ?? data;
     const filtered =
-      codexRuntime?.consumeTerminalOutput(sessionId, claudeFiltered) ?? claudeFiltered;
+      codexRuntime?.consumeTerminalOutput(sessionId, ptyGeneration, claudeFiltered) ??
+      claudeFiltered;
     if (filtered) {
-      queueTerminalOutput(sessionId, filtered);
+      terminalOutputBatcher.queue(sessionId, ptyGeneration, filtered);
     }
   },
   (state) => {
+    const liveSessionIds = new Set(state.sessions.map(({ id }) => id));
+    for (const status of state.sessions) {
+      const previous = terminalStatusBaselines.get(status.id);
+      const enteredFailure = enteredTerminalFailure(previous, status);
+      terminalStatusBaselines.set(status.id, {
+        phase: status.phase,
+        ptyGeneration: status.ptyGeneration,
+      });
+      if (!enteredFailure) {
+        continue;
+      }
+      terminalOutputBatcher.discard(status.id, status.ptyGeneration);
+      resolvePendingPermissionModeProbes(status.id, status.ptyGeneration);
+      if (!terminalOperationInvalidationSuppressions.has(status.id)) {
+        invalidateDevelopmentSessionOperation(status.id);
+      }
+      claudeRuntime?.setInactive(status.id, status.ptyGeneration);
+      codexRuntime?.setInactive(status.id, status.ptyGeneration);
+    }
+    for (const sessionId of terminalStatusBaselines.keys()) {
+      if (!liveSessionIds.has(sessionId)) {
+        terminalStatusBaselines.delete(sessionId);
+        terminalOutputBatcher.discard(sessionId);
+        resolvePendingPermissionModeProbes(sessionId);
+      }
+    }
     const enriched = describeWorkspace(state);
     mainWindow?.webContents.send('workspace:state', enriched);
     updateTray(enriched);
@@ -618,7 +663,8 @@ const activateProject = (sessionId: string): WorkspaceState => {
 };
 
 /** Drops every runtime session bound to a folder so agent state does not leak into a reopen. */
-const releaseRuntimeForSessions = (sessionIds: string[]): void => {
+const releaseRuntimeForSessions = async (sessionIds: string[]): Promise<void> => {
+  await Promise.all(sessionIds.map(invalidateAndWaitForDevelopmentSessionOperation));
   for (const sessionId of sessionIds) {
     claudeRuntime?.closeSession(sessionId);
     codexRuntime?.closeSession(sessionId);
@@ -727,17 +773,26 @@ function updateTray(state = describeWorkspace()): void {
         ? [
             {
               click: () => {
-                workspace.restart(activeStatus.id);
+                void runDirectTerminalTransition(
+                  directTerminalTransitionDependencies,
+                  activeStatus.id,
+                  activeStatus.ptyGeneration,
+                  () => workspace.restart(activeStatus.id),
+                ).catch(() => {});
               },
               label: `重启 ${sessionLabel(activeStatus)}`,
             } satisfies MenuItemConstructorOptions,
             {
               click: () => {
-                if (activeStatus.phase === 'running') {
-                  workspace.stop(activeStatus.id);
-                } else {
-                  workspace.start(activeStatus.id);
-                }
+                void runDirectTerminalTransition(
+                  directTerminalTransitionDependencies,
+                  activeStatus.id,
+                  activeStatus.ptyGeneration,
+                  () =>
+                    activeStatus.phase === 'running'
+                      ? workspace.stop(activeStatus.id)
+                      : workspace.start(activeStatus.id),
+                ).catch(() => {});
               },
               label: activeStatus.phase === 'running' ? '停止当前终端' : '启动当前终端',
             } satisfies MenuItemConstructorOptions,
@@ -767,6 +822,13 @@ const validateSessionId = (sessionId: unknown): string => {
     throw new Error('项目会话标识无效。');
   }
   return sessionId;
+};
+
+const validatePtyGeneration = (value: unknown): PtyGeneration => {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error('终端代次无效。');
+  }
+  return value;
 };
 
 const requireClaudeRuntime = (): ClaudeRuntime => {
@@ -1089,6 +1151,13 @@ const validateClaudeEffortRequest = (effort: unknown): ClaudeEffortRequest => {
   return effort as ClaudeEffortRequest;
 };
 
+const validateModelSpeedMode = (mode: unknown): ModelSpeedMode => {
+  if (mode !== 'fast' && mode !== 'standard') {
+    throw new Error('模型服务速度标识无效。');
+  }
+  return mode;
+};
+
 /** Option identifiers are minted by `getModelOptions`; anything else never reaches the terminal. */
 const validateModelOptionId = (value: unknown): string => {
   if (
@@ -1284,6 +1353,122 @@ const claudeFailure = async (sessionId: string, error: unknown): Promise<ClaudeO
   };
 };
 
+/** Serializes launch-time PTY mutation across Claude and Codex for each workspace session. */
+const developmentSessionOperations = new SessionOperationCoordinator((sessionId) =>
+  workspace.hasSession(sessionId),
+);
+const projectRuntimeSwitchOperations = new ProjectRuntimeSwitchCoordinator({
+  cleanupBeforeCommit: async (_cwd, selected) => {
+    if (selected === 'codex') {
+      await requireClaudeRuntime().stopUnusedRoutingServices();
+    }
+  },
+  commitRuntime: (cwd, selected) => agentRuntimeStore.set(cwd, selected),
+  getCurrentRuntime: (cwd) => agentRuntimeStore.get(cwd),
+  getSession: (sessionId) =>
+    workspace.hasSession(sessionId) ? workspace.getStatus(sessionId) : undefined,
+  hasActiveRuntime: (sessionId) =>
+    requireClaudeRuntime().isActive(sessionId) || requireCodexRuntime().isActive(sessionId),
+  invalidateAndWait: (sessionId) => developmentSessionOperations.invalidateAndWait(sessionId),
+  prepareProvider: async (cwd, selected) => {
+    const officialProvider =
+      selected === 'codex' ? 'openai-codex' : requireClaudeRuntime().officialNetworkProvider(cwd);
+    if (officialProvider) {
+      await assertOfficialProviderAllowed(officialProvider, 'provider-switch', cwd);
+    }
+  },
+  sessionsForDirectory: (cwd) =>
+    workspace.sessionIdsForDirectory(cwd).map((sessionId) => workspace.getStatus(sessionId)),
+});
+const managedConfigTransactions = new SessionConfigTransactionCoordinator();
+const terminalOperationInvalidationSuppressions = new Set<string>();
+
+const invalidateDevelopmentSessionOperation = (sessionId: string): void => {
+  developmentSessionOperations.invalidate(sessionId);
+};
+
+const invalidateAndWaitForDevelopmentSessionOperation = (sessionId: string): Promise<void> =>
+  developmentSessionOperations.invalidateAndWait(sessionId);
+
+const withDevelopmentSessionOperation = <T>(
+  sessionId: string,
+  operation: (assertCurrent: () => void) => Promise<T>,
+): Promise<T> => {
+  const initialStatus = workspace.getStatus(sessionId);
+  projectRuntimeSwitchOperations.assertDevelopmentOperationAllowed(initialStatus.cwd);
+  return developmentSessionOperations.run(sessionId, (assertSessionCurrent) =>
+    operation(() => {
+      assertSessionCurrent();
+      const currentStatus = workspace.getStatus(sessionId);
+      if (!sameDirectory(currentStatus.cwd, initialStatus.cwd)) {
+        throw new Error('开发会话已不再属于发起操作时的项目。');
+      }
+      projectRuntimeSwitchOperations.assertDevelopmentOperationAllowed(currentStatus.cwd);
+    }),
+  );
+};
+
+const withoutTerminalOperationInvalidation = <T>(sessionId: string, operation: () => T): T => {
+  terminalOperationInvalidationSuppressions.add(sessionId);
+  try {
+    return operation();
+  } finally {
+    terminalOperationInvalidationSuppressions.delete(sessionId);
+  }
+};
+
+const directTerminalTransitionDependencies = {
+  deactivateRuntimes: (sessionId: string, expectedGeneration: PtyGeneration) => {
+    claudeRuntime?.setInactive(sessionId, expectedGeneration);
+    codexRuntime?.setInactive(sessionId, expectedGeneration);
+  },
+  discardOutput: (sessionId: string, expectedGeneration: PtyGeneration) => {
+    terminalOutputBatcher.discard(sessionId, expectedGeneration);
+  },
+  getPtyGeneration: (sessionId: string) => workspace.getStatus(sessionId).ptyGeneration,
+  invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,
+  resolveProbes: resolvePendingPermissionModeProbes,
+  withInvalidationSuppressed: withoutTerminalOperationInvalidation,
+};
+
+const failedRuntimeLaunchCleanupDependencies = {
+  hasSession: (sessionId: string) => workspace.hasSession(sessionId),
+  stopIfGeneration: (sessionId: string, expectedGeneration: PtyGeneration) =>
+    workspace.stopIfGeneration(sessionId, expectedGeneration),
+};
+
+interface TerminalRuntimeOwner {
+  bindPty(sessionId: string, ptyGeneration: PtyGeneration): void;
+  cleanupPreparedLaunch(sessionId: string): unknown;
+  setInactive(sessionId: string, expectedGeneration: PtyGeneration): unknown;
+  writeTerminal(sessionId: string, ptyGeneration: PtyGeneration, data: string): boolean;
+}
+
+const restartRuntimeTerminal = (
+  runtime: TerminalRuntimeOwner,
+  sessionId: string,
+  environment: Parameters<TerminalWorkspace['restart']>[1],
+  command: string,
+  failureMessage: string,
+  assertCurrent: () => void,
+  ownGeneration: (ptyGeneration: PtyGeneration) => void,
+): TerminalStatus => {
+  const previousGeneration = workspace.getStatus(sessionId).ptyGeneration;
+  terminalOutputBatcher.discard(sessionId, previousGeneration);
+  resolvePendingPermissionModeProbes(sessionId, previousGeneration);
+  const terminalStatus = workspace.restart(sessionId, environment);
+  ownGeneration(terminalStatus.ptyGeneration);
+  runtime.bindPty(sessionId, terminalStatus.ptyGeneration);
+  if (terminalStatus.phase === 'error') {
+    throw new Error(terminalStatus.message ?? failureMessage);
+  }
+  assertCurrent();
+  if (!runtime.writeTerminal(sessionId, terminalStatus.ptyGeneration, `${command}\r`)) {
+    throw new Error('新的 PowerShell 已停止，启动命令没有写入。');
+  }
+  return terminalStatus;
+};
+
 const codexFailure = async (sessionId: string, error: unknown): Promise<CodexOperationResult> => {
   const runtime = requireCodexRuntime();
   const status = workspace.getStatus(sessionId);
@@ -1341,24 +1526,50 @@ const managedChatGptConfigInput = (
   provider: 'gateway',
 });
 
+const managedConfigTransactionState = (error: unknown): ClaudeProjectState | undefined =>
+  error instanceof OwnedConfigTransactionError
+    ? (error.state as ClaudeProjectState | undefined)
+    : undefined;
+
+const publishRestoredClaudeProjectState = (state: ClaudeProjectState): void => {
+  if (workspace.hasSession(state.sessionId)) {
+    mainWindow?.webContents.send('claude:state', state);
+  }
+};
+
 const resumeClaudeAfterManagedCutover = async (
   runtime: ClaudeRuntime,
   sessionId: string,
   cwd: string,
+  assertCurrent: () => void,
 ): Promise<ClaudeProjectState> => {
+  let ownedGeneration = workspace.getStatus(sessionId).ptyGeneration;
   try {
     const prepared = await runtime.prepareLaunch(sessionId, cwd, 'continue');
-    const terminalStatus = workspace.restart(sessionId, prepared.environment);
-    if (terminalStatus.phase === 'error') {
-      throw new Error(terminalStatus.message ?? '无法在新接入上恢复 Claude Code 会话。');
-    }
-    workspace.write(sessionId, `${prepared.command}\r`);
-    return runtime.getState(sessionId, cwd);
+    assertCurrent();
+    restartRuntimeTerminal(
+      runtime,
+      sessionId,
+      prepared.environment,
+      prepared.command,
+      '无法在新接入上恢复 Claude Code 会话。',
+      assertCurrent,
+      (ptyGeneration) => {
+        ownedGeneration = ptyGeneration;
+      },
+    );
+    const state = await runtime.getState(sessionId, cwd);
+    assertCurrent();
+    return state;
   } catch (error) {
     // Once the saved route changes, falling back to the old live PTY would silently keep billing
     // the previous relay. Fail closed even when preparing or starting the replacement TUI fails.
-    workspace.stop(sessionId);
-    runtime.setInactive(sessionId);
+    cleanupFailedRuntimeLaunch(
+      failedRuntimeLaunchCleanupDependencies,
+      runtime,
+      sessionId,
+      ownedGeneration,
+    );
     throw error;
   }
 };
@@ -1367,11 +1578,13 @@ const verifyAndSaveManagedChatGptProject = async (
   sessionId: string,
   cwd: string,
   managed: ManagedChatGptGatewayProjectConfig,
+  assertCurrent: () => void,
   requestedModel?: string,
   resumeAfterSave = false,
 ): Promise<{ connectionTest: ClaudeConnectionTestResult; projectState?: ClaudeProjectState }> => {
   const runtime = requireClaudeRuntime();
   const current = await runtime.getState(sessionId, cwd);
+  assertCurrent();
   const model =
     requestedModel ??
     (current.config.preset === 'chatgpt-subscription' &&
@@ -1387,25 +1600,50 @@ const verifyAndSaveManagedChatGptProject = async (
   const input = managedChatGptConfigInput(managed, model, modelFast);
   emitManagedChatGptProgress(sessionId, 'testing', 7, `正在真实验证模型 ${model}。`);
   let connectionTest = await runtime.testConnection(cwd, input);
+  assertCurrent();
   if (
     !connectionTest.ok &&
     (connectionTest.failureKind === 'network' || connectionTest.failureKind === 'timeout')
   ) {
     emitManagedChatGptProgress(sessionId, 'testing', 7, '连接首次失败，正在自动重启网关并复检。');
     await requireManagedChatGptGateway().ensureRunning();
+    assertCurrent();
     connectionTest = await runtime.testConnection(cwd, input);
+    assertCurrent();
   }
   if (!connectionTest.ok) {
     return { connectionTest };
   }
   emitManagedChatGptProgress(sessionId, 'saving', 8, '连接已通过，正在保存当前项目配置。');
-  const savedState = await runtime.saveConfig(sessionId, cwd, input);
-  return {
-    connectionTest,
-    projectState: resumeAfterSave
-      ? await resumeClaudeAfterManagedCutover(runtime, sessionId, cwd)
-      : savedState,
+  const assertConfigTransactionTarget = (): void => {
+    const currentStatus = workspace.getStatus(sessionId);
+    if (!sameDirectory(currentStatus.cwd, cwd)) {
+      throw new Error('托管网关配置操作已不再拥有原项目会话。');
+    }
   };
+  const assertConfigCutoverCurrent = (): void => {
+    assertCurrent();
+    assertConfigTransactionTarget();
+  };
+  const projectState = await runOwnedConfigTransaction({
+    assertOperationOwnership: assertConfigCutoverCurrent,
+    assertRollbackOwnership: assertConfigTransactionTarget,
+    coordinator: managedConfigTransactions,
+    createSnapshot: () => runtime.createConfigSnapshot(cwd),
+    cwd,
+    publishRestoredState: publishRestoredClaudeProjectState,
+    readState: () => runtime.getState(sessionId, cwd),
+    restoreSnapshot: (snapshot) => runtime.restoreConfigSnapshot(cwd, snapshot),
+    ...(resumeAfterSave
+      ? {
+          resume: (_savedState: ClaudeProjectState) =>
+            resumeClaudeAfterManagedCutover(runtime, sessionId, cwd, assertConfigCutoverCurrent),
+        }
+      : {}),
+    save: () => runtime.saveConfig(sessionId, cwd, input),
+    sessionId,
+  });
+  return { connectionTest, projectState };
 };
 
 const validatePluginId = (value: unknown): string => {
@@ -1972,39 +2210,16 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const selected = validateDevelopmentRuntime(runtime);
       const status = workspace.getStatus(validatedSessionId);
-      const current = agentRuntimeStore.get(status.cwd);
-      if (current !== selected) {
-        const projectHasActiveAgent = workspace
-          .sessionIdsForDirectory(status.cwd)
-          .some(
-            (candidateSessionId) =>
-              requireClaudeRuntime().isActive(candidateSessionId) ||
-              requireCodexRuntime().isActive(candidateSessionId),
-          );
-        if (projectHasActiveAgent) {
-          throw new Error('请先结束当前开发会话，再切换开发引擎。');
-        }
-        const officialProvider =
-          selected === 'codex'
-            ? 'openai-codex'
-            : requireClaudeRuntime().officialNetworkProvider(status.cwd);
-        if (officialProvider) {
-          await assertOfficialProviderAllowed(officialProvider, 'provider-switch', status.cwd);
-        }
-        const rollback = new RollbackCoordinator();
-        rollback.add(() => agentRuntimeStore.set(status.cwd, current));
-        try {
-          agentRuntimeStore.set(status.cwd, selected);
-          if (selected === 'codex') {
-            await requireClaudeRuntime().stopUnusedRoutingServices();
-          }
-          rollback.commit();
-        } catch (error) {
-          await rollback.rollback();
-          throw error;
-        }
-      }
-      return { cwd: status.cwd, runtime: selected, sessionId: validatedSessionId };
+      const committedRuntime = await projectRuntimeSwitchOperations.switchRuntime(
+        validatedSessionId,
+        status.cwd,
+        selected,
+      );
+      return {
+        cwd: status.cwd,
+        runtime: committedRuntime,
+        sessionId: validatedSessionId,
+      };
     },
   );
   ipcMain.handle('project:add', (event, directoryPath: unknown) => {
@@ -2025,10 +2240,11 @@ const registerIpc = (): void => {
       return failedWorkspaceResult(error);
     }
   });
-  ipcMain.handle('project:close', (event, sessionId: unknown) => {
+  ipcMain.handle('project:close', async (event, sessionId: unknown) => {
     validateSender(event);
     try {
       const validatedSessionId = validateSessionId(sessionId);
+      await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId);
       requireClaudeRuntime().closeSession(validatedSessionId);
       requireCodexRuntime().closeSession(validatedSessionId);
       // The folder stays remembered: closing one conversation is not "forget this project".
@@ -2056,22 +2272,22 @@ const registerIpc = (): void => {
       return failedWorkspaceResult(error);
     }
   });
-  ipcMain.handle('project:close-folder', (event, projectPath: unknown) => {
+  ipcMain.handle('project:close-folder', async (event, projectPath: unknown) => {
     validateSender(event);
     try {
       const target = validateProjectPath(projectPath);
-      releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
+      await releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
       const state = workspace.closeDirectory(target);
       return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
     }
   });
-  ipcMain.handle('project:forget', (event, projectPath: unknown) => {
+  ipcMain.handle('project:forget', async (event, projectPath: unknown) => {
     validateSender(event);
     try {
       const target = validateProjectPath(projectPath);
-      releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
+      await releaseRuntimeForSessions(workspace.sessionIdsForDirectory(target));
       const state = workspace.closeDirectory(target);
       workspaceStore.removeProject(target);
       agentRuntimeStore.remove(target);
@@ -2089,9 +2305,12 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const normalizedTitle = normalizeClaudeSessionTitle(title);
       const state = workspace.renameSession(validatedSessionId, normalizedTitle);
-      if (claudeRuntime?.isActive(validatedSessionId)) {
-        workspace.write(validatedSessionId, `/rename ${normalizedTitle}\r`);
-      }
+      const status = workspace.getStatus(validatedSessionId);
+      claudeRuntime?.writeTerminal(
+        validatedSessionId,
+        status.ptyGeneration,
+        `/rename ${normalizedTitle}\r`,
+      );
       return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
     } catch (error) {
       return failedWorkspaceResult(error);
@@ -2101,7 +2320,6 @@ const registerIpc = (): void => {
     'project:open-stored-conversation',
     async (event, projectPath: unknown, conversationId: unknown): Promise<WorkspaceResult> => {
       validateSender(event);
-      let sessionId: string | undefined;
       try {
         if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
           throw new Error('会话标识无效。');
@@ -2114,70 +2332,121 @@ const registerIpc = (): void => {
 
         // A stored conversation always gets its own terminal, so several can resume side by side.
         workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`);
-        sessionId = workspace.getState().activeSessionId;
+        const openedSessionId = workspace.getState().activeSessionId;
+        if (!openedSessionId) {
+          throw new Error('无法创建历史会话终端。');
+        }
         workspaceStore.addProject(resolved);
 
-        const prepared = await runtime.prepareLaunchWithSession(
-          sessionId,
-          resolved,
-          conversationId,
-        );
-        const terminalStatus = workspace.restart(sessionId, prepared.environment);
-        if (terminalStatus.phase === 'error') {
-          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
-        }
-        workspace.write(sessionId, `${prepared.command}\r`);
+        await withDevelopmentSessionOperation(openedSessionId, async (assertCurrent) => {
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            const prepared = await runtime.prepareLaunchWithSession(
+              openedSessionId,
+              resolved,
+              conversationId,
+            );
+            launchPrepared = true;
+            assertCurrent();
+            restartRuntimeTerminal(
+              runtime,
+              openedSessionId,
+              prepared.environment,
+              prepared.command,
+              '无法为 Claude Code 启动安全终端。',
+              assertCurrent,
+              (ptyGeneration) => {
+                ownedGeneration = ptyGeneration;
+              },
+            );
+          } catch (error) {
+            if (launchPrepared || ownedGeneration !== undefined) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                openedSessionId,
+                ownedGeneration,
+              );
+            }
+            throw error;
+          }
+        });
         return { ok: true, state: describeWorkspace() };
       } catch (error) {
-        if (sessionId) {
-          requireClaudeRuntime().setInactive(sessionId);
-        }
         return failedWorkspaceResult(error);
       }
     },
   );
-  ipcMain.handle('terminal:start', (event, sessionId: unknown) => {
-    validateSender(event);
-    try {
-      return operationFromStatus(workspace.start(validateSessionId(sessionId)));
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : '无法启动终端。',
-        ok: false,
-        status: workspace.getActiveStatus(),
-      } satisfies OperationResult;
-    }
-  });
-  ipcMain.handle('terminal:restart', (event, sessionId: unknown) => {
-    validateSender(event);
-    try {
-      const validatedSessionId = validateSessionId(sessionId);
-      requireClaudeRuntime().setInactive(validatedSessionId);
-      requireCodexRuntime().setInactive(validatedSessionId);
-      return operationFromStatus(workspace.restart(validatedSessionId));
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : '无法重启终端。',
-        ok: false,
-        status: workspace.getActiveStatus(),
-      } satisfies OperationResult;
-    }
-  });
-  ipcMain.handle('terminal:stop', (event, sessionId: unknown) => {
-    validateSender(event);
-    try {
-      const validatedSessionId = validateSessionId(sessionId);
-      requireClaudeRuntime().setInactive(validatedSessionId);
-      requireCodexRuntime().setInactive(validatedSessionId);
-      return operationFromStatus(workspace.stop(validatedSessionId));
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : '无法停止终端。',
-        ok: false,
-        status: workspace.getActiveStatus(),
-      } satisfies OperationResult;
-    }
-  });
+  ipcMain.handle(
+    'terminal:start',
+    async (event, sessionId: unknown, expectedGeneration: unknown) => {
+      validateSender(event);
+      try {
+        const validatedSessionId = validateSessionId(sessionId);
+        const validatedGeneration = validatePtyGeneration(expectedGeneration);
+        const status = await runDirectTerminalTransition(
+          directTerminalTransitionDependencies,
+          validatedSessionId,
+          validatedGeneration,
+          () => workspace.start(validatedSessionId),
+        );
+        return operationFromStatus(status);
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : '无法启动终端。',
+          ok: false,
+          status: workspace.getActiveStatus(),
+        } satisfies OperationResult;
+      }
+    },
+  );
+  ipcMain.handle(
+    'terminal:restart',
+    async (event, sessionId: unknown, expectedGeneration: unknown) => {
+      validateSender(event);
+      try {
+        const validatedSessionId = validateSessionId(sessionId);
+        const validatedGeneration = validatePtyGeneration(expectedGeneration);
+        const status = await runDirectTerminalTransition(
+          directTerminalTransitionDependencies,
+          validatedSessionId,
+          validatedGeneration,
+          () => workspace.restart(validatedSessionId),
+        );
+        return operationFromStatus(status);
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : '无法重启终端。',
+          ok: false,
+          status: workspace.getActiveStatus(),
+        } satisfies OperationResult;
+      }
+    },
+  );
+  ipcMain.handle(
+    'terminal:stop',
+    async (event, sessionId: unknown, expectedGeneration: unknown) => {
+      validateSender(event);
+      try {
+        const validatedSessionId = validateSessionId(sessionId);
+        const validatedGeneration = validatePtyGeneration(expectedGeneration);
+        const status = await runDirectTerminalTransition(
+          directTerminalTransitionDependencies,
+          validatedSessionId,
+          validatedGeneration,
+          () => workspace.stop(validatedSessionId),
+        );
+        return operationFromStatus(status);
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : '无法停止终端。',
+          ok: false,
+          status: workspace.getActiveStatus(),
+        } satisfies OperationResult;
+      }
+    },
+  );
   ipcMain.handle('directory:choose', async (event) => {
     validateSender(event);
     return chooseDirectory(BrowserWindow.fromWebContents(event.sender) ?? undefined);
@@ -2273,31 +2542,53 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireCodexRuntime();
-      let restartAttempted = false;
       try {
-        if (agentRuntimeStore.get(status.cwd) !== 'codex') {
-          throw new Error('当前项目尚未选择 Codex 开发引擎。');
-        }
-        await assertOfficialProviderAllowed('openai-codex', 'cli-launch', status.cwd);
-        const prepared = await runtime.prepareLaunch(
-          validatedSessionId,
-          status.cwd,
-          validateCodexLaunchMode(mode),
-        );
-        restartAttempted = true;
-        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
-        if (terminalStatus.phase === 'error') {
-          throw new Error(terminalStatus.message ?? '无法为 Codex 启动安全终端。');
-        }
-        workspace.write(validatedSessionId, `${prepared.command}\r`);
-        return {
-          ok: true,
-          state: await runtime.getState(validatedSessionId, status.cwd),
-        };
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            if (agentRuntimeStore.get(status.cwd) !== 'codex') {
+              throw new Error('当前项目尚未选择 Codex 开发引擎。');
+            }
+            await assertOfficialProviderAllowed('openai-codex', 'cli-launch', status.cwd);
+            assertCurrent();
+            const prepared = await runtime.prepareLaunch(
+              validatedSessionId,
+              status.cwd,
+              validateCodexLaunchMode(mode),
+            );
+            launchPrepared = true;
+            assertCurrent();
+            if (agentRuntimeStore.get(status.cwd) !== 'codex') {
+              throw new Error('当前项目已切换开发引擎，这次 Codex 启动已取消。');
+            }
+            restartRuntimeTerminal(
+              runtime,
+              validatedSessionId,
+              prepared.environment,
+              prepared.command,
+              '无法为 Codex 启动安全终端。',
+              assertCurrent,
+              (ptyGeneration) => {
+                ownedGeneration = ptyGeneration;
+              },
+            );
+            const state = await runtime.getState(validatedSessionId, status.cwd);
+            assertCurrent();
+            return { ok: true, state };
+          } catch (error) {
+            if (launchPrepared || ownedGeneration !== undefined) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                validatedSessionId,
+                ownedGeneration,
+              );
+            }
+            return codexFailure(validatedSessionId, error);
+          }
+        });
       } catch (error) {
-        if (restartAttempted) {
-          runtime.setInactive(validatedSessionId);
-        }
         return codexFailure(validatedSessionId, error);
       }
     },
@@ -2373,107 +2664,142 @@ const registerIpc = (): void => {
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
       const resumeAfterSetup = runtime.isActive(validatedSessionId);
-      let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
-        await assertOfficialProviderAllowed('openai-codex', 'login', status.cwd);
-        if (resumeAfterSetup) {
-          emitManagedChatGptProgress(
-            validatedSessionId,
-            'detecting',
-            1,
-            '检测到运行中的 Claude 会话；已先停止旧路由，防止登录期间继续消耗原中转站额度。',
-          );
-          workspace.stop(validatedSessionId);
-          runtime.setInactive(validatedSessionId);
-        }
-        emitManagedChatGptProgress(
-          validatedSessionId,
-          'detecting',
-          1,
-          resumeAfterSetup
-            ? '旧路由已停止，正在检测 Claude Code、登录网关与本机端口。'
-            : '正在检测 Claude Code、登录网关与本机端口。',
-        );
-        let environment = await runtime.getSoftwareUpdates(true);
-        if (!environment.claudeCode.installed) {
-          emitManagedChatGptProgress(
-            validatedSessionId,
-            'installing-claude',
-            2,
-            '未检测到 Claude Code，正在通过官方安装方式补齐。',
-          );
-          environment = (await runtime.installOrUpdateClaudeCode()).state;
-        } else {
-          emitManagedChatGptProgress(
-            validatedSessionId,
-            'installing-claude',
-            2,
-            'Claude Code 已就绪，无需重复安装。',
-          );
-        }
-        if (!environment.claudeCode.installed) {
-          throw new Error('Claude Code 自动安装结束后仍未通过环境检测。');
-        }
-        emitManagedChatGptProgress(
-          validatedSessionId,
-          'installing-gateway',
-          3,
-          'Claude Code 已就绪，正在检查并配置 ChatGPT 本地网关；此方式不需要 CCR。',
-        );
-        const managed = await requireManagedChatGptGateway().setup(forceLogin, (step, detail) => {
-          const stage: ManagedChatGptSetupStage =
-            step === 5 ? 'logging-in' : step >= 6 ? 'discovering-models' : 'installing-gateway';
-          emitManagedChatGptProgress(validatedSessionId, stage, step, detail);
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          let connectionTest: ClaudeConnectionTestResult | undefined;
+          try {
+            await assertOfficialProviderAllowed('openai-codex', 'login', status.cwd);
+            assertCurrent();
+            if (resumeAfterSetup) {
+              emitManagedChatGptProgress(
+                validatedSessionId,
+                'detecting',
+                1,
+                '检测到运行中的 Claude 会话；已先停止旧路由，防止登录期间继续消耗原中转站额度。',
+              );
+              withoutTerminalOperationInvalidation(validatedSessionId, () => {
+                workspace.stopIfGeneration(validatedSessionId, status.ptyGeneration);
+              });
+              runtime.setInactive(validatedSessionId, status.ptyGeneration);
+              assertCurrent();
+            }
+            emitManagedChatGptProgress(
+              validatedSessionId,
+              'detecting',
+              1,
+              resumeAfterSetup
+                ? '旧路由已停止，正在检测 Claude Code、登录网关与本机端口。'
+                : '正在检测 Claude Code、登录网关与本机端口。',
+            );
+            let environment = await runtime.getSoftwareUpdates(true);
+            assertCurrent();
+            if (!environment.claudeCode.installed) {
+              emitManagedChatGptProgress(
+                validatedSessionId,
+                'installing-claude',
+                2,
+                '未检测到 Claude Code，正在通过官方安装方式补齐。',
+              );
+              environment = (await runtime.installOrUpdateClaudeCode()).state;
+              assertCurrent();
+            } else {
+              emitManagedChatGptProgress(
+                validatedSessionId,
+                'installing-claude',
+                2,
+                'Claude Code 已就绪，无需重复安装。',
+              );
+            }
+            if (!environment.claudeCode.installed) {
+              throw new Error('Claude Code 自动安装结束后仍未通过环境检测。');
+            }
+            emitManagedChatGptProgress(
+              validatedSessionId,
+              'installing-gateway',
+              3,
+              'Claude Code 已就绪，正在检查并配置 ChatGPT 本地网关；此方式不需要 CCR。',
+            );
+            const managed = await requireManagedChatGptGateway().setup(
+              forceLogin,
+              (step, detail) => {
+                const stage: ManagedChatGptSetupStage =
+                  step === 5
+                    ? 'logging-in'
+                    : step >= 6
+                      ? 'discovering-models'
+                      : 'installing-gateway';
+                emitManagedChatGptProgress(validatedSessionId, stage, step, detail);
+              },
+            );
+            assertCurrent();
+            const applied = await verifyAndSaveManagedChatGptProject(
+              validatedSessionId,
+              status.cwd,
+              managed,
+              assertCurrent,
+              undefined,
+              resumeAfterSetup,
+            );
+            assertCurrent();
+            connectionTest = applied.connectionTest;
+            const state = await requireManagedChatGptGateway().getState();
+            assertCurrent();
+            if (!applied.projectState) {
+              emitManagedChatGptProgress(
+                validatedSessionId,
+                'error',
+                8,
+                `自动接入未通过：${connectionTest.message}`,
+                false,
+              );
+              return {
+                connectionTest,
+                error: connectionTest.message,
+                message: '环境与模型列表已准备好，但真实连接测试未通过。',
+                ok: false,
+                state,
+              };
+            }
+            emitManagedChatGptProgress(
+              validatedSessionId,
+              'complete',
+              8,
+              resumeAfterSetup
+                ? `接入成功；旧路由已切断，最近会话已在新路由恢复，模型为 ${applied.projectState.config.model}。`
+                : `接入成功，已自动选择并验证模型 ${applied.projectState.config.model}。`,
+              false,
+            );
+            return {
+              connectionTest,
+              message: resumeAfterSetup
+                ? `环境、网关和模型已全部自动配置；旧路由已停止，最近会话已在新路由恢复。`
+                : `环境、网关和模型已全部自动配置；当前使用 ${applied.projectState.config.model}。`,
+              ok: true,
+              projectState: applied.projectState,
+              state,
+            };
+          } catch (error) {
+            const state = await requireManagedChatGptGateway().getState();
+            const message = error instanceof Error ? error.message : '托管网关配置失败。';
+            const projectState = managedConfigTransactionState(error);
+            emitManagedChatGptProgress(validatedSessionId, 'error', 8, message, false);
+            return {
+              connectionTest,
+              error: message,
+              message: resumeAfterSetup
+                ? '未能完成 ChatGPT 订阅的一键接入；旧路由会话已保持停止，不会继续消耗原中转站额度。'
+                : '未能完成 ChatGPT 订阅的一键接入。',
+              ok: false,
+              ...(projectState ? { projectState } : {}),
+              state,
+            };
+          }
         });
-        const applied = await verifyAndSaveManagedChatGptProject(
-          validatedSessionId,
-          status.cwd,
-          managed,
-          undefined,
-          resumeAfterSetup,
-        );
-        connectionTest = applied.connectionTest;
-        const state = await requireManagedChatGptGateway().getState();
-        if (!applied.projectState) {
-          emitManagedChatGptProgress(
-            validatedSessionId,
-            'error',
-            8,
-            `自动接入未通过：${connectionTest.message}`,
-            false,
-          );
-          return {
-            connectionTest,
-            error: connectionTest.message,
-            message: '环境与模型列表已准备好，但真实连接测试未通过。',
-            ok: false,
-            state,
-          };
-        }
-        emitManagedChatGptProgress(
-          validatedSessionId,
-          'complete',
-          8,
-          resumeAfterSetup
-            ? `接入成功；旧路由已切断，最近会话已在新路由恢复，模型为 ${applied.projectState.config.model}。`
-            : `接入成功，已自动选择并验证模型 ${applied.projectState.config.model}。`,
-          false,
-        );
-        return {
-          connectionTest,
-          message: resumeAfterSetup
-            ? `环境、网关和模型已全部自动配置；旧路由已停止，最近会话已在新路由恢复。`
-            : `环境、网关和模型已全部自动配置；当前使用 ${applied.projectState.config.model}。`,
-          ok: true,
-          projectState: applied.projectState,
-          state,
-        };
       } catch (error) {
         const state = await requireManagedChatGptGateway().getState();
         const message = error instanceof Error ? error.message : '托管网关配置失败。';
         emitManagedChatGptProgress(validatedSessionId, 'error', 8, message, false);
         return {
-          connectionTest,
           error: message,
           message: resumeAfterSetup
             ? '未能完成 ChatGPT 订阅的一键接入；旧路由会话已保持停止，不会继续消耗原中转站额度。'
@@ -2502,55 +2828,83 @@ const registerIpc = (): void => {
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
       const resumeAfterModelChange = runtime.isActive(validatedSessionId);
-      let connectionTest: ClaudeConnectionTestResult | undefined;
       try {
-        await assertOfficialProviderAllowed('openai-codex', 'first-request', status.cwd);
-        emitManagedChatGptProgress(
-          validatedSessionId,
-          'discovering-models',
-          6,
-          '正在刷新网关模型列表并校验你的选择。',
-        );
-        const managed = await requireManagedChatGptGateway().configurationForModel(requestedModel);
-        const applied = await verifyAndSaveManagedChatGptProject(
-          validatedSessionId,
-          status.cwd,
-          managed,
-          requestedModel,
-          resumeAfterModelChange,
-        );
-        connectionTest = applied.connectionTest;
-        const state = await requireManagedChatGptGateway().getState();
-        if (!applied.projectState) {
-          emitManagedChatGptProgress(validatedSessionId, 'error', 8, connectionTest.message, false);
-          return {
-            connectionTest,
-            error: connectionTest.message,
-            message: '所选模型未通过真实连接测试，原配置保持不变。',
-            ok: false,
-            state,
-          };
-        }
-        emitManagedChatGptProgress(
-          validatedSessionId,
-          'complete',
-          8,
-          `模型 ${requestedModel} 已验证并切换完成。`,
-          false,
-        );
-        return {
-          connectionTest,
-          message: `已切换并验证模型 ${requestedModel}。`,
-          ok: true,
-          projectState: applied.projectState,
-          state,
-        };
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          let connectionTest: ClaudeConnectionTestResult | undefined;
+          try {
+            await assertOfficialProviderAllowed('openai-codex', 'first-request', status.cwd);
+            assertCurrent();
+            emitManagedChatGptProgress(
+              validatedSessionId,
+              'discovering-models',
+              6,
+              '正在刷新网关模型列表并校验你的选择。',
+            );
+            const managed =
+              await requireManagedChatGptGateway().configurationForModel(requestedModel);
+            assertCurrent();
+            const applied = await verifyAndSaveManagedChatGptProject(
+              validatedSessionId,
+              status.cwd,
+              managed,
+              assertCurrent,
+              requestedModel,
+              resumeAfterModelChange,
+            );
+            assertCurrent();
+            connectionTest = applied.connectionTest;
+            const state = await requireManagedChatGptGateway().getState();
+            assertCurrent();
+            if (!applied.projectState) {
+              emitManagedChatGptProgress(
+                validatedSessionId,
+                'error',
+                8,
+                connectionTest.message,
+                false,
+              );
+              return {
+                connectionTest,
+                error: connectionTest.message,
+                message: '所选模型未通过真实连接测试，原配置保持不变。',
+                ok: false,
+                state,
+              };
+            }
+            emitManagedChatGptProgress(
+              validatedSessionId,
+              'complete',
+              8,
+              `模型 ${requestedModel} 已验证并切换完成。`,
+              false,
+            );
+            return {
+              connectionTest,
+              message: `已切换并验证模型 ${requestedModel}。`,
+              ok: true,
+              projectState: applied.projectState,
+              state,
+            };
+          } catch (error) {
+            const state = await requireManagedChatGptGateway().getState();
+            const message = error instanceof Error ? error.message : '无法切换托管网关模型。';
+            const projectState = managedConfigTransactionState(error);
+            emitManagedChatGptProgress(validatedSessionId, 'error', 8, message, false);
+            return {
+              connectionTest,
+              error: message,
+              message: '无法完成模型切换。',
+              ok: false,
+              ...(projectState ? { projectState } : {}),
+              state,
+            };
+          }
+        });
       } catch (error) {
         const state = await requireManagedChatGptGateway().getState();
         const message = error instanceof Error ? error.message : '无法切换托管网关模型。';
         emitManagedChatGptProgress(validatedSessionId, 'error', 8, message, false);
         return {
-          connectionTest,
           error: message,
           message: '无法完成模型切换。',
           ok: false,
@@ -2964,10 +3318,13 @@ const registerIpc = (): void => {
       try {
         return {
           ok: true,
-          state: await requireClaudeRuntime().switchModel(
-            validatedSessionId,
-            status.cwd,
-            validateModelOptionId(optionId),
+          state: await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
+            requireClaudeRuntime().switchModel(
+              validatedSessionId,
+              status.cwd,
+              validateModelOptionId(optionId),
+              assertCurrent,
+            ),
           ),
         };
       } catch (error) {
@@ -2982,35 +3339,54 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
-      const rollback = new RollbackCoordinator();
-      let restartAttempted = false;
       try {
-        const validatedInput = validateClaudeRelaunchInput(input);
-        const officialProvider = validatedInput.entryId
-          ? runtime.connectionHistoryOfficialNetworkProvider(status.cwd, validatedInput.entryId)
-          : runtime.officialNetworkProvider(status.cwd);
-        if (officialProvider) {
-          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-        }
-        const snapshot = runtime.createConfigSnapshot(status.cwd);
-        rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
-        const prepared = await runtime.relaunch(validatedSessionId, status.cwd, validatedInput);
-        restartAttempted = true;
-        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
-        if (terminalStatus.phase === 'error') {
-          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
-        }
-        workspace.write(validatedSessionId, `${prepared.command}\r`);
-        rollback.commit();
-        return {
-          ok: true,
-          state: await runtime.getState(validatedSessionId, status.cwd),
-        };
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          const rollback = new RollbackCoordinator();
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            const validatedInput = validateClaudeRelaunchInput(input);
+            const officialProvider = validatedInput.entryId
+              ? runtime.connectionHistoryOfficialNetworkProvider(status.cwd, validatedInput.entryId)
+              : runtime.officialNetworkProvider(status.cwd);
+            if (officialProvider) {
+              await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
+              assertCurrent();
+            }
+            const snapshot = runtime.createConfigSnapshot(status.cwd);
+            rollback.add(() => runtime.restoreConfigSnapshot(status.cwd, snapshot));
+            const prepared = await runtime.relaunch(validatedSessionId, status.cwd, validatedInput);
+            launchPrepared = true;
+            assertCurrent();
+            restartRuntimeTerminal(
+              runtime,
+              validatedSessionId,
+              prepared.environment,
+              prepared.command,
+              '无法为 Claude Code 启动安全终端。',
+              assertCurrent,
+              (ptyGeneration) => {
+                ownedGeneration = ptyGeneration;
+              },
+            );
+            rollback.commit();
+            const state = await runtime.getState(validatedSessionId, status.cwd);
+            assertCurrent();
+            return { ok: true, state };
+          } catch (error) {
+            await rollback.rollback();
+            if (launchPrepared || ownedGeneration !== undefined) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                validatedSessionId,
+                ownedGeneration,
+              );
+            }
+            return claudeFailure(validatedSessionId, error);
+          }
+        });
       } catch (error) {
-        await rollback.rollback();
-        if (restartAttempted) {
-          runtime.setInactive(validatedSessionId);
-        }
         return claudeFailure(validatedSessionId, error);
       }
     },
@@ -3024,10 +3400,12 @@ const registerIpc = (): void => {
       try {
         return {
           ok: true,
-          state: await requireClaudeRuntime().setPermissionMode(
-            validatedSessionId,
-            status.cwd,
-            validateClaudePermissionMode(mode),
+          state: await withDevelopmentSessionOperation(validatedSessionId, () =>
+            requireClaudeRuntime().setPermissionMode(
+              validatedSessionId,
+              status.cwd,
+              validateClaudePermissionMode(mode),
+            ),
           ),
         };
       } catch (error) {
@@ -3044,10 +3422,12 @@ const registerIpc = (): void => {
       try {
         return {
           ok: true,
-          state: await requireClaudeRuntime().setEffort(
-            validatedSessionId,
-            status.cwd,
-            validateClaudeEffortRequest(effort),
+          state: await withDevelopmentSessionOperation(validatedSessionId, () =>
+            requireClaudeRuntime().setEffort(
+              validatedSessionId,
+              status.cwd,
+              validateClaudeEffortRequest(effort),
+            ),
           ),
         };
       } catch (error) {
@@ -3055,23 +3435,102 @@ const registerIpc = (): void => {
       }
     },
   );
-  ipcMain.on('claude:permission-mode-observed', (event, sessionId: unknown, mode: unknown) => {
-    validateSender(event);
-    try {
+  ipcMain.handle(
+    'claude:set-model-speed',
+    async (event, sessionId: unknown, mode: unknown): Promise<ClaudeOperationResult> => {
+      validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
-      requireClaudeRuntime().observePermissionModeFromScreen(
-        validatedSessionId,
-        status.cwd,
-        validateClaudePermissionMode(mode),
-      );
-    } catch {
-      // A queued xterm write can finish immediately after its project or Claude session is closed.
-    }
-  });
+      const runtime = requireClaudeRuntime();
+      try {
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          let commandWritten = false;
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            const validatedMode = validateModelSpeedMode(mode);
+            if (!runtime.isActive(validatedSessionId)) {
+              return {
+                ok: true,
+                state: await runtime.saveModelSpeedPreference(
+                  validatedSessionId,
+                  status.cwd,
+                  validatedMode,
+                ),
+              };
+            }
+            const officialProvider = runtime.officialNetworkProvider(status.cwd);
+            if (officialProvider) {
+              await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
+              assertCurrent();
+            }
+            const prepared = await runtime.prepareModelSpeedRelaunch(
+              validatedSessionId,
+              status.cwd,
+              validatedMode,
+            );
+            launchPrepared = true;
+            assertCurrent();
+            restartRuntimeTerminal(
+              runtime,
+              validatedSessionId,
+              prepared.environment,
+              prepared.command,
+              '无法为 Claude Code 启动安全终端。',
+              assertCurrent,
+              (ptyGeneration) => {
+                ownedGeneration = ptyGeneration;
+              },
+            );
+            commandWritten = true;
+            return {
+              ok: true,
+              state: await runtime.commitModelSpeedPreference(
+                validatedSessionId,
+                status.cwd,
+                prepared.targetKey,
+                prepared.preference,
+              ),
+            };
+          } catch (error) {
+            if ((launchPrepared || ownedGeneration !== undefined) && !commandWritten) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                validatedSessionId,
+                ownedGeneration,
+              );
+            }
+            return claudeFailure(validatedSessionId, error);
+          }
+        });
+      } catch (error) {
+        return claudeFailure(validatedSessionId, error);
+      }
+    },
+  );
+  ipcMain.on(
+    'claude:permission-mode-observed',
+    (event, sessionId: unknown, ptyGeneration: unknown, mode: unknown) => {
+      validateSender(event);
+      try {
+        const validatedSessionId = validateSessionId(sessionId);
+        const validatedGeneration = validatePtyGeneration(ptyGeneration);
+        const status = workspace.getStatus(validatedSessionId);
+        requireClaudeRuntime().observePermissionModeFromScreen(
+          validatedSessionId,
+          status.cwd,
+          validatedGeneration,
+          validateClaudePermissionMode(mode),
+        );
+      } catch {
+        // A queued xterm write can finish immediately after its project or Claude session is closed.
+      }
+    },
+  );
   ipcMain.on(
     'claude:permission-mode-probe-result',
-    (event, sessionId: unknown, probeId: unknown, mode: unknown) => {
+    (event, sessionId: unknown, ptyGeneration: unknown, probeId: unknown, mode: unknown) => {
       validateSender(event);
       if (
         typeof probeId !== 'number' ||
@@ -3087,10 +3546,22 @@ const registerIpc = (): void => {
       }
 
       let validatedMode: ClaudePermissionMode | undefined;
+      let validatedGeneration: PtyGeneration;
       try {
-        validateSessionId(sessionId);
+        const validatedSessionId = validateSessionId(sessionId);
+        validatedGeneration = validatePtyGeneration(ptyGeneration);
+        const current = workspace.getStatus(validatedSessionId);
+        if (
+          pending.ptyGeneration !== validatedGeneration ||
+          current.ptyGeneration !== validatedGeneration
+        ) {
+          throw new Error('终端代次已经失效。');
+        }
         validatedMode = mode === undefined ? undefined : validateClaudePermissionMode(mode);
       } catch {
+        clearTimeout(pending.timer);
+        pendingPermissionModeProbes.delete(probeId);
+        pending.resolve(undefined);
         return;
       }
       clearTimeout(pending.timer);
@@ -3183,34 +3654,56 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
-      let restartAttempted = false;
       try {
-        if (agentRuntimeStore.get(status.cwd) !== 'claude') {
-          throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
-        }
-        const officialProvider = runtime.officialNetworkProvider(status.cwd);
-        if (officialProvider) {
-          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-        }
-        const prepared = await runtime.prepareLaunch(
-          validatedSessionId,
-          status.cwd,
-          validateClaudeLaunchMode(mode),
-        );
-        restartAttempted = true;
-        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
-        if (terminalStatus.phase === 'error') {
-          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
-        }
-        workspace.write(validatedSessionId, `${prepared.command}\r`);
-        return {
-          ok: true,
-          state: await runtime.getState(validatedSessionId, status.cwd),
-        };
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            if (agentRuntimeStore.get(status.cwd) !== 'claude') {
+              throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
+            }
+            const officialProvider = runtime.officialNetworkProvider(status.cwd);
+            if (officialProvider) {
+              await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
+              assertCurrent();
+            }
+            const prepared = await runtime.prepareLaunch(
+              validatedSessionId,
+              status.cwd,
+              validateClaudeLaunchMode(mode),
+            );
+            launchPrepared = true;
+            assertCurrent();
+            if (agentRuntimeStore.get(status.cwd) !== 'claude') {
+              throw new Error('当前项目已切换开发引擎，这次 Claude 启动已取消。');
+            }
+            restartRuntimeTerminal(
+              runtime,
+              validatedSessionId,
+              prepared.environment,
+              prepared.command,
+              '无法为 Claude Code 启动安全终端。',
+              assertCurrent,
+              (ptyGeneration) => {
+                ownedGeneration = ptyGeneration;
+              },
+            );
+            const state = await runtime.getState(validatedSessionId, status.cwd);
+            assertCurrent();
+            return { ok: true, state };
+          } catch (error) {
+            if (launchPrepared || ownedGeneration !== undefined) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                validatedSessionId,
+                ownedGeneration,
+              );
+            }
+            return claudeFailure(validatedSessionId, error);
+          }
+        });
       } catch (error) {
-        if (restartAttempted) {
-          runtime.setInactive(validatedSessionId);
-        }
         return claudeFailure(validatedSessionId, error);
       }
     },
@@ -3246,10 +3739,12 @@ const registerIpc = (): void => {
         const status = workspace.getStatus(validatedSessionId);
         return {
           ok: true,
-          state: await runtime.runCommand(
-            validatedSessionId,
-            status.cwd,
-            `${command}${normalizedArgument ? ` ${normalizedArgument}` : ''}`,
+          state: await withDevelopmentSessionOperation(validatedSessionId, () =>
+            runtime.runCommand(
+              validatedSessionId,
+              status.cwd,
+              `${command}${normalizedArgument ? ` ${normalizedArgument}` : ''}`,
+            ),
           ),
         };
       } catch (error) {
@@ -3281,35 +3776,51 @@ const registerIpc = (): void => {
     validateSender(event);
     hideMainWindowToTray();
   });
-  ipcMain.on('terminal:write', (event, sessionId: unknown, data: unknown) => {
-    validateSender(event);
-    if (typeof data !== 'string' || data.length > 65_536) {
-      return;
-    }
-    try {
-      workspace.write(validateSessionId(sessionId), data);
-    } catch {
-      // A stale renderer event can arrive immediately after a project is closed.
-    }
-  });
-  ipcMain.on('terminal:resize', (event, sessionId: unknown, cols: unknown, rows: unknown) => {
-    validateSender(event);
-    if (typeof cols !== 'number' || typeof rows !== 'number') {
-      return;
-    }
-    try {
-      const validatedSessionId = validateSessionId(sessionId);
-      const applied = workspace.resize(validatedSessionId, cols, rows);
-      /*
-       * Echo back the size the PTY actually took. PSReadLine repaints with absolute cursor moves,
-       * so xterm disagreeing with ConPTY by even one row makes that repaint overwrite the wrong
-       * line and leaves the previous screen visible underneath.
-       */
-      mainWindow?.webContents.send('terminal:size', validatedSessionId, applied.cols, applied.rows);
-    } catch {
-      // A ResizeObserver callback can race with project closure.
-    }
-  });
+  ipcMain.on(
+    'terminal:write',
+    (event, sessionId: unknown, ptyGeneration: unknown, data: unknown) => {
+      validateSender(event);
+      if (typeof data !== 'string' || data.length > 65_536) {
+        return;
+      }
+      try {
+        workspace.write(validateSessionId(sessionId), validatePtyGeneration(ptyGeneration), data);
+      } catch {
+        // A stale renderer event can arrive immediately after a project is closed.
+      }
+    },
+  );
+  ipcMain.on(
+    'terminal:resize',
+    (event, sessionId: unknown, ptyGeneration: unknown, cols: unknown, rows: unknown) => {
+      validateSender(event);
+      if (typeof cols !== 'number' || typeof rows !== 'number') {
+        return;
+      }
+      try {
+        const validatedSessionId = validateSessionId(sessionId);
+        const validatedGeneration = validatePtyGeneration(ptyGeneration);
+        const applied = workspace.resize(validatedSessionId, validatedGeneration, cols, rows);
+        if (!applied) {
+          return;
+        }
+        /*
+         * Echo back the size the PTY actually took. PSReadLine repaints with absolute cursor moves,
+         * so xterm disagreeing with ConPTY by even one row makes that repaint overwrite the wrong
+         * line and leaves the previous screen visible underneath.
+         */
+        mainWindow?.webContents.send(
+          'terminal:size',
+          validatedSessionId,
+          validatedGeneration,
+          applied.cols,
+          applied.rows,
+        );
+      } catch {
+        // A ResizeObserver callback can race with project closure.
+      }
+    },
+  );
   ipcMain.handle('workspace:get-stored-projects', async (event) => {
     validateSender(event);
     return workspaceStore.getProjects().filter((project) => existsSync(project.path));
@@ -3382,34 +3893,53 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
-      let restartAttempted = false;
       try {
-        if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
-          throw new Error('会话标识无效。');
-        }
-        const officialProvider = runtime.officialNetworkProvider(status.cwd);
-        if (officialProvider) {
-          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-        }
-        const prepared = await runtime.prepareLaunchWithSession(
-          validatedSessionId,
-          status.cwd,
-          conversationId,
-        );
-        restartAttempted = true;
-        const terminalStatus = workspace.restart(validatedSessionId, prepared.environment);
-        if (terminalStatus.phase === 'error') {
-          throw new Error(terminalStatus.message ?? '无法为 Claude Code 启动安全终端。');
-        }
-        workspace.write(validatedSessionId, `${prepared.command}\r`);
-        return {
-          ok: true,
-          state: await runtime.getState(validatedSessionId, status.cwd),
-        };
+        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
+              throw new Error('会话标识无效。');
+            }
+            const officialProvider = runtime.officialNetworkProvider(status.cwd);
+            if (officialProvider) {
+              await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
+              assertCurrent();
+            }
+            const prepared = await runtime.prepareLaunchWithSession(
+              validatedSessionId,
+              status.cwd,
+              conversationId,
+            );
+            launchPrepared = true;
+            assertCurrent();
+            restartRuntimeTerminal(
+              runtime,
+              validatedSessionId,
+              prepared.environment,
+              prepared.command,
+              '无法为 Claude Code 启动安全终端。',
+              assertCurrent,
+              (ptyGeneration) => {
+                ownedGeneration = ptyGeneration;
+              },
+            );
+            const state = await runtime.getState(validatedSessionId, status.cwd);
+            assertCurrent();
+            return { ok: true, state };
+          } catch (error) {
+            if (launchPrepared || ownedGeneration !== undefined) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                validatedSessionId,
+                ownedGeneration,
+              );
+            }
+            return claudeFailure(validatedSessionId, error);
+          }
+        });
       } catch (error) {
-        if (restartAttempted) {
-          runtime.setInactive(validatedSessionId);
-        }
         return claudeFailure(validatedSessionId, error);
       }
     },
@@ -3722,8 +4252,11 @@ if (!hasSingleInstanceLock) {
       () => advancedSettingsStore.get().webResearchIsolation,
       () => appPreferencesStore.get().managedChatGptContextWindowMode,
       (state) => {
+        if (!workspace.hasSession(state.sessionId)) {
+          return;
+        }
         const claudeTitle = state.metrics?.sessionName;
-        if (claudeTitle && workspace.hasSession(state.sessionId)) {
+        if (claudeTitle) {
           try {
             workspace.syncClaudeSessionTitle(state.sessionId, claudeTitle);
           } catch {
@@ -3732,11 +4265,10 @@ if (!hasSingleInstanceLock) {
         }
         mainWindow?.webContents.send('claude:state', state);
       },
-      (sessionId, data) => {
-        workspace.write(sessionId, data);
-      },
+      (sessionId, ptyGeneration, data) => workspace.write(sessionId, ptyGeneration, data),
       requestPermissionModeFromScreen,
       () => requireManagedChatGptGateway().ensureRunning(),
+      () => requireManagedChatGptGateway().getInstalledVersion(),
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
       workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
       app.getVersion(),
@@ -3755,8 +4287,11 @@ if (!hasSingleInstanceLock) {
     codexRuntime = new CodexRuntime(
       app.getPath('userData'),
       (state) => {
-        mainWindow?.webContents.send('codex:state', state);
+        if (workspace.hasSession(state.sessionId)) {
+          mainWindow?.webContents.send('codex:state', state);
+        }
       },
+      (sessionId, ptyGeneration, data) => workspace.write(sessionId, ptyGeneration, data),
       downloadEngine,
       busyRegistry,
       (url, init) => session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
@@ -3865,12 +4400,7 @@ app.on('before-quit', (event) => {
     return;
   }
   downloadEngine?.flushJournal();
-  for (const buffer of outputBuffers.values()) {
-    if (buffer.timer) {
-      clearTimeout(buffer.timer);
-    }
-  }
-  outputBuffers.clear();
+  terminalOutputBatcher.dispose();
   for (const pending of pendingPermissionModeProbes.values()) {
     clearTimeout(pending.timer);
     pending.resolve(undefined);

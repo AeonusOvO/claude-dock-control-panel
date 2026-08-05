@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { IPty } from '@lydell/node-pty';
 import * as pty from '@lydell/node-pty';
-import type { TerminalStatus } from '../shared/contracts';
+import type { PtyGeneration, TerminalStatus } from '../shared/contracts';
 import {
   ansiBackground,
   ansiForeground,
@@ -13,7 +13,7 @@ import {
 } from '../shared/terminal-themes';
 import { normalizeTerminalSize } from './directory';
 
-type DataListener = (data: string) => void;
+type DataListener = (ptyGeneration: PtyGeneration, data: string) => void;
 type StatusListener = (status: TerminalStatus) => void;
 export type TerminalEnvironmentOverrides = Record<string, null | string>;
 
@@ -121,6 +121,7 @@ export class TerminalSession {
       cwd: initialCwd,
       id,
       phase: 'stopped',
+      ptyGeneration: this.generation,
       shell: 'Windows 终端',
       title: initialTitle,
     };
@@ -173,15 +174,15 @@ export class TerminalSession {
       return this.getStatus();
     }
 
+    const generation = ++this.generation;
     this.setStatus({
       cwd,
       id: this.status.id,
       phase: 'starting',
+      ptyGeneration: generation,
       shell: 'Windows 终端',
       title: this.status.title,
     });
-
-    const generation = ++this.generation;
 
     try {
       const startup = buildPowershellStartup(TERMINAL_THEMES[themeId].palette);
@@ -204,8 +205,8 @@ export class TerminalSession {
 
       this.process = terminalProcess;
       terminalProcess.onData((data) => {
-        if (generation === this.generation) {
-          this.onData(data);
+        if (generation === this.generation && this.process === terminalProcess) {
+          this.onData(generation, data);
         }
       });
       terminalProcess.onExit(({ exitCode }) => {
@@ -219,6 +220,7 @@ export class TerminalSession {
           id: this.status.id,
           message: `终端已退出（代码 ${exitCode}）`,
           phase: 'stopped',
+          ptyGeneration: generation,
           shell: 'Windows 终端',
           title: this.status.title,
         });
@@ -229,6 +231,7 @@ export class TerminalSession {
         id: this.status.id,
         phase: 'running',
         pid: terminalProcess.pid,
+        ptyGeneration: generation,
         shell: 'Windows 终端',
         title: this.status.title,
       });
@@ -239,6 +242,7 @@ export class TerminalSession {
         id: this.status.id,
         message: '无法启动终端；请检查系统命令环境与当前目录。',
         phase: 'error',
+        ptyGeneration: generation,
         shell: 'Windows 终端',
         title: this.status.title,
       });
@@ -250,7 +254,6 @@ export class TerminalSession {
   public stop(emitStatus = true): TerminalStatus {
     const terminalProcess = this.process;
     this.process = undefined;
-    this.generation += 1;
 
     if (terminalProcess) {
       terminalProcess.kill();
@@ -261,6 +264,7 @@ export class TerminalSession {
         cwd: this.status.cwd,
         id: this.status.id,
         phase: 'stopped',
+        ptyGeneration: this.generation,
         shell: 'Windows 终端',
         title: this.status.title,
       });
@@ -269,12 +273,24 @@ export class TerminalSession {
     return this.getStatus();
   }
 
-  public write(data: string): void {
-    if (!this.process || this.status.phase !== 'running') {
-      return;
+  public stopIfGeneration(
+    expectedGeneration: PtyGeneration,
+    emitStatus = true,
+  ): TerminalStatus | undefined {
+    return expectedGeneration === this.generation ? this.stop(emitStatus) : undefined;
+  }
+
+  public write(expectedGeneration: PtyGeneration, data: string): boolean {
+    if (
+      expectedGeneration !== this.generation ||
+      !this.process ||
+      this.status.phase !== 'running'
+    ) {
+      return false;
     }
 
     this.process.write(data);
+    return true;
   }
 
   private setStatus(status: TerminalStatus): void {

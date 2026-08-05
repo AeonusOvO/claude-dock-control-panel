@@ -8,6 +8,7 @@ import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
   buildClaudeSettingsEnvironment,
+  buildClaudeSpeedSettings,
   buildRuntimeSignalCommand,
   buildWebSearchGuardCommand,
   evaluateClaudeInstallation,
@@ -157,11 +158,73 @@ describe('Claude Code configuration', () => {
     });
   });
 
+  it('builds isolated standard, Claude Fast, and GPT fast launch profiles', () => {
+    const official = normalizeClaudeConfig({
+      authMode: 'existing',
+      baseUrl: '',
+      credentialAction: 'keep',
+      model: 'claude-opus-5',
+      preset: 'anthropic',
+      provider: 'anthropic',
+    });
+    const managed = normalizeClaudeConfig({
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialAction: 'keep',
+      model: 'gpt-5.6-sol',
+      modelFast: 'gpt-5.4-mini',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    });
+
+    expect(buildClaudeSpeedSettings()).toEqual({
+      fastMode: false,
+      fastModePerSessionOptIn: true,
+    });
+    expect(buildClaudeEnvironment(official)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: null,
+    });
+    expect(buildClaudeSettingsEnvironment(official)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: '',
+    });
+
+    const claudeFast = { mechanism: 'claude-native-fast' as const, mode: 'fast' as const };
+    expect(buildClaudeSpeedSettings(claudeFast)).toEqual({
+      fastMode: true,
+      fastModePerSessionOptIn: false,
+    });
+    expect(buildClaudeEnvironment(official, undefined, 'standard', claudeFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: null,
+      CLAUDE_CODE_EXTRA_BODY: null,
+    });
+    expect(buildClaudeSettingsEnvironment(official, 'standard', claudeFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '',
+      CLAUDE_CODE_EXTRA_BODY: '',
+    });
+
+    const gptFast = { mechanism: 'gpt-service-tier' as const, mode: 'fast' as const };
+    const extraBody = JSON.stringify({ service_tier: 'fast' });
+    expect(buildClaudeSpeedSettings(gptFast)).toEqual({
+      fastMode: false,
+      fastModePerSessionOptIn: true,
+    });
+    expect(buildClaudeEnvironment(managed, 'token', 'standard', gptFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: extraBody,
+    });
+    expect(buildClaudeSettingsEnvironment(managed, 'standard', gptFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: extraBody,
+    });
+  });
+
   it('defaults the fast model to the main model and validates both identifiers', () => {
     expect(normalizeClaudeConfig(gatewayInput).modelFast).toBe('deepseek-chat');
     expect(() =>
       normalizeClaudeConfig({ ...gatewayInput, modelFast: 'invalid model name' }),
-    ).toThrow('快速模型标识');
+    ).toThrow('小型/备用模型标识');
   });
 
   it('overrides inherited CCR route aliases without writing credentials to temporary settings', () => {

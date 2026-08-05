@@ -33,6 +33,7 @@ import type {
   ClaudeLaunchMode,
   ClaudeModelOption,
   ClaudeModelOptions,
+  ClaudeOperationResult,
   ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginMarketplaceView,
@@ -69,6 +70,7 @@ import type {
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
   ManagedChatGptGatewayState,
+  ModelSpeedMode,
   ManagedChatGptSetupProgress,
   NetworkPreflightResult,
   NetworkProviderId,
@@ -81,6 +83,7 @@ import type {
   ApplicationProxyState,
   ApplicationProxyView,
   SaveApplicationProxyInput,
+  PtyGeneration,
   TerminalPhase,
   TerminalStatus,
   WorkspaceProjectView,
@@ -134,6 +137,13 @@ import {
 import { deriveUpdateActionState } from '../shared/update-actions';
 import { ArtifactController } from './artifact';
 import {
+  ClaudeLaunchAttemptRegistry,
+  orchestrateClaudeLaunchAttempt,
+  type ClaudeLaunchAttemptToken,
+  type ClaudeLaunchResultDisposition,
+} from './claude-launch-attempt';
+import { SessionGenerationRegistry } from './session-generation';
+import {
   closeOpenSelect,
   enhanceAllSelects,
   enhanceSelect,
@@ -171,7 +181,13 @@ interface TerminalView {
   /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
   pendingFrame: number;
   /** Main-process probes waiting for all output that preceded their request to reach xterm. */
-  permissionModeProbes: Array<{ probeId: number; requiredRevision: number }>;
+  permissionModeProbes: Array<{
+    probeId: number;
+    ptyGeneration: PtyGeneration;
+    requiredRevision: number;
+  }>;
+  /** The exact PTY generation this xterm instance and all of its asynchronous work own. */
+  readonly ptyGeneration: PtyGeneration;
   /** Last complete badge passively reported after xterm reconstructed a PTY screen delta. */
   observedPermissionMode?: ClaudePermissionMode;
   terminal: Terminal;
@@ -321,6 +337,8 @@ const footerResourceDetails = requiredElement<HTMLElement>('#footer-resource-det
 const footerContextWindowOptions = requiredElement<HTMLElement>('#footer-context-window-options');
 const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
 const footerModelMenu = requiredElement<HTMLElement>('#footer-model-menu');
+const footerSpeed = requiredElement<HTMLButtonElement>('#footer-speed');
+const footerSpeedMenu = requiredElement<HTMLElement>('#footer-speed-menu');
 const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
 const footerModeMenu = requiredElement<HTMLElement>('#footer-mode-menu');
 const footerEffort = requiredElement<HTMLButtonElement>('#footer-effort');
@@ -1115,6 +1133,9 @@ const terminalViews = new Map<string, TerminalView>();
 const claudeStates = new Map<string, ClaudeProjectState>();
 const codexStates = new Map<string, CodexProjectState>();
 const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
+const claudeStateLoadGenerations = new SessionGenerationRegistry();
+const codexStateLoadGenerations = new SessionGenerationRegistry();
+const runtimeStateLoadGenerations = new SessionGenerationRegistry();
 const networkPreflightResults = new Map<NetworkProviderId, NetworkPreflightResult>();
 /** Conversation history per project folder, keyed by the lower-cased folder path. */
 const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
@@ -1125,9 +1146,6 @@ const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
 const historyLoadsInFlight = new Set<string>();
 const historyReloadRequested = new Set<string>();
 let dragDepth = 0;
-let claudeRequestGeneration = 0;
-let codexRequestGeneration = 0;
-let runtimeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
 let connectionRemedyInProgress = false;
@@ -1157,7 +1175,9 @@ let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
 let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
-let launchInProgress = false;
+const claudeLaunchAttempts = new ClaudeLaunchAttemptRegistry();
+const codexLaunchAttempts = new SessionGenerationRegistry();
+const storedConversationRestores = new Set<string>();
 let codexOperationInProgress = false;
 let codexAutoLaunchSessionId = '';
 const routeHealthNotifications = new Map<string, string>();
@@ -1172,6 +1192,7 @@ let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 /** Set while a status-bar switch is in flight, so a second click cannot stack terminal writes. */
 let modeSwitchInProgress = false;
 let modelSwitchInProgress = false;
+let speedSwitchInProgress = false;
 let effortSwitchInProgress = false;
 const guardedButtons = new WeakSet<HTMLButtonElement>();
 let chatConfig: ChatConfigView | undefined;
@@ -3466,7 +3487,7 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
         : 'Anthropic Messages 接口由 Claude Code 直接访问，不经过协议转换。';
   modelHelp.textContent =
     provider.id === 'chatgpt-subscription'
-      ? `默认映射为主模型 ${provider.model}、快速模型 ${provider.modelFast ?? provider.model}；请以本地网关实时可用模型为准，可在这里修改。`
+      ? `默认映射为主模型 ${provider.model}、小型/备用模型 ${provider.modelFast ?? provider.model}；后者会更换模型，不是服务速度档位。请以本地网关实时可用模型为准，可在这里修改。`
       : `主模型会同时用于默认、Opus 与 Sonnet 路由；当前推荐 ${provider.model}。`;
   authModeHelp.textContent =
     provider.id === 'chatgpt-subscription'
@@ -3671,10 +3692,50 @@ const PERMISSION_MODE_CATALOG: ReadonlyArray<{
 const permissionModeLabel = (mode?: ClaudePermissionMode): string =>
   PERMISSION_MODE_CATALOG.find((entry) => entry.id === mode)?.label ?? '—';
 
+const modelSpeedFastLabel = (state: ClaudeProjectState): string => {
+  if (state.speed.mechanism === 'claude-native-fast') {
+    return 'Claude Fast';
+  }
+  if (
+    state.speed.mechanism === 'gpt-service-tier' ||
+    state.config.preset === 'chatgpt-subscription'
+  ) {
+    return 'GPT 1.5x';
+  }
+  return state.config.provider === 'anthropic' ? 'Claude Fast' : '快速档';
+};
+
+const modelSpeedFooterLabel = (state: ClaudeProjectState): string => {
+  if (state.speed.status === 'active') {
+    return '速度 Claude Fast 已开启';
+  }
+  if (state.speed.status === 'not-active') {
+    return state.speed.mechanism === 'gpt-service-tier'
+      ? '速度 GPT 1.5x 未生效'
+      : '速度 Claude Fast 未生效';
+  }
+  if (state.speed.status === 'requested') {
+    return state.speed.mechanism === 'gpt-service-tier'
+      ? '速度 已请求 GPT 1.5x'
+      : '速度 已请求 Claude Fast';
+  }
+  if (state.speed.availability === 'unsupported') {
+    return '速度 不支持';
+  }
+  if (state.speed.availability === 'unverified') {
+    return '速度 未验证';
+  }
+  if (state.speed.availability === 'update-required') {
+    return '速度 需更新';
+  }
+  return '速度 标准';
+};
+
 const hideFooterMenus = (): void => {
   for (const [menu, trigger] of [
     [footerResourceMenu, footerResource],
     [footerModelMenu, footerModel],
+    [footerSpeedMenu, footerSpeed],
     [footerModeMenu, footerMode],
     [footerEffortMenu, footerEffort],
   ] as const) {
@@ -3719,6 +3780,19 @@ const buildFooterMenuItem = (
     hideFooterMenus();
     onChoose();
   });
+  return item;
+};
+
+const buildFooterRadioMenuItem = (
+  label: string,
+  detail: string,
+  selected: boolean,
+  onChoose: () => void,
+  disabled = false,
+): HTMLButtonElement => {
+  const item = buildFooterMenuItem(label, detail, selected, onChoose, disabled);
+  item.role = 'menuitemradio';
+  item.setAttribute('aria-checked', String(selected));
   return item;
 };
 
@@ -4083,7 +4157,16 @@ const savePendingAppSettings = async (): Promise<void> => {
   }
 };
 
-const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => {
+const renderDevelopmentRuntimeState = (
+  state: DevelopmentRuntimeState,
+  invalidatePendingLoad = true,
+): void => {
+  if (!workspaceState.sessions.some((session) => session.id === state.sessionId)) {
+    return;
+  }
+  if (invalidatePendingLoad) {
+    runtimeStateLoadGenerations.invalidate(state.sessionId);
+  }
   developmentRuntimeStates.set(state.sessionId, state);
   if (state.sessionId !== workspaceState.activeSessionId) {
     return;
@@ -4104,7 +4187,7 @@ const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => 
   if (codexSelected) {
     const codexState = codexStates.get(state.sessionId);
     if (codexState) {
-      renderCodexState(codexState);
+      renderCodexState(codexState, false);
     } else {
       runAgentLabel.textContent = '正在检查 Codex';
       runClaudeButton.disabled = true;
@@ -4113,16 +4196,22 @@ const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => 
   } else {
     const claudeState = claudeStates.get(state.sessionId);
     if (claudeState) {
-      renderClaudeState(claudeState);
+      renderClaudeState(claudeState, true, false);
     } else {
-      runAgentLabel.textContent = '新建安全会话';
+      renderClaudeLaunchControls(state.sessionId);
       void loadClaudeState(state.sessionId);
     }
   }
   void runActiveNetworkPreflight(false);
 };
 
-const renderCodexState = (state: CodexProjectState): void => {
+const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true): void => {
+  if (!workspaceState.sessions.some((session) => session.id === state.sessionId)) {
+    return;
+  }
+  if (invalidatePendingLoad) {
+    codexStateLoadGenerations.invalidate(state.sessionId);
+  }
   codexStates.set(state.sessionId, state);
   if (
     state.sessionId !== workspaceState.activeSessionId ||
@@ -4136,6 +4225,7 @@ const renderCodexState = (state: CodexProjectState): void => {
   const accountReady = Boolean(account) || !state.requiresOpenaiAuth;
   const ready = installed && accountReady;
   const waitingForLogin = login.phase === 'waiting' || login.phase === 'starting';
+  const launchInProgress = codexLaunchAttempts.isActive(state.sessionId);
 
   codexInstallStep.dataset.state = installed ? 'ready' : 'error';
   codexInstallTitle.textContent = installed
@@ -4196,17 +4286,27 @@ const renderCodexState = (state: CodexProjectState): void => {
   codexQuotaValue.textContent = quota ? `已用 ${quota.usedPercent.toFixed(0)}%` : '等待额度数据';
   codexQuotaBar.style.width = `${quota?.usedPercent ?? 0}%`;
 
-  const actionLabel = codexOperationInProgress
-    ? '正在准备 Codex…'
-    : !installed
-      ? '一键安装、登录并启动'
-      : !accountReady
-        ? '使用 ChatGPT 登录并启动'
-        : '新建 Codex 安全会话';
+  const actionLabel =
+    codexOperationInProgress || launchInProgress
+      ? '正在准备 Codex…'
+      : !installed
+        ? '一键安装、登录并启动'
+        : !accountReady
+          ? '使用 ChatGPT 登录并启动'
+          : '新建 Codex 安全会话';
   codexPrimaryAction.textContent = actionLabel;
-  codexPrimaryAction.disabled = codexOperationInProgress || waitingForLogin;
-  runAgentLabel.textContent = ready ? '新建 Codex 会话' : '一键准备 Codex';
-  runClaudeButton.disabled = codexOperationInProgress || waitingForLogin;
+  codexPrimaryAction.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  codexPrimaryAction.setAttribute(
+    'aria-busy',
+    String(codexOperationInProgress || launchInProgress),
+  );
+  runAgentLabel.textContent = launchInProgress
+    ? '正在启动 Codex…'
+    : ready
+      ? '新建 Codex 会话'
+      : '一键准备 Codex';
+  runClaudeButton.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  runClaudeButton.setAttribute('aria-busy', String(codexOperationInProgress || launchInProgress));
   runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
   runClaudeButton.title = ready
     ? '在当前项目启动官方 Codex 安全会话'
@@ -4214,6 +4314,7 @@ const renderCodexState = (state: CodexProjectState): void => {
 
   for (const button of [codexLaunchNew, codexLaunchContinue, codexLaunchResume]) {
     button.disabled = !ready || codexOperationInProgress || launchInProgress;
+    button.setAttribute('aria-busy', String(launchInProgress));
   }
 
   routeHealth.hidden = true;
@@ -4229,6 +4330,10 @@ const renderCodexState = (state: CodexProjectState): void => {
   renderFooterResource(state.resourceUsage);
   footerModel.textContent = '模型 Codex 自动';
   footerModel.disabled = true;
+  footerSpeed.textContent = '速度 Codex 内管理';
+  footerSpeed.disabled = true;
+  footerSpeed.title = '原生 Codex 的速度设置由 Codex 自己管理，ClaudeDock 不接管。';
+  footerSpeed.setAttribute('aria-busy', 'false');
   footerMode.textContent = '模式 工作区写入';
   footerMode.disabled = true;
   footerEffort.textContent = '思考 Codex 自动';
@@ -4239,35 +4344,127 @@ const renderCodexState = (state: CodexProjectState): void => {
   renderActiveNetworkPreflight();
 };
 
-const loadCodexState = async (sessionId: string): Promise<void> => {
-  const generation = ++codexRequestGeneration;
+const loadCodexState = async (
+  sessionId: string,
+  errorMessage = '无法读取 Codex 工作台状态。',
+): Promise<CodexProjectState | undefined> => {
+  const request = codexStateLoadGenerations.begin(sessionId);
+  let state: CodexProjectState;
   try {
-    const state = await window.controlPanel.getCodexProjectState(sessionId);
-    if (generation === codexRequestGeneration) {
-      renderCodexState(state);
-    }
+    state = await window.controlPanel.getCodexProjectState(sessionId);
   } catch {
-    if (generation === codexRequestGeneration) {
-      showToast('无法读取 Codex 工作台状态。', 'error');
+    if (codexStateLoadGenerations.finish(request)) {
+      showToast(errorMessage, 'error');
     }
+    return;
   }
+  if (!codexStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
+    return;
+  }
+  renderCodexState(state, false);
+  return state;
 };
 
 const loadDevelopmentRuntime = async (sessionId: string): Promise<void> => {
-  const generation = ++runtimeRequestGeneration;
+  const request = runtimeStateLoadGenerations.begin(sessionId);
+  let state: DevelopmentRuntimeState;
   try {
-    const state = await window.controlPanel.getDevelopmentRuntime(sessionId);
-    if (generation === runtimeRequestGeneration) {
-      renderDevelopmentRuntimeState(state);
-    }
+    state = await window.controlPanel.getDevelopmentRuntime(sessionId);
   } catch {
-    if (generation === runtimeRequestGeneration) {
+    if (runtimeStateLoadGenerations.finish(request)) {
       showToast('无法读取当前项目的开发引擎。', 'error');
     }
+    return;
+  }
+  if (!runtimeStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
+    return;
+  }
+  renderDevelopmentRuntimeState(state, false);
+};
+
+const claudeLaunchBlocked = (state: ClaudeProjectState): boolean =>
+  state.installation.security !== 'ready' || Boolean(state.routeHealth?.blocking);
+
+const renderClaudeLaunchControls = (sessionId: string, launchBlocked = false): void => {
+  if (sessionId !== workspaceState.activeSessionId || activeDevelopmentRuntime() !== 'claude') {
+    return;
+  }
+  const busy = claudeLaunchAttempts.isBusy(sessionId);
+  runAgentLabel.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
+  runClaudeButton.disabled = busy || launchBlocked;
+  runClaudeButton.setAttribute('aria-busy', String(busy));
+  launchNewButton.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
+  for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
+    button.disabled = busy || launchBlocked;
+    button.setAttribute('aria-busy', String(busy));
   }
 };
 
-const renderClaudeState = (state: ClaudeProjectState): void => {
+const refreshClaudeLaunchControls = (sessionId: string): void => {
+  const state = claudeStates.get(sessionId);
+  if (state) {
+    renderClaudeState(state, true, false);
+  } else {
+    renderClaudeLaunchControls(sessionId);
+  }
+};
+
+const beginClaudeLaunchAttempt = (
+  status: TerminalStatus,
+  state = claudeStates.get(status.id),
+): ClaudeLaunchAttemptToken => {
+  const token = claudeLaunchAttempts.begin(status.id, {
+    active: state?.active,
+    conversationId: state?.metrics?.sessionId,
+    terminalPhase: status.phase,
+    terminalPid: status.pid,
+    terminalPtyGeneration: status.ptyGeneration,
+  });
+  renderClaudeLaunchControls(status.id, state ? claudeLaunchBlocked(state) : false);
+  return token;
+};
+
+const failClaudeLaunchAttempt = (token: ClaudeLaunchAttemptToken): boolean => {
+  if (!claudeLaunchAttempts.fail(token)) {
+    return false;
+  }
+  refreshClaudeLaunchControls(token.sessionId);
+  return true;
+};
+
+const renderClaudeLaunchResult = (
+  token: ClaudeLaunchAttemptToken,
+  state: ClaudeProjectState,
+  disposition: ClaudeLaunchResultDisposition,
+): boolean => {
+  if (
+    state.sessionId !== token.sessionId ||
+    !claudeLaunchAttempts.acceptResult(token, disposition)
+  ) {
+    return false;
+  }
+  renderClaudeState(state);
+  return true;
+};
+
+const renderClaudeState = (
+  state: ClaudeProjectState,
+  observeLaunch = true,
+  invalidatePendingLoad = true,
+): void => {
+  if (!workspaceState.sessions.some((session) => session.id === state.sessionId)) {
+    return;
+  }
+  if (invalidatePendingLoad) {
+    claudeStateLoadGenerations.invalidate(state.sessionId);
+  }
+  if (observeLaunch) {
+    claudeLaunchAttempts.observeClaude({
+      active: state.active,
+      conversationId: state.metrics?.sessionId,
+      sessionId: state.sessionId,
+    });
+  }
   claudeStates.set(state.sessionId, state);
   if (state.permissionMode === undefined) {
     const view = terminalViews.get(state.sessionId);
@@ -4288,7 +4485,6 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     syncConnectionInteractivity();
     return;
   }
-  runAgentLabel.textContent = '新建安全会话';
   const installationReady = installation.security === 'ready';
   connectionEnvironmentReady = installationReady;
   environmentSetup.hidden = installationReady;
@@ -4334,14 +4530,14 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
       routeHealthNotifications.get(state.sessionId) !== notificationKey
     ) {
       routeHealthNotifications.set(state.sessionId, notificationKey);
-      if (!launchInProgress) {
+      if (!claudeLaunchAttempts.isBusy(state.sessionId)) {
         showToast(health.headline, 'error');
       }
     }
   }
   runClaudeButton.dataset.routeHealth = health?.tone ?? 'unknown';
-  const launchBlocked = !installationReady || Boolean(health?.blocking);
-  runClaudeButton.disabled = launchInProgress || launchBlocked;
+  const launchBlocked = claudeLaunchBlocked(state);
+  renderClaudeLaunchControls(state.sessionId, launchBlocked);
   runClaudeButton.title = !installationReady
     ? installation.message
     : health?.blocking
@@ -4396,6 +4592,14 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   footerModel.disabled = modelSwitchInProgress;
   footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
   footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
+  footerSpeed.textContent = modelSpeedFooterLabel(state);
+  footerSpeed.dataset.availability = state.speed.availability;
+  footerSpeed.dataset.mechanism = state.speed.mechanism;
+  footerSpeed.dataset.status = state.speed.status;
+  footerSpeed.disabled =
+    speedSwitchInProgress || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
+  footerSpeed.setAttribute('aria-busy', String(speedSwitchInProgress));
+  footerSpeed.title = state.speed.detail;
   footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
   footerMode.dataset.mode = state.permissionMode ?? 'unknown';
   footerMode.disabled = modeSwitchInProgress;
@@ -4446,9 +4650,6 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
 
   claudeRuntimeWarning.hidden = !state.warning;
   claudeRuntimeWarning.textContent = state.warning ?? '';
-  for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
-    button.disabled = launchInProgress || launchBlocked;
-  }
 
   if (configFormSessionId !== state.sessionId) {
     populateClaudeConfigForm(state);
@@ -4468,17 +4669,38 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
 };
 
 const loadClaudeState = async (sessionId: string): Promise<void> => {
-  const generation = ++claudeRequestGeneration;
+  const request = claudeStateLoadGenerations.begin(sessionId);
+  const attemptAtRequest = claudeLaunchAttempts.current(sessionId);
+  let state: ClaudeProjectState;
   try {
-    const state = await window.controlPanel.getClaudeProjectState(sessionId);
-    if (generation === claudeRequestGeneration) {
-      renderClaudeState(state);
-    }
+    state = await window.controlPanel.getClaudeProjectState(sessionId);
   } catch {
-    if (generation === claudeRequestGeneration) {
+    if (claudeStateLoadGenerations.finish(request)) {
       showToast('无法读取 Claude 工作台状态。', 'error');
     }
+    return;
   }
+  if (!claudeStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
+    return;
+  }
+  const currentAttempt = claudeLaunchAttempts.current(sessionId);
+  if (
+    currentAttempt &&
+    attemptAtRequest &&
+    currentAttempt.generation !== attemptAtRequest.generation
+  ) {
+    return;
+  }
+  if (currentAttempt && !attemptAtRequest) {
+    claudeLaunchAttempts.hydrateClaude(currentAttempt, {
+      active: state.active,
+      conversationId: state.metrics?.sessionId,
+      sessionId: state.sessionId,
+    });
+    renderClaudeState(state, false, false);
+    return;
+  }
+  renderClaudeState(state, true, false);
 };
 
 /**
@@ -4489,10 +4711,11 @@ async function resumeStoredConversation(
   projectPath: string,
   session: ClaudeSessionMetadata,
 ): Promise<void> {
-  if (launchInProgress) {
+  const restoreKey = `${projectPath.toLowerCase()}:${session.conversationId}`;
+  if (storedConversationRestores.has(restoreKey)) {
     return;
   }
-  launchInProgress = true;
+  storedConversationRestores.add(restoreKey);
   try {
     const result = await window.controlPanel.openStoredConversation(
       projectPath,
@@ -4510,7 +4733,7 @@ async function resumeStoredConversation(
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
   } finally {
-    launchInProgress = false;
+    storedConversationRestores.delete(restoreKey);
   }
 }
 
@@ -6051,7 +6274,7 @@ const runConnectionTest = async (
   renderConnectionTestPending();
   const knownState = claudeStates.get(status.id);
   if (knownState) {
-    renderClaudeState(knownState);
+    renderClaudeState(knownState, true, false);
   }
   const originalLabel = testClaudeConnectionButton.textContent;
   testClaudeConnectionButton.disabled = true;
@@ -6085,7 +6308,7 @@ const runConnectionTest = async (
     syncConnectionInteractivity();
     const latestState = claudeStates.get(status.id);
     if (latestState) {
-      renderClaudeState(latestState);
+      renderClaudeState(latestState, true, false);
     }
   }
 };
@@ -6287,41 +6510,57 @@ const relaunchClaudeSession = async (
   input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
 ): Promise<void> => {
   const status = activeStatus();
-  if (!status || launchInProgress) {
+  if (!status || claudeLaunchAttempts.isBusy(status.id)) {
     return;
   }
-  if (
-    !(await requestConfirmation({
-      confirmLabel: '压缩并重启',
-      message: `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
-      title: '重启 Claude Code 会话',
-    }))
-  ) {
-    return;
-  }
-
-  launchInProgress = true;
-  const known = claudeStates.get(status.id);
-  if (known) {
-    renderClaudeState(known);
-  }
-  const endMask = beginTerminalMask(status.id, '正在压缩上下文并恢复会话');
+  const attempt = beginClaudeLaunchAttempt(status);
+  let endMask = (): void => undefined;
+  let loadStateAfterCompletion = false;
   try {
-    const result = await window.controlPanel.relaunchClaudeSession(status.id, {
-      ...input,
-      compactFirst: true,
+    const outcome = await orchestrateClaudeLaunchAttempt({
+      applyResult: (result) =>
+        renderClaudeLaunchResult(attempt, result.state, result.ok ? 'success' : 'failure'),
+      confirmation: () =>
+        requestConfirmation({
+          confirmLabel: '压缩并重启',
+          message: `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
+          title: '重启 Claude Code 会话',
+        }),
+      onRelease: () => refreshClaudeLaunchControls(attempt.sessionId),
+      prepare: () => {
+        endMask = beginTerminalMask(status.id, '正在压缩上下文并恢复会话');
+      },
+      registry: claudeLaunchAttempts,
+      start: () =>
+        window.controlPanel.relaunchClaudeSession(status.id, {
+          ...input,
+          compactFirst: true,
+        }),
+      token: attempt,
     });
-    renderClaudeState(result.state);
+    if (outcome.status === 'rejected') {
+      loadStateAfterCompletion = true;
+      showToast('重启会话时发生异常。', 'error');
+      return;
+    }
+    if (outcome.status !== 'resolved') {
+      return;
+    }
+
+    const { result } = outcome;
+    loadStateAfterCompletion = true;
+    if (!result.ok) {
+      failClaudeLaunchAttempt(attempt);
+    }
     showToast(
       result.ok ? '会话已重启并恢复上下文。' : (result.error ?? '重启会话失败。'),
       result.ok ? 'success' : 'error',
     );
-  } catch {
-    showToast('重启会话时发生异常。', 'error');
   } finally {
     endMask();
-    launchInProgress = false;
-    void loadClaudeState(status.id);
+    if (loadStateAfterCompletion) {
+      void loadClaudeState(status.id);
+    }
   }
 };
 
@@ -6330,11 +6569,14 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
   if (!status || modelSwitchInProgress) {
     return;
   }
-  if (!option.sameEndpoint) {
-    await relaunchClaudeSession(
-      `切换到「${option.providerLabel} · ${option.model}」需要更换接口地址与凭据。`,
-      { entryId: option.entryId },
-    );
+  if (option.requiresRelaunch) {
+    const summary =
+      option.relaunchReason === 'connection'
+        ? `切换到「${option.providerLabel} · ${option.model}」需要更换接口地址与凭据。`
+        : option.relaunchReason === 'speed-profile'
+          ? `切换到「${option.providerLabel} · ${option.model}」会同时应用该模型已保存的服务速度配置。`
+          : `切换到「${option.providerLabel} · ${option.model}」需要重启当前会话。`;
+    await relaunchClaudeSession(summary, { entryId: option.entryId });
     return;
   }
 
@@ -6357,9 +6599,117 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
     footerModel.setAttribute('aria-busy', 'false');
     const knownState = claudeStates.get(status.id);
     if (knownState) {
-      renderClaudeState(knownState);
+      renderClaudeState(knownState, true, false);
     }
     void loadClaudeState(status.id);
+  }
+};
+
+const switchClaudeModelSpeed = async (mode: ModelSpeedMode): Promise<void> => {
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (
+    !status ||
+    !state ||
+    speedSwitchInProgress ||
+    (state.active && claudeLaunchAttempts.isBusy(status.id))
+  ) {
+    return;
+  }
+  if (mode === 'fast' && !state.speed.canSelectFast) {
+    showToast(state.speed.detail, 'error');
+    return;
+  }
+
+  const attempt = state.active ? beginClaudeLaunchAttempt(status, state) : undefined;
+  let endMask = (): void => undefined;
+  let operationStarted = false;
+  let loadStateAfterCompletion = false;
+  try {
+    let result: ClaudeOperationResult;
+    if (attempt) {
+      const fastLabel = modelSpeedFastLabel(state);
+      const speedDetail =
+        mode === 'standard'
+          ? `将「${state.speed.model}」恢复为标准服务速度。`
+          : state.speed.mechanism === 'claude-native-fast'
+            ? `将「${state.speed.model}」切换为 ${fastLabel}。Claude Fast 仅适用于受支持的 Opus 5 / 4.8，最高约 2.5x，并按更高单价计费；组织资格、额度和模型可用性仍由 Anthropic 判定。`
+            : `将为「${state.speed.model}」请求 ${fastLabel}（service_tier=fast）。该档位的额度消耗或计价可能更高；ClaudeDock 只能确认请求已发送，无法确认 ChatGPT 上游最终采用。`;
+      const outcome = await orchestrateClaudeLaunchAttempt({
+        applyResult: (nextResult) =>
+          renderClaudeLaunchResult(
+            attempt,
+            nextResult.state,
+            nextResult.ok ? 'success' : 'failure',
+          ),
+        confirmation: () =>
+          requestConfirmation({
+            confirmLabel: '切换并恢复',
+            message: `${speedDetail}\n\nClaudeDock 会重启当前 PowerShell，并通过 --resume 精确恢复当前对话；不会压缩上下文。`,
+            title: '切换服务速度',
+          }),
+        onRelease: () => refreshClaudeLaunchControls(attempt.sessionId),
+        prepare: () => {
+          speedSwitchInProgress = true;
+          operationStarted = true;
+          renderClaudeState(state, true, false);
+          endMask = beginTerminalMask(status.id, '正在切换服务速度并恢复当前对话');
+        },
+        registry: claudeLaunchAttempts,
+        start: () => window.controlPanel.setClaudeModelSpeed(status.id, mode),
+        token: attempt,
+      });
+      if (outcome.status === 'rejected') {
+        loadStateAfterCompletion = true;
+        showToast('切换服务速度时发生异常。', 'error');
+        return;
+      }
+      if (outcome.status !== 'resolved') {
+        return;
+      }
+      result = outcome.result;
+    } else {
+      speedSwitchInProgress = true;
+      operationStarted = true;
+      renderClaudeState(state, true, false);
+      result = await window.controlPanel.setClaudeModelSpeed(status.id, mode);
+      renderClaudeState(result.state);
+    }
+
+    loadStateAfterCompletion = true;
+    if (!result.ok) {
+      if (attempt) {
+        failClaudeLaunchAttempt(attempt);
+      }
+      showToast(result.error ?? '无法切换服务速度。', 'error');
+      return;
+    }
+    if (!state.active) {
+      showToast('速度偏好已保存；下次新建或恢复会话时生效。', 'success');
+    } else if (mode === 'standard') {
+      showToast('已按标准速度恢复当前对话。', 'success');
+    } else if (state.speed.mechanism === 'gpt-service-tier') {
+      showToast('已为当前对话请求 GPT 1.5x；上游是否采用仍由 ChatGPT 决定。', 'success');
+    } else {
+      showToast('已请求 Claude Fast；是否生效将由 Claude Code 状态行确认。', 'success');
+    }
+  } catch {
+    if (!attempt || failClaudeLaunchAttempt(attempt)) {
+      loadStateAfterCompletion = true;
+      showToast('切换服务速度时发生异常。', 'error');
+    }
+  } finally {
+    endMask();
+    if (operationStarted) {
+      speedSwitchInProgress = false;
+    }
+    if (loadStateAfterCompletion) {
+      const knownState = claudeStates.get(status.id);
+      if (knownState) {
+        renderClaudeState(knownState, true, false);
+      }
+      void loadClaudeState(status.id);
+    }
   }
 };
 
@@ -6420,7 +6770,7 @@ const switchEffortLevel = async (effort: ClaudeEffortRequest): Promise<void> => 
     footerEffort.setAttribute('aria-busy', 'false');
     const knownState = claudeStates.get(status.id);
     if (knownState) {
-      renderClaudeState(knownState);
+      renderClaudeState(knownState, true, false);
     }
     void loadClaudeState(status.id);
   }
@@ -6445,7 +6795,11 @@ const openModelMenu = async (): Promise<void> => {
     ...options.options.map((option) =>
       buildFooterMenuItem(
         option.model,
-        option.sameEndpoint ? option.providerLabel : `${option.providerLabel} · 需重启会话`,
+        option.requiresRelaunch
+          ? option.relaunchReason === 'connection'
+            ? `${option.providerLabel} · 更换接入，需重启会话`
+            : `${option.providerLabel} · 速度配置不同，需重启会话`
+          : option.providerLabel,
         option.model === options.activeModel,
         () => {
           void switchClaudeModel(option);
@@ -6461,6 +6815,57 @@ const openModelMenu = async (): Promise<void> => {
     footerModelMenu.append(hint);
   }
   openFooterMenu(footerModelMenu, footerModel);
+};
+
+const openSpeedMenu = (): void => {
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (!status || !state || activeDevelopmentRuntime() !== 'claude') {
+    return;
+  }
+
+  const fastLabel = modelSpeedFastLabel(state);
+  const fastDetail = state.speed.canSelectFast
+    ? state.speed.mechanism === 'claude-native-fast'
+      ? 'Claude Code 原生 Fast；仅支持 Opus 5 / 4.8，最高约 2.5x，单价更高，资格与额度由 Anthropic 判定。'
+      : '请求 service_tier=fast（约 1.5x）；额度消耗或计价可能更高，ClaudeDock 无法确认上游最终采用。'
+    : state.speed.detail;
+  const standardAlreadyApplied =
+    state.speed.preference === 'standard' && state.speed.status === 'standard';
+  const fastAlreadyApplied =
+    state.speed.preference === 'fast' && state.speed.status !== 'not-active';
+  footerSpeedMenu.replaceChildren(
+    buildFooterRadioMenuItem(
+      '标准速度',
+      '默认档位；不启用 Claude Fast，也不发送 GPT 快速服务档请求。',
+      state.speed.preference === 'standard',
+      () => {
+        void switchClaudeModelSpeed('standard');
+      },
+      speedSwitchInProgress || standardAlreadyApplied,
+    ),
+    buildFooterRadioMenuItem(
+      fastLabel,
+      fastDetail,
+      state.speed.preference === 'fast',
+      () => {
+        void switchClaudeModelSpeed('fast');
+      },
+      speedSwitchInProgress || !state.speed.canSelectFast || fastAlreadyApplied,
+    ),
+  );
+
+  const statusHint = document.createElement('p');
+  statusHint.className = 'footer-menu__hint';
+  statusHint.textContent = state.speed.detail;
+  footerSpeedMenu.append(statusHint);
+  const lifecycleHint = document.createElement('p');
+  lifecycleHint.className = 'footer-menu__hint footer-menu__hint--separated';
+  lifecycleHint.textContent = state.active
+    ? '切换会重启当前 PowerShell，并用当前对话 UUID 精确恢复；不会压缩上下文。'
+    : '当前会话未运行；选择后只保存此接入与模型的偏好，下次新建或恢复会话时生效。';
+  footerSpeedMenu.append(lifecycleHint);
+  openFooterMenu(footerSpeedMenu, footerSpeed);
 };
 
 const openModeMenu = (): void => {
@@ -7605,16 +8010,79 @@ const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
   }
 };
 
-const pasteIntoActiveTerminal = async (): Promise<void> => {
-  const status = activeStatus();
-  if (!status || status.phase !== 'running') {
+const terminalStatusForSession = (sessionId: string): TerminalStatus | undefined =>
+  workspaceState.sessions.find((status) => status.id === sessionId);
+
+/**
+ * An xterm instance is an ownership token for one exact PTY generation. Checking both map identity
+ * and workspace status prevents an old event closure from targeting a replacement view or PTY.
+ */
+const ownsTerminalGeneration = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+): boolean => {
+  const status = terminalStatusForSession(sessionId);
+  return (
+    terminalViews.get(sessionId) === view &&
+    view.ptyGeneration === ptyGeneration &&
+    status?.ptyGeneration === ptyGeneration
+  );
+};
+
+const writableTerminalGeneration = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+): boolean =>
+  ownsTerminalGeneration(sessionId, ptyGeneration, view) &&
+  terminalStatusForSession(sessionId)?.phase === 'running';
+
+const terminalViewForStatus = (status: TerminalStatus): TerminalView | undefined => {
+  const view = terminalViews.get(status.id);
+  return view && ownsTerminalGeneration(status.id, status.ptyGeneration, view) ? view : undefined;
+};
+
+const writeToTerminalGeneration = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+  data: string,
+): boolean => {
+  if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    return false;
+  }
+  window.controlPanel.writeTerminal(sessionId, ptyGeneration, data);
+  return true;
+};
+
+const pasteIntoTerminalGeneration = async (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+): Promise<void> => {
+  if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
     return;
   }
   const text = await window.controlPanel.readClipboardText();
-  if (text) {
-    window.controlPanel.writeTerminal(status.id, text.replace(/\r?\n/g, '\r'));
+  if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    return;
   }
-  terminalViews.get(status.id)?.terminal.focus();
+  if (text) {
+    writeToTerminalGeneration(sessionId, ptyGeneration, view, text.replace(/\r?\n/g, '\r'));
+  }
+  if (writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    view.terminal.focus();
+  }
+};
+
+const pasteIntoActiveTerminal = async (): Promise<void> => {
+  const status = activeStatus();
+  const view = status ? terminalViewForStatus(status) : undefined;
+  if (!status || status.phase !== 'running' || !view) {
+    return;
+  }
+  await pasteIntoTerminalGeneration(status.id, status.ptyGeneration, view);
 };
 
 const copyActiveTerminalSelection = async (): Promise<void> => {
@@ -7798,7 +8266,9 @@ const showTerminalContextMenu = (event: MouseEvent): void => {
   terminalContextMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
 };
 
-const createTerminalView = (sessionId: string, active: boolean): TerminalView => {
+const createTerminalView = (status: TerminalStatus, active: boolean): TerminalView => {
+  const sessionId = status.id;
+  const ptyGeneration = status.ptyGeneration;
   const container = document.createElement('div');
   container.className = active ? 'project-terminal project-terminal--active' : 'project-terminal';
   container.dataset.sessionId = sessionId;
@@ -7827,11 +8297,27 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
     // No WebGL (remote session, blocklisted driver): the default DOM renderer still works.
   }
 
+  const view: TerminalView = {
+    appliedOutputRevision: 0,
+    container,
+    fitAddon,
+    outputRevision: 0,
+    pending: [],
+    pendingFrame: 0,
+    pendingLength: 0,
+    permissionModeProbes: [],
+    ptyGeneration,
+    terminal,
+  };
+
   terminal.onData((data) => {
-    window.controlPanel.writeTerminal(sessionId, data);
+    writeToTerminalGeneration(sessionId, ptyGeneration, view, data);
   });
 
   terminal.attachCustomKeyEventHandler((event) => {
+    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+      return false;
+    }
     if (event.isComposing || event.keyCode === 229) {
       return true;
     }
@@ -7853,11 +8339,11 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
       return false;
     }
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyV') {
-      void pasteIntoActiveTerminal();
+      void pasteIntoTerminalGeneration(sessionId, ptyGeneration, view);
       return false;
     }
     if (event.shiftKey && !event.ctrlKey && event.code === 'Enter') {
-      window.controlPanel.writeTerminal(sessionId, '\x0a');
+      writeToTerminalGeneration(sessionId, ptyGeneration, view, '\x0a');
       return false;
     }
 
@@ -7865,17 +8351,6 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
   });
   container.addEventListener('contextmenu', showTerminalContextMenu);
 
-  const view: TerminalView = {
-    appliedOutputRevision: 0,
-    container,
-    fitAddon,
-    outputRevision: 0,
-    pending: [],
-    pendingFrame: 0,
-    pendingLength: 0,
-    permissionModeProbes: [],
-    terminal,
-  };
   terminalViews.set(sessionId, view);
   return view;
 };
@@ -7900,33 +8375,43 @@ const readTerminalPermissionMode = (view: TerminalView): ClaudePermissionMode | 
 };
 
 const reportTerminalPermissionMode = (sessionId: string, view: TerminalView): void => {
+  if (!ownsTerminalGeneration(sessionId, view.ptyGeneration, view)) {
+    return;
+  }
   const mode = readTerminalPermissionMode(view);
   if (!mode || mode === view.observedPermissionMode) {
     return;
   }
   view.observedPermissionMode = mode;
-  window.controlPanel.observeClaudePermissionMode(sessionId, mode);
+  window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);
 };
 
 const answerReadyPermissionModeProbes = (sessionId: string, view: TerminalView): void => {
+  if (!ownsTerminalGeneration(sessionId, view.ptyGeneration, view)) {
+    return;
+  }
   const ready = view.permissionModeProbes.filter(
-    (probe) => probe.requiredRevision <= view.appliedOutputRevision,
+    (probe) =>
+      probe.ptyGeneration === view.ptyGeneration &&
+      probe.requiredRevision <= view.appliedOutputRevision,
   );
   if (ready.length === 0) {
     return;
   }
   view.permissionModeProbes = view.permissionModeProbes.filter(
-    (probe) => probe.requiredRevision > view.appliedOutputRevision,
+    (probe) =>
+      probe.ptyGeneration !== view.ptyGeneration ||
+      probe.requiredRevision > view.appliedOutputRevision,
   );
   const mode = readTerminalPermissionMode(view);
-  for (const { probeId } of ready) {
-    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId, mode);
+  for (const { probeId, ptyGeneration } of ready) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId, mode);
   }
 };
 
 const rejectPermissionModeProbes = (sessionId: string, view: TerminalView): void => {
-  for (const { probeId } of view.permissionModeProbes) {
-    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId);
+  for (const { probeId, ptyGeneration } of view.permissionModeProbes) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);
   }
   view.permissionModeProbes.length = 0;
 };
@@ -7935,9 +8420,13 @@ const rejectPermissionModeProbes = (sessionId: string, view: TerminalView): void
  * Output is queued and written once per frame. Writing every IPC chunk separately made xterm reflow
  * dozens of times between paints, which is what the input stutter actually was.
  */
-const queueTerminalOutput = (sessionId: string, data: string): void => {
+const queueTerminalOutput = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  data: string,
+): void => {
   const view = terminalViews.get(sessionId);
-  if (!view) {
+  if (!view || !ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
     return;
   }
 
@@ -7956,11 +8445,19 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
   }
   view.pendingFrame = requestAnimationFrame(() => {
     view.pendingFrame = 0;
+    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+      view.pending.length = 0;
+      view.pendingLength = 0;
+      return;
+    }
     const chunk = view.pending.join('');
     const revision = view.outputRevision;
     view.pending.length = 0;
     view.pendingLength = 0;
     view.terminal.write(chunk, () => {
+      if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+        return;
+      }
       view.appliedOutputRevision = Math.max(view.appliedOutputRevision, revision);
       reportTerminalPermissionMode(sessionId, view);
       answerReadyPermissionModeProbes(sessionId, view);
@@ -7968,17 +8465,49 @@ const queueTerminalOutput = (sessionId: string, data: string): void => {
   });
 };
 
-const ensureTerminalView = (sessionId: string, active: boolean): TerminalView =>
-  terminalViews.get(sessionId) ?? createTerminalView(sessionId, active);
+const disposeTerminalView = (sessionId: string, view: TerminalView): void => {
+  if (terminalViews.get(sessionId) === view) {
+    terminalViews.delete(sessionId);
+  }
+  if (view.pendingFrame !== 0) {
+    cancelAnimationFrame(view.pendingFrame);
+    view.pendingFrame = 0;
+  }
+  view.pending.length = 0;
+  view.pendingLength = 0;
+  rejectPermissionModeProbes(sessionId, view);
+  const mask = terminalMasks.get(sessionId);
+  if (mask?.view === view) {
+    mask.overlay.remove();
+    terminalMasks.delete(sessionId);
+  }
+  view.terminal.dispose();
+  view.container.remove();
+};
+
+const ensureTerminalView = (status: TerminalStatus, active: boolean): TerminalView => {
+  const existing = terminalViews.get(status.id);
+  if (existing?.ptyGeneration === status.ptyGeneration) {
+    return existing;
+  }
+  if (existing) {
+    disposeTerminalView(status.id, existing);
+  }
+  return createTerminalView(status, active);
+};
 
 const fitActiveTerminal = (): boolean => {
-  const view = terminalViews.get(workspaceState.activeSessionId);
-  const bounds = view?.container.getBoundingClientRect();
+  const sessionId = workspaceState.activeSessionId;
+  const view = terminalViews.get(sessionId);
+  if (!view) {
+    return false;
+  }
+  const ptyGeneration = view.ptyGeneration;
+  const bounds = view.container.getBoundingClientRect();
   if (
-    !view ||
+    !ownsTerminalGeneration(sessionId, ptyGeneration, view) ||
     !view.container.isConnected ||
     !view.container.classList.contains('project-terminal--active') ||
-    !bounds ||
     bounds.width < 1 ||
     bounds.height < 1
   ) {
@@ -7987,8 +8516,12 @@ const fitActiveTerminal = (): boolean => {
 
   try {
     view.fitAddon.fit();
+    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+      return false;
+    }
     window.controlPanel.resizeTerminal(
-      workspaceState.activeSessionId,
+      sessionId,
+      ptyGeneration,
       view.terminal.cols,
       view.terminal.rows,
     );
@@ -8329,10 +8862,12 @@ const playSendAnimation = (
 
 const submitComposer = (): void => {
   const status = activeStatus();
-  if (!status || status.phase !== 'running') {
+  const view = status ? terminalViewForStatus(status) : undefined;
+  if (!status || status.phase !== 'running' || !view) {
     showToast('终端还没有运行，无法发送。', 'error');
     return;
   }
+  const ptyGeneration = status.ptyGeneration;
 
   const text = composerInput.value;
   let submission: ReturnType<typeof buildTerminalSubmission>;
@@ -8350,10 +8885,10 @@ const submitComposer = (): void => {
   void writeTerminalSubmission(
     submission,
     (data) => {
-      window.controlPanel.writeTerminal(status.id, data);
+      writeToTerminalGeneration(status.id, ptyGeneration, view, data);
     },
-    // The session can be closed or stopped during the gap between the two writes.
-    () => activeStatus()?.id === status.id && activeStatus()?.phase === 'running',
+    // The session can be closed, stopped or replaced during the gap between the two writes.
+    () => writableTerminalGeneration(status.id, ptyGeneration, view),
   );
 
   playSendAnimation(text);
@@ -8422,9 +8957,13 @@ composerInput.addEventListener('keydown', (event) => {
   // catches up when the main process reads the repainted badge.
   if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey) {
     const status = activeStatus();
-    if (status) {
+    const view = status ? terminalViewForStatus(status) : undefined;
+    if (
+      status?.phase === 'running' &&
+      view &&
+      writeToTerminalGeneration(status.id, status.ptyGeneration, view, '\x1b[Z')
+    ) {
       event.preventDefault();
-      window.controlPanel.writeTerminal(status.id, '\x1b[Z');
     }
   }
 });
@@ -9137,10 +9676,39 @@ function renderProjectList(): void {
 
 function renderWorkspace(state: WorkspaceState): void {
   const previousActiveSessionId = workspaceState.activeSessionId;
-  const activeViewAlreadyExists = terminalViews.has(state.activeSessionId);
+  const nextActiveStatus = state.sessions.find((status) => status.id === state.activeSessionId);
+  const activeViewAlreadyExists =
+    nextActiveStatus !== undefined &&
+    terminalViews.get(nextActiveStatus.id)?.ptyGeneration === nextActiveStatus.ptyGeneration;
   syncConversationTitles(state);
-  workspaceState = state;
   const validSessionIds = new Set(state.sessions.map((status) => status.id));
+  const releasedClaudeLaunches = new Set<string>();
+  const releasedCodexLaunches = new Set<string>();
+  for (const status of state.sessions) {
+    const release = claudeLaunchAttempts.observeTerminal(status);
+    if (release) {
+      releasedClaudeLaunches.add(release.token.sessionId);
+    }
+    if (
+      (status.phase === 'error' || status.phase === 'stopped') &&
+      codexLaunchAttempts.invalidate(status.id)
+    ) {
+      releasedCodexLaunches.add(status.id);
+    }
+  }
+  for (const release of claudeLaunchAttempts.prune(validSessionIds)) {
+    releasedClaudeLaunches.add(release.token.sessionId);
+  }
+  for (const token of codexLaunchAttempts.prune(validSessionIds)) {
+    releasedCodexLaunches.add(token.sessionId);
+  }
+  claudeStateLoadGenerations.prune(validSessionIds);
+  codexStateLoadGenerations.prune(validSessionIds);
+  runtimeStateLoadGenerations.prune(validSessionIds);
+  if (codexAutoLaunchSessionId && !validSessionIds.has(codexAutoLaunchSessionId)) {
+    codexAutoLaunchSessionId = '';
+  }
+  workspaceState = state;
   if (
     pendingComposerFocusSessionId &&
     (pendingComposerFocusSessionId !== state.activeSessionId ||
@@ -9151,21 +9719,13 @@ function renderWorkspace(state: WorkspaceState): void {
 
   for (const status of state.sessions) {
     const active = status.id === state.activeSessionId;
-    const view = ensureTerminalView(status.id, active);
+    const view = ensureTerminalView(status, active);
     view.container.classList.toggle('project-terminal--active', active);
   }
 
   for (const [sessionId, view] of terminalViews) {
     if (!validSessionIds.has(sessionId)) {
-      if (view.pendingFrame !== 0) {
-        cancelAnimationFrame(view.pendingFrame);
-      }
-      rejectPermissionModeProbes(sessionId, view);
-      terminalMasks.get(sessionId)?.overlay.remove();
-      terminalMasks.delete(sessionId);
-      view.terminal.dispose();
-      view.container.remove();
-      terminalViews.delete(sessionId);
+      disposeTerminalView(sessionId, view);
     }
   }
   for (const sessionId of claudeStates.keys()) {
@@ -9190,6 +9750,15 @@ function renderWorkspace(state: WorkspaceState): void {
   const status = activeStatus();
   if (status) {
     renderActiveStatus(status);
+    if (releasedClaudeLaunches.has(status.id) && activeDevelopmentRuntime() === 'claude') {
+      refreshClaudeLaunchControls(status.id);
+    }
+    if (releasedCodexLaunches.has(status.id) && activeDevelopmentRuntime() === 'codex') {
+      const latest = codexStates.get(status.id);
+      if (latest) {
+        renderCodexState(latest, false);
+      }
+    }
   } else {
     renderNoActiveSession();
   }
@@ -9217,7 +9786,7 @@ function renderWorkspace(state: WorkspaceState): void {
     gatewayCheckedAt.textContent = '等待首次检测';
     const knownRuntimeState = developmentRuntimeStates.get(state.activeSessionId);
     if (knownRuntimeState) {
-      renderDevelopmentRuntimeState(knownRuntimeState);
+      renderDevelopmentRuntimeState(knownRuntimeState, false);
     } else if (state.activeSessionId) {
       void loadDevelopmentRuntime(state.activeSessionId);
     }
@@ -9313,60 +9882,73 @@ const openDirectoryPicker = async (): Promise<void> => {
 
 const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
   const status = activeStatus();
-  if (!status || launchInProgress) {
+  if (!status || claudeLaunchAttempts.isBusy(status.id)) {
     return;
   }
 
-  launchInProgress = true;
-  const existingState = claudeStates.get(status.id);
-  if (existingState) {
-    renderClaudeState(existingState);
-  }
-  try {
-    terminalViews.get(status.id)?.terminal.clear();
-    const result = await window.controlPanel.launchClaude(status.id, mode);
-    renderClaudeState(result.state);
-    if (!result.ok) {
-      showToast(result.error ?? '无法启动 Claude Code。', 'error');
-      return;
-    }
-    showToast(
-      mode === 'new'
-        ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
-        : mode === 'continue'
-          ? '正在续接当前项目最近的会话'
-          : '已打开当前项目的历史会话选择器',
-    );
-    // `resume` opens Claude's own arrow-key picker, which needs the raw keystrokes.
-    if (mode === 'resume') {
-      terminalViews.get(status.id)?.terminal.focus();
-    } else {
-      requestComposerFocus(status.id);
-    }
-  } catch {
+  // Capture the lifecycle baseline and paint the busy state before the first await, including when
+  // the renderer has not loaded a ClaudeProjectState for this session yet.
+  const attempt = beginClaudeLaunchAttempt(status);
+  const outcome = await orchestrateClaudeLaunchAttempt({
+    applyResult: (result) =>
+      renderClaudeLaunchResult(attempt, result.state, result.ok ? 'success' : 'failure'),
+    onRelease: () => refreshClaudeLaunchControls(attempt.sessionId),
+    prepare: () => terminalViews.get(status.id)?.terminal.clear(),
+    registry: claudeLaunchAttempts,
+    start: () => window.controlPanel.launchClaude(status.id, mode),
+    token: attempt,
+  });
+  if (outcome.status === 'rejected') {
     showToast('无法启动 Claude Code。', 'error');
-  } finally {
-    launchInProgress = false;
-    const latest = claudeStates.get(status.id);
-    if (latest) {
-      renderClaudeState(latest);
-    }
+    return;
+  }
+  if (outcome.status !== 'resolved') {
+    return;
+  }
+
+  const { result } = outcome;
+  if (!result.ok) {
+    failClaudeLaunchAttempt(attempt);
+    showToast(result.error ?? '无法启动 Claude Code。', 'error');
+    return;
+  }
+  showToast(
+    mode === 'new'
+      ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
+      : mode === 'continue'
+        ? '正在续接当前项目最近的会话'
+        : '已打开当前项目的历史会话选择器',
+  );
+  // `resume` opens Claude's own arrow-key picker, which needs the raw keystrokes.
+  if (mode === 'resume') {
+    terminalViews.get(status.id)?.terminal.focus();
+  } else {
+    requestComposerFocus(status.id);
   }
 };
 
 const launchCodex = async (mode: CodexLaunchMode): Promise<void> => {
   const status = activeStatus();
-  if (!status || launchInProgress || codexOperationInProgress) {
+  if (!status || codexLaunchAttempts.isActive(status.id) || codexOperationInProgress) {
     return;
   }
-  launchInProgress = true;
+  const attempt = codexLaunchAttempts.begin(status.id);
   const existingState = codexStates.get(status.id);
   if (existingState) {
-    renderCodexState(existingState);
+    renderCodexState(existingState, false);
   }
   try {
+    if (!codexLaunchAttempts.isCurrent(attempt)) {
+      return;
+    }
     terminalViews.get(status.id)?.terminal.clear();
+    if (!codexLaunchAttempts.isCurrent(attempt)) {
+      return;
+    }
     const result = await window.controlPanel.launchCodex(status.id, mode);
+    if (!codexLaunchAttempts.isCurrent(attempt) || result.state.sessionId !== attempt.sessionId) {
+      return;
+    }
     renderCodexState(result.state);
     if (!result.ok) {
       showToast(result.error ?? '无法启动 Codex。', 'error');
@@ -9385,12 +9967,15 @@ const launchCodex = async (mode: CodexLaunchMode): Promise<void> => {
       requestComposerFocus(status.id);
     }
   } catch {
-    showToast('无法启动 Codex。', 'error');
+    if (codexLaunchAttempts.isCurrent(attempt)) {
+      showToast('无法启动 Codex。', 'error');
+    }
   } finally {
-    launchInProgress = false;
-    const latest = codexStates.get(status.id);
-    if (latest) {
-      renderCodexState(latest);
+    if (codexLaunchAttempts.finish(attempt)) {
+      const latest = codexStates.get(status.id);
+      if (latest) {
+        renderCodexState(latest, false);
+      }
     }
   }
 };
@@ -9403,7 +9988,7 @@ const installOrUpdateCodex = async (): Promise<CodexProjectState | undefined> =>
   codexOperationInProgress = true;
   const existing = codexStates.get(status.id);
   if (existing) {
-    renderCodexState(existing);
+    renderCodexState(existing, false);
   }
   try {
     const result = await window.controlPanel.installOrUpdateCodex(status.id);
@@ -9421,7 +10006,7 @@ const installOrUpdateCodex = async (): Promise<CodexProjectState | undefined> =>
     codexOperationInProgress = false;
     const latest = codexStates.get(status.id);
     if (latest) {
-      renderCodexState(latest);
+      renderCodexState(latest, false);
     }
   }
 };
@@ -9440,7 +10025,7 @@ const startCodexLogin = async (
   }
   const existing = codexStates.get(status.id);
   if (existing) {
-    renderCodexState(existing);
+    renderCodexState(existing, false);
   }
   try {
     const result = await window.controlPanel.startCodexLogin(status.id, method);
@@ -9462,7 +10047,7 @@ const startCodexLogin = async (
     codexOperationInProgress = false;
     const latest = codexStates.get(status.id);
     if (latest) {
-      renderCodexState(latest);
+      renderCodexState(latest, false);
       if (
         codexAutoLaunchSessionId === latest.sessionId &&
         latest.account &&
@@ -9478,16 +10063,13 @@ const startCodexLogin = async (
 
 const prepareAndLaunchCodex = async (): Promise<void> => {
   const status = activeStatus();
-  if (!status || codexOperationInProgress || launchInProgress) {
+  if (!status || codexOperationInProgress || codexLaunchAttempts.isActive(status.id)) {
     return;
   }
   let state = codexStates.get(status.id);
   if (!state) {
-    try {
-      state = await window.controlPanel.getCodexProjectState(status.id);
-      renderCodexState(state);
-    } catch {
-      showToast('无法读取 Codex 环境。', 'error');
+    state = await loadCodexState(status.id, '无法读取 Codex 环境。');
+    if (!state) {
       return;
     }
   }
@@ -9515,6 +10097,7 @@ const switchDevelopmentRuntime = async (runtime: DevelopmentRuntime): Promise<vo
     const normalizedCwd = state.cwd.toLocaleLowerCase();
     for (const session of workspaceState.sessions) {
       if (session.cwd.toLocaleLowerCase() === normalizedCwd) {
+        runtimeStateLoadGenerations.invalidate(session.id);
         developmentRuntimeStates.set(session.id, {
           ...state,
           sessionId: session.id,
@@ -9761,7 +10344,7 @@ const renderConnectionHistory = (): void => {
       appendParameter('检测网关', entry.gatewayEndpoint);
     }
     appendParameter('主模型', displayedModel || '默认模型');
-    appendParameter('快速模型', displayedModelFast || displayedModel || '跟随主模型');
+    appendParameter('小型/备用模型', displayedModelFast || displayedModel || '跟随主模型');
     const meta = document.createElement('span');
     meta.className = 'connection-history__meta';
     meta.textContent = [
@@ -9884,33 +10467,42 @@ const deleteConnectionHistory = async (entryId: string): Promise<void> => {
   }
 };
 
-window.controlPanel.onTerminalData((sessionId, data) => {
-  queueTerminalOutput(sessionId, data);
+window.controlPanel.onTerminalData((sessionId, ptyGeneration, data) => {
+  queueTerminalOutput(sessionId, ptyGeneration, data);
 });
-window.controlPanel.onClaudePermissionModeProbe((sessionId, probeId) => {
+window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {
   const view = terminalViews.get(sessionId);
-  if (!view) {
-    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId);
+  if (!view || !ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);
     return;
   }
   if (view.appliedOutputRevision >= view.outputRevision) {
     window.controlPanel.reportClaudePermissionModeProbe(
       sessionId,
+      ptyGeneration,
       probeId,
       readTerminalPermissionMode(view),
     );
     return;
   }
-  view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });
+  view.permissionModeProbes.push({
+    probeId,
+    ptyGeneration,
+    requiredRevision: view.outputRevision,
+  });
 });
 /*
  * The PTY clamps the size it was asked for. xterm has to follow, because PSReadLine repaints its
  * edit buffer with absolute cursor moves — a one-row disagreement puts that repaint on the wrong
  * line and leaves the previous screen visible underneath it.
  */
-window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
+window.controlPanel.onTerminalSize((sessionId, ptyGeneration, cols, rows) => {
   const view = terminalViews.get(sessionId);
-  if (!view || (view.terminal.cols === cols && view.terminal.rows === rows)) {
+  if (
+    !view ||
+    !ownsTerminalGeneration(sessionId, ptyGeneration, view) ||
+    (view.terminal.cols === cols && view.terminal.rows === rows)
+  ) {
     return;
   }
   try {
@@ -10012,9 +10604,9 @@ window.controlPanel.onNetworkPreflight((result) => {
     const codexState = status ? codexStates.get(status.id) : undefined;
     const claudeState = status ? claudeStates.get(status.id) : undefined;
     if (activeDevelopmentRuntime() === 'codex' && codexState) {
-      renderCodexState(codexState);
+      renderCodexState(codexState, false);
     } else if (claudeState) {
-      renderClaudeState(claudeState);
+      renderClaudeState(claudeState, true, false);
     } else {
       renderActiveNetworkPreflight();
     }
@@ -10633,6 +11225,13 @@ footerModel.addEventListener('click', () => {
     hideFooterMenus();
   }
 });
+footerSpeed.addEventListener('click', () => {
+  if (footerSpeedMenu.hidden) {
+    openSpeedMenu();
+  } else {
+    hideFooterMenus();
+  }
+});
 footerMode.addEventListener('click', () => {
   if (footerModeMenu.hidden) {
     openModeMenu();
@@ -10718,7 +11317,7 @@ codexCancelLogin.addEventListener('click', () => {
       codexOperationInProgress = false;
       const latest = codexStates.get(status.id);
       if (latest) {
-        renderCodexState(latest);
+        renderCodexState(latest, false);
       }
     });
 });
@@ -10752,7 +11351,7 @@ codexLogout.addEventListener('click', () => {
         codexOperationInProgress = false;
         const latest = codexStates.get(status.id);
         if (latest) {
-          renderCodexState(latest);
+          renderCodexState(latest, false);
         }
       });
   });
@@ -11008,8 +11607,7 @@ restartButton.addEventListener('click', async () => {
   if (!status) {
     return;
   }
-  const result = await window.controlPanel.restartTerminal(status.id);
-  terminalViews.get(status.id)?.terminal.clear();
+  const result = await window.controlPanel.restartTerminal(status.id, status.ptyGeneration);
   if (handleOperation(result, result.ok ? '终端已重启' : undefined)) {
     retryTerminalFitUntilMeasured();
     requestComposerFocus(status.id);
@@ -11022,9 +11620,12 @@ toggleButton.addEventListener('click', async () => {
   }
 
   if (status.phase === 'running') {
-    handleOperation(await window.controlPanel.stopTerminal(status.id), '终端已停止');
+    handleOperation(
+      await window.controlPanel.stopTerminal(status.id, status.ptyGeneration),
+      '终端已停止',
+    );
   } else {
-    const result = await window.controlPanel.startTerminal(status.id);
+    const result = await window.controlPanel.startTerminal(status.id, status.ptyGeneration);
     if (handleOperation(result, '终端已启动')) {
       retryTerminalFitUntilMeasured();
       requestComposerFocus(status.id);
@@ -11156,10 +11757,12 @@ document.addEventListener('pointerdown', (event) => {
   if (
     !footerResourceMenu.contains(event.target as Node) &&
     !footerModelMenu.contains(event.target as Node) &&
+    !footerSpeedMenu.contains(event.target as Node) &&
     !footerModeMenu.contains(event.target as Node) &&
     !footerEffortMenu.contains(event.target as Node) &&
     !footerResource.contains(event.target as Node) &&
     !footerModel.contains(event.target as Node) &&
+    !footerSpeed.contains(event.target as Node) &&
     !footerMode.contains(event.target as Node) &&
     !footerEffort.contains(event.target as Node)
   ) {
@@ -11324,13 +11927,8 @@ window.addEventListener('beforeunload', () => {
   if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
   }
-  for (const [sessionId, view] of terminalViews) {
-    if (view.pendingFrame !== 0) {
-      cancelAnimationFrame(view.pendingFrame);
-    }
-    rejectPermissionModeProbes(sessionId, view);
-    terminalMasks.get(sessionId)?.overlay.remove();
-    view.terminal.dispose();
+  for (const [sessionId, view] of [...terminalViews]) {
+    disposeTerminalView(sessionId, view);
   }
   terminalMasks.clear();
 });
@@ -11379,7 +11977,7 @@ void (async () => {
   }
 
   if (status.phase !== 'running' && status.phase !== 'starting') {
-    handleOperation(await window.controlPanel.startTerminal(status.id));
+    handleOperation(await window.controlPanel.startTerminal(status.id, status.ptyGeneration));
   }
   void loadConnectionHistory();
   retryTerminalFitUntilMeasured();
