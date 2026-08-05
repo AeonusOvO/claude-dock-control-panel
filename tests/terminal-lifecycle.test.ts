@@ -4,7 +4,7 @@ import {
   cleanupFailedRuntimeLaunch,
   enteredTerminalFailure,
   isTerminalFailurePhase,
-  runDirectTerminalTransition,
+  TerminalTransitionCoordinator,
   type DirectTerminalTransitionDependencies,
   type FailedRuntimeLaunchCleanupDependencies,
   type FailedRuntimeLaunchOwner,
@@ -82,8 +82,7 @@ describe('direct terminal transitions', () => {
       };
       const expectedStatus = terminalStatus(resultPhase, resultGeneration);
 
-      const transitioning = runDirectTerminalTransition(
-        dependencies,
+      const transitioning = new TerminalTransitionCoordinator(dependencies).run(
         'session-a',
         currentGeneration,
         () => {
@@ -135,7 +134,7 @@ describe('direct terminal transitions', () => {
     };
 
     await expect(
-      runDirectTerminalTransition(dependencies, 'session-a', 2, () => {
+      new TerminalTransitionCoordinator(dependencies).run('session-a', 2, () => {
         order.push('pty:start');
         return terminalStatus('running', 4);
       }),
@@ -171,10 +170,14 @@ describe('direct terminal transitions', () => {
       },
     };
 
-    const transitioning = runDirectTerminalTransition(dependencies, 'session-a', 2, () => {
-      order.push('pty:restart');
-      return terminalStatus('running', 4);
-    });
+    const transitioning = new TerminalTransitionCoordinator(dependencies).run(
+      'session-a',
+      2,
+      () => {
+        order.push('pty:restart');
+        return terminalStatus('running', 4);
+      },
+    );
     expect(order).toEqual(['generation:2', 'invalidate', 'resolve-probes:2']);
 
     currentGeneration = 3;
@@ -182,6 +185,160 @@ describe('direct terminal transitions', () => {
 
     await expect(transitioning).rejects.toThrow('终端已被其他操作替换');
     expect(order).toEqual(['generation:2', 'invalidate', 'resolve-probes:2', 'generation:3']);
+  });
+  it('lets a later Stop supersede an earlier pending Restart on the same generation', async () => {
+    const leaseUnwound = deferred();
+    const mutations: string[] = [];
+    let currentGeneration: PtyGeneration = 2;
+    const dependencies: DirectTerminalTransitionDependencies = {
+      deactivateRuntimes: (_sessionId, expectedGeneration) => {
+        mutations.push(`deactivate:${expectedGeneration}`);
+      },
+      discardOutput: (_sessionId, expectedGeneration) => {
+        mutations.push(`discard:${expectedGeneration}`);
+      },
+      getPtyGeneration: () => currentGeneration,
+      invalidateAndWait: () => leaseUnwound.promise,
+      resolveProbes: () => undefined,
+      withInvalidationSuppressed: (_sessionId, operation) => operation(),
+    };
+    const coordinator = new TerminalTransitionCoordinator(dependencies);
+
+    const restart = coordinator
+      .run('session-a', 2, () => {
+        mutations.push('pty:restart');
+        currentGeneration = 3;
+        return terminalStatus('running', 3);
+      })
+      .catch((error: unknown) => error);
+    const stop = coordinator.run('session-a', 2, () => {
+      mutations.push('pty:stop');
+      return terminalStatus('stopped', 2);
+    });
+
+    leaseUnwound.resolve();
+    await expect(restart).resolves.toMatchObject({
+      message: expect.stringContaining('更新操作取代'),
+    });
+    await expect(stop).resolves.toMatchObject({ phase: 'stopped', ptyGeneration: 2 });
+    expect(mutations).toEqual(['discard:2', 'deactivate:2', 'pty:stop']);
+    expect(currentGeneration).toBe(2);
+  });
+
+  it('lets a later Restart supersede an earlier pending Stop', async () => {
+    const leaseUnwound = deferred();
+    const mutations: string[] = [];
+    let currentGeneration: PtyGeneration = 2;
+    const dependencies: DirectTerminalTransitionDependencies = {
+      deactivateRuntimes: (_sessionId, expectedGeneration) => {
+        mutations.push(`deactivate:${expectedGeneration}`);
+      },
+      discardOutput: (_sessionId, expectedGeneration) => {
+        mutations.push(`discard:${expectedGeneration}`);
+      },
+      getPtyGeneration: () => currentGeneration,
+      invalidateAndWait: () => leaseUnwound.promise,
+      resolveProbes: () => undefined,
+      withInvalidationSuppressed: (_sessionId, operation) => operation(),
+    };
+    const coordinator = new TerminalTransitionCoordinator(dependencies);
+
+    const stop = coordinator
+      .run('session-a', 2, () => {
+        mutations.push('pty:stop');
+        return terminalStatus('stopped', 2);
+      })
+      .catch((error: unknown) => error);
+    const restart = coordinator.run('session-a', 2, () => {
+      mutations.push('pty:restart');
+      currentGeneration = 3;
+      return terminalStatus('running', 3);
+    });
+
+    leaseUnwound.resolve();
+    await expect(stop).resolves.toMatchObject({ message: expect.stringContaining('更新操作取代') });
+    await expect(restart).resolves.toMatchObject({ phase: 'running', ptyGeneration: 3 });
+    expect(mutations).toEqual(['discard:2', 'deactivate:2', 'pty:restart']);
+    expect(currentGeneration).toBe(3);
+  });
+
+  it('does not let a stale request supersede a valid pending intent', async () => {
+    const leaseUnwound = deferred();
+    let currentGeneration: PtyGeneration = 2;
+    const mutations: string[] = [];
+    const dependencies: DirectTerminalTransitionDependencies = {
+      deactivateRuntimes: () => {
+        mutations.push('deactivate');
+      },
+      discardOutput: () => {
+        mutations.push('discard');
+      },
+      getPtyGeneration: () => currentGeneration,
+      invalidateAndWait: () => leaseUnwound.promise,
+      resolveProbes: () => undefined,
+      withInvalidationSuppressed: (_sessionId, operation) => operation(),
+    };
+    const coordinator = new TerminalTransitionCoordinator(dependencies);
+    const validStop = coordinator.run('session-a', 2, () => {
+      mutations.push('pty:stop');
+      return terminalStatus('stopped', currentGeneration);
+    });
+
+    await expect(
+      coordinator.run('session-a', 1, () => {
+        mutations.push('pty:stale-restart');
+        currentGeneration = 3;
+        return terminalStatus('running', 3);
+      }),
+    ).rejects.toThrow('终端已被其他操作替换');
+
+    leaseUnwound.resolve();
+    await expect(validStop).resolves.toMatchObject({ phase: 'stopped', ptyGeneration: 2 });
+    expect(mutations).toEqual(['discard', 'deactivate', 'pty:stop']);
+    expect(currentGeneration).toBe(2);
+  });
+
+  it('keeps terminal intents independent across sessions', async () => {
+    const releaseA = deferred();
+    const releaseB = deferred();
+    const mutations: string[] = [];
+    const dependencies: DirectTerminalTransitionDependencies = {
+      deactivateRuntimes: (sessionId) => {
+        mutations.push(`deactivate:${sessionId}`);
+      },
+      discardOutput: (sessionId) => {
+        mutations.push(`discard:${sessionId}`);
+      },
+      getPtyGeneration: () => 2,
+      invalidateAndWait: (sessionId) =>
+        sessionId === 'session-a' ? releaseA.promise : releaseB.promise,
+      resolveProbes: () => undefined,
+      withInvalidationSuppressed: (_sessionId, operation) => operation(),
+    };
+    const coordinator = new TerminalTransitionCoordinator(dependencies);
+    const transitionA = coordinator.run('session-a', 2, () => {
+      mutations.push('pty:session-a');
+      return terminalStatus('stopped', 2);
+    });
+    const transitionB = coordinator.run('session-b', 2, () => {
+      mutations.push('pty:session-b');
+      return { ...terminalStatus('stopped', 2), id: 'session-b' };
+    });
+
+    releaseB.resolve();
+    await expect(transitionB).resolves.toMatchObject({ id: 'session-b', phase: 'stopped' });
+    expect(mutations).toEqual(['discard:session-b', 'deactivate:session-b', 'pty:session-b']);
+
+    releaseA.resolve();
+    await expect(transitionA).resolves.toMatchObject({ id: 'session-a', phase: 'stopped' });
+    expect(mutations).toEqual([
+      'discard:session-b',
+      'deactivate:session-b',
+      'pty:session-b',
+      'discard:session-a',
+      'deactivate:session-a',
+      'pty:session-a',
+    ]);
   });
 });
 
@@ -208,15 +365,19 @@ const failedLaunchHarness = (
   const runtime: FailedRuntimeLaunchOwner = {
     cleanupPreparedLaunch: () => {
       order.push('cleanup-prepared');
-      if (runtimeGeneration === undefined) {
+      if (runtimeGeneration === undefined && prepared) {
         prepared = false;
+        return true;
       }
+      return false;
     },
     setInactive: (_sessionId, expectedGeneration) => {
       order.push(`inactive:${expectedGeneration}`);
       if (runtimeGeneration === expectedGeneration) {
         runtimeGeneration = undefined;
+        return true;
       }
+      return false;
     },
   };
   return {
@@ -235,7 +396,7 @@ describe('failed runtime launch cleanup', () => {
 
     cleanupFailedRuntimeLaunch(harness.dependencies, harness.runtime, 'session-a', 2);
 
-    expect(harness.order).toEqual(['has-session', 'stop:2', 'inactive:2']);
+    expect(harness.order).toEqual(['has-session', 'stop:2', 'inactive:2', 'cleanup-prepared']);
     expect(harness.getWorkspaceGeneration()).toBe(3);
     expect(harness.getRuntimeGeneration()).toBe(3);
   });
@@ -248,6 +409,16 @@ describe('failed runtime launch cleanup', () => {
     expect(harness.order).toEqual(['has-session', 'stop:2', 'inactive:2']);
     expect(harness.getWorkspaceGeneration()).toBeUndefined();
     expect(harness.getRuntimeGeneration()).toBeUndefined();
+  });
+
+  it('stops the predecessor PTY and clears an unbound replacement launch', () => {
+    const harness = failedLaunchHarness(2, undefined);
+
+    cleanupFailedRuntimeLaunch(harness.dependencies, harness.runtime, 'session-a', 2);
+
+    expect(harness.order).toEqual(['has-session', 'stop:2', 'inactive:2', 'cleanup-prepared']);
+    expect(harness.getPrepared()).toBe(false);
+    expect(harness.getWorkspaceGeneration()).toBeUndefined();
   });
 
   it('uses prepared-launch cleanup before a PTY generation has been bound', () => {

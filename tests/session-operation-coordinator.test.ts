@@ -42,6 +42,85 @@ describe('SessionOperationCoordinator', () => {
     );
   });
 
+  it('aborts a lease synchronously but waits for cancelled cleanup to unwind', async () => {
+    const coordinator = new SessionOperationCoordinator(() => true);
+    const entered = deferred();
+    const cleanupEntered = deferred();
+    const releaseCleanup = deferred();
+    let observedSignal: AbortSignal | undefined;
+
+    const operation = coordinator.run('session-a', async (assertCurrent, signal) => {
+      observedSignal = signal;
+      const aborted = new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          resolve();
+        } else {
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        }
+      });
+      entered.resolve();
+      await aborted;
+      try {
+        assertCurrent();
+      } finally {
+        cleanupEntered.resolve();
+        await releaseCleanup.promise;
+      }
+    });
+    await entered.promise;
+
+    const unwound = coordinator.invalidateAndWait('session-a');
+    expect(observedSignal?.aborted).toBe(true);
+    await cleanupEntered.promise;
+    let unwoundSettled = false;
+    void unwound.then(() => {
+      unwoundSettled = true;
+    });
+    await Promise.resolve();
+    expect(unwoundSettled).toBe(false);
+    await expect(coordinator.run('session-a', async () => undefined)).rejects.toThrow('尚未完成');
+
+    releaseCleanup.resolve();
+    await expect(operation).rejects.toThrow('已被新的终端或会话操作取消');
+    await unwound;
+    expect(unwoundSettled).toBe(true);
+  });
+
+  it('makes repeated invalidation idempotent for one abort reason and completion barrier', async () => {
+    const coordinator = new SessionOperationCoordinator(() => true);
+    const entered = deferred();
+    let abortEvents = 0;
+    let abortReason: unknown;
+
+    const operation = coordinator.run('session-a', async (assertCurrent, signal) => {
+      const aborted = new Promise<void>((resolve) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            abortEvents += 1;
+            abortReason = signal.reason;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      entered.resolve();
+      await aborted;
+      assertCurrent();
+    });
+    await entered.promise;
+
+    const first = coordinator.invalidateAndWait('session-a');
+    coordinator.invalidate('session-a');
+    const second = coordinator.invalidateAndWait('session-a');
+
+    expect(first).toBe(second);
+    expect(abortEvents).toBe(1);
+    expect(abortReason).toBeInstanceOf(Error);
+    await expect(operation).rejects.toBe(abortReason);
+    await expect(first).resolves.toBeUndefined();
+  });
+
   it('invalidates an operation when its workspace session disappears', async () => {
     const sessions = new Set(['session-a']);
     const coordinator = new SessionOperationCoordinator((sessionId) => sessions.has(sessionId));

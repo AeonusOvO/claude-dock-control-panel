@@ -137,4 +137,39 @@ describe('Claude project profile store', () => {
 
     expect(reopened.getAllowBypassPermissions('d:\\projects\\example')).toBe(false);
   });
+
+  it('captures config, credential, and launch switches from one immutable profile', () => {
+    const { store } = createStore();
+    store.save(CWD, gatewayInput);
+    store.setAllowBypassPermissions(CWD, false);
+
+    const first = store.createLaunchSnapshot(CWD);
+    expect(first).toMatchObject({
+      allowBypassPermissions: false,
+      config: {
+        baseUrl: 'https://gateway.example.com',
+        model: 'deepseek-chat',
+      },
+      credential: 'secret-token',
+    });
+    expect(store.launchSnapshotIsCurrent(CWD, first)).toBe(true);
+
+    store.save(CWD, {
+      ...gatewayInput,
+      baseUrl: 'https://replacement.example.com',
+      credential: 'replacement-token',
+      model: 'replacement-model',
+    });
+
+    expect(first.config.baseUrl).toBe('https://gateway.example.com');
+    expect(first.credential).toBe('secret-token');
+    expect(store.launchSnapshotIsCurrent(CWD, first)).toBe(false);
+    expect(store.createLaunchSnapshot(CWD)).toMatchObject({
+      config: {
+        baseUrl: 'https://replacement.example.com',
+        model: 'replacement-model',
+      },
+      credential: 'replacement-token',
+    });
+  });
 });

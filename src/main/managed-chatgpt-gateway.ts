@@ -298,6 +298,7 @@ export class ManagedChatGptGateway {
   private readonly statePath: string;
   private readonly versionsDirectory: string;
   private process?: ChildProcess;
+  private spawnedExecutablePath?: string;
   private setupInFlight?: Promise<ManagedChatGptGatewayProjectConfig>;
 
   public constructor(
@@ -453,21 +454,17 @@ export class ManagedChatGptGateway {
 
   public async stop(): Promise<void> {
     const state = this.loadState();
-    const trackedPid = this.process?.pid;
-    const processId = trackedPid ?? state?.processId;
-    this.stopProcess();
-    if (processId && processId !== trackedPid && state) {
-      await this.stopPersistedProcess(state, processId);
+    if (!state) {
+      this.stopProcess();
+      return;
     }
-    if (state?.processId) {
-      this.persistState({ ...state, processId: undefined });
-    }
+    await this.stopProcessesForState(state, 'ChatGPT 本地网关停止后端口仍被占用。');
   }
 
   public shutdown(): void {
-    const processId = this.process?.pid;
+    // Keep the persisted PID until the child really exits. If the app terminates first, the next
+    // instance can still verify and reconcile the exact managed process instead of trusting a port.
     this.stopProcess();
-    this.clearPersistedProcessId(processId);
   }
 
   private async latest(): Promise<CliProxyApiRelease> {
@@ -521,6 +518,13 @@ export class ManagedChatGptGateway {
     });
     const relativeExecutable = await this.extractRelease(archivePath, release.version);
     const executableSha256 = sha256File(path.resolve(this.rootDirectory, relativeExecutable));
+    if (current) {
+      report?.(4, `正在停止 CLIProxyAPI ${current.installedVersion}，准备切换版本。`);
+      await this.stopProcessesForState(
+        current,
+        '旧版 CLIProxyAPI 停止后端口仍被占用，已拒绝切换安装版本。',
+      );
+    }
     const next: PersistedGatewayState = {
       encryptedClientKey: current?.encryptedClientKey ?? '',
       encryptedManagementKey: current?.encryptedManagementKey,
@@ -624,7 +628,7 @@ export class ManagedChatGptGateway {
   }
 
   private async login(state: PersistedGatewayState): Promise<void> {
-    this.stopProcess();
+    await this.stopProcessesForState(state, 'OpenAI 授权前无法确认旧托管网关已经停止。');
     const executable = this.executablePath(state);
     const callbackPort = await findAvailablePort(
       OAUTH_DEFAULT_PORT,
@@ -658,7 +662,16 @@ export class ManagedChatGptGateway {
       throw new Error('托管网关本地访问密钥无法解密。');
     }
     if (await this.probe(state.port, credential)) {
-      return;
+      const processId = this.process?.pid ?? state.processId;
+      if (processId && (await this.processMatchesState(state, processId))) {
+        if (state.processId !== processId) {
+          this.persistState({ ...state, processId });
+        }
+        return;
+      }
+      throw new Error(
+        `本机端口 ${state.port} 上的托管网关可以响应，但进程身份或运行版本无法确认；已拒绝复用。`,
+      );
     }
     if (!(await portIsAvailable(state.port))) {
       throw new Error(
@@ -673,6 +686,7 @@ export class ManagedChatGptGateway {
       stdio: 'ignore',
       windowsHide: true,
     });
+    this.spawnedExecutablePath = executable;
     const child = this.process;
     if (!child.pid) {
       this.stopProcess();
@@ -682,12 +696,14 @@ export class ManagedChatGptGateway {
     child.once('exit', () => {
       if (this.process === child) {
         this.process = undefined;
+        this.spawnedExecutablePath = undefined;
       }
       this.clearPersistedProcessId(child.pid);
     });
     child.once('error', () => {
       if (this.process === child) {
         this.process = undefined;
+        this.spawnedExecutablePath = undefined;
       }
       this.clearPersistedProcessId(child.pid);
     });
@@ -867,6 +883,93 @@ export class ManagedChatGptGateway {
     }
   }
 
+  private async processExecutablePath(processId: number): Promise<string | undefined> {
+    if (!this.processIsRunning(processId)) {
+      return undefined;
+    }
+    if (this.process?.pid === processId && this.spawnedExecutablePath) {
+      return this.spawnedExecutablePath;
+    }
+    try {
+      const result = await execFileAsync(
+        'powershell.exe',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          '$p = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $env:CLAUDEDOCK_GATEWAY_PID); if ($p) { [Console]::Out.Write($p.ExecutablePath) }',
+        ],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, CLAUDEDOCK_GATEWAY_PID: String(processId) },
+          maxBuffer: 64 * 1024,
+          timeout: 5_000,
+          windowsHide: true,
+        },
+      );
+      return result.stdout.trim() || undefined;
+    } catch (error) {
+      if (!this.processIsRunning(processId)) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async processMatchesState(
+    state: PersistedGatewayState,
+    processId: number,
+  ): Promise<boolean> {
+    const actualExecutable = await this.processExecutablePath(processId);
+    return Boolean(
+      actualExecutable &&
+      path.resolve(actualExecutable).toLowerCase() ===
+        path.resolve(this.executablePath(state)).toLowerCase(),
+    );
+  }
+
+  private async waitForPortAvailability(port: number): Promise<boolean> {
+    if (!port) {
+      return true;
+    }
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      if (await portIsAvailable(port)) {
+        return true;
+      }
+      await delay(100);
+    }
+    return portIsAvailable(port);
+  }
+
+  private async stopProcessesForState(
+    state: PersistedGatewayState,
+    occupiedPortMessage: string,
+  ): Promise<void> {
+    const processIds = new Set<number>();
+    if (this.process?.pid) {
+      processIds.add(this.process.pid);
+    }
+    if (state.processId) {
+      processIds.add(state.processId);
+    }
+    for (const processId of processIds) {
+      await this.stopPersistedProcess(state, processId);
+    }
+    if (this.process?.pid && processIds.has(this.process.pid)) {
+      this.process = undefined;
+    }
+    for (const processId of processIds) {
+      this.clearPersistedProcessId(processId);
+    }
+    if (!(await this.waitForPortAvailability(state.port))) {
+      throw new Error(occupiedPortMessage);
+    }
+  }
+
   private processIsRunning(processId: number): boolean {
     try {
       process.kill(processId, 0);
@@ -886,30 +989,14 @@ export class ManagedChatGptGateway {
       return;
     }
     const expectedExecutable = path.resolve(this.executablePath(state));
-    const result = await execFileAsync(
-      'powershell.exe',
-      [
-        '-NoLogo',
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        '$p = Get-CimInstance Win32_Process -Filter ("ProcessId = " + $env:CLAUDEDOCK_GATEWAY_PID); if ($p) { [Console]::Out.Write($p.ExecutablePath) }',
-      ],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, CLAUDEDOCK_GATEWAY_PID: String(processId) },
-        maxBuffer: 64 * 1024,
-        timeout: 5_000,
-        windowsHide: true,
-      },
-    );
-    const actualExecutable = result.stdout.trim();
-    if (
-      !actualExecutable ||
-      path.resolve(actualExecutable).toLowerCase() !== expectedExecutable.toLowerCase()
-    ) {
+    const actualExecutable = await this.processExecutablePath(processId);
+    if (!actualExecutable) {
+      if (!this.processIsRunning(processId)) {
+        return;
+      }
+      throw new Error('托管网关进程身份无法安全确认，已拒绝终止该进程。');
+    }
+    if (path.resolve(actualExecutable).toLowerCase() !== expectedExecutable.toLowerCase()) {
       throw new Error('托管网关进程身份无法安全确认，已拒绝终止该进程。');
     }
     process.kill(processId, 'SIGTERM');
@@ -927,5 +1014,6 @@ export class ManagedChatGptGateway {
       this.process.kill();
     }
     this.process = undefined;
+    this.spawnedExecutablePath = undefined;
   }
 }

@@ -29,7 +29,6 @@ import type {
   ClaudeModelOptions,
   ClaudePermissionMode,
   ClaudeProjectState,
-  ClaudeRelaunchInput,
   ClaudeRouteHealth,
   ClaudeRouterManagementState,
   ClaudeRouterProviderProtocol,
@@ -96,7 +95,11 @@ import {
 } from './claude-web-research';
 import { claudeMessagesEndpoint, testClaudeConnection } from './claude-connection-test';
 import { ClaudeConfigStore } from './claude-config-store';
-import type { ClaudeConfigPresentation, ClaudeConfigSnapshot } from './claude-config-store';
+import type {
+  ClaudeConfigPresentation,
+  ClaudeConfigSnapshot,
+  ClaudeLaunchConfigSnapshot,
+} from './claude-config-store';
 import { ClaudeConnectionHistoryStore } from './claude-connection-history';
 import { ClaudeGatewayDetector } from './claude-gateway-diagnostics';
 import { ConversationPreferencesStore, isConversationId } from './conversation-preferences-store';
@@ -178,6 +181,12 @@ interface ConnectionHistoryMetadata {
   sourceCredentialConfigured?: boolean;
 }
 
+export interface PreparedClaudeConfigSave {
+  historyMetadata?: ConnectionHistoryMetadata;
+  input: SaveClaudeConfigInput;
+  presentation?: ClaudeConfigPresentation;
+}
+
 interface PreparedOpenAiConnection {
   effectiveInput: SaveClaudeConfigInput;
   historyMetadata: ConnectionHistoryMetadata;
@@ -221,6 +230,8 @@ interface ConnectionCheckRecord {
 export interface PreparedClaudeLaunch {
   command: string;
   environment: ClaudeEnvironmentOverrides;
+  /** Bound PTY replaced by this prepared launch, if one still owned the runtime at commit time. */
+  predecessorPtyGeneration?: PtyGeneration;
 }
 
 export interface PreparedClaudeSpeedRelaunch extends PreparedClaudeLaunch {
@@ -771,6 +782,11 @@ export class ClaudeRuntime {
     SOFTWARE_UPDATE_CACHE_MS,
   );
   private readonly configStore: ClaudeConfigStore;
+  private conversationLaunchGuard: (
+    cwd: string,
+    mode: ClaudeLaunchMode,
+    conversationId?: string,
+  ) => void = () => {};
   private readonly fetchImplementation: typeof fetch;
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   /** Serialises complete body/return submissions so two UI actions cannot interleave PTY bytes. */
@@ -782,6 +798,7 @@ export class ClaudeRuntime {
   private metricsPollInFlight?: Promise<void>;
   private readonly metricsTimer: NodeJS.Timeout;
   private nextLaunchGeneration = 0;
+  private nextStateRevision = 0;
   private readonly resourceUsageService: ProviderResourceUsageService;
   /** Serialises Shift+Tab stepping per session so two clicks can never interleave presses. */
   private readonly modeSwitchLocks = new Set<string>();
@@ -847,6 +864,30 @@ export class ClaudeRuntime {
     if (previousRoute) {
       void this.stopUnusedRoute(previousRoute).catch(() => {});
     }
+  }
+
+  public removeConversationPreferences(conversationId: string): void {
+    this.conversationPreferences.remove(conversationId);
+  }
+
+  public sessionIdsForConversation(cwd: string, conversationId: string): string[] {
+    const normalizedConversationId = conversationId.toLocaleLowerCase();
+    const cwdKey = projectKey(cwd);
+    return [...this.sessions.values()]
+      .filter(
+        (runtime) =>
+          projectKey(runtime.cwd) === cwdKey &&
+          [runtime.conversationId, runtime.metrics?.sessionId].some(
+            (candidate) => candidate?.toLocaleLowerCase() === normalizedConversationId,
+          ),
+      )
+      .map(({ sessionId }) => sessionId);
+  }
+
+  public setConversationLaunchGuard(
+    guard: (cwd: string, mode: ClaudeLaunchMode, conversationId?: string) => void,
+  ): void {
+    this.conversationLaunchGuard = guard;
   }
 
   public officialNetworkProvider(cwd: string): NetworkProviderId | undefined {
@@ -1091,45 +1132,89 @@ export class ClaudeRuntime {
 
   public async getState(sessionId: string, cwd: string): Promise<ClaudeProjectState> {
     const runtime = this.ensureSession(sessionId, cwd);
-    const installation = await this.diagnoseInstallation();
-    const matches = modelMatches(runtime.expectedModel, runtime.metrics?.modelId);
-    const config = this.configStore.getConfig(cwd);
-    const metricsConfig = runtime.expectedModel
-      ? { ...config, model: runtime.expectedModel }
-      : config;
-    const contextWindowMode = runtime.contextWindowMode ?? this.managedChatGptContextWindowMode();
-    const displayMetrics = effectiveClaudeMetrics(
-      runtime.metrics,
-      metricsConfig,
-      contextWindowMode,
-    );
-    const contextUsage = claudeResourceUsage(displayMetrics, metricsConfig, contextWindowMode);
-    const providerUsage = await this.resourceUsageService.read(
-      projectKey(cwd),
-      config.preset,
-      this.configStore.getCredential(cwd),
-    );
-    return {
-      active: runtime.active,
-      allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
-      config: this.configStore.getView(cwd),
-      cwd,
-      effortCompatibility: runtime.effortCompatibility,
-      effortRequest: runtime.effortRequest,
-      expectedModel: runtime.expectedModel,
-      installation,
-      metrics: displayMetrics,
-      modelMatches: matches,
-      permissionMode: runtime.permissionMode,
-      permissionModeCycle: [...runtime.permissionModeCycle],
-      resourceUsage: mergeClaudeResourceUsage(contextUsage, providerUsage),
-      routeHealth: await this.getRouteHealth(runtime, config),
-      sessionId,
-      speed: this.modelSpeedState(runtime, config, installation.version),
-      warning: matches
-        ? undefined
-        : `运行中模型 ${runtime.metrics?.modelId ?? '未知'} 与锁定模型 ${runtime.expectedModel} 不一致。`,
-    };
+    for (;;) {
+      if (this.sessions.get(sessionId) !== runtime) {
+        throw new Error('Claude Code 会话已关闭，这次状态读取已取消。');
+      }
+      const stateRevision = ++this.nextStateRevision;
+      const active = runtime.active;
+      const launchGeneration = runtime.launchGeneration;
+      const ptyGeneration = runtime.ptyGeneration;
+      const runtimeCwd = runtime.cwd;
+      const lastApiError = runtime.lastApiError;
+      const ownershipIsCurrent = (): boolean =>
+        this.sessions.get(sessionId) === runtime &&
+        runtime.active === active &&
+        runtime.launchGeneration === launchGeneration &&
+        runtime.ptyGeneration === ptyGeneration &&
+        runtime.cwd === runtimeCwd;
+
+      const installation = await this.diagnoseInstallation();
+      if (!ownershipIsCurrent()) {
+        continue;
+      }
+      const config = this.configStore.getConfig(cwd);
+      const credential = this.configStore.getCredential(cwd);
+      const configFingerprint = connectionFingerprint(config, credential);
+      const [providerUsage, routeHealth] = await Promise.all([
+        this.resourceUsageService.read(projectKey(cwd), config.preset, credential),
+        this.getRouteHealth(runtime, config),
+      ]);
+      if (this.sessions.get(sessionId) !== runtime) {
+        throw new Error('Claude Code 会话已关闭，这次状态读取已取消。');
+      }
+      if (
+        !ownershipIsCurrent() ||
+        runtime.lastApiError !== lastApiError ||
+        connectionFingerprint(
+          this.configStore.getConfig(cwd),
+          this.configStore.getCredential(cwd),
+        ) !== configFingerprint
+      ) {
+        continue;
+      }
+
+      const matches = modelMatches(runtime.expectedModel, runtime.metrics?.modelId);
+      const metricsConfig = runtime.expectedModel
+        ? { ...config, model: runtime.expectedModel }
+        : config;
+      const contextWindowMode = runtime.contextWindowMode ?? this.managedChatGptContextWindowMode();
+      const displayMetrics = effectiveClaudeMetrics(
+        runtime.metrics,
+        metricsConfig,
+        contextWindowMode,
+      );
+      const contextUsage = claudeResourceUsage(displayMetrics, metricsConfig, contextWindowMode);
+      return {
+        active: runtime.active,
+        allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
+        config: this.configStore.getView(cwd),
+        cwd,
+        effortCompatibility: runtime.effortCompatibility,
+        effortRequest: runtime.effortRequest,
+        expectedModel: runtime.expectedModel,
+        installation,
+        metrics: displayMetrics,
+        modelMatches: matches,
+        permissionMode: runtime.permissionMode,
+        permissionModeCycle: [...runtime.permissionModeCycle],
+        ptyGeneration: runtime.ptyGeneration,
+        resourceUsage: mergeClaudeResourceUsage(contextUsage, providerUsage),
+        routeHealth,
+        sessionId,
+        stateRevision,
+        speed: this.modelSpeedState(runtime, config, installation.version),
+        warning: matches
+          ? undefined
+          : `运行中模型 ${runtime.metrics?.modelId ?? '未知'} 与锁定模型 ${runtime.expectedModel} 不一致。`,
+      };
+    }
+  }
+
+  public async publishProjectState(sessionId: string, cwd: string): Promise<ClaudeProjectState> {
+    const state = await this.getState(sessionId, cwd);
+    this.onState(state);
+    return state;
   }
 
   public isActive(sessionId: string): boolean {
@@ -1305,22 +1390,22 @@ export class ClaudeRuntime {
   }
 
   public async saveRouterProvider(
-    sessionId: string,
-    cwd: string,
     input: SaveClaudeRouterProviderInput,
-  ): Promise<{
-    projectState?: ClaudeProjectState;
-    saved: SavedRouterProvider;
-  }> {
+    assertCurrent: () => void = () => undefined,
+  ): Promise<SavedRouterProvider> {
     const saved = await this.routerManager.saveProvider(input);
+    assertCurrent();
     this.routerHealthCache.set(saved.state);
-    if (!input.useForCurrentProject) {
-      return { saved };
-    }
-    const projectState = await this.saveConfig(
-      sessionId,
-      cwd,
-      {
+    return saved;
+  }
+
+  public prepareRouterProjectConfig(saved: SavedRouterProvider): PreparedClaudeConfigSave {
+    return {
+      historyMetadata: {
+        name: saved.provider.name,
+        protocol: connectionProtocolForRouterProvider(saved.provider.protocol),
+      },
+      input: {
         authMode: 'authToken',
         baseUrl: saved.connection.baseUrl,
         credential: saved.connection.apiKey,
@@ -1329,25 +1414,19 @@ export class ClaudeRuntime {
         preset: 'gateway',
         provider: 'gateway',
       },
-      {
-        name: saved.provider.name,
-        protocol: connectionProtocolForRouterProvider(saved.provider.protocol),
-      },
-    );
-    return { projectState, saved };
+    };
   }
 
-  public async repairRouterFromProject(
-    sessionId: string,
+  public async repairRouterProviderFromProject(
     cwd: string,
-  ): Promise<{
-    projectState: ClaudeProjectState;
-    saved: SavedRouterProvider;
-  }> {
-    const config = this.configStore.getConfig(cwd);
-    const credential = this.configStore.getCredential(cwd);
-    const input = routerRepairInputForProject(config, credential);
+    assertCurrent: () => void = () => undefined,
+  ): Promise<SavedRouterProvider> {
+    // The caller owns the directory transaction before this source profile is read. Keep the exact
+    // config/credential pair in memory while CCR management performs its asynchronous work.
+    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const input = routerRepairInputForProject(launchSnapshot.config, launchSnapshot.credential);
     const current = await this.getRouterHealthState(true);
+    assertCurrent();
     if (!current.managementAvailable) {
       throw new Error('CCR 管理服务尚未就绪，无法写入服务提供方。');
     }
@@ -1356,32 +1435,14 @@ export class ClaudeRuntime {
     }
 
     const saved = await this.routerManager.saveProvider(input);
+    assertCurrent();
     const routerState = await this.routerManager.start();
+    assertCurrent();
     this.routerHealthCache.set(routerState);
     if (routerState.gatewayState !== 'running') {
       throw new Error(routerState.message);
     }
-    const projectState = await this.saveConfig(
-      sessionId,
-      cwd,
-      {
-        authMode: 'authToken',
-        baseUrl: saved.connection.baseUrl,
-        credential: saved.connection.apiKey,
-        credentialAction: 'replace',
-        model: saved.connection.model,
-        preset: 'gateway',
-        provider: 'gateway',
-      },
-      {
-        name: saved.provider.name,
-        protocol: connectionProtocolForRouterProvider(saved.provider.protocol),
-      },
-    );
-    return {
-      projectState,
-      saved: { ...saved, state: routerState },
-    };
+    return { ...saved, state: routerState };
   }
 
   private routeKindForConfig(config: NormalizedClaudeConfig): ClaudeRouteKind {
@@ -1480,8 +1541,9 @@ export class ClaudeRuntime {
     resumeSessionId?: string,
     startMode?: ClaudePermissionMode,
     overrides?: ClaudeLaunchOverrides,
+    launchSnapshot = this.configStore.createLaunchSnapshot(cwd),
   ): Promise<PreparedClaudeLaunch> {
-    const config = this.configStore.getConfig(cwd);
+    const config = launchSnapshot.config;
     const routeKind = this.routeKindForConfig(config);
     const reservation = this.routeLifecycle.reserve(sessionId, routeKind);
     try {
@@ -1490,6 +1552,7 @@ export class ClaudeRuntime {
         cwd,
         mode,
         config,
+        launchSnapshot,
         routeKind,
         resumeSessionId,
         startMode,
@@ -1507,30 +1570,39 @@ export class ClaudeRuntime {
     cwd: string,
     mode: ClaudeLaunchMode,
     config: NormalizedClaudeConfig,
+    launchSnapshot: ClaudeLaunchConfigSnapshot,
     routeKind: ClaudeRouteKind,
     resumeSessionId?: string,
     startMode?: ClaudePermissionMode,
     overrides?: ClaudeLaunchOverrides,
   ): Promise<PreparedClaudeLaunch> {
+    const assertLaunchSnapshotCurrent = (): void => {
+      if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
+        throw new Error('Claude 接入配置在启动准备期间已更新，本次启动已取消，请重试。');
+      }
+    };
     const installation = await this.diagnoseInstallation(true);
     if (installation.security !== 'ready') {
       throw new Error(installation.message);
     }
+    assertLaunchSnapshotCurrent();
 
     await this.prepareRouteServices(routeKind, sessionId);
-    const credential = this.configStore.getCredential(cwd);
+    assertLaunchSnapshotCurrent();
+    const credential = launchSnapshot.credential;
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
       throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
     }
     if (usesDefaultClaudeRouter(config)) {
       const router = await this.getRouterHealthState(true);
+      assertLaunchSnapshotCurrent();
       const blockingDetail = routerBlockingDetail(config, router);
       if (blockingDetail) {
         throw new Error(blockingDetail);
       }
     }
 
-    const allowBypass = this.configStore.getAllowBypassPermissions(cwd);
+    const allowBypass = launchSnapshot.allowBypassPermissions;
     /*
      * Reopening a stored conversation should feel like it never stopped, so the model, permission
      * mode and thinking depth it was last running with win over the project defaults. Bypass is the
@@ -1545,6 +1617,7 @@ export class ClaudeRuntime {
         : mode === 'continue'
           ? this.sessions.get(sessionId)?.conversationId
           : undefined;
+    this.conversationLaunchGuard(cwd, mode, resumedConversationId);
     const remembered = resumedConversationId
       ? this.conversationPreferences.get(resumedConversationId)
       : undefined;
@@ -1678,6 +1751,7 @@ export class ClaudeRuntime {
     // Commit the runtime only after every launch artifact has been prepared successfully.
     const previousArtifactDirectory = this.sessions.get(sessionId)?.artifactDirectory;
     const runtime = this.ensureSession(sessionId, cwd);
+    const predecessorPtyGeneration = runtime.active ? runtime.ptyGeneration : undefined;
     runtime.active = true;
     runtime.artifactDirectory = artifactDirectory;
     runtime.ptyGeneration = undefined;
@@ -1722,7 +1796,7 @@ export class ClaudeRuntime {
       artifactDirectory,
       previousArtifactDirectory,
     );
-    return { command, environment };
+    return { command, environment, predecessorPtyGeneration };
   }
 
   /** Removes only a bounded sample of artifacts that no live launch can read anymore. */
@@ -1778,15 +1852,65 @@ export class ClaudeRuntime {
     }
   }
 
-  public async saveConfig(
+  public async prepareConnectionConfig(
+    input: SaveClaudeConfigInput,
+    historyName?: string,
+    assertCurrent: () => void = () => undefined,
+  ): Promise<PreparedClaudeConfigSave> {
+    if (input.protocol !== 'openai') {
+      return {
+        historyMetadata: {
+          ...(historyName ? { name: historyName } : {}),
+          protocol: input.protocol ?? defaultConnectionProtocolForPreset(input.preset),
+        },
+        input,
+      };
+    }
+
+    const prepared = await this.prepareOpenAiConnection(input, assertCurrent);
+    assertCurrent();
+    return {
+      historyMetadata: {
+        ...prepared.historyMetadata,
+        ...(historyName ? { name: historyName } : {}),
+      },
+      input: prepared.effectiveInput,
+      presentation: prepared.presentation,
+    };
+  }
+
+  /** Reads and prepares one history replay without changing the project profile. */
+  public async prepareConnectionHistory(
+    cwd: string,
+    entryId: string,
+    assertCurrent: () => void = () => undefined,
+  ): Promise<PreparedClaudeConfigSave> {
+    const replay = this.historyStore.toReplayInput(cwd, entryId);
+    assertCurrent();
+    if (replay.config.protocol === 'openai') {
+      return this.prepareConnectionConfig(replay.config, replay.name, assertCurrent);
+    }
+    return {
+      historyMetadata: {
+        name: replay.name,
+        protocol: replay.protocol,
+      },
+      input: replay.config,
+    };
+  }
+
+  /** The only project-route persistence point; callers hold the directory transaction here. */
+  public commitPreparedConfig(cwd: string, prepared: PreparedClaudeConfigSave): void {
+    this.configStore.save(cwd, prepared.input, prepared.presentation);
+  }
+
+  /** Performs fallible post-commit work while the caller still owns the tentative profile. */
+  public async completePreparedConfigSave(
     sessionId: string,
     cwd: string,
-    input: Parameters<ClaudeConfigStore['save']>[1],
-    historyMetadata?: ConnectionHistoryMetadata,
-    presentation?: ClaudeConfigPresentation,
+    prepared: PreparedClaudeConfigSave,
   ): Promise<ClaudeProjectState> {
-    this.configStore.save(cwd, input, presentation);
-    await this.recordConnectionHistory(cwd, input, historyMetadata);
+    await this.recordConnectionHistory(cwd, prepared.input, prepared.historyMetadata);
     const runtime = this.ensureSession(sessionId, cwd);
     if (!runtime.active) {
       await this.prepareRouteServices(
@@ -1794,34 +1918,7 @@ export class ClaudeRuntime {
         sessionId,
       );
     }
-    const state = await this.getState(sessionId, cwd);
-    this.onState(state);
-    return { ...state, active: runtime.active };
-  }
-
-  public async saveConnectionConfig(
-    sessionId: string,
-    cwd: string,
-    input: SaveClaudeConfigInput,
-    historyName?: string,
-  ): Promise<ClaudeProjectState> {
-    if (input.protocol !== 'openai') {
-      return this.saveConfig(sessionId, cwd, input, {
-        protocol: input.protocol ?? defaultConnectionProtocolForPreset(input.preset),
-      });
-    }
-
-    const prepared = await this.prepareOpenAiConnection(input);
-    if (historyName) {
-      prepared.historyMetadata.name = historyName;
-    }
-    return this.saveConfig(
-      sessionId,
-      cwd,
-      prepared.effectiveInput,
-      prepared.historyMetadata,
-      prepared.presentation,
-    );
+    return this.publishProjectState(sessionId, cwd);
   }
 
   public getConnectionHistory(cwd: string): ClaudeConnectionHistoryEntry[] {
@@ -1838,26 +1935,6 @@ export class ClaudeRuntime {
     name: string,
   ): ClaudeConnectionHistoryEntry[] {
     return this.historyStore.rename(cwd, entryId, name);
-  }
-
-  /**
-   * Replays a saved setup. It goes through `saveConfig`, so restoring a record is indistinguishable
-   * from having typed it again — including the deduplication that keeps the list from growing when
-   * the restored setup is already the newest one.
-   */
-  public async applyConnectionHistory(
-    sessionId: string,
-    cwd: string,
-    entryId: string,
-  ): Promise<ClaudeProjectState> {
-    const replay = this.historyStore.toReplayInput(cwd, entryId);
-    if (replay.config.protocol === 'openai') {
-      return this.saveConnectionConfig(sessionId, cwd, replay.config, replay.name);
-    }
-    return this.saveConfig(sessionId, cwd, replay.config, {
-      name: replay.name,
-      protocol: replay.protocol,
-    });
   }
 
   /**
@@ -2062,13 +2139,13 @@ export class ClaudeRuntime {
     if (runtime.active) {
       throw new Error('Claude Code 正在运行；调整服务速度需要精确恢复当前对话。');
     }
-    const config = this.configStore.getConfig(cwd);
-    const resolved = this.resolveModelSpeed(
-      config,
-      config.model,
-      (await this.diagnoseInstallation()).version,
-      mode,
-    );
+    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const { config } = launchSnapshot;
+    const installation = await this.diagnoseInstallation();
+    if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
+      throw new Error('Claude 接入配置在保存速度偏好期间已更新，请重试。');
+    }
+    const resolved = this.resolveModelSpeed(config, config.model, installation.version, mode);
     this.modelSpeedPreferences.set(resolved.targetKey, mode);
     const state = await this.getState(sessionId, cwd);
     this.onState(state);
@@ -2088,8 +2165,12 @@ export class ClaudeRuntime {
     if (!conversationId || !isConversationId(conversationId)) {
       throw new Error('当前对话尚未上报可恢复的会话标识，请稍候再调整服务速度。');
     }
-    const config = this.configStore.getConfig(cwd);
+    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const { config } = launchSnapshot;
     const installation = await this.diagnoseInstallation();
+    if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
+      throw new Error('Claude 接入配置在速度切换准备期间已更新，请重试。');
+    }
     const model = this.modelForSpeedPreference(runtime, config, installation.version);
     const resolved = this.resolveModelSpeed(config, model, installation.version, mode);
     const prepared = await this.prepareLaunchInternal(
@@ -2099,6 +2180,7 @@ export class ClaudeRuntime {
       conversationId,
       undefined,
       { model, speed: mode },
+      launchSnapshot,
     );
     return {
       ...prepared,
@@ -2119,24 +2201,20 @@ export class ClaudeRuntime {
     return state;
   }
 
-  /**
-   * The one relaunch path, shared by cross-endpoint model switches and by `dontAsk` — both need a
-   * new PTY. `--continue` restores the conversation; the optional `/compact` first keeps the restored
-   * context small enough for a model whose window may be narrower than the current one's.
-   */
-  public async relaunch(
+  /** Completes the optional live `/compact` before a relaunch; it never mutates the project profile. */
+  public async compactBeforeRelaunch(
     sessionId: string,
     cwd: string,
-    input: ClaudeRelaunchInput,
-  ): Promise<PreparedClaudeLaunch> {
+    compactFirst: boolean,
+    assertCurrent: () => void = () => undefined,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const runtime = this.ensureSession(sessionId, cwd);
-    if (input.compactFirst && runtime.active) {
-      await this.compactAndWait(runtime);
+    assertCurrent();
+    if (compactFirst && runtime.active) {
+      await this.compactAndWait(runtime, assertCurrent, signal);
+      assertCurrent();
     }
-    if (input.entryId) {
-      await this.applyConnectionHistory(sessionId, cwd, input.entryId);
-    }
-    return this.prepareLaunch(sessionId, cwd, 'continue', input.permissionMode);
   }
 
   /**
@@ -2209,15 +2287,8 @@ export class ClaudeRuntime {
     }
   }
 
-  public async setAllowBypassPermissions(
-    sessionId: string,
-    cwd: string,
-    allowed: boolean,
-  ): Promise<ClaudeProjectState> {
+  public commitAllowBypassPermissions(cwd: string, allowed: boolean): void {
     this.configStore.setAllowBypassPermissions(cwd, allowed);
-    const state = await this.getState(sessionId, cwd);
-    this.onState(state);
-    return state;
   }
 
   /**
@@ -2349,39 +2420,67 @@ export class ClaudeRuntime {
    * Issues `/compact` and waits for the PostCompact hook. A timeout is not fatal — the relaunch is
    * still safe, it just carries the un-compacted history — so the caller is never blocked.
    */
-  private async compactAndWait(runtime: RuntimeSession): Promise<void> {
+  private async compactAndWait(
+    runtime: RuntimeSession,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const ptyGeneration = this.requireBoundPty(runtime);
+    let abortListener: (() => void) | undefined;
+    let finish!: (error?: unknown) => void;
+    let settled = false;
     let timer: NodeJS.Timeout | undefined;
     let waiter: RuntimeSession['waitingForCompact'];
-    const compacted = new Promise<void>((resolve) => {
-      const finish = (): void => {
+    const compacted = new Promise<unknown | undefined>((resolve) => {
+      finish = (error?: unknown): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        if (signal && abortListener) {
+          signal.removeEventListener('abort', abortListener);
+        }
         if (runtime.waitingForCompact === waiter) {
           runtime.waitingForCompact = undefined;
         }
-        resolve();
+        resolve(error);
       };
-      timer = setTimeout(finish, COMPACT_TIMEOUT_MS);
-      timer.unref?.();
       waiter = () => {
-        if (timer) {
-          clearTimeout(timer);
-        }
         finish();
       };
       runtime.waitingForCompact = waiter;
+      timer = setTimeout(() => {
+        finish();
+      }, COMPACT_TIMEOUT_MS);
+      timer.unref?.();
+      if (signal) {
+        abortListener = () => {
+          finish(signal.reason ?? new Error('这次重启操作已取消。'));
+        };
+        if (signal.aborted) {
+          abortListener();
+        } else {
+          signal.addEventListener('abort', abortListener, { once: true });
+        }
+      }
     });
     try {
-      await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`);
-      await compacted;
+      assertCurrent();
+      await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`, assertCurrent);
+      const compactError = await compacted;
+      if (compactError !== undefined) {
+        throw compactError;
+      }
+      assertCurrent();
       this.assertRuntimePty(runtime, ptyGeneration);
     } catch (error) {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (runtime.waitingForCompact === waiter) {
-        runtime.waitingForCompact = undefined;
-      }
-      throw error;
+      finish(error);
+      const cancellationReason = signal?.reason;
+      throw signal?.aborted && cancellationReason instanceof Error ? cancellationReason : error;
     }
   }
 
@@ -2435,6 +2534,7 @@ export class ClaudeRuntime {
   /** Builds the real Claude Code route for an OpenAI-compatible upstream. */
   private async prepareOpenAiConnection(
     input: SaveClaudeConfigInput,
+    assertCurrent: () => void = () => undefined,
   ): Promise<PreparedOpenAiConnection> {
     if (input.authMode !== 'authToken' && input.authMode !== 'none') {
       throw new Error('OpenAI 协议请选择 Bearer 密钥或无需认证。');
@@ -2448,8 +2548,10 @@ export class ClaudeRuntime {
     const protocol = routerProtocolForOpenAiEndpoint(endpoint);
 
     let routerState = await this.routerManager.getState();
+    assertCurrent();
     if (!routerState.installed) {
       const installed = await this.routerManager.installFromNpm('npm');
+      assertCurrent();
       routerState = installed.state;
       this.softwareUpdatesCache.clear();
     }
@@ -2461,6 +2563,7 @@ export class ClaudeRuntime {
         startError = error;
         routerState = await this.routerManager.getState();
       }
+      assertCurrent();
       if (!routerState.managementAvailable) {
         throw new Error(
           startError instanceof Error
@@ -2509,7 +2612,9 @@ export class ClaudeRuntime {
       protocol,
       useForCurrentProject: false,
     });
+    assertCurrent();
     routerState = await this.routerManager.start();
+    assertCurrent();
     this.routerHealthCache.set(routerState);
     if (routerState.gatewayState !== 'running') {
       throw new Error(`本地 Router 未能启动模型网关：${routerState.message}`);

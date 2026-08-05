@@ -1,14 +1,17 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { DevelopmentRuntime } from '../src/shared/contracts';
+import type { DevelopmentRuntime, PtyGeneration } from '../src/shared/contracts';
 import {
   OwnedConfigTransactionError,
   ProjectRuntimeSwitchCoordinator,
-  runOwnedConfigTransaction,
+  runOwnedConfigTransaction as runPhasedConfigTransaction,
   SessionConfigTransactionCoordinator,
+  type OwnedConfigTransactionOptions,
   type ProjectRuntimeSwitchDependencies,
   type RuntimeSwitchSessionSnapshot,
 } from '../src/main/main-process-operation-coordinator';
+import { SessionOperationCoordinator } from '../src/main/session-operation-coordinator';
+import { cleanupFailedRuntimeLaunch } from '../src/main/terminal-lifecycle';
 
 const deferred = <T = void>() => {
   let reject!: (reason?: unknown) => void;
@@ -18,6 +21,33 @@ const deferred = <T = void>() => {
     resolve = resolvePromise;
   });
   return { promise, reject, resolve };
+};
+
+type TestConfigTransactionOptions<TSnapshot, TState> = Omit<
+  OwnedConfigTransactionOptions<TSnapshot, void, TState>,
+  'commit' | 'complete' | 'prepare'
+> & {
+  resume?: (savedState: TState) => Promise<TState>;
+  save: () => Promise<TState>;
+};
+
+/** Adapts the older save/resume test fixtures onto the explicit synchronous-commit phases. */
+const runTestConfigTransaction = <TSnapshot, TState>(
+  options: TestConfigTransactionOptions<TSnapshot, TState>,
+): Promise<TState> => {
+  const { resume, save, ...transaction } = options;
+  let saving!: Promise<TState>;
+  return runPhasedConfigTransaction({
+    ...transaction,
+    commit: () => {
+      saving = save();
+    },
+    complete: async () => {
+      const savedState = await saving;
+      return resume ? resume(savedState) : savedState;
+    },
+    prepare: () => undefined,
+  });
 };
 
 const runtimeKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
@@ -140,6 +170,89 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
     expect(harness.commits).toEqual([{ cwd, runtime: 'codex' }]);
   });
 
+  it('stops a predecessor PTY before a cancelled relaunch lets a runtime switch commit', async () => {
+    const cwd = 'C:\\projects\\alpha';
+    const preparedEntered = deferred();
+    const cancellationObserved = deferred();
+    const sessionOperations = new SessionOperationCoordinator(() => true);
+    let committedRuntime: DevelopmentRuntime = 'claude';
+    let prepared = false;
+    let processRunning = true;
+    let runtimeActive = true;
+    let runtimeGeneration: PtyGeneration | undefined = 1;
+    const sessions = [session('session-a', cwd, 1)];
+    const switchCoordinator = new ProjectRuntimeSwitchCoordinator({
+      cleanupBeforeCommit: async () => undefined,
+      commitRuntime: (_cwd, runtime) => {
+        committedRuntime = runtime;
+      },
+      getCurrentRuntime: () => committedRuntime,
+      getSession: (sessionId) => sessions.find((candidate) => candidate.id === sessionId),
+      hasActiveRuntime: () => runtimeActive,
+      invalidateAndWait: (sessionId) => {
+        const unwound = sessionOperations.invalidateAndWait(sessionId);
+        cancellationObserved.resolve();
+        return unwound;
+      },
+      prepareProvider: async () => undefined,
+      sessionsForDirectory: () => sessions,
+    });
+
+    const relaunch = sessionOperations.run('session-a', async (assertCurrent) => {
+      const predecessorPtyGeneration = runtimeGeneration;
+      runtimeGeneration = undefined;
+      prepared = true;
+      preparedEntered.resolve();
+      await cancellationObserved.promise;
+      try {
+        assertCurrent();
+      } catch (error) {
+        cleanupFailedRuntimeLaunch(
+          {
+            hasSession: () => true,
+            stopIfGeneration: (_sessionId, expectedGeneration) => {
+              if (expectedGeneration === 1) {
+                processRunning = false;
+              }
+            },
+          },
+          {
+            cleanupPreparedLaunch: () => {
+              if (prepared && runtimeGeneration === undefined) {
+                prepared = false;
+                runtimeActive = false;
+                return true;
+              }
+              return false;
+            },
+            setInactive: (_sessionId, expectedGeneration) => {
+              if (runtimeGeneration === expectedGeneration) {
+                runtimeGeneration = undefined;
+                runtimeActive = false;
+                return true;
+              }
+              return false;
+            },
+          },
+          'session-a',
+          predecessorPtyGeneration,
+        );
+        throw error;
+      }
+    });
+    const relaunchOutcome = relaunch.catch((error: unknown) => error);
+    await preparedEntered.promise;
+
+    const switching = switchCoordinator.switchRuntime('session-a', cwd, 'codex');
+
+    await expect(relaunchOutcome).resolves.toBeInstanceOf(Error);
+    await expect(switching).resolves.toBe('codex');
+    expect(processRunning).toBe(false);
+    expect(prepared).toBe(false);
+    expect(runtimeActive).toBe(false);
+    expect(committedRuntime).toBe('codex');
+  });
+
   it('allows unrelated directories to finish independently', async () => {
     const cwdA = 'C:\\projects\\alpha';
     const cwdB = 'C:\\projects\\beta';
@@ -169,6 +282,275 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
 });
 
 describe('owned config transactions', () => {
+  it('blocks sibling launches until tentative config rollback recovery finishes', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const cwd = 'C:\\projects\\alpha';
+    const resumeEntered = deferred();
+    const failResume = deferred();
+    const recoveryReadEntered = deferred();
+    const releaseRecoveryRead = deferred();
+    let config = 'original';
+
+    const transaction = runTestConfigTransaction({
+      assertOperationOwnership: () => undefined,
+      coordinator,
+      createSnapshot: () => config,
+      cwd,
+      readState: async () => {
+        recoveryReadEntered.resolve();
+        await releaseRecoveryRead.promise;
+        return config;
+      },
+      restoreSnapshot: (snapshot) => {
+        config = snapshot;
+      },
+      resume: async () => {
+        resumeEntered.resolve();
+        await failResume.promise;
+        throw new Error('resume failed');
+      },
+      save: async () => {
+        config = 'tentative';
+        return config;
+      },
+      sessionId: 'session-a',
+    });
+    const outcome = transaction.catch((error: unknown) => error);
+    await resumeEntered.promise;
+
+    expect(() => coordinator.assertDevelopmentOperationAllowed(cwd, 'session-a')).not.toThrow();
+    expect(() => coordinator.assertDevelopmentOperationAllowed(cwd, 'session-b')).toThrow(
+      '正在保存并验证接入配置',
+    );
+    expect(() =>
+      coordinator.assertDevelopmentOperationAllowed('C:\\projects\\beta', 'session-b'),
+    ).not.toThrow();
+
+    failResume.resolve();
+    await recoveryReadEntered.promise;
+    expect(config).toBe('original');
+    expect(() => coordinator.assertDevelopmentOperationAllowed(cwd, 'session-b')).toThrow(
+      '正在保存并验证接入配置',
+    );
+
+    releaseRecoveryRead.resolve();
+    await expect(outcome).resolves.toBeInstanceOf(OwnedConfigTransactionError);
+    expect(() => coordinator.assertDevelopmentOperationAllowed(cwd, 'session-b')).not.toThrow();
+  });
+
+  it('waits for a pre-existing sibling launch to unwind before tentative save', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const operations = new SessionOperationCoordinator(() => true);
+    const cwd = 'C:\\projects\\alpha';
+    const siblingEntered = deferred();
+    const releaseSibling = deferred();
+    const invalidationEntered = deferred();
+    const events: string[] = [];
+    let config = 'original';
+
+    const siblingOperation = operations.run('session-b', async (assertCurrent) => {
+      events.push('sibling-start');
+      siblingEntered.resolve();
+      try {
+        await releaseSibling.promise;
+        assertCurrent();
+      } finally {
+        events.push('sibling-unwound');
+      }
+    });
+    const siblingOutcome = siblingOperation.catch((error: unknown) => error);
+    await siblingEntered.promise;
+
+    const transaction = runTestConfigTransaction({
+      acquireIsolation: () =>
+        coordinator.acquireDevelopmentIsolation(
+          'session-a',
+          cwd,
+          ['session-a', 'session-b'],
+          (sessionId) => {
+            events.push(`invalidate:${sessionId}`);
+            invalidationEntered.resolve();
+            return operations.invalidateAndWait(sessionId);
+          },
+        ),
+      assertOperationOwnership: () => undefined,
+      coordinator,
+      createSnapshot: () => {
+        events.push('snapshot');
+        return config;
+      },
+      cwd,
+      readState: async () => config,
+      restoreSnapshot: (snapshot) => {
+        config = snapshot;
+      },
+      save: async () => {
+        events.push('save');
+        config = 'tentative';
+        return config;
+      },
+      sessionId: 'session-a',
+    });
+    await invalidationEntered.promise;
+
+    expect(config).toBe('original');
+    expect(events).toEqual(['sibling-start', 'invalidate:session-b']);
+    expect(() => coordinator.assertDevelopmentOperationAllowed(cwd, 'session-b')).toThrow(
+      '正在保存并验证接入配置',
+    );
+
+    releaseSibling.resolve();
+    await expect(siblingOutcome).resolves.toBeInstanceOf(Error);
+    await expect(transaction).resolves.toBe('tentative');
+    expect(events).toEqual([
+      'sibling-start',
+      'invalidate:session-b',
+      'sibling-unwound',
+      'snapshot',
+      'snapshot',
+      'save',
+      'snapshot',
+      'snapshot',
+      'snapshot',
+    ]);
+    expect(config).toBe('tentative');
+  });
+
+  it('rejects a raced sibling transaction reservation after isolation begins', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const cwd = 'C:\\projects\\alpha';
+    const invalidationEntered = deferred();
+    const releaseInvalidation = deferred();
+    let config = 'original';
+    let siblingSaveStarted = false;
+
+    const transaction = runTestConfigTransaction({
+      acquireIsolation: () =>
+        coordinator.acquireDevelopmentIsolation(
+          'session-a',
+          cwd,
+          ['session-a', 'session-b'],
+          async () => {
+            invalidationEntered.resolve();
+            await releaseInvalidation.promise;
+          },
+        ),
+      assertOperationOwnership: () => undefined,
+      coordinator,
+      createSnapshot: () => config,
+      cwd,
+      readState: async () => config,
+      restoreSnapshot: (snapshot) => {
+        config = snapshot;
+      },
+      save: async () => {
+        config = 'first';
+        return config;
+      },
+      sessionId: 'session-a',
+    });
+    await invalidationEntered.promise;
+
+    expect(() =>
+      runTestConfigTransaction({
+        assertOperationOwnership: () => undefined,
+        coordinator,
+        createSnapshot: () => config,
+        cwd,
+        readState: async () => config,
+        restoreSnapshot: (snapshot) => {
+          config = snapshot;
+        },
+        save: async () => {
+          siblingSaveStarted = true;
+          config = 'second';
+          return config;
+        },
+        sessionId: 'session-b',
+      }),
+    ).toThrow('已进入隔离保存阶段');
+    expect(siblingSaveStarted).toBe(false);
+    expect(config).toBe('original');
+
+    releaseInvalidation.resolve();
+    await expect(transaction).resolves.toBe('first');
+    expect(config).toBe('first');
+  });
+
+  it('does not deadlock an already queued sibling config transaction during isolation', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const operations = new SessionOperationCoordinator(() => true);
+    const cwd = 'C:\\projects\\alpha';
+    const firstResumeEntered = deferred();
+    const releaseFirstResume = deferred();
+    const invalidations: string[] = [];
+    let config = 'original';
+    let secondSaveStarted = false;
+    const acquireIsolation = (owner: string): Promise<void> =>
+      coordinator.acquireDevelopmentIsolation(
+        owner,
+        cwd,
+        ['session-a', 'session-b'],
+        (sessionId) => {
+          invalidations.push(`${owner}->${sessionId}`);
+          return operations.invalidateAndWait(sessionId);
+        },
+      );
+
+    const firstTransaction = operations.run('session-a', (assertCurrent) =>
+      runTestConfigTransaction({
+        acquireIsolation: () => acquireIsolation('session-a'),
+        assertOperationOwnership: assertCurrent,
+        coordinator,
+        createSnapshot: () => config,
+        cwd,
+        readState: async () => config,
+        restoreSnapshot: (snapshot) => {
+          config = snapshot;
+        },
+        resume: async () => {
+          firstResumeEntered.resolve();
+          await releaseFirstResume.promise;
+          return config;
+        },
+        save: async () => {
+          config = 'first';
+          return config;
+        },
+        sessionId: 'session-a',
+      }),
+    );
+    const secondTransaction = operations.run('session-b', (assertCurrent) =>
+      runTestConfigTransaction({
+        acquireIsolation: () => acquireIsolation('session-b'),
+        assertOperationOwnership: assertCurrent,
+        coordinator,
+        createSnapshot: () => config,
+        cwd,
+        readState: async () => config,
+        restoreSnapshot: (snapshot) => {
+          config = snapshot;
+        },
+        save: async () => {
+          secondSaveStarted = true;
+          config = 'second';
+          return config;
+        },
+        sessionId: 'session-b',
+      }),
+    );
+
+    await firstResumeEntered.promise;
+    expect(secondSaveStarted).toBe(false);
+    expect(invalidations).not.toContain('session-a->session-b');
+
+    releaseFirstResume.resolve();
+    await expect(firstTransaction).resolves.toBe('first');
+    await expect(secondTransaction).resolves.toBe('second');
+    expect(secondSaveStarted).toBe(true);
+    expect(config).toBe('second');
+  });
+
   it('preserves a newer identical save from another session in the same folder', async () => {
     const coordinator = new SessionConfigTransactionCoordinator();
     const cwd = 'C:\\projects\\alpha';
@@ -177,7 +559,7 @@ describe('owned config transactions', () => {
     let config = 'original';
     let secondSaveStarted = false;
 
-    const firstTransaction = runOwnedConfigTransaction({
+    const firstTransaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -200,7 +582,7 @@ describe('owned config transactions', () => {
     );
     await firstSaveEntered.promise;
 
-    const secondTransaction = runOwnedConfigTransaction({
+    const secondTransaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -236,7 +618,7 @@ describe('owned config transactions', () => {
     let config = 'original';
     let secondSaveStarted = false;
 
-    const firstTransaction = runOwnedConfigTransaction({
+    const firstTransaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -265,7 +647,7 @@ describe('owned config transactions', () => {
     await recoveryReadEntered.promise;
     expect(config).toBe('original');
 
-    const secondTransaction = runOwnedConfigTransaction({
+    const secondTransaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -298,7 +680,7 @@ describe('owned config transactions', () => {
     let config = 'original';
     let secondSaveStarted = false;
 
-    const firstTransaction = runOwnedConfigTransaction({
+    const firstTransaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -320,7 +702,7 @@ describe('owned config transactions', () => {
     });
     await resumeEntered.promise;
 
-    const secondTransaction = runOwnedConfigTransaction({
+    const secondTransaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -356,7 +738,7 @@ describe('owned config transactions', () => {
       [runtimeKey(cwdB), 'original-b'],
     ]);
 
-    const transactionA = runOwnedConfigTransaction({
+    const transactionA = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => configs.get(runtimeKey(cwdA)) ?? '',
@@ -376,7 +758,7 @@ describe('owned config transactions', () => {
     await firstSaveEntered.promise;
 
     await expect(
-      runOwnedConfigTransaction({
+      runTestConfigTransaction({
         assertOperationOwnership: () => undefined,
         coordinator,
         createSnapshot: () => configs.get(runtimeKey(cwdB)) ?? '',
@@ -405,7 +787,7 @@ describe('owned config transactions', () => {
     const failResume = deferred();
     let config = 'original';
 
-    const transaction = runOwnedConfigTransaction({
+    const transaction = runTestConfigTransaction({
       assertOperationOwnership: () => undefined,
       coordinator,
       createSnapshot: () => config,
@@ -446,7 +828,7 @@ describe('owned config transactions', () => {
     const published: string[] = [];
     let config = 'original';
 
-    const transaction = runOwnedConfigTransaction({
+    const transaction = runTestConfigTransaction({
       assertOperationOwnership: () => {
         events.push('assert');
       },
@@ -490,7 +872,8 @@ describe('owned config transactions', () => {
     expect((error as OwnedConfigTransactionError<string>).state).toBe('original');
     expect(config).toBe('original');
     expect(published).toEqual(['original']);
-    expect(events.slice(0, 3)).toEqual(['assert', 'snapshot', 'save']);
+    expect(events[0]).toBe('assert');
+    expect(events.indexOf('snapshot')).toBeLessThan(events.indexOf('save'));
     expect(events).toContain('restore');
     expect(events.slice(-2)).toEqual(['assert', 'publish']);
   });
@@ -500,10 +883,10 @@ describe('owned config transactions', () => {
     let config = 'original';
     let ownershipChecks = 0;
 
-    const transaction = runOwnedConfigTransaction({
+    const transaction = runTestConfigTransaction({
       assertOperationOwnership: () => {
         ownershipChecks += 1;
-        if (ownershipChecks > 1) {
+        if (ownershipChecks > 2) {
           throw new Error('operation cancelled');
         }
       },
@@ -528,6 +911,129 @@ describe('owned config transactions', () => {
     );
     expect(error).toBeInstanceOf(OwnedConfigTransactionError);
     expect((error as OwnedConfigTransactionError<string>).message).toBe('operation cancelled');
+    expect((error as OwnedConfigTransactionError<string>).restored).toBe(true);
+    expect((error as OwnedConfigTransactionError<string>).state).toBe('original');
+    expect(config).toBe('original');
+  });
+
+  it('finishes asynchronous preparation before the synchronous profile commit', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const prepareEntered = deferred();
+    const releasePrepare = deferred();
+    const events: string[] = [];
+    let config = 'original';
+
+    const transaction = runPhasedConfigTransaction({
+      assertOperationOwnership: () => undefined,
+      commit: (prepared) => {
+        events.push(`commit:${prepared}`);
+        expect(config).toBe('original');
+        config = prepared;
+      },
+      complete: async (prepared) => {
+        events.push(`complete:${prepared}`);
+        expect(config).toBe('prepared');
+        return config;
+      },
+      coordinator,
+      createSnapshot: () => config,
+      cwd: 'C:\\projects\\alpha',
+      prepare: async () => {
+        events.push('prepare:start');
+        prepareEntered.resolve();
+        await releasePrepare.promise;
+        events.push('prepare:end');
+        return 'prepared';
+      },
+      readState: async () => config,
+      restoreSnapshot: (snapshot) => {
+        config = snapshot;
+      },
+      sessionId: 'session-a',
+    });
+    await prepareEntered.promise;
+
+    expect(config).toBe('original');
+    expect(events).toEqual(['prepare:start']);
+
+    releasePrepare.resolve();
+    await expect(transaction).resolves.toBe('prepared');
+    expect(events).toEqual([
+      'prepare:start',
+      'prepare:end',
+      'commit:prepared',
+      'complete:prepared',
+    ]);
+  });
+
+  it('cancels a stale prepared save without rolling back an external profile update', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const prepareEntered = deferred();
+    const releasePrepare = deferred();
+    let commitCalled = false;
+    let config = 'original';
+
+    const transaction = runPhasedConfigTransaction({
+      assertOperationOwnership: () => undefined,
+      commit: () => {
+        commitCalled = true;
+        config = 'tentative';
+      },
+      complete: async () => config,
+      coordinator,
+      createSnapshot: () => config,
+      cwd: 'C:\\projects\\alpha',
+      prepare: async () => {
+        prepareEntered.resolve();
+        await releasePrepare.promise;
+        return 'prepared';
+      },
+      readState: async () => config,
+      restoreSnapshot: (snapshot) => {
+        config = snapshot;
+      },
+      sessionId: 'session-a',
+    });
+    const outcome = transaction.catch((error: unknown) => error);
+    await prepareEntered.promise;
+
+    config = 'external-newer';
+    releasePrepare.resolve();
+
+    const error = await outcome;
+    expect(error).toBeInstanceOf(OwnedConfigTransactionError);
+    expect((error as OwnedConfigTransactionError<string>).message).toContain('异步准备期间');
+    expect((error as OwnedConfigTransactionError<string>).restored).toBe(false);
+    expect((error as OwnedConfigTransactionError<string>).state).toBe('external-newer');
+    expect(commitCalled).toBe(false);
+    expect(config).toBe('external-newer');
+  });
+
+  it('captures and restores the exact profile left by a throwing synchronous commit', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    let config = 'original';
+
+    const transaction = runPhasedConfigTransaction({
+      assertOperationOwnership: () => undefined,
+      commit: () => {
+        config = 'partial-write';
+        throw new Error('commit failed');
+      },
+      complete: async () => config,
+      coordinator,
+      createSnapshot: () => config,
+      cwd: 'C:\\projects\\alpha',
+      prepare: () => 'prepared',
+      readState: async () => config,
+      restoreSnapshot: (snapshot) => {
+        config = snapshot;
+      },
+      sessionId: 'session-a',
+    });
+
+    const error = await transaction.catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(OwnedConfigTransactionError);
+    expect((error as OwnedConfigTransactionError<string>).message).toBe('commit failed');
     expect((error as OwnedConfigTransactionError<string>).restored).toBe(true);
     expect((error as OwnedConfigTransactionError<string>).state).toBe('original');
     expect(config).toBe('original');

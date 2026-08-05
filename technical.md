@@ -192,17 +192,22 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - xterm 在 `createTerminalView` 里 try/catch 加载 `@xterm/addon-webgl`，并监听
   `onContextLoss` → `dispose()` 回退 DOM 渲染器。加载失败不影响会话可用性。
 - **主进程侧合并**：`TerminalOutputBatcher` 按 session 与精确 `ptyGeneration` 攒 8ms
-  （`TERMINAL_OUTPUT_FLUSH_MS`）或 64KB（`TERMINAL_OUTPUT_FLUSH_BYTES`）发一次 `terminal:data`。
-  每个 session 只有一个带 generation 的待发缓冲：较旧 generation 的新数据直接忽略，较新 generation
-  才能替换旧缓冲。timer 闭包固定捕获 generation 与缓冲对象身份；即使已取消的旧 timer 被手动触发，
-  也不能 emit 或删除替代缓冲。flush 同时检查缓冲身份、expected generation 与 workspace 当前
-  generation；`discard(sessionId, generation)` 也只删除精确目标。`consumeTerminalOutput` 仍逐块
-  调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。`before-quit` dispose 全部 timer 和缓冲。
-- **渲染层侧合并**：同名的 `queueTerminalOutput` 按 `requestAnimationFrame` 把队列合成一次
-  `terminal.write`，缓冲上限 512KB（超限丢弃最旧分块，xterm 的 scrollback 随后也会丢掉它们）。
-  `TerminalView` 固定拥有创建时的 `ptyGeneration`；排队、RAF callback 和 xterm write callback
-  都同时核对 view 对象与 generation。generation 改变时取消旧 RAF、probe、遮罩与 pending write，
-  dispose 并移除旧实例，再创建空白的新视图；迟到 IPC 无法渲染或推进替代视图的输出 revision。
+  （`TERMINAL_OUTPUT_FLUSH_MS`）或 64KiB UTF-8 字节（`TERMINAL_OUTPUT_FLUSH_BYTES`）发一次
+  `terminal:data`。每个 session 只有一个带 generation 的待发缓冲：较旧 generation 的新数据直接忽略，
+  较新 generation 才能替换旧缓冲。timer 闭包固定捕获 generation 与缓冲对象身份；即使已取消的旧
+  timer 被手动触发，也不能 emit 或删除替代缓冲。自然 `stopped/error` 在发布 workspace 状态前同步
+  flush 该 generation 的末尾缓冲；显式替换、直接控制与删除 session 仍只 discard，不能把 predecessor
+  输出送进新终端。flush 同时检查缓冲身份、expected generation 与 workspace 当前 generation；
+  `consumeTerminalOutput` 仍逐块调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。`before-quit`
+  dispose 全部 timer 和缓冲。
+- **渲染层侧无损泵**：`TerminalOutputPump` 按 `requestAnimationFrame` 合并待处理工作，但每个
+  `TerminalView` 同一时间只允许一个 `terminal.write` 在途；每次最多提交 64Ki 个 UTF-16 code unit，
+  且不会在代理对中间切分。实时输出不再设置 512KB 截断，也不丢弃最旧分块；队列只有在 xterm 的
+  write callback 确认解析完成后才消费，只有完整 IPC revision 全部应用后才推进
+  `appliedRevision`。`TerminalView` 固定拥有创建时的 `ptyGeneration`，排队、RAF 与写入完成回调都
+  复核 view 对象和 generation；替换视图后，迟到回调不能消费、报告 probe 或推进新视图。主进程在
+  发送 permission-mode probe 前还会先同步 flush 同 generation 的待发输出，renderer 再以 revision
+  屏障等待此前屏幕差量全部进入 xterm。
 - **创建与持续布局分流**：活动 xterm 的容器在 `terminal.open()` 前就带
   `project-terminal--active`。`retryTerminalFitUntilMeasured` 只在冷启动/首次可见时用带
   generation 的四帧有界重试；窗口与分隔条的持续变化走 100ms 尾沿
@@ -463,8 +468,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   终止事件上更新显示；估算数据使用 `source: 'estimated'` 并在 UI 标“约”，供应商数据使用
   `source: 'provider'`。
 - `ChatHistoryStore`（`src/main/chat-history-store.ts`）把正文、标题、时间与 Token 快照以
-  version 2 明文原子写入 `userData/claude/chat-history.json`：先写权限 `0600` 的 `.tmp`
-  再重命名。1.x version 1 字符串消息在读取时规范化成 text block，只有显式 save 才升级磁盘。
+  version 2 明文原子写入 `userData/claude/chat-history.json`：先用 `wx` 和权限 `0600` 独占写入
+  同目录的 `.tmp-<pid>-<uuid>`，再重命名。Windows 上仅对 `EACCES` / `EBUSY` / `EPERM` 按
+  5/10/20/40/80ms 有界重试；始终只清理本次拥有的临时文件，不先删除目标，因此失败时保留最后一份
+  有效历史和原始错误。1.x version 1 字符串消息在读取时规范化成 text block，只有显式 save 才升级磁盘。
   base64 禁止落进历史，未知字段和无效 source 被拒绝。最多保留最近 50 个对话、每个 100 条
   消息；对话 ID 只接受 v4 UUID。只有 `ENOENT` 视为空历史；JSON 损坏、版本未知或权限/
   读取错误会尝试保留 `chat-history.json.corrupt.bak`，随后 fail-closed 抛错，禁止保存覆盖与
@@ -1431,9 +1438,16 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 
 ### 回滚与故障边界
 
-- `RollbackCoordinator` 以逆序、幂等方式执行补偿步骤。项目开发引擎持久化失败时恢复原选择；
-  Claude 保存、历史恢复和跨端点重启失败时恢复 `ClaudeConfigStore` 的加密快照。
-- 访问守卫在任何配置或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
+- MCP 等多步骤工具仍使用 `RollbackCoordinator` 做逆序、幂等补偿。Claude 项目 profile 则由
+  `SessionConfigTransactionCoordinator` 与 `runOwnedConfigTransaction()` 按规范化目录串行化：先在
+  原 profile 保持不变时完成 provider/history/router 异步准备，确认原快照未被外部更新后，再通过
+  `commitPreparedConfig()` 或 `commitAllowBypassPermissions()` 无 `await` 同步提交。路由完成、状态回读、
+  可选会话恢复和失败恢复状态发布都保留在同一事务屏障内。
+- 提交后的失败只有在事务仍拥有目录、目标 session 和精确已提交快照时才恢复加密 profile；异步准备
+  期间观察到外部新配置会在提交前取消，回滚也不会覆盖排队成功或外部较新的写入。CCR Provider 保存
+  先于可选项目 profile 提交，是独立持久化边界；项目提交失败会恢复项目快照，但不会谎称已撤销 CCR
+  内已经保存的 Provider。
+- 访问守卫在任何配置 commit 或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
   inactive；只有已经尝试销毁并重启 PTY 后发生错误才进入 inactive 状态。
 - WebSocket 单独失败时基础 HTTPS/CLI 功能仍为 `partially_available`，但 `cloud-task`
   动作被拒绝。未知或跳过的关键探测按 fail-closed 处理。
@@ -1684,9 +1698,11 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   其余继续核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、窄宽响应式和
   遮罩无重排。隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY，输出
-  24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow，并在最终
-  PTY size 确认行后捕获 `dist/visual-qa/conpty-resize-live.png`。该 Windows 专用烟测补足
-  静态终端 fixture 无法证明 PTY resize/reflow 的边界，结束后删除临时用户目录。
+  24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow；每次 resize 都等待
+  preload 的权威 `terminal:size`，不靠固定睡眠。截图后连续执行三轮 restart → stop → start，再让最终
+  generation 输出唯一 sentinel 并立即 `exit`，断言 data 先于 `stopped`、停止后没有同 generation
+  迟到数据、旧 generation 的 `stopped/error` 不会覆盖最终运行状态。该 Windows 专用烟测已作为
+  production build 后的 `verify` 门禁，结束后删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
   `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
   几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 163 个按钮全部命中

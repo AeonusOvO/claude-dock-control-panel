@@ -190,6 +190,7 @@ interface ConfigTransactionIntent {
   completed: Promise<void>;
   finished: boolean;
   generation: number;
+  isolationAcquired: boolean;
   key: string;
   predecessor: Promise<void>;
   resolveCompleted: () => void;
@@ -226,7 +227,58 @@ class ConfigTransactionOwnership {
 export class SessionConfigTransactionCoordinator {
   private readonly active = new Map<string, ConfigTransactionIntent>();
   private nextGeneration = 0;
+  private readonly reservations = new Map<string, Set<ConfigTransactionIntent>>();
   private readonly tail = new Map<string, ConfigTransactionIntent>();
+
+  /** Blocks sibling launches while a same-folder transaction exposes tentative persisted config. */
+  public assertDevelopmentOperationAllowed(cwd: string, sessionId?: string): void {
+    const key = directoryKey(cwd);
+    const active = this.active.get(key);
+    if (active) {
+      if (active.sessionId === sessionId) {
+        return;
+      }
+      throw new Error('当前项目正在保存并验证接入配置，请等待操作完成。');
+    }
+
+    if (this.tail.has(key)) {
+      throw new Error('当前项目正在等待接入配置事务，请等待操作完成。');
+    }
+  }
+
+  /**
+   * Cancels same-folder development work that predates the active transaction. Transactions already
+   * queued behind this one are safe to leave running because their callbacks cannot execute until the
+   * active transaction releases its barrier.
+   */
+  public async acquireDevelopmentIsolation(
+    sessionId: string,
+    cwd: string,
+    siblingSessionIds: readonly string[],
+    invalidateAndWait: (sessionId: string) => Promise<void>,
+  ): Promise<void> {
+    const key = directoryKey(cwd);
+    const intent = this.active.get(key);
+    if (!intent || intent.sessionId !== sessionId || !this.owns(intent)) {
+      throw new Error('当前配置事务无法取得项目开发会话隔离。');
+    }
+
+    // Mark isolation synchronously before cancellation begins. A raced sibling that already passed the
+    // renderer/main guard can no longer reserve a new config transaction and wait on this intent.
+    intent.isolationAcquired = true;
+    const reservedSessionIds = new Set(
+      [...(this.reservations.get(key) ?? [])]
+        .filter((candidate) => candidate !== intent)
+        .map((candidate) => candidate.sessionId),
+    );
+    const sessionsToInvalidate = [...new Set(siblingSessionIds)].filter(
+      (candidate) => candidate !== sessionId && !reservedSessionIds.has(candidate),
+    );
+    await Promise.all(sessionsToInvalidate.map(invalidateAndWait));
+    if (!this.owns(intent)) {
+      throw new Error('配置事务在等待项目开发会话退出时失去所有权。');
+    }
+  }
 
   public run<T>(
     sessionId: string,
@@ -259,12 +311,20 @@ export class SessionConfigTransactionCoordinator {
       if (this.tail.get(intent.key) === intent) {
         this.tail.delete(intent.key);
       }
+      const reservations = this.reservations.get(intent.key);
+      reservations?.delete(intent);
+      if (reservations?.size === 0) {
+        this.reservations.delete(intent.key);
+      }
       intent.resolveCompleted();
     }
   }
 
   private reserve(sessionId: string, cwd: string): ConfigTransactionIntent {
     const key = directoryKey(cwd);
+    if (this.active.get(key)?.isolationAcquired) {
+      throw new Error('当前项目配置事务已进入隔离保存阶段，请等待操作完成后重试。');
+    }
     const previous = this.tail.get(key);
     let resolveCompleted!: () => void;
     const completed = new Promise<void>((resolve) => {
@@ -274,11 +334,15 @@ export class SessionConfigTransactionCoordinator {
       completed,
       finished: false,
       generation: ++this.nextGeneration,
+      isolationAcquired: false,
       key,
       predecessor: previous?.completed ?? Promise.resolve(),
       resolveCompleted,
       sessionId,
     };
+    const reservations = this.reservations.get(key) ?? new Set<ConfigTransactionIntent>();
+    reservations.add(intent);
+    this.reservations.set(key, reservations);
     this.tail.set(key, intent);
     return intent;
   }
@@ -296,51 +360,70 @@ export class OwnedConfigTransactionError<TState> extends Error {
   }
 }
 
-export interface OwnedConfigTransactionOptions<TSnapshot, TState> {
+export interface OwnedConfigTransactionOptions<TSnapshot, TPrepared, TState> {
+  acquireIsolation?: () => Promise<void>;
   assertOperationOwnership: () => void;
   assertRollbackOwnership?: () => void;
+  commit: (prepared: TPrepared) => void;
+  complete: (prepared: TPrepared) => Promise<TState>;
   coordinator: SessionConfigTransactionCoordinator;
   createSnapshot: () => TSnapshot;
   cwd: string;
+  prepare: () => Promise<TPrepared> | TPrepared;
   publishRestoredState?: (state: TState) => void;
   readState: () => Promise<TState>;
   restoreSnapshot: (snapshot: TSnapshot) => void;
-  resume?: (savedState: TState) => Promise<TState>;
-  save: () => Promise<TState>;
   sessionId: string;
 }
 
 /**
- * Runs the persistence/resume half of a cutover as one generation-owned transaction. The snapshot is
- * taken synchronously immediately before `save`; every later failure attempts an ownership-checked
- * restore and reads the resulting state again before reporting the original error.
+ * Runs one project-profile mutation as a generation-owned transaction. Potentially slow provider or
+ * history preparation happens while the original snapshot is still persisted. The commit callback is
+ * deliberately synchronous; only after its exact result is captured may validation, route preparation,
+ * state reads, or terminal replacement await. Every later failure performs an ownership-checked restore.
  */
-export const runOwnedConfigTransaction = <TSnapshot, TState>(
-  options: OwnedConfigTransactionOptions<TSnapshot, TState>,
+export const runOwnedConfigTransaction = <TSnapshot, TPrepared, TState>(
+  options: OwnedConfigTransactionOptions<TSnapshot, TPrepared, TState>,
 ): Promise<TState> =>
   options.coordinator.run(options.sessionId, options.cwd, async (ownership) => {
     options.assertOperationOwnership();
+    if (options.acquireIsolation) {
+      await options.acquireIsolation();
+      ownership.assertCurrent();
+      options.assertOperationOwnership();
+    }
+
     const snapshot = options.createSnapshot();
+    let commitAttempted = false;
     let savedSnapshot = snapshot;
 
     try {
-      const saving = options.save();
-      // ClaudeRuntime persists before its first await; remember exactly what this intent wrote so an
-      // unrelated config mutation can also make the eventual rollback stale.
-      savedSnapshot = options.createSnapshot();
-      let state = await saving;
+      const prepared = await options.prepare();
+      ownership.assertCurrent();
+      options.assertOperationOwnership();
+      if (!isDeepStrictEqual(options.createSnapshot(), snapshot)) {
+        throw new Error('项目配置在异步准备期间已被更新，本次保存已取消。');
+      }
+
+      commitAttempted = true;
+      try {
+        options.commit(prepared);
+      } finally {
+        // The commit is synchronous, so this is the exact profile left by either success or a partial
+        // throwing write. It is the only profile this intent is allowed to roll back later.
+        savedSnapshot = options.createSnapshot();
+      }
       ownership.assertCurrent();
       options.assertOperationOwnership();
       if (!isDeepStrictEqual(options.createSnapshot(), savedSnapshot)) {
         throw new Error('项目配置已被更新，本次保存结果不再拥有当前配置。');
       }
-      if (options.resume) {
-        state = await options.resume(state);
-        ownership.assertCurrent();
-        options.assertOperationOwnership();
-        if (!isDeepStrictEqual(options.createSnapshot(), savedSnapshot)) {
-          throw new Error('项目配置已被更新，本次恢复结果不再拥有当前配置。');
-        }
+
+      const state = await options.complete(prepared);
+      ownership.assertCurrent();
+      options.assertOperationOwnership();
+      if (!isDeepStrictEqual(options.createSnapshot(), savedSnapshot)) {
+        throw new Error('项目配置已被更新，本次完成结果不再拥有当前配置。');
       }
       ownership.commit();
       return state;
@@ -348,18 +431,20 @@ export const runOwnedConfigTransaction = <TSnapshot, TState>(
       let recoveryError: unknown;
       let restored = false;
       let state: TState | undefined;
-      try {
-        ownership.assertCurrent();
-        (options.assertRollbackOwnership ?? options.assertOperationOwnership)();
-        if (!isDeepStrictEqual(options.createSnapshot(), savedSnapshot)) {
-          throw new Error('项目配置已被更新，本次失败操作不会覆盖较新的保存结果。', {
-            cause: error,
-          });
+      if (commitAttempted) {
+        try {
+          ownership.assertCurrent();
+          (options.assertRollbackOwnership ?? options.assertOperationOwnership)();
+          if (!isDeepStrictEqual(options.createSnapshot(), savedSnapshot)) {
+            throw new Error('项目配置已被更新，本次失败操作不会覆盖较新的保存结果。', {
+              cause: error,
+            });
+          }
+          options.restoreSnapshot(snapshot);
+          restored = true;
+        } catch (rollbackError) {
+          recoveryError = rollbackError;
         }
-        options.restoreSnapshot(snapshot);
-        restored = true;
-      } catch (rollbackError) {
-        recoveryError = rollbackError;
       }
 
       try {

@@ -3,6 +3,7 @@ export type SessionOperationAssertion = () => void;
 interface SessionOperationLease {
   cancelled: boolean;
   completed: Promise<void>;
+  controller: AbortController;
   generation: number;
   resolveCompleted: () => void;
 }
@@ -25,7 +26,7 @@ export class SessionOperationCoordinator {
   public invalidate(sessionId: string): void {
     const lease = this.leases.get(sessionId);
     if (lease) {
-      lease.cancelled = true;
+      this.cancel(lease);
     }
   }
 
@@ -34,7 +35,7 @@ export class SessionOperationCoordinator {
     if (!lease) {
       return Promise.resolve();
     }
-    lease.cancelled = true;
+    this.cancel(lease);
     return lease.completed;
   }
 
@@ -44,7 +45,7 @@ export class SessionOperationCoordinator {
 
   public async run<T>(
     sessionId: string,
-    operation: (assertCurrent: SessionOperationAssertion) => Promise<T>,
+    operation: (assertCurrent: SessionOperationAssertion, signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     if (this.leases.has(sessionId)) {
       throw new Error(this.busyMessage);
@@ -56,6 +57,7 @@ export class SessionOperationCoordinator {
     const lease: SessionOperationLease = {
       cancelled: false,
       completed,
+      controller: new AbortController(),
       generation: ++this.nextGeneration,
       resolveCompleted,
     };
@@ -68,17 +70,25 @@ export class SessionOperationCoordinator {
         current.generation !== lease.generation ||
         !this.hasSession(sessionId)
       ) {
-        throw new Error(this.cancelledMessage);
+        const reason = lease.controller.signal.reason;
+        throw reason instanceof Error ? reason : new Error(this.cancelledMessage);
       }
     };
 
     try {
-      return await operation(assertCurrent);
+      return await operation(assertCurrent, lease.controller.signal);
     } finally {
       if (this.leases.get(sessionId) === lease) {
         this.leases.delete(sessionId);
       }
       lease.resolveCompleted();
+    }
+  }
+
+  private cancel(lease: SessionOperationLease): void {
+    lease.cancelled = true;
+    if (!lease.controller.signal.aborted) {
+      lease.controller.abort(new Error(this.cancelledMessage));
     }
   }
 }

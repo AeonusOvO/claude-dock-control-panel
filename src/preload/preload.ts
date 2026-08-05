@@ -17,6 +17,7 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
+  ClaudeSessionDeleteResult,
   ManagedChatGptGatewayOperationResult,
   ManagedChatGptGatewayState,
   ManagedChatGptSetupProgress,
@@ -551,7 +552,11 @@ const api: ControlPanelApi = {
       title,
     ) as Promise<boolean>,
   deleteClaudeSession: (projectPath, conversationId) =>
-    ipcRenderer.invoke('claude:delete-session', projectPath, conversationId) as Promise<boolean>,
+    ipcRenderer.invoke(
+      'claude:delete-session',
+      projectPath,
+      conversationId,
+    ) as Promise<ClaudeSessionDeleteResult>,
   launchClaudeWithSession: (sessionId, conversationId) =>
     ipcRenderer.invoke(
       'claude:launch-with-session',

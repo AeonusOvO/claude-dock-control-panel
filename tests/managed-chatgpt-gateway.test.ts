@@ -27,6 +27,35 @@ const releasePayload = (overrides: Record<string, unknown> = {}): Record<string,
   ...overrides,
 });
 
+interface TestGatewayState {
+  encryptedClientKey: string;
+  executableRelativePath: string;
+  executableSha256: string;
+  installedVersion: string;
+  port: number;
+  processId?: number;
+  releaseDigest: string;
+  version: 1;
+}
+
+interface ManagedGatewayInternals {
+  decryptClientKey: (state: TestGatewayState) => string | undefined;
+  extractRelease: (archivePath: string, version: string) => Promise<string>;
+  installLatest: () => Promise<TestGatewayState | undefined>;
+  latest: () => Promise<{
+    digest: string;
+    downloadUrl: string;
+    fileName: string;
+    size: number;
+    version: string;
+  }>;
+  persistState: (state: TestGatewayState) => void;
+  probe: (port: number, credential: string) => Promise<boolean>;
+  processMatchesState: (state: TestGatewayState, processId: number) => Promise<boolean>;
+  start: (state: TestGatewayState) => Promise<void>;
+  stopProcessesForState: (state: TestGatewayState, occupiedPortMessage: string) => Promise<void>;
+}
+
 describe('managed ChatGPT gateway', () => {
   it('removes inherited provider routes and credentials but keeps transport proxies', () => {
     expect(
@@ -143,6 +172,102 @@ describe('managed ChatGPT gateway', () => {
     try {
       expect(manager.getInstalledVersion()).toBe('7.2.117');
       expect(fetchImplementation).not.toHaveBeenCalled();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('stops the running installed version before persisting an upgrade', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-upgrade-'));
+    const root = path.join(userDataPath, 'managed-gateways', 'cliproxyapi');
+    mkdirSync(root, { recursive: true });
+    const current: TestGatewayState = {
+      encryptedClientKey: '',
+      executableRelativePath: path.join('versions', '7.2.116', 'cli-proxy-api.exe'),
+      executableSha256: 'a'.repeat(64),
+      installedVersion: '7.2.116',
+      port: 8317,
+      processId: 42,
+      releaseDigest: 'b'.repeat(64),
+      version: 1,
+    };
+    writeFileSync(path.join(root, 'state.json'), JSON.stringify(current), 'utf8');
+    const startDownload = vi.fn(async () => {});
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      { start: startDownload } as unknown as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    const events: string[] = [];
+    vi.spyOn(internals, 'latest').mockResolvedValue({
+      digest: 'c'.repeat(64),
+      downloadUrl:
+        'https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.117/CLIProxyAPI_7.2.117_windows_amd64.zip',
+      fileName: 'CLIProxyAPI_7.2.117_windows_amd64.zip',
+      size: 21_000_000,
+      version: '7.2.117',
+    });
+    vi.spyOn(internals, 'extractRelease').mockImplementation(async () => {
+      const relative = path.join('versions', '7.2.117', 'cli-proxy-api.exe');
+      const executable = path.join(root, relative);
+      mkdirSync(path.dirname(executable), { recursive: true });
+      writeFileSync(executable, 'validated 7.2.117 executable', 'utf8');
+      return relative;
+    });
+    vi.spyOn(internals, 'stopProcessesForState').mockImplementation(async (state) => {
+      expect(state.installedVersion).toBe('7.2.116');
+      events.push('stop:7.2.116');
+    });
+    vi.spyOn(internals, 'persistState').mockImplementation((state) => {
+      events.push(`persist:${state.installedVersion}`);
+    });
+    try {
+      const upgraded = await internals.installLatest();
+      expect(upgraded).toMatchObject({ installedVersion: '7.2.117' });
+      expect(upgraded).not.toHaveProperty('processId');
+      expect(startDownload).toHaveBeenCalledOnce();
+      expect(events).toEqual(['stop:7.2.116', 'persist:7.2.117']);
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('does not trust a responsive gateway without an exact process identity', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-owner-'));
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    const state: TestGatewayState = {
+      encryptedClientKey: '',
+      executableRelativePath: path.join('versions', '7.2.117', 'cli-proxy-api.exe'),
+      executableSha256: 'a'.repeat(64),
+      installedVersion: '7.2.117',
+      port: 8317,
+      releaseDigest: 'b'.repeat(64),
+      version: 1,
+    };
+    vi.spyOn(internals, 'decryptClientKey').mockReturnValue(`sk-claudedock-${'x'.repeat(43)}`);
+    vi.spyOn(internals, 'probe').mockResolvedValue(true);
+    try {
+      await expect(internals.start(state)).rejects.toThrow('进程身份或运行版本无法确认');
     } finally {
       manager.shutdown();
       rmSync(userDataPath, { force: true, recursive: true });

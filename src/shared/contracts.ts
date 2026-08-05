@@ -694,9 +694,13 @@ export interface ClaudeProjectState {
   permissionMode?: ClaudePermissionMode;
   /** Modes actually observed in this session, in the order Shift+Tab visited them. */
   permissionModeCycle?: ClaudePermissionMode[];
+  /** Exact PowerShell/ConPTY generation that owns the active runtime; absent while inactive/unbound. */
+  ptyGeneration?: PtyGeneration;
   resourceUsage?: ResourceUsageView;
   routeHealth?: ClaudeRouteHealth;
   sessionId: string;
+  /** Monotonic request order used to reject delayed state reads from an older runtime snapshot. */
+  stateRevision: number;
   speed: ModelSpeedState;
   warning?: string;
 }
@@ -1209,6 +1213,10 @@ export interface WorkspaceResult {
   state: WorkspaceState;
 }
 
+export interface ClaudeSessionDeleteResult extends WorkspaceResult {
+  deleted: boolean;
+}
+
 export type DirectoryChoiceResult =
   | {
       canceled: true;
@@ -1466,7 +1474,10 @@ export interface ControlPanelApi {
     conversationId: string,
     title: string,
   ) => Promise<boolean>;
-  deleteClaudeSession: (projectPath: string, conversationId: string) => Promise<boolean>;
+  deleteClaudeSession: (
+    projectPath: string,
+    conversationId: string,
+  ) => Promise<ClaudeSessionDeleteResult>;
   launchClaudeWithSession: (
     sessionId: string,
     conversationId: string,

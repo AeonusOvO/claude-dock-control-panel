@@ -171,10 +171,12 @@ describe('Codex runtime PTY ownership', () => {
     try {
       const first = await runtime.prepareLaunch('session-a', 'D:\\Project', 'new');
       const firstMarker = markerFromLaunchCommand(first.command);
+      expect(first.predecessorPtyGeneration).toBeUndefined();
       runtime.bindPty('session-a', 1);
 
       const second = await runtime.prepareLaunch('session-a', 'D:\\Project', 'continue');
       const secondMarker = markerFromLaunchCommand(second.command);
+      expect(second.predecessorPtyGeneration).toBe(1);
       expect(runtime.isBoundToPty('session-a', 1)).toBe(false);
       runtime.bindPty('session-a', 2);
 

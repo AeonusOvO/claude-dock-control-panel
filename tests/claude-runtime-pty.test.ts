@@ -2,7 +2,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { normalizeClaudeConfig } from '../src/main/claude-configuration';
 import { ClaudeRuntime } from '../src/main/claude-runtime';
+import { ConversationPreferencesStore } from '../src/main/conversation-preferences-store';
+import { modelSpeedTargetKey } from '../src/main/model-speed-capabilities';
 import { SUBMIT_DELAY_MS } from '../src/shared/composer-input';
 import type {
   ClaudeEffortCompatibility,
@@ -15,6 +18,7 @@ import type {
 interface TestRuntimeSession {
   active: boolean;
   artifactDirectory?: string;
+  conversationId?: string;
   cwd: string;
   diagnosticBuffer: string;
   effortCompatibility?: ClaudeEffortCompatibility;
@@ -43,7 +47,24 @@ interface TestRuntimeSession {
   waitingForCompact?: (signaledAt: number) => void;
 }
 
+interface TestLaunchConfigSnapshot {
+  allowBypassPermissions: boolean;
+  config: ReturnType<typeof normalizeClaudeConfig>;
+  credential?: string;
+  storage: Record<string, unknown>;
+}
+
 interface ClaudeRuntimeInternals {
+  compactAndWait(
+    runtime: TestRuntimeSession,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  configStore: {
+    createLaunchSnapshot(cwd: string): TestLaunchConfigSnapshot;
+    getCredential(cwd: string): string | undefined;
+    launchSnapshotIsCurrent(cwd: string, snapshot: TestLaunchConfigSnapshot): boolean;
+  };
   diagnoseInstallation(): Promise<{
     executable: string;
     installationKind: 'native';
@@ -53,6 +74,7 @@ interface ClaudeRuntimeInternals {
     version: string;
   }>;
   emitState(runtime: TestRuntimeSession): Promise<void>;
+  getRouteHealth(...args: unknown[]): Promise<undefined>;
   pollMetricsOnce(): Promise<void>;
   prepareRouteServices(...args: unknown[]): Promise<void>;
   readLaunchArtifact(artifactPath: string): Promise<string>;
@@ -120,7 +142,7 @@ const createRuntime = () => {
     thinkingEnabledForHighEffort: false,
   };
   internals.sessions.set(session.sessionId, session);
-  return { internals, runtime, session, writes };
+  return { internals, root, runtime, session, writes };
 };
 
 const launchArtifacts = (session: TestRuntimeSession) => {
@@ -144,15 +166,85 @@ const launchArtifacts = (session: TestRuntimeSession) => {
   };
 };
 
-const deferredString = () => {
-  let resolve!: (value: string) => void;
-  const promise = new Promise<string>((done) => {
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
     resolve = done;
   });
   return { promise, resolve };
 };
 
+const deferredString = () => deferred<string>();
+const CONVERSATION_A = '8f9aa605-adb6-4e2b-a25a-607e14bad666';
+const CONVERSATION_B = '53b9f42a-a26a-4ce6-a6d3-82d783c8bdde';
+
 describe('Claude runtime PTY ownership', () => {
+  it('finds every exact conversation owner before renderer metrics are available', () => {
+    const { internals, runtime, session } = createRuntime();
+    try {
+      session.conversationId = CONVERSATION_A.toUpperCase();
+      internals.sessions.set('metrics-owner', {
+        ...session,
+        conversationId: undefined,
+        cwd: 'd:\\project',
+        metrics: { capturedAt: 1, sessionId: CONVERSATION_A },
+        sessionId: 'metrics-owner',
+      });
+      internals.sessions.set('other-conversation', {
+        ...session,
+        conversationId: CONVERSATION_B,
+        sessionId: 'other-conversation',
+      });
+      internals.sessions.set('other-project', {
+        ...session,
+        conversationId: CONVERSATION_A,
+        cwd: 'D:\\Other Project',
+        sessionId: 'other-project',
+      });
+
+      expect(runtime.sessionIdsForConversation('D:\\PROJECT', CONVERSATION_A)).toEqual([
+        'session-1',
+        'metrics-owner',
+      ]);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('removes persisted preferences only through the explicit conversation API', () => {
+    const { root, runtime } = createRuntime();
+    try {
+      const preferences = new ConversationPreferencesStore(root);
+      preferences.record(CONVERSATION_A, { model: 'claude-opus-5' });
+      expect(preferences.get(CONVERSATION_A)?.model).toBe('claude-opus-5');
+
+      runtime.removeConversationPreferences(CONVERSATION_A.toUpperCase());
+
+      expect(new ConversationPreferencesStore(root).get(CONVERSATION_A)).toBeUndefined();
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('runs the main-owned conversation guard before committing a resume launch', async () => {
+    const { runtime, session } = createRuntime();
+    const guard = vi.fn(() => {
+      throw new Error('conversation deletion owns this resume');
+    });
+    session.active = false;
+    runtime.setConversationLaunchGuard(guard);
+
+    try {
+      await expect(
+        runtime.prepareLaunchWithSession(session.sessionId, session.cwd, CONVERSATION_A),
+      ).rejects.toThrow('conversation deletion owns this resume');
+      expect(guard).toHaveBeenCalledWith(session.cwd, 'resume', CONVERSATION_A);
+      expect(runtime.isActive(session.sessionId)).toBe(false);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
   it('routes writes and exit markers only through the exact bound generation', () => {
     const { runtime, session, writes } = createRuntime();
     try {
@@ -205,6 +297,21 @@ describe('Claude runtime PTY ownership', () => {
     }
   });
 
+  it('returns the predecessor generation when preparation unbinds a running PTY', async () => {
+    const { runtime, session } = createRuntime();
+    try {
+      runtime.bindPty(session.sessionId, 7);
+
+      const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
+
+      expect(prepared.predecessorPtyGeneration).toBe(7);
+      expect(runtime.isBoundToPty(session.sessionId, 7)).toBe(false);
+      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(true);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
   it('drops a delayed command return after the PTY generation changes', async () => {
     vi.useFakeTimers();
     const { internals, runtime, session, writes } = createRuntime();
@@ -230,6 +337,309 @@ describe('Claude runtime PTY ownership', () => {
       await rejection;
       expect(writes).toHaveLength(1);
       expect(runtime.isBoundToPty(session.sessionId, 8)).toBe(true);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('retries a delayed G1 state read against the current G2 owner', async () => {
+    const { internals, runtime, session } = createRuntime();
+    let resolveFirstRoute!: () => void;
+    const firstRoute = new Promise<undefined>((resolve) => {
+      resolveFirstRoute = () => resolve(undefined);
+    });
+    const getRouteHealth = vi
+      .fn<ClaudeRuntimeInternals['getRouteHealth']>()
+      .mockImplementationOnce(() => firstRoute)
+      .mockResolvedValue(undefined);
+    internals.getRouteHealth = getRouteHealth;
+    session.launchGeneration = 1;
+    session.ptyGeneration = 21;
+    session.metrics = { capturedAt: 1, modelId: 'g1-model' };
+
+    try {
+      const pending = runtime.getState(session.sessionId, session.cwd);
+      await vi.waitFor(() => {
+        expect(getRouteHealth).toHaveBeenCalledTimes(1);
+      });
+
+      session.launchGeneration = 2;
+      session.ptyGeneration = 22;
+      session.metrics = { capturedAt: 2, modelId: 'g2-model' };
+      resolveFirstRoute();
+
+      await expect(pending).resolves.toMatchObject({
+        metrics: { capturedAt: 2, modelId: 'g2-model' },
+        ptyGeneration: 22,
+        stateRevision: 2,
+      });
+      expect(getRouteHealth).toHaveBeenCalledTimes(2);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('aborts a compact-first relaunch without waiting for the compact timeout', async () => {
+    vi.useFakeTimers();
+    const { runtime, session, writes } = createRuntime();
+    const controller = new AbortController();
+    const cancellation = new Error('cancel compact relaunch');
+    const assertCurrent = (): void => {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason;
+      }
+    };
+    try {
+      runtime.bindPty(session.sessionId, 31);
+      const baselineTimerCount = vi.getTimerCount();
+      const pending = runtime.compactBeforeRelaunch(
+        session.sessionId,
+        session.cwd,
+        true,
+        assertCurrent,
+        controller.signal,
+      );
+
+      await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
+      expect(writes[0]?.data).toContain('/compact');
+      expect(writes[1]?.data).toBe('\r');
+      expect(session.waitingForCompact).toBeTypeOf('function');
+
+      controller.abort(cancellation);
+
+      await expect(pending).rejects.toBe(cancellation);
+      expect(session.waitingForCompact).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(baselineTimerCount);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('never writes a queued compact command after its relaunch is cancelled', async () => {
+    vi.useFakeTimers();
+    const { internals, runtime, session, writes } = createRuntime();
+    const controller = new AbortController();
+    const cancellation = new Error('cancel queued compact');
+    const assertCurrent = (): void => {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason;
+      }
+    };
+    try {
+      runtime.bindPty(session.sessionId, 32);
+      const blockingSubmission = internals.submitClaudeCommand(session, '/model current-model');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writes.map(({ data }) => data)).toEqual(['/model current-model']);
+
+      const pending = runtime.compactBeforeRelaunch(
+        session.sessionId,
+        session.cwd,
+        true,
+        assertCurrent,
+        controller.signal,
+      );
+      const rejection = expect(pending).rejects.toBe(cancellation);
+      controller.abort(cancellation);
+      await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
+
+      await expect(blockingSubmission).resolves.toBeUndefined();
+      await rejection;
+      expect(writes.map(({ data }) => data)).toEqual(['/model current-model', '\r']);
+      expect(session.waitingForCompact).toBeUndefined();
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('does not let a late old PostCompact waiter settle its replacement', async () => {
+    vi.useFakeTimers();
+    const { internals, runtime, session } = createRuntime();
+    const firstController = new AbortController();
+    const cancellation = new Error('replace compact waiter');
+    const assertFirstCurrent = (): void => {
+      if (firstController.signal.aborted) {
+        throw firstController.signal.reason;
+      }
+    };
+    try {
+      runtime.bindPty(session.sessionId, 33);
+      const first = internals.compactAndWait(session, assertFirstCurrent, firstController.signal);
+      await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
+      const oldWaiter = session.waitingForCompact;
+      if (!oldWaiter) {
+        throw new Error('The first compact waiter was not installed.');
+      }
+
+      firstController.abort(cancellation);
+      await expect(first).rejects.toBe(cancellation);
+
+      const replacement = internals.compactAndWait(session, () => undefined);
+      await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
+      const replacementWaiter = session.waitingForCompact;
+      if (!replacementWaiter) {
+        throw new Error('The replacement compact waiter was not installed.');
+      }
+      let replacementSettled = false;
+      void replacement.then(() => {
+        replacementSettled = true;
+      });
+
+      oldWaiter(1);
+      await Promise.resolve();
+      expect(replacementSettled).toBe(false);
+      expect(session.waitingForCompact).toBe(replacementWaiter);
+
+      replacementWaiter(2);
+      await expect(replacement).resolves.toBeUndefined();
+      expect(session.waitingForCompact).toBeUndefined();
+    } finally {
+      runtime.shutdown();
+    }
+  });
+});
+
+describe('Claude runtime launch configuration snapshots', () => {
+  it('uses config and credential from one snapshot without rereading storage', async () => {
+    const { internals, runtime, session } = createRuntime();
+    const launchSnapshot: TestLaunchConfigSnapshot = {
+      allowBypassPermissions: false,
+      config: normalizeClaudeConfig({
+        authMode: 'authToken',
+        baseUrl: 'https://snapshot.example.com',
+        credentialAction: 'keep',
+        model: 'snapshot-model',
+        preset: 'custom',
+        provider: 'gateway',
+      }),
+      credential: 'snapshot-token',
+      storage: { revision: 'snapshot' },
+    };
+    const createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    const getCredential = vi.fn(() => 'replacement-token');
+    internals.configStore.createLaunchSnapshot = createLaunchSnapshot;
+    internals.configStore.getCredential = getCredential;
+    internals.configStore.launchSnapshotIsCurrent = vi.fn(
+      (_cwd, candidate) => candidate === launchSnapshot,
+    );
+
+    try {
+      const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
+
+      expect(createLaunchSnapshot).toHaveBeenCalledTimes(1);
+      expect(getCredential).not.toHaveBeenCalled();
+      expect(prepared.environment).toMatchObject({
+        ANTHROPIC_AUTH_TOKEN: 'snapshot-token',
+        ANTHROPIC_BASE_URL: 'https://snapshot.example.com',
+        ANTHROPIC_MODEL: 'snapshot-model',
+      });
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('rejects a launch when the snapshot changes during route preparation', async () => {
+    const { internals, runtime, session } = createRuntime();
+    const launchSnapshot: TestLaunchConfigSnapshot = {
+      allowBypassPermissions: true,
+      config: normalizeClaudeConfig({
+        authMode: 'authToken',
+        baseUrl: 'https://snapshot.example.com',
+        credentialAction: 'keep',
+        model: 'snapshot-model',
+        preset: 'custom',
+        provider: 'gateway',
+      }),
+      credential: 'snapshot-token',
+      storage: { revision: 'snapshot' },
+    };
+    let snapshotCurrent = true;
+    const routePreparation = deferred<void>();
+    internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    internals.configStore.launchSnapshotIsCurrent = vi.fn(() => snapshotCurrent);
+    internals.prepareRouteServices = vi.fn(() => routePreparation.promise);
+    session.artifactDirectory = 'D:\\Existing\\launch-41';
+    session.launchGeneration = 41;
+    session.ptyGeneration = 9;
+    session.exitMarker = 'existing-exit-marker';
+
+    try {
+      const pending = runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
+      const rejection = expect(pending).rejects.toThrow('Claude 接入配置在启动准备期间已更新');
+      await vi.waitFor(() => {
+        expect(internals.prepareRouteServices).toHaveBeenCalledTimes(1);
+      });
+
+      snapshotCurrent = false;
+      routePreparation.resolve(undefined);
+      await rejection;
+
+      expect(session).toMatchObject({
+        active: true,
+        artifactDirectory: 'D:\\Existing\\launch-41',
+        exitMarker: 'existing-exit-marker',
+        launchGeneration: 41,
+        ptyGeneration: 9,
+      });
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('derives a speed target and relaunch environment from the same snapshot', async () => {
+    const { internals, runtime, session } = createRuntime();
+    const conversationId = '00000000-0000-4000-8000-000000000001';
+    const launchSnapshot: TestLaunchConfigSnapshot = {
+      allowBypassPermissions: true,
+      config: normalizeClaudeConfig({
+        authMode: 'apiKey',
+        baseUrl: '',
+        credentialAction: 'keep',
+        model: 'claude-opus-5',
+        preset: 'anthropic-api',
+        provider: 'anthropic',
+      }),
+      credential: 'snapshot-api-key',
+      storage: { revision: 'snapshot' },
+    };
+    const createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    const getCredential = vi.fn(() => 'replacement-api-key');
+    internals.configStore.createLaunchSnapshot = createLaunchSnapshot;
+    internals.configStore.getCredential = getCredential;
+    internals.configStore.launchSnapshotIsCurrent = vi.fn(
+      (_cwd, candidate) => candidate === launchSnapshot,
+    );
+    session.metrics = {
+      capturedAt: 1,
+      modelId: 'claude-opus-5',
+      sessionId: conversationId,
+    };
+
+    try {
+      const prepared = await runtime.prepareModelSpeedRelaunch(
+        session.sessionId,
+        session.cwd,
+        'fast',
+      );
+      const settings = JSON.parse(readFileSync(launchArtifacts(session).settingsPath, 'utf8')) as {
+        fastMode: boolean;
+        model: string;
+      };
+
+      expect(createLaunchSnapshot).toHaveBeenCalledTimes(1);
+      expect(getCredential).not.toHaveBeenCalled();
+      expect(prepared).toMatchObject({
+        environment: { ANTHROPIC_API_KEY: 'snapshot-api-key' },
+        preference: 'fast',
+        targetKey: modelSpeedTargetKey({
+          authMode: launchSnapshot.config.authMode,
+          baseUrl: launchSnapshot.config.baseUrl,
+          model: 'claude-opus-5',
+          preset: launchSnapshot.config.preset,
+          provider: launchSnapshot.config.provider,
+        }),
+      });
+      expect(prepared.command).toContain(conversationId);
+      expect(settings).toMatchObject({ fastMode: true, model: 'claude-opus-5' });
     } finally {
       runtime.shutdown();
     }

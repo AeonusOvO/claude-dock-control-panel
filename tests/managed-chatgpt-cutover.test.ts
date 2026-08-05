@@ -21,12 +21,15 @@ describe('managed ChatGPT route cutover', () => {
 
   it('restores and publishes the exact pre-save config when cutover completion fails', () => {
     expect(mainSource).toMatch(
-      /runOwnedConfigTransaction\(\{[\s\S]*?createSnapshot: \(\) => runtime\.createConfigSnapshot\(cwd\)[\s\S]*?restoreSnapshot: \(snapshot\) => runtime\.restoreConfigSnapshot\(cwd, snapshot\)[\s\S]*?save: \(\) => runtime\.saveConfig\(sessionId, cwd, input\)/,
+      /runOwnedConfigTransaction\(\{[\s\S]*?createSnapshot: \(\) => options\.runtime\.createConfigSnapshot\(options\.cwd\)[\s\S]*?restoreSnapshot: \(snapshot\) =>[\s\S]*?options\.runtime\.restoreConfigSnapshot\(options\.cwd, snapshot\)/,
+    );
+    expect(mainSource).toMatch(
+      /runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>\(\{[\s\S]*?commit: \(prepared\) => runtime\.commitPreparedConfig\(cwd, prepared\)[\s\S]*?complete: async \(prepared\)[\s\S]*?runtime\.completePreparedConfigSave\(sessionId, cwd, prepared\)[\s\S]*?prepare: \(\) => runtime\.prepareConnectionConfig\(input, undefined, assertCurrent\)/,
     );
     expect(mainSource).toContain('publishRestoredState: publishRestoredClaudeProjectState');
-    expect(mainSource).toContain('const projectState = managedConfigTransactionState(error);');
+    expect(mainSource).toContain('const projectState = configTransactionState(error);');
     expect(coordinatorSource).toMatch(
-      /coordinator\.run\(options\.sessionId, options\.cwd[\s\S]*?const snapshot = options\.createSnapshot\(\);[\s\S]*?const saving = options\.save\(\);[\s\S]*?savedSnapshot = options\.createSnapshot\(\);[\s\S]*?let state = await saving/,
+      /coordinator\.run\(options\.sessionId, options\.cwd[\s\S]*?const snapshot = options\.createSnapshot\(\);[\s\S]*?const prepared = await options\.prepare\(\);[\s\S]*?options\.commit\(prepared\);[\s\S]*?savedSnapshot = options\.createSnapshot\(\);[\s\S]*?const state = await options\.complete\(prepared\)/,
     );
     expect(coordinatorSource).toMatch(
       /class SessionConfigTransactionCoordinator[\s\S]*?private readonly tail[\s\S]*?await intent\.predecessor[\s\S]*?this\.active\.set/,

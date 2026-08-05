@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { SessionGenerationRegistry } from '../src/renderer/session-generation';
+import {
+  orchestrateSessionOperation,
+  SessionGenerationRegistry,
+} from '../src/renderer/session-generation';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -110,5 +113,65 @@ describe('per-session asynchronous generations', () => {
 
     expect(registry.prune(new Set(['session-b']))).toEqual([removed]);
     expect(registry.isCurrent(retained)).toBe(true);
+  });
+
+  it('keeps an operation current after an independent lifecycle lock releases', async () => {
+    const operations = new SessionGenerationRegistry();
+    const lifecycle = new SessionGenerationRegistry();
+    const request = deferred<{ active: boolean }>();
+    const operation = operations.begin('session-a');
+    const launch = lifecycle.begin('session-a');
+    const applied: boolean[] = [];
+
+    const completion = orchestrateSessionOperation({
+      applyResult: (result) => {
+        applied.push(result.active);
+        return true;
+      },
+      registry: operations,
+      start: () => request.promise,
+      token: operation,
+    });
+
+    expect(lifecycle.finish(launch)).toBe(true);
+    expect(operations.isCurrent(operation)).toBe(true);
+    request.resolve({ active: true });
+
+    await expect(completion).resolves.toEqual({
+      result: { active: true },
+      status: 'resolved',
+    });
+    expect(applied).toEqual([true]);
+    expect(operations.finish(operation)).toBe(true);
+  });
+
+  it('waits for confirmation and reports an exact cancellation before starting', async () => {
+    const registry = new SessionGenerationRegistry();
+    const confirmation = deferred<boolean>();
+    const operation = registry.begin('session-a');
+    let cancelled = false;
+    let started = false;
+
+    const completion = orchestrateSessionOperation({
+      applyResult: () => true,
+      confirmation: () => confirmation.promise,
+      onCancel: () => {
+        cancelled = true;
+      },
+      registry,
+      start: async () => {
+        started = true;
+        return 'unexpected';
+      },
+      token: operation,
+    });
+
+    expect(started).toBe(false);
+    confirmation.resolve(false);
+
+    await expect(completion).resolves.toEqual({ status: 'cancelled' });
+    expect(cancelled).toBe(true);
+    expect(started).toBe(false);
+    expect(registry.finish(operation)).toBe(true);
   });
 });

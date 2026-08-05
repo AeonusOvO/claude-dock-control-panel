@@ -43,6 +43,8 @@ interface CodexAccountReadResult {
 export interface PreparedCodexLaunch {
   command: string;
   environment: Record<string, null | string>;
+  /** Bound PTY replaced by this prepared launch, if one still owned the runtime at commit time. */
+  predecessorPtyGeneration?: PtyGeneration;
   state: CodexProjectState;
 }
 
@@ -461,6 +463,7 @@ export class CodexRuntime {
       throw new Error('请先使用 ChatGPT 账号登录 Codex。');
     }
     const runtime = this.ensureSession(sessionId, cwd);
+    const predecessorPtyGeneration = runtime.active ? runtime.ptyGeneration : undefined;
     runtime.active = true;
     runtime.ptyGeneration = undefined;
     runtime.exitMarker = `${MARKER_PREFIX}${sessionId}:${Date.now()}\u0007`;
@@ -473,6 +476,7 @@ export class CodexRuntime {
         runtime.exitMarker,
       ),
       environment: {},
+      predecessorPtyGeneration,
       state: { ...state, active: true },
     };
   }

@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { safeStorage } from 'electron';
 import type {
   ClaudeAuthMode,
@@ -42,6 +43,13 @@ export interface ClaudeConfigPresentation {
 
 export interface ClaudeConfigSnapshot {
   project?: StoredClaudeConfig;
+}
+
+export interface ClaudeLaunchConfigSnapshot {
+  allowBypassPermissions: boolean;
+  config: NormalizedClaudeConfig;
+  credential?: string;
+  storage: ClaudeConfigSnapshot;
 }
 
 /** Armed by default: without it the mode picker could never offer 「完全允许」 at all. */
@@ -103,42 +111,11 @@ export class ClaudeConfigStore {
   }
 
   public getConfig(cwd: string): NormalizedClaudeConfig {
-    const stored = this.load().projects[projectKey(cwd)];
-    if (!stored) {
-      return { ...DEFAULT_CLAUDE_CONFIG };
-    }
-
-    const preset = findClaudeProvider(stored.preset)?.id ?? 'custom';
-    try {
-      return normalizeClaudeConfig({
-        apiKeyHelperPolicy: stored.apiKeyHelperPolicy,
-        authMode: stored.authMode,
-        baseUrl: stored.baseUrl,
-        credentialAction: 'keep',
-        model: stored.model,
-        modelFast: stored.modelFast || stored.model,
-        preset,
-        provider: providerForPreset(preset),
-      });
-    } catch {
-      return { ...DEFAULT_CLAUDE_CONFIG };
-    }
+    return this.normalizedConfig(this.load().projects[projectKey(cwd)]);
   }
 
   public getCredential(cwd: string): string | undefined {
-    const encrypted = this.load().projects[projectKey(cwd)]?.encryptedCredential;
-    if (!encrypted) {
-      return undefined;
-    }
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Windows 安全存储当前不可用，无法解密接口凭据。');
-    }
-
-    try {
-      return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
-    } catch {
-      throw new Error('接口凭据无法解密，请在接入设置中重新填写。');
-    }
+    return this.decryptedCredential(this.load().projects[projectKey(cwd)]);
   }
 
   public getView(cwd: string): ClaudeConfigView {
@@ -169,6 +146,20 @@ export class ClaudeConfigStore {
   public createSnapshot(cwd: string): ClaudeConfigSnapshot {
     const project = this.load().projects[projectKey(cwd)];
     return project ? { project: structuredClone(project) } : {};
+  }
+
+  public createLaunchSnapshot(cwd: string): ClaudeLaunchConfigSnapshot {
+    const project = this.load().projects[projectKey(cwd)];
+    return {
+      allowBypassPermissions: project?.allowBypassPermissions ?? DEFAULT_ALLOW_BYPASS_PERMISSIONS,
+      config: this.normalizedConfig(project),
+      credential: this.decryptedCredential(project),
+      storage: project ? { project: structuredClone(project) } : {},
+    };
+  }
+
+  public launchSnapshotIsCurrent(cwd: string, snapshot: ClaudeLaunchConfigSnapshot): boolean {
+    return isDeepStrictEqual(this.createSnapshot(cwd), snapshot.storage);
   }
 
   public restoreSnapshot(cwd: string, snapshot: ClaudeConfigSnapshot): void {
@@ -242,6 +233,44 @@ export class ClaudeConfigStore {
     };
     this.persist(store);
     return this.getView(cwd);
+  }
+
+  private normalizedConfig(stored: StoredClaudeConfig | undefined): NormalizedClaudeConfig {
+    if (!stored) {
+      return { ...DEFAULT_CLAUDE_CONFIG };
+    }
+
+    const preset = findClaudeProvider(stored.preset)?.id ?? 'custom';
+    try {
+      return normalizeClaudeConfig({
+        apiKeyHelperPolicy: stored.apiKeyHelperPolicy,
+        authMode: stored.authMode,
+        baseUrl: stored.baseUrl,
+        credentialAction: 'keep',
+        model: stored.model,
+        modelFast: stored.modelFast || stored.model,
+        preset,
+        provider: providerForPreset(preset),
+      });
+    } catch {
+      return { ...DEFAULT_CLAUDE_CONFIG };
+    }
+  }
+
+  private decryptedCredential(stored: StoredClaudeConfig | undefined): string | undefined {
+    const encrypted = stored?.encryptedCredential;
+    if (!encrypted) {
+      return undefined;
+    }
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('Windows 安全存储当前不可用，无法解密接口凭据。');
+    }
+
+    try {
+      return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+    } catch {
+      throw new Error('接口凭据无法解密，请在接入设置中重新填写。');
+    }
   }
 
   private load(): StoredClaudeConfigFile {

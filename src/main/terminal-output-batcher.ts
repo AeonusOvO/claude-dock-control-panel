@@ -19,8 +19,8 @@ export interface TerminalOutputBatcherOptions {
 }
 
 interface OutputBuffer {
+  byteLength: number;
   chunks: string[];
-  length: number;
   ptyGeneration: PtyGeneration;
   timer: ReturnType<typeof setTimeout> | undefined;
 }
@@ -60,22 +60,30 @@ export class TerminalOutputBatcher {
     }
 
     const buffer = this.buffers.get(sessionId) ?? {
+      byteLength: 0,
       chunks: [],
-      length: 0,
       ptyGeneration,
       timer: undefined,
     };
     buffer.chunks.push(data);
-    buffer.length += data.length;
+    buffer.byteLength += Buffer.byteLength(data, 'utf8');
     this.buffers.set(sessionId, buffer);
 
-    if (buffer.length >= this.flushBytes) {
-      this.flush(sessionId, ptyGeneration, buffer);
+    if (buffer.byteLength >= this.flushBytes) {
+      this.flushOwned(sessionId, ptyGeneration, buffer);
       return;
     }
     buffer.timer ??= setTimeout(() => {
-      this.flush(sessionId, ptyGeneration, buffer);
+      this.flushOwned(sessionId, ptyGeneration, buffer);
     }, this.flushMs);
+  }
+
+  public flush(sessionId: string, expectedGeneration: PtyGeneration): void {
+    const buffer = this.buffers.get(sessionId);
+    if (!buffer || buffer.ptyGeneration !== expectedGeneration) {
+      return;
+    }
+    this.flushOwned(sessionId, expectedGeneration, buffer);
   }
 
   public discard(sessionId: string, expectedGeneration?: PtyGeneration): void {
@@ -110,7 +118,7 @@ export class TerminalOutputBatcher {
     this.buffers.clear();
   }
 
-  private flush(
+  private flushOwned(
     sessionId: string,
     expectedGeneration: PtyGeneration,
     expectedBuffer: OutputBuffer,

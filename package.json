@@ -35,7 +35,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
     "test": "vitest run",
-    "test:conpty": "npm run build && electron scripts/conpty-resize-smoke.cjs",
+    "test:conpty": "npm run build && npm run test:conpty:built",
+    "test:conpty:built": "electron scripts/conpty-resize-smoke.cjs",
     "test:control-theme": "npm run build:renderer && electron scripts/control-theme-smoke.cjs",
     "test:dialog-select": "npm run build:renderer && electron scripts/dialog-select-smoke.cjs",
     "test:layout": "npm run build:renderer && electron scripts/layout-smoke.cjs",
@@ -52,7 +53,7 @@
     "dist": "npm run build && electron-builder --win nsis",
     "release:manifest": "node scripts/generate-release-manifest.mjs outputs",
     "release:verify": "node scripts/verify-release-bundle.mjs outputs",
-    "verify": "npm run check:licenses && npm run lint && npm run format:check && npm run typecheck && npm test && npm run test:layout && npm run test:control-theme && npm run build"
+    "verify": "npm run check:licenses && npm run lint && npm run format:check && npm run typecheck && npm test && npm run test:layout && npm run test:control-theme && npm run build && npm run test:conpty:built"
   },
   "dependencies": {
     "@fontsource-variable/hanken-grotesk": "^5.3.0",

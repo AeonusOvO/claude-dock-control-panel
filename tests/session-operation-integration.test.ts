@@ -19,8 +19,12 @@ describe('main-process session operation ownership', () => {
     expect(mainSource).toContain(
       'await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId);',
     );
+    expect(mainSource).toContain('await runOwnedProjectDirectoryClosure({');
     expect(mainSource).toContain(
-      'await Promise.all(sessionIds.map(invalidateAndWaitForDevelopmentSessionOperation));',
+      'invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,',
+    );
+    expect(mainSource).toMatch(
+      /if \(!enteredFailure\) \{\s+continue;\s+\}\s+terminalOutputBatcher\.flush\(status\.id, status\.ptyGeneration\);[\s\S]*?mainWindow\?\.webContents\.send\('workspace:state', enriched\)/,
     );
   });
 
@@ -31,7 +35,7 @@ describe('main-process session operation ownership', () => {
     );
     expect(handler).toContain('withDevelopmentSessionOperation(validatedSessionId');
     expect(handler).toMatch(
-      /assertOfficialProviderAllowed[\s\S]*?assertCurrent\(\)[\s\S]*?runtime\.prepareLaunch[\s\S]*?assertCurrent\(\)[\s\S]*?agentRuntimeStore\.get\(status\.cwd\) !== 'codex'[\s\S]*?restartRuntimeTerminal\([\s\S]*?ownedGeneration = ptyGeneration/,
+      /assertOfficialProviderAllowed[\s\S]*?assertCurrent\(\)[\s\S]*?runtime\.prepareLaunch[\s\S]*?ownedGeneration = prepared\.predecessorPtyGeneration[\s\S]*?assertCurrent\(\)[\s\S]*?agentRuntimeStore\.get\(status\.cwd\) !== 'codex'[\s\S]*?restartRuntimeTerminal\([\s\S]*?ownedGeneration = ptyGeneration/,
     );
     expect(handler).toContain('if (launchPrepared || ownedGeneration !== undefined)');
   });
@@ -58,7 +62,19 @@ describe('main-process session operation ownership', () => {
       /projectRuntimeSwitchOperations\.switchRuntime\([\s\S]*?validatedSessionId[\s\S]*?status\.cwd[\s\S]*?selected/,
     );
     expect(mainSource).toMatch(
-      /assertDevelopmentOperationAllowed\(initialStatus\.cwd\)[\s\S]*?developmentSessionOperations\.run/,
+      /projectRuntimeSwitchOperations\.assertDevelopmentOperationAllowed\(initialStatus\.cwd\)[\s\S]*?managedConfigTransactions\.assertDevelopmentOperationAllowed\(initialStatus\.cwd, sessionId\)[\s\S]*?developmentSessionOperations\.run[\s\S]*?projectRuntimeSwitchOperations\.assertDevelopmentOperationAllowed\(currentStatus\.cwd\)[\s\S]*?managedConfigTransactions\.assertDevelopmentOperationAllowed\(currentStatus\.cwd, sessionId\)/,
+    );
+    expect(mainSource).toMatch(
+      /const resolved = resolveDirectory[\s\S]*?managedConfigTransactions\.assertDevelopmentOperationAllowed\(resolved\)[\s\S]*?workspace\.openConversation/,
+    );
+    expect(mainSource).toContain(
+      'acquireIsolation: () => acquireConfigTransactionIsolation(options.sessionId, options.cwd)',
+    );
+    expect(mainProcessCoordinatorSource).toMatch(
+      /acquireDevelopmentIsolation[\s\S]*?intent\.isolationAcquired = true[\s\S]*?Promise\.all\(sessionsToInvalidate\.map\(invalidateAndWait\)\)/,
+    );
+    expect(mainProcessCoordinatorSource).toMatch(
+      /options\.assertOperationOwnership\(\)[\s\S]*?await options\.acquireIsolation\(\)[\s\S]*?ownership\.assertCurrent\(\)[\s\S]*?options\.assertOperationOwnership\(\)[\s\S]*?const snapshot = options\.createSnapshot\(\)/,
     );
     expect(mainProcessCoordinatorSource).toMatch(
       /await Promise\.all\([\s\S]*?invalidateAndWait[\s\S]*?assertStable\(intent, true\)[\s\S]*?prepareProvider[\s\S]*?assertStable\(intent, true\)[\s\S]*?cleanupBeforeCommit[\s\S]*?assertStable\(intent, true\)[\s\S]*?commitRuntime/,
@@ -72,7 +88,47 @@ describe('main-process session operation ownership', () => {
       mainSource.indexOf("'claude:command'"),
     );
     expect(claudeLaunchHandler).toMatch(
-      /runtime\.prepareLaunch[\s\S]*?assertCurrent\(\)[\s\S]*?agentRuntimeStore\.get\(status\.cwd\) !== 'claude'[\s\S]*?restartRuntimeTerminal/,
+      /runtime\.prepareLaunch[\s\S]*?ownedGeneration = prepared\.predecessorPtyGeneration[\s\S]*?assertLaunchCurrent\(\)[\s\S]*?agentRuntimeStore\.get\(status\.cwd\) !== 'claude'[\s\S]*?restartRuntimeTerminal/,
+    );
+
+    const speedHandler = mainSource.slice(
+      mainSource.indexOf("'claude:set-model-speed'"),
+      mainSource.indexOf("'claude:permission-mode-observed'"),
+    );
+    expect(speedHandler).toMatch(
+      /prepareModelSpeedRelaunch[\s\S]*?launchPrepared = true[\s\S]*?ownedGeneration = prepared\.predecessorPtyGeneration[\s\S]*?assertCurrent\(\)[\s\S]*?restartRuntimeTerminal/,
+    );
+  });
+
+  it('owns permanent conversation deletion above every resume launch path', () => {
+    expect(mainSource).toContain('await runOwnedClaudeConversationDeletion({');
+    expect(mainSource).toContain(
+      'sessionIdsForConversation: () => runtime.sessionIdsForConversation(cwd, conversationId),',
+    );
+    expect(mainSource).toContain(
+      'invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,',
+    );
+    expect(mainSource).toContain(
+      'removePreferences: () => runtime.removeConversationPreferences(conversationId),',
+    );
+    expect(mainSource).toMatch(
+      /claudeRuntime\.setConversationLaunchGuard[\s\S]*?claudeConversationLifecycle\.assertLaunchAllowed/,
+    );
+
+    const storedConversationHandler = mainSource.slice(
+      mainSource.indexOf("'project:open-stored-conversation'"),
+      mainSource.indexOf("'terminal:start'"),
+    );
+    expect(storedConversationHandler).toMatch(
+      /assertLaunchAllowed[\s\S]*?runResume[\s\S]*?conversationOwnership\.assertCurrent\(\)[\s\S]*?prepareLaunchWithSession/,
+    );
+
+    const exactResumeHandler = mainSource.slice(
+      mainSource.indexOf("'claude:launch-with-session'"),
+      mainSource.indexOf("'claude:plugins-get'"),
+    );
+    expect(exactResumeHandler).toMatch(
+      /runResume[\s\S]*?conversationOwnership\.assertCurrent\(\)[\s\S]*?prepareLaunchWithSession/,
     );
   });
 

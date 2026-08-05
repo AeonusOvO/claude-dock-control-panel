@@ -426,7 +426,7 @@ describe('Claude runtime permission mode observation', () => {
       'await this.submitClaudeCommand(runtime, `/model ${option.model}`, assertCurrent);',
     );
     expect(runtimeSource).toContain(
-      'await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`);',
+      'await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`, assertCurrent);',
     );
     expect(runtimeSource).toContain('const submitted = await writeTerminalSubmission(');
     expect(runtimeSource).toContain('buildTerminalSubmission(commandLine),');

@@ -33,7 +33,6 @@ import type {
   ClaudeLaunchMode,
   ClaudeModelOption,
   ClaudeModelOptions,
-  ClaudeOperationResult,
   ClaudePermissionMode,
   ClaudePluginCatalog,
   ClaudePluginMarketplaceView,
@@ -90,6 +89,7 @@ import type {
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import { claudeStateOwnershipIsCurrent } from '../shared/claude-state-ownership';
 import { estimateChatUsage } from '../shared/chat-usage';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import {
@@ -142,7 +142,9 @@ import {
   type ClaudeLaunchAttemptToken,
   type ClaudeLaunchResultDisposition,
 } from './claude-launch-attempt';
-import { SessionGenerationRegistry } from './session-generation';
+import { orchestrateSessionOperation, SessionGenerationRegistry } from './session-generation';
+import { FolderHistoryLoadCoordinator } from './folder-history-load';
+import { TerminalOutputPump } from './terminal-output-pump';
 import {
   closeOpenSelect,
   enhanceAllSelects,
@@ -169,17 +171,10 @@ installSelectDismissHandlers();
 installPressRipples();
 
 interface TerminalView {
-  /** Latest PTY-output revision fully applied to xterm's screen buffer. */
-  appliedOutputRevision: number;
   container: HTMLDivElement;
   fitAddon: FitAddon;
-  /** Latest PTY-output revision accepted into this view's renderer-side queue. */
-  outputRevision: number;
-  /** Output arriving between two frames, flushed as one `write` so heavy output stays smooth. */
-  pending: string[];
-  pendingLength: number;
-  /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
-  pendingFrame: number;
+  /** Lossless, one-write-in-flight output owner for this exact PTY generation. */
+  outputPump: TerminalOutputPump;
   /** Main-process probes waiting for all output that preceded their request to reach xterm. */
   permissionModeProbes: Array<{
     probeId: number;
@@ -1143,8 +1138,7 @@ const expandedFolders = new Set<string>();
 /** Keeps each folder's history list where the user scrolled it, across sidebar rebuilds. */
 const historyScrollPositions = new Map<string, number>();
 const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
-const historyLoadsInFlight = new Set<string>();
-const historyReloadRequested = new Set<string>();
+const folderHistoryLoads = new FolderHistoryLoadCoordinator();
 let dragDepth = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
@@ -1176,6 +1170,7 @@ let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
 let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
 const claudeLaunchAttempts = new ClaudeLaunchAttemptRegistry();
+const claudeSpeedOperations = new SessionGenerationRegistry();
 const codexLaunchAttempts = new SessionGenerationRegistry();
 const storedConversationRestores = new Set<string>();
 let codexOperationInProgress = false;
@@ -1192,7 +1187,6 @@ let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 /** Set while a status-bar switch is in flight, so a second click cannot stack terminal writes. */
 let modeSwitchInProgress = false;
 let modelSwitchInProgress = false;
-let speedSwitchInProgress = false;
 let effortSwitchInProgress = false;
 const guardedButtons = new WeakSet<HTMLButtonElement>();
 let chatConfig: ChatConfigView | undefined;
@@ -4432,6 +4426,18 @@ const failClaudeLaunchAttempt = (token: ClaudeLaunchAttemptToken): boolean => {
   return true;
 };
 
+const claudeStateCanApply = (state: ClaudeProjectState): boolean => {
+  const status = workspaceState.sessions.find((session) => session.id === state.sessionId);
+  if (!status) {
+    return false;
+  }
+  return claudeStateOwnershipIsCurrent(
+    state,
+    claudeStates.get(state.sessionId)?.stateRevision,
+    status.ptyGeneration,
+  );
+};
+
 const renderClaudeLaunchResult = (
   token: ClaudeLaunchAttemptToken,
   state: ClaudeProjectState,
@@ -4452,7 +4458,7 @@ const renderClaudeState = (
   observeLaunch = true,
   invalidatePendingLoad = true,
 ): void => {
-  if (!workspaceState.sessions.some((session) => session.id === state.sessionId)) {
+  if (!claudeStateCanApply(state)) {
     return;
   }
   if (invalidatePendingLoad) {
@@ -4592,13 +4598,14 @@ const renderClaudeState = (
   footerModel.disabled = modelSwitchInProgress;
   footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
   footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
+  const speedOperationActive = claudeSpeedOperations.isActive(state.sessionId);
   footerSpeed.textContent = modelSpeedFooterLabel(state);
   footerSpeed.dataset.availability = state.speed.availability;
   footerSpeed.dataset.mechanism = state.speed.mechanism;
   footerSpeed.dataset.status = state.speed.status;
   footerSpeed.disabled =
-    speedSwitchInProgress || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
-  footerSpeed.setAttribute('aria-busy', String(speedSwitchInProgress));
+    speedOperationActive || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
+  footerSpeed.setAttribute('aria-busy', String(speedOperationActive));
   footerSpeed.title = state.speed.detail;
   footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
   footerMode.dataset.mode = state.permissionMode ?? 'unknown';
@@ -4680,7 +4687,11 @@ const loadClaudeState = async (sessionId: string): Promise<void> => {
     }
     return;
   }
-  if (!claudeStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
+  if (
+    !claudeStateLoadGenerations.finish(request) ||
+    state.sessionId !== sessionId ||
+    !claudeStateCanApply(state)
+  ) {
     return;
   }
   const currentAttempt = claudeLaunchAttempts.current(sessionId);
@@ -6611,8 +6622,8 @@ const switchClaudeModelSpeed = async (mode: ModelSpeedMode): Promise<void> => {
   if (
     !status ||
     !state ||
-    speedSwitchInProgress ||
-    (state.active && claudeLaunchAttempts.isBusy(status.id))
+    claudeSpeedOperations.isActive(status.id) ||
+    claudeLaunchAttempts.isBusy(status.id)
   ) {
     return;
   }
@@ -6621,89 +6632,79 @@ const switchClaudeModelSpeed = async (mode: ModelSpeedMode): Promise<void> => {
     return;
   }
 
-  const attempt = state.active ? beginClaudeLaunchAttempt(status, state) : undefined;
+  const operation = claudeSpeedOperations.begin(status.id);
+  const attempt = beginClaudeLaunchAttempt(status, state);
+  renderClaudeState(state, false, false);
+  const fastLabel = modelSpeedFastLabel(state);
+  const speedDetail =
+    mode === 'standard'
+      ? `将「${state.speed.model}」恢复为标准服务速度。`
+      : state.speed.mechanism === 'claude-native-fast'
+        ? `将「${state.speed.model}」切换为 ${fastLabel}。Claude Fast 仅适用于受支持的 Opus 5 / 4.8，最高约 2.5x，并按更高单价计费；组织资格、额度和模型可用性仍由 Anthropic 判定。`
+        : `将为「${state.speed.model}」请求 ${fastLabel}（service_tier=fast）。该档位的额度消耗或计价可能更高；ClaudeDock 只能确认请求已发送，无法确认 ChatGPT 上游最终采用。`;
+  const lifecycleDetail =
+    '如果主进程确认 Claude Code 仍在运行，ClaudeDock 会重启当前 PowerShell，并通过 --resume 精确恢复当前对话；不会压缩上下文。如果会话已经停止，则只保存此接入与模型的速度偏好，供下次新建或恢复时使用。';
   let endMask = (): void => undefined;
-  let operationStarted = false;
-  let loadStateAfterCompletion = false;
   try {
-    let result: ClaudeOperationResult;
-    if (attempt) {
-      const fastLabel = modelSpeedFastLabel(state);
-      const speedDetail =
-        mode === 'standard'
-          ? `将「${state.speed.model}」恢复为标准服务速度。`
-          : state.speed.mechanism === 'claude-native-fast'
-            ? `将「${state.speed.model}」切换为 ${fastLabel}。Claude Fast 仅适用于受支持的 Opus 5 / 4.8，最高约 2.5x，并按更高单价计费；组织资格、额度和模型可用性仍由 Anthropic 判定。`
-            : `将为「${state.speed.model}」请求 ${fastLabel}（service_tier=fast）。该档位的额度消耗或计价可能更高；ClaudeDock 只能确认请求已发送，无法确认 ChatGPT 上游最终采用。`;
-      const outcome = await orchestrateClaudeLaunchAttempt({
-        applyResult: (nextResult) =>
-          renderClaudeLaunchResult(
-            attempt,
-            nextResult.state,
-            nextResult.ok ? 'success' : 'failure',
-          ),
-        confirmation: () =>
-          requestConfirmation({
-            confirmLabel: '切换并恢复',
-            message: `${speedDetail}\n\nClaudeDock 会重启当前 PowerShell，并通过 --resume 精确恢复当前对话；不会压缩上下文。`,
-            title: '切换服务速度',
-          }),
-        onRelease: () => refreshClaudeLaunchControls(attempt.sessionId),
-        prepare: () => {
-          speedSwitchInProgress = true;
-          operationStarted = true;
-          renderClaudeState(state, true, false);
-          endMask = beginTerminalMask(status.id, '正在切换服务速度并恢复当前对话');
-        },
-        registry: claudeLaunchAttempts,
-        start: () => window.controlPanel.setClaudeModelSpeed(status.id, mode),
-        token: attempt,
-      });
-      if (outcome.status === 'rejected') {
-        loadStateAfterCompletion = true;
-        showToast('切换服务速度时发生异常。', 'error');
-        return;
-      }
-      if (outcome.status !== 'resolved') {
-        return;
-      }
-      result = outcome.result;
-    } else {
-      speedSwitchInProgress = true;
-      operationStarted = true;
-      renderClaudeState(state, true, false);
-      result = await window.controlPanel.setClaudeModelSpeed(status.id, mode);
-      renderClaudeState(result.state);
+    const outcome = await orchestrateSessionOperation({
+      applyResult: (result) => {
+        if (result.state.sessionId !== operation.sessionId) {
+          return false;
+        }
+        renderClaudeState(result.state);
+        return true;
+      },
+      confirmation: () =>
+        requestConfirmation({
+          confirmLabel: '确认切换',
+          message: `${speedDetail}\n\n${lifecycleDetail}`,
+          title: '切换服务速度',
+        }),
+      onCancel: () => {
+        if (claudeLaunchAttempts.cancel(attempt)) {
+          refreshClaudeLaunchControls(attempt.sessionId);
+        }
+      },
+      registry: claudeSpeedOperations,
+      start: () => {
+        if (!claudeLaunchAttempts.isCurrent(attempt)) {
+          throw new Error('确认期间会话状态已经变化。');
+        }
+        endMask = beginTerminalMask(status.id, '正在应用服务速度设置');
+        return window.controlPanel.setClaudeModelSpeed(status.id, mode);
+      },
+      token: operation,
+    });
+    if (outcome.status === 'rejected') {
+      failClaudeLaunchAttempt(attempt);
+      showToast('切换服务速度时发生异常。', 'error');
+      return;
+    }
+    if (outcome.status !== 'resolved') {
+      return;
     }
 
-    loadStateAfterCompletion = true;
+    const { result } = outcome;
     if (!result.ok) {
-      if (attempt) {
-        failClaudeLaunchAttempt(attempt);
-      }
+      failClaudeLaunchAttempt(attempt);
       showToast(result.error ?? '无法切换服务速度。', 'error');
       return;
     }
-    if (!state.active) {
+    if (!result.state.active) {
+      if (claudeLaunchAttempts.cancel(attempt)) {
+        refreshClaudeLaunchControls(attempt.sessionId);
+      }
       showToast('速度偏好已保存；下次新建或恢复会话时生效。', 'success');
     } else if (mode === 'standard') {
       showToast('已按标准速度恢复当前对话。', 'success');
-    } else if (state.speed.mechanism === 'gpt-service-tier') {
+    } else if (result.state.speed.mechanism === 'gpt-service-tier') {
       showToast('已为当前对话请求 GPT 1.5x；上游是否采用仍由 ChatGPT 决定。', 'success');
     } else {
       showToast('已请求 Claude Fast；是否生效将由 Claude Code 状态行确认。', 'success');
     }
-  } catch {
-    if (!attempt || failClaudeLaunchAttempt(attempt)) {
-      loadStateAfterCompletion = true;
-      showToast('切换服务速度时发生异常。', 'error');
-    }
   } finally {
     endMask();
-    if (operationStarted) {
-      speedSwitchInProgress = false;
-    }
-    if (loadStateAfterCompletion) {
+    if (claudeSpeedOperations.finish(operation)) {
       const knownState = claudeStates.get(status.id);
       if (knownState) {
         renderClaudeState(knownState, true, false);
@@ -6834,6 +6835,7 @@ const openSpeedMenu = (): void => {
     state.speed.preference === 'standard' && state.speed.status === 'standard';
   const fastAlreadyApplied =
     state.speed.preference === 'fast' && state.speed.status !== 'not-active';
+  const speedOperationActive = claudeSpeedOperations.isActive(status.id);
   footerSpeedMenu.replaceChildren(
     buildFooterRadioMenuItem(
       '标准速度',
@@ -6842,7 +6844,7 @@ const openSpeedMenu = (): void => {
       () => {
         void switchClaudeModelSpeed('standard');
       },
-      speedSwitchInProgress || standardAlreadyApplied,
+      speedOperationActive || standardAlreadyApplied,
     ),
     buildFooterRadioMenuItem(
       fastLabel,
@@ -6851,7 +6853,7 @@ const openSpeedMenu = (): void => {
       () => {
         void switchClaudeModelSpeed('fast');
       },
-      speedSwitchInProgress || !state.speed.canSelectFast || fastAlreadyApplied,
+      speedOperationActive || !state.speed.canSelectFast || fastAlreadyApplied,
     ),
   );
 
@@ -8298,13 +8300,18 @@ const createTerminalView = (status: TerminalStatus, active: boolean): TerminalVi
   }
 
   const view: TerminalView = {
-    appliedOutputRevision: 0,
     container,
     fitAddon,
-    outputRevision: 0,
-    pending: [],
-    pendingFrame: 0,
-    pendingLength: 0,
+    outputPump: new TerminalOutputPump({
+      cancelFrame: (handle) => window.cancelAnimationFrame(handle),
+      isCurrent: () => ownsTerminalGeneration(sessionId, ptyGeneration, view),
+      onAppliedRevision: () => {
+        reportTerminalPermissionMode(sessionId, view);
+        answerReadyPermissionModeProbes(sessionId, view);
+      },
+      scheduleFrame: (callback) => window.requestAnimationFrame(callback),
+      write: (data, callback) => terminal.write(data, callback),
+    }),
     permissionModeProbes: [],
     ptyGeneration,
     terminal,
@@ -8355,9 +8362,6 @@ const createTerminalView = (status: TerminalStatus, active: boolean): TerminalVi
   return view;
 };
 
-/** Caps the queue so a runaway process cannot grow the buffer without bound. */
-const MAX_PENDING_OUTPUT = 512 * 1024;
-
 /**
  * xterm has already applied cursor moves and retained unchanged cells, so its current screen
  * contains the complete mode badge even when the PTY emitted only a repaint delta. Read every row
@@ -8393,7 +8397,7 @@ const answerReadyPermissionModeProbes = (sessionId: string, view: TerminalView):
   const ready = view.permissionModeProbes.filter(
     (probe) =>
       probe.ptyGeneration === view.ptyGeneration &&
-      probe.requiredRevision <= view.appliedOutputRevision,
+      probe.requiredRevision <= view.outputPump.appliedRevision,
   );
   if (ready.length === 0) {
     return;
@@ -8401,7 +8405,7 @@ const answerReadyPermissionModeProbes = (sessionId: string, view: TerminalView):
   view.permissionModeProbes = view.permissionModeProbes.filter(
     (probe) =>
       probe.ptyGeneration !== view.ptyGeneration ||
-      probe.requiredRevision > view.appliedOutputRevision,
+      probe.requiredRevision > view.outputPump.appliedRevision,
   );
   const mode = readTerminalPermissionMode(view);
   for (const { probeId, ptyGeneration } of ready) {
@@ -8417,8 +8421,8 @@ const rejectPermissionModeProbes = (sessionId: string, view: TerminalView): void
 };
 
 /**
- * Output is queued and written once per frame. Writing every IPC chunk separately made xterm reflow
- * dozens of times between paints, which is what the input stutter actually was.
+ * Output is admitted into the exact generation's lossless pump. The pump coalesces work per frame,
+ * bounds each xterm parse quantum, and never starts another write until xterm acknowledges this one.
  */
 const queueTerminalOutput = (
   sessionId: string,
@@ -8429,52 +8433,14 @@ const queueTerminalOutput = (
   if (!view || !ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
     return;
   }
-
-  view.outputRevision += 1;
-  view.pending.push(data);
-  view.pendingLength += data.length;
-  if (view.pendingLength > MAX_PENDING_OUTPUT) {
-    // Dropping the oldest queued output keeps the newest visible; xterm's scrollback would have
-    // discarded it moments later anyway.
-    while (view.pending.length > 1 && view.pendingLength > MAX_PENDING_OUTPUT) {
-      view.pendingLength -= view.pending.shift()?.length ?? 0;
-    }
-  }
-  if (view.pendingFrame !== 0) {
-    return;
-  }
-  view.pendingFrame = requestAnimationFrame(() => {
-    view.pendingFrame = 0;
-    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
-      view.pending.length = 0;
-      view.pendingLength = 0;
-      return;
-    }
-    const chunk = view.pending.join('');
-    const revision = view.outputRevision;
-    view.pending.length = 0;
-    view.pendingLength = 0;
-    view.terminal.write(chunk, () => {
-      if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
-        return;
-      }
-      view.appliedOutputRevision = Math.max(view.appliedOutputRevision, revision);
-      reportTerminalPermissionMode(sessionId, view);
-      answerReadyPermissionModeProbes(sessionId, view);
-    });
-  });
+  view.outputPump.enqueue(data);
 };
 
 const disposeTerminalView = (sessionId: string, view: TerminalView): void => {
   if (terminalViews.get(sessionId) === view) {
     terminalViews.delete(sessionId);
   }
-  if (view.pendingFrame !== 0) {
-    cancelAnimationFrame(view.pendingFrame);
-    view.pendingFrame = 0;
-  }
-  view.pending.length = 0;
-  view.pendingLength = 0;
+  view.outputPump.dispose();
   rejectPermissionModeProbes(sessionId, view);
   const mask = terminalMasks.get(sessionId);
   if (mask?.view === view) {
@@ -9299,30 +9265,42 @@ const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
     showToast(result.error ?? '无法移除这个项目。', 'error');
     return;
   }
-  expandedFolders.delete(project.path.toLowerCase());
-  historyScrollPositions.delete(project.path.toLowerCase());
+  const key = project.path.toLowerCase();
+  folderHistoryLoads.invalidate(key);
+  storedConversations.delete(key);
+  expandedFolders.delete(key);
+  historyScrollPositions.delete(key);
   showToast(`已从列表中移除 ${project.name}`);
 };
+
+const workspaceContainsProject = (projectKey: string): boolean =>
+  workspaceState.projects.some((project) => project.path.toLowerCase() === projectKey);
 
 /** Loads a folder's Claude conversation history without requiring a live terminal for it. */
 async function loadFolderHistory(projectPath: string, force = false): Promise<void> {
   const key = projectPath.toLowerCase();
-  if (historyLoadsInFlight.has(key)) {
-    if (force) historyReloadRequested.add(key);
-    return;
-  }
   if (!force && storedConversations.has(key)) {
     return;
   }
-  historyLoadsInFlight.add(key);
+  const token = folderHistoryLoads.request(key, force);
+  if (!token) {
+    return;
+  }
+
   try {
-    storedConversations.set(key, await window.controlPanel.getClaudeSessionsForPath(projectPath));
+    const conversations = await window.controlPanel.getClaudeSessionsForPath(projectPath);
+    if (!folderHistoryLoads.isCurrent(token) || !workspaceContainsProject(key)) {
+      return;
+    }
+    storedConversations.set(key, conversations);
     renderProjectList();
   } catch {
-    storedConversations.set(key, []);
+    if (folderHistoryLoads.isCurrent(token) && workspaceContainsProject(key)) {
+      storedConversations.set(key, []);
+    }
   } finally {
-    historyLoadsInFlight.delete(key);
-    if (historyReloadRequested.delete(key)) {
+    const completion = folderHistoryLoads.finish(token);
+    if (completion.current && completion.reloadRequested && workspaceContainsProject(key)) {
       void loadFolderHistory(projectPath, true);
     }
   }
@@ -9359,17 +9337,10 @@ const deleteStoredConversation = async (
   session: ClaudeSessionMetadata,
 ): Promise<void> => {
   const title = session.sessionName || session.sessionId.slice(0, 8);
-  const runningMatches = workspaceState.sessions.filter(
-    (status) =>
-      status.cwd.toLowerCase() === projectPath.toLowerCase() &&
-      claudeStates.get(status.id)?.metrics?.sessionId === session.sessionId,
-  );
-  const activeWarning =
-    runningMatches.length > 0 ? '\n\n该历史对话当前仍在运行；继续后会先关闭对应终端。' : '';
   if (
     !(await requestConfirmation({
       confirmLabel: '永久删除',
-      message: `永久删除历史对话“${title}”？此操作无法撤销。${activeWarning}`,
+      message: `永久删除历史对话“${title}”？此操作无法撤销；如果该对话仍在运行，会先关闭对应终端。`,
       title: '删除历史对话',
       tone: 'danger',
     }))
@@ -9378,16 +9349,10 @@ const deleteStoredConversation = async (
   }
 
   try {
-    for (const status of runningMatches) {
-      const result = await window.controlPanel.closeProject(status.id);
-      renderWorkspace(result.state);
-      if (!result.ok) {
-        throw new Error(result.error ?? '无法关闭仍在运行的历史对话。');
-      }
-    }
-    const deleted = await window.controlPanel.deleteClaudeSession(projectPath, session.sessionId);
-    if (!deleted) {
-      throw new Error('历史对话文件已不存在或无法删除。');
+    const result = await window.controlPanel.deleteClaudeSession(projectPath, session.sessionId);
+    renderWorkspace(result.state);
+    if (!result.ok || !result.deleted) {
+      throw new Error(result.error ?? '历史对话文件已不存在或无法删除。');
     }
     await loadFolderHistory(projectPath, true);
     showToast(`已删除历史对话“${title}”`);
@@ -9702,6 +9667,7 @@ function renderWorkspace(state: WorkspaceState): void {
   for (const token of codexLaunchAttempts.prune(validSessionIds)) {
     releasedCodexLaunches.add(token.sessionId);
   }
+  claudeSpeedOperations.prune(validSessionIds);
   claudeStateLoadGenerations.prune(validSessionIds);
   codexStateLoadGenerations.prune(validSessionIds);
   runtimeStateLoadGenerations.prune(validSessionIds);
@@ -10476,7 +10442,7 @@ window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probe
     window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);
     return;
   }
-  if (view.appliedOutputRevision >= view.outputRevision) {
+  if (view.outputPump.appliedRevision >= view.outputPump.acceptedRevision) {
     window.controlPanel.reportClaudePermissionModeProbe(
       sessionId,
       ptyGeneration,
@@ -10488,7 +10454,7 @@ window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probe
   view.permissionModeProbes.push({
     probeId,
     ptyGeneration,
-    requiredRevision: view.outputRevision,
+    requiredRevision: view.outputPump.acceptedRevision,
   });
 });
 /*

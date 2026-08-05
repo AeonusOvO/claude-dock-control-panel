@@ -111,15 +111,19 @@ IPC 返回成功并不代表新的终端生命周期已经可见，因此 render
 ### 会话并发与运行时所有权
 
 - 每次真实 PowerShell/ConPTY spawn 都由 `TerminalSession` 生成新的 `ptyGeneration`；停止不递增，
-  重启只因一次新 spawn 递增一次。主进程 8ms / 64KiB 与 renderer 每帧 / 512KiB 的输出合并都绑定
-  精确 generation 和缓冲/视图身份，旧定时器、RAF 或写入完成回调不能清空或渲染替代终端。
+  重启只因一次新 spawn 递增一次。主进程按 8ms / 64KiB UTF-8 字节合并输出；renderer 的无损泵按帧
+  调度、同一时间只保留一个 xterm 写入，每次最多 64Ki 个 UTF-16 code unit 且不切开代理对。实时输出
+  不再因 renderer 队列过大而丢弃旧分块。两侧都绑定精确 generation 和缓冲/视图身份；自然退出会先
+  同步发送该 generation 的末尾缓冲，旧定时器、RAF 或写入完成回调不能清空或渲染替代终端。
 - 每次 Claude Code launch 独占
   `userData/claude/runtime/<session-id>/launch-<runtime-token>-<launch-generation>/`，其中同时存放
   `settings.json`、`metrics.json`、`signal.json` 与 `turn-stop.json`。异步读取完成后还会复核该 launch
   与精确 PTY 的所有权，不复用前一次启动的状态或信号文件。
 - 直接 start/restart/stop 固定按“预检 → 失效旧操作 → 解除精确 generation 的 probe → 等待 unwind →
   复检 → generation-scoped 清理 → 同步 PTY 动作”执行。同一规范化项目目录的开发引擎切换会整体
-  保留所有权，配置 snapshot/save/resume/rollback 按目录 FIFO；其他项目目录仍可并行。
+  保留所有权；项目配置按目录 FIFO 执行“异步准备 → 同步提交 → 完成验证/恢复 → 所有权校验回滚”。
+  准备 OpenAI 转换、历史记录或 Router 时原 profile 保持不变，提交前还会复核快照；事务屏障持续到
+  完成或回滚状态发布结束，其他项目目录仍可并行。
 - renderer 的 Claude、Codex 与开发引擎状态请求，以及 Claude 启动的确认和 IPC 结果，都由 per-session
   generation 隔离；删除会话时同步裁剪结果 tombstone。可执行竞态测试用假定时器、延迟 Promise、
   可控 PTY 回调和真实临时文件验证旧完成路径不能影响替代会话。
@@ -318,6 +322,7 @@ outputs/                 本地安装包和解包产物（忽略）
 - 自动更新拒绝降级、未签名 manifest、摘要不符和未经授权的下载主机。
 - 项目秘密扫描覆盖当前工作树和完整 Git 历史；CI 也运行全历史扫描。
 - 聊天历史和附件保存在当前 Windows 用户目录，属于本机明文可恢复数据；共享设备上应主动清理。
+  历史更新使用同目录唯一临时文件和 Windows 短暂锁定重试，失败时不会先删除上一份有效历史。
 - 本地构建默认没有可信代码签名，Windows SmartScreen 可能显示未知发布者；只有发布工作流的可信
   Authenticode 验证通过后才能发布稳定版。
 - 当前只发布 Windows x64。

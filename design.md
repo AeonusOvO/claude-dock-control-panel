@@ -415,12 +415,14 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - 新建活动终端必须先把容器设为可见再调用 `terminal.open()`；冷启动和会话首次可见时最多
   连续四帧重试 `fit()`。窗口、侧栏和抽屉的连续尺寸变化只走 100ms 尾沿防抖；拖拽期间只
   标脏，释放后恰好 fit 一次，`ResizeObserver` 对相同整数宽高短路。
-- 输出写入在两侧都做合并：主进程按 session 和精确 `ptyGeneration` 攒 8ms 或 64KB 发一次 IPC；
-  每个 timer 固定拥有当时的 generation 与缓冲对象，较旧 generation 不能替换较新的待发缓冲，flush
-  还要复核当前 workspace generation。渲染层按 `requestAnimationFrame` 合并成一次
-  `terminal.write`（缓冲上限 512KB，超限丢弃最旧分块），排队、RAF 和 xterm 写入完成回调都必须
-  同时匹配当前 view 对象与 generation。逐块 `send`/`write` 是输入卡顿的真实来源——每块都会触发
-  一次 xterm 重排。
+- 输出写入在两侧都做合并：主进程按 session 和精确 `ptyGeneration` 攒 8ms 或 64KiB UTF-8 字节发
+  一次 IPC；每个 timer 固定拥有当时的 generation 与缓冲对象，较旧 generation 不能替换较新的待发
+  缓冲，flush 还要复核当前 workspace generation。自然退出先同步发送末尾缓冲，显式替换仍只丢弃旧
+  generation。渲染层用 `TerminalOutputPump` 按 `requestAnimationFrame` 调度，同一 view 只允许一个
+  `terminal.write` 在途，每次最多 64Ki 个 UTF-16 code unit 且不切开代理对；实时输出不设截断上限，
+  也不丢弃旧分块。只有 xterm callback 确认后才消费队列并推进完整 revision。排队、RAF 和完成回调
+  都必须同时匹配当前 view 对象与 generation。逐块 `send`/`write` 是输入卡顿的真实来源——每块都会
+  触发一次 xterm 重排。
 - 主进程的合并只影响发给渲染层的消息；`consumeTerminalOutput` 仍然逐块接收，因为它跨块
   跟踪退出标记，喂给它合并后的缓冲会漏判。generation-scoped discard 也只能清理目标缓冲，不能
   删除已经替换它的新 generation。
@@ -444,9 +446,13 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - 开发引擎切换以解析并规范化后的项目目录为所有权边界：目录在第一个 `await` 前同步保留，同目录
   已有和新开的开发操作都必须避让；每个异步边界后重新枚举 session/generation，持久化是最后一个
   无后续 `await` 的同步提交。不同目录互不阻塞。
-- 配置事务在同一目录内严格 FIFO。取得目录所有权后才在 save 前立即 snapshot；save、可选 resume、
-  失败 rollback 和权威状态回读都留在同一队列里。rollback 只有在事务仍拥有该目录、操作、PTY 与
-  已持久化配置指纹时才允许写回，不能覆盖后来成功或外部更新；不同目录继续并行。
+- 配置事务在同一目录内严格 FIFO，并固定按 session lease → directory reservation 的顺序取得所有权。
+  取得目录后先取消并等待已经开始、且尚未排入同一配置队列的兄弟会话开发操作；随后先保存原始快照，
+  在 profile 仍未变化时完成 OpenAI 转换、历史解析或 Router Provider 等异步准备，复核快照后才执行无
+  `await` 的同步 profile commit。后续路由验证、状态回读和可选会话恢复仍留在同一屏障里。rollback 只有
+  在事务仍拥有目录与精确已提交快照时才允许写回，不能覆盖后来成功或外部更新；已排队事务不会互相
+  等待造成死锁，不同目录继续并行。Router Provider 是先完成的独立持久化，项目 profile 失败只回滚
+  项目快照，不冒充能够恢复 CCR 内已经保存的 Provider。
 - renderer 对 Claude/Codex/开发引擎状态请求和启动续体使用 per-session generation；成功、拒绝、
   `catch` 与 `finally` 都必须持有当前 token。删除再创建同一 session ID 也不能让旧 token 重新生效，
   workspace 更新会裁剪缺失 session 的 token、terminal baseline 与 launch-result tombstone。

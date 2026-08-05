@@ -57,6 +57,59 @@ describe('TerminalOutputBatcher', () => {
     });
   });
 
+  it('counts the immediate flush threshold in UTF-8 bytes', () => {
+    const emitted: EmittedOutput[] = [];
+    const batcher = new TerminalOutputBatcher({
+      emit: createEmitter(emitted),
+      flushBytes: 4,
+      isCurrentGeneration: () => true,
+    });
+    const data = '€x';
+
+    expect(data).toHaveLength(2);
+    expect(Buffer.byteLength(data, 'utf8')).toBe(4);
+    batcher.queue('session-utf8', 1, data);
+
+    expect(emitted).toEqual([{ data, ptyGeneration: 1, sessionId: 'session-utf8' }]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('flushes final queued output synchronously without crossing generations', () => {
+    const events: string[] = [];
+    const batcher = new TerminalOutputBatcher({
+      emit: (sessionId, ptyGeneration, data) => {
+        events.push(`data:${sessionId}:${ptyGeneration}:${data}`);
+      },
+      isCurrentGeneration: (_sessionId, ptyGeneration) => ptyGeneration === 2,
+    });
+
+    batcher.queue('session-1', 2, 'final output');
+    batcher.flush('session-1', 1);
+    expect(events).toEqual([]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    batcher.flush('session-1', 2);
+    events.push('state:stopped:2');
+
+    expect(events).toEqual(['data:session-1:2:final output', 'state:stopped:2']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('emits every preceding byte before a permission-mode probe is sent', () => {
+    const events: string[] = [];
+    const batcher = new TerminalOutputBatcher({
+      emit: (_sessionId, _ptyGeneration, data) => events.push(`data:${data}`),
+      isCurrentGeneration: () => true,
+    });
+
+    batcher.queue('session-1', 3, 'prompt repaint');
+    batcher.flush('session-1', 3);
+    events.push('permission-mode-probe');
+
+    expect(events).toEqual(['data:prompt repaint', 'permission-mode-probe']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('lets a newer generation replace an older buffer without letting late old data evict it', async () => {
     const currentGenerations = new Map<string, PtyGeneration>([['session-1', 1]]);
     const emitted: EmittedOutput[] = [];

@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+const terminalOutputPumpSource = readFileSync(
+  new URL('../src/renderer/terminal-output-pump.ts', import.meta.url),
+  'utf8',
+);
 const componentKit = readFileSync(
   new URL('../src/renderer/components.ts', import.meta.url),
   'utf8',
@@ -60,9 +64,11 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /if \(existing\) \{\s+disposeTerminalView\(status\.id, existing\);\s+\}\s+return createTerminalView\(status, active\);/,
     );
-    expect(rendererSource).toMatch(
-      /view\.terminal\.write\(chunk, \(\) => \{\s+if \(!ownsTerminalGeneration\(sessionId, ptyGeneration, view\)\)/,
+    expect(rendererSource).toContain(
+      'isCurrent: () => ownsTerminalGeneration(sessionId, ptyGeneration, view),',
     );
+    expect(terminalOutputPumpSource).toContain('if (!this.options.isCurrent()) {');
+    expect(terminalOutputPumpSource).toContain('this.options.write(plan.data, finish);');
     expect(rendererSource).toContain(
       'window.controlPanel.onTerminalData((sessionId, ptyGeneration, data) => {',
     );
@@ -436,6 +442,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toContain('data-conversation-context-action="delete"');
     expect(rendererSource).toContain('const deleteStoredConversation = async');
     expect(rendererSource).toContain('window.controlPanel.deleteClaudeSession(');
+    expect(rendererSource).toContain('renderWorkspace(result.state);');
+    expect(rendererSource).toContain('if (!result.ok || !result.deleted) {');
+    expect(rendererSource).not.toContain('const runningMatches = workspaceState.sessions.filter');
     expect(rendererSource).toContain("deleteButton.className = 'history-item__delete';");
     expect(rendererSource).toContain("confirmLabel: '永久删除'");
   });
@@ -472,11 +481,15 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('applyTerminalTheme(initialSettings.theme, false, false);');
   });
 
-  it('queues a forced history refresh behind an older in-flight read', () => {
-    expect(rendererSource).toContain('const historyReloadRequested = new Set<string>();');
-    expect(rendererSource).toContain('if (force) historyReloadRequested.add(key);');
-    expect(rendererSource).toContain('if (historyReloadRequested.delete(key))');
-    expect(rendererSource).toContain('await loadFolderHistory(projectPath, true);');
+  it('generation-fences folder history refreshes across forget and re-add', () => {
+    expect(rendererSource).toContain(
+      'const folderHistoryLoads = new FolderHistoryLoadCoordinator();',
+    );
+    expect(rendererSource).toContain('folderHistoryLoads.invalidate(key);');
+    expect(rendererSource).toContain('storedConversations.delete(key);');
+    expect(rendererSource).toContain('const token = folderHistoryLoads.request(key, force);');
+    expect(rendererSource).toContain('folderHistoryLoads.isCurrent(token)');
+    expect(rendererSource).toContain('completion.current && completion.reloadRequested');
   });
 
   it('keeps official preflight separate while the footer runs the saved real connection test', () => {
@@ -631,13 +644,16 @@ describe('renderer interaction lifecycle contract', () => {
       rendererSource.indexOf('const switchClaudeModelSpeed = async'),
       rendererSource.indexOf('const switchPermissionMode = async'),
     );
-    expect(speedHandler).toContain(
-      'const attempt = state.active ? beginClaudeLaunchAttempt(status, state) : undefined;',
-    );
+    expect(speedHandler).toContain('const operation = claudeSpeedOperations.begin(status.id);');
+    expect(speedHandler).toContain('const attempt = beginClaudeLaunchAttempt(status, state);');
+    expect(speedHandler).toContain('await orchestrateSessionOperation({');
     expect(speedHandler).toContain('window.controlPanel.setClaudeModelSpeed(status.id, mode)');
     expect(speedHandler).toContain('service_tier=fast');
     expect(speedHandler).toContain('无法确认 ChatGPT 上游最终采用');
+    expect(speedHandler).toContain('如果主进程确认 Claude Code 仍在运行');
     expect(speedHandler).toContain('不会压缩上下文');
+    expect(speedHandler).toContain('if (!result.state.active)');
+    expect(speedHandler).not.toContain('state.active ? beginClaudeLaunchAttempt');
     expect(speedHandler).not.toContain('compactFirst');
     expect(preloadSource).toContain("'claude:set-model-speed'");
   });
@@ -689,9 +705,9 @@ describe('renderer interaction lifecycle contract', () => {
     expect(switchHandler).toContain('renderClaudeState(knownState, true, false);');
   });
 
-  it('routes every Claude launch continuation through exact-generation orchestration', () => {
+  it('keeps Claude launch locks and speed settlement under independent generations', () => {
     expect(rendererSource).toContain('terminalPtyGeneration: status.ptyGeneration');
-    expect(rendererSource.match(/await orchestrateClaudeLaunchAttempt\(\{/g)).toHaveLength(3);
+    expect(rendererSource.match(/await orchestrateClaudeLaunchAttempt\(\{/g)).toHaveLength(2);
     const launchHandler = rendererSource.slice(
       rendererSource.indexOf('const launchClaude = async'),
       rendererSource.indexOf('const launchCodex = async'),
@@ -726,13 +742,13 @@ describe('renderer interaction lifecycle contract', () => {
       rendererSource.indexOf('const switchPermissionMode = async'),
     );
     expect(speedHandler.indexOf('beginClaudeLaunchAttempt(status, state)')).toBeLessThan(
-      speedHandler.indexOf('await orchestrateClaudeLaunchAttempt'),
+      speedHandler.indexOf('await orchestrateSessionOperation'),
     );
+    expect(speedHandler).toContain('registry: claudeSpeedOperations');
     expect(speedHandler).toContain('confirmation: () =>');
     expect(speedHandler).toContain('window.controlPanel.setClaudeModelSpeed(status.id, mode)');
-    expect(speedHandler).toContain(
-      'onRelease: () => refreshClaudeLaunchControls(attempt.sessionId)',
-    );
+    expect(speedHandler).toContain('claudeSpeedOperations.finish(operation)');
+    expect(speedHandler).toContain('claudeLaunchAttempts.cancel(attempt)');
 
     expect(rendererSource).toContain('claudeLaunchAttempts.acceptResult(token, disposition)');
     expect(rendererSource).not.toContain('current && !claudeLaunchAttempts.isCurrent(token)');
@@ -749,6 +765,12 @@ describe('renderer interaction lifecycle contract', () => {
       expect(rendererSource).toContain(`${registry}.finish(request)`);
       expect(rendererSource).toContain(`${registry}.prune(validSessionIds)`);
     }
+    expect(rendererSource).toContain(
+      'const claudeSpeedOperations = new SessionGenerationRegistry();',
+    );
+    expect(rendererSource).toContain('claudeSpeedOperations.begin(status.id)');
+    expect(rendererSource).toContain('claudeSpeedOperations.finish(operation)');
+    expect(rendererSource).toContain('claudeSpeedOperations.prune(validSessionIds)');
     expect(rendererSource).not.toMatch(/let (?:claude|codex|runtime)RequestGeneration = 0;/);
 
     const workspaceRenderer = rendererSource.slice(
@@ -770,6 +792,18 @@ describe('renderer interaction lifecycle contract', () => {
       /finally \{\s+if \(codexLaunchAttempts\.finish\(attempt\)\)/,
     );
     expect(rendererSource).not.toContain('let codexLaunchInProgress = false;');
+  });
+
+  it('rejects delayed Claude state across runtime and PTY generations', () => {
+    expect(claudeRuntimeSource).toContain('private nextStateRevision = 0;');
+    expect(claudeRuntimeSource).toContain('const stateRevision = ++this.nextStateRevision;');
+    expect(claudeRuntimeSource).toContain('runtime.ptyGeneration === ptyGeneration');
+    expect(claudeRuntimeSource).toContain('ptyGeneration: runtime.ptyGeneration,');
+    expect(claudeRuntimeSource).toContain('stateRevision,');
+    expect(mainSource).toContain('claudeStateOwnershipIsCurrent(');
+    expect(mainSource).toContain('publishedClaudeStateRevisions.set(');
+    expect(rendererSource).toContain('const claudeStateCanApply =');
+    expect(rendererSource).toContain('!claudeStateCanApply(state)');
   });
 
   it('lists every permission mode and routes the un-cyclable one through a relaunch', () => {
@@ -858,16 +892,27 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain(
       'window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);',
     );
-    expect(rendererSource).toMatch(
-      /view\.terminal\.write\(chunk, \(\) => \{\s+if \(!ownsTerminalGeneration\(sessionId, ptyGeneration, view\)\) \{\s+return;\s+\}\s+view\.appliedOutputRevision = Math\.max\(view\.appliedOutputRevision, revision\);\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);/,
-    );
-    expect(rendererSource).toContain('probe.requiredRevision <= view.appliedOutputRevision');
+    expect(rendererSource).toContain('outputPump: new TerminalOutputPump({');
+    expect(rendererSource).toContain('write: (data, callback) => terminal.write(data, callback),');
+    expect(rendererSource).toContain('view.outputPump.enqueue(data);');
+    expect(rendererSource).toContain('view.outputPump.dispose();');
+    expect(rendererSource).not.toContain('MAX_PENDING_OUTPUT');
+    expect(rendererSource).not.toContain('view.pending.shift()');
+    expect(terminalOutputPumpSource).toContain('private inFlight = false;');
+    expect(terminalOutputPumpSource).toContain('this.consume(plan);');
+    expect(terminalOutputPumpSource).toContain('this.options.onAppliedRevision(');
+    expect(rendererSource).toContain('probe.requiredRevision <= view.outputPump.appliedRevision');
     expect(rendererSource).toContain(
       'window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {',
     );
-    expect(rendererSource).toContain('view.appliedOutputRevision >= view.outputRevision');
+    expect(rendererSource).toContain(
+      'view.outputPump.appliedRevision >= view.outputPump.acceptedRevision',
+    );
     expect(rendererSource).toMatch(
-      /view\.permissionModeProbes\.push\(\{\s+probeId,\s+ptyGeneration,\s+requiredRevision: view\.outputRevision,/,
+      /view\.permissionModeProbes\.push\(\{\s+probeId,\s+ptyGeneration,\s+requiredRevision: view\.outputPump\.acceptedRevision,/,
+    );
+    expect(mainSource).toMatch(
+      /terminalOutputBatcher\.flush\(sessionId, ptyGeneration\);\s+target\.send\('claude:permission-mode-probe'/,
     );
     expect(rendererSource).toContain('window.controlPanel.reportClaudePermissionModeProbe(');
   });
