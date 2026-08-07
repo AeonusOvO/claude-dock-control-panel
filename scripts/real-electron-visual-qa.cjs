@@ -202,6 +202,9 @@ const main = async () => {
       if (bytes.length < 1_000) throw new Error(`Invalid real Electron capture: ${file}`);
       writeFileSync(path.join(outputRoot, file), bytes);
       const dom = await evaluate(`(() => ({
+        launchButtonDisabled: document.querySelector('#run-claude')?.disabled ?? true,
+        launchButtonOpacity: getComputedStyle(document.querySelector('#run-claude')).opacity,
+        launchButtonText: document.querySelector('#run-agent-label')?.textContent ?? '',
         nativeState: document.querySelector('#native-conversation')?.dataset.state ?? '',
         redundantModelStatus: Boolean(document.querySelector('#native-model-status')),
         summaryAnimation: getComputedStyle(document.querySelector('#runtime-activity-panel')).animationName,
@@ -228,12 +231,14 @@ const main = async () => {
     );
     await waitFor(`() => Boolean(document.querySelector('.conversation-item'))`, 'the project');
 
-    await evaluate(`(() => {
-      const button = document.querySelector('#run-claude');
-      button.disabled = false;
-      button.removeAttribute('aria-disabled');
-      return true;
-    })()`);
+    await waitFor(
+      `() => document.querySelector('#run-claude')?.disabled === false`,
+      'the actionable safe-session button',
+    );
+    await capture('claude-safe-session-action.png', {
+      interaction: 'launch-ready',
+      theme: await evaluate(`document.documentElement.dataset.theme`),
+    });
     await click('#run-claude');
     await waitFor(
       `() => document.querySelector('#native-conversation')?.dataset.state === 'open'`,

@@ -1366,14 +1366,16 @@ body[data-phase='error'] .status-pill {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-inline-end: var(--s-2);
+  min-width: 0;
+  padding-inline-end: 0;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
 .history-item {
-  --history-tail: calc(var(--s-10) + var(--s-8));
+  /* One responsive slot is shared by the timestamp and delete action. It cannot consume the title. */
+  --history-tail: clamp(42px, 23%, 58px);
 
   align-items: center;
   background: transparent;
@@ -1407,11 +1409,13 @@ body[data-phase='error'] .status-pill {
   color: inherit;
   cursor: pointer;
   display: grid;
-  gap: 7px;
+  box-sizing: border-box;
+  gap: var(--s-2);
   grid-template-columns: auto minmax(0, 1fr) var(--history-tail);
   min-width: 0;
   padding: 5px 7px;
   text-align: left;
+  width: 100%;
 }
 
 /*

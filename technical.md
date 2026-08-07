@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.2（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+当前架构版本：5.0.0-rc.3（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
 `ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
 版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须显式使用用户本机已安装的
 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
@@ -134,6 +134,12 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   聚焦，不创建第二进程；高级终端转移失败会恢复原 owner、草稿和原选择。
 - 结果未知的提交永不自动重发，避免重复工具操作、费用或外部副作用。仅当 JSONL 对账确认 user 记录
   已写入后才清理加密待确认文本。
+- `native-conversation:start` 对路由预约、adapter 启动和 owner claim 按同一次启动事务回滚；新 UUID
+  在 adapter 启动失败且没有正文时删除空恢复行，精确 resume 失败则保留原恢复入口。升级时还会把
+  “无提交且无 canonical JSONL”的旧版空预约与真实历史对账并清理，不删除任何 Claude JSONL。
+- `chatgpt-subscription` 的手动与自动连接测试在主进程先执行
+  `ManagedChatGptGateway.ensureRunning()`。这只恢复 ClaudeDock 自有的回环 sidecar，不接管外部
+  Claude/Codex/CCR；成功后才运行真实一 token 测试并替换旧健康快照。
 - 隔离 profile 使用临时 userData/home/project、假适配器和内存终端，不获取生产单实例锁，不启动
   托盘、更新器、插件变更、外部路由写入或真实 PTY。所有危险入口在主进程再次检查 profile capability。
 - `FakeConversationAdapter` 的完整场景按固定顺序发出文本、工具成功/失败、图片、任务、用量以及

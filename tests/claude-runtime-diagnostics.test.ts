@@ -398,6 +398,8 @@ describe('Claude runtime permission mode observation', () => {
       mainSource.indexOf("ipcMain.handle('app:open-external'"),
     );
     expect(testHandler).toContain('const validatedInput = validateClaudeConfigInput(input);');
+    expect(testHandler).toContain("validatedInput.preset === 'chatgpt-subscription'");
+    expect(testHandler).toContain('requireManagedChatGptGateway().ensureRunning()');
     expect(testHandler).toContain(
       'const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);',
     );
@@ -405,6 +407,9 @@ describe('Claude runtime permission mode observation', () => {
       /if \(officialProvider\) \{[\s\S]*?assertOfficialProviderAllowed\(officialProvider, 'first-request', status\.cwd\);/,
     );
     expect(testHandler.indexOf('assertOfficialProviderAllowed(')).toBeLessThan(
+      testHandler.indexOf('requireClaudeRuntime().testConnection('),
+    );
+    expect(testHandler.indexOf('ensureRunning()')).toBeLessThan(
       testHandler.indexOf('requireClaudeRuntime().testConnection('),
     );
   });

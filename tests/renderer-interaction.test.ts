@@ -1352,7 +1352,13 @@ describe('sidebar conversation list affordances', () => {
       /\n\.project-list \{[^}]*?padding-inline-end: var\(--s-2\);[^}]*?\}/,
     );
     expect(rendererStyles).toMatch(
-      /\n\.project-folder__history \{[^}]*?padding-inline-end: var\(--s-2\);[^}]*?scrollbar-gutter: stable;[^}]*?\}/,
+      /\n\.project-folder__history \{[^}]*?padding-inline-end: 0;[^}]*?scrollbar-gutter: stable;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.history-item \{[^}]*?--history-tail: clamp\(42px, 23%, 58px\);[^}]*?min-width: 0;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.history-item__select \{[^}]*?grid-template-columns: auto minmax\(0, 1fr\) var\(--history-tail\);[^}]*?width: 100%;[^}]*?\}/,
     );
     // The chat-history card has its own 32px delete column, which needs the same clearance.
     expect(rendererStyles).toMatch(
@@ -1425,6 +1431,30 @@ describe('external application proxy settings', () => {
 });
 
 describe('native conversation component suite', () => {
+  it('keeps the primary launch action visible through remediable route failures', () => {
+    const launchControls = rendererSource.slice(
+      rendererSource.indexOf('const renderClaudeLaunchControls ='),
+      rendererSource.indexOf('const refreshClaudeLaunchControls ='),
+    );
+    expect(launchControls).toContain('runClaudeButton.disabled = busy;');
+    expect(launchControls).toContain(
+      'runClaudeButton.dataset.launchBlocked = String(launchBlocked);',
+    );
+    expect(launchControls).not.toContain('busy || launchBlocked');
+  });
+
+  it('always leaves the startup status after a native launch failure', () => {
+    const nativeLaunch = rendererSource.slice(
+      rendererSource.indexOf('const launchNativeClaude = async'),
+      rendererSource.indexOf('const resizeNativeComposer ='),
+    );
+    expect(nativeLaunch).toContain("nativeComposerStatus.textContent = '正在安全启动 Claude…';");
+    expect(nativeLaunch).toContain("'尚未接入模型 · 请先完成配置'");
+    expect(nativeLaunch).toContain("'接入配置暂不可用 · 请重新检测连接'");
+    expect(nativeLaunch).toContain("'启动失败 · 请重试'");
+    expect(nativeLaunch).toContain("nativeComposerStatus.textContent = 'Claude 已就绪';");
+  });
+
   it('uses one button base with semantic and size variants', () => {
     expect(rendererStyles).toContain('.button--compact');
     expect(rendererStyles).toContain('.button--danger');

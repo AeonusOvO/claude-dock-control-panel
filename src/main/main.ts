@@ -2309,26 +2309,34 @@ const registerIpc = (): void => {
       launch = { ownerId, prepared };
       nativeLaunches.set(conversationId, launch);
     }
-    const result = await service.start({
-      conversationId,
-      launch: launch
-        ? {
-            cliVersion: launch.prepared.cliVersion,
-            configFingerprintSource: { runtime: launch.prepared.configFingerprint },
-            endpointIdentity: launch.prepared.endpointIdentity,
-            model: launch.prepared.model,
-          }
-        : { configFingerprintSource: { adapter: 'isolated-fake' } },
-      model: launch?.prepared.model ?? request.model,
-      permissionMode: request.permissionMode,
-      projectPath,
-      resume: request.resume,
-    });
-    if (!result.ok && launch) {
-      requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
-      nativeLaunches.delete(conversationId);
+    try {
+      const result = await service.start({
+        conversationId,
+        launch: launch
+          ? {
+              cliVersion: launch.prepared.cliVersion,
+              configFingerprintSource: { runtime: launch.prepared.configFingerprint },
+              endpointIdentity: launch.prepared.endpointIdentity,
+              model: launch.prepared.model,
+            }
+          : { configFingerprintSource: { adapter: 'isolated-fake' } },
+        model: launch?.prepared.model ?? request.model,
+        permissionMode: request.permissionMode,
+        projectPath,
+        resume: request.resume,
+      });
+      if (!result.ok && launch) {
+        requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
+        nativeLaunches.delete(conversationId);
+      }
+      return result;
+    } catch (error) {
+      if (launch) {
+        requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
+        nativeLaunches.delete(conversationId);
+      }
+      throw error;
     }
-    return result;
   });
   ipcMain.handle('native-conversation:get', (event, conversationId: unknown) => {
     validateSender(event);
@@ -4774,6 +4782,12 @@ const registerIpc = (): void => {
       const status = workspace.getStatus(validatedSessionId);
       try {
         const validatedInput = validateClaudeConfigInput(input);
+        // The ChatGPT subscription route is an app-owned loopback gateway. A saved project must be
+        // able to survive an app or Windows restart without presenting the stopped child process as
+        // a broken user configuration. Start it before both manual and automatic connection tests.
+        if (validatedInput.preset === 'chatgpt-subscription') {
+          await requireManagedChatGptGateway().ensureRunning();
+        }
         const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
         if (officialProvider) {
           await assertOfficialProviderAllowed(officialProvider, 'first-request', status.cwd);
@@ -5675,7 +5689,20 @@ if (!hasSingleInstanceLock) {
       recoveryStore: new ConversationRecoveryStore(runtimeProfile.paths.userData, safeStorage),
       runtime: 'claude',
     });
-    nativeConversationService.recoverInterrupted();
+    const interruptedNativeConversations = nativeConversationService.recoverInterrupted();
+    // rc.2 could leave a recovery row when the adapter failed before Claude created a transcript.
+    // Such an empty reservation has no prompt, output, or session to recover. Reconcile it against
+    // Claude's canonical JSONL index so the upgrade cleans the false card without touching history.
+    for (const recovery of interruptedNativeConversations) {
+      if (
+        recovery.submissions.length === 0 &&
+        !sessionManager
+          .getSessionsForProject(recovery.projectPath)
+          .some((session) => session.conversationId === recovery.conversationId)
+      ) {
+        nativeConversationService.discardRecovery(recovery.conversationId, recovery.projectPath);
+      }
+    }
     claudePermissionBridge = new ClaudePermissionBridge(
       (request) => {
         const target = mainWindow?.webContents;

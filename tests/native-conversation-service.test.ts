@@ -115,17 +115,48 @@ describe('native conversation service', () => {
       throw new Error('fake startup failure');
     };
     const ownerRegistry = new ConversationOwnerRegistry();
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
     const service = new NativeConversationService({
       adapter,
       onSnapshot: () => undefined,
       ownerRegistry,
-      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      recoveryStore,
       runtime: 'claude',
     });
     const result = await service.start({ projectPath });
 
     expect(result).toMatchObject({ ok: false, message: 'fake startup failure' });
     expect(ownerRegistry.activeConversationIds('claude', projectPath).size).toBe(0);
+    expect(recoveryStore.list()).toEqual([]);
+  });
+
+  it('keeps an existing recovery entry when an exact resume fails to start', async () => {
+    const adapter = new FakeConversationAdapter();
+    adapter.start = async () => {
+      throw new Error('resume failed');
+    };
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
+    recoveryStore.reserve({
+      conversationId,
+      launch: { configFingerprint: 'a'.repeat(64) },
+      ownerKind: 'native',
+      projectPath,
+      runtime: 'claude',
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry: new ConversationOwnerRegistry(),
+      recoveryStore,
+      runtime: 'claude',
+    });
+
+    await expect(
+      service.start({ conversationId, projectPath, resume: true }),
+    ).resolves.toMatchObject({ ok: false, message: 'resume failed' });
+    expect(recoveryStore.list()).toHaveLength(1);
+    expect(recoveryStore.list()[0]?.conversationId).toBe(conversationId);
   });
 
   it('transfers one owner to a terminal and preserves an unsent encrypted draft', async () => {

@@ -196,7 +196,7 @@ const installFixtures = String.raw`
       const empty = byId('native-conversation-empty');
       messages.replaceChildren(empty);
       empty.hidden = state !== 'empty';
-      byId('native-composer-status').textContent = state === 'loading' ? 'Claude 正在处理' : state === 'failure' ? '需要处理' : '可以继续对话';
+      byId('native-composer-status').textContent = state === 'loading' ? 'Claude 正在处理' : state === 'failure' ? '接入配置暂不可用 · 请重新检测连接' : '可以继续对话';
       byId('native-stop').hidden = state !== 'loading';
       if (state === 'empty') return;
       const user = message('user', (body) => body.append(markdown('<p>请完成 <strong>ClaudeDock 5.0</strong> 原生对话迁移，并保留原始空白、代码围栏与工具顺序。</p>')));
@@ -416,6 +416,7 @@ app
         const runtimeCards = [...document.querySelectorAll('.runtime-option')];
         const selectedRuntime = document.querySelector('.runtime-option:has(input:checked)');
         const projectFolder = document.querySelector('.project-folder');
+        const historyRows = [...document.querySelectorAll('.history-item')];
         const rect = view.getBoundingClientRect();
         return {
           composerDisplay: getComputedStyle(composer).display,
@@ -431,6 +432,17 @@ app
           messagesHeight: Math.round(messages.getBoundingClientRect().height),
           messagesScrollTop: Math.round(messages.scrollTop),
           innerWidth: window.innerWidth,
+          historyRows: historyRows.map((row) => {
+            const label = row.querySelector('.history-item__label').getBoundingClientRect();
+            const time = row.querySelector('.history-item__time').getBoundingClientRect();
+            const remove = row.querySelector('.history-item__delete').getBoundingClientRect();
+            return {
+              deleteWidth: Math.round(remove.width),
+              labelWidth: Math.round(label.width),
+              noTailOverlap: label.right <= time.left,
+              timeWidth: Math.round(time.width),
+            };
+          }),
           visualViewportWidth: Math.round(window.visualViewport?.width ?? window.innerWidth),
           compactViewport: document.documentElement.dataset.compactViewport ?? '',
           railCollapsed: document.querySelector('.workspace')?.classList.contains('workspace--rail-collapsed') ?? false,
@@ -495,6 +507,28 @@ app
           zoom: 100,
         });
       }
+    }
+
+    // The real regression only appeared with a narrow project rail and an active hover tail. Keep a
+    // dedicated four-theme capture in addition to the base matrix so title width and crossfade
+    // geometry are visible evidence, not merely static CSS assertions.
+    for (const theme of themes) {
+      await window.webContents.executeJavaScript(applyTheme(theme));
+      window.setContentSize(820, 640);
+      window.webContents.setZoomFactor(1);
+      await scene('base', { railWidth: 270, state: 'success' });
+      const point = await window.webContents.executeJavaScript(`(() => {
+        const rect = document.querySelector('.history-item').getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      })()`);
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
+      await capture('sidebar-history', `${theme}-820x640-hover.png`, {
+        railWidth: 270,
+        scene: 'history-hover',
+        theme,
+        width: 820,
+        zoom: 100,
+      });
     }
 
     await window.webContents.executeJavaScript(applyTheme('graphite'));

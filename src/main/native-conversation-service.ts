@@ -173,6 +173,12 @@ export class NativeConversationService {
     } catch (error) {
       this.active.delete(conversationId);
       this.options.ownerRegistry.release(owner, owner.ownerId, generation);
+      // A failed brand-new launch has no Claude transcript or useful recovery state. Keeping the
+      // just-reserved row would turn a startup error into a false "interrupted conversation" card
+      // on the next render. Exact resumes keep their existing recovery entry so the user can retry.
+      if (!input.resume) {
+        this.options.recoveryStore.discard(this.options.runtime, input.projectPath, conversationId);
+      }
       return {
         conversationId,
         message: error instanceof Error ? error.message : 'Claude 原生会话启动失败。',

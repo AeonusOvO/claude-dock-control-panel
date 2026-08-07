@@ -3984,6 +3984,7 @@ const launchNativeClaude = async (
   nativeConversationStarting = true;
   nativeSendButton.disabled = true;
   nativeComposerStatus.textContent = '正在安全启动 Claude…';
+  let launchSucceeded = false;
   try {
     const result = await window.controlPanel.startNativeConversation({
       conversationId,
@@ -3994,7 +3995,10 @@ const launchNativeClaude = async (
       showToast(result.message ?? '无法启动 Claude 原生对话。', 'error');
       return;
     }
+    launchSucceeded = true;
     if (result.existingOwnerKind === 'terminal') {
+      nativeSendButton.disabled = true;
+      nativeComposerStatus.textContent = '该对话已在高级终端中运行';
       showToast('该对话已经在高级终端中运行。');
       setNativeConversationVisible(false);
       return;
@@ -4007,7 +4011,28 @@ const launchNativeClaude = async (
   } finally {
     nativeConversationStarting = false;
     const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
-    if (snapshot) renderNativeConversation(snapshot);
+    if (snapshot) {
+      renderNativeConversation(snapshot);
+    } else if (launchSucceeded) {
+      nativeSendButton.disabled = false;
+      nativeComposerStatus.textContent = 'Claude 已就绪';
+    } else if (!launchSucceeded) {
+      const state = claudeStates.get(status.id);
+      const credentialRequired =
+        state &&
+        (state.config.authMode === 'apiKey' || state.config.authMode === 'authToken') &&
+        !state.config.credentialConfigured;
+      nativeSendButton.disabled = true;
+      nativeComposerStatus.textContent = !state
+        ? '启动失败 · 请检查接入配置后重试'
+        : state.installation.security !== 'ready'
+          ? 'Claude Code 尚未就绪 · 请检查环境'
+          : credentialRequired
+            ? '尚未接入模型 · 请先完成配置'
+            : state.routeHealth?.blocking
+              ? '接入配置暂不可用 · 请重新检测连接'
+              : '启动失败 · 请重试';
+    }
   }
 };
 
@@ -6225,11 +6250,16 @@ const renderClaudeLaunchControls = (sessionId: string, launchBlocked = false): v
   }
   const busy = claudeLaunchAttempts.isBusy(sessionId);
   runAgentLabel.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
-  runClaudeButton.disabled = busy || launchBlocked;
+  // Route health is a remediable preflight state, not a reason to turn the primary action into a
+  // translucent dead end. The launch path can restart app-owned gateways and returns a precise
+  // configuration error when user action is actually required.
+  runClaudeButton.disabled = busy;
+  runClaudeButton.dataset.launchBlocked = String(launchBlocked);
   runClaudeButton.setAttribute('aria-busy', String(busy));
   launchNewButton.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
   for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
-    button.disabled = busy || launchBlocked;
+    button.disabled = busy;
+    button.dataset.launchBlocked = String(launchBlocked);
     button.setAttribute('aria-busy', String(busy));
   }
 };
