@@ -154,7 +154,7 @@ export const checkSoftwareUpdates = async (
       installed: router.installed,
       latestVersion: latestRouter,
       message: !router.installed
-        ? '尚未安装路由器，可从官方安装包、npm 或国内镜像中选择。'
+        ? '尚未安装 CCR CLI，可由 ClaudeDock 在后台通过 npm 自动安装。'
         : latestRouter
           ? routerUpdateAvailable
             ? `发现路由器 ${latestRouter}。`

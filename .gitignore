@@ -11,6 +11,7 @@ coverage/
 .env.*
 !.env.example
 .playwright-mcp/
+.claude/
 
 outputs/*
 !outputs/.gitkeep

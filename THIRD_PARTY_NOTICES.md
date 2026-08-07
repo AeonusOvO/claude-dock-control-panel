@@ -21,6 +21,15 @@ Before each public release, maintainers must:
 4. stop the release if a dependency's license is missing, incompatible, or requires an obligation
    the release does not satisfy.
 
-ClaudeDock 4.1.0 does not bundle, download, launch, or link a proxy core. It may connect to a
-user-configured external HTTP or SOCKS5 proxy, but those independent tools and services are not part
-of this distribution.
+ClaudeDock does not bundle CLIProxyAPI in its installer and does not link against it. Starting with
+4.3.0, an explicit user action can make ClaudeDock download a separately released Windows x64 build
+from the upstream `router-for-me/CLIProxyAPI` GitHub repository, verify the release path, byte size
+and GitHub-provided SHA-256 digest, and launch it as an independent loopback-only process. CLIProxyAPI
+is licensed separately under the MIT License and retains its upstream copyright and notices:
+<https://github.com/router-for-me/CLIProxyAPI>.
+
+The downloaded executable, its configuration and its OpenAI authorization files live under the
+current user's ClaudeDock application-data directory; they are not covered by ClaudeDock's
+Apache-2.0 license. Users can remove those managed files after fully exiting ClaudeDock. ClaudeDock
+may also connect to a user-configured external HTTP or SOCKS5 application proxy, but those
+independent tools and services are not part of this distribution.

@@ -10,6 +10,7 @@ import { RiskDecisionEngine } from '../src/main/risk-decision-engine';
 const directPath = (overrides: Partial<NetworkPathView> = {}): NetworkPathView => ({
   detail: 'Electron 主进程：直连。',
   dnsServers: ['1.1.1.1'],
+  globalIpv6Available: false,
   ipv4Available: true,
   ipv6Available: false,
   process: 'application',
@@ -82,6 +83,21 @@ describe('RiskDecisionEngine', () => {
     expect(result.signals.map((signal) => signal.id)).toEqual(
       expect.arrayContaining(['proxy-present', 'virtual-interface-present']),
     );
+  });
+
+  it('reports an unconfirmed global IPv6 path as a non-blocking notice', () => {
+    const result = evaluate(
+      'cli-launch',
+      observation([probe('cli:openai-codex-api')], {
+        paths: [directPath({ globalIpv6Available: true, ipv6Available: true })],
+      }),
+    );
+
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(
+      true,
+    );
+    expect(result.signals.map((signal) => signal.id)).toContain('global-ipv6-path-unconfirmed');
   });
 
   it('blocks required TLS failures but keeps an optional process-path failure as a warning', () => {

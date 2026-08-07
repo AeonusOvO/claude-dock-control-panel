@@ -4,6 +4,7 @@ release
 coverage
 outputs
 work
+.claude
 package-lock.json
 v2rayN-*
 

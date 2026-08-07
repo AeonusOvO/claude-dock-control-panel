@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   root: 'src/renderer',
@@ -17,6 +17,7 @@ export default defineConfig({
     strictPort: true,
   },
   test: {
+    exclude: [...configDefaults.exclude, '**/.claude/worktrees/**'],
     root: '.',
   },
 });

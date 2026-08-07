@@ -8,10 +8,26 @@ const RESOLVE_COMMAND = `$command = Get-Command $env:${COMMAND_ENV} -ErrorAction
 
 export interface WindowsCommandOptions {
   cwd?: string;
+  env?: Record<string, null | string | undefined>;
   maxBuffer?: number;
   onLine?: (line: string, stream: 'stderr' | 'stdout') => void;
   timeout?: number;
 }
+
+const commandEnvironment = (
+  overrides: Record<string, null | string | undefined> = {},
+): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = { ...process.env };
+  for (const [name, value] of Object.entries(overrides)) {
+    if (value === null || value === undefined) {
+      delete environment[name];
+    } else {
+      environment[name] = value;
+    }
+  }
+  delete environment.ELECTRON_RUN_AS_NODE;
+  return environment;
+};
 
 interface CommandOutput {
   stderr: string;
@@ -202,8 +218,7 @@ export const runWindowsCommand = async (
   argumentsList: string[],
   options: WindowsCommandOptions = {},
 ): Promise<string> => {
-  const environment: NodeJS.ProcessEnv = { ...process.env };
-  delete environment.ELECTRON_RUN_AS_NODE;
+  const environment = commandEnvironment(options.env);
   const resolved = await resolveWindowsCommand(command, environment, options.cwd);
   const invocation = windowsCommandInvocationForPath(resolved, command);
   return (

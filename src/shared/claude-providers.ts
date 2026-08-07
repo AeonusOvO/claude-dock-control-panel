@@ -42,7 +42,7 @@ export type ClaudeProviderId = ClaudeProviderDefinition['id'];
 
 export const CLAUDE_PROVIDER_GROUPS = [
   { id: 'official', label: '官方接入' },
-  { id: 'subscription', label: '订阅转换（实验性）' },
+  { id: 'subscription', label: '订阅接入（实验性）' },
   { id: 'domestic', label: '国内服务' },
   { id: 'overseas', label: '海外与聚合服务' },
   { id: 'local', label: '本地服务' },
@@ -84,16 +84,15 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     authMode: 'authToken',
     baseUrl: 'http://127.0.0.1:8317',
     caveat:
-      'OpenAI Codex 负责人曾公开介绍 CLIProxyAPI / claudex 实践，但它仍是第三方本地网关，不是 OpenAI 或 Anthropic 官方产品接入；当前条款、套餐限制与模型可用性仍然适用。',
-    consoleUrl: 'https://github.com/router-for-me/CLIProxyAPI',
+      '这条路径由 OpenAI Codex 负责人 Thibault “Tibo” Sottiaux 公开分享；CLIProxyAPI 仍是第三方开源网关，不是 OpenAI 或 Anthropic 官方产品，相关条款、套餐限制与模型可用性仍然适用。',
+    consoleUrl: 'https://x.com/thsottiaux/status/2076119366647894371',
     description:
-      '使用 ChatGPT 的 Codex 订阅授权，经用户自行运行的本地兼容网关转换为 Anthropic Messages。',
-    docsUrl: 'https://learn.chatgpt.com/docs/auth',
-    editableBaseUrl: true,
+      '由 ClaudeDock 一键安装、授权并托管本机网关，把 ChatGPT Codex 订阅接入当前 Claude Code 项目。',
+    docsUrl: 'https://github.com/router-for-me/CLIProxyAPI',
+    editableBaseUrl: false,
     group: 'subscription',
     id: 'chatgpt-subscription',
-    keyHint: '填写本地网关 api-keys 中的一项，不要填写 ChatGPT 密码或 OAuth Token',
-    label: 'ChatGPT 订阅（本地网关）',
+    label: 'ChatGPT 订阅（ClaudeDock 托管）',
     model: 'gpt-5.6-sol',
     modelFast: 'gpt-5.4-mini',
   },
@@ -354,6 +353,20 @@ export const claudeProviderIdSet = new Set<string>(CLAUDE_PROVIDERS.map((provide
 
 export const providerForPreset = (id: ClaudeProviderId): 'anthropic' | 'gateway' =>
   findClaudeProvider(id)?.group === 'official' ? 'anthropic' : 'gateway';
+
+/**
+ * Only first-party presets inherit an official network profile. Anthropic presets use the Claude
+ * profile; the managed subscription bridge uses the OpenAI/Codex profile behind that bridge.
+ * Overseas, domestic, local and advanced providers retain their own endpoint semantics.
+ */
+export const officialNetworkProviderForClaudePreset = (
+  id: ClaudeProviderId,
+): 'anthropic-claude' | 'openai-codex' | undefined => {
+  const group = findClaudeProvider(id)?.group;
+  if (group === 'official') return 'anthropic-claude';
+  if (group === 'subscription') return 'openai-codex';
+  return undefined;
+};
 
 export const CLAUDE_PROVIDER_EXTERNAL_HOSTS = new Set(
   CLAUDE_PROVIDERS.flatMap((provider) => [provider.consoleUrl, provider.docsUrl])

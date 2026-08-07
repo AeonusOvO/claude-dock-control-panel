@@ -21,6 +21,7 @@ import type {
   ApplicationUpdaterState,
   AppQuitRequest,
   AppSettingsView,
+  BusyLease,
   ArtifactNetworkLogEntry,
   ArtifactNetworkState,
   ClaudeConnectionAdvice,
@@ -46,6 +47,7 @@ import type {
   ClaudeRouterProviderView,
   RouterKernelOperationResult,
   RouterKernelState,
+  RouterOperationProgress,
   ClaudeSessionMetadata,
   ChatConfigView,
   ChatAttachmentImportResult,
@@ -65,6 +67,11 @@ import type {
   McpCatalogEntry,
   McpScope,
   McpServerView,
+  FooterResourcePreference,
+  ManagedChatGptContextWindowMode,
+  ManagedChatGptGatewayState,
+  ModelSpeedMode,
+  ManagedChatGptSetupProgress,
   NetworkPreflightResult,
   NetworkProviderId,
   SoftwareUpdateState,
@@ -74,13 +81,26 @@ import type {
   OperationResult,
   ApplicationProxyCandidate,
   ApplicationProxyState,
+  ApplicationProxyView,
+  SaveApplicationProxyInput,
+  RuntimeActivitySnapshot,
+  RuntimeTaskView,
+  ClaudePermissionRequestView,
+  ClaudePermissionDecision,
+  PtyGeneration,
   TerminalPhase,
   TerminalStatus,
   WorkspaceProjectView,
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import { claudeStateOwnershipIsCurrent } from '../shared/claude-state-ownership';
 import { estimateChatUsage } from '../shared/chat-usage';
+import {
+  CLAUDE_COMMAND_CATALOG,
+  CODEX_COMMAND_CATALOG,
+  type CliCommandDefinition,
+} from '../shared/cli-command-catalog';
 import { parseClaudeCurl, type ClaudeCurlAnalysis } from '../shared/claude-curl';
 import {
   completeConnectionEndpoint,
@@ -127,10 +147,21 @@ import {
 import { deriveUpdateActionState } from '../shared/update-actions';
 import { ArtifactController } from './artifact';
 import {
+  ClaudeLaunchAttemptRegistry,
+  orchestrateClaudeLaunchAttempt,
+  type ClaudeLaunchAttemptToken,
+  type ClaudeLaunchResultDisposition,
+} from './claude-launch-attempt';
+import { orchestrateSessionOperation, SessionGenerationRegistry } from './session-generation';
+import { FolderHistoryLoadCoordinator } from './folder-history-load';
+import { TerminalOutputPump } from './terminal-output-pump';
+import {
   closeOpenSelect,
   enhanceAllSelects,
+  enhanceSelect,
   installPressRipples,
   installSelectDismissHandlers,
+  setEnhancedSelectValue,
 } from './components';
 import {
   createKatexMathRenderer,
@@ -151,19 +182,18 @@ installSelectDismissHandlers();
 installPressRipples();
 
 interface TerminalView {
-  /** Latest PTY-output revision fully applied to xterm's screen buffer. */
-  appliedOutputRevision: number;
   container: HTMLDivElement;
   fitAddon: FitAddon;
-  /** Latest PTY-output revision accepted into this view's renderer-side queue. */
-  outputRevision: number;
-  /** Output arriving between two frames, flushed as one `write` so heavy output stays smooth. */
-  pending: string[];
-  pendingLength: number;
-  /** `requestAnimationFrame` handle for the queued flush, `0` when nothing is scheduled. */
-  pendingFrame: number;
+  /** Lossless, one-write-in-flight output owner for this exact PTY generation. */
+  outputPump: TerminalOutputPump;
   /** Main-process probes waiting for all output that preceded their request to reach xterm. */
-  permissionModeProbes: Array<{ probeId: number; requiredRevision: number }>;
+  permissionModeProbes: Array<{
+    probeId: number;
+    ptyGeneration: PtyGeneration;
+    requiredRevision: number;
+  }>;
+  /** The exact PTY generation this xterm instance and all of its asynchronous work own. */
+  readonly ptyGeneration: PtyGeneration;
   /** Last complete badge passively reported after xterm reconstructed a PTY screen delta. */
   observedPermissionMode?: ClaudePermissionMode;
   terminal: Terminal;
@@ -175,6 +205,19 @@ interface AdvancedDraftControlState {
   checked?: boolean;
   control: AdvancedDraftControl;
   value: string;
+}
+
+interface ApplicationProxyDraftSnapshot {
+  enabled: boolean;
+  host: string;
+  port: string;
+  protocol: 'http' | 'socks5';
+  scope: {
+    application: boolean;
+    cli: boolean;
+    conversation: boolean;
+  };
+  username: string;
 }
 
 interface AdvancedConnectionSnapshot {
@@ -203,6 +246,7 @@ const applyCurlDirectButton = requiredElement<HTMLButtonElement>('#apply-curl-di
 const importCurlRouterButton = requiredElement<HTMLButtonElement>('#import-curl-router');
 const authModeHelp = requiredElement<HTMLElement>('#auth-mode-help');
 const authModeLabel = requiredElement<HTMLElement>('#auth-mode-label');
+const authModeField = requiredElement<HTMLElement>('#auth-mode-field');
 const claudeAuthMode = requiredElement<HTMLSelectElement>('#claude-auth-mode');
 const claudeApiKeyHelperPolicy = requiredElement<HTMLSelectElement>(
   '#claude-api-key-helper-policy',
@@ -210,6 +254,8 @@ const claudeApiKeyHelperPolicy = requiredElement<HTMLSelectElement>(
 const claudeApiKeyHelperStatus = requiredElement<HTMLElement>('#claude-api-key-helper-status');
 const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
+const claudeConfigStepTitle = requiredElement<HTMLElement>('#claude-config-step-title');
+const claudeConfigStepDescription = requiredElement<HTMLElement>('#claude-config-step-description');
 const claudeCredential = requiredElement<HTMLInputElement>('#claude-credential');
 const claudeInstallationDetail = requiredElement<HTMLElement>('#claude-installation-detail');
 const claudeInstallationTitle = requiredElement<HTMLElement>('#claude-installation-title');
@@ -241,6 +287,8 @@ const connectionRemedyCause = requiredElement<HTMLElement>('#connection-remedy-c
 const connectionRemedyFix = requiredElement<HTMLElement>('#connection-remedy-fix');
 const connectionRemedyActions = requiredElement<HTMLElement>('#connection-remedy-actions');
 const commandArgument = requiredElement<HTMLInputElement>('#command-argument');
+const claudeCommandGrid = requiredElement<HTMLElement>('#claude-command-grid');
+const codexCommandGrid = requiredElement<HTMLElement>('#codex-command-grid');
 const contextPercentage = requiredElement<HTMLElement>('#context-percentage');
 const contextProgress = requiredElement<HTMLElement>('.context-progress');
 const contextProgressBar = requiredElement<HTMLElement>('#context-progress-bar');
@@ -291,12 +339,20 @@ const networkPreflightDialogRecheck = requiredElement<HTMLButtonElement>(
 const networkPreflightClose = requiredElement<HTMLButtonElement>('#network-preflight-close');
 const footerContextLabel = requiredElement<HTMLElement>('#footer-context-label');
 const footerContextRing = requiredElement<HTMLElement>('#footer-context-ring');
+const footerResource = requiredElement<HTMLButtonElement>('#footer-resource');
+const footerResourceMenu = requiredElement<HTMLElement>('#footer-resource-menu');
+const footerResourceDetails = requiredElement<HTMLElement>('#footer-resource-details');
+const footerContextWindowOptions = requiredElement<HTMLElement>('#footer-context-window-options');
 const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
 const footerModelMenu = requiredElement<HTMLElement>('#footer-model-menu');
+const footerSpeed = requiredElement<HTMLButtonElement>('#footer-speed');
+const footerSpeedMenu = requiredElement<HTMLElement>('#footer-speed-menu');
 const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
 const footerModeMenu = requiredElement<HTMLElement>('#footer-mode-menu');
 const footerEffort = requiredElement<HTMLButtonElement>('#footer-effort');
 const footerEffortMenu = requiredElement<HTMLElement>('#footer-effort-menu');
+const footerMore = requiredElement<HTMLButtonElement>('#footer-more');
+const footerSecondaryStatus = requiredElement<HTMLElement>('#footer-secondary-status');
 const footerStatus = requiredElement<HTMLElement>('#footer-status');
 const gatewayCandidates = requiredElement<HTMLElement>('#gateway-candidates');
 const gatewayCheckedAt = requiredElement<HTMLElement>('#gateway-checked-at');
@@ -335,7 +391,7 @@ const routerWizardBaseUrlField = requiredElement<HTMLElement>('#router-wizard-ba
 const routerWizardBaseUrl = requiredElement<HTMLInputElement>('#router-wizard-base-url');
 const routerWizardCredentialField = requiredElement<HTMLElement>('#router-wizard-credential-field');
 const routerWizardCredential = requiredElement<HTMLInputElement>('#router-wizard-credential');
-const routerWizardModel = requiredElement<HTMLInputElement>('#router-wizard-model');
+const routerWizardModel = requiredElement<HTMLSelectElement>('#router-wizard-model');
 const routerWizardUseRoute = requiredElement<HTMLInputElement>('#router-wizard-use-route');
 const routerWizardDecision = requiredElement<HTMLElement>('#router-wizard-decision');
 const routerWizardSubmit = requiredElement<HTMLButtonElement>('#router-wizard-submit');
@@ -368,10 +424,22 @@ const settingsChatIdleTimeout = requiredElement<HTMLSelectElement>('#settings-ch
 const settingsWebResearchIsolation = requiredElement<HTMLInputElement>(
   '#settings-web-research-isolation',
 );
+const settingsCcrBackendStatus = requiredElement<HTMLElement>('#settings-ccr-backend-status');
+const settingsChatGptGatewayStatus = requiredElement<HTMLElement>(
+  '#settings-chatgpt-gateway-status',
+);
+const settingsOpenCcrBackend = requiredElement<HTMLButtonElement>('#settings-open-ccr-backend');
+const settingsOpenChatGptGateway = requiredElement<HTMLButtonElement>(
+  '#settings-open-chatgpt-gateway',
+);
 const settingsTheme = requiredElement<HTMLSelectElement>('#settings-theme');
 const settingsLanguage = requiredElement<HTMLSelectElement>('#settings-language');
 const settingsVersion = requiredElement<HTMLOutputElement>('#settings-version');
 const applicationProxyEnabled = requiredElement<HTMLInputElement>('#application-proxy-enabled');
+const applicationProxyConfiguration = requiredElement<HTMLElement>(
+  '#application-proxy-configuration',
+);
+const applicationProxyScope = requiredElement<HTMLElement>('#application-proxy-scope');
 const applicationProxyProtocol = requiredElement<HTMLSelectElement>('#application-proxy-protocol');
 const applicationProxyHost = requiredElement<HTMLInputElement>('#application-proxy-host');
 const applicationProxyPort = requiredElement<HTMLInputElement>('#application-proxy-port');
@@ -430,15 +498,12 @@ const routerProviderName = requiredElement<HTMLInputElement>('#router-provider-n
 const routerProviderPreferred = requiredElement<HTMLInputElement>('#router-provider-preferred');
 const routerProviderProtocol = requiredElement<HTMLSelectElement>('#router-provider-protocol');
 const routerProviderUseProject = requiredElement<HTMLInputElement>('#router-provider-use-project');
-const routerInstallSource = requiredElement<HTMLSelectElement>('#router-install-source');
-const routerInstallSourceField = requiredElement<HTMLElement>('#router-install-source-field');
 const routerRemediation = requiredElement<HTMLElement>('#router-remediation');
 const routerRemediationDetail = requiredElement<HTMLElement>('#router-remediation-detail');
 const routerRemediationTitle = requiredElement<HTMLElement>('#router-remediation-title');
 const routerStatus = requiredElement<HTMLElement>('#router-status');
 const routerStatusDetail = requiredElement<HTMLElement>('#router-status-detail');
 const routerStatusTitle = requiredElement<HTMLElement>('#router-status-title');
-const routerSwapHint = requiredElement<HTMLElement>('#router-swap-hint');
 const routerVersion = requiredElement<HTMLElement>('#router-version');
 const uninstallRouterButton = requiredElement<HTMLButtonElement>('#uninstall-router');
 const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-router-provider');
@@ -457,6 +522,13 @@ const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
 const composerForm = requiredElement<HTMLFormElement>('#terminal-composer');
 const composerInput = requiredElement<HTMLTextAreaElement>('#composer-input');
 const composerSendButton = requiredElement<HTMLButtonElement>('#composer-send');
+const runtimeActivityTrigger = requiredElement<HTMLButtonElement>('#runtime-activity-trigger');
+const runtimeActivityLabel = requiredElement<HTMLElement>('#runtime-activity-label');
+const runtimeActivityPanel = requiredElement<HTMLElement>('#runtime-activity-panel');
+const runtimeActivitySummary = requiredElement<HTMLElement>('#runtime-activity-summary');
+const runtimeActivityClose = requiredElement<HTMLButtonElement>('#runtime-activity-close');
+const runtimeTaskList = requiredElement<HTMLUListElement>('#runtime-task-list');
+const runtimeProcessList = requiredElement<HTMLUListElement>('#runtime-process-list');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
 const testClaudeConnectionButton = requiredElement<HTMLButtonElement>('#test-claude-connection');
@@ -544,6 +616,7 @@ const confirmationDialogConfirm = requiredElement<HTMLButtonElement>(
 );
 const quitConfirmationDialog = requiredElement<HTMLDialogElement>('#quit-confirmation-dialog');
 const quitConfirmationTitle = requiredElement<HTMLElement>('#quit-confirmation-title');
+const quitConfirmationMessage = requiredElement<HTMLElement>('#quit-confirmation-message');
 const quitConfirmationList = requiredElement<HTMLUListElement>('#quit-confirmation-list');
 const quitMinimizeButton = requiredElement<HTMLButtonElement>('#quit-minimize');
 const quitForceButton = requiredElement<HTMLButtonElement>('#quit-force');
@@ -557,6 +630,18 @@ const terminalShell = requiredElement<HTMLElement>('#terminal-shell');
 const chatShell = requiredElement<HTMLElement>('#chat-shell');
 const chatConfigForm = requiredElement<HTMLFormElement>('#chat-config-form');
 const chatSettingsDialog = requiredElement<HTMLDialogElement>('#chat-settings-dialog');
+const claudePermissionDialog = requiredElement<HTMLDialogElement>('#claude-permission-dialog');
+const claudePermissionTool = requiredElement<HTMLElement>('#claude-permission-tool');
+const claudePermissionDescription = requiredElement<HTMLElement>('#claude-permission-description');
+const claudePermissionSuggestions = requiredElement<HTMLFieldSetElement>(
+  '#claude-permission-suggestions',
+);
+const claudePermissionDenyReason = requiredElement<HTMLInputElement>(
+  '#claude-permission-deny-reason',
+);
+const claudePermissionFallback = requiredElement<HTMLButtonElement>('#claude-permission-fallback');
+const claudePermissionDeny = requiredElement<HTMLButtonElement>('#claude-permission-deny');
+const claudePermissionAllow = requiredElement<HTMLButtonElement>('#claude-permission-allow');
 const openChatSettingsButton = requiredElement<HTMLButtonElement>('#open-chat-settings');
 const closeChatSettingsButton = requiredElement<HTMLButtonElement>('#close-chat-settings');
 const chatProtocol = requiredElement<HTMLSelectElement>('#chat-protocol');
@@ -586,12 +671,26 @@ const chatAttachButton = requiredElement<HTMLButtonElement>('#chat-attach');
 const sendChatButton = requiredElement<HTMLButtonElement>('#send-chat');
 const stopChatButton = requiredElement<HTMLButtonElement>('#stop-chat');
 const newChatButton = requiredElement<HTMLButtonElement>('#new-chat');
+const updateCenterDialog = requiredElement<HTMLDialogElement>('#update-center-dialog');
+const closeUpdateCenterButton = requiredElement<HTMLButtonElement>('#close-update-center');
+const cancelUpdateCenterButton = requiredElement<HTMLButtonElement>('#cancel-update-center');
+const updateCenterAllButton = requiredElement<HTMLButtonElement>('#update-center-all');
+const updateCenterEmpty = requiredElement<HTMLElement>('#update-center-empty');
+const updateCenterList = requiredElement<HTMLElement>('#update-center-list');
+const updateCenterSummary = requiredElement<HTMLElement>('#update-center-summary');
 const openDownloadCenterButton = requiredElement<HTMLButtonElement>('#open-download-center');
 const downloadActiveCount = requiredElement<HTMLElement>('#download-active-count');
 const downloadCenterDialog = requiredElement<HTMLDialogElement>('#download-center-dialog');
 const closeDownloadCenterButton = requiredElement<HTMLButtonElement>('#close-download-center');
 const downloadCenterEmpty = requiredElement<HTMLElement>('#download-center-empty');
+const downloadActiveSection = requiredElement<HTMLElement>('#download-active-section');
+const downloadActiveSummary = requiredElement<HTMLElement>('#download-active-summary');
+const downloadOperationList = requiredElement<HTMLElement>('#download-operation-list');
 const downloadTaskList = requiredElement<HTMLElement>('#download-task-list');
+const downloadHistorySection = requiredElement<HTMLElement>('#download-history-section');
+const downloadHistorySummary = requiredElement<HTMLElement>('#download-history-summary');
+const downloadHistoryList = requiredElement<HTMLElement>('#download-history-list');
+const clearDownloadHistoryButton = requiredElement<HTMLButtonElement>('#clear-download-history');
 const downloadProgressTemplate = requiredElement<HTMLTemplateElement>(
   '#download-progress-template',
 );
@@ -662,117 +761,208 @@ const appendDownloadAction = (
   container.append(button);
 };
 
-const renderDownloads = (tasks: DownloadTaskView[]): void => {
-  downloadTaskList.replaceChildren();
-  downloadCenterEmpty.hidden = tasks.length > 0;
-  for (const task of tasks) {
-    const card = document.createElement('article');
-    card.className = 'download-task';
-    card.dataset.state = task.state;
-    const heading = document.createElement('header');
-    const identity = document.createElement('div');
-    const title = document.createElement('strong');
-    title.textContent = task.label;
-    const state = document.createElement('span');
-    state.className = 'download-task__state';
-    state.textContent = DOWNLOAD_STATE_LABELS[task.state];
-    identity.append(title, state);
+const ACTIVE_DOWNLOAD_STATES = new Set<DownloadTaskView['state']>([
+  'paused',
+  'progressing',
+  'queued',
+  'verifying',
+]);
 
-    const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
-      HTMLElement | undefined;
-    if (!progress) {
-      continue;
-    }
-    /*
-     * A settled task has no motion left to report. `percent` stays at -1 whenever the server never
-     * sent a length, so keying the spinner off the number alone left a failed or cancelled download
-     * animating forever as if it were still trying.
-     */
-    const settled =
-      task.state === 'cancelled' || task.state === 'completed' || task.state === 'failed';
-    const percent = Math.max(0, task.percent);
-    const indeterminate = !settled && task.percent < 0;
-    progress.dataset.indeterminate = String(indeterminate);
-    progress.style.setProperty('--download-progress', `${percent}%`);
-    const ringValue = progress.querySelector<HTMLElement>('.download-progress__value');
-    const linearValue = progress.querySelector<HTMLElement>('.download-progress__linear > span');
-    if (ringValue) {
-      ringValue.textContent = indeterminate ? '…' : `${Math.round(percent)}%`;
-    }
-    if (linearValue) {
-      linearValue.style.width = indeterminate ? '42%' : `${percent}%`;
-    }
-    heading.append(identity, progress);
+const createDownloadTaskCard = (task: DownloadTaskView, historical: boolean): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'download-task';
+  card.dataset.state = task.state;
+  const heading = document.createElement('header');
+  const identity = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = task.label;
+  const state = document.createElement('span');
+  state.className = 'download-task__state';
+  state.textContent = DOWNLOAD_STATE_LABELS[task.state];
+  identity.append(title, state);
 
-    const metrics = document.createElement('dl');
-    metrics.className = 'download-task__metrics';
-    const appendMetric = (label: string, value: string): void => {
-      const wrapper = document.createElement('div');
-      const term = document.createElement('dt');
-      const detail = document.createElement('dd');
-      term.textContent = label;
-      detail.textContent = value;
-      wrapper.append(term, detail);
-      metrics.append(wrapper);
-    };
-    appendMetric(
-      '进度',
-      task.totalBytes > 0
-        ? `${formatDownloadBytes(task.receivedBytes)} / ${formatDownloadBytes(task.totalBytes)}`
-        : `${formatDownloadBytes(task.receivedBytes)} / 计算中…`,
-    );
-    appendMetric(
-      '速度',
-      task.bytesPerSecond > 0 ? `${formatDownloadBytes(task.bytesPerSecond)}/s` : '计算中…',
-    );
-    appendMetric('已用', formatDownloadDuration(task.elapsedMs));
-    appendMetric('剩余', formatDownloadDuration(task.remainingMs));
+  const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
+    HTMLElement | undefined;
+  if (!progress) return card;
+  const settled =
+    task.state === 'cancelled' || task.state === 'completed' || task.state === 'failed';
+  const percent = Math.max(0, task.percent);
+  const indeterminate = !settled && task.percent < 0;
+  progress.dataset.indeterminate = String(indeterminate);
+  progress.setAttribute('role', 'progressbar');
+  progress.setAttribute('aria-label', `${task.label}下载进度`);
+  progress.setAttribute('aria-busy', String(indeterminate));
+  if (!indeterminate) progress.setAttribute('aria-valuenow', String(Math.round(percent)));
+  progress.setAttribute('aria-valuemin', '0');
+  progress.setAttribute('aria-valuemax', '100');
+  progress.style.setProperty('--download-progress', `${percent}%`);
+  const ringValue = progress.querySelector<HTMLElement>('.download-progress__value');
+  const linearValue = progress.querySelector<HTMLElement>('.download-progress__linear > span');
+  if (ringValue) ringValue.textContent = indeterminate ? '…' : `${Math.round(percent)}%`;
+  if (linearValue) linearValue.style.width = indeterminate ? '42%' : `${percent}%`;
+  heading.append(identity, progress);
 
-    if (task.errorMessage) {
-      const error = document.createElement('p');
-      error.className = 'download-task__error';
-      error.textContent = task.errorMessage;
-      card.append(heading, metrics, error);
-    } else {
-      card.append(heading, metrics);
-    }
-    const actions = document.createElement('footer');
-    if (task.canPause) {
-      appendDownloadAction(actions, task, 'pause', '暂停');
-    }
-    if (task.canResume) {
-      appendDownloadAction(actions, task, 'resume', '继续');
-    }
-    if (!['cancelled', 'completed', 'failed'].includes(task.state)) {
-      appendDownloadAction(actions, task, 'cancel', '取消');
-    }
-    if (actions.childElementCount > 0) {
-      card.append(actions);
-    }
-    downloadTaskList.append(card);
+  const metrics = document.createElement('dl');
+  metrics.className = 'download-task__metrics';
+  const appendMetric = (label: string, value: string): void => {
+    const wrapper = document.createElement('div');
+    const term = document.createElement('dt');
+    const detail = document.createElement('dd');
+    term.textContent = label;
+    detail.textContent = value;
+    wrapper.append(term, detail);
+    metrics.append(wrapper);
+  };
+  appendMetric(
+    '进度',
+    task.totalBytes > 0
+      ? `${formatDownloadBytes(task.receivedBytes)} / ${formatDownloadBytes(task.totalBytes)}`
+      : `${formatDownloadBytes(task.receivedBytes)} / 计算中…`,
+  );
+  appendMetric(
+    '速度',
+    task.bytesPerSecond > 0 ? `${formatDownloadBytes(task.bytesPerSecond)}/s` : '计算中…',
+  );
+  appendMetric('已用', formatDownloadDuration(task.elapsedMs));
+  appendMetric('剩余', formatDownloadDuration(task.remainingMs));
+
+  if (task.errorMessage) {
+    const error = document.createElement('p');
+    error.className = 'download-task__error';
+    error.textContent = task.errorMessage;
+    card.append(heading, metrics, error);
+  } else {
+    card.append(heading, metrics);
   }
+  const actions = document.createElement('footer');
+  if (!historical && task.canPause) appendDownloadAction(actions, task, 'pause', '暂停');
+  if (!historical && task.canResume) appendDownloadAction(actions, task, 'resume', '继续');
+  if (!historical && !settled) appendDownloadAction(actions, task, 'cancel', '取消');
+  if (historical) {
+    const finishedAt = document.createElement('span');
+    finishedAt.className = 'download-task__history-time';
+    finishedAt.textContent = task.finishedAt
+      ? new Date(task.finishedAt).toLocaleString('zh-CN')
+      : '本次运行';
+    const remove = document.createElement('button');
+    remove.className = 'download-task__delete';
+    remove.type = 'button';
+    remove.textContent = '删除记录';
+    remove.addEventListener('click', () => {
+      void (async () => {
+        const confirmed = await requestConfirmation({
+          confirmLabel: '删除记录',
+          message: `删除“${task.label}”的下载历史？这不会删除已经安装的软件。`,
+          title: '删除下载历史',
+          tone: 'danger',
+        });
+        if (!confirmed) return;
+        remove.disabled = true;
+        try {
+          handleDownloadsChanged(await window.controlPanel.deleteDownloadHistory(task.id));
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : '无法删除下载历史。', 'error');
+          remove.disabled = false;
+        }
+      })();
+    });
+    actions.append(finishedAt, remove);
+  }
+  if (actions.childElementCount > 0) card.append(actions);
+  return card;
 };
 
-const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
-  const active = tasks.filter(({ state }) =>
-    ['paused', 'progressing', 'queued', 'verifying'].includes(state),
+const createBusyOperationCard = (lease: BusyLease): HTMLElement => {
+  const card = document.createElement('article');
+  card.className = 'download-task';
+  card.dataset.state = 'installing';
+  const heading = document.createElement('header');
+  const identity = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = lease.label;
+  const state = document.createElement('span');
+  state.className = 'download-task__state';
+  state.textContent = lease.kind === 'uninstall' ? '卸载中' : '安装中';
+  identity.append(title, state);
+  const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
+    HTMLElement | undefined;
+  if (progress) {
+    progress.dataset.indeterminate = 'true';
+    progress.setAttribute('role', 'progressbar');
+    progress.setAttribute('aria-label', `${lease.label}进度`);
+    progress.setAttribute('aria-busy', 'true');
+    progress.querySelector<HTMLElement>('.download-progress__value')!.textContent = '…';
+    progress.querySelector<HTMLElement>('.download-progress__linear > span')!.style.width = '42%';
+    heading.append(identity, progress);
+  } else {
+    heading.append(identity);
+  }
+  card.append(heading);
+  return card;
+};
+
+const applicationDownloadView = (): DownloadTaskView | undefined => {
+  const updater = applicationUpdaterState;
+  if (!updater || updater.phase !== 'downloading') return undefined;
+  const totalBytes = updater.totalBytes ?? 0;
+  const receivedBytes = updater.downloadedBytes ?? 0;
+  return {
+    bytesPerSecond: updater.bytesPerSecond ?? 0,
+    canPause: false,
+    canResume: false,
+    elapsedMs: 0,
+    id: 'application-update-download',
+    label: `ClaudeDock ${updater.latestVersion ?? ''} 应用更新`,
+    percent: updater.percent ?? -1,
+    receivedBytes,
+    remainingMs:
+      updater.bytesPerSecond && totalBytes > receivedBytes
+        ? ((totalBytes - receivedBytes) / updater.bytesPerSecond) * 1_000
+        : -1,
+    state: 'progressing',
+    totalBytes,
+  };
+};
+
+const renderDownloadCenter = (): void => {
+  const activeDownloads = downloadTasks.filter(({ state }) => ACTIVE_DOWNLOAD_STATES.has(state));
+  const history = downloadTasks
+    .filter(({ state }) => !ACTIVE_DOWNLOAD_STATES.has(state))
+    .sort((left, right) => (right.finishedAt ?? 0) - (left.finishedAt ?? 0));
+  const applicationDownload = applicationDownloadView();
+  const operations = busyLeases.filter(({ kind }) => kind === 'install' || kind === 'uninstall');
+  const visibleActive = applicationDownload
+    ? [applicationDownload, ...activeDownloads]
+    : activeDownloads;
+
+  downloadTaskList.replaceChildren(
+    ...visibleActive.map((task) => createDownloadTaskCard(task, false)),
   );
-  const running = active.some(({ state }) => state === 'progressing' || state === 'verifying');
+  downloadOperationList.replaceChildren(...operations.map(createBusyOperationCard));
+  downloadHistoryList.replaceChildren(...history.map((task) => createDownloadTaskCard(task, true)));
+  downloadActiveSection.hidden = visibleActive.length === 0 && operations.length === 0;
+  downloadHistorySection.hidden = history.length === 0;
+  downloadCenterEmpty.hidden =
+    visibleActive.length > 0 || operations.length > 0 || history.length > 0;
+  downloadActiveSummary.textContent = `${visibleActive.length + operations.length} 项进行中`;
+  downloadHistorySummary.textContent = `${history.length} 条记录`;
+  clearDownloadHistoryButton.disabled = history.length === 0;
+
+  const activeCount = visibleActive.length + operations.length;
   const aggregatePercent =
-    active.length > 0 && active.every(({ totalBytes }) => totalBytes > 0)
-      ? (active.reduce((sum, task) => sum + task.receivedBytes, 0) /
-          active.reduce((sum, task) => sum + task.totalBytes, 0)) *
+    operations.length === 0 &&
+    visibleActive.length > 0 &&
+    visibleActive.every(({ totalBytes }) => totalBytes > 0)
+      ? (visibleActive.reduce((sum, task) => sum + task.receivedBytes, 0) /
+          visibleActive.reduce((sum, task) => sum + task.totalBytes, 0)) *
         100
       : -1;
-  document.body.dataset.downloading = String(running);
-  openDownloadCenterButton.dataset.active = String(active.length > 0);
-  /*
-   * The frame morphs square → circle while work is in flight, so "active" has to mean the same
-   * thing here as it does to the user: queued, running, paused or verifying. A queue that is
-   * entirely paused keeps the circle but freezes and recolours the arc instead of spinning it.
-   */
+  document.body.dataset.downloading = String(activeCount > 0);
+  openDownloadCenterButton.dataset.active = String(activeCount > 0);
   openDownloadCenterButton.dataset.paused = String(
-    active.length > 0 && !running && active.every(({ state }) => state === 'paused'),
+    activeCount > 0 &&
+      operations.length === 0 &&
+      visibleActive.every(({ state }) => state === 'paused'),
   );
   openDownloadCenterButton.dataset.indeterminate = String(aggregatePercent < 0);
   openDownloadCenterButton.style.setProperty(
@@ -781,12 +971,19 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
   );
   openDownloadCenterButton.setAttribute(
     'aria-label',
-    active.length > 0 ? `打开下载中心，${active.length} 项未完成` : '打开下载中心',
+    activeCount > 0 ? `打开下载中心，${activeCount} 项未完成` : '打开下载中心',
   );
-  downloadActiveCount.hidden = active.length === 0;
-  downloadActiveCount.textContent = String(active.length);
-  const routerDownload = active.find((task) =>
-    /CCR|CC Switch|Claude Code Router|路由器/i.test(task.label),
+  downloadActiveCount.hidden = activeCount === 0;
+  downloadActiveCount.textContent = String(activeCount);
+};
+
+const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
+  downloadTasks = tasks;
+  renderDownloadCenter();
+  const routerDownload = tasks.find(
+    (task) =>
+      ACTIVE_DOWNLOAD_STATES.has(task.state) &&
+      /CCR|CC Switch|Claude Code Router|路由器/i.test(task.label),
   );
   if (routerDownload && routerOperationInProgress) {
     setRouterOperationStage(
@@ -799,27 +996,116 @@ const handleDownloadsChanged = (tasks: DownloadTaskView[]): void => {
         : undefined,
     );
   }
-  renderDownloads(tasks);
 };
 
-const renderApplicationProxyState = (state: ApplicationProxyState): void => {
-  const { config, test } = state;
-  applicationProxyEnabled.checked = config.enabled;
-  applicationProxyProtocol.value = config.protocol;
-  applicationProxyHost.value = config.host;
-  applicationProxyPort.value = config.port ? String(config.port) : '';
-  applicationProxyUsername.value = config.username;
+const captureApplicationProxyDraft = (): ApplicationProxyDraftSnapshot => ({
+  enabled: applicationProxyEnabled.checked,
+  host: applicationProxyHost.value,
+  port: applicationProxyPort.value,
+  protocol: applicationProxyProtocol.value === 'socks5' ? 'socks5' : 'http',
+  scope: {
+    application: applicationProxyScopeApplication.checked,
+    cli: applicationProxyScopeCli.checked,
+    conversation: applicationProxyScopeConversation.checked,
+  },
+  username: applicationProxyUsername.value,
+});
+
+const applicationProxyViewSnapshot = (
+  config: ApplicationProxyView,
+): ApplicationProxyDraftSnapshot => ({
+  enabled: config.enabled,
+  host: config.host,
+  port: config.port ? String(config.port) : '',
+  protocol: config.protocol,
+  scope: { ...config.scope },
+  username: config.username,
+});
+
+const applicationProxyDraftMatches = (
+  left: ApplicationProxyDraftSnapshot,
+  right: ApplicationProxyDraftSnapshot,
+): boolean =>
+  left.enabled === right.enabled &&
+  left.host === right.host &&
+  left.port === right.port &&
+  left.protocol === right.protocol &&
+  left.username === right.username &&
+  left.scope.application === right.scope.application &&
+  left.scope.cli === right.scope.cli &&
+  left.scope.conversation === right.scope.conversation;
+
+const applicationProxyIsDirty = (): boolean =>
+  (savedApplicationProxy
+    ? !applicationProxyDraftMatches(
+        captureApplicationProxyDraft(),
+        applicationProxyViewSnapshot(savedApplicationProxy),
+      )
+    : applicationProxyDraftEdited) || applicationProxyPassword.value.length > 0;
+
+const syncApplicationProxyInteractivity = (): void => {
+  const enabled = applicationProxyEnabled.checked && !applicationProxyInitialLoadPending;
+  applicationProxyEnabled.disabled = applicationProxyInitialLoadPending;
+  for (const container of [applicationProxyConfiguration, applicationProxyScope]) {
+    container.inert = !enabled;
+    container.setAttribute('aria-disabled', String(!enabled));
+    for (const control of container.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+      'input, select',
+    )) {
+      control.disabled = !enabled;
+    }
+  }
+  if (enabled && applicationProxyProtocol.value === 'socks5') {
+    applicationProxyScopeCli.checked = false;
+    applicationProxyScopeCli.disabled = true;
+  }
+  applicationProxySave.disabled =
+    applicationProxyInitialLoadPending || applicationProxySaveInProgress;
+  applicationProxyDetect.disabled = applicationProxyInitialLoadPending;
+  applicationProxyTest.disabled =
+    applicationProxyInitialLoadPending ||
+    applicationProxyTestInProgress ||
+    !savedApplicationProxy?.enabled ||
+    applicationProxyIsDirty();
+};
+
+const applyApplicationProxyDraft = (draft: ApplicationProxyDraftSnapshot): void => {
+  applicationProxyEnabled.checked = draft.enabled;
+  applicationProxyProtocol.value = draft.protocol;
+  applicationProxyHost.value = draft.host;
+  applicationProxyPort.value = draft.port;
+  applicationProxyUsername.value = draft.username;
   applicationProxyPassword.value = '';
+  applicationProxyScopeCli.checked = draft.scope.cli;
+  applicationProxyScopeApplication.checked = draft.scope.application;
+  applicationProxyScopeConversation.checked = draft.scope.conversation;
+  syncApplicationProxyInteractivity();
+};
+
+const renderApplicationProxyState = (
+  state: ApplicationProxyState,
+  preserveDirtyDraft = true,
+): void => {
+  const { config, test } = state;
+  const draft = captureApplicationProxyDraft();
+  const preserveDraft =
+    preserveDirtyDraft &&
+    connectionAdvancedDialog.open &&
+    (applicationProxyDraftEdited || applicationProxyIsDirty());
+  savedApplicationProxy = config;
+  if (!preserveDraft) {
+    applyApplicationProxyDraft(applicationProxyViewSnapshot(config));
+  } else {
+    const password = applicationProxyPassword.value;
+    applyApplicationProxyDraft(draft);
+    applicationProxyPassword.value = password;
+    syncApplicationProxyInteractivity();
+  }
   applicationProxyCredentialStatus.textContent = config.username
     ? config.passwordConfigured
       ? `账号 ${config.username} · 密码已由 Windows DPAPI 加密保存；密码框留空会保留。`
       : `账号 ${config.username} · 未保存密码。`
     : '未配置代理账号密码。';
-  applicationProxyScopeCli.checked = config.scope.cli;
-  applicationProxyScopeCli.disabled = config.protocol === 'socks5';
-  applicationProxyScopeApplication.checked = config.scope.application;
-  applicationProxyScopeConversation.checked = config.scope.conversation;
-  applicationProxyTest.disabled = !config.enabled;
   const enabledScopes = [
     config.scope.cli ? 'CLI' : undefined,
     config.scope.application ? 'ClaudeDock 自身网络' : undefined,
@@ -832,13 +1118,23 @@ const renderApplicationProxyState = (state: ApplicationProxyState): void => {
   applicationProxyTestResult.textContent = test
     ? `${test.message}${test.latencyMs === undefined ? '' : ` · ${test.latencyMs} ms`} · ${new Date(test.checkedAt).toLocaleTimeString()}`
     : '保存后可通过独立会话测试该端口，不会发送模型请求。';
+  updateSettingsUnsavedIndicator();
 };
 
-const loadApplicationProxyState = async (): Promise<void> => {
+const loadApplicationProxyState = async (
+  preserveDirtyDraft = true,
+  loadGeneration = applicationProxyLoadGeneration,
+): Promise<boolean> => {
   try {
-    renderApplicationProxyState(await window.controlPanel.getApplicationProxyState());
+    const state = await window.controlPanel.getApplicationProxyState();
+    if (loadGeneration !== applicationProxyLoadGeneration) return false;
+    renderApplicationProxyState(state, preserveDirtyDraft);
+    return true;
   } catch {
-    showToast('无法读取应用代理设置。', 'error');
+    if (loadGeneration === applicationProxyLoadGeneration) {
+      showToast('无法读取应用代理设置。', 'error');
+    }
+    return false;
   }
 };
 
@@ -850,11 +1146,13 @@ const renderApplicationProxyCandidates = (candidates: ApplicationProxyCandidate[
       button.type = 'button';
       button.textContent = `${candidate.label} · ${candidate.protocol.toUpperCase()} ${candidate.host}:${candidate.port}`;
       button.addEventListener('click', () => {
+        applicationProxyDraftEdited = true;
         applicationProxyProtocol.value = candidate.protocol;
         applicationProxyHost.value = candidate.host;
         applicationProxyPort.value = String(candidate.port);
         if (candidate.protocol === 'socks5') applicationProxyScopeCli.checked = false;
-        applicationProxyScopeCli.disabled = candidate.protocol === 'socks5';
+        syncApplicationProxyInteractivity();
+        updateSettingsUnsavedIndicator();
         showToast('已填入候选代理；请确认作用域后保存');
       });
       return button;
@@ -863,6 +1161,10 @@ const renderApplicationProxyCandidates = (candidates: ApplicationProxyCandidate[
 };
 
 const unsubscribeDownloadsChanged = window.controlPanel.onDownloadsChanged(handleDownloadsChanged);
+const unsubscribeBusyChanged = window.controlPanel.onBusyChanged((leases) => {
+  busyLeases = leases;
+  renderDownloadCenter();
+});
 const unsubscribeApplicationProxyChanged = window.controlPanel.onApplicationProxyChanged(
   (state) => {
     renderApplicationProxyState(state);
@@ -991,6 +1293,10 @@ const terminalViews = new Map<string, TerminalView>();
 const claudeStates = new Map<string, ClaudeProjectState>();
 const codexStates = new Map<string, CodexProjectState>();
 const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
+const runtimeActivityStates = new Map<string, RuntimeActivitySnapshot>();
+const claudeStateLoadGenerations = new SessionGenerationRegistry();
+const codexStateLoadGenerations = new SessionGenerationRegistry();
+const runtimeStateLoadGenerations = new SessionGenerationRegistry();
 const networkPreflightResults = new Map<NetworkProviderId, NetworkPreflightResult>();
 /** Conversation history per project folder, keyed by the lower-cased folder path. */
 const storedConversations = new Map<string, ClaudeSessionMetadata[]>();
@@ -998,12 +1304,8 @@ const expandedFolders = new Set<string>();
 /** Keeps each folder's history list where the user scrolled it, across sidebar rebuilds. */
 const historyScrollPositions = new Map<string, number>();
 const collapsedProviderGroups = new Set<ClaudeProviderGroupId>();
-const historyLoadsInFlight = new Set<string>();
-const historyReloadRequested = new Set<string>();
+const folderHistoryLoads = new FolderHistoryLoadCoordinator();
 let dragDepth = 0;
-let claudeRequestGeneration = 0;
-let codexRequestGeneration = 0;
-let runtimeRequestGeneration = 0;
 let configFormSessionId = '';
 let connectionTestInProgress = false;
 let connectionRemedyInProgress = false;
@@ -1016,25 +1318,40 @@ let selectedProviderId: ClaudeProviderId | undefined;
 let selectedRouterProviderId: string | undefined;
 let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let savedAppSettings: AppSettingsView | undefined;
+let footerResourcePreference: FooterResourcePreference = 'auto';
+let managedChatGptContextWindowMode: ManagedChatGptContextWindowMode = 'standard';
+let savedApplicationProxy: ApplicationProxyView | undefined;
+let applicationProxyCancelBaseline: ApplicationProxyDraftSnapshot | undefined;
+let applicationProxySaveInProgress = false;
+let applicationProxyTestInProgress = false;
+let applicationProxyLoadGeneration = 0;
+let applicationProxyInitialLoadPending = false;
+let applicationProxyDraftEdited = false;
 let selectedRailTab: string | undefined = 'projects';
+let previewRailTab: string | undefined;
+let railPreviewCloseTimer: number | undefined;
 type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | 'router';
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
+let managedChatGptSetupInProgress = false;
+let renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
 let lastClaudeSessionId = '';
 let lastCurlAnalysis: ClaudeCurlAnalysis | undefined;
-let launchInProgress = false;
+const claudeLaunchAttempts = new ClaudeLaunchAttemptRegistry();
+const claudeSpeedOperations = new SessionGenerationRegistry();
+const codexLaunchAttempts = new SessionGenerationRegistry();
+const storedConversationRestores = new Set<string>();
 let codexOperationInProgress = false;
 let codexAutoLaunchSessionId = '';
 const routeHealthNotifications = new Map<string, string>();
 const effortRecoveryNotifications = new Map<string, number>();
 let routerManagementState: ClaudeRouterManagementState | undefined;
 let routerKernelState: RouterKernelState | undefined;
+let lastRouterOperationProgress: RouterOperationProgress | undefined;
 let routerOperationInProgress = false;
-/** Set after a successful purge so the “pick a new source” hint only appears when it applies. */
-let routerPurgeCompleted = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
@@ -1065,6 +1382,10 @@ let queuedChatAttachmentImports = 0;
 let chatSubmissionInFlight = false;
 let conversationBusyLeaseActive = false;
 let pendingQuitRequest: AppQuitRequest | undefined;
+const claudePermissionQueue: ClaudePermissionRequestView[] = [];
+let activeClaudePermissionRequest: ClaudePermissionRequestView | undefined;
+let claudePermissionResponsePending = false;
+let claudePermissionExpiryTimer: number | undefined;
 let artifactNetworkState: ArtifactNetworkState = { allowed: true, entries: [] };
 let markdownRenderer: MarkdownDomRenderer;
 let markdownHighlighter: HighlighterCore | undefined;
@@ -1116,6 +1437,9 @@ let applicationUpdaterState: ApplicationUpdaterState | undefined;
 let softwareUpdateInProgress = false;
 let softwareUpdatePromise: Promise<void> | undefined;
 let updateRefreshInProgress = false;
+let updateCenterOperationInProgress = false;
+let downloadTasks: DownloadTaskView[] = [];
+let busyLeases: BusyLease[] = [];
 let pendingComposerFocusSessionId = '';
 let conversationContextTarget:
   | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
@@ -1397,8 +1721,8 @@ window.controlPanel.onArtifactNetworkLog((entry: ArtifactNetworkLogEntry) => {
 
 const applyTerminalTheme = (themeId: TerminalThemeId, announce = true, persist = true): void => {
   activeTerminalTheme = themeId;
-  terminalThemeSelect.value = themeId;
-  settingsTheme.value = themeId;
+  setEnhancedSelectValue(terminalThemeSelect, themeId);
+  setEnhancedSelectValue(settingsTheme, themeId);
   if (persist) localStorage.setItem('claudedock.terminalTheme', themeId);
   const definition = TERMINAL_THEMES[themeId];
   // The shell steps are written onto the root element so every `var(--…)` in styles.css follows the
@@ -1452,6 +1776,210 @@ const activeDevelopmentRuntime = (): DevelopmentRuntime => {
   const status = activeStatus();
   return status ? (developmentRuntimeStates.get(status.id)?.runtime ?? 'claude') : 'claude';
 };
+
+const RUNTIME_PHASE_LABELS: Record<RuntimeActivitySnapshot['phase'], string> = {
+  'cli-idle': 'CLI 空闲',
+  failed: '需要处理',
+  'foreground-running': '前台响应中',
+  resuming: '正在恢复对话',
+  stopped: '已停止',
+  'waiting-background': '等待后台唤醒',
+};
+
+const runtimeTaskIsUnfinished = (task: RuntimeTaskView): boolean =>
+  task.status === 'queued' || task.status === 'running' || task.status === 'waiting';
+
+const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
+  const activeSessionId = workspaceState.activeSessionId;
+  const state = snapshot ?? runtimeActivityStates.get(activeSessionId);
+  if (state) runtimeActivityStates.set(state.sessionId, state);
+  if (!state || state.sessionId !== activeSessionId) {
+    runtimeActivityTrigger.hidden = true;
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  const unfinished = state.tasks.filter(runtimeTaskIsUnfinished);
+  const visible = unfinished.length > 0 || state.webProcesses.length > 0;
+  runtimeActivityTrigger.hidden = !visible;
+  runtimeActivityTrigger.dataset.phase = state.phase;
+  runtimeActivityLabel.textContent = `后台任务 ${unfinished.length} · ${RUNTIME_PHASE_LABELS[state.phase]}`;
+  runtimeActivitySummary.textContent = `${RUNTIME_PHASE_LABELS[state.phase]} · 子代理 ${state.subagentCount} · ${
+    state.willResumeConversation === true
+      ? '完成后会恢复主对话'
+      : state.willResumeConversation === false
+        ? '不会自动恢复主对话'
+        : '是否恢复待确认'
+  }`;
+  if (state.phase === 'waiting-background' || state.phase === 'resuming') {
+    titleStatus.textContent =
+      state.phase === 'waiting-background'
+        ? `后台任务仍在运行 · ${unfinished.length} 项`
+        : '后台任务已返回 · 正在恢复主对话';
+    footerStatus.textContent = RUNTIME_PHASE_LABELS[state.phase];
+  } else if (state.phase === 'failed') {
+    titleStatus.textContent = '本轮响应失败 · 终端上下文已保留';
+    footerStatus.textContent = '需要手动继续';
+  }
+
+  runtimeTaskList.replaceChildren(
+    ...state.tasks.map((task) => {
+      const item = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = task.description;
+      const details = document.createElement('span');
+      const tokenLabel =
+        task.tokenUse === 'likely'
+          ? '可能持续消耗 token'
+          : task.tokenUse === 'none'
+            ? '不消耗模型 token'
+            : 'token 状态未知';
+      const wakeLabel =
+        task.willWakeParent === true
+          ? '完成后唤醒主对话'
+          : task.willWakeParent === false
+            ? '不唤醒主对话'
+            : '唤醒状态未知';
+      details.textContent = `${task.kind} · ${task.status} · ${tokenLabel} · ${wakeLabel}`;
+      item.append(title, details);
+      return item;
+    }),
+  );
+  if (state.tasks.length === 0) {
+    const empty = document.createElement('li');
+    empty.textContent = '暂无任务记录';
+    runtimeTaskList.append(empty);
+  }
+
+  runtimeProcessList.replaceChildren(
+    ...state.webProcesses.map((process) => {
+      const item = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = `${process.name} · PID ${process.pid}`;
+      const command = document.createElement('span');
+      command.textContent = process.commandSummary;
+      item.append(title, command);
+      for (const target of process.urls) {
+        const link = document.createElement('a');
+        link.href = target.url;
+        link.textContent = `${target.url}（${target.confirmed ? '已确认' : '由监听端口推断'}）`;
+        link.addEventListener('click', (event) => {
+          event.preventDefault();
+          void openExternal(target.url);
+        });
+        item.append(link);
+      }
+      if (process.exposureWarning) {
+        const warning = document.createElement('span');
+        warning.textContent = process.exposureWarning;
+        item.append(warning);
+      }
+      const terminate = document.createElement('button');
+      terminate.type = 'button';
+      terminate.textContent = process.status === 'stopping' ? '正在结束…' : '结束进程';
+      terminate.disabled = process.status === 'stopping';
+      terminate.addEventListener('click', () => {
+        terminate.disabled = true;
+        void window.controlPanel
+          .terminateRuntimeProcess(state.sessionId, process.processKey)
+          .then(renderRuntimeActivity)
+          .catch(() => showToast('无法结束该 Web 进程；所有权可能已经变化。', 'error'));
+      });
+      item.append(terminate);
+      return item;
+    }),
+  );
+  if (state.webProcesses.length === 0) {
+    const empty = document.createElement('li');
+    empty.textContent = '未发现当前会话派生的 Web 监听进程';
+    runtimeProcessList.append(empty);
+  }
+
+  if (!visible) {
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  }
+};
+
+const loadActiveRuntimeActivity = async (): Promise<void> => {
+  const sessionId = workspaceState.activeSessionId;
+  if (!sessionId) {
+    runtimeActivityTrigger.hidden = true;
+    runtimeActivityPanel.hidden = true;
+    return;
+  }
+  try {
+    const state = await window.controlPanel.getRuntimeActivity(sessionId);
+    if (workspaceState.activeSessionId === sessionId) renderRuntimeActivity(state);
+  } catch {
+    runtimeActivityTrigger.hidden = true;
+  }
+};
+
+const renderClaudePermissionRequest = (): void => {
+  const request = activeClaudePermissionRequest;
+  if (!request || claudePermissionResponsePending) return;
+  claudePermissionTool.textContent = request.toolName;
+  claudePermissionDescription.textContent = request.description;
+  claudePermissionDenyReason.value = '';
+  claudePermissionSuggestions.replaceChildren();
+  claudePermissionSuggestions.hidden = request.suggestions.length === 0;
+  for (const suggestion of request.suggestions) {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'claude-permission-suggestion';
+    radio.value = suggestion.id;
+    label.append(radio, document.createTextNode(suggestion.label));
+    claudePermissionSuggestions.append(label);
+  }
+  claudePermissionAllow.textContent = '本次允许';
+  claudePermissionSuggestions.addEventListener(
+    'change',
+    () => {
+      claudePermissionAllow.textContent = '允许并保存所选范围';
+    },
+    { once: true },
+  );
+  claudePermissionDialog.returnValue = '';
+  if (!claudePermissionDialog.open) claudePermissionDialog.showModal();
+  if (claudePermissionExpiryTimer !== undefined) window.clearTimeout(claudePermissionExpiryTimer);
+  claudePermissionExpiryTimer = window.setTimeout(
+    () => void respondToClaudePermission({ behavior: 'fallback' }),
+    Math.max(0, request.expiresAt - Date.now()),
+  );
+};
+
+const showNextClaudePermissionRequest = (): void => {
+  if (activeClaudePermissionRequest || claudePermissionQueue.length === 0) return;
+  activeClaudePermissionRequest = claudePermissionQueue.shift();
+  renderClaudePermissionRequest();
+};
+
+async function respondToClaudePermission(decision: ClaudePermissionDecision): Promise<void> {
+  const request = activeClaudePermissionRequest;
+  if (!request || claudePermissionResponsePending) return;
+  claudePermissionResponsePending = true;
+  claudePermissionAllow.disabled = true;
+  claudePermissionDeny.disabled = true;
+  claudePermissionFallback.disabled = true;
+  if (claudePermissionExpiryTimer !== undefined) {
+    window.clearTimeout(claudePermissionExpiryTimer);
+    claudePermissionExpiryTimer = undefined;
+  }
+  try {
+    await window.controlPanel.respondClaudePermission(request.requestId, decision);
+  } finally {
+    activeClaudePermissionRequest = undefined;
+    claudePermissionResponsePending = false;
+    claudePermissionAllow.disabled = false;
+    claudePermissionDeny.disabled = false;
+    claudePermissionFallback.disabled = false;
+    if (claudePermissionDialog.open) claudePermissionDialog.close();
+    window.setTimeout(showNextClaudePermissionRequest, 0);
+  }
+}
 
 const activeNetworkProvider = (): NetworkProviderId | undefined => {
   if (activeDevelopmentRuntime() === 'codex') {
@@ -2829,12 +3357,12 @@ const syncApiKeyHelperPolicyUi = (): void => {
 
 const syncConnectionInteractivity = (): void => {
   const busy = connectionTestInProgress || connectionRemedyInProgress;
-  providerPicker.setAttribute('aria-disabled', String(!connectionEnvironmentReady || busy));
-  providerPicker.inert = !connectionEnvironmentReady || busy;
+  providerPicker.setAttribute('aria-disabled', String(busy));
+  providerPicker.inert = busy;
   claudeConfigForm.inert = !connectionEnvironmentReady || busy;
   connectionRemedyActions.inert = busy;
   for (const button of providerGroups.querySelectorAll<HTMLButtonElement>('.provider-card')) {
-    button.disabled = !connectionEnvironmentReady || busy;
+    button.disabled = busy;
   }
   for (const control of claudeConfigForm.querySelectorAll<
     HTMLButtonElement | HTMLInputElement | HTMLSelectElement
@@ -2856,28 +3384,269 @@ const syncConnectionInteractivity = (): void => {
 const buildChatGptSubscriptionGuide = (): HTMLElement => {
   const guide = document.createElement('section');
   guide.className = 'subscription-gateway-guide';
-  guide.setAttribute('aria-label', 'ChatGPT 订阅本地网关接入步骤');
+  guide.setAttribute('aria-label', 'ChatGPT 订阅托管网关');
 
   const title = document.createElement('strong');
-  title.textContent = '先在 ClaudeDock 外完成本地网关授权';
-  const steps = document.createElement('ol');
-  for (const copy of [
-    '安装并启动 CLIProxyAPI，或在 CC Switch 中启用 Codex OAuth 本地路由；OAuth Token 始终由该工具管理。',
-    '在外部工具中完成 ChatGPT / Codex 登录。1455 是 OAuth 回调端口，不是 Claude Code 的模型接口。',
-    '确认模型接口地址与本地访问密钥；CLIProxyAPI 默认可使用 127.0.0.1:8317，CC Switch 请复制它实际显示的 Claude 路由地址。',
-  ]) {
-    const item = document.createElement('li');
-    item.textContent = copy;
-    steps.append(item);
-  }
+  title.textContent = 'OpenAI Codex 负责人公开分享的 claudex 路径';
+  const source = document.createElement('p');
+  source.textContent =
+    'Thibault “Tibo” Sottiaux 公开分享了 CLIProxyAPI 接入 Claude Code 的实践。ClaudeDock 把安装、配置和后台运行收进一个界面，不要求你打开终端或第三方控制台。';
+  const statusCard = document.createElement('div');
+  statusCard.className = 'subscription-gateway-status';
+  statusCard.setAttribute('aria-live', 'polite');
+  const statusText = document.createElement('div');
+  const statusTitle = document.createElement('strong');
+  statusTitle.textContent = '正在检查托管网关';
+  const statusDetail = document.createElement('span');
+  statusDetail.textContent = '请稍候…';
+  statusText.append(statusTitle, statusDetail);
+  const action = document.createElement('button');
+  action.type = 'button';
+  action.dataset.ripple = '';
+  action.textContent = '一键安装并登录';
+  action.disabled = true;
+  statusCard.append(statusText, action);
+  const progressCard = document.createElement('div');
+  progressCard.className = 'subscription-gateway-progress';
+  progressCard.setAttribute('aria-live', 'polite');
+  progressCard.hidden = true;
+  const progressTitle = document.createElement('strong');
+  const progressDetail = document.createElement('span');
+  const progressMeter = document.createElement('progress');
+  progressMeter.setAttribute('aria-label', 'ChatGPT 自动接入进度');
+  progressMeter.max = 8;
+  progressCard.append(progressTitle, progressDetail, progressMeter);
+  const modelField = document.createElement('label');
+  modelField.className = 'field subscription-gateway-model';
+  modelField.hidden = true;
+  const modelLabel = document.createElement('span');
+  modelLabel.textContent = '当前模型';
+  const modelSelect = document.createElement('select');
+  const modelHelpText = document.createElement('small');
+  modelHelpText.textContent = '列表来自本机网关实时接口；切换后会自动复测并保存，无需再点接入。';
+  modelField.append(modelLabel, modelSelect, modelHelpText);
+  enhanceSelect(modelSelect);
+  const secondaryActions = document.createElement('div');
+  secondaryActions.className = 'subscription-gateway-actions';
   const boundary = document.createElement('small');
   boundary.textContent =
-    '公开方案里的 claudex 别名本质是作用域受限的环境变量；ClaudeDock 只把同类回环地址、模型和本地访问密钥注入当前项目子进程，不改 shell 配置，不读取 OAuth 登录文件，也不修改系统级路由。';
-  guide.append(title, steps, boundary);
+    '一次点击会自动检测 Claude Code、补齐缺失组件、打开 OpenAI 官方授权、读取模型列表、真实测试并保存。此方式不需要 CCR；不会读取 OAuth Token 内容，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
+
+  const renderModels = (models: readonly string[], preferredModel?: string): void => {
+    const currentModel = claudeStates.get(workspaceState.activeSessionId)?.config.model;
+    const selected = models.includes(modelSelect.value)
+      ? modelSelect.value
+      : preferredModel && models.includes(preferredModel)
+        ? preferredModel
+        : currentModel && models.includes(currentModel)
+          ? currentModel
+          : models[0];
+    modelSelect.replaceChildren(
+      ...models.map((model) => {
+        const option = document.createElement('option');
+        option.value = model;
+        option.textContent = model;
+        return option;
+      }),
+    );
+    if (selected) {
+      modelSelect.value = selected;
+    }
+    modelField.hidden = models.length === 0;
+  };
+
+  renderManagedChatGptProgress = (progress): void => {
+    if (progress.sessionId !== workspaceState.activeSessionId) {
+      return;
+    }
+    managedChatGptSetupInProgress = progress.active;
+    progressCard.hidden = false;
+    progressTitle.textContent = `第 ${progress.step}/${progress.totalSteps} 步`;
+    progressDetail.textContent = progress.detail;
+    progressMeter.max = progress.totalSteps;
+    progressMeter.value = progress.step;
+    action.disabled = progress.active;
+    action.setAttribute('aria-busy', String(progress.active));
+    modelSelect.disabled = progress.active;
+    if (progress.active) {
+      action.textContent = '正在自动接入…';
+    }
+  };
+
+  const renderState = (state: ManagedChatGptGatewayState, preferredModel?: string): void => {
+    const operationBusy = state.busy || managedChatGptSetupInProgress;
+    statusCard.dataset.phase = state.phase;
+    statusTitle.textContent = operationBusy
+      ? '正在自动检测并接入'
+      : state.phase === 'ready'
+        ? 'ChatGPT 一键接入已就绪'
+        : state.phase === 'stopped'
+          ? '授权已完成，等待启用'
+          : state.phase === 'login-required'
+            ? '安装完成，等待 OpenAI 授权'
+            : '尚未安装托管网关';
+    statusDetail.textContent = state.message;
+    renderModels(state.availableModels, preferredModel);
+    action.disabled = operationBusy;
+    action.setAttribute('aria-busy', String(operationBusy));
+    modelSelect.disabled = operationBusy;
+    action.textContent = operationBusy
+      ? '安装进行中…'
+      : state.phase === 'not-installed'
+        ? '一键安装并登录'
+        : state.phase === 'login-required'
+          ? '登录 OpenAI 并自动配置'
+          : state.phase === 'stopped'
+            ? '启动并用于当前项目'
+            : '检查并自动修复';
+    secondaryActions.replaceChildren();
+    if (state.authenticated && !operationBusy) {
+      const relogin = document.createElement('button');
+      relogin.type = 'button';
+      relogin.textContent = '重新登录 OpenAI';
+      relogin.addEventListener('click', () => {
+        void runSetup(true, relogin);
+      });
+      secondaryActions.append(relogin);
+    }
+    claudeConfigForm.hidden = selectedProviderId === 'chatgpt-subscription';
+  };
+
+  const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
+    if (managedChatGptSetupInProgress) {
+      showToast('托管网关正在安装或配置，请等待当前操作完成。');
+      return;
+    }
+    const sessionId = workspaceState.activeSessionId;
+    if (!sessionId) {
+      showToast('请先选择一个项目。', 'error');
+      return;
+    }
+    managedChatGptSetupInProgress = true;
+    button.disabled = true;
+    modelSelect.disabled = true;
+    const original = button.textContent;
+    let restoreOriginalLabel = true;
+    let resultStateRendered = false;
+    statusCard.dataset.phase = 'installing';
+    statusTitle.textContent = '正在安装并配置托管网关';
+    button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
+    statusDetail.textContent =
+      '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
+    try {
+      const result = await window.controlPanel.setupManagedChatGptGateway(sessionId, forceLogin);
+      managedChatGptSetupInProgress = false;
+      renderState(result.state, result.projectState?.config.model);
+      resultStateRendered = true;
+      if (!result.ok) {
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '配置未完成';
+        statusDetail.textContent = result.error ?? result.message;
+        if (button === action) {
+          action.textContent = '重试';
+          restoreOriginalLabel = false;
+        }
+        showToast(result.error ?? result.message, 'error');
+        return;
+      }
+      if (result.projectState) {
+        renderClaudeState(result.projectState);
+      }
+      if (result.connectionTest) {
+        statusDetail.textContent = result.connectionTest.message;
+      }
+      showToast(result.message);
+    } catch {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '配置未完成';
+      statusDetail.textContent = '无法完成 ChatGPT 托管网关配置，请稍后重试。';
+      if (button === action) {
+        action.textContent = '重试';
+        restoreOriginalLabel = false;
+      }
+      showToast('无法完成 ChatGPT 托管网关配置。', 'error');
+    } finally {
+      managedChatGptSetupInProgress = false;
+      if (button.isConnected) {
+        button.disabled = false;
+        if (restoreOriginalLabel && !resultStateRendered) {
+          button.textContent = original;
+        }
+      } else if (selectedProviderId === 'chatgpt-subscription') {
+        applyPresetUi('chatgpt-subscription', true);
+      }
+      if (guide.isConnected) {
+        modelSelect.disabled = false;
+      }
+    }
+  };
+
+  action.addEventListener('click', () => {
+    void runSetup(false, action);
+  });
+  modelSelect.addEventListener('change', () => {
+    const sessionId = workspaceState.activeSessionId;
+    const previousModel = claudeStates.get(sessionId)?.config.model;
+    const requestedModel = modelSelect.value;
+    if (!sessionId || !requestedModel || managedChatGptSetupInProgress) {
+      return;
+    }
+    managedChatGptSetupInProgress = true;
+    modelSelect.disabled = true;
+    void window.controlPanel
+      .setManagedChatGptGatewayModel(sessionId, requestedModel)
+      .then((result) => {
+        renderState(result.state, result.projectState?.config.model);
+        if (!result.ok) {
+          if (previousModel && result.state.availableModels.includes(previousModel)) {
+            modelSelect.value = previousModel;
+          }
+          statusCard.dataset.phase = 'error';
+          statusTitle.textContent = '模型切换未完成';
+          statusDetail.textContent = result.error ?? result.message;
+          showToast(result.error ?? result.message, 'error');
+          return;
+        }
+        if (result.projectState) {
+          renderClaudeState(result.projectState);
+        }
+        statusTitle.textContent = '模型已验证并切换';
+        statusDetail.textContent = result.message;
+        showToast(result.message);
+      })
+      .catch(() => {
+        if (previousModel) {
+          modelSelect.value = previousModel;
+        }
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '模型切换未完成';
+        statusDetail.textContent = '无法验证并切换所选模型。';
+        showToast('无法验证并切换所选模型。', 'error');
+      })
+      .finally(() => {
+        managedChatGptSetupInProgress = false;
+        modelSelect.disabled = false;
+      });
+  });
+  void window.controlPanel
+    .getManagedChatGptGatewayState()
+    .then((state) => {
+      if (guide.isConnected) {
+        renderState(state);
+      }
+    })
+    .catch(() => {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '无法读取托管网关状态';
+      statusDetail.textContent = '请稍后重试。';
+      action.disabled = false;
+    });
+  guide.append(title, source, statusCard, progressCard, modelField, secondaryActions, boundary);
   return guide;
 };
 
 const moveProviderTools = (providerId?: ClaudeProviderId): void => {
+  renderManagedChatGptProgress = undefined;
   providerSpecialSetup.replaceChildren();
   connectionAdvancedContent.append(
     connectionAdvice,
@@ -2887,7 +3656,7 @@ const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     connectionGlossary,
   );
   if (providerId === 'chatgpt-subscription') {
-    providerSpecialSetup.append(buildChatGptSubscriptionGuide(), gatewayDiscoverySection);
+    providerSpecialSetup.append(buildChatGptSubscriptionGuide());
     return;
   }
   if (providerId === 'curl') {
@@ -2963,7 +3732,7 @@ function renderProviderPicker(): void {
       card.dataset.providerId = provider.id;
       card.classList.toggle('provider-card--selected', provider.id === selectedProviderId);
       card.setAttribute('aria-pressed', String(provider.id === selectedProviderId));
-      card.disabled = !connectionEnvironmentReady || connectionTestInProgress;
+      card.disabled = connectionTestInProgress || connectionRemedyInProgress;
 
       const title = document.createElement('strong');
       title.textContent = provider.label;
@@ -2981,7 +3750,7 @@ function renderProviderPicker(): void {
         card.append(badge);
       }
       card.addEventListener('click', () => {
-        if (!connectionEnvironmentReady) {
+        if (!connectionEnvironmentReady && provider.id !== 'chatgpt-subscription') {
           showToast('请先安装或更新 Claude Code。', 'error');
           return;
         }
@@ -3023,7 +3792,9 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   }
   selectedProviderId = provider.id;
   claudePreset.value = provider.id;
-  claudeConfigForm.hidden = false;
+  const isManagedChatGpt = provider.id === 'chatgpt-subscription';
+  environmentSetup.hidden = isManagedChatGpt || connectionEnvironmentReady;
+  claudeConfigForm.hidden = isManagedChatGpt;
   const isOfficialLogin = provider.id === 'anthropic';
   const isAdvanced =
     provider.id === 'custom' || provider.id === 'gateway' || provider.id === 'curl';
@@ -3034,7 +3805,13 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   }
   const protocol = claudeProtocol.value as ConfigurableEndpointProtocol;
   protocolField.hidden = !supportsProtocolSwitch;
-  baseUrlField.hidden = !provider.editableBaseUrl;
+  baseUrlField.hidden = isManagedChatGpt || !provider.editableBaseUrl;
+  authModeField.hidden = isManagedChatGpt;
+  credentialSourceSettings.hidden = isManagedChatGpt;
+  claudeConfigStepTitle.textContent = isManagedChatGpt ? '选择托管网关模型' : '选择模型并填写凭据';
+  claudeConfigStepDescription.textContent = isManagedChatGpt
+    ? '地址和本地访问密钥由 ClaudeDock 自动配置；你只需要按需调整模型。'
+    : '密钥只交给主进程加密保存，界面不会回显已保存内容。';
 
   if (isAdvanced) {
     setAuthOptions(
@@ -3086,7 +3863,7 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
         : 'Anthropic Messages 接口由 Claude Code 直接访问，不经过协议转换。';
   modelHelp.textContent =
     provider.id === 'chatgpt-subscription'
-      ? `默认映射为主模型 ${provider.model}、快速模型 ${provider.modelFast ?? provider.model}；请以本地网关实时可用模型为准，可在这里修改。`
+      ? `默认映射为主模型 ${provider.model}、小型/备用模型 ${provider.modelFast ?? provider.model}；后者会更换模型，不是服务速度档位。请以本地网关实时可用模型为准，可在这里修改。`
       : `主模型会同时用于默认、Opus 与 Sonnet 路由；当前推荐 ${provider.model}。`;
   authModeHelp.textContent =
     provider.id === 'chatgpt-subscription'
@@ -3111,6 +3888,7 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
           : `${provider.label} 凭据`;
   claudeCredential.placeholder = provider.keyHint ?? '留空则保留已保存的凭据';
   credentialField.hidden =
+    isManagedChatGpt ||
     claudeAuthMode.value === 'existing' ||
     claudeAuthMode.value === 'none' ||
     provider.id === 'ollama';
@@ -3123,11 +3901,11 @@ const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
   openProviderConsoleButton.hidden = !provider.consoleUrl;
   openProviderConsoleButton.dataset.externalUrl = provider.consoleUrl ?? '';
   openProviderConsoleButton.textContent =
-    provider.id === 'chatgpt-subscription' ? '查看网关项目' : '打开密钥控制台';
+    provider.id === 'chatgpt-subscription' ? '查看公开原帖' : '打开密钥控制台';
   openProviderDocsButton.hidden = !provider.docsUrl;
   openProviderDocsButton.dataset.externalUrl = provider.docsUrl ?? '';
   openProviderDocsButton.textContent =
-    provider.id === 'chatgpt-subscription' ? '查看官方登录说明' : '查看官方文档';
+    provider.id === 'chatgpt-subscription' ? '查看上游源码' : '查看官方文档';
   moveProviderTools(provider.id);
   renderProviderPicker();
   syncConnectionInteractivity();
@@ -3172,7 +3950,10 @@ const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
   claudeModelFast.value =
     config.sourceModelFast ?? config.sourceModel ?? config.modelFast ?? config.model;
   claudeAuthMode.value = config.sourceAuthMode ?? config.authMode;
-  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+  credentialField.hidden =
+    config.preset === 'chatgpt-subscription' ||
+    claudeAuthMode.value === 'existing' ||
+    claudeAuthMode.value === 'none';
   if (config.preset === 'ollama') {
     credentialField.hidden = true;
   }
@@ -3223,6 +4004,7 @@ const restoreAdvancedConnectionSnapshot = (snapshot: AdvancedConnectionSnapshot)
   credentialField.hidden =
     snapshot.authMode === 'existing' ||
     snapshot.authMode === 'none' ||
+    snapshot.providerId === 'chatgpt-subscription' ||
     snapshot.providerId === 'ollama';
   for (const state of snapshot.controls) {
     state.control.value = state.value;
@@ -3286,15 +4068,63 @@ const PERMISSION_MODE_CATALOG: ReadonlyArray<{
 const permissionModeLabel = (mode?: ClaudePermissionMode): string =>
   PERMISSION_MODE_CATALOG.find((entry) => entry.id === mode)?.label ?? '—';
 
+const modelSpeedFastLabel = (state: ClaudeProjectState): string => {
+  if (state.speed.mechanism === 'claude-native-fast') {
+    return 'Claude Fast';
+  }
+  if (
+    state.speed.mechanism === 'gpt-service-tier' ||
+    state.config.preset === 'chatgpt-subscription'
+  ) {
+    return 'GPT 1.5x';
+  }
+  return state.config.provider === 'anthropic' ? 'Claude Fast' : '快速档';
+};
+
+const modelSpeedFooterLabel = (state: ClaudeProjectState): string => {
+  if (state.speed.status === 'active') {
+    return '速度 Claude Fast 已开启';
+  }
+  if (state.speed.status === 'not-active') {
+    return state.speed.mechanism === 'gpt-service-tier'
+      ? '速度 GPT 1.5x 未生效'
+      : '速度 Claude Fast 未生效';
+  }
+  if (state.speed.status === 'requested') {
+    return state.speed.mechanism === 'gpt-service-tier'
+      ? '速度 已请求 GPT 1.5x'
+      : '速度 已请求 Claude Fast';
+  }
+  if (state.speed.availability === 'unsupported') {
+    return '速度 不支持';
+  }
+  if (state.speed.availability === 'unverified') {
+    return '速度 未验证';
+  }
+  if (state.speed.availability === 'update-required') {
+    return '速度 需更新';
+  }
+  return '速度 标准';
+};
+
 const hideFooterMenus = (): void => {
   for (const [menu, trigger] of [
+    [footerResourceMenu, footerResource],
     [footerModelMenu, footerModel],
+    [footerSpeedMenu, footerSpeed],
     [footerModeMenu, footerMode],
     [footerEffortMenu, footerEffort],
   ] as const) {
     menu.hidden = true;
     trigger.setAttribute('aria-expanded', 'false');
   }
+};
+
+const setFooterSecondaryOpen = (open: boolean): void => {
+  const compact = window.matchMedia('(max-width: 1040px)').matches;
+  const next = open && compact;
+  footerSecondaryStatus.dataset.open = String(next);
+  footerMore.setAttribute('aria-expanded', String(next));
 };
 
 /**
@@ -3336,6 +4166,176 @@ const buildFooterMenuItem = (
   return item;
 };
 
+const buildFooterRadioMenuItem = (
+  label: string,
+  detail: string,
+  selected: boolean,
+  onChoose: () => void,
+  disabled = false,
+): HTMLButtonElement => {
+  const item = buildFooterMenuItem(label, detail, selected, onChoose, disabled);
+  item.role = 'menuitemradio';
+  item.setAttribute('aria-checked', String(selected));
+  return item;
+};
+
+const formatResourceAmount = (amount: number, currency: string): string =>
+  currency.toUpperCase() === 'USD'
+    ? `$${amount.toFixed(amount < 10 ? 2 : 0)}`
+    : `${amount.toFixed(amount < 10 ? 2 : 0)} ${currency}`;
+
+const formatResetTime = (resetsAt: number | undefined): string => {
+  if (resetsAt === undefined) return '重置时间未提供';
+  const milliseconds = resetsAt < 10_000_000_000 ? resetsAt * 1000 : resetsAt;
+  const remaining = milliseconds - Date.now();
+  if (remaining <= 0) return '正在重置';
+  const minutes = Math.ceil(remaining / 60_000);
+  return minutes >= 1440
+    ? `${Math.ceil(minutes / 1440)} 天后重置`
+    : minutes >= 60
+      ? `${Math.ceil(minutes / 60)} 小时后重置`
+      : `${minutes} 分钟后重置`;
+};
+
+const resourceSourceLabel = (
+  source: NonNullable<ClaudeProjectState['resourceUsage']>['source'],
+): string =>
+  ({
+    'claude-statusline': 'Claude Code 状态行',
+    'codex-app-server': 'Codex 官方 App Server',
+    'deepseek-balance': 'DeepSeek 官方余额接口',
+    'managed-chatgpt-gateway': '受管 ChatGPT 本地网关',
+    'openrouter-key': 'OpenRouter 官方密钥接口',
+  })[source];
+
+const managedContextWindowSelectable = (state: ClaudeProjectState | undefined): boolean =>
+  Boolean(
+    state?.config.preset === 'chatgpt-subscription' &&
+    (state.config.model.toLowerCase() === 'gpt-5.6-sol' ||
+      state.config.model.toLowerCase() === 'gpt-5.6'),
+  );
+
+const syncManagedChatGptContextWindowSelection = (): void => {
+  for (const button of footerContextWindowOptions.querySelectorAll<HTMLButtonElement>(
+    '[data-context-window-mode]',
+  )) {
+    button.setAttribute(
+      'aria-checked',
+      String(button.dataset.contextWindowMode === managedChatGptContextWindowMode),
+    );
+  }
+};
+
+const renderFooterResource = (
+  usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
+  contextWindowSelectable = false,
+): void => {
+  const preference = footerResourcePreference;
+  const context = usage?.contextUsedPercent;
+  const window = usage?.windows?.[0];
+  const balance = usage?.balance?.balances?.[0];
+  const quotaText =
+    window?.usedPercent === undefined ? undefined : `额度 ${window.usedPercent.toFixed(0)}%`;
+  const contextText = context === undefined ? undefined : `上下文 ${context.toFixed(0)}%`;
+  const balanceText = balance
+    ? `余额 ${formatResourceAmount(balance.amount, balance.currency)}`
+    : undefined;
+  const selected =
+    usage?.availability === 'stale'
+      ? { percent: window?.usedPercent ?? context, text: '资源 已过期' }
+      : usage?.availability === 'unavailable'
+        ? { percent: undefined, text: '资源 不可用' }
+        : preference === 'context'
+          ? {
+              percent: context ?? window?.usedPercent,
+              text: contextText ?? quotaText ?? balanceText ?? '资源 —',
+            }
+          : {
+              percent: window?.usedPercent ?? context,
+              text: quotaText ?? balanceText ?? contextText ?? '资源 —',
+            };
+  footerContextLabel.textContent = selected.text;
+  footerContextRing.hidden = selected.percent === undefined;
+  footerContextRing.style.setProperty('--context-progress', `${selected.percent ?? 0}%`);
+  footerContextRing.dataset.level =
+    selected.percent !== undefined && selected.percent >= 85
+      ? 'danger'
+      : selected.percent !== undefined && selected.percent >= 65
+        ? 'warning'
+        : 'normal';
+  footerResource.dataset.availability = usage?.availability ?? 'unavailable';
+  footerResource.title = '点击查看上下文、订阅窗口、余额和显示偏好';
+  footerResourceDetails.replaceChildren();
+  const lines = [
+    usage?.contextUsedTokens === undefined || usage.contextWindowTokens === undefined
+      ? contextText
+      : `上下文：${formatTokenCount(usage.contextUsedTokens)} / ${formatTokenCount(usage.contextWindowTokens)}（${context?.toFixed(1) ?? '—'}%）`,
+    usage?.autoCompactAtTokens === undefined
+      ? undefined
+      : `自动压缩线：约 ${formatTokenCount(usage.autoCompactAtTokens)}`,
+    ...(usage?.windows ?? []).map(
+      (item) =>
+        `${item.label}：${item.usedPercent === undefined ? '缺失' : `已用 ${item.usedPercent.toFixed(0)}%`} · ${formatResetTime(item.resetsAt)}`,
+    ),
+    ...(usage?.balance?.balances ?? []).map(
+      (item) => `余额：${formatResourceAmount(item.amount, item.currency)}`,
+    ),
+    usage?.balance?.used === undefined ? undefined : `累计用量：$${usage.balance.used.toFixed(2)}`,
+    usage?.detail,
+    usage ? `来源：${resourceSourceLabel(usage.source)}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+  for (const line of lines.length > 0 ? lines : ['尚无资源数据。']) {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = line;
+    footerResourceDetails.append(paragraph);
+  }
+  for (const button of footerResourceMenu.querySelectorAll<HTMLButtonElement>(
+    '[data-resource-preference]',
+  )) {
+    button.setAttribute('aria-checked', String(button.dataset.resourcePreference === preference));
+  }
+  footerContextWindowOptions.hidden = !contextWindowSelectable;
+  syncManagedChatGptContextWindowSelection();
+};
+
+const loadAdvancedRouterBackends = async (): Promise<void> => {
+  const status = activeStatus();
+  settingsCcrBackendStatus.textContent = status
+    ? '正在检查 CCR CLI 后台状态…'
+    : '请先打开一个项目后再检查 CCR CLI 后台。';
+  settingsChatGptGatewayStatus.textContent = '正在检查 ChatGPT 本地网关状态…';
+  settingsOpenCcrBackend.disabled = true;
+  settingsOpenChatGptGateway.disabled = true;
+
+  const [routerResult, gatewayResult] = await Promise.allSettled([
+    status
+      ? window.controlPanel.getClaudeRouterManagementState(status.id)
+      : Promise.resolve(undefined),
+    window.controlPanel.getManagedChatGptGatewayState(),
+  ]);
+  if (routerResult.status === 'fulfilled' && routerResult.value) {
+    const state = routerResult.value;
+    routerManagementState = state;
+    settingsCcrBackendStatus.textContent = state.serviceRunning
+      ? state.managementAvailable
+        ? `运行中 · ${state.version ? `v${state.version}` : '版本待识别'}`
+        : '检测到后台进程，但不是可安全接管的 CCR CLI。'
+      : state.installed
+        ? 'CCR CLI 已安装，后台当前未运行。'
+        : 'CCR CLI 尚未安装。';
+    settingsOpenCcrBackend.disabled = !state.serviceRunning || !state.managementAvailable;
+  } else if (status) {
+    settingsCcrBackendStatus.textContent = '无法读取 CCR CLI 后台状态。';
+  }
+
+  if (gatewayResult.status === 'fulfilled') {
+    settingsChatGptGatewayStatus.textContent = gatewayResult.value.message;
+    settingsOpenChatGptGateway.disabled = !gatewayResult.value.managementAvailable;
+  } else {
+    settingsChatGptGatewayStatus.textContent = '无法读取 ChatGPT 本地网关状态。';
+  }
+};
+
 const selectSettingsTab = (tab: SettingsTab): void => {
   selectedSettingsTab = tab;
   for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
@@ -3353,6 +4353,9 @@ const selectSettingsTab = (tab: SettingsTab): void => {
   }
   if (tab === 'proxy') {
     void loadApplicationProxyState();
+  }
+  if (tab === 'advanced') {
+    void loadAdvancedRouterBackends();
   }
   if (tab === 'router') {
     void loadRouterManagement();
@@ -3375,8 +4378,10 @@ const pendingAppSettings = (): Pick<
 
 const updateSettingsUnsavedIndicator = (): number => {
   if (!savedAppSettings) {
-    settingsUnsavedIndicator.hidden = true;
-    return 0;
+    const count = applicationProxyIsDirty() ? 1 : 0;
+    settingsUnsavedIndicator.hidden = count === 0;
+    settingsUnsavedIndicator.textContent = `*${count} 项未保存`;
+    return count;
   }
   const pending = pendingAppSettings();
   const count = [
@@ -3385,6 +4390,7 @@ const updateSettingsUnsavedIndicator = (): number => {
     pending.theme !== savedAppSettings.theme,
     pending.advanced.chatIdleTimeoutMinutes !== savedAppSettings.advanced.chatIdleTimeoutMinutes,
     pending.advanced.webResearchIsolation !== savedAppSettings.advanced.webResearchIsolation,
+    applicationProxyIsDirty(),
   ].filter(Boolean).length;
   settingsUnsavedIndicator.hidden = count === 0;
   settingsUnsavedIndicator.textContent = `*${count} 项未保存`;
@@ -3399,7 +4405,7 @@ const applyAppSettingsToControls = (settings: AppSettingsView): void => {
   settingsLanguage.value = settings.language;
   settingsVersion.value = settings.version;
   settingsVersion.textContent = settings.version;
-  settingsTheme.value = settings.theme;
+  setEnhancedSelectValue(settingsTheme, settings.theme);
   applyTerminalTheme(settings.theme, false, false);
 };
 
@@ -3407,6 +4413,8 @@ const loadAppSettings = async (): Promise<void> => {
   try {
     const settings = await window.controlPanel.getAppSettings();
     savedAppSettings = settings;
+    footerResourcePreference = settings.footerResourcePreference;
+    managedChatGptContextWindowMode = settings.managedChatGptContextWindowMode;
     applyAppSettingsToControls(settings);
     updateSettingsUnsavedIndicator();
   } catch {
@@ -3418,9 +4426,25 @@ const openAdvancedConnectionDialog = (): void => {
   if (connectionAdvancedDialog.open) {
     return;
   }
+  closeRailPreview();
   advancedConnectionSnapshot = captureAdvancedConnectionSnapshot();
+  applicationProxyCancelBaseline = captureApplicationProxyDraft();
+  const loadGeneration = ++applicationProxyLoadGeneration;
+  applicationProxyInitialLoadPending = true;
+  applicationProxyDraftEdited = false;
+  syncApplicationProxyInteractivity();
+  completeConnectionAdvancedButton.disabled = true;
   selectSettingsTab('general');
-  void loadAppSettings();
+  void Promise.all([loadAppSettings(), loadApplicationProxyState(false, loadGeneration)]).then(
+    ([, proxyLoaded]) => {
+      if (loadGeneration !== applicationProxyLoadGeneration) return;
+      applicationProxyInitialLoadPending = false;
+      if (proxyLoaded) applicationProxyCancelBaseline = captureApplicationProxyDraft();
+      syncApplicationProxyInteractivity();
+      completeConnectionAdvancedButton.disabled = false;
+      updateSettingsUnsavedIndicator();
+    },
+  );
   connectionAdvancedDialog.showModal();
 };
 
@@ -3434,7 +4458,14 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   if (!complete && savedAppSettings) {
     applyAppSettingsToControls(savedAppSettings);
   }
+  if (!complete && applicationProxyCancelBaseline) {
+    applyApplicationProxyDraft(applicationProxyCancelBaseline);
+  }
   advancedConnectionSnapshot = undefined;
+  applicationProxyCancelBaseline = undefined;
+  applicationProxyLoadGeneration += 1;
+  applicationProxyInitialLoadPending = false;
+  applicationProxyDraftEdited = false;
   savedAppSettings = undefined;
   settingsUnsavedIndicator.hidden = true;
   connectionAdvancedDialog.close(complete ? 'complete' : 'cancel');
@@ -3442,9 +4473,50 @@ const closeAdvancedConnectionDialog = (complete: boolean): void => {
   openConnectionAdvancedButton.focus();
 };
 
+const pendingApplicationProxyInput = (): SaveApplicationProxyInput => {
+  const port = Number.parseInt(applicationProxyPort.value, 10);
+  return {
+    enabled: applicationProxyEnabled.checked,
+    host: applicationProxyHost.value,
+    password: applicationProxyPassword.value || undefined,
+    port: Number.isInteger(port) ? port : undefined,
+    protocol: applicationProxyProtocol.value === 'socks5' ? 'socks5' : 'http',
+    scope: {
+      application: applicationProxyScopeApplication.checked,
+      cli: applicationProxyScopeCli.checked,
+      conversation: applicationProxyScopeConversation.checked,
+    },
+    username: applicationProxyUsername.value,
+  };
+};
+
+const savePendingApplicationProxy = async (): Promise<boolean> => {
+  if (!applicationProxyIsDirty() || applicationProxySaveInProgress) return false;
+  applicationProxySaveInProgress = true;
+  applicationProxySave.disabled = true;
+  try {
+    const state = await window.controlPanel.saveApplicationProxy(pendingApplicationProxyInput());
+    renderApplicationProxyState(state, false);
+    applicationProxyDraftEdited = false;
+    applicationProxyCancelBaseline = captureApplicationProxyDraft();
+    await window.controlPanel.invalidateNetworkPreflight('application-proxy-change');
+    void runActiveNetworkPreflight(true);
+    return true;
+  } finally {
+    applicationProxySaveInProgress = false;
+    applicationProxySave.disabled = false;
+  }
+};
+
 const savePendingAppSettings = async (): Promise<void> => {
   const saved = savedAppSettings;
-  if (!saved || updateSettingsUnsavedIndicator() === 0) {
+  if (!saved) {
+    showToast('全局设置仍在读取，请稍后重试。', 'error');
+    return;
+  }
+  const proxyDirty = applicationProxyIsDirty();
+  const appSettingsDirty = updateSettingsUnsavedIndicator() > (proxyDirty ? 1 : 0);
+  if (!appSettingsDirty && !proxyDirty) {
     closeAdvancedConnectionDialog(true);
     return;
   }
@@ -3453,6 +4525,9 @@ const savePendingAppSettings = async (): Promise<void> => {
   cancelConnectionAdvancedButton.disabled = true;
   completeConnectionAdvancedButton.textContent = '正在保存…';
   try {
+    if (proxyDirty) {
+      await savePendingApplicationProxy();
+    }
     if (pending.launchAtLogin !== saved.launchAtLogin) {
       await window.controlPanel.setLaunchAtLogin(pending.launchAtLogin);
     }
@@ -3473,7 +4548,7 @@ const savePendingAppSettings = async (): Promise<void> => {
     closeAdvancedConnectionDialog(true);
   } catch {
     showToast('部分设置未能保存，已重新读取当前值。', 'error');
-    await loadAppSettings();
+    await Promise.all([loadAppSettings(), loadApplicationProxyState(false)]);
   } finally {
     completeConnectionAdvancedButton.disabled = false;
     cancelConnectionAdvancedButton.disabled = false;
@@ -3481,7 +4556,16 @@ const savePendingAppSettings = async (): Promise<void> => {
   }
 };
 
-const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => {
+const renderDevelopmentRuntimeState = (
+  state: DevelopmentRuntimeState,
+  invalidatePendingLoad = true,
+): void => {
+  if (!workspaceState.sessions.some((session) => session.id === state.sessionId)) {
+    return;
+  }
+  if (invalidatePendingLoad) {
+    runtimeStateLoadGenerations.invalidate(state.sessionId);
+  }
   developmentRuntimeStates.set(state.sessionId, state);
   if (state.sessionId !== workspaceState.activeSessionId) {
     return;
@@ -3502,7 +4586,7 @@ const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => 
   if (codexSelected) {
     const codexState = codexStates.get(state.sessionId);
     if (codexState) {
-      renderCodexState(codexState);
+      renderCodexState(codexState, false);
     } else {
       runAgentLabel.textContent = '正在检查 Codex';
       runClaudeButton.disabled = true;
@@ -3511,16 +4595,22 @@ const renderDevelopmentRuntimeState = (state: DevelopmentRuntimeState): void => 
   } else {
     const claudeState = claudeStates.get(state.sessionId);
     if (claudeState) {
-      renderClaudeState(claudeState);
+      renderClaudeState(claudeState, true, false);
     } else {
-      runAgentLabel.textContent = '新建安全会话';
+      renderClaudeLaunchControls(state.sessionId);
       void loadClaudeState(state.sessionId);
     }
   }
   void runActiveNetworkPreflight(false);
 };
 
-const renderCodexState = (state: CodexProjectState): void => {
+const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true): void => {
+  if (!workspaceState.sessions.some((session) => session.id === state.sessionId)) {
+    return;
+  }
+  if (invalidatePendingLoad) {
+    codexStateLoadGenerations.invalidate(state.sessionId);
+  }
   codexStates.set(state.sessionId, state);
   if (
     state.sessionId !== workspaceState.activeSessionId ||
@@ -3534,6 +4624,7 @@ const renderCodexState = (state: CodexProjectState): void => {
   const accountReady = Boolean(account) || !state.requiresOpenaiAuth;
   const ready = installed && accountReady;
   const waitingForLogin = login.phase === 'waiting' || login.phase === 'starting';
+  const launchInProgress = codexLaunchAttempts.isActive(state.sessionId);
 
   codexInstallStep.dataset.state = installed ? 'ready' : 'error';
   codexInstallTitle.textContent = installed
@@ -3594,17 +4685,27 @@ const renderCodexState = (state: CodexProjectState): void => {
   codexQuotaValue.textContent = quota ? `已用 ${quota.usedPercent.toFixed(0)}%` : '等待额度数据';
   codexQuotaBar.style.width = `${quota?.usedPercent ?? 0}%`;
 
-  const actionLabel = codexOperationInProgress
-    ? '正在准备 Codex…'
-    : !installed
-      ? '一键安装、登录并启动'
-      : !accountReady
-        ? '使用 ChatGPT 登录并启动'
-        : '新建 Codex 安全会话';
+  const actionLabel =
+    codexOperationInProgress || launchInProgress
+      ? '正在准备 Codex…'
+      : !installed
+        ? '一键安装、登录并启动'
+        : !accountReady
+          ? '使用 ChatGPT 登录并启动'
+          : '新建 Codex 安全会话';
   codexPrimaryAction.textContent = actionLabel;
-  codexPrimaryAction.disabled = codexOperationInProgress || waitingForLogin;
-  runAgentLabel.textContent = ready ? '新建 Codex 会话' : '一键准备 Codex';
-  runClaudeButton.disabled = codexOperationInProgress || waitingForLogin;
+  codexPrimaryAction.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  codexPrimaryAction.setAttribute(
+    'aria-busy',
+    String(codexOperationInProgress || launchInProgress),
+  );
+  runAgentLabel.textContent = launchInProgress
+    ? '正在启动 Codex…'
+    : ready
+      ? '新建 Codex 会话'
+      : '一键准备 Codex';
+  runClaudeButton.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  runClaudeButton.setAttribute('aria-busy', String(codexOperationInProgress || launchInProgress));
   runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
   runClaudeButton.title = ready
     ? '在当前项目启动官方 Codex 安全会话'
@@ -3612,6 +4713,7 @@ const renderCodexState = (state: CodexProjectState): void => {
 
   for (const button of [codexLaunchNew, codexLaunchContinue, codexLaunchResume]) {
     button.disabled = !ready || codexOperationInProgress || launchInProgress;
+    button.setAttribute('aria-busy', String(launchInProgress));
   }
 
   routeHealth.hidden = true;
@@ -3622,10 +4724,15 @@ const renderCodexState = (state: CodexProjectState): void => {
       ? 'ChatGPT 已连接'
       : 'Codex 已连接'
     : 'Codex 待准备';
-  footerContextLabel.textContent = quota ? `额度 ${quota.usedPercent.toFixed(0)}%` : '额度 —';
-  footerContextRing.style.setProperty('--context-progress', `${quota?.usedPercent ?? 0}%`);
+  footerContextLabel.textContent = '上下文 —';
+  footerContextRing.style.setProperty('--context-progress', '0%');
+  renderFooterResource(state.resourceUsage);
   footerModel.textContent = '模型 Codex 自动';
   footerModel.disabled = true;
+  footerSpeed.textContent = '速度 Codex 内管理';
+  footerSpeed.disabled = true;
+  footerSpeed.title = '原生 Codex 的速度设置由 Codex 自己管理，ClaudeDock 不接管。';
+  footerSpeed.setAttribute('aria-busy', 'false');
   footerMode.textContent = '模式 工作区写入';
   footerMode.disabled = true;
   footerEffort.textContent = '思考 Codex 自动';
@@ -3636,35 +4743,139 @@ const renderCodexState = (state: CodexProjectState): void => {
   renderActiveNetworkPreflight();
 };
 
-const loadCodexState = async (sessionId: string): Promise<void> => {
-  const generation = ++codexRequestGeneration;
+const loadCodexState = async (
+  sessionId: string,
+  errorMessage = '无法读取 Codex 工作台状态。',
+): Promise<CodexProjectState | undefined> => {
+  const request = codexStateLoadGenerations.begin(sessionId);
+  let state: CodexProjectState;
   try {
-    const state = await window.controlPanel.getCodexProjectState(sessionId);
-    if (generation === codexRequestGeneration) {
-      renderCodexState(state);
-    }
+    state = await window.controlPanel.getCodexProjectState(sessionId);
   } catch {
-    if (generation === codexRequestGeneration) {
-      showToast('无法读取 Codex 工作台状态。', 'error');
+    if (codexStateLoadGenerations.finish(request)) {
+      showToast(errorMessage, 'error');
     }
+    return;
   }
+  if (!codexStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
+    return;
+  }
+  renderCodexState(state, false);
+  return state;
 };
 
 const loadDevelopmentRuntime = async (sessionId: string): Promise<void> => {
-  const generation = ++runtimeRequestGeneration;
+  const request = runtimeStateLoadGenerations.begin(sessionId);
+  let state: DevelopmentRuntimeState;
   try {
-    const state = await window.controlPanel.getDevelopmentRuntime(sessionId);
-    if (generation === runtimeRequestGeneration) {
-      renderDevelopmentRuntimeState(state);
-    }
+    state = await window.controlPanel.getDevelopmentRuntime(sessionId);
   } catch {
-    if (generation === runtimeRequestGeneration) {
+    if (runtimeStateLoadGenerations.finish(request)) {
       showToast('无法读取当前项目的开发引擎。', 'error');
     }
+    return;
+  }
+  if (!runtimeStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
+    return;
+  }
+  renderDevelopmentRuntimeState(state, false);
+};
+
+const claudeLaunchBlocked = (state: ClaudeProjectState): boolean =>
+  state.installation.security !== 'ready' || Boolean(state.routeHealth?.blocking);
+
+const renderClaudeLaunchControls = (sessionId: string, launchBlocked = false): void => {
+  if (sessionId !== workspaceState.activeSessionId || activeDevelopmentRuntime() !== 'claude') {
+    return;
+  }
+  const busy = claudeLaunchAttempts.isBusy(sessionId);
+  runAgentLabel.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
+  runClaudeButton.disabled = busy || launchBlocked;
+  runClaudeButton.setAttribute('aria-busy', String(busy));
+  launchNewButton.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
+  for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
+    button.disabled = busy || launchBlocked;
+    button.setAttribute('aria-busy', String(busy));
   }
 };
 
-const renderClaudeState = (state: ClaudeProjectState): void => {
+const refreshClaudeLaunchControls = (sessionId: string): void => {
+  const state = claudeStates.get(sessionId);
+  if (state) {
+    renderClaudeState(state, true, false);
+  } else {
+    renderClaudeLaunchControls(sessionId);
+  }
+};
+
+const beginClaudeLaunchAttempt = (
+  status: TerminalStatus,
+  state = claudeStates.get(status.id),
+): ClaudeLaunchAttemptToken => {
+  const token = claudeLaunchAttempts.begin(status.id, {
+    active: state?.active,
+    conversationId: state?.metrics?.sessionId,
+    terminalPhase: status.phase,
+    terminalPid: status.pid,
+    terminalPtyGeneration: status.ptyGeneration,
+  });
+  renderClaudeLaunchControls(status.id, state ? claudeLaunchBlocked(state) : false);
+  return token;
+};
+
+const failClaudeLaunchAttempt = (token: ClaudeLaunchAttemptToken): boolean => {
+  if (!claudeLaunchAttempts.fail(token)) {
+    return false;
+  }
+  refreshClaudeLaunchControls(token.sessionId);
+  return true;
+};
+
+const claudeStateCanApply = (state: ClaudeProjectState): boolean => {
+  const status = workspaceState.sessions.find((session) => session.id === state.sessionId);
+  if (!status) {
+    return false;
+  }
+  return claudeStateOwnershipIsCurrent(
+    state,
+    claudeStates.get(state.sessionId)?.stateRevision,
+    status.ptyGeneration,
+  );
+};
+
+const renderClaudeLaunchResult = (
+  token: ClaudeLaunchAttemptToken,
+  state: ClaudeProjectState,
+  disposition: ClaudeLaunchResultDisposition,
+): boolean => {
+  if (
+    state.sessionId !== token.sessionId ||
+    !claudeLaunchAttempts.acceptResult(token, disposition)
+  ) {
+    return false;
+  }
+  renderClaudeState(state);
+  return true;
+};
+
+const renderClaudeState = (
+  state: ClaudeProjectState,
+  observeLaunch = true,
+  invalidatePendingLoad = true,
+): void => {
+  if (!claudeStateCanApply(state)) {
+    return;
+  }
+  if (invalidatePendingLoad) {
+    claudeStateLoadGenerations.invalidate(state.sessionId);
+  }
+  if (observeLaunch) {
+    claudeLaunchAttempts.observeClaude({
+      active: state.active,
+      conversationId: state.metrics?.sessionId,
+      sessionId: state.sessionId,
+    });
+  }
   claudeStates.set(state.sessionId, state);
   if (state.permissionMode === undefined) {
     const view = terminalViews.get(state.sessionId);
@@ -3685,7 +4896,6 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     syncConnectionInteractivity();
     return;
   }
-  runAgentLabel.textContent = '新建安全会话';
   const installationReady = installation.security === 'ready';
   connectionEnvironmentReady = installationReady;
   environmentSetup.hidden = installationReady;
@@ -3731,14 +4941,14 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
       routeHealthNotifications.get(state.sessionId) !== notificationKey
     ) {
       routeHealthNotifications.set(state.sessionId, notificationKey);
-      if (!launchInProgress) {
+      if (!claudeLaunchAttempts.isBusy(state.sessionId)) {
         showToast(health.headline, 'error');
       }
     }
   }
   runClaudeButton.dataset.routeHealth = health?.tone ?? 'unknown';
-  const launchBlocked = !installationReady || Boolean(health?.blocking);
-  runClaudeButton.disabled = launchInProgress || launchBlocked;
+  const launchBlocked = claudeLaunchBlocked(state);
+  renderClaudeLaunchControls(state.sessionId, launchBlocked);
   runClaudeButton.title = !installationReady
     ? installation.message
     : health?.blocking
@@ -3788,15 +4998,29 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
   footerContextRing.dataset.level = contextProgress.dataset.level;
   footerContextLabel.textContent =
     percentage === undefined ? '上下文 —' : `上下文 ${percentage.toFixed(0)}%`;
+  renderFooterResource(state.resourceUsage, managedContextWindowSelectable(state));
   footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
   footerModel.disabled = modelSwitchInProgress;
   footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
   footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
+  const speedOperationActive = claudeSpeedOperations.isActive(state.sessionId);
+  footerSpeed.textContent = modelSpeedFooterLabel(state);
+  footerSpeed.dataset.availability = state.speed.availability;
+  footerSpeed.dataset.mechanism = state.speed.mechanism;
+  footerSpeed.dataset.status = state.speed.status;
+  footerSpeed.disabled =
+    speedOperationActive || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
+  footerSpeed.setAttribute('aria-busy', String(speedOperationActive));
+  footerSpeed.title = state.speed.detail;
+  const requestedPermissionMode = state.permissionModeRequest ?? state.permissionMode;
   footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
   footerMode.dataset.mode = state.permissionMode ?? 'unknown';
+  footerMode.dataset.requestedMode = requestedPermissionMode ?? 'unknown';
   footerMode.disabled = modeSwitchInProgress;
   footerMode.title = state.active
-    ? '点击切换权限模式，或在终端按 Shift+Tab'
+    ? requestedPermissionMode !== state.permissionMode
+      ? `请求：${permissionModeLabel(requestedPermissionMode)} · 实际：${permissionModeLabel(state.permissionMode)}；点击切换权限模式`
+      : '点击切换权限模式，或在终端按 Shift+Tab'
     : '启动 Claude Code 后可切换权限模式';
   // The status line reports what Claude Code applied, which can sit below a request the model caps.
   const effortApplied = state.metrics?.effortLevel;
@@ -3806,6 +5030,8 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
       : (effortApplied ?? state.effortRequest);
   footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
   footerEffort.dataset.effort = effortShown ?? 'unknown';
+  footerEffort.dataset.requestedEffort = state.effortRequest ?? 'unknown';
+  footerEffort.dataset.appliedEffort = effortApplied ?? 'unknown';
   footerEffort.disabled =
     effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending';
   footerEffort.setAttribute(
@@ -3829,7 +5055,6 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
     showToast('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
   }
   allowBypassPermissions.checked = state.allowBypassPermissions;
-
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
   metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
   metricCost.textContent =
@@ -3842,9 +5067,6 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
 
   claudeRuntimeWarning.hidden = !state.warning;
   claudeRuntimeWarning.textContent = state.warning ?? '';
-  for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
-    button.disabled = launchInProgress || launchBlocked;
-  }
 
   if (configFormSessionId !== state.sessionId) {
     populateClaudeConfigForm(state);
@@ -3864,17 +5086,42 @@ const renderClaudeState = (state: ClaudeProjectState): void => {
 };
 
 const loadClaudeState = async (sessionId: string): Promise<void> => {
-  const generation = ++claudeRequestGeneration;
+  const request = claudeStateLoadGenerations.begin(sessionId);
+  const attemptAtRequest = claudeLaunchAttempts.current(sessionId);
+  let state: ClaudeProjectState;
   try {
-    const state = await window.controlPanel.getClaudeProjectState(sessionId);
-    if (generation === claudeRequestGeneration) {
-      renderClaudeState(state);
-    }
+    state = await window.controlPanel.getClaudeProjectState(sessionId);
   } catch {
-    if (generation === claudeRequestGeneration) {
+    if (claudeStateLoadGenerations.finish(request)) {
       showToast('无法读取 Claude 工作台状态。', 'error');
     }
+    return;
   }
+  if (
+    !claudeStateLoadGenerations.finish(request) ||
+    state.sessionId !== sessionId ||
+    !claudeStateCanApply(state)
+  ) {
+    return;
+  }
+  const currentAttempt = claudeLaunchAttempts.current(sessionId);
+  if (
+    currentAttempt &&
+    attemptAtRequest &&
+    currentAttempt.generation !== attemptAtRequest.generation
+  ) {
+    return;
+  }
+  if (currentAttempt && !attemptAtRequest) {
+    claudeLaunchAttempts.hydrateClaude(currentAttempt, {
+      active: state.active,
+      conversationId: state.metrics?.sessionId,
+      sessionId: state.sessionId,
+    });
+    renderClaudeState(state, false, false);
+    return;
+  }
+  renderClaudeState(state, true, false);
 };
 
 /**
@@ -3885,10 +5132,11 @@ async function resumeStoredConversation(
   projectPath: string,
   session: ClaudeSessionMetadata,
 ): Promise<void> {
-  if (launchInProgress) {
+  const restoreKey = `${projectPath.toLowerCase()}:${session.conversationId}`;
+  if (storedConversationRestores.has(restoreKey)) {
     return;
   }
-  launchInProgress = true;
+  storedConversationRestores.add(restoreKey);
   try {
     const result = await window.controlPanel.openStoredConversation(
       projectPath,
@@ -3906,7 +5154,7 @@ async function resumeStoredConversation(
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
   } finally {
-    launchInProgress = false;
+    storedConversationRestores.delete(restoreKey);
   }
 }
 
@@ -3917,27 +5165,21 @@ const openExternal = async (url: string): Promise<void> => {
 };
 
 const applyGatewayCandidate = (candidate: ClaudeGatewayCandidate): void => {
-  const preset: ClaudePreset =
-    candidate.kind === 'cliproxyapi' ? 'chatgpt-subscription' : 'gateway';
+  const preset: ClaudePreset = 'gateway';
   claudePreset.value = preset;
   applyPresetUi(preset, false);
   claudeBaseUrl.value = candidate.apiBaseUrl;
-  if (candidate.kind !== 'cliproxyapi') {
-    claudeModel.value =
-      lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
-    claudeModelFast.value = claudeModel.value;
-  }
-  claudeAuthMode.value =
-    candidate.kind === 'cliproxyapi' ? 'authToken' : candidate.authRequired ? 'authToken' : 'none';
+  claudeModel.value =
+    lastCurlAnalysis?.model || (claudeModel.value === 'default' ? '' : claudeModel.value);
+  claudeModelFast.value = claudeModel.value;
+  claudeAuthMode.value = candidate.authRequired ? 'authToken' : 'none';
   claudeCredential.value = '';
   credentialField.hidden = claudeAuthMode.value === 'none';
   connectionTestResult.hidden = true;
   showToast(
-    candidate.kind === 'cliproxyapi'
-      ? '已选用 CLIProxyAPI；请填写本地 api-keys 访问密钥，再执行真实连接测试'
-      : candidate.authRequired
-        ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
-        : `已选用 ${candidate.label}；下一步执行真实连接测试`,
+    candidate.authRequired
+      ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
+      : `已选用 ${candidate.label}；下一步执行真实连接测试`,
   );
   claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -4015,9 +5257,9 @@ const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void =
       // Swapping gateways starts here, where the user actually sees what is installed.
       const purgeButton = document.createElement('button');
       purgeButton.type = 'button';
-      purgeButton.textContent = '彻底清除这个路由器';
+      purgeButton.textContent = '卸载 CLI 路由';
       purgeButton.addEventListener('click', () => {
-        void purgeRouter(purgeButton);
+        void uninstallRouterCli(purgeButton);
       });
       actions.append(purgeButton);
     }
@@ -4070,11 +5312,6 @@ const routerProtocolLabel = (protocol: ClaudeRouterProviderView['protocol']): st
     : protocol === 'openai_responses'
       ? 'OpenAI 响应协议'
       : 'OpenAI 对话补全协议';
-
-const routerInstallationKindLabel = (
-  kind: ClaudeRouterManagementState['installationKind'],
-): string =>
-  kind === 'desktop' ? '桌面版' : kind === 'npm' ? '命令行版' : kind === 'mixed' ? '混合' : '未知';
 
 const routerProviderInput = (
   provider: ClaudeRouterProviderView,
@@ -4252,7 +5489,6 @@ const syncUpdateActionVisibility = (): void => {
   installUpdateClaudeButton.hidden = !claudeActionVisible;
   installUpdateClaudeButton.textContent = actions.claudeCode === 'update' ? '一键更新' : '一键安装';
 
-  routerInstallSourceField.hidden = !routerActionVisible;
   installRouterButton.hidden = !routerActionVisible;
   installRouterButton.textContent = actions.router === 'update' ? '一键更新' : '一键安装';
 
@@ -4411,6 +5647,22 @@ const loadConnectionAdvice = async (): Promise<void> => {
   }
 };
 
+const routerOperationLabel = (progress: RouterOperationProgress): string => {
+  const labels: Record<RouterOperationProgress['stage'], string> = {
+    checking: '检查环境',
+    complete: '操作完成',
+    configuring: '写入配置',
+    downloading: '下载 CLI',
+    error: '操作未完成',
+    installing: '安装 CLI',
+    recovering: '恢复中断任务',
+    starting: '启动后台',
+    stopping: '停止后台',
+    verifying: '校验安装',
+  };
+  return labels[progress.stage];
+};
+
 function renderRouterManagement(state: ClaudeRouterManagementState): void {
   routerManagementState = state;
   const displayState = state.installed ? state.gatewayState : 'not-installed';
@@ -4423,6 +5675,12 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
         ? '路由器管理服务已运行'
         : '路由器已安装但未运行';
   routerStatusDetail.textContent = state.message;
+  const progress = lastRouterOperationProgress;
+  if (progress && (progress.active || Date.now() - progress.updatedAt < 6_000)) {
+    routerStatus.dataset.state = progress.stage === 'error' ? 'error' : 'starting';
+    routerStatusTitle.textContent = `${routerOperationLabel(progress)} · 第 ${progress.step}/${progress.totalSteps} 步`;
+    routerStatusDetail.textContent = progress.detail;
+  }
   routerVersion.textContent = state.version ? `v${state.version}` : '版本待识别';
   renderRouterRemediation(state);
   applyRouterRelevance();
@@ -4431,10 +5689,8 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
   syncUpdateActionVisibility();
   uninstallRouterButton.disabled = routerOperationInProgress || !state.canUninstall;
   uninstallRouterButton.title = state.canUninstall
-    ? `彻底卸载当前${routerInstallationKindLabel(state.installationKind)}安装并删除全部配置数据`
-    : '未检测到需要清除的路由器程序或配置';
-  // Only offer the swap guidance once the purge actually left a clean slate.
-  routerSwapHint.hidden = state.installed || !routerPurgeCompleted;
+    ? '只卸载 ClaudeDock 管理的 CCR CLI；不会卸载桌面版或改写 Claude/Codex App'
+    : '未检测到可由 ClaudeDock 卸载的 CCR CLI';
   startRouterButton.textContent = state.runtimeMismatch ? '修复运行环境并重启' : '启动路由器';
   startRouterButton.disabled =
     routerOperationInProgress ||
@@ -4476,10 +5732,7 @@ function renderRouterManagement(state: ClaudeRouterManagementState): void {
         (sessionId) =>
           state.installed
             ? window.controlPanel.startClaudeRouter(sessionId)
-            : window.controlPanel.installClaudeRouterFromSource(
-                sessionId,
-                routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
-              ),
+            : window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
         state.installed ? '正在启动…' : '正在安装…',
         action,
       );
@@ -4598,6 +5851,56 @@ const setRouterOperationStage = (stage: string, detail: string, percent?: number
   }
 };
 
+const unsubscribeManagedChatGptSetupProgress = window.controlPanel.onManagedChatGptSetupProgress(
+  (progress) => {
+    if (progress.sessionId === workspaceState.activeSessionId) {
+      managedChatGptSetupInProgress = progress.active;
+      renderManagedChatGptProgress?.(progress);
+    }
+  },
+);
+
+const unsubscribeRouterOperationProgress = window.controlPanel.onRouterOperationProgress(
+  (progress) => {
+    lastRouterOperationProgress = progress;
+    routerOperationInProgress = progress.active;
+    setRouterOperationStage(
+      `${routerOperationLabel(progress)} · 第 ${progress.step}/${progress.totalSteps} 步`,
+      progress.detail,
+      (progress.step / Math.max(1, progress.totalSteps)) * 100,
+    );
+    if (routerManagementState) {
+      renderRouterManagement(routerManagementState);
+    }
+    if (!progress.active) {
+      window.setTimeout(() => {
+        if (
+          lastRouterOperationProgress?.updatedAt === progress.updatedAt &&
+          routerManagementState
+        ) {
+          renderRouterManagement(routerManagementState);
+        }
+      }, 6_100);
+    }
+  },
+);
+
+const setRouterWizardModels = (models: readonly string[], preferred?: string): void => {
+  const unique = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
+  const selected = preferred && unique.includes(preferred) ? preferred : unique[0];
+  routerWizardModel.replaceChildren(
+    ...unique.map((model) => {
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = model;
+      return option;
+    }),
+  );
+  if (selected) {
+    routerWizardModel.value = selected;
+  }
+};
+
 const syncRouterWizard = (): void => {
   const provider = findClaudeProvider(routerWizardProvider.value);
   if (!provider) {
@@ -4613,16 +5916,27 @@ const syncRouterWizard = (): void => {
   routerWizardCredentialField.hidden = !needsCredential;
   routerWizardCredential.required = needsCredential && provider.id !== 'ollama';
   routerWizardCredential.placeholder = provider.keyHint ?? '仅在提交时交给主进程安全保存';
-  routerWizardModel.placeholder = provider.model;
+  const previousProvider = routerWizardModel.dataset.providerId;
+  const existingModels = routerManagementState?.providers.find(
+    (item) => item.name === `wizard-${provider.id}`,
+  )?.models;
+  setRouterWizardModels(
+    [
+      ...(existingModels ?? []),
+      provider.model,
+      ...(provider.modelFast ? [provider.modelFast] : []),
+    ],
+    previousProvider === provider.id ? routerWizardModel.value : provider.model,
+  );
+  routerWizardModel.dataset.providerId = provider.id;
   if (capability.mode === 'direct') {
     routerWizardUseRoute.checked = false;
-    routerWizardUseRoute.disabled = true;
   } else if (capability.mode === 'router-required') {
     routerWizardUseRoute.checked = true;
-    routerWizardUseRoute.disabled = true;
   } else {
-    routerWizardUseRoute.disabled = false;
+    routerWizardUseRoute.checked = false;
   }
+  routerWizardUseRoute.disabled = true;
   const routed = routerWizardUseRoute.checked;
   routerWizardDecision.dataset.mode = routed ? 'router' : 'direct';
   routerWizardDecision.textContent = `${routed ? '将使用 CCR 完成协议转换' : '将直接写入 Claude Code CLI 配置'}：${capability.reason}`;
@@ -4681,7 +5995,7 @@ const runRouterWizard = async (): Promise<void> => {
     return;
   }
   const capability = ROUTER_CAPABILITIES[provider.id];
-  const routed = capability.mode === 'router-required' || routerWizardUseRoute.checked;
+  const routed = capability.mode === 'router-required';
   routerOperationInProgress = true;
   setRouterOperationStage('准备', `正在校验 ${provider.label} 接入参数…`, 5);
   await runGuarded(routerWizardSubmit, '正在自动配置…', async () => {
@@ -4702,6 +6016,30 @@ const runRouterWizard = async (): Promise<void> => {
         }
         populateClaudeConfigForm(saved.state);
       } else {
+        const upstreamBaseUrl = provider.editableBaseUrl
+          ? routerWizardBaseUrl.value.trim()
+          : provider.baseUrl;
+        const upstreamCredential =
+          provider.id === 'ollama' ? undefined : routerWizardCredential.value.trim() || undefined;
+        setRouterOperationStage(
+          '发现模型',
+          '正在读取当前接口的实时模型列表；这一步同时验证地址与密钥。',
+          10,
+        );
+        const discovery = await window.controlPanel.discoverClaudeProviderModels({
+          baseUrl: upstreamBaseUrl,
+          credential: upstreamCredential,
+        });
+        if (!discovery.ok || discovery.models.length === 0) {
+          throw new Error(discovery.error ?? discovery.message);
+        }
+        const selectedBeforeDiscovery = routerWizardModel.value;
+        setRouterWizardModels(
+          discovery.models,
+          discovery.models.includes(selectedBeforeDiscovery)
+            ? selectedBeforeDiscovery
+            : discovery.models[0],
+        );
         setRouterOperationStage('检查路由内核', '正在确认 CCR 已安装且管理接口可用…', 15);
         let management = await window.controlPanel.getClaudeRouterManagementState(status.id);
         if (!management.installed) {
@@ -4720,15 +6058,13 @@ const runRouterWizard = async (): Promise<void> => {
           setRouterOperationStage('启动路由内核', '正在启动 CCR 并等待本地管理端点…', 65);
           const started = await window.controlPanel.startClaudeRouter(status.id);
           renderRouterManagement(started.routerState);
-          if (!started.ok || !started.routerState.managementAvailable) {
+          if (!started.routerState.managementAvailable) {
             throw new Error(started.message);
           }
           management = started.routerState;
         }
         setRouterOperationStage('写入路由配置', '正在写入上游、模型与当前项目绑定…', 80);
-        const baseUrl = provider.editableBaseUrl
-          ? routerWizardBaseUrl.value.trim()
-          : provider.baseUrl;
+        const baseUrl = upstreamBaseUrl;
         const existing = management.providers.find((item) => item.name === `wizard-${provider.id}`);
         const saved = await window.controlPanel.saveClaudeRouterProvider(status.id, {
           apiKey:
@@ -4739,7 +6075,7 @@ const runRouterWizard = async (): Promise<void> => {
           credentialAction: 'replace',
           id: existing?.id,
           makePreferred: true,
-          models: [routerWizardModel.value.trim() || provider.model],
+          models: [routerWizardModel.value],
           name: `wizard-${provider.id}`,
           protocol: 'openai_chat_completions',
           useForCurrentProject: true,
@@ -4898,20 +6234,15 @@ const runRouterOperation = async (
   });
 };
 
-/**
- * The purge is irreversible — CCR keeps the upstream keys inside the data directory that gets
- * deleted — so the confirmation spells out exactly what disappears before anything runs.
- */
-const purgeRouter = async (button: HTMLButtonElement): Promise<void> => {
+const uninstallRouterCli = async (button: HTMLButtonElement): Promise<void> => {
   if (
     !(await requestConfirmation({
-      confirmLabel: '彻底清除',
+      confirmLabel: '卸载 CLI',
       message:
-        '彻底卸载路由器并清除全部数据？\n\n' +
-        '将删除：路由器程序、全部服务提供方配置、保存在其中的上游密钥与用量记录。\n' +
-        '不会改动：Claude Code 与 Codex 自己的配置。\n\n' +
-        '删除后无法恢复；完成后可以选择新的安装来源重新安装。',
-      title: '彻底清除路由器',
+        '卸载 ClaudeDock 管理的 CCR CLI？\n\n' +
+        '不会卸载 CCR 桌面版，不会改写 Claude/Codex App，也不会删除桌面版可能使用的共享配置。\n' +
+        '以后需要时，可在 ClaudeDock 中一键重新安装。',
+      title: '卸载 CLI 路由',
       tone: 'danger',
     }))
   ) {
@@ -4919,11 +6250,9 @@ const purgeRouter = async (button: HTMLButtonElement): Promise<void> => {
   }
   void runRouterOperation(
     async (sessionId) => {
-      const result = await window.controlPanel.uninstallClaudeRouter(sessionId);
-      routerPurgeCompleted = result.ok;
-      return result;
+      return window.controlPanel.uninstallClaudeRouter(sessionId);
     },
-    '正在清除…',
+    '正在卸载…',
     button,
   );
 };
@@ -5323,11 +6652,7 @@ const handleConnectionRemedyAction = async (
       break;
     case 'install-router':
       await runRouterOperation(
-        (sessionId) =>
-          window.controlPanel.installClaudeRouterFromSource(
-            sessionId,
-            routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
-          ),
+        (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
         '正在安装…',
         installRouterButton,
       );
@@ -5370,7 +6695,7 @@ const runConnectionTest = async (
   renderConnectionTestPending();
   const knownState = claudeStates.get(status.id);
   if (knownState) {
-    renderClaudeState(knownState);
+    renderClaudeState(knownState, true, false);
   }
   const originalLabel = testClaudeConnectionButton.textContent;
   testClaudeConnectionButton.disabled = true;
@@ -5404,7 +6729,7 @@ const runConnectionTest = async (
     syncConnectionInteractivity();
     const latestState = claudeStates.get(status.id);
     if (latestState) {
-      renderClaudeState(latestState);
+      renderClaudeState(latestState, true, false);
     }
   }
 };
@@ -5448,6 +6773,7 @@ const rerunAutomaticConnectionTestForActiveProject = (): void => {
 };
 
 const setWorkbenchOpen = (open: boolean): void => {
+  if (open) closeRailPreview();
   // The listbox is a fixed-position popup on `body`, so closing the panel underneath it has to
   // dismiss it explicitly or it would hang over the terminal.
   closeOpenSelect();
@@ -5606,41 +6932,57 @@ const relaunchClaudeSession = async (
   input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
 ): Promise<void> => {
   const status = activeStatus();
-  if (!status || launchInProgress) {
+  if (!status || claudeLaunchAttempts.isBusy(status.id)) {
     return;
   }
-  if (
-    !(await requestConfirmation({
-      confirmLabel: '压缩并重启',
-      message: `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
-      title: '重启 Claude Code 会话',
-    }))
-  ) {
-    return;
-  }
-
-  launchInProgress = true;
-  const known = claudeStates.get(status.id);
-  if (known) {
-    renderClaudeState(known);
-  }
-  const endMask = beginTerminalMask(status.id, '正在压缩上下文并恢复会话');
+  const attempt = beginClaudeLaunchAttempt(status);
+  let endMask = (): void => undefined;
+  let loadStateAfterCompletion = false;
   try {
-    const result = await window.controlPanel.relaunchClaudeSession(status.id, {
-      ...input,
-      compactFirst: true,
+    const outcome = await orchestrateClaudeLaunchAttempt({
+      applyResult: (result) =>
+        renderClaudeLaunchResult(attempt, result.state, result.ok ? 'success' : 'failure'),
+      confirmation: () =>
+        requestConfirmation({
+          confirmLabel: '压缩并重启',
+          message: `${summary}\n\n这需要重启 Claude Code 会话。对话历史会通过 --continue 恢复，但终端画面会重绘。\n\n确定后会先压缩上下文再重启。`,
+          title: '重启 Claude Code 会话',
+        }),
+      onRelease: () => refreshClaudeLaunchControls(attempt.sessionId),
+      prepare: () => {
+        endMask = beginTerminalMask(status.id, '正在压缩上下文并恢复会话');
+      },
+      registry: claudeLaunchAttempts,
+      start: () =>
+        window.controlPanel.relaunchClaudeSession(status.id, {
+          ...input,
+          compactFirst: true,
+        }),
+      token: attempt,
     });
-    renderClaudeState(result.state);
+    if (outcome.status === 'rejected') {
+      loadStateAfterCompletion = true;
+      showToast('重启会话时发生异常。', 'error');
+      return;
+    }
+    if (outcome.status !== 'resolved') {
+      return;
+    }
+
+    const { result } = outcome;
+    loadStateAfterCompletion = true;
+    if (!result.ok) {
+      failClaudeLaunchAttempt(attempt);
+    }
     showToast(
       result.ok ? '会话已重启并恢复上下文。' : (result.error ?? '重启会话失败。'),
       result.ok ? 'success' : 'error',
     );
-  } catch {
-    showToast('重启会话时发生异常。', 'error');
   } finally {
     endMask();
-    launchInProgress = false;
-    void loadClaudeState(status.id);
+    if (loadStateAfterCompletion) {
+      void loadClaudeState(status.id);
+    }
   }
 };
 
@@ -5649,11 +6991,14 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
   if (!status || modelSwitchInProgress) {
     return;
   }
-  if (!option.sameEndpoint) {
-    await relaunchClaudeSession(
-      `切换到「${option.providerLabel} · ${option.model}」需要更换接口地址与凭据。`,
-      { entryId: option.entryId },
-    );
+  if (option.requiresRelaunch) {
+    const summary =
+      option.relaunchReason === 'connection'
+        ? `切换到「${option.providerLabel} · ${option.model}」需要更换接口地址与凭据。`
+        : option.relaunchReason === 'speed-profile'
+          ? `切换到「${option.providerLabel} · ${option.model}」会同时应用该模型已保存的服务速度配置。`
+          : `切换到「${option.providerLabel} · ${option.model}」需要重启当前会话。`;
+    await relaunchClaudeSession(summary, { entryId: option.entryId });
     return;
   }
 
@@ -5676,9 +7021,107 @@ const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
     footerModel.setAttribute('aria-busy', 'false');
     const knownState = claudeStates.get(status.id);
     if (knownState) {
-      renderClaudeState(knownState);
+      renderClaudeState(knownState, true, false);
     }
     void loadClaudeState(status.id);
+  }
+};
+
+const switchClaudeModelSpeed = async (mode: ModelSpeedMode): Promise<void> => {
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (
+    !status ||
+    !state ||
+    claudeSpeedOperations.isActive(status.id) ||
+    claudeLaunchAttempts.isBusy(status.id)
+  ) {
+    return;
+  }
+  if (mode === 'fast' && !state.speed.canSelectFast) {
+    showToast(state.speed.detail, 'error');
+    return;
+  }
+
+  const operation = claudeSpeedOperations.begin(status.id);
+  const attempt = beginClaudeLaunchAttempt(status, state);
+  renderClaudeState(state, false, false);
+  const fastLabel = modelSpeedFastLabel(state);
+  const speedDetail =
+    mode === 'standard'
+      ? `将「${state.speed.model}」恢复为标准服务速度。`
+      : state.speed.mechanism === 'claude-native-fast'
+        ? `将「${state.speed.model}」切换为 ${fastLabel}。Claude Fast 仅适用于受支持的 Opus 5 / 4.8，最高约 2.5x，并按更高单价计费；组织资格、额度和模型可用性仍由 Anthropic 判定。`
+        : `将为「${state.speed.model}」请求 ${fastLabel}（service_tier=fast）。该档位的额度消耗或计价可能更高；ClaudeDock 只能确认请求已发送，无法确认 ChatGPT 上游最终采用。`;
+  const lifecycleDetail =
+    '如果主进程确认 Claude Code 仍在运行，ClaudeDock 会重启当前 PowerShell，并通过 --resume 精确恢复当前对话；不会压缩上下文。如果会话已经停止，则只保存此接入与模型的速度偏好，供下次新建或恢复时使用。';
+  let endMask = (): void => undefined;
+  try {
+    const outcome = await orchestrateSessionOperation({
+      applyResult: (result) => {
+        if (result.state.sessionId !== operation.sessionId) {
+          return false;
+        }
+        renderClaudeState(result.state);
+        return true;
+      },
+      confirmation: () =>
+        requestConfirmation({
+          confirmLabel: '确认切换',
+          message: `${speedDetail}\n\n${lifecycleDetail}`,
+          title: '切换服务速度',
+        }),
+      onCancel: () => {
+        if (claudeLaunchAttempts.cancel(attempt)) {
+          refreshClaudeLaunchControls(attempt.sessionId);
+        }
+      },
+      registry: claudeSpeedOperations,
+      start: () => {
+        if (!claudeLaunchAttempts.isCurrent(attempt)) {
+          throw new Error('确认期间会话状态已经变化。');
+        }
+        endMask = beginTerminalMask(status.id, '正在应用服务速度设置');
+        return window.controlPanel.setClaudeModelSpeed(status.id, mode);
+      },
+      token: operation,
+    });
+    if (outcome.status === 'rejected') {
+      failClaudeLaunchAttempt(attempt);
+      showToast('切换服务速度时发生异常。', 'error');
+      return;
+    }
+    if (outcome.status !== 'resolved') {
+      return;
+    }
+
+    const { result } = outcome;
+    if (!result.ok) {
+      failClaudeLaunchAttempt(attempt);
+      showToast(result.error ?? '无法切换服务速度。', 'error');
+      return;
+    }
+    if (!result.state.active) {
+      if (claudeLaunchAttempts.cancel(attempt)) {
+        refreshClaudeLaunchControls(attempt.sessionId);
+      }
+      showToast('速度偏好已保存；下次新建或恢复会话时生效。', 'success');
+    } else if (mode === 'standard') {
+      showToast('已按标准速度恢复当前对话。', 'success');
+    } else if (result.state.speed.mechanism === 'gpt-service-tier') {
+      showToast('已为当前对话请求 GPT 1.5x；上游是否采用仍由 ChatGPT 决定。', 'success');
+    } else {
+      showToast('已请求 Claude Fast；是否生效将由 Claude Code 状态行确认。', 'success');
+    }
+  } finally {
+    endMask();
+    if (claudeSpeedOperations.finish(operation)) {
+      const knownState = claudeStates.get(status.id);
+      if (knownState) {
+        renderClaudeState(knownState, true, false);
+      }
+      void loadClaudeState(status.id);
+    }
   }
 };
 
@@ -5686,6 +7129,20 @@ const switchPermissionMode = async (mode: ClaudePermissionMode): Promise<void> =
   const status = activeStatus();
   if (!status || modeSwitchInProgress) {
     return;
+  }
+  if (mode === 'dontAsk' || mode === 'bypassPermissions') {
+    const confirmed = await requestConfirmation({
+      confirmLabel: mode === 'bypassPermissions' ? '确认完全允许' : '确认仅预批准',
+      message:
+        mode === 'bypassPermissions'
+          ? '“完全允许”会跳过 Claude 的权限确认。仅在你信任当前项目及其指令时启用。'
+          : '“仅预批准”会重启并恢复当前会话，未预先批准的工具请求将直接被拒绝。确认继续吗？',
+      title: mode === 'bypassPermissions' ? '确认高风险权限模式' : '确认严格权限模式',
+      tone: 'danger',
+    });
+    if (!confirmed) {
+      return;
+    }
   }
   if (mode === 'dontAsk') {
     await relaunchClaudeSession('「仅预批准」只能在会话启动时设定。', { permissionMode: mode });
@@ -5739,13 +7196,13 @@ const switchEffortLevel = async (effort: ClaudeEffortRequest): Promise<void> => 
     footerEffort.setAttribute('aria-busy', 'false');
     const knownState = claudeStates.get(status.id);
     if (knownState) {
-      renderClaudeState(knownState);
+      renderClaudeState(knownState, true, false);
     }
     void loadClaudeState(status.id);
   }
 };
 
-const openModelMenu = async (): Promise<void> => {
+const openModelMenu = async (trigger = footerModel): Promise<void> => {
   const status = activeStatus();
   if (!status) {
     return;
@@ -5764,7 +7221,11 @@ const openModelMenu = async (): Promise<void> => {
     ...options.options.map((option) =>
       buildFooterMenuItem(
         option.model,
-        option.sameEndpoint ? option.providerLabel : `${option.providerLabel} · 需重启会话`,
+        option.requiresRelaunch
+          ? option.relaunchReason === 'connection'
+            ? `${option.providerLabel} · 更换接入，需重启会话`
+            : `${option.providerLabel} · 速度配置不同，需重启会话`
+          : option.providerLabel,
         option.model === options.activeModel,
         () => {
           void switchClaudeModel(option);
@@ -5779,7 +7240,59 @@ const openModelMenu = async (): Promise<void> => {
     hint.textContent = '请先在工作台启动 Claude Code 会话。';
     footerModelMenu.append(hint);
   }
-  openFooterMenu(footerModelMenu, footerModel);
+  openFooterMenu(footerModelMenu, trigger);
+};
+
+const openSpeedMenu = (): void => {
+  const status = activeStatus();
+  const state = status ? claudeStates.get(status.id) : undefined;
+  if (!status || !state || activeDevelopmentRuntime() !== 'claude') {
+    return;
+  }
+
+  const fastLabel = modelSpeedFastLabel(state);
+  const fastDetail = state.speed.canSelectFast
+    ? state.speed.mechanism === 'claude-native-fast'
+      ? 'Claude Code 原生 Fast；仅支持 Opus 5 / 4.8，最高约 2.5x，单价更高，资格与额度由 Anthropic 判定。'
+      : '请求 service_tier=fast（约 1.5x）；额度消耗或计价可能更高，ClaudeDock 无法确认上游最终采用。'
+    : state.speed.detail;
+  const standardAlreadyApplied =
+    state.speed.preference === 'standard' && state.speed.status === 'standard';
+  const fastAlreadyApplied =
+    state.speed.preference === 'fast' && state.speed.status !== 'not-active';
+  const speedOperationActive = claudeSpeedOperations.isActive(status.id);
+  footerSpeedMenu.replaceChildren(
+    buildFooterRadioMenuItem(
+      '标准速度',
+      '默认档位；不启用 Claude Fast，也不发送 GPT 快速服务档请求。',
+      state.speed.preference === 'standard',
+      () => {
+        void switchClaudeModelSpeed('standard');
+      },
+      speedOperationActive || standardAlreadyApplied,
+    ),
+    buildFooterRadioMenuItem(
+      fastLabel,
+      fastDetail,
+      state.speed.preference === 'fast',
+      () => {
+        void switchClaudeModelSpeed('fast');
+      },
+      speedOperationActive || !state.speed.canSelectFast || fastAlreadyApplied,
+    ),
+  );
+
+  const statusHint = document.createElement('p');
+  statusHint.className = 'footer-menu__hint';
+  statusHint.textContent = state.speed.detail;
+  footerSpeedMenu.append(statusHint);
+  const lifecycleHint = document.createElement('p');
+  lifecycleHint.className = 'footer-menu__hint footer-menu__hint--separated';
+  lifecycleHint.textContent = state.active
+    ? '切换会重启当前 PowerShell，并用当前对话 UUID 精确恢复；不会压缩上下文。'
+    : '当前会话未运行；选择后只保存此接入与模型的偏好，下次新建或恢复会话时生效。';
+  footerSpeedMenu.append(lifecycleHint);
+  openFooterMenu(footerSpeedMenu, footerSpeed);
 };
 
 const openModeMenu = (): void => {
@@ -5899,31 +7412,38 @@ const setConnectionPolling = (enabled: boolean): void => {
   }
 };
 
-const applyRailTab = (tab?: string): void => {
-  const enteringConnection = tab === 'connection' && selectedRailTab !== 'connection';
+const prepareRailTab = (tab: string): void => {
   if (tab === 'chat') {
-    mainView = 'chat';
-  } else if (tab !== undefined) {
-    mainView = 'terminal';
-  }
-  selectedRailTab = tab;
-  if (enteringConnection) {
+    void loadChatConfig();
+    void loadChatHistory();
+    renderChatUsage();
+  } else if (tab === 'connection') {
     const lastProvider =
       selectedProviderId ?? claudeStates.get(workspaceState.activeSessionId)?.config.preset;
     applyDefaultProviderGroupExpansion(lastProvider);
     providerGroupExpansionPending = Boolean(workspaceState.activeSessionId && !lastProvider);
     renderProviderPicker();
+  } else if (tab === 'plugins') {
+    void loadPluginCatalog(false);
+  } else if (tab === 'mcp') {
+    void loadMcpCatalog(false);
   }
-  const collapsed = tab === undefined;
+};
+
+const renderRailPresentation = (tab: string | undefined, preview: boolean): void => {
+  const collapsed = selectedRailTab === undefined;
   workspace.classList.toggle('workspace--rail-collapsed', collapsed);
+  workspace.classList.toggle('workspace--rail-preview', preview && tab !== undefined);
   workspace.dataset.railPanel = tab ?? 'collapsed';
-  controlPanel.inert = collapsed;
-  controlPanel.setAttribute('aria-hidden', String(collapsed));
+  controlPanel.inert = tab === undefined;
+  controlPanel.setAttribute('aria-hidden', String(tab === undefined));
   panelResizer.tabIndex = collapsed ? -1 : 0;
   for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
-    const selected = button.dataset.railTab === tab;
+    const selected = button.dataset.railTab === selectedRailTab;
+    const transient = preview && button.dataset.railTab === tab;
     button.classList.toggle('activity-rail__button--active', selected);
-    button.setAttribute('aria-expanded', String(selected));
+    button.classList.toggle('activity-rail__button--preview', transient);
+    button.setAttribute('aria-expanded', String(selected || transient));
     button.setAttribute('aria-pressed', String(selected));
     const label = button.querySelector<HTMLElement>('span:not(.activity-rail__dot)')?.textContent;
     button.title = selected ? `${label ?? '侧栏'}（再次点击可收起侧栏）` : (label ?? '打开侧栏');
@@ -5939,20 +7459,58 @@ const applyRailTab = (tab?: string): void => {
       (connectionAdvancedDialog.open &&
         (selectedSettingsTab === 'connection' || selectedSettingsTab === 'router')),
   );
-  if (tab === 'chat') {
-    void loadChatConfig();
-    void loadChatHistory();
-    renderChatUsage();
-  }
-  if (tab === 'plugins') {
-    void loadPluginCatalog(false);
-  }
-  if (tab === 'mcp') {
-    void loadMcpCatalog(false);
-  }
-  if (!chatVisible) {
+  if (!chatVisible && !preview) {
     retryTerminalFitUntilMeasured();
   }
+};
+
+const cancelRailPreviewClose = (): void => {
+  window.clearTimeout(railPreviewCloseTimer);
+  railPreviewCloseTimer = undefined;
+};
+
+const closeRailPreview = (): void => {
+  cancelRailPreviewClose();
+  if (previewRailTab === undefined) return;
+  previewRailTab = undefined;
+  renderRailPresentation(selectedRailTab, false);
+};
+
+const railPreviewDialogObserver = new MutationObserver((records) => {
+  if (
+    previewRailTab !== undefined &&
+    records.some(({ target }) => target instanceof HTMLDialogElement && target.hasAttribute('open'))
+  ) {
+    closeRailPreview();
+  }
+});
+railPreviewDialogObserver.observe(document.body, {
+  attributeFilter: ['open'],
+  attributes: true,
+  subtree: true,
+});
+
+const scheduleRailPreviewClose = (delay = 120): void => {
+  cancelRailPreviewClose();
+  railPreviewCloseTimer = window.setTimeout(closeRailPreview, delay);
+};
+
+const showRailPreview = (tab: string): void => {
+  if (selectedRailTab !== undefined) return;
+  cancelRailPreviewClose();
+  if (previewRailTab !== tab) prepareRailTab(tab);
+  previewRailTab = tab;
+  renderRailPresentation(tab, true);
+};
+
+const applyRailTab = (tab?: string): void => {
+  closeRailPreview();
+  if (tab === 'chat') mainView = 'chat';
+  else if (tab !== undefined) mainView = 'terminal';
+  const entering = tab !== undefined && tab !== selectedRailTab;
+  selectedRailTab = tab;
+  if (entering && tab) prepareRailTab(tab);
+  renderRailPresentation(tab, false);
 };
 
 /**
@@ -6002,6 +7560,47 @@ const selectWorkbenchPage = (page: string): void => {
     panel.classList.toggle('workbench-page--active', panel.dataset.workbenchPage === page);
   }
 };
+
+const renderCliCommandCatalog = (grid: HTMLElement, entries: CliCommandDefinition[]): void => {
+  const nodes: HTMLElement[] = [];
+  let previousCategory = '';
+  for (const entry of entries) {
+    if (entry.category !== previousCategory) {
+      const heading = document.createElement('h4');
+      heading.className = 'command-grid__category';
+      heading.textContent = entry.category;
+      nodes.push(heading);
+      previousCategory = entry.category;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.commandAction = entry.action;
+    button.dataset.commandRuntime = entry.runtime;
+    button.dataset.commandValue = entry.command;
+    button.dataset.commandRisk = entry.risk;
+    if (entry.runtime === 'claude' && entry.action === 'run') {
+      button.dataset.claudeCommand = entry.command;
+      if (entry.syntax.includes('[参数]')) button.dataset.usesArgument = 'true';
+    }
+    if (entry.risk === 'destructive') button.classList.add('command-danger');
+    const code = document.createElement('code');
+    code.textContent = entry.command;
+    const description = document.createElement('span');
+    description.textContent = entry.aliases.length
+      ? `${entry.description} · 别名 ${entry.aliases.join('、')}`
+      : entry.description;
+    const requirements = entry.requirements.length
+      ? ` · 条件：${entry.requirements.join('；')}`
+      : '';
+    button.title = `${entry.syntax} · ${entry.documentedVersion} · ${entry.platforms.join('/')} · ${entry.action === 'run' ? '可视化执行' : '填入输入框确认'}${requirements}`;
+    button.append(code, description);
+    nodes.push(button);
+  }
+  grid.replaceChildren(...nodes);
+};
+
+renderCliCommandCatalog(claudeCommandGrid, CLAUDE_COMMAND_CATALOG);
+renderCliCommandCatalog(codexCommandGrid, CODEX_COMMAND_CATALOG);
 
 const pluginKey = (plugin: ClaudePluginView): string =>
   `${plugin.marketplaceName}/${plugin.name}`.toLowerCase();
@@ -6101,6 +7700,8 @@ const renderApplicationUpdater = (state: ApplicationUpdaterState): void => {
   applicationUpdateVersion.dataset.update = String(
     state.phase === 'downloaded' || state.phase === 'downloading' || softwareReportsUpdate,
   );
+  renderDownloadCenter();
+  if (updateCenterDialog.open) renderUpdateCenter();
 };
 
 const runApplicationUpdateAction = async (): Promise<void> => {
@@ -6884,6 +8485,175 @@ const refreshPluginUpdates = async (): Promise<boolean> => {
   }
 };
 
+interface UpdateCenterItem {
+  actionLabel: string;
+  detail: string;
+  disabled?: boolean;
+  id: string;
+  run: () => Promise<void>;
+  title: string;
+  version: string;
+}
+
+const updateCenterItems = (): UpdateCenterItem[] => {
+  const items: UpdateCenterItem[] = [];
+  if (softwareUpdates?.application.updateAvailable) {
+    const updaterDisabled = applicationUpdaterState?.phase === 'disabled';
+    items.push({
+      actionLabel: applicationUpdaterState?.phase === 'downloaded' ? '重启并安装' : '下载更新',
+      detail: softwareUpdates.application.message,
+      disabled:
+        updateCenterOperationInProgress ||
+        updaterDisabled ||
+        applicationUpdaterState?.phase === 'checking' ||
+        applicationUpdaterState?.phase === 'downloading',
+      id: 'application',
+      run: runApplicationUpdateAction,
+      title: 'ClaudeDock',
+      version: `v${softwareUpdates.application.currentVersion ?? '未知'} → ${softwareUpdates.application.latestVersion ?? '未知'}`,
+    });
+  }
+  if (softwareUpdates?.claudeCode.updateAvailable) {
+    items.push({
+      actionLabel: '更新',
+      detail: softwareUpdates.claudeCode.message,
+      disabled: updateCenterOperationInProgress || softwareUpdateInProgress,
+      id: 'claude-code',
+      run: runClaudeInstallUpdate,
+      title: 'Claude Code',
+      version: `v${softwareUpdates.claudeCode.currentVersion ?? '未知'} → ${softwareUpdates.claudeCode.latestVersion ?? '未知'}`,
+    });
+  }
+  if (softwareUpdates?.router.updateAvailable) {
+    const status = activeStatus();
+    items.push({
+      actionLabel: status ? '更新' : '先打开项目',
+      detail: status
+        ? softwareUpdates.router.message
+        : `${softwareUpdates.router.message} 路由器操作需要一个已打开项目作为安全作用域。`,
+      disabled: updateCenterOperationInProgress || routerOperationInProgress || !status,
+      id: 'router',
+      run: async () => {
+        await runRouterOperation(
+          (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
+          '正在更新…',
+          installRouterButton,
+        );
+      },
+      title: 'Claude Code Router',
+      version: `v${softwareUpdates.router.currentVersion ?? '未知'} → ${softwareUpdates.router.latestVersion ?? '未知'}`,
+    });
+  }
+  for (const plugin of pluginCatalog?.installed.filter(({ updateAvailable }) => updateAvailable) ??
+    []) {
+    items.push({
+      actionLabel: '更新',
+      detail: `${plugin.marketplaceName} · ${localizePluginCopy(plugin).description}`,
+      disabled: updateCenterOperationInProgress || pluginMutationInProgress,
+      id: `plugin:${plugin.pluginId}`,
+      run: async () => {
+        await runPluginMutation(
+          () => window.controlPanel.updateClaudePlugin(plugin.pluginId),
+          '正在更新…',
+          updateAllPluginsButton,
+        );
+      },
+      title: plugin.name,
+      version: `v${plugin.version ?? '未知'} → ${plugin.latestVersion ?? '最新'}`,
+    });
+  }
+  return items;
+};
+
+const renderUpdateCenter = (): void => {
+  const items = updateCenterItems();
+  updateCenterList.replaceChildren(
+    ...items.map((item) => {
+      const row = document.createElement('article');
+      row.className = 'update-center-item';
+      row.dataset.updateId = item.id;
+      const copy = document.createElement('div');
+      copy.className = 'update-center-item__copy';
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const version = document.createElement('span');
+      version.textContent = item.version;
+      const detail = document.createElement('small');
+      detail.textContent = item.detail;
+      copy.append(title, version, detail);
+      const action = document.createElement('button');
+      action.className = 'update-center-item__action';
+      action.type = 'button';
+      action.textContent = item.actionLabel;
+      action.disabled = item.disabled === true;
+      action.addEventListener('click', () => {
+        void runUpdateCenterAction(item);
+      });
+      row.append(copy, action);
+      return row;
+    }),
+  );
+  updateCenterEmpty.hidden = items.length > 0;
+  updateCenterSummary.textContent =
+    items.length > 0 ? `共 ${items.length} 项可更新` : '全部项目均为当前可检测到的最新版本';
+  updateCenterAllButton.hidden = items.length === 0;
+  updateCenterAllButton.disabled =
+    updateCenterOperationInProgress || items.every(({ disabled }) => disabled);
+};
+
+const runUpdateCenterAction = async (item: UpdateCenterItem): Promise<void> => {
+  if (updateCenterOperationInProgress || item.disabled) return;
+  updateCenterOperationInProgress = true;
+  renderUpdateCenter();
+  updateCenterDialog.close('start-update');
+  openDownloadCenter();
+  try {
+    await item.run();
+  } finally {
+    updateCenterOperationInProgress = false;
+    await loadSoftwareUpdates(true);
+    renderUpdateCenter();
+  }
+};
+
+const runAllUpdates = async (): Promise<void> => {
+  if (updateCenterOperationInProgress) return;
+  const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
+  const hasProject = Boolean(activeStatus());
+  updateCenterOperationInProgress = true;
+  renderUpdateCenter();
+  updateCenterDialog.close('start-all-updates');
+  openDownloadCenter();
+  try {
+    if (actions.application && applicationUpdaterState?.phase !== 'downloaded') {
+      try {
+        renderApplicationUpdater(await window.controlPanel.downloadApplicationUpdate());
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '无法下载 ClaudeDock 更新。', 'error');
+      }
+    }
+    if (actions.claudeCode === 'update') await runClaudeInstallUpdate();
+    if (actions.router === 'update' && hasProject) {
+      await runRouterOperation(
+        (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
+        '正在更新…',
+        installRouterButton,
+      );
+    }
+    if (actions.plugins) {
+      await runPluginMutation(
+        () => window.controlPanel.updateAllClaudePlugins(),
+        '正在更新…',
+        updateAllPluginsButton,
+      );
+    }
+  } finally {
+    updateCenterOperationInProgress = false;
+    await loadSoftwareUpdates(true);
+    renderUpdateCenter();
+  }
+};
+
 const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
   if (updateRefreshInProgress) {
     return;
@@ -6910,10 +8680,16 @@ const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
       const actions = deriveUpdateActionState(softwareUpdates, pluginCatalog);
       if (!pluginsOk || failedSources > 0) {
         showToast('全局检查已完成，但至少一个更新来源暂时不可用。', 'error');
-      } else if (actions.totalAvailable > 0) {
-        showToast(`检查完成，发现 ${actions.totalAvailable} 项可更新。`);
-      } else {
-        showToast('检查完成，当前没有发现可用更新。');
+      }
+      renderUpdateCenter();
+      if (!updateCenterDialog.open) updateCenterDialog.showModal();
+      closeUpdateCenterButton.focus();
+      if (pluginsOk && failedSources === 0) {
+        showToast(
+          actions.totalAvailable > 0
+            ? `检查完成，发现 ${actions.totalAvailable} 项可更新。`
+            : '检查完成，当前没有发现可用更新。',
+        );
       }
     }
   } finally {
@@ -6924,16 +8700,79 @@ const refreshAvailableUpdates = async (manual: boolean): Promise<void> => {
   }
 };
 
-const pasteIntoActiveTerminal = async (): Promise<void> => {
-  const status = activeStatus();
-  if (!status || status.phase !== 'running') {
+const terminalStatusForSession = (sessionId: string): TerminalStatus | undefined =>
+  workspaceState.sessions.find((status) => status.id === sessionId);
+
+/**
+ * An xterm instance is an ownership token for one exact PTY generation. Checking both map identity
+ * and workspace status prevents an old event closure from targeting a replacement view or PTY.
+ */
+const ownsTerminalGeneration = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+): boolean => {
+  const status = terminalStatusForSession(sessionId);
+  return (
+    terminalViews.get(sessionId) === view &&
+    view.ptyGeneration === ptyGeneration &&
+    status?.ptyGeneration === ptyGeneration
+  );
+};
+
+const writableTerminalGeneration = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+): boolean =>
+  ownsTerminalGeneration(sessionId, ptyGeneration, view) &&
+  terminalStatusForSession(sessionId)?.phase === 'running';
+
+const terminalViewForStatus = (status: TerminalStatus): TerminalView | undefined => {
+  const view = terminalViews.get(status.id);
+  return view && ownsTerminalGeneration(status.id, status.ptyGeneration, view) ? view : undefined;
+};
+
+const writeToTerminalGeneration = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+  data: string,
+): boolean => {
+  if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    return false;
+  }
+  window.controlPanel.writeTerminal(sessionId, ptyGeneration, data);
+  return true;
+};
+
+const pasteIntoTerminalGeneration = async (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  view: TerminalView,
+): Promise<void> => {
+  if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
     return;
   }
   const text = await window.controlPanel.readClipboardText();
-  if (text) {
-    window.controlPanel.writeTerminal(status.id, text.replace(/\r?\n/g, '\r'));
+  if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    return;
   }
-  terminalViews.get(status.id)?.terminal.focus();
+  if (text) {
+    writeToTerminalGeneration(sessionId, ptyGeneration, view, text.replace(/\r?\n/g, '\r'));
+  }
+  if (writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    view.terminal.focus();
+  }
+};
+
+const pasteIntoActiveTerminal = async (): Promise<void> => {
+  const status = activeStatus();
+  const view = status ? terminalViewForStatus(status) : undefined;
+  if (!status || status.phase !== 'running' || !view) {
+    return;
+  }
+  await pasteIntoTerminalGeneration(status.id, status.ptyGeneration, view);
 };
 
 const copyActiveTerminalSelection = async (): Promise<void> => {
@@ -7117,7 +8956,9 @@ const showTerminalContextMenu = (event: MouseEvent): void => {
   terminalContextMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
 };
 
-const createTerminalView = (sessionId: string, active: boolean): TerminalView => {
+const createTerminalView = (status: TerminalStatus, active: boolean): TerminalView => {
+  const sessionId = status.id;
+  const ptyGeneration = status.ptyGeneration;
   const container = document.createElement('div');
   container.className = active ? 'project-terminal project-terminal--active' : 'project-terminal';
   container.dataset.sessionId = sessionId;
@@ -7146,11 +8987,32 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
     // No WebGL (remote session, blocklisted driver): the default DOM renderer still works.
   }
 
+  const view: TerminalView = {
+    container,
+    fitAddon,
+    outputPump: new TerminalOutputPump({
+      cancelFrame: (handle) => window.cancelAnimationFrame(handle),
+      isCurrent: () => ownsTerminalGeneration(sessionId, ptyGeneration, view),
+      onAppliedRevision: () => {
+        reportTerminalPermissionMode(sessionId, view);
+        answerReadyPermissionModeProbes(sessionId, view);
+      },
+      scheduleFrame: (callback) => window.requestAnimationFrame(callback),
+      write: (data, callback) => terminal.write(data, callback),
+    }),
+    permissionModeProbes: [],
+    ptyGeneration,
+    terminal,
+  };
+
   terminal.onData((data) => {
-    window.controlPanel.writeTerminal(sessionId, data);
+    writeToTerminalGeneration(sessionId, ptyGeneration, view, data);
   });
 
   terminal.attachCustomKeyEventHandler((event) => {
+    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+      return false;
+    }
     if (event.isComposing || event.keyCode === 229) {
       return true;
     }
@@ -7172,11 +9034,11 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
       return false;
     }
     if (event.ctrlKey && !event.shiftKey && event.code === 'KeyV') {
-      void pasteIntoActiveTerminal();
+      void pasteIntoTerminalGeneration(sessionId, ptyGeneration, view);
       return false;
     }
     if (event.shiftKey && !event.ctrlKey && event.code === 'Enter') {
-      window.controlPanel.writeTerminal(sessionId, '\x0a');
+      writeToTerminalGeneration(sessionId, ptyGeneration, view, '\x0a');
       return false;
     }
 
@@ -7184,23 +9046,9 @@ const createTerminalView = (sessionId: string, active: boolean): TerminalView =>
   });
   container.addEventListener('contextmenu', showTerminalContextMenu);
 
-  const view: TerminalView = {
-    appliedOutputRevision: 0,
-    container,
-    fitAddon,
-    outputRevision: 0,
-    pending: [],
-    pendingFrame: 0,
-    pendingLength: 0,
-    permissionModeProbes: [],
-    terminal,
-  };
   terminalViews.set(sessionId, view);
   return view;
 };
-
-/** Caps the queue so a runaway process cannot grow the buffer without bound. */
-const MAX_PENDING_OUTPUT = 512 * 1024;
 
 /**
  * xterm has already applied cursor moves and retained unchanged cells, so its current screen
@@ -7219,85 +9067,101 @@ const readTerminalPermissionMode = (view: TerminalView): ClaudePermissionMode | 
 };
 
 const reportTerminalPermissionMode = (sessionId: string, view: TerminalView): void => {
+  if (!ownsTerminalGeneration(sessionId, view.ptyGeneration, view)) {
+    return;
+  }
   const mode = readTerminalPermissionMode(view);
   if (!mode || mode === view.observedPermissionMode) {
     return;
   }
   view.observedPermissionMode = mode;
-  window.controlPanel.observeClaudePermissionMode(sessionId, mode);
+  window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);
 };
 
 const answerReadyPermissionModeProbes = (sessionId: string, view: TerminalView): void => {
+  if (!ownsTerminalGeneration(sessionId, view.ptyGeneration, view)) {
+    return;
+  }
   const ready = view.permissionModeProbes.filter(
-    (probe) => probe.requiredRevision <= view.appliedOutputRevision,
+    (probe) =>
+      probe.ptyGeneration === view.ptyGeneration &&
+      probe.requiredRevision <= view.outputPump.appliedRevision,
   );
   if (ready.length === 0) {
     return;
   }
   view.permissionModeProbes = view.permissionModeProbes.filter(
-    (probe) => probe.requiredRevision > view.appliedOutputRevision,
+    (probe) =>
+      probe.ptyGeneration !== view.ptyGeneration ||
+      probe.requiredRevision > view.outputPump.appliedRevision,
   );
   const mode = readTerminalPermissionMode(view);
-  for (const { probeId } of ready) {
-    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId, mode);
+  for (const { probeId, ptyGeneration } of ready) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId, mode);
   }
 };
 
 const rejectPermissionModeProbes = (sessionId: string, view: TerminalView): void => {
-  for (const { probeId } of view.permissionModeProbes) {
-    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId);
+  for (const { probeId, ptyGeneration } of view.permissionModeProbes) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);
   }
   view.permissionModeProbes.length = 0;
 };
 
 /**
- * Output is queued and written once per frame. Writing every IPC chunk separately made xterm reflow
- * dozens of times between paints, which is what the input stutter actually was.
+ * Output is admitted into the exact generation's lossless pump. The pump coalesces work per frame,
+ * bounds each xterm parse quantum, and never starts another write until xterm acknowledges this one.
  */
-const queueTerminalOutput = (sessionId: string, data: string): void => {
+const queueTerminalOutput = (
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  data: string,
+): void => {
   const view = terminalViews.get(sessionId);
-  if (!view) {
+  if (!view || !ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
     return;
   }
-
-  view.outputRevision += 1;
-  view.pending.push(data);
-  view.pendingLength += data.length;
-  if (view.pendingLength > MAX_PENDING_OUTPUT) {
-    // Dropping the oldest queued output keeps the newest visible; xterm's scrollback would have
-    // discarded it moments later anyway.
-    while (view.pending.length > 1 && view.pendingLength > MAX_PENDING_OUTPUT) {
-      view.pendingLength -= view.pending.shift()?.length ?? 0;
-    }
-  }
-  if (view.pendingFrame !== 0) {
-    return;
-  }
-  view.pendingFrame = requestAnimationFrame(() => {
-    view.pendingFrame = 0;
-    const chunk = view.pending.join('');
-    const revision = view.outputRevision;
-    view.pending.length = 0;
-    view.pendingLength = 0;
-    view.terminal.write(chunk, () => {
-      view.appliedOutputRevision = Math.max(view.appliedOutputRevision, revision);
-      reportTerminalPermissionMode(sessionId, view);
-      answerReadyPermissionModeProbes(sessionId, view);
-    });
-  });
+  view.outputPump.enqueue(data);
 };
 
-const ensureTerminalView = (sessionId: string, active: boolean): TerminalView =>
-  terminalViews.get(sessionId) ?? createTerminalView(sessionId, active);
+const disposeTerminalView = (sessionId: string, view: TerminalView): void => {
+  if (terminalViews.get(sessionId) === view) {
+    terminalViews.delete(sessionId);
+  }
+  view.outputPump.dispose();
+  rejectPermissionModeProbes(sessionId, view);
+  const mask = terminalMasks.get(sessionId);
+  if (mask?.view === view) {
+    mask.overlay.remove();
+    terminalMasks.delete(sessionId);
+  }
+  view.terminal.dispose();
+  view.container.remove();
+};
+
+const ensureTerminalView = (status: TerminalStatus, active: boolean): TerminalView => {
+  const existing = terminalViews.get(status.id);
+  if (existing?.ptyGeneration === status.ptyGeneration) {
+    return existing;
+  }
+  if (existing) {
+    disposeTerminalView(status.id, existing);
+  }
+  return createTerminalView(status, active);
+};
 
 const fitActiveTerminal = (): boolean => {
-  const view = terminalViews.get(workspaceState.activeSessionId);
-  const bounds = view?.container.getBoundingClientRect();
+  const sessionId = workspaceState.activeSessionId;
+  const view = terminalViews.get(sessionId);
+  if (!view) {
+    return false;
+  }
+  const ptyGeneration = view.ptyGeneration;
+  const bounds = view.container.getBoundingClientRect();
   if (
-    !view ||
+    !ownsTerminalGeneration(sessionId, ptyGeneration, view) ||
     !view.container.isConnected ||
     !view.container.classList.contains('project-terminal--active') ||
-    !bounds ||
     bounds.width < 1 ||
     bounds.height < 1
   ) {
@@ -7306,8 +9170,12 @@ const fitActiveTerminal = (): boolean => {
 
   try {
     view.fitAddon.fit();
+    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+      return false;
+    }
     window.controlPanel.resizeTerminal(
-      workspaceState.activeSessionId,
+      sessionId,
+      ptyGeneration,
       view.terminal.cols,
       view.terminal.rows,
     );
@@ -7648,10 +9516,12 @@ const playSendAnimation = (
 
 const submitComposer = (): void => {
   const status = activeStatus();
-  if (!status || status.phase !== 'running') {
+  const view = status ? terminalViewForStatus(status) : undefined;
+  if (!status || status.phase !== 'running' || !view) {
     showToast('终端还没有运行，无法发送。', 'error');
     return;
   }
+  const ptyGeneration = status.ptyGeneration;
 
   const text = composerInput.value;
   let submission: ReturnType<typeof buildTerminalSubmission>;
@@ -7669,10 +9539,10 @@ const submitComposer = (): void => {
   void writeTerminalSubmission(
     submission,
     (data) => {
-      window.controlPanel.writeTerminal(status.id, data);
+      writeToTerminalGeneration(status.id, ptyGeneration, view, data);
     },
-    // The session can be closed or stopped during the gap between the two writes.
-    () => activeStatus()?.id === status.id && activeStatus()?.phase === 'running',
+    // The session can be closed, stopped or replaced during the gap between the two writes.
+    () => writableTerminalGeneration(status.id, ptyGeneration, view),
   );
 
   playSendAnimation(text);
@@ -7741,9 +9611,13 @@ composerInput.addEventListener('keydown', (event) => {
   // catches up when the main process reads the repainted badge.
   if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey) {
     const status = activeStatus();
-    if (status) {
+    const view = status ? terminalViewForStatus(status) : undefined;
+    if (
+      status?.phase === 'running' &&
+      view &&
+      writeToTerminalGeneration(status.id, status.ptyGeneration, view, '\x1b[Z')
+    ) {
       event.preventDefault();
-      window.controlPanel.writeTerminal(status.id, '\x1b[Z');
     }
   }
 });
@@ -7968,6 +9842,8 @@ const renderNoActiveSession = (): void => {
   runtimeCodex.checked = false;
   document.body.dataset.agentRuntime = 'claude';
   setComposerEnabled(false);
+  runtimeActivityTrigger.hidden = true;
+  runtimeActivityPanel.hidden = true;
 };
 
 const activateProject = async (sessionId: string): Promise<void> => {
@@ -8079,30 +9955,42 @@ const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
     showToast(result.error ?? '无法移除这个项目。', 'error');
     return;
   }
-  expandedFolders.delete(project.path.toLowerCase());
-  historyScrollPositions.delete(project.path.toLowerCase());
+  const key = project.path.toLowerCase();
+  folderHistoryLoads.invalidate(key);
+  storedConversations.delete(key);
+  expandedFolders.delete(key);
+  historyScrollPositions.delete(key);
   showToast(`已从列表中移除 ${project.name}`);
 };
+
+const workspaceContainsProject = (projectKey: string): boolean =>
+  workspaceState.projects.some((project) => project.path.toLowerCase() === projectKey);
 
 /** Loads a folder's Claude conversation history without requiring a live terminal for it. */
 async function loadFolderHistory(projectPath: string, force = false): Promise<void> {
   const key = projectPath.toLowerCase();
-  if (historyLoadsInFlight.has(key)) {
-    if (force) historyReloadRequested.add(key);
-    return;
-  }
   if (!force && storedConversations.has(key)) {
     return;
   }
-  historyLoadsInFlight.add(key);
+  const token = folderHistoryLoads.request(key, force);
+  if (!token) {
+    return;
+  }
+
   try {
-    storedConversations.set(key, await window.controlPanel.getClaudeSessionsForPath(projectPath));
+    const conversations = await window.controlPanel.getClaudeSessionsForPath(projectPath);
+    if (!folderHistoryLoads.isCurrent(token) || !workspaceContainsProject(key)) {
+      return;
+    }
+    storedConversations.set(key, conversations);
     renderProjectList();
   } catch {
-    storedConversations.set(key, []);
+    if (folderHistoryLoads.isCurrent(token) && workspaceContainsProject(key)) {
+      storedConversations.set(key, []);
+    }
   } finally {
-    historyLoadsInFlight.delete(key);
-    if (historyReloadRequested.delete(key)) {
+    const completion = folderHistoryLoads.finish(token);
+    if (completion.current && completion.reloadRequested && workspaceContainsProject(key)) {
       void loadFolderHistory(projectPath, true);
     }
   }
@@ -8139,17 +10027,10 @@ const deleteStoredConversation = async (
   session: ClaudeSessionMetadata,
 ): Promise<void> => {
   const title = session.sessionName || session.sessionId.slice(0, 8);
-  const runningMatches = workspaceState.sessions.filter(
-    (status) =>
-      status.cwd.toLowerCase() === projectPath.toLowerCase() &&
-      claudeStates.get(status.id)?.metrics?.sessionId === session.sessionId,
-  );
-  const activeWarning =
-    runningMatches.length > 0 ? '\n\n该历史对话当前仍在运行；继续后会先关闭对应终端。' : '';
   if (
     !(await requestConfirmation({
       confirmLabel: '永久删除',
-      message: `永久删除历史对话“${title}”？此操作无法撤销。${activeWarning}`,
+      message: `永久删除历史对话“${title}”？此操作无法撤销；如果该对话仍在运行，会先关闭对应终端。`,
       title: '删除历史对话',
       tone: 'danger',
     }))
@@ -8158,16 +10039,10 @@ const deleteStoredConversation = async (
   }
 
   try {
-    for (const status of runningMatches) {
-      const result = await window.controlPanel.closeProject(status.id);
-      renderWorkspace(result.state);
-      if (!result.ok) {
-        throw new Error(result.error ?? '无法关闭仍在运行的历史对话。');
-      }
-    }
-    const deleted = await window.controlPanel.deleteClaudeSession(projectPath, session.sessionId);
-    if (!deleted) {
-      throw new Error('历史对话文件已不存在或无法删除。');
+    const result = await window.controlPanel.deleteClaudeSession(projectPath, session.sessionId);
+    renderWorkspace(result.state);
+    if (!result.ok || !result.deleted) {
+      throw new Error(result.error ?? '历史对话文件已不存在或无法删除。');
     }
     await loadFolderHistory(projectPath, true);
     showToast(`已删除历史对话“${title}”`);
@@ -8456,10 +10331,40 @@ function renderProjectList(): void {
 
 function renderWorkspace(state: WorkspaceState): void {
   const previousActiveSessionId = workspaceState.activeSessionId;
-  const activeViewAlreadyExists = terminalViews.has(state.activeSessionId);
+  const nextActiveStatus = state.sessions.find((status) => status.id === state.activeSessionId);
+  const activeViewAlreadyExists =
+    nextActiveStatus !== undefined &&
+    terminalViews.get(nextActiveStatus.id)?.ptyGeneration === nextActiveStatus.ptyGeneration;
   syncConversationTitles(state);
-  workspaceState = state;
   const validSessionIds = new Set(state.sessions.map((status) => status.id));
+  const releasedClaudeLaunches = new Set<string>();
+  const releasedCodexLaunches = new Set<string>();
+  for (const status of state.sessions) {
+    const release = claudeLaunchAttempts.observeTerminal(status);
+    if (release) {
+      releasedClaudeLaunches.add(release.token.sessionId);
+    }
+    if (
+      (status.phase === 'error' || status.phase === 'stopped') &&
+      codexLaunchAttempts.invalidate(status.id)
+    ) {
+      releasedCodexLaunches.add(status.id);
+    }
+  }
+  for (const release of claudeLaunchAttempts.prune(validSessionIds)) {
+    releasedClaudeLaunches.add(release.token.sessionId);
+  }
+  for (const token of codexLaunchAttempts.prune(validSessionIds)) {
+    releasedCodexLaunches.add(token.sessionId);
+  }
+  claudeSpeedOperations.prune(validSessionIds);
+  claudeStateLoadGenerations.prune(validSessionIds);
+  codexStateLoadGenerations.prune(validSessionIds);
+  runtimeStateLoadGenerations.prune(validSessionIds);
+  if (codexAutoLaunchSessionId && !validSessionIds.has(codexAutoLaunchSessionId)) {
+    codexAutoLaunchSessionId = '';
+  }
+  workspaceState = state;
   if (
     pendingComposerFocusSessionId &&
     (pendingComposerFocusSessionId !== state.activeSessionId ||
@@ -8470,21 +10375,13 @@ function renderWorkspace(state: WorkspaceState): void {
 
   for (const status of state.sessions) {
     const active = status.id === state.activeSessionId;
-    const view = ensureTerminalView(status.id, active);
+    const view = ensureTerminalView(status, active);
     view.container.classList.toggle('project-terminal--active', active);
   }
 
   for (const [sessionId, view] of terminalViews) {
     if (!validSessionIds.has(sessionId)) {
-      if (view.pendingFrame !== 0) {
-        cancelAnimationFrame(view.pendingFrame);
-      }
-      rejectPermissionModeProbes(sessionId, view);
-      terminalMasks.get(sessionId)?.overlay.remove();
-      terminalMasks.delete(sessionId);
-      view.terminal.dispose();
-      view.container.remove();
-      terminalViews.delete(sessionId);
+      disposeTerminalView(sessionId, view);
     }
   }
   for (const sessionId of claudeStates.keys()) {
@@ -8509,6 +10406,15 @@ function renderWorkspace(state: WorkspaceState): void {
   const status = activeStatus();
   if (status) {
     renderActiveStatus(status);
+    if (releasedClaudeLaunches.has(status.id) && activeDevelopmentRuntime() === 'claude') {
+      refreshClaudeLaunchControls(status.id);
+    }
+    if (releasedCodexLaunches.has(status.id) && activeDevelopmentRuntime() === 'codex') {
+      const latest = codexStates.get(status.id);
+      if (latest) {
+        renderCodexState(latest, false);
+      }
+    }
   } else {
     renderNoActiveSession();
   }
@@ -8536,7 +10442,7 @@ function renderWorkspace(state: WorkspaceState): void {
     gatewayCheckedAt.textContent = '等待首次检测';
     const knownRuntimeState = developmentRuntimeStates.get(state.activeSessionId);
     if (knownRuntimeState) {
-      renderDevelopmentRuntimeState(knownRuntimeState);
+      renderDevelopmentRuntimeState(knownRuntimeState, false);
     } else if (state.activeSessionId) {
       void loadDevelopmentRuntime(state.activeSessionId);
     }
@@ -8555,6 +10461,7 @@ function renderWorkspace(state: WorkspaceState): void {
   ) {
     retryTerminalFitUntilMeasured();
   }
+  renderRuntimeActivity(runtimeActivityStates.get(state.activeSessionId));
 }
 
 const applyTerminalStatus = (status: TerminalStatus): void => {
@@ -8632,60 +10539,73 @@ const openDirectoryPicker = async (): Promise<void> => {
 
 const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
   const status = activeStatus();
-  if (!status || launchInProgress) {
+  if (!status || claudeLaunchAttempts.isBusy(status.id)) {
     return;
   }
 
-  launchInProgress = true;
-  const existingState = claudeStates.get(status.id);
-  if (existingState) {
-    renderClaudeState(existingState);
-  }
-  try {
-    terminalViews.get(status.id)?.terminal.clear();
-    const result = await window.controlPanel.launchClaude(status.id, mode);
-    renderClaudeState(result.state);
-    if (!result.ok) {
-      showToast(result.error ?? '无法启动 Claude Code。', 'error');
-      return;
-    }
-    showToast(
-      mode === 'new'
-        ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
-        : mode === 'continue'
-          ? '正在续接当前项目最近的会话'
-          : '已打开当前项目的历史会话选择器',
-    );
-    // `resume` opens Claude's own arrow-key picker, which needs the raw keystrokes.
-    if (mode === 'resume') {
-      terminalViews.get(status.id)?.terminal.focus();
-    } else {
-      requestComposerFocus(status.id);
-    }
-  } catch {
+  // Capture the lifecycle baseline and paint the busy state before the first await, including when
+  // the renderer has not loaded a ClaudeProjectState for this session yet.
+  const attempt = beginClaudeLaunchAttempt(status);
+  const outcome = await orchestrateClaudeLaunchAttempt({
+    applyResult: (result) =>
+      renderClaudeLaunchResult(attempt, result.state, result.ok ? 'success' : 'failure'),
+    onRelease: () => refreshClaudeLaunchControls(attempt.sessionId),
+    prepare: () => terminalViews.get(status.id)?.terminal.clear(),
+    registry: claudeLaunchAttempts,
+    start: () => window.controlPanel.launchClaude(status.id, mode),
+    token: attempt,
+  });
+  if (outcome.status === 'rejected') {
     showToast('无法启动 Claude Code。', 'error');
-  } finally {
-    launchInProgress = false;
-    const latest = claudeStates.get(status.id);
-    if (latest) {
-      renderClaudeState(latest);
-    }
+    return;
+  }
+  if (outcome.status !== 'resolved') {
+    return;
+  }
+
+  const { result } = outcome;
+  if (!result.ok) {
+    failClaudeLaunchAttempt(attempt);
+    showToast(result.error ?? '无法启动 Claude Code。', 'error');
+    return;
+  }
+  showToast(
+    mode === 'new'
+      ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
+      : mode === 'continue'
+        ? '正在续接当前项目最近的会话'
+        : '已打开当前项目的历史会话选择器',
+  );
+  // `resume` opens Claude's own arrow-key picker, which needs the raw keystrokes.
+  if (mode === 'resume') {
+    terminalViews.get(status.id)?.terminal.focus();
+  } else {
+    requestComposerFocus(status.id);
   }
 };
 
 const launchCodex = async (mode: CodexLaunchMode): Promise<void> => {
   const status = activeStatus();
-  if (!status || launchInProgress || codexOperationInProgress) {
+  if (!status || codexLaunchAttempts.isActive(status.id) || codexOperationInProgress) {
     return;
   }
-  launchInProgress = true;
+  const attempt = codexLaunchAttempts.begin(status.id);
   const existingState = codexStates.get(status.id);
   if (existingState) {
-    renderCodexState(existingState);
+    renderCodexState(existingState, false);
   }
   try {
+    if (!codexLaunchAttempts.isCurrent(attempt)) {
+      return;
+    }
     terminalViews.get(status.id)?.terminal.clear();
+    if (!codexLaunchAttempts.isCurrent(attempt)) {
+      return;
+    }
     const result = await window.controlPanel.launchCodex(status.id, mode);
+    if (!codexLaunchAttempts.isCurrent(attempt) || result.state.sessionId !== attempt.sessionId) {
+      return;
+    }
     renderCodexState(result.state);
     if (!result.ok) {
       showToast(result.error ?? '无法启动 Codex。', 'error');
@@ -8704,12 +10624,15 @@ const launchCodex = async (mode: CodexLaunchMode): Promise<void> => {
       requestComposerFocus(status.id);
     }
   } catch {
-    showToast('无法启动 Codex。', 'error');
+    if (codexLaunchAttempts.isCurrent(attempt)) {
+      showToast('无法启动 Codex。', 'error');
+    }
   } finally {
-    launchInProgress = false;
-    const latest = codexStates.get(status.id);
-    if (latest) {
-      renderCodexState(latest);
+    if (codexLaunchAttempts.finish(attempt)) {
+      const latest = codexStates.get(status.id);
+      if (latest) {
+        renderCodexState(latest, false);
+      }
     }
   }
 };
@@ -8722,7 +10645,7 @@ const installOrUpdateCodex = async (): Promise<CodexProjectState | undefined> =>
   codexOperationInProgress = true;
   const existing = codexStates.get(status.id);
   if (existing) {
-    renderCodexState(existing);
+    renderCodexState(existing, false);
   }
   try {
     const result = await window.controlPanel.installOrUpdateCodex(status.id);
@@ -8740,7 +10663,7 @@ const installOrUpdateCodex = async (): Promise<CodexProjectState | undefined> =>
     codexOperationInProgress = false;
     const latest = codexStates.get(status.id);
     if (latest) {
-      renderCodexState(latest);
+      renderCodexState(latest, false);
     }
   }
 };
@@ -8759,7 +10682,7 @@ const startCodexLogin = async (
   }
   const existing = codexStates.get(status.id);
   if (existing) {
-    renderCodexState(existing);
+    renderCodexState(existing, false);
   }
   try {
     const result = await window.controlPanel.startCodexLogin(status.id, method);
@@ -8781,7 +10704,7 @@ const startCodexLogin = async (
     codexOperationInProgress = false;
     const latest = codexStates.get(status.id);
     if (latest) {
-      renderCodexState(latest);
+      renderCodexState(latest, false);
       if (
         codexAutoLaunchSessionId === latest.sessionId &&
         latest.account &&
@@ -8797,16 +10720,13 @@ const startCodexLogin = async (
 
 const prepareAndLaunchCodex = async (): Promise<void> => {
   const status = activeStatus();
-  if (!status || codexOperationInProgress || launchInProgress) {
+  if (!status || codexOperationInProgress || codexLaunchAttempts.isActive(status.id)) {
     return;
   }
   let state = codexStates.get(status.id);
   if (!state) {
-    try {
-      state = await window.controlPanel.getCodexProjectState(status.id);
-      renderCodexState(state);
-    } catch {
-      showToast('无法读取 Codex 环境。', 'error');
+    state = await loadCodexState(status.id, '无法读取 Codex 环境。');
+    if (!state) {
       return;
     }
   }
@@ -8834,6 +10754,7 @@ const switchDevelopmentRuntime = async (runtime: DevelopmentRuntime): Promise<vo
     const normalizedCwd = state.cwd.toLocaleLowerCase();
     for (const session of workspaceState.sessions) {
       if (session.cwd.toLocaleLowerCase() === normalizedCwd) {
+        runtimeStateLoadGenerations.invalidate(session.id);
         developmentRuntimeStates.set(session.id, {
           ...state,
           sessionId: session.id,
@@ -9080,7 +11001,7 @@ const renderConnectionHistory = (): void => {
       appendParameter('检测网关', entry.gatewayEndpoint);
     }
     appendParameter('主模型', displayedModel || '默认模型');
-    appendParameter('快速模型', displayedModelFast || displayedModel || '跟随主模型');
+    appendParameter('小型/备用模型', displayedModelFast || displayedModel || '跟随主模型');
     const meta = document.createElement('span');
     meta.className = 'connection-history__meta';
     meta.textContent = [
@@ -9203,33 +11124,42 @@ const deleteConnectionHistory = async (entryId: string): Promise<void> => {
   }
 };
 
-window.controlPanel.onTerminalData((sessionId, data) => {
-  queueTerminalOutput(sessionId, data);
+window.controlPanel.onTerminalData((sessionId, ptyGeneration, data) => {
+  queueTerminalOutput(sessionId, ptyGeneration, data);
 });
-window.controlPanel.onClaudePermissionModeProbe((sessionId, probeId) => {
+window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {
   const view = terminalViews.get(sessionId);
-  if (!view) {
-    window.controlPanel.reportClaudePermissionModeProbe(sessionId, probeId);
+  if (!view || !ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+    window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);
     return;
   }
-  if (view.appliedOutputRevision >= view.outputRevision) {
+  if (view.outputPump.appliedRevision >= view.outputPump.acceptedRevision) {
     window.controlPanel.reportClaudePermissionModeProbe(
       sessionId,
+      ptyGeneration,
       probeId,
       readTerminalPermissionMode(view),
     );
     return;
   }
-  view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });
+  view.permissionModeProbes.push({
+    probeId,
+    ptyGeneration,
+    requiredRevision: view.outputPump.acceptedRevision,
+  });
 });
 /*
  * The PTY clamps the size it was asked for. xterm has to follow, because PSReadLine repaints its
  * edit buffer with absolute cursor moves — a one-row disagreement puts that repaint on the wrong
  * line and leaves the previous screen visible underneath it.
  */
-window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
+window.controlPanel.onTerminalSize((sessionId, ptyGeneration, cols, rows) => {
   const view = terminalViews.get(sessionId);
-  if (!view || (view.terminal.cols === cols && view.terminal.rows === rows)) {
+  if (
+    !view ||
+    !ownsTerminalGeneration(sessionId, ptyGeneration, view) ||
+    (view.terminal.cols === cols && view.terminal.rows === rows)
+  ) {
     return;
   }
   try {
@@ -9241,20 +11171,34 @@ window.controlPanel.onTerminalSize((sessionId, cols, rows) => {
 const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
   rerunAutomaticConnectionTestForActiveProject();
 });
-const closeQuitConfirmation = (confirmed: boolean): void => {
+const closeQuitConfirmation = (decision: boolean | 'retry'): void => {
   pendingQuitRequest = undefined;
   if (quitConfirmationDialog.open) {
-    quitConfirmationDialog.close(confirmed ? 'quit' : 'cancel');
+    quitConfirmationDialog.close(decision === true ? 'quit' : String(decision));
   }
-  window.controlPanel.confirmQuit(confirmed);
+  window.controlPanel.confirmQuit(decision);
 };
 
 const renderQuitConfirmation = (request: AppQuitRequest): void => {
   pendingQuitRequest = request;
-  quitConfirmationTitle.textContent = request.hasBlocking
-    ? '有操作正在进行，不建议退出'
-    : '还有下载未完成';
+  quitConfirmationTitle.textContent = request.runtimeCleanupFailed
+    ? '仍有派生 Web 进程未能安全结束'
+    : request.hasBlocking
+      ? '有操作正在进行，不建议退出'
+      : request.leases.length > 0
+        ? '还有后台任务未完成'
+        : '确认退出 ClaudeDock？';
+  quitConfirmationMessage.textContent = request.runtimeCleanupFailed
+    ? '安全清理尚未完成。请重试；只有明确强制退出才会留下列出的进程。'
+    : request.leases.length > 0
+      ? '退出会结束下列会话或任务；也可以最小化到托盘，让它们继续运行。'
+      : '确认要彻底退出吗？所有 ClaudeDock 窗口和终端都会关闭。';
+  quitMinimizeButton.textContent = request.runtimeCleanupFailed
+    ? '重试安全清理'
+    : '最小化到托盘，继续运行';
+  quitCancelButton.hidden = request.runtimeCleanupFailed === true;
   quitForceButton.dataset.tone = request.hasBlocking ? 'danger' : 'neutral';
+  quitConfirmationList.hidden = request.leases.length === 0;
   quitConfirmationList.replaceChildren(
     ...request.leases.map((lease) => {
       const item = document.createElement('li');
@@ -9276,18 +11220,24 @@ const renderQuitConfirmation = (request: AppQuitRequest): void => {
 /* Every path answers the main-process handshake, including Esc and the default safe action. */
 const unsubscribeAppQuitRequested = window.controlPanel.onAppQuitRequested(renderQuitConfirmation);
 quitMinimizeButton.addEventListener('click', () => {
+  if (pendingQuitRequest?.runtimeCleanupFailed) {
+    closeQuitConfirmation('retry');
+    return;
+  }
   closeQuitConfirmation(false);
   window.controlPanel.minimizeToTray();
 });
 quitCancelButton.addEventListener('click', () => {
+  if (pendingQuitRequest?.runtimeCleanupFailed) return;
   closeQuitConfirmation(false);
 });
 quitConfirmationDialog.addEventListener('cancel', (event) => {
   event.preventDefault();
+  if (pendingQuitRequest?.runtimeCleanupFailed) return;
   closeQuitConfirmation(false);
 });
 quitConfirmationDialog.addEventListener('click', (event) => {
-  if (event.target === quitConfirmationDialog) {
+  if (event.target === quitConfirmationDialog && !pendingQuitRequest?.runtimeCleanupFailed) {
     closeQuitConfirmation(false);
   }
 });
@@ -9303,8 +11253,10 @@ quitForceButton.addEventListener('click', () => {
   }
   void requestConfirmation({
     confirmLabel: '仍要退出',
-    message: '退出会中断不可恢复的安装或配置操作，并可能留下不完整状态。确认仍要退出吗？',
-    title: '确认中断关键操作',
+    message: request.runtimeCleanupFailed
+      ? '安全清理仍未完成。强制退出可能留下上方列出的派生 Web 进程，确认仍要退出吗？'
+      : '退出会中断不可恢复的安装或配置操作，并可能留下不完整状态。确认仍要退出吗？',
+    title: request.runtimeCleanupFailed ? '确认带残留强制退出' : '确认中断关键操作',
     tone: 'danger',
   }).then((confirmed) => {
     closeQuitConfirmation(confirmed);
@@ -9331,9 +11283,9 @@ window.controlPanel.onNetworkPreflight((result) => {
     const codexState = status ? codexStates.get(status.id) : undefined;
     const claudeState = status ? claudeStates.get(status.id) : undefined;
     if (activeDevelopmentRuntime() === 'codex' && codexState) {
-      renderCodexState(codexState);
+      renderCodexState(codexState, false);
     } else if (claudeState) {
-      renderClaudeState(claudeState);
+      renderClaudeState(claudeState, true, false);
     } else {
       renderActiveNetworkPreflight();
     }
@@ -9351,7 +11303,27 @@ window.controlPanel.onNetworkPreflight((result) => {
     }
   }
 });
-window.controlPanel.onWorkspaceState(renderWorkspace);
+const unsubscribeRuntimeActivityChanged = window.controlPanel.onRuntimeActivityChanged((state) => {
+  runtimeActivityStates.set(state.sessionId, state);
+  if (state.sessionId === workspaceState.activeSessionId) renderRuntimeActivity(state);
+});
+const unsubscribeClaudePermissionRequest = window.controlPanel.onClaudePermissionRequest(
+  (request) => {
+    if (
+      request.expiresAt <= Date.now() ||
+      request.requestId === activeClaudePermissionRequest?.requestId ||
+      claudePermissionQueue.some((queued) => queued.requestId === request.requestId)
+    ) {
+      return;
+    }
+    claudePermissionQueue.push(request);
+    showNextClaudePermissionRequest();
+  },
+);
+window.controlPanel.onWorkspaceState((state) => {
+  renderWorkspace(state);
+  void loadActiveRuntimeActivity();
+});
 window.controlPanel.onChatStream(handleChatStream);
 
 chooseDirectoryButton.addEventListener('click', () => {
@@ -9379,10 +11351,22 @@ routeHealthAction.addEventListener('click', () => {
   selectRailTab('connection');
 });
 for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
+  const railTab = button.dataset.railTab ?? 'projects';
   button.addEventListener('click', () => {
-    toggleRailTab(button.dataset.railTab ?? 'projects');
+    toggleRailTab(railTab);
   });
+  button.addEventListener('pointerenter', () => showRailPreview(railTab));
+  button.addEventListener('focusin', () => showRailPreview(railTab));
+  button.addEventListener('pointerleave', () => scheduleRailPreviewClose());
 }
+controlPanel.addEventListener('pointerenter', cancelRailPreviewClose);
+controlPanel.addEventListener('pointerleave', () => scheduleRailPreviewClose());
+controlPanel.addEventListener('focusin', cancelRailPreviewClose);
+controlPanel.addEventListener('focusout', (event) => {
+  const next = event.relatedTarget as Node | null;
+  if (next && (controlPanel.contains(next) || activityRail.contains(next))) return;
+  scheduleRailPreviewClose(0);
+});
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-plugin-tab]')) {
   button.addEventListener('click', () => {
     selectPluginTab(button.dataset.pluginTab ?? 'installed');
@@ -9395,6 +11379,21 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-mcp-tab
 }
 refreshUpdatesButton.addEventListener('click', () => {
   void refreshAvailableUpdates(true);
+});
+closeUpdateCenterButton.addEventListener('click', () => {
+  updateCenterDialog.close('close');
+});
+cancelUpdateCenterButton.addEventListener('click', () => {
+  updateCenterDialog.close('cancel');
+});
+updateCenterAllButton.addEventListener('click', () => {
+  void runAllUpdates();
+});
+updateCenterDialog.addEventListener('click', (event) => {
+  if (event.target === updateCenterDialog) updateCenterDialog.close('backdrop');
+});
+updateCenterDialog.addEventListener('close', () => {
+  if (!downloadCenterDialog.open) refreshUpdatesButton.focus();
 });
 openDownloadCenterButton.addEventListener('click', () => {
   openDownloadCenter();
@@ -9409,6 +11408,24 @@ downloadCenterDialog.addEventListener('click', (event) => {
 });
 downloadCenterDialog.addEventListener('close', () => {
   openDownloadCenterButton.focus();
+});
+clearDownloadHistoryButton.addEventListener('click', () => {
+  void (async () => {
+    const confirmed = await requestConfirmation({
+      confirmLabel: '清空历史',
+      message: '清空全部下载历史？这不会删除已经下载或安装的软件。',
+      title: '清空下载历史',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    clearDownloadHistoryButton.disabled = true;
+    try {
+      handleDownloadsChanged(await window.controlPanel.clearDownloadHistory());
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法清空下载历史。', 'error');
+      clearDownloadHistoryButton.disabled = false;
+    }
+  })();
 });
 updateAllPluginsButton.addEventListener('click', () => {
   void runPluginMutation(
@@ -9515,6 +11532,30 @@ settingsCloseBehavior.addEventListener('change', () => {
 settingsWebResearchIsolation.addEventListener('change', () => {
   updateSettingsUnsavedIndicator();
 });
+settingsOpenCcrBackend.addEventListener('click', () => {
+  const status = activeStatus();
+  if (!status || settingsOpenCcrBackend.disabled) {
+    return;
+  }
+  void runGuarded(settingsOpenCcrBackend, '正在打开…', async () => {
+    const result = await window.controlPanel.openClaudeRouterManagement(status.id);
+    handleRouterResult(result);
+    await loadAdvancedRouterBackends();
+  });
+});
+settingsOpenChatGptGateway.addEventListener('click', () => {
+  if (settingsOpenChatGptGateway.disabled) {
+    return;
+  }
+  void runGuarded(settingsOpenChatGptGateway, '正在打开…', async () => {
+    const result = await window.controlPanel.openManagedChatGptGatewayManagement();
+    showToast(
+      result.message ?? result.error ?? '无法打开 ChatGPT 网关后台。',
+      result.ok ? 'success' : 'error',
+    );
+    await loadAdvancedRouterBackends();
+  });
+});
 settingsChatIdleTimeout.addEventListener('change', () => {
   const requested = Number(settingsChatIdleTimeout.value);
   if (requested !== 0 && requested !== 5 && requested !== 10 && requested !== 30) {
@@ -9522,39 +11563,46 @@ settingsChatIdleTimeout.addEventListener('change', () => {
   }
   updateSettingsUnsavedIndicator();
 });
-applicationProxyProtocol.addEventListener('change', () => {
-  const cliSupported = applicationProxyProtocol.value === 'http';
-  applicationProxyScopeCli.disabled = !cliSupported;
-  if (!cliSupported) applicationProxyScopeCli.checked = false;
+applicationProxyEnabled.addEventListener('change', () => {
+  applicationProxyDraftEdited = true;
+  syncApplicationProxyInteractivity();
+  updateSettingsUnsavedIndicator();
 });
+applicationProxyProtocol.addEventListener('change', () => {
+  applicationProxyDraftEdited = true;
+  syncApplicationProxyInteractivity();
+  updateSettingsUnsavedIndicator();
+});
+for (const control of [
+  applicationProxyHost,
+  applicationProxyPort,
+  applicationProxyUsername,
+  applicationProxyPassword,
+]) {
+  control.addEventListener('input', () => {
+    applicationProxyDraftEdited = true;
+    syncApplicationProxyInteractivity();
+    updateSettingsUnsavedIndicator();
+  });
+}
+for (const control of [
+  applicationProxyScopeCli,
+  applicationProxyScopeApplication,
+  applicationProxyScopeConversation,
+]) {
+  control.addEventListener('change', () => {
+    applicationProxyDraftEdited = true;
+    syncApplicationProxyInteractivity();
+    updateSettingsUnsavedIndicator();
+  });
+}
 applicationProxySave.addEventListener('click', () => {
-  const port = Number.parseInt(applicationProxyPort.value, 10);
-  applicationProxySave.disabled = true;
-  void window.controlPanel
-    .saveApplicationProxy({
-      enabled: applicationProxyEnabled.checked,
-      host: applicationProxyHost.value,
-      password: applicationProxyPassword.value || undefined,
-      port: Number.isInteger(port) ? port : undefined,
-      protocol: applicationProxyProtocol.value === 'socks5' ? 'socks5' : 'http',
-      scope: {
-        application: applicationProxyScopeApplication.checked,
-        cli: applicationProxyScopeCli.checked,
-        conversation: applicationProxyScopeConversation.checked,
-      },
-      username: applicationProxyUsername.value,
-    })
-    .then((state) => {
-      renderApplicationProxyState(state);
-      void window.controlPanel.invalidateNetworkPreflight('application-proxy-change');
-      void runActiveNetworkPreflight(true);
-      showToast('应用代理设置已保存');
+  void savePendingApplicationProxy()
+    .then((saved) => {
+      if (saved) showToast('应用代理设置已保存');
     })
     .catch((error: unknown) => {
       showToast(error instanceof Error ? error.message : '无法保存应用代理设置。', 'error');
-    })
-    .finally(() => {
-      applicationProxySave.disabled = false;
     });
 });
 applicationProxyDetect.addEventListener('click', () => {
@@ -9571,7 +11619,8 @@ applicationProxyDetect.addEventListener('click', () => {
     });
 });
 applicationProxyTest.addEventListener('click', () => {
-  applicationProxyTest.disabled = true;
+  applicationProxyTestInProgress = true;
+  syncApplicationProxyInteractivity();
   applicationProxyTest.textContent = '正在测试…';
   void window.controlPanel
     .testApplicationProxy()
@@ -9583,8 +11632,9 @@ applicationProxyTest.addEventListener('click', () => {
       showToast(error instanceof Error ? error.message : '应用代理测试失败。', 'error');
     })
     .finally(() => {
+      applicationProxyTestInProgress = false;
       applicationProxyTest.textContent = '测试 GitHub 连接';
-      applicationProxyTest.disabled = false;
+      syncApplicationProxyInteractivity();
     });
 });
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')) {
@@ -9612,7 +11662,6 @@ routerWizardProvider.addEventListener('change', () => {
   routerWizardModel.value = '';
   syncRouterWizard();
 });
-routerWizardUseRoute.addEventListener('change', syncRouterWizard);
 routerWizardForm.addEventListener('submit', (event) => {
   event.preventDefault();
   void runRouterWizard();
@@ -9697,12 +11746,6 @@ openChatSettingsButton.addEventListener('click', () => {
 });
 closeChatSettingsButton.addEventListener('click', () => {
   chatSettingsDialog.close('cancel');
-});
-chatSettingsDialog.addEventListener('click', (event) => {
-  // A click that lands on the dialog element itself (not its form) is a click on the backdrop area.
-  if (event.target === chatSettingsDialog) {
-    chatSettingsDialog.close('cancel');
-  }
 });
 chatSettingsDialog.addEventListener('close', () => {
   chatCredential.value = '';
@@ -9809,6 +11852,19 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     setArtifactDetailsOpen(false);
   }
+  if (event.key === 'Escape' && footerSecondaryStatus.dataset.open === 'true') {
+    event.preventDefault();
+    setFooterSecondaryOpen(false);
+    footerMore.focus();
+  }
+  if (event.key === 'Escape' && previewRailTab !== undefined) {
+    event.preventDefault();
+    const trigger = activityRail.querySelector<HTMLButtonElement>(
+      `[data-rail-tab="${previewRailTab}"]`,
+    );
+    closeRailPreview();
+    trigger?.focus();
+  }
 });
 artifactNetworkAllowed.addEventListener('change', () => {
   artifactNetworkAllowed.disabled = true;
@@ -9873,9 +11929,97 @@ networkPreflightClearHistory.addEventListener('click', () => {
       networkPreflightClearHistory.disabled = false;
     });
 });
+footerResource.addEventListener('click', () => {
+  if (footerResourceMenu.hidden) {
+    openFooterMenu(footerResourceMenu, footerResource);
+  } else {
+    hideFooterMenus();
+  }
+});
+runtimeActivityTrigger.addEventListener('click', () => {
+  const opening = runtimeActivityPanel.hidden;
+  runtimeActivityPanel.hidden = !opening;
+  runtimeActivityTrigger.setAttribute('aria-expanded', String(opening));
+  if (opening) runtimeActivityClose.focus({ preventScroll: true });
+});
+runtimeActivityClose.addEventListener('click', () => {
+  runtimeActivityPanel.hidden = true;
+  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  runtimeActivityTrigger.focus({ preventScroll: true });
+});
+claudePermissionFallback.addEventListener('click', () => {
+  void respondToClaudePermission({ behavior: 'fallback' });
+});
+claudePermissionDeny.addEventListener('click', () => {
+  const message = claudePermissionDenyReason.value.trim();
+  void respondToClaudePermission({
+    behavior: 'deny',
+    ...(message ? { message } : {}),
+  });
+});
+claudePermissionAllow.addEventListener('click', () => {
+  const selected = claudePermissionSuggestions.querySelector<HTMLInputElement>(
+    'input[name="claude-permission-suggestion"]:checked',
+  );
+  void respondToClaudePermission({
+    behavior: 'allow',
+    ...(selected?.value ? { suggestionId: selected.value } : {}),
+  });
+});
+claudePermissionDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  void respondToClaudePermission({ behavior: 'fallback' });
+});
+footerMore.addEventListener('click', () => {
+  setFooterSecondaryOpen(footerSecondaryStatus.dataset.open !== 'true');
+});
+footerResourceMenu.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    '[data-resource-preference], [data-context-window-mode]',
+  );
+  const contextWindowMode = button?.dataset.contextWindowMode as
+    ManagedChatGptContextWindowMode | undefined;
+  if (contextWindowMode) {
+    void window.controlPanel
+      .setManagedChatGptContextWindowMode(contextWindowMode)
+      .then((settings) => {
+        managedChatGptContextWindowMode = settings.managedChatGptContextWindowMode;
+        syncManagedChatGptContextWindowSelection();
+        hideFooterMenus();
+        showToast('上下文窗口选择已保存；下次新建或重启托管 ChatGPT 会话生效。');
+      })
+      .catch(() => showToast('无法保存 ChatGPT 上下文窗口选择。', 'error'));
+    return;
+  }
+  const preference = button?.dataset.resourcePreference as FooterResourcePreference | undefined;
+  if (!preference) return;
+  void window.controlPanel
+    .setFooterResourcePreference(preference)
+    .then((settings) => {
+      footerResourcePreference = settings.footerResourcePreference;
+      const status = activeStatus();
+      const codexSelected = activeDevelopmentRuntime() === 'codex';
+      const claudeState = status && !codexSelected ? claudeStates.get(status.id) : undefined;
+      const usage = status
+        ? codexSelected
+          ? codexStates.get(status.id)?.resourceUsage
+          : claudeState?.resourceUsage
+        : undefined;
+      renderFooterResource(usage, managedContextWindowSelectable(claudeState));
+      hideFooterMenus();
+    })
+    .catch(() => showToast('无法保存底栏资源偏好。', 'error'));
+});
 footerModel.addEventListener('click', () => {
   if (footerModelMenu.hidden) {
     void openModelMenu();
+  } else {
+    hideFooterMenus();
+  }
+});
+footerSpeed.addEventListener('click', () => {
+  if (footerSpeedMenu.hidden) {
+    openSpeedMenu();
   } else {
     hideFooterMenus();
   }
@@ -9965,7 +12109,7 @@ codexCancelLogin.addEventListener('click', () => {
       codexOperationInProgress = false;
       const latest = codexStates.get(status.id);
       if (latest) {
-        renderCodexState(latest);
+        renderCodexState(latest, false);
       }
     });
 });
@@ -9999,7 +12143,7 @@ codexLogout.addEventListener('click', () => {
         codexOperationInProgress = false;
         const latest = codexStates.get(status.id);
         if (latest) {
-          renderCodexState(latest);
+          renderCodexState(latest, false);
         }
       });
   });
@@ -10038,7 +12182,10 @@ claudeBaseUrl.addEventListener('blur', () => {
   completeVisibleConnectionEndpoint(true);
 });
 claudeAuthMode.addEventListener('change', () => {
-  credentialField.hidden = claudeAuthMode.value === 'existing' || claudeAuthMode.value === 'none';
+  credentialField.hidden =
+    selectedProviderId === 'chatgpt-subscription' ||
+    claudeAuthMode.value === 'existing' ||
+    claudeAuthMode.value === 'none';
   connectionTestResult.hidden = true;
   connectionRemedy.hidden = true;
   syncApiKeyHelperPolicyUi();
@@ -10077,19 +12224,14 @@ refreshGatewaysButton.addEventListener('click', () => {
   });
 });
 installRouterButton.addEventListener('click', () => {
-  routerPurgeCompleted = false;
   void runRouterOperation(
-    (sessionId) =>
-      window.controlPanel.installClaudeRouterFromSource(
-        sessionId,
-        routerInstallSource.value as 'github' | 'npm' | 'npmmirror',
-      ),
-    routerInstallSource.value === 'github' ? '正在下载并校验…' : '正在安装…',
+    (sessionId) => window.controlPanel.installClaudeRouterFromSource(sessionId, 'npm'),
+    '正在安装…',
     installRouterButton,
   );
 });
 uninstallRouterButton.addEventListener('click', () => {
-  void purgeRouter(uninstallRouterButton);
+  void uninstallRouterCli(uninstallRouterButton);
 });
 installUpdateClaudeButton.addEventListener('click', () => {
   void runClaudeInstallUpdate();
@@ -10221,44 +12363,59 @@ for (const field of [claudeBaseUrl, claudeModel, claudeModelFast, claudeCredenti
     connectionRemedy.hidden = true;
   });
 }
-for (const button of document.querySelectorAll<HTMLButtonElement>('[data-claude-command]')) {
-  button.addEventListener('click', async () => {
-    const status = activeStatus();
-    const command = button.dataset.claudeCommand;
-    if (!status || !command) {
-      return;
-    }
-    if (
-      command === '/clear' &&
-      !(await requestConfirmation({
-        confirmLabel: '开启新会话',
-        message: '/clear 会结束当前上下文并开启新会话，是否继续？',
-        title: '清空当前上下文',
-        tone: 'danger',
-      }))
-    ) {
-      return;
-    }
-    const argument = button.dataset.usesArgument
-      ? commandArgument.value
-      : button.dataset.defaultArgument;
-    const result = await window.controlPanel.runClaudeCommand(status.id, command, argument);
-    renderClaudeState(result.state);
-    if (!result.ok) {
-      showToast(result.error ?? '无法执行 Claude 命令。', 'error');
-      return;
-    }
-    showToast(`已执行 ${command}`);
-    focusComposer();
-  });
-}
+const composeWorkbenchCommand = async (button: HTMLButtonElement): Promise<void> => {
+  const command = button.dataset.commandValue;
+  if (!command) return;
+  if (
+    button.dataset.commandRisk === 'destructive' &&
+    !(await requestConfirmation({
+      confirmLabel: '填入命令',
+      message: `${command} 可能结束、删除或清空当前状态。ClaudeDock 只会填入输入框，不会自动发送。`,
+      title: '确认高风险命令',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+  composerInput.value = `${command}${button.title.includes('[参数]') ? ' ' : ''}`;
+  resizeComposer();
+  composerInput.focus();
+  composerInput.setSelectionRange(composerInput.value.length, composerInput.value.length);
+  setWorkbenchOpen(false);
+  showToast(`已填入 ${command}，确认后按 Enter 发送`);
+};
+
+claudeCommandGrid.addEventListener('click', async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command-value]');
+  const status = activeStatus();
+  if (!button || !status) return;
+  if (button.dataset.commandAction !== 'run') {
+    await composeWorkbenchCommand(button);
+    return;
+  }
+  const command = button.dataset.claudeCommand;
+  if (!command) return;
+  const argument = button.dataset.usesArgument === 'true' ? commandArgument.value : undefined;
+  const result = await window.controlPanel.runClaudeCommand(status.id, command, argument);
+  renderClaudeState(result.state);
+  if (!result.ok) {
+    showToast(result.error ?? '无法执行 Claude 命令。', 'error');
+    return;
+  }
+  showToast(`已执行 ${command}`);
+  focusComposer();
+});
+
+codexCommandGrid.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-command-value]');
+  if (button) void composeWorkbenchCommand(button);
+});
 restartButton.addEventListener('click', async () => {
   const status = activeStatus();
   if (!status) {
     return;
   }
-  const result = await window.controlPanel.restartTerminal(status.id);
-  terminalViews.get(status.id)?.terminal.clear();
+  const result = await window.controlPanel.restartTerminal(status.id, status.ptyGeneration);
   if (handleOperation(result, result.ok ? '终端已重启' : undefined)) {
     retryTerminalFitUntilMeasured();
     requestComposerFocus(status.id);
@@ -10271,9 +12428,12 @@ toggleButton.addEventListener('click', async () => {
   }
 
   if (status.phase === 'running') {
-    handleOperation(await window.controlPanel.stopTerminal(status.id), '终端已停止');
+    handleOperation(
+      await window.controlPanel.stopTerminal(status.id, status.ptyGeneration),
+      '终端已停止',
+    );
   } else {
-    const result = await window.controlPanel.startTerminal(status.id);
+    const result = await window.controlPanel.startTerminal(status.id, status.ptyGeneration);
     if (handleOperation(result, '终端已启动')) {
       retryTerminalFitUntilMeasured();
       requestComposerFocus(status.id);
@@ -10403,14 +12563,32 @@ document.addEventListener('pointerdown', (event) => {
     hideHistoryContextMenu();
   }
   if (
+    !footerResourceMenu.contains(event.target as Node) &&
     !footerModelMenu.contains(event.target as Node) &&
+    !footerSpeedMenu.contains(event.target as Node) &&
     !footerModeMenu.contains(event.target as Node) &&
     !footerEffortMenu.contains(event.target as Node) &&
+    !footerResource.contains(event.target as Node) &&
     !footerModel.contains(event.target as Node) &&
+    !footerSpeed.contains(event.target as Node) &&
     !footerMode.contains(event.target as Node) &&
     !footerEffort.contains(event.target as Node)
   ) {
     hideFooterMenus();
+  }
+  if (
+    !footerSecondaryStatus.contains(event.target as Node) &&
+    !footerMore.contains(event.target as Node)
+  ) {
+    setFooterSecondaryOpen(false);
+  }
+  if (
+    !runtimeActivityPanel.hidden &&
+    !runtimeActivityPanel.contains(event.target as Node) &&
+    !runtimeActivityTrigger.contains(event.target as Node)
+  ) {
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
   }
 });
 window.addEventListener('blur', () => {
@@ -10419,6 +12597,14 @@ window.addEventListener('blur', () => {
   hideConversationContextMenu();
   hideHistoryContextMenu();
   hideFooterMenus();
+  setFooterSecondaryOpen(false);
+  runtimeActivityPanel.hidden = true;
+  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  closeRailPreview();
+});
+window.addEventListener('resize', () => {
+  setFooterSecondaryOpen(false);
+  closeRailPreview();
 });
 
 let workspaceActivationSyncInProgress = false;
@@ -10548,12 +12734,18 @@ const resizeObserver = new ResizeObserver(([entry]) => {
 resizeObserver.observe(terminalStage);
 
 window.addEventListener('beforeunload', () => {
+  railPreviewDialogObserver.disconnect();
   unsubscribeAppQuitRequested();
   unsubscribeAppWindowRestored();
   unsubscribeDownloadsChanged();
+  unsubscribeBusyChanged();
   unsubscribeApplicationUpdaterChanged();
   unsubscribeOpenDownloadCenterRequested();
   unsubscribeApplicationProxyChanged();
+  unsubscribeManagedChatGptSetupProgress();
+  unsubscribeRouterOperationProgress();
+  unsubscribeRuntimeActivityChanged();
+  unsubscribeClaudePermissionRequest();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
   networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
@@ -10569,13 +12761,11 @@ window.addEventListener('beforeunload', () => {
   if (gatewayRefreshTimer !== undefined) {
     window.clearInterval(gatewayRefreshTimer);
   }
-  for (const [sessionId, view] of terminalViews) {
-    if (view.pendingFrame !== 0) {
-      cancelAnimationFrame(view.pendingFrame);
-    }
-    rejectPermissionModeProbes(sessionId, view);
-    terminalMasks.get(sessionId)?.overlay.remove();
-    view.terminal.dispose();
+  if (claudePermissionExpiryTimer !== undefined) {
+    window.clearTimeout(claudePermissionExpiryTimer);
+  }
+  for (const [sessionId, view] of [...terminalViews]) {
+    disposeTerminalView(sessionId, view);
   }
   terminalMasks.clear();
 });
@@ -10585,6 +12775,12 @@ void (async () => {
     handleDownloadsChanged(await window.controlPanel.listDownloads());
   } catch {
     handleDownloadsChanged([]);
+  }
+  try {
+    busyLeases = await window.controlPanel.listBusyLeases();
+    renderDownloadCenter();
+  } catch {
+    busyLeases = [];
   }
   void loadApplicationProxyState();
   try {
@@ -10597,6 +12793,8 @@ void (async () => {
         ? reportedWindowsBuild
         : undefined;
     artifactNetworkState.allowed = initialSettings.artifactNetworkAllowed ?? true;
+    footerResourcePreference = initialSettings.footerResourcePreference;
+    managedChatGptContextWindowMode = initialSettings.managedChatGptContextWindowMode;
     settingsCloseBehavior.value = initialSettings.closeBehavior;
     renderArtifactNetworkLog();
     if (initialSettings.theme !== activeTerminalTheme) {
@@ -10606,6 +12804,7 @@ void (async () => {
     // The terminal still works without Windows-specific reflow hints; settings can be retried later.
   }
   renderWorkspace(await window.controlPanel.getWorkspace());
+  void loadActiveRuntimeActivity();
   window.setTimeout(() => {
     void runActiveNetworkPreflight(false);
   }, 0);
@@ -10622,7 +12821,7 @@ void (async () => {
   }
 
   if (status.phase !== 'running' && status.phase !== 'starting') {
-    handleOperation(await window.controlPanel.startTerminal(status.id));
+    handleOperation(await window.controlPanel.startTerminal(status.id, status.ptyGeneration));
   }
   void loadConnectionHistory();
   retryTerminalFitUntilMeasured();

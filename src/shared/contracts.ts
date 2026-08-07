@@ -23,7 +23,11 @@ export interface BusyLease {
 export interface AppQuitRequest {
   hasBlocking: boolean;
   leases: BusyLease[];
+  /** Cleanup could not prove that every verified PTY descendant stopped; only retry/force are safe. */
+  runtimeCleanupFailed?: boolean;
 }
+
+export type AppQuitDecision = boolean | 'retry';
 export type DownloadTaskState =
   'cancelled' | 'completed' | 'failed' | 'paused' | 'progressing' | 'queued' | 'verifying';
 export interface DownloadTaskView {
@@ -32,11 +36,13 @@ export interface DownloadTaskView {
   canResume: boolean;
   elapsedMs: number;
   errorMessage?: string;
+  finishedAt?: number;
   id: string;
   label: string;
   percent: number;
   receivedBytes: number;
   remainingMs: number;
+  startedAt?: number;
   state: DownloadTaskState;
   totalBytes: number;
 }
@@ -123,7 +129,8 @@ export type GatewayCandidateKind = 'claude-code-router' | 'cliproxyapi' | 'custo
 export type GatewayCandidateStatus = 'offline' | 'partial' | 'ready';
 export type ClaudeRouterGatewayState = 'error' | 'running' | 'starting' | 'stopped' | 'unknown';
 export type ClaudeRouterInstallationKind = 'desktop' | 'mixed' | 'npm' | 'unknown';
-export type ClaudeRouterInstallSource = 'github' | 'npm' | 'npmmirror';
+/** ClaudeDock only manages the CCR command-line package; desktop installers are out of scope. */
+export type ClaudeRouterInstallSource = 'npm' | 'npmmirror';
 export type ClaudeCodeInstallationKind = 'native' | 'npm' | 'unknown';
 export type ClaudeRouterProviderProtocol =
   'anthropic_messages' | 'openai_chat_completions' | 'openai_responses';
@@ -163,6 +170,7 @@ export type NetworkProcessKind =
 export interface NetworkPathView {
   detail: string;
   dnsServers: string[];
+  globalIpv6Available: boolean;
   ipv4Available: boolean;
   ipv6Available: boolean;
   process: NetworkProcessKind;
@@ -418,10 +426,29 @@ export interface AdvancedSettings {
   webResearchIsolation: boolean;
 }
 
+export type FooterResourcePreference = 'auto' | 'context' | 'quota';
+export type ManagedChatGptContextWindowMode = 'extended' | 'standard';
+export type ModelSpeedMode = 'fast' | 'standard';
+export type ModelSpeedMechanism = 'claude-native-fast' | 'gpt-service-tier' | 'none';
+export type ModelSpeedAvailability = 'available' | 'unsupported' | 'unverified' | 'update-required';
+export type ModelSpeedStatus = 'active' | 'not-active' | 'requested' | 'standard';
+
+export interface ModelSpeedState {
+  availability: ModelSpeedAvailability;
+  canSelectFast: boolean;
+  detail: string;
+  mechanism: ModelSpeedMechanism;
+  model: string;
+  preference: ModelSpeedMode;
+  status: ModelSpeedStatus;
+}
+
 export interface AppSettingsView {
   advanced: AdvancedSettings;
   artifactNetworkAllowed?: boolean;
   closeBehavior: CloseBehavior;
+  footerResourcePreference: FooterResourcePreference;
+  managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
   language: 'zh-CN';
   launchAtLogin: boolean;
   theme: TerminalThemeId;
@@ -538,6 +565,54 @@ export interface CodexRateLimitsView {
   secondary?: CodexRateLimitWindow;
 }
 
+export type ResourceAvailability = 'available' | 'stale' | 'unavailable';
+export type ResourceUsageSource =
+  | 'claude-statusline'
+  | 'codex-app-server'
+  | 'deepseek-balance'
+  | 'openrouter-key'
+  | 'managed-chatgpt-gateway';
+
+export interface ResourceCapabilities {
+  balance: boolean;
+  context: boolean;
+  windows: boolean;
+}
+
+export interface ResourceWindow {
+  label: string;
+  resetsAt?: number;
+  usedPercent?: number;
+  windowDurationMins?: number;
+}
+
+export interface ResourceBalanceEntry {
+  amount: number;
+  currency: string;
+}
+
+export interface ResourceBalance {
+  balances?: ResourceBalanceEntry[];
+  limit?: number;
+  unlimited?: boolean;
+  used?: number;
+}
+
+export interface ResourceUsageView {
+  availability: ResourceAvailability;
+  autoCompactAtTokens?: number;
+  balance?: ResourceBalance;
+  capabilities: ResourceCapabilities;
+  checkedAt: number;
+  contextUsedPercent?: number;
+  contextUsedTokens?: number;
+  contextWindowTokens?: number;
+  detail?: string;
+  source: ResourceUsageSource;
+  staleAt?: number;
+  windows?: ResourceWindow[];
+}
+
 export interface CodexLoginView {
   error?: string;
   loginId?: string;
@@ -555,6 +630,7 @@ export interface CodexProjectState {
   login: CodexLoginView;
   operationMessage?: string;
   rateLimits?: CodexRateLimitsView;
+  resourceUsage?: ResourceUsageView;
   requiresOpenaiAuth: boolean;
   sessionId: string;
   warning?: string;
@@ -576,6 +652,8 @@ export interface ClaudeMetrics {
   contextWindowUsed?: number;
   /** Live `effort.level` from the status line; absent when the model has no effort parameter. */
   effortLevel?: ClaudeEffortLevel;
+  /** Native Claude Code serving-speed state; unrelated to the alternate small-model route. */
+  fastMode?: boolean;
   inputTokens?: number;
   linesAdded?: number;
   linesRemoved?: number;
@@ -583,7 +661,9 @@ export interface ClaudeMetrics {
   modelId?: string;
   outputTokens?: number;
   rateLimitFiveHour?: number;
+  rateLimitFiveHourResetsAt?: number;
   rateLimitSevenDay?: number;
+  rateLimitSevenDayResetsAt?: number;
   sessionCostUsd?: number;
   sessionDurationMs?: number;
   sessionId?: string;
@@ -618,10 +698,18 @@ export interface ClaudeProjectState {
   modelMatches?: boolean;
   /** Parsed from the live Claude Code badge; absent until the badge has been seen once. */
   permissionMode?: ClaudePermissionMode;
+  /** Last mode requested through ClaudeDock; the live badge remains the applied truth. */
+  permissionModeRequest?: ClaudePermissionMode;
   /** Modes actually observed in this session, in the order Shift+Tab visited them. */
   permissionModeCycle?: ClaudePermissionMode[];
+  /** Exact PowerShell/ConPTY generation that owns the active runtime; absent while inactive/unbound. */
+  ptyGeneration?: PtyGeneration;
+  resourceUsage?: ResourceUsageView;
   routeHealth?: ClaudeRouteHealth;
   sessionId: string;
+  /** Monotonic request order used to reject delayed state reads from an older runtime snapshot. */
+  stateRevision: number;
+  speed: ModelSpeedState;
   warning?: string;
 }
 
@@ -670,6 +758,9 @@ export interface ClaudeModelOption {
   label: string;
   model: string;
   providerLabel: string;
+  /** A different connection or serving-speed profile is baked into the PTY and needs a relaunch. */
+  requiresRelaunch: boolean;
+  relaunchReason?: 'connection' | 'speed-profile';
   sameEndpoint: boolean;
 }
 
@@ -719,6 +810,69 @@ export interface ClaudeGatewayDiagnostics {
   message: string;
 }
 
+export type ManagedChatGptGatewayPhase =
+  'installing' | 'login-required' | 'not-installed' | 'ready' | 'stopped';
+
+/**
+ * Public state for the ClaudeDock-owned CLIProxyAPI sidecar. OAuth files and the generated local
+ * access key never cross the main/renderer boundary.
+ */
+export interface ManagedChatGptGatewayState {
+  availableModels: string[];
+  authenticated: boolean;
+  busy: boolean;
+  checkedAt: number;
+  endpoint: string;
+  installed: boolean;
+  managementAvailable: boolean;
+  message: string;
+  phase: ManagedChatGptGatewayPhase;
+  running: boolean;
+  usageStatisticsEnabled: false;
+  version?: string;
+}
+
+export interface ManagedChatGptGatewayOperationResult {
+  connectionTest?: ClaudeConnectionTestResult;
+  error?: string;
+  message: string;
+  ok: boolean;
+  projectState?: ClaudeProjectState;
+  state: ManagedChatGptGatewayState;
+}
+
+export type ManagedChatGptSetupStage =
+  | 'complete'
+  | 'detecting'
+  | 'discovering-models'
+  | 'error'
+  | 'installing-claude'
+  | 'installing-gateway'
+  | 'logging-in'
+  | 'saving'
+  | 'testing';
+
+export interface ManagedChatGptSetupProgress {
+  active: boolean;
+  detail: string;
+  sessionId: string;
+  stage: ManagedChatGptSetupStage;
+  step: number;
+  totalSteps: number;
+}
+
+export interface ClaudeProviderModelDiscoveryInput {
+  baseUrl: string;
+  credential?: string;
+}
+
+export interface ClaudeProviderModelDiscoveryResult {
+  error?: string;
+  message: string;
+  models: string[];
+  ok: boolean;
+}
+
 export interface ClaudeRouterProviderView {
   baseUrl: string;
   credentialConfigured: boolean;
@@ -743,6 +897,31 @@ export interface ClaudeRouterManagementState {
   runtimeMismatch?: boolean;
   serviceRunning: boolean;
   version?: string;
+}
+
+export type RouterOperationKind = 'configure' | 'install' | 'recover' | 'start' | 'stop';
+
+export type RouterOperationStage =
+  | 'checking'
+  | 'complete'
+  | 'configuring'
+  | 'downloading'
+  | 'error'
+  | 'installing'
+  | 'recovering'
+  | 'starting'
+  | 'stopping'
+  | 'verifying';
+
+/** A secret-free, main-process-authored snapshot of a long-running router operation. */
+export interface RouterOperationProgress {
+  active: boolean;
+  detail: string;
+  operation: RouterOperationKind;
+  stage: RouterOperationStage;
+  step: number;
+  totalSteps: number;
+  updatedAt: number;
 }
 
 export type RouterKernelId = 'cc-switch' | 'ccr' | 'none';
@@ -795,12 +974,15 @@ export interface ClaudeRouterOperationResult {
   routerState: ClaudeRouterManagementState;
 }
 
+export type PtyGeneration = number;
+
 export interface TerminalStatus {
   cwd: string;
   id: string;
   message?: string;
   phase: TerminalPhase;
   pid?: number;
+  ptyGeneration: PtyGeneration;
   shell: string;
   title: string;
 }
@@ -1026,16 +1208,83 @@ export interface ClaudeConnectionAdvice {
 
 export interface OperationResult {
   error?: string;
+  message?: string;
   ok: boolean;
   /** Absent when the workspace has no conversation to report on — e.g. before a project is opened. */
   status?: TerminalStatus;
 }
+
+export type RuntimeActivityPhase =
+  'stopped' | 'cli-idle' | 'foreground-running' | 'waiting-background' | 'resuming' | 'failed';
+export type RuntimeTaskKind =
+  'subagent' | 'shell' | 'monitor' | 'workflow' | 'teammate' | 'mcp' | 'cron' | 'web';
+export type RuntimeTaskStatus =
+  'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'orphaned';
+export type RuntimeTriState = boolean | 'unknown';
+
+export interface RuntimeTaskView {
+  agentType?: string;
+  description: string;
+  id: string;
+  kind: RuntimeTaskKind;
+  status: RuntimeTaskStatus;
+  tokenUse: 'likely' | 'none' | 'unknown';
+  updatedAt: number;
+  willWakeParent: RuntimeTriState;
+}
+
+export interface RuntimeWebProcessView {
+  commandSummary: string;
+  exposureWarning?: string;
+  name: string;
+  pid: number;
+  ports: number[];
+  processKey: string;
+  startedAt: number;
+  status: 'running' | 'stopping';
+  urls: Array<{ confirmed: boolean; url: string }>;
+}
+
+export interface RuntimeActivitySnapshot {
+  launchGeneration: number;
+  observedAt: number;
+  phase: RuntimeActivityPhase;
+  ptyGeneration: PtyGeneration;
+  sessionId: string;
+  subagentCount: number;
+  tasks: RuntimeTaskView[];
+  webProcesses: RuntimeWebProcessView[];
+  willResumeConversation: RuntimeTriState;
+}
+
+export interface ClaudePermissionSuggestionView {
+  id: string;
+  label: string;
+}
+
+export interface ClaudePermissionRequestView {
+  description: string;
+  expiresAt: number;
+  requestId: string;
+  sessionId: string;
+  suggestions: ClaudePermissionSuggestionView[];
+  toolName: string;
+}
+
+export type ClaudePermissionDecision =
+  | { behavior: 'allow'; suggestionId?: string }
+  | { behavior: 'deny'; message?: string }
+  | { behavior: 'fallback' };
 
 export interface WorkspaceResult {
   error?: string;
   ok: boolean;
   reused?: boolean;
   state: WorkspaceState;
+}
+
+export interface ClaudeSessionDeleteResult extends WorkspaceResult {
+  deleted: boolean;
 }
 
 export type DirectoryChoiceResult =
@@ -1053,12 +1302,31 @@ export type Unsubscribe = () => void;
 export interface ControlPanelApi {
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
+  setFooterResourcePreference: (preference: FooterResourcePreference) => Promise<AppSettingsView>;
+  setManagedChatGptContextWindowMode: (
+    mode: ManagedChatGptContextWindowMode,
+  ) => Promise<AppSettingsView>;
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   setCloseBehavior: (behavior: CloseBehavior) => Promise<AppSettingsView>;
   listBusyLeases: () => Promise<BusyLease[]>;
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
   setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;
+  getRuntimeActivity: (sessionId: string) => Promise<RuntimeActivitySnapshot>;
+  onRuntimeActivityChanged: (listener: (state: RuntimeActivitySnapshot) => void) => Unsubscribe;
+  onClaudePermissionRequest: (
+    listener: (request: ClaudePermissionRequestView) => void,
+  ) => Unsubscribe;
+  respondClaudePermission: (
+    requestId: string,
+    decision: ClaudePermissionDecision,
+  ) => Promise<boolean>;
+  terminateRuntimeProcess: (
+    sessionId: string,
+    processKey: string,
+  ) => Promise<RuntimeActivitySnapshot>;
   cancelDownload: (taskId: string) => Promise<DownloadTaskView>;
+  clearDownloadHistory: () => Promise<DownloadTaskView[]>;
+  deleteDownloadHistory: (taskId: string) => Promise<DownloadTaskView[]>;
   listDownloads: () => Promise<DownloadTaskView[]>;
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
   pauseDownload: (taskId: string) => Promise<DownloadTaskView>;
@@ -1141,17 +1409,24 @@ export interface ControlPanelApi {
     sessionId: string,
     effort: ClaudeEffortRequest,
   ) => Promise<ClaudeOperationResult>;
+  /** Persists a per-model serving-speed preference and relaunches the exact live conversation if needed. */
+  setClaudeModelSpeed: (sessionId: string, mode: ModelSpeedMode) => Promise<ClaudeOperationResult>;
   /** Reports the complete mode badge after xterm has applied PTY screen-delta output. */
-  observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => void;
+  observeClaudePermissionMode: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    mode: ClaudePermissionMode,
+  ) => void;
   /** Answers a main-process probe with the mode currently visible in xterm's complete screen. */
   reportClaudePermissionModeProbe: (
     sessionId: string,
+    ptyGeneration: PtyGeneration,
     probeId: number,
     mode?: ClaudePermissionMode,
   ) => void;
   /** Receives an on-demand request to read the current xterm screen, even if no new PTY data arrived. */
   onClaudePermissionModeProbe: (
-    listener: (sessionId: string, probeId: number) => void,
+    listener: (sessionId: string, ptyGeneration: PtyGeneration, probeId: number) => void,
   ) => Unsubscribe;
   setClaudeAllowBypassPermissions: (
     sessionId: string,
@@ -1195,6 +1470,23 @@ export interface ControlPanelApi {
   ) => Promise<ClaudeRouterOperationResult>;
   uninstallClaudeRouter: (sessionId: string) => Promise<ClaudeRouterOperationResult>;
   getRouterKernelState: (sessionId: string) => Promise<RouterKernelState>;
+  getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
+  openManagedChatGptGatewayManagement: () => Promise<OperationResult>;
+  onManagedChatGptSetupProgress: (
+    listener: (progress: ManagedChatGptSetupProgress) => void,
+  ) => Unsubscribe;
+  onRouterOperationProgress: (listener: (progress: RouterOperationProgress) => void) => Unsubscribe;
+  discoverClaudeProviderModels: (
+    input: ClaudeProviderModelDiscoveryInput,
+  ) => Promise<ClaudeProviderModelDiscoveryResult>;
+  setManagedChatGptGatewayModel: (
+    sessionId: string,
+    model: string,
+  ) => Promise<ManagedChatGptGatewayOperationResult>;
+  setupManagedChatGptGateway: (
+    sessionId: string,
+    forceLogin?: boolean,
+  ) => Promise<ManagedChatGptGatewayOperationResult>;
   installCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
   uninstallCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
   exportCurrentProviderToCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;
@@ -1206,22 +1498,32 @@ export interface ControlPanelApi {
    * through `confirmQuit`, including the cancelling answer — the quit stays blocked until it does.
    */
   onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;
-  confirmQuit: (confirmed: boolean) => void;
+  confirmQuit: (decision: AppQuitDecision) => void;
   minimizeToTray: () => void;
   onOpenDownloadCenterRequested: (listener: () => void) => Unsubscribe;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
-  onTerminalData: (listener: (sessionId: string, data: string) => void) => Unsubscribe;
+  onTerminalData: (
+    listener: (sessionId: string, ptyGeneration: PtyGeneration, data: string) => void,
+  ) => Unsubscribe;
   /**
    * The size the PTY actually adopted after clamping. xterm must follow it: PSReadLine repaints
    * with absolute cursor moves, so a size disagreement leaves the previous screen on top.
    */
   onTerminalSize: (
-    listener: (sessionId: string, cols: number, rows: number) => void,
+    listener: (sessionId: string, ptyGeneration: PtyGeneration, cols: number, rows: number) => void,
   ) => Unsubscribe;
   onWorkspaceState: (listener: (state: WorkspaceState) => void) => Unsubscribe;
-  resizeTerminal: (sessionId: string, cols: number, rows: number) => void;
-  restartTerminal: (sessionId: string) => Promise<OperationResult>;
+  resizeTerminal: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    cols: number,
+    rows: number,
+  ) => void;
+  restartTerminal: (
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+  ) => Promise<OperationResult>;
   runClaudeCommand: (
     sessionId: string,
     command: string,
@@ -1243,9 +1545,9 @@ export interface ControlPanelApi {
     input: SaveClaudeConfigInput,
   ) => Promise<ClaudeConnectionTestResult>;
   openExternal: (url: string) => Promise<boolean>;
-  startTerminal: (sessionId: string) => Promise<OperationResult>;
-  stopTerminal: (sessionId: string) => Promise<OperationResult>;
-  writeTerminal: (sessionId: string, data: string) => void;
+  startTerminal: (sessionId: string, expectedGeneration: PtyGeneration) => Promise<OperationResult>;
+  stopTerminal: (sessionId: string, expectedGeneration: PtyGeneration) => Promise<OperationResult>;
+  writeTerminal: (sessionId: string, ptyGeneration: PtyGeneration, data: string) => void;
   getStoredProjects: () => Promise<WorkspaceProject[]>;
   removeStoredProject: (projectPath: string) => Promise<void>;
   /** Repaints the native frame and remembers the choice for the next cold start. */
@@ -1257,7 +1559,10 @@ export interface ControlPanelApi {
     conversationId: string,
     title: string,
   ) => Promise<boolean>;
-  deleteClaudeSession: (projectPath: string, conversationId: string) => Promise<boolean>;
+  deleteClaudeSession: (
+    projectPath: string,
+    conversationId: string,
+  ) => Promise<ClaudeSessionDeleteResult>;
   launchClaudeWithSession: (
     sessionId: string,
     conversationId: string,

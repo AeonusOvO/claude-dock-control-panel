@@ -21,9 +21,19 @@ const createStore = (): AppPreferencesStore => {
 describe('app preferences store', () => {
   it('defaults to tray and persists the one-time notice', () => {
     const store = createStore();
-    expect(store.get()).toEqual({ closeBehavior: 'tray', closeToTrayNoticeShown: false });
+    expect(store.get()).toEqual({
+      closeBehavior: 'tray',
+      closeToTrayNoticeShown: false,
+      footerResourcePreference: 'auto',
+      managedChatGptContextWindowMode: 'standard',
+    });
     store.set({ closeToTrayNoticeShown: true });
-    expect(store.get()).toEqual({ closeBehavior: 'tray', closeToTrayNoticeShown: true });
+    expect(store.get()).toEqual({
+      closeBehavior: 'tray',
+      closeToTrayNoticeShown: true,
+      footerResourcePreference: 'auto',
+      managedChatGptContextWindowMode: 'standard',
+    });
   });
 
   it('persists direct exit without changing the notice flag', () => {
@@ -31,7 +41,21 @@ describe('app preferences store', () => {
     expect(store.set({ closeBehavior: 'exit' })).toEqual({
       closeBehavior: 'exit',
       closeToTrayNoticeShown: false,
+      footerResourcePreference: 'auto',
+      managedChatGptContextWindowMode: 'standard',
     });
     expect(store.get().closeBehavior).toBe('exit');
+  });
+
+  it('persists the explicit extended managed ChatGPT context choice', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
+    fixtureRoots.push(directory);
+    const store = new AppPreferencesStore(directory);
+    expect(store.set({ managedChatGptContextWindowMode: 'extended' })).toMatchObject({
+      managedChatGptContextWindowMode: 'extended',
+    });
+    expect(new AppPreferencesStore(directory).get().managedChatGptContextWindowMode).toBe(
+      'extended',
+    );
   });
 });

@@ -132,6 +132,19 @@ export const normalizeConnectionBaseUrl = (value: string): string => {
   return addressWithPath(url, path.replace(/\/v1\/messages$/i, ''));
 };
 
+/** Returns the standard model-catalog endpoint belonging to an OpenAI-compatible base or request URL. */
+export const openAiModelsEndpoint = (value: string): string => {
+  const { path, url } = parseConnectionAddress(value);
+  const basePath = path
+    .replace(/\/(?:v1\/)?(?:chat\/completions|responses|models)$/i, '')
+    .replace(/\/+$/, '');
+  url.pathname = (/\/v1$/i.test(basePath) ? `${basePath}/models` : `${basePath}/v1/models`).replace(
+    /\/{2,}/g,
+    '/',
+  );
+  return url.toString();
+};
+
 export const routerProtocolForOpenAiEndpoint = (
   endpoint: string,
 ): Extract<ClaudeRouterProviderProtocol, 'openai_chat_completions' | 'openai_responses'> =>

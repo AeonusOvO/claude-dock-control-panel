@@ -17,8 +17,15 @@ import type {
   ClaudeRelaunchInput,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
+  ClaudeSessionDeleteResult,
+  ManagedChatGptGatewayOperationResult,
+  ManagedChatGptGatewayState,
+  ManagedChatGptSetupProgress,
+  ModelSpeedMode,
+  ClaudeProviderModelDiscoveryResult,
   RouterKernelOperationResult,
   RouterKernelState,
+  RouterOperationProgress,
   ClaudeSessionMetadata,
   ArtifactNetworkLogEntry,
   AppQuitRequest,
@@ -41,6 +48,10 @@ import type {
 const api: ControlPanelApi = {
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
+  setFooterResourcePreference: (preference) =>
+    ipcRenderer.invoke('app:set-footer-resource-preference', preference),
+  setManagedChatGptContextWindowMode: (mode) =>
+    ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode),
   setAdvancedSettings: (settings) => ipcRenderer.invoke('app:set-advanced-settings', settings),
   setCloseBehavior: (behavior) => ipcRenderer.invoke('app:set-close-behavior', behavior),
   listBusyLeases: () => ipcRenderer.invoke('busy:list') as Promise<BusyLease[]>,
@@ -54,7 +65,34 @@ const api: ControlPanelApi = {
     };
   },
   setConversationBusy: (busy) => ipcRenderer.invoke('busy:set-conversation', busy),
+  getRuntimeActivity: (sessionId) => ipcRenderer.invoke('runtime:get-activity', sessionId),
+  onRuntimeActivityChanged: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      state: Parameters<typeof listener>[0],
+    ): void => {
+      listener(state);
+    };
+    ipcRenderer.on('runtime:activity-changed', callback);
+    return () => ipcRenderer.removeListener('runtime:activity-changed', callback);
+  },
+  onClaudePermissionRequest: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      request: Parameters<typeof listener>[0],
+    ): void => {
+      listener(request);
+    };
+    ipcRenderer.on('claude:permission-request', callback);
+    return () => ipcRenderer.removeListener('claude:permission-request', callback);
+  },
+  respondClaudePermission: (requestId, decision) =>
+    ipcRenderer.invoke('claude:permission-response', requestId, decision),
+  terminateRuntimeProcess: (sessionId, processKey) =>
+    ipcRenderer.invoke('runtime:terminate-process', sessionId, processKey),
   cancelDownload: (taskId) => ipcRenderer.invoke('download:cancel', taskId),
+  clearDownloadHistory: () => ipcRenderer.invoke('download:history-clear'),
+  deleteDownloadHistory: (taskId) => ipcRenderer.invoke('download:history-delete', taskId),
   listDownloads: () => ipcRenderer.invoke('download:list') as Promise<DownloadTaskView[]>,
   onDownloadsChanged: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, tasks: DownloadTaskView[]): void => {
@@ -201,28 +239,36 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeOperationResult>,
   setClaudeEffortLevel: (sessionId: string, effort: ClaudeEffortRequest) =>
     ipcRenderer.invoke('claude:set-effort', sessionId, effort) as Promise<ClaudeOperationResult>,
-  observeClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) => {
-    ipcRenderer.send('claude:permission-mode-observed', sessionId, mode);
+  setClaudeModelSpeed: (sessionId: string, mode: ModelSpeedMode) =>
+    ipcRenderer.invoke('claude:set-model-speed', sessionId, mode) as Promise<ClaudeOperationResult>,
+  observeClaudePermissionMode: (sessionId, ptyGeneration, mode) => {
+    ipcRenderer.send('claude:permission-mode-observed', sessionId, ptyGeneration, mode);
   },
-  reportClaudePermissionModeProbe: (
-    sessionId: string,
-    probeId: number,
-    mode?: ClaudePermissionMode,
-  ) => {
-    ipcRenderer.send('claude:permission-mode-probe-result', sessionId, probeId, mode);
+  reportClaudePermissionModeProbe: (sessionId, ptyGeneration, probeId, mode) => {
+    ipcRenderer.send(
+      'claude:permission-mode-probe-result',
+      sessionId,
+      ptyGeneration,
+      probeId,
+      mode,
+    );
   },
   onClaudePermissionModeProbe: (listener) => {
     const callback = (
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
+      ptyGeneration: unknown,
       probeId: unknown,
     ): void => {
       if (
         typeof sessionId === 'string' &&
+        typeof ptyGeneration === 'number' &&
+        Number.isSafeInteger(ptyGeneration) &&
+        ptyGeneration >= 0 &&
         typeof probeId === 'number' &&
         Number.isSafeInteger(probeId)
       ) {
-        listener(sessionId, probeId);
+        listener(sessionId, ptyGeneration, probeId);
       }
     };
     ipcRenderer.on('claude:permission-mode-probe', callback);
@@ -298,6 +344,55 @@ const api: ControlPanelApi = {
     ) as Promise<ClaudeRouterOperationResult>,
   getRouterKernelState: (sessionId) =>
     ipcRenderer.invoke('router:kernel-state', sessionId) as Promise<RouterKernelState>,
+  getManagedChatGptGatewayState: () =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-state',
+    ) as Promise<ManagedChatGptGatewayState>,
+  openManagedChatGptGatewayManagement: () =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-open-management',
+    ) as Promise<OperationResult>,
+  onManagedChatGptSetupProgress: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      progress: ManagedChatGptSetupProgress,
+    ): void => {
+      listener(progress);
+    };
+    ipcRenderer.on('claude:managed-chatgpt-setup-progress', callback);
+    return () => {
+      ipcRenderer.removeListener('claude:managed-chatgpt-setup-progress', callback);
+    };
+  },
+  onRouterOperationProgress: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      progress: RouterOperationProgress,
+    ): void => {
+      listener(progress);
+    };
+    ipcRenderer.on('router:operation-progress', callback);
+    return () => {
+      ipcRenderer.removeListener('router:operation-progress', callback);
+    };
+  },
+  setupManagedChatGptGateway: (sessionId, forceLogin) =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-setup',
+      sessionId,
+      forceLogin ?? false,
+    ) as Promise<ManagedChatGptGatewayOperationResult>,
+  setManagedChatGptGatewayModel: (sessionId, model) =>
+    ipcRenderer.invoke(
+      'claude:managed-chatgpt-gateway-model',
+      sessionId,
+      model,
+    ) as Promise<ManagedChatGptGatewayOperationResult>,
+  discoverClaudeProviderModels: (input) =>
+    ipcRenderer.invoke(
+      'claude:provider-models-discover',
+      input,
+    ) as Promise<ClaudeProviderModelDiscoveryResult>,
   installCcSwitch: (sessionId) =>
     ipcRenderer.invoke(
       'router:cc-switch-install',
@@ -362,10 +457,17 @@ const api: ControlPanelApi = {
     const callback = (
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
+      ptyGeneration: unknown,
       data: unknown,
     ): void => {
-      if (typeof sessionId === 'string' && typeof data === 'string') {
-        listener(sessionId, data);
+      if (
+        typeof sessionId === 'string' &&
+        typeof ptyGeneration === 'number' &&
+        Number.isSafeInteger(ptyGeneration) &&
+        ptyGeneration >= 0 &&
+        typeof data === 'string'
+      ) {
+        listener(sessionId, ptyGeneration, data);
       }
     };
     ipcRenderer.on('terminal:data', callback);
@@ -377,11 +479,19 @@ const api: ControlPanelApi = {
     const callback = (
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
+      ptyGeneration: unknown,
       cols: unknown,
       rows: unknown,
     ): void => {
-      if (typeof sessionId === 'string' && typeof cols === 'number' && typeof rows === 'number') {
-        listener(sessionId, cols, rows);
+      if (
+        typeof sessionId === 'string' &&
+        typeof ptyGeneration === 'number' &&
+        Number.isSafeInteger(ptyGeneration) &&
+        ptyGeneration >= 0 &&
+        typeof cols === 'number' &&
+        typeof rows === 'number'
+      ) {
+        listener(sessionId, ptyGeneration, cols, rows);
       }
     };
     ipcRenderer.on('terminal:size', callback);
@@ -398,11 +508,15 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('workspace:state', callback);
     };
   },
-  resizeTerminal: (sessionId, cols, rows) => {
-    ipcRenderer.send('terminal:resize', sessionId, cols, rows);
+  resizeTerminal: (sessionId, ptyGeneration, cols, rows) => {
+    ipcRenderer.send('terminal:resize', sessionId, ptyGeneration, cols, rows);
   },
-  restartTerminal: (sessionId) =>
-    ipcRenderer.invoke('terminal:restart', sessionId) as Promise<OperationResult>,
+  restartTerminal: (sessionId, expectedGeneration) =>
+    ipcRenderer.invoke(
+      'terminal:restart',
+      sessionId,
+      expectedGeneration,
+    ) as Promise<OperationResult>,
   runClaudeCommand: (sessionId, command, argument) =>
     ipcRenderer.invoke(
       'claude:command',
@@ -439,12 +553,12 @@ const api: ControlPanelApi = {
       input,
     ) as Promise<ClaudeConnectionTestResult>,
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url) as Promise<boolean>,
-  startTerminal: (sessionId) =>
-    ipcRenderer.invoke('terminal:start', sessionId) as Promise<OperationResult>,
-  stopTerminal: (sessionId) =>
-    ipcRenderer.invoke('terminal:stop', sessionId) as Promise<OperationResult>,
-  writeTerminal: (sessionId, data) => {
-    ipcRenderer.send('terminal:write', sessionId, data);
+  startTerminal: (sessionId, expectedGeneration) =>
+    ipcRenderer.invoke('terminal:start', sessionId, expectedGeneration) as Promise<OperationResult>,
+  stopTerminal: (sessionId, expectedGeneration) =>
+    ipcRenderer.invoke('terminal:stop', sessionId, expectedGeneration) as Promise<OperationResult>,
+  writeTerminal: (sessionId, ptyGeneration, data) => {
+    ipcRenderer.send('terminal:write', sessionId, ptyGeneration, data);
   },
   getStoredProjects: () =>
     ipcRenderer.invoke('workspace:get-stored-projects') as Promise<WorkspaceProject[]>,
@@ -465,7 +579,11 @@ const api: ControlPanelApi = {
       title,
     ) as Promise<boolean>,
   deleteClaudeSession: (projectPath, conversationId) =>
-    ipcRenderer.invoke('claude:delete-session', projectPath, conversationId) as Promise<boolean>,
+    ipcRenderer.invoke(
+      'claude:delete-session',
+      projectPath,
+      conversationId,
+    ) as Promise<ClaudeSessionDeleteResult>,
   launchClaudeWithSession: (sessionId, conversationId) =>
     ipcRenderer.invoke(
       'claude:launch-with-session',

@@ -26,22 +26,22 @@ describe('quit confirmation handshake', () => {
     const beforeQuit = mainSource.indexOf("app.on('before-quit'");
     expect(beforeQuit).toBeGreaterThan(-1);
     expect(mainSource.indexOf('requestQuit();', beforeQuit)).toBeLessThan(
-      mainSource.indexOf('chatService.shutdown();', beforeQuit),
+      mainSource.indexOf('shutdownRuntimeForQuit();', beforeQuit),
     );
   });
 
-  it('quits without asking when nobody can answer', () => {
+  it('always asks when the renderer can answer and only bypasses a missing renderer', () => {
     // No window, still loading, or a crashed renderer: asking would hang the quit forever.
     expect(mainSource).toMatch(
       /const canAsk =\s+window !== null &&\s+!window\.isDestroyed\(\) &&\s+!window\.webContents\.isLoading\(\) &&\s+!window\.webContents\.isCrashed\(\);/,
     );
     // A second attempt while the question is outstanding forces it through.
     expect(mainSource).toMatch(
-      /if \(!canAsk \|\| quitConfirmationPending\) \{[\s\S]*?quitConfirmationPending = false;\s+isQuitting = true;\s+app\.quit\(\);/,
+      /if \(!canAsk \|\| quitConfirmationPending\) \{[\s\S]*?quitConfirmationPending = false;\s+void beginControlledQuit\(true\);/,
     );
-    expect(mainSource).toMatch(
-      /if \(leases\.length === 0\) \{\s+isQuitting = true;\s+app\.quit\(\);/,
-    );
+    expect(mainSource).not.toMatch(/if \(leases\.length === 0\)/);
+    expect(mainSource).toContain('id: `terminal:${id}`');
+    expect(mainSource).toContain("phase === 'running' || phase === 'starting'");
     // A duplicate launch has no window and nothing to protect.
     expect(mainSource).toMatch(
       /if \(!hasSingleInstanceLock\) \{[\s\S]*?isQuitting = true;\s+app\.quit\(\);/,
@@ -57,7 +57,7 @@ describe('quit confirmation handshake', () => {
 
   it('quits only on an affirmative reply and clears the pending flag either way', () => {
     expect(mainSource).toMatch(
-      /ipcMain\.on\('app:confirm-quit', \(event, confirmed: unknown\) => \{[\s\S]*?validateSender\(event\);[\s\S]*?quitConfirmationPending = false;\s+if \(confirmed !== true\) \{\s+return;\s+\}\s+isQuitting = true;\s+app\.quit\(\);/,
+      /ipcMain\.on\('app:confirm-quit', \(event, confirmed: unknown\) => \{[\s\S]*?validateSender\(event\);[\s\S]*?quitConfirmationPending = false;[\s\S]*?if \(confirmed === 'retry' && quitResidualConfirmationPending\)[\s\S]*?if \(confirmed !== true\) \{[\s\S]*?return;\s+\}[\s\S]*?void beginControlledQuit\(forceWithResidualProcesses\);/,
     );
   });
 
@@ -70,7 +70,7 @@ describe('quit confirmation handshake', () => {
     expect(contractsSource).toContain(
       'onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;',
     );
-    expect(contractsSource).toContain('confirmQuit: (confirmed: boolean) => void;');
+    expect(contractsSource).toContain('confirmQuit: (decision: AppQuitDecision) => void;');
     expect(preloadSource).toContain("ipcRenderer.on('app:quit-requested', callback);");
     expect(preloadSource).toContain("ipcRenderer.send('app:confirm-quit', confirmed);");
     expect(preloadSource).toContain("ipcRenderer.send('app:quit-request-received');");
@@ -82,7 +82,16 @@ describe('quit confirmation handshake', () => {
       "hasBlocking: leases.some(({ severity }) => severity === 'blocking')",
     );
     expect(mainSource).toMatch(
-      /quitConfirmationTimer = setTimeout\(\(\) => \{[\s\S]*?isQuitting = true;\s+app\.quit\(\);[\s\S]*?\}, 3_000\);/,
+      /quitConfirmationTimer = setTimeout\(\(\) => \{[\s\S]*?void beginControlledQuit\(true\);[\s\S]*?\}, 3_000\);/,
+    );
+    expect(mainSource).toMatch(
+      /async function beginControlledQuit[\s\S]*?claudePermissionBridge\?\.shutdown\(\);[\s\S]*?await runtimeProcessRegistry\?\.terminateAll\(\);/,
+    );
+    expect(mainSource).toContain('quitResidualConfirmationPending = true;');
+    expect(mainSource).toContain('runtimeCleanupFailed: true,');
+    expect(mainSource).toContain("if (confirmed === 'retry' && quitResidualConfirmationPending)");
+    expect(mainSource).toMatch(
+      /function shutdownRuntimeForQuit[\s\S]*?claudePermissionBridge\?\.shutdown\(\);[\s\S]*?workspace\.shutdown\(\);/,
     );
   });
 
@@ -106,9 +115,12 @@ describe('quit confirmation handshake', () => {
     expect(cancelIndex).toBeGreaterThan(forceIndex);
     expect(rendererMarkup).toMatch(/id="quit-minimize"[^>]*autofocus/);
     expect(rendererSource).toContain("? '有操作正在进行，不建议退出'");
-    expect(rendererSource).toContain(": '还有下载未完成';");
+    expect(rendererSource).toContain(": '确认退出 ClaudeDock？';");
+    expect(rendererSource).toContain('quitConfirmationList.hidden = request.leases.length === 0;');
     expect(rendererSource).toContain("? '中断会留下不完整状态' : '可稍后继续'");
     expect(rendererSource).toContain("confirmLabel: '仍要退出'");
+    expect(rendererSource).toContain("? '重试安全清理'");
+    expect(rendererSource).toContain("closeQuitConfirmation('retry');");
     expect(rendererStyles).toContain('.confirmation-dialog[open]');
     expect(rendererStyles).toContain('.quit-confirmation-dialog');
     expect(rendererStyles).toContain('var(--dur-3) var(--ease-decel)');

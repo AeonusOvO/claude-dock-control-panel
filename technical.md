@@ -1,7 +1,36 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.2.0（2026-08-04）。4.2.0 新增项目级“ChatGPT 订阅（本地网关）”实验性预设、
-CLIProxyAPI 默认端口发现和严格回环地址边界；OAuth 仍完全由用户选择的外部网关管理。本版本同时把
+当前架构版本：4.6.2（2026-08-07）。4.6.2 把 `当前版本需改进的bug.md` 从候选方案收敛为已经确认的
+ClaudeDock 5.0 原生对话实施规格，并将 `js-yaml` 升级到 4.3.1、`mermaid` 升级到 11.16.1；本修订
+版本仍不改变 UI、IPC、PTY、会话持久化或运行时行为。4.6.0 在原有按接入/模型隔离的服务速度 profile
+和会话 generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
+登记与受控退出清理；流中断诊断只保存脱敏分类并禁止对部分输出自动重放。Claude/Codex 工作台改用
+共享静态指令注册表；模型、模式与思考控制统一收敛到底部状态栏，提示词区不再重复渲染一套大号
+控件，窄底栏和收起侧栏均采用不复制状态源的响应式浮层。代理草稿加载使用代次与用户编辑锁，
+增强选择器提供显式值同步；接入历史按规范化指纹在全表
+去重。官方 Claude 使用原生 Fast 并以 statusLine `fast_mode` 验证，受管 GPT 只请求
+`service_tier=fast`。4.5.0 为受管 ChatGPT 的
+`gpt-5.6-sol` 增加标准/扩展上下文档位、提前自动压缩、真实当前窗口读数与溢出恢复提示，并把
+Claude/Codex 的上下文、官方额度窗口和受支持供应商余额统一到可配置的底栏资源菜单；同时完成代理
+启用草稿的统一保存与禁用态隔离、受管 ChatGPT 官方 OpenAI 网络预检和本机全局 IPv6 路径提示。
+4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
+PTY 仍携带旧中转站环境继续请求的问题：接入开始即停止当前项目的旧会话，成功后用 `--continue`
+和新环境恢复，任何失败都保持停止而不回退；CLIProxyAPI 登录、解压与运行子进程还会清除继承的
+OpenAI/Codex/Anthropic/CCR 路由和凭据变量，同时保留显式 HTTP 传输代理。4.4.1 把受管 ChatGPT
+接入收敛为一次后台事务：自动补齐
+Claude Code、启动网关、读取实时模型目录、执行真实模型请求并仅在成功后保存；renderer 使用主进程
+8 阶段事件持续反馈，并以实时模型选择框取代手填标识。首次 CCR Provider 保存也会自动启动并确认
+3456，而不再要求用户打开管理页。4.4.0 把 CCR 接入收敛为 CLI-only 的全自动生命周期：后台 npm
+安装、真实阶段事件、原子中断日志与启动续装、Provider/模型自动写入、按活动会话自动启停，以及只在
+服务运行时开放的高级后台入口。npm 子进程继承显式 CLI HTTP 代理，官方源失败会可见地回退镜像；
+桌面 CCR 只检测、不接管、不终止、不卸载，配置继续固定 `applyProfile: false`。CLIProxyAPI 另加入
+本机密钥保护的管理页和可验证 PID 生命周期，切换到不需要网关的路由时可安全停止孤儿 sidecar。
+4.3.1 修复 GitHub Release 重定向后 Electron
+`DownloadItem.getURL()` 返回最终资产地址、而下载任务仍按原始地址等待所造成的 45 秒零字节假停滞；
+同时把受管安装的忙碌状态提升为主进程真值并跨 renderer 重绘锁定按钮。4.3.0 把项目级“ChatGPT 订阅”实验性预设升级为
+ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、安装、启动、OpenAI 浏览器授权引导、
+回环网关配置与项目模型映射，用户不再操作终端或第三方控制台。该路径仍是第三方协议桥，不是 OpenAI
+或 Anthropic 官方 Claude Code 集成。4.2.0 首次加入外部 CLIProxyAPI 发现和严格回环地址边界，并把
 构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
 运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
 的冷启动抖动。4.1.1 在项目主页补齐 SignPath
@@ -31,6 +60,8 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 
 ```text
 Renderer (xterm.js / UI)
+        ├── ClaudeLaunchAttemptRegistry ── per-session generation / 真实事件解锁
+        │
         │ 受限 IPC
         ▼
 Preload contextBridge
@@ -41,9 +72,16 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         │                           └─ …
         │
         ├── AgentRuntimeStore ── 项目路径 → Claude Code / Codex 选择
+        ├── SessionOperationCoordinator ── per-session PTY 变更租约 / 取消后等待 unwind
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        ├── ClaudeConfigStore ── safeStorage / 项目级接入配置
-        │        └── ClaudeConnectionHistoryStore ── version 2 名称 / 协议 / 加密回放
+        │        ├── ClaudeConnectionHistoryStore ── version 3 名称 / 协议 / 加密回放
+        │        ├── ModelSpeedPreferencesStore ── 去凭据目标哈希 / 标准或快速偏好
+        │        └── launch-owned Hooks ── 活动事件 / PermissionRequest named pipe
+        ├── RuntimeActivityRegistry ── session / launch / PTY 代次隔离的任务状态机
+        ├── RuntimeProcessRegistry ── PTY 后代 / TCP 监听 / 不透明终止键 / 退出清理
+        ├── ClaudePermissionBridge ── 会话队列 / 600 秒 fail-closed 权限响应
+        ├── ClaudeStreamDiagnosticsStore ── 14 天 / 200 条 / 2 MiB 脱敏流故障
         ├── CodexRuntime ─┬─ 官方 CLI 检测 / 工作区沙箱 TUI 启动
         │                 ├─ CodexInstaller ── GitHub Release / size + SHA-256
         │                 └─ CodexAppServer ── JSONL / ChatGPT 登录与账号额度
@@ -54,11 +92,12 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ChatService ── Anthropic/OpenAI 多模态 HTTP + typed SSE / usage / 测试 / 取消
         ├── ArtifactService ── 自定义协议 / iframe CSP / 离线库 / webRequest 审计与断网
         ├── BusyRegistry ── 下载/安装/卸载/配置/代理/对话的唯一忙碌租约真值
-        ├── DownloadEngine + DownloadJournal ── 续传 / 进度 / 来源、尺寸与 SHA-256 闸门
+        ├── DownloadEngine + Journal/History ── 续传 / 进度 / 终态历史 / 完整性闸门
         ├── ApplicationProxyStore ── DPAPI / 外部 HTTP-SOCKS5 代理作用域
         ├── McpManager ── 多作用域发现 / CLI 变更 / 健康检查 / 备份回滚
         ├── WorkspaceStore ── 项目列表 / 最后激活项目的原子 JSON 持久化
         ├── ClaudeGatewayDetector ── 本机端口 / 安装 / Claude 设置只读发现
+        ├── ManagedChatGptGateway ── CLIProxyAPI 验证下载 / OAuth 引导 / 回环 sidecar 生命周期
         ├── ClaudeRouterManager ── CCR 3.x 本机 RPC / Provider / 网关 / 安装与卸载
         ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
@@ -66,6 +105,7 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── ApplicationUpdaterService + SourceSelector ── GitHub/HTTPS 镜像择优 / NSIS 更新
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
+        ├── CliCommandCatalog ── Claude / Codex 命令元数据、执行策略与主进程白名单
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
 ```
@@ -163,14 +203,23 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 
 - xterm 在 `createTerminalView` 里 try/catch 加载 `@xterm/addon-webgl`，并监听
   `onContextLoss` → `dispose()` 回退 DOM 渲染器。加载失败不影响会话可用性。
-- **主进程侧合并**：`queueTerminalOutput`（`main.ts:105`）按会话攒 8ms（`OUTPUT_FLUSH_MS`）
-  或 64KB（`OUTPUT_FLUSH_BYTES`）发一次 `terminal:data`。IPC 往返次数是卡顿主因。
-  `consumeTerminalOutput` 仍逐块调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。
-  `before-quit` 清理全部待发定时器。
-- **渲染层侧合并**：同名的 `queueTerminalOutput`（`src/renderer/main.ts:2341`）按
-  `requestAnimationFrame` 把队列合成一次 `terminal.write`，缓冲上限 512KB（超限丢弃最旧
-  分块，xterm 的 scrollback 随后也会丢掉它们）。销毁视图的两处（`renderWorkspace` 清理过期
-  会话、`beforeunload`）都要 `cancelAnimationFrame(view.pendingFrame)`。
+- **主进程侧合并**：`TerminalOutputBatcher` 按 session 与精确 `ptyGeneration` 攒 8ms
+  （`TERMINAL_OUTPUT_FLUSH_MS`）或 64KiB UTF-8 字节（`TERMINAL_OUTPUT_FLUSH_BYTES`）发一次
+  `terminal:data`。每个 session 只有一个带 generation 的待发缓冲：较旧 generation 的新数据直接忽略，
+  较新 generation 才能替换旧缓冲。timer 闭包固定捕获 generation 与缓冲对象身份；即使已取消的旧
+  timer 被手动触发，也不能 emit 或删除替代缓冲。自然 `stopped/error` 在发布 workspace 状态前同步
+  flush 该 generation 的末尾缓冲；显式替换、直接控制与删除 session 仍只 discard，不能把 predecessor
+  输出送进新终端。flush 同时检查缓冲身份、expected generation 与 workspace 当前 generation；
+  `consumeTerminalOutput` 仍逐块调用——它跨块跟踪退出标记，合并后的缓冲会导致漏判。`before-quit`
+  dispose 全部 timer 和缓冲。
+- **渲染层侧无损泵**：`TerminalOutputPump` 按 `requestAnimationFrame` 合并待处理工作，但每个
+  `TerminalView` 同一时间只允许一个 `terminal.write` 在途；每次最多提交 64Ki 个 UTF-16 code unit，
+  且不会在代理对中间切分。实时输出不再设置 512KB 截断，也不丢弃最旧分块；队列只有在 xterm 的
+  write callback 确认解析完成后才消费，只有完整 IPC revision 全部应用后才推进
+  `appliedRevision`。`TerminalView` 固定拥有创建时的 `ptyGeneration`，排队、RAF 与写入完成回调都
+  复核 view 对象和 generation；替换视图后，迟到回调不能消费、报告 probe 或推进新视图。主进程在
+  发送 permission-mode probe 前还会先同步 flush 同 generation 的待发输出，renderer 再以 revision
+  屏障等待此前屏幕差量全部进入 xterm。
 - **创建与持续布局分流**：活动 xterm 的容器在 `terminal.open()` 前就带
   `project-terminal--active`。`retryTerminalFitUntilMeasured` 只在冷启动/首次可见时用带
   generation 的四帧有界重试；窗口与分隔条的持续变化走 100ms 尾沿
@@ -222,6 +271,11 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `current` 或 `history:<id>` 形态，重启入参逐字段校验；
   这些值最终都会影响启动命令或写进运行中的终端，所以一律在主进程重新核对，不信任 renderer。
 - `TerminalWorkspace` 维护项目 ID、活动项目和多个 `TerminalSession`；每个会话拥有独立 PTY。
+  `TerminalSession` 从 generation 0 开始，只在一次真实 spawn 尝试前递增一次；`stop()` 保留
+  generation，`restart()` 先停后启但只因新的 spawn 递增一次。状态、输出、尺寸、写入、resize、
+  permission probe 与停止请求都携带精确 generation，`stopIfGeneration()` 和 generation-aware
+  `write()` / `resize()` 对旧实例直接拒绝。node-pty 的 data/exit callback 还要同时匹配当时捕获的
+  `IPty` 对象，防止旧 ConPTY 回调在 session ID 已复用时污染新进程。
 - `TerminalWorkspace` 构造出来是空的，也允许一直是空的：会话总是属于用户选定的文件夹，
   冷启动和关掉最后一个对话之后都没有活动会话。`getActiveStatus()` 因此返回
   `TerminalStatus | undefined`，`OperationResult.status` 也是可选字段，渲染层要判空。
@@ -240,6 +294,49 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   version 保持 1。
 - 托盘从 `WorkspaceState` 计算错误/运行聚合图标、运行数量和项目切换菜单。
 
+### 会话启动互斥与事件锁
+
+- `SessionOperationCoordinator`（`src/main/session-operation-coordinator.ts`）按 workspace session
+  串行化会重启或写入 PTY 的 Claude/Codex 启动、历史恢复、模型/速度重启和受管 ChatGPT 切换。
+  `run()` 交给回调一个 `assertCurrent()`；它同时核对 generation、取消标记和 session 是否仍存在。
+  `invalidate()` 只标记取消，**不会提前删除 lease**；lease 必须保持 busy，直到旧异步回调在
+  `finally` 中真正 unwind，之后替代操作才能取得所有权。
+- 终端 stop/restart、项目关闭/忘记与开发引擎切换会取消对应操作；关闭或忘记项目还会等待
+  `invalidateAndWait()` 完成后才删除 runtime session。`runDirectTerminalTransition` 对直接
+  start/restart/stop 固定执行七步，顺序不能交换：
+  1. 在改变任何状态前预检 renderer 提交的 expected generation；
+  2. invalidate 当前 per-session 操作并取得它的 unwind Promise；
+  3. 立即解除只属于 expected generation 的 permission probe；
+  4. await 被取消 lease 真正 unwind；
+  5. 再次核对 workspace generation；
+  6. 只 discard expected generation 的输出，并只把绑定该 generation 的 Claude/Codex runtime 设为
+     inactive；
+  7. 在 `withoutTerminalOperationInvalidation` 中同步执行 PTY start/restart/stop。
+     probe 必须在 await 前解除，因为旧操作可能正等待 renderer 回报该 probe 才能 unwind。入口预检失败
+     不做 invalidate 或 cleanup；等待期间若出现替代 PTY，第二次检查也会在 cleanup 和 PTY mutation 前
+     取消请求。`enteredTerminalFailure()` 只把某一 generation 第一次进入 `stopped/error` 视为真实
+     转换；重复状态快照不会再次取消操作，真实失败只按同一 generation 对账 runtime。
+- `ClaudeRuntime` / `CodexRuntime` 在 prepare 提交点清空旧绑定，由 main 在 restart 返回后调用
+  `bindPty()` 绑定唯一 generation。启动命令、退出标记、permission probe、Shift+Tab、模型/思考命令
+  与 `/compact` 都只经绑定 generation 写入；每个异步边界后再次核对 ownership。命令正文和 40ms 后
+  回车分两次写时沿用同一捕获 generation，替代 PowerShell 出现后迟到回车会被丢弃。失败清理只调用
+  `workspace.stopIfGeneration(sessionId, ownedGeneration)` 与 runtime 的精确 `setInactive()`，旧启动的
+  `catch/finally` 不能停止或清空新启动。
+- 项目级 `runtime:set` 在 provider policy 等待前后都重新检查该项目所有 session 是否存在活动 agent；
+  直接启动在异步准备完成、重启 PTY 之前再次核对 `AgentRuntimeStore`。由于最后检查、runtime 提交与
+  同步 restart/write 之间没有 `await`，开发引擎切换和启动只能有一个先完成：切换先完成时旧引擎启动
+  取消，启动先写入时切换因活动 agent 拒绝。
+- renderer 的 `ClaudeLaunchAttemptRegistry`（`src/renderer/claude-launch-attempt.ts`）按 session 保存
+  generation、初始 conversation UUID、Claude active、PowerShell PID 与精确 `ptyGeneration`。点击主入口
+  或任何 relaunch 在第一个 `await` 前登记并立即重绘 `disabled`/`aria-busy`；冷状态第一次观察只建立
+  baseline，不把已有 UUID 误判成新会话。确认、prepare、IPC settlement 与结果应用都通过同一 token
+  的纯 orchestration；旧确认恢复或旧 IPC 拒绝不能发起请求、toast、刷新控件或改写替代尝试。
+- IPC 成功返回不释放 renderer 锁。只有新的 conversation UUID、新的运行中 `ptyGeneration`（即使
+  Windows 复用同一 PID）、新的运行中 PowerShell PID、已观察 active 后变 inactive 且 PowerShell
+  仍运行，或明确 IPC 失败、terminal `stopped/error`、session 删除时才释放。删除会话同时裁剪对应
+  launch-result tombstone，避免长期创建不同 session 造成无界增长。这里故意没有 timeout：超时不能
+  取消仍在主进程执行的 restart，提前解锁反而允许重复启动。Codex 保留独立 renderer 启动状态。
+
 ### 退出确认握手
 
 `before-quit` 是同步事件，等不了 promise，而确认框必须是渲染进程画的主题化弹窗（不能用原生
@@ -247,22 +344,53 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 
 1. 任何退出入口（托盘菜单、Alt+F4、`Cmd/Ctrl+Q`、安装器重启）最终都到 `before-quit`。若
    `isQuitting` 这个单向闩未置位，就 `preventDefault()` 并转交 `requestQuit()`。
-2. `requestQuit()` 显示窗口并发 `app:quit-requested`；渲染进程判断是否值得拦截，然后必须
-   通过 `app:confirm-quit` 回答——包括否定回答，否则应用将永远关不掉。
-3. 主进程只在收到 `true` 时置 `isQuitting = true` 并 `app.quit()`，第二趟才执行真正的清理。
+2. `requestQuit()` 只要渲染窗口能应答就始终显示窗口并发 `app:quit-requested`；工作区里 phase 为
+   `starting/running` 的会话会被合成为仅用于退出确认的 terminal blocking 项，再与 `BusyRegistry`
+   快照一同发送。渲染进程必须通过 `app:confirm-quit` 回答——包括否定回答，否则应用将永远关不掉。
+3. 主进程只在收到 `true` 后进入 `beginControlledQuit()`：停止新的权限等待，按登记所有权清理
+   派生 Web 子树并复查；无残留才置 `isQuitting = true` 并 `app.quit()`，第二趟进入真正退出。
 
 逃生口都是必需的，缺一个要么丢失回复、要么留下关不掉的进程：窗口不存在/正在加载/已崩溃时
-（`canAsk` 为假）直接退出，因为没人能回答；`quitConfirmationPending` 期间再次请求退出即强制
-通过，这是渲染进程卡死时的出路。这里**故意不设超时**——pending 通常意味着弹窗正等着用户读，
-定时器会在用户面前把应用关掉。`session-end`（Windows 关机/注销，是 `BaseWindow` 事件而非
+（`canAsk` 为假）仍先执行受控清理；`quitConfirmationPending` 期间再次请求退出或残留对话框中的
+“强制退出”才绕过残留阻塞，这是渲染进程卡死或 Windows 检查失败时的出路。普通路径会把精确的
+已验证 PID 列表交给界面，允许重试而不是按名称误杀。这里**故意不设确认超时**——pending 通常
+意味着弹窗正等着用户读，定时器会在用户面前把应用关掉。`session-end`（Windows 关机/注销，是 `BaseWindow` 事件而非
 `app` 事件）直接置闩：系统无论如何都会杀进程，弹窗只是推迟丢失同样的工作。单实例锁失败的
 重复启动没有窗口也没有要保护的东西，立即退出。
 
-`BusyRegistry` 是聊天之外的唯一事实来源：下载登记为 `resumable`，安装、卸载和配置写入登记为
+`BusyRegistry` 是聊天之外的长期操作事实来源：下载登记为 `resumable`，安装、卸载和配置写入登记为
 `blocking`，释放函数幂等且所有调用点都在 `finally` 执行。它的快照同时驱动托盘 tooltip、下载
 中心与退出确认；渲染进程再把正在流式生成的回复、发送中的提交和附件读取合并进退出清单。确认框
-把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘。运行中的终端刻意不算；确认框已被
-其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
+把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘；没有活动项时仍显示一般退出确认。
+工作区终端不注册长期租约，避免把普通 shell 永久标成忙碌，但在退出握手时以精确 session 快照加入
+清单。确认框已被其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
+
+### 后台活动、权限 Hook、流故障与派生进程
+
+- `RuntimeActivityRegistry` 以 `{sessionId, launchGeneration, ptyGeneration}` 作为所有权键，阶段为
+  `stopped`、`cli-idle`、`foreground-running`、`waiting-background`、`resuming`、`failed`。
+  `Stop.background_tasks` 让顶层回答进入等待后台而不是误报结束；最后一个任务完成后进入
+  `resuming`，直到新的顶层 `Stop` / `StopFailure`。任务完成记录最多保留 10 分钟和 20 条，token
+  只表达 `likely` / `none` / `unknown`。
+- 每次 Claude launch 的临时 settings 注入 `UserPromptSubmit`、`SubagentStart/Stop`、
+  `TaskCreated/Completed`、顶层 `Stop`、`StopFailure` 与 `SessionEnd`。PowerShell Hook 只把白名单
+  字段写成唯一原子事件文件，不持久化 prompt、回复、工具参数或凭据；轮询消费前后均校验 launch
+  与 PTY 代次，旧事件不能唤醒替代会话。
+- `ClaudePermissionBridge` 为每次 launch 建立随机 token 的 Windows named pipe，按会话串行处理
+  `PermissionRequest`。Hook 最多等待 600 秒，只把工具名与上游建议交给界面；允许/拒绝结果按官方
+  Hook JSON 返回。管道、renderer、代次或超时失败都不给出 allow 决策，让 Claude 回到原生交互。
+  请求与建议只驻留内存，preload 只暴露类型化 request ID 和 suggestion ID。
+- `RuntimeProcessRegistry` 约每 2 秒读取 Windows 进程父子关系和 TCP 监听，只登记当前 PTY 的已验证
+  后代且属于常见 Web 可执行程序。`processKey` 绑定目标/根 PID、创建时间与三重会话代次；终止前
+  重新捕获和校验，先温和停止、限时后再强制结束精确子树。浏览器、Docker daemon、系统服务以及
+  Claude/Codex/CCR 桌面程序永不进入可终止集合。终端明确打印的 URL 标为确认，监听端口推导的
+  `http://127.0.0.1:<port>` 标为推断，通配监听额外显示局域网暴露警告。
+- 托管 CLIProxyAPI 明确使用 `request-retry: 5`、`max-retry-credentials: 0`、
+  `max-retry-interval: 60`、round-robin + 36h session affinity、15 秒 streaming keepalive 和两次
+  bootstrap retry。这些设置只覆盖未输出首字节前的安全重试与半开保活；ClaudeDock 不在已经产生
+  部分响应后重放请求。缺少 `response.completed`、408/429/5xx、EOF 等只写入时间、分类、版本、
+  会话运行时长和任务数，按 14 天、200 条、2 MiB 有界裁剪，并把会话标为 `failed` 供用户在原生
+  终端手动继续。
 
 ### 全局设置 IPC
 
@@ -276,11 +404,19 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   开关的语义是「修复某个中转站缺陷」，所以默认必须是关，行为正常的中转站不为用不上的修复
   付出代价。`ClaudeRuntime` 通过注入的读取函数在每次启动会话时现读，改开关不需要重启应用，
   也不影响已经运行的 PTY。
+- 高级设置另有两个只读运行态入口：CCR CLI 管理页与受管 ChatGPT 网关管理页。renderer 每次进入
+  该页重新查询主进程；只有对应后台真实运行且管理能力可用时才启用按钮，点击入口本身不启动服务。
+  ChatGPT 管理密钥只由主进程写入剪贴板，不通过 preload 返回 renderer。
 - `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
+- 外部代理编辑使用单调递增的加载代次和 `proxyDraftEdited`。首次代理状态回读完成前禁用提交；
+  迟到响应只有在代次仍为当前且用户尚未修改草稿时才能回填，避免取消勾选后被旧启用值覆盖。
+  “完成”在同一保存路径提交应用设置与代理草稿，再以主进程持久化结果回填 UI。
 - 主题继续复用 `ui:set-theme` 与 `WorkspaceStore.terminalTheme`，全局设置和终端工具栏只
-  是两个 UI 入口。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
+  是两个 UI 入口。`src/renderer/components.ts` 的增强选择器控制器同时维护原生 `select.value`、
+  trigger 文本与选中态；启动恢复、工具栏切换和设置回填统一调用显式 `sync()`，不依赖伪造
+  `change` 事件。全局设置“接入”分类移动的是原高级工具的同一组 DOM 节点，仍使用原草稿
   快照与即时操作边界，没有新增第二套 Router/诊断状态。
 
 ### 4.0 共享下载、外部应用代理与 MCP 服务
@@ -290,6 +426,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `Content-Length` 以 `-1` 表达。完成后先进入 `verifying`，只有尺寸和哈希均通过才把
   `.partial` 原子改名；失败或取消不会留下可执行的最终路径。连续 45 秒无字节会进入最多 12 次
   指数退避续传，并保留磁盘前缀。
+- `downloadURL()` 的请求地址与 `DownloadItem.getURL()` 不保证相同：GitHub 重定向后后者可能直接
+  返回带短期签名的 `release-assets.githubusercontent.com` 地址。`claimPendingTask()` 会规范化
+  `getURL()` 与完整 `getURLChain()`，用链中任一已登记 URL 认领任务，再对每一跳执行原有 host/path
+  白名单检查；恢复任务也必须与 journal URL chain 相交，不再让无关下载按队列顺序误领恢复项。
 - `src/main/github-release-routes.ts` 现在只为受管 GitHub Release 资产建立官方
   `github.com → release-assets.githubusercontent.com` 白名单路径，不再把第三方前缀反代作为
   默认下载安装线路。请求使用 `session.defaultSession`，因此继承 Windows system proxy 或用户
@@ -297,12 +437,20 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - `DownloadJournal` 每秒把 URL chain、ETag、Last-Modified、长度、已收字节与开始时间原子写入
   `userData/download-journal.json`，启动时用 `createInterruptedDownload()` 恢复。损坏或越界
   记录丢弃，部分文件从不当作完成产物执行。
+- `DownloadHistoryStore` 把 completed/failed/cancelled 终态按完成时间倒序原子写入
+  `userData/download-history.json`，最多保留 100 条。历史只含任务 ID、显示名称、来源标签、字节数、
+  时间和错误摘要，不保存 URL chain、最终路径、代理或凭据；删除历史只移除元数据，绝不删除用户
+  已下载的最终文件。损坏文件按空历史处理，不能阻止下载内核启动。
 - 4.0.0 删除 `ProxyStore`、节点/订阅解析器、`XraySidecar`、内核源、泄露体检、代理测速、
   外部 TUN 推断和 `WindowsIpv6Service`，同时删除对应 IPC、preload API、renderer 控件、脚本和
   发行测试。旧版 `userData/proxy` 文件不读取、不启用，也不在升级时擅自删除。
 - `ApplicationProxyStore`（`src/main/proxy/application-proxy-store.ts`）只持久化一个用户已有
   HTTP/SOCKS5 代理：主机、端口、协议、账号、作用域与 DPAPI 密文密码。主机只接受域名/IP，
   端口限制 1–65535，禁止 URL、换行和明文降级。密码留空保留原密文；账号清空会同时清除密码。
+- renderer 把 `enabled` 与其余代理字段放入同一设置草稿、脏值计数和“完成”提交事务。关闭时依赖
+  区域设置 `inert`/disabled，但不丢弃地址与作用域草稿；重新开启可继续编辑。存储层允许保留未启用
+  的 SOCKS5 端点草稿；未启用时若旧草稿仍携带 CLI 作用域，会在保存时清除该无效作用域，只有实际
+  启用 SOCKS5 + CLI 组合时才拒绝，避免关闭代理仍无法保存历史配置或出现重启前后状态不一致。
 - `application-proxy.ts` 负责三类派生：Electron `ProxyConfig`、CLI 环境和无凭据候选解析。
   应用作用域未启用时为 `system`，独立对话未启用时为 `direct`；启用时为
   `fixed_servers` 且旁路 `127.0.0.1,localhost,[::1]`。CLI 只接受 HTTP，并设置大小写两套
@@ -372,8 +520,10 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   终止事件上更新显示；估算数据使用 `source: 'estimated'` 并在 UI 标“约”，供应商数据使用
   `source: 'provider'`。
 - `ChatHistoryStore`（`src/main/chat-history-store.ts`）把正文、标题、时间与 Token 快照以
-  version 2 明文原子写入 `userData/claude/chat-history.json`：先写权限 `0600` 的 `.tmp`
-  再重命名。1.x version 1 字符串消息在读取时规范化成 text block，只有显式 save 才升级磁盘。
+  version 2 明文原子写入 `userData/claude/chat-history.json`：先用 `wx` 和权限 `0600` 独占写入
+  同目录的 `.tmp-<pid>-<uuid>`，再重命名。Windows 上仅对 `EACCES` / `EBUSY` / `EPERM` 按
+  5/10/20/40/80ms 有界重试；始终只清理本次拥有的临时文件，不先删除目标，因此失败时保留最后一份
+  有效历史和原始错误。1.x version 1 字符串消息在读取时规范化成 text block，只有显式 save 才升级磁盘。
   base64 禁止落进历史，未知字段和无效 source 被拒绝。最多保留最近 50 个对话、每个 100 条
   消息；对话 ID 只接受 v4 UUID。只有 `ENOENT` 视为空历史；JSON 损坏、版本未知或权限/
   读取错误会尝试保留 `chat-history.json.corrupt.bak`，随后 fail-closed 抛错，禁止保存覆盖与
@@ -518,11 +668,63 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   继续把所有功能堆进 Claude 路由表。
 - 其 Codex OAuth → Claude 路径本质是本地反向代理与 Anthropic/OpenAI 协议转换，不会让
   Claude Code 原生获得 ChatGPT 订阅。CC Switch 自身文档也明确标记服务条款、账号与长期
-  可用性风险。2026-07-12 的公开帖子中，OpenAI Codex 负责人 Tibo 转引 Theo 的三步
+  可用性风险。2026-07-12 的公开帖子中，OpenAI Codex 负责人 Tibo 分享了 Theo 的三步
   CLIProxyAPI/`claudex` 方案，构成明确的公开实践认可；但 OpenAI 当前帮助页列出的 Codex 客户端
-  仍不包含 Claude Code，CLIProxyAPI 也不是 OpenAI 或 Anthropic 产品。ClaudeDock 提供的实验性
-  预设只配置用户自行运行的回环网关，不复制 OAuth 凭据、
-  不默认安装或启动该代理、不把高风险兼容路径描述成官方集成；官方 Codex 客户端通道继续独立存在。
+  仍不包含 Claude Code，CLIProxyAPI 也不是 OpenAI 或 Anthropic 产品。4.3.0 在用户显式点击后
+  托管这个独立进程的安装与生命周期，不把它伪装成官方集成；官方 Codex 客户端通道继续独立存在，
+  CC Switch 也不是这条受管流程的依赖或中间操作界面。
+
+### ChatGPT 订阅受管网关
+
+- `ManagedChatGptGateway`（`src/main/managed-chatgpt-gateway.ts`）只从
+  `router-for-me/CLIProxyAPI` 的 GitHub `releases/latest` 查询发行元数据。版本必须是严格 SemVer，
+  资产名必须精确匹配 `CLIProxyAPI_<version>_windows_amd64.zip`，下载地址必须位于预期仓库/tag，
+  size 必须小于 128 MiB，digest 必须是 GitHub 提供的 SHA-256。`DownloadEngine` 再验证最终字节数
+  与摘要；元数据响应限制为 2 MiB 并拒绝重定向。
+- 安装根目录固定为 `userData/managed-gateways/cliproxyapi/`；版本文件进入 `versions/<version>/`，
+  OAuth 文件进入专用 `auth/`，下载缓存进入 `downloads/`。解压前最多接受 500 个归档条目并拒绝
+  绝对路径、盘符和 `..` 路径；暂存目录只有通过可执行文件位置检查后才原子改名。递归清理函数只
+  接受 `versions/` 的直接子目录，不能扩大到 `userData` 或项目目录。解压后记录可执行文件自己的
+  SHA-256，状态检查与每次启动前重新计算；本地文件被替换时拒绝运行并要求重新安装。
+- 首次配置在 `8317–8327` 中选择空闲端口，强制 `host: 127.0.0.1`、关闭 TLS（仅限本机回环）、
+  远程管理、文件日志、用量统计和面板自更新。管理页只允许本机访问并要求独立随机
+  `mgmt-claudedock-*` 密钥；随机客户端/管理密钥以 DPAPI 密文写入 `state.json`，项目配置副本也由
+  `ClaudeConfigStore` 加密。CLIProxyAPI 运行时必须读取的 `config.yaml` 含本机明文副本，因此该文件
+  用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。只有高级入口被点击时主进程才把管理密钥写入
+  剪贴板并打开 `/management.html`，密钥不返回 renderer。
+- “一键安装并登录”IPC 只返回净化后的状态。操作先检查 Claude Code；缺失时调用项目已有的官方
+  安装路径补齐，再以隐藏窗口运行
+  `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；
+  ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
+  是否出现凭据文件和上游成功标记。授权前在 `1455–1465` 中自动选择空闲回调端口并通过上游官方
+  参数传入；授权最长等待 10 分钟，错误文本会移除 Bearer、本地回调地址和疑似密钥。
+- 托管接入开始时若 `ClaudeRuntime.isActive(sessionId)` 为真，主进程先 `workspace.stop()` 并把
+  runtime 标为 inactive；这是计费安全边界，不允许旧 PTY 在最长 10 分钟的授权窗口里继续使用启动
+  时的中转环境。真实测试与保存成功后，主进程以 `prepareLaunch(..., 'continue')` 重新生成临时
+  settings 和环境、重启 PTY 并恢复最近会话；准备、spawn 或写入失败都会再次停止 PTY，绝不回落到
+  旧路由。模型下拉切换对活动会话复用同一恢复路径。其他项目 session 不在该事务范围内。
+- `buildManagedGatewayEnvironment()` 是 CLIProxyAPI 安装、OAuth 登录和常驻 sidecar 的统一进程净室：
+  按大小写不敏感规则删除 `OPENAI_*`、`CODEX_*`、`ANTHROPIC_*`、`CLAUDE_AGENT_*`、
+  `CLAUDE_CODE_*`、`CCR_*`、`CODEXL_*` 与 `ELECTRON_RUN_AS_NODE`，防止父进程的旧基址或密钥
+  改变上游；`HTTP_PROXY`、
+  `HTTPS_PROXY` 和 `NO_PROXY` 继续保留，因为它们只描述到官方端点的传输路径。
+- `setupInFlight` 是整个安装、校验、授权、启动周期的单例 Promise；重复 IPC 直接等待同一 Promise，
+  不会再次获取 BusyRegistry 租约或启动第二个下载。公开状态在此期间返回 `busy: true` 与
+  `phase: installing`；renderer 另用本地同步锁覆盖 IPC 往返窗口，任何指南重建都保持主按钮禁用。
+- 授权后主进程隐藏启动 sidecar，持久化其 PID，并携带随机本地密钥探测 `GET /v1/models`。
+  `provider-model-discovery.ts` 从根地址、`/v1`、Chat Completions 或 Responses 地址推导模型端点，
+  拒绝跨站重定向，把响应限制为 1 MiB / 500 个安全模型标识。实时目录同时验证端点、Bearer 密钥和
+  账号可见模型；主进程据此推荐聊天/小型模型，再执行最多 1 token 的真实请求。网络或超时失败会
+  自动重启 sidecar 并复检一次，仍失败则不改原项目配置。renderer 只显示实时模型选择框；切换模型
+  会重新获取目录、实测并事务性保存，不暴露地址、认证或凭据输入。
+  `ClaudeRuntime.prepareLaunch()` 在受管预设启动前调用 `ensureRunning()`，应用
+  完全退出或活动 CLI 路由不再需要它时终止 sidecar；进程重启后若 PID 仍在，先用 WMI/CIM 核对
+  `ExecutablePath` 与私有版本目录完全一致才终止，拒绝按名称批量杀进程。不会修改 shell profile、
+  Claude Code 用户设置、Codex 凭据或 Windows 系统级代理/API 路由。
+- `setup()` 每次都会尝试查询最新上游 Release；版本未变则复用已验证安装，版本变化则下载新版本并
+  保留认证目录、随机本地密钥和端口。GitHub 暂时不可达但本机副本完整时允许离线启动已有版本；首次
+  安装或本机哈希异常时仍失败关闭。外部检测到的 CLIProxyAPI 继续按高级通用 Gateway 呈现，不读取、
+  迁移或接管其配置与 OAuth 文件，避免两套所有权边界混合。
 
 ## Claude Code 接入与会话
 
@@ -537,13 +739,13 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   Anthropic 直连凭据以 `safeStorage.encryptString(...)` 的 base64 存放；`decrypt` 在安全存储不可用时返回
   `undefined` 而不是抛错，所以恢复出来的记录顶多是“没有凭据”，不会变成明文。
 - 历史文件为 version 3，每条保存可选 `name`、必填 `protocol`（`anthropic | openai |
-unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模型、凭据状态与 Router Provider
+unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（备用）模型、凭据状态与 Router Provider
   ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
   地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
-- 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/快速模型、预设、provider 和上游协议的
+- 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/小型（备用）模型、预设、provider 和上游协议的
   SHA-256 指纹，与**全部**记录比较而不只是最新一条：命中就把那条记录移到最前面并刷新
   `savedAt`，`id` 与名称保持不变，因此恢复一条较早的记录不会变成一条重复记录，指向它的重命名
-  或待处理引用也不会失效。空白的快速模型在写入时就归一为主模型，自动补全不能让同一份配置
+  或待处理引用也不会失效。空白的小型/备用模型在写入时就归一为主模型，自动补全不能让同一份配置
   读起来像变了。指纹**刻意不含 `gatewayState`**——它描述的是保存那一刻
   机器的状态而不是用户填的配置，网关在 running/stopped 之间反复跳会把同一份配置刷成一堵墙。
   网关状态仍然逐条存下来，恢复时能看到当时的情况。
@@ -565,15 +767,16 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   长地址和模型名允许断行。
 - Anthropic 官方接入支持 Claude Code 现有登录或 `ANTHROPIC_API_KEY`。兼容网关设置
   `ANTHROPIC_BASE_URL`，并支持 `X-Api-Key`、Bearer Token 或本机无认证三种模式。
-- `chatgpt-subscription` 预设仍属于 `gateway`：默认把 `ANTHROPIC_BASE_URL` 指向
-  `http://127.0.0.1:8317`，主/快速模型映射为 `gpt-5.6-sol` / `gpt-5.4-mini`，认证字段只接受网关
-  自己的 `api-keys` 客户端密钥，并以 `ANTHROPIC_AUTH_TOKEN`/Bearer 发送，而不是把它误当成 ChatGPT
-  OAuth Token。`normalizeClaudeConfig` 对该预设额外限定 `localhost/127.0.0.1/::1`，避免把
-  高风险 OAuth 转换路径悄然扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由外部
-  网关和上游账号决定。
+- `chatgpt-subscription` 预设仍属于 `gateway`，但它的地址、认证方式和客户端密钥只由
+  `ManagedChatGptGateway` 生成：`ANTHROPIC_BASE_URL` 指向实际分配的 `127.0.0.1:8317–8327`，
+  主/小型（备用）模型从实时 `/v1/models` 目录中选择，优先匹配可用的 GPT 聊天与 mini/nano 类模型；随机
+  `api-keys` 值以
+  `ANTHROPIC_AUTH_TOKEN`/Bearer 注入当前项目子进程，而不是被误当成 ChatGPT OAuth Token。
+  `normalizeClaudeConfig` 继续把该预设限定在 `localhost/127.0.0.1/::1`，避免把 OAuth 转换路径
+  扩展为远程订阅转售服务。模型名仅为可编辑默认值，真实可用性由上游网关与账号决定。
 - 接入配置分别保存 `model` 与 `modelFast`。主模型写入 `ANTHROPIC_MODEL`、
-  `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；快速模型写入
-  `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少快速模型时
+  `ANTHROPIC_CUSTOM_MODEL_OPTION`、Opus 与 Sonnet 别名；小型/备用模型写入
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL` 与 `ANTHROPIC_SMALL_FAST_MODEL`。旧配置缺少该字段时
   自动回落到主模型；启动时同时使用 `--model` 提高可观察性。
 - 带 `/v1/chat/completions` 的服务是 OpenAI Chat Completions 格式，不能直接满足
   Claude Code 的 Anthropic `/v1/messages`、流式内容块和工具调用语义，必须经
@@ -589,10 +792,38 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - 远程中转只接受 HTTPS；HTTP 仅允许 `localhost`、`127.0.0.1` 或 `::1`，URL 不允许嵌入
   用户名、密码、查询参数或片段。
 
+### 模型服务速度
+
+- `modelFast` 继续表示接入配置中的“小型/备用模型”，会改变模型身份；服务速度是独立的
+  `ModelSpeedMode = standard | fast`，不能复用或迁移该字段。`model-speed-capabilities.ts` 是唯一
+  能力判定入口，renderer 只消费结构化 availability/mechanism/status，不按模型名自行猜测。
+- 官方 Anthropic 接入只有 Claude Code `>= 2.1.219` 且实际/目标模型明确属于 Opus 5 或
+  Opus 4.8 时开放 `claude-native-fast`。Fast profile 在会话专用 settings 写
+  `fastMode: true`、`fastModePerSessionOptIn: false`；标准 profile 写 `fastMode: false`、
+  `fastModePerSessionOptIn: true`。ClaudeDock 不设置 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`；只有
+  statusLine 的 `fast_mode` 严格布尔值为 `true` 才报告 active，资格或额度拒绝时报告 not-active。
+- 受管 ChatGPT 只有已安装 CLIProxyAPI `>= 7.2.117` 且模型为 `gpt-5.4`、`gpt-5.5`、
+  `gpt-5.6`、`gpt-5.6-sol`、`gpt-5.6-terra` 或 `gpt-5.6-luna` 时开放
+  `gpt-service-tier`；`gpt-5.4-mini` 和未知未来模型保持 unverified。Fast profile 在 PTY 环境与
+  settings `env` 注入精确的 `CLAUDE_CODE_EXTRA_BODY={"service_tier":"fast"}`。该路径只能报告
+  requested，不能从 Claude statusLine 推断 OpenAI 上游已经采用 priority tier。
+- 标准 profile 总是显式清除继承的 `CLAUDE_CODE_EXTRA_BODY`，防止上一会话的服务档位串到新模型。
+  Claude 原生 Fast 不设置 service tier；GPT Fast 关闭 Claude 原生 `fastMode`。模型切换只有端点和
+  speed signature 都一致时才允许运行中 `/model`，否则必须重建 PTY。
+- `ModelSpeedPreferencesStore` 把偏好原子写入
+  `userData/claude/model-speed-preferences.json`，权限 `0600`、损坏时回落为空、最多保留 400 条。
+  target key 由 runtime、provider、preset、认证方式、去凭据端点身份和规范化模型生成 SHA-256；
+  官方与受管回环分别使用稳定身份 `anthropic://official`、`managed-chatgpt://local`。文件只含哈希、
+  mode 和时间戳，不保存 API Key、OAuth Token、Bearer Token 或它们的哈希。
+- 活动会话切换速度要求 statusLine 已给出真实 conversation UUID，随后用精确
+  `--resume <uuid>` 重启同一对话，不执行 `/compact`。PowerShell restart/write 成功后才提交偏好；
+  失败保留原偏好并把 runtime 对账为 inactive。未活动时只保存下次启动使用的偏好。
+- 原生 Codex runtime 不进入这套存储和 IPC，renderer 明确显示“速度 Codex 内管理”。
+
 ### 安全启动
 
 1. 主进程用固定 PowerShell 诊断命令解析 `claude --version`。命中 Claude Code 官方安全公告的
-   版本直接阻止，其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.220。
+   版本直接阻止，其他低于 2.1.197 的版本要求升级；当前验证环境为 2.1.221。
 2. `ClaudeRuntime` 为项目会话生成 `userData/claude/runtime/<session-id>/settings.json`，
    通过 Claude Code 官方 `--settings` 参数临时合并，不改变用户、项目或系统设置。命令行
    settings 优先于用户设置，因此会同时写入无秘密的 `env` 覆盖：固定当前项目的标准基址
@@ -611,10 +842,12 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
    命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。认证策略属于端点指纹的一部分，
    修改后必须重启 PTY，不能把旧会话当作同一端点热切模型；Claude 退出后命令会清理所有受管
    环境变量与第三方路由别名。
-4. 非必要流量保护固定启用：
+4. 标准和网关 profile 启用非必要流量保护：
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`DISABLE_TELEMETRY=1`、
    `DISABLE_ERROR_REPORTING=1`、`DISABLE_FEEDBACK_COMMAND=1`、
-   `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` 和 `DO_NOT_TRACK=1`。网关模式还关闭自动更新。
+   `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` 和 `DO_NOT_TRACK=1`。网关模式还关闭自动更新。官方
+   Claude Fast 只清除 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`，让 Claude Code 执行官方组织
+   资格检查；其余遥测/反馈保护保持不变，也不加入任何资格绕过变量。
 5. 临时 settings 设置 `skipWebFetchPreflight: true`，避免 WebFetch 在第三方模型接入时仍把
    域名发往 `api.anthropic.com`。这会同时取消 Anthropic 的域名安全块列表检查，因此
    WebFetch 的最终风险仍由 Claude Code 权限提示和用户判断承担。
@@ -630,7 +863,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 ### 自动发现与新手接入
 
 - `src/shared/claude-providers.ts` 是接入目录的单一事实来源：22 个预设统一声明分组、基址、
-  认证方式、主/快速模型、控制台、文档、密钥提示和风险说明。`ClaudePreset` 直接派生自目录
+  认证方式、主/小型（备用）模型、控制台、文档、密钥提示和风险说明。`ClaudePreset` 直接派生自目录
   ID；主进程 IPC 用目录 ID 集合校验，外链白名单从目录 URL 主机派生，避免 renderer、主进程
   与文档手写三份漂移。原有 `anthropic / deepseek / gateway / custom` ID 保持兼容。
 - `normalizeClaudeConfig` 用目录分组推导 `provider`：官方组进入 `anthropic`，其余进入
@@ -674,7 +907,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
 - `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
   短连接检查 Claude Code Router 默认 `3456/3458`、CLIProxyAPI 默认 `8317` 与 LiteLLM 常用
   `4000`，不会枚举或扫描
-  全部本机端口。
+  全部本机端口。这个探测器只描述外部工具；受管 CLIProxyAPI 的状态由
+  `ManagedChatGptGateway.getState()` 携带随机本地密钥定向探测，二者不共享配置所有权。
 - `BackgroundTaskCoordinator` 为安装检测、Router 状态、网关扫描、软件更新和连接实测提供
   两个并发槽。相同 key 的并发请求共用同一个 Promise，用户触发的连接实测会排在尚未开始的
   后台刷新之前；`AsyncRefreshCache` 让安装、Router 和更新检查在 TTL 内复用结果，并防止旧
@@ -748,49 +982,45 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   ClaudeDock/Electron 可执行文件完全相同时才提前标记 `runtimeMismatch`，官方 CCR 桌面
   进程和系统 `node.exe` 不受影响。`tasklist` 原始字节同时尝试 UTF-8 与 Windows
   GB18030 解码，以覆盖中文产品名；结果按 PID 缓存，避免轮询重复创建进程。
-- 启动操作优先复用现有管理服务并调用 `startGateway`；服务未运行时用检测到的官方 CLI
-  或桌面程序启动。停止只调用 `stopGateway`，保留管理服务，便于继续编辑 Provider。
-- 一键安装从 `api.github.com/repos/musistudio/claude-code-router/releases/latest` 读取
-  官方发布元数据，只接受标签版本与文件名一致的 Windows `.exe`。下载限制 250 MiB、最长
-  10 分钟，并按 Release 的 `size` 与 `sha256:` digest 校验后缓存到
-  `userData/claude/router-installers/`；随后仅打开标准安装向导，Windows UAC、SmartScreen
-  和安装确认仍由用户处理。
-- 另一条安装路径通过固定包名 `@musistudio/claude-code-router@latest` 调用 npm；来源只能
-  是 `https://registry.npmjs.org` 或 `https://registry.npmmirror.com`，registry 以本次
-  argv 参数传入，不写入用户 npm 配置。安装状态区分 desktop/npm/mixed。
-- 卸载是「彻底清除」，目的是把机器恢复到真正未安装的状态，让用户可以换来源重装。步骤固定：
-  1. 只停止经 `service.json` token 与 identity 校验的 CCR 服务（`stopGateway` +
-     对该 PID 发 `SIGTERM`），等待 600ms 让守护进程释放 SQLite 句柄。
-  2. npm 版走 `removeCliInstallation`：先按固定包名 `npm uninstall --global`；包目录仍存在时
-     再按检测到的安装目录 `npm uninstall --global --prefix <installDirectory>`；仍存在才直接
-     `rmSync(packageRoot)` 并删除同目录的 `ccr` / `ccr.cmd` / `ccr.ps1` shim。
-     **`npm uninstall --global` 只能触及当前 npm prefix 下的包**，CCR 装在
-     `D:\ClaudeCode` 而 prefix 是 `%APPDATA%\npm` 时前两步都无效，第三步才是必需的。
-  3. 桌面版找到已知卸载程序就 detached 启动；找不到不再抛错中断整个流程，改为继续清数据并
-     在返回消息里引导用户去 Windows“已安装的应用”移除。
-  4. 删除 `%APPDATA%\claude-code-router` 整个目录（内容清单见 `ROUTER_DATA_ENTRIES`：
-     `config.sqlite` / `api-keys.sqlite` / `usage.sqlite` / `gateway.config.json` /
-     `service.json` / `gateway-proxy-preload.cjs` / `claude-app-gateway-backup.json` /
-     `global-profile-takeover.json` / `bin` / `provider-icons` / `raw-trace-spool`），
-     以及本应用的安装包缓存，并失效 `serviceRuntimeCache`。
-     **Provider 配置与上游密钥由此不可恢复**，renderer 的确认弹窗必须明说这一点。
-- 递归删除的路径由 `routerDataDirectory(appData)` 计算：非绝对路径、basename 不是
-  `claude-code-router`、或父目录不等于传入的 APPDATA 时返回 `undefined` 而不删除。这样被
-  篡改的 `APPDATA` 无法扩大删除范围，`~/.claude` 下 Claude Code 与 Codex 自己的配置也永远
-  触及不到（符合「不得修改 Codex、Claude Code 或系统级 API 路由」）。
-- `canUninstall` 是 `Boolean(cli || desktop || 数据目录存在)`：程序已经没了、只剩孤立配置目录
-  时，清理入口依然可达。
+- 启动只接受系统 `node.exe` 承载的 CLI 后台；检测到 CCR 桌面进程或无法确认的进程时拒绝接管。
+  受支持的 CLI 启动参数固定为 `ccr start --no-open --gateway`。停止先调用 `stopGateway`，再只对
+  经 `service.json` token/identity、PID 和映像核验的 `node.exe`/旧 ClaudeDock CLI 子进程发送
+  `SIGTERM` 并等待最多 10 秒；永不结束 CCR、Claude 或 Codex 桌面 App。
+- 一键安装只通过固定包名 `@musistudio/claude-code-router@latest` 调用 npm，不再下载或打开 Windows
+  桌面安装器。首选 `https://registry.npmjs.org`，命令失败且 npm 本身存在时可见地回退
+  `https://registry.npmmirror.com`；registry 只作为本次 argv 传入，不写入用户 npm 配置。
+  `WindowsCommandOptions.env` 合并 ClaudeDock 为 CLI 配置的 HTTP 代理并显式删除 null 覆盖，
+  因而 npm 能沿用用户第一跳代理，同时保留 `NO_PROXY` 的本机回环地址。
+- `installInFlight` 把并发安装调用合并为一个 Promise。主进程按检查、下载、安装定位、验证、完成/
+  错误广播 `RouterOperationProgress`，renderer 同时更新阶段面板和安装按钮上方状态卡；阶段号来自
+  主进程，不用静态灰按钮猜测进度。
+- 每次 npm 写入前把最小 `RouterOperationJournal` 原子保存到
+  `userData/claude/router-operation.json`。记录仅含 schema、操作、npm/npmmirror 来源、阶段和时间戳，
+  不含 URL、代理、凭据或模型。成功校验 CLI 后删除；断电/崩溃后窗口创建完成即调用
+  `recoverInterruptedInstall()`，幂等重跑 npm 安装并再次校验。恢复失败保留 journal，不删除缓存、
+  Provider 或共享数据，也不给小白用户展示技术清理选择。
+- OpenAI 上游保存时若 CLI 未安装会先自动安装；向导先通过上游 `/v1/models` 获取可选模型，随后
+  启动管理后台、以 `applyProfile: false` 保存 Provider，再显式调用 `startGateway` 并轮询确认 3456
+  已运行。管理页 3458 可用但首个 Provider 尚未写入不再被视为失败，也不会提示用户去后台手动启动。
+  最终项目配置只有在真实请求通过后才保存。`RuntimeSession.routeKind` 记录真实活动路径；最后一个
+  `ccr` 会话结束、切到不需要
+  路由的直连/中转或切换项目到 Codex CLI 后自动停止 CCR，仍有其他活动 CCR 会话时保持运行。
+- 卸载只针对检测到的 npm CLI：先用固定包名执行全局卸载，再针对原安装 prefix 重试，最后只清理
+  已验证的包目录与同目录 shim。若同时存在桌面版，完整保留共享 CCR 数据；只有机器没有桌面版时才
+  允许按 `routerDataDirectory()` 路径牢笼删除共享数据。`canUninstall` 仅由 CLI 是否存在决定。
+- 标准桌面安装位置仅用于显示 `desktop/mixed` 与进程保护状态。ClaudeDock 不启动桌面可执行文件，
+  不查找/打开卸载器，不写 App profile；这条边界另由 `AGENTS.md` 和源码守栏测试固定。
 
 ### 3.0 路由决策与 CC Switch 边界
 
 - `src/shared/router-capabilities.ts` 为供应商目录的每个 ID 明确记录 `direct-anthropic`、
-  `router-optional` 或 `router-required`、认证方式、默认模型和 `verifiedAt`。一键接入向导先展示
-  决策，再按能力选择直连或 CCR；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
+  `router-optional` 或 `router-required`、认证方式、默认模型和 `verifiedAt`。自动接入向导按能力直接
+  选择直连或 CCR，不把路由开关交给普通用户；只有 OpenAI 协议转换才强制路由。DeepSeek 按 2026-08-02
   官方 Claude Code 集成指南使用 Anthropic 兼容 `authToken`、`https://api.deepseek.com/anthropic`
-  与当前模型标识，供应商原始“模型不存在”等错误不再被静默快速模型降级覆盖。
+  与当前模型标识，供应商原始“模型不存在”等错误不再被静默小型/备用模型降级覆盖。
 - `chatgpt-subscription` 的能力值为 `direct` 只表示 ClaudeDock 不再叠加 CCR；真正的协议转换仍由
-  用户自行运行的 CLIProxyAPI/CC Switch 回环网关完成。界面和技术文档必须同时保留“非官方直连”
-  标签，不能从该枚举值推导为 OpenAI 或 Anthropic 官方支持。
+  ClaudeDock 下载并管理的独立 CLIProxyAPI 回环 sidecar 完成。CC Switch 不参与这条流程。界面和
+  技术文档必须同时保留“非官方直连”标签，不能从该枚举值推导为 OpenAI 或 Anthropic 官方支持。
 - 向导阶段固定为决策、检查/安装内核、启动、写 Provider/项目配置和 1-token 连通校验；每个
   阶段通过 BusyRegistry 与下载内核暴露真实状态。CCR 的所有配置写入只能经过
   `saveConfigWithoutProfileTakeover()`，唯一 `saveConfig` 调用永久传 `applyProfile: false`，
@@ -833,7 +1063,10 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   `updateAvailable` 控制。
 - 标题栏 `refresh-updates` 是全局主动检查入口，不是唯一入口。首屏自动检查和用户点击会并行
   处理全部已注册来源，图标以 `aria-busy`/旋转反馈过程，以琥珀点和动态 `aria-label` 表达已发现
-  数量；各领域页可单独刷新。软件/插件/MCP 检查不安装内容；应用代理测试是独立动作，不属于
+  数量；用户主动检查完成后始终打开统一更新对话框，按 ClaudeDock、Claude Code、Router 与插件
+  生成可执行行，支持逐项或全部执行，没有更新时显示明确空状态。单一来源失败只禁用对应行，
+  其他结果仍可操作；操作开始后与 `BusyRegistry`、下载内核和应用更新器状态一起汇入下载中心。
+  各领域页仍可单独刷新。软件/插件/MCP 检查本身不安装内容；应用代理测试是独立动作，不属于
   全局更新聚合，也不会调用模型。
 - Claude Code 先按 `Get-Command claude` 的可执行文件判断 `native/npm/unknown`。官方原生路径使用
   固定 `claude update`；未安装时使用固定 winget ID `Anthropic.ClaudeCode`。只有 npm 安装才并发
@@ -886,7 +1119,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   不包含凭据或模型回复文本。
 - `src/shared/claude-connection-remedy.ts` 把安装门禁、Router 生命周期、401/403、404、
   400/422、超时/网络、200 非标准响应和 Kimi 密钥族不匹配映射为结构化原因、建议与动作；
-  renderer 只负责执行打开控制台/文档、切认证、用快速模型、安装/启动 Router、重试或重选。
+  renderer 只负责执行打开控制台/文档、切认证、用小型/备用模型、安装/启动 Router、重试或重选。
 - 补救动作由 `connectionRemedyInProgress` 串行化；开始后 provider picker、配置表单和补救动作区
   全部 inert/disabled，容器设置 `aria-busy`，唯一 `finally` 恢复。Router 安装不改变当前服务商
   和未保存草稿，避免“处理中”期间配置被静默替换。
@@ -950,7 +1183,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   先通过现有 `project:close` 停掉对应 PTY，成功后才删除。
 - Claude Code 2.1.220 的公开 CLI 没有单会话删除命令；`claude project purge` 会清空整个
   项目范围，不能用于本功能。因此当前实现明确属于现有的严格兼容删除路径，不宣称为官方 API。
-- Claude Code 2.1.196+ 会用小型/快速模型根据首条提示词生成短标题；官方 statusLine 的
+- Claude Code 2.1.196+ 会用小型模型根据首条提示词生成短标题；官方 statusLine 的
   `session_name` 在存在 `/rename`/`--name` 自定义名称时返回自定义名称，否则返回该 AI 标题。
   ClaudeDock 已要求 2.1.197+，因此直接把这个字段同步到对应 `TerminalWorkspace` 标题，不再
   额外运行 `claude -p`、不注入隐藏提示词，也不解析终端绘制文本。工作区记录每个 PTY 最近
@@ -965,17 +1198,38 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/快速模
   参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
-  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数和
-  `effort.level`。`effort` 只在当前模型带思考程度参数时出现，缺失时 `effortLevel` 写入 null，
+  session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数、
+  `effort.level` 和 `fast_mode`。解析层只接受 `fast_mode` 的真实布尔值；字符串或数字不会被当成
+  Fast 已开启。`effort` 只在当前模型带思考程度参数时出现，缺失时 `effortLevel` 写入 null，
   由渲染层回落到本次请求值，而不是伪造默认档。
   stdin 必须显式按 UTF-8 解码（`StreamReader` + `UTF8Encoding`），不能用 `[Console]::In`：
   中文 Windows 的控制台代码页是 GBK，多字节 `session_name` 会被解错，双字节读还可能吞掉
   JSON 的结尾引号导致整个解析失败——症状是恢复带 AI 标题的历史会话后完全没有指标，而全新
   （未命名）会话正常。主进程每秒读取变更，通过受限 IPC 推送，同时把有效的 1–60 字符
   session name 同步到工作区标签。
-- 上下文占用使用 `context_window.used_percentage × context_window_size`，而不是累计所有
-  历史请求。Claude Code 会在接近窗口上限时自动 compact；界面的“实时”表示每次 statusLine
-  刷新后的最新状态，不代表逐 token 流式计数。
+- 上下文占用优先累加 `context_window.current_usage` 的 `input_tokens`、
+  `cache_creation_input_tokens` 和 `cache_read_input_tokens`，并限制在当前窗口内；官方
+  `used_percentage` 只计算这三项，因此 `output_tokens` 不加入占用百分比。仅在这些字段全部
+  缺失时才回退到 `used_percentage × context_window_size`。不使用累计 `total_input_tokens`，避免把
+  已压缩的历史反复计入，也避免取整后的百分比让底栏长期误显 100%。界面的“实时”表示每次
+  statusLine 刷新后的最新状态，不代表逐 token 流式计数。
+- 受管 ChatGPT 仅在模型为 `gpt-5.6-sol`（或兼容别名 `gpt-5.6`）时注入窗口 profile。标准档
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000`，按 Codex 产品的 95% 有效留量显示 258400，并用
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW=258400` 与 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` 在 206720
+  左右提前压缩；扩展实验档对应 1050000 / 997500 / 798000。启动环境同时显式清除继承的 `DISABLE_AUTO_COMPACT`
+  与 `DISABLE_COMPACT`，偏好由 `AppPreferencesStore` 保存并只在下次启动会话时取值。
+- Claude Code 2.1.221 对非 Claude 模型标识会在未禁用 compact 时读取
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`；官方环境变量页的通用描述仍写着该变量需配合
+  `DISABLE_COMPACT`。因此 ClaudeDock 不把偏好值直接冒充实测：只有 statusLine 真正上报
+  272000/1050000 时才换算 95% 有效窗口；若仍上报 200000，界面保留 200000，并按这个较小实测
+  窗口计算约 160000 的提前压缩线。该兼容性需要随 Claude Code 升级持续回归。
+- `parseClaudeContextWindowError` 专门识别压缩期间及普通请求的 400 上下文溢出；运行态错误不回显
+  原始请求或凭据，标准档提示新建会话，扩展档额外说明订阅后端可能仍按较小产品窗口拒绝并建议
+  切回标准档。已经越界后再发 `/compact` 仍可能被上游拒绝，因此不能把手动压缩描述为保证恢复。
+- `ResourceUsageView` 统一表达上下文、重置窗口和余额能力。Claude 用 statusLine 获取上下文及其
+  已上报的 5 小时/7 天窗口，并只对 DeepSeek 官方 `/user/balance` 与 OpenRouter 官方 `/api/v1/key`
+  做有界、缓存的余额读取；Codex 从官方 App Server 的 rate limits 映射 5 小时/7 天窗口。受管
+  ChatGPT 网关的本地请求统计保持禁用，不能当成官方订阅剩余额度。
 - 费用是 Claude Code 客户端本地估算：订阅用户不等同于账单，第三方模型若缺少定价元数据
   也可能为空或不准确。网关在服务端替换模型无法由客户端进行密码学证明；界面只能核对
   statusLine 报告的运行模型与锁定模型是否一致。
@@ -1017,20 +1271,22 @@ sessionId 串行化，两次快速点击不会把按键叠在一起。渲染层�
 原样带过去，不能被静默重置。`dontAsk` 永远不在循环里，只能 `--permission-mode dontAsk`
 启动，因此它走重启路径。
 
-**换模型分同端点与跨端点。** `getClaudeModelOptions` 合并当前配置与该项目的接入历史，
-按 `provider|preset|authMode|apiKeyHelperPolicy|baseUrl` 判定 `sameEndpoint`。同端点直接向
-运行中的会话提交 `/model <model>`，对话不中断，随后由既有的 `expectedModel` /
-`modelMatches` 漂移检测核对 statusLine 报回的真实模型。模型列表的 `activeModel` 优先取本次
-会话已提交的 `expectedModel`，其次取 statusLine 的 `modelId`，最后才回落到项目默认配置。
-跨端点必须重启：`ANTHROPIC_BASE_URL`、凭据和 helper 策略是 PTY spawn 时定死的环境/临时设置，
-运行中改不了。
+**换模型分同 profile 与需重启。** `getClaudeModelOptions` 合并当前配置与该项目的接入历史，
+先按 `provider|preset|authMode|apiKeyHelperPolicy|baseUrl` 判定 `sameEndpoint`，再比较目标模型解析出的
+speed mechanism/mode signature。只有端点和速度 profile 都相同才向运行中的会话提交
+`/model <model>`；否则必须重建 PTY，因为 `ANTHROPIC_BASE_URL`、凭据、helper 策略、
+`CLAUDE_CODE_EXTRA_BODY` 与 Claude `fastMode` 都是在 spawn/settings 阶段定死的。
+热切模型后由既有的 `expectedModel` / `modelMatches` 漂移检测核对 statusLine 报回的真实模型。
+模型列表的 `activeModel` 优先取本次会话已提交的 `expectedModel`，其次取 statusLine 的 `modelId`，
+最后才回落到项目默认配置。
 
 Claude Code 的 TUI 会把同一 PTY 写入中的命令正文和尾随回车视为一次粘贴，可能吞掉回车。
 `switchModel` 因此不能写 `` `/model ${model}\r` ``：它与 `/compact`、命令页白名单动作一起
 进入 `commandSubmissionQueues` 的 per-session 队列，再复用
 `writeTerminalSubmission(buildTerminalSubmission(...))` 先写正文、等待 40ms、单独写 `\r`。
-队列防止快速操作把两条命令的字节交错；间隔两侧都检查 session 对象仍是当前且 `active`，
-会话停止或重启时不向替代 shell 写迟到的回车。只有两段均成功写入后才更新 `expectedModel`。
+队列防止快速操作把两条命令的字节交错；间隔两侧都检查 session 对象仍是当前且 `active`，并
+执行 `SessionOperationCoordinator` 传入的 ownership assertion。会话停止、重启或被更新的操作取消时
+不向替代 shell 写迟到的正文/回车。只有两段均成功写入后才更新 `expectedModel`。
 renderer 的模型按钮在 `try/finally` 内维护 `disabled` 与 `aria-busy`，结束时先直接恢复并重绘
 已有状态，再异步刷新，因此状态读取延迟或失败不会把按钮永久锁住。
 
@@ -1115,8 +1371,16 @@ thinking 关闭。`parseClaudeEffortThinkingDisabledError` 只在最新一段 `A
 → `workspace.restart` → 写入启动命令。`--continue` 恢复当前目录最近的会话，所以对话不丢；
 压缩是为了切到上下文窗口更窄的模型时不溢出。
 
-**压缩与顶层响应完成靠 hook 通知。** per-session `settings.json` 的 `PostCompact` 与 `Stop`
-都执行 `assets/runtime/claude-runtime-signal.ps1`，分别原子写 `signal.json` 和 `turn-stop.json`
+**每次 launch 独占自己的 runtime artifacts。** `ClaudeRuntime` 为每次准备分配
+`userData/claude/runtime/<session-id>/launch-<runtime-token>-<launch-generation>/`，其中同时存放
+`settings.json`、`metrics.json`、`signal.json` 与 `turn-stop.json`；statusLine 与 hooks 只指向该目录。
+异步读取完成后必须再次核对 runtime instance、launch generation、精确 `ptyGeneration` 与路径，旧
+launch 的慢磁盘读取不能消费替代会话的 compact/Stop 信号、覆盖 metrics 或清除新的 effort 恢复状态。
+清理只保留当前和紧邻的前一次目录，其余过期 artifacts 有界回收。
+
+**压缩与顶层响应完成靠 hook 通知。** launch-owned `settings.json` 的 `PostCompact` 与 `Stop`
+都执行 `assets/runtime/claude-runtime-signal.ps1`，分别原子写同目录的 `signal.json` 和
+`turn-stop.json`
 （`$OutputPath.$PID.tmp` → `Move-Item -Force`），内容只有 `{event, signaledAt}`，不回写 hook 载荷。
 Stop 载荷含 `agent_id` 时直接退出，保证只报告主线程完成。脚本吞掉所有异常：丢一个信号最多
 保留临时 high 或让压缩等到超时，不能弄坏对话。主进程在已有的 1 秒 `pollMetrics` 循环里读取
@@ -1131,12 +1395,17 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 
 ### 斜杠命令可视化
 
-渲染进程提交命令名称与可选参数，主进程只接受固定白名单：
-`/context`、`/usage`、`/status`、`/model`、`/permissions`、`/mcp`、`/agents`、`/hooks`、
-`/memory`、`/resume`、`/compact`、`/rename`、`/theme`、`/doctor`、`/help`、`/clear`。参数最长
-500 字符且禁止换行；只有工作台已知正在运行的 Claude 会话可以接收。`/clear` 的二次确认
-在渲染层完成。验证后的命令不由 IPC handler 直接拼接 `\r` 写 PTY，而交给
-`ClaudeRuntime.runCommand`，与换模型和压缩共享同一分段提交与 per-session 队列。
+`src/shared/cli-command-catalog.ts` 是主进程执行白名单、Claude/Codex 工作台和测试的共同事实来源。
+Claude 基准含 101 个有效表项、展开别名后 120 个调用名；Codex 含 50 行、展开组合别名后 53 个
+调用名。每项记录 runtime、命令/别名、语法、分类、来源、版本/平台/功能条件、风险与
+`run` / `compose` 动作；完整快照写入 `docs/cli-command-catalog.md`。动态 Skills、Plugins 和 MCP
+命令不进入静态清单，界面引导用户查看 CLI 原生 `/` 列表。
+
+Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.runCommand`，仍经过参数 500 字符、
+禁止换行、会话运行状态和 per-session 分段提交队列；清理、退出、外部操作或需要参数的条目只生成
+输入骨架并按目录要求确认。Codex 全部为 `compose`，ClaudeDock 不自动向 TUI 发送。`/clear` 的二次
+确认保留在渲染层；验证后的 Claude 命令不由 IPC handler 直接拼接 `\r` 写 PTY，而与换模型和压缩
+共享“正文 → 40ms → 回车”的队列。
 
 ### PowerShell 键盘与剪贴板
 
@@ -1217,19 +1486,28 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
    仅限所选服务商配置中明确列出的官方端点；版本规则随已签名应用发布，不从网络下载策略。
 4. `RiskDecisionEngine` 把观测转换为 `allowed`、`allowed_with_notice`、`warning`、
    `degraded`、`partially_available` 或 `blocked`，同时生成按动作的 `featureAccess`。
-   显式代理和虚拟网卡只加提示；活动所需 DNS/API/CLI 路径失败、关键 TLS/跨域重定向异常、
+   显式代理、虚拟网卡和“本机存在全局 IPv6、但模型进程没有显式代理”只加提示；该 IPv6 信号仅
+   来自本机网卡，不推断公网出口。活动所需 DNS/API/CLI 路径失败、关键 TLS/跨域重定向异常、
    离线、危险版本和 Claude SOCKS 路径才会阻止对应高风险动作。
 5. `NetworkPreflightService` 按“服务商 + 动作 + 项目”执行 single-flight 和两分钟缓存。
    网络变化通过 generation 失效旧结果；失效期间完成的旧请求不会写入缓存或历史。
-6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 接入保存/历史恢复/
-   启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过。自定义网关和
+6. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 与受管 ChatGPT 接入保存/
+   历史恢复/启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过匹配的
+   Anthropic/OpenAI 官方端点预检。自定义网关和
    普通本地终端不被官方服务状态误伤；它们的连接按钮和自动测试直接请求自身端点。
 
 ### 回滚与故障边界
 
-- `RollbackCoordinator` 以逆序、幂等方式执行补偿步骤。项目开发引擎持久化失败时恢复原选择；
-  Claude 保存、历史恢复和跨端点重启失败时恢复 `ClaudeConfigStore` 的加密快照。
-- 访问守卫在任何配置或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
+- MCP 等多步骤工具仍使用 `RollbackCoordinator` 做逆序、幂等补偿。Claude 项目 profile 则由
+  `SessionConfigTransactionCoordinator` 与 `runOwnedConfigTransaction()` 按规范化目录串行化：先在
+  原 profile 保持不变时完成 provider/history/router 异步准备，确认原快照未被外部更新后，再通过
+  `commitPreparedConfig()` 或 `commitAllowBypassPermissions()` 无 `await` 同步提交。路由完成、状态回读、
+  可选会话恢复和失败恢复状态发布都保留在同一事务屏障内。
+- 提交后的失败只有在事务仍拥有目录、目标 session 和精确已提交快照时才恢复加密 profile；异步准备
+  期间观察到外部新配置会在提交前取消，回滚也不会覆盖排队成功或外部较新的写入。CCR Provider 保存
+  先于可选项目 profile 提交，是独立持久化边界；项目提交失败会恢复项目快照，但不会谎称已撤销 CCR
+  内已经保存的 Provider。
+- 访问守卫在任何配置 commit 或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
   inactive；只有已经尝试销毁并重启 PTY 后发生错误才进入 inactive 状态。
 - WebSocket 单独失败时基础 HTTPS/CLI 功能仍为 `partially_available`，但 `cloud-task`
   动作被拒绝。未知或跳过的关键探测按 fail-closed 处理。
@@ -1300,6 +1578,8 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
 ## 构建、测试与调试
 
 - `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
+- Vitest 在默认排除项之外固定忽略 `**/.claude/worktrees/**`；Claude CLI 留在仓库内的辅助工作树
+  可能包含同名旧测试，但它们不是当前提交的测试事实来源，不能让本机残留副本污染门禁结果。
 - `npm run lint`：检查 TypeScript 源码。
 - `npm run typecheck`：分别检查渲染端和主进程类型。
 - `npm test`：运行目录/工作区、项目级开发引擎持久化、Codex 官方 Release 元数据与
@@ -1316,12 +1596,47 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   严格结束标记、部分输出不重放、重定向安全与兼容回退、附件原子导入/
   UUID 引用/裁剪回收、1.x 历史迁移，以及 Markdown XSS、链接、公式、Shiki、Artifact opt-in
   和流式稳定前缀。
+- `tests/runtime-activity-registry.test.ts` 覆盖后台任务/子代理的 waiting→resuming→stop/failure 状态机
+  与代次隔离；`tests/claude-permission-bridge.test.ts` 在 Windows named pipe 上验证排队、允许、拒绝、
+  超时/代次失效回退；`tests/runtime-process-registry.test.ts` 覆盖进程树、TCP 监听、PID 创建时间复用、
+  不透明键、禁终止程序和温和/强制清理；`tests/claude-stream-diagnostics-store.test.ts` 锁定脱敏分类与
+  14 天/200 条/2 MiB 裁剪。`tests/cli-command-catalog.test.ts` 锁定 101/120 与 50/53 的完整调用集合。
+- `npm run test:runtime-soak:accelerated` 在数秒内模拟 24 小时的 1,440 个 Hook 事件和 57 次本地 Web
+  进程创建/回收；`npm run test:runtime-soak` 运行真实 24 小时的同类无付费模型合成测试。它们验证
+  ClaudeDock 自身有界状态与回收路径，不承诺上游模型或网关连续 24 小时无故障。
 - 4.0 守栏覆盖 BusyRegistry 租约释放、下载 EMA/ETA/恢复日志/来源与完整性、退出和托盘忙态、
   外部应用代理 DPAPI 存储/作用域/候选解析、移除旧代理 IPC、应用双更新源信任与测速选择、
   供应商能力矩阵、CCR CLI-only、
   CC Switch MSI/深链/清理牢笼、MCP 三作用域发现/diff/备份/逐字节还原，以及对话无总时长上限、
   静默探活和可选 `local-timeout`。`tests/cli-only-guard.test.ts` 与
   `tests/chat-timeout.test.ts` 作为跨模块源码不变量，避免未来调用点绕过局部单测。
+- `tests/managed-chatgpt-gateway.test.ts` 锁定 CLIProxyAPI 最新发行元数据的仓库/tag/资产名/大小/
+  SHA-256 验证、ZIP 路径穿越拒绝，以及仅监听回环地址、关闭远程管理和使用独立认证目录的配置；
+  同时验证网关进程净室删除继承的供应商路由/凭据变量但保留 HTTP 传输代理。renderer/main 源码
+  守栏要求受管状态 IPC、OpenAI 官方浏览器授权文案、一键安装入口，以及“旧 PTY 先停、成功后在
+  新路由恢复、失败不回落”的切换顺序保持存在。
+- `tests/model-speed-capabilities.test.ts` 锁定 Claude/GPT 支持矩阵、最低 Claude Code/CLIProxyAPI
+  版本、未知模型和第三方路由的 fail-closed 分类；`tests/model-speed-preferences-store.test.ts` 覆盖
+  默认标准、按目标隔离、原子裁剪、损坏文件回退和磁盘中不得出现凭据；
+  `tests/claude-configuration.test.ts` 与 `tests/claude-statusline.test.ts` 继续验证三种速度 profile、
+  `CLAUDE_CODE_EXTRA_BODY` 清理以及 `fast_mode` 严格布尔解析。
+- `tests/claude-launch-attempt.test.ts` 覆盖 per-session generation、冷状态 baseline、conversation/PID/
+  `ptyGeneration`/active→inactive 释放路径、同 PID 新 PTY、显式失败、terminal failure、session 删除、
+  tombstone 裁剪，以及确认挂起或 IPC 迟到时被删除/失效/替代的 executable interleaving；
+  `tests/session-operation-coordinator.test.ts` 验证被取消 lease 在 callback unwind 前仍独占，
+  `invalidateAndWait()` 等待完成且不同 session 可并行；`tests/session-operation-integration.test.ts`
+  固化 main 进程真实 stopped/error 转换、Codex/受管切换租约、runtime switch 检查与延迟命令 ownership。
+- `tests/terminal-workspace.test.ts` 以可替换假 PTY 执行 stale write/resize/stop/data 拒绝，并锁定 restart
+  generation 只递增一次、stop 不递增；`tests/terminal-session-generation.test.ts` mock 真实 node-pty spawn，
+  在 G2 已运行后触发 G1 的迟到 data/exit callback，验证生产 `TerminalSession` 的进程对象与 generation
+  双重围栏，并覆盖 spawn 失败、stop 与再次 start 的递增语义；`tests/terminal-lifecycle.test.ts` 用延迟
+  Promise 执行 start/restart/stop 的七步顺序、入口 stale、unwind 期间替代和失败 cleanup ownership；
+  `tests/terminal-output-batcher.test.ts` 执行 generation 替换、迟到数据、手动触发已取消 timer、scoped
+  discard、live-generation flush 与 dispose。`tests/claude-runtime-pty.test.ts`、`tests/codex-runtime.test.ts`
+  验证精确绑定、
+  冲突重绑、旧输出/退出标记/cleanup 失效，以及 PTY 替换发生在正文与延迟回车之间时不会把回车写进
+  新 shell。renderer 源码守栏还要求 TerminalView、RAF 缓冲、xterm write queue、resize 与 permission
+  probe 全部携带 generation。
 - `tests/renderer-html.test.ts` 使用 Prettier 的严格 HTML 解析器检查渲染入口，同时验证 ID
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
@@ -1341,16 +1656,20 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   确认框必须是可取消的应用内 `<dialog>`，窗口 focus/visibility 恢复路径必须重新读取工作区；
   活动终端的 `focus-within` 必须有主题色聚焦反馈；连接实测必须显示后台状态、在唯一
   `finally` 恢复测试按钮并让定时轮询避让；统一刷新必须在首屏后异步启动，三类更新入口默认
-  隐藏；服务商反选、按上次选择单组展开、
+  隐藏，用户主动检查必须打开含空状态、逐项操作和全部更新的结果对话框；服务商反选、按上次选择单组展开、
   1/2/3 列容器查询、全局设置分类与接入快照式取消、独立聊天导航顺序、实时草稿 Token、
   连接测试、历史保存/恢复/删除入口、Claude/Telegram 主题外观和禁止 hover 上浮，
-  以及活动栏二次点击收起也作为源码/结构契约锁定。底栏三件套同样在这里锁定：连接按钮必须
+  以及活动栏二次点击收起也作为源码/结构契约锁定。终端提示词上方不得重新出现模式、模型或思考
+  控制条，这些入口只能由底栏和命令页承载。底栏交互同样在这里锁定：连接按钮必须
   用保存配置原地测试、不得跳转
   “接入”页；当前 Claude 项目首次载入及窗口从托盘恢复时必须各自动实测一次，同一显示周期
   按 session 去重，普通 focus/visibility 不得重复消耗 token；忙态分支必须排在健康色分支
   之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
-  模型/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上、900px 以下一起隐藏，六种
-  权限模式必须全部出现在目录里，模型切换的 `disabled` / `aria-busy` 必须在 `finally` 中
+  模型/速度/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上并按响应式层级隐藏，六种
+  权限模式必须全部出现在目录里；Claude 启动 generation 必须在首个 `await` 前建立并捕获
+  `ptyGeneration`，冷状态用 `hydrateClaude` 建 baseline，launch/relaunch/速度切换必须共用 exact-token
+  orchestrator，迟到确认或 IPC 结果不能释放、toast 或改写新 generation；模型切换的 `disabled` /
+  `aria-busy` 必须在 `finally` 中
   直接恢复，`dontAsk` 与跨端点模型必须走同一个重启函数，输入框的
   `Shift+Tab` 必须转发 CBT 序列，而模式回读必须发生在 xterm 应用屏幕差量之后；主动 probe
   还要受输出修订号屏障保护并扫描完整活动缓冲区，不能在仍有待写数据时回复旧快照。
@@ -1367,7 +1686,8 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   teardown 之前把未置闩的退出退回 `requestQuit()`；`canAsk` 健康检查、二次请求强制通过和
   单实例锁失败必须无条件退出；`session-end` 必须直接置闩不发问；`app:confirm-quit` 只在
   收到 `true` 时退出且两种回答都清除 pending；托盘退出必须走同一函数而不是内联 `app.quit()`；
-  桥接的两个方向都必须在契约里声明。
+  可应答窗口不能因租约为空绕过确认，`starting/running` 会话必须合成为退出清单；桥接的两个方向
+  都必须在契约里声明。
 - `tests/claude-configuration.test.ts` 覆盖启动命令的权限参数（`--permission-mode` 的引号、
   `--allow-dangerously-skip-permissions` 只在未直接以 bypass 启动时附加、关闭后两者都不出现）
   与共享 `parseClaudePermissionMode` 的六种徽标、夹带 ANSI/OSC、徽标内部被着色打断、软换行
@@ -1411,16 +1731,18 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   既容纳冷启动又防止脚本挂死拖住 CI。
 - `tests/update-actions.test.ts` 覆盖更新入口状态机：首次未检查、软件未安装、已是最新版和
   软件/插件混合更新四类状态不能互相误显。
-- `tests/download-contracts.test.ts` 锁定下载 IPC 三件套（列表、命令、变更订阅）跨进程连通、
+- `tests/download-contracts.test.ts` 锁定下载 IPC（列表、命令、历史清理与变更订阅）跨进程连通、
   每个改动前都校验发送方与任务 ID、CCR 与 Codex 都走共享的校验下载内核，以及下载中心的
   进度呈现：不确定态只属于仍在推进的任务，`cancelled` / `completed` / `failed` 必须立刻停下
   转圈动画——`percent` 在服务端没给长度时一直是 `-1`，只看这个数字会让失败的下载永远转下去。
+- `tests/download-history.test.ts` 覆盖终态历史的持久化、倒序、100 条上限、逐条删除、全部清空、
+  损坏文件降级和敏感字段缺席；非终态任务不能进入历史，清理元数据不得删除最终下载文件。
 - `tests/async-refresh-cache.test.ts` 与 `tests/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
 - `tests/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据、helper 策略和协议）变化就新增、只有网关状态变化不新增、
-  重放一条较早的记录把它移回最前面而不是新增一条、留空的快速模型在回放时不被当成改动、
+  重放一条较早的记录把它移回最前面而不是新增一条、留空的小型/备用模型在回放时不被当成改动、
   version 1 记录迁移为安全策略与可解释协议、OpenAI 原始上游字段与 Router ID 可回放、重命名校验与持久化、
   明文密钥不得出现在磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、
   Windows 路径大小写不敏感、条数上限、文件损坏后回落到空列表。
@@ -1448,9 +1770,13 @@ PowerShell 写入的 UTF-8 BOM 在 JSON 解析前统一剥掉。
   其余继续核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、窄宽响应式和
   遮罩无重排。隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
 - `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY，输出
-  24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow，并在最终
-  PTY size 确认行后捕获 `dist/visual-qa/conpty-resize-live.png`。该 Windows 专用烟测补足
-  静态终端 fixture 无法证明 PTY resize/reflow 的边界，结束后删除临时用户目录。
+  24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow；每次 resize 都等待
+  preload 的权威 `terminal:size`，不靠固定睡眠。截图后连续执行三轮 restart → stop → start，再让最终
+  generation 输出唯一 sentinel 并立即 `exit`，断言 data 先于 `stopped`、停止后没有同 generation
+  迟到数据、旧 generation 的 `stopped/error` 不会覆盖最终运行状态。该 Windows 专用烟测已作为
+  production build 后的 `verify` 门禁；首次命令、最终尺寸和 sentinel 输出都使用 30 秒硬上限，
+  以容纳 GitHub Windows Runner 上 Electron/node-pty/PowerShell/Defender 的冷启动，但仍按 50ms
+  探测立即继续而不是固定等待。结束后删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
   `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
   几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 163 个按钮全部命中
@@ -1495,9 +1821,9 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
 申请材料和角色/构建政策见 `CODE_SIGNING_POLICY.md`；其免费工作流能否顺序签署 Electron NSIS 内部
 应用、动态生成的卸载器及外层安装器，仍须 SignPath 人工确认，不能以自签名替代。
 
-`npm audit --omit=dev` 和完整 `npm audit` 当前均为 0 个已知漏洞；锁文件中的构建期
-`brace-expansion` 与 `fast-uri` 间接依赖已更新到修复版本。每次公开发布仍须重新执行完整审计和
-许可检查。
+2026-08-07 的依赖安全修复把 `js-yaml` 从 4.3.0 升级到 4.3.1，把 `mermaid` 从 11.16.0 升级到
+11.16.1；完整 `npm audit` 随后报告 0 个漏洞。`npm run check:licenses` 与完整功能/供应链回归仍是
+发布门禁；不得仅以 audit 清零替代测试、签名、安装烟测或双渠道一致性验证。
 
 ## 关键取舍与限制
 
@@ -1596,6 +1922,16 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
   <https://code.claude.com/docs/en/llm-gateway-protocol>
 - Claude Code 环境变量：
   <https://code.claude.com/docs/en/env-vars>
+- Claude Code Fast mode：
+  <https://code.claude.com/docs/en/fast-mode>
+- OpenAI API Fast mode / service tier：
+  <https://developers.openai.com/api/docs/guides/fast-mode>
+- OpenAI Codex speed：
+  <https://learn.chatgpt.com/codex/agent-configuration/speed>
+- Codex 模型 service-tier 目录：
+  <https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json>
+- CLIProxyAPI 7.2.117 Claude→Codex translator：
+  <https://github.com/router-for-me/CLIProxyAPI/blob/v7.2.117/internal/translator/codex/claude/codex_claude_request.go>
 - Claude Code settings 与 `--settings` 优先级：
   <https://code.claude.com/docs/en/settings>
 - Claude Code 模型配置：

@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
+const terminalOutputPumpSource = readFileSync(
+  new URL('../src/renderer/terminal-output-pump.ts', import.meta.url),
+  'utf8',
+);
 const componentKit = readFileSync(
   new URL('../src/renderer/components.ts', import.meta.url),
   'utf8',
@@ -18,6 +22,12 @@ const gatewayDiagnosticsSource = readFileSync(
 );
 const providerCatalogSource = readFileSync(
   new URL('../src/shared/claude-providers.ts', import.meta.url),
+  'utf8',
+);
+const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
+const claudeRuntimeSource = readFileSync(
+  new URL('../src/main/claude-runtime.ts', import.meta.url),
   'utf8',
 );
 
@@ -38,10 +48,61 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('let attemptsRemaining = 4;');
     expect(rendererSource).toContain('const debounceTerminalFit = (): void => {');
     expect(rendererSource).toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
-    expect(rendererSource).toContain('view?.container.getBoundingClientRect()');
+    expect(rendererSource).toContain('view.container.getBoundingClientRect()');
     expect(rendererStyles).toContain('.project-terminal--active:focus-within');
     expect(rendererStyles).toMatch(
       /\.project-terminal--active:focus-within\s*\{[\s\S]*?var\(--accent-line\)[\s\S]*?var\(--accent-tint\)/,
+    );
+  });
+
+  it('owns xterm views and asynchronous terminal work by exact PTY generation', () => {
+    expect(rendererSource).toContain('readonly ptyGeneration: PtyGeneration;');
+    expect(rendererSource).toContain('const ownsTerminalGeneration = (');
+    expect(rendererSource).toMatch(
+      /terminalViews\.get\(sessionId\) === view[\s\S]*?view\.ptyGeneration === ptyGeneration[\s\S]*?status\?\.ptyGeneration === ptyGeneration/,
+    );
+    expect(rendererSource).toMatch(
+      /if \(existing\) \{\s+disposeTerminalView\(status\.id, existing\);\s+\}\s+return createTerminalView\(status, active\);/,
+    );
+    expect(rendererSource).toContain(
+      'isCurrent: () => ownsTerminalGeneration(sessionId, ptyGeneration, view),',
+    );
+    expect(terminalOutputPumpSource).toContain('if (!this.options.isCurrent()) {');
+    expect(terminalOutputPumpSource).toContain('this.options.write(plan.data, finish);');
+    expect(rendererSource).toContain(
+      'window.controlPanel.onTerminalData((sessionId, ptyGeneration, data) => {',
+    );
+    expect(rendererSource).toContain('queueTerminalOutput(sessionId, ptyGeneration, data);');
+    expect(rendererSource).toContain(
+      'window.controlPanel.writeTerminal(sessionId, ptyGeneration, data);',
+    );
+    expect(rendererSource.match(/window\.controlPanel\.writeTerminal\(/g)).toHaveLength(1);
+    expect(rendererSource).toMatch(
+      /window\.controlPanel\.resizeTerminal\(\s+sessionId,\s+ptyGeneration,/,
+    );
+  });
+
+  it('fences terminal interaction and permission probes after generation replacement', () => {
+    expect(rendererSource).toContain(
+      'void pasteIntoTerminalGeneration(sessionId, ptyGeneration, view);',
+    );
+    expect(rendererSource).toContain(
+      "writeToTerminalGeneration(sessionId, ptyGeneration, view, '\\x0a');",
+    );
+    expect(rendererSource).toContain(
+      "writeToTerminalGeneration(status.id, status.ptyGeneration, view, '\\x1b[Z')",
+    );
+    expect(rendererSource).toContain(
+      '() => writableTerminalGeneration(status.id, ptyGeneration, view)',
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);',
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {',
+    );
+    expect(rendererSource).toContain(
+      'window.controlPanel.reportClaudePermissionModeProbe(sessionId, ptyGeneration, probeId);',
     );
   });
 
@@ -127,7 +188,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('content.inert = nextCollapsed;');
     expect(rendererSource).toContain('collapsedClaudeProviderGroups(providerId)');
     expect(rendererSource).toMatch(
-      /const enteringConnection = tab === 'connection'[\s\S]*?applyDefaultProviderGroupExpansion\(lastProvider\)/,
+      /const prepareRailTab = \(tab: string\)[\s\S]*?tab === 'connection'[\s\S]*?applyDefaultProviderGroupExpansion\(lastProvider\)/,
     );
     expect(rendererStyles).toContain('container-type: inline-size;');
     expect(rendererStyles).toMatch(
@@ -138,21 +199,75 @@ describe('renderer interaction lifecycle contract', () => {
     );
   });
 
-  it('presents ChatGPT subscription routing as a local experimental conversion', () => {
-    expect(providerCatalogSource).toContain('ChatGPT 订阅（本地网关）');
+  it('presents ChatGPT subscription routing as a ClaudeDock-managed flow', () => {
+    expect(providerCatalogSource).toContain('ChatGPT 订阅（ClaudeDock 托管）');
+    expect(providerCatalogSource).toContain('OpenAI Codex 负责人 Thibault “Tibo” Sottiaux');
     expect(rendererSource).toContain('本地转换 · 非官方直连');
     expect(rendererSource).toContain("provider.id === 'chatgpt-subscription'");
     expect(rendererSource).toContain("? '本机网关'");
     expect(rendererSource).toContain('本地网关再完成 Codex OAuth 请求与协议转换');
-    expect(rendererSource).toContain('1455 是 OAuth 回调端口');
-    expect(rendererSource).toContain('公开方案里的 claudex 别名本质是作用域受限的环境变量');
-    expect(rendererSource).toContain("candidate.kind === 'cliproxyapi' ? 'authToken'");
-    expect(rendererSource).toContain("candidate.kind === 'cliproxyapi'");
-    expect(rendererSource).toContain("? 'chatgpt-subscription'");
+    expect(rendererSource).toContain('一键安装并登录');
+    expect(rendererSource).toContain('不要求你打开终端或第三方控制台');
+    expect(rendererSource).toContain('.setupManagedChatGptGateway(sessionId, forceLogin)');
+    expect(rendererSource).toContain('.setManagedChatGptGatewayModel(sessionId, requestedModel)');
+    expect(rendererSource).toContain('此方式不需要 CCR');
+    expect(rendererMarkup).toContain('选择服务商，一次完成接入');
+    expect(rendererSource).toContain(
+      'environmentSetup.hidden = isManagedChatGpt || connectionEnvironmentReady;',
+    );
+    expect(rendererSource).toContain('renderModels(state.availableModels, preferredModel);');
+    expect(rendererSource).toContain('enhanceSelect(modelSelect);');
+    expect(rendererSource).toContain("progressCard.setAttribute('aria-live', 'polite');");
+    expect(rendererSource).toContain("action.setAttribute('aria-busy', String(progress.active));");
+    expect(rendererSource).toContain('列表来自本机网关实时接口');
+    expect(rendererSource).not.toContain(
+      'providerSpecialSetup.append(buildChatGptSubscriptionGuide(), gatewayDiscoverySection)',
+    );
+    expect(rendererSource).toContain('.getManagedChatGptGatewayState()');
+    expect(rendererSource).toContain('state.busy || managedChatGptSetupInProgress');
+    expect(rendererSource).toContain("? '安装进行中…'");
+    expect(rendererSource).toContain("const preset: ClaudePreset = 'gateway'");
     expect(rendererStyles).toContain('.subscription-gateway-guide');
+    expect(rendererStyles).toContain('.subscription-gateway-status');
+    expect(rendererStyles).toMatch(
+      /\.subscription-gateway-progress\s*\{[\s\S]*?animation: cardEnter/,
+    );
+    expect(rendererStyles).toContain(
+      '.subscription-gateway-progress progress::-webkit-progress-value',
+    );
     expect(gatewayDiagnosticsSource).toContain('probePort(8317)');
     expect(gatewayDiagnosticsSource).toContain("kind: 'cliproxyapi'");
     expect(gatewayDiagnosticsSource).toContain('http://127.0.0.1:8317/v1/models');
+  });
+
+  it('decides whether CCR is required without asking the user to configure routing', () => {
+    expect(rendererMarkup).toMatch(
+      /class="settings-row router-wizard-route"[\s\S]*?for="router-wizard-use-route"[\s\S]*?hidden/,
+    );
+    expect(rendererSource).toContain("const routed = capability.mode === 'router-required';");
+    expect(rendererSource).toContain('routerWizardUseRoute.disabled = true;');
+    expect(rendererSource).not.toContain(
+      "routerWizardUseRoute.addEventListener('change', syncRouterWizard)",
+    );
+  });
+
+  it('keeps managed gateway operations behind the isolated main-process bridge', () => {
+    for (const channel of [
+      'claude:managed-chatgpt-gateway-state',
+      'claude:managed-chatgpt-gateway-setup',
+      'claude:managed-chatgpt-gateway-model',
+      'claude:managed-chatgpt-setup-progress',
+      'claude:managed-chatgpt-gateway-open-management',
+    ]) {
+      expect(mainSource).toContain(`'${channel}'`);
+      expect(preloadSource).toContain(`'${channel}'`);
+    }
+    expect(preloadSource).toContain('setupManagedChatGptGateway: (sessionId, forceLogin)');
+    expect(claudeRuntimeSource).toMatch(
+      /private async prepareRouteServices[\s\S]*?routeKind === 'managed-chatgpt'[\s\S]*?runExclusive\(this\.ensureManagedChatGptGatewayReady\)/,
+    );
+    expect(rendererMarkup).toContain('id="settings-open-chatgpt-gateway"');
+    expect(rendererSource).toContain('.openManagedChatGptGatewayManagement()');
   });
 
   it('opens global settings from the bottom rail and keeps advanced connection tools categorized', () => {
@@ -200,8 +315,10 @@ describe('renderer interaction lifecycle contract', () => {
     );
     expect(rendererSource).toContain("appendParameter('主模型', displayedModel || '默认模型')");
     expect(rendererSource).toContain(
-      "appendParameter('快速模型', displayedModelFast || displayedModel || '跟随主模型')",
+      "appendParameter('小型/备用模型', displayedModelFast || displayedModel || '跟随主模型')",
     );
+    expect(rendererMarkup).toContain('<span>小型/备用模型标识</span>');
+    expect(rendererMarkup).toContain('这是另一个模型，不是服务速度档位');
     expect(rendererSource).not.toContain('connectionHistorySection');
   });
 
@@ -325,6 +442,12 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toContain('data-conversation-context-action="delete"');
     expect(rendererSource).toContain('const deleteStoredConversation = async');
     expect(rendererSource).toContain('window.controlPanel.deleteClaudeSession(');
+    expect(rendererSource).toContain('renderWorkspace(result.state);');
+    expect(rendererSource).toContain('if (!result.ok || !result.deleted) {');
+    expect(rendererSource).toMatch(
+      /const deleteStoredConversation = async[\s\S]*?const result = await window\.controlPanel\.deleteClaudeSession\(projectPath, session\.sessionId\);[\s\S]*?if \(!result\.ok \|\| !result\.deleted\) \{[\s\S]*?\}\s+await loadFolderHistory\(projectPath, true\);\s+showToast\(`已删除历史对话/,
+    );
+    expect(rendererSource).not.toContain('const runningMatches = workspaceState.sessions.filter');
     expect(rendererSource).toContain("deleteButton.className = 'history-item__delete';");
     expect(rendererSource).toContain("confirmLabel: '永久删除'");
   });
@@ -334,7 +457,11 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain(
       "workspace.classList.toggle('workspace--rail-collapsed', collapsed)",
     );
-    expect(rendererSource).toContain('controlPanel.inert = collapsed;');
+    expect(rendererSource).toContain('controlPanel.inert = tab === undefined;');
+    expect(rendererSource).toContain('const showRailPreview = (tab: string): void =>');
+    expect(rendererSource).toContain('workspace--rail-preview');
+    expect(rendererSource).toContain('if (!chatVisible && !preview)');
+    expect(rendererSource).toContain('const railPreviewDialogObserver = new MutationObserver');
     expect(rendererStyles).toContain('.workspace.workspace--rail-collapsed');
     expect(rendererStyles).toContain(
       'grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);',
@@ -350,6 +477,13 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /window\.setTimeout\(\(\) => \{\s+void refreshAvailableUpdates\(false\);/,
     );
+    expect(rendererMarkup).toContain('id="update-center-dialog"');
+    expect(rendererMarkup).toContain('id="update-center-list"');
+    expect(rendererMarkup).toContain('id="update-center-all"');
+    expect(rendererSource).toContain(
+      'if (!updateCenterDialog.open) updateCenterDialog.showModal()',
+    );
+    expect(rendererSource).toContain('const runAllUpdates = async');
     expect(rendererSource).toMatch(/if \(plugin\.updateAvailable\) \{\s+actions\.append/);
   });
 
@@ -361,11 +495,17 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('applyTerminalTheme(initialSettings.theme, false, false);');
   });
 
-  it('queues a forced history refresh behind an older in-flight read', () => {
-    expect(rendererSource).toContain('const historyReloadRequested = new Set<string>();');
-    expect(rendererSource).toContain('if (force) historyReloadRequested.add(key);');
-    expect(rendererSource).toContain('if (historyReloadRequested.delete(key))');
-    expect(rendererSource).toContain('await loadFolderHistory(projectPath, true);');
+  it('generation-fences folder history refreshes across forget and re-add', () => {
+    expect(rendererSource).toContain(
+      'const folderHistoryLoads = new FolderHistoryLoadCoordinator();',
+    );
+    expect(rendererSource).toContain('folderHistoryLoads.invalidate(key);');
+    expect(rendererSource).toContain('storedConversations.delete(key);');
+    expect(rendererSource).toContain('const token = folderHistoryLoads.request(key, force);');
+    expect(rendererSource).toMatch(
+      /const conversations = await window\.controlPanel\.getClaudeSessionsForPath\(projectPath\);\s+if \(!folderHistoryLoads\.isCurrent\(token\) \|\| !workspaceContainsProject\(key\)\) \{\s+return;\s+\}\s+storedConversations\.set\(key, conversations\);/,
+    );
+    expect(rendererSource).toContain('completion.current && completion.reloadRequested');
   });
 
   it('keeps official preflight separate while the footer runs the saved real connection test', () => {
@@ -384,7 +524,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toContain('id="network-preflight-dialog"');
     expect(rendererMarkup).toContain('id="network-preflight-recheck"');
     expect(rendererSource).toMatch(
-      /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState\);/,
+      /connectionTestInProgress = true;\s+renderConnectionTestPending\(\);\s+const knownState = claudeStates\.get\(status\.id\);[\s\S]*?renderClaudeState\(knownState, true, false\);/,
     );
     const testHandler = rendererSource.slice(
       rendererSource.indexOf('const runConnectionTest = async'),
@@ -430,7 +570,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /connectionRemedyInProgress = true;[\s\S]*?connectionRemedy\.setAttribute\('aria-busy', 'true'\);[\s\S]*?syncConnectionInteractivity\(\);[\s\S]*?finally \{[\s\S]*?connectionRemedyInProgress = false;/,
     );
-    expect(rendererSource).toContain('providerPicker.inert = !connectionEnvironmentReady || busy;');
+    expect(rendererSource).toContain('providerPicker.inert = busy;');
     expect(rendererSource).toContain(
       'claudeConfigForm.inert = !connectionEnvironmentReady || busy;',
     );
@@ -448,22 +588,34 @@ describe('renderer interaction lifecycle contract', () => {
     expect(installCase).not.toContain("applyPresetUi('gateway'");
   });
 
-  it('turns the footer model, mode and effort readouts into real menu triggers', () => {
+  it('turns the footer model, speed, mode and effort readouts into real menu triggers', () => {
     expect(rendererMarkup).toMatch(
-      /<button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">/,
+      /<button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">/,
     );
-    expect(rendererMarkup).toMatch(
-      /<button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    expect(rendererMarkup).toContain('data-context-window-mode="standard"');
+    expect(rendererMarkup).toContain('data-context-window-mode="extended"');
+    expect(rendererMarkup).toContain('扩展（实验）· 约 99.75 万有效');
+    expect(rendererSource).toContain('.setManagedChatGptContextWindowMode(contextWindowMode)');
+    expect(preloadSource).toContain(
+      "ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode)",
     );
-    expect(rendererMarkup).toMatch(
-      /<button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">/,
+    for (const id of ['model', 'speed', 'mode', 'effort']) {
+      expect(rendererMarkup).toMatch(
+        new RegExp(
+          `<button id="footer-${id}" type="button" aria-haspopup="menu" aria-expanded="false">`,
+        ),
+      );
+    }
+    // Speed sits between the model identity and permission mode; effort stays immediately to the right.
+    const footerOrder = ['model', 'speed', 'mode', 'effort'].map((id) =>
+      rendererMarkup.indexOf(`id="footer-${id}"`),
     );
-    // Effort sits immediately right of the permission mode readout.
-    expect(rendererMarkup.indexOf('id="footer-mode"')).toBeLessThan(
-      rendererMarkup.indexOf('id="footer-effort"'),
-    );
+    expect(footerOrder).toEqual([...footerOrder].sort((first, second) => first - second));
     expect(rendererMarkup).toContain(
       '<div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden>',
+    );
+    expect(rendererMarkup).toMatch(
+      /id="footer-speed-menu"\s+role="menu"\s+aria-label="切换服务速度"\s+hidden/,
     );
     expect(rendererMarkup).toMatch(
       /id="footer-mode-menu"\s+role="menu"\s+aria-label="切换权限模式"\s+hidden/,
@@ -471,20 +623,59 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toMatch(
       /id="footer-effort-menu"\s+role="menu"\s+aria-label="切换思考程度"\s+hidden/,
     );
-    // All three menus join the one dismissal path rather than starting a second one.
+    // Every popup joins the one dismissal path rather than starting a second one.
     expect(rendererSource).toMatch(
-      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\) &&\s+!footerEffortMenu\.contains\(event\.target as Node\)/,
+      /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerSpeedMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\) &&\s+!footerEffortMenu\.contains\(event\.target as Node\)/,
     );
     expect(rendererSource).toMatch(
-      /\[footerModeMenu, footerMode\],\s+\[footerEffortMenu, footerEffort\],/,
+      /\[footerSpeedMenu, footerSpeed\],\s+\[footerModeMenu, footerMode\],\s+\[footerEffortMenu, footerEffort\],/,
     );
     expect(rendererSource).toMatch(
       /window\.addEventListener\('blur', \(\) => \{[\s\S]*?hideFooterMenus\(\);/,
     );
-    // Narrow windows drop all readouts together, so the footer cannot overflow.
+    // Narrow windows keep the same controls reachable inside one responsive secondary panel.
+    expect(rendererMarkup).toContain('id="footer-more"');
+    expect(rendererMarkup).toContain('id="footer-secondary-status"');
     expect(rendererStyles).toMatch(
-      /@media \(max-width: 900px\)[\s\S]*?#footer-mode,\s+#footer-effort,\s+#footer-model \{\s+display: none;/,
+      /@media \(max-width: 1040px\)[\s\S]*?\.terminal-footer__secondary\[data-open='true'\]/,
     );
+    expect(rendererStyles).not.toMatch(
+      /#footer-model,\s*#footer-speed,\s*#footer-mode[^}]*display:\s*none/,
+    );
+  });
+
+  it('keeps serving speed model-specific and truthful across Claude, GPT and native Codex', () => {
+    for (const label of [
+      '速度 标准',
+      '速度 已请求 Claude Fast',
+      '速度 Claude Fast 已开启',
+      '速度 Claude Fast 未生效',
+      '速度 已请求 GPT 1.5x',
+      '速度 不支持',
+      '速度 未验证',
+    ]) {
+      expect(rendererSource).toContain(label);
+    }
+    expect(rendererSource).toContain("footerSpeed.textContent = '速度 Codex 内管理';");
+    expect(rendererSource).toContain("item.role = 'menuitemradio';");
+    expect(rendererSource).toContain("item.setAttribute('aria-checked', String(selected));");
+
+    const speedHandler = rendererSource.slice(
+      rendererSource.indexOf('const switchClaudeModelSpeed = async'),
+      rendererSource.indexOf('const switchPermissionMode = async'),
+    );
+    expect(speedHandler).toContain('const operation = claudeSpeedOperations.begin(status.id);');
+    expect(speedHandler).toContain('const attempt = beginClaudeLaunchAttempt(status, state);');
+    expect(speedHandler).toContain('await orchestrateSessionOperation({');
+    expect(speedHandler).toContain('window.controlPanel.setClaudeModelSpeed(status.id, mode)');
+    expect(speedHandler).toContain('service_tier=fast');
+    expect(speedHandler).toContain('无法确认 ChatGPT 上游最终采用');
+    expect(speedHandler).toContain('如果主进程确认 Claude Code 仍在运行');
+    expect(speedHandler).toContain('不会压缩上下文');
+    expect(speedHandler).toContain('if (!result.state.active)');
+    expect(speedHandler).not.toContain('state.active ? beginClaudeLaunchAttempt');
+    expect(speedHandler).not.toContain('compactFirst');
+    expect(preloadSource).toContain("'claude:set-model-speed'");
   });
 
   it('offers every adjustable effort level and applies it without a relaunch', () => {
@@ -523,7 +714,7 @@ describe('renderer interaction lifecycle contract', () => {
   it('always releases the model switch trigger after the IPC operation settles', () => {
     const switchHandler = rendererSource.slice(
       rendererSource.indexOf('const switchClaudeModel = async'),
-      rendererSource.indexOf('const switchPermissionMode = async'),
+      rendererSource.indexOf('const switchClaudeModelSpeed = async'),
     );
     expect(switchHandler).toMatch(
       /modelSwitchInProgress = true;\s+footerModel\.disabled = true;\s+footerModel\.setAttribute\('aria-busy', 'true'\);/,
@@ -531,7 +722,108 @@ describe('renderer interaction lifecycle contract', () => {
     expect(switchHandler).toMatch(
       /finally \{\s+endMask\(\);\s+modelSwitchInProgress = false;\s+footerModel\.disabled = false;\s+footerModel\.setAttribute\('aria-busy', 'false'\);/,
     );
-    expect(switchHandler).toContain('renderClaudeState(knownState);');
+    expect(switchHandler).toContain('renderClaudeState(knownState, true, false);');
+  });
+
+  it('keeps Claude launch locks and speed settlement under independent generations', () => {
+    expect(rendererSource).toContain('terminalPtyGeneration: status.ptyGeneration');
+    expect(rendererSource.match(/await orchestrateClaudeLaunchAttempt\(\{/g)).toHaveLength(2);
+    const launchHandler = rendererSource.slice(
+      rendererSource.indexOf('const launchClaude = async'),
+      rendererSource.indexOf('const launchCodex = async'),
+    );
+    expect(launchHandler.indexOf('beginClaudeLaunchAttempt(status)')).toBeLessThan(
+      launchHandler.indexOf('await orchestrateClaudeLaunchAttempt'),
+    );
+    expect(launchHandler).toContain(
+      'start: () => window.controlPanel.launchClaude(status.id, mode)',
+    );
+    expect(launchHandler).toContain(
+      "renderClaudeLaunchResult(attempt, result.state, result.ok ? 'success' : 'failure')",
+    );
+    expect(launchHandler).toContain("if (outcome.status === 'rejected')");
+
+    const relaunchHandler = rendererSource.slice(
+      rendererSource.indexOf('const relaunchClaudeSession = async'),
+      rendererSource.indexOf('const switchClaudeModel = async'),
+    );
+    expect(relaunchHandler.indexOf('beginClaudeLaunchAttempt(status)')).toBeLessThan(
+      relaunchHandler.indexOf('await orchestrateClaudeLaunchAttempt'),
+    );
+    expect(relaunchHandler).toContain('confirmation: () =>');
+    expect(relaunchHandler).toContain('requestConfirmation({');
+    expect(relaunchHandler).toContain('window.controlPanel.relaunchClaudeSession(status.id');
+    expect(relaunchHandler).toContain(
+      'onRelease: () => refreshClaudeLaunchControls(attempt.sessionId)',
+    );
+
+    const speedHandler = rendererSource.slice(
+      rendererSource.indexOf('const switchClaudeModelSpeed = async'),
+      rendererSource.indexOf('const switchPermissionMode = async'),
+    );
+    expect(speedHandler.indexOf('beginClaudeLaunchAttempt(status, state)')).toBeLessThan(
+      speedHandler.indexOf('await orchestrateSessionOperation'),
+    );
+    expect(speedHandler).toContain('registry: claudeSpeedOperations');
+    expect(speedHandler).toContain('confirmation: () =>');
+    expect(speedHandler).toContain('window.controlPanel.setClaudeModelSpeed(status.id, mode)');
+    expect(speedHandler).toContain('claudeSpeedOperations.finish(operation)');
+    expect(speedHandler).toContain('claudeLaunchAttempts.cancel(attempt)');
+
+    expect(rendererSource).toContain('claudeLaunchAttempts.acceptResult(token, disposition)');
+    expect(rendererSource).not.toContain('current && !claudeLaunchAttempts.isCurrent(token)');
+  });
+
+  it('fences state loads and Codex launches with per-session generations', () => {
+    for (const registry of [
+      'claudeStateLoadGenerations',
+      'codexStateLoadGenerations',
+      'runtimeStateLoadGenerations',
+    ]) {
+      expect(rendererSource).toContain(`const ${registry} = new SessionGenerationRegistry();`);
+      expect(rendererSource).toContain(`${registry}.begin(sessionId)`);
+      expect(rendererSource).toContain(`${registry}.finish(request)`);
+      expect(rendererSource).toContain(`${registry}.prune(validSessionIds)`);
+    }
+    expect(rendererSource).toContain(
+      'const claudeSpeedOperations = new SessionGenerationRegistry();',
+    );
+    expect(rendererSource).toContain('claudeSpeedOperations.begin(status.id)');
+    expect(rendererSource).toContain('claudeSpeedOperations.finish(operation)');
+    expect(rendererSource).toContain('claudeSpeedOperations.prune(validSessionIds)');
+    expect(rendererSource).not.toMatch(/let (?:claude|codex|runtime)RequestGeneration = 0;/);
+
+    const workspaceRenderer = rendererSource.slice(
+      rendererSource.indexOf('function renderWorkspace(state: WorkspaceState)'),
+      rendererSource.indexOf('const applyTerminalStatus'),
+    );
+    expect(workspaceRenderer).toContain('claudeLaunchAttempts.observeTerminal(status)');
+    expect(workspaceRenderer).toContain('claudeLaunchAttempts.prune(validSessionIds)');
+    expect(workspaceRenderer).toContain('codexLaunchAttempts.invalidate(status.id)');
+    expect(workspaceRenderer).toContain('codexLaunchAttempts.prune(validSessionIds)');
+
+    const codexLaunchHandler = rendererSource.slice(
+      rendererSource.indexOf('const launchCodex = async'),
+      rendererSource.indexOf('const installOrUpdateCodex = async'),
+    );
+    expect(codexLaunchHandler).toContain('const attempt = codexLaunchAttempts.begin(status.id);');
+    expect(codexLaunchHandler).toContain('codexLaunchAttempts.isCurrent(attempt)');
+    expect(codexLaunchHandler).toMatch(
+      /finally \{\s+if \(codexLaunchAttempts\.finish\(attempt\)\)/,
+    );
+    expect(rendererSource).not.toContain('let codexLaunchInProgress = false;');
+  });
+
+  it('rejects delayed Claude state across runtime and PTY generations', () => {
+    expect(claudeRuntimeSource).toContain('private nextStateRevision = 0;');
+    expect(claudeRuntimeSource).toContain('const stateRevision = ++this.nextStateRevision;');
+    expect(claudeRuntimeSource).toContain('runtime.ptyGeneration === ptyGeneration');
+    expect(claudeRuntimeSource).toContain('ptyGeneration: runtime.ptyGeneration,');
+    expect(claudeRuntimeSource).toContain('stateRevision,');
+    expect(mainSource).toContain('claudeStateOwnershipIsCurrent(');
+    expect(mainSource).toContain('publishedClaudeStateRevisions.set(');
+    expect(rendererSource).toContain('const claudeStateCanApply =');
+    expect(rendererSource).toContain('!claudeStateCanApply(state)');
   });
 
   it('lists every permission mode and routes the un-cyclable one through a relaunch', () => {
@@ -542,9 +834,13 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toMatch(
       /if \(mode === 'dontAsk'\) \{\s+await relaunchClaudeSession\('「仅预批准」只能在会话启动时设定。', \{ permissionMode: mode \}\);/,
     );
-    // Cross-endpoint models reuse the same relaunch instead of a second mechanism.
-    expect(rendererSource).toMatch(
-      /if \(!option\.sameEndpoint\) \{\s+await relaunchClaudeSession\(/,
+    // Connection and per-model speed-profile changes reuse the same relaunch instead of inheriting
+    // a stale launch environment.
+    expect(rendererSource).toContain('if (option.requiresRelaunch)');
+    expect(rendererSource).toContain("option.relaunchReason === 'connection'");
+    expect(rendererSource).toContain("option.relaunchReason === 'speed-profile'");
+    expect(rendererSource).toContain(
+      'await relaunchClaudeSession(summary, { entryId: option.entryId });',
     );
     expect(rendererSource).toContain('compactFirst: true,');
     expect(rendererSource).toContain('对话历史会通过 --continue 恢复');
@@ -554,11 +850,29 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('forwards Shift+Tab from the composer so the shortcut does not depend on terminal focus', () => {
-    expect(rendererSource).toMatch(
-      /if \(event\.key === 'Tab' && event\.shiftKey && !event\.ctrlKey && !event\.altKey\) \{\s+const status = activeStatus\(\);\s+if \(status\) \{\s+event\.preventDefault\(\);\s+window\.controlPanel\.writeTerminal\(status\.id, '\\x1b\[Z'\);/,
+    expect(rendererSource).toContain(
+      "if (event.key === 'Tab' && event.shiftKey && !event.ctrlKey && !event.altKey) {",
     );
-    // xterm already emits the same CBT sequence, so its key handler stays untouched.
+    expect(rendererSource).toContain(
+      'const view = status ? terminalViewForStatus(status) : undefined;',
+    );
+    expect(rendererSource).toContain(
+      "writeToTerminalGeneration(status.id, status.ptyGeneration, view, '\\x1b[Z')",
+    );
+    // xterm already emits the same CBT sequence; its onData ownership fence covers that path.
     expect(rendererSource).not.toContain("event.code === 'Tab'");
+  });
+
+  it('keeps model, permission, and effort controls in the footer instead of above the composer', () => {
+    expect(rendererSource).toMatch(
+      /const switchPermissionMode[\s\S]*?mode === 'dontAsk' \|\| mode === 'bypassPermissions'[\s\S]*?await requestConfirmation/,
+    );
+    expect(rendererMarkup).toContain('id="footer-model"');
+    expect(rendererMarkup).toContain('id="footer-mode"');
+    expect(rendererMarkup).toContain('id="footer-effort"');
+    expect(rendererMarkup).not.toContain('id="composer-control-strip"');
+    expect(rendererMarkup).not.toContain('id="composer-model-control"');
+    expect(rendererStyles).not.toContain('.composer-control-strip');
   });
 
   it('scrolls a folder’s full conversation history without moving the running rows', () => {
@@ -608,18 +922,32 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('for (let row = buffer.baseY; row < end; row += 1) {');
     expect(rendererSource).toContain("buffer.getLine(row)?.translateToString(true) ?? ''");
     expect(rendererSource).toContain(
-      'window.controlPanel.observeClaudePermissionMode(sessionId, mode);',
+      'window.controlPanel.observeClaudePermissionMode(sessionId, view.ptyGeneration, mode);',
+    );
+    expect(rendererSource).toContain('outputPump: new TerminalOutputPump({');
+    expect(rendererSource).toContain('write: (data, callback) => terminal.write(data, callback),');
+    expect(rendererSource).toContain('view.outputPump.enqueue(data);');
+    expect(rendererSource).toContain('view.outputPump.dispose();');
+    expect(rendererSource).not.toContain('MAX_PENDING_OUTPUT');
+    expect(rendererSource).not.toContain('view.pending.shift()');
+    expect(terminalOutputPumpSource).toContain('private inFlight = false;');
+    expect(terminalOutputPumpSource).toContain('this.consume(plan);');
+    expect(terminalOutputPumpSource).toContain('this.options.onAppliedRevision(');
+    expect(rendererSource).toMatch(
+      /onAppliedRevision: \(\) => \{\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);\s+\},\s+scheduleFrame:/,
+    );
+    expect(rendererSource).toContain('probe.requiredRevision <= view.outputPump.appliedRevision');
+    expect(rendererSource).toContain(
+      'window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probeId) => {',
+    );
+    expect(rendererSource).toContain(
+      'view.outputPump.appliedRevision >= view.outputPump.acceptedRevision',
     );
     expect(rendererSource).toMatch(
-      /view\.terminal\.write\(chunk, \(\) => \{\s+view\.appliedOutputRevision = Math\.max\(view\.appliedOutputRevision, revision\);\s+reportTerminalPermissionMode\(sessionId, view\);\s+answerReadyPermissionModeProbes\(sessionId, view\);/,
+      /view\.permissionModeProbes\.push\(\{\s+probeId,\s+ptyGeneration,\s+requiredRevision: view\.outputPump\.acceptedRevision,/,
     );
-    expect(rendererSource).toContain('requiredRevision <= view.appliedOutputRevision');
-    expect(rendererSource).toContain(
-      'window.controlPanel.onClaudePermissionModeProbe((sessionId, probeId) => {',
-    );
-    expect(rendererSource).toContain('view.appliedOutputRevision >= view.outputRevision');
-    expect(rendererSource).toContain(
-      'view.permissionModeProbes.push({ probeId, requiredRevision: view.outputRevision });',
+    expect(mainSource).toMatch(
+      /terminalOutputBatcher\.flush\(sessionId, ptyGeneration\);\s+target\.send\('claude:permission-mode-probe'/,
     );
     expect(rendererSource).toContain('window.controlPanel.reportClaudePermissionModeProbe(');
   });
@@ -630,9 +958,10 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain(
       'window.controlPanel.onAppQuitRequested(renderQuitConfirmation)',
     );
-    expect(rendererSource).toContain('window.controlPanel.confirmQuit(confirmed);');
+    expect(rendererSource).toContain('window.controlPanel.confirmQuit(decision);');
     expect(rendererSource).toContain('closeQuitConfirmation(true);');
     expect(rendererSource).toContain('closeQuitConfirmation(false);');
+    expect(rendererSource).toContain("closeQuitConfirmation('retry');");
     expect(rendererSource).toContain('pendingQuitRequest = request;');
     expect(rendererSource).toContain('request.leases.map((lease) => {');
     expect(rendererSource).toContain('unsubscribeAppQuitRequested();');
@@ -1022,14 +1351,61 @@ describe('external application proxy settings', () => {
       expect(rendererMarkup).toContain(`id="${id}"`);
     }
     expect(rendererSource).toContain('.detectApplicationProxyCandidates()');
-    expect(rendererSource).toContain('.saveApplicationProxy({');
+    expect(rendererSource).toContain('.saveApplicationProxy(pendingApplicationProxyInput())');
     expect(rendererSource).toContain('.testApplicationProxy()');
   });
 
+  it('treats the proxy editor as one staged setting with saved-only testing', () => {
+    expect(rendererMarkup).toMatch(
+      /id="application-proxy-configuration"[\s\S]*?aria-disabled="true"[\s\S]*?inert/,
+    );
+    expect(rendererMarkup).toMatch(
+      /id="application-proxy-scope"[\s\S]*?aria-disabled="true"[\s\S]*?inert/,
+    );
+    expect(rendererSource).toContain('applicationProxyIsDirty()');
+    expect(rendererSource).toContain(
+      'applicationProxyCancelBaseline = captureApplicationProxyDraft();',
+    );
+    expect(rendererSource).toContain('applyApplicationProxyDraft(applicationProxyCancelBaseline);');
+    expect(rendererSource).toContain('await savePendingApplicationProxy();');
+    expect(rendererSource).toContain('!savedApplicationProxy?.enabled ||');
+    expect(rendererSource).toContain('applicationProxyIsDirty();');
+    expect(rendererSource).not.toContain("applicationProxyProtocol.value === 'http'");
+    expect(rendererStyles).toContain(".proxy-settings__dependent[aria-disabled='true']");
+  });
+
+  it('generation-fences delayed proxy loads and never overwrites an edited draft', () => {
+    expect(rendererSource).toContain('let applicationProxyLoadGeneration = 0;');
+    expect(rendererSource).toContain('let applicationProxyDraftEdited = false;');
+    expect(rendererSource).toMatch(
+      /const state = await window\.controlPanel\.getApplicationProxyState\(\);\s+if \(loadGeneration !== applicationProxyLoadGeneration\) return false;/,
+    );
+    expect(rendererSource).toMatch(
+      /preserveDirtyDraft &&\s+connectionAdvancedDialog\.open &&\s+\(applicationProxyDraftEdited \|\| applicationProxyIsDirty\(\)\)/,
+    );
+    expect(rendererSource).toContain(
+      'applicationProxyEnabled.disabled = applicationProxyInitialLoadPending;',
+    );
+    expect(rendererSource).toContain('completeConnectionAdvancedButton.disabled = true;');
+    expect(rendererSource).toContain('const loadGeneration = ++applicationProxyLoadGeneration;');
+  });
+
   it('disables the unsupported CLI scope when SOCKS5 is selected', () => {
-    expect(rendererSource).toContain("applicationProxyProtocol.value === 'http'");
-    expect(rendererSource).toContain('applicationProxyScopeCli.disabled = !cliSupported;');
+    expect(rendererSource).toContain("applicationProxyProtocol.value === 'socks5'");
+    expect(rendererSource).toContain('applicationProxyScopeCli.disabled = true;');
     expect(rendererSource).toContain('applicationProxyScopeCli.checked = false;');
+  });
+});
+
+describe('model configuration dialog', () => {
+  it('does not discard its draft when a pointer is released on the backdrop', () => {
+    expect(rendererMarkup).toContain('id="chat-settings-dialog"');
+    expect(rendererMarkup).toContain('id="close-chat-settings"');
+    expect(rendererSource).not.toMatch(
+      /chatSettingsDialog\.addEventListener\('click',[\s\S]*?event\.target === chatSettingsDialog/,
+    );
+    expect(rendererSource).toContain("chatSettingsDialog.close('cancel');");
+    expect(rendererSource).toContain("chatSettingsDialog.close('saved');");
   });
 });
 

@@ -1,15 +1,23 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { CloseBehavior } from '../shared/contracts';
+import type {
+  CloseBehavior,
+  FooterResourcePreference,
+  ManagedChatGptContextWindowMode,
+} from '../shared/contracts';
 
 export interface AppPreferences {
   closeBehavior: CloseBehavior;
   closeToTrayNoticeShown: boolean;
+  footerResourcePreference: FooterResourcePreference;
+  managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
 }
 
 const DEFAULT_PREFERENCES: AppPreferences = {
   closeBehavior: 'tray',
   closeToTrayNoticeShown: false,
+  footerResourcePreference: 'auto',
+  managedChatGptContextWindowMode: 'standard',
 };
 
 /**
@@ -52,7 +60,10 @@ export class AppPreferencesStore {
     const next = { ...current, ...patch };
     if (
       (next.closeBehavior !== 'exit' && next.closeBehavior !== 'tray') ||
-      typeof next.closeToTrayNoticeShown !== 'boolean'
+      typeof next.closeToTrayNoticeShown !== 'boolean' ||
+      !['auto', 'context', 'quota'].includes(next.footerResourcePreference) ||
+      (next.managedChatGptContextWindowMode !== 'standard' &&
+        next.managedChatGptContextWindowMode !== 'extended')
     ) {
       throw new Error('应用偏好设置无效。');
     }
@@ -106,6 +117,8 @@ export class AppPreferencesStore {
       const parsed = JSON.parse(readFileSync(storagePath, 'utf8')) as {
         closeBehavior?: unknown;
         closeToTrayNoticeShown?: unknown;
+        footerResourcePreference?: unknown;
+        managedChatGptContextWindowMode?: unknown;
         version?: unknown;
       };
       if (
@@ -116,6 +129,13 @@ export class AppPreferencesStore {
         return {
           closeBehavior: parsed.closeBehavior,
           closeToTrayNoticeShown: parsed.closeToTrayNoticeShown,
+          footerResourcePreference:
+            parsed.footerResourcePreference === 'context' ||
+            parsed.footerResourcePreference === 'quota'
+              ? parsed.footerResourcePreference
+              : 'auto',
+          managedChatGptContextWindowMode:
+            parsed.managedChatGptContextWindowMode === 'extended' ? 'extended' : 'standard',
         };
       }
     } catch {

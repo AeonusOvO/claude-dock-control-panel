@@ -24,8 +24,12 @@ interface SelectController {
   readonly listbox: HTMLElement;
   /** The wrapper holding both the native element and the visual trigger. */
   readonly shell: HTMLElement;
+  /** Mirrors programmatic value/disabled changes that do not emit DOM events. */
+  sync: () => void;
   readonly trigger: HTMLButtonElement;
 }
+
+const selectControllers = new WeakMap<HTMLSelectElement, SelectController>();
 
 /**
  * Upper bound for the exit animation, used only as the safety net for a dropped `animationend` —
@@ -88,6 +92,7 @@ const positionListbox = (trigger: HTMLElement, listbox: HTMLElement): void => {
  */
 export const enhanceSelect = (select: HTMLSelectElement): void => {
   if (select.dataset.enhanced === 'true') {
+    selectControllers.get(select)?.sync();
     return;
   }
   select.dataset.enhanced = 'true';
@@ -259,7 +264,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     trigger.setAttribute('aria-expanded', 'true');
     shell.dataset.open = 'true';
     positionListbox(trigger, listbox);
-    openController = { close, listbox, shell, trigger };
+    openController = selectControllers.get(select);
     if (focusSelected) {
       const selectedIndex = optionButtons().findIndex(
         (button) => button.dataset.value === select.value,
@@ -363,7 +368,19 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     subtree: true,
   });
 
+  selectControllers.set(select, { close, listbox, shell, sync: syncTrigger, trigger });
   syncTrigger();
+};
+
+/** Synchronizes an enhanced select after code assigns `.value` directly. */
+export const syncEnhancedSelect = (select: HTMLSelectElement): void => {
+  selectControllers.get(select)?.sync();
+};
+
+/** Assigns a select value and keeps its themed visual trigger in the same state. */
+export const setEnhancedSelectValue = (select: HTMLSelectElement, value: string): void => {
+  select.value = value;
+  syncEnhancedSelect(select);
 };
 
 /** Enhances every `<select>` in the document that has not been enhanced yet. */

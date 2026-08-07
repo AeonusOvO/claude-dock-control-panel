@@ -431,45 +431,109 @@ app
     document.querySelector('#environment-setup').hidden = true;
     document.querySelector('#connection-provider-picker').setAttribute('aria-disabled', 'false');
     document.querySelector('#connection-provider-setup').hidden = false;
-    document.querySelector('#connection-provider-title').textContent = 'ChatGPT 订阅（本地网关）';
+    document.querySelector('#connection-provider-title').textContent =
+      'ChatGPT 订阅（ClaudeDock 托管）';
     document.querySelector('#connection-provider-description').textContent =
-      '使用 ChatGPT 的 Codex 订阅授权，经用户自行运行的本地兼容网关转换为 Anthropic Messages。';
+      '由 ClaudeDock 一键安装、授权并托管本机网关，把 ChatGPT Codex 订阅接入当前 Claude Code 项目。';
     document.querySelector('#connection-provider-caveat').hidden = false;
     document.querySelector('#connection-provider-caveat').textContent =
-      'OpenAI Codex 负责人曾公开介绍这种实践；CLIProxyAPI 仍是第三方本地网关，不是官方产品接入。';
-    document.querySelector('#claude-config-form').hidden = false;
-    document.querySelector('#claude-base-url').value = 'http://127.0.0.1:8317';
-    document.querySelector('#claude-model').value = 'gpt-5.6-sol';
-    document.querySelector('#claude-model-fast').value = 'gpt-5.4-mini';
-    document.querySelector('#credential-label').textContent =
-      '本地网关访问密钥（不是 ChatGPT 凭据）';
-    document.querySelector('#protocol-help').textContent =
-      'Claude Code 访问本机 Anthropic Messages 入口；本地网关再完成 Codex OAuth 请求与协议转换。';
+      '这条路径由 OpenAI Codex 负责人 Tibo 公开分享；CLIProxyAPI 仍是第三方开源网关，不是 OpenAI 或 Anthropic 官方产品。';
+    document.querySelector('#claude-config-form').hidden = true;
+    const advancedConnection = document.querySelector('#connection-advanced-content');
+    for (const selector of [
+      '#credential-source-settings',
+      '#connection-advice',
+      '#gateway-discovery',
+      '#curl-onboarding',
+      '#converter-help',
+      '.connection-glossary',
+    ]) {
+      const advancedNode = document.querySelector(selector);
+      if (advancedNode) advancedConnection.append(advancedNode);
+    }
+    document.querySelector('#router-settings-content').append(document.querySelector('#router-manager'));
     const specialSetup = document.querySelector('#connection-provider-special');
     const subscriptionGuide = document.createElement('section');
     subscriptionGuide.className = 'subscription-gateway-guide';
     const subscriptionTitle = document.createElement('strong');
-    subscriptionTitle.textContent = '先在 ClaudeDock 外完成本地网关授权';
-    const subscriptionSteps = document.createElement('ol');
-    for (const copy of [
-      '安装并启动 CLIProxyAPI，在外部工具中完成 ChatGPT / Codex 登录。',
-      '1455 是 OAuth 回调端口，不是 Claude Code 的模型接口。',
-      '确认 127.0.0.1:8317 与 config.yaml 的本地 api-keys 客户端密钥。',
-    ]) {
-      const item = document.createElement('li');
-      item.textContent = copy;
-      subscriptionSteps.append(item);
+    subscriptionTitle.textContent = 'OpenAI Codex 负责人公开分享的 claudex 路径';
+    const subscriptionSource = document.createElement('p');
+    subscriptionSource.textContent =
+      'Thibault “Tibo” Sottiaux 公开分享了 CLIProxyAPI 接入 Claude Code 的实践。ClaudeDock 把安装、配置和后台运行收进一个界面。';
+    const subscriptionStatus = document.createElement('div');
+    subscriptionStatus.className = 'subscription-gateway-status';
+    subscriptionStatus.dataset.phase = 'ready';
+    const subscriptionStatusText = document.createElement('div');
+    const subscriptionStatusTitle = document.createElement('strong');
+    subscriptionStatusTitle.textContent = 'ChatGPT 一键接入已就绪';
+    const subscriptionStatusDetail = document.createElement('span');
+    subscriptionStatusDetail.textContent = '实时模型目录和真实连接测试均已通过。';
+    subscriptionStatusText.append(subscriptionStatusTitle, subscriptionStatusDetail);
+    const subscriptionAction = document.createElement('button');
+    subscriptionAction.type = 'button';
+    subscriptionAction.textContent = '检查并自动修复';
+    subscriptionStatus.append(subscriptionStatusText, subscriptionAction);
+    const subscriptionProgress = document.createElement('div');
+    subscriptionProgress.className = 'subscription-gateway-progress';
+    const subscriptionProgressTitle = document.createElement('strong');
+    subscriptionProgressTitle.textContent = '第 8/8 步';
+    const subscriptionProgressDetail = document.createElement('span');
+    subscriptionProgressDetail.textContent = '连接已通过，当前项目配置保存完成。';
+    const subscriptionProgressMeter = document.createElement('progress');
+    subscriptionProgressMeter.max = 8;
+    subscriptionProgressMeter.value = 8;
+    subscriptionProgress.append(
+      subscriptionProgressTitle,
+      subscriptionProgressDetail,
+      subscriptionProgressMeter,
+    );
+    const subscriptionModel = document.createElement('label');
+    subscriptionModel.className = 'field subscription-gateway-model';
+    const subscriptionModelLabel = document.createElement('span');
+    subscriptionModelLabel.textContent = '当前模型';
+    const subscriptionModelSelect = document.createElement('select');
+    subscriptionModelSelect.className = 'select-native';
+    subscriptionModelSelect.dataset.enhanced = 'true';
+    for (const model of ['gpt-5.6-sol', 'gpt-5.4-mini']) {
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = model;
+      subscriptionModelSelect.append(option);
     }
+    const subscriptionModelHelp = document.createElement('small');
+    subscriptionModelHelp.textContent =
+      '列表来自本机网关实时接口；切换后会自动复测并保存，无需再点接入。';
+    const subscriptionModelShell = document.createElement('div');
+    subscriptionModelShell.className = 'select';
+    const subscriptionModelTrigger = document.createElement('button');
+    subscriptionModelTrigger.className = 'select__trigger';
+    subscriptionModelTrigger.type = 'button';
+    const subscriptionModelTriggerLabel = document.createElement('span');
+    subscriptionModelTriggerLabel.className = 'select__label';
+    subscriptionModelTriggerLabel.textContent = 'gpt-5.6-sol';
+    const subscriptionModelChevron = document.createElement('span');
+    subscriptionModelChevron.className = 'select__chevron';
+    subscriptionModelChevron.innerHTML = '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>';
+    subscriptionModelTrigger.append(subscriptionModelTriggerLabel, subscriptionModelChevron);
+    subscriptionModelShell.append(subscriptionModelSelect, subscriptionModelTrigger);
+    subscriptionModel.append(subscriptionModelLabel, subscriptionModelShell, subscriptionModelHelp);
     const subscriptionBoundary = document.createElement('small');
     subscriptionBoundary.textContent =
-      'ClaudeDock 采用项目级 claudex 环境注入，不改 shell 配置，也不读取 OAuth 登录文件。';
-    subscriptionGuide.append(subscriptionTitle, subscriptionSteps, subscriptionBoundary);
+      '一次点击会自动检测环境、补齐组件、授权、读取模型、真实测试并保存；此方式不需要 CCR。';
+    subscriptionGuide.append(
+      subscriptionTitle,
+      subscriptionSource,
+      subscriptionStatus,
+      subscriptionProgress,
+      subscriptionModel,
+      subscriptionBoundary,
+    );
     specialSetup.replaceChildren(subscriptionGuide);
     const groups = document.querySelector('#connection-provider-groups');
     groups.replaceChildren();
     for (const fixture of [
       ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], true],
-      ['订阅转换（实验性）', ['ChatGPT 订阅（本地网关）'], false],
+      ['订阅接入（实验性）', ['ChatGPT 订阅（ClaudeDock 托管）'], false],
       ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], true],
       ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], true],
       ['本地服务', ['Ollama 本地模型'], true],
@@ -577,11 +641,22 @@ app
     await window.webContents.executeJavaScript(`
     document.querySelector('#connection-provider-special').scrollIntoView({ block: 'start' });
   `);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    writeFileSync(
-      path.join(outputDirectory, 'connection-subscription-setup-1180.png'),
-      (await captureSettledPage()).toPNG(),
-    );
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const snapshot = (await captureSettledPage()).toPNG();
+      writeFileSync(
+        path.join(outputDirectory, `connection-subscription-setup-${themeId}-1180.png`),
+        snapshot,
+      );
+      if (themeId === 'claude') {
+        writeFileSync(
+          path.join(outputDirectory, 'connection-subscription-setup-1180.png'),
+          snapshot,
+        );
+      }
+    }
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
 
     await window.webContents.executeJavaScript(`
     document.querySelector('#connection-history').scrollIntoView({ block: 'start' });

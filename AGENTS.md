@@ -1,6 +1,10 @@
 # ClaudeDock 项目规则
 
 - 项目定位：Windows 桌面 PowerShell 控制面板；不得修改 Codex、Claude Code 或系统级 API 路由。
+- 路由接管边界：只管理 Claude Code / Codex 的 CLI 会话。不得安装、卸载、终止或改写 Claude、Codex、
+  CCR 的桌面 App；CCR RPC 保存配置必须保持 `applyProfile: false`，由 ClaudeDock 启动 CLI 时注入本机路由。
+- 默认接入必须是单一自动事务：软件检测环境、补齐组件、选择必要路由、发现模型、真实测试并保存；
+  普通用户不手动选择路由内核、不填写可实时发现的模型标识，路由/网关后台只作为高级诊断入口。
 - 必读文档：`README.md`、`design.md`、`technical.md`。
 - 入口：`src/main/main.ts`、`src/preload/preload.ts`、`src/renderer/main.ts`。
 - 修改后至少运行：`npm run lint`、`npm run format:check`、`npm run typecheck`、`npm test`、
@@ -20,6 +24,9 @@
 - 除首次骨架或紧急修复外，在 `codex/feature-*`、`codex/fix-*`、`codex/docs-*` 等短生命周期分支
   开发；验证后提交、推送并创建 PR，CI 成功后才合并 `main`。不要从非 `main` 的临时分支继续堆叠
   发布 PR。
+- 发布构建前必须审计本地与远端未合并分支：用祖先关系和 patch-equivalence 区分真正漏合的提交、
+  squash 后仅哈希不同的提交和依赖机器人分支。只移植已确认属于当前版本范围的用户功能，不得把
+  “合并所有分支”当作自动步骤；审计结论写入 PR 或交付说明，避免已实现功能从安装包中遗漏。
 - 会影响用户软件或发布配置的修改必须走完整发布闭环：版本号与 SemVer 一致、上述检查全部通过、
   从 `main` 创建完全匹配 `package.json` 的 `v<version>` 标签，并由 `.github/workflows/release.yml`
   构建一次、签名一次、同时发布 GitHub Release 与国内兜底镜像。纯分析或无文件变化不得制造空版本。

@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { NormalizedClaudeConfig } from '../src/main/claude-configuration';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 import {
+  claudeResourceUsage,
   connectionProtocolForRouterProvider,
   defaultConnectionProtocolForPreset,
+  effectiveClaudeMetrics,
+  mergeClaudeResourceUsage,
   parseClaudeEffortThinkingDisabledError,
+  parseClaudeContextWindowError,
   parseClaudeMetrics,
   parseClaudeRuntimeApiError,
   routerRepairInputForProject,
@@ -19,6 +23,7 @@ const runtimeSource = readFileSync(
   'utf8',
 );
 const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
 
 /** Mirrors the rolling window `consumeTerminalOutput` keeps for diagnostics. */
@@ -67,10 +72,90 @@ const routerState: ClaudeRouterManagementState = {
 };
 
 describe('Claude runtime route diagnostics', () => {
+  it('keeps live context metrics when provider balance data is merged', () => {
+    const checkedAt = Date.now();
+    const merged = mergeClaudeResourceUsage(
+      {
+        availability: 'available',
+        autoCompactAtTokens: 206_720,
+        capabilities: { balance: false, context: true, windows: true },
+        checkedAt,
+        contextUsedPercent: 25,
+        contextUsedTokens: 64_600,
+        contextWindowTokens: 258_400,
+        source: 'claude-statusline',
+        windows: [{ label: '5 hours', usedPercent: 30 }],
+      },
+      {
+        availability: 'available',
+        balance: { balances: [{ amount: 12.5, currency: 'USD' }] },
+        capabilities: { balance: true, context: false, windows: false },
+        checkedAt: checkedAt + 1,
+        source: 'openrouter-key',
+      },
+    );
+
+    expect(merged).toMatchObject({
+      autoCompactAtTokens: 206_720,
+      balance: { balances: [{ amount: 12.5, currency: 'USD' }] },
+      capabilities: { balance: true, context: true, windows: true },
+      contextUsedPercent: 25,
+      contextUsedTokens: 64_600,
+      contextWindowTokens: 258_400,
+      source: 'openrouter-key',
+      windows: [{ label: '5 hours', usedPercent: 30 }],
+    });
+  });
+
+  it('reports the Codex 95% effective window only for the matching managed model', () => {
+    const metrics = { capturedAt: Date.now(), contextWindowSize: 272_000 };
+    const managed: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      model: 'gpt-5.6-sol',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    };
+
+    expect(effectiveClaudeMetrics(metrics, managed)?.contextWindowSize).toBe(258_400);
+    expect(
+      effectiveClaudeMetrics({ ...metrics, contextWindowSize: 1_050_000 }, managed, 'extended')
+        ?.contextWindowSize,
+    ).toBe(997_500);
+    expect(
+      effectiveClaudeMetrics(metrics, { ...managed, model: 'gpt-5.4-mini' })?.contextWindowSize,
+    ).toBe(272_000);
+  });
+
+  it('uses the live smaller window when Claude Code does not accept the requested override', () => {
+    const managed: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      model: 'gpt-5.6-sol',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    };
+
+    expect(
+      claudeResourceUsage(
+        { capturedAt: Date.now(), contextWindowSize: 200_000, contextWindowUsed: 50_000 },
+        managed,
+        'extended',
+      ),
+    ).toMatchObject({
+      autoCompactAtTokens: 160_000,
+      contextUsedPercent: 25,
+      contextWindowTokens: 200_000,
+    });
+  });
+
   it('keeps the official status-line session title for workspace synchronization', () => {
     const metrics = parseClaudeMetrics(
       JSON.stringify({
         capturedAt: Date.now(),
+        fastMode: true,
         modelId: 'claude-sonnet',
         sessionId: 'conversation-id',
         sessionName: '修复登录重定向',
@@ -78,9 +163,13 @@ describe('Claude runtime route diagnostics', () => {
     );
 
     expect(metrics).toMatchObject({
+      fastMode: true,
       sessionId: 'conversation-id',
       sessionName: '修复登录重定向',
     });
+    expect(
+      parseClaudeMetrics(JSON.stringify({ capturedAt: Date.now(), fastMode: 'true' }))?.fastMode,
+    ).toBeUndefined();
   });
 
   it('recognizes the real Claude Code ConnectionRefused output without echoing raw details', () => {
@@ -105,6 +194,15 @@ describe('Claude runtime route diagnostics', () => {
     expect(result).toContain('接口请求失败');
     expect(result).not.toContain('upstream rejected');
     expect(result).not.toContain('sk-example-sensitive-token');
+  });
+
+  it('classifies an upstream context overflow and gives a recoverable next step', () => {
+    const error =
+      'Error during compaction: API Error: 400 Your input exceeds the context window of this model. Please adjust your input and try again.';
+
+    expect(parseClaudeContextWindowError(error)).toBe(true);
+    expect(parseClaudeRuntimeApiError(error)).toContain('新建对话');
+    expect(parseClaudeRuntimeApiError(error)).toContain('按模型与窗口模式');
   });
 
   it('recognizes wrapped effort errors only when high effort conflicts with disabled thinking', () => {
@@ -242,13 +340,13 @@ describe('Claude runtime permission mode observation', () => {
     // stop as soon as the live cycle revisits a mode.
     expect(runtimeSource).toContain('const PERMISSION_MODE_MAX_STEPS = 8;');
     expect(runtimeSource).toContain(
-      'const current = await this.readPermissionModeFromScreen(sessionId);',
+      'const current = await this.readPermissionModeFromScreen(sessionId, ptyGeneration);',
     );
     expect(runtimeSource).toContain(
       '当前终端没有显示权限模式徽标。请先关闭 Claude Code 的选择器或确认框',
     );
     expect(runtimeSource).toMatch(
-      /const visited = new Set<ClaudePermissionMode>\(\[current\]\);\s+for \(let step = 0; step < PERMISSION_MODE_MAX_STEPS; step \+= 1\) \{\s+const before = runtime\.permissionMode \?\? current;\s+this\.writeToTerminal\(sessionId, SHIFT_TAB_SEQUENCE\);\s+const changed = await this\.waitForPermissionModeChange\(sessionId, before\);/,
+      /const visited = new Set<ClaudePermissionMode>\(\[current\]\);\s+for \(let step = 0; step < PERMISSION_MODE_MAX_STEPS; step \+= 1\) \{\s+const before = runtime\.permissionMode \?\? current;\s+if \(!this\.writeToTerminal\(sessionId, ptyGeneration, SHIFT_TAB_SEQUENCE\)\) \{[\s\S]*?\}\s+const changed = await this\.waitForPermissionModeChange\(runtime, ptyGeneration, before\);/,
     );
     expect(runtimeSource).toContain('if (visited.has(changed))');
     expect(runtimeSource).toContain("throw new Error('该模式不在当前会话的可用循环中。');");
@@ -258,14 +356,19 @@ describe('Claude runtime permission mode observation', () => {
     expect(runtimeSource).toContain('private readonly modeSwitchLocks = new Set<string>();');
     expect(runtimeSource).toContain('this.modeSwitchLocks.add(sessionId);');
     expect(runtimeSource).toContain('this.modeSwitchLocks.delete(sessionId);');
+    expect(runtimeSource).toContain('runtime.permissionModeRequest = mode;');
+    expect(runtimeSource).toContain('permissionModeRequest: runtime.permissionModeRequest,');
+    expect(rendererSource).toContain('state.permissionModeRequest ?? state.permissionMode');
     expect(runtimeSource).toContain('public observePermissionModeFromScreen(');
     expect(runtimeSource).toContain('this.recordPermissionMode(runtime, mode);');
     expect(mainSource).toContain(
-      "target.send('claude:permission-mode-probe', sessionId, probeId);",
+      "target.send('claude:permission-mode-probe', sessionId, ptyGeneration, probeId);",
     );
     expect(mainSource).toContain("'claude:permission-mode-probe-result'");
     expect(preloadSource).toContain("ipcRenderer.on('claude:permission-mode-probe', callback);");
-    expect(preloadSource).toContain("ipcRenderer.send('claude:permission-mode-probe-result'");
+    expect(preloadSource).toMatch(
+      /ipcRenderer\.send\(\s*'claude:permission-mode-probe-result',\s*sessionId,\s*ptyGeneration,\s*probeId,\s*mode,/,
+    );
     expect(runtimeSource).toMatch(
       /observePermissionModeFromRawOutput\(runtime: RuntimeSession\): void \{\s+if \(runtime\.permissionMode !== undefined\) \{\s+return;/,
     );
@@ -282,22 +385,24 @@ describe('Claude runtime permission mode observation', () => {
 
   it('re-derives and re-validates a model option in the main process before writing to the shell', () => {
     expect(runtimeSource).toMatch(
-      /const option = this\.getModelOptions\(cwd, sessionId\)\.options\.find\(\s+\(candidate\) => candidate\.id === optionId,\s+\);/,
+      /const option = \(await this\.getModelOptions\(cwd, sessionId\)\)\.options\.find\(\s+\(candidate\) => candidate\.id === optionId,\s+\);/,
     );
-    expect(runtimeSource).toContain(
-      "throw new Error('这个模型属于其他接入端点，需要重启会话才能切换。');",
-    );
+    expect(runtimeSource).toContain('这个模型属于其他接入端点，需要重启会话才能切换。');
+    expect(runtimeSource).toContain('这个模型保存的服务速度配置与当前 PowerShell 不同');
     expect(runtimeSource).toContain('if (!MODEL_NAME_PATTERN.test(option.model))');
   });
 
-  it('runs the official network guard before a real Anthropic connection test', () => {
+  it('runs the matching official network guard before a real connection test', () => {
     const testHandler = mainSource.slice(
       mainSource.indexOf("'claude:test-connection'"),
       mainSource.indexOf("ipcMain.handle('app:open-external'"),
     );
     expect(testHandler).toContain('const validatedInput = validateClaudeConfigInput(input);');
+    expect(testHandler).toContain(
+      'const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);',
+    );
     expect(testHandler).toMatch(
-      /if \(validatedInput\.provider === 'anthropic' && validatedInput\.protocol !== 'openai'\) \{[\s\S]*?assertOfficialProviderAllowed\(\s*'anthropic-claude',\s*'first-request',\s*status\.cwd,?\s*\);/,
+      /if \(officialProvider\) \{[\s\S]*?assertOfficialProviderAllowed\(officialProvider, 'first-request', status\.cwd\);/,
     );
     expect(testHandler.indexOf('assertOfficialProviderAllowed(')).toBeLessThan(
       testHandler.indexOf('requireClaudeRuntime().testConnection('),
@@ -322,10 +427,10 @@ describe('Claude runtime permission mode observation', () => {
       'private readonly commandSubmissionQueues = new Map<string, Promise<void>>();',
     );
     expect(runtimeSource).toContain(
-      'await this.submitClaudeCommand(runtime, `/model ${option.model}`);',
+      'await this.submitClaudeCommand(runtime, `/model ${option.model}`, assertCurrent);',
     );
     expect(runtimeSource).toContain(
-      'await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`);',
+      'await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`, assertCurrent);',
     );
     expect(runtimeSource).toContain('const submitted = await writeTerminalSubmission(');
     expect(runtimeSource).toContain('buildTerminalSubmission(commandLine),');
@@ -338,15 +443,20 @@ describe('Claude runtime permission mode observation', () => {
     expect(runtimeSource).not.toContain(
       'this.writeToTerminal(sessionId, `/model ${option.model}\\r`);',
     );
-    expect(mainSource).toContain('state: await runtime.runCommand(');
+    expect(mainSource).toMatch(
+      /state: await withDevelopmentSessionOperation\(validatedSessionId, \(\) =>\s+runtime\.runCommand\(/,
+    );
     expect(mainSource).not.toMatch(
       /workspace\.write\(\s*validatedSessionId,\s*`\$\{command\}.*\\r`/,
     );
   });
 
   it('waits for the PostCompact signal on the existing metrics tick and only acts on fresh stamps', () => {
-    expect(runtimeSource).toMatch(
-      /pollMetrics\(\): void \{\s+for \(const runtime of this\.sessions\.values\(\)\) \{\s+this\.pollRuntimeSignal\(runtime\);/,
+    expect(runtimeSource).toContain('private async pollMetricsOnce(): Promise<void>');
+    expect(runtimeSource).toContain('this.pollRuntimeSignal(runtime)');
+    expect(runtimeSource).toContain('const raw = await this.readLaunchArtifact(signalPath);');
+    expect(runtimeSource).toContain(
+      'this.isRuntimeLaunchPtyCurrent(runtime, launchGeneration, ptyGeneration)',
     );
     expect(runtimeSource).toContain(
       "if (parsed.event !== 'PostCompact' || !signaledAt || signaledAt === runtime.signalSeenAt)",

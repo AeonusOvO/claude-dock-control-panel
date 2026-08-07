@@ -5,6 +5,7 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import type { DownloadTaskState, DownloadTaskView } from '../shared/contracts';
 import type { BusyRegistry } from './busy-registry';
+import { DownloadHistoryStore } from './download-history';
 import { DownloadJournal, type DownloadJournalEntry } from './download-journal';
 import { pickFastestGitHubReleaseRoute } from './github-release-routes';
 
@@ -135,6 +136,7 @@ export class DownloadEngine {
   private readonly pendingRestores: ActiveDownload[] = [];
   private readonly tasks = new Map<string, ActiveDownload>();
   private readonly journal: DownloadJournal;
+  private readonly history: DownloadHistoryStore;
 
   public constructor(
     private readonly electronSession: DownloadSession,
@@ -143,6 +145,7 @@ export class DownloadEngine {
     onChange?: DownloadsListener,
   ) {
     this.journal = new DownloadJournal(userDataPath);
+    this.history = new DownloadHistoryStore(userDataPath);
     if (onChange) {
       this.listeners.add(onChange);
     }
@@ -180,7 +183,35 @@ export class DownloadEngine {
   }
 
   public list(): DownloadTaskView[] {
-    return [...this.tasks.values()].map(({ view }) => ({ ...view }));
+    const current = [...this.tasks.values()].map(({ view }) => ({ ...view }));
+    const currentIds = new Set(current.map(({ id }) => id));
+    return [...current, ...this.history.list().filter(({ id }) => !currentIds.has(id))];
+  }
+
+  public clearHistory(): DownloadTaskView[] {
+    for (const [id, task] of this.tasks) {
+      if (task.settled) {
+        this.journal.remove(id);
+        this.deletePartial(task);
+        this.tasks.delete(id);
+      }
+    }
+    this.history.clear();
+    this.notify();
+    return this.list();
+  }
+
+  public deleteHistory(taskId: string): DownloadTaskView[] {
+    const task = this.tasks.get(taskId);
+    if (task && !task.settled) throw new Error('进行中的下载不能删除记录。');
+    if (task?.settled) {
+      this.journal.remove(taskId);
+      this.deletePartial(task);
+      this.tasks.delete(taskId);
+    }
+    this.history.remove(taskId);
+    this.notify();
+    return this.list();
   }
 
   public onChange(listener: DownloadsListener): () => void {
@@ -541,6 +572,7 @@ export class DownloadEngine {
     } else if (existing) {
       throw new Error(`下载任务 ${request.id} 已存在。`);
     }
+    this.history.remove(request.id);
     mkdirSync(path.dirname(request.finalPath), { recursive: true });
     let resolve!: (result: DownloadResult) => void;
     let reject!: (error: Error) => void;
@@ -582,6 +614,7 @@ export class DownloadEngine {
         percent: -1,
         receivedBytes: journalEntry?.receivedBytes ?? 0,
         remainingMs: -1,
+        startedAt,
         state: journalEntry ? 'paused' : 'queued',
         totalBytes: journalEntry?.length ?? 0,
       },
@@ -601,12 +634,7 @@ export class DownloadEngine {
   }
 
   private acceptItem(event: Event, item: DownloadItem): void {
-    const url = new URL(item.getURL()).toString();
-    const pending = this.pendingByUrl.get(url);
-    const task = pending?.shift() ?? this.pendingRestores.shift();
-    if (pending?.length === 0) {
-      this.pendingByUrl.delete(url);
-    }
+    const task = this.claimPendingTask(item);
     if (!task || task.settled) {
       event.preventDefault();
       return;
@@ -657,6 +685,47 @@ export class DownloadEngine {
     }
   }
 
+  /**
+   * Electron may report the final redirected asset URL from DownloadItem#getURL even though
+   * downloadURL was called with the original GitHub release URL. Match every normalized hop in the
+   * item URL chain so a legitimate redirect is not mistaken for an unrelated browser download and
+   * cancelled before its first byte arrives.
+   */
+  private claimPendingTask(item: DownloadItem): ActiveDownload | undefined {
+    const candidates: string[] = [];
+    for (const candidate of [item.getURL(), ...item.getURLChain()]) {
+      try {
+        const normalized = new URL(candidate).toString();
+        if (!candidates.includes(normalized)) {
+          candidates.push(normalized);
+        }
+      } catch {
+        // Invalid redirect hops fail the whitelist check if a task is otherwise claimed.
+      }
+    }
+    for (const candidate of candidates) {
+      const pending = this.pendingByUrl.get(candidate);
+      const task = pending?.shift();
+      if (pending?.length === 0) {
+        this.pendingByUrl.delete(candidate);
+      }
+      if (task) {
+        return task;
+      }
+    }
+    const restoredIndex = this.pendingRestores.findIndex((task) => {
+      const knownUrls = [task.request.url, ...(task.journalEntry?.urlChain ?? [])];
+      return knownUrls.some((known) => {
+        try {
+          return candidates.includes(new URL(known).toString());
+        } catch {
+          return false;
+        }
+      });
+    });
+    return restoredIndex >= 0 ? this.pendingRestores.splice(restoredIndex, 1)[0] : undefined;
+  }
+
   private async complete(task: ActiveDownload): Promise<void> {
     if (task.settled) {
       return;
@@ -682,11 +751,13 @@ export class DownloadEngine {
         canPause: false,
         canResume: false,
         elapsedMs: Date.now() - task.startedAt,
+        finishedAt: Date.now(),
         percent: 100,
         remainingMs: 0,
         state: 'completed',
       };
       this.journal.remove(task.request.id);
+      this.recordHistory(task.view);
       task.releaseBusy();
       task.resolve({ filePath: task.request.finalPath, id: task.request.id });
       this.notify();
@@ -710,6 +781,7 @@ export class DownloadEngine {
       canResume: false,
       elapsedMs: Date.now() - task.startedAt,
       errorMessage: error.message,
+      finishedAt: Date.now(),
       state: 'failed',
     };
     if (preserveJournal) {
@@ -718,6 +790,7 @@ export class DownloadEngine {
       this.journal.remove(task.request.id);
     }
     task.releaseBusy();
+    this.recordHistory(task.view);
     task.reject(error);
     this.notify();
   }
@@ -726,6 +799,14 @@ export class DownloadEngine {
     const snapshot = this.list();
     for (const listener of this.listeners) {
       listener(snapshot);
+    }
+  }
+
+  private recordHistory(view: DownloadTaskView): void {
+    try {
+      this.history.upsert(view);
+    } catch {
+      // History is useful metadata, but a write failure must not change download integrity/result.
     }
   }
 
@@ -832,10 +913,12 @@ export class DownloadEngine {
       canResume: false,
       elapsedMs: Date.now() - task.startedAt,
       errorMessage: undefined,
+      finishedAt: Date.now(),
       state: 'cancelled',
     };
     this.journal.remove(task.request.id);
     task.releaseBusy();
+    this.recordHistory(task.view);
     task.reject(new Error('下载已取消。'));
     this.notify();
   }

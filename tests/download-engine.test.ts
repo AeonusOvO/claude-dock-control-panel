@@ -219,4 +219,59 @@ describe('download engine', () => {
     await completion;
     rmSync(userDataPath, { force: true, recursive: true });
   });
+
+  it('claims a GitHub download when Electron reports the redirected release asset URL', async () => {
+    const originalUrl =
+      'https://github.com/example/project/releases/download/v1.2.3/Example-Tool.zip';
+    const finalUrl =
+      'https://release-assets.githubusercontent.com/github-production-release-asset/example/tool.zip?token=short-lived';
+    const session = new EventEmitter() as EventEmitter & { downloadURL: (url: string) => void };
+    session.downloadURL = vi.fn();
+    Object.assign(session, { createInterruptedDownload: vi.fn() });
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-download-'));
+    const item = Object.assign(new EventEmitter(), {
+      canResume: vi.fn(() => true),
+      cancel: vi.fn(),
+      getReceivedBytes: vi.fn(() => 0),
+      getETag: vi.fn(() => '"fixture"'),
+      getLastModifiedTime: vi.fn(() => 'Mon, 01 Jan 2024 00:00:00 GMT'),
+      getStartTime: vi.fn(() => Date.now() / 1000),
+      getTotalBytes: vi.fn(() => 20_913_304),
+      getURL: vi.fn(() => finalUrl),
+      getURLChain: vi.fn(() => [originalUrl, finalUrl]),
+      isPaused: vi.fn(() => false),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      setSavePath: vi.fn(),
+    });
+    const engine = new DownloadEngine(
+      session as unknown as DownloadSession,
+      new BusyRegistry(),
+      userDataPath,
+    );
+    const finalPath = path.join(userDataPath, 'downloads', 'Example-Tool.zip');
+    const preventDefault = vi.fn();
+    const completion = engine
+      .start({
+        allowedHosts: ['github.com', 'release-assets.githubusercontent.com'],
+        allowedPathPrefixes: ['/example/project/releases/download/v1.2.3/', '/'],
+        finalPath,
+        id: 'redirected-release-fixture',
+        label: 'Redirected release fixture',
+        maxBytes: 64 * 1024 * 1024,
+        url: originalUrl,
+      })
+      .catch(() => undefined);
+    session.emit('will-download', { preventDefault }, item);
+
+    expect(session.downloadURL).toHaveBeenCalledWith(originalUrl);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(item.setSavePath).toHaveBeenCalledWith(`${finalPath}.partial`);
+    expect(engine.list()[0]).toMatchObject({ state: 'progressing' });
+
+    engine.cancel('redirected-release-fixture');
+    item.emit('done', {}, 'cancelled');
+    await completion;
+    rmSync(userDataPath, { force: true, recursive: true });
+  });
 });

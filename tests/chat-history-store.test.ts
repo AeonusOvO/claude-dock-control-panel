@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatAttachmentStore } from '../src/main/chat-attachment-store';
-import { ChatHistoryStore } from '../src/main/chat-history-store';
+import { ChatHistoryStore, replaceChatHistoryFileAtomically } from '../src/main/chat-history-store';
 
 const fixtureRoots: string[] = [];
 
@@ -29,6 +29,9 @@ const usage = {
   source: 'provider' as const,
   totalTokens: 16,
 };
+
+const fileSystemError = (code: string, message = code): NodeJS.ErrnoException =>
+  Object.assign(new Error(message), { code });
 
 describe('independent chat history store', () => {
   it('creates, updates and reloads a conversation without losing messages or usage', () => {
@@ -262,5 +265,143 @@ describe('independent chat history store', () => {
         usage,
       }),
     ).toThrow(/不能保存 base64/);
+  });
+});
+
+describe('chat history atomic replacement', () => {
+  it('uses a unique same-directory temporary path and exclusive private writes', () => {
+    const target = 'C:\\profile\\claude\\chat-history.json';
+    const temporaryIds = ['first-id', 'second-id'];
+    const writeFile = vi.fn();
+    const renameFile = vi.fn();
+    const createTemporaryId = vi.fn(() => temporaryIds.shift() ?? 'unexpected-id');
+
+    replaceChatHistoryFileAtomically(target, 'first', {
+      createTemporaryId,
+      renameFile,
+      writeFile,
+    });
+    replaceChatHistoryFileAtomically(target, 'second', {
+      createTemporaryId,
+      renameFile,
+      writeFile,
+    });
+
+    expect(writeFile).toHaveBeenNthCalledWith(1, `${target}.tmp-${process.pid}-first-id`, 'first', {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    expect(writeFile).toHaveBeenNthCalledWith(
+      2,
+      `${target}.tmp-${process.pid}-second-id`,
+      'second',
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+    expect(renameFile).toHaveBeenNthCalledWith(1, `${target}.tmp-${process.pid}-first-id`, target);
+    expect(renameFile).toHaveBeenNthCalledWith(2, `${target}.tmp-${process.pid}-second-id`, target);
+  });
+
+  it('does not delete an exclusive-create collision that it never owned', () => {
+    const writeError = fileSystemError('EEXIST', 'temporary path collision');
+    const renameFile = vi.fn();
+    const unlinkFile = vi.fn();
+
+    expect(() =>
+      replaceChatHistoryFileAtomically('C:\\profile\\claude\\chat-history.json', 'next', {
+        createTemporaryId: () => 'collision-id',
+        renameFile,
+        unlinkFile,
+        writeFile: () => {
+          throw writeError;
+        },
+      }),
+    ).toThrow(writeError);
+    expect(renameFile).not.toHaveBeenCalled();
+    expect(unlinkFile).not.toHaveBeenCalled();
+  });
+
+  it('retries only transient Windows rename failures with bounded delays', () => {
+    const target = 'C:\\profile\\claude\\chat-history.json';
+    const temporaryPath = `${target}.tmp-${process.pid}-retry-id`;
+    const sleep = vi.fn();
+    const renameFile = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw fileSystemError('EPERM');
+      })
+      .mockImplementationOnce(() => {
+        throw fileSystemError('EBUSY');
+      })
+      .mockImplementationOnce(() => undefined);
+
+    replaceChatHistoryFileAtomically(target, 'next', {
+      createTemporaryId: () => 'retry-id',
+      renameFile,
+      sleep,
+      writeFile: vi.fn(),
+    });
+
+    expect(renameFile).toHaveBeenCalledTimes(3);
+    expect(renameFile).toHaveBeenCalledWith(temporaryPath, target);
+    expect(sleep.mock.calls).toEqual([[5], [10]]);
+  });
+
+  it('preserves the last valid target and original error after persistent rename failure', () => {
+    const { historyPath } = createStore();
+    mkdirSync(path.dirname(historyPath), { recursive: true });
+    writeFileSync(historyPath, 'last-valid-history', 'utf8');
+    const temporaryPath = `${historyPath}.tmp-${process.pid}-persistent-id`;
+    const renameError = fileSystemError('EACCES', 'destination is temporarily locked');
+    const renameFile = vi.fn(() => {
+      throw renameError;
+    });
+    const sleep = vi.fn();
+    let caught: unknown;
+
+    try {
+      replaceChatHistoryFileAtomically(historyPath, 'replacement', {
+        createTemporaryId: () => 'persistent-id',
+        renameFile,
+        sleep,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(renameError);
+    expect(renameFile).toHaveBeenCalledTimes(6);
+    expect(sleep.mock.calls).toEqual([[5], [10], [20], [40], [80]]);
+    expect(readFileSync(historyPath, 'utf8')).toBe('last-valid-history');
+    expect(existsSync(temporaryPath)).toBe(false);
+  });
+
+  it('does not retry non-transient rename failures and still cleans only its temporary file', () => {
+    const { historyPath } = createStore();
+    mkdirSync(path.dirname(historyPath), { recursive: true });
+    writeFileSync(historyPath, 'last-valid-history', 'utf8');
+    const temporaryPath = `${historyPath}.tmp-${process.pid}-fatal-id`;
+    const renameError = fileSystemError('EIO', 'disk failure');
+    const renameFile = vi.fn(() => {
+      throw renameError;
+    });
+    const sleep = vi.fn();
+    let caught: unknown;
+
+    try {
+      replaceChatHistoryFileAtomically(historyPath, 'replacement', {
+        createTemporaryId: () => 'fatal-id',
+        renameFile,
+        sleep,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(renameError);
+    expect(renameFile).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(readFileSync(historyPath, 'utf8')).toBe('last-valid-history');
+    expect(existsSync(temporaryPath)).toBe(false);
   });
 });

@@ -8,6 +8,8 @@ import type {
   CodexLoginView,
   CodexProjectState,
   CodexRateLimitsView,
+  PtyGeneration,
+  ResourceUsageView,
 } from '../shared/contracts';
 import { AsyncRefreshCache } from './async-refresh-cache';
 import type { BusyRegistry } from './busy-registry';
@@ -28,6 +30,8 @@ interface CodexRuntimeSession {
   cwd: string;
   exitMarker?: string;
   markerRemainder: string;
+  /** Exact PowerShell/ConPTY instance this runtime may observe or mutate. */
+  ptyGeneration?: PtyGeneration;
   sessionId: string;
 }
 
@@ -39,6 +43,8 @@ interface CodexAccountReadResult {
 export interface PreparedCodexLaunch {
   command: string;
   environment: Record<string, null | string>;
+  /** Bound PTY replaced by this prepared launch, if one still owned the runtime at commit time. */
+  predecessorPtyGeneration?: PtyGeneration;
   state: CodexProjectState;
 }
 
@@ -107,6 +113,45 @@ export const parseCodexRateLimits = (value: unknown): CodexRateLimitsView | unde
   return primary || secondary ? { primary, secondary } : undefined;
 };
 
+export const codexResourceUsage = (
+  account: CodexAccountView | undefined,
+  rateLimits: CodexRateLimitsView | undefined,
+): ResourceUsageView => {
+  const windows = [rateLimits?.primary, rateLimits?.secondary].flatMap((window, index) =>
+    window
+      ? [
+          {
+            label:
+              window.windowDurationMins === 300
+                ? '5 小时'
+                : window.windowDurationMins === 10_080
+                  ? '7 天'
+                  : index === 0
+                    ? '主要窗口'
+                    : '次要窗口',
+            resetsAt: window.resetsAt,
+            usedPercent: window.usedPercent,
+            windowDurationMins: window.windowDurationMins,
+          },
+        ]
+      : [],
+  );
+  const available = account?.type === 'chatgpt' && windows.length > 0;
+  return {
+    availability: available ? 'available' : 'unavailable',
+    capabilities: { balance: false, context: false, windows: account?.type === 'chatgpt' },
+    checkedAt: Date.now(),
+    detail:
+      account?.type !== 'chatgpt'
+        ? 'API Key 账号没有订阅额度窗口。'
+        : available
+          ? undefined
+          : 'Codex 官方状态源暂未返回额度。',
+    source: 'codex-app-server',
+    windows: windows.length > 0 ? windows : undefined,
+  };
+};
+
 const quotePowerShellLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 export const buildCodexLaunchCommand = (
@@ -160,6 +205,11 @@ export class CodexRuntime {
   public constructor(
     userDataPath: string,
     private readonly onState: (state: CodexProjectState) => void,
+    private readonly writeToTerminal: (
+      sessionId: string,
+      ptyGeneration: PtyGeneration,
+      data: string,
+    ) => boolean,
     downloadEngine: DownloadEngine,
     busyRegistry: BusyRegistry,
     fetchImplementation: typeof fetch = fetch,
@@ -201,27 +251,73 @@ export class CodexRuntime {
     return this.sessions.get(sessionId)?.active ?? false;
   }
 
-  public setInactive(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      session.active = false;
-      session.exitMarker = undefined;
-      session.markerRemainder = '';
+  public bindPty(sessionId: string, ptyGeneration: PtyGeneration): void {
+    const runtime = this.sessions.get(sessionId);
+    if (!runtime?.active) {
+      throw new Error('Codex 启动状态已失效，无法绑定新的终端。');
     }
+    if (runtime.ptyGeneration !== undefined && runtime.ptyGeneration !== ptyGeneration) {
+      throw new Error('Codex 已绑定到其他终端，这次启动结果已失效。');
+    }
+    runtime.ptyGeneration = ptyGeneration;
   }
 
-  public consumeTerminalOutput(sessionId: string, data: string): string {
+  public isBoundToPty(sessionId: string, ptyGeneration: PtyGeneration): boolean {
     const runtime = this.sessions.get(sessionId);
-    if (!runtime?.exitMarker) {
+    return Boolean(runtime?.active && runtime.ptyGeneration === ptyGeneration);
+  }
+
+  public writeTerminal(sessionId: string, ptyGeneration: PtyGeneration, data: string): boolean {
+    return (
+      this.isBoundToPty(sessionId, ptyGeneration) &&
+      this.writeToTerminal(sessionId, ptyGeneration, data)
+    );
+  }
+
+  public setInactive(sessionId: string, expectedGeneration: PtyGeneration): boolean {
+    const session = this.sessions.get(sessionId);
+    if (
+      !session?.active ||
+      expectedGeneration === undefined ||
+      session.ptyGeneration !== expectedGeneration
+    ) {
+      return false;
+    }
+    return this.deactivateSession(session);
+  }
+
+  public cleanupPreparedLaunch(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session?.active || session.ptyGeneration !== undefined) {
+      return false;
+    }
+    return this.deactivateSession(session);
+  }
+
+  private deactivateSession(session: CodexRuntimeSession): boolean {
+    session.active = false;
+    session.ptyGeneration = undefined;
+    session.exitMarker = undefined;
+    session.markerRemainder = '';
+    void this.emitState(session);
+    return true;
+  }
+
+  public consumeTerminalOutput(
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    data: string,
+  ): string {
+    const runtime = this.sessions.get(sessionId);
+    if (runtime?.ptyGeneration !== ptyGeneration || !runtime.exitMarker) {
       return data;
     }
     let combined = runtime.markerRemainder + data;
     runtime.markerRemainder = '';
-    if (combined.includes(runtime.exitMarker)) {
-      combined = combined.replaceAll(runtime.exitMarker, '');
-      runtime.active = false;
-      runtime.exitMarker = undefined;
-      void this.emitState(runtime);
+    const exitMarker = runtime.exitMarker;
+    if (combined.includes(exitMarker)) {
+      combined = combined.replaceAll(exitMarker, '');
+      this.setInactive(sessionId, ptyGeneration);
     }
     if (runtime.exitMarker) {
       const retainedLength = longestMarkerPrefixSuffix(combined, runtime.exitMarker);
@@ -261,6 +357,7 @@ export class CodexRuntime {
       login: { ...this.login },
       operationMessage: this.installProgress,
       rateLimits: this.rateLimits,
+      resourceUsage: codexResourceUsage(accountResult.account, this.rateLimits),
       requiresOpenaiAuth: accountResult.requiresOpenaiAuth,
       sessionId,
       warning,
@@ -366,7 +463,9 @@ export class CodexRuntime {
       throw new Error('请先使用 ChatGPT 账号登录 Codex。');
     }
     const runtime = this.ensureSession(sessionId, cwd);
+    const predecessorPtyGeneration = runtime.active ? runtime.ptyGeneration : undefined;
     runtime.active = true;
+    runtime.ptyGeneration = undefined;
     runtime.exitMarker = `${MARKER_PREFIX}${sessionId}:${Date.now()}\u0007`;
     runtime.markerRemainder = '';
     return {
@@ -377,6 +476,7 @@ export class CodexRuntime {
         runtime.exitMarker,
       ),
       environment: {},
+      predecessorPtyGeneration,
       state: { ...state, active: true },
     };
   }

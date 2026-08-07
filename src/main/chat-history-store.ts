@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -46,6 +47,100 @@ const MAX_MEDIA_TYPE_LENGTH = 127;
 const MAX_FILE_ID_LENGTH = 512;
 const CONVERSATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [5, 10, 20, 40, 80] as const;
+const RETRYABLE_WINDOWS_RENAME_ERRORS = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const synchronousSleepBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+interface AtomicChatHistoryWriteOptions {
+  encoding: 'utf8';
+  flag: 'wx';
+  mode: number;
+}
+
+export interface AtomicChatHistoryOperations {
+  createTemporaryId: () => string;
+  renameFile: (source: string, destination: string) => void;
+  sleep: (delayMs: number) => void;
+  unlinkFile: (filePath: string) => void;
+  writeFile: (filePath: string, contents: string, options: AtomicChatHistoryWriteOptions) => void;
+}
+
+const defaultAtomicChatHistoryOperations: AtomicChatHistoryOperations = {
+  createTemporaryId: randomUUID,
+  renameFile: renameSync,
+  sleep: (delayMs) => {
+    Atomics.wait(synchronousSleepBuffer, 0, 0, delayMs);
+  },
+  unlinkFile: unlinkSync,
+  writeFile: (filePath, contents, options) => {
+    writeFileSync(filePath, contents, options);
+  },
+};
+
+const errorCode = (error: unknown): string | undefined =>
+  error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+
+/** Replaces one history file without ever deleting its last valid destination bytes. */
+export const replaceChatHistoryFileAtomically = (
+  storagePath: string,
+  contents: string,
+  operationOverrides: Partial<AtomicChatHistoryOperations> = {},
+): void => {
+  const operations = {
+    ...defaultAtomicChatHistoryOperations,
+    ...operationOverrides,
+  };
+  const temporaryPath = `${storagePath}.tmp-${process.pid}-${operations.createTemporaryId()}`;
+  let ownsTemporaryFile = false;
+  try {
+    try {
+      operations.writeFile(temporaryPath, contents, {
+        encoding: 'utf8',
+        flag: 'wx',
+        mode: 0o600,
+      });
+      ownsTemporaryFile = true;
+    } catch (error) {
+      // EEXIST means the exclusive create did not give us ownership; every other write failure may
+      // have left bytes in our UUID-named path and is safe to clean without touching the destination.
+      if (errorCode(error) !== 'EEXIST') {
+        try {
+          operations.unlinkFile(temporaryPath);
+        } catch {
+          // Preserve the write failure rather than replacing it with best-effort cleanup details.
+        }
+      }
+      throw error;
+    }
+
+    for (let retryIndex = 0; ; retryIndex += 1) {
+      try {
+        operations.renameFile(temporaryPath, storagePath);
+        ownsTemporaryFile = false;
+        return;
+      } catch (error) {
+        const retryDelay = WINDOWS_RENAME_RETRY_DELAYS_MS[retryIndex];
+        if (
+          !RETRYABLE_WINDOWS_RENAME_ERRORS.has(errorCode(error) ?? '') ||
+          retryDelay === undefined
+        ) {
+          throw error;
+        }
+        operations.sleep(retryDelay);
+      }
+    }
+  } finally {
+    if (ownsTemporaryFile) {
+      try {
+        operations.unlinkFile(temporaryPath);
+      } catch {
+        // The primary write/rename result remains authoritative; only our unique temporary file is touched.
+      }
+    }
+  }
+};
 
 const hasControlCharacter = (value: string): boolean =>
   [...value].some((character) => {
@@ -514,11 +609,6 @@ export class ChatHistoryStore {
 
   private persist(store: StoredChatHistoryFile): void {
     mkdirSync(this.storageDirectory, { recursive: true });
-    const temporaryPath = `${this.storagePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(store, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
-    renameSync(temporaryPath, this.storagePath);
+    replaceChatHistoryFileAtomically(this.storagePath, `${JSON.stringify(store, null, 2)}\n`);
   }
 }

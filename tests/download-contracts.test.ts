@@ -38,6 +38,10 @@ describe('download IPC surface', () => {
     expect(contractsSource).toContain(
       'onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;',
     );
+    expect(mainSource).toContain("ipcMain.handle('download:history-delete'");
+    expect(mainSource).toContain("ipcMain.handle('download:history-clear'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('download:history-delete'");
+    expect(preloadSource).toContain("ipcRenderer.invoke('download:history-clear'");
   });
 
   it('validates the sender and task id before every download mutation', () => {
@@ -50,10 +54,13 @@ describe('download IPC surface', () => {
     }
   });
 
-  it('routes the CCR installer through the shared verified download engine', () => {
-    expect(routerManagerSource).toContain('await this.downloadEngine.start({');
-    expect(routerManagerSource).toContain("label: 'Claude Code Router 安装包'");
-    expect(routerManagerSource).not.toContain('response.body.getReader()');
+  it('installs CCR as a deduplicated CLI task with a recoverable journal', () => {
+    expect(routerManagerSource).toContain("'@musistudio/claude-code-router@latest'");
+    expect(routerManagerSource).toContain('private installInFlight?');
+    expect(routerManagerSource).toContain("'router-operation.json'");
+    expect(routerManagerSource).toContain('recoverInterruptedInstall()');
+    expect(routerManagerSource).not.toContain('Claude Code Router 安装包');
+    expect(preloadSource).toContain("ipcRenderer.on('router:operation-progress', callback)");
   });
 
   it('routes Codex downloads through the engine and streams installer output', () => {
@@ -73,6 +80,13 @@ describe('download IPC surface', () => {
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'pause', '暂停')");
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'resume', '继续')");
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'cancel', '取消')");
+    expect(rendererSource).toContain(
+      "state.textContent = lease.kind === 'uninstall' ? '卸载中' : '安装中'",
+    );
+    expect(rendererSource).toContain('window.controlPanel.deleteDownloadHistory(task.id)');
+    expect(rendererSource).toContain('window.controlPanel.clearDownloadHistory()');
+    expect(rendererMarkup).toContain('id="download-history-list"');
+    expect(rendererMarkup).toContain('id="clear-download-history"');
     expect(rendererStyles).toContain(".download-progress[data-indeterminate='true']");
     expect(rendererStyles).toContain('var(--dur-progress)');
   });

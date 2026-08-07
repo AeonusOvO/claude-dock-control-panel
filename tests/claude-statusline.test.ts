@@ -26,7 +26,13 @@ describe('ClaudeDock status-line helper', () => {
     const input = {
       context_window: {
         context_window_size: 200_000,
-        total_input_tokens: 52_000,
+        current_usage: {
+          cache_creation_input_tokens: 5_000,
+          cache_read_input_tokens: 40_000,
+          input_tokens: 8_000,
+          output_tokens: 2_000,
+        },
+        total_input_tokens: 53_000,
         total_output_tokens: 3_000,
         used_percentage: 27.5,
       },
@@ -39,6 +45,7 @@ describe('ClaudeDock status-line helper', () => {
       effort: {
         level: 'xhigh',
       },
+      fast_mode: true,
       model: {
         display_name: 'DeepSeek Chat',
         id: 'deepseek-chat',
@@ -78,15 +85,59 @@ describe('ClaudeDock status-line helper', () => {
     >;
     expect(metrics).toMatchObject({
       contextWindowSize: 200_000,
-      contextWindowUsed: 55_000,
+      contextWindowUsed: 53_000,
       effortLevel: 'xhigh',
-      inputTokens: 52_000,
+      fastMode: true,
+      inputTokens: 53_000,
       modelId: 'deepseek-chat',
       outputTokens: 3_000,
       sessionCostUsd: 0.42,
       sessionId: 'session-fixture',
       sessionName: 'api-visualization',
     });
+  });
+
+  statusLineIt('uses exact current usage instead of a rounded 100% display value', () => {
+    const outputPath = path.join(fixtureRoot, 'metrics-rounded-percent.json');
+    const scriptPath = path.resolve('assets/runtime/claude-statusline.ps1');
+    const result = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptPath,
+        '-OutputPath',
+        outputPath,
+      ],
+      {
+        encoding: 'utf8',
+        input: JSON.stringify({
+          context_window: {
+            context_window_size: 200_000,
+            current_usage: {
+              cache_creation_input_tokens: 10_000,
+              cache_read_input_tokens: 165_000,
+              input_tokens: 12_345,
+              output_tokens: 2_000,
+            },
+            used_percentage: 100,
+          },
+          model: { display_name: 'GPT bridge', id: 'gpt-5.6-sol' },
+          session_id: 'session-rounded-percent',
+        }),
+        timeout: STATUSLINE_PROCESS_TIMEOUT_MS,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const metrics = JSON.parse(readFileSync(outputPath, 'utf8').replace(/^\uFEFF/, '')) as Record<
+      string,
+      unknown
+    >;
+    expect(metrics.contextWindowUsed).toBe(187_345);
   });
 
   statusLineIt('omits the effort level for a model that does not report one', () => {

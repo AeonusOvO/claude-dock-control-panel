@@ -78,6 +78,62 @@ describe('ApplicationProxyStore', () => {
     expect(store.getCredentials()).toBeUndefined();
   });
 
+  it('round-trips a disabled SOCKS draft without requiring a CLI-compatible endpoint', () => {
+    const directory = createDirectory();
+    const store = new ApplicationProxyStore(directory, secretStorage);
+
+    expect(
+      store.save({
+        enabled: false,
+        host: '127.0.0.1',
+        port: 1080,
+        protocol: 'socks5',
+        scope: { application: true, cli: true, conversation: false },
+      }),
+    ).toMatchObject({
+      enabled: false,
+      host: '127.0.0.1',
+      port: 1080,
+      protocol: 'socks5',
+      scope: { application: true, cli: false, conversation: false },
+    });
+
+    const reloaded = new ApplicationProxyStore(directory, secretStorage).getView();
+    expect(reloaded).toMatchObject({
+      enabled: false,
+      host: '127.0.0.1',
+      port: 1080,
+      protocol: 'socks5',
+      scope: { application: true, cli: false, conversation: false },
+    });
+  });
+
+  it('allows the disabled state to persist without an endpoint', () => {
+    const directory = createDirectory();
+    const store = new ApplicationProxyStore(directory, secretStorage);
+    store.save({
+      enabled: true,
+      host: '127.0.0.1',
+      port: 7890,
+      protocol: 'http',
+      scope: { application: false, cli: true, conversation: false },
+    });
+
+    expect(
+      store.save({
+        enabled: false,
+        host: '',
+        protocol: 'http',
+        scope: { application: false, cli: true, conversation: false },
+      }),
+    ).toMatchObject({ enabled: false, host: '', port: undefined });
+    expect(new ApplicationProxyStore(directory, secretStorage).getView()).toMatchObject({
+      enabled: false,
+      host: '',
+      port: undefined,
+    });
+  });
+
   it('rejects a SOCKS-only port for Claude Code CLI', () => {
     const store = new ApplicationProxyStore(createDirectory(), secretStorage);
     expect(() =>

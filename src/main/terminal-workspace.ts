@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { TerminalStatus, TerminalWorkspaceState } from '../shared/contracts';
+import type { PtyGeneration, TerminalStatus, TerminalWorkspaceState } from '../shared/contracts';
 import { DEFAULT_TERMINAL_THEME, type TerminalThemeId } from '../shared/terminal-themes';
 import { normalizeClaudeSessionTitle } from './claude-session-manager';
 import { TerminalSession, type TerminalEnvironmentOverrides } from './terminal-session';
@@ -19,14 +19,18 @@ export interface ManagedTerminal {
     themeId?: TerminalThemeId,
   ) => TerminalStatus;
   stop: (emitStatus?: boolean) => TerminalStatus;
-  write: (data: string) => void;
+  stopIfGeneration: (
+    expectedGeneration: PtyGeneration,
+    emitStatus?: boolean,
+  ) => TerminalStatus | undefined;
+  write: (expectedGeneration: PtyGeneration, data: string) => boolean;
 }
 
 type TerminalFactory = (
   id: string,
   initialCwd: string,
   initialTitle: string,
-  onData: (data: string) => void,
+  onData: (ptyGeneration: PtyGeneration, data: string) => void,
   onStatus: (status: TerminalStatus) => void,
 ) => ManagedTerminal;
 
@@ -56,7 +60,11 @@ export class TerminalWorkspace {
   private environmentProvider: () => TerminalEnvironmentOverrides = () => ({});
 
   public constructor(
-    private readonly onData: (sessionId: string, data: string) => void,
+    private readonly onData: (
+      sessionId: string,
+      ptyGeneration: PtyGeneration,
+      data: string,
+    ) => void,
     private readonly onState: (state: TerminalWorkspaceState) => void,
     private readonly terminalFactory: TerminalFactory = defaultFactory,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
@@ -189,8 +197,16 @@ export class TerminalWorkspace {
   }
 
   /** Returns the size the PTY actually adopted, which the renderer uses to keep xterm in step. */
-  public resize(sessionId: string, cols: number, rows: number): { cols: number; rows: number } {
-    return this.requireSession(sessionId).resize(cols, rows);
+  public resize(
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+    cols: number,
+    rows: number,
+  ): { cols: number; rows: number } | undefined {
+    const session = this.requireSession(sessionId);
+    return session.getStatus().ptyGeneration === expectedGeneration
+      ? session.resize(cols, rows)
+      : undefined;
   }
 
   public restart(
@@ -231,8 +247,16 @@ export class TerminalWorkspace {
     return this.requireSession(sessionId).stop();
   }
 
-  public write(sessionId: string, data: string): void {
-    this.requireSession(sessionId).write(data);
+  public stopIfGeneration(
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+    emitStatus = true,
+  ): TerminalStatus | undefined {
+    return this.requireSession(sessionId).stopIfGeneration(expectedGeneration, emitStatus);
+  }
+
+  public write(sessionId: string, expectedGeneration: PtyGeneration, data: string): boolean {
+    return this.requireSession(sessionId).write(expectedGeneration, data);
   }
 
   private nextConversationTitle(cwd: string): string {
@@ -253,8 +277,8 @@ export class TerminalWorkspace {
       sessionId,
       cwd,
       title,
-      (data) => {
-        this.onData(sessionId, data);
+      (ptyGeneration, data) => {
+        this.onData(sessionId, ptyGeneration, data);
       },
       () => {
         this.emitState();

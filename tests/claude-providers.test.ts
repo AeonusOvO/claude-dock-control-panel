@@ -5,6 +5,7 @@ import {
   CLAUDE_PROVIDERS,
   collapsedClaudeProviderGroups,
   findClaudeProvider,
+  officialNetworkProviderForClaudePreset,
   providerForPreset,
 } from '../src/shared/claude-providers';
 
@@ -61,18 +62,32 @@ describe('Claude provider catalog', () => {
     }
   });
 
-  it('keeps ChatGPT subscription conversion explicit, local and separate from official access', () => {
+  it('keeps the managed ChatGPT subscription route local and separate from official access', () => {
     expect(findClaudeProvider('chatgpt-subscription')).toMatchObject({
       authMode: 'authToken',
       baseUrl: 'http://127.0.0.1:8317',
+      editableBaseUrl: false,
       group: 'subscription',
+      label: 'ChatGPT 订阅（ClaudeDock 托管）',
       model: 'gpt-5.6-sol',
       modelFast: 'gpt-5.4-mini',
     });
-    expect(findClaudeProvider('chatgpt-subscription')?.caveat).toContain('第三方本地网关');
-    expect(findClaudeProvider('chatgpt-subscription')?.keyHint).toContain('本地网关');
+    expect(findClaudeProvider('chatgpt-subscription')?.caveat).toContain('OpenAI Codex 负责人');
+    expect(findClaudeProvider('chatgpt-subscription')?.caveat).toContain('第三方开源网关');
+    expect(findClaudeProvider('chatgpt-subscription')?.consoleUrl).toContain('thsottiaux/status');
     expect(providerForPreset('chatgpt-subscription')).toBe('gateway');
     expect(collapsedClaudeProviderGroups('chatgpt-subscription')).not.toContain('subscription');
+  });
+
+  it('maps only official and subscription presets to their matching official profiles', () => {
+    expect(officialNetworkProviderForClaudePreset('anthropic')).toBe('anthropic-claude');
+    expect(officialNetworkProviderForClaudePreset('anthropic-api')).toBe('anthropic-claude');
+    expect(officialNetworkProviderForClaudePreset('chatgpt-subscription')).toBe('openai-codex');
+    for (const provider of CLAUDE_PROVIDERS.filter(
+      ({ group }) => !['official', 'subscription'].includes(group),
+    )) {
+      expect(officialNetworkProviderForClaudePreset(provider.id)).toBeUndefined();
+    }
   });
 
   it('only permits HTTPS remote endpoints and explicit loopback HTTP endpoints', () => {

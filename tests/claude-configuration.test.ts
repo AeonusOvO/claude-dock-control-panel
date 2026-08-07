@@ -8,9 +8,11 @@ import {
   buildClaudeEnvironment,
   buildClaudeLaunchCommand,
   buildClaudeSettingsEnvironment,
+  buildClaudeSpeedSettings,
   buildRuntimeSignalCommand,
   buildWebSearchGuardCommand,
   evaluateClaudeInstallation,
+  managedChatGptContextProfile,
   normalizeClaudeConfig,
   shouldDisableInheritedApiKeyHelper,
 } from '../src/main/claude-configuration';
@@ -83,6 +85,33 @@ describe('Claude Code configuration', () => {
       preset: 'chatgpt-subscription',
       provider: 'gateway',
     });
+    const normalized = normalizeClaudeConfig(subscriptionInput);
+    expect(managedChatGptContextProfile(normalized)?.autoCompactAtTokens).toBe(206_720);
+    expect(buildClaudeEnvironment(normalized, 'local-gateway-token')).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '258400',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
+      DISABLE_AUTO_COMPACT: null,
+      DISABLE_COMPACT: null,
+    });
+    expect(buildClaudeSettingsEnvironment(normalized)).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '258400',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
+      DISABLE_AUTO_COMPACT: '',
+      DISABLE_COMPACT: '',
+    });
+    expect(buildClaudeSettingsEnvironment(normalized, 'extended')).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '997500',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1050000',
+    });
+    const otherModel = normalizeClaudeConfig({ ...subscriptionInput, model: 'gpt-5.4-mini' });
+    expect(buildClaudeSettingsEnvironment(otherModel, 'extended')).toMatchObject({
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '',
+    });
     expect(() =>
       normalizeClaudeConfig({
         ...subscriptionInput,
@@ -129,11 +158,73 @@ describe('Claude Code configuration', () => {
     });
   });
 
+  it('builds isolated standard, Claude Fast, and GPT fast launch profiles', () => {
+    const official = normalizeClaudeConfig({
+      authMode: 'existing',
+      baseUrl: '',
+      credentialAction: 'keep',
+      model: 'claude-opus-5',
+      preset: 'anthropic',
+      provider: 'anthropic',
+    });
+    const managed = normalizeClaudeConfig({
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialAction: 'keep',
+      model: 'gpt-5.6-sol',
+      modelFast: 'gpt-5.4-mini',
+      preset: 'chatgpt-subscription',
+      provider: 'gateway',
+    });
+
+    expect(buildClaudeSpeedSettings()).toEqual({
+      fastMode: false,
+      fastModePerSessionOptIn: true,
+    });
+    expect(buildClaudeEnvironment(official)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: null,
+    });
+    expect(buildClaudeSettingsEnvironment(official)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: '',
+    });
+
+    const claudeFast = { mechanism: 'claude-native-fast' as const, mode: 'fast' as const };
+    expect(buildClaudeSpeedSettings(claudeFast)).toEqual({
+      fastMode: true,
+      fastModePerSessionOptIn: false,
+    });
+    expect(buildClaudeEnvironment(official, undefined, 'standard', claudeFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: null,
+      CLAUDE_CODE_EXTRA_BODY: null,
+    });
+    expect(buildClaudeSettingsEnvironment(official, 'standard', claudeFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '',
+      CLAUDE_CODE_EXTRA_BODY: '',
+    });
+
+    const gptFast = { mechanism: 'gpt-service-tier' as const, mode: 'fast' as const };
+    const extraBody = JSON.stringify({ service_tier: 'fast' });
+    expect(buildClaudeSpeedSettings(gptFast)).toEqual({
+      fastMode: false,
+      fastModePerSessionOptIn: true,
+    });
+    expect(buildClaudeEnvironment(managed, 'token', 'standard', gptFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: extraBody,
+    });
+    expect(buildClaudeSettingsEnvironment(managed, 'standard', gptFast)).toMatchObject({
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EXTRA_BODY: extraBody,
+    });
+  });
+
   it('defaults the fast model to the main model and validates both identifiers', () => {
     expect(normalizeClaudeConfig(gatewayInput).modelFast).toBe('deepseek-chat');
     expect(() =>
       normalizeClaudeConfig({ ...gatewayInput, modelFast: 'invalid model name' }),
-    ).toThrow('快速模型标识');
+    ).toThrow('小型/备用模型标识');
   });
 
   it('overrides inherited CCR route aliases without writing credentials to temporary settings', () => {
@@ -170,6 +261,8 @@ describe('Claude Code configuration', () => {
       CLAUDE_CODE_DISABLE_THINKING: null,
       CLAUDE_CODE_EFFORT_LEVEL: null,
       MAX_THINKING_TOKENS: null,
+      DISABLE_AUTO_COMPACT: null,
+      DISABLE_COMPACT: null,
     });
   });
 
