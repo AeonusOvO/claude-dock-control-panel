@@ -24,7 +24,39 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FO
 OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.`;
 
-const normalizeText = (value) => value.replace(/\r\n?/g, '\n').trim();
+const normalizeText = (value) =>
+  value
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+
+const standardWebhooksLicenseNotice = `The published standardwebhooks@1.0.0 package declares SPDX
+MIT but omits a license file. Its npm provenance points to git commit
+929bf0c1928b188287eaf88d0a9f0a4e87df6499, whose repository-level LICENSE is Apache-2.0:
+https://github.com/standard-webhooks/standard-webhooks/blob/929bf0c1928b188287eaf88d0a9f0a4e87df6499/LICENSE
+
+Both upstream representations are retained here instead of silently choosing one.
+
+--- Declared SPDX MIT text ---
+Copyright (c) Standard Webhooks contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--- Apache-2.0 text at the exact npm gitHead ---
+${normalizeText(readFileSync(path.resolve('LICENSE'), 'utf8'))}`;
 
 const repositoryUrl = (value) => {
   if (typeof value === 'string') return value;
@@ -57,6 +89,11 @@ for (const [packagePath, lockEntry] of Object.entries(lock.packages ?? {})) {
   if (notices.length === 0 && id === 'lazy-val@1.0.5' && metadata.license === 'MIT') {
     notices.push(
       '--- SPDX MIT fallback (upstream package omits a license file) ---\n' + lazyValMitLicense,
+    );
+  }
+  if (notices.length === 0 && id === 'standardwebhooks@1.0.0') {
+    notices.push(
+      '--- npm/source license provenance fallback ---\n' + standardWebhooksLicenseNotice,
     );
   }
   if (notices.length === 0) {

@@ -1,0 +1,541 @@
+const { app, BrowserWindow } = require('electron');
+const { mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const typescript = require('typescript');
+
+const root = path.join(__dirname, '..');
+const outputRoot = path.join(root, 'dist', 'visual-qa');
+const isolatedUserData = path.join(root, 'dist', '.electron-native-visual-smoke');
+app.setPath('userData', isolatedUserData);
+
+const loadThemeDefinitions = () => {
+  const source = readFileSync(path.join(root, 'src', 'shared', 'terminal-themes.ts'), 'utf8');
+  const transpiled = typescript.transpileModule(source, {
+    compilerOptions: {
+      module: typescript.ModuleKind.CommonJS,
+      target: typescript.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const themeModule = { exports: {} };
+  const factory = new vm.Script(
+    `(function (exports, module) { ${transpiled}\n})`,
+  ).runInThisContext();
+  factory(themeModule.exports, themeModule);
+  return themeModule.exports;
+};
+
+const { SHELL_CSS_VARIABLES, TERMINAL_THEMES } = loadThemeDefinitions();
+const themes = ['claude', 'telegram', 'graphite', 'midnight'];
+const captures = [];
+
+const applyTheme = (theme) => `
+  (() => {
+    const definition = ${JSON.stringify(TERMINAL_THEMES[theme])};
+    const mapping = ${JSON.stringify(SHELL_CSS_VARIABLES)};
+    for (const [field, property] of Object.entries(mapping)) {
+      document.documentElement.style.setProperty(property, definition.shell[field]);
+    }
+    document.documentElement.dataset.theme = ${JSON.stringify(theme)};
+    document.documentElement.dataset.appearance = definition.appearance;
+    document.documentElement.style.colorScheme = definition.appearance;
+    document.querySelector('#terminal-theme').value = ${JSON.stringify(theme)};
+    document.querySelector('#settings-theme').value = ${JSON.stringify(theme)};
+  })()
+`;
+
+const installFixtures = String.raw`
+  (() => {
+    document.documentElement.dataset.nativeQa = 'true';
+    const qaStyle = document.createElement('style');
+    qaStyle.textContent = [
+      "html[data-native-qa='true'] #terminal-shell { animation: none !important; grid-template-rows: var(--toolbar-h) minmax(0, 1fr) !important; opacity: 1 !important; }",
+      "html[data-native-qa='true'] #terminal-shell > :is(.terminal-stage, .terminal-composer, .terminal-footer) { display: none !important; }",
+      "html[data-native-qa='true'] #native-conversation { animation: none !important; display: grid !important; opacity: 1 !important; transform: none !important; }",
+    ].join('\\n');
+    document.head.append(qaStyle);
+    const byId = (id) => document.getElementById(id);
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    };
+    const activateProjects = () => {
+      for (const page of document.querySelectorAll('[data-rail-page]')) {
+        page.classList.toggle('rail-page--active', page.dataset.railPage === 'projects');
+      }
+      for (const button of document.querySelectorAll('[data-rail-tab]')) {
+        button.classList.toggle('activity-rail__button--active', button.dataset.railTab === 'projects');
+      }
+    };
+    const button = (label, primary = false) => {
+      const result = el('button', '', label);
+      result.type = 'button';
+      result.dataset.primary = String(primary);
+      return result;
+    };
+    const tool = (name, status, summary, open = false) => {
+      const details = el('details', 'native-tool');
+      details.dataset.status = status;
+      details.open = open;
+      const heading = el('summary');
+      heading.append(
+        el('span', 'native-tool__state'),
+        el('span', 'native-tool__name', summary || name),
+        el('span', 'native-tool__status', status === 'running' ? '运行中' : status === 'failed' ? '失败' : '已完成'),
+      );
+      const body = el('div', 'native-tool__details');
+      body.append(el('pre', '', JSON.stringify({ tool: name, path: 'src/main/main.ts' }, null, 2)));
+      if (status !== 'running') body.append(el('pre', '', status === 'failed' ? '权限不足，未修改任何文件。' : '已完成并通过类型检查。'));
+      details.append(heading, body);
+      return details;
+    };
+    const message = (role, bodyBuilder, streaming = false) => {
+      const article = el('article', 'native-message native-message--' + role);
+      if (streaming) article.classList.add('native-message--streaming');
+      article.append(el('strong', 'native-message__label', role === 'user' ? '你' : role === 'assistant' ? 'Claude' : '系统'));
+      const body = el('div', 'native-message__body');
+      bodyBuilder(body);
+      article.append(body);
+      return article;
+    };
+    const markdown = (html) => {
+      const node = el('div', 'chat-message__markdown');
+      node.innerHTML = html;
+      return node;
+    };
+    const buildHistory = (railWidth = 320, scroll = true) => {
+      document.documentElement.style.setProperty('--rail-w', railWidth + 'px');
+      const list = byId('project-list');
+      list.replaceChildren();
+      const folder = el('section', 'project-folder');
+      folder.dataset.open = 'true';
+      folder.dataset.expanded = 'true';
+      folder.dataset.active = 'true';
+      const header = el('div', 'project-folder__header');
+      const disclosure = button('');
+      disclosure.className = 'project-folder__disclosure';
+      disclosure.setAttribute('aria-expanded', 'true');
+      disclosure.append(el('span', 'project-folder__chevron', '▾'));
+      const copy = el('span', 'project-folder__copy');
+      copy.append(el('strong', '', 'ClaudeDock 原生对话架构与安全恢复'), el('span', '', '1 个对话进行中'));
+      disclosure.append(copy);
+      const actions = el('div', 'project-folder__actions');
+      const plus = button('+'); plus.className = 'project-folder__action';
+      const close = button('×'); close.className = 'project-folder__action project-folder__action--close';
+      actions.append(plus, close);
+      header.append(disclosure, actions);
+      const body = el('div', 'project-folder__body');
+      const live = el('div', 'conversation-item');
+      live.dataset.active = 'true'; live.dataset.phase = 'running';
+      const select = button(''); select.className = 'conversation-item__select';
+      select.append(el('span', 'conversation-item__status'), el('span', 'conversation-item__label', '原生对话 · 发布前完整检查'), el('span', 'conversation-item__phase', '运行中'));
+      live.append(select);
+      body.append(live, el('span', 'project-folder__hint', '历史对话（运行中的 UUID 已自动隐藏）'));
+      const history = el('div', 'project-folder__history');
+      history.setAttribute('role', 'list');
+      const names = [
+        '修复窗口缩放时 Claude 螃蟹图标重复与边框截断',
+        '模型能力档位与 Ultra Code 呈现规则',
+        'Windows 强制重启后的安全恢复策略',
+        '主题切换与代码差异背景实时同步',
+        '图片粘贴、拖放与安全附件预览',
+        '任务与下载中心真实进度呈现',
+        '历史会话单一 owner 与失败回滚',
+      ];
+      names.forEach((name, index) => {
+        const row = el('div', 'history-item');
+        const choose = button(''); choose.className = 'history-item__select';
+        choose.append(el('span', 'history-item__icon', '◷'), el('span', 'history-item__label', name), el('span', 'history-item__time', index === 0 ? '刚刚' : index + 1 + ' 天前'));
+        const remove = button('×'); remove.className = 'history-item__delete';
+        row.append(choose, remove); history.append(row);
+      });
+      if (!scroll) history.style.maxHeight = 'none';
+      body.append(history); folder.append(header, body); list.append(folder);
+    };
+    const setControls = () => {
+      const model = byId('native-model-control');
+      model.replaceChildren(new Option('Claude Opus 4.6', 'claude-opus-4-6'), new Option('Claude Haiku 4.5', 'claude-haiku-4-5'));
+      model.value = 'claude-opus-4-6'; model.disabled = false;
+      const effort = byId('native-effort-control');
+      effort.replaceChildren(new Option('Ultra Code · X-High + 编排', 'ultracode'), new Option('最大', 'max'), new Option('更深 · X-High', 'xhigh'));
+      effort.value = 'ultracode'; effort.disabled = false;
+      const fast = byId('native-fast-control'); fast.disabled = false; fast.dataset.state = 'requested'; fast.setAttribute('aria-pressed', 'true'); fast.textContent = 'Fast · 已请求';
+      const permission = byId('native-permission-control');
+      permission.replaceChildren(new Option('逐项确认', 'default'), new Option('规划模式', 'plan'));
+      permission.disabled = false;
+    };
+    const base = ({ state = 'success', railWidth = 320, scroll = true } = {}) => {
+      activateProjects(); buildHistory(railWidth, scroll);
+      for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+      const summaryPanel = byId('runtime-activity-panel');
+      summaryPanel.hidden = true; summaryPanel.dataset.state = 'closed';
+      const diagnosticPanel = byId('terminal-diagnostic');
+      diagnosticPanel.hidden = true; diagnosticPanel.dataset.state = 'closed'; diagnosticPanel.setAttribute('aria-hidden', 'true');
+      const diagnosticScrim = byId('terminal-diagnostic-scrim');
+      diagnosticScrim.hidden = true; diagnosticScrim.dataset.state = 'closed';
+      byId('terminal-shell').hidden = false;
+      byId('chat-shell').hidden = true;
+      byId('terminal-shell').classList.add('terminal-shell--native');
+      byId('terminal-project').textContent = 'ClaudeDock · 原生对话';
+      const native = byId('native-conversation');
+      native.dataset.state = 'open'; native.setAttribute('aria-hidden', 'false');
+      byId('native-terminal-toggle').setAttribute('aria-pressed', 'true');
+      byId('native-terminal-toggle-label').textContent = '高级终端';
+      byId('native-recovery-stack').hidden = true;
+      byId('native-interaction-stack').replaceChildren();
+      byId('native-attachment-queue').hidden = true;
+      setControls();
+      const messages = byId('native-conversation-messages');
+      const empty = byId('native-conversation-empty');
+      messages.replaceChildren(empty);
+      empty.hidden = state !== 'empty';
+      byId('native-composer-status').textContent = state === 'loading' ? 'Claude 正在处理' : state === 'failure' ? '需要处理' : '可以继续对话';
+      byId('native-stop').hidden = state !== 'loading';
+      if (state === 'empty') return;
+      const user = message('user', (body) => body.append(markdown('<p>请完成 <strong>ClaudeDock 5.0</strong> 原生对话迁移，并保留原始空白、代码围栏与工具顺序。</p>')));
+      const assistant = message('assistant', (body) => {
+        body.append(markdown('<h2>实施进度</h2><p>原生适配器已经接管结构化事件。下面的代码块会保留围栏与换行：</p><pre class="markdown-code"><code>const owner = [runtime, project, uuid];\nawait ownerRegistry.claim(owner);</code></pre><hr><p>运行中与高风险工具默认展开，普通成功项保持折叠。</p>'));
+        body.append(tool('Read', 'succeeded', '读取运行时配置', false));
+        body.append(tool('Edit', state === 'failure' ? 'failed' : state === 'loading' ? 'running' : 'succeeded', state === 'failure' ? '写入恢复日志失败' : '更新原生会话服务', true));
+      }, state === 'loading');
+      messages.append(user, assistant);
+    };
+    const interaction = (kind) => {
+      base();
+      const stack = byId('native-interaction-stack');
+      const card = el('form', 'native-interaction native-interaction--' + kind);
+      const head = el('div', 'native-interaction__head');
+      head.append(el('span', 'native-interaction__eyebrow', kind === 'permission' ? '权限确认' : '需要你的选择'), el('strong', '', kind === 'permission' ? '允许修改发布配置吗？' : '请选择异常恢复策略'));
+      head.append(el('p', '', '这项操作会影响当前项目，但不会接触系统级 API 路由。'));
+      card.append(head);
+      if (kind === 'permission') card.append(el('pre', 'native-interaction__payload', '{\n  "tool": "Edit",\n  "file": "package.json"\n}'));
+      else {
+        const fieldset = el('fieldset', 'native-interaction__options');
+        fieldset.append(el('legend', '', '恢复策略'));
+        [['保留现有会话', '切换到已经运行的 owner，不重复启动。'], ['替换旧 owner', '先安全停止旧 owner，再精确恢复 UUID。']].forEach(([title, description], index) => {
+          const label = el('label');
+          const input = el('input'); input.type = 'radio'; input.name = 'strategy'; input.checked = index === 0;
+          const copy = el('span'); copy.append(el('strong', '', title), el('small', '', description));
+          label.append(input, copy); fieldset.append(label);
+        });
+        card.append(fieldset);
+      }
+      const actions = el('div', 'native-interaction__actions');
+      const actionButtons = [button('取消'), button(kind === 'permission' ? '拒绝' : '提交'), button(kind === 'permission' ? '允许一次' : '继续', true)];
+      actionButtons.forEach((action, index) => { action.className = index === 2 ? 'button button--compact button--primary' : 'button button--compact'; });
+      actions.append(...actionButtons);
+      card.append(actions); stack.append(card);
+    };
+    const recovery = () => {
+      base();
+      const stack = byId('native-recovery-stack'); stack.hidden = false; stack.replaceChildren();
+      const card = el('article', 'native-recovery-card');
+      const copy = el('div'); copy.append(el('span', '', '上次运行异常中断 · 结果需要核对'), el('strong', '', '发布前检查与 Windows 强制重启恢复'), el('p', '', '这段输入不会自动重发；继续前请先核对 Claude JSONL。'));
+      const actions = el('div', 'native-recovery-card__actions'); actions.append(button('继续原对话'), button('恢复待确认文本'), button('丢弃记录'));
+      [...actions.children].forEach((action) => { action.className = 'button button--compact'; });
+      actions.lastElementChild.className = 'button button--compact button--danger native-recovery-card__discard'; card.append(copy, actions); stack.append(card);
+    };
+    const attachments = () => {
+      base();
+      const queue = byId('native-attachment-queue'); queue.hidden = false; queue.replaceChildren();
+      ['architecture-overview.png', '窗口缩放问题截图-超长中文文件名.png'].forEach((name, index) => {
+        const card = el('article', 'native-attachment');
+        const preview = el('div', 'native-attachment__preview'); preview.append(el('span', '', index ? 'PNG' : 'IMG'));
+        const copy = el('div'); copy.append(el('strong', '', name), el('small', '', index ? 'image/png · 2.4 MB' : 'image/png · 840 KB'));
+        card.append(preview, copy, button('×')); queue.append(card);
+      });
+      byId('native-composer-input').value = '请对照这两张截图检查四个主题下的布局和动效。';
+    };
+    const summary = () => {
+      base();
+      const panel = byId('runtime-activity-panel'); panel.hidden = false; panel.dataset.state = 'open';
+      byId('runtime-activity-trigger').setAttribute('aria-expanded', 'true');
+      byId('runtime-activity-label').textContent = '活动 4';
+      byId('runtime-activity-summary').textContent = '4 个运行中 · 1 个已完成';
+      const fill = (id, rows) => { const list = byId(id); list.replaceChildren(...rows.map(([name, value]) => { const item = el('li'); item.append(el('span', '', name), el('strong', '', value)); return item; })); };
+      fill('runtime-environment-list', [['变更', '+36,216  −2,699'], ['工作区', '本地'], ['分支', 'codex/feature-native-conversation-v5'], ['发布', 'ClaudeDock 5.0.0-rc.1']]);
+      fill('runtime-task-list', [['子智能体', '4 个运行中'], ['检查', '1 项待处理'], ['后台任务', '状态已确认']]);
+      fill('runtime-source-list', [['来源', 'Claude Agent SDK'], ['MCP', 'openai-docs-mcp']]);
+      fill('runtime-process-list', [['前台轮次', '可中断'], ['终端', '高级模式未启动']]);
+    };
+    const diagnostic = () => {
+      base();
+      const scrim = byId('terminal-diagnostic-scrim'); scrim.hidden = false; scrim.dataset.state = 'open';
+      const panel = byId('terminal-diagnostic'); panel.hidden = false; panel.dataset.state = 'open'; panel.setAttribute('aria-hidden', 'false');
+      byId('terminal-diagnostic-title').textContent = '项目终端未能启动';
+      byId('terminal-diagnostic-message').textContent = '当前原生对话仍可使用。运行诊断后可以重试高级终端连接。';
+      const result = byId('terminal-diagnostic-result'); result.hidden = false; result.textContent = 'POWERSHELL_UNAVAILABLE · 工作目录可访问 · 未读取凭据或会话正文';
+    };
+    const plan = () => {
+      base();
+      const dialog = byId('native-plan-dialog');
+      byId('native-plan-title').textContent = 'ClaudeDock 5.0 原生对话实施计划';
+      byId('native-plan-content').innerHTML = '<h1>发布前计划检查</h1><p>确认以下步骤后再批准实施：</p><ol><li>结构化适配器与单一 owner</li><li>恢复日志、图片安全与命令矩阵</li><li>四主题视觉矩阵与真实 Electron 检查</li><li>完整测试、打包和发布审计</li></ol><pre class="markdown-code"><code>unknown state → draft only\nnever auto-resend</code></pre><blockquote>不确定状态不会自动重发提示词或工具操作。</blockquote>';
+      if (!dialog.open) dialog.showModal(); dialog.dataset.state = 'open';
+    };
+    const updates = () => {
+      base();
+      const dialog = byId('download-center-dialog'); if (!dialog.open) dialog.showModal();
+      byId('download-center-empty').hidden = true; byId('download-active-section').hidden = false;
+      byId('download-active-summary').textContent = '2 项进行中';
+      const list = byId('download-operation-list'); list.replaceChildren();
+      const operation = el('article', 'download-task'); operation.dataset.state = 'installing';
+      const header = el('header'); const identity = el('div'); identity.append(el('strong', '', '更新 Claude Code（npm）'), el('span', 'download-task__state', '校验安装结果 · 队列 2/4'));
+      const progress = byId('download-progress-template').content.firstElementChild.cloneNode(true); progress.dataset.indeterminate = 'true'; progress.querySelector('.download-progress__value').textContent = '…'; progress.querySelector('.download-progress__linear > span').style.width = '34%';
+      header.append(identity, progress); operation.append(header);
+      const metrics = el('dl', 'download-task__metrics download-task__metrics--operation');
+      [['对象', 'Claude Code'], ['已用时间', '01:42'], ['类型', 'claude-code']].forEach(([term, value]) => { const row = el('div'); row.append(el('dt', '', term), el('dd', '', value)); metrics.append(row); });
+      operation.append(metrics, el('pre', 'download-task__log', '检测安装方式：npm\n已选择 registry.npmjs.org\nnpm 下载与写入中（总量未知）\n正在校验 claude --version'));
+      list.append(operation);
+    };
+    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, summary, updates };
+  })()
+`;
+
+const freezeAnimations = async (window, progress) => {
+  await window.webContents.executeJavaScript(`
+    (() => {
+      const animations = document.getAnimations({ subtree: true });
+      for (const animation of animations) {
+        const duration = Number(animation.effect?.getComputedTiming().duration ?? 0);
+        animation.pause();
+        animation.currentTime = duration * ${progress};
+      }
+      return animations.length;
+    })()
+  `);
+};
+
+app
+  .whenReady()
+  .then(async () => {
+    const window = new BrowserWindow({
+      height: 760,
+      show: false,
+      useContentSize: true,
+      webPreferences: {
+        backgroundThrottling: false,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+      width: 1180,
+    });
+    await window.loadFile(path.join(root, 'dist', 'renderer', 'index.html'));
+    await window.webContents.executeJavaScript(installFixtures);
+
+    const capture = async (feature, file, metadata = {}) => {
+      const directory = path.join(outputRoot, feature);
+      mkdirSync(directory, { recursive: true });
+      window.webContents.invalidate();
+      // Hidden BrowserWindows throttle animation clocks until the first compositor frame. Prime one
+      // frame before waiting, otherwise a "settled" screenshot can accidentally capture 30–60% of
+      // an entrance even after the wall-clock duration elapsed.
+      await window.capturePage();
+      // The Telegram theme intentionally has the longest entrance. Settled captures wait beyond the
+      // theme token; paused animation captures remain deterministic because their timelines are held.
+      await new Promise((resolve) => setTimeout(resolve, 440));
+      // capturePage can return the preceding compositor frame in a hidden window. Discard one final
+      // frame, then capture again after a short compositor turn so every file reflects its own scene.
+      await window.capturePage();
+      await new Promise((resolve) => setTimeout(resolve, 34));
+      window.webContents.invalidate();
+      const image = await window.capturePage();
+      const png = image.toPNG();
+      if (png.length < 1000) throw new Error(`Invalid visual capture: ${feature}/${file}`);
+      writeFileSync(path.join(directory, file), png);
+      const dom = await window.webContents.executeJavaScript(`
+      (() => {
+        const view = document.querySelector('#native-conversation');
+        const messages = document.querySelector('#native-conversation-messages');
+        const firstMessage = messages.querySelector('.native-message');
+        const composer = document.querySelector('#native-composer');
+        const summary = document.querySelector('#runtime-activity-panel');
+        const diagnostic = document.querySelector('#terminal-diagnostic');
+        const rect = view.getBoundingClientRect();
+        return {
+          composerDisplay: getComputedStyle(composer).display,
+          composerHeight: Math.round(composer.getBoundingClientRect().height),
+          composerRowHeight: Math.round(composer.querySelector('.native-composer__row').getBoundingClientRect().height),
+          composerTop: Math.round(composer.getBoundingClientRect().top),
+          diagnosticHidden: diagnostic.hidden,
+          firstMessageColor: firstMessage ? getComputedStyle(firstMessage).color : '',
+          firstMessageDisplay: firstMessage ? getComputedStyle(firstMessage).display : '',
+          firstMessageOpacity: firstMessage ? getComputedStyle(firstMessage).opacity : '',
+          firstMessageTop: firstMessage ? Math.round(firstMessage.getBoundingClientRect().top) : -1,
+          messageCount: messages.querySelectorAll('.native-message').length,
+          messagesHeight: Math.round(messages.getBoundingClientRect().height),
+          messagesScrollTop: Math.round(messages.scrollTop),
+          innerWidth: window.innerWidth,
+          visualViewportWidth: Math.round(window.visualViewport?.width ?? window.innerWidth),
+          compactViewport: document.documentElement.dataset.compactViewport ?? '',
+          railCollapsed: document.querySelector('.workspace')?.classList.contains('workspace--rail-collapsed') ?? false,
+          nativeDisplay: getComputedStyle(view).display,
+          nativeHeight: Math.round(rect.height),
+          nativeGridRows: getComputedStyle(view).gridTemplateRows,
+          nativeOpacity: getComputedStyle(view).opacity,
+          nativeState: view.dataset.state,
+          summaryHidden: summary.hidden,
+          dialogs: [...document.querySelectorAll('dialog[open]')].map((dialog) => dialog.id),
+        };
+      })()
+    `);
+      captures.push({
+        dom,
+        feature,
+        file,
+        height: image.getSize().height,
+        width: image.getSize().width,
+        ...metadata,
+      });
+    };
+    const scene = async (name, options) => {
+      await window.webContents.executeJavaScript(
+        `window.__nativeQa.${name}(${JSON.stringify(options ?? {})})`,
+      );
+    };
+
+    if (process.env.CLAUDEDOCK_VISUAL_DEBUG === '1') {
+      await window.webContents.executeJavaScript(applyTheme('graphite'));
+      await scene('base', { railWidth: 320, state: 'success' });
+      await capture('native-conversation', 'debug.png', { scene: 'debug', theme: 'graphite' });
+      console.log(JSON.stringify(captures[0], null, 2));
+      app.exit(0);
+      return;
+    }
+
+    for (const theme of themes) {
+      await window.webContents.executeJavaScript(applyTheme(theme));
+      for (const [width, height] of [
+        [820, 640],
+        [900, 640],
+        [1180, 760],
+      ]) {
+        window.setContentSize(width, height);
+        window.webContents.setZoomFactor(1);
+        await scene('base', {
+          railWidth: width === 820 ? 270 : width === 900 ? 320 : 560,
+          state: 'success',
+        });
+        await capture('native-conversation', `${theme}-${width}x${height}-success.png`, {
+          height,
+          railWidth: width === 820 ? 270 : width === 900 ? 320 : 560,
+          scene: 'success',
+          theme,
+          width,
+          zoom: 100,
+        });
+      }
+    }
+
+    await window.webContents.executeJavaScript(applyTheme('graphite'));
+    window.setContentSize(1180, 760);
+    for (const state of ['empty', 'loading', 'failure']) {
+      await scene('base', { railWidth: 320, state });
+      await capture('native-conversation', `graphite-1180x760-${state}.png`, {
+        scene: state,
+        theme: 'graphite',
+        zoom: 100,
+      });
+    }
+    for (const zoom of [1.25, 1.5, 2]) {
+      window.setContentSize(1180, 760);
+      window.webContents.setZoomFactor(zoom);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await window.webContents.executeJavaScript(`window.dispatchEvent(new Event('resize'))`);
+      await scene('base', { railWidth: 320, state: 'success' });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await capture('native-conversation', `graphite-1180x760-zoom-${Math.round(zoom * 100)}.png`, {
+        scene: 'success',
+        theme: 'graphite',
+        zoom: Math.round(zoom * 100),
+      });
+    }
+    window.webContents.setZoomFactor(1);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const componentScenes = [
+      ['interaction', 'permission', 'permission'],
+      ['interaction', 'question', 'question'],
+      ['recovery', undefined, 'recovery'],
+      ['attachments', undefined, 'attachments'],
+      ['summary', undefined, 'summary'],
+      ['diagnostic', undefined, 'terminal-diagnostic'],
+      ['plan', undefined, 'plan'],
+      ['updates', undefined, 'updates'],
+    ];
+    for (const [themeIndex, theme] of themes.entries()) {
+      // Chromium can retain a just-closed modal backdrop for several hidden-window compositor
+      // frames. A fresh document per theme keeps captures authoritative instead of accepting a
+      // ghosted backdrop as visual evidence for the next theme.
+      if (themeIndex > 0) {
+        await window.loadFile(path.join(root, 'dist', 'renderer', 'index.html'));
+        await window.webContents.executeJavaScript(installFixtures);
+      }
+      await window.webContents.executeJavaScript(applyTheme(theme));
+      window.setContentSize(1180, 760);
+      for (const [name, argument, feature] of componentScenes) {
+        await scene(name, argument);
+        await capture(feature, `${theme}-1180x760-open.png`, {
+          scene: name,
+          state: 'open',
+          theme,
+          zoom: 100,
+        });
+        await window.webContents.executeJavaScript(
+          `for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()`,
+        );
+      }
+    }
+
+    await window.webContents.executeJavaScript(applyTheme('telegram'));
+    window.setContentSize(1180, 760);
+    for (const [name, feature, target] of [
+      ['summary', 'summary', '#runtime-activity-panel'],
+      ['diagnostic', 'terminal-diagnostic', '#terminal-diagnostic'],
+      ['plan', 'plan', '#native-plan-dialog'],
+    ]) {
+      await scene(name);
+      await window.webContents.executeJavaScript(
+        `document.querySelector(${JSON.stringify(target)}).dataset.state = 'opening'`,
+      );
+      await freezeAnimations(window, 0.5);
+      await capture(feature, `telegram-1180x760-enter-mid.png`, {
+        animation: 'enter',
+        progress: 0.5,
+        theme: 'telegram',
+      });
+      await window.webContents.executeJavaScript(
+        `document.querySelector(${JSON.stringify(target)}).dataset.state = 'closing'`,
+      );
+      await freezeAnimations(window, 0.5);
+      await capture(feature, `telegram-1180x760-exit-mid.png`, {
+        animation: 'exit',
+        progress: 0.5,
+        theme: 'telegram',
+      });
+      await window.webContents.executeJavaScript(
+        `for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()`,
+      );
+    }
+
+    const byFeature = Object.groupBy(captures, (capture) => capture.feature);
+    for (const [feature, featureCaptures] of Object.entries(byFeature)) {
+      writeFileSync(
+        path.join(outputRoot, feature, 'manifest.json'),
+        `${JSON.stringify({ captures: featureCaptures, generatedAt: new Date().toISOString(), isolated: true, themes }, null, 2)}\n`,
+      );
+    }
+    writeFileSync(
+      path.join(outputRoot, 'native-visual-manifest.json'),
+      `${JSON.stringify({ captures, generatedAt: new Date().toISOString(), isolatedUserData, themes }, null, 2)}\n`,
+    );
+    console.log(`Native visual QA: ${captures.length} captures in ${outputRoot}`);
+    app.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    app.exit(1);
+  });

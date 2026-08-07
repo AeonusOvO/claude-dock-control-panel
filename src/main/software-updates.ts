@@ -26,6 +26,34 @@ export interface ClaudeRegistryProbe {
   registry: string;
 }
 
+export interface SoftwareUpdateProgress {
+  line?: string;
+  stage: string;
+}
+
+export interface SoftwareUpdateOperationOptions {
+  fetchImpl?: SoftwareUpdateFetch;
+  onProgress?: (progress: SoftwareUpdateProgress) => void;
+}
+
+export const sanitizeSoftwareUpdateLine = (rawLine: string): string | undefined => {
+  const normalized = [...rawLine]
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint === 9 || codePoint === 10 || codePoint === 13 || codePoint >= 32;
+    })
+    .filter((character) => character.codePointAt(0) !== 127)
+    .join('')
+    .trim();
+  if (!normalized) return undefined;
+  const redacted = normalized
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+@)/gi, '$1[credentials]@')
+    .replace(/([?&](?:token|key|secret|password|auth)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)*[^\s]+/g, '[local path]')
+    .replace(/\b(?:npm_[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[redacted]');
+  return redacted.slice(0, 500);
+};
+
 const CLAUDE_REGISTRIES: readonly ClaudeRegistryCandidate[] = Object.freeze([
   { label: 'npm 官方源', registry: OFFICIAL_REGISTRY },
   { label: 'npmmirror 国内镜像', registry: CHINA_REGISTRY },
@@ -167,9 +195,17 @@ export const checkSoftwareUpdates = async (
 
 export const installOrUpdateClaudeCode = async (
   installation: ClaudeInstallationStatus,
-  fetchImpl: SoftwareUpdateFetch = fetch,
+  options: SoftwareUpdateOperationOptions = {},
 ): Promise<string> => {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const report = (stage: string, rawLine?: string): void => {
+    const line = rawLine === undefined ? undefined : sanitizeSoftwareUpdateLine(rawLine);
+    options.onProgress?.({ line, stage });
+  };
+  const onLine = (line: string): void => report('执行安装命令', line);
+  report('检测安装方式');
   if (!installation.installed) {
+    report('通过 WinGet 安装');
     await runWindowsCommand(
       'winget',
       [
@@ -182,31 +218,40 @@ export const installOrUpdateClaudeCode = async (
       ],
       {
         maxBuffer: 16 * 1024 * 1024,
+        onLine,
         timeout: 10 * 60_000,
       },
     );
+    report('校验安装结果');
     return '已通过 Anthropic 的 WinGet 包安装 Claude Code 原生版。';
   }
 
   if (installation.installationKind !== 'npm') {
+    report('运行 Claude 官方更新器');
     await runWindowsCommand('claude', ['update'], {
       maxBuffer: 16 * 1024 * 1024,
+      onLine,
       timeout: 10 * 60_000,
     });
+    report('校验更新结果');
     return installation.installationKind === 'native'
       ? 'Claude Code 原生安装已通过官方更新器更新。'
       : '已沿用当前 Claude Code 安装方式执行官方更新；未创建重复安装。';
   }
 
+  report('测试 npm 下载源');
   const selected = await selectFastestClaudeRegistry(fetchImpl);
+  report(`已选择 ${selected.label}`);
   await runWindowsCommand(
     'npm',
     ['install', '--global', `${CLAUDE_PACKAGE}@latest`, '--registry', selected.registry],
     {
       maxBuffer: 16 * 1024 * 1024,
+      onLine,
       timeout: 10 * 60_000,
     },
   );
+  report('校验更新结果');
   const rate = selected.bytesPerSecond
     ? `，采样速度 ${(selected.bytesPerSecond / 1024 / 1024).toFixed(1)} MiB/s`
     : `，响应延迟 ${selected.latencyMs} ms`;

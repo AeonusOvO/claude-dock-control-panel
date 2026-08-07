@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import type { ChatAttachmentView, ChatContentBlock, ChatMessage } from '../shared/contracts';
+import { inspectSafeImage } from './image-safety';
 
 interface StoredChatAttachmentMetadata extends ChatAttachmentView {
   version: 1;
@@ -179,7 +180,9 @@ const prepareByteSources = (sources: ChatAttachmentBytesSource[]): PreparedAttac
     }
     // Names come from the renderer, so basename them the same way a filesystem import does.
     const fileName = cleanFileName(typeof source.fileName === 'string' ? source.fileName : '');
-    return { bytes, fileName, sizeBytes: bytes.byteLength, ...mediaFor(fileName) };
+    const media = mediaFor(fileName);
+    if (media.type === 'image') inspectSafeImage(bytes, fileName);
+    return { bytes, fileName, sizeBytes: bytes.byteLength, ...media };
   });
 };
 
@@ -496,7 +499,9 @@ export class ChatAttachmentStore {
           throw new Error('单个附件必须大于 0 字节且不超过 32 MiB。');
         }
         const fileName = cleanFileName(resolvedPath);
-        return { fileName, realPath: resolvedPath, sizeBytes, ...mediaFor(fileName) };
+        const media = mediaFor(fileName);
+        if (media.type === 'image') inspectSafeImage(await readFile(resolvedPath), fileName);
+        return { fileName, realPath: resolvedPath, sizeBytes, ...media };
       }),
     );
   }

@@ -40,14 +40,17 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('cancelActiveResizes();');
   });
 
-  it('opens the active xterm visibly, retries cold fits and debounces live resizes', () => {
+  it('opens the active xterm visibly, retries cold fits and coalesces live resizes per frame', () => {
     expect(rendererSource).toMatch(
       /container\.className = active\s*\?\s*'project-terminal project-terminal--active'/,
     );
     expect(rendererSource).toContain('const retryTerminalFitUntilMeasured = (): void => {');
     expect(rendererSource).toContain('let attemptsRemaining = 4;');
     expect(rendererSource).toContain('const debounceTerminalFit = (): void => {');
-    expect(rendererSource).toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
+    expect(rendererSource).toContain('view.fitAddon.proposeDimensions()');
+    expect(rendererSource).toContain('terminalFitFrame = window.requestAnimationFrame');
+    expect(rendererSource).toContain("if (result === 'stable') return;");
+    expect(rendererSource).not.toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
     expect(rendererSource).toContain('view.container.getBoundingClientRect()');
     expect(rendererStyles).toContain('.project-terminal--active:focus-within');
     expect(rendererStyles).toMatch(
@@ -646,11 +649,13 @@ describe('renderer interaction lifecycle contract', () => {
 
   it('keeps serving speed model-specific and truthful across Claude, GPT and native Codex', () => {
     for (const label of [
-      '速度 标准',
-      '速度 已请求 Claude Fast',
-      '速度 Claude Fast 已开启',
-      '速度 Claude Fast 未生效',
-      '速度 已请求 GPT 1.5x',
+      '速度 未请求',
+      '速度 Claude Fast · 已请求',
+      '速度 Claude Fast · 上游确认',
+      '速度 Claude Fast · 已回退',
+      '速度 GPT Fast · 已请求',
+      '速度 GPT Fast · 上游确认',
+      '速度 GPT Fast · 已回退',
       '速度 不支持',
       '速度 未验证',
     ]) {
@@ -729,7 +734,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('terminalPtyGeneration: status.ptyGeneration');
     expect(rendererSource.match(/await orchestrateClaudeLaunchAttempt\(\{/g)).toHaveLength(2);
     const launchHandler = rendererSource.slice(
-      rendererSource.indexOf('const launchClaude = async'),
+      rendererSource.indexOf('const launchClaudeTerminal = async'),
       rendererSource.indexOf('const launchCodex = async'),
     );
     expect(launchHandler.indexOf('beginClaudeLaunchAttempt(status)')).toBeLessThan(
@@ -1324,7 +1329,9 @@ describe('sidebar conversation list affordances', () => {
     expect(rendererStyles).toMatch(/\n\.history-item__select \{[^}]*?padding: 5px 7px;[^}]*?\}/);
     for (const scroller of ['.project-list', '.project-folder__history']) {
       expect(rendererStyles).toMatch(
-        new RegExp(`\\n\\${scroller} \\{[^}]*?padding-right: 4px;[^}]*?\\}`),
+        new RegExp(
+          `\\n\\${scroller} \\{[^}]*?padding-inline-end: var\\(--s-2\\);[^}]*?scrollbar-gutter: stable;[^}]*?\\}`,
+        ),
       );
     }
     // The chat-history card has its own 32px delete column, which needs the same clearance.
@@ -1394,6 +1401,40 @@ describe('external application proxy settings', () => {
     expect(rendererSource).toContain("applicationProxyProtocol.value === 'socks5'");
     expect(rendererSource).toContain('applicationProxyScopeCli.disabled = true;');
     expect(rendererSource).toContain('applicationProxyScopeCli.checked = false;');
+  });
+});
+
+describe('native conversation component suite', () => {
+  it('uses one button base with semantic and size variants', () => {
+    expect(rendererStyles).toContain('.button--compact');
+    expect(rendererStyles).toContain('.button--danger');
+    expect(rendererStyles).not.toContain('.ui-button');
+    expect(rendererMarkup).not.toContain('ui-button');
+    expect(rendererSource).not.toContain('ui-button');
+  });
+
+  it('keeps the advanced terminal action in the shared icon-button family', () => {
+    expect(rendererMarkup).toMatch(
+      /class="icon-button"\s+id="native-terminal-toggle"[\s\S]*?id="native-terminal-toggle-label"/,
+    );
+    expect(rendererMarkup).not.toContain('id="native-model-status"');
+    expect(rendererSource).not.toContain('nativeModelStatus');
+  });
+
+  it('keeps the collapsed native Ultra control concise and moves details to its description', () => {
+    expect(rendererSource).toContain("ultracode: 'Ultra Code'");
+    expect(rendererSource).not.toContain("ultracode: 'Ultra Code · X-High + 编排'");
+    expect(rendererSource).toContain("nativeEffortControl.setAttribute('aria-description'");
+  });
+
+  it('renders the interaction queue one item at a time', () => {
+    expect(rendererSource).toContain('const [activeInteraction] = snapshot.interactions;');
+    expect(rendererSource).toContain(
+      'nativeInteractionStack.dataset.pendingCount = String(snapshot.interactions.length);',
+    );
+    expect(rendererSource).not.toContain(
+      'nativeInteractionStack.replaceChildren(...snapshot.interactions.map(renderNativeInteraction));',
+    );
   });
 });
 

@@ -1,5 +1,20 @@
 import type { TerminalThemeId } from './terminal-themes';
 import type { ClaudeProviderId } from './claude-providers';
+import type {
+  ConversationInteractionResponse,
+  ConversationControlUpdate,
+  ConversationSnapshot,
+  ConversationSubmitInput,
+  NativeAttachmentBytesInput,
+  NativeAttachmentImportResult,
+  NativeAttachmentView,
+  NativeConversationDraftResult,
+  NativeConversationLaunchRequest,
+  NativeConversationOperationResult,
+  NativeConversationStartResult,
+  NativeConversationTerminalTransferResult,
+  NativeRecoveryView,
+} from './native-conversation';
 
 export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 export type DevelopmentRuntime = 'claude' | 'codex';
@@ -14,11 +29,21 @@ export type BusyKind =
   'configure' | 'conversation' | 'download' | 'install' | 'proxy' | 'uninstall';
 export type BusySeverity = 'blocking' | 'resumable';
 export interface BusyLease {
+  readonly action?:
+    'configure' | 'disable' | 'enable' | 'install' | 'refresh' | 'remove' | 'uninstall' | 'update';
   readonly cancellable: boolean;
+  readonly domain?:
+    'claude-code' | 'conversation' | 'gateway' | 'mcp' | 'plugin' | 'router' | 'system';
   readonly id: string;
   readonly kind: BusyKind;
   readonly label: string;
+  readonly logTail?: string[];
+  readonly queuePosition?: number;
+  readonly queueTotal?: number;
   readonly severity: BusySeverity;
+  readonly stage?: string;
+  readonly startedAt?: number;
+  readonly target?: string;
 }
 export interface AppQuitRequest {
   hasBlocking: boolean;
@@ -978,6 +1003,11 @@ export type PtyGeneration = number;
 
 export interface TerminalStatus {
   cwd: string;
+  diagnosticCode?:
+    | 'CWD_UNAVAILABLE'
+    | 'NATIVE_BACKEND_UNAVAILABLE'
+    | 'POWERSHELL_UNAVAILABLE'
+    | 'PTY_START_FAILED';
   id: string;
   message?: string;
   phase: TerminalPhase;
@@ -1300,6 +1330,66 @@ export type DirectoryChoiceResult =
 export type Unsubscribe = () => void;
 
 export interface ControlPanelApi {
+  startNativeConversation: (
+    input: NativeConversationLaunchRequest,
+  ) => Promise<NativeConversationStartResult>;
+  getNativeConversation: (conversationId: string) => Promise<ConversationSnapshot | undefined>;
+  submitNativeConversation: (
+    conversationId: string,
+    input: ConversationSubmitInput,
+  ) => Promise<NativeConversationOperationResult>;
+  respondNativeConversation: (
+    conversationId: string,
+    interactionId: string,
+    response: ConversationInteractionResponse,
+  ) => Promise<NativeConversationOperationResult>;
+  interruptNativeConversation: (
+    conversationId: string,
+  ) => Promise<NativeConversationOperationResult>;
+  stopNativeConversationTask: (
+    conversationId: string,
+    taskId: string,
+  ) => Promise<NativeConversationOperationResult>;
+  updateNativeConversationControls: (
+    conversationId: string,
+    update: ConversationControlUpdate,
+  ) => Promise<NativeConversationOperationResult>;
+  closeNativeConversation: (conversationId: string) => Promise<NativeConversationOperationResult>;
+  renameNativeConversation: (conversationId: string, title: string) => Promise<boolean>;
+  transferNativeConversationToTerminal: (
+    conversationId: string,
+    draft?: ConversationSubmitInput,
+  ) => Promise<NativeConversationTerminalTransferResult>;
+  listNativeRecoveries: () => Promise<NativeRecoveryView[]>;
+  restoreNativeDraft: (
+    conversationId: string,
+    clientSubmissionId: string,
+    projectPath: string,
+  ) => Promise<NativeConversationDraftResult>;
+  discardNativeRecovery: (conversationId: string, projectPath: string) => Promise<boolean>;
+  onNativeConversation: (listener: (snapshot: ConversationSnapshot) => void) => Unsubscribe;
+  onConversationOwnerConflict: (
+    listener: (conflict: {
+      conversationId: string;
+      existingOwnerKind: 'native' | 'terminal';
+      existingSessionId?: string;
+      sessionId: string;
+    }) => void,
+  ) => Unsubscribe;
+  importNativeAttachmentPaths: (
+    conversationId: string,
+    paths: string[],
+  ) => Promise<NativeAttachmentImportResult>;
+  importNativeAttachmentBytes: (
+    conversationId: string,
+    sources: NativeAttachmentBytesInput[],
+  ) => Promise<NativeAttachmentImportResult>;
+  importNativeClipboardImage: (conversationId: string) => Promise<NativeAttachmentImportResult>;
+  readNativeAttachment: (
+    conversationId: string,
+    attachmentId: string,
+  ) => Promise<NativeAttachmentView | undefined>;
+  removeNativeAttachment: (conversationId: string, attachmentId: string) => Promise<boolean>;
   getAppSettings: () => Promise<AppSettingsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
   setFooterResourcePreference: (preference: FooterResourcePreference) => Promise<AppSettingsView>;
@@ -1348,6 +1438,7 @@ export interface ControlPanelApi {
   importChatAttachmentBytes: (
     input: ChatAttachmentBytesImportInput,
   ) => Promise<ChatAttachmentImportResult>;
+  importChatClipboardImage: (draftId?: string) => Promise<ChatAttachmentImportResult>;
   readChatAttachment: (attachmentId: string) => Promise<ChatAttachmentView | undefined>;
   deleteChatDraftAttachment: (draftId: string, attachmentId: string) => Promise<boolean>;
   releaseChatAttachmentDraft: (draftId: string) => Promise<number>;
@@ -1506,17 +1597,21 @@ export interface ControlPanelApi {
   onTerminalData: (
     listener: (sessionId: string, ptyGeneration: PtyGeneration, data: string) => void,
   ) => Unsubscribe;
-  /**
-   * The size the PTY actually adopted after clamping. xterm must follow it: PSReadLine repaints
-   * with absolute cursor moves, so a size disagreement leaves the previous screen on top.
-   */
+  /** Application-normalized size echo; resizeRevision prevents an older echo winning a later fit. */
   onTerminalSize: (
-    listener: (sessionId: string, ptyGeneration: PtyGeneration, cols: number, rows: number) => void,
+    listener: (
+      sessionId: string,
+      ptyGeneration: PtyGeneration,
+      resizeRevision: number,
+      cols: number,
+      rows: number,
+    ) => void,
   ) => Unsubscribe;
   onWorkspaceState: (listener: (state: WorkspaceState) => void) => Unsubscribe;
   resizeTerminal: (
     sessionId: string,
     ptyGeneration: PtyGeneration,
+    resizeRevision: number,
     cols: number,
     rows: number,
   ) => void;

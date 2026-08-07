@@ -4,6 +4,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ChatAttachmentStore } from '../src/main/chat-attachment-store';
 
+const VALID_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
+
 const fixtureRoots: string[] = [];
 
 const fixture = () => {
@@ -28,20 +33,20 @@ describe('chat attachment store', () => {
   it('copies supported files into application-owned UUID storage and encodes only on demand', async () => {
     const { attachmentDirectory, sourceDirectory, store } = fixture();
     const source = path.join(sourceDirectory, 'pixel.png');
-    writeFileSync(source, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(source, VALID_PNG);
 
     const [attachment] = await store.importFiles([source]);
 
     expect(attachment).toMatchObject({
       fileName: 'pixel.png',
       mediaType: 'image/png',
-      sizeBytes: 4,
+      sizeBytes: VALID_PNG.length,
       type: 'image',
     });
     expect(attachment?.attachmentId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
-    expect(store.readBase64(attachment!.attachmentId)).toBe('iVBORw==');
+    expect(store.readBase64(attachment!.attachmentId)).toBe(VALID_PNG.toString('base64'));
     const metadata = JSON.parse(
       readFileSync(
         path.join(attachmentDirectory, attachment!.attachmentId, 'metadata.json'),
@@ -131,17 +136,17 @@ describe('chat attachment store', () => {
     const { store } = fixture();
 
     const imported = await store.importDraftBytes([
-      { bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), fileName: '粘贴内容-1.png' },
+      { bytes: VALID_PNG, fileName: '粘贴内容-1.png' },
     ]);
     const attachment = imported.attachments[0]!;
 
     expect(attachment).toMatchObject({
       fileName: '粘贴内容-1.png',
       mediaType: 'image/png',
-      sizeBytes: 4,
+      sizeBytes: VALID_PNG.length,
       type: 'image',
     });
-    expect(store.readBase64(attachment.attachmentId)).toBe('iVBORw==');
+    expect(store.readBase64(attachment.attachmentId)).toBe(VALID_PNG.toString('base64'));
 
     const appended = await store.importDraftBytes(
       [{ bytes: new TextEncoder().encode('pasted'), fileName: 'note.txt' }],

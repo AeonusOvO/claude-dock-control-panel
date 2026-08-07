@@ -57,6 +57,36 @@ const resolvePowerShell = (): string => {
   return existsSync(absolutePath) ? absolutePath : 'powershell.exe';
 };
 
+const terminalFailure = (
+  error: unknown,
+  cwd: string,
+): Pick<NonNullable<TerminalStatus>, 'diagnosticCode' | 'message'> => {
+  if (!existsSync(cwd)) {
+    return {
+      diagnosticCode: 'CWD_UNAVAILABLE',
+      message: '项目目录当前不可访问，请检查磁盘或重新选择目录。',
+    };
+  }
+  const record = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+  const detail = `${String(record.code ?? '')} ${String(record.message ?? '')}`.toLowerCase();
+  if (detail.includes('powershell') || detail.includes('enoent')) {
+    return {
+      diagnosticCode: 'POWERSHELL_UNAVAILABLE',
+      message: '未能启动本机 PowerShell，请运行诊断后重试。',
+    };
+  }
+  if (detail.includes('conpty') || detail.includes('node-pty') || detail.includes('.dll')) {
+    return {
+      diagnosticCode: 'NATIVE_BACKEND_UNAVAILABLE',
+      message: '终端组件未能加载，请运行诊断或重新安装当前版本。',
+    };
+  }
+  return {
+    diagnosticCode: 'PTY_START_FAILED',
+    message: '项目终端启动失败，请运行诊断后重试。',
+  };
+};
+
 const quotedAnsiForeground = (hex: string): string => `"${ansiForeground(hex)}"`;
 const quotedAnsiBackground = (hex: string): string => `"${ansiBackground(hex)}"`;
 
@@ -136,16 +166,12 @@ export class TerminalSession {
     return this.getStatus();
   }
 
-  /**
-   * Applies a size and reports the size the PTY actually adopted. The two can differ: sizes are
-   * clamped, and PSReadLine repaints its edit buffer with ABSOLUTE cursor moves (pressing Ctrl+C
-   * emits e.g. `ESC[10;27H`). If xterm believes it has different dimensions than ConPTY, that
-   * repaint lands on the wrong row and the previous screen is left behind — which is what the
-   * "two screens stacked on top of each other" bug is. The caller echoes this back so the
-   * renderer can force xterm onto the same grid.
-   */
+  /** Applies the normalized application size and suppresses duplicate ConPTY redraw signals. */
   public resize(cols: number, rows: number): { cols: number; rows: number } {
     const normalized = normalizeTerminalSize(cols, rows);
+    if (this.cols === normalized.cols && this.rows === normalized.rows) {
+      return { cols: this.cols, rows: this.rows };
+    }
     this.cols = normalized.cols;
     this.rows = normalized.rows;
 
@@ -235,12 +261,14 @@ export class TerminalSession {
         shell: 'Windows 终端',
         title: this.status.title,
       });
-    } catch {
+    } catch (error) {
       this.process = undefined;
+      const failure = terminalFailure(error, cwd);
       this.setStatus({
         cwd,
+        diagnosticCode: failure.diagnosticCode,
         id: this.status.id,
-        message: '无法启动终端；请检查系统命令环境与当前目录。',
+        message: failure.message,
         phase: 'error',
         ptyGeneration: generation,
         shell: 'Windows 终端',

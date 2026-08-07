@@ -1,6 +1,6 @@
 # 当前版本需改进的 bug
 
-> 状态：方案已确认，进入实施阶段
+> 状态：5.0.0-rc.1 已完成本地实现、视觉巡检与候选包验证，等待 Draft PR / CI
 >
 > 决策基线：ClaudeDock 4.6.2
 >
@@ -61,7 +61,8 @@ X-High。
 
 最终行为：
 
-- 主标签保持“Ultra Code”，副说明显示“工作流编排 · 实际 X-High”。
+- 收起按钮只显示“Ultra Code”；“工作流编排 · 实际 X-High”放在展开说明、悬停提示和辅助技术描述中，
+  不在对话标题或按钮旁重复占位。
 - 菜单勾选以 requested preset 为准，实际档位单独展示；状态行迟到不能抹掉 Ultra 请求态。
 - 底层仍发送原子 `/effort ultracode`，不能产生“Low + Ultra”等 Claude Code 不支持的组合。
 - Claude 的 `max` 与 `ultracode` 仅当前会话有效，不在重启后静默重放。
@@ -184,7 +185,8 @@ ConPTY 是本机 PowerShell/CLI 伪终端，不是网络连接。成功时完全
 - Markdown 流按稳定 block 增量渲染，保留原始字符串、空白、分隔线和代码围栏，不 trim 或合并文本块。
 - thinking 默认折叠，仅显示协议提供的 summary，不暴露或伪造隐藏推理。
 - 工具卡片：运行中、失败、高风险默认展开；正常成功项折叠。
-- 底部 operation dock 出现时完整替换 composer，草稿安全保留；多个请求按队列显示 `1/N` 与来源。
+- 底部 operation dock 出现时完整替换 composer，草稿安全保留；多个请求按 FIFO 排队，界面一次只
+  显示队首请求，完成后以同一进退场动效切换下一项，不堆叠卡片或重复显示模型/档位说明。
 - 权限只显示 SDK 真正提供的 scope；持久授权与单次授权视觉分离。
 - AskUserQuestion/MCP 表单支持单选、多选、自由文本；secret 字段不进入日志。
 - 计划以完整 Markdown 卡片显示，可全屏检查；审批模式只展示 SDK 实际支持的选项。
@@ -210,6 +212,8 @@ ConPTY 是本机 PowerShell/CLI 伪终端，不是网络连接。成功时完全
 1. 布局、层级、留白、对齐、对比度合理且美观。
 2. 四主题保持各自字体、颜色、阴影、圆角和动效调性。
 3. 复用统一组件和 design token，不出现局部魔法颜色、尺寸或时长。
+   文字操作统一使用 `.button` 及语义变体，标题栏与浮层 chrome 统一使用 `.icon-button`；同类按钮
+   不得重新声明字号和外观。
 4. 进入/退出使用主题 `durEnter/durExit/ease`，退出完成后才移除 DOM，禁止 `display` 闪现。
 5. `prefers-reduced-motion` 保留完整焦点与状态行为，只移除非必要运动。
 
@@ -242,7 +246,20 @@ Electron 窗口，而不是只查看隐藏窗口的静态 renderer fixture。
 5. 实现当前对话摘要、ConPTY 失败诊断和任务下载中心。
 6. 完成四主题逐组件截图修正、故障注入、真实隔离 CLI 烟测、全量打包与分支审计。
 
-## 8. 外部能力依据
+## 8. 本地候选版验证结果
+
+- `npm run verify` 全部通过：116 个测试文件、863 项测试，以及 lint、format、typecheck、layout、
+  control-theme、build 和隔离 ConPTY 烟测。
+- `npm run test:visual` 通过；原生视觉矩阵生成 56 张主题/尺寸/缩放/状态/动效截图。另以隔离假适配器
+  驱动真实可见 Electron 窗口，完成 14 张权限、提问、计划、MCP、摘要和高级终端交互截图并逐张检查。
+- `npm run dist` 生成安装器、blockmap、`latest.yml` 与 `win-unpacked/`；包内扫描确认没有第二份
+  `claude.exe`，生产依赖审计为 0 个已知漏洞。
+- 安装器和应用可执行文件当前为 `NotSigned`，因此只属于本地 RC 候选包；受信任 Authenticode、双渠道
+  清单签名、安装/卸载与更新/回滚仍是正式 5.0.0 的发布阻塞项。
+- 本地/远端分支已按祖先关系与 patch-equivalence 审计：PR #33 已 squash 合并；旧工作树提交已等价
+  进入 `main`；旧更新中心 Draft PR 已被主线后续实现覆盖；独立 Dependabot PR 不混入本次架构发布。
+
+## 9. 外部能力依据
 
 - [Claude Code 会话存储与恢复](https://code.claude.com/docs/en/sessions)
 - [Claude Code 交互模式与 Windows 图片粘贴](https://code.claude.com/docs/en/interactive-mode)

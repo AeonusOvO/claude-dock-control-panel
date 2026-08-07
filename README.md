@@ -3,9 +3,10 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **4.6.2**，许可证为 **Apache-2.0**。4.6.2 把本轮问题审计收敛为已经确认的
-ClaudeDock 5.0 原生对话实施规格，并升级存在公开安全公告的 `js-yaml` 与 `mermaid`；本修订版本身
-尚未切换 UI 或运行架构。正式稳定版必须同时通过可信
+当前代码版本为 **5.0.0-rc.1**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
+迁移为结构化原生对话：Claude Agent SDK 调用用户本机已安装的 `claude.exe`，ClaudeDock 不捆绑
+第二份 Claude Code；PowerShell/ConPTY 保留为用户明确进入的高级终端。Codex 5.0 RC 仍使用原生
+TUI，只复用能力与所有权接口，不把实验性 App Server 伪装成已完成的结构化会话。正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
 只用于开发和测试，不应被描述为正式签名发行版。
 
@@ -31,12 +32,17 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 
 ## 主要能力
 
-- 多项目终端、托盘后台运行、项目/对话历史与终端主题。
-- 顶栏按会话显示后台任务、子代理、恢复阶段和当前 PTY 派生的 Web 监听进程；受控进程只能通过
-  主进程签发的不透明键结束，正常退出会先清理并复查这些进程。
-- Claude 终端底部状态栏可直接切换模式、思考程度与模型，并通过会话级 `PermissionRequest` Hook 显示
-  权限确认；任何 Hook/界面/代次异常都回退 Claude 原生确认而不是自动放行。Codex 保留原生 TUI
-  审批，界面控件只生成 `/plan`、`/permissions`、`/model` 命令骨架。
+- 多项目、托盘后台运行、项目/对话历史、原生 Claude 对话与可选高级 PowerShell/ConPTY 终端。
+- 原生消息流保留 Markdown 块顺序、空白、代码围栏、工具状态、计划、权限、提问、MCP 表单、图片和
+  后台任务；高风险、运行中与失败工具默认展开，普通成功项默认折叠。
+- `(runtime, normalized project, UUID)` 单一 owner 阻止同一对话被原生会话、历史恢复和高级终端
+  重复占用。进入高级终端会先保存草稿并精确恢复 UUID；任何失败均回滚到原生 owner。
+- Claude JSONL 仍是正文真值。独立恢复日志只记录 owner、启动配置和提交阶段；待确认文本由
+  Electron `safeStorage` 加密，无法持久化时阻止发送。不确定的提交只恢复为草稿，绝不自动补发。
+- 顶栏的“当前对话摘要”检查器按需显示环境、前台、子智能体、后台任务和来源；无活动时保持为图标，
+  不再长期显示含糊的“后台任务正在运行”。
+- 模型、effort、Fast、图片与权限控件由同一能力 revision 原子更新。Claude `Ultra Code` 同时显示
+  “工作流编排 · 实际 X-High”；Fast 只显示未请求、已请求、上游确认或已回退，不承诺固定倍率。
 - Claude/Codex 工作台共用静态指令注册表；完整调用名及版本边界见
   [CLI 指令清单](docs/cli-command-catalog.md)，动态 Skills、Plugins 与 MCP 指令仍以 CLI 原生 `/`
   列表为准。
@@ -53,10 +59,11 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   PowerShell，或明确失败/关闭事件，避免准备期间重复重启终端。
 - 终端底栏把上下文、官方额度窗口和受支持供应商余额收拢为“资源”菜单；用户可选择自动、
   上下文优先或额度优先。ClaudeDock 不用本地网关请求次数伪造 ChatGPT 订阅剩余额度。
-- 独立模型对话、Markdown/公式/代码、受限附件和隔离 Artifact 预览。
+- Claude 原生对话与独立模型对话均支持受限图片附件；Windows 剪贴板兼容 `items` 与主进程
+  `readImage()` 回退，应用副本经过类型、大小、像素、路径与 SVG 安全检查并按会话/TTL 回收。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
-- 标题栏统一更新中心聚合 ClaudeDock、Claude Code、Router 与插件更新，支持逐项或全部执行；
-  下载中心同时展示进行中任务、安装/卸载操作和可删除的本机下载历史。
+- 标题栏统一更新中心聚合 ClaudeDock、Claude Code、Router 与插件更新；“任务与下载”精确显示动作、
+  对象、阶段、队列和已用时间，只有存在真实字节总量时才显示百分比、速度与 ETA。
 - 应用更新、依赖许可清单、安全报告与可重复 CI 门禁。
 
 设计和交互约束见 [design.md](design.md)，架构、安全与发布实现见

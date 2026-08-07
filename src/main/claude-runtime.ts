@@ -118,9 +118,17 @@ import {
 } from './model-speed-capabilities';
 import { ModelSpeedPreferencesStore } from './model-speed-preferences-store';
 import { ClaudeRouterManager, type SavedRouterProvider } from './claude-router-manager';
-import { RouteLifecycleCoordinator, type ClaudeRouteKind } from './route-lifecycle-coordinator';
+import {
+  RouteLifecycleCoordinator,
+  type ClaudeRouteKind,
+  type RouteReservationToken,
+} from './route-lifecycle-coordinator';
 import { discoverOpenAiModels } from './provider-model-discovery';
-import { checkSoftwareUpdates, installOrUpdateClaudeCode } from './software-updates';
+import {
+  checkSoftwareUpdates,
+  installOrUpdateClaudeCode,
+  type SoftwareUpdateProgress,
+} from './software-updates';
 
 interface RuntimeSession {
   active: boolean;
@@ -182,6 +190,14 @@ interface RuntimeSession {
   turnStopSeenAt?: number;
   /** Resolved by the next PostCompact signal; lets a relaunch wait for compaction to finish. */
   waitingForCompact?: (signaledAt: number) => void;
+}
+
+export interface PreparedNativeClaudeConversation {
+  cliVersion?: string;
+  configFingerprint: string;
+  endpointIdentity: string;
+  environment: ClaudeEnvironmentOverrides;
+  model: string;
 }
 
 interface ConnectionHistoryMetadata {
@@ -830,6 +846,7 @@ export class ClaudeRuntime {
   /** Serialises Shift+Tab stepping per session so two clicks can never interleave presses. */
   private readonly modeSwitchLocks = new Set<string>();
   private readonly routeLifecycle = new RouteLifecycleCoordinator();
+  private readonly nativeRouteReservations = new Map<string, RouteReservationToken>();
   private readonly routerManager: ClaudeRouterManager;
   private readonly runtimeLaunchToken = randomBytes(8).toString('hex');
   private readonly runtimeRoot: string;
@@ -1435,12 +1452,17 @@ export class ClaudeRuntime {
     }, force);
   }
 
-  public async installOrUpdateClaudeCode(): Promise<{
+  public async installOrUpdateClaudeCode(
+    onProgress?: (progress: SoftwareUpdateProgress) => void,
+  ): Promise<{
     message: string;
     state: SoftwareUpdateState;
   }> {
     const installation = await this.diagnoseInstallation(true);
-    const message = await installOrUpdateClaudeCode(installation, this.fetchImplementation);
+    const message = await installOrUpdateClaudeCode(installation, {
+      fetchImpl: this.fetchImplementation,
+      onProgress,
+    });
     this.installationCache.clear();
     this.softwareUpdatesCache.clear();
     return { message, state: await this.getSoftwareUpdates(true) };
@@ -1598,6 +1620,73 @@ export class ClaudeRuntime {
       this.stopUnusedRoute('ccr', sessionId),
       this.stopUnusedRoute('managed-chatgpt', sessionId),
     ]);
+  }
+
+  /**
+   * Prepares the same project-owned route and credential environment for the structured Agent SDK
+   * lane. The reservation stays live until `releaseNativeConversation` so a PTY teardown cannot
+   * stop a shared CCR/managed gateway underneath an active native conversation.
+   */
+  public async prepareNativeConversation(
+    ownerId: string,
+    cwd: string,
+    requestedModel?: string,
+  ): Promise<PreparedNativeClaudeConversation> {
+    if (this.nativeRouteReservations.has(ownerId)) {
+      throw new Error('该原生会话已经持有接入路由。');
+    }
+    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const config = launchSnapshot.config;
+    const routeKind = this.routeKindForConfig(config);
+    const reservation = this.routeLifecycle.reserve(ownerId, routeKind);
+    try {
+      const installation = await this.diagnoseInstallation(true);
+      if (installation.security !== 'ready') throw new Error(installation.message);
+      await this.prepareRouteServices(routeKind, ownerId);
+      if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
+        throw new Error('Claude 接入配置在原生会话启动期间已更新，请重试。');
+      }
+      const credential = launchSnapshot.credential;
+      if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
+        throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
+      }
+      if (usesDefaultClaudeRouter(config)) {
+        const router = await this.getRouterHealthState(true);
+        const blockingDetail = routerBlockingDetail(config, router);
+        if (blockingDetail) throw new Error(blockingDetail);
+      }
+      const model = requestedModel ?? config.model;
+      if (!MODEL_NAME_PATTERN.test(model)) throw new Error('模型标识无效。');
+      const launchConfig = { ...config, model };
+      const speed = this.resolveModelSpeed(launchConfig, model, installation.version);
+      this.nativeRouteReservations.set(ownerId, reservation);
+      return {
+        cliVersion: installation.version,
+        configFingerprint: connectionFingerprint(launchConfig, credential),
+        endpointIdentity: `${launchConfig.provider}|${launchConfig.preset}|${launchConfig.baseUrl}`,
+        environment: buildClaudeEnvironment(
+          launchConfig,
+          credential,
+          this.managedChatGptContextWindowMode(),
+          speed.profile,
+        ),
+        model,
+      };
+    } catch (error) {
+      if (this.routeLifecycle.release(reservation)) {
+        void this.stopUnusedRoute(routeKind).catch(() => {});
+      }
+      throw error;
+    }
+  }
+
+  public releaseNativeConversation(ownerId: string): void {
+    const reservation = this.nativeRouteReservations.get(ownerId);
+    if (!reservation) return;
+    this.nativeRouteReservations.delete(ownerId);
+    if (this.routeLifecycle.release(reservation)) {
+      void this.stopUnusedRoute(reservation.routeKind).catch(() => {});
+    }
   }
 
   public async prepareLaunch(
@@ -3293,6 +3382,7 @@ export class ClaudeRuntime {
                   kind: optionalString(task?.kind),
                 }))
               : undefined,
+            backgroundTasksPresent: parsed.backgroundTasksPresent === true,
             description: optionalString(parsed.description),
             event: parsed.event,
             eventId: parsed.eventId,

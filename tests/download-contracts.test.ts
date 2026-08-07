@@ -80,9 +80,12 @@ describe('download IPC surface', () => {
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'pause', '暂停')");
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'resume', '继续')");
     expect(rendererSource).toContain("appendDownloadAction(actions, task, 'cancel', '取消')");
-    expect(rendererSource).toContain(
-      "state.textContent = lease.kind === 'uninstall' ? '卸载中' : '安装中'",
-    );
+    expect(rendererSource).toContain("configure: '配置'");
+    expect(rendererSource).toContain("update: '更新'");
+    expect(rendererSource).toContain('lease.stage ?? `${actionLabel}中`');
+    expect(rendererSource).toContain("'已用时间',");
+    expect(rendererSource).toContain("log.className = 'download-task__log'");
+    expect(rendererSource).not.toContain("style.width = '42%'");
     expect(rendererSource).toContain('window.controlPanel.deleteDownloadHistory(task.id)');
     expect(rendererSource).toContain('window.controlPanel.clearDownloadHistory()');
     expect(rendererMarkup).toContain('id="download-history-list"');

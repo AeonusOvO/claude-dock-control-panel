@@ -53,9 +53,9 @@ export const CLAUDE_EFFORT_OPTIONS: readonly ClaudeEffortOption[] = [
     persists: false,
   },
   {
-    detail: 'Claude Code 自身设置：按最深档推理，并为较大任务编排工作流；只作用于本次会话。',
+    detail: 'Claude Code 自身设置：工作流编排，并请求实际 X-High 推理；只作用于本次会话。',
     id: 'ultracode',
-    label: '最深 + 工作流',
+    label: 'Ultra Code',
     persists: false,
   },
 ];

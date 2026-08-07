@@ -41,7 +41,7 @@
           type="button"
           aria-haspopup="dialog"
           aria-controls="download-center-dialog"
-          title="打开下载中心"
+          title="打开任务与下载"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
@@ -165,12 +165,12 @@
             <div class="session-card__heading">
               <span class="status-dot" aria-hidden="true"></span>
               <div>
-                <h1 id="session-heading">Windows 终端</h1>
-                <p id="session-detail">等待启动终端</p>
+                <h1 id="session-heading">PowerShell</h1>
+                <p id="session-detail">等待打开项目</p>
               </div>
             </div>
             <div class="session-meta">
-              <span>伪终端</span>
+              <span>本机终端</span>
               <span id="session-pid">进程号 —</span>
             </div>
           </section>
@@ -963,12 +963,24 @@
               type="button"
               aria-controls="runtime-activity-panel"
               aria-expanded="false"
-              hidden
+              title="当前对话摘要"
             >
-              <span aria-hidden="true"></span><b id="runtime-activity-label">后台任务 0</b>
+              <span aria-hidden="true"></span><b id="runtime-activity-label">对话摘要</b>
             </button>
           </div>
           <div class="terminal-toolbar__actions">
+            <button
+              class="icon-button"
+              id="native-terminal-toggle"
+              type="button"
+              aria-pressed="false"
+              title="切换到高级终端"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m5 7 4 4-4 4M11 16h8" />
+              </svg>
+              <span class="sr-only" id="native-terminal-toggle-label">高级终端</span>
+            </button>
             <button
               class="workbench-trigger"
               id="workbench-trigger"
@@ -1009,6 +1021,118 @@
             </button>
           </div>
         </div>
+        <section
+          class="native-conversation"
+          id="native-conversation"
+          aria-label="Claude 原生对话"
+          aria-hidden="true"
+          data-state="closed"
+        >
+          <section
+            class="native-recovery-stack"
+            id="native-recovery-stack"
+            aria-label="异常中断恢复"
+            aria-live="polite"
+            hidden
+          ></section>
+          <div
+            class="native-conversation__messages"
+            id="native-conversation-messages"
+            role="log"
+            aria-live="polite"
+          >
+            <div class="native-conversation__empty" id="native-conversation-empty">
+              <span class="native-conversation__mark" aria-hidden="true">✦</span>
+              <div>
+                <strong>开始一段原生对话</strong>
+                <p>消息、工具、权限、计划与后台任务会以结构化组件呈现。</p>
+              </div>
+            </div>
+          </div>
+          <div
+            class="native-interaction-stack"
+            id="native-interaction-stack"
+            aria-live="assertive"
+          ></div>
+          <form class="native-composer" id="native-composer">
+            <div class="native-attachment-queue" id="native-attachment-queue" hidden></div>
+            <div class="native-composer__row">
+              <input
+                id="native-attachment-input"
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                multiple
+                hidden
+              />
+              <button
+                class="native-composer__attach"
+                id="native-attach"
+                type="button"
+                title="添加图片"
+                aria-label="添加图片"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8.5 12.5 15 6a3 3 0 0 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8-8" />
+                </svg>
+              </button>
+              <textarea
+                id="native-composer-input"
+                rows="1"
+                spellcheck="true"
+                autocomplete="off"
+                placeholder="给 Claude 发送消息…"
+                aria-label="Claude 消息输入框"
+              ></textarea>
+              <button
+                class="native-composer__stop"
+                id="native-stop"
+                type="button"
+                title="中断当前回复"
+                aria-label="中断当前回复"
+                hidden
+              >
+                <span aria-hidden="true"></span>
+              </button>
+              <button
+                class="native-composer__send"
+                id="native-send"
+                type="submit"
+                title="发送（Enter）"
+                aria-label="发送消息"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 19V5m-6 6 6-6 6 6" />
+                </svg>
+              </button>
+            </div>
+            <div class="native-composer__meta">
+              <span id="native-composer-status">Enter 发送 · Shift+Enter 换行</span>
+              <div class="native-control-bar" aria-label="模型控制">
+                <label>
+                  <span class="sr-only">模型</span>
+                  <select id="native-model-control" aria-label="模型" disabled>
+                    <option value="">Claude</option>
+                  </select>
+                </label>
+                <label>
+                  <span class="sr-only">思考档位</span>
+                  <select id="native-effort-control" aria-label="思考档位" disabled>
+                    <option value="">思考</option>
+                  </select>
+                </label>
+                <button id="native-fast-control" type="button" aria-pressed="false" disabled>
+                  Fast
+                </button>
+                <label>
+                  <span class="sr-only">权限模式</span>
+                  <select id="native-permission-control" aria-label="权限模式" disabled>
+                    <option value="">权限</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </form>
+        </section>
         <div class="terminal-stage" id="terminal-stage">
           <div class="terminal-empty-state" id="terminal-empty-state" aria-hidden="false">
             <span class="empty-prompt">&gt;_</span>
@@ -1077,27 +1201,79 @@
         <aside
           class="runtime-activity-panel"
           id="runtime-activity-panel"
-          aria-label="后台任务详情"
+          aria-label="当前对话摘要"
+          data-state="closed"
           hidden
         >
           <header>
             <div>
-              <strong>后台活动</strong><span id="runtime-activity-summary">暂无后台任务</span>
+              <strong>当前对话摘要</strong><span id="runtime-activity-summary">环境与运行状态</span>
             </div>
-            <button id="runtime-activity-close" type="button" aria-label="关闭后台任务详情">
-              ×
+            <button
+              class="icon-button"
+              id="runtime-activity-close"
+              type="button"
+              aria-label="关闭当前对话摘要"
+              title="关闭"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
             </button>
           </header>
           <div class="runtime-activity-panel__body">
             <section>
-              <h3>任务与子代理</h3>
+              <h3>环境信息</h3>
+              <ul id="runtime-environment-list"></ul>
+            </section>
+            <section>
+              <h3>子智能体与任务</h3>
               <ul id="runtime-task-list"></ul>
             </section>
             <section>
-              <h3>派生 Web 进程</h3>
+              <h3>来源与派生进程</h3>
+              <ul id="runtime-source-list"></ul>
               <ul id="runtime-process-list"></ul>
             </section>
           </div>
+        </aside>
+
+        <button
+          class="terminal-diagnostic-scrim"
+          id="terminal-diagnostic-scrim"
+          type="button"
+          aria-label="关闭终端诊断"
+          hidden
+        ></button>
+        <aside
+          class="terminal-diagnostic"
+          id="terminal-diagnostic"
+          aria-labelledby="terminal-diagnostic-title"
+          aria-hidden="true"
+          data-state="closed"
+          hidden
+        >
+          <header>
+            <span>项目终端</span>
+            <h2 id="terminal-diagnostic-title">终端未能启动</h2>
+            <p id="terminal-diagnostic-message">运行诊断后可以重试连接。</p>
+          </header>
+          <div class="terminal-diagnostic__result" id="terminal-diagnostic-result" hidden></div>
+          <footer>
+            <button class="button button--compact" id="terminal-diagnostic-copy" type="button">
+              复制脱敏信息
+            </button>
+            <button class="button button--compact" id="terminal-diagnostic-run" type="button">
+              运行诊断
+            </button>
+            <button
+              id="terminal-diagnostic-retry"
+              class="button button--compact button--primary"
+              type="button"
+            >
+              重新连接
+            </button>
+          </footer>
         </aside>
 
         <button
@@ -1809,6 +1985,42 @@
       </div>
     </dialog>
 
+    <dialog class="native-plan-dialog" id="native-plan-dialog" aria-labelledby="native-plan-title">
+      <div class="native-plan-dialog__shell">
+        <header>
+          <div>
+            <span class="step-kicker">计划检查</span>
+            <strong id="native-plan-title">实施计划</strong>
+            <p>完整检查计划后，继续规划或按 SDK 当前支持的模式批准。</p>
+          </div>
+          <button
+            class="icon-button"
+            id="native-plan-close"
+            type="button"
+            aria-label="关闭计划检查"
+            title="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+        <article class="chat-message__markdown" id="native-plan-content"></article>
+        <footer>
+          <button class="button button--compact" id="native-plan-continue" type="button">
+            继续规划
+          </button>
+          <button
+            class="button button--compact button--primary"
+            id="native-plan-approve"
+            type="button"
+          >
+            批准计划
+          </button>
+        </footer>
+      </div>
+    </dialog>
+
     <dialog
       class="download-center-dialog"
       id="download-center-dialog"
@@ -1819,16 +2031,16 @@
         <header>
           <div>
             <span class="step-kicker">后台任务</span>
-            <strong id="download-center-title">下载中心</strong>
+            <strong id="download-center-title">任务与下载</strong>
             <p id="download-center-description">
-              下载可暂停、继续或取消；意外退出后，可恢复的半包会保留在这里。
+              查看真实下载进度与安装、更新阶段；未知总量的任务只显示已用时间和日志。
             </p>
           </div>
           <button
             class="download-center-dialog__close"
             id="close-download-center"
             type="button"
-            aria-label="关闭下载中心"
+            aria-label="关闭任务与下载"
             title="关闭"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1838,8 +2050,8 @@
         </header>
         <section class="download-center-dialog__body" aria-live="polite">
           <div class="download-center-empty" id="download-center-empty">
-            <strong>还没有下载任务</strong>
-            <span>安装路由、Codex 或其他组件时，实时进度会显示在这里。</span>
+            <strong>还没有后台任务</strong>
+            <span>下载、安装、更新或插件操作开始后，会在这里显示真实状态。</span>
           </div>
           <section class="download-center-section" id="download-active-section" hidden>
             <div class="download-center-section__heading">

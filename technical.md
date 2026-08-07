@@ -1,8 +1,11 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.6.2（2026-08-07）。4.6.2 把 `当前版本需改进的bug.md` 从候选方案收敛为已经确认的
-ClaudeDock 5.0 原生对话实施规格，并将 `js-yaml` 升级到 4.3.1、`mermaid` 升级到 11.16.1；本修订
-版本仍不改变 UI、IPC、PTY、会话持久化或运行时行为。4.6.0 在原有按接入/模型隔离的服务速度 profile
+当前架构版本：5.0.0-rc.1（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+`ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
+版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须显式使用用户本机已安装的
+`claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
+`win-unpacked`，发现第二份 `claude.exe` 即失败。Codex App Server 原生迁移不属于本 RC；现有
+Codex TUI 继续使用 ConPTY。4.6.0 在原有按接入/模型隔离的服务速度 profile
 和会话 generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
 登记与受控退出清理；流中断诊断只保存脱敏分类并禁止对部分输出自动重放。Claude/Codex 工作台改用
 共享静态指令注册表；模型、模式与思考控制统一收敛到底部状态栏，提示词区不再重复渲染一套大号
@@ -41,6 +44,8 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 
 - Electron 43：桌面窗口、系统托盘、目录选择与进程生命周期。
 - TypeScript 6、Vite 8：主进程编译和渲染资源构建。
+- `@anthropic-ai/claude-agent-sdk`：Claude 结构化消息、工具、权限、提问、计划、MCP、附件和中断；
+  只调用显式解析到的用户安装 `claude.exe`，平台可执行包不进入发行物。
 - `@lydell/node-pty` 1.2 beta：通过 Windows ConPTY 创建真实伪终端，并提供按平台预编译
   原生模块。
 - xterm.js 6 + `@xterm/addon-unicode11` + `@xterm/addon-webgl`：终端渲染、键盘输入与中文
@@ -59,7 +64,9 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 ## 架构与数据流
 
 ```text
-Renderer (xterm.js / UI)
+Renderer (native conversation DOM / optional xterm.js)
+        ├── ConversationReducer ── revision / ordered content blocks / late-event rejection
+        ├── Native interaction dock ── permission / question / plan / MCP / images
         ├── ClaudeLaunchAttemptRegistry ── per-session generation / 真实事件解锁
         │
         │ 受限 IPC
@@ -67,7 +74,14 @@ Renderer (xterm.js / UI)
 Preload contextBridge
         │ 参数过滤
         ▼
-Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty ── PowerShell / ConPTY
+Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test capability gates
+        ├── NativeConversationService ── ConversationAdapter lifecycle / exact UUID resume
+        │        ├── ClaudeAgentAdapter ── user-installed claude.exe / Agent SDK
+        │        ├── FakeConversationAdapter ── deterministic isolated integration scenarios
+        │        ├── ConversationOwnerRegistry ── runtime + normalized project + UUID single owner
+        │        ├── ConversationRecoveryStore ── atomic journal / DPAPI pending prompt
+        │        └── NativeAttachmentStore ── magic bytes / dimensions / TTL / orphan GC
+        ├── TerminalWorkspace ─┬─ TerminalSession ── node-pty ── PowerShell / ConPTY
         │                           ├─ TerminalSession ── node-pty ── PowerShell / ConPTY
         │                           └─ …
         │
@@ -109,6 +123,41 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
 ```
+
+### 原生会话不变量
+
+- 新 Claude 会话在启动前预分配 UUID；JSONL 是正文唯一真值，恢复日志只增强异常中断的可发现性，
+  不能补写尚未落盘的回复。`prepared → dispatched → transcript-confirmed → turn-complete` 各阶段原子
+  更新；`safeStorage` 或日志写入失败时发送失败并保留 renderer 草稿。
+- owner key 固定为 `(runtime, normalizedProjectPath, lowercase UUID)`。历史定向恢复、重命名和删除只用
+  文件名派生 UUID；active/starting owner 从历史隐藏，runtime 失活后重新出现。已有 owner 的恢复只
+  聚焦，不创建第二进程；高级终端转移失败会恢复原 owner、草稿和原选择。
+- 结果未知的提交永不自动重发，避免重复工具操作、费用或外部副作用。仅当 JSONL 对账确认 user 记录
+  已写入后才清理加密待确认文本。
+- 隔离 profile 使用临时 userData/home/project、假适配器和内存终端，不获取生产单实例锁，不启动
+  托盘、更新器、插件变更、外部路由写入或真实 PTY。所有危险入口在主进程再次检查 profile capability。
+- `FakeConversationAdapter` 的完整场景按固定顺序发出文本、工具成功/失败、图片、任务、用量以及
+  permission/question/plan/MCP 请求；renderer 的交互坞只消费队首请求，响应后才显示下一项。
+  这条 FIFO 约束既避免卡片堆叠，也让每个 SDK 响应只匹配当前可见请求。
+
+### 原生视觉与组件门禁
+
+- `.button` 是唯一文字按钮基类，`button--compact`、`button--primary`、`button--danger` 只表达密度
+  与语义；`.icon-button` 是标题栏、摘要和浮层 chrome 的唯一图标按钮基类。renderer 不允许再引入
+  平行的按钮基类或在业务容器中重写字号。模型、effort 已由底栏按钮表达时，标题区不重复说明。
+- `scripts/native-visual-smoke.cjs` 生成四主题、三窗口尺寸、三项目栏宽度、三缩放档及进退场关键帧；
+  `scripts/real-electron-visual-qa.cjs` 另外启动带隔离 `RuntimeProfile` 的真实可见 Electron 窗口，
+  通过 DevTools 输入事件逐项点击权限、提问、计划、MCP、摘要和高级终端，并把截图与 DOM 状态清单
+  写入 `dist/visual-qa/`。两者均不得连接真实会话、PTY、凭据、更新器或外部路由。
+
+### 模型能力与呈现
+
+- `ModelCapabilityProfile` 的身份至少包含 runtime、provider、endpoint、模型族和 CLI/网关版本；
+  结构化运行时元数据优先于验证目录与隔离探测，未知能力 fail-closed。renderer 只消费同一 revision
+  的 `ModelControlState`，防止模型、effort、Fast、图片和权限控件跨版本拼接。
+- Claude `ultracode` 是请求预设，收起控件只呈现“Ultra Code”，展开说明与辅助技术描述再显示
+  “工作流编排 · 实际 X-High”；applied `xhigh` 不得覆盖 requested preset。Fast 是互斥状态而非倍率承诺。Codex Ultra 以后接入同一能力层，
+  但 5.0 RC 不通过实验性 App Server 驱动真实会话。
 
 ### 设计系统跨文件耦合（关键约束）
 

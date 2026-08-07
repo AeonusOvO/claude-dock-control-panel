@@ -19,8 +19,8 @@ import type {
   MenuItemConstructorOptions,
   Session,
 } from 'electron';
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
 import type {
@@ -89,6 +89,13 @@ import type {
   WorkspaceResult,
   WorkspaceState,
 } from '../shared/contracts';
+import type {
+  ConversationControlUpdate,
+  ConversationInteractionResponse,
+  ConversationSubmitInput,
+  NativeAttachmentBytesInput,
+  NativeConversationLaunchRequest,
+} from '../shared/native-conversation';
 import { claudeStateOwnershipIsCurrent } from '../shared/claude-state-ownership';
 import {
   DEFAULT_TERMINAL_THEME,
@@ -114,7 +121,11 @@ import {
   isValidMarketplaceSource,
   isValidPluginId,
 } from './claude-plugin-manager';
-import { ClaudeRuntime, type PreparedClaudeConfigSave } from './claude-runtime';
+import {
+  ClaudeRuntime,
+  type PreparedClaudeConfigSave,
+  type PreparedNativeClaudeConversation,
+} from './claude-runtime';
 import type { SavedRouterProvider } from './claude-router-manager';
 import { CodexRuntime } from './codex-runtime';
 import { AgentRuntimeStore } from './agent-runtime-store';
@@ -168,6 +179,14 @@ import {
 } from './managed-chatgpt-gateway';
 import { McpManager } from './mcp-manager';
 import { AppPreferencesStore } from './app-preferences-store';
+import { resolveRuntimeProfile } from './runtime-profile';
+import { ClaudeAgentAdapter } from './claude-agent-adapter';
+import { FakeConversationAdapter } from './fake-conversation-adapter';
+import { ConversationOwnerRegistry, type ConversationOwner } from './conversation-owner-registry';
+import { ConversationRecoveryStore } from './conversation-recovery-store';
+import { NativeConversationService } from './native-conversation-service';
+import { IsolatedTerminal } from './isolated-terminal';
+import { NativeAttachmentStore } from './native-attachment-store';
 import {
   applicationProxyRules,
   applicationProxyUrl,
@@ -187,6 +206,19 @@ import {
   recordHighestTrustedVersion,
   updateVersionFloorPath,
 } from './application-update-manifest';
+
+const runtimeProfile = resolveRuntimeProfile({
+  defaultHome: homedir(),
+  defaultUserData: app.getPath('userData'),
+});
+if (runtimeProfile.id === 'isolated') {
+  for (const directory of Object.values(runtimeProfile.paths)) {
+    mkdirSync(directory, { recursive: true });
+  }
+  app.setPath('home', runtimeProfile.paths.home);
+  app.setPath('userData', runtimeProfile.paths.userData);
+  app.setPath('sessionData', runtimeProfile.paths.sessionData);
+}
 app.enableSandbox();
 registerArtifactScheme();
 
@@ -236,6 +268,21 @@ let applicationUpdaterService: ApplicationUpdaterService | null = null;
 let claudePermissionBridge: ClaudePermissionBridge | null = null;
 let claudeStreamDiagnosticsStore: ClaudeStreamDiagnosticsStore | null = null;
 let runtimeProcessRegistry: RuntimeProcessRegistry | null = null;
+let nativeConversationService: NativeConversationService | null = null;
+const conversationOwnerRegistry = new ConversationOwnerRegistry();
+const terminalConversationOwners = new Map<string, ConversationOwner>();
+const terminalTransferSessions = new Set<string>();
+const nativeLaunches = new Map<
+  string,
+  { ownerId: string; prepared: PreparedNativeClaudeConversation }
+>();
+
+const releaseTerminalConversationOwner = (sessionId: string): void => {
+  const owner = terminalConversationOwners.get(sessionId);
+  if (!owner) return;
+  conversationOwnerRegistry.release(owner, owner.ownerId, owner.generation);
+  terminalConversationOwners.delete(sessionId);
+};
 const runtimeActivityRegistry = new RuntimeActivityRegistry((state) => {
   mainWindow?.webContents.send('runtime:activity-changed', state);
 });
@@ -354,6 +401,9 @@ const workspace = new TerminalWorkspace(
   (state) => {
     const liveSessionIds = new Set(state.sessions.map(({ id }) => id));
     for (const status of state.sessions) {
+      if (status.phase === 'stopped' || status.phase === 'error') {
+        releaseTerminalConversationOwner(status.id);
+      }
       const previous = terminalStatusBaselines.get(status.id);
       const enteredFailure = enteredTerminalFailure(previous, status);
       terminalStatusBaselines.set(status.id, {
@@ -373,6 +423,7 @@ const workspace = new TerminalWorkspace(
     }
     for (const sessionId of terminalStatusBaselines.keys()) {
       if (!liveSessionIds.has(sessionId)) {
+        releaseTerminalConversationOwner(sessionId);
         invalidateDevelopmentSessionOperation(sessionId);
         claudeRuntime?.closeSession(sessionId);
         codexRuntime?.closeSession(sessionId);
@@ -390,6 +441,10 @@ const workspace = new TerminalWorkspace(
     mainWindow?.webContents.send('workspace:state', enriched);
     updateTray(enriched);
   },
+  runtimeProfile.effects.allowRealRuntimes
+    ? undefined
+    : (id, initialCwd, initialTitle, _onData, onStatus) =>
+        new IsolatedTerminal(id, initialCwd, initialTitle, onStatus),
 );
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
@@ -399,10 +454,12 @@ const advancedSettingsStore = new AdvancedSettingsStore(app.getPath('userData'))
 const appPreferencesStore = new AppPreferencesStore(app.getPath('userData'));
 const agentRuntimeStore = new AgentRuntimeStore(app.getPath('userData'));
 workspace.setTheme(workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
-const sessionManager = new ClaudeSessionManager();
-const pluginManager = new ClaudePluginManager(homedir());
+const sessionManager = new ClaudeSessionManager(runtimeProfile.paths.projects);
+const pluginManager = new ClaudePluginManager(runtimeProfile.paths.home);
 const chatConfigStore = new ChatConfigStore(app.getPath('userData'));
 const chatAttachmentStore = new ChatAttachmentStore(app.getPath('userData'));
+const nativeAttachmentStore = new NativeAttachmentStore(runtimeProfile.paths.userData);
+nativeAttachmentStore.collectOrphans(new Set());
 const chatHistoryStore = new ChatHistoryStore(app.getPath('userData'), chatAttachmentStore);
 try {
   chatAttachmentStore.collectOrphans(chatHistoryStore.referencedAttachmentIds());
@@ -619,6 +676,13 @@ async function beginControlledQuit(forceWithResidualProcesses: boolean): Promise
   // prompt and prevents a new permission request from entering while the quit barrier runs.
   claudePermissionBridge?.shutdown();
   try {
+    const nativeAttachmentOwners = nativeConversationService?.activeIds() ?? [];
+    await nativeConversationService?.closeAll();
+    await Promise.all(
+      nativeAttachmentOwners.map((conversationId) =>
+        nativeAttachmentStore.releaseConversation(conversationId),
+      ),
+    );
     let processCleanupFailed = false;
     try {
       await runtimeProcessRegistry?.terminateAll();
@@ -681,8 +745,8 @@ function shutdownRuntimeForQuit(): void {
 
 const chooseDirectory = async (ownerWindow?: BrowserWindow): Promise<DirectoryChoiceResult> => {
   const defaultPath = directoryDialogDefaultPath(
-    workspace.getActiveStatus()?.cwd ?? homedir(),
-    homedir(),
+    workspace.getActiveStatus()?.cwd ?? runtimeProfile.paths.home,
+    runtimeProfile.paths.home,
   );
   const options: Electron.OpenDialogOptions = {
     buttonLabel: '添加此项目',
@@ -989,6 +1053,129 @@ const requireClaudeRuntime = (): ClaudeRuntime => {
     throw new Error('Claude 工作台尚未初始化。');
   }
   return claudeRuntime;
+};
+
+const assertRuntimeEffect = (allowed: boolean, message: string): void => {
+  if (!allowed) throw new Error(message);
+};
+
+const assertRealRuntimeAllowed = (): void =>
+  assertRuntimeEffect(
+    runtimeProfile.effects.allowRealRuntimes,
+    '隔离运行配置禁止启动真实 PowerShell、Claude Code 或 Codex。',
+  );
+
+const assertExternalRoutingWritesAllowed = (): void =>
+  assertRuntimeEffect(
+    runtimeProfile.effects.allowExternalRoutingWrites,
+    '隔离运行配置禁止写入真实接入、路由或 MCP 配置。',
+  );
+
+const assertPluginMutationsAllowed = (): void =>
+  assertRuntimeEffect(
+    runtimeProfile.effects.allowPluginMutations,
+    '隔离运行配置禁止修改真实 Claude Code 插件。',
+  );
+
+const assertApplicationUpdatesAllowed = (): void =>
+  assertRuntimeEffect(
+    runtimeProfile.effects.allowApplicationUpdates,
+    '隔离运行配置禁止下载、安装或应用真实软件更新。',
+  );
+
+const requireNativeConversationService = (): NativeConversationService => {
+  if (!nativeConversationService) {
+    throw new Error('原生对话服务尚未初始化。');
+  }
+  return nativeConversationService;
+};
+
+const validateConversationId = (value: unknown): string => {
+  if (typeof value !== 'string' || !isValidClaudeSessionId(value)) {
+    throw new Error('原生对话 UUID 无效。');
+  }
+  return value.toLowerCase();
+};
+
+const validateNativeSubmitInput = (value: unknown): ConversationSubmitInput => {
+  if (!value || typeof value !== 'object') throw new Error('原生对话输入格式无效。');
+  const record = value as Partial<ConversationSubmitInput>;
+  if (
+    typeof record.clientSubmissionId !== 'string' ||
+    !record.clientSubmissionId ||
+    record.clientSubmissionId.length > 200 ||
+    !Array.isArray(record.blocks) ||
+    record.blocks.length === 0 ||
+    record.blocks.length > 20
+  ) {
+    throw new Error('原生对话输入格式无效。');
+  }
+  for (const block of record.blocks) {
+    if (!block || typeof block !== 'object') throw new Error('原生对话内容块无效。');
+    if (block.type === 'text') {
+      if (typeof block.text !== 'string' || !block.text || block.text.length > 2_000_000) {
+        throw new Error('原生对话文本为空或过长。');
+      }
+      continue;
+    }
+    if (
+      block.type !== 'image' ||
+      !block.attachment ||
+      typeof block.attachment.id !== 'string' ||
+      !isValidClaudeSessionId(block.attachment.id) ||
+      typeof block.attachment.mediaType !== 'string' ||
+      typeof block.attachment.name !== 'string' ||
+      typeof block.attachment.size !== 'number'
+    ) {
+      throw new Error('原生对话附件格式无效。');
+    }
+  }
+  return record as ConversationSubmitInput;
+};
+
+const resolveNativeSubmitAttachments = (
+  conversationId: string,
+  input: ConversationSubmitInput,
+): ConversationSubmitInput => ({
+  ...input,
+  blocks: input.blocks.map((block) =>
+    block.type === 'text'
+      ? block
+      : {
+          attachment: nativeAttachmentStore.resolve(conversationId, block.attachment.id),
+          type: 'image' as const,
+        },
+  ),
+});
+
+const validateNativeInteractionResponse = (value: unknown): ConversationInteractionResponse => {
+  if (!value || typeof value !== 'object') throw new Error('原生交互响应无效。');
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized, 'utf8') > 256 * 1024) throw new Error('原生交互响应过大。');
+  const response = value as Partial<ConversationInteractionResponse>;
+  if (!['allow', 'deny', 'cancel', 'submit'].includes(response.action ?? '')) {
+    throw new Error('原生交互响应动作无效。');
+  }
+  return value as ConversationInteractionResponse;
+};
+
+const validateNativeControlUpdate = (value: unknown): ConversationControlUpdate => {
+  if (!value || typeof value !== 'object') throw new Error('模型控制参数无效。');
+  const update = value as Partial<ConversationControlUpdate>;
+  if (
+    !Number.isSafeInteger(update.expectedCapabilityRevision) ||
+    Number(update.expectedCapabilityRevision) < 0 ||
+    (update.model !== undefined &&
+      (typeof update.model !== 'string' || update.model.length > 200)) ||
+    (update.effort !== undefined &&
+      !['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'].includes(update.effort)) ||
+    (update.fast !== undefined && typeof update.fast !== 'boolean') ||
+    (update.permissionMode !== undefined &&
+      !['default', 'acceptEdits', 'plan', 'dontAsk', 'auto'].includes(update.permissionMode))
+  ) {
+    throw new Error('模型控制参数无效。');
+  }
+  return update as ConversationControlUpdate;
 };
 
 const requireCodexRuntime = (): CodexRuntime => {
@@ -1602,6 +1789,7 @@ const restartRuntimeTerminal = (
   assertCurrent: () => void,
   ownGeneration: (ptyGeneration: PtyGeneration) => void,
 ): TerminalStatus => {
+  assertRealRuntimeAllowed();
   const previousGeneration = workspace.getStatus(sessionId).ptyGeneration;
   terminalOutputBatcher.discard(sessionId, previousGeneration);
   resolvePendingPermissionModeProbes(sessionId, previousGeneration);
@@ -1695,6 +1883,7 @@ interface ClaudeProjectConfigTransactionOptions<TPrepared> {
 const runClaudeProjectConfigTransaction = <TPrepared>(
   options: ClaudeProjectConfigTransactionOptions<TPrepared>,
 ): Promise<ClaudeProjectState> => {
+  assertExternalRoutingWritesAllowed();
   const assertTargetCurrent = (): void => {
     const currentStatus = workspace.getStatus(options.sessionId);
     if (!sameDirectory(currentStatus.cwd, options.cwd)) {
@@ -1732,6 +1921,59 @@ const publishClaudeProjectState = (state: ClaudeProjectState): boolean => {
     return false;
   }
   publishedClaudeStateRevisions.set(state.sessionId, state.stateRevision);
+  if (!state.active) {
+    releaseTerminalConversationOwner(state.sessionId);
+  } else {
+    const conversationId = state.metrics?.sessionId?.toLowerCase();
+    const generation = Number(state.ptyGeneration ?? 0);
+    if (
+      conversationId &&
+      isValidClaudeSessionId(conversationId) &&
+      generation > 0 &&
+      !terminalTransferSessions.has(state.sessionId)
+    ) {
+      const previous = terminalConversationOwners.get(state.sessionId);
+      if (
+        previous &&
+        (previous.conversationId !== conversationId || previous.generation !== generation)
+      ) {
+        releaseTerminalConversationOwner(state.sessionId);
+      }
+      const owner: ConversationOwner = {
+        conversationId,
+        generation,
+        ownerId: `terminal:${state.sessionId}`,
+        ownerKind: 'terminal',
+        phase: 'active',
+        projectPath: state.cwd,
+        runtime: 'claude',
+      };
+      const claim = conversationOwnerRegistry.claim(owner);
+      if (claim.status === 'conflict') {
+        mainWindow?.webContents.send('conversation:owner-conflict', {
+          conversationId,
+          existingOwnerKind: claim.owner.ownerKind,
+          existingSessionId:
+            claim.owner.ownerKind === 'terminal'
+              ? claim.owner.ownerId.replace(/^terminal:/, '')
+              : undefined,
+          sessionId: state.sessionId,
+        });
+        // A raw `/resume` is only identifiable after Claude reports its UUID. Stop the late owner
+        // immediately so two runtimes cannot continue against one transcript; the renderer explains
+        // that the already-stable owner was retained.
+        queueMicrotask(() => {
+          if (!workspace.hasSession(state.sessionId)) return;
+          const status = workspace.getStatus(state.sessionId);
+          if (status.ptyGeneration !== state.ptyGeneration) return;
+          workspace.stop(state.sessionId);
+          claudeRuntime?.setInactive(state.sessionId, status.ptyGeneration);
+        });
+      } else {
+        terminalConversationOwners.set(state.sessionId, claim.owner);
+      }
+    }
+  }
   const claudeTitle = state.metrics?.sessionName;
   if (claudeTitle) {
     try {
@@ -1899,6 +2141,7 @@ const runMcpMutation = async (
   operation: () => Promise<string>,
 ): Promise<McpOperationResult> => {
   try {
+    assertExternalRoutingWritesAllowed();
     const message = await operation();
     return { catalog: await requireMcpManager().getCatalog(cwd, true), message, ok: true };
   } catch (error) {
@@ -1917,6 +2160,7 @@ const runPluginMutation = async (
   operation: () => Promise<string>,
 ): Promise<ClaudePluginOperationResult> => {
   try {
+    assertPluginMutationsAllowed();
     const message = await operation();
     return { catalog: await refreshedPluginCatalog(), message, ok: true };
   } catch (error) {
@@ -2015,6 +2259,398 @@ const windowsBuildNumber = (): number => {
 };
 
 const registerIpc = (): void => {
+  ipcMain.handle('native-conversation:start', async (event, value: unknown) => {
+    validateSender(event);
+    if (!value || typeof value !== 'object') throw new Error('原生对话启动参数无效。');
+    const request = value as Partial<NativeConversationLaunchRequest>;
+    const projectPath = resolveDirectory(validateProjectPath(request.projectPath));
+    const conversationId = request.conversationId
+      ? validateConversationId(request.conversationId)
+      : randomUUID();
+    if (
+      request.model !== undefined &&
+      (typeof request.model !== 'string' || request.model.length > 200)
+    ) {
+      throw new Error('原生对话模型标识无效。');
+    }
+    if (
+      request.permissionMode !== undefined &&
+      !['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'].includes(
+        request.permissionMode,
+      )
+    ) {
+      throw new Error('原生对话权限模式无效。');
+    }
+    const service = requireNativeConversationService();
+    const existing = conversationOwnerRegistry.ownerFor({
+      conversationId,
+      projectPath,
+      runtime: 'claude',
+    });
+    if (existing) {
+      return service.start({
+        conversationId,
+        model: request.model,
+        permissionMode: request.permissionMode,
+        projectPath,
+        resume: request.resume,
+      });
+    }
+
+    let launch: { ownerId: string; prepared: PreparedNativeClaudeConversation } | undefined;
+    if (runtimeProfile.adapterMode === 'production') {
+      const runtime = requireClaudeRuntime();
+      const officialProvider = runtime.officialNetworkProvider(projectPath);
+      if (officialProvider) {
+        await assertOfficialProviderAllowed(officialProvider, 'cli-launch', projectPath);
+      }
+      const ownerId = `native-route:${conversationId}`;
+      const prepared = await runtime.prepareNativeConversation(ownerId, projectPath, request.model);
+      launch = { ownerId, prepared };
+      nativeLaunches.set(conversationId, launch);
+    }
+    const result = await service.start({
+      conversationId,
+      launch: launch
+        ? {
+            cliVersion: launch.prepared.cliVersion,
+            configFingerprintSource: { runtime: launch.prepared.configFingerprint },
+            endpointIdentity: launch.prepared.endpointIdentity,
+            model: launch.prepared.model,
+          }
+        : { configFingerprintSource: { adapter: 'isolated-fake' } },
+      model: launch?.prepared.model ?? request.model,
+      permissionMode: request.permissionMode,
+      projectPath,
+      resume: request.resume,
+    });
+    if (!result.ok && launch) {
+      requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
+      nativeLaunches.delete(conversationId);
+    }
+    return result;
+  });
+  ipcMain.handle('native-conversation:get', (event, conversationId: unknown) => {
+    validateSender(event);
+    return requireNativeConversationService().getSnapshot(validateConversationId(conversationId));
+  });
+  ipcMain.handle(
+    'native-attachment:import-paths',
+    async (event, conversationId: unknown, paths: unknown) => {
+      validateSender(event);
+      const validatedConversationId = validateConversationId(conversationId);
+      if (
+        !Array.isArray(paths) ||
+        paths.length === 0 ||
+        paths.length > 10 ||
+        paths.some((item) => typeof item !== 'string' || item.length > 32_768)
+      ) {
+        throw new Error('图片选择结果无效。');
+      }
+      try {
+        return {
+          attachments: await nativeAttachmentStore.importFiles(validatedConversationId, paths),
+          ok: true,
+        };
+      } catch (error) {
+        return {
+          attachments: [],
+          message: error instanceof Error ? error.message : '无法安全导入图片。',
+          ok: false,
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    'native-attachment:import-bytes',
+    async (event, conversationId: unknown, sources: unknown) => {
+      validateSender(event);
+      const validatedConversationId = validateConversationId(conversationId);
+      if (
+        !Array.isArray(sources) ||
+        sources.length === 0 ||
+        sources.length > 10 ||
+        sources.some(
+          (source) =>
+            !source ||
+            typeof source !== 'object' ||
+            typeof source.fileName !== 'string' ||
+            !(source.bytes instanceof ArrayBuffer),
+        )
+      ) {
+        throw new Error('粘贴图片数据无效。');
+      }
+      try {
+        return {
+          attachments: await nativeAttachmentStore.importBytes(
+            validatedConversationId,
+            sources as NativeAttachmentBytesInput[],
+          ),
+          ok: true,
+        };
+      } catch (error) {
+        return {
+          attachments: [],
+          message: error instanceof Error ? error.message : '无法安全导入图片。',
+          ok: false,
+        };
+      }
+    },
+  );
+  ipcMain.handle('native-attachment:import-clipboard', async (event, conversationId: unknown) => {
+    validateSender(event);
+    const validatedConversationId = validateConversationId(conversationId);
+    const image = clipboard.readImage();
+    if (image.isEmpty()) {
+      return { attachments: [], message: '剪贴板中没有可读取的图片。', ok: false };
+    }
+    try {
+      const bytes = image.toPNG();
+      return {
+        attachments: await nativeAttachmentStore.importBytes(validatedConversationId, [
+          {
+            bytes: Uint8Array.from(bytes).buffer,
+            fileName: '剪贴板图片.png',
+          },
+        ]),
+        ok: true,
+      };
+    } catch (error) {
+      return {
+        attachments: [],
+        message: error instanceof Error ? error.message : '无法安全导入剪贴板图片。',
+        ok: false,
+      };
+    }
+  });
+  ipcMain.handle(
+    'native-attachment:read',
+    (event, conversationId: unknown, attachmentId: unknown) => {
+      validateSender(event);
+      const validatedConversationId = validateConversationId(conversationId);
+      const validatedAttachmentId = validateConversationId(attachmentId);
+      const attachment = nativeAttachmentStore.get(validatedConversationId, validatedAttachmentId);
+      const resolved = nativeAttachmentStore.resolve(
+        validatedConversationId,
+        validatedAttachmentId,
+      );
+      const image = resolved.path
+        ? nativeImage.createFromPath(resolved.path)
+        : nativeImage.createEmpty();
+      return image.isEmpty()
+        ? attachment
+        : {
+            ...attachment,
+            previewDataUrl: image.resize({ height: 160, quality: 'good', width: 240 }).toDataURL(),
+          };
+    },
+  );
+  ipcMain.handle(
+    'native-attachment:remove',
+    (event, conversationId: unknown, attachmentId: unknown) => {
+      validateSender(event);
+      return nativeAttachmentStore.remove(
+        validateConversationId(conversationId),
+        validateConversationId(attachmentId),
+      );
+    },
+  );
+  ipcMain.handle('native-conversation:submit', (event, conversationId: unknown, input: unknown) => {
+    validateSender(event);
+    const validatedConversationId = validateConversationId(conversationId);
+    return requireNativeConversationService().submit(
+      validatedConversationId,
+      resolveNativeSubmitAttachments(validatedConversationId, validateNativeSubmitInput(input)),
+    );
+  });
+  ipcMain.handle(
+    'native-conversation:respond',
+    (event, conversationId: unknown, interactionId: unknown, response: unknown) => {
+      validateSender(event);
+      if (typeof interactionId !== 'string' || !interactionId || interactionId.length > 300) {
+        throw new Error('原生交互标识无效。');
+      }
+      return requireNativeConversationService().respond(
+        validateConversationId(conversationId),
+        interactionId,
+        validateNativeInteractionResponse(response),
+      );
+    },
+  );
+  ipcMain.handle('native-conversation:interrupt', (event, conversationId: unknown) => {
+    validateSender(event);
+    return requireNativeConversationService().interrupt(validateConversationId(conversationId));
+  });
+  ipcMain.handle(
+    'native-conversation:stop-task',
+    (event, conversationId: unknown, taskId: unknown) => {
+      validateSender(event);
+      if (typeof taskId !== 'string' || !taskId || taskId.length > 300) {
+        throw new Error('后台任务标识无效。');
+      }
+      return requireNativeConversationService().stopTask(
+        validateConversationId(conversationId),
+        taskId,
+      );
+    },
+  );
+  ipcMain.handle(
+    'native-conversation:update-controls',
+    (event, conversationId: unknown, update: unknown) => {
+      validateSender(event);
+      return requireNativeConversationService().updateControls(
+        validateConversationId(conversationId),
+        validateNativeControlUpdate(update),
+      );
+    },
+  );
+  ipcMain.handle('native-conversation:close', async (event, conversationId: unknown) => {
+    validateSender(event);
+    const validatedConversationId = validateConversationId(conversationId);
+    const result = await requireNativeConversationService().close(validatedConversationId);
+    if (result.ok) await nativeAttachmentStore.releaseConversation(validatedConversationId);
+    return result;
+  });
+  ipcMain.handle(
+    'native-conversation:rename',
+    (event, conversationId: unknown, title: unknown): boolean => {
+      validateSender(event);
+      const validatedConversationId = validateConversationId(conversationId);
+      if (typeof title !== 'string') throw new Error('对话名称格式无效。');
+      const snapshot = requireNativeConversationService().getSnapshot(validatedConversationId);
+      if (!snapshot) throw new Error('原生对话不存在或已结束。');
+      return sessionManager.renameSession(
+        snapshot.projectPath,
+        validatedConversationId,
+        normalizeClaudeSessionTitle(title),
+      );
+    },
+  );
+  ipcMain.handle(
+    'native-conversation:transfer-to-terminal',
+    async (event, conversationId: unknown, draft: unknown) => {
+      validateSender(event);
+      const validatedConversationId = validateConversationId(conversationId);
+      const validatedDraft = draft === undefined ? undefined : validateNativeSubmitInput(draft);
+      let transferredOwner: ConversationOwner | undefined;
+      let transferredSessionId: string | undefined;
+      const result = await requireNativeConversationService().transferToTerminal(
+        validatedConversationId,
+        validatedDraft,
+        async (identity) => {
+          const runtime = requireClaudeRuntime();
+          workspace.openConversation(
+            identity.projectPath,
+            `高级终端 ${identity.conversationId.slice(0, 8)}`,
+          );
+          const openedSessionId = workspace.getState().activeSessionId;
+          if (!openedSessionId) throw new Error('无法创建高级终端。');
+          transferredSessionId = openedSessionId;
+          terminalTransferSessions.add(openedSessionId);
+          workspaceStore.addProject(identity.projectPath);
+          let launchPrepared = false;
+          let ownedGeneration: PtyGeneration | undefined;
+          try {
+            await withDevelopmentSessionOperation(openedSessionId, async (assertCurrent) => {
+              const prepared = await runtime.prepareLaunchWithSession(
+                openedSessionId,
+                identity.projectPath,
+                identity.conversationId,
+              );
+              launchPrepared = true;
+              ownedGeneration = prepared.predecessorPtyGeneration;
+              assertCurrent();
+              restartRuntimeTerminal(
+                runtime,
+                openedSessionId,
+                prepared.environment,
+                prepared.command,
+                '无法为 Claude Code 启动高级终端。',
+                assertCurrent,
+                (ptyGeneration) => {
+                  ownedGeneration = ptyGeneration;
+                },
+              );
+            });
+            if (ownedGeneration === undefined) throw new Error('高级终端没有有效的进程代际。');
+            transferredOwner = {
+              conversationId: identity.conversationId,
+              generation: Number(ownedGeneration),
+              ownerId: `terminal:${openedSessionId}`,
+              ownerKind: 'terminal',
+              phase: 'active',
+              projectPath: identity.projectPath,
+              runtime: 'claude',
+            };
+            return { owner: transferredOwner, terminalSessionId: openedSessionId };
+          } catch (error) {
+            if (launchPrepared || ownedGeneration !== undefined) {
+              cleanupFailedRuntimeLaunch(
+                failedRuntimeLaunchCleanupDependencies,
+                runtime,
+                openedSessionId,
+                ownedGeneration,
+              );
+            }
+            if (workspace.hasSession(openedSessionId)) workspace.close(openedSessionId);
+            throw error;
+          }
+        },
+      );
+      if (transferredSessionId) terminalTransferSessions.delete(transferredSessionId);
+      if (!result.ok && transferredSessionId && workspace.hasSession(transferredSessionId)) {
+        await invalidateAndWaitForDevelopmentSessionOperation(transferredSessionId).catch(
+          () => undefined,
+        );
+        await runtimeProcessRegistry?.terminateSession(transferredSessionId).catch(() => undefined);
+        requireClaudeRuntime().closeSession(transferredSessionId);
+        workspace.close(transferredSessionId);
+      }
+      if (result.ok && transferredOwner && transferredSessionId) {
+        terminalConversationOwners.set(transferredSessionId, transferredOwner);
+        const launch = nativeLaunches.get(validatedConversationId);
+        if (launch) {
+          requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
+          nativeLaunches.delete(validatedConversationId);
+        }
+      }
+      return result;
+    },
+  );
+  ipcMain.handle('native-conversation:list-recoveries', (event) => {
+    validateSender(event);
+    return requireNativeConversationService()
+      .listRecoveries()
+      .filter((recovery) => !recovery.clean);
+  });
+  ipcMain.handle(
+    'native-conversation:restore-draft',
+    (event, conversationId: unknown, clientSubmissionId: unknown, projectPath: unknown) => {
+      validateSender(event);
+      if (
+        typeof clientSubmissionId !== 'string' ||
+        !clientSubmissionId ||
+        clientSubmissionId.length > 200
+      ) {
+        throw new Error('恢复草稿标识无效。');
+      }
+      return requireNativeConversationService().restoreDraft(
+        validateConversationId(conversationId),
+        clientSubmissionId,
+        validateProjectPath(projectPath),
+      );
+    },
+  );
+  ipcMain.handle(
+    'native-conversation:discard-recovery',
+    (event, conversationId: unknown, projectPath: unknown) => {
+      validateSender(event);
+      return requireNativeConversationService().discardRecovery(
+        validateConversationId(conversationId),
+        validateProjectPath(projectPath),
+      );
+    },
+  );
   ipcMain.handle('busy:list', (event) => {
     validateSender(event);
     if (!busyRegistry) {
@@ -2337,6 +2973,45 @@ const registerIpc = (): void => {
       };
     }
   });
+  ipcMain.handle('chat:import-clipboard-image', async (event, draftId: unknown) => {
+    validateSender(event);
+    if (draftId !== undefined && typeof draftId !== 'string') {
+      throw new Error('附件草稿标识无效。');
+    }
+    const image = clipboard.readImage();
+    if (image.isEmpty()) {
+      return { attachments: [], errors: [], ok: false };
+    }
+    try {
+      const bytes = image.toPNG();
+      const imported = await chatAttachmentStore.importDraftBytes(
+        [
+          {
+            bytes,
+            fileName: '剪贴板图片.png',
+          },
+        ],
+        draftId,
+      );
+      return {
+        attachments: imported.attachments,
+        draftId: imported.draftId,
+        errors: [],
+        ok: true,
+      };
+    } catch (error) {
+      return {
+        attachments: [],
+        errors: [
+          {
+            message: error instanceof Error ? error.message : '无法安全导入剪贴板图片。',
+            path: '剪贴板图片',
+          },
+        ],
+        ok: false,
+      };
+    }
+  });
   ipcMain.handle(
     'chat:delete-draft-attachment',
     async (event, draftId: unknown, attachmentId: unknown) => {
@@ -2638,12 +3313,48 @@ const registerIpc = (): void => {
           }
           claudeConversationLifecycle.assertLaunchAllowed(resolved, 'resume', conversationId);
 
-          // A stored conversation always gets its own terminal, so several can resume side by side.
+          const existingOwner = conversationOwnerRegistry.ownerFor({
+            conversationId,
+            projectPath: resolved,
+            runtime: 'claude',
+          });
+          if (existingOwner?.ownerKind === 'terminal') {
+            const existingSessionId = existingOwner.ownerId.replace(/^terminal:/, '');
+            if (workspace.hasSession(existingSessionId)) {
+              return {
+                ok: true,
+                reused: true,
+                state: describeWorkspace(workspace.activate(existingSessionId)),
+              };
+            }
+          }
+          if (existingOwner) {
+            throw new Error('该对话已在原生界面运行，请切换到现有对话。');
+          }
+
+          // Different UUIDs may run side by side, but the same canonical transcript has one owner.
           workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`);
           const openedSessionId = workspace.getState().activeSessionId;
           if (!openedSessionId) {
             throw new Error('无法创建历史会话终端。');
           }
+          const predictedGeneration =
+            Number(workspace.getStatus(openedSessionId).ptyGeneration) + 1;
+          const terminalOwner: ConversationOwner = {
+            conversationId: conversationId.toLowerCase(),
+            generation: predictedGeneration,
+            ownerId: `terminal:${openedSessionId}`,
+            ownerKind: 'terminal',
+            phase: 'starting',
+            projectPath: resolved,
+            runtime: 'claude',
+          };
+          const ownerClaim = conversationOwnerRegistry.claim(terminalOwner);
+          if (ownerClaim.status === 'conflict') {
+            workspace.close(openedSessionId);
+            throw new Error('该对话刚刚被另一个界面接管，已取消重复恢复。');
+          }
+          terminalConversationOwners.set(openedSessionId, ownerClaim.owner);
           ownership.assertCurrent();
           workspaceStore.addProject(resolved);
 
@@ -2689,12 +3400,20 @@ const registerIpc = (): void => {
                       ownedGeneration,
                     );
                   }
+                  releaseTerminalConversationOwner(openedSessionId);
+                  if (workspace.hasSession(openedSessionId)) workspace.close(openedSessionId);
                   throw error;
                 }
               },
             ),
           );
           ownership.assertCurrent();
+          conversationOwnerRegistry.updatePhase(
+            terminalOwner,
+            terminalOwner.ownerId,
+            terminalOwner.generation,
+            'active',
+          );
           return { ok: true, state: describeWorkspace() };
         });
       } catch (error) {
@@ -2791,6 +3510,7 @@ const registerIpc = (): void => {
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
+        assertApplicationUpdatesAllowed();
         return {
           ok: true,
           state: await requireCodexRuntime().installOrUpdate(validatedSessionId, status.cwd),
@@ -2805,6 +3525,7 @@ const registerIpc = (): void => {
     async (event, sessionId: unknown, method: unknown): Promise<CodexLoginStartResult> => {
       validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
+      assertRealRuntimeAllowed();
       const status = workspace.getStatus(validatedSessionId);
       try {
         await assertOfficialProviderAllowed('openai-codex', 'login', status.cwd);
@@ -2829,6 +3550,7 @@ const registerIpc = (): void => {
     async (event, sessionId: unknown): Promise<CodexOperationResult> => {
       validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
+      assertRealRuntimeAllowed();
       const status = workspace.getStatus(validatedSessionId);
       try {
         return {
@@ -2845,6 +3567,7 @@ const registerIpc = (): void => {
     async (event, sessionId: unknown): Promise<CodexOperationResult> => {
       validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
+      assertRealRuntimeAllowed();
       const status = workspace.getStatus(validatedSessionId);
       try {
         return {
@@ -4270,9 +4993,22 @@ const registerIpc = (): void => {
   );
   ipcMain.on(
     'terminal:resize',
-    (event, sessionId: unknown, ptyGeneration: unknown, cols: unknown, rows: unknown) => {
+    (
+      event,
+      sessionId: unknown,
+      ptyGeneration: unknown,
+      resizeRevision: unknown,
+      cols: unknown,
+      rows: unknown,
+    ) => {
       validateSender(event);
-      if (typeof cols !== 'number' || typeof rows !== 'number') {
+      if (
+        typeof resizeRevision !== 'number' ||
+        !Number.isSafeInteger(resizeRevision) ||
+        resizeRevision < 0 ||
+        typeof cols !== 'number' ||
+        typeof rows !== 'number'
+      ) {
         return;
       }
       try {
@@ -4282,15 +5018,12 @@ const registerIpc = (): void => {
         if (!applied) {
           return;
         }
-        /*
-         * Echo back the size the PTY actually took. PSReadLine repaints with absolute cursor moves,
-         * so xterm disagreeing with ConPTY by even one row makes that repaint overwrite the wrong
-         * line and leaves the previous screen visible underneath.
-         */
+        // This is the app-normalized request, not an OS/ConPTY acknowledgement.
         mainWindow?.webContents.send(
           'terminal:size',
           validatedSessionId,
           validatedGeneration,
+          resizeRevision,
           applied.cols,
           applied.rows,
         );
@@ -4324,11 +5057,20 @@ const registerIpc = (): void => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
     const status = workspace.getStatus(validatedSessionId);
-    return sessionManager.getSessionsForProject(status.cwd);
+    const active =
+      nativeConversationService?.activeConversationIds(status.cwd) ?? new Set<string>();
+    return sessionManager
+      .getSessionsForProject(status.cwd)
+      .filter((session) => !active.has(session.conversationId.toLowerCase()));
   });
   ipcMain.handle('claude:get-sessions-for-path', async (event, projectPath: unknown) => {
     validateSender(event);
-    return sessionManager.getSessionsForProject(validateProjectPath(projectPath));
+    const validatedProjectPath = validateProjectPath(projectPath);
+    const active =
+      nativeConversationService?.activeConversationIds(validatedProjectPath) ?? new Set<string>();
+    return sessionManager
+      .getSessionsForProject(validatedProjectPath)
+      .filter((session) => !active.has(session.conversationId.toLowerCase()));
   });
   ipcMain.handle(
     'claude:rename-session',
@@ -4389,6 +5131,35 @@ const registerIpc = (): void => {
           if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
             throw new Error('会话标识无效。');
           }
+          const existingOwner = conversationOwnerRegistry.ownerFor({
+            conversationId,
+            projectPath: status.cwd,
+            runtime: 'claude',
+          });
+          if (existingOwner) {
+            if (existingOwner.ownerId === `terminal:${validatedSessionId}`) {
+              return { ok: true, state: await runtime.getState(validatedSessionId, status.cwd) };
+            }
+            throw new Error(
+              existingOwner.ownerKind === 'native'
+                ? '该对话已在原生界面运行。'
+                : '该对话已在另一个高级终端运行。',
+            );
+          }
+          const terminalOwner: ConversationOwner = {
+            conversationId: conversationId.toLowerCase(),
+            generation: Number(status.ptyGeneration) + 1,
+            ownerId: `terminal:${validatedSessionId}`,
+            ownerKind: 'terminal',
+            phase: 'starting',
+            projectPath: status.cwd,
+            runtime: 'claude',
+          };
+          const ownerClaim = conversationOwnerRegistry.claim(terminalOwner);
+          if (ownerClaim.status === 'conflict') {
+            throw new Error('该对话刚刚被其他界面接管。');
+          }
+          terminalConversationOwners.set(validatedSessionId, ownerClaim.owner);
           return claudeConversationLifecycle.runResume(
             status.cwd,
             conversationId,
@@ -4427,6 +5198,12 @@ const registerIpc = (): void => {
                 );
                 const state = await runtime.getState(validatedSessionId, status.cwd);
                 assertResumeCurrent();
+                conversationOwnerRegistry.updatePhase(
+                  terminalOwner,
+                  terminalOwner.ownerId,
+                  terminalOwner.generation,
+                  'active',
+                );
                 return { ok: true, state };
               } catch (error) {
                 if (launchPrepared || ownedGeneration !== undefined) {
@@ -4437,6 +5214,7 @@ const registerIpc = (): void => {
                     ownedGeneration,
                   );
                 }
+                releaseTerminalConversationOwner(validatedSessionId);
                 return claudeFailure(validatedSessionId, error);
               }
             },
@@ -4459,15 +5237,47 @@ const registerIpc = (): void => {
           typeof argument === 'string'
             ? createHash('sha256').update(argument).digest('hex').slice(0, 16)
             : 'global';
+        const action = channel.includes('uninstall')
+          ? 'uninstall'
+          : channel.includes('disable')
+            ? 'disable'
+            : channel.includes('enable')
+              ? 'enable'
+              : channel.includes('update')
+                ? 'update'
+                : channel.includes('refresh')
+                  ? 'refresh'
+                  : channel.includes('remove')
+                    ? 'remove'
+                    : 'install';
+        const actionLabel = (
+          {
+            disable: '禁用',
+            enable: '启用',
+            install: '安装',
+            refresh: '刷新',
+            remove: '移除',
+            uninstall: '卸载',
+            update: '更新',
+          } as const
+        )[action];
+        const target =
+          typeof argument === 'string' && /^[\w@./:-]{1,120}$/.test(argument)
+            ? argument
+            : channel.includes('marketplace')
+              ? '插件市场'
+              : '所选插件';
         const release = busyRegistry?.acquire({
+          action,
           cancellable: false,
+          domain: 'plugin',
           id: `plugin:${channel}:${identity}`,
           kind:
             channel.includes('uninstall') || channel.includes('remove') ? 'uninstall' : 'install',
-          label: channel.includes('uninstall')
-            ? '正在卸载 Claude Code 插件'
-            : '正在修改 Claude Code 插件',
+          label: `${actionLabel} ${target}`,
           severity: 'blocking',
+          stage: `${actionLabel} Claude Code 插件`,
+          target,
         });
         try {
           return await run(argument, flag);
@@ -4538,16 +5348,26 @@ const registerIpc = (): void => {
     'software:claude-install-update',
     async (event): Promise<SoftwareUpdateOperationResult> => {
       validateSender(event);
+      assertApplicationUpdatesAllowed();
       const runtime = requireClaudeRuntime();
+      const operationId = 'software:claude-install-update';
       const release = busyRegistry?.acquire({
+        action: 'update',
         cancellable: false,
-        id: 'software:claude-install-update',
+        domain: 'claude-code',
+        id: operationId,
         kind: 'install',
-        label: '正在安装或更新 Claude Code',
+        label: 'Claude Code',
         severity: 'blocking',
+        stage: '准备安装或更新',
+        target: 'Claude Code',
       });
+      let logTail: string[] = [];
       try {
-        const result = await runtime.installOrUpdateClaudeCode();
+        const result = await runtime.installOrUpdateClaudeCode(({ line, stage }) => {
+          if (line) logTail = [...logTail, line].slice(-8);
+          busyRegistry?.update(operationId, { logTail, stage });
+        });
         return { message: result.message, ok: true, state: result.state };
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法安装或更新 Claude Code。';
@@ -4569,11 +5389,13 @@ const registerIpc = (): void => {
   });
   ipcMain.handle('software:application-updater-download', async (event) => {
     validateSender(event);
+    assertApplicationUpdatesAllowed();
     if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
     return applicationUpdaterService.checkAndDownload();
   });
   ipcMain.handle('software:application-updater-install', async (event) => {
     validateSender(event);
+    assertApplicationUpdatesAllowed();
     if (!applicationUpdaterService) throw new Error('应用更新服务尚未就绪。');
     if (applicationUpdaterService.getState().phase !== 'downloaded') {
       throw new Error('更新安装包尚未下载完成。');
@@ -4689,7 +5511,8 @@ const createWindow = async (): Promise<void> => {
   }
 };
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const hasSingleInstanceLock =
+  !runtimeProfile.effects.singleInstanceLock || app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   // A duplicate launch has nothing to protect and no window to ask through: leave immediately.
   isQuitting = true;
@@ -4721,7 +5544,11 @@ if (!hasSingleInstanceLock) {
       mainWindow?.webContents.send('busy:changed', leases);
       updateTray();
     });
-    mcpManager = new McpManager(homedir(), app.getPath('userData'), busyRegistry);
+    mcpManager = new McpManager(
+      runtimeProfile.paths.home,
+      runtimeProfile.paths.userData,
+      busyRegistry,
+    );
     downloadEngine = new DownloadEngine(
       session.defaultSession as unknown as DownloadSession,
       busyRegistry,
@@ -4753,7 +5580,9 @@ if (!hasSingleInstanceLock) {
     await applyApplicationProxyScope();
     await applyConversationProxyScope();
     // Restore only after the selected application network path is stable.
-    downloadEngine.restoreInterrupted();
+    if (runtimeProfile.effects.restoreWorkspace) {
+      downloadEngine.restoreInterrupted();
+    }
     workspace.setEnvironmentProvider(() =>
       applicationProxyStore
         ? buildApplicationProxyEnvironment(
@@ -4804,6 +5633,49 @@ if (!hasSingleInstanceLock) {
             )
           : {},
     );
+    const nativeAdapter =
+      runtimeProfile.adapterMode === 'fake'
+        ? new FakeConversationAdapter()
+        : new ClaudeAgentAdapter({
+            appVersion: app.getVersion(),
+            environment: (input) => {
+              const launch = nativeLaunches.get(input.conversationId);
+              if (!launch) throw new Error('原生对话的接入环境尚未准备完成。');
+              return {
+                ...launch.prepared.environment,
+                ...(applicationProxyStore
+                  ? buildApplicationProxyEnvironment(
+                      applicationProxyStore.getView(),
+                      applicationProxyStore.getCredentials(),
+                    )
+                  : {}),
+              };
+            },
+          });
+    nativeConversationService = new NativeConversationService({
+      adapter: nativeAdapter,
+      onSnapshot: (snapshot) => {
+        mainWindow?.webContents.send('native-conversation:snapshot', snapshot);
+        if (snapshot.phase === 'failed' || snapshot.phase === 'stopped') {
+          const launch = nativeLaunches.get(snapshot.conversationId);
+          if (launch) {
+            claudeRuntime?.releaseNativeConversation(launch.ownerId);
+            nativeLaunches.delete(snapshot.conversationId);
+          }
+        }
+      },
+      onSubmissionConfirmed: async (conversationId, attachmentIds) => {
+        await Promise.all(
+          attachmentIds.map((attachmentId) =>
+            nativeAttachmentStore.remove(conversationId, attachmentId),
+          ),
+        );
+      },
+      ownerRegistry: conversationOwnerRegistry,
+      recoveryStore: new ConversationRecoveryStore(runtimeProfile.paths.userData, safeStorage),
+      runtime: 'claude',
+    });
+    nativeConversationService.recoverInterrupted();
     claudePermissionBridge = new ClaudePermissionBridge(
       (request) => {
         const target = mainWindow?.webContents;
@@ -4909,7 +5781,10 @@ if (!hasSingleInstanceLock) {
       },
       currentVersion: app.getVersion(),
       driver: autoUpdater as unknown as ApplicationUpdaterDriver,
-      enabled: app.isPackaged && process.platform === 'win32',
+      enabled:
+        runtimeProfile.effects.allowApplicationUpdates &&
+        app.isPackaged &&
+        process.platform === 'win32',
       onChange: (state) => {
         mainWindow?.webContents.send('software:application-updater-changed', state);
       },
@@ -4933,11 +5808,15 @@ if (!hasSingleInstanceLock) {
       },
     });
     registerIpc();
-    createTray();
+    if (runtimeProfile.effects.tray) {
+      createTray();
+    }
 
     // Remembered folders are listed without a terminal each — otherwise every folder ever opened
     // would spawn a PowerShell at startup. Only the folder in use last time is reopened live.
-    const lastActive = workspaceStore.getLastActiveProject();
+    const lastActive = runtimeProfile.effects.restoreWorkspace
+      ? workspaceStore.getLastActiveProject()
+      : undefined;
     if (lastActive && existsSync(lastActive)) {
       try {
         const result = workspace.openProject(lastActive);
@@ -4953,9 +5832,11 @@ if (!hasSingleInstanceLock) {
     }
 
     await createWindow();
-    void claudeRuntime.recoverInterruptedRouterInstall().catch(() => {
-      // The journal is intentionally retained; the next launch or install click retries safely.
-    });
+    if (runtimeProfile.effects.allowExternalRoutingWrites) {
+      void claudeRuntime.recoverInterruptedRouterInstall().catch(() => {
+        // The journal is intentionally retained; the next launch or install click retries safely.
+      });
+    }
   });
 }
 
