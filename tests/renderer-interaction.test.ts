@@ -137,6 +137,26 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toContain("body[data-agent-runtime='codex'] .codex-workbench-page");
   });
 
+  it('uses one responsive illustrated engine picker and removes the redundant session-status card', () => {
+    expect(rendererMarkup).not.toContain('当前对话状态');
+    expect(rendererMarkup).not.toContain('id="status-pill"');
+    expect(rendererMarkup).toMatch(
+      /class="runtime-option__icon runtime-option__icon--claude"[\s\S]*?class="runtime-option__check"/,
+    );
+    expect(rendererMarkup).toMatch(
+      /class="runtime-option__icon runtime-option__icon--codex"[\s\S]*?class="runtime-option__check"/,
+    );
+    expect(rendererSource).not.toContain("requiredElement<HTMLElement>('#session-detail')");
+    expect(rendererStyles).toMatch(
+      /\.runtime-picker \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-option \{[\s\S]*?display: flex;[\s\S]*?min-height: 64px;/,
+    );
+    expect(rendererStyles).toMatch(/\.runtime-option__copy \{[\s\S]*?flex: 1 1 0;/);
+    expect(rendererStyles).toContain('@keyframes runtimeOptionSelect');
+  });
+
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
     expect(rendererMarkup).toMatch(
       /<dialog[\s\S]*?id="confirmation-dialog"[\s\S]*?aria-labelledby="confirmation-dialog-title"[\s\S]*?<form method="dialog">/,
@@ -1327,13 +1347,13 @@ describe('sidebar conversation list affordances', () => {
   it('keeps the delete button clear of the vertical scrollbar in every history scroller', () => {
     expect(rendererStyles).toMatch(/\n\.history-item__delete \{[^}]*?right: 7px;[^}]*?\}/);
     expect(rendererStyles).toMatch(/\n\.history-item__select \{[^}]*?padding: 5px 7px;[^}]*?\}/);
-    for (const scroller of ['.project-list', '.project-folder__history']) {
-      expect(rendererStyles).toMatch(
-        new RegExp(
-          `\\n\\${scroller} \\{[^}]*?padding-inline-end: var\\(--s-2\\);[^}]*?scrollbar-gutter: stable;[^}]*?\\}`,
-        ),
-      );
-    }
+    expect(rendererStyles).toMatch(/\n\.project-list \{[^}]*?scrollbar-gutter: auto;[^}]*?\}/);
+    expect(rendererStyles).not.toMatch(
+      /\n\.project-list \{[^}]*?padding-inline-end: var\(--s-2\);[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.project-folder__history \{[^}]*?padding-inline-end: var\(--s-2\);[^}]*?scrollbar-gutter: stable;[^}]*?\}/,
+    );
     // The chat-history card has its own 32px delete column, which needs the same clearance.
     expect(rendererStyles).toMatch(
       /\n\.chat-history__list \{[^}]*?padding-right: var\(--s-2\);[^}]*?\}/,

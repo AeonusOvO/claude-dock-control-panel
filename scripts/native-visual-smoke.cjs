@@ -108,6 +108,9 @@ const installFixtures = String.raw`
     };
     const buildHistory = (railWidth = 320, scroll = true) => {
       document.documentElement.style.setProperty('--rail-w', railWidth + 'px');
+      byId('runtime-picker').disabled = false;
+      byId('runtime-claude').checked = true;
+      byId('runtime-codex').checked = false;
       const list = byId('project-list');
       list.replaceChildren();
       const folder = el('section', 'project-folder');
@@ -255,6 +258,11 @@ const installFixtures = String.raw`
       const shell = byId('terminal-theme').closest('.select');
       shell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
     };
+    const runtimeSelection = () => {
+      base();
+      byId('runtime-claude').checked = false;
+      byId('runtime-codex').checked = true;
+    };
     const summary = () => {
       base();
       const panel = byId('runtime-activity-panel'); panel.hidden = false; panel.dataset.state = 'open';
@@ -341,7 +349,7 @@ const installFixtures = String.raw`
       operation.append(metrics, el('pre', 'download-task__log', '检测安装方式：npm\n已选择 registry.npmjs.org\nnpm 下载与写入中（总量未知）\n正在校验 claude --version'));
       list.append(operation);
     };
-    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, summary, themeMenu, updates };
+    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, runtimeSelection, summary, themeMenu, updates };
   })()
 `;
 
@@ -405,6 +413,9 @@ app
         const composer = document.querySelector('#native-composer');
         const summary = document.querySelector('#runtime-activity-panel');
         const diagnostic = document.querySelector('#terminal-diagnostic');
+        const runtimeCards = [...document.querySelectorAll('.runtime-option')];
+        const selectedRuntime = document.querySelector('.runtime-option:has(input:checked)');
+        const projectFolder = document.querySelector('.project-folder');
         const rect = view.getBoundingClientRect();
         return {
           composerDisplay: getComputedStyle(composer).display,
@@ -428,6 +439,11 @@ app
           nativeGridRows: getComputedStyle(view).gridTemplateRows,
           nativeOpacity: getComputedStyle(view).opacity,
           nativeState: view.dataset.state,
+          projectRuntimeRightDelta: projectFolder && runtimeCards[0]
+            ? Math.round(projectFolder.getBoundingClientRect().right - runtimeCards[0].getBoundingClientRect().right)
+            : null,
+          runtimeCardHeights: runtimeCards.map((card) => Math.round(card.getBoundingClientRect().height)),
+          runtimeSelected: selectedRuntime?.querySelector('input')?.value ?? '',
           summaryHidden: summary.hidden,
           dialogs: [...document.querySelectorAll('dialog[open]')].map((dialog) => dialog.id),
         };
@@ -513,6 +529,7 @@ app
       ['recovery', undefined, 'recovery'],
       ['attachments', undefined, 'attachments'],
       ['summary', undefined, 'summary'],
+      ['runtimeSelection', undefined, 'runtime-picker'],
       ['themeMenu', undefined, 'theme-menu'],
       ['diagnostic', undefined, 'terminal-diagnostic'],
       ['plan', undefined, 'plan'],
@@ -550,6 +567,18 @@ app
       await freezeAnimations(window, 0.5);
       await capture('composer-theme', `${theme}-1180x760-send-mid.png`, {
         animation: 'send',
+        progress: 0.5,
+        theme,
+      });
+    }
+
+    for (const theme of themes) {
+      await window.webContents.executeJavaScript(applyTheme(theme));
+      window.setContentSize(1180, 760);
+      await scene('runtimeSelection');
+      await freezeAnimations(window, 0.5);
+      await capture('runtime-picker', `${theme}-1180x760-select-mid.png`, {
+        animation: 'select',
         progress: 0.5,
         theme,
       });

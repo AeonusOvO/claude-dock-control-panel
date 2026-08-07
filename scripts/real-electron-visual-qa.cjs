@@ -430,6 +430,20 @@ const main = async () => {
       theme: 'midnight',
     });
 
+    // Runtime switching is deliberately the final real-window interaction. The active native owner
+    // must win this conflict, so the real IPC path rejects the takeover and rolls the selector back
+    // to Claude. The static matrix owns the successful selection and pausable animation midframes.
+    await click('#runtime-codex');
+    await waitFor(
+      `() => document.body.dataset.agentRuntime === 'claude' && document.querySelector('#runtime-claude')?.checked && document.querySelector('#toast')?.classList.contains('toast--visible') && document.querySelector('#toast')?.textContent?.includes('恢复原生界面') && !document.querySelector('#runtime-picker')?.disabled`,
+      'the protected runtime switch rollback',
+    );
+    await capture('midnight-runtime-switch-rollback.png', {
+      interaction: 'runtime-switch',
+      state: 'protected-rollback',
+      theme: 'midnight',
+    });
+
     writeFileSync(
       path.join(outputRoot, 'manifest.json'),
       `${JSON.stringify(

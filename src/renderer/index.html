@@ -157,38 +157,39 @@
 
       <aside class="control-panel" id="control-panel">
         <section class="rail-page rail-page--active" data-rail-page="projects">
-          <section class="session-card" aria-labelledby="session-heading">
-            <div class="section-label">
-              <span>当前对话状态</span>
-              <span class="status-pill" id="status-pill">已停止</span>
-            </div>
-            <div class="session-card__heading">
-              <span class="status-dot" aria-hidden="true"></span>
-              <div>
-                <h1 id="session-heading">PowerShell</h1>
-                <p id="session-detail">等待打开项目</p>
-              </div>
-            </div>
-            <div class="session-meta">
-              <span>本机终端</span>
-              <span id="session-pid">进程号 —</span>
-            </div>
-          </section>
-
           <fieldset class="runtime-picker" id="runtime-picker">
             <legend>当前项目开发引擎</legend>
             <label class="runtime-option" for="runtime-claude">
               <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
-              <span>
+              <span class="runtime-option__icon runtime-option__icon--claude" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6 6 18" />
+                </svg>
+              </span>
+              <span class="runtime-option__copy">
                 <strong>Claude Code</strong>
-                <small>原生体验与现有路由接入</small>
+                <small>原生对话 · 路由可控</small>
+              </span>
+              <span class="runtime-option__check" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
               </span>
             </label>
             <label class="runtime-option" for="runtime-codex">
               <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
-              <span>
+              <span class="runtime-option__icon runtime-option__icon--codex" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <circle cx="7" cy="7" r="2.25" />
+                  <circle cx="17" cy="7" r="2.25" />
+                  <circle cx="12" cy="17" r="2.25" />
+                  <path d="m8.9 8.3 2.2 6.5m4-6.5-2.2 6.5M9.2 7h5.6" />
+                </svg>
+              </span>
+              <span class="runtime-option__copy">
                 <strong>Codex</strong>
-                <small>官方 ChatGPT 订阅登录</small>
+                <small>官方登录 · 高级终端</small>
+              </span>
+              <span class="runtime-option__check" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
               </span>
             </label>
           </fieldset>

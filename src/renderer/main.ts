@@ -526,9 +526,6 @@ const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-route
 const configureRouterProviderButton = requiredElement<HTMLButtonElement>(
   '#configure-router-provider',
 );
-const sessionDetail = requiredElement<HTMLElement>('#session-detail');
-const sessionPid = requiredElement<HTMLElement>('#session-pid');
-const statusPill = requiredElement<HTMLElement>('#status-pill');
 const startRouterButton = requiredElement<HTMLButtonElement>('#start-router');
 const stopRouterButton = requiredElement<HTMLButtonElement>('#stop-router');
 const terminalProject = requiredElement<HTMLElement>('#terminal-project');
@@ -11315,9 +11312,6 @@ const renderActiveStatus = (status: TerminalStatus): void => {
 
   document.body.dataset.phase = status.phase;
   titleStatus.textContent = `${copy.detail} · ${openFolders} 个项目 / ${workspaceState.sessions.length} 个对话`;
-  statusPill.textContent = copy.pill;
-  sessionDetail.textContent = status.message ?? copy.detail;
-  sessionPid.textContent = status.pid ? `进程号 ${status.pid}` : '进程号 —';
   footerStatus.textContent = copy.footer;
   toggleLabel.textContent = status.phase === 'running' ? '停止' : '启动';
   const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
@@ -11349,9 +11343,6 @@ const renderNoActiveSession = (): void => {
   document.body.dataset.phase = 'stopped';
   titleStatus.textContent =
     rememberedCount > 0 ? `未打开对话 · ${rememberedCount} 个最近项目` : '未打开任何项目';
-  statusPill.textContent = '未打开';
-  sessionDetail.textContent = '尚未打开项目对话';
-  sessionPid.textContent = '进程号 —';
   footerStatus.textContent = '等待打开项目';
   toggleLabel.textContent = '启动';
   emptyStateTitle.textContent = rememberedCount > 0 ? '选择一个项目继续' : '还没有项目';

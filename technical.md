@@ -149,6 +149,11 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   因而拥有一致字号、字重、圆角、描边、dot、chevron、hover/press 和 850px 以下折叠行为。主题的
   原生 `<select>` 仍是事实来源，但视觉上只有一个菜单按钮和一个 fixed listbox；只有选项实际溢出时
   才保留滚动条。
+- 项目页不再实例化 `#status-pill/#session-detail/#session-pid`；`renderActiveStatus()` 只更新标题栏、
+  底栏、终端空态和 runtime 控件，错误仍由 `showTerminalDiagnostic()` 按 session generation 去重弹出。
+  `.runtime-picker` 使用单列 flex 卡保证 270px 侧栏仍有正常文字行，两个 runtime 共享图标/说明/勾选
+  结构和 `runtimeOptionSelect` 动效。`.project-list` 改用自动 gutter，避免无滚动条时项目卡永久缩短；嵌套
+  `.project-folder__history` 继续使用 stable gutter 保护时间/删除尾槽。
 - `#native-composer` 是 Claude/Telegram 共用的提交与附件内核。主题只切换 CSS 外壳和两个互斥 SVG：
   Claude 使用圆形上箭头及 `nativeClaudeSend*` 确认关键帧；Telegram 使用纸飞机及
   `nativeTelegramSend*` 涟漪/飞行关键帧。发送成功只短暂设置 `data-sending=true`，在 `animationend`

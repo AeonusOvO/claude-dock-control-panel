@@ -798,14 +798,13 @@ body[data-phase='error'] .status-pill {
 }
 
 .runtime-picker {
-  background: var(--surface-inset);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
+  border: 0;
   display: grid;
-  gap: 6px;
-  grid-template-columns: 1fr 1fr;
+  gap: var(--s-2);
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
-  padding: 8px;
+  min-width: 0;
+  padding: 0;
 }
 
 .runtime-picker legend {
@@ -814,33 +813,44 @@ body[data-phase='error'] .status-pill {
   font-weight: var(--fw-strong);
   letter-spacing: 0.08em;
   line-height: 14px;
-  padding: 0 4px;
+  margin-block-end: var(--s-2);
+  padding: 0;
   text-transform: uppercase;
 }
 
 .runtime-option {
+  align-items: center;
   background: var(--surface-3);
   border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   cursor: pointer;
-  display: grid;
+  display: flex;
+  gap: var(--s-2);
+  min-height: 64px;
   min-width: 0;
-  padding: 8px;
+  overflow: hidden;
+  padding: var(--s-3);
   position: relative;
   transition:
     background var(--dur-2) var(--ease-standard),
     border-color var(--dur-2) var(--ease-standard),
-    box-shadow var(--dur-2) var(--ease-standard);
+    box-shadow var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
 }
 
 .runtime-option:hover {
+  background: var(--surface-4);
   border-color: var(--accent-line);
+  box-shadow: var(--sheen);
 }
 
 .runtime-option:has(input:checked) {
+  animation: runtimeOptionSelect var(--dur-enter) var(--ease-spring);
   background: var(--accent-tint);
   border-color: var(--accent-line);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-ring) 30%, transparent);
+  box-shadow:
+    inset 3px 0 0 var(--accent-solid),
+    0 0 0 2px color-mix(in srgb, var(--accent-ring) 26%, transparent);
 }
 
 .runtime-option:has(input:focus-visible) {
@@ -858,22 +868,111 @@ body[data-phase='error'] .status-pill {
   z-index: 1;
 }
 
-.runtime-option span {
+.runtime-option__icon {
+  align-items: center;
+  align-self: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--text-lo);
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  transition:
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+  width: 36px;
+}
+
+.runtime-option__icon svg {
+  fill: none;
+  height: 20px;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.65;
+  width: 20px;
+}
+
+.runtime-option__icon--codex svg circle {
+  fill: var(--surface-3);
+}
+
+.runtime-option__copy {
+  align-self: center;
   display: grid;
+  flex: 1 1 0;
   gap: 2px;
   min-width: 0;
+  width: 0;
 }
 
 .runtime-option strong {
   color: var(--text-hi);
   font-size: var(--text-xs);
   line-height: 17px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .runtime-option small {
   color: var(--text-dim);
   font-size: var(--text-2xs);
   line-height: 16px;
+}
+
+.runtime-option__check {
+  align-items: center;
+  align-self: center;
+  background: var(--accent-solid);
+  border-radius: var(--r-pill);
+  color: var(--accent-fg);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 18px;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+  width: 18px;
+}
+
+.runtime-option__check svg {
+  fill: none;
+  height: 13px;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+  width: 13px;
+}
+
+.runtime-option:has(input:checked) :is(.runtime-option__icon, .runtime-option__check) {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.runtime-option:has(input:checked) .runtime-option__icon {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-fg);
+}
+
+.runtime-option:active {
+  transform: scale(var(--press-theme));
+}
+
+@keyframes runtimeOptionSelect {
+  from {
+    box-shadow:
+      inset 0 0 0 var(--accent-solid),
+      0 0 0 0 transparent;
+  }
 }
 
 .runtime-picker:disabled {
@@ -956,9 +1055,8 @@ body[data-phase='error'] .status-pill {
    */
   overflow-x: hidden;
   overflow-y: auto;
-  padding-inline-end: var(--s-2);
   scrollbar-color: var(--line-strong) transparent;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
   scrollbar-width: thin;
 }
 
