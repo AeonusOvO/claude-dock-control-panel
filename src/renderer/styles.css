@@ -1566,7 +1566,7 @@ body[data-phase='error'] .status-pill {
   box-shadow: 0 7px 20px color-mix(in srgb, var(--accent-solid) 12%, transparent);
 }
 
-.button--primary:hover {
+.button--primary:hover:not(:disabled) {
   background: var(--accent-solid-hover);
   border-color: transparent;
   box-shadow: 0 9px 24px color-mix(in srgb, var(--accent-solid) 18%, transparent);

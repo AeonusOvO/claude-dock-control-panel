@@ -11,13 +11,22 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
   public closed = false;
   public interrupted = false;
   public stoppedTasks: string[] = [];
-  private readonly pending: Array<(value: IteratorResult<unknown>) => void> = [];
+  private failure?: Error;
+  private readonly pending: Array<{
+    reject: (error: Error) => void;
+    resolve: (value: IteratorResult<unknown>) => void;
+  }> = [];
   private readonly values: unknown[] = [];
 
   public emit(value: unknown): void {
-    const resolve = this.pending.shift();
-    if (resolve) resolve({ done: false, value });
+    const pending = this.pending.shift();
+    if (pending) pending.resolve({ done: false, value });
     else this.values.push(value);
+  }
+
+  public fail(error: Error): void {
+    this.failure = error;
+    for (const pending of this.pending.splice(0)) pending.reject(error);
   }
 
   public applyFlagSettings(settings: Record<string, unknown>): Promise<void> {
@@ -67,7 +76,9 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
 
   public close(): void {
     this.closed = true;
-    for (const resolve of this.pending.splice(0)) resolve({ done: true, value: undefined });
+    for (const pending of this.pending.splice(0)) {
+      pending.resolve({ done: true, value: undefined });
+    }
   }
 
   public [Symbol.asyncIterator](): AsyncIterator<unknown> {
@@ -75,8 +86,9 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
       next: async () => {
         const value = this.values.shift();
         if (value !== undefined) return { done: false, value };
+        if (this.failure) throw this.failure;
         if (this.closed) return { done: true, value: undefined };
-        return new Promise((resolve) => this.pending.push(resolve));
+        return new Promise((resolve, reject) => this.pending.push({ reject, resolve }));
       },
     };
   }
@@ -170,6 +182,123 @@ describe('Claude Agent SDK adapter', () => {
         clientSubmissionId: 'submit-2',
       }),
     ).rejects.toThrow(/页面/);
+  });
+
+  it('writes an accepted submission into the SDK stream and immediately publishes the user row', async () => {
+    const query = new FakeSdkQuery();
+    let prompt: AsyncIterable<unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.5',
+      queryFactory: async () => (input) => {
+        prompt = input.prompt;
+        return query;
+      },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+    const submission = {
+      blocks: [{ text: '发送链路回归', type: 'text' as const }],
+      clientSubmissionId: 'submit-visible-1',
+    };
+
+    await adapter.submit(startInput.conversationId, submission);
+
+    await expect(prompt![Symbol.asyncIterator]().next()).resolves.toMatchObject({
+      done: false,
+      value: {
+        message: { content: [{ text: '发送链路回归', type: 'text' }], role: 'user' },
+        parent_tool_use_id: null,
+        type: 'user',
+        uuid: submission.clientSubmissionId,
+      },
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          id: submission.clientSubmissionId,
+          role: 'user',
+          status: 'complete',
+        }),
+        type: 'message.upsert',
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ phase: 'running', type: 'conversation.phase' });
+  });
+
+  it('keeps the SDK stream reusable after a failed turn and renders the failure', async () => {
+    const query = new FakeSdkQuery();
+    let prompt: AsyncIterable<unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.5',
+      queryFactory: async () => (input) => {
+        prompt = input.prompt;
+        return query;
+      },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+    const iterator = prompt![Symbol.asyncIterator]();
+    await adapter.submit(startInput.conversationId, {
+      blocks: [{ text: '第一次', type: 'text' }],
+      clientSubmissionId: 'submit-failed-turn',
+    });
+    await iterator.next();
+
+    query.emit({
+      errors: ['本轮请求被上游拒绝'],
+      is_error: true,
+      type: 'result',
+      user_message_uuid: 'submit-failed-turn',
+      uuid: 'result-failed-turn',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ role: 'system', status: 'failed' }),
+        type: 'message.upsert',
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ phase: 'idle', type: 'conversation.phase' });
+    await expect(
+      adapter.submit(startInput.conversationId, {
+        blocks: [{ text: '修正后重试', type: 'text' }],
+        clientSubmissionId: 'submit-retry-turn',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { uuid: 'submit-retry-turn' },
+    });
+  });
+
+  it('tears down a dead SDK stream so later sends fail instead of entering a black hole', async () => {
+    const query = new FakeSdkQuery();
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.5',
+      queryFactory: async () => () => query,
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+
+    query.fail(new Error('SDK transport exited'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(events.at(-1)).toMatchObject({
+      message: 'SDK transport exited',
+      type: 'conversation.error',
+    });
+    await expect(
+      adapter.submit(startInput.conversationId, {
+        blocks: [{ text: '不能进入死亡队列', type: 'text' }],
+        clientSubmissionId: 'submit-after-fatal',
+      }),
+    ).rejects.toThrow('原生会话不存在');
   });
 
   it('surfaces permission requests and only resolves them from the native interaction queue', async () => {

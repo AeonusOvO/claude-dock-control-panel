@@ -1474,6 +1474,35 @@ describe('native conversation component suite', () => {
     expect(nativeLaunch).toContain("'Claude Code 启动器不可用 · 请打开任务与下载'");
     expect(nativeLaunch).toContain("'启动失败 · 请查看错误提示后重试'");
     expect(nativeLaunch).toContain("nativeComposerStatus.textContent = 'Claude 已就绪';");
+    expect(nativeLaunch).toContain('nativeConversationStartingSessionId = status.id;');
+    expect(nativeLaunch).toContain('refreshClaudeLaunchControls(status.id);');
+  });
+
+  it('keeps native launch buttons busy only for the owned project startup', () => {
+    const launchControls = rendererSource.slice(
+      rendererSource.indexOf('const renderClaudeLaunchControls ='),
+      rendererSource.indexOf('const refreshClaudeLaunchControls ='),
+    );
+    expect(launchControls).toContain('nativeConversationStartingSessionId === sessionId');
+    expect(launchControls).toContain('claudeLaunchAttempts.isBusy(sessionId)');
+    expect(launchControls).toContain('button.disabled = busy;');
+  });
+
+  it('generation-scopes native submission acknowledgement and preserves newer draft text', () => {
+    const submission = rendererSource.slice(
+      rendererSource.indexOf("nativeComposer.addEventListener('submit'"),
+      rendererSource.indexOf("nativeSendButton.addEventListener('animationend'"),
+    );
+    expect(submission).toContain('const conversationId = activeNativeConversationId;');
+    expect(submission).toContain(
+      'nativeConversationSubmissions.set(conversationId, clientSubmissionId);',
+    );
+    expect(submission).toContain('.submitNativeConversation(conversationId, {');
+    expect(submission).toContain('if (nativeComposerInput.value === text)');
+    expect(submission).toContain(
+      'nativeConversationSubmissions.get(conversationId) === clientSubmissionId',
+    );
+    expect(submission).not.toContain('.submitNativeConversation(activeNativeConversationId, {');
   });
 
   it('uses one button base with semantic and size variants', () => {

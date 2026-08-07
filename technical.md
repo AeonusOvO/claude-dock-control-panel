@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.4（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+当前架构版本：5.0.0-rc.5（2026-08-08）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
 `ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
 版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须从用户本机的 `claude` 命令解析同一
 安装中的 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
@@ -134,6 +134,12 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   聚焦，不创建第二进程；高级终端转移失败会恢复原 owner、草稿和原选择。
 - 结果未知的提交永不自动重发，避免重复工具操作、费用或外部副作用。仅当 JSONL 对账确认 user 记录
   已写入后才清理加密待确认文本。
+- `ClaudeAgentAdapter.submit()` 在 SDK 输入队列同步接受 payload 后，以同一
+  `clientSubmissionId` 发布用户消息，再进入 `running`；renderer 以
+  `(conversationId, clientSubmissionId)` 持有提交锁，迟到确认只清理完全相同的文本和附件集合。
+  SDK `result.is_error` 是可恢复的单轮失败：写入 system 失败消息后回到 `idle`。迭代器抛错或意外 EOF
+  是流级失败：关闭 query/queue、撤销交互并从 adapter 删除 session；服务收到
+  `conversation.error` 后同步释放 owner，主进程据失败快照释放路由预约。
 - `native-conversation:start` 对路由预约、adapter 启动和 owner claim 按同一次启动事务回滚；新 UUID
   在 adapter 启动失败且没有正文时删除空恢复行，精确 resume 失败则保留原恢复入口。升级时还会把
   “无提交且无 canonical JSONL”的旧版空预约与真实历史对账并清理，不删除任何 Claude JSONL。
@@ -173,6 +179,10 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `scripts/real-electron-visual-qa.cjs` 另外启动带隔离 `RuntimeProfile` 的真实可见 Electron 窗口，
   通过 DevTools 输入事件逐项点击权限、提问、计划、MCP、摘要和高级终端，并把截图与 DOM 状态清单
   写入 `dist/visual-qa/`。两者均不得连接真实会话、PTY、凭据、更新器或外部路由。
+- `scripts/control-theme-smoke.cjs` 除遍历全部按钮的主题基础样式外，还通过 DevTools
+  `CSS.forcePseudoState` 对工作台 `#launch-new` 和侧栏 `#run-claude` 逐主题强制 `:hover`，比较
+  计算后的基础色与 `accentSolid`、悬停色与 `accentSolidHover`；任一入口仍为灰色 disabled 或
+  Telegram 没有从浅蓝加深都会直接使 `npm run test:control-theme` 失败。
 
 ### 模型能力与呈现
 

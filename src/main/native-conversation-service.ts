@@ -494,7 +494,10 @@ export class NativeConversationService {
       }
     }
     if (current.snapshot) this.options.onSnapshot(current.snapshot);
-    if (event.type === 'conversation.phase' && ['failed', 'stopped'].includes(event.phase)) {
+    if (
+      event.type === 'conversation.error' ||
+      (event.type === 'conversation.phase' && ['failed', 'stopped'].includes(event.phase))
+    ) {
       this.release(current);
     }
   }

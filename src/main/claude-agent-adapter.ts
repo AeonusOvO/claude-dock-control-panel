@@ -321,6 +321,34 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       type: 'user',
       uuid: input.clientSubmissionId,
     });
+    // The streaming Agent SDK does not guarantee that it will echo the submitted user frame back
+    // before assistant output starts. Publish the accepted input from our owned payload so the
+    // renderer never clears the composer into an apparently empty conversation. Reusing the client
+    // submission UUID also makes a future SDK echo an idempotent upsert rather than a duplicate.
+    this.emit(session, {
+      message: {
+        blocks: input.blocks.map((block, index) =>
+          block.type === 'text'
+            ? {
+                id: `${input.clientSubmissionId}:${index}`,
+                text: block.text,
+                type: 'text' as const,
+              }
+            : {
+                id: `${input.clientSubmissionId}:${index}`,
+                mediaType: block.attachment.mediaType,
+                name: block.attachment.name,
+                source: block.attachment.id,
+                type: 'image' as const,
+              },
+        ),
+        createdAt: Date.now(),
+        id: input.clientSubmissionId,
+        role: 'user',
+        status: 'complete',
+      },
+      type: 'message.upsert',
+    });
     this.emit(session, { phase: 'running', type: 'conversation.phase' });
   }
 
@@ -416,24 +444,37 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
   public async close(conversationId: string): Promise<void> {
     const session = this.sessions.get(conversationId);
     if (!session) return;
-    for (const interaction of session.interactions.values()) interaction.abort();
-    session.interactions.clear();
-    session.queue.close();
-    session.query.close();
+    this.disposeSession(session);
     this.emit(session, { phase: 'stopped', type: 'conversation.phase' });
-    this.sessions.delete(conversationId);
   }
 
   private async consume(session: AgentSession): Promise<void> {
     try {
       for await (const message of session.query) this.consumeMessage(session, message);
+      if (this.sessions.get(session.input.conversationId) === session) {
+        this.failSession(session, new Error('Claude 原生会话输入流意外结束。'));
+      }
     } catch (error) {
-      if (this.sessions.get(session.input.conversationId) !== session) return;
-      this.emit(session, {
-        message: error instanceof Error ? error.message : 'Claude 原生会话异常退出。',
-        type: 'conversation.error',
-      });
+      this.failSession(session, error);
     }
+  }
+
+  private disposeSession(session: AgentSession): boolean {
+    if (this.sessions.get(session.input.conversationId) !== session) return false;
+    this.sessions.delete(session.input.conversationId);
+    for (const interaction of session.interactions.values()) interaction.abort();
+    session.interactions.clear();
+    session.queue.close();
+    session.query.close();
+    return true;
+  }
+
+  private failSession(session: AgentSession, error: unknown): void {
+    if (!this.disposeSession(session)) return;
+    this.emit(session, {
+      message: error instanceof Error ? error.message : 'Claude 原生会话异常退出。',
+      type: 'conversation.error',
+    });
   }
 
   private async publishInitialization(session: AgentSession, value: unknown): Promise<void> {
@@ -663,8 +704,30 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
         timeToFirstTokenMs: typeof value.ttft_ms === 'number' ? value.ttft_ms : undefined,
       },
     });
+    if (value.is_error === true) {
+      const errors = arrayValue(value.errors).filter(
+        (candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate),
+      );
+      const detail = (errors[0] ?? stringValue(value.result) ?? 'Claude 未能完成本轮请求。').slice(
+        0,
+        4_000,
+      );
+      const messageId = `turn-error-${confirmedSubmissionId ?? stringValue(value.uuid) ?? session.sequence + 1}`;
+      this.emit(session, {
+        message: {
+          blocks: [{ id: `${messageId}:0`, text: detail, type: 'text' }],
+          createdAt: Date.now(),
+          id: messageId,
+          role: 'system',
+          status: 'failed',
+        },
+        type: 'message.upsert',
+      });
+    }
     this.emit(session, {
-      phase: value.is_error === true ? 'failed' : 'idle',
+      // An SDK result error belongs to this turn. The streaming process remains reusable, so return
+      // to idle and let the user correct or retry instead of stranding a live session as failed.
+      phase: 'idle',
       type: 'conversation.phase',
     });
   }

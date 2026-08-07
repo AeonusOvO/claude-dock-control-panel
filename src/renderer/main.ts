@@ -1390,8 +1390,9 @@ const nativeConversationSnapshots = new Map<string, ConversationSnapshot>();
 const nativeConversationByProject = new Map<string, string>();
 let nativeRecoveries: NativeRecoveryView[] = [];
 let activeNativeConversationId = '';
-let nativeConversationStarting = false;
+let nativeConversationStartingSessionId: string | undefined;
 let nativeConversationClosingTimer: number | undefined;
+const nativeConversationSubmissions = new Map<string, string>();
 const pendingNativeAttachments: NativeAttachmentView[] = [];
 let nativeAttachmentImporting = false;
 let nativeControlsUpdating = false;
@@ -3812,11 +3813,17 @@ const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
   const capability = snapshot.capabilities;
   renderNativeControls(snapshot);
   const running = snapshot.phase === 'running' || snapshot.phase === 'stopping';
+  const submitting = nativeConversationSubmissions.has(snapshot.conversationId);
   nativeStopButton.hidden = !running;
   nativeSendButton.disabled =
-    nativeConversationStarting || snapshot.phase === 'starting' || snapshot.phase === 'stopping';
+    nativeConversationStartingSessionId === workspaceState.activeSessionId ||
+    submitting ||
+    snapshot.phase === 'starting' ||
+    snapshot.phase === 'stopping' ||
+    snapshot.phase === 'stopped' ||
+    snapshot.phase === 'failed';
   nativeComposerInput.disabled = snapshot.phase === 'stopped' || snapshot.phase === 'failed';
-  nativeAttachButton.disabled = !capability?.attachments.image;
+  nativeAttachButton.disabled = submitting || !capability?.attachments.image;
   renderRuntimeActivity();
   if (nearBottom) nativeConversationMessages.scrollTop = nativeConversationMessages.scrollHeight;
 };
@@ -3959,7 +3966,7 @@ const launchNativeClaude = async (
   exactConversationId?: string,
 ): Promise<void> => {
   const status = activeStatus();
-  if (!status || nativeConversationStarting) return;
+  if (!status || nativeConversationStartingSessionId) return;
   let conversationId = exactConversationId;
   if (!conversationId && mode === 'continue') {
     conversationId = storedConversations.get(status.cwd.toLowerCase())?.[0]?.conversationId;
@@ -3971,7 +3978,8 @@ const launchNativeClaude = async (
     showToast('请从左侧历史对话中选择要恢复的会话。');
     return;
   }
-  nativeConversationStarting = true;
+  nativeConversationStartingSessionId = status.id;
+  refreshClaudeLaunchControls(status.id);
   nativeSendButton.disabled = true;
   nativeComposerStatus.textContent = '正在安全启动 Claude…';
   let launchSucceeded = false;
@@ -4002,7 +4010,10 @@ const launchNativeClaude = async (
     launchFailureMessage = error instanceof Error ? error.message : '无法启动 Claude 原生对话。';
     showToast(launchFailureMessage, 'error');
   } finally {
-    nativeConversationStarting = false;
+    if (nativeConversationStartingSessionId === status.id) {
+      nativeConversationStartingSessionId = undefined;
+    }
+    refreshClaudeLaunchControls(status.id);
     const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
     if (snapshot) {
       renderNativeConversation(snapshot);
@@ -6249,7 +6260,8 @@ const renderClaudeLaunchControls = (sessionId: string, launchBlocked = false): v
   if (sessionId !== workspaceState.activeSessionId || activeDevelopmentRuntime() !== 'claude') {
     return;
   }
-  const busy = claudeLaunchAttempts.isBusy(sessionId);
+  const busy =
+    nativeConversationStartingSessionId === sessionId || claudeLaunchAttempts.isBusy(sessionId);
   runAgentLabel.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
   // Route health is a remediable preflight state, not a reason to turn the primary action into a
   // translucent dead end. The launch path can restart app-owned gateways and returns a precise
@@ -12910,13 +12922,15 @@ chooseDirectoryButton.addEventListener('click', () => {
 nativeComposer.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = nativeComposerInput.value;
+  const conversationId = activeNativeConversationId;
   if (
-    !activeNativeConversationId ||
+    !conversationId ||
     (!text.trim() && pendingNativeAttachments.length === 0) ||
-    nativeSendButton.disabled
+    nativeSendButton.disabled ||
+    nativeConversationSubmissions.has(conversationId)
   )
     return;
-  const nativeSnapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const nativeSnapshot = nativeConversationSnapshots.get(conversationId);
   if (nativeSnapshot && text.trim().startsWith('/') && pendingNativeAttachments.length === 0) {
     nativeSendButton.disabled = true;
     try {
@@ -12936,6 +12950,10 @@ nativeComposer.addEventListener('submit', async (event) => {
   }
   nativeSendButton.disabled = true;
   nativeComposerStatus.textContent = '正在安全保存并提交…';
+  const clientSubmissionId = crypto.randomUUID();
+  const submittedAttachmentIds = new Set(
+    pendingNativeAttachments.map((attachment) => attachment.attachmentId),
+  );
   const blocks = [
     ...(text.trim() ? [{ text, type: 'text' as const }] : []),
     ...pendingNativeAttachments.map((attachment) => ({
@@ -12948,22 +12966,33 @@ nativeComposer.addEventListener('submit', async (event) => {
       type: 'image' as const,
     })),
   ];
+  nativeConversationSubmissions.set(conversationId, clientSubmissionId);
   void window.controlPanel
-    .submitNativeConversation(activeNativeConversationId, {
+    .submitNativeConversation(conversationId, {
       blocks,
-      clientSubmissionId: crypto.randomUUID(),
+      clientSubmissionId,
     })
     .then((result) => {
       if (!result.ok) {
         showToast(result.message ?? '本次输入尚未发送。', 'error');
-        nativeComposerInput.focus();
+        if (activeNativeConversationId === conversationId) nativeComposerInput.focus();
         return;
       }
-      nativeComposerInput.value = '';
-      delete nativeComposerInput.dataset.recoveredDraft;
-      pendingNativeAttachments.splice(0);
-      renderPendingNativeAttachments();
-      resizeNativeComposer();
+      if (activeNativeConversationId === conversationId) {
+        // The input remains editable while the main process durably records the submission. Never
+        // erase text the user typed during that acknowledgement window.
+        if (nativeComposerInput.value === text) {
+          nativeComposerInput.value = '';
+          delete nativeComposerInput.dataset.recoveredDraft;
+          resizeNativeComposer();
+        }
+        for (let index = pendingNativeAttachments.length - 1; index >= 0; index -= 1) {
+          if (submittedAttachmentIds.has(pendingNativeAttachments[index]!.attachmentId)) {
+            pendingNativeAttachments.splice(index, 1);
+          }
+        }
+        renderPendingNativeAttachments();
+      }
       if (result.snapshot) renderNativeConversation(result.snapshot);
       delete nativeSendButton.dataset.sending;
       // Restart the theme-owned confirmation motion even when two sends finish in quick succession.
@@ -12972,12 +13001,15 @@ nativeComposer.addEventListener('submit', async (event) => {
     })
     .catch((error) => {
       showToast(error instanceof Error ? error.message : '本次输入尚未发送。', 'error');
-      nativeComposerInput.focus();
+      if (activeNativeConversationId === conversationId) nativeComposerInput.focus();
     })
     .finally(() => {
+      if (nativeConversationSubmissions.get(conversationId) === clientSubmissionId) {
+        nativeConversationSubmissions.delete(conversationId);
+      }
       const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
       if (snapshot) renderNativeConversation(snapshot);
-      else nativeSendButton.disabled = false;
+      else if (activeNativeConversationId === conversationId) nativeSendButton.disabled = false;
     });
 });
 nativeSendButton.addEventListener('animationend', (event) => {

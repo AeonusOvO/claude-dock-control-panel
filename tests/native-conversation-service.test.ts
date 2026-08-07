@@ -9,6 +9,7 @@ import {
 } from '../src/main/conversation-recovery-store';
 import { FakeConversationAdapter } from '../src/main/fake-conversation-adapter';
 import { NativeConversationService } from '../src/main/native-conversation-service';
+import type { ConversationEvent } from '../src/shared/native-conversation';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -128,6 +129,39 @@ describe('native conversation service', () => {
     expect(result).toMatchObject({ ok: false, message: 'fake startup failure' });
     expect(ownerRegistry.activeConversationIds('claude', projectPath).size).toBe(0);
     expect(recoveryStore.list()).toEqual([]);
+  });
+
+  it('releases the native owner when the adapter reports a fatal stream error', async () => {
+    const adapter = new FakeConversationAdapter();
+    let publish: ((event: ConversationEvent) => void) | undefined;
+    const subscribe = adapter.subscribe.bind(adapter);
+    adapter.subscribe = (listener) => {
+      publish = listener;
+      return subscribe(listener);
+    };
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const started = await service.start({ projectPath });
+
+    publish!({
+      conversationId: started.conversationId,
+      emittedAt: Date.now(),
+      message: 'SDK transport exited',
+      projectPath,
+      revision: 1,
+      runtime: 'claude',
+      sequence: 100,
+      type: 'conversation.error',
+    });
+
+    expect(service.getSnapshot(started.conversationId)).toBeUndefined();
+    expect(ownerRegistry.activeConversationIds('claude', projectPath)).toEqual(new Set());
   });
 
   it('keeps an existing recovery entry when an exact resume fails to start', async () => {
