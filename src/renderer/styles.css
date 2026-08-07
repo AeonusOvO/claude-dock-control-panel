@@ -1358,8 +1358,12 @@ body[data-phase='error'] .status-pill {
 }
 
 .project-folder__history {
+  align-content: start;
   display: grid;
   gap: 2px;
+  /* Never distribute the fixed viewport height across the rows. Long histories scroll at their
+   * natural row height instead of squeezing every title into a one-line sliver. */
+  grid-auto-rows: max-content;
   /* Roughly six rows; running conversations above stay fixed while this list scrolls. */
   max-height: 170px;
   /* Same reason as .project-list: vertical scrolling must not imply horizontal scrolling. */
@@ -1386,6 +1390,7 @@ body[data-phase='error'] .status-pill {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
+  min-height: 27px;
   overflow: hidden;
   padding: 0;
   /* Anchors the delete button so it can occupy the timestamp's slot instead of a column of its own. */
@@ -5868,8 +5873,9 @@ body:has(#native-conversation[data-state='open']) .toast {
   color: var(--accent-fg);
 }
 
-.launch-primary:hover {
+.launch-primary:hover:not(:disabled) {
   background: var(--accent-solid-hover);
+  color: var(--accent-fg);
 }
 
 .launch-secondary {

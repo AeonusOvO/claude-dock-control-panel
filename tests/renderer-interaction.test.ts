@@ -912,6 +912,25 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toMatch(
       /\.project-folder__history \{[\s\S]*?max-height:[\s\S]*?overflow-y: auto;/,
     );
+    expect(rendererStyles).toMatch(
+      /\.project-folder__history \{[^}]*?align-content: start;[^}]*?grid-auto-rows: max-content;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(/\.history-item \{[^}]*?min-height: 27px;[^}]*?\}/);
+  });
+
+  it('does not let an official-network preflight overwrite Claude gateway launch controls', () => {
+    expect(rendererSource).toMatch(
+      /const activeNetworkProvider[\s\S]*?if \(!state\) return undefined;[\s\S]*?state\?\.config\.provider === 'gateway'/,
+    );
+    const preflightRenderer = rendererSource.slice(
+      rendererSource.indexOf('const renderActiveNetworkPreflight'),
+      rendererSource.indexOf('const runActiveNetworkPreflight'),
+    );
+    expect(preflightRenderer).not.toContain('runClaudeButton.disabled');
+    expect(preflightRenderer).not.toContain('launchNewButton');
+    expect(rendererStyles).toMatch(
+      /\.launch-primary:hover:not\(:disabled\) \{\s*background: var\(--accent-solid-hover\);\s*color: var\(--accent-fg\);/,
+    );
   });
 
   it('types Claude-generated titles in place and skips the animation for manual renames', () => {
@@ -1450,8 +1469,10 @@ describe('native conversation component suite', () => {
     );
     expect(nativeLaunch).toContain("nativeComposerStatus.textContent = '正在安全启动 Claude…';");
     expect(nativeLaunch).toContain("'尚未接入模型 · 请先完成配置'");
-    expect(nativeLaunch).toContain("'接入配置暂不可用 · 请重新检测连接'");
-    expect(nativeLaunch).toContain("'启动失败 · 请重试'");
+    expect(nativeLaunch).toContain("'接入配置未就绪 · 请打开配置检查'");
+    expect(nativeLaunch).toContain("'接入配置不可用 · 请打开配置检查'");
+    expect(nativeLaunch).toContain("'Claude Code 启动器不可用 · 请打开任务与下载'");
+    expect(nativeLaunch).toContain("'启动失败 · 请查看错误提示后重试'");
     expect(nativeLaunch).toContain("nativeComposerStatus.textContent = 'Claude 已就绪';");
   });
 

@@ -1,5 +1,9 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ClaudeAgentAdapter } from '../src/main/claude-agent-adapter';
+import {
+  ClaudeAgentAdapter,
+  claudeAgentExecutableFromCommand,
+} from '../src/main/claude-agent-adapter';
 import type { ConversationEvent, ConversationInteraction } from '../src/shared/native-conversation';
 
 class FakeSdkQuery implements AsyncIterable<unknown> {
@@ -88,6 +92,31 @@ const startInput = {
 };
 
 describe('Claude Agent SDK adapter', () => {
+  it('unwraps the NPM command shim to the user-installed native Claude executable', () => {
+    const shim = 'C:\\Users\\Example\\AppData\\Roaming\\npm\\claude.ps1';
+    const expected = path.join(
+      path.dirname(shim),
+      'node_modules',
+      '@anthropic-ai',
+      'claude-code',
+      'bin',
+      'claude.exe',
+    );
+
+    expect(claudeAgentExecutableFromCommand(shim, (candidate) => candidate === expected)).toBe(
+      expected,
+    );
+  });
+
+  it('rejects an incomplete NPM Claude installation with a repairable explanation', () => {
+    expect(() =>
+      claudeAgentExecutableFromCommand(
+        'C:\\Users\\Example\\AppData\\Roaming\\npm\\claude.cmd',
+        () => false,
+      ),
+    ).toThrow(/NPM.*claude\.exe.*重新安装 Claude Code/);
+  });
+
   it('uses the explicitly resolved local executable and emits runtime capabilities', async () => {
     const query = new FakeSdkQuery();
     let capturedOptions: Record<string, unknown> | undefined;

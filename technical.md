@@ -1,9 +1,9 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.3（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+当前架构版本：5.0.0-rc.4（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
 `ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
-版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须显式使用用户本机已安装的
-`claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
+版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须从用户本机的 `claude` 命令解析同一
+安装中的 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
 `win-unpacked`，发现第二份 `claude.exe` 即失败。Codex App Server 原生迁移不属于本 RC；现有
 Codex TUI 继续使用 ConPTY。4.6.0 在原有按接入/模型隔离的服务速度 profile
 和会话 generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
@@ -76,7 +76,7 @@ Preload contextBridge
         ▼
 Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test capability gates
         ├── NativeConversationService ── ConversationAdapter lifecycle / exact UUID resume
-        │        ├── ClaudeAgentAdapter ── user-installed claude.exe / Agent SDK
+        │        ├── ClaudeAgentAdapter ── user-installed claude command / Agent SDK
         │        ├── FakeConversationAdapter ── deterministic isolated integration scenarios
         │        ├── ConversationOwnerRegistry ── runtime + normalized project + UUID single owner
         │        ├── ConversationRecoveryStore ── atomic journal / DPAPI pending prompt
@@ -142,6 +142,10 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   Claude/Codex/CCR；成功后才运行真实一 token 测试并替换旧健康快照。
 - 隔离 profile 使用临时 userData/home/project、假适配器和内存终端，不获取生产单实例锁，不启动
   托盘、更新器、插件变更、外部路由写入或真实 PTY。所有危险入口在主进程再次检查 profile capability。
+- Claude Agent SDK 解析器先查找用户可执行的 `claude` 命令。直接安装返回 `claude.exe` 时原样使用；
+  NPM 的 `claude.cmd` / `claude.ps1` 启动器则只解包到同一安装目录下
+  `node_modules/@anthropic-ai/claude-code/bin/claude.exe`，并在文件不存在时给出可执行的重装诊断。
+  ClaudeDock 不下载、不复制，也不随安装包携带第二份 Claude Code。
 - `FakeConversationAdapter` 的完整场景按固定顺序发出文本、工具成功/失败、图片、任务、用量以及
   permission/question/plan/MCP 请求；renderer 的交互坞只消费队首请求，响应后才显示下一项。
   这条 FIFO 约束既避免卡片堆叠，也让每个 SDK 响应只匹配当前可见请求。
@@ -1239,7 +1243,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   slug 当作用户可读名称；其余只提取 session ID、时间、模型和 usage 等元数据，不跨项目
   枚举。单文件超过 50 MiB 时跳过。渲染层只在项目文件夹的折叠层级中展示历史，不在工作台
   重复生成第二份列表；历史条目全部渲染进 `.project-folder__history` 独立滚动容器（约六行
-  高），运行中对话保持在容器上方不动，滚动位置按文件夹记录、在侧栏因工作区状态刷新而
+  高）。容器使用 `align-content: start` 和内容行轨道，每行至少 27px；13 条夹具在 170px 可视高度
+  中产生约 375px 滚动高度，而不是缩小文字。运行中对话保持在容器上方不动，滚动位置按文件夹记录、在侧栏因工作区状态刷新而
   重建后恢复。文件夹的展开状态只控制历史区：`expandedFolders` 不再被活动会话强制置为
   展开，收起使用中的项目时保留运行中对话行、只隐藏历史与提示区。
 - 历史右键重命名先验证项目路径、UUID、文件类型、50 MiB 上限和 1–60 字符标题，再向对应

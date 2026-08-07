@@ -3,8 +3,9 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **5.0.0-rc.3**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
-迁移为结构化原生对话：Claude Agent SDK 调用用户本机已安装的 `claude.exe`，ClaudeDock 不捆绑
+当前代码版本为 **5.0.0-rc.4**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
+迁移为结构化原生对话：Claude Agent SDK 解析用户本机的 `claude` 命令；NPM 安装时会沿启动器定位
+同一软件包内的 `bin/claude.exe`，ClaudeDock 不捆绑
 第二份 Claude Code；PowerShell/ConPTY 保留为用户明确进入的高级终端。Codex 5.0 RC 仍使用原生
 TUI，只复用能力与所有权接口，不把实验性 App Server 伪装成已完成的结构化会话。正式稳定版必须同时通过可信
 Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在这些门禁完成前，本地构建
@@ -135,6 +136,10 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
 禁用。受管 ChatGPT 会先自动恢复本地网关，确实缺少 Claude Code、模型凭据或可用接入时，输入坞会
 退出“正在启动”并显示对应的环境/配置提示。全新原生会话若在 Claude 创建 JSONL 前启动失败，会
 回滚 owner、路由预约和空恢复记录，不伪装成一次可恢复的异常中断。
+
+官方端点预检只作用于已经确认使用官方接入的项目；Claude 状态尚未加载时不会猜测接入类型，也不会
+覆盖受管网关项目的启动入口。可用主按钮的悬停态沿用当前主题的强调色 token：Telegram 主题由蓝色
+平滑加深，其他主题分别使用自己的强调色，不再通过降低透明度伪装成禁用状态。
 
 IPC 返回成功并不代表新的终端生命周期已经可见，因此 renderer 不使用超时自动解锁。只有观察到
 以下事实之一才恢复操作：新的 conversation UUID、新的运行中 `ptyGeneration`（即使 Windows 复用

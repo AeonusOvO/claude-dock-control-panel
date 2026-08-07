@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   mergeRuntimeClaudeCommands,
@@ -116,6 +116,31 @@ const defaultQueryFactory = async (): Promise<SdkQueryFactory> => {
   return sdk.query as unknown as SdkQueryFactory;
 };
 
+export const claudeAgentExecutableFromCommand = (
+  resolvedCommand: string,
+  fileExists: (candidate: string) => boolean = existsSync,
+): string => {
+  const basename = path.basename(resolvedCommand).toLowerCase();
+  if (basename === 'claude.exe') return resolvedCommand;
+  if (!['claude', 'claude.cmd', 'claude.ps1'].includes(basename)) {
+    throw new Error('本机 Claude Code 命令不是受支持的 Windows 启动器。');
+  }
+  const npmExecutable = path.join(
+    path.dirname(resolvedCommand),
+    'node_modules',
+    '@anthropic-ai',
+    'claude-code',
+    'bin',
+    'claude.exe',
+  );
+  if (!fileExists(npmExecutable)) {
+    throw new Error(
+      '已找到 NPM 的 Claude Code 启动器，但没有找到它安装的 claude.exe。请在“任务与下载”中重新安装 Claude Code。',
+    );
+  }
+  return npmExecutable;
+};
+
 const defaultResolveExecutable = async (
   cwd: string,
   environment: NodeJS.ProcessEnv,
@@ -123,11 +148,10 @@ const defaultResolveExecutable = async (
   if (process.platform !== 'win32') {
     throw new Error('ClaudeDock 目前只在 Windows 上提供原生 Claude 会话。');
   }
-  const resolved = await resolveWindowsCommand('claude.exe', environment, cwd);
-  if (path.basename(resolved).toLowerCase() !== 'claude.exe') {
-    throw new Error('未找到本机安装的 claude.exe；ClaudeDock 不会改用 SDK 内置副本。');
-  }
-  return resolved;
+  // NPM exposes `claude.ps1`/`claude.cmd` on PATH while the native executable lives inside the
+  // installed package. Resolve that user-owned executable explicitly so the Agent SDK uses the
+  // same Claude Code installation without bundling or silently falling back to a second copy.
+  return claudeAgentExecutableFromCommand(await resolveWindowsCommand('claude', environment, cwd));
 };
 
 const commandRecords = (

@@ -148,6 +148,14 @@ const installFixtures = String.raw`
         '任务与下载中心真实进度呈现',
         '历史会话单一 owner 与失败回滚',
       ];
+      names.push(
+        'Agent SDK 启动器与 NPM 安装路径兼容',
+        '安全会话按钮状态单一来源与主题悬停色',
+        '模型接入成功后的原生会话启动事务',
+        '后台活动权威空快照与失联任务处理',
+        '任务与下载中心的阶段和真实进度',
+        '发布候选版安装包与回滚验证',
+      );
       names.forEach((name, index) => {
         const row = el('div', 'history-item');
         const choose = button(''); choose.className = 'history-item__select';
@@ -196,7 +204,7 @@ const installFixtures = String.raw`
       const empty = byId('native-conversation-empty');
       messages.replaceChildren(empty);
       empty.hidden = state !== 'empty';
-      byId('native-composer-status').textContent = state === 'loading' ? 'Claude 正在处理' : state === 'failure' ? '接入配置暂不可用 · 请重新检测连接' : '可以继续对话';
+      byId('native-composer-status').textContent = state === 'loading' ? 'Claude 正在处理' : state === 'failure' ? '接入配置不可用 · 请打开配置检查' : '可以继续对话';
       byId('native-stop').hidden = state !== 'loading';
       if (state === 'empty') return;
       const user = message('user', (body) => body.append(markdown('<p>请完成 <strong>ClaudeDock 5.0</strong> 原生对话迁移，并保留原始空白、代码围栏与工具顺序。</p>')));
@@ -349,7 +357,25 @@ const installFixtures = String.raw`
       operation.append(metrics, el('pre', 'download-task__log', '检测安装方式：npm\n已选择 registry.npmjs.org\nnpm 下载与写入中（总量未知）\n正在校验 claude --version'));
       list.append(operation);
     };
-    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, runtimeSelection, summary, themeMenu, updates };
+    const launchButton = () => {
+      activateProjects();
+      buildHistory(320, true);
+      byId('native-conversation').style.setProperty('display', 'none', 'important');
+      byId('terminal-shell').classList.remove('terminal-shell--native');
+      const workbench = byId('claude-workbench');
+      workbench.classList.add('claude-workbench--open');
+      workbench.setAttribute('aria-hidden', 'false');
+      for (const page of workbench.querySelectorAll('.workbench-page')) {
+        page.classList.toggle('workbench-page--active', page.dataset.workbenchPage === 'session');
+      }
+      const launch = byId('launch-new');
+      launch.disabled = false;
+      launch.removeAttribute('aria-busy');
+      launch.dataset.launchBlocked = 'false';
+      launch.textContent = '新建安全会话';
+      launch.scrollIntoView({ block: 'center' });
+    };
+    window.__nativeQa = { attachments, base, diagnostic, interaction, launchButton, plan, recovery, runtimeSelection, summary, themeMenu, updates };
   })()
 `;
 
@@ -417,6 +443,8 @@ app
         const selectedRuntime = document.querySelector('.runtime-option:has(input:checked)');
         const projectFolder = document.querySelector('.project-folder');
         const historyRows = [...document.querySelectorAll('.history-item')];
+        const historyScroller = document.querySelector('.project-folder__history');
+        const launchButton = document.querySelector('#launch-new');
         const rect = view.getBoundingClientRect();
         return {
           composerDisplay: getComputedStyle(composer).display,
@@ -433,16 +461,25 @@ app
           messagesScrollTop: Math.round(messages.scrollTop),
           innerWidth: window.innerWidth,
           historyRows: historyRows.map((row) => {
+            const rowRect = row.getBoundingClientRect();
             const label = row.querySelector('.history-item__label').getBoundingClientRect();
             const time = row.querySelector('.history-item__time').getBoundingClientRect();
             const remove = row.querySelector('.history-item__delete').getBoundingClientRect();
             return {
               deleteWidth: Math.round(remove.width),
+              labelHeight: Math.round(label.height),
               labelWidth: Math.round(label.width),
               noTailOverlap: label.right <= time.left,
+              rowHeight: Math.round(rowRect.height),
               timeWidth: Math.round(time.width),
             };
           }),
+          historyClientHeight: Math.round(historyScroller?.clientHeight ?? 0),
+          historyScrollHeight: Math.round(historyScroller?.scrollHeight ?? 0),
+          launchBackground: launchButton ? getComputedStyle(launchButton).backgroundColor : '',
+          launchColor: launchButton ? getComputedStyle(launchButton).color : '',
+          launchDisabled: launchButton?.disabled ?? null,
+          launchOpacity: launchButton ? getComputedStyle(launchButton).opacity : '',
           visualViewportWidth: Math.round(window.visualViewport?.width ?? window.innerWidth),
           compactViewport: document.documentElement.dataset.compactViewport ?? '',
           railCollapsed: document.querySelector('.workspace')?.classList.contains('workspace--rail-collapsed') ?? false,
@@ -528,6 +565,27 @@ app
         theme,
         width: 820,
         zoom: 100,
+      });
+    }
+
+    for (const theme of themes) {
+      await window.webContents.executeJavaScript(applyTheme(theme));
+      window.setContentSize(900, 640);
+      window.webContents.setZoomFactor(1);
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: 4, y: 4 });
+      await scene('launchButton');
+      await capture('safe-launch-button', `${theme}-900x640-normal.png`, {
+        interaction: 'normal',
+        theme,
+      });
+      const point = await window.webContents.executeJavaScript(`(() => {
+        const rect = document.querySelector('#launch-new').getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+      })()`);
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
+      await capture('safe-launch-button', `${theme}-900x640-hover.png`, {
+        interaction: 'hover',
+        theme,
       });
     }
 
@@ -647,6 +705,41 @@ app
       await window.webContents.executeJavaScript(
         `for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()`,
       );
+    }
+
+    const historyCaptures = captures.filter((capture) => capture.feature === 'sidebar-history');
+    for (const capture of historyCaptures) {
+      if (capture.dom.historyRows.length !== 13) {
+        throw new Error(`${capture.file}: expected 13 history rows`);
+      }
+      if (capture.dom.historyScrollHeight <= capture.dom.historyClientHeight) {
+        throw new Error(`${capture.file}: long history did not become scrollable`);
+      }
+      if (
+        capture.dom.historyRows.some(
+          (row) => row.rowHeight < 27 || row.labelHeight > row.rowHeight || !row.noTailOverlap,
+        )
+      ) {
+        throw new Error(`${capture.file}: a history row is compressed or overlaps its tail slot`);
+      }
+    }
+    const launchCaptures = captures.filter((capture) => capture.feature === 'safe-launch-button');
+    for (const theme of themes) {
+      const normal = launchCaptures.find(
+        (capture) => capture.theme === theme && capture.interaction === 'normal',
+      );
+      const hover = launchCaptures.find(
+        (capture) => capture.theme === theme && capture.interaction === 'hover',
+      );
+      if (!normal || !hover || normal.dom.launchDisabled || hover.dom.launchDisabled) {
+        throw new Error(`${theme}: safe launch button was missing or disabled`);
+      }
+      if (normal.dom.launchBackground === hover.dom.launchBackground) {
+        throw new Error(`${theme}: safe launch hover did not deepen the theme accent`);
+      }
+      if (hover.dom.launchOpacity !== '1') {
+        throw new Error(`${theme}: safe launch hover became translucent`);
+      }
     }
 
     const byFeature = Object.groupBy(captures, (capture) => capture.feature);

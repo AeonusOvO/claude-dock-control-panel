@@ -2360,6 +2360,10 @@ const activeNetworkProvider = (): NetworkProviderId | undefined => {
   }
   const status = activeStatus();
   const state = status ? claudeStates.get(status.id) : undefined;
+  // Do not guess "official Anthropic" while the project configuration is still loading. That
+  // guess used to start an official-network preflight which could later disable a gateway-backed
+  // Claude launch button, even after the saved gateway configuration had rendered successfully.
+  if (!state) return undefined;
   return state?.config.provider === 'gateway' ? undefined : 'anthropic-claude';
 };
 
@@ -2507,20 +2511,6 @@ const renderActiveNetworkPreflight = (): void => {
     footerConnection.disabled = result?.status === 'testing';
     footerConnection.setAttribute('aria-busy', String(result?.status === 'testing'));
     footerConnectionLabel.textContent = result ? networkStatusLabel(result) : '官方网络待检测';
-  }
-  if (result?.status === 'blocked') {
-    runClaudeButton.disabled = true;
-    runClaudeButton.title = result.reasons[0] ?? result.summary;
-    for (const button of [
-      launchNewButton,
-      launchContinueButton,
-      launchResumeButton,
-      codexLaunchNew,
-      codexLaunchContinue,
-      codexLaunchResume,
-    ]) {
-      button.disabled = true;
-    }
   }
 };
 
@@ -3985,6 +3975,7 @@ const launchNativeClaude = async (
   nativeSendButton.disabled = true;
   nativeComposerStatus.textContent = '正在安全启动 Claude…';
   let launchSucceeded = false;
+  let launchFailureMessage = '';
   try {
     const result = await window.controlPanel.startNativeConversation({
       conversationId,
@@ -3992,7 +3983,8 @@ const launchNativeClaude = async (
       resume: Boolean(conversationId),
     });
     if (!result.ok) {
-      showToast(result.message ?? '无法启动 Claude 原生对话。', 'error');
+      launchFailureMessage = result.message ?? '无法启动 Claude 原生对话。';
+      showToast(launchFailureMessage, 'error');
       return;
     }
     launchSucceeded = true;
@@ -4007,7 +3999,8 @@ const launchNativeClaude = async (
     activateNativeConversation(result.conversationId);
     showToast(result.reused ? '已切换到正在运行的对话。' : 'Claude 原生对话已就绪。');
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '无法启动 Claude 原生对话。', 'error');
+    launchFailureMessage = error instanceof Error ? error.message : '无法启动 Claude 原生对话。';
+    showToast(launchFailureMessage, 'error');
   } finally {
     nativeConversationStarting = false;
     const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
@@ -4024,14 +4017,18 @@ const launchNativeClaude = async (
         !state.config.credentialConfigured;
       nativeSendButton.disabled = true;
       nativeComposerStatus.textContent = !state
-        ? '启动失败 · 请检查接入配置后重试'
+        ? '接入配置未就绪 · 请打开配置检查'
         : state.installation.security !== 'ready'
           ? 'Claude Code 尚未就绪 · 请检查环境'
           : credentialRequired
             ? '尚未接入模型 · 请先完成配置'
             : state.routeHealth?.blocking
-              ? '接入配置暂不可用 · 请重新检测连接'
-              : '启动失败 · 请重试';
+              ? '接入配置不可用 · 请打开配置检查'
+              : /NPM|claude\.exe|启动器/u.test(launchFailureMessage)
+                ? 'Claude Code 启动器不可用 · 请打开任务与下载'
+                : /配置|接入|连接|凭据|模型/u.test(launchFailureMessage)
+                  ? '接入配置不可用 · 请打开配置检查'
+                  : '启动失败 · 请查看错误提示后重试';
     }
   }
 };
@@ -6085,6 +6082,7 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
   const ready = installed && accountReady;
   const waitingForLogin = login.phase === 'waiting' || login.phase === 'starting';
   const launchInProgress = codexLaunchAttempts.isActive(state.sessionId);
+  const officialNetworkBlocked = networkPreflightResults.get('openai-codex')?.status === 'blocked';
 
   codexInstallStep.dataset.state = installed ? 'ready' : 'error';
   codexInstallTitle.textContent = installed
@@ -6154,7 +6152,8 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
           ? '使用 ChatGPT 登录并启动'
           : '新建 Codex 安全会话';
   codexPrimaryAction.textContent = actionLabel;
-  codexPrimaryAction.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  codexPrimaryAction.disabled =
+    codexOperationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
   codexPrimaryAction.setAttribute(
     'aria-busy',
     String(codexOperationInProgress || launchInProgress),
@@ -6164,7 +6163,8 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
     : ready
       ? '新建 Codex 会话'
       : '一键准备 Codex';
-  runClaudeButton.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  runClaudeButton.disabled =
+    codexOperationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
   runClaudeButton.setAttribute('aria-busy', String(codexOperationInProgress || launchInProgress));
   runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
   runClaudeButton.title = ready
@@ -6172,7 +6172,8 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
     : '自动完成官方安装与 ChatGPT 登录';
 
   for (const button of [codexLaunchNew, codexLaunchContinue, codexLaunchResume]) {
-    button.disabled = !ready || codexOperationInProgress || launchInProgress;
+    button.disabled =
+      !ready || codexOperationInProgress || launchInProgress || officialNetworkBlocked;
     button.setAttribute('aria-busy', String(launchInProgress));
   }
 
