@@ -1,6 +1,6 @@
 # 当前版本需改进的 bug
 
-> 状态：5.0.0-rc.1 已完成本地实现、视觉巡检与候选包验证，等待 Draft PR / CI
+> 状态：5.0.0-rc.1 已完成本地实现、视觉巡检与候选包验证；Draft PR #36 的 CI 已通过，等待审查
 >
 > 决策基线：ClaudeDock 4.6.2
 >
@@ -258,6 +258,8 @@ Electron 窗口，而不是只查看隐藏窗口的静态 renderer fixture。
   清单签名、安装/卸载与更新/回滚仍是正式 5.0.0 的发布阻塞项。
 - 本地/远端分支已按祖先关系与 patch-equivalence 审计：PR #33 已 squash 合并；旧工作树提交已等价
   进入 `main`；旧更新中心 Draft PR 已被主线后续实现覆盖；独立 Dependabot PR 不混入本次架构发布。
+- Draft PR #36 的 GitHub Actions `security` 与 `verify` 均通过；PR 保持 Draft，未创建版本标签或
+  稳定 Release。
 
 ## 9. 外部能力依据
 
