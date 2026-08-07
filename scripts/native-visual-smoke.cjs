@@ -52,6 +52,7 @@ const installFixtures = String.raw`
       "html[data-native-qa='true'] #terminal-shell { animation: none !important; grid-template-rows: var(--toolbar-h) minmax(0, 1fr) !important; opacity: 1 !important; }",
       "html[data-native-qa='true'] #terminal-shell > :is(.terminal-stage, .terminal-composer, .terminal-footer) { display: none !important; }",
       "html[data-native-qa='true'] #native-conversation { animation: none !important; display: grid !important; opacity: 1 !important; transform: none !important; }",
+      "html[data-native-qa='true'] #runtime-activity-panel[data-state='open'] { animation: none !important; opacity: 1 !important; transform: none !important; }",
     ].join('\\n');
     document.head.append(qaStyle);
     const byId = (id) => document.getElementById(id);
@@ -159,7 +160,7 @@ const installFixtures = String.raw`
       model.replaceChildren(new Option('Claude Opus 4.6', 'claude-opus-4-6'), new Option('Claude Haiku 4.5', 'claude-haiku-4-5'));
       model.value = 'claude-opus-4-6'; model.disabled = false;
       const effort = byId('native-effort-control');
-      effort.replaceChildren(new Option('Ultra Code · X-High + 编排', 'ultracode'), new Option('最大', 'max'), new Option('更深 · X-High', 'xhigh'));
+      effort.replaceChildren(new Option('Ultra Code', 'ultracode'), new Option('最大', 'max'), new Option('更深 · X-High', 'xhigh'));
       effort.value = 'ultracode'; effort.disabled = false;
       const fast = byId('native-fast-control'); fast.disabled = false; fast.dataset.state = 'requested'; fast.setAttribute('aria-pressed', 'true'); fast.textContent = 'Fast · 已请求';
       const permission = byId('native-permission-control');
@@ -167,6 +168,7 @@ const installFixtures = String.raw`
       permission.disabled = false;
     };
     const base = ({ state = 'success', railWidth = 320, scroll = true } = {}) => {
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
       activateProjects(); buildHistory(railWidth, scroll);
       for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
       const summaryPanel = byId('runtime-activity-panel');
@@ -248,17 +250,66 @@ const installFixtures = String.raw`
       });
       byId('native-composer-input').value = '请对照这两张截图检查四个主题下的布局和动效。';
     };
+    const themeMenu = () => {
+      base();
+      const shell = byId('terminal-theme').closest('.select');
+      shell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    };
     const summary = () => {
       base();
       const panel = byId('runtime-activity-panel'); panel.hidden = false; panel.dataset.state = 'open';
       byId('runtime-activity-trigger').setAttribute('aria-expanded', 'true');
-      byId('runtime-activity-label').textContent = '活动 4';
-      byId('runtime-activity-summary').textContent = '4 个运行中 · 1 个已完成';
-      const fill = (id, rows) => { const list = byId(id); list.replaceChildren(...rows.map(([name, value]) => { const item = el('li'); item.append(el('span', '', name), el('strong', '', value)); return item; })); };
-      fill('runtime-environment-list', [['变更', '+36,216  −2,699'], ['工作区', '本地'], ['分支', 'codex/feature-native-conversation-v5'], ['发布', 'ClaudeDock 5.0.0-rc.1']]);
-      fill('runtime-task-list', [['子智能体', '4 个运行中'], ['检查', '1 项待处理'], ['后台任务', '状态已确认']]);
-      fill('runtime-source-list', [['来源', 'Claude Agent SDK'], ['MCP', 'openai-docs-mcp']]);
-      fill('runtime-process-list', [['前台轮次', '可中断'], ['终端', '高级模式未启动']]);
+      byId('runtime-activity-label').textContent = '活动 2';
+      byId('runtime-activity-summary').textContent = 'Claude 正在处理 · 2 项活动';
+      byId('runtime-environment-meta').textContent = '原生对话';
+      byId('runtime-task-meta').textContent = '2 运行 · 1 完成';
+      byId('runtime-source-meta').textContent = '2 项';
+      const icons = {
+        background: 'M12 4v8l5 3M4.8 17.2a9 9 0 1 0 .3-10.7',
+        foreground: 'M12 3a9 9 0 1 0 9 9M12 7v5l3 2',
+        interface: 'M4 5h16v11H4zM8 20h8M12 16v4',
+        model: 'M12 3v3M12 18v3M3 12h3M18 12h3M8.5 8.5h7v7h-7z',
+        project: 'M3.5 7h6l2 2h9v9.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z',
+        source: 'M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM18 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM7.7 6.1 16.3 17.9',
+        subagent: 'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM16 13a2.5 2.5 0 1 0 0-5M3.5 20c.5-4 8.5-4 9 0M13 17c2.8-1.4 6.8-.5 7.5 2.5',
+        workflow: 'M6 5a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM18 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 23a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM8 3h3a4 4 0 0 1 4 4v4M15 13v4a4 4 0 0 1-4 4H8',
+      };
+      const icon = (kind) => {
+        const mount = el('span', 'runtime-summary-icon'); mount.setAttribute('aria-hidden', 'true');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 24 24');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', icons[kind]); svg.append(path); mount.append(svg); return mount;
+      };
+      const row = ({ action, detail, environment = false, iconKind, status, statusLabel, title }) => {
+        const item = el('li', 'runtime-summary-row' + (environment ? ' runtime-summary-row--environment' : ''));
+        if (status) item.dataset.status = status;
+        const copy = el('div', 'runtime-summary-row__copy');
+        const titleLine = el('div', 'runtime-summary-row__title'); titleLine.append(el('strong', '', title));
+        if (statusLabel) titleLine.append(el('span', 'runtime-summary-row__tag', statusLabel));
+        copy.append(titleLine); if (detail) copy.append(el('span', '', detail));
+        item.append(icon(iconKind), copy);
+        if (action) {
+          const trailing = el('div', 'runtime-summary-row__trailing');
+          trailing.append(action); item.append(trailing);
+        }
+        return item;
+      };
+      byId('runtime-environment-list').replaceChildren(
+        row({ environment: true, iconKind: 'project', title: '项目', detail: 'ClaudeDock' }),
+        row({ environment: true, iconKind: 'interface', title: '界面', detail: '原生对话 · Agent SDK' }),
+        row({ environment: true, iconKind: 'model', title: '模型', detail: 'Claude Opus 4.6' }),
+        row({ environment: true, iconKind: 'foreground', title: '前台', detail: 'Claude 正在处理' }),
+      );
+      const stop = button('停止'); stop.className = 'button button--compact button--quiet runtime-summary-row__action';
+      byId('runtime-task-list').replaceChildren(
+        row({ action: stop, detail: '子智能体 · 完成后返回主对话', iconKind: 'subagent', status: 'running', statusLabel: '运行中', title: '核对四主题视觉矩阵' }),
+        row({ detail: '工作流 · 安装包签名检查', iconKind: 'workflow', status: 'waiting', statusLabel: '等待中', title: '发布前完整验证' }),
+        row({ detail: '后台任务 · 本地执行', iconKind: 'background', status: 'completed', statusLabel: '已完成', title: '生成真实 Electron 截图' }),
+      );
+      byId('runtime-source-list').replaceChildren(
+        row({ iconKind: 'source', title: 'Claude Agent SDK' }),
+        row({ iconKind: 'source', title: '本机 Claude Code CLI' }),
+      );
+      byId('runtime-process-list').replaceChildren();
     };
     const diagnostic = () => {
       base();
@@ -290,7 +341,7 @@ const installFixtures = String.raw`
       operation.append(metrics, el('pre', 'download-task__log', '检测安装方式：npm\n已选择 registry.npmjs.org\nnpm 下载与写入中（总量未知）\n正在校验 claude --version'));
       list.append(operation);
     };
-    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, summary, updates };
+    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, summary, themeMenu, updates };
   })()
 `;
 
@@ -462,18 +513,17 @@ app
       ['recovery', undefined, 'recovery'],
       ['attachments', undefined, 'attachments'],
       ['summary', undefined, 'summary'],
+      ['themeMenu', undefined, 'theme-menu'],
       ['diagnostic', undefined, 'terminal-diagnostic'],
       ['plan', undefined, 'plan'],
       ['updates', undefined, 'updates'],
     ];
-    for (const [themeIndex, theme] of themes.entries()) {
+    for (const theme of themes) {
       // Chromium can retain a just-closed modal backdrop for several hidden-window compositor
-      // frames. A fresh document per theme keeps captures authoritative instead of accepting a
-      // ghosted backdrop as visual evidence for the next theme.
-      if (themeIndex > 0) {
-        await window.loadFile(path.join(root, 'dist', 'renderer', 'index.html'));
-        await window.webContents.executeJavaScript(installFixtures);
-      }
+      // frames. A fresh document for every theme (including the first one after the responsive
+      // matrix) keeps captures authoritative instead of accepting a ghosted backdrop as evidence.
+      await window.loadFile(path.join(root, 'dist', 'renderer', 'index.html'));
+      await window.webContents.executeJavaScript(installFixtures);
       await window.webContents.executeJavaScript(applyTheme(theme));
       window.setContentSize(1180, 760);
       for (const [name, argument, feature] of componentScenes) {
@@ -488,6 +538,21 @@ app
           `for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()`,
         );
       }
+    }
+
+    for (const theme of ['claude', 'telegram']) {
+      await window.webContents.executeJavaScript(applyTheme(theme));
+      window.setContentSize(1180, 760);
+      await scene('base', { railWidth: 320, state: 'success' });
+      await window.webContents.executeJavaScript(
+        `document.querySelector('#native-send').dataset.sending = 'true'`,
+      );
+      await freezeAnimations(window, 0.5);
+      await capture('composer-theme', `${theme}-1180x760-send-mid.png`, {
+        animation: 'send',
+        progress: 0.5,
+        theme,
+      });
     }
 
     await window.webContents.executeJavaScript(applyTheme('telegram'));

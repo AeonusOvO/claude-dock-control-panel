@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **5.0.0-rc.1**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
+当前代码版本为 **5.0.0-rc.2**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
 迁移为结构化原生对话：Claude Agent SDK 调用用户本机已安装的 `claude.exe`，ClaudeDock 不捆绑
 第二份 Claude Code；PowerShell/ConPTY 保留为用户明确进入的高级终端。Codex 5.0 RC 仍使用原生
 TUI，只复用能力与所有权接口，不把实验性 App Server 伪装成已完成的结构化会话。正式稳定版必须同时通过可信
@@ -39,10 +39,12 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   重复占用。进入高级终端会先保存草稿并精确恢复 UUID；任何失败均回滚到原生 owner。
 - Claude JSONL 仍是正文真值。独立恢复日志只记录 owner、启动配置和提交阶段；待确认文本由
   Electron `safeStorage` 加密，无法持久化时阻止发送。不确定的提交只恢复为草稿，绝不自动补发。
-- 顶栏的“当前对话摘要”检查器按需显示环境、前台、子智能体、后台任务和来源；无活动时保持为图标，
-  不再长期显示含糊的“后台任务正在运行”。
-- 模型、effort、Fast、图片与权限控件由同一能力 revision 原子更新。Claude `Ultra Code` 同时显示
-  “工作流编排 · 实际 X-High”；Fast 只显示未请求、已请求、上游确认或已回退，不承诺固定倍率。
+- 顶栏的“当前对话摘要”检查器按需显示环境、前台、子智能体、后台任务和来源；运行中、等待中、
+  已完成使用相邻状态标签和独立语义色，行操作统一在右侧垂直居中。无活动时保持为图标，不再长期
+  显示含糊的“后台任务正在运行”。
+- 模型、effort、Fast、图片与权限控件由同一能力 revision 原子更新。Claude `Ultra Code` 在菜单中
+  解释“工作流编排 · 实际 X-High”，标题栏不重复堆叠已由按钮表达的模型与档位；Fast 只显示
+  未请求、已请求、上游确认或已回退，不承诺固定倍率。
 - Claude/Codex 工作台共用静态指令注册表；完整调用名及版本边界见
   [CLI 指令清单](docs/cli-command-catalog.md)，动态 Skills、Plugins 与 MCP 指令仍以 CLI 原生 `/`
   列表为准。
@@ -61,6 +63,9 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   上下文优先或额度优先。ClaudeDock 不用本地网关请求次数伪造 ChatGPT 订阅剩余额度。
 - Claude 原生对话与独立模型对话均支持受限图片附件；Windows 剪贴板兼容 `items` 与主进程
   `readImage()` 回退，应用副本经过类型、大小、像素、路径与 SVG 安全检查并按会话/TTL 回收。
+- 原生输入坞保持同一提交、附件、键盘和可访问性内核，同时随主题更换外壳：Claude 明亮使用柔和
+  容器与圆形上箭头确认动效；Telegram 明亮使用紧凑扁平输入条、蓝色纸飞机、指针涟漪和发送飞行动效。
+  顶栏“工作台”和“主题”复用同一个菜单按钮组件；主题只有一个入口，点击后打开主题化选择卡片。
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
 - 标题栏统一更新中心聚合 ClaudeDock、Claude Code、Router 与插件更新；“任务与下载”精确显示动作、
   对象、阶段、队列和已用时间，只有存在真实字节总量时才显示百分比、速度与 ETA。

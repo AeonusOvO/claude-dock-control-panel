@@ -143,6 +143,9 @@
   --composer-ring: calc(3px + (1 - var(--press-theme)) * 40px);
   /* Measured live by the renderer so the workbench drawer never covers the input box. */
   --composer-h: 57px;
+  --native-composer-h: 108px;
+  --summary-header-h: 76px;
+  --summary-max-h: 640px;
 
   /* 阴影 */
   --shadow-overlay: 0 18px 44px -18px rgb(31 30 29 / 28%), 0 3px 10px -4px rgb(31 30 29 / 18%);
@@ -1973,6 +1976,10 @@ body[data-phase='error'] .status-pill {
   opacity: 1;
 }
 
+.native-plan-dialog[data-state='closing']::backdrop {
+  opacity: 0;
+}
+
 .native-plan-dialog__shell {
   background: var(--surface-1);
   border: 1px solid var(--line-strong);
@@ -2129,6 +2136,8 @@ body[data-phase='error'] .status-pill {
 .native-composer__send {
   background: var(--accent-solid);
   color: var(--accent-fg);
+  overflow: hidden;
+  position: relative;
 }
 
 .native-composer__send:disabled,
@@ -2139,6 +2148,189 @@ body[data-phase='error'] .status-pill {
 
 .native-composer__send:not(:disabled):hover {
   background: var(--accent-solid-hover);
+}
+
+.native-composer__send-icon--telegram {
+  display: none;
+}
+
+/*
+ * Claude and Telegram share the same semantic composer and interaction code, but not the same
+ * shell. Claude's current clients use a soft, contained prompt card with the attachment action at
+ * the lower-left and a circular upward send action. Telegram Desktop uses a flatter compose strip
+ * with 44 x 46 px edge controls and a circular ripple area. These selectors keep those identities
+ * explicit without forking submission, keyboard, attachment or accessibility behaviour.
+ */
+[data-theme='claude'] .native-composer {
+  background: color-mix(in srgb, var(--surface-terminal) 94%, transparent);
+  padding-bottom: var(--s-3);
+}
+
+[data-theme='claude'] .native-composer__row {
+  border-radius: calc(var(--r-xl) + var(--s-1));
+  box-shadow:
+    var(--sheen),
+    0 12px 32px color-mix(in srgb, var(--text-hi) 5%, transparent);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+}
+
+[data-theme='claude'] .native-composer textarea {
+  min-height: 40px;
+  padding-block: 9px;
+}
+
+[data-theme='claude'] .native-composer__send {
+  height: 38px;
+  width: 38px;
+}
+
+[data-theme='claude'] .native-composer__send[data-sending='true'] {
+  animation: nativeClaudeSendConfirm var(--dur-enter) var(--ease-spring);
+}
+
+[data-theme='claude'] .native-composer__send[data-sending='true'] .native-composer__send-icon {
+  animation: nativeClaudeSendArrow var(--dur-enter) var(--ease-spring);
+}
+
+[data-theme='telegram'] .native-composer {
+  background: var(--surface-1);
+  gap: 0;
+  padding-block: 0;
+  padding-inline: max(var(--s-4), calc((100% - 960px) / 2));
+}
+
+[data-theme='telegram'] .native-composer__row {
+  background: var(--surface-1);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  gap: 0;
+  min-height: 52px;
+  padding: 3px 0;
+}
+
+[data-theme='telegram'] .native-composer__row:focus-within {
+  border-color: transparent;
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent-solid) 72%, transparent);
+}
+
+[data-theme='telegram'] .native-composer textarea {
+  line-height: 22px;
+  min-height: 46px;
+  padding: 12px var(--s-2);
+}
+
+[data-theme='telegram'] .native-composer__attach,
+[data-theme='telegram'] .native-composer__send,
+[data-theme='telegram'] .native-composer__stop {
+  align-self: center;
+  border-radius: var(--r-pill);
+  height: 46px;
+  width: 44px;
+}
+
+[data-theme='telegram'] .native-composer__attach {
+  color: var(--text-dim);
+}
+
+[data-theme='telegram'] .native-composer__send {
+  background: transparent;
+  color: var(--accent-solid);
+}
+
+[data-theme='telegram'] .native-composer__send:not(:disabled):hover {
+  background: var(--accent-tint);
+}
+
+[data-theme='telegram'] .native-composer__send-icon--claude {
+  display: none;
+}
+
+[data-theme='telegram'] .native-composer__send-icon--telegram {
+  display: block;
+  height: 21px;
+  stroke-width: 1.7;
+  width: 21px;
+}
+
+[data-theme='telegram'] .native-composer__meta {
+  align-items: center;
+  background: var(--surface-1);
+  border-top: 1px solid var(--line-subtle);
+  min-height: 30px;
+  padding-inline: var(--s-2);
+}
+
+[data-theme='telegram'] .native-composer__send[data-sending='true'] {
+  animation: nativeTelegramSendConfirm var(--dur-enter) var(--ease-spring);
+}
+
+[data-theme='telegram']
+  .native-composer__send[data-sending='true']
+  .native-composer__send-icon--telegram {
+  animation: nativeTelegramSendFlight var(--dur-enter) var(--ease-enter);
+}
+
+[data-theme='telegram'] .native-composer__send .ripple {
+  background: var(--accent-solid);
+  opacity: 0.18;
+}
+
+@keyframes nativeClaudeSendConfirm {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    transform: scale(1);
+  }
+
+  48% {
+    box-shadow: 0 0 0 6px var(--accent-tint);
+    transform: scale(0.94);
+  }
+}
+
+@keyframes nativeClaudeSendArrow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  48% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes nativeTelegramSendConfirm {
+  0%,
+  100% {
+    background: transparent;
+  }
+
+  52% {
+    background: var(--accent-tint);
+  }
+}
+
+@keyframes nativeTelegramSendFlight {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+
+  42% {
+    opacity: 0.36;
+    transform: translate(6px, -5px);
+  }
+
+  43% {
+    opacity: 0.36;
+    transform: translate(-4px, 4px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
 }
 
 .native-composer__stop {
@@ -2429,20 +2621,6 @@ html[data-compact-viewport='true'] .terminal-title > span {
 
   .workspace:not(.workspace--rail-preview) .panel-resizer {
     display: none;
-  }
-
-  .terminal-toolbar .terminal-theme-picker {
-    display: none;
-  }
-
-  .workbench-trigger > span:last-child {
-    display: none;
-  }
-
-  .workbench-trigger {
-    justify-content: center;
-    padding-inline: 0;
-    width: 30px;
   }
 }
 
@@ -4151,13 +4329,13 @@ html[data-compact-viewport='true'] .terminal-title > span {
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-overlay);
   color: var(--text);
-  max-height: min(620px, calc(100% - var(--toolbar-h) - var(--s-6)));
+  max-height: min(var(--summary-max-h), calc(100% - var(--toolbar-h) - var(--s-6)));
   overflow: hidden;
   position: absolute;
   right: var(--s-4);
   top: calc(var(--toolbar-h) - var(--s-1));
   transform-origin: top right;
-  width: min(448px, calc(100% - var(--s-8)));
+  width: min(420px, calc(100% - var(--s-8)));
   z-index: 34;
 }
 
@@ -4198,91 +4376,269 @@ html[data-compact-viewport='true'] .terminal-title > span {
 }
 
 .runtime-activity-panel > header {
-  align-items: start;
+  align-items: center;
   border-bottom: 1px solid var(--line);
   display: flex;
   justify-content: space-between;
-  padding: var(--s-4);
+  min-height: var(--summary-header-h);
+  padding: var(--s-3) var(--s-4);
 }
 
-.runtime-activity-panel > header > div,
-.runtime-activity-panel__body section {
+.runtime-activity-panel__heading {
   display: grid;
   gap: var(--s-1);
+  min-width: 0;
 }
-.runtime-activity-panel header span {
+
+.runtime-activity-panel__heading > strong {
+  color: var(--text-hi);
+  font-size: var(--text-base);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--ls-snug);
+  line-height: var(--lh-heading);
+}
+
+.runtime-activity-panel__eyebrow,
+.runtime-activity-panel__heading > span:last-child {
   color: var(--text-dim);
   font-size: var(--text-2xs);
+  line-height: var(--lh-compact);
 }
+
+.runtime-activity-panel__eyebrow {
+  color: var(--text-mute);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-body);
+}
+
 .runtime-activity-panel__body {
   display: grid;
-  gap: var(--s-4);
-  max-height: 540px;
+  max-height: calc(var(--summary-max-h) - var(--summary-header-h));
   overflow-y: auto;
-  padding: var(--s-4);
+  scrollbar-gutter: stable;
 }
-.runtime-activity-panel h3 {
-  color: var(--text-lo);
-  font-size: var(--text-xs);
+
+.runtime-summary-section {
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-4);
+}
+
+.runtime-summary-section + .runtime-summary-section {
+  border-top: 1px solid var(--line-subtle);
+}
+
+.runtime-summary-section__heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: var(--s-5);
+}
+
+.runtime-summary-section__heading h3,
+.runtime-summary-section__heading span {
+  color: var(--text-mute);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-compact);
   margin: 0;
 }
+
+.runtime-summary-section__heading h3 {
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-body);
+}
+
+.runtime-summary-section__heading span {
+  font-feature-settings: var(--font-tabular);
+}
+
 .runtime-activity-panel ul {
   display: grid;
-  gap: var(--s-2);
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.runtime-activity-panel li {
-  background: var(--surface-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  display: grid;
-  gap: var(--s-1);
-  padding: var(--s-3);
-}
-.runtime-activity-panel li > span {
-  color: var(--text-dim);
-  font-size: var(--text-2xs);
-}
-.runtime-activity-panel li > a {
-  color: var(--accent-text);
-  overflow-wrap: anywhere;
-}
-.runtime-activity-panel li > button {
-  justify-self: start;
-}
 
-#runtime-environment-list li {
-  align-items: baseline;
+.runtime-summary-row,
+.runtime-summary-empty {
+  align-items: center;
+  animation: runtimeSummaryRowEnter var(--dur-enter) var(--ease-enter) both;
   background: transparent;
   border: 0;
   border-radius: 0;
-  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
-  padding: var(--s-1) 0;
+  display: grid;
+  gap: var(--s-2);
+  min-width: 0;
+  padding: var(--s-2) 0;
 }
 
-#runtime-environment-list li > strong {
+.runtime-summary-row + .runtime-summary-row,
+.runtime-summary-row + .runtime-summary-empty,
+.runtime-summary-empty + .runtime-summary-row {
+  border-top: 1px solid var(--line-subtle);
+}
+
+@keyframes runtimeSummaryRowEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-1));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.runtime-summary-row {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+}
+
+.runtime-summary-icon {
+  align-items: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.runtime-summary-icon svg {
+  fill: none;
+  height: 15px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 15px;
+}
+
+.runtime-summary-row[data-status='running'] .runtime-summary-icon,
+.runtime-summary-row[data-status='running'] .runtime-summary-row__tag {
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+
+.runtime-summary-row[data-status='waiting'] .runtime-summary-icon,
+.runtime-summary-row[data-status='queued'] .runtime-summary-icon,
+.runtime-summary-row[data-status='waiting'] .runtime-summary-row__tag,
+.runtime-summary-row[data-status='queued'] .runtime-summary-row__tag {
+  background: var(--warn-tint);
+  border-color: var(--warn-line);
+  color: var(--warn-text);
+}
+
+.runtime-summary-row[data-status='failed'] .runtime-summary-icon,
+.runtime-summary-row[data-status='lost'] .runtime-summary-icon,
+.runtime-summary-row[data-status='orphaned'] .runtime-summary-icon,
+.runtime-summary-row[data-status='failed'] .runtime-summary-row__tag,
+.runtime-summary-row[data-status='lost'] .runtime-summary-row__tag,
+.runtime-summary-row[data-status='orphaned'] .runtime-summary-row__tag {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+
+.runtime-summary-row__copy {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.runtime-summary-row__title {
+  align-items: center;
+  display: flex;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.runtime-summary-row__title > strong {
+  color: var(--text-hi);
+  font-size: var(--text-xs);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-tight);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-summary-row__tag {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-pill);
+  color: var(--text-dim);
+  flex: 0 0 auto;
+  font-size: var(--text-3xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  padding: var(--s-1) var(--s-2);
+  white-space: nowrap;
+}
+
+.runtime-summary-row__copy > span,
+.runtime-summary-row__copy > a {
+  color: var(--text-dim);
+  font-size: var(--text-2xs);
+  line-height: var(--lh-compact);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.runtime-summary-row__copy > a {
+  color: var(--accent-text);
+}
+
+.runtime-summary-row__trailing {
+  align-items: center;
+  display: flex;
+  justify-self: end;
+}
+
+.runtime-summary-row__action {
+  min-width: 68px;
+}
+
+.runtime-summary-row--environment .runtime-summary-row__copy {
+  align-items: baseline;
+  grid-template-columns: minmax(48px, auto) minmax(0, 1fr);
+}
+
+.runtime-summary-row--environment .runtime-summary-row__title > strong {
   color: var(--text-dim);
   font-weight: var(--fw-medium);
 }
 
-#runtime-environment-list li > span {
-  color: var(--text-hi);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-  text-align: end;
-}
-
-#runtime-source-list {
-  margin-bottom: var(--s-2);
-}
-
-#runtime-source-list li {
-  background: transparent;
-  border: 0;
+.runtime-summary-row--environment .runtime-summary-row__copy > span {
   color: var(--text-lo);
-  padding: var(--s-1) 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: end;
+  white-space: nowrap;
+}
+
+.runtime-summary-empty {
+  color: var(--text-mute);
+  font-size: var(--text-2xs);
+  grid-template-columns: 28px minmax(0, 1fr);
+  line-height: var(--lh-compact);
+}
+
+#runtime-process-list:not(:empty) {
+  border-top: 1px solid var(--line-subtle);
+  margin-top: var(--s-1);
+  padding-top: var(--s-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runtime-summary-row,
+  .runtime-summary-empty {
+    animation-duration: 0.01ms;
+    transform: none;
+  }
 }
 
 .terminal-diagnostic-scrim {
@@ -4527,78 +4883,94 @@ html[data-compact-viewport='true'] .terminal-title > span {
   min-width: 0;
 }
 
-.workbench-trigger {
+.toolbar-menu-button,
+.terminal-toolbar .terminal-theme-control :is(.select__trigger) {
   align-items: center;
   background: var(--surface-3);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   color: var(--text-lo);
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
+  font-family: inherit;
   font-size: var(--text-sm);
+  font-weight: var(--fw-medium);
   gap: 6px;
   height: 30px;
   letter-spacing: var(--ls-body);
   line-height: 19px;
   padding: 0 10px;
+  min-height: 30px;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
   white-space: nowrap;
 }
 
-.workbench-trigger:hover,
-.workbench-trigger[aria-expanded='true'] {
+.toolbar-menu-button:hover,
+.toolbar-menu-button[aria-expanded='true'],
+.terminal-toolbar .terminal-theme-control :is(.select__trigger):hover,
+.terminal-toolbar .terminal-theme-control :is(.select__trigger)[aria-expanded='true'] {
   background: color-mix(in srgb, var(--accent-text) 9%, transparent);
   border-color: var(--text-mute);
   color: var(--text-hi);
 }
 
-.workbench-trigger__dot {
+.toolbar-menu-button:active,
+.terminal-toolbar .terminal-theme-control :is(.select__trigger):active {
+  transform: scale(var(--press-theme));
+}
+
+.toolbar-menu-button__dot,
+.terminal-toolbar .terminal-theme-control :is(.select__trigger)::before {
   background: var(--accent-text);
   border-radius: 50%;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-text) 9%, transparent);
+  content: '';
+  flex: 0 0 auto;
   height: 5px;
   width: 5px;
 }
 
-.terminal-theme-picker {
-  align-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
+.toolbar-menu-button__chevron,
+.terminal-toolbar .terminal-theme-control .select__chevron {
   color: var(--text-dim);
-  display: flex;
-  font-size: var(--text-2xs);
-  gap: 5px;
-  height: 30px;
-  padding: 0 5px 0 8px;
-  white-space: nowrap;
+  display: inline-flex;
+  height: 14px;
+  transition: transform var(--dur-2) var(--ease-spring);
+  width: 14px;
 }
 
-.terminal-theme-picker > span {
+.toolbar-menu-button__chevron svg {
+  fill: none;
+  height: 100%;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 100%;
+}
+
+.toolbar-menu-button[aria-expanded='true'] .toolbar-menu-button__chevron {
+  transform: rotate(180deg);
+}
+
+.terminal-theme-control,
+.terminal-theme-control .select {
   flex: 0 0 auto;
-}
-
-/*
- * The picker is compact chrome, so its trigger overrides the kit's default 36px field geometry.
- * Everything else — the popup, the chevron rotation, the focus halo — comes from the kit.
- */
-.terminal-theme-picker .select {
-  flex: 0 1 auto;
   min-width: 0;
+  width: auto;
 }
 
-.terminal-theme-picker .select__trigger {
-  background: var(--surface-3);
-  border-radius: var(--r-xs);
-  color: var(--text);
-  font-size: var(--text-2xs);
-  gap: var(--s-1);
-  min-height: 22px;
-  padding: 0 4px 0 6px;
-  white-space: nowrap;
+.terminal-toolbar .terminal-theme-control :is(.select__trigger) {
+  width: auto;
 }
 
-.terminal-theme-picker:focus-within {
-  border-color: var(--text-mute);
+.terminal-theme-control .select-native:focus-visible + :is(.select__trigger) {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-tint);
 }
 
 .terminal-stage {
@@ -4861,6 +5233,10 @@ kbd {
 .toast--visible {
   opacity: 1;
   transform: translateY(0);
+}
+
+body:has(#native-conversation[data-state='open']) .toast {
+  bottom: calc(var(--native-composer-h) + var(--s-4));
 }
 
 .workbench-scrim {
@@ -10990,25 +11366,24 @@ body.is-resizing * {
 }
 
 @media (max-width: 850px) {
-  .workbench-trigger {
-    /* Collapses the label to an icon-only button; not a step on the type scale. */
-    font-size: 0;
+  .toolbar-menu-button,
+  .terminal-toolbar .terminal-theme-control :is(.select__trigger) {
     justify-content: center;
     padding: 0;
     width: 32px;
   }
 
-  .workbench-trigger__dot {
-    height: 7px;
-    width: 7px;
-  }
-
-  .terminal-theme-picker > span {
+  .toolbar-menu-button__label,
+  .toolbar-menu-button__chevron,
+  .terminal-theme-control .select__label,
+  .terminal-theme-control .select__chevron {
     display: none;
   }
 
-  .terminal-theme-picker {
-    padding-left: 5px;
+  .toolbar-menu-button__dot,
+  .terminal-toolbar .terminal-theme-control :is(.select__trigger)::before {
+    height: 7px;
+    width: 7px;
   }
 
   .titlebar__status {
@@ -11185,6 +11560,10 @@ body.is-resizing * {
   padding: 5px;
   position: fixed;
   z-index: 70;
+}
+
+.select__listbox[data-scrollable='false'] {
+  overflow-y: hidden;
 }
 
 /* The popup grows out of the edge nearest its trigger, so the motion points back at its source. */
@@ -11444,6 +11823,7 @@ input[type='radio']:disabled:checked {
  * list is mirrored by RIPPLE_SELECTOR in components.ts — keep the two in step.
  */
 #composer-send,
+.native-composer__send,
 .button--primary,
 .chat-send,
 .dialog-primary,

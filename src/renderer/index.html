@@ -982,25 +982,29 @@
               <span class="sr-only" id="native-terminal-toggle-label">高级终端</span>
             </button>
             <button
-              class="workbench-trigger"
+              class="toolbar-menu-button"
               id="workbench-trigger"
               type="button"
               title="Claude 工作台"
               aria-expanded="false"
               aria-controls="claude-workbench"
             >
-              <span class="workbench-trigger__dot" aria-hidden="true"></span>
-              <span id="workbench-trigger-label">Claude 工作台</span>
+              <span class="toolbar-menu-button__dot" aria-hidden="true"></span>
+              <span class="toolbar-menu-button__label" id="workbench-trigger-label"
+                >Claude 工作台</span
+              >
+              <span class="toolbar-menu-button__chevron" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+              </span>
             </button>
-            <label class="terminal-theme-picker" for="terminal-theme">
-              <span>主题</span>
-              <select id="terminal-theme" aria-label="切换终端主题">
+            <div class="terminal-theme-control">
+              <select id="terminal-theme" aria-label="切换终端主题" data-trigger-label="主题">
                 <option value="claude">Claude 明亮</option>
                 <option value="telegram">Telegram 明亮</option>
                 <option value="graphite">石墨深色</option>
                 <option value="midnight">深海蓝</option>
               </select>
-            </label>
+            </div>
             <button
               class="icon-button"
               id="workbench-shortcuts"
@@ -1100,8 +1104,20 @@
                 title="发送（Enter）"
                 aria-label="发送消息"
               >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
+                <svg
+                  class="native-composer__send-icon native-composer__send-icon--claude"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
                   <path d="M12 19V5m-6 6 6-6 6 6" />
+                </svg>
+                <svg
+                  class="native-composer__send-icon native-composer__send-icon--telegram"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path d="m3.5 11.5 16.8-8-5.6 17-3.3-6.8-7.9-2.2Z" />
+                  <path d="m11.4 13.7 8.9-10.2" />
                 </svg>
               </button>
             </div>
@@ -1206,8 +1222,10 @@
           hidden
         >
           <header>
-            <div>
-              <strong>当前对话摘要</strong><span id="runtime-activity-summary">环境与运行状态</span>
+            <div class="runtime-activity-panel__heading">
+              <span class="runtime-activity-panel__eyebrow">当前对话</span>
+              <strong>运行概览</strong>
+              <span id="runtime-activity-summary">当前没有运行中的对话</span>
             </div>
             <button
               class="icon-button"
@@ -1222,16 +1240,25 @@
             </button>
           </header>
           <div class="runtime-activity-panel__body">
-            <section>
-              <h3>环境信息</h3>
+            <section class="runtime-summary-section">
+              <div class="runtime-summary-section__heading">
+                <h3>环境</h3>
+                <span id="runtime-environment-meta">未连接</span>
+              </div>
               <ul id="runtime-environment-list"></ul>
             </section>
-            <section>
-              <h3>子智能体与任务</h3>
+            <section class="runtime-summary-section">
+              <div class="runtime-summary-section__heading">
+                <h3>活动</h3>
+                <span id="runtime-task-meta">无活动</span>
+              </div>
               <ul id="runtime-task-list"></ul>
             </section>
-            <section>
-              <h3>来源与派生进程</h3>
+            <section class="runtime-summary-section">
+              <div class="runtime-summary-section__heading">
+                <h3>来源</h3>
+                <span id="runtime-source-meta">0 项</span>
+              </div>
               <ul id="runtime-source-list"></ul>
               <ul id="runtime-process-list"></ul>
             </section>

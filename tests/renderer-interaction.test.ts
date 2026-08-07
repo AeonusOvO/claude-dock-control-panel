@@ -1421,6 +1421,41 @@ describe('native conversation component suite', () => {
     expect(rendererSource).not.toContain('nativeModelStatus');
   });
 
+  it('uses one shared toolbar menu component for workbench and theme selection', () => {
+    expect(rendererMarkup).toMatch(/class="toolbar-menu-button"\s+id="workbench-trigger"/);
+    expect(rendererMarkup).toMatch(
+      /class="terminal-theme-control">\s*<select id="terminal-theme"[^>]*data-trigger-label="主题"/,
+    );
+    expect(rendererMarkup).not.toContain('terminal-theme-picker');
+    expect(componentKit).toContain('select.dataset.triggerLabel ?? selected?.textContent?.trim()');
+    expect(componentKit).toContain('listbox.dataset.scrollable = String(natural > available);');
+    expect(rendererStyles).toContain(".select__listbox[data-scrollable='false']");
+    expect(rendererStyles).toMatch(
+      /\.toolbar-menu-button,\s*\.terminal-toolbar \.terminal-theme-control :is\(\.select__trigger\) \{[\s\S]*?font-family: inherit;[\s\S]*?font-size: var\(--text-sm\);[\s\S]*?height: 30px;/,
+    );
+  });
+
+  it('keeps one composer behavior while giving Claude and Telegram distinct shells', () => {
+    expect(rendererMarkup).toContain('native-composer__send-icon--claude');
+    expect(rendererMarkup).toContain('native-composer__send-icon--telegram');
+    expect(rendererMarkup).toContain('m3.5 11.5 16.8-8-5.6 17-3.3-6.8-7.9-2.2Z');
+    expect(componentKit).toContain('.native-composer__send');
+    expect(rendererStyles).toMatch(
+      /\[data-theme='claude'\] \.native-composer__row \{[\s\S]*?border-radius: calc\(var\(--r-xl\) \+ var\(--s-1\)\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-theme='telegram'\] \.native-composer__row \{[\s\S]*?border-radius: 0;[\s\S]*?min-height: 52px;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-theme='telegram'\] \.native-composer__attach,[\s\S]*?height: 46px;[\s\S]*?width: 44px;/,
+    );
+    expect(rendererSource).toContain("nativeSendButton.dataset.sending = 'true';");
+    expect(rendererSource).toContain("'--native-composer-h'");
+    expect(rendererStyles).toContain("body:has(#native-conversation[data-state='open']) .toast");
+    expect(rendererStyles).toContain('@keyframes nativeTelegramSendFlight');
+    expect(rendererStyles).toContain('@keyframes nativeClaudeSendArrow');
+  });
+
   it('keeps the collapsed native Ultra control concise and moves details to its description', () => {
     expect(rendererSource).toContain("ultracode: 'Ultra Code'");
     expect(rendererSource).not.toContain("ultracode: 'Ultra Code · X-High + 编排'");
@@ -1434,6 +1469,67 @@ describe('native conversation component suite', () => {
     );
     expect(rendererSource).not.toContain(
       'nativeInteractionStack.replaceChildren(...snapshot.interactions.map(renderNativeInteraction));',
+    );
+  });
+
+  it('renders the conversation summary as one compact four-level inspector', () => {
+    expect(rendererMarkup).toMatch(
+      /runtime-activity-panel__eyebrow">当前对话<[\s\S]*?<strong>运行概览<\/strong>/,
+    );
+    for (const section of ['环境', '活动', '来源']) {
+      expect(rendererMarkup).toMatch(
+        new RegExp(`<h3>${section}</h3>[\\s\\S]*?runtime-(?:environment|task|source)-meta`),
+      );
+    }
+    expect(rendererStyles).toContain('.runtime-summary-section + .runtime-summary-section');
+    expect(rendererStyles).toContain('grid-template-columns: 28px minmax(0, 1fr) auto;');
+    expect(rendererStyles).not.toMatch(
+      /\.runtime-activity-panel li \{[\s\S]*?background: var\(--surface-3\)/,
+    );
+    expect(rendererSource).toContain('RUNTIME_TASK_STATUS_LABELS');
+    expect(rendererSource).toContain('NATIVE_TASK_STATUS_LABELS');
+  });
+
+  it('keeps summary actions inside the shared button component suite', () => {
+    expect(rendererSource).toContain(
+      "stop.className = 'button button--compact button--quiet runtime-summary-row__action';",
+    );
+    expect(rendererSource).toContain(
+      "terminate.className = 'button button--compact button--quiet runtime-summary-row__action';",
+    );
+    expect(rendererStyles).not.toMatch(
+      /\.runtime-summary-row__action \{[^}]*?(?:font-size|border-radius|background|color):/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-summary-row__trailing \{[^}]*?align-items: center;[^}]*?justify-self: end;/,
+    );
+  });
+
+  it('places compact, semantically colored status tags beside task titles', () => {
+    expect(rendererSource).toContain("statusElement.className = 'runtime-summary-row__tag';");
+    expect(rendererStyles).toMatch(
+      /\.runtime-summary-row__title \{[^}]*?display: flex;[^}]*?gap: var\(--s-2\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-status='running'\] \.runtime-summary-row__tag \{[^}]*?background: var\(--accent-tint\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-status='waiting'\] \.runtime-summary-row__tag,[\s\S]*?background: var\(--warn-tint\);/,
+    );
+    expect(rendererStyles).not.toMatch(
+      /\[data-status='completed'\] \.runtime-summary-row__tag[\s\S]*?var\(--ok-/,
+    );
+  });
+
+  it('uses tokenized entry and exit motion for the summary and its rows', () => {
+    expect(rendererStyles).toMatch(
+      /\.runtime-activity-panel\[data-state='opening'\],[\s\S]*?animation: runtimeSummaryEnter var\(--dur-enter\) var\(--ease-enter\) both;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-activity-panel\[data-state='closing'\] \{[\s\S]*?animation: runtimeSummaryExit var\(--dur-exit\) var\(--ease-exit\) both;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-summary-row,[\s\S]*?animation: runtimeSummaryRowEnter var\(--dur-enter\) var\(--ease-enter\) both;/,
     );
   });
 });

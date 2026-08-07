@@ -191,8 +191,8 @@ const main = async () => {
       });
     };
 
-    const capture = async (file, metadata) => {
-      await delay(80);
+    const capture = async (file, metadata, settleMilliseconds = 80) => {
+      if (settleMilliseconds > 0) await delay(settleMilliseconds);
       const result = await client.call('Page.captureScreenshot', {
         captureBeyondViewport: false,
         format: 'png',
@@ -204,7 +204,14 @@ const main = async () => {
       const dom = await evaluate(`(() => ({
         nativeState: document.querySelector('#native-conversation')?.dataset.state ?? '',
         redundantModelStatus: Boolean(document.querySelector('#native-model-status')),
+        summaryAnimation: getComputedStyle(document.querySelector('#runtime-activity-panel')).animationName,
+        summaryBackground: getComputedStyle(document.querySelector('#runtime-activity-panel')).backgroundColor,
+        summaryOpacity: getComputedStyle(document.querySelector('#runtime-activity-panel')).opacity,
         summaryState: document.querySelector('#runtime-activity-panel')?.dataset.state ?? '',
+        openDialogs: [...document.querySelectorAll('dialog[open]')].map((dialog) => dialog.id),
+        workbenchScrim: document.querySelector('#workbench-scrim')?.className ?? '',
+        diagnosticScrimHidden: document.querySelector('#terminal-diagnostic-scrim')?.hidden ?? true,
+        summaryPointStack: document.elementsFromPoint(window.innerWidth - 220, 220).slice(0, 6).map((element) => element.id || element.className || element.tagName),
         terminalToggleClass: document.querySelector('#native-terminal-toggle')?.className ?? '',
         theme: document.documentElement.dataset.theme ?? '',
         title: document.querySelector('#terminal-project')?.textContent ?? '',
@@ -258,6 +265,51 @@ const main = async () => {
         interaction: 'theme-change',
         theme,
       });
+      await click('.terminal-theme-control .select');
+      await waitFor(
+        `() => document.querySelector('.select__listbox[data-open="true"]')?.textContent?.includes('Telegram')`,
+        `${theme} theme selection card`,
+      );
+      await capture(`${theme}-theme-menu-open.png`, {
+        interaction: 'theme-menu',
+        theme,
+      });
+      await click('#terminal-project');
+      await waitFor(
+        `() => !document.querySelector('.select__listbox[data-open="true"]')`,
+        `${theme} theme selection card close`,
+      );
+
+      if (theme === 'claude' || theme === 'telegram') {
+        await click('#native-composer-input');
+        await client.call('Input.insertText', { text: `${theme} 发送动效核对` });
+        await click('#native-send');
+        await waitFor(
+          `() => document.querySelector('#native-send')?.dataset.sending === 'true'`,
+          `${theme} send confirmation motion`,
+        );
+        await evaluate(`(() => {
+          const button = document.querySelector('#native-send');
+          for (const animation of button?.getAnimations({ subtree: true }) ?? []) {
+            const duration = animation.effect?.getTiming().duration;
+            if (typeof duration !== 'number') continue;
+            animation.pause();
+            animation.currentTime = duration * 0.5;
+          }
+          return true;
+        })()`);
+        await capture(
+          `${theme}-send-mid.png`,
+          { animation: 'send-mid', interaction: 'send', theme },
+          0,
+        );
+        await evaluate(`(() => {
+          const button = document.querySelector('#native-send');
+          for (const animation of button?.getAnimations({ subtree: true }) ?? []) animation.cancel();
+          delete button.dataset.sending;
+          return true;
+        })()`);
+      }
     }
 
     await click('#native-composer-input');
@@ -331,17 +383,36 @@ const main = async () => {
       `() => document.querySelector('#runtime-activity-panel')?.dataset.state === 'open'`,
       'the conversation summary inspector',
     );
+    await waitFor(
+      `() => document.querySelector('#runtime-activity-panel')?.getAnimations({ subtree: true }).every((animation) => animation.playState === 'finished')`,
+      'the conversation summary entrance animation',
+    );
     await capture('midnight-summary-open.png', {
       interaction: 'summary-open',
       theme: 'midnight',
     });
     await click('#runtime-activity-close');
-    await delay(70);
-    await capture('midnight-summary-exit-mid.png', {
-      animation: 'exit-mid',
-      interaction: 'summary-close',
-      theme: 'midnight',
-    });
+    await delay(30);
+    await evaluate(`(() => {
+      const panel = document.querySelector('#runtime-activity-panel');
+      for (const animation of panel?.getAnimations({ subtree: true }) ?? []) {
+        if (animation.playState !== 'running') continue;
+        const duration = animation.effect?.getTiming().duration;
+        if (typeof duration !== 'number') continue;
+        animation.pause();
+        animation.currentTime = duration * 0.5;
+      }
+      return panel?.dataset.state === 'closing';
+    })()`);
+    await capture(
+      'midnight-summary-exit-mid.png',
+      {
+        animation: 'exit-mid',
+        interaction: 'summary-close',
+        theme: 'midnight',
+      },
+      0,
+    );
 
     await click('#native-terminal-toggle');
     await delay(70);

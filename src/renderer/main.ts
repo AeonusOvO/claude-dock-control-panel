@@ -568,8 +568,11 @@ const runtimeActivityLabel = requiredElement<HTMLElement>('#runtime-activity-lab
 const runtimeActivityPanel = requiredElement<HTMLElement>('#runtime-activity-panel');
 const runtimeActivitySummary = requiredElement<HTMLElement>('#runtime-activity-summary');
 const runtimeActivityClose = requiredElement<HTMLButtonElement>('#runtime-activity-close');
+const runtimeEnvironmentMeta = requiredElement<HTMLElement>('#runtime-environment-meta');
 const runtimeEnvironmentList = requiredElement<HTMLUListElement>('#runtime-environment-list');
+const runtimeTaskMeta = requiredElement<HTMLElement>('#runtime-task-meta');
 const runtimeTaskList = requiredElement<HTMLUListElement>('#runtime-task-list');
+const runtimeSourceMeta = requiredElement<HTMLElement>('#runtime-source-meta');
 const runtimeSourceList = requiredElement<HTMLUListElement>('#runtime-source-list');
 const runtimeProcessList = requiredElement<HTMLUListElement>('#runtime-process-list');
 const terminalDiagnostic = requiredElement<HTMLElement>('#terminal-diagnostic');
@@ -1899,6 +1902,176 @@ const RUNTIME_PHASE_LABELS: Record<RuntimeActivitySnapshot['phase'], string> = {
 const runtimeTaskIsUnfinished = (task: RuntimeTaskView): boolean =>
   task.status === 'queued' || task.status === 'running' || task.status === 'waiting';
 
+type RuntimeSummaryIconKind =
+  | 'background'
+  | 'empty'
+  | 'foreground'
+  | 'interface'
+  | 'model'
+  | 'process'
+  | 'project'
+  | 'source'
+  | 'subagent'
+  | 'web'
+  | 'workflow';
+
+const RUNTIME_SUMMARY_ICON_PATHS: Record<RuntimeSummaryIconKind, string[]> = {
+  background: ['M12 4v8l5 3', 'M4.8 17.2a9 9 0 1 0 .3-10.7'],
+  empty: ['M12 8v4', 'M12 16h.01', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z'],
+  foreground: ['M12 3a9 9 0 1 0 9 9', 'M12 7v5l3 2'],
+  interface: ['M4 5h16v11H4z', 'M8 20h8', 'M12 16v4'],
+  model: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M8.5 8.5h7v7h-7z'],
+  process: ['M4 5h16v14H4z', 'm7 10 2 2-2 2', 'M13 14h4'],
+  project: ['M3.5 7h6l2 2h9v9.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z'],
+  source: [
+    'M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M18 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M7.7 6.1 16.3 17.9',
+  ],
+  subagent: [
+    'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
+    'M16 13a2.5 2.5 0 1 0 0-5',
+    'M3.5 20c.5-4 8.5-4 9 0',
+    'M13 17c2.8-1.4 6.8-.5 7.5 2.5',
+  ],
+  web: [
+    'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z',
+    'M3 12h18',
+    'M12 3c2.5 2.4 3.7 5.4 3.7 9S14.5 18.6 12 21',
+    'M12 3C9.5 5.4 8.3 8.4 8.3 12S9.5 18.6 12 21',
+  ],
+  workflow: [
+    'M6 5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M18 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M6 23a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M8 3h3a4 4 0 0 1 4 4v4',
+    'M15 13v4a4 4 0 0 1-4 4H8',
+  ],
+};
+
+const RUNTIME_TASK_KIND_LABELS: Record<RuntimeTaskView['kind'], string> = {
+  cron: '定时任务',
+  mcp: 'MCP 任务',
+  monitor: '监控任务',
+  shell: '本地命令',
+  subagent: '子智能体',
+  teammate: '协作智能体',
+  web: 'Web 任务',
+  workflow: '工作流',
+};
+
+const RUNTIME_TASK_STATUS_LABELS: Record<RuntimeTaskView['status'], string> = {
+  completed: '已完成',
+  failed: '失败',
+  orphaned: '状态待确认',
+  queued: '排队中',
+  running: '运行中',
+  waiting: '等待中',
+};
+
+const NATIVE_TASK_KIND_LABELS: Record<ConversationSnapshot['tasks'][number]['kind'], string> = {
+  background: '后台任务',
+  subagent: '子智能体',
+  web: 'Web 任务',
+  workflow: '工作流',
+};
+
+const NATIVE_TASK_STATUS_LABELS: Record<ConversationSnapshot['tasks'][number]['status'], string> = {
+  completed: '已完成',
+  failed: '失败',
+  lost: '状态待确认',
+  queued: '排队中',
+  running: '运行中',
+  stopped: '已停止',
+  waiting: '等待中',
+};
+
+const runtimeSummaryTaskIcon = (
+  kind: RuntimeTaskView['kind'] | ConversationSnapshot['tasks'][number]['kind'],
+): RuntimeSummaryIconKind => {
+  if (kind === 'subagent' || kind === 'teammate') return 'subagent';
+  if (kind === 'web') return 'web';
+  if (kind === 'workflow') return 'workflow';
+  return 'background';
+};
+
+const createRuntimeSummaryIcon = (kind: RuntimeSummaryIconKind): HTMLSpanElement => {
+  const icon = document.createElement('span');
+  icon.className = 'runtime-summary-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  for (const pathDefinition of RUNTIME_SUMMARY_ICON_PATHS[kind]) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', pathDefinition);
+    svg.append(path);
+  }
+  icon.append(svg);
+  return icon;
+};
+
+interface RuntimeSummaryRowInput {
+  action?: HTMLButtonElement;
+  detail?: string;
+  environment?: boolean;
+  icon: RuntimeSummaryIconKind;
+  status?: string;
+  statusLabel?: string;
+  title: string;
+}
+
+const createRuntimeSummaryRow = ({
+  action,
+  detail,
+  environment = false,
+  icon,
+  status,
+  statusLabel,
+  title,
+}: RuntimeSummaryRowInput): HTMLLIElement => {
+  const item = document.createElement('li');
+  item.className = `runtime-summary-row${environment ? ' runtime-summary-row--environment' : ''}`;
+  if (status) item.dataset.status = status;
+  const copy = document.createElement('div');
+  copy.className = 'runtime-summary-row__copy';
+  const titleLine = document.createElement('div');
+  titleLine.className = 'runtime-summary-row__title';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  heading.title = title;
+  titleLine.append(heading);
+  if (statusLabel) {
+    const statusElement = document.createElement('span');
+    statusElement.className = 'runtime-summary-row__tag';
+    statusElement.textContent = statusLabel;
+    titleLine.append(statusElement);
+  }
+  copy.append(titleLine);
+  if (detail) {
+    const description = document.createElement('span');
+    description.textContent = detail;
+    description.title = detail;
+    copy.append(description);
+  }
+  item.append(createRuntimeSummaryIcon(icon), copy);
+  if (action) {
+    const trailing = document.createElement('div');
+    trailing.className = 'runtime-summary-row__trailing';
+    trailing.append(action);
+    item.append(trailing);
+  }
+  return item;
+};
+
+const createRuntimeSummaryEmpty = (message: string): HTMLLIElement => {
+  const item = document.createElement('li');
+  item.className = 'runtime-summary-empty';
+  const text = document.createElement('span');
+  text.textContent = message;
+  item.append(createRuntimeSummaryIcon('empty'), text);
+  return item;
+};
+
 const setRuntimeSummaryOpen = (open: boolean, restoreFocus = false): void => {
   if (runtimeSummaryCloseTimer !== undefined) {
     window.clearTimeout(runtimeSummaryCloseTimer);
@@ -1939,15 +2112,32 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
   );
   const webProcesses = state?.webProcesses ?? [];
   const activityCount = unfinished.length + nativeUnfinished.length + webProcesses.length;
+  const completedCount =
+    (state?.tasks.filter((task) => task.status === 'completed').length ?? 0) +
+    nativeTasks.filter((task) => task.status === 'completed' || task.status === 'stopped').length;
+  const attentionCount =
+    (state?.tasks.filter((task) => task.status === 'failed' || task.status === 'orphaned').length ??
+      0) + nativeTasks.filter((task) => task.status === 'failed' || task.status === 'lost').length;
   runtimeActivityTrigger.hidden = false;
   runtimeActivityTrigger.dataset.active = String(activityCount > 0);
   runtimeActivityTrigger.dataset.phase = state?.phase ?? nativeSnapshot?.phase ?? 'stopped';
   runtimeActivityLabel.textContent = activityCount > 0 ? `活动 ${activityCount}` : '对话摘要';
-  runtimeActivitySummary.textContent = nativeSnapshot
-    ? `${nativePhaseLabel(nativeSnapshot.phase)} · 子智能体 ${nativeTasks.filter((task) => task.kind === 'subagent').length}`
+  const phaseLabel = nativeSnapshot
+    ? nativePhaseLabel(nativeSnapshot.phase)
     : state
-      ? `${RUNTIME_PHASE_LABELS[state.phase]} · 检测到的子智能体 ${state.subagentCount}`
+      ? RUNTIME_PHASE_LABELS[state.phase]
       : '当前没有运行中的对话';
+  runtimeActivitySummary.textContent =
+    activityCount > 0 ? `${phaseLabel} · ${activityCount} 项活动` : phaseLabel;
+  runtimeEnvironmentMeta.textContent = nativeSnapshot ? '原生对话' : state ? '高级终端' : '未连接';
+  runtimeTaskMeta.textContent =
+    activityCount > 0
+      ? `${activityCount} 运行${completedCount > 0 ? ` · ${completedCount} 完成` : ''}`
+      : attentionCount > 0
+        ? `${attentionCount} 待处理`
+        : completedCount > 0
+          ? `${completedCount} 完成`
+          : '无活动';
 
   const active = activeStatus();
   if (active) renderActiveStatus(active);
@@ -1963,11 +2153,12 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
     footerStatus.textContent = '需要手动继续';
   }
 
-  const environmentRows: Array<[string, string]> = [
-    ['项目', active ? projectNameFromPath(active.cwd) : '未打开'],
-    ['界面', nativeSnapshot ? '原生对话 · Agent SDK' : '高级终端 · ConPTY'],
-    ['模型', nativeSnapshot?.capabilities?.model ?? '等待运行时上报'],
+  const environmentRows: Array<[RuntimeSummaryIconKind, string, string]> = [
+    ['project', '项目', active ? projectNameFromPath(active.cwd) : '未打开'],
+    ['interface', '界面', nativeSnapshot ? '原生对话 · Agent SDK' : '高级终端 · ConPTY'],
+    ['model', '模型', nativeSnapshot?.capabilities?.model ?? '等待运行时上报'],
     [
+      'foreground',
       '前台',
       nativeSnapshot
         ? nativePhaseLabel(nativeSnapshot.phase)
@@ -1977,52 +2168,38 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
     ],
   ];
   runtimeEnvironmentList.replaceChildren(
-    ...environmentRows.map(([label, value]) => {
-      const item = document.createElement('li');
-      const title = document.createElement('strong');
-      title.textContent = label;
-      const detail = document.createElement('span');
-      detail.textContent = value;
-      item.append(title, detail);
-      return item;
-    }),
+    ...environmentRows.map(([icon, title, detail]) =>
+      createRuntimeSummaryRow({ detail, environment: true, icon, title }),
+    ),
   );
 
   runtimeTaskList.replaceChildren(
     ...(state?.tasks ?? []).map((task) => {
-      const item = document.createElement('li');
-      const title = document.createElement('strong');
-      title.textContent = task.description;
-      const details = document.createElement('span');
-      const tokenLabel =
-        task.tokenUse === 'likely'
-          ? '可能持续消耗 token'
-          : task.tokenUse === 'none'
-            ? '不消耗模型 token'
-            : 'token 状态未知';
-      const wakeLabel =
-        task.willWakeParent === true
-          ? '完成后唤醒主对话'
-          : task.willWakeParent === false
-            ? '不唤醒主对话'
-            : '唤醒状态未知';
-      details.textContent = `${task.kind} · ${task.status} · ${tokenLabel} · ${wakeLabel}`;
-      item.append(title, details);
-      return item;
+      const details = [
+        RUNTIME_TASK_KIND_LABELS[task.kind],
+        task.agentType,
+        task.tokenUse === 'likely' ? '持续使用模型' : undefined,
+        task.tokenUse === 'none' ? '本地执行' : undefined,
+        task.willWakeParent === true ? '完成后返回主对话' : undefined,
+      ].filter((part): part is string => Boolean(part));
+      return createRuntimeSummaryRow({
+        detail: details.join(' · '),
+        icon: runtimeSummaryTaskIcon(task.kind),
+        status: task.status,
+        statusLabel: RUNTIME_TASK_STATUS_LABELS[task.status],
+        title: task.description,
+      });
     }),
     ...nativeTasks.map((task) => {
-      const item = document.createElement('li');
-      const title = document.createElement('strong');
-      title.textContent = task.description;
-      const details = document.createElement('span');
-      details.textContent = `${task.kind} · ${task.status === 'lost' ? '状态待确认' : task.status}`;
-      item.append(title, details);
+      let stop: HTMLButtonElement | undefined;
       if (task.cancellable && ['queued', 'running', 'waiting'].includes(task.status)) {
-        const stop = document.createElement('button');
+        stop = document.createElement('button');
+        stop.className = 'button button--compact button--quiet runtime-summary-row__action';
         stop.type = 'button';
-        stop.textContent = '停止任务';
+        stop.textContent = '停止';
         stop.addEventListener('click', () => {
-          stop.disabled = true;
+          stop!.disabled = true;
+          stop!.textContent = '停止中…';
           void window.controlPanel
             .stopNativeConversationTask(nativeSnapshot!.conversationId, task.id)
             .then((result) => {
@@ -2030,25 +2207,39 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
             })
             .catch(() => showToast('无法停止这项任务。', 'error'));
         });
-        item.append(stop);
       }
-      return item;
+      return createRuntimeSummaryRow({
+        action: stop,
+        detail: [NATIVE_TASK_KIND_LABELS[task.kind], task.summary]
+          .filter((part): part is string => Boolean(part))
+          .join(' · '),
+        icon: runtimeSummaryTaskIcon(task.kind),
+        status: task.status,
+        statusLabel: NATIVE_TASK_STATUS_LABELS[task.status],
+        title: task.description,
+      });
     }),
   );
   if ((state?.tasks.length ?? 0) + nativeTasks.length === 0) {
-    const empty = document.createElement('li');
-    empty.textContent = '本轮没有检测到子智能体或后台任务';
-    runtimeTaskList.append(empty);
+    runtimeTaskList.append(createRuntimeSummaryEmpty('本轮没有检测到子智能体或后台任务'));
   }
 
   runtimeProcessList.replaceChildren(
     ...webProcesses.map((process) => {
-      const item = document.createElement('li');
-      const title = document.createElement('strong');
-      title.textContent = `${process.name} · PID ${process.pid}`;
-      const command = document.createElement('span');
-      command.textContent = process.commandSummary;
-      item.append(title, command);
+      const terminate = document.createElement('button');
+      terminate.className = 'button button--compact button--quiet runtime-summary-row__action';
+      terminate.type = 'button';
+      terminate.textContent = process.status === 'stopping' ? '结束中…' : '结束';
+      terminate.disabled = process.status === 'stopping';
+      const item = createRuntimeSummaryRow({
+        action: terminate,
+        detail: process.commandSummary,
+        icon: 'process',
+        status: process.status === 'stopping' ? 'waiting' : 'running',
+        statusLabel: process.status === 'stopping' ? '正在结束' : `PID ${process.pid}`,
+        title: process.name,
+      });
+      const copy = item.querySelector<HTMLElement>('.runtime-summary-row__copy')!;
       for (const target of process.urls) {
         const link = document.createElement('a');
         link.href = target.url;
@@ -2057,50 +2248,34 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
           event.preventDefault();
           void openExternal(target.url);
         });
-        item.append(link);
+        copy.append(link);
       }
       if (process.exposureWarning) {
         const warning = document.createElement('span');
         warning.textContent = process.exposureWarning;
-        item.append(warning);
+        copy.append(warning);
       }
-      const terminate = document.createElement('button');
-      terminate.type = 'button';
-      terminate.textContent = process.status === 'stopping' ? '正在结束…' : '结束进程';
-      terminate.disabled = process.status === 'stopping';
       terminate.addEventListener('click', () => {
         terminate.disabled = true;
+        terminate.textContent = '结束中…';
         void window.controlPanel
           .terminateRuntimeProcess(state!.sessionId, process.processKey)
           .then(renderRuntimeActivity)
           .catch(() => showToast('无法结束该 Web 进程；所有权可能已经变化。', 'error'));
       });
-      item.append(terminate);
       return item;
     }),
   );
-  if (webProcesses.length === 0) {
-    const empty = document.createElement('li');
-    empty.textContent = '未发现当前会话派生的 Web 监听进程';
-    runtimeProcessList.append(empty);
-  }
+  const sources = [
+    nativeSnapshot ? 'Claude Agent SDK' : undefined,
+    nativeSnapshot ? '本机 Claude Code CLI' : state ? 'Claude Code 运行事件' : undefined,
+  ].filter((source): source is string => Boolean(source));
+  runtimeSourceMeta.textContent = `${sources.length + webProcesses.length} 项`;
   runtimeSourceList.replaceChildren(
-    ...[
-      nativeSnapshot ? 'Claude Agent SDK' : undefined,
-      nativeSnapshot ? '本机 Claude Code CLI' : state ? 'Claude Code 运行事件' : undefined,
-      webProcesses.length > 0 ? `派生 Web 进程 ${webProcesses.length}` : undefined,
-    ]
-      .filter((source): source is string => Boolean(source))
-      .map((source) => {
-        const item = document.createElement('li');
-        item.textContent = source;
-        return item;
-      }),
+    ...sources.map((source) => createRuntimeSummaryRow({ icon: 'source', title: source })),
   );
-  if (runtimeSourceList.childElementCount === 0) {
-    const empty = document.createElement('li');
-    empty.textContent = '暂无活动来源';
-    runtimeSourceList.append(empty);
+  if (sources.length === 0 && webProcesses.length === 0) {
+    runtimeSourceList.append(createRuntimeSummaryEmpty('暂无活动来源'));
   }
 };
 
@@ -3842,6 +4017,10 @@ const launchNativeClaude = async (
 const resizeNativeComposer = (): void => {
   nativeComposerInput.style.height = 'auto';
   nativeComposerInput.style.height = `${Math.min(nativeComposerInput.scrollHeight, 168)}px`;
+  document.documentElement.style.setProperty(
+    '--native-composer-h',
+    `${Math.ceil(nativeComposer.getBoundingClientRect().height)}px`,
+  );
 };
 
 const renderPendingNativeAttachments = (): void => {
@@ -12764,6 +12943,10 @@ nativeComposer.addEventListener('submit', async (event) => {
       renderPendingNativeAttachments();
       resizeNativeComposer();
       if (result.snapshot) renderNativeConversation(result.snapshot);
+      delete nativeSendButton.dataset.sending;
+      // Restart the theme-owned confirmation motion even when two sends finish in quick succession.
+      void nativeSendButton.offsetWidth;
+      nativeSendButton.dataset.sending = 'true';
     })
     .catch((error) => {
       showToast(error instanceof Error ? error.message : '本次输入尚未发送。', 'error');
@@ -12774,6 +12957,9 @@ nativeComposer.addEventListener('submit', async (event) => {
       if (snapshot) renderNativeConversation(snapshot);
       else nativeSendButton.disabled = false;
     });
+});
+nativeSendButton.addEventListener('animationend', (event) => {
+  if (event.target === nativeSendButton) delete nativeSendButton.dataset.sending;
 });
 nativeComposerInput.addEventListener('input', () => {
   delete nativeComposerInput.dataset.recoveredDraft;

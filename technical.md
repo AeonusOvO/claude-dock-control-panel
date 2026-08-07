@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.1（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+当前架构版本：5.0.0-rc.2（2026-08-07）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
 `ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
 版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须显式使用用户本机已安装的
 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
@@ -145,6 +145,15 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
 - `.button` 是唯一文字按钮基类，`button--compact`、`button--primary`、`button--danger` 只表达密度
   与语义；`.icon-button` 是标题栏、摘要和浮层 chrome 的唯一图标按钮基类。renderer 不允许再引入
   平行的按钮基类或在业务容器中重写字号。模型、effort 已由底栏按钮表达时，标题区不重复说明。
+- `.toolbar-menu-button` 与增强选择器的 trigger 共用同一组标题栏菜单几何和状态规则；工作台与主题
+  因而拥有一致字号、字重、圆角、描边、dot、chevron、hover/press 和 850px 以下折叠行为。主题的
+  原生 `<select>` 仍是事实来源，但视觉上只有一个菜单按钮和一个 fixed listbox；只有选项实际溢出时
+  才保留滚动条。
+- `#native-composer` 是 Claude/Telegram 共用的提交与附件内核。主题只切换 CSS 外壳和两个互斥 SVG：
+  Claude 使用圆形上箭头及 `nativeClaudeSend*` 确认关键帧；Telegram 使用纸飞机及
+  `nativeTelegramSend*` 涟漪/飞行关键帧。发送成功只短暂设置 `data-sending=true`，在 `animationend`
+  后清除；`prefers-reduced-motion` 关闭装饰动画。输入坞实测高度写入 `--native-composer-h`，toast
+  使用该值避开输入操作区。
 - `scripts/native-visual-smoke.cjs` 生成四主题、三窗口尺寸、三项目栏宽度、三缩放档及进退场关键帧；
   `scripts/real-electron-visual-qa.cjs` 另外启动带隔离 `RuntimeProfile` 的真实可见 Electron 窗口，
   通过 DevTools 输入事件逐项点击权限、提问、计划、MCP、摘要和高级终端，并把截图与 DOM 状态清单
@@ -1892,12 +1901,18 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
   <https://claude.com/docs/connectors/building/mcp-apps/design-guidelines>
 - Claude 官方透明主题规范：
   <https://claude.com/docs/connectors/building/mcp-apps/transparent-theming>
-- Telegram Desktop 官方仓库（Open Sans 与桌面交互基线）：
+- Telegram Desktop 官方仓库（Roboto、42px 圆形发送按钮与纸飞机/涟漪交互基线）：
   <https://github.com/telegramdesktop/tdesktop>
+- Telegram Desktop 官方输入与发送按钮样式源：
+  <https://github.com/telegramdesktop/tdesktop/blob/dev/Telegram/SourceFiles/chat_helpers/chat_helpers.style>
+- Telegram Desktop 官方 changelog（发送/回复涟漪与消息发送动画）：
+  <https://github.com/telegramdesktop/tdesktop/blob/dev/changelog.txt>
 - Telegram Web A 主题与动效令牌实现：
   <https://github.com/Ajaxy/telegram-tt>
-- Open Sans 字体源：
-  <https://github.com/googlefonts/opensans>
+- Claude Desktop 官方导航教程（当前桌面输入区与附件入口）：
+  <https://claude.com/resources/tutorials/navigating-the-claude-desktop-app>
+- Claude 官方文件上传说明：
+  <https://support.claude.com/en/articles/8241126-upload-files-to-claude>
 - Fontsource 字体文件仓库：
   <https://github.com/fontsource/font-files>
 - Electron Security：
