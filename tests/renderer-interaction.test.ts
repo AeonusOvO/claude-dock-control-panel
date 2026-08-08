@@ -1505,6 +1505,34 @@ describe('native conversation component suite', () => {
     expect(submission).not.toContain('.submitNativeConversation(activeNativeConversationId, {');
   });
 
+  it('keeps user prompts as bubbles and streams each assistant turn through one terminal shell', () => {
+    const nativeMessageRenderer = rendererSource.slice(
+      rendererSource.indexOf('const nativeMessageRenderKey ='),
+      rendererSource.indexOf('const respondToNativeInteraction ='),
+    );
+    const nativeConversationRenderer = rendererSource.slice(
+      rendererSource.indexOf('const renderNativeConversation ='),
+      rendererSource.indexOf('const activateNativeConversation ='),
+    );
+    expect(nativeMessageRenderer).toContain("terminalMark.textContent = '>_';");
+    expect(nativeMessageRenderer).toContain("mount.classList.add('native-message__stream-text');");
+    expect(nativeMessageRenderer).toContain('mount.textContent = block.text;');
+    expect(nativeMessageRenderer).toContain("message.status !== 'streaming'");
+    expect(nativeConversationRenderer).toContain(
+      'nativeMessageRenderKeys.get(previous) !== renderKey',
+    );
+    expect(nativeConversationRenderer).toContain('ordered.push(previous);');
+    expect(nativeConversationRenderer).toContain('window.requestAnimationFrame(() => {');
+    expect(rendererSource).toContain('scheduleNativeConversationRender(snapshot);');
+    expect(rendererStyles).toMatch(
+      /\.native-message--assistant \{[\s\S]*?width: 100%;[\s\S]*?\.native-message--user \{[\s\S]*?align-self: end;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.native-message--assistant \.native-message__body \{[\s\S]*?var\(--surface-terminal\)[\s\S]*?border-inline-start:/,
+    );
+    expect(rendererStyles).toContain('.native-message__stream-caret');
+  });
+
   it('uses one button base with semantic and size variants', () => {
     expect(rendererStyles).toContain('.button--compact');
     expect(rendererStyles).toContain('.button--danger');

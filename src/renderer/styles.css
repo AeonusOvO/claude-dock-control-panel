@@ -1830,18 +1830,46 @@ body[data-phase='error'] .status-pill {
   min-width: 0;
 }
 
+.native-message--assistant {
+  align-self: start;
+  max-width: min(100%, 960px);
+  width: 100%;
+}
+
 .native-message--user {
   align-self: end;
   max-width: min(82%, 720px);
 }
 
 .native-message__label {
+  align-items: center;
   color: var(--text-dim);
+  display: flex;
   font-size: var(--text-2xs);
   font-weight: var(--fw-strong);
+  gap: var(--s-1);
+}
+
+.native-message--assistant .native-message__label {
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+}
+
+.native-message__terminal-mark {
+  align-items: center;
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-xs);
+  display: inline-flex;
+  font-family: var(--font-mono);
+  height: var(--s-5);
+  justify-content: center;
+  line-height: 1;
+  width: var(--s-6);
 }
 
 .native-message--user .native-message__label {
+  justify-content: flex-end;
   text-align: end;
 }
 
@@ -1859,15 +1887,57 @@ body[data-phase='error'] .status-pill {
   user-select: text;
 }
 
+.native-message--assistant .native-message__body {
+  background: color-mix(in srgb, var(--surface-terminal) 96%, var(--accent-tint));
+  border-color: var(--line-strong);
+  border-inline-start: calc(var(--s-1) * 0.75) solid var(--accent-solid);
+  border-radius: var(--r-md);
+  box-shadow: var(--sheen);
+  padding: var(--s-4) var(--s-5);
+}
+
 .native-message--user .native-message__body {
   background: var(--accent-tint);
   border-color: var(--accent-line);
   white-space: pre-wrap;
 }
 
-.native-message--streaming .native-message__body {
+.native-message--assistant.native-message--streaming .native-message__body {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 6%, transparent);
+}
+
+.native-message__stream-text {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.native-message__stream-caret {
+  animation: nativeMessageCaret var(--dur-blink) step-end infinite;
+  background: var(--accent-solid);
+  border-radius: var(--r-xs);
+  display: inline-block;
+  height: 1em;
+  margin-inline-start: var(--s-1);
+  vertical-align: text-bottom;
+  width: 0.55em;
+}
+
+@keyframes nativeMessageCaret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .native-message__stream-caret {
+    animation: none;
+  }
 }
 
 .native-thinking {

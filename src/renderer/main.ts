@@ -1388,10 +1388,13 @@ const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
 const runtimeActivityStates = new Map<string, RuntimeActivitySnapshot>();
 const nativeConversationSnapshots = new Map<string, ConversationSnapshot>();
 const nativeConversationByProject = new Map<string, string>();
+const nativeMessageRenderKeys = new WeakMap<HTMLElement, string>();
+const pendingNativeConversationRenders = new Map<string, ConversationSnapshot>();
 let nativeRecoveries: NativeRecoveryView[] = [];
 let activeNativeConversationId = '';
 let nativeConversationStartingSessionId: string | undefined;
 let nativeConversationClosingTimer: number | undefined;
+let nativeConversationRenderFrame: number | undefined;
 const nativeConversationSubmissions = new Map<string, string>();
 const pendingNativeAttachments: NativeAttachmentView[] = [];
 let nativeAttachmentImporting = false;
@@ -3152,25 +3155,44 @@ const appendNativeTool = (
   container.append(details);
 };
 
-const renderNativeMessage = (message: ConversationMessageView): HTMLElement => {
-  const article = document.createElement('article');
+const nativeMessageRenderKey = (message: ConversationMessageView): string =>
+  JSON.stringify(message);
+
+const updateNativeMessage = (
+  article: HTMLElement,
+  message: ConversationMessageView,
+  renderKey = nativeMessageRenderKey(message),
+): void => {
   article.className = `native-message native-message--${message.role}`;
   article.dataset.nativeMessageId = message.id;
   article.classList.toggle('native-message--streaming', message.status === 'streaming');
+  article.setAttribute('aria-busy', String(message.status === 'streaming'));
   const label = document.createElement('strong');
   label.className = 'native-message__label';
-  label.textContent =
-    message.role === 'user' ? '你' : message.role === 'assistant' ? 'Claude' : '系统';
+  if (message.role === 'assistant') {
+    const terminalMark = document.createElement('span');
+    terminalMark.className = 'native-message__terminal-mark';
+    terminalMark.setAttribute('aria-hidden', 'true');
+    terminalMark.textContent = '>_';
+    label.append(terminalMark, document.createTextNode(' Claude'));
+  } else {
+    label.textContent = message.role === 'user' ? '你' : '系统';
+  }
   const body = document.createElement('div');
   body.className = 'native-message__body';
+  let streamingTextMount: HTMLElement | undefined;
   for (const block of message.blocks) {
     if (block.type === 'text') {
       const mount = document.createElement('div');
       mount.className = 'chat-message__markdown';
       body.append(mount);
-      if (message.role === 'assistant') {
+      if (message.role === 'assistant' && message.status !== 'streaming') {
         void markdownRenderer.renderInto(mount, block.text);
       } else {
+        if (message.role === 'assistant') {
+          mount.classList.add('native-message__stream-text');
+          streamingTextMount = mount;
+        }
         mount.textContent = block.text;
       }
       continue;
@@ -3191,7 +3213,19 @@ const renderNativeMessage = (message: ConversationMessageView): HTMLElement => {
     image.textContent = block.name;
     body.append(image);
   }
-  article.append(label, body);
+  if (message.status === 'streaming') {
+    const caret = document.createElement('span');
+    caret.className = 'native-message__stream-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    (streamingTextMount ?? body).append(caret);
+  }
+  article.replaceChildren(label, body);
+  nativeMessageRenderKeys.set(article, renderKey);
+};
+
+const renderNativeMessage = (message: ConversationMessageView): HTMLElement => {
+  const article = document.createElement('article');
+  updateNativeMessage(article, message);
   return article;
 };
 
@@ -3777,6 +3811,14 @@ const handleNativeSlashCommand = async (
 };
 
 const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
+  const recorded = nativeConversationSnapshots.get(snapshot.conversationId);
+  if (
+    recorded &&
+    (recorded.revision > snapshot.revision ||
+      (recorded.revision === snapshot.revision && recorded.sequence > snapshot.sequence))
+  ) {
+    return;
+  }
   nativeConversationSnapshots.set(snapshot.conversationId, snapshot);
   nativeConversationByProject.set(snapshot.projectPath.toLowerCase(), snapshot.conversationId);
   if (snapshot.conversationId !== activeNativeConversationId) return;
@@ -3792,14 +3834,17 @@ const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
   );
   const ordered: HTMLElement[] = [];
   for (const message of snapshot.messages) {
-    const replacement = renderNativeMessage(message);
     const previous = existing.get(message.id);
     if (previous) {
-      replacement.style.animation = 'none';
-      previous.replaceWith(replacement);
+      const renderKey = nativeMessageRenderKey(message);
+      if (nativeMessageRenderKeys.get(previous) !== renderKey) {
+        updateNativeMessage(previous, message, renderKey);
+      }
       existing.delete(message.id);
+      ordered.push(previous);
+    } else {
+      ordered.push(renderNativeMessage(message));
     }
-    ordered.push(replacement);
   }
   for (const stale of existing.values()) stale.remove();
   nativeConversationEmpty.hidden = snapshot.messages.length > 0;
@@ -3826,6 +3871,25 @@ const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
   nativeAttachButton.disabled = submitting || !capability?.attachments.image;
   renderRuntimeActivity();
   if (nearBottom) nativeConversationMessages.scrollTop = nativeConversationMessages.scrollHeight;
+};
+
+const scheduleNativeConversationRender = (snapshot: ConversationSnapshot): void => {
+  const pending = pendingNativeConversationRenders.get(snapshot.conversationId);
+  if (
+    pending &&
+    (pending.revision > snapshot.revision ||
+      (pending.revision === snapshot.revision && pending.sequence >= snapshot.sequence))
+  ) {
+    return;
+  }
+  pendingNativeConversationRenders.set(snapshot.conversationId, snapshot);
+  if (nativeConversationRenderFrame !== undefined) return;
+  nativeConversationRenderFrame = window.requestAnimationFrame(() => {
+    nativeConversationRenderFrame = undefined;
+    const snapshots = [...pendingNativeConversationRenders.values()];
+    pendingNativeConversationRenders.clear();
+    for (const pendingSnapshot of snapshots) renderNativeConversation(pendingSnapshot);
+  });
 };
 
 const activateNativeConversation = (conversationId: string): void => {
@@ -12877,7 +12941,7 @@ const unsubscribeRuntimeActivityChanged = window.controlPanel.onRuntimeActivityC
   if (state.sessionId === workspaceState.activeSessionId) renderRuntimeActivity(state);
 });
 const unsubscribeNativeConversation = window.controlPanel.onNativeConversation((snapshot) => {
-  renderNativeConversation(snapshot);
+  scheduleNativeConversationRender(snapshot);
 });
 const unsubscribeConversationOwnerConflict = window.controlPanel.onConversationOwnerConflict(
   (conflict) => {

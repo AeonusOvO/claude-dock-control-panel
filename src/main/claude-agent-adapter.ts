@@ -50,6 +50,8 @@ interface ToolLocation {
 }
 
 interface AgentSession {
+  assistantStreamSequence: number;
+  assistantStreams: Map<string, string>;
   capabilityRevision: number;
   commands: ConversationCommandView[];
   effort?: string;
@@ -240,6 +242,8 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     else adapterOptions.sessionId = input.conversationId;
     const query = factory({ options: adapterOptions, prompt: queue });
     const session: AgentSession = {
+      assistantStreamSequence: 0,
+      assistantStreams: new Map(),
       capabilityRevision: 0,
       commands: [],
       fast: false,
@@ -321,6 +325,9 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       type: 'user',
       uuid: input.clientSubmissionId,
     });
+    // A newly accepted foreground turn owns the next assistant stream. Clear only that lane: a
+    // background tool can still be publishing its own parent-scoped assistant frames.
+    session.assistantStreams.delete('foreground');
     // The streaming Agent SDK does not guarantee that it will echo the submitted user frame back
     // before assistant output starts. Publish the accepted input from our owned payload so the
     // renderer never clears the composer into an apparently empty conversation. Reusing the client
@@ -578,8 +585,12 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
 
   private consumeAssistant(session: AgentSession, value: Record<string, unknown>): void {
     const message = isRecord(value.message) ? value.message : {};
+    const streamLane = stringValue(value.parent_tool_use_id) ?? 'foreground';
     const messageId =
-      stringValue(value.uuid) ?? stringValue(message.id) ?? `assistant-${session.sequence + 1}`;
+      session.assistantStreams.get(streamLane) ??
+      stringValue(value.uuid) ??
+      stringValue(message.id) ??
+      `assistant-${session.revision}-${++session.assistantStreamSequence}`;
     const blocks: ConversationContentBlock[] = [];
     for (const [index, raw] of arrayValue(message.content).entries()) {
       if (!isRecord(raw)) continue;
@@ -617,10 +628,22 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       },
       type: 'message.upsert',
     });
+    session.assistantStreams.delete(streamLane);
   }
 
   private consumeStreamEvent(session: AgentSession, value: Record<string, unknown>): void {
     const event = isRecord(value.event) ? value.event : {};
+    const streamLane = stringValue(value.parent_tool_use_id) ?? 'foreground';
+    if (event.type === 'message_start') {
+      const message = isRecord(event.message) ? event.message : {};
+      session.assistantStreams.set(
+        streamLane,
+        stringValue(value.uuid) ??
+          stringValue(message.id) ??
+          `assistant-stream-${session.revision}-${++session.assistantStreamSequence}`,
+      );
+      return;
+    }
     if (event.type !== 'content_block_delta' || !isRecord(event.delta)) return;
     const index = typeof event.index === 'number' ? event.index : 0;
     const deltaType = stringValue(event.delta.type);
@@ -631,7 +654,13 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
           ? stringValue(event.delta.thinking)
           : undefined;
     if (text === undefined) return;
-    const messageId = stringValue(value.uuid) ?? `assistant-stream-${session.sequence + 1}`;
+    let messageId = session.assistantStreams.get(streamLane);
+    if (!messageId) {
+      messageId =
+        stringValue(value.uuid) ??
+        `assistant-stream-${session.revision}-${++session.assistantStreamSequence}`;
+      session.assistantStreams.set(streamLane, messageId);
+    }
     this.emit(session, {
       blockId: `${messageId}:${index}`,
       blockType: deltaType === 'thinking_delta' ? 'thinking' : 'text',

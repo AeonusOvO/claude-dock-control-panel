@@ -4,6 +4,7 @@ import {
   ClaudeAgentAdapter,
   claudeAgentExecutableFromCommand,
 } from '../src/main/claude-agent-adapter';
+import { reduceConversationEvent } from '../src/shared/conversation-reducer';
 import type { ConversationEvent, ConversationInteraction } from '../src/shared/native-conversation';
 
 class FakeSdkQuery implements AsyncIterable<unknown> {
@@ -225,6 +226,60 @@ describe('Claude Agent SDK adapter', () => {
       }),
     );
     expect(events.at(-1)).toMatchObject({ phase: 'running', type: 'conversation.phase' });
+  });
+
+  it('coalesces UUID-less token deltas and the final assistant frame into one message', async () => {
+    const query = new FakeSdkQuery();
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.6',
+      queryFactory: async () => () => query,
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+
+    query.emit({
+      event: { delta: { text: '你', type: 'text_delta' }, index: 0, type: 'content_block_delta' },
+      type: 'stream_event',
+    });
+    query.emit({
+      event: { delta: { text: '好', type: 'text_delta' }, index: 0, type: 'content_block_delta' },
+      type: 'stream_event',
+    });
+    query.emit({
+      message: {
+        content: [{ text: '你好', type: 'text' }],
+        id: 'sdk-final-message',
+      },
+      type: 'assistant',
+      uuid: 'sdk-final-frame',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const assistantEvents = events.filter(
+      (event) => event.type === 'message.delta' || event.type === 'message.upsert',
+    );
+    const streamedIds = assistantEvents.flatMap((event) =>
+      event.type === 'message.delta'
+        ? [event.messageId]
+        : event.message.role === 'assistant'
+          ? [event.message.id]
+          : [],
+    );
+    expect([...new Set(streamedIds)]).toHaveLength(1);
+
+    const snapshot = events.reduce(
+      (current, event) => reduceConversationEvent(current, event),
+      undefined as ReturnType<typeof reduceConversationEvent>,
+    );
+    expect(snapshot?.messages).toEqual([
+      expect.objectContaining({
+        blocks: [expect.objectContaining({ text: '你好', type: 'text' })],
+        role: 'assistant',
+        status: 'complete',
+      }),
+    ]);
   });
 
   it('keeps the SDK stream reusable after a failed turn and renders the failure', async () => {

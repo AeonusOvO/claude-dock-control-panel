@@ -1,8 +1,9 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.5（2026-08-08）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+当前架构版本：5.0.0-rc.6（2026-08-08）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
 `ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
-版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI。SDK 必须从用户本机的 `claude` 命令解析同一
+版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI，并修复无 UUID token 被拆成逐字消息、最终帧
+重复追加的问题；开发链路的 `nanoid` 锁文件版本同步提升到 3.3.18。SDK 必须从用户本机的 `claude` 命令解析同一
 安装中的 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
 `win-unpacked`，发现第二份 `claude.exe` 即失败。Codex App Server 原生迁移不属于本 RC；现有
 Codex TUI 继续使用 ConPTY。4.6.0 在原有按接入/模型隔离的服务速度 profile
@@ -140,6 +141,12 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   SDK `result.is_error` 是可恢复的单轮失败：写入 system 失败消息后回到 `idle`。迭代器抛错或意外 EOF
   是流级失败：关闭 query/queue、撤销交互并从 adapter 删除 session；服务收到
   `conversation.error` 后同步释放 owner，主进程据失败快照释放路由预约。
+- `ClaudeAgentAdapter` 用前台或 `parent_tool_use_id` 作为助手流通道；首个 `message_start` / delta
+  为通道分配稳定显示 ID，后续 delta 和最终 `assistant` 帧复用它，最终 upsert 因而只把 streaming
+  状态收口为 complete。没有 SDK UUID 时使用 adapter revision 与本地助手序号生成一次性回退 ID，
+  禁止再次使用会随每个事件递增的全局 sequence。renderer 对 IPC 累计快照执行 revision/sequence
+  单调检查，并用 `requestAnimationFrame` 合并同一帧内的更新；流式正文同步写入复用节点，完整正文才
+  进入异步安全 Markdown renderer，避免旧 token 的异步结果覆盖新正文。
 - `native-conversation:start` 对路由预约、adapter 启动和 owner claim 按同一次启动事务回滚；新 UUID
   在 adapter 启动失败且没有正文时删除空恢复行，精确 resume 失败则保留原恢复入口。升级时还会把
   “无提交且无 canonical JSONL”的旧版空预约与真实历史对账并清理，不删除任何 Claude JSONL。
@@ -1685,6 +1692,9 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   超时/代次失效回退；`tests/runtime-process-registry.test.ts` 覆盖进程树、TCP 监听、PID 创建时间复用、
   不透明键、禁终止程序和温和/强制清理；`tests/claude-stream-diagnostics-store.test.ts` 锁定脱敏分类与
   14 天/200 条/2 MiB 裁剪。`tests/cli-command-catalog.test.ts` 锁定 101/120 与 50/53 的完整调用集合。
+- `tests/claude-agent-adapter.test.ts` 还模拟完全不带 UUID 的逐 token stream，断言全部 delta 与最终
+  assistant 帧只产生一个完成消息；renderer 源码守栏同时锁定消息节点复用、每帧快照合并、流式纯文本
+  与完成后 Markdown 的边界，以及用户气泡/助手终端壳的主题化结构。
 - `npm run test:runtime-soak:accelerated` 在数秒内模拟 24 小时的 1,440 个 Hook 事件和 57 次本地 Web
   进程创建/回收；`npm run test:runtime-soak` 运行真实 24 小时的同类无付费模型合成测试。它们验证
   ClaudeDock 自身有界状态与回收路径，不承诺上游模型或网关连续 24 小时无故障。
