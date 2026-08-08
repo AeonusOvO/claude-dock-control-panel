@@ -195,7 +195,7 @@ const installFixtures = String.raw`
       const native = byId('native-conversation');
       native.dataset.state = 'open'; native.setAttribute('aria-hidden', 'false');
       byId('native-terminal-toggle').setAttribute('aria-pressed', 'true');
-      byId('native-terminal-toggle-label').textContent = '高级终端';
+      byId('native-terminal-toggle-label').textContent = '返回终端';
       byId('native-recovery-stack').hidden = true;
       byId('native-interaction-stack').replaceChildren();
       byId('native-attachment-queue').hidden = true;
@@ -332,7 +332,7 @@ const installFixtures = String.raw`
       const scrim = byId('terminal-diagnostic-scrim'); scrim.hidden = false; scrim.dataset.state = 'open';
       const panel = byId('terminal-diagnostic'); panel.hidden = false; panel.dataset.state = 'open'; panel.setAttribute('aria-hidden', 'false');
       byId('terminal-diagnostic-title').textContent = '项目终端未能启动';
-      byId('terminal-diagnostic-message').textContent = '当前原生对话仍可使用。运行诊断后可以重试高级终端连接。';
+      byId('terminal-diagnostic-message').textContent = '当前原生对话仍可使用。运行诊断后可以重试安全终端连接。';
       const result = byId('terminal-diagnostic-result'); result.hidden = false; result.textContent = 'POWERSHELL_UNAVAILABLE · 工作目录可访问 · 未读取凭据或会话正文';
     };
     const plan = () => {

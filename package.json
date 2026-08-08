@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "5.0.0-rc.7",
+  "version": "5.0.0-rc.8",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "main": "dist/main/main.js",
   "private": true,

@@ -1,10 +1,11 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.7（2026-08-08）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
-`ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
-版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI，并修复无 UUID token 被拆成逐字消息、最终帧
-重复追加的问题；开发链路的 `nanoid` 锁文件版本同步提升到 3.3.18。SDK 必须从用户本机的 `claude` 命令解析同一
-安装中的 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
+当前架构版本：5.0.0-rc.8（2026-08-08）。本候选版把 Claude 的新建、继续、选择历史和历史记录
+恢复统一切回 PowerShell/ConPTY 安全终端主路径，结构化原生对话只保留为工具栏显式入口；恢复记录不会
+自动打开原生界面。既有隔离 `RuntimeProfile/AppPaths`、统一 `ConversationAdapter`、Claude Agent SDK
+原生会话、单 owner 注册表、加密恢复日志、附件安全存储、版本化模型能力和权限 contract 均保持不变，
+同时保留无 UUID token 聚合与最终帧原位收口。SDK 必须从用户本机的 `claude` 命令解析同一安装中的
+`claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
 `win-unpacked`，发现第二份 `claude.exe` 即失败。Codex App Server 原生迁移不属于本 RC；现有
 Codex TUI 继续使用 ConPTY。4.6.0 在原有按接入/模型隔离的服务速度 profile
 和会话 generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
@@ -65,7 +66,7 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 ## 架构与数据流
 
 ```text
-Renderer (native conversation DOM / optional xterm.js)
+Renderer (primary xterm.js / explicit native conversation DOM)
         ├── ConversationReducer ── revision / ordered content blocks / late-event rejection
         ├── Native interaction dock ── permission / question / plan / MCP / images
         ├── ClaudeLaunchAttemptRegistry ── per-session generation / 真实事件解锁
@@ -125,6 +126,17 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
         └── 原生目录选择器、路径验证
 ```
 
+### Claude 会话入口路由
+
+- 主路径固定为 `launchClaudeTerminal(mode) → claude:launch → PowerShell/ConPTY`。侧栏“新建安全会话”、
+  工作台 new/continue/resume 和历史记录精确恢复均复用这条路径；成功后关闭原生可见层并恢复终端 fit/focus，
+  启动失败时保留当前界面与既有 owner。
+- 次级路径固定为 `launchNativeClaude(mode) → native-conversation:start`。终端工具栏的“原生对话”是
+  新建或重新打开 native owner 的唯一主界面入口；原生界面中的同一按钮显示“返回终端”，并复用既有
+  草稿确认、精确 UUID 转移、附件保全和失败回滚事务。
+- presentation route 与 permission mode 相互独立。终端优先不修改 `permissionMode` 默认值、
+  `allowBypassPermissions` 项目门禁、SDK `canUseTool` 映射或主进程 owner contract。
+
 ### 原生会话不变量
 
 - 新 Claude 会话在启动前预分配 UUID；JSONL 是正文唯一真值，恢复日志只增强异常中断的可发现性，
@@ -132,7 +144,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   更新；`safeStorage` 或日志写入失败时发送失败并保留 renderer 草稿。
 - owner key 固定为 `(runtime, normalizedProjectPath, lowercase UUID)`。历史定向恢复、重命名和删除只用
   文件名派生 UUID；active/starting owner 从历史隐藏，runtime 失活后重新出现。已有 owner 的恢复只
-  聚焦，不创建第二进程；高级终端转移失败会恢复原 owner、草稿和原选择。
+  聚焦，不创建第二进程；返回安全终端的转移失败会恢复原 owner、草稿和原选择。
 - 结果未知的提交永不自动重发，避免重复工具操作、费用或外部副作用。仅当 JSONL 对账确认 user 记录
   已写入后才清理加密待确认文本。
 - `ClaudeAgentAdapter.submit()` 在 SDK 输入队列同步接受 payload 后，以同一
@@ -193,7 +205,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   使用该值避开输入操作区。
 - `scripts/native-visual-smoke.cjs` 生成四主题、三窗口尺寸、三项目栏宽度、三缩放档及进退场关键帧；
   `scripts/real-electron-visual-qa.cjs` 另外启动带隔离 `RuntimeProfile` 的真实可见 Electron 窗口，
-  通过 DevTools 输入事件逐项点击权限、提问、计划、MCP、摘要和高级终端，并把截图与 DOM 状态清单
+  通过 DevTools 输入事件逐项点击安全终端主入口、显式原生入口、权限、提问、计划、MCP、摘要和返回终端，并把截图与 DOM 状态清单
   写入 `dist/visual-qa/`。两者均不得连接真实会话、PTY、凭据、更新器或外部路由。
 - `scripts/control-theme-smoke.cjs` 除遍历全部按钮的主题基础样式外，还通过 DevTools
   `CSS.forcePseudoState` 对工作台 `#launch-new` 和侧栏 `#run-claude` 逐主题强制 `:hover`，比较

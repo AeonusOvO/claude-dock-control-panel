@@ -2130,7 +2130,7 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
       : '当前没有运行中的对话';
   runtimeActivitySummary.textContent =
     activityCount > 0 ? `${phaseLabel} · ${activityCount} 项活动` : phaseLabel;
-  runtimeEnvironmentMeta.textContent = nativeSnapshot ? '原生对话' : state ? '高级终端' : '未连接';
+  runtimeEnvironmentMeta.textContent = nativeSnapshot ? '原生对话' : state ? '安全终端' : '未连接';
   runtimeTaskMeta.textContent =
     activityCount > 0
       ? `${activityCount} 运行${completedCount > 0 ? ` · ${completedCount} 完成` : ''}`
@@ -2156,7 +2156,7 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
 
   const environmentRows: Array<[RuntimeSummaryIconKind, string, string]> = [
     ['project', '项目', active ? projectNameFromPath(active.cwd) : '未打开'],
-    ['interface', '界面', nativeSnapshot ? '原生对话 · Agent SDK' : '高级终端 · ConPTY'],
+    ['interface', '界面', nativeSnapshot ? '原生对话 · Agent SDK' : '安全终端 · ConPTY'],
     ['model', '模型', nativeSnapshot?.capabilities?.model ?? '等待运行时上报'],
     [
       'foreground',
@@ -3493,7 +3493,7 @@ const setNativeConversationVisible = (visible: boolean): void => {
     nativeConversation.setAttribute('aria-hidden', 'false');
     nativeTerminalToggle.setAttribute('aria-pressed', 'true');
     nativeTerminalToggleLabel.textContent = '返回终端';
-    nativeTerminalToggle.title = '返回高级终端';
+    nativeTerminalToggle.title = '返回安全终端';
     window.requestAnimationFrame(() => {
       if (nativeConversation.dataset.state === 'opening') nativeConversation.dataset.state = 'open';
     });
@@ -3503,8 +3503,8 @@ const setNativeConversationVisible = (visible: boolean): void => {
   nativeConversation.dataset.state = 'closing';
   nativeConversation.setAttribute('aria-hidden', 'true');
   nativeTerminalToggle.setAttribute('aria-pressed', 'false');
-  nativeTerminalToggleLabel.textContent = '高级终端';
-  nativeTerminalToggle.title = '切换到高级终端';
+  nativeTerminalToggleLabel.textContent = '原生对话';
+  nativeTerminalToggle.title = '打开原生对话';
   nativeConversationClosingTimer = window.setTimeout(() => {
     nativeConversation.dataset.state = 'closed';
     terminalShell.classList.remove('terminal-shell--native');
@@ -3674,9 +3674,9 @@ const handleNativeSlashCommand = async (
     );
   if (!command || command.mapping === 'unknown') {
     const enterTerminal = await requestConfirmation({
-      confirmLabel: '进入高级终端',
+      confirmLabel: '进入安全终端',
       message:
-        '这是当前 ClaudeDock 尚未识别的新版命令。为避免把控制命令误当普通提示词，它已被拦截；可进入高级终端使用 Claude 原生 TUI。',
+        '这是当前 ClaudeDock 尚未识别的新版命令。为避免把控制命令误当普通提示词，它已被拦截；可返回安全终端使用 Claude 原生 TUI。',
       title: `尚未适配 ${invocation}`,
       tone: 'default',
     });
@@ -3686,9 +3686,9 @@ const handleNativeSlashCommand = async (
   if (command.mapping === 'adapter') return false;
   if (command.mapping === 'terminal-only') {
     const enterTerminal = await requestConfirmation({
-      confirmLabel: '进入高级终端',
-      message: `${command.name} 控制的是 TUI 显示或终端键位，在原生 DOM 对话中不适用。可以切换到高级终端继续。`,
-      title: `${command.name} 仅适用于高级终端`,
+      confirmLabel: '进入安全终端',
+      message: `${command.name} 控制的是 TUI 显示或终端键位，在原生 DOM 对话中不适用。可以返回安全终端继续。`,
+      title: `${command.name} 仅适用于安全终端`,
       tone: 'default',
     });
     if (enterTerminal) nativeTerminalToggle.click();
@@ -4036,7 +4036,6 @@ const renderNativeRecoveries = (): void => {
     return card;
   });
   nativeRecoveryStack.replaceChildren(...cards);
-  if (recoveries.length > 0 && !activeNativeConversationId) setNativeConversationVisible(true);
 };
 
 const launchNativeClaude = async (
@@ -4076,8 +4075,8 @@ const launchNativeClaude = async (
     launchSucceeded = true;
     if (result.existingOwnerKind === 'terminal') {
       nativeSendButton.disabled = true;
-      nativeComposerStatus.textContent = '该对话已在高级终端中运行';
-      showToast('该对话已经在高级终端中运行。');
+      nativeComposerStatus.textContent = '该对话已在安全终端中运行';
+      showToast('该对话已经在安全终端中运行。');
       setNativeConversationVisible(false);
       return;
     }
@@ -6684,7 +6683,7 @@ const loadClaudeState = async (sessionId: string): Promise<void> => {
   renderClaudeState(state, true, false);
 };
 
-/** Resumes a stored transcript into the single native owner for its canonical file UUID. */
+/** Resumes a stored transcript in its canonical terminal owner. */
 async function resumeStoredConversation(
   projectPath: string,
   session: ClaudeSessionMetadata,
@@ -6695,32 +6694,20 @@ async function resumeStoredConversation(
   }
   storedConversationRestores.add(restoreKey);
   try {
-    const current = activeStatus();
-    if (!current || current.cwd.toLowerCase() !== projectPath.toLowerCase()) {
-      const opened = await window.controlPanel.openConversation(projectPath);
-      renderWorkspace(opened.state);
-      if (!opened.ok) {
-        showToast(opened.error ?? '无法打开这个项目。', 'error');
-        return;
-      }
-    }
-    const result = await window.controlPanel.startNativeConversation({
-      conversationId: session.conversationId,
+    const result = await window.controlPanel.openStoredConversation(
       projectPath,
-      resume: true,
-    });
+      session.conversationId,
+    );
+    renderWorkspace(result.state);
     if (!result.ok) {
-      showToast(result.message ?? '无法恢复这个历史会话。', 'error');
+      showToast(result.error ?? '无法恢复这个历史会话。', 'error');
       return;
     }
-    if (result.existingOwnerKind === 'terminal') {
-      showToast('该对话已经在高级终端中运行，已保留现有会话。');
-      return;
-    }
-    if (result.snapshot) renderNativeConversation(result.snapshot);
-    activateNativeConversation(result.conversationId);
+    setNativeConversationVisible(false);
+    retryTerminalFitUntilMeasured();
+    requestComposerFocus(result.state.activeSessionId);
     const label = session.sessionName || session.conversationId.slice(0, 8);
-    showToast(result.reused ? `已切换到 ${label}` : `已恢复 ${label}`);
+    showToast(result.reused ? `已切换到 ${label}` : `已在安全终端恢复 ${label}`);
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
   } finally {
@@ -12216,6 +12203,7 @@ const launchClaudeTerminal = async (mode: ClaudeLaunchMode): Promise<void> => {
     showToast(result.error ?? '无法启动 Claude Code。', 'error');
     return;
   }
+  setNativeConversationVisible(false);
   showToast(
     mode === 'new'
       ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
@@ -12962,7 +12950,7 @@ const unsubscribeConversationOwnerConflict = window.controlPanel.onConversationO
     showToast(
       conflict.existingOwnerKind === 'native'
         ? '这个对话已在原生界面运行；已停止重复恢复，请切换回原生对话。'
-        : '这个对话已在另一个高级终端运行；已停止重复恢复并保留原会话。',
+        : '这个对话已在另一个安全终端运行；已停止重复恢复并保留原会话。',
       'error',
     );
     if (conflict.existingOwnerKind === 'native') {
@@ -13184,13 +13172,13 @@ nativeTerminalToggle.addEventListener('click', () => {
           confirmLabel: '保存草稿并切换',
           message:
             '当前未发送内容会使用 Windows 安全存储加密保存，并在恢复区标记为未发送；不会自动送给 Claude。',
-          title: '切换到高级终端？',
+          title: '返回安全终端？',
           tone: 'default',
         });
         if (!confirmed) return;
       }
       nativeTerminalToggle.disabled = true;
-      nativeComposerStatus.textContent = '正在安全切换到高级终端…';
+      nativeComposerStatus.textContent = '正在安全返回终端…';
       const draft = hasDraft
         ? {
             blocks: [
@@ -13214,7 +13202,7 @@ nativeTerminalToggle.addEventListener('click', () => {
           draft,
         );
         if (!result.ok) {
-          showToast(result.message ?? '高级终端启动失败，已保留原生对话。', 'error');
+          showToast(result.message ?? '安全终端启动失败，已保留原生对话。', 'error');
           const current = nativeConversationSnapshots.get(activeNativeConversationId);
           if (current) renderNativeConversation(current);
           return;
@@ -13232,9 +13220,9 @@ nativeTerminalToggle.addEventListener('click', () => {
         }
         await refreshNativeRecoveries();
         terminalViews.get(workspaceState.activeSessionId)?.terminal.focus();
-        showToast(result.message ?? '已切换到高级终端。');
+        showToast(result.message ?? '已返回安全终端。');
       } catch (error) {
-        showToast(error instanceof Error ? error.message : '无法切换到高级终端。', 'error');
+        showToast(error instanceof Error ? error.message : '无法返回安全终端。', 'error');
       } finally {
         nativeTerminalToggle.disabled = false;
       }
@@ -13246,7 +13234,7 @@ nativeTerminalToggle.addEventListener('click', () => {
     nativeComposerInput.focus();
     return;
   }
-  void launchClaudeTerminal('new');
+  void launchNativeClaude('new');
 });
 nativeAttachButton.addEventListener('click', () => nativeAttachmentInput.click());
 nativeAttachmentInput.addEventListener('change', () => {
@@ -13304,7 +13292,7 @@ runClaudeButton.addEventListener('click', () => {
   if (activeDevelopmentRuntime() === 'codex') {
     void prepareAndLaunchCodex();
   } else {
-    void launchNativeClaude('new');
+    void launchClaudeTerminal('new');
   }
 });
 runtimeClaude.addEventListener('change', () => {
@@ -14059,13 +14047,13 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-
   });
 }
 launchNewButton.addEventListener('click', () => {
-  void launchNativeClaude('new');
+  void launchClaudeTerminal('new');
 });
 launchContinueButton.addEventListener('click', () => {
-  void launchNativeClaude('continue');
+  void launchClaudeTerminal('continue');
 });
 launchResumeButton.addEventListener('click', () => {
-  void launchNativeClaude('resume');
+  void launchClaudeTerminal('resume');
 });
 codexPrimaryAction.addEventListener('click', () => {
   void prepareAndLaunchCodex();

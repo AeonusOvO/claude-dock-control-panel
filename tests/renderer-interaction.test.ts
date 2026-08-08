@@ -1475,6 +1475,54 @@ describe('native conversation component suite', () => {
     expect(launchControls).not.toContain('busy || launchBlocked');
   });
 
+  it('routes every primary Claude session action through the safe terminal', () => {
+    const sidebarHandler = rendererSource.slice(
+      rendererSource.indexOf("runClaudeButton.addEventListener('click'"),
+      rendererSource.indexOf("runtimeClaude.addEventListener('change'"),
+    );
+    expect(sidebarHandler).toContain('prepareAndLaunchCodex()');
+    expect(sidebarHandler).toContain("launchClaudeTerminal('new')");
+    expect(sidebarHandler).not.toContain("launchNativeClaude('new')");
+
+    const workbenchHandlers = rendererSource.slice(
+      rendererSource.indexOf("launchNewButton.addEventListener('click'"),
+      rendererSource.indexOf("codexPrimaryAction.addEventListener('click'"),
+    );
+    expect(workbenchHandlers).toContain("launchClaudeTerminal('new')");
+    expect(workbenchHandlers).toContain("launchClaudeTerminal('continue')");
+    expect(workbenchHandlers).toContain("launchClaudeTerminal('resume')");
+    expect(workbenchHandlers).not.toContain('launchNativeClaude(');
+
+    const storedResume = rendererSource.slice(
+      rendererSource.indexOf('async function resumeStoredConversation'),
+      rendererSource.indexOf('const openExternal = async'),
+    );
+    expect(storedResume).toContain('window.controlPanel.openStoredConversation(');
+    expect(storedResume).not.toContain('window.controlPanel.startNativeConversation(');
+    expect(storedResume).toContain('setNativeConversationVisible(false);');
+  });
+
+  it('keeps native conversation behind an explicit toolbar action', () => {
+    const toggleHandler = rendererSource.slice(
+      rendererSource.indexOf("nativeTerminalToggle.addEventListener('click'"),
+      rendererSource.indexOf("nativeAttachButton.addEventListener('click'"),
+    );
+    expect(toggleHandler).toContain('transferNativeConversationToTerminal(');
+    expect(toggleHandler).toContain("launchNativeClaude('new')");
+    expect(toggleHandler).not.toContain("launchClaudeTerminal('new')");
+
+    const recoveryRenderer = rendererSource.slice(
+      rendererSource.indexOf('const renderNativeRecoveries ='),
+      rendererSource.indexOf('const launchNativeClaude = async'),
+    );
+    expect(recoveryRenderer).not.toContain('setNativeConversationVisible(true)');
+    expect(rendererMarkup).toContain(
+      'class="icon-button"\n              id="native-terminal-toggle"',
+    );
+    expect(rendererMarkup).toContain('title="打开原生对话"');
+    expect(rendererMarkup).toContain('id="native-terminal-toggle-label">原生对话</span>');
+  });
+
   it('always leaves the startup status after a native launch failure', () => {
     const nativeLaunch = rendererSource.slice(
       rendererSource.indexOf('const launchNativeClaude = async'),

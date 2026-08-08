@@ -241,13 +241,23 @@ const main = async () => {
     });
     await click('#run-claude');
     await waitFor(
+      `() => document.querySelector('#native-conversation')?.dataset.state !== 'open' && !document.querySelector('#terminal-shell')?.classList.contains('terminal-shell--native') && document.querySelector('#run-claude')?.disabled === false`,
+      'the primary safe terminal launch',
+    );
+    await capture('claude-safe-terminal-primary.png', {
+      interaction: 'safe-terminal-primary',
+      theme: await evaluate(`document.documentElement.dataset.theme`),
+    });
+
+    await click('#native-terminal-toggle');
+    await waitFor(
       `() => document.querySelector('#native-conversation')?.dataset.state === 'open'`,
-      'the native conversation',
+      'the explicitly opened native conversation',
     );
 
     await click('#native-composer-input');
     await client.call('Input.insertText', {
-      text: '请检查统一按钮套系、顶部高级终端图标与四个主题的视觉一致性。',
+      text: '请检查统一按钮套系、原生对话切换图标与四个主题的视觉一致性。',
     });
     await click('#native-send');
     await waitFor(
@@ -421,17 +431,17 @@ const main = async () => {
 
     await click('#native-terminal-toggle');
     await delay(70);
-    await capture('midnight-advanced-terminal-exit-mid.png', {
+    await capture('midnight-safe-terminal-exit-mid.png', {
       animation: 'exit-mid',
-      interaction: 'advanced-terminal',
+      interaction: 'safe-terminal',
       theme: 'midnight',
     });
     await waitFor(
       `() => document.querySelector('#native-conversation')?.dataset.state === 'closed'`,
-      'the advanced terminal transition',
+      'the safe terminal transition',
     );
-    await capture('midnight-advanced-terminal.png', {
-      interaction: 'advanced-terminal',
+    await capture('midnight-safe-terminal.png', {
+      interaction: 'safe-terminal',
       theme: 'midnight',
     });
 
