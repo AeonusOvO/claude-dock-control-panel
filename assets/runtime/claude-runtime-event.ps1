@@ -41,16 +41,19 @@ try {
     $payload.description = Copy-SafeText $description 240
     $payload.failureKind = Copy-SafeText $hookPayload.error_type 80
 
-    $backgroundTasks = @()
-    foreach ($task in @($hookPayload.background_tasks)) {
-      if ($backgroundTasks.Count -ge 50) { break }
-      $backgroundTasks += [ordered]@{
-        id          = Copy-SafeText $task.id 160
-        description = Copy-SafeText $task.description 240
-        kind        = Copy-SafeText $task.type 80
+    if ($hookPayload.PSObject.Properties.Name -contains 'background_tasks') {
+      $backgroundTasks = @()
+      foreach ($task in @($hookPayload.background_tasks)) {
+        if ($backgroundTasks.Count -ge 50) { break }
+        $backgroundTasks += [ordered]@{
+          id          = Copy-SafeText $task.id 160
+          description = Copy-SafeText $task.description 240
+          kind        = Copy-SafeText $task.type 80
+        }
       }
+      $payload.backgroundTasksPresent = $true
+      $payload.backgroundTasks = $backgroundTasks
     }
-    if ($backgroundTasks.Count -gt 0) { $payload.backgroundTasks = $backgroundTasks }
   }
 
   if (-not (Test-Path -LiteralPath $OutputDirectory -PathType Container)) {

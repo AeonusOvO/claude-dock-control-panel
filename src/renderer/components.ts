@@ -76,6 +76,9 @@ const positionListbox = (trigger: HTMLElement, listbox: HTMLElement): void => {
   const height = Math.min(natural, available);
 
   listbox.style.maxHeight = `${height}px`;
+  // Windows can paint a permanent scrollbar for `overflow-y: auto` even when all rows fit. Keep the
+  // compact selection card visually quiet unless the measured options really exceed the viewport.
+  listbox.dataset.scrollable = String(natural > available);
   listbox.style.minWidth = `${triggerRect.width}px`;
   listbox.style.top = flipUp
     ? `${Math.max(margin, triggerRect.top - height - gap)}px`
@@ -137,7 +140,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   /** Mirrors the native element's current option text and disabled state onto the trigger. */
   const syncTrigger = (): void => {
     const selected = select.selectedOptions[0];
-    label.textContent = selected?.textContent?.trim() ?? '';
+    label.textContent = select.dataset.triggerLabel ?? selected?.textContent?.trim() ?? '';
     label.dataset.placeholder = String(!selected);
     trigger.disabled = select.disabled;
     shell.dataset.disabled = String(select.disabled);
@@ -453,7 +456,7 @@ export const installSelectDismissHandlers = (): void => {
  * outside that vocabulary. Mirrored by the matching rule in styles.css.
  */
 const RIPPLE_SELECTOR =
-  '#composer-send, .button--primary, .chat-send, .dialog-primary, .launch-primary, [data-ripple]';
+  '#composer-send, .native-composer__send, .button--primary, .chat-send, .dialog-primary, .launch-primary, [data-ripple]';
 
 /**
  * Ripple feedback for the primary action buttons. Interaction should always answer, and a press that

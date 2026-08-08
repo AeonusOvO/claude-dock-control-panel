@@ -1,14 +1,27 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { buildPowershellStartup, powershellStartup } from '../src/main/terminal-session';
+import {
+  buildPowershellStartup,
+  powershellStartup,
+  POWERSHELL_STARTUP_COMMAND_ENV,
+  POWERSHELL_STARTUP_TRIGGER,
+} from '../src/main/terminal-session';
 import { ansiBackground, ansiForeground, TERMINAL_THEMES } from '../src/shared/terminal-themes';
 
 describe('PowerShell terminal startup', () => {
-  it('keeps UTF-8, multiline input, and multiline Backspace configuration in one session', () => {
+  it('keeps UTF-8, multiline input, and the one-shot launch handoff in one session', () => {
     expect(powershellStartup).toContain('[Console]::InputEncoding = $utf8');
     expect(powershellStartup).toContain("Set-PSReadLineKeyHandler -Chord 'Ctrl+j'");
     expect(powershellStartup).toContain("Set-PSReadLineKeyHandler -Chord 'Backspace'");
     expect(powershellStartup).toContain('PSConsoleReadLine]::Replace');
+    expect(powershellStartup).toContain(`$env:${POWERSHELL_STARTUP_COMMAND_ENV}`);
+    expect(powershellStartup).toContain(`function global:${POWERSHELL_STARTUP_TRIGGER}`);
+    expect(powershellStartup).toContain(
+      `Remove-Item Env:${POWERSHELL_STARTUP_COMMAND_ENV} -ErrorAction SilentlyContinue`,
+    );
+    expect(powershellStartup).toContain(
+      `Remove-Item Function:${POWERSHELL_STARTUP_TRIGGER} -ErrorAction SilentlyContinue`,
+    );
   });
 
   it('maps every PSReadLine role to the requested 24-bit palette', () => {
@@ -37,6 +50,30 @@ describe('PowerShell terminal startup', () => {
   it('keeps the compatibility export on the default Claude palette', () => {
     expect(powershellStartup).toBe(buildPowershellStartup(TERMINAL_THEMES.claude.palette));
   });
+
+  it.runIf(process.platform === 'win32')(
+    'executes the captured launch once after removing its environment handoff',
+    () => {
+      const launchCommand = `[Console]::Write(('handoff:' + [string]::IsNullOrEmpty($env:${POWERSHELL_STARTUP_COMMAND_ENV})))`;
+      const result = spawnSync(
+        'powershell.exe',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-Command',
+          `${powershellStartup}; ${POWERSHELL_STARTUP_TRIGGER}`,
+        ],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, [POWERSHELL_STARTUP_COMMAND_ENV]: launchCommand },
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe('handoff:True');
+    },
+  );
 
   it.runIf(process.platform === 'win32')('is valid PowerShell syntax', () => {
     const encodedStartup = Buffer.from(powershellStartup, 'utf16le').toString('base64');

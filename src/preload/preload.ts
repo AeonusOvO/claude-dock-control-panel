@@ -46,6 +46,61 @@ import type {
 } from '../shared/contracts';
 
 const api: ControlPanelApi = {
+  startNativeConversation: (input) => ipcRenderer.invoke('native-conversation:start', input),
+  getNativeConversation: (conversationId) =>
+    ipcRenderer.invoke('native-conversation:get', conversationId),
+  submitNativeConversation: (conversationId, input) =>
+    ipcRenderer.invoke('native-conversation:submit', conversationId, input),
+  respondNativeConversation: (conversationId, interactionId, response) =>
+    ipcRenderer.invoke('native-conversation:respond', conversationId, interactionId, response),
+  interruptNativeConversation: (conversationId) =>
+    ipcRenderer.invoke('native-conversation:interrupt', conversationId),
+  stopNativeConversationTask: (conversationId, taskId) =>
+    ipcRenderer.invoke('native-conversation:stop-task', conversationId, taskId),
+  updateNativeConversationControls: (conversationId, update) =>
+    ipcRenderer.invoke('native-conversation:update-controls', conversationId, update),
+  closeNativeConversation: (conversationId) =>
+    ipcRenderer.invoke('native-conversation:close', conversationId),
+  renameNativeConversation: (conversationId, title) =>
+    ipcRenderer.invoke('native-conversation:rename', conversationId, title),
+  transferNativeConversationToTerminal: (conversationId, draft) =>
+    ipcRenderer.invoke('native-conversation:transfer-to-terminal', conversationId, draft),
+  listNativeRecoveries: () => ipcRenderer.invoke('native-conversation:list-recoveries'),
+  restoreNativeDraft: (conversationId, clientSubmissionId, projectPath) =>
+    ipcRenderer.invoke(
+      'native-conversation:restore-draft',
+      conversationId,
+      clientSubmissionId,
+      projectPath,
+    ),
+  discardNativeRecovery: (conversationId, projectPath) =>
+    ipcRenderer.invoke('native-conversation:discard-recovery', conversationId, projectPath),
+  onNativeConversation: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: Parameters<typeof listener>[0],
+    ): void => listener(snapshot);
+    ipcRenderer.on('native-conversation:snapshot', callback);
+    return () => ipcRenderer.removeListener('native-conversation:snapshot', callback);
+  },
+  onConversationOwnerConflict: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      conflict: Parameters<typeof listener>[0],
+    ): void => listener(conflict);
+    ipcRenderer.on('conversation:owner-conflict', callback);
+    return () => ipcRenderer.removeListener('conversation:owner-conflict', callback);
+  },
+  importNativeAttachmentPaths: (conversationId, paths) =>
+    ipcRenderer.invoke('native-attachment:import-paths', conversationId, paths),
+  importNativeAttachmentBytes: (conversationId, sources) =>
+    ipcRenderer.invoke('native-attachment:import-bytes', conversationId, sources),
+  importNativeClipboardImage: (conversationId) =>
+    ipcRenderer.invoke('native-attachment:import-clipboard', conversationId),
+  readNativeAttachment: (conversationId, attachmentId) =>
+    ipcRenderer.invoke('native-attachment:read', conversationId, attachmentId),
+  removeNativeAttachment: (conversationId, attachmentId) =>
+    ipcRenderer.invoke('native-attachment:remove', conversationId, attachmentId),
   getAppSettings: () => ipcRenderer.invoke('app:get-settings'),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke('app:set-launch-at-login', enabled),
   setFooterResourcePreference: (preference) =>
@@ -135,6 +190,7 @@ const api: ControlPanelApi = {
   testChatConnection: (input) => ipcRenderer.invoke('chat:test-connection', input),
   importChatAttachments: (input) => ipcRenderer.invoke('chat:import-attachments', input),
   importChatAttachmentBytes: (input) => ipcRenderer.invoke('chat:import-attachment-bytes', input),
+  importChatClipboardImage: (draftId) => ipcRenderer.invoke('chat:import-clipboard-image', draftId),
   readChatAttachment: (attachmentId) => ipcRenderer.invoke('chat:read-attachment', attachmentId),
   deleteChatDraftAttachment: (draftId, attachmentId) =>
     ipcRenderer.invoke('chat:delete-draft-attachment', draftId, attachmentId),
@@ -480,6 +536,7 @@ const api: ControlPanelApi = {
       _event: Electron.IpcRendererEvent,
       sessionId: unknown,
       ptyGeneration: unknown,
+      resizeRevision: unknown,
       cols: unknown,
       rows: unknown,
     ): void => {
@@ -488,10 +545,13 @@ const api: ControlPanelApi = {
         typeof ptyGeneration === 'number' &&
         Number.isSafeInteger(ptyGeneration) &&
         ptyGeneration >= 0 &&
+        typeof resizeRevision === 'number' &&
+        Number.isSafeInteger(resizeRevision) &&
+        resizeRevision >= 0 &&
         typeof cols === 'number' &&
         typeof rows === 'number'
       ) {
-        listener(sessionId, ptyGeneration, cols, rows);
+        listener(sessionId, ptyGeneration, resizeRevision, cols, rows);
       }
     };
     ipcRenderer.on('terminal:size', callback);
@@ -508,8 +568,8 @@ const api: ControlPanelApi = {
       ipcRenderer.removeListener('workspace:state', callback);
     };
   },
-  resizeTerminal: (sessionId, ptyGeneration, cols, rows) => {
-    ipcRenderer.send('terminal:resize', sessionId, ptyGeneration, cols, rows);
+  resizeTerminal: (sessionId, ptyGeneration, resizeRevision, cols, rows) => {
+    ipcRenderer.send('terminal:resize', sessionId, ptyGeneration, resizeRevision, cols, rows);
   },
   restartTerminal: (sessionId, expectedGeneration) =>
     ipcRenderer.invoke(

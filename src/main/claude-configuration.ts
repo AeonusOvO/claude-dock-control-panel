@@ -459,20 +459,13 @@ export interface ClaudeLaunchExtensions {
 
 export const buildClaudeLaunchCommand = (
   settingsPath: string,
-  model: string,
   mode: ClaudeLaunchMode,
   exitMarker: string,
   resumeSessionId?: string,
   permissions?: ClaudeLaunchPermissions,
   extensions?: ClaudeLaunchExtensions,
 ): string => {
-  const argumentsList = [
-    '--settings',
-    quotePowerShellArgument(settingsPath),
-    '--model',
-    quotePowerShellArgument(model),
-    '--no-chrome',
-  ];
+  const argumentsList = ['--settings', quotePowerShellArgument(settingsPath)];
 
   if (permissions?.startMode && permissions.startMode !== 'default') {
     argumentsList.push('--permission-mode', quotePowerShellArgument(permissions.startMode));

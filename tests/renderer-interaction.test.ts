@@ -40,14 +40,17 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('cancelActiveResizes();');
   });
 
-  it('opens the active xterm visibly, retries cold fits and debounces live resizes', () => {
+  it('opens the active xterm visibly, retries cold fits and coalesces live resizes per frame', () => {
     expect(rendererSource).toMatch(
       /container\.className = active\s*\?\s*'project-terminal project-terminal--active'/,
     );
     expect(rendererSource).toContain('const retryTerminalFitUntilMeasured = (): void => {');
     expect(rendererSource).toContain('let attemptsRemaining = 4;');
     expect(rendererSource).toContain('const debounceTerminalFit = (): void => {');
-    expect(rendererSource).toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
+    expect(rendererSource).toContain('view.fitAddon.proposeDimensions()');
+    expect(rendererSource).toContain('terminalFitFrame = window.requestAnimationFrame');
+    expect(rendererSource).toContain("if (result === 'stable') return;");
+    expect(rendererSource).not.toContain('const TERMINAL_FIT_DEBOUNCE_MS = 100;');
     expect(rendererSource).toContain('view.container.getBoundingClientRect()');
     expect(rendererStyles).toContain('.project-terminal--active:focus-within');
     expect(rendererStyles).toMatch(
@@ -132,6 +135,26 @@ describe('renderer interaction lifecycle contract', () => {
       /\.runtime-option input \{[\s\S]*?inset: 0;[\s\S]*?width: 100%;/,
     );
     expect(rendererStyles).toContain("body[data-agent-runtime='codex'] .codex-workbench-page");
+  });
+
+  it('uses one responsive illustrated engine picker and removes the redundant session-status card', () => {
+    expect(rendererMarkup).not.toContain('当前对话状态');
+    expect(rendererMarkup).not.toContain('id="status-pill"');
+    expect(rendererMarkup).toMatch(
+      /class="runtime-option__icon runtime-option__icon--claude"[\s\S]*?class="runtime-option__check"/,
+    );
+    expect(rendererMarkup).toMatch(
+      /class="runtime-option__icon runtime-option__icon--codex"[\s\S]*?class="runtime-option__check"/,
+    );
+    expect(rendererSource).not.toContain("requiredElement<HTMLElement>('#session-detail')");
+    expect(rendererStyles).toMatch(
+      /\.runtime-picker \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-option \{[\s\S]*?display: flex;[\s\S]*?min-height: 64px;/,
+    );
+    expect(rendererStyles).toMatch(/\.runtime-option__copy \{[\s\S]*?flex: 1 1 0;/);
+    expect(rendererStyles).toContain('@keyframes runtimeOptionSelect');
   });
 
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
@@ -646,11 +669,13 @@ describe('renderer interaction lifecycle contract', () => {
 
   it('keeps serving speed model-specific and truthful across Claude, GPT and native Codex', () => {
     for (const label of [
-      '速度 标准',
-      '速度 已请求 Claude Fast',
-      '速度 Claude Fast 已开启',
-      '速度 Claude Fast 未生效',
-      '速度 已请求 GPT 1.5x',
+      '速度 未请求',
+      '速度 Claude Fast · 已请求',
+      '速度 Claude Fast · 上游确认',
+      '速度 Claude Fast · 已回退',
+      '速度 GPT Fast · 已请求',
+      '速度 GPT Fast · 上游确认',
+      '速度 GPT Fast · 已回退',
       '速度 不支持',
       '速度 未验证',
     ]) {
@@ -729,7 +754,7 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('terminalPtyGeneration: status.ptyGeneration');
     expect(rendererSource.match(/await orchestrateClaudeLaunchAttempt\(\{/g)).toHaveLength(2);
     const launchHandler = rendererSource.slice(
-      rendererSource.indexOf('const launchClaude = async'),
+      rendererSource.indexOf('const launchClaudeTerminal = async'),
       rendererSource.indexOf('const launchCodex = async'),
     );
     expect(launchHandler.indexOf('beginClaudeLaunchAttempt(status)')).toBeLessThan(
@@ -886,6 +911,25 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('const savedScroll = historyScrollPositions.get(key) ?? 0;');
     expect(rendererStyles).toMatch(
       /\.project-folder__history \{[\s\S]*?max-height:[\s\S]*?overflow-y: auto;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.project-folder__history \{[^}]*?align-content: start;[^}]*?grid-auto-rows: max-content;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(/\.history-item \{[^}]*?min-height: 27px;[^}]*?\}/);
+  });
+
+  it('does not let an official-network preflight overwrite Claude gateway launch controls', () => {
+    expect(rendererSource).toMatch(
+      /const activeNetworkProvider[\s\S]*?if \(!state\) return undefined;[\s\S]*?state\?\.config\.provider === 'gateway'/,
+    );
+    const preflightRenderer = rendererSource.slice(
+      rendererSource.indexOf('const renderActiveNetworkPreflight'),
+      rendererSource.indexOf('const runActiveNetworkPreflight'),
+    );
+    expect(preflightRenderer).not.toContain('runClaudeButton.disabled');
+    expect(preflightRenderer).not.toContain('launchNewButton');
+    expect(rendererStyles).toMatch(
+      /\.launch-primary:hover:not\(:disabled\) \{\s*background: var\(--accent-solid-hover\);\s*color: var\(--accent-fg\);/,
     );
   });
 
@@ -1322,11 +1366,19 @@ describe('sidebar conversation list affordances', () => {
   it('keeps the delete button clear of the vertical scrollbar in every history scroller', () => {
     expect(rendererStyles).toMatch(/\n\.history-item__delete \{[^}]*?right: 7px;[^}]*?\}/);
     expect(rendererStyles).toMatch(/\n\.history-item__select \{[^}]*?padding: 5px 7px;[^}]*?\}/);
-    for (const scroller of ['.project-list', '.project-folder__history']) {
-      expect(rendererStyles).toMatch(
-        new RegExp(`\\n\\${scroller} \\{[^}]*?padding-right: 4px;[^}]*?\\}`),
-      );
-    }
+    expect(rendererStyles).toMatch(/\n\.project-list \{[^}]*?scrollbar-gutter: auto;[^}]*?\}/);
+    expect(rendererStyles).not.toMatch(
+      /\n\.project-list \{[^}]*?padding-inline-end: var\(--s-2\);[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.project-folder__history \{[^}]*?padding-inline-end: 0;[^}]*?scrollbar-gutter: stable;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.history-item \{[^}]*?--history-tail: clamp\(42px, 23%, 58px\);[^}]*?min-width: 0;[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.history-item__select \{[^}]*?grid-template-columns: auto minmax\(0, 1fr\) var\(--history-tail\);[^}]*?width: 100%;[^}]*?\}/,
+    );
     // The chat-history card has its own 32px delete column, which needs the same clearance.
     expect(rendererStyles).toMatch(
       /\n\.chat-history__list \{[^}]*?padding-right: var\(--s-2\);[^}]*?\}/,
@@ -1394,6 +1446,280 @@ describe('external application proxy settings', () => {
     expect(rendererSource).toContain("applicationProxyProtocol.value === 'socks5'");
     expect(rendererSource).toContain('applicationProxyScopeCli.disabled = true;');
     expect(rendererSource).toContain('applicationProxyScopeCli.checked = false;');
+  });
+});
+
+describe('native conversation component suite', () => {
+  it('keeps explicit questions usable in strict mode and restores the gated bypass option', () => {
+    expect(rendererSource).toContain("bypassPermissions: '完全允许'");
+    expect(rendererSource).toContain("dontAsk: '仅预批准'");
+    expect(rendererSource).toContain('你明确要求选项时仍可显示结构化选择题');
+    expect(claudeRuntimeSource).toContain(
+      'allowBypassPermissions: launchSnapshot.allowBypassPermissions',
+    );
+    expect(mainSource).toContain("validatedUpdate.permissionMode === 'bypassPermissions'");
+    expect(mainSource).toContain(
+      'requireClaudeRuntime().allowsBypassPermissions(snapshot.projectPath)',
+    );
+  });
+
+  it('keeps the primary launch action visible through remediable route failures', () => {
+    const launchControls = rendererSource.slice(
+      rendererSource.indexOf('const renderClaudeLaunchControls ='),
+      rendererSource.indexOf('const refreshClaudeLaunchControls ='),
+    );
+    expect(launchControls).toContain('runClaudeButton.disabled = busy;');
+    expect(launchControls).toContain(
+      'runClaudeButton.dataset.launchBlocked = String(launchBlocked);',
+    );
+    expect(launchControls).not.toContain('busy || launchBlocked');
+  });
+
+  it('routes every primary Claude session action through the safe terminal', () => {
+    const sidebarHandler = rendererSource.slice(
+      rendererSource.indexOf("runClaudeButton.addEventListener('click'"),
+      rendererSource.indexOf("runtimeClaude.addEventListener('change'"),
+    );
+    expect(sidebarHandler).toContain('prepareAndLaunchCodex()');
+    expect(sidebarHandler).toContain("launchClaudeTerminal('new')");
+    expect(sidebarHandler).not.toContain("launchNativeClaude('new')");
+
+    const workbenchHandlers = rendererSource.slice(
+      rendererSource.indexOf("launchNewButton.addEventListener('click'"),
+      rendererSource.indexOf("codexPrimaryAction.addEventListener('click'"),
+    );
+    expect(workbenchHandlers).toContain("launchClaudeTerminal('new')");
+    expect(workbenchHandlers).toContain("launchClaudeTerminal('continue')");
+    expect(workbenchHandlers).toContain("launchClaudeTerminal('resume')");
+    expect(workbenchHandlers).not.toContain('launchNativeClaude(');
+
+    const storedResume = rendererSource.slice(
+      rendererSource.indexOf('async function resumeStoredConversation'),
+      rendererSource.indexOf('const openExternal = async'),
+    );
+    expect(storedResume).toContain('window.controlPanel.openStoredConversation(');
+    expect(storedResume).not.toContain('window.controlPanel.startNativeConversation(');
+    expect(storedResume).toContain('setNativeConversationVisible(false);');
+  });
+
+  it('keeps native conversation behind an explicit toolbar action', () => {
+    const toggleHandler = rendererSource.slice(
+      rendererSource.indexOf("nativeTerminalToggle.addEventListener('click'"),
+      rendererSource.indexOf("nativeAttachButton.addEventListener('click'"),
+    );
+    expect(toggleHandler).toContain('transferNativeConversationToTerminal(');
+    expect(toggleHandler).toContain("launchNativeClaude('new')");
+    expect(toggleHandler).not.toContain("launchClaudeTerminal('new')");
+
+    const recoveryRenderer = rendererSource.slice(
+      rendererSource.indexOf('const renderNativeRecoveries ='),
+      rendererSource.indexOf('const launchNativeClaude = async'),
+    );
+    expect(recoveryRenderer).not.toContain('setNativeConversationVisible(true)');
+    expect(rendererMarkup).toContain(
+      'class="icon-button"\n              id="native-terminal-toggle"',
+    );
+    expect(rendererMarkup).toContain('title="打开原生对话"');
+    expect(rendererMarkup).toContain('id="native-terminal-toggle-label">原生对话</span>');
+  });
+
+  it('always leaves the startup status after a native launch failure', () => {
+    const nativeLaunch = rendererSource.slice(
+      rendererSource.indexOf('const launchNativeClaude = async'),
+      rendererSource.indexOf('const resizeNativeComposer ='),
+    );
+    expect(nativeLaunch).toContain("nativeComposerStatus.textContent = '正在安全启动 Claude…';");
+    expect(nativeLaunch).toContain("'尚未接入模型 · 请先完成配置'");
+    expect(nativeLaunch).toContain("'接入配置未就绪 · 请打开配置检查'");
+    expect(nativeLaunch).toContain("'接入配置不可用 · 请打开配置检查'");
+    expect(nativeLaunch).toContain("'Claude Code 启动器不可用 · 请打开任务与下载'");
+    expect(nativeLaunch).toContain("'启动失败 · 请查看错误提示后重试'");
+    expect(nativeLaunch).toContain("nativeComposerStatus.textContent = 'Claude 已就绪';");
+    expect(nativeLaunch).toContain('nativeConversationStartingSessionId = status.id;');
+    expect(nativeLaunch).toContain('refreshClaudeLaunchControls(status.id);');
+  });
+
+  it('keeps native launch buttons busy only for the owned project startup', () => {
+    const launchControls = rendererSource.slice(
+      rendererSource.indexOf('const renderClaudeLaunchControls ='),
+      rendererSource.indexOf('const refreshClaudeLaunchControls ='),
+    );
+    expect(launchControls).toContain('nativeConversationStartingSessionId === sessionId');
+    expect(launchControls).toContain('claudeLaunchAttempts.isBusy(sessionId)');
+    expect(launchControls).toContain('button.disabled = busy;');
+  });
+
+  it('generation-scopes native submission acknowledgement and preserves newer draft text', () => {
+    const submission = rendererSource.slice(
+      rendererSource.indexOf("nativeComposer.addEventListener('submit'"),
+      rendererSource.indexOf("nativeSendButton.addEventListener('animationend'"),
+    );
+    expect(submission).toContain('const conversationId = activeNativeConversationId;');
+    expect(submission).toContain(
+      'nativeConversationSubmissions.set(conversationId, clientSubmissionId);',
+    );
+    expect(submission).toContain('.submitNativeConversation(conversationId, {');
+    expect(submission).toContain('if (nativeComposerInput.value === text)');
+    expect(submission).toContain(
+      'nativeConversationSubmissions.get(conversationId) === clientSubmissionId',
+    );
+    expect(submission).not.toContain('.submitNativeConversation(activeNativeConversationId, {');
+  });
+
+  it('keeps user prompts as bubbles and streams each assistant turn through one terminal shell', () => {
+    const nativeMessageRenderer = rendererSource.slice(
+      rendererSource.indexOf('const nativeMessageRenderKey ='),
+      rendererSource.indexOf('const respondToNativeInteraction ='),
+    );
+    const nativeConversationRenderer = rendererSource.slice(
+      rendererSource.indexOf('const renderNativeConversation ='),
+      rendererSource.indexOf('const activateNativeConversation ='),
+    );
+    expect(nativeMessageRenderer).toContain("terminalMark.textContent = '>_';");
+    expect(nativeMessageRenderer).toContain("mount.classList.add('native-message__stream-text');");
+    expect(nativeMessageRenderer).toContain('mount.textContent = block.text;');
+    expect(nativeMessageRenderer).toContain("message.status !== 'streaming'");
+    expect(nativeConversationRenderer).toContain(
+      'nativeMessageRenderKeys.get(previous) !== renderKey',
+    );
+    expect(nativeConversationRenderer).toContain('ordered.push(previous);');
+    expect(nativeConversationRenderer).toContain('window.requestAnimationFrame(() => {');
+    expect(rendererSource).toContain('scheduleNativeConversationRender(snapshot);');
+    expect(rendererStyles).toMatch(
+      /\.native-message--assistant \{[\s\S]*?width: 100%;[\s\S]*?\.native-message--user \{[\s\S]*?align-self: end;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.native-message--assistant \.native-message__body \{[\s\S]*?var\(--surface-terminal\)[\s\S]*?border-inline-start:/,
+    );
+    expect(rendererStyles).toContain('.native-message__stream-caret');
+  });
+
+  it('uses one button base with semantic and size variants', () => {
+    expect(rendererStyles).toContain('.button--compact');
+    expect(rendererStyles).toContain('.button--danger');
+    expect(rendererStyles).not.toContain('.ui-button');
+    expect(rendererMarkup).not.toContain('ui-button');
+    expect(rendererSource).not.toContain('ui-button');
+  });
+
+  it('keeps the advanced terminal action in the shared icon-button family', () => {
+    expect(rendererMarkup).toMatch(
+      /class="icon-button"\s+id="native-terminal-toggle"[\s\S]*?id="native-terminal-toggle-label"/,
+    );
+    expect(rendererMarkup).not.toContain('id="native-model-status"');
+    expect(rendererSource).not.toContain('nativeModelStatus');
+  });
+
+  it('uses one shared toolbar menu component for workbench and theme selection', () => {
+    expect(rendererMarkup).toMatch(/class="toolbar-menu-button"\s+id="workbench-trigger"/);
+    expect(rendererMarkup).toMatch(
+      /class="terminal-theme-control">\s*<select id="terminal-theme"[^>]*data-trigger-label="主题"/,
+    );
+    expect(rendererMarkup).not.toContain('terminal-theme-picker');
+    expect(componentKit).toContain('select.dataset.triggerLabel ?? selected?.textContent?.trim()');
+    expect(componentKit).toContain('listbox.dataset.scrollable = String(natural > available);');
+    expect(rendererStyles).toContain(".select__listbox[data-scrollable='false']");
+    expect(rendererStyles).toMatch(
+      /\.toolbar-menu-button,\s*\.terminal-toolbar \.terminal-theme-control :is\(\.select__trigger\) \{[\s\S]*?font-family: inherit;[\s\S]*?font-size: var\(--text-sm\);[\s\S]*?height: 30px;/,
+    );
+  });
+
+  it('keeps one composer behavior while giving Claude and Telegram distinct shells', () => {
+    expect(rendererMarkup).toContain('native-composer__send-icon--claude');
+    expect(rendererMarkup).toContain('native-composer__send-icon--telegram');
+    expect(rendererMarkup).toContain('m3.5 11.5 16.8-8-5.6 17-3.3-6.8-7.9-2.2Z');
+    expect(componentKit).toContain('.native-composer__send');
+    expect(rendererStyles).toMatch(
+      /\[data-theme='claude'\] \.native-composer__row \{[\s\S]*?border-radius: calc\(var\(--r-xl\) \+ var\(--s-1\)\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-theme='telegram'\] \.native-composer__row \{[\s\S]*?border-radius: 0;[\s\S]*?min-height: 52px;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-theme='telegram'\] \.native-composer__attach,[\s\S]*?height: 46px;[\s\S]*?width: 44px;/,
+    );
+    expect(rendererSource).toContain("nativeSendButton.dataset.sending = 'true';");
+    expect(rendererSource).toContain("'--native-composer-h'");
+    expect(rendererStyles).toContain("body:has(#native-conversation[data-state='open']) .toast");
+    expect(rendererStyles).toContain('@keyframes nativeTelegramSendFlight');
+    expect(rendererStyles).toContain('@keyframes nativeClaudeSendArrow');
+  });
+
+  it('keeps the collapsed native Ultra control concise and moves details to its description', () => {
+    expect(rendererSource).toContain("ultracode: 'Ultra Code'");
+    expect(rendererSource).not.toContain("ultracode: 'Ultra Code · X-High + 编排'");
+    expect(rendererSource).toContain("nativeEffortControl.setAttribute('aria-description'");
+  });
+
+  it('renders the interaction queue one item at a time', () => {
+    expect(rendererSource).toContain('const [activeInteraction] = snapshot.interactions;');
+    expect(rendererSource).toContain(
+      'nativeInteractionStack.dataset.pendingCount = String(snapshot.interactions.length);',
+    );
+    expect(rendererSource).not.toContain(
+      'nativeInteractionStack.replaceChildren(...snapshot.interactions.map(renderNativeInteraction));',
+    );
+  });
+
+  it('renders the conversation summary as one compact four-level inspector', () => {
+    expect(rendererMarkup).toMatch(
+      /runtime-activity-panel__eyebrow">当前对话<[\s\S]*?<strong>运行概览<\/strong>/,
+    );
+    for (const section of ['环境', '活动', '来源']) {
+      expect(rendererMarkup).toMatch(
+        new RegExp(`<h3>${section}</h3>[\\s\\S]*?runtime-(?:environment|task|source)-meta`),
+      );
+    }
+    expect(rendererStyles).toContain('.runtime-summary-section + .runtime-summary-section');
+    expect(rendererStyles).toContain('grid-template-columns: 28px minmax(0, 1fr) auto;');
+    expect(rendererStyles).not.toMatch(
+      /\.runtime-activity-panel li \{[\s\S]*?background: var\(--surface-3\)/,
+    );
+    expect(rendererSource).toContain('RUNTIME_TASK_STATUS_LABELS');
+    expect(rendererSource).toContain('NATIVE_TASK_STATUS_LABELS');
+  });
+
+  it('keeps summary actions inside the shared button component suite', () => {
+    expect(rendererSource).toContain(
+      "stop.className = 'button button--compact button--quiet runtime-summary-row__action';",
+    );
+    expect(rendererSource).toContain(
+      "terminate.className = 'button button--compact button--quiet runtime-summary-row__action';",
+    );
+    expect(rendererStyles).not.toMatch(
+      /\.runtime-summary-row__action \{[^}]*?(?:font-size|border-radius|background|color):/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-summary-row__trailing \{[^}]*?align-items: center;[^}]*?justify-self: end;/,
+    );
+  });
+
+  it('places compact, semantically colored status tags beside task titles', () => {
+    expect(rendererSource).toContain("statusElement.className = 'runtime-summary-row__tag';");
+    expect(rendererStyles).toMatch(
+      /\.runtime-summary-row__title \{[^}]*?display: flex;[^}]*?gap: var\(--s-2\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-status='running'\] \.runtime-summary-row__tag \{[^}]*?background: var\(--accent-tint\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\[data-status='waiting'\] \.runtime-summary-row__tag,[\s\S]*?background: var\(--warn-tint\);/,
+    );
+    expect(rendererStyles).not.toMatch(
+      /\[data-status='completed'\] \.runtime-summary-row__tag[\s\S]*?var\(--ok-/,
+    );
+  });
+
+  it('uses tokenized entry and exit motion for the summary and its rows', () => {
+    expect(rendererStyles).toMatch(
+      /\.runtime-activity-panel\[data-state='opening'\],[\s\S]*?animation: runtimeSummaryEnter var\(--dur-enter\) var\(--ease-enter\) both;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-activity-panel\[data-state='closing'\] \{[\s\S]*?animation: runtimeSummaryExit var\(--dur-exit\) var\(--ease-exit\) both;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.runtime-summary-row,[\s\S]*?animation: runtimeSummaryRowEnter var\(--dur-enter\) var\(--ease-enter\) both;/,
+    );
   });
 });
 

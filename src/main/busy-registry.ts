@@ -18,7 +18,10 @@ export class BusyRegistry {
     if (this.leases.has(lease.id)) {
       throw new Error(`忙碌任务 ${lease.id} 已存在。`);
     }
-    this.leases.set(lease.id, Object.freeze({ ...lease }));
+    this.leases.set(
+      lease.id,
+      Object.freeze({ ...lease, startedAt: lease.startedAt ?? Date.now() }),
+    );
     this.notify();
     let released = false;
     return () => {
@@ -34,6 +37,20 @@ export class BusyRegistry {
 
   public has(): boolean {
     return this.leases.size > 0;
+  }
+
+  public update(
+    id: string,
+    patch: Partial<
+      Pick<BusyLease, 'label' | 'logTail' | 'queuePosition' | 'queueTotal' | 'stage' | 'target'>
+    >,
+  ): BusyLease | undefined {
+    const current = this.leases.get(id);
+    if (!current) return undefined;
+    const next = Object.freeze({ ...current, ...patch });
+    this.leases.set(id, next);
+    this.notify();
+    return next;
   }
 
   public list(): BusyLease[] {

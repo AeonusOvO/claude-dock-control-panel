@@ -137,6 +137,7 @@ import {
 } from '../shared/composer-history';
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
 import { localizePluginCopy } from '../shared/plugin-localization';
+import { resolveClaudeNativeCommand } from '../shared/claude-native-commands';
 import {
   DEFAULT_TERMINAL_THEME,
   isTerminalThemeId,
@@ -145,6 +146,17 @@ import {
   type TerminalThemeId,
 } from '../shared/terminal-themes';
 import { deriveUpdateActionState } from '../shared/update-actions';
+import type {
+  ConversationContentBlock,
+  ConversationControlUpdate,
+  ConversationInteraction,
+  ConversationInteractionResponse,
+  ConversationMessageView,
+  ConversationSnapshot,
+  NativeAttachmentImportResult,
+  NativeAttachmentView,
+  NativeRecoveryView,
+} from '../shared/native-conversation';
 import { ArtifactController } from './artifact';
 import {
   ClaudeLaunchAttemptRegistry,
@@ -182,8 +194,11 @@ installSelectDismissHandlers();
 installPressRipples();
 
 interface TerminalView {
+  appliedResizeRevision: number;
   container: HTMLDivElement;
   fitAddon: FitAddon;
+  lastFitCols?: number;
+  lastFitRows?: number;
   /** Lossless, one-write-in-flight output owner for this exact PTY generation. */
   outputPump: TerminalOutputPump;
   /** Main-process probes waiting for all output that preceded their request to reach xterm. */
@@ -194,6 +209,7 @@ interface TerminalView {
   }>;
   /** The exact PTY generation this xterm instance and all of its asynchronous work own. */
   readonly ptyGeneration: PtyGeneration;
+  resizeRevision: number;
   /** Last complete badge passively reported after xterm reconstructed a PTY screen delta. */
   observedPermissionMode?: ClaudePermissionMode;
   terminal: Terminal;
@@ -510,15 +526,37 @@ const saveRouterProviderButton = requiredElement<HTMLButtonElement>('#save-route
 const configureRouterProviderButton = requiredElement<HTMLButtonElement>(
   '#configure-router-provider',
 );
-const sessionDetail = requiredElement<HTMLElement>('#session-detail');
-const sessionPid = requiredElement<HTMLElement>('#session-pid');
-const statusPill = requiredElement<HTMLElement>('#status-pill');
 const startRouterButton = requiredElement<HTMLButtonElement>('#start-router');
 const stopRouterButton = requiredElement<HTMLButtonElement>('#stop-router');
 const terminalProject = requiredElement<HTMLElement>('#terminal-project');
 const terminalContextMenu = requiredElement<HTMLElement>('#terminal-context-menu');
 const terminalThemeSelect = requiredElement<HTMLSelectElement>('#terminal-theme');
 const terminalStage = requiredElement<HTMLElement>('#terminal-stage');
+const nativeConversation = requiredElement<HTMLElement>('#native-conversation');
+const nativeConversationMessages = requiredElement<HTMLElement>('#native-conversation-messages');
+const nativeConversationEmpty = requiredElement<HTMLElement>('#native-conversation-empty');
+const nativeRecoveryStack = requiredElement<HTMLElement>('#native-recovery-stack');
+const nativeInteractionStack = requiredElement<HTMLElement>('#native-interaction-stack');
+const nativeComposer = requiredElement<HTMLFormElement>('#native-composer');
+const nativeComposerInput = requiredElement<HTMLTextAreaElement>('#native-composer-input');
+const nativeComposerStatus = requiredElement<HTMLElement>('#native-composer-status');
+const nativeModelControl = requiredElement<HTMLSelectElement>('#native-model-control');
+const nativeEffortControl = requiredElement<HTMLSelectElement>('#native-effort-control');
+const nativeFastControl = requiredElement<HTMLButtonElement>('#native-fast-control');
+const nativePermissionControl = requiredElement<HTMLSelectElement>('#native-permission-control');
+const nativeAttachmentInput = requiredElement<HTMLInputElement>('#native-attachment-input');
+const nativeAttachmentQueue = requiredElement<HTMLElement>('#native-attachment-queue');
+const nativeAttachButton = requiredElement<HTMLButtonElement>('#native-attach');
+const nativeSendButton = requiredElement<HTMLButtonElement>('#native-send');
+const nativeStopButton = requiredElement<HTMLButtonElement>('#native-stop');
+const nativeTerminalToggle = requiredElement<HTMLButtonElement>('#native-terminal-toggle');
+const nativeTerminalToggleLabel = requiredElement<HTMLElement>('#native-terminal-toggle-label');
+const nativePlanDialog = requiredElement<HTMLDialogElement>('#native-plan-dialog');
+const nativePlanTitle = requiredElement<HTMLElement>('#native-plan-title');
+const nativePlanContent = requiredElement<HTMLElement>('#native-plan-content');
+const nativePlanClose = requiredElement<HTMLButtonElement>('#native-plan-close');
+const nativePlanContinue = requiredElement<HTMLButtonElement>('#native-plan-continue');
+const nativePlanApprove = requiredElement<HTMLButtonElement>('#native-plan-approve');
 const composerForm = requiredElement<HTMLFormElement>('#terminal-composer');
 const composerInput = requiredElement<HTMLTextAreaElement>('#composer-input');
 const composerSendButton = requiredElement<HTMLButtonElement>('#composer-send');
@@ -527,8 +565,20 @@ const runtimeActivityLabel = requiredElement<HTMLElement>('#runtime-activity-lab
 const runtimeActivityPanel = requiredElement<HTMLElement>('#runtime-activity-panel');
 const runtimeActivitySummary = requiredElement<HTMLElement>('#runtime-activity-summary');
 const runtimeActivityClose = requiredElement<HTMLButtonElement>('#runtime-activity-close');
+const runtimeEnvironmentMeta = requiredElement<HTMLElement>('#runtime-environment-meta');
+const runtimeEnvironmentList = requiredElement<HTMLUListElement>('#runtime-environment-list');
+const runtimeTaskMeta = requiredElement<HTMLElement>('#runtime-task-meta');
 const runtimeTaskList = requiredElement<HTMLUListElement>('#runtime-task-list');
+const runtimeSourceMeta = requiredElement<HTMLElement>('#runtime-source-meta');
+const runtimeSourceList = requiredElement<HTMLUListElement>('#runtime-source-list');
 const runtimeProcessList = requiredElement<HTMLUListElement>('#runtime-process-list');
+const terminalDiagnostic = requiredElement<HTMLElement>('#terminal-diagnostic');
+const terminalDiagnosticScrim = requiredElement<HTMLButtonElement>('#terminal-diagnostic-scrim');
+const terminalDiagnosticMessage = requiredElement<HTMLElement>('#terminal-diagnostic-message');
+const terminalDiagnosticResult = requiredElement<HTMLElement>('#terminal-diagnostic-result');
+const terminalDiagnosticCopy = requiredElement<HTMLButtonElement>('#terminal-diagnostic-copy');
+const terminalDiagnosticRun = requiredElement<HTMLButtonElement>('#terminal-diagnostic-run');
+const terminalDiagnosticRetry = requiredElement<HTMLButtonElement>('#terminal-diagnostic-retry');
 const titleStatus = requiredElement<HTMLElement>('#title-status');
 const toast = requiredElement<HTMLElement>('#toast');
 const testClaudeConnectionButton = requiredElement<HTMLButtonElement>('#test-claude-connection');
@@ -882,7 +932,23 @@ const createBusyOperationCard = (lease: BusyLease): HTMLElement => {
   title.textContent = lease.label;
   const state = document.createElement('span');
   state.className = 'download-task__state';
-  state.textContent = lease.kind === 'uninstall' ? '卸载中' : '安装中';
+  const actionLabel = (
+    {
+      configure: '配置',
+      disable: '禁用',
+      enable: '启用',
+      install: '安装',
+      refresh: '刷新',
+      remove: '移除',
+      uninstall: '卸载',
+      update: '更新',
+    } as const
+  )[lease.action ?? (lease.kind === 'uninstall' ? 'uninstall' : 'install')];
+  const queueCopy =
+    lease.queuePosition && lease.queueTotal
+      ? ` · 队列 ${lease.queuePosition}/${lease.queueTotal}`
+      : '';
+  state.textContent = `${lease.stage ?? `${actionLabel}中`}${queueCopy}`;
   identity.append(title, state);
   const progress = downloadProgressTemplate.content.firstElementChild?.cloneNode(true) as
     HTMLElement | undefined;
@@ -892,12 +958,38 @@ const createBusyOperationCard = (lease: BusyLease): HTMLElement => {
     progress.setAttribute('aria-label', `${lease.label}进度`);
     progress.setAttribute('aria-busy', 'true');
     progress.querySelector<HTMLElement>('.download-progress__value')!.textContent = '…';
-    progress.querySelector<HTMLElement>('.download-progress__linear > span')!.style.width = '42%';
+    progress.querySelector<HTMLElement>('.download-progress__linear > span')!.style.width = '34%';
     heading.append(identity, progress);
   } else {
     heading.append(identity);
   }
   card.append(heading);
+
+  const details = document.createElement('dl');
+  details.className = 'download-task__metrics download-task__metrics--operation';
+  const appendMetric = (label: string, value: string): void => {
+    const item = document.createElement('div');
+    const term = document.createElement('dt');
+    const description = document.createElement('dd');
+    term.textContent = label;
+    description.textContent = value;
+    item.append(term, description);
+    details.append(item);
+  };
+  appendMetric('对象', lease.target ?? lease.label);
+  appendMetric(
+    '已用时间',
+    formatDuration(Math.max(0, Date.now() - (lease.startedAt ?? Date.now()))),
+  );
+  if (lease.domain) appendMetric('类型', lease.domain);
+  card.append(details);
+
+  if (lease.logTail?.length) {
+    const log = document.createElement('pre');
+    log.className = 'download-task__log';
+    log.textContent = lease.logTail.slice(-4).join('\n');
+    card.append(log);
+  }
   return card;
 };
 
@@ -1294,6 +1386,22 @@ const claudeStates = new Map<string, ClaudeProjectState>();
 const codexStates = new Map<string, CodexProjectState>();
 const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
 const runtimeActivityStates = new Map<string, RuntimeActivitySnapshot>();
+const nativeConversationSnapshots = new Map<string, ConversationSnapshot>();
+const nativeConversationByProject = new Map<string, string>();
+const nativeMessageRenderKeys = new WeakMap<HTMLElement, string>();
+const pendingNativeConversationRenders = new Map<string, ConversationSnapshot>();
+let nativeRecoveries: NativeRecoveryView[] = [];
+let activeNativeConversationId = '';
+let nativeConversationStartingSessionId: string | undefined;
+let nativeConversationClosingTimer: number | undefined;
+let nativeConversationRenderFrame: number | undefined;
+const nativeConversationSubmissions = new Map<string, string>();
+const pendingNativeAttachments: NativeAttachmentView[] = [];
+let nativeAttachmentImporting = false;
+let nativeControlsUpdating = false;
+let renderedNativeCapabilityRevision = -1;
+let expandedNativePlan: Extract<ConversationInteraction, { kind: 'plan' }> | undefined;
+let nativePlanCloseTimer: number | undefined;
 const claudeStateLoadGenerations = new SessionGenerationRegistry();
 const codexStateLoadGenerations = new SessionGenerationRegistry();
 const runtimeStateLoadGenerations = new SessionGenerationRegistry();
@@ -1328,6 +1436,8 @@ let applicationProxyLoadGeneration = 0;
 let applicationProxyInitialLoadPending = false;
 let applicationProxyDraftEdited = false;
 let selectedRailTab: string | undefined = 'projects';
+let compactRailRestoreTab: string | undefined;
+let compactRailResizeFrame: number | undefined;
 let previewRailTab: string | undefined;
 let railPreviewCloseTimer: number | undefined;
 type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | 'router';
@@ -1354,6 +1464,10 @@ let lastRouterOperationProgress: RouterOperationProgress | undefined;
 let routerOperationInProgress = false;
 let routerRefreshInProgress = false;
 let toastTimer: number | undefined;
+let runtimeSummaryCloseTimer: number | undefined;
+let terminalDiagnosticCloseTimer: number | undefined;
+let terminalDiagnosticStatus: TerminalStatus | undefined;
+const shownTerminalDiagnostics = new Set<string>();
 let connectionAdviceState: ClaudeConnectionAdvice | undefined;
 /** Set while a status-bar switch is in flight, so a second click cannot stack terminal writes. */
 let modeSwitchInProgress = false;
@@ -1458,12 +1572,12 @@ const phaseCopy: Record<TerminalPhase, { detail: string; footer: string; pill: s
     pill: '错误',
   },
   running: {
-    detail: '伪终端会话已连接',
+    detail: 'PowerShell 已就绪',
     footer: '后台运行中',
     pill: '运行中',
   },
   starting: {
-    detail: '正在创建伪终端会话',
+    detail: '正在准备 PowerShell',
     footer: '正在连接',
     pill: '启动中',
   },
@@ -1789,77 +1903,344 @@ const RUNTIME_PHASE_LABELS: Record<RuntimeActivitySnapshot['phase'], string> = {
 const runtimeTaskIsUnfinished = (task: RuntimeTaskView): boolean =>
   task.status === 'queued' || task.status === 'running' || task.status === 'waiting';
 
+type RuntimeSummaryIconKind =
+  | 'background'
+  | 'empty'
+  | 'foreground'
+  | 'interface'
+  | 'model'
+  | 'process'
+  | 'project'
+  | 'source'
+  | 'subagent'
+  | 'web'
+  | 'workflow';
+
+const RUNTIME_SUMMARY_ICON_PATHS: Record<RuntimeSummaryIconKind, string[]> = {
+  background: ['M12 4v8l5 3', 'M4.8 17.2a9 9 0 1 0 .3-10.7'],
+  empty: ['M12 8v4', 'M12 16h.01', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z'],
+  foreground: ['M12 3a9 9 0 1 0 9 9', 'M12 7v5l3 2'],
+  interface: ['M4 5h16v11H4z', 'M8 20h8', 'M12 16v4'],
+  model: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M8.5 8.5h7v7h-7z'],
+  process: ['M4 5h16v14H4z', 'm7 10 2 2-2 2', 'M13 14h4'],
+  project: ['M3.5 7h6l2 2h9v9.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z'],
+  source: [
+    'M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M18 21a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M7.7 6.1 16.3 17.9',
+  ],
+  subagent: [
+    'M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
+    'M16 13a2.5 2.5 0 1 0 0-5',
+    'M3.5 20c.5-4 8.5-4 9 0',
+    'M13 17c2.8-1.4 6.8-.5 7.5 2.5',
+  ],
+  web: [
+    'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z',
+    'M3 12h18',
+    'M12 3c2.5 2.4 3.7 5.4 3.7 9S14.5 18.6 12 21',
+    'M12 3C9.5 5.4 8.3 8.4 8.3 12S9.5 18.6 12 21',
+  ],
+  workflow: [
+    'M6 5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M18 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M6 23a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    'M8 3h3a4 4 0 0 1 4 4v4',
+    'M15 13v4a4 4 0 0 1-4 4H8',
+  ],
+};
+
+const RUNTIME_TASK_KIND_LABELS: Record<RuntimeTaskView['kind'], string> = {
+  cron: '定时任务',
+  mcp: 'MCP 任务',
+  monitor: '监控任务',
+  shell: '本地命令',
+  subagent: '子智能体',
+  teammate: '协作智能体',
+  web: 'Web 任务',
+  workflow: '工作流',
+};
+
+const RUNTIME_TASK_STATUS_LABELS: Record<RuntimeTaskView['status'], string> = {
+  completed: '已完成',
+  failed: '失败',
+  orphaned: '状态待确认',
+  queued: '排队中',
+  running: '运行中',
+  waiting: '等待中',
+};
+
+const NATIVE_TASK_KIND_LABELS: Record<ConversationSnapshot['tasks'][number]['kind'], string> = {
+  background: '后台任务',
+  subagent: '子智能体',
+  web: 'Web 任务',
+  workflow: '工作流',
+};
+
+const NATIVE_TASK_STATUS_LABELS: Record<ConversationSnapshot['tasks'][number]['status'], string> = {
+  completed: '已完成',
+  failed: '失败',
+  lost: '状态待确认',
+  queued: '排队中',
+  running: '运行中',
+  stopped: '已停止',
+  waiting: '等待中',
+};
+
+const runtimeSummaryTaskIcon = (
+  kind: RuntimeTaskView['kind'] | ConversationSnapshot['tasks'][number]['kind'],
+): RuntimeSummaryIconKind => {
+  if (kind === 'subagent' || kind === 'teammate') return 'subagent';
+  if (kind === 'web') return 'web';
+  if (kind === 'workflow') return 'workflow';
+  return 'background';
+};
+
+const createRuntimeSummaryIcon = (kind: RuntimeSummaryIconKind): HTMLSpanElement => {
+  const icon = document.createElement('span');
+  icon.className = 'runtime-summary-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  for (const pathDefinition of RUNTIME_SUMMARY_ICON_PATHS[kind]) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', pathDefinition);
+    svg.append(path);
+  }
+  icon.append(svg);
+  return icon;
+};
+
+interface RuntimeSummaryRowInput {
+  action?: HTMLButtonElement;
+  detail?: string;
+  environment?: boolean;
+  icon: RuntimeSummaryIconKind;
+  status?: string;
+  statusLabel?: string;
+  title: string;
+}
+
+const createRuntimeSummaryRow = ({
+  action,
+  detail,
+  environment = false,
+  icon,
+  status,
+  statusLabel,
+  title,
+}: RuntimeSummaryRowInput): HTMLLIElement => {
+  const item = document.createElement('li');
+  item.className = `runtime-summary-row${environment ? ' runtime-summary-row--environment' : ''}`;
+  if (status) item.dataset.status = status;
+  const copy = document.createElement('div');
+  copy.className = 'runtime-summary-row__copy';
+  const titleLine = document.createElement('div');
+  titleLine.className = 'runtime-summary-row__title';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  heading.title = title;
+  titleLine.append(heading);
+  if (statusLabel) {
+    const statusElement = document.createElement('span');
+    statusElement.className = 'runtime-summary-row__tag';
+    statusElement.textContent = statusLabel;
+    titleLine.append(statusElement);
+  }
+  copy.append(titleLine);
+  if (detail) {
+    const description = document.createElement('span');
+    description.textContent = detail;
+    description.title = detail;
+    copy.append(description);
+  }
+  item.append(createRuntimeSummaryIcon(icon), copy);
+  if (action) {
+    const trailing = document.createElement('div');
+    trailing.className = 'runtime-summary-row__trailing';
+    trailing.append(action);
+    item.append(trailing);
+  }
+  return item;
+};
+
+const createRuntimeSummaryEmpty = (message: string): HTMLLIElement => {
+  const item = document.createElement('li');
+  item.className = 'runtime-summary-empty';
+  const text = document.createElement('span');
+  text.textContent = message;
+  item.append(createRuntimeSummaryIcon('empty'), text);
+  return item;
+};
+
+const setRuntimeSummaryOpen = (open: boolean, restoreFocus = false): void => {
+  if (runtimeSummaryCloseTimer !== undefined) {
+    window.clearTimeout(runtimeSummaryCloseTimer);
+    runtimeSummaryCloseTimer = undefined;
+  }
+  if (open) {
+    runtimeActivityPanel.hidden = false;
+    runtimeActivityPanel.dataset.state = 'opening';
+    runtimeActivityTrigger.setAttribute('aria-expanded', 'true');
+    window.requestAnimationFrame(() => {
+      if (runtimeActivityPanel.dataset.state === 'opening') {
+        runtimeActivityPanel.dataset.state = 'open';
+      }
+    });
+    runtimeActivityClose.focus({ preventScroll: true });
+    return;
+  }
+  if (runtimeActivityPanel.hidden) return;
+  runtimeActivityPanel.dataset.state = 'closing';
+  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  runtimeSummaryCloseTimer = window.setTimeout(() => {
+    runtimeActivityPanel.hidden = true;
+    runtimeActivityPanel.dataset.state = 'closed';
+    runtimeSummaryCloseTimer = undefined;
+    if (restoreFocus) runtimeActivityTrigger.focus({ preventScroll: true });
+  }, 220);
+};
+
 const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
   const activeSessionId = workspaceState.activeSessionId;
   const state = snapshot ?? runtimeActivityStates.get(activeSessionId);
   if (state) runtimeActivityStates.set(state.sessionId, state);
-  if (!state || state.sessionId !== activeSessionId) {
-    runtimeActivityTrigger.hidden = true;
-    runtimeActivityPanel.hidden = true;
-    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
-    return;
-  }
+  const nativeSnapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const nativeTasks = nativeSnapshot?.tasks ?? [];
+  const unfinished = state?.tasks.filter(runtimeTaskIsUnfinished) ?? [];
+  const nativeUnfinished = nativeTasks.filter((task) =>
+    ['queued', 'running', 'waiting'].includes(task.status),
+  );
+  const webProcesses = state?.webProcesses ?? [];
+  const activityCount = unfinished.length + nativeUnfinished.length + webProcesses.length;
+  const completedCount =
+    (state?.tasks.filter((task) => task.status === 'completed').length ?? 0) +
+    nativeTasks.filter((task) => task.status === 'completed' || task.status === 'stopped').length;
+  const attentionCount =
+    (state?.tasks.filter((task) => task.status === 'failed' || task.status === 'orphaned').length ??
+      0) + nativeTasks.filter((task) => task.status === 'failed' || task.status === 'lost').length;
+  runtimeActivityTrigger.hidden = false;
+  runtimeActivityTrigger.dataset.active = String(activityCount > 0);
+  runtimeActivityTrigger.dataset.phase = state?.phase ?? nativeSnapshot?.phase ?? 'stopped';
+  runtimeActivityLabel.textContent = activityCount > 0 ? `活动 ${activityCount}` : '对话摘要';
+  const phaseLabel = nativeSnapshot
+    ? nativePhaseLabel(nativeSnapshot.phase)
+    : state
+      ? RUNTIME_PHASE_LABELS[state.phase]
+      : '当前没有运行中的对话';
+  runtimeActivitySummary.textContent =
+    activityCount > 0 ? `${phaseLabel} · ${activityCount} 项活动` : phaseLabel;
+  runtimeEnvironmentMeta.textContent = nativeSnapshot ? '原生对话' : state ? '安全终端' : '未连接';
+  runtimeTaskMeta.textContent =
+    activityCount > 0
+      ? `${activityCount} 运行${completedCount > 0 ? ` · ${completedCount} 完成` : ''}`
+      : attentionCount > 0
+        ? `${attentionCount} 待处理`
+        : completedCount > 0
+          ? `${completedCount} 完成`
+          : '无活动';
 
-  const unfinished = state.tasks.filter(runtimeTaskIsUnfinished);
-  const visible = unfinished.length > 0 || state.webProcesses.length > 0;
-  runtimeActivityTrigger.hidden = !visible;
-  runtimeActivityTrigger.dataset.phase = state.phase;
-  runtimeActivityLabel.textContent = `后台任务 ${unfinished.length} · ${RUNTIME_PHASE_LABELS[state.phase]}`;
-  runtimeActivitySummary.textContent = `${RUNTIME_PHASE_LABELS[state.phase]} · 子代理 ${state.subagentCount} · ${
-    state.willResumeConversation === true
-      ? '完成后会恢复主对话'
-      : state.willResumeConversation === false
-        ? '不会自动恢复主对话'
-        : '是否恢复待确认'
-  }`;
-  if (state.phase === 'waiting-background' || state.phase === 'resuming') {
+  const active = activeStatus();
+  if (active) renderActiveStatus(active);
+  else renderNoActiveSession();
+  if (state?.phase === 'waiting-background' || state?.phase === 'resuming') {
     titleStatus.textContent =
       state.phase === 'waiting-background'
         ? `后台任务仍在运行 · ${unfinished.length} 项`
         : '后台任务已返回 · 正在恢复主对话';
     footerStatus.textContent = RUNTIME_PHASE_LABELS[state.phase];
-  } else if (state.phase === 'failed') {
+  } else if (state?.phase === 'failed') {
     titleStatus.textContent = '本轮响应失败 · 终端上下文已保留';
     footerStatus.textContent = '需要手动继续';
   }
 
+  const environmentRows: Array<[RuntimeSummaryIconKind, string, string]> = [
+    ['project', '项目', active ? projectNameFromPath(active.cwd) : '未打开'],
+    ['interface', '界面', nativeSnapshot ? '原生对话 · Agent SDK' : '安全终端 · ConPTY'],
+    ['model', '模型', nativeSnapshot?.capabilities?.model ?? '等待运行时上报'],
+    [
+      'foreground',
+      '前台',
+      nativeSnapshot
+        ? nativePhaseLabel(nativeSnapshot.phase)
+        : state
+          ? RUNTIME_PHASE_LABELS[state.phase]
+          : '未运行',
+    ],
+  ];
+  runtimeEnvironmentList.replaceChildren(
+    ...environmentRows.map(([icon, title, detail]) =>
+      createRuntimeSummaryRow({ detail, environment: true, icon, title }),
+    ),
+  );
+
   runtimeTaskList.replaceChildren(
-    ...state.tasks.map((task) => {
-      const item = document.createElement('li');
-      const title = document.createElement('strong');
-      title.textContent = task.description;
-      const details = document.createElement('span');
-      const tokenLabel =
-        task.tokenUse === 'likely'
-          ? '可能持续消耗 token'
-          : task.tokenUse === 'none'
-            ? '不消耗模型 token'
-            : 'token 状态未知';
-      const wakeLabel =
-        task.willWakeParent === true
-          ? '完成后唤醒主对话'
-          : task.willWakeParent === false
-            ? '不唤醒主对话'
-            : '唤醒状态未知';
-      details.textContent = `${task.kind} · ${task.status} · ${tokenLabel} · ${wakeLabel}`;
-      item.append(title, details);
-      return item;
+    ...(state?.tasks ?? []).map((task) => {
+      const details = [
+        RUNTIME_TASK_KIND_LABELS[task.kind],
+        task.agentType,
+        task.tokenUse === 'likely' ? '持续使用模型' : undefined,
+        task.tokenUse === 'none' ? '本地执行' : undefined,
+        task.willWakeParent === true ? '完成后返回主对话' : undefined,
+      ].filter((part): part is string => Boolean(part));
+      return createRuntimeSummaryRow({
+        detail: details.join(' · '),
+        icon: runtimeSummaryTaskIcon(task.kind),
+        status: task.status,
+        statusLabel: RUNTIME_TASK_STATUS_LABELS[task.status],
+        title: task.description,
+      });
+    }),
+    ...nativeTasks.map((task) => {
+      let stop: HTMLButtonElement | undefined;
+      if (task.cancellable && ['queued', 'running', 'waiting'].includes(task.status)) {
+        stop = document.createElement('button');
+        stop.className = 'button button--compact button--quiet runtime-summary-row__action';
+        stop.type = 'button';
+        stop.textContent = '停止';
+        stop.addEventListener('click', () => {
+          stop!.disabled = true;
+          stop!.textContent = '停止中…';
+          void window.controlPanel
+            .stopNativeConversationTask(nativeSnapshot!.conversationId, task.id)
+            .then((result) => {
+              if (!result.ok) showToast(result.message ?? '无法停止这项任务。', 'error');
+            })
+            .catch(() => showToast('无法停止这项任务。', 'error'));
+        });
+      }
+      return createRuntimeSummaryRow({
+        action: stop,
+        detail: [NATIVE_TASK_KIND_LABELS[task.kind], task.summary]
+          .filter((part): part is string => Boolean(part))
+          .join(' · '),
+        icon: runtimeSummaryTaskIcon(task.kind),
+        status: task.status,
+        statusLabel: NATIVE_TASK_STATUS_LABELS[task.status],
+        title: task.description,
+      });
     }),
   );
-  if (state.tasks.length === 0) {
-    const empty = document.createElement('li');
-    empty.textContent = '暂无任务记录';
-    runtimeTaskList.append(empty);
+  if ((state?.tasks.length ?? 0) + nativeTasks.length === 0) {
+    runtimeTaskList.append(createRuntimeSummaryEmpty('本轮没有检测到子智能体或后台任务'));
   }
 
   runtimeProcessList.replaceChildren(
-    ...state.webProcesses.map((process) => {
-      const item = document.createElement('li');
-      const title = document.createElement('strong');
-      title.textContent = `${process.name} · PID ${process.pid}`;
-      const command = document.createElement('span');
-      command.textContent = process.commandSummary;
-      item.append(title, command);
+    ...webProcesses.map((process) => {
+      const terminate = document.createElement('button');
+      terminate.className = 'button button--compact button--quiet runtime-summary-row__action';
+      terminate.type = 'button';
+      terminate.textContent = process.status === 'stopping' ? '结束中…' : '结束';
+      terminate.disabled = process.status === 'stopping';
+      const item = createRuntimeSummaryRow({
+        action: terminate,
+        detail: process.commandSummary,
+        icon: 'process',
+        status: process.status === 'stopping' ? 'waiting' : 'running',
+        statusLabel: process.status === 'stopping' ? '正在结束' : `PID ${process.pid}`,
+        title: process.name,
+      });
+      const copy = item.querySelector<HTMLElement>('.runtime-summary-row__copy')!;
       for (const target of process.urls) {
         const link = document.createElement('a');
         link.href = target.url;
@@ -1868,52 +2249,48 @@ const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
           event.preventDefault();
           void openExternal(target.url);
         });
-        item.append(link);
+        copy.append(link);
       }
       if (process.exposureWarning) {
         const warning = document.createElement('span');
         warning.textContent = process.exposureWarning;
-        item.append(warning);
+        copy.append(warning);
       }
-      const terminate = document.createElement('button');
-      terminate.type = 'button';
-      terminate.textContent = process.status === 'stopping' ? '正在结束…' : '结束进程';
-      terminate.disabled = process.status === 'stopping';
       terminate.addEventListener('click', () => {
         terminate.disabled = true;
+        terminate.textContent = '结束中…';
         void window.controlPanel
-          .terminateRuntimeProcess(state.sessionId, process.processKey)
+          .terminateRuntimeProcess(state!.sessionId, process.processKey)
           .then(renderRuntimeActivity)
           .catch(() => showToast('无法结束该 Web 进程；所有权可能已经变化。', 'error'));
       });
-      item.append(terminate);
       return item;
     }),
   );
-  if (state.webProcesses.length === 0) {
-    const empty = document.createElement('li');
-    empty.textContent = '未发现当前会话派生的 Web 监听进程';
-    runtimeProcessList.append(empty);
-  }
-
-  if (!visible) {
-    runtimeActivityPanel.hidden = true;
-    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  const sources = [
+    nativeSnapshot ? 'Claude Agent SDK' : undefined,
+    nativeSnapshot ? '本机 Claude Code CLI' : state ? 'Claude Code 运行事件' : undefined,
+  ].filter((source): source is string => Boolean(source));
+  runtimeSourceMeta.textContent = `${sources.length + webProcesses.length} 项`;
+  runtimeSourceList.replaceChildren(
+    ...sources.map((source) => createRuntimeSummaryRow({ icon: 'source', title: source })),
+  );
+  if (sources.length === 0 && webProcesses.length === 0) {
+    runtimeSourceList.append(createRuntimeSummaryEmpty('暂无活动来源'));
   }
 };
 
 const loadActiveRuntimeActivity = async (): Promise<void> => {
   const sessionId = workspaceState.activeSessionId;
   if (!sessionId) {
-    runtimeActivityTrigger.hidden = true;
-    runtimeActivityPanel.hidden = true;
+    renderRuntimeActivity();
     return;
   }
   try {
     const state = await window.controlPanel.getRuntimeActivity(sessionId);
     if (workspaceState.activeSessionId === sessionId) renderRuntimeActivity(state);
   } catch {
-    runtimeActivityTrigger.hidden = true;
+    renderRuntimeActivity();
   }
 };
 
@@ -1987,6 +2364,10 @@ const activeNetworkProvider = (): NetworkProviderId | undefined => {
   }
   const status = activeStatus();
   const state = status ? claudeStates.get(status.id) : undefined;
+  // Do not guess "official Anthropic" while the project configuration is still loading. That
+  // guess used to start an official-network preflight which could later disable a gateway-backed
+  // Claude launch button, even after the saved gateway configuration had rendered successfully.
+  if (!state) return undefined;
   return state?.config.provider === 'gateway' ? undefined : 'anthropic-claude';
 };
 
@@ -2134,20 +2515,6 @@ const renderActiveNetworkPreflight = (): void => {
     footerConnection.disabled = result?.status === 'testing';
     footerConnection.setAttribute('aria-busy', String(result?.status === 'testing'));
     footerConnectionLabel.textContent = result ? networkStatusLabel(result) : '官方网络待检测';
-  }
-  if (result?.status === 'blocked') {
-    runClaudeButton.disabled = true;
-    runClaudeButton.title = result.reasons[0] ?? result.summary;
-    for (const button of [
-      launchNewButton,
-      launchContinueButton,
-      launchResumeButton,
-      codexLaunchNew,
-      codexLaunchContinue,
-      codexLaunchResume,
-    ]) {
-      button.disabled = true;
-    }
   }
 };
 
@@ -2714,6 +3081,1182 @@ const appendChatMessage = (
   chatEmptyState.hidden = true;
   chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
   return textMount ?? body;
+};
+
+const nativeRecord = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+const nativeJson = (value: unknown): string => {
+  try {
+    return JSON.stringify(value, null, 2) ?? '';
+  } catch {
+    return String(value);
+  }
+};
+
+const nativePhaseLabel = (phase: ConversationSnapshot['phase']): string =>
+  ({
+    failed: '需要处理',
+    idle: '可以继续对话',
+    'requires-action': '等待你的确认',
+    running: 'Claude 正在处理',
+    starting: '正在启动 Claude',
+    stopped: '会话已停止',
+    stopping: '正在停止',
+  })[phase];
+
+const nativeToolStatusLabel = (
+  status: Extract<ConversationContentBlock, { type: 'tool' }>['status'],
+): string =>
+  ({
+    cancelled: '已取消',
+    failed: '失败',
+    pending: '等待中',
+    running: '运行中',
+    succeeded: '已完成',
+  })[status];
+
+const appendNativeTool = (
+  container: HTMLElement,
+  block: Extract<ConversationContentBlock, { type: 'tool' }>,
+): void => {
+  const details = document.createElement('details');
+  details.className = 'native-tool';
+  details.dataset.status = block.status;
+  details.open =
+    block.status === 'pending' ||
+    block.status === 'running' ||
+    block.status === 'failed' ||
+    ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(block.name);
+  const summary = document.createElement('summary');
+  const state = document.createElement('span');
+  state.className = 'native-tool__state';
+  state.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span');
+  name.className = 'native-tool__name';
+  name.textContent = block.summary || block.name;
+  const status = document.createElement('span');
+  status.className = 'native-tool__status';
+  status.textContent = nativeToolStatusLabel(block.status);
+  summary.append(state, name, status);
+  const payload = document.createElement('div');
+  payload.className = 'native-tool__details';
+  const input = document.createElement('pre');
+  input.textContent = nativeJson(block.input);
+  payload.append(input);
+  if (block.output !== undefined) {
+    const output = document.createElement('pre');
+    output.textContent = nativeJson(block.output);
+    payload.append(output);
+  }
+  details.append(summary, payload);
+  container.append(details);
+};
+
+const nativeMessageRenderKey = (message: ConversationMessageView): string =>
+  JSON.stringify(message);
+
+const updateNativeMessage = (
+  article: HTMLElement,
+  message: ConversationMessageView,
+  renderKey = nativeMessageRenderKey(message),
+): void => {
+  article.className = `native-message native-message--${message.role}`;
+  article.dataset.nativeMessageId = message.id;
+  article.classList.toggle('native-message--streaming', message.status === 'streaming');
+  article.setAttribute('aria-busy', String(message.status === 'streaming'));
+  const label = document.createElement('strong');
+  label.className = 'native-message__label';
+  if (message.role === 'assistant') {
+    const terminalMark = document.createElement('span');
+    terminalMark.className = 'native-message__terminal-mark';
+    terminalMark.setAttribute('aria-hidden', 'true');
+    terminalMark.textContent = '>_';
+    label.append(terminalMark, document.createTextNode(' Claude'));
+  } else {
+    label.textContent = message.role === 'user' ? '你' : '系统';
+  }
+  const body = document.createElement('div');
+  body.className = 'native-message__body';
+  let streamingTextMount: HTMLElement | undefined;
+  for (const block of message.blocks) {
+    if (block.type === 'text') {
+      const mount = document.createElement('div');
+      mount.className = 'chat-message__markdown';
+      body.append(mount);
+      if (message.role === 'assistant' && message.status !== 'streaming') {
+        void markdownRenderer.renderInto(mount, block.text);
+      } else {
+        if (message.role === 'assistant') {
+          mount.classList.add('native-message__stream-text');
+          streamingTextMount = mount;
+        }
+        mount.textContent = block.text;
+      }
+      continue;
+    }
+    if (block.type === 'thinking') {
+      const thinking = document.createElement('div');
+      thinking.className = 'native-thinking';
+      thinking.textContent = block.text;
+      body.append(thinking);
+      continue;
+    }
+    if (block.type === 'tool') {
+      appendNativeTool(body, block);
+      continue;
+    }
+    const image = document.createElement('div');
+    image.className = 'chat-attachment-card chat-attachment-card--image';
+    image.textContent = block.name;
+    body.append(image);
+  }
+  if (message.status === 'streaming') {
+    const caret = document.createElement('span');
+    caret.className = 'native-message__stream-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    (streamingTextMount ?? body).append(caret);
+  }
+  article.replaceChildren(label, body);
+  nativeMessageRenderKeys.set(article, renderKey);
+};
+
+const renderNativeMessage = (message: ConversationMessageView): HTMLElement => {
+  const article = document.createElement('article');
+  updateNativeMessage(article, message);
+  return article;
+};
+
+const respondToNativeInteraction = async (
+  interaction: ConversationInteraction,
+  response: ConversationInteractionResponse,
+): Promise<void> => {
+  if (!activeNativeConversationId) return;
+  const result = await window.controlPanel.respondNativeConversation(
+    activeNativeConversationId,
+    interaction.id,
+    response,
+  );
+  if (!result.ok) {
+    showToast(result.message ?? '没有成功提交这次选择。', 'error');
+  } else if (expandedNativePlan?.id === interaction.id) {
+    closeNativePlanDialog();
+  }
+};
+
+const closeNativePlanDialog = (): void => {
+  if (!nativePlanDialog.open || nativePlanDialog.dataset.state === 'closing') return;
+  nativePlanDialog.dataset.state = 'closing';
+  nativePlanCloseTimer = window.setTimeout(() => {
+    nativePlanDialog.close();
+    nativePlanDialog.dataset.state = 'closed';
+    nativePlanCloseTimer = undefined;
+    expandedNativePlan = undefined;
+  }, 220);
+};
+
+const openNativePlanDialog = (
+  interaction: Extract<ConversationInteraction, { kind: 'plan' }>,
+): void => {
+  if (nativePlanCloseTimer !== undefined) {
+    window.clearTimeout(nativePlanCloseTimer);
+    nativePlanCloseTimer = undefined;
+  }
+  expandedNativePlan = interaction;
+  nativePlanTitle.textContent = interaction.title || '实施计划';
+  nativePlanContent.replaceChildren();
+  void markdownRenderer.renderInto(nativePlanContent, interaction.markdown);
+  if (!nativePlanDialog.open) nativePlanDialog.showModal();
+  nativePlanDialog.dataset.state = 'opening';
+  window.requestAnimationFrame(() => {
+    nativePlanDialog.dataset.state = 'open';
+  });
+  nativePlanClose.focus({ preventScroll: true });
+};
+
+const nativeInteractionButton = (
+  label: string,
+  primary: boolean,
+  action: () => void,
+): HTMLButtonElement => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.className = primary ? 'button button--compact button--primary' : 'button button--compact';
+  button.addEventListener('click', action);
+  return button;
+};
+
+const appendNativeQuestionFields = (
+  form: HTMLFormElement,
+  questions: unknown[],
+): (() => Record<string, unknown>) => {
+  const answerFields: Array<{
+    multi: boolean;
+    name: string;
+    question: string;
+  }> = [];
+  for (const [index, rawQuestion] of questions.entries()) {
+    const question = nativeRecord(rawQuestion);
+    if (!question) continue;
+    const prompt = typeof question.question === 'string' ? question.question : `问题 ${index + 1}`;
+    const header = typeof question.header === 'string' ? question.header : prompt;
+    const multi = question.multiSelect === true;
+    const name = `native-question-${index}`;
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'native-interaction__options';
+    const legend = document.createElement('legend');
+    legend.textContent = header;
+    fieldset.append(legend);
+    const options = Array.isArray(question.options) ? question.options : [];
+    for (const [optionIndex, rawOption] of options.entries()) {
+      const option = nativeRecord(rawOption);
+      if (!option) continue;
+      const labelText = typeof option.label === 'string' ? option.label : `选项 ${optionIndex + 1}`;
+      const row = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = multi ? 'checkbox' : 'radio';
+      input.name = name;
+      input.value = labelText;
+      input.required = !multi;
+      const copy = document.createElement('span');
+      const strong = document.createElement('strong');
+      strong.textContent = labelText;
+      copy.append(strong);
+      if (typeof option.description === 'string' && option.description) {
+        const description = document.createElement('small');
+        description.textContent = option.description;
+        copy.append(description);
+      }
+      row.append(input, copy);
+      fieldset.append(row);
+    }
+    form.append(fieldset);
+    answerFields.push({ multi, name, question: prompt });
+  }
+  return () => {
+    const answers: Record<string, string | string[]> = {};
+    for (const field of answerFields) {
+      const selected = [
+        ...form.querySelectorAll<HTMLInputElement>(`[name="${field.name}"]:checked`),
+      ].map((input) => input.value);
+      answers[field.question] = field.multi ? selected : (selected[0] ?? '');
+    }
+    return { answers };
+  };
+};
+
+const appendNativeMcpFields = (
+  form: HTMLFormElement,
+  schema: Record<string, unknown> | undefined,
+): (() => Record<string, unknown>) => {
+  const properties = nativeRecord(schema?.properties) ?? {};
+  const fields: Array<{ key: string; input: HTMLInputElement }> = [];
+  for (const [key, rawDefinition] of Object.entries(properties)) {
+    const definition = nativeRecord(rawDefinition);
+    const label = document.createElement('label');
+    label.className = 'native-interaction__field';
+    const caption = document.createElement('span');
+    caption.textContent = typeof definition?.title === 'string' ? definition.title : key;
+    const input = document.createElement('input');
+    input.type =
+      definition?.type === 'number' || definition?.type === 'integer' ? 'number' : 'text';
+    input.name = key;
+    input.required = Array.isArray(schema?.required) && schema.required.includes(key);
+    if (typeof definition?.description === 'string') input.placeholder = definition.description;
+    label.append(caption, input);
+    form.append(label);
+    fields.push({ input, key });
+  }
+  return () =>
+    Object.fromEntries(
+      fields.map(({ input, key }) => [
+        key,
+        input.type === 'number' && input.value ? Number(input.value) : input.value,
+      ]),
+    );
+};
+
+const renderNativeInteraction = (interaction: ConversationInteraction): HTMLElement => {
+  const card = document.createElement('form');
+  card.className = `native-interaction native-interaction--${interaction.kind}`;
+  card.dataset.interactionId = interaction.id;
+  const head = document.createElement('div');
+  head.className = 'native-interaction__head';
+  const eyebrow = document.createElement('span');
+  eyebrow.className = 'native-interaction__eyebrow';
+  eyebrow.textContent =
+    interaction.kind === 'permission'
+      ? '权限确认'
+      : interaction.kind === 'question'
+        ? '需要你的选择'
+        : interaction.kind === 'plan'
+          ? '实施计划'
+          : 'MCP 请求';
+  const title = document.createElement('strong');
+  title.textContent = interaction.title;
+  head.append(eyebrow, title);
+  if ('description' in interaction && interaction.description) {
+    const description = document.createElement('p');
+    description.textContent = interaction.description;
+    head.append(description);
+  }
+  card.append(head);
+
+  let collectValues: (() => Record<string, unknown>) | undefined;
+  if (interaction.kind === 'permission') {
+    const payload = document.createElement('pre');
+    payload.className = 'native-interaction__payload';
+    payload.textContent = nativeJson(interaction.input);
+    card.append(payload);
+  } else if (interaction.kind === 'question') {
+    collectValues = appendNativeQuestionFields(card, interaction.questions);
+  } else if (interaction.kind === 'plan') {
+    const plan = document.createElement('div');
+    plan.className = 'chat-message__markdown native-interaction__plan';
+    card.append(plan);
+    void markdownRenderer.renderInto(plan, interaction.markdown);
+    const expand = document.createElement('button');
+    expand.className = 'button button--compact native-plan-expand';
+    expand.type = 'button';
+    expand.textContent = '全屏检查计划';
+    expand.addEventListener('click', () => openNativePlanDialog(interaction));
+    card.append(expand);
+  } else if (interaction.mode === 'url' && interaction.url) {
+    const payload = document.createElement('pre');
+    payload.className = 'native-interaction__payload';
+    payload.textContent = interaction.url;
+    card.append(payload);
+  } else {
+    collectValues = appendNativeMcpFields(card, interaction.schema);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'native-interaction__actions';
+  const cancel = nativeInteractionButton('取消', false, () => {
+    void respondToNativeInteraction(interaction, { action: 'cancel' });
+  });
+  actions.append(cancel);
+  if (interaction.kind === 'permission') {
+    actions.append(
+      nativeInteractionButton('拒绝', false, () => {
+        void respondToNativeInteraction(interaction, { action: 'deny' });
+      }),
+    );
+    if (interaction.allowRemember) {
+      actions.append(
+        nativeInteractionButton('允许并记住', false, () => {
+          void respondToNativeInteraction(interaction, { action: 'allow', remember: true });
+        }),
+      );
+    }
+    actions.append(
+      nativeInteractionButton('允许一次', true, () => {
+        void respondToNativeInteraction(interaction, { action: 'allow' });
+      }),
+    );
+  } else if (interaction.kind === 'plan') {
+    actions.append(
+      nativeInteractionButton('继续规划', false, () => {
+        void respondToNativeInteraction(interaction, { action: 'deny', message: '继续完善计划' });
+      }),
+      nativeInteractionButton('批准计划', true, () => {
+        void respondToNativeInteraction(interaction, { action: 'allow' });
+      }),
+    );
+  } else {
+    const submit = nativeInteractionButton('提交', true, () => undefined);
+    submit.type = 'submit';
+    actions.append(submit);
+  }
+  card.append(actions);
+  card.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void respondToNativeInteraction(interaction, {
+      action: 'submit',
+      values: collectValues?.() ?? {},
+    });
+  });
+  return card;
+};
+
+const setNativeConversationVisible = (visible: boolean): void => {
+  if (nativeConversationClosingTimer !== undefined) {
+    window.clearTimeout(nativeConversationClosingTimer);
+    nativeConversationClosingTimer = undefined;
+  }
+  if (visible) {
+    terminalShell.classList.add('terminal-shell--native');
+    nativeConversation.dataset.state = 'opening';
+    nativeConversation.setAttribute('aria-hidden', 'false');
+    nativeTerminalToggle.setAttribute('aria-pressed', 'true');
+    nativeTerminalToggleLabel.textContent = '返回终端';
+    nativeTerminalToggle.title = '返回安全终端';
+    window.requestAnimationFrame(() => {
+      if (nativeConversation.dataset.state === 'opening') nativeConversation.dataset.state = 'open';
+    });
+    return;
+  }
+  if (nativeConversation.dataset.state === 'closed') return;
+  nativeConversation.dataset.state = 'closing';
+  nativeConversation.setAttribute('aria-hidden', 'true');
+  nativeTerminalToggle.setAttribute('aria-pressed', 'false');
+  nativeTerminalToggleLabel.textContent = '原生对话';
+  nativeTerminalToggle.title = '打开原生对话';
+  nativeConversationClosingTimer = window.setTimeout(() => {
+    nativeConversation.dataset.state = 'closed';
+    terminalShell.classList.remove('terminal-shell--native');
+    nativeConversationClosingTimer = undefined;
+    retryTerminalFitUntilMeasured();
+  }, 260);
+};
+
+const nativeEffortLabel = (effort: string): string =>
+  ({
+    auto: '跟随模型',
+    high: '均衡',
+    low: '最低',
+    max: '最大',
+    medium: '较低',
+    ultracode: 'Ultra Code',
+    xhigh: '更深 · X-High',
+  })[effort] ?? effort;
+
+const nativePermissionLabel = (mode: string): string =>
+  ({
+    acceptEdits: '自动接受修改',
+    auto: '智能权限',
+    bypassPermissions: '完全允许',
+    default: '逐项确认',
+    dontAsk: '仅预批准',
+    plan: '规划模式',
+  })[mode] ?? mode;
+
+const nativePermissionDescription = (mode: string): string =>
+  ({
+    acceptEdits: '文件修改自动通过，其余动作仍按规则确认。',
+    auto: '由 Claude Code 的权限分类器判断是否放行动作。',
+    bypassPermissions: '跳过工具权限确认；仅在项目已开启高风险预置时提供。',
+    default: '未预先批准的动作逐项显示权限确认。',
+    dontAsk: '未预先批准的动作直接拒绝；你明确要求选项时仍可显示结构化选择题。',
+    plan: '只读探索并先给出计划，不直接修改项目。',
+  })[mode] ?? mode;
+
+const replaceNativeControlOptions = (
+  select: HTMLSelectElement,
+  options: Array<{ label: string; value: string }>,
+  selected: string,
+): void => {
+  select.replaceChildren(
+    ...options.map(({ label, value }) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  setEnhancedSelectValue(select, selected);
+};
+
+const renderNativeControls = (snapshot: ConversationSnapshot): void => {
+  const capability = snapshot.capabilities;
+  if (!capability) {
+    for (const control of [nativeModelControl, nativeEffortControl, nativePermissionControl]) {
+      control.disabled = true;
+    }
+    nativeFastControl.disabled = true;
+    return;
+  }
+  if (renderedNativeCapabilityRevision !== capability.revision) {
+    renderedNativeCapabilityRevision = capability.revision;
+    replaceNativeControlOptions(
+      nativeModelControl,
+      (capability.models ?? [{ id: capability.model, label: capability.model }]).map((model) => ({
+        label: model.label,
+        value: model.id,
+      })),
+      capability.model,
+    );
+    replaceNativeControlOptions(
+      nativeEffortControl,
+      capability.effort.options.map((effort) => ({
+        label: nativeEffortLabel(effort),
+        value: effort,
+      })),
+      capability.effort.requested ??
+        capability.effort.applied ??
+        capability.effort.options[0] ??
+        '',
+    );
+    replaceNativeControlOptions(
+      nativePermissionControl,
+      capability.permissionModes.map((mode) => ({
+        label: nativePermissionLabel(mode),
+        value: mode,
+      })),
+      nativePermissionControl.value || capability.permissionModes[0] || '',
+    );
+  }
+  nativeModelControl.disabled = nativeControlsUpdating || (capability.models?.length ?? 1) < 2;
+  nativeEffortControl.disabled = nativeControlsUpdating || capability.effort.options.length === 0;
+  const selectedEffort = capability.effort.requested ?? capability.effort.applied;
+  const effortDescription =
+    selectedEffort === 'ultracode'
+      ? '工作流编排；实际思考档位为 X-High，仅作用于当前会话。'
+      : '选择当前模型支持的思考档位。';
+  nativeEffortControl.title = effortDescription;
+  nativeEffortControl.setAttribute('aria-description', effortDescription);
+  nativePermissionControl.disabled =
+    nativeControlsUpdating || capability.permissionModes.length === 0;
+  const permissionDescription = nativePermissionDescription(nativePermissionControl.value);
+  nativePermissionControl.title = permissionDescription;
+  nativePermissionControl.setAttribute('aria-description', permissionDescription);
+  nativeFastControl.disabled =
+    nativeControlsUpdating ||
+    !['off', 'requested', 'confirmed', 'fallback'].includes(capability.fast.state);
+  nativeFastControl.setAttribute(
+    'aria-pressed',
+    String(capability.fast.state === 'requested' || capability.fast.state === 'confirmed'),
+  );
+  nativeFastControl.dataset.state = capability.fast.state;
+  nativeFastControl.textContent =
+    capability.fast.state === 'confirmed'
+      ? 'Fast · 已确认'
+      : capability.fast.state === 'requested'
+        ? 'Fast · 已请求'
+        : capability.fast.state === 'fallback'
+          ? 'Fast · 已回退'
+          : 'Fast';
+};
+
+const updateNativeControls = async (
+  update: Omit<ConversationControlUpdate, 'expectedCapabilityRevision'>,
+): Promise<void> => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  if (!snapshot?.capabilities || nativeControlsUpdating) return;
+  nativeControlsUpdating = true;
+  renderNativeControls(snapshot);
+  try {
+    const result = await window.controlPanel.updateNativeConversationControls(
+      activeNativeConversationId,
+      { ...update, expectedCapabilityRevision: snapshot.capabilities.revision },
+    );
+    if (!result.ok) {
+      showToast(result.message ?? '无法更新模型控制项。', 'error');
+      return;
+    }
+    if (result.snapshot) renderNativeConversation(result.snapshot);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法更新模型控制项。', 'error');
+  } finally {
+    nativeControlsUpdating = false;
+    const latest = nativeConversationSnapshots.get(activeNativeConversationId);
+    if (latest) renderNativeControls(latest);
+  }
+};
+
+const handleNativeSlashCommand = async (
+  rawInput: string,
+  snapshot: ConversationSnapshot,
+): Promise<boolean> => {
+  const trimmed = rawInput.trim();
+  if (!trimmed.startsWith('/')) return false;
+  const [invocation = '', ...argumentParts] = trimmed.split(/\s+/);
+  const argument = argumentParts.join(' ').trim();
+  const command =
+    resolveClaudeNativeCommand(trimmed) ??
+    snapshot.commands.find((candidate) =>
+      [candidate.name, ...candidate.aliases].some(
+        (name) => name.toLowerCase() === invocation.toLowerCase(),
+      ),
+    );
+  if (!command || command.mapping === 'unknown') {
+    const enterTerminal = await requestConfirmation({
+      confirmLabel: '进入安全终端',
+      message:
+        '这是当前 ClaudeDock 尚未识别的新版命令。为避免把控制命令误当普通提示词，它已被拦截；可返回安全终端使用 Claude 原生 TUI。',
+      title: `尚未适配 ${invocation}`,
+      tone: 'default',
+    });
+    if (enterTerminal) nativeTerminalToggle.click();
+    return true;
+  }
+  if (command.mapping === 'adapter') return false;
+  if (command.mapping === 'terminal-only') {
+    const enterTerminal = await requestConfirmation({
+      confirmLabel: '进入安全终端',
+      message: `${command.name} 控制的是 TUI 显示或终端键位，在原生 DOM 对话中不适用。可以返回安全终端继续。`,
+      title: `${command.name} 仅适用于安全终端`,
+      tone: 'default',
+    });
+    if (enterTerminal) nativeTerminalToggle.click();
+    return true;
+  }
+
+  if (command.mapping === 'claudedock') {
+    if (['/model', '/effort', '/fast', '/permissions'].includes(command.name)) {
+      if (command.name === '/model' && argument) await updateNativeControls({ model: argument });
+      else if (command.name === '/effort' && argument)
+        await updateNativeControls({ effort: argument.toLowerCase() });
+      else if (command.name === '/fast' && argument)
+        await updateNativeControls({
+          fast: !['off', 'false', '0'].includes(argument.toLowerCase()),
+        });
+      else if (command.name === '/permissions' && argument)
+        await updateNativeControls({ permissionMode: argument });
+      else {
+        const control =
+          command.name === '/model'
+            ? nativeModelControl
+            : command.name === '/effort'
+              ? nativeEffortControl
+              : command.name === '/permissions'
+                ? nativePermissionControl
+                : nativeFastControl;
+        control.focus({ preventScroll: true });
+        control.click();
+      }
+      return true;
+    }
+    if (['/context', '/cost', '/status', '/usage', '/usage-credits'].includes(command.name)) {
+      renderRuntimeActivity();
+      setRuntimeSummaryOpen(true);
+      return true;
+    }
+    if (command.name === '/theme' || command.name === '/color') {
+      terminalThemeSelect.focus({ preventScroll: true });
+      terminalThemeSelect.click();
+      return true;
+    }
+    if (command.name === '/mcp') selectRailTab('mcp');
+    else if (['/plugin', '/reload-plugins', '/reload-skills'].includes(command.name))
+      selectRailTab('plugins');
+    else selectRailTab('connection');
+    setNativeConversationVisible(false);
+    showToast(`${command.name} 已转到 ClaudeDock 的对应管理页面。`);
+    return true;
+  }
+
+  if (command.name === '/stop') {
+    const result = await window.controlPanel.interruptNativeConversation(snapshot.conversationId);
+    if (!result.ok) showToast(result.message ?? '当前没有可中断的前台轮次。', 'error');
+    return true;
+  }
+  if (command.name === '/tasks') {
+    renderRuntimeActivity();
+    setRuntimeSummaryOpen(true);
+    return true;
+  }
+  if (command.name === '/resume') {
+    if (/^[0-9a-f-]{36}$/i.test(argument)) {
+      await launchNativeClaude('resume', argument);
+    } else {
+      await launchNativeClaude('resume');
+    }
+    return true;
+  }
+  if (command.name === '/rename') {
+    if (!argument) {
+      showToast('请输入新的对话名称，例如 /rename 发布前检查。', 'error');
+      return true;
+    }
+    const renamed = await window.controlPanel.renameNativeConversation(
+      snapshot.conversationId,
+      argument,
+    );
+    showToast(renamed ? `已重命名为“${argument}”。` : '名称没有变化。');
+    return true;
+  }
+  if (command.name === '/copy') {
+    const latest = [...snapshot.messages].reverse().find((message) => message.role === 'assistant');
+    const text = latest?.blocks
+      .filter((block): block is Extract<ConversationContentBlock, { type: 'text' }> =>
+        Boolean(block.type === 'text'),
+      )
+      .map((block) => block.text)
+      .join('\n\n');
+    if (!text) showToast('还没有可复制的助手回复。', 'error');
+    else {
+      await navigator.clipboard.writeText(text);
+      showToast('已复制最近一条助手回复。');
+    }
+    return true;
+  }
+  if (command.name === '/effort') {
+    if (argument) await updateNativeControls({ effort: argument.toLowerCase() });
+    else nativeEffortControl.focus({ preventScroll: true });
+    return true;
+  }
+  if (command.name === '/plan') {
+    await updateNativeControls({ permissionMode: 'plan' });
+    if (argument) {
+      nativeComposerInput.value = argument;
+      resizeNativeComposer();
+      nativeComposerInput.focus();
+      showToast('已进入规划模式；规划目标已放回输入框，确认后手动发送。');
+    }
+    return true;
+  }
+  if (command.name === '/clear' || command.name === '/exit') {
+    const confirmed = await requestConfirmation({
+      confirmLabel: command.name === '/clear' ? '结束并新建' : '结束对话',
+      message:
+        command.name === '/clear'
+          ? '当前对话会安全关闭并回到历史，然后创建一个全新的 UUID。'
+          : '当前原生对话会安全关闭；历史正文不会删除。',
+      title: command.name === '/clear' ? '开始新对话？' : '结束当前对话？',
+      tone: 'danger',
+    });
+    if (!confirmed) return true;
+    const result = await window.controlPanel.closeNativeConversation(snapshot.conversationId);
+    if (!result.ok) {
+      showToast(result.message ?? '无法关闭当前对话。', 'error');
+      return true;
+    }
+    activeNativeConversationId = '';
+    await refreshNativeRecoveries();
+    if (command.name === '/clear') await launchNativeClaude('new');
+    else setNativeConversationVisible(false);
+    return true;
+  }
+  return false;
+};
+
+const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
+  const recorded = nativeConversationSnapshots.get(snapshot.conversationId);
+  if (
+    recorded &&
+    (recorded.revision > snapshot.revision ||
+      (recorded.revision === snapshot.revision && recorded.sequence > snapshot.sequence))
+  ) {
+    return;
+  }
+  nativeConversationSnapshots.set(snapshot.conversationId, snapshot);
+  nativeConversationByProject.set(snapshot.projectPath.toLowerCase(), snapshot.conversationId);
+  if (snapshot.conversationId !== activeNativeConversationId) return;
+  const nearBottom =
+    nativeConversationMessages.scrollHeight -
+      nativeConversationMessages.scrollTop -
+      nativeConversationMessages.clientHeight <
+    96;
+  const existing = new Map(
+    [...nativeConversationMessages.querySelectorAll<HTMLElement>('[data-native-message-id]')].map(
+      (element) => [element.dataset.nativeMessageId ?? '', element],
+    ),
+  );
+  const ordered: HTMLElement[] = [];
+  for (const message of snapshot.messages) {
+    const previous = existing.get(message.id);
+    if (previous) {
+      const renderKey = nativeMessageRenderKey(message);
+      if (nativeMessageRenderKeys.get(previous) !== renderKey) {
+        updateNativeMessage(previous, message, renderKey);
+      }
+      existing.delete(message.id);
+      ordered.push(previous);
+    } else {
+      ordered.push(renderNativeMessage(message));
+    }
+  }
+  for (const stale of existing.values()) stale.remove();
+  nativeConversationEmpty.hidden = snapshot.messages.length > 0;
+  nativeConversationMessages.replaceChildren(nativeConversationEmpty, ...ordered);
+  const [activeInteraction] = snapshot.interactions;
+  nativeInteractionStack.dataset.pendingCount = String(snapshot.interactions.length);
+  nativeInteractionStack.replaceChildren(
+    ...(activeInteraction ? [renderNativeInteraction(activeInteraction)] : []),
+  );
+  nativeComposerStatus.textContent = nativePhaseLabel(snapshot.phase);
+  const capability = snapshot.capabilities;
+  renderNativeControls(snapshot);
+  const running = snapshot.phase === 'running' || snapshot.phase === 'stopping';
+  const submitting = nativeConversationSubmissions.has(snapshot.conversationId);
+  nativeStopButton.hidden = !running;
+  nativeSendButton.disabled =
+    nativeConversationStartingSessionId === workspaceState.activeSessionId ||
+    submitting ||
+    snapshot.phase === 'starting' ||
+    snapshot.phase === 'stopping' ||
+    snapshot.phase === 'stopped' ||
+    snapshot.phase === 'failed';
+  nativeComposerInput.disabled = snapshot.phase === 'stopped' || snapshot.phase === 'failed';
+  nativeAttachButton.disabled = submitting || !capability?.attachments.image;
+  renderRuntimeActivity();
+  if (nearBottom) nativeConversationMessages.scrollTop = nativeConversationMessages.scrollHeight;
+};
+
+const scheduleNativeConversationRender = (snapshot: ConversationSnapshot): void => {
+  const pending = pendingNativeConversationRenders.get(snapshot.conversationId);
+  if (
+    pending &&
+    (pending.revision > snapshot.revision ||
+      (pending.revision === snapshot.revision && pending.sequence >= snapshot.sequence))
+  ) {
+    return;
+  }
+  pendingNativeConversationRenders.set(snapshot.conversationId, snapshot);
+  if (nativeConversationRenderFrame !== undefined) return;
+  nativeConversationRenderFrame = window.requestAnimationFrame(() => {
+    nativeConversationRenderFrame = undefined;
+    const snapshots = [...pendingNativeConversationRenders.values()];
+    pendingNativeConversationRenders.clear();
+    for (const pendingSnapshot of snapshots) renderNativeConversation(pendingSnapshot);
+  });
+};
+
+const activateNativeConversation = (conversationId: string): void => {
+  activeNativeConversationId = conversationId;
+  renderNativeRecoveries();
+  setNativeConversationVisible(true);
+  const snapshot = nativeConversationSnapshots.get(conversationId);
+  if (snapshot) renderNativeConversation(snapshot);
+  nativeComposerInput.focus();
+};
+
+const recoveryProjectIsActive = (recovery: NativeRecoveryView): boolean =>
+  recovery.projectPath.toLowerCase() === (activeStatus()?.cwd ?? '').toLowerCase() &&
+  recovery.conversationId !== activeNativeConversationId;
+
+const refreshNativeRecoveries = async (): Promise<void> => {
+  try {
+    nativeRecoveries = await window.controlPanel.listNativeRecoveries();
+  } catch {
+    nativeRecoveries = [];
+  }
+  renderNativeRecoveries();
+};
+
+const restoreRecoveryDraft = async (
+  recovery: NativeRecoveryView,
+  clientSubmissionId: string,
+): Promise<void> => {
+  const result = await window.controlPanel.restoreNativeDraft(
+    recovery.conversationId,
+    clientSubmissionId,
+    recovery.projectPath,
+  );
+  const restoredDraft = result.draft;
+  if (!result.ok || !restoredDraft) {
+    showToast(result.message ?? '无法恢复待确认文本。', 'error');
+    return;
+  }
+  const text = restoredDraft.blocks
+    .filter(
+      (block): block is Extract<(typeof restoredDraft.blocks)[number], { type: 'text' }> =>
+        block.type === 'text',
+    )
+    .map((block) => block.text)
+    .join('\n\n');
+  nativeComposerInput.value = text;
+  resizeNativeComposer();
+  nativeComposerInput.dataset.recoveredDraft = 'true';
+  nativeComposerStatus.textContent = '已恢复为未发送草稿 · 请核对后手动发送';
+  if (restoredDraft.blocks.some((block) => block.type === 'image')) {
+    showToast('原输入包含图片；为避免引用失效，请重新添加图片后再发送。');
+  } else {
+    showToast(result.message ?? '草稿已恢复，尚未发送。');
+  }
+  nativeComposerInput.focus();
+};
+
+const renderNativeRecoveries = (): void => {
+  const recoveries = nativeRecoveries.filter(recoveryProjectIsActive);
+  nativeRecoveryStack.hidden = recoveries.length === 0;
+  const cards = recoveries.map((recovery) => {
+    const card = document.createElement('article');
+    card.className = 'native-recovery-card';
+    const copy = document.createElement('div');
+    const eyebrow = document.createElement('span');
+    eyebrow.textContent = '上次运行异常中断';
+    const title = document.createElement('strong');
+    title.textContent = recovery.launch.model
+      ? `${recovery.launch.model} 对话可恢复`
+      : 'Claude 对话可恢复';
+    const detail = document.createElement('p');
+    const unknownCount = recovery.submissions.filter(
+      (submission) => submission.state === 'result-unknown',
+    ).length;
+    const draftCount = recovery.submissions.filter(
+      (submission) => submission.state === 'interrupted-draft',
+    ).length;
+    detail.textContent = unknownCount
+      ? `${unknownCount} 条输入的发送结果无法确认；ClaudeDock 不会自动重发。`
+      : draftCount
+        ? `${draftCount} 条内容尚未发送，可恢复到输入框核对。`
+        : '正文仍以 Claude JSONL 为准，可精确继续原对话。';
+    copy.append(eyebrow, title, detail);
+
+    const actions = document.createElement('div');
+    actions.className = 'native-recovery-card__actions';
+    const resume = document.createElement('button');
+    resume.type = 'button';
+    resume.className = 'button button--compact';
+    resume.textContent = '继续原对话';
+    resume.addEventListener('click', () => {
+      void launchNativeClaude('resume', recovery.conversationId);
+    });
+    actions.append(resume);
+    const recoverable = recovery.submissions.find((submission) =>
+      ['interrupted-draft', 'result-unknown'].includes(submission.state),
+    );
+    if (recoverable) {
+      const draft = document.createElement('button');
+      draft.type = 'button';
+      draft.className = 'button button--compact';
+      draft.textContent = unknownCount ? '恢复待核对文本' : '恢复未发送草稿';
+      draft.addEventListener('click', () => {
+        void restoreRecoveryDraft(recovery, recoverable.clientSubmissionId);
+      });
+      actions.append(draft);
+    }
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.className = 'button button--compact button--danger native-recovery-card__discard';
+    discard.textContent = '丢弃记录';
+    discard.addEventListener('click', () => {
+      void (async () => {
+        const confirmed = await requestConfirmation({
+          confirmLabel: '丢弃恢复记录',
+          message: '只会删除 ClaudeDock 的恢复提示，不会删除 Claude 的 JSONL 历史正文。',
+          title: '丢弃恢复记录？',
+          tone: 'danger',
+        });
+        if (!confirmed) return;
+        await window.controlPanel.discardNativeRecovery(
+          recovery.conversationId,
+          recovery.projectPath,
+        );
+        await refreshNativeRecoveries();
+      })().catch(() => showToast('无法丢弃恢复记录。', 'error'));
+    });
+    actions.append(discard);
+    card.append(copy, actions);
+    return card;
+  });
+  nativeRecoveryStack.replaceChildren(...cards);
+};
+
+const launchNativeClaude = async (
+  mode: ClaudeLaunchMode,
+  exactConversationId?: string,
+): Promise<void> => {
+  const status = activeStatus();
+  if (!status || nativeConversationStartingSessionId) return;
+  let conversationId = exactConversationId;
+  if (!conversationId && mode === 'continue') {
+    conversationId = storedConversations.get(status.cwd.toLowerCase())?.[0]?.conversationId;
+  }
+  if (!conversationId && mode === 'resume') {
+    expandedFolders.add(status.cwd.toLowerCase());
+    await loadFolderHistory(status.cwd, false);
+    renderWorkspace(workspaceState);
+    showToast('请从左侧历史对话中选择要恢复的会话。');
+    return;
+  }
+  nativeConversationStartingSessionId = status.id;
+  refreshClaudeLaunchControls(status.id);
+  nativeSendButton.disabled = true;
+  nativeComposerStatus.textContent = '正在安全启动 Claude…';
+  let launchSucceeded = false;
+  let launchFailureMessage = '';
+  try {
+    const result = await window.controlPanel.startNativeConversation({
+      conversationId,
+      projectPath: status.cwd,
+      resume: Boolean(conversationId),
+    });
+    if (!result.ok) {
+      launchFailureMessage = result.message ?? '无法启动 Claude 原生对话。';
+      showToast(launchFailureMessage, 'error');
+      return;
+    }
+    launchSucceeded = true;
+    if (result.existingOwnerKind === 'terminal') {
+      nativeSendButton.disabled = true;
+      nativeComposerStatus.textContent = '该对话已在安全终端中运行';
+      showToast('该对话已经在安全终端中运行。');
+      setNativeConversationVisible(false);
+      return;
+    }
+    if (result.snapshot) renderNativeConversation(result.snapshot);
+    activateNativeConversation(result.conversationId);
+    showToast(result.reused ? '已切换到正在运行的对话。' : 'Claude 原生对话已就绪。');
+  } catch (error) {
+    launchFailureMessage = error instanceof Error ? error.message : '无法启动 Claude 原生对话。';
+    showToast(launchFailureMessage, 'error');
+  } finally {
+    if (nativeConversationStartingSessionId === status.id) {
+      nativeConversationStartingSessionId = undefined;
+    }
+    refreshClaudeLaunchControls(status.id);
+    const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+    if (snapshot) {
+      renderNativeConversation(snapshot);
+    } else if (launchSucceeded) {
+      nativeSendButton.disabled = false;
+      nativeComposerStatus.textContent = 'Claude 已就绪';
+    } else if (!launchSucceeded) {
+      const state = claudeStates.get(status.id);
+      const credentialRequired =
+        state &&
+        (state.config.authMode === 'apiKey' || state.config.authMode === 'authToken') &&
+        !state.config.credentialConfigured;
+      nativeSendButton.disabled = true;
+      nativeComposerStatus.textContent = !state
+        ? '接入配置未就绪 · 请打开配置检查'
+        : state.installation.security !== 'ready'
+          ? 'Claude Code 尚未就绪 · 请检查环境'
+          : credentialRequired
+            ? '尚未接入模型 · 请先完成配置'
+            : state.routeHealth?.blocking
+              ? '接入配置不可用 · 请打开配置检查'
+              : /NPM|claude\.exe|启动器/u.test(launchFailureMessage)
+                ? 'Claude Code 启动器不可用 · 请打开任务与下载'
+                : /配置|接入|连接|凭据|模型/u.test(launchFailureMessage)
+                  ? '接入配置不可用 · 请打开配置检查'
+                  : '启动失败 · 请查看错误提示后重试';
+    }
+  }
+};
+
+const resizeNativeComposer = (): void => {
+  nativeComposerInput.style.height = 'auto';
+  nativeComposerInput.style.height = `${Math.min(nativeComposerInput.scrollHeight, 168)}px`;
+  document.documentElement.style.setProperty(
+    '--native-composer-h',
+    `${Math.ceil(nativeComposer.getBoundingClientRect().height)}px`,
+  );
+};
+
+const renderPendingNativeAttachments = (): void => {
+  nativeAttachmentQueue.hidden = pendingNativeAttachments.length === 0;
+  nativeAttachmentQueue.replaceChildren();
+  for (const attachment of pendingNativeAttachments) {
+    const card = document.createElement('article');
+    card.className = 'native-attachment';
+    const preview = document.createElement('div');
+    preview.className = 'native-attachment__preview';
+    if (attachment.previewDataUrl) {
+      const image = document.createElement('img');
+      image.alt = attachment.fileName;
+      image.src = attachment.previewDataUrl;
+      preview.append(image);
+    } else {
+      preview.textContent = '图片';
+    }
+    const copy = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = attachment.fileName;
+    const meta = document.createElement('small');
+    meta.textContent = `${attachment.width}×${attachment.height} · ${formatAttachmentSize(attachment.sizeBytes)}`;
+    copy.append(name, meta);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `移除图片 ${attachment.fileName}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      if (!activeNativeConversationId) return;
+      remove.disabled = true;
+      void window.controlPanel
+        .removeNativeAttachment(activeNativeConversationId, attachment.attachmentId)
+        .then(() => {
+          const index = pendingNativeAttachments.findIndex(
+            (item) => item.attachmentId === attachment.attachmentId,
+          );
+          if (index >= 0) pendingNativeAttachments.splice(index, 1);
+          renderPendingNativeAttachments();
+        })
+        .catch(() => {
+          remove.disabled = false;
+          showToast('无法移除这张图片。', 'error');
+        });
+    });
+    card.append(preview, copy, remove);
+    nativeAttachmentQueue.append(card);
+  }
+};
+
+const applyNativeAttachmentResult = (result: NativeAttachmentImportResult): void => {
+  if (!result.ok) {
+    showToast(result.message ?? '无法安全导入图片。', 'error');
+    return;
+  }
+  pendingNativeAttachments.push(...result.attachments);
+  renderPendingNativeAttachments();
+  for (const attachment of result.attachments) {
+    void window.controlPanel
+      .readNativeAttachment(activeNativeConversationId, attachment.attachmentId)
+      .then((view) => {
+        if (!view?.previewDataUrl) return;
+        const target = pendingNativeAttachments.find(
+          (item) => item.attachmentId === attachment.attachmentId,
+        );
+        if (target) {
+          target.previewDataUrl = view.previewDataUrl;
+          renderPendingNativeAttachments();
+        }
+      })
+      .catch(() => undefined);
+  }
+  if (result.attachments.length > 0) {
+    showToast(`已安全添加 ${result.attachments.length} 张图片。`);
+  }
+};
+
+const nativeClipboardFileName = (file: File, index: number): string => {
+  const name = file.name.replace(/[\\/]/g, '').trim();
+  if (name && /\.(?:gif|jpe?g|png|webp)$/i.test(name)) return name;
+  const extension =
+    (
+      {
+        'image/gif': '.gif',
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'image/webp': '.webp',
+      } as Record<string, string>
+    )[file.type.toLowerCase()] ?? '.png';
+  return `${name || `粘贴图片-${index + 1}`}${extension}`;
+};
+
+const importNativeAttachments = async (files: File[]): Promise<void> => {
+  if (!activeNativeConversationId || files.length === 0 || nativeAttachmentImporting) return;
+  nativeAttachmentImporting = true;
+  nativeAttachButton.disabled = true;
+  nativeComposerStatus.textContent = '正在检查图片安全性…';
+  try {
+    const paths: string[] = [];
+    const memoryFiles: File[] = [];
+    for (const file of files.slice(0, 10 - pendingNativeAttachments.length)) {
+      const filePath = window.controlPanel.getDroppedPath(file) ?? '';
+      if (filePath) paths.push(filePath);
+      else memoryFiles.push(file);
+    }
+    if (paths.length > 0) {
+      applyNativeAttachmentResult(
+        await window.controlPanel.importNativeAttachmentPaths(activeNativeConversationId, paths),
+      );
+    }
+    if (memoryFiles.length > 0) {
+      const sources = await Promise.all(
+        memoryFiles.map(async (file, index) => ({
+          bytes: await file.arrayBuffer(),
+          fileName: nativeClipboardFileName(file, index),
+        })),
+      );
+      applyNativeAttachmentResult(
+        await window.controlPanel.importNativeAttachmentBytes(activeNativeConversationId, sources),
+      );
+    }
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法安全导入图片。', 'error');
+  } finally {
+    nativeAttachmentImporting = false;
+    nativeAttachmentInput.value = '';
+    const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+    if (snapshot) renderNativeConversation(snapshot);
+  }
 };
 
 const setChatBusy = (busy: boolean): void => {
@@ -4076,24 +5619,26 @@ const modelSpeedFastLabel = (state: ClaudeProjectState): string => {
     state.speed.mechanism === 'gpt-service-tier' ||
     state.config.preset === 'chatgpt-subscription'
   ) {
-    return 'GPT 1.5x';
+    return 'GPT Fast';
   }
   return state.config.provider === 'anthropic' ? 'Claude Fast' : '快速档';
 };
 
 const modelSpeedFooterLabel = (state: ClaudeProjectState): string => {
   if (state.speed.status === 'active') {
-    return '速度 Claude Fast 已开启';
+    return state.speed.mechanism === 'gpt-service-tier'
+      ? '速度 GPT Fast · 上游确认'
+      : '速度 Claude Fast · 上游确认';
   }
   if (state.speed.status === 'not-active') {
     return state.speed.mechanism === 'gpt-service-tier'
-      ? '速度 GPT 1.5x 未生效'
-      : '速度 Claude Fast 未生效';
+      ? '速度 GPT Fast · 已回退'
+      : '速度 Claude Fast · 已回退';
   }
   if (state.speed.status === 'requested') {
     return state.speed.mechanism === 'gpt-service-tier'
-      ? '速度 已请求 GPT 1.5x'
-      : '速度 已请求 Claude Fast';
+      ? '速度 GPT Fast · 已请求'
+      : '速度 Claude Fast · 已请求';
   }
   if (state.speed.availability === 'unsupported') {
     return '速度 不支持';
@@ -4104,7 +5649,7 @@ const modelSpeedFooterLabel = (state: ClaudeProjectState): string => {
   if (state.speed.availability === 'update-required') {
     return '速度 需更新';
   }
-  return '速度 标准';
+  return '速度 未请求';
 };
 
 const hideFooterMenus = (): void => {
@@ -4625,6 +6170,7 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
   const ready = installed && accountReady;
   const waitingForLogin = login.phase === 'waiting' || login.phase === 'starting';
   const launchInProgress = codexLaunchAttempts.isActive(state.sessionId);
+  const officialNetworkBlocked = networkPreflightResults.get('openai-codex')?.status === 'blocked';
 
   codexInstallStep.dataset.state = installed ? 'ready' : 'error';
   codexInstallTitle.textContent = installed
@@ -4694,7 +6240,8 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
           ? '使用 ChatGPT 登录并启动'
           : '新建 Codex 安全会话';
   codexPrimaryAction.textContent = actionLabel;
-  codexPrimaryAction.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  codexPrimaryAction.disabled =
+    codexOperationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
   codexPrimaryAction.setAttribute(
     'aria-busy',
     String(codexOperationInProgress || launchInProgress),
@@ -4704,7 +6251,8 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
     : ready
       ? '新建 Codex 会话'
       : '一键准备 Codex';
-  runClaudeButton.disabled = codexOperationInProgress || launchInProgress || waitingForLogin;
+  runClaudeButton.disabled =
+    codexOperationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
   runClaudeButton.setAttribute('aria-busy', String(codexOperationInProgress || launchInProgress));
   runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
   runClaudeButton.title = ready
@@ -4712,7 +6260,8 @@ const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true
     : '自动完成官方安装与 ChatGPT 登录';
 
   for (const button of [codexLaunchNew, codexLaunchContinue, codexLaunchResume]) {
-    button.disabled = !ready || codexOperationInProgress || launchInProgress;
+    button.disabled =
+      !ready || codexOperationInProgress || launchInProgress || officialNetworkBlocked;
     button.setAttribute('aria-busy', String(launchInProgress));
   }
 
@@ -4788,13 +6337,19 @@ const renderClaudeLaunchControls = (sessionId: string, launchBlocked = false): v
   if (sessionId !== workspaceState.activeSessionId || activeDevelopmentRuntime() !== 'claude') {
     return;
   }
-  const busy = claudeLaunchAttempts.isBusy(sessionId);
+  const busy =
+    nativeConversationStartingSessionId === sessionId || claudeLaunchAttempts.isBusy(sessionId);
   runAgentLabel.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
-  runClaudeButton.disabled = busy || launchBlocked;
+  // Route health is a remediable preflight state, not a reason to turn the primary action into a
+  // translucent dead end. The launch path can restart app-owned gateways and returns a precise
+  // configuration error when user action is actually required.
+  runClaudeButton.disabled = busy;
+  runClaudeButton.dataset.launchBlocked = String(launchBlocked);
   runClaudeButton.setAttribute('aria-busy', String(busy));
   launchNewButton.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
   for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
-    button.disabled = busy || launchBlocked;
+    button.disabled = busy;
+    button.dataset.launchBlocked = String(launchBlocked);
     button.setAttribute('aria-busy', String(busy));
   }
 };
@@ -5025,9 +6580,11 @@ const renderClaudeState = (
   // The status line reports what Claude Code applied, which can sit below a request the model caps.
   const effortApplied = state.metrics?.effortLevel;
   const effortShown =
-    state.effortCompatibility?.recovery === 'recovered'
-      ? (state.effortRequest ?? effortApplied)
-      : (effortApplied ?? state.effortRequest);
+    state.effortRequest === 'ultracode'
+      ? 'ultracode'
+      : state.effortCompatibility?.recovery === 'recovered'
+        ? (state.effortRequest ?? effortApplied)
+        : (effortApplied ?? state.effortRequest);
   footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
   footerEffort.dataset.effort = effortShown ?? 'unknown';
   footerEffort.dataset.requestedEffort = state.effortRequest ?? 'unknown';
@@ -5044,9 +6601,11 @@ const renderClaudeState = (
       ? state.effortCompatibility.recovery === 'failed'
         ? '自动回退失败；请打开菜单手动选择“均衡”或更低档位'
         : '搜索兼容重试期间暂用“均衡”；成功后会自动恢复原思考档位'
-      : effortApplied === undefined
-        ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
-        : '点击调整思考程度，或在终端运行 /effort';
+      : state.effortRequest === 'ultracode'
+        ? `Ultra Code 已请求：工作流编排 · 实际思考档 ${effortApplied?.toUpperCase() ?? '等待上报'}`
+        : effortApplied === undefined
+          ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
+          : '点击调整思考程度，或在终端运行 /effort';
   if (
     state.effortCompatibility?.recovery === 'recovered' &&
     effortRecoveryNotifications.get(state.sessionId) !== state.effortCompatibility.detectedAt
@@ -5124,10 +6683,7 @@ const loadClaudeState = async (sessionId: string): Promise<void> => {
   renderClaudeState(state, true, false);
 };
 
-/**
- * Resumes a stored Claude conversation in its own terminal, so a project folder can keep several
- * historical conversations running side by side instead of restarting the active one.
- */
+/** Resumes a stored transcript in its canonical terminal owner. */
 async function resumeStoredConversation(
   projectPath: string,
   session: ClaudeSessionMetadata,
@@ -5147,10 +6703,11 @@ async function resumeStoredConversation(
       showToast(result.error ?? '无法恢复这个历史会话。', 'error');
       return;
     }
-    const label = session.sessionName || session.sessionId.slice(0, 8);
-    showToast(`已在新对话中恢复 ${label}`);
+    setNativeConversationVisible(false);
     retryTerminalFitUntilMeasured();
     requestComposerFocus(result.state.activeSessionId);
+    const label = session.sessionName || session.conversationId.slice(0, 8);
+    showToast(result.reused ? `已切换到 ${label}` : `已在安全终端恢复 ${label}`);
   } catch {
     showToast('无法恢复这个历史会话。', 'error');
   } finally {
@@ -7051,7 +8608,7 @@ const switchClaudeModelSpeed = async (mode: ModelSpeedMode): Promise<void> => {
     mode === 'standard'
       ? `将「${state.speed.model}」恢复为标准服务速度。`
       : state.speed.mechanism === 'claude-native-fast'
-        ? `将「${state.speed.model}」切换为 ${fastLabel}。Claude Fast 仅适用于受支持的 Opus 5 / 4.8，最高约 2.5x，并按更高单价计费；组织资格、额度和模型可用性仍由 Anthropic 判定。`
+        ? `将「${state.speed.model}」切换为 ${fastLabel}。Claude Fast 仅适用于受支持的模型，并可能按更高单价计费；组织资格、额度和实际加速仍由 Anthropic 判定。`
         : `将为「${state.speed.model}」请求 ${fastLabel}（service_tier=fast）。该档位的额度消耗或计价可能更高；ClaudeDock 只能确认请求已发送，无法确认 ChatGPT 上游最终采用。`;
   const lifecycleDetail =
     '如果主进程确认 Claude Code 仍在运行，ClaudeDock 会重启当前 PowerShell，并通过 --resume 精确恢复当前对话；不会压缩上下文。如果会话已经停止，则只保存此接入与模型的速度偏好，供下次新建或恢复时使用。';
@@ -7109,7 +8666,7 @@ const switchClaudeModelSpeed = async (mode: ModelSpeedMode): Promise<void> => {
     } else if (mode === 'standard') {
       showToast('已按标准速度恢复当前对话。', 'success');
     } else if (result.state.speed.mechanism === 'gpt-service-tier') {
-      showToast('已为当前对话请求 GPT 1.5x；上游是否采用仍由 ChatGPT 决定。', 'success');
+      showToast('已为当前对话请求 GPT Fast；上游是否采用仍由服务端决定。', 'success');
     } else {
       showToast('已请求 Claude Fast；是否生效将由 Claude Code 状态行确认。', 'success');
     }
@@ -7253,8 +8810,8 @@ const openSpeedMenu = (): void => {
   const fastLabel = modelSpeedFastLabel(state);
   const fastDetail = state.speed.canSelectFast
     ? state.speed.mechanism === 'claude-native-fast'
-      ? 'Claude Code 原生 Fast；仅支持 Opus 5 / 4.8，最高约 2.5x，单价更高，资格与额度由 Anthropic 判定。'
-      : '请求 service_tier=fast（约 1.5x）；额度消耗或计价可能更高，ClaudeDock 无法确认上游最终采用。'
+      ? 'Claude Code 原生 Fast；仅支持已验证模型，单价可能更高，资格、额度和实际加速由 Anthropic 判定。'
+      : '请求 service_tier=fast；额度消耗或计价可能更高，ClaudeDock 只显示“已请求”，除非上游返回结构化确认。'
     : state.speed.detail;
   const standardAlreadyApplied =
     state.speed.preference === 'standard' && state.speed.status === 'standard';
@@ -7338,11 +8895,13 @@ const openEffortMenu = (): void => {
   const state = claudeStates.get(status.id);
   const running = state?.active ?? false;
   const compatibility = state?.effortCompatibility;
-  // The applied level is authoritative; the pending request only shows until the status line ticks.
+  // Ultra is a workflow preset whose applied X-High value must not erase the requested identity.
   const current =
-    compatibility?.recovery === 'recovered'
-      ? (state?.effortRequest ?? state?.metrics?.effortLevel)
-      : (state?.metrics?.effortLevel ?? state?.effortRequest);
+    state?.effortRequest === 'ultracode'
+      ? 'ultracode'
+      : compatibility?.recovery === 'recovered'
+        ? (state?.effortRequest ?? state?.metrics?.effortLevel)
+        : (state?.metrics?.effortLevel ?? state?.effortRequest);
   footerEffortMenu.replaceChildren(
     ...CLAUDE_EFFORT_OPTIONS.map((option) =>
       buildFooterMenuItem(
@@ -7545,12 +9104,56 @@ function selectRailTab(tab: string): void {
   applyRailTab(tab);
 }
 
+const compactWorkspaceViewportWidth = (): number =>
+  Math.min(window.innerWidth, window.visualViewport?.width ?? window.innerWidth);
+
+const isCompactWorkspaceViewport = (): boolean => compactWorkspaceViewportWidth() <= 680;
+
 const toggleRailTab = (tab: string): void => {
+  if (isCompactWorkspaceViewport()) {
+    const closingPreview = previewRailTab === tab;
+    if (selectedRailTab !== undefined) {
+      compactRailRestoreTab = selectedRailTab;
+      applyRailTab(undefined);
+    } else {
+      closeRailPreview();
+    }
+    if (!closingPreview) showRailPreview(tab);
+    if (tab === 'chat') focusChatInputAfterNavigation();
+    return;
+  }
   applyRailTab(selectedRailTab === tab ? undefined : tab);
   if (tab === 'chat') {
     focusChatInputAfterNavigation();
   }
 };
+
+const reconcileCompactRail = (): void => {
+  const compact = isCompactWorkspaceViewport();
+  document.documentElement.dataset.compactViewport = String(compact);
+  if (compact && selectedRailTab !== undefined) {
+    compactRailRestoreTab = selectedRailTab;
+    applyRailTab(undefined);
+    return;
+  }
+  if (!compact && compactRailRestoreTab && selectedRailTab === undefined) {
+    const restore = compactRailRestoreTab;
+    compactRailRestoreTab = undefined;
+    applyRailTab(restore);
+  }
+};
+
+const scheduleCompactRailReconciliation = (): void => {
+  if (compactRailResizeFrame !== undefined) window.cancelAnimationFrame(compactRailResizeFrame);
+  compactRailResizeFrame = window.requestAnimationFrame(() => {
+    compactRailResizeFrame = undefined;
+    reconcileCompactRail();
+  });
+};
+
+window.addEventListener('resize', scheduleCompactRailReconciliation);
+window.visualViewport?.addEventListener('resize', scheduleCompactRailReconciliation);
+reconcileCompactRail();
 
 const selectWorkbenchPage = (page: string): void => {
   for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-tab]')) {
@@ -8988,6 +10591,7 @@ const createTerminalView = (status: TerminalStatus, active: boolean): TerminalVi
   }
 
   const view: TerminalView = {
+    appliedResizeRevision: 0,
     container,
     fitAddon,
     outputPump: new TerminalOutputPump({
@@ -9002,6 +10606,7 @@ const createTerminalView = (status: TerminalStatus, active: boolean): TerminalVi
     }),
     permissionModeProbes: [],
     ptyGeneration,
+    resizeRevision: 0,
     terminal,
   };
 
@@ -9150,11 +10755,13 @@ const ensureTerminalView = (status: TerminalStatus, active: boolean): TerminalVi
   return createTerminalView(status, active);
 };
 
-const fitActiveTerminal = (): boolean => {
+type TerminalFitResult = 'changed' | 'stable' | 'unavailable';
+
+const fitActiveTerminal = (): TerminalFitResult => {
   const sessionId = workspaceState.activeSessionId;
   const view = terminalViews.get(sessionId);
   if (!view) {
-    return false;
+    return 'unavailable';
   }
   const ptyGeneration = view.ptyGeneration;
   const bounds = view.container.getBoundingClientRect();
@@ -9165,24 +10772,31 @@ const fitActiveTerminal = (): boolean => {
     bounds.width < 1 ||
     bounds.height < 1
   ) {
-    return false;
+    return 'unavailable';
   }
 
   try {
-    view.fitAddon.fit();
+    const proposed = view.fitAddon.proposeDimensions();
+    if (!proposed || proposed.cols < 2 || proposed.rows < 1) return 'unavailable';
     if (!ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
-      return false;
+      return 'unavailable';
     }
+    if (view.lastFitCols === proposed.cols && view.lastFitRows === proposed.rows) return 'stable';
+    view.lastFitCols = proposed.cols;
+    view.lastFitRows = proposed.rows;
+    view.terminal.resize(proposed.cols, proposed.rows);
+    const resizeRevision = ++view.resizeRevision;
     window.controlPanel.resizeTerminal(
       sessionId,
       ptyGeneration,
-      view.terminal.cols,
-      view.terminal.rows,
+      resizeRevision,
+      proposed.cols,
+      proposed.rows,
     );
-    return true;
+    return 'changed';
   } catch {
     // A resize can race with initial layout; the bounded frame scheduler will retry.
-    return false;
+    return 'unavailable';
   }
 };
 
@@ -9207,7 +10821,8 @@ const retryTerminalFitUntilMeasured = (): void => {
       return;
     }
 
-    fitActiveTerminal();
+    const result = fitActiveTerminal();
+    if (result === 'stable') return;
     attemptsRemaining -= 1;
     if (attemptsRemaining > 0) {
       window.requestAnimationFrame(fitOnNextFrame);
@@ -9217,32 +10832,24 @@ const retryTerminalFitUntilMeasured = (): void => {
   window.requestAnimationFrame(fitOnNextFrame);
 };
 
-const TERMINAL_FIT_DEBOUNCE_MS = 100;
-let terminalFitDebounceTimer: number | undefined;
+let terminalFitFrame: number | undefined;
 let terminalFitDirty = false;
-let isDraggingLayout = false;
 
-const flushDebouncedTerminalFit = (): void => {
-  if (terminalFitDebounceTimer !== undefined) {
-    window.clearTimeout(terminalFitDebounceTimer);
-    terminalFitDebounceTimer = undefined;
-  }
-  if (!terminalFitDirty || isDraggingLayout) {
-    return;
-  }
+const flushTerminalFitFrame = (): void => {
+  terminalFitFrame = undefined;
+  if (!terminalFitDirty) return;
   terminalFitDirty = false;
   fitActiveTerminal();
+  if (terminalFitDirty && terminalFitFrame === undefined) {
+    terminalFitFrame = window.requestAnimationFrame(flushTerminalFitFrame);
+  }
 };
 
 const debounceTerminalFit = (): void => {
   terminalFitDirty = true;
-  if (isDraggingLayout) {
-    return;
+  if (terminalFitFrame === undefined) {
+    terminalFitFrame = window.requestAnimationFrame(flushTerminalFitFrame);
   }
-  if (terminalFitDebounceTimer !== undefined) {
-    window.clearTimeout(terminalFitDebounceTimer);
-  }
-  terminalFitDebounceTimer = window.setTimeout(flushDebouncedTerminalFit, TERMINAL_FIT_DEBOUNCE_MS);
 };
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
@@ -9294,7 +10901,6 @@ const installResizer = (
     const startWidth = current();
     const pointerId = event.pointerId;
     let finished = false;
-    isDraggingLayout = true;
     const move = (moveEvent: PointerEvent): void => {
       if (moveEvent.pointerId !== pointerId) {
         return;
@@ -9320,8 +10926,7 @@ const installResizer = (
       } finally {
         if (activeResizeCleanups.size === 0) {
           document.body.classList.remove('is-resizing');
-          isDraggingLayout = false;
-          flushDebouncedTerminalFit();
+          debounceTerminalFit();
         }
       }
     };
@@ -9382,25 +10987,17 @@ const COMPOSER_HISTORY_KEY = 'claudedock.composerHistory';
 
 const loadComposerHistory = (): ComposerHistoryState => {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(COMPOSER_HISTORY_KEY) ?? '[]');
-    return createComposerHistory(
-      Array.isArray(parsed)
-        ? parsed.filter((entry): entry is string => typeof entry === 'string')
-        : [],
-    );
+    localStorage.removeItem(COMPOSER_HISTORY_KEY);
   } catch {
-    return createComposerHistory();
+    // Storage denial must not prevent an in-memory composer.
   }
+  return createComposerHistory();
 };
 
 let composerHistory = loadComposerHistory();
 
 const persistComposerHistory = (): void => {
-  try {
-    localStorage.setItem(COMPOSER_HISTORY_KEY, JSON.stringify(composerHistory.entries));
-  } catch {
-    // A full or unavailable localStorage must not break sending.
-  }
+  // Intentionally memory-only. Raw prompts are never persisted outside safeStorage.
 };
 
 /** Grows the textarea with its content up to `--composer-max`, then scrolls. */
@@ -9775,15 +11372,54 @@ const syncConversationTitles = (state: WorkspaceState): void => {
   }
 };
 
+const setTerminalDiagnosticOpen = (open: boolean): void => {
+  if (terminalDiagnosticCloseTimer !== undefined) {
+    window.clearTimeout(terminalDiagnosticCloseTimer);
+    terminalDiagnosticCloseTimer = undefined;
+  }
+  if (open) {
+    terminalDiagnostic.hidden = false;
+    terminalDiagnosticScrim.hidden = false;
+    terminalDiagnostic.dataset.state = 'opening';
+    terminalDiagnosticScrim.dataset.state = 'opening';
+    terminalDiagnostic.setAttribute('aria-hidden', 'false');
+    window.requestAnimationFrame(() => {
+      terminalDiagnostic.dataset.state = 'open';
+      terminalDiagnosticScrim.dataset.state = 'open';
+    });
+    terminalDiagnosticRetry.focus({ preventScroll: true });
+    return;
+  }
+  if (terminalDiagnostic.hidden) return;
+  terminalDiagnostic.dataset.state = 'closing';
+  terminalDiagnosticScrim.dataset.state = 'closing';
+  terminalDiagnostic.setAttribute('aria-hidden', 'true');
+  terminalDiagnosticCloseTimer = window.setTimeout(() => {
+    terminalDiagnostic.hidden = true;
+    terminalDiagnosticScrim.hidden = true;
+    terminalDiagnostic.dataset.state = 'closed';
+    terminalDiagnosticScrim.dataset.state = 'closed';
+    terminalDiagnosticCloseTimer = undefined;
+  }, 220);
+};
+
+const showTerminalDiagnostic = (status: TerminalStatus): void => {
+  const key = `${status.id}:${status.ptyGeneration}`;
+  if (shownTerminalDiagnostics.has(key)) return;
+  shownTerminalDiagnostics.add(key);
+  terminalDiagnosticStatus = status;
+  terminalDiagnosticMessage.textContent = status.message ?? '项目终端启动失败。';
+  terminalDiagnosticResult.hidden = true;
+  terminalDiagnosticResult.replaceChildren();
+  setTerminalDiagnosticOpen(true);
+};
+
 const renderActiveStatus = (status: TerminalStatus): void => {
   const copy = phaseCopy[status.phase];
   const openFolders = workspaceState.projects.filter((project) => project.open).length;
 
   document.body.dataset.phase = status.phase;
   titleStatus.textContent = `${copy.detail} · ${openFolders} 个项目 / ${workspaceState.sessions.length} 个对话`;
-  statusPill.textContent = copy.pill;
-  sessionDetail.textContent = status.message ?? copy.detail;
-  sessionPid.textContent = status.pid ? `进程号 ${status.pid}` : '进程号 —';
   footerStatus.textContent = copy.footer;
   toggleLabel.textContent = status.phase === 'running' ? '停止' : '启动';
   const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
@@ -9801,6 +11437,7 @@ const renderActiveStatus = (status: TerminalStatus): void => {
   workbenchScope.dataset.titleTyping = typing;
   runtimePicker.disabled = false;
   setComposerEnabled(status.phase === 'running');
+  if (status.phase === 'error') showTerminalDiagnostic(status);
 };
 
 /**
@@ -9814,9 +11451,6 @@ const renderNoActiveSession = (): void => {
   document.body.dataset.phase = 'stopped';
   titleStatus.textContent =
     rememberedCount > 0 ? `未打开对话 · ${rememberedCount} 个最近项目` : '未打开任何项目';
-  statusPill.textContent = '未打开';
-  sessionDetail.textContent = '尚未打开项目对话';
-  sessionPid.textContent = '进程号 —';
   footerStatus.textContent = '等待打开项目';
   toggleLabel.textContent = '启动';
   emptyStateTitle.textContent = rememberedCount > 0 ? '选择一个项目继续' : '还没有项目';
@@ -9842,8 +11476,8 @@ const renderNoActiveSession = (): void => {
   runtimeCodex.checked = false;
   document.body.dataset.agentRuntime = 'claude';
   setComposerEnabled(false);
-  runtimeActivityTrigger.hidden = true;
-  runtimeActivityPanel.hidden = true;
+  runtimeActivityTrigger.hidden = false;
+  setRuntimeSummaryOpen(false);
 };
 
 const activateProject = async (sessionId: string): Promise<void> => {
@@ -10537,7 +12171,7 @@ const openDirectoryPicker = async (): Promise<void> => {
   }
 };
 
-const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
+const launchClaudeTerminal = async (mode: ClaudeLaunchMode): Promise<void> => {
   const status = activeStatus();
   if (!status || claudeLaunchAttempts.isBusy(status.id)) {
     return;
@@ -10569,6 +12203,7 @@ const launchClaude = async (mode: ClaudeLaunchMode): Promise<void> => {
     showToast(result.error ?? '无法启动 Claude Code。', 'error');
     return;
   }
+  setNativeConversationVisible(false);
   showToast(
     mode === 'new'
       ? `已在 ${projectNameFromPath(status.cwd)} 启动新会话`
@@ -11148,21 +12783,21 @@ window.controlPanel.onClaudePermissionModeProbe((sessionId, ptyGeneration, probe
     requiredRevision: view.outputPump.acceptedRevision,
   });
 });
-/*
- * The PTY clamps the size it was asked for. xterm has to follow, because PSReadLine repaints its
- * edit buffer with absolute cursor moves — a one-row disagreement puts that repaint on the wrong
- * line and leaves the previous screen visible underneath it.
- */
-window.controlPanel.onTerminalSize((sessionId, ptyGeneration, cols, rows) => {
+// Main echoes its normalized request. A monotonically increasing revision rejects stale echoes.
+window.controlPanel.onTerminalSize((sessionId, ptyGeneration, resizeRevision, cols, rows) => {
   const view = terminalViews.get(sessionId);
   if (
     !view ||
     !ownsTerminalGeneration(sessionId, ptyGeneration, view) ||
-    (view.terminal.cols === cols && view.terminal.rows === rows)
+    resizeRevision < view.appliedResizeRevision
   ) {
     return;
   }
+  view.appliedResizeRevision = resizeRevision;
+  if (view.terminal.cols === cols && view.terminal.rows === rows) return;
   try {
+    view.lastFitCols = cols;
+    view.lastFitRows = rows;
     view.terminal.resize(cols, rows);
   } catch {
     // A resize can race with the terminal being disposed.
@@ -11307,6 +12942,26 @@ const unsubscribeRuntimeActivityChanged = window.controlPanel.onRuntimeActivityC
   runtimeActivityStates.set(state.sessionId, state);
   if (state.sessionId === workspaceState.activeSessionId) renderRuntimeActivity(state);
 });
+const unsubscribeNativeConversation = window.controlPanel.onNativeConversation((snapshot) => {
+  scheduleNativeConversationRender(snapshot);
+});
+const unsubscribeConversationOwnerConflict = window.controlPanel.onConversationOwnerConflict(
+  (conflict) => {
+    showToast(
+      conflict.existingOwnerKind === 'native'
+        ? '这个对话已在原生界面运行；已停止重复恢复，请切换回原生对话。'
+        : '这个对话已在另一个安全终端运行；已停止重复恢复并保留原会话。',
+      'error',
+    );
+    if (conflict.existingOwnerKind === 'native') {
+      activateNativeConversation(conflict.conversationId);
+    } else if (conflict.existingSessionId) {
+      void window.controlPanel.activateProject(conflict.existingSessionId).then((result) => {
+        if (result.ok) renderWorkspace(result.state);
+      });
+    }
+  },
+);
 const unsubscribeClaudePermissionRequest = window.controlPanel.onClaudePermissionRequest(
   (request) => {
     if (
@@ -11323,17 +12978,321 @@ const unsubscribeClaudePermissionRequest = window.controlPanel.onClaudePermissio
 window.controlPanel.onWorkspaceState((state) => {
   renderWorkspace(state);
   void loadActiveRuntimeActivity();
+  void refreshNativeRecoveries();
 });
 window.controlPanel.onChatStream(handleChatStream);
 
 chooseDirectoryButton.addEventListener('click', () => {
   void openDirectoryPicker();
 });
+nativeComposer.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = nativeComposerInput.value;
+  const conversationId = activeNativeConversationId;
+  if (
+    !conversationId ||
+    (!text.trim() && pendingNativeAttachments.length === 0) ||
+    nativeSendButton.disabled ||
+    nativeConversationSubmissions.has(conversationId)
+  )
+    return;
+  const nativeSnapshot = nativeConversationSnapshots.get(conversationId);
+  if (nativeSnapshot && text.trim().startsWith('/') && pendingNativeAttachments.length === 0) {
+    nativeSendButton.disabled = true;
+    try {
+      const handled = await handleNativeSlashCommand(text, nativeSnapshot);
+      if (handled) {
+        nativeComposerInput.value = '';
+        delete nativeComposerInput.dataset.recoveredDraft;
+        resizeNativeComposer();
+        return;
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法执行这个原生命令。', 'error');
+      return;
+    } finally {
+      nativeSendButton.disabled = false;
+    }
+  }
+  nativeSendButton.disabled = true;
+  nativeComposerStatus.textContent = '正在安全保存并提交…';
+  const clientSubmissionId = crypto.randomUUID();
+  const submittedAttachmentIds = new Set(
+    pendingNativeAttachments.map((attachment) => attachment.attachmentId),
+  );
+  const blocks = [
+    ...(text.trim() ? [{ text, type: 'text' as const }] : []),
+    ...pendingNativeAttachments.map((attachment) => ({
+      attachment: {
+        id: attachment.attachmentId,
+        mediaType: attachment.mediaType,
+        name: attachment.fileName,
+        size: attachment.sizeBytes,
+      },
+      type: 'image' as const,
+    })),
+  ];
+  nativeConversationSubmissions.set(conversationId, clientSubmissionId);
+  void window.controlPanel
+    .submitNativeConversation(conversationId, {
+      blocks,
+      clientSubmissionId,
+    })
+    .then((result) => {
+      if (!result.ok) {
+        showToast(result.message ?? '本次输入尚未发送。', 'error');
+        if (activeNativeConversationId === conversationId) nativeComposerInput.focus();
+        return;
+      }
+      if (activeNativeConversationId === conversationId) {
+        // The input remains editable while the main process durably records the submission. Never
+        // erase text the user typed during that acknowledgement window.
+        if (nativeComposerInput.value === text) {
+          nativeComposerInput.value = '';
+          delete nativeComposerInput.dataset.recoveredDraft;
+          resizeNativeComposer();
+        }
+        for (let index = pendingNativeAttachments.length - 1; index >= 0; index -= 1) {
+          if (submittedAttachmentIds.has(pendingNativeAttachments[index]!.attachmentId)) {
+            pendingNativeAttachments.splice(index, 1);
+          }
+        }
+        renderPendingNativeAttachments();
+      }
+      if (result.snapshot) renderNativeConversation(result.snapshot);
+      delete nativeSendButton.dataset.sending;
+      // Restart the theme-owned confirmation motion even when two sends finish in quick succession.
+      void nativeSendButton.offsetWidth;
+      nativeSendButton.dataset.sending = 'true';
+    })
+    .catch((error) => {
+      showToast(error instanceof Error ? error.message : '本次输入尚未发送。', 'error');
+      if (activeNativeConversationId === conversationId) nativeComposerInput.focus();
+    })
+    .finally(() => {
+      if (nativeConversationSubmissions.get(conversationId) === clientSubmissionId) {
+        nativeConversationSubmissions.delete(conversationId);
+      }
+      const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+      if (snapshot) renderNativeConversation(snapshot);
+      else if (activeNativeConversationId === conversationId) nativeSendButton.disabled = false;
+    });
+});
+nativeSendButton.addEventListener('animationend', (event) => {
+  if (event.target === nativeSendButton) delete nativeSendButton.dataset.sending;
+});
+nativeComposerInput.addEventListener('input', () => {
+  delete nativeComposerInput.dataset.recoveredDraft;
+  resizeNativeComposer();
+});
+nativeComposerInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  nativeComposer.requestSubmit();
+});
+nativeStopButton.addEventListener('click', () => {
+  if (!activeNativeConversationId) return;
+  nativeStopButton.disabled = true;
+  void window.controlPanel
+    .interruptNativeConversation(activeNativeConversationId)
+    .then((result) => {
+      if (!result.ok) showToast(result.message ?? '无法中断当前轮次。', 'error');
+    })
+    .catch(() => showToast('无法中断当前轮次。', 'error'))
+    .finally(() => {
+      nativeStopButton.disabled = false;
+    });
+});
+nativeModelControl.addEventListener('change', () => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const capability = snapshot?.capabilities;
+  const target = capability?.models?.find((model) => model.id === nativeModelControl.value);
+  if (!capability || !target) return;
+  const currentEffort = capability.effort.requested ?? capability.effort.applied;
+  const nextEffort =
+    currentEffort && target.effortOptions.includes(currentEffort)
+      ? currentEffort
+      : target.effortOptions.includes('high')
+        ? 'high'
+        : target.effortOptions[0];
+  const fastActive = capability.fast.state === 'requested' || capability.fast.state === 'confirmed';
+  if (nextEffort !== currentEffort || (fastActive && !target.supportsFast)) {
+    showToast(
+      `新模型不支持当前全部选项；将改为 ${nativeEffortLabel(nextEffort ?? 'auto')}${fastActive && !target.supportsFast ? '，并关闭 Fast' : ''}。`,
+    );
+  }
+  void updateNativeControls({
+    effort: nextEffort,
+    fast: fastActive && target.supportsFast,
+    model: target.id,
+  });
+});
+nativeEffortControl.addEventListener('change', () => {
+  void updateNativeControls({ effort: nativeEffortControl.value });
+});
+nativeFastControl.addEventListener('click', () => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const state = snapshot?.capabilities?.fast.state;
+  if (!state) return;
+  void updateNativeControls({ fast: state !== 'requested' && state !== 'confirmed' });
+});
+nativePermissionControl.addEventListener('change', () => {
+  void updateNativeControls({ permissionMode: nativePermissionControl.value });
+});
+nativePlanClose.addEventListener('click', closeNativePlanDialog);
+nativePlanDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeNativePlanDialog();
+});
+nativePlanDialog.addEventListener('click', (event) => {
+  if (event.target === nativePlanDialog) closeNativePlanDialog();
+});
+nativePlanContinue.addEventListener('click', () => {
+  if (!expandedNativePlan) return;
+  void respondToNativeInteraction(expandedNativePlan, {
+    action: 'deny',
+    message: '继续完善计划',
+  });
+});
+nativePlanApprove.addEventListener('click', () => {
+  if (!expandedNativePlan) return;
+  void respondToNativeInteraction(expandedNativePlan, { action: 'allow' });
+});
+nativeTerminalToggle.addEventListener('click', () => {
+  if (nativeConversation.dataset.state !== 'closed') {
+    if (!activeNativeConversationId) {
+      setNativeConversationVisible(false);
+      return;
+    }
+    void (async () => {
+      const text = nativeComposerInput.value;
+      const hasDraft = Boolean(text.trim() || pendingNativeAttachments.length > 0);
+      if (hasDraft) {
+        const confirmed = await requestConfirmation({
+          confirmLabel: '保存草稿并切换',
+          message:
+            '当前未发送内容会使用 Windows 安全存储加密保存，并在恢复区标记为未发送；不会自动送给 Claude。',
+          title: '返回安全终端？',
+          tone: 'default',
+        });
+        if (!confirmed) return;
+      }
+      nativeTerminalToggle.disabled = true;
+      nativeComposerStatus.textContent = '正在安全返回终端…';
+      const draft = hasDraft
+        ? {
+            blocks: [
+              ...(text.trim() ? [{ text, type: 'text' as const }] : []),
+              ...pendingNativeAttachments.map((attachment) => ({
+                attachment: {
+                  id: attachment.attachmentId,
+                  mediaType: attachment.mediaType,
+                  name: attachment.fileName,
+                  size: attachment.sizeBytes,
+                },
+                type: 'image' as const,
+              })),
+            ],
+            clientSubmissionId: crypto.randomUUID(),
+          }
+        : undefined;
+      try {
+        const result = await window.controlPanel.transferNativeConversationToTerminal(
+          activeNativeConversationId,
+          draft,
+        );
+        if (!result.ok) {
+          showToast(result.message ?? '安全终端启动失败，已保留原生对话。', 'error');
+          const current = nativeConversationSnapshots.get(activeNativeConversationId);
+          if (current) renderNativeConversation(current);
+          return;
+        }
+        nativeComposerInput.value = '';
+        delete nativeComposerInput.dataset.recoveredDraft;
+        pendingNativeAttachments.splice(0);
+        renderPendingNativeAttachments();
+        resizeNativeComposer();
+        activeNativeConversationId = '';
+        setNativeConversationVisible(false);
+        if (result.terminalSessionId) {
+          const activated = await window.controlPanel.activateProject(result.terminalSessionId);
+          if (activated.ok) renderWorkspace(activated.state);
+        }
+        await refreshNativeRecoveries();
+        terminalViews.get(workspaceState.activeSessionId)?.terminal.focus();
+        showToast(result.message ?? '已返回安全终端。');
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '无法返回安全终端。', 'error');
+      } finally {
+        nativeTerminalToggle.disabled = false;
+      }
+    })();
+    return;
+  }
+  if (activeNativeConversationId) {
+    setNativeConversationVisible(true);
+    nativeComposerInput.focus();
+    return;
+  }
+  void launchNativeClaude('new');
+});
+nativeAttachButton.addEventListener('click', () => nativeAttachmentInput.click());
+nativeAttachmentInput.addEventListener('change', () => {
+  void importNativeAttachments(Array.from(nativeAttachmentInput.files ?? []));
+});
+nativeComposerInput.addEventListener('paste', (event) => {
+  const clipboardData = event.clipboardData;
+  if (!clipboardData || !activeNativeConversationId) return;
+  const itemFiles = [...clipboardData.items]
+    .filter((item) => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  const files =
+    itemFiles.length > 0
+      ? itemFiles
+      : [...clipboardData.files].filter((file) => file.type.startsWith('image/'));
+  if (files.length > 0) {
+    event.preventDefault();
+    void importNativeAttachments(files);
+    return;
+  }
+  const likelyImage = [...clipboardData.types].some((type) =>
+    type.toLowerCase().startsWith('image/'),
+  );
+  if (!likelyImage) return;
+  event.preventDefault();
+  nativeAttachmentImporting = true;
+  nativeAttachButton.disabled = true;
+  void window.controlPanel
+    .importNativeClipboardImage(activeNativeConversationId)
+    .then(applyNativeAttachmentResult)
+    .catch(() => showToast('无法读取 Windows 剪贴板图片。', 'error'))
+    .finally(() => {
+      nativeAttachmentImporting = false;
+      const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+      if (snapshot) renderNativeConversation(snapshot);
+    });
+});
+nativeConversation.addEventListener('dragover', (event) => {
+  if ([...(event.dataTransfer?.items ?? [])].some((item) => item.type.startsWith('image/'))) {
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = 'copy';
+  }
+});
+nativeConversation.addEventListener('drop', (event) => {
+  const files = [...(event.dataTransfer?.files ?? [])].filter((file) =>
+    file.type.startsWith('image/'),
+  );
+  if (files.length === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  void importNativeAttachments(files);
+});
 runClaudeButton.addEventListener('click', () => {
   if (activeDevelopmentRuntime() === 'codex') {
     void prepareAndLaunchCodex();
   } else {
-    void launchClaude('new');
+    void launchClaudeTerminal('new');
   }
 });
 runtimeClaude.addEventListener('change', () => {
@@ -11819,12 +13778,30 @@ chatInput.addEventListener('paste', (event) => {
   if (!clipboard) {
     return;
   }
-  const files = Array.from(clipboard.files);
+  const itemFiles = [...clipboard.items]
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  const files = itemFiles.length > 0 ? itemFiles : Array.from(clipboard.files);
   if (files.length > 0) {
     // Let the file(s) become attachments and keep any co-pasted text out of the textarea, matching
     // how claude.ai treats a paste that carries both a rendering and its source bytes.
     event.preventDefault();
     queueChatAttachmentImport(files);
+    return;
+  }
+  if ([...clipboard.types].some((type) => type.toLowerCase().startsWith('image/'))) {
+    event.preventDefault();
+    queuedChatAttachmentImports += 1;
+    setChatBusy(Boolean(activeChatRequestId));
+    void window.controlPanel
+      .importChatClipboardImage(activeChatAttachmentDraftId)
+      .then(applyChatAttachmentImportResult)
+      .catch(() => showToast('无法读取 Windows 剪贴板图片。', 'error'))
+      .finally(() => {
+        queuedChatAttachmentImports = Math.max(0, queuedChatAttachmentImports - 1);
+        setChatBusy(Boolean(activeChatRequestId));
+      });
     return;
   }
   // No files: fall through to the browser's own plain-text insertion.
@@ -11937,15 +13914,18 @@ footerResource.addEventListener('click', () => {
   }
 });
 runtimeActivityTrigger.addEventListener('click', () => {
-  const opening = runtimeActivityPanel.hidden;
-  runtimeActivityPanel.hidden = !opening;
-  runtimeActivityTrigger.setAttribute('aria-expanded', String(opening));
-  if (opening) runtimeActivityClose.focus({ preventScroll: true });
+  setRuntimeSummaryOpen(
+    Boolean(runtimeActivityPanel.hidden || runtimeActivityPanel.dataset.state === 'closing'),
+  );
 });
 runtimeActivityClose.addEventListener('click', () => {
-  runtimeActivityPanel.hidden = true;
-  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
-  runtimeActivityTrigger.focus({ preventScroll: true });
+  setRuntimeSummaryOpen(false, true);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !runtimeActivityPanel.hidden) {
+    event.preventDefault();
+    setRuntimeSummaryOpen(false, true);
+  }
 });
 claudePermissionFallback.addEventListener('click', () => {
   void respondToClaudePermission({ behavior: 'fallback' });
@@ -12067,13 +14047,13 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-workbench-
   });
 }
 launchNewButton.addEventListener('click', () => {
-  void launchClaude('new');
+  void launchClaudeTerminal('new');
 });
 launchContinueButton.addEventListener('click', () => {
-  void launchClaude('continue');
+  void launchClaudeTerminal('continue');
 });
 launchResumeButton.addEventListener('click', () => {
-  void launchClaude('resume');
+  void launchClaudeTerminal('resume');
 });
 codexPrimaryAction.addEventListener('click', () => {
   void prepareAndLaunchCodex();
@@ -12421,6 +14401,63 @@ restartButton.addEventListener('click', async () => {
     requestComposerFocus(status.id);
   }
 });
+terminalDiagnosticScrim.addEventListener('click', () => setTerminalDiagnosticOpen(false));
+terminalDiagnosticRun.addEventListener('click', () => {
+  const status = terminalDiagnosticStatus;
+  if (!status) return;
+  const diagnosis = (
+    {
+      CWD_UNAVAILABLE: ['项目目录', '不可访问', '检查磁盘连接，或重新添加项目目录。'],
+      NATIVE_BACKEND_UNAVAILABLE: [
+        '终端组件',
+        '加载失败',
+        '先重试；若仍失败，请重新安装当前 ClaudeDock 版本。',
+      ],
+      POWERSHELL_UNAVAILABLE: [
+        'PowerShell',
+        '不可用',
+        '确认 Windows PowerShell 可启动后再重新连接。',
+      ],
+      PTY_START_FAILED: ['终端启动', '未完成', '关闭占用项目目录的程序后重试。'],
+    } as const
+  )[status.diagnosticCode ?? 'PTY_START_FAILED'];
+  const title = document.createElement('strong');
+  title.textContent = `${diagnosis[0]} · ${diagnosis[1]}`;
+  const detail = document.createElement('p');
+  detail.textContent = diagnosis[2];
+  terminalDiagnosticResult.replaceChildren(title, detail);
+  terminalDiagnosticResult.hidden = false;
+});
+terminalDiagnosticCopy.addEventListener('click', () => {
+  const status = terminalDiagnosticStatus;
+  if (!status) return;
+  const report = [
+    'ClaudeDock 终端诊断',
+    `类别: ${status.diagnosticCode ?? 'PTY_START_FAILED'}`,
+    `项目: ${projectNameFromPath(status.cwd)}`,
+    `会话代次: ${status.ptyGeneration}`,
+    `Windows build: ${windowsBuildNumber ?? 'unknown'}`,
+  ].join('\n');
+  void window.controlPanel
+    .writeClipboardText(report)
+    .then(() => showToast('已复制脱敏诊断信息。'))
+    .catch(() => showToast('无法复制诊断信息。', 'error'));
+});
+terminalDiagnosticRetry.addEventListener('click', () => {
+  const status = terminalDiagnosticStatus;
+  if (!status) return;
+  terminalDiagnosticRetry.disabled = true;
+  void window.controlPanel
+    .restartTerminal(status.id, status.ptyGeneration)
+    .then((result) => {
+      if (!handleOperation(result, result.ok ? '项目终端已重新连接' : undefined)) return;
+      setTerminalDiagnosticOpen(false);
+      retryTerminalFitUntilMeasured();
+    })
+    .finally(() => {
+      terminalDiagnosticRetry.disabled = false;
+    });
+});
 toggleButton.addEventListener('click', async () => {
   const status = activeStatus();
   if (!status) {
@@ -12587,8 +14624,7 @@ document.addEventListener('pointerdown', (event) => {
     !runtimeActivityPanel.contains(event.target as Node) &&
     !runtimeActivityTrigger.contains(event.target as Node)
   ) {
-    runtimeActivityPanel.hidden = true;
-    runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+    setRuntimeSummaryOpen(false);
   }
 });
 window.addEventListener('blur', () => {
@@ -12598,8 +14634,7 @@ window.addEventListener('blur', () => {
   hideHistoryContextMenu();
   hideFooterMenus();
   setFooterSecondaryOpen(false);
-  runtimeActivityPanel.hidden = true;
-  runtimeActivityTrigger.setAttribute('aria-expanded', 'false');
+  setRuntimeSummaryOpen(false);
   closeRailPreview();
 });
 window.addEventListener('resize', () => {
@@ -12745,6 +14780,8 @@ window.addEventListener('beforeunload', () => {
   unsubscribeManagedChatGptSetupProgress();
   unsubscribeRouterOperationProgress();
   unsubscribeRuntimeActivityChanged();
+  unsubscribeNativeConversation();
+  unsubscribeConversationOwnerConflict();
   unsubscribeClaudePermissionRequest();
   window.removeEventListener('online', handleNetworkEnvironmentChange);
   window.removeEventListener('offline', handleNetworkEnvironmentChange);
@@ -12754,8 +14791,8 @@ window.addEventListener('beforeunload', () => {
   artifactController?.stopAll();
   markdownHighlighter?.dispose();
   terminalFitGeneration += 1;
-  if (terminalFitDebounceTimer !== undefined) {
-    window.clearTimeout(terminalFitDebounceTimer);
+  if (terminalFitFrame !== undefined) {
+    window.cancelAnimationFrame(terminalFitFrame);
   }
   resizeObserver.disconnect();
   if (gatewayRefreshTimer !== undefined) {

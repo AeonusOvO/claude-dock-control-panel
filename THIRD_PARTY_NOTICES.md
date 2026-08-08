@@ -13,6 +13,11 @@ The complete generated package/version inventory and reproduced license/NOTICE t
 as `THIRD_PARTY_LICENSES.txt`. Regenerate it from the locked Windows x64 dependency tree with
 `npm run generate:licenses`; CI rejects a stale file with `npm run check:licenses`.
 
+`standardwebhooks@1.0.0` is a documented upstream metadata exception: its npm package declares MIT
+but omits a license file, while the exact published `gitHead` points to an Apache-2.0 repository
+license. The generated inventory preserves the npm declaration, exact source provenance and both
+license texts instead of silently discarding either representation.
+
 Before each public release, maintainers must:
 
 1. run `npm ci` from the committed lockfile;

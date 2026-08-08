@@ -7,6 +7,7 @@ import {
   checkSoftwareUpdates,
   isNewerVersion,
   selectFastestClaudeRegistry,
+  sanitizeSoftwareUpdateLine,
 } from '../src/main/software-updates';
 
 describe('software update version comparison', () => {
@@ -85,5 +86,17 @@ describe('software update version comparison', () => {
       expect.stringContaining('claude-code-9.9.9.tgz'),
       expect.objectContaining({ headers: expect.objectContaining({ range: expect.any(String) }) }),
     );
+  });
+
+  it('redacts credentials, tokens and local paths from streamed operation logs', () => {
+    const sanitized = sanitizeSoftwareUpdateLine(
+      'fetch https://user:password@example.com/pkg?token=abc C:\\Users\\Cheng\\secret npm_privateToken',
+    );
+    expect(sanitized).toContain('[credentials]');
+    expect(sanitized).toContain('token=[redacted]');
+    expect(sanitized).toContain('[local path]');
+    expect(sanitized).not.toContain('password');
+    expect(sanitized).not.toContain('Cheng');
+    expect(sanitized).not.toContain('npm_privateToken');
   });
 });

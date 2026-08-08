@@ -6,6 +6,10 @@ import { normalizeClaudeConfig } from '../src/main/claude-configuration';
 import { ClaudeRuntime } from '../src/main/claude-runtime';
 import { ConversationPreferencesStore } from '../src/main/conversation-preferences-store';
 import { modelSpeedTargetKey } from '../src/main/model-speed-capabilities';
+import {
+  POWERSHELL_STARTUP_COMMAND_ENV,
+  POWERSHELL_STARTUP_TRIGGER,
+} from '../src/main/terminal-session';
 import { SUBMIT_DELAY_MS } from '../src/shared/composer-input';
 import type {
   ClaudeEffortCompatibility,
@@ -537,11 +541,17 @@ describe('Claude runtime launch configuration snapshots', () => {
 
       expect(createLaunchSnapshot).toHaveBeenCalledTimes(1);
       expect(getCredential).not.toHaveBeenCalled();
+      expect(prepared.command).toBe(POWERSHELL_STARTUP_TRIGGER);
       expect(prepared.environment).toMatchObject({
         ANTHROPIC_AUTH_TOKEN: 'snapshot-token',
         ANTHROPIC_BASE_URL: 'https://snapshot.example.com',
         ANTHROPIC_MODEL: 'snapshot-model',
       });
+      const launchCommand = prepared.environment[POWERSHELL_STARTUP_COMMAND_ENV];
+      expect(launchCommand).toContain('& claude ');
+      expect(launchCommand).toContain('--settings');
+      expect(launchCommand).not.toContain('--no-chrome');
+      expect(launchCommand).not.toContain('--model');
     } finally {
       runtime.shutdown();
     }
@@ -648,7 +658,8 @@ describe('Claude runtime launch configuration snapshots', () => {
           provider: launchSnapshot.config.provider,
         }),
       });
-      expect(prepared.command).toContain(conversationId);
+      expect(prepared.command).toBe(POWERSHELL_STARTUP_TRIGGER);
+      expect(prepared.environment[POWERSHELL_STARTUP_COMMAND_ENV]).toContain(conversationId);
       expect(settings).toMatchObject({ fastMode: true, model: 'claude-opus-5' });
     } finally {
       runtime.shutdown();

@@ -121,4 +121,32 @@ describe('runtime activity registry', () => {
       vi.useRealTimers();
     }
   });
+
+  it('treats an explicit empty Stop snapshot as authoritative without inventing completion', () => {
+    const registry = new RuntimeActivityRegistry();
+    registry.consume(event('TaskCreated', { taskId: 'lost-completion' }));
+    const reconciled = registry.consume(
+      event('Stop', { backgroundTasks: [], backgroundTasksPresent: true }),
+    );
+
+    expect(reconciled.phase).toBe('cli-idle');
+    expect(reconciled.tasks).toContainEqual(
+      expect.objectContaining({ id: 'lost-completion', status: 'orphaned' }),
+    );
+  });
+
+  it('marks unfinished tasks stale instead of claiming they completed', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-05T00:00:00Z'));
+      const registry = new RuntimeActivityRegistry();
+      registry.consume(event('TaskCreated', { taskId: 'stale-task' }));
+      vi.advanceTimersByTime(30 * 60_000 + 1);
+      expect(registry.get('session-1').tasks).toContainEqual(
+        expect.objectContaining({ id: 'stale-task', status: 'orphaned' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -1,8 +1,15 @@
 # ClaudeDock 技术说明
 
-当前架构版本：4.6.2（2026-08-07）。4.6.2 把 `当前版本需改进的bug.md` 从候选方案收敛为已经确认的
-ClaudeDock 5.0 原生对话实施规格，并将 `js-yaml` 升级到 4.3.1、`mermaid` 升级到 11.16.1；本修订
-版本仍不改变 UI、IPC、PTY、会话持久化或运行时行为。4.6.0 在原有按接入/模型隔离的服务速度 profile
+当前架构版本：5.0.0-rc.9（2026-08-09）。本候选版把 Claude 的新建、继续、选择历史和历史记录
+恢复统一切回 PowerShell/ConPTY 安全终端主路径，结构化原生对话只保留为工具栏显式入口；恢复记录不会
+自动打开原生界面。安全终端改为一次性捕获内部启动脚本、只向可见 PTY 写入固定短触发词，并移除
+`--no-chrome` 与重复的 CLI `--model`，默认体验继续由 Claude Code 原生能力和会话 settings 决定。
+既有隔离 `RuntimeProfile/AppPaths`、统一 `ConversationAdapter`、Claude Agent SDK
+原生会话、单 owner 注册表、加密恢复日志、附件安全存储、版本化模型能力和权限 contract 均保持不变，
+同时保留无 UUID token 聚合与最终帧原位收口。SDK 必须从用户本机的 `claude` 命令解析同一安装中的
+`claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
+`win-unpacked`，发现第二份 `claude.exe` 即失败。Codex App Server 原生迁移不属于本 RC；现有
+Codex TUI 继续使用 ConPTY。4.6.0 在原有按接入/模型隔离的服务速度 profile
 和会话 generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
 登记与受控退出清理；流中断诊断只保存脱敏分类并禁止对部分输出自动重放。Claude/Codex 工作台改用
 共享静态指令注册表；模型、模式与思考控制统一收敛到底部状态栏，提示词区不再重复渲染一套大号
@@ -41,6 +48,8 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 
 - Electron 43：桌面窗口、系统托盘、目录选择与进程生命周期。
 - TypeScript 6、Vite 8：主进程编译和渲染资源构建。
+- `@anthropic-ai/claude-agent-sdk`：Claude 结构化消息、工具、权限、提问、计划、MCP、附件和中断；
+  只调用显式解析到的用户安装 `claude.exe`，平台可执行包不进入发行物。
 - `@lydell/node-pty` 1.2 beta：通过 Windows ConPTY 创建真实伪终端，并提供按平台预编译
   原生模块。
 - xterm.js 6 + `@xterm/addon-unicode11` + `@xterm/addon-webgl`：终端渲染、键盘输入与中文
@@ -59,7 +68,9 @@ Foundation 要求的英文 Code signing policy 入口、归属语和未获批前
 ## 架构与数据流
 
 ```text
-Renderer (xterm.js / UI)
+Renderer (primary xterm.js / explicit native conversation DOM)
+        ├── ConversationReducer ── revision / ordered content blocks / late-event rejection
+        ├── Native interaction dock ── permission / question / plan / MCP / images
         ├── ClaudeLaunchAttemptRegistry ── per-session generation / 真实事件解锁
         │
         │ 受限 IPC
@@ -67,7 +78,14 @@ Renderer (xterm.js / UI)
 Preload contextBridge
         │ 参数过滤
         ▼
-Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty ── PowerShell / ConPTY
+Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test capability gates
+        ├── NativeConversationService ── ConversationAdapter lifecycle / exact UUID resume
+        │        ├── ClaudeAgentAdapter ── user-installed claude command / Agent SDK
+        │        ├── FakeConversationAdapter ── deterministic isolated integration scenarios
+        │        ├── ConversationOwnerRegistry ── runtime + normalized project + UUID single owner
+        │        ├── ConversationRecoveryStore ── atomic journal / DPAPI pending prompt
+        │        └── NativeAttachmentStore ── magic bytes / dimensions / TTL / orphan GC
+        ├── TerminalWorkspace ─┬─ TerminalSession ── node-pty ── PowerShell / ConPTY
         │                           ├─ TerminalSession ── node-pty ── PowerShell / ConPTY
         │                           └─ …
         │
@@ -109,6 +127,101 @@ Electron Main ── TerminalWorkspace ─┬─ TerminalSession ── node-pty
         ├── Tray 聚合状态与项目菜单
         └── 原生目录选择器、路径验证
 ```
+
+### Claude 会话入口路由
+
+- 主路径固定为 `launchClaudeTerminal(mode) → claude:launch → PowerShell/ConPTY`。侧栏“新建安全会话”、
+  工作台 new/continue/resume 和历史记录精确恢复均复用这条路径；成功后关闭原生可见层并恢复终端 fit/focus，
+  启动失败时保留当前界面与既有 owner。
+- 次级路径固定为 `launchNativeClaude(mode) → native-conversation:start`。终端工具栏的“原生对话”是
+  新建或重新打开 native owner 的唯一主界面入口；原生界面中的同一按钮显示“返回终端”，并复用既有
+  草稿确认、精确 UUID 转移、附件保全和失败回滚事务。
+- presentation route 与 permission mode 相互独立。终端优先不修改 `permissionMode` 默认值、
+  `allowBypassPermissions` 项目门禁、SDK `canUseTool` 映射或主进程 owner contract。
+
+### 原生会话不变量
+
+- 新 Claude 会话在启动前预分配 UUID；JSONL 是正文唯一真值，恢复日志只增强异常中断的可发现性，
+  不能补写尚未落盘的回复。`prepared → dispatched → transcript-confirmed → turn-complete` 各阶段原子
+  更新；`safeStorage` 或日志写入失败时发送失败并保留 renderer 草稿。
+- owner key 固定为 `(runtime, normalizedProjectPath, lowercase UUID)`。历史定向恢复、重命名和删除只用
+  文件名派生 UUID；active/starting owner 从历史隐藏，runtime 失活后重新出现。已有 owner 的恢复只
+  聚焦，不创建第二进程；返回安全终端的转移失败会恢复原 owner、草稿和原选择。
+- 结果未知的提交永不自动重发，避免重复工具操作、费用或外部副作用。仅当 JSONL 对账确认 user 记录
+  已写入后才清理加密待确认文本。
+- `ClaudeAgentAdapter.submit()` 在 SDK 输入队列同步接受 payload 后，以同一
+  `clientSubmissionId` 发布用户消息，再进入 `running`；renderer 以
+  `(conversationId, clientSubmissionId)` 持有提交锁，迟到确认只清理完全相同的文本和附件集合。
+  SDK `result.is_error` 是可恢复的单轮失败：写入 system 失败消息后回到 `idle`。迭代器抛错或意外 EOF
+  是流级失败：关闭 query/queue、撤销交互并从 adapter 删除 session；服务收到
+  `conversation.error` 后同步释放 owner，主进程据失败快照释放路由预约。
+- `ClaudeAgentAdapter` 用前台或 `parent_tool_use_id` 作为助手流通道；首个 `message_start` / delta
+  为通道分配稳定显示 ID，后续 delta 和最终 `assistant` 帧复用它，最终 upsert 因而只把 streaming
+  状态收口为 complete。没有 SDK UUID 时使用 adapter revision 与本地助手序号生成一次性回退 ID，
+  禁止再次使用会随每个事件递增的全局 sequence。renderer 对 IPC 累计快照执行 revision/sequence
+  单调检查，并用 `requestAnimationFrame` 合并同一帧内的更新；流式正文同步写入复用节点，完整正文才
+  进入异步安全 Markdown renderer，避免旧 token 的异步结果覆盖新正文。
+- Claude Agent SDK 的原生 `dontAsk` 会在 `canUseTool` 前拒绝所有需用户交互的工具，连 allow rule 中的
+  `AskUserQuestion` 也不例外。ClaudeDock 因此把 SDK engine 保持在 `default`，但在 adapter callback 中
+  复刻 `dontAsk` 的严格语义：未预批准工具立即 deny；只有当前用户 payload 明确包含选择题/选项意图时，
+  放行一次 `AskUserQuestion` 并消费该例外，result 或下一次 submit 都会清除它。这不会扩大 Bash、编辑、
+  MCP 或其他权限。UI 将该逻辑模式标为“仅预批准”，避免把权限确认与对话式选择混为一谈。
+- `prepareNativeConversation()` 从项目 launch snapshot 读取默认开启的 `allowBypassPermissions`，通过
+  service start input 传给 adapter；adapter 只在该门禁为真时设置 SDK
+  `allowDangerouslySkipPermissions` 并发布 `bypassPermissions` 能力。主进程在运行中切换前重新读取项目
+  开关，adapter 再做第二次校验；恢复日志不持久化这个高风险授权，不能用旧会话绕过当前项目设置。
+- `native-conversation:start` 对路由预约、adapter 启动和 owner claim 按同一次启动事务回滚；新 UUID
+  在 adapter 启动失败且没有正文时删除空恢复行，精确 resume 失败则保留原恢复入口。升级时还会把
+  “无提交且无 canonical JSONL”的旧版空预约与真实历史对账并清理，不删除任何 Claude JSONL。
+- `chatgpt-subscription` 的手动与自动连接测试在主进程先执行
+  `ManagedChatGptGateway.ensureRunning()`。这只恢复 ClaudeDock 自有的回环 sidecar，不接管外部
+  Claude/Codex/CCR；成功后才运行真实一 token 测试并替换旧健康快照。
+- 隔离 profile 使用临时 userData/home/project、假适配器和内存终端，不获取生产单实例锁，不启动
+  托盘、更新器、插件变更、外部路由写入或真实 PTY。所有危险入口在主进程再次检查 profile capability。
+- Claude Agent SDK 解析器先查找用户可执行的 `claude` 命令。直接安装返回 `claude.exe` 时原样使用；
+  NPM 的 `claude.cmd` / `claude.ps1` 启动器则只解包到同一安装目录下
+  `node_modules/@anthropic-ai/claude-code/bin/claude.exe`，并在文件不存在时给出可执行的重装诊断。
+  ClaudeDock 不下载、不复制，也不随安装包携带第二份 Claude Code。
+- `FakeConversationAdapter` 的完整场景按固定顺序发出文本、工具成功/失败、图片、任务、用量以及
+  permission/question/plan/MCP 请求；renderer 的交互坞只消费队首请求，响应后才显示下一项。
+  这条 FIFO 约束既避免卡片堆叠，也让每个 SDK 响应只匹配当前可见请求。
+
+### 原生视觉与组件门禁
+
+- `.button` 是唯一文字按钮基类，`button--compact`、`button--primary`、`button--danger` 只表达密度
+  与语义；`.icon-button` 是标题栏、摘要和浮层 chrome 的唯一图标按钮基类。renderer 不允许再引入
+  平行的按钮基类或在业务容器中重写字号。模型、effort 已由底栏按钮表达时，标题区不重复说明。
+- `.toolbar-menu-button` 与增强选择器的 trigger 共用同一组标题栏菜单几何和状态规则；工作台与主题
+  因而拥有一致字号、字重、圆角、描边、dot、chevron、hover/press 和 850px 以下折叠行为。主题的
+  原生 `<select>` 仍是事实来源，但视觉上只有一个菜单按钮和一个 fixed listbox；只有选项实际溢出时
+  才保留滚动条。
+- 项目页不再实例化 `#status-pill/#session-detail/#session-pid`；`renderActiveStatus()` 只更新标题栏、
+  底栏、终端空态和 runtime 控件，错误仍由 `showTerminalDiagnostic()` 按 session generation 去重弹出。
+  `.runtime-picker` 使用单列 flex 卡保证 270px 侧栏仍有正常文字行，两个 runtime 共享图标/说明/勾选
+  结构和 `runtimeOptionSelect` 动效。`.project-list` 改用自动 gutter，避免无滚动条时项目卡永久缩短；嵌套
+  `.project-folder__history` 继续使用 stable gutter 保护时间/删除尾槽。
+- `#native-composer` 是 Claude/Telegram 共用的提交与附件内核。主题只切换 CSS 外壳和两个互斥 SVG：
+  Claude 使用圆形上箭头及 `nativeClaudeSend*` 确认关键帧；Telegram 使用纸飞机及
+  `nativeTelegramSend*` 涟漪/飞行关键帧。发送成功只短暂设置 `data-sending=true`，在 `animationend`
+  后清除；`prefers-reduced-motion` 关闭装饰动画。输入坞实测高度写入 `--native-composer-h`，toast
+  使用该值避开输入操作区。
+- `scripts/native-visual-smoke.cjs` 生成四主题、三窗口尺寸、三项目栏宽度、三缩放档及进退场关键帧；
+  `scripts/real-electron-visual-qa.cjs` 另外启动带隔离 `RuntimeProfile` 的真实可见 Electron 窗口，
+  通过 DevTools 输入事件逐项点击安全终端主入口、显式原生入口、权限、提问、计划、MCP、摘要和返回终端，并把截图与 DOM 状态清单
+  写入 `dist/visual-qa/`。两者均不得连接真实会话、PTY、凭据、更新器或外部路由。
+- `scripts/control-theme-smoke.cjs` 除遍历全部按钮的主题基础样式外，还通过 DevTools
+  `CSS.forcePseudoState` 对工作台 `#launch-new` 和侧栏 `#run-claude` 逐主题强制 `:hover`，比较
+  计算后的基础色与 `accentSolid`、悬停色与 `accentSolidHover`；任一入口仍为灰色 disabled 或
+  Telegram 没有从浅蓝加深都会直接使 `npm run test:control-theme` 失败。
+
+### 模型能力与呈现
+
+- `ModelCapabilityProfile` 的身份至少包含 runtime、provider、endpoint、模型族和 CLI/网关版本；
+  结构化运行时元数据优先于验证目录与隔离探测，未知能力 fail-closed。renderer 只消费同一 revision
+  的 `ModelControlState`，防止模型、effort、Fast、图片和权限控件跨版本拼接。
+- Claude `ultracode` 是请求预设，收起控件只呈现“Ultra Code”，展开说明与辅助技术描述再显示
+  “工作流编排 · 实际 X-High”；applied `xhigh` 不得覆盖 requested preset。Fast 是互斥状态而非倍率承诺。Codex Ultra 以后接入同一能力层，
+  但 5.0 RC 不通过实验性 App Server 驱动真实会话。
 
 ### 设计系统跨文件耦合（关键约束）
 
@@ -839,9 +952,14 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
    完成信号，以及 WebSearch/WebFetch 主线程路由守卫；它们只读 hook stdin、写会话目录 JSON
    或返回本地 hook 决策，不外发。
 3. 主进程重建当前 PowerShell，并在 PTY 创建时注入路由与解密后的凭据；密钥不会出现在
-   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。认证策略属于端点指纹的一部分，
-   修改后必须重启 PTY，不能把旧会话当作同一端点热切模型；Claude 退出后命令会清理所有受管
-   环境变量与第三方路由别名。
+   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。完整启动脚本通过
+   `CLAUDEDOCK_STARTUP_COMMAND` 一次性交给 PowerShell 启动段，启动段在提示符出现前把值捕获到
+   进程变量并删除环境副本；主进程完成 PTY generation 绑定后只写入固定的
+   `Invoke-ClaudeDockStartup`，因此内部 settings 路径、环境清理列表和 marker 不再铺满可见输入。
+   默认命令只保留 `--settings` 与必要的权限/恢复参数，不再重复传 `--model`，也不传
+   `--no-chrome`；模型由同一临时 settings 与项目环境确定，Claude in Chrome 是否使用则回归
+   Claude Code 原生能力。认证策略属于端点指纹的一部分，修改后必须重启 PTY，不能把旧会话当作
+   同一端点热切模型；Claude 退出后命令会清理所有受管环境变量与第三方路由别名。
 4. 标准和网关 profile 启用非必要流量保护：
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`DISABLE_TELEMETRY=1`、
    `DISABLE_ERROR_REPORTING=1`、`DISABLE_FEEDBACK_COMMAND=1`、
@@ -1170,7 +1288,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   slug 当作用户可读名称；其余只提取 session ID、时间、模型和 usage 等元数据，不跨项目
   枚举。单文件超过 50 MiB 时跳过。渲染层只在项目文件夹的折叠层级中展示历史，不在工作台
   重复生成第二份列表；历史条目全部渲染进 `.project-folder__history` 独立滚动容器（约六行
-  高），运行中对话保持在容器上方不动，滚动位置按文件夹记录、在侧栏因工作区状态刷新而
+  高）。容器使用 `align-content: start` 和内容行轨道，每行至少 27px；13 条夹具在 170px 可视高度
+  中产生约 375px 滚动高度，而不是缩小文字。运行中对话保持在容器上方不动，滚动位置按文件夹记录、在侧栏因工作区状态刷新而
   重建后恢复。文件夹的展开状态只控制历史区：`expandedFolders` 不再被活动会话强制置为
   展开，收起使用中的项目时保留运行中对话行、只隐藏历史与提示区。
 - 历史右键重命名先验证项目路径、UUID、文件类型、50 MiB 上限和 1–60 字符标题，再向对应
@@ -1195,7 +1314,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   帧续播；会话关闭时清理定时器。手动重命名通过一次性抑制集合跳过动画，
   `prefers-reduced-motion: reduce` 下不播放动画、直接落最终标题。
 - 定向恢复把经过 UUID 校验的 session ID 交给统一的 PowerShell 命令构造器，因此继续保留
-  参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
+  参数单引号转义、凭据环境清理和不可见退出标记；可见 PTY 只收到固定短触发词，内部命令不进入
+  PowerShell 历史。启动不再附加 `--no-chrome` 或重复的 CLI `--model`。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
   session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数、
@@ -1601,6 +1721,9 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   超时/代次失效回退；`tests/runtime-process-registry.test.ts` 覆盖进程树、TCP 监听、PID 创建时间复用、
   不透明键、禁终止程序和温和/强制清理；`tests/claude-stream-diagnostics-store.test.ts` 锁定脱敏分类与
   14 天/200 条/2 MiB 裁剪。`tests/cli-command-catalog.test.ts` 锁定 101/120 与 50/53 的完整调用集合。
+- `tests/claude-agent-adapter.test.ts` 还模拟完全不带 UUID 的逐 token stream，断言全部 delta 与最终
+  assistant 帧只产生一个完成消息；renderer 源码守栏同时锁定消息节点复用、每帧快照合并、流式纯文本
+  与完成后 Markdown 的边界，以及用户气泡/助手终端壳的主题化结构。
 - `npm run test:runtime-soak:accelerated` 在数秒内模拟 24 小时的 1,440 个 Hook 事件和 57 次本地 Web
   进程创建/回收；`npm run test:runtime-soak` 运行真实 24 小时的同类无付费模型合成测试。它们验证
   ClaudeDock 自身有界状态与回收路径，不承诺上游模型或网关连续 24 小时无故障。
@@ -1843,12 +1966,18 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
   <https://claude.com/docs/connectors/building/mcp-apps/design-guidelines>
 - Claude 官方透明主题规范：
   <https://claude.com/docs/connectors/building/mcp-apps/transparent-theming>
-- Telegram Desktop 官方仓库（Open Sans 与桌面交互基线）：
+- Telegram Desktop 官方仓库（Roboto、42px 圆形发送按钮与纸飞机/涟漪交互基线）：
   <https://github.com/telegramdesktop/tdesktop>
+- Telegram Desktop 官方输入与发送按钮样式源：
+  <https://github.com/telegramdesktop/tdesktop/blob/dev/Telegram/SourceFiles/chat_helpers/chat_helpers.style>
+- Telegram Desktop 官方 changelog（发送/回复涟漪与消息发送动画）：
+  <https://github.com/telegramdesktop/tdesktop/blob/dev/changelog.txt>
 - Telegram Web A 主题与动效令牌实现：
   <https://github.com/Ajaxy/telegram-tt>
-- Open Sans 字体源：
-  <https://github.com/googlefonts/opensans>
+- Claude Desktop 官方导航教程（当前桌面输入区与附件入口）：
+  <https://claude.com/resources/tutorials/navigating-the-claude-desktop-app>
+- Claude 官方文件上传说明：
+  <https://support.claude.com/en/articles/8241126-upload-files-to-claude>
 - Fontsource 字体文件仓库：
   <https://github.com/fontsource/font-files>
 - Electron Security：

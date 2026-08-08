@@ -12,6 +12,7 @@ export interface ClaudeRuntimeActivityEvent {
   agentId?: string;
   agentType?: string;
   backgroundTasks?: Array<{ description?: string; id?: string; kind?: string }>;
+  backgroundTasksPresent?: boolean;
   description?: string;
   event: string;
   eventId: string;
@@ -27,6 +28,7 @@ type RuntimeActivityRecord = RuntimeActivitySnapshot;
 
 const COMPLETED_RETENTION_MS = 10 * 60_000;
 const COMPLETED_LIMIT = 20;
+const UNFINISHED_STALE_MS = 30 * 60_000;
 const unfinished = (task: RuntimeTaskView): boolean =>
   task.status === 'queued' || task.status === 'running' || task.status === 'waiting';
 
@@ -95,7 +97,8 @@ export class RuntimeActivityRegistry {
       record.launchGeneration !== event.launchGeneration ||
       record.ptyGeneration !== event.ptyGeneration
     ) {
-      record = this.beginLaunch(event.sessionId, event.launchGeneration, event.ptyGeneration);
+      this.beginLaunch(event.sessionId, event.launchGeneration, event.ptyGeneration);
+      record = this.records.get(event.sessionId)!;
     }
     record.observedAt = event.signaledAt;
 
@@ -124,6 +127,17 @@ export class RuntimeActivityRegistry {
         }
         break;
       case 'Stop': {
+        if (event.backgroundTasksPresent) {
+          const authoritativeIds = new Set(
+            (event.backgroundTasks ?? []).map((task) => task.id).filter(Boolean),
+          );
+          for (const task of record.tasks) {
+            if (unfinished(task) && !authoritativeIds.has(task.id)) {
+              task.status = 'orphaned';
+              task.updatedAt = event.signaledAt;
+            }
+          }
+        }
         for (const background of event.backgroundTasks ?? []) {
           this.upsertTask(
             record,
@@ -267,6 +281,12 @@ export class RuntimeActivityRegistry {
 
   private prune(record: RuntimeActivityRecord): void {
     const now = Date.now();
+    for (const task of record.tasks) {
+      if (unfinished(task) && now - task.updatedAt > UNFINISHED_STALE_MS) {
+        task.status = 'orphaned';
+        task.updatedAt = now;
+      }
+    }
     const active = record.tasks.filter(unfinished);
     const completed = record.tasks
       .filter((task) => !unfinished(task) && now - task.updatedAt <= COMPLETED_RETENTION_MS)
