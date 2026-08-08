@@ -311,13 +311,13 @@ describe('Claude Code configuration', () => {
     const marker = '\u001b]9;claudedock-exit:session-1\u0007';
     const command = buildClaudeLaunchCommand(
       "C:\\Users\\O'Brien\\settings.json",
-      'deepseek-chat',
       'continue',
       marker,
     );
 
     expect(command).toContain("'C:\\Users\\O''Brien\\settings.json'");
-    expect(command).toContain("--model 'deepseek-chat'");
+    expect(command).not.toContain('--model');
+    expect(command).not.toContain('--no-chrome');
     expect(command).toContain('--continue');
     expect(command).not.toContain(marker);
     expect(command).toContain('FromBase64String');
@@ -330,14 +330,14 @@ describe('Claude Code configuration', () => {
     const marker = '\u001b]9;claudedock-exit:session-2\u0007';
     const command = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'resume',
       marker,
       "a'quoted-session",
     );
 
     expect(command).toContain("--resume 'a''quoted-session'");
-    expect(command).toContain('--no-chrome');
+    expect(command).not.toContain('--no-chrome');
+    expect(command).not.toContain('--model');
     expect(command).toContain('Remove-Item Env:ANTHROPIC_API_KEY');
     expect(command).not.toContain(marker);
   });
@@ -345,7 +345,6 @@ describe('Claude Code configuration', () => {
   it('adds session-local web research agent configuration without replacing Claude Code', () => {
     const command = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'continue',
       '\u001b]9;claudedock-exit:session-web\u0007',
       undefined,
@@ -377,7 +376,6 @@ describe('Claude Code configuration', () => {
   it('launches without web research extensions when the workaround is off', () => {
     const command = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'continue',
       '\u001b]9;claudedock-exit:session-plain\u0007',
       undefined,
@@ -425,7 +423,6 @@ describe('Claude Code configuration', () => {
         );
         const launchCommand = buildClaudeLaunchCommand(
           'C:\\Users\\Tester\\settings.json',
-          'claude-model',
           'continue',
           '',
           undefined,
@@ -460,7 +457,6 @@ describe('Claude Code configuration', () => {
   it('arms the bypass cycle without starting in it', () => {
     const command = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'continue',
       '\u001b]9;claudedock-exit:session-3\u0007',
       undefined,
@@ -474,7 +470,6 @@ describe('Claude Code configuration', () => {
   it('starts in an explicit permission mode with the value quoted', () => {
     const command = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'continue',
       '\u001b]9;claudedock-exit:session-4\u0007',
       undefined,
@@ -488,7 +483,6 @@ describe('Claude Code configuration', () => {
   it('never pairs the arming flag with a bypass start, and omits both when disarmed', () => {
     const armedStart = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'continue',
       '\u001b]9;claudedock-exit:session-5\u0007',
       undefined,
@@ -500,7 +494,6 @@ describe('Claude Code configuration', () => {
 
     const disarmed = buildClaudeLaunchCommand(
       'C:\\Users\\Tester\\settings.json',
-      'claude-model',
       'continue',
       '\u001b]9;claudedock-exit:session-6\u0007',
       undefined,

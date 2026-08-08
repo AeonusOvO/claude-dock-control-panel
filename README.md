@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **5.0.0-rc.8**，许可证为 **Apache-2.0**。Claude 项目的“新建安全会话”、
+当前代码版本为 **5.0.0-rc.9**，许可证为 **Apache-2.0**。Claude 项目的“新建安全会话”、
 “继续最近”“选择历史”和历史记录点击默认进入真实 PowerShell/ConPTY 终端；结构化原生对话只通过
 终端工具栏的“原生对话”按钮显式进入，不会因恢复记录自动抢占终端界面。原生路径仍由 Claude Agent SDK
 解析用户本机的 `claude` 命令；NPM 安装时会沿启动器定位同一软件包内的 `bin/claude.exe`，ClaudeDock
@@ -148,6 +148,11 @@ Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
 禁用。受管 ChatGPT 会先自动恢复本地网关，确实缺少 Claude Code、模型凭据或可用接入时，输入坞会
 退出“正在启动”并显示对应的环境/配置提示。全新原生会话若在 Claude 创建 JSONL 前启动失败，会
 回滚 owner、路由预约和空恢复记录，不伪装成一次可恢复的异常中断。
+
+安全终端只向可见 PowerShell 写入一次短启动触发词，完整的受管参数在提示符出现前由一次性环境交接
+捕获并删除，不进入 xterm 输入或 PowerShell 历史。默认启动不附加系统提示词或子代理，也不再传入
+`--no-chrome`，因此 Claude Code 可以按自己的原生能力使用 Claude in Chrome；只有用户主动开启
+“联网检索隔离”兼容开关时，才会为对应中转站附加专用检索子代理和提示词。
 
 官方端点预检只作用于已经确认使用官方接入的项目；Claude 状态尚未加载时不会猜测接入类型，也不会
 覆盖受管网关项目的启动入口。可用主按钮的悬停态沿用当前主题的强调色 token：Telegram 主题由蓝色

@@ -91,6 +91,7 @@ import {
   type NormalizedClaudeConfig,
 } from './claude-configuration';
 import type { ClaudeRuntimeActivityEvent } from './runtime-activity-registry';
+import { POWERSHELL_STARTUP_COMMAND_ENV, POWERSHELL_STARTUP_TRIGGER } from './terminal-session';
 import {
   classifyClaudeStreamFailure,
   type ClaudeStreamFailureKind,
@@ -1969,9 +1970,8 @@ export class ClaudeRuntime {
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
 
     const exitMarker = `${String.fromCharCode(27)}]9;claudedock-exit:${sessionId}:${launchGeneration}:${Date.now()}${String.fromCharCode(7)}`;
-    const command = buildClaudeLaunchCommand(
+    const launchCommand = buildClaudeLaunchCommand(
       settingsPath,
-      launchModel,
       mode,
       exitMarker,
       resumeSessionId,
@@ -1989,6 +1989,7 @@ export class ClaudeRuntime {
       contextWindowMode,
       speed.profile,
     );
+    environment[POWERSHELL_STARTUP_COMMAND_ENV] = launchCommand;
 
     // Commit the runtime only after every launch artifact has been prepared successfully.
     const previousArtifactDirectory = this.sessions.get(sessionId)?.artifactDirectory;
@@ -2042,7 +2043,11 @@ export class ClaudeRuntime {
       artifactDirectory,
       previousArtifactDirectory,
     );
-    return { command, environment, predecessorPtyGeneration };
+    return {
+      command: POWERSHELL_STARTUP_TRIGGER,
+      environment,
+      predecessorPtyGeneration,
+    };
   }
 
   /** Removes only a bounded sample of artifacts that no live launch can read anymore. */

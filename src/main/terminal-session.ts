@@ -17,6 +17,9 @@ type DataListener = (ptyGeneration: PtyGeneration, data: string) => void;
 type StatusListener = (status: TerminalStatus) => void;
 export type TerminalEnvironmentOverrides = Record<string, null | string>;
 
+export const POWERSHELL_STARTUP_COMMAND_ENV = 'CLAUDEDOCK_STARTUP_COMMAND';
+export const POWERSHELL_STARTUP_TRIGGER = 'Invoke-ClaudeDockStartup';
+
 const buildEnvironment = (overrides: TerminalEnvironmentOverrides = {}): Record<string, string> => {
   const environment: Record<string, string> = {};
   const normalizedOverrides = new Map(
@@ -24,8 +27,13 @@ const buildEnvironment = (overrides: TerminalEnvironmentOverrides = {}): Record<
   );
 
   for (const [key, value] of Object.entries(process.env)) {
-    const override = normalizedOverrides.get(key.toLowerCase());
-    if (override?.value === null) {
+    const normalizedKey = key.toLowerCase();
+    const override = normalizedOverrides.get(normalizedKey);
+    // The one-shot script is trusted only when this spawn supplied it explicitly.
+    if (
+      override?.value === null ||
+      (normalizedKey === POWERSHELL_STARTUP_COMMAND_ENV.toLowerCase() && !override)
+    ) {
       continue;
     }
     if (typeof value === 'string' && !override) {
@@ -90,6 +98,19 @@ const terminalFailure = (
 const quotedAnsiForeground = (hex: string): string => `"${ansiForeground(hex)}"`;
 const quotedAnsiBackground = (hex: string): string => `"${ansiBackground(hex)}"`;
 
+const powershellStartupCommandBootstrap = [
+  `if (-not [string]::IsNullOrEmpty($env:${POWERSHELL_STARTUP_COMMAND_ENV})) {`,
+  `$global:ClaudeDockStartupCommand = $env:${POWERSHELL_STARTUP_COMMAND_ENV};`,
+  `Remove-Item Env:${POWERSHELL_STARTUP_COMMAND_ENV} -ErrorAction SilentlyContinue;`,
+  `function global:${POWERSHELL_STARTUP_TRIGGER} {`,
+  '$command = $global:ClaudeDockStartupCommand;',
+  'Remove-Variable ClaudeDockStartupCommand -Scope Global -ErrorAction SilentlyContinue;',
+  `Remove-Item Function:${POWERSHELL_STARTUP_TRIGGER} -ErrorAction SilentlyContinue;`,
+  'if (-not [string]::IsNullOrEmpty($command)) { & ([ScriptBlock]::Create($command)) }',
+  '}',
+  '}',
+].join(' ');
+
 /**
  * Builds the startup script for one PowerShell spawn. Keeping palette selection at this boundary
  * avoids injecting commands into a live PSReadLine/Claude TUI when the application theme changes.
@@ -126,6 +147,7 @@ export const buildPowershellStartup = (palette: TerminalThemePalette): string =>
       '}',
       '}',
     ].join(' '),
+    powershellStartupCommandBootstrap,
   ].join('; ');
 
 /** Backward-compatible default-theme script for existing imports and syntax checks. */

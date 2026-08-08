@@ -1,8 +1,10 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.8（2026-08-08）。本候选版把 Claude 的新建、继续、选择历史和历史记录
+当前架构版本：5.0.0-rc.9（2026-08-09）。本候选版把 Claude 的新建、继续、选择历史和历史记录
 恢复统一切回 PowerShell/ConPTY 安全终端主路径，结构化原生对话只保留为工具栏显式入口；恢复记录不会
-自动打开原生界面。既有隔离 `RuntimeProfile/AppPaths`、统一 `ConversationAdapter`、Claude Agent SDK
+自动打开原生界面。安全终端改为一次性捕获内部启动脚本、只向可见 PTY 写入固定短触发词，并移除
+`--no-chrome` 与重复的 CLI `--model`，默认体验继续由 Claude Code 原生能力和会话 settings 决定。
+既有隔离 `RuntimeProfile/AppPaths`、统一 `ConversationAdapter`、Claude Agent SDK
 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、版本化模型能力和权限 contract 均保持不变，
 同时保留无 UUID token 聚合与最终帧原位收口。SDK 必须从用户本机的 `claude` 命令解析同一安装中的
 `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
@@ -950,9 +952,14 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
    完成信号，以及 WebSearch/WebFetch 主线程路由守卫；它们只读 hook stdin、写会话目录 JSON
    或返回本地 hook 决策，不外发。
 3. 主进程重建当前 PowerShell，并在 PTY 创建时注入路由与解密后的凭据；密钥不会出现在
-   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。认证策略属于端点指纹的一部分，
-   修改后必须重启 PTY，不能把旧会话当作同一端点热切模型；Claude 退出后命令会清理所有受管
-   环境变量与第三方路由别名。
+   命令行、临时 settings、xterm.js 输入或 PowerShell 历史中。完整启动脚本通过
+   `CLAUDEDOCK_STARTUP_COMMAND` 一次性交给 PowerShell 启动段，启动段在提示符出现前把值捕获到
+   进程变量并删除环境副本；主进程完成 PTY generation 绑定后只写入固定的
+   `Invoke-ClaudeDockStartup`，因此内部 settings 路径、环境清理列表和 marker 不再铺满可见输入。
+   默认命令只保留 `--settings` 与必要的权限/恢复参数，不再重复传 `--model`，也不传
+   `--no-chrome`；模型由同一临时 settings 与项目环境确定，Claude in Chrome 是否使用则回归
+   Claude Code 原生能力。认证策略属于端点指纹的一部分，修改后必须重启 PTY，不能把旧会话当作
+   同一端点热切模型；Claude 退出后命令会清理所有受管环境变量与第三方路由别名。
 4. 标准和网关 profile 启用非必要流量保护：
    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`DISABLE_TELEMETRY=1`、
    `DISABLE_ERROR_REPORTING=1`、`DISABLE_FEEDBACK_COMMAND=1`、
@@ -1307,7 +1314,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   帧续播；会话关闭时清理定时器。手动重命名通过一次性抑制集合跳过动画，
   `prefers-reduced-motion: reduce` 下不播放动画、直接落最终标题。
 - 定向恢复把经过 UUID 校验的 session ID 交给统一的 PowerShell 命令构造器，因此继续保留
-  参数单引号转义、`--no-chrome`、凭据环境清理和不可见退出标记。删除同样限定为当前项目
+  参数单引号转义、凭据环境清理和不可见退出标记；可见 PTY 只收到固定短触发词，内部命令不进入
+  PowerShell 历史。启动不再附加 `--no-chrome` 或重复的 CLI `--model`。删除同样限定为当前项目
   目录下的精确 `<session-id>.jsonl` 文件。
 - `assets/runtime/claude-statusline.ps1` 从 stdin 接收官方 statusLine JSON，原子写入模型、
   session ID、session name、上下文窗口、输入/输出 token、估算费用、持续时间、改动行数、
