@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.6（2026-08-08）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
+当前架构版本：5.0.0-rc.7（2026-08-08）。本候选版增加隔离 `RuntimeProfile/AppPaths`、统一
 `ConversationAdapter`、Claude Agent SDK 原生会话、单 owner 注册表、加密恢复日志、附件安全存储、
 版本化模型能力以及原生对话/摘要/诊断/任务与下载 UI，并修复无 UUID token 被拆成逐字消息、最终帧
 重复追加的问题；开发链路的 `nanoid` 锁文件版本同步提升到 3.3.18。SDK 必须从用户本机的 `claude` 命令解析同一
@@ -147,6 +147,15 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   禁止再次使用会随每个事件递增的全局 sequence。renderer 对 IPC 累计快照执行 revision/sequence
   单调检查，并用 `requestAnimationFrame` 合并同一帧内的更新；流式正文同步写入复用节点，完整正文才
   进入异步安全 Markdown renderer，避免旧 token 的异步结果覆盖新正文。
+- Claude Agent SDK 的原生 `dontAsk` 会在 `canUseTool` 前拒绝所有需用户交互的工具，连 allow rule 中的
+  `AskUserQuestion` 也不例外。ClaudeDock 因此把 SDK engine 保持在 `default`，但在 adapter callback 中
+  复刻 `dontAsk` 的严格语义：未预批准工具立即 deny；只有当前用户 payload 明确包含选择题/选项意图时，
+  放行一次 `AskUserQuestion` 并消费该例外，result 或下一次 submit 都会清除它。这不会扩大 Bash、编辑、
+  MCP 或其他权限。UI 将该逻辑模式标为“仅预批准”，避免把权限确认与对话式选择混为一谈。
+- `prepareNativeConversation()` 从项目 launch snapshot 读取默认开启的 `allowBypassPermissions`，通过
+  service start input 传给 adapter；adapter 只在该门禁为真时设置 SDK
+  `allowDangerouslySkipPermissions` 并发布 `bypassPermissions` 能力。主进程在运行中切换前重新读取项目
+  开关，adapter 再做第二次校验；恢复日志不持久化这个高风险授权，不能用旧会话绕过当前项目设置。
 - `native-conversation:start` 对路由预约、adapter 启动和 owner claim 按同一次启动事务回滚；新 UUID
   在 adapter 启动失败且没有正文时删除空恢复行，精确 resume 失败则保留原恢复入口。升级时还会把
   “无提交且无 canonical JSONL”的旧版空预约与真实历史对账并清理，不删除任何 Claude JSONL。

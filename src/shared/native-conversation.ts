@@ -239,6 +239,7 @@ export type ConversationEvent =
     });
 
 export interface ConversationStartInput {
+  allowBypassPermissions?: boolean;
   cliVersion?: string;
   conversationId: string;
   endpointIdentity?: string;

@@ -3528,9 +3528,20 @@ const nativePermissionLabel = (mode: string): string =>
   ({
     acceptEdits: '自动接受修改',
     auto: '智能权限',
+    bypassPermissions: '完全允许',
     default: '逐项确认',
-    dontAsk: '不主动询问',
+    dontAsk: '仅预批准',
     plan: '规划模式',
+  })[mode] ?? mode;
+
+const nativePermissionDescription = (mode: string): string =>
+  ({
+    acceptEdits: '文件修改自动通过，其余动作仍按规则确认。',
+    auto: '由 Claude Code 的权限分类器判断是否放行动作。',
+    bypassPermissions: '跳过工具权限确认；仅在项目已开启高风险预置时提供。',
+    default: '未预先批准的动作逐项显示权限确认。',
+    dontAsk: '未预先批准的动作直接拒绝；你明确要求选项时仍可显示结构化选择题。',
+    plan: '只读探索并先给出计划，不直接修改项目。',
   })[mode] ?? mode;
 
 const replaceNativeControlOptions = (
@@ -3599,6 +3610,9 @@ const renderNativeControls = (snapshot: ConversationSnapshot): void => {
   nativeEffortControl.setAttribute('aria-description', effortDescription);
   nativePermissionControl.disabled =
     nativeControlsUpdating || capability.permissionModes.length === 0;
+  const permissionDescription = nativePermissionDescription(nativePermissionControl.value);
+  nativePermissionControl.title = permissionDescription;
+  nativePermissionControl.setAttribute('aria-description', permissionDescription);
   nativeFastControl.disabled =
     nativeControlsUpdating ||
     !['off', 'requested', 'confirmed', 'fallback'].includes(capability.fast.state);

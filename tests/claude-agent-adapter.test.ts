@@ -11,6 +11,7 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
   public appliedSettings: Record<string, unknown>[] = [];
   public closed = false;
   public interrupted = false;
+  public permissionModes: string[] = [];
   public stoppedTasks: string[] = [];
   private failure?: Error;
   private readonly pending: Array<{
@@ -39,7 +40,8 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
     return Promise.resolve();
   }
 
-  public setPermissionMode(_mode: string): Promise<void> {
+  public setPermissionMode(mode: string): Promise<void> {
+    this.permissionModes.push(mode);
     return Promise.resolve();
   }
 
@@ -395,6 +397,116 @@ describe('Claude Agent SDK adapter', () => {
       remember: true,
     });
     await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+  });
+
+  it('keeps explicit choice cards available in dontAsk without allowing other prompts', async () => {
+    const query = new FakeSdkQuery();
+    let capturedOptions: Record<string, unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.7',
+      queryFactory:
+        async () =>
+        ({ options }) => {
+          capturedOptions = options;
+          return query;
+        },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    let interaction: ConversationInteraction | undefined;
+    adapter.subscribe((event) => {
+      if (event.type === 'interaction.requested') interaction = event.interaction;
+    });
+    await adapter.start({ ...startInput, permissionMode: 'dontAsk' });
+    expect(capturedOptions?.permissionMode).toBe('default');
+    const canUseTool = capturedOptions?.canUseTool as (
+      name: string,
+      input: Record<string, unknown>,
+      permission: Record<string, unknown>,
+    ) => Promise<unknown>;
+
+    await expect(
+      canUseTool('AskUserQuestion', { questions: [] }, { requestId: 'proactive-question' }),
+    ).resolves.toMatchObject({ behavior: 'deny', message: expect.stringMatching(/明确要求/) });
+    await adapter.submit(startInput.conversationId, {
+      blocks: [{ text: '请解释这个选项为什么消失了。', type: 'text' }],
+      clientSubmissionId: 'mentions-an-option',
+    });
+    await expect(
+      canUseTool('AskUserQuestion', { questions: [] }, { requestId: 'mentioned-option-question' }),
+    ).resolves.toMatchObject({ behavior: 'deny' });
+    await adapter.submit(startInput.conversationId, {
+      blocks: [{ text: '请给我三个选项，我来选。', type: 'text' }],
+      clientSubmissionId: 'explicit-choice-request',
+    });
+    await expect(
+      canUseTool('Bash', { command: 'npm test' }, { requestId: 'unapproved-tool' }),
+    ).resolves.toMatchObject({
+      behavior: 'deny',
+      message: expect.stringMatching(/未被规则预先批准/),
+    });
+
+    const decision = canUseTool(
+      'AskUserQuestion',
+      {
+        questions: [
+          {
+            header: '实现方式',
+            options: [
+              { description: '修复当前链路', label: '原位修复' },
+              { description: '切换为计划模式', label: '进入计划' },
+            ],
+            question: '你希望采用哪种方式？',
+          },
+        ],
+      },
+      { requestId: 'explicit-question', title: '请选择' },
+    );
+    expect(interaction).toMatchObject({ id: 'explicit-question', kind: 'question' });
+    await adapter.respond(startInput.conversationId, 'explicit-question', {
+      action: 'submit',
+      values: { answers: { '你希望采用哪种方式？': '原位修复' } },
+    });
+    await expect(decision).resolves.toMatchObject({ behavior: 'allow' });
+    await expect(
+      canUseTool('AskUserQuestion', { questions: [] }, { requestId: 'second-question' }),
+    ).resolves.toMatchObject({ behavior: 'deny' });
+  });
+
+  it('exposes bypass mode only behind the project opt-in and arms the SDK before switching', async () => {
+    const query = new FakeSdkQuery();
+    let capturedOptions: Record<string, unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.7',
+      queryFactory:
+        async () =>
+        ({ options }) => {
+          capturedOptions = options;
+          return query;
+        },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start({ ...startInput, allowBypassPermissions: true });
+
+    expect(capturedOptions?.allowDangerouslySkipPermissions).toBe(true);
+    expect(events.find((event) => event.type === 'capabilities.updated')).toMatchObject({
+      capabilities: { permissionModes: expect.arrayContaining(['bypassPermissions']) },
+    });
+    await adapter.updateControls(startInput.conversationId, {
+      expectedCapabilityRevision: 1,
+      permissionMode: 'bypassPermissions',
+    });
+    expect(query.permissionModes).toEqual(['bypassPermissions']);
+
+    const blocked = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.7',
+      queryFactory: async () => () => new FakeSdkQuery(),
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    await expect(
+      blocked.start({ ...startInput, permissionMode: 'bypassPermissions' }),
+    ).rejects.toThrow(/关闭了「完全允许」预置/);
   });
 
   it('uses authoritative empty background snapshots to clear running tasks', async () => {

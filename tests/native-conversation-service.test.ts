@@ -31,6 +31,32 @@ const encryption = (available = true): RecoveryEncryption => ({
 const projectPath = 'D:\\Projects\\Native';
 
 describe('native conversation service', () => {
+  it('passes the project bypass gate to the adapter without persisting a privilege override', async () => {
+    const adapter = new FakeConversationAdapter();
+    let receivedAllowBypass: boolean | undefined;
+    const start = adapter.start.bind(adapter);
+    adapter.start = async (input) => {
+      receivedAllowBypass = input.allowBypassPermissions;
+      await start(input);
+    };
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry: new ConversationOwnerRegistry(),
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+
+    const started = await service.start({ allowBypassPermissions: true, projectPath });
+
+    expect(started.ok).toBe(true);
+    expect(receivedAllowBypass).toBe(true);
+    expect(service.getSnapshot(started.conversationId)?.capabilities?.permissionModes).toContain(
+      'bypassPermissions',
+    );
+    expect(service.listRecoveries()[0]?.launch).not.toHaveProperty('allowBypassPermissions');
+  });
+
   it('preallocates a UUID, owns it once, confirms submissions and returns it to history on close', async () => {
     const ownerRegistry = new ConversationOwnerRegistry();
     const recoveryStore = new ConversationRecoveryStore(root(), encryption());

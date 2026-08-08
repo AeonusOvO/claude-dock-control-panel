@@ -46,6 +46,7 @@ export interface NativeConversationServiceOptions {
 }
 
 export interface NativeConversationLaunchInput {
+  allowBypassPermissions?: boolean;
   conversationId?: string;
   launch?: Omit<RecoveryLaunchSnapshot, 'configFingerprint'> & {
     configFingerprintSource?: unknown;
@@ -145,6 +146,7 @@ export class NativeConversationService {
       runtime: this.options.runtime,
     });
     const startInput: ConversationStartInput = {
+      allowBypassPermissions: input.allowBypassPermissions,
       cliVersion: launch.cliVersion,
       conversationId,
       endpointIdentity: launch.endpointIdentity,

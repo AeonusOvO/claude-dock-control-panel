@@ -1171,7 +1171,9 @@ const validateNativeControlUpdate = (value: unknown): ConversationControlUpdate 
       !['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'].includes(update.effort)) ||
     (update.fast !== undefined && typeof update.fast !== 'boolean') ||
     (update.permissionMode !== undefined &&
-      !['default', 'acceptEdits', 'plan', 'dontAsk', 'auto'].includes(update.permissionMode))
+      !['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'].includes(
+        update.permissionMode,
+      ))
   ) {
     throw new Error('模型控制参数无效。');
   }
@@ -2310,7 +2312,13 @@ const registerIpc = (): void => {
       nativeLaunches.set(conversationId, launch);
     }
     try {
+      const allowBypassPermissions =
+        launch?.prepared.allowBypassPermissions ?? runtimeProfile.adapterMode === 'fake';
+      if (request.permissionMode === 'bypassPermissions' && !allowBypassPermissions) {
+        throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
+      }
       const result = await service.start({
+        allowBypassPermissions,
         conversationId,
         launch: launch
           ? {
@@ -2506,10 +2514,16 @@ const registerIpc = (): void => {
     'native-conversation:update-controls',
     (event, conversationId: unknown, update: unknown) => {
       validateSender(event);
-      return requireNativeConversationService().updateControls(
-        validateConversationId(conversationId),
-        validateNativeControlUpdate(update),
-      );
+      const service = requireNativeConversationService();
+      const validatedConversationId = validateConversationId(conversationId);
+      const validatedUpdate = validateNativeControlUpdate(update);
+      if (validatedUpdate.permissionMode === 'bypassPermissions') {
+        const snapshot = service.getSnapshot(validatedConversationId);
+        if (!snapshot || !requireClaudeRuntime().allowsBypassPermissions(snapshot.projectPath)) {
+          throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
+        }
+      }
+      return service.updateControls(validatedConversationId, validatedUpdate);
     },
   );
   ipcMain.handle('native-conversation:close', async (event, conversationId: unknown) => {

@@ -193,6 +193,7 @@ interface RuntimeSession {
 }
 
 export interface PreparedNativeClaudeConversation {
+  allowBypassPermissions: boolean;
   cliVersion?: string;
   configFingerprint: string;
   endpointIdentity: string;
@@ -1661,6 +1662,7 @@ export class ClaudeRuntime {
       const speed = this.resolveModelSpeed(launchConfig, model, installation.version);
       this.nativeRouteReservations.set(ownerId, reservation);
       return {
+        allowBypassPermissions: launchSnapshot.allowBypassPermissions,
         cliVersion: installation.version,
         configFingerprint: connectionFingerprint(launchConfig, credential),
         endpointIdentity: `${launchConfig.provider}|${launchConfig.preset}|${launchConfig.baseUrl}`,
@@ -1687,6 +1689,11 @@ export class ClaudeRuntime {
     if (this.routeLifecycle.release(reservation)) {
       void this.stopUnusedRoute(reservation.routeKind).catch(() => {});
     }
+  }
+
+  /** Re-checks the project gate before a live native session can enter bypass mode. */
+  public allowsBypassPermissions(cwd: string): boolean {
+    return this.configStore.getAllowBypassPermissions(cwd);
   }
 
   public async prepareLaunch(

@@ -1450,6 +1450,19 @@ describe('external application proxy settings', () => {
 });
 
 describe('native conversation component suite', () => {
+  it('keeps explicit questions usable in strict mode and restores the gated bypass option', () => {
+    expect(rendererSource).toContain("bypassPermissions: '完全允许'");
+    expect(rendererSource).toContain("dontAsk: '仅预批准'");
+    expect(rendererSource).toContain('你明确要求选项时仍可显示结构化选择题');
+    expect(claudeRuntimeSource).toContain(
+      'allowBypassPermissions: launchSnapshot.allowBypassPermissions',
+    );
+    expect(mainSource).toContain("validatedUpdate.permissionMode === 'bypassPermissions'");
+    expect(mainSource).toContain(
+      'requireClaudeRuntime().allowsBypassPermissions(snapshot.projectPath)',
+    );
+  });
+
   it('keeps the primary launch action visible through remediable route failures', () => {
     const launchControls = rendererSource.slice(
       rendererSource.indexOf('const renderClaudeLaunchControls ='),

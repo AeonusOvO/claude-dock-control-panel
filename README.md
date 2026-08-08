@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **5.0.0-rc.6**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
+当前代码版本为 **5.0.0-rc.7**，许可证为 **Apache-2.0**。本候选版把 Claude 项目的默认工作区
 迁移为结构化原生对话：Claude Agent SDK 解析用户本机的 `claude` 命令；NPM 安装时会沿启动器定位
 同一软件包内的 `bin/claude.exe`，ClaudeDock 不捆绑
 第二份 Claude Code；用户提示词使用独立气泡，Claude 回复在同一 PowerShell 风格输出壳中按帧平滑
@@ -38,6 +38,9 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - 原生消息流保留 Markdown 块顺序、空白、代码围栏、工具状态、计划、权限、提问、MCP 表单、图片和
   后台任务；同一助手轮次的 token 增量按稳定消息 ID 聚合，完成帧原位替换流式正文，不再产生逐字卡片或
   末尾重复整段。高风险、运行中与失败工具默认展开，普通成功项默认折叠。
+- 原生权限栏把 `dontAsk` 准确显示为“仅预批准”：未预先批准的工具仍直接拒绝，但用户在当前提示词中
+  明确要求选项或选择题时，Claude 可使用现有结构化选择卡，不必切到规划模式。项目默认开启高风险预置时
+  显示“完全允许”，关闭预置后启动、切换与 adapter 三层均拒绝进入该模式。
 - `(runtime, normalized project, UUID)` 单一 owner 阻止同一对话被原生会话、历史恢复和高级终端
   重复占用。进入高级终端会先保存草稿并精确恢复 UUID；任何失败均回滚到原生 owner。
 - Claude JSONL 仍是正文真值。独立恢复日志只记录 owner、启动配置和提交阶段；待确认文本由

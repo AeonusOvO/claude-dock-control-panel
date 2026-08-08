@@ -50,6 +50,7 @@ interface ToolLocation {
 }
 
 interface AgentSession {
+  allowQuestionInteraction: boolean;
   assistantStreamSequence: number;
   assistantStreams: Map<string, string>;
   capabilityRevision: number;
@@ -183,6 +184,29 @@ const normalizedPermissionMode = (value: string | undefined): string =>
     ? value!
     : 'default';
 
+// Upstream `dontAsk` denies AskUserQuestion before the SDK's canUseTool callback, even when the
+// user explicitly asked for a choice card. ClaudeDock keeps the same deny-by-default policy in its
+// callback while running the SDK permission engine in `default`, then makes a narrow exception for
+// an explicitly requested structured question.
+const sdkPermissionMode = (value: string): string => (value === 'dontAsk' ? 'default' : value);
+
+const EXPLICIT_QUESTION_REQUESTS = [
+  /AskUserQuestion|(?:帮我|给我|让我|供我|我来).{0,16}(?:选择题|选项|选择|选)|(?:列出|展示|显示|生成|出).{0,12}(?:选择题|选项|方案).{0,12}(?:选择|选)?/iu,
+  /\b(?:multiple[- ]choice|give me (?:some )?(?:options|choices)|let me choose|ask me (?:a |some )?questions?|present (?:me )?with (?:options|choices))\b/iu,
+];
+const EXPLICIT_QUESTION_REJECTIONS = [
+  /(?:不要|不用|无需|别).{0,12}(?:选择题|选项|提问|问我|询问)/u,
+  /\b(?:do not|don't|no need to).{0,24}(?:ask|options|choices|questions)\b/iu,
+];
+
+const explicitlyRequestsQuestionInteraction = (input: ConversationSubmitInput): boolean =>
+  input.blocks.some(
+    (block) =>
+      block.type === 'text' &&
+      !EXPLICIT_QUESTION_REJECTIONS.some((pattern) => pattern.test(block.text)) &&
+      EXPLICIT_QUESTION_REQUESTS.some((pattern) => pattern.test(block.text)),
+  );
+
 export class ClaudeAgentAdapter implements ConversationAdapter {
   private readonly listeners = new Set<(event: ConversationEvent) => void>();
   private readonly sessions = new Map<string, AgentSession>();
@@ -198,6 +222,10 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
   public async start(input: ConversationStartInput): Promise<void> {
     if (this.sessions.has(input.conversationId))
       throw new Error('该 Claude 会话已经在原生界面运行。');
+    const permissionMode = normalizedPermissionMode(input.permissionMode);
+    if (permissionMode === 'bypassPermissions' && input.allowBypassPermissions !== true) {
+      throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
+    }
     const environment: NodeJS.ProcessEnv = { ...process.env };
     for (const [name, value] of Object.entries(this.options.environment?.(input) ?? {})) {
       if (value === null || value === undefined) delete environment[name];
@@ -233,15 +261,19 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       onElicitation: async (request: Record<string, unknown>, context: { signal: AbortSignal }) =>
         this.requestElicitation(requireSession(), request, context.signal),
       pathToClaudeCodeExecutable: executable,
-      permissionMode: normalizedPermissionMode(input.permissionMode),
+      permissionMode: sdkPermissionMode(permissionMode),
       persistSession: true,
       settingSources: ['user', 'project', 'local'],
       tools: { preset: 'claude_code', type: 'preset' },
     };
+    if (input.allowBypassPermissions === true) {
+      adapterOptions.allowDangerouslySkipPermissions = true;
+    }
     if (input.resume) adapterOptions.resume = input.conversationId;
     else adapterOptions.sessionId = input.conversationId;
     const query = factory({ options: adapterOptions, prompt: queue });
     const session: AgentSession = {
+      allowQuestionInteraction: false,
       assistantStreamSequence: 0,
       assistantStreams: new Map(),
       capabilityRevision: 0,
@@ -252,7 +284,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       interactions: new Map(),
       model: input.model,
       models: [],
-      permissionMode: normalizedPermissionMode(input.permissionMode),
+      permissionMode,
       query,
       queue,
       revision,
@@ -319,6 +351,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
         type: 'image',
       };
     });
+    session.allowQuestionInteraction = explicitlyRequestsQuestionInteraction(input);
     session.queue.push({
       message: { content, role: 'user' },
       parent_tool_use_id: null,
@@ -389,9 +422,17 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     }
     if (
       update.permissionMode &&
-      !['default', 'acceptEdits', 'plan', 'dontAsk', 'auto'].includes(update.permissionMode)
+      !['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'].includes(
+        update.permissionMode,
+      )
     ) {
       throw new Error('当前原生适配器不支持这个权限模式。');
+    }
+    if (
+      update.permissionMode === 'bypassPermissions' &&
+      session.input.allowBypassPermissions !== true
+    ) {
+      throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
     }
 
     if (update.model && update.model !== session.model) await session.query.setModel(update.model);
@@ -407,7 +448,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     }
     if (Object.keys(flagSettings).length > 0) await session.query.applyFlagSettings(flagSettings);
     if (update.permissionMode && update.permissionMode !== session.permissionMode) {
-      await session.query.setPermissionMode(update.permissionMode);
+      await session.query.setPermissionMode(sdkPermissionMode(update.permissionMode));
     }
 
     session.model = selectedModel;
@@ -554,7 +595,14 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       },
       model: stringValue(model.resolvedModel) ?? stringValue(model.value) ?? 'unknown',
       models: modelOptions,
-      permissionModes: ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto'],
+      permissionModes: [
+        'default',
+        'acceptEdits',
+        'plan',
+        ...(session.input.allowBypassPermissions ? ['bypassPermissions'] : []),
+        'auto',
+        'dontAsk',
+      ],
       profileKey: [
         'claude',
         session.input.endpointIdentity ?? 'unknown-endpoint',
@@ -715,6 +763,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
   }
 
   private consumeResult(session: AgentSession, value: Record<string, unknown>): void {
+    session.allowQuestionInteraction = false;
     const confirmedSubmissionId = stringValue(value.user_message_uuid);
     if (confirmedSubmissionId) {
       this.emit(session, {
@@ -869,6 +918,20 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     input: Record<string, unknown>,
     permission: Record<string, unknown>,
   ): Promise<unknown> {
+    if (session.permissionMode === 'dontAsk') {
+      if (toolName !== 'AskUserQuestion' || !session.allowQuestionInteraction) {
+        return {
+          behavior: 'deny',
+          message:
+            toolName === 'AskUserQuestion'
+              ? '当前为「仅预批准」；只有用户在本轮明确要求选项或选择题时才显示交互卡。'
+              : '当前为「仅预批准」；未被规则预先批准的工具请求已直接拒绝。',
+        };
+      }
+      // One AskUserQuestion call can carry up to four questions. Consume the explicit exception so
+      // the model cannot turn one user request into an unbounded sequence of follow-up prompts.
+      session.allowQuestionInteraction = false;
+    }
     const id = stringValue(permission.requestId) ?? `permission-${session.sequence + 1}`;
     const toolUseId = stringValue(permission.toolUseID) ?? id;
     let interaction: ConversationInteraction;
