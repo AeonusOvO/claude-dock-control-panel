@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **5.0.0-rc.9**，许可证为 **Apache-2.0**。Claude 项目的“新建安全会话”、
+当前代码版本为 **5.0.0-rc.10**，许可证为 **Apache-2.0**。Claude 项目的“新建安全会话”、
 “继续最近”“选择历史”和历史记录点击默认进入真实 PowerShell/ConPTY 终端；结构化原生对话只通过
 终端工具栏的“原生对话”按钮显式进入，不会因恢复记录自动抢占终端界面。原生路径仍由 Claude Agent SDK
 解析用户本机的 `claude` 命令；NPM 安装时会沿启动器定位同一软件包内的 `bin/claude.exe`，ClaudeDock
