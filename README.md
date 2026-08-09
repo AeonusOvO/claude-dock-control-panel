@@ -30,8 +30,7 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - 网络预检只检查本机可见路径与服务商配置中的官方 DNS/HTTPS/TLS/CLI 端点，不请求第三方公网
   地址、地区、ASN 或网络信誉服务，也不根据用户位置作判断。
 
-更完整的数据处理说明见 [隐私说明](docs/PRIVACY.md)，中国大陆公开发行边界见
-[合规评估](docs/LEGAL_COMPLIANCE.md)。
+更完整的数据处理说明见 [隐私说明](docs/PRIVACY.md)。
 
 ## 主要能力
 
@@ -82,7 +81,7 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - Claude Code 插件、MCP、Claude Code Router 与 CC Switch 官方安装/导入边界。
 - 标题栏统一更新中心聚合 ClaudeDock、Claude Code、Router 与插件更新；“任务与下载”精确显示动作、
   对象、阶段、队列和已用时间，只有存在真实字节总量时才显示百分比、速度与 ETA。
-- 应用更新、依赖许可清单、安全报告与可重复 CI 门禁。
+- 应用更新、依赖许可清单与安全报告。
 
 设计和交互约束见 [design.md](design.md)，架构、安全与发布实现见
 [technical.md](technical.md)。
@@ -92,15 +91,6 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 正式版本发布后，从仓库的
 [GitHub Releases](https://github.com/AeonusOvO/claude-dock-control-panel/releases) 下载
 `ClaudeDock-Setup-<version>-x64.exe`。安装器支持选择安装目录和桌面快捷方式。
-
-发布前请在 Windows 的文件属性或 PowerShell 中验证 Authenticode：
-
-```powershell
-Get-AuthenticodeSignature .\ClaudeDock-Setup-<version>-x64.exe | Format-List
-```
-
-只有 `Status` 为 `Valid`、签名主体与发行说明一致且时间戳/证书链受 Windows 信任时，才应作为
-正式安装包使用。项目不会用自签名证书或 `NotSigned` 状态冒充正式签名。
 
 启动后：
 
@@ -258,31 +248,17 @@ Range 续传。网关的登录、解压和运行子进程会保留这些普通�
 - “高级设置”只有在 CCR CLI/ChatGPT 网关确实运行时才启用对应后台按钮；停止时按钮保持灰色，
   点击后台入口本身不会偷偷启动服务。
 
-## 双通道安全更新
+## 自动更新
 
-稳定版本同时发布到：
-
-- GitHub Release：`https://github.com/AeonusOvO/claude-dock-control-panel/releases`
-- 国内兜底镜像：`https://124.221.158.247/claudedock/windows/x64/`
-
-每次发布只构建和签署一组 Windows 产物，再把完全相同的字节分发到两个通道：
+正式版通过 [GitHub Releases](https://github.com/AeonusOvO/claude-dock-control-panel/releases)
+分发：应用内“检查所有更新”使用 electron-updater 的 GitHub 源，每次发布构建一组 Windows 产物：
 
 - `ClaudeDock-Setup-<version>-x64.exe`
 - `ClaudeDock-Setup-<version>-x64.exe.blockmap`
 - `latest.yml`
-- `release-manifest.json`
-- `release-manifest.sig`
 
-客户端固定 Ed25519 发布公钥，分别验证每个通道的签名 manifest、版本、文件大小与 SHA-512；随后
-对合格来源进行小范围真实 `Range` 下载测速并选择更快来源。GitHub 不可访问时，镜像不依赖 GitHub
-元数据仍可独立验证。若两个在线通道声明不一致、发生版本回退、跨主机重定向、超大元数据、伪造
-部分响应或完整安装包摘要不符，更新会失败关闭并保留当前可运行版本。
-
-镜像只接受精确的 HTTPS 公网 IP，拒绝 HTTP、用户信息、query、fragment、未授权 IP 与跨主机
-重定向。公网 IP 的受信任 TLS 证书并不规避备案、接入商政策或其他适用监管要求。腾讯云现行规则
-明确要求仅通过公网 IP 提供的中国内地互联网信息服务办理 ICP 备案，但其备案系统暂不支持直接使用
-IP 备案；在维护者从属地通信管理局取得可执行结论前，该地址只保留 TLS 与健康检查，不公开稳定安装
-包。部署、原子切换、回滚和验收细节见 [docs/UPDATE_MIRROR.md](docs/UPDATE_MIRROR.md)。
+更新器先对照 `latest.yml` 校验版本，再按 SHA-512 摘要下载安装包；摘要不符、版本回退或发布
+通道被篡改时更新失败并保留当前可运行版本。
 
 ## 开发环境
 
@@ -313,7 +289,6 @@ npm run dist
 
 ```powershell
 npm run test:conpty
-npm run test:release-security
 npm run test:visual
 npm run test:runtime-soak        # 默认 24 小时、无付费模型依赖的真实时间合成测试
 npm run check:licenses
@@ -331,45 +306,18 @@ outputs/win-unpacked/
 
 `outputs/`、`dist/` 与本地安装包不提交 Git。
 
-## 发布流程
-
-任何影响用户软件或发布配置的修改都要同步更新 `package.json` 与 `package-lock.json` 的 SemVer，
-完成验证、功能分支、PR 和 `main` 合并后，才可从 `main` 创建与 package version 完全一致的
-`v<version>` 标签。
-
-`.github/workflows/release.yml` 会：
-
-1. 核对标签、`main` 提交和 package version，并运行完整验证与依赖审计。
-2. 在 Windows runner 上只构建一次，使用受信任证书签署应用、卸载器和安装器并验证 Windows 链。
-3. 生成 Ed25519 签名 release manifest，先上传 GitHub draft Release 并回读校验。
-4. 把同一组文件上传镜像的版本化 staging；全部验证后才原子公开稳定元数据。
-5. 从两个通道重新执行 GET、HEAD、Range、大小、SHA-512、缓存头和 manifest 签名检查；任一失败
-   都阻止稳定发布并回滚。
-
-工作流 Secret 只保存独立镜像部署身份、manifest 私钥和代码签名凭据，任何私钥、Token、证书密码
-或管理凭据都不得进入仓库、安装包或客户端源码。
-
-### Code signing policy
-
-完整的 [Code signing policy](CODE_SIGNING_POLICY.md) 记录团队角色、构建来源、逐版本人工批准、
-事故响应和当前审批状态。SignPath Foundation 批准后采用其要求的公开归属语：Free code signing
-provided by [SignPath.io](https://signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/)。批准前的本地构建仍是未受信任签名的开发产物，不能据此
-宣称正式签名已经完成。
-
 ## 目录
 
 ```text
 assets/                  图标源与运行期公开配置
 build/                   electron-builder / NSIS 自定义脚本
-deploy/                  更新镜像的 Nginx、systemd 与部署脚本
-docs/                    隐私、合规、镜像和发行说明
-scripts/                 构建、许可、发布和验收脚本
+docs/                    隐私说明、命令清单和发行说明
+scripts/                 构建、许可和验收脚本
 src/main/                Electron 主进程与业务服务
 src/preload/             受限 IPC 桥
 src/renderer/            控制面板与终端界面
 src/shared/              跨进程类型和纯函数
-tests/                   单元、布局、主题与发布安全测试
+tests/                   单元、布局与主题测试
 outputs/                 本地安装包和解包产物（忽略）
 ```
 
@@ -377,12 +325,10 @@ outputs/                 本地安装包和解包产物（忽略）
 
 - 主窗口启用 `contextIsolation`、sandbox，关闭 renderer Node.js 集成；页面只加载项目内资源。
 - Markdown 原始 HTML 不进入宿主 DOM；Artifact 需要用户显式运行并置于隔离 iframe。
-- 自动更新拒绝降级、未签名 manifest、摘要不符和未经授权的下载主机。
-- 项目秘密扫描覆盖当前工作树和完整 Git 历史；CI 也运行全历史扫描。
+- 自动更新只使用 GitHub Releases，校验 `latest.yml` 的 SHA-512 摘要并拒绝降级。
 - 聊天历史和附件保存在当前 Windows 用户目录，属于本机明文可恢复数据；共享设备上应主动清理。
   历史更新使用同目录唯一临时文件和 Windows 短暂锁定重试，失败时不会先删除上一份有效历史。
-- 本地构建默认没有可信代码签名，Windows SmartScreen 可能显示未知发布者；只有发布工作流的可信
-  Authenticode 验证通过后才能发布稳定版。
+- 本地构建没有可信代码签名，Windows SmartScreen 可能显示未知发布者。
 - 当前只发布 Windows x64。
 
 ## 贡献与支持

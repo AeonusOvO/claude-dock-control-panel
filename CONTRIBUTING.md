@@ -10,7 +10,7 @@ and accepts focused bug fixes, tests, documentation and features that preserve i
 3. Keep one topic per branch and avoid generated output, credentials, local databases and installer
    files.
 4. Update tests and the relevant root documentation when behavior, design or architecture changes.
-5. Run npm ci, npm run verify and npm run dist on Windows.
+5. Run npm ci, npm test and npm run dist on Windows.
 6. Describe the purpose, important changes, verification results, risks and remaining questions in
    the pull request.
 

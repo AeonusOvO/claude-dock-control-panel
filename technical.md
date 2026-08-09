@@ -40,9 +40,7 @@ ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、�
 或 Anthropic 官方 Claude Code 集成。4.2.0 首次加入外部 CLIProxyAPI 发现和严格回环地址边界，并把
 构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
 运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
-的冷启动抖动。4.1.1 在项目主页补齐 SignPath
-Foundation 要求的英文 Code signing policy 入口、归属语和未获批前的状态限定。4.1.0 在 4.0.0 的外部代理边界上加入独立签名发布清单、
-可脱离 GitHub 验证的 HTTPS 公网 IP 兜底镜像、原子双渠道发布和严格的更新防降级/重定向边界。
+的冷启动抖动。
 
 ## 技术栈
 
@@ -120,7 +118,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
         ├── CcSwitchAdapter ── 官方 MSI / 注册表只读发现 / ccswitch 深链导出
         ├── ClaudePluginManager ── Claude CLI 插件目录 / 市场 / 安装与更新
         ├── SoftwareUpdates ── ClaudeDock / Claude Code / Router 版本检测与安装源
-        ├── ApplicationUpdaterService + SourceSelector ── GitHub/HTTPS 镜像择优 / NSIS 更新
+        ├── ApplicationUpdaterService ── GitHub Release 的 NSIS 更新
         ├── WindowsCommand ── 原生命令及 npm PowerShell shim 的安全 argv 调用
         ├── ClaudeConnectionTest ── Anthropic /v1/messages 分阶段实测
         ├── CliCommandCatalog ── Claude / Codex 命令元数据、执行策略与主进程白名单
@@ -1160,21 +1158,9 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   不再由 Node 全局 `fetch` 绕开两者。结果缓存 5 分钟，轮询只在缓存到期后产生请求。
 - `ApplicationUpdaterService` 包装 `electron-updater` 的 NSIS updater。仅 `app.isPackaged && win32`
   启用，`autoDownload/autoInstallOnAppQuit` 均关闭：用户点击后检查并下载，下载进度通过 IPC 推送，
-  `update-downloaded` 只是传输完成事件；只有完整安装器的长度和 SHA-512 再验证通过后才允许
-  `quitAndInstall(false, true)`。每次检查前调用
-  `selectApplicationUpdateSource()` 并用 `setFeedURL()` 切换 feed；选择结果和实测速率写入状态供 UI
-  展示。显式关闭 `allowDowngrade`、prerelease 与 web installer；blockmap 仍支持差分下载。
-- `application-update-manifest.ts` 定义 64 KiB 上限的规范 JSON 清单和 256 字节上限的 detached
-  Ed25519 签名。客户端从 `assets/runtime/release-manifest-public-key.pem` 固定公钥，严格校验稳定
-  SemVer、key id `f724eb3fcaa7f4c5`、版本时间、每个文件的路径/长度/完整 SHA-512/样本 SHA-512，
-  以及固定 GitHub tag
-  和公网 IP URL。本地 `userData` 保存最高已接受版本，低于当前应用或该版本下限的清单被拒绝。
-- `application-update-sources.ts` 只接受固定 GitHub 仓库与
-  `https://124.221.158.247/claudedock/windows/x64/`。配置拒绝 HTTP、用户信息、query、fragment、
-  非默认端口与未授权 IP；手动处理最多 3 次重定向，镜像不允许跨主机或变更路径。两个源分别读取并
-  验证 manifest、签名和 `latest.yml`，任一源可独立建立信任；若两边已签名 manifest 字节不一致则
-  失败关闭。只有状态 206、`Content-Range`、`Content-Length` 和样本摘要同时匹配的 256 KiB
-  Range 响应才能参与测速。选中源后 Electron session 的 `webRequest` 再限制精确主机和无 query URL。
+  `update-downloaded` 表示传输完成且已通过 `latest.yml` 的 SHA-512 校验，之后才允许
+  `quitAndInstall(false, true)`。显式关闭 `allowDowngrade`、prerelease 与 web installer；blockmap
+  仍支持差分下载。
 - `src/shared/update-actions.ts` 把检测结果纯函数化为 `hidden / install / update`：状态尚未
   返回时不显示操作；目标未安装时显示安装；只有已安装且 `updateAvailable` 为真时显示更新。
   插件“更新全部”同样要求 `updatesAvailable > 0`，单插件更新按钮则直接受该插件的
@@ -1650,8 +1636,8 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
 
 ### 隐私、历史与第三方边界
 
-- 设置页的“隐私与合规”面板是打包进 renderer 的静态可达说明；完整规则和中国大陆产品风险分别
-  维护在 `docs/PRIVACY.md`、`docs/LEGAL_COMPLIANCE.md`。模型消息角色显示“AI 生成”。这不等于
+- 设置页的“隐私与合规”面板是打包进 renderer 的静态可达说明；完整规则维护在
+  `docs/PRIVACY.md`。模型消息角色显示“AI 生成”。这不等于
   为未来导出文件添加了机器可读元数据；若新增导出，必须单独实现适用的生成内容标识。
 - 外部应用代理只把用户填写的 HTTP/SOCKS5 地址传给勾选的进程，不提供远程网络服务，也不验证
   地址提供方资质或用途合法性；工程、应用内文案和法律说明都不得把这一边界描述为当然豁免。
@@ -1897,7 +1883,7 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   preload 的权威 `terminal:size`，不靠固定睡眠。截图后连续执行三轮 restart → stop → start，再让最终
   generation 输出唯一 sentinel 并立即 `exit`，断言 data 先于 `stopped`、停止后没有同 generation
   迟到数据、旧 generation 的 `stopped/error` 不会覆盖最终运行状态。该 Windows 专用烟测已作为
-  production build 后的 `verify` 门禁；首次命令、最终尺寸和 sentinel 输出都使用 30 秒硬上限，
+  production build 后独立运行；首次命令、最终尺寸和 sentinel 输出都使用 30 秒硬上限，
   以容纳 GitHub Windows Runner 上 Electron/node-pty/PowerShell/Defender 的冷启动，但仍按 50ms
   探测立即继续而不是固定等待。结束后删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
@@ -1906,47 +1892,20 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   主题。
 - `tests/application-proxy.test.ts` 用临时目录和可逆安全存储替身验证密码不落明文、留空保留、清空
   账号删除、SOCKS5 CLI 拒绝、IPv6 URL 编码、Electron 规则、CLI 环境和候选解析。
-- `tests/application-update-manifest.test.ts` 与 `tests/application-update-sources.test.ts` 使用完全
-  注入的密钥、fetch/stream 和临时目录验证签名/文件篡改、元数据上限、版本回退、GitHub 不可用时
-  镜像更新、跨渠道不一致、伪造 Range、跨主机重定向和最终安装器摘要；测试不访问真实网络。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
 - `npm run build`：生成图标、编译主进程并构建渲染资源。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
   固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行
   二次复制或向项目根目录发布。公开应用标识固定为 `io.github.aeonusovo.claudedock`，不得继续使用
   旧维护者命名空间。
-- 发布版本结合 SemVer 与项目发布尺度，且每轮完成的项目修改都必须产生新版本：不兼容或
-  架构级 API/数据/交互变更升主版本，有明确发布价值的成组/重大新功能升次版本，小功能优化、
-  修复、文档、构建与维护改动升修订版本；避免因单个细小行为变化机械升次版本。版本必须同时
-  写入 `package.json` 与 `package-lock.json`；完成验证后必须运行 `npm run dist`，并核对
-  `outputs/ClaudeDock-Setup-<version>-x64.exe`、对应 blockmap、`latest.yml` 与
-  `win-unpacked/`。这些发布产物仍不纳入 Git。
+- 发布版本结合 SemVer 与项目发布尺度：不兼容或架构级 API/数据/交互变更升主版本，有明确发布
+  价值的成组/重大新功能升次版本，小功能优化、修复、文档、构建与维护改动升修订版本；避免因单个
+  细小行为变化机械升次版本。版本必须同时写入 `package.json` 与 `package-lock.json`。
 - `build/installer.nsh`：在辅助安装器的目录页后插入桌面快捷方式复选框；取消勾选时在
   electron-builder 完成默认快捷方式步骤后删除该快捷方式；静默安装未经过选项页时沿用打包器默认行为。
 
-CI 的 security job 在 Ubuntu 上检出完整历史，运行 gitleaks、`npm ci` 和全依赖 audit；Windows job
-执行 lint、格式、类型、全部单元/布局/主题测试和 build。推送 `v*` 标签另触发
-`.github/workflows/release.yml`：标签必须等于 `v${package.version}` 且提交必须是当前 `main`，所有
-代码签名与镜像 Secrets 都是强制门禁。流水线只执行一次 NSIS 构建，依次验证受信任 Authenticode、
-安装/卸载、签名 manifest、本地 bundle、GitHub draft Release 回读和服务器版本化 staging；GitHub
-发布后才让服务器原子切换 `current`。最终从两个渠道比较 GET/HEAD/Range、缓存头、大小、SHA-512
-和清单签名，失败时回滚镜像并撤销错误 Release。
-`.github/workflows/mirror-monitor.yml` 每 6 小时从 GitHub 托管节点验证公网 TLS、精确 IP SAN、至少
-48 小时剩余有效期和健康端点；失败时创建或更新不含服务器管理信息的告警 Issue，恢复后自动关闭。
-服务器的 443 连通性、Nginx、short-lived IP 证书、自动续期和健康端点已经完成工程验证，但腾讯云
-现行[备案场景说明](https://cloud.tencent.com/document/product/243/18910)同时明确：仅通过公网 IP
-提供的中国内地互联网信息服务也需要 ICP 备案，而腾讯云备案系统暂不支持直接使用 IP 备案。取得
-属地通信管理局认可的办理路径前，服务器不公开稳定安装包；不得以 HTTP 或自签名证书绕过该门禁。
-
-Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert 时间戳。标准可信证书通过
-`WINDOWS_CERTIFICATE_BASE64`、`WINDOWS_CERTIFICATE_PASSWORD` 与期望主体 Secret 提供；稳定工作流
-设置 `forceCodeSigning`，未签名、主体不符、时间戳缺失或验证链失败即终止。SignPath Foundation
-申请材料和角色/构建政策见 `CODE_SIGNING_POLICY.md`；其免费工作流能否顺序签署 Electron NSIS 内部
-应用、动态生成的卸载器及外层安装器，仍须 SignPath 人工确认，不能以自签名替代。
-
 2026-08-07 的依赖安全修复把 `js-yaml` 从 4.3.0 升级到 4.3.1，把 `mermaid` 从 11.16.0 升级到
-11.16.1；完整 `npm audit` 随后报告 0 个漏洞。`npm run check:licenses` 与完整功能/供应链回归仍是
-发布门禁；不得仅以 audit 清零替代测试、签名、安装烟测或双渠道一致性验证。
+11.16.1；完整 `npm audit` 随后报告 0 个漏洞。
 
 ## 关键取舍与限制
 
@@ -1957,8 +1916,8 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
 - 保存或切换 Claude 接入不会热修改已运行 PowerShell 的环境；受保护启动会重建当前项目
   终端。这是避免把密钥写入可见终端输入和历史的有意取舍。
 - Windows 10 1809 之前没有所需 ConPTY API，不在支持范围；最小窗口为 820 × 640。
-- 应用自身的签名双源 Release 下载和 NSIS 重启安装已经实现；正式稳定版仍以受信任 Windows 代码
-  签名、公开仓库、双渠道公网验收和适用接入合规确认为发布门禁。退出后的 PTY 恢复仍未实现。
+- 应用自身的 GitHub Release 下载和 NSIS 重启安装已经实现；更新器校验 `latest.yml` 的 SHA-512
+  摘要并拒绝降级。退出后的 PTY 恢复仍未实现。
 
 ## 外部依据
 
@@ -2035,14 +1994,6 @@ Windows 签名配置使用 electron-builder 的 SHA-256 与 RFC 3161 DigiCert �
 - electron-builder 自动更新与运行时 feed：
   <https://www.electron.build/docs/features/auto-update/>、
   <https://www.electron.build/docs/api/electron-updater.class.appupdater/#setfeedurl>
-- electron-builder Windows 代码签名与自定义签名钩子：
-  <https://www.electron.build/docs/features/code-signing/code-signing-win/>、
-  <https://www.electron.build/docs/features/hooks/>
-- Let’s Encrypt short-lived 与公网 IP 证书、Certbot 5.4+：
-  <https://letsencrypt.org/2026/03/11/shorter-certs-certbot>、
-  <https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability.html>
-- SignPath Foundation 开源项目条件与 GitHub 构建集成：
-  <https://signpath.org/>、<https://docs.signpath.io/trusted-build-systems/github>
 - Claude Code LLM gateway：
   <https://code.claude.com/docs/en/llm-gateway>
 - Claude Code 连接网关与官方 1-token 验证：

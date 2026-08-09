@@ -20,7 +20,7 @@ import type {
   Session,
 } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir, release } from 'node:os';
 import path from 'node:path';
 import type {
@@ -195,17 +195,6 @@ import {
 } from './proxy/application-proxy';
 import { ApplicationProxyStore } from './proxy/application-proxy-store';
 import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from './application-updater';
-import {
-  isApplicationUpdateRequestAllowed,
-  loadApplicationUpdateSources,
-  selectApplicationUpdateSource,
-  type ApplicationUpdateSourceSelection,
-} from './application-update-sources';
-import {
-  readHighestTrustedVersion,
-  recordHighestTrustedVersion,
-  updateVersionFloorPath,
-} from './application-update-manifest';
 
 const runtimeProfile = resolveRuntimeProfile({
   defaultHome: homedir(),
@@ -5804,22 +5793,7 @@ if (!hasSingleInstanceLock) {
           sessionId: status.id,
         })),
     );
-    const updateFloorFile = updateVersionFloorPath(app.getPath('userData'));
-    let activeApplicationUpdateSource: ApplicationUpdateSourceSelection | undefined;
-    const applicationUpdateSession = session.fromPartition('electron-updater', {
-      cache: false,
-    });
-    applicationUpdateSession.webRequest.onBeforeRequest((details, callback) => {
-      callback({
-        cancel:
-          !activeApplicationUpdateSource ||
-          !isApplicationUpdateRequestAllowed(activeApplicationUpdateSource, details.url),
-      });
-    });
     applicationUpdaterService = new ApplicationUpdaterService({
-      configureSource: (source) => {
-        activeApplicationUpdateSource = source;
-      },
       currentVersion: app.getVersion(),
       driver: autoUpdater as unknown as ApplicationUpdaterDriver,
       enabled:
@@ -5828,24 +5802,6 @@ if (!hasSingleInstanceLock) {
         process.platform === 'win32',
       onChange: (state) => {
         mainWindow?.webContents.send('software:application-updater-changed', state);
-      },
-      onTrustedVersion: (version) => {
-        recordHighestTrustedVersion(updateFloorFile, version);
-      },
-      selectSource: () => {
-        const publicKeyPem = readFileSync(
-          runtimeAssetPath('release-manifest-public-key.pem'),
-          'utf8',
-        );
-        return selectApplicationUpdateSource(
-          loadApplicationUpdateSources(runtimeAssetPath('update-sources.json')),
-          (url, init) => session.defaultSession.fetch(url, init),
-          {
-            currentVersion: app.getVersion(),
-            highestTrustedVersion: readHighestTrustedVersion(updateFloorFile),
-            publicKeyPem,
-          },
-        );
       },
     });
     registerIpc();

@@ -1,16 +1,16 @@
 # ClaudeDock 分阶段缺陷修复提示词
 
-推荐采用 **“一份总控提示词 + 多份阶段提示词”** 的方式。这样 ChatGPT 不会一次吃下 40 个问题后失控，也便于每阶段独立验证、提交、推送和生成安装包。
+推荐采用 **“一份总控提示词 + 多份阶段提示词”** 的方式。这样 ChatGPT 不会一次吃下 38 个问题后失控，也便于每阶段独立验证。
 
 ## 使用方式
 
 1. 在新的 ChatGPT 对话中，先粘贴下面的 **总控提示词**。
 2. 等它完成“阶段 0：基线检查”。
 3. 然后每次只粘贴一个阶段提示词。
-4. 必须等当前阶段完成测试、提交、推送和打包后，再发送下一阶段。
+4. 必须等当前阶段完成测试和验证后，再发送下一阶段。
 5. 如果中途开启新对话，需要重新粘贴总控提示词，再粘贴当前阶段提示词。
 
-不要一次把所有阶段都发给它，否则容易出现跨阶段重构、漏测、提交混乱和安装包版本对不上代码的问题。
+不要一次把所有阶段都发给它，否则容易出现跨阶段重构和漏测。
 
 ---
 
@@ -46,9 +46,6 @@ D:\Program\ClaudeDesk
 → 运行定向测试
 → 运行全量验证
 → 检查 diff
-→ 递增版本
-→ 构建支持覆盖安装的 Windows 安装包
-→ 提交并推送到 GitHub
 → 提交完整阶段报告
 
 除非我明确要求，否则一次只能处理我当前给出的阶段，不得提前处理后续阶段。
@@ -218,7 +215,7 @@ git stash
 - 用户会话内容；
 - 用户目录中的敏感数据。
 
-5. 对长时间运行的测试、构建和打包持续等待最终结果，不要以“后台还在运行，稍后继续”作为阶段最终回复。
+5. 对长时间运行的测试和构建持续等待最终结果，不要以“后台还在运行，稍后继续”作为阶段最终回复。
 
 ==================================================
 五、每阶段固定验证流程
@@ -226,19 +223,15 @@ git stash
 
 每个阶段必须先运行当前阶段的定向测试，再运行完整验证：
 
-npm run verify
-
-该命令当前包括：
-
-- license 检查；
-- lint；
-- format check；
-- typecheck；
-- 全部 Vitest；
-- layout smoke；
-- control theme smoke；
-- build；
-- live ConPTY smoke。
+npm run check:licenses
+npm run lint
+npm run format:check
+npm run typecheck
+npm test
+npm run test:layout
+npm run test:control-theme
+npm run build
+npm run test:conpty
 
 审计时已知未跟踪文件 commit-diff-snapshot.md 可能导致全仓库 format:check 失败。
 
@@ -247,80 +240,14 @@ npm run verify
 - 不得修改或格式化它；
 - 明确证明 format:check 只因该基线文件失败；
 - 对本阶段所有修改文件单独执行 Prettier check；
-- 单独运行 verify 中剩余的全部检查；
-- 阶段报告必须如实写明完整 verify 的基线阻塞，不能声称 npm run verify 全部通过。
+- 单独运行上面剩余的其余检查；
+- 阶段报告必须如实写明完整验证的基线阻塞，不能声称全部检查通过。
 
 如果 format:check 还报告了本阶段文件，必须修复后再继续。
 
 对于 renderer、terminal、update 等阶段，还要运行对应的额外 smoke 或安全测试。
 
-任何新失败都必须解决。不得把失败简单称为“可能无关”后继续发布。
-
-==================================================
-六、版本、安装包、提交和推送
-==================================================
-
-每一个修改了代码的阶段，都必须独立发布一个可以覆盖安装的新版本。
-
-1. 读取 package.json 当前版本。
-
-项目当前采用类似：
-
-5.0.0-rc.7
-
-的 prerelease 形式。沿用现有规则，将 rc.N 递增，并同步 package-lock.json。
-
-不要硬编码版本号，必须读取执行阶段时的真实版本。
-
-2. 构建安装包必须通过本地代理：
-
-HTTPS_PROXY=http://127.0.0.1:10808 npm run dist
-
-3. 构建后运行：
-
-npm run release:manifest
-npm run release:verify
-
-4. 确认 outputs/ 中生成当前版本对应的 x64 NSIS 安装包，例如：
-
-ClaudeDock-Setup-<version>-x64.exe
-
-确认它支持覆盖安装，但不得擅自启动安装包或覆盖用户当前安装。
-
-5. 提交前执行：
-
-git diff --check
-git status --short
-git diff
-git diff --cached
-
-只显式暂存本阶段文件。
-
-提交信息使用清晰的 Conventional Commit，例如：
-
-fix: isolate renderer conversation state
-
-6. 推送 GitHub 必须使用本地代理：
-
-HTTPS_PROXY=http://127.0.0.1:10808 git push
-
-如果当前分支没有 upstream：
-
-HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
-
-不得不带代理反复重试。
-
-7. 不要创建 GitHub Release、上传外部附件或发布公告，除非我另行要求。
-
-8. 如果打包后又修改了任何生产代码、测试、版本或构建配置，之前的验证和安装包全部作废，必须重新：
-
-- 定向测试；
-- 全量验证；
-- npm run dist；
-- release:manifest；
-- release:verify；
-- 检查安装包；
-- 提交和推送。
+任何新失败都必须解决，不得把失败简单称为“可能无关”后继续。
 
 ==================================================
 七、阶段完成报告格式
@@ -335,17 +262,10 @@ HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
 5. 实际修复方案；
 6. 修改的文件；
 7. 定向测试结果；
-8. npm run verify 和其他 smoke 结果；
+8. 完整验证和其他 smoke 结果；
 9. 是否存在基线测试失败；
-10. 新版本号；
-11. commit SHA；
-12. 推送分支和推送结果；
-13. 安装包绝对路径；
-14. 安装包大小；
-15. SHA-256；
-16. release:verify 结果；
-17. 基线脏文件是否保持原状；
-18. 尚未解决的问题或需要我决定的内容。
+10. 基线脏文件是否保持原状；
+11. 尚未解决的问题或需要我决定的内容。
 
 上述内容全部完成前，不得声称阶段已完成。
 
@@ -369,8 +289,7 @@ HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
 2. 区分用户原有修改与仓库当前 HEAD。
 3. 读取 package.json，确认：
    - 当前版本；
-   - Node 版本要求；
-   - verify、dist、release:manifest、release:verify 脚本。
+   - Node 版本要求。
 4. 运行：
    - npm run typecheck
    - npm run lint
@@ -391,9 +310,6 @@ HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
 本阶段禁止：
 - 修改文件；
 - 创建提交；
-- bump 版本；
-- git push；
-- npm run dist；
 - 恢复或删除基线文件。
 
 完成报告后停止，不要开始阶段 1。
@@ -439,7 +355,7 @@ HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
 - tests/native-attachment-store.test.ts
 - tests/chat-history-store.test.ts
 
-完成修复、全量验证、版本递增、安装包构建、提交和推送后停止，不要开始阶段 2。
+完成本阶段修复和验证后停止，不要开始阶段 2。
 ```
 
 ---
@@ -491,7 +407,7 @@ HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
 - tests/network-path-resolver.test.ts
 - tests/proxy-contracts.test.ts
 
-完成发布闭环后停止，不要开始阶段 3。
+完成本阶段修复和验证后停止，不要开始阶段 3。
 ```
 
 ---
@@ -535,11 +451,7 @@ HTTPS_PROXY=http://127.0.0.1:10808 git push -u origin <当前分支>
 - tests/download-contracts.test.ts
 - tests/download-history.test.ts
 
-本阶段需要额外运行：
-
-npm run test:release-security
-
-完成发布闭环后停止，不要开始阶段 4。
+完成本阶段修复和验证后停止，不要开始阶段 4。
 ```
 
 ---
@@ -553,7 +465,7 @@ npm run test:release-security
 ```text
 现在执行“阶段 4：Codex App Server、登录关联和 MCP Registry 元数据”。
 
-确认阶段 2 已完成并推送后再开始。
+确认阶段 2 已完成后再开始。
 
 只处理：
 
@@ -590,7 +502,7 @@ npm run test:release-security
 
 如果 codex-app-server 的聚焦测试不存在，可以创建对应测试，但不要创建临时生产 abstraction 只为了方便 mock。
 
-完成发布闭环后停止，不要开始阶段 5。
+完成本阶段修复和验证后停止，不要开始阶段 5。
 ```
 
 ---
@@ -636,7 +548,7 @@ npm run test:release-security
 - Turkish locale 下 D:\IDE 和 d:\ide 指向同一配置；
 - 旧配置兼容读取。
 
-完成发布闭环后停止，不要开始阶段 6。
+完成本阶段修复和验证后停止，不要开始阶段 6。
 ```
 
 ---
@@ -687,49 +599,12 @@ npm run test:release-security
 - tests/application-updater.test.ts
 - 生命周期和窗口创建相关测试
 
-完成发布闭环后停止，不要开始阶段 7。
+完成本阶段修复和验证后停止，不要开始阶段 7。
 ```
 
 ---
 
-# 九、阶段 7：更新源故障转移和 Redirect Deadline
-
-覆盖缺陷：**#18、#36**
-
-```text
-现在执行“阶段 7：更新源故障转移与重定向 deadline”。
-
-只处理：
-
-1. application-update-sources.ts:480
-   所有 trusted candidate 都没有可用 benchmark sample 时，固定选择第一个；完整下载失败后不尝试另一个已验证源。
-
-2. application-update-sources.ts:252
-   redirect loop 每一跳重新创建八秒 timeout，使一个逻辑请求最多接近 32 秒。
-
-要求：
-
-- 无 benchmark sample 时不能永久粘在第一个失败源。
-- Full download failover 只能尝试已经独立完成 manifest、signature 和版本一致性验证的 trusted candidate。
-- 不得因 failover 降低更新签名或安装包完整性验证。
-- 每个候选失败原因必须可诊断。
-- Redirect chain 必须共享一个整体 deadline。
-- 仍然保留 host allowlist、最大 redirect 数和 HTTPS 限制。
-- 使用 fake timers 测试每跳接近八秒时，整个操作仍在一个 deadline 内中止。
-- 测试 A full download 失败而 B 成功的路径。
-
-运行：
-
-npm run test:release-security
-
-以及相关 update source/updater 测试。
-
-完成发布闭环后停止，不要开始阶段 8。
-```
-
----
-
-# 十、阶段 8：Runtime Generation 与进程所有权
+# 九、阶段 8：Runtime Generation 与进程所有权
 
 覆盖缺陷：**#29、#30、#31、#38**
 
@@ -767,12 +642,12 @@ npm run test:release-security
 - Stop(200) 后迟到 Submit(100)；
 - deferred process capture 期间 owner 从 A 变 B。
 
-完成发布闭环后停止，不要开始阶段 9。
+完成本阶段修复和验证后停止，不要开始阶段 9。
 ```
 
 ---
 
-# 十一、阶段 9：Native Stream、Permission Pipe 与 Terminal Transfer
+# 十、阶段 9：Native Stream、Permission Pipe 与 Terminal Transfer
 
 覆盖缺陷：**#9、#25、#26、#27、#28**
 
@@ -827,12 +702,12 @@ npm run test:release-security
 - UUID-less stream 的重叠 submit；
 - 第一个 pipe 正常 close，第二个 request 立即分发。
 
-完成发布闭环后停止，不要开始阶段 10。
+完成本阶段修复和验证后停止，不要开始阶段 10。
 ```
 
 ---
 
-# 十二、阶段 10：Renderer 项目和会话状态隔离
+# 十一、阶段 10：Renderer 项目和会话状态隔离
 
 覆盖缺陷：**#1、#10、#33、#34、#39**
 
@@ -887,12 +762,12 @@ npm run test:release-security
 - Folder history 第一次失败、第二次成功；
 - PTY generation 在 submit delay 中改变。
 
-完成发布闭环后停止，不要开始阶段 11。
+完成本阶段修复和验证后停止，不要开始阶段 11。
 ```
 
 ---
 
-# 十三、阶段 11：Markdown 与 Artifact 异步 UI
+# 十二、阶段 11：Markdown 与 Artifact 异步 UI
 
 覆盖缺陷：**#35、#40**
 
@@ -932,98 +807,14 @@ npm run test:select
 npm run test:dialog-select
 npm run test:select-theme
 
-完成发布闭环后停止，不要自动进入最终审计。
+完成本阶段修复和验证后停止。
 ```
 
 ---
 
-# 十四、阶段 12：最终全量回归和发布审计
+# 十四、三个候选问题的专项复现提示词
 
-这个阶段主要验证，不主动重构。
-
-```text
-现在执行“阶段 12：40 项修复的最终全量回归和发布审计”。
-
-本阶段不要重新设计架构，不要顺手重构。
-
-任务：
-
-1. 从 Git 历史和当前代码中逐项核对阶段 1～11 的 40 个已确认缺陷。
-2. 建立 40 项验收矩阵，每项必须标明：
-   - 对应 commit；
-   - 生产代码位置；
-   - 回归测试位置；
-   - 修复的不变量；
-   - 测试结果。
-3. 检查是否存在：
-   - 修复只覆盖 mock 而生产路径仍错误；
-   - generation 创建了但未在 await 后检查；
-   - cancellation 没有清理 listener/timer；
-   - copy-on-write 只改了部分 mutator；
-   - 新状态仍然是 renderer 全局变量；
-   - ownership guard 在 RPC 之后才执行；
-   - retry 降低了签名或完整性验证；
-   - timeout 仍然按 redirect hop 重置；
-   - error 被吞掉但 UI 永远 loading；
-   - 测试只断言“不抛异常”。
-
-4. 运行：
-
-npm run verify
-npm run test:select
-npm run test:dialog-select
-npm run test:select-theme
-npm run test:visual
-npm run test:runtime-soak:accelerated
-npm run test:release-security
-
-5. 如果测试或 smoke 需要关闭正在运行的应用，先询问，不得直接结束进程。
-
-6. 检查：
-
-git diff --check
-git status --short
-git log --oneline --decorate -20
-
-7. 确认所有阶段：
-   - 已推送；
-   - 安装包版本与 commit 对应；
-   - outputs 中最新安装包通过 release:verify；
-   - 基线脏文件没有被误提交；
-   - 没有 token、调试日志、临时 harness 或用户数据。
-
-8. 如果最终审计发现由前面阶段引入的新缺陷：
-   - 编写失败测试；
-   - 最小修复；
-   - 重新递增版本；
-   - 重新完整验证；
-   - 重新打包；
-   - 新建独立 commit 并推送。
-
-9. 如果最终审计没有修改代码：
-   - 不需要为了纯验证强行修改版本；
-   - 可以重新构建并验证当前最新版本安装包；
-   - 不创建空提交。
-
-最终输出：
-
-- 40 项验收矩阵；
-- 所有阶段 commit；
-- 最新版本；
-- GitHub 推送状态；
-- 最终安装包绝对路径、大小和 SHA-256；
-- 所有验证命令结果；
-- 仍未解决的候选问题；
-- 是否适合交给其他用户覆盖安装。
-
-完成后停止。
-```
-
----
-
-# 十五、三个候选问题的专项复现提示词
-
-这三个问题没有足够的生产可达性证据，**不要和已确认的 40 项一起直接修复**。建议在最终阶段后单独执行。
+这三个问题没有足够的生产可达性证据，**不要和已确认的 38 项一起直接修复**。建议在所有修复阶段完成后单独执行。
 
 ```text
 现在只对三个“待动态复现候选”进行生产级复现。
@@ -1088,7 +879,7 @@ src/renderer/terminal-output-pump.ts:77
 
 1. 先运行相关现有测试。
 2. 可以创建临时 harness，但不得提交临时文件。
-3. 本阶段不修改生产代码、不 bump 版本、不提交、不推送、不打包。
+3. 本阶段不修改生产代码、不创建提交。
 4. 对每项输出：
    - 是否稳定复现；
    - 真实生产事件时间线；
@@ -1114,12 +905,10 @@ src/renderer/terminal-output-pump.ts:77
 阶段 4：Codex/MCP
 阶段 5：Router 所有权
 阶段 6：应用生命周期
-阶段 7：更新源
-阶段 8：Runtime generation
-阶段 9：Native/permission/terminal
-阶段 10：Renderer 状态隔离
-阶段 11：Markdown/Artifact
-阶段 12：最终全量审计
+阶段 7：Runtime generation
+阶段 8：Native/permission/terminal
+阶段 9：Renderer 状态隔离
+阶段 10：Markdown/Artifact
 候选专项动态复现
 ```
 

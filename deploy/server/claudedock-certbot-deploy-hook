@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-/usr/sbin/nginx -t
-/usr/bin/systemctl reload nginx
-/usr/bin/systemctl start claudedock-certificate-monitor.service
