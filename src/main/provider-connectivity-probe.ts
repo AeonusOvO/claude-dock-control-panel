@@ -43,10 +43,69 @@ export interface ProviderConnectivityProbeOptions {
   clientVersion?: (provider: NetworkProviderId, cwd?: string) => Promise<string | undefined>;
   dnsLookup?: DnsLookup;
   now?: () => number;
+  overallTimeoutMs?: number;
   resolveProxy: ResolveProxy;
 }
 
 const REQUEST_TIMEOUT_MS = 8_000;
+/**
+ * Ceiling for one whole preflight. Individual HTTP probes already abort at REQUEST_TIMEOUT_MS, but
+ * DNS resolution and Electron's `session.resolveProxy` are injected dependencies with no timeout of
+ * their own — a broken PAC script or a black-holed resolver leaves them pending forever, and the
+ * `Promise.all` in `run` then never settles. Sized above the per-request timeout so a slow-but-live
+ * endpoint still reports its own result rather than being cut off here.
+ */
+const OVERALL_TIMEOUT_MS = 20_000;
+
+const TIMED_OUT = Symbol('preflight-timeout');
+
+/**
+ * One shared deadline several concurrent branches can race against. A single timer is used for all
+ * of them so the whole preflight is bounded, and it is always cleared in `stop()` so a fast run does
+ * not keep the event loop alive.
+ */
+const deadlineTimer = (
+  timeoutMs: number,
+): {
+  race: <T>(work: Promise<T>, onTimeout: () => T) => Promise<T>;
+  stop: () => void;
+} => {
+  let expired = false;
+  const waiters = new Set<() => void>();
+  const timer = setTimeout(() => {
+    expired = true;
+    for (const wake of [...waiters]) {
+      wake();
+    }
+    waiters.clear();
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    race: async <T>(work: Promise<T>, onTimeout: () => T): Promise<T> => {
+      if (expired) {
+        return onTimeout();
+      }
+      let wake: (() => void) | undefined;
+      const timedOut = new Promise<typeof TIMED_OUT>((resolve) => {
+        wake = () => resolve(TIMED_OUT);
+        waiters.add(wake);
+      });
+      try {
+        const outcome = await Promise.race([work, timedOut]);
+        return outcome === TIMED_OUT ? onTimeout() : (outcome as T);
+      } finally {
+        if (wake) {
+          waiters.delete(wake);
+        }
+      }
+    },
+    stop: () => {
+      clearTimeout(timer);
+      waiters.clear();
+    },
+  };
+};
+
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const REACHABLE_HTTP_STATUS = (status: number): boolean => status >= 200 && status < 500;
 
@@ -227,6 +286,7 @@ export class ProviderConnectivityProbe {
   ) => Promise<string | undefined>;
   private readonly dnsLookup: DnsLookup;
   private readonly now: () => number;
+  private readonly overallTimeoutMs: number;
   private readonly pathResolver: NetworkPathResolver;
 
   public constructor(options: ProviderConnectivityProbeOptions) {
@@ -263,6 +323,7 @@ export class ProviderConnectivityProbe {
           Array<{ address: string; family: 4 | 6 }>
         >);
     this.now = options.now ?? Date.now;
+    this.overallTimeoutMs = options.overallTimeoutMs ?? OVERALL_TIMEOUT_MS;
     this.pathResolver = new NetworkPathResolver(options.resolveProxy, options.applicationProxyUrl);
   }
 
@@ -272,23 +333,124 @@ export class ProviderConnectivityProbe {
     cwd?: string,
   ): Promise<ConnectivityObservation> {
     const profile = getProviderProfile(provider);
-    const pathsPromise = this.pathResolver.resolve(provider, profile.endpoints[0]?.url ?? '');
-    const dnsProbesPromise = this.probeDns(profile, action);
-    const endpointProbesPromise = Promise.all(
-      profile.endpoints.map((endpoint) =>
-        this.probeEndpoint(provider, profile, endpoint, action, cwd),
-      ),
+    /*
+     * One deadline shared by every branch. Each branch races it independently so that a hung DNS or
+     * proxy lookup degrades only itself: whatever finished in time is still reported. Timing out
+     * yields `skipped`/`unknown`, which the risk engine counts as a required failure, so the
+     * degraded path is fail-closed rather than a silent pass.
+     */
+    const deadline = deadlineTimer(this.overallTimeoutMs);
+    try {
+      const [paths, dnsProbes, endpointProbes, versionProbe] = await Promise.all([
+        deadline.race(this.pathResolver.resolve(provider, profile.endpoints[0]?.url ?? ''), () =>
+          this.timedOutPaths(provider),
+        ),
+        deadline.race(this.probeDns(profile, action), () =>
+          this.timedOutDnsProbes(profile, action),
+        ),
+        deadline.race(
+          Promise.all(
+            profile.endpoints.map((endpoint) =>
+              this.probeEndpoint(provider, profile, endpoint, action, cwd),
+            ),
+          ),
+          () => this.timedOutEndpointProbes(profile, action),
+        ),
+        deadline.race(this.probeClientVersion(provider, action, cwd), () =>
+          this.timedOutVersionProbe(provider, action),
+        ),
+      ]);
+      return {
+        paths,
+        probes: [...dnsProbes, versionProbe, ...endpointProbes.flat()],
+      };
+    } finally {
+      deadline.stop();
+    }
+  }
+
+  private timedOutPaths(provider: NetworkProviderId): NetworkPathView[] {
+    return this.pathResolver.unknownPaths(provider, '本机网络路径探测超时，代理状态未知。');
+  }
+
+  private timedOutDnsProbes(
+    profile: ProviderProfile,
+    action: NetworkPreflightAction,
+  ): NetworkProbeResult[] {
+    const checkedAt = this.now();
+    const hosts = [...new Set(profile.endpoints.map((endpoint) => new URL(endpoint.url).hostname))];
+    const requiredHosts = new Set(
+      profile.endpoints
+        .filter((endpoint) => endpoint.requiredFor.includes(action))
+        .map((endpoint) => new URL(endpoint.url).hostname),
     );
-    const versionProbePromise = this.probeClientVersion(provider, action, cwd);
-    const [paths, dnsProbes, endpointProbes, versionProbe] = await Promise.all([
-      pathsPromise,
-      dnsProbesPromise,
-      endpointProbesPromise,
-      versionProbePromise,
-    ]);
+    return hosts.map((host) => ({
+      checkedAt,
+      detail: 'DNS 解析超时，未能在预检时限内得到结果。',
+      id: `dns:${host}`,
+      kind: 'dns' as const,
+      label: `${host} DNS`,
+      process: 'application' as const,
+      required: requiredHosts.has(host),
+      status: 'skipped' as const,
+      target: host,
+    }));
+  }
+
+  private timedOutEndpointProbes(
+    profile: ProviderProfile,
+    action: NetworkPreflightAction,
+  ): NetworkProbeResult[][] {
+    const checkedAt = this.now();
+    const detail = '端点探测超时，未能在预检时限内得到结果。';
+    return profile.endpoints.map((endpoint) => {
+      const required = endpoint.requiredFor.includes(action);
+      const probes: NetworkProbeResult[] = [];
+      // Mirror probeEndpoint's own split so the risk engine still sees every required endpoint id.
+      if (endpoint.kind !== 'websocket') {
+        probes.push({
+          checkedAt,
+          detail,
+          id: `app:${endpoint.id}`,
+          kind: endpoint.kind,
+          label: endpoint.label,
+          process: 'application',
+          required: required && endpoint.process !== 'cli',
+          status: 'skipped',
+          target: endpoint.url,
+        });
+      }
+      if (endpoint.process === 'cli' || endpoint.kind === 'websocket') {
+        probes.push({
+          checkedAt,
+          detail,
+          id: `cli:${endpoint.id}`,
+          kind: endpoint.kind,
+          label: endpoint.label,
+          process: profile.id === 'anthropic-claude' ? 'claude-cli' : 'codex-cli',
+          required,
+          status: 'skipped',
+          target: endpoint.url,
+        });
+      }
+      return probes;
+    });
+  }
+
+  private timedOutVersionProbe(
+    provider: NetworkProviderId,
+    action: NetworkPreflightAction,
+  ): NetworkProbeResult {
     return {
-      paths,
-      probes: [...dnsProbes, versionProbe, ...endpointProbes.flat()],
+      checkedAt: this.now(),
+      detail: '客户端版本检查超时，未能在预检时限内得到结果。',
+      id: `version:${provider}`,
+      kind: 'version',
+      label: `${getProviderProfile(provider).displayName} 版本审计`,
+      process: provider === 'anthropic-claude' ? 'claude-cli' : 'codex-cli',
+      required:
+        provider !== 'openai-api' && (action === 'cli-launch' || action === 'first-request'),
+      status: 'skipped',
     };
   }
 

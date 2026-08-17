@@ -3,6 +3,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import { clampPercentage } from './percentage-utils';
 /*
  * Every theme's UI and display face ships self-hosted, because a theme switch is meant to change
  * typography as visibly as it changes colour. Claude pairs Hanken Grotesk with the Newsreader
@@ -17,6 +18,11 @@ import 'katex/dist/katex.css';
 import katex from 'katex';
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core';
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
+import {
+  handleFooterMenuEscape,
+  handleFooterMenuArrowKey,
+  type FooterMenuPair,
+} from './footer-keyboard';
 import type {
   ApplicationUpdaterState,
   AppQuitRequest,
@@ -68,6 +74,7 @@ import type {
   McpScope,
   McpServerView,
   FooterResourcePreference,
+  ClaudeContextWindowMode,
   ManagedChatGptContextWindowMode,
   ManagedChatGptGatewayState,
   ModelSpeedMode,
@@ -95,6 +102,11 @@ import type {
   WorkspaceState,
 } from '../shared/contracts';
 import { claudeStateOwnershipIsCurrent } from '../shared/claude-state-ownership';
+import {
+  nativeConversationHasRunningWork,
+  runConfirmableConversationSurfaceSwitch,
+  terminalConversationHasRunningWork,
+} from '../shared/conversation-surface-switch';
 import { estimateChatUsage } from '../shared/chat-usage';
 import {
   CLAUDE_COMMAND_CATALOG,
@@ -138,6 +150,7 @@ import {
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
 import { localizePluginCopy } from '../shared/plugin-localization';
 import { resolveClaudeNativeCommand } from '../shared/claude-native-commands';
+import { stripClaudeContextWindowSuffix } from '../shared/claude-model-id';
 import {
   DEFAULT_TERMINAL_THEME,
   isTerminalThemeId,
@@ -153,6 +166,8 @@ import type {
   ConversationInteractionResponse,
   ConversationMessageView,
   ConversationSnapshot,
+  ConversationSubmitInput,
+  ModelCapabilityProfile,
   NativeAttachmentImportResult,
   NativeAttachmentView,
   NativeRecoveryView,
@@ -165,7 +180,12 @@ import {
   type ClaudeLaunchResultDisposition,
 } from './claude-launch-attempt';
 import { orchestrateSessionOperation, SessionGenerationRegistry } from './session-generation';
+import { ComposerSubmitCoordinator } from './composer-submit';
 import { FolderHistoryLoadCoordinator } from './folder-history-load';
+import {
+  ManagedChatGptOperationTracker,
+  runManagedChatGptOperation,
+} from './managed-chatgpt-operation';
 import { TerminalOutputPump } from './terminal-output-pump';
 import {
   closeOpenSelect,
@@ -359,6 +379,14 @@ const footerResource = requiredElement<HTMLButtonElement>('#footer-resource');
 const footerResourceMenu = requiredElement<HTMLElement>('#footer-resource-menu');
 const footerResourceDetails = requiredElement<HTMLElement>('#footer-resource-details');
 const footerContextWindowOptions = requiredElement<HTMLElement>('#footer-context-window-options');
+const claudeContextWindowOptions = requiredElement<HTMLElement>('#claude-context-window-options');
+const claudeContextWindowCustomField = requiredElement<HTMLElement>(
+  '#claude-context-window-custom-field',
+);
+const claudeContextWindowCustomInput = requiredElement<HTMLInputElement>(
+  '#claude-context-window-custom-input',
+);
+const claudeContextWindowStatus = requiredElement<HTMLElement>('#claude-context-window-status');
 const footerModel = requiredElement<HTMLButtonElement>('#footer-model');
 const footerModelMenu = requiredElement<HTMLElement>('#footer-model-menu');
 const footerSpeed = requiredElement<HTMLButtonElement>('#footer-speed');
@@ -540,15 +568,15 @@ const nativeInteractionStack = requiredElement<HTMLElement>('#native-interaction
 const nativeComposer = requiredElement<HTMLFormElement>('#native-composer');
 const nativeComposerInput = requiredElement<HTMLTextAreaElement>('#native-composer-input');
 const nativeComposerStatus = requiredElement<HTMLElement>('#native-composer-status');
-const nativeModelControl = requiredElement<HTMLSelectElement>('#native-model-control');
-const nativeEffortControl = requiredElement<HTMLSelectElement>('#native-effort-control');
-const nativeFastControl = requiredElement<HTMLButtonElement>('#native-fast-control');
-const nativePermissionControl = requiredElement<HTMLSelectElement>('#native-permission-control');
+const nativeQueued = requiredElement<HTMLElement>('#native-queued');
+const nativeQueuedText = requiredElement<HTMLElement>('#native-queued-text');
+const nativeQueuedHint = requiredElement<HTMLElement>('#native-queued-hint');
+const nativeQueuedSend = requiredElement<HTMLButtonElement>('#native-queued-send');
+const nativeQueuedCancel = requiredElement<HTMLButtonElement>('#native-queued-cancel');
 const nativeAttachmentInput = requiredElement<HTMLInputElement>('#native-attachment-input');
 const nativeAttachmentQueue = requiredElement<HTMLElement>('#native-attachment-queue');
 const nativeAttachButton = requiredElement<HTMLButtonElement>('#native-attach');
 const nativeSendButton = requiredElement<HTMLButtonElement>('#native-send');
-const nativeStopButton = requiredElement<HTMLButtonElement>('#native-stop');
 const nativeTerminalToggle = requiredElement<HTMLButtonElement>('#native-terminal-toggle');
 const nativeTerminalToggleLabel = requiredElement<HTMLElement>('#native-terminal-toggle-label');
 const nativePlanDialog = requiredElement<HTMLDialogElement>('#native-plan-dialog');
@@ -1387,7 +1415,8 @@ const codexStates = new Map<string, CodexProjectState>();
 const developmentRuntimeStates = new Map<string, DevelopmentRuntimeState>();
 const runtimeActivityStates = new Map<string, RuntimeActivitySnapshot>();
 const nativeConversationSnapshots = new Map<string, ConversationSnapshot>();
-const nativeConversationByProject = new Map<string, string>();
+/** Conversation UUID displayed over each workspace tab, mirroring the main process binding. */
+const nativeConversationBySession = new Map<string, string>();
 const nativeMessageRenderKeys = new WeakMap<HTMLElement, string>();
 const pendingNativeConversationRenders = new Map<string, ConversationSnapshot>();
 let nativeRecoveries: NativeRecoveryView[] = [];
@@ -1397,11 +1426,30 @@ let nativeConversationClosingTimer: number | undefined;
 let nativeConversationRenderFrame: number | undefined;
 const nativeConversationSubmissions = new Map<string, string>();
 const pendingNativeAttachments: NativeAttachmentView[] = [];
+/**
+ * Committed-but-undelivered input, parked above the composer while a turn is still running. It is
+ * deliberately renderer-only: the adapter hands prompts to an `AsyncInputQueue` that wakes a parked
+ * consumer synchronously and exposes no dequeue hook, so the main process has no observable moment
+ * where "the model started reading it" — a `queued` message status in the snapshot would be a lie.
+ */
+interface NativeQueuedMessage {
+  attachments: NativeAttachmentView[];
+  text: string;
+}
+const nativeQueuedMessages = new Map<string, NativeQueuedMessage>();
+/** Conversations whose queued message should be delivered automatically once the turn goes idle. */
+const nativeQueuedAutoFlush = new Set<string>();
+/**
+ * The queued entry currently in flight. It is held separately from `nativeQueuedMessages` so the
+ * bar can keep showing "正在发送…" during the handover without the map entry being re-merged by a
+ * failed delivery putting the same content back.
+ */
+let nativeQueuedDispatch: { conversationId: string; message: NativeQueuedMessage } | undefined;
+let nativeSendAnimating = false;
+let nativeSendAnimationTimer: number | undefined;
 let nativeAttachmentImporting = false;
 let nativeControlsUpdating = false;
-let renderedNativeCapabilityRevision = -1;
 let expandedNativePlan: Extract<ConversationInteraction, { kind: 'plan' }> | undefined;
-let nativePlanCloseTimer: number | undefined;
 const claudeStateLoadGenerations = new SessionGenerationRegistry();
 const codexStateLoadGenerations = new SessionGenerationRegistry();
 const runtimeStateLoadGenerations = new SessionGenerationRegistry();
@@ -1428,6 +1476,11 @@ let advancedConnectionSnapshot: AdvancedConnectionSnapshot | undefined;
 let savedAppSettings: AppSettingsView | undefined;
 let footerResourcePreference: FooterResourcePreference = 'auto';
 let managedChatGptContextWindowMode: ManagedChatGptContextWindowMode = 'standard';
+let claudeContextWindowMode: ClaudeContextWindowMode = 'auto';
+let claudeContextWindowCustomTokens: number | undefined;
+let claudeContextWindowCustomDraftOpen = false;
+/** One prompt per launch and requested mode; a rejection otherwise re-asks on every metrics tick. */
+const claudeContextDowngradePrompted = new Set<string>();
 let savedApplicationProxy: ApplicationProxyView | undefined;
 let applicationProxyCancelBaseline: ApplicationProxyDraftSnapshot | undefined;
 let applicationProxySaveInProgress = false;
@@ -1444,7 +1497,7 @@ type SettingsTab = 'advanced' | 'connection' | 'general' | 'legal' | 'proxy' | '
 let selectedSettingsTab: SettingsTab = 'general';
 let mainView: 'chat' | 'terminal' = 'terminal';
 let gatewayDiagnostics: ClaudeGatewayDiagnostics | undefined;
-let managedChatGptSetupInProgress = false;
+const managedChatGptOperations = new ManagedChatGptOperationTracker();
 let renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
 let gatewayRefreshInProgress = false;
 let gatewayRefreshTimer: number | undefined;
@@ -3155,8 +3208,37 @@ const appendNativeTool = (
   container.append(details);
 };
 
+/**
+ * O(1) change probe. The reducer bumps `version` on every mutation, so this is enough to decide
+ * whether a message's DOM needs rebuilding. It used to be `JSON.stringify(message)`, which
+ * serialized the entire transcript — including full tool inputs and outputs — on every animation
+ * frame of a stream, and was the single largest cause of the long-session freeze.
+ *
+ * The fallback keeps snapshots produced before `version` existed (or by a fake adapter that builds
+ * message views directly) from being treated as permanently unchanged.
+ */
 const nativeMessageRenderKey = (message: ConversationMessageView): string =>
-  JSON.stringify(message);
+  message.version === undefined
+    ? `${message.id}:nover:${message.status}:${message.blocks
+        .map((block) =>
+          block.type === 'tool'
+            ? `${block.id}~${block.status}~${block.summary ?? ''}`
+            : 'text' in block
+              ? `${block.id}~${block.text.length}`
+              : block.id,
+        )
+        .join('|')}`
+    : `${message.id}:${message.version}`;
+
+/**
+ * Rendered markdown, keyed by block id, per message element. A tool progress tick arrives roughly
+ * once a second and changes only a status string, but it rebuilds the whole message — without this
+ * every sibling text block would be re-lexed and re-highlighted through Shiki each time.
+ */
+const nativeRenderedMarkdown = new WeakMap<
+  HTMLElement,
+  Map<string, { node: HTMLElement; text: string }>
+>();
 
 const updateNativeMessage = (
   article: HTMLElement,
@@ -3180,21 +3262,33 @@ const updateNativeMessage = (
   }
   const body = document.createElement('div');
   body.className = 'native-message__body';
+  const cached = nativeRenderedMarkdown.get(article);
+  const rendered = new Map<string, { node: HTMLElement; text: string }>();
   let streamingTextMount: HTMLElement | undefined;
   for (const block of message.blocks) {
     if (block.type === 'text') {
+      if (message.role === 'assistant' && message.status !== 'streaming') {
+        const reusable = cached?.get(block.id);
+        if (reusable && reusable.text === block.text) {
+          body.append(reusable.node);
+          rendered.set(block.id, reusable);
+          continue;
+        }
+        const mount = document.createElement('div');
+        mount.className = 'chat-message__markdown';
+        body.append(mount);
+        rendered.set(block.id, { node: mount, text: block.text });
+        void markdownRenderer.renderInto(mount, block.text);
+        continue;
+      }
       const mount = document.createElement('div');
       mount.className = 'chat-message__markdown';
       body.append(mount);
-      if (message.role === 'assistant' && message.status !== 'streaming') {
-        void markdownRenderer.renderInto(mount, block.text);
-      } else {
-        if (message.role === 'assistant') {
-          mount.classList.add('native-message__stream-text');
-          streamingTextMount = mount;
-        }
-        mount.textContent = block.text;
+      if (message.role === 'assistant') {
+        mount.classList.add('native-message__stream-text');
+        streamingTextMount = mount;
       }
+      mount.textContent = block.text;
       continue;
     }
     if (block.type === 'thinking') {
@@ -3220,6 +3314,7 @@ const updateNativeMessage = (
     (streamingTextMount ?? body).append(caret);
   }
   article.replaceChildren(label, body);
+  nativeRenderedMarkdown.set(article, rendered);
   nativeMessageRenderKeys.set(article, renderKey);
 };
 
@@ -3247,32 +3342,19 @@ const respondToNativeInteraction = async (
 };
 
 const closeNativePlanDialog = (): void => {
-  if (!nativePlanDialog.open || nativePlanDialog.dataset.state === 'closing') return;
-  nativePlanDialog.dataset.state = 'closing';
-  nativePlanCloseTimer = window.setTimeout(() => {
-    nativePlanDialog.close();
-    nativePlanDialog.dataset.state = 'closed';
-    nativePlanCloseTimer = undefined;
-    expandedNativePlan = undefined;
-  }, 220);
+  if (!nativePlanDialog.open) return;
+  nativePlanDialog.close();
+  expandedNativePlan = undefined;
 };
 
 const openNativePlanDialog = (
   interaction: Extract<ConversationInteraction, { kind: 'plan' }>,
 ): void => {
-  if (nativePlanCloseTimer !== undefined) {
-    window.clearTimeout(nativePlanCloseTimer);
-    nativePlanCloseTimer = undefined;
-  }
   expandedNativePlan = interaction;
   nativePlanTitle.textContent = interaction.title || '实施计划';
   nativePlanContent.replaceChildren();
   void markdownRenderer.renderInto(nativePlanContent, interaction.markdown);
   if (!nativePlanDialog.open) nativePlanDialog.showModal();
-  nativePlanDialog.dataset.state = 'opening';
-  window.requestAnimationFrame(() => {
-    nativePlanDialog.dataset.state = 'open';
-  });
   nativePlanClose.focus({ preventScroll: true });
 };
 
@@ -3544,91 +3626,105 @@ const nativePermissionDescription = (mode: string): string =>
     plan: '只读探索并先给出计划，不直接修改项目。',
   })[mode] ?? mode;
 
-const replaceNativeControlOptions = (
-  select: HTMLSelectElement,
-  options: Array<{ label: string; value: string }>,
-  selected: string,
-): void => {
-  select.replaceChildren(
-    ...options.map(({ label, value }) => {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      return option;
-    }),
-  );
-  setEnhancedSelectValue(select, selected);
+/**
+ * Which permission mode ClaudeDock last dispatched, per conversation. `ModelCapabilityProfile`
+ * enumerates the modes a model supports; it does not report which one is active, so the requested
+ * value is the only record of what the user chose.
+ */
+const nativePermissionModes = new Map<string, string>();
+
+const nativeActivePermissionMode = (snapshot: ConversationSnapshot): string | undefined =>
+  nativePermissionModes.get(snapshot.conversationId) ?? snapshot.capabilities?.permissionModes[0];
+
+const nativeFastLabel = (state: ModelCapabilityProfile['fast']['state']): string =>
+  ({
+    confirmed: 'Fast 已确认',
+    fallback: 'Fast 已回退',
+    off: 'Fast 关闭',
+    requested: 'Fast 已请求',
+    unavailable: 'Fast 不可用',
+  })[state];
+
+/**
+ * Fast is reported in five states because "requested" and "confirmed" are genuinely different
+ * claims: ClaudeDock only ever says confirmed when the adapter saw a structured acknowledgement.
+ */
+const nativeFastDetail = (fast: ModelCapabilityProfile['fast']): string => {
+  const mechanism = fast.mechanism ? ` · ${fast.mechanism}` : '';
+  if (fast.state === 'unavailable') return '当前模型没有声明支持 Fast。';
+  if (fast.state === 'off') return '点击请求 Fast；额度消耗或计价可能更高。';
+  if (fast.state === 'requested') {
+    return `已向上游请求 Fast${mechanism}；上游返回结构化确认前不会显示为已确认。`;
+  }
+  if (fast.state === 'confirmed') return `上游已确认 Fast${mechanism}；点击可关闭。`;
+  return `Fast 请求已回退到标准档${mechanism}；点击可重新请求。`;
 };
 
-const renderNativeControls = (snapshot: ConversationSnapshot): void => {
+/**
+ * Renders the four footer chips from an Agent SDK snapshot. Native mode has no PowerShell status
+ * line, so `capabilities` is the only truth available; the terminal-side renderer is suppressed
+ * wholesale while this runs, otherwise the chips flicker between two different sources of truth.
+ */
+const renderNativeFooter = (snapshot: ConversationSnapshot): void => {
   const capability = snapshot.capabilities;
+  const busy = nativeControlsUpdating;
+  for (const chip of [footerModel, footerSpeed, footerMode, footerEffort]) {
+    chip.setAttribute('aria-busy', String(busy));
+  }
   if (!capability) {
-    for (const control of [nativeModelControl, nativeEffortControl, nativePermissionControl]) {
-      control.disabled = true;
+    const pending = '原生会话尚未上报可用能力，请稍候。';
+    footerModel.textContent = '模型 —';
+    footerSpeed.textContent = 'Fast —';
+    footerMode.textContent = '模式 —';
+    footerEffort.textContent = '思考 —';
+    delete footerSpeed.dataset.state;
+    for (const chip of [footerModel, footerSpeed, footerMode, footerEffort]) {
+      chip.disabled = true;
+      chip.title = pending;
     }
-    nativeFastControl.disabled = true;
     return;
   }
-  if (renderedNativeCapabilityRevision !== capability.revision) {
-    renderedNativeCapabilityRevision = capability.revision;
-    replaceNativeControlOptions(
-      nativeModelControl,
-      (capability.models ?? [{ id: capability.model, label: capability.model }]).map((model) => ({
-        label: model.label,
-        value: model.id,
-      })),
-      capability.model,
-    );
-    replaceNativeControlOptions(
-      nativeEffortControl,
-      capability.effort.options.map((effort) => ({
-        label: nativeEffortLabel(effort),
-        value: effort,
-      })),
-      capability.effort.requested ??
-        capability.effort.applied ??
-        capability.effort.options[0] ??
-        '',
-    );
-    replaceNativeControlOptions(
-      nativePermissionControl,
-      capability.permissionModes.map((mode) => ({
-        label: nativePermissionLabel(mode),
-        value: mode,
-      })),
-      nativePermissionControl.value || capability.permissionModes[0] || '',
-    );
-  }
-  nativeModelControl.disabled = nativeControlsUpdating || (capability.models?.length ?? 1) < 2;
-  nativeEffortControl.disabled = nativeControlsUpdating || capability.effort.options.length === 0;
-  const selectedEffort = capability.effort.requested ?? capability.effort.applied;
+  const modelLabel =
+    capability.models?.find((model) => model.id === capability.model)?.label ?? capability.model;
+  footerModel.textContent = `模型 ${modelLabel}`;
+  footerModel.disabled = busy || (capability.models?.length ?? 1) < 2;
+  footerModel.title =
+    (capability.models?.length ?? 1) < 2
+      ? '当前接入只暴露了一个模型。'
+      : '点击切换模型；切换会在同一段对话内生效。';
+
+  footerSpeed.textContent = nativeFastLabel(capability.fast.state);
+  footerSpeed.dataset.state = capability.fast.state;
+  footerSpeed.disabled = busy || capability.fast.state === 'unavailable';
+  footerSpeed.title = nativeFastDetail(capability.fast);
+
+  const permissionMode = snapshot.capabilities?.permissionModes[0];
+  const activePermissionMode = nativeActivePermissionMode(snapshot) ?? permissionMode;
+  footerMode.textContent = `模式 ${activePermissionMode ? nativePermissionLabel(activePermissionMode) : '—'}`;
+  footerMode.dataset.mode = activePermissionMode ?? 'unknown';
+  footerMode.disabled = busy || capability.permissionModes.length === 0;
+  footerMode.title = activePermissionMode
+    ? nativePermissionDescription(activePermissionMode)
+    : '当前会话没有上报可用的权限模式。';
+
+  // The requested level is what the user asked for; `applied` is what Claude Code actually ran at
+  // and can sit lower when the model caps it. Showing only one of them would be dishonest.
+  const requestedEffort = capability.effort.requested;
+  const appliedEffort = capability.effort.applied;
+  const shownEffort = requestedEffort ?? appliedEffort;
+  footerEffort.textContent = `思考 ${shownEffort ? nativeEffortLabel(shownEffort) : '—'}`;
+  footerEffort.dataset.effort = shownEffort ?? 'unknown';
+  footerEffort.dataset.requestedEffort = requestedEffort ?? 'unknown';
+  footerEffort.dataset.appliedEffort = appliedEffort ?? 'unknown';
+  footerEffort.disabled = busy || capability.effort.options.length === 0;
   const effortDescription =
-    selectedEffort === 'ultracode'
+    shownEffort === 'ultracode'
       ? '工作流编排；实际思考档位为 X-High，仅作用于当前会话。'
-      : '选择当前模型支持的思考档位。';
-  nativeEffortControl.title = effortDescription;
-  nativeEffortControl.setAttribute('aria-description', effortDescription);
-  nativePermissionControl.disabled =
-    nativeControlsUpdating || capability.permissionModes.length === 0;
-  const permissionDescription = nativePermissionDescription(nativePermissionControl.value);
-  nativePermissionControl.title = permissionDescription;
-  nativePermissionControl.setAttribute('aria-description', permissionDescription);
-  nativeFastControl.disabled =
-    nativeControlsUpdating ||
-    !['off', 'requested', 'confirmed', 'fallback'].includes(capability.fast.state);
-  nativeFastControl.setAttribute(
-    'aria-pressed',
-    String(capability.fast.state === 'requested' || capability.fast.state === 'confirmed'),
-  );
-  nativeFastControl.dataset.state = capability.fast.state;
-  nativeFastControl.textContent =
-    capability.fast.state === 'confirmed'
-      ? 'Fast · 已确认'
-      : capability.fast.state === 'requested'
-        ? 'Fast · 已请求'
-        : capability.fast.state === 'fallback'
-          ? 'Fast · 已回退'
-          : 'Fast';
+      : requestedEffort && appliedEffort && requestedEffort !== appliedEffort
+        ? `请求：${nativeEffortLabel(requestedEffort)} · 实际：${nativeEffortLabel(appliedEffort)}；点击调整思考程度。`
+        : '选择当前模型支持的思考档位。';
+  footerEffort.title = effortDescription;
+  footerEffort.setAttribute('aria-description', effortDescription);
 };
 
 const updateNativeControls = async (
@@ -3636,25 +3732,183 @@ const updateNativeControls = async (
 ): Promise<void> => {
   const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
   if (!snapshot?.capabilities || nativeControlsUpdating) return;
+  const conversationId = activeNativeConversationId;
   nativeControlsUpdating = true;
-  renderNativeControls(snapshot);
+  renderNativeFooter(snapshot);
   try {
-    const result = await window.controlPanel.updateNativeConversationControls(
-      activeNativeConversationId,
-      { ...update, expectedCapabilityRevision: snapshot.capabilities.revision },
-    );
+    const result = await window.controlPanel.updateNativeConversationControls(conversationId, {
+      ...update,
+      expectedCapabilityRevision: snapshot.capabilities.revision,
+    });
     if (!result.ok) {
       showToast(result.message ?? '无法更新模型控制项。', 'error');
       return;
     }
+    // `ModelCapabilityProfile` lists which permission modes exist, not which one is active, so the
+    // dispatched value is the only record of what ClaudeDock actually asked for.
+    if (update.permissionMode) nativePermissionModes.set(conversationId, update.permissionMode);
     if (result.snapshot) renderNativeConversation(result.snapshot);
   } catch (error) {
     showToast(error instanceof Error ? error.message : '无法更新模型控制项。', 'error');
   } finally {
     nativeControlsUpdating = false;
     const latest = nativeConversationSnapshots.get(activeNativeConversationId);
-    if (latest) renderNativeControls(latest);
+    if (latest) renderNativeFooter(latest);
   }
+};
+
+const switchNativeModel = async (modelId: string): Promise<void> => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const capability = snapshot?.capabilities;
+  const target = capability?.models?.find((model) => model.id === modelId);
+  if (!capability || !target) return;
+  const currentEffort = capability.effort.requested ?? capability.effort.applied;
+  const nextEffort =
+    currentEffort && target.effortOptions.includes(currentEffort)
+      ? currentEffort
+      : target.effortOptions.includes('high')
+        ? 'high'
+        : target.effortOptions[0];
+  const fastActive = capability.fast.state === 'requested' || capability.fast.state === 'confirmed';
+  if (nextEffort !== currentEffort || (fastActive && !target.supportsFast)) {
+    showToast(
+      `新模型不支持当前全部选项；将改为 ${nativeEffortLabel(nextEffort ?? 'auto')}${fastActive && !target.supportsFast ? '，并关闭 Fast' : ''}。`,
+    );
+  }
+  await updateNativeControls({
+    effort: nextEffort,
+    fast: fastActive && target.supportsFast,
+    model: target.id,
+  });
+};
+
+const openNativeModelMenu = (): void => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const capability = snapshot?.capabilities;
+  const models = capability?.models ?? [];
+  footerModelMenu.replaceChildren(
+    ...models.map((model) =>
+      buildFooterRadioMenuItem(
+        model.label,
+        `${model.supportsFast ? '支持 Fast' : '不支持 Fast'} · ${model.attachments.image ? '支持图片' : (model.attachments.reason ?? '不支持图片')}`,
+        model.id === capability?.model,
+        () => {
+          void switchNativeModel(model.id);
+        },
+        nativeControlsUpdating || model.id === capability?.model,
+        footerModel,
+      ),
+    ),
+  );
+  if (models.length === 0) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = capability
+      ? '当前接入只暴露了一个模型。'
+      : '原生会话尚未上报可用能力，请稍候。';
+    footerModelMenu.append(hint);
+  }
+  openFooterMenu(footerModelMenu, footerModel);
+};
+
+const openNativeSpeedMenu = (): void => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const fast = snapshot?.capabilities?.fast;
+  const active = fast?.state === 'requested' || fast?.state === 'confirmed';
+  footerSpeedMenu.replaceChildren(
+    buildFooterRadioMenuItem(
+      '标准速度',
+      '默认档位；不向上游请求 Fast。',
+      Boolean(fast) && !active,
+      () => {
+        void updateNativeControls({ fast: false });
+      },
+      nativeControlsUpdating || !fast || fast.state === 'unavailable' || !active,
+      footerSpeed,
+    ),
+    buildFooterRadioMenuItem(
+      'Fast',
+      fast ? nativeFastDetail(fast) : '原生会话尚未上报可用能力，请稍候。',
+      active,
+      () => {
+        void updateNativeControls({ fast: true });
+      },
+      nativeControlsUpdating || !fast || fast.state === 'unavailable' || active,
+      footerSpeed,
+    ),
+  );
+  if (fast) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = nativeFastDetail(fast);
+    footerSpeedMenu.append(hint);
+  }
+  openFooterMenu(footerSpeedMenu, footerSpeed);
+};
+
+const openNativeModeMenu = (): void => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const capability = snapshot?.capabilities;
+  const current = snapshot ? nativeActivePermissionMode(snapshot) : undefined;
+  footerModeMenu.replaceChildren(
+    ...(capability?.permissionModes ?? []).map((mode) =>
+      buildFooterRadioMenuItem(
+        nativePermissionLabel(mode),
+        nativePermissionDescription(mode),
+        mode === current,
+        () => {
+          void updateNativeControls({ permissionMode: mode });
+        },
+        nativeControlsUpdating || mode === current,
+        footerMode,
+      ),
+    ),
+  );
+  if (!capability || capability.permissionModes.length === 0) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = '原生会话尚未上报可用能力，请稍候。';
+    footerModeMenu.append(hint);
+  }
+  openFooterMenu(footerModeMenu, footerMode);
+};
+
+const openNativeEffortMenu = (): void => {
+  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+  const capability = snapshot?.capabilities;
+  const current = capability?.effort.requested ?? capability?.effort.applied;
+  footerEffortMenu.replaceChildren(
+    ...(capability?.effort.options ?? []).map((effort) =>
+      buildFooterRadioMenuItem(
+        nativeEffortLabel(effort),
+        effort === 'ultracode'
+          ? '工作流编排；实际思考档位为 X-High，仅作用于当前会话。'
+          : '当前模型声明支持的思考档位。',
+        effort === current,
+        () => {
+          void updateNativeControls({ effort });
+        },
+        nativeControlsUpdating || effort === current,
+        footerEffort,
+      ),
+    ),
+  );
+  if (!capability || capability.effort.options.length === 0) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = '原生会话尚未上报可用能力，请稍候。';
+    footerEffortMenu.append(hint);
+  } else if (
+    capability.effort.requested &&
+    capability.effort.applied &&
+    capability.effort.requested !== capability.effort.applied
+  ) {
+    const hint = document.createElement('p');
+    hint.className = 'footer-menu__hint';
+    hint.textContent = `已请求 ${nativeEffortLabel(capability.effort.requested)}，Claude Code 实际运行在 ${nativeEffortLabel(capability.effort.applied)}。`;
+    footerEffortMenu.append(hint);
+  }
+  openFooterMenu(footerEffortMenu, footerEffort);
 };
 
 const handleNativeSlashCommand = async (
@@ -3706,18 +3960,10 @@ const handleNativeSlashCommand = async (
         });
       else if (command.name === '/permissions' && argument)
         await updateNativeControls({ permissionMode: argument });
-      else {
-        const control =
-          command.name === '/model'
-            ? nativeModelControl
-            : command.name === '/effort'
-              ? nativeEffortControl
-              : command.name === '/permissions'
-                ? nativePermissionControl
-                : nativeFastControl;
-        control.focus({ preventScroll: true });
-        control.click();
-      }
+      else if (command.name === '/model') openNativeModelMenu();
+      else if (command.name === '/effort') openNativeEffortMenu();
+      else if (command.name === '/permissions') openNativeModeMenu();
+      else openNativeSpeedMenu();
       return true;
     }
     if (['/context', '/cost', '/status', '/usage', '/usage-credits'].includes(command.name)) {
@@ -3786,7 +4032,7 @@ const handleNativeSlashCommand = async (
   }
   if (command.name === '/effort') {
     if (argument) await updateNativeControls({ effort: argument.toLowerCase() });
-    else nativeEffortControl.focus({ preventScroll: true });
+    else openNativeEffortMenu();
     return true;
   }
   if (command.name === '/plan') {
@@ -3815,13 +4061,295 @@ const handleNativeSlashCommand = async (
       showToast(result.message ?? '无法关闭当前对话。', 'error');
       return true;
     }
+    for (const [sessionId, boundId] of [...nativeConversationBySession.entries()]) {
+      if (boundId === snapshot.conversationId) nativeConversationBySession.delete(sessionId);
+    }
+    nativeQueuedMessages.delete(snapshot.conversationId);
+    nativeQueuedAutoFlush.delete(snapshot.conversationId);
+    // The snapshot holds the whole transcript; keeping it after close leaks it for the app's life.
+    nativeConversationSnapshots.delete(snapshot.conversationId);
     activeNativeConversationId = '';
+    renderNativeQueuedMessage();
     await refreshNativeRecoveries();
     if (command.name === '/clear') await launchNativeClaude('new');
     else setNativeConversationVisible(false);
     return true;
   }
   return false;
+};
+
+/**
+ * The composer owns exactly one action button. `data-action` decides whether it sends or stops,
+ * `data-sending` marks the outgoing animation and `data-stopping` marks the halo that grows only
+ * after the stop button has actually been pressed.
+ */
+type NativeComposerAction = 'send' | 'stop';
+
+const nativeComposerHasIntent = (): boolean =>
+  nativeComposerInput.value.trim().length > 0 || pendingNativeAttachments.length > 0;
+
+/**
+ * Stop is only offered when there is a turn to stop AND nothing the user is about to send: typing
+ * during a reply means the next intent is "send", so the button must return to its theme send face
+ * rather than sit there as a trap that throws away the reply being streamed.
+ */
+const deriveNativeComposerAction = (
+  snapshot: ConversationSnapshot | undefined,
+): NativeComposerAction => {
+  if (!snapshot) return 'send';
+  if (snapshot.phase !== 'running' && snapshot.phase !== 'stopping') return 'send';
+  // The swap waits for the send animation to finish so it is tied to what the user saw, not to how
+  // fast the main process acknowledged the submission.
+  if (nativeSendAnimating) return 'send';
+  if (nativeComposerHasIntent()) return 'send';
+  return 'stop';
+};
+
+const nativeComposerStatusText = (snapshot: ConversationSnapshot): string => {
+  if (snapshot.phase !== 'running' && snapshot.phase !== 'stopping') {
+    return nativePhaseLabel(snapshot.phase);
+  }
+  return nativeComposerHasIntent()
+    ? '回复生成中 · Enter 将排队发送 · Esc 中断'
+    : '回复生成中 · 点击停止可中断 · Esc 同样中断';
+};
+
+/** The only writer of the action button's `data-action`, label and stop-halo marker. */
+const applyNativeComposerAction = (): void => {
+  const snapshot = activeNativeConversationId
+    ? nativeConversationSnapshots.get(activeNativeConversationId)
+    : undefined;
+  const action = deriveNativeComposerAction(snapshot);
+  nativeSendButton.dataset.action = action;
+  if (action !== 'stop') delete nativeSendButton.dataset.stopping;
+  nativeSendButton.title = action === 'stop' ? '中断当前回合（Esc）' : '发送消息（Enter）';
+  nativeSendButton.setAttribute('aria-label', action === 'stop' ? '中断当前回合' : '发送消息');
+  if (snapshot) nativeComposerStatus.textContent = nativeComposerStatusText(snapshot);
+};
+
+const finishNativeSendAnimation = (): void => {
+  if (nativeSendAnimationTimer !== undefined) {
+    window.clearTimeout(nativeSendAnimationTimer);
+    nativeSendAnimationTimer = undefined;
+  }
+  if (!nativeSendAnimating) return;
+  nativeSendAnimating = false;
+  delete nativeSendButton.dataset.sending;
+  applyNativeComposerAction();
+};
+
+/**
+ * Plays the theme's outgoing animation. The watchdog matters because `prefers-reduced-motion` cuts
+ * the duration to `--dur-instant`; if a dropped frame ever swallowed `animationend` the button
+ * would be stranded in its send face while a turn is running.
+ */
+const playNativeSendAnimation = (): void => {
+  finishNativeSendAnimation();
+  nativeSendAnimating = true;
+  delete nativeSendButton.dataset.sending;
+  // Restart the theme-owned confirmation motion even when two sends finish in quick succession.
+  void nativeSendButton.offsetWidth;
+  nativeSendButton.dataset.sending = 'true';
+  applyNativeComposerAction();
+  nativeSendAnimationTimer = window.setTimeout(finishNativeSendAnimation, 600);
+};
+
+let lastNativeQueuedSignature = '\u0000';
+
+const renderNativeQueuedMessage = (): void => {
+  const conversationId = activeNativeConversationId;
+  const dispatching =
+    nativeQueuedDispatch && nativeQueuedDispatch.conversationId === conversationId
+      ? nativeQueuedDispatch.message
+      : undefined;
+  const queued =
+    dispatching ?? (conversationId ? nativeQueuedMessages.get(conversationId) : undefined);
+  // `renderNativeConversation` calls this on every streamed frame, and it ends in
+  // `resizeNativeComposer()`, which forces two synchronous layouts. The queued bar changes only on
+  // deliberate user action, so skipping the unchanged case keeps the reflows off the stream path.
+  const signature =
+    !conversationId || !queued
+      ? ''
+      : [
+          conversationId,
+          dispatching ? 'dispatching' : 'queued',
+          nativeQueuedAutoFlush.has(conversationId) ? 'auto' : 'manual',
+          queued.attachments.length,
+          queued.text,
+        ].join('\u0000');
+  if (signature === lastNativeQueuedSignature) return;
+  lastNativeQueuedSignature = signature;
+  if (!conversationId || !queued) {
+    nativeQueued.hidden = true;
+    nativeQueuedText.textContent = '';
+    nativeQueuedHint.textContent = '';
+    resizeNativeComposer();
+    return;
+  }
+  const attachmentNote = queued.attachments.length ? ` · ${queued.attachments.length} 个附件` : '';
+  nativeQueued.hidden = false;
+  nativeQueued.dataset.state = dispatching ? 'dispatching' : 'queued';
+  nativeQueuedText.textContent = queued.text;
+  nativeQueuedHint.textContent = dispatching
+    ? `正在发送…${attachmentNote}`
+    : nativeQueuedAutoFlush.has(conversationId)
+      ? `本轮结束后自动发送${attachmentNote}`
+      : `本轮已中断 · 点击「立即发送」继续${attachmentNote}`;
+  nativeQueuedSend.hidden = Boolean(dispatching);
+  nativeQueuedCancel.hidden = Boolean(dispatching);
+  resizeNativeComposer();
+};
+
+/**
+ * Parks content above the send row. At most one entry per conversation: a second Enter appends with
+ * a blank line rather than growing a list, so the bar can never turn into a second transcript.
+ */
+const enqueueNativeMessage = (
+  conversationId: string,
+  text: string,
+  attachments: NativeAttachmentView[],
+  options: { autoFlush: boolean },
+): void => {
+  const existing = nativeQueuedMessages.get(conversationId);
+  const addition = text.trim();
+  const merged = existing?.text
+    ? addition
+      ? `${existing.text}\n\n${addition}`
+      : existing.text
+    : addition;
+  nativeQueuedMessages.set(conversationId, {
+    attachments: [...(existing?.attachments ?? []), ...attachments],
+    text: merged,
+  });
+  if (options.autoFlush) nativeQueuedAutoFlush.add(conversationId);
+  else nativeQueuedAutoFlush.delete(conversationId);
+  renderNativeQueuedMessage();
+  applyNativeComposerAction();
+};
+
+/** Folds a queued entry back into the composer so the existing draft-preservation path carries it. */
+const drainNativeQueuedMessageToComposer = (conversationId: string): void => {
+  const queued = nativeQueuedMessages.get(conversationId);
+  nativeQueuedAutoFlush.delete(conversationId);
+  if (!queued) return;
+  nativeQueuedMessages.delete(conversationId);
+  if (queued.text) {
+    const current = nativeComposerInput.value;
+    nativeComposerInput.value = current ? `${queued.text}\n\n${current}` : queued.text;
+  }
+  for (const attachment of queued.attachments) {
+    const known = pendingNativeAttachments.some(
+      (candidate) => candidate.attachmentId === attachment.attachmentId,
+    );
+    if (!known) pendingNativeAttachments.push(attachment);
+  }
+  renderPendingNativeAttachments();
+  renderNativeQueuedMessage();
+  resizeNativeComposer();
+  applyNativeComposerAction();
+};
+
+const nativeSubmits = new ComposerSubmitCoordinator();
+
+/**
+ * Hands one message to the adapter. Nothing is lost on failure: a rejected or cancelled delivery is
+ * put straight back into the queued bar instead of vanishing from both the composer and the
+ * transcript.
+ */
+const deliverNativeMessage = async (
+  conversationId: string,
+  text: string,
+  attachments: NativeAttachmentView[],
+): Promise<boolean> => {
+  const clientSubmissionId = crypto.randomUUID();
+  const blocks = [
+    ...(text.trim() ? [{ text, type: 'text' as const }] : []),
+    ...attachments.map((attachment) => ({
+      attachment: {
+        id: attachment.attachmentId,
+        mediaType: attachment.mediaType,
+        name: attachment.fileName,
+        size: attachment.sizeBytes,
+      },
+      type: 'image' as const,
+    })),
+  ];
+  nativeConversationSubmissions.set(conversationId, clientSubmissionId);
+  nativeComposerStatus.textContent = '正在安全保存并提交…';
+  let delivered = false;
+  try {
+    const outcome = await nativeSubmits.submit({
+      deliver: async () => {
+        const result = await window.controlPanel.submitNativeConversation(conversationId, {
+          blocks,
+          clientSubmissionId,
+        });
+        if (!result.ok) {
+          showToast(result.message ?? '本次输入尚未发送。', 'error');
+          return false;
+        }
+        if (result.snapshot) renderNativeConversation(result.snapshot);
+        return true;
+      },
+      onCancelled: () => {
+        enqueueNativeMessage(conversationId, text, attachments, { autoFlush: false });
+      },
+      onDelivered: () => {
+        nativeQueuedAutoFlush.delete(conversationId);
+      },
+    });
+    delivered = outcome === 'delivered';
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '本次输入尚未发送。', 'error');
+    enqueueNativeMessage(conversationId, text, attachments, { autoFlush: false });
+  } finally {
+    if (nativeConversationSubmissions.get(conversationId) === clientSubmissionId) {
+      nativeConversationSubmissions.delete(conversationId);
+    }
+    if (nativeQueuedDispatch?.conversationId === conversationId) nativeQueuedDispatch = undefined;
+    renderNativeQueuedMessage();
+    const latest = nativeConversationSnapshots.get(activeNativeConversationId);
+    if (latest) renderNativeConversation(latest);
+    else applyNativeComposerAction();
+  }
+  if (!delivered && activeNativeConversationId === conversationId) nativeComposerInput.focus();
+  return delivered;
+};
+
+const flushNativeQueuedMessage = async (conversationId: string): Promise<void> => {
+  const queued = nativeQueuedMessages.get(conversationId);
+  if (!queued || nativeQueuedDispatch || nativeConversationSubmissions.has(conversationId)) return;
+  nativeQueuedMessages.delete(conversationId);
+  nativeQueuedAutoFlush.delete(conversationId);
+  nativeQueuedDispatch = { conversationId, message: queued };
+  renderNativeQueuedMessage();
+  await deliverNativeMessage(conversationId, queued.text, queued.attachments);
+};
+
+/**
+ * Stops the running turn. `keepQueued` is what separates 「立即发送」 (interrupt, then let the idle
+ * snapshot dispatch the parked text) from a plain stop (interrupt and leave the text parked for the
+ * user to release manually).
+ */
+const interruptNativeTurn = (options: { keepQueued?: boolean } = {}): void => {
+  const conversationId = activeNativeConversationId;
+  if (!conversationId) return;
+  const snapshot = nativeConversationSnapshots.get(conversationId);
+  if (!snapshot || (snapshot.phase !== 'running' && snapshot.phase !== 'stopping')) return;
+  if (!options.keepQueued) nativeQueuedAutoFlush.delete(conversationId);
+  nativeSendButton.dataset.stopping = 'true';
+  nativeSendButton.disabled = true;
+  void window.controlPanel
+    .interruptNativeConversation(conversationId)
+    .then((result) => {
+      if (!result.ok) showToast(result.message ?? '无法中断当前轮次。', 'error');
+    })
+    .catch(() => showToast('无法中断当前轮次。', 'error'))
+    .finally(() => {
+      nativeSendButton.disabled = false;
+      renderNativeQueuedMessage();
+      applyNativeComposerAction();
+    });
 };
 
 const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
@@ -3834,7 +4362,6 @@ const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
     return;
   }
   nativeConversationSnapshots.set(snapshot.conversationId, snapshot);
-  nativeConversationByProject.set(snapshot.projectPath.toLowerCase(), snapshot.conversationId);
   if (snapshot.conversationId !== activeNativeConversationId) return;
   const nearBottom =
     nativeConversationMessages.scrollHeight -
@@ -3862,28 +4389,98 @@ const renderNativeConversation = (snapshot: ConversationSnapshot): void => {
   }
   for (const stale of existing.values()) stale.remove();
   nativeConversationEmpty.hidden = snapshot.messages.length > 0;
-  nativeConversationMessages.replaceChildren(nativeConversationEmpty, ...ordered);
+  // Reconcile in place rather than `replaceChildren(...)`. Passing the same nodes back still
+  // detaches and reinserts all of them, which invalidates layout for the whole transcript on every
+  // streamed frame. In the overwhelmingly common append-only case this touches nothing but the
+  // one new node.
+  if (nativeConversationMessages.firstChild !== nativeConversationEmpty) {
+    nativeConversationMessages.prepend(nativeConversationEmpty);
+  }
+  let cursor: ChildNode | null = nativeConversationEmpty.nextSibling;
+  for (const node of ordered) {
+    if (cursor === node) {
+      cursor = node.nextSibling;
+      continue;
+    }
+    nativeConversationMessages.insertBefore(node, cursor);
+  }
   const [activeInteraction] = snapshot.interactions;
   nativeInteractionStack.dataset.pendingCount = String(snapshot.interactions.length);
   nativeInteractionStack.replaceChildren(
     ...(activeInteraction ? [renderNativeInteraction(activeInteraction)] : []),
   );
-  nativeComposerStatus.textContent = nativePhaseLabel(snapshot.phase);
   const capability = snapshot.capabilities;
-  renderNativeControls(snapshot);
-  const running = snapshot.phase === 'running' || snapshot.phase === 'stopping';
+  renderNativeFooter(snapshot);
+  renderNativeQueuedMessage();
+  applyNativeComposerAction();
   const submitting = nativeConversationSubmissions.has(snapshot.conversationId);
-  nativeStopButton.hidden = !running;
-  nativeSendButton.disabled =
+  const baseDisabled =
     nativeConversationStartingSessionId === workspaceState.activeSessionId ||
     submitting ||
     snapshot.phase === 'starting' ||
-    snapshot.phase === 'stopping' ||
     snapshot.phase === 'stopped' ||
     snapshot.phase === 'failed';
+  // 'running' stays enabled on purpose: the same button now carries both legitimate intents —
+  // interrupt when the composer is empty, queue when it is not.
+  nativeSendButton.disabled =
+    baseDisabled || (nativeSendButton.dataset.action === 'stop' && snapshot.phase === 'stopping');
   nativeComposerInput.disabled = snapshot.phase === 'stopped' || snapshot.phase === 'failed';
   nativeAttachButton.disabled = submitting || !capability?.attachments.image;
+  // Only 'idle' may release the queue. 'requires-action' has a permission prompt open and sending
+  // would jump the queue; 'failed'/'stopped' would resend into a dead session forever.
+  if (
+    snapshot.phase === 'idle' &&
+    nativeQueuedAutoFlush.has(snapshot.conversationId) &&
+    !nativeQueuedDispatch &&
+    !submitting
+  ) {
+    void flushNativeQueuedMessage(snapshot.conversationId);
+  }
   renderRuntimeActivity();
+  const status = activeStatus();
+  const nativeProjectState = status ? claudeStates.get(status.id) : undefined;
+  const managedWindow = managedContextWindowSelectable(
+    nativeProjectState,
+    snapshot.capabilities?.model,
+  );
+  const configuredNativeContextWindowTokens = managedWindow
+    ? managedChatGptContextWindowMode === 'extended'
+      ? 1_050_000
+      : 272_000
+    : requestedClaudeContextWindowTokens();
+  // Prefer a real SDK value when one is eventually exposed. Until then the configured target is
+  // useful for estimating usage, but it is labelled as unverified rather than as status-line data.
+  const reportedNativeContextWindowTokens = snapshot.usage.contextWindowTokens;
+  const nativeContextWindowTokens =
+    reportedNativeContextWindowTokens ?? configuredNativeContextWindowTokens;
+  const nativeInputTokens = snapshot.usage.inputTokens;
+  const nativeContextUsedPercent =
+    nativeContextWindowTokens !== undefined && nativeInputTokens !== undefined
+      ? Math.min(100, Math.max(0, (nativeInputTokens / nativeContextWindowTokens) * 100))
+      : undefined;
+  renderFooterResource(
+    {
+      availability: nativeContextWindowTokens === undefined ? 'unavailable' : 'available',
+      capabilities: {
+        balance: false,
+        context: nativeContextWindowTokens !== undefined,
+        windows: false,
+      },
+      checkedAt: Date.now(),
+      contextUsedPercent: nativeContextUsedPercent,
+      contextUsedTokens: nativeInputTokens,
+      contextWindowTokens: nativeContextWindowTokens,
+      detail:
+        reportedNativeContextWindowTokens === undefined
+          ? 'Agent SDK 未上报窗口容量；这里仅显示配置目标，不能证明端点实际上限。'
+          : undefined,
+      source:
+        reportedNativeContextWindowTokens === undefined
+          ? 'claude-configured-target'
+          : 'claude-agent-sdk',
+    },
+    managedWindow,
+  );
   if (nearBottom) nativeConversationMessages.scrollTop = nativeConversationMessages.scrollHeight;
 };
 
@@ -4066,6 +4663,7 @@ const launchNativeClaude = async (
       conversationId,
       projectPath: status.cwd,
       resume: Boolean(conversationId),
+      sessionId: status.id,
     });
     if (!result.ok) {
       launchFailureMessage = result.message ?? '无法启动 Claude 原生对话。';
@@ -4081,6 +4679,7 @@ const launchNativeClaude = async (
       return;
     }
     if (result.snapshot) renderNativeConversation(result.snapshot);
+    nativeConversationBySession.set(status.id, result.conversationId);
     activateNativeConversation(result.conversationId);
     showToast(result.reused ? '已切换到正在运行的对话。' : 'Claude 原生对话已就绪。');
   } catch (error) {
@@ -4121,13 +4720,21 @@ const launchNativeClaude = async (
   }
 };
 
+let lastNativeComposerHeight = -1;
+
+/**
+ * Two forced synchronous layouts, so it must never run on the streaming render path: writing
+ * `--native-composer-h` on `:root` invalidates the whole document, and the following
+ * `getBoundingClientRect()` then re-lays out every message in the transcript. Caching the last
+ * published height keeps the custom-property write out of the frame whenever nothing moved.
+ */
 const resizeNativeComposer = (): void => {
   nativeComposerInput.style.height = 'auto';
   nativeComposerInput.style.height = `${Math.min(nativeComposerInput.scrollHeight, 168)}px`;
-  document.documentElement.style.setProperty(
-    '--native-composer-h',
-    `${Math.ceil(nativeComposer.getBoundingClientRect().height)}px`,
-  );
+  const height = Math.ceil(nativeComposer.getBoundingClientRect().height);
+  if (height === lastNativeComposerHeight) return;
+  lastNativeComposerHeight = height;
+  document.documentElement.style.setProperty('--native-composer-h', `${height}px`);
 };
 
 const renderPendingNativeAttachments = (): void => {
@@ -4966,14 +5573,14 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
   modelLabel.textContent = '当前模型';
   const modelSelect = document.createElement('select');
   const modelHelpText = document.createElement('small');
-  modelHelpText.textContent = '列表来自本机网关实时接口；切换后会自动复测并保存，无需再点接入。';
+  modelHelpText.textContent = '列表来自本机网关实时接口；打开项目后可复测并保存到当前项目。';
   modelField.append(modelLabel, modelSelect, modelHelpText);
   enhanceSelect(modelSelect);
   const secondaryActions = document.createElement('div');
   secondaryActions.className = 'subscription-gateway-actions';
   const boundary = document.createElement('small');
   boundary.textContent =
-    '一次点击会自动检测 Claude Code、补齐缺失组件、打开 OpenAI 官方授权、读取模型列表、真实测试并保存。此方式不需要 CCR；不会读取 OAuth Token 内容，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
+    '一次点击会自动检测 Claude Code、补齐缺失组件、打开 OpenAI 官方授权并读取模型列表；已打开项目时还会真实测试并保存到当前项目。此方式不需要 CCR；不会读取 OAuth Token 内容，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
 
   const renderModels = (models: readonly string[], preferredModel?: string): void => {
     const currentModel = claudeStates.get(workspaceState.activeSessionId)?.config.model;
@@ -4999,40 +5606,61 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
   };
 
   renderManagedChatGptProgress = (progress): void => {
-    if (progress.sessionId !== workspaceState.activeSessionId) {
+    const matchesCurrentScope =
+      progress.sessionId === (workspaceState.activeSessionId || undefined);
+    action.disabled = managedChatGptOperations.busy;
+    action.setAttribute('aria-busy', String(managedChatGptOperations.busy));
+    modelSelect.disabled = managedChatGptOperations.busy || !workspaceState.activeSessionId;
+    if (!matchesCurrentScope) {
+      if (!progress.active) {
+        void window.controlPanel
+          .getManagedChatGptGatewayState()
+          .then((state) => {
+            if (guide.isConnected) renderState(state);
+          })
+          .catch(() => undefined);
+      }
       return;
     }
-    managedChatGptSetupInProgress = progress.active;
     progressCard.hidden = false;
     progressTitle.textContent = `第 ${progress.step}/${progress.totalSteps} 步`;
     progressDetail.textContent = progress.detail;
     progressMeter.max = progress.totalSteps;
     progressMeter.value = progress.step;
-    action.disabled = progress.active;
-    action.setAttribute('aria-busy', String(progress.active));
-    modelSelect.disabled = progress.active;
     if (progress.active) {
       action.textContent = '正在自动接入…';
+    } else {
+      void window.controlPanel
+        .getManagedChatGptGatewayState()
+        .then((state) => {
+          if (guide.isConnected) renderState(state);
+        })
+        .catch(() => undefined);
     }
   };
 
   const renderState = (state: ManagedChatGptGatewayState, preferredModel?: string): void => {
-    const operationBusy = state.busy || managedChatGptSetupInProgress;
+    const hasProject = Boolean(workspaceState.activeSessionId);
+    const operationBusy = state.busy || managedChatGptOperations.busy;
     statusCard.dataset.phase = state.phase;
     statusTitle.textContent = operationBusy
       ? '正在自动检测并接入'
       : state.phase === 'ready'
-        ? 'ChatGPT 一键接入已就绪'
+        ? hasProject
+          ? 'ChatGPT 一键接入已就绪'
+          : '安装与 OpenAI 授权已就绪'
         : state.phase === 'stopped'
           ? '授权已完成，等待启用'
           : state.phase === 'login-required'
             ? '安装完成，等待 OpenAI 授权'
             : '尚未安装托管网关';
-    statusDetail.textContent = state.message;
+    statusDetail.textContent = hasProject
+      ? state.message
+      : `${state.message} 安装与授权不需要先打开项目；项目打开后再执行模型验证和保存。`;
     renderModels(state.availableModels, preferredModel);
     action.disabled = operationBusy;
     action.setAttribute('aria-busy', String(operationBusy));
-    modelSelect.disabled = operationBusy;
+    modelSelect.disabled = operationBusy || !hasProject;
     action.textContent = operationBusy
       ? '安装进行中…'
       : state.phase === 'not-installed'
@@ -5040,8 +5668,12 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
         : state.phase === 'login-required'
           ? '登录 OpenAI 并自动配置'
           : state.phase === 'stopped'
-            ? '启动并用于当前项目'
-            : '检查并自动修复';
+            ? hasProject
+              ? '启动并用于当前项目'
+              : '检查安装与登录状态'
+            : hasProject
+              ? '验证并用于当前项目'
+              : '检查安装与登录状态';
     secondaryActions.replaceChildren();
     if (state.authenticated && !operationBusy) {
       const relogin = document.createElement('button');
@@ -5056,29 +5688,32 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
   };
 
   const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
-    if (managedChatGptSetupInProgress) {
-      showToast('托管网关正在安装或配置，请等待当前操作完成。');
-      return;
-    }
-    const sessionId = workspaceState.activeSessionId;
-    if (!sessionId) {
-      showToast('请先选择一个项目。', 'error');
-      return;
-    }
-    managedChatGptSetupInProgress = true;
-    button.disabled = true;
-    modelSelect.disabled = true;
+    const sessionId = workspaceState.activeSessionId || undefined;
     const original = button.textContent;
     let restoreOriginalLabel = true;
     let resultStateRendered = false;
-    statusCard.dataset.phase = 'installing';
-    statusTitle.textContent = '正在安装并配置托管网关';
-    button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
-    statusDetail.textContent =
-      '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
+    let operationStarted = false;
     try {
-      const result = await window.controlPanel.setupManagedChatGptGateway(sessionId, forceLogin);
-      managedChatGptSetupInProgress = false;
+      const execution = await runManagedChatGptOperation(
+        managedChatGptOperations,
+        sessionId,
+        async (operationSessionId) => {
+          operationStarted = true;
+          button.disabled = true;
+          modelSelect.disabled = true;
+          statusCard.dataset.phase = 'installing';
+          statusTitle.textContent = '正在安装并配置托管网关';
+          button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
+          statusDetail.textContent =
+            '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
+          return window.controlPanel.setupManagedChatGptGateway(operationSessionId, forceLogin);
+        },
+      );
+      if (!execution.started) {
+        showToast('托管网关正在安装或配置，请等待当前操作完成。');
+        return;
+      }
+      const result = execution.result;
       renderState(result.state, result.projectState?.config.model);
       resultStateRendered = true;
       if (!result.ok) {
@@ -5109,17 +5744,18 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
       }
       showToast('无法完成 ChatGPT 托管网关配置。', 'error');
     } finally {
-      managedChatGptSetupInProgress = false;
-      if (button.isConnected) {
-        button.disabled = false;
-        if (restoreOriginalLabel && !resultStateRendered) {
-          button.textContent = original;
+      if (operationStarted) {
+        if (button.isConnected) {
+          button.disabled = managedChatGptOperations.busy;
+          if (restoreOriginalLabel && !resultStateRendered) {
+            button.textContent = original;
+          }
+        } else if (selectedProviderId === 'chatgpt-subscription') {
+          applyPresetUi('chatgpt-subscription', true);
         }
-      } else if (selectedProviderId === 'chatgpt-subscription') {
-        applyPresetUi('chatgpt-subscription', true);
-      }
-      if (guide.isConnected) {
-        modelSelect.disabled = false;
+        if (guide.isConnected) {
+          modelSelect.disabled = managedChatGptOperations.busy || !workspaceState.activeSessionId;
+        }
       }
     }
   };
@@ -5131,14 +5767,14 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
     const sessionId = workspaceState.activeSessionId;
     const previousModel = claudeStates.get(sessionId)?.config.model;
     const requestedModel = modelSelect.value;
-    if (!sessionId || !requestedModel || managedChatGptSetupInProgress) {
+    if (!sessionId || !requestedModel || !managedChatGptOperations.begin(sessionId)) {
       return;
     }
-    managedChatGptSetupInProgress = true;
     modelSelect.disabled = true;
     void window.controlPanel
       .setManagedChatGptGatewayModel(sessionId, requestedModel)
       .then((result) => {
+        managedChatGptOperations.finish(sessionId);
         renderState(result.state, result.projectState?.config.model);
         if (!result.ok) {
           if (previousModel && result.state.availableModels.includes(previousModel)) {
@@ -5167,8 +5803,8 @@ const buildChatGptSubscriptionGuide = (): HTMLElement => {
         showToast('无法验证并切换所选模型。', 'error');
       })
       .finally(() => {
-        managedChatGptSetupInProgress = false;
-        modelSelect.disabled = false;
+        managedChatGptOperations.finish(sessionId);
+        modelSelect.disabled = managedChatGptOperations.busy || !workspaceState.activeSessionId;
       });
   });
   void window.controlPanel
@@ -5653,6 +6289,8 @@ const modelSpeedFooterLabel = (state: ClaudeProjectState): string => {
 };
 
 const hideFooterMenus = (): void => {
+  claudeContextWindowCustomDraftOpen = false;
+  claudeContextWindowCustomField.hidden = claudeContextWindowMode !== 'custom';
   for (const [menu, trigger] of [
     [footerResourceMenu, footerResource],
     [footerModelMenu, footerModel],
@@ -5666,7 +6304,7 @@ const hideFooterMenus = (): void => {
 };
 
 const setFooterSecondaryOpen = (open: boolean): void => {
-  const compact = window.matchMedia('(max-width: 1040px)').matches;
+  const compact = window.matchMedia('(max-width: 1024px)').matches;
   const next = open && compact;
   footerSecondaryStatus.dataset.open = String(next);
   footerMore.setAttribute('aria-expanded', String(next));
@@ -5681,9 +6319,8 @@ const openFooterMenu = (menu: HTMLElement, trigger: HTMLButtonElement): void => 
   menu.hidden = false;
   trigger.setAttribute('aria-expanded', 'true');
   const triggerRect = trigger.getBoundingClientRect();
-  const menuRect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(8, Math.min(triggerRect.left, window.innerWidth - menuRect.width - 8))}px`;
-  menu.style.top = `${Math.max(8, triggerRect.top - menuRect.height - 8)}px`;
+  menu.style.left = `${Math.max(8, Math.min(triggerRect.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, triggerRect.top - menu.offsetHeight - 8)}px`;
   menu.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
 };
 
@@ -5693,6 +6330,7 @@ const buildFooterMenuItem = (
   selected: boolean,
   onChoose: () => void,
   disabled = false,
+  triggerButton?: HTMLButtonElement,
 ): HTMLButtonElement => {
   const item = document.createElement('button');
   item.type = 'button';
@@ -5707,6 +6345,8 @@ const buildFooterMenuItem = (
   item.addEventListener('click', () => {
     hideFooterMenus();
     onChoose();
+    // Restore focus to trigger button after menu closes and choice completes
+    triggerButton?.focus();
   });
   return item;
 };
@@ -5717,8 +6357,9 @@ const buildFooterRadioMenuItem = (
   selected: boolean,
   onChoose: () => void,
   disabled = false,
+  triggerButton?: HTMLButtonElement,
 ): HTMLButtonElement => {
-  const item = buildFooterMenuItem(label, detail, selected, onChoose, disabled);
+  const item = buildFooterMenuItem(label, detail, selected, onChoose, disabled, triggerButton);
   item.role = 'menuitemradio';
   item.setAttribute('aria-checked', String(selected));
   return item;
@@ -5746,6 +6387,8 @@ const resourceSourceLabel = (
   source: NonNullable<ClaudeProjectState['resourceUsage']>['source'],
 ): string =>
   ({
+    'claude-agent-sdk': 'Claude Agent SDK',
+    'claude-configured-target': 'ClaudeDock 配置目标（未验证）',
     'claude-statusline': 'Claude Code 状态行',
     'codex-app-server': 'Codex 官方 App Server',
     'deepseek-balance': 'DeepSeek 官方余额接口',
@@ -5753,12 +6396,16 @@ const resourceSourceLabel = (
     'openrouter-key': 'OpenRouter 官方密钥接口',
   })[source];
 
-const managedContextWindowSelectable = (state: ClaudeProjectState | undefined): boolean =>
-  Boolean(
+const managedContextWindowSelectable = (
+  state: ClaudeProjectState | undefined,
+  selectedModel = state?.metrics?.modelId ?? state?.config.model,
+): boolean => {
+  const model = selectedModel ? stripClaudeContextWindowSuffix(selectedModel).toLowerCase() : '';
+  return Boolean(
     state?.config.preset === 'chatgpt-subscription' &&
-    (state.config.model.toLowerCase() === 'gpt-5.6-sol' ||
-      state.config.model.toLowerCase() === 'gpt-5.6'),
+    (model === 'gpt-5.6-sol' || model === 'gpt-5.6'),
   );
+};
 
 const syncManagedChatGptContextWindowSelection = (): void => {
   for (const button of footerContextWindowOptions.querySelectorAll<HTMLButtonElement>(
@@ -5771,6 +6418,63 @@ const syncManagedChatGptContextWindowSelection = (): void => {
   }
 };
 
+const syncClaudeContextWindowSelection = (): void => {
+  for (const button of claudeContextWindowOptions.querySelectorAll<HTMLButtonElement>(
+    '[data-claude-context-window-mode]',
+  )) {
+    button.setAttribute(
+      'aria-checked',
+      String(button.dataset.claudeContextWindowMode === claudeContextWindowMode),
+    );
+  }
+  claudeContextWindowCustomField.hidden =
+    claudeContextWindowMode !== 'custom' && !claudeContextWindowCustomDraftOpen;
+  if (claudeContextWindowCustomTokens !== undefined) {
+    claudeContextWindowCustomInput.value = String(claudeContextWindowCustomTokens);
+  }
+};
+
+const requestedClaudeContextWindowTokens = (): number | undefined =>
+  claudeContextWindowMode === 'extended'
+    ? 1_000_000
+    : claudeContextWindowMode === 'standard'
+      ? 200_000
+      : claudeContextWindowMode === 'custom'
+        ? claudeContextWindowCustomTokens
+        : undefined;
+
+const renderClaudeContextWindowStatus = (
+  usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
+): void => {
+  const requested = requestedClaudeContextWindowTokens();
+  const source = usage?.source;
+  const hasRuntimeReport = source === 'claude-statusline' || source === 'claude-agent-sdk';
+  const lastReported = hasRuntimeReport ? usage?.contextWindowTokens : undefined;
+  if (lastReported !== undefined && usage?.availability === 'stale') {
+    claudeContextWindowStatus.textContent =
+      requested === undefined
+        ? `自动模式；上次上报 ${formatTokenCount(lastReported)}，数据已过期，等待当前会话确认。`
+        : `已请求 ${formatTokenCount(requested)}；上次上报 ${formatTokenCount(lastReported)}，数据已过期，尚未确认当前会话。`;
+    return;
+  }
+  const reported = usage?.availability === 'available' ? lastReported : undefined;
+  if (reported !== undefined) {
+    const reportedText = formatTokenCount(reported);
+    if (requested === undefined) {
+      claudeContextWindowStatus.textContent = `自动模式；当前会话由 Claude Code 上报 ${reportedText}。`;
+    } else if (requested === reported) {
+      claudeContextWindowStatus.textContent = `已请求 ${formatTokenCount(requested)}；Claude Code 当前会话已采用。`;
+    } else {
+      claudeContextWindowStatus.textContent = `已请求 ${formatTokenCount(requested)}，当前会话上报 ${reportedText}；请重启会话，若仍不一致则当前模型未采用该档位。`;
+    }
+    return;
+  }
+  claudeContextWindowStatus.textContent =
+    requested === undefined
+      ? '自动模式；新会话将由 Claude Code 按模型判定。'
+      : `已请求 ${formatTokenCount(requested)}；等待新会话由 Claude Code 上报实际采用值。`;
+};
+
 const renderFooterResource = (
   usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
   contextWindowSelectable = false,
@@ -5779,49 +6483,61 @@ const renderFooterResource = (
   const context = usage?.contextUsedPercent;
   const window = usage?.windows?.[0];
   const balance = usage?.balance?.balances?.[0];
+  // Clamp all percentages to 0-100 range for display
+  const clampedContext = clampPercentage(context);
+  const clampedWindowPercent = clampPercentage(window?.usedPercent);
   const quotaText =
-    window?.usedPercent === undefined ? undefined : `额度 ${window.usedPercent.toFixed(0)}%`;
-  const contextText = context === undefined ? undefined : `上下文 ${context.toFixed(0)}%`;
+    clampedWindowPercent === undefined ? undefined : `额度 ${clampedWindowPercent.toFixed(0)}%`;
+  const contextText =
+    clampedContext === undefined ? undefined : `上下文 ${clampedContext.toFixed(0)}%`;
+  const anomaly = usage?.contextCountingAnomaly;
   const balanceText = balance
     ? `余额 ${formatResourceAmount(balance.amount, balance.currency)}`
     : undefined;
   const selected =
     usage?.availability === 'stale'
-      ? { percent: window?.usedPercent ?? context, text: '资源 已过期' }
+      ? { percent: clampedWindowPercent ?? clampedContext, text: '资源 已过期' }
       : usage?.availability === 'unavailable'
         ? { percent: undefined, text: '资源 不可用' }
         : preference === 'context'
           ? {
-              percent: context ?? window?.usedPercent,
+              percent: clampedContext ?? clampedWindowPercent,
               text: contextText ?? quotaText ?? balanceText ?? '资源 —',
             }
           : {
-              percent: window?.usedPercent ?? context,
+              percent: clampedWindowPercent ?? clampedContext,
               text: quotaText ?? balanceText ?? contextText ?? '资源 —',
             };
   footerContextLabel.textContent = selected.text;
   footerContextRing.hidden = selected.percent === undefined;
-  footerContextRing.style.setProperty('--context-progress', `${selected.percent ?? 0}%`);
-  footerContextRing.dataset.level =
-    selected.percent !== undefined && selected.percent >= 85
+  const clampedPercent = clampPercentage(selected.percent) ?? 0;
+  footerContextRing.style.setProperty('--context-progress', `${clampedPercent}%`);
+  footerContextRing.dataset.level = anomaly
+    ? 'danger'
+    : selected.percent !== undefined && selected.percent >= 85
       ? 'danger'
       : selected.percent !== undefined && selected.percent >= 65
         ? 'warning'
         : 'normal';
   footerResource.dataset.availability = usage?.availability ?? 'unavailable';
-  footerResource.title = '点击查看上下文、订阅窗口、余额和显示偏好';
+  footerResource.title = anomaly
+    ? '状态行的输入计数与窗口用量不一致，不能据此判断端点容量'
+    : '点击查看上下文、订阅窗口、余额和显示偏好';
   footerResourceDetails.replaceChildren();
   const lines = [
+    anomaly
+      ? `⚠ 计数异常：CLI 原始输入计数为 ${formatTokenCount(anomaly.reportedTokens)}，窗口用量按 ${formatTokenCount(anomaly.windowTokens)} 钳制；这只说明计数或配置不一致。`
+      : undefined,
     usage?.contextUsedTokens === undefined || usage.contextWindowTokens === undefined
       ? contextText
-      : `上下文：${formatTokenCount(usage.contextUsedTokens)} / ${formatTokenCount(usage.contextWindowTokens)}（${context?.toFixed(1) ?? '—'}%）`,
+      : `上下文：${formatTokenCount(usage.contextUsedTokens)} / ${formatTokenCount(usage.contextWindowTokens)}（${clampedContext?.toFixed(1) ?? '—'}%）`,
     usage?.autoCompactAtTokens === undefined
       ? undefined
       : `自动压缩线：约 ${formatTokenCount(usage.autoCompactAtTokens)}`,
-    ...(usage?.windows ?? []).map(
-      (item) =>
-        `${item.label}：${item.usedPercent === undefined ? '缺失' : `已用 ${item.usedPercent.toFixed(0)}%`} · ${formatResetTime(item.resetsAt)}`,
-    ),
+    ...(usage?.windows ?? []).map((item) => {
+      const clampedItemPercent = clampPercentage(item.usedPercent);
+      return `${item.label}：${clampedItemPercent === undefined ? '缺失' : `已用 ${clampedItemPercent.toFixed(0)}%`} · ${formatResetTime(item.resetsAt)}`;
+    }),
     ...(usage?.balance?.balances ?? []).map(
       (item) => `余额：${formatResourceAmount(item.amount, item.currency)}`,
     ),
@@ -5841,6 +6557,14 @@ const renderFooterResource = (
   }
   footerContextWindowOptions.hidden = !contextWindowSelectable;
   syncManagedChatGptContextWindowSelection();
+  const claudeContextSource =
+    usage?.source === 'claude-statusline' ||
+    usage?.source === 'claude-agent-sdk' ||
+    usage?.source === 'claude-configured-target';
+  // Managed ChatGPT owns its separate 272K / 1.05M profile; never show or apply both selectors.
+  claudeContextWindowOptions.hidden = contextWindowSelectable || !claudeContextSource;
+  syncClaudeContextWindowSelection();
+  renderClaudeContextWindowStatus(usage);
 };
 
 const loadAdvancedRouterBackends = async (): Promise<void> => {
@@ -6413,6 +7137,76 @@ const renderClaudeLaunchResult = (
   return true;
 };
 
+/**
+ * Writes the four footer chips from PowerShell status-line truth. Extracted so the native path can
+ * replace all four at once: leaving any of them on this renderer would make them flicker between
+ * the Agent SDK's capabilities and the background terminal's status line on every PTY tick.
+ */
+const renderTerminalFooterChips = (state: ClaudeProjectState): void => {
+  const metrics = state.metrics;
+  footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
+  footerModel.disabled = modelSwitchInProgress;
+  footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
+  footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
+  const speedOperationActive = claudeSpeedOperations.isActive(state.sessionId);
+  footerSpeed.textContent = modelSpeedFooterLabel(state);
+  footerSpeed.dataset.availability = state.speed.availability;
+  footerSpeed.dataset.mechanism = state.speed.mechanism;
+  footerSpeed.dataset.status = state.speed.status;
+  delete footerSpeed.dataset.state;
+  footerSpeed.disabled =
+    speedOperationActive || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
+  footerSpeed.setAttribute('aria-busy', String(speedOperationActive));
+  footerSpeed.title = state.speed.detail;
+  const requestedPermissionMode = state.permissionModeRequest ?? state.permissionMode;
+  footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
+  footerMode.dataset.mode = state.permissionMode ?? 'unknown';
+  footerMode.dataset.requestedMode = requestedPermissionMode ?? 'unknown';
+  footerMode.disabled = modeSwitchInProgress;
+  footerMode.title = state.active
+    ? requestedPermissionMode !== state.permissionMode
+      ? `请求：${permissionModeLabel(requestedPermissionMode)} · 实际：${permissionModeLabel(state.permissionMode)}；点击切换权限模式`
+      : '点击切换权限模式，或在终端按 Shift+Tab'
+    : '启动 Claude Code 后可切换权限模式';
+  // The status line reports what Claude Code applied, which can sit below a request the model caps.
+  const effortApplied = state.metrics?.effortLevel;
+  const effortShown =
+    state.effortRequest === 'ultracode'
+      ? 'ultracode'
+      : state.effortCompatibility?.recovery === 'recovered'
+        ? (state.effortRequest ?? effortApplied)
+        : (effortApplied ?? state.effortRequest);
+  footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
+  footerEffort.dataset.effort = effortShown ?? 'unknown';
+  footerEffort.dataset.requestedEffort = state.effortRequest ?? 'unknown';
+  footerEffort.dataset.appliedEffort = effortApplied ?? 'unknown';
+  footerEffort.disabled =
+    effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending';
+  footerEffort.setAttribute(
+    'aria-busy',
+    String(effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending'),
+  );
+  footerEffort.title = !state.active
+    ? '启动 Claude Code 后可调整思考程度'
+    : state.effortCompatibility
+      ? state.effortCompatibility.recovery === 'failed'
+        ? '自动回退失败；请打开菜单手动选择“均衡”或更低档位'
+        : '搜索兼容重试期间暂用“均衡”；成功后会自动恢复原思考档位'
+      : state.effortRequest === 'ultracode'
+        ? `Ultra Code 已请求：工作流编排 · 实际思考档 ${effortApplied?.toUpperCase() ?? '等待上报'}`
+        : effortApplied === undefined
+          ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
+          : '点击调整思考程度，或在终端运行 /effort';
+  footerEffort.removeAttribute('aria-description');
+  if (
+    state.effortCompatibility?.recovery === 'recovered' &&
+    effortRecoveryNotifications.get(state.sessionId) !== state.effortCompatibility.detectedAt
+  ) {
+    effortRecoveryNotifications.set(state.sessionId, state.effortCompatibility.detectedAt);
+    showToast('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
+  }
+};
+
 const renderClaudeState = (
   state: ClaudeProjectState,
   observeLaunch = true,
@@ -6535,84 +7329,46 @@ const renderClaudeState = (
   claudeLiveIndicator.textContent = state.active ? '实时同步' : '未运行';
   const used = metrics?.contextWindowUsed;
   const size = metrics?.contextWindowSize;
-  const percentage =
-    used !== undefined && size ? Math.min(100, Math.max(0, (used / size) * 100)) : undefined;
+  /*
+   * `resourceUsage` already resolved the clamp: when the declared window is smaller than what the
+   * endpoint serves it reports the real ratio from the unclamped input total. Reuse it so this
+   * readout and the footer never disagree, and so a stuck 100% here is corrected too.
+   */
+  const anomaly = state.resourceUsage?.contextCountingAnomaly;
+  const percentage = anomaly
+    ? state.resourceUsage?.contextUsedPercent
+    : used !== undefined && size
+      ? Math.min(100, Math.max(0, (used / size) * 100))
+      : undefined;
   contextPercentage.textContent =
-    percentage === undefined ? '等待首个响应' : `${percentage.toFixed(1)}%`;
-  contextProgressBar.style.width = `${percentage ?? 0}%`;
-  contextProgress.setAttribute('aria-valuenow', String(Math.round(percentage ?? 0)));
+    percentage === undefined ? '等待首个响应' : `${Math.min(100, percentage).toFixed(1)}%`;
+  contextProgressBar.style.width = `${Math.min(100, percentage ?? 0)}%`;
+  contextProgress.setAttribute('aria-valuenow', String(Math.round(Math.min(100, percentage ?? 0))));
   contextProgress.dataset.level =
     percentage !== undefined && percentage >= 85
       ? 'danger'
       : percentage !== undefined && percentage >= 65
         ? 'warning'
         : 'normal';
-  contextUsed.textContent = `${formatTokenCount(used)} 已用`;
+  contextUsed.textContent = `${formatTokenCount(anomaly?.reportedTokens ?? used)} 已用`;
   contextSize.textContent = `窗口 ${formatTokenCount(size)}`;
-  footerContextRing.style.setProperty('--context-progress', `${percentage ?? 0}%`);
+  const clampedPercentageForFooter =
+    percentage === undefined ? 0 : Math.min(100, Math.max(0, percentage));
+  footerContextRing.style.setProperty('--context-progress', `${clampedPercentageForFooter}%`);
   footerContextRing.dataset.level = contextProgress.dataset.level;
   footerContextLabel.textContent =
-    percentage === undefined ? '上下文 —' : `上下文 ${percentage.toFixed(0)}%`;
-  renderFooterResource(state.resourceUsage, managedContextWindowSelectable(state));
-  footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
-  footerModel.disabled = modelSwitchInProgress;
-  footerModel.setAttribute('aria-busy', String(modelSwitchInProgress));
-  footerModel.title = state.active ? '点击切换模型' : '启动 Claude Code 后可切换模型';
-  const speedOperationActive = claudeSpeedOperations.isActive(state.sessionId);
-  footerSpeed.textContent = modelSpeedFooterLabel(state);
-  footerSpeed.dataset.availability = state.speed.availability;
-  footerSpeed.dataset.mechanism = state.speed.mechanism;
-  footerSpeed.dataset.status = state.speed.status;
-  footerSpeed.disabled =
-    speedOperationActive || claudeLaunchAttempts.isBusy(state.sessionId) || modelSwitchInProgress;
-  footerSpeed.setAttribute('aria-busy', String(speedOperationActive));
-  footerSpeed.title = state.speed.detail;
-  const requestedPermissionMode = state.permissionModeRequest ?? state.permissionMode;
-  footerMode.textContent = `模式 ${permissionModeLabel(state.permissionMode)}`;
-  footerMode.dataset.mode = state.permissionMode ?? 'unknown';
-  footerMode.dataset.requestedMode = requestedPermissionMode ?? 'unknown';
-  footerMode.disabled = modeSwitchInProgress;
-  footerMode.title = state.active
-    ? requestedPermissionMode !== state.permissionMode
-      ? `请求：${permissionModeLabel(requestedPermissionMode)} · 实际：${permissionModeLabel(state.permissionMode)}；点击切换权限模式`
-      : '点击切换权限模式，或在终端按 Shift+Tab'
-    : '启动 Claude Code 后可切换权限模式';
-  // The status line reports what Claude Code applied, which can sit below a request the model caps.
-  const effortApplied = state.metrics?.effortLevel;
-  const effortShown =
-    state.effortRequest === 'ultracode'
-      ? 'ultracode'
-      : state.effortCompatibility?.recovery === 'recovered'
-        ? (state.effortRequest ?? effortApplied)
-        : (effortApplied ?? state.effortRequest);
-  footerEffort.textContent = `思考 ${claudeEffortLabel(effortShown)}`;
-  footerEffort.dataset.effort = effortShown ?? 'unknown';
-  footerEffort.dataset.requestedEffort = state.effortRequest ?? 'unknown';
-  footerEffort.dataset.appliedEffort = effortApplied ?? 'unknown';
-  footerEffort.disabled =
-    effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending';
-  footerEffort.setAttribute(
-    'aria-busy',
-    String(effortSwitchInProgress || state.effortCompatibility?.recovery === 'pending'),
-  );
-  footerEffort.title = !state.active
-    ? '启动 Claude Code 后可调整思考程度'
-    : state.effortCompatibility
-      ? state.effortCompatibility.recovery === 'failed'
-        ? '自动回退失败；请打开菜单手动选择“均衡”或更低档位'
-        : '搜索兼容重试期间暂用“均衡”；成功后会自动恢复原思考档位'
-      : state.effortRequest === 'ultracode'
-        ? `Ultra Code 已请求：工作流编排 · 实际思考档 ${effortApplied?.toUpperCase() ?? '等待上报'}`
-        : effortApplied === undefined
-          ? '点击调整思考程度；当前模型未上报思考档位，可能不支持该参数'
-          : '点击调整思考程度，或在终端运行 /effort';
-  if (
-    state.effortCompatibility?.recovery === 'recovered' &&
-    effortRecoveryNotifications.get(state.sessionId) !== state.effortCompatibility.detectedAt
-  ) {
-    effortRecoveryNotifications.set(state.sessionId, state.effortCompatibility.detectedAt);
-    showToast('搜索任务已临时切到“均衡”；重试完成后会自动恢复原思考档位。');
+    percentage === undefined ? '上下文 —' : `上下文 ${Math.min(100, percentage).toFixed(0)}%`;
+  // Suppress the terminal-side footer update while a native conversation is displayed: the Agent
+  // SDK snapshot is the only truth there, and the background terminal session would otherwise
+  // overwrite all five readouts on every status-line tick.
+  if (activeNativeConversationId) {
+    const nativeSnapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+    if (nativeSnapshot) renderNativeFooter(nativeSnapshot);
+  } else {
+    renderFooterResource(state.resourceUsage, managedContextWindowSelectable(state));
+    renderTerminalFooterChips(state);
   }
+  maybeOfferClaudeContextDowngrade(state);
   allowBypassPermissions.checked = state.allowBypassPermissions;
   metricInput.textContent = formatTokenCount(metrics?.inputTokens);
   metricOutput.textContent = formatTokenCount(metrics?.outputTokens);
@@ -7410,10 +8166,8 @@ const setRouterOperationStage = (stage: string, detail: string, percent?: number
 
 const unsubscribeManagedChatGptSetupProgress = window.controlPanel.onManagedChatGptSetupProgress(
   (progress) => {
-    if (progress.sessionId === workspaceState.activeSessionId) {
-      managedChatGptSetupInProgress = progress.active;
-      renderManagedChatGptProgress?.(progress);
-    }
+    managedChatGptOperations.update(progress.sessionId, progress.active);
+    renderManagedChatGptProgress?.(progress);
   },
 );
 
@@ -8543,6 +9297,39 @@ const relaunchClaudeSession = async (
   }
 };
 
+/** Only a real upstream context rejection justifies recommending a smaller window. A mismatch
+ * between status-line counters is diagnostic evidence, but cannot establish endpoint capacity. */
+const maybeOfferClaudeContextDowngrade = (state: ClaudeProjectState): void => {
+  if (claudeContextWindowMode !== 'extended' && claudeContextWindowMode !== 'custom') return;
+  const rejectedByEndpoint = state.routeHealth?.headline === '当前对话已超过上下文上限';
+  if (!rejectedByEndpoint) return;
+  const promptKey = [
+    state.sessionId,
+    String(state.ptyGeneration ?? 'unknown'),
+    claudeContextWindowMode,
+    String(claudeContextWindowCustomTokens ?? ''),
+  ].join(':');
+  if (claudeContextDowngradePrompted.has(promptKey)) return;
+  claudeContextDowngradePrompted.add(promptKey);
+  void requestConfirmation({
+    confirmLabel: '切到 20 万并重启',
+    message:
+      '当前端点拒绝了这次请求，通常表示它的实际窗口小于所选档位。\n\n是否切换到 20 万窗口？切换后需要重启会话，对话历史会通过 --continue 恢复。',
+    title: '上下文窗口可能设置过大',
+  }).then((confirmed) => {
+    if (!confirmed) return;
+    void window.controlPanel
+      .setClaudeContextWindowMode('standard')
+      .then(async (settings) => {
+        claudeContextWindowMode = settings.claudeContextWindowMode;
+        claudeContextWindowCustomTokens = settings.claudeContextWindowCustomTokens;
+        syncClaudeContextWindowSelection();
+        await relaunchClaudeSession('上下文窗口已切换到 20 万。', {});
+      })
+      .catch(() => showToast('无法切换 Claude 上下文窗口。', 'error'));
+  });
+};
+
 const switchClaudeModel = async (option: ClaudeModelOption): Promise<void> => {
   const status = activeStatus();
   if (!status || modelSwitchInProgress) {
@@ -8760,6 +9547,10 @@ const switchEffortLevel = async (effort: ClaudeEffortRequest): Promise<void> => 
 };
 
 const openModelMenu = async (trigger = footerModel): Promise<void> => {
+  if (activeNativeConversationId) {
+    openNativeModelMenu();
+    return;
+  }
   const status = activeStatus();
   if (!status) {
     return;
@@ -8788,6 +9579,7 @@ const openModelMenu = async (trigger = footerModel): Promise<void> => {
           void switchClaudeModel(option);
         },
         !running,
+        footerModel,
       ),
     ),
   );
@@ -8801,6 +9593,10 @@ const openModelMenu = async (trigger = footerModel): Promise<void> => {
 };
 
 const openSpeedMenu = (): void => {
+  if (activeNativeConversationId) {
+    openNativeSpeedMenu();
+    return;
+  }
   const status = activeStatus();
   const state = status ? claudeStates.get(status.id) : undefined;
   if (!status || !state || activeDevelopmentRuntime() !== 'claude') {
@@ -8827,6 +9623,7 @@ const openSpeedMenu = (): void => {
         void switchClaudeModelSpeed('standard');
       },
       speedOperationActive || standardAlreadyApplied,
+      footerSpeed,
     ),
     buildFooterRadioMenuItem(
       fastLabel,
@@ -8836,6 +9633,7 @@ const openSpeedMenu = (): void => {
         void switchClaudeModelSpeed('fast');
       },
       speedOperationActive || !state.speed.canSelectFast || fastAlreadyApplied,
+      footerSpeed,
     ),
   );
 
@@ -8853,6 +9651,10 @@ const openSpeedMenu = (): void => {
 };
 
 const openModeMenu = (): void => {
+  if (activeNativeConversationId) {
+    openNativeModeMenu();
+    return;
+  }
   const status = activeStatus();
   if (!status) {
     return;
@@ -8874,6 +9676,7 @@ const openModeMenu = (): void => {
         !running ||
           (entry.id === 'bypassPermissions' && !state?.allowBypassPermissions) ||
           (!entry.needsRelaunch && entry.id === state?.permissionMode),
+        footerMode,
       ),
     ),
   );
@@ -8887,6 +9690,10 @@ const openModeMenu = (): void => {
 };
 
 const openEffortMenu = (): void => {
+  if (activeNativeConversationId) {
+    openNativeEffortMenu();
+    return;
+  }
   const status = activeStatus();
   if (!status) {
     return;
@@ -8915,6 +9722,7 @@ const openEffortMenu = (): void => {
         },
         !running ||
           Boolean(compatibility && !isClaudeEffortSafeAfterThinkingDisabledError(option.id)),
+        footerEffort,
       ),
     ),
   );
@@ -11111,7 +11919,9 @@ const playSendAnimation = (
   }, 700);
 };
 
-const submitComposer = (): void => {
+const composerSubmits = new ComposerSubmitCoordinator();
+
+const submitComposer = async (): Promise<void> => {
   const status = activeStatus();
   const view = status ? terminalViewForStatus(status) : undefined;
   if (!status || status.phase !== 'running' || !view) {
@@ -11129,24 +11939,40 @@ const submitComposer = (): void => {
     return;
   }
 
-  /*
-   * Body and return go as two writes: Claude Code's TUI reads one big chunk as a paste and eats a
-   * trailing return, leaving the prompt sitting unsent in its input box. See `composer-input.ts`.
-   */
-  void writeTerminalSubmission(
-    submission,
-    (data) => {
-      writeToTerminalGeneration(status.id, ptyGeneration, view, data);
-    },
-    // The session can be closed, stopped or replaced during the gap between the two writes.
-    () => writableTerminalGeneration(status.id, ptyGeneration, view),
-  );
-
-  playSendAnimation(text);
-  composerHistory = rememberSubmission(composerHistory, text);
-  persistComposerHistory();
-  composerInput.value = '';
-  resizeComposer();
+  try {
+    await composerSubmits.submit({
+      /*
+       * Body and return go as two writes: Claude Code's TUI reads one big chunk as a paste and eats
+       * a trailing return, leaving the prompt sitting unsent in its input box. See
+       * `composer-input.ts`.
+       */
+      deliver: () =>
+        writeTerminalSubmission(
+          submission,
+          (data) => {
+            writeToTerminalGeneration(status.id, ptyGeneration, view, data);
+          },
+          // The session can be closed, stopped or replaced during the gap between the two writes.
+          () => writableTerminalGeneration(status.id, ptyGeneration, view),
+        ),
+      onCancelled: () => {
+        showToast('终端已重启或关闭，这条内容没有发送，已为你保留。', 'error');
+      },
+      onDelivered: () => {
+        playSendAnimation(text);
+        composerHistory = rememberSubmission(composerHistory, text);
+        persistComposerHistory();
+        // Anything typed during the gap between the two writes is not part of this submission and
+        // must survive; only the exact text that went out may be cleared.
+        if (composerInput.value === text) {
+          composerInput.value = '';
+          resizeComposer();
+        }
+      },
+    });
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '发送失败，请重试。', 'error');
+  }
 };
 
 /** ↑/↓ only browse history when the caret is at the very start / end, so editing still works. */
@@ -11176,7 +12002,7 @@ const walkComposerHistory = (direction: 'back' | 'forward'): boolean => {
 
 composerForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  submitComposer();
+  void submitComposer();
 });
 
 composerInput.addEventListener('keydown', (event) => {
@@ -11187,7 +12013,7 @@ composerInput.addEventListener('keydown', (event) => {
 
   if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey) {
     event.preventDefault();
-    submitComposer();
+    void submitComposer();
     return;
   }
   if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey) {
@@ -11603,7 +12429,9 @@ const workspaceContainsProject = (projectKey: string): boolean =>
 /** Loads a folder's Claude conversation history without requiring a live terminal for it. */
 async function loadFolderHistory(projectPath: string, force = false): Promise<void> {
   const key = projectPath.toLowerCase();
-  if (!force && storedConversations.has(key)) {
+  // A previous failure is remembered rather than cached as an empty history, so re-rendering the
+  // project list must not turn it into an IPC retry storm; only an explicit retry forces a reread.
+  if (!force && (storedConversations.has(key) || folderHistoryLoads.hasFailed(key))) {
     return;
   }
   const token = folderHistoryLoads.request(key, force);
@@ -11617,10 +12445,14 @@ async function loadFolderHistory(projectPath: string, force = false): Promise<vo
       return;
     }
     storedConversations.set(key, conversations);
+    folderHistoryLoads.markLoaded(key);
     renderProjectList();
   } catch {
+    // Caching `[]` here would report a failed read as "this folder has no conversations" and, via
+    // the short-circuit above, make that permanent. Record it as a retryable failure instead.
     if (folderHistoryLoads.isCurrent(token) && workspaceContainsProject(key)) {
-      storedConversations.set(key, []);
+      folderHistoryLoads.markFailed(key);
+      renderProjectList();
     }
   } finally {
     const completion = folderHistoryLoads.finish(token);
@@ -11916,7 +12748,23 @@ const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
   }
 
   const history = storedConversations.get(key);
-  if (history === undefined && !project.missing) {
+  if (history === undefined && !project.missing && folderHistoryLoads.hasFailed(key)) {
+    // A failed read is never rendered as "no history": that is indistinguishable from an empty
+    // folder and would quietly hide the user's real conversations.
+    const failure = document.createElement('span');
+    failure.className = 'project-folder__hint';
+    failure.textContent = '读取历史对话失败。';
+    body.append(failure);
+
+    const retry = document.createElement('button');
+    retry.className = 'project-folder__reopen';
+    retry.type = 'button';
+    retry.textContent = '重试读取历史对话';
+    retry.addEventListener('click', () => {
+      void loadFolderHistory(project.path, true);
+    });
+    body.append(retry);
+  } else if (history === undefined && !project.missing) {
     void loadFolderHistory(project.path);
     const loading = document.createElement('span');
     loading.className = 'project-folder__hint';
@@ -11962,6 +12810,36 @@ function renderProjectList(): void {
     projectList.append(renderProjectFolder(project));
   }
 }
+
+/**
+ * Points the native panel at whatever conversation the freshly rendered tab owns, so switching tabs
+ * switches runtimes in place instead of leaving a panel from another project on screen.
+ *
+ * Only the two settled panel states are reconciled: `setNativeConversationVisible` drives a 260 ms
+ * collapse timer, and reacting during `opening`/`closing` would fight it.
+ */
+const reconcileNativeConversationBinding = (state: WorkspaceState): void => {
+  const live = new Set(state.sessions.map((session) => session.id));
+  for (const sessionId of [...nativeConversationBySession.keys()]) {
+    if (!live.has(sessionId)) nativeConversationBySession.delete(sessionId);
+  }
+  const panelState = nativeConversation.dataset.state;
+  if (panelState !== 'open' && panelState !== 'closed') return;
+  const bound = state.activeSessionId
+    ? nativeConversationBySession.get(state.activeSessionId)
+    : undefined;
+  if (bound) {
+    if (bound !== activeNativeConversationId && nativeConversationSnapshots.has(bound)) {
+      activateNativeConversation(bound);
+    }
+    return;
+  }
+  if (activeNativeConversationId) {
+    activeNativeConversationId = '';
+    renderNativeQueuedMessage();
+  }
+  if (panelState === 'open') setNativeConversationVisible(false);
+};
 
 function renderWorkspace(state: WorkspaceState): void {
   const previousActiveSessionId = workspaceState.activeSessionId;
@@ -12095,6 +12973,7 @@ function renderWorkspace(state: WorkspaceState): void {
   ) {
     retryTerminalFitUntilMeasured();
   }
+  reconcileNativeConversationBinding(state);
   renderRuntimeActivity(runtimeActivityStates.get(state.activeSessionId));
 }
 
@@ -12386,9 +13265,9 @@ const switchDevelopmentRuntime = async (runtime: DevelopmentRuntime): Promise<vo
   runtimePicker.disabled = true;
   try {
     const state = await window.controlPanel.setDevelopmentRuntime(status.id, runtime);
-    const normalizedCwd = state.cwd.toLocaleLowerCase();
+    const normalizedCwd = state.cwd.toLocaleLowerCase('en-US');
     for (const session of workspaceState.sessions) {
-      if (session.cwd.toLocaleLowerCase() === normalizedCwd) {
+      if (session.cwd.toLocaleLowerCase('en-US') === normalizedCwd) {
         runtimeStateLoadGenerations.invalidate(session.id);
         developmentRuntimeStates.set(session.id, {
           ...state,
@@ -12985,8 +13864,7 @@ window.controlPanel.onChatStream(handleChatStream);
 chooseDirectoryButton.addEventListener('click', () => {
   void openDirectoryPicker();
 });
-nativeComposer.addEventListener('submit', async (event) => {
-  event.preventDefault();
+const runNativeComposerSubmit = async (): Promise<void> => {
   const text = nativeComposerInput.value;
   const conversationId = activeNativeConversationId;
   if (
@@ -13012,132 +13890,77 @@ nativeComposer.addEventListener('submit', async (event) => {
       return;
     } finally {
       nativeSendButton.disabled = false;
+      applyNativeComposerAction();
     }
   }
-  nativeSendButton.disabled = true;
-  nativeComposerStatus.textContent = '正在安全保存并提交…';
-  const clientSubmissionId = crypto.randomUUID();
-  const submittedAttachmentIds = new Set(
-    pendingNativeAttachments.map((attachment) => attachment.attachmentId),
-  );
-  const blocks = [
-    ...(text.trim() ? [{ text, type: 'text' as const }] : []),
-    ...pendingNativeAttachments.map((attachment) => ({
-      attachment: {
-        id: attachment.attachmentId,
-        mediaType: attachment.mediaType,
-        name: attachment.fileName,
-        size: attachment.sizeBytes,
-      },
-      type: 'image' as const,
-    })),
-  ];
-  nativeConversationSubmissions.set(conversationId, clientSubmissionId);
-  void window.controlPanel
-    .submitNativeConversation(conversationId, {
-      blocks,
-      clientSubmissionId,
-    })
-    .then((result) => {
-      if (!result.ok) {
-        showToast(result.message ?? '本次输入尚未发送。', 'error');
-        if (activeNativeConversationId === conversationId) nativeComposerInput.focus();
-        return;
-      }
-      if (activeNativeConversationId === conversationId) {
-        // The input remains editable while the main process durably records the submission. Never
-        // erase text the user typed during that acknowledgement window.
-        if (nativeComposerInput.value === text) {
-          nativeComposerInput.value = '';
-          delete nativeComposerInput.dataset.recoveredDraft;
-          resizeNativeComposer();
-        }
-        for (let index = pendingNativeAttachments.length - 1; index >= 0; index -= 1) {
-          if (submittedAttachmentIds.has(pendingNativeAttachments[index]!.attachmentId)) {
-            pendingNativeAttachments.splice(index, 1);
-          }
-        }
-        renderPendingNativeAttachments();
-      }
-      if (result.snapshot) renderNativeConversation(result.snapshot);
-      delete nativeSendButton.dataset.sending;
-      // Restart the theme-owned confirmation motion even when two sends finish in quick succession.
-      void nativeSendButton.offsetWidth;
-      nativeSendButton.dataset.sending = 'true';
-    })
-    .catch((error) => {
-      showToast(error instanceof Error ? error.message : '本次输入尚未发送。', 'error');
-      if (activeNativeConversationId === conversationId) nativeComposerInput.focus();
-    })
-    .finally(() => {
-      if (nativeConversationSubmissions.get(conversationId) === clientSubmissionId) {
-        nativeConversationSubmissions.delete(conversationId);
-      }
-      const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
-      if (snapshot) renderNativeConversation(snapshot);
-      else if (activeNativeConversationId === conversationId) nativeSendButton.disabled = false;
-    });
+  // The composer is cleared up front and the content is owned by either the queued bar or the
+  // in-flight submission from here on, so nothing the user types during the acknowledgement window
+  // can be erased by a late response.
+  const attachments = pendingNativeAttachments.splice(0);
+  nativeComposerInput.value = '';
+  delete nativeComposerInput.dataset.recoveredDraft;
+  renderPendingNativeAttachments();
+  resizeNativeComposer();
+  playNativeSendAnimation();
+  if (
+    nativeSnapshot &&
+    (nativeSnapshot.phase === 'running' || nativeSnapshot.phase === 'stopping')
+  ) {
+    // Typing must never destroy a reply that is still streaming. Park it and let the idle snapshot
+    // release it; Esc remains the explicit way to interrupt.
+    enqueueNativeMessage(conversationId, text, attachments, { autoFlush: true });
+    return;
+  }
+  await deliverNativeMessage(conversationId, text, attachments);
+};
+nativeComposer.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void runNativeComposerSubmit();
+});
+nativeSendButton.addEventListener('click', (event) => {
+  if (nativeSendButton.dataset.action !== 'stop') return;
+  // Stop is not a submission: swallow the event before the form hears it.
+  event.preventDefault();
+  interruptNativeTurn();
 });
 nativeSendButton.addEventListener('animationend', (event) => {
-  if (event.target === nativeSendButton) delete nativeSendButton.dataset.sending;
+  // The stop halo lives on ::after; only the element's own animation ends a send.
+  if (event.pseudoElement) return;
+  if (event.target === nativeSendButton) finishNativeSendAnimation();
+});
+nativeQueuedSend.addEventListener('click', () => {
+  const conversationId = activeNativeConversationId;
+  if (!conversationId) return;
+  const snapshot = nativeConversationSnapshots.get(conversationId);
+  if (snapshot && (snapshot.phase === 'running' || snapshot.phase === 'stopping')) {
+    nativeQueuedAutoFlush.add(conversationId);
+    interruptNativeTurn({ keepQueued: true });
+    return;
+  }
+  void flushNativeQueuedMessage(conversationId);
+});
+nativeQueuedCancel.addEventListener('click', () => {
+  if (!activeNativeConversationId) return;
+  drainNativeQueuedMessageToComposer(activeNativeConversationId);
+  nativeComposerInput.focus();
 });
 nativeComposerInput.addEventListener('input', () => {
   delete nativeComposerInput.dataset.recoveredDraft;
   resizeNativeComposer();
+  applyNativeComposerAction();
 });
 nativeComposerInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+    if (!snapshot || (snapshot.phase !== 'running' && snapshot.phase !== 'stopping')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    interruptNativeTurn();
+    return;
+  }
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
   event.preventDefault();
   nativeComposer.requestSubmit();
-});
-nativeStopButton.addEventListener('click', () => {
-  if (!activeNativeConversationId) return;
-  nativeStopButton.disabled = true;
-  void window.controlPanel
-    .interruptNativeConversation(activeNativeConversationId)
-    .then((result) => {
-      if (!result.ok) showToast(result.message ?? '无法中断当前轮次。', 'error');
-    })
-    .catch(() => showToast('无法中断当前轮次。', 'error'))
-    .finally(() => {
-      nativeStopButton.disabled = false;
-    });
-});
-nativeModelControl.addEventListener('change', () => {
-  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
-  const capability = snapshot?.capabilities;
-  const target = capability?.models?.find((model) => model.id === nativeModelControl.value);
-  if (!capability || !target) return;
-  const currentEffort = capability.effort.requested ?? capability.effort.applied;
-  const nextEffort =
-    currentEffort && target.effortOptions.includes(currentEffort)
-      ? currentEffort
-      : target.effortOptions.includes('high')
-        ? 'high'
-        : target.effortOptions[0];
-  const fastActive = capability.fast.state === 'requested' || capability.fast.state === 'confirmed';
-  if (nextEffort !== currentEffort || (fastActive && !target.supportsFast)) {
-    showToast(
-      `新模型不支持当前全部选项；将改为 ${nativeEffortLabel(nextEffort ?? 'auto')}${fastActive && !target.supportsFast ? '，并关闭 Fast' : ''}。`,
-    );
-  }
-  void updateNativeControls({
-    effort: nextEffort,
-    fast: fastActive && target.supportsFast,
-    model: target.id,
-  });
-});
-nativeEffortControl.addEventListener('change', () => {
-  void updateNativeControls({ effort: nativeEffortControl.value });
-});
-nativeFastControl.addEventListener('click', () => {
-  const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
-  const state = snapshot?.capabilities?.fast.state;
-  if (!state) return;
-  void updateNativeControls({ fast: state !== 'requested' && state !== 'confirmed' });
-});
-nativePermissionControl.addEventListener('change', () => {
-  void updateNativeControls({ permissionMode: nativePermissionControl.value });
 });
 nativePlanClose.addEventListener('click', closeNativePlanDialog);
 nativePlanDialog.addEventListener('cancel', (event) => {
@@ -13158,52 +13981,123 @@ nativePlanApprove.addEventListener('click', () => {
   if (!expandedNativePlan) return;
   void respondToNativeInteraction(expandedNativePlan, { action: 'allow' });
 });
+const confirmNativeInterruptSwitch = async (): Promise<boolean> =>
+  requestConfirmation({
+    confirmLabel: '中断并切换',
+    message:
+      '当前回复或后台任务会被中断，已生成的内容会保留在对话记录中；切换后可以继续同一段对话。',
+    title: '中断正在运行的任务并切换？',
+    tone: 'danger',
+  });
+
+const adoptTerminalConversationIntoNative = async (): Promise<void> => {
+  const status = activeStatus();
+  if (!status) return;
+  const state = claudeStates.get(status.id);
+  // No live Claude Code process means there is nothing to take over; start a native conversation.
+  if (!state?.active) {
+    await launchNativeClaude('new');
+    return;
+  }
+  const locallyBusy = terminalConversationHasRunningWork(runtimeActivityStates.get(status.id));
+  let switchStarted = false;
+  try {
+    const attempt = await runConfirmableConversationSurfaceSwitch(
+      locallyBusy,
+      confirmNativeInterruptSwitch,
+      (allowInterrupt) => {
+        if (!switchStarted) {
+          switchStarted = true;
+          nativeTerminalToggle.disabled = true;
+          nativeTerminalToggle.setAttribute('aria-busy', 'true');
+        }
+        return window.controlPanel.adoptTerminalConversation(status.id, allowInterrupt);
+      },
+    );
+    if (attempt.cancelled) return;
+    const result = attempt.result;
+    if (!result.ok || !result.conversationId) {
+      showToast(result.message ?? '无法接管当前终端对话。', 'error');
+      return;
+    }
+    nativeConversationBySession.set(status.id, result.conversationId);
+    if (result.snapshot) renderNativeConversation(result.snapshot);
+    activateNativeConversation(result.conversationId);
+    await refreshNativeRecoveries();
+    showToast(result.message ?? '已切换到原生对话，继续同一段会话。');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '无法接管当前终端对话。', 'error');
+  } finally {
+    if (switchStarted) {
+      nativeTerminalToggle.disabled = false;
+      nativeTerminalToggle.setAttribute('aria-busy', 'false');
+    }
+  }
+};
+
 nativeTerminalToggle.addEventListener('click', () => {
-  if (nativeConversation.dataset.state !== 'closed') {
+  const panelState = nativeConversation.dataset.state;
+  const nativeConversationIsVisible = panelState === 'opening' || panelState === 'open';
+  if (nativeConversationIsVisible) {
     if (!activeNativeConversationId) {
       setNativeConversationVisible(false);
       return;
     }
     void (async () => {
-      const text = nativeComposerInput.value;
-      const hasDraft = Boolean(text.trim() || pendingNativeAttachments.length > 0);
-      if (hasDraft) {
-        const confirmed = await requestConfirmation({
-          confirmLabel: '保存草稿并切换',
-          message:
-            '当前未发送内容会使用 Windows 安全存储加密保存，并在恢复区标记为未发送；不会自动送给 Claude。',
-          title: '返回安全终端？',
-          tone: 'default',
-        });
-        if (!confirmed) return;
-      }
-      nativeTerminalToggle.disabled = true;
-      nativeComposerStatus.textContent = '正在安全返回终端…';
-      const draft = hasDraft
-        ? {
-            blocks: [
-              ...(text.trim() ? [{ text, type: 'text' as const }] : []),
-              ...pendingNativeAttachments.map((attachment) => ({
-                attachment: {
-                  id: attachment.attachmentId,
-                  mediaType: attachment.mediaType,
-                  name: attachment.fileName,
-                  size: attachment.sizeBytes,
-                },
-                type: 'image' as const,
-              })),
-            ],
-            clientSubmissionId: crypto.randomUUID(),
-          }
-        : undefined;
+      const conversationId = activeNativeConversationId;
+      const snapshot = nativeConversationSnapshots.get(conversationId);
+      const locallyBusy = nativeConversationHasRunningWork(snapshot);
+      let switchStarted = false;
+      let draft: ConversationSubmitInput | undefined;
       try {
-        const result = await window.controlPanel.transferNativeConversationToTerminal(
-          activeNativeConversationId,
-          draft,
+        const attempt = await runConfirmableConversationSurfaceSwitch(
+          locallyBusy,
+          confirmNativeInterruptSwitch,
+          (allowInterrupt) => {
+            if (!switchStarted) {
+              // Queued content is folded back into the composer so the existing encrypted draft
+              // path is the single mechanism that carries unsent text across the switch.
+              drainNativeQueuedMessageToComposer(conversationId);
+              const text = nativeComposerInput.value;
+              const hasDraft = Boolean(text.trim() || pendingNativeAttachments.length > 0);
+              draft = hasDraft
+                ? {
+                    blocks: [
+                      ...(text.trim() ? [{ text, type: 'text' as const }] : []),
+                      ...pendingNativeAttachments.map((attachment) => ({
+                        attachment: {
+                          id: attachment.attachmentId,
+                          mediaType: attachment.mediaType,
+                          name: attachment.fileName,
+                          size: attachment.sizeBytes,
+                        },
+                        type: 'image' as const,
+                      })),
+                    ],
+                    clientSubmissionId: crypto.randomUUID(),
+                  }
+                : undefined;
+              switchStarted = true;
+              nativeTerminalToggle.disabled = true;
+              nativeTerminalToggle.setAttribute('aria-busy', 'true');
+              nativeComposerStatus.textContent = '正在安全返回终端…';
+            }
+            return window.controlPanel.transferNativeConversationToTerminal(
+              conversationId,
+              draft,
+              allowInterrupt,
+            );
+          },
         );
+        if (attempt.cancelled) {
+          const current = nativeConversationSnapshots.get(conversationId);
+          if (switchStarted && current) renderNativeConversation(current);
+          return;
+        }
+        const result = attempt.result;
         if (!result.ok) {
           showToast(result.message ?? '安全终端启动失败，已保留原生对话。', 'error');
-          const current = nativeConversationSnapshots.get(activeNativeConversationId);
+          const current = nativeConversationSnapshots.get(conversationId);
           if (current) renderNativeConversation(current);
           return;
         }
@@ -13212,9 +14106,22 @@ nativeTerminalToggle.addEventListener('click', () => {
         pendingNativeAttachments.splice(0);
         renderPendingNativeAttachments();
         resizeNativeComposer();
+        nativeQueuedMessages.delete(conversationId);
+        nativeQueuedAutoFlush.delete(conversationId);
+        // The tab now belongs to the terminal runtime; dropping the binding is what stops
+        // `reconcileNativeConversationBinding` from re-opening the panel on the next render.
+        for (const [sessionId, boundId] of [...nativeConversationBySession.entries()]) {
+          if (boundId === conversationId) nativeConversationBySession.delete(sessionId);
+        }
         activeNativeConversationId = '';
+        renderNativeQueuedMessage();
         setNativeConversationVisible(false);
-        if (result.terminalSessionId) {
+        // The transfer reuses the tab the conversation was already displayed over, so this only
+        // re-selects when the main process had to fall back to another tab for the project.
+        if (
+          result.terminalSessionId &&
+          result.terminalSessionId !== workspaceState.activeSessionId
+        ) {
           const activated = await window.controlPanel.activateProject(result.terminalSessionId);
           if (activated.ok) renderWorkspace(activated.state);
         }
@@ -13224,7 +14131,10 @@ nativeTerminalToggle.addEventListener('click', () => {
       } catch (error) {
         showToast(error instanceof Error ? error.message : '无法返回安全终端。', 'error');
       } finally {
-        nativeTerminalToggle.disabled = false;
+        if (switchStarted) {
+          nativeTerminalToggle.disabled = false;
+          nativeTerminalToggle.setAttribute('aria-busy', 'false');
+        }
       }
     })();
     return;
@@ -13234,7 +14144,7 @@ nativeTerminalToggle.addEventListener('click', () => {
     nativeComposerInput.focus();
     return;
   }
-  void launchNativeClaude('new');
+  void adoptTerminalConversationIntoNative();
 });
 nativeAttachButton.addEventListener('click', () => nativeAttachmentInput.click());
 nativeAttachmentInput.addEventListener('change', () => {
@@ -13829,11 +14739,6 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     setArtifactDetailsOpen(false);
   }
-  if (event.key === 'Escape' && footerSecondaryStatus.dataset.open === 'true') {
-    event.preventDefault();
-    setFooterSecondaryOpen(false);
-    footerMore.focus();
-  }
   if (event.key === 'Escape' && previewRailTab !== undefined) {
     event.preventDefault();
     const trigger = activityRail.querySelector<HTMLButtonElement>(
@@ -13841,6 +14746,39 @@ document.addEventListener('keydown', (event) => {
     );
     closeRailPreview();
     trigger?.focus();
+  }
+  // Escape closes any open footer menu first (before secondary footer)
+  // This ensures focus returns to a visible trigger
+  const footerMenuPairs: readonly FooterMenuPair[] = [
+    { menu: footerResourceMenu, trigger: footerResource },
+    { menu: footerModelMenu, trigger: footerModel },
+    { menu: footerSpeedMenu, trigger: footerSpeed },
+    { menu: footerModeMenu, trigger: footerMode },
+    { menu: footerEffortMenu, trigger: footerEffort },
+  ];
+  if (event.key === 'Escape') {
+    if (handleFooterMenuEscape(footerMenuPairs)) {
+      event.preventDefault();
+      return;
+    }
+  }
+  // Only after footer menus are checked, handle secondary footer
+  if (event.key === 'Escape' && footerSecondaryStatus.dataset.open === 'true') {
+    event.preventDefault();
+    setFooterSecondaryOpen(false);
+    footerMore.focus();
+  }
+  // Arrow key navigation within footer menus
+  if (
+    (event.key === 'ArrowDown' || event.key === 'ArrowUp') &&
+    !event.shiftKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey
+  ) {
+    if (handleFooterMenuArrowKey(footerMenuPairs, event.key, document.activeElement)) {
+      event.preventDefault();
+    }
   }
 });
 artifactNetworkAllowed.addEventListener('change', () => {
@@ -13953,10 +14891,71 @@ claudePermissionDialog.addEventListener('cancel', (event) => {
 footerMore.addEventListener('click', () => {
   setFooterSecondaryOpen(footerSecondaryStatus.dataset.open !== 'true');
 });
+const applyClaudeContextWindowMode = (
+  mode: ClaudeContextWindowMode,
+  customTokens?: number,
+): void => {
+  void window.controlPanel
+    .setClaudeContextWindowMode(mode, customTokens)
+    .then((settings) => {
+      claudeContextWindowMode = settings.claudeContextWindowMode;
+      claudeContextWindowCustomTokens = settings.claudeContextWindowCustomTokens;
+      claudeContextWindowCustomDraftOpen = false;
+      syncClaudeContextWindowSelection();
+      // Refresh footer resource view with updated context window configuration
+      const status = activeStatus();
+      // If native conversation is active, re-render its footer with new config
+      if (activeNativeConversationId) {
+        const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+        if (snapshot) {
+          renderNativeConversation(snapshot);
+        }
+      } else if (status) {
+        // Otherwise refresh from terminal Claude state
+        const codexSelected = activeDevelopmentRuntime() === 'codex';
+        const claudeState = !codexSelected ? claudeStates.get(status.id) : undefined;
+        if (claudeState) {
+          renderFooterResource(
+            claudeState.resourceUsage,
+            managedContextWindowSelectable(claudeState),
+          );
+        }
+      }
+      hideFooterMenus();
+      footerResource.focus();
+      showToast('上下文窗口已保存；下次新建或重启 Claude 会话生效。');
+    })
+    .catch(() => showToast('无法保存 Claude 上下文窗口选择。', 'error'));
+};
+
+claudeContextWindowCustomInput.addEventListener('change', () => {
+  const tokens = Number(claudeContextWindowCustomInput.value);
+  if (!Number.isInteger(tokens) || tokens < 8_000 || tokens > 2_000_000) {
+    showToast('窗口 token 数需为 8000 到 2000000 之间的整数。', 'error');
+    return;
+  }
+  applyClaudeContextWindowMode('custom', tokens);
+});
+
 footerResourceMenu.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-    '[data-resource-preference], [data-context-window-mode]',
+    '[data-resource-preference], [data-context-window-mode], [data-claude-context-window-mode]',
   );
+  const claudeWindowMode = button?.dataset.claudeContextWindowMode as
+    ClaudeContextWindowMode | undefined;
+  if (claudeWindowMode) {
+    if (claudeWindowMode === 'custom') {
+      // A custom value is only selected after validation succeeds. Reveal the draft field without
+      // changing either the saved preference or the radio's committed aria state.
+      claudeContextWindowCustomDraftOpen = true;
+      syncClaudeContextWindowSelection();
+      claudeContextWindowCustomInput.focus();
+      return;
+    }
+    claudeContextWindowCustomDraftOpen = false;
+    applyClaudeContextWindowMode(claudeWindowMode);
+    return;
+  }
   const contextWindowMode = button?.dataset.contextWindowMode as
     ManagedChatGptContextWindowMode | undefined;
   if (contextWindowMode) {
@@ -13965,7 +14964,15 @@ footerResourceMenu.addEventListener('click', (event) => {
       .then((settings) => {
         managedChatGptContextWindowMode = settings.managedChatGptContextWindowMode;
         syncManagedChatGptContextWindowSelection();
+        // If native conversation is active, re-render its footer with new config
+        if (activeNativeConversationId) {
+          const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+          if (snapshot) {
+            renderNativeConversation(snapshot);
+          }
+        }
         hideFooterMenus();
+        footerResource.focus();
         showToast('上下文窗口选择已保存；下次新建或重启托管 ChatGPT 会话生效。');
       })
       .catch(() => showToast('无法保存 ChatGPT 上下文窗口选择。', 'error'));
@@ -13977,16 +14984,26 @@ footerResourceMenu.addEventListener('click', (event) => {
     .setFooterResourcePreference(preference)
     .then((settings) => {
       footerResourcePreference = settings.footerResourcePreference;
-      const status = activeStatus();
-      const codexSelected = activeDevelopmentRuntime() === 'codex';
-      const claudeState = status && !codexSelected ? claudeStates.get(status.id) : undefined;
-      const usage = status
-        ? codexSelected
-          ? codexStates.get(status.id)?.resourceUsage
-          : claudeState?.resourceUsage
-        : undefined;
-      renderFooterResource(usage, managedContextWindowSelectable(claudeState));
+      // If native conversation is active, re-render its footer with new preference
+      if (activeNativeConversationId) {
+        const snapshot = nativeConversationSnapshots.get(activeNativeConversationId);
+        if (snapshot) {
+          renderNativeConversation(snapshot);
+        }
+      } else {
+        // Otherwise refresh from terminal state
+        const status = activeStatus();
+        const codexSelected = activeDevelopmentRuntime() === 'codex';
+        const claudeState = status && !codexSelected ? claudeStates.get(status.id) : undefined;
+        const usage = status
+          ? codexSelected
+            ? codexStates.get(status.id)?.resourceUsage
+            : claudeState?.resourceUsage
+          : undefined;
+        renderFooterResource(usage, managedContextWindowSelectable(claudeState));
+      }
       hideFooterMenus();
+      footerResource.focus();
     })
     .catch(() => showToast('无法保存底栏资源偏好。', 'error'));
 });
@@ -14832,6 +15849,9 @@ void (async () => {
     artifactNetworkState.allowed = initialSettings.artifactNetworkAllowed ?? true;
     footerResourcePreference = initialSettings.footerResourcePreference;
     managedChatGptContextWindowMode = initialSettings.managedChatGptContextWindowMode;
+    claudeContextWindowMode = initialSettings.claudeContextWindowMode;
+    claudeContextWindowCustomTokens = initialSettings.claudeContextWindowCustomTokens;
+    syncClaudeContextWindowSelection();
     settingsCloseBehavior.value = initialSettings.closeBehavior;
     renderArtifactNetworkLog();
     if (initialSettings.theme !== activeTerminalTheme) {

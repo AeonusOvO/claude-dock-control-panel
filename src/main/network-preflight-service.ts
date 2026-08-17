@@ -141,6 +141,14 @@ export class NetworkPreflightService {
   public invalidate(_reason: string): void {
     this.generation += 1;
     this.cache.clear();
+    /*
+     * In-flight work started under the superseded configuration must stop being shared: the
+     * generation guard already keeps its result out of the cache and the diagnostics store, but a
+     * caller arriving after invalidation would otherwise be handed that same promise and receive a
+     * verdict computed with the settings it just replaced. Dropping the map forces a fresh probe;
+     * the orphaned operation still settles harmlessly.
+     */
+    this.inFlight.clear();
   }
 
   public getHistory(): NetworkPreflightHistoryView {

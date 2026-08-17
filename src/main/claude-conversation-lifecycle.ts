@@ -19,9 +19,9 @@ interface ConversationDeletionIntent {
   pendingResumeSessionIds: readonly string[];
 }
 
-const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 const conversationKey = (cwdKey: string, conversationId: string): string =>
-  `${cwdKey}\0${conversationId.toLocaleLowerCase()}`;
+  `${cwdKey}\0${conversationId.toLowerCase()}`;
 
 export class ClaudeConversationResumeOwnership {
   public constructor(
@@ -170,7 +170,7 @@ export class ClaudeConversationLifecycleCoordinator {
     for (const resume of this.resumesByDirectory.get(cwdKey) ?? []) {
       if (
         resume.conversationId === undefined ||
-        resume.conversationId.toLocaleLowerCase() === conversationId.toLocaleLowerCase()
+        resume.conversationId.toLowerCase() === conversationId.toLowerCase()
       ) {
         resume.superseded = true;
         pendingResumeSessionIds.add(resume.sessionId);

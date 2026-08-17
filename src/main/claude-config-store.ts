@@ -65,7 +65,13 @@ const EMPTY_STORE: StoredClaudeConfigFile = {
   version: 1,
 };
 
-const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+/*
+ * Locale-invariant on purpose. A bare `toLocaleLowerCase()` follows the host locale, so under
+ * Turkish/Azeri `D:\IDE` lowercases with a dotless ı and stops matching `d:\ide` — the same project
+ * would get two profile keys and a saved provider config would appear to vanish. `en-US` is the
+ * convention already used by `conversation-recovery-store` and `conversation-owner-registry`.
+ */
+const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 
 const isStoredConfig = (value: unknown): value is StoredClaudeConfig => {
   if (!value || typeof value !== 'object') {

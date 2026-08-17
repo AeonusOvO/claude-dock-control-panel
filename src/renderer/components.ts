@@ -31,12 +31,6 @@ interface SelectController {
 
 const selectControllers = new WeakMap<HTMLSelectElement, SelectController>();
 
-/**
- * Upper bound for the exit animation, used only as the safety net for a dropped `animationend` —
- * the real duration is the theme's `--dur-exit`, which JS never needs to read.
- */
-const EXIT_FALLBACK_MS = 600;
-
 const REDUCED_MOTION = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /**
@@ -122,7 +116,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   trigger.append(label, chevron);
 
   const listbox = document.createElement('div');
-  listbox.className = 'select__listbox';
+  listbox.className = 'select__listbox popover';
   listbox.setAttribute('role', 'listbox');
   listbox.hidden = true;
   /*
@@ -147,9 +141,6 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   };
 
   let activeIndex = -1;
-  /** Pending exit-animation timer, so a reopen mid-close cancels the teardown instead of racing it. */
-  let exitTimer: number | undefined;
-
   const optionButtons = (): HTMLButtonElement[] =>
     Array.from(listbox.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
 
@@ -205,15 +196,9 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     listbox.replaceChildren(...rows);
   };
 
-  /**
-   * Hides the popup. The listbox plays a closing animation on its way out rather than vanishing, so
-   * dismissing a dropdown reads as the reverse of opening it; `hidden` is only applied once that
-   * animation has finished. State that other code observes — `data-open`, `aria-expanded`, the
-   * controller registration — is cleared immediately, so a close is synchronous as far as callers and
-   * the reopen path are concerned.
-   */
+  /** Hides the popup synchronously; CSS animates the discrete `hidden` transition. */
   function close(): void {
-    if (listbox.hidden || listbox.dataset.closing === 'true') {
+    if (listbox.hidden) {
       return;
     }
     listbox.dataset.open = 'false';
@@ -223,27 +208,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     if (openController?.listbox === listbox) {
       openController = undefined;
     }
-
-    const finish = (): void => {
-      // A reopen during the exit clears the flag; finishing then would hide a popup that is open.
-      if (listbox.dataset.closing !== 'true') {
-        return;
-      }
-      delete listbox.dataset.closing;
-      listbox.hidden = true;
-      window.clearTimeout(exitTimer);
-      exitTimer = undefined;
-    };
-
-    if (REDUCED_MOTION()) {
-      listbox.hidden = true;
-      return;
-    }
-
-    listbox.dataset.closing = 'true';
-    listbox.addEventListener('animationend', finish, { once: true });
-    // An interrupted or never-fired animation must not leave the popup stranded on screen.
-    exitTimer = window.setTimeout(finish, EXIT_FALLBACK_MS);
+    listbox.hidden = true;
   }
 
   const open = (focusSelected: boolean): void => {
@@ -251,10 +216,6 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
       return;
     }
     closeOpenSelect();
-    // Cancel any exit in flight on this listbox so the entrance restarts from a clean state.
-    delete listbox.dataset.closing;
-    window.clearTimeout(exitTimer);
-    exitTimer = undefined;
     renderOptions();
     /*
      * Re-parented on every open, not once at construction: a select inside a dialog needs its popup
@@ -276,7 +237,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     }
   };
 
-  /** True while the popup is on screen, including the frames it spends animating out. */
+  /** True while the popup is open. */
   const isOpen = (): boolean => listbox.dataset.open === 'true';
 
   const toggle = (): void => {

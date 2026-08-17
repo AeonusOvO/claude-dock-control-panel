@@ -172,4 +172,32 @@ describe('Claude project profile store', () => {
       credential: 'replacement-token',
     });
   });
+
+  it('keys a project the same way under a Turkish host locale', () => {
+    const { store } = createStore();
+    store.save('D:\\IDE\\Example', gatewayInput);
+
+    /*
+     * Turkish/Azeri collation lowercases ASCII "I" to a dotless "ı", so a locale-sensitive project
+     * key would file D:\IDE under a different entry than d:\ide and the saved provider profile
+     * would look like it had vanished. Simulate that collation for every unqualified call.
+     */
+    const original = String.prototype.toLocaleLowerCase;
+    const spy = vi.spyOn(String.prototype, 'toLocaleLowerCase').mockImplementation(function (
+      this: string,
+      ...args: Parameters<string['toLocaleLowerCase']>
+    ) {
+      if (args[0] === undefined) {
+        return original.call(this).replace(/i/g, '\u0131');
+      }
+      return original.apply(this, args);
+    });
+
+    try {
+      expect(store.getConfig('d:\\ide\\example').baseUrl).toBe('https://gateway.example.com');
+      expect(store.getCredential('d:\\ide\\example')).toBe('secret-token');
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

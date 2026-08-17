@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { rendererStyles } from './renderer-css';
 
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
-const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
 const terminalOutputPumpSource = readFileSync(
   new URL('../src/renderer/terminal-output-pump.ts', import.meta.url),
@@ -146,18 +146,26 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toMatch(
       /class="runtime-option__icon runtime-option__icon--codex"[\s\S]*?class="runtime-option__check"/,
     );
+    expect(rendererMarkup.match(/class="runtime-option card"/g)).toHaveLength(2);
     expect(rendererSource).not.toContain("requiredElement<HTMLElement>('#session-detail')");
     expect(rendererStyles).toMatch(
-      /\.runtime-picker \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/,
+      /\.runtime-picker \{[^}]*?grid-template-columns: minmax\(0, 1fr\);/,
     );
     expect(rendererStyles).toMatch(
-      /\.runtime-option \{[\s\S]*?display: flex;[\s\S]*?min-height: 64px;/,
+      /\.runtime-picker \{[^}]*?--runtime-option-h: calc\(var\(--s-10\) \+ var\(--s-3\)\);/,
     );
-    expect(rendererStyles).toMatch(/\.runtime-option__copy \{[\s\S]*?flex: 1 1 0;/);
-    expect(rendererStyles).toContain('@keyframes runtimeOptionSelect');
+    expect(rendererStyles).toMatch(
+      /\.runtime-option \{[^}]*?display: flex;[^}]*?min-height: var\(--runtime-option-h\);/,
+    );
+    expect(rendererStyles).toMatch(/\.runtime-option__copy \{[^}]*?flex: 1 1 0;/);
   });
 
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
+    const dialogs = [...rendererMarkup.matchAll(/<dialog\b[^>]*>/g)].map(([dialog]) => dialog);
+    expect(dialogs).toHaveLength(10);
+    for (const dialog of dialogs) {
+      expect(dialog).toMatch(/class="[^"]*\bpopover\b[^"]*"/);
+    }
     expect(rendererMarkup).toMatch(
       /<dialog[\s\S]*?id="confirmation-dialog"[\s\S]*?aria-labelledby="confirmation-dialog-title"[\s\S]*?<form method="dialog">/,
     );
@@ -176,12 +184,34 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererStyles).toContain(".confirmation-dialog[data-tone='danger']");
   });
 
-  it('does not animate interactive rail pages through a transformed hit-test layer', () => {
-    const pageAnimation = rendererStyles.match(/@keyframes railPageEnter\s*\{(?<body>[\s\S]*?)\n\}/)
-      ?.groups?.body;
+  it('reuses the shared transient-surface motion recipe instead of one-off keyframes', () => {
+    expect(rendererStyles).toContain('@keyframes popover-in');
+    expect(rendererStyles).toContain('@keyframes popover-out');
+    expect(rendererStyles).toMatch(
+      /\.rail-page--active\s*\{[^}]*?animation: popover-in var\(--dur-3\) var\(--ease-decel\)/,
+    );
 
-    expect(pageAnimation).toBeDefined();
-    expect(pageAnimation).not.toContain('transform:');
+    for (const retiredName of [
+      'runtimeOptionSelect',
+      'checkmarkPop',
+      'selectListboxIn',
+      'selectListboxOut',
+      'advancedDialogEnter',
+      'nativePlanDialogEnter',
+      'nativePlanDialogExit',
+      'chatSettingsEnter',
+      'settingsPanelEnter',
+      'workspaceShellEnter',
+      'railPageEnter',
+      'cardEnter',
+      'runtimeSummaryEnter',
+      'runtimeSummaryExit',
+    ]) {
+      expect(rendererStyles).not.toContain(`@keyframes ${retiredName}`);
+      expect(rendererStyles).not.toMatch(
+        new RegExp(`animation(?:-name)?:\\s*${retiredName}(?:\\s|;|$)`),
+      );
+    }
   });
 
   it('keeps the shell interactive while a real connection test runs in the background', () => {
@@ -231,7 +261,8 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('本地网关再完成 Codex OAuth 请求与协议转换');
     expect(rendererSource).toContain('一键安装并登录');
     expect(rendererSource).toContain('不要求你打开终端或第三方控制台');
-    expect(rendererSource).toContain('.setupManagedChatGptGateway(sessionId, forceLogin)');
+    expect(rendererSource).toContain('.setupManagedChatGptGateway(operationSessionId, forceLogin)');
+    expect(rendererSource).toContain('runManagedChatGptOperation(');
     expect(rendererSource).toContain('.setManagedChatGptGatewayModel(sessionId, requestedModel)');
     expect(rendererSource).toContain('此方式不需要 CCR');
     expect(rendererMarkup).toContain('选择服务商，一次完成接入');
@@ -241,19 +272,25 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererSource).toContain('renderModels(state.availableModels, preferredModel);');
     expect(rendererSource).toContain('enhanceSelect(modelSelect);');
     expect(rendererSource).toContain("progressCard.setAttribute('aria-live', 'polite');");
-    expect(rendererSource).toContain("action.setAttribute('aria-busy', String(progress.active));");
+    expect(rendererSource).toContain(
+      "action.setAttribute('aria-busy', String(managedChatGptOperations.busy));",
+    );
     expect(rendererSource).toContain('列表来自本机网关实时接口');
     expect(rendererSource).not.toContain(
       'providerSpecialSetup.append(buildChatGptSubscriptionGuide(), gatewayDiscoverySection)',
     );
     expect(rendererSource).toContain('.getManagedChatGptGatewayState()');
-    expect(rendererSource).toContain('state.busy || managedChatGptSetupInProgress');
+    expect(rendererSource).toContain('state.busy || managedChatGptOperations.busy');
+    expect(rendererSource).toContain(
+      'const sessionId = workspaceState.activeSessionId || undefined;',
+    );
+    expect(rendererSource).not.toContain("showToast('请先选择一个项目。', 'error');");
     expect(rendererSource).toContain("? '安装进行中…'");
     expect(rendererSource).toContain("const preset: ClaudePreset = 'gateway'");
     expect(rendererStyles).toContain('.subscription-gateway-guide');
     expect(rendererStyles).toContain('.subscription-gateway-status');
     expect(rendererStyles).toMatch(
-      /\.subscription-gateway-progress\s*\{[\s\S]*?animation: cardEnter/,
+      /\.subscription-gateway-progress\s*\{[^}]*?animation: popover-in/,
     );
     expect(rendererStyles).toContain(
       '.subscription-gateway-progress progress::-webkit-progress-value',
@@ -612,9 +649,11 @@ describe('renderer interaction lifecycle contract', () => {
   });
 
   it('turns the footer model, speed, mode and effort readouts into real menu triggers', () => {
-    expect(rendererMarkup).toMatch(
-      /<button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">/,
-    );
+    const resourceTrigger = /<button[^>]*\bid="footer-resource"[^>]*>/.exec(rendererMarkup)?.[0];
+    expect(resourceTrigger).toBeDefined();
+    expect(resourceTrigger).toContain('class="status-chip"');
+    expect(resourceTrigger).toContain('aria-haspopup="dialog"');
+    expect(resourceTrigger).toContain('aria-controls="footer-resource-menu"');
     expect(rendererMarkup).toContain('data-context-window-mode="standard"');
     expect(rendererMarkup).toContain('data-context-window-mode="extended"');
     expect(rendererMarkup).toContain('扩展（实验）· 约 99.75 万有效');
@@ -623,29 +662,30 @@ describe('renderer interaction lifecycle contract', () => {
       "ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode)",
     );
     for (const id of ['model', 'speed', 'mode', 'effort']) {
-      expect(rendererMarkup).toMatch(
-        new RegExp(
-          `<button id="footer-${id}" type="button" aria-haspopup="menu" aria-expanded="false">`,
-        ),
-      );
+      const trigger = new RegExp(`<button[^>]*\\bid="footer-${id}"[^>]*>`).exec(
+        rendererMarkup,
+      )?.[0];
+      expect(trigger, `footer-${id} trigger`).toBeDefined();
+      expect(trigger).toContain('class="status-chip"');
+      expect(trigger).toContain('aria-haspopup="menu"');
+      expect(trigger).toContain(`aria-controls="footer-${id}-menu"`);
     }
     // Speed sits between the model identity and permission mode; effort stays immediately to the right.
     const footerOrder = ['model', 'speed', 'mode', 'effort'].map((id) =>
       rendererMarkup.indexOf(`id="footer-${id}"`),
     );
     expect(footerOrder).toEqual([...footerOrder].sort((first, second) => first - second));
-    expect(rendererMarkup).toContain(
-      '<div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden>',
-    );
-    expect(rendererMarkup).toMatch(
-      /id="footer-speed-menu"\s+role="menu"\s+aria-label="切换服务速度"\s+hidden/,
-    );
-    expect(rendererMarkup).toMatch(
-      /id="footer-mode-menu"\s+role="menu"\s+aria-label="切换权限模式"\s+hidden/,
-    );
-    expect(rendererMarkup).toMatch(
-      /id="footer-effort-menu"\s+role="menu"\s+aria-label="切换思考程度"\s+hidden/,
-    );
+    for (const id of ['resource', 'model', 'speed', 'mode', 'effort']) {
+      const menu = new RegExp(`<div[^>]*\\bid="footer-${id}-menu"[^>]*>`).exec(rendererMarkup)?.[0];
+      expect(menu, `footer-${id} menu`).toBeDefined();
+      expect(menu).toMatch(/class="[^"]*\bpopover\b[^"]*"/);
+      expect(menu).toContain('data-placement="above"');
+      expect(menu).toMatch(/\shidden(?:\s|>)/);
+    }
+    expect(rendererMarkup).toContain('terminal-footer__group--primary');
+    expect(rendererMarkup).toContain('terminal-footer__group--secondary');
+    expect(rendererMarkup).toContain('terminal-footer__group--status');
+    expect(rendererMarkup).toMatch(/class="status-chip" id="footer-status"/);
     // Every popup joins the one dismissal path rather than starting a second one.
     expect(rendererSource).toMatch(
       /!footerModelMenu\.contains\(event\.target as Node\) &&\s+!footerSpeedMenu\.contains\(event\.target as Node\) &&\s+!footerModeMenu\.contains\(event\.target as Node\) &&\s+!footerEffortMenu\.contains\(event\.target as Node\)/,
@@ -660,11 +700,24 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).toContain('id="footer-more"');
     expect(rendererMarkup).toContain('id="footer-secondary-status"');
     expect(rendererStyles).toMatch(
-      /@media \(max-width: 1040px\)[\s\S]*?\.terminal-footer__secondary\[data-open='true'\]/,
+      /@media \(max-width: 1024px\)[\s\S]*?\.terminal-footer__secondary\[data-open='true'\]/,
     );
+    expect(rendererSource).toContain("window.matchMedia('(max-width: 1024px)')");
     expect(rendererStyles).not.toMatch(
       /#footer-model,\s*#footer-speed,\s*#footer-mode[^}]*display:\s*none/,
     );
+  });
+
+  it('separates requested Claude windows from fresh runtime evidence', () => {
+    expect(rendererMarkup).toContain('id="claude-context-window-status"');
+    expect(rendererSource).toContain("usage?.availability === 'stale'");
+    expect(rendererSource).toContain(
+      'claudeContextWindowOptions.hidden = contextWindowSelectable || !claudeContextSource;',
+    );
+    expect(rendererSource).toContain("'claude-configured-target'");
+    expect(rendererSource).toContain('claudeContextWindowCustomDraftOpen = true;');
+    expect(rendererSource).not.toContain('detectContextWindows');
+    expect(mainSource).not.toContain('app:detect-context-windows');
   });
 
   it('keeps serving speed model-specific and truthful across Claude, GPT and native Codex', () => {
@@ -898,6 +951,11 @@ describe('renderer interaction lifecycle contract', () => {
     expect(rendererMarkup).not.toContain('id="composer-control-strip"');
     expect(rendererMarkup).not.toContain('id="composer-model-control"');
     expect(rendererStyles).not.toContain('.composer-control-strip');
+    // The native runtime shares the same footer. A second, native-only control strip above the
+    // composer would duplicate every one of those chips with a different source of truth.
+    expect(rendererMarkup).not.toContain('native-control-bar');
+    expect(rendererStyles).not.toContain('.native-control-bar');
+    expect(rendererSource).not.toContain('native-control-bar');
   });
 
   it('scrolls a folder’s full conversation history without moving the running rows', () => {
@@ -1070,22 +1128,38 @@ describe('the themed select is the control the pointer actually reaches', () => 
     expect(trigger).toContain('transform var(--dur-1) var(--ease-decel)');
   });
 
-  it('animates the dropdown out instead of blinking it away', () => {
-    expect(rendererStyles).toContain('@keyframes selectListboxOut');
+  it('closes synchronously while a discrete CSS transition preserves the visual exit', () => {
+    expect(componentKit).toContain("listbox.className = 'select__listbox popover'");
+    const close = componentKit.slice(
+      componentKit.indexOf('function close(): void'),
+      componentKit.indexOf('const open = (focusSelected: boolean)'),
+    );
+    expect(close).toContain("listbox.dataset.open = 'false'");
+    expect(close).toContain("trigger.setAttribute('aria-expanded', 'false')");
+    expect(close).toContain('listbox.hidden = true;');
+    expect(componentKit).not.toContain('dataset.closing');
+    expect(componentKit).not.toContain('EXIT_FALLBACK_MS');
+    expect(componentKit).not.toContain("listbox.addEventListener('animationend'");
+
+    const popover = rendererStyles.match(/\.popover \{(?<body>[^}]*)\}/)?.groups?.body;
+    expect(popover).toBeDefined();
+    expect(popover).toContain('opacity var(--dur-4) var(--ease-decel)');
+    expect(popover).toContain('transform var(--dur-4) var(--ease-decel)');
+    expect(popover).toContain('overlay var(--dur-exit) allow-discrete');
+    expect(popover).toContain('display var(--dur-exit) allow-discrete');
     expect(rendererStyles).toMatch(
-      /\.select__listbox\[data-closing='true'\]\s*\{[\s\S]*?selectListboxOut var\(--dur-exit\) var\(--ease-accel\)/,
+      /\.popover\[hidden\],\s*dialog\.popover:not\(\[open\]\) \{[^}]*?pointer-events: none;/,
     );
-    // The exit collapses back toward the trigger, mirroring the entrance on both placements.
     expect(rendererStyles).toMatch(
-      /\.select__listbox\[data-closing='true'\]\[data-placement='above'\]\s*\{\s*transform-origin: bottom center;/,
+      /\.popover\[data-placement='above'\] \{[^}]*?transform-origin: bottom center;/,
     );
-    // `hidden` may only land after the animation, and a dropped animationend must not strand it.
-    expect(componentKit).toContain("listbox.dataset.closing = 'true'");
-    expect(componentKit).toMatch(
-      /listbox\.addEventListener\('animationend', finish, \{ once: true \}\)/,
+    expect(rendererStyles).toMatch(
+      /@starting-style \{[\s\S]*?\.popover:not\(dialog\):not\(\[hidden\]\),\s*dialog\.popover\[open\]/,
     );
-    expect(componentKit).toContain('exitTimer = window.setTimeout(finish, EXIT_FALLBACK_MS)');
-    // Openness must be read from state, not from `hidden`, which now lags the close by the exit.
+    expect(rendererStyles).not.toContain('@keyframes selectListboxIn');
+    expect(rendererStyles).not.toContain('@keyframes selectListboxOut');
+
+    // Openness remains explicit so keyboard and ARIA state move in the same synchronous close.
     expect(componentKit).toContain("const isOpen = (): boolean => listbox.dataset.open === 'true'");
     expect(componentKit).not.toMatch(/if \(listbox\.hidden\) \{\s+open\(true\)/);
   });
@@ -1134,8 +1208,8 @@ describe('plugin panel feedback', () => {
   });
 
   /*
-   * `cardEnter` ends at `opacity: 1`, but a not-installed card rests dimmed — so the card faded in
-   * bright and snapped grey when the animation released it, which reads as the fade running backwards.
+   * A card entrance that ends at `opacity: 1` makes a not-installed card fade in bright and snap grey
+   * when the animation releases it, which reads as the fade running backwards.
    */
   it('lands the card entrance on the resting opacity rather than a hard 1', () => {
     expect(rendererStyles).toMatch(/\.plugin-card\s*\{[\s\S]*?--card-rest-opacity: 1;/);
@@ -1337,8 +1411,9 @@ describe('sidebar conversation list affordances', () => {
       );
     }
     expect(rendererStyles).toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{\s*\.history-item__delete,\s*\.history-item__time \{\s*transition-duration: 0\.01ms;/,
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.history-item__delete,\s*\.history-item__time \{\s*transition-duration: var\(--dur-instant\);/,
     );
+    expect(rendererStyles).toContain('--dur-instant: 0.01ms;');
   });
 
   /*
@@ -1360,12 +1435,16 @@ describe('sidebar conversation list affordances', () => {
   /*
    * The delete button crossfades in over the timestamp, and both used to sit 2px from the scroller's
    * padding edge — directly under the vertical scrollbar's gutter, so hovering a row put the button
-   * beneath the thumb. It now shares the timestamp's own 7px inset, which both aligns the two states
+   * beneath the thumb. It now shares the timestamp's spacing-step inset, which aligns the two states
    * of the crossfade and leaves the scrollbar a visible gap.
    */
   it('keeps the delete button clear of the vertical scrollbar in every history scroller', () => {
-    expect(rendererStyles).toMatch(/\n\.history-item__delete \{[^}]*?right: 7px;[^}]*?\}/);
-    expect(rendererStyles).toMatch(/\n\.history-item__select \{[^}]*?padding: 5px 7px;[^}]*?\}/);
+    expect(rendererStyles).toMatch(
+      /\n\.history-item__delete \{[^}]*?right: var\(--s-1-5\);[^}]*?\}/,
+    );
+    expect(rendererStyles).toMatch(
+      /\n\.history-item__select \{[^}]*?padding: var\(--s-1\) var\(--s-1-5\);[^}]*?\}/,
+    );
     expect(rendererStyles).toMatch(/\n\.project-list \{[^}]*?scrollbar-gutter: auto;[^}]*?\}/);
     expect(rendererStyles).not.toMatch(
       /\n\.project-list \{[^}]*?padding-inline-end: var\(--s-2\);[^}]*?\}/,
@@ -1508,17 +1587,50 @@ describe('native conversation component suite', () => {
       rendererSource.indexOf("nativeAttachButton.addEventListener('click'"),
     );
     expect(toggleHandler).toContain('transferNativeConversationToTerminal(');
-    expect(toggleHandler).toContain("launchNativeClaude('new')");
+    expect(toggleHandler).toContain('adoptTerminalConversationIntoNative();');
     expect(toggleHandler).not.toContain("launchClaudeTerminal('new')");
+    // The transfer lands on the tab the conversation was already displayed over, so re-selecting is
+    // the exception, not the rule. Unconditional activation is what used to strand the old tab.
+    expect(toggleHandler).toContain('result.terminalSessionId !== workspaceState.activeSessionId');
+
+    // Entering native mode takes over the tab's live Claude Code session rather than forking a new
+    // conversation; only a tab with no running process falls back to a fresh native launch.
+    const adoptHandler = rendererSource.slice(
+      rendererSource.indexOf('const adoptTerminalConversationIntoNative = async'),
+      rendererSource.indexOf("nativeTerminalToggle.addEventListener('click'"),
+    );
+    expect(adoptHandler).toContain(
+      'window.controlPanel.adoptTerminalConversation(status.id, allowInterrupt)',
+    );
+    expect(adoptHandler).toContain("launchNativeClaude('new')");
+    expect(adoptHandler).toContain(
+      'nativeConversationBySession.set(status.id, result.conversationId);',
+    );
+    expect(adoptHandler).toContain(
+      'terminalConversationHasRunningWork(runtimeActivityStates.get(status.id))',
+    );
+    expect(adoptHandler).toContain('runConfirmableConversationSurfaceSwitch(');
+    expect(toggleHandler).toContain('runConfirmableConversationSurfaceSwitch(');
+    expect(toggleHandler).toContain(
+      "const nativeConversationIsVisible = panelState === 'opening' || panelState === 'open';",
+    );
+    expect(toggleHandler).not.toContain("title: '返回安全终端？'");
+    expect(preloadSource).toContain(
+      "ipcRenderer.invoke('native-conversation:adopt-terminal', sessionId, allowInterrupt ?? false)",
+    );
+    expect(mainSource).toMatch(
+      /\(status\.phase === 'stopped' \|\| status\.phase === 'error'\)\s*&&\s*!terminalTransferSessions\.has\(status\.id\)/,
+    );
+    expect(mainSource).toMatch(
+      /if \(!state\.active\) \{\s*if \(!terminalTransferSessions\.has\(state\.sessionId\)\)/,
+    );
 
     const recoveryRenderer = rendererSource.slice(
       rendererSource.indexOf('const renderNativeRecoveries ='),
       rendererSource.indexOf('const launchNativeClaude = async'),
     );
     expect(recoveryRenderer).not.toContain('setNativeConversationVisible(true)');
-    expect(rendererMarkup).toContain(
-      'class="icon-button"\n              id="native-terminal-toggle"',
-    );
+    expect(rendererMarkup).toMatch(/<button\s+class="icon-button"\s+id="native-terminal-toggle"/);
     expect(rendererMarkup).toContain('title="打开原生对话"');
     expect(rendererMarkup).toContain('id="native-terminal-toggle-label">原生对话</span>');
   });
@@ -1549,21 +1661,36 @@ describe('native conversation component suite', () => {
     expect(launchControls).toContain('button.disabled = busy;');
   });
 
-  it('generation-scopes native submission acknowledgement and preserves newer draft text', () => {
-    const submission = rendererSource.slice(
-      rendererSource.indexOf("nativeComposer.addEventListener('submit'"),
-      rendererSource.indexOf("nativeSendButton.addEventListener('animationend'"),
+  it('generation-scopes native submission acknowledgement and never drops composer content', () => {
+    const delivery = rendererSource.slice(
+      rendererSource.indexOf('const deliverNativeMessage = async'),
+      rendererSource.indexOf('const flushNativeQueuedMessage = async'),
     );
-    expect(submission).toContain('const conversationId = activeNativeConversationId;');
-    expect(submission).toContain(
+    expect(delivery).toContain(
       'nativeConversationSubmissions.set(conversationId, clientSubmissionId);',
     );
-    expect(submission).toContain('.submitNativeConversation(conversationId, {');
-    expect(submission).toContain('if (nativeComposerInput.value === text)');
-    expect(submission).toContain(
+    expect(delivery).toContain('.submitNativeConversation(conversationId, {');
+    expect(delivery).toContain(
       'nativeConversationSubmissions.get(conversationId) === clientSubmissionId',
     );
-    expect(submission).not.toContain('.submitNativeConversation(activeNativeConversationId, {');
+    expect(delivery).not.toContain('.submitNativeConversation(activeNativeConversationId, {');
+    // The composer is cleared before the IPC leaves, so a rejected or superseded delivery has to
+    // hand the content back to the queued bar. Dropping it here would be silent data loss.
+    expect(delivery).toContain(
+      'enqueueNativeMessage(conversationId, text, attachments, { autoFlush: false });',
+    );
+
+    const submit = rendererSource.slice(
+      rendererSource.indexOf('const runNativeComposerSubmit = async'),
+      rendererSource.indexOf("nativeComposer.addEventListener('submit'"),
+    );
+    expect(submit).toContain('const conversationId = activeNativeConversationId;');
+    // The confirmation motion runs before the IPC, not inside its `.then`: the button hands over on
+    // `animationend`, so the handover can never be hostage to main-process latency.
+    expect(submit).toContain('playNativeSendAnimation();');
+    expect(submit).toContain(
+      'enqueueNativeMessage(conversationId, text, attachments, { autoFlush: true });',
+    );
   });
 
   it('keeps user prompts as bubbles and streams each assistant turn through one terminal shell', () => {
@@ -1619,8 +1746,27 @@ describe('native conversation component suite', () => {
     expect(componentKit).toContain('select.dataset.triggerLabel ?? selected?.textContent?.trim()');
     expect(componentKit).toContain('listbox.dataset.scrollable = String(natural > available);');
     expect(rendererStyles).toContain(".select__listbox[data-scrollable='false']");
+    const labeledGroup = rendererMarkup.indexOf('toolbar-group toolbar-group--labeled');
+    const workbenchTrigger = rendererMarkup.indexOf('id="workbench-trigger"');
+    const themeSelect = rendererMarkup.indexOf('id="terminal-theme"');
+    const iconGroup = rendererMarkup.indexOf('toolbar-group toolbar-group--icons');
+    const nativeToggle = rendererMarkup.indexOf('id="native-terminal-toggle"');
+    const shortcuts = rendererMarkup.indexOf('id="workbench-shortcuts"');
+    const clear = rendererMarkup.indexOf('id="clear-terminal"');
+    const toolbarOrder = [
+      labeledGroup,
+      workbenchTrigger,
+      themeSelect,
+      iconGroup,
+      nativeToggle,
+      shortcuts,
+      clear,
+    ];
+    expect(toolbarOrder.every((index) => index >= 0)).toBe(true);
+    expect(toolbarOrder).toEqual([...toolbarOrder].sort((first, second) => first - second));
+    expect(rendererStyles).toContain('--control-h-sm: 28px;');
     expect(rendererStyles).toMatch(
-      /\.toolbar-menu-button,\s*\.terminal-toolbar \.terminal-theme-control :is\(\.select__trigger\) \{[\s\S]*?font-family: inherit;[\s\S]*?font-size: var\(--text-sm\);[\s\S]*?height: 30px;/,
+      /\.toolbar-menu-button,\s*\.terminal-toolbar \.terminal-theme-control :is\(\.select__trigger\) \{[^}]*?height: var\(--control-h-sm\);[^}]*?min-height: var\(--control-h-sm\);/,
     );
   });
 
@@ -1645,10 +1791,108 @@ describe('native conversation component suite', () => {
     expect(rendererStyles).toContain('@keyframes nativeClaudeSendArrow');
   });
 
+  it('gives the native composer exactly one action button that hands over to stop', () => {
+    // Two live buttons at once is the bug this replaces: `#native-stop` is gone and `#native-send`
+    // carries both intents through `data-action`.
+    expect(rendererMarkup).not.toContain('id="native-stop"');
+    expect(rendererMarkup).toContain('data-action="send"');
+    expect(rendererMarkup).toContain('native-composer__send-stop');
+    expect(rendererSource).toContain('nativeSendButton.dataset.action = action;');
+    // The handover is tied to the animation the user watched, not to IPC latency, and typing during
+    // a reply hands the button straight back to send instead of leaving a destructive trap.
+    expect(rendererSource).toContain("if (nativeSendAnimating) return 'send';");
+    expect(rendererSource).toContain("if (nativeComposerHasIntent()) return 'send';");
+    expect(rendererSource).toContain(
+      "if (action !== 'stop') delete nativeSendButton.dataset.stopping;",
+    );
+
+    // Resting stop is a bare rounded square. The pale circle is a click receipt, so it may only
+    // exist behind [data-stopping]; painting it at rest reads as "already pressed".
+    expect(rendererStyles).toContain('@keyframes nativeStopHalo');
+    expect(rendererStyles).toMatch(
+      /\.native-composer__send\[data-action='stop'\] \{[^}]*?background: transparent;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.native-composer__send\[data-action='stop'\] \.native-composer__send-stop \{[^}]*?border-radius: var\(--r-xs\);/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.native-composer__send\[data-action='stop'\]::after \{[^}]*?opacity: 0;/,
+    );
+    expect(rendererStyles).toMatch(
+      /\.native-composer__send\[data-action='stop'\]\[data-stopping='true'\]::after \{[^}]*?animation: nativeStopHalo/,
+    );
+    // Same specificity as the per-theme send fills, so only source order stops the accent colour
+    // from repainting over the stop state.
+    expect(rendererStyles.indexOf(".native-composer__send[data-action='stop']")).toBeGreaterThan(
+      rendererStyles.indexOf("[data-theme='telegram'] .native-composer__send[data-sending='true']"),
+    );
+  });
+
+  it('parks queued text above the send row instead of promoting it to a bubble', () => {
+    const composerMarkup = rendererMarkup.slice(
+      rendererMarkup.indexOf('<form class="native-composer" id="native-composer">'),
+      rendererMarkup.indexOf('<div class="native-composer__meta">'),
+    );
+    expect(composerMarkup).toContain('id="native-queued"');
+    expect(composerMarkup.indexOf('id="native-queued"')).toBeLessThan(
+      composerMarkup.indexOf('class="native-composer__row"'),
+    );
+    // A queued entry is not transcript truth yet, so it must not borrow the bubble component.
+    expect(composerMarkup).not.toContain('native-message');
+    expect(rendererStyles).toMatch(/\.native-queued \{[^}]*?border: 1px dashed/);
+    // Living inside the form is what makes `--native-composer-h`, and therefore toast avoidance,
+    // account for the bar with no extra measurement code.
+    expect(rendererSource).toContain("'--native-composer-h'");
+    // Only an idle turn may release the queue: 'requires-action' would jump an open permission
+    // prompt, and a dead phase would resend into a closed session forever.
+    expect(rendererSource).toMatch(
+      /snapshot\.phase === 'idle' &&\s*nativeQueuedAutoFlush\.has\(snapshot\.conversationId\)/,
+    );
+    // Cancelling folds the text back into the composer so the existing encrypted-draft path is the
+    // only mechanism that has to carry unsent content anywhere.
+    expect(rendererSource).toContain('const drainNativeQueuedMessageToComposer =');
+  });
+
+  it('keeps the status footer mounted and native-aware while a native conversation is open', () => {
+    expect(rendererStyles).toMatch(
+      /\.terminal-shell--native \{[^}]*?grid-template-rows: var\(--toolbar-h\) minmax\(0, 1fr\) var\(--footer-h\);/,
+    );
+    // `.native-conversation` is pinned to grid-row 2, so the footer needs an explicit row.
+    expect(rendererStyles).toMatch(
+      /\.terminal-shell--native > \.terminal-footer \{[^}]*?grid-row: 3;/,
+    );
+
+    // The PTY status line keeps ticking behind the native panel. Guarding only the resource ring
+    // would let all four chips flicker between SDK truth and terminal truth.
+    const claudeState = rendererSource.slice(
+      rendererSource.indexOf('const renderClaudeState = ('),
+      rendererSource.indexOf('maybeOfferClaudeContextDowngrade(state);'),
+    );
+    expect(claudeState).toMatch(
+      /if \(activeNativeConversationId\) \{[\s\S]*?renderNativeFooter\(nativeSnapshot\);[\s\S]*?\} else \{[\s\S]*?renderFooterResource\([\s\S]*?renderTerminalFooterChips\(state\);/,
+    );
+
+    for (const menu of ['openModelMenu', 'openSpeedMenu', 'openModeMenu', 'openEffortMenu']) {
+      const native = `openNative${menu.slice('open'.length, -'Menu'.length)}Menu`;
+      expect(rendererSource).toMatch(
+        new RegExp(
+          `const ${menu} = [^\\n]*\\{\\s*if \\(activeNativeConversationId\\) \\{\\s*${native}\\(\\);`,
+        ),
+      );
+    }
+    // Fast has five honest states; collapsing them to on/off would hide a silent fallback.
+    for (const label of ['Fast 已确认', 'Fast 已回退', 'Fast 关闭', 'Fast 已请求', 'Fast 不可用']) {
+      expect(rendererSource).toContain(label);
+    }
+    expect(rendererStyles).toContain(".status-chip[data-state='fallback']");
+  });
+
   it('keeps the collapsed native Ultra control concise and moves details to its description', () => {
     expect(rendererSource).toContain("ultracode: 'Ultra Code'");
     expect(rendererSource).not.toContain("ultracode: 'Ultra Code · X-High + 编排'");
-    expect(rendererSource).toContain("nativeEffortControl.setAttribute('aria-description'");
+    // The footer chip owns this now that the native control bar is gone; the long explanation must
+    // still reach assistive tech instead of being dropped with the retired strip.
+    expect(rendererSource).toContain("footerEffort.setAttribute('aria-description'");
   });
 
   it('renders the interaction queue one item at a time', () => {
@@ -1712,10 +1956,10 @@ describe('native conversation component suite', () => {
 
   it('uses tokenized entry and exit motion for the summary and its rows', () => {
     expect(rendererStyles).toMatch(
-      /\.runtime-activity-panel\[data-state='opening'\],[\s\S]*?animation: runtimeSummaryEnter var\(--dur-enter\) var\(--ease-enter\) both;/,
+      /\.runtime-activity-panel\[data-state='opening'\],\s*\.runtime-activity-panel\[data-state='open'\] \{[^}]*?animation: popover-in var\(--dur-enter\) var\(--ease-enter\) both;/,
     );
     expect(rendererStyles).toMatch(
-      /\.runtime-activity-panel\[data-state='closing'\] \{[\s\S]*?animation: runtimeSummaryExit var\(--dur-exit\) var\(--ease-exit\) both;/,
+      /\.runtime-activity-panel\[data-state='closing'\] \{[^}]*?animation: popover-out var\(--dur-exit\) var\(--ease-exit\) both;/,
     );
     expect(rendererStyles).toMatch(
       /\.runtime-summary-row,[\s\S]*?animation: runtimeSummaryRowEnter var\(--dur-enter\) var\(--ease-enter\) both;/,
@@ -1743,30 +1987,17 @@ describe('view switching motion', () => {
    */
   it('animates the terminal/chat swap without remounting either shell', () => {
     expect(rendererStyles).toMatch(
-      /\.terminal-shell:not\(\[hidden\]\),\s*\.chat-shell:not\(\[hidden\]\)\s*\{[\s\S]*?animation: workspaceShellEnter var\(--dur-3\) var\(--ease-decel\)/,
+      /\.terminal-shell:not\(\[hidden\]\),\s*\.chat-shell:not\(\[hidden\]\)\s*\{[^}]*?animation: popover-in var\(--dur-3\) var\(--ease-decel\)/,
     );
     expect(rendererStyles).toMatch(
-      /\.settings-panel--active\s*\{[\s\S]*?animation: settingsPanelEnter var\(--dur-3\) var\(--ease-decel\)/,
+      /\.settings-panel--active\s*\{[^}]*?animation: popover-in var\(--dur-3\) var\(--ease-decel\)/,
     );
     // The dead class had no rule anywhere; keeping it would imply a swap style that does not exist.
     expect(rendererSource).not.toContain("workspace.classList.toggle('workspace--chat'");
   });
 
-  /*
-   * Both entrances run on the copy that is already live and clickable, so they are bound by the same
-   * rule as `railPageEnter`: transforming an interactive layer moves every control's hit-test box for
-   * the length of the animation. `.workbench-page` is allowed to translate only because it transforms
-   * the outgoing, `pointer-events: none` copy instead — a shape a `hidden` swap cannot reproduce.
-   */
-  it('fades the switch surfaces rather than transforming a live hit-test layer', () => {
-    for (const name of ['workspaceShellEnter', 'settingsPanelEnter']) {
-      const body = new RegExp(`@keyframes ${name}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`).exec(
-        rendererStyles,
-      )?.groups?.body;
-      expect(body).toBeDefined();
-      expect(body).toContain('opacity:');
-      expect(body).not.toContain('transform:');
-    }
+  it('uses the shared switch entrance and keeps outgoing workbench pages inert', () => {
+    expect(rendererStyles).toMatch(/@keyframes popover-in\s*\{[\s\S]*?opacity:/);
     expect(rendererStyles).toMatch(
       /\.workbench-page:not\(\.workbench-page--active\)\s*\{[\s\S]*?pointer-events: none;[\s\S]*?transform: translateY/,
     );

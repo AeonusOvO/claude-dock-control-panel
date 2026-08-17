@@ -39,6 +39,8 @@ const probe = `
   if (!popup) return { opened: false };
 
   const style = getComputedStyle(popup);
+  const popupBackground = style.backgroundColor;
+  const visibleBeforeCommit = !popup.hidden && style.display !== 'none';
   const rows = [...popup.querySelectorAll('button')];
   // A row buried under the dialog would hit-test to the dialog instead of to itself.
   const rowRect = rows[0].getBoundingClientRect();
@@ -59,18 +61,35 @@ const probe = `
     target.dispatchEvent(new MouseEvent('mousedown', tinit));
     target.dispatchEvent(new MouseEvent('click', tinit));
   }
-  await sleep(60);
+  await sleep(40);
+  const exitStyle = getComputedStyle(popup);
+  const hiddenAfterCommit = popup.hidden;
+  const displayDuringExit = exitStyle.display;
+  const transitionBehavior = exitStyle.transitionBehavior;
+  const closingFlagAbsent = popup.dataset.closing === undefined;
+  const exitAnimations = popup.getAnimations();
+  const activeTransitionProperties = exitAnimations
+    .map((animation) => animation.transitionProperty)
+    .filter(Boolean);
+  for (const animation of exitAnimations) animation.finish();
+  await sleep(0);
 
   return {
+    activeTransitionProperties,
     changeFired,
+    closingFlagAbsent,
     committed: select.value === wanted,
+    displayAfterExit: getComputedStyle(popup).display,
+    displayDuringExit,
+    hiddenAfterCommit,
     hostIsDialog: popup.parentElement.tagName === 'DIALOG',
     opened: true,
     // A themed popup, not the OS listbox: it paints from the theme's own surface token.
-    popupBackground: style.backgroundColor,
+    popupBackground,
     rowIsHittable: popup.contains(rowHit),
     rowCount: rows.length,
-    visible: !popup.hidden,
+    transitionBehavior,
+    visibleBeforeCommit,
   };
 })()
 `;
@@ -80,6 +99,7 @@ app.whenReady().then(async () => {
     height: 900,
     show: false,
     webPreferences: {
+      backgroundThrottling: false,
       preload: path.join(__dirname, '..', 'dist', 'preload', 'preload.js'),
     },
     width: 1280,
@@ -93,7 +113,7 @@ app.whenReady().then(async () => {
 
   const failures = [];
   if (!result.opened) failures.push('the dropdown never opened inside the dialog');
-  if (!result.visible) failures.push('the popup was not on screen');
+  if (!result.visibleBeforeCommit) failures.push('the popup was not on screen before commit');
   if (!result.hostIsDialog) {
     failures.push('the popup stayed outside the dialog, where the top layer buries it');
   }
@@ -101,6 +121,21 @@ app.whenReady().then(async () => {
   if (!result.rowIsHittable) failures.push('a row was not clickable — something covers the popup');
   if (!result.committed) failures.push('clicking a row did not change the native value');
   if (!result.changeFired) failures.push('clicking a row fired no change event');
+  if (!result.hiddenAfterCommit) failures.push('hidden did not update synchronously on commit');
+  if (!result.closingFlagAbsent) failures.push('the retired data-closing flag was set');
+  if (result.displayDuringExit === 'none') {
+    failures.push('the discrete display transition did not preserve the visual exit');
+  }
+  if (!result.transitionBehavior.includes('allow-discrete')) {
+    failures.push('the popup transition does not opt display into allow-discrete');
+  }
+  if (
+    !result.activeTransitionProperties.some((property) => ['display', 'opacity'].includes(property))
+  ) {
+    failures.push('no CSS transition was active during the visual exit');
+  }
+  if (result.displayAfterExit !== 'none')
+    failures.push('the popup remained painted after its exit');
 
   if (failures.length > 0) {
     console.error(`\ndialog select FAILED:\n- ${failures.join('\n- ')}`);

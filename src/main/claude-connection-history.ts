@@ -45,7 +45,7 @@ const EMPTY_STORE: StoredHistoryFile = {
   version: 3,
 };
 
-const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 
 const GATEWAY_STATES = new Set<ClaudeRouterGatewayState>([
   'error',

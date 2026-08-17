@@ -99,4 +99,37 @@ describe('NetworkPreflightService', () => {
 
     expect(diagnosticsStore.getView().entries).toHaveLength(0);
   });
+
+  it('starts a fresh check for callers that arrive after an invalidation', async () => {
+    const root = createRoot();
+    const releases: ((value: ConnectivityObservation) => void)[] = [];
+    const run = vi.fn(
+      () =>
+        new Promise<ConnectivityObservation>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const service = new NetworkPreflightService({
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      probe: { run },
+    });
+    const input = { action: 'background' as const, provider: 'openai-codex' as const };
+
+    const stale = service.run(input);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // Proxy or endpoint settings changed, so anything computed under the old configuration is void.
+    service.invalidate('proxy-changed');
+
+    // Reusing the superseded in-flight promise here hands the new caller a verdict computed with
+    // the configuration they just replaced.
+    const fresh = service.run(input);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(fresh).not.toBe(stale);
+
+    for (const release of releases) {
+      release(successfulObservation());
+    }
+    await Promise.all([stale, fresh]);
+  });
 });

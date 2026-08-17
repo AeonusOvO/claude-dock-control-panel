@@ -526,12 +526,26 @@ export class ChatHistoryStore {
     return true;
   }
 
+  /**
+   * Deletes attachment bytes that no retained conversation references any more.
+   *
+   * Only ever called after the history file is durably committed, so a failure here must not be
+   * reported as a failure of the whole operation: telling the caller nothing was saved invites a
+   * retry of a write that already succeeded. Leftover bytes are reclaimed by the startup orphan
+   * collector instead, which is why swallowing is safe rather than a silent leak.
+   */
   private cleanupAttachments(removed: ChatConversation[], retained: ChatConversation[]): void {
-    const candidates = chatAttachmentIds(removed.flatMap((conversation) => conversation.messages));
-    const retainedIds = chatAttachmentIds(
-      retained.flatMap((conversation) => conversation.messages),
-    );
-    this.attachmentStore.deleteUnreferenced(candidates, retainedIds);
+    try {
+      const candidates = chatAttachmentIds(
+        removed.flatMap((conversation) => conversation.messages),
+      );
+      const retainedIds = chatAttachmentIds(
+        retained.flatMap((conversation) => conversation.messages),
+      );
+      this.attachmentStore.deleteUnreferenced(candidates, retainedIds);
+    } catch {
+      // Locked or already-removed attachment directories are reclaimed on the next startup sweep.
+    }
   }
 
   private validateId(conversationId: string): void {

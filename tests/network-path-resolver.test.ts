@@ -42,4 +42,33 @@ describe('NetworkPathResolver', () => {
     expect(applicationPath?.detail).toContain('可见代理第一跳');
     expect(applicationPath?.detail).toContain('代理内核');
   });
+
+  it('reports no CLI application proxy when the proxy is not scoped to the CLI', async () => {
+    /*
+     * `buildApplicationProxyEnvironment` only injects HTTP(S)_PROXY into the CLI when
+     * `view.scope.cli` is set, so passing a URL here for an application-only proxy makes the CLI
+     * diagnostics blame a proxy the CLI never used. The caller must honour the same scope gate.
+     */
+    const paths = await new NetworkPathResolver(
+      async () => 'DIRECT',
+      () => undefined,
+    ).resolve('anthropic-claude', 'https://api.anthropic.com');
+
+    expect(paths.find(({ process }) => process === 'claude-cli')).toMatchObject({
+      proxyConfigured: false,
+      proxyKind: 'direct',
+    });
+  });
+
+  it('marks every path proxy state unknown when the lookup times out', () => {
+    const paths = new NetworkPathResolver(async () => 'DIRECT').unknownPaths(
+      'anthropic-claude',
+      '本机网络路径探测超时，代理状态未知。',
+    );
+
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.every((path) => path.proxyKind === 'unknown')).toBe(true);
+    expect(paths.some((path) => path.process === 'claude-cli')).toBe(true);
+    expect(paths.every((path) => path.detail.includes('超时'))).toBe(true);
+  });
 });

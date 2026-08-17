@@ -17,7 +17,7 @@ interface ProjectDirectoryLifecycleState {
   openIntents: Set<ProjectDirectoryLifecycleIntent>;
 }
 
-const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 
 export class ProjectDirectoryLifecycleOwnership {
   public constructor(

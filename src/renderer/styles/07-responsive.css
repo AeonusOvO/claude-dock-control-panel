@@ -1,0 +1,307 @@
+/* Responsive breakpoints (CSS media conditions cannot consume custom properties):
+ * compact = 720px · medium = 1024px · wide = 1280px */
+@media (max-width: 1024px) {
+  :root {
+    --activity-rail-w: 54px;
+    --drawer-w: 420px;
+    --rail-w: 248px;
+    --terminal-min: 80px;
+  }
+
+  .native-recovery-card {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .terminal-title > span {
+    display: none;
+  }
+
+  .native-conversation__messages,
+  .native-composer {
+    padding-inline: var(--s-4);
+  }
+
+  .native-interaction-stack {
+    padding-inline: var(--s-4);
+  }
+  .brand__descriptor {
+    display: none;
+  }
+
+  .activity-rail__button span:not(.activity-rail__dot) {
+    display: none;
+  }
+  .terminal-footer__more {
+    display: inline-flex;
+  }
+
+  .terminal-footer__group--status > #footer-status {
+    display: none;
+  }
+
+  .terminal-footer__secondary {
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-lg);
+    bottom: calc(100% + var(--s-2));
+    box-shadow: var(--shadow-overlay);
+    display: grid;
+    gap: var(--s-1);
+    min-width: 230px;
+    opacity: 0;
+    padding: var(--s-2);
+    pointer-events: none;
+    position: absolute;
+    right: var(--s-3);
+    transform: translateY(var(--s-2));
+    transition:
+      opacity var(--dur-2) var(--ease-standard),
+      transform var(--dur-2) var(--ease-standard),
+      visibility var(--dur-zero) linear var(--dur-2);
+    visibility: hidden;
+    z-index: 30;
+  }
+
+  .terminal-footer__secondary[data-open='true'] {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition-delay: var(--dur-zero);
+    visibility: visible;
+  }
+
+  .terminal-footer__secondary > button {
+    justify-content: flex-start;
+    margin: 0;
+    min-height: var(--control-h-sm);
+    padding-inline: var(--s-3);
+    width: 100%;
+  }
+  .chat-toolbar__metrics {
+    display: none;
+  }
+
+  .workspace {
+    grid-template-columns:
+      var(--activity-rail-w) minmax(240px, var(--rail-w)) 5px
+      minmax(0, 1fr);
+  }
+
+  .control-panel {
+    padding-inline: var(--s-3);
+  }
+
+  .titlebar {
+    padding-left: var(--s-3);
+  }
+
+  .titlebar__status {
+    max-width: 210px;
+  }
+
+  .terminal-title {
+    justify-self: start;
+    min-width: 0;
+  }
+
+  .terminal-title strong {
+    max-width: min(190px, 30vw);
+  }
+
+  .terminal-footer {
+    gap: var(--s-2);
+  }
+
+  .terminal-footer__core {
+    gap: var(--s-1);
+    overflow: hidden;
+  }
+
+  #footer-connection,
+  #footer-resource {
+    max-width: min(36vw, 180px);
+  }
+
+  .plugin-toolbar {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .plugin-toolbar__actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plugin-toolbar__actions button {
+    min-width: 0;
+    padding-inline: var(--s-2);
+    white-space: normal;
+  }
+
+  .claude-workbench {
+    width: min(var(--drawer-w), calc(100% - var(--terminal-min)));
+  }
+
+  .workbench-page {
+    padding: var(--s-3);
+  }
+
+  .shortcut-list > div {
+    align-items: start;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-layout {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+
+  .chat-messages {
+    padding-inline: var(--s-4);
+  }
+
+  .chat-composer {
+    padding-inline: var(--s-3);
+  }
+
+  .chat-metric > span:not(.chat-metric__live) {
+    display: none;
+  }
+
+  .software-update-row {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  /* Browser zoom reduces the CSS viewport without always dispatching a window resize in Electron.
+   * Keep the default workspace usable even before the renderer reconciles its rail-preview state. */
+  .workspace:not(.workspace--rail-preview) {
+    grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);
+  }
+
+  .workspace:not(.workspace--rail-preview) .control-panel {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    width: 0;
+  }
+
+  .workspace:not(.workspace--rail-preview) .panel-resizer {
+    display: none;
+  }
+  .network-preflight-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .network-preflight-card__actions button {
+    flex: 1;
+  }
+
+  .network-preflight-dialog__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .network-preflight-probes > div {
+    grid-template-columns: 72px 1fr;
+  }
+
+  .network-preflight-probes > div > span:last-child {
+    grid-column: 1 / -1;
+  }
+  .provider-setup__heading {
+    align-items: stretch;
+    display: grid;
+  }
+  .download-progress {
+    grid-template-columns: 40px minmax(64px, 96px);
+  }
+
+  .download-progress__ring {
+    height: 40px;
+    width: 40px;
+  }
+
+  .download-task__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .quit-confirmation-dialog footer button {
+    flex: 1 1 100%;
+  }
+
+  .quit-confirmation-list li {
+    align-items: start;
+    flex-direction: column;
+  }
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-tabs {
+    border-bottom: 1px solid var(--line);
+    border-right: 0;
+    flex-direction: row;
+    padding: var(--s-2);
+  }
+
+  .settings-tab {
+    flex: 1 1 0;
+    text-align: center;
+  }
+
+  .settings-row {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .settings-row .select {
+    width: 100%;
+  }
+  .toolbar-menu-button,
+  .terminal-toolbar .terminal-theme-control :is(.select__trigger) {
+    justify-content: center;
+    padding: 0;
+    width: var(--control-h-sm);
+  }
+
+  .toolbar-menu-button__label,
+  .toolbar-menu-button__chevron,
+  .terminal-theme-control .select__label,
+  .terminal-theme-control .select__chevron {
+    display: none;
+  }
+
+  .toolbar-menu-button__dot,
+  .terminal-toolbar .terminal-theme-control :is(.select__trigger)::before {
+    height: var(--s-1-5);
+    width: var(--s-1-5);
+  }
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --activity-rail-w: 64px;
+    --drawer-w: 520px;
+    --rail-w: 336px;
+    --terminal-min: 320px;
+  }
+
+  .workspace {
+    grid-template-columns:
+      var(--activity-rail-w) minmax(270px, var(--rail-w)) 5px
+      minmax(var(--terminal-min), 1fr);
+  }
+
+  .control-panel {
+    padding-inline: var(--s-5);
+  }
+
+  .terminal-title strong {
+    max-width: min(360px, 30vw);
+  }
+
+  .settings-layout {
+    grid-template-columns: 192px minmax(0, 1fr);
+  }
+}

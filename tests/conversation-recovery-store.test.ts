@@ -169,4 +169,50 @@ describe('conversation recovery store', () => {
     writeFileSync(path.join(directory, 'recovery-journal.json.bak'), 'also broken', 'utf8');
     expect(new ConversationRecoveryStore(root, encryption()).list()).toEqual([]);
   });
+
+  it('keeps the encrypted prompt in memory when the confirming save fails', () => {
+    const root = createRoot();
+    const store = new ConversationRecoveryStore(root, encryption(), () => 400);
+    reserve(store);
+    store.preparePrompt(
+      identity.runtime,
+      identity.projectPath,
+      identity.conversationId,
+      'submission-1',
+      '需要保留的草稿',
+    );
+    const journalPath = path.join(root, 'claude', 'recovery-journal.json');
+    const before = readFileSync(journalPath, 'utf8');
+
+    /*
+     * `persist` writes its temporary file with the `wx` flag, so pre-creating the exact next
+     * temporary path makes the save fail with EEXIST — a stand-in for ENOSPC or EACCES. The
+     * mutation must not have been applied to memory yet: marking transcript-confirmed deletes the
+     * encrypted prompt, and a later successful save would otherwise flush that deletion to disk
+     * even though this confirmation never became durable.
+     */
+    // reserve() and preparePrompt() have each persisted once, so the next temporary id is 3.
+    writeFileSync(`${journalPath}.${process.pid}.3.tmp`, 'blocking', 'utf8');
+    expect(() =>
+      store.markSubmission(
+        identity.runtime,
+        identity.projectPath,
+        identity.conversationId,
+        'submission-1',
+        'transcript-confirmed',
+      ),
+    ).toThrow();
+
+    expect(readFileSync(journalPath, 'utf8')).toBe(before);
+
+    // The in-memory journal must still match what is on disk, so a later save cannot leak the
+    // rolled-back deletion.
+    const preserved = store.preserveUnsentDraft(
+      identity.runtime,
+      identity.projectPath,
+      identity.conversationId,
+      'submission-1',
+    );
+    expect(preserved.state).toBe('interrupted-draft');
+  });
 });

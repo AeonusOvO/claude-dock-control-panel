@@ -42,4 +42,32 @@ describe('FolderHistoryLoadCoordinator', () => {
     const readded = coordinator.request('d:\\project alpha', false)!;
     expect(coordinator.finish(readded)).toEqual({ current: true, reloadRequested: false });
   });
+
+  it('remembers a failed read so it is never mistaken for an empty history', () => {
+    const coordinator = new FolderHistoryLoadCoordinator();
+    const attempt = coordinator.request('d:\\project alpha', false)!;
+
+    coordinator.finish(attempt);
+    coordinator.markFailed('d:\\project alpha');
+
+    // Caching a failure as `[]` would make every later non-forced read short-circuit and show the
+    // folder as permanently empty, so the failure has to stay distinguishable and retryable.
+    expect(coordinator.hasFailed('d:\\project alpha')).toBe(true);
+    expect(coordinator.hasFailed('d:\\project beta')).toBe(false);
+
+    const retry = coordinator.request('d:\\project alpha', true)!;
+    coordinator.finish(retry);
+    coordinator.markLoaded('d:\\project alpha');
+
+    expect(coordinator.hasFailed('d:\\project alpha')).toBe(false);
+  });
+
+  it('forgets failure state when the project leaves the workspace', () => {
+    const coordinator = new FolderHistoryLoadCoordinator();
+
+    coordinator.markFailed('d:\\project alpha');
+    coordinator.invalidate('d:\\project alpha');
+
+    expect(coordinator.hasFailed('d:\\project alpha')).toBe(false);
+  });
 });

@@ -1,24 +1,40 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
+  ClaudeContextWindowMode,
   CloseBehavior,
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
 } from '../shared/contracts';
+import { isValidClaudeCustomContextWindow } from '../shared/claude-context-window';
 
 export interface AppPreferences {
+  claudeContextWindowCustomTokens?: number;
+  claudeContextWindowMode: ClaudeContextWindowMode;
   closeBehavior: CloseBehavior;
   closeToTrayNoticeShown: boolean;
   footerResourcePreference: FooterResourcePreference;
   managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
 }
 
+/**
+ * `auto` keeps Claude Code's own window judgement. Defaulting to a stated 1M would break official
+ * subscriptions that lack the entitlement, so the wider window is opt-in from the status bar.
+ */
 const DEFAULT_PREFERENCES: AppPreferences = {
+  claudeContextWindowMode: 'auto',
   closeBehavior: 'tray',
   closeToTrayNoticeShown: false,
   footerResourcePreference: 'auto',
   managedChatGptContextWindowMode: 'standard',
 };
+
+const CLAUDE_CONTEXT_WINDOW_MODES: readonly ClaudeContextWindowMode[] = [
+  'auto',
+  'custom',
+  'extended',
+  'standard',
+];
 
 /**
  * Chromium owns a `Preferences` file directly inside `userData`. Windows paths are case-insensitive,
@@ -63,7 +79,12 @@ export class AppPreferencesStore {
       typeof next.closeToTrayNoticeShown !== 'boolean' ||
       !['auto', 'context', 'quota'].includes(next.footerResourcePreference) ||
       (next.managedChatGptContextWindowMode !== 'standard' &&
-        next.managedChatGptContextWindowMode !== 'extended')
+        next.managedChatGptContextWindowMode !== 'extended') ||
+      !CLAUDE_CONTEXT_WINDOW_MODES.includes(next.claudeContextWindowMode) ||
+      (next.claudeContextWindowMode === 'custom' &&
+        !isValidClaudeCustomContextWindow(next.claudeContextWindowCustomTokens)) ||
+      (next.claudeContextWindowCustomTokens !== undefined &&
+        !isValidClaudeCustomContextWindow(next.claudeContextWindowCustomTokens))
     ) {
       throw new Error('应用偏好设置无效。');
     }
@@ -115,6 +136,8 @@ export class AppPreferencesStore {
   private read(storagePath: string): AppPreferences | null {
     try {
       const parsed = JSON.parse(readFileSync(storagePath, 'utf8')) as {
+        claudeContextWindowCustomTokens?: unknown;
+        claudeContextWindowMode?: unknown;
         closeBehavior?: unknown;
         closeToTrayNoticeShown?: unknown;
         footerResourcePreference?: unknown;
@@ -126,7 +149,23 @@ export class AppPreferencesStore {
         (parsed.closeBehavior === 'exit' || parsed.closeBehavior === 'tray') &&
         typeof parsed.closeToTrayNoticeShown === 'boolean'
       ) {
+        const claudeContextWindowMode = CLAUDE_CONTEXT_WINDOW_MODES.includes(
+          parsed.claudeContextWindowMode as ClaudeContextWindowMode,
+        )
+          ? (parsed.claudeContextWindowMode as ClaudeContextWindowMode)
+          : 'auto';
+        const claudeContextWindowCustomTokens = isValidClaudeCustomContextWindow(
+          parsed.claudeContextWindowCustomTokens,
+        )
+          ? parsed.claudeContextWindowCustomTokens
+          : undefined;
         return {
+          claudeContextWindowCustomTokens,
+          // A custom window without a usable token count would inject nothing; fall back to auto.
+          claudeContextWindowMode:
+            claudeContextWindowMode === 'custom' && claudeContextWindowCustomTokens === undefined
+              ? 'auto'
+              : claudeContextWindowMode,
           closeBehavior: parsed.closeBehavior,
           closeToTrayNoticeShown: parsed.closeToTrayNoticeShown,
           footerResourcePreference:

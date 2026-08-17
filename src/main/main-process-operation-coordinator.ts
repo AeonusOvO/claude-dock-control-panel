@@ -2,7 +2,7 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { DevelopmentRuntime, PtyGeneration } from '../shared/contracts';
 
-const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 
 export interface RuntimeSwitchSessionSnapshot {
   cwd: string;

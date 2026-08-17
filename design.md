@@ -1,17 +1,22 @@
 # ClaudeDock 设计规范
 
+当前设计版本：**5.0.0-rc.12**（2026-08-16）。旧版设计计划、路线图、缺陷清单与分阶段修复提示词
+统一归档在 [`docs/archive/`](docs/archive/)；它们仅用于历史追溯，不得覆盖本文的当前设计契约。
+
 ## 5.0 安全终端与原生对话工作区
 
 - 项目默认进入真实 PowerShell/ConPTY 安全终端；“新建安全会话”、继续、选择历史和历史记录点击都走
   终端主路径。结构化原生 DOM 对话只能通过工具栏的“原生对话”显式进入，恢复记录不得自动打开原生
-  界面；进入后，同一按钮显示“返回终端”。消息、工具、计划、权限、提问、附件、恢复卡与交互坞共用
+  界面；进入后，同一按钮显示“返回终端”。按钮始终在当前标签页和同一对话 UUID 间往返：确认无回复、
+  排队/等待任务或运行中的 Web 进程时直接切换，否则用应用内模态框要求用户“中断并切换”或取消；
+  未发送草稿自动走加密恢复通道，不为安全保存本身再弹第二次确认。消息、工具、计划、权限、提问、附件、恢复卡与交互坞共用
   同一四行网格，各行显式指定位置，隐藏空行不得改变消息或输入框的位置。
 - 用户提示词继续靠右使用强调色气泡并保留原始段落；助手回复靠左占用稳定的宽输出列，以当前主题的
   `--surface-terminal`、等宽 `>_` 提示符和强调色左边线复刻 PowerShell 输出层次。这个外壳只是结构化
   对话的视觉语言，不得把回复重新送进 PTY，也不得把每个流式 token 渲染成独立卡片。流式阶段只在同一
   DOM 节点内追加纯文本并显示光标，完成后原位切换安全 Markdown；减少动态效果时光标保持静态。
-- 对话主列始终使用 `minmax(0, 1fr)`；当有效视口不宽于 680px（包括浏览器缩放）时项目栏收起为
-  活动栏入口，点击后以现有 rail preview 动画临时展开。820px 顶栏隐藏技术性“终端”徽标，200%
+- 对话主列始终使用 `minmax(0, 1fr)`；当有效视口不宽于 720px（包括浏览器缩放）时项目栏收起为
+  活动栏入口，点击后以现有 rail preview 动画临时展开。1024px medium 档隐藏技术性“终端”徽标，200%
   缩放再收起主题选择和工作台文字，只保留可读标题与可聚焦图标操作。
 - 历史行采用 `minmax(0, 1fr)` 主列和独立尾槽。时间使用不换行、等宽数字；删除按钮与时间在同一
   尾槽交叉淡入，键盘 focus 与 200% 缩放都不得被滚动条裁掉。项目列表外层没有滚动条时不得永久
@@ -51,6 +56,20 @@
 - 提交动作必须先捕获对话 UUID、提交 UUID、文本和附件集合，再进入异步 IPC；确认只允许清理仍属于
   同一提交的内容，不能用全局活动 UUID 处理迟到结果。SDK 接受输入后立即显示用户消息；单轮失败在
   对话中显示并允许修正重试，流级致命失败则结束 owner，不能留下外观可点但没有消费者的发送按钮。
+- 原生输入坞只有一个动作按钮（`#native-send`），发送与中断是它的两副面孔，不再并排摆两个按钮。
+  三个属性各司其职：`data-action` 决定这次点击是 `send` 还是 `stop`，`data-sending` 标记发送确认
+  动效，`data-stopping` 标记只有真正按下中断后才生长的光环。只有「正在运行/正在中断」且输入框与
+  附件队列都为空时才呈现 `stop`；用户一开始打字，下一个意图就变回「发送」，按钮必须立刻退回主题
+  发送面孔，不能留成一个会丢弃正在流式回复的陷阱。两副面孔的切换发生在发送动效的 `animationend`，
+  绑定用户实际看到的画面，而不是主进程回调的快慢——否则一次快速确认会让按钮在动效中途跳变。
+  `stop` 面孔在静止时是透明底上的方形停止标记，不预先画出按下态；`stop` 期间按钮不禁用，只有
+  `stopping` 阶段才禁用，避免重复中断。
+- 运行中输入的内容不打断回复，而是提升到发送行上方的排队条 `#native-queued`，分两级推进：第一级
+  是「本轮结束后自动发送」，快照回到 `idle` 时自动释放；用户按 `Esc` 中断后降为第二级「本轮已中断 ·
+  点击『立即发送』继续」，必须由人显式点按。每个对话至多一条排队项，再按一次 Enter 以空行追加到
+  同一条，排队条不得增长成第二条对话记录。只有 `idle` 允许释放队列：`requires-action` 正开着权限
+  卡片，放行会插队；`failed`/`stopped` 会朝着已死会话反复重发。切换回终端时排队内容先折回输入框，
+  由既有的加密草稿通道统一携带，不另开一条保全路径。
 - 原生回复的可见身份按前台或 `parent_tool_use_id` 流通道稳定到整条消息：token 增量与最终完整帧必须
   更新同一行。renderer 保存每条消息的渲染签名、复用已有节点，并把连续快照合并到下一绘制帧；滚动、
   文本选择和已完成 Markdown 不得因另一个 token 到达而整体重建。
@@ -61,169 +80,263 @@
   PowerShell 在显示提示符前用一次性环境值捕获它，PTY 绑定完成后只提交固定短触发词。默认 Claude
   会话不附加系统提示词或子代理，不强制 `--no-chrome`，模型由会话专用 settings 决定；显式开启的
   中转站兼容开关仍可按其界面说明附加对应能力。
-- 所有新增组件必须经过四主题、820×640 / 900×640 / 1180×760、270/320/560px 项目栏、
+- 所有新增组件必须经过四主题、720×640 / 820×640 / 900×640 / 1024×640 / 1180×760 / 1280×760、270/320/560px 项目栏、
   125%/150%/200% 缩放及进入/退出中间帧截图。证据写入 `dist/visual-qa/<feature>/manifest.json`，
   生成物不提交 Git；最终仍须在真实 Windows Electron 窗口中逐项点击和截图。
 
-## 设计令牌系统（2026-07-30 更新）
+## 设计系统：单一事实源（2026-08-16）
 
-所有样式使用 CSS 自定义属性管理，禁止硬编码颜色、间距、圆角或时长。
+### 三条原则
 
-`:root` 是唯一允许出现字面值的地方；文件其余部分只能引用令牌。`tests/design-tokens.test.ts`
-把这一点变成可检查的不变式：`:root` 之外不允许 `#rrggbb`、不允许带色相的 `rgb()`/`rgba()`
-（只放行 `0 0 0` 与 `255 255 255` 的中性透明度）、`font-family` 只能是
-`var(--font-ui)` / `var(--font-display)` / `var(--font-mono)` / `inherit`、不允许写死
-`font-size: <n>px`。
-这条不变式同时是「全局主题真的生效」的保证——主题只需覆写令牌，不需要逐条改样式。
-批量替换的工具与感知色差（CIE76）报告见 `scripts/tokenize-colors.cjs`。
+1. **简洁优先**：一个语义只保留一个原语、一个状态源和一个视觉信号；不要用多层外框、重复说明或
+   平行组件补偿层级不足。
+2. **按角色命名**：业务样式表达 body、caption、raised surface、danger 或 popup，不表达某个偶然的
+   像素值。主题改变人格，组件不复制主题分支。
+3. **规范由测试强制**：本文是视觉与交互规范的唯一事实源；`tests/design-tokens.test.ts` 和视觉烟测
+   负责阻止令牌、文件职责、主题对比度、控件外观与布局契约回退。
 
-### 字体族
+### 三层令牌模型与文件职责
 
-- **界面正文**：`--font-ui` 随主题人格变化，字体是主题的一部分而不是全局常量。Claude 使用
-  本地 `Hanken Grotesk Variable`，Telegram 使用其桌面客户端同款的本地 `Roboto Variable`，
-  石墨 / 深海蓝使用本地 `Inter Variable`。中文依次回退 `Microsoft YaHei UI`、`Segoe UI`
-  ——拉丁字体不含中文字形，这个回退不是可选项。
-- **品牌标题**：`--font-display` 是第三种职责明确的字体槽。Claude 使用本地
-  `Newsreader Variable` 表达温和编辑感；Telegram 与两套工程主题让它等于各自正文
-  字体。仅消息标题、空状态标题和 Artifact 抽屉标题可使用，不得把长正文改成衬线。
-- Anthropic 品牌真正使用的 Styrene 与 Tiempos 是商业授权字体，不能随应用分发；
-  Hanken Grotesk 与 Newsreader 是可自由分发的最接近替代，选择依据是几何无衬线的
-  低对比字形与偏窄的编辑体衬线。
-- **等宽**：`--font-mono`（`Cascadia Mono` → `Consolas`）
-- 三个字体槽均由本地包或系统字体提供，离线时不访问第三方字体站点。其他字体写法视为回归；
-  图标按钮继承上下文字体（`inherit`），不单独指定字族。
+| 层级                  | 事实来源                                                                       | 职责                                 | 业务样式能否直接使用字面值         |
+| --------------------- | ------------------------------------------------------------------------------ | ------------------------------------ | ---------------------------------- |
+| Primitive / Reference | `src/shared/terminal-themes.ts`、`styles/01-tokens.css`                        | 主题授权值、默认值、间距与推导公式   | 否；CSS 字面值只在 `01-tokens.css` |
+| Semantic / System     | `--surface-*`、`--type-*`、`--accent-*`、`--ok/warn/bad-*`、`--dur-*`、`--r-*` | 表达内容角色、状态、层级、运动与密度 | 是，且业务规则只使用这一层         |
+| Component             | `styles/05-primitives.css` 与各 view 顶部的组件私有契约                        | 控件几何、状态、修饰符与局部布局     | 只能由语义令牌推导                 |
 
-### 颜色令牌
+`src/renderer/styles.css` 只是 `@import` 清单。样式按所有权拆分如下：
 
-- **表面阶梯**：`--surface-canvas` (body 背景) → `--surface-terminal` (终端背景) → `--surface-1` (chrome) → `--surface-2` (面板) → `--surface-3` (卡片) → `--surface-4` (嵌套卡片) → `--surface-inset` (凹陷)
-- **文字层级**：`--text-hi` (标题) → `--text` (正文) → `--text-lo` (次级/必读辅助) → `--text-dim` (装饰性) → `--text-mute` (禁用)
-- **发丝描边**：`--line-subtle` (6%) / `--line` (9%) / `--line-strong` (13%) / `--line-hover` (20%)
-- **主色**：`--accent-solid` (实心填充) / `--accent-text` (文字图标)；Claude 明亮使用陶土色，
-  Telegram 明亮使用克制蓝色，深色主题沿用青蓝。
-- **状态三色**：`--ok-*` (绿) / `--warn-*` (琥珀) / `--bad-*` (红)，每色包含 solid/text/tint/line 四槽
-- **代码语义色**：Shiki 只负责识别 token 的色相类别，最终颜色映射到
-  `--syntax-red/blue/cyan/green/magenta/yellow/neutral`。因此切主题不需要重建已显示代码，
-  语法色会随 xterm palette 即时重绘。
-- **主题作用域是全局的**：字体、表面阶梯、文字层级、交互层、发丝描边、主色、状态色、
-  阴影、高光、主题排版、圆角、按压、进退场曲线和终端遮罩由
-  `src/shared/terminal-themes.ts` 的 `shell` 字段驱动，映射表是同文件的 `SHELL_CSS_VARIABLES`。
-  切换主题时渲染层遍历该映射写到 `documentElement.style`，主进程同步
-  `setBackgroundColor` / `setTitleBarOverlay`（原生窗口边框由 Windows 绘制，CSS 管不到），
-  所选主题存进 `WorkspaceStore`，冷启动第一帧即为正确配色。绿/琥珀/红的语义不变，但实际
-  明度随外观调整，保证浅底和深底都达到正文对比度要求。
-- **跟随主题的半透明色**：不写 `rgba(r g b / n%)`，改用
-  `color-mix(in srgb, var(--token) n%, transparent)`，这样色相跟着令牌走。纯黑投影
-  （`rgb(0 0 0 / n%)`）与纯白提亮（`rgb(255 255 255 / n%)`）与主题无关，保留字面值。
+| 文件                | 唯一职责                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `01-tokens.css`     | 无条件 `:root`、默认主题值和全部推导阶梯                                                  |
+| `02-reset.css`      | reset、选区、焦点基线、滚动条与仅屏幕阅读器内容                                           |
+| `03-typography.css` | 基础元素与标题角色                                                                        |
+| `04-motion.css`     | 全部 `@keyframes` 和唯一 `prefers-reduced-motion` 块                                      |
+| `05-primitives.css` | button、input、select、checkbox/radio、card、status-chip、popover、tooltip 与 dialog 共性 |
+| `06-layout.css`     | titlebar、activity rail、workspace、drawer、footer 骨架                                   |
+| `07-responsive.css` | 全部宽高媒体查询与条件 `:root` 覆写                                                       |
+| `views/*.css`       | terminal、chat、projects、settings、router、mcp、markdown 的业务外观                      |
 
-### 间距与圆角
+入口当前把 layout 与各 view 先载入，再后置 primitives、responsive、motion，以保留公共原语、响应式
+覆写和减少动态效果的最终优先级。新增规则必须进入拥有该 selector 的文件；跨视图的 selector-list
+整体归 primitive 或 typography，不得拆成多份相同声明。
 
-- **间距阶梯**：`--s-1` (4px) → `--s-2` (8px) → `--s-3` (12px) → `--s-4` (16px) → `--s-5` (20px) → `--s-6` (24px) → `--s-8` (32px) → `--s-10` (40px)
-- **圆角**：`--r-xs` (4px) → `--r-sm` (6px) → `--r-md` (8px) → `--r-lg` (10px) → `--r-xl` (14px) → `--r-2xl` (18px) → `--r-pill` (999px)
-- **节奏原则**：组内 8px、组间 16px、区间 24-40px
+### 完整令牌目录
 
-### 字号阶梯
+下表按命名空间列出 `01-tokens.css` 的公共契约；同一行的 `*` 表示列出的完整后缀集合，而不是允许
+业务代码自行发明新名字。值以 `TerminalThemeShell` 和 `01-tokens.css` 为准，本文只固定用途与所有权。
 
-- **微标 10px**：`--text-3xs` (仅用于极窄空间的图标附标)
-- **最小 11px**：`--text-2xs` (mono 路径、微徽章)
-- **次级 12px**：`--text-xs` (帮助文字、术语表)
-- **默认 13px**：`--text-sm` (按钮、输入、列表)
-- **标题 14px**：`--text-base` (卡片标题)
-- **面板 16px**：`--text-md`
-- **大数值 20px**：`--text-lg`
-- **展示 24px**：`--text-display` (引导图标等大字形)
-- **浮层 28px**：`--text-xl`
-- **眉标 11px**：`--text-eyebrow` (大写、字距 0.08em)
-- 窄屏媒体查询里的 `font-size: 0` 是把按钮收成纯图标的手段，不是阶梯上的一档。
+| 类别               | 公共令牌                                                                                                                                                                                                                                                                  | 用途                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| 字体桥             | `--font-ui/display/mono/tabular`、`--type-base/ratio`                                                                                                                                                                                                                     | 主题授权的字体族、基准字号与比例          |
+| 字体角色           | `--type-{micro,caption,body,subtitle,title,display}-{size,lh,fw,ls}`                                                                                                                                                                                                      | 六级排版角色四元组                        |
+| 行高/字重/字距修饰 | `--lh-{tight,compact,body,note,prose,relaxed,heading}`、`--fw-{regular,medium,semi,strong,heavy}`、`--ls-{tight,snug,body,normal,title,display,wide,caps,eyebrow,shout}`                                                                                                  | label、强调态、等宽数据等有语义的角色修饰 |
+| 表面与边线         | `--surface-{canvas,terminal,1,2,3,4,inset}`、`--line/line-subtle/line-hover/line-strong`、`--layer-{hover,active}`                                                                                                                                                        | 页面层级、边界与交互层                    |
+| 文字与强调色       | `--text-hi/text/text-lo/text-dim/text-mute`、`--accent-{solid,solid-hover,text,fg,tint,line,ring}`                                                                                                                                                                        | 内容层级与主操作                          |
+| 状态与语法色       | `--{ok,warn,bad}-{text,tint,line,solid}`、`--syntax-{neutral,red,green,yellow,blue,magenta,cyan}`                                                                                                                                                                         | 状态、代码与终端语义色                    |
+| 间距               | `--s-{0-5,1,1-5,2,2-5,3,3-5,4,5,6,8,10}`                                                                                                                                                                                                                                  | 2–40px 的唯一公共间距阶梯                 |
+| 圆角与控件         | `--r-{xs,sm,md,lg,xl,2xl,pill}`、`--r-theme-{sm,md,lg,pill}`、`--r-bubble`、`--control-h-{sm,md}`                                                                                                                                                                         | 通用、主题与组件几何                      |
+| 运动               | `--dur-{zero,instant,1,2,3,4,hover,micro,enter,exit,exit-theme,shape,stagger,progress,refresh,blink,busy-loop,status-pulse-fast,status-pulse,status-pulse-slow}`、`--ease-{standard,decel,accel,enter,exit,spring}`、`--press-{sm,lg,theme}`、`--pop-{scale-from,travel}` | 时长、曲线、按压与弹层人格                |
+| 阴影与遮罩         | `--sheen`、`--shadow-{overlay,drawer}`、`--mask-{veil,blur}`、`--opacity-disabled`                                                                                                                                                                                        | 浮层、抽屉、遮罩与禁用态                  |
+| 布局               | `--titlebar-h/titlebar-drag-safe`、`--activity-rail-w/rail-w/drawer-w`、`--toolbar-h/footer-h/composer-h/native-composer-h`、`--composer-{row-h,max,ring}`、`--terminal-min`、`--summary-{header-h,max-h}`                                                                | 应用骨架和可测量边界                      |
 
-### 动效令牌
+组件私有令牌只在拥有者规则附近定义。目前的私有契约是项目引擎卡的
+`--runtime-option-h/icon-size`、历史尾槽的 `--history-tail`、卡片退场的 `--card-rest-opacity`、
+上下文计量的 `--context-color/progress` 与下载环的 `--download-progress`。它们不得被其他 view 当作公共令牌。
 
-- **人格是源，阶梯是派生**：主题只声明六个动效字面量——`--dur-micro`、`--dur-enter`、
-  `--dur-exit-theme`、`--ease-enter`、`--ease-exit`、`--ease-spring`、`--press-theme`。
-  `:root` 从它们派生出全部阶梯，`styles.css` 正文只引用派生令牌。
-- **曲线**：`--ease-standard`（微交互）指向 `--ease-enter`，`--ease-decel`（进场）指向
-  `--ease-spring`，`--ease-accel`（退场）指向 `--ease-exit`。
-- **时长**：`--dur-1`（micro × 0.75，最快微交互）/ `--dur-2`（= micro）/
-  `--dur-3`（enter × 0.85）/ `--dur-4`（= enter，抽屉进）/ `--dur-exit`（抽屉出）。
-- **按压**：`--press-lg` 等于主题的 `--press-theme`，用于大目标；`--press-sm` 由它按比例
-  收敛（下限 0.9），用于 chrome 尺寸的小控件。两档都不写字面缩放值。
-- **主题节奏**：Claude 以 240ms 舒缓减速进入、120ms 微交互；Telegram 以 340ms 长回弹进入、
-  150ms 微交互、更深的 0.975 按压；石墨 190ms / 深海蓝 250ms。同一批声明因此在四套主题下
-  产生四种手感，不需要任何逐主题分支。
-- **刷新反馈**：`--dur-refresh`（enter × 3.75）仅用于标题栏刷新图标的匀速旋转；减少动态效果时
-  由全局规则收敛为一次近乎静止的反馈。
-- **规则**：微交互档（`--dur-1`/`--dur-2`）禁用 emphasized 曲线（会感知为迟滞）。
-  `:root` 之外禁止出现字面 `ms` 或 `cubic-bezier(`，`tests/design-tokens.test.ts` 会拦截
-  ——这条守栏连注释里的字面值也一并拦，注释请写「更长的回弹」而不是具体毫秒数。
-- **交互页切换**：包含按钮、输入框和下拉框的左栏页面只允许透明度进场，不对整页容器做
-  `transform`；否则 Chromium 合成层切换期间可能短暂保留过期的命中测试区域。
-- **悬停不位移**：按钮、卡片、服务商、会话与安装入口的 `:hover` 禁止 `translateY`。
-  悬停只改变交互层、描边和微光，避免 Chromium 重新采样文字造成闪烁；按下时允许轻微缩放，
-  消息气泡进场允许一次性的位移/缩放。
+### 颜色、表面与间距
 
-### 层级表达
+- 表面从 `--surface-canvas`、`--surface-terminal` 到 `--surface-1..4`、`--surface-inset` 逐层表达；
+  明亮主题依靠纸面差和克制阴影，深色主题依靠表面提亮与发丝描边。
+- 文字颜色按 `--text-hi → --text → --text-lo → --text-dim → --text-mute` 递减；它们是颜色语义，
+  不承担字号职责。
+- 主操作使用 `--accent-solid/solid-hover/text/fg/tint/line/ring`；成功、警告、失败只使用
+  `--ok-*`、`--warn-*`、`--bad-*`。状态永远同时给文字或图形，不只靠色相。
+- 间距阶梯完整覆盖 2 / 4 / 6 / 8 / 10 / 12 / 14 / 16 / 20 / 24 / 32 / 40px，对应
+  `--s-0-5` 至 `--s-10`。组内优先 4–8px，组间 12–16px，区间 24–40px。
+- 主题相关半透明色使用 `color-mix()` 与语义色混合；代码高亮最终映射到 `--syntax-*`，切主题不重建 DOM。
 
-- 深色层级通过**表面提亮 + 发丝描边**；明亮主题使用纸面/画布的结构差、低透明交互层和
-  克制的两段式阴影，不是把深色主题的十六进制值简单反转。
-- `--sheen` 由主题提供：深色是内侧高光，明亮是低强度纸面投影。仅用于卡片层，嵌套卡片
-  不重复叠加，避免层级发灰。
-- 遮罩层只模糊一次性 canvas 快照，不对持续刷新的真实终端使用 `backdrop-filter`
+### 六级字体角色
 
-### 单一强调色原则
+每个角色都提供 size / line-height / font-weight / letter-spacing 四元组，例如
+`--type-body-size/-lh/-fw/-ls`。新组件先选择一组角色默认值；若祖先已经建立相同角色可以继承，label、
+强调态和等宽数据可以用上表的语义修饰令牌覆盖某一轴。禁止用 `font` 简写覆盖
+`font-feature-settings`，也不得为了单个状态另造字号。
 
-- 彩色预算：青蓝（识别色）+ 绿/琥珀/红（语义状态色）
-- 禁止装饰性渐变、光斑、多余彩色
-- 所有彩色使用必须有真实语义（状态点、胶囊、健康卡、测试阶段图标等）
+| 角色     | 令牌前缀            | 用途                             |
+| -------- | ------------------- | -------------------------------- |
+| micro    | `--type-micro-*`    | 徽章、计数、时间戳、eyebrow      |
+| caption  | `--type-caption-*`  | 次要说明、副标题、紧凑按钮       |
+| body     | `--type-body-*`     | 默认界面文字、列表主行、输入内容 |
+| subtitle | `--type-subtitle-*` | 分区标题、卡片组标题             |
+| title    | `--type-title-*`    | 面板和对话框标题                 |
+| display  | `--type-display-*`  | 空态、设置头图、关键数值         |
 
-### 标准组件套件
+主题只授权 `typeBase` 与 `typeRatio`，浏览器用 `round()` 推导整数像素；micro 另有 10px 下限。
 
-- **界面里不出现原生控件的外观**。操作系统绘制的 `<select>`、复选框和单选框读不到任何主题
-  令牌，它们看起来像另一个应用。这些控件的呈现全部由套件接管：`src/renderer/components.ts`
-  负责下拉框，复选框与单选框由 `appearance: none` 加令牌 CSS 处理。
-- **原生元素继续做事实来源**。视觉替换的是呈现，不是行为：原生 `<select>` 视觉隐藏后仍留在
-  DOM 内持有焦点、承担取值/校验/`change` 事件，因此既有调用点无需改写，键盘操作也天然与
-  原生一致（`↑/↓` 移动、`Enter` 选定、`Esc` 关闭、`Tab` 收起）。做成完整自绘控件会让全应用
-  为一个纯视觉目标承担回归风险。
-- **下拉框是一个复合控件**。透明原生 `select` 覆盖可视 trigger，以便同一几何区域同时保留
-  浏览器焦点/辅助技术入口和主题外观；布局与命中测试必须把同一 `.select` shell 内的两层视为
-  一个控件，但不得豁免两个不同 shell 或下拉框与其他控件之间的重叠。
-- **同类控件必须共用同一套契约**。对话输入框与项目终端输入框曾各写一套（前者缺聚焦动效、
-  发送按钮不齐平），现在共用同一条 `:focus` 规则、同一个 `composerFocusIn` 动画和同一套
-  发送按钮几何。新增同类控件时先找现有契约复用，不要平行再写一份。
-- **普通文本输入不能依赖容器碰巧提供样式**。`text/url/password/search/email/number` 使用全局
-  输入控件契约：`--surface-1` 表面、`--line-strong` 描边、`--r-sm` 圆角、`--text-sm` 字号，
-  hover 提升描边，focus 使用 `--accent-ring` + `--accent-tint` 光环，disabled 同时降低对比度与
-  改变光标。`.field` 只负责标签和布局；订阅 URL、工具栏搜索等字段即使不在 `.field` 内也不得
-  回落到 Chromium 原生外观。
-- **按钮字号由按钮自己确定**。通用 `.button` 使用 `--font-ui / --text-xs / --lh-compact`，
-  `.button--compact` 只收敛高度与内边距，不另造一套字体；父容器可以决定排列，但不能靠继承让
-  “取消/完成”或相邻工作台按钮出现不同字号。标题栏图标操作统一复用 `.icon-button`。
-- 套件组件不含任何逐主题分支：换主题即换令牌，组件自动跟随。
-- **新增按钮必须并入既有的按钮选择器列表**，否则会退化成浏览器默认方框和系统字体，在四套主题
-  下都像另一个应用。路由设置入口、MCP 备份恢复和 CC Switch 的安装/导出/卸载曾漏掉这一步，
-  现已并入浅色按钮套件的基础、过渡与悬停三处列表；MCP「全部刷新」是最后一个漏网的控件。
-  `npm run test:control-theme` 遍历全部按钮的计算样式来兜底：主题里没有任何规则会产生
-  `border-style: outset`，因此仍是 `outset` 的控件必然从未被项目选择器命中。
-- **一个类名要么自带外观，要么就不该叫「primary」**。`.dialog-primary` 曾只由
-  `.confirmation-dialog footer .dialog-primary` 一类作用域选择器上色，同一个类名用在对话框
-  之外（路由向导的提交按钮）就是裸的原生按钮。基础外观现在写在类名本身，作用域规则只是
-  以更高优先级重申它。
-- **可增长的列表在自身区域内滚动，不推挤或遮挡周边**。历史配置、代理导入预览、体检历史等
-  条目数不可预知的列表都设 `max-height` 并开启局部滚动；上限同时跟随视口
-  （`min(<固定值>, <百分比>vh)`），使小窗口下也不会被顶开，并用 `overscroll-behavior: contain`
-  阻止滚动穿透到整页。
+| 主题          | UI / Display 字体                                       | Base / Ratio | micro / caption / body / subtitle / title / display | 正文行高 | 标题字距 | 强调字重 |
+| ------------- | ------------------------------------------------------- | ------------ | --------------------------------------------------- | -------- | -------- | -------- |
+| Claude 明亮   | Hanken Grotesk / Newsreader                             | 15 / 1.25    | 10 / 12 / 15 / 19 / 23 / 29                         | 1.70     | -0.012em | 600      |
+| 石墨深色      | Inter / Inter                                           | 13 / 1.18    | 10 / 11 / 13 / 15 / 18 / 21                         | 1.50     | -0.008em | 650      |
+| 深海蓝        | Inter / Inter                                           | 14 / 1.20    | 10 / 12 / 14 / 17 / 20 / 24                         | 1.62     | -0.004em | 600      |
+| Telegram 明亮 | Segoe UI → Microsoft YaHei UI → Roboto fallback / 同 UI | 13 / 1.15    | 10 / 11 / 13 / 15 / 17 / 20                         | 1.45     | -0.006em | 600      |
 
-### 交互反馈地板
+等宽内容统一使用 `--font-mono`（Cascadia Mono → Cascadia Code → Consolas）。Anthropic 的商业字体
+不随应用分发；Claude 使用可分发的近似字体。所有字体都本地或随系统提供，不发起第三方字体请求。
 
-- **每个可点的东西都要回应按下**。基线是 `button:active:not(:disabled)` 的一次
-  `--press-sm` 缩放，写在元素本身而不是逐族补规则——后者已经被证明会漏（曾有约三十个按钮
-  只有 hover）。大目标与主要操作再叠加 `--press-lg` 和从指针位置扩散的涟漪。
-- **豁免要有理由**。行状控件（会话/历史列表项、上下文菜单项、下拉行）与拖拽把手不做缩放：
-  缩放会让行内文字相对相邻行错位，而它们本就用背景色回应；把手的缩放会与拖拽打架。
-- **变换与着色走不同曲线**。`transform` 用 `--ease-decel`（按下应该有「给」），颜色用
-  `--ease-standard`（染色不该有弹性）。
-- 全局 `transform` 会让元素成为 `position: fixed` 后代的包含块。新增浮层时确认它挂在
-  `body` 而不是按钮内部，否则会被按压缩放拖着走。
-- `prefers-reduced-motion` 下涟漪不生成节点，动画由全局规则收敛。
+### 四主题动效与圆角人格
+
+| 主题          | micro / enter / exit | enter / spring / exit 曲线                                              | Popup 起始缩放 / 位移 | 按压  | 发送交互             |
+| ------------- | -------------------- | ----------------------------------------------------------------------- | --------------------- | ----- | -------------------- |
+| Claude 明亮   | 120 / 240 / 180ms    | `(0.05,0.7,0.1,1)` / `(0.16,1,0.3,1)` / `(0.3,0,0.8,0.15)`              | 0.96 / 4px            | 0.985 | 圆形上箭头确认       |
+| 石墨深色      | 95 / 150 / 150ms     | `(0.22,0.61,0.36,1)` / `(0.3,0.8,0.4,1)` / `(0.55,0.06,0.68,0.19)`      | 0.98 / 2px            | 0.985 | 通用强调色按压与涟漪 |
+| 深海蓝        | 115 / 175 / 175ms    | `(0.16,0.84,0.24,1)` / `(0.18,0.96,0.28,1.02)` / `(0.4,0.05,0.72,0.15)` | 0.97 / 3px            | 0.985 | 通用强调色按压与涟漪 |
+| Telegram 明亮 | 120 / 200 / 150ms    | `(0.075,0.82,0.165,1)` / `(0.23,1,0.32,1)` / `(0.4,0,1,1)`              | 0.94 / 6px            | 0.975 | 纸飞机飞出与触点涟漪 |
+
+| 主题          | `--r-theme-sm` | `--r-theme-md` | `--r-theme-lg` | `--r-bubble` | 间距阶梯（主题共享）                                    |
+| ------------- | -------------- | -------------- | -------------- | ------------ | ------------------------------------------------------- |
+| Claude 明亮   | 8px            | 12px           | 16px           | 18px         | 2 / 4 / 6 / 8 / 10 / 12 / 14 / 16 / 20 / 24 / 32 / 40px |
+| 石墨深色      | 6px            | 8px            | 10px           | 14px         | 同上                                                    |
+| 深海蓝        | 6px            | 8px            | 10px           | 14px         | 同上                                                    |
+| Telegram 明亮 | 4px            | 6px            | 10px           | 12px         | 同上                                                    |
+
+组件使用 `--dur-1..4`、`--dur-exit`、`--ease-standard/decel/accel`、`--press-sm/lg` 与通用圆角，
+不直接选择某一主题。所有 keyframes 只放在 `04-motion.css`；其中唯一的减少动态效果块取消位移、循环
+和涟漪，但保留焦点、状态文字、遮罩和同步状态翻转。交互页面只做 opacity 进场；hover 不上浮。
+表内授权值以 `src/shared/terminal-themes.ts` 为实现来源；Claude 字体选择参考官方 MCP Apps 的排版与
+透明主题原则，Telegram 的系统 UI 字体、纸飞机和涟漪取自其桌面端实现。外部依据链接集中在
+`technical.md`，不得凭印象改写本表。
+
+### 组件原语
+
+| 原语             | 类名与状态                                                         | 必须做                                                          | 禁止做                                 |
+| ---------------- | ------------------------------------------------------------------ | --------------------------------------------------------------- | -------------------------------------- |
+| 文字按钮         | `.button` + `--compact/--primary/--secondary/--danger/--quiet`     | 类名自带完整外观与 disabled/focus/press                         | 在业务容器重写字体、圆角或主色         |
+| 图标按钮         | `.icon-button`                                                     | 提供可读 `aria-label` 或 `.sr-only`；使用 `--control-h-sm`      | 用空白文字按钮冒充图标按钮             |
+| 卡片             | `.card`                                                            | 使用 surface、line、radius；状态另用语义 tone                   | 叠加外环、渐变和无语义彩色             |
+| 状态项           | `.status-chip`；按钮态或只读态                                     | 同高、同字体角色；状态同时有文字                                | 为底栏每个项目写一套高度和 hover       |
+| 弹层             | `.popover`、`[hidden]` / dialog `[open]`、`data-placement="above"` | 状态同步翻转；关闭态 `pointer-events:none`；让 CSS 处理离散退场 | JS 计时器、`data-closing` 平行状态机   |
+| 增强选择器       | `.select/.select-native/.select__trigger/.select__listbox`         | 原生 select 保持取值、校验、焦点与事件事实来源                  | 回退到系统原生外观或复制业务状态       |
+| 文本输入         | 标准 input 类型；`.field` 只管标签与布局                           | surface、line、focus ring、disabled 全局一致                    | 依赖父容器碰巧上色                     |
+| Checkbox / Radio | 原生 input + token CSS                                             | 保留原生 checked/disabled/focus 语义                            | 为视觉目标增加 JS 状态                 |
+| Dialog           | 原生 `<dialog class="popover">` + 语义 header/body/footer          | `showModal()`、Esc、焦点恢复、backdrop                          | 用 `alert/confirm` 或普通 div 模拟模态 |
+| Tooltip          | `.tooltip` + `.tooltip__content[role="tooltip"]`                   | 触发器可聚焦并用 `aria-describedby` 指向同一文字                | 只支持 hover、复制说明或承载交互控件   |
+
+Tooltip 同时响应 hover 与 `:focus-within`，触摸设备仍应依赖触发器的可访问名称或常驻辅助文字；其内容只做
+短说明，不承载按钮、链接或其他交互控件。
+
+Popover 依赖 `@starting-style` 与 `allow-discrete`；`hidden` 和 dialog `open` 仍是同步可访问性契约。
+普通弹层挂在 `body` 逃离 clipping；dialog 内的 select listbox 必须重挂到已打开 dialog 的 top-layer 子树，
+因为仅提高 `z-index` 不能越过 top layer 的 inert 边界。
+
+### 布局骨架与分组
+
+- **Titlebar**：品牌/当前项目在左，窗口状态与原生窗口按钮在右；拖拽区和 no-drag 控件边界明确。
+- **Activity rail**：只负责一级业务导航；当前项、预览态和折叠态分别表达，不能把业务表单塞进 rail。
+- **Workspace**：活动栏、项目栏、分隔条、主区四列；所有可收缩主列使用 `minmax(0, 1fr)`，拖拽期间
+  关闭宽度过渡，释放后再 fit xterm。
+- **Terminal toolbar**：`toolbar-group--labeled` 先放“工作台/主题”，`toolbar-group--icons` 后放图标操作；
+  组内 gap 4px、组间 gap 12px，中间一条 `--line-subtle` 分隔，控件统一 `--control-h-sm`。
+- **Footer**：primary（连接/资源）、secondary（模型/速度/模式/思考）、status 三组；所有可操作项复用
+  `.status-chip`，中等宽度只把 secondary 原控件收进“更多状态”，不得复制第二份状态源。
+- **Drawer / Dialog**：标题、可滚动正文、固定操作区三段；抽屉不得覆盖 composer，dialog 内容不得逃出
+  top layer 或被背景 inert 吞掉。
+
+### 响应式断点
+
+CSS 媒体条件不能读取自定义属性，因此常量表写在 `07-responsive.css` 文件头，所有媒体查询集中于该文件。
+
+| 断点    | 条件                | 主要职责                                                     |
+| ------- | ------------------- | ------------------------------------------------------------ |
+| compact | `max-width: 720px`  | 项目栏收起、设置导航横排、双栏对话框改单栏、文字菜单收成图标 |
+| medium  | `max-width: 1024px` | 抽屉夹紧、底栏 secondary 收纳、工具栏与插件操作压缩          |
+| wide    | `min-width: 1280px` | 允许多栏和更宽信息布局；不能作为核心操作可见性的前提         |
+
+### 如何新建一个 UI
+
+1. **先定语义与所有权**：确认它是已有 primitive、layout 还是某个 view；同名 selector 已存在就扩展原文件，
+   不在另一个文件追加第二份。
+2. **选文字角色**：正文用 body，辅助说明用 caption，徽章用 micro，分区/面板/空态依次用
+   subtitle/title/display；新独立组件写入该角色需要的四轴，已有组件可继承相同角色，并只用语义修饰
+   令牌表达 label、强调态或等宽数据差异。
+3. **选层级**：页面底、面板、卡片、凹陷区分别取 semantic surface；交互只用 hover/active layer，
+   状态只用 ok/warn/bad。
+4. **新面板**：
+
+   ```html
+   <section class="card" aria-labelledby="example-title">
+     <h2 id="example-title">分区标题</h2>
+     <p>一句必要说明。</p>
+     <button class="button button--primary" type="button">继续</button>
+   </section>
+   ```
+
+5. **新弹窗**：
+
+   ```html
+   <button aria-controls="example-dialog">打开</button>
+   <dialog id="example-dialog" class="popover" aria-labelledby="example-dialog-title">
+     <header><h2 id="example-dialog-title">确认操作</h2></header>
+     <section>必要说明与内容。</section>
+     <footer><button class="button button--primary" type="button">确认</button></footer>
+   </dialog>
+   ```
+
+   通过 `showModal()/close()` 切换；非模态元素使用 `.popover[hidden]`，触发器维护
+   `aria-expanded/aria-controls`，向上展开再加 `data-placement="above"`，不要新增关闭计时器。
+
+6. **新表单**：
+
+   ```html
+   <label class="field" for="example-name">
+     <span>名称</span>
+     <input id="example-name" type="text" aria-describedby="example-name-help" />
+   </label>
+   <p id="example-name-help">用途或错误只保留一个事实来源。</p>
+   ```
+
+   Select 保留原生元素并交给 `enhanceSelect()`；错误文字和 `aria-describedby` 必须指向同一来源。
+
+7. **新列表项**：
+
+   ```html
+   <article class="card example-row">
+     <div><strong>主标题</strong><small>辅助信息</small></div>
+     <button class="icon-button" type="button" aria-label="删除主标题">…</button>
+   </article>
+   ```
+
+   主列使用 `minmax(0, 1fr)`，尾操作使用独立槽；可增长列表自身滚动，hover 不触发布局位移。
+
+8. **新徽章/状态**：
+
+   ```html
+   <span class="status-chip" data-tone="warning"><span aria-hidden="true">●</span>等待确认</span>
+   ```
+
+   优先 `.status-chip`，同时给文字与图形信号，不把颜色当唯一含义。
+
+9. **新工具栏/底栏项**：放入已有 group，复用统一高度与 gap；窄屏移动原控件，不复制状态或监听器。
+10. **验证**：依次运行 `npm test`、`npm run test:control-theme`、`npm run test:select-theme`、
+    `npm run test:select`、`npm run test:dialog-select`、`npm run test:layout`、`npm run test:visual`；发布阶段再跑
+    `npm run dist`。四主题、键盘、200% 缩放与减少动态效果都必须人工核对。
+
+### 禁止事项
+
+- 不在 `01-tokens.css` 外写颜色、px 字号、数字字重、毫秒或曲线字面值；不写 px `line-height`
+  （`tests/design-tokens.test.ts`）。
+- 不新增按尺寸命名的字号别名；业务样式只能引用六个语义文字角色（`tests/design-tokens.test.ts`）。
+- 不在 `04-motion.css` 外写 keyframes 或 reduced-motion；不在 `07-responsive.css` 外写 viewport media
+  （`tests/design-tokens.test.ts`）。
+- 不引用未定义变量，不复制 selector 到另一个文件，不用更高 specificity 掩盖所有权错误
+  （`tests/design-tokens.test.ts`）。
+- 不写逐主题业务选择器来补字体、圆角或动效；主题差异必须由 `TerminalThemeShell` 与令牌桥驱动
+  （`tests/design-tokens.test.ts` + `npm run test:control-theme`）。
+- 不让弹层硬切、留下可点击的退场残影，或在按钮内部挂 fixed popup
+  （`npm run test:select` + `npm run test:dialog-select` + `npm run test:visual`）。
+- 不使用原生控件外观、原生 JavaScript 对话框、只有颜色的状态、hover 位移或装饰性渐变
+  （`npm run test:control-theme` + `npm run test:layout` + 人工四主题复核）。
+- 不为新 UI 复制状态、业务逻辑、IPC 或键盘语义；视觉层只能消费已有事实来源
+  （`npm test` + 对应交互烟测）。
 
 ## 设计目标
 
@@ -245,7 +358,8 @@
 - 主色和状态色都由主题提供，但“正常 / 警告 / 错误”的色相与含义保持不变。
 - 字体：正文使用 `--font-ui`，品牌标题使用 `--font-display`，终端与路径、命令等技术标识
   使用 `--font-mono`。Claude / Telegram 的正文、标题和行高必须在并排截图中明显不同。
-- 圆角：卡片 14px (`--r-xl`)，嵌套卡片 10px (`--r-lg`)，按钮 8px (`--r-md`)，状态胶囊为全圆角 (`--r-pill`)。
+- 圆角：卡片、嵌套内容与按钮分别消费 `--r-theme-lg`、`--r-theme-md`、`--r-theme-sm` 或对应公共
+  语义令牌；具体像素由四主题人格表授权。状态胶囊使用 `--r-pill`，业务视图不得写死固定半径。
 - 阴影：只用于窗口内浮层与拖放激活态，避免装饰性重阴影。
 - 图标：使用一致的 1.8px 线性 SVG，禁止字形充当图标；应用图标以终端提示符和状态灯为核心。
 
@@ -274,7 +388,7 @@
   只在容器不足时收缩到 `calc(100% - 24px)`。Claude 顶部固定“会话 / 命令 / 快捷键”
   三页签；Codex 使用单页准备流程，两者内容区都独立滚动。
   抽屉打开时以半透明遮罩压低终端，不销毁或重排 xterm.js 实例。
-- 在 820–900px 窄窗口下，控制栏最小 240px，终端工具栏改为两列，工作台允许
+- 在 1024px medium 档及以下，控制栏最小 240px，终端工具栏改为两列，工作台允许
   覆盖除 80px 外的终端区域；插件工具栏改为纵向，三个插件页签始终等分可用宽度，按钮文字
   自然换行。插件卡的长名称、仓库地址、操作按钮和市场添加表单必须同时设置可收缩边界并
   自然换行，不得以内容最小宽度撑破侧栏。插件页不得出现横向滚动。底栏的连接与资源始终可见，
@@ -350,12 +464,18 @@
 - 提示文字是输入框自己的 placeholder，开始输入即消失，不再占一行独立小字；「快捷键」页
   保持同一说法，且不得再出现与输入框冲突的旧条目（例如把 `Ctrl+A` 说成「移动到行首」）。
   屏幕阅读器另有一个 `sr-only` 的 `aria-describedby` 文本，因为 placeholder 在有值时会消失。
-- 输入框与发送按钮是 `minmax(0, 1fr) auto` 两列：按钮 `align-self: stretch`，与输入框等高，
-  不是浮在角落里的小方块。输入框最小高度 52px，仍按内容增高到 `--composer-max`。
-  这套几何是**两个输入框共用的契约**，独立对话的输入区必须完全一致，不允许各写一套。
-- 终端输入框上方不放常驻的模式、思考或模型控制条，保持提示词编辑区单一、安静；Claude 的模型、
-  权限模式、思考程度和请求值/实际值全部由底部状态栏及其浮层呈现，切换不能清空输入草稿。
-  Codex 保留原生 TUI 审批，`/plan`、`/permissions`、`/model` 只通过底栏或命令页生成命令骨架。
+- 终端与独立对话的输入框是 `minmax(0, 1fr) auto` 两列：按钮 `align-self: stretch`，与输入框等高，
+  不是浮在角落里的小方块。输入框最小高度 `--composer-row-h`（52px），仍按内容增高到 `--composer-max`。
+  这套几何是**这两个输入框共用的契约**，不允许各写一套。原生输入坞是第三种排布，因为它多一个附件
+  入口：`.native-composer__row` 用 `auto minmax(0, 1fr) auto` 三列，把附件、文本域和唯一的动作按钮
+  放进同一张带描边的圆角卡里，附件与动作按钮是 36px 的等宽圆形按钮而非等高竖条。三者共享的是提交
+  状态机、附件生命周期、键位语义和焦点/禁用反馈，不是列模板；改动任何一个都要确认另外两个的契约
+  仍然成立。
+- 终端和原生输入框上方都不放常驻的模式、思考或模型控制条，保持提示词编辑区单一、安静；Claude 的模型、
+  权限模式、思考程度和请求值/实际值全部由底部状态栏及其浮层呈现，切换不能清空输入草稿。原生对话
+  不再拥有自己的 `.native-control-bar`：同一条底栏在原生可见时改读 Agent SDK 快照，两种模式共用一套
+  控件与浮层，用户不必学第二套位置。Codex 保留原生 TUI 审批，`/plan`、`/permissions`、`/model` 只通过
+  底栏或命令页生成命令骨架。
 - Claude 权限请求使用主题化对话框逐个排队，提供“本次允许”“拒绝并填写原因”，只有上游返回
   `permission_suggestions` 时才显示持久允许范围。高风险选择继续有明确确认；`Esc`、界面关闭、
   Hook 超时或会话代次失效都回退原生交互，绝不能表现为已允许。
@@ -422,7 +542,7 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   第三方端点、跨境处理、AI 生成内容、代理风险、维护者 AeonusOvO 和公开联系电话 13585928550，
   并提供完整政策、官方依据与私密安全报告入口。
 - 全局设置使用主题化原生 `<dialog>`：固定标题与底部操作区，左侧分类导航，右侧内容独立滚动。
-  680px 以下分类导航改为顶部横排；820×640 最小窗口内所有控件仍可聚焦和滚动到。
+  720px compact 档分类导航改为顶部横排；820×640 最小窗口内所有控件仍可聚焦和滚动到。
 - “总设置”采用单列设置卡：左侧“名称 + 说明”，右侧放开关、选择器或只读值。首期包含开机
   启动、主题、语言和当前版本；只有简体中文可用时，语言选择器禁用并解释原因，不伪造选项。
 - 设置分为“即时控制”和“草稿选项”。应用代理保存/测试、安装/卸载、Provider 保存等即时控制
@@ -440,6 +560,9 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - “接入”完整承接原高级设置的唯一 DOM 节点，包括认证来源、自动发现、Router、cURL 与诊断。
   原“接入”业务页不再保留第二个高级入口。取消仍恢复未保存草稿，已经执行的安装、启停和
   Provider 保存仍立即生效。
+- ChatGPT 托管网关的安装和 OpenAI 授权是应用级即时操作，不因冷启动尚无项目而显示一个看似可用、
+  点击后只给瞬时提示的按钮；项目级模型实测与保存只在项目打开后执行。操作锁按发起范围记账，项目
+  切换或关闭不能遗留永久禁用状态，重复点击仍合并到同一进行中操作。
 - “代理”只呈现外部应用代理的地址、凭据和作用域，不出现远程网络服务或系统网络修改控件。
   面板顶部常驻两条边界说明：软件只传递用户提供的连接参数；设置不修改系统网络。
 - “启用外部应用代理”属于设置对话框草稿，并随底部“完成”统一保存。关闭时地址、凭据、测试和
@@ -713,6 +836,16 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   启用/停用、卸载和安装属于独立操作，不受更新入口显隐影响。
 - 终端底栏持续显示连接状态、资源环形进度、模型、速度、权限模式和思考程度，不要求用户打开
   工作台。详细快捷键信息不占用底栏。
+- 原生对话可见时，模型、速度、模式、思考四个 chip 由这条底栏接管，改从 Agent SDK 快照的
+  `capabilities` 读数，点击经 `updateNativeControls` 下发；终端侧的 chip 渲染在此期间整体抑制，
+  否则后台会话的每次状态行心跳都会把四个读数覆盖回去，用户会看到两个真值来源互相闪烁。快照还没
+  上报 `capabilities` 时四个 chip 显示 `—`、禁用并给出“尚未上报可用能力”的说明，不允许先摆一个
+  猜测值。控制项提交期间四个 chip 一起 `aria-busy`，成功、失败、异常都在同一个 `finally` 里按
+  最新快照重绘。
+- 原生 Fast 分五种状态陈述，因为“已请求”和“已确认”是两个不同的断言：`unavailable`（当前模型没有
+  声明支持）、`off`（点击可请求，并披露费用/额度可能更高）、`requested`（已向上游请求，未确认前
+  绝不显示为已开启）、`confirmed`（adapter 收到结构化确认才用）、以及资格或额度被拒的“未生效”。
+  只有 `unavailable` 才禁用按钮；其余四态都要保持可点，让用户能退回默认档。
 - 底栏的连接、资源、模型、速度、模式和思考都是真按钮，不是装饰性文本。点击连接使用当前项目已保存的配置
   原地开始真实测试，不关闭工作台、不切换左栏页面；按钮切到 `data-tone="pending"` 的脉冲圆点、
   显示“正在检测连接”、设置 `aria-busy` 并禁用，测试结束再恢复成正常/需确认/异常。忙态分支
@@ -722,6 +855,13 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   两轴都做视口夹取，条目是「主标题 + 一句说明」的 `role="menuitem"` 按钮，当前项用
   `data-selected`/`aria-checked` 而不是只靠颜色。五个菜单登记进已有的 `pointerdown` 与 `window blur`
   收拢逻辑，不另起一套关闭机制。
+- 资源菜单内的 Claude 上下文窗口是四档 `role="menuitemradio"`：自动（推荐）/ 100 万 / 20 万 /
+  自定义。默认“自动”不注入任何窗口变量，官方订阅保持该档；选“自定义”只展开草稿输入，合法值
+  保存成功后才改变 radio 的提交态。范围 8000–2000000，超出范围以中文错误 toast 拒绝而不是静默
+  落库。菜单顶部把“已请求”与 statusLine / Agent SDK 的“实际采用”分开显示；配置目标不能冒充端点
+  探测结果。托管 ChatGPT 的 272K / 1.05M 菜单与通用 Claude 菜单互斥，不能让两组 profile 叠加。
+  状态行原始计数与窗口钳制值不一致时，环形进度置 `data-level="danger"`，明细给出两项具体数字，
+  但不由这一信号推断端点容量或自动建议降档；只有真实上下文拒绝错误才可提示切回 20 万。
 - 速度菜单默认“标准”，偏好按开发引擎、接入、认证、去凭据端点身份与模型隔离。官方 Anthropic
   的已确认 Opus 5 / Opus 4.8 可请求 Claude Code 原生 Fast；只有 statusLine 上报
   `fast_mode: true` 才显示“Claude Fast 已开启”，资格或额度拒绝时显示“未生效”。受管 GPT 仅显示
@@ -771,9 +911,9 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - 最深两档最烧令牌，底栏按钮用强调色让这个选择保持可见，不能和均衡档看起来一样。
 - 需要重启会话的操作（跨端点换模型、仅预批准）先用确认框说明三件事：会重启、对话历史通过
   `--continue` 恢复、终端画面会重绘。文案不回避重绘，那是用户会亲眼看到的。
-- 底栏在 1040px 以下把模型、速度、模式、思考和状态收纳进“更多状态”浮层；连接和资源始终保留。
+- 底栏在 1024px medium 档及以下把模型、速度、模式、思考和状态收纳进“更多状态”浮层；连接和资源始终保留。
   浮层复用原控件与同一状态源，不复制按钮或读数；支持键盘打开、焦点恢复、`Esc`、点击外部和
-  窗口失焦关闭。900px 与最小 820px 宽度下仍不得丢失、错位或横向溢出。
+  窗口失焦关闭。跨过 medium 档直至最小 820px 宽度都不得丢失、错位或横向溢出。
 - 终端右键菜单只包含复制、粘贴、全选和清屏，并保持键盘可达；有选区时 `Ctrl+C` 复制，
   无选区时保留 PowerShell 中断语义。
 - “Claude 工作台”旁提供紧凑的终端主题选择器，列出 Claude 明亮、Telegram 明亮、石墨深色、
@@ -829,8 +969,8 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 
 ## 动效与可访问性
 
-- 状态灯呼吸动画 1.8s；拖放与按钮反馈 140–180ms；消息气泡以 Telegram 风格快速减速曲线
-  在 200ms 内进入。
+- 动效时长、曲线、popup 起始位移与按压尺度只取自本文件“四主题动效与圆角人格”表及其语义令牌；
+  状态灯、拖放、按钮和消息气泡不得另写业务字面时长。
 - 悬停只使用描边、表面层与微光，不上浮控件或文字；按压反馈不得改变按钮占位尺寸。
 - 界面切换一律有过渡，不做硬切：rail 业务页、设置弹窗分类页、终端 ⇄ 聊天三处都用
   `var(--dur-3)` + `var(--ease-decel)` 的进入动画，侧边栏折叠给 `.workspace` 的

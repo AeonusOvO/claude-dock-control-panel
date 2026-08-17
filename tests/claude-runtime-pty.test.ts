@@ -12,6 +12,7 @@ import {
 } from '../src/main/terminal-session';
 import { SUBMIT_DELAY_MS } from '../src/shared/composer-input';
 import type {
+  ClaudeContextWindowMode,
   ClaudeEffortCompatibility,
   ClaudeEffortRequest,
   ClaudeMetrics,
@@ -22,6 +23,8 @@ import type {
 interface TestRuntimeSession {
   active: boolean;
   artifactDirectory?: string;
+  claudeContextWindowCustomTokens?: number;
+  claudeContextWindowMode?: ClaudeContextWindowMode;
   conversationId?: string;
   cwd: string;
   diagnosticBuffer: string;
@@ -29,6 +32,7 @@ interface TestRuntimeSession {
   effortRestoreAfterTurn?: ClaudeEffortRequest;
   effortRestoreInProgress: boolean;
   exitMarker?: string;
+  expectedModel?: string;
   lastApiError?: {
     category: 'context-window-exceeded' | 'effort-thinking-disabled' | 'general';
     detectedAt: number;
@@ -41,6 +45,7 @@ interface TestRuntimeSession {
   pendingEffortRestore?: ClaudeEffortRequest;
   permissionModeCycle: ClaudePermissionMode[];
   ptyGeneration?: PtyGeneration;
+  runtimeModel?: string;
   sessionId: string;
   settingsPath?: string;
   signalPath?: string;
@@ -96,7 +101,11 @@ afterEach(() => {
   }
 });
 
-const createRuntime = () => {
+const createRuntime = (
+  contextWindow: () => { customTokens?: number; mode: ClaudeContextWindowMode } = () => ({
+    mode: 'auto',
+  }),
+) => {
   const root = mkdtempSync(path.join(tmpdir(), 'claudedock-claude-pty-'));
   temporaryRoots.push(root);
   const writes: Array<{
@@ -111,6 +120,7 @@ const createRuntime = () => {
     path.join(root, 'guard.ps1'),
     () => false,
     () => 'standard',
+    contextWindow,
     () => undefined,
     (sessionId, ptyGeneration, data) => {
       writes.push({ data, ptyGeneration, sessionId });
@@ -513,6 +523,121 @@ describe('Claude runtime PTY ownership', () => {
 });
 
 describe('Claude runtime launch configuration snapshots', () => {
+  it.each([
+    [
+      'gateway',
+      normalizeClaudeConfig({
+        authMode: 'authToken',
+        baseUrl: 'https://relay.example.com',
+        credentialAction: 'keep',
+        model: 'claude-opus-5',
+        preset: 'custom',
+        provider: 'gateway',
+      }),
+      'snapshot-token',
+      'ANTHROPIC_AUTH_TOKEN',
+      '0',
+      '0',
+    ],
+    [
+      'official',
+      normalizeClaudeConfig({
+        authMode: 'apiKey',
+        baseUrl: '',
+        credentialAction: 'keep',
+        model: 'claude-opus-5',
+        preset: 'anthropic-api',
+        provider: 'anthropic',
+      }),
+      'snapshot-api-key',
+      'ANTHROPIC_API_KEY',
+      null,
+      '',
+    ],
+  ] as const)(
+    'prepares matching process and non-secret inline settings for %s native launches',
+    async (route, config, credential, credentialKey, processAttribution, settingsAttribution) => {
+      const { internals, runtime, session } = createRuntime();
+      const launchSnapshot: TestLaunchConfigSnapshot = {
+        allowBypassPermissions: false,
+        config,
+        credential,
+        storage: { revision: `${route}-snapshot` },
+      };
+      const createLaunchSnapshot = vi.fn(() => launchSnapshot);
+      internals.configStore.createLaunchSnapshot = createLaunchSnapshot;
+      internals.configStore.launchSnapshotIsCurrent = vi.fn(
+        (_cwd, candidate) => candidate === launchSnapshot,
+      );
+      const ownerId = `native-route:${route}`;
+
+      try {
+        const prepared = await runtime.prepareNativeConversation(
+          ownerId,
+          session.cwd,
+          'claude-opus-5',
+        );
+
+        expect(createLaunchSnapshot).toHaveBeenCalledTimes(1);
+        expect(prepared.environment[credentialKey]).toBe(credential);
+        expect(prepared.environment.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe(processAttribution);
+        expect(prepared.settingsEnvironment.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe(
+          settingsAttribution,
+        );
+        expect(prepared.settingsEnvironment).not.toHaveProperty(credentialKey);
+      } finally {
+        runtime.releaseNativeConversation(ownerId);
+        runtime.shutdown();
+      }
+    },
+  );
+
+  it('uses the 1M suffix only at the Claude Code launch boundary', async () => {
+    const { internals, runtime, session } = createRuntime(() => ({ mode: 'extended' }));
+    const launchSnapshot: TestLaunchConfigSnapshot = {
+      allowBypassPermissions: false,
+      config: normalizeClaudeConfig({
+        authMode: 'authToken',
+        baseUrl: 'https://relay.example.com',
+        credentialAction: 'keep',
+        model: 'claude-opus-5',
+        preset: 'custom',
+        provider: 'gateway',
+      }),
+      credential: 'snapshot-token',
+      storage: { revision: 'snapshot' },
+    };
+    internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    internals.configStore.launchSnapshotIsCurrent = vi.fn(
+      (_cwd, candidate) => candidate === launchSnapshot,
+    );
+
+    try {
+      const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
+      const settings = JSON.parse(readFileSync(launchArtifacts(session).settingsPath, 'utf8')) as {
+        env: Record<string, string>;
+        model: string;
+      };
+
+      expect(settings.model).toBe('claude-opus-5[1m]');
+      expect(settings.env).toMatchObject({
+        ANTHROPIC_MODEL: 'claude-opus-5[1m]',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+      });
+      expect(prepared.environment).toMatchObject({
+        ANTHROPIC_MODEL: 'claude-opus-5[1m]',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+      });
+      expect(session.expectedModel).toBe('claude-opus-5');
+      expect(session.runtimeModel).toBe('claude-opus-5[1m]');
+      expect(launchSnapshot.config.model).toBe('claude-opus-5');
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
   it('uses config and credential from one snapshot without rereading storage', async () => {
     const { internals, runtime, session } = createRuntime();
     const launchSnapshot: TestLaunchConfigSnapshot = {
@@ -661,6 +786,50 @@ describe('Claude runtime launch configuration snapshots', () => {
       expect(prepared.command).toBe(POWERSHELL_STARTUP_TRIGGER);
       expect(prepared.environment[POWERSHELL_STARTUP_COMMAND_ENV]).toContain(conversationId);
       expect(settings).toMatchObject({ fastMode: true, model: 'claude-opus-5' });
+    } finally {
+      runtime.shutdown();
+    }
+  });
+});
+
+describe('Claude runtime live model context', () => {
+  it('keeps a live extended session on the 1M runtime model after /model', async () => {
+    const { internals, runtime, session } = createRuntime();
+    session.claudeContextWindowMode = 'extended';
+    session.expectedModel = 'claude-opus-5';
+    session.runtimeModel = 'claude-opus-5[1m]';
+    runtime.bindPty(session.sessionId, 17);
+    const targetState = {
+      active: true,
+      cwd: session.cwd,
+      sessionId: session.sessionId,
+    } as Awaited<ReturnType<ClaudeRuntime['getState']>>;
+    vi.spyOn(runtime, 'getModelOptions').mockResolvedValue({
+      activeModel: 'claude-opus-5',
+      options: [
+        {
+          id: 'same-endpoint-sonnet',
+          label: 'claude-sonnet-5',
+          model: 'claude-sonnet-5',
+          providerLabel: '当前接入',
+          requiresRelaunch: false,
+          sameEndpoint: true,
+        },
+      ],
+    });
+    vi.spyOn(runtime, 'getState').mockResolvedValue(targetState);
+    const submit = vi.spyOn(internals, 'submitClaudeCommand').mockResolvedValue(undefined);
+
+    try {
+      await runtime.switchModel(session.sessionId, session.cwd, 'same-endpoint-sonnet');
+
+      expect(submit).toHaveBeenCalledWith(
+        session,
+        '/model claude-sonnet-5[1m]',
+        expect.any(Function),
+      );
+      expect(session.expectedModel).toBe('claude-sonnet-5');
+      expect(session.runtimeModel).toBe('claude-sonnet-5[1m]');
     } finally {
       runtime.shutdown();
     }

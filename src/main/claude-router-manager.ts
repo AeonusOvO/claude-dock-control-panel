@@ -563,6 +563,7 @@ export class ClaudeRouterManager {
   private serviceRuntimeCache?: {
     kind: 'claudedock' | 'cli' | 'desktop' | 'unknown';
     pid: number;
+    serviceToken: string;
   };
 
   public constructor(
@@ -1141,6 +1142,7 @@ export class ClaudeRouterManager {
       }
       access ??= await this.requireActiveService();
     }
+    await this.requireCliOwnedService(access);
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
     const updated = buildUpdatedRouterConfig(current, input);
     const saved = await this.saveConfigWithoutProfileTakeover(access, updated.config, [
@@ -1176,6 +1178,7 @@ export class ClaudeRouterManager {
 
   public async deleteProvider(providerId: string): Promise<ClaudeRouterManagementState> {
     const access = await this.requireActiveService();
+    await this.requireCliOwnedService(access);
     const current = await this.rpcWithAccess<CcrAppConfig>(access, 'getConfig');
     const updated = buildDeletedRouterConfig(current, providerId);
     await this.saveConfigWithoutProfileTakeover(access, updated);
@@ -1304,7 +1307,16 @@ export class ClaudeRouterManager {
     access: CcrServiceAccess,
     desktopExecutable?: string,
   ): Promise<'claudedock' | 'cli' | 'desktop' | 'unknown'> {
-    if (this.serviceRuntimeCache?.pid === access.pid) {
+    /*
+     * Keyed on the service token as well as the PID. Windows recycles PIDs aggressively, so a cache
+     * keyed on the PID alone let a freshly started CCR Desktop service inherit the `cli`
+     * classification of a dead CLI service that happened to hold the same PID — which would then
+     * authorise mutations ClaudeDock must never make to a Desktop-owned service.
+     */
+    if (
+      this.serviceRuntimeCache?.pid === access.pid &&
+      this.serviceRuntimeCache.serviceToken === access.serviceToken
+    ) {
       return this.serviceRuntimeCache.kind;
     }
     let kind: 'claudedock' | 'cli' | 'desktop' | 'unknown' = 'unknown';
@@ -1337,8 +1349,27 @@ export class ClaudeRouterManager {
     } catch {
       kind = 'unknown';
     }
-    this.serviceRuntimeCache = { kind, pid: access.pid };
+    this.serviceRuntimeCache = { kind, pid: access.pid, serviceToken: access.serviceToken };
     return kind;
+  }
+
+  /**
+   * Gate for every Provider mutation.
+   *
+   * `AGENTS.md` forbids ClaudeDock from rewriting a CCR Desktop installation: it may only manage the
+   * CLI service it starts itself. `stopCliService` already refuses non-CLI runtimes, but
+   * `saveProvider` and `deleteProvider` used to go straight to `getConfig`/`saveConfig`, so a
+   * Desktop-owned service could be reconfigured through the RPC before anything checked ownership.
+   */
+  private async requireCliOwnedService(access: CcrServiceAccess): Promise<void> {
+    const runtimeKind = await this.serviceRuntimeKind(access, this.findDesktopExecutable());
+    if (runtimeKind !== 'cli' && runtimeKind !== 'claudedock') {
+      throw new Error(
+        runtimeKind === 'desktop'
+          ? '检测到 CCR 桌面版正在托管该服务，ClaudeDock 不会修改它的配置。'
+          : '无法确认 CCR 服务归属，已停止修改配置以免影响桌面版。',
+      );
+    }
   }
 
   private async stopCliService(

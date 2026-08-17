@@ -146,7 +146,7 @@ export class ClaudeGatewayDetector {
     cwd: string,
     config: NormalizedClaudeConfig,
   ): Promise<ClaudeGatewayDiagnostics> {
-    const cacheKey = `${cwd.toLocaleLowerCase()}\n${config.baseUrl}`;
+    const cacheKey = `${cwd.toLocaleLowerCase('en-US')}\n${config.baseUrl}`;
     if (
       this.cachedDiagnostics &&
       this.cachedDiagnostics.key === cacheKey &&

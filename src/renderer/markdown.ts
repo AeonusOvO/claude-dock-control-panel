@@ -395,6 +395,7 @@ export class MarkdownDomRenderer {
   private readonly mathRenderer?: MarkdownMathRenderer;
   private readonly onOpenExternal: MarkdownRendererOptions['onOpenExternal'];
   private readonly onRunArtifact?: MarkdownRendererOptions['onRunArtifact'];
+  private readonly renderGenerations = new WeakMap<HTMLElement, number>();
   private readonly writeClipboardText: MarkdownRendererOptions['writeClipboardText'];
 
   public constructor(options: MarkdownRendererOptions) {
@@ -418,8 +419,22 @@ export class MarkdownDomRenderer {
     return this.renderTokens(lexMarkdown(source));
   }
 
+  /**
+   * Latest-wins per container. Highlighting and math rendering are async, so two renders into the
+   * same reused element (`#native-plan-content` is one persistent dialog node) can finish out of
+   * order and leave the slower, older content on screen under the newer title.
+   *
+   * The counter is never reset for a live container: recycling generation numbers would let an
+   * older in-flight render match a later one's generation and commit anyway.
+   */
   public async renderInto(container: HTMLElement, source: string): Promise<void> {
-    container.replaceChildren(await this.renderFragment(source));
+    const generation = (this.renderGenerations.get(container) ?? 0) + 1;
+    this.renderGenerations.set(container, generation);
+    const fragment = await this.renderFragment(source);
+    if (this.renderGenerations.get(container) !== generation) {
+      return;
+    }
+    container.replaceChildren(fragment);
   }
 
   public async renderTokens(tokens: readonly MarkdownToken[]): Promise<DocumentFragment> {
@@ -553,7 +568,8 @@ export class MarkdownDomRenderer {
       const run = this.dom.createElement('button');
       run.className = 'markdown-artifact-run';
       run.type = 'button';
-      run.textContent = '运行此可视化';
+      const idleLabel = '运行此可视化';
+      run.textContent = idleLabel;
       const artifactMount = this.dom.createElement('div');
       artifactMount.className = 'artifact-view';
       artifactMount.dataset.state = 'idle';
@@ -561,6 +577,9 @@ export class MarkdownDomRenderer {
         event.preventDefault();
         void (async () => {
           run.disabled = true;
+          // Without this reset a single failure pins the label to 运行失败 forever, so a later
+          // successful run keeps reporting the feature as broken.
+          run.textContent = idleLabel;
           try {
             await this.onRunArtifact?.(source, artifactMount);
           } catch {

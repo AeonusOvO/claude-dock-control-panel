@@ -308,6 +308,58 @@ describe('Claude Code Router management', () => {
     );
   });
 
+  it('refuses a Provider mutation when the running service is owned by CCR Desktop', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-router-owner-'));
+    try {
+      const manager = new ClaudeRouterManager(root);
+      const internals = manager as unknown as {
+        findDesktopExecutable: () => string | undefined;
+        requireCliOwnedService: (access: { pid: number; serviceToken: string }) => Promise<void>;
+        serviceRuntimeCache?: { kind: string; pid: number; serviceToken: string };
+      };
+      internals.findDesktopExecutable = () => 'D:\\Program Files\\CCR\\ccr-desktop.exe';
+      // Prime the classification as if the tasklist probe had identified a Desktop-hosted service.
+      internals.serviceRuntimeCache = {
+        kind: 'desktop',
+        pid: 4321,
+        serviceToken: 'desktop-token',
+      };
+
+      await expect(
+        internals.requireCliOwnedService({ pid: 4321, serviceToken: 'desktop-token' }),
+      ).rejects.toThrow('CCR 桌面版');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it('reclassifies a service when Windows reuses the PID for a different CCR instance', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-router-pid-'));
+    try {
+      const manager = new ClaudeRouterManager(root);
+      const internals = manager as unknown as {
+        serviceRuntimeCache?: { kind: string; pid: number; serviceToken: string };
+        serviceRuntimeKind: (
+          access: { pid: number; serviceToken: string },
+          desktopExecutable?: string,
+        ) => Promise<string>;
+      };
+      internals.serviceRuntimeCache = { kind: 'cli', pid: 4321, serviceToken: 'old-cli-token' };
+
+      // Same PID, different service instance: caching on the PID alone would hand back 'cli' and
+      // authorise mutations against whatever now owns that PID.
+      const reclassified = await internals.serviceRuntimeKind({
+        pid: 4321,
+        serviceToken: 'new-service-token',
+      });
+
+      expect(reclassified).not.toBe('cli');
+      expect(internals.serviceRuntimeCache?.serviceToken).toBe('new-service-token');
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it('decodes a Chinese tasklist image name from the Windows GB18030 code page', () => {
     const tasklistBytes = Buffer.from(
       '22436c61756465446f636b20bfd8d6c6c3e6b0e52e657865222c2231323334222c22436f6e736f6c65222c2231222c22312c303030204b22',

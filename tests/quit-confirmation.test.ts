@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { rendererStyles } from './renderer-css';
 
 const mainSource = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
 const preloadSource = readFileSync(new URL('../src/preload/preload.ts', import.meta.url), 'utf8');
 const rendererSource = readFileSync(new URL('../src/renderer/main.ts', import.meta.url), 'utf8');
 const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
-const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 const contractsSource = readFileSync(
   new URL('../src/shared/contracts.ts', import.meta.url),
   'utf8',
@@ -121,9 +121,18 @@ describe('quit confirmation handshake', () => {
     expect(rendererSource).toContain("confirmLabel: '仍要退出'");
     expect(rendererSource).toContain("? '重试安全清理'");
     expect(rendererSource).toContain("closeQuitConfirmation('retry');");
-    expect(rendererStyles).toContain('.confirmation-dialog[open]');
+    const quitDialog = /<dialog[^>]*\bid="quit-confirmation-dialog"[^>]*>/.exec(
+      rendererMarkup,
+    )?.[0];
+    expect(quitDialog).toBeDefined();
+    expect(quitDialog).toMatch(/class="[^"]*\bpopover\b[^"]*"/);
     expect(rendererStyles).toContain('.quit-confirmation-dialog');
-    expect(rendererStyles).toContain('var(--dur-3) var(--ease-decel)');
+    expect(rendererStyles).toMatch(
+      /dialog\.popover::backdrop \{[^}]*?overlay var\(--dur-exit\) allow-discrete,[^}]*?display var\(--dur-exit\) allow-discrete;/,
+    );
+    expect(rendererStyles).toMatch(
+      /@starting-style \{[\s\S]*?dialog\.popover\[open\][\s\S]*?dialog\.popover\[open\]::backdrop/,
+    );
   });
 
   it('keeps minimize-to-tray inside the validated bridge', () => {

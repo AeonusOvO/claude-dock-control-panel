@@ -66,6 +66,8 @@ export interface TerminalThemeShell {
   okSolid: string;
   okText: string;
   okTint: string;
+  popScaleFrom: string;
+  popTravel: string;
   pressScale: string;
   radiusBubble: string;
   radiusLg: string;
@@ -87,6 +89,8 @@ export interface TerminalThemeShell {
   textHi: string;
   textLo: string;
   textMute: string;
+  typeBase: string;
+  typeRatio: string;
   warnLine: string;
   warnSolid: string;
   warnText: string;
@@ -137,6 +141,8 @@ export const SHELL_CSS_VARIABLES: Record<keyof TerminalThemeShell, string> = {
   okSolid: '--ok-solid',
   okText: '--ok-text',
   okTint: '--ok-tint',
+  popScaleFrom: '--pop-scale-from',
+  popTravel: '--pop-travel',
   pressScale: '--press-theme',
   radiusBubble: '--r-bubble',
   radiusLg: '--r-theme-lg',
@@ -158,6 +164,8 @@ export const SHELL_CSS_VARIABLES: Record<keyof TerminalThemeShell, string> = {
   textHi: '--text-hi',
   textLo: '--text-lo',
   textMute: '--text-mute',
+  typeBase: '--type-base',
+  typeRatio: '--type-ratio',
   warnLine: '--warn-line',
   warnSolid: '--warn-solid',
   warnText: '--warn-text',
@@ -220,13 +228,14 @@ const CJK_FALLBACK = "'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif";
 /**
  * Per-theme faces. Anthropic's own Styrene/Tiempos pairing is licensed and undistributable, so
  * Claude uses the closest free equivalents: Hanken Grotesk for the geometric sans and Newsreader
- * for the editorial serif. Telegram uses Roboto because that is what Telegram Desktop itself
- * renders in. The two dark themes stay on Inter — a neutral face suits tooling chrome — but take
- * different display faces from each other so they stop looking like one theme in two colours.
+ * for the editorial serif. Telegram Desktop follows the operating-system UI face, so Windows uses
+ * Segoe UI first and keeps Roboto as a cross-platform fallback. The two dark themes stay on Inter —
+ * a neutral face suits tooling chrome — but take different display faces from each other so they
+ * stop looking like one theme in two colours.
  */
 const CLAUDE_UI_FONT = `'Hanken Grotesk Variable', ${CJK_FALLBACK}`;
 const CLAUDE_DISPLAY_FONT = `'Newsreader Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif`;
-const TELEGRAM_FONT = `'Roboto Variable', ${CJK_FALLBACK}`;
+const TELEGRAM_FONT = "'Segoe UI', 'Microsoft YaHei UI', 'Roboto Variable', system-ui, sans-serif";
 const INTER_FONT = `'Inter Variable', ${CJK_FALLBACK}`;
 
 export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> = {
@@ -280,6 +289,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       lineHeightBody: '1.7',
       maskBlur: '8px',
       maskVeil: 'rgb(250 249 245 / 58%)',
+      popScaleFrom: '0.96',
+      popTravel: '4px',
       pressScale: '0.985',
       radiusBubble: '18px',
       radiusLg: '16px',
@@ -298,6 +309,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       textHi: '#141413',
       textLo: '#5f5e59',
       textMute: '#908f88',
+      typeBase: '15px',
+      typeRatio: '1.25',
     },
   },
   graphite: {
@@ -336,7 +349,7 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#7cd4f0',
       accentTint: 'rgb(46 168 216 / 10%)',
       ...DARK_CHROME,
-      durEnter: '190ms',
+      durEnter: '150ms',
       durExit: '150ms',
       durMicro: '95ms',
       /* Graphite reads as tooling: short, near-linear settles with no overshoot at all. */
@@ -351,6 +364,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       lineHeightBody: '1.5',
       maskBlur: '6px',
       maskVeil: 'rgb(5 7 10 / 62%)',
+      popScaleFrom: '0.98',
+      popTravel: '2px',
       pressScale: '0.985',
       radiusBubble: '14px',
       radiusLg: '10px',
@@ -369,6 +384,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       textHi: '#e8eef2',
       textLo: '#8b98a3',
       textMute: '#525d67',
+      typeBase: '13px',
+      typeRatio: '1.18',
     },
   },
   midnight: {
@@ -407,7 +424,7 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#7ed8e2',
       accentTint: 'rgb(56 176 196 / 12%)',
       ...DARK_CHROME,
-      durEnter: '250ms',
+      durEnter: '175ms',
       durExit: '175ms',
       durMicro: '115ms',
       /* Midnight is the calm dark theme: longer, softly-decelerating settles, a hint of give. */
@@ -422,6 +439,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       lineHeightBody: '1.62',
       maskBlur: '6px',
       maskVeil: 'rgb(7 17 28 / 62%)',
+      popScaleFrom: '0.97',
+      popTravel: '3px',
       pressScale: '0.985',
       radiusBubble: '14px',
       radiusLg: '10px',
@@ -440,6 +459,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       textHi: '#e9f2f9',
       textLo: '#8b9dae',
       textMute: '#4f6273',
+      typeBase: '14px',
+      typeRatio: '1.2',
     },
   },
   telegram: {
@@ -478,9 +499,9 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       accentText: '#1267a8',
       accentTint: 'rgb(35 123 196 / 10%)',
       ...LIGHT_CHROME,
-      durEnter: '340ms',
-      durExit: '180ms',
-      durMicro: '150ms',
+      durEnter: '200ms',
+      durExit: '150ms',
+      durMicro: '120ms',
       easeEnter: 'cubic-bezier(0.075, 0.82, 0.165, 1)',
       easeExit: 'cubic-bezier(0.4, 0, 1, 1)',
       easeSpring: 'cubic-bezier(0.23, 1, 0.32, 1)',
@@ -492,12 +513,14 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       lineHeightBody: '1.45',
       maskBlur: '6px',
       maskVeil: 'rgb(255 255 255 / 54%)',
+      popScaleFrom: '0.94',
+      popTravel: '6px',
       pressScale: '0.975',
       radiusBubble: '12px',
       radiusLg: '10px',
-      radiusMd: '8px',
+      radiusMd: '6px',
       radiusPill: '999px',
-      radiusSm: '6px',
+      radiusSm: '4px',
       surface1: '#ffffff',
       surface2: '#f4f4f5',
       surface3: '#ffffff',
@@ -510,6 +533,8 @@ export const TERMINAL_THEMES: Record<TerminalThemeId, TerminalThemeDefinition> =
       textHi: '#17191b',
       textLo: '#565b5f',
       textMute: '#979ca0',
+      typeBase: '13px',
+      typeRatio: '1.15',
     },
   },
 };

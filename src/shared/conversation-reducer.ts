@@ -11,6 +11,24 @@ const cloneMessage = (message: ConversationMessageView): ConversationMessageView
   blocks: message.blocks.map(cloneBlock),
 });
 
+/**
+ * Copy one message, bump its version, and swap it into a fresh array. Every other message keeps
+ * its identity, so a token delta allocates two objects instead of one per message in the
+ * transcript — the difference between O(1) and O(N) work per streamed token.
+ */
+const withMessage = (
+  messages: ConversationMessageView[],
+  index: number,
+  mutate: (message: ConversationMessageView) => void,
+): ConversationMessageView[] => {
+  const next = [...messages];
+  const message = cloneMessage(next[index]!);
+  mutate(message);
+  message.version = (message.version ?? 0) + 1;
+  next[index] = message;
+  return next;
+};
+
 export const createConversationSnapshot = (
   event: Extract<ConversationEvent, { type: 'conversation.started' }>,
 ): ConversationSnapshot => ({
@@ -50,14 +68,13 @@ export const reduceConversationEvent = (
     return current;
   }
 
+  // Structural sharing on purpose: only the arrays and objects an event actually touches are
+  // copied. Deep-cloning the transcript here ran once per streamed token and dominated both main
+  // process CPU and the structured-clone cost of shipping the snapshot to the renderer.
   const next: ConversationSnapshot = {
     ...current,
-    interactions: [...current.interactions],
-    messages: current.messages.map(cloneMessage),
     revision: event.revision,
     sequence: event.sequence,
-    tasks: current.tasks.map((task) => ({ ...task })),
-    usage: { ...current.usage },
   };
 
   switch (event.type) {
@@ -71,36 +88,52 @@ export const reduceConversationEvent = (
       break;
     case 'message.upsert': {
       const index = next.messages.findIndex((message) => message.id === event.message.id);
-      if (index >= 0) next.messages[index] = cloneMessage(event.message);
-      else next.messages.push(cloneMessage(event.message));
+      const incoming = cloneMessage(event.message);
+      if (index >= 0) {
+        incoming.version = (next.messages[index]?.version ?? 0) + 1;
+        next.messages = [...next.messages];
+        next.messages[index] = incoming;
+      } else {
+        incoming.version = 1;
+        next.messages = [...next.messages, incoming];
+      }
       break;
     }
     case 'message.delta': {
-      let message = next.messages.find((candidate) => candidate.id === event.messageId);
-      if (!message) {
-        message = {
-          blocks: [],
-          createdAt: event.emittedAt,
-          id: event.messageId,
-          role: 'assistant',
-          status: 'streaming',
-        };
-        next.messages.push(message);
+      const index = next.messages.findIndex((candidate) => candidate.id === event.messageId);
+      if (index < 0) {
+        next.messages = [
+          ...next.messages,
+          {
+            blocks: [{ id: event.blockId, text: event.delta, type: event.blockType }],
+            createdAt: event.emittedAt,
+            id: event.messageId,
+            role: 'assistant',
+            status: 'streaming',
+            version: 1,
+          },
+        ];
+        break;
       }
-      const block = message.blocks.find((candidate) => candidate.id === event.blockId);
-      if (block && (block.type === 'text' || block.type === 'thinking')) {
-        block.text += event.delta;
-      } else {
-        message.blocks.push({ id: event.blockId, text: event.delta, type: event.blockType });
-      }
+      next.messages = withMessage(next.messages, index, (message) => {
+        const blockIndex = message.blocks.findIndex((candidate) => candidate.id === event.blockId);
+        const block = blockIndex >= 0 ? message.blocks[blockIndex] : undefined;
+        if (block && (block.type === 'text' || block.type === 'thinking')) {
+          message.blocks[blockIndex] = { ...block, text: block.text + event.delta };
+        } else {
+          message.blocks.push({ id: event.blockId, text: event.delta, type: event.blockType });
+        }
+      });
       break;
     }
     case 'tool.updated': {
-      const message = next.messages.find((candidate) => candidate.id === event.messageId);
-      if (!message) break;
-      const index = message.blocks.findIndex((block) => block.id === event.block.id);
-      if (index >= 0) message.blocks[index] = cloneBlock(event.block);
-      else message.blocks.push(cloneBlock(event.block));
+      const index = next.messages.findIndex((candidate) => candidate.id === event.messageId);
+      if (index < 0) break;
+      next.messages = withMessage(next.messages, index, (message) => {
+        const blockIndex = message.blocks.findIndex((block) => block.id === event.block.id);
+        if (blockIndex >= 0) message.blocks[blockIndex] = cloneBlock(event.block);
+        else message.blocks.push(cloneBlock(event.block));
+      });
       break;
     }
     case 'interaction.requested':

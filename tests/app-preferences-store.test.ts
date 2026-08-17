@@ -22,6 +22,7 @@ describe('app preferences store', () => {
   it('defaults to tray and persists the one-time notice', () => {
     const store = createStore();
     expect(store.get()).toEqual({
+      claudeContextWindowMode: 'auto',
       closeBehavior: 'tray',
       closeToTrayNoticeShown: false,
       footerResourcePreference: 'auto',
@@ -29,6 +30,7 @@ describe('app preferences store', () => {
     });
     store.set({ closeToTrayNoticeShown: true });
     expect(store.get()).toEqual({
+      claudeContextWindowMode: 'auto',
       closeBehavior: 'tray',
       closeToTrayNoticeShown: true,
       footerResourcePreference: 'auto',
@@ -39,6 +41,7 @@ describe('app preferences store', () => {
   it('persists direct exit without changing the notice flag', () => {
     const store = createStore();
     expect(store.set({ closeBehavior: 'exit' })).toEqual({
+      claudeContextWindowMode: 'auto',
       closeBehavior: 'exit',
       closeToTrayNoticeShown: false,
       footerResourcePreference: 'auto',
@@ -58,4 +61,30 @@ describe('app preferences store', () => {
       'extended',
     );
   });
+
+  it.each([8_000, 2_000_000])('persists the custom Claude context boundary %i', (tokens) => {
+    const store = createStore();
+    expect(
+      store.set({
+        claudeContextWindowCustomTokens: tokens,
+        claudeContextWindowMode: 'custom',
+      }),
+    ).toMatchObject({
+      claudeContextWindowCustomTokens: tokens,
+      claudeContextWindowMode: 'custom',
+    });
+  });
+
+  it.each([7_999, 2_000_001, 200_000.5])(
+    'rejects the invalid custom Claude context window %i',
+    (tokens) => {
+      const store = createStore();
+      expect(() =>
+        store.set({
+          claudeContextWindowCustomTokens: tokens,
+          claudeContextWindowMode: 'custom',
+        }),
+      ).toThrow('应用偏好设置无效');
+    },
+  );
 });

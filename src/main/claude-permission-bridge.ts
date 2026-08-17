@@ -211,10 +211,26 @@ export class ClaudePermissionBridge {
       endpoint.queue.push(queued);
       this.dispatch(endpoint);
     });
-    socket.on('error', () => {
+    /*
+     * A hook client that ends or closes normally — Claude Code exited, or the hook's own wait
+     * elapsed — emits no 'error'. Settling only on 'error' left `active` occupied forever, so every
+     * later permission request sat in the queue until its ten-minute timeout.
+     */
+    const settle = (): void => {
       const active = endpoint.active;
-      if (active?.socket === socket) this.finish(endpoint, active);
-    });
+      if (active?.socket === socket) {
+        this.finish(endpoint, active);
+        return;
+      }
+      const index = endpoint.queue.findIndex((queued) => queued.socket === socket);
+      if (index < 0) return;
+      const [queued] = endpoint.queue.splice(index, 1);
+      if (!queued) return;
+      clearTimeout(queued.timeout);
+      this.pending.delete(queued.request.requestId);
+    };
+    socket.on('close', settle);
+    socket.on('error', settle);
   }
 
   private dispatch(endpoint: PermissionEndpoint): void {

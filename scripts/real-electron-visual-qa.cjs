@@ -95,7 +95,14 @@ const waitForTarget = async (port) => {
   throw new Error('Timed out waiting for the real ClaudeDock Electron window.');
 };
 
-const expression = (source) => `(${source})`;
+/**
+ * Every `waitFor` predicate is written as `() => ...`, so the trailing `()` is what actually runs it.
+ * Without the call the renderer just evaluates a function object, which is truthy, and every wait
+ * returns on its first poll — the harness then photographs and asserts against whatever state
+ * happened to be on screen. That failure mode is silent in the passing direction, so `waitFor`
+ * additionally refuses any result that is still a function.
+ */
+const expression = (source) => `(${source})()`;
 
 const main = async () => {
   const port = await reservePort();
@@ -144,6 +151,12 @@ const main = async () => {
           result.exceptionDetails.exception?.description ?? 'Renderer evaluation failed.',
         );
       }
+      if (result.result?.type === 'function') {
+        // Nothing in this harness legitimately evaluates to a function. Getting one back means a
+        // predicate was stringified but never called, which reads as "condition met" at every call
+        // site and turns the whole suite into a screenshotter with no waits.
+        throw new Error(`Renderer evaluation returned a function instead of a value: ${source}`);
+      }
       return result.result?.value;
     };
 
@@ -153,7 +166,19 @@ const main = async () => {
         if (await evaluate(expression(source))) return;
         await delay(100);
       }
-      throw new Error(`Timed out waiting for ${label}.`);
+      // An open modal blocks nearly every transition this harness waits on, and reporting only the
+      // label sends the reader looking for the wrong bug. Name the dialog when one is up.
+      const blocker = await evaluate(`(() => {
+        const dialog = [...document.querySelectorAll('dialog')].find((node) => node.open);
+        if (!dialog) return '';
+        return (dialog.id || dialog.className || 'dialog') + ': ' +
+          (dialog.querySelector('h1, h2, h3, .dialog__title')?.textContent ?? '').trim();
+      })()`);
+      throw new Error(
+        blocker
+          ? `Timed out waiting for ${label} — an open dialog is blocking it (${blocker}).`
+          : `Timed out waiting for ${label}.`,
+      );
     };
 
     const elementCenter = async (selector) => {
@@ -191,6 +216,16 @@ const main = async () => {
       });
     };
 
+    /**
+     * Moves the cursor off whatever was last clicked. The stop state is defined by having *no*
+     * background, and `.native-composer__send[data-action='stop']:not(:disabled):hover` paints one,
+     * so a resting screenshot taken with the pointer still parked on the button would be a lie.
+     */
+    const parkPointer = async () => {
+      await client.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 8, y: 8 });
+      await delay(40);
+    };
+
     const capture = async (file, metadata, settleMilliseconds = 80) => {
       if (settleMilliseconds > 0) await delay(settleMilliseconds);
       const result = await client.call('Page.captureScreenshot', {
@@ -202,6 +237,16 @@ const main = async () => {
       if (bytes.length < 1_000) throw new Error(`Invalid real Electron capture: ${file}`);
       writeFileSync(path.join(outputRoot, file), bytes);
       const dom = await evaluate(`(() => ({
+        footerDisplay: getComputedStyle(document.querySelector('.terminal-footer')).display,
+        footerEffort: document.querySelector('#footer-effort')?.textContent ?? '',
+        footerMode: document.querySelector('#footer-mode')?.textContent ?? '',
+        footerModel: document.querySelector('#footer-model')?.textContent ?? '',
+        footerSpeed: document.querySelector('#footer-speed')?.textContent ?? '',
+        footerSpeedState: document.querySelector('#footer-speed')?.dataset.state ?? '',
+        queuedHidden: document.querySelector('#native-queued')?.hidden ?? true,
+        queuedState: document.querySelector('#native-queued')?.dataset.state ?? '',
+        sendAction: document.querySelector('#native-send')?.dataset.action ?? '',
+        sendStopping: document.querySelector('#native-send')?.dataset.stopping ?? '',
         launchButtonDisabled: document.querySelector('#run-claude')?.disabled ?? true,
         launchButtonOpacity: getComputedStyle(document.querySelector('#run-claude')).opacity,
         launchButtonText: document.querySelector('#run-agent-label')?.textContent ?? '',
@@ -295,36 +340,220 @@ const main = async () => {
         `${theme} theme selection card close`,
       );
 
-      if (theme === 'claude' || theme === 'telegram') {
-        await click('#native-composer-input');
-        await client.call('Input.insertText', { text: `${theme} 发送动效核对` });
-        await click('#native-send');
-        await waitFor(
-          `() => document.querySelector('#native-send')?.dataset.sending === 'true'`,
-          `${theme} send confirmation motion`,
-        );
-        await evaluate(`(() => {
-          const button = document.querySelector('#native-send');
-          for (const animation of button?.getAnimations({ subtree: true }) ?? []) {
-            const duration = animation.effect?.getTiming().duration;
-            if (typeof duration !== 'number') continue;
-            animation.pause();
-            animation.currentTime = duration * 0.5;
+      // R1/R2 evidence, on every theme. `[fixture:hold]` parks the fake turn in `running` with no
+      // assistant output, which is the only way this harness can photograph a real in-flight turn:
+      // every other fake response resolves inside the submitting tick.
+      await click('#native-composer-input');
+      await client.call('Input.insertText', { text: `[fixture:hold] ${theme} 发送动效核对` });
+      await click('#native-send');
+      await waitFor(
+        `() => document.querySelector('#native-send')?.dataset.sending === 'true'`,
+        `${theme} send confirmation motion`,
+      );
+      await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        for (const animation of button?.getAnimations({ subtree: true }) ?? []) {
+          const duration = animation.effect?.getTiming().duration;
+          if (typeof duration !== 'number') continue;
+          animation.pause();
+          animation.currentTime = duration * 0.5;
+        }
+        return true;
+      })()`);
+      await capture(
+        `${theme}-send-mid.png`,
+        { animation: 'send-mid', interaction: 'send', theme },
+        0,
+      );
+      await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        for (const animation of button?.getAnimations({ subtree: true }) ?? []) animation.cancel();
+        return true;
+      })()`);
+      // Cancelling never fires `animationend`, so the flip below is produced by the renderer's own
+      // 600 ms watchdog rather than forced here: the handover is observed, not staged.
+      await waitFor(
+        `() => document.querySelector('#native-send')?.dataset.action === 'stop' && !document.querySelector('#native-send')?.dataset.stopping`,
+        `${theme} send-to-stop handover`,
+        5_000,
+      );
+      await parkPointer();
+      // The send-to-stop flip and the un-hover both start background-color transitions, so a sample
+      // taken right after parkPointer reads an interpolated colour rather than the resting one.
+      // Fast-forwarding the transitions to their end state is what "at rest" actually means here;
+      // it cannot mask a real defect, because a stop face that stays painted still ends painted.
+      await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        for (const animation of button?.getAnimations({ subtree: true }) ?? []) {
+          try {
+            animation.finish();
+          } catch {
+            animation.cancel();
           }
-          return true;
-        })()`);
-        await capture(
-          `${theme}-send-mid.png`,
-          { animation: 'send-mid', interaction: 'send', theme },
-          0,
+        }
+        return true;
+      })()`);
+      const stopRest = await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        const marker = getComputedStyle(button.querySelector('.native-composer__send-stop'));
+        return {
+          action: button.dataset.action ?? '(unset)',
+          background: getComputedStyle(button).backgroundColor,
+          halo: getComputedStyle(button, '::after').animationName,
+          haloOpacity: getComputedStyle(button, '::after').opacity,
+          markerDisplay: marker.display,
+          markerRadius: parseFloat(marker.borderTopLeftRadius),
+          markerWidth: parseFloat(marker.width),
+          sending: button.dataset.sending ?? '(unset)',
+          status: document.querySelector('#native-composer-status')?.textContent ?? '',
+          stopIsOnlyButton: document.querySelectorAll('#native-composer button[type="submit"]').length,
+          valueLength: document.querySelector('#native-composer-input')?.value.length ?? -1,
+        };
+      })()`);
+      // Report the attribute alongside the colour: a painted background means either the stop rule
+      // lost the cascade or the button already flipped back to 'send', and those need opposite fixes.
+      if (stopRest.action !== 'stop') {
+        throw new Error(
+          `${theme} composer left the stop face before it could be sampled (data-action=${stopRest.action}, data-sending=${stopRest.sending}, status="${stopRest.status}").`,
         );
-        await evaluate(`(() => {
-          const button = document.querySelector('#native-send');
-          for (const animation of button?.getAnimations({ subtree: true }) ?? []) animation.cancel();
-          delete button.dataset.sending;
-          return true;
-        })()`);
       }
+      if (stopRest.background !== 'rgba(0, 0, 0, 0)') {
+        throw new Error(`${theme} stop rest must be transparent, saw ${stopRest.background}.`);
+      }
+      if (stopRest.halo !== 'none' || stopRest.haloOpacity !== '0') {
+        throw new Error(`${theme} stop rest must not carry a halo yet.`);
+      }
+      if (stopRest.markerDisplay !== 'block' || stopRest.markerWidth < 8) {
+        throw new Error(`${theme} stop marker is missing or too small: ${stopRest.markerWidth}.`);
+      }
+      if (stopRest.markerRadius <= 0 || stopRest.markerRadius > stopRest.markerWidth / 2) {
+        throw new Error(
+          `${theme} stop marker must stay a rounded square, saw ${stopRest.markerRadius}px.`,
+        );
+      }
+      if (stopRest.stopIsOnlyButton !== 1) {
+        throw new Error(`${theme} composer must expose exactly one action button.`);
+      }
+      await capture(`${theme}-stop-rest.png`, { interaction: 'stop-rest', theme }, 0);
+
+      // The halo is forced rather than clicked: a real interrupt resolves in the same tick against
+      // the fake adapter, and the idle re-render would strip `data-stopping` before the shutter.
+      await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        button.dataset.stopping = 'true';
+        return true;
+      })()`);
+      await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        for (const animation of button?.getAnimations({ subtree: true }) ?? []) {
+          const duration = animation.effect?.getTiming().duration;
+          if (typeof duration !== 'number') continue;
+          animation.pause();
+          animation.currentTime = duration * 0.5;
+        }
+        return true;
+      })()`);
+      await capture(
+        `${theme}-stop-halo-mid.png`,
+        { animation: 'halo-mid', interaction: 'stop-halo', theme },
+        0,
+      );
+      await evaluate(`(() => {
+        const button = document.querySelector('#native-send');
+        for (const animation of button?.getAnimations({ subtree: true }) ?? []) animation.cancel();
+        delete button.dataset.stopping;
+        return true;
+      })()`);
+
+      const footer = await evaluate(`(() => {
+        const element = document.querySelector('.terminal-footer');
+        const composer = document.querySelector('#native-composer');
+        return {
+          composerBottom: composer.getBoundingClientRect().bottom,
+          controlBarPresent: Boolean(document.querySelector('.native-control-bar')),
+          display: getComputedStyle(element).display,
+          top: element.getBoundingClientRect().top,
+          speed: document.querySelector('#footer-speed')?.textContent ?? '',
+          speedDisabled: document.querySelector('#footer-speed')?.disabled ?? true,
+        };
+      })()`);
+      if (footer.display === 'none') {
+        throw new Error(`${theme} native mode must keep the status footer mounted.`);
+      }
+      if (footer.top < footer.composerBottom - 1) {
+        throw new Error(`${theme} status footer must sit below the composer.`);
+      }
+      if (footer.controlBarPresent) {
+        throw new Error(`${theme} still renders the retired .native-control-bar.`);
+      }
+      if (!footer.speed.startsWith('Fast')) {
+        throw new Error(
+          `${theme} footer must report the native Fast state, saw "${footer.speed}".`,
+        );
+      }
+      await capture(`${theme}-native-footer.png`, { interaction: 'native-footer', theme }, 0);
+
+      // Typing during a live turn must hand the button back to send (R1 #4) and park the text above
+      // the send row instead of promoting it into a transcript bubble (R2).
+      await click('#native-composer-input');
+      await client.call('Input.insertText', { text: `${theme} 排队补充说明` });
+      await waitFor(
+        `() => document.querySelector('#native-send')?.dataset.action === 'send'`,
+        `${theme} send-key restoration while running`,
+      );
+      const bubblesBeforeQueue = await evaluate(
+        `document.querySelectorAll('.native-message').length`,
+      );
+      await click('#native-send');
+      await waitFor(
+        `() => document.querySelector('#native-queued')?.hidden === false && document.querySelector('#native-queued')?.dataset.state === 'queued'`,
+        `${theme} queued message bar`,
+      );
+      await parkPointer();
+      const queued = await evaluate(`(() => {
+        const bar = document.querySelector('#native-queued');
+        const row = document.querySelector('.native-composer__row');
+        const style = getComputedStyle(bar);
+        return {
+          bubbles: document.querySelectorAll('.native-message').length,
+          composerInput: document.querySelector('#native-composer-input').value,
+          gapAboveRow: row.getBoundingClientRect().top - bar.getBoundingClientRect().bottom,
+          hint: document.querySelector('#native-queued-hint')?.textContent ?? '',
+          isBubble: bar.classList.contains('native-message'),
+          borderStyle: style.borderTopStyle,
+          parent: bar.parentElement?.id ?? '',
+        };
+      })()`);
+      if (queued.bubbles !== bubblesBeforeQueue) {
+        throw new Error(`${theme} queued text must not become a transcript bubble yet.`);
+      }
+      if (queued.isBubble || queued.borderStyle !== 'dashed') {
+        throw new Error(`${theme} queued bar must stay visually distinct from a bubble.`);
+      }
+      if (queued.parent !== 'native-composer') {
+        throw new Error(
+          `${theme} queued bar must live inside the composer, saw "${queued.parent}".`,
+        );
+      }
+      // The lower bound is "must not overlap the row", not "must not touch it": a flush bar computes
+      // to a few ten-thousandths below zero once the rects are scaled by the device pixel ratio.
+      if (queued.gapAboveRow < -0.5 || queued.gapAboveRow > 48) {
+        throw new Error(
+          `${theme} queued bar must sit just above the send row, saw ${queued.gapAboveRow}px.`,
+        );
+      }
+      if (queued.composerInput !== '') {
+        throw new Error(`${theme} composer must be cleared once the text is parked.`);
+      }
+      await capture(`${theme}-native-queued.png`, { interaction: 'native-queued', theme }, 0);
+
+      // Releasing the held turn drains the queue through the normal idle path, which is also how
+      // the theme loop hands a clean, idle conversation to the next iteration.
+      await click('#native-queued-send');
+      await waitFor(
+        `() => document.querySelector('#native-queued')?.hidden === true && document.querySelector('#native-send')?.dataset.action === 'send' && document.querySelectorAll('.native-message').length > ${bubblesBeforeQueue}`,
+        `${theme} queued message promotion`,
+      );
     }
 
     await click('#native-composer-input');
@@ -373,8 +602,8 @@ const main = async () => {
       theme: 'midnight',
     });
     await waitFor(
-      `() => !document.querySelector('#native-plan-dialog')?.open`,
-      'the plan close animation',
+      `() => getComputedStyle(document.querySelector('#native-plan-dialog')).display === 'none'`,
+      'the plan discrete display transition',
     );
     await click('.native-interaction--plan .button--primary');
     await waitFor(
@@ -429,7 +658,26 @@ const main = async () => {
       0,
     );
 
+    // The isolated profile refuses to spawn a real PowerShell, so this transfer cannot succeed here
+    // by construction — `assertRealRuntimeAllowed` throws inside `restartRuntimeTerminal`. What this
+    // step is worth photographing is therefore the *rollback*: the native panel must stay open with
+    // a usable composer and re-enabled toggle rather than stranding the user between two surfaces.
+    // A profile that allows real runtimes owns the success path; asserting it here would only ever
+    // assert that the sandbox leaked.
     await click('#native-terminal-toggle');
+    await waitFor(
+      `() => document.querySelector('#confirmation-dialog')?.open && document.querySelector('#confirmation-dialog-title')?.textContent === '中断正在运行的任务并切换？'`,
+      'the running-work transfer confirmation',
+    );
+    await capture('midnight-safe-terminal-confirm.png', {
+      interaction: 'safe-terminal-confirm',
+      theme: 'midnight',
+    });
+    await click('#confirmation-dialog-confirm');
+    await waitFor(
+      `() => document.querySelector('#confirmation-dialog')?.open === false`,
+      'the running-work transfer confirmation to close',
+    );
     await delay(70);
     await capture('midnight-safe-terminal-exit-mid.png', {
       animation: 'exit-mid',
@@ -437,25 +685,72 @@ const main = async () => {
       theme: 'midnight',
     });
     await waitFor(
-      `() => document.querySelector('#native-conversation')?.dataset.state === 'closed'`,
-      'the safe terminal transition',
+      `() => document.querySelector('#native-terminal-toggle')?.disabled === false && document.querySelector('#toast')?.textContent?.includes('已尝试恢复原生界面')`,
+      'the blocked safe terminal transfer to roll back',
     );
+    const rollback = await evaluate(`(() => ({
+      composerDisabled: document.querySelector('#native-composer-input')?.disabled ?? '(missing)',
+      panelState: document.querySelector('#native-conversation')?.dataset.state ?? '(missing)',
+      status: document.querySelector('#native-composer-status')?.textContent ?? '',
+    }))()`);
+    if (rollback.panelState !== 'open') {
+      throw new Error(
+        `a refused safe-terminal transfer must leave the native panel open, saw "${rollback.panelState}".`,
+      );
+    }
+    if (rollback.composerDisabled !== false) {
+      throw new Error('a refused safe-terminal transfer must hand the composer back to the user.');
+    }
+    if (rollback.status === '正在安全返回终端…') {
+      throw new Error('the composer is still advertising a transfer that already failed.');
+    }
     await capture('midnight-safe-terminal.png', {
       interaction: 'safe-terminal',
       theme: 'midnight',
     });
 
-    // Runtime switching is deliberately the final real-window interaction. The active native owner
-    // must win this conflict, so the real IPC path rejects the takeover and rolls the selector back
-    // to Claude. The static matrix owns the successful selection and pausable animation midframes.
+    // Runtime switching is deliberately the final real-window interaction.
+    //
+    // This step used to claim the active native owner wins the conflict and the switch rolls back.
+    // It does not: `runtime:set` gates only on `hasActiveRuntime`, which is PTY-based
+    // (`ClaudeRuntime.isActive` reads the workspace-session map), while a native conversation holds
+    // its route under `nativeRouteReservations`. Nothing in the switch path consults conversation
+    // ownership, so the switch commits. The old assertion never caught this because `waitFor`
+    // evaluated an uninvoked arrow function and returned truthy on its first poll.
+    //
+    // What is actually guaranteed today — and what this now asserts — is that the switch is not
+    // destructive: the native transcript, the open panel and a usable composer all survive it,
+    // because the route stays reserved (`RouteLifecycleCoordinator.hasUser` counts reservations,
+    // not just active PTY sessions). Whether the switch *should* additionally be refused while a
+    // native turn is live is an open product question; it is not implemented anywhere in main, the
+    // renderer, the root docs or the tests, so this harness must not pretend it is.
+    const beforeSwitch = await evaluate(`document.querySelectorAll('.native-message').length`);
     await click('#runtime-codex');
     await waitFor(
-      `() => document.body.dataset.agentRuntime === 'claude' && document.querySelector('#runtime-claude')?.checked && document.querySelector('#toast')?.classList.contains('toast--visible') && document.querySelector('#toast')?.textContent?.includes('恢复原生界面') && !document.querySelector('#runtime-picker')?.disabled`,
-      'the protected runtime switch rollback',
+      `() => document.body.dataset.agentRuntime === 'codex' && document.querySelector('#runtime-codex')?.checked && !document.querySelector('#runtime-picker')?.disabled`,
+      'the runtime switch to settle',
     );
-    await capture('midnight-runtime-switch-rollback.png', {
+    const afterSwitch = await evaluate(`(() => ({
+      composerDisabled: document.querySelector('#native-composer-input')?.disabled ?? '(missing)',
+      messages: document.querySelectorAll('.native-message').length,
+      panelState: document.querySelector('#native-conversation')?.dataset.state ?? '(missing)',
+    }))()`);
+    if (afterSwitch.messages !== beforeSwitch) {
+      throw new Error(
+        `a runtime switch must not drop native transcript content, saw ${beforeSwitch} then ${afterSwitch.messages}.`,
+      );
+    }
+    if (afterSwitch.panelState !== 'open') {
+      throw new Error(
+        `a runtime switch must not tear down the live native panel, saw "${afterSwitch.panelState}".`,
+      );
+    }
+    if (afterSwitch.composerDisabled !== false) {
+      throw new Error('a runtime switch must leave the native composer usable.');
+    }
+    await capture('midnight-runtime-switch.png', {
       interaction: 'runtime-switch',
-      state: 'protected-rollback',
+      state: 'native-survives',
       theme: 'midnight',
     });
 

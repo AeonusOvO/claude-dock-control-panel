@@ -8,12 +8,14 @@ import type {
   ConversationSnapshot,
   ConversationStartInput,
   ConversationSubmitInput,
+  NativeConversationAdoptResult,
   NativeConversationDraftResult,
   NativeConversationOperationResult,
   NativeConversationStartResult,
   NativeConversationTerminalTransferResult,
 } from '../shared/native-conversation';
 import { reduceConversationEvent } from '../shared/conversation-reducer';
+import { nativeConversationHasRunningWork } from '../shared/conversation-surface-switch';
 import {
   ConversationOwnerRegistry,
   type ConversationOwner,
@@ -52,6 +54,10 @@ export interface NativeConversationLaunchInput {
     configFingerprintSource?: unknown;
   };
   model?: string;
+  /** Launch-only model understood by Claude Code; never persisted into recovery metadata. */
+  runtimeModel?: string;
+  /** Launch-only, non-secret settings environment; never persisted into recovery metadata. */
+  settingsEnvironment?: Record<string, string>;
   permissionMode?: string;
   projectPath: string;
   resume?: boolean;
@@ -121,23 +127,7 @@ export class NativeConversationService {
       };
     }
 
-    const launch = input.launch ?? {};
-    const launchSnapshot: RecoveryLaunchSnapshot = {
-      ...launch,
-      configFingerprint: recoveryConfigFingerprint(
-        launch.configFingerprintSource ?? {
-          effort: launch.effort,
-          endpointIdentity: launch.endpointIdentity,
-          model: input.model ?? launch.model,
-          permissionMode: input.permissionMode ?? launch.permissionMode,
-          speed: launch.speed,
-        },
-      ),
-      model: input.model ?? launch.model,
-      permissionMode: input.permissionMode ?? launch.permissionMode,
-    };
-    delete (launchSnapshot as RecoveryLaunchSnapshot & { configFingerprintSource?: unknown })
-      .configFingerprintSource;
+    const { launchSnapshot, startInput } = this.buildLaunch(conversationId, input);
     this.options.recoveryStore.reserve({
       conversationId,
       launch: launchSnapshot,
@@ -145,17 +135,6 @@ export class NativeConversationService {
       projectPath: input.projectPath,
       runtime: this.options.runtime,
     });
-    const startInput: ConversationStartInput = {
-      allowBypassPermissions: input.allowBypassPermissions,
-      cliVersion: launch.cliVersion,
-      conversationId,
-      endpointIdentity: launch.endpointIdentity,
-      model: input.model,
-      ownerKind: 'native',
-      permissionMode: input.permissionMode,
-      projectPath: input.projectPath,
-      resume: input.resume === true,
-    };
     this.active.set(conversationId, {
       confirmedSubmissions: new Set(),
       launch: launchSnapshot,
@@ -345,10 +324,19 @@ export class NativeConversationService {
       conversationId: string;
       projectPath: string;
     }) => Promise<{ owner: ConversationOwner; terminalSessionId: string }>,
+    allowInterrupt = false,
   ): Promise<NativeConversationTerminalTransferResult> {
     const current = this.requireActive(conversationId);
     if (current.transfer) {
       return { message: '该对话正在切换界面。', ok: false, snapshot: current.snapshot };
+    }
+    if (!allowInterrupt && nativeConversationHasRunningWork(current.snapshot)) {
+      return {
+        message: '原生对话仍有正在运行的回复或后台任务。',
+        ok: false,
+        requiresConfirmation: true,
+        snapshot: current.snapshot,
+      };
     }
     if (draft && draft.blocks.length > 0) {
       const serialized = JSON.stringify(draft);
@@ -414,6 +402,126 @@ export class NativeConversationService {
             : '高级终端启动失败；已尝试恢复原生界面。',
         ok: false,
         snapshot: current.snapshot,
+      };
+    }
+  }
+
+  /**
+   * Takes over a conversation that a terminal session currently owns, without minting a new UUID.
+   * Mirrors {@link transferToTerminal} in the opposite direction: stop the Claude process inside the
+   * PTY, resume that exact transcript under the SDK, then commit the owner swap. The workspace tab
+   * itself stays open — only the process inside it is stopped — so switching back is the forward
+   * transfer running on the very same tab.
+   *
+   * `beginTransfer` leaves the terminal owner registered (phase `'stopping'`), so this deliberately
+   * does not delegate to {@link start}: that path would `claim()` the same identity key and get a
+   * `'conflict'`. The native owner is minted here and handed to `commitTransfer`, exactly like
+   * `transferToTerminal` hands over the owner produced by its `startTerminal` callback.
+   */
+  public async adoptFromTerminal(
+    input: NativeConversationLaunchInput & { conversationId: string },
+    stopTerminal: () => Promise<void>,
+    restoreTerminal: () => Promise<void>,
+  ): Promise<NativeConversationAdoptResult> {
+    const conversationId = input.conversationId.toLowerCase();
+    const alreadyNative = this.active.get(conversationId);
+    if (alreadyNative) {
+      return {
+        conversationId,
+        message: '该对话已经在原生界面运行。',
+        ok: true,
+        snapshot: alreadyNative.snapshot,
+      };
+    }
+    const identity = {
+      conversationId,
+      projectPath: input.projectPath,
+      runtime: this.options.runtime,
+    };
+    let terminalOwner: ConversationOwner | undefined;
+    try {
+      terminalOwner = this.options.ownerRegistry.ownerFor(identity);
+    } catch (error) {
+      return {
+        conversationId,
+        message: error instanceof Error ? error.message : '对话标识无效，无法接管。',
+        ok: false,
+      };
+    }
+    if (!terminalOwner) {
+      return {
+        conversationId,
+        message: '当前终端尚未持有这段对话，无法切换到原生对话。',
+        ok: false,
+      };
+    }
+    if (terminalOwner.ownerKind !== 'terminal') {
+      return { conversationId, message: '这段对话不由安全终端持有，无法接管。', ok: false };
+    }
+
+    const generation = (this.generations.get(conversationId) ?? 0) + 1;
+    this.generations.set(conversationId, generation);
+    const owner: ConversationOwner = {
+      conversationId,
+      generation,
+      ownerId: `native:${conversationId}:${generation}`,
+      ownerKind: 'native',
+      phase: 'starting',
+      projectPath: input.projectPath,
+      runtime: this.options.runtime,
+    };
+    // Adoption is always an exact-UUID resume: the JSONL the terminal just stopped writing is the
+    // whole point. A fresh launch here would silently fork the conversation the user is looking at.
+    const { launchSnapshot, startInput } = this.buildLaunch(conversationId, {
+      ...input,
+      resume: true,
+    });
+    const transfer = this.options.ownerRegistry.beginTransfer(terminalOwner, terminalOwner.ownerId);
+    const adopted: ActiveConversation = {
+      confirmedSubmissions: new Set(),
+      launch: launchSnapshot,
+      owner,
+      pendingAttachmentIds: new Map(),
+      startInput,
+      transfer,
+    };
+    this.active.set(conversationId, adopted);
+    try {
+      await stopTerminal();
+      await this.options.adapter.start(startInput);
+      const activeOwner: ConversationOwner = { ...owner, phase: 'active' };
+      this.options.ownerRegistry.commitTransfer(transfer, activeOwner);
+      adopted.owner = activeOwner;
+      adopted.transfer = undefined;
+      this.options.recoveryStore.reserve({
+        conversationId,
+        launch: launchSnapshot,
+        ownerKind: 'native',
+        projectPath: input.projectPath,
+        runtime: this.options.runtime,
+      });
+      return {
+        conversationId,
+        message: '已切换到原生对话。',
+        ok: true,
+        snapshot: this.active.get(conversationId)?.snapshot,
+      };
+    } catch (error) {
+      this.active.delete(conversationId);
+      this.options.ownerRegistry.rollbackTransfer(transfer);
+      let restored = true;
+      try {
+        await restoreTerminal();
+      } catch {
+        restored = false;
+      }
+      const reason = error instanceof Error ? error.message : '原生会话启动失败';
+      return {
+        conversationId,
+        message: restored
+          ? `${reason}；已尝试恢复安全终端。`
+          : `${reason}；安全终端也未能恢复，请手动重新启动该会话。`,
+        ok: false,
       };
     }
   }
@@ -502,6 +610,43 @@ export class NativeConversationService {
     ) {
       this.release(current);
     }
+  }
+
+  private buildLaunch(
+    conversationId: string,
+    input: NativeConversationLaunchInput,
+  ): { launchSnapshot: RecoveryLaunchSnapshot; startInput: ConversationStartInput } {
+    const launch = input.launch ?? {};
+    const launchSnapshot: RecoveryLaunchSnapshot = {
+      ...launch,
+      configFingerprint: recoveryConfigFingerprint(
+        launch.configFingerprintSource ?? {
+          effort: launch.effort,
+          endpointIdentity: launch.endpointIdentity,
+          model: input.model ?? launch.model,
+          permissionMode: input.permissionMode ?? launch.permissionMode,
+          speed: launch.speed,
+        },
+      ),
+      model: input.model ?? launch.model,
+      permissionMode: input.permissionMode ?? launch.permissionMode,
+    };
+    delete (launchSnapshot as RecoveryLaunchSnapshot & { configFingerprintSource?: unknown })
+      .configFingerprintSource;
+    const startInput: ConversationStartInput = {
+      allowBypassPermissions: input.allowBypassPermissions,
+      cliVersion: launch.cliVersion,
+      conversationId,
+      endpointIdentity: launch.endpointIdentity,
+      model: input.model,
+      runtimeModel: input.runtimeModel,
+      settingsEnvironment: input.settingsEnvironment,
+      ownerKind: 'native',
+      permissionMode: input.permissionMode,
+      projectPath: input.projectPath,
+      resume: input.resume === true,
+    };
+    return { launchSnapshot, startInput };
   }
 
   private release(current: ActiveConversation): void {

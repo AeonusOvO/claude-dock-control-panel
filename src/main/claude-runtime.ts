@@ -23,6 +23,7 @@ import type {
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeInstallationStatus,
+  ClaudeContextWindowMode,
   ClaudeLaunchMode,
   ClaudeMetrics,
   ClaudeModelOption,
@@ -49,6 +50,11 @@ import {
   routerProtocolForOpenAiEndpoint,
 } from '../shared/connection-endpoint';
 import { buildTerminalSubmission, writeTerminalSubmission } from '../shared/composer-input';
+import {
+  claudeModelIdsMatch,
+  resolveClaudeRuntimeModel,
+  stripClaudeContextWindowSuffix,
+} from '../shared/claude-model-id';
 import {
   CLAUDE_EFFORT_LEVELS,
   CLAUDE_EFFORT_REQUESTS,
@@ -138,6 +144,9 @@ interface RuntimeSession {
   artifactDirectory?: string;
   /** Claude Code conversation this PTY is attached to, once the status line has reported it. */
   conversationId?: string;
+  /** Generic Claude window selection captured for this launch and reused by live `/model`. */
+  claudeContextWindowCustomTokens?: number;
+  claudeContextWindowMode?: ClaudeContextWindowMode;
   contextWindowMode?: ManagedChatGptContextWindowMode;
   cwd: string;
   diagnosticBuffer: string;
@@ -167,6 +176,8 @@ interface RuntimeSession {
   markerRemainder: string;
   metrics?: ClaudeMetrics;
   metricsPath?: string;
+  /** Model id passed only to Claude Code; persisted identity remains `expectedModel`. */
+  runtimeModel?: string;
   /** Depth remembered for the resumed conversation, replayed once its TUI accepts commands. */
   pendingEffortRestore?: ClaudeEffortRequest;
   /** Earliest moment `pendingEffortRestore` may be submitted; a fresh TUI ignores instant input. */
@@ -200,6 +211,8 @@ export interface PreparedNativeClaudeConversation {
   endpointIdentity: string;
   environment: ClaudeEnvironmentOverrides;
   model: string;
+  runtimeModel: string;
+  settingsEnvironment: Record<string, string>;
 }
 
 interface ConnectionHistoryMetadata {
@@ -319,7 +332,7 @@ const optionalEffortLevel = (value: unknown): ClaudeEffortLevel | undefined =>
     ? (value as ClaudeEffortLevel)
     : undefined;
 
-const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase();
+const projectKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 
 const credentialDigest = (credential?: string): string =>
   createHash('sha256')
@@ -474,7 +487,9 @@ export const parseClaudeContextWindowError = (value: string): boolean => {
   const latest = latestClaudeRuntimeApiError(value);
   return Boolean(
     latest &&
-    /input exceeds the context window|context window of this model|maximum context length|too many input tokens/i.test(
+    // `prompt is too long` is the canonical Anthropic 400 wording; gateways reword it freely, so
+    // match the shortened form some of them emit as well.
+    /input exceeds the context window|context window of this model|maximum context length|too many input tokens|prompt is too long|prompt too long/i.test(
       latest,
     ),
   );
@@ -627,8 +642,22 @@ export const claudeResourceUsage = (
         contextProfile.autoCompactPercent) /
       100
     : undefined;
-  const contextUsedPercent =
-    metrics?.contextWindowUsed !== undefined && metrics.contextWindowSize
+  /*
+   * `contextWindowUsed` is clamped to the window by the status line, so a window that is smaller
+   * than what the endpoint actually serves shows a permanent 100%. `inputTokens` carries the raw
+   * total, and its overshoot is the only evidence available from outside the CLI that the declared
+   * window is wrong. Report the real ratio rather than the clamped one so the bar keeps moving.
+   */
+  const contextCountingAnomaly =
+    metrics?.contextWindowSize &&
+    metrics.contextWindowUsed === metrics.contextWindowSize &&
+    metrics.inputTokens !== undefined &&
+    metrics.inputTokens > metrics.contextWindowSize
+      ? { reportedTokens: metrics.inputTokens, windowTokens: metrics.contextWindowSize }
+      : undefined;
+  const contextUsedPercent = contextCountingAnomaly
+    ? (contextCountingAnomaly.reportedTokens / contextCountingAnomaly.windowTokens) * 100
+    : metrics?.contextWindowUsed !== undefined && metrics.contextWindowSize
       ? Math.min(100, Math.max(0, (metrics.contextWindowUsed / metrics.contextWindowSize) * 100))
       : undefined;
   const windows = [
@@ -655,8 +684,9 @@ export const claudeResourceUsage = (
     autoCompactAtTokens,
     capabilities: { balance: false, context: true, windows: true },
     checkedAt,
+    contextCountingAnomaly,
     contextUsedPercent,
-    contextUsedTokens: metrics?.contextWindowUsed,
+    contextUsedTokens: contextCountingAnomaly?.reportedTokens ?? metrics?.contextWindowUsed,
     contextWindowTokens: metrics?.contextWindowSize,
     detail: available ? undefined : '等待 Claude Code 状态行上报。',
     source: 'claude-statusline',
@@ -696,6 +726,7 @@ export const mergeClaudeResourceUsage = (
           windows: provider.capabilities.windows || context.capabilities.windows,
         },
         checkedAt: Math.max(provider.checkedAt, context.checkedAt),
+        contextCountingAnomaly: context.contextCountingAnomaly,
         contextUsedPercent: context.contextUsedPercent,
         contextUsedTokens: context.contextUsedTokens,
         contextWindowTokens: context.contextWindowTokens,
@@ -738,17 +769,7 @@ export const parseClaudeMetrics = (raw: string): ClaudeMetrics | undefined => {
 };
 
 const modelMatches = (expected: string | undefined, actual: string | undefined): boolean => {
-  if (!expected || expected === 'default' || !actual) {
-    return true;
-  }
-  const normalizedExpected = expected.toLowerCase();
-  const normalizedActual = actual.toLowerCase();
-  return (
-    normalizedActual === normalizedExpected ||
-    normalizedActual.includes(normalizedExpected) ||
-    (['haiku', 'opus', 'sonnet'].includes(normalizedExpected) &&
-      normalizedActual.includes(normalizedExpected))
-  );
+  return claudeModelIdsMatch(expected, actual);
 };
 
 const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
@@ -866,6 +887,11 @@ export class ClaudeRuntime {
      */
     private readonly isWebResearchIsolationEnabled: () => boolean,
     private readonly managedChatGptContextWindowMode: () => ManagedChatGptContextWindowMode,
+    /** Read per launch so a status-bar window change applies to the next session. */
+    private readonly claudeContextWindow: () => {
+      customTokens?: number;
+      mode: ClaudeContextWindowMode;
+    },
     private readonly onState: (state: ClaudeProjectState) => void,
     private readonly writeToTerminal: (
       sessionId: string,
@@ -948,9 +974,9 @@ export class ClaudeRuntime {
     if (!runtime?.active || projectKey(runtime.cwd) !== projectKey(cwd)) {
       return false;
     }
-    const normalizedConversationId = conversationId.toLocaleLowerCase();
+    const normalizedConversationId = conversationId.toLowerCase();
     return [runtime.conversationId, runtime.metrics?.sessionId].some(
-      (candidate) => candidate?.toLocaleLowerCase() === normalizedConversationId,
+      (candidate) => candidate?.toLowerCase() === normalizedConversationId,
     );
   }
 
@@ -1150,7 +1176,7 @@ export class ClaudeRuntime {
         return expectedModel;
       }
     }
-    return reportedModel ?? expectedModel ?? config.model;
+    return stripClaudeContextWindowSuffix(reportedModel ?? expectedModel ?? config.model);
   }
 
   private modelSpeedState(
@@ -1657,10 +1683,18 @@ export class ClaudeRuntime {
         const blockingDetail = routerBlockingDetail(config, router);
         if (blockingDetail) throw new Error(blockingDetail);
       }
-      const model = requestedModel ?? config.model;
-      if (!MODEL_NAME_PATTERN.test(model)) throw new Error('模型标识无效。');
+      const selectedModel = requestedModel ?? config.model;
+      if (!MODEL_NAME_PATTERN.test(selectedModel)) throw new Error('模型标识无效。');
+      const model = stripClaudeContextWindowSuffix(selectedModel);
       const launchConfig = { ...config, model };
       const speed = this.resolveModelSpeed(launchConfig, model, installation.version);
+      const managedContextWindowMode = this.managedChatGptContextWindowMode();
+      const claudeContextWindow = this.claudeContextWindow();
+      const runtimeModel = resolveClaudeRuntimeModel(
+        selectedModel,
+        claudeContextWindow.mode,
+        claudeContextWindow.customTokens,
+      );
       this.nativeRouteReservations.set(ownerId, reservation);
       return {
         allowBypassPermissions: launchSnapshot.allowBypassPermissions,
@@ -1670,10 +1704,20 @@ export class ClaudeRuntime {
         environment: buildClaudeEnvironment(
           launchConfig,
           credential,
-          this.managedChatGptContextWindowMode(),
+          managedContextWindowMode,
           speed.profile,
+          claudeContextWindow.mode,
+          claudeContextWindow.customTokens,
         ),
         model,
+        runtimeModel,
+        settingsEnvironment: buildClaudeSettingsEnvironment(
+          launchConfig,
+          managedContextWindowMode,
+          speed.profile,
+          claudeContextWindow.mode,
+          claudeContextWindow.customTokens,
+        ),
       };
     } catch (error) {
       if (this.routeLifecycle.release(reservation)) {
@@ -1807,14 +1851,15 @@ export class ClaudeRuntime {
         ? remembered.permissionMode
         : undefined;
     const effectiveStartMode = startMode ?? rememberedMode;
-    const launchModel =
+    const selectedLaunchModel =
       overrides?.model ??
       (mode !== 'continue' && remembered?.model && MODEL_NAME_PATTERN.test(remembered.model)
         ? remembered.model
         : config.model);
-    if (!MODEL_NAME_PATTERN.test(launchModel)) {
+    if (!MODEL_NAME_PATTERN.test(selectedLaunchModel)) {
       throw new Error('模型标识不合法，拒绝启动 Claude Code。');
     }
+    const launchModel = stripClaudeContextWindowSuffix(selectedLaunchModel);
     const launchConfig = { ...config, model: launchModel };
     const speed = this.resolveModelSpeed(
       launchConfig,
@@ -1823,6 +1868,12 @@ export class ClaudeRuntime {
       overrides?.speed,
     );
     const contextWindowMode = this.managedChatGptContextWindowMode();
+    const claudeContextWindow = this.claudeContextWindow();
+    const runtimeModel = resolveClaudeRuntimeModel(
+      selectedLaunchModel,
+      claudeContextWindow.mode,
+      claudeContextWindow.customTokens,
+    );
 
     const launchGeneration = ++this.nextLaunchGeneration;
     const sessionDirectory = path.join(this.runtimeRoot, sessionId);
@@ -1892,7 +1943,13 @@ export class ClaudeRuntime {
       $schema: 'https://json.schemastore.org/claude-code-settings.json',
       ...buildClaudeSpeedSettings(speed.profile),
       ...(shouldDisableInheritedApiKeyHelper(config) ? { apiKeyHelper: '' } : {}),
-      env: buildClaudeSettingsEnvironment(launchConfig, contextWindowMode, speed.profile),
+      env: buildClaudeSettingsEnvironment(
+        launchConfig,
+        contextWindowMode,
+        speed.profile,
+        claudeContextWindow.mode,
+        claudeContextWindow.customTokens,
+      ),
       // Hooks remain session-local because this file is passed through Claude Code's --settings.
       hooks: {
         ...(this.activityScriptPath
@@ -1958,7 +2015,7 @@ export class ClaudeRuntime {
           },
         ],
       },
-      model: launchModel,
+      model: runtimeModel,
       skipWebFetchPreflight: true,
       theme: claudeCodeThemeForTerminalTheme(this.currentThemeId),
       statusLine: {
@@ -1988,6 +2045,8 @@ export class ClaudeRuntime {
       credential,
       contextWindowMode,
       speed.profile,
+      claudeContextWindow.mode,
+      claudeContextWindow.customTokens,
     );
     environment[POWERSHELL_STARTUP_COMMAND_ENV] = launchCommand;
 
@@ -1998,6 +2057,8 @@ export class ClaudeRuntime {
     runtime.active = true;
     runtime.activityEventsPath = this.activityScriptPath ? activityEventsPath : undefined;
     runtime.artifactDirectory = artifactDirectory;
+    runtime.claudeContextWindowCustomTokens = claudeContextWindow.customTokens;
+    runtime.claudeContextWindowMode = claudeContextWindow.mode;
     runtime.ptyGeneration = undefined;
     runtime.routeKind = routeKind;
     runtime.conversationId = resumedConversationId;
@@ -2021,6 +2082,7 @@ export class ClaudeRuntime {
     runtime.launchedSpeedTargetKey = speed.targetKey;
     runtime.metrics = undefined;
     runtime.metricsPath = metricsPath;
+    runtime.runtimeModel = runtimeModel;
     // `/effort` cannot ride the launch command, so it is replayed once the new TUI is listening.
     runtime.pendingEffortRestore = remembered?.effort;
     runtime.pendingEffortRestoreAt = remembered?.effort
@@ -2254,7 +2316,7 @@ export class ClaudeRuntime {
       });
     }
 
-    return { activeModel, options };
+    return { activeModel: stripClaudeContextWindowSuffix(activeModel), options };
   }
 
   /**
@@ -2288,19 +2350,29 @@ export class ClaudeRuntime {
     if (!MODEL_NAME_PATTERN.test(option.model)) {
       throw new Error('模型标识不合法，拒绝写入终端。');
     }
+    const canonicalModel = stripClaudeContextWindowSuffix(option.model);
+    if (!MODEL_NAME_PATTERN.test(canonicalModel)) {
+      throw new Error('模型标识不合法，拒绝写入终端。');
+    }
     const installation = await this.diagnoseInstallation();
     assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
     const targetSpeed = this.resolveModelSpeed(
-      { ...this.configStore.getConfig(cwd), model: option.model },
-      option.model,
+      { ...this.configStore.getConfig(cwd), model: canonicalModel },
+      canonicalModel,
       installation.version,
     );
+    const runtimeModel = resolveClaudeRuntimeModel(
+      option.model,
+      runtime.claudeContextWindowMode ?? 'auto',
+      runtime.claudeContextWindowCustomTokens,
+    );
 
-    await this.submitClaudeCommand(runtime, `/model ${option.model}`, assertCurrent);
+    await this.submitClaudeCommand(runtime, `/model ${runtimeModel}`, assertCurrent);
     assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
-    runtime.expectedModel = option.model;
+    runtime.expectedModel = canonicalModel;
+    runtime.runtimeModel = runtimeModel;
     runtime.launchedSpeedPreference = targetSpeed.preference;
     runtime.launchedSpeedSignature = targetSpeed.signature;
     runtime.launchedSpeedTargetKey = targetSpeed.targetKey;
@@ -2597,9 +2669,10 @@ export class ClaudeRuntime {
       return;
     }
     runtime.conversationId = conversationId;
+    const model = runtime.metrics?.modelId ?? runtime.expectedModel;
     this.conversationPreferences.record(conversationId, {
       effort: runtime.effortRequest ?? runtime.metrics?.effortLevel,
-      model: runtime.metrics?.modelId ?? runtime.expectedModel,
+      model: model ? stripClaudeContextWindowSuffix(model) : undefined,
       permissionMode: runtime.permissionMode,
     });
   }

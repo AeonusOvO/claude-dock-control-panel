@@ -151,6 +151,68 @@ describe('Claude runtime route diagnostics', () => {
     });
   });
 
+  it('reports the real ratio when the status line clamps usage to an undersized window', () => {
+    const gateway: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'https://gateway.example',
+      model: 'claude-opus-5',
+      preset: 'custom',
+      provider: 'gateway',
+    };
+
+    // The exact shape observed in a real session: a 1M-capable endpoint behind a plain model name,
+    // so Claude Code assumed 200k, pinned `contextWindowUsed` at the window, and the bar froze.
+    const usage = claudeResourceUsage(
+      {
+        capturedAt: Date.now(),
+        contextWindowSize: 200_000,
+        contextWindowUsed: 200_000,
+        inputTokens: 301_260,
+      },
+      gateway,
+      'standard',
+    );
+
+    expect(usage.contextCountingAnomaly).toEqual({
+      reportedTokens: 301_260,
+      windowTokens: 200_000,
+    });
+    expect(usage.contextUsedTokens).toBe(301_260);
+    expect(usage.contextUsedPercent).toBeCloseTo(150.63, 1);
+  });
+
+  it('does not flag an anomaly while usage sits below the declared window', () => {
+    const gateway: NormalizedClaudeConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'https://gateway.example',
+      model: 'claude-opus-5',
+      preset: 'custom',
+      provider: 'gateway',
+    };
+
+    const usage = claudeResourceUsage(
+      {
+        capturedAt: Date.now(),
+        contextWindowSize: 1_000_000,
+        contextWindowUsed: 250_000,
+        inputTokens: 250_000,
+      },
+      gateway,
+      'standard',
+    );
+
+    expect(usage.contextCountingAnomaly).toBeUndefined();
+    expect(usage.contextUsedPercent).toBe(25);
+  });
+
+  it('treats a shortened gateway context-window rejection as a context error', () => {
+    expect(parseClaudeContextWindowError('API Error: 400 prompt is too long')).toBe(true);
+    expect(parseClaudeContextWindowError('API Error: 400 Prompt too long')).toBe(true);
+    expect(parseClaudeContextWindowError('API Error: 401 invalid api key')).toBe(false);
+  });
+
   it('keeps the official status-line session title for workspace synchronization', () => {
     const metrics = parseClaudeMetrics(
       JSON.stringify({
@@ -432,7 +494,7 @@ describe('Claude runtime permission mode observation', () => {
       'private readonly commandSubmissionQueues = new Map<string, Promise<void>>();',
     );
     expect(runtimeSource).toContain(
-      'await this.submitClaudeCommand(runtime, `/model ${option.model}`, assertCurrent);',
+      'await this.submitClaudeCommand(runtime, `/model ${runtimeModel}`, assertCurrent);',
     );
     expect(runtimeSource).toContain(
       'await this.submitClaudeCommand(runtime, `/compact ${COMPACT_INSTRUCTION}`, assertCurrent);',

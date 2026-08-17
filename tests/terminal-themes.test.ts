@@ -61,8 +61,15 @@ describe('terminal themes', () => {
 
     expect(TERMINAL_THEMES.claude.shell.fontUi).toContain('Hanken Grotesk Variable');
     expect(TERMINAL_THEMES.claude.shell.fontDisplay).toContain('Newsreader Variable');
+    expect(TERMINAL_THEMES.telegram.shell.fontUi).toMatch(/^'Segoe UI'/);
     expect(TERMINAL_THEMES.telegram.shell.fontUi).toContain('Roboto Variable');
     expect(TERMINAL_THEMES.telegram.shell.fontDisplay).toBe(TERMINAL_THEMES.telegram.shell.fontUi);
+    expect(TERMINAL_THEMES.telegram.shell.durMicro).toBe('120ms');
+    expect(TERMINAL_THEMES.telegram.shell.durEnter).toBe('200ms');
+    expect(TERMINAL_THEMES.telegram.shell.durExit).toBe('150ms');
+    expect(TERMINAL_THEMES.telegram.shell.radiusSm).toBe('4px');
+    expect(TERMINAL_THEMES.telegram.shell.radiusMd).toBe('6px');
+    expect(TERMINAL_THEMES.telegram.shell.radiusLg).toBe('10px');
     expect(TERMINAL_THEMES.claude.shell.radiusBubble).not.toBe(
       TERMINAL_THEMES.telegram.shell.radiusBubble,
     );

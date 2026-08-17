@@ -3,7 +3,7 @@
 ClaudeDock 是面向 Windows 的开源 Electron 桌面控制面板，用图形界面管理多个项目的真实
 PowerShell/ConPTY 终端、Claude Code 与 Codex 开发会话、模型接入、MCP、插件和软件更新。
 
-当前代码版本为 **5.0.0-rc.10**，许可证为 **Apache-2.0**。Claude 项目的“新建安全会话”、
+当前代码版本为 **5.0.0-rc.12**，许可证为 **Apache-2.0**。Claude 项目的“新建安全会话”、
 “继续最近”“选择历史”和历史记录点击默认进入真实 PowerShell/ConPTY 终端；结构化原生对话只通过
 终端工具栏的“原生对话”按钮显式进入，不会因恢复记录自动抢占终端界面。原生路径仍由 Claude Agent SDK
 解析用户本机的 `claude` 命令；NPM 安装时会沿启动器定位同一软件包内的 `bin/claude.exe`，ClaudeDock
@@ -42,7 +42,8 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   明确要求选项或选择题时，Claude 可使用现有结构化选择卡，不必切到规划模式。项目默认开启高风险预置时
   显示“完全允许”，关闭预置后启动、切换与 adapter 三层均拒绝进入该模式。
 - `(runtime, normalized project, UUID)` 单一 owner 阻止同一对话被原生会话、历史恢复和安全终端
-  重复占用。从原生对话返回安全终端时会先保存草稿并精确恢复 UUID；任何失败均回滚到原生 owner。
+  重复占用。工具栏按钮在同一标签页、同一 UUID 上双向切换；无任务时直接切换，有回复或后台任务时
+  先确认是否中断。返回安全终端会自动加密保存未发送草稿；任何失败均回滚到原 owner。
 - Claude JSONL 仍是正文真值。独立恢复日志只记录 owner、启动配置和提交阶段；待确认文本由
   Electron `safeStorage` 加密，无法持久化时阻止发送。不确定的提交只恢复为草稿，绝不自动补发。
 - 真实 Agent SDK 输入一经本机队列接受，界面立即按 `clientSubmissionId` 显示对应用户消息；提交
@@ -58,10 +59,10 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   [CLI 指令清单](docs/cli-command-catalog.md)，动态 Skills、Plugins 与 MCP 指令仍以 CLI 原生 `/`
   列表为准。
 - Claude Code 官方安装、版本门禁、项目级服务商接入、连接实测和会话状态。
-- 实验性的“ChatGPT 订阅（ClaudeDock 托管）”预设：用户一次点击后，ClaudeDock 自动检测并补齐
-  Claude Code，从 CLIProxyAPI 官方 GitHub Release 下载并校验 Windows x64 版本，在应用私有目录
-  安装、打开 OpenAI 官方授权页、启动仅监听回环地址的网关，再从实时模型列表选择、实测并保存当前
-  项目配置。应用或 Windows 重启后，手动/自动连接测试会先恢复这个应用自有网关，再验证已保存配置；
+- 实验性的“ChatGPT 订阅（ClaudeDock 托管）”预设：即使尚未打开项目，用户也能一次点击完成
+  Claude Code 检测/补齐、CLIProxyAPI 官方 GitHub Release 校验安装、OpenAI 官方授权和回环网关启动；
+  打开项目后，同一入口再从实时模型列表选择、实测并保存当前项目配置。应用或 Windows 重启后，
+  手动/自动连接测试会先恢复这个应用自有网关，再验证已保存配置；
   网关进程停止不会再被误报为用户配置突然失效。
 - Codex 官方 CLI/App Server 登录状态与项目启动；ChatGPT 登录凭据仍由 Codex 自身管理。
 - Claude Code 底栏提供按接入和模型隔离的“速度”菜单：官方 Claude 使用原生 Fast，受管 GPT
@@ -71,6 +72,12 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
   PowerShell，或明确失败/关闭事件，避免准备期间重复重启终端。
 - 终端底栏把上下文、官方额度窗口和受支持供应商余额收拢为“资源”菜单；用户可选择自动、
   上下文优先或额度优先。ClaudeDock 不用本地网关请求次数伪造 ChatGPT 订阅剩余额度。
+- 资源菜单可声明 Claude 的上下文窗口（自动 / 100 万 / 20 万 / 自定义），下次新建或重启会话生效。
+  默认“自动”交由 Claude Code 按模型判定，官方订阅保持此项即可；对 Claude 模型选择 100 万时，
+  ClaudeDock 只在 Claude Code / Agent SDK 启动边界附加 `[1m]`，CLI 发往上游前会恢复原模型名，
+  避免普通 `claude-*` 标识仍按 20 万提前压缩。菜单分别显示请求值与当前会话的真实上报值；窗口
+  容量由端点决定，软件不把模型目录猜测成自动探测。只有真实的端点上下文拒绝才建议切回 20 万，
+  状态行计数不一致只作为诊断提示。
 - Claude 原生对话与独立模型对话均支持受限图片附件；Windows 剪贴板兼容 `items` 与主进程
   `readImage()` 回退，应用副本经过类型、大小、像素、路径与 SVG 安全检查并按会话/TTL 回收。
 - 原生输入坞保持同一提交、附件、键盘和可访问性内核，同时随主题更换外壳：Claude 明亮使用柔和
@@ -84,7 +91,9 @@ Authenticode 签名、GitHub Release 与国内 HTTPS 镜像一致性验收；在
 - 应用更新、依赖许可清单与安全报告。
 
 设计和交互约束见 [design.md](design.md)，架构、安全与发布实现见
-[technical.md](technical.md)。
+[technical.md](technical.md)，本候选版的融合范围与门禁见
+[5.0.0-rc.12 发布说明](docs/releases/5.0.0-rc.12.md)。旧路线图、实施规格、缺陷清单与分阶段修复
+提示词保存在 [`docs/archive/`](docs/archive/)；它们均为历史材料，不是当前产品规格或 Agent 指令。
 
 ## 安装与使用
 
@@ -183,8 +192,9 @@ Claude/Codex 鉴权、把 Claude Code 指向 GPT 模型并定义 `claudex` 别�
 随上游变化失效。
 
 普通用户只需要在“接入 → 订阅接入（实验性）”选择“ChatGPT 订阅（ClaudeDock 托管）”，再点击一次
-“一键安装并登录”。ClaudeDock 随后自动完成环境检测、缺失组件安装、授权、模型发现、真实测试和项目
-保存；界面用 8 个实时阶段持续反馈，操作结束前主按钮保持锁定。
+“一键安装并登录”。未打开项目时，ClaudeDock 会先完成环境检测、缺失组件安装、授权和模型发现，并用
+6 个实时阶段持续反馈；打开项目后再次使用该入口，会继续真实测试和项目保存的 8 阶段事务。操作结束前
+主按钮保持锁定，项目在操作期间被切换或关闭也不会把按钮遗留在永久禁用状态。
 
 1. ClaudeDock 查询 CLIProxyAPI 官方 GitHub Release，只接受预期仓库、版本、Windows x64 ZIP 与
    GitHub 提供的 SHA-256 摘要；校验后解压到应用 `userData` 私有目录，生成仅监听

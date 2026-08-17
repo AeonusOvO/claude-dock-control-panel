@@ -7,8 +7,12 @@
   普通用户不手动选择路由内核、不填写可实时发现的模型标识，路由/网关后台只作为高级诊断入口。
 - 必读文档：`README.md`、`design.md`、`technical.md`。
 - 入口：`src/main/main.ts`、`src/preload/preload.ts`、`src/renderer/main.ts`。
-- 修改后至少运行：`npm run lint`、`npm run format:check`、`npm run typecheck`、`npm test`、
-  `npm run test:layout`、`npm run test:control-theme`、`npm run build`。
+- 每次更新完成后必须运行完整门禁：`npm run lint`、`npm run format:check`、`npm run typecheck`、
+  `npm test`、`npm run test:layout`、`npm run test:control-theme`、
+  `npm run test:runtime-soak:accelerated`、`npm run build`；全部通过后必须再运行 `npm run dist`
+  生成当次版本的 Windows 安装包，不得只交付开发构建。
+- 每次交付必须报告安装包的绝对路径、应用版本、文件大小、SHA-256 和 Authenticode 签名状态；
+  未签名或签名无效时必须明确说明，不得把本地候选包描述为正式签名发行版。
 - UI、运行方式或技术实现变化时，同步检查三个根目录文档。
 - 生成目录：`dist/`、`outputs/`；Electron Builder 的安装包和解包目录统一输出到 `outputs/`，
   不得再复制到项目根目录，生成目录和安装包均不提交 Git。

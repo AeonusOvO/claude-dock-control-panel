@@ -49,8 +49,9 @@ const installFixtures = String.raw`
     document.documentElement.dataset.nativeQa = 'true';
     const qaStyle = document.createElement('style');
     qaStyle.textContent = [
-      "html[data-native-qa='true'] #terminal-shell { animation: none !important; grid-template-rows: var(--toolbar-h) minmax(0, 1fr) !important; opacity: 1 !important; }",
-      "html[data-native-qa='true'] #terminal-shell > :is(.terminal-stage, .terminal-composer, .terminal-footer) { display: none !important; }",
+      "html[data-native-qa='true'] #terminal-shell { animation: none !important; grid-template-rows: var(--toolbar-h) minmax(0, 1fr) var(--footer-h) !important; opacity: 1 !important; }",
+      "html[data-native-qa='true'] #terminal-shell > :is(.terminal-stage, .terminal-composer) { display: none !important; }",
+      "html[data-native-qa='true'] #terminal-shell > .terminal-footer { grid-row: 3 !important; }",
       "html[data-native-qa='true'] #native-conversation { animation: none !important; display: grid !important; opacity: 1 !important; transform: none !important; }",
       "html[data-native-qa='true'] #runtime-activity-panel[data-state='open'] { animation: none !important; opacity: 1 !important; transform: none !important; }",
     ].join('\\n');
@@ -167,16 +168,21 @@ const installFixtures = String.raw`
       body.append(history); folder.append(header, body); list.append(folder);
     };
     const setControls = () => {
-      const model = byId('native-model-control');
-      model.replaceChildren(new Option('Claude Opus 4.6', 'claude-opus-4-6'), new Option('Claude Haiku 4.5', 'claude-haiku-4-5'));
-      model.value = 'claude-opus-4-6'; model.disabled = false;
-      const effort = byId('native-effort-control');
-      effort.replaceChildren(new Option('Ultra Code', 'ultracode'), new Option('最大', 'max'), new Option('更深 · X-High', 'xhigh'));
-      effort.value = 'ultracode'; effort.disabled = false;
-      const fast = byId('native-fast-control'); fast.disabled = false; fast.dataset.state = 'requested'; fast.setAttribute('aria-pressed', 'true'); fast.textContent = 'Fast · 已请求';
-      const permission = byId('native-permission-control');
-      permission.replaceChildren(new Option('逐项确认', 'default'), new Option('规划模式', 'plan'));
-      permission.disabled = false;
+      const chip = (id, text, title) => {
+        const node = byId(id);
+        node.disabled = false;
+        node.textContent = text;
+        node.title = title;
+        node.setAttribute('aria-busy', 'false');
+        return node;
+      };
+      chip('footer-model', '模型 Claude Opus 4.6', '点击切换模型；切换会在同一段对话内生效。');
+      const speed = chip('footer-speed', 'Fast 已请求', '已向上游请求 Fast · service_tier；上游返回结构化确认前不会显示为已确认。');
+      speed.dataset.state = 'requested';
+      chip('footer-mode', '模式 逐项确认', '未预先批准的动作逐项显示权限确认。');
+      const effort = chip('footer-effort', '思考 Ultra Code', '工作流编排；实际思考档位为 X-High，仅作用于当前会话。');
+      effort.dataset.effort = 'ultracode';
+      effort.setAttribute('aria-description', '工作流编排；实际思考档位为 X-High，仅作用于当前会话。');
     };
     const base = ({ state = 'success', railWidth = 320, scroll = true } = {}) => {
       document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -199,20 +205,45 @@ const installFixtures = String.raw`
       byId('native-recovery-stack').hidden = true;
       byId('native-interaction-stack').replaceChildren();
       byId('native-attachment-queue').hidden = true;
+      byId('native-queued').hidden = true;
       setControls();
       const messages = byId('native-conversation-messages');
       const empty = byId('native-conversation-empty');
       messages.replaceChildren(empty);
       empty.hidden = state !== 'empty';
-      byId('native-composer-status').textContent = state === 'loading' ? 'Claude 正在处理' : state === 'failure' ? '接入配置不可用 · 请打开配置检查' : '可以继续对话';
-      byId('native-stop').hidden = state !== 'loading';
+      const running = state === 'loading' || state === 'stopping' || state === 'queued' || state === 'queued-dispatching';
+      byId('native-composer-status').textContent = state === 'failure'
+        ? '接入配置不可用 · 请打开配置检查'
+        : state === 'queued' || state === 'queued-dispatching'
+          ? '回复生成中 · Enter 将排队发送 · Esc 中断'
+          : running
+            ? '回复生成中 · 点击停止可中断 · Esc 同样中断'
+            : '可以继续对话';
+      const send = byId('native-send');
+      // The composer owns one button: data-action decides whether it sends or stops, and the pale
+      // halo only exists once data-stopping is set by an actual click. No backticks in here: this
+      // whole fixture is a String.raw template, so one would close it and spill the rest into code.
+      send.dataset.action = running && state !== 'queued' && state !== 'queued-dispatching' ? 'stop' : 'send';
+      delete send.dataset.sending;
+      if (state === 'stopping') send.dataset.stopping = 'true';
+      else delete send.dataset.stopping;
+      if (state === 'queued' || state === 'queued-dispatching') {
+        const dispatching = state === 'queued-dispatching';
+        const queued = byId('native-queued');
+        queued.hidden = false;
+        queued.dataset.state = dispatching ? 'dispatching' : 'queued';
+        byId('native-queued-text').textContent = '顺便把安装包签名检查也一并跑一遍，结果贴在最后。';
+        byId('native-queued-hint').textContent = dispatching ? '正在发送…' : '本轮结束后自动发送';
+        byId('native-queued-send').hidden = dispatching;
+        byId('native-queued-cancel').hidden = dispatching;
+      }
       if (state === 'empty') return;
       const user = message('user', (body) => body.append(markdown('<p>请完成 <strong>ClaudeDock 5.0</strong> 原生对话迁移，并保留原始空白、代码围栏与工具顺序。</p>')));
       const assistant = message('assistant', (body) => {
         body.append(markdown('<h2>实施进度</h2><p>原生适配器已经接管结构化事件。下面的代码块会保留围栏与换行：</p><pre class="markdown-code"><code>const owner = [runtime, project, uuid];\nawait ownerRegistry.claim(owner);</code></pre><hr><p>运行中与高风险工具默认展开，普通成功项保持折叠。</p>'));
         body.append(tool('Read', 'succeeded', '读取运行时配置', false));
-        body.append(tool('Edit', state === 'failure' ? 'failed' : state === 'loading' ? 'running' : 'succeeded', state === 'failure' ? '写入恢复日志失败' : '更新原生会话服务', true));
-      }, state === 'loading');
+        body.append(tool('Edit', state === 'failure' ? 'failed' : running ? 'running' : 'succeeded', state === 'failure' ? '写入恢复日志失败' : '更新原生会话服务', true));
+      }, running);
       messages.append(user, assistant);
     };
     const interaction = (kind) => {
@@ -340,7 +371,7 @@ const installFixtures = String.raw`
       const dialog = byId('native-plan-dialog');
       byId('native-plan-title').textContent = 'ClaudeDock 5.0 原生对话实施计划';
       byId('native-plan-content').innerHTML = '<h1>发布前计划检查</h1><p>确认以下步骤后再批准实施：</p><ol><li>结构化适配器与单一 owner</li><li>恢复日志、图片安全与命令矩阵</li><li>四主题视觉矩阵与真实 Electron 检查</li><li>完整测试、打包和发布审计</li></ol><pre class="markdown-code"><code>unknown state → draft only\nnever auto-resend</code></pre><blockquote>不确定状态不会自动重发提示词或工具操作。</blockquote>';
-      if (!dialog.open) dialog.showModal(); dialog.dataset.state = 'open';
+      if (!dialog.open) dialog.showModal();
     };
     const updates = () => {
       base();
@@ -419,8 +450,8 @@ app
       // frame before waiting, otherwise a "settled" screenshot can accidentally capture 30–60% of
       // an entrance even after the wall-clock duration elapsed.
       await window.capturePage();
-      // The Telegram theme intentionally has the longest entrance. Settled captures wait beyond the
-      // theme token; paused animation captures remain deterministic because their timelines are held.
+      // Settled captures wait beyond the longest theme token; paused motion captures remain
+      // deterministic because their timelines are held.
       await new Promise((resolve) => setTimeout(resolve, 440));
       // capturePage can return the preceding compositor frame in a hidden window. Discard one final
       // frame, then capture again after a short compositor turn so every file reflects its own scene.
@@ -437,6 +468,11 @@ app
         const messages = document.querySelector('#native-conversation-messages');
         const firstMessage = messages.querySelector('.native-message');
         const composer = document.querySelector('#native-composer');
+        const queued = document.querySelector('#native-queued');
+        const send = document.querySelector('#native-send');
+        const sendStop = send.querySelector('.native-composer__send-stop');
+        const footer = document.querySelector('.terminal-footer');
+        const nativeShell = document.querySelector('#terminal-shell').classList.contains('terminal-shell--native');
         const summary = document.querySelector('#runtime-activity-panel');
         const diagnostic = document.querySelector('#terminal-diagnostic');
         const runtimeCards = [...document.querySelectorAll('.runtime-option')];
@@ -451,6 +487,20 @@ app
           composerHeight: Math.round(composer.getBoundingClientRect().height),
           composerRowHeight: Math.round(composer.querySelector('.native-composer__row').getBoundingClientRect().height),
           composerTop: Math.round(composer.getBoundingClientRect().top),
+          footerDisplay: getComputedStyle(footer).display,
+          footerTop: Math.round(footer.getBoundingClientRect().top),
+          footerVisibleInNative: nativeShell ? getComputedStyle(footer).display !== 'none' : null,
+          queuedAboveRow: queued.hidden
+            ? null
+            : Math.round(composer.querySelector('.native-composer__row').getBoundingClientRect().top - queued.getBoundingClientRect().bottom),
+          queuedHidden: queued.hidden,
+          queuedState: queued.dataset.state ?? '',
+          sendAction: send.dataset.action ?? '',
+          sendBackground: getComputedStyle(send).backgroundColor,
+          sendStopping: send.dataset.stopping ?? '',
+          sendStopDisplay: getComputedStyle(sendStop).display,
+          sendStopRadius: getComputedStyle(sendStop).borderRadius,
+          sendStopWidth: Math.round(sendStop.getBoundingClientRect().width),
           diagnosticHidden: diagnostic.hidden,
           firstMessageColor: firstMessage ? getComputedStyle(firstMessage).color : '',
           firstMessageDisplay: firstMessage ? getComputedStyle(firstMessage).display : '',
@@ -591,7 +641,14 @@ app
 
     await window.webContents.executeJavaScript(applyTheme('graphite'));
     window.setContentSize(1180, 760);
-    for (const state of ['empty', 'loading', 'failure']) {
+    for (const state of [
+      'empty',
+      'loading',
+      'failure',
+      'stopping',
+      'queued',
+      'queued-dispatching',
+    ]) {
       await scene('base', { railWidth: 320, state });
       await capture('native-conversation', `graphite-1180x760-${state}.png`, {
         scene: state,
@@ -644,7 +701,12 @@ app
           zoom: 100,
         });
         await window.webContents.executeJavaScript(
-          `for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()`,
+          `(() => {
+            for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+            for (const animation of document.getAnimations({ subtree: true })) {
+              if (animation.effect?.target instanceof HTMLDialogElement) animation.cancel();
+            }
+          })()`,
         );
       }
     }
@@ -664,10 +726,38 @@ app
       });
     }
 
+    // The single-button composer and the footer takeover are only observable in a real compositor:
+    // capture the resting stop face (red rounded square, no ring), the halo mid-growth, and the
+    // queued bar parked directly above the send row, in all four themes.
     for (const theme of themes) {
       await window.webContents.executeJavaScript(applyTheme(theme));
       window.setContentSize(1180, 760);
-      await scene('runtimeSelection');
+      await scene('base', { railWidth: 320, state: 'loading' });
+      await capture('composer-theme', `${theme}-1180x760-stop-rest.png`, {
+        animation: 'none',
+        scene: 'stop-rest',
+        theme,
+      });
+      await scene('base', { railWidth: 320, state: 'stopping' });
+      await freezeAnimations(window, 0.5);
+      await capture('composer-theme', `${theme}-1180x760-stop-halo-mid.png`, {
+        animation: 'stop-halo',
+        progress: 0.5,
+        theme,
+      });
+      await scene('base', { railWidth: 320, state: 'queued' });
+      await capture('native-queued', `${theme}-1180x760-queued.png`, {
+        scene: 'queued',
+        theme,
+      });
+      await scene('base', { railWidth: 320, state: 'success' });
+      await capture('native-footer', `${theme}-1180x760-footer.png`, {
+        scene: 'native-footer',
+        theme,
+      });
+    }
+
+    for (const theme of themes) {
       await freezeAnimations(window, 0.5);
       await capture('runtime-picker', `${theme}-1180x760-select-mid.png`, {
         animation: 'select',
@@ -684,27 +774,31 @@ app
       ['plan', 'plan', '#native-plan-dialog'],
     ]) {
       await scene(name);
-      await window.webContents.executeJavaScript(
-        `document.querySelector(${JSON.stringify(target)}).dataset.state = 'opening'`,
-      );
+      await window.webContents.executeJavaScript(`(() => {
+        const target = document.querySelector(${JSON.stringify(target)});
+        if (!(target instanceof HTMLDialogElement)) target.dataset.state = 'opening';
+      })()`);
       await freezeAnimations(window, 0.5);
       await capture(feature, `telegram-1180x760-enter-mid.png`, {
         animation: 'enter',
         progress: 0.5,
         theme: 'telegram',
       });
-      await window.webContents.executeJavaScript(
-        `document.querySelector(${JSON.stringify(target)}).dataset.state = 'closing'`,
-      );
+      await window.webContents.executeJavaScript(`(() => {
+        const target = document.querySelector(${JSON.stringify(target)});
+        if (target instanceof HTMLDialogElement) target.close();
+        else target.dataset.state = 'closing';
+      })()`);
       await freezeAnimations(window, 0.5);
       await capture(feature, `telegram-1180x760-exit-mid.png`, {
         animation: 'exit',
         progress: 0.5,
         theme: 'telegram',
       });
-      await window.webContents.executeJavaScript(
-        `for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()`,
-      );
+      await window.webContents.executeJavaScript(`(() => {
+        for (const animation of document.getAnimations({ subtree: true })) animation.cancel();
+        for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+      })()`);
     }
 
     const historyCaptures = captures.filter((capture) => capture.feature === 'sidebar-history');
@@ -739,6 +833,44 @@ app
       }
       if (hover.dom.launchOpacity !== '1') {
         throw new Error(`${theme}: safe launch hover became translucent`);
+      }
+    }
+
+    // The four complaints this release fixes are all geometry the CSS alone cannot prove: assert
+    // them against the real compositor rather than trusting the stylesheet source.
+    for (const capture of captures.filter((entry) => entry.scene === 'stop-rest')) {
+      if (capture.dom.sendAction !== 'stop') {
+        throw new Error(`${capture.file}: the composer button did not become the stop control`);
+      }
+      if (capture.dom.sendStopping !== '') {
+        throw new Error(`${capture.file}: the stop halo was armed before any click`);
+      }
+      if (capture.dom.sendBackground !== 'rgba(0, 0, 0, 0)') {
+        throw new Error(`${capture.file}: the resting stop button still paints an outer ring`);
+      }
+      if (capture.dom.sendStopDisplay === 'none' || capture.dom.sendStopWidth < 8) {
+        throw new Error(`${capture.file}: the red rounded square was not painted`);
+      }
+    }
+    for (const capture of captures.filter((entry) => entry.scene === 'queued')) {
+      if (capture.dom.queuedHidden) {
+        throw new Error(`${capture.file}: the queued bar did not render`);
+      }
+      if (capture.dom.sendAction !== 'send') {
+        throw new Error(`${capture.file}: queued text did not restore the theme send face`);
+      }
+      if (!(capture.dom.queuedAboveRow >= 0 && capture.dom.queuedAboveRow < 48)) {
+        throw new Error(
+          `${capture.file}: the queued bar is not parked directly above the send row`,
+        );
+      }
+    }
+    for (const capture of captures.filter((entry) => entry.feature === 'native-footer')) {
+      if (capture.dom.footerVisibleInNative !== true) {
+        throw new Error(`${capture.file}: the footer is hidden while native mode is displayed`);
+      }
+      if (capture.dom.footerTop < capture.dom.composerTop) {
+        throw new Error(`${capture.file}: the footer was not placed below the native composer`);
       }
     }
 

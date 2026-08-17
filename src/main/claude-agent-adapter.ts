@@ -4,6 +4,12 @@ import {
   mergeRuntimeClaudeCommands,
   resolveClaudeNativeCommand,
 } from '../shared/claude-native-commands';
+import {
+  claudeModelIdsMatch,
+  hasClaudeOneMillionContextSuffix,
+  resolveClaudeRuntimeModel,
+  stripClaudeContextWindowSuffix,
+} from '../shared/claude-model-id';
 import type {
   ConversationAdapter,
   ConversationControlUpdate,
@@ -66,6 +72,7 @@ interface AgentSession {
   query: SdkQuery;
   queue: AsyncInputQueue;
   revision: number;
+  runtimeModel?: string;
   sequence: number;
   tasks: Map<string, ConversationTaskView>;
   tools: Map<string, ToolLocation>;
@@ -79,11 +86,57 @@ export interface ClaudeAgentAdapterOptions {
   startTimeoutMs?: number;
 }
 
+type ClaudeAgentEnvironmentOverrides = Record<string, null | string | undefined>;
+
+export const buildClaudeAgentProcessEnvironment = (
+  inherited: NodeJS.ProcessEnv,
+  overrides: ClaudeAgentEnvironmentOverrides,
+): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = { ...inherited };
+  for (const [name, value] of Object.entries(overrides)) {
+    const normalizedName = name.toLowerCase();
+    for (const existingName of Object.keys(environment)) {
+      if (existingName.toLowerCase() === normalizedName) delete environment[existingName];
+    }
+    if (value !== null && value !== undefined) environment[name] = value;
+  }
+  return environment;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const stringValue = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
 const arrayValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+/**
+ * A tool result stays in the block, so it is re-sent inside every later snapshot and re-serialized
+ * by the renderer on every repaint of that message. One `Read` of a large file is otherwise enough
+ * to make each subsequent frame megabytes of work, which is how long sessions used to freeze.
+ * The transcript on disk keeps the full text; this cap only bounds what the UI carries.
+ */
+const TOOL_OUTPUT_CHARACTER_LIMIT = 32_000;
+
+const truncateToolOutput = (value: unknown): unknown => {
+  if (typeof value === 'string') {
+    return value.length <= TOOL_OUTPUT_CHARACTER_LIMIT
+      ? value
+      : `${value.slice(0, TOOL_OUTPUT_CHARACTER_LIMIT)}\n…（已省略 ${
+          value.length - TOOL_OUTPUT_CHARACTER_LIMIT
+        } 个字符，完整内容见对话记录）`;
+  }
+  if (value === undefined || value === null || typeof value !== 'object') return value;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? '';
+  } catch {
+    return '（工具输出无法序列化）';
+  }
+  if (serialized.length <= TOOL_OUTPUT_CHARACTER_LIMIT) return value;
+  return `${serialized.slice(0, TOOL_OUTPUT_CHARACTER_LIMIT)}\n…（已省略 ${
+    serialized.length - TOOL_OUTPUT_CHARACTER_LIMIT
+  } 个字符，完整内容见对话记录）`;
+};
 
 class AsyncInputQueue implements AsyncIterable<unknown> {
   private closed = false;
@@ -207,6 +260,26 @@ const explicitlyRequestsQuestionInteraction = (input: ConversationSubmitInput): 
       EXPLICIT_QUESTION_REQUESTS.some((pattern) => pattern.test(block.text)),
   );
 
+const modelRecordMatches = (
+  model: Record<string, unknown>,
+  selectedModel: string | undefined,
+): boolean => {
+  if (!selectedModel) return false;
+  return [stringValue(model.value), stringValue(model.resolvedModel)].some(
+    (candidate) => candidate !== undefined && claudeModelIdsMatch(candidate, selectedModel),
+  );
+};
+
+const modelHasOneMillionContext = (model: string | undefined): boolean =>
+  model !== undefined && hasClaudeOneMillionContextSuffix(model);
+
+const runtimeAddsOneMillionContext = (session: AgentSession): boolean =>
+  modelHasOneMillionContext(session.runtimeModel) &&
+  !modelHasOneMillionContext(session.input.model);
+
+const canonicalModelForSession = (session: AgentSession, model: string): string =>
+  runtimeAddsOneMillionContext(session) ? stripClaudeContextWindowSuffix(model) : model;
+
 export class ClaudeAgentAdapter implements ConversationAdapter {
   private readonly listeners = new Set<(event: ConversationEvent) => void>();
   private readonly sessions = new Map<string, AgentSession>();
@@ -226,14 +299,12 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     if (permissionMode === 'bypassPermissions' && input.allowBypassPermissions !== true) {
       throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
     }
-    const environment: NodeJS.ProcessEnv = { ...process.env };
-    for (const [name, value] of Object.entries(this.options.environment?.(input) ?? {})) {
-      if (value === null || value === undefined) delete environment[name];
-      else environment[name] = value;
-    }
-    environment.CLAUDE_AGENT_SDK_CLIENT_APP = `ClaudeDock/${this.options.appVersion}`;
-    environment.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
-    delete environment.ELECTRON_RUN_AS_NODE;
+    const environment = buildClaudeAgentProcessEnvironment(process.env, {
+      ...this.options.environment?.(input),
+      CLAUDE_AGENT_SDK_CLIENT_APP: `ClaudeDock/${this.options.appVersion}`,
+      CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      ELECTRON_RUN_AS_NODE: null,
+    });
     const [factory, executable] = await Promise.all([
       (this.options.queryFactory ?? defaultQueryFactory)(),
       (this.options.resolveExecutable ?? defaultResolveExecutable)(input.projectPath, environment),
@@ -246,6 +317,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       if (!sessionReference.current) throw new Error('Claude 原生会话尚未完成初始化。');
       return sessionReference.current;
     };
+    const runtimeModel = input.runtimeModel ?? input.model;
     const adapterOptions: Record<string, unknown> = {
       agentProgressSummaries: true,
       canUseTool: async (
@@ -257,14 +329,28 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       env: environment,
       includeHookEvents: true,
       includePartialMessages: true,
-      model: input.model,
+      model: runtimeModel,
       onElicitation: async (request: Record<string, unknown>, context: { signal: AbortSignal }) =>
         this.requestElicitation(requireSession(), request, context.signal),
       pathToClaudeCodeExecutable: executable,
       permissionMode: sdkPermissionMode(permissionMode),
       persistSession: true,
       settingSources: ['user', 'project', 'local'],
+      // Opting into the tools preset is not enough: the SDK treats an omitted `systemPrompt` as a
+      // custom EMPTY prompt (`if (s === void 0) d = ""`), not as "use Claude Code's". Leaving it out
+      // therefore strips every behavioural instruction the CLI ships with — tool-use discipline,
+      // search-before-edit habits, output conventions — while still exposing the same tools. The
+      // model looks measurably worse here than in the terminal for no reason other than this line.
+      systemPrompt: { preset: 'claude_code', type: 'preset' },
       tools: { preset: 'claude_code', type: 'preset' },
+    };
+    // The terminal lane writes `skipWebFetchPreflight: true` into its --settings file
+    // (`claude-runtime.ts`), so WebFetch there never stalls on the blocklist preflight. Native has to
+    // say the same thing through the inline settings layer or the identical request behaves worse in
+    // one lane than the other for no reason the user chose.
+    adapterOptions.settings = {
+      skipWebFetchPreflight: true,
+      ...(input.settingsEnvironment ? { env: { ...input.settingsEnvironment } } : {}),
     };
     if (input.allowBypassPermissions === true) {
       adapterOptions.allowDangerouslySkipPermissions = true;
@@ -288,6 +374,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       query,
       queue,
       revision,
+      runtimeModel,
       sequence: 0,
       tasks: new Map(),
       tools: new Map(),
@@ -401,11 +488,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       throw new Error('模型能力已经变化，请按最新选项重试。');
     }
     const selectedModel = update.model ?? session.model;
-    const model = session.models.find(
-      (candidate) =>
-        stringValue(candidate.value) === selectedModel ||
-        stringValue(candidate.resolvedModel) === selectedModel,
-    );
+    const model = session.models.find((candidate) => modelRecordMatches(candidate, selectedModel));
     if (!model) throw new Error('当前 Claude Code 没有声明这个模型。');
     const levels = arrayValue(model.supportedEffortLevels).filter(
       (level): level is string => typeof level === 'string',
@@ -435,7 +518,16 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
     }
 
-    if (update.model && update.model !== session.model) await session.query.setModel(update.model);
+    if (
+      update.model &&
+      (session.model === undefined || !claudeModelIdsMatch(update.model, session.model))
+    ) {
+      const runtimeModel = modelHasOneMillionContext(session.runtimeModel)
+        ? resolveClaudeRuntimeModel(update.model, 'extended')
+        : stripClaudeContextWindowSuffix(update.model);
+      await session.query.setModel(runtimeModel);
+      session.runtimeModel = runtimeModel;
+    }
     const flagSettings: Record<string, unknown> = {};
     if (update.effort !== undefined) {
       flagSettings.effortLevel =
@@ -533,9 +625,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     this.emit(session, { commands: session.commands, type: 'commands.updated' });
     const models = arrayValue(initialization.models).filter(isRecord);
     session.models = models;
-    const selected = models.find(
-      (model) => model.value === session.model || model.resolvedModel === session.model,
-    );
+    const selected = models.find((model) => modelRecordMatches(model, session.model));
     if (selected) {
       session.capabilityRevision += 1;
       session.fast = stringValue(initialization.fast_mode_state) === 'on';
@@ -556,7 +646,11 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       const candidateLevels = arrayValue(candidate.supportedEffortLevels).filter(
         (level): level is string => typeof level === 'string',
       );
-      const id = stringValue(candidate.resolvedModel) ?? stringValue(candidate.value) ?? 'unknown';
+      const runtimeId =
+        stringValue(candidate.resolvedModel) ?? stringValue(candidate.value) ?? 'unknown';
+      const id = modelRecordMatches(candidate, session.model)
+        ? (session.model ?? canonicalModelForSession(session, runtimeId))
+        : canonicalModelForSession(session, runtimeId);
       return {
         attachments: { image: true },
         effortOptions: [
@@ -570,6 +664,11 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
         supportsUltraWorkflow: candidateLevels.includes('xhigh'),
       };
     });
+    const runtimeModelId =
+      stringValue(model.resolvedModel) ?? stringValue(model.value) ?? 'unknown';
+    const canonicalModel = modelRecordMatches(model, session.model)
+      ? (session.model ?? canonicalModelForSession(session, runtimeModelId))
+      : canonicalModelForSession(session, runtimeModelId);
     const capabilities: ModelCapabilityProfile = {
       attachments: { image: true },
       effort: {
@@ -593,7 +692,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
                 ? 'off'
                 : 'unavailable',
       },
-      model: stringValue(model.resolvedModel) ?? stringValue(model.value) ?? 'unknown',
+      model: canonicalModel,
       models: modelOptions,
       permissionModes: [
         'default',
@@ -606,7 +705,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       profileKey: [
         'claude',
         session.input.endpointIdentity ?? 'unknown-endpoint',
-        stringValue(model.resolvedModel) ?? stringValue(model.value) ?? 'unknown-model',
+        canonicalModel,
         session.input.cliVersion ??
           stringValue(initialization.claude_code_version) ??
           'unknown-cli',
@@ -655,7 +754,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       if (type === 'tool_use' || type === 'server_tool_use') {
         const block: Extract<ConversationContentBlock, { type: 'tool' }> = {
           id,
-          input: raw.input,
+          input: truncateToolOutput(raw.input),
           name: stringValue(raw.name) ?? 'unknown-tool',
           parentToolUseId: stringValue(value.parent_tool_use_id),
           status: 'running',
@@ -727,7 +826,7 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       if (!location) continue;
       const block = {
         ...location.block,
-        output: value.tool_use_result ?? raw.content,
+        output: truncateToolOutput(value.tool_use_result ?? raw.content),
         status: raw.is_error === true ? ('failed' as const) : ('succeeded' as const),
       };
       location.block = block;

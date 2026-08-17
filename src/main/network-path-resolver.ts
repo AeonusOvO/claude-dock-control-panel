@@ -192,4 +192,38 @@ export class NetworkPathResolver {
         )
       : paths;
   }
+
+  /**
+   * The same path list with every proxy state reported as unknown, for when the preflight deadline
+   * elapses before `resolve` settles. `proxyKind: 'unknown'` is what the risk engine already scores
+   * as "system proxy state could not be read", so a timed-out lookup degrades instead of silently
+   * claiming a direct connection.
+   */
+  public unknownPaths(provider: NetworkProviderId, detail: string): NetworkPathView[] {
+    const cliProcess: NetworkProcessKind =
+      provider === 'anthropic-claude' ? 'claude-cli' : 'codex-cli';
+    const unknownProxy = { proxyConfigured: false, proxyKind: 'unknown' as const };
+    const processes: NetworkProcessKind[] = [
+      'application',
+      'oauth-browser',
+      cliProcess,
+      'terminal',
+      'renderer',
+    ];
+    const paths = processes.map((processKind) => ({
+      dnsServers: [],
+      globalIpv6Available: false,
+      ipv4Available: false,
+      ipv6Available: false,
+      virtualInterfaces: [],
+      ...unknownProxy,
+      detail: `${processLabel(processKind)}：${detail}`,
+      process: processKind,
+    }));
+    return provider === 'openai-api'
+      ? paths.filter((pathView) =>
+          ['application', 'oauth-browser', 'renderer'].includes(pathView.process),
+        )
+      : paths;
+  }
 }

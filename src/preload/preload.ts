@@ -63,8 +63,15 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('native-conversation:close', conversationId),
   renameNativeConversation: (conversationId, title) =>
     ipcRenderer.invoke('native-conversation:rename', conversationId, title),
-  transferNativeConversationToTerminal: (conversationId, draft) =>
-    ipcRenderer.invoke('native-conversation:transfer-to-terminal', conversationId, draft),
+  transferNativeConversationToTerminal: (conversationId, draft, allowInterrupt) =>
+    ipcRenderer.invoke(
+      'native-conversation:transfer-to-terminal',
+      conversationId,
+      draft,
+      allowInterrupt ?? false,
+    ),
+  adoptTerminalConversation: (sessionId, allowInterrupt) =>
+    ipcRenderer.invoke('native-conversation:adopt-terminal', sessionId, allowInterrupt ?? false),
   listNativeRecoveries: () => ipcRenderer.invoke('native-conversation:list-recoveries'),
   restoreNativeDraft: (conversationId, clientSubmissionId, projectPath) =>
     ipcRenderer.invoke(
@@ -107,6 +114,8 @@ const api: ControlPanelApi = {
     ipcRenderer.invoke('app:set-footer-resource-preference', preference),
   setManagedChatGptContextWindowMode: (mode) =>
     ipcRenderer.invoke('app:set-managed-chatgpt-context-window-mode', mode),
+  setClaudeContextWindowMode: (mode, customTokens) =>
+    ipcRenderer.invoke('app:set-claude-context-window-mode', mode, customTokens),
   setAdvancedSettings: (settings) => ipcRenderer.invoke('app:set-advanced-settings', settings),
   setCloseBehavior: (behavior) => ipcRenderer.invoke('app:set-close-behavior', behavior),
   listBusyLeases: () => ipcRenderer.invoke('busy:list') as Promise<BusyLease[]>,

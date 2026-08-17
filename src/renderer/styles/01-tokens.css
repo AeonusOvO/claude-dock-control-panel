@@ -1,0 +1,277 @@
+:root {
+  color-scheme: light;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  /* 字体族：界面正文、品牌标题与技术内容各自有明确职责。 */
+  /*
+   * These mirror the Claude theme, which is the default; the renderer overwrites all three the
+   * moment a theme is applied. Anthropic's Styrene/Tiempos are undistributable, so Hanken Grotesk
+   * and Newsreader stand in for them.
+   */
+  --font-ui: 'Hanken Grotesk Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Newsreader Variable', 'Microsoft YaHei UI', 'Segoe UI', system-ui, serif;
+  --font-mono: 'Cascadia Mono', Consolas, monospace;
+  --lh-body: 1.7;
+  --ls-title: -0.012em;
+  --fw-strong: 600;
+  --fw-regular: 400;
+
+  /* Weight ladder derived from the theme's strong weight, so a heavier theme lifts every step. */
+  --fw-medium: calc(var(--fw-strong) - 100);
+  --fw-heavy: calc(var(--fw-strong) + 100);
+  /* Half-step between medium and strong, for labels that need emphasis without reading as a title. */
+  --fw-semi: calc(var(--fw-strong) - 50);
+
+  /*
+   * Leading ladder. Only --lh-body is authored per theme; the rest keep a fixed share of its
+   * distance from 1 so a tight theme (Telegram) tightens every step together instead of leaving
+   * secondary text on Claude's airy leading.
+   */
+  --lh-relaxed: calc(1 + (var(--lh-body) - 1) * 0.86);
+  --lh-prose: calc(1 + (var(--lh-body) - 1) * 0.79);
+  --lh-note: calc(1 + (var(--lh-body) - 1) * 0.72);
+  --lh-compact: calc(1 + (var(--lh-body) - 1) * 0.64);
+  --lh-tight: calc(1 + (var(--lh-body) - 1) * 0.57);
+  --lh-heading: calc(1 + (var(--lh-body) - 1) * 0.36);
+
+  /* Tracking ladder, likewise derived so the theme's title tracking reaches body copy. */
+  --ls-display: calc(var(--ls-title) * 1.35);
+  --ls-tight: calc(var(--ls-title) * 0.92);
+  --ls-snug: calc(var(--ls-title) * 0.5);
+  --ls-body: calc(var(--ls-title) * 0.25);
+  --ls-wide: 0.02em;
+  --ls-caps: 0.05em;
+  --ls-eyebrow: 0.08em;
+  --ls-shout: 0.1em;
+  --ls-normal: 0;
+
+  /* 默认 Claude 明亮表面阶梯；运行时主题会覆写同一组令牌 */
+  --surface-canvas: #f5f4ed;
+  --surface-terminal: #faf9f5;
+  --surface-1: #ffffff;
+  --surface-2: #faf9f5;
+  --surface-3: #ffffff;
+  --surface-4: #ffffff;
+  --surface-inset: #f2f0e8;
+
+  /* 交互态层 */
+  --layer-hover: rgb(20 20 19 / 4%);
+  --layer-active: rgb(20 20 19 / 7%);
+
+  /* 发丝描边 */
+  --line-subtle: rgb(31 30 29 / 10%);
+  --line: rgb(31 30 29 / 16%);
+  --line-strong: rgb(31 30 29 / 22%);
+  --line-hover: rgb(31 30 29 / 30%);
+  --sheen: 0 1px 2px rgb(31 30 29 / 5%), 0 5px 18px -14px rgb(31 30 29 / 22%);
+
+  /* 文字角色 */
+  --text-hi: #141413;
+  --text: #3d3d3a;
+  --text-lo: #5f5e59;
+  --text-dim: #73726c;
+  --text-mute: #908f88;
+  --syntax-red: #7f2c28;
+  --syntax-blue: #3266ad;
+  --syntax-cyan: #246c72;
+  --syntax-green: #265b19;
+  --syntax-magenta: #704074;
+  --syntax-yellow: #5a4815;
+  --syntax-neutral: #5f5e59;
+
+  /* 主色 - Radix 9/10/11 拆分 */
+  --accent-solid: #b85b3d;
+  --accent-solid-hover: #a64e33;
+  --accent-text: #91462f;
+  --accent-fg: #ffffff;
+  --accent-tint: rgb(184 91 61 / 10%);
+  --accent-line: rgb(184 91 61 / 34%);
+  --accent-ring: rgb(184 91 61 / 48%);
+
+  /* 状态三色 */
+  --ok-solid: #437426;
+  --ok-text: #265b19;
+  --ok-tint: rgb(67 116 38 / 9%);
+  --ok-line: rgb(67 116 38 / 36%);
+
+  --warn-solid: #805c1f;
+  --warn-text: #5a4815;
+  --warn-tint: rgb(128 92 31 / 9%);
+  --warn-line: rgb(128 92 31 / 36%);
+
+  --bad-solid: #a73d39;
+  --bad-text: #7f2c28;
+  --bad-tint: rgb(167 61 57 / 9%);
+  --bad-line: rgb(167 61 57 / 36%);
+
+  /* 间距阶梯 */
+  --s-0-5: 2px;
+  --s-1: 4px;
+  --s-1-5: 6px;
+  --s-2: 8px;
+  --s-2-5: 10px;
+  --s-3: 12px;
+  --s-3-5: 14px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+
+  /* 圆角 */
+  /*
+   * Themes own three radius steps plus the bubble; the generic ladder is derived from them so a
+   * switch reshapes every card, chip and dialog. Claude reads soft (8/12/16), Telegram crisp (4/6/10).
+   */
+  --r-xs: calc(var(--r-theme-sm) * 0.5);
+  --r-sm: var(--r-theme-sm);
+  --r-md: var(--r-theme-md);
+  --r-lg: var(--r-theme-lg);
+  --r-xl: calc(var(--r-theme-lg) + 4px);
+  --r-2xl: var(--r-bubble);
+  --r-pill: var(--r-theme-pill);
+
+  /* 布局高度与宽度 */
+  --titlebar-h: 48px;
+  --toolbar-h: 48px;
+  --footer-h: 34px;
+  --rail-w: 320px;
+  --activity-rail-w: 62px;
+  --drawer-w: 468px;
+  --terminal-min: 256px;
+  --composer-max: 168px;
+  /*
+   * The composer standard: both the terminal and chat composers use this as the height floor for
+   * the textarea and for the send cluster, which is what keeps the button flush with the input.
+   * --composer-ring scales the focus halo off the theme's press depth, so a springier theme blooms
+   * wider without any per-theme rule.
+   */
+  --composer-row-h: 52px;
+  --control-h-sm: 28px;
+  --control-h-md: 36px;
+  --composer-ring: calc(3px + (1 - var(--press-theme)) * 40px);
+  /* Measured live by the renderer so the workbench drawer never covers the input box. */
+  --composer-h: 57px;
+  --native-composer-h: 108px;
+  --summary-header-h: 76px;
+  --summary-max-h: 640px;
+  --titlebar-drag-safe: 150px;
+
+  /* 阴影 */
+  --shadow-overlay: 0 18px 44px -18px rgb(31 30 29 / 28%), 0 3px 10px -4px rgb(31 30 29 / 18%);
+  --shadow-drawer: -1px 0 0 rgb(31 30 29 / 12%), -20px 0 50px -26px rgb(31 30 29 / 28%);
+
+  /* 动效曲线 */
+  /*
+   * Themes author the three personality curves (--ease-enter/--ease-exit/--ease-spring); the names the
+   * stylesheet actually uses alias them, so Telegram's long overshoot replaces Claude's decelerate
+   * everywhere at once rather than only on the handful of rules that spelled the theme token.
+   */
+  --ease-standard: var(--ease-enter);
+  --ease-decel: var(--ease-spring);
+  --ease-accel: var(--ease-exit);
+  --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 动效时长 */
+  /*
+   * --dur-micro/--dur-enter/--dur-exit-theme come from the theme; the ladder is scaled off them so
+   * Telegram's slower, springier tempo is felt on every hover and panel, not just chat.
+   */
+  --dur-1: calc(var(--dur-micro) * 0.75);
+  --dur-2: var(--dur-micro);
+  --dur-3: calc(var(--dur-enter) * 0.85);
+  --dur-4: var(--dur-enter);
+  --dur-exit: var(--dur-exit-theme);
+  --dur-progress: calc(var(--dur-enter) * 1.7);
+  --dur-refresh: calc(var(--dur-enter) * 3.75);
+  /* Square ⇄ circle morph on the download button: long enough to read as a shape change. */
+  --dur-shape: calc(var(--dur-enter) * 0.8);
+  /* Per-item offset for staggered list entrances, and the typewriter caret's blink half-period. */
+  --dur-stagger: calc(var(--dur-micro) * 0.33);
+  --dur-blink: calc(var(--dur-micro) * 6);
+  /* Long-running status loops stay fixed so tokenization does not change their existing cadence. */
+  --dur-busy-loop: 800ms;
+  --dur-status-pulse-fast: 900ms;
+  --dur-status-pulse: 1400ms;
+  --dur-status-pulse-slow: 1800ms;
+  --dur-zero: 0ms;
+  /*
+   * Hover-revealed row affordances live in a deliberately slower band than the rest of the micro
+   * ladder: swapping a timestamp for a delete button has to read as a crossfade, and at the theme's
+   * 95–120ms micro tempo it reads as a flicker instead. Scaled off the theme so a springy theme is
+   * still slower than a crisp one, but clamped so every theme lands in the 150–200ms comfort zone.
+   */
+  --dur-hover: clamp(150ms, calc(var(--dur-micro) * 1.35), 200ms);
+  --dur-instant: 0.01ms;
+  --dur-enter: 240ms;
+  --dur-exit-theme: 180ms;
+  --dur-micro: 120ms;
+
+  /* 按压缩放 */
+  --press-lg: var(--press-theme);
+  /* The small step exaggerates the theme's press, but clamped so a springy theme still looks pressed
+   * rather than collapsed. */
+  --press-sm: max(0.9, calc(1 - (1 - var(--press-theme)) * 5.3));
+  --press-theme: 0.985;
+
+  /* 主题人格形状与操作遮罩 */
+  --r-theme-sm: 8px;
+  --r-theme-md: 12px;
+  --r-theme-lg: 16px;
+  --r-theme-pill: 999px;
+  --r-bubble: 18px;
+  --mask-blur: 8px;
+  --mask-veil: rgb(250 249 245 / 58%);
+  --pop-scale-from: 0.96;
+  --pop-travel: 4px;
+
+  /* 角色字号：主题只提供基准与比例，其余六级由浏览器推导。 */
+  --type-base: 15px;
+  --type-ratio: 1.25;
+  --type-micro-size: max(
+    10px,
+    round(nearest, calc(var(--type-base) / var(--type-ratio) / var(--type-ratio)), 1px)
+  );
+  --type-caption-size: round(nearest, calc(var(--type-base) / var(--type-ratio)), 1px);
+  --type-body-size: var(--type-base);
+  --type-subtitle-size: round(nearest, calc(var(--type-base) * var(--type-ratio)), 1px);
+  --type-title-size: round(
+    nearest,
+    calc(var(--type-base) * var(--type-ratio) * var(--type-ratio)),
+    1px
+  );
+  --type-display-size: round(
+    nearest,
+    calc(var(--type-base) * var(--type-ratio) * var(--type-ratio) * var(--type-ratio)),
+    1px
+  );
+
+  /* 每个文字角色都由尺寸、行高、字重和字距四元组完整描述。 */
+  --type-micro-lh: var(--lh-compact);
+  --type-micro-fw: var(--fw-medium);
+  --type-micro-ls: var(--ls-body);
+  --type-caption-lh: var(--lh-note);
+  --type-caption-fw: var(--fw-regular);
+  --type-caption-ls: var(--ls-body);
+  --type-body-lh: var(--lh-prose);
+  --type-body-fw: var(--fw-regular);
+  --type-body-ls: var(--ls-body);
+  --type-subtitle-lh: var(--lh-heading);
+  --type-subtitle-fw: var(--fw-semi);
+  --type-subtitle-ls: var(--ls-snug);
+  --type-title-lh: var(--lh-heading);
+  --type-title-fw: var(--fw-strong);
+  --type-title-ls: var(--ls-tight);
+  --type-display-lh: var(--lh-heading);
+  --type-display-fw: var(--fw-strong);
+  --type-display-ls: var(--ls-display);
+
+  /* 字体特性 */
+  --font-tabular: 'tnum' 1;
+  --opacity-disabled: 0.6;
+}

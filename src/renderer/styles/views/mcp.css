@@ -1,0 +1,342 @@
+/*
+ * One toolbar shape for 插件 and MCP: a search box, a filter dropdown beside it, and any bulk action
+ * on its own full-width row underneath. Both pages instantiate the same classes so they stay in sync
+ * by construction rather than by two lists of rules drifting apart.
+ */
+.plugin-toolbar {
+  align-items: end;
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+}
+
+.plugin-toolbar .field {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.plugin-toolbar button {
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--type-caption-size);
+  padding: var(--s-2) var(--s-3);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.plugin-toolbar button:hover:not(:disabled) {
+  border-color: var(--line-hover);
+}
+
+.plugin-status {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-note);
+  margin: 0;
+}
+
+.plugin-tabs {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-0-5);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 100%;
+  overflow: hidden;
+  padding: var(--s-1);
+}
+
+.plugin-tab {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-strong);
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  padding: var(--s-1-5) var(--s-1);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.plugin-tab:hover {
+  color: var(--text);
+}
+
+.plugin-tab--active {
+  background: var(--surface-4);
+  color: var(--accent-text);
+}
+
+.plugin-tab span {
+  color: var(--text-mute);
+  font-size: var(--type-caption-size);
+}
+
+.plugin-panel {
+  display: none;
+  flex-direction: column;
+  gap: var(--s-3);
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.plugin-panel--active {
+  animation: popover-in var(--dur-3) var(--ease-decel);
+  display: flex;
+}
+
+.plugin-list {
+  display: grid;
+  gap: var(--s-2);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.plugin-empty {
+  background: var(--surface-inset);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-note);
+  padding: var(--s-4);
+  text-align: center;
+}
+
+/*
+ * The entrance has to land on the card's *resting* opacity, not on a hard 1. The shared popover
+ * ends at full opacity, so a card that rests dimmed faded in bright and then snapped grey the moment
+ * the animation released it — the fade read as running backwards. Routing the rest value through a
+ * custom property lets the keyframe end exactly where the card actually lives.
+ */
+.plugin-card {
+  --card-rest-opacity: 1;
+
+  animation: pluginCardEnter var(--dur-3) var(--ease-decel);
+  background: var(--surface-3);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-2);
+  max-width: 100%;
+  min-width: 0;
+  opacity: var(--card-rest-opacity);
+  overflow: hidden;
+  padding: var(--s-3);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    opacity var(--dur-2) var(--ease-standard);
+}
+
+/*
+ * The MCP lists are rebuilt wholesale on every refresh, so the shared card entrance replayed on
+ * every card at once and an install read as the whole list flickering rather than one row arriving.
+ * Cards that survived the rerender hold still; only a server that is genuinely new plays the
+ * entrance, and it lands with an accent sweep so the eye goes to the row that actually changed.
+ */
+.plugin-card[data-fresh='false'] {
+  animation: none;
+}
+
+.plugin-card[data-fresh='true'] {
+  animation:
+    pluginCardEnter var(--dur-3) var(--ease-decel),
+    mcpCardArrive calc(var(--dur-3) * 4) var(--ease-standard);
+}
+
+.plugin-card:hover {
+  border-color: var(--line-hover);
+  box-shadow: var(--sheen);
+}
+
+.plugin-card[data-enabled='false'][data-installed='true'] {
+  --card-rest-opacity: 0.72;
+}
+
+.plugin-card__header {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.plugin-card__header strong {
+  color: var(--text-hi);
+  flex: 1 1 140px;
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plugin-card__badge {
+  background: var(--layer-active);
+  border-radius: var(--r-pill);
+  color: var(--text-lo);
+  flex: 0 0 auto;
+  font-size: var(--type-micro-size);
+  padding: var(--s-0-5) var(--s-2);
+}
+
+.plugin-card[data-enabled='true'] .plugin-card__badge {
+  background: var(--ok-tint);
+  color: var(--ok-text);
+}
+
+.plugin-card p {
+  color: var(--text-lo);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-note);
+  margin: 0;
+}
+
+.plugin-card code {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--type-micro-size);
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.plugin-card__meta {
+  color: var(--text-mute);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--type-micro-size);
+  gap: var(--s-3);
+}
+
+.plugin-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.plugin-card__actions button {
+  flex: 1 1 96px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.plugin-card__danger:hover:not(:disabled) {
+  background: var(--bad-tint);
+  color: var(--bad-text);
+}
+
+/*
+ * The inset panel that closes out a tab: 添加插件市场 on the plugins page, 配置备份 on the MCP page.
+ * Same surface, same padding, same accent submit button, so the two pages end the same way.
+ */
+.plugin-form-panel {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--s-3);
+}
+
+.plugin-form-panel button {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  color: var(--accent-text);
+  cursor: pointer;
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-strong);
+  justify-self: stretch;
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--s-2) var(--s-3-5);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+.plugin-form-panel .field {
+  margin-bottom: 0;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.plugin-form-panel button:hover:not(:disabled) {
+  background: var(--accent-line);
+}
+
+.plugin-form-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.plugin-toolbar__actions {
+  display: grid;
+  gap: var(--s-2);
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.plugin-toolbar__actions button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.plugin-card__badge[data-update='true'] {
+  background: var(--warn-tint);
+  color: var(--warn-text);
+}
+
+.plugin-card__category {
+  color: var(--accent-text);
+}
+
+.mcp-install-scope {
+  margin-block-end: 0;
+}
+
+/* Inherits the shared .plugin-form-panel surface; only the select/button pairing is MCP-specific. */
+.mcp-backups {
+  align-items: end;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mcp-card__path {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  overflow-wrap: anywhere;
+}
+
+.mcp-card__health[data-health='connected'] {
+  color: var(--ok-text);
+}
+
+.mcp-card__health[data-health='failed'] {
+  color: var(--bad-text);
+}
+
+.mcp-card__health[data-health='disabled'] {
+  color: var(--text-dim);
+}

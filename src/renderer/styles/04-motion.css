@@ -1,0 +1,406 @@
+/* Shared entrance/exit recipe for transient surfaces that still use keyframe animation. */
+@keyframes popover-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes popover-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes spinnerRingSpin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes titlebarGlyphSpin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes titleCaretBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes nativeConversationEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nativeConversationExit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(var(--s-1));
+  }
+}
+
+@keyframes nativeMessageCaret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes nativeToolPulse {
+  50% {
+    box-shadow: 0 0 0 5px var(--accent-tint);
+  }
+}
+
+@keyframes nativeInteractionEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-3)) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nativeClaudeSendConfirm {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    transform: scale(1);
+  }
+
+  48% {
+    box-shadow: 0 0 0 6px var(--accent-tint);
+    transform: scale(0.94);
+  }
+}
+
+@keyframes nativeClaudeSendArrow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  48% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes nativeTelegramSendConfirm {
+  0%,
+  100% {
+    background: transparent;
+  }
+
+  52% {
+    background: var(--accent-tint);
+  }
+}
+
+@keyframes nativeTelegramSendFlight {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+
+  42% {
+    opacity: 0.36;
+    transform: translate(6px, -5px);
+  }
+
+  43% {
+    opacity: 0.36;
+    transform: translate(-4px, 4px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes nativeStopHalo {
+  from {
+    opacity: 0;
+    transform: scale(0.24);
+  }
+
+  62% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes chatMessageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-2)) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes composerFocusIn {
+  from {
+    box-shadow: 0 0 0 0 var(--accent-tint);
+  }
+
+  65% {
+    box-shadow: 0 0 0 calc(var(--composer-ring) + 2px) var(--accent-tint);
+  }
+
+  to {
+    box-shadow: 0 0 0 var(--composer-ring) var(--accent-tint);
+  }
+}
+
+@keyframes composer-send-lift {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-64px) scale(0.94);
+  }
+}
+
+@keyframes runtimeActivityConverge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-tint);
+    transform: scale(0.86);
+  }
+  55% {
+    box-shadow: 0 0 0 6px transparent;
+    transform: scale(1);
+  }
+}
+
+@keyframes runtimeSummaryRowEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-1));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nativeScrimEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes nativeScrimExit {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes terminalDiagnosticEnter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--s-3))) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes terminalDiagnosticExit {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--s-2))) scale(0.985);
+  }
+}
+
+@keyframes status-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok-text) 34%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--ok-text) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok-text) 0%, transparent);
+  }
+}
+
+@keyframes busy-bob {
+  from {
+    transform: translateY(-1px);
+  }
+  to {
+    transform: translateY(2px);
+  }
+}
+
+@keyframes conversationEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes projectActivate {
+  from {
+    opacity: 0.7;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pluginCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: var(--card-rest-opacity);
+    transform: translateY(0);
+  }
+}
+
+@keyframes mcpCardArrive {
+  0% {
+    background: var(--accent-tint);
+    border-color: var(--accent-ring);
+    box-shadow: 0 0 0 3px var(--accent-tint);
+  }
+
+  55% {
+    background: var(--accent-tint);
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 0 transparent;
+  }
+
+  100% {
+    background: var(--surface-3);
+    border-color: var(--line-subtle);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes downloadProgressIndeterminate {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+@keyframes rippleOut {
+  to {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-item__label[data-title-typing='true']::after,
+  .chat-history__open strong[data-title-typing='true']::after,
+  #terminal-project[data-title-typing='true']::after,
+  #workbench-scope[data-title-typing='true']::after {
+    animation: none;
+  }
+  .history-item__delete,
+  .history-item__time {
+    transition-duration: var(--dur-instant);
+  }
+  .native-message__stream-caret {
+    animation: none;
+  }
+  .composer-send-bubble {
+    display: none;
+  }
+  .native-composer__send[data-action='stop'][data-stopping='true']::after {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .runtime-summary-row,
+  .runtime-summary-empty {
+    animation-duration: var(--dur-instant);
+    transform: none;
+  }
+  .download-progress[data-indeterminate='true'] .download-progress__linear > span,
+  .download-progress[data-indeterminate='true'] .download-progress__ring::after,
+  .titlebar__downloads[data-indeterminate='true'][data-active='true']::after,
+  .titlebar__refresh--busy svg {
+    animation: none;
+  }
+
+  .download-progress__linear > span,
+  .titlebar__downloads {
+    transition: none;
+  }
+  .workspace--rail-collapsed.workspace--rail-preview .control-panel,
+  .terminal-footer__secondary {
+    transition: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: var(--dur-instant) !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: var(--dur-instant) !important;
+  }
+}

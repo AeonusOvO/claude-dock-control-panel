@@ -1,0 +1,1156 @@
+/*
+ * POPOVER. `hidden` and dialog `open` remain the synchronous accessibility/state contract; discrete
+ * display/overlay transitions keep the final painted frame alive long enough to animate out.
+ */
+.popover {
+  opacity: 1;
+  transform: none;
+  transform-origin: top center;
+  transition:
+    opacity var(--dur-4) var(--ease-decel),
+    transform var(--dur-4) var(--ease-decel),
+    overlay var(--dur-exit) allow-discrete,
+    display var(--dur-exit) allow-discrete;
+}
+
+.popover[data-placement='above'] {
+  transform-origin: bottom center;
+}
+
+.popover[hidden],
+dialog.popover:not([open]) {
+  opacity: 0;
+  pointer-events: none;
+  transform: scaleY(var(--pop-scale-from)) translateY(calc(var(--pop-travel) * -1));
+  transition-duration: var(--dur-exit);
+}
+
+dialog.popover::backdrop {
+  opacity: 0;
+  transition:
+    opacity var(--dur-4) var(--ease-decel),
+    overlay var(--dur-exit) allow-discrete,
+    display var(--dur-exit) allow-discrete;
+}
+
+dialog.popover[open]::backdrop {
+  opacity: 1;
+}
+
+@starting-style {
+  .popover:not(dialog):not([hidden]),
+  dialog.popover[open] {
+    opacity: 0;
+    transform: scaleY(var(--pop-scale-from)) translateY(calc(var(--pop-travel) * -1));
+  }
+
+  dialog.popover[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+/* TOOLTIP. The trigger owns focus/hover; aria-describedby keeps the same text accessible. */
+.tooltip {
+  position: relative;
+}
+
+.tooltip__content {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  bottom: calc(100% + var(--s-2));
+  box-shadow: var(--sheen);
+  color: var(--text-hi);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-fw);
+  left: 50%;
+  letter-spacing: var(--type-micro-ls);
+  line-height: var(--type-micro-lh);
+  opacity: 0;
+  padding: var(--s-1-5) var(--s-2);
+  pointer-events: none;
+  position: absolute;
+  transform: translate(-50%, var(--s-1));
+  transition:
+    opacity var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-decel),
+    visibility var(--dur-zero) linear var(--dur-2);
+  visibility: hidden;
+  white-space: nowrap;
+  z-index: 30;
+}
+
+.tooltip:is(:hover, :focus-within) > .tooltip__content {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: var(--dur-zero);
+  visibility: visible;
+}
+
+.card {
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-decel);
+}
+
+.card:hover {
+  background: var(--layer-hover);
+}
+
+.status-chip {
+  align-items: center;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  font-size: var(--type-caption-size);
+  font-weight: var(--type-caption-fw);
+  letter-spacing: var(--type-caption-ls);
+  line-height: var(--type-caption-lh);
+  min-height: var(--control-h-sm);
+}
+
+button.status-chip {
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+button.status-chip:hover:not(:disabled) {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+button.status-chip:active:not(:disabled) {
+  transform: scale(var(--press-theme));
+}
+
+/* Native Fast fell back to a different mechanism than the one requested -- say so, don't hide it. */
+.status-chip[data-state='fallback'] {
+  background: var(--warn-tint);
+  color: var(--warn-text);
+}
+
+.icon-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  height: var(--control-h-sm);
+  justify-content: center;
+  justify-self: end;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+  width: var(--control-h-sm);
+}
+
+.icon-button:hover {
+  background: var(--layer-hover);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.icon-button:active:not(:disabled) {
+  transform: scale(var(--press-theme));
+}
+
+.icon-button[aria-pressed='true'] {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+.icon-button svg {
+  height: 14px;
+  width: 14px;
+}
+
+.button--small {
+  font-size: var(--type-caption-size);
+  padding: var(--s-1-5) var(--s-3);
+}
+
+.button {
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-medium);
+  gap: var(--s-2);
+  height: 34px;
+  justify-content: center;
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-caption-lh);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+  width: 100%;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+}
+
+.button:active:not(:disabled) {
+  transform: scale(var(--press-theme));
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: var(--opacity-disabled);
+  transform: none;
+}
+
+.button svg {
+  height: 15px;
+  width: 15px;
+}
+
+.button--secondary {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  color: var(--text);
+}
+
+.button--secondary:hover {
+  background: var(--accent-tint);
+  border-color: var(--text-mute);
+}
+
+.button--primary {
+  background: var(--accent-solid);
+  border: 1px solid transparent;
+  color: var(--accent-fg);
+  box-shadow: 0 7px 20px color-mix(in srgb, var(--accent-solid) 12%, transparent);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--accent-solid-hover);
+  border-color: transparent;
+  box-shadow: 0 9px 24px color-mix(in srgb, var(--accent-solid) 18%, transparent);
+}
+
+.button--compact {
+  display: inline-flex;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  width: auto;
+}
+
+.button--danger {
+  background: transparent;
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+
+.button--danger:hover:not(:disabled) {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+}
+
+.button-row {
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: 1fr 1fr;
+  margin-top: var(--s-2);
+}
+
+.button--quiet {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--text-lo);
+}
+
+.button--quiet:hover {
+  background: var(--surface-3);
+  border-color: var(--accent-line);
+  color: var(--text-hi);
+}
+
+.tray-note {
+  align-items: flex-start;
+  border-top: 1px solid var(--accent-tint);
+  color: var(--text-dim);
+  display: flex;
+  font-size: var(--type-body-size);
+  gap: var(--s-2);
+  line-height: var(--lh-note);
+  margin-top: auto;
+  padding: var(--s-3-5) var(--s-1) 0;
+}
+
+.tray-note svg {
+  color: var(--text-dim);
+  flex: 0 0 auto;
+  height: 15px;
+  margin-top: 1px;
+  width: 15px;
+}
+
+.tray-note p {
+  margin: 0;
+}
+
+.drop-overlay--visible {
+  opacity: 1;
+}
+
+.drop-overlay > div {
+  align-items: center;
+  background: var(--surface-3);
+  border: 1px dashed var(--accent-text);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow-overlay);
+  display: flex;
+  flex-direction: column;
+  min-width: 350px;
+  padding: var(--s-10);
+}
+
+.drop-overlay svg {
+  color: var(--accent-text);
+  height: 44px;
+  margin-bottom: var(--s-3-5);
+  width: 44px;
+}
+
+.drop-overlay strong {
+  color: var(--text-hi);
+  font-size: var(--type-subtitle-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--ls-tight);
+  line-height: var(--type-subtitle-lh);
+}
+
+.drop-overlay span {
+  color: var(--text-lo);
+  font-size: var(--type-body-size);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+  margin-top: var(--s-1-5);
+}
+
+.toast[data-tone='error'] {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+
+.toast--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+body:has(#native-conversation[data-state='open']) .toast {
+  bottom: calc(var(--native-composer-h) + var(--s-4));
+}
+
+.security-banner {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--warn-text) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn-text) 22%, transparent);
+  border-radius: var(--r-md);
+  display: flex;
+  gap: var(--s-2-5);
+  padding: var(--s-3);
+}
+
+.security-banner[data-tone='ready'] {
+  background: color-mix(in srgb, var(--ok-text) 6%, transparent);
+  border-color: color-mix(in srgb, var(--ok-text) 22%, transparent);
+}
+
+.security-banner[data-tone='blocked'] {
+  background: color-mix(in srgb, var(--bad-text) 7%, transparent);
+  border-color: color-mix(in srgb, var(--bad-text) 28%, transparent);
+}
+
+.security-banner[data-tone='ready'] .security-banner__icon {
+  background: color-mix(in srgb, var(--ok-text) 12%, transparent);
+  color: var(--ok-text);
+}
+
+.security-banner[data-tone='blocked'] .security-banner__icon {
+  background: color-mix(in srgb, var(--bad-text) 12%, transparent);
+  color: var(--bad-text);
+}
+
+.security-banner div {
+  display: grid;
+  gap: var(--s-1);
+}
+
+.security-banner strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+}
+
+.security-banner span:last-child {
+  color: var(--text-dim);
+  font-size: var(--type-body-size);
+  letter-spacing: var(--ls-body);
+  line-height: var(--lh-compact);
+}
+
+.workbench-warning {
+  background: color-mix(in srgb, var(--bad-text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad-text) 20%, transparent);
+  border-radius: var(--r-sm);
+  color: var(--bad-text);
+  font-size: var(--type-body-size);
+  letter-spacing: var(--ls-body);
+  line-height: var(--lh-compact);
+  margin: var(--s-2) 0 0;
+  padding: var(--s-2) var(--s-2);
+}
+
+.field > span {
+  color: var(--text-lo);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+}
+
+.field input,
+.field .select__trigger {
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  font-family: inherit;
+  font-size: var(--type-body-size);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+  min-height: 36px;
+  outline: none;
+  padding: 0 var(--s-2-5);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+
+/* Text inputs get the same halo as the composers and the dropdown trigger, so focus reads alike. */
+.field input:focus {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.field input:hover:not(:focus):not(:disabled) {
+  border-color: var(--line-hover);
+}
+
+.field small {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-compact);
+}
+
+#router-provider-form .field {
+  gap: var(--s-1);
+}
+
+#router-provider-form .field textarea {
+  min-height: 80px;
+}
+
+.curl-onboarding .field {
+  margin: var(--s-2-5) 0 var(--s-1-5);
+}
+
+.field textarea {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-compact);
+  max-height: 200px;
+  min-height: 104px;
+  outline: none;
+  padding: var(--s-2);
+  resize: vertical;
+}
+
+.field textarea:focus {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-text) 8%, transparent);
+}
+
+/* ============================================
+   Smart Guidance Styles
+   ============================================ */
+
+.smart-guidance {
+  animation: popover-in var(--dur-3) var(--ease-decel);
+  background: var(--warn-tint);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: auto 1fr auto;
+  margin-block: var(--s-5);
+  padding: var(--s-4);
+}
+
+.smart-guidance[data-tone='info'] {
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+}
+
+.smart-guidance[data-tone='error'] {
+  background: var(--bad-tint);
+  border-color: var(--bad-line);
+}
+
+.smart-guidance__icon {
+  font-size: var(--type-display-size);
+  line-height: 1;
+}
+
+.smart-guidance strong {
+  color: var(--text-hi);
+  display: block;
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+  margin-block-end: var(--s-1);
+}
+
+.smart-guidance p {
+  color: var(--text);
+  font-size: var(--type-body-size);
+  line-height: var(--lh-note);
+}
+
+.smart-guidance__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+/* Form field show/hide transitions */
+.field {
+  display: grid;
+  gap: var(--s-1-5);
+  margin-bottom: var(--s-2-5);
+  transition:
+    opacity var(--dur-3) var(--ease-standard),
+    max-height var(--dur-3) var(--ease-standard),
+    margin var(--dur-3) var(--ease-standard);
+}
+
+.field[hidden] {
+  max-height: 0;
+  margin: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+/*
+ * BUTTON STATES — the interaction-feedback floor.
+ *
+ * Every button answers a press, so no control can feel dead: the baseline is one `:active` scale on
+ * the element itself rather than a rule per family, which is what let roughly thirty buttons ship
+ * with a hover but no press. `--press-sm` is the small step, appropriate for the chrome-sized
+ * controls this catches; the large surfaces (composer send, provider cards) override it below with
+ * `--press-lg`, and the ripple adds a second layer on the primary actions.
+ *
+ * Transform is animated on the spring curve while colour stays on the standard curve — a press
+ * should feel like it has give, a tint change should not.
+ */
+button {
+  color: inherit;
+  font-family: var(--font-ui);
+  font-size: var(--type-body-size);
+  line-height: var(--lh-compact);
+  transition:
+    background-color var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard),
+    opacity var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+button:active:not(:disabled) {
+  transform: scale(var(--press-sm));
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+/* The primary actions keep their halo but take the deeper press, matching the composer send. */
+.button--primary:active:not(:disabled),
+.dialog-primary:active:not(:disabled),
+.launch-primary:active:not(:disabled),
+.launch-secondary:active:not(:disabled) {
+  transform: scale(var(--press-lg));
+}
+
+/*
+ * `.dialog-primary` only ever got painted by dialog-scoped rules, so the same class used outside a
+ * dialog footer (the router wizard's submit) fell through to the Chromium button default. The class
+ * now carries its own look; the scoped rules just restate it at higher specificity.
+ */
+.dialog-primary {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  color: var(--accent-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--type-caption-size);
+  min-height: 34px;
+  padding: var(--s-2) var(--s-3-5);
+}
+
+.dialog-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
+  border-color: var(--accent-ring);
+}
+
+.dialog-primary,
+.launch-primary,
+.launch-secondary {
+  transition:
+    background-color var(--dur-1) var(--ease-standard),
+    border-color var(--dur-1) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+}
+
+.dialog-primary:hover:not(:disabled),
+.launch-primary:hover:not(:disabled),
+.button--primary:hover:not(:disabled) {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.launch-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-tint) 55%, var(--accent-solid) 12%);
+  border-color: var(--accent-ring);
+}
+
+/* Toast transitions */
+.toast {
+  background: var(--ok-tint);
+  border: 1px solid var(--ok-line);
+  border-radius: var(--r-md);
+  bottom: 44px;
+  box-shadow: 0 16px 44px rgb(0 0 0 / 38%);
+  color: var(--ok-text);
+  font-size: var(--type-body-size);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+  max-width: 360px;
+  opacity: 0;
+  padding: var(--s-2-5) var(--s-3-5);
+  pointer-events: none;
+  position: fixed;
+  right: var(--s-4);
+  transform: translateY(8px);
+  z-index: 30;
+  transition:
+    opacity var(--dur-3) var(--ease-decel),
+    transform var(--dur-3) var(--ease-decel);
+}
+
+.toast:not(.toast--visible) {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* Drop overlay transitions */
+.drop-overlay {
+  align-items: center;
+  backdrop-filter: blur(6px);
+  background: color-mix(in srgb, var(--surface-canvas) 45%, transparent);
+  display: flex;
+  inset: var(--titlebar-h) 0 0;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 20;
+  transition:
+    opacity var(--dur-3) var(--ease-decel),
+    backdrop-filter var(--dur-3) var(--ease-decel);
+}
+
+.drop-overlay:not(.drop-overlay--visible) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Status pill transitions */
+.status-pill,
+.status-dot {
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.field input,
+.field .select,
+.field textarea {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.terminal-context-menu,
+.conversation-context-menu {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-overlay);
+  display: grid;
+  min-width: 190px;
+  padding: var(--s-1);
+  position: fixed;
+  z-index: 50;
+}
+
+.terminal-context-menu button,
+.conversation-context-menu button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--type-body-size);
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  text-align: left;
+}
+
+.terminal-context-menu button:hover:not(:disabled),
+.terminal-context-menu button:focus-visible,
+.conversation-context-menu button:hover,
+.conversation-context-menu button:focus-visible {
+  background: var(--layer-active);
+}
+
+.conversation-context-menu .conversation-context-menu__danger {
+  color: var(--bad-text);
+}
+
+.terminal-context-menu button:disabled {
+  color: var(--text-mute);
+}
+
+.terminal-context-menu button span {
+  color: var(--text-mute);
+  font-size: var(--type-caption-size);
+}
+
+.connection-advanced-dialog::backdrop,
+.download-center-dialog::backdrop,
+.update-center-dialog::backdrop,
+.conversation-rename-dialog::backdrop,
+.confirmation-dialog::backdrop {
+  background: rgb(0 0 0 / 58%);
+}
+
+/* ==========================================================================================
+ * THE STANDARD COMPONENT KIT
+ *
+ * One set of rules for the controls that used to be native. Everything here is expressed purely in
+ * theme tokens — face, radius, easing, duration, press depth — so all four themes get a consistent
+ * kit without a single per-theme override. Telegram's long springy curves and Claude's softer
+ * decelerate both fall out of the same declarations.
+ * ========================================================================================== */
+
+/*
+ * SELECT. The native element stays in the DOM as the value and event source of truth, but it is
+ * collapsed to the shell's own box so it can still take focus and be reached by assistive tech; the
+ * visible trigger and popup are ours. `opacity: 0` rather than `display: none` is what keeps it
+ * focusable.
+ */
+.select {
+  display: block;
+  position: relative;
+}
+
+.select-native {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  padding: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.select-native:disabled {
+  cursor: not-allowed;
+}
+
+.select__trigger {
+  align-items: center;
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--type-body-size);
+  gap: var(--s-2);
+  justify-content: space-between;
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+  min-height: 36px;
+  padding: 0 var(--s-2-5);
+  text-align: left;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-1) var(--ease-decel);
+  width: 100%;
+}
+
+.select__trigger:hover:not(:disabled),
+.select:not([data-disabled='true']):hover .select__trigger {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+}
+
+/*
+ * The press. The native element covers the trigger, so `:active` never reaches the trigger itself —
+ * the shell's own active state is what has to drive it, otherwise the one control in the kit that is
+ * pressed most often is also the only one that never answers a press.
+ */
+.select:not([data-disabled='true']):active .select__trigger {
+  transform: scale(var(--press-sm));
+}
+
+/*
+ * The focus ring is driven by the hidden native element, because that is what actually holds focus.
+ * This is the same halo the composers use, so a focused dropdown and a focused input read as one
+ * family — the inconsistency called out between the project and chat inputs.
+ */
+.select-native:focus-visible + .select__trigger,
+.select[data-open='true'] .select__trigger {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.select__trigger:disabled,
+.select[data-disabled='true'] .select__trigger {
+  background: var(--surface-2);
+  color: var(--text-mute);
+  cursor: not-allowed;
+}
+
+.select__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select__label[data-placeholder='true'] {
+  color: var(--text-mute);
+}
+
+.select__chevron {
+  align-items: center;
+  color: var(--text-dim);
+  display: flex;
+  flex: 0 0 auto;
+  /* The rotation is the affordance: it confirms the popup opened even before it is read. */
+  transition:
+    transform var(--dur-3) var(--ease-decel),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.select__chevron svg {
+  height: 15px;
+  stroke-width: 2;
+  width: 15px;
+}
+
+.select[data-open='true'] .select__chevron {
+  color: var(--accent-text);
+  transform: rotate(180deg);
+}
+
+.select__listbox {
+  background: var(--surface-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-overlay);
+  display: grid;
+  gap: 1px;
+  max-width: 420px;
+  overflow-y: auto;
+  padding: var(--s-1);
+  position: fixed;
+  z-index: 70;
+}
+
+.select__listbox[data-scrollable='false'] {
+  overflow-y: hidden;
+}
+
+.select__listbox button {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--type-body-size);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+  min-height: 32px;
+  padding: 0 var(--s-2);
+  text-align: left;
+  transition:
+    background-color var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
+}
+
+/* Pointer hover and keyboard arrows land on the same highlight, so the two never disagree. */
+.select__listbox button:hover:not(:disabled),
+.select__listbox button[data-active='true'] {
+  background: var(--layer-hover);
+  color: var(--text-hi);
+}
+
+.select__listbox button[data-selected='true'] {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  font-weight: var(--fw-semi);
+}
+
+.select__listbox button:disabled {
+  color: var(--text-mute);
+  cursor: not-allowed;
+}
+
+/*
+ * CHECKBOX AND RADIO. These need no JS: `appearance: none` hands us the box, and the glyph is drawn
+ * with a pseudo-element that scales in on the theme's own spring curve.
+ */
+input:is(
+  [type='email'],
+  [type='number'],
+  [type='password'],
+  [type='search'],
+  [type='text'],
+  [type='url']
+) {
+  appearance: none;
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--type-body-size);
+  line-height: var(--lh-compact);
+  min-height: calc(var(--s-8) + var(--s-1));
+  outline: none;
+  padding: 0 var(--s-3);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  ):hover:not(:focus):not(:disabled) {
+  border-color: var(--line-hover);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  ):focus {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 var(--s-1) var(--accent-tint);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  )::placeholder {
+  color: var(--text-mute);
+}
+
+input:is(
+    [type='email'],
+    [type='number'],
+    [type='password'],
+    [type='search'],
+    [type='text'],
+    [type='url']
+  ):disabled {
+  background: var(--surface-inset);
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: var(--opacity-disabled);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  appearance: none;
+  background: var(--surface-1);
+  border: 1.5px solid var(--line-hover);
+  cursor: pointer;
+  display: inline-grid;
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0;
+  place-content: center;
+  position: relative;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+  width: 16px;
+}
+
+input[type='checkbox'] {
+  border-radius: max(3px, calc(var(--r-theme-sm) * 0.4));
+}
+
+input[type='radio'] {
+  border-radius: var(--r-pill);
+}
+
+input[type='checkbox']::before,
+input[type='radio']::before {
+  content: '';
+  transform: scale(0);
+  transition: transform var(--dur-3) var(--ease-decel);
+}
+
+/* The tick is a rotated corner rather than a glyph, so it stays crisp at every theme's radius. */
+input[type='checkbox']::before {
+  border-bottom: 2px solid var(--accent-fg);
+  border-right: 2px solid var(--accent-fg);
+  height: 9px;
+  margin-top: calc(var(--s-0-5) * -1);
+  rotate: 40deg;
+  width: 5px;
+}
+
+input[type='radio']::before {
+  background: var(--accent-fg);
+  border-radius: var(--r-pill);
+  height: 6px;
+  width: 6px;
+}
+
+input[type='checkbox']:hover:not(:disabled),
+input[type='radio']:hover:not(:disabled) {
+  border-color: var(--accent-ring);
+}
+
+input[type='checkbox']:checked,
+input[type='radio']:checked {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+}
+
+input[type='checkbox']:checked::before,
+input[type='radio']:checked::before {
+  transform: scale(1);
+}
+
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-tint);
+  outline: none;
+}
+
+input[type='checkbox']:disabled,
+input[type='radio']:disabled {
+  background: var(--surface-2);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+input[type='checkbox']:disabled:checked,
+input[type='radio']:disabled:checked {
+  background: var(--text-mute);
+  border-color: var(--text-mute);
+}
+
+/*
+ * PRESS RIPPLE, for targets large enough that a scale alone reads as a no-op. The wave is sized and
+ * positioned from the pointer by the renderer.
+ *
+ * The standard primary-action classes opt in by name so buttons built at runtime get the feedback
+ * without every call site remembering to ask for it; `data-ripple` stays available for one-offs. This
+ * list is mirrored by RIPPLE_SELECTOR in components.ts — keep the two in step.
+ */
+#composer-send,
+.native-composer__send,
+.button--primary,
+.chat-send,
+.dialog-primary,
+.launch-primary,
+[data-ripple] {
+  overflow: hidden;
+  position: relative;
+}
+
+.ripple {
+  animation: rippleOut var(--dur-micro) var(--ease-accel) forwards;
+  background: currentColor;
+  border-radius: var(--r-pill);
+  opacity: 0.22;
+  pointer-events: none;
+  position: absolute;
+  transform: scale(0);
+}
+
+[data-theme='claude'] .ripple {
+  animation-duration: var(--dur-enter);
+}

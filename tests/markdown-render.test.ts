@@ -241,6 +241,62 @@ describe('safe Markdown DOM rendering', () => {
 
     expect(container.querySelector('.markdown-math')?.textContent).toBe('$not_supported$');
   });
+
+  it('never lets a slower earlier render overwrite newer content in the same container', async () => {
+    const gates = new Map<string, () => void>();
+    // A highlighter is the real-world source of this delay: the older plan has a code block that
+    // needs Shiki, the newer one resolves immediately.
+    const codeToTokens = vi.fn(async (code: string) => {
+      await new Promise<void>((resolve) => gates.set(code, resolve));
+      return { tokens: [[{ content: code }]] };
+    });
+    const renderer = createRenderer({
+      highlighter: { codeToTokens },
+      highlighterTheme: { name: 'claudedock-test-theme' },
+    });
+    // `#native-plan-content` is a single persistent dialog element reused by every plan, so two
+    // opens in a row race inside the same container.
+    const container = document.createElement('div');
+
+    const first = renderer.renderInto(container, '```ts\nconst first = 1;\n```');
+    await vi.waitFor(() => expect(gates.has('const first = 1;')).toBe(true));
+    const second = renderer.renderInto(container, '```ts\nconst second = 2;\n```');
+    await vi.waitFor(() => expect(gates.has('const second = 2;')).toBe(true));
+
+    // The newer render finishes first, then the stale one completes.
+    gates.get('const second = 2;')?.();
+    await second;
+    gates.get('const first = 1;')?.();
+    await first;
+
+    expect(container.textContent).toContain('const second = 2;');
+    expect(container.textContent).not.toContain('const first = 1;');
+  });
+
+  it('restores the artifact button label when a later run succeeds', async () => {
+    let attempt = 0;
+    const onRunArtifact = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error('artifact host unavailable');
+    });
+    const renderer = createRenderer({ onRunArtifact });
+    const container = document.createElement('div');
+
+    await renderer.renderInto(container, '```html\n<p>artifact</p>\n```');
+    const run = container.querySelector('.markdown-artifact-run') as HTMLButtonElement;
+    const idleLabel = run.textContent;
+
+    click(run);
+    await nextMicrotask();
+    expect(run.textContent).toBe('运行失败');
+
+    // The second run works, so leaving the failure label up reports a broken feature as broken
+    // forever even though it now succeeds.
+    click(run);
+    await nextMicrotask();
+    expect(onRunArtifact).toHaveBeenCalledTimes(2);
+    expect(run.textContent).toBe(idleLabel);
+  });
 });
 
 describe('streaming Markdown rendering', () => {

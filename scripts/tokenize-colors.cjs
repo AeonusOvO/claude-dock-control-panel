@@ -1,9 +1,9 @@
 /*
- * One-off migration helper: rewrites the bare `#rrggbb` literals in `styles.css` to the design
- * tokens they are closest to, so switching theme repaints the whole shell instead of only the
- * terminal canvas. Matching is role-aware — the CSS property decides which tokens are even
- * candidates, because a border and a label are never interchangeable even when the hex is similar.
- * Alpha tokens are compared as they actually render, composited over `--surface-2`.
+ * One-off migration helper: recursively follows the renderer's `styles.css` import graph and
+ * rewrites bare `#rrggbb` literals outside `01-tokens.css` to the design tokens they are closest to.
+ * Matching is role-aware — the CSS property decides which tokens are even candidates, because a
+ * border and a label are never interchangeable even when the hex is similar. Alpha tokens are
+ * compared as they actually render, composited over `--surface-2`.
  *
  * Run `node scripts/tokenize-colors.cjs` for the review report, `--write` to apply. Kept in the
  * repo as the record of how the sweep was done; the resulting invariant is enforced by
@@ -12,8 +12,49 @@
 const { readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
-const stylesPath = path.join(__dirname, '..', 'src', 'renderer', 'styles.css');
-const source = readFileSync(stylesPath, 'utf8');
+const rendererDirectory = path.join(__dirname, '..', 'src', 'renderer');
+const stylesPath = path.join(rendererDirectory, 'styles.css');
+const tokensPath = path.join(rendererDirectory, 'styles', '01-tokens.css');
+const importRule =
+  /^\s*@import\s+(?:url\(\s*)?(?<quote>['"])(?<specifier>[^'"]+)\k<quote>\s*\)?\s*;\s*$/gmu;
+
+const loadStyleGraph = (entryPath) => {
+  const ordered = [];
+  const visited = new Set();
+  const ancestors = [];
+  const rendererPrefix = `${path.resolve(rendererDirectory)}${path.sep}`.toLowerCase();
+
+  const visit = (filePath) => {
+    const absolutePath = path.resolve(filePath);
+    const normalizedPath = absolutePath.toLowerCase();
+    if (ancestors.includes(normalizedPath)) {
+      throw new Error(`Circular CSS import: ${[...ancestors, normalizedPath].join(' -> ')}`);
+    }
+    if (visited.has(normalizedPath)) return;
+    if (
+      normalizedPath !== path.resolve(stylesPath).toLowerCase() &&
+      !normalizedPath.startsWith(rendererPrefix)
+    ) {
+      throw new Error(`CSS import escapes the renderer directory: ${absolutePath}`);
+    }
+
+    const source = readFileSync(absolutePath, 'utf8');
+    ancestors.push(normalizedPath);
+    for (const match of source.matchAll(importRule)) {
+      const specifier = match.groups?.specifier;
+      if (!specifier || !specifier.startsWith('.')) continue;
+      visit(path.resolve(path.dirname(absolutePath), specifier));
+    }
+    ancestors.pop();
+    visited.add(normalizedPath);
+    ordered.push({ absolutePath, source });
+  };
+
+  visit(entryPath);
+  return ordered;
+};
+
+const styleGraph = loadStyleGraph(stylesPath);
 
 const SURFACE_2 = '#101419';
 
@@ -169,46 +210,50 @@ const TOKEN_LABS = Object.fromEntries(
 
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
-const rootEnd = source.split('\n').findIndex((line) => line.trim() === '}') + 1;
-
 const report = new Map();
 const skipped = new Map();
-let property = '';
+const rewrittenGraph = styleGraph.map(({ absolutePath, source }) => {
+  if (path.resolve(absolutePath).toLowerCase() === path.resolve(tokensPath).toLowerCase()) {
+    return { absolutePath, output: source, source };
+  }
 
-const lines = source.split('\n').map((line, index) => {
-  const declaration = /^\s*(-{0,2}[a-z][a-z0-9-]*)\s*:/.exec(line);
-  if (declaration) {
-    property = declaration[1];
-  }
-  if (index < rootEnd) {
-    return line;
-  }
-  return line.replace(/#[0-9a-fA-F]{6}\b/g, (hex) => {
-    const role = roleOf(property);
-    if (!role) {
-      skipped.set(`${property}: ${hex}`, (skipped.get(`${property}: ${hex}`) ?? 0) + 1);
-      return hex;
-    }
-    const lab = toLab(rgb(hex.toLowerCase()));
-    let best = ROLES[role][0];
-    let bestDistance = distance(lab, TOKEN_LABS[best]);
-    for (const candidate of ROLES[role].slice(1)) {
-      const candidateDistance = distance(lab, TOKEN_LABS[candidate]);
-      if (candidateDistance < bestDistance) {
-        best = candidate;
-        bestDistance = candidateDistance;
-      }
-    }
-    const key = `${role.padEnd(8)} ${hex.toLowerCase()} -> var(${best})`;
-    report.set(key, Math.max(report.get(key) ?? 0, bestDistance));
-    return `var(${best})`;
-  });
+  let property = '';
+  const output = source
+    .split('\n')
+    .map((line) => {
+      const declaration = /^\s*(-{0,2}[a-z][a-z0-9-]*)\s*:/.exec(line);
+      if (declaration) property = declaration[1];
+      return line.replace(/#[0-9a-fA-F]{6}\b/g, (hex) => {
+        const role = roleOf(property);
+        if (!role) {
+          skipped.set(`${property}: ${hex}`, (skipped.get(`${property}: ${hex}`) ?? 0) + 1);
+          return hex;
+        }
+        const lab = toLab(rgb(hex.toLowerCase()));
+        let best = ROLES[role][0];
+        let bestDistance = distance(lab, TOKEN_LABS[best]);
+        for (const candidate of ROLES[role].slice(1)) {
+          const candidateDistance = distance(lab, TOKEN_LABS[candidate]);
+          if (candidateDistance < bestDistance) {
+            best = candidate;
+            bestDistance = candidateDistance;
+          }
+        }
+        const key = `${role.padEnd(8)} ${hex.toLowerCase()} -> var(${best})`;
+        report.set(key, Math.max(report.get(key) ?? 0, bestDistance));
+        return `var(${best})`;
+      });
+    })
+    .join('\n');
+  return { absolutePath, output, source };
 });
 
 for (const [key, delta] of [...report.entries()].sort((a, b) => b[1] - a[1])) {
   console.log(`${delta.toFixed(1).padStart(5)}  ${key}`);
 }
-console.log(`\n${report.size} distinct colours mapped.`);
+console.log(
+  `\n${report.size} distinct colours mapped across ${styleGraph.length} stylesheet files.`,
+);
 if (skipped.size > 0) {
   console.log('\nleft literal (unknown property role):');
   for (const [key, count] of skipped) {
@@ -217,6 +262,10 @@ if (skipped.size > 0) {
 }
 
 if (process.argv.includes('--write')) {
-  writeFileSync(stylesPath, lines.join('\n'), 'utf8');
-  console.log(`\nwritten: ${stylesPath}`);
+  const changed = rewrittenGraph.filter(({ output, source }) => output !== source);
+  for (const { absolutePath, output } of changed) {
+    writeFileSync(absolutePath, output, 'utf8');
+    console.log(`\nwritten: ${path.relative(rendererDirectory, absolutePath)}`);
+  }
+  if (changed.length === 0) console.log('\nno stylesheet changes needed.');
 }

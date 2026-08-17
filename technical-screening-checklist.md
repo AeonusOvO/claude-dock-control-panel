@@ -1,6 +1,7 @@
 # ClaudeDock 最终技术筛查清单
 
-> 静态扫描基准：2026-08-09 当前工作树。本文用于最终技术筛查，不替代动态测试。
+> 静态扫描基准：ClaudeDock 5.0.0-rc.12（2026-08-16）当前工作树。本文用于最终技术筛查，
+> 不替代动态测试。
 
 ## 1. 扫描口径
 
@@ -17,7 +18,7 @@
 - `.git`、`node_modules`、`dist`、`outputs`、`release`、`coverage`、`.vite`
 - 外部 checkout/vendor，如 `v2rayN-*`
 - EXE、安装包、PDB 等生成物
-- 当前工作树中已删除的 `roadmap.md`、`当前版本需改进的bug.md`
+- `docs/archive/` 中带“历史材料 / 非当前规格”声明的旧计划、路线图、缺陷清单和修复提示词
 - 未跟踪的 diff/snapshot 文件仅列为历史材料，不视为生产实现
 
 状态定义：
@@ -110,15 +111,15 @@
 
 ---
 
-## 4. 包含完整提示词或 Agent 指令的文档
+## 4. 当前治理与归档过程文档
 
-| 文件路径                           | 核心函数或具体表述                                                                                                     | 失败时的阻断行为                                                                 |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `AGENTS.md:1-13`                   | 仓库级 Agent 指令；包括不得修改 Desktop App、`applyProfile: false` 等规则                                              | **文档指令**：Agent 应停止越界修改；文件本身没有程序化 enforcement               |
-| `staged-repair-prompts.md:17-273`  | 总控提示词：“你现在是 ClaudeDock 项目的主要修复工程师……”；要求读取调用链、先写失败测试、最小根因修复、全量验证         | **提示词门禁**：无法复现、验证失败或基线冲突时要求停止，不得声称修复             |
-| `staged-repair-prompts.md:277-316` | 阶段 0 基线检查：“只检查，不修改文件”                                                                                  | **提示词门禁**：基线报告完成后停止；需要关闭运行中的应用时必须先询问             |
-| `staged-repair-prompts.md:320-811` | 阶段 1～6、8～11：持久化、网络、下载、MCP、Router、退出、更新安装、generation、permission、Renderer、Markdown/Artifact | **提示词门禁**：一次只处理当前阶段；越界、无法证明、需要产品决策或验证失败时停止 |
-| `staged-repair-prompts.md:815-894` | 三个动态复现提示词；禁止只凭静态代码或人工单元测试修改生产代码                                                         | **提示词门禁**：仅复现和报告，不修改；等待批准后再修                             |
+| 文件路径                                | 当前状态                                | 当前筛查口径                                    |
+| --------------------------------------- | --------------------------------------- | ----------------------------------------------- |
+| `AGENTS.md`                             | 已恢复并更新为当前仓库维护规则          | 当前 Agent 指令；要求完整门禁、安装包和产物报告 |
+| `docs/archive/plan-2.0.0.md`            | 已恢复原文并标记“历史材料 / 非当前规格” | 仅作历史索引，不作为当前实现或发布依据          |
+| `docs/archive/roadmap.md`               | 已恢复原文并标记“历史材料 / 非当前规格” | 仅作历史索引，不代表当前路线图或产品承诺        |
+| `docs/archive/当前版本需改进的bug.md`   | 已恢复原文并标记“历史材料 / 非当前规格” | 仅作历史索引，不代表当前缺陷状态或产品规格      |
+| `docs/archive/staged-repair-prompts.md` | 已恢复原文并标记“历史材料 / 非当前规格” | 仅作历史索引，不是当前 Agent 指令或提示词门禁   |
 
 ---
 
@@ -126,39 +127,42 @@
 
 这些文件描述提示词行为，但不是完整、直接执行的提示词模板。
 
-| 文件路径                                                                                   | 核心表述                                                                                                                | 分类                   |
-| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `README.md:8-11,42-44,58-60,152-155`                                                       | 用户提示词独立气泡；仅当当前提示词明确要求选项时允许结构化选择；默认不附加 system prompt/subagent；联网隔离开启时才附加 | 说明性文档             |
-| `design.md:9-11,31-34,60-63,327-363,434-436,581-585`                                       | prompt UI、`dontAsk`、默认无系统提示词、多行 prompt、联网检索隔离                                                       | 产品设计契约           |
-| `technical.md:15-16,86-87,164-166,361-362,488-491,1271-1309,1433-1469,1532-1549,1819-1851` | prompt 不落盘、多行 prompt、不注入隐藏提示词、`--agents`、`--append-system-prompt`、WebSearch guard                     | 架构说明               |
-| `docs/releases/5.0.0-rc.6.md:16`                                                           | 用户提示词右侧强调色气泡                                                                                                | 历史说明               |
-| `docs/releases/5.0.0-rc.7.md:8-9`                                                          | 当前提示词明确要求选项时允许结构化选择卡                                                                                | 历史说明               |
-| `docs/releases/5.0.0-rc.8.md:11-12`                                                        | 引用 `staged-repair-prompts.md` 的总控和阶段提示词                                                                      | 索引                   |
-| `docs/releases/5.0.0-rc.9.md:10`                                                           | 默认会话不附加 system prompt/subagent，显式隔离时才启用                                                                 | 历史说明               |
-| `docs/cli-command-catalog.md`                                                              | `/agents`、`/subagents`、`/fewer-permission-prompts` 等 CLI 命令                                                        | 不是自然语言提示词模板 |
+| 文件路径                                                                                 | 核心表述                                                                                                                | 分类                   |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `README.md:8-11,42-44,58-60,152-155`                                                     | 用户提示词独立气泡；仅当当前提示词明确要求选项时允许结构化选择；默认不附加 system prompt/subagent；联网隔离开启时才附加 | 说明性文档             |
+| `design.md`（“5.0 安全终端与原生对话工作区”“终端输入框”“全局设置”“Claude 工作台”）       | prompt UI、`dontAsk`、默认无系统提示词、多行 prompt、联网检索隔离                                                       | 产品设计契约           |
+| `technical.md`（“原生会话不变量”“独立模型对话”“Claude Code 接入与会话”“斜杠命令可视化”） | prompt 不落盘、多行 prompt、不注入隐藏提示词、`--agents`、`--append-system-prompt`、WebSearch guard                     | 架构说明               |
+| `docs/releases/5.0.0-rc.6.md:16`                                                         | 用户提示词右侧强调色气泡                                                                                                | 历史说明               |
+| `docs/releases/5.0.0-rc.7.md:8-9`                                                        | 当前提示词明确要求选项时允许结构化选择卡                                                                                | 历史说明               |
+| `docs/releases/5.0.0-rc.8.md:11-12`                                                      | 历史上引用后来归档为 `docs/archive/staged-repair-prompts.md` 的修复提示词                                               | 历史索引               |
+| `docs/archive/staged-repair-prompts.md`                                                  | 带有醒目归档声明的旧版总控和分阶段修复提示词                                                                            | 历史材料，不执行       |
+| `docs/releases/5.0.0-rc.9.md:10`                                                         | 默认会话不附加 system prompt/subagent，显式隔离时才启用                                                                 | 历史说明               |
+| `docs/cli-command-catalog.md`                                                            | `/agents`、`/subagents`、`/fewer-permission-prompts` 等 CLI 命令                                                        | 不是自然语言提示词模板 |
 
 提示词文件筛查结论：
 
 - 仓库中没有根目录 `CLAUDE.md`。
-- 实际仓库级 Agent 规则文件是大写的 `AGENTS.md`。
-- 完整可复制提示词主要集中在 `AGENTS.md` 和 `staged-repair-prompts.md`。
+- `AGENTS.md` 是当前第一方仓库级 Agent 规则文件，要求每次更新完成完整门禁并构建、报告安装包。
+- 可复制的旧版阶段修复提示词只存在于 `docs/archive/staged-repair-prompts.md`，其归档声明明确禁止
+  将其作为当前 Agent 指令或发布门禁。
 - 实际运行时注入提示词集中在 `src/main/claude-web-research.ts`。
 - `README.md`、`design.md`、`technical.md` 主要描述提示词和注入机制，不是完整模板。
-- `node_modules/*/AGENTS.md` 属于第三方依赖内容，未计入第一方提示词。
+- `node_modules/*/AGENTS.md` 属于第三方依赖内容，未计入第一方提示词；根目录 `AGENTS.md` 单独计入
+  当前仓库治理规则。
 
 ---
 
 ## 6. 安全与架构文档
 
-| 文件路径                                                                      | 核心函数或具体表述                                                                                                              | 失败时的阻断行为                   |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `README.md:251-262,324-334`                                                   | GitHub Releases 自动更新、SHA-512 摘要与拒绝降级、Electron isolation                                                            | **文档契约**：README 本身不执行    |
-| `SECURITY.md:23-31`                                                           | 漏洞报告和安全范围                                                                                                              | 规定报告流程，无运行时阻断         |
-| `CONTRIBUTING.md:17-25`                                                       | 禁止 credential/private key/certificate password；漏洞私下报告                                                                  | **人工流程门禁**：违反时应拒绝合入 |
-| `docs/PRIVACY.md:42-50`                                                       | 更新请求、SHA-512 摘要校验、CLIProxyAPI asset verification                                                                      | 隐私和信任边界说明                 |
-| `technical.md:379-503,537-702,721-835,936-1103,1149-1163,1236-1266,1372-1468` | IPC、generation、permission、process ownership、download、safeStorage、redirect、attachment、Artifact、gateway、update security | **架构契约**：实际阻断点在生产代码 |
-| `design.md:33-34,359-413,532-660,707-806`                                     | permission refusal、Markdown allowlist、Artifact isolation、transaction rollback UI、blocked/warning/allowed UI、更新状态       | **产品设计契约**                   |
-| `docs/plan-2.0.0.md`                                                          | 早期安全和架构规划                                                                                                              | 规划材料，不作为当前实现证据       |
+| 文件路径                                                                                                          | 核心函数或具体表述                                                                                                              | 失败时的阻断行为                   |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `README.md:251-262,324-334`                                                                                       | GitHub Releases 自动更新、SHA-512 摘要与拒绝降级、Electron isolation                                                            | **文档契约**：README 本身不执行    |
+| `SECURITY.md:23-31`                                                                                               | 漏洞报告和安全范围                                                                                                              | 规定报告流程，无运行时阻断         |
+| `CONTRIBUTING.md:17-25`                                                                                           | 禁止 credential/private key/certificate password；漏洞私下报告                                                                  | **人工流程门禁**：违反时应拒绝合入 |
+| `docs/PRIVACY.md:42-50`                                                                                           | 更新请求、SHA-512 摘要校验、CLIProxyAPI asset verification                                                                      | 隐私和信任边界说明                 |
+| `technical.md`（“渲染进程与 IPC”“4.0 共享下载、外部应用代理与 MCP 服务”“Artifact 隔离与联网审计”等）              | IPC、generation、permission、process ownership、download、safeStorage、redirect、attachment、Artifact、gateway、update security | **架构契约**：实际阻断点在生产代码 |
+| `design.md`（“5.0 安全终端与原生对话工作区”“独立对话”“会话生命周期与目录所有权”“Claude 工作台”“官方网络预检 UI”） | permission refusal、Markdown allowlist、Artifact isolation、transaction rollback UI、blocked/warning/allowed UI、更新状态       | **产品设计契约**                   |
+| `docs/archive/plan-2.0.0.md`                                                                                      | 带有醒目归档声明的早期安全和架构规划                                                                                            | 历史材料，不作为当前实现证据       |
 
 历史发布说明：
 
@@ -242,15 +246,30 @@
 | `tests/session-operation-integration.test.ts:14-140`       | session mutating operation 串行化                  |
 | `tests/session-generation.test.ts:23-148`                  | stale generation 结果不能覆盖新状态                |
 
+### 7.5 设计系统与 Renderer 视觉验证
+
+`design.md` 的“设计系统：单一事实源”是 UI 规范；下表是测试证据与发布前命令，不是生产运行时门禁。
+
+| 证据 / 命令                                                                      | 覆盖内容                                                                                                                           |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test -- tests/design-tokens.test.ts`                                        | 拆分入口、未定义变量、三层令牌、六级字体角色、selector 所有权、keyframes / viewport media / 唯一 reduced-motion 位置和四主题对比度 |
+| `npm run test:control-theme`                                                     | 四主题下文字/图标按钮的基础、hover、disabled 与语义色计算样式                                                                      |
+| `npm run test:select-theme`、`npm run test:select`、`npm run test:dialog-select` | 增强 select 的主题、键盘/事件同步，以及 modal dialog top-layer 内的定位与命中                                                      |
+| `npm run test:layout`                                                            | 多窗口、缩放、rail/drawer/footer 分组、控件重叠与同一 `.select` shell 的复合命中豁免                                               |
+| `npm run test:visual`                                                            | renderer 构建、四主题截图、原生交互状态与可访问性视觉烟测                                                                          |
+| `npm run test:visual:real`                                                       | 隔离 RuntimeProfile 的真实 Windows Electron 点击与截图证据，输出到 `dist/visual-qa/`                                               |
+| `npm run dist`                                                                   | 完整类型检查、main/renderer 构建和 Windows NSIS 打包；发布候选的最终门禁                                                           |
+
 ---
 
 ## 8. 历史或生成型 diff 材料
 
-| 文件路径                  | 筛查结论                                                         |
-| ------------------------- | ---------------------------------------------------------------- |
-| `commit-diff-snapshot.md` | 未跟踪历史 diff，可能包含旧 prompt/security 文本；不作为当前实现 |
-| `commit-7b8b733.diff.txt` | 未跟踪历史 commit diff；不作为当前实现                           |
-| `commit-7b8b733-raw.diff` | 未跟踪原始 diff snapshot；不作为当前实现                         |
+三份 snapshot 从未被 Git 跟踪，因此不能声称可由 Git 历史恢复。它们已移动到可恢复归档目录
+`outputs/ui-design-archive-20260816/`，不再位于仓库根目录，也不作为当前实现证据：
+
+- `commit-diff-snapshot.md`
+- `commit-7b8b733.diff.txt`
+- `commit-7b8b733-raw.diff`
 
 ---
 
@@ -294,7 +313,7 @@
 
 5. **测试和文档不能替代执行代码**
    - 测试仅证明预期行为。
-   - `README.md`、`technical.md`、`design.md`、`AGENTS.md` 本身不执行阻断。
+   - `README.md`、`technical.md`、`design.md` 本身不执行阻断。
    - 最终技术筛查应以生产函数为主，测试和文档作为证据链。
 
 ---
@@ -303,7 +322,8 @@
 
 - 应用更新信任链由 electron-updater 的 GitHub Releases feed、`latest.yml` 的 SHA-512 摘要校验和拒绝降级构成。
 - 运行时高风险操作普遍使用 sender、owner、generation、PID/start-time、路径牢笼或 safeStorage 进行 fail-closed 校验。
-- 第一方完整提示词主要位于 `AGENTS.md`、`staged-repair-prompts.md` 和 `src/main/claude-web-research.ts`。
+- 当前第一方生产提示词主要位于 `src/main/claude-web-research.ts`；`docs/archive/` 中的历史过程文档
+  不计入当前运行时实现，根目录 `AGENTS.md` 则作为当前仓库治理规则单独生效。
 - 当前最值得单独评审的例外是 malformed WebSearch Hook payload 的兼容性 fail-open 行为。
 
 本清单是静态分析结果；生成本文件时尚未以该清单替代动态测试。

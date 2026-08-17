@@ -128,4 +128,44 @@ describe('ProviderConnectivityProbe', () => {
       ]),
     );
   });
+
+  it('settles under an overall deadline when DNS never resolves', async () => {
+    const { appFetch } = createProbe();
+    const probe = new ProviderConnectivityProbe({
+      appFetch,
+      cliRequest: async (url) => `401|${url}|0|application/json`,
+      clientVersion: async () => '0.146.0',
+      // A DNS lookup that never settles used to hang the whole preflight forever, because run()
+      // awaits Promise.all with no deadline of its own.
+      dnsLookup: () => new Promise(() => undefined),
+      overallTimeoutMs: 20,
+      resolveProxy: async () => 'DIRECT',
+    });
+
+    const result = await probe.run('openai-codex', 'background');
+
+    // Timing out must degrade to an explicit unknown/skipped probe, which the risk engine treats as
+    // a required failure — never a silent pass.
+    const dnsProbe = result.probes.find((item) => item.kind === 'dns');
+    expect(dnsProbe?.status).toBe('skipped');
+    expect(dnsProbe?.detail).toContain('超时');
+  });
+
+  it('settles under an overall deadline when the proxy lookup never resolves', async () => {
+    const { appFetch } = createProbe();
+    const probe = new ProviderConnectivityProbe({
+      appFetch,
+      cliRequest: async (url) => `401|${url}|0|application/json`,
+      clientVersion: async () => '0.146.0',
+      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
+      overallTimeoutMs: 20,
+      // Electron's session.resolveProxy can hang indefinitely on a broken PAC script.
+      resolveProxy: () => new Promise(() => undefined),
+    });
+
+    const result = await probe.run('openai-codex', 'background');
+
+    expect(result.paths.length).toBeGreaterThan(0);
+    expect(result.paths.every((path) => path.proxyKind === 'unknown')).toBe(true);
+  });
 });

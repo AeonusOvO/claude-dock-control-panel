@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  buildClaudeAgentProcessEnvironment,
   ClaudeAgentAdapter,
   claudeAgentExecutableFromCommand,
 } from '../src/main/claude-agent-adapter';
@@ -10,8 +11,24 @@ import type { ConversationEvent, ConversationInteraction } from '../src/shared/n
 class FakeSdkQuery implements AsyncIterable<unknown> {
   public appliedSettings: Record<string, unknown>[] = [];
   public closed = false;
+  public initialization: Record<string, unknown> = {
+    commands: [
+      { aliases: [], argumentHint: '', description: '帮助', name: 'help' },
+      { aliases: [], argumentHint: '', description: 'future', name: 'future-command' },
+    ],
+    fast_mode_state: 'on',
+    models: [
+      {
+        resolvedModel: 'claude-opus-4-6',
+        supportedEffortLevels: ['low', 'high', 'xhigh', 'max'],
+        supportsFastMode: true,
+        value: 'opus',
+      },
+    ],
+  };
   public interrupted = false;
   public permissionModes: string[] = [];
+  public selectedModels: Array<string | undefined> = [];
   public stoppedTasks: string[] = [];
   private failure?: Error;
   private readonly pending: Array<{
@@ -36,7 +53,8 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
     return Promise.resolve();
   }
 
-  public setModel(_model?: string): Promise<void> {
+  public setModel(model?: string): Promise<void> {
+    this.selectedModels.push(model);
     return Promise.resolve();
   }
 
@@ -46,21 +64,7 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
   }
 
   public initializationResult(): Promise<unknown> {
-    return Promise.resolve({
-      commands: [
-        { aliases: [], argumentHint: '', description: '帮助', name: 'help' },
-        { aliases: [], argumentHint: '', description: 'future', name: 'future-command' },
-      ],
-      fast_mode_state: 'on',
-      models: [
-        {
-          resolvedModel: 'claude-opus-4-6',
-          supportedEffortLevels: ['low', 'high', 'xhigh', 'max'],
-          supportsFastMode: true,
-          value: 'opus',
-        },
-      ],
-    });
+    return Promise.resolve(this.initialization);
   }
 
   public interrupt(): Promise<unknown> {
@@ -132,6 +136,84 @@ describe('Claude Agent SDK adapter', () => {
     ).toThrow(/NPM.*claude\.exe.*重新安装 Claude Code/);
   });
 
+  it('overlays and clears inherited environment keys case-insensitively', () => {
+    const inherited = {
+      CLAUDE_CODE_ATTRIBUTION_HEADER: 'inherited-uppercase',
+      Claude_Code_Attribution_Header: 'inherited-mixed-case',
+      Path: 'C:\\Windows',
+    };
+    const matchingKeys = (environment: NodeJS.ProcessEnv): string[] =>
+      Object.keys(environment).filter(
+        (key) => key.toLowerCase() === 'claude_code_attribution_header',
+      );
+
+    const gateway = buildClaudeAgentProcessEnvironment(inherited, {
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+    });
+    expect(matchingKeys(gateway)).toEqual(['CLAUDE_CODE_ATTRIBUTION_HEADER']);
+    expect(gateway.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
+    expect(gateway.Path).toBe('C:\\Windows');
+
+    const official = buildClaudeAgentProcessEnvironment(inherited, {
+      CLAUDE_CODE_ATTRIBUTION_HEADER: null,
+    });
+    expect(matchingKeys(official)).toEqual([]);
+  });
+
+  it('passes launch-scoped settings above user and project settings', async () => {
+    const query = new FakeSdkQuery();
+    let capturedOptions: Record<string, unknown> | undefined;
+    const settingsEnvironment = {
+      ANTHROPIC_BASE_URL: 'https://gateway.example.com',
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+    };
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.12',
+      queryFactory:
+        async () =>
+        ({ options }) => {
+          capturedOptions = options;
+          return query;
+        },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+
+    await adapter.start({ ...startInput, settingsEnvironment });
+
+    expect(capturedOptions).toMatchObject({
+      settingSources: ['user', 'project', 'local'],
+      settings: { env: settingsEnvironment, skipWebFetchPreflight: true },
+    });
+    expect((capturedOptions?.settings as { env: Record<string, string> }).env).not.toBe(
+      settingsEnvironment,
+    );
+  });
+
+  it('asks for the Claude Code system prompt preset rather than letting it default away', async () => {
+    // The SDK reads this option as `if (systemPrompt === void 0) prompt = ""` — omitting it is a
+    // custom EMPTY prompt, not "use Claude Code's". Dropping this line leaves the model with the
+    // full Claude Code toolset and none of the instructions for using it, which is indistinguishable
+    // from the same model getting noticeably worse. Assert on the exact value, not toMatchObject
+    // against a subset, so deleting the key fails loudly here instead of quietly in conversations.
+    const query = new FakeSdkQuery();
+    let capturedOptions: Record<string, unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.11',
+      queryFactory:
+        async () =>
+        ({ options }) => {
+          capturedOptions = options;
+          return query;
+        },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+
+    await adapter.start(startInput);
+
+    expect(capturedOptions?.systemPrompt).toEqual({ preset: 'claude_code', type: 'preset' });
+    expect(capturedOptions?.tools).toEqual({ preset: 'claude_code', type: 'preset' });
+  });
+
   it('uses the explicitly resolved local executable and emits runtime capabilities', async () => {
     const query = new FakeSdkQuery();
     let capturedOptions: Record<string, unknown> | undefined;
@@ -162,6 +244,71 @@ describe('Claude Agent SDK adapter', () => {
         fast: { state: 'confirmed' },
         model: 'claude-opus-4-6',
       },
+    });
+  });
+
+  it('keeps the canonical model in UI state while the SDK inherits the 1M runtime suffix', async () => {
+    const query = new FakeSdkQuery();
+    query.initialization = {
+      commands: [],
+      fast_mode_state: 'off',
+      models: [
+        {
+          resolvedModel: 'claude-opus-4-6[1m]',
+          supportedEffortLevels: ['low', 'high', 'xhigh'],
+          supportsFastMode: true,
+          value: 'opus',
+        },
+        {
+          resolvedModel: 'claude-sonnet-4-6[1m]',
+          supportedEffortLevels: ['low', 'high'],
+          supportsFastMode: false,
+          value: 'sonnet',
+        },
+      ],
+    };
+    let capturedOptions: Record<string, unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.11',
+      queryFactory:
+        async () =>
+        ({ options }) => {
+          capturedOptions = options;
+          return query;
+        },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+
+    await adapter.start({ ...startInput, runtimeModel: 'claude-opus-4-6[1m]' });
+
+    expect(capturedOptions?.model).toBe('claude-opus-4-6[1m]');
+    expect(events.find(({ type }) => type === 'capabilities.updated')).toMatchObject({
+      capabilities: {
+        model: 'claude-opus-4-6',
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: 'claude-opus-4-6' }),
+          expect.objectContaining({ id: 'claude-sonnet-4-6' }),
+        ]),
+      },
+    });
+
+    await adapter.updateControls(startInput.conversationId, {
+      expectedCapabilityRevision: 1,
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(query.selectedModels).toEqual(['claude-sonnet-4-6[1m]']);
+    expect(events.at(-1)).toMatchObject({
+      capabilities: {
+        model: 'claude-sonnet-4-6',
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: 'claude-opus-4-6' }),
+          expect.objectContaining({ id: 'claude-sonnet-4-6' }),
+        ]),
+      },
+      type: 'capabilities.updated',
     });
   });
 
@@ -282,6 +429,54 @@ describe('Claude Agent SDK adapter', () => {
         status: 'complete',
       }),
     ]);
+  });
+
+  it('caps oversized tool payloads so every later snapshot stays small', async () => {
+    const query = new FakeSdkQuery();
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.6',
+      queryFactory: async () => () => query,
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+
+    query.emit({
+      message: {
+        content: [
+          {
+            id: 'tool-1',
+            input: { content: 'w'.repeat(200_000), file_path: 'D:\\big.txt' },
+            name: 'Write',
+            type: 'tool_use',
+          },
+        ],
+        id: 'sdk-tool-frame',
+      },
+      type: 'assistant',
+      uuid: 'sdk-tool-frame',
+    });
+    query.emit({
+      message: { content: [{ tool_use_id: 'tool-1', type: 'tool_result' }] },
+      tool_use_result: 'r'.repeat(500_000),
+      type: 'user',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const snapshot = events.reduce(
+      (current, event) => reduceConversationEvent(current, event),
+      undefined as ReturnType<typeof reduceConversationEvent>,
+    );
+    const tool = snapshot?.messages
+      .flatMap((message) => message.blocks)
+      .find((block) => block.type === 'tool');
+    expect(tool).toBeDefined();
+    // The renderer re-serializes these on repaint and they ride along in every later snapshot, so
+    // an untruncated multi-hundred-KB payload is what turned long sessions into a freeze.
+    expect(JSON.stringify(tool?.type === 'tool' ? tool.output : '').length).toBeLessThan(40_000);
+    expect(JSON.stringify(tool?.type === 'tool' ? tool.input : '').length).toBeLessThan(40_000);
+    expect(String(tool?.type === 'tool' ? tool.output : '')).toContain('已省略');
   });
 
   it('keeps the SDK stream reusable after a failed turn and renders the failure', async () => {

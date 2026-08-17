@@ -17,6 +17,11 @@ import {
   shouldDisableInheritedApiKeyHelper,
 } from '../src/main/claude-configuration';
 import { CLAUDEDOCK_WEB_RESEARCH_AGENTS } from '../src/main/claude-web-research';
+import {
+  CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
+  CLAUDE_CONTEXT_WINDOW_MIN_TOKENS,
+  isValidClaudeCustomContextWindow,
+} from '../src/shared/claude-context-window';
 import { parseClaudePermissionMode } from '../src/shared/claude-permission-mode';
 
 const gatewayInput: SaveClaudeConfigInput = {
@@ -88,6 +93,7 @@ describe('Claude Code configuration', () => {
     const normalized = normalizeClaudeConfig(subscriptionInput);
     expect(managedChatGptContextProfile(normalized)?.autoCompactAtTokens).toBe(206_720);
     expect(buildClaudeEnvironment(normalized, 'local-gateway-token')).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '258400',
       CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
@@ -95,6 +101,7 @@ describe('Claude Code configuration', () => {
       DISABLE_COMPACT: null,
     });
     expect(buildClaudeSettingsEnvironment(normalized)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '258400',
       CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000',
@@ -126,6 +133,186 @@ describe('Claude Code configuration', () => {
     ).toThrow('必须使用本地网关 Bearer Token');
   });
 
+  it('states the Claude context window only when a mode selects one', () => {
+    const relay = normalizeClaudeConfig({
+      authMode: 'authToken',
+      baseUrl: 'https://relay.example.com',
+      credential: 'secret',
+      credentialAction: 'replace',
+      model: 'claude-opus-5',
+      preset: 'custom',
+      provider: 'gateway',
+    });
+
+    // `auto` must inject nothing: an official subscription without 1M entitlement fails outright
+    // when told to use a window it cannot serve.
+    expect(buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'auto')).toMatchObject({
+      ANTHROPIC_MODEL: 'claude-opus-5',
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '',
+    });
+    expect(buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'extended')).toMatchObject({
+      ANTHROPIC_CUSTOM_MODEL_OPTION: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_SMALL_FAST_MODEL: 'claude-opus-5[1m]',
+      CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+    });
+    expect(buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'standard')).toMatchObject({
+      ANTHROPIC_MODEL: 'claude-opus-5',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    });
+    expect(
+      buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'custom', 256_000),
+    ).toMatchObject({
+      ANTHROPIC_MODEL: 'claude-opus-5',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '256000',
+    });
+    expect(
+      buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'custom', 1_000_000),
+    ).toMatchObject({
+      ANTHROPIC_MODEL: 'claude-opus-5[1m]',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+    });
+    // An out-of-range custom value must not reach the CLI as a bogus window.
+    expect(
+      buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'custom', 10),
+    ).toMatchObject({
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '',
+    });
+    expect(
+      buildClaudeEnvironment(relay, 'secret', 'standard', undefined, 'extended'),
+    ).toMatchObject({
+      ANTHROPIC_CUSTOM_MODEL_OPTION: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_SMALL_FAST_MODEL: 'claude-opus-5[1m]',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+      DISABLE_AUTO_COMPACT: null,
+      DISABLE_COMPACT: null,
+    });
+  });
+
+  it.each([
+    ['standard', 'auto', undefined, '258400', '272000'],
+    ['standard', 'extended', undefined, '258400', '272000'],
+    ['standard', 'custom', 1_000_000, '258400', '272000'],
+    ['extended', 'standard', undefined, '997500', '1050000'],
+    ['extended', 'custom', 256_000, '997500', '1050000'],
+  ] as const)(
+    'keeps the managed ChatGPT %s profile authoritative over generic Claude mode %s',
+    (managedMode, claudeMode, customTokens, autoCompactWindow, maximumWindow) => {
+      const managed = normalizeClaudeConfig({
+        authMode: 'authToken',
+        baseUrl: 'http://localhost:8317',
+        credential: 'local-gateway-token',
+        credentialAction: 'replace',
+        model: 'gpt-5.6-sol',
+        preset: 'chatgpt-subscription',
+        provider: 'gateway',
+      });
+
+      // The managed profile owns these keys and keeps its non-Claude model id undecorated in both
+      // the temporary settings file and the process environment.
+      for (const environment of [
+        buildClaudeSettingsEnvironment(managed, managedMode, undefined, claudeMode, customTokens),
+        buildClaudeEnvironment(
+          managed,
+          'local-gateway-token',
+          managedMode,
+          undefined,
+          claudeMode,
+          customTokens,
+        ),
+      ]) {
+        expect(environment).toMatchObject({
+          ANTHROPIC_CUSTOM_MODEL_OPTION: 'gpt-5.6-sol',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.6-sol',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-5.6-sol',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.6-sol',
+          ANTHROPIC_MODEL: 'gpt-5.6-sol',
+          ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-sol',
+          CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+          CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '80',
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: autoCompactWindow,
+          CLAUDE_CODE_MAX_CONTEXT_TOKENS: maximumWindow,
+        });
+      }
+    },
+  );
+
+  it('does not decorate an unknown non-Claude gateway model as a Claude 1M model', () => {
+    const gateway = normalizeClaudeConfig({
+      authMode: 'authToken',
+      baseUrl: 'https://relay.example.com',
+      credential: 'secret',
+      credentialAction: 'replace',
+      model: 'vendor/reasoner-v3',
+      modelFast: 'vendor/fast-v1',
+      preset: 'custom',
+      provider: 'gateway',
+    });
+
+    for (const environment of [
+      buildClaudeSettingsEnvironment(gateway, 'standard', undefined, 'extended'),
+      buildClaudeEnvironment(gateway, 'secret', 'standard', undefined, 'extended'),
+    ]) {
+      expect(environment).toMatchObject({
+        ANTHROPIC_CUSTOM_MODEL_OPTION: 'vendor/reasoner-v3',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'vendor/fast-v1',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'vendor/reasoner-v3',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'vendor/reasoner-v3',
+        ANTHROPIC_MODEL: 'vendor/reasoner-v3',
+        ANTHROPIC_SMALL_FAST_MODEL: 'vendor/fast-v1',
+        CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+      });
+    }
+    expect(gateway.model).toBe('vendor/reasoner-v3');
+  });
+
+  it('does not force the main Claude 1M marker onto a distinct fast model', () => {
+    const relay = normalizeClaudeConfig({
+      authMode: 'authToken',
+      baseUrl: 'https://relay.example.com',
+      credential: 'secret',
+      credentialAction: 'replace',
+      model: 'claude-opus-5',
+      modelFast: 'claude-haiku-4-5',
+      preset: 'custom',
+      provider: 'gateway',
+    });
+
+    expect(buildClaudeSettingsEnvironment(relay, 'standard', undefined, 'extended')).toMatchObject({
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_MODEL: 'claude-opus-5[1m]',
+      ANTHROPIC_SMALL_FAST_MODEL: 'claude-haiku-4-5',
+    });
+  });
+
+  it('bounds the custom context window to a range a CLI can actually use', () => {
+    expect(CLAUDE_CONTEXT_WINDOW_MIN_TOKENS).toBe(8_000);
+    expect(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS).toBe(2_000_000);
+    expect(isValidClaudeCustomContextWindow(CLAUDE_CONTEXT_WINDOW_MIN_TOKENS)).toBe(true);
+    expect(isValidClaudeCustomContextWindow(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS)).toBe(true);
+    expect(isValidClaudeCustomContextWindow(7_999)).toBe(false);
+    expect(isValidClaudeCustomContextWindow(2_000_001)).toBe(false);
+    expect(isValidClaudeCustomContextWindow(200_000.5)).toBe(false);
+    expect(isValidClaudeCustomContextWindow('200000')).toBe(false);
+    expect(isValidClaudeCustomContextWindow(undefined)).toBe(false);
+  });
+
   /*
    * Claude Code appends `/v1/messages` to whatever it is given, so a relay documented as ending in
    * `/v1` breaks the moment that segment is normalized away.
@@ -151,6 +338,7 @@ describe('Claude Code configuration', () => {
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-chat',
       ANTHROPIC_MODEL: 'deepseek-chat',
       ANTHROPIC_SMALL_FAST_MODEL: 'deepseek-fast',
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       DISABLE_ERROR_REPORTING: '1',
       DISABLE_FEEDBACK_COMMAND: '1',
@@ -182,10 +370,12 @@ describe('Claude Code configuration', () => {
       fastModePerSessionOptIn: true,
     });
     expect(buildClaudeEnvironment(official)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: null,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_EXTRA_BODY: null,
     });
     expect(buildClaudeSettingsEnvironment(official)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_EXTRA_BODY: '',
     });
@@ -196,10 +386,12 @@ describe('Claude Code configuration', () => {
       fastModePerSessionOptIn: false,
     });
     expect(buildClaudeEnvironment(official, undefined, 'standard', claudeFast)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: null,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: null,
       CLAUDE_CODE_EXTRA_BODY: null,
     });
     expect(buildClaudeSettingsEnvironment(official, 'standard', claudeFast)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '',
       CLAUDE_CODE_EXTRA_BODY: '',
     });
@@ -211,10 +403,12 @@ describe('Claude Code configuration', () => {
       fastModePerSessionOptIn: true,
     });
     expect(buildClaudeEnvironment(managed, 'token', 'standard', gptFast)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_EXTRA_BODY: extraBody,
     });
     expect(buildClaudeSettingsEnvironment(managed, 'standard', gptFast)).toMatchObject({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_EXTRA_BODY: extraBody,
     });
@@ -323,6 +517,7 @@ describe('Claude Code configuration', () => {
     expect(command).toContain('FromBase64String');
     expect(command).toContain('Env:ANTHROPIC_API_BASE_URL');
     expect(command).toContain('Env:CCR_CLAUDE_CODE_MODEL');
+    expect(command).toContain('Env:CLAUDE_CODE_ATTRIBUTION_HEADER');
     expect(command).toContain('Env:CODEXL_CLAUDE_CODE_MODEL');
   });
 

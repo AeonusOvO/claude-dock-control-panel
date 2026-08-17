@@ -159,7 +159,7 @@
         <section class="rail-page rail-page--active" data-rail-page="projects">
           <fieldset class="runtime-picker" id="runtime-picker">
             <legend>当前项目开发引擎</legend>
-            <label class="runtime-option" for="runtime-claude">
+            <label class="runtime-option card" for="runtime-claude">
               <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
               <span class="runtime-option__icon runtime-option__icon--claude" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
@@ -174,7 +174,7 @@
                 <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
               </span>
             </label>
-            <label class="runtime-option" for="runtime-codex">
+            <label class="runtime-option card" for="runtime-codex">
               <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
               <span class="runtime-option__icon runtime-option__icon--codex" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
@@ -970,60 +970,64 @@
             </button>
           </div>
           <div class="terminal-toolbar__actions">
-            <button
-              class="icon-button"
-              id="native-terminal-toggle"
-              type="button"
-              aria-pressed="false"
-              title="打开原生对话"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 5h14v10H9l-4 4V5Z" />
-              </svg>
-              <span class="sr-only" id="native-terminal-toggle-label">原生对话</span>
-            </button>
-            <button
-              class="toolbar-menu-button"
-              id="workbench-trigger"
-              type="button"
-              title="Claude 工作台"
-              aria-expanded="false"
-              aria-controls="claude-workbench"
-            >
-              <span class="toolbar-menu-button__dot" aria-hidden="true"></span>
-              <span class="toolbar-menu-button__label" id="workbench-trigger-label"
-                >Claude 工作台</span
+            <div class="toolbar-group toolbar-group--labeled">
+              <button
+                class="toolbar-menu-button"
+                id="workbench-trigger"
+                type="button"
+                title="Claude 工作台"
+                aria-expanded="false"
+                aria-controls="claude-workbench"
               >
-              <span class="toolbar-menu-button__chevron" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
-              </span>
-            </button>
-            <div class="terminal-theme-control">
-              <select id="terminal-theme" aria-label="切换终端主题" data-trigger-label="主题">
-                <option value="claude">Claude 明亮</option>
-                <option value="telegram">Telegram 明亮</option>
-                <option value="graphite">石墨深色</option>
-                <option value="midnight">深海蓝</option>
-              </select>
+                <span class="toolbar-menu-button__dot" aria-hidden="true"></span>
+                <span class="toolbar-menu-button__label" id="workbench-trigger-label"
+                  >Claude 工作台</span
+                >
+                <span class="toolbar-menu-button__chevron" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+                </span>
+              </button>
+              <div class="terminal-theme-control">
+                <select id="terminal-theme" aria-label="切换终端主题" data-trigger-label="主题">
+                  <option value="claude">Claude 明亮</option>
+                  <option value="telegram">Telegram 明亮</option>
+                  <option value="graphite">石墨深色</option>
+                  <option value="midnight">深海蓝</option>
+                </select>
+              </div>
             </div>
-            <button
-              class="icon-button"
-              id="workbench-shortcuts"
-              type="button"
-              title="查看终端快捷键"
-              aria-label="查看终端快捷键"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 11v6M12 7.5h.01" />
-              </svg>
-            </button>
-            <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7" />
-              </svg>
-              <span class="sr-only">清空终端显示</span>
-            </button>
+            <div class="toolbar-group toolbar-group--icons">
+              <button
+                class="icon-button"
+                id="native-terminal-toggle"
+                type="button"
+                aria-pressed="false"
+                title="打开原生对话"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 5h14v10H9l-4 4V5Z" />
+                </svg>
+                <span class="sr-only" id="native-terminal-toggle-label">原生对话</span>
+              </button>
+              <button
+                class="icon-button"
+                id="workbench-shortcuts"
+                type="button"
+                title="查看终端快捷键"
+                aria-label="查看终端快捷键"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 11v6M12 7.5h.01" />
+                </svg>
+              </button>
+              <button class="icon-button" id="clear-terminal" type="button" title="清空终端显示">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7" />
+                </svg>
+                <span class="sr-only">清空终端显示</span>
+              </button>
+            </div>
           </div>
         </div>
         <section
@@ -1060,6 +1064,28 @@
             aria-live="assertive"
           ></div>
           <form class="native-composer" id="native-composer">
+            <div
+              class="native-queued"
+              id="native-queued"
+              role="status"
+              aria-live="polite"
+              data-state="queued"
+              hidden
+            >
+              <span class="native-queued__mark" aria-hidden="true"></span>
+              <p class="native-queued__text" id="native-queued-text"></p>
+              <span class="native-queued__hint" id="native-queued-hint"></span>
+              <button class="native-queued__action" id="native-queued-send" type="button">
+                立即发送
+              </button>
+              <button
+                class="native-queued__action native-queued__action--ghost"
+                id="native-queued-cancel"
+                type="button"
+              >
+                取消
+              </button>
+            </div>
             <div class="native-attachment-queue" id="native-attachment-queue" hidden></div>
             <div class="native-composer__row">
               <input
@@ -1089,19 +1115,10 @@
                 aria-label="Claude 消息输入框"
               ></textarea>
               <button
-                class="native-composer__stop"
-                id="native-stop"
-                type="button"
-                title="中断当前回复"
-                aria-label="中断当前回复"
-                hidden
-              >
-                <span aria-hidden="true"></span>
-              </button>
-              <button
                 class="native-composer__send"
                 id="native-send"
                 type="submit"
+                data-action="send"
                 title="发送（Enter）"
                 aria-label="发送消息"
               >
@@ -1120,33 +1137,11 @@
                   <path d="m3.5 11.5 16.8-8-5.6 17-3.3-6.8-7.9-2.2Z" />
                   <path d="m11.4 13.7 8.9-10.2" />
                 </svg>
+                <span class="native-composer__send-stop" aria-hidden="true"></span>
               </button>
             </div>
             <div class="native-composer__meta">
               <span id="native-composer-status">Enter 发送 · Shift+Enter 换行</span>
-              <div class="native-control-bar" aria-label="模型控制">
-                <label>
-                  <span class="sr-only">模型</span>
-                  <select id="native-model-control" aria-label="模型" disabled>
-                    <option value="">Claude</option>
-                  </select>
-                </label>
-                <label>
-                  <span class="sr-only">思考档位</span>
-                  <select id="native-effort-control" aria-label="思考档位" disabled>
-                    <option value="">思考</option>
-                  </select>
-                </label>
-                <button id="native-fast-control" type="button" aria-pressed="false" disabled>
-                  Fast
-                </button>
-                <label>
-                  <span class="sr-only">权限模式</span>
-                  <select id="native-permission-control" aria-label="权限模式" disabled>
-                    <option value="">权限</option>
-                  </select>
-                </label>
-              </div>
             </div>
           </form>
         </section>
@@ -1178,40 +1173,81 @@
           >
         </form>
         <footer class="terminal-footer">
-          <div class="terminal-footer__core">
-            <button id="footer-connection" type="button">
+          <div class="terminal-footer__core terminal-footer__group terminal-footer__group--primary">
+            <button class="status-chip" id="footer-connection" type="button">
               <span class="footer-connection-dot" aria-hidden="true"></span>
               <span id="footer-connection-label">连接待测试</span>
             </button>
-            <button id="footer-resource" type="button" aria-haspopup="menu" aria-expanded="false">
+            <button
+              class="status-chip"
+              id="footer-resource"
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="footer-resource-menu"
+            >
               <span class="context-ring" id="footer-context-ring" aria-hidden="true"></span>
               <span id="footer-context-label">资源 —</span>
             </button>
           </div>
-          <button
-            class="terminal-footer__more"
-            id="footer-more"
-            type="button"
-            aria-controls="footer-secondary-status"
-            aria-expanded="false"
-            aria-haspopup="true"
+          <div
+            class="terminal-footer__secondary terminal-footer__group terminal-footer__group--secondary"
+            id="footer-secondary-status"
+            data-open="false"
           >
-            <span>更多状态</span><span aria-hidden="true">4</span>
-          </button>
-          <div class="terminal-footer__secondary" id="footer-secondary-status" data-open="false">
-            <button id="footer-model" type="button" aria-haspopup="menu" aria-expanded="false">
+            <button
+              class="status-chip"
+              id="footer-model"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="footer-model-menu"
+            >
               模型 —
             </button>
-            <button id="footer-speed" type="button" aria-haspopup="menu" aria-expanded="false">
+            <button
+              class="status-chip"
+              id="footer-speed"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="footer-speed-menu"
+            >
               速度 —
             </button>
-            <button id="footer-mode" type="button" aria-haspopup="menu" aria-expanded="false">
+            <button
+              class="status-chip"
+              id="footer-mode"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="footer-mode-menu"
+            >
               模式 —
             </button>
-            <button id="footer-effort" type="button" aria-haspopup="menu" aria-expanded="false">
+            <button
+              class="status-chip"
+              id="footer-effort"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="footer-effort-menu"
+            >
               思考 —
             </button>
-            <span id="footer-status">后台待命</span>
+          </div>
+          <div class="terminal-footer__group terminal-footer__group--status">
+            <span class="status-chip" id="footer-status">后台待命</span>
+            <button
+              class="terminal-footer__more status-chip"
+              id="footer-more"
+              type="button"
+              aria-controls="footer-secondary-status"
+              aria-expanded="false"
+              aria-haspopup="true"
+            >
+              <span>更多状态</span><span aria-hidden="true">4</span>
+            </button>
           </div>
         </footer>
 
@@ -1905,31 +1941,32 @@
     </div>
 
     <div
-      class="footer-menu footer-resource-menu"
+      class="footer-menu footer-resource-menu popover"
       id="footer-resource-menu"
-      role="menu"
-      aria-label="资源详情"
+      data-placement="above"
+      role="dialog"
+      aria-label="资源详情与偏好"
       hidden
     >
       <div class="footer-resource-menu__details" id="footer-resource-details"></div>
-      <button type="button" role="menuitemradio" data-resource-preference="auto">自动</button>
-      <button type="button" role="menuitemradio" data-resource-preference="context">
-        上下文优先
-      </button>
-      <button type="button" role="menuitemradio" data-resource-preference="quota">额度优先</button>
+      <div role="radiogroup" aria-label="资源显示偏好">
+        <button type="button" role="radio" data-resource-preference="auto">自动</button>
+        <button type="button" role="radio" data-resource-preference="context">上下文优先</button>
+        <button type="button" role="radio" data-resource-preference="quota">额度优先</button>
+      </div>
       <div
         class="footer-resource-menu__context"
         id="footer-context-window-options"
-        role="group"
+        role="radiogroup"
         aria-label="托管 GPT-5.6 上下文窗口"
         hidden
       >
         <p><strong>托管 GPT-5.6 窗口</strong><span>下次新建或重启会话生效</span></p>
-        <button type="button" role="menuitemradio" data-context-window-mode="standard">
+        <button type="button" role="radio" data-context-window-mode="standard">
           <strong>标准 · 约 25.84 万有效</strong>
           <small>默认；约 20.67 万时提前压缩，和当前 Codex 产品会话一致。</small>
         </button>
-        <button type="button" role="menuitemradio" data-context-window-mode="extended">
+        <button type="button" role="radio" data-context-window-mode="extended">
           <strong>扩展（实验）· 约 99.75 万有效</strong>
           <small>约 79.8 万时提前压缩；当前 ChatGPT 订阅后端可能仍在 27.2 万附近拒绝。</small>
         </button>
@@ -1939,36 +1976,89 @@
           订阅的实际额度消耗仍以官方策略为准。容量可用性与更长会话中早期信息能否稳定利用，均应按真实任务验证。
         </p>
       </div>
+      <div
+        class="footer-resource-menu__context"
+        id="claude-context-window-options"
+        role="radiogroup"
+        aria-label="Claude 上下文窗口"
+        hidden
+      >
+        <p><strong>Claude 上下文窗口</strong><span>下次新建或重启会话生效</span></p>
+        <p class="footer-menu__hint" id="claude-context-window-status">
+          自动模式；新会话将由 Claude Code 按模型判定。
+        </p>
+        <button type="button" role="radio" data-claude-context-window-mode="auto">
+          <strong>自动（推荐）</strong>
+          <small>由 Claude Code 按模型判定；官方订阅请保持此项。</small>
+        </button>
+        <button type="button" role="radio" data-claude-context-window-mode="extended">
+          <strong>100 万</strong>
+          <small>中转站或网关按 1M 提供时选此项，避免在 20 万处提前压缩。</small>
+        </button>
+        <button type="button" role="radio" data-claude-context-window-mode="standard">
+          <strong>20 万</strong>
+          <small>端点拒绝更大窗口时的安全档位。</small>
+        </button>
+        <button type="button" role="radio" data-claude-context-window-mode="custom">
+          <strong>自定义</strong>
+          <small>端点窗口为 12.8 万、25.6 万等非标准值时使用。</small>
+        </button>
+        <label class="footer-menu__custom" id="claude-context-window-custom-field" hidden>
+          <span>窗口 token 数</span>
+          <input
+            type="number"
+            id="claude-context-window-custom-input"
+            min="8000"
+            max="2000000"
+            step="1000"
+            inputmode="numeric"
+          />
+        </label>
+        <p class="footer-menu__hint">
+          这里声明 Claude Code 应采用的窗口，不是对端点容量的自动探测。100 万会在启动边界使用 Claude
+          Code 的 [1m] 标记；状态行的实际上报值会显示在上方。端点最终容量仍以真实请求为准。
+        </p>
+      </div>
     </div>
 
-    <div class="footer-menu" id="footer-model-menu" role="menu" aria-label="切换模型" hidden></div>
+    <div
+      class="footer-menu popover"
+      id="footer-model-menu"
+      role="menu"
+      aria-label="切换模型"
+      data-placement="above"
+      hidden
+    ></div>
 
     <div
-      class="footer-menu footer-speed-menu"
+      class="footer-menu footer-speed-menu popover"
       id="footer-speed-menu"
+      data-placement="above"
       role="menu"
       aria-label="切换服务速度"
       hidden
     ></div>
 
     <div
-      class="footer-menu"
+      class="footer-menu popover"
       id="footer-mode-menu"
+      data-placement="above"
       role="menu"
       aria-label="切换权限模式"
       hidden
     ></div>
 
     <div
-      class="footer-menu"
+      class="footer-menu popover"
       id="footer-effort-menu"
+      data-placement="above"
       role="menu"
       aria-label="切换思考程度"
       hidden
     ></div>
 
     <dialog
-      class="update-center-dialog"
+      class="update-center-dialog popover"
       id="update-center-dialog"
       aria-labelledby="update-center-title"
       aria-describedby="update-center-description"
@@ -2013,7 +2103,11 @@
       </div>
     </dialog>
 
-    <dialog class="native-plan-dialog" id="native-plan-dialog" aria-labelledby="native-plan-title">
+    <dialog
+      class="native-plan-dialog popover"
+      id="native-plan-dialog"
+      aria-labelledby="native-plan-title"
+    >
       <div class="native-plan-dialog__shell">
         <header>
           <div>
@@ -2050,7 +2144,7 @@
     </dialog>
 
     <dialog
-      class="download-center-dialog"
+      class="download-center-dialog popover"
       id="download-center-dialog"
       aria-labelledby="download-center-title"
       aria-describedby="download-center-description"
@@ -2115,7 +2209,7 @@
     </template>
 
     <dialog
-      class="connection-advanced-dialog"
+      class="connection-advanced-dialog popover"
       id="connection-advanced-dialog"
       aria-labelledby="connection-advanced-dialog-title"
       aria-describedby="connection-advanced-dialog-description"
@@ -2608,7 +2702,7 @@
     </dialog>
 
     <dialog
-      class="chat-settings-dialog"
+      class="chat-settings-dialog popover"
       id="chat-settings-dialog"
       aria-labelledby="chat-settings-dialog-title"
     >
@@ -2704,7 +2798,7 @@
       </form>
     </dialog>
 
-    <dialog class="claude-permission-dialog" id="claude-permission-dialog">
+    <dialog class="claude-permission-dialog popover" id="claude-permission-dialog">
       <form method="dialog">
         <header>
           <div>
@@ -2729,7 +2823,7 @@
       </form>
     </dialog>
 
-    <dialog class="conversation-rename-dialog" id="conversation-rename-dialog">
+    <dialog class="conversation-rename-dialog popover" id="conversation-rename-dialog">
       <form method="dialog">
         <header>
           <strong id="conversation-rename-dialog-title">重命名对话</strong>
@@ -2755,7 +2849,7 @@
     </dialog>
 
     <dialog
-      class="confirmation-dialog"
+      class="confirmation-dialog popover"
       id="confirmation-dialog"
       aria-labelledby="confirmation-dialog-title"
       aria-describedby="confirmation-dialog-message"
@@ -2780,7 +2874,7 @@
     </dialog>
 
     <dialog
-      class="confirmation-dialog quit-confirmation-dialog"
+      class="confirmation-dialog quit-confirmation-dialog popover"
       id="quit-confirmation-dialog"
       aria-labelledby="quit-confirmation-title"
       aria-describedby="quit-confirmation-message"
@@ -2803,7 +2897,7 @@
     </dialog>
 
     <dialog
-      class="network-preflight-dialog"
+      class="network-preflight-dialog popover"
       id="network-preflight-dialog"
       aria-labelledby="network-preflight-dialog-title"
     >

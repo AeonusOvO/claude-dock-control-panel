@@ -80,4 +80,40 @@ describe.runIf(process.platform === 'win32')('Claude permission named-pipe bridg
     expect(bridge.respond(request.requestId, { behavior: 'allow' })).toBe(true);
     expect(await readLine(socket)).toBe('');
   });
+
+  it('dispatches the next request as soon as a hook client closes its pipe normally', async () => {
+    const onRequest = vi.fn();
+    const bridge = new ClaudePermissionBridge(onRequest, () => true);
+    bridges.push(bridge);
+    const endpoint = bridge.createEndpoint('session-3', 3);
+
+    const first = await connect(endpoint.pipeName);
+    first.write(
+      `${JSON.stringify({
+        launchGeneration: 3,
+        sessionId: 'session-3',
+        token: endpoint.token,
+        toolName: 'Bash',
+      })}\n`,
+    );
+    await vi.waitFor(() => expect(onRequest).toHaveBeenCalledOnce());
+
+    // The hook gave up on its own — Claude Code exited, or its 600s wait elapsed — and closed the
+    // pipe cleanly. A normal close emits no 'error', so nothing released the active slot and every
+    // later request sat in the queue until the ten-minute timeout.
+    first.end();
+
+    const second = await connect(endpoint.pipeName);
+    second.write(
+      `${JSON.stringify({
+        launchGeneration: 3,
+        sessionId: 'session-3',
+        token: endpoint.token,
+        toolName: 'Write',
+      })}\n`,
+    );
+
+    await vi.waitFor(() => expect(onRequest).toHaveBeenCalledTimes(2));
+    expect(onRequest.mock.calls[1]?.[0]).toMatchObject({ toolName: 'Write' });
+  });
 });

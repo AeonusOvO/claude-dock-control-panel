@@ -52,4 +52,25 @@ describe('native attachment store', () => {
     expect(await store.remove(CONVERSATION_ID, view!.attachmentId)).toBe(true);
     expect(store.list(CONVERSATION_ID)).toEqual([]);
   });
+
+  it('keeps every valid attachment visible when one stored attachment is corrupted', async () => {
+    const { store } = fixture();
+    const [first] = await store.importBytes(CONVERSATION_ID, [
+      { bytes: Uint8Array.from(PNG).buffer, fileName: 'first.png' },
+    ]);
+    const [second] = await store.importBytes(CONVERSATION_ID, [
+      { bytes: Uint8Array.from(PNG).buffer, fileName: 'second.png' },
+    ]);
+    expect(store.list(CONVERSATION_ID)).toHaveLength(2);
+
+    // Corrupt exactly one payload on disk so `get` rejects it for a size mismatch.
+    const payloadPath = store.resolve(CONVERSATION_ID, first!.attachmentId).path;
+    expect(payloadPath).toBeTypeOf('string');
+    writeFileSync(payloadPath!, Buffer.concat([PNG, Buffer.from('trailing')]));
+
+    // Hiding the healthy attachment too would also restart the count and total-size quota at zero.
+    const listed = store.list(CONVERSATION_ID);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.attachmentId).toBe(second!.attachmentId);
+  });
 });

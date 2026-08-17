@@ -52,6 +52,13 @@ export type ConversationContentBlock =
       summary?: string;
     };
 
+/**
+ * A message that exists in the transcript. There is deliberately no 'queued' status: the adapter
+ * pushes into an AsyncInputQueue that resolves a parked consumer synchronously and exposes no
+ * dequeue hook, so the main process cannot observe "the model started reading it". Messages the
+ * user has committed but that have not been handed to the SDK yet are parked in the renderer,
+ * above the composer, and only enter this type once a snapshot proves the SDK accepted them.
+ */
 export interface ConversationMessageView {
   blocks: ConversationContentBlock[];
   createdAt: number;
@@ -59,6 +66,13 @@ export interface ConversationMessageView {
   parentToolUseId?: string;
   role: ConversationRole;
   status: 'streaming' | 'complete' | 'aborted' | 'failed';
+  /**
+   * Bumped by {@link reduceConversationEvent} every time this message changes. Adapters do not set
+   * it; the reducer owns it. It exists so renderers can answer "did this message change?" in O(1)
+   * instead of serializing the message — at a few hundred messages, a per-frame `JSON.stringify`
+   * of the whole transcript is what froze the UI.
+   */
+  version?: number;
 }
 
 export interface ConversationTaskView {
@@ -72,6 +86,7 @@ export interface ConversationTaskView {
 }
 
 export interface ConversationUsageView {
+  contextWindowTokens?: number;
   costUsd?: number;
   durationMs?: number;
   inputTokens?: number;
@@ -243,6 +258,10 @@ export interface ConversationStartInput {
   cliVersion?: string;
   conversationId: string;
   endpointIdentity?: string;
+  /** Model identifier passed only to Claude Code / Agent SDK. UI and recovery keep `model`. */
+  runtimeModel?: string;
+  /** Launch-scoped, non-secret Claude settings applied above user and project settings. */
+  settingsEnvironment?: Record<string, string>;
   model?: string;
   ownerKind: ConversationOwnerKind;
   permissionMode?: string;
@@ -275,6 +294,7 @@ export interface NativeConversationStartResult {
 export interface NativeConversationOperationResult {
   message?: string;
   ok: boolean;
+  requiresConfirmation?: boolean;
   snapshot?: ConversationSnapshot;
 }
 
@@ -292,6 +312,18 @@ export interface NativeConversationLaunchRequest {
   permissionMode?: string;
   projectPath: string;
   resume?: boolean;
+  /**
+   * Workspace terminal session this native conversation is displayed over. Recording it lets the
+   * main process switch runtimes in place on that same tab instead of forking a new one.
+   */
+  sessionId?: string;
+}
+
+/**
+ * Result of adopting a conversation that a terminal session currently owns into the native runtime.
+ */
+export interface NativeConversationAdoptResult extends NativeConversationOperationResult {
+  conversationId?: string;
 }
 
 export interface NativeRecoverySubmissionView {

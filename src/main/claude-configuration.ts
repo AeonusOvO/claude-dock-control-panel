@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type {
+  ClaudeContextWindowMode,
   ClaudeInstallationStatus,
   ClaudeLaunchMode,
   ClaudePermissionMode,
@@ -8,6 +9,11 @@ import type {
   ModelSpeedMode,
   SaveClaudeConfigInput,
 } from '../shared/contracts';
+import { isValidClaudeCustomContextWindow } from '../shared/claude-context-window';
+import {
+  resolveClaudeRuntimeModel,
+  stripClaudeContextWindowSuffix,
+} from '../shared/claude-model-id';
 import { normalizeConnectionBaseUrl } from '../shared/connection-endpoint';
 import { findClaudeProvider, providerForPreset } from '../shared/claude-providers';
 import {
@@ -15,6 +21,12 @@ import {
   compareSemanticVersions,
   getProviderProfile,
 } from '../shared/provider-profiles';
+
+export {
+  CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
+  CLAUDE_CONTEXT_WINDOW_MIN_TOKENS,
+  isValidClaudeCustomContextWindow,
+} from '../shared/claude-context-window';
 
 export interface NormalizedClaudeConfig {
   apiKeyHelperPolicy: NonNullable<SaveClaudeConfigInput['apiKeyHelperPolicy']>;
@@ -59,6 +71,7 @@ export const MANAGED_CLAUDE_ENVIRONMENT_KEYS = [
   'ANTHROPIC_MODEL',
   'ANTHROPIC_SMALL_FAST_MODEL',
   'ANTHROPIC_VERTEX_BASE_URL',
+  'CLAUDE_CODE_ATTRIBUTION_HEADER',
   'CLAUDE_CODE_DISABLE_THINKING',
   'CLAUDE_CODE_EFFORT_LEVEL',
   'CLAUDE_CODE_EXTRA_BODY',
@@ -134,7 +147,58 @@ const managedChatGptContextEnvironment = (
 
 export const usesManagedChatGptCodexContextProfile = (config: NormalizedClaudeConfig): boolean =>
   config.preset === 'chatgpt-subscription' &&
-  (config.model.toLowerCase() === 'gpt-5.6-sol' || config.model.toLowerCase() === 'gpt-5.6');
+  (stripClaudeContextWindowSuffix(config.model).toLowerCase() === 'gpt-5.6-sol' ||
+    stripClaudeContextWindowSuffix(config.model).toLowerCase() === 'gpt-5.6');
+
+/**
+ * Claude Code sizes its context window from the model id and holds the session to that size with
+ * auto-compaction. A gateway that serves a 1M window behind a plain `claude-opus-5` name therefore
+ * compacts at ~200k, and the status line reports usage pinned at the smaller window. Claude Code's
+ * `[1m]` runtime model modifier selects the larger profile; the environment values keep gateways
+ * and compaction thresholds aligned with the chosen window.
+ *
+ * `auto` deliberately injects nothing: official subscriptions without 1M entitlement fail outright
+ * when told to use a window they cannot serve, so Claude Code's own judgement stays the default.
+ */
+export const CLAUDE_CONTEXT_WINDOW_EXTENDED_TOKENS = 1_000_000;
+export const CLAUDE_CONTEXT_WINDOW_STANDARD_TOKENS = 200_000;
+/** Compaction headroom, mirroring the 80% the managed ChatGPT profile already uses. */
+export const CLAUDE_CONTEXT_AUTO_COMPACT_PERCENT = 80;
+
+export const claudeContextWindowTokens = (
+  mode: ClaudeContextWindowMode,
+  customTokens?: number,
+): number | undefined => {
+  if (mode === 'extended') return CLAUDE_CONTEXT_WINDOW_EXTENDED_TOKENS;
+  if (mode === 'standard') return CLAUDE_CONTEXT_WINDOW_STANDARD_TOKENS;
+  if (mode === 'custom' && isValidClaudeCustomContextWindow(customTokens)) return customTokens;
+  return undefined;
+};
+
+/**
+ * Generate Claude context window environment variables.
+ *
+ * Priority order:
+ * 1. The managed ChatGPT profile owns this environment for its known GPT models.
+ * 2. Every other route uses the explicit Claude context window mode.
+ */
+const claudeContextEnvironment = (
+  config: NormalizedClaudeConfig,
+  mode: ClaudeContextWindowMode,
+  customTokens?: number,
+): Record<string, string> => {
+  // These keys cannot describe both profiles at once. The dedicated managed choice always wins.
+  if (usesManagedChatGptCodexContextProfile(config)) return {};
+
+  const windowTokens = claudeContextWindowTokens(mode, customTokens);
+  if (!windowTokens) return {};
+
+  return {
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: String(CLAUDE_CONTEXT_AUTO_COMPACT_PERCENT),
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(windowTokens),
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(windowTokens),
+  };
+};
 
 export const MODEL_NAME_PATTERN = /^[-A-Za-z0-9._:/@[\]~]{1,200}$/;
 const LOOPBACK_GATEWAY_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
@@ -332,6 +396,8 @@ export const buildClaudeEnvironment = (
   credential?: string,
   contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
   speed: ClaudeServingSpeedProfile = STANDARD_CLAUDE_SPEED_PROFILE,
+  claudeContextWindowMode: ClaudeContextWindowMode = 'auto',
+  claudeContextWindowCustomTokens?: number,
 ): ClaudeEnvironmentOverrides => {
   const environment: ClaudeEnvironmentOverrides = {};
   for (const key of MANAGED_CLAUDE_ENVIRONMENT_KEYS) {
@@ -354,23 +420,41 @@ export const buildClaudeEnvironment = (
     environment.ANTHROPIC_AUTH_TOKEN = effectiveCredential;
   }
 
-  environment.ANTHROPIC_MODEL = config.model;
+  const managedChatGpt = usesManagedChatGptCodexContextProfile(config);
+  const runtimeModel = managedChatGpt
+    ? stripClaudeContextWindowSuffix(config.model)
+    : resolveClaudeRuntimeModel(
+        config.model,
+        claudeContextWindowMode,
+        claudeContextWindowCustomTokens,
+      );
+  environment.ANTHROPIC_MODEL = runtimeModel;
 
   if (config.provider === 'gateway' || config.model !== 'default') {
     const fastModel = config.modelFast || config.model;
-    environment.ANTHROPIC_CUSTOM_MODEL_OPTION = config.model;
-    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = fastModel;
-    environment.ANTHROPIC_DEFAULT_OPUS_MODEL = config.model;
-    environment.ANTHROPIC_DEFAULT_SONNET_MODEL = config.model;
-    environment.ANTHROPIC_SMALL_FAST_MODEL = fastModel;
+    const runtimeFastModel =
+      stripClaudeContextWindowSuffix(config.model).toLowerCase() ===
+      stripClaudeContextWindowSuffix(fastModel).toLowerCase()
+        ? runtimeModel
+        : fastModel;
+    environment.ANTHROPIC_CUSTOM_MODEL_OPTION = runtimeModel;
+    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = runtimeFastModel;
+    environment.ANTHROPIC_DEFAULT_OPUS_MODEL = runtimeModel;
+    environment.ANTHROPIC_DEFAULT_SONNET_MODEL = runtimeModel;
+    environment.ANTHROPIC_SMALL_FAST_MODEL = runtimeFastModel;
   }
 
   if (config.provider === 'gateway') {
     environment.ANTHROPIC_BASE_URL = config.baseUrl;
+    environment.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
     environment.DISABLE_AUTOUPDATER = '1';
   }
 
   Object.assign(environment, managedChatGptContextEnvironment(config, contextWindowMode));
+  Object.assign(
+    environment,
+    claudeContextEnvironment(config, claudeContextWindowMode, claudeContextWindowCustomTokens),
+  );
   applyServingSpeedEnvironment(environment, speed);
 
   return environment;
@@ -380,6 +464,8 @@ export const buildClaudeSettingsEnvironment = (
   config: NormalizedClaudeConfig,
   contextWindowMode: ManagedChatGptContextWindowMode = 'standard',
   speed: ClaudeServingSpeedProfile = STANDARD_CLAUDE_SPEED_PROFILE,
+  claudeContextWindowMode: ClaudeContextWindowMode = 'auto',
+  claudeContextWindowCustomTokens?: number,
 ): Record<string, string> => {
   const desiredCredentialKey =
     config.authMode === 'apiKey'
@@ -394,20 +480,38 @@ export const buildClaudeSettingsEnvironment = (
     }
   }
 
-  environment.ANTHROPIC_MODEL = config.model;
+  const managedChatGpt = usesManagedChatGptCodexContextProfile(config);
+  const runtimeModel = managedChatGpt
+    ? stripClaudeContextWindowSuffix(config.model)
+    : resolveClaudeRuntimeModel(
+        config.model,
+        claudeContextWindowMode,
+        claudeContextWindowCustomTokens,
+      );
+  environment.ANTHROPIC_MODEL = runtimeModel;
   if (config.provider === 'gateway' || config.model !== 'default') {
     const fastModel = config.modelFast || config.model;
-    environment.ANTHROPIC_CUSTOM_MODEL_OPTION = config.model;
-    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = fastModel;
-    environment.ANTHROPIC_DEFAULT_OPUS_MODEL = config.model;
-    environment.ANTHROPIC_DEFAULT_SONNET_MODEL = config.model;
-    environment.ANTHROPIC_SMALL_FAST_MODEL = fastModel;
+    const runtimeFastModel =
+      stripClaudeContextWindowSuffix(config.model).toLowerCase() ===
+      stripClaudeContextWindowSuffix(fastModel).toLowerCase()
+        ? runtimeModel
+        : fastModel;
+    environment.ANTHROPIC_CUSTOM_MODEL_OPTION = runtimeModel;
+    environment.ANTHROPIC_DEFAULT_HAIKU_MODEL = runtimeFastModel;
+    environment.ANTHROPIC_DEFAULT_OPUS_MODEL = runtimeModel;
+    environment.ANTHROPIC_DEFAULT_SONNET_MODEL = runtimeModel;
+    environment.ANTHROPIC_SMALL_FAST_MODEL = runtimeFastModel;
   }
   if (config.provider === 'gateway') {
     environment.ANTHROPIC_BASE_URL = config.baseUrl;
+    environment.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
   }
 
   Object.assign(environment, managedChatGptContextEnvironment(config, contextWindowMode));
+  Object.assign(
+    environment,
+    claudeContextEnvironment(config, claudeContextWindowMode, claudeContextWindowCustomTokens),
+  );
   environment.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC =
     speed.mode === 'fast' && speed.mechanism === 'claude-native-fast' ? '' : '1';
   if (speed.mode === 'fast' && speed.mechanism === 'gpt-service-tier') {

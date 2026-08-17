@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { type Dirent, lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -108,13 +108,27 @@ export class NativeAttachmentStore {
 
   public list(conversationId: string): NativeAttachmentView[] {
     const directory = this.conversationDirectory(conversationId);
+    let entries: Dirent[];
     try {
-      return readdirSync(directory, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && UUID_PATTERN.test(entry.name))
-        .map((entry) => this.get(conversationId, entry.name));
+      entries = readdirSync(directory, { withFileTypes: true });
     } catch {
+      // The conversation simply has no attachment directory yet.
       return [];
     }
+    const views: NativeAttachmentView[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !UUID_PATTERN.test(entry.name)) continue;
+      try {
+        views.push(this.get(conversationId, entry.name));
+      } catch {
+        /*
+         * `get` throws for a corrupted or replaced attachment. Isolating it per entry keeps every
+         * healthy attachment visible; failing the whole listing would hide them all and restart the
+         * count and total-size quotas from zero.
+         */
+      }
+    }
+    return views;
   }
 
   public get(conversationId: string, attachmentId: string): NativeAttachmentView {

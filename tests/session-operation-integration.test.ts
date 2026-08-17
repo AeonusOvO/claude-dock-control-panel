@@ -133,8 +133,17 @@ describe('main-process session operation ownership', () => {
       mainSource.indexOf("'claude:plugins-get'"),
     );
     expect(exactResumeHandler).toMatch(
-      /runResume[\s\S]*?conversationOwnership\.assertCurrent\(\)[\s\S]*?prepareLaunchWithSession/,
+      /runResume[\s\S]*?conversationOwnership\.assertCurrent\(\)[\s\S]*?runClaudeResumeLaunch\(/,
     );
+
+    const sharedResumeLaunch = mainSource.slice(
+      mainSource.indexOf('const runClaudeResumeLaunch = async ('),
+      mainSource.indexOf('const codexFailure = async ('),
+    );
+    expect(sharedResumeLaunch).toMatch(
+      /prepareLaunchWithSession\([\s\S]*?assertCurrent\(\);[\s\S]*?restartRuntimeTerminal\(/,
+    );
+    expect(sharedResumeLaunch).toContain('cleanupFailedRuntimeLaunch(');
   });
 
   it('threads lease ownership through queued model command writes', () => {
@@ -145,7 +154,7 @@ describe('main-process session operation ownership', () => {
       /public async switchModel\([\s\S]*?assertCurrent: \(\) => void = \(\) => undefined/,
     );
     expect(claudeRuntimeSource).toContain(
-      'this.submitClaudeCommand(runtime, `/model ${option.model}`, assertCurrent)',
+      'this.submitClaudeCommand(runtime, `/model ${runtimeModel}`, assertCurrent)',
     );
     expect(claudeRuntimeSource).toMatch(
       /private submitClaudeCommand\([\s\S]*?assertCurrent\?\.\(\);[\s\S]*?return false;/,

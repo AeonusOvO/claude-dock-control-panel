@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.10（2026-08-09）。本候选版把 Claude 的新建、继续、选择历史和历史记录
+当前架构版本：5.0.0-rc.12（2026-08-16）。本候选版把 Claude 的新建、继续、选择历史和历史记录
 恢复统一切回 PowerShell/ConPTY 安全终端主路径，结构化原生对话只保留为工具栏显式入口；恢复记录不会
 自动打开原生界面。安全终端改为一次性捕获内部启动脚本、只向可见 PTY 写入固定短触发词，并移除
 `--no-chrome` 与重复的 CLI `--model`，默认体验继续由 Claude Code 原生能力和会话 settings 决定。
@@ -41,6 +41,9 @@ ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、�
 构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
 运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
 的冷启动抖动。
+
+旧版设计计划、路线图、缺陷清单与分阶段修复提示词统一保存在 [`docs/archive/`](docs/archive/)；
+这些文件只用于追溯历史，不是当前架构规格、Agent 指令或发布门禁。
 
 ## 技术栈
 
@@ -133,7 +136,14 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   启动失败时保留当前界面与既有 owner。
 - 次级路径固定为 `launchNativeClaude(mode) → native-conversation:start`。终端工具栏的“原生对话”是
   新建或重新打开 native owner 的唯一主界面入口；原生界面中的同一按钮显示“返回终端”，并复用既有
-  草稿确认、精确 UUID 转移、附件保全和失败回滚事务。
+  加密草稿保全、精确 UUID 转移、附件保全和失败回滚事务；仅安全保存草稿不再额外要求确认。
+- 第三条路径是接管：终端里已经跑着 Claude Code 时，同一个“原生对话”按钮走
+  `adoptTerminalConversationIntoNative() → native-conversation:adopt-terminal → service.adoptFromTerminal()`，
+  把当前这段对话原地搬进原生界面，而不是另起一段。按钮因此按终端是否有活进程分流：无活进程时
+  退回 `launchNativeClaude('new')`，有活进程时才接管。`RuntimeActivitySnapshot` 的前台、等待、恢复、
+  未完成 task 和运行/停止中的 Web 进程，以及原生 snapshot 的执行 phase 与未完成 task，都会先触发
+  中断确认；renderer 预判负责及时反馈，主进程在停止 runtime 前复检并以显式 `allowInterrupt` 防止
+  检查后状态变化的竞态。
 - presentation route 与 permission mode 相互独立。终端优先不修改 `permissionMode` 默认值、
   `allowBypassPermissions` 项目门禁、SDK `canUseTool` 映射或主进程 owner contract。
 
@@ -145,6 +155,24 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
 - owner key 固定为 `(runtime, normalizedProjectPath, lowercase UUID)`。历史定向恢复、重命名和删除只用
   文件名派生 UUID；active/starting owner 从历史隐藏，runtime 失活后重新出现。已有 owner 的恢复只
   聚焦，不创建第二进程；返回安全终端的转移失败会恢复原 owner、草稿和原选择。
+- `adoptFromTerminal` 的不变量与反向转移对称，但顺序不能颠倒：
+  1. 先取 `terminalConversationOwners` 里那条 owner，它和 `prepareModelSpeedRelaunch` 依赖的是同一个
+     真值——只有 Claude Code 在状态行上报过 transcript UUID 之后才存在。缺失或非法 UUID 时直接拒绝
+     并提示稍候，因为此时“接管”只会分叉出一段全新对话。
+  2. 归属校验必须跑在杀 PTY 之前。若终端并不持有这段对话，被拒绝的接管不得留下一个已经被结束的
+     会话。
+  3. 停的是标签页里的 Claude 进程，不是标签页本身：让它继续跑会出现两个写者同时写一份 JSONL，
+     关掉标签页则会毁掉用户正在其中切换的那个容器。停止序列是
+     `invalidateAndWaitForDevelopmentSessionOperation → terminateSession → workspace.stop → setInactive`。
+  4. 启动只能是携带精确 UUID 的 `resume`，绝不是 fresh launch。
+  5. 全程把 sessionId 放进 `terminalTransferSessions`；workspace 的 stopped/error 回调与 inactive
+     project-state 发布都必须跳过 owner release，避免转移被误判成用户主动退出并让最终 commit 失去
+     stopping owner。
+  6. 失败回滚要把 owner 交还终端、用 `runClaudeResumeLaunch` 重启同一段会话，并释放
+     `releaseNativeConversation(ownerId)` 与 `nativeLaunches`。连重启也失败时必须把两个失败都报给
+     用户（提示手动重新启动），静默声称已恢复会让会话彻底搁浅。
+  7. 成功后才 `terminalConversationOwners.delete(sessionId)` 并写入
+     `nativeConversationSessions`，renderer 复用同一个终端标签页而不是新开一个。
 - 结果未知的提交永不自动重发，避免重复工具操作、费用或外部副作用。仅当 JSONL 对账确认 user 记录
   已写入后才清理加密待确认文本。
 - `ClaudeAgentAdapter.submit()` 在 SDK 输入队列同步接受 payload 后，以同一
@@ -164,6 +192,22 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   复刻 `dontAsk` 的严格语义：未预批准工具立即 deny；只有当前用户 payload 明确包含选择题/选项意图时，
   放行一次 `AskUserQuestion` 并消费该例外，result 或下一次 submit 都会清除它。这不会扩大 Bash、编辑、
   MCP 或其他权限。UI 将该逻辑模式标为“仅预批准”，避免把权限确认与对话式选择混为一谈。
+  这不构成比原生 CLI 更严的限制：SDK 只在 CLI 自己的权限引擎判定“需要询问”时才发
+  `can_use_tool` 控制请求（payload 带 `matched_ask_rule`），被 settings 规则预批准的调用根本不会
+  进入 callback；而 SDK 对 `dontAsk` 的定义本就是 “deny if not pre-approved”。该模式默认关闭、
+  需经确认弹窗才能进入，终端侧同样限制它。
+- **原生必须显式传 `systemPrompt: { preset: 'claude_code', type: 'preset' }`。** SDK 把省略该项
+  当作“自定义空提示词”而非“沿用 Claude Code 的”（`sdk.mjs`：`if (s === void 0) d = ""`，只有
+  `s.type === "preset"` 分支才交还 CLI）。官方文档亦明说 “This differs from `claude -p`, which
+  uses the full Claude Code prompt by default”。`tools` 预设**不**蕴含 `systemPrompt` 预设，二者
+  独立；漏传会让模型持有完整工具集却没有任何行为指令，表现为“同一模型在原生模式明显变笨”，
+  且无报错、无告警。`tests/claude-agent-adapter.test.ts` 用精确相等（非 `toMatchObject` 子集）
+  锁定该值，删除即失败。<https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts>
+- 两条会话通道的模型可见行为必须对齐：终端在 `--settings` 文件里写 `skipWebFetchPreflight: true`，
+  原生便通过 inline settings 层传同一项，否则同一个 WebFetch 请求会因为通道不同而被预检拦下。
+  `settingSources` 显式传 `['user','project','local']` 虽与 SDK 默认等价，但 v0.1.0 曾短暂改为
+  不加载任何文件设置后回退，显式传可防版本漂移。此类差异属于“用户没有选择过的额外限制”，
+  发现即修，不留待讨论。
 - `prepareNativeConversation()` 从项目 launch snapshot 读取默认开启的 `allowBypassPermissions`，通过
   service start input 传给 adapter；adapter 只在该门禁为真时设置 SDK
   `allowDangerouslySkipPermissions` 并发布 `bypassPermissions` 能力。主进程在运行中切换前重新读取项目
@@ -184,33 +228,53 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   permission/question/plan/MCP 请求；renderer 的交互坞只消费队首请求，响应后才显示下一项。
   这条 FIFO 约束既避免卡片堆叠，也让每个 SDK 响应只匹配当前可见请求。
 
+### 流式路径的复杂度契约
+
+`includePartialMessages: true` 让每个 token 增量都是一个事件。凡是在这条路径上按整份 transcript
+做 O(N) 工作的写法，在 10 条消息时无感、在几百条消息时会让整个应用卡死；下列约束都是为此存在的，
+放宽任何一条都会把同一个故障带回来。
+
+- `reduceConversationEvent` 只做结构共享：事件碰到哪个数组或对象就复制哪个，其余消息保持同一引用。
+  禁止在 reducer 里深拷贝整份 transcript——它每个 token 跑一次，既吃主进程 CPU，又按整份 transcript
+  抬高快照跨进程结构化克隆的代价（主/渲染两侧各付一次）。
+- `ConversationMessageView.version` 由 reducer 独占维护，adapter 不设置：每次消息变化 +1，且跨
+  delta/`tool.updated`/upsert 连续递增而不重置。renderer 靠它 O(1) 判断“这条消息变了吗”；退回按内容
+  序列化比较等于每帧 `JSON.stringify` 整份 transcript。
+- 主进程用约 50ms 的合并窗口发布快照，同一对话只保留最新一份。`idle`/`failed`/`stopped`/
+  `requires-action` 四个终态绕过定时器立即发送，因为 renderer 要在这些相位释放排队输入和拆除 owner，
+  迟到会表现为界面卡住不动。
+- renderer 重排消息节点用就地 `insertBefore` 对齐，不用 `replaceChildren(...)`：即使传回同一批节点，
+  后者仍会全部摘除再插入，等于每个流式帧让整份 transcript 的布局失效。
+- 强制同步布局的代码（写 `--native-composer-h` 后再 `getBoundingClientRect()`、排队条重绘）必须先比
+  签名或缓存值再决定是否执行，不得挂在流式渲染路径上。`.native-message` 用
+  `content-visibility: auto` + `contain-intrinsic-size` 把滚出视口的消息移出布局与绘制。
+- 已完成的助手文本块按块缓存渲染结果并在重建消息时复用；工具进度每秒一跳会重建整条消息，不做缓存
+  就等于把已经定稿的 Markdown 反复重新 lex 和高亮。
+- adapter 在入库前把工具入参与结果截断到 `TOOL_OUTPUT_CHARACTER_LIMIT`（32000 字符）并标注省略字数。
+  工具结果留在 block 里，会随之后每一份快照重发、并在该消息每次重绘时重新序列化；一次大文件 `Read`
+  就足以让后续每帧变成兆字节级工作量。完整内容仍在磁盘 JSONL 上，这个上限只约束 UI 携带的副本。
+- 对话关闭时必须从 `nativeConversationSnapshots` 删除对应条目，否则每段对话都会把整份 transcript
+  泄漏到进程结束。
+
 ### 原生视觉与组件门禁
 
-- `.button` 是唯一文字按钮基类，`button--compact`、`button--primary`、`button--danger` 只表达密度
-  与语义；`.icon-button` 是标题栏、摘要和浮层 chrome 的唯一图标按钮基类。renderer 不允许再引入
-  平行的按钮基类或在业务容器中重写字号。模型、effort 已由底栏按钮表达时，标题区不重复说明。
-- `.toolbar-menu-button` 与增强选择器的 trigger 共用同一组标题栏菜单几何和状态规则；工作台与主题
-  因而拥有一致字号、字重、圆角、描边、dot、chevron、hover/press 和 850px 以下折叠行为。主题的
-  原生 `<select>` 仍是事实来源，但视觉上只有一个菜单按钮和一个 fixed listbox；只有选项实际溢出时
-  才保留滚动条。
-- 项目页不再实例化 `#status-pill/#session-detail/#session-pid`；`renderActiveStatus()` 只更新标题栏、
-  底栏、终端空态和 runtime 控件，错误仍由 `showTerminalDiagnostic()` 按 session generation 去重弹出。
-  `.runtime-picker` 使用单列 flex 卡保证 270px 侧栏仍有正常文字行，两个 runtime 共享图标/说明/勾选
-  结构和 `runtimeOptionSelect` 动效。`.project-list` 改用自动 gutter，避免无滚动条时项目卡永久缩短；嵌套
-  `.project-folder__history` 继续使用 stable gutter 保护时间/删除尾槽。
-- `#native-composer` 是 Claude/Telegram 共用的提交与附件内核。主题只切换 CSS 外壳和两个互斥 SVG：
-  Claude 使用圆形上箭头及 `nativeClaudeSend*` 确认关键帧；Telegram 使用纸飞机及
-  `nativeTelegramSend*` 涟漪/飞行关键帧。发送成功只短暂设置 `data-sending=true`，在 `animationend`
-  后清除；`prefers-reduced-motion` 关闭装饰动画。输入坞实测高度写入 `--native-composer-h`，toast
-  使用该值避开输入操作区。
-- `scripts/native-visual-smoke.cjs` 生成四主题、三窗口尺寸、三项目栏宽度、三缩放档及进退场关键帧；
-  `scripts/real-electron-visual-qa.cjs` 另外启动带隔离 `RuntimeProfile` 的真实可见 Electron 窗口，
-  通过 DevTools 输入事件逐项点击安全终端主入口、显式原生入口、权限、提问、计划、MCP、摘要和返回终端，并把截图与 DOM 状态清单
-  写入 `dist/visual-qa/`。两者均不得连接真实会话、PTY、凭据、更新器或外部路由。
-- `scripts/control-theme-smoke.cjs` 除遍历全部按钮的主题基础样式外，还通过 DevTools
-  `CSS.forcePseudoState` 对工作台 `#launch-new` 和侧栏 `#run-claude` 逐主题强制 `:hover`，比较
-  计算后的基础色与 `accentSolid`、悬停色与 `accentSolidHover`；任一入口仍为灰色 disabled 或
-  Telegram 没有从浅蓝加深都会直接使 `npm run test:control-theme` 失败。
+组件外观、三层令牌、六级字体角色、原语、布局分组、四主题人格和 720/1024/1280 响应式边界以
+`design.md` 的“设计系统：单一事实源”为准；本文件只记录会影响状态、IPC、top layer 或验证环境的接线。
+
+- 项目页不实例化 `#status-pill/#session-detail/#session-pid`；`renderActiveStatus()` 只更新标题栏、底栏、
+  终端空态和 runtime 控件，错误仍由 `showTerminalDiagnostic()` 按 session generation 去重弹出。
+- `#native-composer` 是 Claude/Telegram 共用的提交与附件内核。它只有一个动作按钮 `#native-send`：
+  `data-action` 在 `send`/`stop` 之间切换，`data-sending=true` 只在发送确认动效期间短暂存在并在
+  `animationend` 后清除，`data-stopping=true` 只在真正按下中断后出现。动作切换绑定动效结束而不是
+  IPC 回调，保证按钮面孔和用户看到的画面一致。运行中输入的内容进入 `#native-queued`（`role="status"`、
+  `aria-live="polite"`、`data-state` 取 `queued`/`dispatching`），它排在发送行之上、附件队列之外，
+  每个对话至多一条。输入坞实测高度写入 `--native-composer-h`，toast 消费该值避开输入操作区；排队条
+  出现或消失都要重新测量，但重绘前先比对签名，避免每个流式帧都触发同步布局。主题图形与减少动态
+  效果行为由设计系统样式负责。
+- `npm run test:control-theme`、`npm run test:select-theme`、`npm run test:select`、
+  `npm run test:dialog-select`、`npm run test:layout` 和 `npm run test:visual` 分别验证控件主题、增强
+  select、top-layer dialog、命中/重叠和四主题截图。真实窗口证据由
+  `npm run test:visual:real` 写入 `dist/visual-qa/`；隔离 profile 不连接真实会话、PTY、凭据、更新器或外部路由。
 
 ### 模型能力与呈现
 
@@ -246,8 +310,8 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
 
 1. `applyTerminalTheme`（`src/renderer/main.ts`）遍历映射表写
    `documentElement.style.setProperty(...)`，并设 `dataset.theme`、`dataset.appearance` 与
-   原生 `colorScheme`；`styles.css` 里所有 `var(--…)` 因此一起切换字体、表面、交互层、阴影、
-   语义状态色与颜色。启动时以 `announce = false` 调用一次。
+   原生 `colorScheme`；`src/renderer/styles/**` 里所有 `var(--…)` 因此一起切换字体、表面、交互层、
+   阴影和语义状态色。启动时以 `announce = false` 调用一次。
 2. 原生窗口边框由 Windows 绘制，CSS 到不了，所以渲染层再调 `ui:set-theme` IPC；主进程
    `applyWindowTheme`（`main.ts:1368`）执行 `setBackgroundColor` + `setTitleBarOverlay`。
    **只改 CSS 会留下用户看到的那圈深色边框。**
@@ -256,59 +320,30 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
    `backgroundColor` / `titleBarOverlay`，冷启动不会闪出错色外框。
 
 新增主题只需补 `shell` 字面量；新增可主题化的属性需要同时补 `TerminalThemeShell` 字段、
-`SHELL_CSS_VARIABLES` 条目和 `:root` 默认值——`tests/design-tokens.test.ts` 会检查这三者齐全，
-并要求该属性在 `styles.css` 正文里至少被引用一次（否则是死令牌）。
-
-`tests/design-tokens.test.ts` 同时守住「主题能生效」的前提：`:root` 之外不允许 hex 字面量、
-不允许带色相的 `rgb()`/`rgba()`、`font-family` 只能是三个职责字体令牌或 `inherit`、不允许写死
-`font-size`。半透明色用 `color-mix(in srgb, var(--token) n%, transparent)`。
-一次性的批量替换脚本保留在 `scripts/tokenize-colors.cjs`（按 CSS 属性判角色、
-alpha 令牌先合成到 `--surface-2` 再比色、打印 CIE76 色差报告，`--write` 才落盘）。
-
-`letterSpacing: 0` 是 TUI 边框对齐的必需值。状态三色（`--ok-*` / `--warn-*` / `--bad-*`）
-的语义跨主题保持一致，但浅底需要更深的文字与描边，所以实际令牌随 `appearance` 调整并逐主题
-做 WCAG 对比度测试。字体也是主题人格的一部分而不是全局常量：Claude 的 `fontUi/fontDisplay`
-分别是 Hanken Grotesk Variable / Newsreader Variable（Anthropic 品牌使用的 Styrene 与
-Tiempos 需商业授权、不能随应用分发，这两款是最接近的可自由分发替代）；Telegram 两者都是
-Roboto Variable，与其桌面客户端一致；两套深色主题使用 Inter Variable。四套字体栈都以
-`'Microsoft YaHei UI'` 起头的 CJK 回退结尾，因为拉丁字体不含中文字形。Shiki 输出的字面色只
-用于判别色相类别，最终写成 `--syntax-*` CSS 变量，因此已经渲染的代码也能即时换主题。
-
-动效同样逐主题定义而不是复制：`--dur-micro`/`--dur-enter`/`--ease-enter`/`--ease-spring`/
-`--ease-exit`/`--press-theme` 是主题字面量，`styles.css` 的 `:root` 再从它们派生 `--dur-1..4`、
-`--ease-standard`/`--ease-decel`/`--ease-accel` 和 `--press-lg`/`--press-sm` 阶梯。因此
-Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests/design-tokens.test.ts` 禁止
-`:root` 之外出现字面 `ms` 或 `cubic-bezier(`，防止任何组件绕过主题写死时长。
+`SHELL_CSS_VARIABLES` 条目和 `styles/01-tokens.css` 的 `:root` 默认值。
+`tests/design-tokens.test.ts` 会检查桥接字段、默认值与消费者三者齐全，并扫描整个拆分样式树的
+未定义变量、旧尺寸字号令牌、selector 所有权、字面颜色/字体/字号/时长、keyframes、viewport media、
+唯一 reduced-motion 块、六级字体角色和四主题对比度。视觉取值与组件规则不在此重复，统一见
+`design.md` 的“设计系统：单一事实源”。Shiki 只判别 token 色相类别，最终写成 `--syntax-*` 变量，
+因此已经渲染的代码也能即时换主题。
 
 #### 标准组件套件
 
-原生表单控件由操作系统绘制而不是我们绘制：一个 `<select>` 会在 Windows 上弹出 Segoe UI 白底
-的 Win32 列表框，它读不到任何主题令牌。`src/renderer/components.ts` 因此替换这些控件的**呈现**，
-但保留原生元素作为取值、校验与 `change` 事件的唯一事实来源：
+视觉原语与状态矩阵见 `design.md`；实现层保留以下不可由 CSS 取代的契约：
 
-- `enhanceSelect()` 把原生 `<select>` 视觉隐藏（仍可被辅助技术聚焦）留在 DOM 内，并在旁边渲染
-  一个由主题令牌绘制的 trigger + `position: fixed` listbox。选择行为写回原生元素并派发真实的
-  `change`/`input`，所以十余处既有的 `select.value` 读写和 `change` 监听全部不需要改动——这正是
-  不做成完整自绘控件的原因，纯视觉目标不值得让整个应用面临回归风险。键盘处理挂在原生
-  select 上（它才是真正持有焦点的元素）；`MutationObserver` 覆盖「代码直接赋 `value` 或重建
-  `<option>`」这种不触发事件的路径。listbox 挂在 `body` 上以逃出滚动容器与弹窗，滚动/缩放时
-  重新定位，trigger 消失时自动关闭。
-- 透明原生 select 与 `aria-hidden` 的视觉 trigger 使用同一矩形且前者位于命中顶层，这是复合
-  控件的既定分层。`scripts/layout-smoke.cjs` 只在二者属于同一 `.select` shell 时合并
-  `elementFromPoint` 与矩形相交结果；不同 shell 仍按独立控件检查。烟测启动后会短暂注入两个
-  故意重叠的独立按钮，要求命中偏差和相交扫描都能抓到该探针，然后才执行正式场景。
-- 复选框与单选框不需要 JS：`appearance: none` 加令牌驱动的 CSS 就够，完全在样式表内实现。
-- `installPressRipples()` 为主要操作按钮提供从指针位置扩散的涟漪。目标由类名而不是逐个
-  `data-ripple` 标记决定（`RIPPLE_SELECTOR` 与 `styles.css` 中对应规则互为镜像），因为相当多
-  按钮是运行时创建的，逐处标注必然遗漏；`data-ripple` 保留给词汇表之外的一次性控件。
-  `prefers-reduced-motion` 下直接不生成涟漪节点。
-
-交互反馈有一条地板规则：`button:active:not(:disabled)` 全局给出 `--press-sm` 缩放。此前约三十个
-按钮只有 hover 甚至毫无状态，逐族补规则必然继续遗漏，所以基线放在元素本身。行状按钮（会话/
-历史列表项、上下文菜单、listbox 行）与拖拽把手显式豁免：缩放会让行内文字相对相邻行错位，
-而它们本就用背景色回应。全局 `transform` 需要确认不会影响 `position: fixed` 后代的包含块——
-所有弹层（`.footer-menu`、两个上下文菜单、`.select__listbox`、`.toast`、`.drop-overlay`、
-`.composer-send-bubble`）都是 `body` 的兄弟节点而不是按钮的子节点，因此安全。
+- `enhanceSelect()` 隐藏原生 `<select>` 的视觉呈现，但原生元素仍是取值、校验、焦点、键盘和事件的
+  唯一事实来源。提交选择时写回 `select.value` 并派发真实 `change`/`input`；`MutationObserver`
+  同步代码直接赋值、disabled 变化和动态 `<option>`。
+- `.select__listbox.popover` 使用 `position: fixed`。普通页面每次打开时挂到 `body` 以逃离滚动容器和
+  clipping；触发器位于已打开 modal dialog 时必须改挂到该 dialog 的 top-layer 子树，否则页面外元素
+  的 inert 状态会让仅靠 `z-index` 的弹层不可命中。滚动和缩放重新定位，触发器消失时关闭。
+- `hidden`、`data-open` 与 `aria-expanded` 同步翻转；JavaScript 不等待退场计时器，也不维护
+  `data-closing`。`styles/05-primitives.css` 通过 `@starting-style`、离散 `display` 过渡和关闭态
+  `pointer-events: none` 完成视觉退场，可访问性状态不被动画延迟。
+- 透明原生 select 与 `aria-hidden` trigger 共用同一 `.select` 矩形。`scripts/layout-smoke.cjs` 只对
+  同一 shell 合并命中与矩形相交结果；不同 shell 仍必须作为独立控件接受重叠检查。
+- Checkbox/radio 的状态保留在原生 input；`installPressRipples()` 只为主要操作附加瞬时节点，
+  `RIPPLE_SELECTOR` 与 `styles/05-primitives.css` 的目标规则互为镜像，减少动态效果时不生成节点。
 
 #### 终端输出与输入的性能路径
 
@@ -720,6 +755,13 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
 - renderer 只能按 session ID 请求/切换，主进程再从 `TerminalWorkspace` 取可信 cwd。同一
   项目任一 session 中有 Claude 或 Codex agent 运行时都拒绝切换，避免不同窗口绕过互斥规则。
   相同项目的多个 session 在 renderer 同步更新选择快照。
+- 这条互斥只覆盖 PTY：`hasActiveRuntime` 走 `ClaudeRuntime.isActive`，读的是 workspace session
+  表，而原生对话把路由挂在 `nativeRouteReservations` 下。因此**活动的原生对话不会拒绝开发引擎
+  切换**，切换会照常提交。切换不具破坏性：`RouteLifecycleCoordinator.hasUser` 同时统计 reservation
+  而不只是活动 PTY session，所以 claude→codex 时 `stopUnusedRoutingServices` 不会掐掉原生对话仍在
+  使用的路由，面板、记录与输入框都保持可用。是否应当在原生回合进行中额外拒绝切换尚未定论，
+  主进程、renderer、文档与测试都没有实现该门禁，`real-electron-visual-qa.cjs` 断言的是"切换不丢
+  原生记录"，而不是"切换被拒绝"。
 - `ControlPanelApi` 只暴露结构化 runtime、安装、登录、退出、账号状态和启动方法。preload
   不提供任意命令、任意 App Server method 或任意外链入口；主进程继续验证 sender、session、
   枚举值和登录 URL。
@@ -803,7 +845,9 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `ClaudeConfigStore` 加密。CLIProxyAPI 运行时必须读取的 `config.yaml` 含本机明文副本，因此该文件
   用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。只有高级入口被点击时主进程才把管理密钥写入
   剪贴板并打开 `/management.html`，密钥不返回 renderer。
-- “一键安装并登录”IPC 只返回净化后的状态。操作先检查 Claude Code；缺失时调用项目已有的官方
+- “一键安装并登录”IPC 只返回净化后的状态，`sessionId` 可选。没有项目时先完成应用级 Claude Code
+  检测/安装、网关安装、OpenAI 授权、启动与模型发现；打开项目后才进入连接实测、配置保存和会话恢复。
+  操作先检查 Claude Code；缺失时调用项目已有的官方
   安装路径补齐，再以隐藏窗口运行
   `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；
   ClaudeDock 不接收密码、Cookie 或 OAuth Token，也不解析 OAuth JSON 内容，只检查专用认证目录
@@ -821,7 +865,8 @@ Telegram 的长回弹与 Claude 的柔和减速由同一批声明产生，`tests
   `HTTPS_PROXY` 和 `NO_PROXY` 继续保留，因为它们只描述到官方端点的传输路径。
 - `setupInFlight` 是整个安装、校验、授权、启动周期的单例 Promise；重复 IPC 直接等待同一 Promise，
   不会再次获取 BusyRegistry 租约或启动第二个下载。公开状态在此期间返回 `busy: true` 与
-  `phase: installing`；renderer 另用本地同步锁覆盖 IPC 往返窗口，任何指南重建都保持主按钮禁用。
+  `phase: installing`；renderer 另用可区分全局/项目范围的本地 operation tracker 覆盖 IPC 往返窗口，
+  所有 progress 都先记账再按当前向导渲染，因此项目切换不会漏掉完成事件或永久锁死按钮。
 - 授权后主进程隐藏启动 sidecar，持久化其 PID，并携带随机本地密钥探测 `GET /v1/models`。
   `provider-model-discovery.ts` 从根地址、`/v1`、Chat Completions 或 Responses 地址推导模型端点，
   拒绝跨站重定向，把响应限制为 1 MiB / 500 个安全模型标识。实时目录同时验证端点、Bearer 密钥和
@@ -1125,7 +1170,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   已验证的包目录与同目录 shim。若同时存在桌面版，完整保留共享 CCR 数据；只有机器没有桌面版时才
   允许按 `routerDataDirectory()` 路径牢笼删除共享数据。`canUninstall` 仅由 CLI 是否存在决定。
 - 标准桌面安装位置仅用于显示 `desktop/mixed` 与进程保护状态。ClaudeDock 不启动桌面可执行文件，
-  不查找/打开卸载器，不写 App profile；这条边界另由 `AGENTS.md` 和源码守栏测试固定。
+  不查找/打开卸载器，不写 App profile；这条边界由本节架构契约和源码守栏测试固定。
 
 ### 3.0 路由决策与 CC Switch 边界
 
@@ -1319,12 +1364,32 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   缺失时才回退到 `used_percentage × context_window_size`。不使用累计 `total_input_tokens`，避免把
   已压缩的历史反复计入，也避免取整后的百分比让底栏长期误显 100%。界面的“实时”表示每次
   statusLine 刷新后的最新状态，不代表逐 token 流式计数。
+- Claude 上下文窗口由底栏资源菜单显式声明（自动 / 100 万 / 20 万 / 自定义），持久化在
+  `app-preferences/app.json` 的 `claudeContextWindowMode`。默认 `auto` 不声明窗口；显式档位仍写入
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`、`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 与
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`，但 Claude Code 2.1.233 对已识别的普通 `claude-*` 模型不会
+  单靠 `MAX_CONTEXT` 扩到 1M。选择 100 万（或自定义恰为 100 万）时，launch-only model 因此使用
+  `<canonical-model>[1m]`；Claude Code 据此选择 1M profile，并在发送上游请求前剥离后缀。
+- `[1m]` 只存在于运行边界：PTY 的临时 `settings.model`、窗口相关 model 环境与会话内 `/model`，以及
+  Agent SDK 的显式 `options.model` / `query.setModel`。配置存储、连接指纹、恢复记录、模型选择 UI 与
+  `expectedModel` 始终保留 canonical model；模型对账忽略后缀。这样网关继续接收原模型名，切换模型
+  也不会把一个已扩展的会话悄悄降回 20 万。
+- 托管 ChatGPT 预设始终由自己的 272K / 1.05M profile 占用同一组变量，无论通用 Claude 偏好为何
+  都不被覆盖；两组选择器在 UI 中也互斥。原生 Agent SDK 尚未上报容量时，底栏把数值标为“配置目标
+  （未验证）”，而不是伪造 `claude-statusline` 来源。
+- statusLine 的 `contextWindowUsed` 与原始 `inputTokens` 不一致时置 `contextCountingAnomaly`，用于提示
+  计数或配置不一致；该组合本身不能证明端点容量。只有 `parseClaudeContextWindowError` 识别到真实
+  上下文拒绝（包括 `prompt is too long` 及网关简写）才建议切到 20 万。提示按会话、PTY generation
+  与当前请求档位去重，重启或改档后可以再次出现。
+- 软件不声称自动探测端点真实窗口：`/v1/models` 通常不返回容量，模型字符串目录也不能证明账号
+  entitlement 或中转映射。界面展示用户请求值与新会话真实上报值；先前未发网络请求却标成 `api`
+  的 detector/probe 原型及悬空 IPC 已删除。
 - 受管 ChatGPT 仅在模型为 `gpt-5.6-sol`（或兼容别名 `gpt-5.6`）时注入窗口 profile。标准档
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000`，按 Codex 产品的 95% 有效留量显示 258400，并用
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=258400` 与 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` 在 206720
   左右提前压缩；扩展实验档对应 1050000 / 997500 / 798000。启动环境同时显式清除继承的 `DISABLE_AUTO_COMPACT`
   与 `DISABLE_COMPACT`，偏好由 `AppPreferencesStore` 保存并只在下次启动会话时取值。
-- Claude Code 2.1.221 对非 Claude 模型标识会在未禁用 compact 时读取
+- Claude Code 2.1.233 对非 Claude 模型标识会在未禁用 compact 时读取
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS`；官方环境变量页的通用描述仍写着该变量需配合
   `DISABLE_COMPACT`。因此 ClaudeDock 不把偏好值直接冒充实测：只有 statusLine 真正上报
   272000/1050000 时才换算 95% 有效窗口；若仍上报 200000，界面保留 200000，并按这个较小实测
@@ -1562,9 +1627,9 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   终端内容。活动栏维护 `selectedRailTab | undefined`：点击当前项切到 `undefined` 后把
   控制栏设为 `inert` / `aria-hidden`、把四列工作区压成“活动栏 + 终端”，并重新安排有限次
   xterm `fit()`；`mainView` 独立记录 `terminal/chat`，所以收起“对话”配置侧栏不会把聊天
-  主区误切回终端；任一其他业务导航会恢复终端。窗口缩到 900px 以下时会重新夹紧宽度；
-  CSS 在 900/850px 和 700px 高度设置独立断点，避免工具栏、状态栏、插件操作区和安装来源
-  控件重叠。
+  主区误切回终端；任一其他业务导航会恢复终端。`styles/07-responsive.css` 在 1024px medium 档
+  夹紧 rail/drawer 并收纳底栏 secondary，在 720px compact 档收起项目栏和压缩导航；1280px wide
+  只用于允许更宽的信息布局。媒体查询常量及职责以 `design.md` 为准。
 
 ## 官方 AI 网络预检与访问守卫
 
@@ -1681,7 +1746,49 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   的会话才能切进去（这是 Claude Code 自己的限制，客户端绕不过，也不应该绕）。首次以该标志
   启动时 Claude Code 会弹自己的一次性免责框，ClaudeDock 不代答。
 
+## 供应商条款边界（核对日期 2026-08-16）
+
+这一节记录的是**产品不能越过的线**，不是实现细节。改动接入层前先读。
+
+- **禁止代持 Anthropic 订阅凭据。** Anthropic 法务与合规页原文：OAuth 授权“intended exclusively
+  for purchasers of…subscription plans”，且“**does not permit third-party developers to offer
+  Claude.ai login or to route requests through Free, Pro, or Max plan credentials on behalf of
+  their users**”，并保留不经通知即采取措施的权利。判定标准是**中继 vs 子进程**：自行接管用户
+  OAuth token 属于被禁止的中继；拉起用户自己已登录的官方 `claude` 二进制属于被认可的用法。
+  ClaudeDock 走后者——`pathToClaudeCodeExecutable` 指向用户本机 `claude.exe`，「Anthropic 官方
+  登录」档位是 `authMode: 'existing'`，不保存任何密钥。**新增接入方式时必须维持这条边界。**
+  <https://code.claude.com/docs/en/legal-and-compliance>
+- **Codex 侧对称约束。** 项目不读写 `~/.codex/auth.json`；OAuth 凭据由官方 Codex 实现保管
+  （见「App Server 登录边界」）。OpenAI 官方开源的 `openai/codex-plugin-cc` 正是「本地 CLI +
+  用户自有订阅」这一模式的公开背书。
+- **品牌限制未决。** Agent SDK 条款允许 “Claude Agent”“{产品名} Powered by Claude”，
+  **不允许**使用 “Claude Code” 名称或让产品显得像 Anthropic 官方产品。“ClaudeDock” 不是
+  “Claude Code”，但该规则约束的是“不显得像官方产品”。**此项需法务判断，本文档不下结论。**
+  <https://code.claude.com/docs/en/agent-sdk/overview>
+- **Agent SDK 计费政策处于暂停变更中。** 2026-05-13 宣布、原定 2026-06-15 生效的订阅额度拆分
+  （Agent SDK / `claude -p` / 第三方应用改走独立月度额度）已于生效当日暂停，官方支持页原文
+  “We're pausing the changes… For now, nothing has changed”。五个月内三次变动，**做架构或定价
+  决策前必须重新核实**，网上大量二手博客仍按“已生效”描述。
+  <https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan>
+- **不要解析任一方的会话 JSONL。** Anthropic 明确 “The entry format is internal to Claude Code
+  and changes between versions”；Codex 的 rollout JSONL 无公开 schema。跨引擎迁移只能走官方
+  通道（Claude Code `/import codex` 覆盖配置；Codex 侧 app-server `externalAgentConfig/import`
+  覆盖会话，单向）。跨供应商的推理链与 prompt cache 必然丢失，**切换开发引擎时不得向用户
+  承诺对话连续性**。<https://code.claude.com/docs/en/sessions>
+- **`AGENTS.md` 不被 Claude Code 读取**，这是产品立场而非疏漏（`anthropics/claude-code#6235`
+  自 2025-08 开启至今无维护者回应，5,916 反应）。Windows 上建符号链接需管理员权限或开发者
+  模式，因此若将来需要共享指令文件，正解是 `CLAUDE.md` 内写 `@AGENTS.md` 导入行。
+  <https://code.claude.com/docs/en/memory>
+- 若将来替用户写 `~/.codex/config.toml`：`project_doc_fallback_filenames` **必须是顶层键**，
+  放进 `[project]` 表会静默失效（OpenAI 维护者在 `openai/codex#22454` 确认）。当前
+  `mcp-manager.ts` 只读该文件，不受影响。
+
 ## 构建、测试与调试
+
+每次更新必须依次通过 `npm run lint`、`npm run format:check`、`npm run typecheck`、`npm test`、
+`npm run test:layout`、`npm run test:control-theme`、`npm run test:runtime-soak:accelerated` 和
+`npm run build`，随后执行 `npm run dist`。交付记录必须包含安装包绝对路径、版本、文件大小、
+SHA-256 与 Authenticode 签名状态；未签名候选包不得称为正式签名发行版。
 
 - `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
 - Vitest 在默认排除项之外固定忽略 `**/.claude/worktrees/**`；Claude CLI 留在仓库内的辅助工作树
@@ -1750,11 +1857,10 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   唯一性和 `requiredElement` 启动依赖，防止浏览器容错解析掩盖 UI 结构损坏。
 - `tests/ui-localization.test.ts` 锁定 Unicode 11 所需的 `allowProposedApi` 设置，并防止已
   汉化的终端、接入与插件文案回退为英文或重新出现“英文原文”面板。
-- `tests/design-tokens.test.ts` 是「全局主题真的生效」的守栏：`styles.css` 的 `:root` 之外不得
-  出现 hex 字面量、带色相的 `rgb()`/`rgba()`、三个职责槽之外的 `font-family` 或写死的 `font-size`；
-  每个 `SHELL_CSS_VARIABLES` 属性都必须既有 `:root` 默认值又在正文里被引用；同时按 WCAG
-  相对亮度校验四套明暗主题的画布、正文、强调色与语义状态色对比度
-  （`textHi`/canvas > 7，其余正文级文字 > 4.5）。
+- `tests/design-tokens.test.ts` 遍历 `src/renderer/styles/**`，验证入口 import、未定义变量、三层令牌、
+  六级字体角色、selector 唯一所有权、keyframes / viewport media / reduced-motion 文件职责，以及
+  `SHELL_CSS_VARIABLES` 的默认值与消费者；同时按 WCAG 相对亮度校验四套主题的正文、强调色和
+  语义状态色对比度。具体视觉规则只在 `design.md` 维护。
 - `tests/composer-input.test.ts` / `tests/composer-history.test.ts` 覆盖输入框的两个纯模块：
   多行提交必须是 `\x0a` 连接的 `body` 加上单独的 `\r` `submit` 两段，历史的去重、上限与
   游标行为；提交测试还用假时钟验证两次 PTY 写入的顺序，以及会话在 40ms 间隔内失效时不会
@@ -1925,7 +2031,7 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   <https://claude.com/docs/connectors/building/mcp-apps/design-guidelines>
 - Claude 官方透明主题规范：
   <https://claude.com/docs/connectors/building/mcp-apps/transparent-theming>
-- Telegram Desktop 官方仓库（Roboto、42px 圆形发送按钮与纸飞机/涟漪交互基线）：
+- Telegram Desktop 官方仓库（系统 UI 字体、圆形发送按钮与纸飞机/涟漪交互基线）：
   <https://github.com/telegramdesktop/tdesktop>
 - Telegram Desktop 官方输入与发送按钮样式源：
   <https://github.com/telegramdesktop/tdesktop/blob/dev/Telegram/SourceFiles/chat_helpers/chat_helpers.style>
@@ -1976,6 +2082,26 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
 - OpenAI 当前 ChatGPT 订阅支持的 Codex 客户端与适用条款：
   <https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan>、
   <https://openai.com/policies/terms-of-use/>
+- Claude Agent SDK 系统提示词语义（省略 = 空提示词，非 Claude Code 预设）：
+  <https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts>
+- Claude Agent SDK 与 CLI 的功能差异、`settingSources` 默认值：
+  <https://code.claude.com/docs/en/agent-sdk/claude-code-features>
+- Anthropic 法务与合规（OAuth 代持禁令）：
+  <https://code.claude.com/docs/en/legal-and-compliance>
+- Agent SDK 品牌使用限制：<https://code.claude.com/docs/en/agent-sdk/overview>
+- Agent SDK 订阅计费变更及其暂停公告：
+  <https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan>
+- Claude Code 会话 JSONL 格式不稳定声明：<https://code.claude.com/docs/en/sessions>
+- Claude Code 只读 `CLAUDE.md` 不读 `AGENTS.md`，及 Windows 符号链接限制：
+  <https://code.claude.com/docs/en/memory>
+- `AGENTS.md` 支持请求（长期开启、无维护者回应，佐证产品立场）：
+  <https://github.com/anthropics/claude-code/issues/6235>
+- OpenAI 官方 Claude Code 插件（本地 CLI + 用户自有订阅模式的公开背书）：
+  <https://github.com/openai/codex-plugin-cc>
+- Codex `AGENTS.md` 发现规则与 `project_doc_fallback_filenames` 顶层键要求：
+  <https://learn.chatgpt.com/docs/agent-configuration/agents-md.md>、
+  <https://github.com/openai/codex/issues/22454>
+- Codex 从 Claude Code 导入配置与会话：<https://learn.chatgpt.com/docs/import.md>
 - CC Switch 官方开源仓库（配置管理能力与非官方代理边界）：
   <https://github.com/farion1231/cc-switch>
 - CC Switch Codex OAuth 反向代理说明与风险披露：

@@ -1,0 +1,32 @@
+/*
+ * Every title-weight surface takes the theme's display face, not just chat. Claude pairs a serif
+ * display with its sans UI; Telegram uses one family throughout, so this rule is a no-op there —
+ * which is exactly the difference a theme switch should make visible.
+ */
+.session-card h1,
+.workbench-header h2,
+.drop-zone__title,
+.provider-group__title,
+.chat-settings-dialog header strong,
+.connection-advanced-dialog header strong,
+.conversation-rename-dialog header strong,
+.confirmation-dialog header strong {
+  font-family: var(--font-display);
+  letter-spacing: var(--ls-title);
+}
+
+button,
+.titlebar__actions {
+  -webkit-app-region: no-drag;
+}
+
+kbd {
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  color: var(--text-lo);
+  font-family: inherit;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+  padding: 1px var(--s-1);
+}

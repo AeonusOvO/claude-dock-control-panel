@@ -160,6 +160,17 @@ export class FakeConversationAdapter implements ConversationAdapter {
       },
       type: 'message.upsert',
     });
+    if (text.includes('[fixture:hold]')) {
+      // Park the conversation in `running` with no assistant output at all. Real-window QA needs a
+      // turn it can photograph mid-flight: the send button's stop state, the halo it grows on click
+      // and the queued bar only exist while a turn is genuinely in progress, and every other fake
+      // response resolves inside the same tick. `interrupt` releases it back to `idle`.
+      this.emit(session, {
+        clientSubmissionId: input.clientSubmissionId,
+        type: 'submission.transcript-confirmed',
+      });
+      return;
+    }
     const assistantId = `fake-assistant-${input.clientSubmissionId}`;
     this.emit(session, {
       blockId: `${assistantId}:0`,

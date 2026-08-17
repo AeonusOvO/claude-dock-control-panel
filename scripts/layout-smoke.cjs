@@ -4,9 +4,12 @@ const path = require('node:path');
 app.setPath('userData', path.join(__dirname, '..', 'dist', '.electron-layout-smoke'));
 
 const sizes = [
+  [720, 640],
   [820, 640],
   [900, 640],
+  [1024, 640],
   [1180, 760],
+  [1280, 760],
 ];
 
 const inspectLayout = `
@@ -14,7 +17,13 @@ const inspectLayout = `
   const visible = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
-    if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || rect.height <= 0) {
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      style.pointerEvents === 'none' ||
+      rect.width <= 0 ||
+      rect.height <= 0
+    ) {
       return false;
     }
     const centerX = rect.left + rect.width / 2;
@@ -162,6 +171,12 @@ const addDetectorCalibrationFixture = `
 `;
 
 const selectRailPage = (name) => `
+  document.querySelector('.workspace').classList.remove(
+    'workspace--rail-collapsed',
+    'workspace--rail-preview',
+  );
+  document.querySelector('.control-panel').inert = false;
+  document.querySelector('.control-panel').setAttribute('aria-hidden', 'false');
   for (const page of document.querySelectorAll('[data-rail-page]')) {
     page.classList.toggle('rail-page--active', page.dataset.railPage === ${JSON.stringify(name)});
   }
@@ -559,6 +574,16 @@ app.whenReady().then(async () => {
   for (const [width, height] of sizes) {
     window.setSize(width, height);
     await new Promise((resolve) => setTimeout(resolve, 80));
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const workspace = document.querySelector('.workspace');
+        // Hidden CI windows can throttle a responsive grid transition indefinitely. Settle the
+        // target geometry synchronously before inspecting the 720/1024/1280 boundary cases.
+        workspace.style.transition = 'none';
+        void workspace.offsetWidth;
+        workspace.style.removeProperty('transition');
+      })()
+    `);
     for (const page of ['projects', 'connection', 'chat']) {
       await window.webContents.executeJavaScript(selectRailPage(page));
       const result = await window.webContents.executeJavaScript(inspectLayout);

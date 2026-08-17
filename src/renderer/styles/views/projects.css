@@ -1,0 +1,947 @@
+.section-label {
+  align-items: center;
+  color: var(--text-dim);
+  display: flex;
+  font-size: var(--type-micro-size);
+  font-weight: var(--fw-strong);
+  justify-content: space-between;
+  letter-spacing: var(--ls-eyebrow);
+  line-height: var(--type-micro-lh);
+  margin-bottom: var(--s-2-5);
+  text-transform: uppercase;
+}
+
+.section-label > span:last-child {
+  color: var(--text-mute);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-wide);
+  text-transform: none;
+}
+
+.session-card::after {
+  content: none;
+}
+
+.session-card__heading {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--s-3);
+}
+
+.session-card h1 {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-heading);
+  margin: 0 0 var(--s-1);
+}
+
+.session-card p {
+  color: var(--text-lo);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-tight);
+  margin: 0;
+}
+
+.status-dot {
+  background: var(--text-lo);
+  border: 3px solid color-mix(in srgb, var(--text-lo) 14%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok-text) 20%, transparent);
+  flex: 0 0 auto;
+  height: 13px;
+  margin-top: var(--s-0-5);
+  transition: background var(--dur-2) var(--ease-standard);
+  width: 13px;
+}
+
+.status-dot--small {
+  border-width: 2px;
+  height: 8px;
+  margin: 0;
+  width: 8px;
+}
+
+body[data-phase='running'] .status-dot {
+  animation: status-pulse var(--dur-status-pulse-slow) ease-out infinite;
+  background: var(--ok-text);
+}
+
+body[data-phase='starting'] .status-dot {
+  animation: status-pulse var(--dur-status-pulse-fast) ease-out infinite;
+  background: var(--warn-text);
+}
+
+body[data-phase='error'] .status-dot {
+  background: var(--bad-solid);
+}
+
+.status-pill {
+  background: color-mix(in srgb, var(--text-lo) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-lo) 16%, transparent);
+  border-radius: var(--r-pill);
+  color: var(--text-lo);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-lh);
+  padding: 0 var(--s-2);
+}
+
+body[data-phase='running'] .status-pill {
+  background: color-mix(in srgb, var(--ok-text) 9%, transparent);
+  border-color: color-mix(in srgb, var(--ok-text) 22%, transparent);
+  color: var(--ok-text);
+}
+
+body[data-phase='error'] .status-pill {
+  background: color-mix(in srgb, var(--bad-text) 9%, transparent);
+  border-color: color-mix(in srgb, var(--bad-text) 22%, transparent);
+  color: var(--bad-text);
+}
+
+.session-meta {
+  border-top: 1px solid var(--line-strong);
+  color: var(--text-dim);
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: var(--type-micro-size);
+  justify-content: space-between;
+  line-height: var(--type-micro-lh);
+  margin-top: var(--s-3);
+  padding-top: var(--s-2-5);
+}
+
+.runtime-picker {
+  --runtime-option-h: calc(var(--s-10) + var(--s-3));
+  --runtime-option-icon-size: var(--control-h-sm);
+  border: 0;
+  display: grid;
+  gap: var(--s-2);
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.runtime-picker legend {
+  color: var(--text-mute);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-fw);
+  letter-spacing: var(--ls-eyebrow);
+  line-height: var(--type-micro-lh);
+  margin-block-end: var(--s-2);
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.runtime-option {
+  align-items: center;
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  display: flex;
+  gap: var(--s-2);
+  min-height: var(--runtime-option-h);
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--s-3);
+  position: relative;
+  transition:
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+}
+
+.runtime-option:hover {
+  background: var(--layer-hover);
+  border-color: var(--accent-line);
+}
+
+.runtime-option:has(input:checked) {
+  background: var(--accent-tint);
+  border-color: var(--line-strong);
+  box-shadow: inset 3px 0 0 var(--accent-solid);
+}
+
+.runtime-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+.runtime-option input {
+  cursor: pointer;
+  height: 100%;
+  inset: 0;
+  opacity: 0;
+  position: absolute;
+  width: 100%;
+  z-index: 1;
+}
+
+.runtime-option__icon {
+  align-items: center;
+  align-self: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  display: inline-flex;
+  height: var(--runtime-option-icon-size);
+  justify-content: center;
+  transition:
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+  width: var(--runtime-option-icon-size);
+}
+
+.runtime-option__icon svg {
+  fill: none;
+  height: 18px;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.65;
+  width: 18px;
+}
+
+.runtime-option__icon--codex svg circle {
+  fill: var(--surface-3);
+}
+
+.runtime-option__copy {
+  align-self: center;
+  display: grid;
+  flex: 1 1 0;
+  gap: var(--s-0-5);
+  min-width: 0;
+  width: 0;
+}
+
+.runtime-option strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--type-body-ls);
+  line-height: var(--type-body-lh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-option small {
+  color: var(--text-lo);
+  font-size: var(--type-caption-size);
+  font-weight: var(--type-caption-fw);
+  letter-spacing: var(--type-caption-ls);
+  line-height: var(--type-caption-lh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-option__check {
+  align-items: center;
+  align-self: center;
+  background: var(--accent-solid);
+  border-radius: var(--r-pill);
+  color: var(--accent-fg);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 18px;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease-standard);
+  width: 18px;
+}
+
+.runtime-option:has(input:checked) .runtime-option__check {
+  opacity: 1;
+}
+
+.runtime-option__check svg {
+  fill: none;
+  height: 13px;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+  width: 13px;
+}
+
+.runtime-option:active {
+  transform: scale(var(--press-theme));
+}
+
+.runtime-picker:disabled {
+  opacity: 0.55;
+}
+
+.runtime-picker:disabled .runtime-option {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.drop-zone:hover {
+  background: var(--surface-3);
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.drop-zone:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.drop-zone--busy .drop-zone__icon {
+  animation: busy-bob var(--dur-busy-loop) ease-in-out infinite alternate;
+}
+
+.drop-zone__icon {
+  align-items: center;
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-lg);
+  color: var(--accent-text);
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  margin-bottom: var(--s-1-5);
+  width: 30px;
+}
+
+.drop-zone__icon svg {
+  height: 19px;
+  width: 19px;
+}
+
+.drop-zone__hint {
+  color: var(--text-dim);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-lh);
+  margin-top: var(--s-1);
+}
+
+.project-list {
+  display: grid;
+  gap: var(--s-1-5);
+  max-height: 340px;
+  /*
+   * `overflow-y: auto` alone computes `overflow-x` to `auto` as well, so a single long conversation
+   * title used to grow a horizontal scrollbar under the whole project list. Rows clip and ellipsize
+   * themselves; the container must never scroll sideways.
+   */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
+}
+
+.project-folder {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+.project-folder[data-active='true'] {
+  border-color: var(--accent-line);
+}
+
+.project-folder[data-open='false'] {
+  background: transparent;
+}
+
+.project-folder[data-missing='true'] {
+  border-color: var(--bad-line);
+}
+
+.project-folder__header {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.project-folder__chevron {
+  color: var(--text-mute);
+  flex: 0 0 auto;
+  font-size: var(--type-micro-size);
+  line-height: 1;
+  transition: transform var(--dur-2) var(--ease-standard);
+}
+
+.project-folder[data-expanded='true'] .project-folder__chevron {
+  transform: rotate(90deg);
+}
+
+.project-folder__copy {
+  display: grid;
+  gap: var(--s-0-5);
+  min-width: 0;
+}
+
+.project-folder__copy strong,
+.project-folder__copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-folder[data-open='false'] .project-folder__copy strong {
+  color: var(--text-lo);
+  font-weight: var(--fw-medium);
+}
+
+.project-folder[data-active='true'] .project-folder__copy strong {
+  color: var(--text-hi);
+}
+
+.project-folder[data-missing='true'] .project-folder__copy span {
+  color: var(--bad-text);
+}
+
+.project-folder__actions {
+  align-items: center;
+  display: flex;
+  gap: 1px;
+  padding-right: var(--s-1);
+}
+
+.project-folder__action {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-mute);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--type-subtitle-size);
+  height: 26px;
+  line-height: 1;
+  padding: 0;
+  width: 26px;
+}
+
+.project-folder__action:hover:not(:disabled) {
+  background: var(--layer-active);
+  color: var(--accent-text);
+}
+
+.project-folder__action--close:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad-text) 10%, transparent);
+  color: var(--bad-text);
+}
+
+.project-folder__body {
+  border-top: 1px solid var(--line-subtle);
+  display: grid;
+  gap: var(--s-0-5);
+  padding: var(--s-1) var(--s-1-5) var(--s-1-5) var(--s-4);
+}
+
+.project-folder__hint {
+  color: var(--text-mute);
+  font-size: var(--type-micro-size);
+  line-height: var(--type-micro-lh);
+  padding: var(--s-1) var(--s-1) 1px;
+}
+
+.project-folder__reopen {
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--type-caption-size);
+  padding: var(--s-1-5);
+  text-align: center;
+}
+
+.project-folder__reopen:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+
+.conversation-item {
+  align-items: center;
+  border-radius: var(--r-md);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px 24px;
+  transition: background-color var(--dur-2) var(--ease-standard);
+}
+
+.conversation-item:hover {
+  background: var(--layer-hover);
+}
+
+.conversation-item__select {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  gap: var(--s-1-5);
+  min-width: 0;
+  padding: var(--s-1-5) var(--s-1) var(--s-1-5) var(--s-1-5);
+  text-align: left;
+}
+
+.conversation-item__status {
+  background: var(--text-lo);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 6px;
+  width: 6px;
+}
+
+.conversation-item[data-phase='running'] .conversation-item__status {
+  background: var(--ok-text);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok-text) 9%, transparent);
+}
+
+.conversation-item[data-phase='starting'] .conversation-item__status {
+  background: var(--warn-text);
+}
+
+.conversation-item[data-phase='error'] .conversation-item__status {
+  background: var(--bad-solid);
+}
+
+.conversation-item__label {
+  color: var(--text);
+  flex: 1 1 auto;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item[data-active='true'] .conversation-item__label {
+  color: var(--text-hi);
+  font-weight: var(--fw-strong);
+}
+
+/*
+ * Typewriter caret shown while a Claude-generated title is being erased and retyped.
+ * The same data attribute drives the sidebar label, the terminal toolbar and the workbench scope.
+ */
+.conversation-item__label[data-title-typing='true']::after,
+.chat-history__open strong[data-title-typing='true']::after,
+#terminal-project[data-title-typing='true']::after,
+#workbench-scope[data-title-typing='true']::after {
+  animation: titleCaretBlink var(--dur-blink) step-end infinite;
+  background: var(--accent-text);
+  border-radius: 1px;
+  content: '';
+  display: inline-block;
+  height: 1em;
+  margin-left: var(--s-0-5);
+  vertical-align: text-bottom;
+  width: 2px;
+}
+
+.conversation-item__phase {
+  color: var(--text-mute);
+  flex: 0 0 auto;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+}
+
+.conversation-item__action {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-xs);
+  color: var(--text-mute);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--type-body-size);
+  height: 22px;
+  line-height: 1;
+  opacity: 0;
+  padding: 0;
+  transition: opacity var(--dur-hover) var(--ease-standard);
+  width: 22px;
+}
+
+.conversation-item:hover .conversation-item__action,
+.conversation-item[data-active='true'] .conversation-item__action {
+  opacity: 1;
+}
+
+.conversation-item__action:hover {
+  background: var(--layer-active);
+  color: var(--accent-text);
+}
+
+.conversation-item__action--close {
+  font-size: var(--type-subtitle-size);
+}
+
+.conversation-item__action--close:hover {
+  background: color-mix(in srgb, var(--bad-text) 10%, transparent);
+  color: var(--bad-text);
+}
+
+.project-folder__history {
+  align-content: start;
+  display: grid;
+  gap: var(--s-0-5);
+  /* Never distribute the fixed viewport height across the rows. Long histories scroll at their
+   * natural row height instead of squeezing every title into a one-line sliver. */
+  grid-auto-rows: max-content;
+  /* Roughly six rows; running conversations above stay fixed while this list scrolls. */
+  max-height: 170px;
+  /* Same reason as .project-list: vertical scrolling must not imply horizontal scrolling. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-width: 0;
+  padding-inline-end: 0;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.history-item {
+  /* One responsive slot is shared by the timestamp and delete action. It cannot consume the title. */
+  --history-tail: clamp(42px, 23%, 58px);
+
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 27px;
+  overflow: hidden;
+  padding: 0;
+  /* Anchors the delete button so it can occupy the timestamp's slot instead of a column of its own. */
+  position: relative;
+  text-align: left;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+  width: 100%;
+}
+
+.history-item:hover {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.history-item__select {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  box-sizing: border-box;
+  gap: var(--s-2);
+  grid-template-columns: auto minmax(0, 1fr) var(--history-tail);
+  min-width: 0;
+  padding: var(--s-1) var(--s-1-5);
+  text-align: left;
+  width: 100%;
+}
+
+/*
+ * The delete button is laid over the timestamp rather than given a column beside it: hovering a row
+ * crossfades 「时间戳 → 删除」 in one slot, so the list keeps a single clean right edge and nothing
+ * reflows on hover. The timestamp keeps its layout width while faded out, which is also what stops
+ * a long title from sliding underneath the button.
+ */
+.history-item__delete {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-mute);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--type-subtitle-size);
+  inset-block: var(--s-0-5);
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  /*
+   * 7px, not 2px: it lines the button up with the timestamp it crossfades with (whose own right
+   * inset comes from `.history-item__select`'s 7px padding) and keeps it clear of the scrollbar
+   * these lists always show.
+   */
+  right: var(--s-1-5);
+  transition: opacity var(--dur-hover) var(--ease-standard);
+  width: var(--history-tail);
+}
+
+.history-item:hover .history-item__delete,
+.history-item:focus-within .history-item__delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.history-item__delete:hover {
+  background: var(--bad-tint);
+  color: var(--bad-text);
+}
+
+.history-item__icon {
+  flex: 0 0 auto;
+  font-size: var(--type-caption-size);
+  line-height: 1;
+}
+
+.history-item__label {
+  flex: 1 1 auto;
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item__time {
+  color: var(--text-mute);
+  font-size: var(--type-micro-size);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-align: end;
+  text-overflow: ellipsis;
+  transition: opacity var(--dur-hover) var(--ease-standard);
+  white-space: nowrap;
+}
+
+.history-item:hover .history-item__time,
+.history-item:focus-within .history-item__time {
+  opacity: 0;
+}
+
+.sr-only {
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/* ============================================
+   Session History Styles
+   ============================================ */
+
+.session-history {
+  margin-block-start: var(--s-8);
+}
+
+.session-history__heading {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--s-4);
+  justify-content: space-between;
+  margin-block-end: var(--s-4);
+}
+
+.session-history__heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.session-history__heading span {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-caps);
+}
+
+.session-history__heading strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+}
+
+#session-count {
+  color: var(--text-lo);
+  font-size: var(--type-body-size);
+}
+
+.session-list {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.session-card {
+  box-shadow: var(--sheen);
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s-4);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+
+.session-card:hover {
+  border-color: var(--line-hover);
+  box-shadow: var(--sheen);
+}
+
+.session-card__header {
+  align-items: center;
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+  margin-block-end: var(--s-2);
+}
+
+.session-card__header strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+}
+
+.session-card__time {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  white-space: nowrap;
+}
+
+.session-card__meta {
+  color: var(--text-lo);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--type-caption-size);
+  gap: var(--s-2) var(--s-4);
+  margin-block-end: var(--s-3);
+}
+
+.session-card__model {
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--type-caption-size);
+}
+
+.session-card__actions {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.session-empty {
+  color: var(--text-dim);
+  font-size: var(--type-body-size);
+  padding: var(--s-6);
+  text-align: center;
+}
+
+/* ============================================
+   Unified Transition System
+   ============================================ */
+
+/* Project folders and conversations */
+.project-folder__disclosure,
+.history-item,
+.conversation-item__select {
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-standard);
+}
+
+.project-folder__disclosure:hover {
+  transform: translateX(2px);
+}
+
+.conversation-item[data-active='true'] {
+  background: var(--accent-tint);
+  animation: projectActivate var(--dur-3) var(--ease-decel);
+}
+
+.project-folder__body > * {
+  animation: conversationEnter var(--dur-2) var(--ease-decel);
+  animation-fill-mode: both;
+}
+
+/*
+ * Row-shaped and full-width controls are excluded: scaling a list row shifts its text against the
+ * neighbours it is aligned with, and these all already answer with a background change on
+ * `:hover`/`[data-active]`. The resizers are drag handles, where a scale would fight the drag.
+ */
+.conversation-item__select:active:not(:disabled),
+.history-item__select:active:not(:disabled),
+.chat-history__item:active:not(:disabled),
+.connection-history__item:active:not(:disabled),
+.footer-menu button:active:not(:disabled),
+.terminal-context-menu button:active:not(:disabled),
+.conversation-context-menu button:active:not(:disabled),
+.select__listbox button:active:not(:disabled),
+.provider-group__toggle:active:not(:disabled),
+.project-folder__disclosure:active:not(:disabled) {
+  transform: none;
+}
+
+.project-folder__disclosure {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  gap: var(--s-1-5);
+  min-width: 0;
+  padding: var(--s-2) var(--s-1) var(--s-2) var(--s-2);
+  text-align: left;
+  min-height: 48px;
+  padding-block: var(--s-2-5);
+}
+
+.project-folder__copy strong {
+  color: var(--text);
+  font-weight: var(--fw-strong);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-lh);
+}
+
+.project-folder__copy span {
+  color: var(--text-dim);
+  line-height: var(--type-caption-lh);
+  font-size: var(--type-caption-size);
+}
+
+.drop-zone {
+  align-items: center;
+  background: var(--surface-inset);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-xl);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--s-2);
+  padding: var(--s-3) var(--s-3);
+  transition:
+    background var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+  width: 100%;
+  min-height: 100px;
+}
+
+.drop-zone__title {
+  color: var(--text-hi);
+  font-weight: var(--fw-strong);
+  line-height: var(--type-caption-lh);
+  font-size: var(--type-body-size);
+}

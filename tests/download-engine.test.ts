@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -33,6 +33,44 @@ describe('download engine', () => {
     expect(mapDownloadItemState('progressing', true, true)).toBe('paused');
     expect(mapDownloadItemState('interrupted', false, true)).toBe('paused');
     expect(mapDownloadItemState('interrupted', false, false)).toBe('failed');
+  });
+
+  it('releases the busy lease when the initial journal write fails', async () => {
+    const session = Object.assign(new EventEmitter(), {
+      createInterruptedDownload: vi.fn(),
+      downloadURL: vi.fn(),
+    });
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-journal-fail-'));
+    /*
+     * The journal writes to `<userData>/download-journal.json.tmp` and renames it into place. A
+     * directory at that exact path makes writeFileSync fail with EISDIR — a stand-in for ENOSPC or
+     * EACCES — without mocking node:fs.
+     */
+    mkdirSync(path.join(userDataPath, 'download-journal.json.tmp'), { recursive: true });
+    const busyRegistry = new BusyRegistry();
+    const engine = new DownloadEngine(
+      session as unknown as DownloadSession,
+      busyRegistry,
+      userDataPath,
+    );
+
+    await expect(
+      engine.start({
+        allowedHosts: ['downloads.example.com'],
+        allowedPathPrefixes: ['/tool.exe'],
+        finalPath: path.join(userDataPath, 'downloads', 'tool.exe'),
+        id: 'leaky-tool',
+        label: '日志写入失败',
+        maxBytes: 100,
+        url: 'https://downloads.example.com/tool.exe',
+      }),
+    ).rejects.toThrow();
+
+    // A leaked lease would sit in the quit confirmation dialog forever and permanently block retry,
+    // because both the task id and the lease id are derived from the request id.
+    expect(busyRegistry.list()).toEqual([]);
+    expect(session.downloadURL).not.toHaveBeenCalled();
+    rmSync(userDataPath, { force: true, recursive: true });
   });
 
   it('captures DownloadItem and exposes pause, resume and cancellation', async () => {

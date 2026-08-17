@@ -225,23 +225,24 @@ export class ConversationRecoveryStore {
     }
     const key = keyOf(input.runtime, input.projectPath, input.conversationId);
     const now = this.now();
-    const existing = this.journal.records.findIndex(
-      (record) => keyOf(record.runtime, record.projectPath, record.conversationId) === key,
-    );
-    const record: ConversationRecoveryRecord = {
-      clean: false,
-      conversationId: input.conversationId.toLowerCase(),
-      launch: { ...input.launch },
-      ownerKind: input.ownerKind,
-      projectPath: path.resolve(input.projectPath),
-      runtime: input.runtime,
-      submissions: existing >= 0 ? this.journal.records[existing]!.submissions : [],
-      updatedAt: now,
-    };
-    if (existing >= 0) this.journal.records[existing] = record;
-    else this.journal.records.push(record);
-    this.persist();
-    return this.publicRecord(record);
+    return this.transact((journal) => {
+      const existing = journal.records.findIndex(
+        (record) => keyOf(record.runtime, record.projectPath, record.conversationId) === key,
+      );
+      const record: ConversationRecoveryRecord = {
+        clean: false,
+        conversationId: input.conversationId.toLowerCase(),
+        launch: { ...input.launch },
+        ownerKind: input.ownerKind,
+        projectPath: path.resolve(input.projectPath),
+        runtime: input.runtime,
+        submissions: existing >= 0 ? journal.records[existing]!.submissions : [],
+        updatedAt: now,
+      };
+      if (existing >= 0) journal.records[existing] = record;
+      else journal.records.push(record);
+      return this.publicRecord(record);
+    });
   }
 
   public preparePrompt(
@@ -256,27 +257,30 @@ export class ConversationRecoveryStore {
     if (!this.encryption.isEncryptionAvailable()) {
       throw new Error('Windows 安全存储不可用，本次内容尚未发送。');
     }
-    const record = this.requireRecord(runtime, projectPath, conversationId);
-    if (
-      record.submissions.some((submission) => submission.clientSubmissionId === clientSubmissionId)
-    ) {
-      throw new Error('提交标识已存在。');
-    }
-    const now = this.now();
-    const submission: RecoverySubmissionRecord = {
-      clientSubmissionId,
-      createdAt: now,
-      encryptedPrompt: this.encryption.encryptString(prompt).toString('base64'),
-      promptDigest: digestPrompt(prompt),
-      sequence: (record.submissions.at(-1)?.sequence ?? 0) + 1,
-      state: 'prepared',
-      updatedAt: now,
-    };
-    record.clean = false;
-    record.submissions.push(submission);
-    record.updatedAt = now;
-    this.persist();
-    return this.publicSubmission(submission);
+    return this.mutate((journal) => {
+      const record = this.requireRecordIn(journal, runtime, projectPath, conversationId);
+      if (
+        record.submissions.some(
+          (submission) => submission.clientSubmissionId === clientSubmissionId,
+        )
+      ) {
+        throw new Error('提交标识已存在。');
+      }
+      const now = this.now();
+      const submission: RecoverySubmissionRecord = {
+        clientSubmissionId,
+        createdAt: now,
+        encryptedPrompt: this.encryption.encryptString(prompt).toString('base64'),
+        promptDigest: digestPrompt(prompt),
+        sequence: (record.submissions.at(-1)?.sequence ?? 0) + 1,
+        state: 'prepared',
+        updatedAt: now,
+      };
+      record.clean = false;
+      record.submissions.push(submission);
+      record.updatedAt = now;
+      return submission;
+    });
   }
 
   public markSubmission(
@@ -286,17 +290,18 @@ export class ConversationRecoveryStore {
     clientSubmissionId: string,
     state: Exclude<RecoverySubmissionState, 'prepared' | 'interrupted-draft' | 'result-unknown'>,
   ): RecoverySubmissionView {
-    const record = this.requireRecord(runtime, projectPath, conversationId);
-    const submission = record.submissions.find(
-      (candidate) => candidate.clientSubmissionId === clientSubmissionId,
-    );
-    if (!submission) throw new Error('恢复日志中没有这次提交。');
-    submission.state = state;
-    submission.updatedAt = this.now();
-    if (state === 'transcript-confirmed') delete submission.encryptedPrompt;
-    record.updatedAt = submission.updatedAt;
-    this.persist();
-    return this.publicSubmission(submission);
+    return this.mutate((journal) => {
+      const record = this.requireRecordIn(journal, runtime, projectPath, conversationId);
+      const submission = record.submissions.find(
+        (candidate) => candidate.clientSubmissionId === clientSubmissionId,
+      );
+      if (!submission) throw new Error('恢复日志中没有这次提交。');
+      submission.state = state;
+      submission.updatedAt = this.now();
+      if (state === 'transcript-confirmed') delete submission.encryptedPrompt;
+      record.updatedAt = submission.updatedAt;
+      return submission;
+    });
   }
 
   public preserveUnsentDraft(
@@ -305,40 +310,44 @@ export class ConversationRecoveryStore {
     conversationId: string,
     clientSubmissionId: string,
   ): RecoverySubmissionView {
-    const record = this.requireRecord(runtime, projectPath, conversationId);
-    const submission = record.submissions.find(
-      (candidate) => candidate.clientSubmissionId === clientSubmissionId,
-    );
-    if (!submission?.encryptedPrompt) throw new Error('没有可保留的加密草稿。');
-    submission.state = 'interrupted-draft';
-    submission.updatedAt = this.now();
-    record.clean = false;
-    record.updatedAt = submission.updatedAt;
-    this.persist();
-    return this.publicSubmission(submission);
+    return this.mutate((journal) => {
+      const record = this.requireRecordIn(journal, runtime, projectPath, conversationId);
+      const submission = record.submissions.find(
+        (candidate) => candidate.clientSubmissionId === clientSubmissionId,
+      );
+      if (!submission?.encryptedPrompt) throw new Error('没有可保留的加密草稿。');
+      submission.state = 'interrupted-draft';
+      submission.updatedAt = this.now();
+      record.clean = false;
+      record.updatedAt = submission.updatedAt;
+      return submission;
+    });
   }
 
   public markInterrupted(): ConversationRecoveryView[] {
-    let changed = false;
-    for (const record of this.journal.records) {
-      if (record.clean) continue;
-      for (const submission of record.submissions) {
-        if (submission.state === 'prepared') {
-          submission.state = 'interrupted-draft';
-          submission.updatedAt = this.now();
-          changed = true;
-        } else if (
-          submission.state === 'dispatched' ||
-          submission.state === 'hook-durable' ||
-          submission.state === 'allow-sent'
-        ) {
-          submission.state = 'result-unknown';
-          submission.updatedAt = this.now();
-          changed = true;
+    this.transact((journal) => {
+      let changed = false;
+      for (const record of journal.records) {
+        if (record.clean) continue;
+        for (const submission of record.submissions) {
+          if (submission.state === 'prepared') {
+            submission.state = 'interrupted-draft';
+            submission.updatedAt = this.now();
+            changed = true;
+          } else if (
+            submission.state === 'dispatched' ||
+            submission.state === 'hook-durable' ||
+            submission.state === 'allow-sent'
+          ) {
+            submission.state = 'result-unknown';
+            submission.updatedAt = this.now();
+            changed = true;
+          }
         }
       }
-    }
-    if (changed) this.persist();
+      // Nothing changed: skip the write rather than rewriting an identical journal on every boot.
+      return changed;
+    });
     return this.journal.records
       .filter((record) => !record.clean)
       .map((record) => this.publicRecord(record));
@@ -369,14 +378,15 @@ export class ConversationRecoveryStore {
     projectPath: string,
     conversationId: string,
   ): void {
-    const record = this.requireRecord(runtime, projectPath, conversationId);
-    const ambiguous = record.submissions.some((submission) =>
-      ['dispatched', 'hook-durable', 'allow-sent', 'result-unknown'].includes(submission.state),
-    );
-    if (ambiguous) throw new Error('仍有发送结果待核对，不能写入 clean marker。');
-    record.clean = true;
-    record.updatedAt = this.now();
-    this.persist();
+    this.transact((journal) => {
+      const record = this.requireRecordIn(journal, runtime, projectPath, conversationId);
+      const ambiguous = record.submissions.some((submission) =>
+        ['dispatched', 'hook-durable', 'allow-sent', 'result-unknown'].includes(submission.state),
+      );
+      if (ambiguous) throw new Error('仍有发送结果待核对，不能写入 clean marker。');
+      record.clean = true;
+      record.updatedAt = this.now();
+    });
   }
 
   public list(): ConversationRecoveryView[] {
@@ -389,13 +399,14 @@ export class ConversationRecoveryStore {
     conversationId: string,
   ): boolean {
     const key = keyOf(runtime, projectPath, conversationId);
-    const next = this.journal.records.filter(
-      (record) => keyOf(record.runtime, record.projectPath, record.conversationId) !== key,
-    );
-    if (next.length === this.journal.records.length) return false;
-    this.journal.records = next;
-    this.persist();
-    return true;
+    return this.transact((journal) => {
+      const next = journal.records.filter(
+        (record) => keyOf(record.runtime, record.projectPath, record.conversationId) !== key,
+      );
+      if (next.length === journal.records.length) return false;
+      journal.records = next;
+      return true;
+    });
   }
 
   private load(): RecoveryJournal {
@@ -436,6 +447,53 @@ export class ConversationRecoveryStore {
       closeSync(handle);
     }
     renameSync(temporaryPath, this.storagePath);
+  }
+
+  /**
+   * Applies a mutation to a deep copy and only adopts it once the save is durable.
+   *
+   * Mutating in place and persisting afterwards left memory and disk divergent whenever the write
+   * failed: `markSubmission('transcript-confirmed')` deletes the encrypted prompt, so a failed save
+   * destroyed the user's only recoverable copy in memory, and any later successful save would then
+   * flush that never-committed deletion to disk.
+   */
+  private transact<T>(apply: (journal: RecoveryJournal) => T): T {
+    const next = structuredClone(this.journal);
+    const outcome = apply(next);
+    // A mutator returning exactly `false` reports "nothing changed", so no write is needed.
+    if (outcome === false) {
+      return outcome;
+    }
+    const previous = this.journal;
+    this.journal = next;
+    try {
+      this.persist();
+    } catch (error) {
+      this.journal = previous;
+      throw error;
+    }
+    return outcome;
+  }
+
+  private mutate(
+    apply: (journal: RecoveryJournal) => RecoverySubmissionRecord,
+  ): RecoverySubmissionView {
+    return this.publicSubmission(this.transact(apply));
+  }
+
+  private requireRecordIn(
+    journal: RecoveryJournal,
+    runtime: ConversationRuntime,
+    projectPath: string,
+    conversationId: string,
+  ): ConversationRecoveryRecord {
+    const key = keyOf(runtime, projectPath, conversationId);
+    const record = journal.records.find(
+      (candidate) =>
+        keyOf(candidate.runtime, candidate.projectPath, candidate.conversationId) === key,
+    );
+    if (!record) throw new Error('会话尚未写入恢复日志。');
+    return record;
   }
 
   private requireRecord(

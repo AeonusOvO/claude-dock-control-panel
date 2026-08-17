@@ -1,0 +1,647 @@
+.titlebar {
+  -webkit-app-region: drag;
+  align-items: center;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  height: 48px;
+  justify-content: space-between;
+  padding: 0 var(--titlebar-drag-safe) 0 var(--s-4);
+}
+
+.brand {
+  align-items: center;
+  display: flex;
+  gap: var(--s-2-5);
+}
+
+.brand__icon {
+  height: 28px;
+  width: 28px;
+}
+
+.brand > div {
+  align-items: baseline;
+  display: flex;
+  gap: var(--s-2);
+}
+
+.brand__name {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-heavy);
+  letter-spacing: var(--ls-wide);
+}
+
+.brand__descriptor {
+  color: var(--text-dim);
+  font-size: var(--type-micro-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--ls-eyebrow);
+  line-height: var(--type-micro-lh);
+  text-transform: uppercase;
+}
+
+.titlebar__status {
+  align-items: center;
+  color: var(--text-lo);
+  display: flex;
+  font-size: var(--type-caption-size);
+  gap: var(--s-1-5);
+  line-height: var(--type-caption-lh);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlebar__actions {
+  align-items: center;
+  display: flex;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.titlebar__refresh {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-lo);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  height: var(--s-8);
+  justify-content: center;
+  padding: var(--s-2);
+  position: relative;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+  width: var(--s-8);
+}
+
+.titlebar__refresh:hover:not(:disabled) {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+  color: var(--accent-text);
+}
+
+.titlebar__refresh:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.titlebar__refresh svg {
+  height: var(--s-4);
+  width: var(--s-4);
+}
+
+.titlebar__refresh[data-update='true']::after {
+  background: var(--warn-solid);
+  border: 2px solid var(--surface-1);
+  border-radius: var(--r-pill);
+  content: '';
+  height: var(--s-2);
+  position: absolute;
+  right: calc(var(--s-1) * -1);
+  top: calc(var(--s-1) * -1);
+  width: var(--s-2);
+}
+
+/*
+ * Loading spins the glyph and nothing else. The button is a rounded square and has to stay one:
+ * an animated ring drawn on the frame reads as the control itself deforming, which is exactly the
+ * feedback the shape of the download button is reserved for.
+ */
+.titlebar__refresh--busy svg {
+  animation: titlebarGlyphSpin var(--dur-refresh) linear infinite;
+  transform-origin: 50% 50%;
+}
+
+.titlebar__downloads {
+  --download-progress: 0%;
+  align-items: center;
+  background: conic-gradient(
+    from 0deg,
+    var(--accent-solid) var(--download-progress),
+    var(--line) 0
+  );
+  border: 0;
+  /*
+   * The frame carries the task state. At rest it matches the refresh button exactly; the moment a
+   * download is live it eases into a true circle so the progress arc has a ring to sit on, then
+   * eases back once the task completes, cancels or fails.
+   */
+  border-radius: var(--r-md);
+  color: var(--text-lo);
+  cursor: pointer;
+  display: inline-flex;
+  height: var(--s-8);
+  justify-content: center;
+  padding: var(--s-0-5);
+  position: relative;
+  transition:
+    border-radius var(--dur-shape) var(--ease-spring),
+    color var(--dur-2) var(--ease-standard);
+  width: var(--s-8);
+}
+
+/* Idle hides the arc entirely so the rounded square reads as a plain icon button. */
+.titlebar__downloads:not([data-active='true']) {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  padding: calc(var(--s-2) - 1px);
+}
+
+.titlebar__downloads[data-active='true'] {
+  border-radius: var(--r-pill);
+}
+
+.titlebar__downloads::before {
+  background: var(--surface-1);
+  border-radius: inherit;
+  content: '';
+  inset: var(--s-0-5);
+  position: absolute;
+}
+
+.titlebar__downloads:not([data-active='true'])::before {
+  inset: 0;
+}
+
+.titlebar__downloads:hover {
+  color: var(--accent-text);
+}
+
+.titlebar__downloads:not([data-active='true']):hover {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+}
+
+/* Only the arc turns; the glyph and the unread badge stay upright. */
+.titlebar__downloads[data-indeterminate='true'][data-active='true']::after {
+  animation: spinnerRingSpin var(--dur-progress) linear infinite;
+  border: 2px solid transparent;
+  border-radius: var(--r-pill);
+  border-top-color: var(--accent-solid);
+  content: '';
+  inset: 0;
+  position: absolute;
+}
+
+/* A paused queue holds its arc still and desaturates it, so "stopped" is legible at a glance. */
+.titlebar__downloads[data-paused='true'] {
+  background: conic-gradient(from 0deg, var(--warn-solid) var(--download-progress), var(--line) 0);
+}
+
+.titlebar__downloads[data-paused='true'][data-indeterminate='true'][data-active='true']::after {
+  animation: none;
+  border-top-color: var(--warn-solid);
+}
+
+.titlebar__downloads svg {
+  height: var(--s-4);
+  position: relative;
+  width: var(--s-4);
+}
+
+.titlebar__downloads-badge {
+  align-items: center;
+  background: var(--accent-solid);
+  border: 2px solid var(--surface-1);
+  border-radius: var(--r-pill);
+  color: var(--accent-fg);
+  display: inline-flex;
+  font-size: var(--type-micro-size);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-heavy);
+  height: var(--s-4);
+  justify-content: center;
+  min-width: var(--s-4);
+  padding: 0 var(--s-1);
+  position: absolute;
+  right: calc(var(--s-1) * -1);
+  top: calc(var(--s-1) * -1);
+  z-index: 1;
+}
+
+.activity-rail {
+  align-items: stretch;
+  background: var(--surface-1);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0-5);
+  padding: var(--s-2-5) var(--s-1-5);
+}
+
+.activity-rail__button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  justify-content: center;
+  padding: var(--s-2) var(--s-0-5);
+  position: relative;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard);
+}
+
+.activity-rail__button span {
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--ls-caps);
+  line-height: var(--type-caption-lh);
+}
+
+.activity-rail__button svg {
+  height: 20px;
+  width: 20px;
+}
+
+.activity-rail__button:hover {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.activity-rail__button--active {
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+
+.activity-rail__button--active::before {
+  background: var(--accent-solid);
+  border-radius: 0 var(--r-pill) var(--r-pill) 0;
+  content: '';
+  height: 22px;
+  left: calc(var(--s-1-5) * -1);
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+}
+
+.activity-rail__button--settings {
+  margin-top: auto;
+}
+
+.activity-rail__dot {
+  background: var(--accent-solid);
+  border: 2px solid var(--surface-1);
+  border-radius: 50%;
+  height: 9px;
+  position: absolute;
+  right: var(--s-2);
+  top: var(--s-1-5);
+  width: 9px;
+}
+
+.activity-rail__dot[data-tone='warning'] {
+  background: var(--warn-solid);
+}
+
+.activity-rail__dot[data-tone='error'] {
+  background: var(--bad-solid);
+}
+
+.rail-page {
+  display: none;
+  flex-direction: column;
+  gap: var(--s-3-5);
+}
+
+.rail-page--active {
+  animation: popover-in var(--dur-3) var(--ease-decel);
+  display: flex;
+}
+
+.control-panel {
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3-5);
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--s-5) var(--s-4) var(--s-4);
+  transition:
+    opacity var(--dur-2) var(--ease-standard),
+    padding var(--dur-2) var(--ease-standard);
+}
+
+.terminal-footer {
+  align-items: center;
+  background: var(--surface-1);
+  border-top: 1px solid var(--line);
+  color: var(--text-mute);
+  display: flex;
+  font-size: var(--type-caption-size);
+  gap: var(--s-2-5);
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-caption-lh);
+  overflow: visible;
+  padding: 0 var(--s-3-5);
+  position: relative;
+}
+
+.workbench-scrim--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workbench-header {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  padding: var(--s-3-5) var(--s-4) var(--s-3);
+}
+
+.workbench-header h2 {
+  color: var(--text-hi);
+  font-size: var(--type-subtitle-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--ls-tight);
+  line-height: var(--type-subtitle-lh);
+  margin: var(--s-0-5) 0 0;
+}
+
+.workbench-eyebrow {
+  color: var(--text-dim);
+  font-size: var(--type-micro-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--ls-eyebrow);
+  line-height: var(--type-micro-lh);
+  text-transform: uppercase;
+}
+
+.workbench-close {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--type-display-size);
+  height: 32px;
+  line-height: 1;
+  width: 32px;
+}
+
+.workbench-close:hover {
+  background: var(--surface-4);
+  color: var(--text-hi);
+}
+
+.workbench-tabs {
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 0 var(--s-3);
+}
+
+.workbench-tab:hover {
+  color: var(--text);
+}
+
+.workbench-tab--active {
+  border-bottom-color: var(--accent-solid);
+  color: var(--text-hi);
+}
+
+.workbench-pages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+/* Workbench page transitions */
+.workbench-page {
+  display: none;
+  padding: var(--s-3-5);
+  transition:
+    opacity var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-decel);
+}
+
+.workbench-page:not(.workbench-page--active) {
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  transform: translateY(12px);
+}
+
+.workbench-page--active {
+  display: block;
+}
+
+/* Workbench tab transitions */
+.workbench-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-medium);
+  height: 40px;
+  letter-spacing: var(--ls-body);
+  line-height: var(--type-body-lh);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+
+/* Workbench drawer slide */
+.claude-workbench {
+  background: var(--surface-2);
+  bottom: calc(var(--footer-h) + var(--composer-h));
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100% - 24px);
+  position: absolute;
+  right: 0;
+  top: var(--toolbar-h);
+  transform: translateX(102%);
+  width: min(var(--drawer-w), calc(100% - 24px));
+  z-index: 8;
+  transition: transform var(--dur-4) var(--ease-decel);
+}
+
+.claude-workbench:not(.claude-workbench--open) {
+  transform: translateX(102%);
+}
+
+.claude-workbench--open {
+  box-shadow: var(--shadow-drawer);
+  transform: translateX(0);
+  transition:
+    box-shadow var(--dur-4) var(--ease-decel),
+    transform var(--dur-4) var(--ease-decel);
+}
+
+.workbench-scrim {
+  background: color-mix(in srgb, var(--surface-canvas) 45%, transparent);
+  border: 0;
+  bottom: calc(var(--footer-h) + var(--composer-h));
+  cursor: default;
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: var(--toolbar-h);
+  z-index: 7;
+  transition: opacity var(--dur-4) var(--ease-decel);
+}
+
+.workbench-scrim:not(.workbench-scrim--visible) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace {
+  display: grid;
+  height: calc(100% - var(--titlebar-h));
+  grid-template-columns:
+    var(--activity-rail-w) minmax(270px, var(--rail-w)) 5px
+    minmax(0, 1fr);
+  /*
+   * The sidebar already fades its contents; without this the column itself snapped to zero, so the
+   * fade played against a gap that had already closed and the collapse read as a hard cut.
+   */
+  transition: grid-template-columns var(--dur-2) var(--ease-standard);
+  position: relative;
+}
+
+/* Dragging the splitter rewrites the same property every frame; easing it would rubber-band. */
+body.is-resizing .workspace {
+  transition: none;
+}
+
+.workspace.workspace--rail-collapsed {
+  grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);
+}
+
+.workspace--rail-collapsed .control-panel {
+  border-right: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding-inline: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.workspace--rail-collapsed.workspace--rail-preview .control-panel {
+  border: 1px solid var(--line-strong);
+  border-left: 0;
+  border-radius: 0 var(--r-xl) var(--r-xl) 0;
+  bottom: var(--s-3);
+  box-shadow: var(--shadow-overlay);
+  clip-path: inset(0 100% 0 0 round 0 var(--r-xl) var(--r-xl) 0);
+  left: var(--activity-rail-w);
+  opacity: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--s-5) var(--s-4) var(--s-4);
+  pointer-events: auto;
+  position: absolute;
+  top: var(--s-3);
+  transition:
+    clip-path var(--dur-3) var(--ease-decel),
+    opacity var(--dur-2) var(--ease-standard);
+  visibility: visible;
+  width: max(270px, var(--rail-w));
+  z-index: 24;
+}
+
+.workspace--rail-collapsed.workspace--rail-preview .control-panel[aria-hidden='false'] {
+  clip-path: inset(0 round 0 var(--r-xl) var(--r-xl) 0);
+}
+
+.activity-rail__button--preview {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+  color: var(--text-hi);
+}
+
+.workspace--rail-collapsed .panel-resizer {
+  display: none;
+}
+
+.panel-resizer {
+  background: var(--surface-1);
+  cursor: col-resize;
+  outline: none;
+  position: relative;
+  touch-action: none;
+  z-index: 5;
+}
+
+.panel-resizer::after,
+.drawer-resizer::after {
+  background: transparent;
+  content: '';
+  inset: 0 1px;
+  position: absolute;
+  transition: background-color var(--dur-2) var(--ease-standard);
+}
+
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.drawer-resizer:hover::after,
+.drawer-resizer:focus-visible::after,
+body.is-resizing .panel-resizer::after,
+body.is-resizing .drawer-resizer::after {
+  background: var(--accent-solid);
+}
+
+body.is-resizing,
+body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.drawer-resizer {
+  bottom: 0;
+  cursor: col-resize;
+  left: calc(var(--s-1) * -1);
+  outline: none;
+  position: absolute;
+  top: 0;
+  touch-action: none;
+  width: 7px;
+  z-index: 3;
+}
+
+.rail-page,
+.rail-page > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/*
+ * The control panel is the scroll container for every page except chat, so those pages keep their
+ * natural height instead of shrinking to fit. Without this the connection history list — whose own
+ * `overflow-y` gives it an automatic minimum size of zero — is the first thing squeezed flat as the
+ * list fills up, instead of scrolling inside its own box.
+ */
+.rail-page:not(.rail-page--chat),
+.rail-page:not(.rail-page--chat) > * {
+  flex-shrink: 0;
+}

@@ -14,6 +14,7 @@ export interface FolderHistoryLoadCompletion {
  */
 export class FolderHistoryLoadCoordinator {
   private readonly active = new Map<string, FolderHistoryLoadToken>();
+  private readonly failed = new Set<string>();
   private nextGeneration = 0;
   private readonly reloadRequested = new Set<string>();
 
@@ -28,9 +29,27 @@ export class FolderHistoryLoadCoordinator {
     };
   }
 
+  /**
+   * A read that failed must stay distinguishable from a folder that genuinely has no conversations:
+   * caching the failure as an empty history would make every later non-forced read short-circuit,
+   * permanently hiding the user's real history behind one transient error.
+   */
+  public hasFailed(projectKey: string): boolean {
+    return this.failed.has(projectKey);
+  }
+
+  public markFailed(projectKey: string): void {
+    this.failed.add(projectKey);
+  }
+
+  public markLoaded(projectKey: string): void {
+    this.failed.delete(projectKey);
+  }
+
   public invalidate(projectKey: string): FolderHistoryLoadToken | undefined {
     const token = this.active.get(projectKey);
     this.active.delete(projectKey);
+    this.failed.delete(projectKey);
     this.reloadRequested.delete(projectKey);
     return token ? { ...token } : undefined;
   }

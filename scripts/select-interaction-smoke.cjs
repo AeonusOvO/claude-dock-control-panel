@@ -4,7 +4,7 @@
  * The native element is layered over the visual trigger to keep focus and assistive-tech reach, which
  * means every press lands on the native element rather than the trigger. This checks the consequences
  * of that layering: a press on the shell opens the popup, a row commits its value, and the popup
- * animates out instead of vanishing.
+ * updates `hidden` synchronously while the browser's discrete CSS transition preserves the exit.
  */
 const { app, BrowserWindow } = require('electron');
 const path = require('node:path');
@@ -64,13 +64,22 @@ const probe = `
   await sleep(40);
   const committed = select.value === wanted;
 
-  // 3. The dismissal must animate rather than blink: still on screen, marked closing, then gone.
-  const closingMarked = popup ? popup.dataset.closing === 'true' : false;
-  const stillOnScreenDuringExit = popup ? !popup.hidden : false;
-  const exitAnimation = popup ? getComputedStyle(popup).animationName : '';
-  await sleep(700);
-  const hiddenAfterExit = popup ? popup.hidden : false;
-  const closingCleared = popup ? popup.dataset.closing === undefined : false;
+  // 3. State closes immediately; display/overlay are delayed by an allow-discrete transition.
+  const hiddenImmediately = popup ? popup.hidden : false;
+  const closingFlagAbsent = popup ? popup.dataset.closing === undefined : false;
+  const exitStyle = popup ? getComputedStyle(popup) : undefined;
+  const displayDuringExit = exitStyle?.display ?? '';
+  const transitionProperty = exitStyle?.transitionProperty ?? '';
+  const transitionBehavior = exitStyle?.transitionBehavior ?? '';
+  const exitAnimations = popup ? popup.getAnimations() : [];
+  const activeTransitionProperties = exitAnimations
+    .map((animation) => animation.transitionProperty)
+    .filter(Boolean);
+  // Hidden BrowserWindows do not promise wall-clock compositor progress. Finish the observed CSS
+  // transitions explicitly so the final discrete display state is still deterministic.
+  for (const animation of exitAnimations) animation.finish();
+  await sleep(0);
+  const displayAfterExit = popup ? getComputedStyle(popup).display : '';
 
   // 4. Reopening after a full close must still work (the exit must not strand state).
   press(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
@@ -79,17 +88,19 @@ const probe = `
 
   return {
     changeFired,
-    closingCleared,
-    closingMarked,
+    activeTransitionProperties,
+    closingFlagAbsent,
     committed,
-    exitAnimation,
-    hiddenAfterExit,
+    displayAfterExit,
+    displayDuringExit,
+    hiddenImmediately,
     hitAtCentreIsNativeSelect: hitAtCentre === select,
     openedPopupVisible,
     reopened,
     rowCount,
     shellAfterPress,
-    stillOnScreenDuringExit,
+    transitionBehavior,
+    transitionProperty,
   };
 })()
 `;
@@ -99,6 +110,7 @@ app.whenReady().then(async () => {
     height: 800,
     show: false,
     webPreferences: {
+      backgroundThrottling: false,
       preload: path.join(__dirname, '..', 'dist', 'preload', 'preload.js'),
     },
     width: 1180,
@@ -119,13 +131,31 @@ app.whenReady().then(async () => {
   if (result.rowCount === 0) failures.push('the popup rendered no rows');
   if (!result.committed) failures.push('clicking a row did not change the native value');
   if (!result.changeFired) failures.push('clicking a row fired no change event');
-  if (!result.closingMarked) failures.push('the dismissal was not marked as closing');
-  if (!result.stillOnScreenDuringExit) failures.push('the popup blinked out instead of animating');
-  if (result.exitAnimation !== 'selectListboxOut') {
-    failures.push(`expected the exit keyframe, got "${result.exitAnimation}"`);
+  if (!result.hiddenImmediately) failures.push('hidden did not update synchronously on commit');
+  if (!result.closingFlagAbsent) failures.push('the retired data-closing flag was set');
+  if (result.displayDuringExit === 'none') {
+    failures.push('the discrete display transition did not preserve the visual exit');
   }
-  if (!result.hiddenAfterExit) failures.push('the popup never hid after its exit animation');
-  if (!result.closingCleared) failures.push('the closing flag was left set');
+  for (const property of ['opacity', 'transform', 'display']) {
+    if (
+      !result.transitionProperty
+        .split(',')
+        .map((value) => value.trim())
+        .includes(property)
+    ) {
+      failures.push(`the popup transition omits ${property}`);
+    }
+  }
+  if (!result.transitionBehavior.includes('allow-discrete')) {
+    failures.push('the popup transition does not opt display into allow-discrete');
+  }
+  if (
+    !result.activeTransitionProperties.some((property) => ['display', 'opacity'].includes(property))
+  ) {
+    failures.push('no CSS transition was active during the visual exit');
+  }
+  if (result.displayAfterExit !== 'none')
+    failures.push('the popup remained painted after its exit');
   if (!result.reopened) failures.push('the select could not be reopened after closing');
 
   if (failures.length > 0) {

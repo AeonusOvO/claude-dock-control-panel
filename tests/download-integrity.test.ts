@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -59,6 +59,25 @@ describe('download integrity gate', () => {
     await expect(completion).rejects.toThrow('校验未通过，文件已删除');
     expect(existsSync(`${fixture.finalPath}.partial`)).toBe(false);
     expect(fixture.engine.list()[0]).toMatchObject({ state: 'failed' });
+    rmSync(fixture.userDataPath, { force: true, recursive: true });
+  });
+
+  it('keeps the verified partial when the atomic replace fails', async () => {
+    const fixture = createFixture();
+    const completion = fixture.start();
+    fixture.electronSession.emit('will-download', { preventDefault: vi.fn() }, fixture.item);
+    writeFileSync(`${fixture.finalPath}.partial`, 'data', { encoding: 'utf8', mode: 0o600 });
+    /*
+     * A directory at finalPath makes renameSync fail deterministically without mocking node:fs,
+     * standing in for the routine Windows EPERM/EBUSY when a scanner still holds the new file.
+     * Verification has already PASSED at that point, so deleting the partial in the catch throws
+     * away good bytes and reports a verification failure that never happened.
+     */
+    mkdirSync(fixture.finalPath, { recursive: true });
+    fixture.item.emit('done', {}, 'completed');
+
+    await expect(completion).rejects.toThrow();
+    expect(existsSync(`${fixture.finalPath}.partial`)).toBe(true);
     rmSync(fixture.userDataPath, { force: true, recursive: true });
   });
 

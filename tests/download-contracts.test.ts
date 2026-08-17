@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { rendererStyles } from './renderer-css';
 
 const contractsSource = readFileSync(
   new URL('../src/shared/contracts.ts', import.meta.url),
@@ -21,7 +22,6 @@ const windowsCommandSource = readFileSync(
   'utf8',
 );
 const rendererMarkup = readFileSync(new URL('../src/renderer/index.html', import.meta.url), 'utf8');
-const rendererStyles = readFileSync(new URL('../src/renderer/styles.css', import.meta.url), 'utf8');
 
 describe('download IPC surface', () => {
   it('keeps list, commands and changed subscription wired across the process boundary', () => {

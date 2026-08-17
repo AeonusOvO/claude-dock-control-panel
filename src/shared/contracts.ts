@@ -8,6 +8,7 @@ import type {
   NativeAttachmentBytesInput,
   NativeAttachmentImportResult,
   NativeAttachmentView,
+  NativeConversationAdoptResult,
   NativeConversationDraftResult,
   NativeConversationLaunchRequest,
   NativeConversationOperationResult,
@@ -453,6 +454,15 @@ export interface AdvancedSettings {
 
 export type FooterResourcePreference = 'auto' | 'context' | 'quota';
 export type ManagedChatGptContextWindowMode = 'extended' | 'standard';
+
+/**
+ * Claude Code derives its context window from the model id, so a gateway that serves a 1M window
+ * behind a plain `claude-opus-5` name is held to 200k and auto-compacts far too early. This mode
+ * lets the user state the intended window explicitly. `auto` keeps Claude Code's own judgement,
+ * which is the only safe default for official subscriptions without 1M entitlement. An explicit
+ * value is a user declaration, not proof that the configured endpoint supports that capacity.
+ */
+export type ClaudeContextWindowMode = 'auto' | 'custom' | 'extended' | 'standard';
 export type ModelSpeedMode = 'fast' | 'standard';
 export type ModelSpeedMechanism = 'claude-native-fast' | 'gpt-service-tier' | 'none';
 export type ModelSpeedAvailability = 'available' | 'unsupported' | 'unverified' | 'update-required';
@@ -471,6 +481,8 @@ export interface ModelSpeedState {
 export interface AppSettingsView {
   advanced: AdvancedSettings;
   artifactNetworkAllowed?: boolean;
+  claudeContextWindowCustomTokens?: number;
+  claudeContextWindowMode: ClaudeContextWindowMode;
   closeBehavior: CloseBehavior;
   footerResourcePreference: FooterResourcePreference;
   managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
@@ -592,6 +604,8 @@ export interface CodexRateLimitsView {
 
 export type ResourceAvailability = 'available' | 'stale' | 'unavailable';
 export type ResourceUsageSource =
+  | 'claude-agent-sdk'
+  | 'claude-configured-target'
   | 'claude-statusline'
   | 'codex-app-server'
   | 'deepseek-balance'
@@ -629,6 +643,11 @@ export interface ResourceUsageView {
   balance?: ResourceBalance;
   capabilities: ResourceCapabilities;
   checkedAt: number;
+  /**
+   * Set when the status line's raw input counter and its window-clamped usage disagree. This proves
+   * a counting/configuration mismatch, not the upstream endpoint's actual context capacity.
+   */
+  contextCountingAnomaly?: ContextCountingAnomaly;
   contextUsedPercent?: number;
   contextUsedTokens?: number;
   contextWindowTokens?: number;
@@ -636,6 +655,13 @@ export interface ResourceUsageView {
   source: ResourceUsageSource;
   staleAt?: number;
   windows?: ResourceWindow[];
+}
+
+export interface ContextCountingAnomaly {
+  /** Raw `total_input_tokens` from the status line, never clamped to the window. */
+  reportedTokens: number;
+  /** The window Claude Code believed it had while reporting the value above. */
+  windowTokens: number;
 }
 
 export interface CodexLoginView {
@@ -880,7 +906,7 @@ export type ManagedChatGptSetupStage =
 export interface ManagedChatGptSetupProgress {
   active: boolean;
   detail: string;
-  sessionId: string;
+  sessionId?: string;
   stage: ManagedChatGptSetupStage;
   step: number;
   totalSteps: number;
@@ -1359,7 +1385,12 @@ export interface ControlPanelApi {
   transferNativeConversationToTerminal: (
     conversationId: string,
     draft?: ConversationSubmitInput,
+    allowInterrupt?: boolean,
   ) => Promise<NativeConversationTerminalTransferResult>;
+  adoptTerminalConversation: (
+    sessionId: string,
+    allowInterrupt?: boolean,
+  ) => Promise<NativeConversationAdoptResult>;
   listNativeRecoveries: () => Promise<NativeRecoveryView[]>;
   restoreNativeDraft: (
     conversationId: string,
@@ -1395,6 +1426,10 @@ export interface ControlPanelApi {
   setFooterResourcePreference: (preference: FooterResourcePreference) => Promise<AppSettingsView>;
   setManagedChatGptContextWindowMode: (
     mode: ManagedChatGptContextWindowMode,
+  ) => Promise<AppSettingsView>;
+  setClaudeContextWindowMode: (
+    mode: ClaudeContextWindowMode,
+    customTokens?: number,
   ) => Promise<AppSettingsView>;
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   setCloseBehavior: (behavior: CloseBehavior) => Promise<AppSettingsView>;
@@ -1575,7 +1610,7 @@ export interface ControlPanelApi {
     model: string,
   ) => Promise<ManagedChatGptGatewayOperationResult>;
   setupManagedChatGptGateway: (
-    sessionId: string,
+    sessionId?: string,
     forceLogin?: boolean,
   ) => Promise<ManagedChatGptGatewayOperationResult>;
   installCcSwitch: (sessionId: string) => Promise<RouterKernelOperationResult>;

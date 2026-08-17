@@ -350,12 +350,19 @@ export class DownloadEngine {
 
   private launch(request: DownloadRequest): Promise<DownloadResult> {
     const { completion, task } = this.createTask(request);
-    this.persistTask(task, true);
-    const pending = this.pendingByUrl.get(task.request.url) ?? [];
-    pending.push(task);
-    this.pendingByUrl.set(task.request.url, pending);
-    this.notify();
     try {
+      /*
+       * `createTask` has already acquired the busy lease and registered the task, so the initial
+       * journal write has to be inside this cleanup: an ENOSPC/EACCES here used to leak both. The
+       * task then stayed unsettled forever (undeletable via deleteHistory, skipped by
+       * clearHistory), its lease sat in the quit dialog, and because ids are version-derived every
+       * retry hit "下载任务已存在".
+       */
+      this.persistTask(task, true);
+      const pending = this.pendingByUrl.get(task.request.url) ?? [];
+      pending.push(task);
+      this.pendingByUrl.set(task.request.url, pending);
+      this.notify();
       this.electronSession.downloadURL(task.request.url);
       this.armStallTimer(task);
     } catch (error) {
@@ -741,10 +748,27 @@ export class DownloadEngine {
       };
       this.notify();
       await this.verifyPartial(task);
-      if (existsSync(task.request.finalPath)) {
-        unlinkSync(task.request.finalPath);
+      try {
+        if (existsSync(task.request.finalPath)) {
+          unlinkSync(task.request.finalPath);
+        }
+        renameSync(`${task.request.finalPath}.partial`, task.request.finalPath);
+      } catch (error) {
+        /*
+         * Verification already passed, so these bytes are known-good. A failed replace (routine
+         * EPERM/EBUSY on Windows while a scanner holds a handle) must not fall into the catch below
+         * and delete them — that used to lose the old file AND the new one, drop the journal entry,
+         * and blame verification for a failure that never happened. Keeping the partial plus its
+         * journal entry leaves the download resumable.
+         */
+        const detail = error instanceof Error ? error.message : '未知错误。';
+        this.fail(
+          task,
+          new Error(`校验已通过，但替换目标文件失败，已保留下载内容：${detail}`),
+          true,
+        );
+        return;
       }
-      renameSync(`${task.request.finalPath}.partial`, task.request.finalPath);
       task.settled = true;
       task.view = {
         ...task.view,
@@ -784,10 +808,20 @@ export class DownloadEngine {
       finishedAt: Date.now(),
       state: 'failed',
     };
-    if (preserveJournal) {
-      this.persistTask(task, true);
-    } else {
-      this.journal.remove(task.request.id);
+    /*
+     * Both journal paths write to disk and can throw (ENOSPC/EACCES). Teardown below — releasing
+     * the busy lease and rejecting the caller — must happen regardless, or a failing disk leaves a
+     * permanently unsettled task whose lease sits in the quit dialog and whose id can never be
+     * retried.
+     */
+    try {
+      if (preserveJournal) {
+        this.persistTask(task, true);
+      } else {
+        this.journal.remove(task.request.id);
+      }
+    } catch {
+      // Losing the resume record is recoverable; leaking the lease is not.
     }
     task.releaseBusy();
     this.recordHistory(task.view);
@@ -842,7 +876,19 @@ export class DownloadEngine {
       return false;
     }
     try {
-      return statSync(entry.savePath).size === entry.receivedBytes;
+      /*
+       * The partial is normally AHEAD of the journal, never behind: `persistTask` is throttled to
+       * one write per JOURNAL_WRITE_INTERVAL_MS and `flushJournal` only re-serializes the cached
+       * entries without re-reading `getReceivedBytes()`, so even a graceful quit records a byte
+       * count up to a second stale. Demanding exact equality therefore threw away a valid partial
+       * on essentially every restart.
+       *
+       * Since downloads only ever append (see `rebindFromDisk`), the recorded offset stays a valid
+       * prefix of a longer partial and `createInterruptedDownload` overwrites the surplus tail. A
+       * partial SHORTER than the journal is still unrecoverable: those bytes were never written, so
+       * resuming at the recorded offset would leave a hole.
+       */
+      return statSync(entry.savePath).size >= entry.receivedBytes;
     } catch {
       return false;
     }

@@ -240,7 +240,7 @@ describe('independent chat history store', () => {
     const created = store.save({ messages: [{ content: '标题', role: 'user' }], usage });
 
     expect(() => store.rename(created.id, '   ')).toThrow(/不能为空/);
-    expect(() => store.rename(created.id, ' ')).toThrow(/不能为空/);
+    expect(() => store.rename(created.id, '\u0007\u0000')).toThrow(/不能为空/);
     expect(() => store.rename(created.id, 'x'.repeat(61))).toThrow(/不能超过 60/);
     expect(() => store.rename(created.id, 42)).toThrow(/无效/);
     expect(store.rename('9f1d3c2b-4a5e-4f6a-8b7c-0d1e2f3a4b5c', '不存在')).toBeUndefined();
@@ -403,5 +403,36 @@ describe('chat history atomic replacement', () => {
     expect(sleep).not.toHaveBeenCalled();
     expect(readFileSync(historyPath, 'utf8')).toBe('last-valid-history');
     expect(existsSync(temporaryPath)).toBe(false);
+  });
+  it('keeps a durably committed history when attachment cleanup fails afterwards', () => {
+    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'claudedock-chat-history-'));
+    fixtureRoots.push(fixtureRoot);
+    const cleanupError = fileSystemError('EBUSY', 'attachment directory is locked');
+    const attachmentStore = new ChatAttachmentStore(fixtureRoot);
+    /*
+     * rmSync on a locked attachment directory is routine on Windows when a viewer still holds an
+     * image. By then the history file has already been renamed into place, so surfacing this as an
+     * overall failure tells the caller nothing was saved and invites a retry of a committed write.
+     */
+    vi.spyOn(attachmentStore, 'deleteUnreferenced').mockImplementation(() => {
+      throw cleanupError;
+    });
+    const store = new ChatHistoryStore(fixtureRoot, attachmentStore);
+    const first = store.save({
+      messages: [{ content: '第一轮', role: 'user' }],
+      usage,
+    });
+
+    const second = store.save({
+      conversationId: first.id,
+      messages: [{ content: '第二轮', role: 'user' }],
+      usage,
+    });
+
+    expect(second.id).toBe(first.id);
+    // The durable write happened, so the reloaded history must show it.
+    expect(new ChatHistoryStore(fixtureRoot).get(first.id)?.messages.at(-1)?.content).toEqual([
+      { text: '第二轮', type: 'text' },
+    ]);
   });
 });
