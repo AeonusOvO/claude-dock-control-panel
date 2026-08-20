@@ -4,8 +4,9 @@ export default defineConfig({
   root: 'src/renderer',
   base: './',
   build: {
-    // Shiki's WASM/language grammars and the single renderer entry are intentionally local-first;
-    // 1.2 MB is the audited budget, not an accidental default-warning suppression.
+    // Shiki's WASM engine and language grammars ship inside the bundle so that highlighting works
+    // without network access, which puts the single renderer entry chunk well above Vite's 500 kB
+    // default threshold.
     chunkSizeWarningLimit: 1_200,
     outDir: '../../dist/renderer',
     emptyOutDir: true,

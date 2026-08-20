@@ -16,5 +16,11 @@
     "noUncheckedIndexedAccess": true,
     "types": ["vite/client", "node", "vitest/globals"]
   },
-  "include": ["src/renderer/**/*.ts", "src/shared/**/*.ts", "tests/**/*.ts", "vite.config.ts"]
+  "include": [
+    "src/renderer/**/*.ts",
+    "src/shared/**/*.ts",
+    "tests/**/*.ts",
+    "vite.config.ts",
+    "vite.preload.config.ts"
+  ]
 }
