@@ -1,0 +1,274 @@
+import { CHANNELS } from '../../shared/ipc/channels';
+import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
+import type {
+  AdvancedSettings,
+  AppSettingsView,
+  ClaudeContextWindowMode,
+  CloseBehavior,
+  DiagnosticLogLevel,
+  DiagnosticsQuery,
+  DirectoryChoiceResult,
+  FooterResourcePreference,
+  ManagedChatGptContextWindowMode,
+} from '../../shared/contracts';
+import {
+  DEFAULT_TERMINAL_THEME,
+  isTerminalThemeId,
+  type TerminalThemeId,
+} from '../../shared/ui/terminal-themes';
+import type { ArtifactService } from '../artifact/service';
+import { isValidClaudeCustomContextWindow } from '../claude/configuration';
+import type { Registry } from '../infra/registry';
+import { CLAUDE_RUNTIME, MAIN_DIAGNOSTICS } from '../infra/service-tokens';
+import type { AdvancedSettingsStore } from '../stores/advanced-settings';
+import type { AppPreferencesStore } from '../stores/app-preferences';
+import type { WorkspaceStore } from '../stores/workspace';
+import type { TerminalWorkspace } from '../terminal/workspace';
+import { validateExternalUrl, validateMarkdownExternalUrl, windowsBuildNumber } from './validation';
+import type { MainState } from './context';
+import type { MainGuards } from './guards';
+
+const diagnosticLevels = new Set<DiagnosticLogLevel>(['debug', 'info', 'warn', 'error']);
+
+const parseDiagnosticsQuery = (input: unknown): DiagnosticsQuery => {
+  if (input === undefined) return {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('诊断查询参数无效。');
+  }
+  const candidate = input as Record<string, unknown>;
+  const optionalText = (key: 'code' | 'domain' | 'message' | 'sessionId', limit: number) => {
+    const value = candidate[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== 'string' || value.length === 0 || value.length > limit) {
+      throw new Error('诊断查询参数无效。');
+    }
+    return value;
+  };
+  const level = candidate.level;
+  if (
+    level !== undefined &&
+    (typeof level !== 'string' || !diagnosticLevels.has(level as DiagnosticLogLevel))
+  ) {
+    throw new Error('诊断查询级别无效。');
+  }
+  const limit = candidate.limit;
+  if (
+    limit !== undefined &&
+    (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 500)
+  ) {
+    throw new Error('诊断查询数量无效。');
+  }
+  return {
+    code: optionalText('code', 100),
+    domain: optionalText('domain', 100),
+    level: level as DiagnosticLogLevel | undefined,
+    limit: limit as number | undefined,
+    message: optionalText('message', 2_000),
+    sessionId: optionalText('sessionId', 200),
+  };
+};
+
+export interface AppIpcDependencies {
+  advancedSettingsStore: AdvancedSettingsStore;
+  appPreferencesStore: AppPreferencesStore;
+  /* The window is created before any renderer exists, so the frame theme stays with the assembly. */
+  applyWindowTheme: (themeId: TerminalThemeId) => void;
+  artifactService: ArtifactService;
+  /* Quit and tray flow through the window/tray assembly, which owns the single-instance handshake. */
+  beginControlledQuit: (forceWithResidualProcesses: boolean) => Promise<void>;
+  /* The tray "add project" entry opens the same dialog. */
+  chooseDirectory: (ownerWindow?: BrowserWindow) => Promise<DirectoryChoiceResult>;
+  guards: Pick<MainGuards, 'validateSender'>;
+  hideMainWindowToTray: () => void;
+  services: Registry;
+  state: MainState;
+  workspace: TerminalWorkspace;
+  workspaceStore: WorkspaceStore;
+}
+
+export const registerAppIpc = ({
+  advancedSettingsStore,
+  appPreferencesStore,
+  applyWindowTheme,
+  artifactService,
+  beginControlledQuit,
+  chooseDirectory,
+  guards: { validateSender },
+  hideMainWindowToTray,
+  services,
+  state,
+  workspace,
+  workspaceStore,
+}: AppIpcDependencies): void => {
+  const appSettingsView = (): AppSettingsView => ({
+    advanced: advancedSettingsStore.get(),
+    artifactNetworkAllowed: artifactService.getState().allowed,
+    claudeContextWindowCustomTokens: appPreferencesStore.get().claudeContextWindowCustomTokens,
+    claudeContextWindowMode: appPreferencesStore.get().claudeContextWindowMode,
+    closeBehavior: appPreferencesStore.get().closeBehavior,
+    footerResourcePreference: appPreferencesStore.get().footerResourcePreference,
+    managedChatGptContextWindowMode: appPreferencesStore.get().managedChatGptContextWindowMode,
+    language: 'zh-CN',
+    launchAtLogin: app.getLoginItemSettings().openAtLogin,
+    theme: workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
+    version: app.getVersion(),
+    windowsBuildNumber: windowsBuildNumber(),
+  });
+  ipcMain.handle(CHANNELS.APP_GET_SETTINGS, (event) => {
+    validateSender(event);
+    return appSettingsView();
+  });
+  ipcMain.handle(CHANNELS.APP_GET_DIAGNOSTICS, (event, query: unknown) => {
+    validateSender(event);
+    return services.resolve(MAIN_DIAGNOSTICS).query(parseDiagnosticsQuery(query));
+  });
+  ipcMain.handle(CHANNELS.APP_SET_ADVANCED_SETTINGS, (event, settings: unknown) => {
+    validateSender(event);
+    const record =
+      settings && typeof settings === 'object'
+        ? (settings as Partial<AdvancedSettings>)
+        : undefined;
+    if (
+      ![0, 5, 10, 30].includes(record?.chatIdleTimeoutMinutes ?? -1) ||
+      typeof record?.webResearchIsolation !== 'boolean'
+    ) {
+      throw new Error('高级设置无效。');
+    }
+    advancedSettingsStore.set({
+      chatIdleTimeoutMinutes: record.chatIdleTimeoutMinutes as 0 | 5 | 10 | 30,
+      webResearchIsolation: record.webResearchIsolation,
+    });
+    return appSettingsView();
+  });
+  ipcMain.handle(CHANNELS.APP_SET_FOOTER_RESOURCE_PREFERENCE, (event, preference: unknown) => {
+    validateSender(event);
+    if (preference !== 'auto' && preference !== 'context' && preference !== 'quota') {
+      throw new Error('底栏资源偏好无效。');
+    }
+    appPreferencesStore.set({ footerResourcePreference: preference as FooterResourcePreference });
+    return appSettingsView();
+  });
+  ipcMain.handle(CHANNELS.APP_SET_MANAGED_CHATGPT_CONTEXT_WINDOW_MODE, (event, mode: unknown) => {
+    validateSender(event);
+    if (mode !== 'standard' && mode !== 'extended') {
+      throw new Error('ChatGPT 上下文窗口模式无效。');
+    }
+    appPreferencesStore.set({
+      managedChatGptContextWindowMode: mode as ManagedChatGptContextWindowMode,
+    });
+    return appSettingsView();
+  });
+  ipcMain.handle(
+    CHANNELS.APP_SET_CLAUDE_CONTEXT_WINDOW_MODE,
+    (event, mode: unknown, customTokens: unknown) => {
+      validateSender(event);
+      if (mode !== 'auto' && mode !== 'custom' && mode !== 'extended' && mode !== 'standard') {
+        throw new Error('Claude 上下文窗口模式无效。');
+      }
+      const tokens = customTokens === undefined ? undefined : Number(customTokens);
+      if (mode === 'custom' && !isValidClaudeCustomContextWindow(tokens)) {
+        throw new Error('自定义上下文窗口需为 8000 到 2000000 之间的整数。');
+      }
+      appPreferencesStore.set({
+        claudeContextWindowCustomTokens: mode === 'custom' ? tokens : undefined,
+        claudeContextWindowMode: mode as ClaudeContextWindowMode,
+      });
+      return appSettingsView();
+    },
+  );
+  ipcMain.handle(CHANNELS.APP_SET_LAUNCH_AT_LOGIN, (event, enabled: unknown) => {
+    validateSender(event);
+    if (typeof enabled !== 'boolean') {
+      throw new Error('开机启动设置无效。');
+    }
+    app.setLoginItemSettings({
+      args: app.isPackaged ? [] : [app.getAppPath()],
+      openAtLogin: enabled,
+      path: process.execPath,
+    });
+    return appSettingsView();
+  });
+  ipcMain.handle(CHANNELS.APP_SET_CLOSE_BEHAVIOR, (event, behavior: unknown) => {
+    validateSender(event);
+    if (behavior !== 'exit' && behavior !== 'tray') {
+      throw new Error('关闭按钮行为无效。');
+    }
+    appPreferencesStore.set({ closeBehavior: behavior as CloseBehavior });
+    return appSettingsView();
+  });
+  ipcMain.handle(CHANNELS.APP_OPEN_EXTERNAL, async (event, url: unknown) => {
+    validateSender(event);
+    try {
+      await shell.openExternal(validateExternalUrl(url));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  ipcMain.handle(CHANNELS.APP_CLIPBOARD_READ, (event) => {
+    validateSender(event);
+    return clipboard.readText().slice(0, 5 * 1024 * 1024);
+  });
+  ipcMain.handle(CHANNELS.APP_CLIPBOARD_WRITE, (event, text: unknown) => {
+    validateSender(event);
+    if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) {
+      return false;
+    }
+    clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.on(CHANNELS.APP_CONFIRM_QUIT, (event, confirmed: unknown) => {
+    validateSender(event);
+    if (state.quitConfirmationTimer) {
+      clearTimeout(state.quitConfirmationTimer);
+      state.quitConfirmationTimer = undefined;
+    }
+    state.quitConfirmationPending = false;
+    if (confirmed === 'retry' && state.quitResidualConfirmationPending) {
+      state.quitResidualConfirmationPending = false;
+      void beginControlledQuit(false);
+      return;
+    }
+    if (confirmed !== true) {
+      state.quitResidualConfirmationPending = false;
+      return;
+    }
+    const forceWithResidualProcesses = state.quitResidualConfirmationPending;
+    state.quitResidualConfirmationPending = false;
+    void beginControlledQuit(forceWithResidualProcesses);
+  });
+  ipcMain.on(CHANNELS.APP_QUIT_REQUEST_RECEIVED, (event) => {
+    validateSender(event);
+    if (state.quitConfirmationTimer) {
+      clearTimeout(state.quitConfirmationTimer);
+      state.quitConfirmationTimer = undefined;
+    }
+  });
+  ipcMain.on(CHANNELS.APP_MINIMIZE_TO_TRAY, (event) => {
+    validateSender(event);
+    hideMainWindowToTray();
+  });
+  ipcMain.handle(CHANNELS.MARKDOWN_OPEN_EXTERNAL, async (event, url: unknown) => {
+    validateSender(event);
+    try {
+      await shell.openExternal(validateMarkdownExternalUrl(url));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  ipcMain.handle(CHANNELS.DIRECTORY_CHOOSE, async (event) => {
+    validateSender(event);
+    return chooseDirectory(BrowserWindow.fromWebContents(event.sender) ?? undefined);
+  });
+  ipcMain.handle(CHANNELS.UI_SET_THEME, async (event, themeId: unknown) => {
+    validateSender(event);
+    if (!isTerminalThemeId(themeId)) {
+      throw new Error('主题标识无效。');
+    }
+    workspaceStore.setTheme(themeId);
+    workspace.setTheme(themeId);
+    services.resolve(CLAUDE_RUNTIME).setTheme(themeId);
+    applyWindowTheme(themeId);
+  });
+};

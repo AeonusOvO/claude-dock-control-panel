@@ -1,0 +1,206 @@
+import type {
+  ClaudePreset,
+  ClaudeProjectState,
+  SaveClaudeConfigInput,
+} from '../../../shared/contracts';
+import type { ClaudeProviderId } from '../../../shared/claude/providers';
+import { createAdvancedSnapshotApi, type AdvancedSnapshotApi } from './advanced-snapshot';
+import { savedClaudeConfigInput } from './form-config-input';
+import {
+  claudeAuthMode,
+  claudeBaseUrl,
+  claudeConfigForm,
+  claudeCredential,
+  claudeModel,
+  claudeModelFast,
+  claudePreset,
+  claudeProtocol,
+  connectionAdvancedContent,
+  connectionAdvice,
+  connectionRemedyActions,
+  credentialField,
+  environmentSetup,
+  providerPicker,
+} from './form-elements';
+import { createConnectionFormBindingsActions } from './form-bindings';
+import type { ConnectionFormDeps } from './form-dependencies';
+import { createConnectionFormConfigInputActions } from './form-config-input';
+import { createConnectionFormPickerActions } from './form-picker';
+import { createConnectionFormPopulateActions } from './form-populate';
+import { createConnectionFormPresetActions } from './form-preset';
+import { createConnectionFormProviderToolsActions } from './form-provider-tools';
+import { createConnectionFormSaveActions } from './form-save';
+import { createConnectionFormState } from './form-state';
+import { createConnectionFormSyncActions } from './form-sync';
+
+export type { ConnectionFormDeps } from './form-dependencies';
+
+export interface ConnectionForm {
+  readonly claudeAuthMode: HTMLSelectElement;
+  readonly claudeBaseUrl: HTMLInputElement;
+  readonly claudeConfigForm: HTMLFormElement;
+  readonly claudeCredential: HTMLInputElement;
+  readonly claudeModel: HTMLInputElement;
+  readonly claudeModelFast: HTMLInputElement;
+  readonly claudePreset: HTMLSelectElement;
+  readonly connectionAdvice: HTMLElement;
+  readonly connectionRemedyActions: HTMLElement;
+  readonly credentialField: HTMLElement;
+  readonly environmentSetup: HTMLElement;
+  readonly providerPicker: HTMLElement;
+  savedClaudeConfigInput: typeof savedClaudeConfigInput;
+  setAuthOptions: (
+    options: Array<{ label: string; value: SaveClaudeConfigInput['authMode'] }>,
+    selected?: SaveClaudeConfigInput['authMode'],
+  ) => void;
+  syncApiKeyHelperPolicyUi: () => void;
+  syncConnectionInteractivity: () => void;
+  applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void;
+  clearProviderSelection: (clearDraft?: boolean) => void;
+  applyDefaultProviderGroupExpansion: (providerId?: ClaudeProviderId) => void;
+  renderProviderPicker: () => void;
+  populateClaudeConfigForm: (state: ClaudeProjectState) => void;
+  currentConfigInput: (
+    credentialAction: SaveClaudeConfigInput['credentialAction'],
+  ) => SaveClaudeConfigInput;
+  completeVisibleConnectionEndpoint: (reportError: boolean) => void;
+  saveClaudeConfig: (
+    credentialAction: SaveClaudeConfigInput['credentialAction'],
+  ) => Promise<boolean>;
+  captureAdvancedConnectionSnapshot: AdvancedSnapshotApi['captureAdvancedConnectionSnapshot'];
+  restoreAdvancedConnectionSnapshot: AdvancedSnapshotApi['restoreAdvancedConnectionSnapshot'];
+  getSelectedProviderId: () => ClaudeProviderId | undefined;
+  getConfigFormSessionId: () => string;
+  setConfigFormSessionId: (sessionId: string) => void;
+  getConnectionEnvironmentReady: () => boolean;
+  setConnectionEnvironmentReady: (ready: boolean) => void;
+  getProviderGroupExpansionPending: () => boolean;
+  setProviderGroupExpansionPending: (pending: boolean) => void;
+  unsubscribeManagedChatGptSetupProgress: () => void;
+}
+
+export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm => {
+  const formState = createConnectionFormState();
+  let providerGroupExpansionPending = false;
+
+  const syncActions = createConnectionFormSyncActions(deps, formState);
+  const { setAuthOptions, syncApiKeyHelperPolicyUi, syncConnectionInteractivity } = syncActions;
+  const configInputActions = createConnectionFormConfigInputActions(formState);
+  const { currentConfigInput, completeVisibleConnectionEndpoint } = configInputActions;
+
+  const providerToolsActions = createConnectionFormProviderToolsActions(
+    deps,
+    formState,
+    () => pickerActions.renderProviderPicker(),
+    syncConnectionInteractivity,
+    (preset, preserveValues) => presetActions.applyPresetUi(preset, preserveValues),
+  );
+  const { clearProviderSelection, moveProviderTools } = providerToolsActions;
+  const presetActions = createConnectionFormPresetActions(
+    formState,
+    setAuthOptions,
+    moveProviderTools,
+    () => pickerActions.renderProviderPicker(),
+    syncConnectionInteractivity,
+  );
+  const { applyPresetUi } = presetActions;
+  const pickerActions = createConnectionFormPickerActions(
+    deps,
+    formState,
+    clearProviderSelection,
+    applyPresetUi,
+  );
+  const { applyDefaultProviderGroupExpansion, renderProviderPicker } = pickerActions;
+  const populateActions = createConnectionFormPopulateActions(
+    formState,
+    applyPresetUi,
+    renderProviderPicker,
+  );
+  const { populateClaudeConfigForm } = populateActions;
+  const saveActions = createConnectionFormSaveActions(
+    deps,
+    currentConfigInput,
+    populateClaudeConfigForm,
+  );
+  const { saveClaudeConfig } = saveActions;
+
+  const advancedSnapshot = createAdvancedSnapshotApi({
+    applyPresetUi,
+    claudeAuthMode,
+    claudeBaseUrl,
+    claudeCredential,
+    claudeModel,
+    claudeModelFast,
+    claudeProtocol,
+    clearProviderSelection,
+    connectionAdvancedContent,
+    credentialField,
+    getSelectedProviderId: () => formState.selectedProviderId,
+    getSelectedRouterProviderId: () => formState.selectedRouterProviderId,
+    renderProviderPicker,
+    setSelectedRouterProviderId: (providerId) => {
+      formState.selectedRouterProviderId = providerId;
+    },
+    syncConnectionInteractivity,
+  });
+
+  const unsubscribeManagedChatGptSetupProgress = window.controlPanel.onManagedChatGptSetupProgress(
+    (progress) => {
+      formState.managedChatGptOperations.update(progress.sessionId, progress.active);
+      formState.renderManagedChatGptProgress?.(progress);
+    },
+  );
+
+  const bindingsActions = createConnectionFormBindingsActions(
+    deps,
+    formState,
+    applyPresetUi,
+    completeVisibleConnectionEndpoint,
+    syncApiKeyHelperPolicyUi,
+    saveClaudeConfig,
+  );
+  bindingsActions.bindConnectionForm();
+
+  return {
+    claudeAuthMode,
+    claudeBaseUrl,
+    claudeConfigForm,
+    claudeCredential,
+    claudeModel,
+    claudeModelFast,
+    claudePreset,
+    connectionAdvice,
+    connectionRemedyActions,
+    credentialField,
+    environmentSetup,
+    providerPicker,
+    savedClaudeConfigInput,
+    setAuthOptions,
+    syncApiKeyHelperPolicyUi,
+    syncConnectionInteractivity,
+    applyPresetUi,
+    clearProviderSelection,
+    applyDefaultProviderGroupExpansion,
+    renderProviderPicker,
+    populateClaudeConfigForm,
+    currentConfigInput,
+    completeVisibleConnectionEndpoint,
+    saveClaudeConfig,
+    captureAdvancedConnectionSnapshot: advancedSnapshot.captureAdvancedConnectionSnapshot,
+    restoreAdvancedConnectionSnapshot: advancedSnapshot.restoreAdvancedConnectionSnapshot,
+    getSelectedProviderId: () => formState.selectedProviderId,
+    getConfigFormSessionId: () => formState.configFormSessionId,
+    setConfigFormSessionId: (sessionId) => {
+      formState.configFormSessionId = sessionId;
+    },
+    getConnectionEnvironmentReady: () => formState.connectionEnvironmentReady,
+    setConnectionEnvironmentReady: (ready) => {
+      formState.connectionEnvironmentReady = ready;
+    },
+    getProviderGroupExpansionPending: () => providerGroupExpansionPending,
+    setProviderGroupExpansionPending: (pending) => {
+      providerGroupExpansionPending = pending;
+    },
+    unsubscribeManagedChatGptSetupProgress,
+  };
+};

@@ -1,0 +1,165 @@
+import { resultFailureMessage } from '../../platform/format';
+import { runManagedChatGptOperation } from './managed-chatgpt-operation';
+import type { ChatGptGuideElements } from './chatgpt-guide-elements';
+import type { ChatGptSubscriptionGuideDeps } from './chatgpt-guide-dependencies';
+import type { ChatGptGuideRenderActions } from './chatgpt-guide-render';
+
+export interface ChatGptGuideSetupActions {
+  runSetup: (forceLogin: boolean, button: HTMLButtonElement) => Promise<void>;
+}
+
+export const createChatGptGuideSetupActions = (
+  elements: ChatGptGuideElements,
+  deps: ChatGptSubscriptionGuideDeps,
+  renderActions: ChatGptGuideRenderActions,
+): ChatGptGuideSetupActions => {
+  const { guide, statusCard, statusTitle, statusDetail, action, modelSelect } = elements;
+  const {
+    getActiveSessionId,
+    claudeStates,
+    managedChatGptOperations,
+    getSelectedProviderId,
+    applyPresetUi,
+    renderClaudeState,
+    showToast,
+  } = deps;
+  const { renderState } = renderActions;
+
+  const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
+    const sessionId = getActiveSessionId() || undefined;
+    const original = button.textContent;
+    let restoreOriginalLabel = true;
+    let resultStateRendered = false;
+    let operationStarted = false;
+    try {
+      const execution = await runManagedChatGptOperation(
+        managedChatGptOperations,
+        sessionId,
+        async (operationSessionId) => {
+          operationStarted = true;
+          button.disabled = true;
+          modelSelect.disabled = true;
+          statusCard.dataset.phase = 'installing';
+          statusTitle.textContent = '正在安装并配置托管网关';
+          button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
+          statusDetail.textContent =
+            '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
+          return window.controlPanel.setupManagedChatGptGateway(operationSessionId, forceLogin);
+        },
+      );
+      if (!execution.started) {
+        showToast('托管网关正在安装或配置，请等待当前操作完成。');
+        return;
+      }
+      const result = execution.result;
+      renderState(result.state, result.projectState?.config.model);
+      resultStateRendered = true;
+      if (!result.ok) {
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '配置未完成';
+        statusDetail.textContent = resultFailureMessage(result, result.message);
+        if (button === action) {
+          action.textContent = '重试';
+          restoreOriginalLabel = false;
+        }
+        showToast(resultFailureMessage(result, result.message), 'error');
+        return;
+      }
+      if (result.projectState) {
+        renderClaudeState(result.projectState);
+      }
+      if (result.connectionTest) {
+        statusDetail.textContent = result.connectionTest.message;
+      }
+      showToast(result.message);
+    } catch {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '配置未完成';
+      statusDetail.textContent = '无法完成 ChatGPT 托管网关配置，请稍后重试。';
+      if (button === action) {
+        action.textContent = '重试';
+        restoreOriginalLabel = false;
+      }
+      showToast('无法完成 ChatGPT 托管网关配置。', 'error');
+    } finally {
+      if (operationStarted) {
+        if (button.isConnected) {
+          button.disabled = managedChatGptOperations.busy;
+          if (restoreOriginalLabel && !resultStateRendered) {
+            button.textContent = original;
+          }
+        } else if (getSelectedProviderId() === 'chatgpt-subscription') {
+          applyPresetUi('chatgpt-subscription', true);
+        }
+        if (guide.isConnected) {
+          modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+        }
+      }
+    }
+  };
+
+  action.addEventListener('click', () => {
+    void runSetup(false, action);
+  });
+  modelSelect.addEventListener('change', () => {
+    const sessionId = getActiveSessionId();
+    const previousModel = claudeStates.get(sessionId)?.config.model;
+    const requestedModel = modelSelect.value;
+    if (!sessionId || !requestedModel || !managedChatGptOperations.begin(sessionId)) {
+      return;
+    }
+    modelSelect.disabled = true;
+    void window.controlPanel
+      .setManagedChatGptGatewayModel(sessionId, requestedModel)
+      .then((result) => {
+        managedChatGptOperations.finish(sessionId);
+        renderState(result.state, result.projectState?.config.model);
+        if (!result.ok) {
+          if (previousModel && result.state.availableModels.includes(previousModel)) {
+            modelSelect.value = previousModel;
+          }
+          statusCard.dataset.phase = 'error';
+          statusTitle.textContent = '模型切换未完成';
+          statusDetail.textContent = resultFailureMessage(result, result.message);
+          showToast(resultFailureMessage(result, result.message), 'error');
+          return;
+        }
+        if (result.projectState) {
+          renderClaudeState(result.projectState);
+        }
+        statusTitle.textContent = '模型已验证并切换';
+        statusDetail.textContent = result.message;
+        showToast(result.message);
+      })
+      .catch(() => {
+        if (previousModel) {
+          modelSelect.value = previousModel;
+        }
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '模型切换未完成';
+        statusDetail.textContent = '无法验证并切换所选模型。';
+        showToast('无法验证并切换所选模型。', 'error');
+      })
+      .finally(() => {
+        managedChatGptOperations.finish(sessionId);
+        modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+      });
+  });
+  void window.controlPanel
+    .getManagedChatGptGatewayState()
+    .then((state) => {
+      if (guide.isConnected) {
+        renderState(state);
+      }
+    })
+    .catch(() => {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '无法读取托管网关状态';
+      statusDetail.textContent = '请稍后重试。';
+      action.disabled = false;
+    });
+
+  return {
+    runSetup,
+  };
+};

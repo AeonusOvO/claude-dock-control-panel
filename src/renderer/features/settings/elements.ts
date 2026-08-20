@@ -1,0 +1,21 @@
+import { requiredElement } from '../../platform/dom';
+
+export interface SettingsElements {
+  chatIdleTimeout: HTMLSelectElement;
+  closeBehavior: HTMLSelectElement;
+  language: HTMLSelectElement;
+  launchAtLogin: HTMLInputElement;
+  unsavedIndicator: HTMLElement;
+  version: HTMLOutputElement;
+  webResearchIsolation: HTMLInputElement;
+}
+
+export const createSettingsElements = (): SettingsElements => ({
+  chatIdleTimeout: requiredElement('#settings-chat-idle-timeout'),
+  closeBehavior: requiredElement('#settings-close-behavior'),
+  language: requiredElement('#settings-language'),
+  launchAtLogin: requiredElement('#settings-launch-at-login'),
+  unsavedIndicator: requiredElement('#settings-unsaved-indicator'),
+  version: requiredElement('#settings-version'),
+  webResearchIsolation: requiredElement('#settings-web-research-isolation'),
+});

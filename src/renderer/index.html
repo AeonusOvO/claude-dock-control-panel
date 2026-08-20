@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; frame-src claudedock-artifact:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173;"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: https:; frame-src claudedock-artifact:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ClaudeDock 控制面板</title>
@@ -760,9 +760,9 @@
             <div class="privacy-shield">
               <span class="privacy-shield__icon" aria-hidden="true">◆</span>
               <div>
-                <strong>严格防护始终启用</strong>
+                <strong>会话环境已锁定</strong>
                 <span
-                  >锁定端点和模型；关闭遥测、错误上报、反馈与网页抓取功能的 Anthropic 预检。</span
+                  >端点与模型由项目配置决定；遥测、错误上报与 WebFetch 的 Anthropic 预检关闭。</span
                 >
               </div>
             </div>
@@ -2277,14 +2277,6 @@
             >
               路由
             </button>
-            <button
-              class="settings-tab"
-              data-settings-tab="legal"
-              type="button"
-              aria-selected="false"
-            >
-              隐私与合规
-            </button>
           </nav>
           <div class="settings-panels">
             <section class="settings-panel settings-panel--active" data-settings-panel="general">
@@ -2413,11 +2405,6 @@
               <div id="connection-advanced-content"></div>
             </section>
             <section class="settings-panel proxy-settings" data-settings-panel="proxy">
-              <p class="proxy-boundary-notice">
-                <strong>仅连接用户已有代理：</strong>
-                ClaudeDock 只保存并传递用户明确填写的 HTTP / SOCKS5
-                连接参数，不提供任何第三方网络服务。请只填写你有权使用且符合所在地法律及服务条款的地址。
-              </p>
               <p class="proxy-boundary-notice">
                 配置只作用于勾选的 ClaudeDock 进程与会话；不修改 Windows 系统代理、路由表、DNS、
                 网卡或其他软件，也不会读取或迁移旧版网络配置。
@@ -2632,60 +2619,6 @@
                 <ol id="cc-switch-residuals" class="cc-switch-residuals"></ol>
               </section>
               <div id="router-settings-content"></div>
-            </section>
-            <section class="settings-panel legal-settings" data-settings-panel="legal">
-              <div class="settings-section-heading">
-                <strong>隐私与联网说明</strong>
-                <span>联网功能的接收方、供应链校验和用户边界会持续公开。</span>
-              </div>
-              <div class="legal-card">
-                <strong>本机保存</strong>
-                <p>
-                  ClaudeDock 不要求注册账号，也不内置遥测。项目记录、对话历史和诊断记录保存在当前
-                  Windows 用户目录；服务密钥使用 Windows DPAPI 加密。删除本地记录即可停止相应处理。
-                </p>
-              </div>
-              <div class="legal-card">
-                <strong>会发送到哪里</strong>
-                <p>
-                  应用更新会访问 GitHub Release 或维护者的 HTTPS IP 镜像，并先验证独立签名的发布
-                  清单；工具更新还可能访问 npm 或
-                  npmmirror。对话内容、附件和终端请求只会发送到你选择的 AI
-                  服务或中转端点。境外服务可能构成个人信息跨境处理，请勿提交无权处理的个人信息、秘密或受限数据。
-                </p>
-              </div>
-              <div class="legal-card">
-                <strong>AI 内容提示</strong>
-                <p>
-                  对话区的模型回复会标记为“AI
-                  生成”。生成内容可能不准确，涉及医疗、法律、金融或对外发布时必须人工核验；不得移除依法需要保留的生成内容标识。
-                </p>
-              </div>
-              <div class="legal-card legal-card--risk">
-                <strong>外部代理仍需合法使用</strong>
-                <p>
-                  ClaudeDock 只把用户填写的 HTTP / SOCKS5
-                  地址作为所选进程的连接参数；这不代表该地址当然合法或已获授权。用户应自行确认服务来源、合同权限，并遵守所在地法律与服务条款。
-                </p>
-              </div>
-              <div class="legal-links">
-                <button
-                  type="button"
-                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/blob/main/docs/PRIVACY.md"
-                >
-                  完整隐私说明
-                </button>
-                <button
-                  type="button"
-                  data-legal-url="https://github.com/AeonusOvO/claude-dock-control-panel/security/advisories/new"
-                >
-                  私密报告安全漏洞
-                </button>
-              </div>
-              <p class="settings-help">
-                维护者：AeonusOvO；公开联系电话：13585928550。一般联系与权利请求使用公开仓库 GitHub
-                Issues；安全漏洞请使用上方私密报告渠道。
-              </p>
             </section>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import type { ApplicationProxyCandidate, ApplicationProxyView } from '../../shared/contracts';
-import type { TerminalEnvironmentOverrides } from '../terminal-session';
+import type { TerminalEnvironmentOverrides } from '../terminal/session';
 import type { ApplicationProxyCredentials } from './application-proxy-store';
 
 const REQUIRED_NO_PROXY = ['127.0.0.1', 'localhost', '::1'];

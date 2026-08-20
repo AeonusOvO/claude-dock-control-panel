@@ -16,9 +16,9 @@
 }
 
 /*
- * The footer stays mounted in native mode: design.md:451 makes it the single owner of model,
- * permission mode, effort and Fast. `.native-conversation` is pinned to grid-row 2, so the footer
- * needs an explicit row or auto-placement puts it somewhere unpredictable.
+ * The footer stays mounted in native mode because it is the single owner of model, permission mode,
+ * effort and Fast. `.native-conversation` is pinned to grid-row 2, so the footer needs an explicit
+ * row or auto-placement puts it somewhere unpredictable.
  */
 .terminal-shell--native > .terminal-footer {
   grid-row: 3;

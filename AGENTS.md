@@ -1,22 +1,38 @@
 # ClaudeDock 项目规则
 
-- 项目定位：Windows 桌面 PowerShell 控制面板；不得修改 Codex、Claude Code 或系统级 API 路由。
-- 路由接管边界：只管理 Claude Code / Codex 的 CLI 会话。不得安装、卸载、终止或改写 Claude、Codex、
-  CCR 的桌面 App；CCR RPC 保存配置必须保持 `applyProfile: false`，由 ClaudeDock 启动 CLI 时注入本机路由。
-- 默认接入必须是单一自动事务：软件检测环境、补齐组件、选择必要路由、发现模型、真实测试并保存；
-  普通用户不手动选择路由内核、不填写可实时发现的模型标识，路由/网关后台只作为高级诊断入口。
-- 必读文档：`README.md`、`design.md`、`technical.md`。
-- 入口：`src/main/main.ts`、`src/preload/preload.ts`、`src/renderer/main.ts`。
-- 每次更新完成后必须运行完整门禁：`npm run lint`、`npm run format:check`、`npm run typecheck`、
-  `npm test`、`npm run test:layout`、`npm run test:control-theme`、
-  `npm run test:runtime-soak:accelerated`、`npm run build`；全部通过后必须再运行 `npm run dist`
-  生成当次版本的 Windows 安装包，不得只交付开发构建。
-- 每次交付必须报告安装包的绝对路径、应用版本、文件大小、SHA-256 和 Authenticode 签名状态；
-  未签名或签名无效时必须明确说明，不得把本地候选包描述为正式签名发行版。
-- UI、运行方式或技术实现变化时，同步检查三个根目录文档。
-- 生成目录：`dist/`、`outputs/`；Electron Builder 的安装包和解包目录统一输出到 `outputs/`，
-  不得再复制到项目根目录，生成目录和安装包均不提交 Git。
-- 任何私钥、Token、证书密码、管理凭据、非公开管理端点/用户名或本机凭据路径都不得进入仓库、
-  安装包、客户端源码、Issue、PR、日志或最终回复。
-- 网络预检只允许访问服务商配置中的官方端点；不得恢复第三方公网地址、地区、ASN 或网络信誉请求，
-  不得根据用户位置作判断。外部应用代理只传递用户填写的连接参数，不读取或迁移旧版网络配置。
+## 项目
+
+- 定位：Windows 桌面控制面板，管理 Claude Code / Codex 的 CLI 会话与 PowerShell 终端。
+- 入口：`src/main/index.ts`、`src/preload/index.ts`、`src/renderer/main.ts`。
+- 生成目录：`dist/`（构建产物）、`outputs/`（安装包）。两者都不提交 Git。
+- 默认接入是单一自动事务：检测环境、补齐组件、选择路由、发现模型、真实测试、保存。普通用户不手动
+  选择路由内核，也不填写可实时发现的模型标识；路由与网关后台只作为高级诊断入口。
+
+## 文档
+
+| 文档                               | 内容                     |
+| ---------------------------------- | ------------------------ |
+| `docs/README.md`                   | 文档地图                 |
+| `docs/explanation/architecture.md` | 分层、进程边界、依赖规则 |
+| `docs/reference/project-layout.md` | 目录地图                 |
+| `docs/reference/ipc-contract.md`   | IPC 频道与 API 方法映射  |
+| `docs/explanation/design.md`       | 设计系统                 |
+| `docs/reference/technical.md`      | 技术实现                 |
+| `docs/how-to/`                     | 开发、验证、发布         |
+| `docs/adr/`                        | 决策记录                 |
+
+## 验证
+
+| 命令                                                                     | 检查                                                                                                                     |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `npm run lint`                                                           | ESLint（`src`、`tests`、`scripts`、`vite.config.ts`、`vite.preload.config.ts`），`--max-warnings=0`，任何 warning 即失败 |
+| `npm run lint:deps`                                                      | 分层规则、循环依赖、孤儿模块                                                                                             |
+| `npm run format:check`                                                   | Prettier                                                                                                                 |
+| `npm run typecheck`                                                      | 三个 tsconfig（渲染端与测试 / 主进程 / preload）                                                                         |
+| `npm test`                                                               | Vitest                                                                                                                   |
+| `npm run build`                                                          | 主进程 + 渲染进程构建                                                                                                    |
+| `npm run test:layout` `npm run test:control-theme` `npm run test:visual` | 真实 Electron 布局与主题                                                                                                 |
+| `npm run test:runtime-soak:accelerated`                                  | 长时运行                                                                                                                 |
+| `npm run dist`                                                           | Windows NSIS 安装包                                                                                                      |
+
+改完代码跑到 `npm run dist`，不要只交付开发构建。UI、运行方式或技术实现变化时同步更新对应文档。

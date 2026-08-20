@@ -1,11 +1,8 @@
 node_modules/
-dist/
-release/
 coverage/
 .vite/
 *.log
 *.pdb
-/ClaudeDock-Setup-*.exe
 
 .env
 .env.*
@@ -13,6 +10,9 @@ coverage/
 .playwright-mcp/
 .claude/
 
+# Build output: `dist/` holds the compiled bundles, `outputs/` holds every shippable artifact.
+# No other directory may contain either (see docs/adr/0007-single-release-directory.md).
+dist/
 outputs/*
 !outputs/.gitkeep
 work/
@@ -22,3 +22,7 @@ v2rayN-*/
 
 .DS_Store
 Thumbs.db
+
+# Ad-hoc debug copies of smoke scripts (e.g. .send-probe.tmp.cjs) must never linger in
+# the repository root; they resolve their own __dirname-relative roots and break in CI.
+.*.tmp.cjs

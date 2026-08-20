@@ -51,63 +51,6 @@
   margin: 0;
 }
 
-.proxy-legal-risk-notice {
-  background: var(--warn-tint);
-  border: 1px solid var(--warn-line);
-  border-radius: var(--r-md);
-  color: var(--warn-text);
-  font-size: var(--type-caption-size);
-  line-height: var(--lh-body);
-  margin: 0;
-  padding: var(--s-3);
-}
-
-.legal-settings {
-  gap: var(--s-3);
-}
-
-.legal-card {
-  background: var(--surface-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  display: grid;
-  gap: var(--s-2);
-  padding: var(--s-3);
-}
-
-.legal-card > strong {
-  color: var(--text-hi);
-  font-size: var(--type-body-size);
-}
-
-.legal-card > p {
-  color: var(--text-lo);
-  font-size: var(--type-caption-size);
-  line-height: var(--lh-body);
-  margin: 0;
-}
-
-.legal-card--risk {
-  background: var(--warn-tint);
-  border-color: var(--warn-line);
-}
-
-.legal-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-}
-
-.legal-links button {
-  background: var(--accent-tint);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-md);
-  color: var(--accent-text);
-  cursor: pointer;
-  min-height: 34px;
-  padding: 0 var(--s-3);
-}
-
 .software-update-row strong {
   color: var(--text-hi);
   font-size: var(--type-body-size);

@@ -1,0 +1,74 @@
+import type { ClaudeRelaunchInput, PtyGeneration, TerminalStatus } from '../../../shared/contracts';
+import type { TerminalElements } from './elements';
+import { createTerminalIoGenerationActions } from './terminal-io-generation';
+import { createTerminalIoMaskActions } from './terminal-io-mask';
+import { createTerminalIoMenuActions } from './terminal-io-menu';
+import { createTerminalIoRelaunchActions } from './terminal-io-relaunch';
+import type { TerminalState, TerminalView } from './state';
+
+export type { TerminalIoDependencies } from './terminal-io-dependencies';
+import type { TerminalIoDependencies } from './terminal-io-dependencies';
+
+export interface TerminalIo {
+  beginTerminalMask: (sessionId: string, label: string) => () => void;
+  copyActiveTerminalSelection: () => Promise<void>;
+  hideTerminalContextMenu: () => void;
+  ownsTerminalGeneration: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => boolean;
+  pasteIntoActiveTerminal: () => Promise<void>;
+  pasteIntoTerminalGeneration: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => Promise<void>;
+  relaunchClaudeSession: (
+    summary: string,
+    input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
+  ) => Promise<void>;
+  showTerminalContextMenu: (event: MouseEvent) => void;
+  terminalStatusForSession: (sessionId: string) => TerminalStatus | undefined;
+  terminalViewForStatus: (status: TerminalStatus) => TerminalView | undefined;
+  writeToTerminalGeneration: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+    data: string,
+  ) => boolean;
+  writableTerminalGeneration: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => boolean;
+}
+
+export const createTerminalIo = (
+  state: TerminalState,
+  elements: TerminalElements,
+  dependencies: TerminalIoDependencies,
+): TerminalIo => {
+  const maskActions = createTerminalIoMaskActions(state, elements, dependencies);
+  const relaunchActions = createTerminalIoRelaunchActions(
+    dependencies,
+    maskActions.beginTerminalMask,
+  );
+  const generationActions = createTerminalIoGenerationActions(state, dependencies);
+  const menuActions = createTerminalIoMenuActions(state, elements, dependencies);
+
+  return {
+    beginTerminalMask: maskActions.beginTerminalMask,
+    copyActiveTerminalSelection: generationActions.copyActiveTerminalSelection,
+    hideTerminalContextMenu: menuActions.hideTerminalContextMenu,
+    ownsTerminalGeneration: generationActions.ownsTerminalGeneration,
+    pasteIntoActiveTerminal: generationActions.pasteIntoActiveTerminal,
+    pasteIntoTerminalGeneration: generationActions.pasteIntoTerminalGeneration,
+    relaunchClaudeSession: relaunchActions.relaunchClaudeSession,
+    showTerminalContextMenu: menuActions.showTerminalContextMenu,
+    terminalStatusForSession: generationActions.terminalStatusForSession,
+    terminalViewForStatus: generationActions.terminalViewForStatus,
+    writeToTerminalGeneration: generationActions.writeToTerminalGeneration,
+    writableTerminalGeneration: generationActions.writableTerminalGeneration,
+  };
+};

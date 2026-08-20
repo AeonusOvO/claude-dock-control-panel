@@ -73,29 +73,6 @@
   text-decoration-color: var(--accent-text);
 }
 
-.markdown-remote-image {
-  align-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-theme-md);
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-  max-width: 100%;
-  padding: var(--s-2);
-  vertical-align: middle;
-}
-
-.markdown-remote-image__label {
-  color: var(--text-lo);
-  font-size: var(--type-body-size);
-  overflow-wrap: anywhere;
-}
-
-.markdown-remote-image__open {
-  flex: 0 0 auto;
-}
-
 .chat-message__markdown img {
   border: 1px solid var(--line);
   border-radius: var(--r-theme-md);
