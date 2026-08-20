@@ -1,0 +1,367 @@
+# IPC 契约
+
+渲染进程与主进程之间的全部通道，以及它们与 `ControlPanelApi` 方法的映射。
+
+## 通道形态
+
+| 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
+| -------- | -------------------------- | ------------------------- | ------------------ | ---- |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 159  |
+| 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
+| 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 22   |
+| 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
+
+`ControlPanelApi` 共 188 个成员：159 请求响应 + 22 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+
+## 当前实现位置
+
+| 内容         | 位置                                                                                                                                           |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 频道常量     | `src/shared/ipc/channels.ts`（188 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 参数 schema  | `src/shared/ipc/schema.ts`（31 个 zod schema）                                                                                                 |
+| 类型定义     | `src/shared/contracts/`（18 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件，238 个导出类型）                                            |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（19 个域接口组合出 188 个成员）                                                                    |
+| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 19 个桥文件                                           |
+| 主进程注册   | `src/main/ipc/`（29 个文件：23 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
+| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 23 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
+| 参数校验     | `src/main/ipc/validation.ts`（`validate*()` 由 `schema.ts` 的 schema 派生）                                                                    |
+| 发送者守卫   | `src/main/ipc/guards.ts`（`validateSender` 拒绝非主窗口来源；另含运行时效果断言与服务解析器）                                                  |
+| 插件变更通道 | `src/main/ipc/claude-plugin.ts` 的 `pluginMutations` Map，8 个通道循环注册，共用 `runPluginMutation` 包装                                      |
+
+preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS 入口 `dist/preload/preload.js`（沙箱 preload 无法 require 相邻文件，桥图必须打成单一产物）。
+
+## 约束
+
+- 频道名只能引用 `src/shared/ipc/channels.ts` 的 `CHANNELS` 常量，preload 与 main 两侧不写裸字符串字面量。
+- 每个 `ipcMain.handle` 与 `ipcMain.on` 首先调用 `validateSender(event)`，拒绝非主窗口 `webContents` 的调用。
+- 参数以 `unknown` 接收，经 `validate*()` 函数收窄后才进入业务代码。
+- preload 只导出白名单方法，不导出 `ipcRenderer` 本体，不透传任意频道名。
+- 事件订阅方法返回取消函数，内部调用 `removeListener`。
+- 渲染进程与主进程共享的类型只来自 `src/shared/`。
+
+## 请求响应频道（159）
+
+### `app`（11）
+
+| 频道                                          | 方法                                 |
+| --------------------------------------------- | ------------------------------------ |
+| `app:get-settings`                            | `getAppSettings`                     |
+| `app:get-diagnostics`                         | `getDiagnostics`                     |
+| `app:set-launch-at-login`                     | `setLaunchAtLogin`                   |
+| `app:set-footer-resource-preference`          | `setFooterResourcePreference`        |
+| `app:set-managed-chatgpt-context-window-mode` | `setManagedChatGptContextWindowMode` |
+| `app:set-claude-context-window-mode`          | `setClaudeContextWindowMode`         |
+| `app:set-advanced-settings`                   | `setAdvancedSettings`                |
+| `app:set-close-behavior`                      | `setCloseBehavior`                   |
+| `app:open-external`                           | `openExternal`                       |
+| `app:clipboard-read`                          | `readClipboardText`                  |
+| `app:clipboard-write`                         | `writeClipboardText`                 |
+
+### `workspace`（3）
+
+| 频道                              | 方法                  |
+| --------------------------------- | --------------------- |
+| `workspace:get-state`             | `getWorkspace`        |
+| `workspace:get-stored-projects`   | `getStoredProjects`   |
+| `workspace:remove-stored-project` | `removeStoredProject` |
+
+### `project`（8）
+
+| 频道                               | 方法                     |
+| ---------------------------------- | ------------------------ |
+| `project:activate`                 | `activateProject`        |
+| `project:add`                      | `addProject`             |
+| `project:close`                    | `closeProject`           |
+| `project:close-folder`             | `closeProjectFolder`     |
+| `project:open-conversation`        | `openConversation`       |
+| `project:open-stored-conversation` | `openStoredConversation` |
+| `project:rename-conversation`      | `renameConversation`     |
+| `project:forget`                   | `forgetProject`          |
+
+### `directory`（1）
+
+| 频道               | 方法              |
+| ------------------ | ----------------- |
+| `directory:choose` | `chooseDirectory` |
+
+### `terminal`（3）
+
+| 频道               | 方法              |
+| ------------------ | ----------------- |
+| `terminal:start`   | `startTerminal`   |
+| `terminal:restart` | `restartTerminal` |
+| `terminal:stop`    | `stopTerminal`    |
+
+### `claude`（48）
+
+| 频道                                             | 方法                                  |
+| ------------------------------------------------ | ------------------------------------- |
+| `claude:get-state`                               | `getClaudeProjectState`               |
+| `claude:launch`                                  | `launchClaude`                        |
+| `claude:relaunch`                                | `relaunchClaudeSession`               |
+| `claude:command`                                 | `runClaudeCommand`                    |
+| `claude:save-config`                             | `saveClaudeConfig`                    |
+| `claude:test-connection`                         | `testClaudeConnection`                |
+| `claude:get-connection-advice`                   | `getClaudeConnectionAdvice`           |
+| `claude:get-gateway-diagnostics`                 | `getClaudeGatewayDiagnostics`         |
+| `claude:model-options`                           | `getClaudeModelOptions`               |
+| `claude:switch-model`                            | `switchClaudeModel`                   |
+| `claude:set-model-speed`                         | `setClaudeModelSpeed`                 |
+| `claude:set-effort`                              | `setClaudeEffortLevel`                |
+| `claude:set-permission-mode`                     | `setClaudePermissionMode`             |
+| `claude:set-allow-bypass-permissions`            | `setClaudeAllowBypassPermissions`     |
+| `claude:permission-response`                     | `respondClaudePermission`             |
+| `claude:provider-models-discover`                | `discoverClaudeProviderModels`        |
+| `claude:connection-history`                      | `getClaudeConnectionHistory`          |
+| `claude:connection-history-apply`                | `applyClaudeConnectionHistory`        |
+| `claude:connection-history-delete`               | `deleteClaudeConnectionHistory`       |
+| `claude:connection-history-rename`               | `renameClaudeConnectionHistory`       |
+| `claude:get-sessions`                            | `getClaudeSessions`                   |
+| `claude:get-sessions-for-path`                   | `getClaudeSessionsForPath`            |
+| `claude:launch-with-session`                     | `launchClaudeWithSession`             |
+| `claude:rename-session`                          | `renameClaudeSession`                 |
+| `claude:delete-session`                          | `deleteClaudeSession`                 |
+| `claude:router-get-state`                        | `getClaudeRouterManagementState`      |
+| `claude:router-install`                          | `installClaudeRouter`                 |
+| `claude:router-install-source`                   | `installClaudeRouterFromSource`       |
+| `claude:router-uninstall`                        | `uninstallClaudeRouter`               |
+| `claude:router-start`                            | `startClaudeRouter`                   |
+| `claude:router-stop`                             | `stopClaudeRouter`                    |
+| `claude:router-open-management`                  | `openClaudeRouterManagement`          |
+| `claude:router-save-provider`                    | `saveClaudeRouterProvider`            |
+| `claude:router-delete-provider`                  | `deleteClaudeRouterProvider`          |
+| `claude:router-repair-from-project`              | `repairClaudeRouterFromProject`       |
+| `claude:managed-chatgpt-gateway-state`           | `getManagedChatGptGatewayState`       |
+| `claude:managed-chatgpt-gateway-setup`           | `setupManagedChatGptGateway`          |
+| `claude:managed-chatgpt-gateway-model`           | `setManagedChatGptGatewayModel`       |
+| `claude:managed-chatgpt-gateway-open-management` | `openManagedChatGptGatewayManagement` |
+| `claude:plugins-get`                             | `getClaudePlugins`                    |
+| `claude:plugins-install`                         | `installClaudePlugin`                 |
+| `claude:plugins-uninstall`                       | `uninstallClaudePlugin`               |
+| `claude:plugins-update`                          | `updateClaudePlugin`                  |
+| `claude:plugins-update-all`                      | `updateAllClaudePlugins`              |
+| `claude:plugins-set-enabled`                     | `setClaudePluginEnabled`              |
+| `claude:plugins-marketplace-add`                 | `addClaudePluginMarketplace`          |
+| `claude:plugins-marketplace-remove`              | `removeClaudePluginMarketplace`       |
+| `claude:plugins-marketplaces-refresh`            | `refreshClaudePluginMarketplaces`     |
+
+后 8 个 `claude:plugins-*` 变更通道由 `pluginMutations` Map 循环注册，共用同一个 `runPluginMutation` 包装。
+
+### `codex`（6）
+
+| 频道                   | 方法                   |
+| ---------------------- | ---------------------- |
+| `codex:get-state`      | `getCodexProjectState` |
+| `codex:install-update` | `installOrUpdateCodex` |
+| `codex:login-start`    | `startCodexLogin`      |
+| `codex:login-cancel`   | `cancelCodexLogin`     |
+| `codex:logout`         | `logoutCodex`          |
+| `codex:launch`         | `launchCodex`          |
+
+### `native-conversation`（14）
+
+| 频道                                       | 方法                                   |
+| ------------------------------------------ | -------------------------------------- |
+| `native-conversation:start`                | `startNativeConversation`              |
+| `native-conversation:get`                  | `getNativeConversation`                |
+| `native-conversation:submit`               | `submitNativeConversation`             |
+| `native-conversation:respond`              | `respondNativeConversation`            |
+| `native-conversation:interrupt`            | `interruptNativeConversation`          |
+| `native-conversation:stop-task`            | `stopNativeConversationTask`           |
+| `native-conversation:update-controls`      | `updateNativeConversationControls`     |
+| `native-conversation:close`                | `closeNativeConversation`              |
+| `native-conversation:rename`               | `renameNativeConversation`             |
+| `native-conversation:transfer-to-terminal` | `transferNativeConversationToTerminal` |
+| `native-conversation:adopt-terminal`       | `adoptTerminalConversation`            |
+| `native-conversation:list-recoveries`      | `listNativeRecoveries`                 |
+| `native-conversation:restore-draft`        | `restoreNativeDraft`                   |
+| `native-conversation:discard-recovery`     | `discardNativeRecovery`                |
+
+### `native-attachment`（5）
+
+| 频道                                 | 方法                          |
+| ------------------------------------ | ----------------------------- |
+| `native-attachment:import-paths`     | `importNativeAttachmentPaths` |
+| `native-attachment:import-bytes`     | `importNativeAttachmentBytes` |
+| `native-attachment:import-clipboard` | `importNativeClipboardImage`  |
+| `native-attachment:read`             | `readNativeAttachment`        |
+| `native-attachment:remove`           | `removeNativeAttachment`      |
+
+### `chat`（17）
+
+| 频道                            | 方法                         |
+| ------------------------------- | ---------------------------- |
+| `chat:get-config`               | `getChatConfig`              |
+| `chat:save-config`              | `saveChatConfig`             |
+| `chat:test-connection`          | `testChatConnection`         |
+| `chat:preflight`                | `preflightChat`              |
+| `chat:start`                    | `startChat`                  |
+| `chat:stop`                     | `stopChat`                   |
+| `chat:list-conversations`       | `getChatConversations`       |
+| `chat:get-conversation`         | `getChatConversation`        |
+| `chat:save-conversation`        | `saveChatConversation`       |
+| `chat:rename-conversation`      | `renameChatConversation`     |
+| `chat:delete-conversation`      | `deleteChatConversation`     |
+| `chat:import-attachments`       | `importChatAttachments`      |
+| `chat:import-attachment-bytes`  | `importChatAttachmentBytes`  |
+| `chat:import-clipboard-image`   | `importChatClipboardImage`   |
+| `chat:read-attachment`          | `readChatAttachment`         |
+| `chat:delete-draft-attachment`  | `deleteChatDraftAttachment`  |
+| `chat:release-attachment-draft` | `releaseChatAttachmentDraft` |
+
+### `markdown`（1）
+
+| 频道                     | 方法                   |
+| ------------------------ | ---------------------- |
+| `markdown:open-external` | `openMarkdownExternal` |
+
+### `artifact`（4）
+
+| 频道                           | 方法                        |
+| ------------------------------ | --------------------------- |
+| `artifact:create`              | `createArtifact`            |
+| `artifact:destroy`             | `destroyArtifact`           |
+| `artifact:get-network-state`   | `getArtifactNetworkState`   |
+| `artifact:set-network-allowed` | `setArtifactNetworkAllowed` |
+
+### `router`（4）
+
+| 频道                              | 方法                              |
+| --------------------------------- | --------------------------------- |
+| `router:kernel-state`             | `getRouterKernelState`            |
+| `router:cc-switch-install`        | `installCcSwitch`                 |
+| `router:cc-switch-uninstall`      | `uninstallCcSwitch`               |
+| `router:cc-switch-export-current` | `exportCurrentProviderToCcSwitch` |
+
+### `network-preflight`（5）
+
+| 频道                              | 方法                           |
+| --------------------------------- | ------------------------------ |
+| `network-preflight:get`           | `getNetworkPreflight`          |
+| `network-preflight:run`           | `runNetworkPreflight`          |
+| `network-preflight:invalidate`    | `invalidateNetworkPreflight`   |
+| `network-preflight:get-history`   | `getNetworkPreflightHistory`   |
+| `network-preflight:clear-history` | `clearNetworkPreflightHistory` |
+
+### `application-proxy`（4）
+
+| 频道                       | 方法                               |
+| -------------------------- | ---------------------------------- |
+| `application-proxy:get`    | `getApplicationProxyState`         |
+| `application-proxy:save`   | `saveApplicationProxy`             |
+| `application-proxy:test`   | `testApplicationProxy`             |
+| `application-proxy:detect` | `detectApplicationProxyCandidates` |
+
+### `mcp`（7）
+
+| 频道                 | 方法               |
+| -------------------- | ------------------ |
+| `mcp:get-catalog`    | `getMcpCatalog`    |
+| `mcp:install`        | `installMcpServer` |
+| `mcp:remove`         | `removeMcpServer`  |
+| `mcp:toggle-preview` | `previewMcpToggle` |
+| `mcp:toggle-apply`   | `applyMcpToggle`   |
+| `mcp:backups`        | `getMcpBackups`    |
+| `mcp:backup-restore` | `restoreMcpBackup` |
+
+### `download`（6）
+
+| 频道                      | 方法                    |
+| ------------------------- | ----------------------- |
+| `download:list`           | `listDownloads`         |
+| `download:pause`          | `pauseDownload`         |
+| `download:resume`         | `resumeDownload`        |
+| `download:cancel`         | `cancelDownload`        |
+| `download:history-delete` | `deleteDownloadHistory` |
+| `download:history-clear`  | `clearDownloadHistory`  |
+
+### `software`（5）
+
+| 频道                                    | 方法                         |
+| --------------------------------------- | ---------------------------- |
+| `software:updates-get`                  | `getSoftwareUpdates`         |
+| `software:claude-install-update`        | `installOrUpdateClaudeCode`  |
+| `software:application-updater-get`      | `getApplicationUpdaterState` |
+| `software:application-updater-download` | `downloadApplicationUpdate`  |
+| `software:application-updater-install`  | `installApplicationUpdate`   |
+
+### `runtime`（4）
+
+| 频道                        | 方法                      |
+| --------------------------- | ------------------------- |
+| `runtime:get`               | `getDevelopmentRuntime`   |
+| `runtime:set`               | `setDevelopmentRuntime`   |
+| `runtime:get-activity`      | `getRuntimeActivity`      |
+| `runtime:terminate-process` | `terminateRuntimeProcess` |
+
+### `busy`（2）
+
+| 频道                    | 方法                  |
+| ----------------------- | --------------------- |
+| `busy:list`             | `listBusyLeases`      |
+| `busy:set-conversation` | `setConversationBusy` |
+
+### `ui`（1）
+
+| 频道           | 方法          |
+| -------------- | ------------- |
+| `ui:set-theme` | `setAppTheme` |
+
+## 单向命令频道（7）
+
+`ipcRenderer.send` → `ipcMain.on`，无返回值。前四个是高频写入，走单向以避免每次按键都产生一次 Promise 往返。
+
+| 频道                                  | 方法                              | 载荷                                                           |
+| ------------------------------------- | --------------------------------- | -------------------------------------------------------------- |
+| `terminal:write`                      | `writeTerminal`                   | `sessionId`、`ptyGeneration`、`data`                           |
+| `terminal:resize`                     | `resizeTerminal`                  | `sessionId`、`ptyGeneration`、`resizeRevision`、`cols`、`rows` |
+| `claude:permission-mode-observed`     | `observeClaudePermissionMode`     | `sessionId`、`ptyGeneration`、`mode`                           |
+| `claude:permission-mode-probe-result` | `reportClaudePermissionModeProbe` | `sessionId`、`ptyGeneration`、`probeId`、`mode`                |
+| `app:minimize-to-tray`                | `minimizeToTray`                  | 无                                                             |
+| `app:confirm-quit`                    | `confirmQuit`                     | `confirmed`                                                    |
+| `app:quit-request-received`           | `onAppQuitRequested` 回调内部     | 无                                                             |
+
+`ptyGeneration` 与 `resizeRevision` 是版本号：终端重启后旧帧的写入与尺寸事件会带着过期版本抵达，主进程按版本丢弃。
+
+## 事件频道（22）
+
+`webContents.send` → `ipcRenderer.on`。订阅方法返回取消函数。
+
+| 频道                                    | 订阅方法                        |
+| --------------------------------------- | ------------------------------- |
+| `app:open-download-center`              | `onOpenDownloadCenterRequested` |
+| `app:quit-requested`                    | `onAppQuitRequested`            |
+| `app:window-restored`                   | `onAppWindowRestored`           |
+| `application-proxy:changed`             | `onApplicationProxyChanged`     |
+| `artifact:network-log`                  | `onArtifactNetworkLog`          |
+| `busy:changed`                          | `onBusyChanged`                 |
+| `chat:stream`                           | `onChatStream`                  |
+| `claude:managed-chatgpt-setup-progress` | `onManagedChatGptSetupProgress` |
+| `claude:permission-mode-probe`          | `onClaudePermissionModeProbe`   |
+| `claude:permission-request`             | `onClaudePermissionRequest`     |
+| `claude:state`                          | `onClaudeState`                 |
+| `codex:state`                           | `onCodexState`                  |
+| `conversation:owner-conflict`           | `onConversationOwnerConflict`   |
+| `download:changed`                      | `onDownloadsChanged`            |
+| `native-conversation:snapshot`          | `onNativeConversation`          |
+| `network-preflight:result`              | `onNetworkPreflight`            |
+| `router:operation-progress`             | `onRouterOperationProgress`     |
+| `runtime:activity-changed`              | `onRuntimeActivityChanged`      |
+| `software:application-updater-changed`  | `onApplicationUpdaterChanged`   |
+| `terminal:data`                         | `onTerminalData`                |
+| `terminal:size`                         | `onTerminalSize`                |
+| `workspace:state`                       | `onWorkspaceState`              |
+
+## 非 IPC 方法（1）
+
+| 方法             | 实现                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| `getDroppedPath` | `webUtils.getPathForFile(file)`，在 preload 内同步返回拖放文件的本机路径，不经过主进程 |
+
+## 新增频道的步骤
+
+1. 在 `src/shared/ipc/channels.ts` 的对应组（请求响应/单向命令/事件）加频道常量。
+2. 在 `src/shared/contracts/control-panel-api.ts` 的对应域接口加方法签名，参数与返回值类型加在同域的 `src/shared/contracts/<domain>.ts`。
+3. 在 `src/preload/bridges/<domain>.ts` 加对应桥方法，频道引用 `CHANNELS` 常量。
+4. 在 `src/main/ipc/<domain>.ts` 注册 `ipcMain.handle`，首行 `validateSender(event)`，参数用 `src/main/ipc/validation.ts` 的 `validate*()` 收窄（新的参数形状先在 `src/shared/ipc/schema.ts` 加 schema）；处理器需要的依赖加进同文件的 `XxxIpcDependencies` 接口。新域还需在 `src/main/ipc/contributions.ts` 的 `MAIN_IPC_CONTRIBUTIONS` 加贡献项。
+5. 更新本文对应小节的表格。

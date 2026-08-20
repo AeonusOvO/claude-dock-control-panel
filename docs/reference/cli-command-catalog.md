@@ -8,7 +8,7 @@
 - Claude 来源：[Claude Code commands](https://code.claude.com/docs/en/commands)
 - Codex 来源：[Codex developer commands](https://learn.chatgpt.com/docs/developer-commands.md?surface=cli)
 
-注册表的唯一实现位于 `src/shared/cli-command-catalog.ts`，主进程执行白名单、Claude/Codex 工作台和自动化测试共同读取它。每项均携带运行时、主命令、别名、官方语法、分类、来源、核对版本、平台、功能条件、风险以及 `run`/`compose` 动作。Claude 只有安全且无需必填参数的少数命令可直接排队，直接执行入口一律不接受参数；带参数、退出/清理、外部跳转或敏感权限命令只填入输入框或再次确认。Codex 全部为 `compose`，权限仍由原生 TUI 处理。
+注册表的唯一实现位于 `src/shared/ui/cli-command-catalog.ts`，主进程执行白名单、Claude/Codex 工作台和自动化测试共同读取它。每项均携带运行时、主命令、别名、官方语法、分类、来源、核对版本、平台、功能条件、风险以及 `run`/`compose` 动作。Claude 只有安全且无需必填参数的少数命令可直接排队，直接执行入口一律不接受参数；带参数、退出/清理、外部跳转或敏感权限命令只填入输入框或再次确认。Codex 全部为 `compose`，权限仍由原生 TUI 处理。
 
 ## Claude Code：101 个主表项，120 个调用名
 

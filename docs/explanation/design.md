@@ -1,6 +1,6 @@
 # ClaudeDock 设计规范
 
-当前设计版本：**5.0.0-rc.12**（2026-08-16）。旧版设计计划、路线图、缺陷清单与分阶段修复提示词
+当前设计版本：**5.0.0-rc.13**（2026-08-20）。旧版设计计划、路线图、缺陷清单与分阶段修复提示词
 统一归档在 [`docs/archive/`](docs/archive/)；它们仅用于历史追溯，不得覆盖本文的当前设计契约。
 
 ## 5.0 安全终端与原生对话工作区
@@ -92,14 +92,14 @@
    平行组件补偿层级不足。
 2. **按角色命名**：业务样式表达 body、caption、raised surface、danger 或 popup，不表达某个偶然的
    像素值。主题改变人格，组件不复制主题分支。
-3. **规范由测试强制**：本文是视觉与交互规范的唯一事实源；`tests/design-tokens.test.ts` 和视觉烟测
+3. **规范由测试强制**：本文是视觉与交互规范的唯一事实源；`tests/renderer/design-tokens.test.ts` 和视觉烟测
    负责阻止令牌、文件职责、主题对比度、控件外观与布局契约回退。
 
 ### 三层令牌模型与文件职责
 
 | 层级                  | 事实来源                                                                       | 职责                                 | 业务样式能否直接使用字面值         |
 | --------------------- | ------------------------------------------------------------------------------ | ------------------------------------ | ---------------------------------- |
-| Primitive / Reference | `src/shared/terminal-themes.ts`、`styles/01-tokens.css`                        | 主题授权值、默认值、间距与推导公式   | 否；CSS 字面值只在 `01-tokens.css` |
+| Primitive / Reference | `src/shared/ui/terminal-themes.ts`、`styles/01-tokens.css`                     | 主题授权值、默认值、间距与推导公式   | 否；CSS 字面值只在 `01-tokens.css` |
 | Semantic / System     | `--surface-*`、`--type-*`、`--accent-*`、`--ok/warn/bad-*`、`--dur-*`、`--r-*` | 表达内容角色、状态、层级、运动与密度 | 是，且业务规则只使用这一层         |
 | Component             | `styles/05-primitives.css` 与各 view 顶部的组件私有契约                        | 控件几何、状态、修饰符与局部布局     | 只能由语义令牌推导                 |
 
@@ -202,7 +202,7 @@
 组件使用 `--dur-1..4`、`--dur-exit`、`--ease-standard/decel/accel`、`--press-sm/lg` 与通用圆角，
 不直接选择某一主题。所有 keyframes 只放在 `04-motion.css`；其中唯一的减少动态效果块取消位移、循环
 和涟漪，但保留焦点、状态文字、遮罩和同步状态翻转。交互页面只做 opacity 进场；hover 不上浮。
-表内授权值以 `src/shared/terminal-themes.ts` 为实现来源；Claude 字体选择参考官方 MCP Apps 的排版与
+表内授权值以 `src/shared/ui/terminal-themes.ts` 为实现来源；Claude 字体选择参考官方 MCP Apps 的排版与
 透明主题原则，Telegram 的系统 UI 字体、纸飞机和涟漪取自其桌面端实现。外部依据链接集中在
 `technical.md`，不得凭印象改写本表。
 
@@ -323,14 +323,14 @@ CSS 媒体条件不能读取自定义属性，因此常量表写在 `07-responsi
 ### 禁止事项
 
 - 不在 `01-tokens.css` 外写颜色、px 字号、数字字重、毫秒或曲线字面值；不写 px `line-height`
-  （`tests/design-tokens.test.ts`）。
-- 不新增按尺寸命名的字号别名；业务样式只能引用六个语义文字角色（`tests/design-tokens.test.ts`）。
+  （`tests/renderer/design-tokens.test.ts`）。
+- 不新增按尺寸命名的字号别名；业务样式只能引用六个语义文字角色（`tests/renderer/design-tokens.test.ts`）。
 - 不在 `04-motion.css` 外写 keyframes 或 reduced-motion；不在 `07-responsive.css` 外写 viewport media
-  （`tests/design-tokens.test.ts`）。
+  （`tests/renderer/design-tokens.test.ts`）。
 - 不引用未定义变量，不复制 selector 到另一个文件，不用更高 specificity 掩盖所有权错误
-  （`tests/design-tokens.test.ts`）。
+  （`tests/renderer/design-tokens.test.ts`）。
 - 不写逐主题业务选择器来补字体、圆角或动效；主题差异必须由 `TerminalThemeShell` 与令牌桥驱动
-  （`tests/design-tokens.test.ts` + `npm run test:control-theme`）。
+  （`tests/renderer/design-tokens.test.ts` + `npm run test:control-theme`）。
 - 不让弹层硬切、留下可点击的退场残影，或在按钮内部挂 fixed popup
   （`npm run test:select` + `npm run test:dialog-select` + `npm run test:visual`）。
 - 不使用原生控件外观、原生 JavaScript 对话框、只有颜色的状态、hover 位移或装饰性渐变
@@ -451,7 +451,7 @@ CSS 媒体条件不能读取自定义属性，因此常量表写在 `07-responsi
   `npm run test:layout` 断言在 820×640 下输入框不被底栏或抽屉覆盖。
 - 多行提示词必须作为**一条**命令进入 PowerShell：行间用 `\x0a`（PSReadLine 的
   `Ctrl+j`/AddLine 绑定所插入的字符）连接，末尾的回车单独写一次。构造逻辑在
-  `src/shared/composer-input.ts`，与 `terminal-session.ts` 的键位绑定成对存在，改一处必须改另一处。
+  `src/shared/conversation/composer-input.ts`，与 `terminal-session.ts` 的键位绑定成对存在，改一处必须改另一处。
 - 会话未在运行时输入框禁用并换 placeholder；启动会话、切项目等操作之后记录“待聚焦”意图，
   只有同一个活动会话真正进入 `running` 后才把焦点给输入框，不使用固定毫秒延时。
   例外：`resume` 模式打开的是 Claude 自己的方向键选择器，需要原始按键，焦点留在输出区。
@@ -523,24 +523,22 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - 每次发送与生成结束后原子写入本机历史；左栏按最近更新排序，显示标题、时间、消息数和
   Token。历史区从标题下方延伸到侧栏底部并独立滚动；空列表说明仍靠近标题，不被弹性空白推到
   底部。最多 50 个对话、每个 100 条消息。删除按钮具有包含标题的 `aria-label`，并复用
-  应用内“永久删除、无法恢复”确认框；历史正文是明文本地数据，界面与文档必须披露。
-- 独立对话的助手消息角色固定显示“AI 生成”，不能只写“模型”或伪装成人类联系人。这个可见标签
-  与后续导出文件的法定元数据标识不是同一层义务；增加导出功能时必须另行设计机器可读标识。
+  应用内“永久删除、无法恢复”确认框。最多 50 个对话、每个 100 条消息。
+- 独立对话的助手消息角色显示“Claude”。
 - 空状态居中解释独立边界；首次模型输出前发生瞬时网络、限流或上游故障时，模型消息卡显示重试
   原因、等待时间与当前次数，收到正文后自然替换这段占位。已有部分文本后断流不自动重放：卡片
   保留正文并追加醒目的中断说明，同时用 toast 补充；该说明是视图状态，不得写入历史正文或
   下一轮模型上下文。
   Markdown 只从 lexer token 创建白名单 DOM，原始 HTML 降级为文本；Artifact 是唯一显式的
-  HTML 执行入口。远程 Markdown 图片显示带隐私说明的占位卡，不生成会自动请求的 `<img>`；
-  用户可用卡片按钮显式交给系统浏览器打开。`data:` 图片仍可在消息内显示。
+  HTML 执行入口。`https:` 与 `data:` 图片直接内联渲染，`<img>` 带
+  `referrerpolicy="no-referrer"`、`loading="lazy"`、`decoding="async"`；其他协议的图片降级为
+  替代文本。
 
 ## 全局设置
 
 - 设置入口固定在活动栏底部，与业务页分组。依据 Microsoft 的 Windows 应用设置建议，设置应
   统一入口、放在导航末尾并把相关内容分组；现有分类为
-  “总设置 / 高级设置 / 接入 / 代理 / 路由 / 隐私与合规”。隐私页不是占位：必须持续披露本机保存、
-  第三方端点、跨境处理、AI 生成内容、代理风险、维护者 AeonusOvO 和公开联系电话 13585928550，
-  并提供完整政策、官方依据与私密安全报告入口。
+  “总设置 / 高级设置 / 接入 / 代理 / 路由”。
 - 全局设置使用主题化原生 `<dialog>`：固定标题与底部操作区，左侧分类导航，右侧内容独立滚动。
   720px compact 档分类导航改为顶部横排；820×640 最小窗口内所有控件仍可聚焦和滚动到。
 - “总设置”采用单列设置卡：左侧“名称 + 说明”，右侧放开关、选择器或只读值。首期包含开机
@@ -579,8 +577,7 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - 作用域是 CLI、ClaudeDock 自身网络、独立对话三个复选项，下面用动态摘要复述实际路径。
   SOCKS5 被选中时 CLI 复选框立即取消并禁用，因为 Claude Code CLI 只支持 HTTP/HTTPS 代理；
   该限制同时用控件状态和文字表达，不能只依赖禁用色。
-- 旧版网络配置不读取也不迁移，页面用通用表述说明升级边界。隐私与合规页的风险卡说明“外部
-  代理仍需合法使用”，不得显示已经移除的功能或暗示其他软件构成法律豁免。
+- 旧版网络配置不读取也不迁移，页面用通用表述说明升级边界，不显示已经移除的功能。
 - 代理表单沿用 `.field`、`.settings-row`、`.proxy-runtime-actions` 与现有按钮令牌；窄窗口下
   地址、端口和操作自然换行，候选按钮可键盘聚焦，测试结果使用文字与语义色双重表达。
 - 接入测试的补救卡使用整体忙态。任一补救动作执行时，服务商选择、配置表单和同卡全部按钮都禁用，
@@ -695,7 +692,7 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   暂不可用”，安装环境未就绪则显示 Claude Code 环境问题。
 - 会话入口下方是每项目持久化的“允许「完全允许」模式”复选框，默认勾选。说明必须写清它只是
   启动时预置、不会自动激活，以及关闭后需要重新启动会话才生效。它是一个逃生开关：
-  Claude Code 首次以该标志启动时会弹自己的一次性免责框，`root`/`sudo` 下还会直接拒绝，
+  Claude Code 首次以该标志启动时会显示自己的一次性确认框，`root`/`sudo` 下还会直接拒绝，
   用户必须能关掉它。
 - 历史对话只在左侧项目文件夹层级中出现，工作台不重复列出。历史项只显示名称与最近活动
   时间，完整列表放在文件夹内约六行高的独立滚动区中：运行中对话固定在上方不随滚动移动，
