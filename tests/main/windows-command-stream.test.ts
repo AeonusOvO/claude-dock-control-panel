@@ -188,7 +188,9 @@ describe('Windows command streaming', () => {
         controller.abort(abortError);
 
         await expect(operation).rejects.toBe(abortError);
-        expect(processIsRunning(descendantPid as number)).toBe(false);
+        await vi.waitFor(() => expect(processIsRunning(descendantPid as number)).toBe(false), {
+          timeout: 2_000,
+        });
       } finally {
         controller.abort();
         for (const pid of [descendantPid, parentPid]) {

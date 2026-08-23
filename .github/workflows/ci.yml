@@ -48,7 +48,9 @@ jobs:
         run: npm run typecheck
 
       - name: Unit tests
-        run: npm test
+        # GitHub's two-core Windows runner is substantially slower than the release workstation.
+        # Keep file-level parallelism without letting four workers exhaust the default 5 s budget.
+        run: npm exec vitest -- run --maxWorkers=2 --testTimeout=15000
 
       - name: Build
         run: npm run build

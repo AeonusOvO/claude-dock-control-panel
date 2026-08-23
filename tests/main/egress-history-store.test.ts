@@ -57,6 +57,14 @@ const storedEntries = (filePath: string): EgressHistoryEntry[] =>
 const fileSystemError = (code: string): NodeJS.ErrnoException =>
   Object.assign(new Error('injected atomic failure'), { code });
 
+const sameStoragePath = (left: string, right: string): boolean => {
+  const leftResolved = path.resolve(left);
+  const rightResolved = path.resolve(right);
+  return process.platform === 'win32'
+    ? leftResolved.toLowerCase() === rightResolved.toLowerCase()
+    : leftResolved === rightResolved;
+};
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
@@ -233,7 +241,7 @@ describe('EgressHistoryStore', () => {
     const failing = new EgressHistoryStore(userDataPath, {
       atomicOperations: {
         renameFile: (source, destination) => {
-          if (destination === primary) throw fileSystemError('EIO');
+          if (sameStoragePath(destination, primary)) throw fileSystemError('EIO');
           renameSync(source, destination);
         },
       },
@@ -256,7 +264,7 @@ describe('EgressHistoryStore', () => {
     const failing = new EgressHistoryStore(userDataPath, {
       atomicOperations: {
         renameFile: (source, destination) => {
-          if (destination === backup) throw fileSystemError('EIO');
+          if (sameStoragePath(destination, backup)) throw fileSystemError('EIO');
           renameSync(source, destination);
         },
       },
