@@ -172,3 +172,9 @@ outputs/        本地安装包与解包产物（忽略）
 ## 问题反馈
 
 [GitHub Issues](https://github.com/AeonusOvO/claude-dock-control-panel/issues)
+
+## 许可证
+
+ClaudeDock 采用 [Apache License 2.0](LICENSE) 开源。版权及归属声明见 [NOTICE](NOTICE)。
+
+该许可证允许个人和商业使用、修改与再分发，但不授予 ClaudeDock 名称、标识或其他商标的使用权。
