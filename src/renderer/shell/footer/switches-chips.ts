@@ -19,6 +19,9 @@ export const createFooterSwitchesChipsActions = (
 
   const renderTerminalFooterChips = (state: ClaudeProjectState): void => {
     const metrics = state.metrics;
+    for (const chip of [footerModel, footerSpeed, footerMode, footerEffort]) {
+      chip.dataset.presentationOwner = 'terminal';
+    }
     footerModel.textContent = `模型 ${metrics?.modelDisplayName ?? metrics?.modelId ?? '—'}`;
     footerModel.disabled = footerState.modelSwitchInProgress;
     footerModel.setAttribute('aria-busy', String(footerState.modelSwitchInProgress));

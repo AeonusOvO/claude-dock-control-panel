@@ -9,8 +9,12 @@ import type {
 import { CHANNELS } from '../../shared/ipc/channels';
 
 export const mcpBridge = {
-  getMcpCatalog: (cwd, refresh) =>
-    ipcRenderer.invoke(CHANNELS.MCP_GET_CATALOG, cwd, refresh ?? false) as Promise<McpCatalog>,
+  getMcpCatalog: (cwd, refreshRegistry) =>
+    ipcRenderer.invoke(
+      CHANNELS.MCP_GET_CATALOG,
+      cwd,
+      refreshRegistry ?? false,
+    ) as Promise<McpCatalog>,
   installMcpServer: (input) =>
     ipcRenderer.invoke(CHANNELS.MCP_INSTALL, input) as Promise<McpOperationResult>,
   removeMcpServer: (input) =>
@@ -24,6 +28,8 @@ export const mcpBridge = {
     ) as Promise<McpTogglePreview>,
   applyMcpToggle: (previewId, cwd) =>
     ipcRenderer.invoke(CHANNELS.MCP_TOGGLE_APPLY, previewId, cwd) as Promise<McpOperationResult>,
+  discardMcpToggle: (previewId) =>
+    ipcRenderer.invoke(CHANNELS.MCP_TOGGLE_DISCARD, previewId) as Promise<boolean>,
   getMcpBackups: () => ipcRenderer.invoke(CHANNELS.MCP_BACKUPS) as Promise<McpBackupView[]>,
   restoreMcpBackup: (backupId, cwd) =>
     ipcRenderer.invoke(CHANNELS.MCP_BACKUP_RESTORE, backupId, cwd) as Promise<McpOperationResult>,

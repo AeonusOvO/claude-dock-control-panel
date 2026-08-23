@@ -77,7 +77,12 @@ export const createNativeDispatchActions = (
           enqueueNativeMessage(conversationId, text, attachments, { autoFlush: false });
         },
         onDelivered: () => {
-          state.nativeQueuedAutoFlush.delete(conversationId);
+          // The IPC stays pending until the foreground turn ends. A newer message may have been
+          // parked while it was in flight; a late acknowledgement must not clear that queue's
+          // auto-flush intent.
+          if (!state.nativeQueuedMessages.has(conversationId)) {
+            state.nativeQueuedAutoFlush.delete(conversationId);
+          }
         },
       });
       delivered = outcome === 'delivered';

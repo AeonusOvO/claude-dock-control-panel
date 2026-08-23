@@ -83,6 +83,35 @@ describe('download journal recovery', () => {
     rmSync(userDataPath, { force: true, recursive: true });
   });
 
+  it('keeps replace transactional when the journal write fails', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-journal-transaction-'));
+    const finalPath = path.join(userDataPath, 'installers', 'tool.exe');
+    const savePath = `${finalPath}.partial`;
+    mkdirSync(path.dirname(savePath), { recursive: true });
+    writeFileSync(savePath, 'data');
+    const journal = new DownloadJournal(userDataPath);
+    journal.upsert({
+      allowedHosts: ['downloads.example.com'],
+      allowedPathPrefixes: ['/tool.exe'],
+      finalPath,
+      id: 'transactional-tool',
+      label: '事务日志工具',
+      length: 10,
+      maxBytes: 100,
+      receivedBytes: 4,
+      savePath,
+      startTime: 1_700_000_000,
+      urlChain: ['https://downloads.example.com/tool.exe'],
+    });
+    mkdirSync(path.join(userDataPath, 'download-journal.json.tmp'), { recursive: true });
+
+    expect(() => journal.replace([])).toThrow();
+    expect(journal.list()).toEqual([
+      expect.objectContaining({ id: 'transactional-tool', receivedBytes: 4 }),
+    ]);
+    rmSync(userDataPath, { force: true, recursive: true });
+  });
+
   it('resumes from the journal offset when the throttled journal lags the partial file', () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-journal-'));
     const finalPath = path.join(userDataPath, 'installers', 'tool.exe');

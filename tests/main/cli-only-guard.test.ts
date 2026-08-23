@@ -4,10 +4,6 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ClaudeConfigurationHint } from '../../src/shared/contracts';
 import { ClaudeRouterManager } from '../../src/main/claude/router-manager';
-import {
-  createTestMainServiceRegistry,
-  registerTestService,
-} from '../helpers/main-service-registry';
 
 const fixtureRoots: string[] = [];
 
@@ -89,67 +85,6 @@ describe('CLI-only product boundary', () => {
     expect(uninstalled.message).toBe('仅检测到 CCR 桌面版；ClaudeDock 不会卸载或修改它。');
     expect(uninstalled.state).toMatchObject({ installationKind: 'desktop', installed: false });
     expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it('changes only Electron session proxy scopes and closes connections after rule changes', async () => {
-    const defaultSetProxy = vi.fn(async () => undefined);
-    const defaultCloseConnections = vi.fn(async () => undefined);
-    vi.doMock('electron', () => ({
-      session: {
-        defaultSession: {
-          closeAllConnections: defaultCloseConnections,
-          setProxy: defaultSetProxy,
-        },
-      },
-    }));
-    const { createProxyScopes } = await import('../../src/main/proxy/scopes');
-    const conversationSetProxy = vi.fn(async () => undefined);
-    const conversationCloseConnections = vi.fn(async () => undefined);
-    const proxyView = {
-      enabled: true,
-      host: '127.0.0.1',
-      passwordConfigured: false,
-      port: 7890,
-      protocol: 'http' as const,
-      scope: { application: true, cli: true, conversation: true },
-      username: '',
-    };
-    const state = {
-      appliedApplicationProxyRules: '',
-      appliedConversationProxyRules: '',
-    };
-    const services = await createTestMainServiceRegistry();
-    const { APPLICATION_PROXY_STORE, CONVERSATION_NETWORK_SESSION } =
-      await import('../../src/main/infra/service-tokens');
-    registerTestService(services, APPLICATION_PROXY_STORE, { getView: () => proxyView } as never);
-    registerTestService(services, CONVERSATION_NETWORK_SESSION, {
-      closeAllConnections: conversationCloseConnections,
-      setProxy: conversationSetProxy,
-    } as never);
-    const scopes = createProxyScopes({
-      services,
-      state: state as never,
-    });
-
-    await scopes.applyApplicationProxyScope();
-    await scopes.applyConversationProxyScope();
-    expect(defaultSetProxy).toHaveBeenCalledWith({
-      mode: 'fixed_servers',
-      proxyBypassRules: '127.0.0.1,localhost,[::1]',
-      proxyRules: 'http://127.0.0.1:7890',
-    });
-    expect(conversationSetProxy).toHaveBeenCalledWith({
-      mode: 'fixed_servers',
-      proxyBypassRules: '127.0.0.1,localhost,[::1]',
-      proxyRules: 'http://127.0.0.1:7890',
-    });
-    expect(defaultCloseConnections).toHaveBeenCalledOnce();
-    expect(conversationCloseConnections).toHaveBeenCalledOnce();
-
-    await scopes.applyApplicationProxyScope();
-    await scopes.applyConversationProxyScope();
-    expect(defaultSetProxy).toHaveBeenCalledOnce();
-    expect(conversationSetProxy).toHaveBeenCalledOnce();
   });
 
   it('reads only Claude Code settings hints and leaves every settings file unchanged', async () => {

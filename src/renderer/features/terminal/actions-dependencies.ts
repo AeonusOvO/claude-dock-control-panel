@@ -4,6 +4,8 @@ import type {
   ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 import type {
+  ClaudeLaunchOutcome,
+  ClaudeLaunchPreflightDecisionOutcome,
   ClaudeProjectState,
   OperationResult,
   TerminalStatus,
@@ -23,6 +25,10 @@ export interface TerminalActionsDependencies {
   handleOperation: (result: OperationResult, successMessage?: string) => boolean;
   projectNameFromPath: (directoryPath: string) => string;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  resolveClaudeLaunchDecision: (
+    token: ClaudeLaunchAttemptToken,
+    paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,
+  ) => Promise<Exclude<ClaudeLaunchPreflightDecisionOutcome, { status: 'paused' }>>;
   renderClaudeLaunchResult: (
     token: ClaudeLaunchAttemptToken,
     state: ClaudeProjectState,

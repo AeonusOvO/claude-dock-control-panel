@@ -25,9 +25,10 @@ import {
 import { createTrayController } from './app/tray';
 import { createWindowController } from './app/window';
 import { createDevelopmentSessionCoordination } from './coordination/development-session';
+import { LaunchPreflightDecisionCoordinator } from './coordination/launch-preflight-decision';
+import { ClaudeLaunchHealthMonitor } from './network/claude-launch-health-monitor';
 import { createDeleteClaudeConversation } from './conversation/deletion';
 import { createPublishNativeSnapshot } from './conversation/snapshot-publisher';
-import { createProxyScopes } from './proxy/scopes';
 import { createProjectOperations } from './terminal/project-operations';
 import { createDescribeWorkspace } from './terminal/workspace-view';
 import { Registry } from './infra/registry';
@@ -35,6 +36,7 @@ import {
   CLAUDE_RUNTIME,
   CODEX_RUNTIME,
   MAIN_WINDOW,
+  NETWORK_PREFLIGHT_SERVICE,
   registerLifecycleServiceReferences,
   RUNTIME_PROCESS_REGISTRY,
 } from './infra/service-tokens';
@@ -81,8 +83,8 @@ registerProcessErrorHandlers();
 /*
  * Quitting is a two-step handshake when work is in flight. `before-quit` cannot wait on a promise, so
  * instead of blocking there we cancel the quit, ask the renderer to raise its own themed
- * confirmation, and quit for real only when it answers yes. `quitConfirmationPending` keeps a second
- * quit attempt (tray menu clicked twice, Alt+F4 while the dialog is up) from stacking dialogs.
+ * confirmation, and quit for real only when it answers yes. The main-owned pending confirmation keeps
+ * a second quit attempt from stacking dialogs and rejects delayed responses to superseded prompts.
  */
 const state = createMainState();
 
@@ -93,12 +95,13 @@ registerLifecycleServiceReferences(services);
  * Bound once against the containers so a handler file can import a guard rather than the container it
  * reads. Each `ipc/*.ts` takes the subset it needs, declared in its own dependency interface.
  */
-const guards = createMainGuards(services, runtimeProfile.effects);
+const guards = createMainGuards(services, runtimeProfile.effects, state);
 
 const conversationOwnerRegistry = new ConversationOwnerRegistry();
 const terminalConversationOwners = new Map<string, ConversationOwner>();
 const terminalTransferSessions = new Set<string>();
 const nativeLaunches = new Map<string, NativeConversationLaunch>();
+const launchPreflightDecisions = new LaunchPreflightDecisionCoordinator();
 
 const publishNativeSnapshot = createPublishNativeSnapshot({ services, state });
 
@@ -134,6 +137,7 @@ const terminalOutputBatcher = new TerminalOutputBatcher({
 const terminalStatusBaselines = new Map<string, Pick<TerminalStatus, 'phase' | 'ptyGeneration'>>();
 const publishedClaudeStateRevisions = new Map<string, number>();
 const terminalOperationInvalidationSuppressions = new Set<string>();
+let invalidateLaunchHealthSession = (_sessionId: string): void => {};
 
 const workspace = new TerminalWorkspace(
   (sessionId, ptyGeneration, data) => {
@@ -161,7 +165,24 @@ const workspace = new TerminalWorkspace(
         releaseTerminalConversationOwner(status.id);
       }
       const previous = terminalStatusBaselines.get(status.id);
+      const generationChanged = Boolean(
+        previous && previous.ptyGeneration !== status.ptyGeneration,
+      );
       const enteredFailure = enteredTerminalFailure(previous, status);
+      const expectedLaunchReplacement =
+        generationChanged && !enteredFailure && previous
+          ? launchPreflightDecisions.consumeExpectedPtyReplacement(
+              status.id,
+              previous.ptyGeneration,
+              status.ptyGeneration,
+            )
+          : false;
+      if ((generationChanged && !expectedLaunchReplacement) || enteredFailure) {
+        launchPreflightDecisions.invalidateSession(status.id);
+      }
+      if (generationChanged || enteredFailure) {
+        invalidateLaunchHealthSession(status.id);
+      }
       terminalStatusBaselines.set(status.id, {
         phase: status.phase,
         ptyGeneration: status.ptyGeneration,
@@ -180,7 +201,9 @@ const workspace = new TerminalWorkspace(
     for (const sessionId of terminalStatusBaselines.keys()) {
       if (!liveSessionIds.has(sessionId)) {
         releaseTerminalConversationOwner(sessionId);
-        invalidateDevelopmentSessionOperation(sessionId);
+        launchPreflightDecisions.invalidateSession(sessionId);
+        invalidateLaunchHealthSession(sessionId);
+        developmentSessionOperations.removeSession(sessionId);
         services.resolve(CLAUDE_RUNTIME).closeSession(sessionId);
         services.resolve(CODEX_RUNTIME).closeSession(sessionId);
         terminalStatusBaselines.delete(sessionId);
@@ -202,6 +225,7 @@ const workspace = new TerminalWorkspace(
     : (id, initialCwd, initialTitle, _onData, onStatus) =>
         new IsolatedTerminal(id, initialCwd, initialTitle, onStatus),
 );
+workspace.setBeforeActiveSessionChange(() => launchPreflightDecisions.invalidateAll());
 
 const { requestPermissionModeFromScreen, resolvePendingPermissionModeProbes } =
   createPermissionModeProbes({
@@ -211,6 +235,31 @@ const { requestPermissionModeFromScreen, resolvePendingPermissionModeProbes } =
     terminalOutputBatcher,
     workspace,
   });
+
+const launchHealthMonitor = new ClaudeLaunchHealthMonitor({
+  isCurrent: ({ ptyGeneration, runtimeLaunchGeneration, sessionId }) => {
+    if (
+      !workspace.hasSession(sessionId) ||
+      workspace.getStatus(sessionId).ptyGeneration !== ptyGeneration
+    ) {
+      return false;
+    }
+    const runtime = services.resolve(CLAUDE_RUNTIME);
+    return (
+      runtime.ownsLaunch(sessionId, runtimeLaunchGeneration) &&
+      runtime.isBoundToPty(sessionId, ptyGeneration)
+    );
+  },
+  onSnapshot: ({ ptyGeneration, runtimeLaunchGeneration, sessionId }, snapshot) => {
+    services
+      .resolve(CLAUDE_RUNTIME)
+      .applyAdvisoryRouteHealth(sessionId, runtimeLaunchGeneration, ptyGeneration, snapshot);
+  },
+  preflight: {
+    run: (input, target) => services.resolve(NETWORK_PREFLIGHT_SERVICE).run(input, target),
+  },
+});
+invalidateLaunchHealthSession = (sessionId) => launchHealthMonitor.invalidateSession(sessionId);
 
 const workspaceStore = new WorkspaceStore(app.getPath('userData'));
 const projectDirectoryLifecycle = new ProjectDirectoryLifecycleCoordinator();
@@ -255,6 +304,7 @@ const describeWorkspace = createDescribeWorkspace({ workspace, workspaceStore })
 const { applyWindowTheme, createWindow, hideMainWindowToTray, showMainWindow } =
   createWindowController({
     appPreferencesStore,
+    invalidateLaunchPreflightDecisions: () => launchPreflightDecisions.invalidateAll(),
     requestQuit: () => quit.requestQuit(),
     services,
     state,
@@ -263,6 +313,10 @@ const { applyWindowTheme, createWindow, hideMainWindowToTray, showMainWindow } =
 
 const quit = createQuitController({
   chatService,
+  invalidateLaunchPreflightDecisions: () => {
+    launchPreflightDecisions.invalidateAll();
+    launchHealthMonitor.invalidateAll();
+  },
   nativeAttachmentStore,
   services,
   showMainWindow,
@@ -272,17 +326,13 @@ const quit = createQuitController({
 const { beginControlledQuit, requestQuit } = quit;
 const { activateProject, addProject, chooseDirectory, failedWorkspaceResult } =
   createProjectOperations({
+    beforeActivate: () => launchPreflightDecisions.invalidateAll(),
     describeWorkspace,
     homeDirectory: runtimeProfile.paths.home,
     projectDirectoryLifecycle,
     workspace,
     workspaceStore,
   });
-
-const { applyApplicationProxyScope, applyConversationProxyScope } = createProxyScopes({
-  services,
-  state,
-});
 
 const {
   acquireConfigTransactionIsolation,
@@ -292,7 +342,8 @@ const {
   invalidateDevelopmentSessionOperation,
   managedConfigTransactions,
   projectRuntimeSwitchOperations,
-  withDevelopmentSessionOperation,
+  withDevelopmentSessionOperation: withLaunchDecisionSessionOperation,
+  withDevelopmentSessionOperationIfStampCurrent,
   withoutTerminalOperationInvalidation,
 } = createDevelopmentSessionCoordination({
   agentRuntimeStore,
@@ -303,6 +354,14 @@ const {
   terminalOutputBatcher,
   workspace,
 });
+
+const withDevelopmentSessionOperation: typeof withLaunchDecisionSessionOperation = (
+  sessionId,
+  operation,
+) => {
+  launchPreflightDecisions.invalidateSession(sessionId);
+  return withLaunchDecisionSessionOperation(sessionId, operation);
+};
 
 const { createTray, updateTray } = createTrayController({
   activateProject,
@@ -362,22 +421,19 @@ const onReady = createBootstrap({
   activateProject,
   advancedSettingsStore,
   appPreferencesStore,
-  applyApplicationProxyScope,
-  applyConversationProxyScope,
   artifactService,
   claudeConversationLifecycle,
   conversationOwnerRegistry,
   createTray,
   createWindow,
   guards,
+  launchHealthMonitor,
   ipc: {
     activateProject,
     addProject,
     advancedSettingsStore,
     agentRuntimeStore,
     appPreferencesStore,
-    applyApplicationProxyScope,
-    applyConversationProxyScope,
     applyWindowTheme,
     artifactService,
     beginControlledQuit,
@@ -392,12 +448,16 @@ const onReady = createBootstrap({
     conversationOwnerRegistry,
     deleteClaudeConversation,
     describeWorkspace,
+    developmentSessionOperations,
     directTerminalTransitions,
     failedRuntimeLaunchCleanupDependencies,
     failedWorkspaceResult,
     guards,
     hideMainWindowToTray,
     invalidateAndWaitForDevelopmentSessionOperation,
+    invalidateLaunchPreflightDecision: (sessionId: string) =>
+      launchPreflightDecisions.invalidateSession(sessionId),
+    launchPreflightDecisions,
     managedConfigTransactions,
     nativeAttachmentStore,
     nativeLaunches,
@@ -417,6 +477,8 @@ const onReady = createBootstrap({
     terminalConversationOwners,
     terminalTransferSessions,
     withDevelopmentSessionOperation,
+    withLaunchDecisionSessionOperation,
+    withDevelopmentSessionOperationIfStampCurrent,
     withoutTerminalOperationInvalidation,
     workspace,
     workspaceStore,

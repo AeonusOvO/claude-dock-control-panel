@@ -24,7 +24,7 @@ const createSettingsFeature = (dependencies: SettingsFeatureDependencies): Setti
   const state = createSettingsState();
   const view = createSettingsView(elements, state, dependencies);
   const actions = createSettingsActions(elements, state, dependencies, view);
-  const dispose = actions.bind();
+  const disposeBindings = actions.bind();
 
   return {
     endDialogSession: actions.endDialogSession,
@@ -34,7 +34,10 @@ const createSettingsFeature = (dependencies: SettingsFeatureDependencies): Setti
     selectTab: view.selectTab,
     setCloseBehaviorValue: view.setCloseBehaviorValue,
     updateUnsavedIndicator: view.updateUnsavedIndicator,
-    dispose,
+    dispose: () => {
+      disposeBindings();
+      dependencies.disposeClaudeExecutionSettings();
+    },
   };
 };
 

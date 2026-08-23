@@ -19,6 +19,16 @@ export interface McpIpcDependencies {
 
 const reportMcpFailure = createFailureReporter('mcp');
 
+const validateTogglePreviewId = (value: unknown): string => {
+  if (
+    typeof value !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  ) {
+    throw new Error('MCP 改动预览标识无效。');
+  }
+  return value;
+};
+
 export const registerMcpIpc = ({
   guards: { assertExternalRoutingWritesAllowed, requireMcpManager, validateSender },
 }: McpIpcDependencies): void => {
@@ -43,9 +53,9 @@ export const registerMcpIpc = ({
   };
   ipcMain.handle(
     CHANNELS.MCP_GET_CATALOG,
-    async (event, cwd: unknown, refresh: unknown): Promise<McpCatalog> => {
+    async (event, cwd: unknown, refreshRegistry: unknown): Promise<McpCatalog> => {
       validateSender(event);
-      return requireMcpManager().getCatalog(validateProjectPath(cwd), refresh === true);
+      return requireMcpManager().getCatalog(validateProjectPath(cwd), refreshRegistry === true);
     },
   );
   ipcMain.handle(
@@ -78,13 +88,17 @@ export const registerMcpIpc = ({
     CHANNELS.MCP_TOGGLE_APPLY,
     async (event, previewId: unknown, cwd: unknown): Promise<McpOperationResult> => {
       validateSender(event);
-      if (typeof previewId !== 'string' || !/^[0-9a-f-]{36}$/i.test(previewId)) {
-        throw new Error('MCP 改动预览标识无效。');
-      }
+      const validatedPreviewId = validateTogglePreviewId(previewId);
       const validatedCwd = validateProjectPath(cwd);
-      return runMcpMutation(validatedCwd, () => requireMcpManager().applyToggle(previewId));
+      return runMcpMutation(validatedCwd, () =>
+        requireMcpManager().applyToggle(validatedPreviewId),
+      );
     },
   );
+  ipcMain.handle(CHANNELS.MCP_TOGGLE_DISCARD, (event, previewId: unknown): boolean => {
+    validateSender(event);
+    return requireMcpManager().discardToggle(validateTogglePreviewId(previewId));
+  });
   ipcMain.handle(CHANNELS.MCP_BACKUPS, (event): McpBackupView[] => {
     validateSender(event);
     return requireMcpManager().listBackups();

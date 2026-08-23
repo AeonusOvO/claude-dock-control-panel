@@ -26,7 +26,6 @@ export interface ApplicationUpdaterDriver {
   disableWebInstaller: boolean;
   on: (event: string, listener: (payload?: unknown) => void) => unknown;
   quitAndInstall: (isSilent?: boolean, isForceRunAfter?: boolean) => void;
-  setFeedURL: (options: Record<string, unknown>) => void;
 }
 
 interface ApplicationUpdaterOptions {
@@ -43,7 +42,8 @@ const numericValue = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 
 export class ApplicationUpdaterService {
-  private operation: Promise<ApplicationUpdaterState> | undefined;
+  private checkOperation: Promise<UpdateCheckResultView | undefined> | undefined;
+  private downloadOperation: Promise<ApplicationUpdaterState> | undefined;
   private state: ApplicationUpdaterState;
 
   public constructor(private readonly options: ApplicationUpdaterOptions) {
@@ -55,7 +55,7 @@ export class ApplicationUpdaterService {
     this.state = options.enabled
       ? {
           currentVersion: options.currentVersion,
-          message: '可以在 ClaudeDock 内下载并安装正式版更新。',
+          message: '可以在 ClaudeDock 内检查、下载并安装当前发布通道的更新。',
           phase: 'idle',
         }
       : {
@@ -63,24 +63,65 @@ export class ApplicationUpdaterService {
           message: '自动更新仅在 Windows 安装版中启用。',
           phase: 'disabled',
         };
-    this.installEventHandlers();
+    if (options.enabled) {
+      this.installEventHandlers();
+    }
   }
 
   public getState(): ApplicationUpdaterState {
     return { ...this.state };
   }
 
+  public async check(): Promise<ApplicationUpdaterState> {
+    if (!this.options.enabled || this.state.phase === 'downloaded') {
+      return this.getState();
+    }
+    if (this.downloadOperation) {
+      return this.getState();
+    }
+    await this.checkForUpdate();
+    return this.getState();
+  }
+
   public checkAndDownload(): Promise<ApplicationUpdaterState> {
-    if (!this.options.enabled) {
+    if (!this.options.enabled || this.state.phase === 'downloaded') {
       return Promise.resolve(this.getState());
     }
-    if (this.operation) {
-      return this.operation;
+    if (this.downloadOperation) {
+      return this.downloadOperation;
     }
-    if (this.state.phase === 'downloaded') {
-      return Promise.resolve(this.getState());
+    this.downloadOperation = (async () => {
+      const result = await this.checkForUpdate();
+      if (!result || result.isUpdateAvailable !== true || this.state.phase === 'downloaded') {
+        return this.getState();
+      }
+      const latestVersion =
+        typeof result.updateInfo?.version === 'string'
+          ? result.updateInfo.version
+          : this.state.latestVersion;
+      this.updateState({
+        currentVersion: this.options.currentVersion,
+        latestVersion,
+        message: latestVersion ? `正在下载 ClaudeDock ${latestVersion}…` : '正在下载更新…',
+        phase: 'downloading',
+      });
+      try {
+        await this.options.driver.downloadUpdate();
+      } catch (error) {
+        this.updateError(error);
+      }
+      return this.getState();
+    })().finally(() => {
+      this.downloadOperation = undefined;
+    });
+    return this.downloadOperation;
+  }
+
+  private checkForUpdate(): Promise<UpdateCheckResultView | undefined> {
+    if (this.checkOperation) {
+      return this.checkOperation;
     }
-    this.operation = (async () => {
+    this.checkOperation = (async () => {
       this.updateState({
         currentVersion: this.options.currentVersion,
         message: '正在检查更新…',
@@ -93,7 +134,7 @@ export class ApplicationUpdaterService {
         }
         const latestVersion =
           typeof result.updateInfo?.version === 'string' ? result.updateInfo.version : undefined;
-        if (result.isUpdateAvailable === false || this.state.phase === 'up-to-date') {
+        if (result.isUpdateAvailable !== true) {
           if (this.state.phase !== 'up-to-date') {
             this.updateState({
               currentVersion: this.options.currentVersion,
@@ -102,29 +143,25 @@ export class ApplicationUpdaterService {
               phase: 'up-to-date',
             });
           }
-          return this.getState();
+          return result;
         }
-        this.updateState({
-          currentVersion: this.options.currentVersion,
-          latestVersion,
-          message: latestVersion ? `正在下载 ClaudeDock ${latestVersion}…` : '正在下载更新…',
-          phase: 'downloading',
-        });
-        await this.options.driver.downloadUpdate();
-        return this.getState();
+        if (this.state.phase !== 'available') {
+          this.updateState({
+            currentVersion: this.options.currentVersion,
+            latestVersion,
+            message: latestVersion ? `发现 ClaudeDock ${latestVersion}。` : '发现可用更新。',
+            phase: 'available',
+          });
+        }
+        return result;
       } catch (error) {
-        this.updateState({
-          currentVersion: this.options.currentVersion,
-          latestVersion: this.state.latestVersion,
-          message: `应用更新失败：${errorMessage(error)}`,
-          phase: 'error',
-        });
-        return this.getState();
-      } finally {
-        this.operation = undefined;
+        this.updateError(error);
+        return undefined;
       }
-    })();
-    return this.operation;
+    })().finally(() => {
+      this.checkOperation = undefined;
+    });
+    return this.checkOperation;
   }
 
   public installDownloaded(): void {
@@ -189,6 +226,15 @@ export class ApplicationUpdaterService {
         message: `应用更新失败：${errorMessage(payload)}`,
         phase: 'error',
       });
+    });
+  }
+
+  private updateError(error: unknown): void {
+    this.updateState({
+      currentVersion: this.options.currentVersion,
+      latestVersion: this.state.latestVersion,
+      message: `应用更新失败：${errorMessage(error)}`,
+      phase: 'error',
     });
   }
 

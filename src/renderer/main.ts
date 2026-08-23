@@ -8,7 +8,18 @@ import '@fontsource-variable/hanken-grotesk';
 import '@fontsource-variable/newsreader';
 import '@fontsource-variable/roboto';
 import '@fontsource-variable/inter';
+/*
+ * Vendor stylesheets are imported here, ahead of `styles.css`, because emit order *is* the cascade
+ * for them. xterm.css hardcodes `background-color: #000` on `.xterm .xterm-viewport` at exactly the
+ * same specificity as the override in `views/terminal.css`, so whichever rule the bundler writes
+ * last wins. While this import lived in `features/terminal/terminal-views-create.ts`, Vite emitted
+ * it *after* the design system and the viewport kept its opaque black — the character grid only
+ * covers whole cells, so every theme showed a black ring in the leftover strip right of and below
+ * the grid. It reproduced only in packaged builds; `vite serve` injects <style> tags in a different
+ * order. Keep every third-party stylesheet on this side of `styles.css`.
+ */
 import 'katex/dist/katex.css';
+import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import {
   enhanceAllSelects,
@@ -16,6 +27,7 @@ import {
   installSelectDismissHandlers,
 } from './platform/components';
 import { Registry } from './platform/registry';
+import { installScrollChaining } from './platform/scroll-chaining';
 import { bootstrapApplication } from './bootstrap';
 
 /*
@@ -27,6 +39,7 @@ import { bootstrapApplication } from './bootstrap';
 enhanceAllSelects();
 installSelectDismissHandlers();
 installPressRipples();
+installScrollChaining();
 
 const rendererRegistry = new Registry();
 

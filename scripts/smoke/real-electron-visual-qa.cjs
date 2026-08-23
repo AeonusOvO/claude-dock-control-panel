@@ -169,16 +169,32 @@ const main = async () => {
       }
       // An open modal blocks nearly every transition this harness waits on, and reporting only the
       // label sends the reader looking for the wrong bug. Name the dialog when one is up.
-      const blocker = await evaluate(`(() => {
+      const diagnostics = await evaluate(`(() => {
         const dialog = [...document.querySelectorAll('dialog')].find((node) => node.open);
-        if (!dialog) return '';
-        return (dialog.id || dialog.className || 'dialog') + ': ' +
-          (dialog.querySelector('h1, h2, h3, .dialog__title')?.textContent ?? '').trim();
+        const send = document.querySelector('#native-send');
+        const queued = document.querySelector('#native-queued');
+        const input = document.querySelector('#native-composer-input');
+        return {
+          blocker: dialog
+            ? (dialog.id || dialog.className || 'dialog') + ': ' +
+              (dialog.querySelector('h1, h2, h3, .dialog__title')?.textContent ?? '').trim()
+            : '',
+          inputDisabled: input?.disabled ?? '(missing)',
+          inputLength: input?.value.length ?? -1,
+          nativeState: document.querySelector('#native-conversation')?.dataset.state ?? '(missing)',
+          queuedHidden: queued?.hidden ?? '(missing)',
+          queuedState: queued?.dataset.state ?? '(missing)',
+          sendAction: send?.dataset.action ?? '(missing)',
+          sendDisabled: send?.disabled ?? '(missing)',
+          sendSending: send?.dataset.sending ?? '(unset)',
+          status: document.querySelector('#native-composer-status')?.textContent ?? '(missing)',
+        };
       })()`);
+      const diagnosticText = JSON.stringify(diagnostics);
       throw new Error(
-        blocker
-          ? `Timed out waiting for ${label} — an open dialog is blocking it (${blocker}).`
-          : `Timed out waiting for ${label}.`,
+        diagnostics.blocker
+          ? `Timed out waiting for ${label} — an open dialog is blocking it (${diagnostics.blocker}); renderer state: ${diagnosticText}.`
+          : `Timed out waiting for ${label}; renderer state: ${diagnosticText}.`,
       );
     };
 

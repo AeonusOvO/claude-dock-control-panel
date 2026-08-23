@@ -68,6 +68,13 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
   public async start(input: ConversationStartInput): Promise<void> {
     if (this.sessions.has(input.conversationId))
       throw new Error('该 Claude 会话已经在原生界面运行。');
+    const revision = (this.startRevisions.get(input.conversationId) ?? 0) + 1;
+    this.startRevisions.set(input.conversationId, revision);
+    const assertStartCurrent = (): void => {
+      if (this.startRevisions.get(input.conversationId) !== revision) {
+        throw new Error('Claude 原生会话启动已取消。');
+      }
+    };
     const permissionMode = normalizedPermissionMode(input.permissionMode);
     if (permissionMode === 'bypassPermissions' && input.allowBypassPermissions !== true) {
       throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
@@ -82,9 +89,8 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       (this.options.queryFactory ?? defaultQueryFactory)(),
       (this.options.resolveExecutable ?? defaultResolveExecutable)(input.projectPath, environment),
     ]);
+    assertStartCurrent();
     const queue = new AsyncInputQueue();
-    const revision = (this.startRevisions.get(input.conversationId) ?? 0) + 1;
-    this.startRevisions.set(input.conversationId, revision);
     const sessionReference: { current?: AgentSession } = {};
     const requireSession = (): AgentSession => {
       if (!sessionReference.current) throw new Error('Claude 原生会话尚未完成初始化。');
@@ -152,6 +158,12 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
       tasks: new Map(),
       tools: new Map(),
     };
+    const assertSessionCurrent = (): void => {
+      assertStartCurrent();
+      if (this.sessions.get(input.conversationId) !== session) {
+        throw new Error('Claude 原生会话启动已取消。');
+      }
+    };
     sessionReference.current = session;
     this.sessions.set(input.conversationId, session);
     this.emit(session, { ownerKind: input.ownerKind, type: 'conversation.started' });
@@ -168,11 +180,15 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
           timer.unref();
         }),
       ]);
+      assertSessionCurrent();
       await this.publishInitialization(session, initialization);
+      assertSessionCurrent();
       this.emit(session, { phase: 'idle', type: 'conversation.phase' });
       void consume;
     } catch (error) {
-      await this.close(input.conversationId);
+      if (this.disposeSession(session)) {
+        this.emit(session, { phase: 'stopped', type: 'conversation.phase' });
+      }
       throw error;
     }
   }
@@ -355,14 +371,18 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
   }
 
   public async close(conversationId: string): Promise<void> {
+    this.startRevisions.set(conversationId, (this.startRevisions.get(conversationId) ?? 0) + 1);
     const session = this.sessions.get(conversationId);
     if (!session) return;
-    this.disposeSession(session);
-    this.emit(session, { phase: 'stopped', type: 'conversation.phase' });
+    if (this.disposeSession(session)) {
+      this.emit(session, { phase: 'stopped', type: 'conversation.phase' });
+    }
   }
 
   private async consume(session: AgentSession): Promise<void> {
-    const emit: AgentEventEmit = (target, event) => this.emit(target, event);
+    const emit: AgentEventEmit = (target, event) => {
+      if (this.sessions.get(target.input.conversationId) === target) this.emit(target, event);
+    };
     try {
       for await (const message of session.query) consumeMessage(session, message, emit);
       if (this.sessions.get(session.input.conversationId) === session) {

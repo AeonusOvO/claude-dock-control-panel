@@ -179,6 +179,23 @@ describe('TerminalWorkspace', () => {
     expect(dataListener).toHaveBeenNthCalledWith(2, 'session-2', betaGeneration, 'beta output');
   });
 
+  it('invalidates pending launch authority before every active-session change', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    const activeSessionIds: string[] = [];
+    workspace.setBeforeActiveSessionChange(() => {
+      activeSessionIds.push(workspace.getState().activeSessionId);
+    });
+
+    workspace.openProject('D:\\Project Alpha');
+    workspace.openProject('D:\\Project Beta');
+    workspace.activate('session-1');
+    workspace.activate('session-1');
+    workspace.openConversation('D:\\Project Alpha');
+
+    expect(activeSessionIds).toEqual(['', 'session-1', 'session-2', 'session-1']);
+  });
+
   it('rejects terminal data from an obsolete PTY generation', () => {
     const dataListener = vi.fn();
     const { factory, terminals } = createFakeFactory();

@@ -81,9 +81,9 @@ interface RuntimeTestInternals {
   }>;
   emitState(runtime: RuntimeTestSession): Promise<void>;
   pollMetricsOnce(): Promise<void>;
+  preparedLaunches: Map<object, { replacement?: RuntimeTestSession }>;
   prepareRouteServices(...args: unknown[]): Promise<void>;
   readLaunchArtifact(artifactPath: string): Promise<string>;
-  root: string;
   sessions: Map<string, RuntimeTestSession>;
   submitClaudeCommand(
     runtime: RuntimeTestSession,
@@ -141,7 +141,6 @@ const createRuntime = (options: RuntimeHarnessOptions = {}) => {
     () => undefined,
   );
   const internals = runtime as unknown as RuntimeTestInternals;
-  internals.root = root;
   internals.diagnoseInstallation = vi.fn(
     async () =>
       ({
@@ -167,7 +166,7 @@ const createRuntime = (options: RuntimeHarnessOptions = {}) => {
     thinkingEnabledForHighEffort: false,
   };
   internals.sessions.set(session.sessionId, session);
-  return { internals, runtime, session, writes };
+  return { internals, root, runtime, session, writes };
 };
 
 const launchConfig = (
@@ -196,13 +195,10 @@ const useLaunchConfig = (internals: RuntimeTestInternals, config: NormalizedClau
   internals.configStore.getCredential = vi.fn(() => snapshot.credential);
 };
 
-const requiredSession = (
-  internals: RuntimeTestInternals,
-  sessionId: string,
-): RuntimeTestSession => {
-  const session = internals.sessions.get(sessionId);
-  if (!session) throw new Error(`Missing runtime session ${sessionId}.`);
-  return session;
+const preparedSession = (internals: RuntimeTestInternals, token: object): RuntimeTestSession => {
+  const replacement = internals.preparedLaunches.get(token)?.replacement;
+  if (!replacement) throw new Error('Missing prepared runtime session.');
+  return replacement;
 };
 
 interface RuntimeSettings {
@@ -537,15 +533,15 @@ describe('Claude runtime route diagnostics', () => {
     useLaunchConfig(internals, preferConfig);
 
     try {
-      await runtime.prepareLaunch('prefer-session', 'D:\\Project', 'new');
-      const preferSession = requiredSession(internals, 'prefer-session');
+      const preferLaunch = await runtime.prepareLaunch('prefer-session', 'D:\\Project', 'new');
+      const preferSession = preparedSession(internals, preferLaunch.token);
       const preferSettings = readSettings(preferSession);
       expect(preferSettings.apiKeyHelper).toBe('');
 
       const inheritedConfig = launchConfig('inherit');
       useLaunchConfig(internals, inheritedConfig);
-      await runtime.prepareLaunch('inherit-session', 'D:\\Project', 'new');
-      const inheritSession = requiredSession(internals, 'inherit-session');
+      const inheritLaunch = await runtime.prepareLaunch('inherit-session', 'D:\\Project', 'new');
+      const inheritSession = preparedSession(internals, inheritLaunch.token);
       const inheritSettings = readSettings(inheritSession);
       expect(Object.hasOwn(inheritSettings, 'apiKeyHelper')).toBe(false);
       expect(inheritSession.launchedConfigFingerprint).not.toBe(
@@ -558,12 +554,12 @@ describe('Claude runtime route diagnostics', () => {
 
   it('enables thinking, narrows a rejected effort for one turn, then restores it on Stop', async () => {
     vi.useFakeTimers();
-    const { internals, runtime, session, writes } = createRuntime();
+    const { internals, root, runtime, session, writes } = createRuntime();
     session.launchGeneration = 1;
-    session.settingsPath = path.join(internals.root, 'settings.json');
-    session.turnStopPath = path.join(internals.root, 'turn-stop.json');
+    session.settingsPath = path.join(root, 'settings.json');
+    session.turnStopPath = path.join(root, 'turn-stop.json');
     writeFileSync(session.settingsPath, '{}\n', 'utf8');
-    runtime.bindPty(session.sessionId, 7);
+    session.ptyGeneration = 7;
     vi.spyOn(runtime, 'getState').mockResolvedValue(projectState(session));
 
     try {
@@ -628,7 +624,7 @@ describe('Claude runtime route diagnostics', () => {
 
     try {
       const enabledLaunch = await runtime.prepareLaunch('isolated-session', 'D:\\Project', 'new');
-      const enabledSettings = readSettings(requiredSession(internals, 'isolated-session'));
+      const enabledSettings = readSettings(preparedSession(internals, enabledLaunch.token));
       expect(enabledSettings.hooks?.PreToolUse?.[0]?.matcher).toBe('WebSearch|WebFetch');
       expect(enabledSettings.hooks?.PreToolUse?.[0]?.hooks[0]?.command).toContain(
         'claudedock-web-research',
@@ -640,7 +636,7 @@ describe('Claude runtime route diagnostics', () => {
 
       isolated = false;
       const plainLaunch = await runtime.prepareLaunch('plain-session', 'D:\\Project', 'new');
-      const plainSettings = readSettings(requiredSession(internals, 'plain-session'));
+      const plainSettings = readSettings(preparedSession(internals, plainLaunch.token));
       expect(plainSettings.hooks?.PreToolUse).toBeUndefined();
       expect(plainLaunch.environment[POWERSHELL_STARTUP_COMMAND_ENV]).not.toContain('--agents');
     } finally {
@@ -700,7 +696,7 @@ describe('Claude runtime permission mode observation', () => {
     internals.emitState = vi.fn(async (current) => {
       requestedModes.push(current.permissionModeRequest);
     });
-    runtime.bindPty(session.sessionId, 9);
+    session.ptyGeneration = 9;
     vi.spyOn(runtime, 'getState').mockResolvedValue(projectState(session));
 
     try {
@@ -749,7 +745,7 @@ describe('Claude runtime permission mode observation', () => {
       claudeFailure: vi.fn() as never,
       failedRuntimeLaunchCleanupDependencies: {} as never,
       guards: {
-        assertOfficialProviderAllowed: vi.fn(),
+        withOfficialProviderAccess: vi.fn(async (_request, operation) => operation()),
         requireClaudeRuntime: vi.fn(() => ({}) as never),
         validateSender: vi.fn(),
       },
@@ -797,7 +793,7 @@ describe('Claude runtime permission mode observation', () => {
     const { runtime, session, writes } = createRuntime({
       readPermissionModeFromScreen: async () => 'bypassPermissions',
     });
-    runtime.bindPty(session.sessionId, 10);
+    session.ptyGeneration = 10;
     vi.spyOn(runtime, 'getState').mockResolvedValue(projectState(session));
 
     try {
@@ -822,7 +818,7 @@ describe('Claude runtime permission mode observation', () => {
 
   it('re-reads and validates every model option before writing to the live shell', async () => {
     const { internals, runtime, session } = createRuntime();
-    runtime.bindPty(session.sessionId, 12);
+    session.ptyGeneration = 12;
     vi.spyOn(runtime, 'getState').mockResolvedValue(projectState(session));
     const getModelOptions = vi.spyOn(runtime, 'getModelOptions');
     const submit = vi.fn(async () => undefined);
@@ -900,12 +896,13 @@ describe('Claude runtime permission mode observation', () => {
     const ensureRunning = vi.fn(async () => {
       calls.push('gateway');
     });
-    const assertOfficialProviderAllowed = vi.fn(async (provider: string) => {
-      calls.push(`guard:${provider}`);
+    const withOfficialProviderAccess = vi.fn(async (request, operation) => {
+      calls.push(`lease:${request.provider}:start`);
+      return operation().finally(() => calls.push(`lease:${request.provider}:end`));
     });
     registerClaudeStateIpc({
       guards: {
-        assertOfficialProviderAllowed: assertOfficialProviderAllowed as never,
+        withOfficialProviderAccess: withOfficialProviderAccess as never,
         requireClaudeRuntime: vi.fn(() => ({ testConnection }) as never),
         requireManagedChatGptGateway: vi.fn(() => ({ ensureRunning }) as never),
         validateSender: vi.fn(),
@@ -926,7 +923,11 @@ describe('Claude runtime permission mode observation', () => {
     await expect(
       ipc.invoke(CHANNELS.CLAUDE_TEST_CONNECTION, 'session-1', officialInput),
     ).resolves.toEqual(result);
-    expect(calls).toEqual(['guard:anthropic-claude', 'test:anthropic']);
+    expect(calls).toEqual([
+      'lease:anthropic-claude:start',
+      'test:anthropic',
+      'lease:anthropic-claude:end',
+    ]);
 
     calls.length = 0;
     const subscriptionInput: SaveClaudeConfigInput = {
@@ -942,7 +943,24 @@ describe('Claude runtime permission mode observation', () => {
     await expect(
       ipc.invoke(CHANNELS.CLAUDE_TEST_CONNECTION, 'session-1', subscriptionInput),
     ).resolves.toEqual(result);
-    expect(calls).toEqual(['gateway', 'guard:openai-codex', 'test:chatgpt-subscription']);
+    expect(calls).toEqual([
+      'lease:openai-codex:start',
+      'gateway',
+      'test:chatgpt-subscription',
+      'lease:openai-codex:end',
+    ]);
+
+    withOfficialProviderAccess.mockRejectedValueOnce(new Error('network blocked'));
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_TEST_CONNECTION, 'session-1', subscriptionInput),
+    ).resolves.toMatchObject({ ok: false });
+    expect(withOfficialProviderAccess.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'first-request', cwd: 'D:\\Project', provider: 'anthropic-claude' },
+      { action: 'first-request', cwd: 'D:\\Project', provider: 'openai-codex' },
+      { action: 'first-request', cwd: 'D:\\Project', provider: 'openai-codex' },
+    ]);
+    expect(ensureRunning).toHaveBeenCalledOnce();
+    expect(testConnection).toHaveBeenCalledTimes(2);
   });
 
   it('publishes one restoral event through the preload bridge only when visibility changes', async () => {
@@ -976,6 +994,7 @@ describe('Claude runtime permission mode observation', () => {
     services.resolve(MAIN_WINDOW).current = fakeWindow as unknown as Electron.BrowserWindow;
     const controller = createWindowController({
       appPreferencesStore: {} as never,
+      invalidateLaunchPreflightDecisions: vi.fn(),
       requestQuit: vi.fn(),
       services,
       state: {} as never,
@@ -1002,7 +1021,7 @@ describe('Claude runtime permission mode observation', () => {
   it('serializes slash commands as separate body and return writes with a lease recheck', async () => {
     vi.useFakeTimers();
     const { runtime, session, writes } = createRuntime();
-    runtime.bindPty(session.sessionId, 15);
+    session.ptyGeneration = 15;
     vi.spyOn(runtime, 'getState').mockResolvedValue(projectState(session));
 
     try {
@@ -1036,10 +1055,10 @@ describe('Claude runtime permission mode observation', () => {
   });
 
   it('ignores an in-flight stale PostCompact read and deduplicates fresh stamps', async () => {
-    const { internals, runtime, session } = createRuntime();
-    runtime.bindPty(session.sessionId, 19);
+    const { internals, root, runtime, session } = createRuntime();
+    session.ptyGeneration = 19;
     session.launchGeneration = 1;
-    session.signalPath = path.join(internals.root, 'signal.json');
+    session.signalPath = path.join(root, 'signal.json');
     const waitingForCompact = vi.fn();
     session.waitingForCompact = waitingForCompact;
     let resolveStale!: (value: string) => void;

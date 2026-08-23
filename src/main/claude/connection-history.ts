@@ -37,6 +37,8 @@ interface StoredHistoryFile {
   version: 3;
 }
 
+export type ClaudeConnectionHistorySnapshot = StoredHistoryFile;
+
 /** Enough to cover a session of trial and error without letting the file grow without bound. */
 export const MAX_HISTORY_ENTRIES = 20;
 
@@ -197,6 +199,14 @@ export class ClaudeConnectionHistoryStore {
   public constructor(userDataPath: string) {
     this.storageDirectory = path.join(userDataPath, 'claude');
     this.storagePath = path.join(this.storageDirectory, 'connection-history.json');
+  }
+
+  public createSnapshot(): ClaudeConnectionHistorySnapshot {
+    return structuredClone(this.load());
+  }
+
+  public restoreSnapshot(snapshot: ClaudeConnectionHistorySnapshot): void {
+    this.persist(structuredClone(snapshot));
   }
 
   /** Newest first, so the list reads top-down as "most recent thing I tried". */

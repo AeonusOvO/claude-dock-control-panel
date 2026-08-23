@@ -1,14 +1,17 @@
 import type { ApplicationProxyState } from '../../shared/contracts';
 
+export interface PendingQuitConfirmation {
+  readonly id: string;
+  readonly mode: 'ordinary' | 'residual';
+  readonly owner: 'native' | 'renderer';
+}
+
 /*
  * Process state that outlives any single handler. The quit handshake is the reason most of it exists:
  * `before-quit` fires more than once, the renderer answers asynchronously, and each pass has to know what
- * the previous one decided. The rest tracks what has already been applied, so a repeat call is a no-op.
+ * the previous one decided. Other fields cache renderer state or coordinate asynchronous process work.
  */
 export interface MainState {
-  /** Proxy rules currently applied to each session, so an unchanged rule set skips a re-apply. */
-  appliedApplicationProxyRules: string;
-  appliedConversationProxyRules: string;
   /** Undefined until the first read; cleared on save so the next read recomputes. */
   applicationProxyState: ApplicationProxyState | undefined;
   /** Swapped for a proxied implementation when the application proxy is on. */
@@ -18,11 +21,10 @@ export interface MainState {
   nativeSnapshotFlushTimer: NodeJS.Timeout | undefined;
   nextPermissionModeProbeId: number;
   quitCleanupInProgress: boolean;
-  quitConfirmationPending: boolean;
-  /** Forces the quit through if the renderer never answers. */
+  /** Main-owned one-shot authority for the exact ordinary or residual prompt currently visible. */
+  quitConfirmation: PendingQuitConfirmation | undefined;
+  /** Falls back when the renderer does not acknowledge the exact request in time. */
   quitConfirmationTimer: NodeJS.Timeout | undefined;
-  /** Set when processes survived cleanup, so a retry may quit anyway. */
-  quitResidualConfirmationPending: boolean;
   /** Force-exits the process if a graceful quit stalls past the watchdog budget. */
   quitWatchdogTimer: NodeJS.Timeout | undefined;
   releaseConversationBusy: (() => void) | undefined;
@@ -30,17 +32,14 @@ export interface MainState {
 }
 
 export const createMainState = (): MainState => ({
-  appliedApplicationProxyRules: '',
-  appliedConversationProxyRules: '',
   applicationProxyState: undefined,
   chatFetch: fetch,
   isQuitting: false,
   nativeSnapshotFlushTimer: undefined,
   nextPermissionModeProbeId: 1,
   quitCleanupInProgress: false,
-  quitConfirmationPending: false,
+  quitConfirmation: undefined,
   quitConfirmationTimer: undefined,
-  quitResidualConfirmationPending: false,
   quitWatchdogTimer: undefined,
   releaseConversationBusy: undefined,
   runtimeShutdownForQuitDone: false,

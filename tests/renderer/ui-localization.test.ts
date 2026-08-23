@@ -197,6 +197,7 @@ describe('Chinese interface contract', () => {
             severity: 'blocking',
           },
         ],
+        requestId: 'quit-request-1',
       });
       expect(harness.query('#quit-confirmation-title').textContent).toBe(
         '有操作正在进行，不建议退出',
@@ -213,10 +214,15 @@ describe('Chinese interface contract', () => {
             severity: 'background',
           },
         ],
+        requestId: 'quit-request-2',
       });
       expect(harness.query('#quit-confirmation-title').textContent).toBe('还有后台任务未完成');
 
-      harness.emit('onAppQuitRequested', { hasBlocking: false, leases: [] });
+      harness.emit('onAppQuitRequested', {
+        hasBlocking: false,
+        leases: [],
+        requestId: 'quit-request-3',
+      });
       expect(harness.query('#quit-confirmation-title').textContent).toBe('确认退出 ClaudeDock？');
     } finally {
       await harness.cleanup();

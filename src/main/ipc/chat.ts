@@ -4,16 +4,19 @@ import type {
   ChatAttachmentBytesImportInput,
   ChatAttachmentImportInput,
   ChatMessage,
+  ChatPreflightResult,
   ChatStartInput,
   NetworkProviderId,
   SaveChatConfigInput,
   SaveChatConversationInput,
 } from '../../shared/contracts';
 import { ChatAttachmentStore, isChatAttachmentId } from '../chat/attachment-store';
-import type { ChatConfigStore } from '../chat/config-store';
+import type { ChatConfigStore, ChatRuntimeSnapshot } from '../chat/config-store';
 import type { ChatHistoryStore } from '../chat/history-store';
+import { endpointFor } from '../chat/protocol';
 import type { ChatService } from '../chat/service';
 import { createFailureReporter } from '../infra/logger';
+import type { NetworkPreflightTarget } from '../network/preflight-target';
 import type { MainGuards } from './guards';
 
 export interface ChatIpcDependencies {
@@ -21,13 +24,13 @@ export interface ChatIpcDependencies {
   chatConfigStore: ChatConfigStore;
   chatHistoryStore: ChatHistoryStore;
   chatService: ChatService;
-  guards: Pick<MainGuards, 'assertOfficialProviderAllowed' | 'validateSender'>;
+  guards: Pick<MainGuards, 'validateSender' | 'withOfficialProviderAccess'>;
 }
 
 const reportAttachmentFailure = createFailureReporter('chat-attachment');
 
 type ValidateSender = MainGuards['validateSender'];
-type AssertOfficialProviderAllowed = MainGuards['assertOfficialProviderAllowed'];
+type WithOfficialProviderAccess = MainGuards['withOfficialProviderAccess'];
 
 const currentTurnLocalAttachmentIds = (messages: ChatMessage[]): Set<string> => {
   const message = messages.at(-1);
@@ -41,26 +44,45 @@ const currentTurnLocalAttachmentIds = (messages: ChatMessage[]): Set<string> => 
   );
 };
 
-const officialProviderForChat = (
-  chatConfigStore: ChatConfigStore,
-): NetworkProviderId | undefined => {
+interface OfficialChatTarget {
+  provider: NetworkProviderId;
+  target: NetworkPreflightTarget;
+}
+
+export const officialTargetForChat = (
+  runtime: ChatRuntimeSnapshot,
+): OfficialChatTarget | undefined => {
+  let parsed: URL;
+  let url: string;
   try {
-    const hostname = new URL(chatConfigStore.getView().baseUrl).hostname.toLowerCase();
-    if (hostname === 'api.anthropic.com') {
-      return 'anthropic-claude';
-    }
-    if (hostname === 'api.openai.com' || hostname === 'chatgpt.com') {
-      return hostname === 'api.openai.com' ? 'openai-api' : 'openai-codex';
-    }
+    url = endpointFor(runtime.baseUrl, runtime.protocol);
+    parsed = new URL(url);
   } catch {
-    // The chat config store already validates URLs; a malformed legacy value is treated as custom.
+    return undefined;
   }
-  return undefined;
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    return undefined;
+  }
+  const provider =
+    parsed.origin === 'https://api.anthropic.com'
+      ? 'anthropic-claude'
+      : parsed.origin === 'https://api.openai.com'
+        ? 'openai-api'
+        : undefined;
+  if (!provider) {
+    return undefined;
+  }
+  const expectedProtocol = provider === 'anthropic-claude' ? 'anthropic' : 'openai';
+  if (runtime.protocol !== expectedProtocol) {
+    throw new Error('官方接口地址与所选对话协议不一致，请检查接口配置。');
+  }
+  return { provider, target: { process: 'application', url } };
 };
 
 const registerChatConfigIpc = (
   chatConfigStore: ChatConfigStore,
   chatService: ChatService,
+  withOfficialProviderAccess: WithOfficialProviderAccess,
   validateSender: ValidateSender,
 ): void => {
   ipcMain.handle(CHANNELS.CHAT_GET_CONFIG, (event) => {
@@ -79,7 +101,22 @@ const registerChatConfigIpc = (
     if (!input || typeof input !== 'object') {
       throw new Error('对话接入测试参数无效。');
     }
-    return chatService.test(input as SaveChatConfigInput);
+    const request = input as SaveChatConfigInput;
+    const runtime = chatService.captureTestRuntimeSnapshot(request);
+    const officialTarget = officialTargetForChat(runtime);
+    const test = () => chatService.testRuntime(runtime);
+    if (!officialTarget) {
+      return test();
+    }
+    return withOfficialProviderAccess(
+      {
+        action: 'first-request',
+        networkScope: 'conversation',
+        provider: officialTarget.provider,
+        target: officialTarget.target,
+      },
+      test,
+    );
   });
 };
 
@@ -291,9 +328,8 @@ const registerChatHistoryIpc = (
 
 const registerChatRequestIpc = (
   chatAttachmentStore: ChatAttachmentStore,
-  chatConfigStore: ChatConfigStore,
   chatService: ChatService,
-  assertOfficialProviderAllowed: AssertOfficialProviderAllowed,
+  withOfficialProviderAccess: WithOfficialProviderAccess,
   validateSender: ValidateSender,
 ): void => {
   ipcMain.handle(CHANNELS.CHAT_PREFLIGHT, (event, input: unknown) => {
@@ -315,21 +351,39 @@ const registerChatRequestIpc = (
       throw new Error('对话请求格式无效。');
     }
     const request = input as ChatStartInput;
-    const officialProvider = officialProviderForChat(chatConfigStore);
-    if (officialProvider) {
-      await assertOfficialProviderAllowed(
-        officialProvider,
-        'first-request',
-        undefined,
-        'conversation',
-      );
-    }
-    return chatService.start(request, (prepared) => {
+    const runtime = chatService.captureRuntimeSnapshot();
+    const officialTarget = officialTargetForChat(runtime);
+    const commitDraft = (prepared: ChatPreflightResult) => {
       chatAttachmentStore.commitDraft(
         request.draftId,
         currentTurnLocalAttachmentIds(prepared.messages),
       );
+    };
+    if (!officialTarget) {
+      return chatService.start(request, runtime, commitDraft);
+    }
+
+    let resolveAccepted!: (prepared: ChatPreflightResult) => void;
+    let rejectAccepted!: (error: unknown) => void;
+    const accepted = new Promise<ChatPreflightResult>((resolve, reject) => {
+      resolveAccepted = resolve;
+      rejectAccepted = reject;
     });
+    const guarded = withOfficialProviderAccess(
+      {
+        action: 'first-request',
+        networkScope: 'conversation',
+        provider: officialTarget.provider,
+        target: officialTarget.target,
+      },
+      async () => {
+        const started = chatService.startWithCompletion(request, runtime, commitDraft);
+        resolveAccepted(started.accepted);
+        await started.completion;
+      },
+    );
+    void guarded.catch(rejectAccepted);
+    return accepted;
   });
   ipcMain.handle(CHANNELS.CHAT_STOP, (event, requestId: unknown) => {
     validateSender(event);
@@ -345,16 +399,15 @@ export const registerChatIpc = ({
   chatConfigStore,
   chatHistoryStore,
   chatService,
-  guards: { assertOfficialProviderAllowed, validateSender },
+  guards: { validateSender, withOfficialProviderAccess },
 }: ChatIpcDependencies): void => {
-  registerChatConfigIpc(chatConfigStore, chatService, validateSender);
+  registerChatConfigIpc(chatConfigStore, chatService, withOfficialProviderAccess, validateSender);
   registerChatAttachmentIpc(chatAttachmentStore, chatHistoryStore, validateSender);
   registerChatHistoryIpc(chatHistoryStore, validateSender);
   registerChatRequestIpc(
     chatAttachmentStore,
-    chatConfigStore,
     chatService,
-    assertOfficialProviderAllowed,
+    withOfficialProviderAccess,
     validateSender,
   );
 };

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -17,8 +17,14 @@ afterEach(() => {
 });
 
 const resultAt = (checkedAt: number): NetworkPreflightResult => ({
+  action: 'background',
+  canonicalCwd: 'C:\\Users\\alice\\private-project',
   checkedAt,
+  configurationRevision: '1:1',
   featureAccess: [],
+  generation: 0,
+  mainRunId: 1,
+  networkScope: 'application',
   paths: [
     {
       detail: 'application path',
@@ -71,8 +77,48 @@ describe('NetworkDiagnosticsStore', () => {
     expect(raw).not.toContain('secret-token-value');
     expect(raw).not.toContain('this-is-a-secret-key');
     expect(raw).not.toContain('10.2.3.4');
+    expect(raw).not.toContain('canonicalCwd');
+    expect(raw).not.toContain('private-project');
+    expect(store.getView().entries[0]).not.toHaveProperty('canonicalCwd');
+    expect(store.getView().entries[0]).not.toHaveProperty('cwd');
     expect(raw).toContain('10.2.3.0/24');
     expect(raw).toContain('[REDACTED]');
+  });
+
+  it('removes project paths from legacy history rows before exposing them', () => {
+    const now = 10 * 24 * 60 * 60 * 1_000;
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-network-history-legacy-'));
+    fixtureRoots.push(root);
+    const directory = path.join(root, 'network-preflight');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      path.join(directory, 'history.json'),
+      JSON.stringify({
+        entries: [
+          {
+            ...resultAt(now),
+            canonicalCwd: 'C:\\Users\\alice\\canonical-project',
+            cwd: 'C:\\Users\\alice\\raw-project',
+          },
+          {
+            ...resultAt(now - 8 * 24 * 60 * 60 * 1_000),
+            canonicalCwd: 'C:\\Users\\alice\\expired-project',
+          },
+        ],
+        version: 1,
+      }),
+      'utf8',
+    );
+
+    const [entry] = new NetworkDiagnosticsStore(root, () => now).getView().entries;
+    expect(entry).not.toHaveProperty('canonicalCwd');
+    expect(entry).not.toHaveProperty('cwd');
+    const migrated = readFileSync(path.join(directory, 'history.json'), 'utf8');
+    expect(migrated).not.toContain('canonicalCwd');
+    expect(migrated).not.toContain('canonical-project');
+    expect(migrated).not.toMatch(/"cwd"/);
+    expect(migrated).not.toContain('raw-project');
+    expect(migrated).not.toContain('expired-project');
   });
 
   it('redacts bearer and query credentials without hiding ordinary diagnostics', () => {

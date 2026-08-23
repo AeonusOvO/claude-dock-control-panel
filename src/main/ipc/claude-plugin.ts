@@ -1,17 +1,23 @@
-import { CHANNELS } from '../../shared/ipc/channels';
 import { createHash } from 'node:crypto';
 import { ipcMain } from 'electron';
-import type { ClaudePluginCatalog, ClaudePluginOperationResult } from '../../shared/contracts';
+import type {
+  BusyKind,
+  ClaudePluginCatalog,
+  ClaudePluginOperationResult,
+} from '../../shared/contracts';
+import { CHANNELS } from '../../shared/ipc/channels';
 import {
   type ClaudePluginManager,
+  ClaudePluginMutationError,
+  type ClaudePluginMutationRequest,
   isValidMarketplaceName,
   isValidMarketplaceSource,
 } from '../claude/plugin-manager';
 import { createFailureReporter } from '../infra/logger';
 import type { Registry } from '../infra/registry';
 import { BUSY_REGISTRY } from '../infra/service-tokens';
-import { validatePluginId } from './validation';
 import type { MainGuards } from './guards';
+import { validatePluginId } from './validation';
 
 export interface ClaudePluginIpcDependencies {
   guards: Pick<MainGuards, 'assertPluginMutationsAllowed' | 'validateSender'>;
@@ -21,55 +27,119 @@ export interface ClaudePluginIpcDependencies {
 
 const reportPluginFailure = createFailureReporter('claude-plugin');
 
+type PluginBusyAction =
+  'disable' | 'enable' | 'install' | 'refresh' | 'remove' | 'uninstall' | 'update';
+
+interface PreparedPluginMutation {
+  action: PluginBusyAction;
+  kind: BusyKind;
+  request: ClaudePluginMutationRequest;
+  target: string;
+}
+
+type PreparePluginMutation = (argument: unknown, flag: unknown) => PreparedPluginMutation;
+
+const actionLabel = (action: PluginBusyAction): string =>
+  (
+    ({
+      disable: '禁用',
+      enable: '启用',
+      install: '安装',
+      refresh: '刷新',
+      remove: '移除',
+      uninstall: '卸载',
+      update: '更新',
+    }) as const
+  )[action];
+
+const mutationIdentitySource = (request: ClaudePluginMutationRequest): string => {
+  switch (request.type) {
+    case 'install':
+    case 'uninstall':
+    case 'update':
+      return `${request.type}:${request.pluginId}`;
+    case 'set-enabled':
+      return `${request.pluginId}:${request.enabled}`;
+    case 'marketplace-add':
+      return `${request.type}:${request.source}`;
+    case 'marketplace-remove':
+      return `${request.type}:${request.name}`;
+    case 'marketplaces-refresh':
+    case 'update-all':
+      return request.type;
+  }
+};
+
 export const registerClaudePluginIpc = ({
   guards: { assertPluginMutationsAllowed, validateSender },
   pluginManager,
   services,
 }: ClaudePluginIpcDependencies): void => {
-  const refreshedPluginCatalog = async (): Promise<ClaudePluginCatalog> => {
-    pluginManager.invalidate();
-    return pluginManager.getCatalog(true);
-  };
+  let mutationSequence = 0;
 
-  /** Every plugin mutation shares the same validate → run → refresh → report shape. */
-  const runPluginMutation = async (
-    operation: () => Promise<string>,
+  const failedMutationResult = async (
+    error: unknown,
+    catalog?: ClaudePluginCatalog,
   ): Promise<ClaudePluginOperationResult> => {
-    try {
-      assertPluginMutationsAllowed();
-      const message = await operation();
-      return { catalog: await refreshedPluginCatalog(), message, ok: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '插件操作失败。';
-      return {
-        ...reportPluginFailure('external-service', message, error),
-        catalog: await refreshedPluginCatalog(),
-        error: message,
-        ok: false,
-      };
-    }
+    const message = error instanceof Error ? error.message : '插件操作失败。';
+    return {
+      ...reportPluginFailure('external-service', message, error),
+      catalog: catalog ?? (await pluginManager.getCatalog(false)),
+      error: message,
+      ok: false,
+    };
   };
 
-  const pluginMutations = new Map<string, (argument: unknown, flag: unknown) => Promise<string>>([
+  const pluginMutations = new Map<string, PreparePluginMutation>([
     [
       CHANNELS.CLAUDE_PLUGINS_INSTALL,
-      (argument) => pluginManager.install(validatePluginId(argument)),
+      (argument) => {
+        const pluginId = validatePluginId(argument);
+        return {
+          action: 'install',
+          kind: 'install',
+          request: { pluginId, type: 'install' },
+          target: pluginId,
+        };
+      },
     ],
     [
       CHANNELS.CLAUDE_PLUGINS_UNINSTALL,
-      (argument) => pluginManager.uninstall(validatePluginId(argument)),
+      (argument) => {
+        const pluginId = validatePluginId(argument);
+        return {
+          action: 'uninstall',
+          kind: 'uninstall',
+          request: { pluginId, type: 'uninstall' },
+          target: pluginId,
+        };
+      },
     ],
     [
       CHANNELS.CLAUDE_PLUGINS_UPDATE,
-      (argument) => pluginManager.update(validatePluginId(argument)),
+      (argument) => {
+        const pluginId = validatePluginId(argument);
+        return {
+          action: 'update',
+          kind: 'install',
+          request: { pluginId, type: 'update' },
+          target: pluginId,
+        };
+      },
     ],
     [
       CHANNELS.CLAUDE_PLUGINS_SET_ENABLED,
       (argument, flag) => {
+        const pluginId = validatePluginId(argument);
         if (typeof flag !== 'boolean') {
           throw new Error('插件启用状态无效。');
         }
-        return pluginManager.setEnabled(validatePluginId(argument), flag);
+        return {
+          action: flag ? 'enable' : 'disable',
+          kind: 'configure',
+          request: { enabled: flag, pluginId, type: 'set-enabled' },
+          target: pluginId,
+        };
       },
     ],
     [
@@ -78,7 +148,14 @@ export const registerClaudePluginIpc = ({
         if (!isValidMarketplaceSource(argument)) {
           throw new Error('插件市场地址无效，请填写仓库所有者/仓库名、HTTPS 地址或本机绝对路径。');
         }
-        return pluginManager.addMarketplace(argument.trim());
+        const source = argument.trim();
+        return {
+          action: 'install',
+          kind: 'install',
+          request: { source, type: 'marketplace-add' },
+          // Local paths and remote URLs stay out of busy status and tray text.
+          target: '插件市场',
+        };
       },
     ],
     [
@@ -87,12 +164,34 @@ export const registerClaudePluginIpc = ({
         if (!isValidMarketplaceName(argument)) {
           throw new Error('插件市场名称无效。');
         }
-        return pluginManager.removeMarketplace(argument);
+        return {
+          action: 'remove',
+          kind: 'uninstall',
+          request: { name: argument, type: 'marketplace-remove' },
+          target: argument,
+        };
       },
     ],
-    [CHANNELS.CLAUDE_PLUGINS_MARKETPLACES_REFRESH, () => pluginManager.refreshMarketplaces()],
-    [CHANNELS.CLAUDE_PLUGINS_UPDATE_ALL, () => pluginManager.updateAll()],
+    [
+      CHANNELS.CLAUDE_PLUGINS_MARKETPLACES_REFRESH,
+      () => ({
+        action: 'refresh',
+        kind: 'install',
+        request: { type: 'marketplaces-refresh' },
+        target: '插件市场',
+      }),
+    ],
+    [
+      CHANNELS.CLAUDE_PLUGINS_UPDATE_ALL,
+      () => ({
+        action: 'update',
+        kind: 'install',
+        request: { type: 'update-all' },
+        target: '所有插件',
+      }),
+    ],
   ]);
+
   ipcMain.handle(CHANNELS.CLAUDE_PLUGINS_GET, async (event, refresh: unknown) => {
     validateSender(event);
     return pluginManager.getCatalog(refresh === true);
@@ -100,64 +199,42 @@ export const registerClaudePluginIpc = ({
 
   /*
    * Each mutation gets a blocking lease so the quit handshake and the tray both know a plugin write is
-   * in flight; the label is derived from the channel so a new entry above needs no wiring here.
+   * in flight. Preparation validates all inputs before any user-controlled value reaches metadata.
    */
-  for (const [channel, run] of pluginMutations) {
+  for (const [channel, prepare] of pluginMutations) {
     ipcMain.handle(channel, async (event, argument: unknown, flag: unknown) => {
       validateSender(event);
-      return runPluginMutation(async () => {
-        const identity =
-          typeof argument === 'string'
-            ? createHash('sha256').update(argument).digest('hex').slice(0, 16)
-            : 'global';
-        const action = channel.includes('uninstall')
-          ? 'uninstall'
-          : channel.includes('disable')
-            ? 'disable'
-            : channel.includes('enable')
-              ? 'enable'
-              : channel.includes('update')
-                ? 'update'
-                : channel.includes('refresh')
-                  ? 'refresh'
-                  : channel.includes('remove')
-                    ? 'remove'
-                    : 'install';
-        const actionLabel = (
-          {
-            disable: '禁用',
-            enable: '启用',
-            install: '安装',
-            refresh: '刷新',
-            remove: '移除',
-            uninstall: '卸载',
-            update: '更新',
-          } as const
-        )[action];
-        const target =
-          typeof argument === 'string' && /^[\w@./:-]{1,120}$/.test(argument)
-            ? argument
-            : channel.includes('marketplace')
-              ? '插件市场'
-              : '所选插件';
-        const release = services.resolve(BUSY_REGISTRY).acquire({
-          action,
+      let release: (() => void) | undefined;
+      try {
+        assertPluginMutationsAllowed();
+        const mutation = prepare(argument, flag);
+        const identity = createHash('sha256')
+          .update(mutationIdentitySource(mutation.request))
+          .digest('hex')
+          .slice(0, 16);
+        mutationSequence += 1;
+        const label = actionLabel(mutation.action);
+        release = services.resolve(BUSY_REGISTRY).acquire({
+          action: mutation.action,
           cancellable: false,
           domain: 'plugin',
-          id: `plugin:${channel}:${identity}`,
-          kind:
-            channel.includes('uninstall') || channel.includes('remove') ? 'uninstall' : 'install',
-          label: `${actionLabel} ${target}`,
+          id: `plugin:${channel}:${identity}:${mutationSequence.toString(36)}`,
+          kind: mutation.kind,
+          label: `${label} ${mutation.target}`,
           severity: 'blocking',
-          stage: `${actionLabel} Claude Code 插件`,
-          target,
+          stage: `${label} Claude Code 插件`,
+          target: mutation.target,
         });
-        try {
-          return await run(argument, flag);
-        } finally {
-          release();
-        }
-      });
+        const outcome = await pluginManager.mutate(mutation.request);
+        return { ...outcome, ok: true };
+      } catch (error) {
+        return failedMutationResult(
+          error,
+          error instanceof ClaudePluginMutationError ? error.catalog : undefined,
+        );
+      } finally {
+        release?.();
+      }
     });
   }
 };

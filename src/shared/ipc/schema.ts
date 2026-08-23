@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type {
   ClaudeEffortRequest,
   ClaudeLaunchMode,
+  ClaudeLaunchPreflightDecisionInput,
   ClaudePermissionDecision,
   ClaudePermissionMode,
   ClaudeProviderModelDiscoveryInput,
@@ -15,6 +16,7 @@ import type {
   McpScope,
   ModelSpeedMode,
   NetworkPreflightAction,
+  NetworkPreflightRunInput,
   NetworkProviderId,
   PtyGeneration,
   SaveClaudeConfigInput,
@@ -28,6 +30,9 @@ import type {
 import { CLAUDE_EFFORT_REQUESTS } from '../claude/effort';
 import { claudeProviderIdSet } from '../claude/providers';
 import { CHANNELS, type EventChannel, type RequestChannel, type SendChannel } from './channels';
+import { claudeExecutionSettingsRequestSchema } from './claude-execution-settings-schema';
+
+export * from './claude-execution-settings-schema';
 
 const SESSION_ID_PATTERN = /^session-\d{1,10}$/u;
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -36,6 +41,16 @@ const HISTORY_ENTRY_ID_PATTERN = /^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/u;
 const MCP_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
 const MODEL_OPTION_ID_PATTERN = /^(?:current|history-[a-z0-9]{1,16}-[a-z0-9]{1,16})$/u;
 const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,79})?$/u;
+const NATIVE_SUBMIT_AUTHORITY_FIELDS = new Set([
+  'action',
+  'cwd',
+  'networkScope',
+  'officialNetworkProvider',
+  'officialNetworkTarget',
+  'projectPath',
+  'provider',
+  'target',
+]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object';
@@ -68,6 +83,10 @@ export const nativeSubmitInputSchema = z
   .superRefine((value, context) => {
     if (!isRecord(value)) {
       addIssue(context, '原生对话输入格式无效。');
+      return;
+    }
+    if (Object.keys(value).some((key) => NATIVE_SUBMIT_AUTHORITY_FIELDS.has(key))) {
+      addIssue(context, '原生对话输入包含未授权字段。');
       return;
     }
     if (
@@ -161,7 +180,11 @@ export const developmentRuntimeSchema = guarded<DevelopmentRuntime>(
 
 export const networkProviderSchema = guarded<NetworkProviderId>(
   (value): value is NetworkProviderId =>
-    value === 'anthropic-claude' || value === 'openai-api' || value === 'openai-codex',
+    value === 'ai-services' ||
+    value === 'anthropic-claude' ||
+    value === 'openai-api' ||
+    value === 'openai-codex' ||
+    value === 'xai-grok',
   '网络预检服务商标识无效。',
 );
 
@@ -181,6 +204,13 @@ export const claudeLaunchModeSchema = guarded<ClaudeLaunchMode>(
     value === 'new' || value === 'continue' || value === 'resume',
   'Claude 会话启动方式无效。',
 );
+
+export const claudeLaunchPreflightDecisionInputSchema = z
+  .object({
+    choice: z.enum(['cancel', 'recheck', 'bypass']),
+    decisionId: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/u, 'Claude 启动决策标识无效。'),
+  })
+  .strict() satisfies z.ZodType<ClaudeLaunchPreflightDecisionInput>;
 
 export const codexLaunchModeSchema = claudeLaunchModeSchema.transform(
   (value) => value as CodexLaunchMode,
@@ -369,11 +399,35 @@ export const projectPathInputSchema = guarded<string>(
   '项目路径格式无效。',
 );
 
+export const networkPreflightRunInputSchema = z
+  .object({
+    action: networkPreflightActionSchema,
+    cwd: projectPathInputSchema.optional(),
+    force: z.boolean().optional(),
+    networkScope: z.enum(['application', 'conversation']).optional(),
+    provider: networkProviderSchema,
+  })
+  .strict()
+  .transform(
+    (value) =>
+      ({
+        action: value.action,
+        ...(value.cwd === undefined ? {} : { cwd: value.cwd }),
+        ...(value.force === undefined ? {} : { force: value.force }),
+        ...(value.networkScope === undefined ? {} : { networkScope: value.networkScope }),
+        provider: value.provider,
+      }) satisfies NetworkPreflightRunInput,
+  );
+
 export const mcpInstallInputSchema = z
   .unknown()
   .superRefine((value, context) => {
     if (!isRecord(value)) {
       addIssue(context, 'MCP 安装参数无效。');
+      return;
+    }
+    if (Object.keys(value).some((key) => !['catalogId', 'cwd', 'scope'].includes(key))) {
+      addIssue(context, 'MCP 安装参数包含未授权字段。');
       return;
     }
     if (typeof value.catalogId !== 'string' || value.catalogId.length > 240) {
@@ -433,6 +487,7 @@ export const providerModelDiscoveryInputSchema = z
       return;
     }
     if (
+      Object.keys(value).some((key) => key !== 'baseUrl' && key !== 'credential') ||
       typeof value.baseUrl !== 'string' ||
       value.baseUrl.length > 2048 ||
       (value.credential !== undefined &&
@@ -592,6 +647,18 @@ export const IPC_REQUESTS = {
     projectPathInputSchema,
     z.string(),
   ]),
+  [CHANNELS.CLAUDE_EXECUTION_SETTINGS_GET]: request('getClaudeExecutionSettings', []),
+  [CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE]: request('updateClaudeExecutionSettings', [
+    claudeExecutionSettingsRequestSchema,
+  ]),
+  [CHANNELS.CLAUDE_EXECUTION_SETTINGS_USE_RECOMMENDED]: request(
+    'useRecommendedClaudeExecutionSettings',
+    [],
+  ),
+  [CHANNELS.CLAUDE_EXECUTION_SETTINGS_RESTORE_DEFAULT]: request(
+    'restoreClaudeExecutionSettingsDefault',
+    [],
+  ),
   [CHANNELS.CLAUDE_GET_CONNECTION_ADVICE]: request('getClaudeConnectionAdvice', [sessionIdSchema]),
   [CHANNELS.CLAUDE_GET_GATEWAY_DIAGNOSTICS]: request('getClaudeGatewayDiagnostics', [
     sessionIdSchema,
@@ -602,6 +669,9 @@ export const IPC_REQUESTS = {
   ]),
   [CHANNELS.CLAUDE_GET_STATE]: request('getClaudeProjectState', [sessionIdSchema]),
   [CHANNELS.CLAUDE_LAUNCH]: request('launchClaude', [sessionIdSchema, claudeLaunchModeSchema]),
+  [CHANNELS.CLAUDE_LAUNCH_PREFLIGHT_DECIDE]: request('decideClaudeLaunchPreflight', [
+    claudeLaunchPreflightDecisionInputSchema,
+  ]),
   [CHANNELS.CLAUDE_LAUNCH_WITH_SESSION]: request('launchClaudeWithSession', [
     sessionIdSchema,
     z.string(),
@@ -610,13 +680,13 @@ export const IPC_REQUESTS = {
     sessionIdSchema,
     z.string(),
   ]),
+  [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT]: request('logoutManagedChatGptGateway', []),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_OPEN_MANAGEMENT]: request(
     'openManagedChatGptGatewayManagement',
     [],
   ),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP]: request('setupManagedChatGptGateway', [
     sessionIdSchema.optional(),
-    z.boolean(),
   ]),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE]: request('getManagedChatGptGatewayState', []),
   [CHANNELS.CLAUDE_MODEL_OPTIONS]: request('getClaudeModelOptions', [sessionIdSchema]),
@@ -639,6 +709,7 @@ export const IPC_REQUESTS = {
   [CHANNELS.CLAUDE_PLUGINS_UPDATE]: request('updateClaudePlugin', [pluginIdSchema]),
   [CHANNELS.CLAUDE_PLUGINS_UPDATE_ALL]: request('updateAllClaudePlugins', []),
   [CHANNELS.CLAUDE_PROVIDER_MODELS_DISCOVER]: request('discoverClaudeProviderModels', [
+    sessionIdSchema,
     providerModelDiscoveryInputSchema,
   ]),
   [CHANNELS.CLAUDE_RELAUNCH]: request('relaunchClaudeSession', [
@@ -726,6 +797,7 @@ export const IPC_REQUESTS = {
   [CHANNELS.MCP_INSTALL]: request('installMcpServer', [mcpInstallInputSchema]),
   [CHANNELS.MCP_REMOVE]: request('removeMcpServer', [mcpRemoveInputSchema]),
   [CHANNELS.MCP_TOGGLE_APPLY]: request('applyMcpToggle', [z.string(), projectPathInputSchema]),
+  [CHANNELS.MCP_TOGGLE_DISCARD]: request('discardMcpToggle', [z.string()]),
   [CHANNELS.MCP_TOGGLE_PREVIEW]: request('previewMcpToggle', [
     projectPathInputSchema,
     z.string(),
@@ -799,7 +871,9 @@ export const IPC_REQUESTS = {
   [CHANNELS.NETWORK_PREFLIGHT_GET]: request('getNetworkPreflight', [networkProviderSchema]),
   [CHANNELS.NETWORK_PREFLIGHT_GET_HISTORY]: request('getNetworkPreflightHistory', []),
   [CHANNELS.NETWORK_PREFLIGHT_INVALIDATE]: request('invalidateNetworkPreflight', [z.string()]),
-  [CHANNELS.NETWORK_PREFLIGHT_RUN]: request('runNetworkPreflight', [z.unknown()]),
+  [CHANNELS.NETWORK_PREFLIGHT_RUN]: request('runNetworkPreflight', [
+    networkPreflightRunInputSchema,
+  ]),
   [CHANNELS.PROJECT_ACTIVATE]: request('activateProject', [sessionIdSchema]),
   [CHANNELS.PROJECT_ADD]: request('addProject', [projectPathInputSchema]),
   [CHANNELS.PROJECT_CLOSE]: request('closeProject', [sessionIdSchema]),
@@ -831,7 +905,9 @@ export const IPC_REQUESTS = {
     z.string(),
   ]),
   [CHANNELS.SOFTWARE_APPLICATION_UPDATER_DOWNLOAD]: request('downloadApplicationUpdate', []),
-  [CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET]: request('getApplicationUpdaterState', []),
+  [CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET]: request('getApplicationUpdaterState', [
+    z.boolean().optional(),
+  ]),
   [CHANNELS.SOFTWARE_APPLICATION_UPDATER_INSTALL]: request('installApplicationUpdate', []),
   [CHANNELS.SOFTWARE_CLAUDE_INSTALL_UPDATE]: request('installOrUpdateClaudeCode', []),
   [CHANNELS.SOFTWARE_UPDATES_GET]: request('getSoftwareUpdates', [z.unknown()]),
@@ -857,6 +933,7 @@ export const IPC_SEND_METHODS = {
 export const IPC_EVENT_METHODS = {
   [CHANNELS.APP_OPEN_DOWNLOAD_CENTER]: 'onOpenDownloadCenterRequested',
   [CHANNELS.APP_QUIT_REQUESTED]: 'onAppQuitRequested',
+  [CHANNELS.APP_QUIT_REQUEST_INVALIDATED]: 'onAppQuitRequestInvalidated',
   [CHANNELS.APP_WINDOW_RESTORED]: 'onAppWindowRestored',
   [CHANNELS.APPLICATION_PROXY_CHANGED]: 'onApplicationProxyChanged',
   [CHANNELS.ARTIFACT_NETWORK_LOG]: 'onArtifactNetworkLog',

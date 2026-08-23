@@ -771,12 +771,18 @@ button:disabled {
   font-size: var(--type-caption-size);
 }
 
-.connection-advanced-dialog::backdrop,
-.download-center-dialog::backdrop,
-.update-center-dialog::backdrop,
-.conversation-rename-dialog::backdrop,
-.confirmation-dialog::backdrop {
-  background: rgb(0 0 0 / 58%);
+/*
+ * THE MODAL SCRIM. One rule for every `<dialog>` in the app, because a scrim is a theme surface like
+ * any other — not a neutral black wash laid over one. `--mask-veil` and `--mask-blur` are the
+ * "operation mask" pair each theme already authors in `terminal-themes.ts` (a warm paper veil for
+ * claude, cool near-black for graphite/midnight, plain white for telegram), and `shell/theme.ts`
+ * rewrites both inline on every theme switch — so the scrim re-tints live, with no extra plumbing
+ * and nothing per-dialog to keep in sync. `::backdrop` only renders for `showModal()`, so this is
+ * inert for the non-modal dialogs.
+ */
+dialog::backdrop {
+  background: var(--mask-veil);
+  backdrop-filter: blur(var(--mask-blur));
 }
 
 /* ==========================================================================================
@@ -914,6 +920,13 @@ button:disabled {
   gap: 1px;
   max-width: 420px;
   overflow-y: auto;
+  /*
+   * The one place chaining must NOT happen. This popup is `position: fixed` over the whole shell, so
+   * its DOM ancestors are not what sits behind it visually; letting a spent gesture chain would
+   * scroll unrelated content out from under the open list. `contain` is the documented opt-out that
+   * `platform/scroll-chaining.ts` honours as a hard stop.
+   */
+  overscroll-behavior: contain;
   padding: var(--s-1);
   position: fixed;
   z-index: 70;

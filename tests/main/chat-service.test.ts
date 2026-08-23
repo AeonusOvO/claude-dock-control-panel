@@ -6,7 +6,11 @@ import {
   serializeChatRequestBody,
   validateChatRequest,
 } from '../../src/main/chat/service';
-import type { ChatStreamEvent } from '../../src/shared/contracts';
+import type { ChatStartInput, ChatStreamEvent } from '../../src/shared/contracts';
+
+const startChat = (service: ChatService, input: ChatStartInput): void => {
+  service.start(input, service.captureRuntimeSnapshot());
+};
 
 const streamResponse = (chunks: string[]): Response => {
   const encoder = new TextEncoder();
@@ -46,7 +50,7 @@ describe('independent chat service', () => {
     } as unknown as ChatConfigStore;
     const service = new ChatService(store, (event) => events.push(event), fetchMock);
 
-    service.start({
+    startChat(service, {
       messages: [{ content: '你好', role: 'user' }],
       requestId: 'request-12345678',
     });
@@ -91,7 +95,7 @@ describe('independent chat service', () => {
     } as unknown as ChatConfigStore;
     const service = new ChatService(store, (event) => events.push(event), fetchMock);
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'ping', role: 'user' }],
       requestId: 'request-87654321',
     });
@@ -136,7 +140,7 @@ describe('independent chat service', () => {
     } as unknown as ChatConfigStore;
     const service = new ChatService(store, (event) => events.push(event), fetchMock);
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'ping', role: 'user' }],
       requestId: 'request-fallback',
     });
@@ -356,7 +360,7 @@ describe('independent chat service', () => {
     } as unknown as ChatConfigStore;
     const service = new ChatService(store, (event) => events.push(event), fetchMock);
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'run', role: 'user' }],
       requestId: 'request-thinking-fallback',
     });
@@ -439,7 +443,7 @@ describe('independent chat service', () => {
     } as unknown as ChatConfigStore;
     const service = new ChatService(store, (event) => events.push(event), fetchMock);
 
-    service.start({
+    startChat(service, {
       messages: [{ content: '你好', role: 'user' }],
       requestId: 'request-relay-headers',
     });
@@ -473,7 +477,7 @@ describe('independent chat service', () => {
     } as unknown as ChatConfigStore;
     const service = new ChatService(store, (event) => events.push(event), fetchMock);
 
-    service.start({
+    startChat(service, {
       messages: [{ content: '你好', role: 'user' }],
       requestId: 'request-ceiling-fallback',
     });
@@ -516,7 +520,7 @@ describe('independent chat service', () => {
       retryMaxDelayMs: 1,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'retry', role: 'user' }],
       requestId: 'request-http-retry',
     });
@@ -556,7 +560,7 @@ describe('independent chat service', () => {
       retryMaxDelayMs: 1,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'retry', role: 'user' }],
       requestId: 'request-http-exhausted',
     });
@@ -588,7 +592,7 @@ describe('independent chat service', () => {
       retryMaxDelayMs: 1,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'retry', role: 'user' }],
       requestId: 'request-network-retry',
     });
@@ -625,7 +629,7 @@ describe('independent chat service', () => {
       retryMaxDelayMs: 1,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'retry', role: 'user' }],
       requestId: 'request-empty-stream',
     });
@@ -660,7 +664,7 @@ describe('independent chat service', () => {
       retryMaxDelayMs: 1,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'partial', role: 'user' }],
       requestId: 'request-partial-stream',
     });
@@ -693,7 +697,7 @@ describe('independent chat service', () => {
           status: 302,
         }),
     );
-    new ChatService(store, (event) => ambiguousEvents.push(event), ambiguousFetch).start({
+    startChat(new ChatService(store, (event) => ambiguousEvents.push(event), ambiguousFetch), {
       messages: [{ content: 'redirect', role: 'user' }],
       requestId: 'request-redirect-302',
     });
@@ -711,7 +715,7 @@ describe('independent chat service', () => {
           status: 307,
         }),
     );
-    new ChatService(store, (event) => crossOriginEvents.push(event), crossOriginFetch).start({
+    startChat(new ChatService(store, (event) => crossOriginEvents.push(event), crossOriginFetch), {
       messages: [{ content: 'redirect', role: 'user' }],
       requestId: 'request-cross-origin-307',
     });
@@ -735,7 +739,7 @@ describe('independent chat service', () => {
           'data: [DONE]\n\n',
         ]),
       );
-    new ChatService(store, (event) => sameOriginEvents.push(event), sameOriginFetch).start({
+    startChat(new ChatService(store, (event) => sameOriginEvents.push(event), sameOriginFetch), {
       messages: [{ content: 'redirect', role: 'user' }],
       requestId: 'request-same-origin-307',
     });
@@ -774,7 +778,7 @@ describe('independent chat service', () => {
       retryMaxDelayMs: 1,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'overload', role: 'user' }],
       requestId: 'request-stream-overload',
     });
@@ -827,7 +831,7 @@ describe('independent chat service', () => {
       undefined,
       { idleRepeatMs: 100, idleTimeoutMs: 15, probeTimeoutMs: 50 },
     );
-    idleService.start({
+    startChat(idleService, {
       messages: [{ content: 'slow', role: 'user' }],
       requestId: 'request-idle',
     });
@@ -859,7 +863,7 @@ describe('independent chat service', () => {
       undefined,
       { idleTimeoutMs: 1_000 },
     );
-    manualService.start({
+    startChat(manualService, {
       messages: [{ content: 'manual', role: 'user' }],
       requestId: 'request-manual',
     });
@@ -908,7 +912,7 @@ describe('independent chat service', () => {
       () => 15,
     );
 
-    service.start({
+    startChat(service, {
       messages: [{ content: 'slow', role: 'user' }],
       requestId: 'request-local-timeout',
     });

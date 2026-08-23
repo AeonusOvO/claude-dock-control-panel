@@ -7,9 +7,13 @@ export interface SettingsActionsDependencies {
   cancelButton: HTMLButtonElement;
   closeAdvancedConnectionDialog: (complete: boolean) => void;
   completeButton: HTMLButtonElement;
+  disposeClaudeExecutionSettings: () => void;
+  endClaudeExecutionDialogSession: (restore: boolean) => void;
+  isClaudeExecutionDirty: () => boolean;
   isProxyDirty: () => boolean;
   loadProxyState: (preserveDirtyDraft?: boolean) => Promise<boolean>;
   onSettingsLoaded: (settings: AppSettingsView) => void;
+  saveClaudeExecutionPending: () => Promise<boolean>;
   saveProxyPending: () => Promise<boolean>;
   showToast: (message: string, tone?: 'error' | 'success') => void;
 }
@@ -42,7 +46,8 @@ const loadAppSettings = async (context: SettingsActionsContext): Promise<void> =
 };
 
 const endDialogSession = (context: SettingsActionsContext, restore: boolean): void => {
-  const { elements, state, view } = context;
+  const { dependencies, elements, state, view } = context;
+  dependencies.endClaudeExecutionDialogSession(restore);
   if (restore && state.saved) {
     view.applySettings(state.saved);
   }
@@ -57,17 +62,26 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
     dependencies.showToast('全局设置仍在读取，请稍后重试。', 'error');
     return;
   }
+  const claudeExecutionDirty = dependencies.isClaudeExecutionDirty();
   const proxyDirty = dependencies.isProxyDirty();
-  const appSettingsDirty = view.updateUnsavedIndicator() > (proxyDirty ? 1 : 0);
-  if (!appSettingsDirty && !proxyDirty) {
+  const appSettingsDirty =
+    view.updateUnsavedIndicator() > Number(proxyDirty) + Number(claudeExecutionDirty);
+  if (!appSettingsDirty && !proxyDirty && !claudeExecutionDirty) {
     dependencies.closeAdvancedConnectionDialog(true);
     return;
   }
   const pending = view.pendingSettings();
+  const savedNetwork = saved.advanced.networkPreflight ?? {
+    checkOnNewSession: true,
+    checkOnProviderLogin: true,
+  };
   dependencies.completeButton.disabled = true;
   dependencies.cancelButton.disabled = true;
   dependencies.completeButton.textContent = '正在保存…';
   try {
+    if (claudeExecutionDirty && !(await dependencies.saveClaudeExecutionPending())) {
+      return;
+    }
     if (proxyDirty) {
       await dependencies.saveProxyPending();
     }
@@ -79,7 +93,9 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
     }
     if (
       pending.advanced.chatIdleTimeoutMinutes !== saved.advanced.chatIdleTimeoutMinutes ||
-      pending.advanced.webResearchIsolation !== saved.advanced.webResearchIsolation
+      pending.advanced.webResearchIsolation !== saved.advanced.webResearchIsolation ||
+      pending.advanced.networkPreflight.checkOnNewSession !== savedNetwork.checkOnNewSession ||
+      pending.advanced.networkPreflight.checkOnProviderLogin !== savedNetwork.checkOnProviderLogin
     ) {
       await window.controlPanel.setAdvancedSettings(pending.advanced);
     }
@@ -100,7 +116,7 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
 };
 
 const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
-  const { elements, view } = context;
+  const { elements, state, view } = context;
   const handleIndicatorChange = (): void => {
     view.updateUnsavedIndicator();
   };
@@ -111,6 +127,15 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
     }
     view.updateUnsavedIndicator();
   };
+  const handleNetworkPreferencesUpdated = (event: Event): void => {
+    const preferences = (event as CustomEvent<AppSettingsView['advanced']['networkPreflight']>)
+      .detail;
+    if (!state.saved || !preferences) return;
+    state.saved = {
+      ...state.saved,
+      advanced: { ...state.saved.advanced, networkPreflight: { ...preferences } },
+    };
+  };
   const tabBindings = Array.from(
     document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]'),
     (button) => ({
@@ -119,7 +144,9 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
         const requested = button.dataset.settingsTab;
         view.selectTab(
           requested === 'advanced' ||
+            requested === 'claude-execution' ||
             requested === 'connection' ||
+            requested === 'network' ||
             requested === 'proxy' ||
             requested === 'router'
             ? requested
@@ -132,7 +159,13 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
   elements.launchAtLogin.addEventListener('change', handleIndicatorChange);
   elements.closeBehavior.addEventListener('change', handleIndicatorChange);
   elements.webResearchIsolation.addEventListener('change', handleIndicatorChange);
+  elements.networkNewSession.addEventListener('change', handleIndicatorChange);
+  elements.networkProviderLogin.addEventListener('change', handleIndicatorChange);
   elements.chatIdleTimeout.addEventListener('change', handleChatIdleTimeoutChange);
+  window.addEventListener(
+    'claudedock:network-preferences-updated',
+    handleNetworkPreferencesUpdated,
+  );
   for (const { button, handleTab } of tabBindings) {
     button.addEventListener('click', handleTab);
   }
@@ -141,7 +174,13 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
     elements.launchAtLogin.removeEventListener('change', handleIndicatorChange);
     elements.closeBehavior.removeEventListener('change', handleIndicatorChange);
     elements.webResearchIsolation.removeEventListener('change', handleIndicatorChange);
+    elements.networkNewSession.removeEventListener('change', handleIndicatorChange);
+    elements.networkProviderLogin.removeEventListener('change', handleIndicatorChange);
     elements.chatIdleTimeout.removeEventListener('change', handleChatIdleTimeoutChange);
+    window.removeEventListener(
+      'claudedock:network-preferences-updated',
+      handleNetworkPreferencesUpdated,
+    );
     for (const { button, handleTab } of tabBindings) {
       button.removeEventListener('click', handleTab);
     }

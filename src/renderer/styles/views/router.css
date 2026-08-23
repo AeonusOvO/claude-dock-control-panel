@@ -1059,7 +1059,11 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
    */
   max-height: min(360px, 42vh);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /*
+   * Deliberately NOT `overscroll-behavior: contain`. Sealing this list is what left the wheel dead
+   * once the list hit its end, forcing the user onto the scrollbar; `platform/scroll-chaining.ts`
+   * now hands a spent gesture to the panel around it.
+   */
   padding: 0;
   scrollbar-gutter: stable;
 }
@@ -1071,7 +1075,6 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
   border-radius: var(--r-lg);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  height: 176px;
   min-height: 176px;
   overflow: hidden;
   transition: border-color var(--dur-2) var(--ease-standard);
@@ -1088,12 +1091,10 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
   display: grid;
   gap: var(--s-0-5);
   justify-items: start;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  /* `hidden` on one axis computes the other axis from `visible` to `auto`, recreating the unwanted
+   * card-level scroller. `clip` keeps long inline content bounded without making the block axis scroll. */
+  overflow-x: clip;
   padding: var(--s-2) var(--s-3);
-  scrollbar-gutter: stable;
   text-align: left;
 }
 
@@ -1803,15 +1804,40 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
 }
 
 .subscription-gateway-actions {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-2);
+}
+
+.subscription-gateway-account {
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  color: var(--accent-text);
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-strong);
+  max-width: min(100%, 420px);
+  overflow: hidden;
+  padding: var(--s-1-5) var(--s-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .subscription-gateway-actions button {
   background: var(--surface-3);
   border-color: var(--line-strong);
   color: var(--text-lo);
+}
+
+.subscription-gateway-actions .button--danger {
+  background: transparent;
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+
+.subscription-gateway-actions .button--danger:hover:not(:disabled) {
+  background: var(--bad-tint);
 }
 
 .subscription-gateway-guide small {

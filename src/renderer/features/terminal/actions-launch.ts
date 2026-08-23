@@ -23,11 +23,12 @@ export const createTerminalLaunchActions = (
     // the renderer has not loaded a ClaudeProjectState for this session yet.
     const attempt = dependencies.beginClaudeLaunchAttempt(status);
     const outcome = await orchestrateClaudeLaunchAttempt({
-      applyResult: (result) =>
+      applyResult: (launchOutcome) =>
+        launchOutcome.status === 'paused' ||
         dependencies.renderClaudeLaunchResult(
           attempt,
-          result.state,
-          result.ok ? 'success' : 'failure',
+          launchOutcome.result.state,
+          launchOutcome.result.ok ? 'success' : 'failure',
         ),
       onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
       prepare: () => state.terminalViews.get(status.id)?.terminal.clear(),
@@ -43,7 +44,23 @@ export const createTerminalLaunchActions = (
       return;
     }
 
-    const { result } = outcome;
+    let launchOutcome = outcome.result;
+    if (launchOutcome.status === 'paused') {
+      const decision = await dependencies.resolveClaudeLaunchDecision(attempt, launchOutcome);
+      if (decision.status !== 'completed') return;
+      launchOutcome = decision;
+      if (
+        !dependencies.renderClaudeLaunchResult(
+          attempt,
+          launchOutcome.result.state,
+          launchOutcome.result.ok ? 'success' : 'failure',
+        )
+      ) {
+        return;
+      }
+    }
+
+    const { result } = launchOutcome;
     if (!result.ok) {
       dependencies.failClaudeLaunchAttempt(attempt);
       dependencies.showToast(

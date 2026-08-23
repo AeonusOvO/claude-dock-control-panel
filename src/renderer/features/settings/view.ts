@@ -12,8 +12,11 @@ export interface SettingsViewDependencies {
   applyTerminalTheme: (themeId: TerminalThemeId, announce?: boolean, persist?: boolean) => void;
   getSelectedRailTab: () => string | undefined;
   getSettingsThemeValue: () => string;
+  isClaudeExecutionDirty: () => boolean;
   isProxyDirty: () => boolean;
   onAdvancedTabSelected: () => void;
+  onClaudeExecutionTabSelected: () => void;
+  onNetworkTabSelected: () => void;
   onProxyTabSelected: () => void;
   onRouterTabSelected: () => void;
   setConnectionPolling: (enabled: boolean) => void;
@@ -58,6 +61,12 @@ const selectSettingsTab = (context: SettingsViewContext, tab: SettingsTab): void
   if (tab === 'advanced') {
     dependencies.onAdvancedTabSelected();
   }
+  if (tab === 'claude-execution') {
+    dependencies.onClaudeExecutionTabSelected();
+  }
+  if (tab === 'network') {
+    dependencies.onNetworkTabSelected();
+  }
   if (tab === 'router') {
     dependencies.onRouterTabSelected();
   }
@@ -68,9 +77,23 @@ const pendingAppSettings = (
 ): Pick<AppSettingsView, 'advanced' | 'closeBehavior' | 'launchAtLogin' | 'theme'> => {
   const { dependencies, elements } = context;
   const themeValue = dependencies.getSettingsThemeValue();
+  const savedNetwork = context.state.saved?.advanced.networkPreflight ?? {
+    checkOnNewSession: true,
+    checkOnProviderLogin: true,
+  };
   return {
     advanced: {
       chatIdleTimeoutMinutes: Number(elements.chatIdleTimeout.value) as 0 | 5 | 10 | 30,
+      networkPreflight: {
+        checkOnNewSession: elements.networkNewSession.checked,
+        checkOnProviderLogin: elements.networkProviderLogin.checked,
+        ...(savedNetwork.cliTimezone ? { cliTimezone: savedNetwork.cliTimezone } : {}),
+        ...(savedNetwork.cliLanguages
+          ? {
+              cliLanguages: [...savedNetwork.cliLanguages],
+            }
+          : {}),
+      },
       webResearchIsolation: elements.webResearchIsolation.checked,
     },
     closeBehavior: elements.closeBehavior.value === 'exit' ? 'exit' : 'tray',
@@ -82,18 +105,26 @@ const pendingAppSettings = (
 const updateSettingsUnsavedIndicator = (context: SettingsViewContext): number => {
   const { dependencies, elements, state } = context;
   if (!state.saved) {
-    const count = dependencies.isProxyDirty() ? 1 : 0;
+    const count =
+      Number(dependencies.isProxyDirty()) + Number(dependencies.isClaudeExecutionDirty());
     elements.unsavedIndicator.hidden = count === 0;
     elements.unsavedIndicator.textContent = `*${count} 项未保存`;
     return count;
   }
   const pending = pendingAppSettings(context);
+  const savedNetwork = state.saved.advanced.networkPreflight ?? {
+    checkOnNewSession: true,
+    checkOnProviderLogin: true,
+  };
   const count = [
     pending.launchAtLogin !== state.saved.launchAtLogin,
     pending.closeBehavior !== state.saved.closeBehavior,
     pending.theme !== state.saved.theme,
     pending.advanced.chatIdleTimeoutMinutes !== state.saved.advanced.chatIdleTimeoutMinutes,
     pending.advanced.webResearchIsolation !== state.saved.advanced.webResearchIsolation,
+    pending.advanced.networkPreflight.checkOnNewSession !== savedNetwork.checkOnNewSession,
+    pending.advanced.networkPreflight.checkOnProviderLogin !== savedNetwork.checkOnProviderLogin,
+    dependencies.isClaudeExecutionDirty(),
     dependencies.isProxyDirty(),
   ].filter(Boolean).length;
   elements.unsavedIndicator.hidden = count === 0;
@@ -110,6 +141,12 @@ const applyAppSettingsToControls = (
   elements.closeBehavior.value = settings.closeBehavior;
   elements.chatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
   elements.webResearchIsolation.checked = settings.advanced.webResearchIsolation;
+  const networkPreflight = settings.advanced.networkPreflight ?? {
+    checkOnNewSession: true,
+    checkOnProviderLogin: true,
+  };
+  elements.networkNewSession.checked = networkPreflight.checkOnNewSession;
+  elements.networkProviderLogin.checked = networkPreflight.checkOnProviderLogin;
   elements.language.value = settings.language;
   elements.version.value = settings.version;
   elements.version.textContent = settings.version;

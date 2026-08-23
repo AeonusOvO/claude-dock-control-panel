@@ -17,18 +17,21 @@ npm run dev
 
 ## 命令
 
-| 命令                      | 作用                                       |
-| ------------------------- | ------------------------------------------ |
-| `npm run dev`             | 开发模式                                   |
-| `npm start`               | 用已构建的 `dist/` 启动 Electron           |
-| `npm run build`           | clean + 图标 + typecheck + 主进程 + 渲染端 |
-| `npm run build:main`      | 只编译主进程与 preload                     |
-| `npm run build:renderer`  | 只构建渲染端                               |
-| `npm run dist`            | 打包 Windows x64 NSIS 安装包到 `outputs/`  |
-| `npm run clean`           | 删除 `dist/`                               |
-| `npm run generate:icons`  | 从 `assets/source/*.svg` 生成 PNG/ICO      |
-| `npm run format`          | Prettier 写入                              |
-| `npm run lint:deps:graph` | 输出依赖架构图                             |
+| 命令                          | 作用                                       |
+| ----------------------------- | ------------------------------------------ |
+| `npm run dev`                 | 开发模式                                   |
+| `npm start`                   | 用已构建的 `dist/` 启动 Electron           |
+| `npm run build`               | clean + 图标 + typecheck + 主进程 + 渲染端 |
+| `npm run build:main`          | 只编译主进程与 preload                     |
+| `npm run build:renderer`      | 只构建渲染端                               |
+| `npm run dist`                | 打包 Windows x64 NSIS 安装包到 `outputs/`  |
+| `npm run release:manifest`    | 校验通道/feed/产物并生成本地发布报告       |
+| `npm run release`             | 打包并运行本地发布门禁，不上传             |
+| `npm run release:publish:cos` | 显式发布已验证产物到 COS；见 release.md    |
+| `npm run clean`               | 删除 `dist/`                               |
+| `npm run generate:icons`      | 从 `assets/source/*.svg` 生成 PNG/ICO      |
+| `npm run format`              | Prettier 写入                              |
+| `npm run lint:deps:graph`     | 输出依赖架构图                             |
 
 验证类命令见 [verify.md](verify.md)。
 

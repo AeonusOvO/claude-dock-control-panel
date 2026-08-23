@@ -1,7 +1,8 @@
 import { ipcRenderer } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
-import type { ControlPanelApi } from '../../src/shared/contracts';
+import type { ClaudeExecutionSettingsDto, ControlPanelApi } from '../../src/shared/contracts';
 import {
+  CHANNELS,
   EVENT_CHANNELS,
   IPC_CHANNELS,
   REQUEST_CHANNELS,
@@ -14,6 +15,7 @@ import { artifactBridge } from '../../src/preload/bridges/artifact';
 import { busyBridge } from '../../src/preload/bridges/busy';
 import { chatBridge } from '../../src/preload/bridges/chat';
 import { claudeBridge } from '../../src/preload/bridges/claude';
+import { claudeExecutionSettingsBridge } from '../../src/preload/bridges/claude-execution-settings';
 import { claudePluginBridge } from '../../src/preload/bridges/claude-plugin';
 import { codexBridge } from '../../src/preload/bridges/codex';
 import { downloadBridge } from '../../src/preload/bridges/download';
@@ -53,6 +55,7 @@ const bridgeFragments = [
   nativeConversationBridge,
   nativeAttachmentBridge,
   claudeBridge,
+  claudeExecutionSettingsBridge,
   claudePluginBridge,
   managedChatgptBridge,
   routerBridge,
@@ -63,13 +66,68 @@ const bridgeFragments = [
 
 const api = Object.assign({}, ...bridgeFragments) satisfies ControlPanelApi;
 
+const executionValues = {
+  concurrentSubagents: 8,
+  spawnDepth: 2,
+  toolSearch: 'auto:25' as const,
+  toolUseConcurrency: 8,
+};
+
+const executionSettingsDto: ClaudeExecutionSettingsDto = {
+  catalogVersion: 1,
+  effective: {
+    concurrentSubagents: {
+      defaultValue: 4,
+      effectiveValue: 8,
+      reason: '并发子代理设置已应用。',
+      requestedValue: 8,
+      source: { kind: 'version-matrix' },
+      status: 'supported',
+    },
+    spawnDepth: {
+      defaultValue: 1,
+      effectiveValue: 2,
+      reason: '子代理深度设置已应用。',
+      requestedValue: 2,
+      source: { kind: 'version-matrix' },
+      status: 'supported',
+    },
+    toolSearch: {
+      defaultValue: 'auto',
+      effectiveValue: 'auto:25',
+      reason: '工具搜索设置已应用。',
+      requestedValue: 'auto:25',
+      source: { kind: 'verified-evidence', verifiedAt: 1 },
+      status: 'supported',
+    },
+    toolUseConcurrency: {
+      defaultValue: 4,
+      effectiveValue: 8,
+      reason: '工具并发设置已应用。',
+      requestedValue: 8,
+      source: { kind: 'version-matrix' },
+      status: 'supported',
+    },
+  },
+  installation: { installed: true, version: '2.1.0' },
+  profiles: [
+    { id: 'token-saver', label: '最省 Token', values: executionValues },
+    { id: 'restrained', label: '节制', values: executionValues },
+    { id: 'balanced', label: '均衡（推荐）', values: executionValues },
+    { id: 'high-throughput', label: '高吞吐', values: executionValues },
+    { id: 'best-performance', label: '最佳性能', values: executionValues },
+  ],
+  requested: { mode: 'profile', profileId: 'balanced' },
+  version: 1,
+};
+
 describe('IPC contract consistency', () => {
   it('keeps the channel partitions complete and disjoint', () => {
-    expect(REQUEST_CHANNELS).toHaveLength(159);
+    expect(REQUEST_CHANNELS).toHaveLength(166);
     expect(SEND_CHANNELS).toHaveLength(7);
-    expect(EVENT_CHANNELS).toHaveLength(22);
-    expect(IPC_CHANNELS).toHaveLength(188);
-    expect(new Set(IPC_CHANNELS).size).toBe(188);
+    expect(EVENT_CHANNELS).toHaveLength(23);
+    expect(IPC_CHANNELS).toHaveLength(196);
+    expect(new Set(IPC_CHANNELS).size).toBe(196);
     expect(new Set([...REQUEST_CHANNELS, ...SEND_CHANNELS, ...EVENT_CHANNELS])).toEqual(
       new Set(IPC_CHANNELS),
     );
@@ -101,6 +159,7 @@ describe('IPC contract consistency', () => {
   it('invokes every shared request channel exactly once through the real preload fragments', () => {
     const invoke = vi.mocked(ipcRenderer.invoke);
     invoke.mockClear();
+    invoke.mockResolvedValue(executionSettingsDto);
 
     for (const { method } of Object.values(IPC_REQUESTS)) {
       const endpoint = api[method] as (...args: unknown[]) => unknown;
@@ -113,27 +172,67 @@ describe('IPC contract consistency', () => {
     expect(new Set(invokedChannels)).toEqual(new Set(REQUEST_CHANNELS));
   });
 
-  it('assembles all 188 API members without duplicate bridge ownership', () => {
+  it('forwards application refresh intent without invoking the download route', async () => {
+    const invoke = vi.mocked(ipcRenderer.invoke);
+    invoke.mockClear();
+
+    await api.getApplicationUpdaterState();
+    await api.getApplicationUpdaterState(false);
+    await api.getApplicationUpdaterState(true);
+
+    expect(invoke.mock.calls).toEqual([
+      [CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET, false],
+      [CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET, false],
+      [CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET, true],
+    ]);
+    expect(invoke).not.toHaveBeenCalledWith(CHANNELS.SOFTWARE_APPLICATION_UPDATER_DOWNLOAD);
+  });
+
+  it('parses Claude execution-settings responses before exposing them to the renderer', async () => {
+    const invoke = vi.mocked(ipcRenderer.invoke);
+    invoke.mockResolvedValueOnce(executionSettingsDto);
+    await expect(api.getClaudeExecutionSettings()).resolves.toEqual(executionSettingsDto);
+
+    invoke.mockResolvedValueOnce({
+      ...executionSettingsDto,
+      environment: { ANTHROPIC_AUTH_TOKEN: 'secret' },
+    });
+    await expect(api.useRecommendedClaudeExecutionSettings()).rejects.toThrow();
+
+    invoke.mockResolvedValueOnce({
+      ...executionSettingsDto,
+      effective: {
+        ...executionSettingsDto.effective,
+        concurrentSubagents: {
+          ...executionSettingsDto.effective.concurrentSubagents,
+          operation: { kind: 'set', value: '8' },
+        },
+      },
+    });
+    await expect(api.restoreClaudeExecutionSettingsDefault()).rejects.toThrow();
+  });
+
+  it('assembles all 196 API members without duplicate bridge ownership', () => {
     const declaredMembers = bridgeFragments.flatMap((fragment) => Object.keys(fragment));
-    expect(declaredMembers).toHaveLength(188);
-    expect(new Set(declaredMembers).size).toBe(188);
-    expect(Object.keys(api)).toHaveLength(188);
+    expect(declaredMembers).toHaveLength(196);
+    expect(new Set(declaredMembers).size).toBe(196);
+    expect(Object.keys(api)).toHaveLength(196);
   });
 
   it('maps every IPC-backed member and records the local and auxiliary exceptions', () => {
     const requestMethods = Object.values(IPC_REQUESTS).map(({ method }) => method);
     const sendMethods = Object.values(IPC_SEND_METHODS);
     const eventMethods = Object.values(IPC_EVENT_METHODS);
-    expect(new Set(requestMethods).size).toBe(159);
+    expect(new Set(requestMethods).size).toBe(166);
     expect(new Set(sendMethods).size).toBe(7);
-    expect(new Set(eventMethods).size).toBe(22);
+    expect(new Set(eventMethods).size).toBe(23);
 
     const mappedMethods = new Set<keyof ControlPanelApi>([
       ...requestMethods,
       ...sendMethods,
       ...eventMethods,
     ]);
-    expect(mappedMethods.size).toBe(187);
+    expect(mappedMethods.size).toBe(195);
     expect(
       Object.keys(api).filter((method) => !mappedMethods.has(method as keyof ControlPanelApi)),
     ).toEqual(['getDroppedPath']);

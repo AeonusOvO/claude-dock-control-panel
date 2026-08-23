@@ -1,173 +1,599 @@
 import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
 import type {
+  ClaudeLaunchOutcome,
   ClaudeOperationResult,
   ClaudeProjectState,
+  NetworkPreflightResult,
   PtyGeneration,
 } from '../../shared/contracts';
-import { claudeRunnableCommands } from '../../shared/ui/cli-command-catalog';
-import type { RunClaudeProjectConfigTransaction } from '../claude/config-transaction';
-import type { ClaudeConversationLifecycleCoordinator } from '../claude/conversation-lifecycle';
-import type { ReportClaudeOperationFailure } from '../claude/operation-failure';
+import { registerClaudeCommandIpc } from '../claude/command-ipc';
+import type {
+  ClaudeRuntime,
+  PreparedLaunchExecution,
+  ProviderAuthorizedOperation,
+  RelaunchExecution,
+  ResumeSessionExecution,
+} from '../claude/launch-execution-types';
+import type { ClaudeLaunchIpcDependencies } from '../claude/launch-ipc-dependencies';
+import { registerClaudeLaunchDecisionIpc } from '../claude/launch-decision-ipc';
 import type { PreparedClaudeConfigSave } from '../claude/runtime';
+import type { ClaudeLaunchAuthorization } from '../claude/runtime-types';
 import { isValidClaudeSessionId } from '../claude/session-manager';
-import type { ConversationOwner, ConversationOwnerRegistry } from '../conversation/owner-registry';
-import type { WithSessionOperation } from '../coordination/session-operation';
-import type { AgentRuntimeStore } from '../runtime/store';
+import type { ConversationOwner } from '../conversation/owner-registry';
 import {
-  cleanupFailedRuntimeLaunch,
-  type FailedRuntimeLaunchCleanupDependencies,
-  type RestartRuntimeTerminal,
-  type ResumeConversationInTerminal,
-} from '../terminal/lifecycle';
-import type { TerminalWorkspace } from '../terminal/workspace';
+  type ClaudeLaunchDecisionBaseline,
+  type ClaudeLaunchDescriptor,
+  LaunchPreflightDecisionStaleError,
+  launchPauseDiagnosticsFromResult,
+} from '../coordination/launch-preflight-decision';
+import type { SessionOperationStamp } from '../coordination/session-operation';
+import { ProviderAccessBlockedError } from '../network/provider-access-guard';
+import { cleanupFailedRuntimeLaunch } from '../terminal/lifecycle';
 import {
   validateClaudeLaunchMode,
   validateClaudeRelaunchInput,
   validateSessionId,
 } from './validation';
-import type { MainGuards } from './guards';
 
-const claudeCommands = claudeRunnableCommands();
+export type { ClaudeLaunchIpcDependencies } from '../claude/launch-ipc-dependencies';
 
-export interface ClaudeLaunchIpcDependencies {
-  agentRuntimeStore: AgentRuntimeStore;
-  claudeConversationLifecycle: ClaudeConversationLifecycleCoordinator;
-  claudeFailure: ReportClaudeOperationFailure;
-  conversationOwnerRegistry: ConversationOwnerRegistry;
-  failedRuntimeLaunchCleanupDependencies: FailedRuntimeLaunchCleanupDependencies;
-  guards: Pick<
-    MainGuards,
-    'assertOfficialProviderAllowed' | 'requireClaudeRuntime' | 'validateSender'
-  >;
-  releaseTerminalConversationOwner: (sessionId: string) => void;
-  restartRuntimeTerminal: RestartRuntimeTerminal;
-  runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction;
-  runClaudeResumeLaunch: ResumeConversationInTerminal;
-  terminalConversationOwners: Map<string, ConversationOwner>;
-  withDevelopmentSessionOperation: WithSessionOperation;
-  workspace: TerminalWorkspace;
-}
+const seedLaunchPreflightEvidence = (
+  runtime: ClaudeRuntime,
+  sessionId: string,
+  ptyGeneration: PtyGeneration,
+  result: NetworkPreflightResult | undefined,
+): void => {
+  if (!result || result.action !== 'cli-launch' || result.status === 'testing') return;
+  runtime.seedActiveLaunchPreflightEvidence?.(sessionId, ptyGeneration, {
+    checkedAt: result.checkedAt ?? result.startedAt,
+    provider: result.provider,
+    status:
+      result.status === 'allowed'
+        ? 'allowed'
+        : result.status === 'blocked'
+          ? 'blocked'
+          : 'degraded',
+  });
+};
 
-const registerClaudeRelaunchIpc = ({
-  claudeFailure,
-  failedRuntimeLaunchCleanupDependencies,
-  guards: { assertOfficialProviderAllowed, requireClaudeRuntime, validateSender },
+/** Shared prepare → exact-token PTY handoff → state path for initial and continued launches. */
+export const executePreparedLaunch = async ({
+  assertCurrent,
+  assertPreparationCurrent,
+  authorization,
+  cleanup,
+  cwd,
+  mode,
+  preflightResult,
+  restartRuntimeTerminal,
+  runtime,
+  sessionId,
+  signal,
+  withExpectedPtyReplacement,
+}: PreparedLaunchExecution): Promise<ClaudeOperationResult> => {
+  let launchToken: object | undefined;
+  let ownedGeneration: PtyGeneration | undefined;
+  try {
+    signal.throwIfAborted();
+    assertPreparationCurrent();
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    const prepared = await runtime.prepareLaunch(sessionId, cwd, mode, undefined, authorization);
+    launchToken = prepared.token;
+    signal.throwIfAborted();
+    assertPreparationCurrent();
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    restartRuntimeTerminal(
+      runtime,
+      sessionId,
+      prepared.environment,
+      prepared.command,
+      '无法为 Claude Code 启动安全终端。',
+      assertCurrent,
+      (ptyGeneration) => {
+        ownedGeneration = ptyGeneration;
+      },
+      prepared.token,
+      withExpectedPtyReplacement,
+    );
+    signal.throwIfAborted();
+    assertCurrent();
+    if (ownedGeneration !== undefined) {
+      seedLaunchPreflightEvidence(runtime, sessionId, ownedGeneration, preflightResult);
+    }
+    const state = await runtime.getState(sessionId, cwd);
+    signal.throwIfAborted();
+    assertCurrent();
+    return { ok: true, state };
+  } catch (error) {
+    if (launchToken || ownedGeneration !== undefined) {
+      cleanupFailedRuntimeLaunch(cleanup, runtime, sessionId, ownedGeneration, launchToken);
+    }
+    throw error;
+  }
+};
+
+/** Executes one exact relaunch descriptor without retaining credential-bearing captures. */
+export const executeClaudeRelaunch = async ({
+  assertCurrent,
+  assertOriginalConfigurationCurrent,
+  authorizeLaunchProvider,
+  authorizeNestedProvider,
+  cleanup,
+  cwd,
+  input,
   restartRuntimeTerminal,
   runClaudeProjectConfigTransaction,
-  withDevelopmentSessionOperation,
+  runtime,
+  sessionId,
+  signal,
+  withExpectedPtyReplacement,
+  workspacePtyGeneration,
+}: RelaunchExecution): Promise<ClaudeOperationResult> => {
+  let launchPreflightResult: NetworkPreflightResult | undefined;
+  let launchToken: object | undefined;
+  let ownedGeneration: PtyGeneration | undefined;
+  const compactCurrentConversation = async (): Promise<void> => {
+    await runtime.compactBeforeRelaunch(sessionId, cwd, input.compactFirst, assertCurrent, signal);
+    signal.throwIfAborted();
+    assertCurrent();
+  };
+  const compactLiveConversation = async (): Promise<void> => {
+    signal.throwIfAborted();
+    if (!input.compactFirst || !runtime.isActive(sessionId)) {
+      await compactCurrentConversation();
+      return;
+    }
+    const liveProvider = runtime.officialNetworkProviderForActivePty(
+      sessionId,
+      workspacePtyGeneration,
+    );
+    await authorizeNestedProvider(
+      liveProvider,
+      async () => {
+        assertCurrent();
+        return compactCurrentConversation();
+      },
+      signal,
+    );
+  };
+  const launchReplacement = async (
+    authorization: ClaudeLaunchAuthorization,
+  ): Promise<ClaudeProjectState> => {
+    signal.throwIfAborted();
+    assertCurrent();
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    const prepared = await runtime.prepareLaunch(
+      sessionId,
+      cwd,
+      'continue',
+      input.permissionMode,
+      authorization,
+    );
+    launchToken = prepared.token;
+    signal.throwIfAborted();
+    assertCurrent();
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    restartRuntimeTerminal(
+      runtime,
+      sessionId,
+      prepared.environment,
+      prepared.command,
+      '无法为 Claude Code 启动安全终端。',
+      assertCurrent,
+      (ptyGeneration) => {
+        ownedGeneration = ptyGeneration;
+      },
+      prepared.token,
+      withExpectedPtyReplacement,
+    );
+    signal.throwIfAborted();
+    assertCurrent();
+    if (ownedGeneration !== undefined) {
+      seedLaunchPreflightEvidence(runtime, sessionId, ownedGeneration, launchPreflightResult);
+    }
+    const state = await runtime.getState(sessionId, cwd);
+    signal.throwIfAborted();
+    assertCurrent();
+    return state;
+  };
+  const cleanupOnFailure = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      if (launchToken || ownedGeneration !== undefined) {
+        cleanupFailedRuntimeLaunch(cleanup, runtime, sessionId, ownedGeneration, launchToken);
+      }
+      throw error;
+    }
+  };
+
+  const entryId = input.entryId;
+  if (!entryId) {
+    assertOriginalConfigurationCurrent();
+    const authorization = runtime.captureLaunchAuthorization(cwd);
+    const relaunchCurrent = (
+      preflightResult?: NetworkPreflightResult,
+    ): Promise<ClaudeProjectState> => {
+      signal.throwIfAborted();
+      launchPreflightResult = preflightResult;
+      return cleanupOnFailure(async () => {
+        signal.throwIfAborted();
+        assertCurrent();
+        assertOriginalConfigurationCurrent();
+        runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+        await compactLiveConversation();
+        signal.throwIfAborted();
+        assertOriginalConfigurationCurrent();
+        runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+        return launchReplacement(authorization);
+      });
+    };
+    const state = await authorizeLaunchProvider(
+      authorization.officialNetworkProvider,
+      relaunchCurrent,
+      signal,
+    );
+    signal.throwIfAborted();
+    assertCurrent();
+    return { ok: true, state };
+  }
+
+  assertOriginalConfigurationCurrent();
+  const historyAuthorization = runtime.captureConnectionHistoryAuthorization(cwd, entryId);
+  const switchAndRelaunch = (
+    preflightResult?: NetworkPreflightResult,
+  ): Promise<ClaudeProjectState> => {
+    signal.throwIfAborted();
+    launchPreflightResult = preflightResult;
+    return cleanupOnFailure(() => {
+      signal.throwIfAborted();
+      assertCurrent();
+      assertOriginalConfigurationCurrent();
+      return runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
+        assertCurrent,
+        commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared),
+        complete: async (prepared) => {
+          signal.throwIfAborted();
+          assertCurrent();
+          const launchAuthorization = runtime.captureLaunchAuthorization(cwd);
+          if (
+            launchAuthorization.officialNetworkProvider !==
+            historyAuthorization.officialNetworkProvider
+          ) {
+            throw new Error('历史接入保存结果与已授权提供方不一致，请重试。');
+          }
+          await runtime.completePreparedConfigSave(sessionId, cwd, prepared);
+          signal.throwIfAborted();
+          assertCurrent();
+          runtime.assertLaunchAuthorizationCurrent(cwd, launchAuthorization);
+          return launchReplacement(launchAuthorization);
+        },
+        cwd,
+        prepare: async () => {
+          signal.throwIfAborted();
+          assertCurrent();
+          assertOriginalConfigurationCurrent();
+          runtime.assertConnectionHistoryAuthorizationCurrent(cwd, historyAuthorization);
+          await compactLiveConversation();
+          signal.throwIfAborted();
+          assertCurrent();
+          assertOriginalConfigurationCurrent();
+          runtime.assertConnectionHistoryAuthorizationCurrent(cwd, historyAuthorization);
+          return runtime.prepareAuthorizedConnectionHistory(
+            cwd,
+            historyAuthorization,
+            assertCurrent,
+          );
+        },
+        runtime,
+        sessionId,
+      });
+    });
+  };
+  const state = await authorizeLaunchProvider(
+    historyAuthorization.officialNetworkProvider,
+    switchAndRelaunch,
+    signal,
+  );
+  signal.throwIfAborted();
+  assertCurrent();
+  return { ok: true, state };
+};
+
+/** Reacquires transcript and terminal ownership around one exact session-resume launch. */
+export const executeClaudeSessionResume = async ({
+  assertCurrent,
+  assertPreparationCurrent,
+  authorizeLaunchProvider,
+  claudeConversationLifecycle,
+  cleanup,
+  conversationId,
+  conversationOwnerRegistry,
+  cwd,
+  expectedOfficialNetworkProvider,
+  runClaudeResumeLaunch,
+  runtime,
+  sessionId,
+  signal,
+  terminalConversationOwners,
+  withExpectedPtyReplacement,
+  workspace,
+}: ResumeSessionExecution): Promise<ClaudeOperationResult> => {
+  signal.throwIfAborted();
+  assertPreparationCurrent();
+  const existingOwner = conversationOwnerRegistry.ownerFor({
+    conversationId,
+    projectPath: cwd,
+    runtime: 'claude',
+  });
+  if (existingOwner) {
+    if (existingOwner.ownerId === `terminal:${sessionId}`) {
+      const state = await runtime.getState(sessionId, cwd);
+      signal.throwIfAborted();
+      assertCurrent();
+      return { ok: true, state };
+    }
+    throw new Error(
+      existingOwner.ownerKind === 'native'
+        ? '该对话已在原生界面运行。'
+        : '该对话已在另一个高级终端运行。',
+    );
+  }
+
+  const authorization = runtime.captureLaunchAuthorization(cwd);
+  if (authorization.officialNetworkProvider !== expectedOfficialNetworkProvider) {
+    throw new LaunchPreflightDecisionStaleError();
+  }
+  const resumeWithOwnership = async (
+    preflightResult?: NetworkPreflightResult,
+  ): Promise<ClaudeOperationResult> => {
+    signal.throwIfAborted();
+    assertPreparationCurrent();
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    const currentStatus = workspace.getStatus(sessionId);
+    const terminalOwner: ConversationOwner = {
+      conversationId: conversationId.toLowerCase(),
+      generation: Number(currentStatus.ptyGeneration) + 1,
+      ownerId: `terminal:${sessionId}`,
+      ownerKind: 'terminal',
+      phase: 'starting',
+      projectPath: cwd,
+      runtime: 'claude',
+    };
+    signal.throwIfAborted();
+    assertPreparationCurrent();
+    const ownerClaim = conversationOwnerRegistry.claim(terminalOwner);
+    if (ownerClaim.status === 'conflict') {
+      throw new Error('该对话刚刚被其他界面接管。');
+    }
+    const claimedOwner = ownerClaim.owner;
+    terminalConversationOwners.set(sessionId, claimedOwner);
+    const releaseClaimedOwner = (): void => {
+      if (terminalConversationOwners.get(sessionId) !== claimedOwner) return;
+      conversationOwnerRegistry.release(
+        claimedOwner,
+        claimedOwner.ownerId,
+        claimedOwner.generation,
+      );
+      terminalConversationOwners.delete(sessionId);
+    };
+    let ownedGeneration: PtyGeneration | undefined;
+    try {
+      return await claudeConversationLifecycle.runResume(
+        cwd,
+        conversationId,
+        sessionId,
+        async (conversationOwnership) => {
+          const assertResumeCurrent = (): void => {
+            signal.throwIfAborted();
+            conversationOwnership.assertCurrent();
+            assertCurrent();
+          };
+          const assertResumePreparationCurrent = (): void => {
+            signal.throwIfAborted();
+            conversationOwnership.assertCurrent();
+            assertPreparationCurrent();
+            runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+          };
+          const resumedGeneration = await runClaudeResumeLaunch(
+            sessionId,
+            cwd,
+            conversationId,
+            '无法为 Claude Code 启动安全终端。',
+            assertResumeCurrent,
+            authorization,
+            assertResumePreparationCurrent,
+            signal,
+            withExpectedPtyReplacement,
+          );
+          ownedGeneration = resumedGeneration;
+          assertResumeCurrent();
+          seedLaunchPreflightEvidence(runtime, sessionId, resumedGeneration, preflightResult);
+          const state = await runtime.getState(sessionId, cwd);
+          assertResumeCurrent();
+          if (Number(resumedGeneration) !== claimedOwner.generation) {
+            throw new Error('恢复会话绑定了意外的终端代际，本次启动已取消。');
+          }
+          if (
+            !conversationOwnerRegistry.updatePhase(
+              claimedOwner,
+              claimedOwner.ownerId,
+              claimedOwner.generation,
+              'active',
+            )
+          ) {
+            throw new Error('对话所有权在启动完成前已更新，本次恢复已取消。');
+          }
+          return { ok: true, state };
+        },
+      );
+    } catch (error) {
+      if (ownedGeneration !== undefined) {
+        cleanupFailedRuntimeLaunch(cleanup, runtime, sessionId, ownedGeneration);
+      }
+      releaseClaimedOwner();
+      throw error;
+    }
+  };
+
+  return authorizeLaunchProvider(
+    authorization.officialNetworkProvider,
+    resumeWithOwnership,
+    signal,
+  );
+};
+
+const registerClaudeRelaunchIpc = ({
+  agentRuntimeStore,
+  claudeFailure,
+  developmentSessionOperations,
+  failedRuntimeLaunchCleanupDependencies,
+  guards: {
+    assertLaunchAdmissionAllowed,
+    requireClaudeRuntime,
+    validateSender,
+    withOfficialProviderAccess,
+  },
+  launchPreflightDecisions,
+  restartRuntimeTerminal,
+  runClaudeProjectConfigTransaction,
+  withLaunchDecisionSessionOperation,
   workspace,
 }: ClaudeLaunchIpcDependencies): void => {
   ipcMain.handle(
     CHANNELS.CLAUDE_RELAUNCH,
-    async (event, sessionId: unknown, input: unknown): Promise<ClaudeOperationResult> => {
+    async (event, sessionId: unknown, input: unknown): Promise<ClaudeLaunchOutcome> => {
       validateSender(event);
+      assertLaunchAdmissionAllowed();
       const validatedSessionId = validateSessionId(sessionId);
+      const validatedInput = validateClaudeRelaunchInput(input);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
+      const intent = launchPreflightDecisions.beginLaunch(validatedSessionId);
+      const descriptor: ClaudeLaunchDescriptor = Object.freeze({
+        cwd: status.cwd,
+        input: validatedInput,
+        kind: 'relaunch',
+        sessionId: validatedSessionId,
+      });
+      let baseline: ClaudeLaunchDecisionBaseline | undefined;
+
+      const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
+        Object.freeze({
+          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd),
+          ...(validatedInput.entryId === undefined
+            ? {}
+            : {
+                history: runtime.captureConnectionHistoryBaseline(
+                  status.cwd,
+                  validatedInput.entryId,
+                ),
+              }),
+          operation,
+          runtime: runtime.captureRuntimeLaunchBaseline(validatedSessionId, status.cwd),
+          workspacePtyGeneration: status.ptyGeneration,
+        });
+      const assertBaselineCurrent = (candidate: ClaudeLaunchDecisionBaseline): void => {
+        assertLaunchAdmissionAllowed();
+        launchPreflightDecisions.assertIntentCurrent(intent);
+        developmentSessionOperations.assertStampCurrent(candidate.operation);
+        const currentStatus = workspace.getStatus(validatedSessionId);
+        if (
+          currentStatus.cwd !== status.cwd ||
+          currentStatus.ptyGeneration !== candidate.workspacePtyGeneration ||
+          agentRuntimeStore.get(status.cwd) !== 'claude'
+        ) {
+          throw new LaunchPreflightDecisionStaleError();
+        }
+        runtime.assertLaunchConfigurationBaselineCurrent(status.cwd, candidate.configuration);
+        runtime.assertRuntimeLaunchBaselineCurrent(
+          validatedSessionId,
+          status.cwd,
+          candidate.runtime,
+        );
+        if (candidate.history) {
+          runtime.assertConnectionHistoryBaselineCurrent(status.cwd, candidate.history);
+        }
+      };
+      const authorizeProvider: ProviderAuthorizedOperation = (provider, operation, signal) => {
+        signal?.throwIfAborted();
+        return provider
+          ? withOfficialProviderAccess(
+              { action: 'cli-launch', cwd: status.cwd, provider },
+              operation,
+              signal,
+            )
+          : operation();
+      };
+
       try {
-        const validatedInput = validateClaudeRelaunchInput(input);
-        return await withDevelopmentSessionOperation(
+        const result = await withLaunchDecisionSessionOperation(
           validatedSessionId,
           async (assertCurrent, signal) => {
-            let launchPrepared = false;
-            let ownedGeneration: PtyGeneration | undefined;
-            const launchReplacement = async (): Promise<ClaudeProjectState> => {
-              const prepared = await runtime.prepareLaunch(
-                validatedSessionId,
-                status.cwd,
-                'continue',
-                validatedInput.permissionMode,
-              );
-              launchPrepared = true;
-              ownedGeneration = prepared.predecessorPtyGeneration;
+            signal.throwIfAborted();
+            const operationStamp = developmentSessionOperations.captureStamp(validatedSessionId);
+            baseline = captureBaseline(operationStamp);
+            const assertRelaunchCurrent = (): void => {
+              assertLaunchAdmissionAllowed();
               assertCurrent();
-              restartRuntimeTerminal(
-                runtime,
-                validatedSessionId,
-                prepared.environment,
-                prepared.command,
-                '无法为 Claude Code 启动安全终端。',
-                assertCurrent,
-                (ptyGeneration) => {
-                  ownedGeneration = ptyGeneration;
-                },
-              );
-              const state = await runtime.getState(validatedSessionId, status.cwd);
-              assertCurrent();
-              return state;
+              launchPreflightDecisions.assertIntentCurrent(intent);
+              developmentSessionOperations.assertStampCurrent(operationStamp);
+              const currentStatus = workspace.getStatus(validatedSessionId);
+              if (
+                currentStatus.cwd !== status.cwd ||
+                agentRuntimeStore.get(status.cwd) !== 'claude'
+              ) {
+                throw new LaunchPreflightDecisionStaleError();
+              }
             };
-
-            try {
-              const entryId = validatedInput.entryId;
-              if (!entryId) {
-                const officialProvider = runtime.officialNetworkProvider(status.cwd);
-                if (officialProvider) {
-                  await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-                  assertCurrent();
-                }
-                await runtime.compactBeforeRelaunch(
-                  validatedSessionId,
-                  status.cwd,
-                  validatedInput.compactFirst,
-                  assertCurrent,
-                  signal,
-                );
-                assertCurrent();
-                return { ok: true, state: await launchReplacement() };
-              }
-
-              const state = await runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
-                assertCurrent,
-                commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
-                complete: async (prepared) => {
-                  await runtime.completePreparedConfigSave(
-                    validatedSessionId,
-                    status.cwd,
-                    prepared,
-                  );
-                  assertCurrent();
-                  return launchReplacement();
-                },
-                cwd: status.cwd,
-                prepare: async () => {
-                  const officialProvider = runtime.connectionHistoryOfficialNetworkProvider(
-                    status.cwd,
-                    entryId,
-                  );
-                  if (officialProvider) {
-                    await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-                    assertCurrent();
-                  }
-                  await runtime.compactBeforeRelaunch(
-                    validatedSessionId,
-                    status.cwd,
-                    validatedInput.compactFirst,
-                    assertCurrent,
-                    signal,
-                  );
-                  assertCurrent();
-                  return runtime.prepareConnectionHistory(status.cwd, entryId, assertCurrent);
-                },
-                runtime,
-                sessionId: validatedSessionId,
-              });
-              return { ok: true, state };
-            } catch (error) {
-              if (launchPrepared || ownedGeneration !== undefined) {
-                cleanupFailedRuntimeLaunch(
-                  failedRuntimeLaunchCleanupDependencies,
-                  runtime,
-                  validatedSessionId,
-                  ownedGeneration,
-                );
-              }
-              return claudeFailure(validatedSessionId, error);
-            }
+            const assertOriginalConfigurationCurrent = (): void => {
+              assertRelaunchCurrent();
+              assertBaselineCurrent(baseline as ClaudeLaunchDecisionBaseline);
+            };
+            return executeClaudeRelaunch({
+              assertCurrent: assertRelaunchCurrent,
+              assertOriginalConfigurationCurrent,
+              authorizeLaunchProvider: authorizeProvider,
+              authorizeNestedProvider: authorizeProvider,
+              cleanup: failedRuntimeLaunchCleanupDependencies,
+              cwd: status.cwd,
+              input: validatedInput,
+              restartRuntimeTerminal,
+              runClaudeProjectConfigTransaction,
+              runtime,
+              sessionId: validatedSessionId,
+              signal,
+              withExpectedPtyReplacement: (predecessor, restart) =>
+                launchPreflightDecisions.withExpectedPtyReplacement(intent, predecessor, restart),
+              workspacePtyGeneration: status.ptyGeneration,
+            });
           },
         );
+        return { result, status: 'completed' };
       } catch (error) {
-        return claudeFailure(validatedSessionId, error);
+        if (error instanceof ProviderAccessBlockedError && baseline) {
+          try {
+            assertBaselineCurrent(baseline);
+            const paused = launchPreflightDecisions.pause(
+              intent,
+              descriptor,
+              error.capture,
+              launchPauseDiagnosticsFromResult(error.result),
+              baseline,
+            );
+            return { ...paused, status: 'paused' };
+          } catch (staleError) {
+            return {
+              result: await claudeFailure(validatedSessionId, staleError),
+              status: 'completed',
+            };
+          }
+        }
+        return {
+          result: await claudeFailure(validatedSessionId, error),
+          status: 'completed',
+        };
       }
     },
   );
@@ -177,239 +603,315 @@ const registerClaudeStartIpc = ({
   agentRuntimeStore,
   claudeConversationLifecycle,
   claudeFailure,
+  developmentSessionOperations,
   failedRuntimeLaunchCleanupDependencies,
-  guards: { assertOfficialProviderAllowed, requireClaudeRuntime, validateSender },
+  guards: {
+    assertLaunchAdmissionAllowed,
+    requireClaudeRuntime,
+    validateSender,
+    withOfficialProviderAccess,
+  },
+  launchPreflightDecisions,
   restartRuntimeTerminal,
-  withDevelopmentSessionOperation,
+  withLaunchDecisionSessionOperation,
   workspace,
 }: ClaudeLaunchIpcDependencies): void => {
   ipcMain.handle(
     CHANNELS.CLAUDE_LAUNCH,
-    async (event, sessionId: unknown, mode: unknown): Promise<ClaudeOperationResult> => {
+    async (event, sessionId: unknown, mode: unknown): Promise<ClaudeLaunchOutcome> => {
       validateSender(event);
+      assertLaunchAdmissionAllowed();
       const validatedSessionId = validateSessionId(sessionId);
+      const launchMode = validateClaudeLaunchMode(mode);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
-      try {
-        const launchMode = validateClaudeLaunchMode(mode);
-        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
-          const executeLaunch = async (
-            assertConversationCurrent: () => void = () => undefined,
-          ): Promise<ClaudeOperationResult> => {
-            const assertLaunchCurrent = (): void => {
-              assertConversationCurrent();
-              assertCurrent();
-            };
-            let launchPrepared = false;
-            let ownedGeneration: PtyGeneration | undefined;
-            try {
-              if (agentRuntimeStore.get(status.cwd) !== 'claude') {
-                throw new Error('当前项目尚未选择 Claude Code 开发引擎。');
-              }
-              const officialProvider = runtime.officialNetworkProvider(status.cwd);
-              if (officialProvider) {
-                await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-                assertLaunchCurrent();
-              }
-              const prepared = await runtime.prepareLaunch(
-                validatedSessionId,
-                status.cwd,
-                launchMode,
-              );
-              launchPrepared = true;
-              ownedGeneration = prepared.predecessorPtyGeneration;
-              assertLaunchCurrent();
-              if (agentRuntimeStore.get(status.cwd) !== 'claude') {
-                throw new Error('当前项目已切换开发引擎，这次 Claude 启动已取消。');
-              }
-              restartRuntimeTerminal(
-                runtime,
-                validatedSessionId,
-                prepared.environment,
-                prepared.command,
-                '无法为 Claude Code 启动安全终端。',
-                assertLaunchCurrent,
-                (ptyGeneration) => {
-                  ownedGeneration = ptyGeneration;
-                },
-              );
-              const state = await runtime.getState(validatedSessionId, status.cwd);
-              assertLaunchCurrent();
-              return { ok: true, state };
-            } catch (error) {
-              if (launchPrepared || ownedGeneration !== undefined) {
-                cleanupFailedRuntimeLaunch(
-                  failedRuntimeLaunchCleanupDependencies,
-                  runtime,
-                  validatedSessionId,
-                  ownedGeneration,
-                );
-              }
-              return claudeFailure(validatedSessionId, error);
-            }
-          };
+      const intent = launchPreflightDecisions.beginLaunch(validatedSessionId);
+      const descriptor: ClaudeLaunchDescriptor = Object.freeze({
+        cwd: status.cwd,
+        kind: 'launch',
+        mode: launchMode,
+        sessionId: validatedSessionId,
+      });
+      let baseline: ClaudeLaunchDecisionBaseline | undefined;
 
-          return launchMode === 'new'
-            ? executeLaunch()
-            : claudeConversationLifecycle.runResume(
-                status.cwd,
-                undefined,
-                validatedSessionId,
-                async (conversationOwnership) =>
-                  executeLaunch(() => conversationOwnership.assertCurrent()),
-              );
+      const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
+        Object.freeze({
+          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd),
+          operation,
+          runtime: runtime.captureRuntimeLaunchBaseline(validatedSessionId, status.cwd),
+          workspacePtyGeneration: status.ptyGeneration,
         });
-      } catch (error) {
-        return claudeFailure(validatedSessionId, error);
-      }
-    },
-  );
-};
-
-const registerClaudeCommandIpc = ({
-  claudeFailure,
-  guards: { requireClaudeRuntime, validateSender },
-  withDevelopmentSessionOperation,
-  workspace,
-}: ClaudeLaunchIpcDependencies): void => {
-  ipcMain.handle(
-    CHANNELS.CLAUDE_COMMAND,
-    async (
-      event,
-      sessionId: unknown,
-      command: unknown,
-      argument: unknown,
-    ): Promise<ClaudeOperationResult> => {
-      validateSender(event);
-      const validatedSessionId = validateSessionId(sessionId);
-      const runtime = requireClaudeRuntime();
-      try {
-        if (typeof command !== 'string' || !claudeCommands.has(command)) {
-          throw new Error('该 Claude 命令不在可视化命令白名单中。');
-        }
-        if (!runtime.isActive(validatedSessionId)) {
-          throw new Error('请先通过 Claude 工作台启动会话，再执行可视化命令。');
-        }
-        const acceptsArgument = claudeCommands.get(command) ?? false;
-        const normalizedArgument =
-          typeof argument === 'string' && acceptsArgument ? argument.trim() : '';
+      const assertBaselineCurrent = (candidate: ClaudeLaunchDecisionBaseline): void => {
+        assertLaunchAdmissionAllowed();
+        launchPreflightDecisions.assertIntentCurrent(intent);
+        developmentSessionOperations.assertStampCurrent(candidate.operation);
+        const currentStatus = workspace.getStatus(validatedSessionId);
         if (
-          normalizedArgument.length > 500 ||
-          /[\r\n]/.test(normalizedArgument) ||
-          (!acceptsArgument && typeof argument === 'string' && argument.trim())
+          currentStatus.cwd !== status.cwd ||
+          currentStatus.ptyGeneration !== candidate.workspacePtyGeneration ||
+          agentRuntimeStore.get(status.cwd) !== 'claude'
         ) {
-          throw new Error('命令参数无效。');
+          throw new LaunchPreflightDecisionStaleError();
         }
-        const status = workspace.getStatus(validatedSessionId);
-        return {
-          ok: true,
-          state: await withDevelopmentSessionOperation(validatedSessionId, () =>
-            runtime.runCommand(
-              validatedSessionId,
-              status.cwd,
-              `${command}${normalizedArgument ? ` ${normalizedArgument}` : ''}`,
-            ),
-          ),
-        };
+        runtime.assertLaunchConfigurationBaselineCurrent(status.cwd, candidate.configuration);
+        runtime.assertRuntimeLaunchBaselineCurrent(
+          validatedSessionId,
+          status.cwd,
+          candidate.runtime,
+        );
+      };
+
+      try {
+        const result = await withLaunchDecisionSessionOperation(
+          validatedSessionId,
+          async (assertCurrent, signal) => {
+            signal.throwIfAborted();
+            const operationStamp = developmentSessionOperations.captureStamp(validatedSessionId);
+            baseline = captureBaseline(operationStamp);
+            const executeLaunch = async (
+              assertConversationCurrent: () => void = () => undefined,
+            ): Promise<ClaudeOperationResult> => {
+              const assertLaunchCurrent = (): void => {
+                assertLaunchAdmissionAllowed();
+                assertConversationCurrent();
+                assertCurrent();
+                launchPreflightDecisions.assertIntentCurrent(intent);
+                developmentSessionOperations.assertStampCurrent(operationStamp);
+              };
+              assertLaunchCurrent();
+              assertBaselineCurrent(baseline as ClaudeLaunchDecisionBaseline);
+              const authorization = runtime.captureLaunchAuthorization(status.cwd);
+              if (
+                authorization.officialNetworkProvider !==
+                (baseline as ClaudeLaunchDecisionBaseline).configuration.officialNetworkProvider
+              ) {
+                throw new LaunchPreflightDecisionStaleError();
+              }
+              const launch = (
+                preflightResult?: NetworkPreflightResult,
+              ): Promise<ClaudeOperationResult> =>
+                executePreparedLaunch({
+                  assertCurrent: assertLaunchCurrent,
+                  assertPreparationCurrent: () => {
+                    assertLaunchCurrent();
+                    assertBaselineCurrent(baseline as ClaudeLaunchDecisionBaseline);
+                  },
+                  authorization,
+                  cleanup: failedRuntimeLaunchCleanupDependencies,
+                  cwd: status.cwd,
+                  mode: launchMode,
+                  ...(preflightResult ? { preflightResult } : {}),
+                  restartRuntimeTerminal,
+                  runtime,
+                  sessionId: validatedSessionId,
+                  signal,
+                  withExpectedPtyReplacement: (predecessor, restart) =>
+                    launchPreflightDecisions.withExpectedPtyReplacement(
+                      intent,
+                      predecessor,
+                      restart,
+                    ),
+                });
+              return authorization.officialNetworkProvider
+                ? withOfficialProviderAccess(
+                    {
+                      action: 'cli-launch',
+                      cwd: status.cwd,
+                      provider: authorization.officialNetworkProvider,
+                    },
+                    launch,
+                    signal,
+                  )
+                : launch();
+            };
+
+            return launchMode === 'new'
+              ? executeLaunch()
+              : claudeConversationLifecycle.runResume(
+                  status.cwd,
+                  undefined,
+                  validatedSessionId,
+                  async (conversationOwnership) =>
+                    executeLaunch(() => conversationOwnership.assertCurrent()),
+                );
+          },
+        );
+        return { result, status: 'completed' };
       } catch (error) {
-        return claudeFailure(validatedSessionId, error);
+        if (error instanceof ProviderAccessBlockedError && baseline) {
+          try {
+            assertBaselineCurrent(baseline);
+            const paused = launchPreflightDecisions.pause(
+              intent,
+              descriptor,
+              error.capture,
+              launchPauseDiagnosticsFromResult(error.result),
+              baseline,
+            );
+            return { ...paused, status: 'paused' };
+          } catch (staleError) {
+            return {
+              result: await claudeFailure(validatedSessionId, staleError),
+              status: 'completed',
+            };
+          }
+        }
+        return {
+          result: await claudeFailure(validatedSessionId, error),
+          status: 'completed',
+        };
       }
     },
   );
 };
 
 const registerClaudeSessionLaunchIpc = ({
+  agentRuntimeStore,
   claudeConversationLifecycle,
   claudeFailure,
   conversationOwnerRegistry,
-  guards: { assertOfficialProviderAllowed, requireClaudeRuntime, validateSender },
-  releaseTerminalConversationOwner,
+  developmentSessionOperations,
+  failedRuntimeLaunchCleanupDependencies,
+  guards: {
+    assertLaunchAdmissionAllowed,
+    requireClaudeRuntime,
+    validateSender,
+    withOfficialProviderAccess,
+  },
+  launchPreflightDecisions,
   runClaudeResumeLaunch,
   terminalConversationOwners,
-  withDevelopmentSessionOperation,
+  withLaunchDecisionSessionOperation,
   workspace,
 }: ClaudeLaunchIpcDependencies): void => {
   ipcMain.handle(
     CHANNELS.CLAUDE_LAUNCH_WITH_SESSION,
-    async (event, sessionId: unknown, conversationId: unknown): Promise<ClaudeOperationResult> => {
+    async (event, sessionId: unknown, conversationId: unknown): Promise<ClaudeLaunchOutcome> => {
       validateSender(event);
+      assertLaunchAdmissionAllowed();
       const validatedSessionId = validateSessionId(sessionId);
+      if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
+        return {
+          result: await claudeFailure(validatedSessionId, new Error('会话标识无效。')),
+          status: 'completed',
+        };
+      }
+      const normalizedConversationId = conversationId.toLowerCase();
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
-      try {
-        return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
-          if (typeof conversationId !== 'string' || !isValidClaudeSessionId(conversationId)) {
-            throw new Error('会话标识无效。');
-          }
-          const existingOwner = conversationOwnerRegistry.ownerFor({
-            conversationId,
-            projectPath: status.cwd,
-            runtime: 'claude',
-          });
-          if (existingOwner) {
-            if (existingOwner.ownerId === `terminal:${validatedSessionId}`) {
-              return { ok: true, state: await runtime.getState(validatedSessionId, status.cwd) };
-            }
-            throw new Error(
-              existingOwner.ownerKind === 'native'
-                ? '该对话已在原生界面运行。'
-                : '该对话已在另一个高级终端运行。',
-            );
-          }
-          const terminalOwner: ConversationOwner = {
-            conversationId: conversationId.toLowerCase(),
-            generation: Number(status.ptyGeneration) + 1,
-            ownerId: `terminal:${validatedSessionId}`,
-            ownerKind: 'terminal',
-            phase: 'starting',
-            projectPath: status.cwd,
-            runtime: 'claude',
-          };
-          const ownerClaim = conversationOwnerRegistry.claim(terminalOwner);
-          if (ownerClaim.status === 'conflict') {
-            throw new Error('该对话刚刚被其他界面接管。');
-          }
-          terminalConversationOwners.set(validatedSessionId, ownerClaim.owner);
-          return claudeConversationLifecycle.runResume(
-            status.cwd,
-            conversationId,
-            validatedSessionId,
-            async (conversationOwnership) => {
-              const assertResumeCurrent = (): void => {
-                conversationOwnership.assertCurrent();
-                assertCurrent();
-              };
-              try {
-                const officialProvider = runtime.officialNetworkProvider(status.cwd);
-                if (officialProvider) {
-                  await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-                  assertResumeCurrent();
-                }
-                await runClaudeResumeLaunch(
-                  validatedSessionId,
-                  status.cwd,
-                  conversationId,
-                  '无法为 Claude Code 启动安全终端。',
-                  assertResumeCurrent,
-                );
-                const state = await runtime.getState(validatedSessionId, status.cwd);
-                assertResumeCurrent();
-                conversationOwnerRegistry.updatePhase(
-                  terminalOwner,
-                  terminalOwner.ownerId,
-                  terminalOwner.generation,
-                  'active',
-                );
-                return { ok: true, state };
-              } catch (error) {
-                releaseTerminalConversationOwner(validatedSessionId);
-                return claudeFailure(validatedSessionId, error);
-              }
-            },
-          );
+      const intent = launchPreflightDecisions.beginLaunch(validatedSessionId);
+      const descriptor: ClaudeLaunchDescriptor = Object.freeze({
+        conversationId: normalizedConversationId,
+        cwd: status.cwd,
+        kind: 'resume-session',
+        sessionId: validatedSessionId,
+      });
+      let baseline: ClaudeLaunchDecisionBaseline | undefined;
+
+      const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
+        Object.freeze({
+          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd),
+          operation,
+          runtime: runtime.captureRuntimeLaunchBaseline(validatedSessionId, status.cwd),
+          workspacePtyGeneration: status.ptyGeneration,
         });
+      const assertBaselineCurrent = (candidate: ClaudeLaunchDecisionBaseline): void => {
+        assertLaunchAdmissionAllowed();
+        launchPreflightDecisions.assertIntentCurrent(intent);
+        developmentSessionOperations.assertStampCurrent(candidate.operation);
+        const currentStatus = workspace.getStatus(validatedSessionId);
+        if (
+          currentStatus.cwd !== status.cwd ||
+          currentStatus.ptyGeneration !== candidate.workspacePtyGeneration ||
+          agentRuntimeStore.get(status.cwd) !== 'claude'
+        ) {
+          throw new LaunchPreflightDecisionStaleError();
+        }
+        runtime.assertLaunchConfigurationBaselineCurrent(status.cwd, candidate.configuration);
+        runtime.assertRuntimeLaunchBaselineCurrent(
+          validatedSessionId,
+          status.cwd,
+          candidate.runtime,
+        );
+      };
+      const authorizeProvider: ProviderAuthorizedOperation = (provider, operation, signal) => {
+        signal?.throwIfAborted();
+        return provider
+          ? withOfficialProviderAccess(
+              { action: 'cli-launch', cwd: status.cwd, provider },
+              operation,
+              signal,
+            )
+          : operation();
+      };
+
+      try {
+        const result = await withLaunchDecisionSessionOperation(
+          validatedSessionId,
+          async (assertCurrent, signal) => {
+            signal.throwIfAborted();
+            const operationStamp = developmentSessionOperations.captureStamp(validatedSessionId);
+            baseline = captureBaseline(operationStamp);
+            const assertResumeCurrent = (): void => {
+              assertLaunchAdmissionAllowed();
+              assertCurrent();
+              launchPreflightDecisions.assertIntentCurrent(intent);
+              developmentSessionOperations.assertStampCurrent(operationStamp);
+              const currentStatus = workspace.getStatus(validatedSessionId);
+              if (
+                currentStatus.cwd !== status.cwd ||
+                agentRuntimeStore.get(status.cwd) !== 'claude'
+              ) {
+                throw new LaunchPreflightDecisionStaleError();
+              }
+            };
+            return executeClaudeSessionResume({
+              assertCurrent: assertResumeCurrent,
+              assertPreparationCurrent: () =>
+                assertBaselineCurrent(baseline as ClaudeLaunchDecisionBaseline),
+              authorizeLaunchProvider: authorizeProvider,
+              claudeConversationLifecycle,
+              cleanup: failedRuntimeLaunchCleanupDependencies,
+              conversationId: normalizedConversationId,
+              conversationOwnerRegistry,
+              cwd: status.cwd,
+              expectedOfficialNetworkProvider: (baseline as ClaudeLaunchDecisionBaseline)
+                .configuration.officialNetworkProvider,
+              runClaudeResumeLaunch,
+              runtime,
+              sessionId: validatedSessionId,
+              signal,
+              terminalConversationOwners,
+              withExpectedPtyReplacement: (predecessor, restart) =>
+                launchPreflightDecisions.withExpectedPtyReplacement(intent, predecessor, restart),
+              workspace,
+            });
+          },
+        );
+        return { result, status: 'completed' };
       } catch (error) {
-        return claudeFailure(validatedSessionId, error);
+        if (error instanceof ProviderAccessBlockedError && baseline) {
+          try {
+            assertBaselineCurrent(baseline);
+            const paused = launchPreflightDecisions.pause(
+              intent,
+              descriptor,
+              error.capture,
+              launchPauseDiagnosticsFromResult(error.result),
+              baseline,
+            );
+            return { ...paused, status: 'paused' };
+          } catch (staleError) {
+            return {
+              result: await claudeFailure(validatedSessionId, staleError),
+              status: 'completed',
+            };
+          }
+        }
+        return {
+          result: await claudeFailure(validatedSessionId, error),
+          status: 'completed',
+        };
       }
     },
   );
@@ -418,6 +920,11 @@ const registerClaudeSessionLaunchIpc = ({
 export const registerClaudeLaunchIpc = (dependencies: ClaudeLaunchIpcDependencies): void => {
   registerClaudeRelaunchIpc(dependencies);
   registerClaudeStartIpc(dependencies);
+  registerClaudeLaunchDecisionIpc(dependencies, {
+    executeClaudeRelaunch,
+    executeClaudeSessionResume,
+    executePreparedLaunch,
+  });
   registerClaudeCommandIpc(dependencies);
   registerClaudeSessionLaunchIpc(dependencies);
 };

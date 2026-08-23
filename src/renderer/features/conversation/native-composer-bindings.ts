@@ -18,16 +18,20 @@ export const createNativeComposerBindings = (
   const runNativeComposerSubmit = async (): Promise<void> => {
     const text = elements.nativeComposerInput.value;
     const conversationId = state.activeNativeConversationId;
+    const nativeSnapshot = conversationId
+      ? state.nativeConversationSnapshots.get(conversationId)
+      : undefined;
+    const turnActive = nativeSnapshot?.phase === 'running' || nativeSnapshot?.phase === 'stopping';
     if (
       !conversationId ||
       (!text.trim() && state.pendingNativeAttachments.length === 0) ||
       elements.nativeSendButton.disabled ||
-      state.nativeConversationSubmissions.has(conversationId)
+      (state.nativeConversationSubmissions.has(conversationId) && !turnActive)
     )
       return;
-    const nativeSnapshot = state.nativeConversationSnapshots.get(conversationId);
     if (
       nativeSnapshot &&
+      !turnActive &&
       text.trim().startsWith('/') &&
       state.pendingNativeAttachments.length === 0
     ) {

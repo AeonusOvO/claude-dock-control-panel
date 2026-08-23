@@ -1,4 +1,5 @@
 import type { WorkspaceState } from '../shared/contracts';
+import { requiredElement } from './platform/dom';
 import type { Registry } from './platform/registry';
 import {
   formatAttachmentSize,
@@ -15,6 +16,7 @@ import { MCP_FEATURE, registerMcpFeature } from './features/mcp';
 import { PLUGINS_FEATURE, registerPluginsFeature } from './features/plugins';
 import { PROXY_FEATURE, registerProxyFeature } from './features/proxy';
 import { SETTINGS_FEATURE, registerSettingsFeature } from './features/settings';
+import { createClaudeExecutionSettingsLoader } from './features/claude-execution-settings/loader';
 import { ARTIFACT_FEATURE, registerArtifactFeature } from './features/artifact';
 import { ROUTER_FEATURE, registerRouterFeature } from './features/router';
 import { CONNECTION_FEATURE, registerConnectionFeature } from './features/connection';
@@ -145,9 +147,34 @@ const installSettingsFeatures = (
     showToast,
   });
   features.preflightFeature = rendererRegistry.resolve(PREFLIGHT_FEATURE);
-  const preflightFeature = features.preflightFeature;
 
   const proxyDirtyDelegate: { current: () => boolean } = { current: () => false };
+  let executionMutationBusy = false;
+  let previousCancelDisabled = false;
+  let previousCompleteDisabled = false;
+  const setExecutionDialogMutationBusy = (busy: boolean): void => {
+    if (busy === executionMutationBusy) return;
+    executionMutationBusy = busy;
+    if (busy) {
+      previousCancelDisabled = cancelConnectionAdvancedButton.disabled;
+      previousCompleteDisabled = completeConnectionAdvancedButton.disabled;
+      cancelConnectionAdvancedButton.disabled = true;
+      completeConnectionAdvancedButton.disabled = true;
+      return;
+    }
+    cancelConnectionAdvancedButton.disabled = previousCancelDisabled;
+    completeConnectionAdvancedButton.disabled = previousCompleteDisabled;
+  };
+  const claudeExecutionSettingsLoader = createClaudeExecutionSettingsLoader({
+    featureDependencies: {
+      root: requiredElement('#claude-execution-settings-root'),
+      setDialogMutationBusy: setExecutionDialogMutationBusy,
+      showToast,
+      updateUnsavedIndicator: () => features.settingsFeature.updateUnsavedIndicator(),
+    },
+    importFeature: () => import('./features/claude-execution-settings'),
+    showToast,
+  });
   registerSettingsFeature(rendererRegistry, {
     applySettingsThemeSelect: themeShell.applySettingsThemeSelect,
     applyTerminalTheme,
@@ -155,12 +182,22 @@ const installSettingsFeatures = (
     closeAdvancedConnectionDialog: (complete) =>
       features.connectionFeature.closeAdvancedDialog(complete),
     completeButton: completeConnectionAdvancedButton,
+    disposeClaudeExecutionSettings: claudeExecutionSettingsLoader.dispose,
+    endClaudeExecutionDialogSession: claudeExecutionSettingsLoader.endDialogSession,
     getSelectedRailTab: railShell.getSelectedRailTab,
     getSettingsThemeValue: themeShell.getSettingsThemeValue,
+    isClaudeExecutionDirty: claudeExecutionSettingsLoader.isDirty,
     isProxyDirty: () => proxyDirtyDelegate.current(),
     loadProxyState: (preserveDirtyDraft) => proxyFeature.loadState(preserveDirtyDraft),
     onAdvancedTabSelected: () => {
       void features.routerFeature.loadAdvancedBackends();
+    },
+    onClaudeExecutionTabSelected: () => {
+      void claudeExecutionSettingsLoader.activate();
+    },
+    onNetworkTabSelected: () => {
+      features.preflightFeature.renderActiveNetworkPreflight();
+      void features.preflightFeature.runActiveNetworkPreflight(false);
     },
     onProxyTabSelected: () => {
       void proxyFeature.loadState();
@@ -173,6 +210,7 @@ const installSettingsFeatures = (
       footerShell.setFooterResourcePreference(settings.footerResourcePreference);
       footerShell.setManagedChatGptContextWindowMode(settings.managedChatGptContextWindowMode);
     },
+    saveClaudeExecutionPending: claudeExecutionSettingsLoader.savePending,
     saveProxyPending: () => proxyFeature.savePending(),
     setConnectionPolling: (enabled) => features.connectionFeature.setConnectionPolling(enabled),
     showToast,
@@ -180,8 +218,8 @@ const installSettingsFeatures = (
   features.settingsFeature = rendererRegistry.resolve(SETTINGS_FEATURE);
   const settingsFeature = features.settingsFeature;
   registerProxyFeature(rendererRegistry, {
-    invalidatePreflight: () => preflightFeature.invalidateAndRun('application-proxy-change'),
     isAdvancedConnectionDialogOpen: () => connectionAdvancedDialog.open,
+    refreshPreflight: () => features.preflightFeature.refreshAfterAuthoritativeChange(),
     showToast,
     updateSettingsUnsavedIndicator: settingsFeature.updateUnsavedIndicator,
   });
@@ -501,6 +539,7 @@ const installProjectFeatures = (
   registerProjectsFeature(rendererRegistry, {
     activeDevelopmentRuntime,
     activeStatus,
+    beginClaudeLaunchAttempt: terminalProjectState.beginClaudeLaunchAttempt,
     claudeLaunchAttempts,
     claudeSpeedOperations,
     claudeStateLoadGenerations,
@@ -513,6 +552,7 @@ const installProjectFeatures = (
     disposeTerminalView: features.terminalFeature.disposeTerminalView,
     effortRecoveryNotifications,
     ensureTerminalView: features.terminalFeature.ensureTerminalView,
+    failClaudeLaunchAttempt: terminalProjectState.failClaudeLaunchAttempt,
     flushPendingComposerFocus: features.terminalFeature.flushPendingComposerFocus,
     forgetSession: (sessionId) => features.connectionFeature.forgetSession(sessionId),
     formatRelativeTime,
@@ -538,9 +578,11 @@ const installProjectFeatures = (
     renderDevelopmentRuntimeState: terminalProjectState.renderDevelopmentRuntimeState,
     renderNoActiveSession: terminalProjectState.renderNoActiveSession,
     renderRuntimeActivity: runtimeActivityShell.renderRuntimeActivity,
+    renderClaudeLaunchResult: terminalProjectState.renderClaudeLaunchResult,
     refreshClaudeLaunchControls: terminalProjectState.refreshClaudeLaunchControls,
     requestComposerFocus: features.terminalFeature.requestComposerFocus,
     requestConfirmation,
+    resolveClaudeLaunchDecision: features.terminalFeature.resolveClaudeLaunchDecision,
     resetForProjectChange: () => features.connectionFeature.resetForProjectChange(),
     resetProviderForm: () => features.routerFeature.resetProviderForm(),
     resultFailureMessage,
@@ -598,6 +640,7 @@ const installApplicationSubscriptions = (
     pluginsFeature,
     proxyFeature,
     routerFeature,
+    settingsFeature,
     artifactFeature,
     chatFeature,
     preflightFeature,
@@ -630,6 +673,7 @@ const installApplicationSubscriptions = (
   );
   window.controlPanel.onWorkspaceState((state) => {
     projectsFeature.renderWorkspace(state);
+    terminalFeature.reconcileClaudeLaunchDecision(state);
     void runtimeActivityShell.loadActiveRuntimeActivity();
     void conversationFeature.refreshRecoveries();
   });
@@ -646,6 +690,7 @@ const installApplicationSubscriptions = (
     mcpFeature.dispose();
     pluginsFeature.dispose();
     proxyFeature.dispose();
+    settingsFeature.dispose();
     connectionForm.unsubscribeManagedChatGptSetupProgress();
     routerFeature.dispose();
     connectionFeature.dispose();

@@ -8,6 +8,9 @@ import type {
   ClaudeConnectionTestResult,
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
+  ClaudeLaunchOutcome,
+  ClaudeLaunchPreflightDecisionInput,
+  ClaudeLaunchPreflightDecisionOutcome,
   ClaudeModelOptions,
   ClaudeOperationResult,
   ClaudePermissionMode,
@@ -64,11 +67,12 @@ export const claudeBridge = {
       optionId,
     ) as Promise<ClaudeOperationResult>,
   relaunchClaudeSession: (sessionId: string, input: ClaudeRelaunchInput) =>
+    ipcRenderer.invoke(CHANNELS.CLAUDE_RELAUNCH, sessionId, input) as Promise<ClaudeLaunchOutcome>,
+  decideClaudeLaunchPreflight: (input: ClaudeLaunchPreflightDecisionInput) =>
     ipcRenderer.invoke(
-      CHANNELS.CLAUDE_RELAUNCH,
-      sessionId,
+      CHANNELS.CLAUDE_LAUNCH_PREFLIGHT_DECIDE,
       input,
-    ) as Promise<ClaudeOperationResult>,
+    ) as Promise<ClaudeLaunchPreflightDecisionOutcome>,
   setClaudePermissionMode: (sessionId: string, mode: ClaudePermissionMode) =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_SET_PERMISSION_MODE,
@@ -147,13 +151,14 @@ export const claudeBridge = {
       entryId,
       name,
     ) as Promise<ClaudeConnectionHistoryResult>,
-  discoverClaudeProviderModels: (input) =>
+  discoverClaudeProviderModels: (sessionId, input) =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_PROVIDER_MODELS_DISCOVER,
+      sessionId,
       input,
     ) as Promise<ClaudeProviderModelDiscoveryResult>,
   launchClaude: (sessionId, mode) =>
-    ipcRenderer.invoke(CHANNELS.CLAUDE_LAUNCH, sessionId, mode) as Promise<ClaudeOperationResult>,
+    ipcRenderer.invoke(CHANNELS.CLAUDE_LAUNCH, sessionId, mode) as Promise<ClaudeLaunchOutcome>,
   onClaudeState: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, state: ClaudeProjectState): void => {
       listener(state);
@@ -206,5 +211,5 @@ export const claudeBridge = {
       CHANNELS.CLAUDE_LAUNCH_WITH_SESSION,
       sessionId,
       conversationId,
-    ) as Promise<ClaudeOperationResult>,
+    ) as Promise<ClaudeLaunchOutcome>,
 } satisfies Partial<ControlPanelApi>;

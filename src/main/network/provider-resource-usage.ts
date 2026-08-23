@@ -7,6 +7,13 @@ const REFRESH_INTERVAL_MS = 60_000;
 const STALE_AFTER_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const MAX_ERROR_DETAIL_LENGTH = 300;
+
+const RESPONSE_TOO_LARGE = '余额响应超过安全大小上限。';
+const RESPONSE_INVALID_JSON = '官方余额接口没有返回有效 JSON。';
+const REQUEST_CANCELLED = '官方余额读取已取消。';
+const REQUEST_FAILED = '无法读取官方余额。';
+const REQUEST_TIMED_OUT = '官方余额接口请求超时。';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -14,20 +21,58 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
-const limitedJson = async (response: Response): Promise<unknown> => {
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-    throw new Error('余额响应超过安全大小上限。');
+class ProviderResourceUsageError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'ProviderResourceUsageError';
   }
-  const body = Buffer.from(await response.arrayBuffer());
-  if (body.length > MAX_RESPONSE_BYTES) {
-    throw new Error('余额响应超过安全大小上限。');
+}
+
+interface ProviderResourceEndpoint {
+  readonly parser: (value: unknown) => ResourceBalance | undefined;
+  readonly url: string;
+}
+
+interface ProviderResourceUsageRun {
+  readonly controller: AbortController;
+  readonly waiters: Set<symbol>;
+  settled: boolean;
+}
+
+const abortFailure = (signal: AbortSignal): ProviderResourceUsageError =>
+  signal.reason instanceof ProviderResourceUsageError
+    ? signal.reason
+    : new ProviderResourceUsageError(REQUEST_CANCELLED);
+
+const raceAbort = async <T>(operation: Promise<T>, signal: AbortSignal): Promise<T> => {
+  if (signal.aborted) throw abortFailure(signal);
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(abortFailure(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
   }
-  if (!response.ok) {
-    throw new Error(`官方余额接口返回 HTTP ${response.status}。`);
-  }
-  return JSON.parse(body.toString('utf8')) as unknown;
 };
+
+const declaredResponseBytes = (response: Response): number | undefined => {
+  const raw = response.headers.get('content-length');
+  if (!raw || !/^\d+$/.test(raw)) return undefined;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
+};
+
+const sourceForProvider = (provider: ClaudeProviderId): ResourceUsageView['source'] =>
+  provider === 'deepseek' ? 'deepseek-balance' : 'openrouter-key';
+
+const safeFailureDetail = (error: unknown): string =>
+  (error instanceof ProviderResourceUsageError ? error.message : REQUEST_FAILED).slice(
+    0,
+    MAX_ERROR_DETAIL_LENGTH,
+  );
 
 export const parseDeepSeekBalance = (value: unknown): ResourceBalance | undefined => {
   if (!isRecord(value) || value.is_available !== true || !Array.isArray(value.balance_infos)) {
@@ -69,9 +114,7 @@ export const parseOpenRouterBalance = (value: unknown): ResourceBalance | undefi
   };
 };
 
-const endpointForProvider = (
-  provider: ClaudeProviderId,
-): { parser: (value: unknown) => ResourceBalance | undefined; url: string } | undefined =>
+const endpointForProvider = (provider: ClaudeProviderId): ProviderResourceEndpoint | undefined =>
   provider === 'deepseek'
     ? { parser: parseDeepSeekBalance, url: 'https://api.deepseek.com/user/balance' }
     : provider === 'openrouter'
@@ -84,20 +127,164 @@ const cacheKeyForCredential = (
   credential: string,
 ): string => `${projectKey}\0${provider}\0${createHash('sha256').update(credential).digest('hex')}`;
 
+const readProviderBalance = async (
+  endpoint: ProviderResourceEndpoint,
+  credential: string,
+  fetchImplementation: typeof fetch,
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+): Promise<ResourceBalance | undefined> => {
+  const controller = new AbortController();
+  let completed = false;
+  let response: Response | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let bodyCancellationStarted = false;
+
+  const cancelBody = (reason: Error): void => {
+    if (bodyCancellationStarted) return;
+    if (reader) {
+      bodyCancellationStarted = true;
+      void reader.cancel(reason).catch(() => undefined);
+    } else if (response?.body && !response.body.locked) {
+      bodyCancellationStarted = true;
+      void response.body.cancel(reason).catch(() => undefined);
+    }
+  };
+  const terminate = (reason: ProviderResourceUsageError): void => {
+    cancelBody(reason);
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  const onCallerAbort = (): void => terminate(new ProviderResourceUsageError(REQUEST_CANCELLED));
+  const onTimeout = (): void => terminate(new ProviderResourceUsageError(REQUEST_TIMED_OUT));
+  const timer = setTimeout(onTimeout, timeoutMs);
+  timer.unref?.();
+  if (callerSignal?.aborted) onCallerAbort();
+  else callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+
+  try {
+    if (controller.signal.aborted) throw abortFailure(controller.signal);
+    const responsePromise = Promise.resolve().then(() =>
+      fetchImplementation(endpoint.url, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${credential}` },
+        method: 'GET',
+        redirect: 'error',
+        signal: controller.signal,
+      }),
+    );
+    void responsePromise.then(
+      (lateResponse) => {
+        if (completed || controller.signal.aborted) {
+          response = lateResponse;
+          cancelBody(abortFailure(controller.signal));
+        }
+      },
+      () => undefined,
+    );
+    response = await raceAbort(responsePromise, controller.signal);
+    if ((declaredResponseBytes(response) ?? 0) > MAX_RESPONSE_BYTES) {
+      throw new ProviderResourceUsageError(RESPONSE_TOO_LARGE);
+    }
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    if (response.body) {
+      reader = response.body.getReader();
+      while (true) {
+        const chunk = await raceAbort(reader.read(), controller.signal);
+        if (chunk.done) break;
+        if (chunk.value.byteLength > MAX_RESPONSE_BYTES - totalBytes) {
+          throw new ProviderResourceUsageError(RESPONSE_TOO_LARGE);
+        }
+        chunks.push(Buffer.from(chunk.value));
+        totalBytes += chunk.value.byteLength;
+      }
+    }
+    if (!response.ok) {
+      throw new ProviderResourceUsageError(`官方余额接口返回 HTTP ${response.status}。`);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.concat(chunks, totalBytes).toString('utf8')) as unknown;
+    } catch {
+      throw new ProviderResourceUsageError(RESPONSE_INVALID_JSON);
+    }
+    const balance = endpoint.parser(parsed);
+    if (controller.signal.aborted) throw abortFailure(controller.signal);
+    return balance;
+  } catch (error) {
+    const failure = controller.signal.aborted
+      ? abortFailure(controller.signal)
+      : error instanceof ProviderResourceUsageError
+        ? error
+        : new ProviderResourceUsageError(REQUEST_FAILED);
+    terminate(failure);
+    throw failure;
+  } finally {
+    completed = true;
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+    reader?.releaseLock();
+  }
+};
+
 export class ProviderResourceUsageService {
+  private readonly activeRuns = new Map<string, ProviderResourceUsageRun>();
   private readonly cache = new Map<string, AsyncRefreshCache<ResourceUsageView>>();
 
-  public constructor(private readonly fetchImplementation: typeof fetch = fetch) {}
+  public constructor(
+    private readonly fetchImplementation: typeof fetch = fetch,
+    private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  ) {}
+
+  private attachWaiter(
+    cacheKey: string,
+    cache: AsyncRefreshCache<ResourceUsageView>,
+    run: ProviderResourceUsageRun,
+    signal?: AbortSignal,
+  ): () => void {
+    const waiter = Symbol(cacheKey);
+    let released = false;
+    run.waiters.add(waiter);
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      run.waiters.delete(waiter);
+      if (run.waiters.size === 0 && !run.settled && this.activeRuns.get(cacheKey) === run) {
+        this.activeRuns.delete(cacheKey);
+        cache.clear();
+        run.controller.abort(new ProviderResourceUsageError(REQUEST_CANCELLED));
+      }
+    };
+    const onAbort = (): void => release();
+    if (signal?.aborted) release();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    return () => {
+      signal?.removeEventListener('abort', onAbort);
+      release();
+    };
+  }
 
   public async read(
     projectKey: string,
     provider: ClaudeProviderId,
     credential: string | undefined,
     force = false,
+    signal?: AbortSignal,
   ): Promise<ResourceUsageView | undefined> {
     const endpoint = endpointForProvider(provider);
     if (!endpoint || !credential) {
       return undefined;
+    }
+    const source = sourceForProvider(provider);
+    if (signal?.aborted) {
+      return {
+        availability: 'unavailable',
+        capabilities: { balance: true, context: false, windows: false },
+        checkedAt: Date.now(),
+        detail: REQUEST_CANCELLED,
+        source,
+      };
     }
     const cacheKey = cacheKeyForCredential(projectKey, provider, credential);
     let cache = this.cache.get(cacheKey);
@@ -105,23 +292,29 @@ export class ProviderResourceUsageService {
       cache = new AsyncRefreshCache<ResourceUsageView>(REFRESH_INTERVAL_MS);
       this.cache.set(cacheKey, cache);
     }
-    try {
-      return await cache.get(async () => {
+    const request = cache.get(async () => {
+      const run: ProviderResourceUsageRun = {
+        controller: new AbortController(),
+        settled: false,
+        waiters: new Set(),
+      };
+      this.activeRuns.set(cacheKey, run);
+      try {
         const checkedAt = Date.now();
-        const response = await this.fetchImplementation(endpoint.url, {
-          headers: { Accept: 'application/json', Authorization: `Bearer ${credential}` },
-          method: 'GET',
-          redirect: 'error',
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        const balance = endpoint.parser(await limitedJson(response));
+        const balance = await readProviderBalance(
+          endpoint,
+          credential,
+          this.fetchImplementation,
+          this.requestTimeoutMs,
+          run.controller.signal,
+        );
         return balance
           ? {
               availability: 'available',
               balance,
               capabilities: { balance: true, context: false, windows: false },
               checkedAt,
-              source: provider === 'deepseek' ? 'deepseek-balance' : 'openrouter-key',
+              source,
               staleAt: checkedAt + STALE_AFTER_MS,
             }
           : {
@@ -129,17 +322,29 @@ export class ProviderResourceUsageService {
               capabilities: { balance: true, context: false, windows: false },
               checkedAt,
               detail: '官方接口没有返回可显示的余额。',
-              source: provider === 'deepseek' ? 'deepseek-balance' : 'openrouter-key',
+              source,
             };
-      }, force);
+      } finally {
+        run.settled = true;
+        if (this.activeRuns.get(cacheKey) === run) {
+          this.activeRuns.delete(cacheKey);
+        }
+      }
+    }, force);
+    const run = this.activeRuns.get(cacheKey);
+    const detachWaiter = run ? this.attachWaiter(cacheKey, cache, run, signal) : () => undefined;
+    try {
+      return await (signal ? raceAbort(request, signal) : request);
     } catch (error) {
       return {
         availability: 'unavailable',
         capabilities: { balance: true, context: false, windows: false },
         checkedAt: Date.now(),
-        detail: error instanceof Error ? error.message : '无法读取官方余额。',
-        source: provider === 'deepseek' ? 'deepseek-balance' : 'openrouter-key',
+        detail: safeFailureDetail(error),
+        source,
       };
+    } finally {
+      detachWaiter();
     }
   }
 }

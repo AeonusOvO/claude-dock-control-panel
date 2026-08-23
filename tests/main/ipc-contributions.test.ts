@@ -24,6 +24,7 @@ describe('main IPC contributions', () => {
       'registerProjectIpc',
       'registerTerminalIpc',
       'registerClaudeStateIpc',
+      'registerClaudeExecutionSettingsIpc',
       'registerCodexIpc',
       'registerManagedChatGptIpc',
       'registerRouterIpc',

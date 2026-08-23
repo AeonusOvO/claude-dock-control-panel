@@ -6,24 +6,24 @@
 
 | 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
 | -------- | -------------------------- | ------------------------- | ------------------ | ---- |
-| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 159  |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 166  |
 | 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
-| 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 22   |
+| 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 23   |
 | 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
 
-`ControlPanelApi` 共 188 个成员：159 请求响应 + 22 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+`ControlPanelApi` 共 196 个成员：166 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
 
 ## 当前实现位置
 
 | 内容         | 位置                                                                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 频道常量     | `src/shared/ipc/channels.ts`（188 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
-| 参数 schema  | `src/shared/ipc/schema.ts`（31 个 zod schema）                                                                                                 |
-| 类型定义     | `src/shared/contracts/`（18 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件，238 个导出类型）                                            |
-| API 组合     | `src/shared/contracts/control-panel-api.ts`（19 个域接口组合出 188 个成员）                                                                    |
-| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 19 个桥文件                                           |
-| 主进程注册   | `src/main/ipc/`（29 个文件：23 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
-| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 23 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
+| 频道常量     | `src/shared/ipc/channels.ts`（196 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 参数 schema  | `src/shared/ipc/schema.ts` + `claude-execution-settings-schema.ts`                                                                             |
+| 类型定义     | `src/shared/contracts/`（20 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件，267 个导出）                                                |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（20 个域接口组合出 196 个成员）                                                                    |
+| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 20 个桥文件                                           |
+| 主进程注册   | `src/main/ipc/`（30 个文件：24 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
+| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 24 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
 | 参数校验     | `src/main/ipc/validation.ts`（`validate*()` 由 `schema.ts` 的 schema 派生）                                                                    |
 | 发送者守卫   | `src/main/ipc/guards.ts`（`validateSender` 拒绝非主窗口来源；另含运行时效果断言与服务解析器）                                                  |
 | 插件变更通道 | `src/main/ipc/claude-plugin.ts` 的 `pluginMutations` Map，8 个通道循环注册，共用 `runPluginMutation` 包装                                      |
@@ -39,7 +39,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 - 事件订阅方法返回取消函数，内部调用 `removeListener`。
 - 渲染进程与主进程共享的类型只来自 `src/shared/`。
 
-## 请求响应频道（159）
+## 请求响应频道（166）
 
 ### `app`（11）
 
@@ -56,6 +56,10 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 | `app:open-external`                           | `openExternal`                       |
 | `app:clipboard-read`                          | `readClipboardText`                  |
 | `app:clipboard-write`                         | `writeClipboardText`                 |
+
+`app:set-advanced-settings` 的结构化参数包含 `networkPreflight.checkOnNewSession`、
+`checkOnProviderLogin` 及可选的 CLI-only `cliTimezone` / `cliLanguages`。主进程校验 IANA 时区和
+BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 Windows 系统设置。
 
 ### `workspace`（3）
 
@@ -92,58 +96,64 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 | `terminal:restart` | `restartTerminal` |
 | `terminal:stop`    | `stopTerminal`    |
 
-### `claude`（48）
+### `claude`（53）
 
-| 频道                                             | 方法                                  |
-| ------------------------------------------------ | ------------------------------------- |
-| `claude:get-state`                               | `getClaudeProjectState`               |
-| `claude:launch`                                  | `launchClaude`                        |
-| `claude:relaunch`                                | `relaunchClaudeSession`               |
-| `claude:command`                                 | `runClaudeCommand`                    |
-| `claude:save-config`                             | `saveClaudeConfig`                    |
-| `claude:test-connection`                         | `testClaudeConnection`                |
-| `claude:get-connection-advice`                   | `getClaudeConnectionAdvice`           |
-| `claude:get-gateway-diagnostics`                 | `getClaudeGatewayDiagnostics`         |
-| `claude:model-options`                           | `getClaudeModelOptions`               |
-| `claude:switch-model`                            | `switchClaudeModel`                   |
-| `claude:set-model-speed`                         | `setClaudeModelSpeed`                 |
-| `claude:set-effort`                              | `setClaudeEffortLevel`                |
-| `claude:set-permission-mode`                     | `setClaudePermissionMode`             |
-| `claude:set-allow-bypass-permissions`            | `setClaudeAllowBypassPermissions`     |
-| `claude:permission-response`                     | `respondClaudePermission`             |
-| `claude:provider-models-discover`                | `discoverClaudeProviderModels`        |
-| `claude:connection-history`                      | `getClaudeConnectionHistory`          |
-| `claude:connection-history-apply`                | `applyClaudeConnectionHistory`        |
-| `claude:connection-history-delete`               | `deleteClaudeConnectionHistory`       |
-| `claude:connection-history-rename`               | `renameClaudeConnectionHistory`       |
-| `claude:get-sessions`                            | `getClaudeSessions`                   |
-| `claude:get-sessions-for-path`                   | `getClaudeSessionsForPath`            |
-| `claude:launch-with-session`                     | `launchClaudeWithSession`             |
-| `claude:rename-session`                          | `renameClaudeSession`                 |
-| `claude:delete-session`                          | `deleteClaudeSession`                 |
-| `claude:router-get-state`                        | `getClaudeRouterManagementState`      |
-| `claude:router-install`                          | `installClaudeRouter`                 |
-| `claude:router-install-source`                   | `installClaudeRouterFromSource`       |
-| `claude:router-uninstall`                        | `uninstallClaudeRouter`               |
-| `claude:router-start`                            | `startClaudeRouter`                   |
-| `claude:router-stop`                             | `stopClaudeRouter`                    |
-| `claude:router-open-management`                  | `openClaudeRouterManagement`          |
-| `claude:router-save-provider`                    | `saveClaudeRouterProvider`            |
-| `claude:router-delete-provider`                  | `deleteClaudeRouterProvider`          |
-| `claude:router-repair-from-project`              | `repairClaudeRouterFromProject`       |
-| `claude:managed-chatgpt-gateway-state`           | `getManagedChatGptGatewayState`       |
-| `claude:managed-chatgpt-gateway-setup`           | `setupManagedChatGptGateway`          |
-| `claude:managed-chatgpt-gateway-model`           | `setManagedChatGptGatewayModel`       |
-| `claude:managed-chatgpt-gateway-open-management` | `openManagedChatGptGatewayManagement` |
-| `claude:plugins-get`                             | `getClaudePlugins`                    |
-| `claude:plugins-install`                         | `installClaudePlugin`                 |
-| `claude:plugins-uninstall`                       | `uninstallClaudePlugin`               |
-| `claude:plugins-update`                          | `updateClaudePlugin`                  |
-| `claude:plugins-update-all`                      | `updateAllClaudePlugins`              |
-| `claude:plugins-set-enabled`                     | `setClaudePluginEnabled`              |
-| `claude:plugins-marketplace-add`                 | `addClaudePluginMarketplace`          |
-| `claude:plugins-marketplace-remove`              | `removeClaudePluginMarketplace`       |
-| `claude:plugins-marketplaces-refresh`            | `refreshClaudePluginMarketplaces`     |
+| 频道                                             | 方法                                    |
+| ------------------------------------------------ | --------------------------------------- |
+| `claude:get-state`                               | `getClaudeProjectState`                 |
+| `claude:launch`                                  | `launchClaude`                          |
+| `claude:relaunch`                                | `relaunchClaudeSession`                 |
+| `claude:command`                                 | `runClaudeCommand`                      |
+| `claude:save-config`                             | `saveClaudeConfig`                      |
+| `claude:test-connection`                         | `testClaudeConnection`                  |
+| `claude:get-connection-advice`                   | `getClaudeConnectionAdvice`             |
+| `claude:get-gateway-diagnostics`                 | `getClaudeGatewayDiagnostics`           |
+| `claude:model-options`                           | `getClaudeModelOptions`                 |
+| `claude:switch-model`                            | `switchClaudeModel`                     |
+| `claude:set-model-speed`                         | `setClaudeModelSpeed`                   |
+| `claude:set-effort`                              | `setClaudeEffortLevel`                  |
+| `claude:set-permission-mode`                     | `setClaudePermissionMode`               |
+| `claude:set-allow-bypass-permissions`            | `setClaudeAllowBypassPermissions`       |
+| `claude:permission-response`                     | `respondClaudePermission`               |
+| `claude:provider-models-discover`                | `discoverClaudeProviderModels`          |
+| `claude:connection-history`                      | `getClaudeConnectionHistory`            |
+| `claude:connection-history-apply`                | `applyClaudeConnectionHistory`          |
+| `claude:connection-history-delete`               | `deleteClaudeConnectionHistory`         |
+| `claude:connection-history-rename`               | `renameClaudeConnectionHistory`         |
+| `claude:get-sessions`                            | `getClaudeSessions`                     |
+| `claude:get-sessions-for-path`                   | `getClaudeSessionsForPath`              |
+| `claude:launch-with-session`                     | `launchClaudeWithSession`               |
+| `claude:rename-session`                          | `renameClaudeSession`                   |
+| `claude:delete-session`                          | `deleteClaudeSession`                   |
+| `claude:execution-settings-get`                  | `getClaudeExecutionSettings`            |
+| `claude:execution-settings-update`               | `updateClaudeExecutionSettings`         |
+| `claude:execution-settings-use-recommended`      | `useRecommendedClaudeExecutionSettings` |
+| `claude:execution-settings-restore-default`      | `restoreClaudeExecutionSettingsDefault` |
+| `claude:launch-preflight-decide`                 | `decideClaudeLaunchPreflight`           |
+| `claude:router-get-state`                        | `getClaudeRouterManagementState`        |
+| `claude:router-install`                          | `installClaudeRouter`                   |
+| `claude:router-install-source`                   | `installClaudeRouterFromSource`         |
+| `claude:router-uninstall`                        | `uninstallClaudeRouter`                 |
+| `claude:router-start`                            | `startClaudeRouter`                     |
+| `claude:router-stop`                             | `stopClaudeRouter`                      |
+| `claude:router-open-management`                  | `openClaudeRouterManagement`            |
+| `claude:router-save-provider`                    | `saveClaudeRouterProvider`              |
+| `claude:router-delete-provider`                  | `deleteClaudeRouterProvider`            |
+| `claude:router-repair-from-project`              | `repairClaudeRouterFromProject`         |
+| `claude:managed-chatgpt-gateway-state`           | `getManagedChatGptGatewayState`         |
+| `claude:managed-chatgpt-gateway-logout`          | `logoutManagedChatGptGateway`           |
+| `claude:managed-chatgpt-gateway-setup`           | `setupManagedChatGptGateway`            |
+| `claude:managed-chatgpt-gateway-model`           | `setManagedChatGptGatewayModel`         |
+| `claude:managed-chatgpt-gateway-open-management` | `openManagedChatGptGatewayManagement`   |
+| `claude:plugins-get`                             | `getClaudePlugins`                      |
+| `claude:plugins-install`                         | `installClaudePlugin`                   |
+| `claude:plugins-uninstall`                       | `uninstallClaudePlugin`                 |
+| `claude:plugins-update`                          | `updateClaudePlugin`                    |
+| `claude:plugins-update-all`                      | `updateAllClaudePlugins`                |
+| `claude:plugins-set-enabled`                     | `setClaudePluginEnabled`                |
+| `claude:plugins-marketplace-add`                 | `addClaudePluginMarketplace`            |
+| `claude:plugins-marketplace-remove`              | `removeClaudePluginMarketplace`         |
+| `claude:plugins-marketplaces-refresh`            | `refreshClaudePluginMarketplaces`       |
 
 后 8 个 `claude:plugins-*` 变更通道由 `pluginMutations` Map 循环注册，共用同一个 `runPluginMutation` 包装。
 
@@ -252,7 +262,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 | `application-proxy:test`   | `testApplicationProxy`             |
 | `application-proxy:detect` | `detectApplicationProxyCandidates` |
 
-### `mcp`（7）
+### `mcp`（8）
 
 | 频道                 | 方法               |
 | -------------------- | ------------------ |
@@ -261,6 +271,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 | `mcp:remove`         | `removeMcpServer`  |
 | `mcp:toggle-preview` | `previewMcpToggle` |
 | `mcp:toggle-apply`   | `applyMcpToggle`   |
+| `mcp:toggle-discard` | `discardMcpToggle` |
 | `mcp:backups`        | `getMcpBackups`    |
 | `mcp:backup-restore` | `restoreMcpBackup` |
 
@@ -323,7 +334,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 
 `ptyGeneration` 与 `resizeRevision` 是版本号：终端重启后旧帧的写入与尺寸事件会带着过期版本抵达，主进程按版本丢弃。
 
-## 事件频道（22）
+## 事件频道（23）
 
 `webContents.send` → `ipcRenderer.on`。订阅方法返回取消函数。
 
@@ -331,6 +342,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 | --------------------------------------- | ------------------------------- |
 | `app:open-download-center`              | `onOpenDownloadCenterRequested` |
 | `app:quit-requested`                    | `onAppQuitRequested`            |
+| `app:quit-request-invalidated`          | `onAppQuitRequestInvalidated`   |
 | `app:window-restored`                   | `onAppWindowRestored`           |
 | `application-proxy:changed`             | `onApplicationProxyChanged`     |
 | `artifact:network-log`                  | `onArtifactNetworkLog`          |

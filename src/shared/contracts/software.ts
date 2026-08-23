@@ -9,7 +9,6 @@ export interface SoftwareUpdateTarget {
 }
 
 export interface SoftwareUpdateState {
-  application: SoftwareUpdateTarget;
   checkedAt: number;
   claudeCode: SoftwareUpdateTarget;
   router: SoftwareUpdateTarget;

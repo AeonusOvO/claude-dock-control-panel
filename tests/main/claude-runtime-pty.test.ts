@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +39,12 @@ interface TestRuntimeSession {
     detail: string;
   };
   launchGeneration?: number;
+  launchPreflightEvidence?: {
+    checkedAt: number;
+    provider: 'anthropic-claude' | 'openai-codex';
+    status: 'allowed' | 'blocked' | 'degraded';
+  };
+  liveOfficialNetworkProvider?: 'anthropic-claude' | 'openai-codex';
   markerRemainder: string;
   metrics?: ClaudeMetrics;
   metricsPath?: string;
@@ -84,11 +90,14 @@ interface ClaudeRuntimeInternals {
   }>;
   emitState(runtime: TestRuntimeSession): Promise<void>;
   getRouteHealth(...args: unknown[]): Promise<undefined>;
+  nativeRouteReservations: Map<string, { phase: 'active' | 'preparing'; token: object }>;
   pollMetricsOnce(): Promise<void>;
+  preparedLaunches: Map<object, { replacement?: TestRuntimeSession }>;
   prepareRouteServices(...args: unknown[]): Promise<void>;
   readLaunchArtifact(artifactPath: string): Promise<string>;
   restoreEffortAfterCompatibilityTurn(runtime: TestRuntimeSession): Promise<void>;
   sessions: Map<string, TestRuntimeSession>;
+  stopUnusedRoute(...args: unknown[]): Promise<void>;
   submitClaudeCommand(runtime: TestRuntimeSession, commandLine: string): Promise<void>;
 }
 
@@ -180,6 +189,14 @@ const launchArtifacts = (session: TestRuntimeSession) => {
   };
 };
 
+const preparedRuntime = (internals: ClaudeRuntimeInternals, token: object): TestRuntimeSession => {
+  const replacement = internals.preparedLaunches.get(token)?.replacement;
+  if (!replacement) {
+    throw new Error('Claude replacement runtime was not prepared.');
+  }
+  return replacement;
+};
+
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -188,7 +205,6 @@ const deferred = <T>() => {
   return { promise, resolve };
 };
 
-const deferredString = () => deferred<string>();
 const CONVERSATION_A = '8f9aa605-adb6-4e2b-a25a-607e14bad666';
 const CONVERSATION_B = '53b9f42a-a26a-4ce6-a6d3-82d783c8bdde';
 
@@ -272,7 +288,7 @@ describe('Claude runtime PTY ownership', () => {
   it('routes writes and exit markers only through the exact bound generation', () => {
     const { runtime, session, writes } = createRuntime();
     try {
-      runtime.bindPty(session.sessionId, 4);
+      session.ptyGeneration = 4;
       expect(runtime.writeTerminal(session.sessionId, 4, 'launch\r')).toBe(true);
       expect(runtime.writeTerminal(session.sessionId, 3, 'stale\r')).toBe(false);
       expect(writes).toEqual([
@@ -293,44 +309,69 @@ describe('Claude runtime PTY ownership', () => {
     }
   });
 
-  it('separates prepared cleanup from exact-generation deactivation', () => {
+  it('seeds and consumes launch evidence only for the exact live runtime and PTY generations', () => {
     const { runtime, session } = createRuntime();
+    const evidence = {
+      checkedAt: 42,
+      provider: 'anthropic-claude' as const,
+      status: 'allowed' as const,
+    };
     try {
-      expect(Reflect.apply(runtime.setInactive, runtime, [session.sessionId])).toBe(false);
-      expect(runtime.isActive(session.sessionId)).toBe(true);
-      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(true);
-      expect(runtime.isActive(session.sessionId)).toBe(false);
+      session.launchGeneration = 8;
+      session.liveOfficialNetworkProvider = 'anthropic-claude';
+      session.ptyGeneration = 4;
 
-      session.active = true;
-      session.exitMarker = 'bound-exit-marker';
-      runtime.bindPty(session.sessionId, 5);
-      expect(Reflect.apply(runtime.setInactive, runtime, [session.sessionId])).toBe(false);
-      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(false);
-      expect(runtime.setInactive(session.sessionId, 4)).toBe(false);
-      expect(runtime.isBoundToPty(session.sessionId, 5)).toBe(true);
-      expect(runtime.setInactive(session.sessionId, 5)).toBe(true);
-
-      session.active = true;
-      session.exitMarker = 'new-exit-marker';
-      runtime.bindPty(session.sessionId, 6);
-      expect(runtime.setInactive(session.sessionId, 5)).toBe(false);
-      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(false);
-      expect(runtime.isBoundToPty(session.sessionId, 6)).toBe(true);
+      expect(runtime.seedActiveLaunchPreflightEvidence(session.sessionId, 3, evidence)).toBe(false);
+      expect(
+        runtime.seedActiveLaunchPreflightEvidence(session.sessionId, 4, {
+          ...evidence,
+          provider: 'openai-codex',
+        }),
+      ).toBe(false);
+      expect(runtime.seedActiveLaunchPreflightEvidence(session.sessionId, 4, evidence)).toBe(true);
+      expect(runtime.takeActiveLaunchPreflightEvidence(session.sessionId, 7, 4)).toBeUndefined();
+      expect(runtime.takeActiveLaunchPreflightEvidence(session.sessionId, 8, 3)).toBeUndefined();
+      expect(runtime.takeActiveLaunchPreflightEvidence(session.sessionId, 8, 4)).toEqual(evidence);
+      expect(runtime.takeActiveLaunchPreflightEvidence(session.sessionId, 8, 4)).toBeUndefined();
     } finally {
       runtime.shutdown();
     }
   });
 
-  it('returns the predecessor generation when preparation unbinds a running PTY', async () => {
+  it('separates exact prepared abort from exact-generation deactivation', async () => {
+    const { internals, runtime, session } = createRuntime();
+    try {
+      session.ptyGeneration = 4;
+      const aborted = await runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
+      expect(runtime.isBoundToPty(session.sessionId, 4)).toBe(true);
+      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(true);
+      expect(runtime.isBoundToPty(session.sessionId, 4)).toBe(true);
+      expect(runtime.abortPreparedLaunch(aborted.token)).toBe(false);
+
+      const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
+      runtime.bindPty(session.sessionId, 5, prepared.token);
+      const replacement = internals.sessions.get(session.sessionId);
+      expect(replacement).not.toBe(session);
+      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(false);
+      expect(runtime.setInactive(session.sessionId, 4)).toBe(false);
+      expect(runtime.isBoundToPty(session.sessionId, 5)).toBe(true);
+      expect(runtime.setInactive(session.sessionId, 5)).toBe(true);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('returns the predecessor generation while preparation keeps its PTY bound', async () => {
     const { runtime, session } = createRuntime();
     try {
-      runtime.bindPty(session.sessionId, 7);
+      session.ptyGeneration = 7;
 
       const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
 
       expect(prepared.predecessorPtyGeneration).toBe(7);
-      expect(runtime.isBoundToPty(session.sessionId, 7)).toBe(false);
-      expect(runtime.cleanupPreparedLaunch(session.sessionId)).toBe(true);
+      expect(runtime.isBoundToPty(session.sessionId, 7)).toBe(true);
+      expect(runtime.abortPreparedLaunch(prepared.token)).toBe(true);
+      expect(runtime.isBoundToPty(session.sessionId, 7)).toBe(true);
     } finally {
       runtime.shutdown();
     }
@@ -340,7 +381,7 @@ describe('Claude runtime PTY ownership', () => {
     vi.useFakeTimers();
     const { internals, runtime, session, writes } = createRuntime();
     try {
-      runtime.bindPty(session.sessionId, 7);
+      session.ptyGeneration = 7;
       const pending = internals.submitClaudeCommand(session, '/model claude-opus-5');
       const rejection = expect(pending).rejects.toThrow('会话已停止或重启');
       await vi.advanceTimersByTimeAsync(0);
@@ -355,7 +396,7 @@ describe('Claude runtime PTY ownership', () => {
       expect(runtime.setInactive(session.sessionId, 7)).toBe(true);
       session.active = true;
       session.exitMarker = 'replacement-exit-marker';
-      runtime.bindPty(session.sessionId, 8);
+      session.ptyGeneration = 8;
       await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
 
       await rejection;
@@ -414,7 +455,7 @@ describe('Claude runtime PTY ownership', () => {
       }
     };
     try {
-      runtime.bindPty(session.sessionId, 31);
+      session.ptyGeneration = 31;
       const baselineTimerCount = vi.getTimerCount();
       const pending = runtime.compactBeforeRelaunch(
         session.sessionId,
@@ -450,7 +491,7 @@ describe('Claude runtime PTY ownership', () => {
       }
     };
     try {
-      runtime.bindPty(session.sessionId, 32);
+      session.ptyGeneration = 32;
       const blockingSubmission = internals.submitClaudeCommand(session, '/model current-model');
       await vi.advanceTimersByTimeAsync(0);
       expect(writes.map(({ data }) => data)).toEqual(['/model current-model']);
@@ -486,7 +527,7 @@ describe('Claude runtime PTY ownership', () => {
       }
     };
     try {
-      runtime.bindPty(session.sessionId, 33);
+      session.ptyGeneration = 33;
       const first = internals.compactAndWait(session, assertFirstCurrent, firstController.signal);
       await vi.advanceTimersByTimeAsync(SUBMIT_DELAY_MS);
       const oldWaiter = session.waitingForCompact;
@@ -523,6 +564,96 @@ describe('Claude runtime PTY ownership', () => {
 });
 
 describe('Claude runtime launch configuration snapshots', () => {
+  it('passes the exact project through managed terminal and native route preparation', async () => {
+    const { internals, runtime, session } = createRuntime();
+    const launchSnapshot: TestLaunchConfigSnapshot = {
+      allowBypassPermissions: false,
+      config: normalizeClaudeConfig({
+        authMode: 'authToken',
+        baseUrl: 'http://127.0.0.1:8317',
+        credentialAction: 'keep',
+        model: 'gpt-5.6-sol',
+        preset: 'chatgpt-subscription',
+        provider: 'gateway',
+      }),
+      credential: 'managed-gateway-token',
+      storage: { revision: 'managed-snapshot' },
+    };
+    internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    internals.configStore.launchSnapshotIsCurrent = vi.fn(
+      (_cwd, candidate) => candidate === launchSnapshot,
+    );
+
+    try {
+      await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
+      expect(internals.prepareRouteServices).toHaveBeenCalledWith(
+        'managed-chatgpt',
+        expect.stringMatching(`^claude-launch:${session.sessionId}:\\d+:target$`),
+        session.cwd,
+      );
+
+      vi.mocked(internals.prepareRouteServices).mockClear();
+      await runtime.prepareNativeConversation('native-managed-route', session.cwd);
+      expect(internals.prepareRouteServices).toHaveBeenCalledWith(
+        'managed-chatgpt',
+        'native-managed-route',
+        session.cwd,
+      );
+    } finally {
+      runtime.releaseNativeConversation('native-managed-route');
+      runtime.shutdown();
+    }
+  });
+
+  it('cancels only the exact in-flight native route entry and cannot resurrect it', async () => {
+    const { internals, runtime, session } = createRuntime();
+    const launchSnapshot: TestLaunchConfigSnapshot = {
+      allowBypassPermissions: false,
+      config: normalizeClaudeConfig({
+        authMode: 'none',
+        baseUrl: 'https://relay.example.com',
+        credentialAction: 'clear',
+        model: 'claude-opus-5',
+        preset: 'custom',
+        provider: 'gateway',
+      }),
+      storage: { revision: 'native-race' },
+    };
+    internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    internals.configStore.launchSnapshotIsCurrent = vi.fn(() => true);
+    const firstRoute = deferred<void>();
+    const secondRoute = deferred<void>();
+    internals.prepareRouteServices = vi
+      .fn()
+      .mockImplementationOnce(() => firstRoute.promise)
+      .mockImplementationOnce(() => secondRoute.promise);
+    const ownerId = 'native-race';
+
+    try {
+      const first = runtime.prepareNativeConversation(ownerId, session.cwd);
+      await vi.waitFor(() => expect(internals.prepareRouteServices).toHaveBeenCalledTimes(1));
+      await expect(runtime.prepareNativeConversation(ownerId, session.cwd)).rejects.toThrow(
+        '已经持有接入路由',
+      );
+
+      runtime.releaseNativeConversation(ownerId);
+      expect(internals.nativeRouteReservations.has(ownerId)).toBe(false);
+      const second = runtime.prepareNativeConversation(ownerId, session.cwd);
+      await vi.waitFor(() => expect(internals.prepareRouteServices).toHaveBeenCalledTimes(2));
+
+      firstRoute.resolve(undefined);
+      await expect(first).rejects.toThrow('接入路由准备已取消');
+      expect(internals.nativeRouteReservations.get(ownerId)?.phase).toBe('preparing');
+
+      secondRoute.resolve(undefined);
+      await expect(second).resolves.toMatchObject({ model: 'claude-opus-5' });
+      expect(internals.nativeRouteReservations.get(ownerId)?.phase).toBe('active');
+    } finally {
+      runtime.releaseNativeConversation(ownerId);
+      runtime.shutdown();
+    }
+  });
+
   it.each([
     [
       'gateway',
@@ -614,7 +745,10 @@ describe('Claude runtime launch configuration snapshots', () => {
 
     try {
       const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
-      const settings = JSON.parse(readFileSync(launchArtifacts(session).settingsPath, 'utf8')) as {
+      const replacement = preparedRuntime(internals, prepared.token);
+      const settings = JSON.parse(
+        readFileSync(launchArtifacts(replacement).settingsPath, 'utf8'),
+      ) as {
         env: Record<string, string>;
         model: string;
       };
@@ -630,8 +764,9 @@ describe('Claude runtime launch configuration snapshots', () => {
         CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
         CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
       });
-      expect(session.expectedModel).toBe('claude-opus-5');
-      expect(session.runtimeModel).toBe('claude-opus-5[1m]');
+      expect(replacement.expectedModel).toBe('claude-opus-5');
+      expect(replacement.runtimeModel).toBe('claude-opus-5[1m]');
+      expect(session.expectedModel).toBeUndefined();
       expect(launchSnapshot.config.model).toBe('claude-opus-5');
     } finally {
       runtime.shutdown();
@@ -709,7 +844,7 @@ describe('Claude runtime launch configuration snapshots', () => {
 
     try {
       const pending = runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
-      const rejection = expect(pending).rejects.toThrow('Claude 接入配置在启动准备期间已更新');
+      const rejection = expect(pending).rejects.toThrow('Claude 接入配置在授权期间已更新');
       await vi.waitFor(() => {
         expect(internals.prepareRouteServices).toHaveBeenCalledTimes(1);
       });
@@ -765,7 +900,10 @@ describe('Claude runtime launch configuration snapshots', () => {
         session.cwd,
         'fast',
       );
-      const settings = JSON.parse(readFileSync(launchArtifacts(session).settingsPath, 'utf8')) as {
+      const replacement = preparedRuntime(internals, prepared.token);
+      const settings = JSON.parse(
+        readFileSync(launchArtifacts(replacement).settingsPath, 'utf8'),
+      ) as {
         fastMode: boolean;
         model: string;
       };
@@ -786,269 +924,6 @@ describe('Claude runtime launch configuration snapshots', () => {
       expect(prepared.command).toBe(POWERSHELL_STARTUP_TRIGGER);
       expect(prepared.environment[POWERSHELL_STARTUP_COMMAND_ENV]).toContain(conversationId);
       expect(settings).toMatchObject({ fastMode: true, model: 'claude-opus-5' });
-    } finally {
-      runtime.shutdown();
-    }
-  });
-});
-
-describe('Claude runtime live model context', () => {
-  it('keeps a live extended session on the 1M runtime model after /model', async () => {
-    const { internals, runtime, session } = createRuntime();
-    session.claudeContextWindowMode = 'extended';
-    session.expectedModel = 'claude-opus-5';
-    session.runtimeModel = 'claude-opus-5[1m]';
-    runtime.bindPty(session.sessionId, 17);
-    const targetState = {
-      active: true,
-      cwd: session.cwd,
-      sessionId: session.sessionId,
-    } as Awaited<ReturnType<ClaudeRuntime['getState']>>;
-    vi.spyOn(runtime, 'getModelOptions').mockResolvedValue({
-      activeModel: 'claude-opus-5',
-      options: [
-        {
-          id: 'same-endpoint-sonnet',
-          label: 'claude-sonnet-5',
-          model: 'claude-sonnet-5',
-          providerLabel: '当前接入',
-          requiresRelaunch: false,
-          sameEndpoint: true,
-        },
-      ],
-    });
-    vi.spyOn(runtime, 'getState').mockResolvedValue(targetState);
-    const submit = vi.spyOn(internals, 'submitClaudeCommand').mockResolvedValue(undefined);
-
-    try {
-      await runtime.switchModel(session.sessionId, session.cwd, 'same-endpoint-sonnet');
-
-      expect(submit).toHaveBeenCalledWith(
-        session,
-        '/model claude-sonnet-5[1m]',
-        expect.any(Function),
-      );
-      expect(session.expectedModel).toBe('claude-sonnet-5');
-      expect(session.runtimeModel).toBe('claude-sonnet-5[1m]');
-    } finally {
-      runtime.shutdown();
-    }
-  });
-});
-
-describe('Claude runtime launch-owned artifacts', () => {
-  it('writes launch-scoped activity and PermissionRequest hooks with a bounded native fallback', async () => {
-    const { root, runtime, session } = createRuntime();
-    const activityEvents: string[] = [];
-    runtime.setRuntimeActivityHandler(path.join(root, 'activity.ps1'), (event) => {
-      activityEvents.push(event.event);
-    });
-    runtime.setPermissionRequestHook(path.join(root, 'permission.ps1'), () => ({
-      pipeName: 'claudedock-test-pipe',
-      token: 'test-token',
-    }));
-    try {
-      await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
-      const settings = JSON.parse(readFileSync(launchArtifacts(session).settingsPath, 'utf8')) as {
-        hooks: Record<
-          string,
-          Array<{ hooks: Array<{ command: string; timeout?: number; type: string }> }>
-        >;
-      };
-      for (const event of [
-        'PermissionRequest',
-        'SessionEnd',
-        'Stop',
-        'StopFailure',
-        'SubagentStart',
-        'SubagentStop',
-        'TaskCreated',
-        'TaskCompleted',
-        'UserPromptSubmit',
-      ]) {
-        expect(settings.hooks[event]).toBeDefined();
-      }
-      const permission = settings.hooks.PermissionRequest?.[0]?.hooks[0];
-      expect(permission).toMatchObject({ timeout: 600, type: 'command' });
-      expect(permission?.command).toContain('-PipeName "claudedock-test-pipe"');
-      expect(permission?.command).toContain(`-LaunchGeneration ${session.launchGeneration}`);
-      runtime.bindPty(session.sessionId, 15);
-      expect(activityEvents).toContain('SessionStart');
-    } finally {
-      runtime.shutdown();
-    }
-  });
-
-  it('keeps delayed G1 signal, turn-stop, and metrics writes isolated from bound G2', async () => {
-    const { internals, runtime, session } = createRuntime();
-    try {
-      await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
-      const first = launchArtifacts(session);
-      const firstSettings = JSON.parse(readFileSync(first.settingsPath, 'utf8')) as {
-        hooks: unknown;
-        statusLine: { command: string };
-      };
-      expect(firstSettings.statusLine.command).toContain(first.metricsPath.replaceAll('\\', '/'));
-      expect(JSON.stringify(firstSettings.hooks)).toContain(first.signalPath.replaceAll('\\', '/'));
-      expect(JSON.stringify(firstSettings.hooks)).toContain(
-        first.turnStopPath.replaceAll('\\', '/'),
-      );
-      runtime.bindPty(session.sessionId, 11);
-
-      await runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
-      const second = launchArtifacts(session);
-      runtime.bindPty(session.sessionId, 12);
-      expect(second.launchGeneration).toBeGreaterThan(first.launchGeneration);
-      expect(second.artifactDirectory).not.toBe(first.artifactDirectory);
-      expect(second.metricsPath).not.toBe(first.metricsPath);
-      expect(second.signalPath).not.toBe(first.signalPath);
-      expect(second.turnStopPath).not.toBe(first.turnStopPath);
-
-      writeFileSync(
-        first.signalPath,
-        JSON.stringify({ event: 'PostCompact', signaledAt: Date.now() }),
-        'utf8',
-      );
-      writeFileSync(
-        first.turnStopPath,
-        JSON.stringify({ event: 'Stop', signaledAt: Date.now() }),
-        'utf8',
-      );
-      writeFileSync(
-        first.metricsPath,
-        JSON.stringify({
-          capturedAt: Date.now(),
-          effortLevel: 'max',
-          modelId: 'stale-g1-model',
-        }),
-        'utf8',
-      );
-
-      const waitingForCompact = vi.fn();
-      const restoreEffort = vi.fn(async () => undefined);
-      internals.restoreEffortAfterCompatibilityTurn = restoreEffort;
-      session.waitingForCompact = waitingForCompact;
-      session.effortCompatibility = {
-        detectedAt: Date.now() - 1_000,
-        maximum: 'high',
-        recovery: 'recovered',
-        rejectedLevel: 'max',
-      };
-      session.effortRestoreAfterTurn = 'max';
-      session.pendingEffortRestore = 'max';
-      session.lastApiError = {
-        category: 'general',
-        detectedAt: Date.now() - 1_000,
-        detail: 'G2 error',
-      };
-
-      await internals.pollMetricsOnce();
-
-      expect(waitingForCompact).not.toHaveBeenCalled();
-      expect(restoreEffort).not.toHaveBeenCalled();
-      expect(session.metrics).toBeUndefined();
-      expect(session.turnStopSeenAt).toBeUndefined();
-      expect(session.effortRestoreAfterTurn).toBe('max');
-      expect(session.pendingEffortRestore).toBe('max');
-      expect(session.lastApiError?.detail).toBe('G2 error');
-
-      writeFileSync(
-        second.signalPath,
-        JSON.stringify({ event: 'PostCompact', signaledAt: Date.now() + 1 }),
-        'utf8',
-      );
-      writeFileSync(
-        second.metricsPath,
-        JSON.stringify({ capturedAt: Date.now() + 1, modelId: 'current-g2-model' }),
-        'utf8',
-      );
-      session.pendingEffortRestore = undefined;
-      await internals.pollMetricsOnce();
-
-      expect(waitingForCompact).toHaveBeenCalledTimes(1);
-      expect(session.metrics?.modelId).toBe('current-g2-model');
-    } finally {
-      runtime.shutdown();
-    }
-  });
-
-  it('discards G1 artifact reads that finish after G2 prepare and bind', async () => {
-    const { internals, runtime, session } = createRuntime();
-    try {
-      await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
-      const first = launchArtifacts(session);
-      runtime.bindPty(session.sessionId, 21);
-      session.waitingForCompact = vi.fn();
-      session.effortCompatibility = {
-        detectedAt: Date.now() - 1_000,
-        maximum: 'high',
-        recovery: 'recovered',
-        rejectedLevel: 'max',
-      };
-      session.effortRestoreAfterTurn = 'max';
-
-      const pendingReads = new Map(
-        [first.signalPath, first.turnStopPath, first.metricsPath].map((artifactPath) => [
-          artifactPath,
-          deferredString(),
-        ]),
-      );
-      const readLaunchArtifact = vi.fn((artifactPath: string) => {
-        const pending = pendingReads.get(artifactPath);
-        return pending
-          ? pending.promise
-          : Promise.reject(new Error(`Unexpected artifact read: ${artifactPath}`));
-      });
-      internals.readLaunchArtifact = readLaunchArtifact;
-      const stalePoll = internals.pollMetricsOnce();
-      await vi.waitFor(() => {
-        expect(readLaunchArtifact).toHaveBeenCalledTimes(3);
-      });
-
-      await runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
-      const second = launchArtifacts(session);
-      runtime.bindPty(session.sessionId, 22);
-      const waitingForCompact = vi.fn();
-      const restoreEffort = vi.fn(async () => undefined);
-      internals.restoreEffortAfterCompatibilityTurn = restoreEffort;
-      session.waitingForCompact = waitingForCompact;
-      session.effortCompatibility = {
-        detectedAt: Date.now() - 500,
-        maximum: 'high',
-        recovery: 'recovered',
-        rejectedLevel: 'xhigh',
-      };
-      session.effortRestoreAfterTurn = 'xhigh';
-      session.pendingEffortRestore = 'xhigh';
-      session.lastApiError = {
-        category: 'general',
-        detectedAt: Date.now() - 500,
-        detail: 'replacement error',
-      };
-
-      pendingReads
-        .get(first.signalPath)
-        ?.resolve(JSON.stringify({ event: 'PostCompact', signaledAt: Date.now() }));
-      pendingReads
-        .get(first.turnStopPath)
-        ?.resolve(JSON.stringify({ event: 'Stop', signaledAt: Date.now() }));
-      pendingReads.get(first.metricsPath)?.resolve(
-        JSON.stringify({
-          capturedAt: Date.now(),
-          effortLevel: 'max',
-          modelId: 'in-flight-g1-model',
-        }),
-      );
-      await stalePoll;
-
-      expect(second.launchGeneration).toBeGreaterThan(first.launchGeneration);
-      expect(waitingForCompact).not.toHaveBeenCalled();
-      expect(restoreEffort).not.toHaveBeenCalled();
-      expect(session.metrics).toBeUndefined();
-      expect(session.turnStopSeenAt).toBeUndefined();
-      expect(session.effortRestoreAfterTurn).toBe('xhigh');
-      expect(session.pendingEffortRestore).toBe('xhigh');
-      expect(session.lastApiError?.detail).toBe('replacement error');
     } finally {
       runtime.shutdown();
     }

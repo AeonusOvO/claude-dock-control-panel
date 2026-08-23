@@ -3,7 +3,13 @@ import type {
   ClaudeLaunchAttemptToken,
   ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
-import type { ClaudeProjectState, TerminalStatus, WorkspaceState } from '../../../shared/contracts';
+import type {
+  ClaudeLaunchOutcome,
+  ClaudeLaunchPreflightDecisionOutcome,
+  ClaudeProjectState,
+  TerminalStatus,
+  WorkspaceState,
+} from '../../../shared/contracts';
 
 export interface TerminalIoDependencies {
   activeStatus: () => TerminalStatus | undefined;
@@ -18,6 +24,10 @@ export interface TerminalIoDependencies {
   hideConversationContextMenu: () => void;
   loadClaudeState: (sessionId: string) => Promise<void>;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  resolveClaudeLaunchDecision: (
+    token: ClaudeLaunchAttemptToken,
+    paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,
+  ) => Promise<Exclude<ClaudeLaunchPreflightDecisionOutcome, { status: 'paused' }>>;
   renderClaudeLaunchResult: (
     token: ClaudeLaunchAttemptToken,
     state: ClaudeProjectState,

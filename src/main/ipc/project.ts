@@ -1,6 +1,6 @@
 import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
-import type { PtyGeneration, WorkspaceResult, WorkspaceState } from '../../shared/contracts';
+import type { WorkspaceResult, WorkspaceState } from '../../shared/contracts';
 import { isValidClaudeSessionId, normalizeClaudeSessionTitle } from '../claude/session-manager';
 import type { ClaudeConversationLifecycleCoordinator } from '../claude/conversation-lifecycle';
 import type { ConversationOwner, ConversationOwnerRegistry } from '../conversation/owner-registry';
@@ -15,10 +15,9 @@ import type { Registry } from '../infra/registry';
 import { CLAUDE_RUNTIME, CODEX_RUNTIME, RUNTIME_PROCESS_REGISTRY } from '../infra/service-tokens';
 import type { AgentRuntimeStore } from '../runtime/store';
 import type { WorkspaceStore } from '../stores/workspace';
-import {
-  cleanupFailedRuntimeLaunch,
-  type FailedRuntimeLaunchCleanupDependencies,
-  type RestartRuntimeTerminal,
+import type {
+  FailedRuntimeLaunchCleanupDependencies,
+  RestartRuntimeTerminal,
 } from '../terminal/lifecycle';
 import {
   type DescribeWorkspace,
@@ -37,8 +36,12 @@ export interface ProjectIpcDependencies {
   describeWorkspace: DescribeWorkspace;
   failedRuntimeLaunchCleanupDependencies: FailedRuntimeLaunchCleanupDependencies;
   failedWorkspaceResult: (error: unknown) => WorkspaceResult;
-  guards: Pick<MainGuards, 'requireClaudeRuntime' | 'requireCodexRuntime' | 'validateSender'>;
+  guards: Pick<
+    MainGuards,
+    'requireClaudeRuntime' | 'requireCodexRuntime' | 'validateSender' | 'withOfficialProviderAccess'
+  >;
   invalidateAndWaitForDevelopmentSessionOperation: (sessionId: string) => Promise<void>;
+  invalidateLaunchPreflightDecision: (sessionId: string) => void;
   managedConfigTransactions: SessionConfigTransactionCoordinator;
   projectDirectoryLifecycle: ProjectDirectoryLifecycleCoordinator;
   releaseTerminalConversationOwner: (sessionId: string) => void;
@@ -52,18 +55,12 @@ export interface ProjectIpcDependencies {
 
 const registerStoredConversationIpc = ({
   agentRuntimeStore,
-  claudeConversationLifecycle,
   conversationOwnerRegistry,
   describeWorkspace,
-  failedRuntimeLaunchCleanupDependencies,
   failedWorkspaceResult,
-  guards: { requireClaudeRuntime, validateSender },
+  guards: { validateSender },
   managedConfigTransactions,
   projectDirectoryLifecycle,
-  releaseTerminalConversationOwner,
-  restartRuntimeTerminal,
-  terminalConversationOwners,
-  withDevelopmentSessionOperation,
   workspace,
   workspaceStore,
 }: ProjectIpcDependencies): void => {
@@ -77,13 +74,11 @@ const registerStoredConversationIpc = ({
         }
         const resolved = resolveDirectory(validateProjectPath(projectPath));
         return await projectDirectoryLifecycle.runOpen(resolved, async (ownership) => {
-          const runtime = requireClaudeRuntime();
           ownership.assertCurrent();
           managedConfigTransactions.assertDevelopmentOperationAllowed(resolved);
           if (agentRuntimeStore.get(resolved) !== 'claude') {
             throw new Error('这是 Claude Code 历史会话，请先将该项目切换为 Claude Code。');
           }
-          claudeConversationLifecycle.assertLaunchAllowed(resolved, 'resume', conversationId);
 
           const existingOwner = conversationOwnerRegistry.ownerFor({
             conversationId,
@@ -104,88 +99,17 @@ const registerStoredConversationIpc = ({
             throw new Error('该对话已在原生界面运行，请切换到现有对话。');
           }
 
-          // Different UUIDs may run side by side, but the same canonical transcript has one owner.
+          // Opening the tab is intentionally separate from launching Claude. The renderer starts the
+          // exact transcript through `claude:launch-with-session`, so provider blocks use the same
+          // main-owned pause/recheck/bypass coordinator and exact prepared-token handoff as every
+          // other transcript resume.
           workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`);
           const openedSessionId = workspace.getState().activeSessionId;
           if (!openedSessionId) {
             throw new Error('无法创建历史会话终端。');
           }
-          const predictedGeneration =
-            Number(workspace.getStatus(openedSessionId).ptyGeneration) + 1;
-          const terminalOwner: ConversationOwner = {
-            conversationId: conversationId.toLowerCase(),
-            generation: predictedGeneration,
-            ownerId: `terminal:${openedSessionId}`,
-            ownerKind: 'terminal',
-            phase: 'starting',
-            projectPath: resolved,
-            runtime: 'claude',
-          };
-          const ownerClaim = conversationOwnerRegistry.claim(terminalOwner);
-          if (ownerClaim.status === 'conflict') {
-            workspace.close(openedSessionId);
-            throw new Error('该对话刚刚被另一个界面接管，已取消重复恢复。');
-          }
-          terminalConversationOwners.set(openedSessionId, ownerClaim.owner);
           ownership.assertCurrent();
           workspaceStore.addProject(resolved);
-
-          await withDevelopmentSessionOperation(openedSessionId, async (assertCurrent) =>
-            claudeConversationLifecycle.runResume(
-              resolved,
-              conversationId,
-              openedSessionId,
-              async (conversationOwnership) => {
-                const assertOpenCurrent = (): void => {
-                  ownership.assertCurrent();
-                  conversationOwnership.assertCurrent();
-                  assertCurrent();
-                };
-                let launchPrepared = false;
-                let ownedGeneration: PtyGeneration | undefined;
-                try {
-                  const prepared = await runtime.prepareLaunchWithSession(
-                    openedSessionId,
-                    resolved,
-                    conversationId,
-                  );
-                  launchPrepared = true;
-                  ownedGeneration = prepared.predecessorPtyGeneration;
-                  assertOpenCurrent();
-                  restartRuntimeTerminal(
-                    runtime,
-                    openedSessionId,
-                    prepared.environment,
-                    prepared.command,
-                    '无法为 Claude Code 启动安全终端。',
-                    assertOpenCurrent,
-                    (ptyGeneration) => {
-                      ownedGeneration = ptyGeneration;
-                    },
-                  );
-                } catch (error) {
-                  if (launchPrepared || ownedGeneration !== undefined) {
-                    cleanupFailedRuntimeLaunch(
-                      failedRuntimeLaunchCleanupDependencies,
-                      runtime,
-                      openedSessionId,
-                      ownedGeneration,
-                    );
-                  }
-                  releaseTerminalConversationOwner(openedSessionId);
-                  if (workspace.hasSession(openedSessionId)) workspace.close(openedSessionId);
-                  throw error;
-                }
-              },
-            ),
-          );
-          ownership.assertCurrent();
-          conversationOwnerRegistry.updatePhase(
-            terminalOwner,
-            terminalOwner.ownerId,
-            terminalOwner.generation,
-            'active',
-          );
           return { ok: true, state: describeWorkspace() };
         });
       } catch (error) {
@@ -204,6 +128,7 @@ export const registerProjectIpc = (dependencies: ProjectIpcDependencies): void =
     failedWorkspaceResult,
     guards: { requireClaudeRuntime, requireCodexRuntime, validateSender },
     invalidateAndWaitForDevelopmentSessionOperation,
+    invalidateLaunchPreflightDecision,
     projectDirectoryLifecycle,
     services,
     workspace,
@@ -235,6 +160,7 @@ export const registerProjectIpc = (dependencies: ProjectIpcDependencies): void =
     validateSender(event);
     try {
       const validatedSessionId = validateSessionId(sessionId);
+      invalidateLaunchPreflightDecision(validatedSessionId);
       await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId);
       await services.resolve(RUNTIME_PROCESS_REGISTRY).terminateSession(validatedSessionId);
       requireClaudeRuntime().closeSession(validatedSessionId);
@@ -285,7 +211,10 @@ export const registerProjectIpc = (dependencies: ProjectIpcDependencies): void =
         },
         coordinator: projectDirectoryLifecycle,
         cwd: target,
-        invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,
+        invalidateAndWait: (sessionId) => {
+          invalidateLaunchPreflightDecision(sessionId);
+          return invalidateAndWaitForDevelopmentSessionOperation(sessionId);
+        },
         isSessionInDirectory: (sessionId, cwd) =>
           workspace.hasSession(sessionId) && sameDirectory(workspace.getStatus(sessionId).cwd, cwd),
         kind: 'close',
@@ -317,7 +246,10 @@ export const registerProjectIpc = (dependencies: ProjectIpcDependencies): void =
         },
         coordinator: projectDirectoryLifecycle,
         cwd: target,
-        invalidateAndWait: invalidateAndWaitForDevelopmentSessionOperation,
+        invalidateAndWait: (sessionId) => {
+          invalidateLaunchPreflightDecision(sessionId);
+          return invalidateAndWaitForDevelopmentSessionOperation(sessionId);
+        },
         isSessionInDirectory: (sessionId, cwd) =>
           workspace.hasSession(sessionId) && sameDirectory(workspace.getStatus(sessionId).cwd, cwd),
         kind: 'forget',

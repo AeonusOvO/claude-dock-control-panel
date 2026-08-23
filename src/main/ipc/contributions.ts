@@ -4,6 +4,7 @@ import { registerBusyIpc } from './busy';
 import { registerChatIpc } from './chat';
 import { registerClaudeConnectionIpc } from './claude-connection';
 import { registerClaudeControlsIpc } from './claude-controls';
+import { registerClaudeExecutionSettingsIpc } from './claude-execution-settings';
 import { registerClaudeLaunchIpc } from './claude-launch';
 import { registerClaudePluginIpc } from './claude-plugin';
 import { registerClaudeStateIpc } from './claude-state';
@@ -38,6 +39,7 @@ export const MAIN_IPC_CONTRIBUTIONS = [
   registerProjectIpc,
   registerTerminalIpc,
   registerClaudeStateIpc,
+  registerClaudeExecutionSettingsIpc,
   registerCodexIpc,
   registerManagedChatGptIpc,
   registerRouterIpc,

@@ -6,6 +6,11 @@ import type {
 } from '../../shared/contracts';
 import { officialNetworkProviderForClaudePreset } from '../../shared/claude/providers';
 import { createFailureReporter } from '../infra/logger';
+import { ProviderAccessBlockedError } from '../network/provider-access-guard';
+import {
+  ProviderModelDiscoveryError,
+  resolveProviderModelDiscoveryTarget,
+} from '../network/provider-model-discovery';
 import type { TerminalWorkspace } from '../terminal/workspace';
 import {
   validateClaudeConfigInput,
@@ -17,22 +22,50 @@ import type { MainGuards } from './guards';
 export interface ClaudeStateIpcDependencies {
   guards: Pick<
     MainGuards,
-    | 'assertOfficialProviderAllowed'
     | 'requireClaudeRuntime'
     | 'requireManagedChatGptGateway'
     | 'validateSender'
+    | 'withOfficialProviderAccess'
   >;
   workspace: TerminalWorkspace;
 }
 
 const reportClaudeStateFailure = createFailureReporter('claude-connection');
+const OFFICIAL_DISCOVERY_BLOCKED_MESSAGE =
+  '官方模型列表访问已被网络预检阻止，请在网络预检详情中重新检查。';
+const PROVIDER_DISCOVERY_FAILED_MESSAGE = '无法读取当前接口的模型列表。';
+
+const providerModelDiscoveryFailure = (error: unknown): ClaudeProviderModelDiscoveryResult => {
+  if (error instanceof ProviderAccessBlockedError) {
+    const failure = reportClaudeStateFailure('environment', OFFICIAL_DISCOVERY_BLOCKED_MESSAGE);
+    return {
+      code: failure.code,
+      error: failure.message,
+      kind: failure.kind,
+      message: failure.message,
+      models: [],
+      ok: false,
+    };
+  }
+
+  const message =
+    error instanceof ProviderModelDiscoveryError
+      ? error.message
+      : PROVIDER_DISCOVERY_FAILED_MESSAGE;
+  return {
+    ...reportClaudeStateFailure('external-service', message),
+    error: message,
+    models: [],
+    ok: false,
+  };
+};
 
 export const registerClaudeStateIpc = ({
   guards: {
-    assertOfficialProviderAllowed,
     requireClaudeRuntime,
     requireManagedChatGptGateway,
     validateSender,
+    withOfficialProviderAccess,
   },
   workspace,
 }: ClaudeStateIpcDependencies): void => {
@@ -50,27 +83,43 @@ export const registerClaudeStateIpc = ({
   });
   ipcMain.handle(
     CHANNELS.CLAUDE_PROVIDER_MODELS_DISCOVER,
-    async (event, rawInput: unknown): Promise<ClaudeProviderModelDiscoveryResult> => {
+    async (
+      event,
+      sessionId: unknown,
+      rawInput: unknown,
+    ): Promise<ClaudeProviderModelDiscoveryResult> => {
       validateSender(event);
       try {
         const input = validateProviderModelDiscoveryInput(rawInput);
-        const models = await requireClaudeRuntime().discoverProviderModels(
-          input.baseUrl,
-          input.credential,
+        const validatedSessionId = validateSessionId(sessionId);
+        const status = workspace.getStatus(validatedSessionId);
+        const target = resolveProviderModelDiscoveryTarget(input.baseUrl);
+        const discover = async (): Promise<ClaudeProviderModelDiscoveryResult> => {
+          const models = await requireClaudeRuntime().discoverProviderModels(
+            target,
+            input.credential,
+          );
+          return {
+            message: `已从当前接口读取 ${models.length} 个可用模型。`,
+            models,
+            ok: true,
+          };
+        };
+        if (!target.officialProvider) {
+          return await discover();
+        }
+        return await withOfficialProviderAccess(
+          {
+            action: 'first-request',
+            cwd: status.cwd,
+            networkScope: 'application',
+            provider: target.officialProvider,
+            target: { process: 'application', url: target.endpoint },
+          },
+          discover,
         );
-        return {
-          message: `已从当前接口读取 ${models.length} 个可用模型。`,
-          models,
-          ok: true,
-        };
       } catch (error) {
-        const message = error instanceof Error ? error.message : '无法读取当前接口的模型列表。';
-        return {
-          ...reportClaudeStateFailure('external-service', message, error),
-          error: message,
-          models: [],
-          ok: false,
-        };
+        return providerModelDiscoveryFailure(error);
       }
     },
   );
@@ -88,17 +137,27 @@ export const registerClaudeStateIpc = ({
       const status = workspace.getStatus(validatedSessionId);
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        // The ChatGPT subscription route is an app-owned loopback gateway. A saved project must be
-        // able to survive an app or Windows restart without presenting the stopped child process as
-        // a broken user configuration. Start it before both manual and automatic connection tests.
-        if (validatedInput.preset === 'chatgpt-subscription') {
-          await requireManagedChatGptGateway().ensureRunning();
-        }
         const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
-        if (officialProvider) {
-          await assertOfficialProviderAllowed(officialProvider, 'first-request', status.cwd);
+        const runtime = requireClaudeRuntime();
+        const testConnection = async (): Promise<ClaudeConnectionTestResult> => {
+          // Readiness can make the sidecar contact its upstream provider, so it must remain behind the
+          // same official-network decision as the real connection request.
+          if (validatedInput.preset === 'chatgpt-subscription') {
+            await requireManagedChatGptGateway().ensureRunning();
+          }
+          return runtime.testConnection(status.cwd, validatedInput);
+        };
+        if (!officialProvider) {
+          return await testConnection();
         }
-        return await requireClaudeRuntime().testConnection(status.cwd, validatedInput);
+        return await withOfficialProviderAccess(
+          {
+            action: 'first-request',
+            cwd: status.cwd,
+            provider: officialProvider,
+          },
+          testConnection,
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法测试 Claude 接入。';
         return {

@@ -1,7 +1,9 @@
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
-import type { NetworkPreflightAction, NetworkProviderId } from '../../shared/contracts';
+import type { NetworkPreflightResult } from '../../shared/contracts';
 import type { RuntimeEffects } from '../app/profile';
+import type { MainState } from './context';
 import type { CcSwitchAdapter } from '../claude/cc-switch-adapter';
+import type { ClaudeExecutionSettingsService } from '../claude/execution-settings-service';
 import type { ManagedChatGptGateway } from '../claude/managed-chatgpt-gateway';
 import type { ClaudeRuntime } from '../claude/runtime';
 import type { CodexRuntime } from '../codex/runtime';
@@ -9,8 +11,9 @@ import type { NativeConversationService } from '../conversation/service';
 import type { DownloadEngine } from '../download/engine';
 import type { Registry } from '../infra/registry';
 import {
-  APPLICATION_PROXY_STORE,
+  APPLICATION_PROXY_COORDINATOR,
   CC_SWITCH_ADAPTER,
+  CLAUDE_EXECUTION_SETTINGS_SERVICE,
   CLAUDE_RUNTIME,
   CODEX_RUNTIME,
   DOWNLOAD_ENGINE,
@@ -23,8 +26,8 @@ import {
 } from '../infra/service-tokens';
 import type { McpManager } from '../mcp/manager';
 import type { NetworkPreflightService } from '../network/preflight-service';
-import type { ProviderAccessGuard } from '../network/provider-access-guard';
-import type { ApplicationProxyStore } from '../proxy/application-proxy-store';
+import type { ProviderAccessGuard, ProviderAccessRequest } from '../network/provider-access-guard';
+import type { ApplicationProxyCoordinator } from '../proxy/application-proxy-coordinator';
 
 /*
  * Every handler starts by rejecting anything that is not the one renderer we own. Service accessors are
@@ -35,17 +38,19 @@ import type { ApplicationProxyStore } from '../proxy/application-proxy-store';
 export interface MainGuards {
   assertApplicationUpdatesAllowed: () => void;
   assertExternalRoutingWritesAllowed: () => void;
-  /** Rejects a request the access guard does not allow to reach an official endpoint. */
-  assertOfficialProviderAllowed: (
-    provider: NetworkProviderId,
-    action: NetworkPreflightAction,
-    cwd?: string,
-    networkScope?: 'conversation',
-  ) => Promise<void>;
+  /** Rejects process or adapter admission once controlled quit cleanup has started. */
+  assertLaunchAdmissionAllowed: () => void;
+  /** Keeps the checked network route stable until the authorized operation finishes. */
+  withOfficialProviderAccess: <T>(
+    request: ProviderAccessRequest,
+    operation: (result: NetworkPreflightResult) => PromiseLike<T> | T,
+    signal?: AbortSignal,
+  ) => Promise<T>;
   assertPluginMutationsAllowed: () => void;
   assertRealRuntimeAllowed: () => void;
-  requireApplicationProxyStore: () => ApplicationProxyStore;
+  requireApplicationProxyCoordinator: () => ApplicationProxyCoordinator;
   requireCcSwitchAdapter: () => CcSwitchAdapter;
+  requireClaudeExecutionSettingsService: () => ClaudeExecutionSettingsService;
   requireClaudeRuntime: () => ClaudeRuntime;
   requireCodexRuntime: () => CodexRuntime;
   requireDownloadEngine: () => DownloadEngine;
@@ -58,7 +63,11 @@ export interface MainGuards {
   validateSender: (event: IpcMainEvent | IpcMainInvokeEvent) => void;
 }
 
-export const createMainGuards = (services: Registry, effects: RuntimeEffects): MainGuards => {
+export const createMainGuards = (
+  services: Registry,
+  effects: RuntimeEffects,
+  state?: Pick<MainState, 'isQuitting' | 'quitCleanupInProgress'>,
+): MainGuards => {
   const assertRuntimeEffect = (allowed: boolean, message: string): void => {
     if (!allowed) throw new Error(message);
   };
@@ -80,10 +89,14 @@ export const createMainGuards = (services: Registry, effects: RuntimeEffects): M
         '隔离运行配置禁止写入真实接入、路由或 MCP 配置。',
       ),
 
-    assertOfficialProviderAllowed: async (provider, action, cwd, networkScope): Promise<void> => {
-      void networkScope;
-      await requireProviderAccessGuard().assertAllowed(provider, action, cwd);
+    assertLaunchAdmissionAllowed: (): void => {
+      if (state?.quitCleanupInProgress || state?.isQuitting) {
+        throw new Error('应用正在退出，无法启动新的 Claude 会话。');
+      }
     },
+
+    withOfficialProviderAccess: (request, operation, signal) =>
+      requireProviderAccessGuard().withAllowed(request, operation, signal),
 
     assertPluginMutationsAllowed: (): void =>
       assertRuntimeEffect(
@@ -97,10 +110,13 @@ export const createMainGuards = (services: Registry, effects: RuntimeEffects): M
         '隔离运行配置禁止启动真实 PowerShell、Claude Code 或 Codex。',
       ),
 
-    requireApplicationProxyStore: (): ApplicationProxyStore =>
-      services.resolve(APPLICATION_PROXY_STORE),
+    requireApplicationProxyCoordinator: (): ApplicationProxyCoordinator =>
+      services.resolve(APPLICATION_PROXY_COORDINATOR),
 
     requireCcSwitchAdapter: (): CcSwitchAdapter => services.resolve(CC_SWITCH_ADAPTER),
+
+    requireClaudeExecutionSettingsService: (): ClaudeExecutionSettingsService =>
+      services.resolve(CLAUDE_EXECUTION_SETTINGS_SERVICE),
 
     requireClaudeRuntime,
 

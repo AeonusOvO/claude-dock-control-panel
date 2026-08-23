@@ -76,6 +76,16 @@ const createScenario = async (completionFailure?: Error) => {
   const { registerManagedChatGptIpc } = await import('../../src/main/ipc/managed-chatgpt');
 
   const calls: string[] = [];
+  const withOfficialProviderAccess = vi.fn(
+    async (_request: unknown, operation: () => Promise<unknown> | unknown) => {
+      calls.push('guard:enter');
+      try {
+        return await operation();
+      } finally {
+        calls.push('guard:exit');
+      }
+    },
+  );
   const before: StoredProfile = {
     config: { model: 'legacy-model', modelFast: 'legacy-fast', preset: 'custom' },
     credential: 'legacy-token',
@@ -121,6 +131,7 @@ const createScenario = async (completionFailure?: Error) => {
       return stateFromProfile();
     }),
     isActive: vi.fn(() => true),
+    mergeConfigCompletionSnapshot: vi.fn((committed: StoredProfile) => committed),
     prepareConnectionConfig: vi.fn(async (input) => {
       calls.push('transaction:prepare');
       return { input } as PreparedClaudeConfigSave;
@@ -206,7 +217,7 @@ const createScenario = async (completionFailure?: Error) => {
       stopIfGeneration: workspace.stopIfGeneration,
     },
     guards: {
-      assertOfficialProviderAllowed: vi.fn(async () => undefined),
+      withOfficialProviderAccess,
       requireClaudeRuntime: vi.fn(() => runtime),
       requireManagedChatGptGateway: vi.fn(() => gateway),
       validateSender: vi.fn(),
@@ -222,11 +233,7 @@ const createScenario = async (completionFailure?: Error) => {
     workspace: workspace as never,
   });
 
-  const result = await ipc.invoke(
-    CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP,
-    'session-1',
-    false,
-  );
+  const result = await ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, 'session-1');
   return {
     before,
     calls,
@@ -236,6 +243,7 @@ const createScenario = async (completionFailure?: Error) => {
     restoredSnapshots,
     result,
     runtime,
+    withOfficialProviderAccess,
     workspace,
   };
 };
@@ -254,6 +262,10 @@ describe('managed ChatGPT route cutover', () => {
       ok: true,
       projectState: { config: { model: 'gpt-5.6-sol', preset: 'chatgpt-subscription' } },
     });
+    expect(scenario.withOfficialProviderAccess).toHaveBeenCalledWith(
+      { action: 'login', cwd: 'D:\\Project', provider: 'openai-codex' },
+      expect.any(Function),
+    );
     expect(scenario.workspace.stopIfGeneration).toHaveBeenCalledWith('session-1', 7);
     expect(scenario.runtime.setInactive).toHaveBeenCalledWith('session-1', 7);
     expect(scenario.runtime.prepareLaunch).toHaveBeenCalledWith(
@@ -262,6 +274,7 @@ describe('managed ChatGPT route cutover', () => {
       'continue',
     );
 
+    const guardEnter = callIndex(scenario.calls, 'guard:enter');
     const stop = callIndex(scenario.calls, 'legacy:stop:7');
     const inactive = callIndex(scenario.calls, 'legacy:set-inactive:7');
     const setup = callIndex(scenario.calls, 'managed:setup');
@@ -269,12 +282,15 @@ describe('managed ChatGPT route cutover', () => {
     const complete = callIndex(scenario.calls, 'transaction:complete');
     const prepareResume = callIndex(scenario.calls, 'resume:prepare:chatgpt-subscription');
     const restart = callIndex(scenario.calls, 'resume:restart:chatgpt-subscription');
+    const guardExit = callIndex(scenario.calls, 'guard:exit');
+    expect(guardEnter).toBeLessThan(stop);
     expect(stop).toBeLessThan(inactive);
     expect(inactive).toBeLessThan(setup);
     expect(setup).toBeLessThan(commit);
     expect(commit).toBeLessThan(complete);
     expect(complete).toBeLessThan(prepareResume);
     expect(prepareResume).toBeLessThan(restart);
+    expect(restart).toBeLessThan(guardExit);
     expect(scenario.calls).not.toContain('resume:prepare:custom');
     expect(scenario.result.message).toContain('旧路由已停止');
   });
@@ -289,14 +305,23 @@ describe('managed ChatGPT route cutover', () => {
       ok: false,
       projectState: { config: { model: 'legacy-model', preset: 'custom' } },
     });
+    expect(scenario.withOfficialProviderAccess).toHaveBeenCalledWith(
+      { action: 'login', cwd: 'D:\\Project', provider: 'openai-codex' },
+      expect.any(Function),
+    );
     expect(scenario.profile).toEqual(scenario.before);
     expect(scenario.restoredSnapshots).toEqual([scenario.before]);
     expect(scenario.publishedStates).toHaveLength(1);
     expect(scenario.publishedStates[0]).toMatchObject({
       config: { model: 'legacy-model', preset: 'custom' },
     });
-    expect(scenario.calls).toContain('transaction:restore');
-    expect(scenario.calls).toContain('transaction:publish-restored');
+    const guardEnter = callIndex(scenario.calls, 'guard:enter');
+    const restore = callIndex(scenario.calls, 'transaction:restore');
+    const publishRestored = callIndex(scenario.calls, 'transaction:publish-restored');
+    const guardExit = callIndex(scenario.calls, 'guard:exit');
+    expect(guardEnter).toBeLessThan(restore);
+    expect(restore).toBeLessThan(publishRestored);
+    expect(publishRestored).toBeLessThan(guardExit);
     expect(scenario.runtime.prepareLaunch).not.toHaveBeenCalled();
     expect(scenario.calls.some((call) => call.startsWith('resume:restart:'))).toBe(false);
   });

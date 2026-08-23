@@ -26,7 +26,6 @@ import {
 import { parseClaudePermissionMode } from '../../shared/claude/permission-mode';
 import { ConversationPreferencesStore, isConversationId } from '../conversation/preferences-store';
 import { ProviderResourceUsageService } from '../network/provider-resource-usage';
-import type { ClaudeLaunchConfigSnapshot } from './config-store';
 import { MODEL_NAME_PATTERN, type NormalizedClaudeConfig } from './configuration';
 import {
   classifyModelSpeed,
@@ -37,6 +36,7 @@ import { ModelSpeedPreferencesStore } from './model-speed-store';
 import { ClaudeRuntimeConnectionConfig } from './runtime-connection-config';
 import { describeEndpoint, endpointKey } from './runtime-connection';
 import type {
+  ClaudeLaunchAuthorization,
   ClaudeLaunchOverrides,
   PreparedClaudeLaunch,
   PreparedClaudeSpeedRelaunch,
@@ -85,9 +85,8 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       ptyGeneration: PtyGeneration,
     ) => Promise<ClaudePermissionMode | undefined>,
     private readonly managedChatGptGatewayInstalledVersion: () => string | undefined,
-    ensureManagedChatGptGatewayReady: () => Promise<void>,
+    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
     fetchImplementation: typeof fetch,
-    applicationVersion: string | undefined,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void,
     stopManagedChatGptGateway: () => Promise<void> | void,
     routerCommandEnvironment: () => Record<string, null | string | undefined>,
@@ -96,7 +95,6 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       userDataPath,
       ensureManagedChatGptGatewayReady,
       fetchImplementation,
-      applicationVersion,
       onRouterOperationProgress,
       stopManagedChatGptGateway,
       routerCommandEnvironment,
@@ -115,7 +113,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     resumeSessionId?: string,
     startMode?: ClaudePermissionMode,
     overrides?: ClaudeLaunchOverrides,
-    launchSnapshot?: ClaudeLaunchConfigSnapshot,
+    authorization?: ClaudeLaunchAuthorization,
   ): Promise<PreparedClaudeLaunch>;
 
   protected abstract enableThinkingForHighEffort(runtime: RuntimeSession): void;
@@ -447,7 +445,9 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     sessionId: string,
     cwd: string,
     effort: ClaudeEffortRequest,
+    assertCurrent: () => void = () => undefined,
   ): Promise<ClaudeProjectState> {
+    assertCurrent();
     const runtime = this.ensureSession(sessionId, cwd);
     const ptyGeneration = this.requireBoundPty(runtime);
     if (!CLAUDE_EFFORT_REQUESTS.has(effort)) {
@@ -462,7 +462,9 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       this.enableThinkingForHighEffort(runtime);
     }
 
-    await this.submitClaudeCommand(runtime, `/effort ${effort}`);
+    assertCurrent();
+    await this.submitClaudeCommand(runtime, `/effort ${effort}`, assertCurrent);
+    assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
     runtime.effortRequest = effort;
     // A relaunch of this conversation should come back at the depth just chosen, not the default.
@@ -476,6 +478,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     }
     this.captureConversationPreferences(runtime);
     const state = await this.getState(sessionId, cwd);
+    assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
     this.onState(state);
     return state;
@@ -527,7 +530,9 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     sessionId: string,
     cwd: string,
     mode: ModelSpeedMode,
+    authorization = this.captureLaunchAuthorization(cwd),
   ): Promise<PreparedClaudeSpeedRelaunch> {
+    this.assertLaunchAuthorizationCurrent(cwd, authorization);
     const runtime = this.ensureSession(sessionId, cwd);
     if (!runtime.active) {
       throw new Error('Claude Code 尚未运行；请直接保存下次启动使用的服务速度。');
@@ -536,12 +541,10 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     if (!conversationId || !isConversationId(conversationId)) {
       throw new Error('当前对话尚未上报可恢复的会话标识，请稍候再调整服务速度。');
     }
-    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const { launchSnapshot } = authorization;
     const { config } = launchSnapshot;
     const installation = await this.diagnoseInstallation();
-    if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
-      throw new Error('Claude 接入配置在速度切换准备期间已更新，请重试。');
-    }
+    this.assertLaunchAuthorizationCurrent(cwd, authorization);
     const model = this.modelForSpeedPreference(runtime, config, installation.version);
     const resolved = this.resolveModelSpeed(config, model, installation.version, mode);
     const prepared = await this.prepareLaunchInternal(
@@ -551,7 +554,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       conversationId,
       undefined,
       { model, speed: mode },
-      launchSnapshot,
+      authorization,
     );
     return {
       ...prepared,
@@ -598,7 +601,9 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     sessionId: string,
     cwd: string,
     mode: ClaudePermissionMode,
+    assertCurrent: () => void = () => undefined,
   ): Promise<ClaudeProjectState> {
+    assertCurrent();
     const runtime = this.ensureSession(sessionId, cwd);
     const ptyGeneration = this.requireBoundPty(runtime);
     if (mode === 'dontAsk') {
@@ -611,11 +616,13 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       throw new Error('上一次模式切换还没有完成，请稍候。');
     }
 
+    assertCurrent();
     this.modeSwitchLocks.add(sessionId);
     runtime.permissionModeRequest = mode;
     void this.emitState(runtime);
     try {
       const current = await this.readPermissionModeFromScreen(sessionId, ptyGeneration);
+      assertCurrent();
       this.assertRuntimePty(runtime, ptyGeneration);
       if (!current) {
         throw new Error(
@@ -625,17 +632,26 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       this.recordPermissionMode(runtime, current);
       if (current === mode) {
         const state = await this.getState(sessionId, cwd);
+        assertCurrent();
         this.assertRuntimePty(runtime, ptyGeneration);
         return state;
       }
 
       const visited = new Set<ClaudePermissionMode>([current]);
       for (let step = 0; step < PERMISSION_MODE_MAX_STEPS; step += 1) {
+        assertCurrent();
+        this.assertRuntimePty(runtime, ptyGeneration);
         const before = runtime.permissionMode ?? current;
         if (!this.writeToTerminal(sessionId, ptyGeneration, SHIFT_TAB_SEQUENCE)) {
           throw new Error('Claude Code 会话已停止或重启，这次模式切换已取消。');
         }
-        const changed = await this.waitForPermissionModeChange(runtime, ptyGeneration, before);
+        const changed = await this.waitForPermissionModeChange(
+          runtime,
+          ptyGeneration,
+          before,
+          assertCurrent,
+        );
+        assertCurrent();
         this.assertRuntimePty(runtime, ptyGeneration);
         if (!changed) {
           throw new Error(
@@ -645,6 +661,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
         this.recordPermissionMode(runtime, changed);
         if (changed === mode) {
           const state = await this.getState(sessionId, cwd);
+          assertCurrent();
           this.assertRuntimePty(runtime, ptyGeneration);
           this.onState(state);
           return state;
@@ -764,16 +781,19 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     runtime: RuntimeSession,
     ptyGeneration: PtyGeneration,
     before: ClaudePermissionMode | undefined,
+    assertCurrent: () => void,
   ): Promise<ClaudePermissionMode | undefined> {
     const startedAt = Date.now();
     return new Promise((resolve, reject) => {
       const probe = async (): Promise<void> => {
         try {
+          assertCurrent();
           this.assertRuntimePty(runtime, ptyGeneration);
           const observed = await this.readPermissionModeFromScreen(
             runtime.sessionId,
             ptyGeneration,
           );
+          assertCurrent();
           this.assertRuntimePty(runtime, ptyGeneration);
           if (observed && observed !== before) {
             resolve(observed);
@@ -887,16 +907,26 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
           }
           return !writeFailed && this.isRuntimePtyCurrent(runtime, ptyGeneration);
         };
+        const submission = buildTerminalSubmission(commandLine);
+        let bodyWritten = false;
         const submitted = await writeTerminalSubmission(
-          buildTerminalSubmission(commandLine),
+          submission,
           (data) => {
-            if (!this.writeToTerminal(sessionId, ptyGeneration, data)) {
+            const wrote = this.writeToTerminal(sessionId, ptyGeneration, data);
+            if (!wrote) {
               writeFailed = true;
+            } else if (submission.body && data === submission.body) {
+              bodyWritten = true;
             }
           },
           isCurrentSession,
         );
         if (!submitted || writeFailed) {
+          // If cancellation lands in the TUI-safe body/return gap, neutralize only the exact live
+          // input line. Never send the clear sequence into a replacement PTY generation.
+          if (bodyWritten && this.isRuntimePtyCurrent(runtime, ptyGeneration)) {
+            this.writeToTerminal(sessionId, ptyGeneration, '\x15');
+          }
           throw new Error('Claude Code 会话已停止或重启，已取消这次命令。');
         }
         this.assertRuntimePty(runtime, ptyGeneration);

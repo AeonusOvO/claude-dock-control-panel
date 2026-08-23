@@ -29,6 +29,13 @@ import {
   type RecoveryLaunchSnapshot,
 } from './recovery-store';
 
+interface NativeTurnCompletion {
+  readonly clientSubmissionId: string;
+  readonly completed: Promise<void>;
+  resolveCompleted: () => void;
+  started: boolean;
+}
+
 interface ActiveConversation {
   confirmedSubmissions: Set<string>;
   launch: RecoveryLaunchSnapshot;
@@ -37,10 +44,13 @@ interface ActiveConversation {
   snapshot?: ConversationSnapshot;
   startInput: ConversationStartInput;
   transfer?: ConversationTransfer;
+  turnCompletion?: NativeTurnCompletion;
 }
 
 export interface NativeConversationServiceOptions {
   adapter: ConversationAdapter;
+  /** Main-owned shutdown fence, checked at every adapter or terminal launch boundary. */
+  assertLaunchAdmissionAllowed?: () => void;
   onSnapshot: (snapshot: ConversationSnapshot) => void;
   onSubmissionConfirmed?: (conversationId: string, attachmentIds: string[]) => void | Promise<void>;
   ownerRegistry: ConversationOwnerRegistry;
@@ -94,6 +104,7 @@ export class NativeConversationService {
   }
 
   public async start(input: NativeConversationLaunchInput): Promise<NativeConversationStartResult> {
+    this.options.assertLaunchAdmissionAllowed?.();
     const conversationId = (input.conversationId ?? randomUUID()).toLowerCase();
     const generation = (this.generations.get(conversationId) ?? 0) + 1;
     this.generations.set(conversationId, generation);
@@ -138,29 +149,47 @@ export class NativeConversationService {
       projectPath: input.projectPath,
       runtime: this.options.runtime,
     });
-    this.active.set(conversationId, {
+    const current: ActiveConversation = {
       confirmedSubmissions: new Set(),
       launch: launchSnapshot,
       owner,
       pendingAttachmentIds: new Map(),
       startInput,
-    });
+    };
+    this.active.set(conversationId, current);
     try {
+      this.options.assertLaunchAdmissionAllowed?.();
       await this.options.adapter.start(startInput);
-      this.options.ownerRegistry.updatePhase(owner, owner.ownerId, generation, 'active');
+      this.options.assertLaunchAdmissionAllowed?.();
+      if (this.active.get(conversationId) !== current) {
+        throw new Error('Claude 原生会话启动已取消。');
+      }
+      if (!this.options.ownerRegistry.updatePhase(owner, owner.ownerId, generation, 'active')) {
+        throw new Error('Claude 原生会话 owner 已变化，启动已取消。');
+      }
       return {
         conversationId,
         ok: true,
         reused: false,
-        snapshot: this.active.get(conversationId)?.snapshot,
+        snapshot: current.snapshot,
       };
     } catch (error) {
-      this.active.delete(conversationId);
-      this.options.ownerRegistry.release(owner, owner.ownerId, generation);
+      if (this.active.get(conversationId) === current) {
+        try {
+          await this.options.adapter.close(conversationId);
+        } catch {
+          // The exact owner is still released below even if adapter teardown reports a failure.
+        }
+        this.release(current);
+      }
       // A failed brand-new launch has no Claude transcript or useful recovery state. Keeping the
       // just-reserved row would turn a startup error into a false "interrupted conversation" card
       // on the next render. Exact resumes keep their existing recovery entry so the user can retry.
-      if (!input.resume) {
+      if (
+        !input.resume &&
+        this.generations.get(conversationId) === generation &&
+        !this.active.has(conversationId)
+      ) {
         this.options.recoveryStore.discard(this.options.runtime, input.projectPath, conversationId);
       }
       return {
@@ -235,6 +264,46 @@ export class NativeConversationService {
         ok: false,
         snapshot: current.snapshot,
       };
+    }
+  }
+
+  /**
+   * Keeps the caller's route lease alive from prompt admission through the exact foreground turn and
+   * any background work it spawned. The ordinary `submit` method remains the service-level enqueue
+   * primitive for tests and adapters that do not own network authority.
+   */
+  public async submitAndWaitForTurn(
+    conversationId: string,
+    input: ConversationSubmitInput,
+  ): Promise<NativeConversationOperationResult> {
+    const current = this.requireActive(conversationId);
+    if (current.turnCompletion) {
+      return {
+        ...reportConversationFailure('user-input', '当前回复仍在运行，请等待完成后再发送。'),
+        ok: false,
+        snapshot: current.snapshot,
+      };
+    }
+    let resolveCompleted!: () => void;
+    const completion: NativeTurnCompletion = {
+      clientSubmissionId: input.clientSubmissionId,
+      completed: new Promise<void>((resolve) => {
+        resolveCompleted = resolve;
+      }),
+      resolveCompleted: () => resolveCompleted(),
+      started: false,
+    };
+    current.turnCompletion = completion;
+    try {
+      const result = await this.submit(conversationId, input);
+      if (!result.ok) {
+        this.finishTurn(current, completion);
+        return result;
+      }
+      await completion.completed;
+      return { ...result, snapshot: current.snapshot };
+    } finally {
+      this.finishTurn(current, completion);
     }
   }
 
@@ -349,7 +418,13 @@ export class NativeConversationService {
   }
 
   public async closeAll(): Promise<void> {
-    await Promise.all([...this.active.keys()].map((conversationId) => this.close(conversationId)));
+    const results = await Promise.all(
+      [...this.active.keys()].map((conversationId) => this.close(conversationId)),
+    );
+    const failedCount = results.filter(({ ok }) => !ok).length;
+    if (failedCount > 0) {
+      throw new Error(`无法关闭 ${failedCount} 个原生会话。`);
+    }
   }
 
   public async transferToTerminal(
@@ -360,95 +435,126 @@ export class NativeConversationService {
       projectPath: string;
     }) => Promise<{ owner: ConversationOwner; terminalSessionId: string }>,
     allowInterrupt = false,
+    authorizeTerminalLaunch?: <T>(
+      identity: {
+        conversationId: string;
+        projectPath: string;
+      },
+      operation: () => Promise<T>,
+    ) => Promise<T>,
   ): Promise<NativeConversationTerminalTransferResult> {
     const current = this.requireActive(conversationId);
-    if (current.transfer) {
-      return {
-        ...reportConversationFailure('internal', '该对话正在切换界面。'),
-        ok: false,
-        snapshot: current.snapshot,
-      };
-    }
+    const transferInProgress = (): NativeConversationTerminalTransferResult => ({
+      ...reportConversationFailure('internal', '该对话正在切换界面。'),
+      ok: false,
+      snapshot: current.snapshot,
+    });
+    const requiresConfirmation = (): NativeConversationTerminalTransferResult => ({
+      ...reportConversationFailure('user-input', '原生对话仍有正在运行的回复或后台任务。'),
+      ok: false,
+      requiresConfirmation: true,
+      snapshot: current.snapshot,
+    });
+    if (current.transfer) return transferInProgress();
     if (!allowInterrupt && nativeConversationHasRunningWork(current.snapshot)) {
-      return {
-        ...reportConversationFailure('user-input', '原生对话仍有正在运行的回复或后台任务。'),
-        ok: false,
-        requiresConfirmation: true,
-        snapshot: current.snapshot,
-      };
+      return requiresConfirmation();
     }
-    if (draft && draft.blocks.length > 0) {
-      const serialized = JSON.stringify(draft);
+
+    const identity = {
+      conversationId,
+      projectPath: current.owner.projectPath,
+    };
+    const performTransfer = async (): Promise<NativeConversationTerminalTransferResult> => {
+      this.options.assertLaunchAdmissionAllowed?.();
+      if (this.active.get(conversationId) !== current) {
+        throw new Error('原生对话状态已经变化，请重新切换。');
+      }
+      if (current.transfer) return transferInProgress();
+      if (!allowInterrupt && nativeConversationHasRunningWork(current.snapshot)) {
+        return requiresConfirmation();
+      }
+      if (draft && draft.blocks.length > 0) {
+        const serialized = JSON.stringify(draft);
+        try {
+          this.options.recoveryStore.preparePrompt(
+            this.options.runtime,
+            current.owner.projectPath,
+            conversationId,
+            draft.clientSubmissionId,
+            serialized,
+          );
+          this.options.recoveryStore.preserveUnsentDraft(
+            this.options.runtime,
+            current.owner.projectPath,
+            conversationId,
+            draft.clientSubmissionId,
+          );
+        } catch (error) {
+          return {
+            ...reportConversationFailure(
+              'environment',
+              error instanceof Error ? error.message : '无法安全保存当前草稿，尚未切换到高级终端。',
+              error,
+            ),
+            ok: false,
+            snapshot: current.snapshot,
+          };
+        }
+      }
+      const transfer = this.options.ownerRegistry.beginTransfer(
+        current.owner,
+        current.owner.ownerId,
+      );
+      current.transfer = transfer;
       try {
-        this.options.recoveryStore.preparePrompt(
-          this.options.runtime,
-          current.owner.projectPath,
+        await this.options.adapter.close(conversationId);
+        this.options.assertLaunchAdmissionAllowed?.();
+        const terminal = await startTerminal({
           conversationId,
-          draft.clientSubmissionId,
-          serialized,
-        );
-        this.options.recoveryStore.preserveUnsentDraft(
-          this.options.runtime,
-          current.owner.projectPath,
+          projectPath: current.owner.projectPath,
+        });
+        this.options.ownerRegistry.commitTransfer(transfer, terminal.owner);
+        this.options.recoveryStore.reserve({
           conversationId,
-          draft.clientSubmissionId,
-        );
+          launch: current.launch,
+          ownerKind: 'terminal',
+          projectPath: current.owner.projectPath,
+          runtime: this.options.runtime,
+        });
+        this.active.delete(conversationId);
+        return {
+          message: draft ? '已保存草稿并切换到高级终端。' : '已切换到高级终端。',
+          ok: true,
+          snapshot: current.snapshot,
+          terminalSessionId: terminal.terminalSessionId,
+        };
       } catch (error) {
+        try {
+          this.options.assertLaunchAdmissionAllowed?.();
+          await this.options.adapter.start({ ...current.startInput, resume: true });
+          this.options.ownerRegistry.rollbackTransfer(transfer);
+          current.transfer = undefined;
+        } catch {
+          this.options.ownerRegistry.rollbackTransfer(transfer);
+          this.release(current);
+        }
         return {
           ...reportConversationFailure(
             'environment',
-            error instanceof Error ? error.message : '无法安全保存当前草稿，尚未切换到高级终端。',
+            error instanceof Error
+              ? `${error.message}；已尝试恢复原生界面。`
+              : '高级终端启动失败；已尝试恢复原生界面。',
             error,
           ),
           ok: false,
           snapshot: current.snapshot,
         };
       }
-    }
-    const transfer = this.options.ownerRegistry.beginTransfer(current.owner, current.owner.ownerId);
-    current.transfer = transfer;
-    try {
-      await this.options.adapter.close(conversationId);
-      const terminal = await startTerminal({
-        conversationId,
-        projectPath: current.owner.projectPath,
-      });
-      this.options.ownerRegistry.commitTransfer(transfer, terminal.owner);
-      this.options.recoveryStore.reserve({
-        conversationId,
-        launch: current.launch,
-        ownerKind: 'terminal',
-        projectPath: current.owner.projectPath,
-        runtime: this.options.runtime,
-      });
-      this.active.delete(conversationId);
-      return {
-        message: draft ? '已保存草稿并切换到高级终端。' : '已切换到高级终端。',
-        ok: true,
-        snapshot: current.snapshot,
-        terminalSessionId: terminal.terminalSessionId,
-      };
-    } catch (error) {
-      try {
-        await this.options.adapter.start({ ...current.startInput, resume: true });
-        this.options.ownerRegistry.rollbackTransfer(transfer);
-        current.transfer = undefined;
-      } catch {
-        this.options.ownerRegistry.rollbackTransfer(transfer);
-        this.release(current);
-      }
-      return {
-        ...reportConversationFailure(
-          'environment',
-          error instanceof Error
-            ? `${error.message}；已尝试恢复原生界面。`
-            : '高级终端启动失败；已尝试恢复原生界面。',
-          error,
-        ),
-        ok: false,
-        snapshot: current.snapshot,
-      };
-    }
+    };
+
+    return authorizeTerminalLaunch
+      ? authorizeTerminalLaunch(identity, performTransfer)
+      : performTransfer();
   }
 
   /**
@@ -468,6 +574,7 @@ export class NativeConversationService {
     stopTerminal: () => Promise<void>,
     restoreTerminal: () => Promise<void>,
   ): Promise<NativeConversationAdoptResult> {
+    this.options.assertLaunchAdmissionAllowed?.();
     const conversationId = input.conversationId.toLowerCase();
     const alreadyNative = this.active.get(conversationId);
     if (alreadyNative) {
@@ -541,6 +648,7 @@ export class NativeConversationService {
     this.active.set(conversationId, adopted);
     try {
       await stopTerminal();
+      this.options.assertLaunchAdmissionAllowed?.();
       await this.options.adapter.start(startInput);
       const activeOwner: ConversationOwner = { ...owner, phase: 'active' };
       this.options.ownerRegistry.commitTransfer(transfer, activeOwner);
@@ -564,6 +672,7 @@ export class NativeConversationService {
       this.options.ownerRegistry.rollbackTransfer(transfer);
       let restored = true;
       try {
+        this.options.assertLaunchAdmissionAllowed?.();
         await restoreTerminal();
       } catch {
         restored = false;
@@ -629,6 +738,11 @@ export class NativeConversationService {
     return this.active.get(conversationId)?.snapshot;
   }
 
+  /** Main-owned identity for authorizing a live turn; no renderer field participates. */
+  public projectPathForActiveConversation(conversationId: string): string {
+    return this.requireActive(conversationId).owner.projectPath;
+  }
+
   public dispose(): void {
     this.unsubscribe();
   }
@@ -644,7 +758,17 @@ export class NativeConversationService {
     ) {
       return;
     }
-    current.snapshot = reduceConversationEvent(current.snapshot, event);
+    const previousSnapshot = current.snapshot;
+    const nextSnapshot = reduceConversationEvent(previousSnapshot, event);
+    if (nextSnapshot === previousSnapshot) return;
+    current.snapshot = nextSnapshot;
+    if (
+      event.type === 'conversation.phase' &&
+      (event.phase === 'running' || event.phase === 'requires-action') &&
+      current.turnCompletion
+    ) {
+      current.turnCompletion.started = true;
+    }
     if (event.type === 'submission.transcript-confirmed') {
       current.confirmedSubmissions.add(event.clientSubmissionId);
       try {
@@ -665,6 +789,7 @@ export class NativeConversationService {
       }
     }
     if (current.snapshot) this.options.onSnapshot(current.snapshot);
+    this.settleTurnIfComplete(current);
     if (
       event.type === 'conversation.error' ||
       (event.type === 'conversation.phase' && ['failed', 'stopped'].includes(event.phase))
@@ -710,7 +835,25 @@ export class NativeConversationService {
     return { launchSnapshot, startInput };
   }
 
+  private settleTurnIfComplete(current: ActiveConversation): void {
+    const completion = current.turnCompletion;
+    if (
+      completion?.started &&
+      current.snapshot &&
+      !nativeConversationHasRunningWork(current.snapshot)
+    ) {
+      this.finishTurn(current, completion);
+    }
+  }
+
+  private finishTurn(current: ActiveConversation, completion: NativeTurnCompletion): void {
+    if (current.turnCompletion === completion) current.turnCompletion = undefined;
+    completion.resolveCompleted();
+  }
+
   private release(current: ActiveConversation): void {
+    if (this.active.get(current.owner.conversationId) !== current) return;
+    if (current.turnCompletion) this.finishTurn(current, current.turnCompletion);
     this.options.ownerRegistry.release(
       current.owner,
       current.owner.ownerId,

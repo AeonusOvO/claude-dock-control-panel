@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applicationProxyRules,
   applicationProxyUrl,
@@ -62,6 +62,121 @@ describe('ApplicationProxyStore', () => {
     expect(persisted).not.toContain(' secret with spaces ');
   });
 
+  it('prepares a candidate without changing memory, credentials, or disk', () => {
+    const directory = createDirectory();
+    const store = new ApplicationProxyStore(directory, secretStorage);
+    const filePath = path.join(directory, 'proxy', 'application-proxy.json');
+    store.save({
+      enabled: true,
+      host: '127.0.0.1',
+      password: 'old-secret',
+      port: 7890,
+      protocol: 'http',
+      scope: { application: true, cli: true, conversation: false },
+      username: 'alice',
+    });
+    const beforeView = store.getView();
+    const beforeCredentials = store.getCredentials();
+    const beforeFile = readFileSync(filePath, 'utf8');
+
+    const prepared = store.prepare({
+      enabled: true,
+      host: 'proxy.example.com',
+      password: 'new-secret',
+      port: 8080,
+      protocol: 'http',
+      scope: { application: false, cli: true, conversation: true },
+      username: 'bob',
+    });
+
+    expect(store.getView()).toEqual(beforeView);
+    expect(store.getCredentials()).toEqual(beforeCredentials);
+    expect(readFileSync(filePath, 'utf8')).toBe(beforeFile);
+    expect(store.getView(prepared)).toMatchObject({
+      host: 'proxy.example.com',
+      port: 8080,
+      scope: { application: false, cli: true, conversation: true },
+      username: 'bob',
+    });
+    expect(store.getCredentials(prepared)).toEqual({
+      password: 'new-secret',
+      username: 'bob',
+    });
+  });
+
+  it('leaves the exact current state unchanged when candidate encryption fails', () => {
+    const directory = createDirectory();
+    const initial = new ApplicationProxyStore(directory, secretStorage);
+    initial.save({
+      enabled: true,
+      host: '127.0.0.1',
+      password: 'old-secret',
+      port: 7890,
+      protocol: 'http',
+      scope: { application: true, cli: true, conversation: true },
+      username: 'alice',
+    });
+    const filePath = path.join(directory, 'proxy', 'application-proxy.json');
+    const beforeFile = readFileSync(filePath, 'utf8');
+    const failingStore = new ApplicationProxyStore(directory, {
+      ...secretStorage,
+      encryptString: () => {
+        throw new Error('encryption failed');
+      },
+    });
+    const beforeView = failingStore.getView();
+
+    expect(() =>
+      failingStore.prepare({
+        enabled: true,
+        host: '127.0.0.1',
+        password: 'new-secret',
+        port: 7891,
+        protocol: 'http',
+        scope: { application: true, cli: true, conversation: true },
+        username: 'alice',
+      }),
+    ).toThrow('encryption failed');
+    expect(failingStore.getView()).toEqual(beforeView);
+    expect(failingStore.getCredentials()?.password).toBe('old-secret');
+    expect(readFileSync(filePath, 'utf8')).toBe(beforeFile);
+  });
+
+  it('restores the exact encrypted snapshot and revision after a committed candidate', () => {
+    const directory = createDirectory();
+    const store = new ApplicationProxyStore(directory, secretStorage);
+    const filePath = path.join(directory, 'proxy', 'application-proxy.json');
+    store.save({
+      enabled: true,
+      host: '127.0.0.1',
+      password: 'old-secret',
+      port: 7890,
+      protocol: 'http',
+      scope: { application: true, cli: true, conversation: true },
+      username: 'alice',
+    });
+    const snapshot = store.snapshot();
+    const beforeFile = readFileSync(filePath, 'utf8');
+    const beforeView = store.getView();
+
+    store.commit(
+      store.prepare({
+        enabled: true,
+        host: '127.0.0.1',
+        password: 'new-secret',
+        port: 7890,
+        protocol: 'http',
+        scope: { application: true, cli: true, conversation: true },
+        username: 'alice',
+      }),
+    );
+    expect(store.getCredentials()?.password).toBe('new-secret');
+
+    expect(store.restore(snapshot)).toEqual(beforeView);
+    expect(store.getCredentials()?.password).toBe('old-secret');
+    expect(readFileSync(filePath, 'utf8')).toBe(beforeFile);
+  });
+
   it('preserves a saved password when omitted and clears it with the username', () => {
     const store = new ApplicationProxyStore(createDirectory(), secretStorage);
     const base = {
@@ -76,6 +191,45 @@ describe('ApplicationProxyStore', () => {
     expect(store.getCredentials()?.password).toBe('one');
     expect(store.save({ ...base, username: '' }).passwordConfigured).toBe(false);
     expect(store.getCredentials()).toBeUndefined();
+  });
+
+  it("does not reuse another username's encrypted password when the replacement omits one", () => {
+    const store = new ApplicationProxyStore(createDirectory(), secretStorage);
+    const base = {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 7890,
+      protocol: 'http' as const,
+      scope: { application: true, cli: true, conversation: true },
+    };
+    store.save({ ...base, password: 'alice-secret', username: 'alice' });
+
+    const changed = store.save({ ...base, username: 'bob' });
+
+    expect(changed).toMatchObject({ passwordConfigured: false, username: 'bob' });
+    expect(store.getCredentials()).toBeUndefined();
+  });
+
+  it('advances the revision for rapid password-only changes', () => {
+    const store = new ApplicationProxyStore(createDirectory(), secretStorage);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const input = {
+      enabled: true,
+      host: '127.0.0.1',
+      port: 7890,
+      protocol: 'http' as const,
+      scope: { application: true, cli: true, conversation: true },
+      username: 'alice',
+    };
+    try {
+      const first = store.save({ ...input, password: 'one' });
+      const second = store.save({ ...input, password: 'two' });
+
+      expect(second.updatedAt).toBe((first.updatedAt ?? 0) + 1);
+      expect(store.getCredentials()?.password).toBe('two');
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('round-trips a disabled SOCKS draft without requiring a CLI-compatible endpoint', () => {

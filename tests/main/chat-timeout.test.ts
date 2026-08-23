@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatConfigStore } from '../../src/main/chat/config-store';
 import { ChatService } from '../../src/main/chat/service';
-import type { ChatStreamEvent } from '../../src/shared/contracts';
+import type { ChatStartInput, ChatStreamEvent } from '../../src/shared/contracts';
+
+const startChat = (service: ChatService, input: ChatStartInput): void => {
+  service.start(input, service.captureRuntimeSnapshot());
+};
 
 const store = {
   getRuntimeConfig: () => ({
@@ -62,7 +66,7 @@ describe('independent chat timeout invariants', () => {
       probeTimeoutMs: 20,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: '持续输出', role: 'user' }],
       requestId: 'request-healthy-stream',
     });
@@ -86,7 +90,7 @@ describe('independent chat timeout invariants', () => {
       { idleTimeoutMs: 1_000 },
     );
 
-    service.start({
+    startChat(service, {
       messages: [{ content: '停止', role: 'user' }],
       requestId: 'request-manual-stop',
     });
@@ -114,7 +118,7 @@ describe('independent chat timeout invariants', () => {
       probeTimeoutMs: 20,
     });
 
-    service.start({
+    startChat(service, {
       messages: [{ content: '保持连接', role: 'user' }],
       requestId: 'request-default-idle',
     });

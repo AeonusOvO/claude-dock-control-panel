@@ -25,6 +25,26 @@ export const createProjectsWorkspaceActions = (
   workspaceRenderer: WorkspaceRenderer,
   rowsApi: ProjectsRowsApi,
 ): ProjectsWorkspaceActions => {
+  /**
+   * Runs `task` unless the same target already has a call in flight.
+   *
+   * The rows these actions are bound to are recreated by every workspace re-render, so the button
+   * the user pressed is gone — and replaced by an enabled one — long before the request resolves.
+   * Guarding on the target is what actually holds. Mirrors `storedConversationRestores` in
+   * `actions-history.ts`.
+   */
+  const runOnce = async (key: string, task: () => Promise<void>): Promise<void> => {
+    if (state.workspaceMutations.has(key)) {
+      return;
+    }
+    state.workspaceMutations.add(key);
+    try {
+      await task();
+    } finally {
+      state.workspaceMutations.delete(key);
+    }
+  };
+
   const activateProject = async (sessionId: string): Promise<void> => {
     const result = await window.controlPanel.activateProject(sessionId);
     if (!result.ok) {
@@ -41,45 +61,55 @@ export const createProjectsWorkspaceActions = (
    * conversation itself stays on disk under 历史对话. The folder is expanded and its history re-read
    * afterwards so the row visibly lands there instead of appearing to vanish.
    */
-  const closeProject = async (status: TerminalStatus): Promise<void> => {
-    if (
-      status.phase === 'running' &&
-      !(await dependencies.requestConfirmation({
-        confirmLabel: '关闭并归档',
-        message: `“${status.title}”还在运行。关闭会先停止它的终端进程，对话本身会归档到“历史对话”，随时可以恢复。`,
-        title: '关闭正在运行的对话',
-        tone: 'default',
-      }))
-    ) {
-      return;
-    }
+  const closeProject = async (status: TerminalStatus): Promise<void> =>
+    runOnce(`close:${status.id}`, async () => {
+      if (
+        status.phase === 'running' &&
+        !(await dependencies.requestConfirmation({
+          confirmLabel: '关闭并归档',
+          message: `“${status.title}”还在运行。关闭会先停止它的终端进程，对话本身会归档到“历史对话”，随时可以恢复。`,
+          title: '关闭正在运行的对话',
+          tone: 'default',
+        }))
+      ) {
+        return;
+      }
 
-    const projectPath = status.cwd;
-    const result = await window.controlPanel.closeProject(status.id);
-    if (!result.ok) {
-      dependencies.showToast(
-        dependencies.resultFailureMessage(result, '无法关闭这个对话。'),
-        'error',
-      );
-      return;
-    }
-    workspaceRenderer.renderWorkspace(result.state);
-    state.expandedFolders.add(projectPath.toLowerCase());
-    await rowsApi.loadFolderHistory(projectPath, true);
-    dependencies.showToast(`已关闭“${status.title}”，可在历史对话中恢复`);
-  };
+      const projectPath = status.cwd;
+      const result = await window.controlPanel.closeProject(status.id);
+      if (!result.ok) {
+        dependencies.showToast(
+          dependencies.resultFailureMessage(result, '无法关闭这个对话。'),
+          'error',
+        );
+        return;
+      }
+      workspaceRenderer.renderWorkspace(result.state);
+      state.expandedFolders.add(projectPath.toLowerCase());
+      await rowsApi.loadFolderHistory(projectPath, true);
+      dependencies.showToast(`已关闭“${status.title}”，可在历史对话中恢复`);
+    });
 
-  const openConversation = async (projectPath: string): Promise<void> => {
-    const result = await window.controlPanel.openConversation(projectPath);
-    workspaceRenderer.renderWorkspace(result.state);
-    if (!result.ok) {
-      dependencies.showToast(dependencies.resultFailureMessage(result, '无法新建对话。'), 'error');
-      return;
-    }
-    dependencies.showToast(`已在 ${dependencies.projectNameFromPath(projectPath)} 新开一个对话`);
-    dependencies.retryTerminalFitUntilMeasured();
-    dependencies.requestComposerFocus(result.state.activeSessionId);
-  };
+  /*
+   * Guarded because every accepted call spawns a real PTY: the "+" button and the empty-folder
+   * "打开一个新对话" button both land here, neither is disabled while the request is in flight, and a
+   * double click used to leave a second terminal process running that the user never asked for.
+   */
+  const openConversation = async (projectPath: string): Promise<void> =>
+    runOnce(`open:${projectPath.toLowerCase()}`, async () => {
+      const result = await window.controlPanel.openConversation(projectPath);
+      workspaceRenderer.renderWorkspace(result.state);
+      if (!result.ok) {
+        dependencies.showToast(
+          dependencies.resultFailureMessage(result, '无法新建对话。'),
+          'error',
+        );
+        return;
+      }
+      dependencies.showToast(`已在 ${dependencies.projectNameFromPath(projectPath)} 新开一个对话`);
+      dependencies.retryTerminalFitUntilMeasured();
+      dependencies.requestComposerFocus(result.state.activeSessionId);
+    });
 
   const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
     if (

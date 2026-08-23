@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "5.0.0-rc.13",
+  "version": "5.0.0-rc.15",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "main": "dist/main/index.js",
   "private": true,
@@ -42,6 +42,7 @@
     "test:layout": "npm run build:renderer && electron scripts/smoke/layout-smoke.cjs",
     "test:runtime-soak": "node scripts/smoke/runtime-soak.cjs",
     "test:runtime-soak:accelerated": "node scripts/smoke/runtime-soak.cjs --hours=24 --accelerated",
+    "test:scroll-chaining": "npm run build:preload && npm run build:renderer && electron scripts/smoke/scroll-chaining-smoke.cjs",
     "test:select": "npm run build:renderer && electron scripts/smoke/select-interaction-smoke.cjs",
     "test:select-theme": "npm run build:renderer && electron scripts/smoke/select-theme-smoke.cjs",
     "test:visual": "npm run build:renderer && electron scripts/smoke/visual-smoke.cjs && electron scripts/smoke/native-visual-smoke.cjs",
@@ -56,6 +57,7 @@
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis",
     "release:manifest": "node scripts/release/manifest.mjs",
+    "release:publish:cos": "node scripts/release/publish-cos.mjs",
     "release": "npm run dist && npm run release:manifest"
   },
   "dependencies": {
@@ -89,6 +91,7 @@
     "@types/node": "26.1.1",
     "@vitest/coverage-v8": "4.1.10",
     "concurrently": "10.0.4",
+    "cos-nodejs-sdk-v5": "3.0.0",
     "cross-env": "10.1.0",
     "dependency-cruiser": "^18.2.0",
     "electron": "43.2.0",
@@ -103,7 +106,8 @@
     "typescript-eslint": "8.65.0",
     "vite": "8.1.5",
     "vitest": "4.1.10",
-    "wait-on": "9.1.0"
+    "wait-on": "9.1.0",
+    "yaml": "2.9.0"
   },
   "build": {
     "appId": "io.github.aeonusovo.claudedock",
@@ -113,11 +117,11 @@
     "directories": {
       "output": "outputs"
     },
+    "detectUpdateChannel": true,
     "publish": {
-      "provider": "github",
-      "owner": "AeonusOvO",
-      "repo": "claude-dock-control-panel",
-      "releaseType": "release"
+      "provider": "generic",
+      "url": "https://claudedock-1304375868.cos.ap-shanghai.myqcloud.com/updates/windows/x64/",
+      "useMultipleRangeRequest": false
     },
     "files": [
       "dist/**/*",

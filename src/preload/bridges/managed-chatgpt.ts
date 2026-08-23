@@ -13,6 +13,10 @@ export const managedChatgptBridge = {
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE,
     ) as Promise<ManagedChatGptGatewayState>,
+  logoutManagedChatGptGateway: () =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT,
+    ) as Promise<ManagedChatGptGatewayOperationResult>,
   openManagedChatGptGatewayManagement: () =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_OPEN_MANAGEMENT,
@@ -35,10 +39,9 @@ export const managedChatgptBridge = {
       sessionId,
       model,
     ) as Promise<ManagedChatGptGatewayOperationResult>,
-  setupManagedChatGptGateway: (sessionId, forceLogin) =>
+  setupManagedChatGptGateway: (sessionId) =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP,
       sessionId,
-      forceLogin ?? false,
     ) as Promise<ManagedChatGptGatewayOperationResult>,
 } satisfies Partial<ControlPanelApi>;

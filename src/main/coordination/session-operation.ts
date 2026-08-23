@@ -1,5 +1,14 @@
 export type SessionOperationAssertion = () => void;
 
+const sessionOperationStampBrand: unique symbol = Symbol('session-operation-stamp');
+
+/** Equality-only main-process lifecycle revision that survives completion of the live operation lease. */
+export interface SessionOperationStamp {
+  readonly revision: number;
+  readonly sessionId: string;
+  readonly [sessionOperationStampBrand]: true;
+}
+
 /** The shape handlers receive when the coordinator is injected as a dependency rather than used directly. */
 export type WithSessionOperation = <T>(
   sessionId: string,
@@ -22,6 +31,8 @@ interface SessionOperationLease {
 export class SessionOperationCoordinator {
   private readonly leases = new Map<string, SessionOperationLease>();
   private nextGeneration = 0;
+  private nextRevision = 0;
+  private readonly revisionBySession = new Map<string, number>();
 
   public constructor(
     private readonly hasSession: (sessionId: string) => boolean,
@@ -29,7 +40,28 @@ export class SessionOperationCoordinator {
     private readonly cancelledMessage = '这个启动操作已被新的终端或会话操作取消。',
   ) {}
 
+  public captureStamp(sessionId: string): SessionOperationStamp {
+    if (!this.hasSession(sessionId)) {
+      throw new Error('开发会话已经不存在，不能创建新的操作授权。');
+    }
+    return Object.freeze({
+      revision: this.revisionBySession.get(sessionId) ?? 0,
+      sessionId,
+      [sessionOperationStampBrand]: true as const,
+    });
+  }
+
+  public assertStampCurrent(stamp: SessionOperationStamp): void {
+    if (
+      !this.hasSession(stamp.sessionId) ||
+      (this.revisionBySession.get(stamp.sessionId) ?? 0) !== stamp.revision
+    ) {
+      throw new Error('开发会话在等待启动确认期间已执行其他操作，本次授权已失效。');
+    }
+  }
+
   public invalidate(sessionId: string): void {
+    this.advanceRevision(sessionId);
     const lease = this.leases.get(sessionId);
     if (lease) {
       this.cancel(lease);
@@ -37,12 +69,19 @@ export class SessionOperationCoordinator {
   }
 
   public invalidateAndWait(sessionId: string): Promise<void> {
+    this.advanceRevision(sessionId);
     const lease = this.leases.get(sessionId);
     if (!lease) {
       return Promise.resolve();
     }
     this.cancel(lease);
     return lease.completed;
+  }
+
+  public removeSession(sessionId: string): void {
+    // Keep the advanced revision as a durable tombstone. If the same opaque session ID is ever
+    // recreated, no stamp captured by the removed incarnation may become current again.
+    this.invalidate(sessionId);
   }
 
   public isBusy(sessionId: string): boolean {
@@ -57,6 +96,23 @@ export class SessionOperationCoordinator {
       throw new Error(this.busyMessage);
     }
     return this.execute(sessionId, this.reserve(sessionId), operation);
+  }
+
+  /** Atomically admits a paused-launch continuation only if no later session operation was reserved. */
+  public runIfStampCurrent<T>(
+    stamp: SessionOperationStamp,
+    operation: (assertCurrent: SessionOperationAssertion, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.leases.has(stamp.sessionId)) {
+      return Promise.reject(new Error(this.busyMessage));
+    }
+    try {
+      this.assertStampCurrent(stamp);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const lease = this.reserve(stamp.sessionId);
+    return this.execute(stamp.sessionId, lease, operation);
   }
 
   /**
@@ -112,6 +168,7 @@ export class SessionOperationCoordinator {
   }
 
   private reserve(sessionId: string): SessionOperationLease {
+    this.advanceRevision(sessionId);
     let resolveCompleted!: () => void;
     const completed = new Promise<void>((resolve) => {
       resolveCompleted = resolve;
@@ -125,6 +182,10 @@ export class SessionOperationCoordinator {
     };
     this.leases.set(sessionId, lease);
     return lease;
+  }
+
+  private advanceRevision(sessionId: string): void {
+    this.revisionBySession.set(sessionId, ++this.nextRevision);
   }
 
   private cancel(lease: SessionOperationLease): void {

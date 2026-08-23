@@ -4,6 +4,7 @@ import type { ZodType } from 'zod';
 import type {
   ClaudeEffortRequest,
   ClaudeLaunchMode,
+  ClaudeLaunchPreflightDecisionInput,
   ClaudePermissionDecision,
   ClaudePermissionMode,
   ClaudeProviderModelDiscoveryInput,
@@ -16,6 +17,7 @@ import type {
   McpScope,
   ModelSpeedMode,
   NetworkPreflightAction,
+  NetworkPreflightRunInput,
   NetworkProviderId,
   PtyGeneration,
   SaveClaudeConfigInput,
@@ -30,6 +32,7 @@ import {
   claudeConfigInputSchema,
   claudeEffortRequestSchema,
   claudeLaunchModeSchema,
+  claudeLaunchPreflightDecisionInputSchema,
   claudePermissionDecisionSchema,
   claudePermissionModeSchema,
   claudeRelaunchInputSchema,
@@ -52,6 +55,7 @@ import {
   nativeInteractionResponseSchema,
   nativeSubmitInputSchema,
   networkPreflightActionSchema,
+  networkPreflightRunInputSchema,
   networkProviderSchema,
   pluginIdSchema,
   projectPathInputSchema,
@@ -107,8 +111,18 @@ export const validateNetworkProvider = (value: unknown): NetworkProviderId =>
 export const validateNetworkPreflightAction = (value: unknown): NetworkPreflightAction =>
   parseSchema(networkPreflightActionSchema, value);
 
+export const validateNetworkPreflightRunInput = (value: unknown): NetworkPreflightRunInput => {
+  const input = parseSchema(networkPreflightRunInputSchema, value);
+  return input.cwd === undefined ? input : { ...input, cwd: path.resolve(input.cwd) };
+};
+
 export const validateClaudeLaunchMode = (mode: unknown): ClaudeLaunchMode =>
   parseSchema(claudeLaunchModeSchema, mode);
+
+export const validateClaudeLaunchPreflightDecisionInput = (
+  input: unknown,
+): ClaudeLaunchPreflightDecisionInput =>
+  parseSchema(claudeLaunchPreflightDecisionInputSchema, input);
 
 export const validateCodexLaunchMode = (mode: unknown): CodexLaunchMode =>
   parseSchema(codexLaunchModeSchema, mode);

@@ -119,10 +119,10 @@ export const pluginCatalog = (
 
 export const mcpCatalog = (names: readonly string[]): McpCatalog => ({
   available: names.map((name) => ({
-    config: { command: 'node' },
     description: `${name} description`,
     featured: true,
     id: name,
+    installable: true,
     name,
     requiresCredential: false,
     transport: 'stdio',

@@ -10,6 +10,66 @@ import {
 export type { RuntimeActivityShellDeps } from './runtime-activity-dependencies';
 import type { RuntimeActivityShellDeps } from './runtime-activity-dependencies';
 
+const runtimeActivityPresentationKey = (
+  active: ReturnType<RuntimeActivityShellDeps['activeStatus']>,
+  nativeSnapshot: ReturnType<RuntimeActivityShellDeps['getActiveConversationSnapshot']>,
+  state: RuntimeActivitySnapshot | undefined,
+): string =>
+  JSON.stringify({
+    active: active
+      ? [
+          active.id,
+          active.cwd,
+          active.title,
+          active.phase,
+          active.ptyGeneration,
+          active.pid,
+          active.shell,
+          active.message,
+          active.diagnosticCode,
+        ]
+      : undefined,
+    native: nativeSnapshot
+      ? {
+          conversationId: nativeSnapshot.conversationId,
+          model: nativeSnapshot.capabilities?.model,
+          phase: nativeSnapshot.phase,
+          tasks: nativeSnapshot.tasks.map((task) => [
+            task.id,
+            task.kind,
+            task.status,
+            task.description,
+            task.summary,
+            task.cancellable,
+          ]),
+        }
+      : undefined,
+    runtime: state
+      ? {
+          phase: state.phase,
+          sessionId: state.sessionId,
+          tasks: state.tasks.map((task) => [
+            task.id,
+            task.kind,
+            task.status,
+            task.description,
+            task.agentType,
+            task.tokenUse,
+            task.willWakeParent,
+          ]),
+          webProcesses: state.webProcesses.map((process) => [
+            process.processKey,
+            process.name,
+            process.pid,
+            process.status,
+            process.commandSummary,
+            process.exposureWarning,
+            process.urls.map(({ confirmed, url }) => [url, confirmed]),
+          ]),
+        }
+      : undefined,
+  });
+
 const runtimeActivityLabel = requiredElement<HTMLElement>('#runtime-activity-label');
 const runtimeActivitySummary = requiredElement<HTMLElement>('#runtime-activity-summary');
 const runtimeEnvironmentMeta = requiredElement<HTMLElement>('#runtime-environment-meta');
@@ -45,12 +105,17 @@ export const createRuntimeActivityShell = (
     { nativePhaseLabel, openExternal, showToast },
     (snapshot?: RuntimeActivitySnapshot) => renderRuntimeActivity(snapshot),
   );
+  let lastPresentationKey = '';
 
   const renderRuntimeActivity = (snapshot?: RuntimeActivitySnapshot): void => {
     const activeSessionId = getActiveSessionId();
     const state = snapshot ?? runtimeActivityStates.get(activeSessionId);
     if (state) runtimeActivityStates.set(state.sessionId, state);
     const nativeSnapshot = getActiveConversationSnapshot();
+    const active = activeStatus();
+    const presentationKey = runtimeActivityPresentationKey(active, nativeSnapshot, state);
+    if (presentationKey === lastPresentationKey) return;
+    lastPresentationKey = presentationKey;
     const nativeTasks = nativeSnapshot?.tasks ?? [];
     const unfinished = state?.tasks.filter(runtimeTaskIsUnfinished) ?? [];
     const nativeUnfinished = nativeTasks.filter((task) =>
@@ -90,7 +155,6 @@ export const createRuntimeActivityShell = (
             ? `${completedCount} 完成`
             : '无活动';
 
-    const active = activeStatus();
     if (active) renderActiveStatus(active);
     else renderNoActiveSession();
     if (state?.phase === 'waiting-background' || state?.phase === 'resuming') {

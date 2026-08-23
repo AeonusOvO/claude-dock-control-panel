@@ -15,7 +15,11 @@ import {
   runOwnedConfigTransaction,
   SessionConfigTransactionCoordinator,
 } from '../../src/main/coordination/main-process-operation';
-import type { WithSessionOperation } from '../../src/main/coordination/session-operation';
+import { LaunchPreflightDecisionCoordinator } from '../../src/main/coordination/launch-preflight-decision';
+import {
+  SessionOperationCoordinator,
+  type WithSessionOperation,
+} from '../../src/main/coordination/session-operation';
 import type { RestartRuntimeTerminal } from '../../src/main/terminal/lifecycle';
 import { CHANNELS } from '../../src/shared/ipc/channels';
 import { createIpcHarness } from '../helpers/ipc-harness';
@@ -40,6 +44,65 @@ const assertOrder = (calls: readonly string[], label: string, steps: readonly st
     expect(index, `missing call: ${marker}`).toBeGreaterThan(previous);
     previous = index;
   }
+};
+
+const registerClaudeRelaunchHarness = async (input: {
+  restartRuntimeTerminal: RestartRuntimeTerminal;
+  runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction;
+  runtime: object;
+  withDevelopmentSessionOperation: WithSessionOperation;
+  withOfficialProviderAccess: (
+    request: { action: string; cwd: string; provider: string },
+    operation: () => Promise<unknown> | unknown,
+  ) => Promise<unknown>;
+}) => {
+  const ipc = createIpcHarness();
+  vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));
+  const { registerClaudeLaunchIpc } = await import('../../src/main/ipc/claude-launch');
+  const developmentSessionOperations = new SessionOperationCoordinator(() => true);
+  const runtime = {
+    assertConnectionHistoryBaselineCurrent: vi.fn(),
+    assertLaunchConfigurationBaselineCurrent: vi.fn(),
+    assertRuntimeLaunchBaselineCurrent: vi.fn(),
+    captureConnectionHistoryBaseline: vi.fn(() => ({})),
+    captureLaunchConfigurationBaseline: vi.fn(() => ({})),
+    captureRuntimeLaunchBaseline: vi.fn(() => ({})),
+    ...input.runtime,
+  };
+  registerClaudeLaunchIpc({
+    agentRuntimeStore: { get: vi.fn(() => 'claude') } as never,
+    claudeConversationLifecycle: {} as never,
+    claudeFailure: vi.fn((_sessionId, error) => ({
+      error: error instanceof Error ? error.message : String(error),
+      ok: false,
+    })) as never,
+    conversationOwnerRegistry: {} as never,
+    developmentSessionOperations,
+    failedRuntimeLaunchCleanupDependencies: {
+      hasSession: vi.fn(() => false),
+      stopIfGeneration: vi.fn(),
+    },
+    guards: {
+      assertLaunchAdmissionAllowed: vi.fn(),
+      requireClaudeRuntime: vi.fn(() => runtime),
+      validateSender: vi.fn(),
+      withOfficialProviderAccess: input.withOfficialProviderAccess,
+    } as never,
+    launchPreflightDecisions: new LaunchPreflightDecisionCoordinator(),
+    releaseTerminalConversationOwner: vi.fn(),
+    restartRuntimeTerminal: input.restartRuntimeTerminal,
+    runClaudeProjectConfigTransaction: input.runClaudeProjectConfigTransaction,
+    runClaudeResumeLaunch: vi.fn(),
+    terminalConversationOwners: new Map(),
+    withDevelopmentSessionOperation: input.withDevelopmentSessionOperation,
+    withDevelopmentSessionOperationIfStampCurrent: (stamp, operation) =>
+      developmentSessionOperations.runIfStampCurrent(stamp, operation),
+    withLaunchDecisionSessionOperation: input.withDevelopmentSessionOperation,
+    workspace: {
+      getStatus: vi.fn(() => ({ cwd: 'D:\\Project', id: 'session-1', ptyGeneration: 7 })),
+    } as never,
+  });
+  return ipc;
 };
 
 afterEach(() => {
@@ -161,6 +224,45 @@ describe('main project-config transaction integration', () => {
     expect(calls).toEqual(['commit', 'complete', 'restore', 'read', 'publish']);
   });
 
+  it('rolls back completion-owned history recency after later completion failure', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const before = { config: 'original', history: ['older', 'selected'] };
+    let profile = structuredClone(before);
+    let captured: unknown;
+
+    try {
+      await runOwnedConfigTransaction({
+        assertOperationOwnership: vi.fn(),
+        commit: () => {
+          profile.config = 'selected';
+        },
+        complete: async () => {
+          profile.history = ['selected', 'older'];
+          throw new Error('launch failed after history completion');
+        },
+        coordinator,
+        createSnapshot: () => structuredClone(profile),
+        cwd: 'D:\\Project',
+        mergeCompletionSnapshot: (committed, completed) => ({
+          config: committed.config,
+          history: completed.history,
+        }),
+        prepare: () => undefined,
+        readState: async () => structuredClone(profile),
+        restoreSnapshot: (snapshot) => {
+          profile = structuredClone(snapshot);
+        },
+        sessionId: 'session-1',
+      });
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(OwnedConfigTransactionError);
+    expect((captured as OwnedConfigTransactionError<typeof profile>).restored).toBe(true);
+    expect(profile).toEqual(before);
+  });
+
   it('serializes equivalent project directories in reservation order', async () => {
     const coordinator = new SessionConfigTransactionCoordinator();
     const releaseFirst = deferred<void>();
@@ -218,7 +320,28 @@ describe('main project-config transaction integration', () => {
       state: routerState,
     } as SavedRouterProvider;
     const prepared = { input: { model: 'saved-model' } } as unknown as PreparedClaudeConfigSave;
+    const launchAuthorization = {
+      cwdKey: 'd:\\project',
+      launchSnapshot: {},
+      officialNetworkProvider: undefined,
+    };
+    const historyAuthorization = {
+      cwdKey: 'd:\\project',
+      entryId: 'history-abc-123',
+      officialNetworkProvider: undefined,
+      replay: {},
+    };
     const runtime = {
+      assertConnectionHistoryAuthorizationCurrent: vi.fn(),
+      assertConnectionHistoryBaselineCurrent: vi.fn(),
+      assertLaunchAuthorizationCurrent: vi.fn(),
+      assertLaunchConfigurationBaselineCurrent: vi.fn(),
+      assertRuntimeLaunchBaselineCurrent: vi.fn(),
+      captureConnectionHistoryAuthorization: vi.fn(() => historyAuthorization),
+      captureConnectionHistoryBaseline: vi.fn(() => ({})),
+      captureLaunchAuthorization: vi.fn(() => launchAuthorization),
+      captureLaunchConfigurationBaseline: vi.fn(() => ({})),
+      captureRuntimeLaunchBaseline: vi.fn(() => ({})),
       commitAllowBypassPermissions: vi.fn(() => {
         calls.push(`${active}:commit-bypass`);
       }),
@@ -237,12 +360,18 @@ describe('main project-config transaction integration', () => {
         calls.push(`${active}:get-state`);
         return projectState;
       }),
+      isActive: vi.fn(() => false),
       officialNetworkProvider: vi.fn(() => undefined),
+      officialNetworkProviderForActivePty: vi.fn(() => undefined),
       prepareConnectionConfig: vi.fn(async () => {
         calls.push(`${active}:prepare-config`);
         return prepared;
       }),
       prepareConnectionHistory: vi.fn(async () => {
+        calls.push(`${active}:prepare-history`);
+        return prepared;
+      }),
+      prepareAuthorizedConnectionHistory: vi.fn(async () => {
         calls.push(`${active}:prepare-history`);
         return prepared;
       }),
@@ -252,6 +381,7 @@ describe('main project-config transaction integration', () => {
           command: 'claude --continue',
           environment: { CLAUDE_ROUTE: 'saved' },
           predecessorPtyGeneration: 3,
+          token: {},
         };
       }),
       prepareRouterProjectConfig: vi.fn(() => {
@@ -289,6 +419,7 @@ describe('main project-config transaction integration', () => {
       calls.push(`${active}:session`);
       return operation(vi.fn(), new AbortController().signal) as Promise<T>;
     };
+    const developmentSessionOperations = new SessionOperationCoordinator(() => true);
     const restartRuntimeTerminal: RestartRuntimeTerminal = (
       _runtime,
       _sessionId,
@@ -307,7 +438,8 @@ describe('main project-config transaction integration', () => {
       getStatus: vi.fn(() => ({ cwd: 'D:\\Project', id: 'session-1', ptyGeneration: 3 })),
     };
     const guards = {
-      assertOfficialProviderAllowed: vi.fn(async () => undefined),
+      assertLaunchAdmissionAllowed: vi.fn(),
+      withOfficialProviderAccess: vi.fn(async (_request, operation) => operation()),
       requireCcSwitchAdapter: vi.fn(() => ({})),
       requireClaudeRuntime: vi.fn(() => runtime),
       validateSender: vi.fn(),
@@ -345,14 +477,19 @@ describe('main project-config transaction integration', () => {
         ok: false,
       })) as never,
       conversationOwnerRegistry: {} as never,
+      developmentSessionOperations,
       failedRuntimeLaunchCleanupDependencies: {} as never,
       guards: guards as never,
+      launchPreflightDecisions: new LaunchPreflightDecisionCoordinator(),
       releaseTerminalConversationOwner: vi.fn(),
       restartRuntimeTerminal,
       runClaudeProjectConfigTransaction,
       runClaudeResumeLaunch: vi.fn(),
       terminalConversationOwners: new Map(),
       withDevelopmentSessionOperation,
+      withDevelopmentSessionOperationIfStampCurrent: (stamp, operation) =>
+        developmentSessionOperations.runIfStampCurrent(stamp, operation),
+      withLaunchDecisionSessionOperation: withDevelopmentSessionOperation,
       workspace: workspace as never,
     });
 
@@ -432,7 +569,10 @@ describe('main project-config transaction integration', () => {
         compactFirst: true,
         entryId: 'history-abc-123',
       }),
-    ).resolves.toMatchObject({ ok: true, state: projectState });
+    ).resolves.toMatchObject({
+      result: { ok: true, state: projectState },
+      status: 'completed',
+    });
     assertOrder(calls, active, [
       'session',
       'directory',
@@ -463,5 +603,341 @@ describe('main project-config transaction integration', () => {
     expect(calls).toContain('router-save-only:save-provider');
     expect(calls).not.toContain('router-save-only:session');
     expect(calls).not.toContain('router-save-only:directory');
+  });
+
+  it('rejects a cancelled history relaunch before reserving its config transaction', async () => {
+    const operations = new SessionOperationCoordinator(() => true);
+    const runClaudeProjectConfigTransaction =
+      vi.fn() as unknown as RunClaudeProjectConfigTransaction;
+    const historyAuthorization = {
+      cwdKey: 'd:\\project',
+      entryId: 'history-abc-123',
+      officialNetworkProvider: 'anthropic-claude',
+      replay: {},
+    };
+    const runtime = {
+      captureConnectionHistoryAuthorization: vi.fn(() => historyAuthorization),
+      compactBeforeRelaunch: vi.fn(async () => undefined),
+      isActive: vi.fn(() => true),
+      officialNetworkProviderForActivePty: vi.fn(() => 'openai-codex'),
+    };
+    const withOfficialProviderAccess = vi.fn(
+      async (
+        _request: { action: string; cwd: string; provider: string },
+        operation: () => Promise<unknown> | unknown,
+      ): Promise<unknown> => {
+        operations.invalidate('session-1');
+        return operation();
+      },
+    );
+    const ipc = await registerClaudeRelaunchHarness({
+      restartRuntimeTerminal: vi.fn() as unknown as RestartRuntimeTerminal,
+      runClaudeProjectConfigTransaction,
+      runtime,
+      withDevelopmentSessionOperation: (sessionId, operation) =>
+        operations.run(sessionId, operation),
+      withOfficialProviderAccess,
+    });
+
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_RELAUNCH, 'session-1', {
+        compactFirst: false,
+        entryId: 'history-abc-123',
+      }),
+    ).resolves.toMatchObject({ result: { ok: false }, status: 'completed' });
+
+    expect(withOfficialProviderAccess).toHaveBeenCalledOnce();
+    expect(runClaudeProjectConfigTransaction).not.toHaveBeenCalled();
+    expect(operations.isBusy('session-1')).toBe(false);
+  });
+
+  it('does not compact or reserve a transaction when target provider access is denied', async () => {
+    const runClaudeProjectConfigTransaction =
+      vi.fn() as unknown as RunClaudeProjectConfigTransaction;
+    const denied = new Error('target access denied');
+    const runtime = {
+      captureConnectionHistoryAuthorization: vi.fn(() => ({
+        cwdKey: 'd:\\project',
+        entryId: 'history-abc-123',
+        officialNetworkProvider: 'openai-codex',
+        replay: {},
+      })),
+      compactBeforeRelaunch: vi.fn(async () => undefined),
+      isActive: vi.fn(() => true),
+      officialNetworkProviderForActivePty: vi.fn(() => 'anthropic-claude'),
+    };
+    const withOfficialProviderAccess = vi.fn(async () => {
+      throw denied;
+    });
+    const ipc = await registerClaudeRelaunchHarness({
+      restartRuntimeTerminal: vi.fn() as unknown as RestartRuntimeTerminal,
+      runClaudeProjectConfigTransaction,
+      runtime,
+      withDevelopmentSessionOperation: async (_sessionId, operation) =>
+        operation(vi.fn(), new AbortController().signal),
+      withOfficialProviderAccess,
+    });
+
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_RELAUNCH, 'session-1', {
+        compactFirst: true,
+        entryId: 'history-abc-123',
+      }),
+    ).resolves.toMatchObject({
+      result: { error: denied.message, ok: false },
+      status: 'completed',
+    });
+
+    expect(runtime.compactBeforeRelaunch).not.toHaveBeenCalled();
+    expect(runtime.officialNetworkProviderForActivePty).not.toHaveBeenCalled();
+    expect(runClaudeProjectConfigTransaction).not.toHaveBeenCalled();
+  });
+
+  it('revalidates history only after the queued transaction predecessor completes', async () => {
+    const transactionEntered = deferred<void>();
+    const releaseTransaction = deferred<void>();
+    let historyCurrent = true;
+    const historyAuthorization = {
+      cwdKey: 'd:\\project',
+      entryId: 'history-abc-123',
+      officialNetworkProvider: undefined,
+      replay: {},
+    };
+    const runtime = {
+      assertConnectionHistoryAuthorizationCurrent: vi.fn(() => {
+        if (!historyCurrent) throw new Error('history changed while queued');
+      }),
+      captureConnectionHistoryAuthorization: vi.fn(() => historyAuthorization),
+      compactBeforeRelaunch: vi.fn(async () => undefined),
+      isActive: vi.fn(() => true),
+      prepareAuthorizedConnectionHistory: vi.fn(async () => ({})),
+    };
+    const runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction = async (
+      options,
+    ) => {
+      transactionEntered.resolve(undefined);
+      await releaseTransaction.promise;
+      await options.prepare();
+      return {} as ClaudeProjectState;
+    };
+    const ipc = await registerClaudeRelaunchHarness({
+      restartRuntimeTerminal: vi.fn() as unknown as RestartRuntimeTerminal,
+      runClaudeProjectConfigTransaction,
+      runtime,
+      withDevelopmentSessionOperation: async (_sessionId, operation) =>
+        operation(vi.fn(), new AbortController().signal),
+      withOfficialProviderAccess: vi.fn(async (_request, operation) => operation()),
+    });
+
+    const relaunch = ipc.invoke(CHANNELS.CLAUDE_RELAUNCH, 'session-1', {
+      compactFirst: true,
+      entryId: 'history-abc-123',
+    });
+    await transactionEntered.promise;
+    historyCurrent = false;
+    releaseTransaction.resolve(undefined);
+
+    await expect(relaunch).resolves.toMatchObject({
+      result: {
+        error: 'history changed while queued',
+        ok: false,
+      },
+      status: 'completed',
+    });
+    expect(runtime.compactBeforeRelaunch).not.toHaveBeenCalled();
+    expect(runtime.prepareAuthorizedConnectionHistory).not.toHaveBeenCalled();
+  });
+
+  it('enters the selected history provider before authorizing compaction with the live PTY provider', async () => {
+    const state = {
+      active: true,
+      cwd: 'D:\\Project',
+      sessionId: 'session-1',
+    } as ClaudeProjectState;
+    const events: string[] = [];
+    let activeProvider: string | undefined;
+    const selectedProvider = 'openai-codex';
+    const prepared = { input: { model: 'selected-model' } } as unknown as PreparedClaudeConfigSave;
+    const historyAuthorization = {
+      cwdKey: 'd:\\project',
+      entryId: 'history-abc-123',
+      officialNetworkProvider: selectedProvider,
+      replay: {},
+    };
+    const launchAuthorization = {
+      cwdKey: 'd:\\project',
+      launchSnapshot: {},
+      officialNetworkProvider: selectedProvider,
+    };
+    const runtime = {
+      assertConnectionHistoryAuthorizationCurrent: vi.fn(),
+      assertLaunchAuthorizationCurrent: vi.fn(),
+      captureConnectionHistoryAuthorization: vi.fn(() => {
+        events.push(`history-provider:${selectedProvider}`);
+        return historyAuthorization;
+      }),
+      captureLaunchAuthorization: vi.fn(() => launchAuthorization),
+      commitPreparedConfig: vi.fn(() => events.push(`commit:${activeProvider}`)),
+      compactBeforeRelaunch: vi.fn(async (_sessionId, _cwd, compactFirst) => {
+        events.push(`compact:${String(compactFirst)}`);
+        expect(activeProvider).toBe('anthropic-claude');
+      }),
+      completePreparedConfigSave: vi.fn(async () => {
+        events.push(`complete:${activeProvider}`);
+        return {} as ClaudeProjectState;
+      }),
+      getState: vi.fn(async () => {
+        events.push(`get-state:${activeProvider}`);
+        return state;
+      }),
+      isActive: vi.fn(() => true),
+      officialNetworkProviderForActivePty: vi.fn((_sessionId, generation) => {
+        events.push(`live-provider:${String(generation)}`);
+        return 'anthropic-claude';
+      }),
+      prepareAuthorizedConnectionHistory: vi.fn(async () => {
+        events.push(`prepare-history:${activeProvider}`);
+        return prepared;
+      }),
+      prepareLaunch: vi.fn(async () => {
+        events.push(`prepare-launch:${activeProvider}`);
+        return {
+          command: 'claude --continue',
+          environment: { CLAUDE_ROUTE: 'selected' },
+          predecessorPtyGeneration: 7,
+          token: {},
+        };
+      }),
+    };
+    const withOfficialProviderAccess = vi.fn(
+      async (
+        request: { action: string; cwd: string; provider: string },
+        operation: () => Promise<unknown> | unknown,
+      ): Promise<unknown> => {
+        events.push(`lease:${request.provider}:start`);
+        const previousProvider = activeProvider;
+        activeProvider = request.provider;
+        try {
+          return await operation();
+        } finally {
+          activeProvider = previousProvider;
+          events.push(`lease:${request.provider}:end`);
+        }
+      },
+    );
+    const runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction = async <TPrepared>(
+      options: ClaudeProjectConfigTransactionOptions<TPrepared>,
+    ): Promise<ClaudeProjectState> => {
+      events.push('transaction');
+      expect(activeProvider).toBe('openai-codex');
+      const preparedValue = await options.prepare();
+      options.commit(preparedValue);
+      return options.complete(preparedValue);
+    };
+    const restartRuntimeTerminal: RestartRuntimeTerminal = (
+      _runtime,
+      _sessionId,
+      _environment,
+      _command,
+      _failureMessage,
+      _assertCurrent,
+      ownGeneration,
+    ) => {
+      events.push(`restart:${activeProvider}`);
+      ownGeneration(8);
+      return {} as ReturnType<RestartRuntimeTerminal>;
+    };
+    const ipc = await registerClaudeRelaunchHarness({
+      restartRuntimeTerminal,
+      runClaudeProjectConfigTransaction,
+      runtime,
+      withDevelopmentSessionOperation: async (_sessionId, operation) =>
+        operation(vi.fn(), new AbortController().signal),
+      withOfficialProviderAccess,
+    });
+
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_RELAUNCH, 'session-1', {
+        compactFirst: true,
+        entryId: 'history-abc-123',
+      }),
+    ).resolves.toMatchObject({ result: { ok: true, state }, status: 'completed' });
+
+    expect(runtime.officialNetworkProviderForActivePty).toHaveBeenCalledWith('session-1', 7);
+    expect(events).toEqual([
+      'history-provider:openai-codex',
+      'lease:openai-codex:start',
+      'transaction',
+      'live-provider:7',
+      'lease:anthropic-claude:start',
+      'compact:true',
+      'lease:anthropic-claude:end',
+      'prepare-history:openai-codex',
+      'commit:openai-codex',
+      'complete:openai-codex',
+      'prepare-launch:openai-codex',
+      'restart:openai-codex',
+      'get-state:openai-codex',
+      'lease:openai-codex:end',
+    ]);
+  });
+
+  it('does not acquire a live-provider lease when history compaction is disabled', async () => {
+    const state = {
+      active: true,
+      cwd: 'D:\\Project',
+      sessionId: 'session-1',
+    } as ClaudeProjectState;
+    const events: string[] = [];
+    const liveProvider = vi.fn(() => 'openai-codex');
+    const withOfficialProviderAccess = vi.fn(
+      async (
+        request: { action: string; cwd: string; provider: string },
+        operation: () => Promise<unknown> | unknown,
+      ): Promise<unknown> => {
+        events.push(`lease:${request.provider}`);
+        return operation();
+      },
+    );
+    const runClaudeProjectConfigTransaction = vi.fn(async (options) => {
+      events.push('transaction');
+      await options.prepare();
+      return state;
+    }) as unknown as RunClaudeProjectConfigTransaction;
+    const historyAuthorization = {
+      cwdKey: 'd:\\project',
+      entryId: 'history-abc-123',
+      officialNetworkProvider: 'anthropic-claude',
+      replay: {},
+    };
+    const runtime = {
+      assertConnectionHistoryAuthorizationCurrent: vi.fn(),
+      captureConnectionHistoryAuthorization: vi.fn(() => historyAuthorization),
+      compactBeforeRelaunch: vi.fn(async (_sessionId, _cwd, compactFirst) => {
+        events.push(`compact:${String(compactFirst)}`);
+      }),
+      isActive: vi.fn(() => true),
+      officialNetworkProviderForActivePty: liveProvider,
+      prepareAuthorizedConnectionHistory: vi.fn(async () => ({})),
+    };
+    const ipc = await registerClaudeRelaunchHarness({
+      restartRuntimeTerminal: vi.fn() as unknown as RestartRuntimeTerminal,
+      runClaudeProjectConfigTransaction,
+      runtime,
+      withDevelopmentSessionOperation: async (_sessionId, operation) =>
+        operation(vi.fn(), new AbortController().signal),
+      withOfficialProviderAccess,
+    });
+
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_RELAUNCH, 'session-1', {
+        compactFirst: false,
+        entryId: 'history-abc-123',
+      }),
+    ).resolves.toMatchObject({ result: { ok: true, state }, status: 'completed' });
+
+    expect(liveProvider).not.toHaveBeenCalled();
+    expect(withOfficialProviderAccess).toHaveBeenCalledOnce();
+    expect(events).toEqual(['lease:anthropic-claude', 'transaction', 'compact:false']);
   });
 });

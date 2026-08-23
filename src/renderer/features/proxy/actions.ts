@@ -4,7 +4,7 @@ import type { ProxyState } from './state';
 import type { ProxyView } from './view';
 
 export interface ProxyActionsDependencies {
-  invalidatePreflight: () => Promise<void>;
+  refreshPreflight: () => Promise<void>;
   showToast: (message: string, tone?: 'error' | 'success') => void;
   updateSettingsUnsavedIndicator: () => void;
 }
@@ -107,7 +107,7 @@ const savePendingApplicationProxy = async (context: ProxyActionsContext): Promis
     view.renderState(proxyState, false);
     state.draftEdited = false;
     state.cancelBaseline = view.captureDraft();
-    await dependencies.invalidatePreflight();
+    await dependencies.refreshPreflight();
     return true;
   } finally {
     state.saveInProgress = false;

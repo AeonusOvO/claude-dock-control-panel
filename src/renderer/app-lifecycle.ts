@@ -36,14 +36,11 @@ export const installGlobalInteractions = (runtime: ApplicationRuntime): void => 
     footerSpeed,
     footerMode,
     footerEffort,
-    footerMore,
     footerResourceMenu,
     footerModelMenu,
     footerSpeedMenu,
     footerModeMenu,
     footerEffortMenu,
-    footerSecondaryStatus,
-    setFooterSecondaryOpen,
     hideFooterMenus,
   } = runtime.footerShell;
 
@@ -55,8 +52,8 @@ export const installGlobalInteractions = (runtime: ApplicationRuntime): void => 
     if (event.key === 'Escape' && railShell.escapeRailPreview()) {
       event.preventDefault();
     }
-    // Escape closes any open footer menu first (before secondary footer)
-    // This ensures focus returns to a visible trigger
+    // Escape closes any open option menu before the containing session-settings region. This keeps
+    // focus on a visible setting trigger so a second Escape can close the disclosure.
     const footerMenuPairs: readonly FooterMenuPair[] = [
       { menu: footerResourceMenu, trigger: footerResource },
       { menu: footerModelMenu, trigger: footerModel },
@@ -69,12 +66,6 @@ export const installGlobalInteractions = (runtime: ApplicationRuntime): void => 
         event.preventDefault();
         return;
       }
-    }
-    // Only after footer menus are checked, handle secondary footer
-    if (event.key === 'Escape' && footerSecondaryStatus.dataset.open === 'true') {
-      event.preventDefault();
-      setFooterSecondaryOpen(false);
-      footerMore.focus();
     }
     // Arrow key navigation within footer menus
     if (
@@ -173,12 +164,6 @@ export const installGlobalInteractions = (runtime: ApplicationRuntime): void => 
       hideFooterMenus();
     }
     if (
-      !footerSecondaryStatus.contains(event.target as Node) &&
-      !footerMore.contains(event.target as Node)
-    ) {
-      setFooterSecondaryOpen(false);
-    }
-    if (
       !runtimeActivityShell.runtimeActivityPanel.hidden &&
       !runtimeActivityShell.runtimeActivityPanel.contains(event.target as Node) &&
       !runtimeActivityShell.runtimeActivityTrigger.contains(event.target as Node)
@@ -205,7 +190,7 @@ export const installWindowLifecycle = (runtime: ApplicationRuntime): void => {
     chatFeature,
   } = runtime;
   const { showToast } = runtime.toastShell;
-  const { hideFooterMenus, setFooterSecondaryOpen } = runtime.footerShell;
+  const { hideFooterMenus } = runtime.footerShell;
 
   window.addEventListener('blur', () => {
     terminalFeature.cancelActiveResizes();
@@ -213,12 +198,10 @@ export const installWindowLifecycle = (runtime: ApplicationRuntime): void => {
     projectsFeature.hideConversationContextMenu();
     connectionHistory.hideContextMenu();
     hideFooterMenus();
-    setFooterSecondaryOpen(false);
     runtimeActivityShell.setRuntimeSummaryOpen(false);
     railShell.closeRailPreview();
   });
   window.addEventListener('resize', () => {
-    setFooterSecondaryOpen(false);
     railShell.closeRailPreview();
   });
 

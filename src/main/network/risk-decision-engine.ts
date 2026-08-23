@@ -4,17 +4,13 @@ import type {
   NetworkPreflightResult,
   NetworkRiskSignal,
 } from '../../shared/contracts';
+
+export type NetworkRiskDecision = Omit<
+  NetworkPreflightResult,
+  'action' | 'canonicalCwd' | 'configurationRevision' | 'generation' | 'mainRunId' | 'networkScope'
+>;
 import { getProviderProfile } from '../../shared/router/provider-profiles';
 import type { ConnectivityObservation } from './provider-connectivity-probe';
-
-const ACTIONS: NetworkPreflightAction[] = [
-  'background',
-  'provider-switch',
-  'login',
-  'cli-launch',
-  'first-request',
-  'cloud-task',
-];
 
 const labelForAction = (action: NetworkPreflightAction): string => {
   switch (action) {
@@ -89,7 +85,7 @@ const pathRiskSignals = (
         (path.process === 'application' ||
           path.process === 'claude-cli' ||
           path.process === 'codex-cli') &&
-        !path.proxyConfigured,
+        path.proxyKind === 'direct',
     )
   ) {
     add(
@@ -120,6 +116,8 @@ const pathRiskSignals = (
   if (
     applicationPath &&
     cliPath &&
+    applicationPath.proxyKind !== 'unknown' &&
+    cliPath.proxyKind !== 'unknown' &&
     (applicationPath.proxyConfigured !== cliPath.proxyConfigured ||
       applicationPath.proxyKind !== cliPath.proxyKind)
   ) {
@@ -166,7 +164,10 @@ const pathRiskSignals = (
       'local-network',
     );
   }
-  if (observation.paths.every((path) => !path.ipv4Available && !path.ipv6Available)) {
+  if (
+    observation.paths.length > 0 &&
+    !observation.paths.some((path) => path.ipv4Available || path.ipv6Available)
+  ) {
     add(
       'offline',
       '未检测到可用网络',
@@ -214,40 +215,34 @@ const addProbeRiskSignals = (
 };
 
 const featureAccessFor = (
-  profile: ReturnType<typeof getProviderProfile>,
+  action: NetworkPreflightAction,
   observation: ConnectivityObservation,
   signals: NetworkRiskSignal[],
-): NetworkFeatureAccess[] =>
-  ACTIONS.map((candidateAction) => {
-    const requiredEndpointIds = new Set(
-      profile.endpoints
-        .filter((endpoint) => endpoint.requiredFor.includes(candidateAction))
-        .map((endpoint) => endpoint.id),
-    );
-    const requiredFailure = observation.probes.some(
-      (probe) =>
-        probe.required &&
-        (probe.status === 'failed' ||
-          probe.status === 'unknown' ||
-          probe.status === 'skipped' ||
-          (probe.kind === 'websocket' && probe.status === 'warning')) &&
-        (probe.id.startsWith('dns:') ||
-          [...requiredEndpointIds].some((endpointId) => probe.id.endsWith(endpointId))),
-    );
-    const globalBlock = signals.some(
-      (signal) =>
-        signal.id === 'offline' ||
-        signal.id === 'unsupported-cli-proxy' ||
-        (signal.severity === 'critical' &&
-          (signal.id.startsWith('tls-invalid:') || signal.id.startsWith('unexpected-redirect:'))),
-    );
-    const allowed = !requiredFailure && !globalBlock;
-    return {
-      action: candidateAction,
+): NetworkFeatureAccess[] => {
+  const requiredFailure = observation.probes.some(
+    (probe) =>
+      probe.required &&
+      (probe.status === 'failed' ||
+        probe.status === 'unknown' ||
+        probe.status === 'skipped' ||
+        (probe.kind === 'websocket' && probe.status === 'warning')),
+  );
+  const globalBlock = signals.some(
+    (signal) =>
+      signal.id === 'offline' ||
+      signal.id === 'unsupported-cli-proxy' ||
+      (signal.severity === 'critical' &&
+        (signal.id.startsWith('tls-invalid:') || signal.id.startsWith('unexpected-redirect:'))),
+  );
+  const allowed = !requiredFailure && !globalBlock;
+  return [
+    {
+      action,
       allowed,
-      reason: allowed ? undefined : `${labelForAction(candidateAction)}所需的官方网络路径未通过。`,
-    };
-  });
+      reason: allowed ? undefined : `${labelForAction(action)}所需的官方网络路径未通过。`,
+    },
+  ];
+};
 
 interface RiskStatusEvaluation {
   critical: boolean;
@@ -264,19 +259,28 @@ const evaluateStatus = (
   const selectedAccess = featureAccess.find((access) => access.action === action);
   const critical = signals.some((signal) => signal.severity === 'critical');
   const websocketUnavailable = observation.probes.some(
-    (probe) => probe.kind === 'websocket' && probe.status !== 'passed',
+    (probe) => probe.kind === 'websocket' && probe.required && probe.status !== 'passed',
   );
-  const unknown = observation.probes.some(
-    (probe) => probe.required && (probe.status === 'unknown' || probe.status === 'skipped'),
+  const environmentIncomplete = Boolean(
+    observation.environment && observation.environment.evidenceStatus !== 'complete',
   );
+  const environmentRisk =
+    observation.environment?.riskLevel === 'high' ||
+    observation.environment?.riskLevel === 'medium';
+  const incomplete =
+    observation.paths.length === 0 ||
+    observation.paths.some((path) => path.proxyKind === 'unknown') ||
+    observation.probes.some(
+      (probe) => probe.required && (probe.status === 'unknown' || probe.status === 'skipped'),
+    );
   let status: NetworkPreflightResult['status'];
   if (!selectedAccess?.allowed || critical) {
     status = 'blocked';
+  } else if (incomplete || environmentIncomplete) {
+    status = 'degraded';
   } else if (websocketUnavailable) {
     status = 'partially_available';
-  } else if (unknown) {
-    status = 'degraded';
-  } else if (signals.some((signal) => signal.severity === 'warning')) {
+  } else if (environmentRisk || signals.some((signal) => signal.severity === 'warning')) {
     status = 'warning';
   } else if (signals.length > 0) {
     status = 'allowed_with_notice';
@@ -323,14 +327,23 @@ export class RiskDecisionEngine {
     observation: ConnectivityObservation,
     startedAt: number,
     checkedAt: number,
-  ): NetworkPreflightResult {
+  ): NetworkRiskDecision {
     const profile = getProviderProfile(provider);
     const signals = pathRiskSignals(provider, observation, checkedAt);
     addProbeRiskSignals(signals, observation, checkedAt);
-    const featureAccess = featureAccessFor(profile, observation, signals);
+    const featureAccess = featureAccessFor(action, observation, signals);
     const riskScore = Math.min(
       100,
-      signals.reduce((total, signal) => total + signal.score, 0),
+      Math.max(
+        signals.reduce((total, signal) => total + signal.score, 0),
+        observation.environment?.riskLevel === 'high'
+          ? 80
+          : observation.environment?.riskLevel === 'medium'
+            ? 40
+            : observation.environment?.riskLevel === 'unknown'
+              ? 25
+              : 0,
+      ),
     );
     const { critical, status, websocketUnavailable } = evaluateStatus(
       action,
@@ -339,14 +352,27 @@ export class RiskDecisionEngine {
       featureAccess,
     );
     const reasons = reasonsFor(signals, websocketUnavailable);
+    const environmentIncomplete = Boolean(
+      observation.environment && observation.environment.evidenceStatus !== 'complete',
+    );
     const summary =
       status === 'blocked'
         ? `${profile.displayName} 的${labelForAction(action)}已阻止。`
-        : status === 'partially_available'
-          ? `${profile.displayName} 基础连接可用，但云端 WebSocket 功能受限。`
-          : status === 'degraded' || status === 'warning'
-            ? `${profile.displayName} 可用，但有未确认的网络风险。`
-            : `${profile.displayName} 官方网络预检通过。`;
+        : observation.environment?.riskLevel === 'high'
+          ? `${profile.displayName} 端点可检测，但发现高风险出口、DNS 或分流信号。`
+          : observation.environment?.riskLevel === 'medium'
+            ? `${profile.displayName} 端点可检测，但发现需要处理的网络环境风险。`
+            : environmentIncomplete
+              ? `${profile.displayName} 端点检查已完成，但关键风险证据不完整，不能判断为低风险。`
+              : status === 'partially_available'
+                ? `${profile.displayName} 的当前动作需要 WebSocket，但握手未确认。`
+                : status === 'degraded'
+                  ? `${profile.displayName} 网络预检结果不完整。`
+                  : status === 'warning'
+                    ? `${profile.displayName} 可用，但有未确认的网络风险。`
+                    : observation.environment
+                      ? `${profile.displayName} 本次检查未发现已知风险；这不构成账号安全保证。`
+                      : `${profile.displayName} 官方端点检查通过。`;
 
     return {
       cacheExpiresAt: checkedAt + profile.cacheTtlMs,
@@ -359,11 +385,18 @@ export class RiskDecisionEngine {
       reasons,
       riskLevel: critical
         ? 'critical'
-        : riskScore >= profile.riskThresholds.blocked
+        : observation.environment?.riskLevel === 'high'
           ? 'high'
-          : riskScore >= profile.riskThresholds.warning
+          : observation.environment?.riskLevel === 'medium'
             ? 'medium'
-            : 'low',
+            : observation.environment?.riskLevel === 'unknown' &&
+                riskScore < profile.riskThresholds.warning
+              ? 'unknown'
+              : riskScore >= profile.riskThresholds.blocked
+                ? 'high'
+                : riskScore >= profile.riskThresholds.warning
+                  ? 'medium'
+                  : 'low',
       riskScore,
       signals,
       startedAt,

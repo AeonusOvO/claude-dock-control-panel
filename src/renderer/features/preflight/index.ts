@@ -22,6 +22,7 @@ export interface PreflightFeature {
   invalidateAndRun: (reason: string, force?: boolean) => Promise<void>;
   isBlocked: (provider: NetworkProviderId) => boolean;
   openNetworkPreflightDialog: (providerOverride?: NetworkProviderId) => Promise<void>;
+  refreshAfterAuthoritativeChange: () => Promise<void>;
   renderActiveNetworkPreflight: () => void;
   runActiveNetworkPreflight: (
     force: boolean,
@@ -65,6 +66,7 @@ const createPreflightFeature = (dependencies: PreflightFeatureDependencies): Pre
     invalidateAndRun: actions.invalidateAndRun,
     isBlocked: (provider) => state.networkPreflightResults.get(provider)?.status === 'blocked',
     openNetworkPreflightDialog: actions.openNetworkPreflightDialog,
+    refreshAfterAuthoritativeChange: actions.refreshAfterAuthoritativeChange,
     renderActiveNetworkPreflight: view.renderActiveNetworkPreflight,
     runActiveNetworkPreflight: actions.runActiveNetworkPreflight,
   };

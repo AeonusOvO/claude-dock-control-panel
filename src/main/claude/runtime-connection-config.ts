@@ -1,3 +1,5 @@
+import { createHmac, randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
@@ -18,7 +20,11 @@ import {
 import type { CcSwitchProviderExportInput } from './cc-switch-adapter';
 import { testClaudeConnection } from './connection-test';
 import type { ClaudeConfigSnapshot } from './config-store';
-import { ClaudeConnectionHistoryStore } from './connection-history';
+import {
+  ClaudeConnectionHistoryStore,
+  type ClaudeConnectionHistorySnapshot,
+  type ConnectionHistoryReplay,
+} from './connection-history';
 import { MODEL_NAME_PATTERN, normalizeClaudeConfig } from './configuration';
 import {
   connectionFingerprint,
@@ -28,6 +34,7 @@ import {
 } from './runtime-connection';
 import { ClaudeRuntimeRouting } from './runtime-routing';
 import type {
+  ClaudeLaunchAuthorization,
   ConnectionCheckRecord,
   ConnectionHistoryMetadata,
   PreparedClaudeConfigSave,
@@ -35,15 +42,42 @@ import type {
   RuntimeSession,
 } from './runtime-types';
 
+export interface ClaudeConnectionHistoryAuthorization {
+  readonly cwdKey: string;
+  readonly entryId: string;
+  readonly officialNetworkProvider?: NetworkProviderId;
+  readonly replay: ConnectionHistoryReplay;
+}
+
+/** Credential-free process-local identity safe to retain while renderer input is pending. */
+export interface ClaudeLaunchConfigurationBaseline {
+  readonly cwdKey: string;
+  readonly revision: string;
+  readonly officialNetworkProvider?: NetworkProviderId;
+}
+
+/** Credential-free process-local identity for one exact connection-history entry. */
+export interface ClaudeConnectionHistoryBaseline {
+  readonly cwdKey: string;
+  readonly entryId: string;
+  readonly revision: string;
+  readonly officialNetworkProvider?: NetworkProviderId;
+}
+
+export interface ClaudeRuntimeConfigTransactionSnapshot {
+  config: ClaudeConfigSnapshot;
+  history: ClaudeConnectionHistorySnapshot;
+}
+
 export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting {
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   private readonly historyStore: ClaudeConnectionHistoryStore;
+  private readonly launchBaselineKey = randomBytes(32);
 
   protected constructor(
     userDataPath: string,
-    ensureManagedChatGptGatewayReady: () => Promise<void>,
+    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
     fetchImplementation: typeof fetch,
-    applicationVersion: string | undefined,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void,
     stopManagedChatGptGateway: () => Promise<void> | void,
     routerCommandEnvironment: () => Record<string, null | string | undefined>,
@@ -52,7 +86,6 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       userDataPath,
       ensureManagedChatGptGatewayReady,
       fetchImplementation,
-      applicationVersion,
       onRouterOperationProgress,
       stopManagedChatGptGateway,
       routerCommandEnvironment,
@@ -74,6 +107,53 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
 
   public officialNetworkProvider(cwd: string): NetworkProviderId | undefined {
     return officialNetworkProviderForClaudePreset(this.configStore.getConfig(cwd).preset);
+  }
+
+  public captureLaunchAuthorization(cwd: string): ClaudeLaunchAuthorization {
+    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    return Object.freeze({
+      cwdKey: projectKey(cwd),
+      launchSnapshot,
+      officialNetworkProvider: officialNetworkProviderForClaudePreset(launchSnapshot.config.preset),
+    });
+  }
+
+  public assertLaunchAuthorizationCurrent(
+    cwd: string,
+    authorization: ClaudeLaunchAuthorization,
+  ): void {
+    if (
+      authorization.cwdKey !== projectKey(cwd) ||
+      !this.configStore.launchSnapshotIsCurrent(cwd, authorization.launchSnapshot)
+    ) {
+      throw new Error('Claude 接入配置在授权期间已更新，本次启动已取消，请重试。');
+    }
+  }
+
+  public captureLaunchConfigurationBaseline(cwd: string): ClaudeLaunchConfigurationBaseline {
+    const snapshot = this.configStore.createSnapshot(cwd);
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(
+      this.configStore.getConfig(cwd).preset,
+    );
+    return Object.freeze({
+      cwdKey: projectKey(cwd),
+      revision: this.baselineRevision(snapshot),
+      ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
+    });
+  }
+
+  public assertLaunchConfigurationBaselineCurrent(
+    cwd: string,
+    baseline: ClaudeLaunchConfigurationBaseline,
+  ): void {
+    const current = this.captureLaunchConfigurationBaseline(cwd);
+    if (
+      current.cwdKey !== baseline.cwdKey ||
+      current.revision !== baseline.revision ||
+      current.officialNetworkProvider !== baseline.officialNetworkProvider
+    ) {
+      throw new Error('Claude 接入配置在等待确认期间已更新，本次启动已失效。');
+    }
   }
 
   public currentProviderForCcSwitch(cwd: string): CcSwitchProviderExportInput {
@@ -104,12 +184,86 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     );
   }
 
-  public createConfigSnapshot(cwd: string): ClaudeConfigSnapshot {
-    return this.configStore.createSnapshot(cwd);
+  public captureConnectionHistoryAuthorization(
+    cwd: string,
+    entryId: string,
+  ): ClaudeConnectionHistoryAuthorization {
+    const replay = structuredClone(this.historyStore.toReplayInput(cwd, entryId));
+    return Object.freeze({
+      cwdKey: projectKey(cwd),
+      entryId,
+      officialNetworkProvider: officialNetworkProviderForClaudePreset(replay.config.preset),
+      replay,
+    });
   }
 
-  public restoreConfigSnapshot(cwd: string, snapshot: ClaudeConfigSnapshot): void {
-    this.configStore.restoreSnapshot(cwd, snapshot);
+  public assertConnectionHistoryAuthorizationCurrent(
+    cwd: string,
+    authorization: ClaudeConnectionHistoryAuthorization,
+  ): void {
+    if (
+      authorization.cwdKey !== projectKey(cwd) ||
+      !isDeepStrictEqual(
+        this.historyStore.toReplayInput(cwd, authorization.entryId),
+        authorization.replay,
+      )
+    ) {
+      throw new Error('历史接入在授权或事务等待期间已更新，请重试。');
+    }
+  }
+
+  public captureConnectionHistoryBaseline(
+    cwd: string,
+    entryId: string,
+  ): ClaudeConnectionHistoryBaseline {
+    const replay = this.historyStore.toReplayInput(cwd, entryId);
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(replay.config.preset);
+    return Object.freeze({
+      cwdKey: projectKey(cwd),
+      entryId,
+      revision: this.baselineRevision(replay),
+      ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
+    });
+  }
+
+  public assertConnectionHistoryBaselineCurrent(
+    cwd: string,
+    baseline: ClaudeConnectionHistoryBaseline,
+  ): void {
+    const current = this.captureConnectionHistoryBaseline(cwd, baseline.entryId);
+    if (
+      current.cwdKey !== baseline.cwdKey ||
+      current.entryId !== baseline.entryId ||
+      current.revision !== baseline.revision ||
+      current.officialNetworkProvider !== baseline.officialNetworkProvider
+    ) {
+      throw new Error('历史接入在等待确认期间已更新，本次启动已失效。');
+    }
+  }
+
+  public createConfigSnapshot(cwd: string): ClaudeRuntimeConfigTransactionSnapshot {
+    return {
+      config: this.configStore.createSnapshot(cwd),
+      history: this.historyStore.createSnapshot(),
+    };
+  }
+
+  public restoreConfigSnapshot(
+    cwd: string,
+    snapshot: ClaudeRuntimeConfigTransactionSnapshot,
+  ): void {
+    this.configStore.restoreSnapshot(cwd, snapshot.config);
+    this.historyStore.restoreSnapshot(snapshot.history);
+  }
+
+  public mergeConfigCompletionSnapshot(
+    committed: ClaudeRuntimeConfigTransactionSnapshot,
+    completed: ClaudeRuntimeConfigTransactionSnapshot,
+  ): ClaudeRuntimeConfigTransactionSnapshot {
+    return {
+      config: committed.config,
+      history: completed.history,
+    };
   }
 
   public async prepareConnectionConfig(
@@ -147,6 +301,35 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   ): Promise<PreparedClaudeConfigSave> {
     const replay = this.historyStore.toReplayInput(cwd, entryId);
     assertCurrent();
+    return this.prepareConnectionReplay(replay, assertCurrent);
+  }
+
+  public async prepareAuthorizedConnectionHistory(
+    cwd: string,
+    authorization: ClaudeConnectionHistoryAuthorization,
+    assertCurrent: () => void = () => undefined,
+  ): Promise<PreparedClaudeConfigSave> {
+    this.assertConnectionHistoryAuthorizationCurrent(cwd, authorization);
+    assertCurrent();
+    const prepared = await this.prepareConnectionReplay(
+      structuredClone(authorization.replay),
+      assertCurrent,
+    );
+    assertCurrent();
+    this.assertConnectionHistoryAuthorizationCurrent(cwd, authorization);
+    if (
+      officialNetworkProviderForClaudePreset(prepared.input.preset) !==
+      authorization.officialNetworkProvider
+    ) {
+      throw new Error('历史接入准备结果与已授权提供方不一致，请重试。');
+    }
+    return prepared;
+  }
+
+  private prepareConnectionReplay(
+    replay: ConnectionHistoryReplay,
+    assertCurrent: () => void,
+  ): Promise<PreparedClaudeConfigSave> | PreparedClaudeConfigSave {
     if (replay.config.protocol === 'openai') {
       return this.prepareConnectionConfig(replay.config, replay.name, assertCurrent);
     }
@@ -176,6 +359,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       await this.prepareRouteServices(
         this.routeKindForConfig(this.configStore.getConfig(cwd)),
         sessionId,
+        cwd,
       );
     }
     return this.publishProjectState(sessionId, cwd);
@@ -327,6 +511,12 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
         sourceModelFast: modelFast,
       },
     };
+  }
+
+  private baselineRevision(value: unknown): string {
+    return createHmac('sha256', this.launchBaselineKey)
+      .update(JSON.stringify(value))
+      .digest('base64url');
   }
 
   private async recordConnectionHistory(

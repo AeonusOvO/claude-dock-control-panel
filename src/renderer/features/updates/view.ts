@@ -53,7 +53,11 @@ const syncUpdateActionVisibility = ({
   elements,
   state,
 }: UpdatesViewContext): void => {
-  const actions = deriveUpdateActionState(state.softwareUpdates, dependencies.getPluginCatalog());
+  const actions = deriveUpdateActionState(
+    state.softwareUpdates,
+    dependencies.getPluginCatalog(),
+    state.applicationUpdaterState,
+  );
   const claudeActionVisible = actions.claudeCode !== 'hidden';
   const routerActionVisible = actions.router !== 'hidden';
 
@@ -79,21 +83,20 @@ const syncUpdateActionVisibility = ({
 const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
   const { dependencies, state } = context;
   const items: UpdateCenterItem[] = [];
-  if (state.softwareUpdates?.application.updateAvailable) {
-    const updaterDisabled = state.applicationUpdaterState?.phase === 'disabled';
+  const applicationUpdater = state.applicationUpdaterState;
+  if (
+    applicationUpdater?.phase === 'available' ||
+    applicationUpdater?.phase === 'downloading' ||
+    applicationUpdater?.phase === 'downloaded'
+  ) {
     items.push({
-      actionLabel:
-        state.applicationUpdaterState?.phase === 'downloaded' ? '重启并安装' : '下载更新',
-      detail: state.softwareUpdates.application.message,
-      disabled:
-        state.updateCenterOperationInProgress ||
-        updaterDisabled ||
-        state.applicationUpdaterState?.phase === 'checking' ||
-        state.applicationUpdaterState?.phase === 'downloading',
+      actionLabel: applicationUpdater.phase === 'downloaded' ? '重启并安装' : '下载更新',
+      detail: applicationUpdater.message,
+      disabled: state.updateCenterOperationInProgress || applicationUpdater.phase === 'downloading',
       id: 'application',
       run: dependencies.runApplicationUpdateAction,
       title: 'ClaudeDock',
-      version: `v${state.softwareUpdates.application.currentVersion ?? '未知'} → ${state.softwareUpdates.application.latestVersion ?? '未知'}`,
+      version: `v${applicationUpdater.currentVersion} → ${applicationUpdater.latestVersion ?? '未知'}`,
     });
   }
   if (state.softwareUpdates?.claudeCode.updateAvailable) {
@@ -183,24 +186,17 @@ const renderApplicationUpdater = (
 ): void => {
   const { dependencies, elements, state } = context;
   state.applicationUpdaterState = updaterState;
-  const active = ['available', 'checking', 'downloaded', 'downloading', 'error'].includes(
-    updaterState.phase,
-  );
-  if (active || updaterState.phase === 'up-to-date') {
-    const sourceRate = updaterState.sourceThroughputBps
-      ? ` · ${(updaterState.sourceThroughputBps / 1024 / 1024).toFixed(1)} MiB/s`
-      : '';
-    elements.applicationUpdateDetail.textContent = `${updaterState.message}${
-      updaterState.sourceLabel ? ` · ${updaterState.sourceLabel}${sourceRate}` : ''
-    }`;
-  }
-  if (updaterState.latestVersion) {
-    elements.applicationUpdateVersion.textContent = `v${updaterState.currentVersion} → ${updaterState.latestVersion}`;
-  }
-  const softwareReportsUpdate = state.softwareUpdates?.application.updateAvailable === true;
+  const sourceRate = updaterState.sourceThroughputBps
+    ? ` · ${(updaterState.sourceThroughputBps / 1024 / 1024).toFixed(1)} MiB/s`
+    : '';
+  elements.applicationUpdateDetail.textContent = `${updaterState.message}${
+    updaterState.sourceLabel ? ` · ${updaterState.sourceLabel}${sourceRate}` : ''
+  }`;
+  elements.applicationUpdateVersion.textContent = updaterState.latestVersion
+    ? `v${updaterState.currentVersion} → ${updaterState.latestVersion}`
+    : `v${updaterState.currentVersion}`;
   elements.applicationUpdateAction.hidden =
-    updaterState.phase === 'disabled' ||
-    (updaterState.phase === 'up-to-date' && !softwareReportsUpdate);
+    updaterState.phase === 'disabled' || updaterState.phase === 'up-to-date';
   elements.applicationUpdateAction.disabled =
     updaterState.phase === 'checking' || updaterState.phase === 'downloading';
   elements.applicationUpdateAction.textContent =
@@ -212,13 +208,13 @@ const renderApplicationUpdater = (
           ? `正在下载${updaterState.percent === undefined ? '…' : ` ${Math.round(updaterState.percent)}%`}`
           : updaterState.phase === 'error'
             ? '重试检查'
-            : updaterState.phase === 'available' || softwareReportsUpdate
+            : updaterState.phase === 'available'
               ? '下载更新'
               : '检查应用更新';
   elements.applicationUpdateVersion.dataset.update = String(
-    updaterState.phase === 'downloaded' ||
-      updaterState.phase === 'downloading' ||
-      softwareReportsUpdate,
+    updaterState.phase === 'available' ||
+      updaterState.phase === 'downloaded' ||
+      updaterState.phase === 'downloading',
   );
   dependencies.setApplicationUpdaterState(updaterState);
   if (elements.updateCenterDialog.open) renderUpdateCenter(context);
@@ -230,18 +226,6 @@ const renderSoftwareUpdates = (
 ): void => {
   const { dependencies, elements, state } = context;
   state.softwareUpdates = softwareUpdates;
-  elements.applicationUpdateDetail.textContent = softwareUpdates.application.message;
-  elements.applicationUpdateVersion.textContent = `v${softwareUpdates.application.currentVersion ?? '未知'}${
-    softwareUpdates.application.updateAvailable
-      ? ` → ${softwareUpdates.application.latestVersion}`
-      : ''
-  }`;
-  elements.applicationUpdateVersion.dataset.update = String(
-    softwareUpdates.application.updateAvailable,
-  );
-  if (state.applicationUpdaterState) {
-    renderApplicationUpdater(context, state.applicationUpdaterState);
-  }
   const target = softwareUpdates.claudeCode;
   elements.claudeUpdateDetail.textContent = target.message;
   elements.claudeUpdateVersion.textContent = target.installed

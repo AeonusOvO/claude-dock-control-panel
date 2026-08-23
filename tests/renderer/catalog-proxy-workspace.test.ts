@@ -131,6 +131,28 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
     });
   });
 
+  it('keeps startup, recommendation browsing and manual refresh on catalog-only Registry sync', async () => {
+    const catalog = mcpCatalog(['catalog-entry']);
+    catalog.available[0]!.description = '<img src=x onerror="throw new Error(\'executed\')">';
+    await withTerminalRenderer({ getMcpCatalog: async () => catalog }, async (harness) => {
+      expect(harness.method('getMcpCatalog')).toHaveBeenCalledWith('D:\\Project', true);
+
+      harness.clearCalls();
+      harness.click('[data-rail-tab="mcp"]');
+      await settle(harness);
+      expect(harness.method('getMcpCatalog')).toHaveBeenCalledWith('D:\\Project', false);
+      expect(harness.query('#mcp-status').textContent).not.toContain('健康检查');
+      expect(harness.query('#mcp-catalog-list').textContent).toContain('<img src=x');
+      expect(harness.query('#mcp-catalog-list').querySelector('img')).toBeNull();
+
+      harness.clearCalls();
+      harness.click('#mcp-refresh');
+      await settle(harness);
+      expect(harness.method('getMcpCatalog')).toHaveBeenCalledWith('D:\\Project', true);
+      expect(harness.query('#mcp-refresh').textContent).toBe('刷新目录');
+    });
+  });
+
   it('filters plugins by category with the same control MCP uses for scope', async () => {
     await withRenderer(
       {

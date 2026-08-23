@@ -119,9 +119,9 @@ describe('renderer interaction lifecycle behavior', () => {
 
   it('keeps managed gateway operations behind the isolated main-process bridge', async () => {
     await withRenderer({}, async (harness) => {
-      await harness.api.setupManagedChatGptGateway(undefined, true);
+      await harness.api.setupManagedChatGptGateway(undefined);
       await harness.api.setManagedChatGptGatewayModel('session-1', 'gpt-5.6-sol');
-      expect(harness.method('setupManagedChatGptGateway')).toHaveBeenCalledWith(undefined, true);
+      expect(harness.method('setupManagedChatGptGateway')).toHaveBeenCalledWith(undefined);
       expect(harness.method('setManagedChatGptGatewayModel')).toHaveBeenCalledWith(
         'session-1',
         'gpt-5.6-sol',
@@ -387,15 +387,36 @@ describe('renderer interaction lifecycle behavior', () => {
 
   it('answers every quit request and only questions the ones that would lose work', async () => {
     await withRenderer({}, async (harness) => {
-      harness.emit('onAppQuitRequested', { hasBlocking: false, leases: [] });
+      harness.emit('onAppQuitRequested', {
+        hasBlocking: false,
+        leases: [],
+        requestId: 'quit-request-1',
+      });
       harness.click('#quit-cancel');
-      expect(harness.method('confirmQuit')).toHaveBeenLastCalledWith(false);
-      harness.emit('onAppQuitRequested', { hasBlocking: false, leases: [] });
+      expect(harness.method('confirmQuit')).toHaveBeenLastCalledWith({
+        decision: false,
+        requestId: 'quit-request-1',
+      });
+      harness.emit('onAppQuitRequested', {
+        hasBlocking: false,
+        leases: [],
+        requestId: 'quit-request-2',
+      });
       harness.click('#quit-force');
-      expect(harness.method('confirmQuit')).toHaveBeenLastCalledWith(true);
-      harness.emit('onAppQuitRequested', { hasBlocking: false, leases: [] });
+      expect(harness.method('confirmQuit')).toHaveBeenLastCalledWith({
+        decision: true,
+        requestId: 'quit-request-2',
+      });
+      harness.emit('onAppQuitRequested', {
+        hasBlocking: false,
+        leases: [],
+        requestId: 'quit-request-3',
+      });
       harness.click('#quit-minimize');
-      expect(harness.method('minimizeToTray')).toHaveBeenCalled();
+      expect(harness.method('confirmQuit')).toHaveBeenLastCalledWith({
+        decision: 'minimize',
+        requestId: 'quit-request-3',
+      });
     });
   });
 });

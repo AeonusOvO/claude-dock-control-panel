@@ -16,7 +16,7 @@ export interface UpdatesActionsDependencies {
   getActiveSessionId: () => string | undefined;
   getPluginCatalog: () => ClaudePluginCatalog | undefined;
   loadClaudeState: (sessionId: string) => Promise<void>;
-  loadMcpCatalog: (refresh: boolean) => Promise<void>;
+  loadMcpCatalog: (refreshRegistry: boolean) => Promise<void>;
   openDownloads: () => void;
   refreshPluginUpdates: () => Promise<boolean>;
   requestConfirmation: (request: UpdateConfirmationRequest) => Promise<boolean>;
@@ -89,9 +89,11 @@ const loadSoftwareUpdates = (context: UpdatesActionsContext, refresh = false): P
     try {
       const [updates, updater] = await Promise.all([
         window.controlPanel.getSoftwareUpdates(refresh),
-        window.controlPanel.getApplicationUpdaterState(),
+        window.controlPanel.getApplicationUpdaterState(
+          refresh || state.applicationUpdaterState === undefined,
+        ),
       ]);
-      state.applicationUpdaterState = updater;
+      view.renderApplicationUpdater(updater);
       view.renderSoftwareUpdates(updates);
     } catch {
       elements.claudeUpdateDetail.textContent = '暂时无法读取软件版本，请检查网络后重试。';
@@ -157,7 +159,11 @@ const runUpdateCenterAction = async (
 const runAllUpdates = async (context: UpdatesActionsContext): Promise<void> => {
   const { dependencies, elements, state, view } = context;
   if (state.updateCenterOperationInProgress) return;
-  const actions = deriveUpdateActionState(state.softwareUpdates, dependencies.getPluginCatalog());
+  const actions = deriveUpdateActionState(
+    state.softwareUpdates,
+    dependencies.getPluginCatalog(),
+    state.applicationUpdaterState,
+  );
   const hasProject = Boolean(dependencies.getActiveSessionId());
   state.updateCenterOperationInProgress = true;
   view.renderUpdateCenter();
@@ -208,6 +214,8 @@ const refreshAvailableUpdates = async (
       // This remains a background CLI task on first load and only becomes user-visible through the
       // titlebar busy state.
       dependencies.refreshPluginUpdates(),
+      // MCP refresh only re-discovers configuration and synchronizes the trusted Registry endpoint;
+      // it is never consent to execute or contact a project-defined MCP server.
       dependencies.getActiveSessionId() ? dependencies.loadMcpCatalog(true) : Promise.resolve(),
     ]);
     const pluginsOk = results[1]?.status === 'fulfilled' && results[1].value;
@@ -217,6 +225,7 @@ const refreshAvailableUpdates = async (
       const actions = deriveUpdateActionState(
         state.softwareUpdates,
         dependencies.getPluginCatalog(),
+        state.applicationUpdaterState,
       );
       if (!pluginsOk || failedSources > 0) {
         dependencies.showToast('全局检查已完成，但至少一个更新来源暂时不可用。', 'error');

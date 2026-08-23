@@ -3,7 +3,7 @@
 Windows 桌面 Electron 控制面板，用图形界面管理多个项目的 PowerShell/ConPTY 终端、Claude Code 与
 Codex 会话、模型接入、路由、MCP、插件和更新。
 
-当前版本 **5.0.0-rc.13**，仅发布 Windows x64。
+当前版本 **5.0.0-rc.15**，仅发布 Windows x64。
 
 ## 功能
 
@@ -72,13 +72,21 @@ Codex 会话、模型接入、路由、MCP、插件和更新。
 
 ## 自动更新
 
-应用内「检查所有更新」使用 electron-updater 的 GitHub 源。每次发布构建：
+应用内「检查所有更新」由 electron-updater 读取打包进应用的腾讯云 COS 通用 HTTPS feed：
 
-- `ClaudeDock-Setup-<version>-x64.exe`
-- `ClaudeDock-Setup-<version>-x64.exe.blockmap`
-- `latest.yml`
+```text
+https://claudedock-1304375868.cos.ap-shanghai.myqcloud.com/updates/windows/x64/
+```
 
-更新器对照 `latest.yml` 校验版本，再按 SHA-512 摘要下载；摘要不符或版本回退时保留当前版本。
+每次发布包含安装包、同名 `.blockmap` 和当前通道清单：`5.0.0-rc.N` 使用 `rc.yml`，稳定版使用
+`latest.yml`。检查本身不下载；用户确认后才下载，完成后再次确认才重启安装。
+
+`5.0.0-rc.15` 是 COS 更新链的手动引导版本。已安装 rc.14 或更早版本的用户需要从
+[GitHub Releases](https://github.com/AeonusOvO/claude-dock-control-panel/releases) 手动安装 rc.15 一次；
+之后的 RC 版本从 COS `rc.yml` 更新。旧安装包内嵌的 GitHub feed 不能远程改写。
+
+更新器按通道清单的 SHA-512 校验下载字节并拒绝降级。SHA-512 只证明安装包与所读取清单一致；
+当前清单和安装包均未签名，不能据此证明发布者身份。控制 COS feed 的主体仍可同时替换清单和安装包。
 
 ## 开发
 
@@ -104,13 +112,17 @@ npm run dev
 | `npm run test:runtime-soak:accelerated` | 加速版 soak                                |
 | `npm run build`                         | 构建主进程、preload 与渲染端               |
 | `npm run dist`                          | 打包 Windows x64 安装包                    |
+| `npm run release:manifest`              | 校验通道、feed、产物和摘要链               |
+| `npm run release`                       | 打包并运行本地产物门禁，不发布             |
+| `npm run release:publish:cos`           | 发布已验证产物到 COS                       |
 
-`npm run dist` 产物写入 `outputs/`：
+`npm run dist` 产物写入 `outputs/`；`npm run release:manifest` 另生成本地发布报告：
 
 ```text
 outputs/ClaudeDock-Setup-<version>-x64.exe
 outputs/ClaudeDock-Setup-<version>-x64.exe.blockmap
-outputs/latest.yml
+outputs/<channel>.yml
+outputs/release-manifest.json
 outputs/win-unpacked/
 ```
 

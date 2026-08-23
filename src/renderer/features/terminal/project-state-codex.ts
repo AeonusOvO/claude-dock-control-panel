@@ -194,6 +194,9 @@ export const createTerminalCodexStateActions = (
     footerContextLabel.textContent = '上下文 —';
     footerContextRing.style.setProperty('--context-progress', '0%');
     renderFooterResource(state.resourceUsage);
+    for (const chip of [footerModel, footerSpeed, footerMode, footerEffort]) {
+      chip.dataset.presentationOwner = 'codex';
+    }
     footerModel.textContent = '模型 Codex 自动';
     footerModel.disabled = true;
     footerSpeed.textContent = '速度 Codex 内管理';

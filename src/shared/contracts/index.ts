@@ -6,6 +6,7 @@ export type * from './app';
 export type * from './artifact';
 export type * from './chat';
 export type * from './claude';
+export type * from './claude-execution-settings';
 export type * from './claude-plugin';
 export type * from './codex';
 export type * from './control-panel-api';

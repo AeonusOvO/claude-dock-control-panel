@@ -1,4 +1,5 @@
 import type { ClaudeSessionMetadata } from '../../../shared/contracts';
+import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-attempt';
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
 import type { ProjectsState } from './state';
 import type { WorkspaceRenderer } from './workspace';
@@ -87,23 +88,76 @@ export const createProjectsHistoryActions = (
     }
     state.storedConversationRestores.add(restoreKey);
     try {
-      const result = await window.controlPanel.openStoredConversation(
+      const opened = await window.controlPanel.openStoredConversation(
         projectPath,
         session.conversationId,
       );
-      workspaceRenderer.renderWorkspace(result.state);
-      if (!result.ok) {
+      workspaceRenderer.renderWorkspace(opened.state);
+      if (!opened.ok) {
         dependencies.showToast(
-          dependencies.resultFailureMessage(result, '无法恢复这个历史会话。'),
+          dependencies.resultFailureMessage(opened, '无法恢复这个历史会话。'),
           'error',
         );
         return;
       }
       dependencies.setNativePanelVisible(false);
       dependencies.retryTerminalFitUntilMeasured();
-      dependencies.requestComposerFocus(result.state.activeSessionId);
+      dependencies.requestComposerFocus(opened.state.activeSessionId);
       const label = session.sessionName || session.conversationId.slice(0, 8);
-      dependencies.showToast(result.reused ? `已切换到 ${label}` : `已在安全终端恢复 ${label}`);
+      if (opened.reused) {
+        dependencies.showToast(`已切换到 ${label}`);
+        return;
+      }
+
+      const status = opened.state.sessions.find(({ id }) => id === opened.state.activeSessionId);
+      if (!status) {
+        dependencies.showToast('无法找到刚创建的历史会话终端。', 'error');
+        return;
+      }
+      const attempt = dependencies.beginClaudeLaunchAttempt(status);
+      const outcome = await orchestrateClaudeLaunchAttempt({
+        applyResult: (launchOutcome) =>
+          launchOutcome.status === 'paused' ||
+          dependencies.renderClaudeLaunchResult(
+            attempt,
+            launchOutcome.result.state,
+            launchOutcome.result.ok ? 'success' : 'failure',
+          ),
+        onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
+        registry: dependencies.claudeLaunchAttempts,
+        start: () => window.controlPanel.launchClaudeWithSession(status.id, session.conversationId),
+        token: attempt,
+      });
+      if (outcome.status === 'rejected') {
+        dependencies.showToast('恢复历史会话时发生异常。', 'error');
+        return;
+      }
+      if (outcome.status !== 'resolved') return;
+
+      let launchOutcome = outcome.result;
+      if (launchOutcome.status === 'paused') {
+        const decision = await dependencies.resolveClaudeLaunchDecision(attempt, launchOutcome);
+        if (decision.status !== 'completed') return;
+        launchOutcome = decision;
+        if (
+          !dependencies.renderClaudeLaunchResult(
+            attempt,
+            launchOutcome.result.state,
+            launchOutcome.result.ok ? 'success' : 'failure',
+          )
+        ) {
+          return;
+        }
+      }
+      if (!launchOutcome.result.ok) {
+        dependencies.failClaudeLaunchAttempt(attempt);
+        dependencies.showToast(
+          dependencies.resultFailureMessage(launchOutcome.result, '无法恢复这个历史会话。'),
+          'error',
+        );
+        return;
+      }
+      dependencies.showToast(`已在安全终端恢复 ${label}`);
     } catch {
       dependencies.showToast('无法恢复这个历史会话。', 'error');
     } finally {

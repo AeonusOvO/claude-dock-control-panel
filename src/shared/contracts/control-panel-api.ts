@@ -17,7 +17,7 @@ import type {
 import type { TerminalThemeId } from '../ui/terminal-themes';
 import type {
   AdvancedSettings,
-  AppQuitDecision,
+  AppQuitDecisionResponse,
   AppQuitRequest,
   AppSettingsView,
   BusyLease,
@@ -55,6 +55,9 @@ import type {
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeLaunchMode,
+  ClaudeLaunchOutcome,
+  ClaudeLaunchPreflightDecisionInput,
+  ClaudeLaunchPreflightDecisionOutcome,
   ClaudeModelOptions,
   ClaudeOperationResult,
   ClaudePermissionDecision,
@@ -69,6 +72,10 @@ import type {
   ModelSpeedMode,
   SaveClaudeConfigInput,
 } from './claude';
+import type {
+  ClaudeExecutionSettingsDto,
+  ClaudeExecutionSettingsRequest,
+} from './claude-execution-settings';
 import type { ClaudePluginCatalog, ClaudePluginOperationResult } from './claude-plugin';
 import type {
   CodexLaunchMode,
@@ -152,7 +159,8 @@ export interface AppApi {
    * through `confirmQuit`, including the cancelling answer — the quit stays blocked until it does.
    */
   onAppQuitRequested: (listener: (request: AppQuitRequest) => void) => Unsubscribe;
-  confirmQuit: (decision: AppQuitDecision) => void;
+  onAppQuitRequestInvalidated: (listener: (requestId: string) => void) => Unsubscribe;
+  confirmQuit: (response: AppQuitDecisionResponse) => void;
   minimizeToTray: () => void;
   onOpenDownloadCenterRequested: (listener: () => void) => Unsubscribe;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
@@ -388,7 +396,10 @@ export interface ClaudeApi {
   relaunchClaudeSession: (
     sessionId: string,
     input: ClaudeRelaunchInput,
-  ) => Promise<ClaudeOperationResult>;
+  ) => Promise<ClaudeLaunchOutcome>;
+  decideClaudeLaunchPreflight: (
+    input: ClaudeLaunchPreflightDecisionInput,
+  ) => Promise<ClaudeLaunchPreflightDecisionOutcome>;
   /** Walks the Shift+Tab cycle until the live badge reports the requested mode. */
   setClaudePermissionMode: (
     sessionId: string,
@@ -436,9 +447,10 @@ export interface ClaudeApi {
     name: string,
   ) => Promise<ClaudeConnectionHistoryResult>;
   discoverClaudeProviderModels: (
+    sessionId: string,
     input: ClaudeProviderModelDiscoveryInput,
   ) => Promise<ClaudeProviderModelDiscoveryResult>;
-  launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeOperationResult>;
+  launchClaude: (sessionId: string, mode: ClaudeLaunchMode) => Promise<ClaudeLaunchOutcome>;
   onClaudeState: (listener: (state: ClaudeProjectState) => void) => Unsubscribe;
   runClaudeCommand: (
     sessionId: string,
@@ -467,7 +479,16 @@ export interface ClaudeApi {
   launchClaudeWithSession: (
     sessionId: string,
     conversationId: string,
-  ) => Promise<ClaudeOperationResult>;
+  ) => Promise<ClaudeLaunchOutcome>;
+}
+
+export interface ClaudeExecutionSettingsApi {
+  getClaudeExecutionSettings: () => Promise<ClaudeExecutionSettingsDto>;
+  updateClaudeExecutionSettings: (
+    requested: ClaudeExecutionSettingsRequest,
+  ) => Promise<ClaudeExecutionSettingsDto>;
+  useRecommendedClaudeExecutionSettings: () => Promise<ClaudeExecutionSettingsDto>;
+  restoreClaudeExecutionSettingsDefault: () => Promise<ClaudeExecutionSettingsDto>;
 }
 
 export interface ClaudePluginApi {
@@ -487,6 +508,7 @@ export interface ClaudePluginApi {
 
 export interface ManagedChatGptApi {
   getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
+  logoutManagedChatGptGateway: () => Promise<ManagedChatGptGatewayOperationResult>;
   openManagedChatGptGatewayManagement: () => Promise<OperationResult>;
   onManagedChatGptSetupProgress: (
     listener: (progress: ManagedChatGptSetupProgress) => void,
@@ -495,10 +517,7 @@ export interface ManagedChatGptApi {
     sessionId: string,
     model: string,
   ) => Promise<ManagedChatGptGatewayOperationResult>;
-  setupManagedChatGptGateway: (
-    sessionId?: string,
-    forceLogin?: boolean,
-  ) => Promise<ManagedChatGptGatewayOperationResult>;
+  setupManagedChatGptGateway: (sessionId?: string) => Promise<ManagedChatGptGatewayOperationResult>;
 }
 
 export interface RouterApi {
@@ -538,11 +557,12 @@ export interface CodexApi {
 }
 
 export interface McpApi {
-  getMcpCatalog: (cwd: string, refresh?: boolean) => Promise<McpCatalog>;
+  getMcpCatalog: (cwd: string, refreshRegistry?: boolean) => Promise<McpCatalog>;
   installMcpServer: (input: McpInstallInput) => Promise<McpOperationResult>;
   removeMcpServer: (input: McpRemoveInput) => Promise<McpOperationResult>;
   previewMcpToggle: (cwd: string, name: string, enabled: boolean) => Promise<McpTogglePreview>;
   applyMcpToggle: (previewId: string, cwd: string) => Promise<McpOperationResult>;
+  discardMcpToggle: (previewId: string) => Promise<boolean>;
   getMcpBackups: () => Promise<McpBackupView[]>;
   restoreMcpBackup: (backupId: string, cwd: string) => Promise<McpOperationResult>;
 }
@@ -550,7 +570,7 @@ export interface McpApi {
 export interface SoftwareUpdateApi {
   getSoftwareUpdates: (refresh?: boolean) => Promise<SoftwareUpdateState>;
   installOrUpdateClaudeCode: () => Promise<SoftwareUpdateOperationResult>;
-  getApplicationUpdaterState: () => Promise<ApplicationUpdaterState>;
+  getApplicationUpdaterState: (refresh?: boolean) => Promise<ApplicationUpdaterState>;
   downloadApplicationUpdate: () => Promise<ApplicationUpdaterState>;
   installApplicationUpdate: () => Promise<void>;
   onApplicationUpdaterChanged: (listener: (state: ApplicationUpdaterState) => void) => () => void;
@@ -575,6 +595,7 @@ export interface ControlPanelApi
     NativeConversationApi,
     NativeAttachmentApi,
     ClaudeApi,
+    ClaudeExecutionSettingsApi,
     ClaudePluginApi,
     ManagedChatGptApi,
     RouterApi,

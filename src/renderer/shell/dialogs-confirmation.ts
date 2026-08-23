@@ -8,6 +8,7 @@ export interface ConfirmationRequest {
 }
 
 export interface ConfirmationDialogActions {
+  cancelPending: () => void;
   requestConfirmation: (request: ConfirmationRequest) => Promise<boolean>;
 }
 
@@ -73,5 +74,10 @@ export const createConfirmationDialogActions = (): ConfirmationDialogActions => 
     });
   };
 
-  return { requestConfirmation };
+  return {
+    cancelPending: () => {
+      if (confirmationDialog.open) confirmationDialog.close('cancel');
+    },
+    requestConfirmation,
+  };
 };

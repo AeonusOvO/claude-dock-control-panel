@@ -10,8 +10,8 @@ export const createChatGptSubscriptionGuide = (
 ): (() => HTMLElement) => {
   const buildChatGptSubscriptionGuide = (): HTMLElement => {
     const elements = buildChatGptSubscriptionGuideElements();
-    const renderActions = createChatGptGuideRenderActions(elements, deps, (forceLogin, button) =>
-      setupActions.runSetup(forceLogin, button),
+    const renderActions = createChatGptGuideRenderActions(elements, deps, (button) =>
+      setupActions.runLogout(button),
     );
     const setupActions = createChatGptGuideSetupActions(elements, deps, renderActions);
     const {

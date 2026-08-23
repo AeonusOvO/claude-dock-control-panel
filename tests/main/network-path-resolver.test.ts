@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { NetworkPathResolver } from '../../src/main/network/path-resolver';
+import { NetworkPathResolver, PROXY_ENVIRONMENT_KEYS } from '../../src/main/network/path-resolver';
+import { RiskDecisionEngine } from '../../src/main/network/risk-decision-engine';
 
 describe('NetworkPathResolver', () => {
   it('labels the loopback HTTP adapter as ClaudeDock built-in proxy', async () => {
@@ -60,15 +61,107 @@ describe('NetworkPathResolver', () => {
     });
   });
 
-  it('marks every path proxy state unknown when the lookup times out', () => {
-    const paths = new NetworkPathResolver(async () => 'DIRECT').unknownPaths(
-      'anthropic-claude',
-      '本机网络路径探测超时，代理状态未知。',
+  it('preserves independently observed local facts when proxy lookup times out', () => {
+    const localFacts = {
+      dnsServers: ['192.0.2.53', '2001:db8::53'],
+      globalIpv6Available: true,
+      ipv4Available: true,
+      ipv6Available: true,
+      virtualInterfaces: ['虚拟网络接口'],
+    };
+    const paths = new NetworkPathResolver(
+      async () => 'DIRECT',
+      () => 'http://127.0.0.1:43123',
+      () => localFacts,
+    ).unknownPaths('anthropic-claude', 'Electron 系统代理解析超时，PAC 路径未知。');
+
+    expect(paths.map(({ process }) => process)).toEqual([
+      'application',
+      'oauth-browser',
+      'claude-cli',
+      'terminal',
+      'renderer',
+    ]);
+    expect(paths).toEqual(
+      paths.map((path) =>
+        expect.objectContaining({
+          ...localFacts,
+          detail: expect.stringContaining('超时'),
+          process: path.process,
+        }),
+      ),
+    );
+    const pacDependentPaths = paths.filter(({ process }) =>
+      ['application', 'oauth-browser', 'renderer'].includes(process),
+    );
+    expect(
+      pacDependentPaths.every(
+        ({ proxyConfigured, proxyKind }) => !proxyConfigured && proxyKind === 'unknown',
+      ),
+    ).toBe(true);
+    const cliPaths = paths.filter(({ process }) => ['claude-cli', 'terminal'].includes(process));
+    expect(
+      cliPaths.every(
+        ({ detail, proxyConfigured, proxyKind }) =>
+          detail.includes('本地配置独立判定') &&
+          proxyConfigured &&
+          proxyKind === 'application-proxy',
+      ),
+    ).toBe(true);
+  });
+
+  it('preserves an Anthropic ALL_PROXY SOCKS block when PAC resolution times out', () => {
+    const originalEnvironment = PROXY_ENVIRONMENT_KEYS.map(
+      (key) => [key, process.env[key]] as const,
+    );
+    try {
+      for (const key of PROXY_ENVIRONMENT_KEYS) delete process.env[key];
+      process.env.ALL_PROXY = 'socks5://127.0.0.1:1080';
+      const paths = new NetworkPathResolver(
+        async () => 'DIRECT',
+        () => undefined,
+        () => ({
+          dnsServers: ['192.0.2.53'],
+          globalIpv6Available: false,
+          ipv4Available: true,
+          ipv6Available: false,
+          virtualInterfaces: [],
+        }),
+      ).unknownPaths('anthropic-claude', 'Electron 系统代理解析超时，PAC 路径未知。');
+
+      expect(paths.find(({ process }) => process === 'claude-cli')).toMatchObject({
+        proxyConfigured: true,
+        proxyKind: 'socks',
+      });
+      const decision = new RiskDecisionEngine().evaluate(
+        'anthropic-claude',
+        'cli-launch',
+        { paths, probes: [] },
+        1,
+        2,
+      );
+      expect(decision.signals.map(({ id }) => id)).toContain('unsupported-cli-proxy');
+      expect(decision.status).toBe('blocked');
+    } finally {
+      for (const key of PROXY_ENVIRONMENT_KEYS) delete process.env[key];
+      for (const [key, value] of originalEnvironment) {
+        if (value !== undefined) process.env[key] = value;
+      }
+    }
+  });
+
+  it('returns no authoritative path rows when host-local fact collection fails', async () => {
+    const resolver = new NetworkPathResolver(
+      async () => 'DIRECT',
+      () => undefined,
+      () => {
+        throw new Error('local facts unavailable');
+      },
     );
 
-    expect(paths.length).toBeGreaterThan(0);
-    expect(paths.every((path) => path.proxyKind === 'unknown')).toBe(true);
-    expect(paths.some((path) => path.process === 'claude-cli')).toBe(true);
-    expect(paths.every((path) => path.detail.includes('超时'))).toBe(true);
+    await expect(
+      resolver.resolve('openai-api', 'https://api.openai.com/', 'application'),
+    ).resolves.toEqual([]);
+    expect(resolver.unknownPaths('openai-api', '代理解析超时。')).toEqual([]);
   });
 });

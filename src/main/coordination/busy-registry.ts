@@ -22,7 +22,14 @@ export class BusyRegistry {
       lease.id,
       Object.freeze({ ...lease, startedAt: lease.startedAt ?? Date.now() }),
     );
-    this.notify();
+    try {
+      this.notify();
+    } catch (error) {
+      // acquire() must be transactional: callers cannot release a lease if notification throws before
+      // the release callback is returned.
+      this.leases.delete(lease.id);
+      throw error;
+    }
     let released = false;
     return () => {
       if (released) {
@@ -30,7 +37,11 @@ export class BusyRegistry {
       }
       released = true;
       if (this.leases.delete(lease.id)) {
-        this.notify();
+        try {
+          this.notify();
+        } catch {
+          // The lease is already released; observer failure must not interrupt owner teardown.
+        }
       }
     };
   }

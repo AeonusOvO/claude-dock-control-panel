@@ -25,6 +25,22 @@ const listCssFiles = (directory: string): string[] =>
     })
     .sort((left, right) => left.localeCompare(right));
 
+const listTypeScriptFiles = (directory: string): string[] =>
+  readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => {
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return listTypeScriptFiles(absolutePath);
+      return entry.isFile() && entry.name.endsWith('.ts') ? [absolutePath] : [];
+    })
+    .sort((left, right) => left.localeCompare(right));
+
+/*
+ * Built fresh per call rather than shared: a `/g` regex carries `lastIndex` between `test()` calls,
+ * which would silently skip files once the scan below moved past the first match.
+ */
+const stylesheetImports = (source: string): string[] =>
+  [...source.matchAll(/^import '([^']+\.css)';$/gm)].flatMap((match) => match[1] ?? []);
+
 const styleSources: StyleSource[] = listCssFiles(stylesDirectory).map((absolutePath) => {
   const css = readFileSync(absolutePath, 'utf8');
   return {
@@ -38,6 +54,7 @@ const sourceByPath = new Map(styleSources.map((source) => [source.relativePath, 
 if (!sourceByPath.has(TOKENS_FILE)) throw new Error(`Missing ${TOKENS_FILE}`);
 
 const entryStyles = readFileSync(path.join(rendererDirectory, 'styles.css'), 'utf8');
+const rendererEntry = readFileSync(path.join(rendererDirectory, 'main.ts'), 'utf8');
 const rendererMarkup = readFileSync(path.join(rendererDirectory, 'index.html'), 'utf8');
 const componentSource = readFileSync(
   path.join(rendererDirectory, 'platform', 'components.ts'),
@@ -148,6 +165,38 @@ describe('design-system source architecture', () => {
         'views/terminal.css',
       ]),
     );
+  });
+
+  /*
+   * Emit order is the entire cascade for vendor CSS. xterm.css hardcodes
+   * `background-color: #000` on `.xterm .xterm-viewport` at exactly the same specificity as the
+   * override in `views/terminal.css`, so whichever rule the bundler writes last wins. This import
+   * used to live in `features/terminal/terminal-views-create.ts`, which made Vite emit it *after*
+   * the design system: the viewport stayed opaque black, and because the character grid only covers
+   * whole cells, every theme showed a black ring in the leftover strip right of and below the grid.
+   * It reproduced only in packaged builds — `vite serve` injects <style> tags in a different order —
+   * so the gate is on import position, not on rendered output.
+   */
+  it('imports every vendor stylesheet ahead of the design system', () => {
+    const imports = stylesheetImports(rendererEntry);
+    const designSystemIndex = imports.indexOf('./styles.css');
+
+    expect(designSystemIndex).toBeGreaterThan(0);
+    expect(imports.slice(0, designSystemIndex)).toEqual([
+      'katex/dist/katex.css',
+      '@xterm/xterm/css/xterm.css',
+    ]);
+    // The design system is last, so nothing third-party can be appended behind it.
+    expect(designSystemIndex).toBe(imports.length - 1);
+
+    // Any other module importing a stylesheet lands in the bundle wherever its feature happens to
+    // be reached, which is exactly how the ordering broke in the first place.
+    const offenders = listTypeScriptFiles(rendererDirectory)
+      .filter((absolutePath) => absolutePath !== path.join(rendererDirectory, 'main.ts'))
+      .filter((absolutePath) => stylesheetImports(readFileSync(absolutePath, 'utf8')).length > 0)
+      .map((absolutePath) => path.relative(rendererDirectory, absolutePath).replaceAll('\\', '/'));
+
+    expect(offenders).toEqual([]);
   });
 
   it('defines every referenced custom property in CSS or the theme bridge', () => {
@@ -355,6 +404,34 @@ describe('design-token literals', () => {
   it('drops decorative window lights from the shell', () => {
     expect(`${entryStyles}\n${allStyles}`).not.toContain('window-lights');
   });
+
+  /*
+   * The neutral-colour exemption above deliberately allows pure black and pure white, which is how
+   * five dialogs came to paint a hardcoded `rgb(0 0 0 / 58%)` scrim that ignored the theme entirely.
+   * A modal scrim is a theme surface, so it gets its own rule: every `::backdrop` takes its colour
+   * from the per-theme `--mask-veil` token and nothing else.
+   */
+  it('paints every modal scrim from the per-theme mask token', () => {
+    const offenders: string[] = [];
+    let canonicalScrims = 0;
+
+    for (const source of styleSources) {
+      source.root.walkRules((rule) => {
+        if (!rule.selector.includes('::backdrop')) return;
+        if (normalizeSelector(rule.selector) === 'dialog::backdrop') canonicalScrims += 1;
+
+        rule.walkDecls(/^background(?:-color|-image)?$/, (declaration) => {
+          if (!declaration.value.includes('var(--mask-veil)')) {
+            offenders.push(`${locationOf(source, declaration)}: ${declaration.toString()}`);
+          }
+        });
+      });
+    }
+
+    expect(offenders).toEqual([]);
+    // Exactly one rule owns the scrim, so a theme switch can never leave a dialog behind.
+    expect(canonicalScrims).toBe(1);
+  });
 });
 
 describe('popover contract', () => {
@@ -388,9 +465,9 @@ describe('popover contract', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('marks exactly ten dialogs as popovers', () => {
+  it('marks exactly eleven dialogs as popovers', () => {
     const dialogs = rendererMarkup.match(/<dialog\b[^>]*>/gi) ?? [];
-    expect(dialogs).toHaveLength(10);
+    expect(dialogs).toHaveLength(11);
     expect(dialogs.filter((openingTag) => !classTokens(openingTag).includes('popover'))).toEqual(
       [],
     );

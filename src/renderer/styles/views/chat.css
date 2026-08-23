@@ -349,11 +349,6 @@
   width: min(460px, calc(100vw - 48px));
 }
 
-.chat-settings-dialog::backdrop {
-  backdrop-filter: blur(var(--mask-blur));
-  background: rgb(0 0 0 / 42%);
-}
-
 .chat-settings-dialog .chat-config-form {
   display: grid;
   gap: 0;

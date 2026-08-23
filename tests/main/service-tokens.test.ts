@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { Registry } from '../../src/main/infra/registry';
 import {
-  APPLICATION_PROXY_STORE,
+  APPLICATION_PROXY_COORDINATOR,
   APPLICATION_PROXY_TEST_SESSION,
   APPLICATION_UPDATER_SERVICE,
   BUSY_REGISTRY,
   CC_SWITCH_ADAPTER,
+  CLAUDE_EXECUTION_INSTALLATION_PROVIDER,
+  CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER,
+  CLAUDE_EXECUTION_SETTINGS_SERVICE,
   CLAUDE_PERMISSION_BRIDGE,
   CLAUDE_RUNTIME,
   CLAUDE_STREAM_DIAGNOSTICS_STORE,
@@ -24,11 +27,14 @@ import {
 } from '../../src/main/infra/service-tokens';
 
 const serviceTokens = [
-  APPLICATION_PROXY_STORE,
+  APPLICATION_PROXY_COORDINATOR,
   APPLICATION_PROXY_TEST_SESSION,
   APPLICATION_UPDATER_SERVICE,
   BUSY_REGISTRY,
   CC_SWITCH_ADAPTER,
+  CLAUDE_EXECUTION_INSTALLATION_PROVIDER,
+  CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER,
+  CLAUDE_EXECUTION_SETTINGS_SERVICE,
   CLAUDE_PERMISSION_BRIDGE,
   CLAUDE_RUNTIME,
   CLAUDE_STREAM_DIAGNOSTICS_STORE,
@@ -46,9 +52,9 @@ const serviceTokens = [
 ] as const;
 
 describe('main service tokens', () => {
-  it('declares 19 independent typed symbols', () => {
-    expect(serviceTokens).toHaveLength(19);
-    expect(new Set(serviceTokens).size).toBe(19);
+  it('declares 22 independent typed symbols', () => {
+    expect(serviceTokens).toHaveLength(22);
+    expect(new Set(serviceTokens).size).toBe(22);
     expect(serviceTokens.every((token) => typeof token === 'symbol')).toBe(true);
   });
 

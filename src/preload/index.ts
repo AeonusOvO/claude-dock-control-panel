@@ -13,6 +13,7 @@ import { networkPreflightBridge } from './bridges/network-preflight';
 import { nativeConversationBridge } from './bridges/native-conversation';
 import { nativeAttachmentBridge } from './bridges/native-attachment';
 import { claudeBridge } from './bridges/claude';
+import { claudeExecutionSettingsBridge } from './bridges/claude-execution-settings';
 import { claudePluginBridge } from './bridges/claude-plugin';
 import { managedChatgptBridge } from './bridges/managed-chatgpt';
 import { routerBridge } from './bridges/router';
@@ -34,6 +35,7 @@ const api = {
   ...nativeConversationBridge,
   ...nativeAttachmentBridge,
   ...claudeBridge,
+  ...claudeExecutionSettingsBridge,
   ...claudePluginBridge,
   ...managedChatgptBridge,
   ...routerBridge,

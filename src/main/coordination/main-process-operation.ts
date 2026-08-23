@@ -11,14 +11,19 @@ export interface RuntimeSwitchSessionSnapshot {
 }
 
 export interface ProjectRuntimeSwitchDependencies {
+  assertSwitchAllowed: (cwd: string) => void;
   cleanupBeforeCommit: (cwd: string, selected: DevelopmentRuntime) => Promise<void>;
   commitRuntime: (cwd: string, selected: DevelopmentRuntime) => void;
   getCurrentRuntime: (cwd: string) => DevelopmentRuntime;
   getSession: (sessionId: string) => RuntimeSwitchSessionSnapshot | undefined;
   hasActiveRuntime: (sessionId: string) => boolean;
   invalidateAndWait: (sessionId: string) => Promise<void>;
-  prepareProvider: (cwd: string, selected: DevelopmentRuntime) => Promise<void>;
   sessionsForDirectory: (cwd: string) => RuntimeSwitchSessionSnapshot[];
+  withProviderAccess: (
+    cwd: string,
+    selected: DevelopmentRuntime,
+    operation: () => Promise<DevelopmentRuntime>,
+  ) => Promise<DevelopmentRuntime>;
 }
 
 interface DirectorySwitchIntent {
@@ -118,23 +123,26 @@ export class ProjectRuntimeSwitchCoordinator {
   private async execute(intent: DirectorySwitchIntent): Promise<DevelopmentRuntime> {
     try {
       await intent.predecessor;
-      const sessions = this.assertStable(intent, false);
+      this.assertStable(intent, false);
       if (intent.expectedRuntime === intent.selected) {
         return intent.selected;
       }
 
-      await Promise.all(sessions.map((session) => this.dependencies.invalidateAndWait(session.id)));
-      this.assertStable(intent, true);
+      // The await is intentional: keep the switch reservation owned until the access lease releases.
+      return await this.dependencies.withProviderAccess(intent.cwd, intent.selected, async () => {
+        const sessions = this.assertStable(intent, false);
+        await Promise.all(
+          sessions.map((session) => this.dependencies.invalidateAndWait(session.id)),
+        );
+        this.assertStable(intent, true);
 
-      await this.dependencies.prepareProvider(intent.cwd, intent.selected);
-      this.assertStable(intent, true);
+        await this.dependencies.cleanupBeforeCommit(intent.cwd, intent.selected);
+        this.assertStable(intent, true);
 
-      await this.dependencies.cleanupBeforeCommit(intent.cwd, intent.selected);
-      this.assertStable(intent, true);
-
-      // Persistence is deliberately the final synchronous commit. Nothing may await after this line.
-      this.dependencies.commitRuntime(intent.cwd, intent.selected);
-      return intent.selected;
+        // Persistence is deliberately the final synchronous commit. Nothing may await after this line.
+        this.dependencies.commitRuntime(intent.cwd, intent.selected);
+        return intent.selected;
+      });
     } finally {
       if (this.currentByDirectory.get(intent.key) === intent) {
         this.currentByDirectory.delete(intent.key);
@@ -148,6 +156,7 @@ export class ProjectRuntimeSwitchCoordinator {
     cwd: string,
     selected: DevelopmentRuntime,
   ): DirectorySwitchIntent {
+    this.dependencies.assertSwitchAllowed(cwd);
     const key = directoryKey(cwd);
     const initiatingSession = this.dependencies.getSession(sessionId);
     if (!initiatingSession || directoryKey(initiatingSession.cwd) !== key) {
@@ -229,6 +238,10 @@ export class SessionConfigTransactionCoordinator {
   private nextGeneration = 0;
   private readonly reservations = new Map<string, Set<ConfigTransactionIntent>>();
   private readonly tail = new Map<string, ConfigTransactionIntent>();
+
+  public constructor(
+    private readonly assertReservationAllowed: (cwd: string) => void = () => undefined,
+  ) {}
 
   /** Blocks sibling launches while a same-folder transaction exposes tentative persisted config. */
   public assertDevelopmentOperationAllowed(cwd: string, sessionId?: string): void {
@@ -321,6 +334,7 @@ export class SessionConfigTransactionCoordinator {
   }
 
   private reserve(sessionId: string, cwd: string): ConfigTransactionIntent {
+    this.assertReservationAllowed(cwd);
     const key = directoryKey(cwd);
     if (this.active.get(key)?.isolationAcquired) {
       throw new Error('当前项目配置事务已进入隔离保存阶段，请等待操作完成后重试。');
@@ -369,6 +383,10 @@ export interface OwnedConfigTransactionOptions<TSnapshot, TPrepared, TState> {
   coordinator: SessionConfigTransactionCoordinator;
   createSnapshot: () => TSnapshot;
   cwd: string;
+  mergeCompletionSnapshot?: (
+    committedSnapshot: TSnapshot,
+    completedSnapshot: TSnapshot,
+  ) => TSnapshot;
   prepare: () => Promise<TPrepared> | TPrepared;
   publishRestoredState?: (state: TState) => void;
   readState: () => Promise<TState>;
@@ -419,7 +437,16 @@ export const runOwnedConfigTransaction = <TSnapshot, TPrepared, TState>(
         throw new Error('项目配置已被更新，本次保存结果不再拥有当前配置。');
       }
 
-      const state = await options.complete(prepared);
+      let state: TState;
+      try {
+        state = await options.complete(prepared);
+      } finally {
+        // Claude completion owns history recency, but it does not own arbitrary project-config drift
+        // that races its awaits. Merge only the explicitly declared completion-owned snapshot fields.
+        if (options.mergeCompletionSnapshot) {
+          savedSnapshot = options.mergeCompletionSnapshot(savedSnapshot, options.createSnapshot());
+        }
+      }
       ownership.assertCurrent();
       options.assertOperationOwnership();
       if (!isDeepStrictEqual(options.createSnapshot(), savedSnapshot)) {

@@ -25,10 +25,25 @@ export const runStartupContributions = async (
   }
 };
 
-export const runQuitContributions = (contributions: readonly QuitContribution[]): void => {
+/**
+ * Runs every teardown step, even when one of them throws.
+ *
+ * Quit contributions are independent cleanups, and the last of them is what force-kills the
+ * PowerShell trees ConPTY's own `kill()` cannot reach. Without per-step isolation, one throwing
+ * contribution would skip all the later ones and leave those shells running after the app is gone —
+ * so a failure is recorded and the sweep continues. Errors are collected rather than logged here to
+ * keep this module free of infrastructure imports; the caller decides how to report them.
+ */
+export const runQuitContributions = (contributions: readonly QuitContribution[]): unknown[] => {
+  const failures: unknown[] = [];
   for (const contribution of contributions) {
-    contribution();
+    try {
+      contribution();
+    } catch (error) {
+      failures.push(error);
+    }
   }
+  return failures;
 };
 
 export const collectTrayMenuItems = <Context, Item>(

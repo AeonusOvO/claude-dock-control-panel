@@ -69,6 +69,7 @@ export class TerminalWorkspace {
   private currentThemeId: TerminalThemeId;
   private nextSessionNumber = 1;
   private readonly sessions = new Map<string, ManagedTerminal>();
+  private beforeActiveSessionChange: () => void = () => undefined;
   private environmentProvider: () => TerminalEnvironmentOverrides = () => ({});
 
   public constructor(
@@ -86,7 +87,7 @@ export class TerminalWorkspace {
 
   public activate(sessionId: string): TerminalWorkspaceState {
     this.requireSession(sessionId);
-    this.activeSessionId = sessionId;
+    this.setActiveSession(sessionId);
     this.emitState();
     return this.getState();
   }
@@ -101,13 +102,13 @@ export class TerminalWorkspace {
     this.claudeSessionTitles.delete(sessionId);
 
     if (this.sessions.size === 0) {
-      this.activeSessionId = '';
+      this.setActiveSession('');
     } else if (this.activeSessionId === sessionId) {
       const nextId = sessionIds[closedIndex + 1] ?? sessionIds[closedIndex - 1];
       if (!nextId || !this.sessions.has(nextId)) {
         throw new Error('无法选择下一个项目会话。');
       }
-      this.activeSessionId = nextId;
+      this.setActiveSession(nextId);
     }
 
     this.emitState();
@@ -162,7 +163,7 @@ export class TerminalWorkspace {
     if (existingId) {
       const existing = this.requireSession(existingId);
       const status = existing.getStatus();
-      this.activeSessionId = status.id;
+      this.setActiveSession(status.id);
       if (status.phase === 'stopped' || status.phase === 'error') {
         existing.start(status.cwd, this.withDefaultEnvironment(), this.currentThemeId);
       } else {
@@ -177,7 +178,7 @@ export class TerminalWorkspace {
   /** Always create an additional concurrent conversation for this folder. */
   public openConversation(cwd: string, title?: string): TerminalWorkspaceState {
     const sessionId = this.createSession(cwd, title ?? this.nextConversationTitle(cwd));
-    this.activeSessionId = sessionId;
+    this.setActiveSession(sessionId);
     this.emitState();
     this.requireSession(sessionId).start(cwd, this.withDefaultEnvironment(), this.currentThemeId);
     return this.getState();
@@ -230,6 +231,10 @@ export class TerminalWorkspace {
       this.withDefaultEnvironment(environment),
       this.currentThemeId,
     );
+  }
+
+  public setBeforeActiveSessionChange(callback: () => void): void {
+    this.beforeActiveSessionChange = callback;
   }
 
   public setEnvironmentProvider(provider: () => TerminalEnvironmentOverrides): void {
@@ -302,6 +307,12 @@ export class TerminalWorkspace {
 
   private emitState(): void {
     this.onState(this.getState());
+  }
+
+  private setActiveSession(sessionId: string): void {
+    if (this.activeSessionId === sessionId) return;
+    this.beforeActiveSessionChange();
+    this.activeSessionId = sessionId;
   }
 
   private requireSession(sessionId: string): ManagedTerminal {

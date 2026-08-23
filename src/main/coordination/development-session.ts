@@ -11,13 +11,13 @@ import {
   ProjectRuntimeSwitchCoordinator,
   SessionConfigTransactionCoordinator,
 } from './main-process-operation';
-import { SessionOperationCoordinator } from './session-operation';
+import { SessionOperationCoordinator, type SessionOperationStamp } from './session-operation';
 
 export interface DevelopmentSessionCoordinationDependencies {
   agentRuntimeStore: AgentRuntimeStore;
   guards: Pick<
     MainGuards,
-    'assertOfficialProviderAllowed' | 'requireClaudeRuntime' | 'requireCodexRuntime'
+    'requireClaudeRuntime' | 'requireCodexRuntime' | 'withOfficialProviderAccess'
   >;
   resolvePendingPermissionModeProbes: PermissionModeProbes['resolvePendingPermissionModeProbes'];
   services: Registry;
@@ -43,12 +43,16 @@ export interface DevelopmentSessionCoordination {
     sessionId: string,
     operation: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
+  withDevelopmentSessionOperationIfStampCurrent: <T>(
+    stamp: SessionOperationStamp,
+    operation: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   withoutTerminalOperationInvalidation: <T>(sessionId: string, operation: () => T) => T;
 }
 
 export const createDevelopmentSessionCoordination = ({
   agentRuntimeStore,
-  guards: { assertOfficialProviderAllowed, requireClaudeRuntime, requireCodexRuntime },
+  guards: { requireClaudeRuntime, requireCodexRuntime, withOfficialProviderAccess },
   resolvePendingPermissionModeProbes,
   services,
   terminalOperationInvalidationSuppressions,
@@ -59,7 +63,13 @@ export const createDevelopmentSessionCoordination = ({
   const developmentSessionOperations = new SessionOperationCoordinator((sessionId) =>
     workspace.hasSession(sessionId),
   );
+  // These reciprocal checks and reservations must stay synchronous. Together they prevent a runtime
+  // switch from resolving provider access while a config transaction exposes tentative persisted config.
+  const managedConfigTransactions = new SessionConfigTransactionCoordinator((cwd) =>
+    projectRuntimeSwitchOperations.assertDevelopmentOperationAllowed(cwd),
+  );
   const projectRuntimeSwitchOperations = new ProjectRuntimeSwitchCoordinator({
+    assertSwitchAllowed: (cwd) => managedConfigTransactions.assertDevelopmentOperationAllowed(cwd),
     cleanupBeforeCommit: async (_cwd, selected) => {
       if (selected === 'codex') {
         await requireClaudeRuntime().stopUnusedRoutingServices();
@@ -72,17 +82,19 @@ export const createDevelopmentSessionCoordination = ({
     hasActiveRuntime: (sessionId) =>
       requireClaudeRuntime().isActive(sessionId) || requireCodexRuntime().isActive(sessionId),
     invalidateAndWait: (sessionId) => developmentSessionOperations.invalidateAndWait(sessionId),
-    prepareProvider: async (cwd, selected) => {
-      const officialProvider =
-        selected === 'codex' ? 'openai-codex' : requireClaudeRuntime().officialNetworkProvider(cwd);
-      if (officialProvider) {
-        await assertOfficialProviderAllowed(officialProvider, 'provider-switch', cwd);
-      }
-    },
     sessionsForDirectory: (cwd) =>
       workspace.sessionIdsForDirectory(cwd).map((sessionId) => workspace.getStatus(sessionId)),
+    withProviderAccess: (cwd, selected, operation) => {
+      const officialProvider =
+        selected === 'codex' ? 'openai-codex' : requireClaudeRuntime().officialNetworkProvider(cwd);
+      return officialProvider
+        ? withOfficialProviderAccess(
+            { action: 'provider-switch', cwd, provider: officialProvider },
+            operation,
+          )
+        : operation();
+    },
   });
-  const managedConfigTransactions = new SessionConfigTransactionCoordinator();
 
   const invalidateDevelopmentSessionOperation = (sessionId: string): void => {
     developmentSessionOperations.invalidate(sessionId);
@@ -115,6 +127,29 @@ export const createDevelopmentSessionCoordination = ({
         }
         projectRuntimeSwitchOperations.assertDevelopmentOperationAllowed(currentStatus.cwd);
         managedConfigTransactions.assertDevelopmentOperationAllowed(currentStatus.cwd, sessionId);
+      }, signal),
+    );
+  };
+
+  const withDevelopmentSessionOperationIfStampCurrent = <T>(
+    stamp: SessionOperationStamp,
+    operation: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
+    const initialStatus = workspace.getStatus(stamp.sessionId);
+    projectRuntimeSwitchOperations.assertDevelopmentOperationAllowed(initialStatus.cwd);
+    managedConfigTransactions.assertDevelopmentOperationAllowed(initialStatus.cwd, stamp.sessionId);
+    return developmentSessionOperations.runIfStampCurrent(stamp, (assertSessionCurrent, signal) =>
+      operation(() => {
+        assertSessionCurrent();
+        const currentStatus = workspace.getStatus(stamp.sessionId);
+        if (!sameDirectory(currentStatus.cwd, initialStatus.cwd)) {
+          throw new Error('开发会话已不再属于发起操作时的项目。');
+        }
+        projectRuntimeSwitchOperations.assertDevelopmentOperationAllowed(currentStatus.cwd);
+        managedConfigTransactions.assertDevelopmentOperationAllowed(
+          currentStatus.cwd,
+          stamp.sessionId,
+        );
       }, signal),
     );
   };
@@ -154,6 +189,7 @@ export const createDevelopmentSessionCoordination = ({
     managedConfigTransactions,
     projectRuntimeSwitchOperations,
     withDevelopmentSessionOperation,
+    withDevelopmentSessionOperationIfStampCurrent,
     withoutTerminalOperationInvalidation,
   };
 };

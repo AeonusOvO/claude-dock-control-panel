@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
   ClaudePluginCatalog,
@@ -11,6 +10,15 @@ import { runWindowsCommand } from '../infra/windows-command';
 const LIST_TIMEOUT_MS = 120_000;
 const MUTATION_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 256 * 1024;
+const MAX_MANIFEST_PLUGINS = 2_048;
+const MAX_MARKETPLACES = 256;
+const MAX_CATALOG_ENTRIES = 10_000;
+const MAX_DESCRIPTION_LENGTH = 4_096;
+const MAX_SOURCE_LABEL_LENGTH = 1_024;
+const MAX_INSTALL_LOCATION_LENGTH = 4_096;
+const MAX_MARKETPLACE_SOURCE_LENGTH = 400;
+const CONTROL_CHARACTER = /\p{Cc}/u;
 
 /**
  * `plugin@marketplace` as printed by `claude plugin list --json --available`. Both halves are
@@ -18,6 +26,7 @@ const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
  */
 const PLUGIN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,79})?$/;
 const MARKETPLACE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+const GITHUB_SHORTHAND = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const isValidPluginId = (value: unknown): value is string =>
   typeof value === 'string' && PLUGIN_ID.test(value);
@@ -25,33 +34,84 @@ export const isValidPluginId = (value: unknown): value is string =>
 export const isValidMarketplaceName = (value: unknown): value is string =>
   typeof value === 'string' && MARKETPLACE_NAME.test(value);
 
+const hasAmbiguousPathSegment = (value: string): boolean =>
+  value.split(/[\\/]/).some((segment) => segment === '.' || segment === '..');
+
+const isSafeLocalMarketplaceSource = (value: string): boolean => {
+  if (/^[A-Za-z]:[\\/]/.test(value)) {
+    const pathFromRoot = value.slice(2);
+    return (
+      !/[\\/]{2}/.test(pathFromRoot) &&
+      !/[<>:"|?*]/.test(value.slice(3)) &&
+      !hasAmbiguousPathSegment(value)
+    );
+  }
+  if (!value.startsWith('\\\\') || value.startsWith('\\\\?\\') || value.startsWith('\\\\.\\')) {
+    return false;
+  }
+  if (value.includes('/')) {
+    return false;
+  }
+  const segments = value.slice(2).replace(/\\$/, '').split('\\');
+  return (
+    segments.length >= 2 &&
+    segments.every(
+      (segment) =>
+        Boolean(segment) && segment !== '.' && segment !== '..' && !/[<>:"|?*]/.test(segment),
+    )
+  );
+};
+
 /**
- * A marketplace source may be a GitHub `owner/repo`, an https URL or an absolute local path.
- * Anything else — including `-`-prefixed strings that would be parsed as CLI options — is refused.
+ * A marketplace source may be a GitHub `owner/repo`, a credential-free https URL or an absolute
+ * local drive/UNC path. Ambiguous URL spellings, device paths and control characters are refused.
  */
 export const isValidMarketplaceSource = (value: unknown): value is string => {
-  if (typeof value !== 'string') {
+  if (typeof value !== 'string' || CONTROL_CHARACTER.test(value)) {
     return false;
   }
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 400 || trimmed.startsWith('-') || /[\r\n\0]/.test(trimmed)) {
+  if (!trimmed || trimmed.length > MAX_MARKETPLACE_SOURCE_LENGTH || trimmed.startsWith('-')) {
     return false;
   }
-  if (/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed)) {
+  if (GITHUB_SHORTHAND.test(trimmed)) {
     return true;
   }
-  if (/^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith('\\\\')) {
+  if (isSafeLocalMarketplaceSource(trimmed)) {
     return true;
+  }
+  if (!/^https:\/\//i.test(trimmed) || trimmed.includes('\\')) {
+    return false;
+  }
+  const authority = trimmed.slice('https://'.length).split(/[/?#]/, 1)[0];
+  if (!authority || authority.includes('@')) {
+    return false;
   }
   try {
-    return new URL(trimmed).protocol === 'https:';
+    const url = new URL(trimmed);
+    return (
+      url.protocol === 'https:' &&
+      Boolean(url.hostname) &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.hash === ''
+    );
   } catch {
     return false;
   }
 };
 
-const optionalString = (value: unknown): string | undefined =>
-  typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const optionalString = (
+  value: unknown,
+  maximumLength = MAX_SOURCE_LABEL_LENGTH,
+): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maximumLength ? trimmed : undefined;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -64,27 +124,79 @@ const scopeOf = (value: unknown): ClaudePluginScope | undefined =>
 
 export const UNKNOWN_PLUGIN_SOURCE = '未知来源';
 
+const safeHttpsSourceLabel = (value: unknown): string | undefined => {
+  const source = optionalString(value, MAX_MARKETPLACE_SOURCE_LENGTH);
+  if (
+    !source ||
+    CONTROL_CHARACTER.test(source) ||
+    !/^https:\/\//i.test(source) ||
+    source.includes('\\')
+  ) {
+    return undefined;
+  }
+  try {
+    const url = new URL(source);
+    if (url.protocol !== 'https:' || !url.hostname) {
+      return undefined;
+    }
+    const pathname = url.pathname.replace(/\.git$/i, '').replace(/^\/+/, '');
+    return /^(?:www\.)?github\.com$/i.test(url.hostname)
+      ? pathname
+      : [url.hostname, pathname].filter(Boolean).join('/');
+  } catch {
+    return undefined;
+  }
+};
+
+const safeRelativeSourceLabel = (
+  value: unknown,
+  maximumLength = MAX_SOURCE_LABEL_LENGTH,
+): string | undefined => {
+  const source = optionalString(value, maximumLength);
+  if (
+    !source ||
+    CONTROL_CHARACTER.test(source) ||
+    path.isAbsolute(source) ||
+    /^[A-Za-z]:[\\/]/.test(source) ||
+    source.startsWith('\\\\') ||
+    source.includes('?') ||
+    source.includes('#') ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:/i.test(source) ||
+    source.includes('://')
+  ) {
+    return undefined;
+  }
+  const normalized = source.replace(/^\.[\\/]/, '');
+  if (!normalized || hasAmbiguousPathSegment(normalized)) {
+    return undefined;
+  }
+  return normalized.replaceAll('\\', '/');
+};
+
+const safeSourceLabel = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  return /^https:\/\//i.test(value) ? safeHttpsSourceLabel(value) : safeRelativeSourceLabel(value);
+};
+
 /** The CLI prints `source` either as a bare relative path or as a git descriptor object. */
 export const describePluginSource = (value: unknown): string => {
   if (typeof value === 'string') {
-    return value;
+    return safeSourceLabel(value) ?? UNKNOWN_PLUGIN_SOURCE;
   }
-  if (!value || typeof value !== 'object') {
+  if (!isRecord(value)) {
     return UNKNOWN_PLUGIN_SOURCE;
   }
-  const record = value as Record<string, unknown>;
-  const url = optionalString(record.url);
-  const subPath = optionalString(record.path);
-  const ref = optionalString(record.ref);
-  const label = url
-    ? url.replace(/^https:\/\/(?:www\.)?github\.com\//i, '').replace(/\.git$/i, '')
-    : (optionalString(record.source) ?? UNKNOWN_PLUGIN_SOURCE);
-  return [label, subPath, ref && `@${ref}`].filter(Boolean).join(' · ');
+  const label = safeHttpsSourceLabel(value.url) ?? safeSourceLabel(value.source);
+  const subPath = safeRelativeSourceLabel(value.path, 512);
+  const ref = safeRelativeSourceLabel(value.ref, 160);
+  return [label ?? UNKNOWN_PLUGIN_SOURCE, subPath, ref && `@${ref}`].filter(Boolean).join(' · ');
 };
 
 /** Installed entries report `"unknown"` when the marketplace ships no version of its own. */
 const optionalVersion = (value: unknown): string | undefined => {
-  const version = optionalString(value);
+  const version = optionalString(value, 160);
   return version && version.toLowerCase() !== 'unknown' ? version : undefined;
 };
 
@@ -99,38 +211,42 @@ export const parsePluginEntry = (value: unknown, installed: boolean): ClaudePlug
     record.source && typeof record.source === 'object'
       ? (record.source as Record<string, unknown>)
       : undefined;
-  const declaredName = optionalString(record.name);
-  const declaredMarketplace = optionalString(record.marketplaceName) ?? '';
+  const declaredName = optionalString(record.name, 80);
+  const declaredMarketplace = optionalString(record.marketplaceName, 80) ?? '';
   /*
    * `claude plugin list --json --available` describes available plugins with
    * `pluginId`/`name`/`marketplaceName`, but installed plugins only with `id`
    * (`plugin@marketplace`). Accepting `id` and splitting it keeps installed plugins visible.
    */
   const pluginId =
-    optionalString(record.pluginId) ??
-    optionalString(record.id) ??
+    optionalString(record.pluginId, 161) ??
+    optionalString(record.id, 161) ??
     (declaredName && declaredMarketplace ? `${declaredName}@${declaredMarketplace}` : declaredName);
   if (!pluginId || !isValidPluginId(pluginId)) {
     return null;
   }
   const [idName, idMarketplace] = pluginId.split('@');
-  const name = declaredName ?? idName;
+  const name = declaredName && MARKETPLACE_NAME.test(declaredName) ? declaredName : idName;
   if (!name) {
     return null;
   }
 
   return {
-    description: optionalString(record.description) ?? MISSING_PLUGIN_DESCRIPTION,
+    description:
+      optionalString(record.description, MAX_DESCRIPTION_LENGTH) ?? MISSING_PLUGIN_DESCRIPTION,
     // The CLI omits `enabled` for available plugins and for enabled installs alike.
     enabled: installed ? record.enabled !== false : false,
     installCount: optionalCount(record.installCount),
     installed,
-    marketplaceName: declaredMarketplace || idMarketplace || '本地',
+    marketplaceName:
+      (declaredMarketplace && MARKETPLACE_NAME.test(declaredMarketplace) && declaredMarketplace) ||
+      idMarketplace ||
+      '本地',
     name,
     pluginId,
     scope: scopeOf(record.scope),
     sourceLabel: describePluginSource(record.source),
-    sourceRevision: optionalString(sourceRecord?.sha),
+    sourceRevision: optionalString(sourceRecord?.sha, 160),
     latestVersion: optionalVersion(record.latestVersion),
     updateAvailable: record.updateAvailable === true,
     version: optionalVersion(record.version),
@@ -144,18 +260,30 @@ export const parsePluginCatalog = (
   const collect = (value: unknown, installed: boolean): ClaudePluginView[] =>
     Array.isArray(value)
       ? value
+          .slice(0, MAX_CATALOG_ENTRIES)
           .map((entry) => parsePluginEntry(entry, installed))
           .filter((entry): entry is ClaudePluginView => entry !== null)
       : [];
 
   if (Array.isArray(parsed)) {
-    return { available: [], installed: collect(parsed, true) };
+    const installed = collect(parsed, true);
+    if (parsed.length > 0 && installed.length === 0) {
+      throw new Error('Unexpected plugin catalog entries.');
+    }
+    return { available: [], installed };
   }
-  if (!parsed || typeof parsed !== 'object') {
-    return { available: [], installed: [] };
+  if (!isRecord(parsed)) {
+    throw new Error('Unexpected plugin catalog shape.');
   }
 
-  const record = parsed as Record<string, unknown>;
+  const record = parsed;
+  if (
+    (record.available !== undefined && !Array.isArray(record.available)) ||
+    (record.installed !== undefined && !Array.isArray(record.installed)) ||
+    (!Array.isArray(record.available) && !Array.isArray(record.installed))
+  ) {
+    throw new Error('Unexpected plugin catalog shape.');
+  }
   const availableCatalog = collect(record.available, false);
   const availableById = new Map(
     availableCatalog.map((plugin) => [plugin.pluginId, plugin] as const),
@@ -178,9 +306,48 @@ export const parsePluginCatalog = (
         ),
     };
   });
+  const inputEntryCount =
+    (Array.isArray(record.available) ? record.available.length : 0) +
+    (Array.isArray(record.installed) ? record.installed.length : 0);
+  if (inputEntryCount > 0 && availableCatalog.length + installed.length === 0) {
+    throw new Error('Unexpected plugin catalog entries.');
+  }
   const installedIds = new Set(installed.map((plugin) => plugin.pluginId));
   const available = availableCatalog.filter((plugin) => !installedIds.has(plugin.pluginId));
   return { available, installed };
+};
+
+const safeRepositoryLabel = (value: unknown): string | undefined => {
+  const source = optionalString(value, MAX_MARKETPLACE_SOURCE_LENGTH);
+  if (!source || CONTROL_CHARACTER.test(source)) {
+    return undefined;
+  }
+  if (GITHUB_SHORTHAND.test(source)) {
+    return source;
+  }
+  if (!/^https:\/\//i.test(source) || source.includes('\\')) {
+    return undefined;
+  }
+  try {
+    const url = new URL(source);
+    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) {
+      return undefined;
+    }
+    return `${url.hostname}${url.pathname.replace(/\.git$/i, '')}`;
+  } catch {
+    return undefined;
+  }
+};
+
+const safeMarketplaceSourceLabel = (value: unknown): string => {
+  const source = optionalString(value, MAX_MARKETPLACE_SOURCE_LENGTH);
+  if (!source || CONTROL_CHARACTER.test(source)) {
+    return '未知';
+  }
+  if (isSafeLocalMarketplaceSource(source) || path.isAbsolute(source)) {
+    return '本地';
+  }
+  return safeSourceLabel(source) ?? '未知';
 };
 
 export const parseMarketplaces = (raw: string): ClaudePluginMarketplaceView[] => {
@@ -190,20 +357,21 @@ export const parseMarketplaces = (raw: string): ClaudePluginMarketplaceView[] =>
   }
 
   const marketplaces: ClaudePluginMarketplaceView[] = [];
-  for (const entry of parsed) {
+  for (const entry of parsed.slice(0, MAX_MARKETPLACES)) {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
     const record = entry as Record<string, unknown>;
-    const name = optionalString(record.name);
-    if (!name) {
+    const name = optionalString(record.name, 80);
+    if (!name || !isValidMarketplaceName(name)) {
       continue;
     }
     marketplaces.push({
-      installLocation: optionalString(record.installLocation),
+      // This remains in the existing renderer contract until the later contract-hardening phase.
+      installLocation: optionalString(record.installLocation, MAX_INSTALL_LOCATION_LENGTH),
       name,
-      repo: optionalString(record.repo),
-      source: optionalString(record.source) ?? '未知',
+      repo: safeRepositoryLabel(record.repo),
+      source: safeMarketplaceSourceLabel(record.source),
     });
   }
   return marketplaces;
@@ -215,45 +383,99 @@ export interface PluginManifestEntry {
   sourceLabel?: string;
 }
 
+const isContainedPath = (root: string, candidate: string): boolean => {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === '' ||
+    (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`))
+  );
+};
+
+const unsafeManifestError = (): Error => new Error('插件市场清单不可用。');
+
 /**
- * Reads `<installLocation>/.claude-plugin/marketplace.json` for every checked-out marketplace and
- * keys its plugins by `plugin@marketplace`. Installed entries carry no description of their own,
- * so this is the only local source for one.
+ * Node does not expose a handle-relative "open beneath this directory without reparse points" API on
+ * Windows. A check-then-open implementation can be redirected through a junction between checks, so
+ * production manifest enrichment fails closed instead of reading a CLI-provided absolute path. The
+ * caller retains the CLI catalog entry when this generic, path-free error is returned.
  */
-export const collectMarketplaceManifests = (
+export const readBoundedMarketplaceManifest = (
+  installationDirectory: string,
+  candidatePath: string,
+): Promise<string> => {
+  if (!path.isAbsolute(installationDirectory) || !path.isAbsolute(candidatePath)) {
+    return Promise.reject(unsafeManifestError());
+  }
+  const lexicalRoot = path.resolve(installationDirectory);
+  const lexicalCandidate = path.resolve(candidatePath);
+  if (lexicalCandidate === lexicalRoot || !isContainedPath(lexicalRoot, lexicalCandidate)) {
+    return Promise.reject(unsafeManifestError());
+  }
+
+  // Never cross the unsafe Node filesystem seam, even when lexical containment happens to hold.
+  return Promise.reject(unsafeManifestError());
+};
+
+export const readMarketplaceManifest = (installLocation: string): Promise<string> =>
+  readBoundedMarketplaceManifest(
+    installLocation,
+    path.resolve(installLocation, '.claude-plugin', 'marketplace.json'),
+  );
+
+const manifestSource = (value: unknown): string | undefined => {
+  const source = optionalString(value, 512);
+  if (!source || CONTROL_CHARACTER.test(source) || path.isAbsolute(source)) {
+    return undefined;
+  }
+  const relativeSource = source.replace(/^\.[\\/]/, '');
+  if (!relativeSource || hasAmbiguousPathSegment(relativeSource)) {
+    return undefined;
+  }
+  return relativeSource.replaceAll('\\', '/');
+};
+
+/**
+ * Parses bounded marketplace manifests supplied through the reader seam and keys their plugins by
+ * `plugin@marketplace`. The production reader currently fails closed on the unsafe Windows filesystem
+ * seam; an unavailable manifest only omits enrichment and never removes CLI catalog entries.
+ */
+export const collectMarketplaceManifests = async (
   marketplaces: ClaudePluginMarketplaceView[],
-  readManifest: (installLocation: string) => string,
-): Map<string, PluginManifestEntry> => {
+  readManifest: (installLocation: string) => Promise<string> | string = readMarketplaceManifest,
+): Promise<Map<string, PluginManifestEntry>> => {
   const manifests = new Map<string, PluginManifestEntry>();
-  for (const marketplace of marketplaces) {
-    if (!marketplace.installLocation) {
+  for (const marketplace of marketplaces.slice(0, MAX_MARKETPLACES)) {
+    if (!marketplace.installLocation || !isValidMarketplaceName(marketplace.name)) {
       continue;
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readManifest(marketplace.installLocation));
+      const manifestText = await readManifest(marketplace.installLocation);
+      if (Buffer.byteLength(manifestText, 'utf8') > MAX_MANIFEST_BYTES) {
+        continue;
+      }
+      parsed = JSON.parse(manifestText);
     } catch {
-      // A missing or malformed manifest only costs descriptions, never the plugin list itself.
+      // A missing, unsafe or malformed manifest only costs descriptions, never the plugin list.
       continue;
     }
     const plugins = isRecord(parsed) ? parsed.plugins : undefined;
     if (!Array.isArray(plugins)) {
       continue;
     }
-    for (const entry of plugins) {
+    for (const entry of plugins.slice(0, MAX_MANIFEST_PLUGINS)) {
       if (!isRecord(entry)) {
         continue;
       }
-      const name = optionalString(entry.name);
-      if (!name) {
+      const name = optionalString(entry.name, 80);
+      if (!name || !MARKETPLACE_NAME.test(name)) {
         continue;
       }
-      const subPath = optionalString(entry.source);
+      const subPath = manifestSource(entry.source);
+      const description = optionalString(entry.description, MAX_DESCRIPTION_LENGTH);
       manifests.set(`${name}@${marketplace.name}`, {
-        description: optionalString(entry.description),
-        sourceLabel: [marketplace.repo ?? marketplace.name, subPath?.replace(/^\.\//, '')]
-          .filter(Boolean)
-          .join(' · '),
+        description,
+        sourceLabel: [marketplace.repo ?? marketplace.name, subPath].filter(Boolean).join(' · '),
       });
     }
   }
@@ -293,56 +515,215 @@ const emptyCatalog = (message: string, cliAvailable: boolean): ClaudePluginCatal
   updatesAvailable: 0,
 });
 
+class PluginCatalogLoadError extends Error {
+  public constructor(
+    message: string,
+    public readonly cliAvailable: boolean,
+  ) {
+    super(message);
+  }
+}
+
+interface CatalogLoad {
+  generation: number;
+  promise: Promise<ClaudePluginCatalog>;
+}
+
+export type ClaudePluginMutationRequest =
+  | { pluginId: string; type: 'install' }
+  | { pluginId: string; type: 'uninstall' }
+  | { enabled: boolean; pluginId: string; type: 'set-enabled' }
+  | { pluginId: string; type: 'update' }
+  | { type: 'marketplaces-refresh' }
+  | { type: 'update-all' }
+  | { source: string; type: 'marketplace-add' }
+  | { name: string; type: 'marketplace-remove' };
+
+export interface ClaudePluginMutationOutcome {
+  catalog: ClaudePluginCatalog;
+  message: string;
+}
+
+export class ClaudePluginMutationError extends Error {
+  public constructor(
+    message: string,
+    public readonly catalog: ClaudePluginCatalog,
+  ) {
+    super(message);
+  }
+}
+
 export class ClaudePluginManager {
   private cached?: ClaudePluginCatalog;
-  private inFlight?: Promise<ClaudePluginCatalog>;
+  private cacheCurrent = false;
+  private catalogGeneration = 0;
+  private inFlight?: CatalogLoad;
+  private lastGood?: ClaudePluginCatalog;
+  private mutationTail: Promise<void> = Promise.resolve();
 
-  public constructor(private readonly cwd: string) {}
+  public constructor(
+    private readonly cwd: string,
+    private readonly commandRunner: typeof runWindowsCommand = runWindowsCommand,
+    private readonly manifestReader: (
+      installLocation: string,
+    ) => Promise<string> | string = readMarketplaceManifest,
+  ) {}
 
-  /** Returns the cached catalog unless `refresh` is set; concurrent refreshes are coalesced. */
+  /** Returns the cached catalog unless `refresh` is set; concurrent current refreshes are coalesced. */
   public async getCatalog(refresh = false): Promise<ClaudePluginCatalog> {
-    if (!refresh && this.cached) {
+    if (!refresh && this.cacheCurrent && this.cached) {
       return this.cached;
     }
-    this.inFlight ??= this.loadCatalog().finally(() => {
-      this.inFlight = undefined;
+
+    const generation = this.catalogGeneration;
+    let load = this.inFlight;
+    if (!load || load.generation !== generation) {
+      load = { generation, promise: this.loadCatalog() };
+      this.inFlight = load;
+    }
+
+    try {
+      const catalog = await load.promise;
+      if (generation !== this.catalogGeneration) {
+        // A mutation superseded this read. Publish the current generation, never the obsolete result.
+        return this.getCatalog(false);
+      }
+      this.cached = catalog;
+      this.lastGood = catalog;
+      this.cacheCurrent = true;
+      return catalog;
+    } catch (error) {
+      if (generation !== this.catalogGeneration) {
+        return this.getCatalog(false);
+      }
+      const failure =
+        error instanceof PluginCatalogLoadError
+          ? error
+          : new PluginCatalogLoadError('无法读取插件列表。', false);
+      if (this.lastGood) {
+        this.cached = this.lastGood;
+        this.cacheCurrent = true;
+        return {
+          ...this.lastGood,
+          checkedAt: Date.now(),
+          cliAvailable: failure.cliAvailable,
+          message: failure.message,
+        };
+      }
+      return emptyCatalog(failure.message, failure.cliAvailable);
+    } finally {
+      if (this.inFlight === load) {
+        this.inFlight = undefined;
+      }
+    }
+  }
+
+  /**
+   * Serializes the write and its forced catalog refresh as one transaction. A later mutation cannot
+   * start until the earlier caller has received a post-mutation catalog (or its safe stale fallback).
+   */
+  public mutate(request: ClaudePluginMutationRequest): Promise<ClaudePluginMutationOutcome> {
+    return this.enqueueMutation(async () => {
+      let message: string | undefined;
+      let mutationError: unknown;
+      try {
+        message = await this.executeMutation(request);
+      } catch (error) {
+        mutationError = error;
+      }
+
+      // Even a failed CLI command may have applied part of a mutation, so every attempt fences reads.
+      this.invalidate();
+      const catalog = await this.getCatalog(true);
+      if (mutationError !== undefined) {
+        throw new ClaudePluginMutationError(
+          mutationError instanceof Error ? mutationError.message : '插件操作失败。',
+          catalog,
+        );
+      }
+      return { catalog, message: message ?? '插件操作已完成。' };
     });
-    return this.inFlight;
   }
 
-  public async install(pluginId: string): Promise<string> {
-    await this.run(['plugin', 'install', pluginId, '--scope', 'user'], MUTATION_TIMEOUT_MS);
-    return `插件 ${pluginId} 已安装。重启 Claude 会话后生效。`;
+  /** Supersedes current reads without discarding the last-known-good fallback. */
+  public invalidate(): void {
+    this.catalogGeneration += 1;
+    this.cacheCurrent = false;
+    this.inFlight = undefined;
   }
 
-  public async uninstall(pluginId: string): Promise<string> {
-    await this.run(
-      ['plugin', 'uninstall', pluginId, '--scope', 'user', '--yes'],
-      MUTATION_TIMEOUT_MS,
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.mutationTail.then(operation);
+    this.mutationTail = queued.then(
+      () => undefined,
+      () => undefined,
     );
-    return `插件 ${pluginId} 已卸载。`;
+    return queued;
   }
 
-  public async setEnabled(pluginId: string, enabled: boolean): Promise<string> {
-    await this.run(
-      ['plugin', enabled ? 'enable' : 'disable', pluginId, '--scope', 'user'],
-      MUTATION_TIMEOUT_MS,
-    );
-    return `插件 ${pluginId} 已${enabled ? '启用' : '停用'}。重启 Claude 会话后生效。`;
+  private assertPluginId(pluginId: string): void {
+    if (!isValidPluginId(pluginId)) {
+      throw new Error('插件标识无效。');
+    }
   }
 
-  public async update(pluginId: string): Promise<string> {
-    await this.run(['plugin', 'update', pluginId, '--scope', 'user'], MUTATION_TIMEOUT_MS);
-    return `插件 ${pluginId} 已更新。重启 Claude 会话后生效。`;
+  private async executeMutation(request: ClaudePluginMutationRequest): Promise<string> {
+    switch (request.type) {
+      case 'install':
+        this.assertPluginId(request.pluginId);
+        await this.run(
+          ['plugin', 'install', request.pluginId, '--scope', 'user'],
+          MUTATION_TIMEOUT_MS,
+        );
+        return `插件 ${request.pluginId} 已安装。重启 Claude 会话后生效。`;
+      case 'uninstall':
+        this.assertPluginId(request.pluginId);
+        await this.run(
+          ['plugin', 'uninstall', request.pluginId, '--scope', 'user', '--yes'],
+          MUTATION_TIMEOUT_MS,
+        );
+        return `插件 ${request.pluginId} 已卸载。`;
+      case 'set-enabled':
+        this.assertPluginId(request.pluginId);
+        await this.run(
+          ['plugin', request.enabled ? 'enable' : 'disable', request.pluginId, '--scope', 'user'],
+          MUTATION_TIMEOUT_MS,
+        );
+        return `插件 ${request.pluginId} 已${request.enabled ? '启用' : '停用'}。重启 Claude 会话后生效。`;
+      case 'update':
+        this.assertPluginId(request.pluginId);
+        await this.run(
+          ['plugin', 'update', request.pluginId, '--scope', 'user'],
+          MUTATION_TIMEOUT_MS,
+        );
+        return `插件 ${request.pluginId} 已更新。重启 Claude 会话后生效。`;
+      case 'marketplaces-refresh':
+        await this.run(['plugin', 'marketplace', 'update'], MUTATION_TIMEOUT_MS);
+        return '插件市场索引已刷新。';
+      case 'update-all':
+        return this.updateAllPlugins();
+      case 'marketplace-add': {
+        if (!isValidMarketplaceSource(request.source)) {
+          throw new Error('插件市场地址无效。');
+        }
+        const source = request.source.trim();
+        await this.run(
+          ['plugin', 'marketplace', 'add', source, '--scope', 'user'],
+          MUTATION_TIMEOUT_MS,
+        );
+        return '插件市场已添加。';
+      }
+      case 'marketplace-remove':
+        if (!isValidMarketplaceName(request.name)) {
+          throw new Error('插件市场名称无效。');
+        }
+        await this.run(['plugin', 'marketplace', 'remove', request.name], MUTATION_TIMEOUT_MS);
+        return `插件市场 ${request.name} 已移除。`;
+    }
   }
 
-  public async refreshMarketplaces(): Promise<string> {
+  private async updateAllPlugins(): Promise<string> {
     await this.run(['plugin', 'marketplace', 'update'], MUTATION_TIMEOUT_MS);
-    return '插件市场索引已刷新。';
-  }
-
-  public async updateAll(): Promise<string> {
-    await this.refreshMarketplaces();
     const catalog = await this.loadCatalog();
     if (catalog.installed.length === 0) {
       return '没有需要更新的已安装插件。';
@@ -366,43 +747,22 @@ export class ClaudePluginManager {
     return `已检查并更新 ${updated} 个插件。重启 Claude 会话后生效。`;
   }
 
-  public async addMarketplace(source: string): Promise<string> {
-    await this.run(
-      ['plugin', 'marketplace', 'add', source, '--scope', 'user'],
-      MUTATION_TIMEOUT_MS,
-    );
-    return `插件市场 ${source} 已添加。`;
-  }
-
-  public async removeMarketplace(name: string): Promise<string> {
-    await this.run(['plugin', 'marketplace', 'remove', name], MUTATION_TIMEOUT_MS);
-    return `插件市场 ${name} 已移除。`;
-  }
-
-  public invalidate(): void {
-    this.cached = undefined;
-  }
-
   private async loadCatalog(): Promise<ClaudePluginCatalog> {
     let listOutput: string;
     try {
       listOutput = await this.run(['plugin', 'list', '--json', '--available'], LIST_TIMEOUT_MS);
     } catch (error) {
-      const catalog = emptyCatalog(
+      throw new PluginCatalogLoadError(
         error instanceof Error ? error.message : '无法读取插件列表。',
         false,
       );
-      this.cached = catalog;
-      return catalog;
     }
 
     let plugins: { available: ClaudePluginView[]; installed: ClaudePluginView[] };
     try {
       plugins = parsePluginCatalog(listOutput);
     } catch {
-      const catalog = emptyCatalog('Claude 命令行返回了无法解析的插件列表。', true);
-      this.cached = catalog;
-      return catalog;
+      throw new PluginCatalogLoadError('Claude 命令行返回了无法解析的插件列表。', true);
     }
 
     let marketplaces: ClaudePluginMarketplaceView[] = [];
@@ -416,12 +776,10 @@ export class ClaudePluginManager {
 
     const installed = enrichInstalledPlugins(
       plugins.installed,
-      collectMarketplaceManifests(marketplaces, (installLocation) =>
-        readFileSync(path.join(installLocation, '.claude-plugin', 'marketplace.json'), 'utf8'),
-      ),
+      await collectMarketplaceManifests(marketplaces, this.manifestReader),
     );
 
-    const catalog: ClaudePluginCatalog = {
+    return {
       available: plugins.available,
       checkedAt: Date.now(),
       cliAvailable: true,
@@ -430,8 +788,6 @@ export class ClaudePluginManager {
       message: `已安装 ${installed.length} 个插件，市场中还有 ${plugins.available.length} 个可选。`,
       updatesAvailable: installed.filter((plugin) => plugin.updateAvailable).length,
     };
-    this.cached = catalog;
-    return catalog;
   }
 
   /**
@@ -440,12 +796,11 @@ export class ClaudePluginManager {
    */
   private async run(argumentsList: string[], timeout: number): Promise<string> {
     try {
-      const stdout = await runWindowsCommand('claude', argumentsList, {
+      return await this.commandRunner('claude', argumentsList, {
         cwd: this.cwd,
         maxBuffer: MAX_OUTPUT_BYTES,
         timeout,
       });
-      return stdout;
     } catch (error) {
       const record = error as { code?: unknown; killed?: boolean };
       const rawMessage = error instanceof Error ? error.message : '';

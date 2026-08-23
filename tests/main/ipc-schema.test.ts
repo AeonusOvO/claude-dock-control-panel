@@ -42,9 +42,9 @@ describe('shared IPC schemas', () => {
   });
 
   it('parses positional tuples without collapsing explicit undefined values', () => {
-    expect(
-      parseIpcRequestArgs(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, [undefined, false]),
-    ).toEqual([undefined, false]);
+    expect(parseIpcRequestArgs(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, [undefined])).toEqual(
+      [undefined],
+    );
     expect(() =>
       parseIpcRequestArgs(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, [false]),
     ).toThrow();
@@ -63,7 +63,7 @@ describe('shared IPC schemas', () => {
     expect(validateModelOptionId('history:current')).toBe('history:current');
   });
 
-  it('preserves native submit passthrough fields and legacy numeric acceptance', () => {
+  it('preserves native submit extensions while rejecting renderer authority fields', () => {
     const input = {
       blocks: [
         {
@@ -80,6 +80,20 @@ describe('shared IPC schemas', () => {
       extensionField: true,
     };
     expect(validateNativeSubmitInput(input)).toBe(input);
+    for (const authorityField of [
+      'action',
+      'cwd',
+      'networkScope',
+      'officialNetworkProvider',
+      'officialNetworkTarget',
+      'projectPath',
+      'provider',
+      'target',
+    ]) {
+      expect(() =>
+        validateNativeSubmitInput({ ...input, [authorityField]: 'renderer-owned' }),
+      ).toThrow('原生对话输入包含未授权字段。');
+    }
   });
 
   it('checks serialized native interaction size before accepting the action', () => {
@@ -108,7 +122,9 @@ describe('shared IPC schemas', () => {
 
   it('validates the runtime, network, launch, login, effort, permission and speed enums', () => {
     expect(validateDevelopmentRuntime('claude')).toBe('claude');
+    expect(validateNetworkProvider('ai-services')).toBe('ai-services');
     expect(validateNetworkProvider('openai-codex')).toBe('openai-codex');
+    expect(validateNetworkProvider('xai-grok')).toBe('xai-grok');
     expect(validateNetworkPreflightAction('provider-switch')).toBe('provider-switch');
     expect(validateClaudeLaunchMode('resume')).toBe('resume');
     expect(validateCodexLoginMethod('device-code')).toBe('device-code');
@@ -116,6 +132,44 @@ describe('shared IPC schemas', () => {
     expect(validateClaudePermissionMode('dontAsk')).toBe('dontAsk');
     expect(validateModelSpeedMode('fast')).toBe('fast');
     expect(() => validateNetworkProvider('unknown')).toThrow('网络预检服务商标识无效。');
+  });
+
+  it('accepts only renderer-owned network preflight fields', () => {
+    expect(
+      parseIpcRequestArgs(CHANNELS.NETWORK_PREFLIGHT_RUN, [
+        {
+          action: 'first-request',
+          cwd: 'relative/project',
+          force: true,
+          networkScope: 'conversation',
+          provider: 'openai-codex',
+        },
+      ]),
+    ).toEqual([
+      {
+        action: 'first-request',
+        cwd: 'relative/project',
+        force: true,
+        networkScope: 'conversation',
+        provider: 'openai-codex',
+      },
+    ]);
+    for (const authorityField of [
+      'canonicalCwd',
+      'configurationRevision',
+      'generation',
+      'mainRunId',
+    ]) {
+      expect(() =>
+        parseIpcRequestArgs(CHANNELS.NETWORK_PREFLIGHT_RUN, [
+          {
+            action: 'background',
+            [authorityField]: authorityField === 'canonicalCwd' ? 'D:\\Injected' : 1,
+            provider: 'openai-api',
+          },
+        ]),
+      ).toThrow();
+    }
   });
 
   it('strips unknown relaunch fields and preserves optional keys', () => {
@@ -210,19 +264,35 @@ describe('shared IPC schemas', () => {
     expect(() => validateProjectPath('   ')).toThrow('项目路径格式无效。');
   });
 
-  it('strips and resolves MCP install and remove inputs', () => {
+  it('accepts only renderer-owned MCP install fields and resolves the project path', () => {
     expect(
       validateMcpInstallInput({
-        catalogId: '',
+        catalogId: 'curated:filesystem',
         cwd: 'relative/project',
-        extensionField: true,
         scope: 'project',
       }),
     ).toEqual({
-      catalogId: '',
+      catalogId: 'curated:filesystem',
       cwd: path.resolve('relative/project'),
       scope: 'project',
     });
+    for (const authority of [
+      { executable: 'powershell.exe' },
+      { args: ['--yes', 'untrusted-package'] },
+      { config: { command: 'untrusted' } },
+      { url: 'https://renderer-controlled.invalid/mcp' },
+      { '--yes': true },
+    ]) {
+      expect(() =>
+        validateMcpInstallInput({
+          ...authority,
+          catalogId: 'curated:filesystem',
+          cwd: 'relative/project',
+          scope: 'project',
+        }),
+      ).toThrow('MCP 安装参数包含未授权字段。');
+    }
+
     expect(
       validateMcpRemoveInput({
         cwd: 'relative/project',
@@ -237,14 +307,176 @@ describe('shared IPC schemas', () => {
     });
   });
 
-  it('strips unknown model-discovery fields and preserves empty base URLs', () => {
+  it('accepts only the three Claude execution-settings request modes', () => {
+    const custom = {
+      mode: 'custom' as const,
+      values: {
+        concurrentSubagents: 128,
+        spawnDepth: 16,
+        toolSearch: 'auto:100' as const,
+        toolUseConcurrency: 128,
+      },
+    };
+    expect(parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_GET, [])).toEqual([]);
+    expect(
+      parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [{ mode: 'claude-default' }]),
+    ).toEqual([{ mode: 'claude-default' }]);
+    expect(
+      parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+        { mode: 'profile', profileId: 'best-performance' },
+      ]),
+    ).toEqual([{ mode: 'profile', profileId: 'best-performance' }]);
+    expect(parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [custom])).toEqual([
+      custom,
+    ]);
+  });
+
+  it('rejects renderer-supplied Claude execution authority and arbitrary fields', () => {
+    for (const authorityField of [
+      'benchmark',
+      'credentials',
+      'endpoint',
+      'environment',
+      'evidence',
+      'installation',
+      'machine',
+      'operations',
+      'route',
+    ]) {
+      expect(() =>
+        parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+          {
+            [authorityField]: 'renderer-controlled',
+            mode: 'profile',
+            profileId: 'balanced',
+          },
+        ]),
+      ).toThrow();
+    }
+    expect(() =>
+      parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+        { arbitrary: true, mode: 'claude-default' },
+      ]),
+    ).toThrow();
+    expect(() =>
+      parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+        {
+          mode: 'custom',
+          values: {
+            concurrentSubagents: 8,
+            environment: { ENABLE_TOOL_SEARCH: 'true' },
+            spawnDepth: 2,
+            toolSearch: true,
+            toolUseConcurrency: 8,
+          },
+        },
+      ]),
+    ).toThrow();
+  });
+
+  it('enforces Claude execution profile, numeric, and tool-search boundaries', () => {
+    const values = {
+      concurrentSubagents: 8,
+      spawnDepth: 2,
+      toolSearch: 'auto' as const,
+      toolUseConcurrency: 8,
+    };
+    for (const profileId of [
+      'balanced',
+      'best-performance',
+      'high-throughput',
+      'restrained',
+      'token-saver',
+    ]) {
+      expect(
+        parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+          { mode: 'profile', profileId },
+        ]),
+      ).toEqual([{ mode: 'profile', profileId }]);
+    }
+    expect(() =>
+      parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+        { mode: 'profile', profileId: 'renderer-profile' },
+      ]),
+    ).toThrow();
+
+    for (const patch of [
+      { concurrentSubagents: 0 },
+      { concurrentSubagents: 129 },
+      { concurrentSubagents: 1.5 },
+      { concurrentSubagents: Number.MAX_SAFE_INTEGER + 1 },
+      { spawnDepth: 0 },
+      { spawnDepth: 17 },
+      { toolUseConcurrency: Number.NaN },
+      { toolUseConcurrency: Number.POSITIVE_INFINITY },
+    ]) {
+      expect(() =>
+        parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+          { mode: 'custom', values: { ...values, ...patch } },
+        ]),
+      ).toThrow();
+    }
+
+    for (const toolSearch of [true, false, 'inherit', 'auto', 'auto:0', 'auto:100']) {
+      expect(
+        parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+          { mode: 'custom', values: { ...values, toolSearch } },
+        ])[0],
+      ).toMatchObject({ mode: 'custom', values: { toolSearch } });
+    }
+    for (const toolSearch of ['auto:00', 'auto:01', 'auto:101', 'auto:-1', 'true', 'AUTO:1']) {
+      expect(() =>
+        parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+          { mode: 'custom', values: { ...values, toolSearch } },
+        ]),
+      ).toThrow();
+    }
+  });
+
+  it('rejects extra positional arguments for Claude execution settings operations', () => {
+    for (const channel of [
+      CHANNELS.CLAUDE_EXECUTION_SETTINGS_GET,
+      CHANNELS.CLAUDE_EXECUTION_SETTINGS_USE_RECOMMENDED,
+      CHANNELS.CLAUDE_EXECUTION_SETTINGS_RESTORE_DEFAULT,
+    ] as const) {
+      expect(() => parseIpcRequestArgs(channel, ['unexpected'])).toThrow();
+    }
+    expect(() =>
+      parseIpcRequestArgs(CHANNELS.CLAUDE_EXECUTION_SETTINGS_UPDATE, [
+        { mode: 'claude-default' },
+        'unexpected',
+      ]),
+    ).toThrow();
+  });
+
+  it('accepts only renderer-owned model-discovery fields', () => {
     expect(
       validateProviderModelDiscoveryInput({
         baseUrl: '',
         credential: 'secret',
-        extensionField: true,
       }),
     ).toEqual({ baseUrl: '', credential: 'secret' });
+
+    for (const authorityField of [
+      'action',
+      'configurationRevision',
+      'cwd',
+      'endpoint',
+      'mainRunId',
+      'officialProvider',
+      'projectPath',
+      'provider',
+      'runId',
+      'target',
+      'transport',
+    ]) {
+      expect(() =>
+        validateProviderModelDiscoveryInput({
+          baseUrl: 'https://api.anthropic.com',
+          [authorityField]: 'renderer-controlled',
+        }),
+      ).toThrow('模型发现参数包含无效字段。');
+    }
   });
 
   it('normalizes permission decisions exactly at the boundary', () => {

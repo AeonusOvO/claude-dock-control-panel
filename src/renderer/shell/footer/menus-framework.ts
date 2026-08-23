@@ -6,10 +6,8 @@ import {
   footerModeMenu,
   footerModel,
   footerModelMenu,
-  footerMore,
   footerResource,
   footerResourceMenu,
-  footerSecondaryStatus,
   footerSpeed,
   footerSpeedMenu,
 } from './elements';
@@ -17,7 +15,6 @@ import { footerState } from './state';
 
 export interface FooterMenusFrameworkActions {
   hideFooterMenus: () => void;
-  setFooterSecondaryOpen: (open: boolean) => void;
   openFooterMenu: (menu: HTMLElement, trigger: HTMLButtonElement) => void;
   buildFooterMenuItem: (
     label: string,
@@ -51,13 +48,6 @@ export const createFooterMenusFrameworkActions = (): FooterMenusFrameworkActions
       menu.hidden = true;
       trigger.setAttribute('aria-expanded', 'false');
     }
-  };
-
-  const setFooterSecondaryOpen = (open: boolean): void => {
-    const compact = window.matchMedia('(max-width: 1024px)').matches;
-    const next = open && compact;
-    footerSecondaryStatus.dataset.open = String(next);
-    footerMore.setAttribute('aria-expanded', String(next));
   };
 
   /**
@@ -117,7 +107,6 @@ export const createFooterMenusFrameworkActions = (): FooterMenusFrameworkActions
 
   return {
     hideFooterMenus,
-    setFooterSecondaryOpen,
     openFooterMenu,
     buildFooterMenuItem,
     buildFooterRadioMenuItem,

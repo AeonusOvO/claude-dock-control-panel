@@ -19,6 +19,7 @@ import {
 const appSettings = (overrides: Partial<AppSettingsView> = {}): AppSettingsView => ({
   advanced: {
     chatIdleTimeoutMinutes: 0,
+    networkPreflight: { checkOnNewSession: true, checkOnProviderLogin: true },
     webResearchIsolation: false,
   },
   artifactNetworkAllowed: true,

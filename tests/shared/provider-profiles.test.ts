@@ -32,12 +32,39 @@ describe('official provider profiles', () => {
     expect(
       profile.endpoints.find((endpoint) => endpoint.id === 'openai-auth')?.requiredFor,
     ).toContain('login');
+    expect(
+      profile.endpoints.find((endpoint) => endpoint.id === 'openai-chatgpt')?.requiredFor,
+    ).toEqual(['provider-switch', 'login']);
     expect(profile.endpoints.find((endpoint) => endpoint.id === 'openai-codex-api')?.process).toBe(
       'cli',
     );
     expect(
       profile.endpoints.find((endpoint) => endpoint.kind === 'websocket')?.requiredFor,
     ).toEqual(['cloud-task']);
+  });
+
+  it('covers ChatGPT, Claude and Grok in the independent manual suite', () => {
+    const profile = getProviderProfile('ai-services');
+    expect(profile.endpoints.map((endpoint) => endpoint.label)).toEqual(
+      expect.arrayContaining([
+        'ChatGPT',
+        'OpenAI Codex',
+        'Claude',
+        'Claude API',
+        'Grok',
+        'xAI API',
+      ]),
+    );
+    expect(profile.endpoints.every((endpoint) => endpoint.requiredFor.includes('background'))).toBe(
+      true,
+    );
+  });
+
+  it('uses xAI official authentication, API and Grok Build hosts', () => {
+    const profile = getProviderProfile('xai-grok');
+    expect(profile.requiredDomains).toEqual(
+      expect.arrayContaining(['auth.x.ai', 'api.x.ai', 'cli-chat-proxy.grok.com', 'grok.com']),
+    );
   });
 
   it('does not embed location or public-address intelligence policy', () => {

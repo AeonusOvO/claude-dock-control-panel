@@ -601,7 +601,7 @@ body[data-phase='error'] .status-pill {
   /* Same reason as .project-list: vertical scrolling must not imply horizontal scrolling. */
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* Chains to the surrounding panel when spent — see platform/scroll-chaining.ts. */
   min-width: 0;
   padding-inline-end: 0;
   scrollbar-color: var(--line-strong) transparent;

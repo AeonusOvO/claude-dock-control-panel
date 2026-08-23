@@ -5,6 +5,8 @@ export interface SettingsElements {
   closeBehavior: HTMLSelectElement;
   language: HTMLSelectElement;
   launchAtLogin: HTMLInputElement;
+  networkNewSession: HTMLInputElement;
+  networkProviderLogin: HTMLInputElement;
   unsavedIndicator: HTMLElement;
   version: HTMLOutputElement;
   webResearchIsolation: HTMLInputElement;
@@ -15,6 +17,8 @@ export const createSettingsElements = (): SettingsElements => ({
   closeBehavior: requiredElement('#settings-close-behavior'),
   language: requiredElement('#settings-language'),
   launchAtLogin: requiredElement('#settings-launch-at-login'),
+  networkNewSession: requiredElement('#settings-network-new-session'),
+  networkProviderLogin: requiredElement('#settings-network-provider-login'),
   unsavedIndicator: requiredElement('#settings-unsaved-indicator'),
   version: requiredElement('#settings-version'),
   webResearchIsolation: requiredElement('#settings-web-research-isolation'),

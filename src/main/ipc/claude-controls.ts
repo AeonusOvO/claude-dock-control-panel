@@ -32,7 +32,7 @@ export interface ClaudeControlsIpcDependencies {
   failedRuntimeLaunchCleanupDependencies: FailedRuntimeLaunchCleanupDependencies;
   guards: Pick<
     MainGuards,
-    'assertOfficialProviderAllowed' | 'requireClaudeRuntime' | 'validateSender'
+    'withOfficialProviderAccess' | 'requireClaudeRuntime' | 'validateSender'
   >;
   /* Shared with the request path that opens each probe and with quit cleanup, which resolves the rest. */
   pendingPermissionModeProbes: Map<number, PendingPermissionModeProbe>;
@@ -113,7 +113,7 @@ const registerPermissionObservationIpc = (
 export const registerClaudeControlsIpc = ({
   claudeFailure,
   failedRuntimeLaunchCleanupDependencies,
-  guards: { assertOfficialProviderAllowed, requireClaudeRuntime, validateSender },
+  guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
   pendingPermissionModeProbes,
   restartRuntimeTerminal,
   services,
@@ -164,11 +164,12 @@ export const registerClaudeControlsIpc = ({
       try {
         return {
           ok: true,
-          state: await withDevelopmentSessionOperation(validatedSessionId, () =>
+          state: await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
             requireClaudeRuntime().setPermissionMode(
               validatedSessionId,
               status.cwd,
               validateClaudePermissionMode(mode),
+              assertCurrent,
             ),
           ),
         };
@@ -186,11 +187,12 @@ export const registerClaudeControlsIpc = ({
       try {
         return {
           ok: true,
-          state: await withDevelopmentSessionOperation(validatedSessionId, () =>
+          state: await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
             requireClaudeRuntime().setEffort(
               validatedSessionId,
               status.cwd,
               validateClaudeEffortRequest(effort),
+              assertCurrent,
             ),
           ),
         };
@@ -208,64 +210,78 @@ export const registerClaudeControlsIpc = ({
       const runtime = requireClaudeRuntime();
       try {
         return await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
-          let commandWritten = false;
-          let launchPrepared = false;
+          let launchToken: object | undefined;
           let ownedGeneration: PtyGeneration | undefined;
           try {
             const validatedMode = validateModelSpeedMode(mode);
             if (!runtime.isActive(validatedSessionId)) {
-              return {
-                ok: true,
-                state: await runtime.saveModelSpeedPreference(
+              assertCurrent();
+              const state = await runtime.saveModelSpeedPreference(
+                validatedSessionId,
+                status.cwd,
+                validatedMode,
+              );
+              assertCurrent();
+              return { ok: true, state };
+            }
+
+            const authorization = runtime.captureLaunchAuthorization(status.cwd);
+            const relaunchWithModelSpeed = async (): Promise<ClaudeOperationResult> => {
+              try {
+                assertCurrent();
+                runtime.assertLaunchAuthorizationCurrent(status.cwd, authorization);
+                const prepared = await runtime.prepareModelSpeedRelaunch(
                   validatedSessionId,
                   status.cwd,
                   validatedMode,
-                ),
-              };
-            }
-            const officialProvider = runtime.officialNetworkProvider(status.cwd);
-            if (officialProvider) {
-              await assertOfficialProviderAllowed(officialProvider, 'cli-launch', status.cwd);
-              assertCurrent();
-            }
-            const prepared = await runtime.prepareModelSpeedRelaunch(
-              validatedSessionId,
-              status.cwd,
-              validatedMode,
-            );
-            launchPrepared = true;
-            ownedGeneration = prepared.predecessorPtyGeneration;
-            assertCurrent();
-            restartRuntimeTerminal(
-              runtime,
-              validatedSessionId,
-              prepared.environment,
-              prepared.command,
-              '无法为 Claude Code 启动安全终端。',
-              assertCurrent,
-              (ptyGeneration) => {
-                ownedGeneration = ptyGeneration;
-              },
-            );
-            commandWritten = true;
-            return {
-              ok: true,
-              state: await runtime.commitModelSpeedPreference(
-                validatedSessionId,
-                status.cwd,
-                prepared.targetKey,
-                prepared.preference,
-              ),
+                  authorization,
+                );
+                launchToken = prepared.token;
+                assertCurrent();
+                restartRuntimeTerminal(
+                  runtime,
+                  validatedSessionId,
+                  prepared.environment,
+                  prepared.command,
+                  '无法为 Claude Code 启动安全终端。',
+                  assertCurrent,
+                  (ptyGeneration) => {
+                    ownedGeneration = ptyGeneration;
+                  },
+                  prepared.token,
+                );
+                const state = await runtime.commitModelSpeedPreference(
+                  validatedSessionId,
+                  status.cwd,
+                  prepared.targetKey,
+                  prepared.preference,
+                );
+                assertCurrent();
+                return { ok: true, state };
+              } catch (error) {
+                if (launchToken || ownedGeneration !== undefined) {
+                  cleanupFailedRuntimeLaunch(
+                    failedRuntimeLaunchCleanupDependencies,
+                    runtime,
+                    validatedSessionId,
+                    ownedGeneration,
+                    launchToken,
+                  );
+                }
+                throw error;
+              }
             };
+            return authorization.officialNetworkProvider
+              ? await withOfficialProviderAccess(
+                  {
+                    action: 'cli-launch',
+                    cwd: status.cwd,
+                    provider: authorization.officialNetworkProvider,
+                  },
+                  relaunchWithModelSpeed,
+                )
+              : await relaunchWithModelSpeed();
           } catch (error) {
-            if ((launchPrepared || ownedGeneration !== undefined) && !commandWritten) {
-              cleanupFailedRuntimeLaunch(
-                failedRuntimeLaunchCleanupDependencies,
-                runtime,
-                validatedSessionId,
-                ownedGeneration,
-              );
-            }
             return claudeFailure(validatedSessionId, error);
           }
         });

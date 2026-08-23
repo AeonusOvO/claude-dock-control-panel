@@ -11,6 +11,15 @@ import { FakeConversationAdapter } from '../../src/main/conversation/fake-adapte
 import { NativeConversationService } from '../../src/main/conversation/service';
 import type { ConversationEvent } from '../../src/shared/conversation/native';
 
+type ConversationEventWithoutEnvelope = ConversationEvent extends infer Event
+  ? Event extends ConversationEvent
+    ? Omit<
+        Event,
+        'conversationId' | 'emittedAt' | 'projectPath' | 'revision' | 'runtime' | 'sequence'
+      >
+    : never
+  : never;
+
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
@@ -29,6 +38,14 @@ const encryption = (available = true): RecoveryEncryption => ({
 });
 
 const projectPath = 'D:\\Projects\\Native';
+
+const deferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
 
 describe('native conversation service', () => {
   it('passes launch-only runtime settings to the adapter without persisting them', async () => {
@@ -66,6 +83,116 @@ describe('native conversation service', () => {
     expect(recoveryStore.list()[0]?.launch.model).toBe('claude-opus-5');
     expect(recoveryStore.list()[0]?.launch).not.toHaveProperty('runtimeModel');
     expect(recoveryStore.list()[0]?.launch).not.toHaveProperty('settingsEnvironment');
+  });
+
+  it('rejects late native adapter admission after quit cleanup begins', async () => {
+    const adapter = new FakeConversationAdapter();
+    const adapterStart = vi.spyOn(adapter, 'start');
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
+    let admissionCheck = 0;
+    const assertLaunchAdmissionAllowed = vi.fn(() => {
+      admissionCheck += 1;
+      if (admissionCheck > 1) {
+        throw new Error('应用正在退出，无法启动新的 Claude 会话。');
+      }
+    });
+    const service = new NativeConversationService({
+      adapter,
+      assertLaunchAdmissionAllowed,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore,
+      runtime: 'claude',
+    });
+
+    const started = await service.start({ projectPath });
+
+    expect(started).toMatchObject({
+      message: '应用正在退出，无法启动新的 Claude 会话。',
+      ok: false,
+      reused: false,
+    });
+    expect(assertLaunchAdmissionAllowed).toHaveBeenCalledTimes(2);
+    expect(adapterStart).not.toHaveBeenCalled();
+    expect(service.activeConversationIds(projectPath)).toEqual(new Set());
+    expect(recoveryStore.list()).toEqual([]);
+  });
+
+  it('tears down an adapter that finishes after quit cleanup starts', async () => {
+    const adapter = new FakeConversationAdapter();
+    const adapterEntered = deferred<void>();
+    const continueAdapter = deferred<void>();
+    const startAdapter = adapter.start.bind(adapter);
+    adapter.start = async (input) => {
+      adapterEntered.resolve();
+      await continueAdapter.promise;
+      await startAdapter(input);
+    };
+    let admissionAllowed = true;
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
+    const service = new NativeConversationService({
+      adapter,
+      assertLaunchAdmissionAllowed: () => {
+        if (!admissionAllowed) throw new Error('应用正在退出，无法启动新的 Claude 会话。');
+      },
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore,
+      runtime: 'claude',
+    });
+    const conversationId = '77777777-7777-4777-8777-777777777777';
+
+    const starting = service.start({ conversationId, projectPath });
+    await adapterEntered.promise;
+    admissionAllowed = false;
+    continueAdapter.resolve();
+
+    await expect(starting).resolves.toMatchObject({
+      message: '应用正在退出，无法启动新的 Claude 会话。',
+      ok: false,
+      reused: false,
+    });
+    expect(service.activeIds()).toEqual([]);
+    expect(ownerRegistry.activeConversationIds('claude', projectPath)).toEqual(new Set());
+    expect(recoveryStore.list()).toEqual([]);
+    await expect(adapter.listCommands(conversationId)).rejects.toThrow('隔离对话不存在。');
+  });
+
+  it('does not reactivate an admitted start after closeAll releases its exact owner', async () => {
+    const adapter = new FakeConversationAdapter();
+    const adapterEntered = deferred<void>();
+    const continueAdapter = deferred<void>();
+    adapter.start = async () => {
+      adapterEntered.resolve();
+      await continueAdapter.promise;
+    };
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
+    const service = new NativeConversationService({
+      adapter,
+      assertLaunchAdmissionAllowed: () => undefined,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore,
+      runtime: 'claude',
+    });
+    const conversationId = '88888888-8888-4888-8888-888888888888';
+
+    const starting = service.start({ conversationId, projectPath });
+    await adapterEntered.promise;
+    await service.closeAll();
+    continueAdapter.resolve();
+
+    await expect(starting).resolves.toMatchObject({
+      message: 'Claude 原生会话启动已取消。',
+      ok: false,
+      reused: false,
+    });
+    expect(service.activeIds()).toEqual([]);
+    expect(ownerRegistry.activeConversationIds('claude', projectPath)).toEqual(new Set());
+    expect(recoveryStore.list()).toEqual([]);
   });
 
   it('passes the project bypass gate to the adapter without persisting a privilege override', async () => {
@@ -122,6 +249,133 @@ describe('native conversation service', () => {
     expect((await service.close(started.conversationId)).ok).toBe(true);
     expect(service.activeConversationIds(projectPath).size).toBe(0);
     expect(recoveryStore.list()[0]?.clean).toBe(true);
+  });
+
+  it('rejects closeAll after a real adapter failure while releasing successful conversations', async () => {
+    const adapter = new FakeConversationAdapter();
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const first = await service.start({ projectPath });
+    const second = await service.start({ projectPath });
+    const close = adapter.close.bind(adapter);
+    adapter.close = async (conversationId) => {
+      if (conversationId === second.conversationId) {
+        throw new Error('adapter close failed');
+      }
+      await close(conversationId);
+    };
+
+    await expect(service.closeAll()).rejects.toThrow('无法关闭 1 个原生会话。');
+
+    expect(service.activeIds()).toEqual([second.conversationId]);
+    expect(service.activeConversationIds(projectPath)).toEqual(new Set([second.conversationId]));
+    expect(ownerRegistry.activeConversationIds('claude', projectPath)).toEqual(
+      new Set([second.conversationId]),
+    );
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+  });
+
+  it('keeps an authorized submit pending through foreground and background turn work', async () => {
+    const adapter = new FakeConversationAdapter();
+    let publish: ((event: ConversationEvent) => void) | undefined;
+    const subscribe = adapter.subscribe.bind(adapter);
+    adapter.subscribe = (listener) => {
+      publish = listener;
+      return subscribe(listener);
+    };
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry: new ConversationOwnerRegistry(),
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const started = await service.start({ projectPath });
+    let sequence = service.getSnapshot(started.conversationId)!.sequence;
+    const emit = (event: ConversationEventWithoutEnvelope): void => {
+      sequence += 1;
+      publish!({
+        ...event,
+        conversationId: started.conversationId,
+        emittedAt: Date.now(),
+        projectPath,
+        revision: 1,
+        runtime: 'claude',
+        sequence,
+      } as ConversationEvent);
+    };
+    adapter.submit = async (_conversationId, input) => {
+      emit({
+        message: {
+          blocks: [{ id: `${input.clientSubmissionId}:0`, text: '保持授权', type: 'text' }],
+          createdAt: Date.now(),
+          id: input.clientSubmissionId,
+          role: 'user',
+          status: 'complete',
+        },
+        type: 'message.upsert',
+      });
+      emit({ phase: 'running', type: 'conversation.phase' });
+    };
+
+    let settled = false;
+    const submission = service
+      .submitAndWaitForTurn(started.conversationId, {
+        blocks: [{ text: '保持授权', type: 'text' }],
+        clientSubmissionId: 'authorized-turn-1',
+      })
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(service.projectPathForActiveConversation(started.conversationId)).toBe(projectPath);
+
+    emit({ phase: 'requires-action', type: 'conversation.phase' });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    emit({
+      tasks: [
+        {
+          cancellable: true,
+          description: '后台检查',
+          id: 'task-1',
+          kind: 'background',
+          status: 'running',
+          updatedAt: Date.now(),
+        },
+      ],
+      type: 'tasks.reconciled',
+    });
+    emit({ phase: 'idle', type: 'conversation.phase' });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    emit({
+      tasks: [
+        {
+          cancellable: false,
+          description: '后台检查',
+          id: 'task-1',
+          kind: 'background',
+          status: 'completed',
+          updatedAt: Date.now(),
+        },
+      ],
+      type: 'tasks.reconciled',
+    });
+    await expect(submission).resolves.toMatchObject({ ok: true });
+    expect(settled).toBe(true);
   });
 
   it('focuses an existing terminal owner instead of starting a duplicate runtime', async () => {
@@ -387,6 +641,12 @@ describe('native conversation service', () => {
       sequence: 100,
       type: 'conversation.phase',
     });
+    const authorizeTerminalLaunch = vi.fn(
+      async (
+        _identity: { conversationId: string; projectPath: string },
+        operation: () => Promise<unknown>,
+      ) => operation(),
+    );
     const startTerminal = vi.fn(
       async ({
         conversationId,
@@ -412,9 +672,15 @@ describe('native conversation service', () => {
       started.conversationId,
       undefined,
       startTerminal,
+      false,
+      authorizeTerminalLaunch as unknown as <T>(
+        identity: { conversationId: string; projectPath: string },
+        operation: () => Promise<T>,
+      ) => Promise<T>,
     );
 
     expect(blocked).toMatchObject({ ok: false, requiresConfirmation: true });
+    expect(authorizeTerminalLaunch).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(startTerminal).not.toHaveBeenCalled();
     expect(beginTransfer).not.toHaveBeenCalled();
@@ -431,9 +697,23 @@ describe('native conversation service', () => {
       undefined,
       startTerminal,
       true,
+      authorizeTerminalLaunch as unknown as <T>(
+        identity: { conversationId: string; projectPath: string },
+        operation: () => Promise<T>,
+      ) => Promise<T>,
     );
 
     expect(allowed).toMatchObject({ ok: true, terminalSessionId: 'session-9' });
+    expect(authorizeTerminalLaunch).toHaveBeenCalledWith(
+      {
+        conversationId: started.conversationId,
+        projectPath,
+      },
+      expect.any(Function),
+    );
+    expect(authorizeTerminalLaunch.mock.invocationCallOrder[0]).toBeLessThan(
+      close.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(close).toHaveBeenCalledTimes(1);
     expect(startTerminal).toHaveBeenCalledTimes(1);
     expect(beginTransfer).toHaveBeenCalledTimes(1);
@@ -444,6 +724,39 @@ describe('native conversation service', () => {
         runtime: 'claude',
       }),
     ).toMatchObject({ ownerKind: 'terminal', ownerId: 'terminal:session-9' });
+  });
+
+  it('keeps the native runtime active when terminal launch authorization fails', async () => {
+    const adapter = new FakeConversationAdapter();
+    const close = vi.spyOn(adapter, 'close');
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const beginTransfer = vi.spyOn(ownerRegistry, 'beginTransfer');
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const started = await service.start({ projectPath });
+    const startTerminal = vi.fn();
+
+    await expect(
+      service.transferToTerminal(
+        started.conversationId,
+        undefined,
+        startTerminal,
+        false,
+        async () => {
+          throw new Error('network blocked');
+        },
+      ),
+    ).rejects.toThrow('network blocked');
+
+    expect(close).not.toHaveBeenCalled();
+    expect(beginTransfer).not.toHaveBeenCalled();
+    expect(startTerminal).not.toHaveBeenCalled();
+    expect(service.getSnapshot(started.conversationId)).toBeDefined();
   });
 
   it('rolls a failed terminal transfer back to the original native owner', async () => {

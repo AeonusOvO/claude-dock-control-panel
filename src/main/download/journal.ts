@@ -105,38 +105,44 @@ export class DownloadJournal {
   }
 
   public remove(id: string): void {
-    if (this.entries.delete(id)) {
-      this.write();
-    }
+    if (!this.entries.has(id)) return;
+    const next = new Map(this.entries);
+    next.delete(id);
+    this.write(next);
+    this.entries.delete(id);
   }
 
   public replace(entries: DownloadJournalEntry[]): void {
-    this.entries.clear();
+    const next = new Map<string, DownloadJournalEntry>();
     for (const entry of entries) {
-      this.entries.set(entry.id, {
-        ...entry,
-        allowedHosts: [...entry.allowedHosts],
-        allowedPathPrefixes: [...entry.allowedPathPrefixes],
-        urlChain: [...entry.urlChain],
-      });
+      next.set(entry.id, this.cloneEntry(entry));
     }
-    this.write();
+    this.write(next);
+    this.entries.clear();
+    for (const [id, entry] of next) this.entries.set(id, entry);
   }
 
   public upsert(entry: DownloadJournalEntry): void {
-    this.entries.set(entry.id, {
+    const next = new Map(this.entries);
+    next.set(entry.id, this.cloneEntry(entry));
+    this.write(next);
+    this.entries.set(entry.id, this.cloneEntry(entry));
+  }
+
+  private cloneEntry(entry: DownloadJournalEntry): DownloadJournalEntry {
+    return {
       ...entry,
       allowedHosts: [...entry.allowedHosts],
       allowedPathPrefixes: [...entry.allowedPathPrefixes],
       urlChain: [...entry.urlChain],
-    });
-    this.write();
+    };
   }
 
-  private write(): void {
+  private write(entries = this.entries): void {
     mkdirSync(path.dirname(this.storagePath), { recursive: true });
     const temporaryPath = `${this.storagePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(this.list(), null, 2)}\n`, {
+    const snapshot = [...entries.values()].map((entry) => this.cloneEntry(entry));
+    writeFileSync(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
     });

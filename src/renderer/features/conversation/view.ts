@@ -42,42 +42,80 @@ const nativeToolStatusLabel = (
     succeeded: '已完成',
   })[status];
 
-const appendNativeTool = (
-  container: HTMLElement,
-  block: Extract<ConversationContentBlock, { type: 'tool' }>,
-): void => {
-  const details = document.createElement('details');
-  details.className = 'native-tool';
-  details.dataset.status = block.status;
-  details.open =
-    block.status === 'pending' ||
-    block.status === 'running' ||
-    block.status === 'failed' ||
-    ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(block.name);
-  const summary = document.createElement('summary');
-  const state = document.createElement('span');
-  state.className = 'native-tool__state';
-  state.setAttribute('aria-hidden', 'true');
-  const name = document.createElement('span');
-  name.className = 'native-tool__name';
-  name.textContent = block.summary || block.name;
-  const status = document.createElement('span');
-  status.className = 'native-tool__status';
-  status.textContent = nativeToolStatusLabel(block.status);
-  summary.append(state, name, status);
-  const payload = document.createElement('div');
-  payload.className = 'native-tool__details';
-  const input = document.createElement('pre');
-  input.textContent = nativeJson(block.input);
-  payload.append(input);
-  if (block.output !== undefined) {
-    const output = document.createElement('pre');
-    output.textContent = nativeJson(block.output);
-    payload.append(output);
+interface NativeTextBlockDomState {
+  id: string;
+  markdownGeneration: number;
+  markdownMessageStatus: ConversationMessageView['status'] | undefined;
+  markdownSource: string | undefined;
+  markdownState: 'failed' | 'pending' | 'plain' | 'rendered';
+  mount: HTMLElement;
+  source: string;
+  text: Text;
+  type: 'text';
+}
+
+interface NativeThinkingBlockDomState {
+  id: string;
+  mount: HTMLElement;
+  source: string;
+  text: Text;
+  type: 'thinking';
+}
+
+interface NativeToolBlockDomState {
+  id: string;
+  input: HTMLElement;
+  inputText: string;
+  mount: HTMLDetailsElement;
+  name: HTMLElement;
+  nameText: string;
+  output: HTMLElement | undefined;
+  outputText: string | undefined;
+  payload: HTMLElement;
+  status: HTMLElement;
+  statusValue: Extract<ConversationContentBlock, { type: 'tool' }>['status'];
+  toolName: string;
+  type: 'tool';
+}
+
+interface NativeImageBlockDomState {
+  id: string;
+  mount: HTMLElement;
+  name: string;
+  type: 'image';
+}
+
+type NativeBlockDomState =
+  | NativeImageBlockDomState
+  | NativeTextBlockDomState
+  | NativeThinkingBlockDomState
+  | NativeToolBlockDomState;
+
+interface NativeMessageDomState {
+  blocks: Map<string, NativeBlockDomState>;
+  body: HTMLElement;
+  caret: HTMLElement;
+  label: HTMLElement;
+  role: ConversationMessageView['role'] | undefined;
+  status: ConversationMessageView['status'];
+}
+
+const updateNativeTextNode = (text: Text, previous: string, next: string): void => {
+  if (previous === next) return;
+  if (next.startsWith(previous)) {
+    text.appendData(next.slice(previous.length));
+    return;
   }
-  details.append(summary, payload);
-  container.append(details);
+  text.data = next;
 };
+
+const nativeToolStartsOpen = (
+  block: Extract<ConversationContentBlock, { type: 'tool' }>,
+): boolean =>
+  block.status === 'pending' ||
+  block.status === 'running' ||
+  block.status === 'failed' ||
+  ['Bash', 'Edit', 'Write', 'NotebookEdit'].includes(block.name);
 
 /**
  * O(1) change probe. The reducer bumps `version` on every mutation, so this is enough to decide
@@ -90,26 +128,415 @@ const appendNativeTool = (
  */
 export const nativeMessageRenderKey = (message: ConversationMessageView): string =>
   message.version === undefined
-    ? `${message.id}:nover:${message.status}:${message.blocks
-        .map((block) =>
+    ? JSON.stringify([
+        message.id,
+        message.role,
+        message.status,
+        message.blocks.map((block) =>
           block.type === 'tool'
-            ? `${block.id}~${block.status}~${block.summary ?? ''}`
-            : 'text' in block
-              ? `${block.id}~${block.text.length}`
-              : block.id,
-        )
-        .join('|')}`
+            ? [
+                block.id,
+                block.type,
+                block.name,
+                block.status,
+                block.summary,
+                block.output !== undefined,
+              ]
+            : block.type === 'image'
+              ? [block.id, block.type, block.name]
+              : [block.id, block.type, block.text],
+        ),
+      ])
     : `${message.id}:${message.version}`;
 
-/**
- * Rendered markdown, keyed by block id, per message element. A tool progress tick arrives roughly
- * once a second and changes only a status string, but it rebuilds the whole message — without this
- * every sibling text block would be re-lexed and re-highlighted through Shiki each time.
- */
-const nativeRenderedMarkdown = new WeakMap<
-  HTMLElement,
-  Map<string, { node: HTMLElement; text: string }>
->();
+interface NativeMessageRenderer {
+  render: (message: ConversationMessageView) => HTMLElement;
+  update: (article: HTMLElement, message: ConversationMessageView, renderKey?: string) => void;
+}
+
+interface NativeMessageRenderContext {
+  domStates: WeakMap<HTMLElement, NativeMessageDomState>;
+  getMarkdownRenderer: () => MarkdownDomRenderer;
+}
+
+const createNativeBlockDomState = (block: ConversationContentBlock): NativeBlockDomState => {
+  if (block.type === 'text') {
+    const mount = document.createElement('div');
+    mount.className = 'chat-message__markdown';
+    const text = document.createTextNode('');
+    mount.append(text);
+    return {
+      id: block.id,
+      markdownGeneration: 0,
+      markdownMessageStatus: undefined,
+      markdownSource: undefined,
+      markdownState: 'plain',
+      mount,
+      source: '',
+      text,
+      type: 'text',
+    };
+  }
+  if (block.type === 'thinking') {
+    const mount = document.createElement('div');
+    mount.className = 'native-thinking';
+    const text = document.createTextNode('');
+    mount.append(text);
+    return { id: block.id, mount, source: '', text, type: 'thinking' };
+  }
+  if (block.type === 'image') {
+    const mount = document.createElement('div');
+    mount.className = 'chat-attachment-card chat-attachment-card--image';
+    mount.textContent = block.name;
+    return { id: block.id, mount, name: block.name, type: 'image' };
+  }
+
+  const mount = document.createElement('details');
+  mount.className = 'native-tool';
+  mount.dataset.status = block.status;
+  mount.open = nativeToolStartsOpen(block);
+  const summary = document.createElement('summary');
+  const state = document.createElement('span');
+  state.className = 'native-tool__state';
+  state.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span');
+  name.className = 'native-tool__name';
+  const nameText = block.summary || block.name;
+  name.textContent = nameText;
+  const status = document.createElement('span');
+  status.className = 'native-tool__status';
+  status.textContent = nativeToolStatusLabel(block.status);
+  summary.append(state, name, status);
+  const payload = document.createElement('div');
+  payload.className = 'native-tool__details';
+  const input = document.createElement('pre');
+  const inputText = nativeJson(block.input);
+  input.textContent = inputText;
+  payload.append(input);
+  const outputText = block.output === undefined ? undefined : nativeJson(block.output);
+  const output = outputText === undefined ? undefined : document.createElement('pre');
+  if (output && outputText !== undefined) {
+    output.textContent = outputText;
+    payload.append(output);
+  }
+  mount.append(summary, payload);
+  return {
+    id: block.id,
+    input,
+    inputText,
+    mount,
+    name,
+    nameText,
+    output,
+    outputText,
+    payload,
+    status,
+    statusValue: block.status,
+    toolName: block.name,
+    type: 'tool',
+  };
+};
+
+const updateNativeToolBlock = (
+  state: NativeToolBlockDomState,
+  block: Extract<ConversationContentBlock, { type: 'tool' }>,
+): void => {
+  const nameText = block.summary || block.name;
+  const shouldOpen =
+    (state.statusValue !== block.status || state.toolName !== block.name) &&
+    nativeToolStartsOpen(block);
+  if (state.statusValue !== block.status) {
+    state.statusValue = block.status;
+    state.mount.dataset.status = block.status;
+    state.status.textContent = nativeToolStatusLabel(block.status);
+  }
+  if (state.nameText !== nameText) {
+    state.nameText = nameText;
+    state.name.textContent = nameText;
+  }
+  state.toolName = block.name;
+  if (shouldOpen) state.mount.open = true;
+
+  const inputText = nativeJson(block.input);
+  if (state.inputText !== inputText) {
+    state.inputText = inputText;
+    state.input.textContent = inputText;
+  }
+  const outputText = block.output === undefined ? undefined : nativeJson(block.output);
+  if (outputText === undefined) {
+    state.output?.remove();
+    state.output = undefined;
+  } else if (!state.output) {
+    state.output = document.createElement('pre');
+    state.output.textContent = outputText;
+    state.payload.append(state.output);
+  } else if (state.outputText !== outputText) {
+    state.output.textContent = outputText;
+  }
+  state.outputText = outputText;
+};
+
+const invalidateNativeBlock = (block: NativeBlockDomState): void => {
+  if (block.type === 'text') block.markdownGeneration += 1;
+};
+
+const nativeMarkdownRenderIsCurrent = (
+  context: NativeMessageRenderContext,
+  article: HTMLElement,
+  messageState: NativeMessageDomState,
+  blockState: NativeTextBlockDomState,
+  source: string,
+  messageStatus: ConversationMessageView['status'],
+  generation: number,
+): boolean =>
+  context.domStates.get(article) === messageState &&
+  messageState.blocks.get(blockState.id) === blockState &&
+  messageState.role === 'assistant' &&
+  messageState.status === messageStatus &&
+  blockState.markdownGeneration === generation &&
+  blockState.markdownMessageStatus === messageStatus &&
+  blockState.markdownSource === source &&
+  blockState.markdownState === 'pending';
+
+const renderNativeMarkdown = (
+  context: NativeMessageRenderContext,
+  article: HTMLElement,
+  messageState: NativeMessageDomState,
+  blockState: NativeTextBlockDomState,
+  source: string,
+  messageStatus: ConversationMessageView['status'],
+): void => {
+  const generation = blockState.markdownGeneration + 1;
+  blockState.markdownGeneration = generation;
+  blockState.markdownMessageStatus = messageStatus;
+  blockState.markdownSource = source;
+  blockState.markdownState = 'pending';
+  if (blockState.mount.firstChild !== blockState.text || blockState.mount.childNodes.length !== 1) {
+    blockState.mount.replaceChildren(blockState.text);
+  }
+  void context
+    .getMarkdownRenderer()
+    .renderFragment(source)
+    .then((fragment) => {
+      if (
+        !nativeMarkdownRenderIsCurrent(
+          context,
+          article,
+          messageState,
+          blockState,
+          source,
+          messageStatus,
+          generation,
+        )
+      ) {
+        return;
+      }
+      blockState.mount.replaceChildren(fragment);
+      blockState.markdownState = 'rendered';
+    })
+    .catch(() => {
+      if (
+        !nativeMarkdownRenderIsCurrent(
+          context,
+          article,
+          messageState,
+          blockState,
+          source,
+          messageStatus,
+          generation,
+        )
+      ) {
+        return;
+      }
+      blockState.mount.replaceChildren(blockState.text);
+      blockState.markdownState = 'failed';
+    });
+};
+
+const updateNativeTextBlock = (
+  context: NativeMessageRenderContext,
+  article: HTMLElement,
+  messageState: NativeMessageDomState,
+  blockState: NativeTextBlockDomState,
+  block: Extract<ConversationContentBlock, { type: 'text' }>,
+): void => {
+  const previousSource = blockState.source;
+  updateNativeTextNode(blockState.text, previousSource, block.text);
+  blockState.source = block.text;
+  const renderMarkdown = messageState.role === 'assistant' && messageState.status !== 'streaming';
+  blockState.mount.classList.toggle(
+    'native-message__stream-text',
+    messageState.role === 'assistant' && messageState.status === 'streaming',
+  );
+  if (!renderMarkdown) {
+    if (
+      blockState.markdownState !== 'plain' ||
+      blockState.mount.firstChild !== blockState.text ||
+      blockState.mount.childNodes.length !== 1
+    ) {
+      blockState.markdownGeneration += 1;
+      blockState.markdownMessageStatus = undefined;
+      blockState.markdownSource = undefined;
+      blockState.markdownState = 'plain';
+      blockState.mount.replaceChildren(blockState.text);
+    }
+    return;
+  }
+  if (
+    blockState.markdownSource === block.text &&
+    blockState.markdownMessageStatus === messageState.status &&
+    blockState.markdownState !== 'plain'
+  ) {
+    return;
+  }
+  renderNativeMarkdown(context, article, messageState, blockState, block.text, messageState.status);
+};
+
+const updateNativeBlock = (
+  context: NativeMessageRenderContext,
+  article: HTMLElement,
+  messageState: NativeMessageDomState,
+  blockState: NativeBlockDomState,
+  block: ConversationContentBlock,
+): void => {
+  if (blockState.type === 'text' && block.type === 'text') {
+    updateNativeTextBlock(context, article, messageState, blockState, block);
+    return;
+  }
+  if (blockState.type === 'thinking' && block.type === 'thinking') {
+    updateNativeTextNode(blockState.text, blockState.source, block.text);
+    blockState.source = block.text;
+    return;
+  }
+  if (blockState.type === 'tool' && block.type === 'tool') {
+    updateNativeToolBlock(blockState, block);
+    return;
+  }
+  if (blockState.type === 'image' && block.type === 'image' && blockState.name !== block.name) {
+    blockState.name = block.name;
+    blockState.mount.textContent = block.name;
+  }
+};
+
+const updateNativeMessageLabel = (
+  messageState: NativeMessageDomState,
+  role: ConversationMessageView['role'],
+): void => {
+  if (messageState.role === role) return;
+  messageState.role = role;
+  if (role === 'assistant') {
+    const terminalMark = document.createElement('span');
+    terminalMark.className = 'native-message__terminal-mark';
+    terminalMark.setAttribute('aria-hidden', 'true');
+    terminalMark.textContent = '>_';
+    messageState.label.replaceChildren(terminalMark, document.createTextNode(' Claude'));
+    return;
+  }
+  messageState.label.textContent = role === 'user' ? '你' : '系统';
+};
+
+const createNativeMessageDomState = (article: HTMLElement): NativeMessageDomState => {
+  const label = document.createElement('strong');
+  label.className = 'native-message__label';
+  const body = document.createElement('div');
+  body.className = 'native-message__body';
+  const caret = document.createElement('span');
+  caret.className = 'native-message__stream-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  const messageState: NativeMessageDomState = {
+    blocks: new Map(),
+    body,
+    caret,
+    label,
+    role: undefined,
+    status: 'complete',
+  };
+  article.append(label, body);
+  return messageState;
+};
+
+const reconcileNativeMessageBlocks = (
+  messageState: NativeMessageDomState,
+  ordered: NativeBlockDomState[],
+): void => {
+  let cursor: ChildNode | null = messageState.body.firstChild;
+  for (const blockState of ordered) {
+    if (cursor === blockState.mount) {
+      cursor = blockState.mount.nextSibling;
+      continue;
+    }
+    messageState.body.insertBefore(blockState.mount, cursor);
+  }
+  if (messageState.status !== 'streaming') return;
+  const tail = ordered.at(-1);
+  if (tail?.type === 'text') {
+    tail.mount.append(messageState.caret);
+  } else {
+    messageState.body.append(messageState.caret);
+  }
+};
+
+const createNativeMessageRenderer = (
+  state: ConversationState,
+  getMarkdownRenderer: () => MarkdownDomRenderer,
+): NativeMessageRenderer => {
+  const context: NativeMessageRenderContext = {
+    domStates: new WeakMap(),
+    getMarkdownRenderer,
+  };
+
+  const update = (
+    article: HTMLElement,
+    message: ConversationMessageView,
+    renderKey = nativeMessageRenderKey(message),
+  ): void => {
+    let messageState = context.domStates.get(article);
+    if (!messageState) {
+      messageState = createNativeMessageDomState(article);
+      context.domStates.set(article, messageState);
+    }
+    messageState.caret.remove();
+    messageState.status = message.status;
+    updateNativeMessageLabel(messageState, message.role);
+    article.className = `native-message native-message--${message.role}`;
+    article.dataset.nativeMessageId = message.id;
+    article.classList.toggle('native-message--streaming', message.status === 'streaming');
+    article.setAttribute('aria-busy', String(message.status === 'streaming'));
+
+    const ordered: NativeBlockDomState[] = [];
+    const liveBlockIds = new Set<string>();
+    for (const block of message.blocks) {
+      liveBlockIds.add(block.id);
+      let blockState = messageState.blocks.get(block.id);
+      if (!blockState || blockState.type !== block.type) {
+        if (blockState) {
+          invalidateNativeBlock(blockState);
+          blockState.mount.remove();
+        }
+        blockState = createNativeBlockDomState(block);
+        messageState.blocks.set(block.id, blockState);
+      }
+      updateNativeBlock(context, article, messageState, blockState, block);
+      ordered.push(blockState);
+    }
+    for (const [blockId, blockState] of messageState.blocks) {
+      if (liveBlockIds.has(blockId)) continue;
+      invalidateNativeBlock(blockState);
+      blockState.mount.remove();
+      messageState.blocks.delete(blockId);
+    }
+    reconcileNativeMessageBlocks(messageState, ordered);
+    state.nativeMessageRenderKeys.set(article, renderKey);
+  };
+
+  const render = (message: ConversationMessageView): HTMLElement => {
+    const article = document.createElement('article');
+    update(article, message);
+    return article;
+  };
+
+  return { render, update };
+};
 
 export const nativeInteractionButton = (
   label: string,
@@ -300,90 +727,11 @@ export const createConversationView = (
   const nativeActivePermissionMode = (snapshot: ConversationSnapshot): string | undefined =>
     state.nativePermissionModes.get(snapshot.conversationId) ??
     snapshot.capabilities?.permissionModes[0];
-
-  const updateNativeMessage = (
-    article: HTMLElement,
-    message: ConversationMessageView,
-    renderKey = nativeMessageRenderKey(message),
-  ): void => {
-    article.className = `native-message native-message--${message.role}`;
-    article.dataset.nativeMessageId = message.id;
-    article.classList.toggle('native-message--streaming', message.status === 'streaming');
-    article.setAttribute('aria-busy', String(message.status === 'streaming'));
-    const label = document.createElement('strong');
-    label.className = 'native-message__label';
-    if (message.role === 'assistant') {
-      const terminalMark = document.createElement('span');
-      terminalMark.className = 'native-message__terminal-mark';
-      terminalMark.setAttribute('aria-hidden', 'true');
-      terminalMark.textContent = '>_';
-      label.append(terminalMark, document.createTextNode(' Claude'));
-    } else {
-      label.textContent = message.role === 'user' ? '你' : '系统';
-    }
-    const body = document.createElement('div');
-    body.className = 'native-message__body';
-    const cached = nativeRenderedMarkdown.get(article);
-    const rendered = new Map<string, { node: HTMLElement; text: string }>();
-    let streamingTextMount: HTMLElement | undefined;
-    for (const block of message.blocks) {
-      if (block.type === 'text') {
-        if (message.role === 'assistant' && message.status !== 'streaming') {
-          const reusable = cached?.get(block.id);
-          if (reusable && reusable.text === block.text) {
-            body.append(reusable.node);
-            rendered.set(block.id, reusable);
-            continue;
-          }
-          const mount = document.createElement('div');
-          mount.className = 'chat-message__markdown';
-          body.append(mount);
-          rendered.set(block.id, { node: mount, text: block.text });
-          void dependencies.getMarkdownRenderer().renderInto(mount, block.text);
-          continue;
-        }
-        const mount = document.createElement('div');
-        mount.className = 'chat-message__markdown';
-        body.append(mount);
-        if (message.role === 'assistant') {
-          mount.classList.add('native-message__stream-text');
-          streamingTextMount = mount;
-        }
-        mount.textContent = block.text;
-        continue;
-      }
-      if (block.type === 'thinking') {
-        const thinking = document.createElement('div');
-        thinking.className = 'native-thinking';
-        thinking.textContent = block.text;
-        body.append(thinking);
-        continue;
-      }
-      if (block.type === 'tool') {
-        appendNativeTool(body, block);
-        continue;
-      }
-      const image = document.createElement('div');
-      image.className = 'chat-attachment-card chat-attachment-card--image';
-      image.textContent = block.name;
-      body.append(image);
-    }
-    if (message.status === 'streaming') {
-      const caret = document.createElement('span');
-      caret.className = 'native-message__stream-caret';
-      caret.setAttribute('aria-hidden', 'true');
-      (streamingTextMount ?? body).append(caret);
-    }
-    article.replaceChildren(label, body);
-    nativeRenderedMarkdown.set(article, rendered);
-    state.nativeMessageRenderKeys.set(article, renderKey);
-  };
-
-  const renderNativeMessage = (message: ConversationMessageView): HTMLElement => {
-    const article = document.createElement('article');
-    updateNativeMessage(article, message);
-    return article;
-  };
+  const nativeMessageRenderer = createNativeMessageRenderer(
+    state,
+    dependencies.getMarkdownRenderer,
+  );
+  let lastNativeFooterPresentationKey = '';
 
   /**
    * Renders the four footer chips from an Agent SDK snapshot. Native mode has no PowerShell status
@@ -393,12 +741,27 @@ export const createConversationView = (
   const renderNativeFooter = (snapshot: ConversationSnapshot): void => {
     const capability = snapshot.capabilities;
     const busy = state.nativeControlsUpdating;
+    const activePermissionMode = nativeActivePermissionMode(snapshot);
+    const presentationKey = JSON.stringify([
+      snapshot.conversationId,
+      capability?.revision,
+      activePermissionMode,
+      busy,
+    ]);
+    if (
+      presentationKey === lastNativeFooterPresentationKey &&
+      dependencies.footerModel.dataset.presentationOwner === 'native'
+    ) {
+      return;
+    }
+    lastNativeFooterPresentationKey = presentationKey;
     for (const chip of [
       dependencies.footerModel,
       dependencies.footerSpeed,
       dependencies.footerMode,
       dependencies.footerEffort,
     ]) {
+      chip.dataset.presentationOwner = 'native';
       chip.setAttribute('aria-busy', String(busy));
     }
     if (!capability) {
@@ -433,8 +796,6 @@ export const createConversationView = (
     dependencies.footerSpeed.disabled = busy || capability.fast.state === 'unavailable';
     dependencies.footerSpeed.title = nativeFastDetail(capability.fast);
 
-    const permissionMode = snapshot.capabilities?.permissionModes[0];
-    const activePermissionMode = nativeActivePermissionMode(snapshot) ?? permissionMode;
     dependencies.footerMode.textContent = `模式 ${activePermissionMode ? nativePermissionLabel(activePermissionMode) : '—'}`;
     dependencies.footerMode.dataset.mode = activePermissionMode ?? 'unknown';
     dependencies.footerMode.disabled = busy || capability.permissionModes.length === 0;
@@ -465,7 +826,7 @@ export const createConversationView = (
   return {
     nativeActivePermissionMode,
     renderNativeFooter,
-    renderNativeMessage,
-    updateNativeMessage,
+    renderNativeMessage: nativeMessageRenderer.render,
+    updateNativeMessage: nativeMessageRenderer.update,
   };
 };

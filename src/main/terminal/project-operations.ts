@@ -13,6 +13,7 @@ import type { WorkspaceStore } from '../stores/workspace';
 import type { DescribeWorkspace, TerminalWorkspace } from './workspace';
 
 export interface ProjectOperationDependencies {
+  beforeActivate?: (sessionId: string) => void;
   describeWorkspace: DescribeWorkspace;
   /* Fallback for the folder dialog and the ceiling the picker will not walk above. */
   homeDirectory: string;
@@ -32,6 +33,7 @@ export interface ProjectOperations {
 const reportWorkspaceFailure = createFailureReporter('workspace');
 
 export const createProjectOperations = ({
+  beforeActivate,
   describeWorkspace,
   homeDirectory,
   projectDirectoryLifecycle,
@@ -117,6 +119,7 @@ export const createProjectOperations = ({
   };
 
   const activateProject = (sessionId: string): WorkspaceState => {
+    beforeActivate?.(sessionId);
     const state = workspace.activate(sessionId);
     const active = state.sessions.find((session) => session.id === state.activeSessionId);
     if (active) {

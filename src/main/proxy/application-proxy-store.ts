@@ -14,16 +14,27 @@ export interface ApplicationProxySecretStorage {
   isEncryptionAvailable(): boolean;
 }
 
-interface StoredApplicationProxy {
-  enabled: boolean;
-  encryptedPassword?: string;
-  host: string;
-  port?: number;
-  protocol: ApplicationProxyProtocol;
-  scope: ApplicationProxyScope;
-  updatedAt?: number;
-  username: string;
-  version: 1;
+/** Main-process-only persisted proxy state. It may contain encrypted credentials. */
+export interface StoredApplicationProxyState {
+  readonly enabled: boolean;
+  readonly encryptedPassword?: string;
+  readonly host: string;
+  readonly port?: number;
+  readonly protocol: ApplicationProxyProtocol;
+  readonly scope: Readonly<ApplicationProxyScope>;
+  readonly updatedAt?: number;
+  readonly username: string;
+  readonly version: 1;
+}
+
+export interface ApplicationProxyStoreSnapshot {
+  readonly kind: 'application-proxy-snapshot';
+  readonly stored: StoredApplicationProxyState;
+}
+
+export interface PreparedApplicationProxySave {
+  readonly kind: 'prepared-application-proxy-save';
+  readonly stored: StoredApplicationProxyState;
 }
 
 export interface ApplicationProxyCredentials {
@@ -36,7 +47,7 @@ const DEFAULT_SCOPE: ApplicationProxyScope = {
   cli: true,
   conversation: false,
 };
-const DEFAULT_STATE: StoredApplicationProxy = {
+const DEFAULT_STATE: StoredApplicationProxyState = {
   enabled: false,
   host: '',
   protocol: 'http',
@@ -46,6 +57,8 @@ const DEFAULT_STATE: StoredApplicationProxy = {
 };
 const HOSTNAME_PATTERN =
   /^(?=.{1,253}$)(?:localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*)$/i;
+
+type ApplicationProxyStoreSource = ApplicationProxyStoreSnapshot | PreparedApplicationProxySave;
 
 const cleanText = (value: unknown, maximum: number): string => {
   if (typeof value !== 'string' || value.length > maximum || /[\0\r\n]/.test(value)) {
@@ -86,7 +99,13 @@ const normalizeScope = (value: unknown): ApplicationProxyScope => {
   };
 };
 
-const toView = (stored: StoredApplicationProxy): ApplicationProxyView => ({
+const cloneStored = (stored: StoredApplicationProxyState): StoredApplicationProxyState =>
+  Object.freeze({
+    ...stored,
+    scope: Object.freeze({ ...stored.scope }),
+  });
+
+const toView = (stored: StoredApplicationProxyState): ApplicationProxyView => ({
   enabled: stored.enabled,
   host: stored.host,
   passwordConfigured: Boolean(stored.encryptedPassword),
@@ -99,7 +118,7 @@ const toView = (stored: StoredApplicationProxy): ApplicationProxyView => ({
 
 export class ApplicationProxyStore {
   private readonly filePath: string;
-  private stored: StoredApplicationProxy;
+  private stored: StoredApplicationProxyState;
 
   public constructor(
     userDataPath: string,
@@ -108,14 +127,24 @@ export class ApplicationProxyStore {
     const directory = path.join(userDataPath, 'proxy');
     mkdirSync(directory, { recursive: true });
     this.filePath = path.join(directory, 'application-proxy.json');
-    this.stored = this.load();
+    this.stored = cloneStored(this.load());
   }
 
-  public getView(): ApplicationProxyView {
-    return toView(this.stored);
+  public getView(source?: ApplicationProxyStoreSource): ApplicationProxyView {
+    return toView(source?.stored ?? this.stored);
   }
 
-  public save(input: SaveApplicationProxyInput): ApplicationProxyView {
+  public snapshot(): ApplicationProxyStoreSnapshot {
+    return Object.freeze({
+      kind: 'application-proxy-snapshot' as const,
+      stored: cloneStored(this.stored),
+    });
+  }
+
+  public prepare(
+    input: SaveApplicationProxyInput,
+    snapshot: ApplicationProxyStoreSnapshot = this.snapshot(),
+  ): PreparedApplicationProxySave {
     if (!input || typeof input !== 'object') throw new Error('代理配置无效。');
     if (input.protocol !== 'http' && input.protocol !== 'socks5') {
       throw new Error('仅支持 HTTP 或 SOCKS5 应用代理。');
@@ -137,30 +166,52 @@ export class ApplicationProxyStore {
     if (input.protocol === 'socks5') scope.cli = false;
     if (password && !username) throw new Error('填写代理密码时必须同时填写账号。');
 
-    let encryptedPassword = username ? this.stored.encryptedPassword : undefined;
+    let encryptedPassword =
+      username && username === snapshot.stored.username
+        ? snapshot.stored.encryptedPassword
+        : undefined;
     if (password) {
       if (!this.secretStorage.isEncryptionAvailable()) {
         throw new Error('Windows 安全存储不可用，代理密码不会降级为明文保存。');
       }
       encryptedPassword = this.secretStorage.encryptString(password).toString('base64');
     }
-    this.stored = {
-      enabled,
-      encryptedPassword,
-      host,
-      port,
-      protocol: input.protocol,
-      scope,
-      updatedAt: Date.now(),
-      username,
-      version: 1,
-    };
-    this.persist();
+    return Object.freeze({
+      kind: 'prepared-application-proxy-save' as const,
+      stored: cloneStored({
+        enabled,
+        encryptedPassword,
+        host,
+        port,
+        protocol: input.protocol,
+        scope,
+        updatedAt: Math.max(Date.now(), (snapshot.stored.updatedAt ?? 0) + 1),
+        username,
+        version: 1,
+      }),
+    });
+  }
+
+  public commit(prepared: PreparedApplicationProxySave): ApplicationProxyView {
+    this.persist(prepared.stored);
+    this.stored = cloneStored(prepared.stored);
     return this.getView();
   }
 
-  public getCredentials(): ApplicationProxyCredentials | undefined {
-    const { encryptedPassword, username } = this.stored;
+  public restore(snapshot: ApplicationProxyStoreSnapshot): ApplicationProxyView {
+    this.persist(snapshot.stored);
+    this.stored = cloneStored(snapshot.stored);
+    return this.getView();
+  }
+
+  public save(input: SaveApplicationProxyInput): ApplicationProxyView {
+    return this.commit(this.prepare(input));
+  }
+
+  public getCredentials(
+    source?: ApplicationProxyStoreSource,
+  ): ApplicationProxyCredentials | undefined {
+    const { encryptedPassword, username } = source?.stored ?? this.stored;
     if (!username || !encryptedPassword || !this.secretStorage.isEncryptionAvailable()) {
       return undefined;
     }
@@ -174,7 +225,7 @@ export class ApplicationProxyStore {
     }
   }
 
-  private load(): StoredApplicationProxy {
+  private load(): StoredApplicationProxyState {
     try {
       const parsed = JSON.parse(readFileSync(this.filePath, 'utf8')) as Record<string, unknown>;
       if (parsed.version !== 1) return { ...DEFAULT_STATE, scope: { ...DEFAULT_SCOPE } };
@@ -210,9 +261,9 @@ export class ApplicationProxyStore {
     }
   }
 
-  private persist(): void {
+  private persist(stored: StoredApplicationProxyState): void {
     const temporaryPath = `${this.filePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(this.stored, null, 2)}\n`, {
+    writeFileSync(temporaryPath, `${JSON.stringify(stored, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
     });

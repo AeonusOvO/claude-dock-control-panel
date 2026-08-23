@@ -18,16 +18,17 @@ import {
   footerModeMenu,
   footerModel,
   footerModelMenu,
-  footerMore,
   footerResource,
   footerResourceMenu,
-  footerSecondaryStatus,
+  footerSessionSettings,
+  footerSessionSettingsRegion,
   footerSpeed,
   footerSpeedMenu,
   footerStatus,
 } from './elements';
 import { footerState } from './state';
 import { createFooterMenus, type FooterMenusDeps } from './menus';
+import { installSessionSettings } from './session-settings';
 import { createFooterSwitches, type FooterSwitchesDeps } from './switches';
 
 export interface FooterShellDeps extends FooterMenusDeps, FooterSwitchesDeps {}
@@ -55,10 +56,10 @@ export interface FooterShell {
   readonly footerSpeedMenu: HTMLElement;
   readonly footerResource: HTMLButtonElement;
   readonly footerResourceMenu: HTMLElement;
-  readonly footerMore: HTMLButtonElement;
-  readonly footerSecondaryStatus: HTMLElement;
+  readonly footerSessionSettings: HTMLButtonElement;
+  readonly footerSessionSettingsRegion: HTMLElement;
   hideFooterMenus: () => void;
-  setFooterSecondaryOpen: (open: boolean) => void;
+  setSessionSettingsOpen: (open: boolean) => void;
   openFooterMenu: (menu: HTMLElement, trigger: HTMLButtonElement) => void;
   buildFooterRadioMenuItem: (
     label: string,
@@ -92,6 +93,13 @@ export interface FooterShell {
 export const createFooterShell = (deps: FooterShellDeps): FooterShell => {
   const menus = createFooterMenus({ formatTokenCount: deps.formatTokenCount });
   const switches = createFooterSwitches(menus, deps);
+  const sessionSettings = installSessionSettings({
+    document,
+    ownedPopups: [footerModelMenu, footerSpeedMenu, footerModeMenu, footerEffortMenu],
+    region: footerSessionSettingsRegion,
+    trigger: footerSessionSettings,
+    window,
+  });
 
   footerResource.addEventListener('click', () => {
     if (footerResourceMenu.hidden) {
@@ -99,9 +107,6 @@ export const createFooterShell = (deps: FooterShellDeps): FooterShell => {
     } else {
       menus.hideFooterMenus();
     }
-  });
-  footerMore.addEventListener('click', () => {
-    menus.setFooterSecondaryOpen(footerSecondaryStatus.dataset.open !== 'true');
   });
   claudeContextWindowCustomInput.addEventListener('change', () => {
     const tokens = Number(claudeContextWindowCustomInput.value);
@@ -185,10 +190,10 @@ export const createFooterShell = (deps: FooterShellDeps): FooterShell => {
     footerSpeedMenu,
     footerResource,
     footerResourceMenu,
-    footerMore,
-    footerSecondaryStatus,
+    footerSessionSettings,
+    footerSessionSettingsRegion,
     hideFooterMenus: menus.hideFooterMenus,
-    setFooterSecondaryOpen: menus.setFooterSecondaryOpen,
+    setSessionSettingsOpen: sessionSettings.setOpen,
     openFooterMenu: menus.openFooterMenu,
     buildFooterRadioMenuItem: menus.buildFooterRadioMenuItem,
     renderFooterResource: menus.renderFooterResource,

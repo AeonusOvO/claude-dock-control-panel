@@ -5,7 +5,8 @@ import type { ChatGptSubscriptionGuideDeps } from './chatgpt-guide-dependencies'
 import type { ChatGptGuideRenderActions } from './chatgpt-guide-render';
 
 export interface ChatGptGuideSetupActions {
-  runSetup: (forceLogin: boolean, button: HTMLButtonElement) => Promise<void>;
+  runLogout: (button: HTMLButtonElement) => Promise<void>;
+  runSetup: (button: HTMLButtonElement) => Promise<void>;
 }
 
 export const createChatGptGuideSetupActions = (
@@ -25,7 +26,7 @@ export const createChatGptGuideSetupActions = (
   } = deps;
   const { renderState } = renderActions;
 
-  const runSetup = async (forceLogin: boolean, button: HTMLButtonElement): Promise<void> => {
+  const runSetup = async (button: HTMLButtonElement): Promise<void> => {
     const sessionId = getActiveSessionId() || undefined;
     const original = button.textContent;
     let restoreOriginalLabel = true;
@@ -41,10 +42,10 @@ export const createChatGptGuideSetupActions = (
           modelSelect.disabled = true;
           statusCard.dataset.phase = 'installing';
           statusTitle.textContent = '正在安装并配置托管网关';
-          button.textContent = forceLogin ? '等待 OpenAI 授权…' : '正在安装并打开授权页…';
+          button.textContent = '正在安装并打开授权页…';
           statusDetail.textContent =
             '如果需要登录，浏览器会自动打开 OpenAI 官方页面；完成授权后无需复制任何代码。';
-          return window.controlPanel.setupManagedChatGptGateway(operationSessionId, forceLogin);
+          return window.controlPanel.setupManagedChatGptGateway(operationSessionId);
         },
       );
       if (!execution.started) {
@@ -98,8 +99,52 @@ export const createChatGptGuideSetupActions = (
     }
   };
 
+  const runLogout = async (button: HTMLButtonElement): Promise<void> => {
+    const sessionId = getActiveSessionId() || undefined;
+    let operationFinished = false;
+    if (!managedChatGptOperations.begin(sessionId)) {
+      showToast('托管网关正在处理其他操作，请等待当前操作完成。');
+      return;
+    }
+    button.disabled = true;
+    button.textContent = '正在退出…';
+    modelSelect.disabled = true;
+    try {
+      const result = await window.controlPanel.logoutManagedChatGptGateway();
+      managedChatGptOperations.finish(sessionId);
+      operationFinished = true;
+      renderState(result.state);
+      if (!result.ok) {
+        statusCard.dataset.phase = 'error';
+        statusTitle.textContent = '退出未完成';
+        statusDetail.textContent = resultFailureMessage(result, result.message);
+        showToast(resultFailureMessage(result, result.message), 'error');
+        return;
+      }
+      showToast(result.message);
+    } catch {
+      statusCard.dataset.phase = 'error';
+      statusTitle.textContent = '退出未完成';
+      statusDetail.textContent = '无法退出 ClaudeDock 托管的 OpenAI 账号，请稍后重试。';
+      showToast('无法退出 ClaudeDock 托管的 OpenAI 账号。', 'error');
+    } finally {
+      if (!operationFinished) {
+        managedChatGptOperations.finish(sessionId);
+      }
+      if (button.isConnected) {
+        button.disabled = false;
+        button.textContent = '退出当前账号';
+      } else if (getSelectedProviderId() === 'chatgpt-subscription') {
+        applyPresetUi('chatgpt-subscription', true);
+      }
+      if (guide.isConnected) {
+        modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+      }
+    }
+  };
+
   action.addEventListener('click', () => {
-    void runSetup(false, action);
+    void runSetup(action);
   });
   modelSelect.addEventListener('change', () => {
     const sessionId = getActiveSessionId();
@@ -160,6 +205,7 @@ export const createChatGptGuideSetupActions = (
     });
 
   return {
+    runLogout,
     runSetup,
   };
 };

@@ -1,17 +1,22 @@
 import type { ClaudeOperationResult, PtyGeneration, TerminalStatus } from '../../shared/contracts';
 import { createFailureReporter } from '../infra/logger';
 import type { MainGuards } from '../ipc/guards';
+import type { ClaudeLaunchAuthorization } from './runtime-types';
 import type { PermissionModeProbes } from './permission-mode-probe';
 import {
   cleanupFailedRuntimeLaunch,
   type FailedRuntimeLaunchCleanupDependencies,
   type RestartRuntimeTerminal,
+  type WithExpectedPtyReplacement,
 } from '../terminal/lifecycle';
 import type { TerminalOutputBatcher } from '../terminal/output-batcher';
 import type { TerminalWorkspace } from '../terminal/workspace';
 
 export interface ClaudeLaunchOperationDependencies {
-  guards: Pick<MainGuards, 'assertRealRuntimeAllowed' | 'requireClaudeRuntime'>;
+  guards: Pick<
+    MainGuards,
+    'assertLaunchAdmissionAllowed' | 'assertRealRuntimeAllowed' | 'requireClaudeRuntime'
+  >;
   resolvePendingPermissionModeProbes: PermissionModeProbes['resolvePendingPermissionModeProbes'];
   terminalOutputBatcher: TerminalOutputBatcher;
   workspace: TerminalWorkspace;
@@ -28,13 +33,17 @@ export interface ClaudeLaunchOperations {
     conversationId: string,
     failureMessage: string,
     assertCurrent: () => void,
+    launchAuthorization?: object,
+    assertPreparationCurrent?: () => void,
+    signal?: AbortSignal,
+    withExpectedPtyReplacement?: WithExpectedPtyReplacement,
   ) => Promise<PtyGeneration>;
 }
 
 const reportClaudeFailure = createFailureReporter('claude');
 
 export const createClaudeLaunchOperations = ({
-  guards: { assertRealRuntimeAllowed, requireClaudeRuntime },
+  guards: { assertLaunchAdmissionAllowed, assertRealRuntimeAllowed, requireClaudeRuntime },
   resolvePendingPermissionModeProbes,
   terminalOutputBatcher,
   workspace,
@@ -68,17 +77,25 @@ export const createClaudeLaunchOperations = ({
     failureMessage,
     assertCurrent,
     ownGeneration,
+    launchToken,
+    withExpectedPtyReplacement,
   ): TerminalStatus => {
+    assertLaunchAdmissionAllowed();
     assertRealRuntimeAllowed();
     const previousGeneration = workspace.getStatus(sessionId).ptyGeneration;
     terminalOutputBatcher.discard(sessionId, previousGeneration);
     resolvePendingPermissionModeProbes(sessionId, previousGeneration);
-    const terminalStatus = workspace.restart(sessionId, environment);
+    const terminalStatus = withExpectedPtyReplacement
+      ? withExpectedPtyReplacement(previousGeneration, () =>
+          workspace.restart(sessionId, environment),
+        )
+      : workspace.restart(sessionId, environment);
     ownGeneration(terminalStatus.ptyGeneration);
-    runtime.bindPty(sessionId, terminalStatus.ptyGeneration);
     if (terminalStatus.phase === 'error') {
       throw new Error(terminalStatus.message ?? failureMessage);
     }
+    assertCurrent();
+    runtime.bindPty(sessionId, terminalStatus.ptyGeneration, launchToken);
     assertCurrent();
     if (!runtime.writeTerminal(sessionId, terminalStatus.ptyGeneration, `${command}\r`)) {
       throw new Error('新的 PowerShell 已停止，启动命令没有写入。');
@@ -99,15 +116,28 @@ export const createClaudeLaunchOperations = ({
     conversationId: string,
     failureMessage: string,
     assertCurrent: () => void,
+    launchAuthorization?: object,
+    assertPreparationCurrent: () => void = assertCurrent,
+    signal?: AbortSignal,
+    withExpectedPtyReplacement?: WithExpectedPtyReplacement,
   ): Promise<PtyGeneration> => {
     const runtime = requireClaudeRuntime();
-    let launchPrepared = false;
+    let launchToken: object | undefined;
     let ownedGeneration: PtyGeneration | undefined;
     try {
-      const prepared = await runtime.prepareLaunchWithSession(sessionId, cwd, conversationId);
-      launchPrepared = true;
-      ownedGeneration = prepared.predecessorPtyGeneration;
-      assertCurrent();
+      signal?.throwIfAborted();
+      assertLaunchAdmissionAllowed();
+      assertPreparationCurrent();
+      const prepared = await runtime.prepareLaunchWithSession(
+        sessionId,
+        cwd,
+        conversationId,
+        launchAuthorization as ClaudeLaunchAuthorization | undefined,
+      );
+      launchToken = prepared.token;
+      signal?.throwIfAborted();
+      assertLaunchAdmissionAllowed();
+      assertPreparationCurrent();
       restartRuntimeTerminal(
         runtime,
         sessionId,
@@ -118,16 +148,21 @@ export const createClaudeLaunchOperations = ({
         (ptyGeneration) => {
           ownedGeneration = ptyGeneration;
         },
+        prepared.token,
+        withExpectedPtyReplacement,
       );
+      signal?.throwIfAborted();
+      assertCurrent();
       if (ownedGeneration === undefined) throw new Error('安全终端没有有效的进程代际。');
       return ownedGeneration;
     } catch (error) {
-      if (launchPrepared || ownedGeneration !== undefined) {
+      if (launchToken || ownedGeneration !== undefined) {
         cleanupFailedRuntimeLaunch(
           failedRuntimeLaunchCleanupDependencies,
           runtime,
           sessionId,
           ownedGeneration,
+          launchToken,
         );
       }
       throw error;

@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type {
@@ -9,6 +8,7 @@ import type {
   ClaudeRouteHealth,
   ClaudeStreamFailureKind,
   ManagedChatGptContextWindowMode,
+  NetworkProviderId,
   PtyGeneration,
   RouterOperationProgress,
 } from '../../shared/contracts';
@@ -17,6 +17,7 @@ import {
   stripClaudeContextWindowSuffix,
 } from '../../shared/claude/model-id';
 import { isClaudeEffortSafeAfterThinkingDisabledError } from '../../shared/claude/effort';
+import { officialNetworkProviderForClaudePreset } from '../../shared/claude/providers';
 import { DEFAULT_TERMINAL_THEME, type TerminalThemeId } from '../../shared/ui/terminal-themes';
 import {
   buildClaudeEnvironment,
@@ -62,14 +63,23 @@ export {
   mergeClaudeResourceUsage,
   parseClaudeMetrics,
 } from './runtime-metrics';
-import { cleanupObsoleteLaunchArtifacts } from './runtime-artifact-cleanup';
 import { prepareClaudeLaunchArtifacts } from './runtime-launch-artifacts';
 export { claudeCodeThemeForTerminalTheme } from './runtime-launch-artifacts';
+import type { ClaudeExecutionEnvironmentPair } from './execution-settings-capabilities';
+import type {
+  ClaudeExecutionLaunchInput,
+  ClaudeExecutionSettingsLaunchResolver,
+} from './execution-settings-service';
 import { claudeRouteHealth } from './runtime-route-health';
 import { modelMatches } from './runtime-controls';
-import { ClaudeRuntimePolling } from './runtime-polling';
+import {
+  ClaudeRuntimeLaunchHandoff,
+  type PreparedClaudeLaunchRecord,
+} from './runtime-launch-handoff';
+import type { NativeRouteReservation } from './runtime-routing';
 import type {
   ClaudeLaunchOverrides,
+  ClaudeLaunchPreflightEvidence,
   PreparedClaudeLaunch,
   PreparedNativeClaudeConversation,
   RuntimeSession,
@@ -100,7 +110,7 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
   return 0;
 };
 
-export class ClaudeRuntime extends ClaudeRuntimePolling {
+export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
   private onStreamFailure?: (observation: {
     cliVersion?: string;
     gatewayVersion?: string;
@@ -119,9 +129,7 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     mode: ClaudeLaunchMode,
     conversationId?: string,
   ) => void = () => {};
-  private nextLaunchGeneration = 0;
   private nextStateRevision = 0;
-  private readonly runtimeLaunchToken = randomBytes(8).toString('hex');
   private readonly runtimeRoot: string;
   private currentThemeId: TerminalThemeId;
 
@@ -147,14 +155,14 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
       sessionId: string,
       ptyGeneration: PtyGeneration,
     ) => Promise<ClaudePermissionMode | undefined>,
-    ensureManagedChatGptGatewayReady: () => Promise<void>,
+    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
     managedChatGptGatewayInstalledVersion: () => string | undefined,
     fetchImplementation: typeof fetch = fetch,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
-    applicationVersion?: string,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void = () => {},
     stopManagedChatGptGateway: () => Promise<void> | void = () => {},
     routerCommandEnvironment: () => Record<string, null | string | undefined> = () => ({}),
+    private readonly executionSettingsLaunchResolver?: ClaudeExecutionSettingsLaunchResolver,
   ) {
     super(
       userDataPath,
@@ -164,7 +172,6 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
       managedChatGptGatewayInstalledVersion,
       ensureManagedChatGptGatewayReady,
       fetchImplementation,
-      applicationVersion,
       onRouterOperationProgress,
       stopManagedChatGptGateway,
       routerCommandEnvironment,
@@ -190,6 +197,7 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
   }
 
   public closeSession(sessionId: string): void {
+    this.cleanupPreparedLaunch(sessionId);
     const previous = this.sessions.get(sessionId);
     const previousRoute = previous?.routeKind;
     if (previous?.launchGeneration !== undefined && previous.ptyGeneration !== undefined) {
@@ -396,28 +404,81 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     return this.sessions.get(sessionId)?.active ?? false;
   }
 
+  /** Returns the provider captured by the launch that owns this exact live PTY generation. */
+  public officialNetworkProviderForActivePty(
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+  ): NetworkProviderId | undefined {
+    const runtime = this.sessions.get(sessionId);
+    if (!runtime?.active) return undefined;
+    if (runtime.ptyGeneration !== expectedGeneration) {
+      throw new Error('Claude Code 已绑定到其他终端，这次重新启动已取消。');
+    }
+    return runtime.liveOfficialNetworkProvider;
+  }
+
   public ownsLaunch(sessionId: string, launchGeneration: number): boolean {
     const runtime = this.sessions.get(sessionId);
     return Boolean(runtime?.active && runtime.launchGeneration === launchGeneration);
   }
 
-  public bindPty(sessionId: string, ptyGeneration: PtyGeneration): void {
+  /** Seeds only the exact live PTY from the authoritative check that admitted its launch. */
+  public seedActiveLaunchPreflightEvidence(
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    evidence: ClaudeLaunchPreflightEvidence,
+  ): boolean {
     const runtime = this.sessions.get(sessionId);
-    if (!runtime?.active) {
-      throw new Error('Claude Code 启动状态已失效，无法绑定新的终端。');
+    if (
+      !runtime?.active ||
+      runtime.ptyGeneration !== ptyGeneration ||
+      runtime.liveOfficialNetworkProvider !== evidence.provider
+    ) {
+      return false;
     }
-    if (runtime.ptyGeneration !== undefined && runtime.ptyGeneration !== ptyGeneration) {
-      throw new Error('Claude Code 已绑定到其他终端，这次启动结果已失效。');
+    runtime.launchPreflightEvidence = Object.freeze({ ...evidence });
+    return true;
+  }
+
+  /** Consumes a launch seed once and only for the activity event's exact runtime and PTY generations. */
+  public takeActiveLaunchPreflightEvidence(
+    sessionId: string,
+    launchGeneration: number,
+    ptyGeneration: PtyGeneration,
+  ): ClaudeLaunchPreflightEvidence | undefined {
+    const runtime = this.sessions.get(sessionId);
+    if (
+      !runtime?.active ||
+      runtime.launchGeneration !== launchGeneration ||
+      runtime.ptyGeneration !== ptyGeneration
+    ) {
+      return undefined;
     }
-    runtime.ptyGeneration = ptyGeneration;
-    this.onActivityEvent?.({
-      event: 'SessionStart',
-      eventId: `launch-${runtime.launchGeneration ?? 0}`,
-      launchGeneration: runtime.launchGeneration ?? 0,
-      ptyGeneration,
-      sessionId,
-      signaledAt: Date.now(),
+    const evidence = runtime.launchPreflightEvidence;
+    runtime.launchPreflightEvidence = undefined;
+    return evidence;
+  }
+
+  /** Applies only display state to the exact live launch; it has no terminal or runtime control path. */
+  public applyAdvisoryRouteHealth(
+    sessionId: string,
+    launchGeneration: number,
+    ptyGeneration: PtyGeneration,
+    health: ClaudeRouteHealth,
+  ): boolean {
+    const runtime = this.sessions.get(sessionId);
+    if (
+      !runtime?.active ||
+      runtime.launchGeneration !== launchGeneration ||
+      runtime.ptyGeneration !== ptyGeneration
+    ) {
+      return false;
+    }
+    runtime.advisoryRouteHealth = Object.freeze({ ...health, blocking: false });
+    void this.emitState(runtime).catch(() => {
+      // Advisory publication must not affect the exact running launch it describes.
     });
+    return true;
   }
 
   public isBoundToPty(sessionId: string, ptyGeneration: PtyGeneration): boolean {
@@ -444,6 +505,41 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     );
   }
 
+  private async resolveExecutionSettingsForLaunch(
+    cwd: string,
+    config: NormalizedClaudeConfig,
+    model: string,
+    officialNetworkProvider: NetworkProviderId | undefined,
+    processEnvironment: Readonly<Record<string, null | string>>,
+    settingsEnvironment: Readonly<Record<string, string>>,
+  ): Promise<ClaudeExecutionEnvironmentPair> {
+    const capturedProcessEnvironment = Object.freeze({ ...processEnvironment });
+    const capturedSettingsEnvironment = Object.freeze({ ...settingsEnvironment });
+    const input: ClaudeExecutionLaunchInput = Object.freeze({
+      processEnvironment: capturedProcessEnvironment,
+      route: Object.freeze({
+        model,
+        ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
+        routeId: JSON.stringify({
+          baseUrl: config.baseUrl,
+          cwd: projectKey(cwd),
+          officialNetworkProvider: officialNetworkProvider ?? null,
+          preset: config.preset,
+          provider: config.provider,
+        }),
+      }),
+      settingsEnvironment: capturedSettingsEnvironment,
+    });
+    const resolver = this.executionSettingsLaunchResolver;
+    if (!resolver) {
+      return Object.freeze({
+        processEnvironment: capturedProcessEnvironment,
+        settingsEnvironment: capturedSettingsEnvironment,
+      });
+    }
+    return (await resolver.resolveLaunch(input)).environments;
+  }
+
   /**
    * Prepares the same project-owned route and credential environment for the structured Agent SDK
    * lane. The reservation stays live until `releaseNativeConversation` so a PTY teardown cannot
@@ -454,26 +550,42 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     cwd: string,
     requestedModel?: string,
   ): Promise<PreparedNativeClaudeConversation> {
+    this.assertLaunchAdmissionAllowed();
     if (this.nativeRouteReservations.has(ownerId)) {
       throw new Error('该原生会话已经持有接入路由。');
     }
     const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
     const config = launchSnapshot.config;
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
     const routeKind = this.routeKindForConfig(config);
-    const reservation = this.routeLifecycle.reserve(ownerId, routeKind);
-    try {
-      const installation = await this.diagnoseInstallation(true);
-      if (installation.security !== 'ready') throw new Error(installation.message);
-      await this.prepareRouteServices(routeKind, ownerId);
+    const entry: NativeRouteReservation = {
+      phase: 'preparing',
+      token: this.routeLifecycle.reserve(ownerId, routeKind),
+    };
+    // Publish before the first await so duplicate preparation and release can see the exact owner.
+    this.nativeRouteReservations.set(ownerId, entry);
+    const assertReservationCurrent = (): void => {
+      this.assertLaunchAdmissionAllowed();
+      if (this.nativeRouteReservations.get(ownerId) !== entry) {
+        throw new Error('该原生会话的接入路由准备已取消。');
+      }
       if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
         throw new Error('Claude 接入配置在原生会话启动期间已更新，请重试。');
       }
+    };
+    try {
+      const installation = await this.diagnoseInstallation(true);
+      assertReservationCurrent();
+      if (installation.security !== 'ready') throw new Error(installation.message);
+      await this.prepareRouteServices(routeKind, ownerId, cwd);
+      assertReservationCurrent();
       const credential = launchSnapshot.credential;
       if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
         throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
       }
       if (usesDefaultClaudeRouter(config)) {
         const router = await this.getRouterHealthState(true);
+        assertReservationCurrent();
         const blockingDetail = routerBlockingDetail(config, router);
         if (blockingDetail) throw new Error(blockingDetail);
       }
@@ -489,44 +601,59 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
         claudeContextWindow.mode,
         claudeContextWindow.customTokens,
       );
-      this.nativeRouteReservations.set(ownerId, reservation);
+      const processEnvironment = buildClaudeEnvironment(
+        launchConfig,
+        credential,
+        managedContextWindowMode,
+        speed.profile,
+        claudeContextWindow.mode,
+        claudeContextWindow.customTokens,
+      );
+      const settingsEnvironment = buildClaudeSettingsEnvironment(
+        launchConfig,
+        managedContextWindowMode,
+        speed.profile,
+        claudeContextWindow.mode,
+        claudeContextWindow.customTokens,
+      );
+      const executionSettings = await this.resolveExecutionSettingsForLaunch(
+        cwd,
+        launchConfig,
+        runtimeModel,
+        officialNetworkProvider,
+        processEnvironment,
+        settingsEnvironment,
+      );
+      assertReservationCurrent();
+      entry.phase = 'active';
       return {
         allowBypassPermissions: launchSnapshot.allowBypassPermissions,
         cliVersion: installation.version,
         configFingerprint: connectionFingerprint(launchConfig, credential),
         endpointIdentity: `${launchConfig.provider}|${launchConfig.preset}|${launchConfig.baseUrl}`,
-        environment: buildClaudeEnvironment(
-          launchConfig,
-          credential,
-          managedContextWindowMode,
-          speed.profile,
-          claudeContextWindow.mode,
-          claudeContextWindow.customTokens,
-        ),
+        environment: { ...executionSettings.processEnvironment },
         model,
+        ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
         runtimeModel,
-        settingsEnvironment: buildClaudeSettingsEnvironment(
-          launchConfig,
-          managedContextWindowMode,
-          speed.profile,
-          claudeContextWindow.mode,
-          claudeContextWindow.customTokens,
-        ),
+        settingsEnvironment: { ...executionSettings.settingsEnvironment },
       };
     } catch (error) {
-      if (this.routeLifecycle.release(reservation)) {
-        void this.stopUnusedRoute(routeKind).catch(() => {});
+      if (this.nativeRouteReservations.get(ownerId) === entry) {
+        this.nativeRouteReservations.delete(ownerId);
+        if (this.routeLifecycle.release(entry.token)) {
+          void this.stopUnusedRoute(routeKind).catch(() => {});
+        }
       }
       throw error;
     }
   }
 
   public releaseNativeConversation(ownerId: string): void {
-    const reservation = this.nativeRouteReservations.get(ownerId);
-    if (!reservation) return;
+    const entry = this.nativeRouteReservations.get(ownerId);
+    if (!entry) return;
     this.nativeRouteReservations.delete(ownerId);
-    if (this.routeLifecycle.release(reservation)) {
-      void this.stopUnusedRoute(reservation.routeKind).catch(() => {});
+    if (this.routeLifecycle.release(entry.token)) {
+      void this.stopUnusedRoute(entry.token.routeKind).catch(() => {});
     }
   }
 
@@ -540,16 +667,36 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     cwd: string,
     mode: ClaudeLaunchMode,
     startMode?: ClaudePermissionMode,
+    authorization = this.captureLaunchAuthorization(cwd),
   ): Promise<PreparedClaudeLaunch> {
-    return this.prepareLaunchInternal(sessionId, cwd, mode, undefined, startMode);
+    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    return this.prepareLaunchInternal(
+      sessionId,
+      cwd,
+      mode,
+      undefined,
+      startMode,
+      undefined,
+      authorization,
+    );
   }
 
   public async prepareLaunchWithSession(
     sessionId: string,
     cwd: string,
     conversationId: string,
+    authorization = this.captureLaunchAuthorization(cwd),
   ): Promise<PreparedClaudeLaunch> {
-    return this.prepareLaunchInternal(sessionId, cwd, 'resume', conversationId);
+    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    return this.prepareLaunchInternal(
+      sessionId,
+      cwd,
+      'resume',
+      conversationId,
+      undefined,
+      undefined,
+      authorization,
+    );
   }
 
   protected override async prepareLaunchInternal(
@@ -559,14 +706,27 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     resumeSessionId?: string,
     startMode?: ClaudePermissionMode,
     overrides?: ClaudeLaunchOverrides,
-    launchSnapshot = this.configStore.createLaunchSnapshot(cwd),
+    authorization = this.captureLaunchAuthorization(cwd),
   ): Promise<PreparedClaudeLaunch> {
+    this.assertLaunchAdmissionAllowed();
+    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    const launchSnapshot = authorization.launchSnapshot;
     const config = launchSnapshot.config;
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
+    if (officialNetworkProvider !== authorization.officialNetworkProvider) {
+      throw new Error('Claude 启动快照与已授权提供方不一致，本次启动已取消。');
+    }
     const routeKind = this.routeKindForConfig(config);
-    const reservation = this.routeLifecycle.reserve(sessionId, routeKind);
+    const record = this.reservePreparedLaunch(
+      sessionId,
+      cwd,
+      routeKind,
+      authorization,
+      this.runtimeRoot,
+    );
     try {
       return await this.prepareLaunchWithReservedRoute(
-        sessionId,
+        record,
         cwd,
         mode,
         config,
@@ -576,15 +736,14 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
         startMode,
         overrides,
       );
-    } finally {
-      if (this.routeLifecycle.release(reservation)) {
-        void this.stopUnusedRoute(routeKind).catch(() => {});
-      }
+    } catch (error) {
+      this.abortPreparedLaunch(record.token);
+      throw error;
     }
   }
 
   private async prepareLaunchWithReservedRoute(
-    sessionId: string,
+    record: PreparedClaudeLaunchRecord,
     cwd: string,
     mode: ClaudeLaunchMode,
     config: NormalizedClaudeConfig,
@@ -594,18 +753,19 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
     startMode?: ClaudePermissionMode,
     overrides?: ClaudeLaunchOverrides,
   ): Promise<PreparedClaudeLaunch> {
+    const { sessionId, generation: launchGeneration } = record.token;
     const assertLaunchSnapshotCurrent = (): void => {
-      if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
-        throw new Error('Claude 接入配置在启动准备期间已更新，本次启动已取消，请重试。');
-      }
+      this.assertLaunchAdmissionAllowed();
+      this.assertPreparedLaunchCurrent(record);
     };
+    assertLaunchSnapshotCurrent();
     const installation = await this.diagnoseInstallation(true);
     if (installation.security !== 'ready') {
       throw new Error(installation.message);
     }
     assertLaunchSnapshotCurrent();
 
-    await this.prepareRouteServices(routeKind, sessionId);
+    await this.prepareRouteServices(routeKind, record.targetRouteReservation.sessionId, cwd);
     assertLaunchSnapshotCurrent();
     const credential = launchSnapshot.credential;
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
@@ -669,7 +829,6 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
       claudeContextWindow.customTokens,
     );
 
-    const launchGeneration = ++this.nextLaunchGeneration;
     const {
       activityEventsPath,
       artifactDirectory,
@@ -705,117 +864,89 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
       themeId: this.currentThemeId,
       webSearchGuardScriptPath: this.webSearchGuardScriptPath,
     });
+    const executionSettings = await this.resolveExecutionSettingsForLaunch(
+      cwd,
+      launchConfig,
+      runtimeModel,
+      record.authorization.officialNetworkProvider,
+      environment,
+      buildClaudeSettingsEnvironment(
+        launchConfig,
+        contextWindowMode,
+        speed.profile,
+        claudeContextWindow.mode,
+        claudeContextWindow.customTokens,
+      ),
+    );
 
-    // Commit the runtime only after every launch artifact has been prepared successfully.
-    const previousArtifactDirectory = this.sessions.get(sessionId)?.artifactDirectory;
-    const runtime = this.ensureSession(sessionId, cwd);
-    const predecessorPtyGeneration = runtime.active ? runtime.ptyGeneration : undefined;
-    runtime.active = true;
-    runtime.activityEventsPath = this.activityScriptPath ? activityEventsPath : undefined;
-    runtime.artifactDirectory = artifactDirectory;
-    runtime.claudeContextWindowCustomTokens = claudeContextWindow.customTokens;
-    runtime.claudeContextWindowMode = claudeContextWindow.mode;
-    runtime.ptyGeneration = undefined;
-    runtime.routeKind = routeKind;
-    runtime.conversationId = resumedConversationId;
-    runtime.contextWindowMode = contextWindowMode;
-    runtime.diagnosticBuffer = '';
-    runtime.effortCompatibility = undefined;
-    runtime.effortRestoreAfterTurn = undefined;
-    runtime.effortRestoreInProgress = false;
-    // A relaunch re-reads the persisted effort setting, so a session-only request no longer holds.
-    runtime.effortRequest = undefined;
-    runtime.expectedModel = launchModel;
-    runtime.exitMarker = exitMarker;
-    runtime.markerRemainder = '';
-    runtime.lastApiError = undefined;
-    runtime.launchedConfigFingerprint = connectionFingerprint(config, credential);
-    runtime.launchedAt = Date.now();
-    runtime.launchedCliVersion = installation.version;
-    runtime.launchGeneration = launchGeneration;
-    runtime.launchedSpeedPreference = speed.preference;
-    runtime.launchedSpeedSignature = speed.signature;
-    runtime.launchedSpeedTargetKey = speed.targetKey;
-    runtime.metrics = undefined;
-    runtime.metricsPath = metricsPath;
-    runtime.runtimeModel = runtimeModel;
-    // `/effort` cannot ride the launch command, so it is replayed once the new TUI is listening.
-    runtime.pendingEffortRestore = remembered?.effort;
-    runtime.pendingEffortRestoreAt = remembered?.effort
-      ? Date.now() + EFFORT_RESTORE_DELAY_MS
-      : undefined;
-    runtime.settingsPath = settingsPath;
-    runtime.thinkingEnabledForHighEffort = false;
-    runtime.turnStopPath = turnStopPath;
-    runtime.turnStopSeenAt = undefined;
-    // A relaunch paints a fresh TUI, so nothing observed in the previous one still holds.
-    runtime.permissionMode = effectiveStartMode;
-    runtime.permissionModeRequest = effectiveStartMode;
-    runtime.permissionModeCycle = effectiveStartMode ? [effectiveStartMode] : [];
-    runtime.signalPath = signalPath;
-    runtime.signalSeenAt = undefined;
-    runtime.waitingForCompact = undefined;
+    assertLaunchSnapshotCurrent();
+    if (
+      record.artifactDirectory !== artifactDirectory ||
+      record.sessionDirectory !== sessionDirectory
+    ) {
+      throw new Error('Claude 启动产物与准备令牌不一致，本次启动已取消。');
+    }
 
-    cleanupObsoleteLaunchArtifacts(sessionDirectory, artifactDirectory, previousArtifactDirectory);
+    // The detached replacement is not observable as active until its exact token binds a PTY.
+    const replacement: RuntimeSession = {
+      active: true,
+      activityEventsPath: this.activityScriptPath ? activityEventsPath : undefined,
+      artifactDirectory,
+      claudeContextWindowCustomTokens: claudeContextWindow.customTokens,
+      claudeContextWindowMode: claudeContextWindow.mode,
+      contextWindowMode,
+      conversationId: resumedConversationId,
+      cwd,
+      diagnosticBuffer: '',
+      effortCompatibility: undefined,
+      effortRestoreAfterTurn: undefined,
+      effortRestoreInProgress: false,
+      // A relaunch re-reads the persisted effort setting, so a session-only request no longer holds.
+      effortRequest: undefined,
+      exitMarker,
+      expectedModel: launchModel,
+      lastApiError: undefined,
+      launchedAt: Date.now(),
+      launchedCliVersion: installation.version,
+      launchedConfigFingerprint: connectionFingerprint(config, credential),
+      launchedSpeedPreference: speed.preference,
+      launchedSpeedSignature: speed.signature,
+      launchedSpeedTargetKey: speed.targetKey,
+      launchGeneration,
+      markerRemainder: '',
+      metrics: undefined,
+      metricsPath,
+      pendingEffortRestore: remembered?.effort,
+      pendingEffortRestoreAt: remembered?.effort ? Date.now() + EFFORT_RESTORE_DELAY_MS : undefined,
+      permissionMode: effectiveStartMode,
+      permissionModeCycle: effectiveStartMode ? [effectiveStartMode] : [],
+      permissionModeRequest: effectiveStartMode,
+      routeKind,
+      runtimeModel,
+      sessionId,
+      settingsPath,
+      signalPath,
+      signalSeenAt: undefined,
+      thinkingEnabledForHighEffort: false,
+      turnStopPath,
+      turnStopSeenAt: undefined,
+      waitingForCompact: undefined,
+    };
+    record.replacement = replacement;
+    record.phase = 'prepared';
     return {
       command: POWERSHELL_STARTUP_TRIGGER,
-      environment,
-      predecessorPtyGeneration,
+      environment: { ...executionSettings.processEnvironment },
+      officialNetworkProvider: record.authorization.officialNetworkProvider,
+      predecessorPtyGeneration: record.predecessorPtyGeneration,
+      token: record.token,
     };
-  }
-
-  public setInactive(sessionId: string, expectedGeneration: PtyGeneration): boolean {
-    const runtime = this.sessions.get(sessionId);
-    if (
-      !runtime?.active ||
-      expectedGeneration === undefined ||
-      runtime.ptyGeneration !== expectedGeneration
-    ) {
-      return false;
-    }
-    return this.deactivateRuntime(runtime);
-  }
-
-  public cleanupPreparedLaunch(sessionId: string): boolean {
-    const runtime = this.sessions.get(sessionId);
-    if (!runtime?.active || runtime.ptyGeneration !== undefined) {
-      return false;
-    }
-    return this.deactivateRuntime(runtime);
-  }
-
-  private deactivateRuntime(runtime: RuntimeSession): boolean {
-    const waitingForCompact = runtime.waitingForCompact;
-    this.emitSyntheticSessionEnd(runtime);
-    runtime.active = false;
-    runtime.launchGeneration = undefined;
-    runtime.permissionModeRequest = undefined;
-    runtime.ptyGeneration = undefined;
-    runtime.exitMarker = undefined;
-    runtime.markerRemainder = '';
-    runtime.waitingForCompact = undefined;
-    waitingForCompact?.(0);
-    if (runtime.routeKind) {
-      void this.stopUnusedRoute(runtime.routeKind).catch(() => {});
-    }
-    void this.emitState(runtime);
-    return true;
-  }
-
-  private emitSyntheticSessionEnd(runtime: RuntimeSession): void {
-    if (runtime.launchGeneration === undefined || runtime.ptyGeneration === undefined) return;
-    this.onActivityEvent?.({
-      event: 'SessionEnd',
-      eventId: `session-end-${Date.now()}`,
-      launchGeneration: runtime.launchGeneration,
-      ptyGeneration: runtime.ptyGeneration,
-      sessionId: runtime.sessionId,
-      signaledAt: Date.now(),
-    });
   }
 
   public shutdown(): void {
     this.shutdownRuntimePolling();
+    this.abortAllPreparedLaunches();
+    this.nativeRouteReservations.clear();
     this.sessions.clear();
     this.clearControlState();
     this.routeLifecycle.clear();
@@ -933,7 +1064,7 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
   ): Promise<ClaudeRouteHealth | undefined> {
     const credential = this.configStore.getCredential(runtime.cwd);
     const fingerprint = connectionFingerprint(config, credential);
-    return claudeRouteHealth({
+    const configuredHealth = await claudeRouteHealth({
       config,
       fingerprint,
       lastApiError: runtime.lastApiError,
@@ -941,6 +1072,11 @@ export class ClaudeRuntime extends ClaudeRuntimePolling {
       matchingCheck: this.matchingConnectionCheck(runtime.cwd, fingerprint),
       readRouterHealth: () => this.getRouterHealthState(),
     });
+    // A concrete runtime or blocking configuration failure is more specific than the background
+    // observer. Otherwise the exact launch's latest advisory snapshot is the live display truth.
+    return configuredHealth?.tone === 'error'
+      ? configuredHealth
+      : (runtime.advisoryRouteHealth ?? configuredHealth);
   }
 
   protected override async emitState(runtime: RuntimeSession): Promise<void> {

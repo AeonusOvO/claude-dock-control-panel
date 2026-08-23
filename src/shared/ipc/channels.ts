@@ -54,14 +54,20 @@ const requestChannels = {
   CLAUDE_CONNECTION_HISTORY_DELETE: 'claude:connection-history-delete',
   CLAUDE_CONNECTION_HISTORY_RENAME: 'claude:connection-history-rename',
   CLAUDE_DELETE_SESSION: 'claude:delete-session',
+  CLAUDE_EXECUTION_SETTINGS_GET: 'claude:execution-settings-get',
+  CLAUDE_EXECUTION_SETTINGS_UPDATE: 'claude:execution-settings-update',
+  CLAUDE_EXECUTION_SETTINGS_USE_RECOMMENDED: 'claude:execution-settings-use-recommended',
+  CLAUDE_EXECUTION_SETTINGS_RESTORE_DEFAULT: 'claude:execution-settings-restore-default',
   CLAUDE_GET_CONNECTION_ADVICE: 'claude:get-connection-advice',
   CLAUDE_GET_GATEWAY_DIAGNOSTICS: 'claude:get-gateway-diagnostics',
   CLAUDE_GET_SESSIONS: 'claude:get-sessions',
   CLAUDE_GET_SESSIONS_FOR_PATH: 'claude:get-sessions-for-path',
   CLAUDE_GET_STATE: 'claude:get-state',
   CLAUDE_LAUNCH: 'claude:launch',
+  CLAUDE_LAUNCH_PREFLIGHT_DECIDE: 'claude:launch-preflight-decide',
   CLAUDE_LAUNCH_WITH_SESSION: 'claude:launch-with-session',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_MODEL: 'claude:managed-chatgpt-gateway-model',
+  CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT: 'claude:managed-chatgpt-gateway-logout',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_OPEN_MANAGEMENT: 'claude:managed-chatgpt-gateway-open-management',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP: 'claude:managed-chatgpt-gateway-setup',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE: 'claude:managed-chatgpt-gateway-state',
@@ -126,6 +132,7 @@ const requestChannels = {
   MCP_INSTALL: 'mcp:install',
   MCP_REMOVE: 'mcp:remove',
   MCP_TOGGLE_APPLY: 'mcp:toggle-apply',
+  MCP_TOGGLE_DISCARD: 'mcp:toggle-discard',
   MCP_TOGGLE_PREVIEW: 'mcp:toggle-preview',
 
   // native-attachment
@@ -220,6 +227,7 @@ const eventChannels = {
   // app
   APP_OPEN_DOWNLOAD_CENTER: 'app:open-download-center',
   APP_QUIT_REQUESTED: 'app:quit-requested',
+  APP_QUIT_REQUEST_INVALIDATED: 'app:quit-request-invalidated',
   APP_WINDOW_RESTORED: 'app:window-restored',
 
   // application-proxy

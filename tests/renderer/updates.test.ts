@@ -18,13 +18,6 @@ const pluginCatalog: ClaudePluginCatalog = {
 };
 
 const softwareUpdates: SoftwareUpdateState = {
-  application: {
-    currentVersion: '5.0.0',
-    installed: true,
-    latestVersion: '5.1.0',
-    message: 'ClaudeDock 5.1.0 可用。',
-    updateAvailable: true,
-  },
   checkedAt: 1,
   claudeCode: {
     currentVersion: '1.0.0',
@@ -45,9 +38,9 @@ const applicationUpdater = (
   phase: ApplicationUpdaterState['phase'],
   overrides: Partial<ApplicationUpdaterState> = {},
 ): ApplicationUpdaterState => ({
-  currentVersion: '5.0.0',
-  latestVersion: '5.1.0',
-  message: 'ClaudeDock 5.1.0 可用。',
+  currentVersion: '5.0.0-rc.14',
+  latestVersion: '5.0.0-rc.15',
+  message: 'ClaudeDock 5.0.0-rc.15 可用。',
   phase,
   ...overrides,
 });
@@ -76,11 +69,21 @@ describe('renderer updates feature', () => {
       refreshClaudePluginMarketplaces: vi.fn(async () => marketplaceRefreshResult),
     });
     try {
+      await settle(harness);
+      expect(harness.method('getApplicationUpdaterState')).toHaveBeenCalledWith(true);
+      harness.clearCalls();
+
       harness.click('#refresh-updates');
       await settle(harness);
 
       expect(harness.method('getSoftwareUpdates')).toHaveBeenCalledWith(true);
+      expect(harness.method('getApplicationUpdaterState')).toHaveBeenCalledWith(true);
+      expect(harness.method('getApplicationUpdaterState')).toHaveBeenLastCalledWith(true);
+      expect(harness.method('downloadApplicationUpdate')).not.toHaveBeenCalled();
       expect(harness.method('refreshClaudePluginMarketplaces')).toHaveBeenCalled();
+      expect(harness.query('#application-update-version').textContent).toBe(
+        'v5.0.0-rc.14 → 5.0.0-rc.15',
+      );
       expect(harness.query<HTMLDialogElement>('#update-center-dialog').open).toBe(true);
       expect(harness.query('#update-center-summary').textContent).toContain('2 项可更新');
       expect(harness.query('#update-center-list').textContent).toContain('ClaudeDock');

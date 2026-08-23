@@ -2,7 +2,6 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
-import '@xterm/xterm/css/xterm.css';
 import { TERMINAL_THEMES } from '../../../shared/ui/terminal-themes';
 import type { TerminalStatus } from '../../../shared/contracts';
 import { TerminalOutputPump } from '../../platform/terminal-output-pump';

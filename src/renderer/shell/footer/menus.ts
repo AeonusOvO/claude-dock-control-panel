@@ -23,7 +23,6 @@ export interface FooterMenus {
   modelSpeedFastLabel: (state: ClaudeProjectState) => string;
   modelSpeedFooterLabel: (state: ClaudeProjectState) => string;
   hideFooterMenus: () => void;
-  setFooterSecondaryOpen: (open: boolean) => void;
   openFooterMenu: (menu: HTMLElement, trigger: HTMLButtonElement) => void;
   buildFooterMenuItem: (
     label: string,
@@ -79,7 +78,6 @@ export const createFooterMenus = (deps: FooterMenusDeps): FooterMenus => {
     modelSpeedFastLabel: labelActions.modelSpeedFastLabel,
     modelSpeedFooterLabel: labelActions.modelSpeedFooterLabel,
     hideFooterMenus: frameworkActions.hideFooterMenus,
-    setFooterSecondaryOpen: frameworkActions.setFooterSecondaryOpen,
     openFooterMenu: frameworkActions.openFooterMenu,
     buildFooterMenuItem: frameworkActions.buildFooterMenuItem,
     buildFooterRadioMenuItem: frameworkActions.buildFooterRadioMenuItem,

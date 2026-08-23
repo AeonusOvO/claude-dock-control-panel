@@ -7,6 +7,7 @@ import { createIpcHarness, type IpcHarness } from './ipc-harness';
 
 export interface MainHarness {
   readonly calls: readonly string[];
+  readonly constructorCalls: ReadonlyMap<string, readonly unknown[]>;
   readonly dependencies: Record<PropertyKey, unknown>;
   readonly electron: Record<string, unknown>;
   readonly fileExists: Mock;
@@ -62,17 +63,14 @@ const createDependencyContainer = (
 };
 
 const createMainState = (): MainState => ({
-  appliedApplicationProxyRules: '',
-  appliedConversationProxyRules: '',
   applicationProxyState: undefined,
   chatFetch: fetch,
   isQuitting: false,
   nativeSnapshotFlushTimer: undefined,
   nextPermissionModeProbeId: 1,
   quitCleanupInProgress: false,
-  quitConfirmationPending: false,
+  quitConfirmation: undefined,
   quitConfirmationTimer: undefined,
-  quitResidualConfirmationPending: false,
   quitWatchdogTimer: undefined,
   releaseConversationBusy: undefined,
   runtimeShutdownForQuitDone: false,
@@ -96,6 +94,11 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
   };
 
   const fakeSession = {
+    fetch: vi.fn(async () => new Response()),
+    resolveProxy: vi.fn(async () => 'DIRECT'),
+    setProxy: vi.fn(async () => undefined),
+  };
+  const conversationNetworkSession = {
     fetch: vi.fn(async () => new Response()),
     resolveProxy: vi.fn(async () => 'DIRECT'),
     setProxy: vi.fn(async () => undefined),
@@ -124,6 +127,11 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     createFromDataURL: vi.fn(() => ({ isEmpty: () => false, toPNG: () => Buffer.alloc(0) })),
     createFromPath: vi.fn(() => ({})),
   };
+  const netRequest = vi.fn(() => createDeepStub('electron.net.request', calls));
+  const createElectronApplicationRequest = vi.fn(() => createDeepStub('applicationRequest', calls));
+  const createElectronSessionFetch = vi.fn(() =>
+    vi.fn(async () => new Response(null, { status: 204 })),
+  );
   const electron = {
     app,
     BrowserWindow: {
@@ -134,7 +142,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     nativeImage,
     net: {
       fetch: fakeSession.fetch,
-      request: vi.fn(() => createDeepStub('electron.net.request', calls)),
+      request: netRequest,
     },
     safeStorage: {
       decryptString: vi.fn(() => ''),
@@ -143,7 +151,9 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     },
     session: {
       defaultSession: fakeSession,
-      fromPartition: vi.fn(() => fakeSession),
+      fromPartition: vi.fn((partition: string) =>
+        partition === 'claudedock-conversation-network' ? conversationNetworkSession : fakeSession,
+      ),
     },
     shell,
   };
@@ -163,11 +173,44 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
       scope: { application: false, cli: false, conversation: false },
     })),
   };
+  const applicationProxyCoordinator = {
+    acquirePreflightLease: vi.fn(
+      async (
+        scopes: 'application' | 'conversation' | readonly ('application' | 'conversation')[],
+      ) => {
+        const requested = typeof scopes === 'string' ? [scopes] : scopes;
+        const normalized = (['application', 'conversation'] as const).filter((scope) =>
+          requested.includes(scope),
+        );
+        return {
+          assertCurrent: vi.fn(),
+          epochs: Object.fromEntries(normalized.map((scope) => [scope, `${scope}-epoch`])),
+          release: vi.fn(),
+          scopes: normalized,
+        };
+      },
+    ),
+    captureConfiguration: vi.fn(() => ({
+      revision: 'proxy-configuration-revision',
+      view: applicationProxyStore.getView(),
+    })),
+    credentialsForProxy: vi.fn(() => undefined),
+    getCliEnvironment: vi.fn(() => ({})),
+    getView: applicationProxyStore.getView,
+    isConfigurationCurrent: vi.fn(
+      (revision: string) => revision === 'proxy-configuration-revision',
+    ),
+    initialize: vi.fn(async () => calls.push('proxy.initialize')),
+    runApplicationProxyTest: vi.fn(),
+    save: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+  };
   const claudeRuntime = {
     ownsLaunch: vi.fn(() => false),
     recoverInterruptedRouterInstall: vi.fn(async () => undefined),
     releaseNativeConversation: vi.fn(),
     setConversationLaunchGuard: vi.fn(() => calls.push('claude.setConversationLaunchGuard')),
+    setLaunchAdmissionGuard: vi.fn(() => calls.push('claude.setLaunchAdmissionGuard')),
     setPermissionRequestHook: vi.fn(() => calls.push('claude.setPermissionRequestHook')),
     setRuntimeActivityHandler: vi.fn(() => calls.push('claude.setRuntimeActivityHandler')),
     setStreamFailureHandler: vi.fn(() => calls.push('claude.setStreamFailureHandler')),
@@ -192,28 +235,46 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     terminateAll: vi.fn(async () => undefined),
   };
   const streamDiagnosticsStore = { append: vi.fn() };
+  const networkPreflightService = { invalidate: vi.fn() };
   const codexRuntime = { dispose: vi.fn() };
   const managedChatGptGateway = {
-    ensureRunning: vi.fn(async () => undefined),
+    ensureRunning: vi.fn(async () => {
+      calls.push('gateway.ensureRunning');
+    }),
     getInstalledVersion: vi.fn(() => undefined),
     shutdown: vi.fn(),
     stop: vi.fn(async () => undefined),
   };
   const stubs: Record<string, unknown> = {
+    applicationProxyCoordinator,
     applicationProxyStore,
+    applicationSession: fakeSession,
+    createElectronApplicationRequest,
+    createElectronSessionFetch,
+    withOfficialProviderAccess: vi.fn(
+      async (_request: unknown, operation: () => Promise<unknown> | unknown) => {
+        calls.push('guard.withOfficialProviderAccess');
+        return operation();
+      },
+    ),
     claudeRuntime,
     codexRuntime,
+    conversationNetworkSession,
     downloadEngine,
     managedChatGptGateway,
     nativeConversationService,
+    netRequest,
+    networkPreflightService,
     permissionBridge,
     runtimeProcessRegistry,
     streamDiagnosticsStore,
   };
 
+  const constructorCalls = new Map<string, readonly unknown[]>();
   const constructor = (name: string, instance: unknown): Mock =>
-    vi.fn(function (..._args: unknown[]) {
+    vi.fn(function (...args: unknown[]) {
       calls.push(`construct:${name}`);
+      constructorCalls.set(name, args);
       return instance;
     });
 
@@ -266,16 +327,23 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     NetworkDiagnosticsStore: constructor('NetworkDiagnosticsStore', {}),
   }));
   vi.doMock('../../src/main/network/electron-request', () => ({
-    createElectronApplicationRequest: vi.fn(() => createDeepStub('applicationRequest', calls)),
+    createElectronApplicationRequest,
+    createElectronSessionFetch,
   }));
   vi.doMock('../../src/main/network/preflight-service', () => ({
-    NetworkPreflightService: constructor('NetworkPreflightService', {}),
+    NetworkPreflightService: constructor('NetworkPreflightService', networkPreflightService),
   }));
   vi.doMock('../../src/main/network/provider-access-guard', () => ({
     ProviderAccessGuard: constructor('ProviderAccessGuard', {}),
   }));
   vi.doMock('../../src/main/network/provider-connectivity-probe', () => ({
     ProviderConnectivityProbe: constructor('ProviderConnectivityProbe', {}),
+  }));
+  vi.doMock('../../src/main/proxy/application-proxy-coordinator', () => ({
+    ApplicationProxyCoordinator: constructor(
+      'ApplicationProxyCoordinator',
+      applicationProxyCoordinator,
+    ),
   }));
   vi.doMock('../../src/main/proxy/application-proxy-store', () => ({
     ApplicationProxyStore: constructor('ApplicationProxyStore', applicationProxyStore),
@@ -311,6 +379,8 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
   };
   const guards = new Proxy(
     {
+      withOfficialProviderAccess: stubs.withOfficialProviderAccess,
+      requireManagedChatGptGateway: vi.fn(() => managedChatGptGateway),
       validateSender: vi.fn(() => calls.push('ipc.validateSender')),
     },
     {
@@ -356,8 +426,6 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
       activateProject: vi.fn(),
       advancedSettingsStore: { get: vi.fn(() => ({ webResearchIsolation: false })) },
       appPreferencesStore,
-      applyApplicationProxyScope: vi.fn(async () => calls.push('proxy.applyApplication')),
-      applyConversationProxyScope: vi.fn(async () => calls.push('proxy.applyConversation')),
       artifactService: { install: vi.fn(() => calls.push('artifact.install')) },
       claudeConversationLifecycle: createDeepStub('claudeConversationLifecycle', calls),
       conversationOwnerRegistry: createDeepStub('conversationOwnerRegistry', calls),
@@ -390,6 +458,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
 
   return {
     calls,
+    constructorCalls,
     dependencies,
     electron,
     fileExists,
@@ -419,6 +488,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
         '../../src/main/network/preflight-service',
         '../../src/main/network/provider-access-guard',
         '../../src/main/network/provider-connectivity-probe',
+        '../../src/main/proxy/application-proxy-coordinator',
         '../../src/main/proxy/application-proxy-store',
         '../../src/main/runtime/process-registry',
         '../../src/main/updates/application',

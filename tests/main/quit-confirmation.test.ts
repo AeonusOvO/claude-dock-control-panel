@@ -4,15 +4,12 @@ import type { Registry } from '../../src/main/infra/registry';
 import { createMainState } from '../../src/main/ipc/context';
 import { CHANNELS } from '../../src/shared/ipc/channels';
 import type { WorkspaceState } from '../../src/shared/contracts';
-import { rendererStyles } from '../helpers/renderer-css';
 import { createIpcHarness } from '../helpers/ipc-harness';
 import {
   createTestMainServiceRegistry,
   registerTestService,
 } from '../helpers/main-service-registry';
-import { createRendererHarness, type RendererHarness } from '../helpers/renderer-harness';
-
-const renderers: RendererHarness[] = [];
+import { createQuitServices, installQuitElectronMock } from '../helpers/quit-confirmation';
 
 const emptyWorkspace: WorkspaceState = {
   activeSessionId: '',
@@ -25,124 +22,21 @@ const emptyWorkspace: WorkspaceState = {
  * release → terminate → budget race → quit) needs more links than two rounds can cover.
  */
 const flushPromises = async (): Promise<void> => {
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 16; i += 1) {
     await Promise.resolve();
   }
-};
-
-const installElectronMock = () => {
-  const ipc = createIpcHarness();
-  const appListeners = new Map<string, (...args: unknown[]) => void>();
-  const app = {
-    exit: vi.fn(),
-    getAppPath: vi.fn(() => 'C:\\claudedock-test'),
-    getLoginItemSettings: vi.fn(() => ({ openAtLogin: false })),
-    getVersion: vi.fn(() => '0.0.0-test'),
-    isPackaged: false,
-    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
-      appListeners.set(event, listener);
-    }),
-    quit: vi.fn(),
-    requestSingleInstanceLock: vi.fn(() => true),
-    setLoginItemSettings: vi.fn(),
-    whenReady: vi.fn(async () => undefined),
-  };
-  const electron = {
-    app,
-    BrowserWindow: {
-      fromWebContents: vi.fn(() => undefined),
-    },
-    clipboard: {
-      readText: vi.fn(() => ''),
-      writeText: vi.fn(),
-    },
-    ipcMain: ipc.ipcMain,
-    shell: { openExternal: vi.fn(async () => undefined) },
-  };
-  vi.doMock('electron', () => electron);
-  return { app, appListeners, electron, ipc };
-};
-
-type QuitServiceOverrides = Partial<
-  Record<
-    | 'busyRegistry'
-    | 'claudePermissionBridge'
-    | 'claudeRuntime'
-    | 'codexRuntime'
-    | 'downloadEngine'
-    | 'managedChatGptGateway'
-    | 'nativeConversationService'
-    | 'runtimeProcessRegistry',
-    unknown
-  >
->;
-
-const createQuitServices = async (overrides: QuitServiceOverrides = {}): Promise<Registry> => {
-  const services = await createTestMainServiceRegistry();
-  const {
-    BUSY_REGISTRY,
-    CLAUDE_PERMISSION_BRIDGE,
-    CLAUDE_RUNTIME,
-    CODEX_RUNTIME,
-    DOWNLOAD_ENGINE,
-    MANAGED_CHATGPT_GATEWAY,
-    NATIVE_CONVERSATION_SERVICE,
-    RUNTIME_PROCESS_REGISTRY,
-  } = await import('../../src/main/infra/service-tokens');
-  registerTestService(
-    services,
-    BUSY_REGISTRY,
-    (overrides.busyRegistry ?? new BusyRegistry()) as never,
-  );
-  registerTestService(
-    services,
-    CLAUDE_PERMISSION_BRIDGE,
-    (overrides.claudePermissionBridge ?? { fallbackPending: vi.fn(), shutdown: vi.fn() }) as never,
-  );
-  registerTestService(
-    services,
-    CLAUDE_RUNTIME,
-    (overrides.claudeRuntime ?? { setTheme: vi.fn(), shutdown: vi.fn() }) as never,
-  );
-  registerTestService(
-    services,
-    CODEX_RUNTIME,
-    (overrides.codexRuntime ?? { dispose: vi.fn() }) as never,
-  );
-  registerTestService(
-    services,
-    DOWNLOAD_ENGINE,
-    (overrides.downloadEngine ?? { flushJournal: vi.fn() }) as never,
-  );
-  registerTestService(
-    services,
-    MANAGED_CHATGPT_GATEWAY,
-    (overrides.managedChatGptGateway ?? { shutdown: vi.fn() }) as never,
-  );
-  registerTestService(
-    services,
-    NATIVE_CONVERSATION_SERVICE,
-    (overrides.nativeConversationService ?? {
-      activeIds: vi.fn(() => []),
-      closeAll: vi.fn(async () => undefined),
-    }) as never,
-  );
-  registerTestService(
-    services,
-    RUNTIME_PROCESS_REGISTRY,
-    (overrides.runtimeProcessRegistry ?? {
-      list: vi.fn(() => []),
-      stop: vi.fn(),
-      terminateAll: vi.fn(async () => undefined),
-    }) as never,
-  );
-  return services;
 };
 
 const setMainWindow = async (services: Registry, window: Electron.BrowserWindow): Promise<void> => {
   const { MAIN_WINDOW } = await import('../../src/main/infra/service-tokens');
   services.resolve(MAIN_WINDOW).current = window;
 };
+
+const setHealthyMainWindow = (
+  services: Registry,
+  webContents: Electron.WebContents,
+): Promise<void> =>
+  setMainWindow(services, { isDestroyed: () => false, webContents } as Electron.BrowserWindow);
 
 const createQuitDependencies = (services: Registry) => {
   const state = createMainState();
@@ -151,11 +45,15 @@ const createQuitDependencies = (services: Registry) => {
     shutdown: vi.fn(),
   };
   const chatService = { shutdown: vi.fn() };
-  const nativeAttachmentStore = { releaseConversation: vi.fn(async () => undefined) };
+  const invalidateLaunchPreflightDecisions = vi.fn();
+  const nativeAttachmentStore = {
+    releaseConversation: vi.fn(async (_conversationId: string): Promise<void> => undefined),
+  };
   const showMainWindow = vi.fn();
   const sweepPowershellTrees = vi.fn();
   return {
     chatService,
+    invalidateLaunchPreflightDecisions,
     nativeAttachmentStore,
     services,
     showMainWindow,
@@ -165,8 +63,7 @@ const createQuitDependencies = (services: Registry) => {
   };
 };
 
-afterEach(async () => {
-  await Promise.all(renderers.splice(0).map((renderer) => renderer.cleanup()));
+afterEach(() => {
   vi.useRealTimers();
   vi.doUnmock('electron');
   vi.resetModules();
@@ -174,7 +71,7 @@ afterEach(async () => {
 
 describe('quit confirmation handshake', () => {
   it('bounces an unlatched before-quit through one controller and tears down only after latching', async () => {
-    const { appListeners } = installElectronMock();
+    const { appListeners } = installQuitElectronMock();
     const downloadEngine = { flushJournal: vi.fn() };
     const services = await createQuitServices({
       claudePermissionBridge: { shutdown: vi.fn() },
@@ -236,9 +133,217 @@ describe('quit confirmation handshake', () => {
     expect(quit.shutdownRuntimeForQuit).toHaveBeenCalledTimes(1);
   });
 
+  it('resolves proxy authentication through the transaction coordinator', async () => {
+    const { appListeners } = installQuitElectronMock();
+    const services = await createQuitServices();
+    const credentialsForProxy = vi.fn(() => ({
+      password: 'candidate-secret',
+      username: 'proxy-user',
+    }));
+    const { APPLICATION_PROXY_COORDINATOR } = await import('../../src/main/infra/service-tokens');
+    registerTestService(services, APPLICATION_PROXY_COORDINATOR, {
+      credentialsForProxy,
+    } as never);
+    const { registerAppLifecycle } = await import('../../src/main/app/lifecycle');
+    registerAppLifecycle({
+      effects: {
+        allowApplicationUpdates: false,
+        allowExternalRoutingWrites: false,
+        allowPluginMutations: false,
+        allowRealRuntimes: false,
+        restoreWorkspace: false,
+        singleInstanceLock: true,
+        tray: false,
+      },
+      onReady: vi.fn(async () => undefined),
+      pendingPermissionModeProbes: new Map(),
+      quit: { requestQuit: vi.fn(), shutdownRuntimeForQuit: vi.fn() } as never,
+      services,
+      showMainWindow: vi.fn(),
+      state: createMainState(),
+      terminalOutputBatcher: { dispose: vi.fn() } as never,
+    });
+    const login = appListeners.get('login');
+    const event = { preventDefault: vi.fn() };
+    const callback = vi.fn();
+    const requestingSession = {};
+
+    login?.(
+      event,
+      { session: requestingSession },
+      undefined,
+      {
+        host: '127.0.0.1',
+        isProxy: true,
+        port: 7890,
+      },
+      callback,
+    );
+
+    expect(credentialsForProxy).toHaveBeenCalledWith(requestingSession, '127.0.0.1', 7890);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledWith('proxy-user', 'candidate-secret');
+  });
+
+  it('leaves non-proxy origin authentication untouched', async () => {
+    const { appListeners } = installQuitElectronMock();
+    const services = await createQuitServices();
+    const credentialsForProxy = vi.fn();
+    const { APPLICATION_PROXY_COORDINATOR } = await import('../../src/main/infra/service-tokens');
+    registerTestService(services, APPLICATION_PROXY_COORDINATOR, {
+      credentialsForProxy,
+    } as never);
+    const { registerAppLifecycle } = await import('../../src/main/app/lifecycle');
+    registerAppLifecycle({
+      effects: {
+        allowApplicationUpdates: false,
+        allowExternalRoutingWrites: false,
+        allowPluginMutations: false,
+        allowRealRuntimes: false,
+        restoreWorkspace: false,
+        singleInstanceLock: true,
+        tray: false,
+      },
+      onReady: vi.fn(async () => undefined),
+      pendingPermissionModeProbes: new Map(),
+      quit: { requestQuit: vi.fn(), shutdownRuntimeForQuit: vi.fn() } as never,
+      services,
+      showMainWindow: vi.fn(),
+      state: createMainState(),
+      terminalOutputBatcher: { dispose: vi.fn() } as never,
+    });
+    const event = { preventDefault: vi.fn() };
+    const callback = vi.fn();
+
+    appListeners.get('login')?.(
+      event,
+      { session: {} },
+      { url: 'https://example.test/private' },
+      { host: 'example.test', isProxy: false, port: 443 },
+      callback,
+    );
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    expect(credentialsForProxy).not.toHaveBeenCalled();
+  });
+
+  it('cancels proxy login challenges without WebContents instead of throwing', async () => {
+    const { appListeners } = installQuitElectronMock();
+    const services = await createQuitServices();
+    const credentialsForProxy = vi.fn();
+    const { APPLICATION_PROXY_COORDINATOR } = await import('../../src/main/infra/service-tokens');
+    registerTestService(services, APPLICATION_PROXY_COORDINATOR, {
+      credentialsForProxy,
+    } as never);
+    const { registerAppLifecycle } = await import('../../src/main/app/lifecycle');
+    registerAppLifecycle({
+      effects: {
+        allowApplicationUpdates: false,
+        allowExternalRoutingWrites: false,
+        allowPluginMutations: false,
+        allowRealRuntimes: false,
+        restoreWorkspace: false,
+        singleInstanceLock: true,
+        tray: false,
+      },
+      onReady: vi.fn(async () => undefined),
+      pendingPermissionModeProbes: new Map(),
+      quit: { requestQuit: vi.fn(), shutdownRuntimeForQuit: vi.fn() } as never,
+      services,
+      showMainWindow: vi.fn(),
+      state: createMainState(),
+      terminalOutputBatcher: { dispose: vi.fn() } as never,
+    });
+    const event = { preventDefault: vi.fn() };
+    const callback = vi.fn();
+
+    expect(() =>
+      appListeners.get('login')?.(
+        event,
+        undefined,
+        { url: 'https://example.test/' },
+        { host: '127.0.0.1', isProxy: true, port: 7890 },
+        callback,
+      ),
+    ).not.toThrow();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledWith();
+    expect(credentialsForProxy).not.toHaveBeenCalled();
+  });
+
+  it('keeps WebContents proxy credentials scoped to the exact application or conversation Session', async () => {
+    const { appListeners } = installQuitElectronMock();
+    const services = await createQuitServices();
+    const applicationSession = {};
+    const conversationSession = {};
+    const unrelatedTestSession = {};
+    const credentialsForProxy = vi.fn((requestingSession: unknown) =>
+      requestingSession === applicationSession
+        ? { password: 'application-secret', username: 'application-user' }
+        : requestingSession === conversationSession
+          ? { password: 'conversation-secret', username: 'conversation-user' }
+          : undefined,
+    );
+    const { APPLICATION_PROXY_COORDINATOR } = await import('../../src/main/infra/service-tokens');
+    registerTestService(services, APPLICATION_PROXY_COORDINATOR, {
+      credentialsForProxy,
+    } as never);
+    const { registerAppLifecycle } = await import('../../src/main/app/lifecycle');
+    registerAppLifecycle({
+      effects: {
+        allowApplicationUpdates: false,
+        allowExternalRoutingWrites: false,
+        allowPluginMutations: false,
+        allowRealRuntimes: false,
+        restoreWorkspace: false,
+        singleInstanceLock: true,
+        tray: false,
+      },
+      onReady: vi.fn(async () => undefined),
+      pendingPermissionModeProbes: new Map(),
+      quit: { requestQuit: vi.fn(), shutdownRuntimeForQuit: vi.fn() } as never,
+      services,
+      showMainWindow: vi.fn(),
+      state: createMainState(),
+      terminalOutputBatcher: { dispose: vi.fn() } as never,
+    });
+    const login = appListeners.get('login');
+    const callbacks = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+    const events = callbacks.map(() => ({ preventDefault: vi.fn() }));
+    const challenge = { host: 'proxy.example.com', isProxy: true, port: 7890 };
+
+    login?.(events[0], { session: applicationSession }, undefined, challenge, callbacks[0]);
+    login?.(events[1], { session: conversationSession }, undefined, challenge, callbacks[1]);
+    login?.(events[2], { session: unrelatedTestSession }, undefined, challenge, callbacks[2]);
+    login?.(
+      events[3],
+      { session: applicationSession },
+      undefined,
+      { ...challenge, isProxy: false },
+      callbacks[3],
+    );
+
+    expect(callbacks[0]).toHaveBeenCalledWith('application-user', 'application-secret');
+    expect(callbacks[1]).toHaveBeenCalledWith('conversation-user', 'conversation-secret');
+    expect(callbacks[2]).toHaveBeenCalledWith();
+    expect(callbacks[3]).not.toHaveBeenCalled();
+    expect(
+      events.slice(0, 3).every(({ preventDefault }) => preventDefault.mock.calls.length === 1),
+    ).toBe(true);
+    expect(events[3]?.preventDefault).not.toHaveBeenCalled();
+    expect(credentialsForProxy).toHaveBeenCalledTimes(3);
+    expect(credentialsForProxy).toHaveBeenNthCalledWith(
+      3,
+      unrelatedTestSession,
+      'proxy.example.com',
+      7890,
+    );
+  });
+
   it('sweeps spawned PowerShell trees and force-exits through the watchdog if the quit stalls', async () => {
     vi.useFakeTimers();
-    const { app, appListeners } = installElectronMock();
+    const { app, appListeners } = installQuitElectronMock();
     const services = await createQuitServices();
     const dependencies = createQuitDependencies(services);
     const sweepPowershellTrees = vi.fn();
@@ -276,8 +381,154 @@ describe('quit confirmation handshake', () => {
     expect(app.exit).toHaveBeenCalledWith(0);
   });
 
+  it('blocks on failed conversation cleanup and isolates runtime shutdown after explicit force', async () => {
+    vi.useFakeTimers();
+    const { app, dialog } = installQuitElectronMock();
+    let chooseNativeAction: ((result: Electron.MessageBoxReturnValue) => void) | undefined;
+    dialog.showMessageBox.mockReturnValueOnce(
+      new Promise((resolve) => {
+        chooseNativeAction = resolve;
+      }),
+    );
+    const terminateAll = vi.fn(async () => undefined);
+    const claudeRuntime = {
+      setTheme: vi.fn(),
+      shutdown: vi.fn(() => {
+        throw new Error('runtime shutdown failed');
+      }),
+    };
+    const codexRuntime = { dispose: vi.fn() };
+    const managedChatGptGateway = {
+      shutdown: vi.fn(),
+      shutdownForQuit: vi.fn(async () => true),
+    };
+    const services = await createQuitServices({
+      claudeRuntime,
+      codexRuntime,
+      managedChatGptGateway,
+      nativeConversationService: {
+        activeIds: vi.fn(() => ['conversation-1', 'conversation-2']),
+        closeAll: vi.fn(async () => {
+          throw new Error('conversation close failed');
+        }),
+      },
+      runtimeProcessRegistry: {
+        list: vi.fn(() => []),
+        stop: vi.fn(),
+        terminateAll,
+      },
+    });
+    const dependencies = createQuitDependencies(services);
+    dependencies.nativeAttachmentStore.releaseConversation.mockImplementation(
+      async (conversationId: string) => {
+        if (conversationId === 'conversation-1') {
+          throw new Error('attachment release failed');
+        }
+      },
+    );
+    const { createQuitController } = await import('../../src/main/app/lifecycle');
+    const quit = createQuitController(dependencies as never);
+
+    await quit.beginControlledQuit(false);
+
+    expect(dependencies.nativeAttachmentStore.releaseConversation).not.toHaveBeenCalled();
+    expect(terminateAll).toHaveBeenCalledTimes(1);
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(dependencies.state.isQuitting).toBe(false);
+
+    chooseNativeAction?.({ checkboxChecked: false, response: 1 });
+    await flushPromises();
+
+    expect(terminateAll).toHaveBeenCalledTimes(2);
+    expect(claudeRuntime.shutdown).toHaveBeenCalledTimes(1);
+    expect(managedChatGptGateway.shutdown).toHaveBeenCalledTimes(1);
+    expect(codexRuntime.dispose).toHaveBeenCalledTimes(1);
+    expect(dependencies.workspace.shutdown).toHaveBeenCalledTimes(1);
+    expect(dependencies.sweepPowershellTrees).toHaveBeenCalledTimes(1);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(app.exit).not.toHaveBeenCalled();
+    expect(dependencies.state.isQuitting).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not turn attachment cleanup failures into a false residual-process prompt', async () => {
+    const { app, ipc } = installQuitElectronMock();
+    const runtimeProcessRegistry = {
+      list: vi.fn(() => []),
+      stop: vi.fn(),
+      terminateAll: vi.fn(async () => undefined),
+    };
+    const services = await createQuitServices({
+      nativeConversationService: {
+        activeIds: vi.fn().mockReturnValueOnce(['conversation-1']).mockReturnValue([]),
+        closeAll: vi.fn(async () => undefined),
+      },
+      runtimeProcessRegistry,
+    });
+    await setHealthyMainWindow(services, ipc.webContents as never);
+    const dependencies = createQuitDependencies(services);
+    dependencies.nativeAttachmentStore.releaseConversation.mockRejectedValue(
+      new Error('attachment release failed'),
+    );
+    const { createQuitController } = await import('../../src/main/app/lifecycle');
+    const quit = createQuitController(dependencies as never);
+
+    await quit.beginControlledQuit(false);
+
+    expect(runtimeProcessRegistry.terminateAll).toHaveBeenCalledTimes(1);
+    expect(dependencies.nativeAttachmentStore.releaseConversation).toHaveBeenCalledTimes(1);
+    expect(dependencies.state.quitConfirmation).toBeUndefined();
+    expect(ipc.messages).toEqual([]);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(dependencies.state.isQuitting).toBe(true);
+  });
+
+  it('starts independent cleanup before a hung conversation close consumes the total budget', async () => {
+    vi.useFakeTimers();
+    const { app } = installQuitElectronMock();
+    let finishConversationClose: (() => void) | undefined;
+    const closeAll = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishConversationClose = resolve;
+        }),
+    );
+    const terminateAll = vi.fn(async () => undefined);
+    const services = await createQuitServices({
+      nativeConversationService: {
+        activeIds: vi.fn(() => []),
+        closeAll,
+      },
+      runtimeProcessRegistry: {
+        list: vi.fn(() => []),
+        stop: vi.fn(),
+        terminateAll,
+      },
+    });
+    const dependencies = createQuitDependencies(services);
+    const { createQuitController } = await import('../../src/main/app/lifecycle');
+    const quit = createQuitController(dependencies as never);
+
+    const pendingQuit = quit.beginControlledQuit(false);
+    await flushPromises();
+    expect(closeAll).toHaveBeenCalledTimes(1);
+    expect(terminateAll).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await pendingQuit;
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(dependencies.state.isQuitting).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    finishConversationClose?.();
+    await flushPromises();
+    expect(dependencies.showMainWindow).not.toHaveBeenCalled();
+  });
+
   it('leaves immediately when a duplicate launch cannot own the single-instance lock', async () => {
-    const { app } = installElectronMock();
+    const { app } = installQuitElectronMock();
     app.requestSingleInstanceLock.mockReturnValue(false);
     const state = createMainState();
     const { registerAppLifecycle } = await import('../../src/main/app/lifecycle');
@@ -307,13 +558,10 @@ describe('quit confirmation handshake', () => {
 
   it('asks a healthy renderer with both registry and live-terminal leases', async () => {
     vi.useFakeTimers();
-    const { ipc } = installElectronMock();
+    const { ipc } = installQuitElectronMock();
     const busyRegistry = new BusyRegistry();
     const services = await createQuitServices({ busyRegistry });
-    await setMainWindow(services, {
-      isDestroyed: () => false,
-      webContents: ipc.webContents,
-    } as Electron.BrowserWindow);
+    await setHealthyMainWindow(services, ipc.webContents as never);
     busyRegistry.acquire({
       cancellable: false,
       id: 'install:active',
@@ -342,7 +590,10 @@ describe('quit confirmation handshake', () => {
     quit.requestQuit();
 
     expect(dependencies.showMainWindow).toHaveBeenCalledTimes(1);
-    expect(dependencies.state.quitConfirmationPending).toBe(true);
+    expect(dependencies.state.quitConfirmation).toMatchObject({
+      mode: 'ordinary',
+      owner: 'renderer',
+    });
     expect(ipc.messages.at(-1)).toEqual({
       args: [
         {
@@ -351,6 +602,7 @@ describe('quit confirmation handshake', () => {
             expect.objectContaining({ id: 'install:active' }),
             expect.objectContaining({ id: 'terminal:session-1', severity: 'blocking' }),
           ],
+          requestId: expect.any(String),
         },
       ],
       channel: CHANNELS.APP_QUIT_REQUESTED,
@@ -359,45 +611,127 @@ describe('quit confirmation handshake', () => {
     expect(vi.getTimerCount()).toBe(1);
   });
 
-  it('forces cleanup on a second request or after an unacknowledged delivery timeout', async () => {
+  it('invalidates superseded renderer prompts before safe cleanup starts', async () => {
     vi.useFakeTimers();
-    const { app, ipc } = installElectronMock();
+    const { app, ipc } = installQuitElectronMock();
     const runtimeProcessRegistry = {
       list: vi.fn(() => []),
       stop: vi.fn(),
       terminateAll: vi.fn(async () => undefined),
     };
     const services = await createQuitServices({ runtimeProcessRegistry });
-    await setMainWindow(services, {
-      isDestroyed: () => false,
-      webContents: ipc.webContents,
-    } as Electron.BrowserWindow);
+    await setHealthyMainWindow(services, ipc.webContents as never);
     const first = createQuitDependencies(services);
     const { createQuitController } = await import('../../src/main/app/lifecycle');
     const quit = createQuitController(first as never);
 
     quit.requestQuit();
+    const firstRequestId = first.state.quitConfirmation?.id;
     quit.requestQuit();
     await flushPromises();
+    expect(ipc.messages).toContainEqual({
+      args: [firstRequestId],
+      channel: CHANNELS.APP_QUIT_REQUEST_INVALIDATED,
+      direction: 'main-to-renderer',
+    });
     expect(app.quit).toHaveBeenCalledTimes(1);
     expect(first.state.isQuitting).toBe(true);
 
     const timeoutServices = await createQuitServices({ runtimeProcessRegistry });
-    await setMainWindow(timeoutServices, {
-      isDestroyed: () => false,
-      webContents: ipc.webContents,
-    } as Electron.BrowserWindow);
+    await setHealthyMainWindow(timeoutServices, ipc.webContents as never);
     const timed = createQuitDependencies(timeoutServices);
     const timedQuit = createQuitController(timed as never);
     timedQuit.requestQuit();
+    const timedRequestId = timed.state.quitConfirmation?.id;
     await vi.advanceTimersByTimeAsync(3_000);
     await flushPromises();
+    expect(ipc.messages).toContainEqual({
+      args: [timedRequestId],
+      channel: CHANNELS.APP_QUIT_REQUEST_INVALIDATED,
+      direction: 'main-to-renderer',
+    });
     expect(app.quit).toHaveBeenCalledTimes(2);
     expect(timed.state.isQuitting).toBe(true);
   });
 
+  it('does not show a contradictory second prompt while controlled cleanup is running', async () => {
+    const { app, ipc } = installQuitElectronMock();
+    let finishConversationClose: (() => void) | undefined;
+    const services = await createQuitServices({
+      nativeConversationService: {
+        activeIds: vi.fn(() => []),
+        closeAll: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              finishConversationClose = resolve;
+            }),
+        ),
+      },
+    });
+    await setHealthyMainWindow(services, ipc.webContents as never);
+    const dependencies = createQuitDependencies(services);
+    const { createQuitController } = await import('../../src/main/app/lifecycle');
+    const quit = createQuitController(dependencies as never);
+
+    const pendingQuit = quit.beginControlledQuit(false);
+    await flushPromises();
+    quit.requestQuit();
+
+    expect(ipc.messages).toEqual([]);
+    expect(app.quit).not.toHaveBeenCalled();
+
+    finishConversationClose?.();
+    await pendingQuit;
+    expect(app.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses native residual confirmation when initial renderer delivery is unavailable or throws', async () => {
+    const { app, dialog } = installQuitElectronMock();
+    const runtimeProcessRegistry = {
+      list: vi.fn(() => []),
+      stop: vi.fn(),
+      terminateAll: vi.fn(async () => {
+        throw new Error('scan failed');
+      }),
+    };
+    const { createQuitController } = await import('../../src/main/app/lifecycle');
+
+    const missingWindowServices = await createQuitServices({ runtimeProcessRegistry });
+    const missingWindowDependencies = createQuitDependencies(missingWindowServices);
+    createQuitController(missingWindowDependencies as never).requestQuit();
+    await flushPromises();
+
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(missingWindowDependencies.state.quitConfirmation).toMatchObject({
+      mode: 'residual',
+      owner: 'native',
+    });
+
+    const throwingWindowServices = await createQuitServices({ runtimeProcessRegistry });
+    const throwingWebContents = {
+      isCrashed: vi.fn(() => false),
+      isDestroyed: vi.fn(() => false),
+      isLoading: vi.fn(() => false),
+      send: vi.fn(() => {
+        throw new Error('renderer send failed');
+      }),
+    };
+    await setHealthyMainWindow(throwingWindowServices, throwingWebContents as never);
+    const throwingWindowDependencies = createQuitDependencies(throwingWindowServices);
+    createQuitController(throwingWindowDependencies as never).requestQuit();
+    await flushPromises();
+
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(2);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(throwingWindowDependencies.state.quitConfirmation).toMatchObject({
+      mode: 'residual',
+      owner: 'native',
+    });
+  });
+
   it('asks for retry when process cleanup cannot prove a safe shutdown', async () => {
-    const { app, ipc } = installElectronMock();
+    const { app, ipc } = installQuitElectronMock();
     const runtimeProcessRegistry = {
       list: vi
         .fn()
@@ -415,17 +749,17 @@ describe('quit confirmation handshake', () => {
         .mockResolvedValue(undefined),
     };
     const services = await createQuitServices({ runtimeProcessRegistry });
-    await setMainWindow(services, {
-      isDestroyed: () => false,
-      webContents: ipc.webContents,
-    } as Electron.BrowserWindow);
+    await setHealthyMainWindow(services, ipc.webContents as never);
     const dependencies = createQuitDependencies(services);
     const { createQuitController } = await import('../../src/main/app/lifecycle');
     const quit = createQuitController(dependencies as never);
 
     await quit.beginControlledQuit(false);
     expect(app.quit).not.toHaveBeenCalled();
-    expect(dependencies.state.quitResidualConfirmationPending).toBe(true);
+    expect(dependencies.state.quitConfirmation).toMatchObject({
+      mode: 'residual',
+      owner: 'renderer',
+    });
     expect(ipc.messages.at(-1)).toEqual({
       args: [
         expect.objectContaining({
@@ -452,16 +786,74 @@ describe('quit confirmation handshake', () => {
       workspace: {} as never,
       workspaceStore: { getTheme: vi.fn() } as never,
     });
-    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, 'retry');
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: 'retry',
+      requestId: dependencies.state.quitConfirmation?.id,
+    });
     await flushPromises();
 
     expect(app.quit).toHaveBeenCalledTimes(1);
     expect(dependencies.state.isQuitting).toBe(true);
   });
 
-  it('accepts only affirmative IPC decisions, clears delivery timers, and validates minimize', async () => {
+  it('falls back to native confirmation when the residual renderer prompt is not acknowledged', async () => {
     vi.useFakeTimers();
-    const { ipc } = installElectronMock();
+    const { app, dialog, ipc } = installQuitElectronMock();
+    let chooseNativeAction: ((result: Electron.MessageBoxReturnValue) => void) | undefined;
+    dialog.showMessageBox.mockReturnValueOnce(
+      new Promise((resolve) => {
+        chooseNativeAction = resolve;
+      }),
+    );
+    const runtimeProcessRegistry = {
+      list: vi.fn(() => []),
+      stop: vi.fn(),
+      terminateAll: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('scan failed'))
+        .mockResolvedValue(undefined),
+    };
+    const services = await createQuitServices({ runtimeProcessRegistry });
+    await setHealthyMainWindow(services, ipc.webContents as never);
+    const dependencies = createQuitDependencies(services);
+    const { createQuitController } = await import('../../src/main/app/lifecycle');
+    const quit = createQuitController(dependencies as never);
+
+    await quit.beginControlledQuit(false);
+
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(dependencies.state.quitConfirmation).toMatchObject({
+      mode: 'residual',
+      owner: 'renderer',
+    });
+    expect(dependencies.state.quitConfirmationTimer).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await flushPromises();
+
+    expect(runtimeProcessRegistry.terminateAll).toHaveBeenCalledTimes(1);
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(dependencies.state.isQuitting).toBe(false);
+    expect(dependencies.state.quitConfirmation).toMatchObject({
+      mode: 'residual',
+      owner: 'native',
+    });
+    expect(dependencies.state.quitConfirmationTimer).toBeUndefined();
+
+    chooseNativeAction?.({ checkboxChecked: false, response: 0 });
+    await flushPromises();
+
+    expect(runtimeProcessRegistry.terminateAll).toHaveBeenCalledTimes(2);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(dependencies.state.isQuitting).toBe(true);
+    expect(dependencies.state.quitConfirmation).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('accepts only the current renderer acknowledgement and one-shot mode-valid decision', async () => {
+    vi.useFakeTimers();
+    const { ipc } = installQuitElectronMock();
     const state = createMainState();
     const services = await createQuitServices();
     const beginControlledQuit = vi.fn(async () => undefined);
@@ -483,26 +875,64 @@ describe('quit confirmation handshake', () => {
       workspaceStore: { getTheme: vi.fn() } as never,
     });
 
-    state.quitConfirmationPending = true;
+    state.quitConfirmation = { id: 'quit-request-1', mode: 'ordinary', owner: 'renderer' };
     state.quitConfirmationTimer = setTimeout(() => undefined, 3_000);
-    ipc.sendFromRenderer(CHANNELS.APP_QUIT_REQUEST_RECEIVED);
+    ipc.sendFromRenderer(CHANNELS.APP_QUIT_REQUEST_RECEIVED, 'stale-request');
+    expect(state.quitConfirmationTimer).toBeDefined();
+    ipc.sendFromRenderer(CHANNELS.APP_QUIT_REQUEST_RECEIVED, 'quit-request-1');
     expect(state.quitConfirmationTimer).toBeUndefined();
 
-    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, false);
-    expect(state.quitConfirmationPending).toBe(false);
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: true,
+      requestId: 'stale-request',
+    });
+    expect(state.quitConfirmation?.id).toBe('quit-request-1');
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: false,
+      requestId: 'quit-request-1',
+    });
+    expect(state.quitConfirmation).toBeUndefined();
     expect(beginControlledQuit).not.toHaveBeenCalled();
 
-    state.quitConfirmationPending = true;
-    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, true);
+    state.quitConfirmation = { id: 'quit-request-2', mode: 'ordinary', owner: 'renderer' };
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: 'retry',
+      requestId: 'quit-request-2',
+    });
+    expect(state.quitConfirmation?.id).toBe('quit-request-2');
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: true,
+      requestId: 'quit-request-2',
+    });
     expect(beginControlledQuit).toHaveBeenCalledWith(false);
 
-    state.quitResidualConfirmationPending = true;
-    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, true);
+    state.quitConfirmation = { id: 'quit-request-3', mode: 'residual', owner: 'renderer' };
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: true,
+      requestId: 'quit-request-2',
+    });
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: false,
+      requestId: 'quit-request-3',
+    });
+    expect(state.quitConfirmation?.id).toBe('quit-request-3');
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: true,
+      requestId: 'quit-request-3',
+    });
     expect(beginControlledQuit).toHaveBeenLastCalledWith(true);
+
+    state.quitConfirmation = { id: 'quit-request-4', mode: 'residual', owner: 'native' };
+    ipc.sendFromRenderer(CHANNELS.APP_CONFIRM_QUIT, {
+      decision: true,
+      requestId: 'quit-request-4',
+    });
+    expect(state.quitConfirmation?.id).toBe('quit-request-4');
+    expect(beginControlledQuit).toHaveBeenCalledTimes(2);
 
     ipc.sendFromRenderer(CHANNELS.APP_MINIMIZE_TO_TRAY);
     expect(hideMainWindowToTray).toHaveBeenCalledTimes(1);
-    expect(validateSender).toHaveBeenCalledTimes(5);
+    expect(validateSender).toHaveBeenCalledTimes(11);
   });
 
   it('latches an OS session end and routes window close through the selected policy', async () => {
@@ -530,6 +960,9 @@ describe('quit confirmation handshake', () => {
         on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
           webContentsListeners.set(event, listener);
         }),
+        once: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+          webContentsListeners.set(event, listener);
+        }),
         send: vi.fn(),
         setWindowOpenHandler: vi.fn(),
       },
@@ -544,13 +977,14 @@ describe('quit confirmation handshake', () => {
     const downloadEngine = { flushJournal: vi.fn() };
     const services = await createQuitServices({ downloadEngine });
     const state = createMainState();
-    state.quitConfirmationPending = true;
+    state.quitConfirmation = { id: 'quit-request-1', mode: 'ordinary', owner: 'renderer' };
     state.quitConfirmationTimer = setTimeout(() => undefined, 60_000);
     const requestQuit = vi.fn();
     const preferences = { closeBehavior: 'exit' };
     const { createWindowController } = await import('../../src/main/app/window');
     const controller = createWindowController({
       appPreferencesStore: { get: vi.fn(() => preferences), set: vi.fn() } as never,
+      invalidateLaunchPreflightDecisions: vi.fn(),
       requestQuit,
       services,
       state,
@@ -558,57 +992,25 @@ describe('quit confirmation handshake', () => {
     });
     await controller.createWindow();
 
+    webContentsListeners.get('render-process-gone')?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(requestQuit).toHaveBeenCalledTimes(1);
+
     windowListeners.get('session-end')?.();
     expect(downloadEngine.flushJournal).toHaveBeenCalledTimes(1);
     expect(state.isQuitting).toBe(true);
-    expect(state.quitConfirmationPending).toBe(false);
+    expect(state.quitConfirmation).toBeUndefined();
     expect(state.quitConfirmationTimer).toBeUndefined();
 
     state.isQuitting = false;
     const closeEvent = { preventDefault: vi.fn() };
     windowListeners.get('close')?.(closeEvent);
     expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1);
-    expect(requestQuit).toHaveBeenCalledTimes(1);
+    expect(requestQuit).toHaveBeenCalledTimes(2);
 
     preferences.closeBehavior = 'tray';
     windowListeners.get('close')?.({ preventDefault: vi.fn() });
     expect(fakeWindow.hide).toHaveBeenCalledTimes(1);
-  });
-
-  it('acknowledges preload delivery before notifying, and sends every decision through IPC', async () => {
-    const ipc = createIpcHarness();
-    vi.doMock('electron', () => ({
-      ipcRenderer: ipc.ipcRenderer,
-      webUtils: { getPathForFile: vi.fn(() => '') },
-    }));
-    const { appBridge } = await import('../../src/preload/bridges/app');
-    const observedMessageCounts: number[] = [];
-    const unsubscribe = appBridge.onAppQuitRequested(() => {
-      observedMessageCounts.push(ipc.messages.length);
-    });
-
-    ipc.emitFromMain(CHANNELS.APP_QUIT_REQUESTED, { hasBlocking: false, leases: [] });
-    expect(observedMessageCounts).toEqual([2]);
-    expect(ipc.messages[1]).toEqual({
-      args: [],
-      channel: CHANNELS.APP_QUIT_REQUEST_RECEIVED,
-      direction: 'renderer-to-main',
-    });
-
-    appBridge.confirmQuit(false);
-    appBridge.confirmQuit('retry');
-    appBridge.confirmQuit(true);
-    appBridge.minimizeToTray();
-    expect(ipc.messages.slice(2).map(({ args, channel }) => ({ args, channel }))).toEqual([
-      { args: [false], channel: CHANNELS.APP_CONFIRM_QUIT },
-      { args: ['retry'], channel: CHANNELS.APP_CONFIRM_QUIT },
-      { args: [true], channel: CHANNELS.APP_CONFIRM_QUIT },
-      { args: [], channel: CHANNELS.APP_MINIMIZE_TO_TRAY },
-    ]);
-
-    unsubscribe();
-    ipc.emitFromMain(CHANNELS.APP_QUIT_REQUESTED, { hasBlocking: false, leases: [] });
-    expect(observedMessageCounts).toEqual([2]);
   });
 
   it('registers renderer conversation work as one idempotently released blocking lease', async () => {
@@ -636,76 +1038,5 @@ describe('quit confirmation handshake', () => {
     expect(await ipc.invoke(CHANNELS.BUSY_SET_CONVERSATION, false)).toEqual([]);
     expect(await ipc.invoke(CHANNELS.BUSY_LIST)).toEqual([]);
     expect(validateSender).toHaveBeenCalledTimes(4);
-  });
-
-  it('renders a task-aware keyboard-safe dialog and returns safe, retry, and force actions', async () => {
-    const renderer = await createRendererHarness();
-    renderers.push(renderer);
-    renderer.clearCalls();
-    const dialog = renderer.query<HTMLDialogElement>('#quit-confirmation-dialog');
-    const minimize = renderer.query<HTMLButtonElement>('#quit-minimize');
-    const force = renderer.query<HTMLButtonElement>('#quit-force');
-    const cancel = renderer.query<HTMLButtonElement>('#quit-cancel');
-
-    expect(minimize.autofocus).toBe(true);
-    expect(
-      [minimize, force, cancel].map((button) =>
-        Array.from(button.parentElement?.children ?? []).indexOf(button),
-      ),
-    ).toEqual([0, 1, 2]);
-
-    renderer.emit('onAppQuitRequested', {
-      hasBlocking: true,
-      leases: [
-        {
-          cancellable: false,
-          id: 'install:critical',
-          kind: 'install',
-          label: '关键安装正在提交',
-          severity: 'blocking',
-        },
-      ],
-    });
-    expect(dialog.open).toBe(true);
-    expect(renderer.query('#quit-confirmation-title').textContent).toBe(
-      '有操作正在进行，不建议退出',
-    );
-    expect(renderer.query('#quit-confirmation-list').textContent).toContain('关键安装正在提交');
-    expect(renderer.query('#quit-confirmation-list').textContent).toContain('中断会留下不完整状态');
-    expect(renderer.document.activeElement).toBe(minimize);
-
-    minimize.click();
-    expect(renderer.method('confirmQuit')).toHaveBeenLastCalledWith(false);
-    expect(renderer.method('minimizeToTray')).toHaveBeenCalledTimes(1);
-
-    renderer.emit('onAppQuitRequested', {
-      hasBlocking: true,
-      leases: [],
-      runtimeCleanupFailed: true,
-    });
-    expect(minimize.textContent).toBe('重试安全清理');
-    expect(cancel.hidden).toBe(true);
-    minimize.click();
-    expect(renderer.method('confirmQuit')).toHaveBeenLastCalledWith('retry');
-    expect(renderer.method('minimizeToTray')).toHaveBeenCalledTimes(1);
-
-    renderer.emit('onAppQuitRequested', { hasBlocking: false, leases: [] });
-    force.click();
-    expect(renderer.method('confirmQuit')).toHaveBeenLastCalledWith(true);
-
-    renderer.emit('onAppQuitRequested', { hasBlocking: false, leases: [] });
-    const cancelEvent = new renderer.dom.window.Event('cancel', { cancelable: true });
-    dialog.dispatchEvent(cancelEvent);
-    expect(cancelEvent.defaultPrevented).toBe(true);
-    expect(renderer.method('confirmQuit')).toHaveBeenLastCalledWith(false);
-
-    expect(dialog.classList.contains('popover')).toBe(true);
-    expect(rendererStyles).toContain('.quit-confirmation-dialog');
-    expect(rendererStyles).toMatch(
-      /dialog\.popover::backdrop \{[^}]*?overlay var\(--dur-exit\) allow-discrete,[^}]*?display var\(--dur-exit\) allow-discrete;/,
-    );
-    expect(rendererStyles).toMatch(
-      /@starting-style \{[\s\S]*?dialog\.popover\[open\][\s\S]*?dialog\.popover\[open\]::backdrop/,
-    );
   });
 });

@@ -237,6 +237,53 @@ export interface ClaudeOperationResult extends FailureMetadata {
   state: ClaudeProjectState;
 }
 
+/**
+ * Renderer-safe explanation for a Claude launch paused by main-owned network authorization. It is
+ * deliberately rebuilt from coarse facts rather than derived with `Omit` from the main result, so
+ * cwd, route, target, process, configuration and run identities cannot accidentally cross IPC.
+ */
+export interface ClaudeLaunchPauseDiagnostics {
+  checkedAt: number;
+  failedItems: ReadonlyArray<{
+    label: string;
+    status: 'failed' | 'warning';
+  }>;
+  reasons: readonly string[];
+  scope: 'application' | 'conversation';
+  status: 'blocked' | 'degraded';
+  summary: string;
+}
+
+export type ClaudeLaunchOutcome =
+  | {
+      result: ClaudeOperationResult;
+      status: 'completed';
+    }
+  | {
+      decisionId: string;
+      diagnostics: ClaudeLaunchPauseDiagnostics;
+      status: 'paused';
+    };
+
+export interface ClaudeLaunchPreflightDecisionInput {
+  choice: 'bypass' | 'cancel' | 'recheck';
+  decisionId: string;
+}
+
+export type ClaudeLaunchPreflightDecisionOutcome =
+  | {
+      result: ClaudeOperationResult;
+      status: 'completed';
+    }
+  | {
+      decisionId: string;
+      diagnostics: ClaudeLaunchPauseDiagnostics;
+      status: 'paused';
+    }
+  | {
+      status: 'cancelled' | 'consumed' | 'stale';
+    };
+
 export interface ClaudeConnectionTestStage {
   detail: string;
   id: 'authentication' | 'endpoint' | 'model';

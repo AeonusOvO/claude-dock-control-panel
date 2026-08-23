@@ -31,11 +31,12 @@ export const createTerminalIoRelaunchActions = (
     let loadStateAfterCompletion = false;
     try {
       const outcome = await orchestrateClaudeLaunchAttempt({
-        applyResult: (result) =>
+        applyResult: (launchOutcome) =>
+          launchOutcome.status === 'paused' ||
           dependencies.renderClaudeLaunchResult(
             attempt,
-            result.state,
-            result.ok ? 'success' : 'failure',
+            launchOutcome.result.state,
+            launchOutcome.result.ok ? 'success' : 'failure',
           ),
         confirmation: () =>
           dependencies.requestConfirmation({
@@ -64,7 +65,23 @@ export const createTerminalIoRelaunchActions = (
         return;
       }
 
-      const { result } = outcome;
+      let launchOutcome = outcome.result;
+      if (launchOutcome.status === 'paused') {
+        const decision = await dependencies.resolveClaudeLaunchDecision(attempt, launchOutcome);
+        if (decision.status !== 'completed') return;
+        launchOutcome = decision;
+        if (
+          !dependencies.renderClaudeLaunchResult(
+            attempt,
+            launchOutcome.result.state,
+            launchOutcome.result.ok ? 'success' : 'failure',
+          )
+        ) {
+          return;
+        }
+      }
+
+      const { result } = launchOutcome;
       loadStateAfterCompletion = true;
       if (!result.ok) {
         dependencies.failClaudeLaunchAttempt(attempt);

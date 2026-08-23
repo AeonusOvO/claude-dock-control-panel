@@ -24,8 +24,8 @@ export interface CodexIpcDependencies {
   guards: Pick<
     MainGuards,
     | 'assertApplicationUpdatesAllowed'
-    | 'assertOfficialProviderAllowed'
     | 'assertRealRuntimeAllowed'
+    | 'withOfficialProviderAccess'
     | 'requireCodexRuntime'
     | 'validateSender'
   >;
@@ -41,10 +41,10 @@ export const registerCodexIpc = ({
   failedRuntimeLaunchCleanupDependencies,
   guards: {
     assertApplicationUpdatesAllowed,
-    assertOfficialProviderAllowed,
     assertRealRuntimeAllowed,
     requireCodexRuntime,
     validateSender,
+    withOfficialProviderAccess,
   },
   restartRuntimeTerminal,
   withDevelopmentSessionOperation,
@@ -92,18 +92,22 @@ export const registerCodexIpc = ({
       assertRealRuntimeAllowed();
       const status = workspace.getStatus(validatedSessionId);
       try {
-        await assertOfficialProviderAllowed('openai-codex', 'login', status.cwd);
-        const prepared = await requireCodexRuntime().startLogin(
-          validatedSessionId,
-          status.cwd,
-          validateCodexLoginMethod(method),
+        return await withOfficialProviderAccess(
+          { action: 'login', cwd: status.cwd, provider: 'openai-codex' },
+          async () => {
+            const prepared = await requireCodexRuntime().startLogin(
+              validatedSessionId,
+              status.cwd,
+              validateCodexLoginMethod(method),
+            );
+            let openedBrowser = false;
+            if (prepared.externalUrl) {
+              await shell.openExternal(prepared.externalUrl);
+              openedBrowser = true;
+            }
+            return { ok: true, openedBrowser, state: prepared.state };
+          },
         );
-        let openedBrowser = false;
-        if (prepared.externalUrl) {
-          await shell.openExternal(prepared.externalUrl);
-          openedBrowser = true;
-        }
-        return { ok: true, openedBrowser, state: prepared.state };
       } catch (error) {
         return codexFailure(validatedSessionId, error);
       }
@@ -158,33 +162,37 @@ export const registerCodexIpc = ({
             if (agentRuntimeStore.get(status.cwd) !== 'codex') {
               throw new Error('当前项目尚未选择 Codex 开发引擎。');
             }
-            await assertOfficialProviderAllowed('openai-codex', 'cli-launch', status.cwd);
-            assertCurrent();
-            const prepared = await runtime.prepareLaunch(
-              validatedSessionId,
-              status.cwd,
-              validateCodexLaunchMode(mode),
-            );
-            launchPrepared = true;
-            ownedGeneration = prepared.predecessorPtyGeneration;
-            assertCurrent();
-            if (agentRuntimeStore.get(status.cwd) !== 'codex') {
-              throw new Error('当前项目已切换开发引擎，这次 Codex 启动已取消。');
-            }
-            restartRuntimeTerminal(
-              runtime,
-              validatedSessionId,
-              prepared.environment,
-              prepared.command,
-              '无法为 Codex 启动安全终端。',
-              assertCurrent,
-              (ptyGeneration) => {
-                ownedGeneration = ptyGeneration;
+            return await withOfficialProviderAccess(
+              { action: 'cli-launch', cwd: status.cwd, provider: 'openai-codex' },
+              async () => {
+                assertCurrent();
+                const prepared = await runtime.prepareLaunch(
+                  validatedSessionId,
+                  status.cwd,
+                  validateCodexLaunchMode(mode),
+                );
+                launchPrepared = true;
+                ownedGeneration = prepared.predecessorPtyGeneration;
+                assertCurrent();
+                if (agentRuntimeStore.get(status.cwd) !== 'codex') {
+                  throw new Error('当前项目已切换开发引擎，这次 Codex 启动已取消。');
+                }
+                restartRuntimeTerminal(
+                  runtime,
+                  validatedSessionId,
+                  prepared.environment,
+                  prepared.command,
+                  '无法为 Codex 启动安全终端。',
+                  assertCurrent,
+                  (ptyGeneration) => {
+                    ownedGeneration = ptyGeneration;
+                  },
+                );
+                const state = await runtime.getState(validatedSessionId, status.cwd);
+                assertCurrent();
+                return { ok: true, state };
               },
             );
-            const state = await runtime.getState(validatedSessionId, status.cwd);
-            assertCurrent();
-            return { ok: true, state };
           } catch (error) {
             if (launchPrepared || ownedGeneration !== undefined) {
               cleanupFailedRuntimeLaunch(

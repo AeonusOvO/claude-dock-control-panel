@@ -8,7 +8,6 @@ const softwareState = (
   routerInstalled: boolean,
   routerUpdate: boolean,
 ): SoftwareUpdateState => ({
-  application: { installed: true, message: '', updateAvailable: false },
   checkedAt: 1,
   claudeCode: {
     installed: claudeInstalled,
@@ -79,10 +78,16 @@ describe('conditional update actions', () => {
     });
   });
 
-  it('counts an application release without inventing an in-app install action', () => {
+  it('counts an application release confirmed by electron-updater', () => {
     const state = softwareState(true, false, true, false);
-    state.application.updateAvailable = true;
-    expect(deriveUpdateActionState(state, pluginCatalog(0))).toEqual({
+    expect(
+      deriveUpdateActionState(state, pluginCatalog(0), {
+        currentVersion: '5.0.0-rc.14',
+        latestVersion: '5.0.0-rc.15',
+        message: 'Update available.',
+        phase: 'available',
+      }),
+    ).toEqual({
       application: true,
       claudeCode: 'hidden',
       plugins: false,
@@ -90,4 +95,18 @@ describe('conditional update actions', () => {
       totalAvailable: 1,
     });
   });
+
+  it.each(['available', 'downloading', 'downloaded'] as const)(
+    'keeps the application action counted through the %s phase',
+    (phase) => {
+      expect(
+        deriveUpdateActionState(undefined, undefined, {
+          currentVersion: '5.0.0-rc.14',
+          latestVersion: '5.0.0-rc.15',
+          message: 'Updater state.',
+          phase,
+        }),
+      ).toMatchObject({ application: true, totalAvailable: 1 });
+    },
+  );
 });

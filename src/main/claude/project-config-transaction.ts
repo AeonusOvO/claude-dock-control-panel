@@ -58,6 +58,8 @@ export const createRunClaudeProjectConfigTransaction = ({
       coordinator: managedConfigTransactions,
       createSnapshot: () => options.runtime.createConfigSnapshot(options.cwd),
       cwd: options.cwd,
+      mergeCompletionSnapshot: (committed, completed) =>
+        options.runtime.mergeConfigCompletionSnapshot(committed, completed),
       prepare: options.prepare,
       publishRestoredState: publishRestoredClaudeProjectState,
       readState: () => options.runtime.getState(options.sessionId, options.cwd),

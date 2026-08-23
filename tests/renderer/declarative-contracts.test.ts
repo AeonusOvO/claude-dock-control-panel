@@ -37,7 +37,7 @@ describe('exported behavior and declarative UI contracts', () => {
   });
 
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
-    expect(harness.document.querySelectorAll('dialog.popover')).toHaveLength(10);
+    expect(harness.document.querySelectorAll('dialog.popover')).toHaveLength(11);
     expect(harness.query('#confirmation-dialog').getAttribute('aria-labelledby')).toBe(
       'confirmation-dialog-title',
     );
@@ -69,7 +69,15 @@ describe('exported behavior and declarative UI contracts', () => {
       harness.document.querySelectorAll<HTMLElement>('[data-settings-tab]'),
       ({ dataset }) => dataset.settingsTab,
     );
-    expect(tabs).toEqual(['general', 'advanced', 'connection', 'proxy', 'router']);
+    expect(tabs).toEqual([
+      'general',
+      'network',
+      'advanced',
+      'claude-execution',
+      'connection',
+      'proxy',
+      'router',
+    ]);
     expect(harness.query('#open-connection-advanced').getAttribute('aria-haspopup')).toBe('dialog');
   });
 

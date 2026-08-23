@@ -22,7 +22,7 @@ export interface ClaudeConnectionIpcDependencies {
   configTransactionState: (error: unknown) => ClaudeProjectState | undefined;
   guards: Pick<
     MainGuards,
-    'assertOfficialProviderAllowed' | 'requireClaudeRuntime' | 'validateSender'
+    'requireClaudeRuntime' | 'validateSender' | 'withOfficialProviderAccess'
   >;
   runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction;
   withDevelopmentSessionOperation: WithSessionOperation;
@@ -31,10 +31,26 @@ export interface ClaudeConnectionIpcDependencies {
 
 const reportConfigurationFailure = createFailureReporter('claude-configuration');
 
+type OfficialProviderAccessRequest = Parameters<MainGuards['withOfficialProviderAccess']>[0];
+
+const withOptionalOfficialProviderAccess = <T>(
+  withOfficialProviderAccess: MainGuards['withOfficialProviderAccess'],
+  request: Omit<OfficialProviderAccessRequest, 'provider'>,
+  provider: OfficialProviderAccessRequest['provider'] | undefined,
+  assertCurrent: () => void,
+  operation: () => Promise<T> | T,
+): Promise<T> | T => {
+  if (!provider) return operation();
+  return withOfficialProviderAccess({ ...request, provider }, () => {
+    assertCurrent();
+    return operation();
+  });
+};
+
 export const registerClaudeConnectionIpc = ({
   claudeFailure,
   configTransactionState,
-  guards: { assertOfficialProviderAllowed, requireClaudeRuntime, validateSender },
+  guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
   runClaudeProjectConfigTransaction,
   withDevelopmentSessionOperation,
   workspace,
@@ -56,17 +72,14 @@ export const registerClaudeConnectionIpc = ({
             complete: (prepared) =>
               runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
             cwd: status.cwd,
-            prepare: async () => {
-              if (officialProvider) {
-                await assertOfficialProviderAllowed(
-                  officialProvider,
-                  'provider-switch',
-                  status.cwd,
-                );
-                assertCurrent();
-              }
-              return runtime.prepareConnectionConfig(validatedInput, undefined, assertCurrent);
-            },
+            prepare: () =>
+              withOptionalOfficialProviderAccess(
+                withOfficialProviderAccess,
+                { action: 'provider-switch', cwd: status.cwd },
+                officialProvider,
+                assertCurrent,
+                () => runtime.prepareConnectionConfig(validatedInput, undefined, assertCurrent),
+              ),
             runtime,
             sessionId: validatedSessionId,
           }),
@@ -107,21 +120,14 @@ export const registerClaudeConnectionIpc = ({
             complete: (prepared) =>
               runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
             cwd: status.cwd,
-            prepare: async () => {
-              const officialProvider = runtime.connectionHistoryOfficialNetworkProvider(
-                status.cwd,
-                validatedEntryId,
-              );
-              if (officialProvider) {
-                await assertOfficialProviderAllowed(
-                  officialProvider,
-                  'provider-switch',
-                  status.cwd,
-                );
-                assertCurrent();
-              }
-              return runtime.prepareConnectionHistory(status.cwd, validatedEntryId, assertCurrent);
-            },
+            prepare: () =>
+              withOptionalOfficialProviderAccess(
+                withOfficialProviderAccess,
+                { action: 'provider-switch', cwd: status.cwd },
+                runtime.connectionHistoryOfficialNetworkProvider(status.cwd, validatedEntryId),
+                assertCurrent,
+                () => runtime.prepareConnectionHistory(status.cwd, validatedEntryId, assertCurrent),
+              ),
             runtime,
             sessionId: validatedSessionId,
           }),

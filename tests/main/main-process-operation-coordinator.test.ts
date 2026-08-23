@@ -63,6 +63,7 @@ const switchHarness = (
   }
   const commits: Array<{ cwd: string; runtime: DevelopmentRuntime }> = [];
   const dependencies: ProjectRuntimeSwitchDependencies = {
+    assertSwitchAllowed: () => undefined,
     cleanupBeforeCommit: async () => undefined,
     commitRuntime: (cwd, runtime) => {
       commits.push({ cwd, runtime });
@@ -72,9 +73,9 @@ const switchHarness = (
     getSession: (sessionId) => sessions.get(sessionId),
     hasActiveRuntime: () => false,
     invalidateAndWait: async () => undefined,
-    prepareProvider: async () => undefined,
     sessionsForDirectory: (cwd) =>
       [...sessions.values()].filter((session) => runtimeKey(session.cwd) === runtimeKey(cwd)),
+    withProviderAccess: async (_cwd, _selected, operation) => operation(),
     ...overrides,
   };
   return {
@@ -97,9 +98,10 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
     const providerEntered = deferred();
     const releaseProvider = deferred();
     const harness = switchHarness([session('session-a', cwd)], {
-      prepareProvider: async () => {
+      withProviderAccess: async (_cwd, _selected, operation) => {
         providerEntered.resolve();
         await releaseProvider.promise;
+        return operation();
       },
     });
 
@@ -131,15 +133,16 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
     const releaseSecondProvider = deferred();
     let providerCalls = 0;
     const harness = switchHarness([session('session-a', cwd)], {
-      prepareProvider: async () => {
+      withProviderAccess: async (_cwd, _selected, operation) => {
         providerCalls += 1;
         if (providerCalls === 1) {
           firstProviderEntered.resolve();
           await releaseFirstProvider.promise;
-          return;
+        } else {
+          secondProviderEntered.resolve();
+          await releaseSecondProvider.promise;
         }
-        secondProviderEntered.resolve();
-        await releaseSecondProvider.promise;
+        return operation();
       },
     });
 
@@ -170,6 +173,33 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
     expect(harness.commits).toEqual([{ cwd, runtime: 'codex' }]);
   });
 
+  it('rejects config reservations while a runtime switch owns the directory', async () => {
+    const cwd = 'C:\\projects\\alpha';
+    const providerEntered = deferred();
+    const releaseProvider = deferred();
+    const transactions = new SessionConfigTransactionCoordinator((target) =>
+      harness.coordinator.assertDevelopmentOperationAllowed(target),
+    );
+    const harness = switchHarness([session('session-a', cwd)], {
+      assertSwitchAllowed: (target) => transactions.assertDevelopmentOperationAllowed(target),
+      withProviderAccess: async (_cwd, _selected, operation) => {
+        providerEntered.resolve();
+        await releaseProvider.promise;
+        return operation();
+      },
+    });
+
+    const switching = harness.coordinator.switchRuntime('session-a', cwd, 'codex');
+    await providerEntered.promise;
+
+    expect(() => transactions.run('session-a', cwd, async () => undefined)).toThrow(
+      '当前项目正在切换开发引擎，请等待切换完成。',
+    );
+
+    releaseProvider.resolve();
+    await expect(switching).resolves.toBe('codex');
+  });
+
   it('stops a predecessor PTY before a cancelled relaunch lets a runtime switch commit', async () => {
     const cwd = 'C:\\projects\\alpha';
     const preparedEntered = deferred();
@@ -182,6 +212,7 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
     let runtimeGeneration: PtyGeneration | undefined = 1;
     const sessions = [session('session-a', cwd, 1)];
     const switchCoordinator = new ProjectRuntimeSwitchCoordinator({
+      assertSwitchAllowed: () => undefined,
       cleanupBeforeCommit: async () => undefined,
       commitRuntime: (_cwd, runtime) => {
         committedRuntime = runtime;
@@ -194,8 +225,8 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
         cancellationObserved.resolve();
         return unwound;
       },
-      prepareProvider: async () => undefined,
       sessionsForDirectory: () => sessions,
+      withProviderAccess: async (_cwd, _selected, operation) => operation(),
     });
 
     const relaunch = sessionOperations.run('session-a', async (assertCurrent) => {
@@ -259,11 +290,12 @@ describe('ProjectRuntimeSwitchCoordinator', () => {
     const providerAEntered = deferred();
     const releaseProviderA = deferred();
     const harness = switchHarness([session('session-a', cwdA), session('session-b', cwdB)], {
-      prepareProvider: async (cwd) => {
+      withProviderAccess: async (cwd, _selected, operation) => {
         if (runtimeKey(cwd) === runtimeKey(cwdA)) {
           providerAEntered.resolve();
           await releaseProviderA.promise;
         }
+        return operation();
       },
     });
 

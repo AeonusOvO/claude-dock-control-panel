@@ -9,7 +9,7 @@ export interface ChatGptGuideRenderActions {
 export const createChatGptGuideRenderActions = (
   elements: ChatGptGuideElements,
   deps: ChatGptSubscriptionGuideDeps,
-  runSetup: (forceLogin: boolean, button: HTMLButtonElement) => Promise<void>,
+  runLogout: (button: HTMLButtonElement) => Promise<void>,
 ): ChatGptGuideRenderActions => {
   const {
     guide,
@@ -127,13 +127,18 @@ export const createChatGptGuideRenderActions = (
               : '检查安装与登录状态';
     secondaryActions.replaceChildren();
     if (state.authenticated && !operationBusy) {
+      const account = document.createElement('span');
+      account.className = 'subscription-gateway-account';
+      account.textContent = `当前账号：${state.accountEmail ?? '已授权账号（邮箱暂不可用）'}`;
       const relogin = document.createElement('button');
       relogin.type = 'button';
-      relogin.textContent = '重新登录 OpenAI';
+      relogin.className = 'button--danger';
+      relogin.textContent = '退出当前账号';
+      relogin.title = '只退出 ClaudeDock 托管账号；不会退出浏览器、Google 或其他网站账号';
       relogin.addEventListener('click', () => {
-        void runSetup(true, relogin);
+        void runLogout(relogin);
       });
-      secondaryActions.append(relogin);
+      secondaryActions.append(account, relogin);
     }
     claudeConfigForm.hidden = getSelectedProviderId() === 'chatgpt-subscription';
   };

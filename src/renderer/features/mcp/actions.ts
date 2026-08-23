@@ -25,7 +25,7 @@ export interface McpActionsDependencies {
 export interface McpActions {
   bind: () => () => void;
   installServer: (entry: McpCatalogEntry, cwd: string, button: HTMLButtonElement) => void;
-  loadCatalog: (refresh: boolean) => Promise<void>;
+  loadCatalog: (refreshRegistry: boolean) => Promise<void>;
   removeServer: (server: McpServerView, cwd: string, button: HTMLButtonElement) => Promise<void>;
   toggleServer: (server: McpServerView, cwd: string, button: HTMLButtonElement) => Promise<void>;
 }
@@ -103,8 +103,11 @@ const toggleServer = async (
   toggle: HTMLButtonElement,
 ): Promise<void> => {
   const { dependencies } = context;
+  let previewId: string | undefined;
+  let submitted = false;
   try {
     const preview = await window.controlPanel.previewMcpToggle(cwd, server.name, !server.enabled);
+    previewId = preview.id;
     if (
       !(await dependencies.requestConfirmation({
         confirmLabel: server.enabled ? '确认停用' : '确认启用',
@@ -113,12 +116,16 @@ const toggleServer = async (
         tone: 'danger',
       }))
     ) {
+      await window.controlPanel.discardMcpToggle(preview.id);
+      previewId = undefined;
       return;
     }
+    submitted = true;
     void runMcpMutation(context, toggle, '正在写入…', () =>
       window.controlPanel.applyMcpToggle(preview.id, cwd),
     );
   } catch (error) {
+    if (previewId && !submitted) void window.controlPanel.discardMcpToggle(previewId);
     dependencies.showToast(
       error instanceof Error ? error.message : '无法生成 MCP 改动预览。',
       'error',
@@ -158,6 +165,7 @@ const installServer = (
   cwd: string,
   install: HTMLButtonElement,
 ): void => {
+  if (!entry.installable) return;
   const { elements } = context;
   void runMcpMutation(context, install, '正在安装…', () =>
     window.controlPanel.installMcpServer({
@@ -168,7 +176,7 @@ const installServer = (
   );
 };
 
-const loadMcpCatalog = (context: McpActionsContext, refresh: boolean): Promise<void> => {
+const loadMcpCatalog = (context: McpActionsContext, refreshRegistry: boolean): Promise<void> => {
   const { dependencies, elements, state, view } = context;
   if (state.loadPromise) return state.loadPromise;
   const status = dependencies.getActiveStatus();
@@ -178,9 +186,10 @@ const loadMcpCatalog = (context: McpActionsContext, refresh: boolean): Promise<v
   }
   state.loadPromise = (async () => {
     elements.refresh.disabled = true;
-    if (refresh || !state.catalog) elements.status.textContent = '正在发现 MCP 并执行受限健康检查…';
+    if (refreshRegistry || !state.catalog)
+      elements.status.textContent = '正在发现 MCP 并同步 Registry…';
     try {
-      view.renderCatalog(await window.controlPanel.getMcpCatalog(status.cwd, refresh));
+      view.renderCatalog(await window.controlPanel.getMcpCatalog(status.cwd, refreshRegistry));
       await loadMcpBackups(context);
     } catch (error) {
       elements.status.textContent = error instanceof Error ? error.message : '无法读取 MCP 配置。';
@@ -260,7 +269,7 @@ export const createMcpActions = (
   return {
     bind: () => bindMcpActions(context),
     installServer: (entry, cwd, button) => installServer(context, entry, cwd, button),
-    loadCatalog: (refresh) => loadMcpCatalog(context, refresh),
+    loadCatalog: (refreshRegistry) => loadMcpCatalog(context, refreshRegistry),
     removeServer: (server, cwd, button) => removeServer(context, server, cwd, button),
     toggleServer: (server, cwd, button) => toggleServer(context, server, cwd, button),
   };

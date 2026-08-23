@@ -19,10 +19,10 @@ const collectScripts = (directory: string): string[] =>
       return /\.(c?js|mjs)$/.test(entry.name) ? [relativePath] : [];
     })
     .sort();
-const scriptDirectories = ['build', 'smoke', 'tools'];
+const scriptDirectories = ['build', 'release', 'smoke', 'tools'];
 const scripts = scriptDirectories.flatMap(collectScripts).sort();
 
-describe('smoke and build scripts', () => {
+describe('repository scripts', () => {
   it('finds scripts in each classified directory', () => {
     for (const directory of scriptDirectories) {
       expect(scripts.some((script) => script.startsWith(`${directory}${path.sep}`))).toBe(true);

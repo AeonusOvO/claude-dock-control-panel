@@ -44,8 +44,9 @@ export interface ConversationIpcDependencies {
   conversationOwnerRegistry: ConversationOwnerRegistry;
   guards: Pick<
     MainGuards,
-    | 'assertOfficialProviderAllowed'
+    | 'assertLaunchAdmissionAllowed'
     | 'requireClaudeRuntime'
+    | 'withOfficialProviderAccess'
     | 'requireNativeConversationService'
     | 'validateSender'
   >;
@@ -80,10 +81,11 @@ const registerConversationStartIpc = (
   {
     conversationOwnerRegistry,
     guards: {
-      assertOfficialProviderAllowed,
+      assertLaunchAdmissionAllowed,
       requireClaudeRuntime,
       requireNativeConversationService,
       validateSender,
+      withOfficialProviderAccess,
     },
     nativeLaunches,
     runtimeProfile,
@@ -92,6 +94,7 @@ const registerConversationStartIpc = (
 ): void => {
   ipcMain.handle(CHANNELS.NATIVE_CONVERSATION_START, async (event, value: unknown) => {
     validateSender(event);
+    assertLaunchAdmissionAllowed();
     if (!value || typeof value !== 'object') throw new Error('原生对话启动参数无效。');
     const request = value as Partial<NativeConversationLaunchRequest>;
     const projectPath = resolveDirectory(validateProjectPath(request.projectPath));
@@ -132,60 +135,85 @@ const registerConversationStartIpc = (
     }
 
     let launch: NativeConversationLaunch | undefined;
-    if (runtimeProfile.adapterMode === 'production') {
-      const runtime = requireClaudeRuntime();
-      const officialProvider = runtime.officialNetworkProvider(projectPath);
-      if (officialProvider) {
-        await assertOfficialProviderAllowed(officialProvider, 'cli-launch', projectPath);
+    const runtime =
+      runtimeProfile.adapterMode === 'production' ? requireClaudeRuntime() : undefined;
+    const startNativeConversation = async () => {
+      assertLaunchAdmissionAllowed();
+      if (runtime) {
+        const ownerId = `native-route:${conversationId}`;
+        const prepared = await runtime.prepareNativeConversation(
+          ownerId,
+          projectPath,
+          request.model,
+        );
+        try {
+          assertLaunchAdmissionAllowed();
+          launch = { ownerId, prepared };
+          nativeLaunches.set(conversationId, launch);
+        } catch (error) {
+          runtime.releaseNativeConversation(ownerId);
+          throw error;
+        }
       }
-      const ownerId = `native-route:${conversationId}`;
-      const prepared = await runtime.prepareNativeConversation(ownerId, projectPath, request.model);
-      launch = { ownerId, prepared };
-      nativeLaunches.set(conversationId, launch);
-    }
-    try {
-      const allowBypassPermissions =
-        launch?.prepared.allowBypassPermissions ?? runtimeProfile.adapterMode === 'fake';
-      if (request.permissionMode === 'bypassPermissions' && !allowBypassPermissions) {
-        throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
+      try {
+        assertLaunchAdmissionAllowed();
+        const allowBypassPermissions =
+          launch?.prepared.allowBypassPermissions ?? runtimeProfile.adapterMode === 'fake';
+        if (request.permissionMode === 'bypassPermissions' && !allowBypassPermissions) {
+          throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
+        }
+        const result = await service.start({
+          allowBypassPermissions,
+          conversationId,
+          launch: launch
+            ? {
+                cliVersion: launch.prepared.cliVersion,
+                configFingerprintSource: { runtime: launch.prepared.configFingerprint },
+                endpointIdentity: launch.prepared.endpointIdentity,
+                model: launch.prepared.model,
+              }
+            : { configFingerprintSource: { adapter: 'isolated-fake' } },
+          model: launch?.prepared.model ?? request.model,
+          runtimeModel: launch?.prepared.runtimeModel,
+          settingsEnvironment: launch?.prepared.settingsEnvironment,
+          permissionMode: request.permissionMode,
+          projectPath,
+          resume: request.resume,
+        });
+        if (!result.ok && launch) {
+          runtime?.releaseNativeConversation(launch.ownerId);
+          nativeLaunches.delete(conversationId);
+        }
+        return result;
+      } catch (error) {
+        if (launch) {
+          runtime?.releaseNativeConversation(launch.ownerId);
+          nativeLaunches.delete(conversationId);
+        }
+        throw error;
       }
-      const result = await service.start({
-        allowBypassPermissions,
-        conversationId,
-        launch: launch
-          ? {
-              cliVersion: launch.prepared.cliVersion,
-              configFingerprintSource: { runtime: launch.prepared.configFingerprint },
-              endpointIdentity: launch.prepared.endpointIdentity,
-              model: launch.prepared.model,
-            }
-          : { configFingerprintSource: { adapter: 'isolated-fake' } },
-        model: launch?.prepared.model ?? request.model,
-        runtimeModel: launch?.prepared.runtimeModel,
-        settingsEnvironment: launch?.prepared.settingsEnvironment,
-        permissionMode: request.permissionMode,
-        projectPath,
-        resume: request.resume,
-      });
-      if (!result.ok && launch) {
-        requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
-        nativeLaunches.delete(conversationId);
-      }
-      return result;
-    } catch (error) {
-      if (launch) {
-        requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
-        nativeLaunches.delete(conversationId);
-      }
-      throw error;
-    }
+    };
+    const officialProvider = runtime?.officialNetworkProvider(projectPath);
+    return officialProvider
+      ? withOfficialProviderAccess(
+          { action: 'cli-launch', cwd: projectPath, provider: officialProvider },
+          startNativeConversation,
+        )
+      : startNativeConversation();
   });
 };
 
 const registerConversationControlIpc = (
   {
-    guards: { requireClaudeRuntime, requireNativeConversationService, validateSender },
+    guards: {
+      requireClaudeRuntime,
+      requireNativeConversationService,
+      validateSender,
+      withOfficialProviderAccess,
+    },
     nativeAttachmentStore,
+    nativeLaunches,
+    runtimeProfile,
     sessionManager,
   }: ConversationIpcDependencies,
   { nativeConversationSessions, resolveNativeSubmitAttachments }: ConversationIpcContext,
@@ -196,13 +224,37 @@ const registerConversationControlIpc = (
   });
   ipcMain.handle(
     CHANNELS.NATIVE_CONVERSATION_SUBMIT,
-    (event, conversationId: unknown, input: unknown) => {
+    async (event, conversationId: unknown, input: unknown) => {
       validateSender(event);
       const validatedConversationId = validateConversationId(conversationId);
-      return requireNativeConversationService().submit(
+      const service = requireNativeConversationService();
+      const projectPath = service.projectPathForActiveConversation(validatedConversationId);
+      const validatedInput = resolveNativeSubmitAttachments(
         validatedConversationId,
-        resolveNativeSubmitAttachments(validatedConversationId, validateNativeSubmitInput(input)),
+        validateNativeSubmitInput(input),
       );
+      const submitTurn = () =>
+        service.submitAndWaitForTurn(validatedConversationId, validatedInput);
+      if (runtimeProfile.adapterMode !== 'production') return submitTurn();
+
+      const launch = nativeLaunches.get(validatedConversationId);
+      if (!launch) {
+        throw new Error('原生对话的主进程接入授权已经失效，请重新打开该对话。');
+      }
+      const provider = launch.prepared.officialNetworkProvider;
+      return provider
+        ? withOfficialProviderAccess(
+            {
+              action: 'first-request',
+              cwd: projectPath,
+              provider,
+              ...(launch.prepared.officialNetworkTarget
+                ? { target: launch.prepared.officialNetworkTarget }
+                : {}),
+            },
+            submitTurn,
+          )
+        : submitTurn();
     },
   );
   ipcMain.handle(
@@ -281,9 +333,16 @@ const registerConversationControlIpc = (
 
 const registerConversationTransferIpc = (
   {
-    guards: { requireClaudeRuntime, requireNativeConversationService, validateSender },
+    guards: {
+      assertLaunchAdmissionAllowed,
+      requireClaudeRuntime,
+      requireNativeConversationService,
+      validateSender,
+      withOfficialProviderAccess,
+    },
     nativeLaunches,
     runClaudeResumeLaunch,
+    runtimeProfile,
     terminalConversationOwners,
     terminalTransferSessions,
     withDevelopmentSessionOperation,
@@ -296,6 +355,7 @@ const registerConversationTransferIpc = (
     CHANNELS.NATIVE_CONVERSATION_TRANSFER_TO_TERMINAL,
     async (event, conversationId: unknown, draft: unknown, allowInterrupt: unknown) => {
       validateSender(event);
+      assertLaunchAdmissionAllowed();
       const validatedConversationId = validateConversationId(conversationId);
       const validatedDraft = draft === undefined ? undefined : validateNativeSubmitInput(draft);
       if (typeof allowInterrupt !== 'boolean') {
@@ -303,71 +363,91 @@ const registerConversationTransferIpc = (
       }
       let transferredOwner: ConversationOwner | undefined;
       let transferredSessionId: string | undefined;
-      const result = await requireNativeConversationService().transferToTerminal(
-        validatedConversationId,
-        validatedDraft,
-        async (identity) => {
-          const usableTab = (candidate: string | undefined): string | undefined => {
-            if (!candidate || !workspace.hasSession(candidate)) return undefined;
-            return sameDirectory(workspace.getStatus(candidate).cwd, identity.projectPath)
-              ? candidate
-              : undefined;
-          };
-          // Prefer the tab this native conversation was displayed over, then the tab the user is
-          // looking at. `openConversation` is unconditionally additive, so calling it here is
-          // exactly what produced the duplicated sidebar row and the orphaned original.
-          const reusableSessionId = selectReusableConversationSurfaceSession(
-            [
-              nativeConversationSessions.get(identity.conversationId),
-              workspace.getState().activeSessionId,
-            ],
-            (candidate) => usableTab(candidate) !== undefined,
-          );
-          let targetSessionId = reusableSessionId;
-          if (!targetSessionId) {
-            workspace.openProject(identity.projectPath);
-            targetSessionId = workspace.getState().activeSessionId;
-            if (!targetSessionId) throw new Error('无法打开该项目的安全终端。');
-          }
-          transferredSessionId = targetSessionId;
-          terminalTransferSessions.add(targetSessionId);
-          workspaceStore.addProject(identity.projectPath);
-          let ownedGeneration: PtyGeneration | undefined;
-          const launchSessionId = targetSessionId;
-          await withDevelopmentSessionOperation(launchSessionId, async (assertCurrent) => {
-            ownedGeneration = await runClaudeResumeLaunch(
-              launchSessionId,
-              identity.projectPath,
-              identity.conversationId,
-              '无法为 Claude Code 启动安全终端。',
-              assertCurrent,
+      const service = requireNativeConversationService();
+      try {
+        const result = await service.transferToTerminal(
+          validatedConversationId,
+          validatedDraft,
+          async (identity) => {
+            assertLaunchAdmissionAllowed();
+            const usableTab = (candidate: string | undefined): string | undefined => {
+              if (!candidate || !workspace.hasSession(candidate)) return undefined;
+              return sameDirectory(workspace.getStatus(candidate).cwd, identity.projectPath)
+                ? candidate
+                : undefined;
+            };
+            // Prefer the tab this native conversation was displayed over, then the tab the user is
+            // looking at. `openConversation` is unconditionally additive, so calling it here is
+            // exactly what produced the duplicated sidebar row and the orphaned original.
+            const reusableSessionId = selectReusableConversationSurfaceSession(
+              [
+                nativeConversationSessions.get(identity.conversationId),
+                workspace.getState().activeSessionId,
+              ],
+              (candidate) => usableTab(candidate) !== undefined,
             );
-          });
-          if (ownedGeneration === undefined) throw new Error('安全终端没有有效的进程代际。');
-          transferredOwner = {
-            conversationId: identity.conversationId,
-            generation: Number(ownedGeneration),
-            ownerId: `terminal:${targetSessionId}`,
-            ownerKind: 'terminal',
-            phase: 'active',
-            projectPath: identity.projectPath,
-            runtime: 'claude',
-          };
-          return { owner: transferredOwner, terminalSessionId: targetSessionId };
-        },
-        allowInterrupt,
-      );
-      if (transferredSessionId) terminalTransferSessions.delete(transferredSessionId);
-      if (result.ok && transferredOwner && transferredSessionId) {
-        terminalConversationOwners.set(transferredSessionId, transferredOwner);
-        nativeConversationSessions.set(validatedConversationId, transferredSessionId);
-        const launch = nativeLaunches.get(validatedConversationId);
-        if (launch) {
-          requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
-          nativeLaunches.delete(validatedConversationId);
+            let targetSessionId = reusableSessionId;
+            if (!targetSessionId) {
+              workspace.openProject(identity.projectPath);
+              targetSessionId = workspace.getState().activeSessionId;
+              if (!targetSessionId) throw new Error('无法打开该项目的安全终端。');
+            }
+            transferredSessionId = targetSessionId;
+            terminalTransferSessions.add(targetSessionId);
+            workspaceStore.addProject(identity.projectPath);
+            let ownedGeneration: PtyGeneration | undefined;
+            const launchSessionId = targetSessionId;
+            await withDevelopmentSessionOperation(launchSessionId, async (assertCurrent) => {
+              ownedGeneration = await runClaudeResumeLaunch(
+                launchSessionId,
+                identity.projectPath,
+                identity.conversationId,
+                '无法为 Claude Code 启动安全终端。',
+                assertCurrent,
+              );
+            });
+            if (ownedGeneration === undefined) throw new Error('安全终端没有有效的进程代际。');
+            transferredOwner = {
+              conversationId: identity.conversationId,
+              generation: Number(ownedGeneration),
+              ownerId: `terminal:${targetSessionId}`,
+              ownerKind: 'terminal',
+              phase: 'active',
+              projectPath: identity.projectPath,
+              runtime: 'claude',
+            };
+            return { owner: transferredOwner, terminalSessionId: targetSessionId };
+          },
+          allowInterrupt,
+          async (identity, operation) => {
+            if (runtimeProfile.adapterMode !== 'production') return operation();
+            const runtime = requireClaudeRuntime();
+            const officialProvider = runtime.officialNetworkProvider(identity.projectPath);
+            return officialProvider
+              ? withOfficialProviderAccess(
+                  {
+                    action: 'cli-launch',
+                    cwd: identity.projectPath,
+                    provider: officialProvider,
+                  },
+                  operation,
+                )
+              : operation();
+          },
+        );
+        if (result.ok && transferredOwner && transferredSessionId) {
+          terminalConversationOwners.set(transferredSessionId, transferredOwner);
+          nativeConversationSessions.set(validatedConversationId, transferredSessionId);
+          const launch = nativeLaunches.get(validatedConversationId);
+          if (launch) {
+            requireClaudeRuntime().releaseNativeConversation(launch.ownerId);
+            nativeLaunches.delete(validatedConversationId);
+          }
         }
+        return result;
+      } finally {
+        if (transferredSessionId) terminalTransferSessions.delete(transferredSessionId);
       }
-      return result;
     },
   );
 };
@@ -375,10 +455,11 @@ const registerConversationTransferIpc = (
 const registerConversationAdoptionIpc = (
   {
     guards: {
-      assertOfficialProviderAllowed,
+      assertLaunchAdmissionAllowed,
       requireClaudeRuntime,
       requireNativeConversationService,
       validateSender,
+      withOfficialProviderAccess,
     },
     invalidateAndWaitForDevelopmentSessionOperation,
     nativeLaunches,
@@ -397,6 +478,7 @@ const registerConversationAdoptionIpc = (
     CHANNELS.NATIVE_CONVERSATION_ADOPT_TERMINAL,
     async (event, sessionId: unknown, allowInterrupt: unknown) => {
       validateSender(event);
+      assertLaunchAdmissionAllowed();
       const validatedSessionId = validateSessionId(sessionId);
       if (typeof allowInterrupt !== 'boolean') {
         throw new Error('安全终端切换确认参数无效。');
@@ -454,92 +536,113 @@ const registerConversationAdoptionIpc = (
         nativeLaunches.delete(conversationId);
         launch = undefined;
       };
-      if (runtimeProfile.adapterMode === 'production') {
-        const officialProvider = runtime.officialNetworkProvider(projectPath);
-        if (officialProvider) {
-          await assertOfficialProviderAllowed(officialProvider, 'cli-launch', projectPath);
+      const adoptFromTerminal = async () => {
+        assertLaunchAdmissionAllowed();
+        if (runtimeProfile.adapterMode === 'production') {
+          const ownerId = `native-route:${conversationId}`;
+          const prepared = await runtime.prepareNativeConversation(ownerId, projectPath, undefined);
+          launch = { ownerId, prepared };
+          try {
+            assertLaunchAdmissionAllowed();
+            nativeLaunches.set(conversationId, launch);
+          } catch (error) {
+            releasePreparedLaunch();
+            throw error;
+          }
         }
-        const ownerId = `native-route:${conversationId}`;
-        const prepared = await runtime.prepareNativeConversation(ownerId, projectPath, undefined);
-        launch = { ownerId, prepared };
-        nativeLaunches.set(conversationId, launch);
-      }
-      // Network preflight and SDK preparation can take long enough for a formerly idle terminal to
-      // start work. Recheck at the destructive boundary, after preparation but before stopping PTY.
-      if (!workspace.hasSession(validatedSessionId)) {
-        releasePreparedLaunch();
-        return {
-          ...reportConversationFailure('user-input', '该终端标签已经关闭。', {
-            sessionId: validatedSessionId,
-          }),
-          ok: false,
-        };
-      }
-      if (!allowInterrupt && terminalHasRunningWork()) {
-        releasePreparedLaunch();
-        return requiresConfirmation();
-      }
-
-      terminalTransferSessions.add(validatedSessionId);
-      try {
-        const result = await service.adoptFromTerminal(
-          {
-            allowBypassPermissions:
-              launch?.prepared.allowBypassPermissions ?? runtimeProfile.adapterMode === 'fake',
-            conversationId,
-            launch: launch
-              ? {
-                  cliVersion: launch.prepared.cliVersion,
-                  configFingerprintSource: { runtime: launch.prepared.configFingerprint },
-                  endpointIdentity: launch.prepared.endpointIdentity,
-                  model: launch.prepared.model,
-                }
-              : { configFingerprintSource: { adapter: 'isolated-fake' } },
-            model: launch?.prepared.model,
-            projectPath,
-            runtimeModel: launch?.prepared.runtimeModel,
-            settingsEnvironment: launch?.prepared.settingsEnvironment,
-          },
-          // Stop the Claude process inside the tab, but keep the tab. Leaving it running would put
-          // two writers on one JSONL; closing it would destroy the tab the user is switching within.
-          async () => {
-            await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId).catch(
-              () => undefined,
-            );
-            await services
-              .resolve(RUNTIME_PROCESS_REGISTRY)
-              .terminateSession(validatedSessionId)
-              .catch(() => undefined);
-            if (!workspace.hasSession(validatedSessionId)) return;
-            const current = workspace.getStatus(validatedSessionId);
-            workspace.stop(validatedSessionId);
-            requireClaudeRuntime().setInactive(validatedSessionId, current.ptyGeneration);
-          },
-          async () => {
-            await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
-              await runClaudeResumeLaunch(
-                validatedSessionId,
-                projectPath,
-                conversationId,
-                '无法恢复安全终端。',
-                assertCurrent,
-              );
-            });
-          },
-        );
-        if (result.ok) {
-          terminalConversationOwners.delete(validatedSessionId);
-          nativeConversationSessions.set(conversationId, validatedSessionId);
-        } else {
+        // Network preflight and SDK preparation can take long enough for a formerly idle terminal to
+        // start work. Recheck at the destructive boundary, after preparation but before stopping PTY.
+        if (!workspace.hasSession(validatedSessionId)) {
           releasePreparedLaunch();
+          return {
+            ...reportConversationFailure('user-input', '该终端标签已经关闭。', {
+              sessionId: validatedSessionId,
+            }),
+            ok: false,
+          };
         }
-        return result;
-      } catch (error) {
-        releasePreparedLaunch();
-        throw error;
-      } finally {
-        terminalTransferSessions.delete(validatedSessionId);
-      }
+        if (!allowInterrupt && terminalHasRunningWork()) {
+          releasePreparedLaunch();
+          return requiresConfirmation();
+        }
+        try {
+          assertLaunchAdmissionAllowed();
+        } catch (error) {
+          releasePreparedLaunch();
+          throw error;
+        }
+
+        terminalTransferSessions.add(validatedSessionId);
+        try {
+          const result = await service.adoptFromTerminal(
+            {
+              allowBypassPermissions:
+                launch?.prepared.allowBypassPermissions ?? runtimeProfile.adapterMode === 'fake',
+              conversationId,
+              launch: launch
+                ? {
+                    cliVersion: launch.prepared.cliVersion,
+                    configFingerprintSource: { runtime: launch.prepared.configFingerprint },
+                    endpointIdentity: launch.prepared.endpointIdentity,
+                    model: launch.prepared.model,
+                  }
+                : { configFingerprintSource: { adapter: 'isolated-fake' } },
+              model: launch?.prepared.model,
+              projectPath,
+              runtimeModel: launch?.prepared.runtimeModel,
+              settingsEnvironment: launch?.prepared.settingsEnvironment,
+            },
+            // Stop the Claude process inside the tab, but keep the tab. Leaving it running would put
+            // two writers on one JSONL; closing it would destroy the tab the user is switching within.
+            async () => {
+              await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId).catch(
+                () => undefined,
+              );
+              await services
+                .resolve(RUNTIME_PROCESS_REGISTRY)
+                .terminateSession(validatedSessionId)
+                .catch(() => undefined);
+              if (!workspace.hasSession(validatedSessionId)) return;
+              const current = workspace.getStatus(validatedSessionId);
+              workspace.stop(validatedSessionId);
+              requireClaudeRuntime().setInactive(validatedSessionId, current.ptyGeneration);
+            },
+            async () => {
+              await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
+                await runClaudeResumeLaunch(
+                  validatedSessionId,
+                  projectPath,
+                  conversationId,
+                  '无法恢复安全终端。',
+                  assertCurrent,
+                );
+              });
+            },
+          );
+          if (result.ok) {
+            terminalConversationOwners.delete(validatedSessionId);
+            nativeConversationSessions.set(conversationId, validatedSessionId);
+          } else {
+            releasePreparedLaunch();
+          }
+          return result;
+        } catch (error) {
+          releasePreparedLaunch();
+          throw error;
+        } finally {
+          terminalTransferSessions.delete(validatedSessionId);
+        }
+      };
+      const officialProvider =
+        runtimeProfile.adapterMode === 'production'
+          ? runtime.officialNetworkProvider(projectPath)
+          : undefined;
+      return officialProvider
+        ? withOfficialProviderAccess(
+            { action: 'cli-launch', cwd: projectPath, provider: officialProvider },
+            adoptFromTerminal,
+          )
+        : adoptFromTerminal();
     },
   );
 };

@@ -131,7 +131,70 @@ describe('RiskDecisionEngine', () => {
     );
   });
 
-  it('reports WebSocket-only failure as partial availability and blocks cloud tasks', () => {
+  it('blocks required application and CLI probes that report HTTP 407', () => {
+    const application = evaluate(
+      'first-request',
+      observation([
+        probe('app:configured-chat-api', {
+          detail: 'HTTP 407，代理认证未通过。',
+          status: 'failed',
+        }),
+      ]),
+    );
+    const cli = evaluate(
+      'cli-launch',
+      observation([
+        probe('cli:openai-codex-api', {
+          detail: 'HTTP 407，代理认证未通过。',
+          process: 'codex-cli',
+          status: 'failed',
+        }),
+      ]),
+    );
+
+    expect(application.status).toBe('blocked');
+    expect(
+      application.featureAccess.find((access) => access.action === 'first-request')?.allowed,
+    ).toBe(false);
+    expect(cli.status).toBe('blocked');
+    expect(cli.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(false);
+  });
+
+  it.each([401, 403, 405])(
+    'keeps required HTTP %i authentication and method responses non-blocking once probes pass',
+    (status) => {
+      const application = evaluate(
+        'first-request',
+        observation([
+          probe('app:configured-chat-api', {
+            detail: `HTTP ${status}，官方端点可达。`,
+            status: 'passed',
+          }),
+        ]),
+      );
+      const cli = evaluate(
+        'cli-launch',
+        observation([
+          probe('cli:openai-codex-api', {
+            detail: `HTTP ${status}，官方端点可达。`,
+            process: 'codex-cli',
+            status: 'passed',
+          }),
+        ]),
+      );
+
+      expect(application.status).not.toBe('blocked');
+      expect(
+        application.featureAccess.find((access) => access.action === 'first-request')?.allowed,
+      ).toBe(true);
+      expect(cli.status).not.toBe('blocked');
+      expect(cli.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(
+        true,
+      );
+    },
+  );
+
+  it('keeps optional unauthenticated WebSocket evidence advisory and blocks required cloud tasks', () => {
     const background = evaluate(
       'background',
       observation([
@@ -157,8 +220,16 @@ describe('RiskDecisionEngine', () => {
       ]),
     );
 
-    expect(background.status).toBe('partially_available');
+    expect(background.status).toBe('allowed');
+    expect(background.featureAccess).toEqual([{ action: 'background', allowed: true }]);
     expect(cloud.status).toBe('blocked');
+    expect(cloud.featureAccess).toEqual([
+      {
+        action: 'cloud-task',
+        allowed: false,
+        reason: '云端任务所需的官方网络路径未通过。',
+      },
+    ]);
   });
 
   it('fails closed when a required probe is unknown', () => {
@@ -173,6 +244,159 @@ describe('RiskDecisionEngine', () => {
     );
 
     expect(result.status).toBe('blocked');
+  });
+
+  it('treats unknown proxy resolution with observed IPv4 as incomplete, not offline', () => {
+    const result = evaluate(
+      'first-request',
+      observation([probe('app:openai-chatgpt')], {
+        paths: [
+          directPath({
+            proxyKind: 'unknown',
+          }),
+        ],
+      }),
+    );
+
+    expect(result.status).toBe('degraded');
+    expect(result.summary).toContain('网络预检结果不完整');
+    expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
+    expect(result.signals.map((signal) => signal.id)).toContain('proxy-resolution-unknown');
+    expect(result.signals.map((signal) => signal.id)).not.toContain('offline');
+  });
+
+  it('blocks only genuine nonempty all-false interface evidence as offline', () => {
+    const result = evaluate(
+      'first-request',
+      observation([probe('app:openai-chatgpt')], {
+        paths: [directPath({ ipv4Available: false, ipv6Available: false })],
+      }),
+    );
+
+    expect(result.status).toBe('blocked');
+    expect(result.featureAccess).toEqual([
+      {
+        action: 'first-request',
+        allowed: false,
+        reason: '首次请求所需的官方网络路径未通过。',
+      },
+    ]);
+    expect(result.signals.map((signal) => signal.id)).toContain('offline');
+  });
+
+  it.each([
+    ['IPv4-only', { ipv4Available: true, ipv6Available: false }],
+    ['IPv6-only', { ipv4Available: false, ipv6Available: true }],
+  ])('does not infer offline from an observed %s host path', (_label, familyFacts) => {
+    const result = evaluate(
+      'first-request',
+      observation([probe('app:openai-chatgpt')], {
+        paths: [directPath(familyFacts)],
+      }),
+    );
+
+    expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
+    expect(result.signals.map((signal) => signal.id)).not.toContain('offline');
+  });
+
+  it('treats missing path evidence as incomplete instead of fabricating offline state', () => {
+    const result = evaluate(
+      'first-request',
+      observation([probe('app:openai-chatgpt')], { paths: [] }),
+    );
+
+    expect(result.status).toBe('degraded');
+    expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
+    expect(result.signals.map((signal) => signal.id)).not.toContain('offline');
+  });
+
+  it('does not report a safe result when required environment evidence is incomplete', () => {
+    const result = evaluate(
+      'background',
+      observation([probe('app:openai-chatgpt')], {
+        environment: {
+          checkedAt: 2,
+          dnsDetail: '权威 DNS 未完成。',
+          dnsStatus: 'unknown',
+          evidenceStatus: 'partial',
+          issues: [],
+          localLanguage: 'en-US',
+          localTimezone: 'America/Los_Angeles',
+          riskLevel: 'unknown',
+          summary: '关键证据不完整。',
+        },
+      }),
+    );
+
+    expect(result.status).toBe('degraded');
+    expect(result.riskLevel).toBe('unknown');
+    expect(result.summary).toContain('不能判断为低风险');
+  });
+
+  it('surfaces high environment risk without misreporting provider reachability failure', () => {
+    const result = evaluate(
+      'background',
+      observation([probe('app:openai-chatgpt')], {
+        environment: {
+          checkedAt: 2,
+          dnsDetail: 'DNS 出口国家不一致。',
+          dnsStatus: 'review',
+          evidenceStatus: 'complete',
+          issues: [
+            {
+              detail: 'DNS 出口国家不一致。',
+              kind: 'dns-egress',
+              severity: 'high',
+              title: 'DNS 出口国家不一致',
+            },
+          ],
+          localLanguage: 'en-US',
+          localTimezone: 'America/Los_Angeles',
+          riskLevel: 'high',
+          summary: '检测到高风险。',
+        },
+      }),
+    );
+
+    expect(result.status).toBe('warning');
+    expect(result.riskLevel).toBe('high');
+    expect(result.featureAccess).toEqual([{ action: 'background', allowed: true }]);
+    expect(result.summary).toContain('高风险出口、DNS 或分流信号');
+  });
+
+  it('does not treat an unknown proxy path as a confirmed direct IPv6 path', () => {
+    const result = evaluate(
+      'first-request',
+      observation([probe('app:openai-chatgpt')], {
+        paths: [
+          directPath({
+            globalIpv6Available: true,
+            ipv6Available: true,
+            proxyKind: 'unknown',
+          }),
+        ],
+      }),
+    );
+
+    expect(result.signals.map((signal) => signal.id)).not.toContain('global-ipv6-path-unconfirmed');
+  });
+
+  it('does not claim application and CLI paths differ while either proxy state is unknown', () => {
+    const result = evaluate(
+      'cli-launch',
+      observation([probe('cli:openai-codex-api')], {
+        paths: [
+          directPath({ proxyKind: 'unknown' }),
+          directPath({
+            process: 'codex-cli',
+            proxyConfigured: true,
+            proxyKind: 'system',
+          }),
+        ],
+      }),
+    );
+
+    expect(result.signals.map((signal) => signal.id)).not.toContain('process-paths-differ');
   });
 
   it('blocks a Claude CLI SOCKS path because the official client does not support it', () => {

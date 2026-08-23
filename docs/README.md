@@ -15,7 +15,7 @@
 | ---------------------------------------------------------- | --------------------------------------------------------- |
 | [technical.md](reference/technical.md)                     | 各功能域的实现细节、接线与技术约束                        |
 | [project-layout.md](reference/project-layout.md)           | 目录结构、依赖规则、文件体积护栏                          |
-| [ipc-contract.md](reference/ipc-contract.md)               | 全部 188 个通道与 `ControlPanelApi` 188 个 API 成员的映射 |
+| [ipc-contract.md](reference/ipc-contract.md)               | 全部 196 个通道与 `ControlPanelApi` 196 个 API 成员的映射 |
 | [cli-command-catalog.md](reference/cli-command-catalog.md) | Claude / Codex 斜杠命令清单                               |
 
 ## how-to —— 照着做
@@ -23,8 +23,8 @@
 | 文档                            | 内容                                                         |
 | ------------------------------- | ------------------------------------------------------------ |
 | [develop.md](how-to/develop.md) | 环境、命令、加 IPC 往返 / 状态广播 / 设置项 / 视图样式、约定 |
-| [verify.md](how-to/verify.md)   | 快门禁、全门禁、打包报告、CI                                 |
-| [release.md](how-to/release.md) | 版本、产物、更新契约、发布说明格式                           |
+| [verify.md](how-to/verify.md)   | 快门禁、全门禁、发布报告、COS 公开 feed 验收                 |
+| [release.md](how-to/release.md) | 通道产物、COS 发布、控制台备用、引导与信任边界               |
 
 ## adr —— 决策记录
 
@@ -36,11 +36,12 @@
 | [0004](adr/0004-local-first-renderer-assets.md)            | 渲染端资源本地优先                       |
 | [0005](adr/0005-native-select-as-source-of-truth.md)       | 原生 `<select>` 保留为事实源，只替换呈现 |
 | [0006](adr/0006-feature-sliced-renderer.md)                | 按特性分片的渲染进程结构                 |
-| [0007](adr/0007-single-release-directory.md)               | 单一发布目录与产物清单                   |
+| [0007](adr/0007-single-release-directory.md)               | 单一发布目录与 COS 更新链                |
 | [0008](adr/0008-ipc-single-source-of-truth.md)             | IPC 通道与载荷的单一事实源               |
 | [0009](adr/0009-behavioral-tests-replace-source-pins.md)   | 行为测试替代源码文本钉（取代 0003）      |
 | [0010](adr/0010-runtime-registry-and-contributions.md)     | 运行期注册表与贡献点                     |
 | [0011](adr/0011-registration-based-feature-composition.md) | 渲染端注册式分片                         |
+| [0012](adr/0012-scroll-chaining-and-canonical-scrim.md)    | 单一滚动链与规范遮罩                     |
 
 ## releases
 

@@ -20,7 +20,10 @@ import {
   type RouteReservationToken,
 } from '../coordination/route-lifecycle';
 import { AsyncRefreshCache } from '../infra/async-refresh-cache';
-import { discoverOpenAiModels } from '../network/provider-model-discovery';
+import {
+  discoverOpenAiModelsAtTarget,
+  type ProviderModelDiscoveryTarget,
+} from '../network/provider-model-discovery';
 import {
   checkSoftwareUpdates,
   installOrUpdateClaudeCode,
@@ -51,6 +54,11 @@ const noInstallation = (message: string): ClaudeInstallationStatus => ({
   security: 'not-installed',
 });
 
+export interface NativeRouteReservation {
+  phase: 'active' | 'preparing';
+  readonly token: RouteReservationToken;
+}
+
 export abstract class ClaudeRuntimeRouting {
   protected readonly backgroundTasks = new BackgroundTaskCoordinator(2);
   protected readonly installationCache = new AsyncRefreshCache<ClaudeInstallationStatus>(
@@ -64,16 +72,16 @@ export abstract class ClaudeRuntimeRouting {
   );
   protected readonly configStore: ClaudeConfigStore;
   protected readonly fetchImplementation: typeof fetch;
-  protected readonly nativeRouteReservations = new Map<string, RouteReservationToken>();
+  protected readonly nativeRouteReservations = new Map<string, NativeRouteReservation>();
   protected readonly routeLifecycle = new RouteLifecycleCoordinator();
   protected readonly routerManager: ClaudeRouterManager;
   private readonly gatewayDetector = new ClaudeGatewayDetector();
+  private launchAdmissionGuard: () => void = () => undefined;
 
   protected constructor(
     userDataPath: string,
-    private readonly ensureManagedChatGptGatewayReady: () => Promise<void>,
+    private readonly ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
     fetchImplementation: typeof fetch,
-    private readonly applicationVersion: string | undefined,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void,
     private readonly stopManagedChatGptGateway: () => Promise<void> | void,
     routerCommandEnvironment: () => Record<string, null | string | undefined>,
@@ -85,6 +93,15 @@ export abstract class ClaudeRuntimeRouting {
       onRouterOperationProgress,
       routerCommandEnvironment,
     );
+  }
+
+  /** Main lifecycle fence used immediately before every launch-owned route process admission. */
+  public setLaunchAdmissionGuard(guard: () => void): void {
+    this.launchAdmissionGuard = guard;
+  }
+
+  protected assertLaunchAdmissionAllowed(): void {
+    this.launchAdmissionGuard();
   }
 
   protected abstract hasActiveRoute(
@@ -156,12 +173,7 @@ export abstract class ClaudeRuntimeRouting {
         this.getRouterHealthState(force),
       ]);
       return this.backgroundTasks.run('software-updates', 'background', () =>
-        checkSoftwareUpdates(
-          installation,
-          router,
-          this.applicationVersion,
-          this.fetchImplementation,
-        ),
+        checkSoftwareUpdates(installation, router, this.fetchImplementation),
       );
     }, force);
   }
@@ -182,8 +194,11 @@ export abstract class ClaudeRuntimeRouting {
     return { message, state: await this.getSoftwareUpdates(true) };
   }
 
-  public discoverProviderModels(baseUrl: string, credential?: string): Promise<string[]> {
-    return discoverOpenAiModels(baseUrl, credential, this.fetchImplementation);
+  public discoverProviderModels(
+    target: Readonly<ProviderModelDiscoveryTarget>,
+    credential?: string,
+  ): Promise<string[]> {
+    return discoverOpenAiModelsAtTarget(target, credential, this.fetchImplementation);
   }
 
   public async startRouter(): Promise<ClaudeRouterManagementState> {
@@ -303,31 +318,33 @@ export abstract class ClaudeRuntimeRouting {
 
   protected async prepareRouteServices(
     routeKind: ClaudeRouteKind,
-    sessionId: string,
+    _ownerId: string,
+    cwd: string,
   ): Promise<void> {
+    this.assertLaunchAdmissionAllowed();
     if (routeKind === 'managed-chatgpt') {
-      await this.routeLifecycle.runExclusive(this.ensureManagedChatGptGatewayReady);
-      await this.stopUnusedRoute('ccr', sessionId);
+      await this.routeLifecycle.runExclusive(() => {
+        this.assertLaunchAdmissionAllowed();
+        return this.ensureManagedChatGptGatewayReady(cwd);
+      });
       return;
     }
     if (routeKind === 'ccr') {
       await this.routeLifecycle.runExclusive(async () => {
+        this.assertLaunchAdmissionAllowed();
         let state = await this.routerManager.getState();
+        this.assertLaunchAdmissionAllowed();
         if (!state.installed) {
           state = (await this.routerManager.installFromNpm('npm')).state;
+          this.assertLaunchAdmissionAllowed();
         }
         if (!state.managementAvailable || state.gatewayState !== 'running') {
+          this.assertLaunchAdmissionAllowed();
           state = await this.routerManager.start();
         }
         this.routerHealthCache.set(state);
       });
-      await this.stopUnusedRoute('managed-chatgpt', sessionId);
-      return;
     }
-    await Promise.all([
-      this.stopUnusedRoute('ccr', sessionId),
-      this.stopUnusedRoute('managed-chatgpt', sessionId),
-    ]);
   }
 
   protected getRouterHealthState(

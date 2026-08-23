@@ -6,15 +6,34 @@ import type {
   ClaudeEndpointProtocol,
   ClaudeMetrics,
   ClaudePermissionMode,
+  ClaudeRouteHealth,
   ManagedChatGptContextWindowMode,
   ModelSpeedMode,
+  NetworkProviderId,
   PtyGeneration,
   SaveClaudeConfigInput,
 } from '../../shared/contracts';
-import type { ClaudeConfigPresentation } from './config-store';
+import type { ClaudeConfigPresentation, ClaudeLaunchConfigSnapshot } from './config-store';
 import type { ClaudeEnvironmentOverrides, ClaudeServingSpeedProfile } from './configuration';
 import type { ModelSpeedCapability } from './model-speed-capabilities';
 import type { ClaudeRouteKind } from '../coordination/route-lifecycle';
+
+export interface ClaudePreparedLaunchToken {
+  readonly generation: number;
+  readonly sessionId: string;
+}
+
+export interface ClaudeLaunchPreflightEvidence {
+  readonly checkedAt: number;
+  readonly provider: NetworkProviderId;
+  readonly status: 'allowed' | 'blocked' | 'degraded';
+}
+
+export interface ClaudeLaunchAuthorization {
+  readonly cwdKey: string;
+  readonly launchSnapshot: ClaudeLaunchConfigSnapshot;
+  readonly officialNetworkProvider?: NetworkProviderId;
+}
 
 interface RuntimeSession {
   active: boolean;
@@ -43,6 +62,12 @@ interface RuntimeSession {
     detectedAt: number;
     detail: string;
   };
+  /** Display-only network observation owned by this exact live launch object. */
+  advisoryRouteHealth?: ClaudeRouteHealth;
+  /** Official provider bound to the exact live PTY generation, never inferred from saved config. */
+  liveOfficialNetworkProvider?: NetworkProviderId;
+  /** Minimal successful launch evidence consumed once by exact-generation advisory monitoring. */
+  launchPreflightEvidence?: ClaudeLaunchPreflightEvidence;
   launchedConfigFingerprint?: string;
   launchedAt?: number;
   launchedCliVersion?: string;
@@ -61,6 +86,8 @@ interface RuntimeSession {
   pendingEffortRestore?: ClaudeEffortRequest;
   /** Earliest moment `pendingEffortRestore` may be submitted; a fresh TUI ignores instant input. */
   pendingEffortRestoreAt?: number;
+  /** Exact prepared launch that was atomically promoted to this live runtime. */
+  launchToken?: ClaudePreparedLaunchToken;
   /** Live mode read off the TUI badge; undefined until the badge has been painted once. */
   permissionMode?: ClaudePermissionMode;
   /** Last ClaudeDock request, kept separate while the TUI still reports the previous mode. */
@@ -86,6 +113,10 @@ interface RuntimeSession {
 export interface PreparedNativeClaudeConversation {
   allowBypassPermissions: boolean;
   cliVersion?: string;
+  /** Official provider captured with this exact credential-bearing native launch, when applicable. */
+  officialNetworkProvider?: NetworkProviderId;
+  /** Optional application probe target captured by main; renderer submit payloads cannot set it. */
+  officialNetworkTarget?: { readonly process: 'application'; readonly url: string };
   configFingerprint: string;
   endpointIdentity: string;
   environment: ClaudeEnvironmentOverrides;
@@ -123,8 +154,12 @@ interface ConnectionCheckRecord {
 export interface PreparedClaudeLaunch {
   command: string;
   environment: ClaudeEnvironmentOverrides;
-  /** Bound PTY replaced by this prepared launch, if one still owned the runtime at commit time. */
+  /** Exact official provider derived from the immutable launch snapshot, when one is required. */
+  officialNetworkProvider?: NetworkProviderId;
+  /** Bound PTY that remains live until this exact launch token binds a replacement. */
   predecessorPtyGeneration?: PtyGeneration;
+  /** Single-use identity for binding or aborting only this prepared launch. */
+  token: ClaudePreparedLaunchToken;
 }
 
 export interface PreparedClaudeSpeedRelaunch extends PreparedClaudeLaunch {

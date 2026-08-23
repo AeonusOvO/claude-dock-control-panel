@@ -21,6 +21,12 @@ const createStore = () => {
   };
 };
 
+const settings = (chatIdleTimeoutMinutes: 0 | 5 | 10 | 30, webResearchIsolation: boolean) => ({
+  chatIdleTimeoutMinutes,
+  networkPreflight: { checkOnNewSession: true, checkOnProviderLogin: true },
+  webResearchIsolation,
+});
+
 describe('AdvancedSettingsStore', () => {
   /*
    * These switches exist to work around relay defects. A user who never opens the tab must get a
@@ -29,22 +35,16 @@ describe('AdvancedSettingsStore', () => {
   it('leaves every workaround off until it is turned on', () => {
     const { store } = createStore();
 
-    expect(store.get()).toEqual({ chatIdleTimeoutMinutes: 0, webResearchIsolation: false });
+    expect(store.get()).toEqual(settings(0, false));
   });
 
   it('persists a change for the next launch', () => {
     const { settingsPath, store } = createStore();
 
-    expect(store.set({ chatIdleTimeoutMinutes: 10, webResearchIsolation: true })).toEqual({
-      chatIdleTimeoutMinutes: 10,
-      webResearchIsolation: true,
-    });
-    expect(store.get()).toEqual({ chatIdleTimeoutMinutes: 10, webResearchIsolation: true });
-    expect(JSON.parse(readFileSync(settingsPath, 'utf8'))).toMatchObject({ version: 1 });
-    expect(store.set({ chatIdleTimeoutMinutes: 0, webResearchIsolation: false })).toEqual({
-      chatIdleTimeoutMinutes: 0,
-      webResearchIsolation: false,
-    });
+    expect(store.set(settings(10, true))).toEqual(settings(10, true));
+    expect(store.get()).toEqual(settings(10, true));
+    expect(JSON.parse(readFileSync(settingsPath, 'utf8'))).toMatchObject({ version: 2 });
+    expect(store.set(settings(0, false))).toEqual(settings(0, false));
   });
 
   it('rejects a value that is not a switch', () => {
@@ -53,30 +53,31 @@ describe('AdvancedSettingsStore', () => {
     expect(() =>
       store.set({
         chatIdleTimeoutMinutes: 0,
+        networkPreflight: { checkOnNewSession: true, checkOnProviderLogin: true },
         webResearchIsolation: 'yes' as unknown as boolean,
       }),
     ).toThrow(/高级设置/);
-    expect(() =>
-      store.set({ chatIdleTimeoutMinutes: 15 as 0, webResearchIsolation: false }),
-    ).toThrow(/高级设置/);
+    expect(() => store.set({ ...settings(0, false), chatIdleTimeoutMinutes: 15 as 0 })).toThrow(
+      /高级设置/,
+    );
   });
 
-  it.each(['{ not json', '{"version":2,"webResearchIsolation":true}', '{"version":1}'])(
+  it.each(['{ not json', '{"version":1}'])(
     'falls back to the defaults for unusable content %s',
     (content) => {
       const { settingsPath, store } = createStore();
-      store.set({ chatIdleTimeoutMinutes: 30, webResearchIsolation: true });
+      store.set(settings(30, true));
       writeFileSync(settingsPath, content, 'utf8');
 
-      expect(store.get()).toEqual({ chatIdleTimeoutMinutes: 0, webResearchIsolation: false });
+      expect(store.get()).toEqual(settings(0, false));
     },
   );
 
   it('migrates an existing version 1 switch file to no automatic timeout', () => {
     const { settingsPath, store } = createStore();
-    store.set({ chatIdleTimeoutMinutes: 5, webResearchIsolation: false });
+    store.set(settings(5, false));
     writeFileSync(settingsPath, '{"version":1,"webResearchIsolation":true}', 'utf8');
 
-    expect(store.get()).toEqual({ chatIdleTimeoutMinutes: 0, webResearchIsolation: true });
+    expect(store.get()).toEqual(settings(0, true));
   });
 });

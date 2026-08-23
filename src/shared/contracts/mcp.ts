@@ -19,12 +19,11 @@ export interface McpServerView {
 }
 
 export interface McpCatalogEntry {
-  config: Record<string, unknown>;
   description: string;
   featured: boolean;
   id: string;
+  installable: boolean;
   name: string;
-  officialUrl?: string;
   requiresCredential: boolean;
   transport: McpTransport;
 }

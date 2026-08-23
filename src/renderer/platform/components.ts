@@ -57,6 +57,12 @@ export const closeOpenSelect = (): void => {
  * The popup is `position: fixed`, so it escapes the scroll containers and dialogs it lives inside.
  */
 const positionListbox = (trigger: HTMLElement, listbox: HTMLElement): void => {
+  /*
+   * Clearing the clamp below lets the popup spring to its natural height for one measurement, and at
+   * that instant the browser sees a box with nothing to scroll and clamps `scrollTop` to 0. Re-apply
+   * it afterwards, or every re-measure silently throws the user back to the top of the list.
+   */
+  const scrollTop = listbox.scrollTop;
   // Measure with the constraint cleared, otherwise a previous open's clamp sticks.
   listbox.style.maxHeight = '';
   const triggerRect = trigger.getBoundingClientRect();
@@ -70,6 +76,7 @@ const positionListbox = (trigger: HTMLElement, listbox: HTMLElement): void => {
   const height = Math.min(natural, available);
 
   listbox.style.maxHeight = `${height}px`;
+  listbox.scrollTop = scrollTop;
   // Windows can paint a permanent scrollbar for `overflow-y: auto` even when all rows fit. Keep the
   // compact selection card visually quiet unless the measured options really exceed the viewport.
   listbox.dataset.scrollable = String(natural > available);
@@ -392,11 +399,21 @@ export const installSelectDismissHandlers = (): void => {
 
   window.addEventListener(
     'scroll',
-    () => {
+    (event) => {
       const controller = openController;
-      if (controller) {
-        repositionOrClose(controller);
+      if (!controller) {
+        return;
       }
+      /*
+       * `scroll` does not bubble, but it does capture, so this also fires when the popup scrolls
+       * itself — and re-measuring on the popup's own scroll is pointless work that used to fight the
+       * user for the scrollbar. Only an outside scroller can move the trigger.
+       */
+      const target = event.target;
+      if (target instanceof Node && controller.listbox.contains(target)) {
+        return;
+      }
+      repositionOrClose(controller);
     },
     true,
   );

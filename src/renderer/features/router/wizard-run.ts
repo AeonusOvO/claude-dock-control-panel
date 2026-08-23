@@ -78,7 +78,7 @@ export const createRouterWizardRunActions = (
             '正在读取当前接口的实时模型列表；这一步同时验证地址与密钥。',
             10,
           );
-          const discovery = await window.controlPanel.discoverClaudeProviderModels({
+          const discovery = await window.controlPanel.discoverClaudeProviderModels(status.id, {
             baseUrl: upstreamBaseUrl,
             credential: upstreamCredential,
           });

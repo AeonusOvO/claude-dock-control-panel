@@ -2,6 +2,7 @@ import { CHANNELS } from '../../shared/ipc/channels';
 import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
 import type {
   AdvancedSettings,
+  AppQuitDecisionResponse,
   AppSettingsView,
   ClaudeContextWindowMode,
   CloseBehavior,
@@ -68,6 +69,27 @@ const parseDiagnosticsQuery = (input: unknown): DiagnosticsQuery => {
   };
 };
 
+const parseQuitDecisionResponse = (input: unknown): AppQuitDecisionResponse | undefined => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const candidate = input as Record<string, unknown>;
+  if (
+    Object.keys(candidate).length !== 2 ||
+    typeof candidate.requestId !== 'string' ||
+    candidate.requestId.length === 0 ||
+    candidate.requestId.length > 100 ||
+    (candidate.decision !== true &&
+      candidate.decision !== false &&
+      candidate.decision !== 'minimize' &&
+      candidate.decision !== 'retry')
+  ) {
+    return undefined;
+  }
+  return {
+    decision: candidate.decision,
+    requestId: candidate.requestId,
+  };
+};
+
 export interface AppIpcDependencies {
   advancedSettingsStore: AdvancedSettingsStore;
   appPreferencesStore: AppPreferencesStore;
@@ -85,6 +107,64 @@ export interface AppIpcDependencies {
   workspace: TerminalWorkspace;
   workspaceStore: WorkspaceStore;
 }
+
+const registerQuitIpc = ({
+  beginControlledQuit,
+  guards: { validateSender },
+  hideMainWindowToTray,
+  state,
+}: Pick<
+  AppIpcDependencies,
+  'beginControlledQuit' | 'guards' | 'hideMainWindowToTray' | 'state'
+>): void => {
+  ipcMain.on(CHANNELS.APP_CONFIRM_QUIT, (event, input: unknown) => {
+    validateSender(event);
+    const response = parseQuitDecisionResponse(input);
+    const confirmation = state.quitConfirmation;
+    if (
+      !response ||
+      !confirmation ||
+      confirmation.owner !== 'renderer' ||
+      confirmation.id !== response.requestId ||
+      (confirmation.mode === 'ordinary' && response.decision === 'retry') ||
+      (confirmation.mode === 'residual' &&
+        (response.decision === false || response.decision === 'minimize'))
+    ) {
+      return;
+    }
+    if (state.quitConfirmationTimer) {
+      clearTimeout(state.quitConfirmationTimer);
+      state.quitConfirmationTimer = undefined;
+    }
+    state.quitConfirmation = undefined;
+    if (response.decision === 'retry') {
+      void beginControlledQuit(false);
+      return;
+    }
+    if (response.decision === 'minimize') {
+      hideMainWindowToTray();
+      return;
+    }
+    if (response.decision === true) {
+      void beginControlledQuit(confirmation.mode === 'residual');
+    }
+  });
+  ipcMain.on(CHANNELS.APP_QUIT_REQUEST_RECEIVED, (event, requestId: unknown) => {
+    validateSender(event);
+    const confirmation = state.quitConfirmation;
+    if (
+      typeof requestId !== 'string' ||
+      confirmation?.owner !== 'renderer' ||
+      confirmation.id !== requestId
+    ) {
+      return;
+    }
+    if (state.quitConfirmationTimer) {
+      clearTimeout(state.quitConfirmationTimer);
+      state.quitConfirmationTimer = undefined;
+    }
+  });
+};
 
 export const registerAppIpc = ({
   advancedSettingsStore,
@@ -130,12 +210,30 @@ export const registerAppIpc = ({
         : undefined;
     if (
       ![0, 5, 10, 30].includes(record?.chatIdleTimeoutMinutes ?? -1) ||
+      !record?.networkPreflight ||
+      typeof record.networkPreflight.checkOnNewSession !== 'boolean' ||
+      typeof record.networkPreflight.checkOnProviderLogin !== 'boolean' ||
+      (record.networkPreflight.cliTimezone !== undefined &&
+        typeof record.networkPreflight.cliTimezone !== 'string') ||
+      (record.networkPreflight.cliLanguages !== undefined &&
+        (!Array.isArray(record.networkPreflight.cliLanguages) ||
+          !record.networkPreflight.cliLanguages.every((item) => typeof item === 'string'))) ||
       typeof record?.webResearchIsolation !== 'boolean'
     ) {
       throw new Error('高级设置无效。');
     }
     advancedSettingsStore.set({
       chatIdleTimeoutMinutes: record.chatIdleTimeoutMinutes as 0 | 5 | 10 | 30,
+      networkPreflight: {
+        checkOnNewSession: record.networkPreflight.checkOnNewSession,
+        checkOnProviderLogin: record.networkPreflight.checkOnProviderLogin,
+        ...(record.networkPreflight.cliTimezone
+          ? { cliTimezone: record.networkPreflight.cliTimezone }
+          : {}),
+        ...(record.networkPreflight.cliLanguages
+          ? { cliLanguages: [...record.networkPreflight.cliLanguages] }
+          : {}),
+      },
       webResearchIsolation: record.webResearchIsolation,
     });
     return appSettingsView();
@@ -217,32 +315,11 @@ export const registerAppIpc = ({
     clipboard.writeText(text);
     return true;
   });
-  ipcMain.on(CHANNELS.APP_CONFIRM_QUIT, (event, confirmed: unknown) => {
-    validateSender(event);
-    if (state.quitConfirmationTimer) {
-      clearTimeout(state.quitConfirmationTimer);
-      state.quitConfirmationTimer = undefined;
-    }
-    state.quitConfirmationPending = false;
-    if (confirmed === 'retry' && state.quitResidualConfirmationPending) {
-      state.quitResidualConfirmationPending = false;
-      void beginControlledQuit(false);
-      return;
-    }
-    if (confirmed !== true) {
-      state.quitResidualConfirmationPending = false;
-      return;
-    }
-    const forceWithResidualProcesses = state.quitResidualConfirmationPending;
-    state.quitResidualConfirmationPending = false;
-    void beginControlledQuit(forceWithResidualProcesses);
-  });
-  ipcMain.on(CHANNELS.APP_QUIT_REQUEST_RECEIVED, (event) => {
-    validateSender(event);
-    if (state.quitConfirmationTimer) {
-      clearTimeout(state.quitConfirmationTimer);
-      state.quitConfirmationTimer = undefined;
-    }
+  registerQuitIpc({
+    beginControlledQuit,
+    guards: { validateSender },
+    hideMainWindowToTray,
+    state,
   });
   ipcMain.on(CHANNELS.APP_MINIMIZE_TO_TRAY, (event) => {
     validateSender(event);

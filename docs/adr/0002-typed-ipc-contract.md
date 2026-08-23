@@ -5,7 +5,7 @@
 
 ## 背景
 
-渲染进程需要 187 个能力：158 个请求响应、22 个事件订阅、6 个单向命令、1 个进程内调用。
+渲染进程当前需要 196 个能力：166 个请求响应、23 个事件订阅、6 个单向命令、1 个进程内调用。
 
 Electron 允许 preload 直接把 `ipcRenderer` 或一个通用 `invoke(channel, ...args)` 交给渲染端。这样加通道零成本，但渲染端能调用任意频道名，且没有任何一处能列出全部通道——频道名与载荷形状只存在于两侧的字面量里。
 
@@ -36,7 +36,7 @@ ipcMain.handle('namespace:action', async (event, argument: unknown) => {
 - 渲染端能调用的通道集合是封闭的，等于 `ControlPanelApi` 的成员集合。
 - 载荷形状由 TypeScript 检查，两侧不会静默分叉。
 - 全部通道可枚举，`docs/reference/ipc-contract.md` 是完整清单。
-- 代价：`ControlPanelApi` 是 187 个成员的单一接口。已拆成 19 个按域划分的子接口再组合，签名总数不变，`window.controlPanel` 运行期仍是一个扁平对象。
+- 代价：`ControlPanelApi` 是 196 个成员的单一接口。已拆成 20 个按域划分的子接口再组合，签名总数不变，`window.controlPanel` 运行期仍是一个扁平对象。
 - 代价：加通道要改四处。
 
 ## 备选方案

@@ -16,14 +16,14 @@
 
 ```
 renderer/
-  main.ts                  33 行：字体样式引入 + 组件套件安装 + new Registry + bootstrap
+  main.ts                  46 行：字体样式引入 + 组件套件/滚动链安装 + new Registry + bootstrap
   bootstrap.ts             523 行：DOM 环境、RuntimeState、ShellStack 装配
-  feature-registration.ts  678 行：14 个特性的注册与解析，按阶段分组
+  feature-registration.ts  719 行：15 个特性的注册与解析，按阶段分组
   runtime-types.ts         133 行：RuntimeState / ShellStack / FeatureBundle 三层类型
-  app-lifecycle.ts         371 行：生命周期钩子
-  platform/                11 个文件：注册表、组件套件、格式化、终端视图等与特性无关能力
-  shell/                   36 个文件 3,703 行：侧栏、底栏、工作区、对话框、toast、主题
-  features/                14 个特性 194 个文件 21,860 行
+  app-lifecycle.ts         354 行：生命周期钩子
+  platform/                14 个文件：注册表、组件套件、滚动链、格式化、终端视图等与特性无关能力
+  shell/                   37 个文件 3,612 行：侧栏、底栏、工作区、对话框、toast、主题
+  features/                15 个特性 196 个文件 21,575 行
 ```
 
 **注册式取代装配式**。每个特性的 `index.ts` 导出三件套：
@@ -49,23 +49,24 @@ export const registerTerminalFeature = (
 
 **五文件 + 子工厂模式**。特性内先按 ADR-0006 的五文件（elements/state/view/actions/index）划分；某族职责超过单文件可维护规模时，以主题前缀拆子工厂，母文件保留聚合与导出。实测形态：
 
-| 特性                | 文件数  | 子工厂前缀族                                                                                  |
-| ------------------- | ------- | --------------------------------------------------------------------------------------------- |
-| terminal            | 39      | `terminal-io-*`、`terminal-layout-*`、`terminal-views-*`、`project-state-*`、`codex-launch-*` |
-| connection          | 38      | `form-*`、`history-*`、`chatgpt-guide-*`、`connection-*`                                      |
-| chat / conversation | 21 / 21 | 各自按职责前缀                                                                                |
-| 其余 9 个特性       | 5–17    | 简单特性保持五文件不动                                                                        |
+| 特性                      | 文件数  | 子工厂前缀族                                                                                  |
+| ------------------------- | ------- | --------------------------------------------------------------------------------------------- |
+| terminal                  | 40      | `terminal-io-*`、`terminal-layout-*`、`terminal-views-*`、`project-state-*`、`codex-launch-*` |
+| connection                | 39      | `form-*`、`history-*`、`chatgpt-guide-*`、`connection-*`                                      |
+| chat / conversation       | 21 / 22 | 各自按职责前缀                                                                                |
+| claude-execution-settings | 2       | 全局设置中的独立惰性特性                                                                      |
+| 其余 10 个特性            | 5–17    | 简单特性保持五文件不动                                                                        |
 
 **跨特性依赖只经两条通道**：
 
 - `delegate`：先建 `{ current }` 引用盒，注册后回填——用于"A 需要 B 的一个回调，但 B 注册在 A 之后"的时序缺口。
 - `-dependencies.ts` 文件：消费方声明自己需要的最小鸭子类型接口（如 terminal 对 connection 表单只声明 `ConnectionFormLike` 的 10 个成员），装配处传入完整实例，结构类型兼容。消费方不 import 提供方的完整类型。
 
-依赖方向由 dependency-cruiser 强制：`features/<name>/` 不得 import 其他特性（14 条按目录动态生成的 error 规则），跨特性协作只能经 `shell/` 编排或 `platform/` 共享层。
+依赖方向由 dependency-cruiser 强制：`features/<name>/` 不得 import 其他特性（15 条按目录动态生成的 error 规则），跨特性协作只能经 `shell/` 编排或 `platform/` 共享层。
 
 ## 结果
 
-- `main.ts` 从 15,886 行（HEAD `6ca456e` 基线实测，ADR-0006 时点为 15,181）降到 33 行；渲染端没有一个文件超过 `max-lines` 限制，114 个以上的子工厂文件全部在限制内。
+- `main.ts` 从 15,886 行（HEAD `6ca456e` 基线实测，ADR-0006 时点为 15,181）降到 46 行；渲染端没有一个文件超过 `max-lines` 限制，子工厂文件全部在限制内。
 - 特性边界可机检：特性间 import 违规、孤儿文件、循环依赖全部是 `lint:deps` 的 error。
 - 行为测试的前置条件在特性粒度上成立（见 [ADR-0009](0009-behavioral-tests-replace-source-pins.md)）。
 - 代价：理解一条跨特性数据流需要跨 `feature-registration.ts` 的阶段分组与两个特性的依赖接口，比单一作用域的全文搜索多两跳。

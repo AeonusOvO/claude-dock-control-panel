@@ -899,7 +899,7 @@
               </select>
             </label>
             <div class="plugin-toolbar__actions">
-              <button id="mcp-refresh" type="button">检查更新</button>
+              <button id="mcp-refresh" type="button">刷新目录</button>
             </div>
           </div>
           <p class="plugin-status" id="mcp-status">请选择一个项目以发现 MCP。</p>
@@ -971,6 +971,15 @@
           </div>
           <div class="terminal-toolbar__actions">
             <div class="toolbar-group toolbar-group--labeled">
+              <button
+                class="toolbar-menu-button network-preflight-trigger"
+                id="network-preflight-trigger"
+                type="button"
+                title="检查 IP、DNS 与地区环境"
+              >
+                <span class="network-preflight-trigger__pulse" aria-hidden="true"></span>
+                <span class="toolbar-menu-button__label">网络预检</span>
+              </button>
               <button
                 class="toolbar-menu-button"
                 id="workbench-trigger"
@@ -1192,8 +1201,10 @@
           </div>
           <div
             class="terminal-footer__secondary terminal-footer__group terminal-footer__group--secondary"
-            id="footer-secondary-status"
+            id="footer-session-settings-region"
             data-open="false"
+            role="group"
+            aria-label="会话设置"
           >
             <button
               class="status-chip"
@@ -1239,14 +1250,17 @@
           <div class="terminal-footer__group terminal-footer__group--status">
             <span class="status-chip" id="footer-status">后台待命</span>
             <button
-              class="terminal-footer__more status-chip"
-              id="footer-more"
+              class="terminal-footer__session-settings status-chip"
+              id="footer-session-settings"
               type="button"
-              aria-controls="footer-secondary-status"
+              aria-controls="footer-session-settings-region"
               aria-expanded="false"
-              aria-haspopup="true"
+              title="展开会话设置"
             >
-              <span>更多状态</span><span aria-hidden="true">4</span>
+              <span>会话设置</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 9 5 5 5-5" />
+              </svg>
             </button>
           </div>
         </footer>
@@ -2247,11 +2261,27 @@
             </button>
             <button
               class="settings-tab"
+              data-settings-tab="network"
+              type="button"
+              aria-selected="false"
+            >
+              网络
+            </button>
+            <button
+              class="settings-tab"
               data-settings-tab="advanced"
               type="button"
               aria-selected="false"
             >
               高级设置
+            </button>
+            <button
+              class="settings-tab"
+              data-settings-tab="claude-execution"
+              type="button"
+              aria-selected="false"
+            >
+              Claude 执行
             </button>
             <button
               class="settings-tab"
@@ -2330,6 +2360,56 @@
                 <output id="settings-version">—</output>
               </div>
             </section>
+            <section class="settings-panel network-settings" data-settings-panel="network">
+              <div class="settings-section-heading network-settings__heading">
+                <span>
+                  <strong>网络预检</strong>
+                  <small
+                    >评估官方端点、IP 情报、DNS 出口信号与时区；Windows 系统语言只作参考。</small
+                  >
+                </span>
+                <button class="dialog-primary" id="settings-network-recheck" type="button">
+                  重新检测
+                </button>
+              </div>
+              <div
+                class="network-settings__status"
+                id="settings-network-status"
+                data-tone="unknown"
+              >
+                <strong id="settings-network-summary">尚无检测结果</strong>
+                <span id="settings-network-meta">打开此页面后会读取当前状态。</span>
+              </div>
+              <p class="settings-help">
+                IP 风险情报和地区一致性只用于提示，不保证账号不会受限；DNS
+                出口在缺少服务端关联证据时会明确显示“无法证明”。
+              </p>
+              <label class="settings-row" for="settings-network-new-session">
+                <span>
+                  <strong>每次新建会话时检测</strong>
+                  <small>在 Claude / Codex CLI 启动与首个请求前执行；默认开启。</small>
+                </span>
+                <input id="settings-network-new-session" type="checkbox" checked />
+              </label>
+              <label class="settings-row" for="settings-network-provider-login">
+                <span>
+                  <strong>每次登录海外服务时检测</strong>
+                  <small>在 ChatGPT、Claude 官方登录或切换账号前执行；默认开启。</small>
+                </span>
+                <input id="settings-network-provider-login" type="checkbox" checked />
+              </label>
+              <div class="settings-section-heading">
+                <strong>出口与本机环境</strong>
+                <span>地址只展示脱敏前缀，完整公网 IP 不写入设置或诊断历史。</span>
+              </div>
+              <div class="network-settings__facts" id="settings-network-facts"></div>
+              <div class="network-settings__issues" id="settings-network-issues"></div>
+              <p class="settings-help" id="settings-network-repair-note">
+                “修改”只影响之后由 ClaudeDock 启动的 CLI 进程，不修改 Windows
+                时区、DNS、代理或网卡；正在运行的会话需要重开后生效。Windows
+                系统语言始终只读，不会由预检修改。
+              </p>
+            </section>
             <section class="settings-panel" data-settings-panel="advanced">
               <div class="settings-section-heading">
                 <strong>对话与中转站兼容</strong>
@@ -2397,6 +2477,13 @@
                 两个后台都只绑定本机地址。ChatGPT 网关面板需要管理密钥；打开时 ClaudeDock
                 会把密钥复制到剪贴板，不会在 ClaudeDock 页面中显示明文。
               </p>
+            </section>
+            <section
+              class="settings-panel"
+              data-settings-panel="claude-execution"
+              aria-label="Claude 执行"
+            >
+              <div id="claude-execution-settings-root" aria-live="polite"></div>
             </section>
             <section class="settings-panel" data-settings-panel="connection">
               <p class="connection-advanced-dialog__notice">
@@ -2782,6 +2869,49 @@
     </dialog>
 
     <dialog
+      class="confirmation-dialog claude-launch-preflight-dialog popover"
+      id="claude-launch-preflight-dialog"
+      aria-labelledby="claude-launch-preflight-title"
+      aria-describedby="claude-launch-preflight-meta"
+    >
+      <form>
+        <header>
+          <span class="step-kicker">Claude 启动已暂停</span>
+          <strong id="claude-launch-preflight-title">连接前需要你确认</strong>
+        </header>
+        <section class="claude-launch-preflight-dialog__summary" aria-live="polite">
+          <strong id="claude-launch-preflight-summary">网络检查未通过</strong>
+          <p id="claude-launch-preflight-meta"></p>
+        </section>
+        <details id="claude-launch-preflight-details">
+          <summary>查看详情</summary>
+          <div class="claude-launch-preflight-dialog__details">
+            <section>
+              <h3>检查项</h3>
+              <ul id="claude-launch-preflight-failed-items"></ul>
+            </section>
+            <section>
+              <h3>判断依据</h3>
+              <ul id="claude-launch-preflight-reasons"></ul>
+            </section>
+          </div>
+        </details>
+        <footer>
+          <button id="claude-launch-preflight-cancel" type="button">我再看看</button>
+          <button
+            autofocus
+            class="dialog-primary"
+            id="claude-launch-preflight-recheck"
+            type="button"
+          >
+            检查网络
+          </button>
+          <button id="claude-launch-preflight-bypass" type="button">坚持连接</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
       class="confirmation-dialog popover"
       id="confirmation-dialog"
       aria-labelledby="confirmation-dialog-title"
@@ -2856,6 +2986,10 @@
           <section>
             <h3>进程网络路径</h3>
             <ul id="network-preflight-paths"></ul>
+          </section>
+          <section>
+            <h3>出口与环境</h3>
+            <div class="network-preflight-environment" id="network-preflight-environment"></div>
           </section>
         </div>
         <section>

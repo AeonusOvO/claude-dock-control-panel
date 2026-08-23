@@ -1,4 +1,8 @@
-import type { ClaudePluginCatalog, SoftwareUpdateState } from '../contracts';
+import type {
+  ApplicationUpdaterState,
+  ClaudePluginCatalog,
+  SoftwareUpdateState,
+} from '../contracts';
 
 export type SoftwareUpdateAction = 'hidden' | 'install' | 'update';
 
@@ -29,14 +33,21 @@ const softwareAction = (
 export const deriveUpdateActionState = (
   software: SoftwareUpdateState | undefined,
   plugins: ClaudePluginCatalog | undefined,
-): UpdateActionState => ({
-  application: software?.application.updateAvailable ?? false,
-  claudeCode: softwareAction(software?.claudeCode),
-  plugins: (plugins?.updatesAvailable ?? 0) > 0,
-  router: softwareAction(software?.router),
-  totalAvailable:
-    Number(software?.application.updateAvailable ?? false) +
-    Number(software?.claudeCode.updateAvailable ?? false) +
-    Number(software?.router.updateAvailable ?? false) +
-    (plugins?.updatesAvailable ?? 0),
-});
+  applicationUpdater?: ApplicationUpdaterState,
+): UpdateActionState => {
+  const application =
+    applicationUpdater?.phase === 'available' ||
+    applicationUpdater?.phase === 'downloading' ||
+    applicationUpdater?.phase === 'downloaded';
+  return {
+    application,
+    claudeCode: softwareAction(software?.claudeCode),
+    plugins: (plugins?.updatesAvailable ?? 0) > 0,
+    router: softwareAction(software?.router),
+    totalAvailable:
+      Number(application) +
+      Number(software?.claudeCode.updateAvailable ?? false) +
+      Number(software?.router.updateAvailable ?? false) +
+      (plugins?.updatesAvailable ?? 0),
+  };
+};

@@ -1,8 +1,13 @@
 import type {
   ClaudeLaunchMode,
+  ClaudeLaunchOutcome,
+  ClaudeLaunchPreflightDecisionOutcome,
   ClaudeRelaunchInput,
   TerminalStatus,
+  WorkspaceState,
 } from '../../../shared/contracts';
+import type { ClaudeLaunchAttemptToken } from '../../platform/claude-launch-attempt';
+import { ClaudeLaunchPreflightDecisionController } from '../../platform/claude-launch-preflight-decision';
 import { createRegistryToken, type Registry } from '../../platform/registry';
 import { createTerminalActions, type TerminalActionsDependencies } from './actions';
 import { createTerminalElements } from './elements';
@@ -11,10 +16,13 @@ import { createTerminalLayout, type TerminalLayoutDependencies } from './termina
 import { createTerminalViews, type TerminalViewsDependencies } from './terminal-views';
 import { createTerminalState, type TerminalView } from './state';
 
-export type TerminalFeatureDependencies = Omit<TerminalIoDependencies, 'focusComposer'> &
+export type TerminalFeatureDependencies = Omit<
+  TerminalIoDependencies,
+  'focusComposer' | 'resolveClaudeLaunchDecision'
+> &
   TerminalViewsDependencies &
   TerminalLayoutDependencies &
-  TerminalActionsDependencies;
+  Omit<TerminalActionsDependencies, 'resolveClaudeLaunchDecision'>;
 
 export interface TerminalFeature {
   beginTerminalMask: (sessionId: string, label: string) => () => void;
@@ -41,6 +49,11 @@ export interface TerminalFeature {
     summary: string,
     input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
   ) => Promise<void>;
+  reconcileClaudeLaunchDecision: (workspace: WorkspaceState) => void;
+  resolveClaudeLaunchDecision: (
+    token: ClaudeLaunchAttemptToken,
+    paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,
+  ) => Promise<Exclude<ClaudeLaunchPreflightDecisionOutcome, { status: 'paused' }>>;
   requestComposerFocus: (sessionId?: string) => void;
   resizeComposer: () => void;
   retryTerminalFitUntilMeasured: () => void;
@@ -55,22 +68,43 @@ export const TERMINAL_FEATURE = createRegistryToken<TerminalFeature>('renderer.f
 const createTerminalFeature = (dependencies: TerminalFeatureDependencies): TerminalFeature => {
   const elements = createTerminalElements();
   const state = createTerminalState();
+  const launchDecisionController = new ClaudeLaunchPreflightDecisionController({
+    launchAttempts: dependencies.claudeLaunchAttempts,
+    refreshLaunchControls: dependencies.refreshClaudeLaunchControls,
+  });
+  const decisionAwareDependencies = {
+    ...dependencies,
+    resolveClaudeLaunchDecision: (
+      token: Parameters<typeof launchDecisionController.present>[0],
+      paused: Parameters<typeof launchDecisionController.present>[1],
+    ) => launchDecisionController.present(token, paused),
+  };
 
   const io = createTerminalIo(state, elements, {
-    ...dependencies,
+    ...decisionAwareDependencies,
     focusComposer: () => layout.focusComposer(),
   });
 
-  const views = createTerminalViews(state, elements, dependencies, io);
+  const views = createTerminalViews(state, elements, decisionAwareDependencies, io);
 
-  const layout = createTerminalLayout(state, elements, dependencies, io, views);
+  const layout = createTerminalLayout(state, elements, decisionAwareDependencies, io, views);
 
-  const actions = createTerminalActions(state, elements, dependencies, io, views, layout);
+  const actions = createTerminalActions(
+    state,
+    elements,
+    decisionAwareDependencies,
+    io,
+    views,
+    layout,
+  );
 
   return {
     beginTerminalMask: io.beginTerminalMask,
     cancelActiveResizes: layout.cancelActiveResizes,
-    dispose: actions.dispose,
+    dispose: () => {
+      launchDecisionController.dispose();
+      actions.dispose();
+    },
     disposeTerminalView: views.disposeTerminalView,
     ensureTerminalView: views.ensureTerminalView,
     flushPendingComposerFocus: layout.flushPendingComposerFocus,
@@ -87,6 +121,9 @@ const createTerminalFeature = (dependencies: TerminalFeatureDependencies): Termi
     panelResizer: elements.panelResizer,
     playSendAnimation: layout.playSendAnimation,
     relaunchClaudeSession: io.relaunchClaudeSession,
+    reconcileClaudeLaunchDecision: (workspace) =>
+      launchDecisionController.reconcileWorkspace(workspace),
+    resolveClaudeLaunchDecision: (token, paused) => launchDecisionController.present(token, paused),
     requestComposerFocus: layout.requestComposerFocus,
     resizeComposer: layout.resizeComposer,
     retryTerminalFitUntilMeasured: views.retryTerminalFitUntilMeasured,

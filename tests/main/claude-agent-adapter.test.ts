@@ -1,10 +1,11 @@
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildClaudeAgentProcessEnvironment,
   ClaudeAgentAdapter,
   claudeAgentExecutableFromCommand,
 } from '../../src/main/claude/agent-adapter';
+import type { SdkQueryFactory } from '../../src/main/claude/agent-adapter-bootstrap';
 import { reduceConversationEvent } from '../../src/shared/conversation/reducer';
 import type {
   ConversationEvent,
@@ -104,6 +105,16 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
   }
 }
 
+const deferred = <T>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+};
+
 const startInput = {
   conversationId: '11111111-1111-4111-8111-111111111111',
   model: 'claude-opus-4-6',
@@ -161,6 +172,65 @@ describe('Claude Agent SDK adapter', () => {
       CLAUDE_CODE_ATTRIBUTION_HEADER: null,
     });
     expect(matchingKeys(official)).toEqual([]);
+  });
+
+  it('cancels a pending start before a delayed SDK factory can create a query', async () => {
+    const factory = deferred<SdkQueryFactory>();
+    const query = new FakeSdkQuery();
+    const events: ConversationEvent[] = [];
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.13',
+      queryFactory: () => factory.promise,
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    adapter.subscribe((event) => events.push(event));
+
+    const starting = adapter.start(startInput);
+    await adapter.close(startInput.conversationId);
+    factory.resolve(() => query);
+
+    await expect(starting).rejects.toThrow('Claude 原生会话启动已取消。');
+    expect(query.closed).toBe(false);
+    expect(events).toEqual([]);
+    await expect(adapter.listCommands(startInput.conversationId)).rejects.toThrow(
+      'Claude 原生会话不存在。',
+    );
+  });
+
+  it('does not publish delayed initialization or close a newer exact replacement', async () => {
+    const firstInitialization = deferred<unknown>();
+    const firstQuery = new FakeSdkQuery();
+    firstQuery.initializationResult = () => firstInitialization.promise;
+    const secondQuery = new FakeSdkQuery();
+    const queries = [firstQuery, secondQuery];
+    const events: ConversationEvent[] = [];
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.13',
+      queryFactory: async () => {
+        const query = queries.shift();
+        if (!query) throw new Error('Unexpected adapter start.');
+        return () => query;
+      },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    adapter.subscribe((event) => events.push(event));
+
+    const firstStart = adapter.start(startInput);
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.type === 'conversation.started')).toBe(true);
+    });
+    await adapter.close(startInput.conversationId);
+    await adapter.start(startInput);
+    const replacementEventCount = events.length;
+
+    firstInitialization.resolve({ commands: [{ name: 'stale-command' }] });
+    await expect(firstStart).rejects.toThrow('Claude 原生会话启动已取消。');
+
+    expect(firstQuery.closed).toBe(true);
+    expect(secondQuery.closed).toBe(false);
+    expect(events).toHaveLength(replacementEventCount);
+    await expect(adapter.listCommands(startInput.conversationId)).resolves.not.toEqual([]);
+    await adapter.close(startInput.conversationId);
   });
 
   it('passes launch-scoped settings above user and project settings', async () => {

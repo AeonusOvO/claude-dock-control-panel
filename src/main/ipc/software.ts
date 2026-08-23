@@ -70,9 +70,10 @@ export const registerSoftwareIpc = ({
       }
     },
   );
-  ipcMain.handle(CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET, (event) => {
+  ipcMain.handle(CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET, (event, refresh: unknown) => {
     validateSender(event);
-    return services.resolve(APPLICATION_UPDATER_SERVICE).getState();
+    const applicationUpdater = services.resolve(APPLICATION_UPDATER_SERVICE);
+    return refresh === true ? applicationUpdater.check() : applicationUpdater.getState();
   });
   ipcMain.handle(CHANNELS.SOFTWARE_APPLICATION_UPDATER_DOWNLOAD, async (event) => {
     validateSender(event);

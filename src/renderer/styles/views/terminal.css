@@ -457,9 +457,12 @@
   width: min(920px, calc(100vw - var(--s-8)));
 }
 
+/*
+ * Inherits colour and blur from the canonical `dialog::backdrop` scrim; this rule only adds the fade,
+ * which is unique to the plan dialog. It used to mix its own scrim from `--text-hi`, which resolved
+ * to a *white* 55% wash in the dark themes and blew out the whole shell behind it.
+ */
 .native-plan-dialog::backdrop {
-  background: color-mix(in srgb, var(--text-hi) 55%, transparent);
-  backdrop-filter: blur(var(--mask-blur));
   opacity: 0;
   transition: opacity var(--dur-exit) var(--ease-exit);
 }
@@ -1537,10 +1540,6 @@ html[data-compact-viewport='true'] .terminal-title > span {
   width: min(500px, calc(100vw - 48px));
 }
 
-.claude-permission-dialog::backdrop {
-  background: rgb(0 0 0 / 46%);
-  backdrop-filter: blur(var(--mask-blur));
-}
 .claude-permission-dialog form {
   display: grid;
   gap: var(--s-4);
@@ -2448,31 +2447,110 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   color: var(--text-dim);
 }
 
-.terminal-footer__more {
+.terminal-footer__session-settings {
   align-items: center;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--text-lo);
   cursor: pointer;
-  display: none;
+  display: inline-flex;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
   font: inherit;
-  gap: var(--s-2);
+  gap: var(--s-1-5);
   min-height: var(--control-h-sm);
-  padding: 0 var(--s-3);
+  padding: 0;
+  pointer-events: none;
+  transform: translateY(5px) scale(0.96);
+  transition:
+    max-width var(--dur-3) var(--ease-decel),
+    opacity var(--dur-2) var(--ease-standard),
+    padding var(--dur-3) var(--ease-decel),
+    transform var(--dur-3) var(--ease-decel),
+    visibility var(--dur-zero) linear var(--dur-3);
+  visibility: hidden;
+  white-space: nowrap;
 }
 
-.terminal-footer__more > span:last-child {
-  align-items: center;
-  background: var(--accent-tint);
-  border-radius: var(--r-pill);
-  color: var(--accent-text);
-  display: inline-flex;
-  font-size: var(--type-micro-size);
-  justify-content: center;
-  margin-left: 0;
-  min-width: 17px;
-  padding-inline: var(--s-1);
+.terminal-footer[data-session-settings-overflow='true'] .terminal-footer__session-settings {
+  max-width: 150px;
+  opacity: 1;
+  padding: 0 var(--s-2-5) 0 var(--s-3);
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition-delay: var(--dur-zero);
+  visibility: visible;
+}
+
+.terminal-footer[data-session-settings-overflow='true']
+  .terminal-footer__group--status
+  > #footer-status {
+  display: none;
+}
+
+.terminal-footer[data-session-settings-overflow='true'] .terminal-footer__secondary {
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  bottom: calc(100% + var(--s-2));
+  box-shadow: var(--shadow-overlay);
+  display: grid;
+  gap: var(--s-1);
+  min-width: 230px;
+  opacity: 0;
+  padding: var(--s-2);
+  pointer-events: none;
+  position: absolute;
+  right: var(--s-3);
+  transform: translateY(var(--s-2));
+  transition:
+    opacity var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-standard),
+    visibility var(--dur-zero) linear var(--dur-2);
+  visibility: hidden;
+  z-index: 30;
+}
+
+.terminal-footer[data-session-settings-overflow='true']
+  .terminal-footer__secondary[data-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: var(--dur-zero);
+  visibility: visible;
+}
+
+.terminal-footer[data-session-settings-overflow='true'] .terminal-footer__secondary > button {
+  justify-content: flex-start;
+  margin: 0;
+  min-height: var(--control-h-sm);
+  padding-inline: var(--s-3);
+  width: 100%;
+}
+
+.terminal-footer__session-settings:hover,
+.terminal-footer__session-settings:focus-visible,
+.terminal-footer__session-settings[aria-expanded='true'] {
+  background: var(--layer-hover);
+  border-color: var(--line-hover);
+  color: var(--text);
+}
+
+.terminal-footer__session-settings svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform var(--dur-2) var(--ease-standard);
+  width: 14px;
+}
+
+.terminal-footer__session-settings[aria-expanded='true'] svg {
+  transform: rotate(180deg);
 }
 
 #footer-connection {
@@ -2541,6 +2619,35 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   justify-content: space-between;
   margin: var(--s-3) var(--s-4) 0;
   padding: var(--s-2-5) var(--s-3);
+}
+
+.network-preflight-trigger {
+  gap: var(--s-2);
+}
+
+.network-preflight-trigger__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok-text);
+  box-shadow: 0 0 0 3px var(--ok-tint);
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+
+.network-preflight-trigger[data-tone='warning'] .network-preflight-trigger__pulse {
+  background: var(--warn-text);
+  box-shadow: 0 0 0 3px var(--warn-tint);
+}
+
+.network-preflight-trigger[data-tone='error'] .network-preflight-trigger__pulse {
+  background: var(--bad-text);
+  box-shadow: 0 0 0 3px var(--bad-tint);
+}
+
+.network-preflight-trigger[data-tone='pending'] .network-preflight-trigger__pulse {
+  animation: status-pulse var(--dur-status-pulse) ease-out infinite;
 }
 
 .network-preflight-card__status {
@@ -2633,11 +2740,6 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   width: 880px;
 }
 
-.network-preflight-dialog::backdrop {
-  background: rgb(0 0 0 / 62%);
-  backdrop-filter: blur(4px);
-}
-
 .network-preflight-dialog > form {
   display: grid;
   gap: var(--s-4);
@@ -2695,6 +2797,18 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   display: grid;
   gap: var(--s-4);
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.network-preflight-environment {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.network-preflight-environment p {
+  color: var(--text-lo);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-note);
+  margin: 0;
 }
 
 .network-preflight-dialog h3 {

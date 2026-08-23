@@ -8,7 +8,7 @@ export type McpFeatureDependencies = McpActionsDependencies;
 
 export interface McpFeature {
   dispose: () => void;
-  loadCatalog: (refresh: boolean) => Promise<void>;
+  loadCatalog: (refreshRegistry: boolean) => Promise<void>;
 }
 
 export const MCP_FEATURE = createRegistryToken<McpFeature>('renderer.feature.mcp');

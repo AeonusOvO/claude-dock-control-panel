@@ -26,19 +26,25 @@ export interface BusyLease {
   readonly target?: string;
 }
 
+export type AppQuitRequestId = string;
+
 export interface AppQuitRequest {
   hasBlocking: boolean;
   leases: BusyLease[];
+  /** Main-issued equality token that makes acknowledgements and decisions one-shot. */
+  requestId: AppQuitRequestId;
   /** Cleanup could not prove that every verified PTY descendant stopped; only retry/force are safe. */
   runtimeCleanupFailed?: boolean;
 }
 
-export type AppQuitDecision = boolean | 'retry';
+export type AppQuitDecision = boolean | 'minimize' | 'retry';
 
-/**
- * Opt-in workarounds for relay-side protocol quirks. Every switch is off by default: a relay that
- * behaves correctly must not carry the cost of a fix it does not need.
- */
+export interface AppQuitDecisionResponse {
+  decision: AppQuitDecision;
+  requestId: AppQuitRequestId;
+}
+
+/** Global advanced preferences: opt-in relay workarounds plus default-on network safety checks. */
 export interface AdvancedSettings {
   /** Zero leaves slow conversations running until the user stops them. */
   chatIdleTimeoutMinutes: ChatIdleTimeoutMinutes;
@@ -47,6 +53,17 @@ export interface AdvancedSettings {
    * Turn this on when the relay refuses web search once the model is raised to high effort.
    */
   webResearchIsolation: boolean;
+  /** Advisory environment checks; official endpoint guards remain independent of these switches. */
+  networkPreflight: NetworkPreflightPreferences;
+}
+
+export interface NetworkPreflightPreferences {
+  checkOnNewSession: boolean;
+  checkOnProviderLogin: boolean;
+  /** IANA timezone injected into future ClaudeDock-owned CLI processes; never changes Windows. */
+  cliTimezone?: string;
+  /** BCP-47 languages used by future ClaudeDock-owned requests/processes; never changes Windows. */
+  cliLanguages?: string[];
 }
 
 export type FooterResourcePreference = 'auto' | 'context' | 'quota';

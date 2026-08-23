@@ -31,52 +31,6 @@
   .activity-rail__button span:not(.activity-rail__dot) {
     display: none;
   }
-  .terminal-footer__more {
-    display: inline-flex;
-  }
-
-  .terminal-footer__group--status > #footer-status {
-    display: none;
-  }
-
-  .terminal-footer__secondary {
-    background: var(--surface-2);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-lg);
-    bottom: calc(100% + var(--s-2));
-    box-shadow: var(--shadow-overlay);
-    display: grid;
-    gap: var(--s-1);
-    min-width: 230px;
-    opacity: 0;
-    padding: var(--s-2);
-    pointer-events: none;
-    position: absolute;
-    right: var(--s-3);
-    transform: translateY(var(--s-2));
-    transition:
-      opacity var(--dur-2) var(--ease-standard),
-      transform var(--dur-2) var(--ease-standard),
-      visibility var(--dur-zero) linear var(--dur-2);
-    visibility: hidden;
-    z-index: 30;
-  }
-
-  .terminal-footer__secondary[data-open='true'] {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-    transition-delay: var(--dur-zero);
-    visibility: visible;
-  }
-
-  .terminal-footer__secondary > button {
-    justify-content: flex-start;
-    margin: 0;
-    min-height: var(--control-h-sm);
-    padding-inline: var(--s-3);
-    width: 100%;
-  }
   .chat-toolbar__metrics {
     display: none;
   }
@@ -106,6 +60,17 @@
 
   .terminal-title strong {
     max-width: min(190px, 30vw);
+  }
+
+  .network-preflight-trigger {
+    flex: 0 0 var(--control-h-sm);
+    justify-content: center;
+    padding: 0;
+    width: var(--control-h-sm);
+  }
+
+  .network-preflight-trigger .toolbar-menu-button__label {
+    display: none;
   }
 
   .terminal-footer {
@@ -242,12 +207,23 @@
     border-bottom: 1px solid var(--line);
     border-right: 0;
     flex-direction: row;
+    overflow-x: auto;
     padding: var(--s-2);
   }
 
   .settings-tab {
-    flex: 1 1 0;
+    flex: 0 0 auto;
+    min-width: 96px;
     text-align: center;
+  }
+
+  .claude-execution-actions span {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .claude-execution-custom__tool-search {
+    grid-column: auto;
   }
 
   .settings-row {

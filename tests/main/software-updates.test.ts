@@ -28,9 +28,6 @@ describe('software update version comparison', () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       requested.push(url);
-      if (url.includes('api.github.com')) {
-        return new Response(JSON.stringify({ tag_name: 'v3.5.0' }), { status: 200 });
-      }
       if (url.includes('registry.npmmirror.com')) {
         return new Response(JSON.stringify({ version: '9.9.9' }), { status: 200 });
       }
@@ -49,13 +46,13 @@ describe('software update version comparison', () => {
       version: '1.0.0',
     } as ClaudeRouterManagementState;
 
-    const result = await checkSoftwareUpdates(installation, router, '3.4.0', fetchMock);
+    const result = await checkSoftwareUpdates(installation, router, fetchMock);
 
-    expect(result.application.latestVersion).toBe('3.5.0');
     expect(result.claudeCode.latestVersion).toBe('9.9.9');
     expect(result.router.latestVersion).toBe('9.9.9');
     expect(requested.some((url) => url.includes('registry.npmjs.org'))).toBe(true);
     expect(requested.some((url) => url.includes('registry.npmmirror.com'))).toBe(true);
+    expect(requested.some((url) => url.includes('api.github.com'))).toBe(false);
   });
 
   it('uses a small tarball sample to choose the faster compatible npm registry', async () => {

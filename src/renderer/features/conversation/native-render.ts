@@ -86,20 +86,23 @@ export const createNativeRenderActions = (
     renderNativeQueuedMessage();
     applyNativeComposerAction();
     const submitting = state.nativeConversationSubmissions.has(snapshot.conversationId);
+    const turnActive = snapshot.phase === 'running' || snapshot.phase === 'stopping';
     const baseDisabled =
       state.nativeConversationStartingSessionId === dependencies.getActiveSessionId() ||
-      submitting ||
+      (submitting && !turnActive) ||
       snapshot.phase === 'starting' ||
       snapshot.phase === 'stopped' ||
       snapshot.phase === 'failed';
-    // 'running' stays enabled on purpose: the same button now carries both legitimate intents —
-    // interrupt when the composer is empty, queue when it is not.
+    // A submit IPC keeps the provider route leased until the whole turn ends. Once the turn is visibly
+    // running, that pending promise must not disable stop or prevent the next composer value from
+    // being parked above the send row.
     elements.nativeSendButton.disabled =
       baseDisabled ||
       (elements.nativeSendButton.dataset.action === 'stop' && snapshot.phase === 'stopping');
     elements.nativeComposerInput.disabled =
       snapshot.phase === 'stopped' || snapshot.phase === 'failed';
-    elements.nativeAttachButton.disabled = submitting || !capability?.attachments.image;
+    elements.nativeAttachButton.disabled =
+      (submitting && !turnActive) || !capability?.attachments.image;
     // Only 'idle' may release the queue. 'requires-action' has a permission prompt open and sending
     // would jump the queue; 'failed'/'stopped' would resend into a dead session forever.
     if (
@@ -140,7 +143,8 @@ export const createNativeRenderActions = (
           context: nativeContextWindowTokens !== undefined,
           windows: false,
         },
-        checkedAt: Date.now(),
+        // Agent SDK snapshots do not expose a resource sample timestamp; this field is not presented.
+        checkedAt: 0,
         contextUsedPercent: nativeContextUsedPercent,
         contextUsedTokens: nativeInputTokens,
         contextWindowTokens: nativeContextWindowTokens,

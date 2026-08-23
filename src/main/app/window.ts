@@ -20,6 +20,7 @@ import { assetPath, preloadScriptPath, rendererEntryPath } from './paths';
 
 export interface WindowControllerDependencies {
   appPreferencesStore: AppPreferencesStore;
+  invalidateLaunchPreflightDecisions: () => void;
   /* Injected rather than imported: the quit handshake needs the window, so the edge runs both ways. */
   requestQuit: () => void;
   services: Registry;
@@ -37,6 +38,7 @@ export interface WindowController {
 
 export const createWindowController = ({
   appPreferencesStore,
+  invalidateLaunchPreflightDecisions,
   requestQuit,
   services,
   state,
@@ -60,6 +62,7 @@ export const createWindowController = ({
   };
 
   const hideMainWindowToTray = (): void => {
+    invalidateLaunchPreflightDecisions();
     services.resolve(MAIN_WINDOW).current?.hide();
     /*
      * Hiding to the tray must never surface as a crash dialog. The balloon and the "already told you"
@@ -129,8 +132,28 @@ export const createWindowController = ({
     mainWindowReference.current = mainWindow;
 
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    mainWindow.webContents.on(
+      'did-start-navigation',
+      (_event, _url, _isSameDocument, isMainFrame) => {
+        if (isMainFrame) invalidateLaunchPreflightDecisions();
+      },
+    );
+    mainWindow.webContents.once('destroyed', invalidateLaunchPreflightDecisions);
     mainWindow.webContents.on('render-process-gone', () => {
+      const quitConfirmationWasPending = state.quitConfirmation?.owner === 'renderer';
+      if (quitConfirmationWasPending) {
+        if (state.quitConfirmationTimer) {
+          clearTimeout(state.quitConfirmationTimer);
+          state.quitConfirmationTimer = undefined;
+        }
+        state.quitConfirmation = undefined;
+      }
+      invalidateLaunchPreflightDecisions();
       services.resolve(CLAUDE_PERMISSION_BRIDGE).fallbackPending();
+      if (quitConfirmationWasPending) {
+        const retryQuit = setImmediate(requestQuit);
+        retryQuit.unref();
+      }
     });
     /*
      * The OS is logging out or shutting down. Windows gives an app very little time here and kills it
@@ -138,13 +161,14 @@ export const createWindowController = ({
      * `before-quit` runs its teardown straight through instead of asking.
      */
     mainWindow.on('session-end', () => {
+      invalidateLaunchPreflightDecisions();
       services.resolve(DOWNLOAD_ENGINE).flushJournal();
       if (state.quitConfirmationTimer) {
         clearTimeout(state.quitConfirmationTimer);
         state.quitConfirmationTimer = undefined;
       }
       state.isQuitting = true;
-      state.quitConfirmationPending = false;
+      state.quitConfirmation = undefined;
     });
     mainWindow.webContents.on('will-navigate', (event, url) => {
       if (url !== services.resolve(MAIN_WINDOW).current?.webContents.getURL()) {
@@ -152,6 +176,7 @@ export const createWindowController = ({
       }
     });
     mainWindow.on('close', (event) => {
+      invalidateLaunchPreflightDecisions();
       if (state.isQuitting) {
         return;
       }
@@ -164,6 +189,7 @@ export const createWindowController = ({
       hideMainWindowToTray();
     });
     mainWindow.on('closed', () => {
+      invalidateLaunchPreflightDecisions();
       mainWindowReference.current = null;
     });
     mainWindow.once('ready-to-show', () => {

@@ -15,14 +15,28 @@ import {
 } from './elements';
 import { footerState } from './state';
 
+type FooterResourceUsage = ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'];
+
+interface FooterResourcePresentation {
+  availability: string;
+  claudeContextSource: boolean;
+  claudeContextStatus: string;
+  claudeContextWindowCustomDraftOpen: boolean;
+  claudeContextWindowCustomTokens: number | undefined;
+  claudeContextWindowMode: string;
+  contextWindowSelectable: boolean;
+  details: string[];
+  label: string;
+  level: 'danger' | 'normal' | 'warning';
+  managedChatGptContextWindowMode: string;
+  percent: number | undefined;
+  preference: string;
+  title: string;
+}
+
 export interface FooterMenusResourceActions {
-  renderClaudeContextWindowStatus: (
-    usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
-  ) => void;
-  renderFooterResource: (
-    usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
-    contextWindowSelectable?: boolean,
-  ) => void;
+  renderClaudeContextWindowStatus: (usage: FooterResourceUsage) => void;
+  renderFooterResource: (usage: FooterResourceUsage, contextWindowSelectable?: boolean) => void;
 }
 
 export const createFooterMenusResourceActions = (
@@ -35,48 +49,46 @@ export const createFooterMenusResourceActions = (
   const { syncManagedChatGptContextWindowSelection, syncClaudeContextWindowSelection } =
     contextWindowActions;
   const { requestedClaudeContextWindowTokens } = contextWindowActions;
+  let lastPresentationKey = '';
 
-  const renderClaudeContextWindowStatus = (
-    usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
-  ): void => {
+  const claudeContextWindowStatusText = (usage: FooterResourceUsage): string => {
     const requested = requestedClaudeContextWindowTokens();
     const source = usage?.source;
     const hasRuntimeReport = source === 'claude-statusline' || source === 'claude-agent-sdk';
     const lastReported = hasRuntimeReport ? usage?.contextWindowTokens : undefined;
     if (lastReported !== undefined && usage?.availability === 'stale') {
-      claudeContextWindowStatus.textContent =
-        requested === undefined
-          ? `自动模式；上次上报 ${formatTokenCount(lastReported)}，数据已过期，等待当前会话确认。`
-          : `已请求 ${formatTokenCount(requested)}；上次上报 ${formatTokenCount(lastReported)}，数据已过期，尚未确认当前会话。`;
-      return;
+      return requested === undefined
+        ? `自动模式；上次上报 ${formatTokenCount(lastReported)}，数据已过期，等待当前会话确认。`
+        : `已请求 ${formatTokenCount(requested)}；上次上报 ${formatTokenCount(lastReported)}，数据已过期，尚未确认当前会话。`;
     }
     const reported = usage?.availability === 'available' ? lastReported : undefined;
     if (reported !== undefined) {
       const reportedText = formatTokenCount(reported);
       if (requested === undefined) {
-        claudeContextWindowStatus.textContent = `自动模式；当前会话由 Claude Code 上报 ${reportedText}。`;
-      } else if (requested === reported) {
-        claudeContextWindowStatus.textContent = `已请求 ${formatTokenCount(requested)}；Claude Code 当前会话已采用。`;
-      } else {
-        claudeContextWindowStatus.textContent = `已请求 ${formatTokenCount(requested)}，当前会话上报 ${reportedText}；请重启会话，若仍不一致则当前模型未采用该档位。`;
+        return `自动模式；当前会话由 Claude Code 上报 ${reportedText}。`;
       }
-      return;
+      if (requested === reported) {
+        return `已请求 ${formatTokenCount(requested)}；Claude Code 当前会话已采用。`;
+      }
+      return `已请求 ${formatTokenCount(requested)}，当前会话上报 ${reportedText}；请重启会话，若仍不一致则当前模型未采用该档位。`;
     }
-    claudeContextWindowStatus.textContent =
-      requested === undefined
-        ? '自动模式；新会话将由 Claude Code 按模型判定。'
-        : `已请求 ${formatTokenCount(requested)}；等待新会话由 Claude Code 上报实际采用值。`;
+    return requested === undefined
+      ? '自动模式；新会话将由 Claude Code 按模型判定。'
+      : `已请求 ${formatTokenCount(requested)}；等待新会话由 Claude Code 上报实际采用值。`;
   };
 
-  const renderFooterResource = (
-    usage: ClaudeProjectState['resourceUsage'] | CodexProjectState['resourceUsage'],
-    contextWindowSelectable = false,
-  ): void => {
+  const renderClaudeContextWindowStatus = (usage: FooterResourceUsage): void => {
+    claudeContextWindowStatus.textContent = claudeContextWindowStatusText(usage);
+  };
+
+  const footerResourcePresentation = (
+    usage: FooterResourceUsage,
+    contextWindowSelectable: boolean,
+  ): FooterResourcePresentation => {
     const preference = footerState.footerResourcePreference;
     const context = usage?.contextUsedPercent;
     const window = usage?.windows?.[0];
     const balance = usage?.balance?.balances?.[0];
-    // Clamp all percentages to 0-100 range for display
     const clampedContext = clampPercentage(context);
     const clampedWindowPercent = clampPercentage(window?.usedPercent);
     const quotaText =
@@ -101,23 +113,7 @@ export const createFooterMenusResourceActions = (
                 percent: clampedWindowPercent ?? clampedContext,
                 text: quotaText ?? balanceText ?? contextText ?? '资源 —',
               };
-    footerContextLabel.textContent = selected.text;
-    footerContextRing.hidden = selected.percent === undefined;
-    const clampedPercent = clampPercentage(selected.percent) ?? 0;
-    footerContextRing.style.setProperty('--context-progress', `${clampedPercent}%`);
-    footerContextRing.dataset.level = anomaly
-      ? 'danger'
-      : selected.percent !== undefined && selected.percent >= 85
-        ? 'danger'
-        : selected.percent !== undefined && selected.percent >= 65
-          ? 'warning'
-          : 'normal';
-    footerResource.dataset.availability = usage?.availability ?? 'unavailable';
-    footerResource.title = anomaly
-      ? '状态行的输入计数与窗口用量不一致，不能据此判断端点容量'
-      : '点击查看上下文、订阅窗口、余额和显示偏好';
-    footerResourceDetails.replaceChildren();
-    const lines = [
+    const details = [
       anomaly
         ? `⚠ 计数异常：CLI 原始输入计数为 ${formatTokenCount(anomaly.reportedTokens)}，窗口用量按 ${formatTokenCount(anomaly.windowTokens)} 钳制；这只说明计数或配置不一致。`
         : undefined,
@@ -140,7 +136,55 @@ export const createFooterMenusResourceActions = (
       usage?.detail,
       usage ? `来源：${resourceSourceLabel(usage.source)}` : undefined,
     ].filter((line): line is string => Boolean(line));
-    for (const line of lines.length > 0 ? lines : ['尚无资源数据。']) {
+    const claudeContextSource =
+      usage?.source === 'claude-statusline' ||
+      usage?.source === 'claude-agent-sdk' ||
+      usage?.source === 'claude-configured-target';
+    return {
+      availability: usage?.availability ?? 'unavailable',
+      claudeContextSource,
+      claudeContextStatus: claudeContextWindowStatusText(usage),
+      claudeContextWindowCustomDraftOpen: footerState.claudeContextWindowCustomDraftOpen,
+      claudeContextWindowCustomTokens: footerState.claudeContextWindowCustomTokens,
+      claudeContextWindowMode: footerState.claudeContextWindowMode,
+      contextWindowSelectable,
+      details: details.length > 0 ? details : ['尚无资源数据。'],
+      label: selected.text,
+      level: anomaly
+        ? 'danger'
+        : selected.percent !== undefined && selected.percent >= 85
+          ? 'danger'
+          : selected.percent !== undefined && selected.percent >= 65
+            ? 'warning'
+            : 'normal',
+      managedChatGptContextWindowMode: footerState.managedChatGptContextWindowMode,
+      percent: selected.percent,
+      preference,
+      title: anomaly
+        ? '状态行的输入计数与窗口用量不一致，不能据此判断端点容量'
+        : '点击查看上下文、订阅窗口、余额和显示偏好',
+    };
+  };
+
+  const renderFooterResource = (
+    usage: FooterResourceUsage,
+    contextWindowSelectable = false,
+  ): void => {
+    const presentation = footerResourcePresentation(usage, contextWindowSelectable);
+    const presentationKey = JSON.stringify(presentation);
+    if (presentationKey === lastPresentationKey) return;
+
+    footerContextLabel.textContent = presentation.label;
+    footerContextRing.hidden = presentation.percent === undefined;
+    footerContextRing.style.setProperty(
+      '--context-progress',
+      `${clampPercentage(presentation.percent) ?? 0}%`,
+    );
+    footerContextRing.dataset.level = presentation.level;
+    footerResource.dataset.availability = presentation.availability;
+    footerResource.title = presentation.title;
+    footerResourceDetails.replaceChildren();
+    for (const line of presentation.details) {
       const paragraph = document.createElement('p');
       paragraph.textContent = line;
       footerResourceDetails.append(paragraph);
@@ -148,18 +192,19 @@ export const createFooterMenusResourceActions = (
     for (const button of footerResourceMenu.querySelectorAll<HTMLButtonElement>(
       '[data-resource-preference]',
     )) {
-      button.setAttribute('aria-checked', String(button.dataset.resourcePreference === preference));
+      button.setAttribute(
+        'aria-checked',
+        String(button.dataset.resourcePreference === presentation.preference),
+      );
     }
-    footerContextWindowOptions.hidden = !contextWindowSelectable;
+    footerContextWindowOptions.hidden = !presentation.contextWindowSelectable;
     syncManagedChatGptContextWindowSelection();
-    const claudeContextSource =
-      usage?.source === 'claude-statusline' ||
-      usage?.source === 'claude-agent-sdk' ||
-      usage?.source === 'claude-configured-target';
     // Managed ChatGPT owns its separate 272K / 1.05M profile; never show or apply both selectors.
-    claudeContextWindowOptions.hidden = contextWindowSelectable || !claudeContextSource;
+    claudeContextWindowOptions.hidden =
+      presentation.contextWindowSelectable || !presentation.claudeContextSource;
     syncClaudeContextWindowSelection();
-    renderClaudeContextWindowStatus(usage);
+    claudeContextWindowStatus.textContent = presentation.claudeContextStatus;
+    lastPresentationKey = presentationKey;
   };
 
   return {

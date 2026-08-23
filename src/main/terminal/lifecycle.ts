@@ -21,15 +21,23 @@ export interface FailedRuntimeLaunchCleanupDependencies {
 }
 
 export interface FailedRuntimeLaunchOwner {
+  abortPreparedLaunch?: (launchToken: object, expectedGeneration?: PtyGeneration) => boolean;
+  cleanupFailedLaunchGeneration?: (sessionId: string, expectedGeneration: PtyGeneration) => boolean;
   cleanupPreparedLaunch: (sessionId: string) => boolean;
   setInactive: (sessionId: string, expectedGeneration: PtyGeneration) => boolean;
 }
 
 /** A runtime that can claim the PTY a restart creates and write its launch command into it. */
 export interface TerminalRuntimeOwner extends FailedRuntimeLaunchOwner {
-  bindPty: (sessionId: string, ptyGeneration: PtyGeneration) => void;
+  bindPty: (sessionId: string, ptyGeneration: PtyGeneration, launchToken?: object) => void;
   writeTerminal: (sessionId: string, ptyGeneration: PtyGeneration, data: string) => boolean;
 }
+
+/** Scope one synchronous restart so its exact launch intent can own the resulting PTY edge. */
+export type WithExpectedPtyReplacement = (
+  predecessor: PtyGeneration,
+  restart: () => TerminalStatus,
+) => TerminalStatus;
 
 /**
  * Replaces a session's PowerShell and hands the new generation to `runtime`. Declared here so every
@@ -43,6 +51,8 @@ export type RestartRuntimeTerminal = (
   failureMessage: string,
   assertCurrent: () => void,
   ownGeneration: (ptyGeneration: PtyGeneration) => void,
+  launchToken?: object,
+  withExpectedPtyReplacement?: WithExpectedPtyReplacement,
 ) => TerminalStatus;
 
 /**
@@ -56,6 +66,10 @@ export type ResumeConversationInTerminal = (
   conversationId: string,
   failureMessage: string,
   assertCurrent: () => void,
+  launchAuthorization?: object,
+  assertPreparationCurrent?: () => void,
+  signal?: AbortSignal,
+  withExpectedPtyReplacement?: WithExpectedPtyReplacement,
 ) => Promise<PtyGeneration>;
 
 const TERMINAL_REPLACED_MESSAGE = '终端已被其他操作替换，这次控制请求已取消。';
@@ -158,7 +172,18 @@ export const cleanupFailedRuntimeLaunch = (
   runtime: FailedRuntimeLaunchOwner,
   sessionId: string,
   ownedGeneration?: PtyGeneration,
+  launchToken?: object,
 ): void => {
+  if (launchToken && runtime.abortPreparedLaunch) {
+    try {
+      if (ownedGeneration !== undefined && dependencies.hasSession(sessionId)) {
+        dependencies.stopIfGeneration(sessionId, ownedGeneration);
+      }
+    } finally {
+      runtime.abortPreparedLaunch(launchToken, ownedGeneration);
+    }
+    return;
+  }
   if (ownedGeneration === undefined) {
     runtime.cleanupPreparedLaunch(sessionId);
     return;
@@ -166,9 +191,10 @@ export const cleanupFailedRuntimeLaunch = (
   if (dependencies.hasSession(sessionId)) {
     dependencies.stopIfGeneration(sessionId, ownedGeneration);
   }
+  if (runtime.cleanupFailedLaunchGeneration?.(sessionId, ownedGeneration)) {
+    return;
+  }
   if (!runtime.setInactive(sessionId, ownedGeneration)) {
-    // Preparation clears the predecessor binding before the replacement PTY exists. If cancellation
-    // owns that predecessor generation, stop it above and then deactivate the still-unbound launch.
     runtime.cleanupPreparedLaunch(sessionId);
   }
 };

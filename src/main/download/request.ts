@@ -29,8 +29,12 @@ export interface DownloadSession {
     path: string;
     startTime?: number;
     urlChain: string[];
-  }) => void;
+  }) => Promise<void> | void;
   downloadURL: (url: string) => void;
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   on: (event: 'will-download', listener: (event: Event, item: DownloadItem) => void) => unknown;
+  removeListener?: (
+    event: 'will-download',
+    listener: (event: Event, item: DownloadItem) => void,
+  ) => unknown;
 }

@@ -18,13 +18,13 @@
 - `createRegistryToken<T>(description)` 产出带类型的 Symbol token。
 - `Registry.register(token, factory)` 注册工厂；`resolve(token)` 惰性求值并缓存单例；解析栈检测循环依赖并报出完整链。
 - 生命周期晚于启动的对象（主窗口、托盘）用 `ServiceReference<T>`（`{ current: T | null }`）封装：token 解析后立刻可取，`current` 在对象创建后写入。可空性从 19 个字段收敛为 2 个显式引用盒。
-- 主进程服务 token 共 22 个（`src/main/infra/service-tokens.ts`）；渲染端 14 个特性 token（各 `features/<name>/index.ts` 内定义，如 `DOWNLOADS_FEATURE`）。
+- 主进程服务 token 共 25 个（`src/main/infra/service-tokens.ts`）；渲染端 15 个特性 token（各 `features/<name>/index.ts` 内定义，如 `DOWNLOADS_FEATURE`）。
 
 **贡献点**（`src/main/infra/contributions.ts`）定义四类贡献，每类一个运行器：
 
 | 贡献类型 | 签名                          | 现有贡献数                    | 消费位置                                   |
 | -------- | ----------------------------- | ----------------------------- | ------------------------------------------ |
-| IPC 域   | `(deps) => void`              | 23                            | `ipc/index.ts` 经 `MAIN_IPC_CONTRIBUTIONS` |
+| IPC 域   | `(deps) => void`              | 24                            | `ipc/index.ts` 经 `MAIN_IPC_CONTRIBUTIONS` |
 | 启动     | `() => void \| Promise<void>` | `app/bootstrap.ts` 的贡献数组 | `runStartupContributions`                  |
 | 退出     | `() => void`                  | `app/lifecycle.ts` 的退出数组 | `runQuitContributions`                     |
 | 托盘菜单 | `(context) => Item[]`         | 6（项目/窗口/终端/分隔/退出） | `app/tray.ts` 的 `collectTrayMenuItems`    |

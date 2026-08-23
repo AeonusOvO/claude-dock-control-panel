@@ -1,5 +1,12 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
+const commonExcludes = [...configDefaults.exclude, '**/.claude/worktrees/**'];
+
+const electronMockIsolatedTests = [
+  'tests/main/claude-runtime-diagnostics.test.ts',
+  'tests/main/main-config-transaction-integration.test.ts',
+] as const;
+
 export default defineConfig({
   root: 'src/renderer',
   base: './',
@@ -18,7 +25,30 @@ export default defineConfig({
     strictPort: true,
   },
   test: {
-    exclude: [...configDefaults.exclude, '**/.claude/worktrees/**'],
     root: '.',
+    exclude: commonExcludes,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'parallel',
+          exclude: [...commonExcludes, ...electronMockIsolatedTests],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'claude-runtime-diagnostics',
+          include: [electronMockIsolatedTests[0]],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'main-config-transaction-integration',
+          include: [electronMockIsolatedTests[1]],
+        },
+      },
+    ],
   },
 });

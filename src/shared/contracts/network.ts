@@ -1,7 +1,10 @@
-export type NetworkProviderId = 'anthropic-claude' | 'openai-api' | 'openai-codex';
+export type NetworkProviderId =
+  'ai-services' | 'anthropic-claude' | 'openai-api' | 'openai-codex' | 'xai-grok';
 
 export type NetworkPreflightAction =
   'background' | 'cli-launch' | 'cloud-task' | 'first-request' | 'login' | 'provider-switch';
+
+export type NetworkPreflightScope = 'application' | 'conversation';
 
 export type NetworkPreflightStatus =
   | 'allowed'
@@ -60,10 +63,70 @@ export interface NetworkFeatureAccess {
   reason?: string;
 }
 
+export type NetworkEnvironmentIssueKind =
+  | 'direct-route-mismatch'
+  | 'dns-egress'
+  | 'evidence-incomplete'
+  | 'ip-hygiene'
+  | 'ipv6-egress'
+  | 'language-mismatch'
+  | 'timezone-mismatch';
+
+export interface NetworkEnvironmentCheck {
+  detail: string;
+  id:
+    | 'direct-route'
+    | 'dns-authoritative'
+    | 'exit-ip'
+    | 'ip-reputation'
+    | 'ipv6-route'
+    | 'language'
+    | 'timezone';
+  label: string;
+  source: string;
+  status: 'passed' | 'risk' | 'unknown';
+}
+
+export interface NetworkEnvironmentIssue {
+  detail: string;
+  kind: NetworkEnvironmentIssueKind;
+  severity: 'info' | 'warning' | 'high';
+  suggestedLanguages?: string[];
+  suggestedTimezone?: string;
+  title: string;
+}
+
+export interface NetworkEnvironmentAssessment {
+  checkedAt: number;
+  checks?: NetworkEnvironmentCheck[];
+  cliLanguages?: string[];
+  cliTimezone?: string;
+  dnsDetail: string;
+  dnsStatus: 'consistent' | 'review' | 'unknown';
+  exitAddressPrefix?: string;
+  exitCountryCode?: string;
+  exitCountryName?: string;
+  exitProvider?: string;
+  exitTimezone?: string;
+  evidenceStatus?: 'complete' | 'partial' | 'unavailable';
+  issues: NetworkEnvironmentIssue[];
+  localLanguage: string;
+  localTimezone: string;
+  riskLevel: 'high' | 'low' | 'medium' | 'unknown';
+  summary: string;
+}
+
 export interface NetworkPreflightResult {
+  action: NetworkPreflightAction;
   cacheExpiresAt?: number;
+  canonicalCwd?: string;
   checkedAt?: number;
+  configurationRevision: string;
   featureAccess: NetworkFeatureAccess[];
+  environment?: NetworkEnvironmentAssessment;
+  generation: number;
+  mainRunId: number;
+  networkScope: NetworkPreflightScope;
   paths: NetworkPathView[];
   probes: NetworkProbeResult[];
   provider: NetworkProviderId;
@@ -81,10 +144,22 @@ export interface NetworkPreflightRunInput {
   action: NetworkPreflightAction;
   cwd?: string;
   force?: boolean;
+  networkScope?: NetworkPreflightScope;
   provider: NetworkProviderId;
 }
 
+export type NetworkPreflightHistoryEntry = Omit<
+  NetworkPreflightResult,
+  'action' | 'canonicalCwd' | 'configurationRevision' | 'generation' | 'mainRunId' | 'networkScope'
+> &
+  Partial<
+    Pick<
+      NetworkPreflightResult,
+      'action' | 'configurationRevision' | 'generation' | 'mainRunId' | 'networkScope'
+    >
+  >;
+
 export interface NetworkPreflightHistoryView {
-  entries: NetworkPreflightResult[];
+  entries: NetworkPreflightHistoryEntry[];
   retentionDays: number;
 }

@@ -1,7 +1,11 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
-import type { NetworkPreflightHistoryView, NetworkPreflightResult } from '../../shared/contracts';
+import type {
+  NetworkPreflightHistoryEntry,
+  NetworkPreflightHistoryView,
+  NetworkPreflightResult,
+} from '../../shared/contracts';
 
 const RETENTION_DAYS = 7;
 const MAX_ENTRIES = 40;
@@ -35,26 +39,49 @@ const maskNetworkAddress = (value: string): string => {
   return '[REDACTED_ADDRESS]';
 };
 
-const sanitizeResult = (result: NetworkPreflightResult): NetworkPreflightResult => ({
-  ...result,
-  paths: result.paths.map((item) => ({
-    ...item,
-    detail: redactDiagnosticText(item.detail),
-    dnsServers: item.dnsServers.slice(0, 8).map(maskNetworkAddress),
-    virtualInterfaces: item.virtualInterfaces.slice(0, 12),
-  })),
-  probes: result.probes.map((item) => ({
-    ...item,
-    detail: redactDiagnosticText(item.detail),
-    target: item.target ? redactDiagnosticText(item.target) : undefined,
-  })),
-  reasons: result.reasons.map(redactDiagnosticText),
-  signals: result.signals.map((item) => ({
-    ...item,
-    detail: redactDiagnosticText(item.detail),
-  })),
-  summary: redactDiagnosticText(result.summary),
-});
+const sanitizeResult = (result: NetworkPreflightResult): NetworkPreflightHistoryEntry => {
+  const { canonicalCwd: omittedCanonicalCwd, ...historyEntry } = result;
+  void omittedCanonicalCwd;
+  return {
+    ...historyEntry,
+    paths: result.paths.map((item) => ({
+      ...item,
+      detail: redactDiagnosticText(item.detail),
+      dnsServers: item.dnsServers.slice(0, 8).map(maskNetworkAddress),
+      virtualInterfaces: item.virtualInterfaces.slice(0, 12),
+    })),
+    probes: result.probes.map((item) => ({
+      ...item,
+      detail: redactDiagnosticText(item.detail),
+      target: item.target ? redactDiagnosticText(item.target) : undefined,
+    })),
+    reasons: result.reasons.map(redactDiagnosticText),
+    signals: result.signals.map((item) => ({
+      ...item,
+      detail: redactDiagnosticText(item.detail),
+    })),
+    summary: redactDiagnosticText(result.summary),
+  };
+};
+
+interface LoadedHistory {
+  entries: NetworkPreflightHistoryEntry[];
+  needsMigration: boolean;
+}
+
+const hasLegacyProjectPaths = (entry: NetworkPreflightHistoryEntry): boolean =>
+  Object.hasOwn(entry, 'canonicalCwd') || Object.hasOwn(entry, 'cwd');
+
+const withoutProjectPaths = (entry: NetworkPreflightHistoryEntry): NetworkPreflightHistoryEntry => {
+  const rawEntry = entry as NetworkPreflightHistoryEntry & {
+    canonicalCwd?: unknown;
+    cwd?: unknown;
+  };
+  const { canonicalCwd: omittedCanonicalCwd, cwd: omittedCwd, ...historyEntry } = rawEntry;
+  void omittedCanonicalCwd;
+  void omittedCwd;
+  return historyEntry;
+};
 
 export class NetworkDiagnosticsStore {
   private readonly directory: string;
@@ -69,7 +96,7 @@ export class NetworkDiagnosticsStore {
   }
 
   public append(result: NetworkPreflightResult): void {
-    const entries = [sanitizeResult(result), ...this.load()]
+    const entries = [sanitizeResult(result), ...this.load().entries]
       .filter((entry) => (entry.checkedAt ?? entry.startedAt) >= this.now() - RETENTION_MS)
       .slice(0, MAX_ENTRIES);
     this.persist(entries);
@@ -81,38 +108,48 @@ export class NetworkDiagnosticsStore {
   }
 
   public getView(): NetworkPreflightHistoryView {
+    const loaded = this.load();
+    const entries = loaded.entries
+      .filter((entry) => (entry.checkedAt ?? entry.startedAt) >= this.now() - RETENTION_MS)
+      .slice(0, MAX_ENTRIES);
+    if (loaded.needsMigration || entries.length !== loaded.entries.length) {
+      this.persist(entries);
+    }
     return {
-      entries: this.load()
-        .filter((entry) => (entry.checkedAt ?? entry.startedAt) >= this.now() - RETENTION_MS)
-        .slice(0, MAX_ENTRIES),
+      entries,
       retentionDays: RETENTION_DAYS,
     };
   }
 
-  private load(): NetworkPreflightResult[] {
+  private load(): LoadedHistory {
     try {
       const parsed = JSON.parse(readFileSync(this.storagePath, 'utf8')) as {
         entries?: unknown;
         version?: unknown;
       };
       if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-        return [];
+        return { entries: [], needsMigration: false };
       }
-      return parsed.entries.filter((entry): entry is NetworkPreflightResult =>
+      const validEntries = parsed.entries.filter((entry): entry is NetworkPreflightHistoryEntry =>
         Boolean(
           entry &&
           typeof entry === 'object' &&
-          typeof (entry as NetworkPreflightResult).provider === 'string' &&
-          typeof (entry as NetworkPreflightResult).status === 'string' &&
-          Array.isArray((entry as NetworkPreflightResult).probes),
+          typeof (entry as NetworkPreflightHistoryEntry).provider === 'string' &&
+          typeof (entry as NetworkPreflightHistoryEntry).status === 'string' &&
+          Array.isArray((entry as NetworkPreflightHistoryEntry).probes),
         ),
       );
+      return {
+        entries: validEntries.map(withoutProjectPaths),
+        needsMigration:
+          validEntries.length !== parsed.entries.length || validEntries.some(hasLegacyProjectPaths),
+      };
     } catch {
-      return [];
+      return { entries: [], needsMigration: false };
     }
   }
 
-  private persist(entries: NetworkPreflightResult[]): void {
+  private persist(entries: NetworkPreflightHistoryEntry[]): void {
     mkdirSync(this.directory, { recursive: true });
     const temporaryPath = `${this.storagePath}.tmp`;
     writeFileSync(temporaryPath, `${JSON.stringify({ entries, version: 1 }, null, 2)}\n`, {

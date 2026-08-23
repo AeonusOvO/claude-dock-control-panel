@@ -24,6 +24,8 @@ export interface ChatRuntimeConfig {
   protocol: ChatProtocol;
 }
 
+export type ChatRuntimeSnapshot = Readonly<ChatRuntimeConfig>;
+
 interface StoredChatConfigFile {
   config: StoredChatConfig;
   version: 1;

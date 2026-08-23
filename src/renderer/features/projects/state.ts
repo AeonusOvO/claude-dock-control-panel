@@ -25,6 +25,16 @@ export interface ProjectsState {
   suppressedTitleAnimations: Set<string>;
   titleAnimations: Map<string, TitleAnimationState>;
   workspaceActivationSyncInProgress: boolean;
+  /**
+   * Workspace mutations currently in flight, keyed by what they act on.
+   *
+   * These rows are rebuilt by every workspace re-render, so disabling the button that started the
+   * request is not enough — the replacement arrives enabled while the first call is still awaiting
+   * the main process. Keying on the target instead of the element survives the re-render, which
+   * matters most for opening a conversation: each accepted call spawns a real PTY, so a double click
+   * costs a stray terminal process rather than a duplicated bit of UI state.
+   */
+  workspaceMutations: Set<string>;
 }
 
 export const createProjectsState = (): ProjectsState => ({
@@ -38,4 +48,5 @@ export const createProjectsState = (): ProjectsState => ({
   suppressedTitleAnimations: new Set<string>(),
   titleAnimations: new Map<string, TitleAnimationState>(),
   workspaceActivationSyncInProgress: false,
+  workspaceMutations: new Set<string>(),
 });

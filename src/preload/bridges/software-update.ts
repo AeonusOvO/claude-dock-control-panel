@@ -6,7 +6,8 @@ export const softwareUpdateBridge = {
   getSoftwareUpdates: (refresh) =>
     ipcRenderer.invoke(CHANNELS.SOFTWARE_UPDATES_GET, refresh ?? false),
   installOrUpdateClaudeCode: () => ipcRenderer.invoke(CHANNELS.SOFTWARE_CLAUDE_INSTALL_UPDATE),
-  getApplicationUpdaterState: () => ipcRenderer.invoke(CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET),
+  getApplicationUpdaterState: (refresh) =>
+    ipcRenderer.invoke(CHANNELS.SOFTWARE_APPLICATION_UPDATER_GET, refresh ?? false),
   downloadApplicationUpdate: () =>
     ipcRenderer.invoke(CHANNELS.SOFTWARE_APPLICATION_UPDATER_DOWNLOAD),
   installApplicationUpdate: () => ipcRenderer.invoke(CHANNELS.SOFTWARE_APPLICATION_UPDATER_INSTALL),

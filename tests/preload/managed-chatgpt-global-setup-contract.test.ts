@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { MainGuards } from '../../src/main/ipc/guards';
 import type {
   ManagedChatGptGatewayOperationResult,
   ManagedChatGptGatewayState,
@@ -45,25 +46,117 @@ describe('managed ChatGPT projectless setup contract', () => {
     }));
     const { managedChatgptBridge } = await import('../../src/preload/bridges/managed-chatgpt');
 
-    void managedChatgptBridge.setupManagedChatGptGateway(undefined, undefined);
+    void managedChatgptBridge.setupManagedChatGptGateway(undefined);
 
     expect(ipc.ipcRenderer.invoke).toHaveBeenCalledWith(
       CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP,
       undefined,
-      false,
     );
+  });
+
+  it('sends managed-account logout without a project, login flag, or browser action', async () => {
+    const ipc = createIpcHarness();
+    vi.doMock('electron', () => ({
+      ipcRenderer: ipc.ipcRenderer,
+      webUtils: { getPathForFile: vi.fn(() => '') },
+    }));
+    const { managedChatgptBridge } = await import('../../src/preload/bridges/managed-chatgpt');
+
+    void managedChatgptBridge.logoutManagedChatGptGateway();
+
+    expect(ipc.ipcRenderer.invoke).toHaveBeenCalledWith(
+      CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT,
+    );
+  });
+
+  it('handles managed-account logout without provider preflight, project access, or browser control', async () => {
+    const ipc = createIpcHarness();
+    const openExternal = vi.fn();
+    const logout = vi.fn(async () => undefined);
+    const getState = vi.fn(async () => ({
+      ...state,
+      authenticated: false,
+      availableModels: [],
+      managementAvailable: false,
+      phase: 'login-required' as const,
+      running: false,
+    }));
+    const withOfficialProviderAccess = vi.fn();
+    const getStatus = vi.fn();
+    vi.doMock('electron', () => ({
+      clipboard: { writeText: vi.fn() },
+      ipcMain: ipc.ipcMain,
+      shell: { openExternal },
+    }));
+    const { registerManagedChatGptIpc } = await import('../../src/main/ipc/managed-chatgpt');
+    const services = await createTestMainServiceRegistry();
+    registerManagedChatGptIpc({
+      configTransactionState: vi.fn(),
+      failedRuntimeLaunchCleanupDependencies: {} as never,
+      guards: {
+        requireClaudeRuntime: vi.fn(),
+        requireManagedChatGptGateway: () => ({ getState, logout }) as never,
+        validateSender: vi.fn(),
+        withOfficialProviderAccess: withOfficialProviderAccess as never,
+      },
+      restartRuntimeTerminal: vi.fn(),
+      runClaudeProjectConfigTransaction: vi.fn(),
+      services,
+      withDevelopmentSessionOperation: vi.fn(),
+      withoutTerminalOperationInvalidation: vi.fn(),
+      workspace: { getStatus } as never,
+    });
+
+    const result = await ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT);
+
+    expect(result).toMatchObject({
+      message: expect.stringContaining('浏览器和 Google 登录状态未被修改'),
+      ok: true,
+      state: { authenticated: false, phase: 'login-required' },
+    });
+    expect(logout).toHaveBeenCalledOnce();
+    expect(withOfficialProviderAccess).not.toHaveBeenCalled();
+    expect(getStatus).not.toHaveBeenCalled();
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('routes an omitted project directly to one deduplicated global setup', async () => {
     const ipc = createIpcHarness();
-    const setup = vi.fn(async () => undefined);
-    const getState = vi.fn(async () => state);
+    const routeEvents: string[] = [];
+    let providerAccessActive = false;
+    const setup = vi.fn(async () => {
+      expect(providerAccessActive).toBe(true);
+      routeEvents.push('gateway-setup');
+    });
+    const getState = vi.fn(async () => {
+      expect(providerAccessActive).toBe(true);
+      routeEvents.push('gateway-state');
+      return state;
+    });
     const getStatus = vi.fn(() => {
       throw new Error('Project status must not be read for global setup.');
     });
-    const assertOfficialProviderAllowed = vi.fn(async () => undefined);
+    const withOfficialProviderAccess = vi.fn(
+      async <T>(
+        _request: Parameters<MainGuards['withOfficialProviderAccess']>[0],
+        operation: () => Promise<T> | T,
+      ): Promise<T> => {
+        routeEvents.push('guard-enter');
+        providerAccessActive = true;
+        try {
+          return await operation();
+        } finally {
+          providerAccessActive = false;
+          routeEvents.push('guard-exit');
+        }
+      },
+    ) as unknown as MainGuards['withOfficialProviderAccess'];
     const runtime = {
-      getSoftwareUpdates: vi.fn(async () => ({ claudeCode: { installed: true } })),
+      getSoftwareUpdates: vi.fn(async () => {
+        expect(providerAccessActive).toBe(true);
+        routeEvents.push('runtime-software-updates');
+        return { claudeCode: { installed: true } };
+      }),
     };
     vi.doMock('electron', () => ({
       clipboard: { writeText: vi.fn() },
@@ -80,10 +173,10 @@ describe('managed ChatGPT projectless setup contract', () => {
       configTransactionState: vi.fn(),
       failedRuntimeLaunchCleanupDependencies: {} as never,
       guards: {
-        assertOfficialProviderAllowed,
         requireClaudeRuntime: () => runtime as never,
         requireManagedChatGptGateway: () => ({ getState, setup }) as never,
         validateSender: vi.fn(),
+        withOfficialProviderAccess,
       },
       restartRuntimeTerminal: vi.fn(),
       runClaudeProjectConfigTransaction: vi.fn(),
@@ -94,15 +187,31 @@ describe('managed ChatGPT projectless setup contract', () => {
     });
 
     const [first, second] = await Promise.all([
-      ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, undefined, false),
-      ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, undefined, false),
+      ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, undefined),
+      ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, undefined),
     ]);
 
     expect(first).toEqual(success);
     expect(second).toEqual(success);
     expect(setup).toHaveBeenCalledOnce();
     expect(setup).toHaveBeenCalledWith(false, expect.any(Function));
-    expect(assertOfficialProviderAllowed).toHaveBeenCalledWith('openai-codex', 'login');
+    expect(withOfficialProviderAccess).toHaveBeenCalledOnce();
+    expect(withOfficialProviderAccess).toHaveBeenCalledWith(
+      {
+        action: 'login',
+        cwd: undefined,
+        provider: 'openai-codex',
+      },
+      expect.any(Function),
+    );
+    expect(routeEvents).toEqual([
+      'guard-enter',
+      'runtime-software-updates',
+      'gateway-setup',
+      'gateway-state',
+      'guard-exit',
+    ]);
+    expect(providerAccessActive).toBe(false);
     expect(getStatus).not.toHaveBeenCalled();
   });
 

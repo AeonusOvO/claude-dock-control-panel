@@ -1,5 +1,10 @@
 import type { BrowserWindow, Session, Tray } from 'electron';
 import type { CcSwitchAdapter } from '../claude/cc-switch-adapter';
+import type { ClaudeExecutionInstallationProvider } from '../claude/execution-settings-installation';
+import type {
+  ClaudeExecutionSettingsLaunchResolver,
+  ClaudeExecutionSettingsService,
+} from '../claude/execution-settings-service';
 import type { ManagedChatGptGateway } from '../claude/managed-chatgpt-gateway';
 import type { ClaudePermissionBridge } from '../claude/permission-bridge';
 import type { ClaudeRuntime } from '../claude/runtime';
@@ -14,7 +19,7 @@ import type { McpManager } from '../mcp/manager';
 import type { NetworkDiagnosticsStore } from '../network/diagnostics-store';
 import type { NetworkPreflightService } from '../network/preflight-service';
 import type { ProviderAccessGuard } from '../network/provider-access-guard';
-import type { ApplicationProxyStore } from '../proxy/application-proxy-store';
+import type { ApplicationProxyCoordinator } from '../proxy/application-proxy-coordinator';
 import type { RuntimeProcessRegistry } from '../runtime/process-registry';
 import type { ApplicationUpdaterService } from '../updates/application';
 import { createRegistryToken, type Registry } from './registry';
@@ -23,8 +28,9 @@ export interface ServiceReference<Value> {
   current: Value | null;
 }
 
-export const APPLICATION_PROXY_STORE =
-  createRegistryToken<ApplicationProxyStore>('application-proxy-store');
+export const APPLICATION_PROXY_COORDINATOR = createRegistryToken<ApplicationProxyCoordinator>(
+  'application-proxy-coordinator',
+);
 export const APPLICATION_PROXY_TEST_SESSION = createRegistryToken<Session>(
   'application-proxy-test-session',
 );
@@ -36,6 +42,16 @@ export const CC_SWITCH_ADAPTER = createRegistryToken<CcSwitchAdapter>('cc-switch
 export const CLAUDE_PERMISSION_BRIDGE = createRegistryToken<ClaudePermissionBridge>(
   'claude-permission-bridge',
 );
+export const CLAUDE_EXECUTION_INSTALLATION_PROVIDER =
+  createRegistryToken<ClaudeExecutionInstallationProvider>(
+    'claude-execution-installation-provider',
+  );
+export const CLAUDE_EXECUTION_SETTINGS_SERVICE =
+  createRegistryToken<ClaudeExecutionSettingsService>('claude-execution-settings-service');
+export const CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER =
+  createRegistryToken<ClaudeExecutionSettingsLaunchResolver>(
+    'claude-execution-settings-launch-resolver',
+  );
 export const CLAUDE_RUNTIME = createRegistryToken<ClaudeRuntime>('claude-runtime');
 export const CLAUDE_STREAM_DIAGNOSTICS_STORE = createRegistryToken<ClaudeStreamDiagnosticsStore>(
   'claude-stream-diagnostics-store',

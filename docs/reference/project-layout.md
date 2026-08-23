@@ -25,11 +25,11 @@ main/       shared/ + electron    renderer/   shared/ + DOM
 | `assets/runtime/`          | 打包进安装包的 PowerShell 运行期脚本                  |
 | `build/installer.nsh`      | electron-builder NSIS 自定义段                        |
 | `docs/`                    | 全部文档，见 [docs/README.md](../README.md)           |
-| `scripts/`                 | 构建与验收脚本                                        |
+| `scripts/`                 | 构建、验收与 release/COS 发布脚本                     |
 | `src/`                     | 三个进程树 + `shared/`                                |
 | `tests/`                   | Vitest 测试                                           |
 | `dist/`                    | `npm run build` 产出（忽略）                          |
-| `outputs/`                 | `npm run dist` 产出（忽略）                           |
+| `outputs/`                 | 安装包、通道 YAML、发布报告与解包候选（忽略）         |
 | `.github/workflows/ci.yml` | lint、format:check、typecheck、test、lint:deps、build |
 | `.dependency-cruiser.cjs`  | 分层、循环、孤儿规则                                  |
 | `tsconfig.json`            | 渲染端与测试、`shared/`（DOM lib）                    |
@@ -38,19 +38,23 @@ main/       shared/ + electron    renderer/   shared/ + DOM
 | `vite.config.ts`           | 渲染端构建                                            |
 | `vite.preload.config.ts`   | preload 构建                                          |
 
+`scripts/release/manifest.mjs` 解析并校验当前 `rc.yml`、`beta.yml` 或 `latest.yml`，生成本地
+`release-manifest.json`；`scripts/release/publish-cos.mjs` 使用环境凭据发布到固定 COS prefix。两者不进入
+Electron 运行时，也不把 COS 写凭据写进 `outputs/`。
+
 `AGENTS.md` 与 `README.md` 留在根目录：前者是 agent 工具链的固定读取位置，后者是仓库首页。两者都是索引，正文在 `docs/`。
 
 ## `src/shared/`
 
 ```
 shared/
-  contracts/              218 个导出类型，零运行期代码
+  contracts/              267 个导出，零运行期代码
     index.ts              桶文件，`export type *` re-export 全部类型
-    app.ts artifact.ts chat.ts claude.ts claude-plugin.ts codex.ts download.ts
+    app.ts artifact.ts chat.ts claude.ts claude-execution-settings.ts
+    claude-plugin.ts codex.ts diagnostics.ts download.ts egress-diagnostics.ts
     managed-chatgpt.ts mcp.ts network.ts proxy.ts resource.ts router.ts
     runtime.ts software.ts terminal.ts workspace.ts
-    control-panel-api.ts  19 个域接口组合出 ControlPanelApi 的 188 个成员
-    diagnostics.ts        诊断类型（与域文件同层，供三进程共用）
+    control-panel-api.ts  20 个域接口组合出 ControlPanelApi 的 196 个成员
   claude/                 connection-remedy context-window curl effort model-id
                           native-commands permission-mode providers state-ownership
   conversation/           native reducer surface-switch composer-input
@@ -76,13 +80,13 @@ main/
   app/                    bootstrap.ts lifecycle.ts window.ts tray.ts profile.ts paths.ts
   infra/                  registry.ts service-tokens.ts contributions.ts logger.ts
                           diagnostics.ts 等；Registry 与四类贡献点见 ADR-0010
-  ipc/                    29 个文件 = 23 个域 handler + 基础设施 + 入口：
+  ipc/                    30 个文件 = 24 个域 handler + 基础设施 + 入口：
     index.ts              registerIpc(deps)：一次跑完全部贡献
-    contributions.ts      MAIN_IPC_CONTRIBUTIONS：23 个域贡献的注册数组
+    contributions.ts      MAIN_IPC_CONTRIBUTIONS：24 个域贡献的注册数组
     contribution.ts       IpcContribution 类型与依赖推导工具
     context.ts guards.ts validation.ts   MainState、guards、共享校验
     app.ts artifact.ts busy.ts chat.ts claude-connection.ts claude-controls.ts
-    claude-launch.ts claude-plugin.ts claude-state.ts codex.ts conversation.ts
+    claude-execution-settings.ts claude-launch.ts claude-plugin.ts claude-state.ts codex.ts conversation.ts
     conversation-attachment.ts download.ts managed-chatgpt.ts mcp.ts network.ts
     project.ts proxy.ts router.ts runtime.ts session.ts software.ts terminal.ts
   claude/ codex/ chat/ conversation/ terminal/ network/ proxy/
@@ -97,36 +101,36 @@ handler 之间禁止互相 import：共享只经 `context/guards/validation`，�
 
 ```
 preload/
-  index.ts                展开组装 19 个 bridge，satisfies ControlPanelApi，单点暴露
-  bridges/                按域拆分的 19 个桥文件：app application-proxy artifact busy
-                          chat claude claude-plugin codex download managed-chatgpt mcp
+  index.ts                展开组装 20 个 bridge，satisfies ControlPanelApi，单点暴露
+  bridges/                按域拆分的 20 个桥文件：app application-proxy artifact busy
+                          chat claude claude-execution-settings claude-plugin codex download managed-chatgpt mcp
                           native-attachment native-conversation network-preflight
                           router runtime software-update terminal workspace
 ```
 
-通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 188 个常量 + `schema.ts` 31 个 zod schema），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
+通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 196 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
 
 ## `src/renderer/`
 
 ```
 renderer/
-  index.html              手写 HTML 骨架（2,881 行）
-  main.ts                 33 行：字体样式 + 组件套件 + new Registry + bootstrap
+  index.html              手写 HTML 骨架（2,943 行）
+  main.ts                 46 行：字体样式 + 组件套件 + 滚动链 + new Registry + bootstrap
   bootstrap.ts            DOM 环境、RuntimeState、ShellStack 装配
-  feature-registration.ts 14 个特性的注册与解析，按阶段分组
+  feature-registration.ts 15 个特性的注册与解析，按阶段分组
   runtime-types.ts        RuntimeState / ShellStack / FeatureBundle 三层类型
   app-lifecycle.ts        生命周期钩子
   styles.css              @import 七层样式 + views/ 视图样式
   platform/               与特性无关能力：registry.ts components.ts dom.ts
                           format.ts percentage-utils.ts artifact.ts
                           claude-launch-attempt.ts composer-submit.ts
-                          session-generation.ts terminal-output-pump.ts
-                          terminal-view.ts markdown/
-  shell/                  跨特性外壳：rail footer（子目录 26 文件）dialogs
-                          workbench toast theme runtime-activity 及各自的
-                          -dependencies / -preview 文件，共 36 文件 3,703 行
-  features/               14 个特性共 194 个文件：
-                          artifact chat connection conversation downloads mcp
+                          scroll-chaining.ts session-generation.ts
+                          terminal-output-pump.ts terminal-view.ts markdown/
+  shell/                  跨特性外壳：rail footer dialogs workbench toast theme
+                          runtime-activity 及各自的 -dependencies / -preview 文件，
+                          共 37 个 TypeScript 文件 3,612 行
+  features/               15 个特性共 196 个 TypeScript 文件：
+                          artifact chat claude-execution-settings connection conversation downloads mcp
                           plugins preflight projects proxy router settings
                           terminal updates（其中 terminal 40 文件、connection 39）
 ```
@@ -200,7 +204,7 @@ scripts/
 | `no-unresolvable`                     | 禁止无法解析的 import                                                  | error |
 | `src-not-to-dev-dep`                  | `src/` 不得依赖 devDependency（`electron` 例外，由打包后的二进制提供） | error |
 | `main-ipc-handlers-are-isolated`      | `src/main/ipc/` 域 handler 之间禁止互相 import                         | error |
-| `renderer-feature-<name>-is-isolated` | `features/<name>/` 不得 import 其他特性（按目录动态生成 14 条）        | error |
+| `renderer-feature-<name>-is-isolated` | `features/<name>/` 不得 import 其他特性（按目录动态生成 15 条）        | error |
 
 全部规则为 error；`lint` 脚本同时要求 `--max-warnings=0`，任何 warning 即失败。
 
@@ -219,10 +223,10 @@ npx depcruise src --output-type archi
 
 | 行数  | 文件                                                    |
 | ----- | ------------------------------------------------------- |
-| 3,034 | `src/renderer/styles/views/terminal.css`                |
-| 2,881 | `src/renderer/index.html`                               |
+| 3,037 | `src/renderer/styles/views/terminal.css`                |
+| 2,943 | `src/renderer/index.html`                               |
 | 2,024 | `src/renderer/styles/views/router.css`                  |
-| 1,189 | `src/renderer/styles/views/settings.css`                |
+| 1,536 | `src/renderer/styles/views/settings.css`                |
 | 1,157 | `src/renderer/styles/05-primitives.css`                 |
 | 1,077 | `tests/main/claude-runtime-diagnostics.test.ts`         |
 | 1,057 | `tests/main/claude-runtime-pty.test.ts`                 |

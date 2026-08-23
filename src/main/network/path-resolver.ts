@@ -2,11 +2,16 @@ import { getServers } from 'node:dns';
 import { networkInterfaces } from 'node:os';
 import type {
   NetworkPathView,
+  NetworkPreflightScope,
   NetworkProcessKind,
   NetworkProviderId,
 } from '../../shared/contracts';
 
-export type ResolveProxy = (url: string) => Promise<string>;
+export type ResolveProxy = (
+  url: string,
+  networkScope: NetworkPreflightScope,
+  signal?: AbortSignal,
+) => Promise<string>;
 
 export const PROXY_ENVIRONMENT_KEYS = [
   'HTTPS_PROXY',
@@ -68,12 +73,15 @@ export const classifyEnvironmentProxy = (
   };
 };
 
-export const interfaceFacts = (): {
+export interface NetworkPathLocalFacts {
+  dnsServers: string[];
   globalIpv6Available: boolean;
   ipv4Available: boolean;
   ipv6Available: boolean;
   virtualInterfaces: string[];
-} => {
+}
+
+export const interfaceFacts = (): Omit<NetworkPathLocalFacts, 'dnsServers'> => {
   let globalIpv6Available = false;
   let ipv4Available = false;
   let ipv6Available = false;
@@ -101,6 +109,14 @@ export const interfaceFacts = (): {
   };
 };
 
+const hostLocalFacts = (): NetworkPathLocalFacts => ({
+  ...interfaceFacts(),
+  dnsServers: getServers().map((server) => {
+    const percent = server.indexOf('%');
+    return percent >= 0 ? server.slice(0, percent) : server;
+  }),
+});
+
 const processLabel = (processKind: NetworkProcessKind): string => {
   switch (processKind) {
     case 'application':
@@ -122,18 +138,30 @@ export class NetworkPathResolver {
   public constructor(
     private readonly resolveProxy: ResolveProxy,
     private readonly applicationProxyUrl: () => string | undefined = () => undefined,
+    private readonly readLocalFacts: () => NetworkPathLocalFacts = hostLocalFacts,
   ) {}
 
-  public async resolve(provider: NetworkProviderId, targetUrl: string): Promise<NetworkPathView[]> {
-    const interfaces = interfaceFacts();
-    const dnsServers = getServers().map((server) => {
-      const percent = server.indexOf('%');
-      return percent >= 0 ? server.slice(0, percent) : server;
-    });
+  public async resolve(
+    provider: NetworkProviderId,
+    targetUrl: string,
+    networkScope: NetworkPreflightScope = 'application',
+    signal?: AbortSignal,
+  ): Promise<NetworkPathView[]> {
+    signal?.throwIfAborted();
+    let localFacts: NetworkPathLocalFacts;
+    try {
+      localFacts = this.readLocalFacts();
+    } catch {
+      // Without authoritative host-interface facts, returning no path rows is safer than fabricating
+      // an offline observation from false placeholders.
+      return [];
+    }
     let resolvedProxy = 'UNKNOWN';
     try {
-      resolvedProxy = await this.resolveProxy(targetUrl);
+      resolvedProxy = await this.resolveProxy(targetUrl, networkScope, signal);
+      signal?.throwIfAborted();
     } catch {
+      signal?.throwIfAborted();
       // A failed proxy lookup is represented as unknown and assessed by the decision engine.
     }
     const applicationProxy =
@@ -148,10 +176,9 @@ export class NetworkPathResolver {
       proxy: Pick<NetworkPathView, 'proxyConfigured' | 'proxyKind'>,
       detail: string,
     ): NetworkPathView => ({
-      ...interfaces,
+      ...localFacts,
       ...proxy,
       detail: `${processLabel(processKind)}：${detail}`,
-      dnsServers,
       process: processKind,
     });
 
@@ -190,7 +217,7 @@ export class NetworkPathResolver {
       ),
       makePath('renderer', applicationProxy, '无直接网络权限，所有探测均由主进程执行。'),
     ];
-    return provider === 'openai-api'
+    return provider === 'openai-api' || provider === 'ai-services' || provider === 'xai-grok'
       ? paths.filter((pathView) =>
           ['application', 'oauth-browser', 'renderer'].includes(pathView.process),
         )
@@ -198,15 +225,21 @@ export class NetworkPathResolver {
   }
 
   /**
-   * The same path list with every proxy state reported as unknown, for when the preflight deadline
-   * elapses before `resolve` settles. `proxyKind: 'unknown'` is what the risk engine already scores
-   * as "system proxy state could not be read", so a timed-out lookup degrades instead of silently
-   * claiming a direct connection.
+   * Reports Electron/PAC-dependent paths as unknown after a deadline while preserving independently
+   * observable CLI and terminal proxy configuration. This keeps a hung PAC lookup from hiding an
+   * unsupported CLI proxy or inventing uncertainty about process environment that was read locally.
    */
   public unknownPaths(provider: NetworkProviderId, detail: string): NetworkPathView[] {
+    let localFacts: NetworkPathLocalFacts;
+    try {
+      localFacts = this.readLocalFacts();
+    } catch {
+      return [];
+    }
     const cliProcess: NetworkProcessKind =
       provider === 'anthropic-claude' ? 'claude-cli' : 'codex-cli';
     const unknownProxy = { proxyConfigured: false, proxyKind: 'unknown' as const };
+    const cliProxy = classifyEnvironmentProxy(this.applicationProxyUrl());
     const processes: NetworkProcessKind[] = [
       'application',
       'oauth-browser',
@@ -214,17 +247,20 @@ export class NetworkPathResolver {
       'terminal',
       'renderer',
     ];
-    const paths = processes.map((processKind) => ({
-      dnsServers: [],
-      globalIpv6Available: false,
-      ipv4Available: false,
-      ipv6Available: false,
-      virtualInterfaces: [],
-      ...unknownProxy,
-      detail: `${processLabel(processKind)}：${detail}`,
-      process: processKind,
-    }));
-    return provider === 'openai-api'
+    const paths = processes.map((processKind) => {
+      const cliOrTerminal = processKind === cliProcess || processKind === 'terminal';
+      const proxy = cliOrTerminal ? cliProxy : unknownProxy;
+      const processDetail = cliOrTerminal
+        ? `${detail}；该进程的代理配置已从本地配置独立判定。`
+        : detail;
+      return {
+        ...localFacts,
+        ...proxy,
+        detail: `${processLabel(processKind)}：${processDetail}`,
+        process: processKind,
+      };
+    });
+    return provider === 'openai-api' || provider === 'ai-services' || provider === 'xai-grok'
       ? paths.filter((pathView) =>
           ['application', 'oauth-browser', 'renderer'].includes(pathView.process),
         )

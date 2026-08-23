@@ -9,6 +9,8 @@ export type ManagedChatGptGatewayPhase =
  * access key never cross the main/renderer boundary.
  */
 export interface ManagedChatGptGatewayState {
+  /** Validated account identity for the current local OAuth artifact; tokens never cross IPC. */
+  accountEmail?: string;
   availableModels: string[];
   authenticated: boolean;
   busy: boolean;

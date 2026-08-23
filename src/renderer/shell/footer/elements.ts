@@ -30,6 +30,8 @@ export const footerMode = requiredElement<HTMLButtonElement>('#footer-mode');
 export const footerModeMenu = requiredElement<HTMLElement>('#footer-mode-menu');
 export const footerEffort = requiredElement<HTMLButtonElement>('#footer-effort');
 export const footerEffortMenu = requiredElement<HTMLElement>('#footer-effort-menu');
-export const footerMore = requiredElement<HTMLButtonElement>('#footer-more');
-export const footerSecondaryStatus = requiredElement<HTMLElement>('#footer-secondary-status');
+export const footerSessionSettings = requiredElement<HTMLButtonElement>('#footer-session-settings');
+export const footerSessionSettingsRegion = requiredElement<HTMLElement>(
+  '#footer-session-settings-region',
+);
 export const footerStatus = requiredElement<HTMLElement>('#footer-status');

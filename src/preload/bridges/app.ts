@@ -19,16 +19,25 @@ export const appBridge = {
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   onAppQuitRequested: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, request: AppQuitRequest): void => {
-      ipcRenderer.send(CHANNELS.APP_QUIT_REQUEST_RECEIVED);
       listener(request);
+      ipcRenderer.send(CHANNELS.APP_QUIT_REQUEST_RECEIVED, request.requestId);
     };
     ipcRenderer.on(CHANNELS.APP_QUIT_REQUESTED, callback);
     return () => {
       ipcRenderer.removeListener(CHANNELS.APP_QUIT_REQUESTED, callback);
     };
   },
-  confirmQuit: (confirmed) => {
-    ipcRenderer.send(CHANNELS.APP_CONFIRM_QUIT, confirmed);
+  onAppQuitRequestInvalidated: (listener) => {
+    const callback = (_event: Electron.IpcRendererEvent, requestId: string): void => {
+      listener(requestId);
+    };
+    ipcRenderer.on(CHANNELS.APP_QUIT_REQUEST_INVALIDATED, callback);
+    return () => {
+      ipcRenderer.removeListener(CHANNELS.APP_QUIT_REQUEST_INVALIDATED, callback);
+    };
+  },
+  confirmQuit: (response) => {
+    ipcRenderer.send(CHANNELS.APP_CONFIRM_QUIT, response);
   },
   minimizeToTray: () => {
     ipcRenderer.send(CHANNELS.APP_MINIMIZE_TO_TRAY);

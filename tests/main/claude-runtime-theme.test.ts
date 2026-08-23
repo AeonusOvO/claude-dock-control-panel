@@ -58,8 +58,8 @@ describe('Claude runtime terminal theme', () => {
         security: 'ready';
         version: string;
       }>;
+      preparedLaunches: Map<object, { replacement?: { settingsPath?: string } }>;
       prepareRouteServices: () => Promise<void>;
-      sessions: Map<string, { settingsPath?: string }>;
     };
     internals.configStore.createLaunchSnapshot = vi.fn(() => snapshot);
     internals.configStore.launchSnapshotIsCurrent = vi.fn(
@@ -79,8 +79,9 @@ describe('Claude runtime terminal theme', () => {
     internals.prepareRouteServices = vi.fn(async () => undefined);
 
     const readTheme = async (sessionId: string): Promise<string> => {
-      await runtime.prepareLaunch(sessionId, 'D:\\Project', 'new');
-      const settingsPath = internals.sessions.get(sessionId)?.settingsPath;
+      const prepared = await runtime.prepareLaunch(sessionId, 'D:\\Project', 'new');
+      const settingsPath = internals.preparedLaunches.get(prepared.token)?.replacement
+        ?.settingsPath;
       if (!settingsPath) throw new Error('Claude settings file was not prepared.');
       return (JSON.parse(readFileSync(settingsPath, 'utf8')) as { theme: string }).theme;
     };

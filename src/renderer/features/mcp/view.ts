@@ -93,7 +93,7 @@ const renderMcpInstalledCard = (
         : server.health === 'disabled'
           ? '已停用'
           : '状态未知'
-  } · ${server.healthDetail ?? '尚未执行健康检查。'}`;
+  } · ${server.healthDetail ?? '目录读取不会执行连接检查。'}`;
   const meta = document.createElement('div');
   meta.className = 'plugin-card__meta';
   const scope = document.createElement('span');
@@ -157,13 +157,26 @@ const renderMcpCatalogCard = (
   const install = document.createElement('button');
   install.type = 'button';
   install.className = 'button button--primary button--small';
-  install.textContent = installedNames.has(entry.name) ? '已安装' : '安装';
+  install.textContent = installedNames.has(entry.name)
+    ? '已安装'
+    : entry.installable
+      ? '安装'
+      : '仅浏览';
   install.disabled =
-    state.mutationInProgress || installedNames.has(entry.name) || entry.requiresCredential;
-  install.title = entry.requiresCredential ? '该条目需要凭据，不能自动写入明文配置。' : '';
-  install.addEventListener('click', () => {
-    dependencies.onInstall(entry, cwd, install);
-  });
+    state.mutationInProgress ||
+    installedNames.has(entry.name) ||
+    !entry.installable ||
+    entry.requiresCredential;
+  install.title = !entry.installable
+    ? 'Registry 条目仅供浏览；ClaudeDock 不会执行其安装配置。'
+    : entry.requiresCredential
+      ? '该条目需要凭据，不能自动写入明文配置。'
+      : '';
+  if (entry.installable) {
+    install.addEventListener('click', () => {
+      dependencies.onInstall(entry, cwd, install);
+    });
+  }
   actions.append(install);
   card.append(header, description, actions);
   return card;

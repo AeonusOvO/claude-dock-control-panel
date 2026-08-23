@@ -1,5 +1,6 @@
+import { getClaudeExecutionProfile } from '../../shared/claude/execution-profiles';
 import { CHANNELS } from '../../shared/ipc/channels';
-import { app, net, safeStorage, session, shell } from 'electron';
+import { app, net, safeStorage, session, shell, type Session } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -9,6 +10,10 @@ import { ArtifactService } from '../artifact/service';
 import { ClaudeAgentAdapter } from '../claude/agent-adapter';
 import { CcSwitchAdapter } from '../claude/cc-switch-adapter';
 import { ClaudeConversationLifecycleCoordinator } from '../claude/conversation-lifecycle';
+import { resolveClaudeExecutionCapabilities } from '../claude/execution-settings-capabilities';
+import { claudeExecutionInstallationProvider } from '../claude/execution-settings-installation';
+import { ClaudeExecutionSettingsService } from '../claude/execution-settings-service';
+import { ClaudeExecutionSettingsStore } from '../claude/execution-settings-store';
 import { ManagedChatGptGateway } from '../claude/managed-chatgpt-gateway';
 import { ClaudePermissionBridge } from '../claude/permission-bridge';
 import type { PermissionModeProbes } from '../claude/permission-mode-probe';
@@ -30,11 +35,14 @@ import { MainDiagnostics } from '../infra/diagnostics';
 import { mainLogger } from '../infra/logger';
 import type { Registry } from '../infra/registry';
 import {
-  APPLICATION_PROXY_STORE,
+  APPLICATION_PROXY_COORDINATOR,
   APPLICATION_PROXY_TEST_SESSION,
   APPLICATION_UPDATER_SERVICE,
   BUSY_REGISTRY,
   CC_SWITCH_ADAPTER,
+  CLAUDE_EXECUTION_INSTALLATION_PROVIDER,
+  CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER,
+  CLAUDE_EXECUTION_SETTINGS_SERVICE,
   CLAUDE_PERMISSION_BRIDGE,
   CLAUDE_RUNTIME,
   CLAUDE_STREAM_DIAGNOSTICS_STORE,
@@ -57,17 +65,28 @@ import type { NativeConversationLaunch } from '../ipc/conversation';
 import type { MainGuards } from '../ipc/guards';
 import { registerIpc, type MainIpcDependencies } from '../ipc';
 import { McpManager } from '../mcp/manager';
+import { McpRegistryClient } from '../mcp/registry-client';
+import { McpRegistrySyncService } from '../mcp/registry-service';
+import { McpRegistrySnapshotStore } from '../mcp/registry-snapshot';
+import { ClaudeLaunchHealthMonitor } from '../network/claude-launch-health-monitor';
 import { NetworkDiagnosticsStore } from '../network/diagnostics-store';
-import { createElectronApplicationRequest } from '../network/electron-request';
+import { NetworkEnvironmentRiskProbe } from '../network/environment-risk-probe';
+import {
+  createElectronApplicationRequest,
+  createElectronSessionFetch,
+} from '../network/electron-request';
 import { NetworkPreflightService } from '../network/preflight-service';
 import { ProviderAccessGuard } from '../network/provider-access-guard';
 import { ProviderConnectivityProbe } from '../network/provider-connectivity-probe';
-import { applicationProxyUrl, buildApplicationProxyEnvironment } from '../proxy/application-proxy';
+import { applicationProxyUrl } from '../proxy/application-proxy';
+import { ApplicationProxyCoordinator } from '../proxy/application-proxy-coordinator';
 import { ApplicationProxyStore } from '../proxy/application-proxy-store';
-import type { ProxyScopes } from '../proxy/scopes';
 import { RuntimeActivityRegistry } from '../runtime/activity-registry';
 import { RuntimeProcessRegistry } from '../runtime/process-registry';
-import type { AdvancedSettingsStore } from '../stores/advanced-settings';
+import {
+  networkPreflightProcessEnvironment,
+  type AdvancedSettingsStore,
+} from '../stores/advanced-settings';
 import type { AppPreferencesStore } from '../stores/app-preferences';
 import type { WorkspaceStore } from '../stores/workspace';
 import type { ProjectOperations } from '../terminal/project-operations';
@@ -82,16 +101,21 @@ export interface BootstrapDependencies {
   activateProject: ProjectOperations['activateProject'];
   advancedSettingsStore: AdvancedSettingsStore;
   appPreferencesStore: AppPreferencesStore;
-  applyApplicationProxyScope: ProxyScopes['applyApplicationProxyScope'];
-  applyConversationProxyScope: ProxyScopes['applyConversationProxyScope'];
   artifactService: ArtifactService;
   claudeConversationLifecycle: ClaudeConversationLifecycleCoordinator;
   conversationOwnerRegistry: ConversationOwnerRegistry;
   createTray: TrayController['createTray'];
   createWindow: WindowController['createWindow'];
-  guards: Pick<MainGuards, 'requireManagedChatGptGateway'>;
+  guards: Pick<
+    MainGuards,
+    | 'assertExternalRoutingWritesAllowed'
+    | 'assertLaunchAdmissionAllowed'
+    | 'requireManagedChatGptGateway'
+    | 'withOfficialProviderAccess'
+  >;
   /** The one container every IPC slice draws from; assembled once and forwarded unchanged. */
   ipc: MainIpcDependencies;
+  launchHealthMonitor: ClaudeLaunchHealthMonitor;
   nativeAttachmentStore: NativeAttachmentStore;
   nativeLaunches: Map<string, NativeConversationLaunch>;
   publishClaudeProjectState: ClaudeStatePublisher['publishClaudeProjectState'];
@@ -109,8 +133,8 @@ export interface BootstrapDependencies {
 
 type NetworkServiceBootstrap = Pick<
   BootstrapDependencies,
-  | 'applyApplicationProxyScope'
-  | 'applyConversationProxyScope'
+  | 'advancedSettingsStore'
+  | 'guards'
   | 'runtimeProfile'
   | 'services'
   | 'state'
@@ -125,6 +149,7 @@ type AgentRuntimeBootstrap = Pick<
   | 'claudeConversationLifecycle'
   | 'conversationOwnerRegistry'
   | 'guards'
+  | 'launchHealthMonitor'
   | 'nativeAttachmentStore'
   | 'nativeLaunches'
   | 'publishClaudeProjectState'
@@ -140,22 +165,73 @@ type AgentRuntimeBootstrap = Pick<
 
 type DiagnosticsBootstrap = Pick<
   BootstrapDependencies,
-  'runtimeActivityRegistry' | 'runtimeProfile' | 'services' | 'workspace'
+  'advancedSettingsStore' | 'runtimeActivityRegistry' | 'runtimeProfile' | 'services' | 'workspace'
 >;
+
+const combinedCliEnvironment = (
+  advancedSettingsStore: AdvancedSettingsStore,
+  coordinator: ApplicationProxyCoordinator,
+): Record<string, null | string> => ({
+  ...coordinator.getCliEnvironment(),
+  ...networkPreflightProcessEnvironment(advancedSettingsStore.get()),
+});
+
+const installClaudeExecutionSettings = ({
+  runtimeProfile,
+  services,
+}: Pick<BootstrapDependencies, 'runtimeProfile' | 'services'>): void => {
+  services.register(
+    CLAUDE_EXECUTION_INSTALLATION_PROVIDER,
+    () => claudeExecutionInstallationProvider,
+  );
+  services.register(
+    CLAUDE_EXECUTION_SETTINGS_SERVICE,
+    (registry) =>
+      new ClaudeExecutionSettingsService({
+        capabilityResolver: resolveClaudeExecutionCapabilities,
+        installationProvider: registry.resolve(CLAUDE_EXECUTION_INSTALLATION_PROVIDER),
+        profileLookup: getClaudeExecutionProfile,
+        store: new ClaudeExecutionSettingsStore(runtimeProfile.paths.userData),
+      }),
+  );
+  services.register(CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER, (registry) =>
+    registry.resolve(CLAUDE_EXECUTION_SETTINGS_SERVICE),
+  );
+
+  services.resolve(CLAUDE_EXECUTION_INSTALLATION_PROVIDER);
+  services.resolve(CLAUDE_EXECUTION_SETTINGS_SERVICE);
+  services.resolve(CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER);
+};
+
+const createAuthenticatedSessionFetch = (
+  services: Registry,
+  electronSession: Session,
+): typeof fetch =>
+  createElectronSessionFetch({
+    requestFactory: (options) => net.request(options),
+    resolveProxyCredentials: ({ authInfo, session: requestingSession }) =>
+      authInfo.isProxy && requestingSession === electronSession
+        ? services
+            .resolve(APPLICATION_PROXY_COORDINATOR)
+            .credentialsForProxy(requestingSession, authInfo.host, authInfo.port)
+        : undefined,
+    session: electronSession,
+  });
 
 /**
  * Downloads, gateways and proxy scope come first: every runtime below launches through the network
  * path selected here, and restoring interrupted work before the path is stable would use the wrong one.
  */
 const installNetworkServices = async ({
-  applyApplicationProxyScope,
-  applyConversationProxyScope,
+  advancedSettingsStore,
+  guards: { assertExternalRoutingWritesAllowed },
   runtimeProfile,
   services,
   state,
   updateTray,
   workspace,
 }: NetworkServiceBootstrap): Promise<void> => {
+  const applicationProxyStore = new ApplicationProxyStore(app.getPath('userData'), safeStorage);
   services.register(
     BUSY_REGISTRY,
     () =>
@@ -164,15 +240,19 @@ const installNetworkServices = async ({
         updateTray();
       }),
   );
-  services.register(
-    MCP_MANAGER,
-    (registry) =>
-      new McpManager(
-        runtimeProfile.paths.home,
-        runtimeProfile.paths.userData,
-        registry.resolve(BUSY_REGISTRY),
-      ),
-  );
+  services.register(MCP_MANAGER, (registry) => {
+    const registryClient = new McpRegistryClient({
+      fetch: createAuthenticatedSessionFetch(registry, session.defaultSession),
+    });
+    const registryStore = new McpRegistrySnapshotStore(runtimeProfile.paths.userData);
+    const registryService = new McpRegistrySyncService(registryClient, registryStore);
+    return new McpManager(
+      runtimeProfile.paths.home,
+      runtimeProfile.paths.userData,
+      registry.resolve(BUSY_REGISTRY),
+      registryService,
+    );
+  });
   services.register(DOWNLOAD_ENGINE, (registry) => {
     const downloadEngine = new DownloadEngine(
       session.defaultSession as unknown as DownloadSession,
@@ -193,8 +273,7 @@ const installNetworkServices = async ({
         registry.resolve(DOWNLOAD_ENGINE),
         registry.resolve(BUSY_REGISTRY),
         (url) => shell.openExternal(url),
-        (url, init) =>
-          session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
+        createAuthenticatedSessionFetch(registry, session.defaultSession),
       ),
   );
   services.register(
@@ -205,43 +284,102 @@ const installNetworkServices = async ({
         registry.resolve(DOWNLOAD_ENGINE),
         registry.resolve(BUSY_REGISTRY),
         safeStorage,
-        (url, init) =>
-          session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
+        createAuthenticatedSessionFetch(registry, session.defaultSession),
+        () =>
+          combinedCliEnvironment(
+            advancedSettingsStore,
+            registry.resolve(APPLICATION_PROXY_COORDINATOR),
+          ),
       ),
-  );
-  services.register(
-    APPLICATION_PROXY_STORE,
-    () => new ApplicationProxyStore(app.getPath('userData'), safeStorage),
   );
   services.register(CONVERSATION_NETWORK_SESSION, () =>
     session.fromPartition('claudedock-conversation-network'),
+  );
+  services.register(
+    APPLICATION_PROXY_COORDINATOR,
+    (registry) =>
+      new ApplicationProxyCoordinator({
+        applicationSession: session.defaultSession,
+        assertExternalRoutingWritesAllowed,
+        conversationSession: registry.resolve(CONVERSATION_NETWORK_SESSION),
+        store: applicationProxyStore,
+      }),
   );
   services.register(APPLICATION_PROXY_TEST_SESSION, () =>
     session.fromPartition('claudedock-application-proxy-test'),
   );
 
   services.resolve(BUSY_REGISTRY);
-  services.resolve(MCP_MANAGER);
+  // Registry snapshot validation is deferred until the first MCP catalog request, off the startup path.
   const downloadEngine = services.resolve(DOWNLOAD_ENGINE);
   services.resolve(CC_SWITCH_ADAPTER);
   services.resolve(MANAGED_CHATGPT_GATEWAY);
-  const applicationProxyStore = services.resolve(APPLICATION_PROXY_STORE);
   const conversationNetworkSession = services.resolve(CONVERSATION_NETWORK_SESSION);
+  const applicationProxyCoordinator = services.resolve(APPLICATION_PROXY_COORDINATOR);
   services.resolve(APPLICATION_PROXY_TEST_SESSION);
 
-  state.chatFetch = (url, init) =>
-    conversationNetworkSession.fetch(url instanceof URL ? url.toString() : url, init);
-  await applyApplicationProxyScope();
-  await applyConversationProxyScope();
+  state.chatFetch = createAuthenticatedSessionFetch(services, conversationNetworkSession);
+  await applicationProxyCoordinator.initialize();
   // Restore only after the selected application network path is stable.
   if (runtimeProfile.effects.restoreWorkspace) {
     downloadEngine.restoreInterrupted();
   }
   workspace.setEnvironmentProvider(() =>
-    buildApplicationProxyEnvironment(
-      applicationProxyStore.getView(),
-      applicationProxyStore.getCredentials(),
-    ),
+    combinedCliEnvironment(advancedSettingsStore, applicationProxyCoordinator),
+  );
+};
+
+const reconcileInterruptedNativeConversations = (
+  nativeConversationService: NativeConversationService,
+  sessionManager: ClaudeSessionManager,
+): void => {
+  const interrupted = nativeConversationService.recoverInterrupted();
+  // rc.2 could leave a recovery row when the adapter failed before Claude created a transcript.
+  // Reconcile empty reservations against Claude's canonical JSONL index without touching history.
+  for (const recovery of interrupted) {
+    if (
+      recovery.submissions.length === 0 &&
+      !sessionManager
+        .getSessionsForProject(recovery.projectPath)
+        .some((session) => session.conversationId === recovery.conversationId)
+    ) {
+      nativeConversationService.discardRecovery(recovery.conversationId, recovery.projectPath);
+    }
+  }
+};
+
+const installClaudeStreamFailureHandler = (
+  claudeRuntime: ClaudeRuntime,
+  runtimeActivityRegistry: RuntimeActivityRegistry,
+  streamDiagnosticsStore: ClaudeStreamDiagnosticsStore,
+): void => {
+  claudeRuntime.setStreamFailureHandler((observation) => {
+    const activity = runtimeActivityRegistry.get(observation.sessionId);
+    streamDiagnosticsStore.append({
+      ...observation,
+      backgroundTaskCount: activity.tasks.filter(
+        (task) =>
+          task.status === 'queued' || task.status === 'running' || task.status === 'waiting',
+      ).length,
+    });
+    runtimeActivityRegistry.setPhase(observation.sessionId, 'failed');
+  });
+};
+
+const registerClaudePermissionBridge = (services: Registry): void => {
+  services.register(
+    CLAUDE_PERMISSION_BRIDGE,
+    () =>
+      new ClaudePermissionBridge(
+        (request) => {
+          const target = services.resolve(MAIN_WINDOW).current?.webContents;
+          if (!target || target.isDestroyed() || target.isCrashed()) return false;
+          target.send(CHANNELS.CLAUDE_PERMISSION_REQUEST, request);
+          return true;
+        },
+        (sessionId, launchGeneration) =>
+          services.resolve(CLAUDE_RUNTIME).ownsLaunch(sessionId, launchGeneration),
+      ),
   );
 };
 
@@ -255,7 +393,12 @@ const installAgentRuntimes = ({
   appPreferencesStore,
   claudeConversationLifecycle,
   conversationOwnerRegistry,
-  guards: { requireManagedChatGptGateway },
+  guards: {
+    assertLaunchAdmissionAllowed,
+    requireManagedChatGptGateway,
+    withOfficialProviderAccess,
+  },
+  launchHealthMonitor,
   nativeAttachmentStore,
   nativeLaunches,
   publishClaudeProjectState,
@@ -268,6 +411,8 @@ const installAgentRuntimes = ({
   workspace,
   workspaceStore,
 }: AgentRuntimeBootstrap): void => {
+  const cliEnvironment = () =>
+    combinedCliEnvironment(advancedSettingsStore, services.resolve(APPLICATION_PROXY_COORDINATOR));
   services.register(
     RUNTIME_PROCESS_REGISTRY,
     () =>
@@ -287,7 +432,7 @@ const installAgentRuntimes = ({
   );
   services.register(
     CLAUDE_RUNTIME,
-    () =>
+    (registry) =>
       new ClaudeRuntime(
         app.getPath('userData'),
         runtimeAssetPath('claude-statusline.ps1'),
@@ -299,35 +444,31 @@ const installAgentRuntimes = ({
           customTokens: appPreferencesStore.get().claudeContextWindowCustomTokens,
           mode: appPreferencesStore.get().claudeContextWindowMode,
         }),
-        (state) => {
-          publishClaudeProjectState(state);
-        },
+        (state) => publishClaudeProjectState(state),
         (sessionId, ptyGeneration, data) => workspace.write(sessionId, ptyGeneration, data),
         requestPermissionModeFromScreen,
-        () => requireManagedChatGptGateway().ensureRunning(),
+        (cwd) =>
+          withOfficialProviderAccess(
+            { action: 'first-request', cwd, provider: 'openai-codex' },
+            () => requireManagedChatGptGateway().ensureRunning(),
+          ),
         () => requireManagedChatGptGateway().getInstalledVersion(),
-        (url, init) =>
-          session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
+        createAuthenticatedSessionFetch(registry, session.defaultSession),
         workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
-        app.getVersion(),
         (progress) => {
           services
             .resolve(MAIN_WINDOW)
             .current?.webContents.send(CHANNELS.ROUTER_OPERATION_PROGRESS, progress);
         },
         () => requireManagedChatGptGateway().stop(),
-        () => {
-          const proxyStore = services.resolve(APPLICATION_PROXY_STORE);
-          return buildApplicationProxyEnvironment(
-            proxyStore.getView(),
-            proxyStore.getCredentials(),
-          );
-        },
+        cliEnvironment,
+        registry.resolve(CLAUDE_EXECUTION_SETTINGS_LAUNCH_RESOLVER),
       ),
   );
 
   services.resolve(RUNTIME_PROCESS_REGISTRY);
   const claudeRuntime = services.resolve(CLAUDE_RUNTIME);
+  claudeRuntime.setLaunchAdmissionGuard(assertLaunchAdmissionAllowed);
   const nativeAdapter =
     runtimeProfile.adapterMode === 'fake'
       ? new FakeConversationAdapter()
@@ -336,13 +477,9 @@ const installAgentRuntimes = ({
           environment: (input) => {
             const launch = nativeLaunches.get(input.conversationId);
             if (!launch) throw new Error('原生对话的接入环境尚未准备完成。');
-            const proxyStore = services.resolve(APPLICATION_PROXY_STORE);
             return {
               ...launch.prepared.environment,
-              ...buildApplicationProxyEnvironment(
-                proxyStore.getView(),
-                proxyStore.getCredentials(),
-              ),
+              ...cliEnvironment(),
             };
           },
         });
@@ -351,6 +488,7 @@ const installAgentRuntimes = ({
     () =>
       new NativeConversationService({
         adapter: nativeAdapter,
+        assertLaunchAdmissionAllowed,
         onSnapshot: (snapshot) => {
           publishNativeSnapshot(snapshot);
           if (snapshot.phase === 'failed' || snapshot.phase === 'stopped') {
@@ -374,35 +512,9 @@ const installAgentRuntimes = ({
       }),
   );
   const nativeConversationService = services.resolve(NATIVE_CONVERSATION_SERVICE);
-  const interruptedNativeConversations = nativeConversationService.recoverInterrupted();
-  // rc.2 could leave a recovery row when the adapter failed before Claude created a transcript.
-  // Such an empty reservation has no prompt, output, or session to recover. Reconcile it against
-  // Claude's canonical JSONL index so the upgrade cleans the false card without touching history.
-  for (const recovery of interruptedNativeConversations) {
-    if (
-      recovery.submissions.length === 0 &&
-      !sessionManager
-        .getSessionsForProject(recovery.projectPath)
-        .some((session) => session.conversationId === recovery.conversationId)
-    ) {
-      nativeConversationService.discardRecovery(recovery.conversationId, recovery.projectPath);
-    }
-  }
+  reconcileInterruptedNativeConversations(nativeConversationService, sessionManager);
 
-  services.register(
-    CLAUDE_PERMISSION_BRIDGE,
-    () =>
-      new ClaudePermissionBridge(
-        (request) => {
-          const target = services.resolve(MAIN_WINDOW).current?.webContents;
-          if (!target || target.isDestroyed() || target.isCrashed()) return false;
-          target.send(CHANNELS.CLAUDE_PERMISSION_REQUEST, request);
-          return true;
-        },
-        (sessionId, launchGeneration) =>
-          services.resolve(CLAUDE_RUNTIME).ownsLaunch(sessionId, launchGeneration),
-      ),
-  );
+  registerClaudePermissionBridge(services);
   services.register(
     CLAUDE_STREAM_DIAGNOSTICS_STORE,
     () => new ClaudeStreamDiagnosticsStore(app.getPath('userData')),
@@ -420,8 +532,7 @@ const installAgentRuntimes = ({
         (sessionId, ptyGeneration, data) => workspace.write(sessionId, ptyGeneration, data),
         registry.resolve(DOWNLOAD_ENGINE),
         registry.resolve(BUSY_REGISTRY),
-        (url, init) =>
-          session.defaultSession.fetch(url instanceof URL ? url.toString() : url, init),
+        createAuthenticatedSessionFetch(registry, session.defaultSession),
       ),
   );
 
@@ -431,20 +542,46 @@ const installAgentRuntimes = ({
     (sessionId, launchGeneration) => permissionBridge.createEndpoint(sessionId, launchGeneration),
   );
   const streamDiagnosticsStore = services.resolve(CLAUDE_STREAM_DIAGNOSTICS_STORE);
-  claudeRuntime.setStreamFailureHandler((observation) => {
-    const activity = runtimeActivityRegistry.get(observation.sessionId);
-    streamDiagnosticsStore.append({
-      ...observation,
-      backgroundTaskCount: activity.tasks.filter(
-        (task) =>
-          task.status === 'queued' || task.status === 'running' || task.status === 'waiting',
-      ).length,
-    });
-    runtimeActivityRegistry.setPhase(observation.sessionId, 'failed');
-  });
+  installClaudeStreamFailureHandler(claudeRuntime, runtimeActivityRegistry, streamDiagnosticsStore);
   claudeRuntime.setRuntimeActivityHandler(runtimeAssetPath('claude-runtime-event.ps1'), (event) => {
+    const monitorKey = {
+      ptyGeneration: event.ptyGeneration,
+      runtimeLaunchGeneration: event.launchGeneration,
+      sessionId: event.sessionId,
+    } as const;
     if (event.event === 'SessionEnd') {
       permissionBridge.closeLaunch(event.sessionId, event.launchGeneration);
+      launchHealthMonitor.invalidateExact(monitorKey);
+    } else if (event.event === 'SessionStart') {
+      // The exact-token bind emits SessionStart synchronously. Defer only to the next microtask so
+      // the admitting cli-launch check can seed this PTY before monitoring decides whether to probe.
+      queueMicrotask(() => {
+        if (
+          !workspace.hasSession(event.sessionId) ||
+          workspace.getStatus(event.sessionId).ptyGeneration !== event.ptyGeneration ||
+          !claudeRuntime.ownsLaunch(event.sessionId, event.launchGeneration) ||
+          !claudeRuntime.isBoundToPty(event.sessionId, event.ptyGeneration)
+        ) {
+          return;
+        }
+        const provider = claudeRuntime.officialNetworkProviderForActivePty(
+          event.sessionId,
+          event.ptyGeneration,
+        );
+        if (provider) {
+          const initialEvidence = claudeRuntime.takeActiveLaunchPreflightEvidence(
+            event.sessionId,
+            event.launchGeneration,
+            event.ptyGeneration,
+          );
+          launchHealthMonitor.start({
+            ...monitorKey,
+            cwd: workspace.getStatus(event.sessionId).cwd,
+            ...(initialEvidence ? { initialEvidence } : {}),
+            provider,
+          });
+        }
+      });
     }
     runtimeActivityRegistry.consume(event);
   });
@@ -456,6 +593,7 @@ const installAgentRuntimes = ({
 
 /** Preflight, the access guard it feeds, process scanning and the updater — all read-only observers. */
 const installDiagnostics = ({
+  advancedSettingsStore,
   runtimeActivityRegistry,
   runtimeProfile,
   services,
@@ -467,43 +605,73 @@ const installDiagnostics = ({
     NETWORK_DIAGNOSTICS_STORE,
     () => new NetworkDiagnosticsStore(app.getPath('userData')),
   );
-  services.register(
-    NETWORK_PREFLIGHT_SERVICE,
-    () =>
-      new NetworkPreflightService({
-        diagnosticsStore: services.resolve(NETWORK_DIAGNOSTICS_STORE),
-        onResult: (result) => {
-          services
-            .resolve(MAIN_WINDOW)
-            .current?.webContents.send(CHANNELS.NETWORK_PREFLIGHT_RESULT, result);
-        },
-        probe: new ProviderConnectivityProbe({
-          appFetch: (url, init) => net.fetch(url, init),
-          applicationRequest: createElectronApplicationRequest((options) =>
-            net.request({ ...options, session: session.defaultSession }),
-          ),
-          cliEnvironment: () => {
-            const proxyStore = services.resolve(APPLICATION_PROXY_STORE);
-            return buildApplicationProxyEnvironment(
-              proxyStore.getView(),
-              proxyStore.getCredentials(),
-            );
-          },
-          resolveProxy: (url) => session.defaultSession.resolveProxy(url),
-          /*
-           * Must match `buildApplicationProxyEnvironment`'s own gate exactly. Reporting the proxy
-           * here whenever it is merely enabled made CLI diagnostics blame an application- or
-           * conversation-only proxy for failures on a CLI that actually ran direct.
-           */
-          applicationProxyUrl: () => {
-            const view = services.resolve(APPLICATION_PROXY_STORE).getView();
-            return view.scope.cli && view.protocol === 'http'
-              ? applicationProxyUrl(view)
-              : undefined;
-          },
-        }),
+  services.register(NETWORK_PREFLIGHT_SERVICE, () => {
+    const proxyCoordinator = services.resolve(APPLICATION_PROXY_COORDINATOR);
+    const preflightService = new NetworkPreflightService({
+      acquireNetworkLease: (scopes) => proxyCoordinator.acquirePreflightLease(scopes),
+      diagnosticsStore: services.resolve(NETWORK_DIAGNOSTICS_STORE),
+      environmentProbe: new NetworkEnvironmentRiskProbe({
+        cliEnvironment: () => combinedCliEnvironment(advancedSettingsStore, proxyCoordinator),
+        settings: () => advancedSettingsStore.get().networkPreflight,
+        systemLanguages: () => app.getPreferredSystemLanguages(),
       }),
-  );
+      onObservabilityError: (phase, error) => {
+        mainLogger.warn('network-preflight', `网络预检的附属记录步骤失败：${phase}。`, error);
+      },
+      onResult: (result) => {
+        services
+          .resolve(MAIN_WINDOW)
+          .current?.webContents.send(CHANNELS.NETWORK_PREFLIGHT_RESULT, result);
+      },
+      probe: new ProviderConnectivityProbe({
+        applicationRequestForScope: (networkScope) => {
+          const electronSession =
+            networkScope === 'conversation'
+              ? services.resolve(CONVERSATION_NETWORK_SESSION)
+              : session.defaultSession;
+          return createElectronApplicationRequest({
+            fetch: (input, init) => electronSession.fetch(input, init),
+          });
+        },
+        cliEnvironment: () => combinedCliEnvironment(advancedSettingsStore, proxyCoordinator),
+        resolveProxy: async (url, networkScope, signal) => {
+          signal?.throwIfAborted();
+          const electronSession =
+            networkScope === 'conversation'
+              ? services.resolve(CONVERSATION_NETWORK_SESSION)
+              : session.defaultSession;
+          // Electron's PAC resolver has no AbortSignal parameter. The probe bounds concurrent
+          // unresolved calls; these checks fence a late result from an obsolete authoritative run.
+          const resolved = await electronSession.resolveProxy(url);
+          signal?.throwIfAborted();
+          return resolved;
+        },
+        /*
+         * Must match the coordinator's CLI-environment gate exactly. Reporting the proxy
+         * here whenever it is merely enabled made CLI diagnostics blame an application- or
+         * conversation-only proxy for failures on a CLI that actually ran direct.
+         */
+        applicationProxyUrl: () => {
+          const view = proxyCoordinator.getView();
+          return view.scope.cli && view.protocol === 'http' ? applicationProxyUrl(view) : undefined;
+        },
+      }),
+      shouldAssessEnvironment: (input) => {
+        const settings = advancedSettingsStore.get().networkPreflight;
+        return (
+          input.force === true ||
+          input.action === 'background' ||
+          (input.action === 'cli-launch' && settings.checkOnNewSession) ||
+          ((input.action === 'login' || input.action === 'provider-switch') &&
+            settings.checkOnProviderLogin)
+        );
+      },
+    });
+    proxyCoordinator.subscribe((scope) => {
+      preflightService.invalidate(`application-proxy-${scope}-transition`);
+    });
+    return preflightService;
+  });
   services.register(
     MAIN_DIAGNOSTICS,
     (registry) =>
@@ -516,7 +684,15 @@ const installDiagnostics = ({
   );
   services.register(
     PROVIDER_ACCESS_GUARD,
-    (registry) => new ProviderAccessGuard(registry.resolve(NETWORK_PREFLIGHT_SERVICE)),
+    (registry) =>
+      new ProviderAccessGuard(registry.resolve(NETWORK_PREFLIGHT_SERVICE), (request) => {
+        const settings = advancedSettingsStore.get().networkPreflight;
+        return (
+          (request.action === 'cli-launch' && settings.checkOnNewSession) ||
+          ((request.action === 'login' || request.action === 'provider-switch') &&
+            settings.checkOnProviderLogin)
+        );
+      }),
   );
   services.register(
     APPLICATION_UPDATER_SERVICE,
@@ -596,6 +772,7 @@ const createBootstrapContributions = (
     () => {
       artifactService.install();
     },
+    () => installClaudeExecutionSettings(dependencies),
     () => installNetworkServices(dependencies),
     () => installAgentRuntimes(dependencies),
     () => installDiagnostics(dependencies),
