@@ -1,13 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
-import type { PtyGeneration } from '../../shared/contracts';
+import type { ClaudeRouteHealth, NetworkProviderId, PtyGeneration } from '../../shared/contracts';
 import type { ClaudeRouteKind, RouteReservationToken } from '../coordination/route-lifecycle';
 import { cleanupObsoleteLaunchArtifacts } from './runtime-artifact-cleanup';
 import { projectKey } from './runtime-connection';
 import { ClaudeRuntimePolling } from './runtime-polling';
 import type {
   ClaudeLaunchAuthorization,
+  ClaudeLaunchPreflightEvidence,
+  ClaudeNetworkAccess,
   ClaudePreparedLaunchToken,
   RuntimeSession,
 } from './runtime-types';
@@ -105,6 +107,7 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
 
     const replacement = record.replacement;
     replacement.ptyGeneration = ptyGeneration;
+    replacement.liveNetworkAccess = record.authorization.networkAccess;
     replacement.liveOfficialNetworkProvider = record.authorization.officialNetworkProvider;
     replacement.launchToken = token;
 
@@ -127,6 +130,108 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
       sessionId,
       signaledAt: Date.now(),
     });
+  }
+
+  /** Returns the exact network route captured by the launch owning this live PTY generation. */
+  public networkAccessForActivePty(
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+  ): Readonly<ClaudeNetworkAccess> | undefined {
+    const runtime = this.sessions.get(sessionId);
+    if (!runtime?.active) return undefined;
+    if (runtime.ptyGeneration !== expectedGeneration) {
+      throw new Error('Claude Code 已绑定到其他终端，这次重新启动已取消。');
+    }
+    return runtime.liveNetworkAccess;
+  }
+
+  /** Returns only official-provider capability, kept separate from custom gateway identity. */
+  public officialNetworkProviderForActivePty(
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+  ): NetworkProviderId | undefined {
+    const runtime = this.sessions.get(sessionId);
+    if (!runtime?.active) return undefined;
+    if (runtime.ptyGeneration !== expectedGeneration) {
+      throw new Error('Claude Code 已绑定到其他终端，这次重新启动已取消。');
+    }
+    return runtime.liveOfficialNetworkProvider;
+  }
+
+  public ownsLaunch(sessionId: string, launchGeneration: number): boolean {
+    const runtime = this.sessions.get(sessionId);
+    return Boolean(runtime?.active && runtime.launchGeneration === launchGeneration);
+  }
+
+  /** Seeds only the exact live PTY from the authoritative check that admitted its launch. */
+  public seedActiveLaunchPreflightEvidence(
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    evidence: ClaudeLaunchPreflightEvidence,
+  ): boolean {
+    const runtime = this.sessions.get(sessionId);
+    if (
+      !runtime?.active ||
+      runtime.ptyGeneration !== ptyGeneration ||
+      runtime.liveOfficialNetworkProvider !== evidence.provider
+    ) {
+      return false;
+    }
+    runtime.launchPreflightEvidence = Object.freeze({ ...evidence });
+    return true;
+  }
+
+  /** Consumes a launch seed once and only for the activity event's exact runtime and PTY generations. */
+  public takeActiveLaunchPreflightEvidence(
+    sessionId: string,
+    launchGeneration: number,
+    ptyGeneration: PtyGeneration,
+  ): ClaudeLaunchPreflightEvidence | undefined {
+    const runtime = this.sessions.get(sessionId);
+    if (
+      !runtime?.active ||
+      runtime.launchGeneration !== launchGeneration ||
+      runtime.ptyGeneration !== ptyGeneration
+    ) {
+      return undefined;
+    }
+    const evidence = runtime.launchPreflightEvidence;
+    runtime.launchPreflightEvidence = undefined;
+    return evidence;
+  }
+
+  /** Applies only display state to the exact live launch; it has no terminal or runtime control path. */
+  public applyAdvisoryRouteHealth(
+    sessionId: string,
+    launchGeneration: number,
+    ptyGeneration: PtyGeneration,
+    health: ClaudeRouteHealth,
+  ): boolean {
+    const runtime = this.sessions.get(sessionId);
+    if (
+      !runtime?.active ||
+      runtime.launchGeneration !== launchGeneration ||
+      runtime.ptyGeneration !== ptyGeneration
+    ) {
+      return false;
+    }
+    runtime.advisoryRouteHealth = Object.freeze({ ...health, blocking: false });
+    void this.emitState(runtime).catch(() => {
+      // Advisory publication must not affect the exact running launch it describes.
+    });
+    return true;
+  }
+
+  public isBoundToPty(sessionId: string, ptyGeneration: PtyGeneration): boolean {
+    const runtime = this.sessions.get(sessionId);
+    return Boolean(runtime?.active && runtime.ptyGeneration === ptyGeneration);
+  }
+
+  public writeTerminal(sessionId: string, ptyGeneration: PtyGeneration, data: string): boolean {
+    return (
+      this.isBoundToPty(sessionId, ptyGeneration) &&
+      this.writeToTerminal(sessionId, ptyGeneration, data)
+    );
   }
 
   protected reservePreparedLaunch(
@@ -297,6 +402,7 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
     runtime.launchGeneration = undefined;
     runtime.launchPreflightEvidence = undefined;
     runtime.launchToken = undefined;
+    runtime.liveNetworkAccess = undefined;
     runtime.liveOfficialNetworkProvider = undefined;
     runtime.permissionModeRequest = undefined;
     runtime.ptyGeneration = undefined;

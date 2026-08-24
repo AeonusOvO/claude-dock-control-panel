@@ -5,7 +5,8 @@ import { CHANNELS } from '../../shared/ipc/channels';
 export const codexBridge = {
   getCodexProjectState: (sessionId) =>
     ipcRenderer.invoke(CHANNELS.CODEX_GET_STATE, sessionId) as Promise<CodexProjectState>,
-  installOrUpdateCodex: (sessionId) => ipcRenderer.invoke(CHANNELS.CODEX_INSTALL_UPDATE, sessionId),
+  installOrUpdateCodex: (sessionId, operation) =>
+    ipcRenderer.invoke(CHANNELS.CODEX_INSTALL_UPDATE, sessionId, operation),
   startCodexLogin: (sessionId, method) =>
     ipcRenderer.invoke(CHANNELS.CODEX_LOGIN_START, sessionId, method),
   cancelCodexLogin: (sessionId) => ipcRenderer.invoke(CHANNELS.CODEX_LOGIN_CANCEL, sessionId),

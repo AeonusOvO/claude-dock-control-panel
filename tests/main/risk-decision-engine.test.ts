@@ -13,9 +13,11 @@ const directPath = (overrides: Partial<NetworkPathView> = {}): NetworkPathView =
   globalIpv6Available: false,
   ipv4Available: true,
   ipv6Available: false,
+  networkScope: 'application',
   process: 'application',
   proxyConfigured: false,
   proxyKind: 'direct',
+  target: 'https://chatgpt.com/',
   virtualInterfaces: [],
   ...overrides,
 });
@@ -80,9 +82,59 @@ describe('RiskDecisionEngine', () => {
     expect(result.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(
       true,
     );
-    expect(result.signals.map((signal) => signal.id)).toEqual(
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).toEqual(
       expect.arrayContaining(['proxy-present', 'virtual-interface-present']),
     );
+  });
+
+  it('blocks an incompatible client action without calling healthy provider connectivity failed', () => {
+    const result = evaluate(
+      'cli-launch',
+      observation([
+        probe('cli:openai-codex-api'),
+        probe('version:openai-codex', {
+          detail: '当前版本低于安全基线。',
+          kind: 'version',
+          process: 'codex-cli',
+          status: 'failed',
+        }),
+      ]),
+    );
+
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.providerConnectivity.summary).toContain('连接正常');
+    expect(result.featureAccess).toEqual([
+      {
+        action: 'cli-launch',
+        allowed: false,
+        reason: expect.stringContaining('CLI 兼容性检查未通过'),
+      },
+    ]);
+    expect(result.providerConnectivity.signals.map((signal) => signal.id)).not.toContain(
+      'probe-failed:version:openai-codex',
+    );
+  });
+
+  it('degrades an action that has no required provider endpoint evidence', () => {
+    const result = evaluate(
+      'background',
+      observation([
+        probe('app:optional', {
+          required: false,
+          status: 'passed',
+        }),
+      ]),
+    );
+
+    expect(result.providerConnectivity.status).toBe('degraded');
+    expect(result.featureAccess).toEqual([
+      {
+        action: 'background',
+        allowed: false,
+        reason: expect.stringContaining('没有可用的必需提供商端点证据'),
+      },
+    ]);
   });
 
   it('reports an unconfirmed global IPv6 path as a non-blocking notice', () => {
@@ -97,7 +149,10 @@ describe('RiskDecisionEngine', () => {
     expect(result.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(
       true,
     );
-    expect(result.signals.map((signal) => signal.id)).toContain('global-ipv6-path-unconfirmed');
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).toContain(
+      'global-ipv6-path-unconfirmed',
+    );
   });
 
   it('blocks required TLS failures but keeps an optional process-path failure as a warning', () => {
@@ -125,7 +180,8 @@ describe('RiskDecisionEngine', () => {
     );
 
     expect(required.status).toBe('blocked');
-    expect(optional.status).toBe('warning');
+    expect(optional.status).toBe('allowed_with_notice');
+    expect(optional.providerConnectivity.status).toBe('allowed_with_notice');
     expect(optional.featureAccess.find((access) => access.action === 'cli-launch')?.allowed).toBe(
       true,
     );
@@ -220,14 +276,16 @@ describe('RiskDecisionEngine', () => {
       ]),
     );
 
-    expect(background.status).toBe('allowed');
+    expect(background.status).toBe('allowed_with_notice');
+    expect(background.providerConnectivity.status).toBe('allowed_with_notice');
     expect(background.featureAccess).toEqual([{ action: 'background', allowed: true }]);
-    expect(cloud.status).toBe('blocked');
+    expect(cloud.status).toBe('partially_available');
+    expect(cloud.providerConnectivity.status).toBe('partially_available');
     expect(cloud.featureAccess).toEqual([
       {
         action: 'cloud-task',
         allowed: false,
-        reason: '云端任务所需的官方网络路径未通过。',
+        reason: '云端任务所需的提供商端点能力未通过。',
       },
     ]);
   });
@@ -258,14 +316,19 @@ describe('RiskDecisionEngine', () => {
       }),
     );
 
-    expect(result.status).toBe('degraded');
-    expect(result.summary).toContain('网络预检结果不完整');
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.summary).toContain('连接正常');
     expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
-    expect(result.signals.map((signal) => signal.id)).toContain('proxy-resolution-unknown');
-    expect(result.signals.map((signal) => signal.id)).not.toContain('offline');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).toContain(
+      'proxy-resolution-unknown',
+    );
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).not.toContain(
+      'local-interface-offline',
+    );
   });
 
-  it('blocks only genuine nonempty all-false interface evidence as offline', () => {
+  it('keeps an all-false local interface snapshot advisory when provider probes pass', () => {
     const result = evaluate(
       'first-request',
       observation([probe('app:openai-chatgpt')], {
@@ -273,15 +336,12 @@ describe('RiskDecisionEngine', () => {
       }),
     );
 
-    expect(result.status).toBe('blocked');
-    expect(result.featureAccess).toEqual([
-      {
-        action: 'first-request',
-        allowed: false,
-        reason: '首次请求所需的官方网络路径未通过。',
-      },
-    ]);
-    expect(result.signals.map((signal) => signal.id)).toContain('offline');
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).toContain(
+      'local-interface-offline',
+    );
   });
 
   it.each([
@@ -296,21 +356,32 @@ describe('RiskDecisionEngine', () => {
     );
 
     expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
-    expect(result.signals.map((signal) => signal.id)).not.toContain('offline');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).not.toContain(
+      'local-interface-offline',
+    );
   });
 
-  it('treats missing path evidence as incomplete instead of fabricating offline state', () => {
+  it('keeps missing path evidence advisory instead of fabricating offline state', () => {
     const result = evaluate(
       'first-request',
       observation([probe('app:openai-chatgpt')], { paths: [] }),
     );
 
-    expect(result.status).toBe('degraded');
-    expect(result.featureAccess).toEqual([{ action: 'first-request', allowed: true }]);
-    expect(result.signals.map((signal) => signal.id)).not.toContain('offline');
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.providerConnectivity.featureAccess).toEqual([
+      { action: 'first-request', allowed: true },
+    ]);
+    expect(result.advisoryEvidence.riskLevel).toBe('unknown');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).toContain(
+      'path-evidence-unavailable',
+    );
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).not.toContain(
+      'local-interface-offline',
+    );
   });
 
-  it('does not report a safe result when required environment evidence is incomplete', () => {
+  it('keeps incomplete environment evidence advisory when provider probes pass', () => {
     const result = evaluate(
       'background',
       observation([probe('app:openai-chatgpt')], {
@@ -322,15 +393,21 @@ describe('RiskDecisionEngine', () => {
           issues: [],
           localLanguage: 'en-US',
           localTimezone: 'America/Los_Angeles',
+          publicAddressObservations: [],
           riskLevel: 'unknown',
           summary: '关键证据不完整。',
         },
       }),
     );
 
-    expect(result.status).toBe('degraded');
-    expect(result.riskLevel).toBe('unknown');
-    expect(result.summary).toContain('不能判断为低风险');
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.providerConnectivity.featureAccess).toEqual([
+      { action: 'background', allowed: true },
+    ]);
+    expect(result.advisoryEvidence.riskLevel).toBe('unknown');
+    expect(result.advisoryEvidence.summary).toContain('关键证据不完整');
+    expect(result.summary).toContain('连接正常');
   });
 
   it('surfaces high environment risk without misreporting provider reachability failure', () => {
@@ -352,16 +429,21 @@ describe('RiskDecisionEngine', () => {
           ],
           localLanguage: 'en-US',
           localTimezone: 'America/Los_Angeles',
+          publicAddressObservations: [],
           riskLevel: 'high',
           summary: '检测到高风险。',
         },
       }),
     );
 
-    expect(result.status).toBe('warning');
-    expect(result.riskLevel).toBe('high');
-    expect(result.featureAccess).toEqual([{ action: 'background', allowed: true }]);
-    expect(result.summary).toContain('高风险出口、DNS 或分流信号');
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.providerConnectivity.status).toBe('allowed');
+    expect(result.providerConnectivity.featureAccess).toEqual([
+      { action: 'background', allowed: true },
+    ]);
+    expect(result.advisoryEvidence.riskLevel).toBe('high');
+    expect(result.advisoryEvidence.summary).toContain('检测到高风险');
+    expect(result.summary).toContain('连接正常');
   });
 
   it('does not treat an unknown proxy path as a confirmed direct IPv6 path', () => {
@@ -378,7 +460,9 @@ describe('RiskDecisionEngine', () => {
       }),
     );
 
-    expect(result.signals.map((signal) => signal.id)).not.toContain('global-ipv6-path-unconfirmed');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).not.toContain(
+      'global-ipv6-path-unconfirmed',
+    );
   });
 
   it('does not claim application and CLI paths differ while either proxy state is unknown', () => {
@@ -396,31 +480,56 @@ describe('RiskDecisionEngine', () => {
       }),
     );
 
-    expect(result.signals.map((signal) => signal.id)).not.toContain('process-paths-differ');
+    expect(result.advisoryEvidence.signals.map((signal) => signal.id)).not.toContain(
+      'process-paths-differ',
+    );
   });
 
-  it('blocks a Claude CLI SOCKS path because the official client does not support it', () => {
-    const input = observation(
-      [
-        probe('cli:anthropic-api', {
-          process: 'claude-cli',
-        }),
-      ],
-      {
-        paths: [
-          directPath(),
-          directPath({
-            detail: 'Claude CLI via SOCKS',
+  it.each(['socks', 'socks5h'] as const)(
+    'blocks a Claude CLI %s path because the official client cannot use the probed transport',
+    (proxyKind) => {
+      const input = observation(
+        [
+          probe('cli:anthropic-api', {
             process: 'claude-cli',
-            proxyConfigured: true,
-            proxyKind: 'socks',
           }),
         ],
-      },
-    );
-    const result = new RiskDecisionEngine().evaluate('anthropic-claude', 'cli-launch', input, 1, 2);
+        {
+          paths: [
+            directPath(),
+            directPath({
+              detail: 'Claude CLI via SOCKS',
+              process: 'claude-cli',
+              proxyConfigured: true,
+              proxyKind,
+            }),
+          ],
+        },
+      );
+      const result = new RiskDecisionEngine().evaluate(
+        'anthropic-claude',
+        'cli-launch',
+        input,
+        1,
+        2,
+      );
 
-    expect(result.status).toBe('blocked');
-    expect(result.signals.map((signal) => signal.id)).toContain('unsupported-cli-proxy');
-  });
+      expect(result.status).toBe('blocked');
+      expect(result.providerConnectivity.status).toBe('blocked');
+      expect(result.providerConnectivity.featureAccess).toEqual([
+        {
+          action: 'cli-launch',
+          allowed: false,
+          reason: expect.stringContaining('不能使用当前显式 SOCKS 代理'),
+        },
+      ]);
+      expect(result.providerConnectivity.signals.map((signal) => signal.id)).toContain(
+        'unsupported-cli-proxy',
+      );
+      expect(result.advisoryEvidence.signals.map((signal) => signal.id)).not.toContain(
+        'unsupported-cli-proxy',
+      );
+      expect(result.providerConnectivity.summary).toContain('当前 Claude Code CLI 传输配置不可用');
+    },
+  );
 });

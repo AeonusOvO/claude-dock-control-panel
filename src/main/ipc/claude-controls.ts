@@ -7,6 +7,7 @@ import type {
 } from '../../shared/contracts';
 import type { ReportClaudeOperationFailure } from '../claude/operation-failure';
 import type { PendingPermissionModeProbe } from '../claude/permission-mode-probe';
+import { effectiveClaudeNetworkAccess } from '../claude/runtime-types';
 import type { WithSessionOperation } from '../coordination/session-operation';
 import {
   cleanupFailedRuntimeLaunch,
@@ -271,12 +272,16 @@ export const registerClaudeControlsIpc = ({
                 throw error;
               }
             };
-            return authorization.officialNetworkProvider
+            const networkAccess = effectiveClaudeNetworkAccess(
+              authorization.networkAccess,
+              authorization.officialNetworkProvider,
+            );
+            return networkAccess
               ? await withOfficialProviderAccess(
                   {
                     action: 'cli-launch',
                     cwd: status.cwd,
-                    provider: authorization.officialNetworkProvider,
+                    ...networkAccess,
                   },
                   relaunchWithModelSpeed,
                 )

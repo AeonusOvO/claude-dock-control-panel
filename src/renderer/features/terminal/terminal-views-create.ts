@@ -74,6 +74,7 @@ export const createTerminalViewActions = (
     const view: TerminalView = {
       appliedResizeRevision: 0,
       container,
+      disposeInteractionListeners: () => undefined,
       fitAddon,
       outputPump: new TerminalOutputPump({
         cancelFrame: (handle) => window.cancelAnimationFrame(handle),
@@ -119,8 +120,20 @@ export const createTerminalViewActions = (
         void window.controlPanel.writeClipboardText(terminal.getSelection());
         return false;
       }
-      if (event.ctrlKey && !event.shiftKey && event.code === 'KeyV') {
-        void io.pasteIntoTerminalGeneration(sessionId, ptyGeneration, view);
+      if (
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        !event.getModifierState('AltGraph') &&
+        event.code === 'KeyV'
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (!event.repeat) {
+          void io.pasteIntoTerminalGeneration(sessionId, ptyGeneration, view);
+        }
         return false;
       }
       if (event.shiftKey && !event.ctrlKey && event.code === 'Enter') {
@@ -130,7 +143,20 @@ export const createTerminalViewActions = (
 
       return true;
     });
-    container.addEventListener('contextmenu', io.showTerminalContextMenu);
+    const handleMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 2) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const handleContextMenu = (event: MouseEvent): void => {
+      io.showTerminalContextMenu(event, sessionId, ptyGeneration, view);
+    };
+    container.addEventListener('mousedown', handleMouseDown, { capture: true });
+    container.addEventListener('contextmenu', handleContextMenu, { capture: true });
+    view.disposeInteractionListeners = () => {
+      container.removeEventListener('mousedown', handleMouseDown, { capture: true });
+      container.removeEventListener('contextmenu', handleContextMenu, { capture: true });
+    };
 
     state.terminalViews.set(sessionId, view);
     return view;

@@ -78,6 +78,7 @@ import type {
 } from './claude-execution-settings';
 import type { ClaudePluginCatalog, ClaudePluginOperationResult } from './claude-plugin';
 import type {
+  CodexInstallOperation,
   CodexLaunchMode,
   CodexLoginMethod,
   CodexLoginStartResult,
@@ -548,7 +549,10 @@ export interface RouterApi {
 
 export interface CodexApi {
   getCodexProjectState: (sessionId: string) => Promise<CodexProjectState>;
-  installOrUpdateCodex: (sessionId: string) => Promise<CodexOperationResult>;
+  installOrUpdateCodex: (
+    sessionId: string,
+    operation: CodexInstallOperation,
+  ) => Promise<CodexOperationResult>;
   startCodexLogin: (sessionId: string, method: CodexLoginMethod) => Promise<CodexLoginStartResult>;
   cancelCodexLogin: (sessionId: string) => Promise<CodexOperationResult>;
   logoutCodex: (sessionId: string) => Promise<CodexOperationResult>;

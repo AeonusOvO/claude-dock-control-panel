@@ -14,6 +14,7 @@ export interface TerminalElements {
   drawerResizer: HTMLElement;
   panelResizer: HTMLElement;
   restartButton: HTMLButtonElement;
+  restartLabel: HTMLElement;
   terminalContextMenu: HTMLElement;
   terminalDiagnostic: HTMLElement;
   terminalDiagnosticCopy: HTMLButtonElement;
@@ -24,6 +25,7 @@ export interface TerminalElements {
   terminalDiagnosticScrim: HTMLButtonElement;
   terminalStage: HTMLElement;
   toggleButton: HTMLButtonElement;
+  toggleLabel: HTMLElement;
 }
 
 export const createTerminalElements = (): TerminalElements => ({
@@ -34,6 +36,7 @@ export const createTerminalElements = (): TerminalElements => ({
   drawerResizer: requiredElement<HTMLElement>('#drawer-resizer'),
   panelResizer: requiredElement<HTMLElement>('#panel-resizer'),
   restartButton: requiredElement<HTMLButtonElement>('#restart-terminal'),
+  restartLabel: requiredElement<HTMLElement>('#restart-terminal-label'),
   terminalContextMenu: requiredElement<HTMLElement>('#terminal-context-menu'),
   terminalDiagnostic: requiredElement<HTMLElement>('#terminal-diagnostic'),
   terminalDiagnosticCopy: requiredElement<HTMLButtonElement>('#terminal-diagnostic-copy'),
@@ -44,4 +47,5 @@ export const createTerminalElements = (): TerminalElements => ({
   terminalDiagnosticScrim: requiredElement<HTMLButtonElement>('#terminal-diagnostic-scrim'),
   terminalStage: requiredElement<HTMLElement>('#terminal-stage'),
   toggleButton: requiredElement<HTMLButtonElement>('#toggle-terminal'),
+  toggleLabel: requiredElement<HTMLElement>('#toggle-terminal-label'),
 });

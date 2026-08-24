@@ -12,6 +12,7 @@ import { ClaudeRuntime } from '../../src/main/claude/runtime';
 import { createDevelopmentSessionCoordination } from '../../src/main/coordination/development-session';
 import {
   LAUNCH_PREFLIGHT_DECISION_TTL_MS,
+  launchPauseDiagnosticsFromResult,
   LaunchPreflightDecisionCoordinator,
   type ClaudeLaunchDecisionBaseline,
   type ClaudeLaunchDescriptor,
@@ -91,8 +92,23 @@ const launchDecisionBlockedCapture = () =>
   }) as never;
 
 const launchDecisionDiagnostics = () => ({
+  action: 'cli-launch' as const,
   checkedAt: 100,
-  failedItems: [{ label: 'TLS handshake', status: 'failed' as const }],
+  failedItems: [
+    {
+      checkedAt: 100,
+      detail: 'TLS 证书校验失败。',
+      kind: 'tls' as const,
+      label: 'TLS handshake',
+      process: 'application' as const,
+      required: true,
+      status: 'failed' as const,
+      target: 'https://api.anthropic.com/v1/messages',
+    },
+  ],
+  freshness: 'fresh' as const,
+  provider: 'anthropic-claude' as const,
+  providerLabel: 'Anthropic Claude Code',
   reasons: ['连接被阻止'],
   scope: 'application' as const,
   status: 'blocked' as const,
@@ -100,50 +116,86 @@ const launchDecisionDiagnostics = () => ({
 });
 
 const launchPreflightResult = (
-  status: 'allowed' | 'blocked' = 'blocked',
+  status: 'allowed' | 'allowed_with_notice' | 'blocked' = 'blocked',
   mainRunId = 9,
-): NetworkPreflightResult =>
-  ({
+  probeDetail = 'https://secret.invalid D:\\Project',
+): NetworkPreflightResult => {
+  const allowed = status === 'allowed' || status === 'allowed_with_notice';
+  const probes = [
+    {
+      checkedAt: 100,
+      detail: probeDetail,
+      id: 'tls',
+      kind: 'tls' as const,
+      label: 'TLS handshake https://secret.invalid',
+      process: 'application' as const,
+      required: true,
+      status: allowed ? ('passed' as const) : ('failed' as const),
+      target: 'https://user:password@api.anthropic.com/v1/messages?token=secret-query#fragment',
+    },
+  ];
+  const providerSignals = allowed
+    ? []
+    : [
+        {
+          confidence: 'high' as const,
+          detail: 'private endpoint and route data',
+          id: 'route-blocked',
+          label: 'Route blocked',
+          observedAt: 100,
+          score: 90,
+          severity: 'critical' as const,
+          source: 'application',
+        },
+      ];
+  const providerConnectivity = {
+    featureAccess: [
+      {
+        action: 'cli-launch' as const,
+        allowed,
+        ...(allowed ? {} : { reason: 'blocked' }),
+      },
+    ],
+    probes,
+    reasons: allowed ? [] : ['raw route unavailable'],
+    signals: providerSignals,
+    status,
+    summary: allowed ? 'allowed' : 'raw blocked summary',
+  };
+  const advisoryEvidence = {
+    paths: [],
+    reasons: [],
+    riskLevel: 'low' as const,
+    riskScore: 0,
+    signals: [],
+    summary: 'advisory evidence',
+  };
+  return {
     action: 'cli-launch',
+    advisoryEvidence,
+    cacheExpiresAt: Number.MAX_SAFE_INTEGER,
     canonicalCwd: 'D:\\Project',
     checkedAt: 100,
     configurationRevision: 'route-revision',
-    featureAccess: [
-      {
-        action: 'cli-launch',
-        allowed: status === 'allowed',
-        reasons: status === 'allowed' ? [] : ['blocked'],
-      },
-    ],
+    featureAccess: providerConnectivity.featureAccess,
     generation: 4,
     mainRunId,
     networkScope: 'application',
-    paths: [],
-    probes: [
-      {
-        detail: 'https://secret.invalid D:\\Project',
-        id: 'tls',
-        label: 'TLS handshake https://secret.invalid',
-        status: status === 'allowed' ? 'passed' : 'failed',
-      },
-    ],
+    paths: advisoryEvidence.paths,
+    probes: providerConnectivity.probes,
     provider: 'anthropic-claude',
+    providerConnectivity,
     providerLabel: 'Anthropic Claude Code',
-    reasons: status === 'allowed' ? [] : ['raw route unavailable'],
-    riskLevel: status === 'allowed' ? 'low' : 'high',
-    riskScore: status === 'allowed' ? 0 : 100,
-    signals: [
-      {
-        detail: 'private endpoint and route data',
-        id: 'route-blocked',
-        label: status === 'allowed' ? 'Route allowed' : 'Route blocked',
-        severity: status === 'allowed' ? 'info' : 'error',
-      },
-    ],
+    reasons: providerConnectivity.reasons,
+    riskLevel: advisoryEvidence.riskLevel,
+    riskScore: advisoryEvidence.riskScore,
+    schemaVersion: 2,
+    signals: providerConnectivity.signals,
     startedAt: 90,
-    status,
-    summary: status === 'allowed' ? 'allowed' : 'raw blocked summary',
-  }) as unknown as NetworkPreflightResult;
+    status: providerConnectivity.status,
+    summary: providerConnectivity.summary,
+  };
+};
 
 const registerLaunchPreflightHarness = async () => {
   const ipc = createIpcHarness();
@@ -157,10 +209,7 @@ const registerLaunchPreflightHarness = async () => {
     randomId: () => `${String(++nextDecision).padStart(32, '0')}-launch-decision`,
   });
   const blockedResult = launchPreflightResult('blocked');
-  const blockedError = new ProviderAccessBlockedError(blockedResult, {
-    process: 'application',
-    url: 'https://api.anthropic.com/v1/messages',
-  });
+  const blockedError = new ProviderAccessBlockedError(blockedResult);
   const launchAuthorization = {
     cwdKey: 'd:\\project',
     launchSnapshot: {
@@ -237,7 +286,7 @@ const registerLaunchPreflightHarness = async () => {
         _capture: unknown,
         operation: (result: NetworkPreflightResult) => Promise<unknown>,
         _signal?: AbortSignal,
-      ) => operation(launchPreflightResult('allowed', 10)),
+      ) => operation(launchPreflightResult('allowed_with_notice', 10)),
     ),
   };
   const workspaceSessionIds = ['session-1'];
@@ -609,7 +658,46 @@ describe('main-process session operation ownership', () => {
     expect(coordinator.reserve(decisionIds[0]!, 'bypass').status).toMatch(/stale|consumed/u);
   });
 
-  it('pauses a blocked Claude launch before preparation without exposing route authority', async () => {
+  it.each([
+    {
+      detail: '连接失败：spawn D:\\Project ENOENT',
+      expected: '连接失败：spawn [REDACTED_PATH] ENOENT',
+      name: 'drive-root path',
+    },
+    {
+      detail: 'EACCES opening C:/workspace/private/config.json',
+      expected: 'EACCES opening [REDACTED_PATH]',
+      name: 'forward-slash drive path',
+    },
+    {
+      detail: 'connect \\\\fileserver\\private-share\\project ECONNREFUSED',
+      expected: 'connect [REDACTED_PATH] ECONNREFUSED',
+      name: 'UNC path',
+    },
+    {
+      detail: 'ENOENT opening "D:\\Project Folder\\config.json"',
+      expected: 'ENOENT opening "[REDACTED_PATH]"',
+      name: 'quoted path with spaces',
+    },
+    {
+      detail: "EACCES at '\\\\?\\UNC\\fileserver\\private-share\\Project Folder\\config.json'",
+      expected: "EACCES at '[REDACTED_PATH]'",
+      name: 'extended UNC path',
+    },
+    {
+      detail: 'pipe unavailable at \\\\.\\pipe\\private-agent EBUSY',
+      expected: 'pipe unavailable at [REDACTED_PATH] EBUSY',
+      name: 'Windows device path',
+    },
+  ])('redacts a $name while preserving its diagnostic classification', ({ detail, expected }) => {
+    const diagnostics = launchPauseDiagnosticsFromResult(
+      launchPreflightResult('blocked', 9, detail),
+    );
+
+    expect(diagnostics.failedItems[0]?.detail).toBe(expected);
+  });
+
+  it('pauses before preparation with attributed decision evidence but no private route authority', async () => {
     const harness = await registerLaunchPreflightHarness();
 
     const outcome = await harness.ipc.invoke(CHANNELS.CLAUDE_LAUNCH, 'session-1', 'new');
@@ -617,7 +705,22 @@ describe('main-process session operation ownership', () => {
 
     expect(outcome).toMatchObject({
       diagnostics: {
-        failedItems: [{ status: 'failed' }],
+        action: 'cli-launch',
+        checkedAt: 100,
+        failedItems: [
+          {
+            checkedAt: 100,
+            detail: '网络目标 [REDACTED_PATH]',
+            kind: 'tls',
+            process: 'application',
+            required: true,
+            status: 'failed',
+            target: 'https://api.anthropic.com/v1/messages',
+          },
+        ],
+        freshness: 'fresh',
+        provider: 'anthropic-claude',
+        providerLabel: 'Anthropic Claude Code',
         scope: 'application',
         status: 'blocked',
         summary: '网络检查未通过，Claude 启动已暂停。',
@@ -642,14 +745,17 @@ describe('main-process session operation ownership', () => {
     expect(harness.launchPreflightDecisions.hasPending('session-1')).toBe(true);
 
     const rendererPayload = JSON.stringify(outcome);
+    expect(rendererPayload).toContain('anthropic-claude');
+    expect(rendererPayload).toContain('api.anthropic.com');
+    expect(rendererPayload).not.toContain(JSON.stringify('D:\\Project').slice(1, -1));
     for (const forbidden of [
-      'D:\\Project',
-      'anthropic-claude',
-      'api.anthropic.com',
       'route-revision',
       'mainRunId',
       'generation',
       'decrypted-secret-must-not-be-retained',
+      'secret.invalid',
+      'secret-query',
+      'password@',
     ]) {
       expect(rendererPayload).not.toContain(forbidden);
     }
@@ -842,7 +948,7 @@ describe('main-process session operation ownership', () => {
     expect(harness.runtime.seedActiveLaunchPreflightEvidence).toHaveBeenCalledWith('session-1', 8, {
       checkedAt: 100,
       provider: 'anthropic-claude',
-      status: 'allowed',
+      status: 'allowed_with_notice',
     });
     await expect(
       harness.ipc.invoke(CHANNELS.CLAUDE_LAUNCH_PREFLIGHT_DECIDE, {
@@ -977,10 +1083,7 @@ describe('main-process session operation ownership', () => {
       await import('../../src/main/network/provider-access-guard');
     const paused = await harness.ipc.invoke(CHANNELS.CLAUDE_LAUNCH, 'session-1', 'new');
     if (paused.status !== 'paused') throw new Error('Expected launch to pause.');
-    const repeatedBlock = new ProviderAccessBlockedError(launchPreflightResult('blocked', 11), {
-      process: 'application',
-      url: 'https://api.anthropic.com/v1/messages',
-    });
+    const repeatedBlock = new ProviderAccessBlockedError(launchPreflightResult('blocked', 11));
     harness.providerAccess.recheck.mockRejectedValueOnce(repeatedBlock);
 
     const replacement = await harness.ipc.invoke(CHANNELS.CLAUDE_LAUNCH_PREFLIGHT_DECIDE, {

@@ -1,4 +1,5 @@
 import type {
+  NetworkEnvironmentAssessment,
   NetworkPreflightAction,
   NetworkPreflightResult,
   NetworkPreflightScope,
@@ -44,22 +45,134 @@ export const networkPreflightCacheKey = (
     networkPreflightTargetKey(capture.target),
   ]);
 
+export const networkPreflightUnavailableEnvironmentAssessment = (
+  error: unknown,
+): NetworkEnvironmentAssessment => {
+  const checkedAt = Date.now();
+  const detail = error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
+  return {
+    checkedAt,
+    checks: [],
+    dnsDetail: '环境辅助证据收集器未能完成。',
+    dnsStatus: 'unknown',
+    evidenceStatus: 'unavailable',
+    issues: [
+      {
+        detail,
+        kind: 'evidence-incomplete',
+        severity: 'info',
+        title: '辅助证据不可用',
+      },
+    ],
+    localLanguage: 'unknown',
+    localTimezone: 'unknown',
+    publicAddressObservations: [],
+    riskLevel: 'unknown',
+    summary: '环境辅助证据不可用；这不代表提供商端点不可达。',
+  };
+};
+
+export const networkPreflightInternalFailureResult = (
+  provider: NetworkProviderId,
+  identity: NetworkPreflightIdentity,
+  startedAt: number,
+  error: unknown,
+): NetworkPreflightResult => {
+  const checkedAt = Date.now();
+  const profile = getProviderProfile(provider);
+  const detail = error instanceof Error ? error.message : String(error);
+  const providerConnectivity = {
+    featureAccess: [
+      {
+        action: identity.action,
+        allowed: false,
+        reason: '提供商端点网络预检自身未能完成。',
+      },
+    ],
+    probes: [],
+    reasons: [detail],
+    signals: [
+      {
+        confidence: 'high' as const,
+        detail,
+        id: 'preflight-internal-failure',
+        label: '提供商端点网络预检未完成',
+        observedAt: checkedAt,
+        score: 100,
+        severity: 'critical' as const,
+        source: 'preflight-service',
+      },
+    ],
+    status: 'blocked' as const,
+    summary: `${profile.displayName} 的提供商端点网络预检未完成，相关动作已阻止。`,
+  };
+  const advisoryEvidence = {
+    paths: [],
+    reasons: [],
+    riskLevel: 'unknown' as const,
+    riskScore: 0,
+    signals: [],
+    summary: '本次未形成可用的辅助网络证据。',
+  };
+  return {
+    ...identity,
+    advisoryEvidence,
+    checkedAt,
+    featureAccess: providerConnectivity.featureAccess,
+    paths: advisoryEvidence.paths,
+    probes: providerConnectivity.probes,
+    provider,
+    providerConnectivity,
+    providerLabel: profile.displayName,
+    reasons: providerConnectivity.reasons,
+    riskLevel: advisoryEvidence.riskLevel,
+    riskScore: advisoryEvidence.riskScore,
+    schemaVersion: 2,
+    signals: providerConnectivity.signals,
+    startedAt,
+    status: providerConnectivity.status,
+    summary: providerConnectivity.summary,
+  };
+};
+
 export const networkPreflightTestingResult = (
   provider: NetworkProviderId,
   identity: NetworkPreflightIdentity,
   startedAt: number,
-): NetworkPreflightResult => ({
-  ...identity,
-  featureAccess: [],
-  paths: [],
-  probes: [],
-  provider,
-  providerLabel: getProviderProfile(provider).displayName,
-  reasons: [],
-  riskLevel: 'unknown',
-  riskScore: 0,
-  signals: [],
-  startedAt,
-  status: 'testing',
-  summary: `${getProviderProfile(provider).displayName} 正在执行无额度网络预检。`,
-});
+): NetworkPreflightResult => {
+  const providerLabel = getProviderProfile(provider).displayName;
+  const providerConnectivity = {
+    featureAccess: [],
+    probes: [],
+    reasons: [],
+    signals: [],
+    status: 'testing' as const,
+    summary: `${providerLabel} 正在执行无额度提供商端点网络预检。`,
+  };
+  const advisoryEvidence = {
+    paths: [],
+    reasons: [],
+    riskLevel: 'unknown' as const,
+    riskScore: 0,
+    signals: [],
+    summary: '显式代理、本机接口与目标限定的环境辅助证据正在收集。',
+  };
+  return {
+    ...identity,
+    advisoryEvidence,
+    featureAccess: providerConnectivity.featureAccess,
+    paths: advisoryEvidence.paths,
+    probes: providerConnectivity.probes,
+    provider,
+    providerConnectivity,
+    providerLabel,
+    reasons: providerConnectivity.reasons,
+    riskLevel: advisoryEvidence.riskLevel,
+    riskScore: advisoryEvidence.riskScore,
+    schemaVersion: 2,
+    signals: [],
+    startedAt,
+    status: 'testing',
+    summary: providerConnectivity.summary,
+  };
+};

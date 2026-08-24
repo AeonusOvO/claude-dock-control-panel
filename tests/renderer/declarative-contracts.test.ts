@@ -28,12 +28,38 @@ describe('exported behavior and declarative UI contracts', () => {
     expect(harness.query('#codex-project-step').textContent).toContain('当前目录');
   });
 
-  it('uses one responsive illustrated engine picker and removes the redundant session-status card', () => {
-    expect(harness.document.querySelectorAll('#runtime-picker .runtime-option')).toHaveLength(2);
+  it('uses authoritative local runtime marks and removes the redundant session-status card', () => {
+    const picker = harness.query('#runtime-picker');
+    expect(picker.querySelectorAll('.runtime-option')).toHaveLength(2);
     expect(harness.document.querySelector('#status-pill')).toBeNull();
-    expect(harness.query('#runtime-picker').querySelectorAll('.runtime-option__icon')).toHaveLength(
-      2,
+    expect(picker.querySelectorAll('.runtime-option__icon')).toHaveLength(2);
+    expect(picker.querySelector('.runtime-option__icon svg')).toBeNull();
+    expect(
+      Array.from(picker.querySelectorAll<HTMLImageElement>('.runtime-option__brand-mark'), (mark) =>
+        mark.getAttribute('src'),
+      ),
+    ).toEqual([
+      './assets/brands/claude-spark-clay.svg',
+      './assets/brands/openai-blossom-black.svg',
+      './assets/brands/openai-blossom-white.svg',
+    ]);
+    expectCss(
+      /\.runtime-option__icon--claude\s*\{[^}]*background:\s*var\(--brand-anthropic-surface\)/u,
     );
+    expectCss(
+      /\.runtime-option__icon--codex\s*\{[^}]*background:\s*var\(--brand-openai-light-surface\)/u,
+    );
+    expectCss(
+      /html\[data-appearance='dark'\] \.runtime-option__icon--codex\s*\{[^}]*var\(--brand-openai-dark-surface\)/u,
+    );
+    for (const declaration of [
+      '--brand-anthropic-surface: #faf9f5',
+      '--brand-openai-light-surface: #ffffff',
+      '--brand-openai-dark-surface: #000000',
+    ]) {
+      expect(rendererStyles).toContain(declaration);
+    }
+    expect(rendererStyles).not.toMatch(/\.runtime-option__brand-mark\s*\{[^}]*filter:/u);
   });
 
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {

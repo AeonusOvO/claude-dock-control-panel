@@ -4,14 +4,18 @@ import { createTerminalIoGenerationActions } from './terminal-io-generation';
 import { createTerminalIoMaskActions } from './terminal-io-mask';
 import { createTerminalIoMenuActions } from './terminal-io-menu';
 import { createTerminalIoRelaunchActions } from './terminal-io-relaunch';
-import type { TerminalState, TerminalView } from './state';
+import type { TerminalContextMenuTarget, TerminalState, TerminalView } from './state';
 
 export type { TerminalIoDependencies } from './terminal-io-dependencies';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
 
 export interface TerminalIo {
   beginTerminalMask: (sessionId: string, label: string) => () => void;
-  copyActiveTerminalSelection: () => Promise<void>;
+  copyTerminalSelectionGeneration: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => Promise<void>;
   hideTerminalContextMenu: () => void;
   ownsTerminalGeneration: (
     sessionId: string,
@@ -19,6 +23,7 @@ export interface TerminalIo {
     view: TerminalView,
   ) => boolean;
   pasteIntoActiveTerminal: () => Promise<void>;
+  pasteIntoTerminalContextMenuTarget: (target: TerminalContextMenuTarget) => Promise<void>;
   pasteIntoTerminalGeneration: (
     sessionId: string,
     ptyGeneration: PtyGeneration,
@@ -28,7 +33,12 @@ export interface TerminalIo {
     summary: string,
     input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
   ) => Promise<void>;
-  showTerminalContextMenu: (event: MouseEvent) => void;
+  showTerminalContextMenu: (
+    event: MouseEvent,
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => void;
   terminalStatusForSession: (sessionId: string) => TerminalStatus | undefined;
   terminalViewForStatus: (status: TerminalStatus) => TerminalView | undefined;
   writeToTerminalGeneration: (
@@ -59,10 +69,11 @@ export const createTerminalIo = (
 
   return {
     beginTerminalMask: maskActions.beginTerminalMask,
-    copyActiveTerminalSelection: generationActions.copyActiveTerminalSelection,
+    copyTerminalSelectionGeneration: generationActions.copyTerminalSelectionGeneration,
     hideTerminalContextMenu: menuActions.hideTerminalContextMenu,
     ownsTerminalGeneration: generationActions.ownsTerminalGeneration,
     pasteIntoActiveTerminal: generationActions.pasteIntoActiveTerminal,
+    pasteIntoTerminalContextMenuTarget: generationActions.pasteIntoTerminalContextMenuTarget,
     pasteIntoTerminalGeneration: generationActions.pasteIntoTerminalGeneration,
     relaunchClaudeSession: relaunchActions.relaunchClaudeSession,
     showTerminalContextMenu: menuActions.showTerminalContextMenu,

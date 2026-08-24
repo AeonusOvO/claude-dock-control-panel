@@ -18,7 +18,20 @@ import { ClaudeLaunchAttemptRegistry } from '../../src/renderer/platform/claude-
  * that actually costs something: each accepted call spawns a real PTY in the main process.
  */
 
-const workspaceState = { activeSessionId: 'session-1' } as unknown as WorkspaceState;
+const workspaceState: WorkspaceState = {
+  activeSessionId: 'session-1',
+  projects: [],
+  sessions: [
+    {
+      cwd: 'D:\\work\\repo',
+      id: 'session-1',
+      phase: 'running',
+      ptyGeneration: 1,
+      shell: 'powershell.exe',
+      title: '对话',
+    },
+  ],
+};
 
 /** A deferred main-process reply, so a second click can be made to land mid-flight. */
 const deferred = <T>(): { promise: Promise<T>; resolve: (value: T) => void } => {

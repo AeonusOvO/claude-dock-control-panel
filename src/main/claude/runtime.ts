@@ -33,6 +33,7 @@ import {
   routerBlockingDetail,
   usesDefaultClaudeRouter,
 } from './runtime-connection';
+import { claudeNetworkAccessForLaunchSnapshot } from './runtime-connection-config';
 export {
   connectionProtocolForRouterProvider,
   computeClaudeConnectionAdvice,
@@ -77,12 +78,12 @@ import {
   type PreparedClaudeLaunchRecord,
 } from './runtime-launch-handoff';
 import type { NativeRouteReservation } from './runtime-routing';
-import type {
-  ClaudeLaunchOverrides,
-  ClaudeLaunchPreflightEvidence,
-  PreparedClaudeLaunch,
-  PreparedNativeClaudeConversation,
-  RuntimeSession,
+import {
+  type ClaudeLaunchOverrides,
+  type PreparedClaudeLaunch,
+  type PreparedNativeClaudeConversation,
+  type RuntimeSession,
+  sameClaudeNetworkAccess,
 } from './runtime-types';
 export type {
   PreparedClaudeConfigSave,
@@ -404,95 +405,6 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
     return this.sessions.get(sessionId)?.active ?? false;
   }
 
-  /** Returns the provider captured by the launch that owns this exact live PTY generation. */
-  public officialNetworkProviderForActivePty(
-    sessionId: string,
-    expectedGeneration: PtyGeneration,
-  ): NetworkProviderId | undefined {
-    const runtime = this.sessions.get(sessionId);
-    if (!runtime?.active) return undefined;
-    if (runtime.ptyGeneration !== expectedGeneration) {
-      throw new Error('Claude Code 已绑定到其他终端，这次重新启动已取消。');
-    }
-    return runtime.liveOfficialNetworkProvider;
-  }
-
-  public ownsLaunch(sessionId: string, launchGeneration: number): boolean {
-    const runtime = this.sessions.get(sessionId);
-    return Boolean(runtime?.active && runtime.launchGeneration === launchGeneration);
-  }
-
-  /** Seeds only the exact live PTY from the authoritative check that admitted its launch. */
-  public seedActiveLaunchPreflightEvidence(
-    sessionId: string,
-    ptyGeneration: PtyGeneration,
-    evidence: ClaudeLaunchPreflightEvidence,
-  ): boolean {
-    const runtime = this.sessions.get(sessionId);
-    if (
-      !runtime?.active ||
-      runtime.ptyGeneration !== ptyGeneration ||
-      runtime.liveOfficialNetworkProvider !== evidence.provider
-    ) {
-      return false;
-    }
-    runtime.launchPreflightEvidence = Object.freeze({ ...evidence });
-    return true;
-  }
-
-  /** Consumes a launch seed once and only for the activity event's exact runtime and PTY generations. */
-  public takeActiveLaunchPreflightEvidence(
-    sessionId: string,
-    launchGeneration: number,
-    ptyGeneration: PtyGeneration,
-  ): ClaudeLaunchPreflightEvidence | undefined {
-    const runtime = this.sessions.get(sessionId);
-    if (
-      !runtime?.active ||
-      runtime.launchGeneration !== launchGeneration ||
-      runtime.ptyGeneration !== ptyGeneration
-    ) {
-      return undefined;
-    }
-    const evidence = runtime.launchPreflightEvidence;
-    runtime.launchPreflightEvidence = undefined;
-    return evidence;
-  }
-
-  /** Applies only display state to the exact live launch; it has no terminal or runtime control path. */
-  public applyAdvisoryRouteHealth(
-    sessionId: string,
-    launchGeneration: number,
-    ptyGeneration: PtyGeneration,
-    health: ClaudeRouteHealth,
-  ): boolean {
-    const runtime = this.sessions.get(sessionId);
-    if (
-      !runtime?.active ||
-      runtime.launchGeneration !== launchGeneration ||
-      runtime.ptyGeneration !== ptyGeneration
-    ) {
-      return false;
-    }
-    runtime.advisoryRouteHealth = Object.freeze({ ...health, blocking: false });
-    void this.emitState(runtime).catch(() => {
-      // Advisory publication must not affect the exact running launch it describes.
-    });
-    return true;
-  }
-
-  public isBoundToPty(sessionId: string, ptyGeneration: PtyGeneration): boolean {
-    const runtime = this.sessions.get(sessionId);
-    return Boolean(runtime?.active && runtime.ptyGeneration === ptyGeneration);
-  }
-
-  public writeTerminal(sessionId: string, ptyGeneration: PtyGeneration, data: string): boolean {
-    return (
-      this.isBoundToPty(sessionId, ptyGeneration) &&
-      this.writeToTerminal(sessionId, ptyGeneration, data)
-    );
-  }
-
   protected override hasActiveRoute(
     routeKind: ClaudeRouteKind,
     excludedSessionId?: string,
@@ -556,6 +468,7 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
     }
     const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
     const config = launchSnapshot.config;
+    const networkAccess = claudeNetworkAccessForLaunchSnapshot(launchSnapshot);
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
     const routeKind = this.routeKindForConfig(config);
     const entry: NativeRouteReservation = {
@@ -633,6 +546,7 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
         endpointIdentity: `${launchConfig.provider}|${launchConfig.preset}|${launchConfig.baseUrl}`,
         environment: { ...executionSettings.processEnvironment },
         model,
+        ...(networkAccess === undefined ? {} : { networkAccess }),
         ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
         runtimeModel,
         settingsEnvironment: { ...executionSettings.settingsEnvironment },
@@ -713,8 +627,14 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
     const launchSnapshot = authorization.launchSnapshot;
     const config = launchSnapshot.config;
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
-    if (officialNetworkProvider !== authorization.officialNetworkProvider) {
-      throw new Error('Claude 启动快照与已授权提供方不一致，本次启动已取消。');
+    if (
+      officialNetworkProvider !== authorization.officialNetworkProvider ||
+      !sameClaudeNetworkAccess(
+        claudeNetworkAccessForLaunchSnapshot(launchSnapshot),
+        authorization.networkAccess,
+      )
+    ) {
+      throw new Error('Claude 启动快照与已授权网络目标不一致，本次启动已取消。');
     }
     const routeKind = this.routeKindForConfig(config);
     const record = this.reservePreparedLaunch(
@@ -937,7 +857,12 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
     return {
       command: POWERSHELL_STARTUP_TRIGGER,
       environment: { ...executionSettings.processEnvironment },
-      officialNetworkProvider: record.authorization.officialNetworkProvider,
+      ...(record.authorization.networkAccess === undefined
+        ? {}
+        : { networkAccess: record.authorization.networkAccess }),
+      ...(record.authorization.officialNetworkProvider === undefined
+        ? {}
+        : { officialNetworkProvider: record.authorization.officialNetworkProvider }),
       predecessorPtyGeneration: record.predecessorPtyGeneration,
       token: record.token,
     };

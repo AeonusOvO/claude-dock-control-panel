@@ -1,5 +1,5 @@
 import type { ClaudeLaunchMode, TerminalStatus } from '../../../shared/contracts';
-import { bindTerminalControlActions } from './actions-controls';
+import { createTerminalControlActions } from './actions-controls';
 import { createTerminalDiagnosticActions } from './actions-diagnostic';
 import { bindTerminalIpcListeners } from './actions-ipc';
 import { createTerminalLaunchActions } from './actions-launch';
@@ -15,7 +15,9 @@ import type { TerminalActionsDependencies } from './actions-dependencies';
 export interface TerminalActions {
   dispose: () => void;
   launchClaudeTerminal: (mode: ClaudeLaunchMode) => Promise<void>;
+  renderControlStatus: (status?: TerminalStatus) => void;
   showTerminalDiagnostic: (status: TerminalStatus) => void;
+  startTerminal: (status: TerminalStatus) => Promise<void>;
 }
 
 export const createTerminalActions = (
@@ -28,8 +30,15 @@ export const createTerminalActions = (
 ): TerminalActions => {
   const diagnosticActions = createTerminalDiagnosticActions(state, elements, dependencies, views);
   const launchActions = createTerminalLaunchActions(state, layout, dependencies);
+  const controlActions = createTerminalControlActions(
+    state,
+    elements,
+    dependencies,
+    io,
+    views,
+    layout,
+  );
   bindTerminalIpcListeners(state, io, views);
-  bindTerminalControlActions(state, elements, dependencies, io, views, layout);
 
   let observedTerminalWidth = -1;
   let observedTerminalHeight = -1;
@@ -64,6 +73,8 @@ export const createTerminalActions = (
   return {
     dispose,
     launchClaudeTerminal: launchActions.launchClaudeTerminal,
+    renderControlStatus: controlActions.renderControlStatus,
     showTerminalDiagnostic: diagnosticActions.showTerminalDiagnostic,
+    startTerminal: controlActions.startTerminal,
   };
 };

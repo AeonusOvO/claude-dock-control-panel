@@ -10,6 +10,7 @@ import {
   type ClaudePluginManager,
   ClaudePluginMutationError,
   type ClaudePluginMutationRequest,
+  claudePluginMutationIdentity,
   isValidMarketplaceName,
   isValidMarketplaceSource,
 } from '../claude/plugin-manager';
@@ -51,24 +52,6 @@ const actionLabel = (action: PluginBusyAction): string =>
       update: '更新',
     }) as const
   )[action];
-
-const mutationIdentitySource = (request: ClaudePluginMutationRequest): string => {
-  switch (request.type) {
-    case 'install':
-    case 'uninstall':
-    case 'update':
-      return `${request.type}:${request.pluginId}`;
-    case 'set-enabled':
-      return `${request.pluginId}:${request.enabled}`;
-    case 'marketplace-add':
-      return `${request.type}:${request.source}`;
-    case 'marketplace-remove':
-      return `${request.type}:${request.name}`;
-    case 'marketplaces-refresh':
-    case 'update-all':
-      return request.type;
-  }
-};
 
 export const registerClaudePluginIpc = ({
   guards: { assertPluginMutationsAllowed, validateSender },
@@ -198,8 +181,9 @@ export const registerClaudePluginIpc = ({
   });
 
   /*
-   * Each mutation gets a blocking lease so the quit handshake and the tray both know a plugin write is
-   * in flight. Preparation validates all inputs before any user-controlled value reaches metadata.
+   * The first main-owned mutation gets one blocking lease. Identical callers join that owner and
+   * competing mutations are rejected, so renderer reload cannot duplicate side effects or leases.
+   * Preparation validates all inputs before any user-controlled value reaches metadata.
    */
   for (const [channel, prepare] of pluginMutations) {
     ipcMain.handle(channel, async (event, argument: unknown, flag: unknown) => {
@@ -208,24 +192,28 @@ export const registerClaudePluginIpc = ({
       try {
         assertPluginMutationsAllowed();
         const mutation = prepare(argument, flag);
-        const identity = createHash('sha256')
-          .update(mutationIdentitySource(mutation.request))
-          .digest('hex')
-          .slice(0, 16);
-        mutationSequence += 1;
-        const label = actionLabel(mutation.action);
-        release = services.resolve(BUSY_REGISTRY).acquire({
-          action: mutation.action,
-          cancellable: false,
-          domain: 'plugin',
-          id: `plugin:${channel}:${identity}:${mutationSequence.toString(36)}`,
-          kind: mutation.kind,
-          label: `${label} ${mutation.target}`,
-          severity: 'blocking',
-          stage: `${label} Claude Code 插件`,
-          target: mutation.target,
-        });
-        const outcome = await pluginManager.mutate(mutation.request);
+        const joinsActiveMutation = pluginManager.hasActiveMutation();
+        const outcomePromise = pluginManager.mutate(mutation.request);
+        if (!joinsActiveMutation) {
+          const identity = createHash('sha256')
+            .update(claudePluginMutationIdentity(mutation.request))
+            .digest('hex')
+            .slice(0, 16);
+          mutationSequence += 1;
+          const label = actionLabel(mutation.action);
+          release = services.resolve(BUSY_REGISTRY).acquire({
+            action: mutation.action,
+            cancellable: false,
+            domain: 'plugin',
+            id: `plugin:${channel}:${identity}:${mutationSequence.toString(36)}`,
+            kind: mutation.kind,
+            label: `${label} ${mutation.target}`,
+            severity: 'blocking',
+            stage: `${label} Claude Code 插件`,
+            target: mutation.target,
+          });
+        }
+        const outcome = await outcomePromise;
         return { ...outcome, ok: true };
       } catch (error) {
         return failedMutationResult(

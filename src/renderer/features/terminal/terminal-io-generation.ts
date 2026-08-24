@@ -1,15 +1,20 @@
 import type { PtyGeneration, TerminalStatus } from '../../../shared/contracts';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
-import type { TerminalState, TerminalView } from './state';
+import type { TerminalContextMenuTarget, TerminalState, TerminalView } from './state';
 
 export interface TerminalIoGenerationActions {
-  copyActiveTerminalSelection: () => Promise<void>;
+  copyTerminalSelectionGeneration: (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => Promise<void>;
   ownsTerminalGeneration: (
     sessionId: string,
     ptyGeneration: PtyGeneration,
     view: TerminalView,
   ) => boolean;
   pasteIntoActiveTerminal: () => Promise<void>;
+  pasteIntoTerminalContextMenuTarget: (target: TerminalContextMenuTarget) => Promise<void>;
   pasteIntoTerminalGeneration: (
     sessionId: string,
     ptyGeneration: PtyGeneration,
@@ -80,25 +85,40 @@ export const createTerminalIoGenerationActions = (
     return true;
   };
 
-  const pasteIntoTerminalGeneration = async (
+  const pasteIntoOwnedTerminalGeneration = async (
     sessionId: string,
     ptyGeneration: PtyGeneration,
     view: TerminalView,
+    ownsPaste: () => boolean,
   ): Promise<void> => {
-    if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    if (!ownsPaste() || !writableTerminalGeneration(sessionId, ptyGeneration, view)) {
       return;
     }
     const text = await window.controlPanel.readClipboardText();
-    if (!writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    if (!ownsPaste() || !writableTerminalGeneration(sessionId, ptyGeneration, view)) {
       return;
     }
     if (text) {
-      writeToTerminalGeneration(sessionId, ptyGeneration, view, text.replace(/\r?\n/g, '\r'));
+      view.terminal.paste(text);
     }
-    if (writableTerminalGeneration(sessionId, ptyGeneration, view)) {
+    if (ownsPaste() && writableTerminalGeneration(sessionId, ptyGeneration, view)) {
       view.terminal.focus();
     }
   };
+
+  const pasteIntoTerminalGeneration = (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ): Promise<void> => pasteIntoOwnedTerminalGeneration(sessionId, ptyGeneration, view, () => true);
+
+  const pasteIntoTerminalContextMenuTarget = (target: TerminalContextMenuTarget): Promise<void> =>
+    pasteIntoOwnedTerminalGeneration(
+      target.sessionId,
+      target.ptyGeneration,
+      target.view,
+      () => state.terminalContextMenuRevision === target.menuRevision,
+    );
 
   const pasteIntoActiveTerminal = async (): Promise<void> => {
     const status = dependencies.activeStatus();
@@ -109,20 +129,26 @@ export const createTerminalIoGenerationActions = (
     await pasteIntoTerminalGeneration(status.id, status.ptyGeneration, view);
   };
 
-  const copyActiveTerminalSelection = async (): Promise<void> => {
-    const terminal = state.terminalViews.get(
-      dependencies.getWorkspaceState().activeSessionId,
-    )?.terminal;
-    if (terminal?.hasSelection()) {
-      await window.controlPanel.writeClipboardText(terminal.getSelection());
+  const copyTerminalSelectionGeneration = async (
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ): Promise<void> => {
+    if (!ownsTerminalGeneration(sessionId, ptyGeneration, view) || !view.terminal.hasSelection()) {
+      return;
     }
-    terminal?.focus();
+    const selection = view.terminal.getSelection();
+    await window.controlPanel.writeClipboardText(selection);
+    if (ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
+      view.terminal.focus();
+    }
   };
 
   return {
-    copyActiveTerminalSelection,
+    copyTerminalSelectionGeneration,
     ownsTerminalGeneration,
     pasteIntoActiveTerminal,
+    pasteIntoTerminalContextMenuTarget,
     pasteIntoTerminalGeneration,
     terminalStatusForSession,
     terminalViewForStatus,

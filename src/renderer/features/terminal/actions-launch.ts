@@ -24,12 +24,13 @@ export const createTerminalLaunchActions = (
     const attempt = dependencies.beginClaudeLaunchAttempt(status);
     const outcome = await orchestrateClaudeLaunchAttempt({
       applyResult: (launchOutcome) =>
-        launchOutcome.status === 'paused' ||
-        dependencies.renderClaudeLaunchResult(
-          attempt,
-          launchOutcome.result.state,
-          launchOutcome.result.ok ? 'success' : 'failure',
-        ),
+        launchOutcome.status === 'paused'
+          ? dependencies.setClaudeLaunchPaused(attempt)
+          : dependencies.renderClaudeLaunchResult(
+              attempt,
+              launchOutcome.result.state,
+              launchOutcome.result.ok ? 'success' : 'failure',
+            ),
       onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
       prepare: () => state.terminalViews.get(status.id)?.terminal.clear(),
       registry: dependencies.claudeLaunchAttempts,

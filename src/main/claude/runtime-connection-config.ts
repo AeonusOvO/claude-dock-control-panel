@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type {
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
+  ClaudeEndpointProtocol,
   ClaudeProjectState,
   ClaudeRouterManagementState,
   NetworkProviderId,
@@ -19,13 +20,17 @@ import {
 } from '../../shared/claude/providers';
 import type { CcSwitchProviderExportInput } from './cc-switch-adapter';
 import { testClaudeConnection } from './connection-test';
-import type { ClaudeConfigSnapshot } from './config-store';
+import type { ClaudeConfigSnapshot, ClaudeLaunchConfigSnapshot } from './config-store';
 import {
   ClaudeConnectionHistoryStore,
   type ClaudeConnectionHistorySnapshot,
   type ConnectionHistoryReplay,
 } from './connection-history';
-import { MODEL_NAME_PATTERN, normalizeClaudeConfig } from './configuration';
+import {
+  MODEL_NAME_PATTERN,
+  type NormalizedClaudeConfig,
+  normalizeClaudeConfig,
+} from './configuration';
 import {
   connectionFingerprint,
   customRouterProviderName,
@@ -33,18 +38,22 @@ import {
   projectKey,
 } from './runtime-connection';
 import { ClaudeRuntimeRouting } from './runtime-routing';
-import type {
-  ClaudeLaunchAuthorization,
-  ConnectionCheckRecord,
-  ConnectionHistoryMetadata,
-  PreparedClaudeConfigSave,
-  PreparedOpenAiConnection,
-  RuntimeSession,
+import {
+  captureClaudeNetworkAccess,
+  type ClaudeLaunchAuthorization,
+  type ClaudeNetworkAccess,
+  type ConnectionCheckRecord,
+  type ConnectionHistoryMetadata,
+  type PreparedClaudeConfigSave,
+  type PreparedOpenAiConnection,
+  type RuntimeSession,
+  sameClaudeNetworkAccess,
 } from './runtime-types';
 
 export interface ClaudeConnectionHistoryAuthorization {
   readonly cwdKey: string;
   readonly entryId: string;
+  readonly networkAccess?: Readonly<ClaudeNetworkAccess>;
   readonly officialNetworkProvider?: NetworkProviderId;
   readonly replay: ConnectionHistoryReplay;
 }
@@ -52,6 +61,7 @@ export interface ClaudeConnectionHistoryAuthorization {
 /** Credential-free process-local identity safe to retain while renderer input is pending. */
 export interface ClaudeLaunchConfigurationBaseline {
   readonly cwdKey: string;
+  readonly networkAccess?: Readonly<ClaudeNetworkAccess>;
   readonly revision: string;
   readonly officialNetworkProvider?: NetworkProviderId;
 }
@@ -60,6 +70,7 @@ export interface ClaudeLaunchConfigurationBaseline {
 export interface ClaudeConnectionHistoryBaseline {
   readonly cwdKey: string;
   readonly entryId: string;
+  readonly networkAccess?: Readonly<ClaudeNetworkAccess>;
   readonly revision: string;
   readonly officialNetworkProvider?: NetworkProviderId;
 }
@@ -68,6 +79,43 @@ export interface ClaudeRuntimeConfigTransactionSnapshot {
   config: ClaudeConfigSnapshot;
   history: ClaudeConnectionHistorySnapshot;
 }
+
+export const claudeNetworkAccessForConfig = (
+  config: Pick<NormalizedClaudeConfig, 'baseUrl' | 'preset'>,
+  protocol: ClaudeEndpointProtocol | undefined,
+): Readonly<ClaudeNetworkAccess> | undefined => {
+  const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
+  if (officialNetworkProvider) {
+    return captureClaudeNetworkAccess({ provider: officialNetworkProvider });
+  }
+  if (protocol === 'openai' || !config.baseUrl.trim()) return undefined;
+  return captureClaudeNetworkAccess({
+    provider: 'anthropic-claude',
+    target: {
+      process: 'claude-cli',
+      url: completeConnectionEndpoint(config.baseUrl, 'anthropic'),
+    },
+  });
+};
+
+export const claudeNetworkAccessForConfigInput = (
+  input: SaveClaudeConfigInput,
+): Readonly<ClaudeNetworkAccess> | undefined => {
+  const officialNetworkProvider = officialNetworkProviderForClaudePreset(input.preset);
+  if (officialNetworkProvider) {
+    return captureClaudeNetworkAccess({ provider: officialNetworkProvider });
+  }
+  if (input.protocol === 'openai') return undefined;
+  return claudeNetworkAccessForConfig(
+    normalizeClaudeConfig(input),
+    input.protocol ?? defaultConnectionProtocolForPreset(input.preset),
+  );
+};
+
+export const claudeNetworkAccessForLaunchSnapshot = (
+  snapshot: Pick<ClaudeLaunchConfigSnapshot, 'config' | 'protocol'>,
+): Readonly<ClaudeNetworkAccess> | undefined =>
+  claudeNetworkAccessForConfig(snapshot.config, snapshot.protocol);
 
 export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting {
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
@@ -105,16 +153,34 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     return connectionCheck?.fingerprint === fingerprint ? connectionCheck.result : undefined;
   }
 
+  public networkAccess(cwd: string): Readonly<ClaudeNetworkAccess> | undefined {
+    return claudeNetworkAccessForConfig(
+      this.configStore.getConfig(cwd),
+      this.configStore.getView(cwd).protocol,
+    );
+  }
+
+  public networkAccessForConfigInput(
+    input: SaveClaudeConfigInput,
+  ): Readonly<ClaudeNetworkAccess> | undefined {
+    return claudeNetworkAccessForConfigInput(input);
+  }
+
   public officialNetworkProvider(cwd: string): NetworkProviderId | undefined {
     return officialNetworkProviderForClaudePreset(this.configStore.getConfig(cwd).preset);
   }
 
   public captureLaunchAuthorization(cwd: string): ClaudeLaunchAuthorization {
     const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(
+      launchSnapshot.config.preset,
+    );
+    const networkAccess = claudeNetworkAccessForLaunchSnapshot(launchSnapshot);
     return Object.freeze({
       cwdKey: projectKey(cwd),
       launchSnapshot,
-      officialNetworkProvider: officialNetworkProviderForClaudePreset(launchSnapshot.config.preset),
+      ...(networkAccess === undefined ? {} : { networkAccess }),
+      ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
     });
   }
 
@@ -132,11 +198,15 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
 
   public captureLaunchConfigurationBaseline(cwd: string): ClaudeLaunchConfigurationBaseline {
     const snapshot = this.configStore.createSnapshot(cwd);
-    const officialNetworkProvider = officialNetworkProviderForClaudePreset(
-      this.configStore.getConfig(cwd).preset,
+    const config = this.configStore.getConfig(cwd);
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
+    const networkAccess = claudeNetworkAccessForConfig(
+      config,
+      this.configStore.getView(cwd).protocol,
     );
     return Object.freeze({
       cwdKey: projectKey(cwd),
+      ...(networkAccess === undefined ? {} : { networkAccess }),
       revision: this.baselineRevision(snapshot),
       ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
     });
@@ -150,6 +220,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     if (
       current.cwdKey !== baseline.cwdKey ||
       current.revision !== baseline.revision ||
+      !sameClaudeNetworkAccess(current.networkAccess, baseline.networkAccess) ||
       current.officialNetworkProvider !== baseline.officialNetworkProvider
     ) {
       throw new Error('Claude 接入配置在等待确认期间已更新，本次启动已失效。');
@@ -184,15 +255,25 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     );
   }
 
+  public connectionHistoryNetworkAccess(
+    cwd: string,
+    entryId: string,
+  ): Readonly<ClaudeNetworkAccess> | undefined {
+    return this.networkAccessForConfigInput(this.historyStore.toSaveInput(cwd, entryId));
+  }
+
   public captureConnectionHistoryAuthorization(
     cwd: string,
     entryId: string,
   ): ClaudeConnectionHistoryAuthorization {
     const replay = structuredClone(this.historyStore.toReplayInput(cwd, entryId));
+    const officialNetworkProvider = officialNetworkProviderForClaudePreset(replay.config.preset);
+    const networkAccess = this.networkAccessForConfigInput(replay.config);
     return Object.freeze({
       cwdKey: projectKey(cwd),
       entryId,
-      officialNetworkProvider: officialNetworkProviderForClaudePreset(replay.config.preset),
+      ...(networkAccess === undefined ? {} : { networkAccess }),
+      ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
       replay,
     });
   }
@@ -218,9 +299,11 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   ): ClaudeConnectionHistoryBaseline {
     const replay = this.historyStore.toReplayInput(cwd, entryId);
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(replay.config.preset);
+    const networkAccess = this.networkAccessForConfigInput(replay.config);
     return Object.freeze({
       cwdKey: projectKey(cwd),
       entryId,
+      ...(networkAccess === undefined ? {} : { networkAccess }),
       revision: this.baselineRevision(replay),
       ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
     });
@@ -235,6 +318,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       current.cwdKey !== baseline.cwdKey ||
       current.entryId !== baseline.entryId ||
       current.revision !== baseline.revision ||
+      !sameClaudeNetworkAccess(current.networkAccess, baseline.networkAccess) ||
       current.officialNetworkProvider !== baseline.officialNetworkProvider
     ) {
       throw new Error('历史接入在等待确认期间已更新，本次启动已失效。');
@@ -317,11 +401,18 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     );
     assertCurrent();
     this.assertConnectionHistoryAuthorizationCurrent(cwd, authorization);
+    const preparedNetworkAccess = claudeNetworkAccessForConfig(
+      normalizeClaudeConfig(prepared.input),
+      prepared.presentation?.protocol ??
+        prepared.input.protocol ??
+        defaultConnectionProtocolForPreset(prepared.input.preset),
+    );
     if (
       officialNetworkProviderForClaudePreset(prepared.input.preset) !==
-      authorization.officialNetworkProvider
+        authorization.officialNetworkProvider ||
+      !sameClaudeNetworkAccess(preparedNetworkAccess, authorization.networkAccess)
     ) {
-      throw new Error('历史接入准备结果与已授权提供方不一致，请重试。');
+      throw new Error('历史接入准备结果与已授权网络目标不一致，请重试。');
     }
     return prepared;
   }

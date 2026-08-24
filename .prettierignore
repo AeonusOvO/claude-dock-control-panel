@@ -7,4 +7,5 @@ work
 .claude
 package-lock.json
 v2rayN-*
+src/renderer/assets/brands/*.svg
 

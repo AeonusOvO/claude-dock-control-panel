@@ -157,14 +157,18 @@
 
       <aside class="control-panel" id="control-panel">
         <section class="rail-page rail-page--active" data-rail-page="projects">
-          <fieldset class="runtime-picker" id="runtime-picker">
-            <legend>当前项目开发引擎</legend>
+          <fieldset class="runtime-picker" id="runtime-picker" aria-busy="false">
+            <legend id="runtime-picker-label" aria-live="polite" aria-atomic="true">
+              当前项目开发引擎
+            </legend>
             <label class="runtime-option card" for="runtime-claude">
               <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
               <span class="runtime-option__icon runtime-option__icon--claude" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6 6 18" />
-                </svg>
+                <img
+                  class="runtime-option__brand-mark"
+                  src="./assets/brands/claude-spark-clay.svg"
+                  alt=""
+                />
               </span>
               <span class="runtime-option__copy">
                 <strong>Claude Code</strong>
@@ -177,12 +181,16 @@
             <label class="runtime-option card" for="runtime-codex">
               <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
               <span class="runtime-option__icon runtime-option__icon--codex" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <circle cx="7" cy="7" r="2.25" />
-                  <circle cx="17" cy="7" r="2.25" />
-                  <circle cx="12" cy="17" r="2.25" />
-                  <path d="m8.9 8.3 2.2 6.5m4-6.5-2.2 6.5M9.2 7h5.6" />
-                </svg>
+                <img
+                  class="runtime-option__brand-mark runtime-option__brand-mark--light"
+                  src="./assets/brands/openai-blossom-black.svg"
+                  alt=""
+                />
+                <img
+                  class="runtime-option__brand-mark runtime-option__brand-mark--dark"
+                  src="./assets/brands/openai-blossom-white.svg"
+                  alt=""
+                />
               </span>
               <span class="runtime-option__copy">
                 <strong>Codex</strong>
@@ -218,21 +226,31 @@
               <span id="actions-heading">快捷操作</span>
               <span>当前对话</span>
             </div>
-            <button class="button button--primary" id="run-claude" type="button">
+            <button class="button button--primary" id="run-claude" type="button" aria-busy="false">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m8 6 6 6-6 6" />
                 <path d="M15 18h3" />
               </svg>
-              <span id="run-agent-label">新建安全会话</span>
+              <span id="run-agent-label" aria-live="polite" aria-atomic="true"> 新建安全会话 </span>
             </button>
             <div class="button-row">
-              <button class="button button--quiet" id="restart-terminal" type="button">
+              <button
+                class="button button--quiet"
+                id="restart-terminal"
+                type="button"
+                aria-busy="false"
+              >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
                 </svg>
-                重启
+                <span id="restart-terminal-label">重启</span>
               </button>
-              <button class="button button--quiet" id="toggle-terminal" type="button">
+              <button
+                class="button button--quiet"
+                id="toggle-terminal"
+                type="button"
+                aria-busy="false"
+              >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="5" y="5" width="14" height="14" rx="2" />
                 </svg>
@@ -829,11 +847,21 @@
               </select>
             </label>
             <div class="plugin-toolbar__actions" id="plugin-update-actions">
-              <button id="refresh-plugins" type="button">检查更新</button>
-              <button id="update-all-plugins" type="button" hidden>更新全部</button>
+              <button id="refresh-plugins" type="button" aria-busy="false">检查更新</button>
+              <button id="update-all-plugins" type="button" aria-busy="false" hidden>
+                更新全部
+              </button>
             </div>
           </div>
-          <p class="plugin-status" id="plugin-status">正在读取插件列表…</p>
+          <p
+            class="plugin-status"
+            id="plugin-status"
+            aria-busy="false"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            正在读取插件列表…
+          </p>
 
           <nav class="plugin-tabs" aria-label="插件分组">
             <button class="plugin-tab plugin-tab--active" data-plugin-tab="installed" type="button">
@@ -975,7 +1003,8 @@
                 class="toolbar-menu-button network-preflight-trigger"
                 id="network-preflight-trigger"
                 type="button"
-                title="检查 IP、DNS 与地区环境"
+                title="检查提供商端点与目标限定的辅助网络证据"
+                aria-busy="false"
               >
                 <span class="network-preflight-trigger__pulse" aria-hidden="true"></span>
                 <span class="toolbar-menu-button__label">网络预检</span>
@@ -1418,7 +1447,9 @@
               </div>
             </div>
             <div class="network-preflight-card__actions">
-              <button id="network-preflight-recheck" type="button">重新检测</button>
+              <button id="network-preflight-recheck" type="button" aria-busy="false">
+                重新检测
+              </button>
               <button id="network-preflight-details" type="button">详情</button>
             </div>
           </section>
@@ -1508,12 +1539,24 @@
               <p class="workbench-warning" id="claude-runtime-warning" hidden></p>
 
               <div class="launch-actions">
-                <button class="launch-primary" id="launch-new" type="button">新建安全会话</button>
+                <button class="launch-primary" id="launch-new" type="button" aria-busy="false">
+                  新建安全会话
+                </button>
                 <div>
-                  <button class="launch-secondary" id="launch-continue" type="button">
+                  <button
+                    class="launch-secondary"
+                    id="launch-continue"
+                    type="button"
+                    aria-busy="false"
+                  >
                     继续最近会话
                   </button>
-                  <button class="launch-secondary" id="launch-resume" type="button">
+                  <button
+                    class="launch-secondary"
+                    id="launch-resume"
+                    type="button"
+                    aria-busy="false"
+                  >
                     选择历史会话
                   </button>
                 </div>
@@ -1660,7 +1703,12 @@
               <p>
                 ClaudeDock 负责安装、登录和项目启动；账号令牌、续期与执行沙箱仍由官方 Codex 管理。
               </p>
-              <button class="launch-primary" id="codex-primary-action" type="button">
+              <button
+                class="launch-primary"
+                id="codex-primary-action"
+                type="button"
+                aria-busy="false"
+              >
                 一键准备并启动
               </button>
             </section>
@@ -1672,7 +1720,7 @@
                   <strong id="codex-install-title">正在检查 Codex CLI</strong>
                   <small id="codex-install-detail">核对官方 Windows 安装与版本</small>
                 </div>
-                <button id="codex-install" type="button">安装</button>
+                <button id="codex-install" type="button" aria-busy="false">安装</button>
               </li>
               <li id="codex-account-step" data-state="pending">
                 <span class="codex-readiness__index">2</span>
@@ -1682,7 +1730,7 @@
                     >支持 Plus、Pro、Business、Edu 与 Enterprise</small
                   >
                 </div>
-                <button id="codex-login" type="button">登录</button>
+                <button id="codex-login" type="button" aria-busy="false">登录</button>
               </li>
               <li id="codex-project-step" data-state="pending">
                 <span class="codex-readiness__index">3</span>
@@ -1715,20 +1763,36 @@
             </section>
 
             <div class="codex-secondary-actions">
-              <button id="codex-device-login-action" type="button">改用设备码登录</button>
-              <button id="codex-cancel-login" type="button" hidden>取消登录</button>
-              <button id="codex-logout" type="button" hidden>退出 Codex 账号</button>
+              <button id="codex-device-login-action" type="button" aria-busy="false">
+                改用设备码登录
+              </button>
+              <button id="codex-cancel-login" type="button" aria-busy="false" hidden>
+                取消登录
+              </button>
+              <button id="codex-logout" type="button" aria-busy="false" hidden>
+                退出 Codex 账号
+              </button>
             </div>
 
             <div class="launch-actions codex-launch-actions">
-              <button class="launch-primary" id="codex-launch-new" type="button">
+              <button class="launch-primary" id="codex-launch-new" type="button" aria-busy="false">
                 新建安全会话
               </button>
               <div>
-                <button class="launch-secondary" id="codex-launch-continue" type="button">
+                <button
+                  class="launch-secondary"
+                  id="codex-launch-continue"
+                  type="button"
+                  aria-busy="false"
+                >
                   继续最近会话
                 </button>
-                <button class="launch-secondary" id="codex-launch-resume" type="button">
+                <button
+                  class="launch-secondary"
+                  id="codex-launch-resume"
+                  type="button"
+                  aria-busy="false"
+                >
                   选择历史会话
                 </button>
               </div>
@@ -2365,10 +2429,16 @@
                 <span>
                   <strong>网络预检</strong>
                   <small
-                    >评估官方端点、IP 情报、DNS 出口信号与时区；Windows 系统语言只作参考。</small
+                    >评估官方端点、目标限定的公网地址、DNS 目标对照与时区；Windows
+                    系统语言只作参考。</small
                   >
                 </span>
-                <button class="dialog-primary" id="settings-network-recheck" type="button">
+                <button
+                  class="dialog-primary"
+                  id="settings-network-recheck"
+                  type="button"
+                  aria-busy="false"
+                >
                   重新检测
                 </button>
               </div>
@@ -2376,6 +2446,8 @@
                 class="network-settings__status"
                 id="settings-network-status"
                 data-tone="unknown"
+                aria-live="polite"
+                aria-atomic="true"
               >
                 <strong id="settings-network-summary">尚无检测结果</strong>
                 <span id="settings-network-meta">打开此页面后会读取当前状态。</span>
@@ -2972,35 +3044,45 @@
           </div>
           <button id="network-preflight-close" type="button" aria-label="关闭">×</button>
         </header>
-        <section class="network-preflight-dialog__summary" data-tone="unknown">
+        <section
+          class="network-preflight-dialog__summary"
+          data-tone="unknown"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <strong id="network-preflight-dialog-summary">尚无探测结果</strong>
           <span id="network-preflight-dialog-meta"
             >探测不调用模型、不读取登录令牌，也不修改系统代理。</span
           >
         </section>
         <div class="network-preflight-dialog__grid">
-          <section>
-            <h3>风险与结论</h3>
-            <ul id="network-preflight-reasons"></ul>
+          <section class="network-preflight-dialog__wide">
+            <h3>提供商端点证据</h3>
+            <div class="network-preflight-probes" id="network-preflight-probes"></div>
           </section>
           <section>
-            <h3>进程网络路径</h3>
+            <h3>应用与 CLI 可见代理决策</h3>
             <ul id="network-preflight-paths"></ul>
           </section>
           <section>
-            <h3>出口与环境</h3>
+            <h3>目标限定的公网地址与辅助证据</h3>
             <div class="network-preflight-environment" id="network-preflight-environment"></div>
           </section>
+          <section class="network-preflight-dialog__wide">
+            <h3>处理建议</h3>
+            <ul id="network-preflight-reasons"></ul>
+          </section>
         </div>
-        <section>
-          <h3>逐项探测</h3>
-          <div class="network-preflight-probes" id="network-preflight-probes"></div>
-        </section>
         <footer class="network-preflight-dialog__footer">
           <span>诊断历史仅保留 7 天 / 40 条，地址只保存掩码网段，凭据会脱敏。</span>
           <div>
             <button id="network-preflight-clear-history" type="button">清除诊断历史</button>
-            <button class="dialog-primary" id="network-preflight-dialog-recheck" type="button">
+            <button
+              class="dialog-primary"
+              id="network-preflight-dialog-recheck"
+              type="button"
+              aria-busy="false"
+            >
               立即重新检测
             </button>
           </div>

@@ -294,6 +294,43 @@ const safeTarget = (rawUrl: string): string => {
   return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 };
 
+const isSocksProxyKind = (proxyKind: NetworkPathView['proxyKind'] | undefined): boolean =>
+  proxyKind === 'socks' || proxyKind === 'socks5h';
+
+const proxyCanResolveEndpointHost = (pathView: NetworkPathView | undefined): boolean =>
+  Boolean(
+    pathView?.proxyConfigured &&
+    (pathView.proxyKind === 'socks5h' || !isSocksProxyKind(pathView.proxyKind)),
+  );
+
+const dnsAuthorityForTransport = (
+  provider: NetworkProviderId,
+  profile: ProviderProfile,
+  action: NetworkPreflightAction,
+  paths: NetworkPathView[],
+  probe: NetworkProbeResult,
+): NetworkProbeResult => {
+  if (!probe.required || probe.kind !== 'dns' || !probe.target) return probe;
+  const requiredEndpoints = profile.endpoints.filter(
+    (endpoint) =>
+      endpoint.requiredFor.includes(action) && new URL(endpoint.url).hostname === probe.target,
+  );
+  const allRequiredTransportsUseProxy =
+    requiredEndpoints.length > 0 &&
+    requiredEndpoints.every((endpoint) => {
+      const process =
+        endpoint.process === 'cli'
+          ? provider === 'anthropic-claude'
+            ? 'claude-cli'
+            : 'codex-cli'
+          : 'application';
+      return proxyCanResolveEndpointHost(
+        paths.find((pathView) => pathView.process === process && pathView.target === endpoint.url),
+      );
+    });
+  return allRequiredTransportsUseProxy ? { ...probe, required: false } : probe;
+};
+
 const classifyNetworkError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
   const stderr =
@@ -511,8 +548,8 @@ export class ProviderConnectivityProbe {
             {
               id: 'configured-chat-api',
               kind: 'api',
-              label: '已配置的官方聊天 API',
-              process: 'application',
+              label: '已配置的聊天 API',
+              process: target.process === 'claude-cli' ? 'cli' : 'application',
               requiredFor: [action],
               url: target.url,
             },
@@ -527,15 +564,35 @@ export class ProviderConnectivityProbe {
      */
     const deadline = deadlineTimer(this.overallTimeoutMs, signal);
     const cancellableWork = new CancellableWorkTracker();
+    const requiredPathTargets = [
+      ...new Set(
+        profile.endpoints
+          .filter((endpoint) => endpoint.requiredFor.includes(action))
+          .map((endpoint) => endpoint.url),
+      ),
+    ];
+    const pathTargets =
+      requiredPathTargets.length > 0
+        ? requiredPathTargets
+        : profile.endpoints[0]
+          ? [profile.endpoints[0].url]
+          : [];
     try {
-      const pathOperation = deadline.race(
-        this.pathResolver.resolve(provider, profile.endpoints[0]?.url ?? '', networkScope, signal),
-        () => this.timedOutPaths(provider),
-      );
+      const pathOperation = (async (): Promise<NetworkPathView[]> => {
+        const resolvedPaths: NetworkPathView[] = [];
+        for (const pathTarget of pathTargets) {
+          const targetPaths = await deadline.race(
+            this.pathResolver.resolve(provider, pathTarget, networkScope, signal),
+            () => this.timedOutPaths(provider, pathTarget, networkScope),
+          );
+          resolvedPaths.push(...targetPaths);
+        }
+        return target
+          ? resolvedPaths.filter((pathView) => pathView.process === target.process)
+          : resolvedPaths;
+      })();
       const [paths, dnsProbes, endpointProbes, versionProbe] = await Promise.all([
-        pathOperation.then((resolved) =>
-          target ? resolved.filter((pathView) => pathView.process === 'application') : resolved,
-        ),
+        pathOperation,
         this.probeDns(profile, action, deadline, signal),
         Promise.all(
           profile.endpoints.map((endpoint) =>
@@ -560,9 +617,16 @@ export class ProviderConnectivityProbe {
             ),
       ]);
       signal?.throwIfAborted();
+      const transportScopedDnsProbes = dnsProbes.map((probe) =>
+        dnsAuthorityForTransport(provider, profile, action, paths, probe),
+      );
       return {
         paths,
-        probes: [...dnsProbes, ...(versionProbe ? [versionProbe] : []), ...endpointProbes.flat()],
+        probes: [
+          ...transportScopedDnsProbes,
+          ...(versionProbe ? [versionProbe] : []),
+          ...endpointProbes.flat(),
+        ],
       };
     } finally {
       deadline.stop();
@@ -572,8 +636,17 @@ export class ProviderConnectivityProbe {
     }
   }
 
-  private timedOutPaths(provider: NetworkProviderId): NetworkPathView[] {
-    return this.pathResolver.unknownPaths(provider, 'Electron 系统代理解析超时，PAC 路径未知。');
+  private timedOutPaths(
+    provider: NetworkProviderId,
+    targetUrl: string,
+    networkScope: NetworkPreflightScope,
+  ): NetworkPathView[] {
+    return this.pathResolver.unknownPaths(
+      provider,
+      targetUrl,
+      networkScope,
+      'Electron 系统代理解析超时，PAC 路径未知。',
+    );
   }
 
   private timedOutDnsProbe(host: string, required: boolean): NetworkProbeResult {
@@ -600,7 +673,7 @@ export class ProviderConnectivityProbe {
       id: `app:${endpoint.id}`,
       kind: endpoint.kind,
       label: `${endpoint.label}（应用）`,
-      process: endpoint.kind === 'oauth' ? 'oauth-browser' : 'application',
+      process: 'application',
       required,
       status: 'skipped',
       target: safeTarget(endpoint.url),
@@ -760,8 +833,9 @@ export class ProviderConnectivityProbe {
       });
       signal?.throwIfAborted();
       const uninspectedRedirect = response.status >= 300 && response.status < 400;
+      const serverFailure = response.status >= 500;
       let status: NetworkProbeResult['status'] =
-        response.status === 407 || uninspectedRedirect
+        response.status === 407 || uninspectedRedirect || serverFailure
           ? 'failed'
           : REACHABLE_HTTP_STATUS(response.status)
             ? 'passed'
@@ -771,7 +845,9 @@ export class ProviderConnectivityProbe {
           ? 'HTTP 407，代理认证未通过。'
           : uninspectedRedirect
             ? `应用路径最终返回 HTTP ${response.status} 重定向，但未提供可验证的目标。`
-            : `HTTP ${response.status}，官方端点可达。`;
+            : serverFailure
+              ? `应用路径返回 HTTP ${response.status}，提供商端点服务不可用。`
+              : `HTTP ${response.status}，官方端点可达。`;
       // A protected official API commonly answers an anonymous reachability probe with a
       // 401/403 HTML authentication page. That still proves DNS, TCP and TLS reachability. Only a
       // successful API response returning HTML is credible captive-portal/content-substitution
@@ -803,7 +879,7 @@ export class ProviderConnectivityProbe {
         id: `app:${endpoint.id}`,
         kind: endpoint.kind,
         label: `${endpoint.label}（应用）`,
-        process: endpoint.kind === 'oauth' ? 'oauth-browser' : 'application',
+        process: 'application',
         required,
         status,
         target: safeTarget(endpoint.url),
@@ -813,18 +889,20 @@ export class ProviderConnectivityProbe {
       const message = error instanceof Error ? error.message : String(error);
       const redirectCancelled = /redirect was cancelled/i.test(message);
       const exactTarget = endpoint.id === 'configured-chat-api';
+      const optionalKnownRedirect = redirectCancelled && !exactTarget && !required;
       return {
         checkedAt,
-        detail:
-          redirectCancelled && !exactTarget
-            ? '官方端点已返回重定向响应；应用为避免跟随未验证目标而停止，但该网络路径已确认可达。'
+        detail: optionalKnownRedirect
+          ? '官方端点已返回重定向响应；应用为避免跟随未验证目标而停止，但该网络路径已确认可达。'
+          : redirectCancelled
+            ? '必需官方端点返回了未验证的重定向；只有目标经过 HTTPS 提供商允许列表验证后才能作为连接证据。'
             : classifyNetworkError(error),
         id: `app:${endpoint.id}`,
         kind: endpoint.kind,
         label: `${endpoint.label}（应用）`,
-        process: endpoint.kind === 'oauth' ? 'oauth-browser' : 'application',
+        process: 'application',
         required,
-        status: redirectCancelled && !exactTarget ? 'warning' : 'failed',
+        status: optionalKnownRedirect ? 'warning' : 'failed',
         target: safeTarget(endpoint.url),
       };
     }

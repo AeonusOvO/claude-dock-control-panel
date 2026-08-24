@@ -1,7 +1,7 @@
 # ClaudeDock 设计规范
 
-当前设计版本：**5.0.0-rc.15**（2026-08-23）。旧版设计计划、路线图、缺陷清单与分阶段修复提示词
-统一归档在 [`docs/archive/`](docs/archive/)；它们仅用于历史追溯，不得覆盖本文的当前设计契约。
+当前设计版本：**5.0.0-rc.16**（2026-08-24）。旧版设计计划、路线图、缺陷清单与分阶段修复提示词
+统一归档在 [`docs/archive/`](../archive/)；它们仅用于历史追溯，不得覆盖本文的当前设计契约。
 
 ## 5.0 安全终端与原生对话工作区
 
@@ -43,9 +43,12 @@
   主题不再嵌套第二层框体：单一按钮打开单一选择卡片，两种菜单按钮的字号、字重、高度、圆角、描边、
   chevron、hover、press 与窄宽折叠行为必须完全一致。
 - 左栏不再重复显示“当前对话状态”卡片：运行状态已经在标题栏、对话行和底栏可见，终端失败按
-  `(session, generation)` 只弹一次主题化诊断框。开发引擎使用同一响应式图形卡组件，通过图标、主标题、
-  能力说明、选择勾和左侧强调线建立层级；卡组始终使用单列横向卡，保证 270px 侧栏仍维持正常文字行，
-  切换使用主题时长和缓动，不能退回“两个方框加文字”。
+  `(session, generation)` 只弹一次主题化诊断框。开发引擎使用同一响应式图形卡组件，通过官方标记、
+  主标题、能力说明、选择勾和左侧强调线建立层级；卡组始终使用单列横向卡，保证 270px 侧栏仍维持
+  正常文字行。Claude Code 使用本地官方 Anthropic Clay Spark 和固定 Anthropic 表面；Codex 按当前
+  appearance 使用本地官方 OpenAI 黑/白 Blossom 与固定白/黑表面。geometry、fill、surface 和 border
+  不随主题重着色，不得用 inline 近似图形或 CSS filter 替代。标记是装饰图片，邻接文字已命名 runtime，
+  因此使用空 `alt`。切换使用主题时长和缓动，不能退回“两个方框加文字”。
 - 原生输入坞使用共享 DOM、提交状态机、附件生命周期、键盘语义和可访问性接口，但允许主题拥有不同
   外壳。Claude 明亮采用宽松的柔和卡片、圆形上箭头和轻微抬升确认；Telegram 明亮采用接近官方桌面
   客户端的紧凑扁平输入条、纸飞机、指针原点涟漪和短距离飞行动效。主题差异只能由 `data-theme` 与
@@ -693,9 +696,10 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 - 上下文进度 0–65% 使用青蓝到薄荷绿；65–85% 转为琥珀色；85% 以上转为珊瑚红。百分比、
   数字和颜色同时表达，不只依赖色彩。
 - 会话入口分为一个主操作“新建安全会话”和两个次操作“继续最近 / 选择历史”，并在按钮下方
-  解释三者的上下文差异。任一入口点击后必须在第一个 `await` 之前同步禁用主按钮和三个入口、
-  设置 `aria-busy` 并显示“正在启动安全会话…”，即使 renderer 还没有该 session 的 Claude 状态
-  缓存也不能留下可重复点击的空窗。
+  解释三者的上下文差异。任一入口点击后必须在第一个 `await` 前建立精确 launch attempt owner、同步
+  禁用入口并设置 `aria-busy`：先显示“正在进行网络预检…”，精确终端 lifecycle 进入启动阶段后显示
+  “正在启动…”，暂停确认时显示“等待网络确认…”。冷状态也不能留下可重复点击的空窗；只有当前 owner
+  的失败或真实 session/generation lifecycle 证据可以恢复入口。
 - 启动锁按 session 与 generation 隔离，IPC 成功返回不直接解锁，也不设 renderer 超时。只有新的
   conversation UUID、新的运行中 `ptyGeneration`（即使 Windows 复用了同一 PID）、新的运行中
   PowerShell/ConPTY PID、Claude 已活动后退出且原 PowerShell 仍运行，或明确 IPC 失败、终端
@@ -797,7 +801,7 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   “下载更新”，下载中在原按钮显示进度，完成后改为“重启并安装”并使用应用内确认框。开发版隐藏安装
   操作。Claude Code 不展示手动来源下拉：原生安装沿用官方更新，npm 安装用不超过 128 KiB 的样本
   自动择优，文案明确“不创建重复安装”。
-- ClaudeDock 行必须保留完整预发布版本，例如 `v5.0.0-rc.14 → 5.0.0-rc.15`；可用、下载中和已下载
+- ClaudeDock 行必须保留完整预发布版本，例如 `v5.0.0-rc.15 → 5.0.0-rc.16`；可用、下载中和已下载
   三个阶段都继续计入更新总数。当前 feed 是打包时固定的单一 generic HTTPS 地址，不显示不存在的
   GitHub/镜像选择、测速或签名清单状态。
 - “已下载”表示 electron-updater 已按所读取通道清单完成传输和 SHA-512 一致性检查，并不表示清单或
@@ -940,7 +944,14 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   `aria-controls`/`aria-expanded`，区域具备名称与 group 语义，支持每次点击切换、方向键/Home/End 导航、
   焦点恢复、`Esc`、点击外部和窗口失焦关闭。跨过 medium 档直至最小 820px 宽度都不得丢失、错位或横向溢出。
 - 终端右键菜单只包含复制、粘贴、全选和清屏，并保持键盘可达；有选区时 `Ctrl+C` 复制，
-  无选区时保留 PowerShell 中断语义。
+  无选区时保留 PowerShell 中断语义。纯 `Ctrl+V` 和菜单粘贴必须汇合到 generation-owned paste helper，
+  对精确 `sessionId`、`ptyGeneration` 与 `TerminalView` 在剪贴板读取前后复检，并恰好调用一次
+  `Terminal.paste(text)`；xterm 独占换行规范化与 bracketed-paste 编码，已有 `onData` 是唯一
+  `terminal:write` 路径，禁止并行 direct write。纯 `Ctrl+V` 排除 repeat、Shift、Alt、AltGraph 与 Meta；
+  剪贴板 5 MiB 上限加 12 个 bracket wrapper code units 仍作为一个 PTY write 接收，不切块。
+  右键 `mousedown` 和 `contextmenu` 在终端容器 capture 阶段先于 xterm target handler 拦截；菜单捕获
+  同一精确目标与单调 revision。点击自身 Paste 后隐藏菜单不撤销该 attempt，但另一个菜单替换 target、
+  view dispose 或 PTY generation 变化会使异步读取结果失效；dispose 同时移除 capture listeners。
 - “Claude 工作台”旁提供紧凑的终端主题选择器，列出 Claude 明亮、Telegram 明亮、石墨深色、
   深海蓝四套主题；窗口变窄时只收起“主题”标签，不遮挡工作台、信息和清屏按钮。启动恢复、
   工具栏切换和设置回填必须通过增强选择器的显式同步接口同时更新原生值与视觉名称，不能让
@@ -951,41 +962,39 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 
 ## 官方网络预检 UI
 
-- Claude 与 Codex 工作台共用工具栏中的“网络预检”按钮，位于工作台入口左侧；状态点复用统一语义色。
-  用户点击后不依赖模型、项目、登录或活动会话，固定检测 ChatGPT/Codex、Claude、Grok/xAI，并打开同一
-  详情；自定义 Claude 网关仍按自身健康状态运行，但不妨碍用户手动执行独立综合预检。
-- 设置新增“网络”页：顶部显示当前结论与“重新检测”，正文直接展示脱敏出口、IP 风险、DNS 证据边界、
-  时区问题与只读的 Windows 系统语言参考；“每次新建会话”和“每次登录海外服务”默认开启且可独立关闭。
-- 工具栏详情弹窗显示零凭据、零模型额度的官方预检状态；终端底栏在 Claude 模式下继续
-  显示当前已保存路由的真实健康状态，点击原地重跑最多一 token 的模型连接测试。Codex 模式
-  的底栏连接入口才打开官方预检详情。
-- 官方 Claude 配置的真实测试先经过官方访问守卫，再发送最小模型请求；中转站、自定义网关和
-  本地转换器不套用 Anthropic 官方端点结论，而是直接实测各自保存的接口。首次载入当前 Claude
-  项目及从托盘恢复时自动实测一次，并明确接受可能产生的极少量额度；普通聚焦不重复请求。
-- 状态色沿用 `--ok-*`、`--warn-*`、`--bad-*` 和强调色令牌，并始终配合“本次未发现已知风险”
-  “关键证据不完整”“检测到高风险出口或 DNS 信号”“官方网络已阻止”等文字；代理/VPN 提示不得伪装成
-  服务端连接失败，证据缺失也不得使用成功色。
-- 详情使用原生 `<dialog>`：顶部结论卡，其后是风险、路径、出口环境、逐项探测列表和固定操作区。
-  窄于 720px 时双栏降为单栏，探测行详情换到整行；内容可独立滚动，最大高度 82vh。详情必须
-  完整公网地址不进入 renderer 或诊断历史；界面只显示掩码前缀，并逐项显示 IP 多源情报、分流出口、
-  权威 DNS、IPv6 和时区是“通过 / 风险 / 未完成”；Windows 系统语言始终标为“参考”。即使全部通过也只能写
-  “本次未发现已知风险”，
-  不能承诺账号安全；任一关键项未完成时必须明确写“不能判断为低风险”。
-- 路径行只能陈述进程可见事实：显式代理显示“可见代理第一跳”，没有系统/环境代理时显示
-  “未发现本机显式代理”。不得把后者缩写成“直连”，因为进程可见信息不能证明端到端拓扑。
-- 应用探测绑定当前 Electron Session，使用无凭据 `GET` 读取状态与响应头后立即停止正文。
-  manual redirect 不自动跟随：已知官方入口被 Electron 取消跳转时，显示“路径可达、跳转目标未验证”的警告；
-  用户配置的精确 API 目标仍失败关闭。401/403/404/405 只显示“端点已响应”，不能写成登录成功或服务断开。
-- “正在检测”使用状态点呼吸动画和 `aria-live` 文本；按钮同步 `disabled`，减少动态模式下
-  保留静态状态文字但不播放循环动画。风险列表、探测状态和操作按钮均可键盘访问，不只靠颜色。
-- 新建或重启 Claude 会话遇到阻止结论时打开专用对话框，固定提供“我再看看 / 重新检查 / 坚持连接”
-  三个明确选择。“坚持连接”只授权这一次被精确捕获的会话启动，不能改写全局网络策略，也不能被另一
-  项目、另一 Provider 或较新的配置复用；启动后后台复查只更新连接状态，不主动中断会话。
-- 首次冷启动若只有 DNS、连接重置或超时这类瞬态失败，系统在阻断前自动等待 150ms 并强制重测一次，
-  解决首检失败而手动重测立即正常的竞态。离线、TLS、非白名单跳转、门户网络、CLI 代理不支持和内部
-  预检异常不自动重试；用户取消等待时也不得启动第二次探测。
-- 时区不一致的“修改”仅保存 CLI `TZ` 覆盖并作用于之后由 ClaudeDock 启动的进程；不修改 Windows
-  时区、DNS、代理或网卡。Windows 系统语言只读，不生成风险、修改按钮或 CLI 覆盖建议。
+- Claude 与 Codex 工作台共用“网络预检”入口；手动综合检查可覆盖 ChatGPT/Codex、Claude 与 Grok/xAI，
+  自动登录/会话守卫只检查当前动作的精确 Provider 与配置目标。中转站、自定义网关和本地转换器不复用
+  官方 Anthropic/OpenAI 结论，而是实测自身端点。
+- 详情只保留一条从权威到建议的层级：1）Provider 连接结论；2）精确端点的 DNS、TLS、HTTP、重定向、
+  内容替换、application session、CLI 与必需 WebSocket 证据；3）application/CLI 可见代理决策及 TUN
+  caveat；4）目标限定的公网地址观察；5）DNS、IPv6、STUN、接口、环境、兼容性、信誉和建议操作。
+- Provider endpoint evidence 是 access authority。`allowed` 与 `allowed_with_notice` 都使用绿色“连接正常”；
+  TUN、虚拟接口、显式代理、分流提示、信誉源不可用或高风险建议证据不得把一个成功的精确 Provider
+  连接改成黄/红或阻止动作。反之，精确 Provider 的必需能力失败即使建议证据看似低风险也保持阻止。
+- `providerConnectivity` 与 `advisoryEvidence` 不混为综合风险分。建议采集失败表示该建议未知，不表示
+  Provider 失败；界面不再使用“综合风险”“模型出口”“Claude 出口”或其他把泛用目的地冒充 Provider
+  路径的标签。
+- 公网地址观察逐项显示 process/session、transport、address family、精确 observation endpoint、
+  collection time、freshness、confidence 与 source agreement，并明确“不证明 Anthropic/OpenAI 端点的
+  public source address”。完整地址不进入 renderer 或诊断历史，IPv4 与 IPv6 独立呈现；不可用观察不伪造
+  address family。DNS、IPv6/STUN、接口、时区、语言和信誉 check 也携带 advisory authority、process、scope、
+  target、transport、checked time、freshness 与 confidence；cache/history 投影必须明确标为“缓存”。
+- 路径行只能陈述当前 target、process 与 network scope 的可见第一跳。`resolveProxy(url) === DIRECT`
+  只表示 Electron 没有为该 URL 返回显式 HTTP/SOCKS/PAC 代理；它不证明物理公网直连，也不排除 TUN、
+  透明代理、soft router 或按目标分流。CLI 环境变量同样不能证明端到端拓扑。
+- 应用探测绑定实际 Electron Session，使用无凭据请求并限制正文；CLI 使用实际 transport。401/403/405
+  等 Provider 典型状态表示端点已响应，不表示认证成功。只接受受信任 redirect，TLS、非白名单跳转、
+  captive portal/content substitution 和必需 WebSocket 失败按精确动作处理。
+- 检测操作在第一个 `await` 前建立 owner，立即把按钮设为 `disabled`/`aria-busy` 并通过 `aria-live` 显示
+  “正在进行网络预检…”。已经打开的 dialog 也立即切到 pending 并保留当前 target/action；无关重绘和
+  stale completion/`finally` 不能覆盖结果或恢复较新的 owner。减少动态模式只取消循环动画，不删除状态文字。
+- 新建或重启 Claude 会话遇到阻止结论时提供“我再看看 / 重新检查 / 坚持连接”。“坚持连接”只授权被
+  精确捕获的 session、Provider、target、configuration revision 与 launch generation，不能跨项目或复用；
+  启动后的后台复查只更新健康呈现，不主动中断会话。
+- 首次冷启动若只有 DNS、连接重置或超时等瞬态 Provider 失败，可在阻断前等待 150ms 并强制重测一次。
+  离线、TLS、非白名单跳转、门户网络、CLI transport 不支持和内部预检异常不自动重试；取消后不再发请求。
+- 时区覆盖只作用于之后由 ClaudeDock 启动的 CLI，不修改 Windows 时区、DNS、代理、路由或网卡；Windows
+  系统语言始终是只读参考。
 
 ## Codex 工作台
 
@@ -1032,6 +1041,14 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
   说明、关闭按钮及“完成/取消”都具有明确名称，`Esc` 与“取消”保持同一语义。
 - 自动检测区和 cURL 输入使用具名 `region` / `label`；动态诊断与测试结果通过
   `aria-live` 或现有状态提示通知，但不反复播报 6 秒轮询中未变化的内容。
+- 终端 start/stop/restart、Claude preflight/launch、runtime switching、Codex install/update/login/
+  cancel/logout/launch 与 plugin refresh/update 的 busy 文案、disabled、`aria-busy` 和 live status 都属于
+  精确 operation token。runtime switching 由 main 按规范化项目目录持有，同目录 session 与 reload 后的
+  renderer 共用 pending attempt。Codex 安装与账号动作由 main 按应用全局持有，并用单调 revision 与精确
+  operation kind 恢复原文案。插件 mutation/refresh 也由 main 应用级单例持有：相同逻辑请求加入当前 Promise，
+  竞争请求不排队；catalog snapshot 恢复 attempt/kind/target/phase，完整 mutation surface（安装、更新、启停、
+  卸载、市场增删和来源输入）同步锁定。目录、workspace、catalog 或状态快照重绘只能读取当前 owner；只有
+  该 owner 的 settlement 可以恢复控件，stale result/`finally` 不得清除较新操作。
 - 标题栏刷新图标有稳定的中文 `aria-label`；检查期间使用 `aria-busy`，发现更新后标签同时
   包含可更新项数量，不能只用琥珀状态点表达。
 - Router 管理区使用具名 `region`，Provider 表单全部使用显式标签；运行中的安装、启动、
@@ -1049,7 +1066,12 @@ img`；表格横向滚动，代码块显示语言与复制按钮，公式居中�
 
 ## 素材维护
 
-- 矢量源位于 `assets/source/`。
-- `npm run generate:icons` 生成 `assets/generated/` 中的 PNG 和 ICO。
-- 标题栏 Logo 由 Vite 从生成图标导入，开发和打包环境均使用同一资源源。
-- 不直接手改生成文件；更改图标时修改 SVG 源并重新生成。
+- 应用图标矢量源位于 `assets/source/`；`npm run generate:icons` 生成 `assets/generated/` 中的 PNG 和 ICO。
+  标题栏 Logo 由 Vite 从生成图标导入，开发和打包环境使用同一资源源。不要直接手改生成文件。
+- runtime 品牌标记位于 `src/renderer/assets/brands/`：Anthropic Clay Spark、OpenAI black Blossom 和
+  OpenAI white Blossom。它们是带官方来源 URL、archive entry、检索日期与 SHA-256 的独立审计资产，
+  不经过应用图标生成器，也不增加 icon dependency。
+- runtime SVG 只允许官方 geometry/fill 和 provenance comment；禁止 `<image>`、`<script>`、event handler、
+  `href`、CSS filter 或 `currentColor` 重着色。Vite 必须输出可检查的本地文件，不能折叠为 opaque data URL。
+- 资产变更同时更新 source hash、LF-normalized body hash、declarative contract 和 light/dark visual proof；
+  品牌表面变量是固定品牌常量，不由当前 ClaudeDock 主题覆写。

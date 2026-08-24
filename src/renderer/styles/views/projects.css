@@ -182,33 +182,53 @@ body[data-phase='error'] .status-pill {
 .runtime-option__icon {
   align-items: center;
   align-self: center;
-  background: var(--surface-inset);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--r-md);
-  color: var(--text-dim);
   display: inline-flex;
   height: var(--runtime-option-icon-size);
   justify-content: center;
-  transition:
-    background var(--dur-2) var(--ease-standard),
-    border-color var(--dur-2) var(--ease-standard),
-    color var(--dur-2) var(--ease-standard),
-    transform var(--dur-2) var(--ease-spring);
+  overflow: hidden;
+  transition: transform var(--dur-2) var(--ease-spring);
   width: var(--runtime-option-icon-size);
 }
 
-.runtime-option__icon svg {
-  fill: none;
-  height: 18px;
-  stroke: currentcolor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.65;
-  width: 18px;
+.runtime-option__icon--claude {
+  background: var(--brand-anthropic-surface);
+  border-color: var(--brand-anthropic-line);
 }
 
-.runtime-option__icon--codex svg circle {
-  fill: var(--surface-3);
+.runtime-option__icon--codex {
+  background: var(--brand-openai-light-surface);
+  border-color: var(--brand-openai-light-line);
+}
+
+.runtime-option__brand-mark {
+  display: block;
+  height: 21px;
+  object-fit: contain;
+  width: 21px;
+}
+
+.runtime-option__icon--codex .runtime-option__brand-mark {
+  height: 29px;
+  width: 29px;
+}
+
+.runtime-option__brand-mark--dark {
+  display: none;
+}
+
+html[data-appearance='dark'] .runtime-option__icon--codex {
+  background: var(--brand-openai-dark-surface);
+  border-color: var(--brand-openai-dark-line);
+}
+
+html[data-appearance='dark'] .runtime-option__brand-mark--light {
+  display: none;
+}
+
+html[data-appearance='dark'] .runtime-option__brand-mark--dark {
+  display: block;
 }
 
 .runtime-option__copy {

@@ -74,6 +74,7 @@ import { NetworkEnvironmentRiskProbe } from '../network/environment-risk-probe';
 import {
   createElectronApplicationRequest,
   createElectronSessionFetch,
+  type ElectronRedirectPolicy,
 } from '../network/electron-request';
 import { NetworkPreflightService } from '../network/preflight-service';
 import { ProviderAccessGuard } from '../network/provider-access-guard';
@@ -206,8 +207,10 @@ const installClaudeExecutionSettings = ({
 const createAuthenticatedSessionFetch = (
   services: Registry,
   electronSession: Session,
+  authorizeRedirect?: ElectronRedirectPolicy,
 ): typeof fetch =>
   createElectronSessionFetch({
+    ...(authorizeRedirect ? { authorizeRedirect } : {}),
     requestFactory: (options) => net.request(options),
     resolveProxyCredentials: ({ authInfo, session: requestingSession }) =>
       authInfo.isProxy && requestingSession === electronSession
@@ -630,6 +633,8 @@ const installDiagnostics = ({
               ? services.resolve(CONVERSATION_NETWORK_SESSION)
               : session.defaultSession;
           return createElectronApplicationRequest({
+            createRedirectFetch: (authorizeRedirect) =>
+              createAuthenticatedSessionFetch(services, electronSession, authorizeRedirect),
             fetch: (input, init) => electronSession.fetch(input, init),
           });
         },

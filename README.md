@@ -3,7 +3,7 @@
 Windows 桌面 Electron 控制面板，用图形界面管理多个项目的 PowerShell/ConPTY 终端、Claude Code 与
 Codex 会话、模型接入、路由、MCP、插件和更新。
 
-当前版本 **5.0.0-rc.15**，仅发布 Windows x64。
+当前版本 **5.0.0-rc.16**，仅发布 Windows x64。
 
 ## 功能
 
@@ -110,10 +110,10 @@ npm run dev
 | `npm run test:visual`                   | 真实 Electron 视觉检查                     |
 | `npm run test:runtime-soak`             | 24 小时真实时间合成测试                    |
 | `npm run test:runtime-soak:accelerated` | 加速版 soak                                |
-| `npm run build`                         | 构建主进程、preload 与渲染端               |
+| `npm run build`                         | clean 后先生成源码身份，再构建三进程       |
 | `npm run dist`                          | 打包 Windows x64 安装包                    |
-| `npm run release:manifest`              | 校验通道、feed、产物和摘要链               |
-| `npm run release`                       | 打包并运行本地产物门禁，不发布             |
+| `npm run release:manifest`              | 校验源码身份、NSIS payload、更新链与产物   |
+| `npm run release`                       | clean exact commit 上重装、跑门禁并打包    |
 | `npm run release:publish:cos`           | 发布已验证产物到 COS                       |
 
 `npm run dist` 产物写入 `outputs/`；`npm run release:manifest` 另生成本地发布报告：
@@ -126,7 +126,9 @@ outputs/release-manifest.json
 outputs/win-unpacked/
 ```
 
-`outputs/` 与 `dist/` 不提交 Git。
+`outputs/` 与 `dist/` 不提交 Git。最终候选的 `npm run release` 要求 clean exact HEAD 且 `outputs/` 除跟踪的
+空 `.gitkeep` 外为空；它依次执行 `npm ci`、lint、format check、全部 typecheck、全量 Vitest、
+dependency-cruiser、`npm run dist`、源码身份复核和 manifest，不执行上传。
 
 ## 目录
 
@@ -153,7 +155,7 @@ outputs/        本地安装包与解包产物（忽略）
 | [docs/explanation/design.md](docs/explanation/design.md)                       | 设计系统与交互约束                 |
 | [docs/reference/technical.md](docs/reference/technical.md)                     | 各功能域的实现细节与技术约束       |
 | [docs/reference/project-layout.md](docs/reference/project-layout.md)           | 目录结构与依赖规则                 |
-| [docs/reference/ipc-contract.md](docs/reference/ipc-contract.md)               | 187 个 IPC 通道与 API 方法映射     |
+| [docs/reference/ipc-contract.md](docs/reference/ipc-contract.md)               | 196 个 IPC 通道与 API 方法映射     |
 | [docs/reference/cli-command-catalog.md](docs/reference/cli-command-catalog.md) | Claude / Codex 斜杠命令清单        |
 | [docs/how-to/](docs/how-to/)                                                   | 开发、验证、发布                   |
 | [docs/adr/](docs/adr/)                                                         | 决策记录                           |
@@ -169,9 +171,12 @@ outputs/        本地安装包与解包产物（忽略）
 - 聊天历史与附件保存在当前 Windows 用户目录，是本机明文数据。
 - 本地构建没有代码签名，Windows SmartScreen 可能显示未知发布者。
 
-## 问题反馈
+## 参与与反馈
 
-[GitHub Issues](https://github.com/AeonusOvO/claude-dock-control-panel/issues)
+- 缺陷和功能建议：[GitHub Issues](https://github.com/AeonusOvO/claude-dock-control-panel/issues)
+- 贡献流程：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全漏洞私密报告：[SECURITY.md](SECURITY.md)
+- 社区行为：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ## 许可证
 

@@ -4,7 +4,7 @@ import type {
   ClaudeConnectionTestResult,
   ClaudeProviderModelDiscoveryResult,
 } from '../../shared/contracts';
-import { officialNetworkProviderForClaudePreset } from '../../shared/claude/providers';
+import { claudeNetworkAccessForConfigInput } from '../claude/runtime-connection-config';
 import { createFailureReporter } from '../infra/logger';
 import { ProviderAccessBlockedError } from '../network/provider-access-guard';
 import {
@@ -137,8 +137,8 @@ export const registerClaudeStateIpc = ({
       const status = workspace.getStatus(validatedSessionId);
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
         const runtime = requireClaudeRuntime();
+        const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const testConnection = async (): Promise<ClaudeConnectionTestResult> => {
           // Readiness can make the sidecar contact its upstream provider, so it must remain behind the
           // same official-network decision as the real connection request.
@@ -147,14 +147,12 @@ export const registerClaudeStateIpc = ({
           }
           return runtime.testConnection(status.cwd, validatedInput);
         };
-        if (!officialProvider) {
-          return await testConnection();
-        }
+        if (!networkAccess) return await testConnection();
         return await withOfficialProviderAccess(
           {
             action: 'first-request',
             cwd: status.cwd,
-            provider: officialProvider,
+            ...networkAccess,
           },
           testConnection,
         );

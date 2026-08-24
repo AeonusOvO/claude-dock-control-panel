@@ -9,6 +9,7 @@ import type {
   ClaudeRouteHealth,
   ManagedChatGptContextWindowMode,
   ModelSpeedMode,
+  NetworkProviderConnectivityStatus,
   NetworkProviderId,
   PtyGeneration,
   SaveClaudeConfigInput,
@@ -17,21 +18,68 @@ import type { ClaudeConfigPresentation, ClaudeLaunchConfigSnapshot } from './con
 import type { ClaudeEnvironmentOverrides, ClaudeServingSpeedProfile } from './configuration';
 import type { ModelSpeedCapability } from './model-speed-capabilities';
 import type { ClaudeRouteKind } from '../coordination/route-lifecycle';
+import type { NetworkPreflightTarget } from '../network/preflight-target';
 
 export interface ClaudePreparedLaunchToken {
   readonly generation: number;
   readonly sessionId: string;
 }
 
+/** Exact provider route checked before a Claude operation; custom targets are not official capability. */
+export interface ClaudeNetworkAccess {
+  readonly provider: NetworkProviderId;
+  readonly target?: Readonly<NetworkPreflightTarget>;
+}
+
+export const captureClaudeNetworkAccess = (
+  access: ClaudeNetworkAccess | undefined,
+): Readonly<ClaudeNetworkAccess> | undefined =>
+  access
+    ? Object.freeze({
+        provider: access.provider,
+        ...(access.target
+          ? {
+              target: Object.freeze({
+                process: access.target.process,
+                url: new URL(access.target.url).toString(),
+              }),
+            }
+          : {}),
+      })
+    : undefined;
+
+export const effectiveClaudeNetworkAccess = (
+  access: ClaudeNetworkAccess | undefined,
+  officialNetworkProvider: NetworkProviderId | undefined,
+  legacyTarget?: Readonly<NetworkPreflightTarget>,
+): Readonly<ClaudeNetworkAccess> | undefined =>
+  access ??
+  (officialNetworkProvider === undefined
+    ? undefined
+    : captureClaudeNetworkAccess({
+        provider: officialNetworkProvider,
+        ...(legacyTarget === undefined ? {} : { target: legacyTarget }),
+      }));
+
+export const sameClaudeNetworkAccess = (
+  left: ClaudeNetworkAccess | undefined,
+  right: ClaudeNetworkAccess | undefined,
+): boolean =>
+  left?.provider === right?.provider &&
+  left?.target?.process === right?.target?.process &&
+  left?.target?.url === right?.target?.url;
+
 export interface ClaudeLaunchPreflightEvidence {
   readonly checkedAt: number;
   readonly provider: NetworkProviderId;
-  readonly status: 'allowed' | 'blocked' | 'degraded';
+  readonly status: Exclude<NetworkProviderConnectivityStatus, 'testing'>;
 }
 
 export interface ClaudeLaunchAuthorization {
   readonly cwdKey: string;
   readonly launchSnapshot: ClaudeLaunchConfigSnapshot;
+  /** Exact route authority, including a main-owned custom gateway target when applicable. */
+  readonly networkAccess?: Readonly<ClaudeNetworkAccess>;
   readonly officialNetworkProvider?: NetworkProviderId;
 }
 
@@ -64,7 +112,9 @@ interface RuntimeSession {
   };
   /** Display-only network observation owned by this exact live launch object. */
   advisoryRouteHealth?: ClaudeRouteHealth;
-  /** Official provider bound to the exact live PTY generation, never inferred from saved config. */
+  /** Exact provider route bound to the live PTY generation, never inferred from saved config. */
+  liveNetworkAccess?: Readonly<ClaudeNetworkAccess>;
+  /** Official provider capability bound separately from custom gateway identity. */
   liveOfficialNetworkProvider?: NetworkProviderId;
   /** Minimal successful launch evidence consumed once by exact-generation advisory monitoring. */
   launchPreflightEvidence?: ClaudeLaunchPreflightEvidence;
@@ -113,10 +163,12 @@ interface RuntimeSession {
 export interface PreparedNativeClaudeConversation {
   allowBypassPermissions: boolean;
   cliVersion?: string;
-  /** Official provider captured with this exact credential-bearing native launch, when applicable. */
+  /** Exact provider route captured with this credential-bearing native launch. */
+  networkAccess?: Readonly<ClaudeNetworkAccess>;
+  /** Official provider captured separately from custom target identity, when applicable. */
   officialNetworkProvider?: NetworkProviderId;
-  /** Optional application probe target captured by main; renderer submit payloads cannot set it. */
-  officialNetworkTarget?: { readonly process: 'application'; readonly url: string };
+  /** Legacy exact application target retained for compatible native launch adapters. */
+  officialNetworkTarget?: Readonly<NetworkPreflightTarget>;
   configFingerprint: string;
   endpointIdentity: string;
   environment: ClaudeEnvironmentOverrides;
@@ -154,7 +206,9 @@ interface ConnectionCheckRecord {
 export interface PreparedClaudeLaunch {
   command: string;
   environment: ClaudeEnvironmentOverrides;
-  /** Exact official provider derived from the immutable launch snapshot, when one is required. */
+  /** Exact route derived from the immutable launch snapshot, including custom gateway targets. */
+  networkAccess?: Readonly<ClaudeNetworkAccess>;
+  /** Exact official provider derived separately from the immutable launch snapshot. */
   officialNetworkProvider?: NetworkProviderId;
   /** Bound PTY that remains live until this exact launch token binds a replacement. */
   predecessorPtyGeneration?: PtyGeneration;

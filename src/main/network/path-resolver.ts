@@ -1,4 +1,5 @@
 import { getServers } from 'node:dns';
+import { isIP } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import type {
   NetworkPathView,
@@ -21,6 +22,8 @@ export const PROXY_ENVIRONMENT_KEYS = [
   'ALL_PROXY',
   'all_proxy',
 ] as const;
+
+export const NO_PROXY_ENVIRONMENT_KEYS = ['NO_PROXY', 'no_proxy'] as const;
 
 export const VIRTUAL_INTERFACE_PATTERN =
   /(vpn|wireguard|wintun|tap|tun|tailscale|zerotier|hyper-v|vmware|virtualbox|docker|wsl)/i;
@@ -57,21 +60,107 @@ const classifyResolvedProxy = (
   return { proxyConfigured: true, proxyKind: 'pac' };
 };
 
-export const classifyEnvironmentProxy = (
-  applicationProxyUrl?: string,
-): Pick<NetworkPathView, 'proxyConfigured' | 'proxyKind'> => {
-  if (/^https?:\/\//i.test(applicationProxyUrl ?? '')) {
-    return { proxyConfigured: true, proxyKind: 'application-proxy' };
+interface EnvironmentProxyDecision {
+  bypassedByNoProxy: boolean;
+  proxy: Pick<NetworkPathView, 'proxyConfigured' | 'proxyKind'>;
+}
+
+const targetPort = (url: URL): string =>
+  url.port || (url.protocol === 'https:' || url.protocol === 'wss:' ? '443' : '80');
+
+const noProxyEntry = (rawEntry: string): { host: string; port?: string } | undefined => {
+  const entry = rawEntry.trim();
+  if (!entry) return undefined;
+  if (entry.startsWith('[')) {
+    const closingBracket = entry.indexOf(']');
+    if (closingBracket < 0) return undefined;
+    const host = entry.slice(1, closingBracket).toLowerCase();
+    const remainder = entry.slice(closingBracket + 1);
+    return remainder.startsWith(':') && /^\d+$/.test(remainder.slice(1))
+      ? { host, port: remainder.slice(1) }
+      : { host };
   }
+  const separator = entry.lastIndexOf(':');
+  const hasOneColon = separator >= 0 && entry.indexOf(':') === separator;
+  const port =
+    hasOneColon && /^\d+$/.test(entry.slice(separator + 1))
+      ? entry.slice(separator + 1)
+      : undefined;
+  const host = (port ? entry.slice(0, separator) : entry).replace(/^\./, '').toLowerCase();
+  return host ? { host, ...(port ? { port } : {}) } : undefined;
+};
+
+const targetBypassesEnvironmentProxy = (targetUrl: string): boolean => {
+  let target: URL;
+  try {
+    target = new URL(targetUrl.replace(/^wss:/i, 'https:'));
+  } catch {
+    return false;
+  }
+  const hostname = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const port = targetPort(target);
+  const entries = NO_PROXY_ENVIRONMENT_KEYS.map((key) => process.env[key])
+    .filter((value): value is string => Boolean(value))
+    .flatMap((value) => value.split(','));
+  return entries.some((rawEntry) => {
+    const entry = rawEntry.trim();
+    if (entry === '*') return true;
+    const parsed = noProxyEntry(entry);
+    if (!parsed || (parsed.port && parsed.port !== port)) return false;
+    if (isIP(parsed.host) !== 0 || parsed.host === 'localhost') {
+      return hostname === parsed.host;
+    }
+    return hostname === parsed.host || hostname.endsWith(`.${parsed.host}`);
+  });
+};
+
+const environmentProxyDecision = (
+  applicationProxyUrl?: string,
+  targetUrl?: string,
+): EnvironmentProxyDecision => {
+  const applicationProxyConfigured = /^https?:\/\//i.test(applicationProxyUrl ?? '');
   const configured = PROXY_ENVIRONMENT_KEYS.map((key) => process.env[key]?.trim()).find(Boolean);
+  const bypassedByNoProxy = Boolean(
+    targetUrl &&
+    (applicationProxyConfigured || configured) &&
+    targetBypassesEnvironmentProxy(targetUrl),
+  );
+  if (bypassedByNoProxy || (!applicationProxyConfigured && !configured)) {
+    return {
+      bypassedByNoProxy,
+      proxy: { proxyConfigured: false, proxyKind: 'direct' },
+    };
+  }
+  if (applicationProxyConfigured) {
+    return {
+      bypassedByNoProxy: false,
+      proxy: { proxyConfigured: true, proxyKind: 'application-proxy' },
+    };
+  }
   if (!configured) {
-    return { proxyConfigured: false, proxyKind: 'direct' };
+    return {
+      bypassedByNoProxy: false,
+      proxy: { proxyConfigured: false, proxyKind: 'direct' },
+    };
   }
   return {
-    proxyConfigured: true,
-    proxyKind: /^socks(?:4|5|5h)?:/i.test(configured) ? 'socks' : 'environment',
+    bypassedByNoProxy: false,
+    proxy: {
+      proxyConfigured: true,
+      proxyKind: /^socks5h:/i.test(configured)
+        ? 'socks5h'
+        : /^socks(?:4|5)?:/i.test(configured)
+          ? 'socks'
+          : 'environment',
+    },
   };
 };
+
+export const classifyEnvironmentProxy = (
+  applicationProxyUrl?: string,
+  targetUrl?: string,
+): Pick<NetworkPathView, 'proxyConfigured' | 'proxyKind'> =>
+  environmentProxyDecision(applicationProxyUrl, targetUrl).proxy;
 
 export interface NetworkPathLocalFacts {
   dnsServers: string[];
@@ -125,6 +214,8 @@ const processLabel = (processKind: NetworkProcessKind): string => {
       return 'Claude Code CLI';
     case 'codex-cli':
       return 'Codex CLI';
+    case 'network-diagnostics':
+      return '网络诊断进程';
     case 'oauth-browser':
       return '系统浏览器 OAuth';
     case 'renderer':
@@ -168,7 +259,8 @@ export class NetworkPathResolver {
       resolvedProxy === 'UNKNOWN'
         ? { proxyConfigured: false, proxyKind: 'unknown' as const }
         : classifyResolvedProxy(resolvedProxy);
-    const cliProxy = classifyEnvironmentProxy(this.applicationProxyUrl());
+    const cliProxyDecision = environmentProxyDecision(this.applicationProxyUrl(), targetUrl);
+    const cliProxy = cliProxyDecision.proxy;
     const cliProcess: NetworkProcessKind =
       provider === 'anthropic-claude' ? 'claude-cli' : 'codex-cli';
     const makePath = (
@@ -179,7 +271,9 @@ export class NetworkPathResolver {
       ...localFacts,
       ...proxy,
       detail: `${processLabel(processKind)}：${detail}`,
+      networkScope,
       process: processKind,
+      target: targetUrl,
     });
 
     const paths = [
@@ -191,20 +285,15 @@ export class NetworkPathResolver {
           : '未解析到本机显式代理；TUN、透明代理或软路由链路仍可能接管后续流量。',
       ),
       makePath(
-        'oauth-browser',
-        applicationProxy,
-        applicationProxy.proxyConfigured
-          ? '登录页交由系统浏览器打开；这里只显示 Electron 可见的代理第一跳，浏览器实际路径可能不同。'
-          : '登录页交由系统浏览器打开；未发现本机显式代理不代表公网直连，浏览器仍可能经过 TUN 或网关。',
-      ),
-      makePath(
         cliProcess,
         cliProxy,
         cliProxy.proxyKind === 'application-proxy'
           ? '经用户配置的外部 HTTP 代理转发；ClaudeDock 不提供该代理或其后续线路。'
           : cliProxy.proxyConfigured
             ? '继承启动时 HTTP(S)_PROXY / ALL_PROXY 指定的可见第一跳；代理内核可继续链式转发。'
-            : '未发现代理环境变量；CLI 仍可能经过 TUN、透明代理或软路由链路。',
+            : cliProxyDecision.bypassedByNoProxy
+              ? '当前目标命中 NO_PROXY，未使用已配置的代理环境变量；CLI 仍可能经过 TUN、透明代理或软路由链路。'
+              : '未发现代理环境变量；CLI 仍可能经过 TUN、透明代理或软路由链路。',
       ),
       makePath(
         'terminal',
@@ -213,14 +302,14 @@ export class NetworkPathResolver {
           ? '经用户配置的外部 HTTP 代理转发；仅影响由 ClaudeDock 启动的项目终端。'
           : cliProxy.proxyConfigured
             ? '继承项目终端的代理环境第一跳，不改写系统或 CLI 路由。'
-            : '未发现代理环境变量，不据此断言公网直连。',
+            : cliProxyDecision.bypassedByNoProxy
+              ? '当前目标命中 NO_PROXY，未使用已配置的代理环境变量；不据此断言公网直连。'
+              : '未发现代理环境变量，不据此断言公网直连。',
       ),
       makePath('renderer', applicationProxy, '无直接网络权限，所有探测均由主进程执行。'),
     ];
     return provider === 'openai-api' || provider === 'ai-services' || provider === 'xai-grok'
-      ? paths.filter((pathView) =>
-          ['application', 'oauth-browser', 'renderer'].includes(pathView.process),
-        )
+      ? paths.filter((pathView) => ['application', 'renderer'].includes(pathView.process))
       : paths;
   }
 
@@ -229,7 +318,12 @@ export class NetworkPathResolver {
    * observable CLI and terminal proxy configuration. This keeps a hung PAC lookup from hiding an
    * unsupported CLI proxy or inventing uncertainty about process environment that was read locally.
    */
-  public unknownPaths(provider: NetworkProviderId, detail: string): NetworkPathView[] {
+  public unknownPaths(
+    provider: NetworkProviderId,
+    targetUrl: string,
+    networkScope: NetworkPreflightScope,
+    detail: string,
+  ): NetworkPathView[] {
     let localFacts: NetworkPathLocalFacts;
     try {
       localFacts = this.readLocalFacts();
@@ -239,14 +333,8 @@ export class NetworkPathResolver {
     const cliProcess: NetworkProcessKind =
       provider === 'anthropic-claude' ? 'claude-cli' : 'codex-cli';
     const unknownProxy = { proxyConfigured: false, proxyKind: 'unknown' as const };
-    const cliProxy = classifyEnvironmentProxy(this.applicationProxyUrl());
-    const processes: NetworkProcessKind[] = [
-      'application',
-      'oauth-browser',
-      cliProcess,
-      'terminal',
-      'renderer',
-    ];
+    const cliProxy = environmentProxyDecision(this.applicationProxyUrl(), targetUrl).proxy;
+    const processes: NetworkProcessKind[] = ['application', cliProcess, 'terminal', 'renderer'];
     const paths = processes.map((processKind) => {
       const cliOrTerminal = processKind === cliProcess || processKind === 'terminal';
       const proxy = cliOrTerminal ? cliProxy : unknownProxy;
@@ -257,13 +345,13 @@ export class NetworkPathResolver {
         ...localFacts,
         ...proxy,
         detail: `${processLabel(processKind)}：${processDetail}`,
+        networkScope,
         process: processKind,
+        target: targetUrl,
       };
     });
     return provider === 'openai-api' || provider === 'ai-services' || provider === 'xai-grok'
-      ? paths.filter((pathView) =>
-          ['application', 'oauth-browser', 'renderer'].includes(pathView.process),
-        )
+      ? paths.filter((pathView) => ['application', 'renderer'].includes(pathView.process))
       : paths;
   }
 }

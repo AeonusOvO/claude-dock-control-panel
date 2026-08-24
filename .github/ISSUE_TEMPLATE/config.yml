@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 举报行为准则或平台滥用
+    url: https://support.github.com/contact/report-abuse
+    about: 使用 GitHub 的私密举报渠道，不要在公开 Issue 中披露敏感细节。
+  - name: 私密报告安全漏洞
+    url: https://github.com/AeonusOvO/claude-dock-control-panel/security/advisories/new
+    about: 不要公开提交漏洞、凭据、令牌或敏感复现细节。

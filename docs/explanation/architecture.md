@@ -48,7 +48,7 @@ preload: <dist/preload/preload.js>,
 | 下载与更新               | `download-center`、`application-updater` | `download:changed`、`software:application-updater-changed` |
 | 忙碌租约                 | `busy` 协调器                            | `busy:changed`                                             |
 
-渲染进程重新打开某个界面时不重建状态，而是重放最近一次广播快照。
+渲染进程重新打开某个界面时不重建状态，而是重放最近一次广播快照。渲染端自身的异步反馈也是派生视图状态：busy 文案、disabled、`aria-busy` 与 live status 必须属于精确 operation token 和 session generation。工作区、目录或状态快照的无关重绘只消费当前 owner，不能恢复控件；只有仍为 current 的操作 settlement 可以结束并恢复它。runtime 切换由 main 按规范化项目目录持有；同目录的全部 session 共享 pending attempt，renderer reload 后通过 `runtime:get` 重建 busy 呈现并只在 pending 期间轮询到最终提交状态。Codex installer 与 App Server 登录/账号状态在 main 中是应用级单例；main 暴露单调 `revision` 和精确 `{ attempt, kind }` operation descriptor，renderer reload 后恢复原操作文案与 owner，并拒绝延迟快照或 completion。插件变更同样由 main 应用级单例持有；catalog snapshot 带 `{ attempt, kind, target, phase }`，相同逻辑请求加入已有 Promise，竞争请求不排队，renderer 只在 active 期间轮询并锁定完整 mutation surface。
 
 ### 会话所有权键
 
@@ -67,15 +67,13 @@ preload: <dist/preload/preload.js>,
 
 ## 数据流
 
-三条独立通路，形态与频率不同：
+三条独立通路共 196 个频道，形态与频率不同：
 
-**请求响应**（166 个频道）—— 渲染端 `invoke`，主进程 `handle`，返回结构化结果。全部用户操作走这条路。
+- **请求响应**（166 个）—— renderer `invoke`，main `handle`，返回结构化结果。
+- **单向发送**（7 个）—— 高频或握手型 renderer → main 消息使用 `send/on`；包括 generation-fenced `terminal:write`，避免每次按键产生 Promise 往返。
+- **事件推送**（23 个）—— main 状态变化后广播，renderer 订阅并重渲染对应界面。
 
-**终端字节流** —— 主进程 `node-pty` 读到字节后 `webContents.send('terminal:data')`，渲染端喂给 xterm.js；反向的按键走单向 `terminal:write`。单向而非请求响应，是为了避免每次按键产生一次 Promise 往返。
-
-**事件推送**（23 个频道）—— 主进程状态变化后广播，渲染端订阅并重渲染对应界面。
-
-完整频道表见 [ipc-contract.md](../reference/ipc-contract.md)。
+`ControlPanelApi` 同样有 196 个成员，但分区不同：166 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
 
 ## 外部进程
 
@@ -90,49 +88,51 @@ ClaudeDock 启动并管理外部 CLI，不捆绑第二份实现：
 
 密钥经 Electron `safeStorage`（Windows DPAPI）加密，不写入项目文件、命令行或终端历史。
 
-网络预检的官方端点判定与出口环境评估都在主进程执行。第三方 IP 情报响应中的完整地址在主进程内
-立即掩码，renderer 和诊断历史最多接收网段前缀；CLI 时区/语言修复只注入 ClaudeDock 后续创建的
-子进程，不改 Windows 全局设置。
+网络预检在主进程保留两条独立证据通道：精确 Provider 端点的 DNS/TLS/HTTP/应用/CLI/必需 WebSocket 决定连接可用性；公网地址、DNS 对照、IPv6、STUN、接口、环境和信誉只形成目标限定的建议证据。每项建议 check 都携带 authority、process、scope、target、transport、时间、新鲜度和置信度；cache/history 投影明确标为 cached，不伪造不可用地址族。第三方响应中的完整地址不进入 renderer 或诊断历史；CLI 时区覆盖只注入 ClaudeDock 后续创建的子进程，不改 Windows 全局设置。
 
 ## 渲染进程分片
 
-`src/renderer/main.ts` 从 15,886 行的单一作用域（HEAD `6ca456e` 基线实测；ADR-0006 时点记为 15,181）收敛为 46 行入口：15 个特性收进 `features/`（196 个 TypeScript 文件），跨特性外壳收进 `shell/`，与特性无关能力收进 `platform/`，装配分为 `bootstrap.ts`（DOM 环境与外壳）与 `feature-registration.ts`（特性注册与解析）。
+`src/renderer/main.ts` 从 15,886 行的单一作用域（HEAD `6ca456e` 基线实测；ADR-0006 时点记为 15,181）收敛为 46 行入口：15 个特性收进 `features/`，跨特性外壳收进 `shell/`，与特性无关能力收进 `platform/`，装配分为 `bootstrap.ts`（DOM 环境与外壳）与 `feature-registration.ts`（特性注册与解析）。
 
 每个特性导出注册式三件套（类型化 Symbol token、工厂注册函数、Feature 接口），经 `platform/registry.ts` 的 Registry 惰性构造，循环依赖在解析时报错。依赖方向只有特性 → shell → platform → shared：特性之间禁止互相 import，跨特性协作经 `shell/` 编排或 `platform/` 共享层，跨特性回调经显式 delegate 或 `-dependencies.ts` 最小接口。分片决策见 [ADR-0006](../adr/0006-feature-sliced-renderer.md) 与 [ADR-0011](../adr/0011-registration-based-feature-composition.md)。
 
 ## 测试策略
 
-| 层次               | 工具                             | 覆盖                                                               |
-| ------------------ | -------------------------------- | ------------------------------------------------------------------ |
-| 单元与契约         | Vitest（部分用例 jsdom 环境）    | 纯函数、reducer、IPC 契约                                          |
-| 行为测试           | Vitest + 三个 harness            | 渲染端模块加载驱动、主进程服务、IPC 往返（1,971 例通过，2 例跳过） |
-| 资产契约           | Vitest + postcss                 | CSS 设计 token、HTML 结构、组件类名                                |
-| 真实 Electron 冒烟 | `scripts/smoke/*-smoke.cjs`      | 布局、控件主题、原生 `<select>`、ConPTY 尺寸、视觉                 |
-| 长时合成           | `scripts/smoke/runtime-soak.cjs` | 24 小时会话与资源行为                                              |
+| 层次               | 工具                             | 覆盖                                               |
+| ------------------ | -------------------------------- | -------------------------------------------------- |
+| 单元与契约         | Vitest（部分用例 jsdom 环境）    | 纯函数、reducer、IPC 与 package 契约               |
+| 行为测试           | Vitest + 三个 harness            | renderer 模块驱动、main 服务、IPC 往返与竞态       |
+| 资产契约           | Vitest + postcss                 | CSS token、HTML 结构、本地资源来源与安全结构       |
+| 真实 Electron 冒烟 | `scripts/smoke/*-smoke.cjs`      | 布局、控件主题、原生 `<select>`、ConPTY 尺寸、视觉 |
+| 长时合成           | `scripts/smoke/runtime-soak.cjs` | 24 小时会话与资源行为                              |
 
-行为测试的基础设施是 `tests/helpers/` 的三个 harness（renderer-harness 加载真实渲染端模块并驱动 DOM、main-harness 组装主进程环境、ipc-harness 捕获 handler 并驱动往返）。源码文本钉（约 1,045 处）已全部转换为行为测试或资产契约，转换规则与设施见 [ADR-0009](../adr/0009-behavioral-tests-replace-source-pins.md)。
+行为测试的基础设施是 `tests/helpers/` 的三个 harness（renderer-harness 加载真实 renderer 模块并驱动 DOM、main-harness 组装 main 环境、ipc-harness 捕获 handler 并驱动往返）。实现形态优先通过可观察行为验证；package/config、设计系统和带来源哈希的本地资产使用结构化契约，少数纯模块另保留禁止 network/subprocess/global mutation 能力的窄范围负向源码扫描，完整边界见 [验证清单](../how-to/verify.md) 与 [ADR-0009](../adr/0009-behavioral-tests-replace-source-pins.md)。
 
 ## 构建
 
-| 步骤     | 命令                                                                                                             | 产物                |
-| -------- | ---------------------------------------------------------------------------------------------------------------- | ------------------- |
-| 图标     | `node scripts/build/generate-icons.mjs`                                                                          | `assets/generated/` |
-| 类型检查 | `tsc -p tsconfig.json --noEmit` + `tsc -p tsconfig.main.json --noEmit` + `tsc -p tsconfig.preload.json --noEmit` | —                   |
-| 主进程   | `tsc -p tsconfig.main.json`                                                                                      | `dist/main/`        |
-| preload  | `vite build --config vite.preload.config.ts`                                                                     | `dist/preload/`     |
-| 渲染端   | `vite build`                                                                                                     | `dist/renderer/`    |
-| 安装包   | `electron-builder --win nsis`                                                                                    | `outputs/`          |
-| 发布门禁 | `node scripts/release/manifest.mjs`                                                                              | 本地发布报告        |
-| COS 发布 | `node scripts/release/publish-cos.mjs`                                                                           | 远端 generic feed   |
+- 源码身份：`node scripts/build/source-identity.mjs` → `dist/build-source-identity.json`
+- 图标：`node scripts/build/generate-icons.mjs` → `assets/generated/`
+- 类型检查：`tsc -p tsconfig.json --noEmit` + `tsc -p tsconfig.main.json --noEmit` + `tsc -p tsconfig.preload.json --noEmit`
+- 主进程：`tsc -p tsconfig.main.json` → `dist/main/`
+- preload：`vite build --config vite.preload.config.ts` → `dist/preload/`
+- 渲染端：`vite build` → `dist/renderer/`
+- 安装包：`electron-builder --win nsis` → `outputs/`
+- 发布编排：`node scripts/release/release.mjs` → 质量门禁 + 安装包 + 本地报告
+- 发布门禁：`node scripts/release/manifest.mjs` → 本地发布报告
+- COS 发布：`node scripts/release/publish-cos.mjs` → 远端 generic feed
 
-`npm run release` 组合安装包与本地发布门禁，不访问外部服务。COS publisher 只在显式命令和隔离的
-发布凭据下运行：先原子创建并公开验证版本化安装包/blockmap，再加锁、预检并最后推进当前通道 YAML。
+`npm run build` 在 clean 后先生成源码身份，再执行任何生成、typecheck 或编译。`npm run release` 只接受
+clean exact commit 和空 `outputs/`，以 Node built-in 编排 `npm ci`、lint、format、全部 typecheck、全量
+Vitest、dependency-cruiser、`npm run dist`、源码身份复核和 manifest，不访问外部服务。manifest 通过 pinned
+7z 把 NSIS payload 逐字节绑定到 `win-unpacked`，并重算 blockmap v2 的 BLAKE2b-144 chunks。COS publisher
+只在显式命令和隔离的发布凭据下运行：先 frozen revalidation，再原子创建并公开验证版本化
+installer/blockmap，最后加锁、预检并推进当前通道 YAML。
 
-三个 tsconfig 分别覆盖渲染端与测试、主进程、preload。`shared/` 同时被三套配置检查，不能引用 `electron`、`node:*` 或 DOM 类型。preload 使用 Vite 打成单个 CommonJS 文件，满足 Electron sandbox 对本地模块加载的限制。
+三个 tsconfig 分别覆盖渲染端与测试、主进程、preload。`shared/` 同时被三套配置检查，不能引用 `electron`、bare 或 `node:` 形式的 Node core import，也不能引用 DOM 类型。preload 使用 Vite 打成单个 CommonJS 文件，满足 Electron sandbox 对本地模块加载的限制。
 
 开发模式下 Vite 分别提供渲染端服务和 preload 监听构建，`tsc --watch` 增量编译主进程，`wait-on` 等待主进程与 preload 产物就绪后再启动 Electron。
 
-`asarUnpack` 列出必须解包的原生模块与运行期脚本：`@lydell/node-pty`（ConPTY 原生绑定）与 `assets/runtime/*.ps1`（PowerShell 需要真实文件路径）。
+`asarUnpack` 列出必须解包的原生模块与运行期脚本：`@lydell/node-pty`（ConPTY 原生绑定）与 `assets/runtime/*.ps1`（PowerShell 需要真实文件路径）。根目录 `LICENSE` 与 `NOTICE` 是 electron-builder `build.files` 的显式打包契约，必须能在最终应用包中读取。
 
 ## 打包体积
 

@@ -1,5 +1,6 @@
 import { projectNameFromPath } from '../../platform/format';
 import type { CodexProjectState } from '../../../shared/contracts';
+import type { CodexOperationPresentation } from './codex-operation-state';
 import type { TerminalProjectStateDeps } from './project-state-dependencies';
 import {
   codexAccountDetail,
@@ -41,7 +42,121 @@ import {
   runClaudeButton,
 } from './project-state-dom';
 
+const codexOperationLabel = (operation?: CodexOperationPresentation): string | undefined => {
+  switch (operation?.operation) {
+    case 'install':
+      return '正在安装…';
+    case 'update':
+      return '正在更新…';
+    case 'login-browser':
+      return '正在启动浏览器登录…';
+    case 'login-device':
+      return '正在启动设备码登录…';
+    case 'cancel-login':
+      return '正在取消登录…';
+    case 'logout':
+      return '正在退出账号…';
+    default:
+      return undefined;
+  }
+};
+
+const renderCodexOperationControls = (
+  operation: CodexOperationPresentation | undefined,
+  installation: CodexProjectState['installation'],
+): { operationInProgress: boolean; operationLabel?: string } => {
+  const operationInProgress = Boolean(operation);
+  const operationLabel = codexOperationLabel(operation);
+  const installOperation = operation?.operation === 'install' || operation?.operation === 'update';
+  codexInstallButton.textContent = installOperation
+    ? operationLabel!
+    : installation.updateAvailable
+      ? '更新'
+      : '安装';
+  codexInstallButton.disabled = operationInProgress;
+  codexInstallButton.setAttribute('aria-busy', String(installOperation));
+
+  const controls = [
+    [codexLoginButton, 'login-browser', '登录'],
+    [codexDeviceLoginAction, 'login-device', '改用设备码登录'],
+    [codexCancelLogin, 'cancel-login', '取消登录'],
+    [codexLogout, 'logout', '退出 Codex 账号'],
+  ] as const;
+  for (const [button, kind, idleLabel] of controls) {
+    const ownsOperation = operation?.operation === kind;
+    button.textContent = ownsOperation ? operationLabel! : idleLabel;
+    button.disabled = operationInProgress;
+    button.setAttribute('aria-busy', String(ownsOperation));
+  }
+  return { operationInProgress, operationLabel };
+};
+
+const renderCodexLoadingPresentation = (
+  deps: Pick<
+    TerminalProjectStateDeps,
+    'activeDevelopmentRuntime' | 'getCodexOperation' | 'getWorkspaceState'
+  >,
+  sessionId: string,
+  errorMessage?: string,
+): void => {
+  if (
+    sessionId !== deps.getWorkspaceState().activeSessionId ||
+    deps.activeDevelopmentRuntime() !== 'codex'
+  ) {
+    return;
+  }
+  const installation = {
+    installed: false,
+    message: errorMessage ?? '正在读取 Codex 工作台状态…',
+    updateAvailable: false,
+  };
+  const operation = deps.getCodexOperation();
+  const { operationInProgress, operationLabel } = renderCodexOperationControls(
+    operation,
+    installation,
+  );
+  const loadingLabel = operationLabel ?? (errorMessage ? 'Codex 状态不可用' : '正在检查 Codex…');
+
+  codexInstallStep.dataset.state = errorMessage ? 'error' : 'pending';
+  codexInstallTitle.textContent = errorMessage ? '无法读取 Codex 环境' : '正在检查 Codex 环境';
+  codexInstallDetail.textContent = errorMessage ?? installation.message;
+  codexInstallButton.hidden = false;
+  codexInstallButton.disabled = true;
+  codexAccountStep.dataset.state = 'pending';
+  codexAccountTitle.textContent = '等待 Codex 状态';
+  codexAccountDetail.textContent = '当前项目的账号状态尚未加载。';
+  codexLoginButton.hidden = false;
+  codexLoginButton.disabled = true;
+  codexDeviceLogin.hidden = true;
+  codexDeviceLoginAction.hidden = true;
+  codexCancelLogin.hidden = true;
+  codexLogout.hidden = true;
+  codexUsageCard.hidden = true;
+  codexProjectStep.dataset.state = 'pending';
+  codexProjectTitle.textContent = '等待环境与账号就绪';
+  codexProjectDetail.textContent = errorMessage ?? '正在读取当前项目的 Codex 状态。';
+  codexPrimaryAction.textContent = loadingLabel;
+  codexPrimaryAction.disabled = true;
+  codexPrimaryAction.setAttribute('aria-busy', String(!operationInProgress && !errorMessage));
+  runAgentLabel.textContent = loadingLabel;
+  runClaudeButton.disabled = true;
+  runClaudeButton.setAttribute('aria-busy', String(!operationInProgress && !errorMessage));
+  for (const [button, idleLabel] of [
+    [codexLaunchNew, '新建安全会话'],
+    [codexLaunchContinue, '继续最近会话'],
+    [codexLaunchResume, '选择历史会话'],
+  ] as const) {
+    button.textContent = idleLabel;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'false');
+  }
+  codexBoundaryNote.textContent = errorMessage
+    ? `${errorMessage} 请重新打开项目或稍后重试。`
+    : '正在读取 Codex 安装、账号与额度状态。';
+};
+
 export interface TerminalCodexStateActions {
+  renderCodexLoadingState: (sessionId: string, errorMessage?: string) => void;
   renderCodexState: (state: CodexProjectState, invalidatePendingLoad?: boolean) => void;
   loadCodexState: (
     sessionId: string,
@@ -58,14 +173,26 @@ export const createTerminalCodexStateActions = (
     codexStates,
     codexStateLoadGenerations,
     codexLaunchAttempts,
-    isCodexOperationInProgress,
+    getCodexOperation,
     renderFooterResource,
     showToast,
     preflightFeature,
   } = deps;
 
+  const renderCodexLoadingState = (sessionId: string, errorMessage?: string): void => {
+    renderCodexLoadingPresentation(deps, sessionId, errorMessage);
+  };
+
   const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true): void => {
     if (!getWorkspaceState().sessions.some((session) => session.id === state.sessionId)) {
+      return;
+    }
+    const current = codexStates.get(state.sessionId);
+    if (
+      current &&
+      (state.revision < current.revision ||
+        (state.revision === current.revision && state !== current))
+    ) {
       return;
     }
     if (invalidatePendingLoad) {
@@ -84,6 +211,11 @@ export const createTerminalCodexStateActions = (
     const accountReady = Boolean(account) || !state.requiresOpenaiAuth;
     const ready = installed && accountReady;
     const waitingForLogin = login.phase === 'waiting' || login.phase === 'starting';
+    const operation = getCodexOperation(state);
+    const { operationInProgress, operationLabel } = renderCodexOperationControls(
+      operation,
+      installation,
+    );
     const launchInProgress = codexLaunchAttempts.isActive(state.sessionId);
     const officialNetworkBlocked = preflightFeature.isBlocked('openai-codex');
 
@@ -93,8 +225,6 @@ export const createTerminalCodexStateActions = (
       : '需要安装 Codex CLI';
     codexInstallDetail.textContent = state.operationMessage ?? installation.message;
     codexInstallButton.hidden = installed && !installation.updateAvailable;
-    codexInstallButton.textContent = installation.updateAvailable ? '更新' : '安装';
-    codexInstallButton.disabled = isCodexOperationInProgress();
 
     codexAccountStep.dataset.state = accountReady
       ? 'ready'
@@ -114,7 +244,7 @@ export const createTerminalCodexStateActions = (
       ? [account.email, account.planType].filter(Boolean).join(' · ') || '凭据由 Codex 官方管理'
       : (login.error ?? '浏览器登录可直接使用 ChatGPT 订阅额度');
     codexLoginButton.hidden = accountReady || waitingForLogin;
-    codexLoginButton.disabled = !installed || isCodexOperationInProgress();
+    codexLoginButton.disabled = !installed || operationInProgress;
 
     codexProjectStep.dataset.state = ready ? 'ready' : 'pending';
     codexProjectTitle.textContent = ready ? '当前项目已就绪' : '等待环境与账号就绪';
@@ -146,9 +276,10 @@ export const createTerminalCodexStateActions = (
     codexQuotaValue.textContent = quota ? `已用 ${quota.usedPercent.toFixed(0)}%` : '等待额度数据';
     codexQuotaBar.style.width = `${quota?.usedPercent ?? 0}%`;
 
-    const actionLabel =
-      isCodexOperationInProgress() || launchInProgress
-        ? '正在准备 Codex…'
+    const actionLabel = operationLabel
+      ? operationLabel
+      : launchInProgress
+        ? '正在启动 Codex…'
         : !installed
           ? '一键安装、登录并启动'
           : !accountReady
@@ -156,30 +287,30 @@ export const createTerminalCodexStateActions = (
             : '新建 Codex 安全会话';
     codexPrimaryAction.textContent = actionLabel;
     codexPrimaryAction.disabled =
-      isCodexOperationInProgress() || launchInProgress || waitingForLogin || officialNetworkBlocked;
-    codexPrimaryAction.setAttribute(
-      'aria-busy',
-      String(isCodexOperationInProgress() || launchInProgress),
-    );
-    runAgentLabel.textContent = launchInProgress
-      ? '正在启动 Codex…'
-      : ready
-        ? '新建 Codex 会话'
-        : '一键准备 Codex';
+      operationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
+    codexPrimaryAction.setAttribute('aria-busy', String(launchInProgress));
+    runAgentLabel.textContent = operationLabel
+      ? operationLabel
+      : launchInProgress
+        ? '正在启动 Codex…'
+        : ready
+          ? '新建 Codex 会话'
+          : '一键准备 Codex';
     runClaudeButton.disabled =
-      isCodexOperationInProgress() || launchInProgress || waitingForLogin || officialNetworkBlocked;
-    runClaudeButton.setAttribute(
-      'aria-busy',
-      String(isCodexOperationInProgress() || launchInProgress),
-    );
+      operationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
+    runClaudeButton.setAttribute('aria-busy', String(launchInProgress));
     runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
     runClaudeButton.title = ready
       ? '在当前项目启动官方 Codex 安全会话'
       : '自动完成官方安装与 ChatGPT 登录';
 
-    for (const button of [codexLaunchNew, codexLaunchContinue, codexLaunchResume]) {
-      button.disabled =
-        !ready || isCodexOperationInProgress() || launchInProgress || officialNetworkBlocked;
+    for (const [button, idleLabel] of [
+      [codexLaunchNew, '新建安全会话'],
+      [codexLaunchContinue, '继续最近会话'],
+      [codexLaunchResume, '选择历史会话'],
+    ] as const) {
+      button.textContent = launchInProgress ? '正在启动…' : idleLabel;
+      button.disabled = !ready || operationInProgress || launchInProgress || officialNetworkBlocked;
       button.setAttribute('aria-busy', String(launchInProgress));
     }
 
@@ -218,11 +349,13 @@ export const createTerminalCodexStateActions = (
     errorMessage = '无法读取 Codex 工作台状态。',
   ): Promise<CodexProjectState | undefined> => {
     const request = codexStateLoadGenerations.begin(sessionId);
+    renderCodexLoadingState(sessionId);
     let state: CodexProjectState;
     try {
       state = await window.controlPanel.getCodexProjectState(sessionId);
     } catch {
       if (codexStateLoadGenerations.finish(request)) {
+        renderCodexLoadingState(sessionId, errorMessage);
         showToast(errorMessage, 'error');
       }
       return;
@@ -230,11 +363,16 @@ export const createTerminalCodexStateActions = (
     if (!codexStateLoadGenerations.finish(request) || state.sessionId !== sessionId) {
       return;
     }
+    const current = codexStates.get(sessionId);
+    if (current && state.revision <= current.revision) {
+      return current;
+    }
     renderCodexState(state, false);
     return state;
   };
 
   return {
+    renderCodexLoadingState,
     renderCodexState,
     loadCodexState,
   };

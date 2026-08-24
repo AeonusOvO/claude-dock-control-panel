@@ -2,6 +2,7 @@ import type {
   TerminalStatus,
   WorkspaceProjectView,
   WorkspaceResult,
+  WorkspaceState,
 } from '../../../shared/contracts';
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
 import type { ProjectsElements } from './elements';
@@ -45,6 +46,17 @@ export const createProjectsWorkspaceActions = (
     }
   };
 
+  const requestActiveTerminalFocus = (workspace: WorkspaceState): void => {
+    const status = workspace.sessions.find(
+      (candidate) => candidate.id === workspace.activeSessionId,
+    );
+    if (!status || (status.phase !== 'running' && status.phase !== 'starting')) {
+      return;
+    }
+    dependencies.retryTerminalFitUntilMeasured();
+    dependencies.requestComposerFocus(status.id);
+  };
+
   const activateProject = async (sessionId: string): Promise<void> => {
     const result = await window.controlPanel.activateProject(sessionId);
     if (!result.ok) {
@@ -52,8 +64,7 @@ export const createProjectsWorkspaceActions = (
       return;
     }
     workspaceRenderer.renderWorkspace(result.state);
-    dependencies.retryTerminalFitUntilMeasured();
-    dependencies.requestComposerFocus(result.state.activeSessionId);
+    requestActiveTerminalFocus(result.state);
   };
 
   /**
@@ -107,8 +118,7 @@ export const createProjectsWorkspaceActions = (
         return;
       }
       dependencies.showToast(`已在 ${dependencies.projectNameFromPath(projectPath)} 新开一个对话`);
-      dependencies.retryTerminalFitUntilMeasured();
-      dependencies.requestComposerFocus(result.state.activeSessionId);
+      requestActiveTerminalFocus(result.state);
     });
 
   const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
@@ -189,8 +199,7 @@ export const createProjectsWorkspaceActions = (
     try {
       const result = await window.controlPanel.addProject(directoryPath);
       if (handleWorkspaceResult(result, directoryPath)) {
-        dependencies.retryTerminalFitUntilMeasured();
-        dependencies.requestComposerFocus(result.state.activeSessionId);
+        requestActiveTerminalFocus(result.state);
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : '';

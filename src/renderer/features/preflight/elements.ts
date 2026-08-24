@@ -18,6 +18,7 @@ export interface PreflightElements {
   networkPreflightRecheck: HTMLButtonElement;
   networkPreflightSummary: HTMLElement;
   networkPreflightTrigger: HTMLButtonElement;
+  networkPreflightTriggerLabel: HTMLElement;
   settingsNetworkFacts: HTMLElement;
   settingsNetworkIssues: HTMLElement;
   settingsNetworkMeta: HTMLElement;
@@ -44,6 +45,9 @@ export const createPreflightElements = (): PreflightElements => ({
   networkPreflightRecheck: requiredElement('#network-preflight-recheck'),
   networkPreflightSummary: requiredElement('#network-preflight-summary'),
   networkPreflightTrigger: requiredElement('#network-preflight-trigger'),
+  networkPreflightTriggerLabel: requiredElement(
+    '#network-preflight-trigger .toolbar-menu-button__label',
+  ),
   settingsNetworkFacts: requiredElement('#settings-network-facts'),
   settingsNetworkIssues: requiredElement('#settings-network-issues'),
   settingsNetworkMeta: requiredElement('#settings-network-meta'),

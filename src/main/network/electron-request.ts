@@ -47,6 +47,7 @@ export interface ElectronSessionRequestAdapterOptions {
 }
 
 export interface ElectronApplicationRequestOptions {
+  readonly createRedirectFetch?: (authorizeRedirect: ElectronRedirectPolicy) => typeof fetch;
   readonly fetch: (input: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -54,6 +55,9 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 const REQUEST_CLEANUP_BUDGET_MS = 5_000;
 const MAX_FETCH_REDIRECTS = 20;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+const normalizedDomain = (value: string): string => value.trim().toLowerCase().replace(/\.$/, '');
+const domainAllowsHost = (domain: string, host: string): boolean =>
+  host === domain || host.endsWith(`.${domain}`);
 const SUPPORTED_REQUEST_INIT_KEYS = new Set([
   'body',
   'cache',
@@ -692,7 +696,7 @@ export const createElectronApplicationRequest = (
   options: ElectronApplicationRequestOptions,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): ApplicationEndpointRequest => {
-  return async (url, signal): Promise<ApplicationEndpointResponse> => {
+  return async (url, signal, redirectAuthority): Promise<ApplicationEndpointResponse> => {
     const controller = new AbortController();
     const onSignalAbort = (): void => controller.abort(signal?.reason);
     if (signal?.aborted) {
@@ -703,27 +707,53 @@ export const createElectronApplicationRequest = (
     const timer = setTimeout(() => controller.abort(new Error('连接超时。')), timeoutMs);
     timer.unref();
     try {
-      /*
-       * Use the bound Electron Session's fetch implementation for the production reachability
-       * probe. On affected Windows/TUN paths Electron ClientRequest can emit only finish -> close,
-       * without response or error, while Session.fetch on the same Session returns the real HTTP
-       * response. Manual redirects intentionally remain unfollowed: Electron reports those as
-       * "Redirect was cancelled", which the provider probe records as reachable without issuing
-       * an unvalidated follow-up request.
-       */
-      const response = await options.fetch(url, {
+      const redirects: ApplicationEndpointResponse['redirects'] = [];
+      const allowedDomains = (redirectAuthority?.allowedDomains ?? [])
+        .map(normalizedDomain)
+        .filter(Boolean);
+      const redirectFetch =
+        redirectAuthority && options.createRedirectFetch
+          ? options.createRedirectFetch(({ statusCode, targetUrl }) => {
+              if (targetUrl.protocol !== 'https:') {
+                throw new TypeError('Redirect target must use HTTPS');
+              }
+              const host = normalizedDomain(targetUrl.hostname);
+              if (!allowedDomains.some((domain) => domainAllowsHost(domain, host))) {
+                throw new TypeError(`Redirect target is not allowed: ${host}`);
+              }
+              redirects.push({ host, statusCode });
+            })
+          : undefined;
+      const requestInit: RequestInit = {
         cache: 'no-store',
         credentials: 'omit',
         method: 'GET',
         redirect: 'manual',
         signal: controller.signal,
-      });
+      };
+      /*
+       * Keep Session.fetch as the primary transport because it is reliable on affected Windows/TUN
+       * paths. Only a confirmed manual redirect switches to the bound ClientRequest adapter, where
+       * Electron exposes each hop and validation runs synchronously before followRedirect().
+       */
+      let response: Response;
+      try {
+        response = await options.fetch(url, requestInit);
+      } catch (error) {
+        if (!redirectFetch || !/redirect was cancelled/i.test(String(error))) throw error;
+        response = await redirectFetch(url, { ...requestInit, redirect: 'follow' });
+      }
+      if (response.status >= 300 && response.status < 400 && redirectFetch) {
+        await response.body?.cancel();
+        controller.signal.throwIfAborted();
+        response = await redirectFetch(url, { ...requestInit, redirect: 'follow' });
+      }
       controller.signal.throwIfAborted();
       await response.body?.cancel();
       controller.signal.throwIfAborted();
       return {
         contentType: response.headers.get('content-type') ?? '',
-        redirects: [],
+        redirects,
         status: response.status,
       };
     } finally {

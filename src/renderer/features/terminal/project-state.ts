@@ -34,6 +34,7 @@ export interface TerminalProjectState {
     state: DevelopmentRuntimeState,
     invalidatePendingLoad?: boolean,
   ) => void;
+  renderCodexLoadingState: (sessionId: string, errorMessage?: string) => void;
   renderCodexState: (state: CodexProjectState, invalidatePendingLoad?: boolean) => void;
   loadCodexState: (
     sessionId: string,
@@ -47,6 +48,7 @@ export interface TerminalProjectState {
     state?: ClaudeProjectState,
   ) => ClaudeLaunchAttemptToken;
   failClaudeLaunchAttempt: (token: ClaudeLaunchAttemptToken) => boolean;
+  setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
   renderClaudeLaunchResult: (
     token: ClaudeLaunchAttemptToken,
     state: ClaudeProjectState,
@@ -93,6 +95,7 @@ export const createTerminalProjectState = (
   );
   const runtimeActions = createTerminalRuntimeStateActions(
     deps,
+    codexActions.renderCodexLoadingState,
     codexActions.renderCodexState,
     codexActions.loadCodexState,
     claudeStateActions.renderClaudeState,
@@ -103,6 +106,7 @@ export const createTerminalProjectState = (
 
   return {
     renderDevelopmentRuntimeState: runtimeActions.renderDevelopmentRuntimeState,
+    renderCodexLoadingState: codexActions.renderCodexLoadingState,
     renderCodexState: codexActions.renderCodexState,
     loadCodexState: codexActions.loadCodexState,
     loadDevelopmentRuntime: runtimeActions.loadDevelopmentRuntime,
@@ -110,6 +114,7 @@ export const createTerminalProjectState = (
     refreshClaudeLaunchControls: claudeLaunchActions.refreshClaudeLaunchControls,
     beginClaudeLaunchAttempt: claudeLaunchActions.beginClaudeLaunchAttempt,
     failClaudeLaunchAttempt: claudeLaunchActions.failClaudeLaunchAttempt,
+    setClaudeLaunchPaused: claudeLaunchActions.setClaudeLaunchPaused,
     renderClaudeLaunchResult: claudeLaunchActions.renderClaudeLaunchResult,
     renderClaudeState: claudeStateActions.renderClaudeState,
     loadClaudeState: claudeLoadActions.loadClaudeState,

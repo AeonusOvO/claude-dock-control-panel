@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type {
   CodexAccountView,
+  CodexActiveOperationView,
   CodexInstallationStatus,
+  CodexInstallOperation,
   CodexLaunchMode,
   CodexLoginMethod,
   CodexLoginView,
@@ -49,12 +51,29 @@ export interface PreparedCodexLaunch {
 }
 
 export interface PreparedCodexLogin {
+  attempt: number;
   externalUrl?: string;
   state: CodexProjectState;
 }
 
+interface ActiveCodexInstallAttempt {
+  attempt: number;
+  operation: CodexInstallOperation;
+}
+
+interface ActiveCodexLoginAttempt {
+  attempt: number;
+  method: CodexLoginMethod;
+}
+
+interface ActiveCodexAccountMutation {
+  attempt: number;
+  operation: 'cancel-login' | 'logout';
+}
+
 const INSTALLATION_CACHE_MS = 5 * 60_000;
 const ACCOUNT_CACHE_MS = 5_000;
+const STATE_SNAPSHOT_ATTEMPTS = 8;
 const MARKER_PREFIX = '\u001b]9;claudedock-codex-exit:';
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -62,6 +81,9 @@ const isRecord = (value: unknown): value is JsonRecord =>
 
 const boundedString = (value: unknown, maximum: number): string | undefined =>
   typeof value === 'string' && value.trim() ? value.trim().slice(0, maximum) : undefined;
+
+const sameDisplayState = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
 
 export const parseCodexAccountRead = (value: unknown): CodexAccountReadResult => {
   if (!isRecord(value)) {
@@ -191,16 +213,24 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
 
 export class CodexRuntime {
   private readonly accountCache = new AsyncRefreshCache<CodexAccountReadResult>(ACCOUNT_CACHE_MS);
+  private accountState: CodexAccountReadResult = { requiresOpenaiAuth: true };
+  private activeAccountMutation: ActiveCodexAccountMutation | undefined;
+  private activeInstallAttempt: ActiveCodexInstallAttempt | undefined;
+  private activeLoginAttempt: ActiveCodexLoginAttempt | undefined;
   private readonly appServer: CodexAppServerClient;
   private readonly installationCache = new AsyncRefreshCache<CodexInstallationStatus>(
     INSTALLATION_CACHE_MS,
   );
+  private installationState: CodexInstallationStatus | undefined;
   private readonly installer: CodexInstaller;
   private installProgress: string | undefined;
   private lastInstallProgressEmitAt = 0;
   private login: CodexLoginView = { phase: 'idle' };
+  private nextGlobalOperationAttempt = 1;
   private rateLimits: CodexRateLimitsView | undefined;
   private readonly sessions = new Map<string, CodexRuntimeSession>();
+  private stateRevision = 1;
+  private warningState: string | undefined;
 
   public constructor(
     userDataPath: string,
@@ -220,10 +250,11 @@ export class CodexRuntime {
       busyRegistry,
       (line, stream) => {
         const detail = line.trim();
-        if (!detail) {
+        if (!detail || this.activeInstallAttempt === undefined) {
           return;
         }
         this.installProgress = `${stream === 'stderr' ? '安装提示' : '正在安装'}：${detail.slice(0, 300)}`;
+        this.advanceStateRevision();
         const now = Date.now();
         if (now - this.lastInstallProgressEmitAt >= 200) {
           this.lastInstallProgressEmitAt = now;
@@ -299,6 +330,7 @@ export class CodexRuntime {
     session.ptyGeneration = undefined;
     session.exitMarker = undefined;
     session.markerRemainder = '';
+    this.advanceStateRevision();
     void this.emitState(session);
     return true;
   }
@@ -331,50 +363,91 @@ export class CodexRuntime {
 
   public async getState(sessionId: string, cwd: string): Promise<CodexProjectState> {
     const session = this.ensureSession(sessionId, cwd);
-    const installation = await this.diagnoseInstallation();
-    let accountResult: CodexAccountReadResult = { requiresOpenaiAuth: true };
-    let warning: string | undefined;
-    if (installation.installed) {
-      try {
-        accountResult = await this.readAccount();
-        if (accountResult.account?.type === 'chatgpt') {
-          await this.readRateLimits();
-        } else {
-          this.rateLimits = undefined;
+    for (let snapshotAttempt = 0; snapshotAttempt < STATE_SNAPSHOT_ATTEMPTS; snapshotAttempt += 1) {
+      const snapshotRevision = this.stateRevision;
+      const installation = await this.diagnoseInstallation();
+      let accountResult = this.accountState;
+      let rateLimits = this.rateLimits;
+      let warning: string | undefined;
+      if (installation.installed) {
+        try {
+          accountResult = await this.readAccount();
+          rateLimits =
+            accountResult.account?.type === 'chatgpt' ? await this.readRateLimits() : undefined;
+        } catch (error) {
+          warning =
+            error instanceof Error
+              ? `无法读取 Codex 账号：${error.message}`
+              : '无法读取 Codex 账号状态。';
         }
-      } catch (error) {
-        warning =
-          error instanceof Error
-            ? `无法读取 Codex 账号：${error.message}`
-            : '无法读取 Codex 账号状态。';
+      } else {
+        accountResult = { requiresOpenaiAuth: true };
+        rateLimits = undefined;
       }
+      if (snapshotRevision !== this.stateRevision) {
+        continue;
+      }
+      if (
+        !sameDisplayState(this.installationState, installation) ||
+        !sameDisplayState(this.accountState, accountResult) ||
+        !sameDisplayState(this.rateLimits, rateLimits) ||
+        this.warningState !== warning
+      ) {
+        this.installationState = installation;
+        this.accountState = accountResult;
+        this.rateLimits = rateLimits;
+        this.warningState = warning;
+        this.advanceStateRevision();
+      }
+      const committedAccount = this.accountState;
+      const committedInstallation = this.installationState ?? installation;
+      const committedRateLimits = this.rateLimits;
+      return {
+        account: committedAccount.account,
+        active: session.active,
+        activeOperation: this.activeOperationView(),
+        cwd,
+        installation: committedInstallation,
+        login: { ...this.login },
+        operationMessage: this.installProgress,
+        rateLimits: committedRateLimits,
+        revision: this.stateRevision,
+        resourceUsage: codexResourceUsage(committedAccount.account, committedRateLimits),
+        requiresOpenaiAuth: committedAccount.requiresOpenaiAuth,
+        sessionId,
+        warning: this.warningState,
+      };
     }
-    return {
-      account: accountResult.account,
-      active: session.active,
-      cwd,
-      installation,
-      login: { ...this.login },
-      operationMessage: this.installProgress,
-      rateLimits: this.rateLimits,
-      resourceUsage: codexResourceUsage(accountResult.account, this.rateLimits),
-      requiresOpenaiAuth: accountResult.requiresOpenaiAuth,
-      sessionId,
-      warning,
-    };
+    throw new Error('Codex 状态持续变化，请稍后重试。');
   }
 
-  public async installOrUpdate(sessionId: string, cwd: string): Promise<CodexProjectState> {
+  public async installOrUpdate(
+    sessionId: string,
+    cwd: string,
+    operation: CodexInstallOperation,
+  ): Promise<CodexProjectState> {
+    this.assertGlobalOperationAvailable('安装或更新 Codex');
+    const owner = { attempt: this.nextOperationAttempt(), operation };
+    this.activeInstallAttempt = owner;
     this.installProgress = '准备下载 Codex 官方安装脚本…';
+    this.advanceStateRevision();
     await this.emitAllStates();
     try {
       await this.installer.installLatest();
+      if (this.activeInstallAttempt?.attempt !== owner.attempt) {
+        throw new Error('这次 Codex 安装已经被更新的全局操作取代。');
+      }
       this.appServer.stop();
       this.installationCache.clear();
       this.accountCache.clear();
+      this.advanceStateRevision();
     } finally {
-      this.installProgress = undefined;
-      await this.emitAllStates();
+      if (this.activeInstallAttempt?.attempt === owner.attempt) {
+        this.activeInstallAttempt = undefined;
+        this.installProgress = undefined;
+        this.advanceStateRevision();
+        await this.emitAllStates();
+      }
     }
     return this.getState(sessionId, cwd);
   }
@@ -384,13 +457,21 @@ export class CodexRuntime {
     cwd: string,
     method: CodexLoginMethod,
   ): Promise<PreparedCodexLogin> {
-    const installation = await this.diagnoseInstallation(true);
-    if (!installation.installed) {
-      throw new Error('请先安装 Codex CLI。');
-    }
+    this.assertGlobalOperationAvailable('启动 ChatGPT 登录');
+    const attempt = this.nextOperationAttempt();
+    const owner = { attempt, method };
+    this.activeLoginAttempt = owner;
     this.login = { method, phase: 'starting' };
+    this.advanceStateRevision();
     await this.emitAllStates();
     try {
+      const installation = await this.diagnoseInstallation(true);
+      if (!this.loginAttemptIsCurrent(owner)) {
+        throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+      }
+      if (!installation.installed) {
+        throw new Error('请先安装 Codex CLI。');
+      }
       const response = await this.appServer.request<JsonRecord>('account/login/start', {
         ...(method === 'browser'
           ? {
@@ -404,10 +485,25 @@ export class CodexRuntime {
       if (!loginId) {
         throw new Error('Codex 没有返回登录标识。');
       }
+      if (!this.loginAttemptIsCurrent(owner)) {
+        void this.cancelSupersededLogin(loginId);
+        throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+      }
       if (method === 'browser') {
         const authUrl = this.validateLoginUrl(response.authUrl);
         this.login = { loginId, method, phase: 'waiting' };
-        return { externalUrl: authUrl, state: await this.getState(sessionId, cwd) };
+        this.advanceStateRevision();
+        await this.emitAllStates();
+        if (!this.loginAttemptIsCurrent(owner)) {
+          void this.cancelSupersededLogin(loginId);
+          throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+        }
+        const state = await this.getState(sessionId, cwd);
+        if (!this.loginAttemptIsCurrent(owner)) {
+          void this.cancelSupersededLogin(loginId);
+          throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+        }
+        return { attempt, externalUrl: authUrl, state };
       }
       const verificationUrl = this.validateLoginUrl(response.verificationUrl);
       const userCode = boundedString(response.userCode, 32);
@@ -421,33 +517,72 @@ export class CodexRuntime {
         userCode,
         verificationUrl,
       };
-      return { externalUrl: verificationUrl, state: await this.getState(sessionId, cwd) };
-    } catch (error) {
-      this.login = {
-        error: error instanceof Error ? error.message : '无法启动 ChatGPT 登录。',
-        method,
-        phase: 'error',
-      };
+      this.advanceStateRevision();
       await this.emitAllStates();
+      if (!this.loginAttemptIsCurrent(owner)) {
+        void this.cancelSupersededLogin(loginId);
+        throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+      }
+      const state = await this.getState(sessionId, cwd);
+      if (!this.loginAttemptIsCurrent(owner)) {
+        void this.cancelSupersededLogin(loginId);
+        throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+      }
+      return { attempt, externalUrl: verificationUrl, state };
+    } catch (error) {
+      if (this.loginAttemptIsCurrent(owner)) {
+        this.activeLoginAttempt = undefined;
+        this.login = {
+          error: error instanceof Error ? error.message : '无法启动 ChatGPT 登录。',
+          method,
+          phase: 'error',
+        };
+        this.advanceStateRevision();
+        await this.emitAllStates();
+      }
       throw error;
     }
   }
 
   public async cancelLogin(sessionId: string, cwd: string): Promise<CodexProjectState> {
+    this.assertAccountMutationAvailable('取消 ChatGPT 登录');
+    const mutation = this.beginAccountMutation('cancel-login');
     const loginId = this.login.loginId;
-    if (loginId) {
-      await this.appServer.request('account/login/cancel', { loginId });
+    this.supersedeLoginAttempt();
+    await this.emitAllStates();
+    try {
+      if (loginId) {
+        await this.appServer.request('account/login/cancel', { loginId });
+      }
+    } finally {
+      await this.finishAccountMutation(mutation);
     }
-    this.login = { phase: 'idle' };
     return this.getState(sessionId, cwd);
   }
 
   public async logout(sessionId: string, cwd: string): Promise<CodexProjectState> {
-    await this.appServer.request('account/logout');
-    this.accountCache.clear();
-    this.rateLimits = undefined;
-    this.login = { phase: 'idle' };
+    this.assertAccountMutationAvailable('退出 Codex 账号');
+    const mutation = this.beginAccountMutation('logout');
+    this.supersedeLoginAttempt();
+    await this.emitAllStates();
+    try {
+      await this.appServer.request('account/logout');
+      if (!this.accountMutationIsCurrent(mutation)) {
+        throw new Error('这次退出账号操作已经被更新的全局操作取代。');
+      }
+      this.accountCache.clear();
+      this.accountState = { requiresOpenaiAuth: true };
+      this.rateLimits = undefined;
+      this.advanceStateRevision();
+      await this.emitAllStates();
+    } finally {
+      await this.finishAccountMutation(mutation);
+    }
     return this.getState(sessionId, cwd);
+  }
+
+  public isLoginAttemptCurrent(attempt: number): boolean {
+    return this.activeLoginAttempt?.attempt === attempt;
   }
 
   public async prepareLaunch(
@@ -468,6 +603,7 @@ export class CodexRuntime {
     runtime.ptyGeneration = undefined;
     runtime.exitMarker = `${MARKER_PREFIX}${sessionId}:${Date.now()}\u0007`;
     runtime.markerRemainder = '';
+    this.advanceStateRevision();
     return {
       command: buildCodexLaunchCommand(
         state.installation.executable,
@@ -477,8 +613,100 @@ export class CodexRuntime {
       ),
       environment: {},
       predecessorPtyGeneration,
-      state: { ...state, active: true },
+      state: { ...state, active: true, revision: this.stateRevision },
     };
+  }
+
+  private activeOperationView(): CodexActiveOperationView | undefined {
+    if (this.activeInstallAttempt) {
+      return {
+        attempt: this.activeInstallAttempt.attempt,
+        kind: this.activeInstallAttempt.operation,
+      };
+    }
+    if (this.activeAccountMutation) {
+      return {
+        attempt: this.activeAccountMutation.attempt,
+        kind: this.activeAccountMutation.operation,
+      };
+    }
+    if (this.activeLoginAttempt && this.login.phase === 'starting') {
+      return {
+        attempt: this.activeLoginAttempt.attempt,
+        kind: this.activeLoginAttempt.method === 'device-code' ? 'login-device' : 'login-browser',
+      };
+    }
+    return undefined;
+  }
+
+  private advanceStateRevision(): void {
+    this.stateRevision += 1;
+  }
+
+  private nextOperationAttempt(): number {
+    const attempt = this.nextGlobalOperationAttempt;
+    this.nextGlobalOperationAttempt += 1;
+    return attempt;
+  }
+
+  private assertGlobalOperationAvailable(label: string): void {
+    if (this.activeInstallAttempt !== undefined) {
+      throw new Error(`${label}无法开始：Codex 安装或更新仍在进行。`);
+    }
+    if (this.activeAccountMutation) {
+      throw new Error(`${label}无法开始：Codex 账号操作仍在进行。`);
+    }
+    if (this.activeLoginAttempt) {
+      throw new Error(`${label}无法开始：ChatGPT 登录仍在进行。`);
+    }
+  }
+
+  private assertAccountMutationAvailable(label: string): void {
+    if (this.activeInstallAttempt !== undefined) {
+      throw new Error(`${label}无法开始：Codex 安装或更新仍在进行。`);
+    }
+    if (this.activeAccountMutation) {
+      throw new Error(`${label}无法开始：另一个 Codex 账号操作仍在进行。`);
+    }
+  }
+
+  private beginAccountMutation(
+    operation: ActiveCodexAccountMutation['operation'],
+  ): ActiveCodexAccountMutation {
+    const mutation = { attempt: this.nextOperationAttempt(), operation };
+    this.activeAccountMutation = mutation;
+    this.advanceStateRevision();
+    return mutation;
+  }
+
+  private accountMutationIsCurrent(mutation: ActiveCodexAccountMutation): boolean {
+    return this.activeAccountMutation?.attempt === mutation.attempt;
+  }
+
+  private async finishAccountMutation(mutation: ActiveCodexAccountMutation): Promise<void> {
+    if (this.accountMutationIsCurrent(mutation)) {
+      this.activeAccountMutation = undefined;
+      this.advanceStateRevision();
+      await this.emitAllStates();
+    }
+  }
+
+  private loginAttemptIsCurrent(attempt: ActiveCodexLoginAttempt): boolean {
+    return this.activeLoginAttempt?.attempt === attempt.attempt;
+  }
+
+  private supersedeLoginAttempt(): void {
+    this.activeLoginAttempt = undefined;
+    this.login = { phase: 'idle' };
+    this.advanceStateRevision();
+  }
+
+  private async cancelSupersededLogin(loginId: string): Promise<void> {
+    try {
+      await this.appServer.request('account/login/cancel', { loginId });
+    } catch {
+      // The local attempt is already fenced; remote cancellation is best-effort cleanup only.
+    }
   }
 
   private ensureSession(sessionId: string, cwd: string): CodexRuntimeSession {
@@ -590,13 +818,11 @@ export class CodexRuntime {
     );
   }
 
-  private async readRateLimits(): Promise<void> {
+  private async readRateLimits(): Promise<CodexRateLimitsView | undefined> {
     try {
-      this.rateLimits = parseCodexRateLimits(
-        await this.appServer.request('account/rateLimits/read'),
-      );
+      return parseCodexRateLimits(await this.appServer.request('account/rateLimits/read'));
     } catch {
-      this.rateLimits = undefined;
+      return undefined;
     }
   }
 
@@ -617,7 +843,17 @@ export class CodexRuntime {
 
   private handleNotification(notification: CodexAppServerNotification): void {
     if (notification.method === 'account/login/completed') {
+      const loginId = boundedString(notification.params?.loginId, 100);
+      if (
+        !this.activeLoginAttempt ||
+        !this.login.loginId ||
+        !loginId ||
+        loginId !== this.login.loginId
+      ) {
+        return;
+      }
       const success = notification.params?.success === true;
+      this.activeLoginAttempt = undefined;
       this.login = success
         ? { phase: 'idle' }
         : {
@@ -625,16 +861,19 @@ export class CodexRuntime {
             phase: 'error',
           };
       this.accountCache.clear();
+      this.advanceStateRevision();
       void this.emitAllStates();
       return;
     }
     if (notification.method === 'account/updated') {
       this.accountCache.clear();
+      this.advanceStateRevision();
       void this.emitAllStates();
       return;
     }
     if (notification.method === 'account/rateLimits/updated') {
       this.rateLimits = parseCodexRateLimits(notification.params);
+      this.advanceStateRevision();
       void this.emitAllStates();
     }
   }
@@ -644,7 +883,7 @@ export class CodexRuntime {
   }
 
   private async emitAllStates(): Promise<void> {
-    await Promise.all(
+    await Promise.allSettled(
       [...this.sessions.values()].map(async (session) => {
         await this.emitState(session);
       }),

@@ -5,7 +5,7 @@ export interface ProviderEndpointProfile {
   id: string;
   kind: 'api' | 'https' | 'oauth' | 'websocket';
   label: string;
-  process: 'application' | 'cli' | 'oauth';
+  process: 'application' | 'cli';
   requiredFor: NetworkPreflightAction[];
   url: string;
 }
@@ -204,8 +204,8 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         id: 'openai-auth',
         kind: 'oauth',
         label: 'ChatGPT 官方认证',
-        process: 'oauth',
-        requiredFor: ['provider-switch', 'login'],
+        process: 'application',
+        requiredFor: [],
         url: 'https://auth.openai.com/',
       },
       {
@@ -219,7 +219,7 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         kind: 'https',
         label: 'ChatGPT 服务',
         process: 'application',
-        requiredFor: ['provider-switch', 'login'],
+        requiredFor: [],
         url: 'https://chatgpt.com/',
       },
       {
@@ -227,7 +227,7 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         kind: 'api',
         label: 'Codex 服务',
         process: 'cli',
-        requiredFor: ['cli-launch', 'first-request'],
+        requiredFor: ['background', 'provider-switch', 'login', 'cli-launch', 'first-request'],
         url: 'https://chatgpt.com/backend-api/codex',
       },
       {
@@ -292,16 +292,16 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         id: 'anthropic-claude-auth',
         kind: 'oauth',
         label: 'Claude.ai 官方认证',
-        process: 'oauth',
-        requiredFor: ['provider-switch', 'login'],
+        process: 'application',
+        requiredFor: [],
         url: 'https://claude.ai/',
       },
       {
         id: 'anthropic-console-auth',
         kind: 'oauth',
         label: 'Anthropic Console 认证',
-        process: 'oauth',
-        requiredFor: ['login'],
+        process: 'application',
+        requiredFor: [],
         url: 'https://platform.claude.com/',
       },
       {
@@ -383,7 +383,7 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         kind: 'https',
         label: 'Grok',
         process: 'application',
-        requiredFor: ['background', 'provider-switch', 'login'],
+        requiredFor: ['background'],
         url: 'https://grok.com/',
       },
       {
@@ -391,8 +391,8 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         id: 'xai-auth',
         kind: 'oauth',
         label: 'xAI 官方认证',
-        process: 'oauth',
-        requiredFor: ['provider-switch', 'login'],
+        process: 'application',
+        requiredFor: [],
         url: 'https://auth.x.ai/',
       },
       {
@@ -400,7 +400,7 @@ export const PROVIDER_PROFILES: Record<NetworkProviderId, ProviderProfile> = {
         kind: 'api',
         label: 'xAI API',
         process: 'application',
-        requiredFor: ['background', 'first-request'],
+        requiredFor: ['background', 'provider-switch', 'login', 'first-request'],
         url: 'https://api.x.ai/v1/models',
       },
       {

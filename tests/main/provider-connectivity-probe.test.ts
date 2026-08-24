@@ -1,39 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  ProviderConnectivityProbe,
-  type ApplicationEndpointRequest,
-} from '../../src/main/network/provider-connectivity-probe';
-
-const deferred = <T>() => {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-};
-
-const createProbe = (
-  cliRequest?: (url: string, websocket: boolean) => Promise<string>,
-  applicationRequest?: ApplicationEndpointRequest,
-) => {
-  const appFetch = vi.fn(
-    async (_url: string, _init: RequestInit) => new Response(null, { status: 204 }),
-  );
-  return {
-    appFetch,
-    probe: new ProviderConnectivityProbe({
-      appFetch,
-      applicationRequest,
-      cliRequest:
-        cliRequest ??
-        (async (url, websocket) =>
-          websocket ? `101|${url.replace(/^wss:/, 'https:')}|0|` : `401|${url}|0|application/json`),
-      clientVersion: async () => '0.146.0',
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      resolveProxy: async () => 'DIRECT',
-    }),
-  };
-};
+import { ProviderConnectivityProbe } from '../../src/main/network/provider-connectivity-probe';
+import { RiskDecisionEngine } from '../../src/main/network/risk-decision-engine';
+import { createProbe, withProxyEnvironment } from '../helpers/provider-connectivity-probe-fixture';
 
 describe('ProviderConnectivityProbe', () => {
   it('uses only metadata requests and controlled CLI probes', async () => {
@@ -53,6 +21,236 @@ describe('ProviderConnectivityProbe', () => {
           init.method === 'GET' && init.credentials === 'omit' && init.redirect === 'follow',
       ),
     ).toBe(true);
+  });
+
+  it('requires the exact Codex service endpoint for background provider authority', async () => {
+    const { probe } = createProbe(
+      async () => {
+        throw new Error('synthetic CLI endpoint failure');
+      },
+      async () => {
+        throw new Error('synthetic application endpoint failure');
+      },
+    );
+
+    const observation = await probe.run('openai-codex', 'background');
+    const codexService = observation.probes.find(
+      (candidate) => candidate.id === 'cli:openai-codex-api',
+    );
+    const result = new RiskDecisionEngine().evaluate(
+      'openai-codex',
+      'background',
+      observation,
+      1,
+      2,
+    );
+
+    expect(codexService).toMatchObject({ required: true, status: 'failed' });
+    expect(result.providerConnectivity.status).toBe('blocked');
+    expect(result.featureAccess).toEqual([
+      expect.objectContaining({ action: 'background', allowed: false }),
+    ]);
+  });
+
+  it('keeps a CLI action available when its exact HTTP-proxied endpoint passes despite local DNS failure', async () => {
+    const probe = new ProviderConnectivityProbe({
+      appFetch: async () => new Response(null, { status: 204 }),
+      applicationProxyUrl: () => 'http://127.0.0.1:43123',
+      cliRequest: async (url) => `401|${url}|0|application/json`,
+      clientVersion: async () => '2.1.197',
+      dnsLookup: async () => {
+        throw new Error('getaddrinfo ENOTFOUND api.anthropic.com');
+      },
+      resolveProxy: async () => 'DIRECT',
+    });
+
+    const observation = await probe.run('anthropic-claude', 'cli-launch');
+    const dnsProbe = observation.probes.find(
+      (candidate) => candidate.id === 'dns:api.anthropic.com',
+    );
+    const endpointProbe = observation.probes.find(
+      (candidate) => candidate.id === 'cli:anthropic-api',
+    );
+    const result = new RiskDecisionEngine().evaluate(
+      'anthropic-claude',
+      'cli-launch',
+      observation,
+      1,
+      2,
+    );
+
+    expect(dnsProbe).toMatchObject({ required: false, status: 'failed' });
+    expect(endpointProbe).toMatchObject({ required: true, status: 'passed' });
+    expect(result.providerConnectivity.status).toBe('allowed_with_notice');
+    expect(result.featureAccess).toEqual([{ action: 'cli-launch', allowed: true }]);
+  });
+
+  it('keeps Electron-only OAuth failures advisory when the exact Codex login transport passes', async () => {
+    const probe = new ProviderConnectivityProbe({
+      applicationRequest: async () => {
+        throw new Error('Electron application route unavailable');
+      },
+      cliRequest: async (url, websocket) =>
+        websocket ? `403|${url.replace(/^wss:/, 'https:')}|0|` : `401|${url}|0|application/json`,
+      clientVersion: async () => '0.146.0',
+      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
+      resolveProxy: async () => 'DIRECT',
+    });
+
+    const observation = await probe.run('openai-codex', 'login');
+    const result = new RiskDecisionEngine().evaluate('openai-codex', 'login', observation, 1, 2);
+
+    expect(observation.probes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'app:openai-auth',
+          process: 'application',
+          required: false,
+          status: 'failed',
+        }),
+        expect.objectContaining({
+          id: 'app:openai-chatgpt',
+          process: 'application',
+          required: false,
+          status: 'failed',
+        }),
+        expect.objectContaining({
+          id: 'cli:openai-codex-api',
+          process: 'codex-cli',
+          required: true,
+          status: 'passed',
+        }),
+      ]),
+    );
+    expect(observation.paths.some(({ process }) => process === 'oauth-browser')).toBe(false);
+    expect(result.providerConnectivity.status).toBe('allowed_with_notice');
+    expect(result.featureAccess).toEqual([{ action: 'login', allowed: true }]);
+  });
+
+  it('resolves destination-specific PAC transport before applying local DNS authority', async () => {
+    const resolveProxy = vi.fn(async (url: string) =>
+      url === 'https://chatgpt.com/' ? 'PROXY 127.0.0.1:7890' : 'DIRECT',
+    );
+    const probe = new ProviderConnectivityProbe({
+      applicationRequest: async () => ({
+        contentType: 'application/json',
+        redirects: [],
+        status: 204,
+      }),
+      cliRequest: async (url) => `401|${url}|0|application/json`,
+      clientVersion: async () => undefined,
+      dnsLookup: async (host) => {
+        if (host === 'chatgpt.com') throw new Error('getaddrinfo ENOTFOUND chatgpt.com');
+        return [{ address: '203.0.113.10', family: 4 }];
+      },
+      resolveProxy,
+    });
+
+    const observation = await probe.run('ai-services', 'background');
+    const chatgptDns = observation.probes.find((candidate) => candidate.id === 'dns:chatgpt.com');
+    const result = new RiskDecisionEngine().evaluate(
+      'ai-services',
+      'background',
+      observation,
+      1,
+      2,
+    );
+
+    expect(resolveProxy).toHaveBeenCalledWith('https://chatgpt.com/', 'application', undefined);
+    expect(resolveProxy).toHaveBeenCalledWith(
+      'https://chatgpt.com/backend-api/codex',
+      'application',
+      undefined,
+    );
+    expect(observation.paths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          process: 'application',
+          proxyConfigured: true,
+          target: 'https://chatgpt.com/',
+        }),
+        expect.objectContaining({
+          process: 'application',
+          proxyConfigured: false,
+          target: 'https://chatgpt.com/backend-api/codex',
+        }),
+      ]),
+    );
+    expect(chatgptDns).toMatchObject({ required: true, status: 'failed' });
+    expect(result.providerConnectivity.status).toBe('blocked');
+  });
+
+  it.each([
+    ['SOCKS5', 'socks5://127.0.0.1:1080', true, 'blocked'],
+    ['SOCKS5H', 'socks5h://127.0.0.1:1080', false, 'allowed_with_notice'],
+  ] as const)(
+    'preserves %s destination-DNS authority for a successful Codex transport',
+    async (_case, proxyUrl, dnsRequired, expectedStatus) => {
+      await withProxyEnvironment({ ALL_PROXY: proxyUrl }, async () => {
+        const probe = new ProviderConnectivityProbe({
+          applicationRequest: async () => ({
+            contentType: 'application/json',
+            redirects: [],
+            status: 204,
+          }),
+          cliRequest: async (url) => `401|${url}|0|application/json`,
+          clientVersion: async () => '0.146.0',
+          dnsLookup: async () => {
+            throw new Error('getaddrinfo ENOTFOUND chatgpt.com');
+          },
+          resolveProxy: async () => 'DIRECT',
+        });
+
+        const observation = await probe.run('openai-codex', 'cli-launch');
+        const dnsProbe = observation.probes.find((candidate) => candidate.id === 'dns:chatgpt.com');
+        const result = new RiskDecisionEngine().evaluate(
+          'openai-codex',
+          'cli-launch',
+          observation,
+          1,
+          2,
+        );
+
+        expect(
+          observation.paths.find(
+            (path) =>
+              path.process === 'codex-cli' &&
+              path.target === 'https://chatgpt.com/backend-api/codex',
+          ),
+        ).toMatchObject({ proxyKind: dnsRequired ? 'socks' : 'socks5h' });
+        expect(dnsProbe).toMatchObject({ required: dnsRequired, status: 'failed' });
+        expect(result.providerConnectivity.status).toBe(expectedStatus);
+        expect(result.featureAccess).toEqual([
+          expect.objectContaining({ action: 'cli-launch', allowed: !dnsRequired }),
+        ]);
+      });
+    },
+  );
+
+  it('keeps unproxied required DNS failures authoritative', async () => {
+    const probe = new ProviderConnectivityProbe({
+      applicationRequest: async () => ({
+        contentType: 'application/json',
+        redirects: [],
+        status: 204,
+      }),
+      cliRequest: async (url) => `401|${url}|0|application/json`,
+      dnsLookup: async () => {
+        throw new Error('getaddrinfo ENOTFOUND direct-provider-host');
+      },
+      resolveProxy: async () => 'DIRECT',
+    });
+
+    const observation = await probe.run('openai-codex', 'login');
+    const result = new RiskDecisionEngine().evaluate('openai-codex', 'login', observation, 1, 2);
+
+    expect(
+      observation.probes.filter((candidate) => candidate.kind === 'dns' && candidate.required),
+    ).not.toHaveLength(0);
+    expect(result.providerConnectivity.status).toBe('blocked');
+    expect(result.featureAccess).toEqual([
+      expect.objectContaining({ action: 'login', allowed: false }),
+    ]);
   });
 
   it('uses the selected Electron request and proxy resolver for conversation scope', async () => {
@@ -91,161 +289,54 @@ describe('ProviderConnectivityProbe', () => {
     expect(resolveProxy).toHaveBeenCalledWith(expect.any(String), 'conversation', undefined);
   });
 
-  it('forwards one authoritative signal to every probe branch and removes its deadline listener', async () => {
-    const controller = new AbortController();
-    const addEventListener = vi.spyOn(controller.signal, 'addEventListener');
-    const removeEventListener = vi.spyOn(controller.signal, 'removeEventListener');
-    const applicationRequest = vi.fn(async (_url: string, _signal?: AbortSignal) => ({
-      contentType: 'application/json',
-      redirects: [],
-      status: 204,
-    }));
-    const cliRequest = vi.fn(
-      async (url: string, websocket: boolean, _cwd?: string, _signal?: AbortSignal) =>
-        websocket ? `101|${url.replace(/^wss:/, 'https:')}|0|` : `401|${url}|0|application/json`,
-    );
-    const clientVersion = vi.fn(
-      async (_provider: string, _cwd?: string, _signal?: AbortSignal) => '0.146.0',
-    );
-    const dnsLookup = vi.fn(async (_host: string, _signal?: AbortSignal) => [
-      { address: '203.0.113.10', family: 4 as const },
-    ]);
-    const resolveProxy = vi.fn(
-      async (_url: string, _scope: string, _signal?: AbortSignal) => 'DIRECT',
-    );
+  it('resolves and publishes the exact action target for destination-specific path evidence', async () => {
+    const resolveProxy = vi.fn(async () => 'DIRECT');
     const probe = new ProviderConnectivityProbe({
-      applicationRequest,
-      cliRequest,
-      clientVersion,
-      dnsLookup,
+      appFetch: async () => new Response(null, { status: 204 }),
+      cliRequest: async (url, websocket) =>
+        websocket ? `101|${url.replace(/^wss:/, 'https:')}|0|` : `401|${url}|0|application/json`,
+      clientVersion: async () => '0.146.0',
+      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
       resolveProxy,
     });
 
-    await probe.run(
-      'openai-codex',
-      'background',
+    const cliLaunch = await probe.run('openai-codex', 'cli-launch');
+    expect(resolveProxy).toHaveBeenLastCalledWith(
+      'https://chatgpt.com/backend-api/codex',
+      'application',
       undefined,
+    );
+    expect(
+      cliLaunch.paths.every((path) => path.target === 'https://chatgpt.com/backend-api/codex'),
+    ).toBe(true);
+
+    const login = await probe.run('openai-codex', 'login', undefined, 'conversation');
+    expect(resolveProxy).toHaveBeenLastCalledWith(
+      'https://chatgpt.com/backend-api/codex',
       'conversation',
       undefined,
-      controller.signal,
     );
+    expect(
+      login.paths.every(
+        (path) =>
+          path.networkScope === 'conversation' &&
+          path.target === 'https://chatgpt.com/backend-api/codex',
+      ),
+    ).toBe(true);
 
-    expect(applicationRequest).toHaveBeenCalled();
-    expect(applicationRequest.mock.calls.every(([, signal]) => signal === controller.signal)).toBe(
-      true,
-    );
-    expect(cliRequest).toHaveBeenCalled();
-    expect(cliRequest.mock.calls.every(([, , , signal]) => signal === controller.signal)).toBe(
-      true,
-    );
-    expect(clientVersion).not.toHaveBeenCalled();
-    expect(dnsLookup).toHaveBeenCalled();
-    expect(dnsLookup.mock.calls.every(([, signal]) => signal === controller.signal)).toBe(true);
-    expect(resolveProxy).toHaveBeenCalledWith(
-      expect.any(String),
-      'conversation',
-      controller.signal,
-    );
-    const deadlineListener = addEventListener.mock.calls.find(([type]) => type === 'abort')?.[1];
-    expect(deadlineListener).toBeDefined();
-    expect(removeEventListener).toHaveBeenCalledWith('abort', deadlineListener);
-  });
-
-  it('rejects authoritative cancellation instead of converting it into a probe verdict', async () => {
-    const controller = new AbortController();
-    const abortError = new Error('obsolete preflight');
-    let forwardedSignal: AbortSignal | undefined;
-    const applicationRequest = vi.fn(
-      (_url: string, signal?: AbortSignal): Promise<never> =>
-        new Promise((_resolve, reject) => {
-          forwardedSignal = signal;
-          if (!signal) {
-            reject(new Error('authoritative signal missing'));
-            return;
-          }
-          const rejectAbort = (): void => reject(signal.reason);
-          if (signal.aborted) {
-            rejectAbort();
-          } else {
-            signal.addEventListener('abort', rejectAbort, { once: true });
-          }
-        }),
-    );
-    const probe = new ProviderConnectivityProbe({
-      applicationRequest,
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      resolveProxy: async () => 'DIRECT',
+    const configuredTarget = 'https://gateway.example.test/v1/chat/completions';
+    const custom = await probe.run('openai-api', 'first-request', undefined, 'application', {
+      process: 'application',
+      url: configuredTarget,
     });
-    const operation = probe.run(
-      'openai-api',
-      'first-request',
-      undefined,
-      'application',
-      {
+    expect(resolveProxy).toHaveBeenLastCalledWith(configuredTarget, 'application', undefined);
+    expect(custom.paths).toEqual([
+      expect.objectContaining({
+        networkScope: 'application',
         process: 'application',
-        url: 'https://api.openai.com/v1/chat/completions',
-      },
-      controller.signal,
-    );
-
-    await vi.waitFor(() => expect(applicationRequest).toHaveBeenCalledOnce());
-    controller.abort(abortError);
-
-    await expect(operation).rejects.toBe(abortError);
-    expect(forwardedSignal).toBe(controller.signal);
-  });
-
-  it('waits for cancellable leaf cleanup before authoritative cancellation settles', async () => {
-    const controller = new AbortController();
-    const abortError = new Error('obsolete preflight');
-    const cleanup = deferred<void>();
-    const cleanupStarted = vi.fn();
-    const applicationRequest = vi.fn(
-      (_url: string, signal?: AbortSignal): Promise<never> =>
-        new Promise((_resolve, reject) => {
-          const onAbort = (): void => {
-            cleanupStarted();
-            void cleanup.promise.then(() => reject(signal?.reason));
-          };
-          if (signal?.aborted) onAbort();
-          else signal?.addEventListener('abort', onAbort, { once: true });
-        }),
-    );
-    const probe = new ProviderConnectivityProbe({
-      applicationRequest,
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      resolveProxy: async () => 'DIRECT',
-    });
-    const operation = probe.run(
-      'openai-api',
-      'first-request',
-      undefined,
-      'application',
-      {
-        process: 'application',
-        url: 'https://api.openai.com/v1/chat/completions',
-      },
-      controller.signal,
-    );
-    let settled = false;
-    void operation.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-
-    await vi.waitFor(() => expect(applicationRequest).toHaveBeenCalledOnce());
-    controller.abort(abortError);
-    await vi.waitFor(() => expect(cleanupStarted).toHaveBeenCalledOnce());
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    cleanup.resolve();
-
-    await expect(operation).rejects.toBe(abortError);
+        target: configuredTarget,
+      }),
+    ]);
   });
 
   it('checks an exact direct-chat endpoint only through the selected application scope', async () => {
@@ -320,6 +411,63 @@ describe('ProviderConnectivityProbe', () => {
     ).toBe(false);
   });
 
+  it('uses exact Claude CLI transport authority for a custom Messages gateway', async () => {
+    const applicationRequest = vi.fn(async () => ({
+      contentType: 'application/json',
+      redirects: [],
+      status: 204,
+    }));
+    const cliRequest = vi.fn(async (url: string) => `401|${url}|0|application/json`);
+    const dnsLookup = vi.fn(async () => [{ address: '203.0.113.10', family: 4 as const }]);
+    const resolveProxy = vi.fn(async () => 'DIRECT');
+    const probe = new ProviderConnectivityProbe({
+      applicationRequest,
+      cliRequest,
+      dnsLookup,
+      resolveProxy,
+    });
+    const url = 'https://gateway.example.test/tenant/v1/messages';
+
+    const observation = await probe.run(
+      'anthropic-claude',
+      'cli-launch',
+      'D:\\Project',
+      'application',
+      { process: 'claude-cli', url },
+    );
+    const result = new RiskDecisionEngine().evaluate(
+      'anthropic-claude',
+      'cli-launch',
+      observation,
+      1,
+      2,
+    );
+
+    expect(cliRequest).toHaveBeenCalledOnce();
+    expect(cliRequest).toHaveBeenCalledWith(url, false, 'D:\\Project', undefined);
+    expect(resolveProxy).toHaveBeenCalledWith(url, 'application', undefined);
+    expect(observation.paths).toEqual([
+      expect.objectContaining({ process: 'claude-cli', target: url }),
+    ]);
+    expect(observation.probes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'cli:configured-chat-api',
+          process: 'claude-cli',
+          required: true,
+          status: 'passed',
+          target: url,
+        }),
+        expect.objectContaining({
+          id: 'app:configured-chat-api',
+          process: 'application',
+          required: false,
+        }),
+      ]),
+    );
+    expect(result.providerConnectivity.status).toBe('allowed');
+  });
+
   it('fails closed when no Session-owned application request adapter is configured', async () => {
     const probe = new ProviderConnectivityProbe({
       cliRequest: async (url, websocket) =>
@@ -371,6 +519,32 @@ describe('ProviderConnectivityProbe', () => {
     expect(applicationProbes[0]?.detail).toContain('网络路径已确认可达');
   });
 
+  it('does not use an unvalidated Electron OAuth redirect as system-browser login authority', async () => {
+    const { probe } = createProbe(undefined, async () => {
+      throw new TypeError('Redirect was cancelled');
+    });
+
+    const observation = await probe.run('openai-codex', 'login');
+    const applicationProbes = observation.probes.filter((candidate) =>
+      candidate.id.startsWith('app:'),
+    );
+    const result = new RiskDecisionEngine().evaluate('openai-codex', 'login', observation, 1, 2);
+
+    expect(applicationProbes.length).toBeGreaterThan(0);
+    expect(applicationProbes).toEqual(
+      applicationProbes.map((candidate) =>
+        expect.objectContaining({
+          id: candidate.id,
+          process: 'application',
+          required: false,
+          status: 'warning',
+        }),
+      ),
+    );
+    expect(result.providerConnectivity.status).toBe('allowed_with_notice');
+    expect(result.featureAccess).toEqual([{ action: 'login', allowed: true }]);
+  });
+
   it('still rejects a redirect cancellation from an exact configured API target', async () => {
     const { probe } = createProbe(undefined, async () => {
       throw new TypeError('Redirect was cancelled');
@@ -382,7 +556,7 @@ describe('ProviderConnectivityProbe', () => {
     });
 
     expect(result.probes.find((item) => item.id === 'app:configured-chat-api')).toMatchObject({
-      detail: expect.stringContaining('Redirect was cancelled'),
+      detail: expect.stringContaining('未验证的重定向'),
       required: true,
       status: 'failed',
     });
@@ -405,6 +579,39 @@ describe('ProviderConnectivityProbe', () => {
       required: true,
       status: 'failed',
     });
+  });
+
+  it('blocks a required application endpoint on HTTP 503', async () => {
+    const { probe } = createProbe(undefined, async () => ({
+      contentType: 'text/plain',
+      redirects: [],
+      status: 503,
+    }));
+
+    const observation = await probe.run('openai-api', 'first-request', undefined, 'application', {
+      process: 'application',
+      url: 'https://api.openai.com/v1/chat/completions',
+    });
+    const endpointProbe = observation.probes.find(
+      (candidate) => candidate.id === 'app:configured-chat-api',
+    );
+    const result = new RiskDecisionEngine().evaluate(
+      'openai-api',
+      'first-request',
+      observation,
+      1,
+      2,
+    );
+
+    expect(endpointProbe).toMatchObject({
+      detail: expect.stringContaining('HTTP 503'),
+      required: true,
+      status: 'failed',
+    });
+    expect(result.providerConnectivity.status).toBe('blocked');
+    expect(result.featureAccess).toEqual([
+      expect.objectContaining({ action: 'first-request', allowed: false }),
+    ]);
   });
 
   it.each([401, 403, 405])(
@@ -649,204 +856,5 @@ describe('ProviderConnectivityProbe', () => {
         }),
       ]),
     );
-  });
-
-  it('preserves completed DNS and endpoint siblings when only some items time out', async () => {
-    const pendingDns = new Promise<never>(() => undefined);
-    const pendingApplication = new Promise<never>(() => undefined);
-    const probe = new ProviderConnectivityProbe({
-      applicationRequest: (url) =>
-        url === 'https://claude.ai/'
-          ? pendingApplication
-          : Promise.resolve({ contentType: 'application/json', redirects: [], status: 204 }),
-      cliRequest: async (url) => `401|${url}|0|application/json`,
-      clientVersion: async () => '2.1.200',
-      dnsLookup: (host) =>
-        host === 'claude.ai'
-          ? pendingDns
-          : Promise.resolve([{ address: '203.0.113.10', family: 4 }]),
-      overallTimeoutMs: 20,
-      resolveProxy: async () => 'DIRECT',
-    });
-
-    const result = await probe.run('anthropic-claude', 'first-request');
-
-    expect(result.probes.find(({ id }) => id === 'dns:claude.ai')?.status).toBe('skipped');
-    expect(result.probes.find(({ id }) => id === 'app:anthropic-claude-auth')?.status).toBe(
-      'skipped',
-    );
-    expect(result.probes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: 'dns:platform.claude.com', status: 'passed' }),
-        expect.objectContaining({ id: 'dns:api.anthropic.com', status: 'passed' }),
-        expect.objectContaining({ id: 'app:anthropic-console-auth', status: 'passed' }),
-        expect.objectContaining({ id: 'app:anthropic-api', status: 'passed' }),
-        expect.objectContaining({ id: 'cli:anthropic-api', status: 'passed' }),
-      ]),
-    );
-  });
-
-  it('starts independent application and CLI transports concurrently in stable result order', async () => {
-    const targetUrl = 'https://chatgpt.com/backend-api/codex';
-    const applicationOutcome = deferred<{
-      contentType: string;
-      redirects: never[];
-      status: number;
-    }>();
-    const cliOutcome = deferred<string>();
-    const applicationRequest = vi.fn((url: string) =>
-      url === targetUrl
-        ? applicationOutcome.promise
-        : Promise.resolve({ contentType: 'application/json', redirects: [], status: 204 }),
-    );
-    const cliRequest = vi.fn((url: string, websocket: boolean) =>
-      url === targetUrl
-        ? cliOutcome.promise
-        : Promise.resolve(
-            websocket
-              ? `101|${url.replace(/^wss:/, 'https:')}|0|`
-              : `401|${url}|0|application/json`,
-          ),
-    );
-    const probe = new ProviderConnectivityProbe({
-      applicationRequest,
-      cliRequest,
-      clientVersion: async () => '0.146.0',
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      overallTimeoutMs: 1_000,
-      resolveProxy: async () => 'DIRECT',
-    });
-    const operation = probe.run('openai-codex', 'cli-launch');
-
-    try {
-      await vi.waitFor(() => {
-        expect(applicationRequest).toHaveBeenCalledWith(
-          targetUrl,
-          undefined,
-          expect.objectContaining({
-            allowedDomains: expect.arrayContaining(['chatgpt.com', 'auth.openai.com']),
-          }),
-        );
-        expect(cliRequest).toHaveBeenCalledWith(targetUrl, false, undefined, undefined);
-      });
-      cliOutcome.resolve(`401|${targetUrl}|0|application/json`);
-      applicationOutcome.resolve({ contentType: 'application/json', redirects: [], status: 204 });
-      const result = await operation;
-      const applicationIndex = result.probes.findIndex(({ id }) => id === 'app:openai-codex-api');
-      const cliIndex = result.probes.findIndex(({ id }) => id === 'cli:openai-codex-api');
-      expect(applicationIndex).toBeGreaterThanOrEqual(0);
-      expect(cliIndex).toBeGreaterThan(applicationIndex);
-    } finally {
-      cliOutcome.resolve(`401|${targetUrl}|0|application/json`);
-      applicationOutcome.resolve({ contentType: 'application/json', redirects: [], status: 204 });
-    }
-  });
-
-  it('bounds repeated hung OS DNS lookups without retaining an unbounded queue', async () => {
-    const dnsLookup = vi.fn(() => new Promise<never>(() => undefined));
-    const probe = new ProviderConnectivityProbe({
-      applicationRequest: async () => ({
-        contentType: 'application/json',
-        redirects: [],
-        status: 204,
-      }),
-      dnsLookup,
-      overallTimeoutMs: 10,
-      resolveProxy: async () => 'DIRECT',
-    });
-    const target = {
-      process: 'application' as const,
-      url: 'https://api.openai.com/v1/chat/completions',
-    };
-
-    await Promise.all(
-      Array.from({ length: 10 }, () =>
-        probe.run('openai-api', 'first-request', undefined, 'application', target),
-      ),
-    );
-    expect(dnsLookup).toHaveBeenCalledTimes(6);
-
-    await probe.run('openai-api', 'first-request', undefined, 'application', target);
-    expect(dnsLookup).toHaveBeenCalledTimes(6);
-  });
-
-  it('bounds repeated hung Electron PAC lookups without retaining an unbounded queue', async () => {
-    const resolveProxy = vi.fn(() => new Promise<never>(() => undefined));
-    const probe = new ProviderConnectivityProbe({
-      applicationRequest: async () => ({
-        contentType: 'application/json',
-        redirects: [],
-        status: 204,
-      }),
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      overallTimeoutMs: 10,
-      resolveProxy,
-    });
-    const target = {
-      process: 'application' as const,
-      url: 'https://api.openai.com/v1/chat/completions',
-    };
-
-    const results = await Promise.all(
-      Array.from({ length: 8 }, () =>
-        probe.run('openai-api', 'first-request', undefined, 'application', target),
-      ),
-    );
-    expect(resolveProxy).toHaveBeenCalledTimes(2);
-    expect(
-      results.every(({ paths }) => paths.every(({ proxyKind }) => proxyKind === 'unknown')),
-    ).toBe(true);
-
-    await probe.run('openai-api', 'first-request', undefined, 'application', target);
-    expect(resolveProxy).toHaveBeenCalledTimes(2);
-  });
-
-  it('settles under an overall deadline when DNS never resolves', async () => {
-    const { appFetch } = createProbe();
-    const probe = new ProviderConnectivityProbe({
-      appFetch,
-      cliRequest: async (url) => `401|${url}|0|application/json`,
-      clientVersion: async () => '0.146.0',
-      // A DNS lookup that never settles used to hang the whole preflight forever, because run()
-      // awaits Promise.all with no deadline of its own.
-      dnsLookup: () => new Promise(() => undefined),
-      overallTimeoutMs: 20,
-      resolveProxy: async () => 'DIRECT',
-    });
-
-    const result = await probe.run('openai-codex', 'background');
-
-    // Timing out must degrade to an explicit unknown/skipped probe, which the risk engine treats as
-    // a required failure — never a silent pass.
-    const dnsProbe = result.probes.find((item) => item.kind === 'dns');
-    expect(dnsProbe?.status).toBe('skipped');
-    expect(dnsProbe?.detail).toContain('超时');
-  });
-
-  it('settles under an overall deadline when the proxy lookup never resolves', async () => {
-    const { appFetch } = createProbe();
-    const probe = new ProviderConnectivityProbe({
-      appFetch,
-      cliRequest: async (url) => `401|${url}|0|application/json`,
-      clientVersion: async () => '0.146.0',
-      dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
-      overallTimeoutMs: 20,
-      // Electron's session.resolveProxy can hang indefinitely on a broken PAC script.
-      resolveProxy: () => new Promise(() => undefined),
-    });
-
-    const result = await probe.run('openai-codex', 'background');
-
-    expect(result.paths.length).toBeGreaterThan(0);
-    expect(
-      result.paths
-        .filter(({ process }) => ['application', 'oauth-browser', 'renderer'].includes(process))
-        .every(({ proxyKind }) => proxyKind === 'unknown'),
-    ).toBe(true);
-    expect(
-      result.paths
-        .filter(({ process }) => ['codex-cli', 'terminal'].includes(process))
-        .every(({ proxyKind }) => proxyKind !== 'unknown'),
-    ).toBe(true);
   });
 });

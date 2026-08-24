@@ -52,22 +52,24 @@ module.exports = {
       severity: 'error',
       from: {
         orphan: true,
-        pathNot: [
-          ENTRY_POINTS,
-          '\\.d\\.ts$',
-          '(^|/)tests/',
-          '(^|/)(\\.|)[^/]+\\.(json|js|cjs|mjs|ts)$',
-        ],
+        pathNot: [ENTRY_POINTS, '\\.d\\.ts$', '(^|/)tests/', '^[^/]+\\.(json|js|cjs|mjs|ts)$'],
       },
       to: {},
     },
     {
       name: 'shared-stays-pure',
       comment:
-        '`src/shared/` compiles into every process, so it may not reach for Electron or Node built-ins.',
+        '`src/shared/` compiles into every process, so it may not reach for Node built-ins through node: or bare specifiers.',
       severity: 'error',
       from: { path: '^src/shared/' },
-      to: { dependencyTypes: ['core'], path: '^(electron|node:)' },
+      to: { dependencyTypes: ['core'] },
+    },
+    {
+      name: 'shared-no-electron',
+      comment: '`src/shared/` compiles outside Electron and may not import the Electron runtime.',
+      severity: 'error',
+      from: { path: '^src/shared/' },
+      to: { path: '^(electron|node_modules/electron)(/|$)' },
     },
     {
       name: 'shared-imports-nothing-above',
@@ -102,10 +104,11 @@ module.exports = {
     },
     {
       name: 'preload-no-node-builtins',
-      comment: 'Node built-ins reached through preload would be exposed across the context bridge.',
+      comment:
+        'Node built-ins reached through preload via node: or bare specifiers would be exposed across the context bridge.',
       severity: 'error',
       from: { path: '^src/preload/' },
-      to: { dependencyTypes: ['core'], path: '^(node:|fs|path|os|child_process|crypto)$' },
+      to: { dependencyTypes: ['core'] },
     },
     {
       name: 'src-not-to-tests',

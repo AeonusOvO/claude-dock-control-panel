@@ -145,15 +145,18 @@ export class FakeTerminal {
       length: 0,
     },
   };
+  public bracketedPasteMode = false;
   public cols = 80;
   public readonly customKeyHandlers: Array<(event: KeyboardEvent) => boolean> = [];
   public disposed = false;
   public focused = false;
   public readonly loadedAddons: unknown[] = [];
   public options: Record<string, unknown>;
+  public readonly pasteCalls: string[] = [];
   public readonly pendingWriteCallbacks: Array<() => void> = [];
   public resized: Array<{ cols: number; rows: number }> = [];
   public rows = 24;
+  public selection = '';
   public readonly unicode = { activeVersion: '' };
   public readonly writes: string[] = [];
   private readonly dataListeners = new Set<(data: string) => void>();
@@ -177,6 +180,7 @@ export class FakeTerminal {
 
   public dispose(): void {
     this.disposed = true;
+    this.customKeyHandlers.length = 0;
     this.dataListeners.clear();
   }
 
@@ -189,11 +193,11 @@ export class FakeTerminal {
   }
 
   public getSelection(): string {
-    return '';
+    return this.selection;
   }
 
   public hasSelection(): boolean {
-    return false;
+    return this.selection.length > 0;
   }
 
   public loadAddon(addon: unknown): void {
@@ -220,6 +224,15 @@ export class FakeTerminal {
         y: 0,
       }),
     });
+  }
+
+  public paste(data: string): void {
+    this.pasteCalls.push(data);
+    const normalized = data.replace(/\r?\n/g, '\r');
+    const escape = String.fromCharCode(27);
+    this.emitData(
+      this.bracketedPasteMode ? `${escape}[200~${normalized}${escape}[201~` : normalized,
+    );
   }
 
   public refresh(): void {}

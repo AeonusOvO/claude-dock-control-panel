@@ -11,6 +11,9 @@ export default defineConfig({
   root: 'src/renderer',
   base: './',
   build: {
+    // Keep bundled visual assets as inspectable packaged files; brand provenance must not be folded
+    // into opaque data URLs in the renderer document.
+    assetsInlineLimit: 0,
     // Shiki's WASM engine and language grammars ship inside the bundle so that highlighting works
     // without network access, which puts the single renderer entry chunk well above Vite's 500 kB
     // default threshold.

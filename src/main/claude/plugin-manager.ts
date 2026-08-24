@@ -2,6 +2,8 @@ import path from 'node:path';
 import type {
   ClaudePluginCatalog,
   ClaudePluginMarketplaceView,
+  ClaudePluginOperationKind,
+  ClaudePluginOperationView,
   ClaudePluginScope,
   ClaudePluginView,
 } from '../../shared/contracts';
@@ -539,6 +541,76 @@ export type ClaudePluginMutationRequest =
   | { source: string; type: 'marketplace-add' }
   | { name: string; type: 'marketplace-remove' };
 
+interface ActivePluginMutation {
+  identity: string;
+  operation: ClaudePluginOperationView;
+  promise: Promise<ClaudePluginMutationOutcome>;
+}
+
+export const claudePluginMutationIdentity = (request: ClaudePluginMutationRequest): string => {
+  switch (request.type) {
+    case 'install':
+    case 'uninstall':
+    case 'update':
+      return `${request.type}:${request.pluginId}`;
+    case 'set-enabled':
+      return `${request.type}:${request.pluginId}:${request.enabled}`;
+    case 'marketplace-add':
+      return `${request.type}:${request.source.trim()}`;
+    case 'marketplace-remove':
+      return `${request.type}:${request.name}`;
+    case 'marketplaces-refresh':
+    case 'update-all':
+      return request.type;
+  }
+};
+
+const pluginMutationOperation = (
+  request: ClaudePluginMutationRequest,
+  attempt: number,
+): ClaudePluginOperationView => {
+  let kind: ClaudePluginOperationKind;
+  let target: string;
+  switch (request.type) {
+    case 'install':
+    case 'uninstall':
+    case 'update':
+      kind = request.type;
+      target = request.pluginId;
+      break;
+    case 'set-enabled':
+      kind = request.enabled ? 'enable' : 'disable';
+      target = request.pluginId;
+      break;
+    case 'marketplace-add':
+      kind = 'marketplace-add';
+      target = '插件市场';
+      break;
+    case 'marketplace-remove':
+      kind = 'marketplace-remove';
+      target = request.name;
+      break;
+    case 'marketplaces-refresh':
+      kind = 'refresh';
+      target = '插件市场';
+      break;
+    case 'update-all':
+      kind = 'update-all';
+      target = '所有插件';
+      break;
+  }
+  return Object.freeze({ attempt, kind, phase: 'mutating', startedAt: Date.now(), target });
+};
+
+const withoutActivePluginOperation = (catalog: ClaudePluginCatalog): ClaudePluginCatalog => {
+  if (catalog.activeOperation === undefined) {
+    return catalog;
+  }
+  const settled = { ...catalog };
+  delete settled.activeOperation;
+  return settled;
+};
+
 export interface ClaudePluginMutationOutcome {
   catalog: ClaudePluginCatalog;
   message: string;
@@ -554,12 +626,13 @@ export class ClaudePluginMutationError extends Error {
 }
 
 export class ClaudePluginManager {
+  private activeMutation?: ActivePluginMutation;
   private cached?: ClaudePluginCatalog;
   private cacheCurrent = false;
   private catalogGeneration = 0;
   private inFlight?: CatalogLoad;
   private lastGood?: ClaudePluginCatalog;
-  private mutationTail: Promise<void> = Promise.resolve();
+  private nextMutationAttempt = 1;
 
   public constructor(
     private readonly cwd: string,
@@ -569,10 +642,110 @@ export class ClaudePluginManager {
     ) => Promise<string> | string = readMarketplaceManifest,
   ) {}
 
-  /** Returns the cached catalog unless `refresh` is set; concurrent current refreshes are coalesced. */
-  public async getCatalog(refresh = false): Promise<ClaudePluginCatalog> {
+  /** Returns a stable snapshot immediately, including any application-global mutation owner. */
+  public getCatalog(refresh = false): Promise<ClaudePluginCatalog> {
+    return this.readCatalog(refresh, false);
+  }
+
+  public hasActiveMutation(): boolean {
+    return this.activeMutation !== undefined;
+  }
+
+  /** Joins an identical in-flight mutation and rejects every competing side effect. */
+  public mutate(request: ClaudePluginMutationRequest): Promise<ClaudePluginMutationOutcome> {
+    const identity = claudePluginMutationIdentity(request);
+    if (this.activeMutation) {
+      if (this.activeMutation.identity === identity) {
+        return this.activeMutation.promise;
+      }
+      return Promise.reject(
+        new ClaudePluginMutationError(
+          '已有插件操作正在进行，请等待完成后再试。',
+          this.catalogForView(
+            this.cached ?? this.lastGood ?? emptyCatalog('插件操作正在进行。', true),
+          ),
+        ),
+      );
+    }
+
+    const attempt = this.nextMutationAttempt++;
+    const operation = pluginMutationOperation(request, attempt);
+    const run = Promise.resolve().then(() => this.performMutation(request, attempt));
+    const completion = run.finally(() => {
+      if (this.activeMutation?.operation.attempt === attempt) {
+        this.activeMutation = undefined;
+      }
+    });
+    this.activeMutation = { identity, operation, promise: completion };
+    return completion;
+  }
+
+  /** Supersedes current reads without discarding the last-known-good fallback. */
+  public invalidate(): void {
+    this.catalogGeneration += 1;
+    this.cacheCurrent = false;
+    this.inFlight = undefined;
+  }
+
+  private catalogForView(catalog: ClaudePluginCatalog): ClaudePluginCatalog {
+    const settled = withoutActivePluginOperation(catalog);
+    return this.activeMutation
+      ? { ...settled, activeOperation: this.activeMutation.operation }
+      : settled;
+  }
+
+  private async catalogAfterMutation(active: ActivePluginMutation): Promise<ClaudePluginCatalog> {
+    try {
+      return (await active.promise).catalog;
+    } catch (error) {
+      if (error instanceof ClaudePluginMutationError) {
+        return error.catalog;
+      }
+      return this.readCatalog(false, false);
+    }
+  }
+
+  private async performMutation(
+    request: ClaudePluginMutationRequest,
+    attempt: number,
+  ): Promise<ClaudePluginMutationOutcome> {
+    let message: string | undefined;
+    let mutationError: unknown;
+    try {
+      message = await this.executeMutation(request);
+    } catch (error) {
+      mutationError = error;
+    }
+
+    // Even a failed CLI command may have applied part of a mutation, so every attempt fences reads.
+    if (this.activeMutation?.operation.attempt === attempt) {
+      this.activeMutation.operation = Object.freeze({
+        ...this.activeMutation.operation,
+        phase: 'refreshing',
+      });
+    }
+    this.invalidate();
+    const catalog = withoutActivePluginOperation(await this.readCatalog(true, true));
+    if (mutationError !== undefined) {
+      throw new ClaudePluginMutationError(
+        mutationError instanceof Error ? mutationError.message : '插件操作失败。',
+        catalog,
+      );
+    }
+    return { catalog, message: message ?? '插件操作已完成。' };
+  }
+
+  private async readCatalog(
+    refresh: boolean,
+    mutationOwnedRefresh: boolean,
+  ): Promise<ClaudePluginCatalog> {
+    if (this.activeMutation && !mutationOwnedRefresh) {
+      return this.catalogForView(
+        this.cached ?? this.lastGood ?? emptyCatalog('插件操作正在进行。', true),
+      );
+    }
     if (!refresh && this.cacheCurrent && this.cached) {
-      return this.cached;
+      return this.catalogForView(this.cached);
     }
 
     const generation = this.catalogGeneration;
@@ -585,16 +758,17 @@ export class ClaudePluginManager {
     try {
       const catalog = await load.promise;
       if (generation !== this.catalogGeneration) {
-        // A mutation superseded this read. Publish the current generation, never the obsolete result.
-        return this.getCatalog(false);
+        const active = this.activeMutation;
+        return active ? this.catalogAfterMutation(active) : this.readCatalog(false, false);
       }
       this.cached = catalog;
       this.lastGood = catalog;
       this.cacheCurrent = true;
-      return catalog;
+      return this.catalogForView(catalog);
     } catch (error) {
       if (generation !== this.catalogGeneration) {
-        return this.getCatalog(false);
+        const active = this.activeMutation;
+        return active ? this.catalogAfterMutation(active) : this.readCatalog(false, false);
       }
       const failure =
         error instanceof PluginCatalogLoadError
@@ -603,62 +777,19 @@ export class ClaudePluginManager {
       if (this.lastGood) {
         this.cached = this.lastGood;
         this.cacheCurrent = true;
-        return {
+        return this.catalogForView({
           ...this.lastGood,
           checkedAt: Date.now(),
           cliAvailable: failure.cliAvailable,
           message: failure.message,
-        };
+        });
       }
-      return emptyCatalog(failure.message, failure.cliAvailable);
+      return this.catalogForView(emptyCatalog(failure.message, failure.cliAvailable));
     } finally {
       if (this.inFlight === load) {
         this.inFlight = undefined;
       }
     }
-  }
-
-  /**
-   * Serializes the write and its forced catalog refresh as one transaction. A later mutation cannot
-   * start until the earlier caller has received a post-mutation catalog (or its safe stale fallback).
-   */
-  public mutate(request: ClaudePluginMutationRequest): Promise<ClaudePluginMutationOutcome> {
-    return this.enqueueMutation(async () => {
-      let message: string | undefined;
-      let mutationError: unknown;
-      try {
-        message = await this.executeMutation(request);
-      } catch (error) {
-        mutationError = error;
-      }
-
-      // Even a failed CLI command may have applied part of a mutation, so every attempt fences reads.
-      this.invalidate();
-      const catalog = await this.getCatalog(true);
-      if (mutationError !== undefined) {
-        throw new ClaudePluginMutationError(
-          mutationError instanceof Error ? mutationError.message : '插件操作失败。',
-          catalog,
-        );
-      }
-      return { catalog, message: message ?? '插件操作已完成。' };
-    });
-  }
-
-  /** Supersedes current reads without discarding the last-known-good fallback. */
-  public invalidate(): void {
-    this.catalogGeneration += 1;
-    this.cacheCurrent = false;
-    this.inFlight = undefined;
-  }
-
-  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const queued = this.mutationTail.then(operation);
-    this.mutationTail = queued.then(
-      () => undefined,
-      () => undefined,
-    );
-    return queued;
   }
 
   private assertPluginId(pluginId: string): void {

@@ -45,11 +45,13 @@ export interface TerminalFeature {
     source?: HTMLTextAreaElement,
     variant?: 'terminal' | 'chat',
   ) => void;
+  pruneTerminalControlOperations: (validSessionIds: ReadonlySet<string>) => void;
   relaunchClaudeSession: (
     summary: string,
     input: Omit<ClaudeRelaunchInput, 'compactFirst'>,
   ) => Promise<void>;
   reconcileClaudeLaunchDecision: (workspace: WorkspaceState) => void;
+  renderControlStatus: (status?: TerminalStatus) => void;
   resolveClaudeLaunchDecision: (
     token: ClaudeLaunchAttemptToken,
     paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,
@@ -60,6 +62,7 @@ export interface TerminalFeature {
   setComposerEnabled: (enabled: boolean) => void;
   setPendingComposerFocusSessionId: (sessionId: string) => void;
   showTerminalDiagnostic: (status: TerminalStatus) => void;
+  startTerminal: (status: TerminalStatus) => Promise<void>;
   terminalContextMenu: HTMLElement;
 }
 
@@ -120,9 +123,13 @@ const createTerminalFeature = (dependencies: TerminalFeatureDependencies): Termi
     launchClaudeTerminal: actions.launchClaudeTerminal,
     panelResizer: elements.panelResizer,
     playSendAnimation: layout.playSendAnimation,
+    pruneTerminalControlOperations: (validSessionIds) => {
+      state.terminalControlOperations.prune(validSessionIds);
+    },
     relaunchClaudeSession: io.relaunchClaudeSession,
     reconcileClaudeLaunchDecision: (workspace) =>
       launchDecisionController.reconcileWorkspace(workspace),
+    renderControlStatus: actions.renderControlStatus,
     resolveClaudeLaunchDecision: (token, paused) => launchDecisionController.present(token, paused),
     requestComposerFocus: layout.requestComposerFocus,
     resizeComposer: layout.resizeComposer,
@@ -132,6 +139,7 @@ const createTerminalFeature = (dependencies: TerminalFeatureDependencies): Termi
       state.pendingComposerFocusSessionId = sessionId;
     },
     showTerminalDiagnostic: actions.showTerminalDiagnostic,
+    startTerminal: actions.startTerminal,
     terminalContextMenu: elements.terminalContextMenu,
   };
 };

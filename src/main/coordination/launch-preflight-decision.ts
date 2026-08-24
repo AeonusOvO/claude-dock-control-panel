@@ -140,8 +140,12 @@ const captureDiagnostics = (
   diagnostics: ClaudeLaunchPauseDiagnostics,
 ): ClaudeLaunchPauseDiagnostics =>
   freeze({
+    action: diagnostics.action,
     checkedAt: diagnostics.checkedAt,
     failedItems: freeze(diagnostics.failedItems.map((item) => freeze({ ...item }))),
+    freshness: diagnostics.freshness,
+    provider: diagnostics.provider,
+    providerLabel: diagnostics.providerLabel,
     reasons: freeze([...diagnostics.reasons]),
     scope: diagnostics.scope,
     status: diagnostics.status,
@@ -163,39 +167,201 @@ const captureBlocked = (blocked: ProviderAccessBlockedCapture): ProviderAccessBl
     ...(blocked.target === undefined ? {} : { target: freeze({ ...blocked.target }) }),
   });
 
-const safeLabel = (value: string): string => {
-  const collapsed = value.replaceAll(/https?:\/\/\S+|(?:[A-Za-z]:)?[\\/]\S+/gu, '网络目标').trim();
-  return collapsed.slice(0, 120) || '网络检查项';
+const WINDOWS_PATH_PLACEHOLDER = '[REDACTED_PATH]';
+const WINDOWS_PATH_QUOTES = new Set(['"', "'", '`']);
+const WINDOWS_PATH_TERMINATORS = new Set([
+  '"',
+  "'",
+  '`',
+  '<',
+  '>',
+  '|',
+  '?',
+  '*',
+  ',',
+  ';',
+  ')',
+  ']',
+  '}',
+]);
+
+const isAsciiLetter = (value: string | undefined): boolean =>
+  value !== undefined && /^[A-Za-z]$/u.test(value);
+
+const isWindowsPathSeparator = (value: string | undefined): boolean =>
+  value === '\\' || value === '/';
+
+const isWindowsPathSegmentBoundary = (
+  value: string | undefined,
+  quotedBy: string | undefined,
+): boolean =>
+  value === undefined ||
+  value === '\r' ||
+  value === '\n' ||
+  value === quotedBy ||
+  (quotedBy === undefined && /\s/u.test(value));
+
+const windowsAbsolutePathPrefixEnd = (
+  value: string,
+  index: number,
+  quotedBy?: string,
+): number | undefined => {
+  const previous = value[index - 1];
+  if (previous !== undefined && /^[A-Za-z0-9]$/u.test(previous)) return undefined;
+  if (
+    isAsciiLetter(value[index]) &&
+    value[index + 1] === ':' &&
+    isWindowsPathSeparator(value[index + 2])
+  ) {
+    return index + 3;
+  }
+  if (!isWindowsPathSeparator(value[index]) || !isWindowsPathSeparator(value[index + 1])) {
+    return undefined;
+  }
+  if (
+    (value[index + 2] === '?' || value[index + 2] === '.') &&
+    isWindowsPathSeparator(value[index + 3])
+  ) {
+    return index + 4;
+  }
+
+  let separator = index + 2;
+  while (!isWindowsPathSeparator(value[separator])) {
+    if (isWindowsPathSegmentBoundary(value[separator], quotedBy)) return undefined;
+    separator += 1;
+  }
+  const shareStart = separator + 1;
+  if (
+    isWindowsPathSeparator(value[shareStart]) ||
+    isWindowsPathSegmentBoundary(value[shareStart], quotedBy)
+  ) {
+    return undefined;
+  }
+  return shareStart + 1;
 };
 
-/** Builds launch-specific diagnostics without copying raw preflight details or identity fields. */
+const isUnquotedWindowsPathTerminator = (value: string, index: number): boolean => {
+  const character = value[index];
+  if (character === undefined || /\s/u.test(character)) return true;
+  if (WINDOWS_PATH_TERMINATORS.has(character)) return true;
+  return (
+    character === ':' &&
+    !(isAsciiLetter(value[index - 1]) && isWindowsPathSeparator(value[index + 1]))
+  );
+};
+
+const redactWindowsAbsolutePaths = (value: string): string => {
+  let redacted = '';
+  let index = 0;
+  while (index < value.length) {
+    const quote = WINDOWS_PATH_QUOTES.has(value[index] ?? '') ? value[index] : undefined;
+    const quotedPathStart = quote === undefined ? undefined : index + 1;
+    const quotedPrefixEnd =
+      quotedPathStart === undefined
+        ? undefined
+        : windowsAbsolutePathPrefixEnd(value, quotedPathStart, quote);
+    if (quote !== undefined && quotedPathStart !== undefined && quotedPrefixEnd !== undefined) {
+      let closingQuote = quotedPrefixEnd;
+      while (
+        closingQuote < value.length &&
+        value[closingQuote] !== quote &&
+        value[closingQuote] !== '\r' &&
+        value[closingQuote] !== '\n'
+      ) {
+        closingQuote += 1;
+      }
+      if (value[closingQuote] === quote) {
+        redacted += `${quote}${WINDOWS_PATH_PLACEHOLDER}${quote}`;
+        index = closingQuote + 1;
+        continue;
+      }
+    }
+
+    const prefixEnd = windowsAbsolutePathPrefixEnd(value, index);
+    if (prefixEnd === undefined) {
+      redacted += value[index];
+      index += 1;
+      continue;
+    }
+    let pathEnd = prefixEnd;
+    while (!isUnquotedWindowsPathTerminator(value, pathEnd)) pathEnd += 1;
+    redacted += WINDOWS_PATH_PLACEHOLDER;
+    index = pathEnd;
+  }
+  return redacted;
+};
+
+const safeDiagnosticText = (value: string, maximum = 240): string => {
+  const collapsed = redactWindowsAbsolutePaths(
+    value
+      .replaceAll(/https?:\/\/\S+/gu, '网络目标')
+      .replaceAll(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]')
+      .replaceAll(/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{8,}/giu, '[REDACTED_CREDENTIAL]'),
+  )
+    .replaceAll(/(?:[A-Za-z]:)?[\\/]Users[\\/][^\s]+/giu, WINDOWS_PATH_PLACEHOLDER)
+    .trim();
+  return collapsed.slice(0, maximum) || '网络检查项';
+};
+
+const safeTarget = (value: string | undefined): string | undefined => {
+  if (!value) return undefined;
+  try {
+    const target = new URL(value);
+    target.username = '';
+    target.password = '';
+    target.search = '';
+    target.hash = '';
+    return target.toString().slice(0, 320);
+  } catch {
+    return safeDiagnosticText(value, 320);
+  }
+};
+
+/** Builds an attributed launch decision payload from a strict renderer-safe allow-list. */
 export const launchPauseDiagnosticsFromResult = (
   result: NetworkPreflightResult,
 ): ClaudeLaunchPauseDiagnostics => {
-  const failedItems = result.probes
+  const connectivity = result.providerConnectivity;
+  const failedItems = connectivity.probes
     .filter((probe) => probe.status === 'failed' || probe.status === 'warning')
     .slice(0, 8)
-    .map((probe) =>
-      freeze({
-        label: safeLabel(probe.label),
+    .map((probe) => {
+      const target = safeTarget(probe.target);
+      return freeze({
+        checkedAt: probe.checkedAt,
+        detail: safeDiagnosticText(probe.detail),
+        kind: probe.kind,
+        label: safeDiagnosticText(probe.label, 120),
+        process: probe.process,
+        required: probe.required,
         status: probe.status as 'failed' | 'warning',
-      }),
-    );
-  const signalLabels = result.signals
+        ...(target ? { target } : {}),
+      });
+    });
+  const signalLabels = connectivity.signals
     .filter((signal) => signal.severity !== 'info')
-    .map((signal) => safeLabel(signal.label));
+    .map((signal) => safeDiagnosticText(`${signal.label} · 来源：${signal.source}`));
   const reasons = [
     ...new Set([
       ...signalLabels,
       ...(failedItems.length === 0 ? ['请求的网络能力未通过检查。'] : []),
     ]),
   ].slice(0, 8);
+  const checkedAt = result.checkedAt ?? result.startedAt;
+  const freshness =
+    result.cacheExpiresAt !== undefined && result.cacheExpiresAt >= Date.now()
+      ? 'fresh'
+      : 'unknown';
   return freeze({
-    checkedAt: result.checkedAt ?? result.startedAt,
+    action: result.action,
+    checkedAt,
     failedItems: freeze(failedItems),
+    freshness,
+    provider: result.provider,
+    providerLabel: safeDiagnosticText(result.providerLabel, 120),
     reasons: freeze(reasons),
     scope: result.networkScope,
-    status: result.status === 'blocked' ? 'blocked' : 'degraded',
+    status: connectivity.status === 'blocked' ? 'blocked' : 'degraded',
     summary: '网络检查未通过，Claude 启动已暂停。',
   });
 };

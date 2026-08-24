@@ -26,7 +26,27 @@ export interface ClaudePluginMarketplaceView {
   source: string;
 }
 
+export type ClaudePluginOperationKind =
+  | 'disable'
+  | 'enable'
+  | 'install'
+  | 'marketplace-add'
+  | 'marketplace-remove'
+  | 'refresh'
+  | 'uninstall'
+  | 'update'
+  | 'update-all';
+
+export interface ClaudePluginOperationView {
+  attempt: number;
+  kind: ClaudePluginOperationKind;
+  phase: 'mutating' | 'refreshing';
+  startedAt: number;
+  target: string;
+}
+
 export interface ClaudePluginCatalog {
+  activeOperation?: ClaudePluginOperationView;
   available: ClaudePluginView[];
   checkedAt: number;
   cliAvailable: boolean;

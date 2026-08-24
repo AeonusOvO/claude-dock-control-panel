@@ -6,10 +6,11 @@ import type {
   ClaudeOperationResult,
   ClaudeProjectState,
 } from '../../shared/contracts';
-import { officialNetworkProviderForClaudePreset } from '../../shared/claude/providers';
 import type { RunClaudeProjectConfigTransaction } from '../claude/config-transaction';
 import type { ReportClaudeOperationFailure } from '../claude/operation-failure';
 import type { PreparedClaudeConfigSave } from '../claude/runtime';
+import { claudeNetworkAccessForConfigInput } from '../claude/runtime-connection-config';
+import { type ClaudeNetworkAccess, effectiveClaudeNetworkAccess } from '../claude/runtime-types';
 import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
 import type { TerminalWorkspace } from '../terminal/workspace';
@@ -31,17 +32,17 @@ export interface ClaudeConnectionIpcDependencies {
 
 const reportConfigurationFailure = createFailureReporter('claude-configuration');
 
-type OfficialProviderAccessRequest = Parameters<MainGuards['withOfficialProviderAccess']>[0];
+type ProviderAccessRequest = Parameters<MainGuards['withOfficialProviderAccess']>[0];
 
-const withOptionalOfficialProviderAccess = <T>(
+const withOptionalNetworkAccess = <T>(
   withOfficialProviderAccess: MainGuards['withOfficialProviderAccess'],
-  request: Omit<OfficialProviderAccessRequest, 'provider'>,
-  provider: OfficialProviderAccessRequest['provider'] | undefined,
+  request: Omit<ProviderAccessRequest, 'provider' | 'target'>,
+  access: Readonly<ClaudeNetworkAccess> | undefined,
   assertCurrent: () => void,
   operation: () => Promise<T> | T,
 ): Promise<T> | T => {
-  if (!provider) return operation();
-  return withOfficialProviderAccess({ ...request, provider }, () => {
+  if (!access) return operation();
+  return withOfficialProviderAccess({ ...request, ...access }, () => {
     assertCurrent();
     return operation();
   });
@@ -64,7 +65,7 @@ export const registerClaudeConnectionIpc = ({
       const runtime = requireClaudeRuntime();
       try {
         const validatedInput = validateClaudeConfigInput(input);
-        const officialProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
+        const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const state = await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
           runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
             assertCurrent,
@@ -73,10 +74,10 @@ export const registerClaudeConnectionIpc = ({
               runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
             cwd: status.cwd,
             prepare: () =>
-              withOptionalOfficialProviderAccess(
+              withOptionalNetworkAccess(
                 withOfficialProviderAccess,
                 { action: 'provider-switch', cwd: status.cwd },
-                officialProvider,
+                networkAccess,
                 assertCurrent,
                 () => runtime.prepareConnectionConfig(validatedInput, undefined, assertCurrent),
               ),
@@ -121,10 +122,18 @@ export const registerClaudeConnectionIpc = ({
               runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
             cwd: status.cwd,
             prepare: () =>
-              withOptionalOfficialProviderAccess(
+              withOptionalNetworkAccess(
                 withOfficialProviderAccess,
                 { action: 'provider-switch', cwd: status.cwd },
-                runtime.connectionHistoryOfficialNetworkProvider(status.cwd, validatedEntryId),
+                typeof runtime.connectionHistoryNetworkAccess === 'function'
+                  ? runtime.connectionHistoryNetworkAccess(status.cwd, validatedEntryId)
+                  : effectiveClaudeNetworkAccess(
+                      undefined,
+                      runtime.connectionHistoryOfficialNetworkProvider(
+                        status.cwd,
+                        validatedEntryId,
+                      ),
+                    ),
                 assertCurrent,
                 () => runtime.prepareConnectionHistory(status.cwd, validatedEntryId, assertCurrent),
               ),

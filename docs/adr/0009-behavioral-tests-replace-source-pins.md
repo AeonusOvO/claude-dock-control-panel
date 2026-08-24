@@ -41,6 +41,14 @@
 - 代价：行为测试比文本钉运行更慢（jsdom 环境装载、真实 store 落盘），且首次编写成本高——每处转换都要先理解钉背后的原始缺陷。
 - 代价：资产契约测试仍然对 CSS/HTML 的字面结构敏感，这是资产文件的固有属性，不随测试方式改变。
 
+## 后续静态边界
+
+上述数字是本 ADR 落地时的迁移结果，不是永久的 `readFileSync` inventory。rc.16 后续新增了少量窄范围
+负向能力扫描：egress transport/DNS/MaxMind/repair 模块、plugin catalog 和两个 shared contract 边界只断言
+不得出现 network、subprocess、global mutation API 或已删除 vocabulary。它们保护“纯模块不得拥有某能力”，
+不检查函数正文、调用顺序或正向实现拼写，并与可观察行为测试并存。package/config、release script syntax、
+asset/harness 和临时落盘读取也继续存在；当前完整清单以 [验证文档](../how-to/verify.md) 为准。
+
 ## 备选方案
 
 **继续保留全部文本钉，与行为测试并存** —— 1,045 处钉对每次重构都会产生误报噪音，且 ADR-0003 自己已写明"当一段逻辑可以导入并驱动时，就写行为测试，不写文本断言"；并存是拖延而不是方案。

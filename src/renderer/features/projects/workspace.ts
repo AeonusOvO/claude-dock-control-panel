@@ -41,6 +41,7 @@ export interface WorkspaceRendererDependencies {
   loadConnectionHistory: () => Promise<void>;
   loadDevelopmentRuntime: (sessionId: string) => Promise<void>;
   loadRouterManagement: () => Promise<void>;
+  pruneTerminalControlOperations: (validSessionIds: ReadonlySet<string>) => void;
   reconcileBinding: (state: WorkspaceState) => void;
   renderActiveStatus: (status: TerminalStatus) => void;
   renderConnectionHistory: () => void;
@@ -112,6 +113,7 @@ export const createWorkspaceRenderer = (
     dependencies.claudeSpeedOperations.prune(validSessionIds);
     dependencies.claudeStateLoadGenerations.prune(validSessionIds);
     dependencies.codexStateLoadGenerations.prune(validSessionIds);
+    dependencies.pruneTerminalControlOperations(validSessionIds);
     dependencies.runtimeStateLoadGenerations.prune(validSessionIds);
     if (
       dependencies.getCodexAutoLaunchSessionId() &&
@@ -120,10 +122,16 @@ export const createWorkspaceRenderer = (
       dependencies.setCodexAutoLaunchSessionId('');
     }
     dependencies.setWorkspaceState(workspace);
+    const pendingComposerFocusSessionId = dependencies.getPendingComposerFocusSessionId();
+    const pendingComposerFocusStatus = workspace.sessions.find(
+      ({ id }) => id === pendingComposerFocusSessionId,
+    );
     if (
-      dependencies.getPendingComposerFocusSessionId() &&
-      (dependencies.getPendingComposerFocusSessionId() !== workspace.activeSessionId ||
-        !validSessionIds.has(dependencies.getPendingComposerFocusSessionId()))
+      pendingComposerFocusSessionId &&
+      (pendingComposerFocusSessionId !== workspace.activeSessionId ||
+        !pendingComposerFocusStatus ||
+        pendingComposerFocusStatus.phase === 'error' ||
+        pendingComposerFocusStatus.phase === 'stopped')
     ) {
       dependencies.setPendingComposerFocusSessionId('');
     }
@@ -162,7 +170,8 @@ export const createWorkspaceRenderer = (
     if (status) {
       dependencies.renderActiveStatus(status);
       if (
-        releasedClaudeLaunches.has(status.id) &&
+        (releasedClaudeLaunches.has(status.id) ||
+          dependencies.claudeLaunchAttempts.isBusy(status.id)) &&
         dependencies.activeDevelopmentRuntime() === 'claude'
       ) {
         dependencies.refreshClaudeLaunchControls(status.id);

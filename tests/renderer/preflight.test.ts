@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
-  ApplicationProxyState,
   ClaudeProjectState,
-  CodexProjectState,
   NetworkPreflightResult,
-  NetworkPreflightStatus,
-  NetworkProviderId,
+  NetworkProviderConnectivityStatus,
 } from '../../src/shared/contracts';
 import { createRendererHarness } from '../helpers/renderer-harness';
 import {
@@ -14,89 +11,13 @@ import {
   settle,
   withTerminalRenderer,
 } from '../helpers/renderer-interaction-fixture';
-import { claudeProjectState } from '../helpers/renderer-terminal-fixture';
-
-let nextMainRunId = 1;
-
-const preflightResult = (
-  provider: NetworkProviderId,
-  status: NetworkPreflightStatus,
-  overrides: Partial<NetworkPreflightResult> = {},
-): NetworkPreflightResult => ({
-  action: 'background',
-  checkedAt: 1,
-  configurationRevision: 'test:1',
-  featureAccess: [],
-  generation: 0,
-  mainRunId: nextMainRunId++,
-  networkScope: 'application',
-  paths: [],
-  probes: [],
-  provider,
-  providerLabel:
-    provider === 'openai-codex'
-      ? 'OpenAI Codex'
-      : provider === 'ai-services'
-        ? 'AI 服务综合预检'
-        : provider === 'xai-grok'
-          ? 'xAI Grok'
-          : 'Anthropic Claude Code',
-  reasons: [],
-  riskLevel: status === 'blocked' ? 'high' : 'low',
-  riskScore: status === 'blocked' ? 90 : 10,
-  signals: [],
-  startedAt: 1,
-  status,
-  summary: `synthetic ${status}`,
-  ...overrides,
-});
-
-const gatewayClaudeState = (): ClaudeProjectState => {
-  const state = claudeProjectState();
-  return {
-    ...state,
-    config: {
-      ...state.config,
-      baseUrl: 'https://gateway.example.test',
-      provider: 'gateway',
-    },
-  };
-};
-
-const readyCodexState = (): CodexProjectState => ({
-  account: {
-    email: 'synthetic@example.test',
-    planType: 'test',
-    type: 'chatgpt',
-  },
-  active: false,
-  cwd: 'D:\\Project',
-  installation: {
-    installed: true,
-    message: 'Codex CLI 已就绪。',
-    updateAvailable: false,
-    version: 'test',
-  },
-  login: { phase: 'idle' },
-  requiresOpenaiAuth: true,
-  sessionId: 'session-1',
-});
-
-const proxyState = (): ApplicationProxyState => ({
-  config: {
-    enabled: true,
-    host: 'saved.example.test',
-    passwordConfigured: false,
-    port: 8_080,
-    protocol: 'http',
-    scope: {
-      application: true,
-      cli: true,
-      conversation: true,
-    },
-    username: '',
-  },
-});
+import {
+  gatewayClaudeState,
+  preflightResult,
+  proxyState,
+  readyCodexState,
+  stalePreflightEnvironment,
+} from '../helpers/renderer-preflight-fixture';
 
 describe('renderer preflight feature', () => {
   it('selects official Claude and Codex providers without guessing for gateways or unloaded state', async () => {
@@ -194,7 +115,205 @@ describe('renderer preflight feature', () => {
     );
   });
 
-  it('maps every preflight status to the card tone and Codex footer label', async () => {
+  it('labels an OpenAI API dialog recheck with the exact provider', async () => {
+    const runNetworkPreflight = vi
+      .fn()
+      .mockResolvedValueOnce(preflightResult('anthropic-claude', 'allowed'))
+      .mockImplementationOnce(() => new Promise<NetworkPreflightResult>(() => undefined));
+
+    await withTerminalRenderer({ runNetworkPreflight }, async (harness) => {
+      harness.emit(
+        'onNetworkPreflight',
+        preflightResult('openai-api', 'blocked', {
+          generation: 2,
+          mainRunId: 200,
+          summary: 'OpenAI API endpoint blocked',
+        }),
+      );
+      expect(harness.query<HTMLDialogElement>('#network-preflight-dialog').open).toBe(true);
+
+      harness.click('#network-preflight-dialog-recheck');
+
+      expect(runNetworkPreflight).toHaveBeenLastCalledWith({
+        action: 'background',
+        force: true,
+        provider: 'openai-api',
+      });
+      expect(harness.query('#network-preflight-dialog-meta').textContent).toContain('OpenAI API');
+      expect(harness.query('#network-preflight-dialog-meta').textContent).not.toContain(
+        'Anthropic Claude Code',
+      );
+    });
+  });
+
+  it('renders an open manual dialog pending immediately and keeps ownership across unrelated events', async () => {
+    let resolveManual: ((result: NetworkPreflightResult) => void) | undefined;
+    const manual = new Promise<NetworkPreflightResult>((resolve) => {
+      resolveManual = resolve;
+    });
+    const runNetworkPreflight = vi
+      .fn()
+      .mockResolvedValueOnce(
+        preflightResult('anthropic-claude', 'allowed', {
+          environment: stalePreflightEnvironment(),
+          summary: 'active provider ready',
+        }),
+      )
+      .mockImplementationOnce(() => manual);
+
+    await withTerminalRenderer({ runNetworkPreflight }, async (harness) => {
+      harness.click('#network-preflight-trigger');
+
+      expect(harness.query<HTMLDialogElement>('#network-preflight-dialog').open).toBe(true);
+      expect(harness.query('.network-preflight-dialog__summary').dataset.tone).toBe('pending');
+      expect(harness.query('.network-preflight-dialog__summary').getAttribute('aria-live')).toBe(
+        'polite',
+      );
+      expect(harness.query('#settings-network-status').getAttribute('aria-live')).toBe('polite');
+      expect(harness.query('#network-preflight-dialog-summary').textContent).toBe(
+        '正在进行网络预检…',
+      );
+      expect(harness.query('#network-preflight-dialog-meta').textContent).toContain(
+        'AI 服务综合预检 · 后台无额度预检',
+      );
+      expect(harness.query('#network-preflight-probes').textContent).toContain(
+        '正在检查当前提供商',
+      );
+      expect(harness.query('#network-preflight-paths').textContent).toContain('正在解析当前目标');
+      expect(harness.query('#network-preflight-environment').textContent).toContain(
+        '正在收集目标限定',
+      );
+      expect(harness.query('#settings-network-facts').textContent).toContain('旧结果已暂时隐藏');
+      expect(harness.query('#settings-network-facts').textContent).not.toContain(
+        'stale environment summary',
+      );
+      expect(harness.query('#settings-network-issues').textContent).not.toContain(
+        'stale repair action',
+      );
+      expect(harness.document.querySelector('[data-network-repair="timezone"]')).toBeNull();
+      for (const selector of [
+        '#network-preflight-trigger',
+        '#network-preflight-recheck',
+        '#network-preflight-dialog-recheck',
+        '#settings-network-recheck',
+      ]) {
+        const button = harness.query<HTMLButtonElement>(selector);
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+        expect(button.textContent).toContain('正在进行网络预检…');
+      }
+
+      harness.emit(
+        'onNetworkPreflight',
+        preflightResult('openai-codex', 'blocked', { summary: 'inactive blocked result' }),
+      );
+      expect(harness.query('#network-preflight-dialog-summary').textContent).toBe(
+        '正在进行网络预检…',
+      );
+      expect(harness.query('#settings-network-summary').textContent).toBe('正在进行网络预检…');
+
+      resolveManual?.(
+        preflightResult('ai-services', 'allowed', { summary: 'manual suite complete' }),
+      );
+      await settle(harness);
+
+      expect(harness.query('#network-preflight-dialog-summary').textContent).toBe(
+        'manual suite complete',
+      );
+      expect(harness.query('#network-preflight-trigger').getAttribute('aria-busy')).toBe('false');
+      expect(harness.query('#network-preflight-recheck').textContent).toContain('重新检测');
+      expect(harness.query('#network-preflight-dialog-recheck').textContent).toContain(
+        '立即重新检测',
+      );
+    });
+  });
+
+  it('reconciles a manual dialog when an authoritative environment refresh supersedes it', async () => {
+    let resolveManual: ((result: NetworkPreflightResult) => void) | undefined;
+    const manual = new Promise<NetworkPreflightResult>((resolve) => {
+      resolveManual = resolve;
+    });
+    const runNetworkPreflight = vi
+      .fn()
+      .mockResolvedValueOnce(
+        preflightResult('anthropic-claude', 'allowed', { summary: 'initial active result' }),
+      )
+      .mockImplementationOnce(() => manual)
+      .mockResolvedValueOnce(
+        preflightResult('anthropic-claude', 'allowed', { summary: 'replacement active result' }),
+      );
+
+    await withTerminalRenderer(
+      {
+        invalidateNetworkPreflight: async () => undefined,
+        runNetworkPreflight,
+      },
+      async (harness) => {
+        harness.click('#network-preflight-trigger');
+        expect(harness.query('#network-preflight-dialog-summary').textContent).toBe(
+          '正在进行网络预检…',
+        );
+
+        window.dispatchEvent(new Event('online'));
+        await settle(harness);
+
+        expect(harness.method('invalidateNetworkPreflight')).toHaveBeenCalledWith(
+          'network-environment-changed',
+        );
+        expect(runNetworkPreflight).toHaveBeenCalledTimes(3);
+        expect(harness.query<HTMLDialogElement>('#network-preflight-dialog').open).toBe(true);
+        expect(harness.query('#network-preflight-dialog-summary').textContent).toBe('尚无探测结果');
+        expect(harness.query('#network-preflight-summary').textContent).toBe(
+          'replacement active result',
+        );
+        expect(harness.query('#network-preflight-trigger').getAttribute('aria-busy')).toBe('false');
+
+        resolveManual?.(
+          preflightResult('ai-services', 'allowed', { summary: 'superseded manual result' }),
+        );
+        await settle(harness);
+
+        expect(harness.query('#network-preflight-dialog-summary').textContent).toBe('尚无探测结果');
+        expect(harness.query('#network-preflight-summary').textContent).toBe(
+          'replacement active result',
+        );
+      },
+    );
+  });
+
+  it('restores only the owning manual operation after cancellation', async () => {
+    let rejectManual: ((error: Error) => void) | undefined;
+    const manual = new Promise<NetworkPreflightResult>((_resolve, reject) => {
+      rejectManual = reject;
+    });
+    const runNetworkPreflight = vi
+      .fn()
+      .mockResolvedValueOnce(preflightResult('anthropic-claude', 'allowed'))
+      .mockImplementationOnce(() => manual);
+
+    await withTerminalRenderer({ runNetworkPreflight }, async (harness) => {
+      harness.click('#network-preflight-trigger');
+      expect(harness.query('#network-preflight-trigger').getAttribute('aria-busy')).toBe('true');
+
+      rejectManual?.(new DOMException('manual preflight cancelled', 'AbortError'));
+      await settle(harness);
+
+      for (const selector of [
+        '#network-preflight-trigger',
+        '#network-preflight-recheck',
+        '#network-preflight-dialog-recheck',
+        '#settings-network-recheck',
+      ]) {
+        const button = harness.query<HTMLButtonElement>(selector);
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-busy')).toBe('false');
+      }
+      expect(harness.query('#network-preflight-dialog-summary').textContent).toBe('尚无探测结果');
+      expect(harness.query('#toast').textContent).toContain('操作失败');
+    });
+  });
+
+  it('maps every provider-connectivity status to the card tone and Codex footer label', async () => {
     await withTerminalRenderer(
       {
         getCodexProjectState: async () => readyCodexState(),
@@ -206,15 +325,15 @@ describe('renderer preflight feature', () => {
         runNetworkPreflight: async ({ provider }) => preflightResult(provider, 'allowed'),
       },
       async (harness) => {
-        const cases: Array<[NetworkPreflightStatus, string, string]> = [
-          ['allowed', 'success', '官方网络正常'],
-          ['allowed_with_notice', 'warning', '网络可用 · 有路径提示'],
-          ['blocked', 'error', '官方网络已阻止'],
-          ['degraded', 'warning', '网络结果不完整'],
-          ['partially_available', 'warning', '当前动作的 WebSocket 未确认'],
-          ['testing', 'pending', '正在执行无额度预检'],
-          ['unknown', 'warning', '网络状态未知'],
-          ['warning', 'warning', '网络可用 · 需要确认'],
+        const cases: Array<[NetworkProviderConnectivityStatus, string, string]> = [
+          ['allowed', 'success', '连接正常'],
+          ['allowed_with_notice', 'success', '连接正常'],
+          ['blocked', 'error', '提供商连接未通过'],
+          ['degraded', 'warning', '连接证据不完整'],
+          ['partially_available', 'warning', '部分连接能力不可用'],
+          ['testing', 'pending', '正在进行网络预检…'],
+          ['unknown', 'warning', '连接状态未知'],
+          ['warning', 'warning', '连接可用 · 有端点说明'],
         ];
 
         for (const [status, tone, label] of cases) {
@@ -347,6 +466,21 @@ describe('renderer preflight feature', () => {
         harness.emit(
           'onNetworkPreflight',
           preflightResult('ai-services', 'warning', {
+            advisoryEvidence: {
+              reasons: ['synthetic advisory-only reason', 'synthetic risk reason'],
+              signals: [
+                {
+                  confidence: 'medium',
+                  detail: 'synthetic advisory signal detail',
+                  id: 'advisory-signal',
+                  label: 'Synthetic advisory signal',
+                  observedAt: 1,
+                  score: 10,
+                  severity: 'notice',
+                  source: 'synthetic advisory collector',
+                },
+              ],
+            },
             paths: [
               {
                 detail: 'Electron 主进程：代理连接。',
@@ -354,9 +488,11 @@ describe('renderer preflight feature', () => {
                 globalIpv6Available: false,
                 ipv4Available: true,
                 ipv6Available: false,
+                networkScope: 'application',
                 process: 'application',
                 proxyConfigured: true,
                 proxyKind: 'application-proxy',
+                target: 'https://api.openai.com/v1/models',
                 virtualInterfaces: ['Synthetic Tunnel'],
               },
               {
@@ -365,9 +501,11 @@ describe('renderer preflight feature', () => {
                 globalIpv6Available: false,
                 ipv4Available: true,
                 ipv6Available: false,
+                networkScope: 'application',
                 process: 'oauth-browser',
                 proxyConfigured: false,
                 proxyKind: 'unknown',
+                target: 'https://auth.openai.com/',
                 virtualInterfaces: [],
               },
             ],
@@ -381,6 +519,7 @@ describe('renderer preflight feature', () => {
                 process: 'application',
                 required: true,
                 status: 'passed',
+                target: 'https://api.openai.com/v1/models',
               },
               {
                 checkedAt: 1,
@@ -391,8 +530,23 @@ describe('renderer preflight feature', () => {
                 process: 'oauth-browser',
                 required: false,
                 status: 'skipped',
+                target: 'https://auth.openai.com/',
               },
             ],
+            providerConnectivity: {
+              signals: [
+                {
+                  confidence: 'high',
+                  detail: 'synthetic provider signal detail',
+                  id: 'provider-signal',
+                  label: 'Synthetic provider signal',
+                  observedAt: 1,
+                  score: 90,
+                  severity: 'critical',
+                  source: 'synthetic provider collector',
+                },
+              ],
+            },
             reasons: ['synthetic risk reason'],
             summary: 'synthetic warning details',
           }),
@@ -402,8 +556,22 @@ describe('renderer preflight feature', () => {
         expect(harness.query('#network-preflight-dialog-summary').textContent).toBe(
           'synthetic warning details',
         );
-        expect(harness.query('#network-preflight-reasons').textContent).toContain(
-          'synthetic risk reason',
+        const reasons = [...harness.document.querySelectorAll('#network-preflight-reasons li')].map(
+          (item) => item.textContent ?? '',
+        );
+        expect(reasons).toEqual(
+          expect.arrayContaining(['synthetic risk reason', 'synthetic advisory-only reason']),
+        );
+        expect(reasons.join(' ')).toContain(
+          '提供商信号 · Synthetic provider signal · 严重度：critical · 来源：synthetic provider collector',
+        );
+        expect(reasons.join(' ')).toContain('采集时间：');
+        expect(reasons.join(' ')).toContain('置信度：高');
+        expect(reasons.join(' ')).toContain(
+          '辅助信号 · Synthetic advisory signal · 严重度：notice · 来源：synthetic advisory collector',
+        );
+        expect(harness.query('#network-preflight-paths').textContent).toContain(
+          '目标：https://api.openai.com/v1/models；范围：应用网络会话',
         );
         expect(harness.query('#network-preflight-paths').textContent).toContain(
           '可见代理第一跳：application-proxy',
@@ -417,64 +585,101 @@ describe('renderer preflight feature', () => {
         expect(harness.query('#network-preflight-paths').textContent).not.toContain(
           '未发现本机显式代理',
         );
-        expect(harness.query('#network-preflight-probes').textContent).toContain(
-          '通过HTTPS 探测synthetic passed detail',
+        const probes = harness.query('#network-preflight-probes').textContent;
+        for (const evidence of [
+          '通过HTTPS 探测',
+          '方法：HTTPS',
+          '进程：Electron 应用',
+          '必需提供商证据',
+          '目标：https://api.openai.com/v1/models',
+          '采集时间：',
+          'synthetic passed detail',
+          '已跳过OAuth 探测',
+          '方法：OAuth',
+          '进程：OAuth 浏览器',
+          '可选证据',
+          '目标：https://auth.openai.com/',
+          'synthetic skipped detail',
+        ]) {
+          expect(probes).toContain(evidence);
+        }
+      },
+    );
+  });
+
+  it('keeps a blocked provider summary primary when advisory environment evidence is low risk', async () => {
+    await withTerminalRenderer(
+      {
+        runNetworkPreflight: async ({ provider }) =>
+          preflightResult(provider, 'blocked', {
+            environment: {
+              checkedAt: 1,
+              dnsDetail: '辅助 DNS 观察未发现已知风险。',
+              dnsStatus: 'consistent',
+              evidenceStatus: 'complete',
+              issues: [],
+              localLanguage: 'zh-CN',
+              localTimezone: 'Asia/Shanghai',
+              publicAddressObservations: [],
+              riskLevel: 'low',
+              summary: '辅助公网地址与环境观察未发现已知风险。',
+            },
+            summary: 'Anthropic 必需端点连接失败。',
+          }),
+      },
+      async (harness) => {
+        await settle(harness);
+
+        expect(harness.query('#settings-network-status').dataset.tone).toBe('error');
+        expect(harness.query('#settings-network-summary').textContent).toBe(
+          'Anthropic 必需端点连接失败。',
         );
-        expect(harness.query('#network-preflight-probes').textContent).toContain(
-          '已跳过OAuth 探测synthetic skipped detail',
+        expect(harness.query('#settings-network-facts').textContent).toContain(
+          '辅助证据摘要：辅助公网地址与环境观察未发现已知风险。',
         );
       },
     );
   });
 
-  it('renders Windows preferred languages as reference-only without a language repair action', async () => {
+  it('never lets high-risk advisory copy imply that a blocked provider passed', async () => {
     await withTerminalRenderer(
       {
         runNetworkPreflight: async ({ provider }) =>
-          preflightResult(provider, 'allowed', {
+          preflightResult(provider, 'blocked', {
             environment: {
               checkedAt: 1,
-              checks: [
+              dnsDetail: '辅助 DNS 观察需要审阅。',
+              dnsStatus: 'review',
+              evidenceStatus: 'complete',
+              issues: [
                 {
-                  detail:
-                    '仅供参考：Windows 首选语言 zh-CN、en-US 中至少一项与出口国家 US 的常用语言匹配。',
-                  id: 'language',
-                  label: '系统语言参考',
-                  source: 'Windows 首选语言 + IPQuery',
-                  status: 'passed',
+                  detail: 'synthetic advisory issue',
+                  kind: 'dns-egress',
+                  severity: 'high',
+                  title: '辅助 DNS 风险',
                 },
               ],
-              cliLanguages: ['en-US'],
-              dnsDetail: '权威 DNS 出口与模型出口国家一致。',
-              dnsStatus: 'consistent',
-              evidenceStatus: 'complete',
-              exitCountryCode: 'US',
-              issues: [],
               localLanguage: 'zh-CN',
-              localTimezone: 'America/Los_Angeles',
-              riskLevel: 'low',
-              summary: '系统语言对照仅供参考。',
+              localTimezone: 'Asia/Shanghai',
+              publicAddressObservations: [],
+              riskLevel: 'high',
+              summary:
+                '目标限定的公网地址、DNS 或环境辅助证据包含高风险信号；这些信号只供单独审阅，不授予或拒绝提供商访问。',
             },
+            summary: 'Anthropic 必需端点连接失败。',
           }),
       },
       async (harness) => {
-        harness.click('#settings-network-recheck');
         await settle(harness);
 
-        expect(harness.query('#settings-network-facts').textContent).toContain(
-          'Windows 首选语言（首项）：zh-CN · 仅供参考',
+        expect(harness.query('#settings-network-summary').textContent).toBe(
+          'Anthropic 必需端点连接失败。',
         );
         expect(harness.query('#settings-network-facts').textContent).toContain(
-          'CLI 语言环境覆盖：en-US · 不参与系统语言对照',
+          '不授予或拒绝提供商访问',
         );
-        expect(harness.query('#settings-network-facts').textContent).toContain(
-          '参考 · 系统语言参考',
-        );
-        expect(harness.document.querySelector('[data-network-repair="language"]')).toBeNull();
-
-        harness.click('#network-preflight-details');
-        expect(harness.query('#network-preflight-environment').textContent).toContain(
-          '参考 · 系统语言参考',
+        expect(harness.query('#settings-network-status').textContent).not.toContain(
+          '已通过的提供商端点连接结论',
         );
       },
     );
@@ -501,7 +706,11 @@ describe('renderer preflight feature', () => {
       async (harness) => {
         expect(harness.method('runNetworkPreflight')).toHaveBeenCalledOnce();
         expect(harness.query<HTMLButtonElement>('#network-preflight-trigger').disabled).toBe(false);
-        expect(harness.query('#network-preflight-summary').textContent).toBe('正在执行网络预检…');
+        expect(harness.query('#network-preflight-trigger').getAttribute('aria-busy')).toBe('true');
+        expect(harness.query('#network-preflight-summary').textContent).toBe('正在进行网络预检…');
+        expect(harness.query('#network-preflight-recheck').textContent).toContain(
+          '正在进行网络预检…',
+        );
         expect(harness.query<HTMLButtonElement>('#network-preflight-recheck').disabled).toBe(false);
         expect(harness.query<HTMLButtonElement>('#network-preflight-dialog-recheck').disabled).toBe(
           false,
@@ -515,20 +724,26 @@ describe('renderer preflight feature', () => {
           provider: 'ai-services',
         });
         expect(harness.query<HTMLButtonElement>('#network-preflight-recheck').disabled).toBe(true);
+        expect(harness.query('#settings-network-recheck').getAttribute('aria-busy')).toBe('true');
         harness.click('#network-preflight-dialog-recheck');
         expect(harness.method('runNetworkPreflight')).toHaveBeenCalledTimes(2);
+
+        resolveAutomatic?.(preflightResult('anthropic-claude', 'allowed'));
+        await settle(harness);
+        expect(harness.query<HTMLButtonElement>('#network-preflight-recheck').disabled).toBe(true);
+        expect(harness.query('#network-preflight-summary').textContent).toBe('正在进行网络预检…');
+        expect(harness.query('#network-preflight-trigger').getAttribute('aria-busy')).toBe('true');
 
         resolveManual?.(preflightResult('ai-services', 'allowed'));
         await settle(harness);
         expect(harness.query<HTMLButtonElement>('#network-preflight-trigger').disabled).toBe(false);
+        expect(harness.query('#network-preflight-trigger').getAttribute('aria-busy')).toBe('false');
+        expect(harness.query('#network-preflight-trigger').textContent).toContain('网络预检');
         expect(harness.query<HTMLButtonElement>('#network-preflight-recheck').disabled).toBe(false);
+        expect(harness.query('#network-preflight-recheck').textContent).toContain('重新检测');
         expect(harness.query<HTMLButtonElement>('#network-preflight-dialog-recheck').disabled).toBe(
           false,
         );
-
-        resolveAutomatic?.(preflightResult('anthropic-claude', 'allowed'));
-        await settle(harness);
-        expect(harness.query<HTMLButtonElement>('#network-preflight-recheck').disabled).toBe(false);
       },
     );
   });
@@ -563,9 +778,7 @@ describe('renderer preflight feature', () => {
             summary: 'stale testing result',
           }),
         );
-        expect(harness.query('#network-preflight-summary').textContent).toBe(
-          'stale testing result',
-        );
+        expect(harness.query('#network-preflight-summary').textContent).toBe('正在进行网络预检…');
 
         window.dispatchEvent(new Event('online'));
         await settle(harness);
@@ -605,6 +818,9 @@ describe('renderer preflight feature', () => {
         expect(harness.query('#network-preflight-summary').textContent).toBe(
           'active Claude warning',
         );
+        expect(harness.query('#settings-network-summary').textContent).toBe(
+          'active Claude warning',
+        );
 
         harness.emit(
           'onNetworkPreflight',
@@ -617,6 +833,9 @@ describe('renderer preflight feature', () => {
           'inactive Codex blocked',
         );
         expect(harness.query('#network-preflight-summary').textContent).toBe(
+          'active Claude warning',
+        );
+        expect(harness.query('#settings-network-summary').textContent).toBe(
           'active Claude warning',
         );
       },

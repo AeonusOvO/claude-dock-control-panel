@@ -12,6 +12,7 @@ import type {
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
 } from '../../shared/contracts';
+import { MAX_CLIPBOARD_TEXT_LENGTH } from '../../shared/contracts/terminal';
 import {
   DEFAULT_TERMINAL_THEME,
   isTerminalThemeId,
@@ -305,11 +306,11 @@ export const registerAppIpc = ({
   });
   ipcMain.handle(CHANNELS.APP_CLIPBOARD_READ, (event) => {
     validateSender(event);
-    return clipboard.readText().slice(0, 5 * 1024 * 1024);
+    return clipboard.readText().slice(0, MAX_CLIPBOARD_TEXT_LENGTH);
   });
   ipcMain.handle(CHANNELS.APP_CLIPBOARD_WRITE, (event, text: unknown) => {
     validateSender(event);
-    if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) {
+    if (typeof text !== 'string' || text.length > MAX_CLIPBOARD_TEXT_LENGTH) {
       return false;
     }
     clipboard.writeText(text);

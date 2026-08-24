@@ -32,12 +32,13 @@ export const createTerminalIoRelaunchActions = (
     try {
       const outcome = await orchestrateClaudeLaunchAttempt({
         applyResult: (launchOutcome) =>
-          launchOutcome.status === 'paused' ||
-          dependencies.renderClaudeLaunchResult(
-            attempt,
-            launchOutcome.result.state,
-            launchOutcome.result.ok ? 'success' : 'failure',
-          ),
+          launchOutcome.status === 'paused'
+            ? dependencies.setClaudeLaunchPaused(attempt)
+            : dependencies.renderClaudeLaunchResult(
+                attempt,
+                launchOutcome.result.state,
+                launchOutcome.result.ok ? 'success' : 'failure',
+              ),
         confirmation: () =>
           dependencies.requestConfirmation({
             confirmLabel: '压缩并重启',

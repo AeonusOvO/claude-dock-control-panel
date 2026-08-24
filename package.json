@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "5.0.0-rc.15",
+  "version": "5.0.0-rc.16",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "license": "Apache-2.0",
   "main": "dist/main/index.js",
@@ -18,7 +18,8 @@
     "url": "https://github.com/AeonusOvO/claude-dock-control-panel/issues"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "npm": ">=11"
   },
   "scripts": {
     "clean": "node scripts/build/clean.mjs",
@@ -29,6 +30,7 @@
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron": "wait-on tcp:5173 dist/main/index.js dist/preload/preload.js && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .",
     "generate:icons": "node scripts/build/generate-icons.mjs",
+    "generate:source-identity": "node scripts/build/source-identity.mjs",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.{mjs,cjs}\" vite.config.ts vite.preload.config.ts --max-warnings=0",
     "lint:deps": "depcruise src tests --config .dependency-cruiser.cjs --output-type err",
     "lint:deps:graph": "depcruise src --config .dependency-cruiser.cjs --output-type archi",
@@ -53,13 +55,13 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:preload": "vite build --config vite.preload.config.ts",
     "build:renderer": "vite build",
-    "build": "npm run clean && npm run generate:icons && npm run typecheck && npm run build:main && npm run build:preload && npm run build:renderer",
+    "build": "npm run clean && npm run generate:source-identity && npm run generate:icons && npm run typecheck && npm run build:main && npm run build:preload && npm run build:renderer",
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis",
     "release:manifest": "node scripts/release/manifest.mjs",
     "release:publish:cos": "node scripts/release/publish-cos.mjs",
-    "release": "npm run dist && npm run release:manifest"
+    "release": "node scripts/release/release.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.224",
@@ -87,10 +89,13 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@eslint/js": "10.0.1",
+    "@noble/hashes": "2.2.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "26.1.1",
     "@vitest/coverage-v8": "4.1.10",
+    "7zip-bin": "5.2.0",
     "concurrently": "10.0.4",
     "cos-nodejs-sdk-v5": "3.0.0",
     "cross-env": "10.1.0",
@@ -129,6 +134,8 @@
       "assets/generated/**/*",
       "assets/runtime/**/*",
       "!node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+      "LICENSE",
+      "NOTICE",
       "package.json"
     ],
     "asarUnpack": [

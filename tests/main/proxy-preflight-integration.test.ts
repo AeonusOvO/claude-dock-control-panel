@@ -57,9 +57,11 @@ const successfulObservation = (): ConnectivityObservation => ({
       globalIpv6Available: false,
       ipv4Available: true,
       ipv6Available: false,
+      networkScope: 'application',
       process: 'application',
       proxyConfigured: false,
       proxyKind: 'direct',
+      target: 'https://chatgpt.com/',
       virtualInterfaces: [],
     },
   ],
@@ -556,8 +558,11 @@ describe('proxy and preflight integration', () => {
       'application:close',
     ]);
     expect(harness.diagnosticsStore.getView().entries[0]).toMatchObject({
-      reasons: ['probe unavailable'],
-      status: 'blocked',
+      providerConnectivity: {
+        reasons: ['probe unavailable'],
+        status: 'blocked',
+      },
+      schemaVersion: 2,
     });
   });
 

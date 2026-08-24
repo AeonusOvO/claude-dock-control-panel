@@ -4,14 +4,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, createReadStream, openSync, readFileSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import COS from 'cos-nodejs-sdk-v5';
 import {
   compareSemanticVersions,
   defaultProjectRoot,
   parseSemanticVersion,
   parseUpdateManifest,
+  sanitizeManifestText,
   validateRelease,
 } from './manifest.mjs';
+import { loadReleaseOrchestration } from './release.mjs';
 
 export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 export const CHANNEL_CACHE_CONTROL = 'no-cache, max-age=0, must-revalidate';
@@ -19,12 +22,13 @@ export const CHANNEL_CACHE_CONTROL = 'no-cache, max-age=0, must-revalidate';
 const messageOf = (value) => (value instanceof Error ? value.message : String(value));
 
 export const redactSensitiveText = (value, secrets = []) => {
-  let text = String(value);
-  for (const secret of [...secrets].filter(Boolean).sort((left, right) => right.length - left.length)) {
+  let text = sanitizeManifestText(value);
+  for (const secret of [...secrets]
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length)) {
     text = text.replaceAll(secret, '<redacted>');
   }
   return text
-    .replace(/(https?:\/\/[^\s?#"'<>]+)\?[^\s"'<>]*/giu, '$1?<redacted>')
     .replace(
       /((?:authorization|secret(?:id|key)|securitytoken|x-cos-security-token)\s*["']?\s*[:=]\s*["']?)[^\s,"';}\]]+/giu,
       '$1<redacted>',
@@ -114,12 +118,7 @@ const existingObjectError = (error) => {
   );
 };
 
-export const createCosStorage = ({
-  bucket,
-  client,
-  region,
-  secrets = [],
-}) => {
+export const createCosStorage = ({ bucket, client, region, secrets = [] }) => {
   const putObject = async (
     { body, bytes, cacheControl, contentType, key, localPath, sha256, sha512 },
     forbidOverwrite,
@@ -212,7 +211,9 @@ const publicObjectUrl = (feedUrl, name) =>
 const checkedFetch = async (fetchImpl, url, init, expectedStatus) => {
   const response = await fetchImpl(url, init);
   if (response.status !== expectedStatus) {
-    throw new Error(`${init?.method ?? 'GET'} ${new URL(url).pathname} returned HTTP ${response.status}`);
+    throw new Error(
+      `${init?.method ?? 'GET'} ${new URL(url).pathname} returned HTTP ${response.status}`,
+    );
   }
   return response;
 };
@@ -320,14 +321,31 @@ const immutableDescriptor = (artifact, releaseDirectory, prefix) => {
   };
 };
 
-const channelDescriptor = ({ artifact, localPath, prefix, remoteName }) => ({
+const channelDescriptor = ({ artifact, body, prefix, remoteName }) => ({
   ...artifact,
+  body,
   cacheControl: CHANNEL_CACHE_CONTROL,
   contentType: 'application/yaml; charset=utf-8',
   key: objectKey(prefix, remoteName),
-  localPath,
   remoteName,
 });
+
+const freezeChannelManifest = (artifact, bytes) => {
+  if (!Buffer.isBuffer(bytes)) {
+    throw new Error('validated release did not freeze the channel manifest bytes');
+  }
+  const body = Buffer.from(bytes);
+  const sha256 = createHash('sha256').update(body).digest('hex');
+  const sha512 = createHash('sha512').update(body).digest('base64');
+  if (
+    body.byteLength !== artifact.bytes ||
+    sha256 !== artifact.sha256 ||
+    sha512 !== artifact.sha512
+  ) {
+    throw new Error('frozen channel manifest bytes differ from the validated artifact metadata');
+  }
+  return body;
+};
 
 const assertRemoteMetadataCompatible = (remote, descriptor) => {
   if (remote.bytes !== undefined && remote.bytes !== descriptor.bytes) {
@@ -353,7 +371,9 @@ const publishImmutableObject = async ({ descriptor, feedUrl, fetchImpl, log, sto
   } else {
     const racedRemote = await storage.head(descriptor.key);
     if (!racedRemote.exists) {
-      throw new Error(`immutable create for ${descriptor.remoteName} conflicted but no object exists`);
+      throw new Error(
+        `immutable create for ${descriptor.remoteName} conflicted but no object exists`,
+      );
     }
     assertRemoteMetadataCompatible(racedRemote, descriptor);
     log(`reuse concurrently created immutable ${descriptor.remoteName}`);
@@ -382,7 +402,9 @@ const assertChannelAdvance = (existingText, localText, localVersion, remoteName)
   if (!existing.version) throw new Error(`${remoteName} has no readable version`);
   const comparison = compareSemanticVersions(existing.version, localVersion);
   if (comparison > 0) {
-    throw new Error(`${remoteName} version ${existing.version} is newer than local ${localVersion}`);
+    throw new Error(
+      `${remoteName} version ${existing.version} is newer than local ${localVersion}`,
+    );
   }
   if (comparison === 0) {
     if (existingText !== localText) {
@@ -471,9 +493,13 @@ const acquireChannelLocks = async ({ channels, log, prefix, storage }) => {
     try {
       await releaseChannelLocks({ locks, log, storage });
     } catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], 'channel lock acquisition and cleanup failed', {
-        cause: cleanupError,
-      });
+      throw new AggregateError(
+        [error, cleanupError],
+        'channel lock acquisition and cleanup failed',
+        {
+          cause: cleanupError,
+        },
+      );
     }
     throw error;
   }
@@ -545,9 +571,11 @@ export const publishValidatedRelease = async ({
   release,
   storage,
 }) => {
-  const { blockmap, channelManifestPath, installer, manifest, updateManifest } = release;
+  const { blockmap, channelManifestBytes, installer, manifest, updateManifest } = release;
   if (manifest.problems.length > 0) {
-    throw new Error(`local release validation failed: ${manifest.problems.join('; ')}`);
+    throw new Error(
+      `local release validation failed: ${manifest.problems.map((problem) => redactSensitiveText(problem)).join('; ')}`,
+    );
   }
   if (!installer || !blockmap || !updateManifest) {
     throw new Error('local release validation did not produce the complete update chain');
@@ -566,6 +594,25 @@ export const publishValidatedRelease = async ({
     if (!/^[0-9A-Za-z-]+$/.test(channel)) throw new Error(`invalid promotion channel: ${channel}`);
   }
 
+  const manifestArtifact = manifest.artifacts.find(
+    (artifact) => artifact.name === manifest.channelManifest,
+  );
+  if (!manifestArtifact)
+    throw new Error(`missing local artifact metadata: ${manifest.channelManifest}`);
+  const channelBody = freezeChannelManifest(manifestArtifact, channelManifestBytes);
+  const localText = channelBody.toString('utf8');
+  const publications = channels.map((channel) => {
+    const remoteName = `${channel}.yml`;
+    return {
+      descriptor: channelDescriptor({
+        artifact: manifestArtifact,
+        body: channelBody,
+        prefix,
+        remoteName,
+      }),
+    };
+  });
+
   await storage.assertAtomicCreateSupported();
   for (const artifact of [installer, blockmap]) {
     await publishImmutableObject({
@@ -576,23 +623,6 @@ export const publishValidatedRelease = async ({
       storage,
     });
   }
-
-  const localText = readFileSync(channelManifestPath, 'utf8');
-  const manifestArtifact = manifest.artifacts.find(
-    (artifact) => artifact.name === manifest.channelManifest,
-  );
-  if (!manifestArtifact) throw new Error(`missing local artifact metadata: ${manifest.channelManifest}`);
-  const publications = channels.map((channel) => {
-    const remoteName = `${channel}.yml`;
-    return {
-      descriptor: channelDescriptor({
-        artifact: manifestArtifact,
-        localPath: channelManifestPath,
-        prefix,
-        remoteName,
-      }),
-    };
-  });
   await withChannelLocks({
     channels,
     log,
@@ -636,14 +666,106 @@ export const publishValidatedRelease = async ({
   };
 };
 
+const withoutGeneratedAt = (manifest) =>
+  Object.fromEntries(Object.entries(manifest).filter(([key]) => key !== 'generatedAt'));
+
+export const assertFrozenManifestMatches = ({ currentManifest, frozenManifest }) => {
+  if (
+    typeof frozenManifest?.generatedAt !== 'string' ||
+    Number.isNaN(Date.parse(frozenManifest.generatedAt)) ||
+    new Date(frozenManifest.generatedAt).toISOString() !== frozenManifest.generatedAt
+  ) {
+    throw new Error('frozen release manifest has an invalid generatedAt value');
+  }
+  if (!Array.isArray(frozenManifest.problems)) {
+    throw new Error('frozen release manifest has no problems array');
+  }
+  if (frozenManifest.problems.length > 0) {
+    throw new Error(
+      `frozen release manifest contains problems: ${frozenManifest.problems.map((problem) => redactSensitiveText(problem)).join('; ')}`,
+    );
+  }
+  if (frozenManifest.source?.treeClean !== true) {
+    throw new Error('frozen release manifest does not record a clean source tree');
+  }
+  if (currentManifest.source?.treeClean !== true) {
+    throw new Error('current source tree is not clean');
+  }
+  if (!isDeepStrictEqual(currentManifest.source, frozenManifest.source)) {
+    throw new Error(
+      'current Git HEAD or package-lock.json SHA-256 differs from the frozen manifest',
+    );
+  }
+  if (!isDeepStrictEqual(currentManifest.artifacts, frozenManifest.artifacts)) {
+    throw new Error('current release artifacts differ from the frozen manifest');
+  }
+  if (currentManifest.problems.length > 0) {
+    throw new Error(
+      `current non-writing release validation failed: ${currentManifest.problems.map((problem) => redactSensitiveText(problem)).join('; ')}`,
+    );
+  }
+  if (!isDeepStrictEqual(withoutGeneratedAt(currentManifest), withoutGeneratedAt(frozenManifest))) {
+    throw new Error('current release metadata differs from the frozen manifest');
+  }
+};
+
+export const loadFrozenValidatedRelease = ({
+  archive,
+  extractInstaller,
+  now = new Date(),
+  projectRoot = defaultProjectRoot,
+  releaseDirectory = path.join(projectRoot, 'outputs'),
+  signatureStatus,
+  sourceIdentity,
+  temporaryRoot,
+  validateReleaseImpl = validateRelease,
+} = {}) => {
+  const reportPath = path.join(releaseDirectory, 'release-manifest.json');
+  let frozenManifestBytes;
+  let frozenManifest;
+  try {
+    frozenManifestBytes = readFileSync(reportPath);
+    frozenManifest = JSON.parse(frozenManifestBytes.toString('utf8'));
+  } catch (error) {
+    throw new Error(`frozen release manifest cannot be read: ${messageOf(error)}`, {
+      cause: error,
+    });
+  }
+  if (!frozenManifest || typeof frozenManifest !== 'object' || Array.isArray(frozenManifest)) {
+    throw new Error('frozen release manifest root must be an object');
+  }
+  loadReleaseOrchestration({
+    releaseDirectory,
+    reportBytes: frozenManifestBytes,
+    source: frozenManifest.source,
+  });
+  const currentRelease = validateReleaseImpl({
+    archive,
+    expectedPackagedSourceIdentity: frozenManifest.source,
+    extractInstaller,
+    now,
+    projectRoot,
+    releaseDirectory,
+    signatureStatus,
+    sourceIdentity,
+    temporaryRoot,
+    writeReport: false,
+  });
+  assertFrozenManifestMatches({
+    currentManifest: currentRelease.manifest,
+    frozenManifest,
+  });
+  return {
+    ...currentRelease,
+    manifest: frozenManifest,
+  };
+};
+
 export const runPublishCli = async ({
   environment = process.env,
   projectRoot = defaultProjectRoot,
 } = {}) => {
-  const release = validateRelease({ projectRoot, writeReport: true });
-  if (release.manifest.problems.length > 0) {
-    throw new Error(`local release validation failed: ${release.manifest.problems.join('; ')}`);
-  }
+  const release = loadFrozenValidatedRelease({ projectRoot });
   const configuration = readCosEnvironment(release.manifest.feedUrl, environment);
   const secrets = [
     configuration.secretId,

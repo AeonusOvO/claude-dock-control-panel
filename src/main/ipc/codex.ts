@@ -14,7 +14,12 @@ import {
   type RestartRuntimeTerminal,
 } from '../terminal/lifecycle';
 import type { TerminalWorkspace } from '../terminal/workspace';
-import { validateCodexLaunchMode, validateCodexLoginMethod, validateSessionId } from './validation';
+import {
+  validateCodexInstallOperation,
+  validateCodexLaunchMode,
+  validateCodexLoginMethod,
+  validateSessionId,
+} from './validation';
 import type { MainGuards } from './guards';
 
 export interface CodexIpcDependencies {
@@ -69,15 +74,20 @@ export const registerCodexIpc = ({
   });
   ipcMain.handle(
     CHANNELS.CODEX_INSTALL_UPDATE,
-    async (event, sessionId: unknown): Promise<CodexOperationResult> => {
+    async (event, sessionId: unknown, operation: unknown): Promise<CodexOperationResult> => {
       validateSender(event);
       const validatedSessionId = validateSessionId(sessionId);
+      const validatedOperation = validateCodexInstallOperation(operation);
       const status = workspace.getStatus(validatedSessionId);
       try {
         assertApplicationUpdatesAllowed();
         return {
           ok: true,
-          state: await requireCodexRuntime().installOrUpdate(validatedSessionId, status.cwd),
+          state: await requireCodexRuntime().installOrUpdate(
+            validatedSessionId,
+            status.cwd,
+            validatedOperation,
+          ),
         };
       } catch (error) {
         return codexFailure(validatedSessionId, error);
@@ -95,13 +105,17 @@ export const registerCodexIpc = ({
         return await withOfficialProviderAccess(
           { action: 'login', cwd: status.cwd, provider: 'openai-codex' },
           async () => {
-            const prepared = await requireCodexRuntime().startLogin(
+            const runtime = requireCodexRuntime();
+            const prepared = await runtime.startLogin(
               validatedSessionId,
               status.cwd,
               validateCodexLoginMethod(method),
             );
             let openedBrowser = false;
             if (prepared.externalUrl) {
+              if (!runtime.isLoginAttemptCurrent(prepared.attempt)) {
+                throw new Error('这次 ChatGPT 登录已经被取消或取代。');
+              }
               await shell.openExternal(prepared.externalUrl);
               openedBrowser = true;
             }

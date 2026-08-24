@@ -7,6 +7,7 @@ import type {
   ClaudePermissionMode,
   ClaudeProviderModelDiscoveryInput,
   ClaudeRelaunchInput,
+  CodexInstallOperation,
   CodexLaunchMode,
   CodexLoginMethod,
   ControlPanelApi,
@@ -219,6 +220,11 @@ export const codexLaunchModeSchema = claudeLaunchModeSchema.transform(
 export const codexLoginMethodSchema = guarded<CodexLoginMethod>(
   (value): value is CodexLoginMethod => value === 'browser' || value === 'device-code',
   'Codex 登录方式无效。',
+);
+
+export const codexInstallOperationSchema = guarded<CodexInstallOperation>(
+  (value): value is CodexInstallOperation => value === 'install' || value === 'update',
+  'Codex 安装操作无效。',
 );
 
 export const claudePermissionModeSchema = guarded<ClaudePermissionMode>(
@@ -773,7 +779,10 @@ export const IPC_REQUESTS = {
     claudeConfigInputSchema,
   ]),
   [CHANNELS.CODEX_GET_STATE]: request('getCodexProjectState', [sessionIdSchema]),
-  [CHANNELS.CODEX_INSTALL_UPDATE]: request('installOrUpdateCodex', [sessionIdSchema]),
+  [CHANNELS.CODEX_INSTALL_UPDATE]: request('installOrUpdateCodex', [
+    sessionIdSchema,
+    codexInstallOperationSchema,
+  ]),
   [CHANNELS.CODEX_LAUNCH]: request('launchCodex', [sessionIdSchema, codexLaunchModeSchema]),
   [CHANNELS.CODEX_LOGIN_CANCEL]: request('cancelCodexLogin', [sessionIdSchema]),
   [CHANNELS.CODEX_LOGIN_START]: request('startCodexLogin', [

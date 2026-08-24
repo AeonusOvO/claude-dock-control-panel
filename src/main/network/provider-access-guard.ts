@@ -188,12 +188,20 @@ export class ProviderAccessBlockedError extends Error {
     public readonly result: NetworkPreflightResult,
     target?: Readonly<NetworkPreflightTarget>,
   ) {
-    const recommendation = result.reasons.find((reason) => reason.startsWith('建议：'));
-    super(
-      `${result.summary}${result.reasons[0] ? ` ${result.reasons[0]}` : ''}${
-        recommendation ? ` ${recommendation}` : ''
-      } 请在网络预检详情中重新检查。`,
-    );
+    const { featureAccess, reasons, summary } = result.providerConnectivity;
+    const deniedReason = featureAccess.find(
+      (access) => access.action === result.action && !access.allowed,
+    )?.reason;
+    const recommendation = reasons.find((reason) => reason.startsWith('建议：'));
+    const detailParts = [
+      summary,
+      ...(deniedReason && deniedReason !== summary ? [`当前操作仍被阻止：${deniedReason}`] : []),
+      ...[reasons[0], recommendation].filter(
+        (reason, index, candidates): reason is string =>
+          Boolean(reason) && reason !== summary && candidates.indexOf(reason) === index,
+      ),
+    ];
+    super(`${detailParts.join(' ')} 请在网络预检详情中重新检查。`);
     this.name = 'ProviderAccessBlockedError';
     this.capture = blockedCapture(result, target);
   }
@@ -207,7 +215,9 @@ const exactBlockedRouteIdentity = (
   identity.provider === capture.provider &&
   identity.canonicalCwd === capture.canonicalCwd &&
   identity.networkScope === capture.networkScope &&
-  identity.configurationRevision === capture.configurationRevision;
+  identity.configurationRevision === capture.configurationRevision &&
+  identity.target?.process === capture.target?.process &&
+  identity.target?.url === capture.target?.url;
 
 const TRANSIENT_RETRY_ACTIONS = new Set<NetworkPreflightAction>([
   'cli-launch',
@@ -216,18 +226,15 @@ const TRANSIENT_RETRY_ACTIONS = new Set<NetworkPreflightAction>([
   'provider-switch',
 ]);
 const TRANSIENT_FAILURE_PATTERN =
-  /连接超时|DNS 解析失败|连接失败|timed?\s*out|ENOTFOUND|ECONNRESET/i;
+  /连接超时|DNS 解析失败|连接失败|\bHTTP 5\d{2}\b|timed?\s*out|ENOTFOUND|ECONNRESET/i;
 
 const transientNetworkBlock = (result: NetworkPreflightResult): boolean => {
-  if (!TRANSIENT_RETRY_ACTIONS.has(result.action) || result.status !== 'blocked') return false;
-  if (!result.paths.some((candidate) => candidate.ipv4Available || candidate.ipv6Available)) {
+  const connectivity = result.providerConnectivity;
+  if (!TRANSIENT_RETRY_ACTIONS.has(result.action) || connectivity.status !== 'blocked')
     return false;
-  }
   if (
-    result.signals.some(
+    connectivity.signals.some(
       ({ id }) =>
-        id === 'offline' ||
-        id === 'unsupported-cli-proxy' ||
         id.startsWith('tls-invalid:') ||
         id.startsWith('unexpected-redirect:') ||
         id.startsWith('captive-portal:') ||
@@ -236,7 +243,7 @@ const transientNetworkBlock = (result: NetworkPreflightResult): boolean => {
   ) {
     return false;
   }
-  const requiredFailures = result.probes.filter(
+  const requiredFailures = connectivity.probes.filter(
     (probe) => probe.required && probe.status === 'failed',
   );
   return (
@@ -333,10 +340,11 @@ export class ProviderAccessGuard {
           if (parentScope && !parentScope.active) {
             throw new ProviderAccessContextExpiredError();
           }
-          const access = result.featureAccess.find(
+          const connectivity = result.providerConnectivity;
+          const access = connectivity.featureAccess.find(
             (candidate) => candidate.action === attemptInput.action,
           );
-          if (!access?.allowed || result.status === 'blocked') {
+          if (!access?.allowed || connectivity.status === 'blocked') {
             throw new ProviderAccessBlockedError(result, capturedTarget);
           }
           return this.runOperation(
@@ -401,10 +409,11 @@ export class ProviderAccessGuard {
           leaseContext,
           async (result, activeLeaseContext) => {
             signal?.throwIfAborted();
-            const access = result.featureAccess.find(
+            const connectivity = result.providerConnectivity;
+            const access = connectivity.featureAccess.find(
               (candidate) => candidate.action === capture.action,
             );
-            if (!access?.allowed || result.status === 'blocked') {
+            if (!access?.allowed || connectivity.status === 'blocked') {
               throw new ProviderAccessBlockedError(result, capture.target);
             }
             return this.runOperation(activeLeaseContext, () => operation(result), signal);

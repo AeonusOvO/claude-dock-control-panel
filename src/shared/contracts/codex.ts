@@ -6,6 +6,17 @@ export type CodexLaunchMode = ClaudeLaunchMode;
 
 export type CodexLoginMethod = 'browser' | 'device-code';
 
+export type CodexInstallOperation = 'install' | 'update';
+
+export type CodexActiveOperationKind =
+  'cancel-login' | CodexInstallOperation | 'login-browser' | 'login-device' | 'logout';
+
+export interface CodexActiveOperationView {
+  /** Monotonic application-global attempt owned by the main process. */
+  attempt: number;
+  kind: CodexActiveOperationKind;
+}
+
 export interface CodexInstallationStatus {
   executable?: string;
   installed: boolean;
@@ -44,11 +55,14 @@ export interface CodexLoginView {
 export interface CodexProjectState {
   account?: CodexAccountView;
   active: boolean;
+  activeOperation?: CodexActiveOperationView;
   cwd: string;
   installation: CodexInstallationStatus;
   login: CodexLoginView;
   operationMessage?: string;
   rateLimits?: CodexRateLimitsView;
+  /** Monotonic application-global state revision used to reject delayed IPC snapshots. */
+  revision: number;
   resourceUsage?: ResourceUsageView;
   requiresOpenaiAuth: boolean;
   sessionId: string;

@@ -95,6 +95,29 @@ const parseIpv6Bytes = (address: string): Buffer => {
   return bytes;
 };
 
+const hasIpv4MappedIpv6Bytes = (bytes: Uint8Array): boolean =>
+  bytes.length === 16 &&
+  bytes.subarray(0, 10).every((byte) => byte === 0) &&
+  bytes[10] === 0xff &&
+  bytes[11] === 0xff;
+
+/** Identifies IPv4-mapped IPv6 spellings without accepting them as independent IPv6 evidence. */
+export const isIpv4MappedIpv6Address = (address: string): boolean => {
+  if (
+    typeof address !== 'string' ||
+    address.length === 0 ||
+    Buffer.byteLength(address, 'utf8') > MAX_ADDRESS_TEXT_BYTES ||
+    isIP(address) !== 6
+  ) {
+    return false;
+  }
+  try {
+    return hasIpv4MappedIpv6Bytes(parseIpv6Bytes(address));
+  } catch {
+    return false;
+  }
+};
+
 const parseAddress = (address: string, expectedFamily?: EgressAddressFamily): ParsedAddress => {
   if (
     typeof address !== 'string' ||
@@ -109,10 +132,11 @@ const parseAddress = (address: string, expectedFamily?: EgressAddressFamily): Pa
   if (expectedFamily && family !== expectedFamily) {
     throw new EgressAddressRedactionError('family-mismatch');
   }
-  return {
-    bytes: version === 4 ? parseIpv4Bytes(address) : parseIpv6Bytes(address),
-    family,
-  };
+  const bytes = version === 4 ? parseIpv4Bytes(address) : parseIpv6Bytes(address);
+  if (family === 'ipv6' && hasIpv4MappedIpv6Bytes(bytes)) {
+    throw new EgressAddressRedactionError('invalid-address');
+  }
+  return { bytes, family };
 };
 
 const canonicalIpv6 = (bytes: Uint8Array): string => {
@@ -180,6 +204,12 @@ export const normalizeEgressAddressBinary = (
   const parsed = parseAddress(address, expectedFamily);
   return { bytes: Uint8Array.from(parsed.bytes), family: parsed.family };
 };
+
+/** Produces a transient canonical /24 or /64 prefix without creating a durable fingerprint. */
+export const transientEgressAddressPrefix = (
+  address: string,
+  expectedFamily?: EgressAddressFamily,
+): string => prefixFor(parseAddress(address, expectedFamily));
 
 /** Produces the only address shape allowed in durable egress history. */
 export const redactEgressAddress = (

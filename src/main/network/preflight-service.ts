@@ -14,17 +14,20 @@ import {
   type ConnectivityObservation,
   ProviderConnectivityProbe,
 } from './provider-connectivity-probe';
+import { cachedNetworkPreflightEvidence } from './preflight-result-projection';
 import {
   captureNetworkPreflightTarget,
-  networkPreflightTargetKey,
+  sameNetworkPreflightTarget,
   type NetworkPreflightTarget,
 } from './preflight-target';
 import {
   networkPreflightCacheKey,
   networkPreflightCwdCacheKey,
   type NetworkPreflightIdentity,
+  networkPreflightInternalFailureResult,
   type NetworkPreflightRequestCapture,
   networkPreflightTestingResult,
+  networkPreflightUnavailableEnvironmentAssessment,
 } from './preflight-service-identity';
 import { RiskDecisionEngine } from './risk-decision-engine';
 
@@ -61,6 +64,7 @@ interface NetworkPreflightServiceOptions {
   ) => Promise<NetworkPreflightLease>;
   diagnosticsStore: NetworkDiagnosticsStore;
   environmentProbe?: { run(signal?: AbortSignal): Promise<ConnectivityObservation['environment']> };
+  environmentTimeoutMs?: number;
   onObservabilityError?: (phase: NetworkPreflightObservabilityPhase, error: unknown) => void;
   onResult?: (result: NetworkPreflightResult) => void;
   probe: Pick<ProviderConnectivityProbe, 'run'>;
@@ -98,6 +102,7 @@ export interface NetworkPreflightRouteIdentity {
   readonly generation: number;
   readonly networkScope: NetworkPreflightScope;
   readonly provider: NetworkProviderId;
+  readonly target?: Readonly<NetworkPreflightTarget>;
 }
 
 interface ActiveNetworkPreflightRun {
@@ -120,6 +125,7 @@ interface NetworkPreflightRunWaiter {
 }
 
 const MAX_RETAINED_PREFLIGHT_KEYS = 256;
+const ENVIRONMENT_ASSESSMENT_TIMEOUT_MS = 20_000;
 
 const abortReasonFor = (signal: AbortSignal): unknown =>
   signal.reason ?? new DOMException('This operation was aborted', 'AbortError');
@@ -132,6 +138,7 @@ export class NetworkPreflightService {
   private readonly activeRuns = new Set<ActiveNetworkPreflightRun>();
   private readonly activeUsesByKey = new Map<string, number>();
   private readonly cache = new Map<string, CachedResult>();
+  private readonly environmentTimeoutMs: number;
   private generation = 0;
   private readonly inFlight = new Map<string, ActiveNetworkPreflightRun>();
   private readonly latestRunByKey = new Map<string, number>();
@@ -141,6 +148,10 @@ export class NetworkPreflightService {
   private readonly riskEngine: RiskDecisionEngine;
 
   public constructor(private readonly options: NetworkPreflightServiceOptions) {
+    this.environmentTimeoutMs = Math.max(
+      1,
+      options.environmentTimeoutMs ?? ENVIRONMENT_ASSESSMENT_TIMEOUT_MS,
+    );
     this.riskEngine = options.riskEngine ?? new RiskDecisionEngine();
   }
 
@@ -207,6 +218,7 @@ export class NetworkPreflightService {
         generation,
         networkScope: capture.networkScope,
         provider: capture.provider,
+        ...(capture.target === undefined ? {} : { target: capture.target }),
       });
       signal?.throwIfAborted();
       result = await operation(identity, leaseContext);
@@ -411,7 +423,12 @@ export class NetworkPreflightService {
       if (!capture.force && cached?.cacheExpiresAt && cached.cacheExpiresAt > now) {
         signal?.throwIfAborted();
         this.assertCachedCurrent(cached, configurationRevision, key, lease);
-        return await this.invokeOperation(operation, cached, leaseContext, signal);
+        return await this.invokeOperation(
+          operation,
+          cachedNetworkPreflightEvidence(cached),
+          leaseContext,
+          signal,
+        );
       }
 
       const generationAtStart = this.generation;
@@ -723,16 +740,18 @@ export class NetworkPreflightService {
             checkedAt,
           ),
           ...identity,
-          ...(probeOutcome.observation.environment
-            ? { environment: probeOutcome.observation.environment }
-            : {}),
         };
         cacheable = true;
       } catch (error: unknown) {
-        result = this.internalFailureResult(capture.provider, identity, startedAt, error);
+        result = networkPreflightInternalFailureResult(
+          capture.provider,
+          identity,
+          startedAt,
+          error,
+        );
       }
     } else {
-      result = this.internalFailureResult(
+      result = networkPreflightInternalFailureResult(
         capture.provider,
         identity,
         startedAt,
@@ -764,7 +783,41 @@ export class NetworkPreflightService {
     return result;
   }
 
-  private runProbe(
+  private async collectEnvironmentAssessment(
+    environmentProbe: NonNullable<NetworkPreflightServiceOptions['environmentProbe']>,
+    signal: AbortSignal,
+  ): Promise<ConnectivityObservation['environment']> {
+    const controller = new AbortController();
+    const onParentAbort = (): void => controller.abort(abortReasonFor(signal));
+    if (signal.aborted) onParentAbort();
+    else signal.addEventListener('abort', onParentAbort, { once: true });
+
+    const timeoutError = new DOMException('网络环境建议证据收集超时。', 'TimeoutError');
+    const timer = setTimeout(() => controller.abort(timeoutError), this.environmentTimeoutMs);
+    timer.unref?.();
+    let onCollectionAbort: (() => void) | undefined;
+    const collectionAborted = new Promise<never>((_resolve, reject) => {
+      onCollectionAbort = (): void => reject(abortReasonFor(controller.signal));
+      if (controller.signal.aborted) onCollectionAbort();
+      else controller.signal.addEventListener('abort', onCollectionAbort, { once: true });
+    });
+    const collection = Promise.resolve().then(() => environmentProbe.run(controller.signal));
+
+    try {
+      return await Promise.race([collection, collectionAborted]);
+    } catch (error: unknown) {
+      signal.throwIfAborted();
+      return networkPreflightUnavailableEnvironmentAssessment(error);
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onParentAbort);
+      if (onCollectionAbort) {
+        controller.signal.removeEventListener('abort', onCollectionAbort);
+      }
+    }
+  }
+
+  private async runProbe(
     capture: NetworkPreflightRequestCapture,
     signal: AbortSignal,
   ): Promise<ConnectivityObservation> {
@@ -783,12 +836,16 @@ export class NetworkPreflightService {
       networkScope: capture.networkScope,
       provider: capture.provider,
     };
-    if (!this.options.environmentProbe || !this.options.shouldAssessEnvironment?.(input)) {
+    const environmentProbe = this.options.environmentProbe;
+    if (!environmentProbe || !this.options.shouldAssessEnvironment?.(input)) {
       return connectivity;
     }
-    return Promise.all([connectivity, this.options.environmentProbe.run(signal)]).then(
-      ([observation, environment]) => (environment ? { ...observation, environment } : observation),
-    );
+    const environment = this.collectEnvironmentAssessment(environmentProbe, signal);
+    const [observation, environmentAssessment] = await Promise.all([connectivity, environment]);
+    signal.throwIfAborted();
+    return environmentAssessment
+      ? { ...observation, environment: environmentAssessment }
+      : observation;
   }
 
   private beginKeyUse(key: string): void {
@@ -852,7 +909,7 @@ export class NetworkPreflightService {
       outer.networkScope !== nested.networkScope ||
       networkPreflightCwdCacheKey(outer.canonicalCwd) !==
         networkPreflightCwdCacheKey(nested.canonicalCwd) ||
-      networkPreflightTargetKey(outer.target) !== networkPreflightTargetKey(nested.target)
+      !sameNetworkPreflightTarget(outer.target, nested.target)
     ) {
       throw new NetworkPreflightLeaseContextError(
         '嵌套网络操作与当前预检的服务商、项目或网络作用范围不一致。',
@@ -972,50 +1029,6 @@ export class NetworkPreflightService {
         // Observability must never replace the authoritative network verdict with its own failure.
       }
     }
-  }
-
-  private internalFailureResult(
-    provider: NetworkProviderId,
-    identity: NetworkPreflightIdentity,
-    startedAt: number,
-    error: unknown,
-  ): NetworkPreflightResult {
-    const checkedAt = Date.now();
-    const profile = getProviderProfile(provider);
-    const detail = error instanceof Error ? error.message : String(error);
-    return {
-      ...identity,
-      checkedAt,
-      featureAccess: [
-        {
-          action: identity.action,
-          allowed: false,
-          reason: '网络预检自身未能完成。',
-        },
-      ],
-      paths: [],
-      probes: [],
-      provider,
-      providerLabel: profile.displayName,
-      reasons: [detail],
-      riskLevel: 'unknown',
-      riskScore: 100,
-      signals: [
-        {
-          confidence: 'high',
-          detail,
-          id: 'preflight-internal-failure',
-          label: '网络预检未完成',
-          observedAt: checkedAt,
-          score: 100,
-          severity: 'critical',
-          source: 'preflight-service',
-        },
-      ],
-      startedAt,
-      status: 'blocked',
-      summary: `${profile.displayName} 网络预检未完成，高风险动作已阻止。`,
-    };
   }
 
   public invalidate(_reason: string): void {

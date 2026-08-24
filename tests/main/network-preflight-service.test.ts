@@ -79,9 +79,11 @@ const successfulObservation = (): ConnectivityObservation => ({
       globalIpv6Available: false,
       ipv4Available: true,
       ipv6Available: false,
+      networkScope: 'application',
       process: 'application',
       proxyConfigured: false,
       proxyKind: 'direct',
+      target: 'https://chatgpt.com/',
       virtualInterfaces: [],
     },
   ],
@@ -141,6 +143,85 @@ describe('NetworkPreflightService', () => {
 
     await service.run(input);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('projects cached advisory rows as cached without mutating live evidence', async () => {
+    const root = createRoot();
+    const run = vi.fn(async () => successfulObservation());
+    const environmentProbe = {
+      run: vi.fn(async () => ({
+        checkedAt: 100,
+        checks: [
+          {
+            authority: 'advisory-only' as const,
+            checkedAt: 101,
+            confidence: 'medium' as const,
+            detail: 'live DNS evidence',
+            freshness: 'live' as const,
+            id: 'dns-authoritative' as const,
+            label: '权威 DNS 观察',
+            networkScope: 'application' as const,
+            process: 'network-diagnostics' as const,
+            source: 'dnscheck.tools',
+            status: 'passed' as const,
+            target: '*.test.dnscheck.tools TXT',
+            transport: 'system-dns' as const,
+          },
+        ],
+        dnsDetail: 'live DNS evidence',
+        dnsStatus: 'consistent' as const,
+        evidenceStatus: 'complete' as const,
+        issues: [],
+        localLanguage: 'zh-CN',
+        localTimezone: 'Asia/Shanghai',
+        publicAddressObservations: [
+          {
+            addressFamily: 'ipv4' as const,
+            addressPrefix: '203.0.113.0/24',
+            checkedAt: 102,
+            confidence: 'medium' as const,
+            detail: 'live endpoint-scoped observation',
+            endpoint: 'https://api.ipquery.io/?format=json',
+            freshness: 'live' as const,
+            networkScope: 'application' as const,
+            observationProvider: 'IPQuery',
+            process: 'network-diagnostics' as const,
+            sourceAgreement: 'single-source' as const,
+            state: 'complete' as const,
+            statement: 'destination-scoped advisory evidence',
+            transport: 'curl-cli' as const,
+          },
+        ],
+        riskLevel: 'low' as const,
+        summary: 'live advisory evidence',
+      })),
+    };
+    const service = new NetworkPreflightService({
+      ...networkLeaseOptions(),
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      environmentProbe,
+      probe: { run },
+      shouldAssessEnvironment: () => true,
+    });
+    const input = { action: 'background' as const, provider: 'openai-codex' as const };
+
+    const live = await service.run(input);
+    const cached = await service.run(input);
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(environmentProbe.run).toHaveBeenCalledOnce();
+    expect(live.advisoryEvidence.environment?.checks?.[0]?.freshness).toBe('live');
+    expect(live.advisoryEvidence.environment?.publicAddressObservations[0]?.freshness).toBe('live');
+    expect(cached).not.toBe(live);
+    expect(cached.advisoryEvidence.environment?.checks?.[0]).toMatchObject({
+      checkedAt: 101,
+      freshness: 'cached',
+    });
+    expect(cached.advisoryEvidence.environment?.publicAddressObservations[0]).toMatchObject({
+      checkedAt: 102,
+      freshness: 'cached',
+    });
+    expect(cached.environment).toBe(cached.advisoryEvidence.environment);
   });
 
   it('transfers the first lease to the shared run without a second queued acquisition', async () => {
@@ -480,6 +561,28 @@ describe('NetworkPreflightService', () => {
     expect(leaseHarness.leases[0]?.release).toHaveBeenCalledOnce();
   });
 
+  it('composes separately captured exact targets by structural identity', async () => {
+    const root = createRoot();
+    const service = new NetworkPreflightService({
+      ...networkLeaseOptions(),
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      probe: { run: vi.fn(async () => successfulObservation()) },
+    });
+    const input = { action: 'cli-launch' as const, provider: 'anthropic-claude' as const };
+    const url = 'https://gateway.example.test/v1/messages';
+
+    await expect(
+      service.runWithLease(input, { process: 'claude-cli', url }, (_result, leaseContext) =>
+        service.runWithExistingLease(
+          input,
+          { process: 'claude-cli', url },
+          leaseContext,
+          () => 'nested-complete',
+        ),
+      ),
+    ).resolves.toBe('nested-complete');
+  });
+
   it('retains a borrowed outer lease while an external coalesced operation still uses it', async () => {
     const root = createRoot();
     const leaseHarness = createNetworkLeaseHarness();
@@ -608,9 +711,16 @@ describe('NetworkPreflightService', () => {
         configurationRevision: result.configurationRevision,
         generation: result.generation,
         mainRunId: result.mainRunId,
+        advisoryEvidence: expect.objectContaining({
+          paths: [],
+          riskLevel: 'unknown',
+          riskScore: 0,
+        }),
         networkScope: result.networkScope,
         paths: [],
         probes: [],
+        providerConnectivity: expect.objectContaining({ status: 'testing' }),
+        schemaVersion: 2,
         status: 'testing',
       }),
     );
@@ -739,6 +849,63 @@ describe('NetworkPreflightService', () => {
       undefined,
       'conversation',
       secondTarget,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('does not let an untargeted official Claude cache authorize a custom gateway', async () => {
+    const root = createRoot();
+    const run = vi.fn(async () => successfulObservation());
+    const service = new NetworkPreflightService({
+      ...networkLeaseOptions(),
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      probe: { run },
+    });
+    const input = {
+      action: 'cli-launch' as const,
+      provider: 'anthropic-claude' as const,
+    };
+    const firstGateway = {
+      process: 'claude-cli' as const,
+      url: 'https://gateway.example.test/v1/messages',
+    };
+    const secondGateway = {
+      process: 'claude-cli' as const,
+      url: 'https://other.example.test/v1/messages',
+    };
+
+    await service.run(input);
+    await service.run(input);
+    await service.run(input, firstGateway);
+    await service.run(input, firstGateway);
+    await service.run(input, secondGateway);
+
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      'anthropic-claude',
+      'cli-launch',
+      undefined,
+      'application',
+      undefined,
+      expect.any(AbortSignal),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      'anthropic-claude',
+      'cli-launch',
+      undefined,
+      'application',
+      firstGateway,
+      expect.any(AbortSignal),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      3,
+      'anthropic-claude',
+      'cli-launch',
+      undefined,
+      'application',
+      secondGateway,
       expect.any(AbortSignal),
     );
   });
@@ -918,6 +1085,184 @@ describe('NetworkPreflightService', () => {
     expect(result.featureAccess.find(({ action }) => action === 'cli-launch')?.allowed).toBe(true);
   });
 
+  it('keeps provider access allowed when advisory environment collection fails', async () => {
+    const root = createRoot();
+    const environmentProbe = {
+      run: vi.fn((): never => {
+        throw new Error('environment intelligence unavailable');
+      }),
+    };
+    const service = new NetworkPreflightService({
+      ...networkLeaseOptions(),
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      environmentProbe,
+      probe: { run: vi.fn(async () => successfulObservation()) },
+      shouldAssessEnvironment: () => true,
+    });
+
+    const result = await service.run({
+      action: 'cli-launch',
+      provider: 'openai-codex',
+    });
+
+    expect(environmentProbe.run).toHaveBeenCalledOnce();
+    expect(result.providerConnectivity).toMatchObject({
+      featureAccess: [{ action: 'cli-launch', allowed: true }],
+      reasons: [],
+      status: 'allowed',
+    });
+    expect(result.status).toBe('allowed_with_notice');
+    expect(result.advisoryEvidence).toMatchObject({
+      environment: {
+        evidenceStatus: 'unavailable',
+        issues: [expect.objectContaining({ kind: 'evidence-incomplete' })],
+        riskLevel: 'unknown',
+      },
+      riskLevel: 'unknown',
+    });
+  });
+
+  it('preserves advisory evidence that completes within the collection budget', async () => {
+    const root = createRoot();
+    const environmentAssessment: NonNullable<ConnectivityObservation['environment']> = {
+      checkedAt: Date.now(),
+      checks: [],
+      dnsDetail: '辅助 DNS 证据已完成。',
+      dnsStatus: 'consistent',
+      evidenceStatus: 'complete',
+      issues: [],
+      localLanguage: 'zh-CN',
+      localTimezone: 'Asia/Shanghai',
+      publicAddressObservations: [],
+      riskLevel: 'low',
+      summary: '环境辅助证据已完成。',
+    };
+    const service = new NetworkPreflightService({
+      ...networkLeaseOptions(),
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      environmentProbe: { run: vi.fn(async () => environmentAssessment) },
+      environmentTimeoutMs: 50,
+      probe: { run: vi.fn(async () => successfulObservation()) },
+      shouldAssessEnvironment: () => true,
+    });
+
+    const result = await service.run({
+      action: 'cli-launch',
+      provider: 'openai-codex',
+    });
+
+    expect(result.advisoryEvidence.environment).toEqual(environmentAssessment);
+    expect(result.providerConnectivity.featureAccess).toEqual([
+      { action: 'cli-launch', allowed: true },
+    ]);
+  });
+
+  it('bounds pending advisory collection without blocking provider authorization indefinitely', async () => {
+    vi.useFakeTimers();
+    try {
+      const root = createRoot();
+      let environmentSignal: AbortSignal | undefined;
+      let providerSettled = false;
+      const environmentProbe = {
+        run: vi.fn((signal?: AbortSignal): Promise<never> => {
+          environmentSignal = signal;
+          return new Promise(() => undefined);
+        }),
+      };
+      const providerProbe = {
+        run: vi.fn(() =>
+          Promise.resolve(successfulObservation()).finally(() => {
+            providerSettled = true;
+          }),
+        ),
+      };
+      const service = new NetworkPreflightService({
+        ...networkLeaseOptions(),
+        diagnosticsStore: new NetworkDiagnosticsStore(root),
+        environmentProbe,
+        environmentTimeoutMs: 50,
+        probe: providerProbe,
+        shouldAssessEnvironment: () => true,
+      });
+      let preflightSettled = false;
+      const pending = service
+        .run({
+          action: 'cli-launch',
+          provider: 'openai-codex',
+        })
+        .finally(() => {
+          preflightSettled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(providerProbe.run).toHaveBeenCalledOnce();
+      expect(providerSettled).toBe(true);
+      expect(environmentProbe.run).toHaveBeenCalledOnce();
+      expect(environmentSignal?.aborted).toBe(false);
+      expect(preflightSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(environmentSignal?.aborted).toBe(false);
+      expect(preflightSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+
+      expect(environmentSignal?.aborted).toBe(true);
+      expect(result.providerConnectivity.featureAccess).toEqual([
+        { action: 'cli-launch', allowed: true },
+      ]);
+      expect(result.advisoryEvidence.environment).toMatchObject({
+        evidenceStatus: 'unavailable',
+        issues: [
+          expect.objectContaining({
+            detail: '网络环境建议证据收集超时。',
+            kind: 'evidence-incomplete',
+          }),
+        ],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates cancellation while advisory environment collection is pending', async () => {
+    const root = createRoot();
+    let environmentSignal: AbortSignal | undefined;
+    const environmentProbe = {
+      run: vi.fn(
+        (signal?: AbortSignal): Promise<never> =>
+          new Promise((_resolve, reject) => {
+            environmentSignal = signal;
+            const rejectAbort = (): void => reject(signal?.reason);
+            if (signal?.aborted) rejectAbort();
+            else signal?.addEventListener('abort', rejectAbort, { once: true });
+          }),
+      ),
+    };
+    const service = new NetworkPreflightService({
+      ...networkLeaseOptions(),
+      diagnosticsStore: new NetworkDiagnosticsStore(root),
+      environmentProbe,
+      probe: { run: vi.fn(async () => successfulObservation()) },
+      shouldAssessEnvironment: () => true,
+    });
+    const controller = new AbortController();
+    const abortError = new Error('environment check cancelled');
+    const pending = service.run(
+      { action: 'cli-launch', provider: 'openai-codex' },
+      undefined,
+      controller.signal,
+    );
+
+    await vi.waitFor(() => expect(environmentSignal).toBeInstanceOf(AbortSignal));
+    controller.abort(abortError);
+
+    await expect(pending).rejects.toBe(abortError);
+    expect(environmentSignal?.aborted).toBe(true);
+    expect(service.getHistory().entries).toEqual([]);
+  });
+
   it('preserves a real probe failure when failure reporting also fails', async () => {
     const root = createRoot();
     const diagnosticsStore = new NetworkDiagnosticsStore(root);
@@ -942,6 +1287,19 @@ describe('NetworkPreflightService', () => {
       provider: 'openai-codex',
     });
 
+    expect(result.providerConnectivity).toMatchObject({
+      featureAccess: [expect.objectContaining({ action: 'cli-launch', allowed: false })],
+      reasons: ['probe unavailable'],
+      signals: [expect.objectContaining({ id: 'preflight-internal-failure' })],
+      status: 'blocked',
+    });
+    expect(result.advisoryEvidence).toMatchObject({
+      paths: [],
+      reasons: [],
+      riskLevel: 'unknown',
+      riskScore: 0,
+      signals: [],
+    });
     expect(result.status).toBe('blocked');
     expect(result.reasons).toContain('probe unavailable');
   });
@@ -997,7 +1355,10 @@ describe('NetworkPreflightService', () => {
     const root = createRoot();
     const run = vi
       .fn()
-      .mockResolvedValueOnce(failedRequiredObservation('连接超时。'))
+      .mockResolvedValueOnce({
+        ...failedRequiredObservation('连接超时。'),
+        paths: [],
+      })
       .mockResolvedValueOnce(successfulObservation());
     const diagnosticsStore = new NetworkDiagnosticsStore(root);
     const service = new NetworkPreflightService({
@@ -1014,10 +1375,13 @@ describe('NetworkPreflightService', () => {
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(operation).toHaveBeenCalledOnce();
-    expect(diagnosticsStore.getView().entries.map(({ status }) => status)).toEqual([
-      expect.not.stringMatching('blocked'),
-      'blocked',
-    ]);
+    expect(
+      diagnosticsStore
+        .getView()
+        .entries.map((entry) =>
+          entry.schemaVersion === 2 ? entry.providerConnectivity.status : 'legacy',
+        ),
+    ).toEqual([expect.not.stringMatching('blocked'), 'blocked']);
   });
 
   it('cancels the transient launch retry before starting a second probe', async () => {

@@ -1,4 +1,5 @@
 import type { TerminalStatus } from '../../../shared/contracts';
+import { OwnedSessionOperationRegistry } from '../../platform/session-generation';
 import type { TerminalView } from '../../platform/terminal-view';
 
 export type { TerminalPermissionModeProbe, TerminalView } from '../../platform/terminal-view';
@@ -19,11 +20,23 @@ export interface TerminalMaskState {
   view: TerminalView;
 }
 
+export interface TerminalContextMenuTarget {
+  menuRevision: number;
+  ptyGeneration: TerminalStatus['ptyGeneration'];
+  sessionId: string;
+  view: TerminalView;
+}
+
+export type TerminalControlOperation = 'restart' | 'start' | 'stop';
+
 export interface TerminalState {
   pendingComposerFocusSessionId: string;
   shownTerminalDiagnostics: Set<string>;
   terminalDiagnosticCloseTimer: number | undefined;
   terminalDiagnosticStatus: TerminalStatus | undefined;
+  terminalContextMenuRevision: number;
+  terminalContextMenuTarget: TerminalContextMenuTarget | undefined;
+  terminalControlOperations: OwnedSessionOperationRegistry<TerminalControlOperation>;
   terminalFitDirty: boolean;
   terminalFitFrame: number | undefined;
   terminalFitGeneration: number;
@@ -36,6 +49,9 @@ export const createTerminalState = (): TerminalState => ({
   shownTerminalDiagnostics: new Set<string>(),
   terminalDiagnosticCloseTimer: undefined,
   terminalDiagnosticStatus: undefined,
+  terminalContextMenuRevision: 0,
+  terminalContextMenuTarget: undefined,
+  terminalControlOperations: new OwnedSessionOperationRegistry<TerminalControlOperation>(),
   terminalFitDirty: false,
   terminalFitFrame: undefined,
   terminalFitGeneration: 0,

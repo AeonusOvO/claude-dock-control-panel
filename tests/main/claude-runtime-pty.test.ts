@@ -14,6 +14,7 @@ import { SUBMIT_DELAY_MS } from '../../src/shared/conversation/composer-input';
 import type {
   ClaudeContextWindowMode,
   ClaudeEffortCompatibility,
+  ClaudeEndpointProtocol,
   ClaudeEffortRequest,
   ClaudeMetrics,
   ClaudePermissionMode,
@@ -66,6 +67,7 @@ interface TestLaunchConfigSnapshot {
   allowBypassPermissions: boolean;
   config: ReturnType<typeof normalizeClaudeConfig>;
   credential?: string;
+  protocol: ClaudeEndpointProtocol;
   storage: Record<string, unknown>;
 }
 
@@ -77,7 +79,9 @@ interface ClaudeRuntimeInternals {
   ): Promise<void>;
   configStore: {
     createLaunchSnapshot(cwd: string): TestLaunchConfigSnapshot;
+    getConfig(cwd: string): ReturnType<typeof normalizeClaudeConfig>;
     getCredential(cwd: string): string | undefined;
+    getView(cwd: string): { protocol: ClaudeEndpointProtocol };
     launchSnapshotIsCurrent(cwd: string, snapshot: TestLaunchConfigSnapshot): boolean;
   };
   diagnoseInstallation(): Promise<{
@@ -577,6 +581,7 @@ describe('Claude runtime launch configuration snapshots', () => {
         provider: 'gateway',
       }),
       credential: 'managed-gateway-token',
+      protocol: 'anthropic',
       storage: { revision: 'managed-snapshot' },
     };
     internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
@@ -617,6 +622,7 @@ describe('Claude runtime launch configuration snapshots', () => {
         preset: 'custom',
         provider: 'gateway',
       }),
+      protocol: 'anthropic',
       storage: { revision: 'native-race' },
     };
     internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
@@ -669,6 +675,13 @@ describe('Claude runtime launch configuration snapshots', () => {
       'ANTHROPIC_AUTH_TOKEN',
       '0',
       '0',
+      {
+        provider: 'anthropic-claude',
+        target: {
+          process: 'claude-cli',
+          url: 'https://relay.example.com/v1/messages',
+        },
+      },
     ],
     [
       'official',
@@ -684,19 +697,44 @@ describe('Claude runtime launch configuration snapshots', () => {
       'ANTHROPIC_API_KEY',
       null,
       '',
+      { provider: 'anthropic-claude' },
     ],
   ] as const)(
     'prepares matching process and non-secret inline settings for %s native launches',
-    async (route, config, credential, credentialKey, processAttribution, settingsAttribution) => {
+    async (
+      route,
+      config,
+      credential,
+      credentialKey,
+      processAttribution,
+      settingsAttribution,
+      expectedNetworkAccess,
+    ) => {
       const { internals, runtime, session } = createRuntime();
       const launchSnapshot: TestLaunchConfigSnapshot = {
         allowBypassPermissions: false,
         config,
         credential,
+        protocol: 'anthropic',
         storage: { revision: `${route}-snapshot` },
       };
       const createLaunchSnapshot = vi.fn(() => launchSnapshot);
+      const getConfig = vi.fn(() =>
+        normalizeClaudeConfig({
+          authMode: 'none',
+          baseUrl: 'https://live.example.com',
+          credentialAction: 'clear',
+          model: 'live-model',
+          preset: 'custom',
+          provider: 'gateway',
+        }),
+      );
+      const getCredential = vi.fn(() => 'live-token');
+      const getView = vi.fn(() => ({ protocol: 'openai' as const }));
       internals.configStore.createLaunchSnapshot = createLaunchSnapshot;
+      internals.configStore.getConfig = getConfig;
+      internals.configStore.getCredential = getCredential;
+      internals.configStore.getView = getView;
       internals.configStore.launchSnapshotIsCurrent = vi.fn(
         (_cwd, candidate) => candidate === launchSnapshot,
       );
@@ -710,6 +748,10 @@ describe('Claude runtime launch configuration snapshots', () => {
         );
 
         expect(createLaunchSnapshot).toHaveBeenCalledTimes(1);
+        expect(getConfig).not.toHaveBeenCalled();
+        expect(getCredential).not.toHaveBeenCalled();
+        expect(getView).not.toHaveBeenCalled();
+        expect(prepared.networkAccess).toEqual(expectedNetworkAccess);
         expect(prepared.environment[credentialKey]).toBe(credential);
         expect(prepared.environment.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe(processAttribution);
         expect(prepared.settingsEnvironment.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe(
@@ -736,6 +778,7 @@ describe('Claude runtime launch configuration snapshots', () => {
         provider: 'gateway',
       }),
       credential: 'snapshot-token',
+      protocol: 'anthropic',
       storage: { revision: 'snapshot' },
     };
     internals.configStore.createLaunchSnapshot = vi.fn(() => launchSnapshot);
@@ -773,7 +816,7 @@ describe('Claude runtime launch configuration snapshots', () => {
     }
   });
 
-  it('uses config and credential from one snapshot without rereading storage', async () => {
+  it('binds the exact custom target from one snapshot without rereading live config', async () => {
     const { internals, runtime, session } = createRuntime();
     const launchSnapshot: TestLaunchConfigSnapshot = {
       allowBypassPermissions: false,
@@ -786,12 +829,26 @@ describe('Claude runtime launch configuration snapshots', () => {
         provider: 'gateway',
       }),
       credential: 'snapshot-token',
+      protocol: 'anthropic',
       storage: { revision: 'snapshot' },
     };
     const createLaunchSnapshot = vi.fn(() => launchSnapshot);
+    const getConfig = vi.fn(() =>
+      normalizeClaudeConfig({
+        authMode: 'none',
+        baseUrl: 'https://live.example.com',
+        credentialAction: 'clear',
+        model: 'live-model',
+        preset: 'custom',
+        provider: 'gateway',
+      }),
+    );
     const getCredential = vi.fn(() => 'replacement-token');
+    const getView = vi.fn(() => ({ protocol: 'openai' as const }));
     internals.configStore.createLaunchSnapshot = createLaunchSnapshot;
+    internals.configStore.getConfig = getConfig;
     internals.configStore.getCredential = getCredential;
+    internals.configStore.getView = getView;
     internals.configStore.launchSnapshotIsCurrent = vi.fn(
       (_cwd, candidate) => candidate === launchSnapshot,
     );
@@ -800,7 +857,21 @@ describe('Claude runtime launch configuration snapshots', () => {
       const prepared = await runtime.prepareLaunch(session.sessionId, session.cwd, 'new');
 
       expect(createLaunchSnapshot).toHaveBeenCalledTimes(1);
+      expect(getConfig).not.toHaveBeenCalled();
       expect(getCredential).not.toHaveBeenCalled();
+      expect(getView).not.toHaveBeenCalled();
+      expect(prepared.networkAccess).toEqual({
+        provider: 'anthropic-claude',
+        target: {
+          process: 'claude-cli',
+          url: 'https://snapshot.example.com/v1/messages',
+        },
+      });
+      runtime.bindPty(session.sessionId, 10, prepared.token);
+      expect(runtime.networkAccessForActivePty(session.sessionId, 10)).toBe(prepared.networkAccess);
+      expect(() => runtime.networkAccessForActivePty(session.sessionId, 9)).toThrow(
+        'Claude Code 已绑定到其他终端',
+      );
       expect(prepared.command).toBe(POWERSHELL_STARTUP_TRIGGER);
       expect(prepared.environment).toMatchObject({
         ANTHROPIC_AUTH_TOKEN: 'snapshot-token',
@@ -830,6 +901,7 @@ describe('Claude runtime launch configuration snapshots', () => {
         provider: 'gateway',
       }),
       credential: 'snapshot-token',
+      protocol: 'anthropic',
       storage: { revision: 'snapshot' },
     };
     let snapshotCurrent = true;
@@ -844,14 +916,13 @@ describe('Claude runtime launch configuration snapshots', () => {
 
     try {
       const pending = runtime.prepareLaunch(session.sessionId, session.cwd, 'continue');
-      const rejection = expect(pending).rejects.toThrow('Claude 接入配置在授权期间已更新');
       await vi.waitFor(() => {
         expect(internals.prepareRouteServices).toHaveBeenCalledTimes(1);
       });
 
       snapshotCurrent = false;
       routePreparation.resolve(undefined);
-      await rejection;
+      await expect(pending).rejects.toThrow('Claude 接入配置在授权期间已更新');
 
       expect(session).toMatchObject({
         active: true,
@@ -879,6 +950,7 @@ describe('Claude runtime launch configuration snapshots', () => {
         provider: 'anthropic',
       }),
       credential: 'snapshot-api-key',
+      protocol: 'anthropic',
       storage: { revision: 'snapshot' },
     };
     const createLaunchSnapshot = vi.fn(() => launchSnapshot);

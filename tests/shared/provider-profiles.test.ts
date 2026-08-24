@@ -27,17 +27,19 @@ describe('official provider profiles', () => {
     );
   });
 
-  it('separates login, CLI, and WebSocket action requirements', () => {
+  it('keeps external-browser pages advisory while requiring exact CLI login authority', () => {
     const profile = getProviderProfile('openai-codex');
-    expect(
-      profile.endpoints.find((endpoint) => endpoint.id === 'openai-auth')?.requiredFor,
-    ).toContain('login');
+    expect(profile.endpoints.find((endpoint) => endpoint.id === 'openai-auth')).toMatchObject({
+      process: 'application',
+      requiredFor: [],
+    });
     expect(
       profile.endpoints.find((endpoint) => endpoint.id === 'openai-chatgpt')?.requiredFor,
-    ).toEqual(['provider-switch', 'login']);
-    expect(profile.endpoints.find((endpoint) => endpoint.id === 'openai-codex-api')?.process).toBe(
-      'cli',
-    );
+    ).toEqual([]);
+    expect(profile.endpoints.find((endpoint) => endpoint.id === 'openai-codex-api')).toMatchObject({
+      process: 'cli',
+      requiredFor: expect.arrayContaining(['provider-switch', 'login']),
+    });
     expect(
       profile.endpoints.find((endpoint) => endpoint.kind === 'websocket')?.requiredFor,
     ).toEqual(['cloud-task']);

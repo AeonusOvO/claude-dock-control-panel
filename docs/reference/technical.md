@@ -1,53 +1,27 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.15（2026-08-23）。本候选版继续架构收敛：渲染进程入口 `main.ts` 从
-15,886 行收敛为 46 行 shell，15 个特性分片经 shell/platform 分层与注册表组合；IPC 的
-channels/schema/preload 桥建立单一事实源，主进程以运行期注册表与四类贡献点装配，lint 与依赖规则
-收敛为零警告 error 门禁（ADR-0008 至 ADR-0011）。应用内更新改由单一 electron-updater 状态源读取
-腾讯云 COS generic feed，RC 使用 `rc.yml`，稳定版使用 `latest.yml`，发布脚本保证不可变资产优先、
-公开摘要验证和通道清单最后提交（ADR-0007）。强制退出的进程树清理修复为 1 秒级清理 + 15 秒预算
+当前架构版本：5.0.0-rc.16（2026-08-24）。本候选版把网络结果拆成
+`providerConnectivity` 与 `advisoryEvidence` 两个独立 authority：精确 Provider 端点的
+DNS/TLS/HTTP/重定向/内容替换/application/CLI/必需 WebSocket 决定可用性，公网地址、DNS 对照、
+IPv6、STUN、接口、环境与信誉只形成目标限定的建议证据。终端粘贴统一为 generation-owned
+`Terminal.paste()`，xterm `onData()` 是唯一 PTY 写入路径；右键在 capture 阶段先于 Chromium/xterm
+接管。renderer 的 Claude 启动、预检、插件刷新、runtime 切换、终端控制和 Codex 操作使用 owner token
+驱动即时文案、`aria-busy` 与 stale-settlement fencing。runtime selector 改用带来源和哈希的本地官方
+Anthropic Clay Spark 与 OpenAI 黑/白 Blossom；`LICENSE`、`NOTICE` 和精简社区文件进入发布契约。
 
-- 8 秒 watchdog 兜底；运行期会话关闭后的 PowerShell 滞留以 OSC PID 握手与树终止消除。
-  PowerShell/ConPTY 安全终端主路径与结构化原生对话工具栏入口继续保留。既有隔离
-  `RuntimeProfile/AppPaths`、统一 `ConversationAdapter`、Claude Agent SDK
-  原生会话、单 owner 注册表、加密恢复日志、附件安全存储、版本化模型能力和权限 contract 均保持不变，
-  同时保留无 UUID token 聚合与最终帧原位收口。SDK 必须从用户本机的 `claude` 命令解析同一安装中的
-  `claude.exe`；构建排除 `@anthropic-ai/claude-agent-sdk-*` 平台二进制并在打包后扫描 `app.asar` 与
-  `win-unpacked`，发现第二份 `claude.exe` 即失败。Codex App Server 原生迁移不属于本 RC；现有
-  Codex TUI 继续使用 ConPTY。4.6.0 在原有按接入/模型隔离的服务速度 profile
-  和会话 generation 锁之上，加入 launch-owned Claude 活动/权限 Hook、后台任务状态机、派生 Web 进程所有权
-  登记与受控退出清理；流中断诊断只保存脱敏分类并禁止对部分输出自动重放。Claude/Codex 工作台改用
-  共享静态指令注册表；模型、模式与思考控制统一收敛到底部状态栏，提示词区不再重复渲染一套大号
-  控件，窄底栏和收起侧栏均采用不复制状态源的响应式浮层。代理草稿加载使用代次与用户编辑锁，
-  增强选择器提供显式值同步；接入历史按规范化指纹在全表
-  去重。官方 Claude 使用原生 Fast 并以 statusLine `fast_mode` 验证，受管 GPT 只请求
-  `service_tier=fast`。4.5.0 为受管 ChatGPT 的
-  `gpt-5.6-sol` 增加标准/扩展上下文档位、提前自动压缩、真实当前窗口读数与溢出恢复提示，并把
-  Claude/Codex 的上下文、官方额度窗口和受支持供应商余额统一到可配置的底栏资源菜单；同时完成代理
-  启用草稿的统一保存与禁用态隔离、受管 ChatGPT 官方 OpenAI 网络预检和本机全局 IPv6 路径提示。
-  4.4.2 修复受管 ChatGPT 接入保存新配置后，运行中的 Claude
-  PTY 仍携带旧中转站环境继续请求的问题：接入开始即停止当前项目的旧会话，成功后用 `--continue`
-  和新环境恢复，任何失败都保持停止而不回退；CLIProxyAPI 登录、解压与运行子进程还会清除继承的
-  OpenAI/Codex/Anthropic/CCR 路由和凭据变量，同时保留显式 HTTP 传输代理。4.4.1 把受管 ChatGPT
-  接入收敛为一次后台事务：自动补齐
-  Claude Code、启动网关、读取实时模型目录、执行真实模型请求并仅在成功后保存；renderer 使用主进程
-  8 阶段事件持续反馈，并以实时模型选择框取代手填标识。首次 CCR Provider 保存也会自动启动并确认
-  3456，而不再要求用户打开管理页。4.4.0 把 CCR 接入收敛为 CLI-only 的全自动生命周期：后台 npm
-  安装、真实阶段事件、原子中断日志与启动续装、Provider/模型自动写入、按活动会话自动启停，以及只在
-  服务运行时开放的高级后台入口。npm 子进程继承显式 CLI HTTP 代理，官方源失败会可见地回退镜像；
-  桌面 CCR 只检测、不接管、不终止、不卸载，配置继续固定 `applyProfile: false`。CLIProxyAPI 另加入
-  本机密钥保护的管理页和可验证 PID 生命周期，切换到不需要网关的路由时可安全停止孤儿 sidecar。
-  4.3.1 修复 GitHub Release 重定向后 Electron
-  `DownloadItem.getURL()` 返回最终资产地址、而下载任务仍按原始地址等待所造成的 45 秒零字节假停滞；
-  同时把受管安装的忙碌状态提升为主进程真值并跨 renderer 重绘锁定按钮。4.3.0 把项目级“ChatGPT 订阅”实验性预设升级为
-  ClaudeDock 托管的 CLIProxyAPI sidecar：应用负责验证上游发行包、安装、启动、OpenAI 浏览器授权引导、
-  回环网关配置与项目模型映射，用户不再操作终端或第三方控制台。该路径仍是第三方协议桥，不是 OpenAI
-  或 Anthropic 官方 Claude Code 集成。4.2.0 首次加入外部 CLIProxyAPI 发现和严格回环地址边界，并把
-  构建期 `brace-expansion` 与 `fast-uri` 间接依赖更新到已修复的补丁版本。4.1.2 不改变
-  运行时架构，仅把真实 PowerShell argv 回归测试的单例时限提升到 45 秒，以覆盖 GitHub Windows runner
-  的冷启动抖动。
+renderer 入口继续保持 feature-sliced shell/platform 注册架构，IPC 的 channel/schema/preload 桥是单一
+事实源，main 通过运行期注册表与 contribution 装配，lint 与 dependency-cruiser 维持零警告门禁
+（ADR-0008 至 ADR-0011）。应用更新继续由单一 electron-updater 状态源读取腾讯云 COS generic feed；
+RC 使用 `rc.yml`，稳定版使用 `latest.yml`，发布顺序固定为不可变资产、公开摘要验证、通道清单最后提交
+（ADR-0007）。
 
-旧版设计计划、路线图、缺陷清单与分阶段修复提示词统一保存在 [`docs/archive/`](docs/archive/)；
+PowerShell/ConPTY 安全终端与显式原生对话入口继续并存。`RuntimeProfile/AppPaths` 隔离、统一
+`ConversationAdapter`、single-owner registry、加密恢复、附件存储、模型能力、权限 contract、launch-owned
+Hook、后台任务和受控派生进程保持有效。Agent SDK 只解析用户本机 `claude` 安装；构建排除 SDK 平台
+二进制并扫描 `app.asar`/`win-unpacked`，发现第二份 `claude.exe` 即失败。Codex 继续使用官方 TUI/ConPTY，
+本候选版不迁移到实验性 App Server 会话。
+
+旧版设计计划、路线图、缺陷清单与分阶段修复提示词统一保存在 [`docs/archive/`](../archive/)；
 这些文件只用于追溯历史，不是当前架构规格、Agent 指令或发布门禁。
 
 ## 技术栈
@@ -72,13 +46,32 @@ channels/schema/preload 桥建立单一事实源，主进程以运行期注册�
 
 依赖版本以 `package.json` 和 `package-lock.json` 为唯一事实来源。
 
+### 本地品牌资产与法律文件
+
+| 资源                                                  | 官方来源                              | Source SVG SHA-256                                                 | LF-normalized body SHA-256                                         |
+| ----------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `src/renderer/assets/brands/claude-spark-clay.svg`    | <https://www.anthropic.com/press-kit> | `6D53DB4BE375E899C937C26CF16684A80D6E869B1928D72B37748BEF2560E219` | `1E3C6BD43F5B0598FF4452769410D0597AD0BE3FBDD043930DA664AF9E1FD39F` |
+| `src/renderer/assets/brands/openai-blossom-black.svg` | <https://openai.com/brand/>           | `7BE72F1FEA831D3BA81A545CEE79B7E0AE69449D5D7837C9571CCBFB4AA1E00B` | `CC448BF8E40F2B83E6E559EA8BE816657740BC8305269E88EEC27FF710356941` |
+| `src/renderer/assets/brands/openai-blossom-white.svg` | <https://openai.com/brand/>           | `B94EA61D860FAE6F82F43571F36F17111FCF5D348E8E9CC22AE4B441C7560011` | `834590F050BFC2F170BEAE54D432CDD2096C74AECEB8FD4D482DB76493EA4F02` |
+
+三个资源均于 2026-08-24 从各自官方 archive 取得；SVG comment 记录 page、archive URL/entry、检索日期与
+原始 hash。文件保留官方 geometry/fill，只允许安全 standalone SVG：不得包含 `<image>`、`<script>`、
+event handler 或 `href`。Claude 使用固定 Anthropic light surface；OpenAI 按 appearance 使用 black-on-white
+或 white-on-black，禁止 `currentColor`、CSS filter 和主题 token 重着色。`vite.config.ts` 将
+`assetsInlineLimit` 设为 0，使三项作为 hashed local files 进入 renderer package。
+
+根目录 `LICENSE` 与 `NOTICE` 在 electron-builder `build.files` 中逐字列出，并通过 package contract 和
+最终 ASAR 检查验证；不得依赖 builder 的隐式默认行为。
+
 ## 架构与数据流
 
 ```text
 Renderer (primary xterm.js / explicit native conversation DOM)
         ├── ConversationReducer ── revision / ordered content blocks / late-event rejection
         ├── Native interaction dock ── permission / question / plan / MCP / images
-        ├── ClaudeLaunchAttemptRegistry ── per-session generation / 真实事件解锁
+        ├── OwnedSessionOperationRegistry ── per-session operation / generation UI ownership
+        ├── OwnedOperationRegistry ── application-global Codex install/account UI ownership
+        ├── ClaudeLaunchAttemptRegistry ── preflight / starting / paused / 真实事件解锁
         │
         │ 受限 IPC
         ▼
@@ -527,10 +520,12 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `beginLaunch()` supersede、session/global invalidation 与 restart 异常都必须清除未消费 expectation，
   禁止跨启动泄漏。restart 返回后才记录 owned generation、检查 intent、绑定 PTY 和写命令，因此后续
   失败仍只停止本次替代 generation 并中止精确 prepared token。
-- 项目级 `runtime:set` 在 provider policy 等待前后都重新检查该项目所有 session 是否存在活动 agent；
-  直接启动在异步准备完成、重启 PTY 之前再次核对 `AgentRuntimeStore`。由于最后检查、runtime 提交与
-  同步 restart/write 之间没有 `await`，开发引擎切换和启动只能有一个先完成：切换先完成时旧引擎启动
-  取消，启动先写入时切换因活动 agent 拒绝。
+- `ProjectRuntimeSwitchCoordinator` 按规范化项目目录而非 renderer session 持有 `runtime:set`。main 在
+  provider policy 等待前后都重新检查该目录全部 session 的活动 agent，并通过 `runtime:get` 暴露单调
+  pending attempt 与目标 runtime；同目录 renderer session 共用 busy 状态，reload 后只在 pending 期间轮询
+  到提交结果。直接启动在异步准备完成、重启 PTY 之前再次核对 `AgentRuntimeStore`。由于最后检查、runtime
+  提交与同步 restart/write 之间没有 `await`，开发引擎切换和启动只能有一个先完成：切换先完成时旧引擎
+  启动取消，启动先写入时切换因活动 agent 拒绝。
 - renderer 的 `ClaudeLaunchAttemptRegistry`（`src/renderer/platform/claude-launch-attempt.ts`）按 session 保存
   generation、初始 conversation UUID、Claude active、PowerShell PID 与精确 `ptyGeneration`。点击主入口
   或任何 relaunch 在第一个 `await` 前登记并立即重绘 `disabled`/`aria-busy`；冷状态第一次观察只建立
@@ -540,7 +535,20 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   Windows 复用同一 PID）、新的运行中 PowerShell PID、已观察 active 后变 inactive 且 PowerShell
   仍运行，或明确 IPC 失败、terminal `stopped/error`、session 删除时才释放。删除会话同时裁剪对应
   launch-result tombstone，避免长期创建不同 session 造成无界增长。这里故意没有 timeout：超时不能
-  取消仍在主进程执行的 restart，提前解锁反而允许重复启动。Codex 保留独立 renderer 启动状态。
+  取消仍在 main 执行的 restart，提前解锁反而允许重复启动。Codex 保留独立 renderer 启动状态。
+- 终端 start/stop/restart 由 renderer registry 按精确 session generation 持有；自动启动也必须调用同一
+  owner，main 的 `starting` snapshot 可在 reload 后重建“正在启动…”，失败状态不能留下延迟 focus intent。
+  runtime switch 的最终 owner 是上述 main CWD coordinator，renderer token 只派生同目录呈现。
+- Codex installer、browser/device login、cancel 与 logout 在 main 中共享应用级单例。`CodexProjectState`
+  暴露单调 `revision` 和 sanitized `{ attempt, kind }` active operation；main 在异步诊断前预留 owner，结束时
+  先以更高 revision 清除并向全部项目广播。renderer 的 optimistic token 只在没有更新 main descriptor 时生效，
+  reload 恢复精确文案、disabled 与 `aria-busy`，older revision 或 stale settlement 不能重新锁定控件。
+- 插件 manager 同步预留一个应用级 mutation owner，catalog snapshot 暴露 `{ attempt, kind, target, phase }`。
+  相同逻辑请求加入现有 Promise，竞争请求立即拒绝且不排队 CLI 副作用；BusyRegistry lease 只属于第一位
+  owner。renderer reload 从 catalog 恢复准确文案与完整 mutation-surface lock，只在 active 期间轮询；延迟 poll
+  和 dispose 后 timer 都被 fenced。Claude launch registry 另保存 presentation phase：attempt 从 `preflight`
+  开始，精确 terminal lifecycle 推进为 `starting`，owned confirmation 进入 `paused`；stale 结果不能倒退
+  phase、toast 或恢复入口。
 - 项目页的工作区动作按 **目标** 而不是按元素去重（`ProjectsState.workspaceMutations`，与
   `actions-history.ts` 的 `storedConversationRestores` 同一模式）。这些行由每次 workspace 重绘整体重建，
   按下的那个按钮在请求返回前就已被一个 enabled 的新按钮替换，所以 `disabled` 拦不住第二次点击。
@@ -1747,8 +1755,18 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   移动重绘编辑缓冲（按 `Ctrl+C` 会发出形如 `ESC[10;27H` 的序列），两侧网格只要不一致，
   重绘就落在错误的行上，上一屏留在原地——这正是「两屏叠在一起」那个 bug。
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
-  `Ctrl+V` 从主进程读取最多 5 MiB 文本并写入当前 PTY。右键菜单复用同一受限 API，并提供
-  全选和只清除 xterm 显示。
+  粘贴的物理路径固定为
+  `clipboard → Terminal.paste once → xterm onData once → generation-fenced writeTerminal once`。
+  剪贴板 helper 在读取前后都验证精确 `sessionId`、`ptyGeneration` 与 `TerminalView`，不得直接调用
+  `writeTerminal`；`Terminal.paste()` 独占换行规范化和 bracketed-paste wrapper。只有不带 Shift、Alt、
+  AltGraph、Meta 且非 repeat 的纯 `Ctrl+V` 被应用接管，并执行 `preventDefault`、`stopPropagation`、
+  `stopImmediatePropagation` 后 `return false`。共享边界允许 5 MiB clipboard text 加 12 个 bracket wrapper
+  code units 作为一次 PTY write，超过边界才拒绝，不能为绕过上限而切块。
+- 终端容器在 capture 阶段拦截右键 `mousedown` 和 `contextmenu`，先于 xterm mouse tracking 与 Chromium
+  default。菜单 target 固定为打开时的 session/view/generation/revision；自身 Paste 点击隐藏菜单不改变
+  revision，另一个菜单打开则推进 revision，使前一个尚未完成的 clipboard read 在回写前失效。PTY 或 view
+  stale 同样无输出；view disposal 会关闭菜单并移除 capture listeners。复制、全选和只清除 xterm 显示继续
+  复用同一菜单。
 - 会话未在运行时输入框禁用并更换 placeholder；启动会话、切项目等操作记录目标 session ID，
   renderer 只在该 session 仍为活动会话且 phase 已变为 `running` 后于下一绘制帧聚焦输入框。
   固定 40/60/80ms 延时已删除，避免 PTY 冷启动慢时焦点请求落在 disabled textarea 上后丢失。
@@ -1766,124 +1784,98 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
 
 ## 官方 AI 网络预检与访问守卫
 
-### 模块与数据流
+### 两个独立 authority
 
-`src/shared/router/provider-profiles.ts` 是版本化服务商配置源，集中维护官方端点、动作需求、缓存 TTL、
-风险阈值、隐私环境变量、版本规则和检索日期。Schema 在模块加载时校验；端点只允许 HTTPS/WSS，
-重复端点 ID 或空来源会阻止应用启动，避免静默使用损坏规则。
-配置随经过构建/发布流程的应用版本更新，不接受运行时下载的无签名规则；这样牺牲即时热更新，
-但避免网络中间人替换封锁策略。规则损坏时 fail-closed 并要求安装修复版本，不回退到陈旧的
-隐藏常量。
+`NetworkPreflightResult` 的当前 schema 为 version 2。它保留两个不能互相替代的嵌套结果：
 
-主进程链路如下：
+- `providerConnectivity`：精确配置 Provider 目标的连接 authority。DNS、TLS、HTTP status/reachability、
+  redirect trust、captive-portal/content-substitution、实际 Electron application session、CLI transport 和
+  当前动作要求的 WebSocket 共同决定 `allowed`、`allowed_with_notice`、`partially_available`、`unknown` 或
+  `blocked`。兼容顶层 `status` 只从该结果派生，不是第二个事实源。
+- `advisoryEvidence`：目标限定的路径、公网地址、DNS、IPv6、STUN、接口、时区、语言、兼容性和信誉
+  观察。它独立记录 collection state、severity 与 confidence；缺失或高风险建议项不改变一个已经通过的
+  Provider 连接，也不能把失败的 Provider 端点改成可用。
 
-1. `NetworkPathResolver` 读取活动网卡、IPv4/IPv6 可用性、DNS 服务器、虚拟接口名称、
-   Electron `session.resolveProxy()` 与 CLI 标准代理环境；不记录代理 URL、用户名或密码。
-   解析结果只代表进程可见的显式代理第一跳，`DIRECT` 或缺少代理环境变量不等于公网直连。
-2. `ProviderConnectivityProbe` 并行执行官方域名 DNS、Electron 无凭据 `GET`、CLI
-   `curl.exe` HTTPS/TLS、Codex WebSocket Upgrade 和 CLI `--version`。应用请求由
-   `electron-application-request.ts` 绑定到当前 application/conversation 作用域的 Electron
-   `Session.fetch`，使用 `redirect: manual`。这避开了部分 Windows + TUN 路径上
-   `ClientRequest` 只发出 `finish -> close`、却没有 `response/error` 的 Electron transport 故障。
-   读取状态与响应头后立即取消正文，既避免下载页面，也避免部分 CDN/代理对
-   `HEAD` 的非标准响应。Electron 在 manual redirect 下拒绝暴露跳转目标时，已知官方入口记为
-   “路径可达、跳转目标未验证”的非阻断警告，不会发出未验证的后续请求；用户配置的精确 API 目标
-   仍 fail-closed。401/403/404/405 表示端点可达而不是认证成功；不附带现有登录令牌、API Key，
-   不调用模型接口正文，也不保存跳转 URL 的路径或查询参数。
-3. 手动综合预检固定覆盖 ChatGPT/Codex、Claude 与 Grok/xAI 官方端点；自动登录和会话守卫仍只检查
-   当前动作实际使用的服务商。并行环境探针通过当前 CLI 路径请求 IPQuery，并使用 ProxyCheck 与
-   Stop Forum Spam 交叉检查代理、VPN、机房、风险分和公开滥用记录；通过独立线路回显检查分流直连
-   出口是否与模型出口不同；通过 dnscheck.tools 的随机 TXT 查询让权威服务器直接返回实际递归解析器
-   的国家与网络归属，再与模型出口国家对照；存在全局 IPv6 时另检查外部 IPv6 出口。
-   Windows 语言只从 `app.getPreferredSystemLanguages()` 读取系统首选语言列表，不使用应用界面语言或
-   CLI `LANG/LC_ALL` 覆盖。与出口国家不匹配或无法对照都只是参考信息，不产生风险、不降级证据完整性、
-   不阻止动作，也不提供语言“修复”。
-   主进程在构造结果时立即把公网地址降为 IPv4 `/16` 或 IPv6 `/48` 风格的掩码前缀；完整地址不进入
-   renderer、设置或诊断历史。任何关键来源不可用都产生“证据不完整”，不能显示低风险或通过结论；
-   环境风险本身不伪装成服务端不可达，动作守卫仍单独依据当前动作所需端点决定能否继续。
-4. `RiskDecisionEngine` 把端点与环境证据共同转换为 `allowed`、`allowed_with_notice`、`warning`、
-   `degraded`、`partially_available` 或 `blocked`，同时生成按动作的 `featureAccess`。
-   显式代理、虚拟网卡和“本机存在全局 IPv6、但模型进程没有显式代理”只加提示；该 IPv6 信号仅
-   来自本机网卡，不推断公网出口。活动所需 DNS/API/CLI 路径失败、关键 TLS/跨域重定向异常、
-   离线、危险版本和 Claude SOCKS 路径才会阻止对应高风险动作。
-5. `NetworkPreflightService` 在第一次异步等待前复制服务商、动作、规范化项目目录、作用域和精确
-   官方目标；目标 URL 规范化后冻结，同一个快照同时用于私有缓存键和真实探测。默认/application
-   检查租用 application 作用域；无精确目标的 conversation 诊断原子租用 application + conversation；
-   精确独立对话请求只租用实际选择的 Electron 作用域。
-6. 预检租约通过代理协调器的同一 FIFO 队列取得，只接受带随机 epoch 的 `stable` 作用域。保存与
-   对账作为 writer 在读取存储、改变 health、调用 `setProxy()` 或关闭连接前等待全部活动租约同步释放；
-   release 不入队且幂等，避免 writer 等待排在自身之后的 release 形成死锁。排在 writer 之后的新
-   预检不能越过它读取旧路由。
-7. 缓存身份包含“服务商 + 动作 + 项目 + 网络作用域 + 精确目标 + 稳定 epoch 集合”。公开的
-   `configurationRevision` 是用进程内随机密钥对服务商规则版本与随机 epoch 做 HMAC 得到的等值令牌，
-   不包含代理地址、规则、账号、密文、时间戳、项目或目标 URL。相同请求执行 single-flight 和有界缓存；
-   generation、主进程 run ID 与租约 currentness 在探测后、缓存写入、诊断、通知和返回前重复校验，
-   同步回调触发的重入失效也不能让旧结果获得授权。
-8. `ProviderAccessGuard` 位于 IPC 动作前：Codex 登录/启动、官方 Claude 与受管 ChatGPT 接入保存/
-   历史恢复/启动/重启/真实连接测试、开发引擎切换和官方独立对话首次请求都必须先通过匹配的
-   Anthropic/OpenAI 官方端点预检。自定义网关和
-   普通本地终端不被官方服务状态误伤；它们的连接按钮和自动测试直接请求自身端点。
-   设置中的“每次新建会话”和“每次登录海外服务”默认开启；开启时对应 `cli-launch` 与
-   `login/provider-switch` 每次都带 `force` 重新探测，不复用两分钟缓存。关闭只停用该自动事件，用户手动
-   “重新检测”仍会运行完整官方与环境评估。
-9. `cli-launch / first-request / login / provider-switch` 的第一次阻止若只包含 DNS、连接重置、连接失败
-   或超时，且仍存在活动 IPv4/IPv6 路径，守卫等待 150ms 后强制执行一次新预检再决定是否阻止。
-   这是唯一自动首检重试；离线、TLS、跨域/降级跳转、门户网络、CLI 代理不支持和内部预检失败立即
-   阻止。等待与第二次探测共用调用方 AbortSignal，取消后不得继续发请求或进入业务操作。
-10. 启动阻止会冻结一份带 generation、配置 revision、项目、Provider 和目标身份的单次决策。
-    renderer 只能选择取消、强制重检或坚持连接；主进程重新验证全部基线后才继续，决策不能跨项目、
-    跨路由或重复消费。坚持连接成功后 `ClaudeLaunchHealthMonitor` 绑定精确 launch/PTy generation：
-    正常时约 2 分钟复查，有风险时从约 15 秒指数退避并加入抖动，最多 2 分钟；它只有显示状态发布口，
-    没有 stop/restart/close seam，因此后续风险不会自动中断已经运行的会话。
+`src/shared/router/provider-profiles.ts` 是版本化 Provider 配置源，集中维护官方 HTTPS/WSS 端点、动作需求、
+缓存 TTL、CLI 版本规则、来源和检索日期。规则随应用发布，不运行时下载；schema 损坏、重复 endpoint ID
+或不安全 URL 会 fail-closed。自定义 target 使用调用方保存并重新校验的精确 URL，绝不借用官方结果。
 
-### 回滚与故障边界
+### 主进程数据流
 
-- MCP 等多步骤工具仍使用 `RollbackCoordinator` 做逆序、幂等补偿。Claude 项目 profile 则由
-  `SessionConfigTransactionCoordinator` 与 `runOwnedConfigTransaction()` 按规范化目录串行化：先在
-  原 profile 保持不变时完成 provider/history/router 异步准备，确认原快照未被外部更新后，再通过
-  `commitPreparedConfig()` 或 `commitAllowBypassPermissions()` 无 `await` 同步提交。路由完成、状态回读、
-  可选会话恢复和失败恢复状态发布都保留在同一事务屏障内。
-- 提交后的失败只有在事务仍拥有目录、目标 session 和精确已提交快照时才恢复加密 profile；异步准备
-  期间观察到外部新配置会在提交前取消，回滚也不会覆盖排队成功或外部较新的写入。CCR Provider 保存
-  先于可选项目 profile 提交，是独立持久化边界；项目提交失败会恢复项目快照，但不会谎称已撤销 CCR
-  内已经保存的 Provider。
-- 访问守卫在任何配置 commit 或 PTY 变更前运行。预检失败不会把仍在运行的 Claude/Codex 会话错误标成
-  inactive；只有已经尝试销毁并重启 PTY 后发生错误才进入 inactive 状态。
-- 代理事务与预检按 reader/writer 顺序线性化：已经取得租约的预检先完成，已排队的保存随后改变路由，
-  保存之后到达的预检只能取得最终稳定 epoch。预检在成功、阻止、探测异常、缓存命中、失效和附属记录
-  异常路径都于 `finally` 同步释放租约；协调器从不依据可能过时的“当前空闲”快照授权探测。
-- 未登录 WebSocket 握手收到 401/403/426 只能证明端点已响应，不能证明会话长连接受限。可选
-  WebSocket 不改变普通后台/登录结论；只有 `cloud-task` 等当前动作把它标为必需时才拒绝该动作。
-  未知或跳过的关键探测按 fail-closed 处理。
-- Electron 43 在部分 Windows + TUN 环境中，`ClientRequest` 可能在没有 `response/error` 的情况下
-  直接 `close`；这不能被当成无法连外网的证据。应用预检因此改用同一作用域的 `Session.fetch`。
-  `Session.fetch` 的 manual redirect 在 Electron 中可报 `Redirect was cancelled`；已知官方入口将其显示为可达警告，
-  而精确配置端点因无法核验目标仍失败关闭。非白名单跨域、HTTP 降级、TLS 或真实连接失败仍失败。
-- 2.2.2 恢复预检上线前的真实路由测试职责：官方预检只在官方模型请求前增加防护，不再覆盖
-  Claude 底栏的 `routeHealth`，也不再把中转站的真实测试替换成官方预检详情。
-- 本实现不修改系统代理、DNS、路由表、网卡、Windows 时区/语言、Codex/Claude Code 配置文件或官方登录存储，也不自动
-  关闭 VPN。Claude Code 官方不支持 SOCKS，因此外部应用代理存储层拒绝 SOCKS5 + CLI 作用域；
-  对继承环境中已有的 SOCKS 仍在预检中硬阻止。
-- 时区修复写入 `AdvancedSettingsStore.networkPreflight`，未来的 ClaudeDock 子进程获得 `TZ`。`TZ` 只接受
-  IANA 标识；运行中会话不热改，需重开。历史配置中的 CLI 语言覆盖仅保留兼容性，不参与系统语言参考项。
+1. `NetworkPreflightService` 在第一个 `await` 前冻结 Provider、action、normalized project、
+   `NetworkPreflightTarget`、network scope 和稳定 proxy epoch。缓存/single-flight 身份包含这些字段；
+   custom target、application/conversation scope 或 route epoch 不同即不能命中同一结果。
+2. `NetworkPathResolver` 为每个实际 target 记录 `target`、`networkScope`、`process` 与 `proxyKind`。
+   `Session.resolveProxy(url) === DIRECT` 只表示 Electron 没有为该 URL 返回显式 HTTP/SOCKS/PAC 代理；
+   CLI 没有 proxy environment 也只说明进程可见配置。两者都不证明物理公网直连，也不排除 TUN、透明
+   proxy、soft router 或 destination routing。
+3. `ProviderConnectivityProbe` 对精确 Provider endpoint 执行 DNS A/AAAA、TLS、无凭据 HTTP、redirect 与
+   content validation、实际 `Session.fetch` application transport、CLI HTTPS/TLS 和按 action 要求的
+   WebSocket Upgrade。401/403/405 等典型未认证状态表示 endpoint 已响应，不表示登录成功。受信任同源/
+   官方 redirect 可验证后接受；非白名单跨源、HTTP downgrade、TLS failure、portal/substitution 或必需
+   transport failure 阻止对应动作。
+4. Electron application probe 绑定真实 application/conversation Session，读取有限状态/headers 后停止
+   body。Electron 43 + TUN 下 `ClientRequest` 可能只有 `finish → close` 而无 response/error，因此不能据此
+   宣告断网；预检使用同 scope 的 `Session.fetch`。CLI probe 使用即将启动业务的实际环境与 transport。
+5. `RiskDecisionEngine` 只从 required Provider evidence 派生 `providerConnectivity` 与 `featureAccess`。
+   `allowed_with_notice` 仍是绿色可用；TUN/virtual interface、显式代理、destination split、generic IP
+   disagreement、reputation unavailable、language/time-zone 或本机 IPv6 状态都不能降级工作正常的 Provider。
+   CLI 版本不兼容可以作为独立 launch compatibility gate，但不得伪装成 network-route failure。
+6. `EnvironmentRiskProbe` 独立收集各项 advice；一个 observation endpoint 失败不跳过其余来源。
+   `api.ipquery.io`、`myip.ipip.net`、`api6.ipify.org`、STUN、DNS comparison 和 reputation 都是各自
+   observation endpoint 的 destination-scoped evidence；没有任何一项可以命名为“模型出口”“Claude 出口”
+   或 Provider egress。STUN 只代表 WebRTC observation，不代表 Electron/CLI HTTP route。信誉源只有返回
+   可用的 negative/positive 字段时才算已完成；来源不可用不能伪装成低风险通过。
+7. 每条公网地址观察记录 process/session、transport、可知时的 address family、exact observation endpoint、
+   collectedAt、freshness、confidence 与 source agreement，并附带“不证明 Anthropic/OpenAI endpoint 的
+   public source address”边界；不可用来源不伪造 address family。完整地址只在 main 暂存；renderer/history
+   最多收到规范化 IPv4 `/24` 或 IPv6 `/64` prefix 以及对应 provenance/confidence。IPv4/IPv6 分别得出
+   collection state，不用一个地址族补全另一个。所有 environment check 还记录 advisory authority、process、
+   network scope、target、transport/method、checkedAt、freshness 与 confidence；cache 命中和持久化历史投影
+   标为 `cached`，不回写或篡改仍为 `live` 的内存结果。
+8. 预检通过 `ApplicationProxyCoordinator` 的 reader lease 与 proxy/config writer FIFO 线性化。所有
+   success/failure/cancel/cache/observability paths 在 `finally` 幂等释放 lease；每个 await 后都复核 main
+   run ID、generation、target、epoch 与 lease currentness。stale result 不写缓存、不记 history、不通知、
+   不授权业务。
+9. `ProviderAccessGuard` 在 Codex login/launch、官方 Claude、受管 ChatGPT、official chat first request 和
+   provider switch 等动作的 commit/PTy mutation 前读取 `providerConnectivity`。自定义 gateway 和本地
+   terminal 只检查自身 target，不受其他官方 Provider 状态影响。`ClaudeLaunchHealthMonitor` 同样保留
+   `allowed_with_notice`，显示绿色“连接正常”并把 path/advice 放在 secondary copy。
+10. 首次阻止若仅来自 DNS、reset、connect failure 或 timeout，且仍有 active IP path，可等待 150ms 后
+    force 一次新 probe；offline、TLS、untrusted redirect、portal、unsupported CLI transport 和 internal
+    failure 不自动重试。等待和第二次 probe 共用调用方 AbortSignal，取消后不得继续业务操作。
 
-### 网络路径判定边界
+### 操作授权与事务边界
 
-- Electron `resolveProxy()` 和 CLI 环境变量只能说明进程可见的第一跳，不能证明端到端拓扑。
-- ClaudeDock 不扫描、解析或迁移其他网络工具的配置，也不根据进程品牌、虚拟网卡名称或位置
-  猜测网络结构。路径卡只展示本机可验证事实和服务商官方端点的实测结果。
-- DNS 服务器列表仍只代表本机配置；最终 DNS 风险证据来自随机子域查询到 dnscheck.tools 权威服务器后
-  返回的递归解析器出口。解析器国家与模型出口国家不一致时列为高风险；一致只表示本次未发现国家不一致，
-  不证明运营商归属、DoH 策略或未来请求绝对安全。权威查询失败必须显示“未完成”，不得回退成“无泄露”。
+- launch 阻止结果冻结 session/project、Provider、exact target、configuration revision、launch generation
+  与 predecessor PTY generation。renderer 只能取消、force recheck 或一次性坚持连接；main 在消费前重验
+  全部 identity，授权不能跨项目、跨 route、跨 provider 或重复使用。启动后的 health monitor 只有状态
+  发布能力，不主动 stop/restart/close 已运行会话。
+- `SessionConfigTransactionCoordinator` 在 normalized directory 内串行 profile 事务。访问守卫先于无
+  `await` 的 profile commit/PTy mutation；rollback 只有在事务仍拥有目录、session 与精确 committed
+  snapshot 时才能恢复，不覆盖排队成功或外部更新。预检失败不把仍运行的 Claude/Codex 错标 inactive。
+- WebSocket 401/403/426 只证明 Upgrade endpoint 响应。可选 WebSocket 不改变普通 login/background
+  结论；只有当前 action 明确 require 时，失败或 unknown 才进入 `partially_available`/`blocked`。
+- 本实现不修改 Windows system proxy、DNS、route table、NIC、time zone/language、Claude/Codex settings
+  或登录存储，也不自动关闭 VPN。显式 CLI `TZ` override 只作用于之后由 ClaudeDock 启动的子进程。
 
-### 历史与第三方边界
+### 路径、建议与历史边界
 
-- 外部应用代理只把用户填写的 HTTP/SOCKS5 地址传给勾选的进程，不提供远程网络服务。
-- `NetworkDiagnosticsStore` 只保留 7 天、最多 40 条；写盘前再次移除 Bearer、`sk-*` 和 URL
-  查询凭据。记录包含时间、服务商、风险、进程路径和逐项结论，不包含 cwd、完整公网 IP、
-  请求/响应正文、OAuth Token、API Key 或代理凭据；环境结果最多包含掩码网段前缀。用户可在详情弹窗立即清空。
-- `userData/network-preflight/history.json` 使用 `0600` 意图、临时文件 +
-  `rename` 原子替换。Windows 的最终 ACL 仍由当前用户配置和 Electron `userData` 目录继承。
+- UI 的 provider conclusion 始终先于 advisory。之后依次显示 exact endpoint evidence、application/CLI
+  visible proxy decision 与 TUN caveat、endpoint-scoped public-address observations，再显示 DNS、IPv6、
+  STUN、interface、environment、compatibility、reputation 与建议操作。
+- DNS server list 只代表本机配置；random authoritative DNS comparison 只描述该测试 target 观察到的
+  resolver。国家/网络不一致、来源冲突或 unavailable 是 advice，不证明 Provider route 泄露，也不阻止
+  已通过的 Provider。generic public-IP destinations 之间的一致或不一致同样不产生 direct-route mismatch。
+- 外部应用代理只把用户填写的 HTTP/SOCKS5 参数传给勾选 scope，不提供远程网络服务；路径证据不记录
+  proxy credential、完整 URL query 或授权字段。
+- `NetworkDiagnosticsStore` version 2 持久化嵌套 `providerConnectivity` 与 `advisoryEvidence`，不写含糊的
+  flat duplicate。version-1 记录迁移为明确 `legacyComposite`，连接 authority 为 unknown；旧综合字段不会
+  被展示成新 schema 的 Provider evidence。历史保留 7 天、最多 40 条，写盘前再次移除 Bearer、`sk-*`、
+  URL credential/query、完整 public IP、cwd、request/response body、OAuth token、API key 与 proxy secret。
+- `userData/network-preflight/history.json` 使用 `0600` intent、同目录临时文件和 atomic rename。诊断写入、
+  notification 或 reputation adapter 失败属于 observability/advisory failure，不能改写已经得到的 Provider
+  result。用户可从详情清空历史。
 
 ### 维护与外部依据（核对日期 2026-08-22）
 
@@ -1950,19 +1942,22 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
 
 ## 构建、测试与调试
 
-每次更新必须依次通过 `npm run lint`、`npm run format:check`、`npm run typecheck`、`npm test`、
-`npm run test:layout`、`npm run test:control-theme`、`npm run test:runtime-soak:accelerated` 和
-`npm run build`，随后执行 `npm run dist`。正式发布候选在定向清理旧生成物后运行 `npm run release`，
-使 channel/feed/产物/SHA-512 门禁生成 `outputs/release-manifest.json`；COS 发布是后续独立的
-`npm run release:publish:cos`，不会由构建或 CI 隐式触发。交付记录必须包含安装包绝对路径、版本、
-通道、feed、各产物大小与 SHA-256/SHA-512、公开 COS 长度/Range/缓存验证及 Authenticode 状态；
-未签名候选包不得称为正式签名发行版。
+命令清单、适用范围和通过标准以 [verify.md](../how-to/verify.md) 为唯一事实源：快门禁包含 lint、
+format、三套 typecheck、全量 Vitest、dependency-cruiser 与 build；跨进程、结构或构建改动还执行全部
+Electron/ConPTY/soak 门禁和三项 opt-in Windows 集成测试。最终候选的门禁发生在全部发行改动提交后的
+exact commit。定向清理旧生成物后，`npm run release` 从 clean source 与空 `outputs/` 开始，依次执行
+`npm ci`、质量门禁、`npm run dist`、源码身份复核和 manifest，生成
+`outputs/release-manifest.json`。COS 发布是后续独立的 `npm run release:publish:cos`，不会由构建或 CI
+隐式触发。测试数量取自 exact-commit 日志；安装包路径、版本、通道、feed、各产物大小与
+SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 状态取自最终 manifest 和远端
+验收。签名语言必须以最终候选状态为条件；`NotSigned` 候选不得称为正式签名发行版。
 
-- `npm run dev`：并行监听主进程与 Vite 渲染进程并启动 Electron。
+- `npm run dev`：并行运行 main `tsc --watch`、preload Vite watch、renderer Vite server，并在 main/preload
+  产物和本机 Vite 端口就绪后启动 Electron。
 - Vitest 在默认排除项之外固定忽略 `**/.claude/worktrees/**`；Claude CLI 留在仓库内的辅助工作树
   可能包含同名旧测试，但它们不是当前提交的测试事实来源，不能让本机残留副本污染门禁结果。
 - `npm run lint`：检查 TypeScript 源码。
-- `npm run typecheck`：分别检查渲染端和主进程类型。
+- `npm run typecheck`：分别检查渲染端与测试、主进程、preload 三套 tsconfig。
 - `npm test`：运行目录/工作区、项目级开发引擎持久化、Codex 官方 Release 元数据与
   SHA-256 约束、账号/额度响应白名单、沙箱启动命令、Claude 配置与版本门禁、cURL 协议识别、Router 配置
   定向修改与秘密净化、官方安装包元数据校验、运行期 API 错误识别与路由阻断、高档 thinking
@@ -2171,11 +2166,17 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
 - `tests/main/application-proxy.test.ts` 用临时目录和可逆安全存储替身验证密码不落明文、留空保留、清空
   账号删除、SOCKS5 CLI 拒绝、IPv6 URL 编码、Electron 规则、CLI 环境和候选解析。
 - NSIS 的 `installerLanguages` 固定为 `zh_CN`，安装向导不会随系统语言退回英文。
-- `npm run build`：生成图标、编译主进程并构建渲染资源。
+- `npm run build`：clean 后立即写入无凭据的 `dist/build-source-identity.json`（完整 Git HEAD、
+  `package-lock.json` SHA-256、clean-tree fact），再生成图标、typecheck 并编译三个进程。开发构建可记录
+  dirty fact；最终 release 只接受 clean identity。该文件进入 ASAR，manifest 与 frozen COS revalidation
+  都必须把它和当前源码精确匹配。
 - `npm run dist`：构建 Windows x64 NSIS 安装包；Electron Builder 的 `directories.output`
   固定为 `outputs/`，安装程序、Blockmap、更新元数据和解包产物均直接写入该目录，不再执行
   二次复制或向项目根目录发布。公开应用标识固定为 `io.github.aeonusovo.claudedock`，不得继续使用
   旧维护者命名空间。
+- release manifest 使用 pinned `7zip-bin` 解压 NSIS 与唯一 `app-64.7z`，把 `app.asar`、完整 unpacked tree
+  和 updater YAML 逐字节绑定到 `win-unpacked`；外部 gzip blockmap v2 的每个 BLAKE2b-144 chunk 也会
+  重算。两组确定性 cohort evidence 在 frozen COS validation 中重新检查并精确比较。
 - 发布版本结合 SemVer 与项目发布尺度：不兼容或架构级 API/数据/交互变更升主版本，有明确发布
   价值的成组/重大新功能升次版本，小功能优化、修复、文档、构建与维护改动升修订版本；避免因单个
   细小行为变化机械升次版本。版本必须同时写入 `package.json` 与 `package-lock.json`。

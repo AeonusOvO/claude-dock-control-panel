@@ -3,10 +3,16 @@ import type { TerminalStatus } from './terminal';
 
 export type DevelopmentRuntime = 'claude' | 'codex';
 
+export interface DevelopmentRuntimeSwitchOperation {
+  attempt: number;
+  runtime: DevelopmentRuntime;
+}
+
 export interface DevelopmentRuntimeState {
   cwd: string;
   runtime: DevelopmentRuntime;
   sessionId: string;
+  switchOperation?: DevelopmentRuntimeSwitchOperation;
 }
 
 export interface WorkspaceProject {

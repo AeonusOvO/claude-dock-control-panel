@@ -33,13 +33,3 @@ export interface CodexLaunchDeps {
     invalidateAndRun: (reason: string) => Promise<unknown>;
   };
 }
-
-export interface CodexLaunchMutableState {
-  codexOperationInProgress: boolean;
-  codexAutoLaunchSessionId: string;
-}
-
-export const createCodexLaunchMutableState = (): CodexLaunchMutableState => ({
-  codexOperationInProgress: false,
-  codexAutoLaunchSessionId: '',
-});

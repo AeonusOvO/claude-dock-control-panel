@@ -54,6 +54,7 @@ export const registerRuntimeIpc = ({
       cwd: status.cwd,
       runtime: agentRuntimeStore.get(status.cwd),
       sessionId: validatedSessionId,
+      switchOperation: projectRuntimeSwitchOperations.activeSwitch(status.cwd),
     };
   });
   ipcMain.handle(

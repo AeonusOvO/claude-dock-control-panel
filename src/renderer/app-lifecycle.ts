@@ -297,7 +297,6 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
     preflightFeature,
     updatesFeature,
     activeStatus,
-    terminalProjectState,
     connectionHistory,
     terminalFeature,
     setWindowsBuildNumber,
@@ -343,12 +342,13 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
     return;
   }
 
+  const preserveComposerFocusIntent = status.phase === 'running' || status.phase === 'starting';
   if (status.phase !== 'running' && status.phase !== 'starting') {
-    terminalProjectState.handleOperation(
-      await window.controlPanel.startTerminal(status.id, status.ptyGeneration),
-    );
+    await terminalFeature.startTerminal(status);
   }
   void connectionHistory.load();
   terminalFeature.retryTerminalFitUntilMeasured();
-  terminalFeature.requestComposerFocus(status.id);
+  if (preserveComposerFocusIntent) {
+    terminalFeature.requestComposerFocus(status.id);
+  }
 };

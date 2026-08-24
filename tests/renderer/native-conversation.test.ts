@@ -5,7 +5,6 @@ import type { MarkdownDomRenderer } from '../../src/renderer/platform/markdown';
 import { SessionGenerationRegistry } from '../../src/renderer/platform/session-generation';
 import type { ConversationMessageView } from '../../src/shared/conversation/native';
 import type {
-  ClaudeLaunchPauseDiagnostics,
   ClaudeLaunchPreflightDecisionOutcome,
   NetworkPreflightResult,
 } from '../../src/shared/contracts';
@@ -16,23 +15,13 @@ import {
   withNativeRenderer,
   withTerminalRenderer,
 } from '../helpers/renderer-interaction-fixture';
+import { launchPauseDiagnostics } from '../helpers/renderer-preflight-fixture';
 import {
   claudeProjectState,
   nativeSnapshot,
   terminalStatus,
   terminalWorkspace,
 } from '../helpers/renderer-terminal-fixture';
-
-const launchPauseDiagnostics = (
-  summary = '网络检查未通过，Claude 启动已暂停。',
-): ClaudeLaunchPauseDiagnostics => ({
-  checkedAt: 100,
-  failedItems: [{ label: 'TLS handshake', status: 'failed' }],
-  reasons: ['连接被阻止'],
-  scope: 'application',
-  status: 'blocked',
-  summary,
-});
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -60,26 +49,47 @@ const assistantTextMessage = (
   version,
 });
 
-const genericPreflightResult = (): NetworkPreflightResult => ({
-  action: 'background',
-  checkedAt: 200,
-  configurationRevision: 'renderer-generic-result',
-  featureAccess: [],
-  generation: 9,
-  mainRunId: 99,
-  networkScope: 'application',
-  paths: [],
-  probes: [],
-  provider: 'anthropic-claude',
-  providerLabel: 'Anthropic Claude Code',
-  reasons: [],
-  riskLevel: 'low',
-  riskScore: 0,
-  signals: [],
-  startedAt: 190,
-  status: 'allowed',
-  summary: 'generic preflight completed',
-});
+const genericPreflightResult = (): NetworkPreflightResult => {
+  const providerConnectivity = {
+    featureAccess: [],
+    probes: [],
+    reasons: [],
+    signals: [],
+    status: 'allowed' as const,
+    summary: 'generic preflight completed',
+  };
+  const advisoryEvidence = {
+    paths: [],
+    reasons: [],
+    riskLevel: 'low' as const,
+    riskScore: 0,
+    signals: [],
+    summary: 'generic advisory evidence',
+  };
+  return {
+    action: 'background',
+    advisoryEvidence,
+    checkedAt: 200,
+    configurationRevision: 'renderer-generic-result',
+    featureAccess: providerConnectivity.featureAccess,
+    generation: 9,
+    mainRunId: 99,
+    networkScope: 'application',
+    paths: advisoryEvidence.paths,
+    probes: providerConnectivity.probes,
+    provider: 'anthropic-claude',
+    providerConnectivity,
+    providerLabel: 'Anthropic Claude Code',
+    reasons: providerConnectivity.reasons,
+    riskLevel: advisoryEvidence.riskLevel,
+    riskScore: advisoryEvidence.riskScore,
+    schemaVersion: 2,
+    signals: [],
+    startedAt: 190,
+    status: providerConnectivity.status,
+    summary: providerConnectivity.summary,
+  };
+};
 
 describe('native conversation behavior', () => {
   it('keeps explicit questions usable in strict mode and restores the gated bypass option', async () => {
@@ -172,9 +182,24 @@ describe('native conversation behavior', () => {
         expect(harness.query('#claude-launch-preflight-summary').textContent).toBe(
           '网络检查未通过，Claude 启动已暂停。',
         );
-        expect(harness.query('#claude-launch-preflight-failed-items').textContent).toContain(
+        const decisionMeta = harness.query('#claude-launch-preflight-meta').textContent;
+        expect(decisionMeta).toContain('Anthropic Claude Code（anthropic-claude）');
+        expect(decisionMeta).toContain('CLI 启动预检');
+        expect(decisionMeta).toContain('应用网络会话');
+        expect(decisionMeta).toContain('采集时间：');
+        expect(decisionMeta).toContain('新鲜度：当前缓存有效');
+        const failedItems = harness.query('#claude-launch-preflight-failed-items').textContent;
+        for (const evidence of [
           'TLS handshake',
-        );
+          '方法：TLS',
+          '进程：Claude CLI',
+          '必需提供商证据',
+          '目标：https://api.anthropic.com/v1/messages',
+          '采集时间：',
+          'TLS 证书校验失败',
+        ]) {
+          expect(failedItems).toContain(evidence);
+        }
         expect(harness.query('#claude-launch-preflight-reasons').textContent).toContain(
           '连接被阻止',
         );
@@ -191,15 +216,21 @@ describe('native conversation behavior', () => {
         );
 
         harness.emit('onNetworkPreflight', genericPreflightResult());
-        harness.emit('onNetworkPreflight', {
-          ...genericPreflightResult(),
-          provider: 'openai-codex',
-          providerLabel: 'OpenAI Codex',
+        const blocked = genericPreflightResult();
+        const providerConnectivity = {
+          ...blocked.providerConnectivity,
           reasons: ['generic blocked event'],
-          riskLevel: 'high',
-          riskScore: 100,
-          status: 'blocked',
+          status: 'blocked' as const,
           summary: 'generic blocked event',
+        };
+        harness.emit('onNetworkPreflight', {
+          ...blocked,
+          provider: 'openai-codex',
+          providerConnectivity,
+          providerLabel: 'OpenAI Codex',
+          reasons: providerConnectivity.reasons,
+          status: providerConnectivity.status,
+          summary: providerConnectivity.summary,
         });
         await harness.flush();
         expect(dialog.open).toBe(true);

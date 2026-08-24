@@ -12,6 +12,7 @@ export interface TerminalPermissionModeProbe {
 export interface TerminalView {
   appliedResizeRevision: number;
   container: HTMLDivElement;
+  disposeInteractionListeners: () => void;
   fitAddon: FitAddon;
   lastFitCols?: number;
   lastFitRows?: number;

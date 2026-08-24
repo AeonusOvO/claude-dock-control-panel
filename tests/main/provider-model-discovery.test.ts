@@ -21,11 +21,58 @@ afterEach(() => {
   vi.resetModules();
 });
 
-const allowedProviderAccessResult = {
-  action: 'first-request',
-  featureAccess: [{ action: 'first-request', allowed: true, reason: 'allowed' }],
-  status: 'allowed',
-} as unknown as NetworkPreflightResult;
+const providerAccessResult = (
+  status: 'allowed' | 'blocked' = 'allowed',
+): NetworkPreflightResult => {
+  const providerConnectivity = {
+    featureAccess: [
+      {
+        action: 'first-request' as const,
+        allowed: status === 'allowed',
+        ...(status === 'allowed' ? {} : { reason: 'blocked' }),
+      },
+    ],
+    probes: [],
+    reasons: status === 'allowed' ? [] : ['blocked'],
+    signals: [],
+    status,
+    summary: status,
+  };
+  const advisoryEvidence = {
+    paths: [],
+    reasons: [],
+    riskLevel: 'low' as const,
+    riskScore: 0,
+    signals: [],
+    summary: 'advisory evidence',
+  };
+  return {
+    action: 'first-request',
+    advisoryEvidence,
+    canonicalCwd: 'D:\\Main-Owned\\Project',
+    checkedAt: 100,
+    configurationRevision: 'main-owned-revision',
+    featureAccess: providerConnectivity.featureAccess,
+    generation: 3,
+    mainRunId: 7,
+    networkScope: 'application',
+    paths: advisoryEvidence.paths,
+    probes: providerConnectivity.probes,
+    provider: 'anthropic-claude',
+    providerConnectivity,
+    providerLabel: 'Anthropic Claude Code',
+    reasons: providerConnectivity.reasons,
+    riskLevel: advisoryEvidence.riskLevel,
+    riskScore: advisoryEvidence.riskScore,
+    schemaVersion: 2,
+    signals: [],
+    startedAt: 90,
+    status: providerConnectivity.status,
+    summary: providerConnectivity.summary,
+  };
+};
+
+const allowedProviderAccessResult = providerAccessResult();
 
 const providerAccessRequest = {
   action: 'first-request' as const,
@@ -289,22 +336,10 @@ describe('provider model discovery', () => {
       undefined,
     );
 
-    const blocked = new ProviderAccessBlockedError(
-      {
-        action: 'first-request',
-        canonicalCwd: cwd,
-        configurationRevision: 'main-owned-revision',
-        featureAccess: [{ action: 'first-request', allowed: false, reason: 'blocked' }],
-        generation: 3,
-        mainRunId: 7,
-        networkScope: 'application',
-        provider: 'anthropic-claude',
-        reasons: ['blocked'],
-        status: 'blocked',
-        summary: 'blocked',
-      } as unknown as NetworkPreflightResult,
-      { process: 'application', url: 'https://api.anthropic.com/v1/models' },
-    );
+    const blocked = new ProviderAccessBlockedError(providerAccessResult('blocked'), {
+      process: 'application',
+      url: 'https://api.anthropic.com/v1/models',
+    });
     const callsBeforeBlock = discoverProviderModels.mock.calls.length;
     withOfficialProviderAccess.mockRejectedValueOnce(blocked);
     const blockedResult = await ipc.invoke(CHANNELS.CLAUDE_PROVIDER_MODELS_DISCOVER, 'session-1', {
@@ -503,11 +538,7 @@ describe('provider model discovery', () => {
   });
 
   it('assimilates PromiseLike operations once and expires inherited authority after settlement', async () => {
-    const allowedResult = {
-      action: 'first-request',
-      featureAccess: [{ action: 'first-request', allowed: true, reason: 'allowed' }],
-      status: 'allowed',
-    } as unknown as NetworkPreflightResult;
+    const allowedResult = providerAccessResult();
     const leaseContext = Object.freeze({});
     let leaseActive = false;
     const runWithLease = vi.fn(async (_input, _target, operation) => {

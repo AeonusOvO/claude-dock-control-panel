@@ -6,7 +6,7 @@ import {
   type PluginsActionsDependencies,
 } from './actions';
 import { createPluginsElements } from './elements';
-import { createPluginsState } from './state';
+import { createPluginsState, pluginOperationInProgress } from './state';
 import {
   createPluginsView,
   type PluginConfirmationRequest,
@@ -62,7 +62,7 @@ const createPluginsFeature = (dependencies: PluginsFeatureDependencies): Plugins
   return {
     dispose,
     getCatalog: () => state.catalog,
-    isMutationInProgress: () => state.mutationInProgress,
+    isMutationInProgress: () => state.mutationInProgress || pluginOperationInProgress(state),
     loadCatalog: actions.loadCatalog,
     refreshUpdates: actions.refreshUpdates,
     setUpdateActionVisibility: actions.setUpdateActionVisibility,

@@ -1,5 +1,12 @@
 import type { FailureMetadata } from '../diagnostics/failure';
 
+/** Maximum clipboard text retained for a single application-owned paste operation. */
+export const MAX_CLIPBOARD_TEXT_LENGTH = 5 * 1024 * 1024;
+/** xterm adds `ESC[200~` and `ESC[201~` around one bracketed-paste payload. */
+export const XTERM_BRACKETED_PASTE_OVERHEAD = 12;
+/** Preserves one xterm data event as one generation-fenced PTY write without truncation or chunking. */
+export const MAX_TERMINAL_WRITE_LENGTH = MAX_CLIPBOARD_TEXT_LENGTH + XTERM_BRACKETED_PASTE_OVERHEAD;
+
 export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 
 export type PtyGeneration = number;

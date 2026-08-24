@@ -2799,6 +2799,10 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.network-preflight-dialog__wide {
+  grid-column: 1 / -1;
+}
+
 .network-preflight-environment {
   display: grid;
   gap: var(--s-2);

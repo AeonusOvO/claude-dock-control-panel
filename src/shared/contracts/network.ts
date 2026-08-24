@@ -16,10 +16,18 @@ export type NetworkPreflightStatus =
   | 'unknown'
   | 'warning';
 
+export type NetworkProviderConnectivityStatus = NetworkPreflightStatus;
+
 export type NetworkProbeStatus = 'failed' | 'passed' | 'skipped' | 'unknown' | 'warning';
 
 export type NetworkProcessKind =
-  'application' | 'claude-cli' | 'codex-cli' | 'oauth-browser' | 'renderer' | 'terminal';
+  | 'application'
+  | 'claude-cli'
+  | 'codex-cli'
+  | 'network-diagnostics'
+  | 'oauth-browser'
+  | 'renderer'
+  | 'terminal';
 
 export interface NetworkPathView {
   detail: string;
@@ -27,10 +35,19 @@ export interface NetworkPathView {
   globalIpv6Available: boolean;
   ipv4Available: boolean;
   ipv6Available: boolean;
+  networkScope: NetworkPreflightScope;
   process: NetworkProcessKind;
   proxyConfigured: boolean;
   proxyKind:
-    'application-proxy' | 'direct' | 'environment' | 'pac' | 'socks' | 'system' | 'unknown';
+    | 'application-proxy'
+    | 'direct'
+    | 'environment'
+    | 'pac'
+    | 'socks'
+    | 'socks5h'
+    | 'system'
+    | 'unknown';
+  target: string;
   virtualInterfaces: string[];
 }
 
@@ -64,7 +81,6 @@ export interface NetworkFeatureAccess {
 }
 
 export type NetworkEnvironmentIssueKind =
-  | 'direct-route-mismatch'
   | 'dns-egress'
   | 'evidence-incomplete'
   | 'ip-hygiene'
@@ -72,19 +88,33 @@ export type NetworkEnvironmentIssueKind =
   | 'language-mismatch'
   | 'timezone-mismatch';
 
+export type NetworkEvidenceFreshness = 'cached' | 'live' | 'unknown';
+
+export type NetworkEnvironmentEvidenceTransport =
+  'curl-cli' | 'derived' | 'local-system' | 'not-collected' | 'system-dns';
+
 export interface NetworkEnvironmentCheck {
+  authority: 'advisory-only';
+  checkedAt: number;
+  confidence: 'high' | 'low' | 'medium' | 'unknown';
   detail: string;
+  freshness: NetworkEvidenceFreshness;
   id:
-    | 'direct-route'
     | 'dns-authoritative'
-    | 'exit-ip'
     | 'ip-reputation'
-    | 'ipv6-route'
+    | 'ipv6-public-address'
     | 'language'
+    | 'public-address-ipip'
+    | 'public-address-ipquery'
+    | 'stun-public-address'
     | 'timezone';
   label: string;
+  networkScope: NetworkPreflightScope;
+  process: NetworkProcessKind;
   source: string;
-  status: 'passed' | 'risk' | 'unknown';
+  status: 'passed' | 'risk' | 'unavailable' | 'unknown';
+  target: string;
+  transport: NetworkEnvironmentEvidenceTransport;
 }
 
 export interface NetworkEnvironmentIssue {
@@ -96,6 +126,27 @@ export interface NetworkEnvironmentIssue {
   title: string;
 }
 
+export interface NetworkPublicAddressObservation {
+  addressFamily?: 'ipv4' | 'ipv6';
+  addressPrefix?: string;
+  checkedAt: number;
+  confidence: 'high' | 'low' | 'medium' | 'unknown';
+  countryCode?: string;
+  countryName?: string;
+  detail: string;
+  endpoint: string;
+  freshness: NetworkEvidenceFreshness;
+  networkProvider?: string;
+  networkScope: NetworkPreflightScope;
+  observationProvider: string;
+  process: NetworkProcessKind;
+  sourceAgreement: 'corroborated' | 'mixed' | 'not-comparable' | 'single-source';
+  state: 'complete' | 'unavailable';
+  statement: string;
+  timezone?: string;
+  transport: 'curl-cli';
+}
+
 export interface NetworkEnvironmentAssessment {
   checkedAt: number;
   checks?: NetworkEnvironmentCheck[];
@@ -103,40 +154,69 @@ export interface NetworkEnvironmentAssessment {
   cliTimezone?: string;
   dnsDetail: string;
   dnsStatus: 'consistent' | 'review' | 'unknown';
-  exitAddressPrefix?: string;
-  exitCountryCode?: string;
-  exitCountryName?: string;
-  exitProvider?: string;
-  exitTimezone?: string;
   evidenceStatus?: 'complete' | 'partial' | 'unavailable';
   issues: NetworkEnvironmentIssue[];
   localLanguage: string;
   localTimezone: string;
+  publicAddressObservations: NetworkPublicAddressObservation[];
   riskLevel: 'high' | 'low' | 'medium' | 'unknown';
+  summary: string;
+}
+
+export interface NetworkProviderConnectivityAssessment {
+  featureAccess: NetworkFeatureAccess[];
+  probes: NetworkProbeResult[];
+  reasons: string[];
+  signals: NetworkRiskSignal[];
+  status: NetworkProviderConnectivityStatus;
+  summary: string;
+}
+
+export interface NetworkAdvisoryEvidenceAssessment {
+  environment?: NetworkEnvironmentAssessment;
+  paths: NetworkPathView[];
+  reasons: string[];
+  riskLevel: 'high' | 'low' | 'medium' | 'unknown';
+  riskScore: number;
+  signals: NetworkRiskSignal[];
   summary: string;
 }
 
 export interface NetworkPreflightResult {
   action: NetworkPreflightAction;
+  advisoryEvidence: NetworkAdvisoryEvidenceAssessment;
   cacheExpiresAt?: number;
   canonicalCwd?: string;
   checkedAt?: number;
   configurationRevision: string;
-  featureAccess: NetworkFeatureAccess[];
-  environment?: NetworkEnvironmentAssessment;
   generation: number;
   mainRunId: number;
   networkScope: NetworkPreflightScope;
-  paths: NetworkPathView[];
-  probes: NetworkProbeResult[];
   provider: NetworkProviderId;
+  providerConnectivity: NetworkProviderConnectivityAssessment;
   providerLabel: string;
-  reasons: string[];
-  riskLevel: 'critical' | 'high' | 'low' | 'medium' | 'unknown';
-  riskScore: number;
-  signals: NetworkRiskSignal[];
+  schemaVersion: 2;
   startedAt: number;
+
+  /** @deprecated Compatibility projection. Provider admission must use providerConnectivity. */
+  featureAccess: NetworkFeatureAccess[];
+  /** @deprecated Compatibility projection. Advisory evidence lives under advisoryEvidence. */
+  environment?: NetworkEnvironmentAssessment;
+  /** @deprecated Compatibility projection. Advisory evidence lives under advisoryEvidence. */
+  paths: NetworkPathView[];
+  /** @deprecated Compatibility projection. Provider evidence lives under providerConnectivity. */
+  probes: NetworkProbeResult[];
+  /** @deprecated Compatibility projection. Provider reasons live under providerConnectivity. */
+  reasons: string[];
+  /** @deprecated Compatibility projection of advisoryEvidence.riskLevel. */
+  riskLevel: 'critical' | 'high' | 'low' | 'medium' | 'unknown';
+  /** @deprecated Compatibility projection of advisoryEvidence.riskScore. */
+  riskScore: number;
+  /** @deprecated Compatibility projection of both explicitly separated signal lanes. */
+  signals: NetworkRiskSignal[];
+  /** @deprecated Compatibility status derived from provider connectivity plus visible notices. */
   status: NetworkPreflightStatus;
+  /** @deprecated Compatibility projection of providerConnectivity.summary. */
   summary: string;
 }
 
@@ -148,16 +228,30 @@ export interface NetworkPreflightRunInput {
   provider: NetworkProviderId;
 }
 
-export type NetworkPreflightHistoryEntry = Omit<
+export type NetworkPreflightHistoryEntryV2 = Omit<
   NetworkPreflightResult,
-  'action' | 'canonicalCwd' | 'configurationRevision' | 'generation' | 'mainRunId' | 'networkScope'
-> &
-  Partial<
-    Pick<
-      NetworkPreflightResult,
-      'action' | 'configurationRevision' | 'generation' | 'mainRunId' | 'networkScope'
-    >
-  >;
+  | 'canonicalCwd'
+  | 'environment'
+  | 'featureAccess'
+  | 'paths'
+  | 'probes'
+  | 'reasons'
+  | 'riskLevel'
+  | 'riskScore'
+  | 'signals'
+  | 'status'
+  | 'summary'
+>;
+
+export interface NetworkPreflightHistoryEntryV1 {
+  checkedAt?: number;
+  legacyComposite: Record<string, unknown>;
+  schemaVersion: 1;
+  startedAt: number;
+}
+
+export type NetworkPreflightHistoryEntry =
+  NetworkPreflightHistoryEntryV1 | NetworkPreflightHistoryEntryV2;
 
 export interface NetworkPreflightHistoryView {
   entries: NetworkPreflightHistoryEntry[];

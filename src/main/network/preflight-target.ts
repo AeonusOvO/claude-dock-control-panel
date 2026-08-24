@@ -1,5 +1,5 @@
 export interface NetworkPreflightTarget {
-  readonly process: 'application';
+  readonly process: 'application' | 'claude-cli';
   readonly url: string;
 }
 
@@ -15,4 +15,10 @@ export const captureNetworkPreflightTarget = (
 
 export const networkPreflightTargetKey = (
   target: NetworkPreflightTarget | undefined,
-): readonly ['application', string] | null => (target ? [target.process, target.url] : null);
+): readonly [NetworkPreflightTarget['process'], string] | null =>
+  target ? [target.process, target.url] : null;
+
+export const sameNetworkPreflightTarget = (
+  left: NetworkPreflightTarget | undefined,
+  right: NetworkPreflightTarget | undefined,
+): boolean => left?.process === right?.process && left?.url === right?.url;

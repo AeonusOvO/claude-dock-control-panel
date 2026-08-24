@@ -18,7 +18,12 @@ import type {
 import type { ClaudeLaunchIpcDependencies } from '../claude/launch-ipc-dependencies';
 import { registerClaudeLaunchDecisionIpc } from '../claude/launch-decision-ipc';
 import type { PreparedClaudeConfigSave } from '../claude/runtime';
-import type { ClaudeLaunchAuthorization } from '../claude/runtime-types';
+import {
+  type ClaudeLaunchAuthorization,
+  type ClaudeNetworkAccess,
+  effectiveClaudeNetworkAccess,
+  sameClaudeNetworkAccess,
+} from '../claude/runtime-types';
 import { isValidClaudeSessionId } from '../claude/session-manager';
 import type { ConversationOwner } from '../conversation/owner-registry';
 import {
@@ -38,22 +43,28 @@ import {
 
 export type { ClaudeLaunchIpcDependencies } from '../claude/launch-ipc-dependencies';
 
+const authorizationNetworkAccess = (
+  authorization: Pick<ClaudeLaunchAuthorization, 'networkAccess' | 'officialNetworkProvider'>,
+): Readonly<ClaudeNetworkAccess> | undefined =>
+  effectiveClaudeNetworkAccess(authorization.networkAccess, authorization.officialNetworkProvider);
+
 const seedLaunchPreflightEvidence = (
   runtime: ClaudeRuntime,
   sessionId: string,
   ptyGeneration: PtyGeneration,
   result: NetworkPreflightResult | undefined,
 ): void => {
-  if (!result || result.action !== 'cli-launch' || result.status === 'testing') return;
+  if (
+    !result ||
+    result.action !== 'cli-launch' ||
+    result.providerConnectivity.status === 'testing'
+  ) {
+    return;
+  }
   runtime.seedActiveLaunchPreflightEvidence?.(sessionId, ptyGeneration, {
     checkedAt: result.checkedAt ?? result.startedAt,
     provider: result.provider,
-    status:
-      result.status === 'allowed'
-        ? 'allowed'
-        : result.status === 'blocked'
-          ? 'blocked'
-          : 'degraded',
+    status: result.providerConnectivity.status,
   });
 };
 
@@ -144,12 +155,15 @@ export const executeClaudeRelaunch = async ({
       await compactCurrentConversation();
       return;
     }
-    const liveProvider = runtime.officialNetworkProviderForActivePty(
-      sessionId,
-      workspacePtyGeneration,
-    );
+    const liveNetworkAccess =
+      typeof runtime.networkAccessForActivePty === 'function'
+        ? runtime.networkAccessForActivePty(sessionId, workspacePtyGeneration)
+        : effectiveClaudeNetworkAccess(
+            undefined,
+            runtime.officialNetworkProviderForActivePty(sessionId, workspacePtyGeneration),
+          );
     await authorizeNestedProvider(
-      liveProvider,
+      liveNetworkAccess,
       async () => {
         assertCurrent();
         return compactCurrentConversation();
@@ -230,7 +244,7 @@ export const executeClaudeRelaunch = async ({
       });
     };
     const state = await authorizeLaunchProvider(
-      authorization.officialNetworkProvider,
+      authorizationNetworkAccess(authorization),
       relaunchCurrent,
       signal,
     );
@@ -258,10 +272,14 @@ export const executeClaudeRelaunch = async ({
           assertCurrent();
           const launchAuthorization = runtime.captureLaunchAuthorization(cwd);
           if (
+            !sameClaudeNetworkAccess(
+              authorizationNetworkAccess(launchAuthorization),
+              authorizationNetworkAccess(historyAuthorization),
+            ) ||
             launchAuthorization.officialNetworkProvider !==
-            historyAuthorization.officialNetworkProvider
+              historyAuthorization.officialNetworkProvider
           ) {
-            throw new Error('历史接入保存结果与已授权提供方不一致，请重试。');
+            throw new Error('历史接入保存结果与已授权网络目标不一致，请重试。');
           }
           await runtime.completePreparedConfigSave(sessionId, cwd, prepared);
           signal.throwIfAborted();
@@ -292,7 +310,7 @@ export const executeClaudeRelaunch = async ({
     });
   };
   const state = await authorizeLaunchProvider(
-    historyAuthorization.officialNetworkProvider,
+    authorizationNetworkAccess(historyAuthorization),
     switchAndRelaunch,
     signal,
   );
@@ -311,7 +329,7 @@ export const executeClaudeSessionResume = async ({
   conversationId,
   conversationOwnerRegistry,
   cwd,
-  expectedOfficialNetworkProvider,
+  expectedNetworkAccess,
   runClaudeResumeLaunch,
   runtime,
   sessionId,
@@ -342,7 +360,7 @@ export const executeClaudeSessionResume = async ({
   }
 
   const authorization = runtime.captureLaunchAuthorization(cwd);
-  if (authorization.officialNetworkProvider !== expectedOfficialNetworkProvider) {
+  if (!sameClaudeNetworkAccess(authorizationNetworkAccess(authorization), expectedNetworkAccess)) {
     throw new LaunchPreflightDecisionStaleError();
   }
   const resumeWithOwnership = async (
@@ -438,7 +456,7 @@ export const executeClaudeSessionResume = async ({
   };
 
   return authorizeLaunchProvider(
-    authorization.officialNetworkProvider,
+    authorizationNetworkAccess(authorization),
     resumeWithOwnership,
     signal,
   );
@@ -516,11 +534,11 @@ const registerClaudeRelaunchIpc = ({
           runtime.assertConnectionHistoryBaselineCurrent(status.cwd, candidate.history);
         }
       };
-      const authorizeProvider: ProviderAuthorizedOperation = (provider, operation, signal) => {
+      const authorizeProvider: ProviderAuthorizedOperation = (networkAccess, operation, signal) => {
         signal?.throwIfAborted();
-        return provider
+        return networkAccess
           ? withOfficialProviderAccess(
-              { action: 'cli-launch', cwd: status.cwd, provider },
+              { action: 'cli-launch', cwd: status.cwd, ...networkAccess },
               operation,
               signal,
             )
@@ -681,9 +699,14 @@ const registerClaudeStartIpc = ({
               assertLaunchCurrent();
               assertBaselineCurrent(baseline as ClaudeLaunchDecisionBaseline);
               const authorization = runtime.captureLaunchAuthorization(status.cwd);
+              const networkAccess = authorizationNetworkAccess(authorization);
               if (
-                authorization.officialNetworkProvider !==
-                (baseline as ClaudeLaunchDecisionBaseline).configuration.officialNetworkProvider
+                !sameClaudeNetworkAccess(
+                  networkAccess,
+                  authorizationNetworkAccess(
+                    (baseline as ClaudeLaunchDecisionBaseline).configuration,
+                  ),
+                )
               ) {
                 throw new LaunchPreflightDecisionStaleError();
               }
@@ -712,12 +735,12 @@ const registerClaudeStartIpc = ({
                       restart,
                     ),
                 });
-              return authorization.officialNetworkProvider
+              return networkAccess
                 ? withOfficialProviderAccess(
                     {
                       action: 'cli-launch',
                       cwd: status.cwd,
-                      provider: authorization.officialNetworkProvider,
+                      ...networkAccess,
                     },
                     launch,
                     signal,
@@ -834,11 +857,11 @@ const registerClaudeSessionLaunchIpc = ({
           candidate.runtime,
         );
       };
-      const authorizeProvider: ProviderAuthorizedOperation = (provider, operation, signal) => {
+      const authorizeProvider: ProviderAuthorizedOperation = (networkAccess, operation, signal) => {
         signal?.throwIfAborted();
-        return provider
+        return networkAccess
           ? withOfficialProviderAccess(
-              { action: 'cli-launch', cwd: status.cwd, provider },
+              { action: 'cli-launch', cwd: status.cwd, ...networkAccess },
               operation,
               signal,
             )
@@ -875,8 +898,9 @@ const registerClaudeSessionLaunchIpc = ({
               conversationId: normalizedConversationId,
               conversationOwnerRegistry,
               cwd: status.cwd,
-              expectedOfficialNetworkProvider: (baseline as ClaudeLaunchDecisionBaseline)
-                .configuration.officialNetworkProvider,
+              expectedNetworkAccess: authorizationNetworkAccess(
+                (baseline as ClaudeLaunchDecisionBaseline).configuration,
+              ),
               runClaudeResumeLaunch,
               runtime,
               sessionId: validatedSessionId,

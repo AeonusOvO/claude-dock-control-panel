@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalSession } from '../../src/main/terminal/session';
 import type { PtyGeneration, TerminalStatus } from '../../src/shared/contracts';
+import {
+  MAX_CLIPBOARD_TEXT_LENGTH,
+  MAX_TERMINAL_WRITE_LENGTH,
+} from '../../src/shared/contracts/terminal';
 
 interface ControlledPty {
   emitData(data: string): void;
@@ -78,6 +82,18 @@ describe('TerminalSession PTY generation ownership', () => {
         useConptyDll: true,
       }),
     );
+  });
+
+  it('forwards one maximum clipboard bracketed-paste payload as one PTY write', () => {
+    const session = new TerminalSession('session-paste', 'D:\\Project', '对话', vi.fn(), vi.fn());
+    const started = session.start();
+    const terminal = ptyHarness.processes[0]!;
+    const payload = `\x1b[200~${'x'.repeat(MAX_CLIPBOARD_TEXT_LENGTH)}\x1b[201~`;
+
+    expect(payload).toHaveLength(MAX_TERMINAL_WRITE_LENGTH);
+    expect(session.write(started.ptyGeneration, payload)).toBe(true);
+    expect(terminal.write).toHaveBeenCalledOnce();
+    expect(terminal.write.mock.calls[0]?.[0]).toBe(payload);
   });
 
   it('ignores late data and exit callbacks from a replaced node-pty process', () => {

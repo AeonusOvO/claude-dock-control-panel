@@ -10,8 +10,12 @@ export const createTerminalViewLifecycleActions = (
   state: TerminalState,
   createTerminalView: (status: TerminalStatus, active: boolean) => TerminalView,
   rejectPermissionModeProbes: (sessionId: string, view: TerminalView) => void,
+  hideTerminalContextMenu: () => void,
 ): TerminalViewLifecycleActions => {
   const disposeTerminalView = (sessionId: string, view: TerminalView): void => {
+    if (state.terminalContextMenuTarget?.view === view) {
+      hideTerminalContextMenu();
+    }
     if (state.terminalViews.get(sessionId) === view) {
       state.terminalViews.delete(sessionId);
     }
@@ -22,6 +26,7 @@ export const createTerminalViewLifecycleActions = (
       mask.overlay.remove();
       state.terminalMasks.delete(sessionId);
     }
+    view.disposeInteractionListeners();
     view.terminal.dispose();
     view.container.remove();
   };

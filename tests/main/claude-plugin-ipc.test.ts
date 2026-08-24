@@ -47,6 +47,7 @@ const commandIs = (argumentsList: string[], ...expected: string[]): boolean =>
 
 const createPluginManager = () => ({
   getCatalog: vi.fn(async () => catalog),
+  hasActiveMutation: vi.fn(() => false),
   mutate: vi.fn(async (request: { type: string }) => ({
     catalog,
     message: request.type === 'marketplace-add' ? '插件市场已添加。' : '插件操作已完成。',
@@ -87,7 +88,7 @@ describe('Claude plugin IPC hardening', () => {
     ).resolves.toMatchObject({ ok: true });
 
     const identity = createHash('sha256')
-      .update('formatter@official:false')
+      .update('set-enabled:formatter@official:false')
       .digest('hex')
       .slice(0, 16);
     expect(acquire).toHaveBeenCalledExactlyOnceWith({
@@ -162,7 +163,7 @@ describe('Claude plugin IPC hardening', () => {
     expect(pluginManager.getCatalog).toHaveBeenCalledWith(false);
   });
 
-  it('holds mutation B until mutation A has completed its forced post-mutation refresh', async () => {
+  it('rejects a competing mutation without adding a lease or queueing its side effect', async () => {
     const firstRefresh = deferred<string>();
     const calls: string[][] = [];
     const leaseSnapshots: string[][] = [];
@@ -192,10 +193,19 @@ describe('Claude plugin IPC hardening', () => {
     await vi.waitFor(() =>
       expect(calls).toContainEqual(['plugin', 'list', '--json', '--available']),
     );
-    const second = ipc.invoke(CHANNELS.CLAUDE_PLUGINS_MARKETPLACE_REMOVE, 'official');
-    await vi.waitFor(() =>
-      expect(leaseSnapshots.some((snapshot) => snapshot.length === 2)).toBe(true),
-    );
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_PLUGINS_MARKETPLACE_REMOVE, 'official'),
+    ).resolves.toMatchObject({
+      catalog: {
+        activeOperation: {
+          kind: 'install',
+          phase: 'refreshing',
+          target: 'first@official',
+        },
+      },
+      ok: false,
+    });
+    expect(Math.max(...leaseSnapshots.map((snapshot) => snapshot.length))).toBe(1);
     expect(calls).not.toContainEqual(['plugin', 'marketplace', 'remove', 'official']);
 
     firstRefresh.resolve(pluginList('after-first@official'));
@@ -203,21 +213,15 @@ describe('Claude plugin IPC hardening', () => {
       catalog: { installed: [expect.objectContaining({ pluginId: 'after-first@official' })] },
       ok: true,
     });
-    await expect(second).resolves.toMatchObject({
-      catalog: { installed: [expect.objectContaining({ pluginId: 'after-second@official' })] },
-      ok: true,
-    });
-    expect(calls).toEqual([
-      ['plugin', 'install', 'first@official', '--scope', 'user'],
-      ['plugin', 'list', '--json', '--available'],
-      ['plugin', 'marketplace', 'list', '--json'],
-      ['plugin', 'marketplace', 'remove', 'official'],
-      ['plugin', 'list', '--json', '--available'],
-      ['plugin', 'marketplace', 'list', '--json'],
-    ]);
+    await expect(
+      ipc.invoke(CHANNELS.CLAUDE_PLUGINS_MARKETPLACE_REMOVE, 'official'),
+    ).resolves.toMatchObject({ ok: true });
+    expect(
+      calls.filter((argumentsList) => commandIs(argumentsList, 'plugin', 'marketplace', 'remove')),
+    ).toEqual([['plugin', 'marketplace', 'remove', 'official']]);
   });
 
-  it('admits identical queued toggle requests with unique busy operation ids', async () => {
+  it('joins identical toggle requests under one busy lease and one CLI side effect', async () => {
     const firstDisable = deferred<string>();
     const calls: string[][] = [];
     const leaseSnapshots: string[][] = [];
@@ -226,7 +230,7 @@ describe('Claude plugin IPC hardening', () => {
       calls.push(argumentsList);
       if (commandIs(argumentsList, 'plugin', 'disable')) {
         disableCalls += 1;
-        return disableCalls === 1 ? firstDisable.promise : '';
+        return firstDisable.promise;
       }
       if (commandIs(argumentsList, 'plugin', 'list')) {
         return JSON.stringify({ available: [], installed: [] });
@@ -249,18 +253,14 @@ describe('Claude plugin IPC hardening', () => {
     const first = ipc.invoke(CHANNELS.CLAUDE_PLUGINS_SET_ENABLED, 'same@official', false);
     await vi.waitFor(() => expect(disableCalls).toBe(1));
     const second = ipc.invoke(CHANNELS.CLAUDE_PLUGINS_SET_ENABLED, 'same@official', false);
-    await vi.waitFor(() =>
-      expect(leaseSnapshots.some((snapshot) => snapshot.length === 2)).toBe(true),
-    );
-    const simultaneousIds = leaseSnapshots.find((snapshot) => snapshot.length === 2) ?? [];
-    expect(new Set(simultaneousIds).size).toBe(2);
+    await vi.waitFor(() => expect(leaseSnapshots.length).toBeGreaterThan(0));
+    expect(Math.max(...leaseSnapshots.map((snapshot) => snapshot.length))).toBe(1);
     expect(disableCalls).toBe(1);
 
     firstDisable.resolve('');
     await expect(first).resolves.toMatchObject({ ok: true });
     await expect(second).resolves.toMatchObject({ ok: true });
     expect(calls.filter((argumentsList) => commandIs(argumentsList, 'plugin', 'disable'))).toEqual([
-      ['plugin', 'disable', 'same@official', '--scope', 'user'],
       ['plugin', 'disable', 'same@official', '--scope', 'user'],
     ]);
   });

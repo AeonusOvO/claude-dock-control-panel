@@ -78,6 +78,280 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
     });
   });
 
+  it('keeps plugin refresh feedback owned and locks every mutation control', async () => {
+    const catalog = pluginCatalog(
+      [plugin('available')],
+      [
+        plugin('installed', {
+          enabled: true,
+          installed: true,
+          latestVersion: '2.0.0',
+          updateAvailable: true,
+          version: '1.0.0',
+        }),
+      ],
+    );
+    catalog.marketplaces = [{ name: 'official', source: 'anthropics/claude-plugins-official' }];
+    catalog.updatesAvailable = 1;
+    type RefreshResult = Awaited<ReturnType<ControlPanelApi['refreshClaudePluginMarketplaces']>>;
+    let resolveRefresh: ((result: RefreshResult) => void) | undefined;
+    const refresh = new Promise<RefreshResult>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    await withTerminalRenderer(
+      {
+        getClaudePlugins: async () => catalog,
+        refreshClaudePluginMarketplaces: () => refresh,
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="plugins"]');
+        await settle(harness);
+        harness.click('#refresh-plugins');
+
+        const button = harness.query<HTMLButtonElement>('#refresh-plugins');
+        expect(button.textContent).toBe('正在刷新…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+        expect(harness.query('#plugin-status').textContent).toContain('正在刷新插件市场');
+        for (const mutationButton of harness.document.querySelectorAll<HTMLButtonElement>(
+          '#plugin-installed-list button, #plugin-available-list button, #plugin-marketplace-list button, #update-all-plugins, #add-plugin-marketplace',
+        )) {
+          expect(mutationButton.disabled).toBe(true);
+        }
+        const marketplaceSource = harness.query<HTMLInputElement>('#plugin-marketplace-source');
+        expect(marketplaceSource.disabled).toBe(true);
+        marketplaceSource.value = 'synthetic/marketplace';
+        harness.query<HTMLFormElement>('#plugin-marketplace-form').requestSubmit();
+        await harness.flush();
+        expect(harness.method('addClaudePluginMarketplace')).not.toHaveBeenCalled();
+        expect(marketplaceSource.value).toBe('synthetic/marketplace');
+
+        input(harness.query('#plugin-search'), 'available');
+        expect(button.textContent).toBe('正在刷新…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        resolveRefresh?.({ catalog, message: '已刷新。', ok: true });
+        await settle(harness);
+        expect(button.textContent).toBe('检查更新');
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-busy')).toBe('false');
+        expect(marketplaceSource.disabled).toBe(false);
+        expect(harness.query<HTMLButtonElement>('#plugin-available-list button').disabled).toBe(
+          false,
+        );
+        expect(harness.query<HTMLButtonElement>('#add-plugin-marketplace').disabled).toBe(false);
+      },
+    );
+  });
+
+  it('keeps refresh ownership while an older catalogue load settles', async () => {
+    const catalog = pluginCatalog(
+      [],
+      [
+        plugin('installed', {
+          enabled: true,
+          installed: true,
+          latestVersion: '2.0.0',
+          updateAvailable: true,
+          version: '1.0.0',
+        }),
+      ],
+    );
+    catalog.updatesAvailable = 1;
+    type Catalog = Awaited<ReturnType<ControlPanelApi['getClaudePlugins']>>;
+    type RefreshResult = Awaited<ReturnType<ControlPanelApi['refreshClaudePluginMarketplaces']>>;
+    let resolveCatalog: ((value: Catalog) => void) | undefined;
+    let resolveRefresh: ((value: RefreshResult) => void) | undefined;
+    const catalogLoad = new Promise<Catalog>((resolve) => {
+      resolveCatalog = resolve;
+    });
+    const refresh = new Promise<RefreshResult>((resolve) => {
+      resolveRefresh = resolve;
+    });
+
+    await withTerminalRenderer(
+      {
+        getClaudePlugins: () => catalogLoad,
+        refreshClaudePluginMarketplaces: () => refresh,
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="plugins"]');
+        await harness.flush();
+        harness.click('#refresh-plugins');
+
+        const refreshButton = harness.query<HTMLButtonElement>('#refresh-plugins');
+        const updateAll = harness.query<HTMLButtonElement>('#update-all-plugins');
+        expect(refreshButton.textContent).toBe('正在刷新…');
+        expect(updateAll.disabled).toBe(true);
+
+        resolveCatalog?.(catalog);
+        await harness.flush();
+        await harness.flush();
+
+        expect(harness.method('refreshClaudePluginMarketplaces')).toHaveBeenCalledTimes(1);
+        expect(refreshButton.textContent).toBe('正在刷新…');
+        expect(refreshButton.disabled).toBe(true);
+        expect(updateAll.disabled).toBe(true);
+
+        resolveRefresh?.({ catalog, message: '已刷新。', ok: true });
+        await settle(harness);
+        expect(refreshButton.textContent).toBe('检查更新');
+        expect(refreshButton.disabled).toBe(false);
+        expect(updateAll.disabled).toBe(false);
+      },
+    );
+  });
+
+  it('reconstructs a main-owned mutation after reload and polls until its refreshing phase settles', async () => {
+    const installed = plugin('installed', {
+      enabled: true,
+      installed: true,
+      latestVersion: '2.0.0',
+      updateAvailable: true,
+      version: '1.0.0',
+    });
+    const activeCatalog = pluginCatalog([], [installed]);
+    activeCatalog.activeOperation = {
+      attempt: 7,
+      kind: 'update',
+      phase: 'refreshing',
+      startedAt: 10,
+      target: installed.pluginId,
+    };
+    activeCatalog.updatesAvailable = 1;
+    const settledCatalog = pluginCatalog([], [installed]);
+    settledCatalog.updatesAvailable = 1;
+    type Catalog = Awaited<ReturnType<ControlPanelApi['getClaudePlugins']>>;
+    let resolvePoll: ((catalog: Catalog) => void) | undefined;
+    const pendingPoll = new Promise<Catalog>((resolve) => {
+      resolvePoll = resolve;
+    });
+    let catalogCalls = 0;
+
+    await withTerminalRenderer(
+      {
+        getClaudePlugins: () => {
+          catalogCalls += 1;
+          return catalogCalls === 1 ? Promise.resolve(activeCatalog) : pendingPoll;
+        },
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="plugins"]');
+        await settle(harness);
+
+        const status = harness.query('#plugin-status');
+        const updateButton = Array.from(
+          harness.document.querySelectorAll<HTMLButtonElement>('#plugin-installed-list button'),
+        ).find((button) => button.dataset.pluginOperationKind === 'update')!;
+        expect(status.textContent).toBe('正在刷新插件列表以确认“更新 installed@official”的结果…');
+        expect(status.getAttribute('aria-busy')).toBe('true');
+        expect(updateButton.textContent).toBe('正在更新…');
+        expect(updateButton.disabled).toBe(true);
+        expect(updateButton.getAttribute('aria-busy')).toBe('true');
+        expect(harness.query<HTMLButtonElement>('#refresh-plugins').disabled).toBe(true);
+        expect(harness.method('updateClaudePlugin')).not.toHaveBeenCalled();
+        expect(catalogCalls).toBe(2);
+
+        resolvePoll?.(settledCatalog);
+        await settle(harness);
+        expect(status.getAttribute('aria-busy')).toBe('false');
+        expect(updateButton.isConnected).toBe(false);
+        const settledUpdate = Array.from(
+          harness.document.querySelectorAll<HTMLButtonElement>('#plugin-installed-list button'),
+        ).find((button) => button.dataset.pluginOperationKind === 'update')!;
+        expect(settledUpdate.textContent).toBe('更新');
+        expect(settledUpdate.disabled).toBe(false);
+        expect(settledUpdate.getAttribute('aria-busy')).toBe('false');
+      },
+    );
+  });
+
+  it('preserves the marketplace source when adding it returns ok false', async () => {
+    const catalog = pluginCatalog([]);
+    await withTerminalRenderer(
+      {
+        addClaudePluginMarketplace: async () => ({
+          catalog,
+          message: '无法添加插件市场。',
+          ok: false,
+        }),
+        getClaudePlugins: async () => catalog,
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="plugins"]');
+        await settle(harness);
+
+        const source = harness.query<HTMLInputElement>('#plugin-marketplace-source');
+        source.value = 'synthetic/marketplace';
+        harness.query<HTMLFormElement>('#plugin-marketplace-form').requestSubmit();
+        await settle(harness);
+
+        expect(harness.method('addClaudePluginMarketplace')).toHaveBeenCalledWith(
+          'synthetic/marketplace',
+        );
+        expect(source.value).toBe('synthetic/marketplace');
+      },
+    );
+  });
+
+  it('keeps a pending catalogue load authoritative over a newer mutation attempt', async () => {
+    type Catalog = Awaited<ReturnType<ControlPanelApi['getClaudePlugins']>>;
+    const catalog = pluginCatalog([]);
+    let resolveCatalog: ((value: Catalog) => void) | undefined;
+    const pendingCatalog = new Promise<Catalog>((resolve) => {
+      resolveCatalog = resolve;
+    });
+
+    await withTerminalRenderer({ getClaudePlugins: () => pendingCatalog }, async (harness) => {
+      harness.click('[data-rail-tab="plugins"]');
+      await harness.flush();
+
+      const source = harness.query<HTMLInputElement>('#plugin-marketplace-source');
+      source.value = 'synthetic/marketplace';
+      expect(source.disabled).toBe(true);
+      harness.query<HTMLFormElement>('#plugin-marketplace-form').requestSubmit();
+      await harness.flush();
+
+      expect(harness.method('addClaudePluginMarketplace')).not.toHaveBeenCalled();
+      expect(source.value).toBe('synthetic/marketplace');
+
+      resolveCatalog?.(catalog);
+      await settle(harness);
+      expect(source.disabled).toBe(false);
+    });
+  });
+
+  it('keeps final catalogue predicates authoritative after a persistent mutation settles', async () => {
+    const currentCatalog = pluginCatalog([]);
+    currentCatalog.updatesAvailable = 1;
+    const finalCatalog = pluginCatalog([]);
+    finalCatalog.updatesAvailable = 0;
+
+    await withTerminalRenderer(
+      {
+        getClaudePlugins: async () => currentCatalog,
+        updateAllClaudePlugins: async () => ({
+          catalog: finalCatalog,
+          message: '已更新全部插件。',
+          ok: true,
+        }),
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="plugins"]');
+        await settle(harness);
+
+        const updateAll = harness.query<HTMLButtonElement>('#update-all-plugins');
+        expect(updateAll.disabled).toBe(false);
+        updateAll.click();
+        await settle(harness);
+
+        expect(harness.method('updateAllClaudePlugins')).toHaveBeenCalledTimes(1);
+        expect(updateAll.disabled).toBe(true);
+      },
+    );
+  });
+
   it('clears the in-progress flag before re-rendering, so rebuilt buttons come back enabled', async () => {
     const installed = plugin('installed', { enabled: true, installed: true });
     const catalog = pluginCatalog([], [installed]);

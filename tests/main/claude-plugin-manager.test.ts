@@ -364,7 +364,7 @@ describe('Claude plugin manager catalog fencing', () => {
     await expect(manager.getCatalog()).resolves.toBe(good);
   });
 
-  it('serializes each mutation plus its forced refresh through one FIFO and continues after failure', async () => {
+  it('joins identical mutations, rejects competing side effects and releases ownership after failure', async () => {
     const firstMutation = deferred<string>();
     const firstRefresh = deferred<string>();
     const callArguments: string[][] = [];
@@ -392,36 +392,62 @@ describe('Claude plugin manager catalog fencing', () => {
     );
 
     const install = manager.mutate({ pluginId: 'first@official', type: 'install' });
-    const remove = manager.mutate({ name: 'second', type: 'marketplace-remove' });
-    const disable = manager.mutate({
-      enabled: false,
-      pluginId: 'third@official',
-      type: 'set-enabled',
+    const joinedInstall = manager.mutate({ pluginId: 'first@official', type: 'install' });
+    expect(joinedInstall).toBe(install);
+    await expect(
+      manager.mutate({ name: 'second', type: 'marketplace-remove' }),
+    ).rejects.toMatchObject({
+      catalog: {
+        activeOperation: {
+          attempt: 1,
+          kind: 'install',
+          phase: 'mutating',
+          target: 'first@official',
+        },
+      },
+      message: '已有插件操作正在进行，请等待完成后再试。',
+    });
+    await expect(manager.getCatalog(false)).resolves.toMatchObject({
+      activeOperation: {
+        attempt: 1,
+        kind: 'install',
+        phase: 'mutating',
+        target: 'first@official',
+      },
     });
 
-    await vi.waitFor(() => expect(callArguments).toHaveLength(1));
-    expect(callArguments[0]).toEqual(['plugin', 'install', 'first@official', '--scope', 'user']);
-
-    firstMutation.reject(new Error('failed'));
     await vi.waitFor(() =>
-      expect(callArguments).toContainEqual(['plugin', 'list', '--json', '--available']),
+      expect(callArguments).toContainEqual([
+        'plugin',
+        'install',
+        'first@official',
+        '--scope',
+        'user',
+      ]),
     );
-    expect(callArguments).not.toContainEqual(['plugin', 'marketplace', 'remove', 'second']);
-
+    firstMutation.reject(new Error('failed'));
+    await vi.waitFor(() => expect(listCalls).toBe(1));
+    await expect(manager.getCatalog(false)).resolves.toMatchObject({
+      activeOperation: { attempt: 1, kind: 'install', phase: 'refreshing' },
+    });
     firstRefresh.resolve(JSON.stringify({ available: [], installed: [] }));
     await expect(install).rejects.toThrow('Claude 插件命令执行失败');
-    await expect(remove).resolves.toMatchObject({ message: expect.stringContaining('已移除') });
-    await expect(disable).resolves.toMatchObject({ message: expect.stringContaining('已停用') });
-    expect(callArguments).toEqual([
-      ['plugin', 'install', 'first@official', '--scope', 'user'],
-      ['plugin', 'list', '--json', '--available'],
-      ['plugin', 'marketplace', 'list', '--json'],
-      ['plugin', 'marketplace', 'remove', 'second'],
-      ['plugin', 'list', '--json', '--available'],
-      ['plugin', 'marketplace', 'list', '--json'],
-      ['plugin', 'disable', 'third@official', '--scope', 'user'],
-      ['plugin', 'list', '--json', '--available'],
-      ['plugin', 'marketplace', 'list', '--json'],
+    await expect(joinedInstall).rejects.toThrow('Claude 插件命令执行失败');
+    expect(manager.hasActiveMutation()).toBe(false);
+
+    await expect(
+      manager.mutate({ enabled: false, pluginId: 'third@official', type: 'set-enabled' }),
+    ).resolves.toMatchObject({ message: expect.stringContaining('已停用') });
+    expect(
+      callArguments.filter((argumentsList) => commandIs(argumentsList, 'plugin', 'install')),
+    ).toEqual([['plugin', 'install', 'first@official', '--scope', 'user']]);
+    expect(callArguments).not.toContainEqual(['plugin', 'marketplace', 'remove', 'second']);
+    expect(callArguments).toContainEqual([
+      'plugin',
+      'disable',
+      'third@official',
+      '--scope',
+      'user',
     ]);
   });
 

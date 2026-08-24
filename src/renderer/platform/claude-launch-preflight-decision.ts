@@ -36,6 +36,42 @@ const requiredElement = <T extends HTMLElement>(selector: string): T => {
   return element;
 };
 
+const PROCESS_LABELS: Readonly<Record<string, string>> = {
+  application: 'Electron 应用',
+  'claude-cli': 'Claude CLI',
+  'codex-cli': 'Codex CLI',
+  'network-diagnostics': '网络诊断进程',
+  'oauth-browser': 'OAuth 浏览器',
+  renderer: 'Renderer',
+  terminal: '终端进程',
+};
+
+const PROBE_KIND_LABELS = {
+  api: 'API',
+  dns: 'DNS',
+  https: 'HTTPS',
+  oauth: 'OAuth',
+  path: '路径',
+  tls: 'TLS',
+  version: '版本',
+  websocket: 'WebSocket',
+} as const;
+
+const ACTION_LABELS = {
+  background: '后台无额度预检',
+  'cli-launch': 'CLI 启动预检',
+  'cloud-task': '云端任务预检',
+  'first-request': '首次请求预检',
+  login: '登录预检',
+  'provider-switch': '提供商切换预检',
+} as const;
+
+const formatCheckedAt = (checkedAt: number): string =>
+  new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(checkedAt);
+
 /**
  * Dedicated renderer owner for a paused Claude launch. It keeps only display-safe diagnostics, the
  * opaque decision ID, and the exact renderer launch token; no generic preflight event can settle it.
@@ -227,15 +263,18 @@ export class ClaudeLaunchPreflightDecisionController {
 
   private render(diagnostics: ClaudeLaunchPauseDiagnostics): void {
     this.summary.textContent = diagnostics.summary;
-    this.meta.textContent =
+    const scope = diagnostics.scope === 'conversation' ? '会话网络会话' : '应用网络会话';
+    const disposition =
       diagnostics.status === 'blocked'
         ? '当前网络检查阻止了这次启动。你可以取消、重新检查，或仅为这一次继续连接。'
         : '当前网络检查发现异常。你可以先查看详情，再决定如何处理这一次启动。';
+    const freshness = diagnostics.freshness === 'fresh' ? '当前缓存有效' : '未知';
+    this.meta.textContent = `${diagnostics.providerLabel}（${diagnostics.provider}） · ${ACTION_LABELS[diagnostics.action]} · ${scope} · 采集时间：${formatCheckedAt(diagnostics.checkedAt)} · 新鲜度：${freshness}。${disposition}`;
     this.failedItems.replaceChildren(
       ...diagnostics.failedItems.map((item) => {
         const row = document.createElement('li');
         row.dataset.status = item.status;
-        row.textContent = item.label;
+        row.textContent = `${item.status === 'failed' ? '失败' : '警告'} · ${item.label} · 方法：${PROBE_KIND_LABELS[item.kind]} · 进程：${PROCESS_LABELS[item.process] ?? item.process} · ${item.required ? '必需提供商证据' : '可选证据'}${item.target ? ` · 目标：${item.target}` : ''} · 采集时间：${formatCheckedAt(item.checkedAt)} · ${item.detail}`;
         return row;
       }),
     );

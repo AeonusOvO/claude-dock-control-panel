@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ClaudeLaunchAttemptRegistry } from '../../src/renderer/platform/claude-launch-attempt';
 import { FolderHistoryLoadCoordinator } from '../../src/renderer/features/projects/folder-history-load';
 import {
@@ -6,18 +6,91 @@ import {
   SessionGenerationRegistry,
 } from '../../src/renderer/platform/session-generation';
 import { claudeStateOwnershipIsCurrent } from '../../src/shared/claude/state-ownership';
-import type { ControlPanelApi } from '../../src/shared/contracts';
+import type {
+  CodexProjectState,
+  ControlPanelApi,
+  OperationResult,
+  WorkspaceState,
+} from '../../src/shared/contracts';
 import {
   expectCss,
   settle,
   withRenderer,
   withTerminalRenderer,
 } from '../helpers/renderer-interaction-fixture';
+import { launchPauseDiagnostics } from '../helpers/renderer-preflight-fixture';
 import {
   claudeProjectState,
   terminalStatus,
   terminalWorkspace,
 } from '../helpers/renderer-terminal-fixture';
+
+const deferred = <T>(): {
+  promise: Promise<T>;
+  reject: (error: unknown) => void;
+  resolve: (value: T) => void;
+} => {
+  let reject = (_error: unknown): void => undefined;
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+};
+
+const codexProjectState = (overrides: Partial<CodexProjectState> = {}): CodexProjectState => ({
+  active: false,
+  cwd: 'D:\\Project',
+  installation: {
+    installed: true,
+    message: 'Codex CLI 已就绪。',
+    updateAvailable: false,
+    version: '1.0.0',
+  },
+  login: { phase: 'idle' },
+  revision: 1,
+  requiresOpenaiAuth: false,
+  sessionId: 'session-1',
+  ...overrides,
+});
+
+const twoSessionWorkspace = (activeSessionId: 'session-a' | 'session-b'): WorkspaceState => {
+  const sessionA = terminalStatus(1, {
+    cwd: 'D:\\ProjectA',
+    id: 'session-a',
+    title: 'Project A',
+  });
+  const sessionB = terminalStatus(1, {
+    cwd: 'D:\\ProjectB',
+    id: 'session-b',
+    title: 'Project B',
+  });
+  return {
+    activeSessionId,
+    projects: [
+      {
+        lastActiveAt: 2,
+        missing: false,
+        name: 'Project A',
+        open: true,
+        path: sessionA.cwd,
+        remembered: true,
+        sessionIds: [sessionA.id],
+      },
+      {
+        lastActiveAt: 1,
+        missing: false,
+        name: 'Project B',
+        open: true,
+        path: sessionB.cwd,
+        remembered: true,
+        sessionIds: [sessionB.id],
+      },
+    ],
+    sessions: [sessionA, sessionB],
+  };
+};
 
 describe('renderer interaction lifecycle behavior', () => {
   it('always releases resize pointer capture across interrupted window lifecycles', async () => {
@@ -91,6 +164,212 @@ describe('renderer interaction lifecycle behavior', () => {
       },
     );
   });
+
+  it('keeps a running replacement owned until launch IPC settles and then handles success', async () => {
+    type LaunchResult = Awaited<ReturnType<ControlPanelApi['launchClaude']>>;
+    const launch = deferred<LaunchResult>();
+    await withTerminalRenderer({ launchClaude: () => launch.promise }, async (harness) => {
+      harness.click('#run-claude');
+      const run = harness.query<HTMLButtonElement>('#run-claude');
+      expect(harness.query('#run-agent-label').textContent).toContain('正在进行网络预检…');
+      expect(run.disabled).toBe(true);
+      expect(run.getAttribute('aria-busy')).toBe('true');
+
+      harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(2, { phase: 'starting' })));
+      await harness.flush();
+      expect(harness.query('#run-agent-label').textContent).toContain('正在启动…');
+      expect(harness.query('#launch-new').textContent).toContain('正在启动…');
+
+      harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(2)));
+      await settle(harness);
+      expect(harness.query('#run-agent-label').textContent).toContain('正在启动…');
+      expect(run.disabled).toBe(true);
+      expect(run.getAttribute('aria-busy')).toBe('true');
+      expect(harness.query('#toast').textContent).not.toContain('启动新会话');
+
+      launch.resolve({
+        result: {
+          ok: true,
+          state: claudeProjectState({ active: true, ptyGeneration: 2, stateRevision: 2 }),
+        },
+        status: 'completed',
+      });
+      await settle(harness);
+      expect(run.disabled).toBe(false);
+      expect(run.getAttribute('aria-busy')).toBe('false');
+      expect(harness.query('#toast').textContent).toContain('启动新会话');
+    });
+  });
+
+  it('handles a failed launch result after the replacement reported running first', async () => {
+    type LaunchResult = Awaited<ReturnType<ControlPanelApi['launchClaude']>>;
+    const launch = deferred<LaunchResult>();
+    await withTerminalRenderer({ launchClaude: () => launch.promise }, async (harness) => {
+      harness.click('#run-claude');
+      const run = harness.query<HTMLButtonElement>('#run-claude');
+
+      harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(2)));
+      await settle(harness);
+      expect(run.disabled).toBe(true);
+      expect(run.getAttribute('aria-busy')).toBe('true');
+
+      launch.resolve({
+        result: {
+          error: 'synthetic launch failure',
+          ok: false,
+          state: claudeProjectState({ active: false, ptyGeneration: 2, stateRevision: 2 }),
+        },
+        status: 'completed',
+      });
+      await settle(harness);
+      expect(run.disabled).toBe(false);
+      expect(run.getAttribute('aria-busy')).toBe('false');
+      expect(harness.query('#toast').textContent).toContain('操作失败');
+    });
+  });
+
+  it('advances a paused terminal relaunch from preflight to waiting presentation', async () => {
+    await withTerminalRenderer(
+      {
+        getClaudeModelOptions: async () => ({
+          activeModel: 'claude-sonnet-5',
+          options: [
+            {
+              entryId: 'history-next',
+              id: 'next',
+              label: 'Next',
+              model: 'claude-opus-5',
+              providerLabel: 'Anthropic',
+              relaunchReason: 'connection',
+              requiresRelaunch: true,
+              sameEndpoint: false,
+            },
+          ],
+        }),
+        relaunchClaudeSession: async () => ({
+          decisionId: 'decision-terminal-relaunch',
+          diagnostics: launchPauseDiagnostics(),
+          status: 'paused',
+        }),
+      },
+      async (harness) => {
+        harness.click('#footer-model');
+        await settle(harness);
+        harness.query<HTMLButtonElement>('#footer-model-menu button').click();
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
+        await settle(harness);
+
+        expect(harness.method('relaunchClaudeSession')).toHaveBeenCalledWith('session-1', {
+          compactFirst: true,
+          entryId: 'history-next',
+        });
+        expect(harness.query('#run-agent-label').textContent).toContain('等待网络确认…');
+        expect(harness.query('#launch-new').textContent).toContain('等待网络确认…');
+        expect(harness.query<HTMLDialogElement>('#claude-launch-preflight-dialog').open).toBe(true);
+      },
+    );
+  });
+
+  it('keeps restart feedback owned through workspace renders and restores it on settlement', async () => {
+    type RestartResult = Awaited<ReturnType<ControlPanelApi['restartTerminal']>>;
+    const restart = deferred<RestartResult>();
+    await withTerminalRenderer({ restartTerminal: () => restart.promise }, async (harness) => {
+      harness.click('#restart-terminal');
+      const button = harness.query<HTMLButtonElement>('#restart-terminal');
+      expect(harness.query('#restart-terminal-label').textContent).toBe('正在重启…');
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('aria-busy')).toBe('true');
+
+      harness.emit('onWorkspaceState', terminalWorkspace());
+      await harness.flush();
+      expect(harness.query('#restart-terminal-label').textContent).toBe('正在重启…');
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('aria-busy')).toBe('true');
+
+      restart.resolve({ ok: true, status: terminalStatus(2) });
+      await settle(harness);
+      expect(harness.query('#restart-terminal-label').textContent).toBe('重启');
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute('aria-busy')).toBe('false');
+    });
+  });
+
+  it('labels terminal stop and start operations and restores only their owner', async () => {
+    type StopResult = Awaited<ReturnType<ControlPanelApi['stopTerminal']>>;
+    type StartResult = Awaited<ReturnType<ControlPanelApi['startTerminal']>>;
+    const stop = deferred<StopResult>();
+    const start = deferred<StartResult>();
+    await withTerminalRenderer(
+      {
+        startTerminal: () => start.promise,
+        stopTerminal: () => stop.promise,
+      },
+      async (harness) => {
+        harness.click('#toggle-terminal');
+        const button = harness.query<HTMLButtonElement>('#toggle-terminal');
+        expect(harness.query('#toggle-terminal-label').textContent).toBe('正在停止…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        stop.reject(new Error('synthetic stop failure'));
+        await settle(harness);
+        expect(harness.query('#toggle-terminal-label').textContent).toBe('停止');
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-busy')).toBe('false');
+
+        harness.emit(
+          'onWorkspaceState',
+          terminalWorkspace(terminalStatus(1, { phase: 'stopped' })),
+        );
+        await harness.flush();
+        harness.click('#toggle-terminal');
+        expect(harness.query('#toggle-terminal-label').textContent).toBe('正在启动…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        start.resolve({ ok: true, status: terminalStatus(2) });
+        await settle(harness);
+        expect(harness.query('#toggle-terminal-label').textContent).toBe('停止');
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-busy')).toBe('false');
+      },
+    );
+  });
+
+  it.each(['restart', 'start', 'stop'] as const)(
+    'drops a removed session before a late %s settlement can toast or queue focus',
+    async (operation) => {
+      const request = deferred<OperationResult>();
+      const initialStatus = terminalStatus(1, {
+        phase: operation === 'start' ? 'stopped' : 'running',
+      });
+      const overrides: Partial<ControlPanelApi> = {
+        getWorkspace: async () => terminalWorkspace(initialStatus),
+      };
+      if (operation === 'restart') overrides.restartTerminal = () => request.promise;
+      if (operation === 'start') overrides.startTerminal = () => request.promise;
+      if (operation === 'stop') overrides.stopTerminal = () => request.promise;
+
+      await withTerminalRenderer(overrides, async (harness) => {
+        if (operation === 'restart') harness.click('#restart-terminal');
+        if (operation === 'stop') harness.click('#toggle-terminal');
+
+        harness.emit('onWorkspaceState', { activeSessionId: '', projects: [], sessions: [] });
+        await harness.flush();
+        const clear = harness.query<HTMLButtonElement>('#clear-terminal');
+        clear.focus();
+        const toastBeforeSettlement = harness.query('#toast').textContent;
+
+        request.resolve({ ok: true, status: terminalStatus(2) });
+        await settle(harness);
+        expect(harness.query('#toast').textContent).toBe(toastBeforeSettlement);
+
+        harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(3)));
+        await settle(harness);
+        expect(harness.document.activeElement).toBe(clear);
+      });
+    },
+  );
 
   it('keeps the shell interactive while a real connection test runs in the background', async () => {
     const pending = new Promise<never>(() => undefined);
@@ -260,9 +539,322 @@ describe('renderer interaction lifecycle behavior', () => {
     const speeds = new SessionGenerationRegistry();
     const launch = launches.begin('session-1', { terminalPtyGeneration: 1 });
     const speed = speeds.begin('session-1');
-    expect(launches.observeTerminal(terminalStatus(2))).toMatchObject({ reason: 'powershell' });
+    expect(launches.observeTerminal(terminalStatus(2))).toBeUndefined();
     expect(speeds.isCurrent(speed)).toBe(true);
+    expect(launches.isCurrent(launch)).toBe(true);
+    expect(launches.acceptResult(launch, 'success')).toBe(true);
     expect(launches.isCurrent(launch)).toBe(false);
+  });
+
+  it.each([
+    ['#codex-login', 'browser', '正在启动浏览器登录…'],
+    ['#codex-device-login-action', 'device-code', '正在启动设备码登录…'],
+  ] as const)(
+    'keeps %s feedback owned while a Codex login request is pending',
+    async (selector, method, label) => {
+      const state = codexProjectState({ requiresOpenaiAuth: true });
+      type LoginResult = Awaited<ReturnType<ControlPanelApi['startCodexLogin']>>;
+      const login = deferred<LoginResult>();
+      await withTerminalRenderer(
+        {
+          getCodexProjectState: async () => state,
+          getDevelopmentRuntime: async (sessionId) => ({
+            cwd: 'D:\\Project',
+            runtime: 'codex',
+            sessionId,
+          }),
+          startCodexLogin: (_sessionId, requestedMethod) => {
+            expect(requestedMethod).toBe(method);
+            return login.promise;
+          },
+        },
+        async (harness) => {
+          harness.click(selector);
+          const button = harness.query<HTMLButtonElement>(selector);
+          expect(button.textContent).toBe(label);
+          expect(button.disabled).toBe(true);
+          expect(button.getAttribute('aria-busy')).toBe('true');
+
+          harness.emit('onCodexState', state);
+          expect(button.textContent).toBe(label);
+          expect(button.disabled).toBe(true);
+          expect(button.getAttribute('aria-busy')).toBe('true');
+
+          login.reject(new Error('synthetic login failure'));
+          await settle(harness);
+          expect(button.getAttribute('aria-busy')).toBe('false');
+        },
+      );
+    },
+  );
+
+  it('rejects a delayed login-start snapshot after a newer account event', async () => {
+    const initial = codexProjectState({ requiresOpenaiAuth: true, revision: 1 });
+    type LoginResult = Awaited<ReturnType<ControlPanelApi['startCodexLogin']>>;
+    const login = deferred<LoginResult>();
+    await withTerminalRenderer(
+      {
+        getCodexProjectState: async () => initial,
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: initial.cwd,
+          runtime: 'codex',
+          sessionId,
+        }),
+        startCodexLogin: () => login.promise,
+      },
+      async (harness) => {
+        harness.click('#codex-login');
+        harness.emit(
+          'onCodexState',
+          codexProjectState({
+            account: { email: 'member@example.test', planType: 'plus', type: 'chatgpt' },
+            requiresOpenaiAuth: true,
+            revision: 3,
+          }),
+        );
+        login.resolve({
+          ok: true,
+          openedBrowser: true,
+          state: codexProjectState({
+            login: { loginId: 'stale-login', method: 'browser', phase: 'waiting' },
+            requiresOpenaiAuth: true,
+            revision: 2,
+          }),
+        });
+        await settle(harness);
+
+        expect(harness.query('#codex-account-title').textContent).toBe('ChatGPT 账号已连接');
+        expect(harness.query<HTMLButtonElement>('#codex-login').hidden).toBe(true);
+        expect(harness.query<HTMLButtonElement>('#codex-cancel-login').hidden).toBe(true);
+      },
+    );
+  });
+
+  it('keeps Codex launch feedback owned across account-state renders', async () => {
+    const state = codexProjectState();
+    type LaunchResult = Awaited<ReturnType<ControlPanelApi['launchCodex']>>;
+    const launch = deferred<LaunchResult>();
+    await withTerminalRenderer(
+      {
+        getCodexProjectState: async () => state,
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: 'D:\\Project',
+          runtime: 'codex',
+          sessionId,
+        }),
+        launchCodex: () => launch.promise,
+      },
+      async (harness) => {
+        harness.click('#codex-launch-new');
+        const button = harness.query<HTMLButtonElement>('#codex-launch-new');
+        expect(button.textContent).toBe('正在启动…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+        expect(harness.query('#run-agent-label').textContent).toContain('正在启动 Codex…');
+
+        harness.emit('onCodexState', state);
+        expect(button.textContent).toBe('正在启动…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        launch.reject(new Error('synthetic launch failure'));
+        await settle(harness);
+        expect(button.textContent).toBe('新建安全会话');
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-busy')).toBe('false');
+      },
+    );
+  });
+
+  it('labels Codex login cancellation and restores only the owning operation', async () => {
+    const state = codexProjectState({
+      login: { method: 'browser', phase: 'waiting' },
+      requiresOpenaiAuth: true,
+    });
+    type CancelResult = Awaited<ReturnType<ControlPanelApi['cancelCodexLogin']>>;
+    const cancellation = deferred<CancelResult>();
+    await withTerminalRenderer(
+      {
+        cancelCodexLogin: () => cancellation.promise,
+        getCodexProjectState: async () => state,
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: 'D:\\Project',
+          runtime: 'codex',
+          sessionId,
+        }),
+      },
+      async (harness) => {
+        harness.click('#codex-cancel-login');
+        const button = harness.query<HTMLButtonElement>('#codex-cancel-login');
+        expect(button.textContent).toBe('正在取消登录…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        const completed = codexProjectState({ requiresOpenaiAuth: true });
+        cancellation.resolve({ ok: true, state: completed });
+        await settle(harness);
+        expect(button.textContent).toBe('取消登录');
+        expect(button.getAttribute('aria-busy')).toBe('false');
+      },
+    );
+  });
+
+  it('restores the active project after a global Codex login cancellation settles elsewhere', async () => {
+    const stateA = codexProjectState({
+      cwd: 'D:\\ProjectA',
+      login: { method: 'browser', phase: 'waiting' },
+      requiresOpenaiAuth: true,
+      sessionId: 'session-a',
+    });
+    const stateB = codexProjectState({
+      cwd: 'D:\\ProjectB',
+      login: { method: 'browser', phase: 'waiting' },
+      requiresOpenaiAuth: true,
+      sessionId: 'session-b',
+    });
+    type CancelResult = Awaited<ReturnType<ControlPanelApi['cancelCodexLogin']>>;
+    const cancellation = deferred<CancelResult>();
+    await withTerminalRenderer(
+      {
+        cancelCodexLogin: () => cancellation.promise,
+        getCodexProjectState: async (sessionId) => (sessionId === 'session-a' ? stateA : stateB),
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: sessionId === 'session-a' ? stateA.cwd : stateB.cwd,
+          runtime: 'codex',
+          sessionId,
+        }),
+        getWorkspace: async () => twoSessionWorkspace('session-a'),
+      },
+      async (harness) => {
+        harness.click('#codex-cancel-login');
+        harness.emit('onWorkspaceState', twoSessionWorkspace('session-b'));
+        await settle(harness);
+
+        const activeButton = harness.query<HTMLButtonElement>('#codex-cancel-login');
+        expect(activeButton.textContent).toBe('正在取消登录…');
+        expect(activeButton.disabled).toBe(true);
+        expect(activeButton.getAttribute('aria-busy')).toBe('true');
+
+        const completionRevision = 2;
+        const completedB = codexProjectState({
+          ...stateB,
+          login: { phase: 'idle' },
+          revision: completionRevision,
+        });
+        harness.emit('onCodexState', completedB);
+        cancellation.resolve({
+          ok: true,
+          state: codexProjectState({
+            ...stateA,
+            login: { phase: 'idle' },
+            revision: completionRevision,
+          }),
+        });
+        await settle(harness);
+
+        expect(activeButton.textContent).toBe('取消登录');
+        expect(activeButton.disabled).toBe(false);
+        expect(activeButton.getAttribute('aria-busy')).toBe('false');
+        expect(activeButton.hidden).toBe(true);
+        expect(harness.query<HTMLButtonElement>('#codex-login').hidden).toBe(false);
+      },
+    );
+  });
+
+  it('releases login-and-launch ownership when authentication completes off project', async () => {
+    const stateA = codexProjectState({
+      cwd: 'D:\\ProjectA',
+      requiresOpenaiAuth: true,
+      revision: 1,
+      sessionId: 'session-a',
+    });
+    const stateB = codexProjectState({
+      cwd: 'D:\\ProjectB',
+      requiresOpenaiAuth: true,
+      revision: 1,
+      sessionId: 'session-b',
+    });
+    const launchCodex = vi.fn(async () => ({ ok: true, state: stateA }));
+    await withTerminalRenderer(
+      {
+        getCodexProjectState: async (sessionId) => (sessionId === 'session-a' ? stateA : stateB),
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: sessionId === 'session-a' ? stateA.cwd : stateB.cwd,
+          runtime: 'codex',
+          sessionId,
+        }),
+        getWorkspace: async () => twoSessionWorkspace('session-a'),
+        launchCodex,
+        startCodexLogin: async () => ({
+          ok: true,
+          openedBrowser: true,
+          state: codexProjectState({
+            ...stateA,
+            login: { loginId: 'login-a', method: 'browser', phase: 'waiting' },
+            revision: 2,
+          }),
+        }),
+      },
+      async (harness) => {
+        harness.click('#codex-primary-action');
+        await settle(harness);
+        harness.emit('onWorkspaceState', twoSessionWorkspace('session-b'));
+        await settle(harness);
+
+        const authenticatedA = codexProjectState({
+          ...stateA,
+          account: { email: 'member@example.test', planType: 'plus', type: 'chatgpt' },
+          revision: 3,
+        });
+        harness.emit('onCodexState', authenticatedA);
+        harness.emit('onWorkspaceState', twoSessionWorkspace('session-a'));
+        await settle(harness);
+        harness.emit('onCodexState', { ...authenticatedA, revision: 4 });
+        await settle(harness);
+
+        expect(launchCodex).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it('labels Codex logout after confirmation and fences its final restoration', async () => {
+    const state = codexProjectState({
+      account: {
+        email: 'synthetic@example.test',
+        planType: 'test',
+        type: 'chatgpt',
+      },
+      requiresOpenaiAuth: true,
+    });
+    type LogoutResult = Awaited<ReturnType<ControlPanelApi['logoutCodex']>>;
+    const logout = deferred<LogoutResult>();
+    await withTerminalRenderer(
+      {
+        getCodexProjectState: async () => state,
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: 'D:\\Project',
+          runtime: 'codex',
+          sessionId,
+        }),
+        logoutCodex: () => logout.promise,
+      },
+      async (harness) => {
+        harness.click('#codex-logout');
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
+        await harness.flush();
+
+        const button = harness.query<HTMLButtonElement>('#codex-logout');
+        expect(button.textContent).toBe('正在退出账号…');
+        expect(button.disabled).toBe(true);
+        expect(button.getAttribute('aria-busy')).toBe('true');
+
+        logout.reject(new Error('synthetic logout failure'));
+        await settle(harness);
+        expect(button.textContent).toBe('退出 Codex 账号');
+        expect(button.disabled).toBe(false);
+        expect(button.getAttribute('aria-busy')).toBe('false');
+      },
+    );
   });
 
   it('fences state loads and Codex launches with per-session generations', async () => {

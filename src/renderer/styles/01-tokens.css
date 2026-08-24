@@ -57,6 +57,14 @@
   --surface-4: #ffffff;
   --surface-inset: #f2f0e8;
 
+  /* 官方标记使用固定品牌表面，不随 ClaudeDock 运行时主题覆写。 */
+  --brand-anthropic-surface: #faf9f5;
+  --brand-anthropic-line: #e8e6dc;
+  --brand-openai-light-surface: #ffffff;
+  --brand-openai-light-line: #d9d9d9;
+  --brand-openai-dark-surface: #000000;
+  --brand-openai-dark-line: #333333;
+
   /* 交互态层 */
   --layer-hover: rgb(20 20 19 / 4%);
   --layer-active: rgb(20 20 19 / 7%);

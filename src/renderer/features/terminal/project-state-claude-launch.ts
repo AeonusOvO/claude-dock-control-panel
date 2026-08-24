@@ -23,6 +23,7 @@ export interface TerminalClaudeLaunchActions {
   failClaudeLaunchAttempt: (token: ClaudeLaunchAttemptToken) => boolean;
   refreshClaudeLaunchControls: (sessionId: string) => void;
   renderClaudeLaunchControls: (sessionId: string, launchBlocked?: boolean) => void;
+  setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
   renderClaudeLaunchResult: (
     token: ClaudeLaunchAttemptToken,
     state: ClaudeProjectState,
@@ -56,18 +57,29 @@ export const createTerminalClaudeLaunchActions = (
     ) {
       return;
     }
-    const busy =
-      conversationFeature.startingSessionId() === sessionId ||
-      claudeLaunchAttempts.isBusy(sessionId);
-    runAgentLabel.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
+    const launchPhase = claudeLaunchAttempts.presentationPhase(sessionId);
+    const conversationStarting = conversationFeature.startingSessionId() === sessionId;
+    const busy = conversationStarting || Boolean(launchPhase);
+    const busyLabel = conversationStarting
+      ? '正在启动…'
+      : launchPhase === 'preflight'
+        ? '正在进行网络预检…'
+        : launchPhase === 'paused'
+          ? '等待网络确认…'
+          : '正在启动…';
+    runAgentLabel.textContent = busy ? busyLabel : '新建安全会话';
     // Route health is a remediable preflight state, not a reason to turn the primary action into a
     // translucent dead end. The launch path can restart app-owned gateways and returns a precise
     // configuration error when user action is actually required.
     runClaudeButton.disabled = busy;
     runClaudeButton.dataset.launchBlocked = String(launchBlocked);
     runClaudeButton.setAttribute('aria-busy', String(busy));
-    launchNewButton.textContent = busy ? '正在启动安全会话…' : '新建安全会话';
-    for (const button of [launchNewButton, launchContinueButton, launchResumeButton]) {
+    for (const [button, idleLabel] of [
+      [launchNewButton, '新建安全会话'],
+      [launchContinueButton, '继续最近会话'],
+      [launchResumeButton, '选择历史会话'],
+    ] as const) {
+      button.textContent = busy ? busyLabel : idleLabel;
       button.disabled = busy;
       button.dataset.launchBlocked = String(launchBlocked);
       button.setAttribute('aria-busy', String(busy));
@@ -76,10 +88,10 @@ export const createTerminalClaudeLaunchActions = (
 
   const refreshClaudeLaunchControls = (sessionId: string): void => {
     const state = claudeStates.get(sessionId);
-    if (state) {
+    if (state && claudeStateCanApply(state)) {
       renderClaudeState(state, true, false);
     } else {
-      renderClaudeLaunchControls(sessionId);
+      renderClaudeLaunchControls(sessionId, state ? claudeLaunchBlocked(state) : false);
     }
   };
 
@@ -100,6 +112,14 @@ export const createTerminalClaudeLaunchActions = (
 
   const failClaudeLaunchAttempt = (token: ClaudeLaunchAttemptToken): boolean => {
     if (!claudeLaunchAttempts.fail(token)) {
+      return false;
+    }
+    refreshClaudeLaunchControls(token.sessionId);
+    return true;
+  };
+
+  const setClaudeLaunchPaused = (token: ClaudeLaunchAttemptToken): boolean => {
+    if (!claudeLaunchAttempts.setPresentationPhase(token, 'paused')) {
       return false;
     }
     refreshClaudeLaunchControls(token.sessionId);
@@ -140,6 +160,7 @@ export const createTerminalClaudeLaunchActions = (
     failClaudeLaunchAttempt,
     refreshClaudeLaunchControls,
     renderClaudeLaunchControls,
+    setClaudeLaunchPaused,
     renderClaudeLaunchResult,
   };
 };

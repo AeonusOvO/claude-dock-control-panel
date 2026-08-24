@@ -1,5 +1,12 @@
 import type { ClaudeProviderId } from '../claude/providers';
 import type { FailureMetadata } from '../diagnostics/failure';
+import type {
+  NetworkPreflightAction,
+  NetworkPreflightScope,
+  NetworkProcessKind,
+  NetworkProbeResult,
+  NetworkProviderId,
+} from './network';
 import type { ResourceUsageView } from './resource';
 import type { PtyGeneration } from './terminal';
 import type { WorkspaceResult } from './workspace';
@@ -239,17 +246,27 @@ export interface ClaudeOperationResult extends FailureMetadata {
 
 /**
  * Renderer-safe explanation for a Claude launch paused by main-owned network authorization. It is
- * deliberately rebuilt from coarse facts rather than derived with `Omit` from the main result, so
- * cwd, route, target, process, configuration and run identities cannot accidentally cross IPC.
+ * rebuilt from a strict allow-list so the dialog can attribute the exact decision without exposing
+ * cwd, credentials, route leases, configuration revisions, or run identities.
  */
 export interface ClaudeLaunchPauseDiagnostics {
+  action: NetworkPreflightAction;
   checkedAt: number;
   failedItems: ReadonlyArray<{
+    checkedAt: number;
+    detail: string;
+    kind: NetworkProbeResult['kind'];
     label: string;
+    process: NetworkProcessKind;
+    required: boolean;
     status: 'failed' | 'warning';
+    target?: string;
   }>;
+  freshness: 'fresh' | 'unknown';
+  provider: NetworkProviderId;
+  providerLabel: string;
   reasons: readonly string[];
-  scope: 'application' | 'conversation';
+  scope: NetworkPreflightScope;
   status: 'blocked' | 'degraded';
   summary: string;
 }

@@ -1,6 +1,7 @@
 import { projectNameFromPath, resultFailureMessage } from '../../platform/format';
 import type { OperationResult, TerminalPhase, TerminalStatus } from '../../../shared/contracts';
 import type { TerminalProjectStateDeps } from './project-state-dependencies';
+import { renderRuntimePickerControls } from './project-state-runtime';
 import {
   claudeWorkbench,
   emptyState,
@@ -8,12 +9,8 @@ import {
   emptyStateTitle,
   footerStatus,
   runtimeActivityTrigger,
-  runtimeClaude,
-  runtimeCodex,
-  runtimePicker,
   terminalProject,
   titleStatus,
-  toggleLabel,
   workbenchScope,
   workbenchTabs,
   workbenchTitle,
@@ -70,7 +67,6 @@ export const createTerminalSessionActions = (
     document.body.dataset.phase = status.phase;
     titleStatus.textContent = `${copy.detail} · ${openFolders} 个项目 / ${getWorkspaceState().sessions.length} 个对话`;
     footerStatus.textContent = copy.footer;
-    toggleLabel.textContent = status.phase === 'running' ? '停止' : '启动';
     const terminalIsVisible = status.phase === 'running' || status.phase === 'starting';
     emptyStateTitle.textContent = '终端尚未运行';
     emptyStateHint.textContent = '点击左侧“启动”创建终端会话';
@@ -84,7 +80,8 @@ export const createTerminalSessionActions = (
     terminalProject.title = status.cwd;
     workbenchScope.textContent = scopedTitle;
     workbenchScope.dataset.titleTyping = typing;
-    runtimePicker.disabled = false;
+    renderRuntimePickerControls(deps, status.id);
+    terminalFeature.renderControlStatus(status);
     terminalFeature.setComposerEnabled(status.phase === 'running');
     if (status.phase === 'error') terminalFeature.showTerminalDiagnostic(status);
   };
@@ -101,7 +98,6 @@ export const createTerminalSessionActions = (
     titleStatus.textContent =
       rememberedCount > 0 ? `未打开对话 · ${rememberedCount} 个最近项目` : '未打开任何项目';
     footerStatus.textContent = '等待打开项目';
-    toggleLabel.textContent = '启动';
     emptyStateTitle.textContent = rememberedCount > 0 ? '选择一个项目继续' : '还没有项目';
     emptyStateHint.textContent =
       rememberedCount > 0
@@ -120,10 +116,9 @@ export const createTerminalSessionActions = (
     workbenchTrigger.title = 'Claude 工作台';
     claudeWorkbench.setAttribute('aria-label', 'Claude 可视化工作台');
     setWorkbenchOpen(false);
-    runtimePicker.disabled = true;
-    runtimeClaude.checked = true;
-    runtimeCodex.checked = false;
+    renderRuntimePickerControls(deps);
     document.body.dataset.agentRuntime = 'claude';
+    terminalFeature.renderControlStatus();
     terminalFeature.setComposerEnabled(false);
     runtimeActivityTrigger.hidden = false;
     setRuntimeSummaryOpen(false);

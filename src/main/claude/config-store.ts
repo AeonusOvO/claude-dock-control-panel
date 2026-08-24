@@ -49,6 +49,7 @@ export interface ClaudeLaunchConfigSnapshot {
   allowBypassPermissions: boolean;
   config: NormalizedClaudeConfig;
   credential?: string;
+  protocol: ClaudeEndpointProtocol;
   storage: ClaudeConfigSnapshot;
 }
 
@@ -125,14 +126,12 @@ export class ClaudeConfigStore {
   }
 
   public getView(cwd: string): ClaudeConfigView {
-    const config = this.getConfig(cwd);
     const stored = this.load().projects[projectKey(cwd)];
+    const config = this.normalizedConfig(stored);
     return {
       ...config,
       credentialConfigured: Boolean(stored?.encryptedCredential),
-      protocol:
-        stored?.protocol ??
-        (config.provider === 'anthropic' || config.preset !== 'gateway' ? 'anthropic' : 'unknown'),
+      protocol: this.endpointProtocol(stored, config),
       routerProviderId: stored?.routerProviderId,
       sourceAuthMode: stored?.sourceAuthMode,
       sourceBaseUrl: stored?.sourceBaseUrl,
@@ -156,10 +155,12 @@ export class ClaudeConfigStore {
 
   public createLaunchSnapshot(cwd: string): ClaudeLaunchConfigSnapshot {
     const project = this.load().projects[projectKey(cwd)];
+    const config = this.normalizedConfig(project);
     return {
       allowBypassPermissions: project?.allowBypassPermissions ?? DEFAULT_ALLOW_BYPASS_PERMISSIONS,
-      config: this.normalizedConfig(project),
+      config,
       credential: this.decryptedCredential(project),
+      protocol: this.endpointProtocol(project, config),
       storage: project ? { project: structuredClone(project) } : {},
     };
   }
@@ -239,6 +240,16 @@ export class ClaudeConfigStore {
     };
     this.persist(store);
     return this.getView(cwd);
+  }
+
+  private endpointProtocol(
+    stored: StoredClaudeConfig | undefined,
+    config: NormalizedClaudeConfig,
+  ): ClaudeEndpointProtocol {
+    return (
+      stored?.protocol ??
+      (config.provider === 'anthropic' || config.preset !== 'gateway' ? 'anthropic' : 'unknown')
+    );
   }
 
   private normalizedConfig(stored: StoredClaudeConfig | undefined): NormalizedClaudeConfig {

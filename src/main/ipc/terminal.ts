@@ -1,6 +1,7 @@
 import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
 import type { OperationResult, TerminalStatus } from '../../shared/contracts';
+import { MAX_TERMINAL_WRITE_LENGTH } from '../../shared/contracts/terminal';
 import { createFailureReporter } from '../infra/logger';
 import type { Registry } from '../infra/registry';
 import { MAIN_WINDOW } from '../infra/service-tokens';
@@ -100,7 +101,7 @@ export const registerTerminalIpc = ({
     CHANNELS.TERMINAL_WRITE,
     (event, sessionId: unknown, ptyGeneration: unknown, data: unknown) => {
       validateSender(event);
-      if (typeof data !== 'string' || data.length > 65_536) {
+      if (typeof data !== 'string' || data.length > MAX_TERMINAL_WRITE_LENGTH) {
         return;
       }
       try {

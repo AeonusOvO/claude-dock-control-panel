@@ -2,6 +2,7 @@ import type {
   ClaudeRouteHealth,
   NetworkPreflightResult,
   NetworkPreflightRunInput,
+  NetworkProviderConnectivityStatus,
   NetworkProviderId,
   PtyGeneration,
 } from '../../shared/contracts';
@@ -21,7 +22,7 @@ export interface ClaudeLaunchHealthMonitorKey {
 export interface ClaudeLaunchHealthEvidence {
   readonly checkedAt: number;
   readonly provider: NetworkProviderId;
-  readonly status: 'allowed' | 'blocked' | 'degraded';
+  readonly status: Exclude<NetworkProviderConnectivityStatus, 'testing'>;
 }
 
 export interface ClaudeLaunchHealthMonitorStart extends ClaudeLaunchHealthMonitorKey {
@@ -60,13 +61,20 @@ const cloneKey = (input: ClaudeLaunchHealthMonitorKey): ClaudeLaunchHealthMonito
     sessionId: input.sessionId,
   });
 
-const allowed = (result: NetworkPreflightResult): boolean => result.status === 'allowed';
+type ConnectivityHealthStatus =
+  ClaudeLaunchHealthEvidence['status'] | NetworkPreflightResult['providerConnectivity']['status'];
+
+const healthyStatus = (status: ConnectivityHealthStatus): boolean =>
+  status === 'allowed' || status === 'allowed_with_notice';
+
+const allowed = (result: NetworkPreflightResult): boolean =>
+  healthyStatus(result.providerConnectivity.status);
 
 const healthForResult = (
-  result: Pick<NetworkPreflightResult, 'status'>,
+  result: { readonly status: ConnectivityHealthStatus },
   checkedAt: number,
 ): ClaudeRouteHealth => {
-  if (result.status === 'allowed') {
+  if (healthyStatus(result.status)) {
     return Object.freeze({
       blocking: false,
       checkedAt,
@@ -154,7 +162,7 @@ export class ClaudeLaunchHealthMonitor {
       return;
     }
     if (input.initialEvidence?.provider === input.provider) {
-      record.concernCount = input.initialEvidence.status === 'allowed' ? 0 : 1;
+      record.concernCount = healthyStatus(input.initialEvidence.status) ? 0 : 1;
       this.publish(record, healthForResult(input.initialEvidence, input.initialEvidence.checkedAt));
       if (this.owns(record)) this.schedule(record);
       else this.stop(record);
@@ -205,7 +213,10 @@ export class ClaudeLaunchHealthMonitor {
         return;
       }
       record.concernCount = allowed(result) ? 0 : Math.min(record.concernCount + 1, 31);
-      this.publish(record, healthForResult(result, result.checkedAt ?? this.now()));
+      this.publish(
+        record,
+        healthForResult(result.providerConnectivity, result.checkedAt ?? this.now()),
+      );
     } catch {
       if (!this.owns(record)) {
         this.stop(record);

@@ -62,6 +62,7 @@ const defaultCodexState = (sessionId: string): CodexProjectState => ({
     updateAvailable: false,
   },
   login: { phase: 'idle' },
+  revision: 1,
   requiresOpenaiAuth: false,
   sessionId,
 });

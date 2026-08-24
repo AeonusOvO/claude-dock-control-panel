@@ -79,9 +79,32 @@ describe('Claude launch attempts', () => {
     expect(() => registry.begin('session-b', {})).not.toThrow();
   });
 
-  it('releases when a different conversation UUID is observed', () => {
+  it('keeps preflight, starting and paused presentation phases under the exact attempt', () => {
     const registry = new ClaudeLaunchAttemptRegistry();
-    registry.begin('session-a', {
+    const first = registry.begin('session-a', {
+      terminalPhase: 'running',
+      terminalPid: 10,
+      terminalPtyGeneration: 1,
+    });
+
+    expect(registry.presentationPhase('session-a')).toBe('preflight');
+    expect(
+      registry.observeTerminal(terminal('session-a', 'starting', undefined, 2)),
+    ).toBeUndefined();
+    expect(registry.presentationPhase('session-a')).toBe('starting');
+    expect(registry.setPresentationPhase(first, 'paused')).toBe(true);
+    expect(registry.presentationPhase('session-a')).toBe('paused');
+
+    registry.invalidate('session-a');
+    const replacement = registry.begin('session-a', {});
+    expect(registry.setPresentationPhase(first, 'starting')).toBe(false);
+    expect(registry.presentationPhase('session-a')).toBe('preflight');
+    expect(registry.isCurrent(replacement)).toBe(true);
+  });
+
+  it('releases when an accepted result is followed by a different conversation UUID', () => {
+    const registry = new ClaudeLaunchAttemptRegistry();
+    const token = registry.begin('session-a', {
       active: false,
       conversationId: 'conversation-old',
       terminalPhase: 'running',
@@ -89,6 +112,7 @@ describe('Claude launch attempts', () => {
       terminalPtyGeneration: 1,
     });
 
+    expect(registry.acceptResult(token, 'success')).toBe(true);
     expect(
       registry.observeClaude({
         active: true,
@@ -101,7 +125,7 @@ describe('Claude launch attempts', () => {
 
   it('hydrates an unknown conversation baseline before accepting a later UUID as new', () => {
     const registry = new ClaudeLaunchAttemptRegistry();
-    registry.begin('session-a', {
+    const token = registry.begin('session-a', {
       terminalPhase: 'running',
       terminalPid: 10,
       terminalPtyGeneration: 1,
@@ -115,6 +139,7 @@ describe('Claude launch attempts', () => {
       }),
     ).toBeUndefined();
     expect(registry.isBusy('session-a')).toBe(true);
+    expect(registry.acceptResult(token, 'success')).toBe(true);
     expect(
       registry.observeClaude({
         active: true,
@@ -124,10 +149,10 @@ describe('Claude launch attempts', () => {
     ).toBe('conversation');
   });
 
-  it('releases when a new running PowerShell PID is observed', () => {
+  it('releases when an accepted result is followed by a new running PowerShell PID', () => {
     const registry = new ClaudeLaunchAttemptRegistry();
     registry.observeTerminal(terminal('session-a', 'running', 10));
-    registry.begin('session-a', {
+    const token = registry.begin('session-a', {
       active: false,
       terminalPhase: 'running',
       terminalPid: 10,
@@ -137,16 +162,17 @@ describe('Claude launch attempts', () => {
     expect(
       registry.observeTerminal(terminal('session-a', 'starting', undefined, 2)),
     ).toBeUndefined();
+    expect(registry.acceptResult(token, 'success')).toBe(true);
     expect(registry.observeTerminal(terminal('session-a', 'running', 11, 2))?.reason).toBe(
       'powershell',
     );
     expect(registry.isBusy('session-a')).toBe(false);
   });
 
-  it('releases for a new PTY generation when Windows reuses the same PID', () => {
+  it('releases for an accepted result when Windows reuses the PID on a new PTY generation', () => {
     const registry = new ClaudeLaunchAttemptRegistry();
     registry.observeTerminal(terminal('session-a', 'running', 10, 1));
-    registry.begin('session-a', {
+    const token = registry.begin('session-a', {
       active: false,
       terminalPhase: 'running',
       terminalPid: 10,
@@ -156,16 +182,37 @@ describe('Claude launch attempts', () => {
     expect(
       registry.observeTerminal(terminal('session-a', 'starting', undefined, 2)),
     ).toBeUndefined();
+    expect(registry.acceptResult(token, 'success')).toBe(true);
     expect(registry.observeTerminal(terminal('session-a', 'running', 10, 2))?.reason).toBe(
       'powershell',
     );
     expect(registry.isBusy('session-a')).toBe(false);
   });
 
+  it.each(['success', 'failure'] as const)(
+    'retains early replacement evidence until the %s result is accepted',
+    (disposition) => {
+      const registry = new ClaudeLaunchAttemptRegistry();
+      const token = registry.begin('session-a', {
+        active: false,
+        terminalPhase: 'running',
+        terminalPid: 10,
+        terminalPtyGeneration: 1,
+      });
+
+      expect(registry.observeTerminal(terminal('session-a', 'running', 11, 2))).toBeUndefined();
+      expect(registry.isCurrent(token)).toBe(true);
+      expect(registry.isBusy('session-a')).toBe(true);
+
+      expect(registry.acceptResult(token, disposition)).toBe(true);
+      expect(registry.isBusy('session-a')).toBe(false);
+    },
+  );
+
   it('releases when Claude exits and the same PowerShell remains running', () => {
     const registry = new ClaudeLaunchAttemptRegistry();
     registry.observeTerminal(terminal('session-a', 'running', 10));
-    registry.begin('session-a', {
+    const token = registry.begin('session-a', {
       active: false,
       terminalPhase: 'running',
       terminalPid: 10,
@@ -173,6 +220,7 @@ describe('Claude launch attempts', () => {
     });
 
     expect(registry.observeClaude({ active: true, sessionId: 'session-a' })).toBeUndefined();
+    expect(registry.acceptResult(token, 'success')).toBe(true);
     expect(registry.observeClaude({ active: false, sessionId: 'session-a' })?.reason).toBe(
       'claude-exit',
     );
@@ -204,6 +252,40 @@ describe('Claude launch attempts', () => {
       }),
     ).toBe(false);
     expect(registry.isCurrent(second)).toBe(true);
+    expect(registry.isBusy('session-a')).toBe(true);
+  });
+
+  it('does not apply an old settlement with retained running evidence to a newer attempt', async () => {
+    const registry = new ClaudeLaunchAttemptRegistry();
+    const ipc = deferred<string>();
+    const first = registry.begin('session-a', {
+      terminalPhase: 'running',
+      terminalPid: 10,
+      terminalPtyGeneration: 1,
+    });
+    const applied: string[] = [];
+    const completion = orchestrateClaudeLaunchAttempt({
+      applyResult: (result) => {
+        applied.push(result);
+        return registry.acceptResult(first, 'success');
+      },
+      registry,
+      start: () => ipc.promise,
+      token: first,
+    });
+
+    expect(registry.observeTerminal(terminal('session-a', 'running', 11, 2))).toBeUndefined();
+    registry.invalidate('session-a');
+    const replacement = registry.begin('session-a', {
+      terminalPhase: 'running',
+      terminalPid: 11,
+      terminalPtyGeneration: 2,
+    });
+    ipc.resolve('old result');
+
+    await expect(completion).resolves.toEqual({ status: 'stale' });
+    expect(applied).toEqual([]);
+    expect(registry.isCurrent(replacement)).toBe(true);
     expect(registry.isBusy('session-a')).toBe(true);
   });
 

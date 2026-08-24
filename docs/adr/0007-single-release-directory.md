@@ -41,22 +41,29 @@ electron-updater 又读取安装包内嵌的 GitHub provider。预发布版本�
 
 4. 命令职责分离：
 
-   - `npm run dist`：构建 Windows x64 产物。
-   - `npm run release:manifest`：校验本地产物和更新链。
-   - `npm run release`：依次执行前两项，不上传。
-   - `npm run release:publish:cos`：用发布进程环境凭据发布已验证产物。
+   - `npm run dist`：构建 Windows x64 产物，是唯一打包边界。
+   - `npm run release:manifest`：校验本地产物、packaged source identity、NSIS payload 和更新链。
+   - `npm run release`：从 clean exact commit 与空 `outputs/` 开始，依次执行 `npm ci`、全部质量门禁、
+     `npm run dist`、源码身份复核和 `release:manifest`，再写入绑定 fixed steps 与 frozen report 摘要的
+     `release-orchestration.json`，不上传。
+   - `npm run release:publish:cos`：要求有效 orchestration record，对 frozen report 完整复核并冻结通道清单
+     字节后，用发布进程环境凭据发布已验证产物。
    - `npm run release:publish:cos -- --promote-rc`：稳定版同时推进 `latest.yml` 和 `rc.yml`。
 
 5. `scripts/release/manifest.mjs` 是可复用发布门禁，任一项不成立就非零退出：
 
    - 安装包、同名 blockmap、当前通道 YAML 三项齐全，目录内没有陈旧发布文件。
-   - `build.publish` 恰好是一个符合约束的 generic COS feed。
+   - clean source identity 与 ASAR 内 packaged identity 精确一致。
+   - `build.publish` 恰好是一个符合约束的 generic COS feed；packaged updater channel 与发行通道一致。
    - YAML 结构可解析，`files` 恰好有一个完整对象。
    - `version`、`files[0].url`、`path`、`files[0].size`、文件项和顶层 SHA-512 均与最终安装包一致。
-   - SemVer 和派生通道有效。
+   - pinned 7z 提取出的 NSIS application payload 与 `win-unpacked` 逐字节一致；gzip blockmap v2 的结构、
+     覆盖和全部 BLAKE2b-144 chunks 有效。
+   - SemVer 和派生通道有效；Authenticode 只接受明确的 `Valid` 或 `NotSigned`。
 
-6. `outputs/release-manifest.json` 是本地发布记录，包含 provider、feed、通道、产物字节数、SHA-256、
-   SHA-512、安装包 Authenticode 状态、生成时间和问题列表。它不上传为更新清单，也不是签名。
+6. `outputs/release-manifest.json` 是本地发布记录，包含 provider、feed、通道、源码身份、cohort、产物
+   字节数、SHA-256、SHA-512、安装包 Authenticode 状态、生成时间和问题列表。它不上传为更新清单，也不是
+   签名。
 
 7. COS 发布使用不可变资产优先、可变通道最后的协议：
 
@@ -79,8 +86,9 @@ electron-updater 又读取安装包内嵌的 GitHub provider。预发布版本�
 9. electron-updater 是 ClaudeDock 版本、下载和安装状态的唯一权威。检查与下载分离，用户显式开始下载；
    SHA-512 不匹配、降级或通道异常都保留当前安装。GitHub ClaudeDock 版本请求不再参与更新中心聚合。
 
-10. 完整性声明不得扩大为真实性声明。当前 `NotSigned` 安装包、未签名通道清单和无 `publisherName`
-    配置意味着“SHA-512 通过”“已下载”或“TLS 可用”都不能显示为“发布者身份已验证”或“供应链已验证”。
+10. 完整性声明不得扩大为真实性声明。Authenticode 结论只取最终 manifest；若为 `NotSigned`，不得描述为
+    已签名发行版。无论最终为 `Valid` 或 `NotSigned`，未签名通道清单和无 `publisherName` 配置都意味着
+    “SHA-512 通过”“已下载”或“TLS 可用”不能显示为“发布者身份已验证”或“供应链已验证”。
 
 ## 结果
 

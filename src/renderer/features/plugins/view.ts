@@ -1,12 +1,14 @@
 import type {
   ClaudePluginCatalog,
   ClaudePluginMarketplaceView,
+  ClaudePluginOperationKind,
   ClaudePluginOperationResult,
+  ClaudePluginOperationView,
   ClaudePluginView,
 } from '../../../shared/contracts';
 import { localizePluginCopy } from '../../../shared/ui/plugin-localization';
 import type { PluginsElements } from './elements';
-import type { PluginsState } from './state';
+import { pluginOperationInProgress, type PluginsState } from './state';
 
 export interface PluginConfirmationRequest {
   confirmLabel?: string;
@@ -35,6 +37,7 @@ export interface PluginsViewDependencies {
 
 export interface PluginsView {
   renderCatalog: (catalog: ClaudePluginCatalog) => void;
+  renderOperationPresentation: () => void;
   selectTab: (tab: string) => void;
 }
 
@@ -100,18 +103,52 @@ const selectPluginTab = (tab: string): void => {
   }
 };
 
+const pluginOperationObject = (operation: ClaudePluginOperationView): string => {
+  switch (operation.kind) {
+    case 'disable':
+      return `停用 ${operation.target}`;
+    case 'enable':
+      return `启用 ${operation.target}`;
+    case 'install':
+      return `安装 ${operation.target}`;
+    case 'marketplace-add':
+      return '添加插件市场';
+    case 'marketplace-remove':
+      return `移除插件市场 ${operation.target}`;
+    case 'refresh':
+      return '刷新插件市场';
+    case 'uninstall':
+      return `卸载 ${operation.target}`;
+    case 'update':
+      return `更新 ${operation.target}`;
+    case 'update-all':
+      return '更新所有插件';
+  }
+};
+
+const pluginOperationStatus = (operation: ClaudePluginOperationView): string =>
+  operation.phase === 'refreshing'
+    ? `正在刷新插件列表以确认“${pluginOperationObject(operation)}”的结果…`
+    : `正在${pluginOperationObject(operation)}…`;
+
 const pluginActionButton = (
   { dependencies, state }: PluginsViewContext,
   label: string,
   variant: 'primary' | 'quiet' | 'secondary',
   busyLabel: string,
+  operationKind: ClaudePluginOperationKind,
+  operationTarget: string,
   operation: () => Promise<ClaudePluginOperationResult>,
 ): HTMLButtonElement => {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `button button--${variant} button--small`;
+  button.dataset.busyLabel = busyLabel;
+  button.dataset.pluginOperationKind = operationKind;
+  button.dataset.pluginOperationTarget = operationTarget;
   button.textContent = label;
-  button.disabled = state.mutationInProgress;
+  button.disabled = pluginOperationInProgress(state);
+  button.setAttribute('aria-busy', 'false');
   button.addEventListener('click', () => {
     dependencies.runMutation(operation, busyLabel, button);
   });
@@ -194,6 +231,8 @@ const renderPluginCard = (
         plugin.enabled ? '停用' : '启用',
         'secondary',
         plugin.enabled ? '正在停用…' : '正在启用…',
+        plugin.enabled ? 'disable' : 'enable',
+        plugin.pluginId,
         dependencies.toggleOperation(plugin),
       ),
     );
@@ -204,6 +243,8 @@ const renderPluginCard = (
           '更新',
           'quiet',
           '正在更新…',
+          'update',
+          plugin.pluginId,
           dependencies.updateOperation(plugin),
         ),
       );
@@ -211,8 +252,12 @@ const renderPluginCard = (
     const uninstall = document.createElement('button');
     uninstall.type = 'button';
     uninstall.className = 'button button--quiet button--small plugin-card__danger';
+    uninstall.dataset.busyLabel = '正在卸载…';
+    uninstall.dataset.pluginOperationKind = 'uninstall';
+    uninstall.dataset.pluginOperationTarget = plugin.pluginId;
     uninstall.textContent = '卸载';
-    uninstall.disabled = state.mutationInProgress;
+    uninstall.disabled = pluginOperationInProgress(state);
+    uninstall.setAttribute('aria-busy', 'false');
     uninstall.addEventListener('click', async () => {
       if (
         !(await dependencies.requestConfirmation({
@@ -234,6 +279,8 @@ const renderPluginCard = (
         '安装',
         'primary',
         '正在安装…',
+        'install',
+        plugin.pluginId,
         dependencies.installOperation(plugin),
       ),
     );
@@ -260,6 +307,59 @@ const renderPluginList = (
   }
   for (const plugin of plugins) {
     container.append(renderPluginCard(context, plugin, isFresh(plugin)));
+  }
+};
+
+const renderPluginOperationPresentation = ({ elements, state }: PluginsViewContext): void => {
+  const activeOperation = state.catalog?.activeOperation;
+  const localMutation = Boolean(state.mutationOperation);
+  const refreshing = Boolean(state.refreshOperation) || activeOperation?.kind === 'refresh';
+  const busy = pluginOperationInProgress(state);
+  const catalogAvailable = state.catalog?.cliAvailable ?? false;
+  for (const button of [
+    ...elements.installedList.querySelectorAll<HTMLButtonElement>('button'),
+    ...elements.availableList.querySelectorAll<HTMLButtonElement>('button'),
+    ...elements.marketplaceList.querySelectorAll<HTMLButtonElement>('button'),
+  ]) {
+    button.disabled = busy;
+    if (activeOperation) {
+      const ownsOperation =
+        button.dataset.pluginOperationKind === activeOperation.kind &&
+        button.dataset.pluginOperationTarget === activeOperation.target;
+      button.setAttribute('aria-busy', String(ownsOperation));
+      if (ownsOperation && button.dataset.busyLabel) {
+        button.textContent = button.dataset.busyLabel;
+      }
+    } else if (!localMutation) {
+      button.setAttribute('aria-busy', 'false');
+    }
+  }
+
+  const addingMarketplace = activeOperation?.kind === 'marketplace-add';
+  const updatingAll = activeOperation?.kind === 'update-all';
+  elements.marketplaceSource.disabled = busy;
+  elements.marketplaceSource.setAttribute('aria-busy', String(busy));
+  elements.addMarketplaceButton.disabled = busy || !catalogAvailable;
+  elements.addMarketplaceButton.setAttribute('aria-busy', String(addingMarketplace));
+  elements.updateAllButton.disabled =
+    busy || !catalogAvailable || (state.catalog?.updatesAvailable ?? 0) === 0;
+  elements.updateAllButton.setAttribute('aria-busy', String(updatingAll));
+  if (activeOperation) {
+    elements.addMarketplaceButton.textContent = addingMarketplace ? '正在添加…' : '添加市场';
+    elements.updateAllButton.textContent = updatingAll ? '正在更新…' : '更新全部';
+  } else if (!localMutation) {
+    elements.addMarketplaceButton.textContent = '添加市场';
+    elements.updateAllButton.textContent = '更新全部';
+  }
+
+  elements.refreshButton.disabled = busy;
+  elements.refreshButton.setAttribute('aria-busy', String(refreshing));
+  elements.refreshButton.textContent = refreshing ? '正在刷新…' : '检查更新';
+  elements.status.setAttribute('aria-busy', String(busy));
+  if (activeOperation) {
+    elements.status.textContent = pluginOperationStatus(activeOperation);
+  } else if (refreshing) {
+    elements.status.textContent = '正在刷新插件市场并检查更新…';
   }
 };
 
@@ -330,9 +430,11 @@ const renderPluginCatalog = (context: PluginsViewContext, catalog: ClaudePluginC
       renderMarketplaceCard(context, marketplace, previousKeys === null),
     );
   }
-  elements.addMarketplaceButton.disabled = state.mutationInProgress || !catalog.cliAvailable;
+  elements.addMarketplaceButton.disabled =
+    pluginOperationInProgress(state) || !catalog.cliAvailable;
   elements.updateAllButton.disabled =
-    state.mutationInProgress || !catalog.cliAvailable || catalog.updatesAvailable === 0;
+    pluginOperationInProgress(state) || !catalog.cliAvailable || catalog.updatesAvailable === 0;
+  renderPluginOperationPresentation(context);
   dependencies.syncUpdateActionVisibility();
 };
 
@@ -360,8 +462,12 @@ const renderMarketplaceCard = (
   const remove = document.createElement('button');
   remove.type = 'button';
   remove.className = 'button button--quiet button--small plugin-card__danger';
+  remove.dataset.busyLabel = '正在移除…';
+  remove.dataset.pluginOperationKind = 'marketplace-remove';
+  remove.dataset.pluginOperationTarget = marketplace.name;
   remove.textContent = '移除市场';
-  remove.disabled = state.mutationInProgress;
+  remove.disabled = pluginOperationInProgress(state);
+  remove.setAttribute('aria-busy', 'false');
   remove.addEventListener('click', async () => {
     if (
       !(await dependencies.requestConfirmation({
@@ -393,6 +499,7 @@ export const createPluginsView = (
   const context = { dependencies, elements, state };
   return {
     renderCatalog: (catalog) => renderPluginCatalog(context, catalog),
+    renderOperationPresentation: () => renderPluginOperationPresentation(context),
     selectTab: selectPluginTab,
   };
 };

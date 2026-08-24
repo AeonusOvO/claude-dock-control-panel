@@ -14,7 +14,7 @@ main/       shared/ + electron    renderer/   shared/ + DOM
             禁止 renderer/
 ```
 
-`shared/` 编译进全部三个进程，因此不能出现 `electron`、`node:*` 或 DOM 类型。`main/` 与 `renderer/` 互不 import，只通过 IPC 通信（见 [ipc-contract.md](ipc-contract.md)）。
+`shared/` 编译进全部三个进程，因此不能出现 `electron`、bare / `node:` Node core import 或 DOM 类型。`main/` 与 `renderer/` 互不 import，只通过 IPC 通信（见 [ipc-contract.md](ipc-contract.md)）。
 
 ## 仓库根
 
@@ -38,9 +38,12 @@ main/       shared/ + electron    renderer/   shared/ + DOM
 | `vite.config.ts`           | 渲染端构建                                            |
 | `vite.preload.config.ts`   | preload 构建                                          |
 
-`scripts/release/manifest.mjs` 解析并校验当前 `rc.yml`、`beta.yml` 或 `latest.yml`，生成本地
-`release-manifest.json`；`scripts/release/publish-cos.mjs` 使用环境凭据发布到固定 COS prefix。两者不进入
-Electron 运行时，也不把 COS 写凭据写进 `outputs/`。
+`scripts/build/source-identity.mjs` 在 clean 后、任何生成或编译前写入
+`dist/build-source-identity.json`；该无凭据文件随 `dist/**/*` 进入 ASAR。`scripts/release/release.mjs` 从 clean
+exact commit 编排重装、质量门禁、`npm run dist`、源码身份复核和 manifest；
+`scripts/release/manifest.mjs` 校验当前 `rc.yml`、`beta.yml` 或 `latest.yml`、NSIS payload、blockmap 和
+packaged identity 并生成本地 `release-manifest.json`。`scripts/release/publish-cos.mjs` 使用环境凭据发布到
+固定 COS prefix。release 脚本不进入 Electron 运行时，也不把 COS 写凭据写进 `outputs/`。
 
 `AGENTS.md` 与 `README.md` 留在根目录：前者是 agent 工具链的固定读取位置，后者是仓库首页。两者都是索引，正文在 `docs/`。
 
@@ -127,12 +130,10 @@ renderer/
                           scroll-chaining.ts session-generation.ts
                           terminal-output-pump.ts terminal-view.ts markdown/
   shell/                  跨特性外壳：rail footer dialogs workbench toast theme
-                          runtime-activity 及各自的 -dependencies / -preview 文件，
-                          共 37 个 TypeScript 文件 3,612 行
-  features/               15 个特性共 196 个 TypeScript 文件：
-                          artifact chat claude-execution-settings connection conversation downloads mcp
-                          plugins preflight projects proxy router settings
-                          terminal updates（其中 terminal 40 文件、connection 39）
+                          runtime-activity 及各自的 -dependencies / -preview 文件
+  features/               15 个特性：artifact chat claude-execution-settings connection
+                          conversation downloads mcp plugins preflight projects proxy router
+                          settings terminal updates
 ```
 
 每个特性的 `index.ts` 导出注册式三件套（见 [ADR-0011](../adr/0011-registration-based-feature-composition.md)）：
@@ -178,7 +179,8 @@ tests/
 
 ```
 scripts/
-  build/    clean.mjs generate-icons.mjs
+  build/    clean.mjs generate-icons.mjs source-identity.mjs
+  release/  release.mjs manifest.mjs artifact-integrity.mjs publish-cos.mjs
   smoke/    conpty-resize-smoke.cjs control-theme-smoke.cjs dialog-select-smoke.cjs
             layout-smoke.cjs native-visual-smoke.cjs real-electron-visual-qa.cjs
             runtime-soak.cjs select-interaction-smoke.cjs select-theme-smoke.cjs
@@ -190,21 +192,20 @@ scripts/
 
 `.dependency-cruiser.cjs`，通过 `npm run lint:deps` 运行。
 
-| 规则                                  | 内容                                                                   | 级别  |
-| ------------------------------------- | ---------------------------------------------------------------------- | ----- |
-| `no-circular`                         | 禁止循环依赖                                                           | error |
-| `no-orphans`                          | 禁止孤儿模块（入口、`.d.ts`、`tests/`、根配置除外）                    | error |
-| `shared-stays-pure`                   | `src/shared/` 不得依赖 `electron` 或 `node:*`                          | error |
-| `shared-imports-nothing-above`        | `src/shared/` 不得 import 任何进程树                                   | error |
-| `main-not-to-renderer`                | `src/main/` 不得 import `renderer/` 或 `preload/`                      | error |
-| `renderer-not-to-main`                | `src/renderer/` 不得 import `main/` 或 `preload/`                      | error |
-| `preload-only-shared`                 | `src/preload/` 不得 import `main/` 或 `renderer/`                      | error |
-| `preload-no-node-builtins`            | preload 不得 import Node 内置模块                                      | error |
-| `src-not-to-tests`                    | `src/` 不得依赖 `tests/`                                               | error |
-| `no-unresolvable`                     | 禁止无法解析的 import                                                  | error |
-| `src-not-to-dev-dep`                  | `src/` 不得依赖 devDependency（`electron` 例外，由打包后的二进制提供） | error |
-| `main-ipc-handlers-are-isolated`      | `src/main/ipc/` 域 handler 之间禁止互相 import                         | error |
-| `renderer-feature-<name>-is-isolated` | `features/<name>/` 不得 import 其他特性（按目录动态生成 15 条）        | error |
+- `no-circular`（error）：禁止循环依赖
+- `no-orphans`（error）：禁止孤儿模块（入口、`.d.ts`、`tests/`、根配置除外）
+- `shared-stays-pure`（error）：`src/shared/` 不得依赖 bare / `node:` Node core
+- `shared-no-electron`（error）：`src/shared/` 不得依赖 `electron`
+- `shared-imports-nothing-above`（error）：`src/shared/` 不得 import 任何进程树
+- `main-not-to-renderer`（error）：`src/main/` 不得 import `renderer/` 或 `preload/`
+- `renderer-not-to-main`（error）：`src/renderer/` 不得 import `main/` 或 `preload/`
+- `preload-only-shared`（error）：`src/preload/` 不得 import `main/` 或 `renderer/`
+- `preload-no-node-builtins`（error）：preload 不得 import bare / `node:` Node core
+- `src-not-to-tests`（error）：`src/` 不得依赖 `tests/`
+- `no-unresolvable`（error）：禁止无法解析的 import
+- `src-not-to-dev-dep`（error）：`src/` 不得依赖 devDependency（`electron` 例外，由打包后的二进制提供）
+- `main-ipc-handlers-are-isolated`（error）：`src/main/ipc/` 域 handler 之间禁止互相 import
+- `renderer-feature-<name>-is-isolated`（error）：`features/<name>/` 不得 import 其他特性（按目录动态生成 15 条）
 
 全部规则为 error；`lint` 脚本同时要求 `--max-warnings=0`，任何 warning 即失败。
 

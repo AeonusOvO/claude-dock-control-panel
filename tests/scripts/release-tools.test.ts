@@ -1,296 +1,28 @@
-import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  type ArchiveReader,
+  type ObjectDescriptor,
+  type ReleaseManifest,
+  blockmapBytes,
+  cleanupReleaseFixtures,
+  createPublicationHarness,
+  createReleaseFixture,
+  digest,
+  feedUrl,
+  fixtureRoots,
+  manifestTools,
+  packageManifest,
+  prefix,
+  publisherTools,
+  validateFixture,
+  writeFixtureOrchestration,
+} from './release-tools-fixture';
 
-interface Artifact {
-  bytes: number;
-  name: string;
-  sha256: string;
-  sha512: string;
-}
-
-interface ReleaseManifest {
-  artifacts: Artifact[];
-  channel: string;
-  channelManifest: string;
-  directory: string;
-  feedUrl?: string;
-  generatedAt: string;
-  problems: string[];
-  provider?: string;
-  signature: string;
-  version: string;
-}
-
-interface ReleaseValidation {
-  blockmap?: Artifact;
-  channelManifestPath: string;
-  installer?: Artifact;
-  manifest: ReleaseManifest;
-  updateManifest?: { version?: string };
-}
-
-interface ManifestTools {
-  compareSemanticVersions(left: string, right: string): number;
-  resolveReleaseChannel(packageManifest: unknown): string;
-  validateGenericFeed(packageManifest: unknown): { feedUrl: string };
-  validateRelease(options: {
-    now?: Date;
-    projectRoot: string;
-    releaseDirectory?: string;
-    signatureStatus?: () => string;
-    writeReport?: boolean;
-  }): ReleaseValidation;
-}
-
-interface ObjectDescriptor {
-  body?: Buffer;
-  bytes: number;
-  cacheControl: string;
-  contentType: string;
-  firstByte?: number;
-  key: string;
-  localPath?: string;
-  remoteName?: string;
-  sha256?: string;
-  sha512?: string;
-}
-
-interface RemoteObject {
-  body: Buffer;
-  cacheControl: string;
-  sha256?: string;
-  sha512?: string;
-}
-
-interface PublisherTools {
-  CHANNEL_CACHE_CONTROL: string;
-  IMMUTABLE_CACHE_CONTROL: string;
-  createCosStorage(options: {
-    bucket: string;
-    client: {
-      deleteObject?(parameters: unknown): Promise<unknown>;
-      getBucketVersioning?(parameters: unknown): Promise<unknown>;
-      getObject?(parameters: unknown): Promise<unknown>;
-      headObject(parameters: unknown): Promise<unknown>;
-      putObject(parameters: unknown): Promise<unknown>;
-    };
-    region: string;
-    secrets?: string[];
-  }): {
-    assertAtomicCreateSupported(): Promise<void>;
-    create(descriptor: ObjectDescriptor): Promise<boolean>;
-    head(key: string): Promise<unknown>;
-    read(key: string): Promise<Buffer | undefined>;
-  };
-  publishValidatedRelease(options: {
-    fetchImpl: typeof fetch;
-    log?: (message: string) => void;
-    prefix: string;
-    promoteChannels?: string[];
-    release: ReleaseValidation;
-    storage: {
-      assertAtomicCreateSupported(): Promise<void>;
-      create(descriptor: ObjectDescriptor): Promise<boolean>;
-      delete(key: string): Promise<void>;
-      head(key: string): Promise<{
-        bytes?: number;
-        cacheControl?: string;
-        exists: boolean;
-        sha256?: string;
-        sha512?: string;
-      }>;
-      put(descriptor: ObjectDescriptor): Promise<void>;
-      read(key: string): Promise<Buffer | undefined>;
-    };
-  }): Promise<{ assets: string[]; channels: string[]; version: string }>;
-  readCosEnvironment(
-    feedUrl: string,
-    environment: Record<string, string>,
-  ): {
-    prefix: string;
-  };
-  redactSensitiveText(value: unknown, secrets?: string[]): string;
-}
-
-const scriptsDirectory = path.join(__dirname, '..', '..', 'scripts', 'release');
-const manifestTools = (await import(
-  pathToFileURL(path.join(scriptsDirectory, 'manifest.mjs')).href
-)) as ManifestTools;
-const publisherTools = (await import(
-  pathToFileURL(path.join(scriptsDirectory, 'publish-cos.mjs')).href
-)) as PublisherTools;
-
-const fixtureRoots: string[] = [];
-const feedUrl = 'https://claudedock-test-123.cos.ap-test.myqcloud.com/updates/windows/x64/';
-const prefix = 'updates/windows/x64/';
-
-const digest = (algorithm: 'sha256' | 'sha512', encoding: 'base64' | 'hex', body: Buffer) =>
-  createHash(algorithm).update(body).digest(encoding);
-
-const packageManifest = (
-  version: string,
-  publish: unknown = {
-    provider: 'generic',
-    url: feedUrl,
-    useMultipleRangeRequest: false,
-  },
-) => ({
-  build: {
-    detectUpdateChannel: true,
-    productName: 'ClaudeDock Test',
-    publish,
-  },
-  version,
-});
-
-const updateManifest = (version: string, installerName: string, installer: Buffer) => {
-  const sha512 = digest('sha512', 'base64', installer);
-  return [
-    `version: ${version}`,
-    'files:',
-    `  - url: ${installerName}`,
-    `    sha512: ${sha512}`,
-    `    size: ${installer.byteLength}`,
-    `path: ${installerName}`,
-    `sha512: ${sha512}`,
-    "releaseDate: '2026-08-23T00:00:00.000Z'",
-    '',
-  ].join('\n');
-};
-
-const createReleaseFixture = (version = '5.0.0-rc.15') => {
-  const root = mkdtempSync(path.join(tmpdir(), 'claudedock-release-tools-'));
-  fixtureRoots.push(root);
-  const output = path.join(root, 'outputs');
-  mkdirSync(output);
-  writeFileSync(path.join(root, 'package.json'), JSON.stringify(packageManifest(version)), 'utf8');
-  const installerName = `ClaudeDock-Setup-${version}-x64.exe`;
-  const channel = version.includes('-') ? version.split('-')[1]!.split('.')[0]! : 'latest';
-  const installer = Buffer.from(`installer-${version}`);
-  const blockmap = Buffer.from(`blockmap-${version}`);
-  writeFileSync(path.join(output, installerName), installer);
-  writeFileSync(path.join(output, `${installerName}.blockmap`), blockmap);
-  writeFileSync(
-    path.join(output, `${channel}.yml`),
-    updateManifest(version, installerName, installer),
-    'utf8',
-  );
-  return { channel, installer, installerName, output, root };
-};
-
-const validateFixture = (root: string, output: string, writeReport = false) =>
-  manifestTools.validateRelease({
-    now: new Date('2026-08-23T01:02:03.000Z'),
-    projectRoot: root,
-    releaseDirectory: output,
-    signatureStatus: () => 'NotSigned',
-    writeReport,
-  });
-
-const createPublicationHarness = () => {
-  const remote = new Map<string, RemoteObject>();
-  const writes: ObjectDescriptor[] = [];
-  let afterCreate: ((descriptor: ObjectDescriptor) => Promise<void>) | undefined;
-  let beforeCreate: ((descriptor: ObjectDescriptor) => Promise<void>) | undefined;
-  let rangeByte: number | undefined;
-  let rangeStatus = 206;
-  const descriptorBody = (descriptor: ObjectDescriptor) => {
-    if (descriptor.body) return descriptor.body;
-    if (!descriptor.localPath) throw new Error(`missing body for ${descriptor.key}`);
-    return readFileSync(descriptor.localPath);
-  };
-  const writeRemote = (descriptor: ObjectDescriptor) => {
-    writes.push(descriptor);
-    remote.set(descriptor.key, {
-      body: descriptorBody(descriptor),
-      cacheControl: descriptor.cacheControl,
-      sha256: descriptor.sha256,
-      sha512: descriptor.sha512,
-    });
-  };
-  const storage = {
-    assertAtomicCreateSupported: vi.fn(async () => undefined),
-    create: vi.fn(async (descriptor: ObjectDescriptor) => {
-      await beforeCreate?.(descriptor);
-      if (remote.has(descriptor.key)) return false;
-      writeRemote(descriptor);
-      await afterCreate?.(descriptor);
-      return true;
-    }),
-    delete: vi.fn(async (key: string) => {
-      remote.delete(key);
-    }),
-    head: vi.fn(async (key: string) => {
-      const object = remote.get(key);
-      return object
-        ? {
-            bytes: object.body.byteLength,
-            cacheControl: object.cacheControl,
-            exists: true,
-            sha256: object.sha256,
-            sha512: object.sha512,
-          }
-        : { exists: false };
-    }),
-    put: vi.fn(async (descriptor: ObjectDescriptor) => {
-      writeRemote(descriptor);
-    }),
-    read: vi.fn(async (key: string) => remote.get(key)?.body),
-  };
-  const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
-    const request = input instanceof Request ? input : undefined;
-    const url = new URL(request?.url ?? String(input));
-    const key = decodeURIComponent(url.pathname.replace(/^\//, ''));
-    const object = remote.get(key);
-    if (!object) return new Response('missing', { status: 404 });
-    const method = init?.method ?? request?.method ?? 'GET';
-    const headers = new Headers({
-      'cache-control': object.cacheControl,
-      'content-length': String(object.body.byteLength),
-    });
-    if (method === 'HEAD') return new Response(null, { headers, status: 200 });
-    const requestHeaders = new Headers(init?.headers ?? request?.headers);
-    if (requestHeaders.get('range') === 'bytes=0-0') {
-      if (rangeStatus !== 206)
-        return new Response(new Uint8Array(object.body), { headers, status: rangeStatus });
-      headers.set('content-length', '1');
-      headers.set('content-range', `bytes 0-0/${object.body.byteLength}`);
-      return new Response(new Uint8Array([rangeByte ?? object.body[0] ?? 0]), {
-        headers,
-        status: 206,
-      });
-    }
-    return new Response(new Uint8Array(object.body), { headers, status: 200 });
-  });
-  return {
-    fetchImpl,
-    remote,
-    setAfterCreate: (hook: typeof afterCreate) => {
-      afterCreate = hook;
-    },
-    setBeforeCreate: (hook: typeof beforeCreate) => {
-      beforeCreate = hook;
-    },
-    setRangeByte: (byte: number | undefined) => {
-      rangeByte = byte;
-    },
-    setRangeStatus: (status: number) => {
-      rangeStatus = status;
-    },
-    storage,
-    writes,
-  };
-};
-
-afterEach(() => {
-  for (const root of fixtureRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
+afterEach(cleanupReleaseFixtures);
 
 describe('release manifest validation', () => {
   it('selects detected prerelease channels and compares complete semantic versions', () => {
@@ -341,6 +73,83 @@ describe('release manifest validation', () => {
     }
   });
 
+  it('records full source identity and distinguishes ignored outputs from tracked and untracked dirt', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-source-identity-'));
+    fixtureRoots.push(root);
+    const emptyGitConfig = path.join(root, 'empty-gitconfig');
+    const packageLock = Buffer.from('{"lockfileVersion":3}\n', 'utf8');
+    writeFileSync(emptyGitConfig, '', 'utf8');
+    writeFileSync(path.join(root, '.gitignore'), 'dist/\noutputs/\n', 'utf8');
+    writeFileSync(path.join(root, 'package-lock.json'), packageLock);
+    const git = (arguments_: string[]) =>
+      execFileSync('git', ['-C', root, ...arguments_], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: emptyGitConfig,
+          GIT_CONFIG_SYSTEM: emptyGitConfig,
+        },
+      });
+    git(['init', '--quiet']);
+    git(['add', '.gitignore', 'empty-gitconfig', 'package-lock.json']);
+    git([
+      '-c',
+      'user.name=ClaudeDock Tests',
+      '-c',
+      'user.email=tests@example.invalid',
+      'commit',
+      '--quiet',
+      '-m',
+      'fixture',
+    ]);
+
+    const clean = manifestTools.readSourceIdentity({ projectRoot: root });
+    expect(clean).toEqual({
+      gitHead: git(['rev-parse', '--verify', 'HEAD']).trim(),
+      packageLockSha256: digest('sha256', 'hex', packageLock),
+      treeClean: true,
+    });
+
+    mkdirSync(path.join(root, 'outputs'), { recursive: true });
+    mkdirSync(path.join(root, 'dist'), { recursive: true });
+    writeFileSync(path.join(root, 'outputs', 'installer.exe'), 'ignored', 'utf8');
+    writeFileSync(path.join(root, 'dist', 'main.js'), 'ignored', 'utf8');
+    expect(manifestTools.readSourceIdentity({ projectRoot: root }).treeClean).toBe(true);
+
+    writeFileSync(path.join(root, 'package-lock.json'), '{"changed":true}\n', 'utf8');
+    expect(manifestTools.readSourceIdentity({ projectRoot: root }).treeClean).toBe(false);
+    writeFileSync(path.join(root, 'package-lock.json'), packageLock);
+    expect(manifestTools.readSourceIdentity({ projectRoot: root }).treeClean).toBe(true);
+
+    writeFileSync(path.join(root, 'untracked.txt'), 'dirty', 'utf8');
+    expect(manifestTools.readSourceIdentity({ projectRoot: root }).treeClean).toBe(false);
+  });
+
+  it('refuses dirty source and stale same-version build identities', () => {
+    const fixture = createReleaseFixture();
+    const dirty = validateFixture(fixture.root, fixture.output, false, {
+      sourceIdentity: () => ({ ...fixture.sourceIdentity, treeClean: false }),
+    });
+    expect(dirty.manifest.source).toEqual({ ...fixture.sourceIdentity, treeClean: false });
+    expect(dirty.manifest.problems).toContain(
+      'source tree is dirty; commit or remove tracked and untracked changes before final release manifest generation',
+    );
+
+    const staleSource = {
+      ...fixture.sourceIdentity,
+      gitHead: 'b'.repeat(40),
+      packageLockSha256: 'c'.repeat(64),
+    };
+    const stale = validateFixture(fixture.root, fixture.output, false, {
+      sourceIdentity: () => staleSource,
+    });
+    expect(stale.manifest.version).toBe('5.0.0-rc.15');
+    expect(stale.manifest.source).toEqual(staleSource);
+    expect(stale.manifest.problems).toContain(
+      'packaged source identity Git HEAD, package-lock.json SHA-256 differs from expected source identity',
+    );
+  });
+
   it('validates the exact installer, blockmap, RC manifest, digest chain, and report fields', () => {
     const fixture = createReleaseFixture();
     const result = validateFixture(fixture.root, fixture.output, true);
@@ -348,10 +157,23 @@ describe('release manifest validation', () => {
     expect(result.manifest).toMatchObject({
       channel: 'rc',
       channelManifest: 'rc.yml',
+      cohort: {
+        blockmap: {
+          algorithm: 'BLAKE2b-144',
+          chunkCount: 2,
+          coverageBytes: fixture.installer.byteLength,
+        },
+        installerPayload: {
+          appAsar: expect.objectContaining({ sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
+          appAsarUnpacked: expect.objectContaining({ fileCount: 1 }),
+          schemaVersion: 1,
+        },
+      },
       feedUrl,
       problems: [],
       provider: 'generic',
       signature: 'NotSigned',
+      source: fixture.sourceIdentity,
       version: '5.0.0-rc.15',
     });
     expect(result.manifest.artifacts.map(({ name }) => name)).toEqual([
@@ -416,9 +238,272 @@ describe('release manifest validation', () => {
       expect.arrayContaining([expect.stringContaining('rc.yml cannot be parsed')]),
     );
   });
+
+  it('rejects stale installer payload bytes and mismatched unpacked resources', () => {
+    const fixture = createReleaseFixture();
+    fixture.installerPayloadFiles.set('resources/app.asar', Buffer.from('stale app.asar'));
+    expect(validateFixture(fixture.root, fixture.output).manifest.problems).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('resources/app.asar bytes differ from win-unpacked'),
+      ]),
+    );
+
+    fixture.installerPayloadFiles.set(
+      'resources/app.asar',
+      readFileSync(path.join(fixture.output, 'win-unpacked', 'resources', 'app.asar')),
+    );
+    fixture.installerPayloadFiles.set(
+      'resources/app.asar.unpacked/assets/runtime/fixture.ps1',
+      Buffer.from('mismatched unpacked bytes'),
+    );
+    expect(validateFixture(fixture.root, fixture.output).manifest.problems).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('app.asar.unpacked bytes differ from win-unpacked'),
+      ]),
+    );
+  });
+
+  it('rejects malformed and stale external blockmaps', () => {
+    const fixture = createReleaseFixture();
+    const blockmapPath = path.join(fixture.output, `${fixture.installerName}.blockmap`);
+    writeFileSync(blockmapPath, 'not gzip JSON', 'utf8');
+    expect(validateFixture(fixture.root, fixture.output).manifest.problems).toEqual(
+      expect.arrayContaining([expect.stringContaining('blockmap is not valid gzip JSON')]),
+    );
+
+    writeFileSync(blockmapPath, blockmapBytes(Buffer.alloc(fixture.installer.byteLength, 0x78)));
+    expect(validateFixture(fixture.root, fixture.output).manifest.problems).toEqual(
+      expect.arrayContaining([expect.stringContaining('checksum does not match the installer')]),
+    );
+  });
+
+  it('requires the packaged updater channel and rejects the wrong channel', () => {
+    const fixture = createReleaseFixture();
+    const appUpdatePath = path.join(fixture.output, 'win-unpacked', 'resources', 'app-update.yml');
+    const withoutChannel = Buffer.from(
+      `provider: generic\nurl: ${feedUrl}\nuseMultipleRangeRequest: false\n`,
+    );
+    writeFileSync(appUpdatePath, withoutChannel);
+    fixture.installerPayloadFiles.set('resources/app-update.yml', withoutChannel);
+    expect(validateFixture(fixture.root, fixture.output).manifest.problems).toEqual(
+      expect.arrayContaining([expect.stringContaining('channel undefined != intended channel rc')]),
+    );
+
+    const wrongChannel = Buffer.from(
+      `provider: generic\nurl: ${feedUrl}\nuseMultipleRangeRequest: false\nchannel: latest\n`,
+    );
+    writeFileSync(appUpdatePath, wrongChannel);
+    fixture.installerPayloadFiles.set('resources/app-update.yml', wrongChannel);
+    expect(validateFixture(fixture.root, fixture.output).manifest.problems).toEqual(
+      expect.arrayContaining([expect.stringContaining('channel latest != intended channel rc')]),
+    );
+  });
+
+  it('redacts URL userinfo, queries, and fragments from manifest problems', () => {
+    const fixture = createReleaseFixture();
+    const sensitiveUrl = [
+      'https://',
+      'user:password',
+      '@example.test/feed',
+      '?token=credential',
+      '#fragment-credential',
+    ].join('');
+    const archive: ArchiveReader = {
+      ...fixture.archive,
+      listPackage: () => {
+        throw new Error(`invalid feed ${sensitiveUrl}`);
+      },
+    };
+    const result = validateFixture(fixture.root, fixture.output, false, { archive });
+    const reportText = JSON.stringify(result.manifest);
+    expect(reportText).toContain('<redacted>');
+    expect(reportText).not.toContain('user:password');
+    expect(reportText).not.toContain('token=credential');
+    expect(reportText).not.toContain('fragment-credential');
+    expect(manifestTools.sanitizeManifestText(sensitiveUrl)).toBe(
+      'https://<redacted>@example.test/feed?<redacted>#<redacted>',
+    );
+  });
+
+  it.each(['Valid', 'NotSigned'])('accepts determinate Authenticode status %s', (status) => {
+    const fixture = createReleaseFixture();
+    const result = validateFixture(fixture.root, fixture.output, false, {
+      signatureStatus: () => status,
+    });
+    expect(result.manifest.signature).toBe(status);
+    const authenticodeProblems = result.manifest.problems.filter((problem) =>
+      problem.includes('Authenticode'),
+    );
+    expect(authenticodeProblems).toEqual([]);
+  });
+
+  it.each(['unknown', 'unavailable', '', 'HashMismatch', 'NotTrusted', 'UnknownError', 'Other'])(
+    'rejects nondeterminate Authenticode status %s',
+    (status) => {
+      const fixture = createReleaseFixture();
+      const result = validateFixture(fixture.root, fixture.output, false, {
+        signatureStatus: () => status,
+      });
+      expect(result.manifest.problems).toEqual(
+        expect.arrayContaining([expect.stringContaining('expected Valid or NotSigned')]),
+      );
+    },
+  );
 });
 
 describe('COS release publication', () => {
+  it('requires an exact orchestrator record for the frozen manifest bytes', () => {
+    const fixture = createReleaseFixture();
+    validateFixture(fixture.root, fixture.output, true);
+    const reportPath = path.join(fixture.output, 'release-manifest.json');
+
+    expect(() =>
+      publisherTools.loadFrozenValidatedRelease({
+        projectRoot: fixture.root,
+        releaseDirectory: fixture.output,
+      }),
+    ).toThrow('release orchestration record cannot be read');
+
+    writeFixtureOrchestration(fixture.output, fixture.sourceIdentity);
+    writeFileSync(reportPath, `${readFileSync(reportPath, 'utf8')}\n`, 'utf8');
+    expect(() =>
+      publisherTools.loadFrozenValidatedRelease({
+        projectRoot: fixture.root,
+        releaseDirectory: fixture.output,
+      }),
+    ).toThrow('frozen release manifest differs from the orchestrated manifest');
+  });
+
+  it('loads the frozen manifest without rewriting it or changing generatedAt', () => {
+    const fixture = createReleaseFixture();
+    validateFixture(fixture.root, fixture.output, true);
+    writeFixtureOrchestration(fixture.output, fixture.sourceIdentity);
+    const reportPath = path.join(fixture.output, 'release-manifest.json');
+    const frozenReport = readFileSync(reportPath, 'utf8');
+
+    const release = publisherTools.loadFrozenValidatedRelease({
+      archive: fixture.archive,
+      extractInstaller: fixture.extractInstaller,
+      now: new Date('2026-08-24T10:11:12.000Z'),
+      projectRoot: fixture.root,
+      releaseDirectory: fixture.output,
+      signatureStatus: () => 'NotSigned',
+      sourceIdentity: () => fixture.sourceIdentity,
+    });
+
+    expect(release.manifest.generatedAt).toBe('2026-08-23T01:02:03.000Z');
+    expect(readFileSync(reportPath, 'utf8')).toBe(frozenReport);
+  });
+
+  it('refuses source identity or artifact drift from the frozen manifest without rewriting it', () => {
+    const fixture = createReleaseFixture();
+    validateFixture(fixture.root, fixture.output, true);
+    writeFixtureOrchestration(fixture.output, fixture.sourceIdentity);
+    const reportPath = path.join(fixture.output, 'release-manifest.json');
+    const frozenReport = readFileSync(reportPath, 'utf8');
+    const options = {
+      archive: fixture.archive,
+      extractInstaller: fixture.extractInstaller,
+      projectRoot: fixture.root,
+      releaseDirectory: fixture.output,
+      signatureStatus: () => 'NotSigned',
+    };
+
+    expect(() =>
+      publisherTools.loadFrozenValidatedRelease({
+        ...options,
+        sourceIdentity: () => ({ ...fixture.sourceIdentity, gitHead: 'b'.repeat(40) }),
+      }),
+    ).toThrow('current Git HEAD or package-lock.json SHA-256 differs from the frozen manifest');
+
+    fixture.archiveFiles.set(
+      'dist/build-source-identity.json',
+      Buffer.from(
+        JSON.stringify({ schemaVersion: 1, ...fixture.sourceIdentity, gitHead: 'b'.repeat(40) }),
+        'utf8',
+      ),
+    );
+    expect(() =>
+      publisherTools.loadFrozenValidatedRelease({
+        ...options,
+        sourceIdentity: () => fixture.sourceIdentity,
+      }),
+    ).toThrow(
+      'current non-writing release validation failed: packaged source identity Git HEAD differs from expected source identity',
+    );
+    fixture.archiveFiles.set(
+      'dist/build-source-identity.json',
+      Buffer.from(JSON.stringify({ schemaVersion: 1, ...fixture.sourceIdentity }), 'utf8'),
+    );
+
+    fixture.installerPayloadFiles.set('resources/app.asar', Buffer.from('stale installer payload'));
+    expect(() =>
+      publisherTools.loadFrozenValidatedRelease({
+        ...options,
+        sourceIdentity: () => fixture.sourceIdentity,
+      }),
+    ).toThrow(
+      'current non-writing release validation failed: installer payload cannot be linked to win-unpacked',
+    );
+    fixture.installerPayloadFiles.set(
+      'resources/app.asar',
+      readFileSync(path.join(fixture.output, 'win-unpacked', 'resources', 'app.asar')),
+    );
+
+    writeFileSync(
+      path.join(fixture.output, `${fixture.installerName}.blockmap`),
+      blockmapBytes(fixture.installer, [fixture.installer.byteLength]),
+    );
+    expect(() =>
+      publisherTools.loadFrozenValidatedRelease({
+        ...options,
+        sourceIdentity: () => fixture.sourceIdentity,
+      }),
+    ).toThrow('current release artifacts differ from the frozen manifest');
+    expect(readFileSync(reportPath, 'utf8')).toBe(frozenReport);
+  });
+
+  it('compares deterministic cohort evidence and rechecks blockmap chunks from a frozen report', () => {
+    const fixture = createReleaseFixture();
+    validateFixture(fixture.root, fixture.output, true);
+    writeFixtureOrchestration(fixture.output, fixture.sourceIdentity);
+    const reportPath = path.join(fixture.output, 'release-manifest.json');
+    const blockmapPath = path.join(fixture.output, `${fixture.installerName}.blockmap`);
+    const frozen = JSON.parse(readFileSync(reportPath, 'utf8')) as ReleaseManifest;
+    const blockmapArtifact = frozen.artifacts.find(({ name }) => name.endsWith('.blockmap'))!;
+    const updateFrozenArtifact = (bytes: Buffer) => {
+      blockmapArtifact.bytes = bytes.byteLength;
+      blockmapArtifact.sha256 = digest('sha256', 'hex', bytes);
+      blockmapArtifact.sha512 = digest('sha512', 'base64', bytes);
+      writeFileSync(reportPath, `${JSON.stringify(frozen, null, 2)}\n`, 'utf8');
+      writeFixtureOrchestration(fixture.output, fixture.sourceIdentity);
+    };
+    const options = {
+      archive: fixture.archive,
+      extractInstaller: fixture.extractInstaller,
+      projectRoot: fixture.root,
+      releaseDirectory: fixture.output,
+      signatureStatus: () => 'NotSigned',
+      sourceIdentity: () => fixture.sourceIdentity,
+    };
+
+    const alternate = blockmapBytes(fixture.installer, [fixture.installer.byteLength]);
+    writeFileSync(blockmapPath, alternate);
+    updateFrozenArtifact(alternate);
+    expect(() => publisherTools.loadFrozenValidatedRelease(options)).toThrow(
+      'current release metadata differs from the frozen manifest',
+    );
+
+    const stale = blockmapBytes(Buffer.alloc(fixture.installer.byteLength, 0x78), [
+      fixture.installer.byteLength,
+    ]);
+    writeFileSync(blockmapPath, stale);
+    updateFrozenArtifact(stale);
+    expect(() => publisherTools.loadFrozenValidatedRelease(options)).toThrow(
+      'current non-writing release validation failed: external blockmap is invalid',
+    );
+  });
+
   it('uploads immutable assets first, verifies them publicly, and commits the channel last', async () => {
     const fixture = createReleaseFixture();
     const release = validateFixture(fixture.root, fixture.output);
@@ -461,6 +546,45 @@ describe('COS release publication', () => {
     });
     expect(shippedWrites()).toHaveLength(3);
     expect(harness.storage.delete).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes the frozen channel bytes when the local YAML changes after validation', async () => {
+    const fixture = createReleaseFixture();
+    validateFixture(fixture.root, fixture.output, true);
+    writeFixtureOrchestration(fixture.output, fixture.sourceIdentity);
+    const release = publisherTools.loadFrozenValidatedRelease({
+      archive: fixture.archive,
+      extractInstaller: fixture.extractInstaller,
+      projectRoot: fixture.root,
+      releaseDirectory: fixture.output,
+      signatureStatus: () => 'NotSigned',
+      sourceIdentity: () => fixture.sourceIdentity,
+    });
+    const channelPath = path.join(fixture.output, 'rc.yml');
+    const frozenText = readFileSync(channelPath, 'utf8');
+    const changedText = frozenText.replace(
+      /(sha512: )([0-9A-Za-z+/])/u,
+      (_match, label: string, character: string) => `${label}${character === 'A' ? 'B' : 'A'}`,
+    );
+    expect(changedText).toHaveLength(frozenText.length);
+    expect(changedText).not.toBe(frozenText);
+    const harness = createPublicationHarness();
+    harness.setAfterCreate(async (descriptor) => {
+      if (descriptor.key === `${prefix}${fixture.installerName}.blockmap`) {
+        writeFileSync(channelPath, changedText, 'utf8');
+      }
+    });
+
+    await expect(
+      publisherTools.publishValidatedRelease({
+        fetchImpl: harness.fetchImpl,
+        prefix,
+        release,
+        storage: harness.storage,
+      }),
+    ).resolves.toMatchObject({ version: '5.0.0-rc.15' });
+    expect(readFileSync(channelPath, 'utf8')).toBe(changedText);
+    expect(harness.remote.get(`${prefix}rc.yml`)?.body.toString('utf8')).toBe(frozenText);
   });
 
   it('refuses an immutable collision before replacing any remote bytes', async () => {
@@ -777,17 +901,36 @@ describe('COS release publication', () => {
     };
     expect(publisherTools.readCosEnvironment(feedUrl, environment).prefix).toBe(prefix);
     const redacted = publisherTools.redactSensitiveText(
-      'Authorization: secret-key-value https://example.com/a?q-ak=secret-id-value&q-signature=abc security-token-value',
+      'Authorization: secret-key-value https://feed-user:feed-password@example.com/a?q-ak=secret-id-value&q-signature=abc security-token-value',
       ['secret-id-value', 'secret-key-value', 'security-token-value'],
     );
     expect(redacted).not.toContain('secret-id-value');
     expect(redacted).not.toContain('secret-key-value');
     expect(redacted).not.toContain('security-token-value');
+    expect(redacted).not.toContain('feed-user');
+    expect(redacted).not.toContain('feed-password');
     expect(redacted).not.toContain('q-signature=abc');
+
+    const secretBearingUrl = [
+      'https://',
+      environment.TENCENT_COS_SECRET_ID,
+      ':other-userinfo',
+      '@example.test/a',
+      `?custom=${environment.TENCENT_COS_SECRET_KEY}`,
+      '#fragment-value',
+    ].join('');
+    expect(
+      publisherTools.redactSensitiveText(secretBearingUrl, [
+        environment.TENCENT_COS_SECRET_ID,
+        environment.TENCENT_COS_SECRET_KEY,
+      ]),
+    ).toBe('https://<redacted>@example.test/a?<redacted>#<redacted>');
 
     const client = {
       headObject: vi.fn(async () => {
-        throw new Error('Authorization=secret-key-value https://example.com/a?q-signature=abc');
+        throw new Error(
+          'Authorization=secret-key-value https://feed-user:feed-password@example.com/a?q-signature=abc',
+        );
       }),
       putObject: vi.fn(async () => ({})),
     };
@@ -805,6 +948,8 @@ describe('COS release publication', () => {
     }
     expect(errorMessage).toContain('<redacted>');
     expect(errorMessage).not.toContain('secret-key-value');
+    expect(errorMessage).not.toContain('feed-user');
+    expect(errorMessage).not.toContain('feed-password');
     expect(errorMessage).not.toContain('q-signature=abc');
   });
 });

@@ -14,6 +14,7 @@ import type { RuntimeProfile } from '../app/profile';
 import { isValidClaudeSessionId, normalizeClaudeSessionTitle } from '../claude/session-manager';
 import type { ClaudeSessionManager } from '../claude/session-manager';
 import type { PreparedNativeClaudeConversation } from '../claude/runtime';
+import { effectiveClaudeNetworkAccess } from '../claude/runtime-types';
 import type { NativeAttachmentStore } from '../conversation/attachment-store';
 import type { ConversationOwner, ConversationOwnerRegistry } from '../conversation/owner-registry';
 import type { WithSessionOperation } from '../coordination/session-operation';
@@ -193,10 +194,13 @@ const registerConversationStartIpc = (
         throw error;
       }
     };
-    const officialProvider = runtime?.officialNetworkProvider(projectPath);
-    return officialProvider
+    const networkAccess =
+      typeof runtime?.networkAccess === 'function'
+        ? runtime.networkAccess(projectPath)
+        : effectiveClaudeNetworkAccess(undefined, runtime?.officialNetworkProvider(projectPath));
+    return networkAccess
       ? withOfficialProviderAccess(
-          { action: 'cli-launch', cwd: projectPath, provider: officialProvider },
+          { action: 'cli-launch', cwd: projectPath, ...networkAccess },
           startNativeConversation,
         )
       : startNativeConversation();
@@ -241,16 +245,17 @@ const registerConversationControlIpc = (
       if (!launch) {
         throw new Error('原生对话的主进程接入授权已经失效，请重新打开该对话。');
       }
-      const provider = launch.prepared.officialNetworkProvider;
-      return provider
+      const networkAccess = effectiveClaudeNetworkAccess(
+        launch.prepared.networkAccess,
+        launch.prepared.officialNetworkProvider,
+        launch.prepared.officialNetworkTarget,
+      );
+      return networkAccess
         ? withOfficialProviderAccess(
             {
               action: 'first-request',
               cwd: projectPath,
-              provider,
-              ...(launch.prepared.officialNetworkTarget
-                ? { target: launch.prepared.officialNetworkTarget }
-                : {}),
+              ...networkAccess,
             },
             submitTurn,
           )
@@ -422,13 +427,19 @@ const registerConversationTransferIpc = (
           async (identity, operation) => {
             if (runtimeProfile.adapterMode !== 'production') return operation();
             const runtime = requireClaudeRuntime();
-            const officialProvider = runtime.officialNetworkProvider(identity.projectPath);
-            return officialProvider
+            const networkAccess =
+              typeof runtime.networkAccess === 'function'
+                ? runtime.networkAccess(identity.projectPath)
+                : effectiveClaudeNetworkAccess(
+                    undefined,
+                    runtime.officialNetworkProvider(identity.projectPath),
+                  );
+            return networkAccess
               ? withOfficialProviderAccess(
                   {
                     action: 'cli-launch',
                     cwd: identity.projectPath,
-                    provider: officialProvider,
+                    ...networkAccess,
                   },
                   operation,
                 )
@@ -633,13 +644,15 @@ const registerConversationAdoptionIpc = (
           terminalTransferSessions.delete(validatedSessionId);
         }
       };
-      const officialProvider =
-        runtimeProfile.adapterMode === 'production'
-          ? runtime.officialNetworkProvider(projectPath)
-          : undefined;
-      return officialProvider
+      const networkAccess =
+        runtimeProfile.adapterMode !== 'production'
+          ? undefined
+          : typeof runtime.networkAccess === 'function'
+            ? runtime.networkAccess(projectPath)
+            : effectiveClaudeNetworkAccess(undefined, runtime.officialNetworkProvider(projectPath));
+      return networkAccess
         ? withOfficialProviderAccess(
-            { action: 'cli-launch', cwd: projectPath, provider: officialProvider },
+            { action: 'cli-launch', cwd: projectPath, ...networkAccess },
             adoptFromTerminal,
           )
         : adoptFromTerminal();

@@ -9,6 +9,7 @@ import type {
   ClaudePermissionMode,
   ClaudeProviderModelDiscoveryInput,
   ClaudeRelaunchInput,
+  CodexInstallOperation,
   CodexLaunchMode,
   CodexLoginMethod,
   DevelopmentRuntime,
@@ -37,6 +38,7 @@ import {
   claudePermissionModeSchema,
   claudeRelaunchInputSchema,
   claudeRouterProviderInputSchema,
+  codexInstallOperationSchema,
   codexLaunchModeSchema,
   codexLoginMethodSchema,
   conversationIdSchema,
@@ -129,6 +131,9 @@ export const validateCodexLaunchMode = (mode: unknown): CodexLaunchMode =>
 
 export const validateCodexLoginMethod = (method: unknown): CodexLoginMethod =>
   parseSchema(codexLoginMethodSchema, method);
+
+export const validateCodexInstallOperation = (operation: unknown): CodexInstallOperation =>
+  parseSchema(codexInstallOperationSchema, operation);
 
 export const validateClaudePermissionMode = (mode: unknown): ClaudePermissionMode =>
   parseSchema(claudePermissionModeSchema, mode);

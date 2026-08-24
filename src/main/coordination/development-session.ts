@@ -1,5 +1,6 @@
 import type { PtyGeneration } from '../../shared/contracts';
 import type { PermissionModeProbes } from '../claude/permission-mode-probe';
+import { effectiveClaudeNetworkAccess } from '../claude/runtime-types';
 import type { Registry } from '../infra/registry';
 import { CLAUDE_RUNTIME, CODEX_RUNTIME } from '../infra/service-tokens';
 import type { MainGuards } from '../ipc/guards';
@@ -85,11 +86,16 @@ export const createDevelopmentSessionCoordination = ({
     sessionsForDirectory: (cwd) =>
       workspace.sessionIdsForDirectory(cwd).map((sessionId) => workspace.getStatus(sessionId)),
     withProviderAccess: (cwd, selected, operation) => {
-      const officialProvider =
-        selected === 'codex' ? 'openai-codex' : requireClaudeRuntime().officialNetworkProvider(cwd);
-      return officialProvider
+      const runtime = selected === 'claude' ? requireClaudeRuntime() : undefined;
+      const networkAccess =
+        selected === 'codex'
+          ? ({ provider: 'openai-codex' } as const)
+          : typeof runtime?.networkAccess === 'function'
+            ? runtime.networkAccess(cwd)
+            : effectiveClaudeNetworkAccess(undefined, runtime?.officialNetworkProvider(cwd));
+      return networkAccess
         ? withOfficialProviderAccess(
-            { action: 'provider-switch', cwd, provider: officialProvider },
+            { action: 'provider-switch', cwd, ...networkAccess },
             operation,
           )
         : operation();

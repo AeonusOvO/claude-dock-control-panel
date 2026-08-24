@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   orchestrateSessionOperation,
+  OwnedOperationRegistry,
+  OwnedSessionOperationRegistry,
   SessionGenerationRegistry,
 } from '../../src/renderer/platform/session-generation';
 
@@ -21,6 +23,33 @@ const deferred = <T>(): Deferred<T> => {
 };
 
 describe('per-session asynchronous generations', () => {
+  it('couples visible operation copy to the exact session generation', () => {
+    const registry = new OwnedSessionOperationRegistry<'install' | 'update'>();
+    const stale = registry.begin('session-a', 'install');
+    const current = registry.begin('session-a', 'update');
+    const independent = registry.begin('session-b', 'install');
+
+    expect(registry.current('session-a')).toBe(current);
+    expect(registry.current('session-b')).toBe(independent);
+    expect(registry.finish(stale)).toBe(false);
+    expect(registry.current('session-a')?.operation).toBe('update');
+    expect(registry.finish(current)).toBe(true);
+    expect(registry.isActive('session-a')).toBe(false);
+  });
+
+  it('lets one application-global operation owner fence every session', () => {
+    const registry = new OwnedOperationRegistry<'install' | 'logout'>();
+    const stale = registry.begin('session-a', 'install');
+    const current = registry.begin('session-b', 'logout');
+
+    expect(registry.current()).toBe(current);
+    expect(registry.isActive()).toBe(true);
+    expect(registry.finish(stale)).toBe(false);
+    expect(registry.isCurrent(current)).toBe(true);
+    expect(registry.finish(current)).toBe(true);
+    expect(registry.isActive()).toBe(false);
+  });
+
   it('allows independent sessions to settle in either order', async () => {
     const registry = new SessionGenerationRegistry();
     const first = deferred<string>();

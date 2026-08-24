@@ -116,6 +116,7 @@ describe('Claude project profile store', () => {
       sourceCredentialConfigured: true,
       sourceModel: 'gpt-5.4',
     });
+    expect(reopened.createLaunchSnapshot(CWD).protocol).toBe('openai');
   });
 
   it('remembers the switch for a project that has no saved route yet', () => {
@@ -151,6 +152,7 @@ describe('Claude project profile store', () => {
         model: 'deepseek-chat',
       },
       credential: 'secret-token',
+      protocol: 'anthropic',
     });
     expect(store.launchSnapshotIsCurrent(CWD, first)).toBe(true);
 
@@ -163,6 +165,7 @@ describe('Claude project profile store', () => {
 
     expect(first.config.baseUrl).toBe('https://gateway.example.com');
     expect(first.credential).toBe('secret-token');
+    expect(first.protocol).toBe('anthropic');
     expect(store.launchSnapshotIsCurrent(CWD, first)).toBe(false);
     expect(store.createLaunchSnapshot(CWD)).toMatchObject({
       config: {

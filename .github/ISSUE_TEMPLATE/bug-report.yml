@@ -1,0 +1,73 @@
+name: 缺陷报告
+description: 报告可复现的 ClaudeDock 行为问题
+title: '[Bug] '
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: 感谢报告。安全漏洞请改用 SECURITY.md 中的私密报告入口；提交前请移除凭据、令牌、完整公网地址和本机私有数据。
+  - type: input
+    id: version
+    attributes:
+      label: ClaudeDock 版本
+      description: 在设置中查看完整版本号。
+      placeholder: 5.0.0-rc.16
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 环境
+      placeholder: Windows 11 24H2，x64
+    validations:
+      required: true
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: 安装来源
+      options:
+        - GitHub Release 安装包
+        - 应用内更新
+        - 本地 npm run dist 构建
+        - 开发模式
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 实际行为
+      description: 写清发生了什么、频率和可见错误。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开…
+        2. 点击…
+        3. 观察…
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充证据
+      description: 可附脱敏日志、截图、终端类型、开发引擎、精确 Provider 目标和网络作用域。不要粘贴密钥、认证头、完整公网地址或签名 URL。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前检查
+      options:
+        - label: 我已搜索现有 Issue，未发现同一问题。
+          required: true
+        - label: 我已移除凭据、令牌、完整公网地址和本机私有数据。
+          required: true

@@ -46,6 +46,7 @@ export const createTerminalViews = (
     state,
     createActions.createTerminalView,
     permissionActions.rejectPermissionModeProbes,
+    io.hideTerminalContextMenu,
   );
   const fitActions = createTerminalViewFitActions(state, dependencies, io);
 

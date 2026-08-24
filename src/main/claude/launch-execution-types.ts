@@ -2,7 +2,6 @@ import type {
   ClaudeLaunchMode,
   ClaudeRelaunchInput,
   NetworkPreflightResult,
-  NetworkProviderId,
   PtyGeneration,
 } from '../../shared/contracts';
 import type { ConversationOwner, ConversationOwnerRegistry } from '../conversation/owner-registry';
@@ -16,12 +15,12 @@ import type {
 import type { TerminalWorkspace } from '../terminal/workspace';
 import type { RunClaudeProjectConfigTransaction } from './config-transaction';
 import type { ClaudeConversationLifecycleCoordinator } from './conversation-lifecycle';
-import type { ClaudeLaunchAuthorization } from './runtime-types';
+import type { ClaudeLaunchAuthorization, ClaudeNetworkAccess } from './runtime-types';
 
 export type ClaudeRuntime = ReturnType<MainGuards['requireClaudeRuntime']>;
 
 export type ProviderAuthorizedOperation = <T>(
-  provider: NetworkProviderId | undefined,
+  networkAccess: Readonly<ClaudeNetworkAccess> | undefined,
   operation: (result?: NetworkPreflightResult) => Promise<T>,
   signal?: AbortSignal,
 ) => Promise<T>;
@@ -67,7 +66,7 @@ export interface ResumeSessionExecution {
   readonly conversationId: string;
   readonly conversationOwnerRegistry: ConversationOwnerRegistry;
   readonly cwd: string;
-  readonly expectedOfficialNetworkProvider: NetworkProviderId | undefined;
+  readonly expectedNetworkAccess: Readonly<ClaudeNetworkAccess> | undefined;
   readonly runClaudeResumeLaunch: ResumeConversationInTerminal;
   readonly runtime: ClaudeRuntime;
   readonly sessionId: string;

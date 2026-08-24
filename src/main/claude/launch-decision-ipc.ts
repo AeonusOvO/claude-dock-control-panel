@@ -4,7 +4,6 @@ import type {
   ClaudeLaunchPreflightDecisionOutcome,
   ClaudeOperationResult,
   NetworkPreflightResult,
-  NetworkProviderId,
 } from '../../shared/contracts';
 import { CHANNELS } from '../../shared/ipc/channels';
 import {
@@ -23,13 +22,24 @@ import type {
   RelaunchExecution,
   ResumeSessionExecution,
 } from './launch-execution-types';
+import {
+  type ClaudeNetworkAccess,
+  effectiveClaudeNetworkAccess,
+  sameClaudeNetworkAccess,
+} from './runtime-types';
 import type { ClaudeLaunchIpcDependencies } from './launch-ipc-dependencies';
 
 type ProviderAuthorizedOperation = <T>(
-  provider: NetworkProviderId | undefined,
+  networkAccess: Readonly<ClaudeNetworkAccess> | undefined,
   operation: (result?: NetworkPreflightResult) => Promise<T>,
   signal?: AbortSignal,
 ) => Promise<T>;
+
+const baselineNetworkAccess = (baseline: {
+  readonly networkAccess?: Readonly<ClaudeNetworkAccess>;
+  readonly officialNetworkProvider?: ClaudeNetworkAccess['provider'];
+}): Readonly<ClaudeNetworkAccess> | undefined =>
+  effectiveClaudeNetworkAccess(baseline.networkAccess, baseline.officialNetworkProvider);
 
 export interface ClaudeLaunchDecisionExecutions {
   readonly executeClaudeRelaunch: (input: RelaunchExecution) => Promise<ClaudeOperationResult>;
@@ -94,10 +104,16 @@ export const registerClaudeLaunchDecisionIpc = (
       let continuationSignal: AbortSignal | undefined;
       let continuationStamp: SessionOperationStamp | undefined;
 
-      const expectedOfficialNetworkProvider = (): NetworkProviderId | undefined =>
+      const expectedNetworkAccess = (): Readonly<ClaudeNetworkAccess> | undefined =>
         descriptor.kind === 'relaunch' && descriptor.input.entryId !== undefined
-          ? reservation.baseline.history?.officialNetworkProvider
-          : reservation.baseline.configuration.officialNetworkProvider;
+          ? reservation.baseline.history
+            ? baselineNetworkAccess(reservation.baseline.history)
+            : undefined
+          : baselineNetworkAccess(reservation.baseline.configuration);
+      const blockedNetworkAccess: Readonly<ClaudeNetworkAccess> = Object.freeze({
+        provider: reservation.blocked.provider,
+        ...(reservation.blocked.target === undefined ? {} : { target: reservation.blocked.target }),
+      });
       const captureContinuationBaseline = (): ClaudeLaunchDecisionBaseline => {
         assertLaunchAdmissionAllowed();
         if (!continuationStamp) throw new LaunchPreflightDecisionStaleError();
@@ -187,16 +203,18 @@ export const registerClaudeLaunchDecisionIpc = (
                 );
               }
             };
-            const capturedAtLaunchBoundary =
-              reservation.blocked.provider === expectedOfficialNetworkProvider();
+            const capturedAtLaunchBoundary = sameClaudeNetworkAccess(
+              blockedNetworkAccess,
+              expectedNetworkAccess(),
+            );
             const authorizeCapturedProvider: ProviderAuthorizedOperation = (
-              provider,
+              networkAccess,
               operation,
               operationSignal = signal,
             ) => {
               operationSignal.throwIfAborted();
               assertPreparationCurrent();
-              if (provider !== reservation.blocked.provider) {
+              if (!sameClaudeNetworkAccess(networkAccess, blockedNetworkAccess)) {
                 throw new LaunchPreflightDecisionStaleError();
               }
               if (choice === 'recheck') {
@@ -227,7 +245,7 @@ export const registerClaudeLaunchDecisionIpc = (
               );
             };
             const authorizeNestedProvider: ProviderAuthorizedOperation = (
-              provider,
+              networkAccess,
               operation,
               operationSignal = signal,
             ) => {
@@ -237,32 +255,32 @@ export const registerClaudeLaunchDecisionIpc = (
                 if (descriptor.kind !== 'relaunch') {
                   throw new LaunchPreflightDecisionStaleError();
                 }
-                return authorizeCapturedProvider(provider, operation, operationSignal);
+                return authorizeCapturedProvider(networkAccess, operation, operationSignal);
               }
-              return provider
+              return networkAccess
                 ? withOfficialProviderAccess(
-                    { action: 'cli-launch', cwd: descriptor.cwd, provider },
+                    { action: 'cli-launch', cwd: descriptor.cwd, ...networkAccess },
                     operation,
                     operationSignal,
                   )
                 : operation();
             };
             const authorizeLaunchProvider: ProviderAuthorizedOperation = (
-              provider,
+              networkAccess,
               operation,
               operationSignal = signal,
             ) => {
               operationSignal.throwIfAborted();
               assertPreparationCurrent();
-              if (provider !== expectedOfficialNetworkProvider()) {
+              if (!sameClaudeNetworkAccess(networkAccess, expectedNetworkAccess())) {
                 throw new LaunchPreflightDecisionStaleError();
               }
               if (capturedAtLaunchBoundary) {
-                return authorizeCapturedProvider(provider, operation, operationSignal);
+                return authorizeCapturedProvider(networkAccess, operation, operationSignal);
               }
-              return provider
+              return networkAccess
                 ? withOfficialProviderAccess(
-                    { action: 'cli-launch', cwd: descriptor.cwd, provider },
+                    { action: 'cli-launch', cwd: descriptor.cwd, ...networkAccess },
                     operation,
                     operationSignal,
                   )
@@ -283,14 +301,17 @@ export const registerClaudeLaunchDecisionIpc = (
                 };
                 assertLaunchPreparationCurrent();
                 const authorization = runtime.captureLaunchAuthorization(descriptor.cwd);
+                const networkAccess = baselineNetworkAccess(authorization);
                 if (
-                  authorization.officialNetworkProvider !==
-                  reservation.baseline.configuration.officialNetworkProvider
+                  !sameClaudeNetworkAccess(
+                    networkAccess,
+                    baselineNetworkAccess(reservation.baseline.configuration),
+                  )
                 ) {
                   throw new LaunchPreflightDecisionStaleError();
                 }
                 return authorizeLaunchProvider(
-                  authorization.officialNetworkProvider,
+                  networkAccess,
                   (preflightResult) =>
                     executePreparedLaunch({
                       assertCurrent: assertLaunchCurrent,
@@ -358,8 +379,7 @@ export const registerClaudeLaunchDecisionIpc = (
               conversationId: descriptor.conversationId,
               conversationOwnerRegistry,
               cwd: descriptor.cwd,
-              expectedOfficialNetworkProvider:
-                reservation.baseline.configuration.officialNetworkProvider,
+              expectedNetworkAccess: baselineNetworkAccess(reservation.baseline.configuration),
               runClaudeResumeLaunch,
               runtime,
               sessionId: descriptor.sessionId,

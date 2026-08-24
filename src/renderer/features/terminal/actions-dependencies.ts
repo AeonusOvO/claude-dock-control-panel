@@ -25,6 +25,7 @@ export interface TerminalActionsDependencies {
   handleOperation: (result: OperationResult, successMessage?: string) => boolean;
   projectNameFromPath: (directoryPath: string) => string;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
   resolveClaudeLaunchDecision: (
     token: ClaudeLaunchAttemptToken,
     paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,

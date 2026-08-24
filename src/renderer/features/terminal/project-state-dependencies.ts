@@ -11,6 +11,10 @@ import type {
 } from '../../../shared/contracts';
 import { SessionGenerationRegistry } from '../../platform/session-generation';
 import { ClaudeLaunchAttemptRegistry } from '../../platform/claude-launch-attempt';
+import type {
+  CodexOperationPresentation,
+  RuntimeSwitchOperationToken,
+} from './codex-operation-state';
 import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import type { ConfirmationRequest } from '../../shell/dialogs';
 
@@ -44,7 +48,8 @@ export interface TerminalProjectStateDeps {
   runtimeStateLoadGenerations: SessionGenerationRegistry;
   claudeLaunchAttempts: ClaudeLaunchAttemptRegistry;
   codexLaunchAttempts: SessionGenerationRegistry;
-  isCodexOperationInProgress: () => boolean;
+  getCodexOperation: (state?: CodexProjectState) => CodexOperationPresentation | undefined;
+  getRuntimeSwitchOperation: (sessionId: string) => RuntimeSwitchOperationToken | undefined;
   connectionForm: ConnectionFormLike;
   requestConfirmation: (request: ConfirmationRequest) => Promise<boolean>;
   showToast: (message: string, tone?: 'error' | 'success') => void;
@@ -68,6 +73,7 @@ export interface TerminalProjectStateDeps {
   };
   terminalFeature: {
     getTerminalView: (sessionId: string) => TerminalViewLike | undefined;
+    renderControlStatus: (status?: TerminalStatus) => void;
     setComposerEnabled: (enabled: boolean) => void;
     showTerminalDiagnostic: (status: TerminalStatus) => void;
     relaunchClaudeSession: (

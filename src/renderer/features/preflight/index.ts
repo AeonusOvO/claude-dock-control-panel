@@ -64,7 +64,8 @@ const createPreflightFeature = (dependencies: PreflightFeatureDependencies): Pre
     },
     hasResult: (provider) => state.networkPreflightResults.has(provider),
     invalidateAndRun: actions.invalidateAndRun,
-    isBlocked: (provider) => state.networkPreflightResults.get(provider)?.status === 'blocked',
+    isBlocked: (provider) =>
+      state.networkPreflightResults.get(provider)?.providerConnectivity.status === 'blocked',
     openNetworkPreflightDialog: actions.openNetworkPreflightDialog,
     refreshAfterAuthoritativeChange: actions.refreshAfterAuthoritativeChange,
     renderActiveNetworkPreflight: view.renderActiveNetworkPreflight,

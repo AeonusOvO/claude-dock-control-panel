@@ -1,10 +1,16 @@
+import type { PtyGeneration } from '../../../shared/contracts';
 import type { TerminalElements } from './elements';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
-import type { TerminalState } from './state';
+import type { TerminalState, TerminalView } from './state';
 
 export interface TerminalIoMenuActions {
   hideTerminalContextMenu: () => void;
-  showTerminalContextMenu: (event: MouseEvent) => void;
+  showTerminalContextMenu: (
+    event: MouseEvent,
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ) => void;
 }
 
 export const createTerminalIoMenuActions = (
@@ -14,14 +20,37 @@ export const createTerminalIoMenuActions = (
 ): TerminalIoMenuActions => {
   const hideTerminalContextMenu = (): void => {
     elements.terminalContextMenu.hidden = true;
+    state.terminalContextMenuTarget = undefined;
   };
 
-  const showTerminalContextMenu = (event: MouseEvent): void => {
+  const showTerminalContextMenu = (
+    event: MouseEvent,
+    sessionId: string,
+    ptyGeneration: PtyGeneration,
+    view: TerminalView,
+  ): void => {
     event.preventDefault();
+    event.stopPropagation();
     dependencies.hideConversationContextMenu();
-    const terminal = state.terminalViews.get(
-      dependencies.getWorkspaceState().activeSessionId,
-    )?.terminal;
+    const status = dependencies
+      .getWorkspaceState()
+      .sessions.find((candidate) => candidate.id === sessionId);
+    if (
+      state.terminalViews.get(sessionId) !== view ||
+      view.ptyGeneration !== ptyGeneration ||
+      status?.ptyGeneration !== ptyGeneration
+    ) {
+      hideTerminalContextMenu();
+      return;
+    }
+    state.terminalContextMenuRevision += 1;
+    state.terminalContextMenuTarget = {
+      menuRevision: state.terminalContextMenuRevision,
+      ptyGeneration,
+      sessionId,
+      view,
+    };
+    const terminal = view.terminal;
     const copy = elements.terminalContextMenu.querySelector<HTMLButtonElement>(
       '[data-terminal-context-action="copy"]',
     );

@@ -13,25 +13,25 @@ npm install
 npm run dev
 ```
 
-`npm run dev` 并行启动三件事：`tsc --watch` 增量编译主进程与 preload、Vite 在 `127.0.0.1:5173` 提供渲染端、`wait-on` 就绪后启动 Electron。改动主进程代码需要重启 Electron；改动渲染端由 Vite 热更新。
+`npm run dev` 协调四个进程：main 使用 `tsc --watch` 增量编译，preload 使用 Vite watch 构建，renderer 由 Vite 在 `127.0.0.1:5173` 提供，Electron 在 `wait-on` 确认 main 与 preload 产物就绪后启动。改动 main 或 preload 代码需要重启 Electron；改动 renderer 由 Vite 热更新。
 
 ## 命令
 
-| 命令                          | 作用                                       |
-| ----------------------------- | ------------------------------------------ |
-| `npm run dev`                 | 开发模式                                   |
-| `npm start`                   | 用已构建的 `dist/` 启动 Electron           |
-| `npm run build`               | clean + 图标 + typecheck + 主进程 + 渲染端 |
-| `npm run build:main`          | 只编译主进程与 preload                     |
-| `npm run build:renderer`      | 只构建渲染端                               |
-| `npm run dist`                | 打包 Windows x64 NSIS 安装包到 `outputs/`  |
-| `npm run release:manifest`    | 校验通道/feed/产物并生成本地发布报告       |
-| `npm run release`             | 打包并运行本地发布门禁，不上传             |
-| `npm run release:publish:cos` | 显式发布已验证产物到 COS；见 release.md    |
-| `npm run clean`               | 删除 `dist/`                               |
-| `npm run generate:icons`      | 从 `assets/source/*.svg` 生成 PNG/ICO      |
-| `npm run format`              | Prettier 写入                              |
-| `npm run lint:deps:graph`     | 输出依赖架构图                             |
+- `npm run dev`：开发模式
+- `npm start`：用已构建的 `dist/` 启动 Electron
+- `npm run build`：clean 后先生成 identity，再生成图标、typecheck 和构建三进程
+- `npm run build:main`：只编译 main
+- `npm run build:preload`：只构建 preload
+- `npm run build:renderer`：只构建 renderer
+- `npm run dist`：打包 Windows x64 NSIS 安装包到 `outputs/`
+- `npm run release:manifest`：校验通道/feed/产物并生成本地发布报告
+- `npm run release`：在 clean exact commit 上重装、跑门禁、打包和生成报告，不上传
+- `npm run release:publish:cos`：显式发布已验证产物到 COS；见 release.md
+- `npm run clean`：删除 `dist/`
+- `npm run generate:icons`：从 `assets/source/*.svg` 生成 PNG/ICO
+- `npm run generate:source-identity`：生成无凭据 packaged source identity
+- `npm run format`：Prettier 写入
+- `npm run lint:deps:graph`：输出依赖架构图
 
 验证类命令见 [verify.md](verify.md)。
 
@@ -73,21 +73,25 @@ npm run dev
 
 ## 约定
 
-| 项       | 约定                                                                                      |
-| -------- | ----------------------------------------------------------------------------------------- |
-| 类型位置 | 跨进程类型在 `src/shared/`；单进程内部类型就近定义                                        |
-| 桶文件   | 只有 `src/shared/contracts/index.ts` 一个，其余一律直接 import 具体文件                   |
-| 参数校验 | IPC 入口一律 `unknown` 入参 + `validate*()` 收窄，不信任渲染端                            |
-| 错误处理 | 主进程把异常转成结构化失败结果返回，不让 Promise reject 穿过 IPC 边界                     |
-| 注释     | 解释为什么，不解释是什么；不引用文档路径，不写流程性表述                                  |
-| 命名     | 文件 kebab-case，类型 PascalCase，函数与变量 camelCase，IPC 频道 `namespace:kebab-action` |
-| 提交前   | 跑快门禁（见 [verify.md](verify.md)）                                                     |
+| 项       | 约定                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------- |
+| 类型位置 | 跨进程类型在 `src/shared/`；单进程内部类型就近定义                                                |
+| 桶文件   | 只有 `src/shared/contracts/index.ts` 一个，其余一律直接 import 具体文件                           |
+| 参数校验 | IPC 入口一律 `unknown` 入参 + `validate*()` 收窄，不信任渲染端                                    |
+| 错误处理 | 主进程把异常转成结构化失败结果返回，不让 Promise reject 穿过 IPC 边界                             |
+| 注释     | 解释为什么，不解释是什么；不引用文档路径，不写流程性表述                                          |
+| 命名     | 文件 kebab-case，类型 PascalCase，函数与变量 camelCase，IPC 频道 `namespace:kebab-action`         |
+| 终端输入 | 捕获 session/view/`ptyGeneration`；粘贴只走 `Terminal.paste → onData`，不得直接写 PTY             |
+| 事件顺序 | 必须先于 xterm 的右键处理使用容器 capture listener，并在 dispose 时成对移除                       |
+| 异步反馈 | busy 文案、disabled、`aria-busy`/live status 属于 operation token；旧 settlement 不得恢复新 owner |
+| 品牌资产 | 官方 SVG 保留来源 URL、检索日期、源/规范化哈希与安全结构；改动同步资产契约测试                    |
+| 提交前   | 跑快门禁（见 [verify.md](verify.md)）；代码或打包改动后必须跑 `npm run dist`                      |
 
 ## 结构约束
 
 `npm run lint:deps` 强制的分层规则见 [project-layout.md](../reference/project-layout.md)。全部规则为 error，常见违规：
 
-- 在 `src/shared/` 里 import `electron` 或 `node:*`。
+- 在 `src/shared/` 里 import `electron`，或通过 bare / `node:` specifier import Node core module。
 - 新建文件后没有任何 import 引用它（孤儿模块）。
 - 两个模块互相 import（循环依赖）。
 - `src/` 里 import 了 devDependency。

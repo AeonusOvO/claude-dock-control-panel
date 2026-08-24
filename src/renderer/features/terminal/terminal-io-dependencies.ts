@@ -24,6 +24,7 @@ export interface TerminalIoDependencies {
   hideConversationContextMenu: () => void;
   loadClaudeState: (sessionId: string) => Promise<void>;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
   resolveClaudeLaunchDecision: (
     token: ClaudeLaunchAttemptToken,
     paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,

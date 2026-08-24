@@ -8,6 +8,8 @@ import type { PreflightElements } from './elements';
 import {
   acceptBackgroundApplicationResult,
   clearTestingBackgroundResults,
+  ownsPreflightOperation,
+  type PreflightOperationToken,
   type PreflightState,
 } from './state';
 import type { PreflightView } from './view';
@@ -33,10 +35,12 @@ export interface PreflightActions {
 
 interface PreflightRunRequest {
   force: boolean;
+  manual: boolean;
   provider: NetworkProviderId;
 }
 
 interface ActivePreflightRun {
+  operation: PreflightOperationToken;
   promise: Promise<void>;
   request: PreflightRunRequest;
 }
@@ -50,6 +54,7 @@ interface PreflightActionsContext {
   activeRun?: ActivePreflightRun;
   dependencies: PreflightActionsDependencies;
   elements: PreflightElements;
+  nextOperationSequence: number;
   queuedRun?: QueuedPreflightRun;
   state: PreflightState;
   view: PreflightView;
@@ -73,37 +78,45 @@ const manualNetworkProvider = (
   providerOverride?: NetworkProviderId,
 ): NetworkProviderId => providerOverride ?? 'ai-services';
 
+const renderPreflightPresentation = (
+  context: PreflightActionsContext,
+  provider: NetworkProviderId,
+): void => {
+  context.view.renderActiveNetworkPreflight();
+  if (context.elements.networkPreflightDialog.open) {
+    const dialogProvider = context.state.networkPreflightDialogProvider ?? provider;
+    context.view.renderNetworkPreflightDetails(
+      context.state.networkPreflightResults.get(dialogProvider),
+    );
+  }
+};
+
 const startNetworkPreflightRun = (
   context: PreflightActionsContext,
   request: PreflightRunRequest,
 ): Promise<void> => {
-  const { dependencies, elements, state, view } = context;
-  const manual = request.provider === 'ai-services';
-  state.networkPreflightInProgress = true;
-  state.networkPreflightManualInProgress = manual;
-  elements.networkPreflightTrigger.disabled = manual;
-  elements.networkPreflightRecheck.disabled = manual;
-  elements.networkPreflightDialogRecheck.disabled = manual;
-  elements.settingsNetworkRecheck.disabled = manual;
-  view.renderActiveNetworkPreflight();
-  const operation = (async () => {
+  const { dependencies, state } = context;
+  const operation = Object.freeze({
+    action: 'background' as const,
+    manual: request.manual,
+    provider: request.provider,
+    sequence: context.nextOperationSequence++,
+  });
+  state.networkPreflightOperation = operation;
+  renderPreflightPresentation(context, request.provider);
+  const promise = (async () => {
     try {
       const result = await window.controlPanel.runNetworkPreflight({
-        action: 'background',
+        action: operation.action,
         force: request.force,
         provider: request.provider,
       });
+      if (!ownsPreflightOperation(state, operation)) return;
       if (acceptBackgroundApplicationResult(state, result)) {
-        view.renderActiveNetworkPreflight();
-        if (
-          !state.networkPreflightDialogProvider ||
-          state.networkPreflightDialogProvider === request.provider
-        ) {
-          view.renderNetworkPreflightDetails(result);
-        }
+        renderPreflightPresentation(context, request.provider);
       }
     } catch (error) {
-      if (!context.queuedRun) {
+      if (ownsPreflightOperation(state, operation) && !context.queuedRun) {
         dependencies.showToast(
           error instanceof Error ? error.message : '网络预检无法完成。',
           'error',
@@ -111,7 +124,9 @@ const startNetworkPreflightRun = (
       }
     }
   })().finally(() => {
-    if (context.activeRun?.promise !== operation) return;
+    if (context.activeRun?.operation !== operation || !ownsPreflightOperation(state, operation)) {
+      return;
+    }
     context.activeRun = undefined;
     const queued = context.queuedRun;
     context.queuedRun = undefined;
@@ -122,16 +137,11 @@ const startNetworkPreflightRun = (
       });
       return;
     }
-    state.networkPreflightInProgress = false;
-    state.networkPreflightManualInProgress = false;
-    elements.networkPreflightTrigger.disabled = false;
-    elements.networkPreflightRecheck.disabled = false;
-    elements.networkPreflightDialogRecheck.disabled = false;
-    elements.settingsNetworkRecheck.disabled = false;
-    view.renderActiveNetworkPreflight();
+    state.networkPreflightOperation = undefined;
+    renderPreflightPresentation(context, request.provider);
   });
-  context.activeRun = { promise: operation, request };
-  return operation;
+  context.activeRun = { operation, promise, request };
+  return promise;
 };
 
 const queueNetworkPreflightRun = (
@@ -159,6 +169,7 @@ const queueNetworkPreflightRun = (
         queued.request.provider === request.provider
           ? {
               force: queued.request.force || request.force,
+              manual: queued.request.manual || request.manual,
               provider: request.provider,
             }
           : request;
@@ -182,7 +193,7 @@ const runActiveNetworkPreflight = (
     }
     return Promise.resolve();
   }
-  return queueNetworkPreflightRun(context, { force, provider }, supersedeActive);
+  return queueNetworkPreflightRun(context, { force, manual: false, provider }, supersedeActive);
 };
 
 const runManualNetworkPreflight = (
@@ -191,7 +202,7 @@ const runManualNetworkPreflight = (
 ): Promise<void> => {
   const provider = manualNetworkProvider(context, providerOverride);
   context.state.networkPreflightDisplayProvider = provider;
-  return queueNetworkPreflightRun(context, { force: true, provider }, true);
+  return queueNetworkPreflightRun(context, { force: true, manual: true, provider }, true);
 };
 
 const openNetworkPreflightDialog = async (
@@ -257,7 +268,7 @@ const handleNetworkPreflight = (
     ) {
       view.renderNetworkPreflightDetails(result);
     }
-  } else if (result.status === 'blocked') {
+  } else if (result.providerConnectivity.status === 'blocked' && !state.networkPreflightOperation) {
     state.networkPreflightDialogProvider = result.provider;
     view.renderNetworkPreflightDetails(result);
     if (!elements.networkPreflightDialog.open && !hasPausedClaudeLaunchDialog()) {
@@ -274,9 +285,8 @@ const bindPreflightActions = (context: PreflightActionsContext): (() => void) =>
   const handleDetails = (): void => void openNetworkPreflightDialog(context);
   const handleManualDetails = (): void => {
     const provider = manualNetworkProvider(context);
-    void openNetworkPreflightDialog(context, provider).then(() =>
-      runManualNetworkPreflight(context, provider),
-    );
+    void openNetworkPreflightDialog(context, provider);
+    void runManualNetworkPreflight(context, provider);
   };
   const handleRecheck = (): void => void runManualNetworkPreflight(context);
   const handleRepair = (event: Event): void => {
@@ -389,7 +399,7 @@ export const createPreflightActions = (
   dependencies: PreflightActionsDependencies,
   view: PreflightView,
 ): PreflightActions => {
-  const context = { dependencies, elements, state, view };
+  const context = { dependencies, elements, nextOperationSequence: 1, state, view };
   return {
     activeNetworkProvider: () => activeNetworkProvider(context),
     bind: () => bindPreflightActions(context),

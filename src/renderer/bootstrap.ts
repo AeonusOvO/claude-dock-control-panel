@@ -314,7 +314,9 @@ const installTerminalProjectStack = (
     runtimeStateLoadGenerations,
     claudeLaunchAttempts,
     codexLaunchAttempts,
-    isCodexOperationInProgress: () => shells.codexLaunchShell.isCodexOperationInProgress(),
+    getCodexOperation: () => shells.codexLaunchShell.getCodexOperation(),
+    getRuntimeSwitchOperation: (sessionId) =>
+      shells.codexLaunchShell.getRuntimeSwitchOperation(sessionId),
     connectionForm,
     requestConfirmation,
     showToast,
@@ -337,6 +339,7 @@ const installTerminalProjectStack = (
     },
     terminalFeature: {
       getTerminalView: (sessionId) => features.terminalFeature.getTerminalView(sessionId),
+      renderControlStatus: (status) => features.terminalFeature.renderControlStatus(status),
       setComposerEnabled: (enabled) => features.terminalFeature.setComposerEnabled(enabled),
       showTerminalDiagnostic: (status) => features.terminalFeature.showTerminalDiagnostic(status),
       relaunchClaudeSession: (summary, input) =>

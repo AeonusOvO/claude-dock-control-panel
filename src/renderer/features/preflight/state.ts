@@ -1,18 +1,31 @@
-import type { NetworkPreflightResult, NetworkProviderId } from '../../../shared/contracts';
+import type {
+  NetworkPreflightAction,
+  NetworkPreflightResult,
+  NetworkProviderId,
+} from '../../../shared/contracts';
+
+export interface PreflightOperationToken {
+  readonly action: NetworkPreflightAction;
+  readonly manual: boolean;
+  readonly provider: NetworkProviderId;
+  readonly sequence: number;
+}
 
 export interface PreflightState {
   networkPreflightDialogProvider?: NetworkProviderId;
   networkPreflightDisplayProvider?: NetworkProviderId;
-  networkPreflightInProgress: boolean;
-  networkPreflightManualInProgress: boolean;
+  networkPreflightOperation?: PreflightOperationToken;
   networkPreflightResults: Map<NetworkProviderId, NetworkPreflightResult>;
 }
 
 export const createPreflightState = (): PreflightState => ({
-  networkPreflightInProgress: false,
-  networkPreflightManualInProgress: false,
   networkPreflightResults: new Map(),
 });
+
+export const ownsPreflightOperation = (
+  state: PreflightState,
+  operation: PreflightOperationToken,
+): boolean => state.networkPreflightOperation === operation;
 
 const isBackgroundApplicationResult = (result: NetworkPreflightResult): boolean =>
   result.action === 'background' &&
@@ -22,7 +35,7 @@ const isBackgroundApplicationResult = (result: NetworkPreflightResult): boolean 
 export const clearTestingBackgroundResults = (state: PreflightState): boolean => {
   let changed = false;
   for (const [provider, result] of state.networkPreflightResults) {
-    if (result.status === 'testing') {
+    if (result.providerConnectivity.status === 'testing') {
       state.networkPreflightResults.delete(provider);
       changed = true;
     }
@@ -41,8 +54,8 @@ export const acceptBackgroundApplicationResult = (
     if (result.generation === current.generation) {
       if (result.mainRunId < current.mainRunId) return false;
       if (result.mainRunId === current.mainRunId) {
-        if (current.status !== 'testing') return false;
-        if (result.status === 'testing') return false;
+        if (current.providerConnectivity.status !== 'testing') return false;
+        if (result.providerConnectivity.status === 'testing') return false;
       }
     }
   }

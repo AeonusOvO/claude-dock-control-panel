@@ -837,7 +837,25 @@ describe('createElectronApplicationRequest', () => {
     );
   });
 
-  it('keeps Electron manual redirects unfollowed', async () => {
+  it('keeps authoritative non-redirecting probes on the primary Session fetch path', async () => {
+    const fetch = vi.fn(
+      async () => new Response(null, { status: 204 }),
+    ) as unknown as typeof globalThis.fetch;
+    const redirectFetch = vi.fn() as unknown as typeof globalThis.fetch;
+    const createRedirectFetch = vi.fn(() => redirectFetch);
+    const applicationRequest = createElectronApplicationRequest({ createRedirectFetch, fetch });
+
+    await expect(
+      applicationRequest('https://chatgpt.com/', undefined, {
+        allowedDomains: ['auth.openai.com'],
+      }),
+    ).resolves.toMatchObject({ redirects: [], status: 204 });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(createRedirectFetch).toHaveBeenCalledOnce();
+    expect(redirectFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps redirects manual when no inspectable redirect transport is available', async () => {
     const redirectCancelled = new TypeError('Redirect was cancelled');
     const fetch = vi.fn(async () => {
       throw redirectCancelled;
@@ -850,6 +868,75 @@ describe('createElectronApplicationRequest', () => {
       }),
     ).rejects.toBe(redirectCancelled);
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('validates and follows a trusted HTTPS redirect through the production ClientRequest adapter', async () => {
+    const harness = clientRequest(
+      ({ emitter }) => {
+        emitter.emit('redirect', 302, 'GET', 'https://login.auth.openai.com/authorize', {
+          location: ['https://login.auth.openai.com/authorize'],
+        });
+      },
+      ({ emitter }) => {
+        const response = incomingResponse(204, { 'content-type': 'application/json' });
+        emitter.emit('response', response);
+        response.emit('end');
+        emitter.emit('close');
+      },
+    );
+    const fallbackFetch = vi.fn(async () => {
+      throw new TypeError('Redirect was cancelled');
+    }) as unknown as typeof globalThis.fetch;
+    const applicationRequest = createElectronApplicationRequest({
+      createRedirectFetch: (authorizeRedirect) =>
+        createElectronSessionFetch({
+          authorizeRedirect,
+          requestFactory: () => harness.request,
+          resolveProxyCredentials: () => undefined,
+          session: {} as Session,
+        }),
+      fetch: fallbackFetch,
+    });
+
+    await expect(
+      applicationRequest('https://chatgpt.com/', undefined, {
+        allowedDomains: ['auth.openai.com'],
+      }),
+    ).resolves.toEqual({
+      contentType: 'application/json',
+      redirects: [{ host: 'login.auth.openai.com', statusCode: 302 }],
+      status: 204,
+    });
+    expect(harness.request.followRedirect).toHaveBeenCalledOnce();
+    expect(fallbackFetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['an untrusted domain', 'https://attacker.example/authorize', 'not allowed'],
+    ['an HTTP downgrade', 'http://auth.openai.com/authorize', 'must use HTTPS'],
+  ] as const)('blocks %s before following the redirect', async (_case, redirectUrl, message) => {
+    const harness = clientRequest(({ emitter }) => {
+      emitter.emit('redirect', 302, 'GET', redirectUrl, { location: [redirectUrl] });
+    });
+    const applicationRequest = createElectronApplicationRequest({
+      createRedirectFetch: (authorizeRedirect) =>
+        createElectronSessionFetch({
+          authorizeRedirect,
+          requestFactory: () => harness.request,
+          resolveProxyCredentials: () => undefined,
+          session: {} as Session,
+        }),
+      fetch: vi.fn(async () => {
+        throw new TypeError('Redirect was cancelled');
+      }) as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(
+      applicationRequest('https://chatgpt.com/', undefined, {
+        allowedDomains: ['auth.openai.com'],
+      }),
+    ).rejects.toThrow(message);
+    expect(harness.request.followRedirect).not.toHaveBeenCalled();
   });
 
   it('forwards the authoritative abort reason to the active Session fetch', async () => {

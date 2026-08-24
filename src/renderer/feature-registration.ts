@@ -351,6 +351,7 @@ const installConversationFeatures = (
     loadClaudeState: terminalProjectState.loadClaudeState,
     projectNameFromPath,
     refreshClaudeLaunchControls: terminalProjectState.refreshClaudeLaunchControls,
+    setClaudeLaunchPaused: terminalProjectState.setClaudeLaunchPaused,
     renderClaudeLaunchResult: terminalProjectState.renderClaudeLaunchResult,
     requestConfirmation,
     resultFailureMessage,
@@ -571,6 +572,7 @@ const installProjectFeatures = (
     loadRouterManagement: () => features.routerFeature.loadManagement(),
     phaseCopy,
     projectNameFromPath,
+    pruneTerminalControlOperations: features.terminalFeature.pruneTerminalControlOperations,
     reconcileBinding: (state) => features.conversationFeature.reconcileBinding(state),
     renderActiveStatus: terminalProjectState.renderActiveStatus,
     renderConnectionHistory: connectionHistory.render,
@@ -653,13 +655,15 @@ const installApplicationSubscriptions = (
   window.controlPanel.onClaudeState(terminalProjectState.renderClaudeState);
   window.controlPanel.onCodexState((state) => {
     terminalProjectState.renderCodexState(state);
-    if (
-      codexLaunchShell.getCodexAutoLaunchSessionId() === state.sessionId &&
-      state.account &&
-      state.sessionId === getWorkspaceState().activeSessionId &&
-      activeDevelopmentRuntime() === 'codex' &&
-      !codexLaunchShell.isCodexOperationInProgress()
-    ) {
+    if (codexLaunchShell.getCodexAutoLaunchSessionId() !== state.sessionId || !state.account) {
+      return;
+    }
+    const active = state.sessionId === getWorkspaceState().activeSessionId;
+    if (!active) {
+      codexLaunchShell.setCodexAutoLaunchSessionId('');
+      return;
+    }
+    if (activeDevelopmentRuntime() === 'codex' && !codexLaunchShell.isCodexOperationInProgress()) {
       codexLaunchShell.setCodexAutoLaunchSessionId('');
       void codexLaunchShell.launchCodex('new');
     }

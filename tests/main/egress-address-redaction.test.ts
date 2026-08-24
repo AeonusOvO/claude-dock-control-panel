@@ -2,10 +2,12 @@ import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   EgressAddressRedactionError,
+  isIpv4MappedIpv6Address,
   normalizeEgressAddressBinary,
   normalizePersistedRedactedEgressAddress,
   redactEgressAddress,
   redactEgressAddresses,
+  transientEgressAddressPrefix,
 } from '../../src/main/egress-diagnostics/address-redactor';
 
 const KEY_A = Buffer.alloc(32, 0x11);
@@ -43,6 +45,8 @@ describe('egress address redaction', () => {
     expect(redactEgressAddress('2001:db8:1234:5678::abcd', 'ipv6', KEY_A).fingerprint).not.toBe(
       ipv6.fingerprint,
     );
+    expect(transientEgressAddressPrefix('203.0.113.77')).toBe('203.0.113.0/24');
+    expect(transientEgressAddressPrefix('2001:db8::1')).toBe('2001:db8::/64');
   });
 
   it('rejects invalid input and family mismatches without reflecting exact input in errors', () => {
@@ -61,6 +65,20 @@ describe('egress address redaction', () => {
     expect(() => redactEgressAddress('203.0.113.10', 'ipv4', Buffer.alloc(31))).toThrow(
       /fingerprint key/i,
     );
+  });
+
+  it('rejects IPv4-mapped IPv6 spellings instead of creating a misleading IPv6 prefix', () => {
+    for (const mapped of ['::ffff:203.0.113.47', '0:0:0:0:0:ffff:cb00:712f']) {
+      expect(isIpv4MappedIpv6Address(mapped)).toBe(true);
+      expect(() => transientEgressAddressPrefix(mapped)).toThrow(EgressAddressRedactionError);
+      expect(() => transientEgressAddressPrefix(mapped, 'ipv6')).toThrow(
+        EgressAddressRedactionError,
+      );
+      expect(() => normalizeEgressAddressBinary(mapped, 'ipv6')).toThrow(
+        EgressAddressRedactionError,
+      );
+      expect(() => redactEgressAddress(mapped, 'ipv6', KEY_A)).toThrow(EgressAddressRedactionError);
+    }
   });
 
   it('redacts private and public addresses identically and deduplicates canonical equivalents', () => {

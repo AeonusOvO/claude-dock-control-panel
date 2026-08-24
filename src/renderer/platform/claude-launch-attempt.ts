@@ -9,7 +9,13 @@ export type ClaudeLaunchReleaseReason =
   | 'session-deleted'
   | 'terminal-failure';
 
+type ClaudeLaunchLifecycleEvidenceReason = Extract<
+  ClaudeLaunchReleaseReason,
+  'claude-exit' | 'conversation' | 'powershell'
+>;
+
 export type ClaudeLaunchResultDisposition = 'failure' | 'success';
+export type ClaudeLaunchPresentationPhase = 'paused' | 'preflight' | 'starting';
 
 export interface ClaudeLaunchAttemptToken {
   generation: number;
@@ -40,17 +46,21 @@ export interface ClaudeLaunchResultTombstone extends ClaudeLaunchAttemptToken {
 }
 
 interface ClaudeLaunchAttempt extends ClaudeLaunchAttemptToken {
+  acceptedResult?: ClaudeLaunchResultDisposition;
   baselineConversationId?: string;
   baselinePid?: number;
   baselinePtyGeneration?: TerminalStatus['ptyGeneration'];
   latestClaudeActive?: boolean;
+  lifecycleEvidenceReason?: ClaudeLaunchLifecycleEvidenceReason;
+  presentationPhase: ClaudeLaunchPresentationPhase;
   sawClaudeActive: boolean;
 }
 
 /**
- * Owns renderer launch locks without using timeouts. A launch is released only by an observed
- * lifecycle transition or by the exact async attempt reporting a failure. Generations make a late
- * rejection from an older IPC harmless after a newer attempt has already started.
+ * Owns renderer launch locks without using timeouts. Non-failure lifecycle evidence is retained until
+ * the exact IPC result is accepted because the replacement PTY can report running before invoke
+ * settlement. Explicit failures remain terminal, and generations make an older settlement harmless
+ * after a newer attempt has already started.
  */
 export class ClaudeLaunchAttemptRegistry {
   private readonly attempts = new Map<string, ClaudeLaunchAttempt>();
@@ -72,6 +82,7 @@ export class ClaudeLaunchAttemptRegistry {
       baselinePid: baseline.terminalPhase === 'running' ? baseline.terminalPid : undefined,
       baselinePtyGeneration: baseline.terminalPtyGeneration,
       latestClaudeActive: baseline.active,
+      presentationPhase: 'preflight',
       sawClaudeActive: baseline.active === true,
     });
     return token;
@@ -82,11 +93,28 @@ export class ClaudeLaunchAttemptRegistry {
     return attempt ? { generation: attempt.generation, sessionId: attempt.sessionId } : undefined;
   }
 
+  public presentationPhase(sessionId: string): ClaudeLaunchPresentationPhase | undefined {
+    return this.attempts.get(sessionId)?.presentationPhase;
+  }
+
+  public setPresentationPhase(
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ): boolean {
+    const attempt = this.attempts.get(token.sessionId);
+    if (!attempt || attempt.generation !== token.generation) {
+      return false;
+    }
+    attempt.presentationPhase = phase;
+    return true;
+  }
+
   public acceptResult(
     token: ClaudeLaunchAttemptToken,
     disposition: ClaudeLaunchResultDisposition,
   ): boolean {
-    if (!this.isCurrent(token)) {
+    const attempt = this.attempts.get(token.sessionId);
+    if (!attempt || attempt.generation !== token.generation) {
       return false;
     }
     const tombstone = this.resultTombstones.get(token.sessionId);
@@ -94,6 +122,10 @@ export class ClaudeLaunchAttemptRegistry {
       return false;
     }
     this.resultTombstones.set(token.sessionId, { ...token, disposition });
+    attempt.acceptedResult = disposition;
+    if (attempt.lifecycleEvidenceReason) {
+      this.release(token.sessionId, token.generation, attempt.lifecycleEvidenceReason);
+    }
     return true;
   }
 
@@ -156,12 +188,12 @@ export class ClaudeLaunchAttemptRegistry {
       if (!attempt.baselineConversationId) {
         attempt.baselineConversationId = observation.conversationId;
       } else if (observation.conversationId !== attempt.baselineConversationId) {
-        return this.release(observation.sessionId, attempt.generation, 'conversation');
+        return this.observeLifecycleEvidence(attempt, 'conversation');
       }
     }
     const terminal = this.terminalStatuses.get(observation.sessionId);
     if (!observation.active && attempt.sawClaudeActive && terminal?.phase === 'running') {
-      return this.release(observation.sessionId, attempt.generation, 'claude-exit');
+      return this.observeLifecycleEvidence(attempt, 'claude-exit');
     }
     return undefined;
   }
@@ -172,6 +204,9 @@ export class ClaudeLaunchAttemptRegistry {
     if (!attempt) {
       return undefined;
     }
+    if (status.phase === 'starting') {
+      attempt.presentationPhase = 'starting';
+    }
     if (status.phase === 'error' || status.phase === 'stopped') {
       return this.release(status.id, attempt.generation, 'terminal-failure');
     }
@@ -181,14 +216,14 @@ export class ClaudeLaunchAttemptRegistry {
         status.ptyGeneration !== attempt.baselinePtyGeneration) ||
         (status.pid !== undefined && status.pid !== attempt.baselinePid))
     ) {
-      return this.release(status.id, attempt.generation, 'powershell');
+      return this.observeLifecycleEvidence(attempt, 'powershell');
     }
     if (
       status.phase === 'running' &&
       attempt.sawClaudeActive &&
       attempt.latestClaudeActive === false
     ) {
-      return this.release(status.id, attempt.generation, 'claude-exit');
+      return this.observeLifecycleEvidence(attempt, 'claude-exit');
     }
     return undefined;
   }
@@ -214,6 +249,16 @@ export class ClaudeLaunchAttemptRegistry {
       }
     }
     return released;
+  }
+
+  private observeLifecycleEvidence(
+    attempt: ClaudeLaunchAttempt,
+    reason: ClaudeLaunchLifecycleEvidenceReason,
+  ): ClaudeLaunchRelease | undefined {
+    attempt.lifecycleEvidenceReason ??= reason;
+    return attempt.acceptedResult
+      ? this.release(attempt.sessionId, attempt.generation, attempt.lifecycleEvidenceReason)
+      : undefined;
   }
 
   private release(

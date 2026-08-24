@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { DevelopmentRuntime, PtyGeneration } from '../../shared/contracts';
+import type {
+  DevelopmentRuntime,
+  DevelopmentRuntimeSwitchOperation,
+  PtyGeneration,
+} from '../../shared/contracts';
 
 const directoryKey = (cwd: string): string => path.resolve(cwd).toLocaleLowerCase('en-US');
 
@@ -27,6 +31,7 @@ export interface ProjectRuntimeSwitchDependencies {
 }
 
 interface DirectorySwitchIntent {
+  attempt: number;
   completed: Promise<void>;
   cwd: string;
   expectedRuntime: DevelopmentRuntime;
@@ -67,8 +72,14 @@ const sameSessionSnapshot = (
  */
 export class ProjectRuntimeSwitchCoordinator {
   private readonly currentByDirectory = new Map<string, DirectorySwitchIntent>();
+  private nextAttempt = 0;
 
   public constructor(private readonly dependencies: ProjectRuntimeSwitchDependencies) {}
+
+  public activeSwitch(cwd: string): DevelopmentRuntimeSwitchOperation | undefined {
+    const intent = this.currentByDirectory.get(directoryKey(cwd));
+    return intent ? { attempt: intent.attempt, runtime: intent.selected } : undefined;
+  }
 
   public assertDevelopmentOperationAllowed(cwd: string): void {
     if (this.currentByDirectory.has(directoryKey(cwd))) {
@@ -179,6 +190,7 @@ export class ProjectRuntimeSwitchCoordinator {
       resolveCompleted = resolve;
     });
     const intent: DirectorySwitchIntent = {
+      attempt: ++this.nextAttempt,
       completed,
       cwd,
       expectedRuntime: this.dependencies.getCurrentRuntime(cwd),

@@ -7,10 +7,16 @@ import type {
 import { createCodexLaunchAccountActions } from './codex-launch-account';
 import { createCodexLaunchActions } from './codex-launch-actions';
 import { bindCodexLaunchControls } from './codex-launch-bindings';
-import { createCodexLaunchMutableState } from './codex-launch-dependencies';
+import type { CodexLaunchDeps } from './codex-launch-dependencies';
+import {
+  codexOperationAdmissionBlocked,
+  codexOperationPresentation,
+  createCodexLaunchMutableState,
+  type CodexOperationPresentation,
+  type RuntimeSwitchOperationToken,
+} from './codex-operation-state';
 
 export type { CodexLaunchDeps } from './codex-launch-dependencies';
-import type { CodexLaunchDeps } from './codex-launch-dependencies';
 
 export interface CodexLaunch {
   launchCodex: (mode: CodexLaunchMode) => Promise<void>;
@@ -18,6 +24,8 @@ export interface CodexLaunch {
   startCodexLogin: (method: CodexLoginMethod, launchAfterLogin: boolean) => Promise<void>;
   prepareAndLaunchCodex: () => Promise<void>;
   switchDevelopmentRuntime: (runtime: DevelopmentRuntime) => Promise<void>;
+  getCodexOperation: (state?: CodexProjectState) => CodexOperationPresentation | undefined;
+  getRuntimeSwitchOperation: (sessionId: string) => RuntimeSwitchOperationToken | undefined;
   isCodexOperationInProgress: () => boolean;
   getCodexAutoLaunchSessionId: () => string;
   setCodexAutoLaunchSessionId: (sessionId: string) => void;
@@ -35,7 +43,11 @@ export const createCodexLaunch = (deps: CodexLaunchDeps): CodexLaunch => {
     startCodexLogin: actions.startCodexLogin,
     prepareAndLaunchCodex: actions.prepareAndLaunchCodex,
     switchDevelopmentRuntime: accountActions.switchDevelopmentRuntime,
-    isCodexOperationInProgress: () => mutableState.codexOperationInProgress,
+    getCodexOperation: (state) => codexOperationPresentation(mutableState, deps.codexStates, state),
+    getRuntimeSwitchOperation: (sessionId) =>
+      mutableState.runtimeSwitchOperations.current(sessionId),
+    isCodexOperationInProgress: () =>
+      codexOperationAdmissionBlocked(mutableState, deps.codexStates),
     getCodexAutoLaunchSessionId: () => mutableState.codexAutoLaunchSessionId,
     setCodexAutoLaunchSessionId: (sessionId) => {
       mutableState.codexAutoLaunchSessionId = sessionId;

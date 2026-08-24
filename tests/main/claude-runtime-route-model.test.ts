@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeRuntime } from '../../src/main/claude/runtime';
+import { claudeNetworkAccessForConfig } from '../../src/main/claude/runtime-connection-config';
+import { sameClaudeNetworkAccess } from '../../src/main/claude/runtime-types';
 import type { ClaudePermissionMode, PtyGeneration } from '../../src/shared/contracts';
 
 interface TestRuntimeSession {
@@ -117,6 +119,45 @@ const createRouteBoundaryRuntime = (
   internals.stopUnusedRoute = stopUnusedRoute;
   return { internals, runtime, stopUnusedRoute };
 };
+
+describe('Claude runtime network access identity', () => {
+  it('keeps custom Anthropic-compatible gateways exact and distinct from official capability', () => {
+    const customAccess = claudeNetworkAccessForConfig(
+      { baseUrl: 'https://gateway.example.com/tenant', preset: 'custom' },
+      'anthropic',
+    );
+    const otherGateway = claudeNetworkAccessForConfig(
+      { baseUrl: 'https://other.example.com/tenant', preset: 'custom' },
+      'anthropic',
+    );
+    const officialAccess = claudeNetworkAccessForConfig(
+      { baseUrl: '', preset: 'anthropic' },
+      'anthropic',
+    );
+
+    expect(customAccess).toEqual({
+      provider: 'anthropic-claude',
+      target: {
+        process: 'claude-cli',
+        url: 'https://gateway.example.com/tenant/v1/messages',
+      },
+    });
+    expect(Object.isFrozen(customAccess)).toBe(true);
+    expect(Object.isFrozen(customAccess?.target)).toBe(true);
+    expect(officialAccess).toEqual({ provider: 'anthropic-claude' });
+    expect(sameClaudeNetworkAccess(customAccess, officialAccess)).toBe(false);
+    expect(sameClaudeNetworkAccess(customAccess, otherGateway)).toBe(false);
+  });
+
+  it('does not treat an OpenAI-compatible local router target as Anthropic authority', () => {
+    expect(
+      claudeNetworkAccessForConfig(
+        { baseUrl: 'http://127.0.0.1:3456', preset: 'custom' },
+        'openai',
+      ),
+    ).toBeUndefined();
+  });
+});
 
 describe('Claude runtime managed route boundary', () => {
   it('passes the exact project to readiness without stopping the predecessor route', async () => {

@@ -3,28 +3,50 @@ import { ClaudeLaunchHealthMonitor } from '../../src/main/network/claude-launch-
 import type { NetworkPreflightResult } from '../../src/shared/contracts';
 
 const result = (
-  status: NetworkPreflightResult['status'],
+  status: NetworkPreflightResult['providerConnectivity']['status'],
   checkedAt = 100,
-): NetworkPreflightResult => ({
-  action: 'background',
-  checkedAt,
-  configurationRevision: 'main-only-revision',
-  featureAccess: [{ action: 'background', allowed: status !== 'blocked' }],
-  generation: 4,
-  mainRunId: 9,
-  networkScope: 'application',
-  paths: [],
-  probes: [],
-  provider: 'anthropic-claude',
-  providerLabel: 'Anthropic Claude Code',
-  reasons: ['must never reach the display snapshot'],
-  riskLevel: status === 'allowed' ? 'low' : 'high',
-  riskScore: status === 'allowed' ? 0 : 90,
-  signals: [],
-  startedAt: checkedAt - 10,
-  status,
-  summary: 'must never reach the display snapshot',
-});
+  compatibilityStatus: NetworkPreflightResult['status'] = status,
+): NetworkPreflightResult => {
+  const providerConnectivity = {
+    featureAccess: [{ action: 'background' as const, allowed: status !== 'blocked' }],
+    probes: [],
+    reasons: ['must never reach the display snapshot'],
+    signals: [],
+    status,
+    summary: 'must never reach the display snapshot',
+  };
+  const advisoryEvidence = {
+    paths: [],
+    reasons: [],
+    riskLevel: 'high' as const,
+    riskScore: 90,
+    signals: [],
+    summary: 'advisory evidence must never reach the display snapshot',
+  };
+  return {
+    action: 'background',
+    advisoryEvidence,
+    checkedAt,
+    configurationRevision: 'main-only-revision',
+    featureAccess: providerConnectivity.featureAccess,
+    generation: 4,
+    mainRunId: 9,
+    networkScope: 'application',
+    paths: advisoryEvidence.paths,
+    probes: providerConnectivity.probes,
+    provider: 'anthropic-claude',
+    providerConnectivity,
+    providerLabel: 'Anthropic Claude Code',
+    reasons: providerConnectivity.reasons,
+    riskLevel: advisoryEvidence.riskLevel,
+    riskScore: advisoryEvidence.riskScore,
+    schemaVersion: 2,
+    signals: [],
+    startedAt: checkedAt - 10,
+    status: compatibilityStatus,
+    summary: providerConnectivity.summary,
+  };
+};
 
 const flush = async (): Promise<void> => {
   await Promise.resolve();
@@ -78,6 +100,57 @@ describe('Claude launch health monitor', () => {
     expect(snapshot).not.toHaveProperty('mainRunId');
     expect(snapshot).not.toHaveProperty('provider');
     expect(JSON.stringify(snapshot)).not.toContain('Secret');
+    expect(JSON.stringify(snapshot)).not.toContain('must never reach the display snapshot');
+    expect(JSON.stringify(snapshot)).not.toContain('advisory evidence must never reach');
+    monitor.invalidateAll();
+  });
+
+  it('keeps allow and allow-with-notice healthy despite high advisory evidence and poisoned flat status', async () => {
+    const timers: Array<{ callback: () => void; delay: number; unref: ReturnType<typeof vi.fn> }> =
+      [];
+    const setTimer = vi.fn((callback: () => void, delay: number) => {
+      const timer = { callback, delay, unref: vi.fn() };
+      timers.push(timer);
+      return timer as unknown as NodeJS.Timeout;
+    });
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(result('allowed', 101, 'blocked'))
+      .mockResolvedValueOnce(result('allowed_with_notice', 102, 'blocked'));
+    const onSnapshot = vi.fn();
+    const monitor = new ClaudeLaunchHealthMonitor({
+      concernBaseIntervalMs: 10,
+      healthyIntervalMs: 100,
+      isCurrent: () => true,
+      jitterRatio: 0,
+      maximumIntervalMs: 100,
+      onSnapshot,
+      preflight: { run },
+      setTimer,
+    });
+
+    monitor.start({
+      cwd: 'D:\\Project',
+      provider: 'anthropic-claude',
+      ptyGeneration: 7,
+      runtimeLaunchGeneration: 12,
+      sessionId: 'session-1',
+    });
+    await flush();
+
+    expect(onSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionId: 'session-1' }),
+      expect.objectContaining({ checkedAt: 101, tone: 'success' }),
+    );
+    expect(timers[0]?.delay).toBe(100);
+
+    timers[0]!.callback();
+    await flush();
+    expect(onSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionId: 'session-1' }),
+      expect.objectContaining({ checkedAt: 102, tone: 'success' }),
+    );
+    expect(timers[1]?.delay).toBe(100);
     monitor.invalidateAll();
   });
 
