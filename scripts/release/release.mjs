@@ -253,8 +253,24 @@ export const loadReleaseOrchestration = ({
   return record;
 };
 
-export const executeReleaseStep = ({ arguments: arguments_, projectRoot = defaultProjectRoot }) =>
-  execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', arguments_, {
+export const npmInvocation = ({
+  environment = process.env,
+  nodeExecutable = process.execPath,
+} = {}) => {
+  const npmCliPath = environment.npm_execpath?.trim();
+  if (!npmCliPath) {
+    throw new Error('release must be invoked through npm run release');
+  }
+  return { arguments: [npmCliPath], executable: nodeExecutable };
+};
+
+export const executeReleaseStep = ({
+  arguments: arguments_,
+  executeFile = execFileSync,
+  npm = npmInvocation(),
+  projectRoot = defaultProjectRoot,
+}) =>
+  executeFile(npm.executable, [...npm.arguments, ...arguments_], {
     cwd: projectRoot,
     stdio: 'inherit',
   });

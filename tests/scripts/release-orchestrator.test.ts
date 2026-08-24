@@ -15,7 +15,26 @@ interface ReleaseStep {
   name: string;
 }
 
+interface NpmInvocation {
+  arguments: string[];
+  executable: string;
+}
+
 interface ReleaseTools {
+  executeReleaseStep(options: {
+    arguments: string[];
+    executeFile: (
+      executable: string,
+      arguments_: string[],
+      options: { cwd: string; stdio: string },
+    ) => void;
+    npm: NpmInvocation;
+    projectRoot: string;
+  }): void;
+  npmInvocation(options?: {
+    environment?: NodeJS.ProcessEnv;
+    nodeExecutable?: string;
+  }): NpmInvocation;
   orchestrateRelease(options: {
     executeStep: (step: ReleaseStep & { projectRoot: string }) => void;
     isTrackedFile?: (options: { filePath: string; projectRoot: string }) => boolean;
@@ -55,6 +74,35 @@ afterEach(() => {
 });
 
 describe('release orchestration', () => {
+  it('invokes the npm CLI through the current Node executable on Windows-safe paths', () => {
+    const npm = releaseTools.npmInvocation({
+      environment: {
+        npm_execpath: 'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js',
+      },
+      nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe',
+    });
+    const executeFile = vi.fn();
+
+    expect(npm).toEqual({
+      arguments: ['C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js'],
+      executable: 'C:\\Program Files\\nodejs\\node.exe',
+    });
+    releaseTools.executeReleaseStep({
+      arguments: ['run', 'lint'],
+      executeFile,
+      npm,
+      projectRoot: 'D:\\Program\\ClaudeDock',
+    });
+    expect(executeFile).toHaveBeenCalledWith(
+      'C:\\Program Files\\nodejs\\node.exe',
+      ['C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js', 'run', 'lint'],
+      { cwd: 'D:\\Program\\ClaudeDock', stdio: 'inherit' },
+    );
+    expect(() =>
+      releaseTools.npmInvocation({ environment: {}, nodeExecutable: 'node.exe' }),
+    ).toThrow('release must be invoked through npm run release');
+  });
+
   it('runs fresh install, exact quality gates, dist, identity verification, and manifest in order', () => {
     const fixture = createFixture();
     const events: string[] = [];
