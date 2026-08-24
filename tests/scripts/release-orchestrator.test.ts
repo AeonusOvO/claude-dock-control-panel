@@ -313,6 +313,9 @@ describe('release orchestration', () => {
       readFileSync(path.join(projectRoot, 'package.json'), 'utf8'),
     ) as { scripts?: Record<string, string> };
     expect(packageManifest.scripts?.release).toBe('node scripts/release/release.mjs');
+    expect(packageManifest.scripts?.postinstall).toBe(
+      'install-electron && electron-builder install-app-deps',
+    );
     expect(packageManifest.scripts?.dist).toBe('npm run build && electron-builder --win nsis');
   });
 });

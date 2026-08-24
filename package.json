@@ -23,7 +23,7 @@
   },
   "scripts": {
     "clean": "node scripts/build/clean.mjs",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "install-electron && electron-builder install-app-deps",
     "dev": "npm run clean && npm run generate:icons && concurrently -k \"npm:dev:main\" \"npm:dev:preload\" \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:main": "tsc -p tsconfig.main.json --watch --preserveWatchOutput",
     "dev:preload": "vite build --config vite.preload.config.ts --watch",
