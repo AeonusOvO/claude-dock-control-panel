@@ -63,7 +63,7 @@ describe('exported behavior and declarative UI contracts', () => {
   });
 
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
-    expect(harness.document.querySelectorAll('dialog.popover')).toHaveLength(12);
+    expect(harness.document.querySelectorAll('dialog.popover')).toHaveLength(13);
     expect(harness.query('#confirmation-dialog').getAttribute('aria-labelledby')).toBe(
       'confirmation-dialog-title',
     );

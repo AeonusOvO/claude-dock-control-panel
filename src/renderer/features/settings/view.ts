@@ -4,6 +4,7 @@ import {
   isTerminalThemeId,
   type TerminalThemeId,
 } from '../../../shared/ui/terminal-themes';
+import { setEnhancedSelectValue } from '../../platform/components';
 import type { SettingsElements } from './elements';
 import type { SettingsState, SettingsTab } from './state';
 
@@ -26,7 +27,7 @@ export interface SettingsView {
   applySettings: (settings: AppSettingsView) => void;
   pendingSettings: () => Pick<
     AppSettingsView,
-    'advanced' | 'closeBehavior' | 'launchAtLogin' | 'theme'
+    'advanced' | 'closeBehavior' | 'conversationResume' | 'launchAtLogin' | 'theme'
   >;
   selectTab: (tab: SettingsTab) => void;
   setCloseBehaviorValue: (value: string) => void;
@@ -74,7 +75,10 @@ const selectSettingsTab = (context: SettingsViewContext, tab: SettingsTab): void
 
 const pendingAppSettings = (
   context: SettingsViewContext,
-): Pick<AppSettingsView, 'advanced' | 'closeBehavior' | 'launchAtLogin' | 'theme'> => {
+): Pick<
+  AppSettingsView,
+  'advanced' | 'closeBehavior' | 'conversationResume' | 'launchAtLogin' | 'theme'
+> => {
   const { dependencies, elements } = context;
   const themeValue = dependencies.getSettingsThemeValue();
   const savedNetwork = context.state.saved?.advanced.networkPreflight ?? {
@@ -97,6 +101,14 @@ const pendingAppSettings = (
       webResearchIsolation: elements.webResearchIsolation.checked,
     },
     closeBehavior: elements.closeBehavior.value === 'exit' ? 'exit' : 'tray',
+    conversationResume: {
+      modelMismatchBehavior:
+        elements.conversationModelMismatch.value === 'use-current' ||
+        elements.conversationModelMismatch.value === 'use-conversation'
+          ? elements.conversationModelMismatch.value
+          : 'ask',
+      restoreLastWorkspaceOnStartup: elements.restoreLastWorkspace.checked,
+    },
     launchAtLogin: elements.launchAtLogin.checked,
     theme: isTerminalThemeId(themeValue) ? themeValue : DEFAULT_TERMINAL_THEME,
   };
@@ -119,6 +131,10 @@ const updateSettingsUnsavedIndicator = (context: SettingsViewContext): number =>
   const count = [
     pending.launchAtLogin !== state.saved.launchAtLogin,
     pending.closeBehavior !== state.saved.closeBehavior,
+    pending.conversationResume.modelMismatchBehavior !==
+      state.saved.conversationResume.modelMismatchBehavior,
+    pending.conversationResume.restoreLastWorkspaceOnStartup !==
+      state.saved.conversationResume.restoreLastWorkspaceOnStartup,
     pending.theme !== state.saved.theme,
     pending.advanced.chatIdleTimeoutMinutes !== state.saved.advanced.chatIdleTimeoutMinutes,
     pending.advanced.webResearchIsolation !== state.saved.advanced.webResearchIsolation,
@@ -138,8 +154,16 @@ const applyAppSettingsToControls = (
 ): void => {
   const { dependencies, elements } = context;
   elements.launchAtLogin.checked = settings.launchAtLogin;
-  elements.closeBehavior.value = settings.closeBehavior;
-  elements.chatIdleTimeout.value = String(settings.advanced.chatIdleTimeoutMinutes);
+  setEnhancedSelectValue(elements.closeBehavior, settings.closeBehavior);
+  setEnhancedSelectValue(
+    elements.conversationModelMismatch,
+    settings.conversationResume.modelMismatchBehavior,
+  );
+  elements.restoreLastWorkspace.checked = settings.conversationResume.restoreLastWorkspaceOnStartup;
+  setEnhancedSelectValue(
+    elements.chatIdleTimeout,
+    String(settings.advanced.chatIdleTimeoutMinutes),
+  );
   elements.webResearchIsolation.checked = settings.advanced.webResearchIsolation;
   const networkPreflight = settings.advanced.networkPreflight ?? {
     checkOnNewSession: true,
@@ -147,7 +171,7 @@ const applyAppSettingsToControls = (
   };
   elements.networkNewSession.checked = networkPreflight.checkOnNewSession;
   elements.networkProviderLogin.checked = networkPreflight.checkOnProviderLogin;
-  elements.language.value = settings.language;
+  setEnhancedSelectValue(elements.language, settings.language);
   elements.version.value = settings.version;
   elements.version.textContent = settings.version;
   dependencies.applySettingsThemeSelect(settings.theme);
@@ -165,7 +189,7 @@ export const createSettingsView = (
     pendingSettings: () => pendingAppSettings(context),
     selectTab: (tab) => selectSettingsTab(context, tab),
     setCloseBehaviorValue: (value) => {
-      elements.closeBehavior.value = value;
+      setEnhancedSelectValue(elements.closeBehavior, value);
     },
     updateUnsavedIndicator: () => updateSettingsUnsavedIndicator(context),
   };

@@ -9,6 +9,119 @@ afterEach(() => {
 });
 
 describe('Claude connection IPC project ownership', () => {
+  it('rebinds a conversation to the current complete connection without changing project config', async () => {
+    const ipc = createIpcHarness();
+    vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));
+    const { registerClaudeConnectionIpc } = await import('../../src/main/ipc/claude-connection');
+    const state = { cwd: 'D:\\ProjectA' } as ClaudeProjectState;
+    const runtime = {
+      bindConversationToCurrent: vi.fn(async () => undefined),
+      publishProjectState: vi.fn(() => state),
+    };
+    const runTransaction = vi.fn();
+
+    registerClaudeConnectionIpc({
+      claudeFailure: vi.fn(),
+      configTransactionState: vi.fn(() => undefined),
+      guards: {
+        requireClaudeRuntime: vi.fn(() => runtime),
+        validateSender: vi.fn(),
+        withOfficialProviderAccess: vi.fn((_request, operation) => operation()),
+      },
+      invalidateAndWaitForMatchingDevelopmentSessionOperation: vi.fn(async () => false),
+      runClaudeProjectConfigTransaction: runTransaction,
+      withDevelopmentSessionOperation: vi.fn((_sessionId, operation) =>
+        operation(vi.fn(), new AbortController().signal),
+      ),
+      workspace: {
+        getStatus: vi.fn(() => ({ cwd: 'D:\\ProjectA', id: 'session-1' })),
+      },
+    } as never);
+
+    const conversationId = '123e4567-e89b-42d3-a456-426614174000';
+    const result = await ipc.invoke(
+      CHANNELS.CLAUDE_CONVERSATION_MODEL_APPLY,
+      'session-1',
+      conversationId,
+      'use-current',
+    );
+
+    expect(result).toEqual({ choice: 'use-current', ok: true, state });
+    expect(runtime.bindConversationToCurrent).toHaveBeenCalledExactlyOnceWith(
+      'D:\\ProjectA',
+      conversationId,
+    );
+    expect(runtime.publishProjectState).toHaveBeenCalledExactlyOnceWith(
+      'session-1',
+      'D:\\ProjectA',
+    );
+    expect(runTransaction).not.toHaveBeenCalled();
+  });
+
+  it('tests the original connection before committing its project transaction', async () => {
+    const ipc = createIpcHarness();
+    vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));
+    const { registerClaudeConnectionIpc } = await import('../../src/main/ipc/claude-connection');
+    const order: string[] = [];
+    const state = { cwd: 'D:\\ProjectA' } as ClaudeProjectState;
+    const prepared = { input: { authMode: 'apiKey' } };
+    const runtime = {
+      commitPreparedConfig: vi.fn(() => order.push('commit')),
+      completePreparedConfigSave: vi.fn(async () => {
+        order.push('complete');
+        return state;
+      }),
+      conversationNetworkAccess: vi.fn(() => undefined),
+      prepareConversationConnection: vi.fn(async () => {
+        order.push('prepare');
+        return prepared;
+      }),
+      testPreparedConnection: vi.fn(async () => {
+        order.push('test');
+        return { ok: true };
+      }),
+    };
+
+    registerClaudeConnectionIpc({
+      claudeFailure: vi.fn(),
+      configTransactionState: vi.fn(() => undefined),
+      guards: {
+        requireClaudeRuntime: vi.fn(() => runtime),
+        validateSender: vi.fn(),
+        withOfficialProviderAccess: vi.fn((_request, operation) => operation()),
+      },
+      invalidateAndWaitForMatchingDevelopmentSessionOperation: vi.fn(async () => false),
+      runClaudeProjectConfigTransaction: vi.fn(async (options) => {
+        const candidate = await options.prepare();
+        await options.validatePrepared?.(candidate);
+        options.commit(candidate);
+        return options.complete(candidate);
+      }),
+      withDevelopmentSessionOperation: vi.fn((_sessionId, operation) =>
+        operation(vi.fn(), new AbortController().signal),
+      ),
+      workspace: {
+        getStatus: vi.fn(() => ({ cwd: 'D:\\ProjectA', id: 'session-1' })),
+      },
+    } as never);
+
+    const conversationId = '123e4567-e89b-42d3-a456-426614174000';
+    const result = await ipc.invoke(
+      CHANNELS.CLAUDE_CONVERSATION_MODEL_APPLY,
+      'session-1',
+      conversationId,
+      'use-conversation',
+    );
+
+    expect(result).toMatchObject({ choice: 'use-conversation', ok: true, state });
+    expect(order).toEqual(['prepare', 'test', 'commit', 'complete']);
+    expect(runtime.prepareConversationConnection).toHaveBeenCalledWith(
+      'D:\\ProjectA',
+      conversationId,
+      expect.any(Function),
+    );
+  });
+
   it('reads the current project after a save is rejected because the session changed projects', async () => {
     const ipc = createIpcHarness();
     vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));

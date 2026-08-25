@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type {
+  ClaudeConfigView,
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
   ClaudeEndpointProtocol,
@@ -470,6 +471,24 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     return this.historyStore.list(cwd);
   }
 
+  protected conversationReplayForCurrent(cwd: string): ConnectionHistoryReplay | undefined {
+    return this.historyStore.findReplayForCurrent(cwd, this.configStore.getView(cwd));
+  }
+
+  protected conversationReplayForView(
+    cwd: string,
+    view: ClaudeConfigView,
+  ): ConnectionHistoryReplay | undefined {
+    return this.historyStore.findReplayForCurrent(cwd, view);
+  }
+
+  protected conversationReplayForModel(
+    cwd: string,
+    model: string,
+  ): ConnectionHistoryReplay | undefined {
+    return this.historyStore.findReplayForModel(cwd, model);
+  }
+
   public deleteConnectionHistory(cwd: string, entryId: string): ClaudeConnectionHistoryEntry[] {
     return this.historyStore.remove(cwd, entryId);
   }
@@ -608,6 +627,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
           routerProviderId: saved.provider.id,
           sourceAuthMode: input.authMode,
           sourceBaseUrl: endpoint,
+          sourceCredential: credentialAction === 'replace' ? enteredCredential : undefined,
           sourceCredentialConfigured,
           sourceModel: model,
           sourceModelFast: modelFast,

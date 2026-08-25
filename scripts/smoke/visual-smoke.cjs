@@ -61,6 +61,56 @@ const applyQaTheme = (themeId) => `
   })()
 `;
 
+const showConversationModelVisualFixture = `
+  (() => {
+    const renderCard = (selector, badgeText, titleText, facts) => {
+      const card = document.querySelector(selector);
+      const badge = document.createElement('span');
+      badge.className = 'conversation-model-dialog__badge';
+      badge.textContent = badgeText;
+      const title = document.createElement('h3');
+      title.textContent = titleText;
+      const list = document.createElement('dl');
+      for (const [labelText, valueText] of facts) {
+        const label = document.createElement('dt');
+        label.textContent = labelText;
+        const value = document.createElement('dd');
+        value.textContent = valueText;
+        list.append(label, value);
+      }
+      card.replaceChildren(badge, title, list);
+    };
+    renderCard('#conversation-model-dialog-original-card', '对话原有', 'DeepSeek 团队中转', [
+      ['详细模型', 'DeepSeek V4 PRO'],
+      ['简单模型', 'DeepSeek V4 flash'],
+      ['账户 / API', 'API 凭据已配置 · SHA-256 5f4dcc3b5a'],
+      ['认证方式', 'Bearer / Auth Token'],
+      ['接口协议', 'OpenAI 兼容协议'],
+      ['接口地址', 'https://relay.example.com/v1/chat/completions'],
+      ['接入名称', '团队 DeepSeek 海外灾备中转站'],
+    ]);
+    renderCard('#conversation-model-dialog-current-card', '正在接入', 'ChatGPT 官方订阅', [
+      ['详细模型', 'gpt-5.6-sol'],
+      ['简单模型', 'gpt-5.6-sol-mini'],
+      ['账户 / API', '订阅账户：qa.account@example.com'],
+      ['认证方式', '官方订阅账户授权'],
+      ['接口协议', 'OpenAI 兼容协议'],
+      ['接口地址', '由平台或本机服务管理'],
+    ]);
+    document.querySelector('#conversation-model-dialog-title').textContent =
+      '“安全绘画方案讨论”绑定了另一套模型';
+    document.querySelector('#conversation-model-dialog-description').textContent =
+      '请选择恢复时使用哪套完整接入。平台、账户、API、接口和两个模型会作为一个整体处理。';
+    document.querySelector('#conversation-model-dialog-differences').textContent =
+      '检测到不同：平台、账户、API 凭据、接口地址、中转路由、详细模型、简单模型';
+    document.querySelector('#conversation-model-dialog-warning').hidden = true;
+    document.querySelector('#conversation-model-dialog-original').disabled = false;
+    document.querySelector('#conversation-model-dialog-remember').checked = false;
+    const dialog = document.querySelector('#conversation-model-dialog');
+    if (!dialog.open) dialog.showModal();
+  })()
+`;
+
 const installThemeMatrixFixtures = `
   (() => {
     const staticMotionStyle = document.createElement('style');
@@ -949,6 +999,51 @@ app
     `);
     // A hidden BrowserWindow does not necessarily paint during a timer-only wait. Force and discard
     // one settled frame so the dialog's discrete top-layer exit finishes before recovery captures.
+    await captureSettledPage();
+
+    await window.webContents.executeJavaScript(showConversationModelVisualFixture);
+    await captureSettledPage();
+    const modelDialogMotion = await window.webContents.executeJavaScript(`
+      (() => ({
+        arrow: getComputedStyle(document.querySelector('.conversation-model-dialog__arrow svg')).animationName,
+        card: getComputedStyle(document.querySelector('#conversation-model-dialog-original-card')).animationName,
+      }))()
+    `);
+    if (
+      modelDialogMotion.arrow !== 'conversationModelArrowDrift' ||
+      modelDialogMotion.card !== 'conversationModelCardEnter'
+    ) {
+      throw new Error(
+        `Conversation model dialog motion is missing: ${JSON.stringify(modelDialogMotion)}`,
+      );
+    }
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      writeFileSync(
+        path.join(outputDirectory, `conversation-model-dialog-${themeId}-1180.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+    }
+    window.setSize(720, 760);
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
+    writeFileSync(
+      path.join(outputDirectory, 'conversation-model-dialog-claude-720.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const form = document.querySelector('#conversation-model-dialog form');
+        form.scrollTop = form.scrollHeight;
+      })()
+    `);
+    writeFileSync(
+      path.join(outputDirectory, 'conversation-model-dialog-actions-claude-720.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    window.setSize(1180, 760);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#conversation-model-dialog').close();
+    `);
     await captureSettledPage();
 
     await window.webContents.executeJavaScript(`

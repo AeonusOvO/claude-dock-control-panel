@@ -174,6 +174,25 @@ type DiagnosticsBootstrap = Pick<
   | 'workspace'
 >;
 
+const managedChatGptConversationAccount = async (gateway: ManagedChatGptGateway) => {
+  const state = await gateway.getState();
+  return {
+    ...(state.accountEmail ? { accountIdentity: state.accountEmail } : {}),
+    ...(state.authenticated ? { authMethod: 'ChatGPT OAuth 订阅' } : {}),
+  };
+};
+
+const configureConversationModels = (
+  runtime: ClaudeRuntime,
+  requireGateway: () => ManagedChatGptGateway,
+  preferences: AppPreferencesStore,
+): void => {
+  runtime.setConversationModelResolvers({
+    managedChatGptAccount: () => managedChatGptConversationAccount(requireGateway()),
+    preference: () => preferences.get().conversationResume.modelMismatchBehavior,
+  });
+};
+
 const combinedCliEnvironment = (
   advancedSettingsStore: AdvancedSettingsStore,
   coordinator: ApplicationProxyCoordinator,
@@ -477,6 +496,7 @@ const installAgentRuntimes = ({
   services.resolve(RUNTIME_PROCESS_REGISTRY);
   const claudeRuntime = services.resolve(CLAUDE_RUNTIME);
   claudeRuntime.setLaunchAdmissionGuard(assertLaunchAdmissionAllowed);
+  configureConversationModels(claudeRuntime, requireManagedChatGptGateway, appPreferencesStore);
   const nativeAdapter =
     runtimeProfile.adapterMode === 'fake'
       ? new FakeConversationAdapter()
@@ -749,18 +769,21 @@ const installDiagnostics = ({
 
 const restoreLastWorkspace = ({
   activateProject,
+  appPreferencesStore,
   runtimeProfile,
   workspace,
   workspaceStore,
 }: Pick<
   BootstrapDependencies,
-  'activateProject' | 'runtimeProfile' | 'workspace' | 'workspaceStore'
+  'activateProject' | 'appPreferencesStore' | 'runtimeProfile' | 'workspace' | 'workspaceStore'
 >): void => {
   // Remembered folders are listed without a terminal each — otherwise every folder ever opened
   // would spawn a PowerShell at startup. Only the folder in use last time is reopened live.
-  const lastActive = runtimeProfile.effects.restoreWorkspace
-    ? workspaceStore.getLastActiveProject()
-    : undefined;
+  const lastActive =
+    runtimeProfile.effects.restoreWorkspace &&
+    appPreferencesStore.get().conversationResume.restoreLastWorkspaceOnStartup
+      ? workspaceStore.getLastActiveProject()
+      : undefined;
   if (!lastActive || !existsSync(lastActive)) return;
   try {
     const result = workspace.openProject(lastActive);

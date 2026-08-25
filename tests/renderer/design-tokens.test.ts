@@ -481,9 +481,9 @@ describe('popover contract', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('marks exactly twelve dialogs as popovers', () => {
+  it('marks exactly thirteen dialogs as popovers', () => {
     const dialogs = rendererMarkup.match(/<dialog\b[^>]*>/gi) ?? [];
-    expect(dialogs).toHaveLength(12);
+    expect(dialogs).toHaveLength(13);
     expect(dialogs.filter((openingTag) => !classTokens(openingTag).includes('popover'))).toEqual(
       [],
     );

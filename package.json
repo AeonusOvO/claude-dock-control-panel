@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "5.0.0-rc.21",
+  "version": "5.0.0-rc.22",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "license": "Apache-2.0",
   "main": "dist/main/index.js",

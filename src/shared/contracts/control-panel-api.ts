@@ -23,6 +23,7 @@ import type {
   BusyLease,
   ClaudeContextWindowMode,
   CloseBehavior,
+  ConversationResumePreferences,
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
 } from './app';
@@ -52,6 +53,9 @@ import type {
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionHistoryResult,
   ClaudeConnectionTestResult,
+  ClaudeConversationModelApplyResult,
+  ClaudeConversationModelChoice,
+  ClaudeConversationModelResolution,
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeLaunchMode,
@@ -153,6 +157,9 @@ export interface AppApi {
   ) => Promise<AppSettingsView>;
   setAdvancedSettings: (settings: AdvancedSettings) => Promise<AppSettingsView>;
   setCloseBehavior: (behavior: CloseBehavior) => Promise<AppSettingsView>;
+  setConversationResumePreferences: (
+    preferences: ConversationResumePreferences,
+  ) => Promise<AppSettingsView>;
   openMarkdownExternal: (url: string) => Promise<boolean>;
   getDroppedPath: (file: File) => string;
   /**
@@ -478,6 +485,11 @@ export interface ClaudeApi {
   ) => Promise<ClaudeConnectionTestResult>;
   getClaudeSessions: (sessionId: string) => Promise<ClaudeSessionMetadata[]>;
   getClaudeSessionsForPath: (projectPath: string) => Promise<ClaudeSessionMetadata[]>;
+  inspectClaudeConversationModel: (
+    projectPath: string,
+    conversationId: string,
+    legacyModelHint?: string,
+  ) => Promise<ClaudeConversationModelResolution>;
   renameClaudeSession: (
     projectPath: string,
     conversationId: string,
@@ -491,6 +503,11 @@ export interface ClaudeApi {
     sessionId: string,
     conversationId: string,
   ) => Promise<ClaudeLaunchOutcome>;
+  applyClaudeConversationModel: (
+    sessionId: string,
+    conversationId: string,
+    choice: ClaudeConversationModelChoice,
+  ) => Promise<ClaudeConversationModelApplyResult>;
 }
 
 export interface ClaudeExecutionSettingsApi {

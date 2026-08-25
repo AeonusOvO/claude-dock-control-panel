@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/contracts';
 import {
   type ClaudeLaunchAttemptToken,
+  type ClaudeLaunchPresentationPhase,
   type ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 import { createTerminalClaudeLaunchActions } from './project-state-claude-launch';
@@ -49,6 +50,10 @@ export interface TerminalProjectState {
   ) => ClaudeLaunchAttemptToken;
   failClaudeLaunchAttempt: (token: ClaudeLaunchAttemptToken) => boolean;
   setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
+  setClaudeLaunchPresentationPhase: (
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ) => boolean;
   renderClaudeLaunchResult: (
     token: ClaudeLaunchAttemptToken,
     state: ClaudeProjectState,
@@ -115,6 +120,7 @@ export const createTerminalProjectState = (
     beginClaudeLaunchAttempt: claudeLaunchActions.beginClaudeLaunchAttempt,
     failClaudeLaunchAttempt: claudeLaunchActions.failClaudeLaunchAttempt,
     setClaudeLaunchPaused: claudeLaunchActions.setClaudeLaunchPaused,
+    setClaudeLaunchPresentationPhase: claudeLaunchActions.setClaudeLaunchPresentationPhase,
     renderClaudeLaunchResult: claudeLaunchActions.renderClaudeLaunchResult,
     renderClaudeState: claudeStateActions.renderClaudeState,
     loadClaudeState: claudeLoadActions.loadClaudeState,

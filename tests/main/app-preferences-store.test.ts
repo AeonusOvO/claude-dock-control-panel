@@ -25,6 +25,10 @@ describe('app preferences store', () => {
       claudeContextWindowMode: 'auto',
       closeBehavior: 'tray',
       closeToTrayNoticeShown: false,
+      conversationResume: {
+        modelMismatchBehavior: 'ask',
+        restoreLastWorkspaceOnStartup: true,
+      },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
     });
@@ -33,6 +37,10 @@ describe('app preferences store', () => {
       claudeContextWindowMode: 'auto',
       closeBehavior: 'tray',
       closeToTrayNoticeShown: true,
+      conversationResume: {
+        modelMismatchBehavior: 'ask',
+        restoreLastWorkspaceOnStartup: true,
+      },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
     });
@@ -44,10 +52,31 @@ describe('app preferences store', () => {
       claudeContextWindowMode: 'auto',
       closeBehavior: 'exit',
       closeToTrayNoticeShown: false,
+      conversationResume: {
+        modelMismatchBehavior: 'ask',
+        restoreLastWorkspaceOnStartup: true,
+      },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
     });
     expect(store.get().closeBehavior).toBe('exit');
+  });
+
+  it('persists model mismatch and startup restore choices together', () => {
+    const store = createStore();
+    expect(
+      store.set({
+        conversationResume: {
+          modelMismatchBehavior: 'use-conversation',
+          restoreLastWorkspaceOnStartup: false,
+        },
+      }),
+    ).toMatchObject({
+      conversationResume: {
+        modelMismatchBehavior: 'use-conversation',
+        restoreLastWorkspaceOnStartup: false,
+      },
+    });
   });
 
   it('persists the explicit extended managed ChatGPT context choice', () => {

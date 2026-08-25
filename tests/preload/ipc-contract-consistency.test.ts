@@ -125,11 +125,11 @@ const executionSettingsDto: ClaudeExecutionSettingsDto = {
 
 describe('IPC contract consistency', () => {
   it('keeps the channel partitions complete and disjoint', () => {
-    expect(REQUEST_CHANNELS).toHaveLength(173);
+    expect(REQUEST_CHANNELS).toHaveLength(176);
     expect(SEND_CHANNELS).toHaveLength(7);
     expect(EVENT_CHANNELS).toHaveLength(23);
-    expect(IPC_CHANNELS).toHaveLength(203);
-    expect(new Set(IPC_CHANNELS).size).toBe(203);
+    expect(IPC_CHANNELS).toHaveLength(206);
+    expect(new Set(IPC_CHANNELS).size).toBe(206);
     expect(new Set([...REQUEST_CHANNELS, ...SEND_CHANNELS, ...EVENT_CHANNELS])).toEqual(
       new Set(IPC_CHANNELS),
     );
@@ -214,18 +214,18 @@ describe('IPC contract consistency', () => {
     await expect(api.restoreClaudeExecutionSettingsDefault()).rejects.toThrow();
   });
 
-  it('assembles all 203 API members without duplicate bridge ownership', () => {
+  it('assembles all 206 API members without duplicate bridge ownership', () => {
     const declaredMembers = bridgeFragments.flatMap((fragment) => Object.keys(fragment));
-    expect(declaredMembers).toHaveLength(203);
-    expect(new Set(declaredMembers).size).toBe(203);
-    expect(Object.keys(api)).toHaveLength(203);
+    expect(declaredMembers).toHaveLength(206);
+    expect(new Set(declaredMembers).size).toBe(206);
+    expect(Object.keys(api)).toHaveLength(206);
   });
 
   it('maps every IPC-backed member and records the local and auxiliary exceptions', () => {
     const requestMethods = Object.values(IPC_REQUESTS).map(({ method }) => method);
     const sendMethods = Object.values(IPC_SEND_METHODS);
     const eventMethods = Object.values(IPC_EVENT_METHODS);
-    expect(new Set(requestMethods).size).toBe(173);
+    expect(new Set(requestMethods).size).toBe(176);
     expect(new Set(sendMethods).size).toBe(7);
     expect(new Set(eventMethods).size).toBe(23);
 
@@ -234,7 +234,7 @@ describe('IPC contract consistency', () => {
       ...sendMethods,
       ...eventMethods,
     ]);
-    expect(mappedMethods.size).toBe(202);
+    expect(mappedMethods.size).toBe(205);
     expect(
       Object.keys(api).filter((method) => !mappedMethods.has(method as keyof ControlPanelApi)),
     ).toEqual(['getDroppedPath']);

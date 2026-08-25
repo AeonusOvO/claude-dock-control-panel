@@ -3,6 +3,15 @@ import type { ChatIdleTimeoutMinutes } from './chat';
 
 export type CloseBehavior = 'exit' | 'tray';
 
+export type ConversationModelMismatchBehavior = 'ask' | 'use-conversation' | 'use-current';
+
+export interface ConversationResumePreferences {
+  /** What to do when a stored conversation is bound to a different complete model connection. */
+  modelMismatchBehavior: ConversationModelMismatchBehavior;
+  /** Reopen the last live workspace tab when ClaudeDock starts. Remembered folders remain listed. */
+  restoreLastWorkspaceOnStartup: boolean;
+}
+
 export type BusyKind =
   'configure' | 'conversation' | 'download' | 'install' | 'proxy' | 'uninstall';
 
@@ -85,6 +94,7 @@ export interface AppSettingsView {
   claudeContextWindowCustomTokens?: number;
   claudeContextWindowMode: ClaudeContextWindowMode;
   closeBehavior: CloseBehavior;
+  conversationResume: ConversationResumePreferences;
   footerResourcePreference: FooterResourcePreference;
   managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
   language: 'zh-CN';

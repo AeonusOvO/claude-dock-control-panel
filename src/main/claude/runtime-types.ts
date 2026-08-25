@@ -19,6 +19,7 @@ import type { ClaudeEnvironmentOverrides, ClaudeServingSpeedProfile } from './co
 import type { ModelSpeedCapability } from './model-speed-capabilities';
 import type { ClaudeRouteKind } from '../coordination/route-lifecycle';
 import type { NetworkPreflightTarget } from '../network/preflight-target';
+import type { ConversationConnectionBinding } from '../conversation/preferences-store';
 
 export interface ClaudePreparedLaunchToken {
   readonly generation: number;
@@ -90,6 +91,8 @@ interface RuntimeSession {
   artifactDirectory?: string;
   /** Claude Code conversation this PTY is attached to, once the status line has reported it. */
   conversationId?: string;
+  /** Complete main-owned route identity captured before this exact launch was admitted. */
+  conversationBinding?: ConversationConnectionBinding;
   /** Generic Claude window selection captured for this launch and reused by live `/model`. */
   claudeContextWindowCustomTokens?: number;
   claudeContextWindowMode?: ClaudeContextWindowMode;
@@ -163,6 +166,8 @@ interface RuntimeSession {
 export interface PreparedNativeClaudeConversation {
   allowBypassPermissions: boolean;
   cliVersion?: string;
+  /** Complete route binding retained in main for the native conversation preference store. */
+  conversationBinding: ConversationConnectionBinding;
   /** Exact provider route captured with this credential-bearing native launch. */
   networkAccess?: Readonly<ClaudeNetworkAccess>;
   /** Official provider captured separately from custom target identity, when applicable. */

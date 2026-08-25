@@ -15,7 +15,13 @@ type ClaudeLaunchLifecycleEvidenceReason = Extract<
 >;
 
 export type ClaudeLaunchResultDisposition = 'failure' | 'success';
-export type ClaudeLaunchPresentationPhase = 'paused' | 'preflight' | 'starting';
+export type ClaudeLaunchPresentationPhase =
+  | 'checking-model-network'
+  | 'paused'
+  | 'preflight'
+  | 'restoring-conversation'
+  | 'starting'
+  | 'switching-model';
 
 export interface ClaudeLaunchAttemptToken {
   generation: number;

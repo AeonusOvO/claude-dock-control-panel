@@ -583,6 +583,7 @@ const installProjectFeatures = (
     renderRuntimeActivity: runtimeActivityShell.renderRuntimeActivity,
     renderClaudeLaunchResult: terminalProjectState.renderClaudeLaunchResult,
     refreshClaudeLaunchControls: terminalProjectState.refreshClaudeLaunchControls,
+    setClaudeLaunchPresentationPhase: terminalProjectState.setClaudeLaunchPresentationPhase,
     requestComposerFocus: features.terminalFeature.requestComposerFocus,
     requestConfirmation,
     resolveClaudeLaunchDecision: features.terminalFeature.resolveClaudeLaunchDecision,

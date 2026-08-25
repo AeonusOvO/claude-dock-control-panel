@@ -525,6 +525,36 @@
   }
 }
 
+@keyframes conversationModelCardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-2)) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes conversationModelArrowDrift {
+  0%,
+  100% {
+    transform: translateX(-2px);
+  }
+  50% {
+    transform: translateX(2px);
+  }
+}
+
+@keyframes launchProgressSweep {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(220%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .conversation-item__label[data-title-typing='true']::after,
   .chat-history__open strong[data-title-typing='true']::after,

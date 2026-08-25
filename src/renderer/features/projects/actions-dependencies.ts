@@ -8,6 +8,7 @@ import type {
 import type {
   ClaudeLaunchAttemptRegistry,
   ClaudeLaunchAttemptToken,
+  ClaudeLaunchPresentationPhase,
   ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 
@@ -28,6 +29,10 @@ export interface ProjectsActionsDependencies {
   hideTerminalContextMenu: () => void;
   projectNameFromPath: (directoryPath: string) => string;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  setClaudeLaunchPresentationPhase: (
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ) => boolean;
   requestComposerFocus: (sessionId?: string) => void;
   requestConfirmation: (request: {
     confirmLabel?: string;

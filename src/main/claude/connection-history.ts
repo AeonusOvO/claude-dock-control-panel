@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { safeStorage } from 'electron';
 import type {
+  ClaudeConfigView,
   ClaudeConnectionHistoryEntry,
   ClaudeEndpointProtocol,
   ClaudeRouterGatewayState,
@@ -264,7 +265,9 @@ export class ClaudeConnectionHistoryStore {
           routerProviderId: input.routerProviderId,
           sourceCredentialConfigured: input.sourceCredentialConfigured,
         }
-      : undefined;
+      : input.routerProviderId
+        ? { routerProviderId: input.routerProviderId }
+        : undefined;
     const fingerprint = entryFingerprint(config, credential, protocol, sourceIdentity);
     const existing = entries.find((entry) => this.fingerprintOf(entry) === fingerprint);
     if (existing) {
@@ -351,6 +354,64 @@ export class ClaudeConnectionHistoryStore {
       throw new Error('这条接入记录已被删除。');
     }
 
+    return this.replayEntry(entry);
+  }
+
+  /**
+   * Returns the newest replay whose complete visible route matches the live project profile. The
+   * OpenAI source identity is compared instead of the generated local gateway identity, which is
+   * what lets a conversation retain the real upstream credential.
+   */
+  public findReplayForCurrent(
+    cwd: string,
+    view: ClaudeConfigView,
+  ): ConnectionHistoryReplay | undefined {
+    const entry = (this.load().projects[projectKey(cwd)] ?? []).find((candidate) => {
+      if (candidate.protocol !== view.protocol) return false;
+      if (view.protocol === 'openai') {
+        return (
+          candidate.routerProviderId === view.routerProviderId &&
+          candidate.sourceAuthMode === view.sourceAuthMode &&
+          candidate.sourceBaseUrl === view.sourceBaseUrl &&
+          candidate.sourceModel === view.sourceModel &&
+          (candidate.sourceModelFast || candidate.sourceModel) ===
+            (view.sourceModelFast || view.sourceModel) &&
+          candidate.sourceCredentialConfigured === view.sourceCredentialConfigured
+        );
+      }
+      return (
+        candidate.apiKeyHelperPolicy === view.apiKeyHelperPolicy &&
+        candidate.authMode === view.authMode &&
+        candidate.baseUrl === view.baseUrl &&
+        candidate.model === view.model &&
+        (candidate.modelFast || candidate.model) === (view.modelFast || view.model) &&
+        candidate.preset === view.preset &&
+        candidate.provider === view.provider &&
+        (candidate.routerProviderId ?? '') === (view.routerProviderId ?? '')
+      );
+    });
+    return entry ? this.replayEntry(entry) : undefined;
+  }
+
+  /** Best-effort migration for version-1 conversations that only remembered a model id. */
+  public findReplayForModel(cwd: string, model: string): ConnectionHistoryReplay | undefined {
+    const normalized = model.trim();
+    const matches = (this.load().projects[projectKey(cwd)] ?? []).filter(
+      (candidate) =>
+        candidate.model === normalized ||
+        candidate.sourceModel === normalized ||
+        candidate.modelFast === normalized ||
+        candidate.sourceModelFast === normalized,
+    );
+    const [entry] = matches;
+    if (!entry) return undefined;
+    // A v1 conversation only knows its model string. If that model appeared behind multiple
+    // accounts, credentials, endpoints, or routes, choosing the newest one would invent identity.
+    if (new Set(matches.map((entry) => this.fingerprintOf(entry))).size !== 1) return undefined;
+    return this.replayEntry(entry);
+  }
+
+  private replayEntry(entry: StoredHistoryEntry): ConnectionHistoryReplay {
     const credential = this.decrypt(entry.encryptedCredential);
     const sourceConfig =
       entry.protocol === 'openai' && entry.sourceBaseUrl && entry.sourceModel
@@ -380,6 +441,7 @@ export class ClaudeConnectionHistoryStore {
         modelFast: entry.modelFast || entry.model,
         preset: entry.preset,
         provider: entry.provider,
+        routerProviderId: entry.routerProviderId,
         ...sourceConfig,
       },
       name: entry.name,
@@ -409,7 +471,9 @@ export class ClaudeConnectionHistoryStore {
             routerProviderId: entry.routerProviderId,
             sourceCredentialConfigured: entry.sourceCredentialConfigured,
           }
-        : undefined,
+        : entry.routerProviderId
+          ? { routerProviderId: entry.routerProviderId }
+          : undefined,
     );
   }
 

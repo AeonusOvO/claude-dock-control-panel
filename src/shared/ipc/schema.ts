@@ -589,6 +589,9 @@ export const IPC_REQUESTS = {
     z.number().optional(),
   ]),
   [CHANNELS.APP_SET_CLOSE_BEHAVIOR]: request('setCloseBehavior', [z.unknown()]),
+  [CHANNELS.APP_SET_CONVERSATION_RESUME_PREFERENCES]: request('setConversationResumePreferences', [
+    z.unknown(),
+  ]),
   [CHANNELS.APP_SET_FOOTER_RESOURCE_PREFERENCE]: request('setFooterResourcePreference', [
     z.unknown(),
   ]),
@@ -656,6 +659,16 @@ export const IPC_REQUESTS = {
     sessionIdSchema,
     historyEntryIdSchema,
     z.string(),
+  ]),
+  [CHANNELS.CLAUDE_CONVERSATION_MODEL_APPLY]: request('applyClaudeConversationModel', [
+    sessionIdSchema,
+    conversationIdSchema,
+    z.enum(['use-conversation', 'use-current']),
+  ]),
+  [CHANNELS.CLAUDE_CONVERSATION_MODEL_INSPECT]: request('inspectClaudeConversationModel', [
+    projectPathInputSchema,
+    conversationIdSchema,
+    z.string().max(200).optional(),
   ]),
   [CHANNELS.CLAUDE_DELETE_SESSION]: request('deleteClaudeSession', [
     projectPathInputSchema,

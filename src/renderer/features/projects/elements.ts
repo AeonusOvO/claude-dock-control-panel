@@ -9,6 +9,16 @@ const requiredElement = <T extends HTMLElement>(selector: string): T => {
 export interface ProjectsElements {
   chooseDirectoryButton: HTMLButtonElement;
   conversationContextMenu: HTMLElement;
+  conversationModelCurrent: HTMLButtonElement;
+  conversationModelCurrentCard: HTMLElement;
+  conversationModelDialog: HTMLDialogElement;
+  conversationModelDialogDescription: HTMLElement;
+  conversationModelDialogTitle: HTMLElement;
+  conversationModelDifferences: HTMLElement;
+  conversationModelOriginal: HTMLButtonElement;
+  conversationModelOriginalCard: HTMLElement;
+  conversationModelRemember: HTMLInputElement;
+  conversationModelWarning: HTMLElement;
   conversationRenameCancel: HTMLButtonElement;
   conversationRenameDialog: HTMLDialogElement;
   conversationRenameDialogDescription: HTMLElement;
@@ -25,6 +35,30 @@ export const createProjectsElements = (): ProjectsElements => {
   return {
     chooseDirectoryButton,
     conversationContextMenu: requiredElement<HTMLElement>('#conversation-context-menu'),
+    conversationModelCurrent: requiredElement<HTMLButtonElement>(
+      '#conversation-model-dialog-current',
+    ),
+    conversationModelCurrentCard: requiredElement<HTMLElement>(
+      '#conversation-model-dialog-current-card',
+    ),
+    conversationModelDialog: requiredElement<HTMLDialogElement>('#conversation-model-dialog'),
+    conversationModelDialogDescription: requiredElement<HTMLElement>(
+      '#conversation-model-dialog-description',
+    ),
+    conversationModelDialogTitle: requiredElement<HTMLElement>('#conversation-model-dialog-title'),
+    conversationModelDifferences: requiredElement<HTMLElement>(
+      '#conversation-model-dialog-differences',
+    ),
+    conversationModelOriginal: requiredElement<HTMLButtonElement>(
+      '#conversation-model-dialog-original',
+    ),
+    conversationModelOriginalCard: requiredElement<HTMLElement>(
+      '#conversation-model-dialog-original-card',
+    ),
+    conversationModelRemember: requiredElement<HTMLInputElement>(
+      '#conversation-model-dialog-remember',
+    ),
+    conversationModelWarning: requiredElement<HTMLElement>('#conversation-model-dialog-warning'),
     conversationRenameCancel: requiredElement<HTMLButtonElement>('#conversation-rename-cancel'),
     conversationRenameDialog: requiredElement<HTMLDialogElement>('#conversation-rename-dialog'),
     conversationRenameDialogDescription: requiredElement<HTMLElement>(

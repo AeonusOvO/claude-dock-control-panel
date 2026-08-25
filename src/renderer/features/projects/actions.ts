@@ -10,6 +10,7 @@ import { createProjectsWorkspaceActions } from './actions-workspace';
 import type { ProjectsElements } from './elements';
 import type { ConversationContextTarget, ProjectsState } from './state';
 import type { WorkspaceRenderer } from './workspace';
+import { createConversationModelDialog } from './model-resolution-dialog';
 
 export type {
   ProjectsActionsDependencies,
@@ -60,6 +61,7 @@ export const createProjectsActions = (
     workspaceRenderer,
   );
   const contextMenuActions = createProjectsContextMenuActions(elements, state, dependencies);
+  const modelDialog = createConversationModelDialog(elements);
   const workspaceActions = createProjectsWorkspaceActions(
     elements,
     state,
@@ -73,6 +75,7 @@ export const createProjectsActions = (
     workspaceRenderer,
     rowsApi,
     renameActions.requestConversationTitle,
+    modelDialog.requestChoice,
   );
 
   elements.chooseDirectoryButton.addEventListener('click', () => {

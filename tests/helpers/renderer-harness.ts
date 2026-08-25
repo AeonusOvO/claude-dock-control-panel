@@ -108,6 +108,10 @@ const defaultAppSettings = {
   artifactNetworkAllowed: true,
   claudeContextWindowMode: 'auto' as const,
   closeBehavior: 'tray' as const,
+  conversationResume: {
+    modelMismatchBehavior: 'ask' as const,
+    restoreLastWorkspaceOnStartup: true,
+  },
   footerResourcePreference: 'auto' as const,
   language: 'zh-CN' as const,
   launchAtLogin: false,

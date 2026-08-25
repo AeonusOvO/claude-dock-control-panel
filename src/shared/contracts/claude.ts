@@ -422,6 +422,55 @@ export interface ClaudeSessionMetadata {
   sessionName?: string;
 }
 
+export type ClaudeConversationModelChoice = 'use-conversation' | 'use-current';
+
+export type ClaudeConversationModelDifference =
+  | 'account'
+  | 'authentication'
+  | 'credential'
+  | 'endpoint'
+  | 'main-model'
+  | 'platform'
+  | 'protocol'
+  | 'router-provider'
+  | 'small-model';
+
+/** Renderer-safe, complete identity of one conversation-bound model connection. */
+export interface ClaudeConversationModelIdentity {
+  accountDetail: string;
+  accountIdentity?: string;
+  authModeLabel: string;
+  connectionName?: string;
+  credentialConfigured: boolean;
+  /** Short SHA-256 prefix. It distinguishes keys without disclosing key material. */
+  credentialFingerprint?: string;
+  endpoint?: string;
+  mainModel: string;
+  networkPresentation: 'domestic' | 'foreign' | 'local';
+  protocolLabel: string;
+  providerLabel: string;
+  smallModel: string;
+  source: 'bound' | 'current' | 'legacy-inferred' | 'legacy-model-only';
+}
+
+export interface ClaudeConversationModelResolution {
+  conversation: ClaudeConversationModelIdentity;
+  current: ClaudeConversationModelIdentity;
+  differences: ClaudeConversationModelDifference[];
+  mismatch: boolean;
+  preference: 'ask' | 'use-conversation' | 'use-current';
+  /** False only for an old transcript whose original connection can no longer be reconstructed. */
+  restorable: boolean;
+}
+
+export interface ClaudeConversationModelApplyResult extends FailureMetadata {
+  choice: ClaudeConversationModelChoice;
+  connectionTest?: ClaudeConnectionTestResult;
+  error?: string;
+  ok: boolean;
+  state: ClaudeProjectState;
+}
+
 export type ClaudeConnectionAdviceTone = 'error' | 'info' | 'success' | 'warning';
 
 export type ClaudeConnectionAdviceAction =

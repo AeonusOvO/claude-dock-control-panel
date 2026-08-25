@@ -2,6 +2,7 @@ import { claudeStateOwnershipIsCurrent } from '../../../shared/claude/state-owne
 import type { ClaudeProjectState, TerminalStatus } from '../../../shared/contracts';
 import {
   type ClaudeLaunchAttemptToken,
+  type ClaudeLaunchPresentationPhase,
   type ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 import type { TerminalProjectStateDeps } from './project-state-dependencies';
@@ -24,6 +25,10 @@ export interface TerminalClaudeLaunchActions {
   refreshClaudeLaunchControls: (sessionId: string) => void;
   renderClaudeLaunchControls: (sessionId: string, launchBlocked?: boolean) => void;
   setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
+  setClaudeLaunchPresentationPhase: (
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ) => boolean;
   renderClaudeLaunchResult: (
     token: ClaudeLaunchAttemptToken,
     state: ClaudeProjectState,
@@ -66,7 +71,13 @@ export const createTerminalClaudeLaunchActions = (
         ? '正在进行网络预检…'
         : launchPhase === 'paused'
           ? '等待网络确认…'
-          : '正在启动…';
+          : launchPhase === 'checking-model-network'
+            ? '正在切换模型并检查网络…'
+            : launchPhase === 'switching-model'
+              ? '正在切换对话模型…'
+              : launchPhase === 'restoring-conversation'
+                ? '正在恢复历史对话…'
+                : '正在启动…';
     runAgentLabel.textContent = busy ? busyLabel : '新建安全会话';
     // Route health is a remediable preflight state, not a reason to turn the primary action into a
     // translucent dead end. The launch path can restart app-owned gateways and returns a precise
@@ -126,6 +137,15 @@ export const createTerminalClaudeLaunchActions = (
     return true;
   };
 
+  const setClaudeLaunchPresentationPhase = (
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ): boolean => {
+    if (!claudeLaunchAttempts.setPresentationPhase(token, phase)) return false;
+    refreshClaudeLaunchControls(token.sessionId);
+    return true;
+  };
+
   const claudeStateCanApply = (state: ClaudeProjectState): boolean => {
     const status = getWorkspaceState().sessions.find((session) => session.id === state.sessionId);
     if (!status) {
@@ -161,6 +181,7 @@ export const createTerminalClaudeLaunchActions = (
     refreshClaudeLaunchControls,
     renderClaudeLaunchControls,
     setClaudeLaunchPaused,
+    setClaudeLaunchPresentationPhase,
     renderClaudeLaunchResult,
   };
 };

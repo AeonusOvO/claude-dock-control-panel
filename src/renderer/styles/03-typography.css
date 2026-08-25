@@ -9,6 +9,7 @@
 .provider-group__title,
 .chat-settings-dialog header strong,
 .connection-advanced-dialog header strong,
+.conversation-model-dialog header strong,
 .conversation-rename-dialog header strong,
 .confirmation-dialog header strong {
   font-family: var(--font-display);

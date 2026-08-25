@@ -54,6 +54,7 @@ const setup = (): {
     hideTerminalContextMenu: vi.fn(),
     projectNameFromPath: (directoryPath: string) => directoryPath,
     refreshClaudeLaunchControls: vi.fn(),
+    setClaudeLaunchPresentationPhase: vi.fn(() => true),
     requestComposerFocus: vi.fn(),
     requestConfirmation: vi.fn(async () => true),
     resolveClaudeLaunchDecision: vi.fn(async () => ({ status: 'cancelled' as const })),

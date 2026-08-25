@@ -74,10 +74,8 @@ import type {
 import { claudeRouteHealth } from './runtime-route-health';
 import { modelMatches } from './runtime-controls';
 import { claudeOfficialAuthProvider } from './official-auth-status';
-import {
-  ClaudeRuntimeLaunchHandoff,
-  type PreparedClaudeLaunchRecord,
-} from './runtime-launch-handoff';
+import { ClaudeRuntimeConversationModels } from './runtime-conversation-model';
+import type { PreparedClaudeLaunchRecord } from './runtime-launch-handoff';
 import type { NativeRouteReservation } from './runtime-routing';
 import {
   type ClaudeLaunchOverrides,
@@ -112,7 +110,7 @@ const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
   return 0;
 };
 
-export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
+export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
   private onStreamFailure?: (observation: {
     cliVersion?: string;
     gatewayVersion?: string;
@@ -541,11 +539,14 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
         settingsEnvironment,
       );
       assertReservationCurrent();
+      const conversationBinding = await this.currentConversationBinding(cwd, launchSnapshot);
+      assertReservationCurrent();
       entry.phase = 'active';
       return {
         allowBypassPermissions: launchSnapshot.allowBypassPermissions,
         cliVersion: installation.version,
         configFingerprint: connectionFingerprint(launchConfig, credential),
+        conversationBinding,
         endpointIdentity: `${launchConfig.provider}|${launchConfig.preset}|${launchConfig.baseUrl}`,
         environment: { ...executionSettings.processEnvironment },
         model,
@@ -803,6 +804,8 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
     );
 
     assertLaunchSnapshotCurrent();
+    const conversationBinding = await this.currentConversationBinding(cwd, launchSnapshot);
+    assertLaunchSnapshotCurrent();
     if (
       record.artifactDirectory !== artifactDirectory ||
       record.sessionDirectory !== sessionDirectory
@@ -818,6 +821,7 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
       claudeContextWindowCustomTokens: claudeContextWindow.customTokens,
       claudeContextWindowMode: claudeContextWindow.mode,
       contextWindowMode,
+      conversationBinding,
       conversationId: resumedConversationId,
       cwd,
       diagnosticBuffer: '',

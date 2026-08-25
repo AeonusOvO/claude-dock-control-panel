@@ -181,6 +181,13 @@ const registerConversationStartIpc = (
           projectPath,
           resume: request.resume,
         });
+        if (result.ok && runtime && launch) {
+          runtime.recordNativeConversationBinding(
+            conversationId,
+            launch.prepared.conversationBinding,
+            launch.prepared.model,
+          );
+        }
         if (!result.ok && launch) {
           runtime?.releaseNativeConversation(launch.ownerId);
           nativeLaunches.delete(conversationId);

@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.20（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.22（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -655,6 +655,10 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 - `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
+- `AppPreferencesStore` 的 `conversationResume` 保存两项独立偏好：模型不一致时每次询问、始终用
+  当前接入或始终恢复对话原接入，以及启动时是否恢复最后工作区。后者关闭后仍列出已记住的项目，但
+  bootstrap 不自动打开最后项目、最后对话或连接其平台模型；设置页和“不再提示”都通过同一严格校验
+  的 `app:set-conversation-resume-preferences` 原子保存。
 - 外部代理编辑使用单调递增的加载代次和 `proxyDraftEdited`。首次代理状态回读完成前禁用提交；
   迟到响应只有在代次仍为当前且用户尚未修改草稿时才能回填，避免取消勾选后被旧启用值覆盖。
   “完成”在同一保存路径提交应用设置与代理草稿，再以主进程持久化结果回填 UI。
@@ -1053,6 +1057,23 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（备用）模型、凭据状态与 Router Provider
   ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
   地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
+- `ConversationPreferencesStore` 的 version 2 为每个 conversation UUID 保存完整连接绑定：接入预设、
+  协议、端点、认证方式、Router Provider、主/小型模型、接入名称、订阅账户/认证描述、凭据状态与
+  SHA-256 指纹。需要恢复的原始 API 凭据只以 `safeStorage` 密文写盘，renderer 仅接收十位指纹前缀和
+  脱敏地址；旧 version 1 只有模型名的记录仅在匹配到唯一完整接入身份时做尽力推断。同名模型对应多个
+  账户、凭据、端点或路由时拒绝猜测，并明确标为只知道模型名。
+- OpenAI 转换接入还把当前 Router Provider 的上游凭据单独以 `sourceEncryptedCredential` 写入项目 profile；
+  它与本机 Router 客户端凭据分开加密，只在 Provider ID 相同且选择保留凭据时沿用，切离 OpenAI 路由或
+  改用另一 Provider 就清除。这样即使接入历史的非关键写入失败，后续启动快照仍能绑定实际当前 API，
+  不会误拿一条旧历史记录的密钥。
+- 终端与原生对话都从准备启动时冻结的同一 `ClaudeLaunchConfigSnapshot` 生成绑定并写入对话偏好，不能在
+  await 后重新读取易变项目配置。完整比较包含平台、协议、端点、认证、订阅账户、API 指纹、Router
+  Provider、主模型和小型模型；小型模型空白先规范化成主模型，因此“上下都填同一模型”和“下方留空”
+  相等，而任何真正不同的字段——即使同一中转站、同一 API 或同名主模型——都会触发差异。
+- `claude:conversation-model-inspect` 只返回两套脱敏身份、差异项、可恢复性和用户偏好。选择“使用当前
+  模型”只把该对话重新绑定到当前完整接入；选择“使用该对话原有模型”复用 provider access guard、
+  `runClaudeProjectConfigTransaction` 与真实模型请求，测试通过才提交，失败按既有项目/Router 所有权
+  规则回滚。订阅账户已变化且不能安全重建时禁用原接入按钮，不做隐式登录切换。
 - `claude:connection-history-apply` 不再把“配置事务提交”当成连接成功。handler 先通过
   `prepareConnectionHistory()` 解密并准备候选，再由 `testPreparedConnection()` 对这份尚未提交的
   effective input 发出最多 15 秒、`max_tokens: 1` 的真实 Messages 请求；只有端点、认证与 Anthropic
@@ -1542,6 +1563,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   中产生约 375px 滚动高度，而不是缩小文字。运行中对话保持在容器上方不动，滚动位置按文件夹记录、在侧栏因工作区状态刷新而
   重建后恢复。文件夹的展开状态只控制历史区：`expandedFolders` 不再被活动会话强制置为
   展开，收起使用中的项目时保留运行中对话行、只隐藏历史与提示区。
+- 历史枚举同时排除原生对话 owner 与安全终端 owner 的 conversation UUID。终端已经打开但尚未收到
+  statusLine 时也不会在历史列表再渲染一行，从而避免同一对话在“运行中”和“历史”区域重叠。
 - 历史右键重命名先验证项目路径、UUID、文件类型、50 MiB 上限和 1–60 字符标题，再向对应
   JSONL 追加 `type: "custom-title"` 记录，不重写正文。运行中重命名先更新工作区标题；若该
   PTY 正在运行 Claude Code，再发送白名单 `/rename <title>` 让 Claude 元数据同步更新。
@@ -1995,9 +2018,11 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
 - 禁止任意页面跳转、弹窗和未授权 IPC 通道；`validateSender` 同时要求目标
   `webContents` 与 `senderFrame === mainFrame`，sandbox 子 frame 不能调用 preload IPC。
 - 不保存终端输入或命令历史；项目直连密钥与 Router 客户端密钥只以 Windows `safeStorage`
-  密文持久化，OpenAI 上游密钥交给本机 CCR Provider 存储；为支持历史完整恢复，用户本次新填的
-  上游密钥还会以 `safeStorage` 密文进入历史，renderer 始终只接收“是否已配置”的布尔值。
-  终端不会收到含密钥的文本命令。PowerShell 自身行为不在应用持久化范围内。
+  密文持久化，OpenAI 上游密钥交给本机 CCR Provider 存储；为支持启动时绑定实际当前 API 和历史完整
+  恢复，用户本次新填的上游密钥还会分别以 `safeStorage` 密文进入项目 profile 与历史，renderer 始终
+  只接收“是否已配置”的布尔值和短指纹。
+  终端不会收到含密钥的文本命令。对话连接绑定需要的 API 凭据同样只保存为 `safeStorage` 密文；磁盘
+  上的指纹不可反推出凭据，完整摘要也不跨 main/preload 边界。PowerShell 自身行为不在应用持久化范围内。
 - 原生 `node-pty` 只在主进程加载；`node-pty` 与需要由外部 PowerShell 执行的
   `assets/runtime/claude-statusline.ps1`、`assets/runtime/claude-runtime-signal.ps1`
   均在打包时从 ASAR 解包。
@@ -2217,14 +2242,19 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   version 1 记录迁移为安全策略与可解释协议、OpenAI 原始上游字段与 Router ID 可回放、重命名校验与持久化、
   明文密钥不得出现在磁盘文件里、恢复出的配置可直接用于保存、删除后再恢复报「已被删除」、
   Windows 路径大小写不敏感、条数上限、文件损坏后回落到空列表。
+- `tests/main/conversation-preferences-store.test.ts` 与 `conversation-model-binding.test.ts` 覆盖 version 1
+  迁移、绑定密文、无明文密钥、凭据/账户/路由/主模型/小型模型差异，以及“空白小型模型等于主模型”
+  的规范化；`session-history-filter.test.ts` 锁定终端与原生 owner 都不会重复出现在历史区。
+- `tests/renderer/workspace-shell.test.ts` 驱动真实 renderer 模块，覆盖模糊背景模型选择框、完整双方信息、
+  不再提示持久化、原接入/当前接入动作，以及仅国外接入显示网络检查的左侧启动进度文案。
 - `tests/main/claude-providers.test.ts` 锁定目录 ID 唯一、分组完整、远程 HTTPS/本机 HTTP 边界、
   模型字符规则、外链可解析、上次官方/国内/自定义选择只展开对应组及
   Kimi/SiliconFlow/Ollama 特例；
   `tests/shared/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
 - `npm run test:layout` 使用隐藏 Electron 窗口在 720×640、820×640、900×640、1024×640、
   1180×760、1280×760 六种尺寸轮换项目/对话/接入、分类接入历史弹窗、插件的已安装/可安装/市场
-  三个面板、工作台三页、收起控制栏和全局设置两个分类，并加入富文本长内容、附件与 Artifact 抽屉
-  压力态，共 102 个场景；检查交互控件
+  三个面板、工作台三页、收起控制栏和全局设置两个分类，并加入完整模型差异弹窗、富文本长内容、
+  附件与 Artifact 抽屉压力态；模型弹窗分别检查滚动顶端与底部操作区，共 114 个场景；检查交互控件
   矩形相交、`elementFromPoint` 命中对象、关键容器
   横向溢出和文档级 overflow。扫描会识别滚动裁剪祖先，避免把模态内容区外不可见的控件误判
   为覆盖固定底栏；同一自绘 select 的原生层/视觉层、遮罩层与抽屉的有意叠放不计为控件重叠，
@@ -2234,8 +2264,8 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。收起
   控制栏场景在测试窗口内同步关闭过渡后检查最终几何，避免隐藏 CI 窗口节流 CSS transition 时把
   中间帧误报为遮挡；这不会修改应用运行时样式。
-- `npm run test:visual` 保留插件、服务商向导、内联历史配置、四主题分类历史弹窗及其选中态、四主题历史
-  接入失败结果页、820px 单列态、
+- `npm run test:visual` 保留插件、服务商向导、内联历史配置、四主题分类历史弹窗及其选中态、四主题
+  完整模型差异弹窗与 720px 单列态、四主题历史接入失败结果页、820px 单列态、
   全局设置、连接测试、终端聚焦态、
   Codex 三步工作台、代理/路由设置页与 MCP 管理页，
   独立对话详情抽屉与重命名弹窗回归图，并生成四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵

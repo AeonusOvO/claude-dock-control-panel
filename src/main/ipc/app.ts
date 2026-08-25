@@ -167,6 +167,35 @@ const registerQuitIpc = ({
   });
 };
 
+const registerConversationResumePreferencesIpc = (input: {
+  appPreferencesStore: AppPreferencesStore;
+  appSettingsView: () => AppSettingsView;
+  validateSender: MainGuards['validateSender'];
+}): void => {
+  ipcMain.handle(CHANNELS.APP_SET_CONVERSATION_RESUME_PREFERENCES, (event, value: unknown) => {
+    input.validateSender(event);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('对话恢复设置无效。');
+    }
+    const preferences = value as Record<string, unknown>;
+    if (
+      (preferences.modelMismatchBehavior !== 'ask' &&
+        preferences.modelMismatchBehavior !== 'use-conversation' &&
+        preferences.modelMismatchBehavior !== 'use-current') ||
+      typeof preferences.restoreLastWorkspaceOnStartup !== 'boolean'
+    ) {
+      throw new Error('对话恢复设置无效。');
+    }
+    input.appPreferencesStore.set({
+      conversationResume: {
+        modelMismatchBehavior: preferences.modelMismatchBehavior,
+        restoreLastWorkspaceOnStartup: preferences.restoreLastWorkspaceOnStartup,
+      },
+    });
+    return input.appSettingsView();
+  });
+};
+
 export const registerAppIpc = ({
   advancedSettingsStore,
   appPreferencesStore,
@@ -187,6 +216,7 @@ export const registerAppIpc = ({
     claudeContextWindowCustomTokens: appPreferencesStore.get().claudeContextWindowCustomTokens,
     claudeContextWindowMode: appPreferencesStore.get().claudeContextWindowMode,
     closeBehavior: appPreferencesStore.get().closeBehavior,
+    conversationResume: { ...appPreferencesStore.get().conversationResume },
     footerResourcePreference: appPreferencesStore.get().footerResourcePreference,
     managedChatGptContextWindowMode: appPreferencesStore.get().managedChatGptContextWindowMode,
     language: 'zh-CN',
@@ -294,6 +324,11 @@ export const registerAppIpc = ({
     }
     appPreferencesStore.set({ closeBehavior: behavior as CloseBehavior });
     return appSettingsView();
+  });
+  registerConversationResumePreferencesIpc({
+    appPreferencesStore,
+    appSettingsView,
+    validateSender,
   });
   ipcMain.handle(CHANNELS.APP_OPEN_EXTERNAL, async (event, url: unknown) => {
     validateSender(event);

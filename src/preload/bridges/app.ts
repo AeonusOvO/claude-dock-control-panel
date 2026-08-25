@@ -15,6 +15,8 @@ export const appBridge = {
   setAdvancedSettings: (settings) =>
     ipcRenderer.invoke(CHANNELS.APP_SET_ADVANCED_SETTINGS, settings),
   setCloseBehavior: (behavior) => ipcRenderer.invoke(CHANNELS.APP_SET_CLOSE_BEHAVIOR, behavior),
+  setConversationResumePreferences: (preferences) =>
+    ipcRenderer.invoke(CHANNELS.APP_SET_CONVERSATION_RESUME_PREFERENCES, preferences),
   openMarkdownExternal: (url) => ipcRenderer.invoke(CHANNELS.MARKDOWN_OPEN_EXTERNAL, url),
   getDroppedPath: (file: File) => webUtils.getPathForFile(file),
   onAppQuitRequested: (listener) => {

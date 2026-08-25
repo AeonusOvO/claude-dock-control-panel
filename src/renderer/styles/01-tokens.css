@@ -89,6 +89,9 @@
   --syntax-magenta: #704074;
   --syntax-yellow: #5a4815;
   --syntax-neutral: #5f5e59;
+  --decision-blue-solid: #2563eb;
+  --decision-blue-hover: #1d4ed8;
+  --decision-blue-ring: rgb(37 99 235 / 38%);
 
   /* 主色 - Radix 9/10/11 拆分 */
   --accent-solid: #b85b3d;

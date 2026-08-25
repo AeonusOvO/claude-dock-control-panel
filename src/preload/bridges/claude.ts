@@ -6,6 +6,8 @@ import type {
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionHistoryResult,
   ClaudeConnectionTestResult,
+  ClaudeConversationModelApplyResult,
+  ClaudeConversationModelResolution,
   ClaudeEffortRequest,
   ClaudeGatewayDiagnostics,
   ClaudeLaunchOutcome,
@@ -198,6 +200,13 @@ export const claudeBridge = {
     ipcRenderer.invoke(CHANNELS.CLAUDE_GET_SESSIONS_FOR_PATH, projectPath) as Promise<
       ClaudeSessionMetadata[]
     >,
+  inspectClaudeConversationModel: (projectPath, conversationId, legacyModelHint) =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_CONVERSATION_MODEL_INSPECT,
+      projectPath,
+      conversationId,
+      legacyModelHint,
+    ) as Promise<ClaudeConversationModelResolution>,
   renameClaudeSession: (projectPath, conversationId, title) =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_RENAME_SESSION,
@@ -217,4 +226,11 @@ export const claudeBridge = {
       sessionId,
       conversationId,
     ) as Promise<ClaudeLaunchOutcome>,
+  applyClaudeConversationModel: (sessionId, conversationId, choice) =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_CONVERSATION_MODEL_APPLY,
+      sessionId,
+      conversationId,
+      choice,
+    ) as Promise<ClaudeConversationModelApplyResult>,
 } satisfies Partial<ControlPanelApi>;

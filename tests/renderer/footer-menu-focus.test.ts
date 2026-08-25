@@ -25,6 +25,10 @@ const appSettings = (overrides: Partial<AppSettingsView> = {}): AppSettingsView 
   artifactNetworkAllowed: true,
   claudeContextWindowMode: 'auto',
   closeBehavior: 'tray',
+  conversationResume: {
+    modelMismatchBehavior: 'ask',
+    restoreLastWorkspaceOnStartup: true,
+  },
   footerResourcePreference: 'auto',
   language: 'zh-CN',
   launchAtLogin: false,

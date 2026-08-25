@@ -187,6 +187,25 @@
 }
 
 @media (max-width: 720px) {
+  .conversation-model-dialog__comparison {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .conversation-model-dialog__arrow {
+    transform: rotate(90deg);
+  }
+
+  .conversation-model-dialog footer,
+  .conversation-model-dialog__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .conversation-model-dialog__actions,
+  .conversation-model-dialog footer button {
+    width: 100%;
+  }
+
   .current-connection {
     align-items: start;
     grid-template-columns: minmax(0, 1fr);

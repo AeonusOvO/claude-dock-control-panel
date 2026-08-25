@@ -100,6 +100,7 @@ describe('Claude project profile store', () => {
         routerProviderId: 'relay-example',
         sourceAuthMode: 'authToken',
         sourceBaseUrl: 'https://relay.example.com/v1/chat/completions',
+        sourceCredential: 'sk-openai-upstream',
         sourceCredentialConfigured: true,
         sourceModel: 'gpt-5.4',
         sourceModelFast: 'gpt-5-mini',
@@ -117,6 +118,35 @@ describe('Claude project profile store', () => {
       sourceModel: 'gpt-5.4',
     });
     expect(reopened.createLaunchSnapshot(CWD).protocol).toBe('openai');
+    expect(reopened.createLaunchSnapshot(CWD).sourceCredential).toBe('sk-openai-upstream');
+    expect(readFileSync(profilePath, 'utf8')).not.toContain('sk-openai-upstream');
+  });
+
+  it('keeps an unchanged OpenAI upstream key for the same Router provider and clears it off-route', () => {
+    const { store } = createStore();
+    const presentation = {
+      protocol: 'openai' as const,
+      routerProviderId: 'relay-example',
+      sourceAuthMode: 'authToken' as const,
+      sourceBaseUrl: 'https://relay.example.com/v1/chat/completions',
+      sourceCredentialConfigured: true,
+      sourceModel: 'gpt-5.4',
+      sourceModelFast: 'gpt-5-mini',
+    };
+    store.save(CWD, gatewayInput, {
+      ...presentation,
+      sourceCredential: 'sk-openai-upstream',
+    });
+
+    store.save(
+      CWD,
+      { ...gatewayInput, credential: undefined, credentialAction: 'keep' },
+      presentation,
+    );
+    expect(store.getSourceCredential(CWD)).toBe('sk-openai-upstream');
+
+    store.save(CWD, gatewayInput);
+    expect(store.getSourceCredential(CWD)).toBeUndefined();
   });
 
   it('remembers the switch for a project that has no saved route yet', () => {

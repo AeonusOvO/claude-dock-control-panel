@@ -736,6 +736,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     runtime.conversationId = conversationId;
     const model = runtime.metrics?.modelId ?? runtime.expectedModel;
     this.conversationPreferences.record(conversationId, {
+      binding: runtime.conversationBinding,
       effort: runtime.effortRequest ?? runtime.metrics?.effortLevel,
       model: model ? stripClaudeContextWindowSuffix(model) : undefined,
       permissionMode: runtime.permissionMode,

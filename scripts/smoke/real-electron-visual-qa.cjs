@@ -188,6 +188,12 @@ const main = async () => {
           sendDisabled: send?.disabled ?? '(missing)',
           sendSending: send?.dataset.sending ?? '(unset)',
           status: document.querySelector('#native-composer-status')?.textContent ?? '(missing)',
+          toast: document.querySelector('#toast')?.textContent ?? '(missing)',
+          activeRuntime: document.body.dataset.agentRuntime ?? '(missing)',
+          codexChecked: document.querySelector('#runtime-codex')?.checked ?? '(missing)',
+          runtimePickerDisabled: document.querySelector('#runtime-picker')?.disabled ?? '(missing)',
+          toggleBusy: document.querySelector('#native-terminal-toggle')?.getAttribute('aria-busy') ?? '(missing)',
+          toggleDisabled: document.querySelector('#native-terminal-toggle')?.disabled ?? '(missing)',
         };
       })()`);
       const diagnosticText = JSON.stringify(diagnostics);
@@ -199,13 +205,36 @@ const main = async () => {
     };
 
     const elementCenter = async (selector) => {
+      const scrolled = await evaluate(`(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) return false;
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        return true;
+      })()`);
+      if (!scrolled) throw new Error(`Missing real-window element: ${selector}`);
+      await delay(80);
       const value = await evaluate(`(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!element) return null;
         const rect = element.getBoundingClientRect();
-        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        return {
+          height: rect.height,
+          hit: hit?.id || hit?.className || hit?.tagName || '(none)',
+          hittable: Boolean(hit && (hit === element || element.contains(hit))),
+          width: rect.width,
+          x,
+          y,
+        };
       })()`);
       if (!value) throw new Error(`Missing real-window element: ${selector}`);
+      if (value.width <= 0 || value.height <= 0 || !value.hittable) {
+        throw new Error(
+          `Real-window element is not physically hittable: ${selector} (${value.width}x${value.height}; hit ${value.hit}).`,
+        );
+      }
       return value;
     };
 
@@ -303,8 +332,8 @@ const main = async () => {
     });
     await click('#run-claude');
     await waitFor(
-      `() => document.querySelector('#native-conversation')?.dataset.state !== 'open' && !document.querySelector('#terminal-shell')?.classList.contains('terminal-shell--native') && document.querySelector('#run-claude')?.disabled === false`,
-      'the primary safe terminal launch',
+      `() => document.querySelector('#native-conversation')?.dataset.state !== 'open' && !document.querySelector('#terminal-shell')?.classList.contains('terminal-shell--native') && document.querySelector('#run-claude')?.disabled === false && document.querySelector('#toast')?.textContent?.includes('隔离运行配置禁止启动')`,
+      'the isolated profile to refuse the primary safe terminal launch',
     );
     await capture('claude-safe-terminal-primary.png', {
       interaction: 'safe-terminal-primary',
@@ -742,7 +771,12 @@ const main = async () => {
     // native turn is live is an open product question; it is not implemented anywhere in main, the
     // renderer, the root docs or the tests, so this harness must not pretend it is.
     const beforeSwitch = await evaluate(`document.querySelectorAll('.native-message').length`);
-    await click('#runtime-codex');
+    await click('#runtime-disclosure > summary');
+    await waitFor(
+      `() => document.querySelector('#runtime-disclosure')?.open === true`,
+      'the runtime picker disclosure',
+    );
+    await click("label[for='runtime-codex']");
     await waitFor(
       `() => document.body.dataset.agentRuntime === 'codex' && document.querySelector('#runtime-codex')?.checked && !document.querySelector('#runtime-picker')?.disabled`,
       'the runtime switch to settle',

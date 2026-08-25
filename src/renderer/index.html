@@ -3146,6 +3146,33 @@
                   <option value="exit">直接退出</option>
                 </select>
               </label>
+              <div class="settings-section-heading settings-section-heading--subtle">
+                <strong>对话恢复</strong>
+                <span>让每个历史对话保持自己的完整模型接入。</span>
+              </div>
+              <label
+                class="settings-row settings-row--select"
+                for="settings-conversation-model-mismatch"
+              >
+                <span>
+                  <strong>历史对话模型不一致时</strong>
+                  <small
+                    >比较平台、账号/API、接口、主模型和小型/备用模型；弹窗内也可记住所选项。</small
+                  >
+                </span>
+                <select id="settings-conversation-model-mismatch">
+                  <option value="ask">每次询问</option>
+                  <option value="use-current">始终使用当前模型</option>
+                  <option value="use-conversation">始终使用对话原有模型</option>
+                </select>
+              </label>
+              <label class="settings-row" for="settings-restore-last-workspace">
+                <span>
+                  <strong>启动时恢复上次工作区</strong>
+                  <small>关闭后仍保留项目列表，但不会自动打开上次对话或连接它的平台模型。</small>
+                </span>
+                <input id="settings-restore-last-workspace" type="checkbox" checked />
+              </label>
               <label class="settings-row settings-row--select" for="settings-theme">
                 <span>
                   <strong>主题</strong>
@@ -3671,6 +3698,70 @@
           <button class="dialog-primary" id="claude-permission-allow" type="button">
             本次允许
           </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
+      class="conversation-model-dialog popover"
+      id="conversation-model-dialog"
+      aria-labelledby="conversation-model-dialog-title"
+      aria-describedby="conversation-model-dialog-description"
+    >
+      <form method="dialog">
+        <header>
+          <span class="step-kicker">检测到完整模型接入不同</span>
+          <strong id="conversation-model-dialog-title">这个对话绑定了另一套模型</strong>
+          <p id="conversation-model-dialog-description">
+            请选择本次恢复使用哪套接入。平台、账户、API、接口和两个模型都会一起处理。
+          </p>
+        </header>
+        <div class="conversation-model-dialog__comparison">
+          <section
+            class="conversation-model-dialog__card"
+            id="conversation-model-dialog-original-card"
+            aria-label="对话原有模型"
+          ></section>
+          <span class="conversation-model-dialog__arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5" /></svg>
+          </span>
+          <section
+            class="conversation-model-dialog__card conversation-model-dialog__card--current"
+            id="conversation-model-dialog-current-card"
+            aria-label="现有模型"
+          ></section>
+        </div>
+        <p
+          class="conversation-model-dialog__differences"
+          id="conversation-model-dialog-differences"
+        ></p>
+        <p
+          class="conversation-model-dialog__warning"
+          id="conversation-model-dialog-warning"
+          hidden
+        ></p>
+        <footer>
+          <label
+            class="conversation-model-dialog__remember"
+            for="conversation-model-dialog-remember"
+          >
+            <input id="conversation-model-dialog-remember" type="checkbox" />
+            <span>不再提示，并记住本次选择</span>
+          </label>
+          <span class="conversation-model-dialog__actions">
+            <button id="conversation-model-dialog-original" type="submit" value="use-conversation">
+              使用该对话原有模型
+            </button>
+            <button
+              autofocus
+              class="dialog-primary"
+              id="conversation-model-dialog-current"
+              type="submit"
+              value="use-current"
+            >
+              使用当前模型
+            </button>
+          </span>
         </footer>
       </form>
     </dialog>

@@ -27,6 +27,7 @@ interface StoredClaudeConfig extends NormalizedClaudeConfig {
   sourceAuthMode?: ClaudeAuthMode;
   sourceBaseUrl?: string;
   sourceCredentialConfigured?: boolean;
+  sourceEncryptedCredential?: string;
   sourceModel?: string;
   sourceModelFast?: string;
 }
@@ -36,6 +37,8 @@ export interface ClaudeConfigPresentation {
   routerProviderId?: string;
   sourceAuthMode?: ClaudeAuthMode;
   sourceBaseUrl?: string;
+  /** Main-process-only upstream credential captured before Router conversion. */
+  sourceCredential?: string;
   sourceCredentialConfigured?: boolean;
   sourceModel?: string;
   sourceModelFast?: string;
@@ -50,6 +53,7 @@ export interface ClaudeLaunchConfigSnapshot {
   config: NormalizedClaudeConfig;
   credential?: string;
   protocol: ClaudeEndpointProtocol;
+  sourceCredential?: string;
   storage: ClaudeConfigSnapshot;
 }
 
@@ -103,6 +107,8 @@ const isStoredConfig = (value: unknown): value is StoredClaudeConfig => {
     (record.sourceBaseUrl === undefined || typeof record.sourceBaseUrl === 'string') &&
     (record.sourceCredentialConfigured === undefined ||
       typeof record.sourceCredentialConfigured === 'boolean') &&
+    (record.sourceEncryptedCredential === undefined ||
+      typeof record.sourceEncryptedCredential === 'string') &&
     (record.sourceModel === undefined || typeof record.sourceModel === 'string') &&
     (record.sourceModelFast === undefined || typeof record.sourceModelFast === 'string')
   );
@@ -123,6 +129,10 @@ export class ClaudeConfigStore {
 
   public getCredential(cwd: string): string | undefined {
     return this.decryptedCredential(this.load().projects[projectKey(cwd)]);
+  }
+
+  public getSourceCredential(cwd: string): string | undefined {
+    return this.decryptedSourceCredential(this.load().projects[projectKey(cwd)]);
   }
 
   public getView(cwd: string): ClaudeConfigView {
@@ -156,11 +166,13 @@ export class ClaudeConfigStore {
   public createLaunchSnapshot(cwd: string): ClaudeLaunchConfigSnapshot {
     const project = this.load().projects[projectKey(cwd)];
     const config = this.normalizedConfig(project);
+    const sourceCredential = this.decryptedSourceCredential(project);
     return {
       allowBypassPermissions: project?.allowBypassPermissions ?? DEFAULT_ALLOW_BYPASS_PERMISSIONS,
       config,
       credential: this.decryptedCredential(project),
       protocol: this.endpointProtocol(project, config),
+      ...(sourceCredential ? { sourceCredential } : {}),
       storage: project ? { project: structuredClone(project) } : {},
     };
   }
@@ -203,6 +215,7 @@ export class ClaudeConfigStore {
     const store = this.load();
     const key = projectKey(cwd);
     const existingCredential = store.projects[key]?.encryptedCredential;
+    const existingSource = store.projects[key];
     let encryptedCredential = existingCredential;
 
     if (input.credentialAction === 'replace') {
@@ -222,6 +235,28 @@ export class ClaudeConfigStore {
       encryptedCredential = undefined;
     }
 
+    let sourceEncryptedCredential: string | undefined;
+    if (presentation?.protocol === 'openai') {
+      const sourceCredential = presentation.sourceCredential?.trim();
+      const sameRouterProvider =
+        Boolean(presentation.routerProviderId) &&
+        presentation.routerProviderId === existingSource?.routerProviderId;
+      sourceEncryptedCredential = sameRouterProvider
+        ? existingSource?.sourceEncryptedCredential
+        : undefined;
+      if (sourceCredential) {
+        if (sourceCredential.length > 4096 || /[\r\n]/.test(sourceCredential)) {
+          throw new Error('OpenAI 上游凭据不能换行，且长度不能超过 4096 个字符。');
+        }
+        if (!safeStorage.isEncryptionAvailable()) {
+          throw new Error('Windows 安全存储当前不可用，拒绝以明文保存 OpenAI 上游凭据。');
+        }
+        sourceEncryptedCredential = safeStorage.encryptString(sourceCredential).toString('base64');
+      } else if (!presentation.sourceCredentialConfigured) {
+        sourceEncryptedCredential = undefined;
+      }
+    }
+
     store.projects[key] = {
       ...config,
       // Saving a route must not silently re-arm (or disarm) the permission switch.
@@ -235,6 +270,7 @@ export class ClaudeConfigStore {
       sourceAuthMode: presentation?.sourceAuthMode,
       sourceBaseUrl: presentation?.sourceBaseUrl,
       sourceCredentialConfigured: presentation?.sourceCredentialConfigured,
+      sourceEncryptedCredential,
       sourceModel: presentation?.sourceModel,
       sourceModelFast: presentation?.sourceModelFast,
     };
@@ -287,6 +323,19 @@ export class ClaudeConfigStore {
       return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
     } catch {
       throw new Error('接口凭据无法解密，请在接入设置中重新填写。');
+    }
+  }
+
+  private decryptedSourceCredential(stored: StoredClaudeConfig | undefined): string | undefined {
+    const encrypted = stored?.sourceEncryptedCredential;
+    if (!encrypted) return undefined;
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('Windows 安全存储当前不可用，无法解密 OpenAI 上游凭据。');
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+    } catch {
+      throw new Error('OpenAI 上游凭据无法解密，请在接入设置中重新填写。');
     }
   }
 

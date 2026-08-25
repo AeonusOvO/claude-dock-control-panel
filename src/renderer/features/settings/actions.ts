@@ -92,6 +92,14 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
       await window.controlPanel.setCloseBehavior(pending.closeBehavior);
     }
     if (
+      pending.conversationResume.modelMismatchBehavior !==
+        saved.conversationResume.modelMismatchBehavior ||
+      pending.conversationResume.restoreLastWorkspaceOnStartup !==
+        saved.conversationResume.restoreLastWorkspaceOnStartup
+    ) {
+      await window.controlPanel.setConversationResumePreferences(pending.conversationResume);
+    }
+    if (
       pending.advanced.chatIdleTimeoutMinutes !== saved.advanced.chatIdleTimeoutMinutes ||
       pending.advanced.webResearchIsolation !== saved.advanced.webResearchIsolation ||
       pending.advanced.networkPreflight.checkOnNewSession !== savedNetwork.checkOnNewSession ||
@@ -158,6 +166,8 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
 
   elements.launchAtLogin.addEventListener('change', handleIndicatorChange);
   elements.closeBehavior.addEventListener('change', handleIndicatorChange);
+  elements.conversationModelMismatch.addEventListener('change', handleIndicatorChange);
+  elements.restoreLastWorkspace.addEventListener('change', handleIndicatorChange);
   elements.webResearchIsolation.addEventListener('change', handleIndicatorChange);
   elements.networkNewSession.addEventListener('change', handleIndicatorChange);
   elements.networkProviderLogin.addEventListener('change', handleIndicatorChange);
@@ -173,6 +183,8 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
   return () => {
     elements.launchAtLogin.removeEventListener('change', handleIndicatorChange);
     elements.closeBehavior.removeEventListener('change', handleIndicatorChange);
+    elements.conversationModelMismatch.removeEventListener('change', handleIndicatorChange);
+    elements.restoreLastWorkspace.removeEventListener('change', handleIndicatorChange);
     elements.webResearchIsolation.removeEventListener('change', handleIndicatorChange);
     elements.networkNewSession.removeEventListener('change', handleIndicatorChange);
     elements.networkProviderLogin.removeEventListener('change', handleIndicatorChange);

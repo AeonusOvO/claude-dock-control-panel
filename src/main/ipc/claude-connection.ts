@@ -2,6 +2,7 @@ import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
 import type {
   ClaudeConfigResult,
+  ClaudeConversationModelApplyResult,
   ClaudeConnectionTestResult,
   ClaudeConnectionHistoryResult,
   ClaudeOperationResult,
@@ -14,8 +15,15 @@ import { claudeNetworkAccessForConfigInput } from '../claude/runtime-connection-
 import { type ClaudeNetworkAccess, effectiveClaudeNetworkAccess } from '../claude/runtime-types';
 import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
+import { resolveDirectory } from '../infra/directory';
 import type { TerminalWorkspace } from '../terminal/workspace';
-import { validateClaudeConfigInput, validateHistoryEntryId, validateSessionId } from './validation';
+import {
+  validateClaudeConfigInput,
+  validateConversationId,
+  validateHistoryEntryId,
+  validateProjectPath,
+  validateSessionId,
+} from './validation';
 import type { MainGuards } from './guards';
 
 export interface ClaudeConnectionIpcDependencies {
@@ -167,6 +175,121 @@ const registerConnectionHistoryApplyIpc = ({
   );
 };
 
+const registerConversationModelIpc = ({
+  configTransactionState,
+  guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+  runClaudeProjectConfigTransaction,
+  withDevelopmentSessionOperation,
+  workspace,
+}: ClaudeConnectionIpcDependencies): void => {
+  ipcMain.handle(
+    CHANNELS.CLAUDE_CONVERSATION_MODEL_INSPECT,
+    async (event, projectPath: unknown, conversationId: unknown, legacyModelHint: unknown) => {
+      validateSender(event);
+      const cwd = resolveDirectory(validateProjectPath(projectPath));
+      const hint = typeof legacyModelHint === 'string' ? legacyModelHint : undefined;
+      return requireClaudeRuntime().inspectConversationModel(
+        cwd,
+        validateConversationId(conversationId),
+        hint,
+      );
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.CLAUDE_CONVERSATION_MODEL_APPLY,
+    async (
+      event,
+      sessionId: unknown,
+      conversationId: unknown,
+      choice: unknown,
+    ): Promise<ClaudeConversationModelApplyResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const validatedConversationId = validateConversationId(conversationId);
+      if (choice !== 'use-conversation' && choice !== 'use-current') {
+        throw new Error('历史对话模型选择无效。');
+      }
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      let connectionTest: ClaudeConnectionTestResult | undefined;
+      try {
+        if (choice === 'use-current') {
+          const state = await withDevelopmentSessionOperation(
+            validatedSessionId,
+            async (assertCurrent) => {
+              await runtime.bindConversationToCurrent(status.cwd, validatedConversationId);
+              assertCurrent();
+              return runtime.publishProjectState(validatedSessionId, status.cwd);
+            },
+          );
+          return { choice, ok: true, state };
+        }
+
+        const state = await withDevelopmentSessionOperation(
+          validatedSessionId,
+          (assertCurrent, signal) =>
+            runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
+              assertCurrent,
+              commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
+              complete: (prepared) =>
+                runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
+              cwd: status.cwd,
+              prepare: () =>
+                withOptionalNetworkAccess(
+                  withOfficialProviderAccess,
+                  { action: 'provider-switch', cwd: status.cwd },
+                  runtime.conversationNetworkAccess(status.cwd, validatedConversationId),
+                  assertCurrent,
+                  () =>
+                    runtime.prepareConversationConnection(
+                      status.cwd,
+                      validatedConversationId,
+                      assertCurrent,
+                    ),
+                ),
+              runtime,
+              sessionId: validatedSessionId,
+              validatePrepared: async (prepared) => {
+                connectionTest = await runtime.testPreparedConnection(
+                  status.cwd,
+                  prepared,
+                  assertCurrent,
+                  signal,
+                );
+                const officialLoginDeferred =
+                  !connectionTest.ok &&
+                  connectionTest.tone === 'warning' &&
+                  prepared.input.authMode === 'existing';
+                if (!connectionTest.ok && !officialLoginDeferred) {
+                  throw new Error(connectionTest.message ?? '对话原有模型未通过真实连接测试。');
+                }
+              },
+            }),
+        );
+        return {
+          choice,
+          ...(connectionTest ? { connectionTest } : {}),
+          ok: true,
+          state,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法切换历史对话模型。';
+        const state =
+          configTransactionState(error) ??
+          (await runtime.getState(validatedSessionId, workspace.getStatus(validatedSessionId).cwd));
+        return {
+          ...reportConfigurationFailure('environment', message, error),
+          choice,
+          ...(connectionTest ? { connectionTest } : {}),
+          error: message,
+          ok: false,
+          state,
+        };
+      }
+    },
+  );
+};
+
 export const registerClaudeConnectionIpc = ({
   claudeFailure,
   configTransactionState,
@@ -176,6 +299,15 @@ export const registerClaudeConnectionIpc = ({
   withDevelopmentSessionOperation,
   workspace,
 }: ClaudeConnectionIpcDependencies): void => {
+  registerConversationModelIpc({
+    claudeFailure,
+    configTransactionState,
+    guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+    invalidateAndWaitForMatchingDevelopmentSessionOperation,
+    runClaudeProjectConfigTransaction,
+    withDevelopmentSessionOperation,
+    workspace,
+  });
   ipcMain.handle(
     CHANNELS.CLAUDE_SAVE_CONFIG,
     async (event, sessionId: unknown, input: unknown): Promise<ClaudeConfigResult> => {

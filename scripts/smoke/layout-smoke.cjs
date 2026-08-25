@@ -128,14 +128,14 @@ const inspectLayout = `
   // includes off-canvas geometry. Inspect every user-facing child instead of treating that
   // deliberate clipping container as content overflow.
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .current-connection, .connection-history-recovery, .connection-history-recovery__details, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__list, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .current-connection, .conversation-model-dialog, .conversation-model-dialog form, .conversation-model-dialog__comparison, .conversation-model-dialog__card, .conversation-model-dialog__actions, .connection-history-recovery, .connection-history-recovery__details, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__list, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
     .map((element) => element.id || element.className);
 
   const horizontalClips = [...inspectionRoot.querySelectorAll(
-    '.current-connection, .connection-history-recovery, .connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__footer'
+    '.current-connection, .conversation-model-dialog, .conversation-model-dialog form, .conversation-model-dialog__comparison, .conversation-model-dialog__card, .conversation-model-dialog__actions, .connection-history-recovery, .connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__footer'
   )]
     .filter(visible)
     .filter((element) => {
@@ -347,6 +347,64 @@ const addConnectionHistoryStressFixture = `
     document.querySelector('[data-history-dialog-count="api"]').textContent = '4 条';
     document.querySelector('#connection-history-dialog-summary').textContent =
       '当前项目共 4 条接入记录';
+  })()
+`;
+
+const showConversationModelStressFixture = `
+  (() => {
+    const renderCard = (selector, badgeText, titleText, facts) => {
+      const card = document.querySelector(selector);
+      const badge = document.createElement('span');
+      badge.className = 'conversation-model-dialog__badge';
+      badge.textContent = badgeText;
+      const title = document.createElement('h3');
+      title.textContent = titleText;
+      const list = document.createElement('dl');
+      for (const [labelText, valueText] of facts) {
+        const label = document.createElement('dt');
+        label.textContent = labelText;
+        const value = document.createElement('dd');
+        value.textContent = valueText;
+        list.append(label, value);
+      }
+      card.replaceChildren(badge, title, list);
+    };
+    const originalFacts = [
+      ['详细模型', 'DeepSeek V4 PRO / an-intentionally-long-model-identity'],
+      ['简单模型', 'DeepSeek V4 flash / another-intentionally-long-model-identity'],
+      ['账户 / API', 'API 凭据已配置 · SHA-256 5f4dcc3b5a'],
+      ['认证方式', 'Bearer / Auth Token'],
+      ['接口协议', 'OpenAI 兼容协议'],
+      ['接口地址', 'https://relay.example.com/a/very/long/v1/chat/completions'],
+      ['接入名称', '团队 DeepSeek 海外灾备中转站'],
+    ];
+    renderCard(
+      '#conversation-model-dialog-original-card',
+      '对话原有',
+      'DeepSeek 团队中转',
+      originalFacts,
+    );
+    renderCard(
+      '#conversation-model-dialog-current-card',
+      '正在接入',
+      'ChatGPT 官方订阅',
+      [
+        ['详细模型', 'gpt-5.6-sol'],
+        ['简单模型', 'gpt-5.6-sol-mini'],
+        ['账户 / API', '订阅账户：qa.account@example.com'],
+        ['认证方式', '官方订阅账户授权'],
+        ['接口协议', 'OpenAI 兼容协议'],
+        ['接口地址', '由平台或本机服务管理'],
+      ],
+    );
+    document.querySelector('#conversation-model-dialog-title').textContent =
+      '“一条标题也非常长的历史对话”绑定了另一套模型';
+    document.querySelector('#conversation-model-dialog-differences').textContent =
+      '检测到不同：平台、账户、API 凭据、接口地址、中转路由、详细模型、简单模型';
+    document.querySelector('#conversation-model-dialog-warning').hidden = true;
+    document.querySelector('#conversation-model-dialog-original').disabled = false;
+    const dialog = document.querySelector('#conversation-model-dialog');
+    if (!dialog.open) dialog.showModal();
   })()
 `;
 
@@ -652,6 +710,7 @@ const installLayoutSmokeStubs = () => {
   ipcMain.handle('app:get-settings', () => ({
     advanced: { chatIdleTimeoutMinutes: 0, webResearchIsolation: false },
     closeBehavior: 'tray',
+    conversationResume: { modelMismatchBehavior: 'ask', restoreLastWorkspaceOnStartup: true },
     language: 'zh-CN',
     launchAtLogin: false,
     theme: 'claude',
@@ -679,6 +738,34 @@ const runDetectorCalibration = async (window) => {
         right === 'layout-detector-calibration-front',
     );
   return detectorCalibrationPassed;
+};
+
+const inspectConversationModelDialog = async (window, width, height) => {
+  await window.webContents.executeJavaScript(showConversationModelStressFixture);
+  await new Promise((resolve) => setTimeout(resolve, 420));
+  const top = {
+    height,
+    page: 'connection:conversation-model-dialog-top',
+    width,
+    ...(await window.webContents.executeJavaScript(inspectLayout)),
+  };
+  await window.webContents.executeJavaScript(`
+    (() => {
+      const form = document.querySelector('#conversation-model-dialog form');
+      form.scrollTop = form.scrollHeight;
+    })()
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const bottom = {
+    height,
+    page: 'connection:conversation-model-dialog-bottom',
+    width,
+    ...(await window.webContents.executeJavaScript(inspectLayout)),
+  };
+  await window.webContents.executeJavaScript(`
+    document.querySelector('#conversation-model-dialog').close();
+  `);
+  return [top, bottom];
 };
 
 const collectScenarios = async (window) => {
@@ -762,6 +849,7 @@ const collectScenarios = async (window) => {
         await window.webContents.executeJavaScript(`
           document.querySelector('#connection-history-dialog').close();
         `);
+        results.push(...(await inspectConversationModelDialog(window, width, height)));
         await window.webContents.executeJavaScript(showConnectionHistoryRecoveryFixture);
         results.push({
           height,
@@ -902,7 +990,7 @@ app.whenReady().then(async () => {
   await window.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
   const detectorCalibrationPassed = await runDetectorCalibration(window);
   const results = await collectScenarios(window);
-  const expectedScenarios = sizes.length * 17;
+  const expectedScenarios = sizes.length * 19;
   const failures = results.filter(
     (result) =>
       result.documentOverflow ||

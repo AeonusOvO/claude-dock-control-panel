@@ -3,6 +3,7 @@ import path from 'node:path';
 import type {
   ClaudeContextWindowMode,
   CloseBehavior,
+  ConversationResumePreferences,
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
 } from '../../shared/contracts';
@@ -13,6 +14,7 @@ export interface AppPreferences {
   claudeContextWindowMode: ClaudeContextWindowMode;
   closeBehavior: CloseBehavior;
   closeToTrayNoticeShown: boolean;
+  conversationResume: ConversationResumePreferences;
   footerResourcePreference: FooterResourcePreference;
   managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
 }
@@ -25,6 +27,10 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   claudeContextWindowMode: 'auto',
   closeBehavior: 'tray',
   closeToTrayNoticeShown: false,
+  conversationResume: {
+    modelMismatchBehavior: 'ask',
+    restoreLastWorkspaceOnStartup: true,
+  },
   footerResourcePreference: 'auto',
   managedChatGptContextWindowMode: 'standard',
 };
@@ -68,7 +74,12 @@ export class AppPreferencesStore {
   public get(): AppPreferences {
     this.migrateLegacyStorage();
     const parsed = this.read(this.storagePath);
-    return parsed ?? { ...DEFAULT_PREFERENCES };
+    return (
+      parsed ?? {
+        ...DEFAULT_PREFERENCES,
+        conversationResume: { ...DEFAULT_PREFERENCES.conversationResume },
+      }
+    );
   }
 
   public set(patch: Partial<AppPreferences>): AppPreferences {
@@ -77,6 +88,7 @@ export class AppPreferencesStore {
     if (
       (next.closeBehavior !== 'exit' && next.closeBehavior !== 'tray') ||
       typeof next.closeToTrayNoticeShown !== 'boolean' ||
+      !isConversationResumePreferences(next.conversationResume) ||
       !['auto', 'context', 'quota'].includes(next.footerResourcePreference) ||
       (next.managedChatGptContextWindowMode !== 'standard' &&
         next.managedChatGptContextWindowMode !== 'extended') ||
@@ -140,6 +152,7 @@ export class AppPreferencesStore {
         claudeContextWindowMode?: unknown;
         closeBehavior?: unknown;
         closeToTrayNoticeShown?: unknown;
+        conversationResume?: unknown;
         footerResourcePreference?: unknown;
         managedChatGptContextWindowMode?: unknown;
         version?: unknown;
@@ -168,6 +181,7 @@ export class AppPreferencesStore {
               : claudeContextWindowMode,
           closeBehavior: parsed.closeBehavior,
           closeToTrayNoticeShown: parsed.closeToTrayNoticeShown,
+          conversationResume: normalizeConversationResumePreferences(parsed.conversationResume),
           footerResourcePreference:
             parsed.footerResourcePreference === 'context' ||
             parsed.footerResourcePreference === 'quota'
@@ -183,3 +197,21 @@ export class AppPreferencesStore {
     return null;
   }
 }
+
+const isConversationResumePreferences = (
+  value: unknown,
+): value is ConversationResumePreferences => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.modelMismatchBehavior === 'ask' ||
+      record.modelMismatchBehavior === 'use-conversation' ||
+      record.modelMismatchBehavior === 'use-current') &&
+    typeof record.restoreLastWorkspaceOnStartup === 'boolean'
+  );
+};
+
+const normalizeConversationResumePreferences = (value: unknown): ConversationResumePreferences =>
+  isConversationResumePreferences(value)
+    ? { ...value }
+    : { ...DEFAULT_PREFERENCES.conversationResume };

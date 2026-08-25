@@ -215,6 +215,57 @@ describe('ClaudeConnectionHistoryStore', () => {
     expect(entries[0]?.modelFast).toBe('glm-4.6');
   });
 
+  it('keeps a direct route id in replay and treats another relay as a different setup', () => {
+    const { store } = createStore();
+    const first = {
+      ...gatewayConfig({ routerProviderId: 'relay-a' }),
+      routerProviderId: 'relay-a',
+    };
+    const [entry] = store.record(CWD, first);
+
+    expect(store.toSaveInput(CWD, entry?.id ?? '')).toMatchObject({
+      routerProviderId: 'relay-a',
+    });
+    expect(store.record(CWD, { ...first, routerProviderId: 'relay-b' })).toHaveLength(2);
+    expect(
+      store.findReplayForCurrent(CWD, {
+        apiKeyHelperPolicy: 'prefer-claudedock',
+        authMode: 'apiKey',
+        baseUrl: 'http://127.0.0.1:3456',
+        credentialConfigured: true,
+        model: 'glm-4.6',
+        preset: 'gateway',
+        protocol: 'anthropic',
+        provider: 'gateway',
+        routerProviderId: 'relay-a',
+      }),
+    ).toBeDefined();
+    expect(
+      store.findReplayForCurrent(CWD, {
+        apiKeyHelperPolicy: 'prefer-claudedock',
+        authMode: 'apiKey',
+        baseUrl: 'http://127.0.0.1:3456',
+        credentialConfigured: true,
+        model: 'glm-4.6',
+        preset: 'gateway',
+        protocol: 'anthropic',
+        provider: 'gateway',
+        routerProviderId: 'relay-missing',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('does not infer an ambiguous legacy conversation from a shared model name', () => {
+    const { store } = createStore();
+    store.record(CWD, gatewayConfig({ baseUrl: 'https://relay-a.example.com' }));
+    store.record(CWD, {
+      ...gatewayConfig({ baseUrl: 'https://relay-b.example.com' }),
+      credential: 'sk-another-key',
+    });
+
+    expect(store.findReplayForModel(CWD, 'glm-4.6')).toBeUndefined();
+  });
+
   it('treats the upstream protocol as part of the saved connection', () => {
     const { store } = createStore();
 

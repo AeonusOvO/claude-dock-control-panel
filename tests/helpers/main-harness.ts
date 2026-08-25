@@ -210,6 +210,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     recoverInterruptedRouterInstall: vi.fn(async () => undefined),
     releaseNativeConversation: vi.fn(),
     setConversationLaunchGuard: vi.fn(() => calls.push('claude.setConversationLaunchGuard')),
+    setConversationModelResolvers: vi.fn(() => calls.push('claude.setConversationModelResolvers')),
     setLaunchAdmissionGuard: vi.fn(() => calls.push('claude.setLaunchAdmissionGuard')),
     setPermissionRequestHook: vi.fn(() => calls.push('claude.setPermissionRequestHook')),
     setRuntimeActivityHandler: vi.fn(() => calls.push('claude.setRuntimeActivityHandler')),

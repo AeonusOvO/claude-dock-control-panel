@@ -10,12 +10,14 @@ import {
 import { createFailureReporter } from '../infra/logger';
 import type { Registry } from '../infra/registry';
 import { NATIVE_CONVERSATION_SERVICE } from '../infra/service-tokens';
+import type { ConversationOwnerRegistry } from '../conversation/owner-registry';
 import type { DescribeWorkspace, TerminalWorkspace } from '../terminal/workspace';
 import type { WorkspaceStore } from '../stores/workspace';
 import { validateProjectPath, validateSessionId } from './validation';
 import type { MainGuards } from './guards';
 
 export interface SessionIpcDependencies {
+  conversationOwnerRegistry: ConversationOwnerRegistry;
   /* Deleting a transcript also has to unwind terminal and native ownership, which the assembly owns. */
   deleteClaudeConversation: (
     cwd: string,
@@ -32,6 +34,7 @@ export interface SessionIpcDependencies {
 const reportSessionFailure = createFailureReporter('conversation');
 
 export const registerSessionIpc = ({
+  conversationOwnerRegistry,
   deleteClaudeConversation,
   describeWorkspace,
   guards: { requireClaudeRuntime, validateSender },
@@ -56,6 +59,12 @@ export const registerSessionIpc = ({
     const validatedSessionId = validateSessionId(sessionId);
     const status = workspace.getStatus(validatedSessionId);
     const active = services.resolve(NATIVE_CONVERSATION_SERVICE).activeConversationIds(status.cwd);
+    for (const conversationId of conversationOwnerRegistry.activeConversationIds(
+      'claude',
+      status.cwd,
+    )) {
+      active.add(conversationId);
+    }
     return sessionManager
       .getSessionsForProject(status.cwd)
       .filter((session) => !active.has(session.conversationId.toLowerCase()));
@@ -66,6 +75,12 @@ export const registerSessionIpc = ({
     const active = services
       .resolve(NATIVE_CONVERSATION_SERVICE)
       .activeConversationIds(validatedProjectPath);
+    for (const conversationId of conversationOwnerRegistry.activeConversationIds(
+      'claude',
+      validatedProjectPath,
+    )) {
+      active.add(conversationId);
+    }
     return sessionManager
       .getSessionsForProject(validatedProjectPath)
       .filter((session) => !active.has(session.conversationId.toLowerCase()));
