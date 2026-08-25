@@ -18,6 +18,16 @@ const setup = `
     page.classList.remove('rail-page--active');
   }
   document.querySelector('[data-rail-page="connection"]').classList.add('rail-page--active');
+  const choiceStep = document.querySelector('[data-connection-wizard-step="choice"]');
+  const configureStep = document.querySelector('[data-connection-wizard-step="configure"]');
+  choiceStep.hidden = true;
+  choiceStep.classList.remove('connection-wizard-step--active', 'connection-wizard-step--leaving');
+  configureStep.hidden = false;
+  configureStep.classList.remove('connection-wizard-step--leaving');
+  configureStep.classList.add('connection-wizard-step--active');
+  configureStep.style.animation = 'none';
+  delete document.querySelector('#connection-wizard-viewport').dataset.direction;
+  configureStep.prepend(document.querySelector('#connection-history'));
 
   const list = document.querySelector('#connection-history-list');
   const empty = document.querySelector('#connection-history-empty');
