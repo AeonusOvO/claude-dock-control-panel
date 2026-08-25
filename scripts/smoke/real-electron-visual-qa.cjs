@@ -201,6 +201,7 @@ const main = async () => {
           queuedState: queued?.dataset.state ?? '(missing)',
           sendAction: send?.dataset.action ?? '(missing)',
           sendDisabled: send?.disabled ?? '(missing)',
+          sendMotion: window.__claudeDockQaSendMotion ?? '(unset)',
           sendSending: send?.dataset.sending ?? '(unset)',
           status: document.querySelector('#native-composer-status')?.textContent ?? '(missing)',
           toast: document.querySelector('#toast')?.textContent ?? '(missing)',
@@ -425,21 +426,38 @@ const main = async () => {
       // every other fake response resolves inside the submitting tick.
       await click('#native-composer-input');
       await client.call('Input.insertText', { text: `[fixture:hold] ${theme} 发送动效核对` });
-      await click('#native-send');
-      await waitFor(
-        `() => document.querySelector('#native-send')?.dataset.sending === 'true'`,
-        `${theme} send confirmation motion`,
-      );
+      const expectedSendAnimation =
+        theme === 'claude'
+          ? 'nativeClaudeSendConfirm'
+          : theme === 'telegram'
+            ? 'nativeTelegramSendConfirm'
+            : undefined;
       await evaluate(`(() => {
         const button = document.querySelector('#native-send');
-        for (const animation of button?.getAnimations({ subtree: true }) ?? []) {
-          const duration = animation.effect?.getTiming().duration;
-          if (typeof duration !== 'number') continue;
-          animation.pause();
-          animation.currentTime = duration * 0.5;
-        }
+        window.__claudeDockQaSendMotionObserver?.disconnect();
+        const record = { names: [], seen: false };
+        window.__claudeDockQaSendMotion = record;
+        const observer = new MutationObserver(() => {
+          if (button.dataset.sending !== 'true') return;
+          observer.disconnect();
+          const animations = button.getAnimations({ subtree: true });
+          record.seen = true;
+          record.names = animations.map((animation) => animation.animationName ?? '(unnamed)');
+          for (const animation of animations) {
+            const duration = animation.effect?.getTiming().duration;
+            animation.pause();
+            if (typeof duration === 'number') animation.currentTime = duration * 0.5;
+          }
+        });
+        observer.observe(button, { attributeFilter: ['data-sending'], attributes: true });
+        window.__claudeDockQaSendMotionObserver = observer;
         return true;
       })()`);
+      await click('#native-send');
+      await waitFor(
+        `() => window.__claudeDockQaSendMotion?.seen === true && ${expectedSendAnimation ? `window.__claudeDockQaSendMotion.names.includes(${JSON.stringify(expectedSendAnimation)})` : 'true'} && document.querySelector('#native-send')?.dataset.sending === 'true'`,
+        `${theme} send confirmation motion`,
+      );
       await capture(
         `${theme}-send-mid.png`,
         { animation: 'send-mid', interaction: 'send', theme },
