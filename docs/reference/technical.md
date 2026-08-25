@@ -1,13 +1,10 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.16（2026-08-24）。本候选版把网络结果拆成
-`providerConnectivity` 与 `advisoryEvidence` 两个独立 authority：精确 Provider 端点的
-DNS/TLS/HTTP/重定向/内容替换/application/CLI/必需 WebSocket 决定可用性，公网地址、DNS 对照、
-IPv6、STUN、接口、环境与信誉只形成目标限定的建议证据。终端粘贴统一为 generation-owned
-`Terminal.paste()`，xterm `onData()` 是唯一 PTY 写入路径；右键在 capture 阶段先于 Chromium/xterm
-接管。renderer 的 Claude 启动、预检、插件刷新、runtime 切换、终端控制和 Codex 操作使用 owner token
-驱动即时文案、`aria-busy` 与 stale-settlement fencing。runtime selector 改用带来源和哈希的本地官方
-Anthropic Clay Spark 与 OpenAI 黑/白 Blossom；`LICENSE`、`NOTICE` 和精简社区文件进入发布契约。
+当前架构版本：5.0.0-rc.17（2026-08-24）。本候选版引入版本化工作区启动引导，以 main 进程持久化状态、
+类型化 IPC 与 renderer feature 分片共同维护“选择路径、自动准备、打开项目、准备完成”四步事务；旧用户迁移、
+跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
+使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
+继续由设计 token 与行为门禁统一约束。
 
 renderer 入口继续保持 feature-sliced shell/platform 注册架构，IPC 的 channel/schema/preload 桥是单一
 事实源，main 通过运行期注册表与 contribution 装配，lint 与 dependency-cruiser 维持零警告门禁
