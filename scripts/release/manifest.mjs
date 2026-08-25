@@ -24,6 +24,7 @@ export const defaultProjectRoot = path.resolve(
 const byproductNames = new Set([
   '.gitkeep',
   'builder-debug.yml',
+  'builder-effective-config.yaml',
   'production-smoke-appdata',
   'release-manifest.json',
   'release-orchestration.json',
@@ -470,13 +471,32 @@ export const resolveReleaseChannel = (packageManifest) => {
 const authenticodeStatus = (filePath) => {
   if (process.platform !== 'win32') return 'unavailable';
   try {
+    const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows';
+    const powershellExecutable = path.join(
+      windowsRoot,
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    const securityModulePath = path.join(
+      windowsRoot,
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'Modules',
+      'Microsoft.PowerShell.Security',
+      'Microsoft.PowerShell.Security.psd1',
+    );
     const escapedPath = filePath.replaceAll("'", "''");
+    const escapedModulePath = securityModulePath.replaceAll("'", "''");
     return execFileSync(
-      'powershell',
+      powershellExecutable,
       [
         '-NoProfile',
+        '-NonInteractive',
         '-Command',
-        `(Get-AuthenticodeSignature -LiteralPath '${escapedPath}').Status`,
+        `Import-Module -Name '${escapedModulePath}' -Force; (Get-AuthenticodeSignature -LiteralPath '${escapedPath}').Status.ToString()`,
       ],
       { encoding: 'utf8' },
     ).trim();

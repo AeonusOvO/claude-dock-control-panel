@@ -152,6 +152,7 @@ describe('release manifest validation', () => {
 
   it('validates the exact installer, blockmap, RC manifest, digest chain, and report fields', () => {
     const fixture = createReleaseFixture();
+    writeFileSync(path.join(fixture.output, 'builder-effective-config.yaml'), 'debug: true\n');
     const result = validateFixture(fixture.root, fixture.output, true);
 
     expect(result.manifest).toMatchObject({
