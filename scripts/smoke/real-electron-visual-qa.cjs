@@ -13,14 +13,29 @@ const isolatedRoot = path.join(
   `run-${Date.now().toString(36)}`,
 );
 const userData = path.join(isolatedRoot, 'userData');
+const appPreferences = path.join(userData, 'app-preferences');
 const fakeHome = path.join(isolatedRoot, 'home');
 const projects = path.join(isolatedRoot, 'projects');
 const projectPath = path.join(projects, 'native-conversation-visual-project');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
 
-for (const directory of [outputRoot, userData, fakeHome, projects, projectPath]) {
+for (const directory of [outputRoot, userData, appPreferences, fakeHome, projects, projectPath]) {
   mkdirSync(directory, { recursive: true });
 }
+writeFileSync(
+  path.join(appPreferences, 'onboarding.json'),
+  `${JSON.stringify(
+    {
+      completedSteps: [],
+      currentStep: 'engine',
+      flowVersion: 2,
+      status: 'pending',
+      version: 2,
+    },
+    null,
+    2,
+  )}\n`,
+);
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -323,20 +338,19 @@ const main = async () => {
     // close to finish, and verify the workbench is no longer inert before touching controls beneath
     // it. Coordinate-only clicks used to tunnel through this layer and made the first capture look
     // actionable even though a person could not reach the launch button.
-    const firstRunGuideOpen = await evaluate(
-      `document.querySelector('#onboarding-shell')?.dataset.state === 'open'`,
+    await waitFor(
+      `() => document.querySelector('#onboarding-shell')?.dataset.state === 'open' && document.querySelector('#control-panel')?.inert === true`,
+      'the seeded first-run guide to open and isolate the workbench',
     );
-    if (firstRunGuideOpen) {
-      await capture('onboarding-first-run-real.png', {
-        interaction: 'first-run-guide',
-        theme: await evaluate(`document.documentElement.dataset.theme`),
-      });
-      await click('#onboarding-dismiss');
-      await waitFor(
-        `() => document.querySelector('#onboarding-shell')?.hidden === true && document.querySelector('#control-panel')?.inert === false`,
-        'the first-run guide to finish closing and release the workbench',
-      );
-    }
+    await capture('onboarding-first-run-real.png', {
+      interaction: 'first-run-guide',
+      theme: await evaluate(`document.documentElement.dataset.theme`),
+    });
+    await click('#onboarding-dismiss');
+    await waitFor(
+      `() => document.querySelector('#onboarding-shell')?.hidden === true && document.querySelector('#control-panel')?.inert === false`,
+      'the first-run guide to finish closing and release the workbench',
+    );
     await evaluate(
       `(async () => window.controlPanel.addProject(${JSON.stringify(projectPath)}))()`,
     );
