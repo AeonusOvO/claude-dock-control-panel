@@ -1,0 +1,285 @@
+/*
+ * Connection history has two surfaces with one information architecture: the compact, source-
+ * filtered list in the wizard and the complete four-source library in this modal. Everything is
+ * token-driven so the scrim, glass, type and motion inherit the active theme without overrides.
+ */
+.connection-heading--with-action {
+  align-items: start;
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.connection-heading__copy {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.connection-history-trigger {
+  align-self: start;
+  border-color: var(--line-strong);
+  gap: var(--s-2);
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.connection-history-trigger svg {
+  height: 16px;
+  width: 16px;
+}
+
+.connection-history-dialog {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  max-height: calc(100vh - var(--s-6));
+  max-width: none;
+  overflow: visible;
+  padding: 0;
+  width: min(980px, calc(100vw - var(--s-8)));
+}
+
+.connection-history-dialog__shell {
+  background: color-mix(in srgb, var(--surface-2) 94%, transparent);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-overlay);
+  container-name: connection-history-dialog;
+  container-type: inline-size;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  max-height: calc(100vh - var(--s-6));
+  min-height: min(700px, calc(100vh - var(--s-6)));
+  overflow: hidden;
+}
+
+.connection-history-dialog__header {
+  align-items: start;
+  border-bottom: 1px solid var(--line-subtle);
+  display: flex;
+  gap: var(--s-4);
+  justify-content: space-between;
+  padding: var(--s-5) var(--s-5) var(--s-4);
+}
+
+.connection-history-dialog__header > div {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.connection-history-dialog__header strong {
+  color: var(--text-hi);
+  font-size: var(--type-title-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--type-title-ls);
+  line-height: var(--type-title-lh);
+}
+
+.connection-history-dialog__header p {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-prose);
+  margin: 0;
+}
+
+.connection-history-dialog__header .icon-button {
+  flex: 0 0 auto;
+}
+
+.connection-history-tabs {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--r-pill);
+  display: grid;
+  gap: var(--s-1);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: var(--s-4) var(--s-5) var(--s-2);
+  padding: var(--s-1);
+}
+
+.connection-history-tabs button {
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-pill);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-medium);
+  min-height: var(--control-h-md);
+  overflow: hidden;
+  padding: 0 var(--s-3);
+  text-overflow: ellipsis;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-3) var(--ease-decel),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+  white-space: nowrap;
+}
+
+.connection-history-tabs button:hover {
+  background: var(--layer-hover);
+  color: var(--text);
+}
+
+.connection-history-tabs button[aria-selected='true'] {
+  background: var(--surface-3);
+  box-shadow: var(--sheen);
+  color: var(--accent-text);
+}
+
+.connection-history-dialog__viewport {
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--s-2) 0;
+}
+
+/*
+ * All four panels remain laid out in one track. Changing category therefore moves the existing
+ * surface itself instead of destroying one list and fading another into its place. The spring
+ * curve preserves direction and momentum, while the viewport clips only the off-screen panels.
+ */
+.connection-history-dialog__track {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  transform: translate3d(0, 0, 0);
+  transition: transform var(--dur-4) var(--ease-spring);
+  will-change: transform;
+}
+
+.connection-history-dialog__panel {
+  display: grid;
+  flex: 0 0 100%;
+  gap: var(--s-3);
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  padding: 0 var(--s-5);
+}
+
+.connection-history-dialog__panel-heading {
+  align-items: baseline;
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+}
+
+.connection-history-dialog__panel-heading strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+}
+
+.connection-history-dialog__panel-heading span,
+.connection-history-dialog__empty,
+.connection-history-dialog__footer > span {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+}
+
+.connection-history-dialog__empty {
+  align-content: center;
+  background: var(--surface-inset);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-lg);
+  display: grid;
+  justify-items: center;
+  margin: 0;
+  min-height: 220px;
+  padding: var(--s-5);
+  text-align: center;
+}
+
+.connection-history-dialog__empty[hidden] {
+  display: none;
+}
+
+.connection-history-dialog__list {
+  align-content: start;
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: none;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 var(--s-2) var(--s-1) 0;
+  scrollbar-gutter: stable;
+}
+
+.connection-history-dialog__list[hidden] {
+  display: none;
+}
+
+.connection-history__list[aria-busy='true'] {
+  opacity: 0.64;
+  transition: opacity var(--dur-2) var(--ease-standard);
+}
+
+.connection-history-dialog__list .connection-history__item {
+  min-height: 190px;
+}
+
+.connection-history-dialog__footer {
+  align-items: center;
+  border-top: 1px solid var(--line-subtle);
+  display: flex;
+  gap: var(--s-4);
+  justify-content: space-between;
+  padding: var(--s-3) var(--s-5);
+}
+
+.connection-history-dialog__footer .button {
+  border-radius: var(--r-pill);
+  min-width: 96px;
+}
+
+@container connection-history-dialog (max-width: 800px) {
+  .connection-history-dialog__header {
+    padding: var(--s-4);
+  }
+
+  .connection-history-tabs {
+    display: flex;
+    margin: var(--s-3) var(--s-4) var(--s-2);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .connection-history-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .connection-history-tabs button {
+    flex: 0 0 auto;
+    min-width: 136px;
+  }
+
+  .connection-history-dialog__panel {
+    padding: 0 var(--s-4);
+  }
+
+  .connection-history-dialog__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-history-dialog__footer {
+    padding: var(--s-3) var(--s-4);
+  }
+}
+
+@container connection-history-dialog (max-width: 480px) {
+  .connection-history-dialog__header p,
+  .connection-history-dialog__footer > span {
+    display: none;
+  }
+
+  .connection-history-dialog__footer {
+    justify-content: end;
+  }
+}

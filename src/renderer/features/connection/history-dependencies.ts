@@ -3,10 +3,13 @@ import type {
   ClaudeProjectState,
   TerminalStatus,
 } from '../../../shared/contracts';
+import type { ConnectionModelSource } from './history-source';
 
 export interface ConnectionHistoryState {
+  allEntries: ClaudeConnectionHistoryEntry[];
   entries: ClaudeConnectionHistoryEntry[];
   mutationInProgress: boolean;
+  selectedSource: ConnectionModelSource | undefined;
   targetId: string;
 }
 

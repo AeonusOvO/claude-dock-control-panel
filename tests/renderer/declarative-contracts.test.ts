@@ -63,7 +63,7 @@ describe('exported behavior and declarative UI contracts', () => {
   });
 
   it('keeps confirmation and IME focus inside the renderer across window activation', () => {
-    expect(harness.document.querySelectorAll('dialog.popover')).toHaveLength(11);
+    expect(harness.document.querySelectorAll('dialog.popover')).toHaveLength(12);
     expect(harness.query('#confirmation-dialog').getAttribute('aria-labelledby')).toBe(
       'confirmation-dialog-title',
     );
@@ -112,6 +112,11 @@ describe('exported behavior and declarative UI contracts', () => {
     const config = harness.query('#claude-config-form');
     expect(history.compareDocumentPosition(config) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(config.textContent).toContain('小型/备用模型标识');
+    expect(harness.query('#open-connection-history').getAttribute('aria-haspopup')).toBe('dialog');
+    expect(harness.query('#connection-history-dialog')).toBeInstanceOf(HTMLDialogElement);
+    expect(harness.document.querySelectorAll('#connection-history-tabs [role="tab"]')).toHaveLength(
+      4,
+    );
   });
 
   it('labels connection protocol and route while supporting contextual renaming', () => {
@@ -136,7 +141,10 @@ describe('exported behavior and declarative UI contracts', () => {
       /\.access-choice-card\s*\{[^}]*min-height:\s*clamp\(128px, 13vh, 152px\)[^}]*padding:\s*clamp\(/u,
     );
     expectCss(
-      /@media \(max-width: 1024px\)\s*\{[^}]*\.connection-wizard-actions\s*\{[^}]*bottom:\s*auto;[^}]*position:\s*relative;/u,
+      /\.provider-picker\s*\{[^}]*display:\s*grid;[^}]*gap:\s*clamp\(var\(--s-5\), 3vw, var\(--s-8\)\)/u,
+    );
+    expect(rendererStyles).not.toMatch(
+      /@media \(max-width: 1024px\)\s*\{[^}]*\.connection-wizard-actions\s*\{[^}]*position:\s*relative/u,
     );
   });
 

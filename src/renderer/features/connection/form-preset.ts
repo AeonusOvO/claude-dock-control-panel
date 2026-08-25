@@ -46,6 +46,7 @@ export const createConnectionFormPresetActions = (
   moveProviderTools: (providerId?: ClaudeProviderId) => void,
   renderProviderPicker: () => void,
   syncConnectionInteractivity: () => void,
+  notifySelectedProviderChanged: () => void,
 ): ConnectionFormPresetActions => {
   const applyPresetUi = (preset: ClaudePreset, preserveValues: boolean): void => {
     const provider = findClaudeProvider(preset) ?? findClaudeProvider('custom');
@@ -173,6 +174,7 @@ export const createConnectionFormPresetActions = (
     moveProviderTools(provider.id);
     renderProviderPicker();
     syncConnectionInteractivity();
+    notifySelectedProviderChanged();
   };
 
   return {

@@ -186,18 +186,25 @@
   }
 }
 
-/* A bottom-sticky element is pulled upward before reaching its normal flow position. In compact
- * windows that would place the glass capsule over the second provider row. Return it to flow while
- * preserving the same themed capsule, so every card remains fully readable and the actions follow
- * the content instead of covering it. */
-@media (max-width: 1024px) {
-  .connection-wizard-actions {
-    bottom: auto;
-    position: relative;
-  }
-}
-
 @media (max-width: 720px) {
+  .connection-heading--with-action {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-history-trigger {
+    justify-self: start;
+  }
+
+  .connection-history-dialog {
+    max-height: calc(100vh - var(--s-3));
+    width: calc(100vw - var(--s-3));
+  }
+
+  .connection-history-dialog__shell {
+    max-height: calc(100vh - var(--s-3));
+    min-height: min(640px, calc(100vh - var(--s-3)));
+  }
+
   .connection-wizard-progress {
     gap: var(--s-2);
     grid-template-columns: minmax(0, 1fr) var(--s-5) minmax(0, 1fr);
@@ -220,6 +227,10 @@
   .access-choice-grid,
   .domestic-model-picker {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .provider-picker {
+    gap: clamp(var(--s-4), 4.5vw, var(--s-5));
   }
 
   .connection-wizard-actions > span {

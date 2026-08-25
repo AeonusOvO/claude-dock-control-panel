@@ -7,6 +7,7 @@
 @import './styles/views/chat.css';
 @import './styles/views/markdown.css';
 @import './styles/views/router.css';
+@import './styles/views/connection-history.css';
 @import './styles/views/mcp.css';
 @import './styles/views/settings.css';
 @import './styles/views/onboarding.css';

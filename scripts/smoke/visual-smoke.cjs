@@ -786,6 +786,24 @@ app
     document.querySelector('#connection-history-empty').hidden = true;
     document.querySelector('#connection-history-count').textContent =
       '1 条历史配置 · 点击恢复全部参数';
+    const historyDialogList = document.querySelector('[data-history-dialog-list="api"]');
+    historyDialogList.replaceChildren(
+      ...Array.from({ length: 4 }, (_, index) => {
+        const clone = historyItem.cloneNode(true);
+        clone.querySelector('strong').textContent = [
+          '研发中转站',
+          '本机 Claude Code Router',
+          '团队 OpenAI 网关',
+          '备用 API 路由',
+        ][index];
+        return clone;
+      }),
+    );
+    historyDialogList.hidden = false;
+    document.querySelector('[data-history-dialog-empty="api"]').hidden = true;
+    document.querySelector('[data-history-dialog-count="api"]').textContent = '4 条';
+    document.querySelector('#connection-history-dialog-summary').textContent =
+      '当前项目共 4 条接入记录';
     document.querySelector('.control-panel').scrollTop = 0;
     document.querySelector('[data-rail-page="connection"]').style.animation = 'none';
     for (const button of document.querySelectorAll('[data-rail-tab]')) {
@@ -867,6 +885,47 @@ app
       path.join(outputDirectory, 'connection-history-1180.png'),
       (await captureSettledPage()).toPNG(),
     );
+
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const dialog = document.querySelector('#connection-history-dialog');
+        document.querySelector('#open-connection-history').click();
+        if (!dialog.open) dialog.showModal();
+        document.querySelector('#connection-history-dialog-track').style.transform =
+          'translate3d(-300%, 0, 0)';
+        for (const tab of document.querySelectorAll('#connection-history-tabs [role="tab"]')) {
+          const selected = tab.dataset.historyCategory === 'api';
+          tab.setAttribute('aria-selected', String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+        }
+        for (const panel of document.querySelectorAll('#connection-history-dialog [role="tabpanel"]')) {
+          const selected = panel.dataset.historyCategory === 'api';
+          panel.setAttribute('aria-hidden', String(!selected));
+          panel.toggleAttribute('inert', !selected);
+        }
+      })();
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 420));
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      writeFileSync(
+        path.join(outputDirectory, `connection-history-dialog-${themeId}-1180.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+    }
+    window.setSize(820, 640);
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    writeFileSync(
+      path.join(outputDirectory, 'connection-history-dialog-claude-820.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    window.setSize(1180, 760);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#connection-history-dialog').close();
+    `);
 
     await window.webContents.executeJavaScript(`
     document.querySelector('#connection-advanced-dialog').showModal();

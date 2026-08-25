@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.19（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.20（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -1205,7 +1205,20 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   overflow 可见，避免裁切主题阴影、`:focus-visible` 和横向退场帧；最外层 control panel 继续承担页面级
   横向 containment。底部 sticky 操作区使用三列 pill grid、主题 `--mask-blur` backdrop filter 和半透明
   表面 fallback，状态列可收缩换行，按钮在窄 viewport 保留一致 caption 字号与 `--control-h-md` 高度；
-  1024px 以下恢复正常文档流，防止 bottom-sticky 把胶囊提前拉到第二排卡片上方造成遮挡。
+  各 viewport 宽度都保持 bottom-sticky，由向导 viewport 底部安全区避免遮挡最后一排卡片。切换步骤时，
+  renderer 在 DOM 重排前后读取胶囊 `getBoundingClientRect()`，将视口对齐纳入 Last 位置后，通过 Web
+  Animations 从反向位移到零；关键帧只包含 `transform`，时长与缓动取 `--dur-4` / `--ease-spring`。新步骤在
+  减少动态效果下直接落位，快速往返或功能销毁会先取消旧 Animation，避免迟到的完成事件清理新状态。
+- `history-source.ts` 只依据历史记录的 `preset` 分类，不能按协议、显示地址或 Router 端点猜测来源：
+  `anthropic` 属于 Claude 官方订阅，`chatgpt-subscription` 属于 ChatGPT 官方订阅，provider 目录中
+  `domestic` 分组属于国产模型，其余已知/旧版/自定义记录都进入 API / 中转站。history state 同时保留
+  `allEntries` 与按当前 provider 派生的 `entries`；保存、恢复、重命名和删除先替换完整列表，再重算
+  内联列表，不能把切换来源误写成删除历史。
+- `history-dialog.ts` 使用原生 `showModal()`、规范 `dialog::backdrop` 高斯遮罩和四块常驻 panel。分类切换
+  只改变整条 track 的 `translate3d`，tab 使用 roving `tabindex` 并支持左右/Home/End；非活动 panel 同时
+  设置 `inert` 与 `aria-hidden`。弹窗 active source 与表单 selected source 分离，打开时才以当前来源作为
+  初始分类。历史右键菜单打开期间移入 dialog 顶层，关闭时隐藏并还原到 `body`；所有内联/弹窗副本共享
+  同一 IPC mutation 和 busy 状态，不维护第二份记录。
 - `ManagedChatGptSetupProgress.interruptible` 由 main 在发送进度时给出，当前只允许 OAuth `logging-in`
   阶段取消。renderer 同时核对 session scope；可取消时调用无参数
   `cancelManagedChatGptGatewaySetup`，主进程的 `ManagedChatGptGateway.cancelSetup()` 再检查实际仍处于
@@ -1217,7 +1230,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   内所有 `input/select/textarea` 的值与勾选状态；“取消”、关闭按钮和 `Esc` 恢复快照，
   “完成”保留当前输入。Router 安装/卸载/启停与 Provider 保存仍走既有即时 IPC，不能伪装
   成可回滚事务，界面在操作区上方明确说明这一边界。接入历史不属于高级诊断工具，因此不进入
-  快照范围，也不会随 Router/cURL 工具节点移动。
+  设置快照范围，也不会随 Router/cURL 工具节点移动；右上角分类历史弹窗仍属于接入主流程入口。
 - 应用级非即时设置另有 `savedAppSettings` 基线。renderer 只在控件变化时比较开机启动、关闭行为、
   主题、对话静默超时与联网检索隔离五个字段，实时计算 `*N 项未保存`；主题可本地预览但不调用
   IPC。点击“完成”才按变化字段调用现有 setter，取消/关闭/Esc 恢复基线。首帧
@@ -2166,9 +2179,10 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   模型字符规则、外链可解析、上次官方/国内/自定义选择只展开对应组及
   Kimi/SiliconFlow/Ollama 特例；
   `tests/shared/claude-connection-remedy.test.ts` 覆盖认证、路径、模型、环境和 Router 修复动作。
-- `npm run test:layout` 使用隐藏 Electron 窗口在 820×640、900×640、1180×760 三种尺寸
-  轮换项目/对话/接入、插件的已安装/可安装/市场三个面板、工作台三页、收起控制栏和全局设置
-  两个分类，并加入富文本长内容、附件与 Artifact 抽屉压力态，共 42 个场景；检查交互控件
+- `npm run test:layout` 使用隐藏 Electron 窗口在 720×640、820×640、900×640、1024×640、
+  1180×760、1280×760 六种尺寸轮换项目/对话/接入、分类接入历史弹窗、插件的已安装/可安装/市场
+  三个面板、工作台三页、收起控制栏和全局设置两个分类，并加入富文本长内容、附件与 Artifact 抽屉
+  压力态，共 96 个场景；检查交互控件
   矩形相交、`elementFromPoint` 命中对象、关键容器
   横向溢出和文档级 overflow。扫描会识别滚动裁剪祖先，避免把模态内容区外不可见的控件误判
   为覆盖固定底栏；同一自绘 select 的原生层/视觉层、遮罩层与抽屉的有意叠放不计为控件重叠，
@@ -2178,7 +2192,8 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。收起
   控制栏场景在测试窗口内同步关闭过渡后检查最终几何，避免隐藏 CI 窗口节流 CSS transition 时把
   中间帧误报为遮挡；这不会修改应用运行时样式。
-- `npm run test:visual` 保留插件、服务商向导、历史配置、全局设置、连接测试、终端聚焦态、
+- `npm run test:visual` 保留插件、服务商向导、内联历史配置、四主题分类历史弹窗及其 820px 单列态、
+  全局设置、连接测试、终端聚焦态、
   Codex 三步工作台、代理/路由设置页与 MCP 管理页，
   独立对话详情抽屉与重命名弹窗回归图，并生成四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵
   PNG，以及四主题 MCP、代理和路由截图到 `dist/visual-qa/`。富文本对话矩阵主动聚焦输入框，

@@ -2291,7 +2291,7 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
 }
 
 .command-intro strong,
-.connection-heading strong {
+.connection-heading__copy > strong {
   color: var(--text-hi);
   font-size: var(--type-body-size);
   font-weight: var(--fw-medium);
@@ -2300,7 +2300,7 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
 }
 
 .command-intro span,
-.connection-heading span {
+.connection-heading__copy > span {
   color: var(--text-dim);
   font-size: var(--type-body-size);
   letter-spacing: var(--ls-body);

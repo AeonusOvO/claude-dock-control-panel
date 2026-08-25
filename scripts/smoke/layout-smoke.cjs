@@ -128,14 +128,14 @@ const inspectLayout = `
   // includes off-canvas geometry. Inspect every user-facing child instead of treating that
   // deliberate clipping container as content overflow.
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__list, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
     .map((element) => element.id || element.className);
 
   const horizontalClips = [...inspectionRoot.querySelectorAll(
-    '.connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions'
+    '.connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__footer'
   )]
     .filter(visible)
     .filter((element) => {
@@ -339,6 +339,14 @@ const addConnectionHistoryStressFixture = `
     document.querySelector('#connection-history-empty').hidden = true;
     document.querySelector('#connection-history-count').textContent =
       '1 条历史配置 · 点击恢复全部参数';
+
+    const dialogList = document.querySelector('[data-history-dialog-list="api"]');
+    dialogList.replaceChildren(...Array.from({ length: 4 }, () => item.cloneNode(true)));
+    dialogList.hidden = false;
+    document.querySelector('[data-history-dialog-empty="api"]').hidden = true;
+    document.querySelector('[data-history-dialog-count="api"]').textContent = '4 条';
+    document.querySelector('#connection-history-dialog-summary').textContent =
+      '当前项目共 4 条接入记录';
   })()
 `;
 
@@ -661,6 +669,35 @@ const collectScenarios = async (window) => {
         await window.webContents.executeJavaScript(`
           document.querySelector('.control-panel').scrollTop = 0;
         `);
+        await window.webContents.executeJavaScript(`
+          (() => {
+            const dialog = document.querySelector('#connection-history-dialog');
+            document.querySelector('#open-connection-history').click();
+            if (!dialog.open) dialog.showModal();
+            document.querySelector('#connection-history-dialog-track').style.transform =
+              'translate3d(-300%, 0, 0)';
+            for (const tab of document.querySelectorAll('#connection-history-tabs [role="tab"]')) {
+              const selected = tab.dataset.historyCategory === 'api';
+              tab.setAttribute('aria-selected', String(selected));
+              tab.tabIndex = selected ? 0 : -1;
+            }
+            for (const panel of document.querySelectorAll('#connection-history-dialog [role="tabpanel"]')) {
+              const selected = panel.dataset.historyCategory === 'api';
+              panel.setAttribute('aria-hidden', String(!selected));
+              panel.toggleAttribute('inert', !selected);
+            }
+          })();
+        `);
+        await new Promise((resolve) => setTimeout(resolve, 420));
+        results.push({
+          height,
+          page: 'connection:history-dialog',
+          width,
+          ...(await window.webContents.executeJavaScript(inspectLayout)),
+        });
+        await window.webContents.executeJavaScript(`
+          document.querySelector('#connection-history-dialog').close();
+        `);
       }
     }
     await window.webContents.executeJavaScript(selectRailPage('plugins'));
@@ -793,7 +830,7 @@ app.whenReady().then(async () => {
   await window.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
   const detectorCalibrationPassed = await runDetectorCalibration(window);
   const results = await collectScenarios(window);
-  const expectedScenarios = sizes.length * 15;
+  const expectedScenarios = sizes.length * 16;
   const failures = results.filter(
     (result) =>
       result.documentOverflow ||

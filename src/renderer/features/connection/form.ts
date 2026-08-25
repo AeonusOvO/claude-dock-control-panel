@@ -77,12 +77,19 @@ export interface ConnectionForm {
   setConnectionEnvironmentReady: (ready: boolean) => void;
   getProviderGroupExpansionPending: () => boolean;
   setProviderGroupExpansionPending: (pending: boolean) => void;
+  subscribeSelectedProvider: (
+    listener: (providerId: ClaudeProviderId | undefined) => void,
+  ) => () => void;
   unsubscribeManagedChatGptSetupProgress: () => void;
 }
 
 export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm => {
   const formState = createConnectionFormState();
   let providerGroupExpansionPending = false;
+  const selectedProviderListeners = new Set<(providerId: ClaudeProviderId | undefined) => void>();
+  const notifySelectedProviderChanged = (): void => {
+    for (const listener of selectedProviderListeners) listener(formState.selectedProviderId);
+  };
 
   const syncActions = createConnectionFormSyncActions(deps, formState);
   const { setAuthOptions, syncApiKeyHelperPolicyUi, syncConnectionInteractivity } = syncActions;
@@ -95,6 +102,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     () => pickerActions.renderProviderPicker(),
     syncConnectionInteractivity,
     (preset, preserveValues) => presetActions.applyPresetUi(preset, preserveValues),
+    notifySelectedProviderChanged,
   );
   const { clearProviderSelection, moveProviderTools } = providerToolsActions;
   const presetActions = createConnectionFormPresetActions(
@@ -103,6 +111,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     moveProviderTools,
     () => pickerActions.renderProviderPicker(),
     syncConnectionInteractivity,
+    notifySelectedProviderChanged,
   );
   const { applyPresetUi } = presetActions;
   const pickerActions = createConnectionFormPickerActions(
@@ -207,7 +216,13 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     setProviderGroupExpansionPending: (pending) => {
       providerGroupExpansionPending = pending;
     },
+    subscribeSelectedProvider: (listener) => {
+      selectedProviderListeners.add(listener);
+      listener(formState.selectedProviderId);
+      return () => selectedProviderListeners.delete(listener);
+    },
     unsubscribeManagedChatGptSetupProgress: () => {
+      selectedProviderListeners.clear();
       formState.renderWizard = undefined;
       wizardActions.dispose();
       unsubscribeManagedChatGptSetupProgress();

@@ -8,12 +8,11 @@ import { enhanceSelect } from '../../platform/components';
 import { claudeCredential, providerGroups } from './form-elements';
 import type { ConnectionFormDeps } from './form-dependencies';
 import type { ConnectionFormState } from './form-state';
-
-type AccessChoice = 'api' | 'chatgpt-subscription' | 'claude-subscription' | 'domestic';
+import { connectionModelSourceForProvider, type ConnectionModelSource } from './history-source';
 
 const ACCESS_CHOICES: ReadonlyArray<{
   detail: string;
-  id: AccessChoice;
+  id: ConnectionModelSource;
   label: string;
   providerId: ClaudeProviderId;
 }> = [
@@ -43,14 +42,7 @@ const ACCESS_CHOICES: ReadonlyArray<{
   },
 ];
 
-export const accessChoiceForProvider = (
-  providerId: ClaudeProviderId | undefined,
-): AccessChoice | undefined => {
-  if (providerId === 'anthropic') return 'claude-subscription';
-  if (providerId === 'chatgpt-subscription') return 'chatgpt-subscription';
-  if (findClaudeProvider(providerId)?.group === 'domestic') return 'domestic';
-  return providerId ? 'api' : undefined;
-};
+export const accessChoiceForProvider = connectionModelSourceForProvider;
 
 export interface ConnectionFormPickerActions {
   applyDefaultProviderGroupExpansion: (providerId?: ClaudeProviderId) => void;

@@ -11,7 +11,9 @@ export interface ConnectionHistoryMutationActions {
 export const createConnectionHistoryMutationActions = (
   deps: ConnectionHistoryDependencies,
   state: ConnectionHistoryState,
+  setEntries: (entries: ConnectionHistoryState['allEntries']) => void,
   renderConnectionHistory: () => void,
+  setConnectionHistoryBusy: (busy: boolean) => void,
 ): ConnectionHistoryMutationActions => {
   const {
     activeStatus,
@@ -24,7 +26,7 @@ export const createConnectionHistoryMutationActions = (
 
   const renameConnectionHistory = async (entryId: string): Promise<void> => {
     const status = activeStatus();
-    const entry = state.entries.find((candidate) => candidate.id === entryId);
+    const entry = state.allEntries.find((candidate) => candidate.id === entryId);
     if (!status || !entry || state.mutationInProgress) {
       return;
     }
@@ -33,13 +35,14 @@ export const createConnectionHistoryMutationActions = (
       return;
     }
     state.mutationInProgress = true;
+    setConnectionHistoryBusy(true);
     try {
       const result = await window.controlPanel.renameClaudeConnectionHistory(
         status.id,
         entryId,
         nextName,
       );
-      state.entries = result.entries;
+      setEntries(result.entries);
       renderConnectionHistory();
       if (!result.ok) {
         showToast(resultFailureMessage(result, '无法重命名这条接入记录。'), 'error');
@@ -50,20 +53,21 @@ export const createConnectionHistoryMutationActions = (
       showToast('无法重命名这条接入记录。', 'error');
     } finally {
       state.mutationInProgress = false;
+      setConnectionHistoryBusy(false);
     }
   };
 
   const loadConnectionHistory = async (): Promise<void> => {
     const status = activeStatus();
     if (!status) {
-      state.entries = [];
+      setEntries([]);
       renderConnectionHistory();
       return;
     }
     try {
-      state.entries = await window.controlPanel.getClaudeConnectionHistory(status.id);
+      setEntries(await window.controlPanel.getClaudeConnectionHistory(status.id));
     } catch {
-      state.entries = [];
+      setEntries([]);
     }
     renderConnectionHistory();
   };
@@ -74,9 +78,10 @@ export const createConnectionHistoryMutationActions = (
       return;
     }
     state.mutationInProgress = true;
+    setConnectionHistoryBusy(true);
     try {
       const result = await window.controlPanel.applyClaudeConnectionHistory(status.id, entryId);
-      state.entries = result.entries;
+      setEntries(result.entries);
       renderConnectionHistory();
       if (!result.ok) {
         showToast(resultFailureMessage(result, '无法恢复这条接入记录。'), 'error');
@@ -91,6 +96,7 @@ export const createConnectionHistoryMutationActions = (
       showToast('无法恢复这条接入记录。', 'error');
     } finally {
       state.mutationInProgress = false;
+      setConnectionHistoryBusy(false);
     }
   };
 
@@ -100,9 +106,10 @@ export const createConnectionHistoryMutationActions = (
       return;
     }
     state.mutationInProgress = true;
+    setConnectionHistoryBusy(true);
     try {
       const result = await window.controlPanel.deleteClaudeConnectionHistory(status.id, entryId);
-      state.entries = result.entries;
+      setEntries(result.entries);
       renderConnectionHistory();
       if (!result.ok) {
         showToast(resultFailureMessage(result, '无法删除这条接入记录。'), 'error');
@@ -113,6 +120,7 @@ export const createConnectionHistoryMutationActions = (
       showToast('无法删除这条接入记录。', 'error');
     } finally {
       state.mutationInProgress = false;
+      setConnectionHistoryBusy(false);
     }
   };
 

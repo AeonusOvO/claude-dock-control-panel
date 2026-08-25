@@ -1551,6 +1551,9 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
    * so the wizard can preserve its complete themed paint bounds while the two steps cross-fade.
    */
   overflow: visible;
+  /* The sticky capsule may sit over this flow while the page is scrolled. Reserve a themed safe
+   * area so the final provider row and its focus ring can always clear the controls. */
+  padding-bottom: calc(var(--control-h-md) + var(--s-6));
   position: relative;
 }
 
@@ -1608,6 +1611,12 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
   z-index: 6;
 }
 
+.connection-wizard-actions[data-motion='flip'] {
+  /* FLIP only animates the capsule's compositor transform. Text and buttons keep their current
+   * paint throughout the step reflow instead of inheriting the step's opacity transition. */
+  will-change: transform;
+}
+
 .connection-wizard-actions > span {
   color: var(--text-dim);
   font-size: var(--type-caption-size);
@@ -1643,6 +1652,8 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
 .provider-picker {
   container-name: provider-picker;
   container-type: inline-size;
+  display: grid;
+  gap: clamp(var(--s-5), 3vw, var(--s-8));
 }
 
 .connection-wizard-step > .provider-picker,

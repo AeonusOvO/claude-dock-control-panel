@@ -504,6 +504,7 @@ const installSecondaryShells = (
     resultFailureMessage,
     showToast,
   });
+  connectionForm.subscribeSelectedProvider(connectionHistory.setSelectedProvider);
   shells.connectionHistory = connectionHistory;
 };
 

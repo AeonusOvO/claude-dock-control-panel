@@ -274,9 +274,25 @@
         </section>
 
         <section class="rail-page" data-rail-page="connection">
-          <div class="connection-heading">
-            <strong>按步骤完成模型接入</strong>
-            <span>先选择模型来源，再进入对应配置；当前事务完成前不会留下半配置状态。</span>
+          <div class="connection-heading connection-heading--with-action">
+            <div class="connection-heading__copy">
+              <strong>按步骤完成模型接入</strong>
+              <span>先选择模型来源，再进入对应配置；当前事务完成前不会留下半配置状态。</span>
+            </div>
+            <button
+              class="button button--compact connection-history-trigger"
+              id="open-connection-history"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="connection-history-dialog"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 8v4l2.8 1.8" />
+                <path d="M4.7 7.4A8 8 0 1 1 4 14" />
+                <path d="M4 4v4h4" />
+              </svg>
+              <span>接入历史记录</span>
+            </button>
           </div>
 
           <nav class="connection-wizard-progress" aria-label="接入进度">
@@ -2643,6 +2659,187 @@
             </button>
             <button class="update-center-all" id="update-center-all" type="button">全部更新</button>
           </div>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog
+      class="connection-history-dialog popover"
+      id="connection-history-dialog"
+      aria-labelledby="connection-history-dialog-title"
+      aria-describedby="connection-history-dialog-description"
+    >
+      <div class="connection-history-dialog__shell">
+        <header class="connection-history-dialog__header">
+          <div>
+            <span class="step-kicker">按来源整理</span>
+            <strong id="connection-history-dialog-title">接入历史记录</strong>
+            <p id="connection-history-dialog-description">
+              每个入口只显示同类配置；恢复、重命名或删除仍只影响当前项目。
+            </p>
+          </div>
+          <button
+            class="icon-button"
+            id="close-connection-history"
+            type="button"
+            aria-label="关闭接入历史记录"
+            title="关闭"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>
+
+        <nav
+          class="connection-history-tabs"
+          id="connection-history-tabs"
+          role="tablist"
+          aria-label="历史配置来源"
+        >
+          <button
+            id="connection-history-tab-claude"
+            type="button"
+            role="tab"
+            aria-controls="connection-history-panel-claude"
+            aria-selected="true"
+            data-history-category="claude-subscription"
+          >
+            Claude 官方订阅
+          </button>
+          <button
+            id="connection-history-tab-chatgpt"
+            type="button"
+            role="tab"
+            aria-controls="connection-history-panel-chatgpt"
+            aria-selected="false"
+            tabindex="-1"
+            data-history-category="chatgpt-subscription"
+          >
+            ChatGPT 订阅
+          </button>
+          <button
+            id="connection-history-tab-domestic"
+            type="button"
+            role="tab"
+            aria-controls="connection-history-panel-domestic"
+            aria-selected="false"
+            tabindex="-1"
+            data-history-category="domestic"
+          >
+            国产模型
+          </button>
+          <button
+            id="connection-history-tab-api"
+            type="button"
+            role="tab"
+            aria-controls="connection-history-panel-api"
+            aria-selected="false"
+            tabindex="-1"
+            data-history-category="api"
+          >
+            中转站
+          </button>
+        </nav>
+
+        <div class="connection-history-dialog__viewport">
+          <div class="connection-history-dialog__track" id="connection-history-dialog-track">
+            <section
+              class="connection-history-dialog__panel"
+              id="connection-history-panel-claude"
+              role="tabpanel"
+              aria-labelledby="connection-history-tab-claude"
+              data-history-category="claude-subscription"
+            >
+              <div class="connection-history-dialog__panel-heading">
+                <strong>Claude 官方订阅</strong>
+                <span data-history-dialog-count="claude-subscription">0 条</span>
+              </div>
+              <p
+                class="connection-history-dialog__empty"
+                data-history-dialog-empty="claude-subscription"
+              >
+                当前项目还没有 Claude 官方订阅记录。
+              </p>
+              <ul
+                class="connection-history__list connection-history-dialog__list"
+                data-history-dialog-list="claude-subscription"
+              ></ul>
+            </section>
+            <section
+              class="connection-history-dialog__panel"
+              id="connection-history-panel-chatgpt"
+              role="tabpanel"
+              aria-labelledby="connection-history-tab-chatgpt"
+              data-history-category="chatgpt-subscription"
+              aria-hidden="true"
+              inert
+            >
+              <div class="connection-history-dialog__panel-heading">
+                <strong>ChatGPT 订阅</strong>
+                <span data-history-dialog-count="chatgpt-subscription">0 条</span>
+              </div>
+              <p
+                class="connection-history-dialog__empty"
+                data-history-dialog-empty="chatgpt-subscription"
+              >
+                当前项目还没有 ChatGPT 订阅记录。
+              </p>
+              <ul
+                class="connection-history__list connection-history-dialog__list"
+                data-history-dialog-list="chatgpt-subscription"
+              ></ul>
+            </section>
+            <section
+              class="connection-history-dialog__panel"
+              id="connection-history-panel-domestic"
+              role="tabpanel"
+              aria-labelledby="connection-history-tab-domestic"
+              data-history-category="domestic"
+              aria-hidden="true"
+              inert
+            >
+              <div class="connection-history-dialog__panel-heading">
+                <strong>国产模型</strong>
+                <span data-history-dialog-count="domestic">0 条</span>
+              </div>
+              <p class="connection-history-dialog__empty" data-history-dialog-empty="domestic">
+                当前项目还没有国产模型记录。
+              </p>
+              <ul
+                class="connection-history__list connection-history-dialog__list"
+                data-history-dialog-list="domestic"
+              ></ul>
+            </section>
+            <section
+              class="connection-history-dialog__panel"
+              id="connection-history-panel-api"
+              role="tabpanel"
+              aria-labelledby="connection-history-tab-api"
+              data-history-category="api"
+              aria-hidden="true"
+              inert
+            >
+              <div class="connection-history-dialog__panel-heading">
+                <strong>API / 中转站</strong>
+                <span data-history-dialog-count="api">0 条</span>
+              </div>
+              <p class="connection-history-dialog__empty" data-history-dialog-empty="api">
+                当前项目还没有 API 或中转站记录。
+              </p>
+              <ul
+                class="connection-history__list connection-history-dialog__list"
+                data-history-dialog-list="api"
+              ></ul>
+            </section>
+          </div>
+        </div>
+
+        <footer class="connection-history-dialog__footer">
+          <span id="connection-history-dialog-summary">当前项目共 0 条接入记录</span>
+          <button class="button button--compact" id="finish-connection-history" type="button">
+            完成
+          </button>
         </footer>
       </div>
     </dialog>

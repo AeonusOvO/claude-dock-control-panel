@@ -503,6 +503,9 @@
   .titlebar__downloads {
     transition: none;
   }
+  .connection-history-dialog__track {
+    transition-duration: var(--dur-instant);
+  }
   .workspace--rail-collapsed.workspace--rail-preview .control-panel,
   .terminal-footer__secondary {
     transition: none;

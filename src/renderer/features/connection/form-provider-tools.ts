@@ -28,6 +28,7 @@ export const createConnectionFormProviderToolsActions = (
   renderProviderPicker: () => void,
   syncConnectionInteractivity: () => void,
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void,
+  notifySelectedProviderChanged: () => void,
 ): ConnectionFormProviderToolsActions => {
   const { getActiveSessionId, claudeStates, renderClaudeState, showToast, connectionFeature } =
     deps;
@@ -82,6 +83,7 @@ export const createConnectionFormProviderToolsActions = (
     moveProviderTools();
     renderProviderPicker();
     syncConnectionInteractivity();
+    notifySelectedProviderChanged();
   };
 
   return {

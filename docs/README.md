@@ -44,6 +44,7 @@
 | [0012](adr/0012-scroll-chaining-and-canonical-scrim.md)    | 单一滚动链与规范遮罩                     |
 | [0013](adr/0013-versioned-workspace-onboarding.md)         | 版本化工作区启动引导                     |
 | [0014](adr/0014-independent-engine-model-access-wizard.md) | 引擎/模型解耦与可中断接入向导            |
+| [0015](adr/0015-classified-connection-history.md)          | 来源筛选与分类接入历史                   |
 
 ## releases
 

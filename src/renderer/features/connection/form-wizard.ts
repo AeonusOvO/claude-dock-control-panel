@@ -30,12 +30,87 @@ export interface ConnectionFormWizardActions {
   render: () => void;
 }
 
+interface ConnectionActionsMotion {
+  animateFrom: (first: DOMRect) => void;
+  cancel: () => void;
+  getRect: () => DOMRect;
+}
+
+const cssTimeToMilliseconds = (value: string, fallback: number): number => {
+  const normalized = value.trim();
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (normalized.endsWith('ms')) return parsed;
+  if (normalized.endsWith('s')) return parsed * 1000;
+  return fallback;
+};
+
+const createConnectionActionsMotion = (element: HTMLElement): ConnectionActionsMotion => {
+  let active: Animation | undefined;
+  let generation = 0;
+
+  const cancel = (): void => {
+    generation += 1;
+    const previous = active;
+    active = undefined;
+    previous?.cancel();
+    delete element.dataset.motion;
+  };
+
+  const animateFrom = (first: DOMRect): void => {
+    const last = element.getBoundingClientRect();
+    const deltaX = first.left - last.left;
+    const deltaY = first.top - last.top;
+    if (
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+      typeof element.animate !== 'function' ||
+      (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5)
+    ) {
+      return;
+    }
+
+    const styles = window.getComputedStyle(element);
+    const duration = cssTimeToMilliseconds(
+      styles.getPropertyValue('--dur-4'),
+      cssTimeToMilliseconds(styles.getPropertyValue('--dur-enter'), 240),
+    );
+    const easing =
+      styles.getPropertyValue('--ease-spring').trim() || 'cubic-bezier(0.16, 1, 0.3, 1)';
+    const currentGeneration = ++generation;
+    element.dataset.motion = 'flip';
+    const animation = element.animate(
+      [
+        { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
+        { transform: 'translate3d(0, 0, 0)' },
+      ],
+      { duration, easing },
+    );
+    active = animation;
+    const cleanup = (): void => {
+      if (currentGeneration !== generation) return;
+      active = undefined;
+      delete element.dataset.motion;
+    };
+    animation.addEventListener('finish', cleanup, { once: true });
+    animation.addEventListener('cancel', cleanup, { once: true });
+  };
+
+  return { animateFrom, cancel, getRect: () => element.getBoundingClientRect() };
+};
+
 export const createConnectionFormWizardActions = (
   deps: ConnectionFormDeps,
   formState: ConnectionFormState,
   applyPresetUi: (providerId: ClaudeProviderId, preserveValues: boolean) => void,
 ): ConnectionFormWizardActions => {
   let transitionGeneration = 0;
+  const connectionWizardActions = connectionWizardPreviousButton.closest<HTMLElement>(
+    '.connection-wizard-actions',
+  );
+  if (!connectionWizardActions) {
+    throw new Error('接入向导操作条缺失。');
+  }
+  const actionsMotion = createConnectionActionsMotion(connectionWizardActions);
 
   const operationBusy = (): boolean =>
     formState.managedChatGptOperations.busy ||
@@ -100,8 +175,10 @@ export const createConnectionFormWizardActions = (
     delete connectionWizardViewport.dataset.direction;
   };
 
-  const showStep = (step: ConnectionFormState['wizardStep']): void => {
+  const showStep = (step: ConnectionFormState['wizardStep'], alignViewport = false): void => {
     if (formState.wizardStep === step) return;
+    const actionsFirstRect = actionsMotion.getRect();
+    actionsMotion.cancel();
     const previous =
       formState.wizardStep === 'choice'
         ? connectionWizardChoiceStep
@@ -117,6 +194,13 @@ export const createConnectionFormWizardActions = (
     next.classList.remove('connection-wizard-step--leaving');
     next.classList.add('connection-wizard-step--active');
     render();
+    if (alignViewport) {
+      /* Align before the FLIP's final measurement. The browser applies this in the same frame, so
+       * users see the capsule continue from its current screen position instead of a separate
+       * smooth-scroll drift fighting the spring translation. */
+      connectionWizardViewport.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }
+    actionsMotion.animateFrom(actionsFirstRect);
     next
       .querySelector<HTMLElement>(
         'button:not(:disabled), input:not(:disabled), select:not(:disabled)',
@@ -167,8 +251,7 @@ export const createConnectionFormWizardActions = (
   const handleNext = (): void => {
     if (!formState.selectedProviderId || operationBusy()) return;
     if (formState.wizardStep === 'choice') {
-      showStep('configure');
-      connectionWizardViewport.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showStep('configure', true);
       return;
     }
     if (
@@ -199,6 +282,7 @@ export const createConnectionFormWizardActions = (
 
   return {
     dispose: () => {
+      actionsMotion.cancel();
       connectionWizardPreviousButton.removeEventListener('click', handlePrevious);
       connectionWizardChoiceProgress.removeEventListener('click', handleChoiceProgress);
       connectionWizardNextButton.removeEventListener('click', handleNext);

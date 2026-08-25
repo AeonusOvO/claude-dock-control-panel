@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
 
 describe('connection access wizard', () => {
@@ -16,6 +16,63 @@ describe('connection access wizard', () => {
       expect(harness.query('#connection-provider-setup').hasAttribute('hidden')).toBe(false);
       harness.click('#connection-wizard-previous');
       expect(harness.query('[data-connection-wizard-step="choice"]').hidden).toBe(false);
+    });
+  });
+
+  it('FLIP-translates the action capsule from its current screen position without fading it', async () => {
+    await withTerminalRenderer({}, async (harness) => {
+      const actions = harness.query<HTMLElement>('.connection-wizard-actions');
+      const configureStep = harness.query<HTMLElement>('[data-connection-wizard-step="configure"]');
+      vi.spyOn(actions, 'getBoundingClientRect').mockImplementation(
+        () =>
+          ({
+            bottom: configureStep.hidden ? 476 : 796,
+            height: 56,
+            left: 80,
+            right: 1080,
+            top: configureStep.hidden ? 420 : 740,
+            width: 1000,
+            x: 80,
+            y: configureStep.hidden ? 420 : 740,
+            toJSON: () => ({}),
+          }) as DOMRect,
+      );
+      const cancel = vi.fn();
+      const addEventListener = vi.fn();
+      const animate = vi.fn(
+        (
+          _keyframes: Keyframe[] | PropertyIndexedKeyframes | null,
+          _options?: number | KeyframeAnimationOptions,
+        ) => ({ addEventListener, cancel }) as unknown as Animation,
+      );
+      Object.defineProperty(actions, 'animate', { configurable: true, value: animate });
+
+      harness.click('[data-rail-tab="connection"]');
+      harness.click('[data-provider-id="deepseek"]');
+      harness.click('#connection-wizard-next');
+
+      expect(animate).toHaveBeenCalledOnce();
+      const [keyframes, options] = animate.mock.calls[0]!;
+      expect(keyframes).toEqual([
+        { transform: 'translate3d(0px, -320px, 0)' },
+        { transform: 'translate3d(0, 0, 0)' },
+      ]);
+      expect(keyframes).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ opacity: 0 })]),
+      );
+      expect(options).toEqual(
+        expect.objectContaining({ easing: expect.stringContaining('cubic-bezier') }),
+      );
+      expect(actions.dataset.motion).toBe('flip');
+
+      Object.defineProperty(harness.dom.window, 'matchMedia', {
+        configurable: true,
+        value: (query: string) => ({ matches: query.includes('prefers-reduced-motion') }),
+      });
+      harness.click('#connection-wizard-previous');
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(animate).toHaveBeenCalledOnce();
+      expect(actions.dataset.motion).toBeUndefined();
     });
   });
 
