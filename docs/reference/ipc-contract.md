@@ -6,21 +6,21 @@
 
 | 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
 | -------- | -------------------------- | ------------------------- | ------------------ | ---- |
-| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 172  |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 173  |
 | 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
 | 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 23   |
 | 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
 
-`ControlPanelApi` 共 202 个成员：172 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+`ControlPanelApi` 共 203 个成员：173 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
 
 ## 当前实现位置
 
 | 内容         | 位置                                                                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 频道常量     | `src/shared/ipc/channels.ts`（202 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 频道常量     | `src/shared/ipc/channels.ts`（203 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
 | 参数 schema  | `src/shared/ipc/schema.ts` + `claude-execution-settings-schema.ts`                                                                             |
 | 类型定义     | `src/shared/contracts/`（21 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件）                                                            |
-| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 202 个成员）                                                                    |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 203 个成员）                                                                    |
 | 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 21 个桥文件                                           |
 | 主进程注册   | `src/main/ipc/`（31 个文件：25 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
 | 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 25 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
@@ -39,7 +39,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 - 事件订阅方法返回取消函数，内部调用 `removeListener`。
 - 渲染进程与主进程共享的类型只来自 `src/shared/`。
 
-## 请求响应频道（172）
+## 请求响应频道（173）
 
 ### `app`（11）
 
@@ -109,7 +109,7 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 | `terminal:restart` | `restartTerminal` |
 | `terminal:stop`    | `stopTerminal`    |
 
-### `claude`（54）
+### `claude`（55）
 
 | 频道                                             | 方法                                    |
 | ------------------------------------------------ | --------------------------------------- |
@@ -131,6 +131,7 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 | `claude:provider-models-discover`                | `discoverClaudeProviderModels`          |
 | `claude:connection-history`                      | `getClaudeConnectionHistory`            |
 | `claude:connection-history-apply`                | `applyClaudeConnectionHistory`          |
+| `claude:connection-history-cancel-apply`         | `cancelClaudeConnectionHistoryApply`    |
 | `claude:connection-history-delete`               | `deleteClaudeConnectionHistory`         |
 | `claude:connection-history-rename`               | `renameClaudeConnectionHistory`         |
 | `claude:get-sessions`                            | `getClaudeSessions`                     |

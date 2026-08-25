@@ -645,6 +645,9 @@ export const IPC_REQUESTS = {
     sessionIdSchema,
     historyEntryIdSchema,
   ]),
+  [CHANNELS.CLAUDE_CONNECTION_HISTORY_CANCEL_APPLY]: request('cancelClaudeConnectionHistoryApply', [
+    sessionIdSchema,
+  ]),
   [CHANNELS.CLAUDE_CONNECTION_HISTORY_DELETE]: request('deleteClaudeConnectionHistory', [
     sessionIdSchema,
     historyEntryIdSchema,

@@ -58,6 +58,7 @@ const requestChannels = {
   CLAUDE_COMMAND: 'claude:command',
   CLAUDE_CONNECTION_HISTORY: 'claude:connection-history',
   CLAUDE_CONNECTION_HISTORY_APPLY: 'claude:connection-history-apply',
+  CLAUDE_CONNECTION_HISTORY_CANCEL_APPLY: 'claude:connection-history-cancel-apply',
   CLAUDE_CONNECTION_HISTORY_DELETE: 'claude:connection-history-delete',
   CLAUDE_CONNECTION_HISTORY_RENAME: 'claude:connection-history-rename',
   CLAUDE_DELETE_SESSION: 'claude:delete-session',

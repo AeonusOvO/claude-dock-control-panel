@@ -28,6 +28,12 @@ const connectionHistoryCount = requiredElement<HTMLElement>('#connection-history
 const connectionHistoryDialogSummary = requiredElement<HTMLElement>(
   '#connection-history-dialog-summary',
 );
+const connectionHistoryDialogSelection = requiredElement<HTMLElement>(
+  '#connection-history-dialog-selection',
+);
+const finishConnectionHistoryButton = requiredElement<HTMLButtonElement>(
+  '#finish-connection-history',
+);
 
 const dialogLists = new Map(
   CONNECTION_HISTORY_SOURCES.map((source) => [
@@ -56,22 +62,30 @@ export const connectionHistoryInteractionRoots: readonly HTMLElement[] = [
 const createHistoryItem = (
   entry: ClaudeConnectionHistoryEntry,
   mutationInProgress: boolean,
+  selectedEntryId: string,
 ): HTMLLIElement => {
   const item = document.createElement('li');
   item.className = 'connection-history__item';
   item.dataset.historyId = entry.id;
+  const selected = selectedEntryId === entry.id;
+  item.dataset.selected = String(selected);
 
   const restore = document.createElement('button');
   restore.className = 'connection-history__restore';
   restore.type = 'button';
   restore.disabled = mutationInProgress;
+  restore.setAttribute('aria-pressed', String(selected));
   const displayName = historyDisplayName(entry);
-  restore.title = `恢复连接：${displayName}`;
+  restore.title = `选择配置：${displayName}`;
 
   const titleRow = document.createElement('span');
   titleRow.className = 'connection-history__title-row';
   const title = document.createElement('strong');
   title.textContent = displayName;
+  const selectedMark = document.createElement('span');
+  selectedMark.className = 'connection-history__selected-mark';
+  selectedMark.setAttribute('aria-hidden', 'true');
+  selectedMark.textContent = '✓';
   const tags = document.createElement('span');
   tags.className = 'connection-history__tags';
   const protocolTag = document.createElement('span');
@@ -82,7 +96,7 @@ const createHistoryItem = (
   routeTag.className = 'connection-history__tag connection-history__tag--route';
   routeTag.textContent = historyRouteLabel(entry);
   tags.append(protocolTag, routeTag);
-  titleRow.append(title, tags);
+  titleRow.append(title, tags, selectedMark);
 
   const parameters = document.createElement('span');
   parameters.className = 'connection-history__parameters';
@@ -134,8 +148,11 @@ const renderList = (
   list: HTMLElement,
   entries: readonly ClaudeConnectionHistoryEntry[],
   mutationInProgress: boolean,
+  selectedEntryId: string,
 ): void => {
-  list.replaceChildren(...entries.map((entry) => createHistoryItem(entry, mutationInProgress)));
+  list.replaceChildren(
+    ...entries.map((entry) => createHistoryItem(entry, mutationInProgress, selectedEntryId)),
+  );
   list.setAttribute('aria-busy', String(mutationInProgress));
 };
 
@@ -154,10 +171,17 @@ export const createConnectionHistoryRenderActions = (
         button.disabled = busy;
       }
     }
+    finishConnectionHistoryButton.disabled = busy;
+    finishConnectionHistoryButton.setAttribute('aria-busy', String(busy));
   };
 
   const renderConnectionHistory = (): void => {
-    renderList(connectionHistoryList, state.entries, state.mutationInProgress);
+    renderList(
+      connectionHistoryList,
+      state.entries,
+      state.mutationInProgress,
+      state.selectedEntryId,
+    );
     connectionHistoryEmpty.hidden = state.entries.length > 0;
     const selectedLabel = state.selectedSource
       ? CONNECTION_MODEL_SOURCE_LABELS[state.selectedSource]
@@ -177,12 +201,23 @@ export const createConnectionHistoryRenderActions = (
       const empty = dialogEmptyStates.get(source);
       const count = dialogCounts.get(source);
       if (!list || !empty || !count) continue;
-      renderList(list, sourceEntries, state.mutationInProgress);
+      renderList(list, sourceEntries, state.mutationInProgress, state.selectedEntryId);
       list.hidden = sourceEntries.length === 0;
       empty.hidden = sourceEntries.length > 0;
       count.textContent = `${sourceEntries.length} 条`;
     }
     connectionHistoryDialogSummary.textContent = `当前项目共 ${state.allEntries.length} 条接入记录`;
+    const selectedEntry = state.allEntries.find((entry) => entry.id === state.selectedEntryId);
+    connectionHistoryDialogSelection.hidden = !selectedEntry;
+    connectionHistoryDialogSelection.textContent = selectedEntry
+      ? `当前选择：${historyDisplayName(selectedEntry)}`
+      : '';
+    finishConnectionHistoryButton.dataset.mode = selectedEntry ? 'confirm' : 'cancel';
+    finishConnectionHistoryButton.textContent = selectedEntry ? '完成' : '取消';
+    finishConnectionHistoryButton.classList.toggle('button--primary', Boolean(selectedEntry));
+    finishConnectionHistoryButton.classList.toggle('button--quiet', !selectedEntry);
+    finishConnectionHistoryButton.disabled = state.mutationInProgress;
+    finishConnectionHistoryButton.setAttribute('aria-busy', String(state.mutationInProgress));
   };
 
   return { renderConnectionHistory, setConnectionHistoryBusy };

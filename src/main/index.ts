@@ -341,6 +341,7 @@ const {
   developmentSessionOperations,
   directTerminalTransitions,
   invalidateAndWaitForDevelopmentSessionOperation,
+  invalidateAndWaitForMatchingDevelopmentSessionOperation,
   invalidateDevelopmentSessionOperation,
   managedConfigTransactions,
   projectRuntimeSwitchOperations,
@@ -457,6 +458,7 @@ const onReady = createBootstrap({
     guards,
     hideMainWindowToTray,
     invalidateAndWaitForDevelopmentSessionOperation,
+    invalidateAndWaitForMatchingDevelopmentSessionOperation,
     invalidateLaunchPreflightDecision: (sessionId: string) =>
       launchPreflightDecisions.invalidateSession(sessionId),
     launchPreflightDecisions,

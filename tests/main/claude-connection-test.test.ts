@@ -145,4 +145,25 @@ describe('Claude connection test', () => {
       expect.objectContaining({ id: 'authentication', status: 'failed' }),
     );
   });
+
+  it('propagates an owned cancellation instead of converting it into a network failure', async () => {
+    const controller = new AbortController();
+    const cancellation = new Error('历史接入已由用户取消。');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        const requestSignal = init.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          requestSignal?.addEventListener('abort', () => reject(requestSignal.reason), {
+            once: true,
+          });
+        });
+      }),
+    );
+
+    const pending = testClaudeConnection(gatewayConfig, 'router-client-key', controller.signal);
+    controller.abort(cancellation);
+
+    await expect(pending).rejects.toBe(cancellation);
+  });
 });

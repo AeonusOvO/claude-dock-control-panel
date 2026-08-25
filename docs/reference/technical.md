@@ -1053,6 +1053,41 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（备用）模型、凭据状态与 Router Provider
   ID。version 1/2 读取时，已知直连预设迁移为 Anthropic；旧 `gateway` 记录无法从本机 Router
   地址反推出上游协议，因此迁移为 `unknown`，下一次写操作会以 version 3 原子落盘。
+- `claude:connection-history-apply` 不再把“配置事务提交”当成连接成功。handler 先通过
+  `prepareConnectionHistory()` 解密并准备候选，再由 `testPreparedConnection()` 对这份尚未提交的
+  effective input 发出最多 15 秒、`max_tokens: 1` 的真实 Messages 请求；只有端点、认证与 Anthropic
+  消息 envelope 全部通过才进入 `runClaudeProjectConfigTransaction` 的 commit。测试失败保持原配置，
+  并把结构化 `connectionTest` 连同失败结果返回 renderer。`authMode: existing` 的 Claude 官方登录不读取
+  Claude Code 令牌，因此独立 Messages 探针允许 warning；该边界只说明探针不能借用 CLI 凭据，不代表
+  Claude 账号状态不可获取。
+- `official-auth-status.ts` 由主进程执行 `claude auth status --json`，调用前清除 Anthropic key/token/base URL
+  与 Bedrock、Foundry、Vertex Provider 覆盖，使用 8 秒超时、64 KiB 输出上限和 30 秒异步缓存。解析器只
+  接受布尔 `loggedIn`，并只投影长度与控制字符校验后的账号邮箱、`authMethod`、`checkedAt`；原始输出、
+  token、组织 ID 和未知字段全部丢弃。CLI 在未登录时会携带合法 JSON 以退出码 1 结束，因此仍从命令封装
+  的有界 stdout 解析为明确“未登录”；命令缺失、超时、无合法状态载荷或格式异常才降级为
+  `{ available: false, loggedIn: false }`。该投影作为既有 `ClaudeProjectState.officialAuth` 随
+  `claude:state` 返回和广播，不增加 IPC 频道或 `ControlPanelApi` 成员。
+- OpenAI 候选准备会先改写本机 Router Provider，因此 prepared value 同时携带该次写入的精确补偿。
+  `runOwnedConfigTransaction` 把真实连接测试作为 pre-commit `validatePrepared` 阶段；取消、测试失败或之后
+  任一事务失败都会调用 `rollbackPrepared`。补偿只在 CCR service 的 origin、PID、service token 仍相同，
+  且 `getConfig` 仍等于 `saveConfig` 返回的服务端规范化结果时恢复旧 Provider、preferred 与 credential；
+  任何较新的 Router 保存都优先保留，不会被失败事务覆盖。prepare 在保存后的自身失败也执行同一补偿。
+- 项目配置事务在 prepare 前保存完整配置快照，并在 commit 后记录本事务实际留下的快照。失败或取消时只在
+  generation owner 仍有效、发起 session 仍映射到同一规范化项目目录、当前快照仍等于本事务保存结果时恢复
+  原项目配置；否则报告恢复边界并保留较新写入。恢复后的权威 `ClaudeProjectState` 会重新发布，Router 的
+  `rollbackPrepared` 则补偿项目文件之外的外部状态。
+- 历史应用在 `SessionOperationCoordinator` 中持有唯一 `AbortSignal`。新增
+  `claude:connection-history-cancel-apply` 只调用 `invalidateAndWaitIfSignal(sessionId, signal)`：signal 与当前
+  lease 不完全相同就返回 `false`，不能误取消同一项目稍后启动的其他终端任务。连接 fetch 使用
+  `AbortSignal.any([ownerSignal, AbortSignal.timeout(15_000)])`；用户取消原样抛出 owner reason，等待事务
+  rollback/unwind 完成后才向 renderer 返回已取消。
+- renderer 的 `history-dialog.ts` 只管理分类、当前选择与确认；`history-recovery.ts` 以 attempt fence 管理
+  `running / cancelling / failure / success`，运行时隐藏并 inert 普通向导，失败允许用同一 entry ID 重试，
+  成功 1.5 秒后恢复原 surface 快照。历史 load/apply/delete/rename token 均携带 `{ generation, sessionId }`；
+  项目切换递增 generation、失效 mutation/recovery owner、清空旧历史和专用 surface，因此迟到 settlement
+  既不能重绘新项目，也不能释放新 owner 的 busy。`current-connection-summary.ts` 是不接触 DOM 的脱敏纯函数，
+  同步消费 Claude `officialAuth`，`current-connection-view.ts` 把当前配置与历史名称匹配，并用相同
+  generation + active session fence 异步补充 ChatGPT 账号。
 - 判重用 `apiKeyHelperPolicy`、认证方式、地址、凭据、主/小型（备用）模型、预设、provider 和上游协议的
   SHA-256 指纹，与**全部**记录比较而不只是最新一条：命中就把那条记录移到最前面并刷新
   `savedAt`，`id` 与名称保持不变，因此恢复一条较早的记录不会变成一条重复记录，指向它的重命名
@@ -2168,7 +2203,14 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   损坏文件降级和敏感字段缺席；非终态任务不能进入历史，清理元数据不得删除最终下载文件。
 - `tests/main/async-refresh-cache.test.ts` 与 `tests/main/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
-  `tests/main/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限。
+  `tests/main/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限与 owner cancellation 原样传播；
+  `tests/renderer/connection-history-dialog.test.ts` 覆盖未选择取消、选中反馈、分类清空、确认后专用接入页、
+  成功延时回落、失败重试、后台确认取消，以及加载、应用、删除、重命名跨项目后的迟到结果隔离；
+  `tests/renderer/current-connection-summary.test.ts` 与 `current-connection-view.test.ts` 锁定账号、模型、中转
+  名称/地址优先级、URL 敏感字段净化和 ChatGPT 账号的 generation + session fence。
+- `tests/main/claude-official-auth-status.test.ts` 锁定 Claude 状态命令参数、Provider 环境清理、缓存、输出白名单
+  和失败降级；`tests/main/claude-runtime-router-rollback.test.ts` 覆盖 Router 保存后取消与启动失败的精确补偿，
+  配置事务测试同时覆盖项目快照回滚、较新写入保护和 session 跨项目后的目标 fence。
 - `tests/main/claude-connection-history.test.ts` 用可逆的假 `safeStorage` 替身覆盖接入历史：
   重复保存不新增、任一字段（含凭据、helper 策略和协议）变化就新增、只有网关状态变化不新增、
   重放一条较早的记录把它移回最前面而不是新增一条、留空的小型/备用模型在回放时不被当成改动、
@@ -2182,7 +2224,7 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
 - `npm run test:layout` 使用隐藏 Electron 窗口在 720×640、820×640、900×640、1024×640、
   1180×760、1280×760 六种尺寸轮换项目/对话/接入、分类接入历史弹窗、插件的已安装/可安装/市场
   三个面板、工作台三页、收起控制栏和全局设置两个分类，并加入富文本长内容、附件与 Artifact 抽屉
-  压力态，共 96 个场景；检查交互控件
+  压力态，共 102 个场景；检查交互控件
   矩形相交、`elementFromPoint` 命中对象、关键容器
   横向溢出和文档级 overflow。扫描会识别滚动裁剪祖先，避免把模态内容区外不可见的控件误判
   为覆盖固定底栏；同一自绘 select 的原生层/视觉层、遮罩层与抽屉的有意叠放不计为控件重叠，
@@ -2192,7 +2234,8 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   可复现失败；独立对话额外注入超长模型名、128K Token 数值与长标题历史，覆盖新增状态。收起
   控制栏场景在测试窗口内同步关闭过渡后检查最终几何，避免隐藏 CI 窗口节流 CSS transition 时把
   中间帧误报为遮挡；这不会修改应用运行时样式。
-- `npm run test:visual` 保留插件、服务商向导、内联历史配置、四主题分类历史弹窗及其 820px 单列态、
+- `npm run test:visual` 保留插件、服务商向导、内联历史配置、四主题分类历史弹窗及其选中态、四主题历史
+  接入失败结果页、820px 单列态、
   全局设置、连接测试、终端聚焦态、
   Codex 三步工作台、代理/路由设置页与 MCP 管理页，
   独立对话详情抽屉与重命名弹窗回归图，并生成四主题 × 富文本对话/终端/终端遮罩的 12 张矩阵

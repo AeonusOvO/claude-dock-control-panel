@@ -751,11 +751,18 @@ app
     historyList.replaceChildren();
     const historyItem = document.createElement('li');
     historyItem.className = 'connection-history__item';
+    historyItem.dataset.selected = 'false';
     const historyRestore = document.createElement('button');
     historyRestore.className = 'connection-history__restore';
     historyRestore.type = 'button';
     const historyTitle = document.createElement('strong');
     historyTitle.textContent = '本机转换器 / 模型网关';
+    const historyTitleRow = document.createElement('span');
+    historyTitleRow.className = 'connection-history__title-row';
+    const historySelectedMark = document.createElement('span');
+    historySelectedMark.className = 'connection-history__selected-mark';
+    historySelectedMark.textContent = '✓';
+    historyTitleRow.append(historyTitle, historySelectedMark);
     const historyParameters = document.createElement('span');
     historyParameters.className = 'connection-history__parameters';
     for (const [labelText, valueText] of [
@@ -776,7 +783,7 @@ app
     historyMeta.className = 'connection-history__meta';
     historyMeta.textContent =
       '07/27 23:58 · Bearer · 含凭据 · ClaudeDock 单一凭据 · 网关运行中';
-    historyRestore.append(historyTitle, historyParameters, historyMeta);
+    historyRestore.append(historyTitleRow, historyParameters, historyMeta);
     const historyDelete = document.createElement('button');
     historyDelete.className = 'connection-history__delete';
     historyDelete.type = 'button';
@@ -804,6 +811,10 @@ app
     document.querySelector('[data-history-dialog-count="api"]').textContent = '4 条';
     document.querySelector('#connection-history-dialog-summary').textContent =
       '当前项目共 4 条接入记录';
+    document.querySelector('#current-connection').dataset.kind = 'api';
+    document.querySelector('#current-connection-name').textContent = '研发中转站';
+    document.querySelector('#current-connection-metadata').textContent =
+      '接口：https://gateway.example.com/anthropic/ · API 凭据已配置';
     document.querySelector('.control-panel').scrollTop = 0;
     document.querySelector('[data-rail-page="connection"]').style.animation = 'none';
     for (const button of document.querySelectorAll('[data-rail-tab]')) {
@@ -889,7 +900,6 @@ app
     await window.webContents.executeJavaScript(`
       (() => {
         const dialog = document.querySelector('#connection-history-dialog');
-        document.querySelector('#open-connection-history').click();
         if (!dialog.open) dialog.showModal();
         document.querySelector('#connection-history-dialog-track').style.transform =
           'translate3d(-300%, 0, 0)';
@@ -903,6 +913,17 @@ app
           panel.setAttribute('aria-hidden', String(!selected));
           panel.toggleAttribute('inert', !selected);
         }
+        const selectedItem = document.querySelector('[data-history-dialog-list="api"] .connection-history__item');
+        selectedItem.dataset.selected = 'true';
+        selectedItem.querySelector('.connection-history__restore').setAttribute('aria-pressed', 'true');
+        const selection = document.querySelector('#connection-history-dialog-selection');
+        selection.hidden = false;
+        selection.textContent = '当前选择：研发中转站';
+        const finish = document.querySelector('#finish-connection-history');
+        finish.dataset.mode = 'confirm';
+        finish.textContent = '完成';
+        finish.classList.remove('button--quiet');
+        finish.classList.add('button--primary');
       })();
     `);
     await new Promise((resolve) => setTimeout(resolve, 420));
@@ -926,6 +947,82 @@ app
     await window.webContents.executeJavaScript(`
       document.querySelector('#connection-history-dialog').close();
     `);
+    // A hidden BrowserWindow does not necessarily paint during a timer-only wait. Force and discard
+    // one settled frame so the dialog's discrete top-layer exit finishes before recovery captures.
+    await captureSettledPage();
+
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const normalSelectors = [
+          '.connection-heading__intro',
+          '#open-connection-history',
+          '#connection-wizard-progress',
+          '#connection-advice',
+          '#environment-setup',
+          '#connection-wizard-viewport',
+          '#connection-wizard-actions',
+        ];
+        for (const selector of normalSelectors) {
+          const surface = document.querySelector(selector);
+          surface.dataset.visualWasHidden = String(surface.hidden);
+          surface.dataset.visualWasInert = String(surface.hasAttribute('inert'));
+          surface.hidden = true;
+          surface.toggleAttribute('inert', true);
+        }
+        const recovery = document.querySelector('#connection-history-recovery');
+        recovery.hidden = false;
+        recovery.removeAttribute('inert');
+        recovery.dataset.phase = 'failure';
+        document.querySelector('#connection-history-recovery-kicker').textContent = '接入未完成';
+        document.querySelector('#connection-history-recovery-title').textContent =
+          '研发中转站 接入失败';
+        document.querySelector('#connection-history-recovery-detail').textContent =
+          '历史配置未通过连接测试，请检查网络、认证方式与模型标识后重新接入。';
+        const details = document.querySelector('#connection-history-recovery-details');
+        details.replaceChildren();
+        for (const [label, status, detail] of [
+          ['接口地址', '通过', '200 · /v1/messages 可访问'],
+          ['身份认证', '通过', '网关接受了当前认证方式。'],
+          ['模型响应', '失败', '模型返回的消息格式不完整，请检查模型标识。'],
+        ]) {
+          const item = document.createElement('li');
+          item.dataset.status = status === '失败' ? 'failed' : 'passed';
+          const heading = document.createElement('span');
+          const strong = document.createElement('strong');
+          strong.textContent = label;
+          const em = document.createElement('em');
+          em.textContent = status;
+          heading.append(strong, em);
+          const small = document.createElement('small');
+          small.textContent = detail;
+          item.append(heading, small);
+          details.append(item);
+        }
+        document.querySelector('#cancel-connection-history-recovery').hidden = true;
+        document.querySelector('#retry-connection-history-recovery').hidden = false;
+        document.querySelector('#return-from-connection-history-recovery').hidden = false;
+      })();
+    `);
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      writeFileSync(
+        path.join(outputDirectory, `connection-history-recovery-${themeId}-1180.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+    }
+    await window.webContents.executeJavaScript(`
+      (() => {
+        document.querySelector('#connection-history-recovery').hidden = true;
+        for (const surface of document.querySelectorAll('[data-visual-was-hidden]')) {
+          surface.hidden = surface.dataset.visualWasHidden === 'true';
+          surface.toggleAttribute('inert', surface.dataset.visualWasInert === 'true');
+          delete surface.dataset.visualWasHidden;
+          delete surface.dataset.visualWasInert;
+        }
+      })();
+    `);
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
 
     await window.webContents.executeJavaScript(`
     document.querySelector('#connection-advanced-dialog').showModal();

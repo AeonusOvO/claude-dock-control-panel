@@ -128,14 +128,14 @@ const inspectLayout = `
   // includes off-canvas geometry. Inspect every user-facing child instead of treating that
   // deliberate clipping container as content overflow.
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__list, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .current-connection, .connection-history-recovery, .connection-history-recovery__details, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__list, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
     .map((element) => element.id || element.className);
 
   const horizontalClips = [...inspectionRoot.querySelectorAll(
-    '.connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__footer'
+    '.current-connection, .connection-history-recovery, .connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions, .connection-history-dialog__shell, .connection-history-dialog__panel, .connection-history-dialog__footer'
   )]
     .filter(visible)
     .filter((element) => {
@@ -347,6 +347,71 @@ const addConnectionHistoryStressFixture = `
     document.querySelector('[data-history-dialog-count="api"]').textContent = '4 条';
     document.querySelector('#connection-history-dialog-summary').textContent =
       '当前项目共 4 条接入记录';
+  })()
+`;
+
+const showConnectionHistoryRecoveryFixture = `
+  (() => {
+    const normalSelectors = [
+      '.connection-heading__intro',
+      '#open-connection-history',
+      '#connection-wizard-progress',
+      '#connection-advice',
+      '#environment-setup',
+      '#connection-wizard-viewport',
+      '#connection-wizard-actions',
+    ];
+    for (const selector of normalSelectors) {
+      const surface = document.querySelector(selector);
+      surface.dataset.layoutWasHidden = String(surface.hidden);
+      surface.dataset.layoutWasInert = String(surface.hasAttribute('inert'));
+      surface.hidden = true;
+      surface.toggleAttribute('inert', true);
+    }
+    const recovery = document.querySelector('#connection-history-recovery');
+    recovery.hidden = false;
+    recovery.removeAttribute('inert');
+    recovery.dataset.phase = 'failure';
+    document.querySelector('#connection-history-recovery-kicker').textContent = '接入未完成';
+    document.querySelector('#connection-history-recovery-title').textContent =
+      '一个名称和接口地址都很长的团队 API 中转站接入失败';
+    document.querySelector('#connection-history-recovery-detail').textContent =
+      '历史配置未通过连接测试，请检查网络、认证方式与模型标识后重新接入。';
+    const details = document.querySelector('#connection-history-recovery-details');
+    details.replaceChildren();
+    for (const [label, status, detail] of [
+      ['接口地址', '失败', 'https://gateway.example.com/an/intentionally/long/anthropic/v1/messages'],
+      ['身份认证', '未执行', '接口连通后才能确认凭据。'],
+      ['模型响应', '未执行', '认证通过后才能验证超长模型标识。'],
+    ]) {
+      const item = document.createElement('li');
+      item.dataset.status = status === '失败' ? 'failed' : 'skipped';
+      const heading = document.createElement('span');
+      const strong = document.createElement('strong');
+      strong.textContent = label;
+      const em = document.createElement('em');
+      em.textContent = status;
+      heading.append(strong, em);
+      const small = document.createElement('small');
+      small.textContent = detail;
+      item.append(heading, small);
+      details.append(item);
+    }
+    document.querySelector('#cancel-connection-history-recovery').hidden = true;
+    document.querySelector('#retry-connection-history-recovery').hidden = false;
+    document.querySelector('#return-from-connection-history-recovery').hidden = false;
+  })()
+`;
+
+const hideConnectionHistoryRecoveryFixture = `
+  (() => {
+    document.querySelector('#connection-history-recovery').hidden = true;
+    for (const surface of document.querySelectorAll('[data-layout-was-hidden]')) {
+      surface.hidden = surface.dataset.layoutWasHidden === 'true';
+      surface.toggleAttribute('inert', surface.dataset.layoutWasInert === 'true');
+      delete surface.dataset.layoutWasHidden;
+      delete surface.dataset.layoutWasInert;
+    }
   })()
 `;
 
@@ -672,7 +737,6 @@ const collectScenarios = async (window) => {
         await window.webContents.executeJavaScript(`
           (() => {
             const dialog = document.querySelector('#connection-history-dialog');
-            document.querySelector('#open-connection-history').click();
             if (!dialog.open) dialog.showModal();
             document.querySelector('#connection-history-dialog-track').style.transform =
               'translate3d(-300%, 0, 0)';
@@ -698,6 +762,14 @@ const collectScenarios = async (window) => {
         await window.webContents.executeJavaScript(`
           document.querySelector('#connection-history-dialog').close();
         `);
+        await window.webContents.executeJavaScript(showConnectionHistoryRecoveryFixture);
+        results.push({
+          height,
+          page: 'connection:history-recovery',
+          width,
+          ...(await window.webContents.executeJavaScript(inspectLayout)),
+        });
+        await window.webContents.executeJavaScript(hideConnectionHistoryRecoveryFixture);
       }
     }
     await window.webContents.executeJavaScript(selectRailPage('plugins'));
@@ -830,7 +902,7 @@ app.whenReady().then(async () => {
   await window.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
   const detectorCalibrationPassed = await runDetectorCalibration(window);
   const results = await collectScenarios(window);
-  const expectedScenarios = sizes.length * 16;
+  const expectedScenarios = sizes.length * 17;
   const failures = results.filter(
     (result) =>
       result.documentOverflow ||

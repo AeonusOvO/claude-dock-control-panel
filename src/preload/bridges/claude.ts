@@ -138,6 +138,11 @@ export const claudeBridge = {
       sessionId,
       entryId,
     ) as Promise<ClaudeConnectionHistoryResult>,
+  cancelClaudeConnectionHistoryApply: (sessionId: string) =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_CONNECTION_HISTORY_CANCEL_APPLY,
+      sessionId,
+    ) as Promise<boolean>,
   deleteClaudeConnectionHistory: (sessionId: string, entryId: string) =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_CONNECTION_HISTORY_DELETE,

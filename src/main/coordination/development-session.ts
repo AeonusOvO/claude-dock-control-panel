@@ -37,6 +37,10 @@ export interface DevelopmentSessionCoordination {
   developmentSessionOperations: SessionOperationCoordinator;
   directTerminalTransitions: TerminalTransitionCoordinator;
   invalidateAndWaitForDevelopmentSessionOperation: (sessionId: string) => Promise<void>;
+  invalidateAndWaitForMatchingDevelopmentSessionOperation: (
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
   invalidateDevelopmentSessionOperation: (sessionId: string) => void;
   managedConfigTransactions: SessionConfigTransactionCoordinator;
   projectRuntimeSwitchOperations: ProjectRuntimeSwitchCoordinator;
@@ -108,6 +112,11 @@ export const createDevelopmentSessionCoordination = ({
 
   const invalidateAndWaitForDevelopmentSessionOperation = (sessionId: string): Promise<void> =>
     developmentSessionOperations.invalidateAndWait(sessionId);
+
+  const invalidateAndWaitForMatchingDevelopmentSessionOperation = (
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> => developmentSessionOperations.invalidateAndWaitIfSignal(sessionId, signal);
 
   const acquireConfigTransactionIsolation = (sessionId: string, cwd: string): Promise<void> =>
     managedConfigTransactions.acquireDevelopmentIsolation(
@@ -191,6 +200,7 @@ export const createDevelopmentSessionCoordination = ({
     developmentSessionOperations,
     directTerminalTransitions,
     invalidateAndWaitForDevelopmentSessionOperation,
+    invalidateAndWaitForMatchingDevelopmentSessionOperation,
     invalidateDevelopmentSessionOperation,
     managedConfigTransactions,
     projectRuntimeSwitchOperations,

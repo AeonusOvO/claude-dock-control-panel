@@ -2,6 +2,8 @@ import { bindConnectionHistoryEvents } from './history-bindings';
 import { createConnectionHistoryDialogActions } from './history-dialog';
 import { createConnectionHistoryMutationActions } from './history-mutations';
 import { createConnectionHistoryRenderActions } from './history-render';
+import { createConnectionHistoryRecoveryActions } from './history-recovery';
+import { createCurrentConnectionViewActions } from './current-connection-view';
 import type { ClaudeConnectionHistoryEntry } from '../../../shared/contracts';
 import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import {
@@ -19,6 +21,8 @@ export interface ConnectionHistory {
   load: () => Promise<void>;
   openDialog: () => void;
   render: () => void;
+  renderCurrentConnection: () => void;
+  resetForProjectChange: () => void;
   setEntries: (entries: ClaudeConnectionHistoryEntry[]) => void;
   setSelectedProvider: (providerId: ClaudeProviderId | undefined) => void;
   hideContextMenu: () => void;
@@ -29,25 +33,58 @@ export const createConnectionHistory = (deps: ConnectionHistoryDependencies): Co
     allEntries: [],
     entries: [],
     mutationInProgress: false,
+    selectedEntryId: '',
     selectedSource: undefined,
     targetId: '',
   };
 
+  let renderCurrentConnection = (): void => undefined;
   const setEntries = (entries: ClaudeConnectionHistoryEntry[]): void => {
     state.allEntries = entries;
     state.entries = filterConnectionHistoryBySource(entries, state.selectedSource);
+    if (state.selectedEntryId && !entries.some((entry) => entry.id === state.selectedEntryId)) {
+      state.selectedEntryId = '';
+    }
+    renderCurrentConnection();
   };
 
   const renderActions = createConnectionHistoryRenderActions(state);
+  const currentConnectionActions = createCurrentConnectionViewActions(deps, state);
+  renderCurrentConnection = currentConnectionActions.render;
   const mutationActions = createConnectionHistoryMutationActions(
     deps,
     state,
     setEntries,
     renderActions.renderConnectionHistory,
     renderActions.setConnectionHistoryBusy,
+    currentConnectionActions.render,
   );
-  const menuActions = bindConnectionHistoryEvents(deps, state, mutationActions);
-  const dialogActions = createConnectionHistoryDialogActions(state, menuActions);
+  const recoveryActions = createConnectionHistoryRecoveryActions(
+    deps,
+    state,
+    mutationActions,
+    currentConnectionActions.render,
+  );
+  let requestRestore = (_entryId: string): void => undefined;
+  const menuActions = bindConnectionHistoryEvents(deps, state, mutationActions, (entryId) => {
+    requestRestore(entryId);
+  });
+  const dialogActions = createConnectionHistoryDialogActions(
+    state,
+    menuActions,
+    renderActions.renderConnectionHistory,
+    recoveryActions.start,
+  );
+  requestRestore = dialogActions.requestRestore;
+
+  const resetForProjectChange = (): void => {
+    mutationActions.invalidate();
+    dialogActions.resetForProjectChange();
+    recoveryActions.reset();
+    state.selectedEntryId = '';
+    setEntries([]);
+    renderActions.renderConnectionHistory();
+  };
 
   return {
     closeDialog: dialogActions.close,
@@ -55,7 +92,12 @@ export const createConnectionHistory = (deps: ConnectionHistoryDependencies): Co
     state,
     load: mutationActions.loadConnectionHistory,
     openDialog: dialogActions.open,
-    render: renderActions.renderConnectionHistory,
+    render: () => {
+      renderActions.renderConnectionHistory();
+      currentConnectionActions.render();
+    },
+    renderCurrentConnection: currentConnectionActions.render,
+    resetForProjectChange,
     setEntries,
     setSelectedProvider: (providerId) => {
       state.selectedSource = connectionModelSourceForProvider(providerId);

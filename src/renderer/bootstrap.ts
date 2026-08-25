@@ -495,7 +495,12 @@ const installSecondaryShells = (
     });
 
   const connectionHistory = createConnectionHistory({
+    activeClaudeState: () => {
+      const status = activeStatus();
+      return status ? claudeStates.get(status.id) : undefined;
+    },
     activeStatus,
+    getManagedChatGptGatewayState: () => window.controlPanel.getManagedChatGptGatewayState(),
     hideTerminalContextMenu: () => features.terminalFeature.hideTerminalContextMenu(),
     hideConversationContextMenu: () => features.projectsFeature.hideConversationContextMenu(),
     populateClaudeConfigForm: connectionForm.populateClaudeConfigForm,

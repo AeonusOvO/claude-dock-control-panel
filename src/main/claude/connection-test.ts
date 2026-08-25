@@ -149,9 +149,11 @@ const requestClaudeConnection = async (
   endpoint: string,
   headers: Record<string, string>,
   testedAt: number,
+  externalSignal?: AbortSignal,
 ): Promise<ConnectionRequestFailure | ConnectionRequestSuccess> => {
   const startedAt = Date.now();
   try {
+    const timeoutSignal = AbortSignal.timeout(15_000);
     const response = await fetch(endpoint, {
       body: JSON.stringify({
         max_tokens: 1,
@@ -161,10 +163,15 @@ const requestClaudeConnection = async (
       headers,
       method: 'POST',
       redirect: 'manual',
-      signal: AbortSignal.timeout(15_000),
+      signal: externalSignal ? AbortSignal.any([externalSignal, timeoutSignal]) : timeoutSignal,
     });
     return { response, startedAt };
   } catch (error) {
+    if (externalSignal?.aborted) {
+      throw externalSignal.reason instanceof Error
+        ? externalSignal.reason
+        : new Error('接入测试已取消。');
+    }
     const detail =
       error instanceof Error && error.name === 'TimeoutError'
         ? '15 秒内没有收到响应。'
@@ -355,6 +362,7 @@ const failedConnectionResult = (
 export const testClaudeConnection = async (
   config: NormalizedClaudeConfig,
   credential?: string,
+  signal?: AbortSignal,
 ): Promise<ClaudeConnectionTestResult> => {
   const testedAt = Date.now();
   const effectiveCredential = credential || (config.preset === 'ollama' ? 'ollama' : undefined);
@@ -375,7 +383,7 @@ export const testClaudeConnection = async (
     headers.authorization = `Bearer ${effectiveCredential}`;
   }
 
-  const request = await requestClaudeConnection(config, endpoint, headers, testedAt);
+  const request = await requestClaudeConnection(config, endpoint, headers, testedAt, signal);
   if ('failure' in request) {
     return request.failure;
   }

@@ -190,12 +190,15 @@ export interface PreparedClaudeConfigSave {
   historyMetadata?: ConnectionHistoryMetadata;
   input: SaveClaudeConfigInput;
   presentation?: ClaudeConfigPresentation;
+  /** Exact Router compensation retained only until the owning config transaction succeeds. */
+  rollbackRouterConfig?: () => Promise<void>;
 }
 
 interface PreparedOpenAiConnection {
   effectiveInput: SaveClaudeConfigInput;
   historyMetadata: ConnectionHistoryMetadata;
   presentation: ClaudeConfigPresentation;
+  rollbackRouterConfig: () => Promise<void>;
 }
 
 interface ConnectionCheckRecord {

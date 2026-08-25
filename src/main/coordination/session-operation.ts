@@ -78,6 +78,21 @@ export class SessionOperationCoordinator {
     return lease.completed;
   }
 
+  /** Cancels only the lease represented by the exact signal handed to its operation callback. */
+  public async invalidateAndWaitIfSignal(
+    sessionId: string,
+    expectedSignal: AbortSignal,
+  ): Promise<boolean> {
+    const lease = this.leases.get(sessionId);
+    if (!lease || lease.controller.signal !== expectedSignal) {
+      return false;
+    }
+    this.advanceRevision(sessionId);
+    this.cancel(lease);
+    await lease.completed;
+    return true;
+  }
+
   public removeSession(sessionId: string): void {
     // Keep the advanced revision as a durable tombstone. If the same opaque session ID is ever
     // recreated, no stamp captured by the removed incarnation may become current again.

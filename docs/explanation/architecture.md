@@ -51,6 +51,10 @@ preload: <dist/preload/preload.js>,
 
 渲染进程重新打开某个界面时不重建状态，而是重放最近一次广播快照。渲染端自身的异步反馈也是派生视图状态：busy 文案、disabled、`aria-busy` 与 live status 必须属于精确 operation token 和 session generation。工作区、目录或状态快照的无关重绘只消费当前 owner，不能恢复控件；只有仍为 current 的操作 settlement 可以结束并恢复它。runtime 切换由 main 按规范化项目目录持有；同目录的全部 session 共享 pending attempt，renderer reload 后通过 `runtime:get` 重建 busy 呈现并只在 pending 期间轮询到最终提交状态。Codex installer 与 App Server 登录/账号状态在 main 中是应用级单例；main 暴露单调 `revision` 和精确 `{ attempt, kind }` operation descriptor，renderer reload 后恢复原操作文案与 owner，并拒绝延迟快照或 completion。插件变更同样由 main 应用级单例持有；catalog snapshot 带 `{ attempt, kind, target, phase }`，相同逻辑请求加入已有 Promise，竞争请求不排队，renderer 只在 active 期间轮询并锁定完整 mutation surface。
 
+接入历史同样遵守双层所有权：renderer 的加载、应用、删除、重命名和专用恢复 surface 由单调 generation 与活动 session 共同持有，切换项目立即使旧 owner 失效；main 再确认该 session 仍映射到事务发起时的规范化项目目录。接入事务在 prepare 前保存项目配置快照，失败或取消时只在当前状态仍是本事务精确写入结果时恢复，并通过 prepared compensation 回滚它写入的 Router 外部状态；较新的项目配置或 Router 写入绝不被旧事务覆盖。
+
+Claude 官方账号状态也归 main。`official-auth-status.ts` 以有界命令调用读取 `claude auth status --json`，清除 Provider 覆盖后只把登录布尔值、安全账号标识、认证方式和检查时间投影到既有 `ClaudeProjectState`；令牌、原始 JSON 与未知字段不会跨进程，命令失败则显式降级。该能力复用现有 `claude:state` 请求与广播，不改变 IPC/API 数量。
+
 ### 会话所有权键
 
 一个对话由 `(runtime, normalized project, UUID)` 三元组唯一标识。原生会话、历史恢复和安全终端会尝试打开同一个对话，三元组保证只有一个持有者，第二个尝试收到 `conversation:owner-conflict`。
@@ -68,24 +72,24 @@ preload: <dist/preload/preload.js>,
 
 ## 数据流
 
-三条独立通路共 202 个频道，形态与频率不同：
+三条独立通路共 203 个频道，形态与频率不同：
 
-- **请求响应**（172 个）—— renderer `invoke`，main `handle`，返回结构化结果。
+- **请求响应**（173 个）—— renderer `invoke`，main `handle`，返回结构化结果。
 - **单向发送**（7 个）—— 高频或握手型 renderer → main 消息使用 `send/on`；包括 generation-fenced `terminal:write`，避免每次按键产生 Promise 往返。
 - **事件推送**（23 个）—— main 状态变化后广播，renderer 订阅并重渲染对应界面。
 
-`ControlPanelApi` 同样有 202 个成员，但分区不同：172 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
+`ControlPanelApi` 同样有 203 个成员，但分区不同：173 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
 
 ## 外部进程
 
 ClaudeDock 启动并管理外部 CLI，不捆绑第二份实现：
 
-| 外部程序                  | 关系                                                            |
-| ------------------------- | --------------------------------------------------------------- |
-| `claude`                  | 解析用户本机安装；终端会话直接运行，原生对话经 Claude Agent SDK |
-| `codex`                   | 解析用户本机安装；5.0 RC 使用官方 TUI                           |
-| CCR（Claude Code Router） | OpenAI 协议上游需要格式转换时自动安装并托管，只管理 CLI 包      |
-| CLIProxyAPI               | 受管 ChatGPT 订阅接入的回环网关，从官方 Release 校验安装        |
+| 外部程序                  | 关系                                                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `claude`                  | 解析用户本机安装；终端会话直接运行，原生对话经 Claude Agent SDK；登录状态通过有界 `auth status --json` 安全投影 |
+| `codex`                   | 解析用户本机安装；5.0 RC 使用官方 TUI                                                                           |
+| CCR（Claude Code Router） | OpenAI 协议上游需要格式转换时自动安装并托管，只管理 CLI 包                                                      |
+| CLIProxyAPI               | 受管 ChatGPT 订阅接入的回环网关，从官方 Release 校验安装                                                        |
 
 密钥经 Electron `safeStorage`（Windows DPAPI）加密，不写入项目文件、命令行或终端历史。
 

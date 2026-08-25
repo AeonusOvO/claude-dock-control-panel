@@ -447,6 +447,7 @@ export interface ClaudeApi {
     sessionId: string,
     entryId: string,
   ) => Promise<ClaudeConnectionHistoryResult>;
+  cancelClaudeConnectionHistoryApply: (sessionId: string) => Promise<boolean>;
   deleteClaudeConnectionHistory: (
     sessionId: string,
     entryId: string,

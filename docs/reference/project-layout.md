@@ -57,7 +57,7 @@ shared/
     claude-plugin.ts codex.ts diagnostics.ts download.ts egress-diagnostics.ts
     managed-chatgpt.ts mcp.ts network.ts proxy.ts resource.ts router.ts
     onboarding.ts runtime.ts software.ts terminal.ts workspace.ts
-    control-panel-api.ts  21 个域接口组合出 ControlPanelApi 的 202 个成员
+    control-panel-api.ts  21 个域接口组合出 ControlPanelApi 的 203 个成员
   claude/                 connection-remedy context-window curl effort model-id
                           native-commands permission-mode providers state-ownership
   conversation/           native reducer surface-switch composer-input
@@ -92,7 +92,9 @@ main/
     claude-execution-settings.ts claude-launch.ts claude-plugin.ts claude-state.ts codex.ts conversation.ts
     conversation-attachment.ts download.ts managed-chatgpt.ts mcp.ts network.ts
     onboarding.ts project.ts proxy.ts router.ts runtime.ts session.ts software.ts terminal.ts
-  claude/ codex/ chat/ conversation/ terminal/ network/ proxy/
+  claude/                 项目配置事务、接入历史、路由、运行态等
+    official-auth-status.ts  `claude auth status --json` 的缓存与安全白名单投影
+  codex/ chat/ conversation/ terminal/ network/ proxy/
   download/ mcp/ artifact/ updates/ stores/ coordination/
 ```
 
@@ -111,7 +113,7 @@ preload/
                           router runtime software-update terminal workspace
 ```
 
-通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 202 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
+通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 203 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
 
 ## `src/renderer/`
 
@@ -144,22 +146,22 @@ renderer/
 | `register<Name>Feature` | `(registry, deps) => registry.register(token, factory)` 工厂注册 |
 | `Feature` 接口          | 该特性对外暴露的成员，消费方按 token 解析                        |
 
-特性内部按五文件（elements/state/view/actions/index）划分；单族职责超过可维护规模时以主题前缀拆子工厂（如 terminal 的 `terminal-io-*`、`terminal-layout-*`、`terminal-views-*`、`project-state-*`、`codex-launch-*` 五族）。跨特性依赖只经两条通道：显式 delegate（`{ current }` 引用盒）与 `-dependencies.ts` 最小接口（消费方声明鸭子类型，装配处传完整实例）。真正跨特性的状态（`workspaceState`、`selectedRailTab`、`mainView`、toast）归 `shell/`。
+特性内部按五文件（elements/state/view/actions/index）划分；单族职责超过可维护规模时以主题前缀拆子工厂（如 terminal 的 `terminal-io-*`、`terminal-layout-*`、`terminal-views-*`、`project-state-*`、`codex-launch-*` 五族）。connection 的历史子流进一步按 `history-dialog / history-render / history-mutations / history-recovery / current-connection-view` 拆分：分类弹窗只持有选择，恢复页持有运行期状态，顶部摘要只消费脱敏项目状态。跨特性依赖只经两条通道：显式 delegate（`{ current }` 引用盒）与 `-dependencies.ts` 最小接口（消费方声明鸭子类型，装配处传完整实例）。真正跨特性的状态（`workspaceState`、`selectedRailTab`、`mainView`、toast）归 `shell/`。
 
 ### 样式
 
 `styles.css` 按数字前缀顺序 `@import` 七个层，再 `@import` `views/` 下的视图样式。
 
-| 层                  | 内容                                                                  |
-| ------------------- | --------------------------------------------------------------------- |
-| `01-tokens.css`     | CSS 自定义属性                                                        |
-| `02-reset.css`      | 归一化                                                                |
-| `03-typography.css` | 字体与文本                                                            |
-| `04-motion.css`     | 过渡与动画                                                            |
-| `05-primitives.css` | 按钮、输入、卡片等控件                                                |
-| `06-layout.css`     | 应用骨架                                                              |
-| `07-responsive.css` | 断点                                                                  |
-| `views/*.css`       | 单视图样式：chat、markdown、mcp、projects、router、settings、terminal |
+| 层                  | 内容                                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `01-tokens.css`     | CSS 自定义属性                                                                            |
+| `02-reset.css`      | 归一化                                                                                    |
+| `03-typography.css` | 字体与文本                                                                                |
+| `04-motion.css`     | 过渡与动画                                                                                |
+| `05-primitives.css` | 按钮、输入、卡片等控件                                                                    |
+| `06-layout.css`     | 应用骨架                                                                                  |
+| `07-responsive.css` | 断点                                                                                      |
+| `views/*.css`       | 单视图样式：chat、connection-history、markdown、mcp、projects、router、settings、terminal |
 
 ## `tests/`
 

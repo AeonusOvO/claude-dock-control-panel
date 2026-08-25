@@ -169,6 +169,31 @@ describe('SessionOperationCoordinator', () => {
     await expect(first).resolves.toBeUndefined();
   });
 
+  it('cancels only the lease that owns the exact operation signal', async () => {
+    const coordinator = new SessionOperationCoordinator(() => true);
+    const entered = deferred<AbortSignal>();
+    const operation = coordinator.run('session-a', async (assertCurrent, signal) => {
+      entered.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      assertCurrent();
+    });
+    const ownedSignal = await entered.promise;
+
+    await expect(
+      coordinator.invalidateAndWaitIfSignal('session-a', new AbortController().signal),
+    ).resolves.toBe(false);
+    expect(ownedSignal.aborted).toBe(false);
+    expect(coordinator.isBusy('session-a')).toBe(true);
+
+    const cancelled = coordinator.invalidateAndWaitIfSignal('session-a', ownedSignal);
+    expect(ownedSignal.aborted).toBe(true);
+    await expect(operation).rejects.toThrow('已被新的终端或会话操作取消');
+    await expect(cancelled).resolves.toBe(true);
+    expect(coordinator.isBusy('session-a')).toBe(false);
+  });
+
   it('invalidates an operation when its workspace session disappears', async () => {
     const sessions = new Set(['session-a']);
     const coordinator = new SessionOperationCoordinator((sessionId) => sessions.has(sessionId));

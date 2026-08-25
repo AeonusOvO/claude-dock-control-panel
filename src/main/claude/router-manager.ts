@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import type {
   ClaudeRouterGatewayState,
   ClaudeRouterManagementState,
@@ -69,6 +69,8 @@ export interface SavedRouterProvider {
     model: string;
   };
   provider: ClaudeRouterProviderView;
+  /** Restores only this exact config mutation while the same CCR service still owns it. */
+  rollbackConfigMutation: () => Promise<void>;
   state: ClaudeRouterManagementState;
 }
 
@@ -427,31 +429,83 @@ export class ClaudeRouterManager extends ClaudeRouterPackageManager {
     const saved = await this.saveConfigWithoutProfileTakeover(access, updated.config, [
       input.apiKey ?? '',
     ]);
-    // A fresh CCR service intentionally keeps port 3456 stopped until its first provider exists.
-    // Start it here, after the provider is valid, so the one-click path never sends users to the
-    // management page to perform the missing middle step themselves.
-    await this.rpcWithAccess(access, 'startGateway');
-    let state = await this.getState();
-    const gatewayDeadline = Date.now() + 10_000;
-    while (state.gatewayState !== 'running' && Date.now() < gatewayDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      state = await this.getState();
+    const rollbackConfigMutation = this.configMutationRollback(access, current, saved);
+    try {
+      // A fresh CCR service intentionally keeps port 3456 stopped until its first provider exists.
+      // Start it here, after the provider is valid, so the one-click path never sends users to the
+      // management page to perform the missing middle step themselves.
+      await this.rpcWithAccess(access, 'startGateway');
+      let state = await this.getState();
+      const gatewayDeadline = Date.now() + 10_000;
+      while (state.gatewayState !== 'running' && Date.now() < gatewayDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        state = await this.getState();
+      }
+      if (state.gatewayState !== 'running') {
+        throw new Error(`服务提供方已保存，但 CCR 模型接口自动启动失败：${state.message}`);
+      }
+      const provider = state.providers.find((item) => item.id === updated.providerId);
+      if (!provider) {
+        throw new Error('CCR 已保存配置，但没有返回对应服务提供方。');
+      }
+      return {
+        connection: {
+          apiKey: readGatewayApiKey(saved),
+          baseUrl: state.endpoint,
+          model: `${provider.name}/${provider.models[0]}`,
+        },
+        provider,
+        rollbackConfigMutation,
+        state,
+      };
+    } catch (error) {
+      try {
+        await rollbackConfigMutation();
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `${safeMessage(error)}；Router 配置回滚失败：${safeMessage(rollbackError)}`,
+          { cause: rollbackError },
+        );
+      }
+      throw error;
     }
-    if (state.gatewayState !== 'running') {
-      throw new Error(`服务提供方已保存，但 CCR 模型接口自动启动失败：${state.message}`);
-    }
-    const provider = state.providers.find((item) => item.id === updated.providerId);
-    if (!provider) {
-      throw new Error('CCR 已保存配置，但没有返回对应服务提供方。');
-    }
-    return {
-      connection: {
-        apiKey: readGatewayApiKey(saved),
-        baseUrl: state.endpoint,
-        model: `${provider.name}/${provider.models[0]}`,
-      },
-      provider,
-      state,
+  }
+
+  /**
+   * Captures one credential-bearing Router mutation as an exact, single-use compensation. It may
+   * restore the previous config only while the same service identity is alive and its current
+   * config still equals the save result. A newer Provider/preference/credential therefore wins.
+   */
+  private configMutationRollback(
+    appliedAccess: CcrServiceAccess,
+    previousConfig: CcrAppConfig,
+    appliedConfig: CcrAppConfig,
+  ): () => Promise<void> {
+    const serviceIdentity = {
+      origin: appliedAccess.origin,
+      pid: appliedAccess.pid,
+      serviceToken: appliedAccess.serviceToken,
+    };
+    let restored = false;
+    return async (): Promise<void> => {
+      if (restored) return;
+      const currentAccess = await this.getActiveServiceAccess();
+      if (
+        !currentAccess ||
+        currentAccess.origin !== serviceIdentity.origin ||
+        currentAccess.pid !== serviceIdentity.pid ||
+        currentAccess.serviceToken !== serviceIdentity.serviceToken
+      ) {
+        throw new Error('Router 服务身份已变化，本次失败操作不会覆盖新服务的配置。');
+      }
+      await this.requireCliOwnedService(currentAccess);
+      const currentConfig = await this.rpcWithAccess<CcrAppConfig>(currentAccess, 'getConfig');
+      if (!isDeepStrictEqual(currentConfig, appliedConfig)) {
+        throw new Error('Router 配置已被更新，本次失败操作不会覆盖较新的保存结果。');
+      }
+      await this.saveConfigWithoutProfileTakeover(currentAccess, previousConfig);
+      restored = true;
     };
   }
 

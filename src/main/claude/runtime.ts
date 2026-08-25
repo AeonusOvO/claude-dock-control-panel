@@ -73,6 +73,7 @@ import type {
 } from './execution-settings-service';
 import { claudeRouteHealth } from './runtime-route-health';
 import { modelMatches } from './runtime-controls';
+import { claudeOfficialAuthProvider } from './official-auth-status';
 import {
   ClaudeRuntimeLaunchHandoff,
   type PreparedClaudeLaunchRecord,
@@ -336,9 +337,10 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
       const config = this.configStore.getConfig(cwd);
       const credential = this.configStore.getCredential(cwd);
       const configFingerprint = connectionFingerprint(config, credential);
-      const [providerUsage, routeHealth] = await Promise.all([
+      const [providerUsage, routeHealth, officialAuth] = await Promise.all([
         this.resourceUsageService.read(projectKey(cwd), config.preset, credential),
         this.getRouteHealth(runtime, config),
+        config.preset === 'anthropic' ? claudeOfficialAuthProvider.getState() : undefined,
       ]);
       if (this.sessions.get(sessionId) !== runtime) {
         throw new Error('Claude Code 会话已关闭，这次状态读取已取消。');
@@ -376,6 +378,7 @@ export class ClaudeRuntime extends ClaudeRuntimeLaunchHandoff {
         installation,
         metrics: displayMetrics,
         modelMatches: matches,
+        ...(officialAuth ? { officialAuth } : {}),
         permissionMode: runtime.permissionMode,
         permissionModeRequest: runtime.permissionModeRequest,
         permissionModeCycle: [...runtime.permissionModeCycle],

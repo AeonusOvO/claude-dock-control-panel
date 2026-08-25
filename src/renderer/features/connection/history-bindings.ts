@@ -14,6 +14,7 @@ export const bindConnectionHistoryEvents = (
   deps: ConnectionHistoryDependencies,
   state: ConnectionHistoryState,
   mutationActions: ConnectionHistoryMutationActions,
+  requestRestore: (entryId: string) => void,
 ): ConnectionHistoryMenuActions => {
   const { hideTerminalContextMenu, hideConversationContextMenu } = deps;
 
@@ -38,7 +39,7 @@ export const bindConnectionHistoryEvents = (
         return;
       }
       if (target.closest('.connection-history__restore')) {
-        void mutationActions.applyConnectionHistory(entryId);
+        requestRestore(entryId);
       }
     });
     root.addEventListener('contextmenu', (event) => {
@@ -75,7 +76,7 @@ export const bindConnectionHistoryEvents = (
       if (action === 'rename') {
         void mutationActions.renameConnectionHistory(entryId);
       } else if (action === 'apply') {
-        void mutationActions.applyConnectionHistory(entryId);
+        requestRestore(entryId);
       } else if (action === 'delete') {
         void mutationActions.deleteConnectionHistory(entryId);
       }

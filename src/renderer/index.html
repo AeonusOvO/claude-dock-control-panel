@@ -276,8 +276,26 @@
         <section class="rail-page" data-rail-page="connection">
           <div class="connection-heading connection-heading--with-action">
             <div class="connection-heading__copy">
-              <strong>按步骤完成模型接入</strong>
-              <span>先选择模型来源，再进入对应配置；当前事务完成前不会留下半配置状态。</span>
+              <div class="connection-heading__intro">
+                <strong>按步骤完成模型接入</strong>
+                <span>先选择模型来源，再进入对应配置；当前事务完成前不会留下半配置状态。</span>
+              </div>
+              <div
+                class="current-connection"
+                id="current-connection"
+                data-kind="empty"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <span>当前接入</span>
+                <div>
+                  <strong id="current-connection-name">尚未选择接入</strong>
+                  <small id="current-connection-metadata"
+                    >打开项目后，这里会显示当前生效的账号、模型或中转站。</small
+                  >
+                </div>
+              </div>
             </div>
             <button
               class="button button--compact connection-history-trigger"
@@ -295,7 +313,62 @@
             </button>
           </div>
 
-          <nav class="connection-wizard-progress" aria-label="接入进度">
+          <section
+            class="connection-history-recovery"
+            id="connection-history-recovery"
+            data-phase="idle"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          >
+            <div class="connection-history-recovery__indicator" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3a9 9 0 1 1-8.5 6" />
+                <path d="M3 4v5h5" />
+                <path class="connection-history-recovery__check" d="m7.5 12 3 3 6-7" />
+              </svg>
+            </div>
+            <span class="step-kicker" id="connection-history-recovery-kicker">接入历史</span>
+            <strong id="connection-history-recovery-title" tabindex="-1">正在准备历史接入</strong>
+            <p id="connection-history-recovery-detail">
+              将恢复完整配置，并在提交前完成真实网络、认证和模型响应测试。
+            </p>
+            <ul
+              class="connection-history-recovery__details"
+              id="connection-history-recovery-details"
+            ></ul>
+            <div class="connection-history-recovery__actions">
+              <button
+                class="button button--compact button--quiet"
+                id="cancel-connection-history-recovery"
+                type="button"
+              >
+                取消接入
+              </button>
+              <button
+                class="button button--compact button--primary"
+                id="retry-connection-history-recovery"
+                type="button"
+                hidden
+              >
+                重新接入
+              </button>
+              <button
+                class="button button--compact button--quiet"
+                id="return-from-connection-history-recovery"
+                type="button"
+                hidden
+              >
+                返回接入页
+              </button>
+            </div>
+          </section>
+
+          <nav
+            class="connection-wizard-progress"
+            id="connection-wizard-progress"
+            aria-label="接入进度"
+          >
             <button id="connection-wizard-progress-choice" data-state="active" type="button">
               <span>1</span>
               <span><strong>选择模型</strong><small>确定订阅、国产模型或 API</small></span>
@@ -874,7 +947,7 @@
             </section>
           </div>
 
-          <footer class="connection-wizard-actions">
+          <footer class="connection-wizard-actions" id="connection-wizard-actions">
             <button
               class="button button--compact button--quiet"
               id="connection-wizard-previous"
@@ -2673,7 +2746,17 @@
         <header class="connection-history-dialog__header">
           <div>
             <span class="step-kicker">按来源整理</span>
-            <strong id="connection-history-dialog-title">接入历史记录</strong>
+            <div class="connection-history-dialog__title-row">
+              <strong id="connection-history-dialog-title">接入历史记录</strong>
+              <span
+                class="connection-history-dialog__selection"
+                id="connection-history-dialog-selection"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                hidden
+              ></span>
+            </div>
             <p id="connection-history-dialog-description">
               每个入口只显示同类配置；恢复、重命名或删除仍只影响当前项目。
             </p>
@@ -2837,8 +2920,13 @@
 
         <footer class="connection-history-dialog__footer">
           <span id="connection-history-dialog-summary">当前项目共 0 条接入记录</span>
-          <button class="button button--compact" id="finish-connection-history" type="button">
-            完成
+          <button
+            class="button button--compact button--quiet"
+            id="finish-connection-history"
+            type="button"
+            data-mode="cancel"
+          >
+            取消
           </button>
         </footer>
       </div>

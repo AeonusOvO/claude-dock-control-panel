@@ -400,6 +400,10 @@ export interface OwnedConfigTransactionOptions<TSnapshot, TPrepared, TState> {
     completedSnapshot: TSnapshot,
   ) => TSnapshot;
   prepare: () => Promise<TPrepared> | TPrepared;
+  /** Runs fallible checks against the prepared value before the project profile is committed. */
+  validatePrepared?: (prepared: TPrepared) => Promise<void> | void;
+  /** Compensates external resources captured by prepare on every later transaction failure. */
+  rollbackPrepared?: (prepared: TPrepared) => Promise<void> | void;
   publishRestoredState?: (state: TState) => void;
   readState: () => Promise<TState>;
   restoreSnapshot: (snapshot: TSnapshot) => void;
@@ -408,9 +412,10 @@ export interface OwnedConfigTransactionOptions<TSnapshot, TPrepared, TState> {
 
 /**
  * Runs one project-profile mutation as a generation-owned transaction. Potentially slow provider or
- * history preparation happens while the original snapshot is still persisted. The commit callback is
- * deliberately synchronous; only after its exact result is captured may validation, route preparation,
- * state reads, or terminal replacement await. Every later failure performs an ownership-checked restore.
+ * history preparation and its fallible validation happen while the original snapshot is still
+ * persisted. The commit callback is deliberately synchronous; only after its exact result is captured
+ * may completion, state reads, or terminal replacement await. Every later failure performs an
+ * ownership-checked project restore plus an exact compensation for prepared external resources.
  */
 export const runOwnedConfigTransaction = <TSnapshot, TPrepared, TState>(
   options: OwnedConfigTransactionOptions<TSnapshot, TPrepared, TState>,
@@ -425,12 +430,20 @@ export const runOwnedConfigTransaction = <TSnapshot, TPrepared, TState>(
 
     const snapshot = options.createSnapshot();
     let commitAttempted = false;
+    let prepareCompleted = false;
+    let prepared!: TPrepared;
     let savedSnapshot = snapshot;
 
     try {
-      const prepared = await options.prepare();
+      prepared = await options.prepare();
+      prepareCompleted = true;
       ownership.assertCurrent();
       options.assertOperationOwnership();
+      if (options.validatePrepared) {
+        await options.validatePrepared(prepared);
+        ownership.assertCurrent();
+        options.assertOperationOwnership();
+      }
       if (!isDeepStrictEqual(options.createSnapshot(), snapshot)) {
         throw new Error('项目配置在异步准备期间已被更新，本次保存已取消。');
       }
@@ -485,6 +498,18 @@ export const runOwnedConfigTransaction = <TSnapshot, TPrepared, TState>(
           recoveryError = rollbackError;
         }
       }
+      if (prepareCompleted && options.rollbackPrepared) {
+        try {
+          await options.rollbackPrepared(prepared);
+        } catch (rollbackError) {
+          recoveryError = recoveryError
+            ? new AggregateError(
+                [recoveryError, rollbackError],
+                '项目配置与已准备资源均未能完整回滚。',
+              )
+            : rollbackError;
+        }
+      }
 
       try {
         state = await options.readState();
@@ -494,7 +519,9 @@ export const runOwnedConfigTransaction = <TSnapshot, TPrepared, TState>(
           options.publishRestoredState?.(state);
         }
       } catch (stateError) {
-        recoveryError ??= stateError;
+        recoveryError = recoveryError
+          ? new AggregateError([recoveryError, stateError], '事务回滚后的状态读取也失败。')
+          : stateError;
       } finally {
         ownership.finish();
       }

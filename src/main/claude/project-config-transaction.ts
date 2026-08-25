@@ -62,9 +62,16 @@ export const createRunClaudeProjectConfigTransaction = ({
         options.runtime.mergeConfigCompletionSnapshot(committed, completed),
       prepare: options.prepare,
       publishRestoredState: publishRestoredClaudeProjectState,
-      readState: () => options.runtime.getState(options.sessionId, options.cwd),
+      readState: () => {
+        // `getState()` binds the runtime session to its cwd. Never call it with the transaction's
+        // old directory after the workspace has reused that session id for another project.
+        assertTargetCurrent();
+        return options.runtime.getState(options.sessionId, options.cwd);
+      },
+      rollbackPrepared: (prepared) => options.runtime.rollbackPreparedConfig(prepared),
       restoreSnapshot: (snapshot) => options.runtime.restoreConfigSnapshot(options.cwd, snapshot),
       sessionId: options.sessionId,
+      validatePrepared: options.validatePrepared,
     });
   };
   return runClaudeProjectConfigTransaction;

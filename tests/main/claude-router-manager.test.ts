@@ -342,6 +342,91 @@ describe('Claude Code Router management', () => {
     }
   });
 
+  it('rolls back only the exact Router config mutation and never overwrites a newer config', async () => {
+    const access = {
+      managementUrl: 'http://127.0.0.1:3456/ui',
+      origin: 'http://127.0.0.1:3456',
+      pid: 4321,
+      serviceToken: 'service-token',
+      webToken: 'web-token',
+    };
+    const provider = {
+      baseUrl: providerInput.baseUrl,
+      credentialConfigured: true,
+      id: providerInput.name,
+      models: providerInput.models,
+      name: providerInput.name,
+      preferred: true,
+      protocol: providerInput.protocol,
+    };
+    const runningState = {
+      checkedAt: 1,
+      endpoint: 'http://127.0.0.1:3456',
+      gatewayState: 'running',
+      installed: true,
+      installationKind: 'npm',
+      manageable: true,
+      managementAvailable: true,
+      message: '模型网关已运行。',
+      providers: [provider],
+      serviceRunning: true,
+      version: '3.1.0',
+    };
+    let currentConfig: Record<string, unknown> = structuredClone(baseConfig);
+    const manager = new ClaudeRouterManager('C:\\claudedock-test');
+    const internals = manager as unknown as {
+      getActiveServiceAccess: () => Promise<typeof access | undefined>;
+      getState: () => Promise<typeof runningState>;
+      requireCliOwnedService: (value: typeof access) => Promise<void>;
+      rpcWithAccess: <T>(value: typeof access, method: string) => Promise<T>;
+      saveConfigWithoutProfileTakeover: (
+        value: typeof access,
+        config: Record<string, unknown>,
+      ) => Promise<Record<string, unknown>>;
+    };
+    internals.getActiveServiceAccess = vi.fn(async () => access);
+    internals.requireCliOwnedService = vi.fn(async () => undefined);
+    internals.rpcWithAccess = vi.fn(async (_value, method) => {
+      if (method === 'getConfig') return structuredClone(currentConfig) as never;
+      return undefined as never;
+    });
+    internals.saveConfigWithoutProfileTakeover = vi.fn(async (_value, config) => {
+      currentConfig = structuredClone(config);
+      if (
+        Array.isArray(currentConfig.Providers) &&
+        currentConfig.Providers.some(
+          (candidate) =>
+            typeof candidate === 'object' &&
+            candidate !== null &&
+            'id' in candidate &&
+            candidate.id === 'relay-example',
+        )
+      ) {
+        currentConfig.serviceCanonicalForm = 'normalized-after-save';
+      }
+      return structuredClone(currentConfig);
+    });
+    internals.getState = vi.fn(async () => runningState);
+
+    const saved = await manager.saveProvider(providerInput);
+    const appliedConfig = structuredClone(currentConfig);
+    expect(currentConfig.preferredProvider).toBe('relay-example');
+    expect(currentConfig.serviceCanonicalForm).toBe('normalized-after-save');
+    expect(JSON.stringify(currentConfig)).toContain('sk-upstream-example');
+
+    const newerConfig = {
+      ...structuredClone(currentConfig),
+      preferredProvider: 'newer-provider',
+    };
+    currentConfig = newerConfig;
+    await expect(saved.rollbackConfigMutation()).rejects.toThrow('不会覆盖较新的保存结果');
+    expect(currentConfig).toEqual(newerConfig);
+
+    currentConfig = appliedConfig;
+    await saved.rollbackConfigMutation();
+    expect(currentConfig).toEqual(baseConfig);
+  });
+
   it('launches the CCR CLI with its compatible system Node instead of Electron', () => {
     expect(
       routerCliStartSpec(

@@ -224,6 +224,82 @@ describe('main project-config transaction integration', () => {
     expect(calls).toEqual(['commit', 'complete', 'restore', 'read', 'publish']);
   });
 
+  it('rolls back a prepared external mutation when cancellation lands before commit', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const cancellation = new Error('history apply cancelled');
+    let ownershipChecks = 0;
+    let routerConfig = 'old-provider';
+    const rollbackPrepared = vi.fn(async () => {
+      routerConfig = 'old-provider';
+    });
+
+    let captured: unknown;
+    try {
+      await runOwnedConfigTransaction({
+        assertOperationOwnership: () => {
+          ownershipChecks += 1;
+          if (ownershipChecks === 2) throw cancellation;
+        },
+        commit: vi.fn(),
+        complete: vi.fn(async () => ({ routerConfig })),
+        coordinator,
+        createSnapshot: () => ({ profile: 'old-profile' }),
+        cwd: 'D:\\Project',
+        prepare: () => {
+          routerConfig = 'prepared-provider';
+          return { routerConfig };
+        },
+        readState: async () => ({ routerConfig }),
+        restoreSnapshot: vi.fn(),
+        rollbackPrepared,
+        sessionId: 'session-1',
+      });
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(OwnedConfigTransactionError);
+    expect((captured as OwnedConfigTransactionError<unknown>).originalError).toBe(cancellation);
+    expect(rollbackPrepared).toHaveBeenCalledOnce();
+    expect(routerConfig).toBe('old-provider');
+  });
+
+  it('rolls back a prepared external mutation when its pre-commit connection test fails', async () => {
+    const coordinator = new SessionConfigTransactionCoordinator();
+    const connectionFailure = new Error('real connection test failed');
+    let routerConfig = 'old-provider';
+    const commit = vi.fn();
+    const rollbackPrepared = vi.fn(async () => {
+      routerConfig = 'old-provider';
+    });
+
+    await expect(
+      runOwnedConfigTransaction({
+        assertOperationOwnership: vi.fn(),
+        commit,
+        complete: vi.fn(async () => ({ routerConfig })),
+        coordinator,
+        createSnapshot: () => ({ profile: 'old-profile' }),
+        cwd: 'D:\\Project',
+        prepare: () => {
+          routerConfig = 'prepared-provider';
+          return { routerConfig };
+        },
+        readState: async () => ({ routerConfig }),
+        restoreSnapshot: vi.fn(),
+        rollbackPrepared,
+        sessionId: 'session-1',
+        validatePrepared: () => {
+          throw connectionFailure;
+        },
+      }),
+    ).rejects.toMatchObject({ originalError: connectionFailure });
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(rollbackPrepared).toHaveBeenCalledOnce();
+    expect(routerConfig).toBe('old-provider');
+  });
+
   it('rolls back completion-owned history recency after later completion failure', async () => {
     const coordinator = new SessionConfigTransactionCoordinator();
     const before = { config: 'original', history: ['older', 'selected'] };
@@ -371,6 +447,16 @@ describe('main project-config transaction integration', () => {
         calls.push(`${active}:prepare-history`);
         return prepared;
       }),
+      testPreparedConnection: vi.fn(async () => {
+        calls.push(`${active}:test-history`);
+        return {
+          message: '连接测试通过。',
+          ok: true,
+          stages: [],
+          testedAt: 1,
+          tone: 'success',
+        };
+      }),
       prepareAuthorizedConnectionHistory: vi.fn(async () => {
         calls.push(`${active}:prepare-history`);
         return prepared;
@@ -408,6 +494,7 @@ describe('main project-config transaction integration', () => {
       transactionCount += 1;
       calls.push(`${active}:directory`);
       const preparedValue = await options.prepare();
+      await options.validatePrepared?.(preparedValue);
       const commitResult = options.commit(preparedValue);
       expect(commitResult).toBeUndefined();
       return options.complete(preparedValue);
@@ -457,6 +544,8 @@ describe('main project-config transaction integration', () => {
       })) as never,
       configTransactionState: vi.fn(),
       guards: guards as never,
+      invalidateAndWaitForMatchingDevelopmentSessionOperation: (sessionId, signal) =>
+        developmentSessionOperations.invalidateAndWaitIfSignal(sessionId, signal),
       runClaudeProjectConfigTransaction,
       withDevelopmentSessionOperation,
       workspace: workspace as never,
@@ -559,6 +648,7 @@ describe('main project-config transaction integration', () => {
       'session',
       'directory',
       'prepare-history',
+      'test-history',
       'commit-profile',
       'complete-profile',
     ]);

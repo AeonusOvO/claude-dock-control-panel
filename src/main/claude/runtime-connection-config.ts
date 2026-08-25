@@ -365,16 +365,22 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       };
     }
 
-    const prepared = await this.prepareOpenAiConnection(input, assertCurrent);
-    assertCurrent();
-    return {
+    const openAiPrepared = await this.prepareOpenAiConnection(input, assertCurrent);
+    const prepared: PreparedClaudeConfigSave = {
       historyMetadata: {
-        ...prepared.historyMetadata,
+        ...openAiPrepared.historyMetadata,
         ...(historyName ? { name: historyName } : {}),
       },
-      input: prepared.effectiveInput,
-      presentation: prepared.presentation,
+      input: openAiPrepared.effectiveInput,
+      presentation: openAiPrepared.presentation,
+      rollbackRouterConfig: openAiPrepared.rollbackRouterConfig,
     };
+    try {
+      assertCurrent();
+      return prepared;
+    } catch (error) {
+      return this.failAfterPreparedConfig(prepared, error);
+    }
   }
 
   /** Reads and prepares one history replay without changing the project profile. */
@@ -399,22 +405,26 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       structuredClone(authorization.replay),
       assertCurrent,
     );
-    assertCurrent();
-    this.assertConnectionHistoryAuthorizationCurrent(cwd, authorization);
-    const preparedNetworkAccess = claudeNetworkAccessForConfig(
-      normalizeClaudeConfig(prepared.input),
-      prepared.presentation?.protocol ??
-        prepared.input.protocol ??
-        defaultConnectionProtocolForPreset(prepared.input.preset),
-    );
-    if (
-      officialNetworkProviderForClaudePreset(prepared.input.preset) !==
-        authorization.officialNetworkProvider ||
-      !sameClaudeNetworkAccess(preparedNetworkAccess, authorization.networkAccess)
-    ) {
-      throw new Error('历史接入准备结果与已授权网络目标不一致，请重试。');
+    try {
+      assertCurrent();
+      this.assertConnectionHistoryAuthorizationCurrent(cwd, authorization);
+      const preparedNetworkAccess = claudeNetworkAccessForConfig(
+        normalizeClaudeConfig(prepared.input),
+        prepared.presentation?.protocol ??
+          prepared.input.protocol ??
+          defaultConnectionProtocolForPreset(prepared.input.preset),
+      );
+      if (
+        officialNetworkProviderForClaudePreset(prepared.input.preset) !==
+          authorization.officialNetworkProvider ||
+        !sameClaudeNetworkAccess(preparedNetworkAccess, authorization.networkAccess)
+      ) {
+        throw new Error('历史接入准备结果与已授权网络目标不一致，请重试。');
+      }
+      return prepared;
+    } catch (error) {
+      return this.failAfterPreparedConfig(prepared, error);
     }
-    return prepared;
   }
 
   private prepareConnectionReplay(
@@ -553,55 +563,60 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       protocol,
       useForCurrentProject: false,
     });
-    assertCurrent();
-    routerState = await this.routerManager.start();
-    assertCurrent();
-    this.routerHealthCache.set(routerState);
-    if (routerState.gatewayState !== 'running') {
-      throw new Error(`本地 Router 未能启动模型网关：${routerState.message}`);
-    }
+    try {
+      assertCurrent();
+      routerState = await this.routerManager.start();
+      assertCurrent();
+      this.routerHealthCache.set(routerState);
+      if (routerState.gatewayState !== 'running') {
+        throw new Error(`本地 Router 未能启动模型网关：${routerState.message}`);
+      }
 
-    const sourceCredentialConfigured =
-      credentialAction === 'replace' ||
-      (credentialAction === 'keep' && Boolean(existing?.credentialConfigured));
-    const sourceConfig: SaveClaudeConfigInput = {
-      ...input,
-      baseUrl: endpoint,
-      credential: undefined,
-      credentialAction: 'keep',
-      protocol: 'openai',
-      routerProviderId: saved.provider.id,
-    };
-    return {
-      effectiveInput: {
-        apiKeyHelperPolicy: input.apiKeyHelperPolicy,
-        authMode: 'authToken',
-        baseUrl: saved.connection.baseUrl,
-        credential: saved.connection.apiKey,
-        credentialAction: 'replace',
-        model: `${saved.provider.name}/${model}`,
-        modelFast: `${saved.provider.name}/${modelFast}`,
-        preset: 'custom',
-        provider: 'gateway',
-      },
-      historyMetadata: {
-        name: saved.provider.name,
+      const sourceCredentialConfigured =
+        credentialAction === 'replace' ||
+        (credentialAction === 'keep' && Boolean(existing?.credentialConfigured));
+      const sourceConfig: SaveClaudeConfigInput = {
+        ...input,
+        baseUrl: endpoint,
+        credential: undefined,
+        credentialAction: 'keep',
         protocol: 'openai',
         routerProviderId: saved.provider.id,
-        sourceConfig,
-        sourceCredential: credentialAction === 'replace' ? enteredCredential : undefined,
-        sourceCredentialConfigured,
-      },
-      presentation: {
-        protocol: 'openai',
-        routerProviderId: saved.provider.id,
-        sourceAuthMode: input.authMode,
-        sourceBaseUrl: endpoint,
-        sourceCredentialConfigured,
-        sourceModel: model,
-        sourceModelFast: modelFast,
-      },
-    };
+      };
+      return {
+        effectiveInput: {
+          apiKeyHelperPolicy: input.apiKeyHelperPolicy,
+          authMode: 'authToken',
+          baseUrl: saved.connection.baseUrl,
+          credential: saved.connection.apiKey,
+          credentialAction: 'replace',
+          model: `${saved.provider.name}/${model}`,
+          modelFast: `${saved.provider.name}/${modelFast}`,
+          preset: 'custom',
+          provider: 'gateway',
+        },
+        historyMetadata: {
+          name: saved.provider.name,
+          protocol: 'openai',
+          routerProviderId: saved.provider.id,
+          sourceConfig,
+          sourceCredential: credentialAction === 'replace' ? enteredCredential : undefined,
+          sourceCredentialConfigured,
+        },
+        presentation: {
+          protocol: 'openai',
+          routerProviderId: saved.provider.id,
+          sourceAuthMode: input.authMode,
+          sourceBaseUrl: endpoint,
+          sourceCredentialConfigured,
+          sourceModel: model,
+          sourceModelFast: modelFast,
+        },
+        rollbackRouterConfig: saved.rollbackConfigMutation,
+      };
+    } catch (error) {
+      return this.failAfterSavedRouterMutation(saved, error);
+    }
   }
 
   private baselineRevision(value: unknown): string {
@@ -655,6 +670,24 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       fingerprint,
       result,
     });
+    return result;
+  }
+
+  /** Tests the exact effective route prepared for a history replay before its profile is committed. */
+  public async testPreparedConnection(
+    cwd: string,
+    prepared: PreparedClaudeConfigSave,
+    assertCurrent: () => void = () => undefined,
+    signal?: AbortSignal,
+  ): Promise<ClaudeConnectionTestResult> {
+    assertCurrent();
+    const config = normalizeClaudeConfig(prepared.input);
+    const enteredCredential = prepared.input.credential?.trim();
+    const credential = enteredCredential || this.configStore.getCredential(cwd);
+    const fingerprint = connectionFingerprint(config, credential);
+    const result = await testClaudeConnection(config, credential, signal);
+    assertCurrent();
+    this.connectionChecks.set(projectKey(cwd), { fingerprint, result });
     return result;
   }
 }

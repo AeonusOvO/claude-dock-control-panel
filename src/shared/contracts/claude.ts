@@ -122,8 +122,8 @@ export interface SaveClaudeConfigInput {
 }
 
 /**
- * A previously saved connection setup, replayable in one click. The credential itself never leaves
- * the main process — the renderer only learns whether one is attached.
+ * A previously saved connection setup, selectable for a confirmed and tested replay. The credential
+ * itself never leaves the main process — the renderer only learns whether one is attached.
  */
 export interface ClaudeConnectionHistoryEntry {
   apiKeyHelperPolicy: ClaudeApiKeyHelperPolicy;
@@ -149,6 +149,7 @@ export interface ClaudeConnectionHistoryEntry {
 }
 
 export interface ClaudeConnectionHistoryResult extends FailureMetadata {
+  connectionTest?: ClaudeConnectionTestResult;
   entries: ClaudeConnectionHistoryEntry[];
   error?: string;
   ok: boolean;
@@ -198,6 +199,15 @@ export interface ClaudeRouteHealth {
   tone: ClaudeRouteHealthTone;
 }
 
+/** Safe, credential-free identity reported by the installed Claude Code CLI. */
+export interface ClaudeOfficialAuthState {
+  accountIdentity?: string;
+  authMethod?: string;
+  available: boolean;
+  checkedAt: number;
+  loggedIn: boolean;
+}
+
 export interface ClaudeProjectState {
   active: boolean;
   /** Whether the next launch arms `bypassPermissions` so Shift+Tab can reach it. */
@@ -215,6 +225,8 @@ export interface ClaudeProjectState {
   installation: ClaudeInstallationStatus;
   metrics?: ClaudeMetrics;
   modelMatches?: boolean;
+  /** Present only for the first-party Claude subscription route. */
+  officialAuth?: ClaudeOfficialAuthState;
   /** Parsed from the live Claude Code badge; absent until the badge has been seen once. */
   permissionMode?: ClaudePermissionMode;
   /** Last mode requested through ClaudeDock; the live badge remains the applied truth. */

@@ -40,6 +40,7 @@ import {
   usesDefaultClaudeRouter,
 } from './runtime-connection';
 import { ClaudeRouterManager, type SavedRouterProvider } from './router-manager';
+import { safeMessage } from './router-package-manager';
 import type { PreparedClaudeConfigSave } from './runtime-types';
 
 const execFileAsync = promisify(execFile);
@@ -228,9 +229,13 @@ export abstract class ClaudeRuntimeRouting {
     assertCurrent: () => void = () => undefined,
   ): Promise<SavedRouterProvider> {
     const saved = await this.routerManager.saveProvider(input);
-    assertCurrent();
-    this.routerHealthCache.set(saved.state);
-    return saved;
+    try {
+      assertCurrent();
+      this.routerHealthCache.set(saved.state);
+      return saved;
+    } catch (error) {
+      return this.failAfterSavedRouterMutation(saved, error);
+    }
   }
 
   public prepareRouterProjectConfig(saved: SavedRouterProvider): PreparedClaudeConfigSave {
@@ -248,7 +253,51 @@ export abstract class ClaudeRuntimeRouting {
         preset: 'gateway',
         provider: 'gateway',
       },
+      rollbackRouterConfig: saved.rollbackConfigMutation,
     };
+  }
+
+  /** Compensates the external Router half of a prepared project-config transaction. */
+  public async rollbackPreparedConfig(prepared: unknown): Promise<void> {
+    if (typeof prepared !== 'object' || prepared === null) return;
+    const rollback = (prepared as Partial<PreparedClaudeConfigSave>).rollbackRouterConfig;
+    if (!rollback) return;
+    await rollback();
+    this.routerHealthCache.clear();
+  }
+
+  /** Rolls back a prepared Router mutation when a later handoff check rejects the prepared value. */
+  protected async failAfterPreparedConfig(
+    prepared: PreparedClaudeConfigSave,
+    error: unknown,
+  ): Promise<never> {
+    try {
+      await this.rollbackPreparedConfig(prepared);
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `${safeMessage(error)}；已准备的 Router 配置回滚失败：${safeMessage(rollbackError)}`,
+        { cause: rollbackError },
+      );
+    }
+    throw error;
+  }
+
+  protected async failAfterSavedRouterMutation(
+    saved: SavedRouterProvider,
+    error: unknown,
+  ): Promise<never> {
+    try {
+      await saved.rollbackConfigMutation();
+      this.routerHealthCache.clear();
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `${safeMessage(error)}；Router 配置回滚失败：${safeMessage(rollbackError)}`,
+        { cause: rollbackError },
+      );
+    }
+    throw error;
   }
 
   public async repairRouterProviderFromProject(
@@ -269,14 +318,18 @@ export abstract class ClaudeRuntimeRouting {
     }
 
     const saved = await this.routerManager.saveProvider(input);
-    assertCurrent();
-    const routerState = await this.routerManager.start();
-    assertCurrent();
-    this.routerHealthCache.set(routerState);
-    if (routerState.gatewayState !== 'running') {
-      throw new Error(routerState.message);
+    try {
+      assertCurrent();
+      const routerState = await this.routerManager.start();
+      assertCurrent();
+      this.routerHealthCache.set(routerState);
+      if (routerState.gatewayState !== 'running') {
+        throw new Error(routerState.message);
+      }
+      return { ...saved, state: routerState };
+    } catch (error) {
+      return this.failAfterSavedRouterMutation(saved, error);
     }
-    return { ...saved, state: routerState };
   }
 
   protected routeKindForConfig(config: NormalizedClaudeConfig): ClaudeRouteKind {

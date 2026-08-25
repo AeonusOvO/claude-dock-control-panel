@@ -586,7 +586,10 @@ const installProjectFeatures = (
     requestComposerFocus: features.terminalFeature.requestComposerFocus,
     requestConfirmation,
     resolveClaudeLaunchDecision: features.terminalFeature.resolveClaudeLaunchDecision,
-    resetForProjectChange: () => features.connectionFeature.resetForProjectChange(),
+    resetForProjectChange: () => {
+      features.connectionFeature.resetForProjectChange();
+      connectionHistory.resetForProjectChange();
+    },
     resetProviderForm: () => features.routerFeature.resetProviderForm(),
     resultFailureMessage,
     retryTerminalFitUntilMeasured: features.terminalFeature.retryTerminalFitUntilMeasured,
@@ -663,7 +666,10 @@ const installApplicationSubscriptions = (
   const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
     connectionFeature.rerunAutomaticConnectionTestForActiveProject();
   });
-  window.controlPanel.onClaudeState(terminalProjectState.renderClaudeState);
+  window.controlPanel.onClaudeState((state) => {
+    terminalProjectState.renderClaudeState(state);
+    shells.connectionHistory.renderCurrentConnection();
+  });
   window.controlPanel.onCodexState((state) => {
     terminalProjectState.renderCodexState(state);
     if (codexLaunchShell.getCodexAutoLaunchSessionId() !== state.sessionId || !state.account) {

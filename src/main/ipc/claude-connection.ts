@@ -2,6 +2,7 @@ import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
 import type {
   ClaudeConfigResult,
+  ClaudeConnectionTestResult,
   ClaudeConnectionHistoryResult,
   ClaudeOperationResult,
   ClaudeProjectState,
@@ -25,6 +26,10 @@ export interface ClaudeConnectionIpcDependencies {
     MainGuards,
     'requireClaudeRuntime' | 'validateSender' | 'withOfficialProviderAccess'
   >;
+  invalidateAndWaitForMatchingDevelopmentSessionOperation: (
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
   runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction;
   withDevelopmentSessionOperation: WithSessionOperation;
   workspace: TerminalWorkspace;
@@ -48,10 +53,125 @@ const withOptionalNetworkAccess = <T>(
   });
 };
 
+const registerConnectionHistoryApplyIpc = ({
+  configTransactionState,
+  guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+  invalidateAndWaitForMatchingDevelopmentSessionOperation,
+  runClaudeProjectConfigTransaction,
+  withDevelopmentSessionOperation,
+  workspace,
+}: ClaudeConnectionIpcDependencies): void => {
+  const activeApplications = new Map<string, AbortSignal>();
+  ipcMain.handle(
+    CHANNELS.CLAUDE_CONNECTION_HISTORY_APPLY,
+    async (event, sessionId: unknown, entryId: unknown): Promise<ClaudeConnectionHistoryResult> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      const status = workspace.getStatus(validatedSessionId);
+      const runtime = requireClaudeRuntime();
+      if (activeApplications.has(validatedSessionId)) {
+        const message = '这条历史配置正在接入，请等待当前操作完成或先取消接入。';
+        return {
+          ...reportConfigurationFailure('environment', message),
+          entries: runtime.getConnectionHistory(status.cwd),
+          error: message,
+          ok: false,
+        };
+      }
+      let operationSignal: AbortSignal | undefined;
+      let connectionTest: ClaudeConnectionTestResult | undefined;
+      try {
+        const validatedEntryId = validateHistoryEntryId(entryId);
+        const state = await withDevelopmentSessionOperation(
+          validatedSessionId,
+          (assertCurrent, signal) => {
+            operationSignal = signal;
+            activeApplications.set(validatedSessionId, signal);
+            return runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
+              assertCurrent,
+              commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
+              complete: (prepared) =>
+                runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
+              cwd: status.cwd,
+              prepare: () =>
+                runtime.prepareConnectionHistory(status.cwd, validatedEntryId, assertCurrent),
+              runtime,
+              sessionId: validatedSessionId,
+              validatePrepared: (prepared) =>
+                withOptionalNetworkAccess(
+                  withOfficialProviderAccess,
+                  { action: 'provider-switch', cwd: status.cwd },
+                  typeof runtime.connectionHistoryNetworkAccess === 'function'
+                    ? runtime.connectionHistoryNetworkAccess(status.cwd, validatedEntryId)
+                    : effectiveClaudeNetworkAccess(
+                        undefined,
+                        runtime.connectionHistoryOfficialNetworkProvider(
+                          status.cwd,
+                          validatedEntryId,
+                        ),
+                      ),
+                  assertCurrent,
+                  async () => {
+                    connectionTest = await runtime.testPreparedConnection(
+                      status.cwd,
+                      prepared,
+                      assertCurrent,
+                      signal,
+                    );
+                    const officialLoginDeferred =
+                      !connectionTest.ok &&
+                      connectionTest.tone === 'warning' &&
+                      prepared.input.authMode === 'existing';
+                    if (!connectionTest.ok && !officialLoginDeferred) {
+                      throw new Error(connectionTest.message ?? '历史配置未通过真实连接测试。');
+                    }
+                  },
+                ),
+            });
+          },
+        );
+        return {
+          ...(connectionTest ? { connectionTest } : {}),
+          entries: runtime.getConnectionHistory(status.cwd),
+          ok: true,
+          state,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法应用这条接入记录。';
+        const state = configTransactionState(error);
+        return {
+          ...reportConfigurationFailure('environment', message, error),
+          ...(connectionTest ? { connectionTest } : {}),
+          entries: runtime.getConnectionHistory(status.cwd),
+          error: message,
+          ok: false,
+          ...(state ? { state } : {}),
+        };
+      } finally {
+        if (activeApplications.get(validatedSessionId) === operationSignal) {
+          activeApplications.delete(validatedSessionId);
+        }
+      }
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.CLAUDE_CONNECTION_HISTORY_CANCEL_APPLY,
+    async (event, sessionId: unknown): Promise<boolean> => {
+      validateSender(event);
+      const validatedSessionId = validateSessionId(sessionId);
+      workspace.getStatus(validatedSessionId);
+      const signal = activeApplications.get(validatedSessionId);
+      if (!signal) return false;
+      return invalidateAndWaitForMatchingDevelopmentSessionOperation(validatedSessionId, signal);
+    },
+  );
+};
+
 export const registerClaudeConnectionIpc = ({
   claudeFailure,
   configTransactionState,
   guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+  invalidateAndWaitForMatchingDevelopmentSessionOperation,
   runClaudeProjectConfigTransaction,
   withDevelopmentSessionOperation,
   workspace,
@@ -88,13 +208,16 @@ export const registerClaudeConnectionIpc = ({
         return { ok: true, state };
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法保存 Claude 接入配置。';
+        let state = configTransactionState(error);
+        if (!state) {
+          const currentStatus = workspace.getStatus(validatedSessionId);
+          state = await runtime.getState(validatedSessionId, currentStatus.cwd);
+        }
         return {
           ...reportConfigurationFailure('user-input', message, error),
           error: message,
           ok: false,
-          state:
-            configTransactionState(error) ??
-            (await runtime.getState(validatedSessionId, status.cwd)),
+          state,
         };
       }
     },
@@ -105,56 +228,15 @@ export const registerClaudeConnectionIpc = ({
     const status = workspace.getStatus(validatedSessionId);
     return requireClaudeRuntime().getConnectionHistory(status.cwd);
   });
-  ipcMain.handle(
-    CHANNELS.CLAUDE_CONNECTION_HISTORY_APPLY,
-    async (event, sessionId: unknown, entryId: unknown): Promise<ClaudeConnectionHistoryResult> => {
-      validateSender(event);
-      const validatedSessionId = validateSessionId(sessionId);
-      const status = workspace.getStatus(validatedSessionId);
-      const runtime = requireClaudeRuntime();
-      try {
-        const validatedEntryId = validateHistoryEntryId(entryId);
-        const state = await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
-          runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
-            assertCurrent,
-            commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
-            complete: (prepared) =>
-              runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
-            cwd: status.cwd,
-            prepare: () =>
-              withOptionalNetworkAccess(
-                withOfficialProviderAccess,
-                { action: 'provider-switch', cwd: status.cwd },
-                typeof runtime.connectionHistoryNetworkAccess === 'function'
-                  ? runtime.connectionHistoryNetworkAccess(status.cwd, validatedEntryId)
-                  : effectiveClaudeNetworkAccess(
-                      undefined,
-                      runtime.connectionHistoryOfficialNetworkProvider(
-                        status.cwd,
-                        validatedEntryId,
-                      ),
-                    ),
-                assertCurrent,
-                () => runtime.prepareConnectionHistory(status.cwd, validatedEntryId, assertCurrent),
-              ),
-            runtime,
-            sessionId: validatedSessionId,
-          }),
-        );
-        return { entries: runtime.getConnectionHistory(status.cwd), ok: true, state };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : '无法应用这条接入记录。';
-        const state = configTransactionState(error);
-        return {
-          ...reportConfigurationFailure('environment', message, error),
-          entries: runtime.getConnectionHistory(status.cwd),
-          error: message,
-          ok: false,
-          ...(state ? { state } : {}),
-        };
-      }
-    },
-  );
+  registerConnectionHistoryApplyIpc({
+    claudeFailure,
+    configTransactionState,
+    guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+    invalidateAndWaitForMatchingDevelopmentSessionOperation,
+    runClaudeProjectConfigTransaction,
+    withDevelopmentSessionOperation,
+    workspace,
+  });
   ipcMain.handle(
     CHANNELS.CLAUDE_CONNECTION_HISTORY_DELETE,
     async (event, sessionId: unknown, entryId: unknown): Promise<ClaudeConnectionHistoryResult> => {

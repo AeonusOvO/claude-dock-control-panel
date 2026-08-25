@@ -465,6 +465,66 @@
   }
 }
 
+@keyframes connection-history-selection-label {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--s-2) * -1)) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes connection-history-card-select {
+  0% {
+    transform: scale(0.985);
+  }
+  62% {
+    transform: scale(1.008);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes connection-history-recovery-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--s-4)) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes connection-history-recovery-orbit {
+  0% {
+    transform: rotate(0deg) scale(0.96);
+  }
+  55% {
+    transform: rotate(220deg) scale(1.04);
+  }
+  100% {
+    transform: rotate(360deg) scale(0.96);
+  }
+}
+
+@keyframes connection-history-check-draw {
+  from {
+    opacity: 0;
+    stroke-dashoffset: 16;
+    transform: scale(0.76);
+    transform-origin: center;
+  }
+  to {
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .conversation-item__label[data-title-typing='true']::after,
   .chat-history__open strong[data-title-typing='true']::after,
