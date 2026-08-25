@@ -317,6 +317,26 @@ const main = async () => {
       `() => Boolean(window.controlPanel && document.querySelector('#project-list'))`,
       'the renderer bridge',
     );
+
+    // A clean user-data directory deliberately opens the first-run guide above the workbench. Keep
+    // this real-window suite honest: dismiss it with an actual pointer click, wait for the animated
+    // close to finish, and verify the workbench is no longer inert before touching controls beneath
+    // it. Coordinate-only clicks used to tunnel through this layer and made the first capture look
+    // actionable even though a person could not reach the launch button.
+    const firstRunGuideOpen = await evaluate(
+      `document.querySelector('#onboarding-shell')?.dataset.state === 'open'`,
+    );
+    if (firstRunGuideOpen) {
+      await capture('onboarding-first-run-real.png', {
+        interaction: 'first-run-guide',
+        theme: await evaluate(`document.documentElement.dataset.theme`),
+      });
+      await click('#onboarding-dismiss');
+      await waitFor(
+        `() => document.querySelector('#onboarding-shell')?.hidden === true && document.querySelector('#control-panel')?.inert === false`,
+        'the first-run guide to finish closing and release the workbench',
+      );
+    }
     await evaluate(
       `(async () => window.controlPanel.addProject(${JSON.stringify(projectPath)}))()`,
     );
