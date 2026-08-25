@@ -19,6 +19,8 @@ const probe = `
 
   const select = document.querySelector('#settings-theme');
   const shell = select.closest('.select');
+  shell.scrollIntoView({ block: 'center' });
+  await sleep(100);
   const rect = shell.getBoundingClientRect();
   const init = {
     bubbles: true,
@@ -112,7 +114,11 @@ app.whenReady().then(async () => {
   console.log(JSON.stringify(result, undefined, 2));
 
   const failures = [];
-  if (!result.opened) failures.push('the dropdown never opened inside the dialog');
+  if (!result.opened) {
+    console.error('\ndialog select FAILED:\n- the dropdown never opened inside the dialog');
+    app.exit(1);
+    return;
+  }
   if (!result.visibleBeforeCommit) failures.push('the popup was not on screen before commit');
   if (!result.hostIsDialog) {
     failures.push('the popup stayed outside the dialog, where the top layer buries it');
