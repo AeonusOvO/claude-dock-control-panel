@@ -10,6 +10,7 @@ import {
   runtimeCodex,
   runtimePicker,
   runtimePickerLabel,
+  runtimeSummaryValue,
   workbenchTabs,
   workbenchTitle,
   workbenchTrigger,
@@ -47,6 +48,11 @@ export const renderRuntimePickerControls = (
   runtimePicker.disabled = !sessionId || switching;
   runtimePicker.setAttribute('aria-busy', String(switching));
   runtimePickerLabel.textContent = switching ? '正在切换并检查网络…' : '当前项目开发引擎';
+  runtimeSummaryValue.textContent = switching
+    ? `正在切换到 ${displayedRuntime === 'codex' ? 'Codex' : 'Claude Code'}…`
+    : displayedRuntime === 'codex'
+      ? 'Codex'
+      : 'Claude Code';
 };
 
 export const createTerminalRuntimeStateActions = (

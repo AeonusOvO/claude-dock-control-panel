@@ -104,7 +104,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
         refreshClaudePluginMarketplaces: () => refresh,
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
         harness.click('#refresh-plugins');
 
@@ -176,7 +176,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
         refreshClaudePluginMarketplaces: () => refresh,
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await harness.flush();
         harness.click('#refresh-plugins');
 
@@ -237,7 +237,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
         },
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
 
         const status = harness.query('#plugin-status');
@@ -279,7 +279,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
         getClaudePlugins: async () => catalog,
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
 
         const source = harness.query<HTMLInputElement>('#plugin-marketplace-source');
@@ -304,7 +304,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
     });
 
     await withTerminalRenderer({ getClaudePlugins: () => pendingCatalog }, async (harness) => {
-      harness.click('[data-rail-tab="plugins"]');
+      harness.click('[data-rail-tab="extensions"]');
       await harness.flush();
 
       const source = harness.query<HTMLInputElement>('#plugin-marketplace-source');
@@ -338,7 +338,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
         }),
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
 
         const updateAll = harness.query<HTMLButtonElement>('#update-all-plugins');
@@ -361,7 +361,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
         setClaudePluginEnabled: async () => ({ catalog, message: 'done', ok: true }),
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
         harness.query<HTMLButtonElement>('#plugin-installed-list button').click();
         await settle(harness);
@@ -377,7 +377,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
     await withRenderer(
       { getClaudePlugins: async () => pluginCatalog([plugin('available')], [installed]) },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
         expect(
           harness.query('#plugin-installed-list .plugin-card').getAttribute('data-installed'),
@@ -412,7 +412,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
       expect(harness.method('getMcpCatalog')).toHaveBeenCalledWith('D:\\Project', true);
 
       harness.clearCalls();
-      harness.click('[data-rail-tab="mcp"]');
+      harness.click('[data-extension-tab="mcp"]');
       await settle(harness);
       expect(harness.method('getMcpCatalog')).toHaveBeenCalledWith('D:\\Project', false);
       expect(harness.query('#mcp-status').textContent).not.toContain('健康检查');
@@ -434,7 +434,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
           pluginCatalog([plugin('api-security'), plugin('frontend-design')]),
       },
       async (harness) => {
-        harness.click('[data-rail-tab="plugins"]');
+        harness.click('[data-rail-tab="extensions"]');
         await settle(harness);
         input(harness.query('#plugin-search'), 'frontend');
         expect(
@@ -448,7 +448,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
   it('animates only the plugin cards that are genuinely new', async () => {
     const catalog = pluginCatalog([plugin('alpha'), plugin('beta')]);
     await withRenderer({ getClaudePlugins: async () => catalog }, async (harness) => {
-      harness.click('[data-rail-tab="plugins"]');
+      harness.click('[data-rail-tab="extensions"]');
       await settle(harness);
       expect(
         Array.from(
@@ -467,7 +467,7 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
     await withTerminalRenderer(
       { getMcpCatalog: async () => mcpCatalog(['alpha', 'beta']) },
       async (harness) => {
-        harness.click('[data-rail-tab="mcp"]');
+        harness.click('[data-extension-tab="mcp"]');
         await settle(harness);
         input(harness.query('#mcp-search'), 'alpha');
         expect(harness.query('#mcp-catalog-list .plugin-card').getAttribute('data-fresh')).toBe(

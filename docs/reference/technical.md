@@ -24,6 +24,27 @@ Hook、后台任务和受控派生进程保持有效。Agent SDK 只解析用户
 旧版设计计划、路线图、缺陷清单与分阶段修复提示词统一保存在 [`docs/archive/`](../archive/)；
 这些文件只用于追溯历史，不是当前架构规格、Agent 指令或发布门禁。
 
+## 工作区导航与启动引导
+
+- renderer 的 `features/onboarding/` 按 `elements / state / view / actions / environment / index`
+  分片。view 只管理步骤、焦点、背景 `inert`、来源原点和双向退出；actions 负责 IPC、目录选择器和
+  键盘；environment 只消费现有软件版本能力，不复制安装或接入业务。
+- main 的 `OnboardingStore` 写入 `userData/app-preferences/onboarding.json`，当前 storage/flow version
+  都是 1。写入沿用临时文件 + rename 的原子替换；读取时逐项校验 status、step、path 和时间，损坏或
+  新版本不兼容时回到安全默认值。检测到既有 `app-preferences/app.json`、旧 preferences、workspace、
+  对话或连接历史时返回 completed，避免升级后强制弹出。
+- `onboarding:get/update/complete/skip/reset` 通过独立 preload bridge 暴露。progress input 只允许
+  `{ currentStep, completedSteps, path? }`；main 不接收密钥、令牌、模型 ID、项目路径或项目内容。
+- 顶层 rail 把 plugins / MCP 规范化为 `extensions`，内部 `extensionTab` 决定真实 rail page；旧的
+  `/plugins` 与 `/mcp` 命令仍可传入原名称，由 shell 规范化到同一顶层入口。connection 与 extensions
+  设置 `workspace.dataset.railPanel` 后跨越原侧栏、分隔条与终端列，退出时回到 projects。
+- 引导准备页对 Claude/API 路径读取 `getSoftwareUpdates(false)` 的真实 Claude Code 状态；Codex 的
+  CLI、账号与项目配置依赖项目作用域，因此明确标为“项目后检测”，不提前宣告成功。完成引导只进入
+  工作区，不擅自启动终端或触发登录；后续沿既有单一自动事务继续检测、补齐、发现、实测与保存。
+- CSS 文件职责不变：业务外观在 `views/onboarding.css`，全部关键帧在 `04-motion.css`，720/1024
+  响应式规则在 `07-responsive.css`。四主题继续由 `TerminalThemeShell → SHELL_CSS_VARIABLES` 一次
+  覆写 UI/display/mono 字体、排版比例、色彩、圆角、阴影、时长和非线性曲线。
+
 ## 技术栈
 
 - Electron 43：桌面窗口、系统托盘、目录选择与进程生命周期。

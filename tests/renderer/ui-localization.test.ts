@@ -164,7 +164,7 @@ describe('Chinese interface contract', () => {
       getClaudePlugins: vi.fn(async () => pluginCatalog),
     });
     try {
-      harness.click('[data-rail-tab="plugins"]');
+      harness.click('[data-rail-tab="extensions"]');
       await harness.flush();
 
       const card = harness.query<HTMLElement>('#plugin-available-list .plugin-card');

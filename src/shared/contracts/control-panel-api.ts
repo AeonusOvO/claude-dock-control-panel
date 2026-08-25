@@ -106,6 +106,7 @@ import type {
   NetworkPreflightRunInput,
   NetworkProviderId,
 } from './network';
+import type { OnboardingPath, OnboardingProgressInput, OnboardingState } from './onboarding';
 import type {
   ApplicationProxyCandidate,
   ApplicationProxyState,
@@ -195,6 +196,14 @@ export interface WorkspaceApi {
   onWorkspaceState: (listener: (state: WorkspaceState) => void) => Unsubscribe;
   getStoredProjects: () => Promise<WorkspaceProject[]>;
   removeStoredProject: (projectPath: string) => Promise<void>;
+}
+
+export interface OnboardingApi {
+  getOnboardingState: () => Promise<OnboardingState>;
+  updateOnboardingProgress: (input: OnboardingProgressInput) => Promise<OnboardingState>;
+  completeOnboarding: (pathChoice?: OnboardingPath) => Promise<OnboardingState>;
+  skipOnboarding: () => Promise<OnboardingState>;
+  resetOnboarding: () => Promise<OnboardingState>;
 }
 
 export interface TerminalApi {
@@ -587,6 +596,7 @@ export interface SoftwareUpdateApi {
 export interface ControlPanelApi
   extends
     AppApi,
+    OnboardingApi,
     WorkspaceApi,
     TerminalApi,
     BusyApi,

@@ -769,6 +769,13 @@ app
       await window.webContents.executeJavaScript(applyTheme(theme));
       window.setContentSize(1180, 760);
       await scene('base', { railWidth: 320, state: 'loading' });
+      await window.webContents.executeJavaScript(`
+        (() => {
+          for (const animation of document.querySelector('#native-send').getAnimations({ subtree: true })) {
+            animation.finish();
+          }
+        })()
+      `);
       await capture('composer-theme', `${theme}-1180x760-stop-rest.png`, {
         animation: 'none',
         scene: 'stop-rest',

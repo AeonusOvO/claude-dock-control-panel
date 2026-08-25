@@ -10,6 +10,7 @@ import { applicationProxyBridge } from './bridges/application-proxy';
 import { artifactBridge } from './bridges/artifact';
 import { chatBridge } from './bridges/chat';
 import { networkPreflightBridge } from './bridges/network-preflight';
+import { onboardingBridge } from './bridges/onboarding';
 import { nativeConversationBridge } from './bridges/native-conversation';
 import { nativeAttachmentBridge } from './bridges/native-attachment';
 import { claudeBridge } from './bridges/claude';
@@ -32,6 +33,7 @@ const api = {
   ...artifactBridge,
   ...chatBridge,
   ...networkPreflightBridge,
+  ...onboardingBridge,
   ...nativeConversationBridge,
   ...nativeAttachmentBridge,
   ...claudeBridge,

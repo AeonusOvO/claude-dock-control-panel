@@ -195,10 +195,17 @@ const addDetectorCalibrationFixture = `
 `;
 
 const selectRailPage = (name) => `
-  document.querySelector('.workspace').classList.remove(
+  (() => {
+  const workspace = document.querySelector('.workspace');
+  workspace.style.transition = 'none';
+  workspace.classList.remove(
     'workspace--rail-collapsed',
     'workspace--rail-preview',
   );
+  workspace.dataset.railPanel =
+    ['plugins', 'mcp'].includes(${JSON.stringify(name)}) ? 'extensions' : ${JSON.stringify(name)};
+  void workspace.offsetWidth;
+  workspace.style.removeProperty('transition');
   document.querySelector('.control-panel').inert = false;
   document.querySelector('.control-panel').setAttribute('aria-hidden', 'false');
   for (const page of document.querySelectorAll('[data-rail-page]')) {
@@ -206,6 +213,7 @@ const selectRailPage = (name) => `
   }
   document.querySelector('#terminal-shell').hidden = ${JSON.stringify(name)} === 'chat';
   document.querySelector('#chat-shell').hidden = ${JSON.stringify(name)} !== 'chat';
+  })();
 `;
 
 const selectWorkbenchPage = (name) => `

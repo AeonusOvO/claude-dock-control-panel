@@ -135,6 +135,55 @@
   .software-update-row {
     align-items: flex-start;
   }
+
+  .onboarding-shell {
+    padding: var(--s-2);
+  }
+
+  .onboarding-surface {
+    border-radius: var(--r-lg);
+    height: 100%;
+  }
+
+  .onboarding-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .onboarding-progress {
+    border-bottom: 1px solid var(--line);
+    border-right: 0;
+    gap: var(--s-2);
+    padding: var(--s-3);
+  }
+
+  .onboarding-progress__eyebrow,
+  .onboarding-progress button > strong,
+  .onboarding-progress button > small,
+  .onboarding-progress > p {
+    display: none;
+  }
+
+  .onboarding-progress ol {
+    display: grid;
+    gap: var(--s-2);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .onboarding-progress button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    min-height: var(--control-h-md);
+    padding: var(--s-1);
+  }
+
+  .onboarding-progress button > span {
+    grid-row: auto;
+  }
+
+  .onboarding-viewport {
+    padding: var(--s-5);
+  }
 }
 
 @media (max-width: 720px) {
@@ -233,6 +282,73 @@
 
   .settings-row .select {
     width: 100%;
+  }
+
+  .workspace:is([data-rail-panel='connection'], [data-rail-panel='extensions']):not(
+      .workspace--rail-preview
+    )
+    .control-panel {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    width: auto;
+  }
+
+  .onboarding-brand small {
+    display: none;
+  }
+
+  .onboarding-step__copy h1,
+  .onboarding-step__copy h2 {
+    font-size: var(--type-title-size);
+  }
+
+  .onboarding-path {
+    grid-template-columns: var(--control-h-md) minmax(0, 1fr) var(--control-h-sm);
+  }
+
+  .onboarding-path__mark,
+  .onboarding-project-picker__icon {
+    height: var(--control-h-md);
+    width: var(--control-h-md);
+  }
+
+  .onboarding-path__mark img,
+  .onboarding-path__mark svg {
+    height: var(--control-h-sm);
+    width: var(--control-h-sm);
+  }
+
+  .onboarding-checklist > div {
+    align-items: start;
+    grid-template-columns: var(--control-h-sm) minmax(0, 1fr);
+  }
+
+  .onboarding-checklist output {
+    grid-column: 2;
+  }
+
+  .onboarding-checklist__icon {
+    height: var(--control-h-sm);
+    width: var(--control-h-sm);
+  }
+
+  .onboarding-project-picker {
+    grid-template-columns: var(--control-h-md) minmax(0, 1fr);
+    padding: var(--s-3);
+  }
+
+  .onboarding-project-picker__action {
+    display: none;
+  }
+
+  .onboarding-actions {
+    flex-wrap: wrap;
+  }
+
+  .onboarding-actions > span {
+    flex-basis: 100%;
+    order: -1;
   }
   .toolbar-menu-button,
   .terminal-toolbar .terminal-theme-control :is(.select__trigger) {

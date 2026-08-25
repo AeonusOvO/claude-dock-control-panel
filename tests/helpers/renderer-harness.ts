@@ -20,6 +20,13 @@ const emptyWorkspace: WorkspaceState = {
   sessions: [],
 };
 
+const completedOnboarding = {
+  completedSteps: ['welcome', 'prepare', 'project', 'ready'] as const,
+  currentStep: 'ready' as const,
+  flowVersion: 1,
+  status: 'completed' as const,
+};
+
 const defaultClaudeState = (sessionId: string): ClaudeProjectState => ({
   active: false,
   allowBypassPermissions: false,
@@ -163,6 +170,30 @@ export const createRendererHarness = async (
         return Promise.resolve(defaultAppSettings);
       case 'getWorkspace':
         return Promise.resolve(emptyWorkspace);
+      case 'getOnboardingState':
+        return Promise.resolve(completedOnboarding);
+      case 'updateOnboardingProgress': {
+        const input = args[0] as {
+          completedSteps: Array<'prepare' | 'project' | 'ready' | 'welcome'>;
+          currentStep: 'prepare' | 'project' | 'ready' | 'welcome';
+          path?: 'claude' | 'codex' | 'provider';
+        };
+        return Promise.resolve({ ...input, flowVersion: 1, status: 'in-progress' as const });
+      }
+      case 'completeOnboarding':
+        return Promise.resolve({
+          ...completedOnboarding,
+          ...(args[0] ? { path: args[0] } : {}),
+        });
+      case 'skipOnboarding':
+        return Promise.resolve({ ...completedOnboarding, status: 'skipped' as const });
+      case 'resetOnboarding':
+        return Promise.resolve({
+          completedSteps: [],
+          currentStep: 'welcome' as const,
+          flowVersion: 1,
+          status: 'pending' as const,
+        });
       case 'getDevelopmentRuntime':
         return Promise.resolve({
           cwd: 'D:\\Project',

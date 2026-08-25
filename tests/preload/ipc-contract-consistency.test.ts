@@ -24,6 +24,7 @@ import { mcpBridge } from '../../src/preload/bridges/mcp';
 import { nativeAttachmentBridge } from '../../src/preload/bridges/native-attachment';
 import { nativeConversationBridge } from '../../src/preload/bridges/native-conversation';
 import { networkPreflightBridge } from '../../src/preload/bridges/network-preflight';
+import { onboardingBridge } from '../../src/preload/bridges/onboarding';
 import { routerBridge } from '../../src/preload/bridges/router';
 import { runtimeBridge } from '../../src/preload/bridges/runtime';
 import { softwareUpdateBridge } from '../../src/preload/bridges/software-update';
@@ -52,6 +53,7 @@ const bridgeFragments = [
   artifactBridge,
   chatBridge,
   networkPreflightBridge,
+  onboardingBridge,
   nativeConversationBridge,
   nativeAttachmentBridge,
   claudeBridge,
@@ -123,11 +125,11 @@ const executionSettingsDto: ClaudeExecutionSettingsDto = {
 
 describe('IPC contract consistency', () => {
   it('keeps the channel partitions complete and disjoint', () => {
-    expect(REQUEST_CHANNELS).toHaveLength(166);
+    expect(REQUEST_CHANNELS).toHaveLength(171);
     expect(SEND_CHANNELS).toHaveLength(7);
     expect(EVENT_CHANNELS).toHaveLength(23);
-    expect(IPC_CHANNELS).toHaveLength(196);
-    expect(new Set(IPC_CHANNELS).size).toBe(196);
+    expect(IPC_CHANNELS).toHaveLength(201);
+    expect(new Set(IPC_CHANNELS).size).toBe(201);
     expect(new Set([...REQUEST_CHANNELS, ...SEND_CHANNELS, ...EVENT_CHANNELS])).toEqual(
       new Set(IPC_CHANNELS),
     );
@@ -212,18 +214,18 @@ describe('IPC contract consistency', () => {
     await expect(api.restoreClaudeExecutionSettingsDefault()).rejects.toThrow();
   });
 
-  it('assembles all 196 API members without duplicate bridge ownership', () => {
+  it('assembles all 201 API members without duplicate bridge ownership', () => {
     const declaredMembers = bridgeFragments.flatMap((fragment) => Object.keys(fragment));
-    expect(declaredMembers).toHaveLength(196);
-    expect(new Set(declaredMembers).size).toBe(196);
-    expect(Object.keys(api)).toHaveLength(196);
+    expect(declaredMembers).toHaveLength(201);
+    expect(new Set(declaredMembers).size).toBe(201);
+    expect(Object.keys(api)).toHaveLength(201);
   });
 
   it('maps every IPC-backed member and records the local and auxiliary exceptions', () => {
     const requestMethods = Object.values(IPC_REQUESTS).map(({ method }) => method);
     const sendMethods = Object.values(IPC_SEND_METHODS);
     const eventMethods = Object.values(IPC_EVENT_METHODS);
-    expect(new Set(requestMethods).size).toBe(166);
+    expect(new Set(requestMethods).size).toBe(171);
     expect(new Set(sendMethods).size).toBe(7);
     expect(new Set(eventMethods).size).toBe(23);
 
@@ -232,7 +234,7 @@ describe('IPC contract consistency', () => {
       ...sendMethods,
       ...eventMethods,
     ]);
-    expect(mappedMethods.size).toBe(195);
+    expect(mappedMethods.size).toBe(200);
     expect(
       Object.keys(api).filter((method) => !mappedMethods.has(method as keyof ControlPanelApi)),
     ).toEqual(['getDroppedPath']);

@@ -538,6 +538,32 @@ body.is-resizing .workspace {
   grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);
 }
 
+/* Management destinations use the full canvas; the rail remains the stable point of origin. */
+.workspace:is([data-rail-panel='connection'], [data-rail-panel='extensions']) {
+  grid-template-columns: var(--activity-rail-w) 0 0 minmax(0, 1fr);
+}
+
+.workspace:is([data-rail-panel='connection'], [data-rail-panel='extensions']) .control-panel {
+  border-right: 0;
+  grid-column: 2 / -1;
+  grid-row: 1;
+  opacity: 1;
+  padding: var(--s-6) clamp(var(--s-4), 4vw, var(--s-10));
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.workspace:is([data-rail-panel='connection'], [data-rail-panel='extensions']) .rail-page--active {
+  margin-inline: auto;
+  max-width: 1120px;
+  width: 100%;
+}
+
+.workspace:is([data-rail-panel='connection'], [data-rail-panel='extensions'])
+  :is(.panel-resizer, .terminal-shell, .chat-shell) {
+  display: none;
+}
+
 .workspace--rail-collapsed .control-panel {
   border-right: 0;
   opacity: 0;

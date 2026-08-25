@@ -47,6 +47,7 @@ preload: <dist/preload/preload.js>,
 | 原生对话快照             | `native-conversation` 会话               | `native-conversation:snapshot` 广播                        |
 | 下载与更新               | `download-center`、`application-updater` | `download:changed`、`software:application-updater-changed` |
 | 忙碌租约                 | `busy` 协调器                            | `busy:changed`                                             |
+| 启动引导进度             | `OnboardingStore`                        | 请求响应读取 / 原子 JSON 持久化                            |
 
 渲染进程重新打开某个界面时不重建状态，而是重放最近一次广播快照。渲染端自身的异步反馈也是派生视图状态：busy 文案、disabled、`aria-busy` 与 live status 必须属于精确 operation token 和 session generation。工作区、目录或状态快照的无关重绘只消费当前 owner，不能恢复控件；只有仍为 current 的操作 settlement 可以结束并恢复它。runtime 切换由 main 按规范化项目目录持有；同目录的全部 session 共享 pending attempt，renderer reload 后通过 `runtime:get` 重建 busy 呈现并只在 pending 期间轮询到最终提交状态。Codex installer 与 App Server 登录/账号状态在 main 中是应用级单例；main 暴露单调 `revision` 和精确 `{ attempt, kind }` operation descriptor，renderer reload 后恢复原操作文案与 owner，并拒绝延迟快照或 completion。插件变更同样由 main 应用级单例持有；catalog snapshot 带 `{ attempt, kind, target, phase }`，相同逻辑请求加入已有 Promise，竞争请求不排队，renderer 只在 active 期间轮询并锁定完整 mutation surface。
 
@@ -67,13 +68,13 @@ preload: <dist/preload/preload.js>,
 
 ## 数据流
 
-三条独立通路共 196 个频道，形态与频率不同：
+三条独立通路共 201 个频道，形态与频率不同：
 
-- **请求响应**（166 个）—— renderer `invoke`，main `handle`，返回结构化结果。
+- **请求响应**（171 个）—— renderer `invoke`，main `handle`，返回结构化结果。
 - **单向发送**（7 个）—— 高频或握手型 renderer → main 消息使用 `send/on`；包括 generation-fenced `terminal:write`，避免每次按键产生 Promise 往返。
 - **事件推送**（23 个）—— main 状态变化后广播，renderer 订阅并重渲染对应界面。
 
-`ControlPanelApi` 同样有 196 个成员，但分区不同：166 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
+`ControlPanelApi` 同样有 201 个成员，但分区不同：171 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
 
 ## 外部进程
 
@@ -92,7 +93,7 @@ ClaudeDock 启动并管理外部 CLI，不捆绑第二份实现：
 
 ## 渲染进程分片
 
-`src/renderer/main.ts` 从 15,886 行的单一作用域（HEAD `6ca456e` 基线实测；ADR-0006 时点记为 15,181）收敛为 46 行入口：15 个特性收进 `features/`，跨特性外壳收进 `shell/`，与特性无关能力收进 `platform/`，装配分为 `bootstrap.ts`（DOM 环境与外壳）与 `feature-registration.ts`（特性注册与解析）。
+`src/renderer/main.ts` 从 15,886 行的单一作用域（HEAD `6ca456e` 基线实测；ADR-0006 时点记为 15,181）收敛为 46 行入口：16 个特性收进 `features/`，跨特性外壳收进 `shell/`，与特性无关能力收进 `platform/`，装配分为 `bootstrap.ts`（DOM 环境与外壳）与 `feature-registration.ts`（特性注册与解析）。启动引导是独立 `onboarding` 特性；renderer 只持有步骤呈现，版本化状态归 main 的 `OnboardingStore`。
 
 每个特性导出注册式三件套（类型化 Symbol token、工厂注册函数、Feature 接口），经 `platform/registry.ts` 的 Registry 惰性构造，循环依赖在解析时报错。依赖方向只有特性 → shell → platform → shared：特性之间禁止互相 import，跨特性协作经 `shell/` 编排或 `platform/` 共享层，跨特性回调经显式 delegate 或 `-dependencies.ts` 最小接口。分片决策见 [ADR-0006](../adr/0006-feature-sliced-renderer.md) 与 [ADR-0011](../adr/0011-registration-based-feature-composition.md)。
 

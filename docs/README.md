@@ -15,7 +15,7 @@
 | ---------------------------------------------------------- | --------------------------------------------------------- |
 | [technical.md](reference/technical.md)                     | 各功能域的实现细节、接线与技术约束                        |
 | [project-layout.md](reference/project-layout.md)           | 目录结构、依赖规则、文件体积护栏                          |
-| [ipc-contract.md](reference/ipc-contract.md)               | 全部 196 个通道与 `ControlPanelApi` 196 个 API 成员的映射 |
+| [ipc-contract.md](reference/ipc-contract.md)               | 全部 201 个通道与 `ControlPanelApi` 201 个 API 成员的映射 |
 | [cli-command-catalog.md](reference/cli-command-catalog.md) | Claude / Codex 斜杠命令清单                               |
 
 ## how-to —— 照着做
@@ -42,6 +42,7 @@
 | [0010](adr/0010-runtime-registry-and-contributions.md)     | 运行期注册表与贡献点                     |
 | [0011](adr/0011-registration-based-feature-composition.md) | 渲染端注册式分片                         |
 | [0012](adr/0012-scroll-chaining-and-canonical-scrim.md)    | 单一滚动链与规范遮罩                     |
+| [0013](adr/0013-versioned-workspace-onboarding.md)         | 版本化工作区启动引导                     |
 
 ## releases
 

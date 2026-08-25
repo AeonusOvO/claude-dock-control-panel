@@ -6,24 +6,24 @@
 
 | 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
 | -------- | -------------------------- | ------------------------- | ------------------ | ---- |
-| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 166  |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 171  |
 | 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
 | 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 23   |
 | 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
 
-`ControlPanelApi` 共 196 个成员：166 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+`ControlPanelApi` 共 201 个成员：171 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
 
 ## 当前实现位置
 
 | 内容         | 位置                                                                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 频道常量     | `src/shared/ipc/channels.ts`（196 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 频道常量     | `src/shared/ipc/channels.ts`（201 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
 | 参数 schema  | `src/shared/ipc/schema.ts` + `claude-execution-settings-schema.ts`                                                                             |
-| 类型定义     | `src/shared/contracts/`（20 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件，267 个导出）                                                |
-| API 组合     | `src/shared/contracts/control-panel-api.ts`（20 个域接口组合出 196 个成员）                                                                    |
-| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 20 个桥文件                                           |
-| 主进程注册   | `src/main/ipc/`（30 个文件：24 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
-| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 24 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
+| 类型定义     | `src/shared/contracts/`（21 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件）                                                            |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 201 个成员）                                                                    |
+| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 21 个桥文件                                           |
+| 主进程注册   | `src/main/ipc/`（31 个文件：25 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
+| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 25 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
 | 参数校验     | `src/main/ipc/validation.ts`（`validate*()` 由 `schema.ts` 的 schema 派生）                                                                    |
 | 发送者守卫   | `src/main/ipc/guards.ts`（`validateSender` 拒绝非主窗口来源；另含运行时效果断言与服务解析器）                                                  |
 | 插件变更通道 | `src/main/ipc/claude-plugin.ts` 的 `pluginMutations` Map，8 个通道循环注册，共用 `runPluginMutation` 包装                                      |
@@ -39,7 +39,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 - 事件订阅方法返回取消函数，内部调用 `removeListener`。
 - 渲染进程与主进程共享的类型只来自 `src/shared/`。
 
-## 请求响应频道（166）
+## 请求响应频道（171）
 
 ### `app`（11）
 
@@ -60,6 +60,19 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 `app:set-advanced-settings` 的结构化参数包含 `networkPreflight.checkOnNewSession`、
 `checkOnProviderLogin` 及可选的 CLI-only `cliTimezone` / `cliLanguages`。主进程校验 IANA 时区和
 BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 Windows 系统设置。
+
+### `onboarding`（5）
+
+| 频道                  | 方法                       | 作用                           |
+| --------------------- | -------------------------- | ------------------------------ |
+| `onboarding:get`      | `getOnboardingState`       | 读取版本化本地进度             |
+| `onboarding:update`   | `updateOnboardingProgress` | 保存路径、当前步骤与已完成步骤 |
+| `onboarding:complete` | `completeOnboarding`       | 标记完成并保留所选使用路径     |
+| `onboarding:skip`     | `skipOnboarding`           | 标记跳过，后续不自动遮挡       |
+| `onboarding:reset`    | `resetOnboarding`          | 从设置或空工作区重新开始       |
+
+五个 handler 都先校验 sender；步骤与路径由 `OnboardingStore` 白名单校验。存储只包含版本、状态、
+步骤、路径和更新时间，不接受凭据、模型 ID 或项目正文。
 
 ### `workspace`（3）
 

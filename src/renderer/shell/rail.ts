@@ -1,6 +1,6 @@
 import { requiredElement } from '../platform/dom';
 import { createRailPreviewActions } from './rail-preview';
-import { createRailMutableState } from './rail-state';
+import { createRailMutableState, type RailMutableState } from './rail-state';
 
 export type { RailShellDeps } from './rail-dependencies';
 import type { RailShellDeps } from './rail-dependencies';
@@ -18,6 +18,47 @@ export interface RailShell {
   readonly terminalShell: HTMLElement;
   readonly chatShell: HTMLElement;
 }
+
+const bindActivityRailButtons = (
+  activityRail: HTMLElement,
+  handlers: {
+    closePreviewSoon: () => void;
+    preview: (tab: string) => void;
+    toggle: (tab: string) => void;
+  },
+): void => {
+  for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
+    const railTab = button.dataset.railTab ?? 'projects';
+    button.addEventListener('click', () => handlers.toggle(railTab));
+    const preview = (): void => {
+      if (railTab !== 'connection' && railTab !== 'extensions') handlers.preview(railTab);
+    };
+    button.addEventListener('pointerenter', preview);
+    button.addEventListener('focusin', preview);
+    button.addEventListener('pointerleave', handlers.closePreviewSoon);
+  }
+};
+
+const bindExtensionSwitcher = (select: (tab: 'mcp' | 'plugins') => void): void => {
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-extension-tab]')) {
+    button.addEventListener('click', () => {
+      const nextTab = button.dataset.extensionTab;
+      if (nextTab === 'plugins' || nextTab === 'mcp') select(nextTab);
+    });
+  }
+};
+
+const normalizeRailTab = (state: RailMutableState, tab: string): string => {
+  if (tab === 'plugins' || tab === 'mcp') {
+    state.extensionDirection = tab === 'mcp' ? 'forward' : 'backward';
+    state.extensionTab = tab;
+    return 'extensions';
+  }
+  return tab;
+};
+
+const effectiveRailPage = (state: RailMutableState, tab: string | undefined): string | undefined =>
+  tab === 'extensions' ? state.extensionTab : tab;
 
 export const createRailShell = (deps: RailShellDeps): RailShell => {
   const {
@@ -66,24 +107,26 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
       applyDefaultProviderGroupExpansion(lastProvider);
       setProviderGroupExpansionPending(Boolean(getActiveSessionId() && !lastProvider));
       renderProviderPicker();
-    } else if (tab === 'plugins') {
-      loadPluginsCatalog();
-    } else if (tab === 'mcp') {
-      loadMcpCatalog();
+    } else if (tab === 'extensions') {
+      if (state.extensionTab === 'plugins') loadPluginsCatalog();
+      else loadMcpCatalog();
     }
   };
 
   const renderRailPresentation = (tab: string | undefined, preview: boolean): void => {
+    const normalizedTab = tab ? normalizeRailTab(state, tab) : undefined;
+    const pageTab = effectiveRailPage(state, normalizedTab);
+    const fullCanvas = normalizedTab === 'connection' || normalizedTab === 'extensions';
     const collapsed = state.selectedRailTab === undefined;
     workspace.classList.toggle('workspace--rail-collapsed', collapsed);
     workspace.classList.toggle('workspace--rail-preview', preview && tab !== undefined);
-    workspace.dataset.railPanel = tab ?? 'collapsed';
-    controlPanel.inert = tab === undefined;
-    controlPanel.setAttribute('aria-hidden', String(tab === undefined));
-    getPanelResizer().tabIndex = collapsed ? -1 : 0;
+    workspace.dataset.railPanel = normalizedTab ?? 'collapsed';
+    controlPanel.inert = normalizedTab === undefined;
+    controlPanel.setAttribute('aria-hidden', String(normalizedTab === undefined));
+    getPanelResizer().tabIndex = collapsed || fullCanvas ? -1 : 0;
     for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
       const selected = button.dataset.railTab === state.selectedRailTab;
-      const transient = preview && button.dataset.railTab === tab;
+      const transient = preview && button.dataset.railTab === normalizedTab;
       button.classList.toggle('activity-rail__button--active', selected);
       button.classList.toggle('activity-rail__button--preview', transient);
       button.setAttribute('aria-expanded', String(selected || transient));
@@ -92,13 +135,28 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
       button.title = selected ? `${label ?? '侧栏'}（再次点击可收起侧栏）` : (label ?? '打开侧栏');
     }
     for (const page of document.querySelectorAll<HTMLElement>('[data-rail-page]')) {
-      page.classList.toggle('rail-page--active', page.dataset.railPage === tab);
+      const active = page.dataset.railPage === pageTab;
+      page.classList.toggle('rail-page--active', active);
+      if (active && normalizedTab === 'extensions') {
+        page.dataset.motionDirection = state.extensionDirection;
+      } else {
+        delete page.dataset.motionDirection;
+      }
+    }
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-extension-tab]')) {
+      const active = button.dataset.extensionTab === state.extensionTab;
+      button.dataset.active = String(active);
+      button.setAttribute('aria-pressed', String(active));
     }
     const chatVisible = state.mainView === 'chat';
     terminalShell.hidden = chatVisible;
     chatShell.hidden = !chatVisible;
+    terminalShell.inert = fullCanvas;
+    chatShell.inert = fullCanvas;
+    terminalShell.setAttribute('aria-hidden', String(chatVisible || fullCanvas));
+    chatShell.setAttribute('aria-hidden', String(!chatVisible || fullCanvas));
     setConnectionPolling(
-      tab === 'connection' ||
+      normalizedTab === 'connection' ||
         (connectionAdvancedDialog.open &&
           (getSettingsSelectedTab() === 'connection' || getSettingsSelectedTab() === 'router')),
     );
@@ -108,13 +166,14 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   };
 
   const applyRailTab = (tab?: string): void => {
+    const normalizedTab = tab ? normalizeRailTab(state, tab) : undefined;
     previewActions.closeRailPreview();
-    if (tab === 'chat') state.mainView = 'chat';
-    else if (tab !== undefined) state.mainView = 'terminal';
-    const entering = tab !== undefined && tab !== state.selectedRailTab;
-    state.selectedRailTab = tab;
-    if (entering && tab) prepareRailTab(tab);
-    renderRailPresentation(tab, false);
+    if (normalizedTab === 'chat') state.mainView = 'chat';
+    else if (normalizedTab !== undefined) state.mainView = 'terminal';
+    const entering = normalizedTab !== undefined && normalizedTab !== state.selectedRailTab;
+    state.selectedRailTab = normalizedTab;
+    if (entering && normalizedTab) prepareRailTab(normalizedTab);
+    renderRailPresentation(normalizedTab, false);
   };
 
   /**
@@ -138,20 +197,25 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   const isCompactWorkspaceViewport = (): boolean => compactWorkspaceViewportWidth() <= 680;
 
   const toggleRailTab = (tab: string): void => {
+    const normalizedTab = normalizeRailTab(state, tab);
+    if (normalizedTab === 'connection' || normalizedTab === 'extensions') {
+      applyRailTab(state.selectedRailTab === normalizedTab ? 'projects' : normalizedTab);
+      return;
+    }
     if (isCompactWorkspaceViewport()) {
-      const closingPreview = state.previewRailTab === tab;
+      const closingPreview = state.previewRailTab === normalizedTab;
       if (state.selectedRailTab !== undefined) {
         state.compactRailRestoreTab = state.selectedRailTab;
         applyRailTab(undefined);
       } else {
         previewActions.closeRailPreview();
       }
-      if (!closingPreview) previewActions.showRailPreview(tab);
-      if (tab === 'chat') focusInputAfterNavigation();
+      if (!closingPreview) previewActions.showRailPreview(normalizedTab);
+      if (normalizedTab === 'chat') focusInputAfterNavigation();
       return;
     }
-    applyRailTab(state.selectedRailTab === tab ? undefined : tab);
-    if (tab === 'chat') {
+    applyRailTab(state.selectedRailTab === normalizedTab ? undefined : normalizedTab);
+    if (normalizedTab === 'chat') {
       focusInputAfterNavigation();
     }
   };
@@ -184,15 +248,21 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   window.addEventListener('resize', scheduleCompactRailReconciliation);
   window.visualViewport?.addEventListener('resize', scheduleCompactRailReconciliation);
 
-  for (const button of activityRail.querySelectorAll<HTMLButtonElement>('[data-rail-tab]')) {
-    const railTab = button.dataset.railTab ?? 'projects';
-    button.addEventListener('click', () => {
-      toggleRailTab(railTab);
-    });
-    button.addEventListener('pointerenter', () => previewActions.showRailPreview(railTab));
-    button.addEventListener('focusin', () => previewActions.showRailPreview(railTab));
-    button.addEventListener('pointerleave', () => previewActions.scheduleRailPreviewClose());
-  }
+  bindActivityRailButtons(activityRail, {
+    closePreviewSoon: previewActions.scheduleRailPreviewClose,
+    preview: previewActions.showRailPreview,
+    toggle: toggleRailTab,
+  });
+  bindExtensionSwitcher((nextTab) => {
+    if (nextTab === state.extensionTab) return;
+    state.extensionDirection = nextTab === 'mcp' ? 'forward' : 'backward';
+    state.extensionTab = nextTab;
+    prepareRailTab('extensions');
+    applyRailTab('extensions');
+    document
+      .querySelector<HTMLElement>(`[data-rail-page="${nextTab}"]`)
+      ?.focus({ preventScroll: true });
+  });
 
   return {
     selectRailTab,

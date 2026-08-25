@@ -340,3 +340,52 @@
 .mcp-card__health[data-health='disabled'] {
   color: var(--text-dim);
 }
+.extension-switcher {
+  align-self: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-pill);
+  display: inline-grid;
+  gap: var(--s-1);
+  grid-template-columns: repeat(2, minmax(110px, 1fr));
+  padding: var(--s-1);
+}
+
+.extension-switcher__tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--type-caption-size);
+  font-weight: var(--fw-strong);
+  line-height: var(--type-caption-lh);
+  min-height: var(--control-h-sm);
+  padding: 0 var(--s-4);
+  position: relative;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-spring);
+}
+
+.extension-switcher__tab:hover {
+  color: var(--text);
+}
+
+.extension-switcher__tab[data-active='true'] {
+  background: var(--surface-3);
+  border-color: var(--line);
+  box-shadow: var(--sheen);
+  color: var(--text-hi);
+}
+
+.rail-page[data-motion-direction='forward'] {
+  animation: extension-page-forward var(--dur-4) var(--ease-spring);
+}
+
+.rail-page[data-motion-direction='backward'] {
+  animation: extension-page-backward var(--dur-4) var(--ease-spring);
+}

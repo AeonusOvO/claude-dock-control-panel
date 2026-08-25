@@ -21,6 +21,7 @@ export const launchNewButton = requiredElement<HTMLButtonElement>('#launch-new')
 export const launchResumeButton = requiredElement<HTMLButtonElement>('#launch-resume');
 export const runtimePicker = requiredElement<HTMLFieldSetElement>('#runtime-picker');
 export const runtimePickerLabel = requiredElement<HTMLElement>('#runtime-picker-label');
+export const runtimeSummaryValue = requiredElement<HTMLElement>('#runtime-summary-value');
 export const runtimeClaude = requiredElement<HTMLInputElement>('#runtime-claude');
 export const runtimeCodex = requiredElement<HTMLInputElement>('#runtime-codex');
 export const allowBypassPermissions = requiredElement<HTMLInputElement>(

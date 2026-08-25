@@ -51,13 +51,13 @@ packaged identity 并生成本地 `release-manifest.json`。`scripts/release/pub
 
 ```
 shared/
-  contracts/              267 个导出，零运行期代码
+  contracts/              跨进程类型导出，零运行期代码
     index.ts              桶文件，`export type *` re-export 全部类型
     app.ts artifact.ts chat.ts claude.ts claude-execution-settings.ts
     claude-plugin.ts codex.ts diagnostics.ts download.ts egress-diagnostics.ts
     managed-chatgpt.ts mcp.ts network.ts proxy.ts resource.ts router.ts
-    runtime.ts software.ts terminal.ts workspace.ts
-    control-panel-api.ts  20 个域接口组合出 ControlPanelApi 的 196 个成员
+    onboarding.ts runtime.ts software.ts terminal.ts workspace.ts
+    control-panel-api.ts  21 个域接口组合出 ControlPanelApi 的 201 个成员
   claude/                 connection-remedy context-window curl effort model-id
                           native-commands permission-mode providers state-ownership
   conversation/           native reducer surface-switch composer-input
@@ -83,15 +83,15 @@ main/
   app/                    bootstrap.ts lifecycle.ts window.ts tray.ts profile.ts paths.ts
   infra/                  registry.ts service-tokens.ts contributions.ts logger.ts
                           diagnostics.ts 等；Registry 与四类贡献点见 ADR-0010
-  ipc/                    30 个文件 = 24 个域 handler + 基础设施 + 入口：
+  ipc/                    31 个文件 = 25 个域 handler + 基础设施 + 入口：
     index.ts              registerIpc(deps)：一次跑完全部贡献
-    contributions.ts      MAIN_IPC_CONTRIBUTIONS：24 个域贡献的注册数组
+    contributions.ts      MAIN_IPC_CONTRIBUTIONS：25 个域贡献的注册数组
     contribution.ts       IpcContribution 类型与依赖推导工具
     context.ts guards.ts validation.ts   MainState、guards、共享校验
     app.ts artifact.ts busy.ts chat.ts claude-connection.ts claude-controls.ts
     claude-execution-settings.ts claude-launch.ts claude-plugin.ts claude-state.ts codex.ts conversation.ts
     conversation-attachment.ts download.ts managed-chatgpt.ts mcp.ts network.ts
-    project.ts proxy.ts router.ts runtime.ts session.ts software.ts terminal.ts
+    onboarding.ts project.ts proxy.ts router.ts runtime.ts session.ts software.ts terminal.ts
   claude/ codex/ chat/ conversation/ terminal/ network/ proxy/
   download/ mcp/ artifact/ updates/ stores/ coordination/
 ```
@@ -104,23 +104,23 @@ handler 之间禁止互相 import：共享只经 `context/guards/validation`，�
 
 ```
 preload/
-  index.ts                展开组装 20 个 bridge，satisfies ControlPanelApi，单点暴露
-  bridges/                按域拆分的 20 个桥文件：app application-proxy artifact busy
+  index.ts                展开组装 21 个 bridge，satisfies ControlPanelApi，单点暴露
+  bridges/                按域拆分的 21 个桥文件：app application-proxy artifact busy
                           chat claude claude-execution-settings claude-plugin codex download managed-chatgpt mcp
-                          native-attachment native-conversation network-preflight
+                          native-attachment native-conversation network-preflight onboarding
                           router runtime software-update terminal workspace
 ```
 
-通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 196 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
+通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 201 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
 
 ## `src/renderer/`
 
 ```
 renderer/
-  index.html              手写 HTML 骨架（2,943 行）
+  index.html              手写 HTML 骨架
   main.ts                 46 行：字体样式 + 组件套件 + 滚动链 + new Registry + bootstrap
   bootstrap.ts            DOM 环境、RuntimeState、ShellStack 装配
-  feature-registration.ts 15 个特性的注册与解析，按阶段分组
+  feature-registration.ts 16 个特性的注册与解析，按阶段分组
   runtime-types.ts        RuntimeState / ShellStack / FeatureBundle 三层类型
   app-lifecycle.ts        生命周期钩子
   styles.css              @import 七层样式 + views/ 视图样式
@@ -131,9 +131,9 @@ renderer/
                           terminal-output-pump.ts terminal-view.ts markdown/
   shell/                  跨特性外壳：rail footer dialogs workbench toast theme
                           runtime-activity 及各自的 -dependencies / -preview 文件
-  features/               15 个特性：artifact chat claude-execution-settings connection
-                          conversation downloads mcp plugins preflight projects proxy router
-                          settings terminal updates
+  features/               16 个特性：artifact chat claude-execution-settings connection
+                          conversation downloads mcp onboarding plugins preflight projects proxy
+                          router settings terminal updates
 ```
 
 每个特性的 `index.ts` 导出注册式三件套（见 [ADR-0011](../adr/0011-registration-based-feature-composition.md)）：

@@ -128,11 +128,11 @@ describe('exported behavior and declarative UI contracts', () => {
     expect(harness.query('#chat-composer')).toBeInstanceOf(HTMLFormElement);
   });
 
-  it('places chat above the project/connection group and exposes its complete conversation state', () => {
+  it('places the workspace first and exposes the complete independent-conversation state', () => {
     const buttons = Array.from(harness.document.querySelectorAll<HTMLElement>('[data-rail-tab]'));
     expect(buttons.map(({ dataset }) => dataset.railTab).slice(0, 3)).toEqual([
-      'chat',
       'projects',
+      'chat',
       'connection',
     ]);
     for (const id of ['chat-context-total', 'chat-token-usage', 'new-chat', 'chat-history-list']) {

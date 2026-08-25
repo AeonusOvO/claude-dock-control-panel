@@ -3,6 +3,14 @@
 仅发布 Windows x64 NSIS 安装包。GitHub Releases 提供手动下载与历史记录；腾讯云 COS 的通用 HTTPS
 feed 提供应用内更新。`npm run release` 只构建和校验，不向任何外部服务上传。
 
+## 发布完成定义
+
+正式发布必须让目标通道用户能够从软件右上角“检查更新”发现新版本，并完成显式下载与重启安装。
+Git 提交、本地 `npm run dist`、GitHub Release 或单独上传安装包都只是发布过程的一部分，不能单独称为
+“用户可更新”。每次用户可见、运行方式或技术实现更新都必须递增 SemVer，生成同一构建 cohort 的安装包、
+blockmap 和通道清单，通过完整 `npm run release` 门禁，再按不可变资产优先、通道清单最后的顺序发布到
+COS 并完成远端复核。没有完成通道发布的版本统一标记为“已提交/待发布”。
+
 ## 步骤
 
 1. 将 `package.json` 的 `version` 改为目标版本并同步 lockfile；确认 `build.files` 字面包含根目录 `LICENSE` 与 `NOTICE`。

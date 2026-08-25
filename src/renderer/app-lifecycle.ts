@@ -299,6 +299,7 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
     activeStatus,
     connectionHistory,
     terminalFeature,
+    onboardingFeature,
     setWindowsBuildNumber,
   } = runtime;
   const { applyTerminalTheme } = themeShell;
@@ -326,6 +327,7 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
     // The terminal still works without Windows-specific reflow hints; settings can be retried later.
   }
   projectsFeature.renderWorkspace(await window.controlPanel.getWorkspace());
+  await onboardingFeature.initialize();
   void runtimeActivityShell.loadActiveRuntimeActivity();
   window.setTimeout(() => {
     void preflightFeature.runActiveNetworkPreflight(false);

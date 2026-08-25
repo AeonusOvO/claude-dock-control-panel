@@ -16,6 +16,7 @@ import { registerDownloadIpc } from './download';
 import { registerManagedChatGptIpc } from './managed-chatgpt';
 import { registerMcpIpc } from './mcp';
 import { registerNetworkIpc } from './network';
+import { registerOnboardingIpc } from './onboarding';
 import { registerProjectIpc } from './project';
 import { registerProxyIpc } from './proxy';
 import { registerRouterIpc } from './router';
@@ -34,6 +35,7 @@ export const MAIN_IPC_CONTRIBUTIONS = [
   registerProxyIpc,
   registerNetworkIpc,
   registerAppIpc,
+  registerOnboardingIpc,
   registerArtifactIpc,
   registerChatIpc,
   registerProjectIpc,

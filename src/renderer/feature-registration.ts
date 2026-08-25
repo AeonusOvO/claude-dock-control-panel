@@ -24,6 +24,7 @@ import { CHAT_FEATURE, registerChatFeature } from './features/chat';
 import { CONVERSATION_FEATURE, registerConversationFeature } from './features/conversation';
 import { PROJECTS_FEATURE, registerProjectsFeature } from './features/projects';
 import { TERMINAL_FEATURE, registerTerminalFeature } from './features/terminal';
+import { ONBOARDING_FEATURE, registerOnboardingFeature } from './features/onboarding';
 import { phaseCopy } from './features/terminal/project-state';
 import type { FeatureBundle, RuntimeState, ShellStack } from './runtime-types';
 
@@ -609,6 +610,15 @@ const installProjectFeatures = (
     workbenchScope,
   });
   features.projectsFeature = rendererRegistry.resolve(PROJECTS_FEATURE);
+  registerOnboardingFeature(rendererRegistry, {
+    closeSettingsDialog: () => features.connectionFeature.closeAdvancedDialog(false),
+    getWorkspaceState,
+    openDirectoryPicker: features.projectsFeature.openDirectoryPicker,
+    reopenSettingsDialog: () => state.openConnectionAdvancedButton.click(),
+    selectRailTab: railShell.selectRailTab,
+    showToast,
+  });
+  features.onboardingFeature = rendererRegistry.resolve(ONBOARDING_FEATURE);
 };
 
 /**
@@ -647,6 +657,7 @@ const installApplicationSubscriptions = (
     chatFeature,
     preflightFeature,
     terminalFeature,
+    onboardingFeature,
   } = features;
 
   const unsubscribeAppWindowRestored = window.controlPanel.onAppWindowRestored(() => {
@@ -677,6 +688,7 @@ const installApplicationSubscriptions = (
   );
   window.controlPanel.onWorkspaceState((state) => {
     projectsFeature.renderWorkspace(state);
+    onboardingFeature.renderWorkspace(state);
     terminalFeature.reconcileClaudeLaunchDecision(state);
     void runtimeActivityShell.loadActiveRuntimeActivity();
     void conversationFeature.refreshRecoveries();
@@ -705,6 +717,7 @@ const installApplicationSubscriptions = (
     artifactFeature.dispose();
     themeShell.dispose();
     terminalFeature.dispose();
+    onboardingFeature.dispose();
   });
 };
 

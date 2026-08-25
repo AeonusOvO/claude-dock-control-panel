@@ -35,6 +35,7 @@ import type { TerminalFeature } from './features/terminal';
 import type { RouterFeature } from './features/router';
 import type { ConnectionFeature } from './features/connection';
 import type { ProjectsFeature } from './features/projects';
+import type { OnboardingFeature } from './features/onboarding';
 
 /**
  * Shared mutable renderer state owned by the bootstrap layer: top-level DOM hooks, session/state
@@ -127,6 +128,7 @@ export interface FeatureBundle {
   routerFeature: RouterFeature;
   connectionFeature: ConnectionFeature;
   projectsFeature: ProjectsFeature;
+  onboardingFeature: OnboardingFeature;
 }
 
 /** Everything `bootstrapApplication` wires: shared state, shells, and resolved features. */

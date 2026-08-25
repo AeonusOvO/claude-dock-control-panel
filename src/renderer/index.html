@@ -54,13 +54,29 @@
     <main class="workspace" id="workspace">
       <nav class="activity-rail" id="activity-rail" aria-label="主导航">
         <button
+          class="activity-rail__button activity-rail__button--active"
+          data-rail-tab="projects"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="true"
+          aria-pressed="true"
+          title="工作区（再次点击可收起侧栏）"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
+            />
+          </svg>
+          <span>工作区</span>
+        </button>
+        <button
           class="activity-rail__button"
           data-rail-tab="chat"
           type="button"
           aria-controls="control-panel"
           aria-expanded="false"
           aria-pressed="false"
-          title="对话"
+          title="独立对话"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -68,23 +84,7 @@
             />
             <path d="M8 10h8M8 13.5h5" />
           </svg>
-          <span>对话</span>
-        </button>
-        <button
-          class="activity-rail__button activity-rail__button--active"
-          data-rail-tab="projects"
-          type="button"
-          aria-controls="control-panel"
-          aria-expanded="true"
-          aria-pressed="true"
-          title="项目（再次点击可收起侧栏）"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
-            />
-          </svg>
-          <span>项目</span>
+          <span>独立对话</span>
         </button>
         <button
           class="activity-rail__button"
@@ -104,37 +104,20 @@
         </button>
         <button
           class="activity-rail__button"
-          data-rail-tab="plugins"
+          data-rail-tab="extensions"
           type="button"
           aria-controls="control-panel"
           aria-expanded="false"
           aria-pressed="false"
-          title="插件"
+          title="扩展"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path
               d="M9 4v3H6.2A1.2 1.2 0 0 0 5 8.2V11h2.4a2.6 2.6 0 1 1 0 5.2H5v2.6A1.2 1.2 0 0 0 6.2 20H9v-2.4a2.6 2.6 0 1 1 5.2 0V20h3.6a1.2 1.2 0 0 0 1.2-1.2V15h-2.4a2.6 2.6 0 1 1 0-5.2H19V8.2A1.2 1.2 0 0 0 17.8 7H15V4Z"
             />
           </svg>
-          <span>插件</span>
+          <span>扩展</span>
           <span class="activity-rail__dot" id="plugin-rail-dot" hidden></span>
-        </button>
-        <button
-          class="activity-rail__button"
-          data-rail-tab="mcp"
-          type="button"
-          aria-controls="control-panel"
-          aria-expanded="false"
-          aria-pressed="false"
-          title="MCP"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="6" cy="6" r="2.5" />
-            <circle cx="18" cy="6" r="2.5" />
-            <circle cx="12" cy="18" r="2.5" />
-            <path d="M8.2 7.3 10.8 16M15.8 7.3 13.2 16M8.5 6h7" />
-          </svg>
-          <span>MCP</span>
         </button>
         <button
           class="activity-rail__button activity-rail__button--settings"
@@ -157,50 +140,59 @@
 
       <aside class="control-panel" id="control-panel">
         <section class="rail-page rail-page--active" data-rail-page="projects">
-          <fieldset class="runtime-picker" id="runtime-picker" aria-busy="false">
-            <legend id="runtime-picker-label" aria-live="polite" aria-atomic="true">
-              当前项目开发引擎
-            </legend>
-            <label class="runtime-option card" for="runtime-claude">
-              <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
-              <span class="runtime-option__icon runtime-option__icon--claude" aria-hidden="true">
-                <img
-                  class="runtime-option__brand-mark"
-                  src="./assets/brands/claude-spark-clay.svg"
-                  alt=""
-                />
+          <details class="runtime-disclosure" id="runtime-disclosure">
+            <summary>
+              <span>
+                <small>当前项目开发引擎</small>
+                <strong id="runtime-summary-value">Claude Code</strong>
               </span>
-              <span class="runtime-option__copy">
-                <strong>Claude Code</strong>
-                <small>安全终端 · 原生对话可选</small>
-              </span>
-              <span class="runtime-option__check" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
-              </span>
-            </label>
-            <label class="runtime-option card" for="runtime-codex">
-              <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
-              <span class="runtime-option__icon runtime-option__icon--codex" aria-hidden="true">
-                <img
-                  class="runtime-option__brand-mark runtime-option__brand-mark--light"
-                  src="./assets/brands/openai-blossom-black.svg"
-                  alt=""
-                />
-                <img
-                  class="runtime-option__brand-mark runtime-option__brand-mark--dark"
-                  src="./assets/brands/openai-blossom-white.svg"
-                  alt=""
-                />
-              </span>
-              <span class="runtime-option__copy">
-                <strong>Codex</strong>
-                <small>官方登录 · 高级终端</small>
-              </span>
-              <span class="runtime-option__check" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
-              </span>
-            </label>
-          </fieldset>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5" /></svg>
+            </summary>
+            <fieldset class="runtime-picker" id="runtime-picker" aria-busy="false">
+              <legend id="runtime-picker-label" aria-live="polite" aria-atomic="true">
+                当前项目开发引擎
+              </legend>
+              <label class="runtime-option card" for="runtime-claude">
+                <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
+                <span class="runtime-option__icon runtime-option__icon--claude" aria-hidden="true">
+                  <img
+                    class="runtime-option__brand-mark"
+                    src="./assets/brands/claude-spark-clay.svg"
+                    alt=""
+                  />
+                </span>
+                <span class="runtime-option__copy">
+                  <strong>Claude Code</strong>
+                  <small>安全终端 · 原生对话可选</small>
+                </span>
+                <span class="runtime-option__check" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
+                </span>
+              </label>
+              <label class="runtime-option card" for="runtime-codex">
+                <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
+                <span class="runtime-option__icon runtime-option__icon--codex" aria-hidden="true">
+                  <img
+                    class="runtime-option__brand-mark runtime-option__brand-mark--light"
+                    src="./assets/brands/openai-blossom-black.svg"
+                    alt=""
+                  />
+                  <img
+                    class="runtime-option__brand-mark runtime-option__brand-mark--dark"
+                    src="./assets/brands/openai-blossom-white.svg"
+                    alt=""
+                  />
+                </span>
+                <span class="runtime-option__copy">
+                  <strong>Codex</strong>
+                  <small>官方登录 · 高级终端</small>
+                </span>
+                <span class="runtime-option__check" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
+                </span>
+              </label>
+            </fieldset>
+          </details>
 
           <section class="project-section" aria-labelledby="project-heading">
             <div class="section-label">
@@ -824,6 +816,14 @@
         </section>
 
         <section class="rail-page" data-rail-page="plugins">
+          <nav class="extension-switcher" aria-label="扩展类型">
+            <button class="extension-switcher__tab" data-extension-tab="plugins" type="button">
+              插件
+            </button>
+            <button class="extension-switcher__tab" data-extension-tab="mcp" type="button">
+              MCP 服务
+            </button>
+          </nav>
           <div class="connection-heading">
             <strong>插件管理</strong>
             <span>浏览、安装、启停和卸载 Claude Code 插件，无需记住命令。</span>
@@ -901,6 +901,14 @@
         </section>
 
         <section class="rail-page" data-rail-page="mcp">
+          <nav class="extension-switcher" aria-label="扩展类型">
+            <button class="extension-switcher__tab" data-extension-tab="plugins" type="button">
+              插件
+            </button>
+            <button class="extension-switcher__tab" data-extension-tab="mcp" type="button">
+              MCP 服务
+            </button>
+          </nav>
           <div class="connection-heading">
             <strong>MCP 管理</strong>
             <span>发现 Claude Code 与 Codex CLI 的服务器；安装操作只定向写入 Claude Code。</span>
@@ -1188,6 +1196,13 @@
             <span class="empty-prompt">&gt;_</span>
             <strong id="empty-state-title">终端尚未运行</strong>
             <span id="empty-state-hint">点击左侧“启动”创建终端会话</span>
+            <button
+              class="button button--compact button--quiet"
+              id="resume-onboarding"
+              type="button"
+            >
+              打开入门向导
+            </button>
           </div>
         </div>
         <form class="terminal-composer" id="terminal-composer">
@@ -1969,6 +1984,317 @@
           </div>
         </aside>
       </section>
+
+      <section
+        class="onboarding-shell"
+        id="onboarding-shell"
+        data-state="closed"
+        aria-labelledby="onboarding-title"
+        aria-modal="true"
+        role="dialog"
+        hidden
+      >
+        <div class="onboarding-shell__backdrop" aria-hidden="true"></div>
+        <article class="onboarding-surface">
+          <header class="onboarding-header">
+            <a class="onboarding-brand" href="#onboarding-title" aria-label="ClaudeDock 入门">
+              <img id="onboarding-brand-logo" alt="" />
+              <span>
+                <strong>ClaudeDock</strong>
+                <small>桌面开发工作台</small>
+              </span>
+            </a>
+            <button
+              class="button button--compact button--quiet"
+              id="onboarding-dismiss"
+              type="button"
+            >
+              稍后再说
+            </button>
+          </header>
+
+          <div class="onboarding-layout">
+            <nav class="onboarding-progress" aria-label="入门进度">
+              <span class="onboarding-progress__eyebrow">开始使用</span>
+              <ol>
+                <li>
+                  <button data-onboarding-progress-step="welcome" type="button">
+                    <span>1</span><strong>选择路径</strong><small>告诉我们你怎么使用 AI</small>
+                  </button>
+                </li>
+                <li>
+                  <button data-onboarding-progress-step="prepare" type="button">
+                    <span>2</span><strong>自动准备</strong><small>检测环境与接入策略</small>
+                  </button>
+                </li>
+                <li>
+                  <button data-onboarding-progress-step="project" type="button">
+                    <span>3</span><strong>打开项目</strong><small>建立安全工作范围</small>
+                  </button>
+                </li>
+                <li>
+                  <button data-onboarding-progress-step="ready" type="button">
+                    <span>4</span><strong>准备完成</strong><small>进入你的工作区</small>
+                  </button>
+                </li>
+              </ol>
+              <p>进度只保存在本机，不包含密钥、令牌或项目内容。</p>
+            </nav>
+
+            <div class="onboarding-viewport" id="onboarding-viewport" aria-live="polite">
+              <section
+                class="onboarding-step onboarding-step--active"
+                data-onboarding-step="welcome"
+              >
+                <div class="onboarding-step__copy">
+                  <span class="onboarding-kicker">欢迎来到 ClaudeDock</span>
+                  <h1 id="onboarding-title">先选一条最适合你的使用路径</h1>
+                  <p>之后的环境检测、接入方式和默认操作都会围绕这个选择自动收敛。</p>
+                </div>
+                <div class="onboarding-paths" role="radiogroup" aria-label="使用路径">
+                  <button
+                    class="onboarding-path"
+                    data-onboarding-path="claude"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <span
+                      class="onboarding-path__mark onboarding-path__mark--claude"
+                      aria-hidden="true"
+                    >
+                      <img src="./assets/brands/claude-spark-clay.svg" alt="" />
+                    </span>
+                    <span
+                      ><strong>Claude Code</strong
+                      ><small>使用 Claude 官方 CLI 与原生对话</small></span
+                    >
+                    <span class="onboarding-path__check" aria-hidden="true">✓</span>
+                  </button>
+                  <button
+                    class="onboarding-path"
+                    data-onboarding-path="codex"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <span
+                      class="onboarding-path__mark onboarding-path__mark--codex"
+                      aria-hidden="true"
+                    >
+                      <img
+                        class="onboarding-brand--light"
+                        src="./assets/brands/openai-blossom-black.svg"
+                        alt=""
+                      />
+                      <img
+                        class="onboarding-brand--dark"
+                        src="./assets/brands/openai-blossom-white.svg"
+                        alt=""
+                      />
+                    </span>
+                    <span
+                      ><strong>ChatGPT / Codex</strong
+                      ><small>使用 OpenAI 官方登录与 Codex CLI</small></span
+                    >
+                    <span class="onboarding-path__check" aria-hidden="true">✓</span>
+                  </button>
+                  <button
+                    class="onboarding-path"
+                    data-onboarding-path="provider"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <span class="onboarding-path__mark" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <path d="M10 14a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.3 7" />
+                        <path d="M14 10a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7L12.7 17" />
+                      </svg>
+                    </span>
+                    <span
+                      ><strong>API 服务商</strong
+                      ><small>使用已有接口，模型由 ClaudeDock 自动发现</small></span
+                    >
+                    <span class="onboarding-path__check" aria-hidden="true">✓</span>
+                  </button>
+                </div>
+                <footer class="onboarding-actions">
+                  <span id="onboarding-welcome-hint">请选择一条路径继续</span>
+                  <button
+                    class="button button--compact button--primary"
+                    id="onboarding-welcome-next"
+                    type="button"
+                    disabled
+                  >
+                    继续
+                  </button>
+                </footer>
+              </section>
+
+              <section class="onboarding-step" data-onboarding-step="prepare" hidden>
+                <div class="onboarding-step__copy">
+                  <span class="onboarding-kicker">自动准备</span>
+                  <h2>先确认环境，不让你填写能自动发现的内容</h2>
+                  <p>这里只报告真实状态；项目级路由、模型与登录会在打开项目后继续完成。</p>
+                </div>
+                <div class="onboarding-checklist" id="onboarding-checklist" aria-busy="false">
+                  <div data-onboarding-check="desktop" data-tone="ready">
+                    <span class="onboarding-checklist__icon" aria-hidden="true">✓</span>
+                    <span
+                      ><strong>ClaudeDock 桌面环境</strong
+                      ><small>Windows 桌面运行环境已就绪</small></span
+                    >
+                    <output>已就绪</output>
+                  </div>
+                  <div data-onboarding-check="tool" data-tone="pending">
+                    <span class="onboarding-checklist__icon" aria-hidden="true">·</span>
+                    <span
+                      ><strong id="onboarding-tool-title">开发工具</strong
+                      ><small id="onboarding-tool-detail">等待检测本机环境</small></span
+                    >
+                    <output id="onboarding-tool-status">待检测</output>
+                  </div>
+                  <div data-onboarding-check="route" data-tone="automatic">
+                    <span class="onboarding-checklist__icon" aria-hidden="true">↻</span>
+                    <span
+                      ><strong>接入与路由</strong
+                      ><small>打开项目后自动选择最短可用链路并真实测试</small></span
+                    >
+                    <output>自动</output>
+                  </div>
+                  <div data-onboarding-check="model" data-tone="automatic">
+                    <span class="onboarding-checklist__icon" aria-hidden="true">↻</span>
+                    <span
+                      ><strong>可用模型</strong
+                      ><small>连接成功后实时发现，不要求手动填写模型标识</small></span
+                    >
+                    <output>自动</output>
+                  </div>
+                </div>
+                <footer class="onboarding-actions onboarding-actions--split">
+                  <button
+                    class="button button--compact button--quiet"
+                    data-onboarding-back="welcome"
+                    type="button"
+                  >
+                    返回
+                  </button>
+                  <span id="onboarding-prepare-hint">正在读取本机状态…</span>
+                  <button
+                    class="button button--compact button--quiet"
+                    id="onboarding-recheck"
+                    type="button"
+                  >
+                    重新检测
+                  </button>
+                  <button
+                    class="button button--compact button--primary"
+                    id="onboarding-prepare-next"
+                    type="button"
+                  >
+                    继续
+                  </button>
+                </footer>
+              </section>
+
+              <section class="onboarding-step" data-onboarding-step="project" hidden>
+                <div class="onboarding-step__copy">
+                  <span class="onboarding-kicker">安全工作范围</span>
+                  <h2>选择第一个工作区</h2>
+                  <p>ClaudeDock 只在你明确选择的文件夹内管理会话、配置和终端。</p>
+                </div>
+                <button
+                  class="onboarding-project-picker"
+                  id="onboarding-project-picker"
+                  type="button"
+                >
+                  <span class="onboarding-project-picker__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v1.8" />
+                      <path d="M20.5 12v6.3a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2V7.7" />
+                      <path d="M12 10v7m-3-3 3 3 3-3" />
+                    </svg>
+                  </span>
+                  <span
+                    ><strong id="onboarding-project-title">选择项目文件夹</strong
+                    ><small id="onboarding-project-detail"
+                      >点击打开 Windows 文件夹选择器</small
+                    ></span
+                  >
+                  <span class="onboarding-project-picker__action">选择</span>
+                </button>
+                <div class="onboarding-boundary-note">
+                  <strong>边界清晰</strong>
+                  <span>不会扫描其他目录；之后可从“工作区”添加更多项目。</span>
+                </div>
+                <footer class="onboarding-actions">
+                  <button
+                    class="button button--compact button--quiet"
+                    data-onboarding-back="prepare"
+                    type="button"
+                  >
+                    返回
+                  </button>
+                  <span id="onboarding-project-hint">请选择一个项目后继续</span>
+                  <button
+                    class="button button--compact button--primary"
+                    id="onboarding-project-next"
+                    type="button"
+                    disabled
+                  >
+                    继续
+                  </button>
+                </footer>
+              </section>
+
+              <section class="onboarding-step" data-onboarding-step="ready" hidden>
+                <div class="onboarding-ready-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m6.5 12.5 3.4 3.4 7.6-8" /></svg>
+                </div>
+                <div class="onboarding-step__copy onboarding-step__copy--center">
+                  <span class="onboarding-kicker">准备完成</span>
+                  <h2>你的工作区已经就位</h2>
+                  <p>
+                    进入后，ClaudeDock
+                    会在当前项目内继续执行接入检测、组件补齐、模型发现与真实连接测试。
+                  </p>
+                </div>
+                <dl class="onboarding-summary">
+                  <div>
+                    <dt>使用路径</dt>
+                    <dd id="onboarding-summary-path">—</dd>
+                  </div>
+                  <div>
+                    <dt>当前项目</dt>
+                    <dd id="onboarding-summary-project">—</dd>
+                  </div>
+                  <div>
+                    <dt>后续流程</dt>
+                    <dd>自动检测与保存</dd>
+                  </div>
+                </dl>
+                <footer class="onboarding-actions onboarding-actions--center">
+                  <button
+                    class="button button--compact button--quiet"
+                    data-onboarding-back="project"
+                    type="button"
+                  >
+                    返回
+                  </button>
+                  <button
+                    class="button button--compact button--primary"
+                    id="onboarding-complete"
+                    type="button"
+                  >
+                    进入工作区
+                  </button>
+                </footer>
+              </section>
+            </div>
+          </div>
+        </article>
+      </section>
     </main>
 
     <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
@@ -2422,6 +2748,15 @@
                   <small>安装包与应用版本。</small>
                 </span>
                 <output id="settings-version">—</output>
+              </div>
+              <div class="settings-row settings-row--action">
+                <span>
+                  <strong>入门向导</strong>
+                  <small>重新选择使用路径、检查环境并打开一个项目。</small>
+                </span>
+                <button class="dialog-primary" id="settings-open-onboarding" type="button">
+                  重新打开
+                </button>
               </div>
             </section>
             <section class="settings-panel network-settings" data-settings-panel="network">

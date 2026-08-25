@@ -19,6 +19,7 @@ describe('main IPC contributions', () => {
       'registerProxyIpc',
       'registerNetworkIpc',
       'registerAppIpc',
+      'registerOnboardingIpc',
       'registerArtifactIpc',
       'registerChatIpc',
       'registerProjectIpc',

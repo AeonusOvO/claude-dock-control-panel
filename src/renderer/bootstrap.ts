@@ -71,12 +71,15 @@ const createRuntimeState = (rendererRegistry: Registry): RuntimeState => {
   const routerActions = requiredElement<HTMLElement>('#router-actions');
   const chatMessagesElement = requiredElement<HTMLElement>('#chat-messages');
   const chatComposer = requiredElement<HTMLFormElement>('#chat-composer');
+  const onboardingBrandLogo = requiredElement<HTMLImageElement>('#onboarding-brand-logo');
 
   void window.controlPanel.setConversationBusy(false);
 
   routerSettingsContent.append(routerManager);
 
-  brandLogo.src = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
+  const appIconUrl = new URL('../../assets/generated/app-icon-64.png', import.meta.url).href;
+  brandLogo.src = appIconUrl;
+  onboardingBrandLogo.src = appIconUrl;
 
   const claudeStates = new Map<string, ClaudeProjectState>();
   const codexStates = new Map<string, CodexProjectState>();

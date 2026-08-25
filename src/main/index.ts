@@ -58,6 +58,7 @@ import { TerminalWorkspace } from './terminal/workspace';
 import { WorkspaceStore } from './stores/workspace';
 import { AdvancedSettingsStore } from './stores/advanced-settings';
 import { AppPreferencesStore } from './stores/app-preferences';
+import { OnboardingStore } from './stores/onboarding';
 import { resolveRuntimeProfile } from './app/profile';
 import { ConversationOwnerRegistry, type ConversationOwner } from './conversation/owner-registry';
 import { IsolatedTerminal } from './terminal/isolated';
@@ -266,6 +267,7 @@ const projectDirectoryLifecycle = new ProjectDirectoryLifecycleCoordinator();
 const claudeConversationLifecycle = new ClaudeConversationLifecycleCoordinator();
 const advancedSettingsStore = new AdvancedSettingsStore(app.getPath('userData'));
 const appPreferencesStore = new AppPreferencesStore(app.getPath('userData'));
+const onboardingStore = new OnboardingStore(app.getPath('userData'));
 const agentRuntimeStore = new AgentRuntimeStore(app.getPath('userData'));
 workspace.setTheme(workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
 const sessionManager = new ClaudeSessionManager(runtimeProfile.paths.projects);
@@ -461,6 +463,7 @@ const onReady = createBootstrap({
     managedConfigTransactions,
     nativeAttachmentStore,
     nativeLaunches,
+    onboardingStore,
     pendingPermissionModeProbes,
     pluginManager,
     projectDirectoryLifecycle,

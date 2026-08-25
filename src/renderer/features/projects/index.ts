@@ -33,6 +33,7 @@ export interface ProjectsFeature {
   hideConversationContextMenu: () => void;
   isTitleAnimating: (sessionId: string) => boolean;
   loadFolderHistory: (projectPath: string, force?: boolean) => Promise<void>;
+  openDirectoryPicker: () => Promise<void>;
   reconcileWorkspaceAfterActivation: () => Promise<void>;
   renderWorkspace: (state: WorkspaceState) => void;
   requestConversationTitle: (currentTitle: string, historical: boolean) => Promise<string | null>;
@@ -84,6 +85,7 @@ const createProjectsFeature = (dependencies: ProjectsFeatureDependencies): Proje
     hideConversationContextMenu: actions.hideConversationContextMenu,
     isTitleAnimating: titleView.isTitleAnimating,
     loadFolderHistory: (projectPath, force) => rows.loadFolderHistory(projectPath, force),
+    openDirectoryPicker: actions.openDirectoryPicker,
     reconcileWorkspaceAfterActivation: workspaceRenderer.reconcileWorkspaceAfterActivation,
     renderWorkspace: workspaceRenderer.renderWorkspace,
     requestConversationTitle: actions.requestConversationTitle,

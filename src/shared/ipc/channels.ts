@@ -12,6 +12,13 @@ const requestChannels = {
   APP_SET_LAUNCH_AT_LOGIN: 'app:set-launch-at-login',
   APP_SET_MANAGED_CHATGPT_CONTEXT_WINDOW_MODE: 'app:set-managed-chatgpt-context-window-mode',
 
+  // onboarding
+  ONBOARDING_COMPLETE: 'onboarding:complete',
+  ONBOARDING_GET: 'onboarding:get',
+  ONBOARDING_RESET: 'onboarding:reset',
+  ONBOARDING_SKIP: 'onboarding:skip',
+  ONBOARDING_UPDATE: 'onboarding:update',
+
   // application-proxy
   APPLICATION_PROXY_DETECT: 'application-proxy:detect',
   APPLICATION_PROXY_GET: 'application-proxy:get',

@@ -502,7 +502,7 @@ describe('MCP discovery', () => {
   it('exposes only explicit per-server MCP actions', async () => {
     const harness = await createRendererHarness();
     try {
-      harness.click('[data-rail-tab="mcp"]');
+      harness.click('[data-extension-tab="mcp"]');
       await harness.flush();
 
       const page = harness.query<HTMLElement>('[data-rail-page="mcp"]');

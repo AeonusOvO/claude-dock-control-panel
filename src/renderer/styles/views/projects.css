@@ -110,6 +110,71 @@ body[data-phase='error'] .status-pill {
   padding-top: var(--s-2-5);
 }
 
+.runtime-disclosure {
+  background: var(--surface-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  transition:
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+
+.runtime-disclosure:hover {
+  border-color: var(--line-hover);
+}
+
+.runtime-disclosure[open] {
+  box-shadow: var(--sheen);
+}
+
+.runtime-disclosure summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+  min-height: var(--composer-row-h);
+  padding: var(--s-2-5) var(--s-3);
+}
+
+.runtime-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.runtime-disclosure summary > span {
+  display: grid;
+  gap: var(--s-0-5);
+}
+
+.runtime-disclosure summary small {
+  color: var(--text-mute);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-fw);
+  letter-spacing: var(--ls-eyebrow);
+  line-height: var(--type-micro-lh);
+  text-transform: uppercase;
+}
+
+.runtime-disclosure summary strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+  font-weight: var(--fw-strong);
+  line-height: var(--type-body-lh);
+}
+
+.runtime-disclosure summary > svg {
+  color: var(--text-dim);
+  height: var(--s-5);
+  transition: transform var(--dur-3) var(--ease-spring);
+  width: var(--s-5);
+}
+
+.runtime-disclosure[open] summary > svg {
+  transform: rotate(180deg);
+}
+
 .runtime-picker {
   --runtime-option-h: calc(var(--s-10) + var(--s-3));
   --runtime-option-icon-size: var(--control-h-sm);
@@ -119,7 +184,7 @@ body[data-phase='error'] .status-pill {
   grid-template-columns: minmax(0, 1fr);
   margin: 0;
   min-width: 0;
-  padding: 0;
+  padding: 0 var(--s-3) var(--s-3);
 }
 
 .runtime-picker legend {
