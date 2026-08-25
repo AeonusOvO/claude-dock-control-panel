@@ -25,6 +25,7 @@ const createHarness = (enabled = true) => {
   }));
   const downloadUpdate = vi.fn<ApplicationUpdaterDriver['downloadUpdate']>(async () => []);
   const quitAndInstall = vi.fn<ApplicationUpdaterDriver['quitAndInstall']>();
+  const onInstallError = vi.fn();
   const driver: ApplicationUpdaterDriver = {
     allowDowngrade: true,
     allowPrerelease: true,
@@ -45,6 +46,7 @@ const createHarness = (enabled = true) => {
     driver,
     enabled,
     onChange: (state) => changes.push(state),
+    onInstallError,
   });
   return {
     changes,
@@ -54,6 +56,7 @@ const createHarness = (enabled = true) => {
     emit: (event: string, payload?: unknown) => {
       for (const listener of listeners.get(event) ?? []) listener(payload);
     },
+    onInstallError,
     quitAndInstall,
     service,
   };
@@ -84,7 +87,7 @@ describe('application updater service', () => {
     expect(harness.service.getState().phase).toBe('disabled');
     expect(harness.checkForUpdates).not.toHaveBeenCalled();
     expect(harness.downloadUpdate).not.toHaveBeenCalled();
-    expect(() => harness.service.installDownloaded()).toThrow('更新安装包尚未下载完成。');
+    await expect(harness.service.installDownloaded()).rejects.toThrow('更新安装包尚未下载完成。');
   });
 
   it('checks without downloading and preserves complete prerelease versions', async () => {
@@ -175,8 +178,93 @@ describe('application updater service', () => {
     await harness.service.check();
     expect(harness.checkForUpdates).toHaveBeenCalledOnce();
 
-    harness.service.installDownloaded();
-    expect(harness.quitAndInstall).toHaveBeenCalledWith(false, true);
+    await harness.service.installDownloaded();
+    expect(harness.service.getState()).toMatchObject({
+      latestVersion: '5.0.0-rc.16',
+      phase: 'installing',
+    });
+    expect(harness.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  it('coalesces installation preparation and only installs a downloaded update', async () => {
+    const harness = createHarness();
+    const preparation = deferred<void>();
+    const prepareInstall = vi.fn(() => preparation.promise);
+
+    await expect(harness.service.installDownloaded(prepareInstall)).rejects.toThrow(
+      '更新安装包尚未下载完成。',
+    );
+    harness.emit('update-downloaded', { version: '5.0.0-rc.16' });
+
+    const first = harness.service.installDownloaded(prepareInstall);
+    const duplicate = harness.service.installDownloaded(prepareInstall);
+    expect(first).toBe(duplicate);
+    expect(prepareInstall).toHaveBeenCalledOnce();
+    expect(harness.service.getState()).toMatchObject({
+      latestVersion: '5.0.0-rc.16',
+      message: 'ClaudeDock 5.0.0-rc.16 已下载并通过 SHA-512 校验，正在退出并启动安装…',
+      phase: 'installing',
+    });
+    expect(harness.quitAndInstall).not.toHaveBeenCalled();
+
+    preparation.resolve();
+    await expect(first).resolves.toBeUndefined();
+    expect(harness.quitAndInstall).toHaveBeenCalledOnce();
+    await expect(harness.service.installDownloaded()).resolves.toBeUndefined();
+    expect(harness.quitAndInstall).toHaveBeenCalledOnce();
+  });
+
+  it('reports preparation and installer launch failures as retryable updater errors', async () => {
+    const preparationFailure = createHarness();
+    preparationFailure.emit('update-downloaded', { version: '5.0.0-rc.16' });
+
+    await expect(
+      preparationFailure.service.installDownloaded(async () => {
+        throw new Error('runtime cleanup failed');
+      }),
+    ).rejects.toThrow('runtime cleanup failed');
+    expect(preparationFailure.service.getState()).toMatchObject({
+      latestVersion: '5.0.0-rc.16',
+      message: '应用更新失败：runtime cleanup failed',
+      phase: 'error',
+    });
+    expect(preparationFailure.onInstallError).toHaveBeenCalledOnce();
+    expect(preparationFailure.quitAndInstall).not.toHaveBeenCalled();
+
+    const launchFailure = createHarness();
+    launchFailure.quitAndInstall.mockImplementationOnce(() => {
+      throw new Error('installer launch failed');
+    });
+    launchFailure.emit('update-downloaded', { version: '5.0.0-rc.16' });
+
+    await expect(launchFailure.service.installDownloaded()).rejects.toThrow(
+      'installer launch failed',
+    );
+    expect(launchFailure.service.getState()).toMatchObject({
+      message: '应用更新失败：installer launch failed',
+      phase: 'error',
+    });
+    expect(launchFailure.onInstallError).toHaveBeenCalledOnce();
+  });
+
+  it('recovers the host quit latch when the driver reports an asynchronous install error', async () => {
+    const harness = createHarness();
+    harness.emit('update-downloaded', { version: '5.0.0-rc.16' });
+    await harness.service.installDownloaded();
+    expect(harness.service.getState().phase).toBe('installing');
+    expect(harness.onInstallError).not.toHaveBeenCalled();
+
+    harness.emit('error', new Error('asynchronous NSIS failure'));
+
+    expect(harness.onInstallError).toHaveBeenCalledOnce();
+    expect(harness.service.getState()).toMatchObject({
+      message: '应用更新失败：asynchronous NSIS failure',
+      phase: 'error',
+    });
+
+    const downloadFailure = createHarness();
+    downloadFailure.emit('error', new Error('feed failure'));
+    expect(downloadFailure.onInstallError).not.toHaveBeenCalled();
   });
 
   it('surfaces check, download, and driver errors without losing the latest version', async () => {

@@ -87,12 +87,20 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
   if (
     applicationUpdater?.phase === 'available' ||
     applicationUpdater?.phase === 'downloading' ||
-    applicationUpdater?.phase === 'downloaded'
+    applicationUpdater?.phase === 'downloaded' ||
+    applicationUpdater?.phase === 'installing'
   ) {
     items.push({
-      actionLabel: applicationUpdater.phase === 'downloaded' ? '重启并安装' : '下载更新',
+      actionLabel:
+        applicationUpdater.phase === 'downloaded' || applicationUpdater.phase === 'installing'
+          ? '正在安装…'
+          : '下载并更新',
       detail: applicationUpdater.message,
-      disabled: state.updateCenterOperationInProgress || applicationUpdater.phase === 'downloading',
+      disabled:
+        state.updateCenterOperationInProgress ||
+        applicationUpdater.phase === 'downloading' ||
+        applicationUpdater.phase === 'downloaded' ||
+        applicationUpdater.phase === 'installing',
       id: 'application',
       run: dependencies.runApplicationUpdateAction,
       title: 'ClaudeDock',
@@ -198,10 +206,13 @@ const renderApplicationUpdater = (
   elements.applicationUpdateAction.hidden =
     updaterState.phase === 'disabled' || updaterState.phase === 'up-to-date';
   elements.applicationUpdateAction.disabled =
-    updaterState.phase === 'checking' || updaterState.phase === 'downloading';
+    updaterState.phase === 'checking' ||
+    updaterState.phase === 'downloading' ||
+    updaterState.phase === 'downloaded' ||
+    updaterState.phase === 'installing';
   elements.applicationUpdateAction.textContent =
-    updaterState.phase === 'downloaded'
-      ? '重启并安装'
+    updaterState.phase === 'downloaded' || updaterState.phase === 'installing'
+      ? '正在安装…'
       : updaterState.phase === 'checking'
         ? '正在检查…'
         : updaterState.phase === 'downloading'
@@ -209,12 +220,13 @@ const renderApplicationUpdater = (
           : updaterState.phase === 'error'
             ? '重试检查'
             : updaterState.phase === 'available'
-              ? '下载更新'
+              ? '下载并更新'
               : '检查应用更新';
   elements.applicationUpdateVersion.dataset.update = String(
     updaterState.phase === 'available' ||
       updaterState.phase === 'downloaded' ||
-      updaterState.phase === 'downloading',
+      updaterState.phase === 'downloading' ||
+      updaterState.phase === 'installing',
   );
   dependencies.setApplicationUpdaterState(updaterState);
   if (elements.updateCenterDialog.open) renderUpdateCenter(context);

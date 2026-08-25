@@ -128,10 +128,21 @@ const inspectLayout = `
   // includes off-canvas geometry. Inspect every user-facing child instead of treating that
   // deliberate clipping container as content overflow.
   const overflow = [...inspectionRoot.querySelectorAll(
-    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
+    '.control-panel, .rail-page--active, .terminal-toolbar, .terminal-footer, .chat-toolbar, .chat-toolbar__metrics, .chat-metric, .chat-messages, .chat-message, .chat-message__content, .chat-message__attachments, .chat-attachment-card, .chat-composer, .chat-history, .chat-history__item, .chat-history__open, .artifact-view, .artifact-details, .artifact-details__body, .artifact-active-list__item, .artifact-network-log__item, .plugin-toolbar, .plugin-tabs, .plugin-panel--active, .plugin-list, .plugin-card, .plugin-card__header, .plugin-card__actions, #plugin-marketplace-form, .install-source-row, .router-actions, .claude-workbench, .connection-wizard-progress, .connection-wizard-viewport, .connection-wizard-step--active, .provider-picker, .provider-groups, .access-choice-grid, .access-choice-card, .domestic-model-picker, .connection-wizard-actions, .connection-advanced-dialog__shell, .settings-layout, .settings-panel--active, #connection-advanced-content, .connection-history, .connection-history__item, .connection-history__restore'
   )]
     .filter(visible)
     .filter((element) => element.scrollWidth > element.clientWidth + 2)
+    .map((element) => element.id || element.className);
+
+  const horizontalClips = [...inspectionRoot.querySelectorAll(
+    '.connection-wizard-progress, .provider-picker, .access-choice-card, .connection-wizard-actions'
+  )]
+    .filter(visible)
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const painted = clippedRect(element);
+      return painted.left - rect.left > 1 || rect.right - painted.right > 1;
+    })
     .map((element) => element.id || element.className);
 
   // The composer is the primary input; the footer and the workbench drawer must never sit on top of
@@ -172,6 +183,7 @@ const inspectLayout = `
     covered,
     documentOverflow: document.documentElement.scrollWidth > innerWidth + 2,
     hitTargetMisses,
+    horizontalClips,
     maskNeutral,
     overlaps,
     overflow,
@@ -635,6 +647,21 @@ const collectScenarios = async (window) => {
       await window.webContents.executeJavaScript(selectRailPage(page));
       const result = await window.webContents.executeJavaScript(inspectLayout);
       results.push({ height, page, width, ...result });
+      if (page === 'connection') {
+        await window.webContents.executeJavaScript(`
+          document.querySelector('.connection-wizard-actions').scrollIntoView({ block: 'end' });
+        `);
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        results.push({
+          height,
+          page: 'connection:actions',
+          width,
+          ...(await window.webContents.executeJavaScript(inspectLayout)),
+        });
+        await window.webContents.executeJavaScript(`
+          document.querySelector('.control-panel').scrollTop = 0;
+        `);
+      }
     }
     await window.webContents.executeJavaScript(selectRailPage('plugins'));
     await window.webContents.executeJavaScript(addPluginStressFixtures);
@@ -766,11 +793,12 @@ app.whenReady().then(async () => {
   await window.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
   const detectorCalibrationPassed = await runDetectorCalibration(window);
   const results = await collectScenarios(window);
-  const expectedScenarios = sizes.length * 14;
+  const expectedScenarios = sizes.length * 15;
   const failures = results.filter(
     (result) =>
       result.documentOverflow ||
       result.hitTargetMisses.length > 0 ||
+      result.horizontalClips.length > 0 ||
       !result.maskNeutral ||
       result.overlaps.length > 0 ||
       result.overflow.length > 0 ||

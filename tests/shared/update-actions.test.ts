@@ -96,7 +96,7 @@ describe('conditional update actions', () => {
     });
   });
 
-  it.each(['available', 'downloading', 'downloaded'] as const)(
+  it.each(['available', 'downloading', 'downloaded', 'installing'] as const)(
     'keeps the application action counted through the %s phase',
     (phase) => {
       expect(

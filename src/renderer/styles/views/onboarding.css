@@ -230,6 +230,12 @@
   inset: clamp(var(--s-5), 5vw, var(--s-10));
   margin-inline: auto;
   max-width: min(760px, calc(100% - var(--s-10)));
+  /* The base step fills the viewport in normal flow. Once it becomes an inset absolute exit layer,
+   * retaining that 100% minimum height would extend past the lower inset and briefly create a
+   * vertical scrollbar. Let the inset define its height and clip only the non-interactive exit
+   * layer; the active step keeps the viewport's real overflow behavior. */
+  min-height: 0;
+  overflow: clip;
   pointer-events: none;
   position: absolute;
 }

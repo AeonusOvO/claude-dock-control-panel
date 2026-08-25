@@ -1544,7 +1544,13 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
 
 .connection-wizard-viewport {
   min-height: 300px;
-  overflow: hidden;
+  /*
+   * The step transition translates paint but does not participate in layout. Keeping this
+   * viewport clipped used to shave the provider surface shadow, card focus rings and the bottom
+   * edge of the outgoing step. The full-canvas control panel already owns horizontal containment,
+   * so the wizard can preserve its complete themed paint bounds while the two steps cross-fade.
+   */
+  overflow: visible;
   position: relative;
 }
 
@@ -1582,29 +1588,42 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
 
 .connection-wizard-actions {
   align-items: center;
-  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
-  border-top: 1px solid var(--line);
-  bottom: 0;
-  display: flex;
+  -webkit-backdrop-filter: blur(var(--mask-blur)) saturate(125%);
+  backdrop-filter: blur(var(--mask-blur)) saturate(125%);
+  background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line-strong) 82%, transparent);
+  border-radius: var(--r-pill);
+  bottom: var(--s-2);
+  box-shadow:
+    0 var(--s-2) var(--s-5) calc(-1 * var(--s-2))
+      color-mix(in srgb, var(--text-hi) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--text-hi) 7%, transparent);
+  display: grid;
   gap: var(--s-2);
-  margin-top: var(--s-4);
-  padding: var(--s-3) 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  isolation: isolate;
+  margin: var(--s-5) var(--s-3) var(--s-2);
+  padding: var(--s-1-5);
   position: sticky;
-  z-index: 2;
+  z-index: 6;
 }
 
 .connection-wizard-actions > span {
   color: var(--text-dim);
-  flex: 1;
   font-size: var(--type-caption-size);
   line-height: var(--type-caption-lh);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding-inline: var(--s-2);
   text-align: center;
 }
 
 .connection-wizard-actions .button {
-  flex: 0 0 auto;
+  border-radius: var(--r-pill);
   font-size: var(--type-caption-size);
-  min-width: 96px;
+  min-height: var(--control-h-md);
+  min-width: 104px;
+  padding-inline: var(--s-5);
 }
 
 .provider-picker,
@@ -1614,7 +1633,7 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
   border-radius: var(--r-xl);
   box-shadow: var(--sheen);
   margin-top: var(--s-3);
-  padding: var(--s-3);
+  padding: clamp(var(--s-4), 1.7vw, var(--s-5));
 }
 
 .provider-picker[aria-disabled='true'] {
@@ -1633,7 +1652,7 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
 
 .access-choice-grid {
   display: grid;
-  gap: var(--s-3);
+  gap: clamp(var(--s-3), 1.4vw, var(--s-4));
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -1647,8 +1666,8 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
   font-family: inherit;
   gap: var(--s-2);
   grid-template-columns: minmax(0, 1fr) var(--control-h-sm);
-  min-height: 112px;
-  padding: var(--s-4);
+  min-height: clamp(128px, 13vh, 152px);
+  padding: clamp(var(--s-4), 1.6vw, var(--s-5));
   text-align: left;
   transition:
     background-color var(--dur-2) var(--ease-standard),
@@ -1674,8 +1693,9 @@ body[data-agent-runtime='codex'] .workbench-pages--claude {
 }
 
 .access-choice-card > span:first-child {
+  align-content: start;
   display: grid;
-  gap: var(--s-1);
+  gap: var(--s-2);
 }
 
 .access-choice-card strong {

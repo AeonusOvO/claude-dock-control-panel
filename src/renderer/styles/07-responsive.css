@@ -186,6 +186,17 @@
   }
 }
 
+/* A bottom-sticky element is pulled upward before reaching its normal flow position. In compact
+ * windows that would place the glass capsule over the second provider row. Return it to flow while
+ * preserving the same themed capsule, so every card remains fully readable and the actions follow
+ * the content instead of covering it. */
+@media (max-width: 1024px) {
+  .connection-wizard-actions {
+    bottom: auto;
+    position: relative;
+  }
+}
+
 @media (max-width: 720px) {
   .connection-wizard-progress {
     gap: var(--s-2);
@@ -212,7 +223,23 @@
   }
 
   .connection-wizard-actions > span {
-    text-align: left;
+    display: -webkit-box;
+    font-size: var(--type-micro-size);
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    padding-inline: var(--s-1);
+    text-align: center;
+  }
+
+  .connection-wizard-actions {
+    gap: var(--s-1);
+    margin-inline: var(--s-2);
+  }
+
+  .connection-wizard-actions .button {
+    min-width: clamp(82px, 24vw, 104px);
+    padding-inline: var(--s-3);
   }
   /* Browser zoom reduces the CSS viewport without always dispatching a window resize in Electron.
    * Keep the default workspace usable even before the renderer reconciles its rail-preview state. */

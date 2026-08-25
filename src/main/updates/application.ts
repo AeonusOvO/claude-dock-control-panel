@@ -33,6 +33,7 @@ interface ApplicationUpdaterOptions {
   driver: ApplicationUpdaterDriver;
   enabled: boolean;
   onChange: (state: ApplicationUpdaterState) => void;
+  onInstallError?: () => void;
 }
 
 const errorMessage = (value: unknown): string =>
@@ -44,6 +45,7 @@ const numericValue = (value: unknown): number | undefined =>
 export class ApplicationUpdaterService {
   private checkOperation: Promise<UpdateCheckResultView | undefined> | undefined;
   private downloadOperation: Promise<ApplicationUpdaterState> | undefined;
+  private installOperation: Promise<void> | undefined;
   private state: ApplicationUpdaterState;
 
   public constructor(private readonly options: ApplicationUpdaterOptions) {
@@ -73,7 +75,11 @@ export class ApplicationUpdaterService {
   }
 
   public async check(): Promise<ApplicationUpdaterState> {
-    if (!this.options.enabled || this.state.phase === 'downloaded') {
+    if (
+      !this.options.enabled ||
+      this.state.phase === 'downloaded' ||
+      this.state.phase === 'installing'
+    ) {
       return this.getState();
     }
     if (this.downloadOperation) {
@@ -84,7 +90,11 @@ export class ApplicationUpdaterService {
   }
 
   public checkAndDownload(): Promise<ApplicationUpdaterState> {
-    if (!this.options.enabled || this.state.phase === 'downloaded') {
+    if (
+      !this.options.enabled ||
+      this.state.phase === 'downloaded' ||
+      this.state.phase === 'installing'
+    ) {
       return Promise.resolve(this.getState());
     }
     if (this.downloadOperation) {
@@ -92,7 +102,12 @@ export class ApplicationUpdaterService {
     }
     this.downloadOperation = (async () => {
       const result = await this.checkForUpdate();
-      if (!result || result.isUpdateAvailable !== true || this.state.phase === 'downloaded') {
+      if (
+        !result ||
+        result.isUpdateAvailable !== true ||
+        this.state.phase === 'downloaded' ||
+        this.state.phase === 'installing'
+      ) {
         return this.getState();
       }
       const latestVersion =
@@ -164,11 +179,38 @@ export class ApplicationUpdaterService {
     return this.checkOperation;
   }
 
-  public installDownloaded(): void {
-    if (this.state.phase !== 'downloaded') {
-      throw new Error('更新安装包尚未下载完成。');
+  public installDownloaded(
+    prepareInstall: () => Promise<void> = async () => undefined,
+  ): Promise<void> {
+    if (this.installOperation) {
+      return this.installOperation;
     }
-    this.options.driver.quitAndInstall(false, true);
+    if (this.state.phase !== 'downloaded') {
+      return Promise.reject(new Error('更新安装包尚未下载完成。'));
+    }
+    this.updateState({
+      currentVersion: this.options.currentVersion,
+      latestVersion: this.state.latestVersion,
+      message: `ClaudeDock ${this.state.latestVersion ?? '新版本'} 已下载并通过 SHA-512 校验，正在退出并启动安装…`,
+      percent: 100,
+      phase: 'installing',
+    });
+    const operation = (async () => {
+      try {
+        await prepareInstall();
+        this.options.driver.quitAndInstall(true, true);
+      } catch (error) {
+        this.updateInstallError(error);
+        throw error;
+      }
+    })();
+    this.installOperation = operation;
+    void operation.catch(() => {
+      if (this.installOperation === operation) {
+        this.installOperation = undefined;
+      }
+    });
+    return operation;
   }
 
   private installEventHandlers(): void {
@@ -214,19 +256,29 @@ export class ApplicationUpdaterService {
       this.updateState({
         currentVersion: this.options.currentVersion,
         latestVersion,
-        message: `ClaudeDock ${latestVersion ?? '新版本'} 已下载并通过 SHA-512 校验，可重启安装。`,
+        message: `ClaudeDock ${latestVersion ?? '新版本'} 已下载并通过 SHA-512 校验，正在准备安装…`,
         percent: 100,
         phase: 'downloaded',
       });
     });
     driver.on('error', (payload) => {
-      this.updateState({
-        currentVersion: this.options.currentVersion,
-        latestVersion: this.state.latestVersion,
-        message: `应用更新失败：${errorMessage(payload)}`,
-        phase: 'error',
-      });
+      if (this.state.phase === 'installing') {
+        this.updateInstallError(payload);
+        return;
+      }
+      this.installOperation = undefined;
+      this.updateError(payload);
     });
+  }
+
+  private updateInstallError(error: unknown): void {
+    this.installOperation = undefined;
+    try {
+      this.options.onInstallError?.();
+    } catch {
+      // Error reporting must still leave the updater state retryable even if host recovery fails.
+    }
+    this.updateError(error);
   }
 
   private updateError(error: unknown): void {

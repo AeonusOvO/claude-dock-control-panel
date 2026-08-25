@@ -122,6 +122,24 @@ describe('exported behavior and declarative UI contracts', () => {
     expect(harness.query('#conversation-rename-field-label').textContent).toContain('名称');
   });
 
+  it('keeps the connection chooser spacious and floats complete actions in a themed glass capsule', () => {
+    expect(harness.query('#connection-wizard-previous').textContent).toContain('上一步');
+    expect(harness.query('#connection-wizard-next').textContent).toContain('下一步');
+    expectCss(/\.connection-wizard-viewport\s*\{[^}]*overflow:\s*visible/u);
+    expectCss(
+      /\.connection-wizard-actions\s*\{[^}]*backdrop-filter:\s*blur\(var\(--mask-blur\)\) saturate\(125%\)[^}]*border-radius:\s*var\(--r-pill\)[^}]*grid-template-columns:\s*auto minmax\(0, 1fr\) auto[^}]*position:\s*sticky/u,
+    );
+    expectCss(
+      /\.connection-wizard-actions \.button\s*\{[^}]*border-radius:\s*var\(--r-pill\)[^}]*min-height:\s*var\(--control-h-md\)/u,
+    );
+    expectCss(
+      /\.access-choice-card\s*\{[^}]*min-height:\s*clamp\(128px, 13vh, 152px\)[^}]*padding:\s*clamp\(/u,
+    );
+    expectCss(
+      /@media \(max-width: 1024px\)\s*\{[^}]*\.connection-wizard-actions\s*\{[^}]*bottom:\s*auto;[^}]*position:\s*relative;/u,
+    );
+  });
+
   it('provides independently configured model chat with a separate workspace', () => {
     expect(harness.query('#chat-config-form')).toBeInstanceOf(HTMLFormElement);
     expect(harness.query('#chat-shell').hasAttribute('hidden')).toBe(true);

@@ -88,6 +88,7 @@ describe('renderer updates feature', () => {
       expect(harness.query('#update-center-summary').textContent).toContain('2 项可更新');
       expect(harness.query('#update-center-list').textContent).toContain('ClaudeDock');
       expect(harness.query('#update-center-list').textContent).toContain('Claude Code');
+      expect(harness.query('#update-center-list').textContent).toContain('下载并更新');
       expect(harness.query('#refresh-updates').getAttribute('aria-label')).toContain('2 项可更新');
 
       harness.click('[data-update-id="application"] .update-center-item__action');
@@ -102,18 +103,61 @@ describe('renderer updates feature', () => {
     }
   });
 
-  it('installs a downloaded application update only after in-page confirmation', async () => {
+  it('runs the application update last because success exits into the installer', async () => {
+    const operationOrder: string[] = [];
+    let updaterState = applicationUpdater('available');
+    const harness = await createRendererHarness({
+      downloadApplicationUpdate: vi.fn(async () => {
+        operationOrder.push('application');
+        updaterState = applicationUpdater('installing', {
+          message: '正在退出并启动安装。',
+          percent: 100,
+        });
+        return updaterState;
+      }),
+      getApplicationUpdaterState: vi.fn(async () => updaterState),
+      getSoftwareUpdates: vi.fn(async () => softwareUpdates),
+      installOrUpdateClaudeCode: vi.fn(async () => {
+        operationOrder.push('claude-code');
+        return {
+          message: 'Claude Code 更新完成。',
+          ok: true,
+          state: softwareUpdates,
+        };
+      }),
+      refreshClaudePluginMarketplaces: vi.fn(async () => marketplaceRefreshResult),
+    });
+    try {
+      await settle(harness);
+      harness.click('#refresh-updates');
+      await settle(harness);
+      harness.click('#update-center-all');
+      await settle(harness);
+
+      expect(operationOrder).toEqual(['claude-code', 'application']);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('shows verified downloads as automatically installing without a second confirmation', async () => {
     const harness = await createRendererHarness();
     try {
       harness.emit('onApplicationUpdaterChanged', applicationUpdater('downloaded'));
-      expect(harness.query('#application-update-action').textContent).toBe('重启并安装');
-
-      harness.click('#application-update-action');
-      expect(harness.query('#confirmation-dialog').textContent).toContain('安装 ClaudeDock 更新');
-      harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
-      await settle(harness);
-
-      expect(harness.method('installApplicationUpdate')).toHaveBeenCalledOnce();
+      expect(harness.query('#application-update-action').textContent).toBe('正在安装…');
+      expect(harness.query<HTMLButtonElement>('#application-update-action').disabled).toBe(true);
+      expect(harness.query('#confirmation-dialog').textContent).not.toContain(
+        '安装 ClaudeDock 更新',
+      );
+      harness.emit(
+        'onApplicationUpdaterChanged',
+        applicationUpdater('installing', {
+          message: '已校验，正在退出并启动安装。',
+          percent: 100,
+        }),
+      );
+      expect(harness.query('#application-update-action').textContent).toBe('正在安装…');
+      expect(harness.method('installApplicationUpdate')).not.toHaveBeenCalled();
       harness.dom.window.dispatchEvent(new harness.dom.window.Event('beforeunload'));
       expect(harness.method('onApplicationUpdaterChanged')).toHaveBeenCalledOnce();
     } finally {

@@ -45,24 +45,6 @@ interface UpdatesActionsContext {
 
 const runApplicationUpdateAction = async (context: UpdatesActionsContext): Promise<void> => {
   const { dependencies, elements, state, view } = context;
-  if (state.applicationUpdaterState?.phase === 'downloaded') {
-    const confirmed = await dependencies.requestConfirmation({
-      confirmLabel: '重启并安装',
-      message:
-        'ClaudeDock 将关闭当前窗口并启动已校验的更新安装包。请先保存终端中尚未写入磁盘的内容。',
-      title: '安装 ClaudeDock 更新',
-    });
-    if (!confirmed) return;
-    try {
-      await window.controlPanel.installApplicationUpdate();
-    } catch (error) {
-      dependencies.showToast(
-        error instanceof Error ? error.message : '无法启动更新安装。',
-        'error',
-      );
-    }
-    return;
-  }
   elements.applicationUpdateAction.disabled = true;
   elements.applicationUpdateAction.textContent = '正在检查…';
   try {
@@ -170,7 +152,16 @@ const runAllUpdates = async (context: UpdatesActionsContext): Promise<void> => {
   elements.updateCenterDialog.close('start-all-updates');
   dependencies.openDownloads();
   try {
-    if (actions.application && state.applicationUpdaterState?.phase !== 'downloaded') {
+    if (actions.claudeCode === 'update') await runClaudeInstallUpdate(context);
+    if (actions.router === 'update' && hasProject) {
+      await dependencies.runRouterUpdate();
+    }
+    if (actions.plugins) {
+      await dependencies.runAllPluginUpdates();
+    }
+    // ClaudeDock is deliberately last: a successful download exits into the NSIS installer, so no
+    // later mutation may remain queued after the application has entered its one-way quit latch.
+    if (actions.application) {
       try {
         view.renderApplicationUpdater(await window.controlPanel.downloadApplicationUpdate());
       } catch (error) {
@@ -179,13 +170,6 @@ const runAllUpdates = async (context: UpdatesActionsContext): Promise<void> => {
           'error',
         );
       }
-    }
-    if (actions.claudeCode === 'update') await runClaudeInstallUpdate(context);
-    if (actions.router === 'update' && hasProject) {
-      await dependencies.runRouterUpdate();
-    }
-    if (actions.plugins) {
-      await dependencies.runAllPluginUpdates();
     }
   } finally {
     state.updateCenterOperationInProgress = false;

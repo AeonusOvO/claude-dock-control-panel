@@ -28,6 +28,25 @@ export const registerSoftwareIpc = ({
   services,
   state,
 }: SoftwareIpcDependencies): void => {
+  const installDownloadedApplicationUpdate = async (): Promise<void> => {
+    const applicationUpdaterService = services.resolve(APPLICATION_UPDATER_SERVICE);
+    try {
+      await applicationUpdaterService.installDownloaded(async () => {
+        // Latch before asynchronous cleanup so no new session can enter while the owned process
+        // set is being drained. The regular before-quit contributions stop the observer only after
+        // quitAndInstall has successfully asked Electron to quit; a synchronous installer failure
+        // therefore leaves the registry usable for a retry.
+        state.isQuitting = true;
+        const runtimeProcessRegistry = services.resolve(RUNTIME_PROCESS_REGISTRY);
+        await runtimeProcessRegistry.terminateAll();
+        services.resolve(CLAUDE_PERMISSION_BRIDGE).shutdown();
+      });
+    } catch (error) {
+      state.isQuitting = false;
+      throw error;
+    }
+  };
+
   ipcMain.handle(CHANNELS.SOFTWARE_UPDATES_GET, async (event, refresh: unknown) => {
     validateSender(event);
     return requireClaudeRuntime().getSoftwareUpdates(refresh === true);
@@ -78,25 +97,17 @@ export const registerSoftwareIpc = ({
   ipcMain.handle(CHANNELS.SOFTWARE_APPLICATION_UPDATER_DOWNLOAD, async (event) => {
     validateSender(event);
     assertApplicationUpdatesAllowed();
-    return services.resolve(APPLICATION_UPDATER_SERVICE).checkAndDownload();
+    const applicationUpdater = services.resolve(APPLICATION_UPDATER_SERVICE);
+    const result = await applicationUpdater.checkAndDownload();
+    if (result.phase === 'downloaded') {
+      await installDownloadedApplicationUpdate();
+      return applicationUpdater.getState();
+    }
+    return result;
   });
   ipcMain.handle(CHANNELS.SOFTWARE_APPLICATION_UPDATER_INSTALL, async (event) => {
     validateSender(event);
     assertApplicationUpdatesAllowed();
-    const applicationUpdaterService = services.resolve(APPLICATION_UPDATER_SERVICE);
-    if (applicationUpdaterService.getState().phase !== 'downloaded') {
-      throw new Error('更新安装包尚未下载完成。');
-    }
-    services.resolve(CLAUDE_PERMISSION_BRIDGE).shutdown();
-    const runtimeProcessRegistry = services.resolve(RUNTIME_PROCESS_REGISTRY);
-    await runtimeProcessRegistry.terminateAll();
-    runtimeProcessRegistry.stop();
-    state.isQuitting = true;
-    try {
-      applicationUpdaterService.installDownloaded();
-    } catch (error) {
-      state.isQuitting = false;
-      throw error;
-    }
+    await installDownloadedApplicationUpdate();
   });
 };

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRendererHarness } from '../helpers/renderer-harness';
+import { expectCss } from '../helpers/renderer-interaction-fixture';
 
 const pendingOnboarding = {
   completedSteps: [] as Array<'engine' | 'model' | 'prepare' | 'project' | 'ready'>,
@@ -9,6 +10,23 @@ const pendingOnboarding = {
 };
 
 describe('onboarding flow', () => {
+  it('uses explicit previous-step labels and keeps the exiting layer out of scroll overflow', async () => {
+    const harness = await createRendererHarness();
+    try {
+      const backButtons = Array.from(
+        harness.document.querySelectorAll<HTMLButtonElement>('[data-onboarding-back]'),
+      );
+      expect(backButtons).toHaveLength(4);
+      expect(backButtons.map((button) => button.textContent?.trim())).toEqual(
+        Array.from({ length: 4 }, () => '上一步'),
+      );
+      expect(harness.query('#onboarding-dismiss').textContent?.trim()).not.toBe('上一步');
+      expectCss(/\.onboarding-step--leaving\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*clip;/u);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   it('selects engine and model independently, including the compact domestic model picker', async () => {
     const updateOnboardingProgress = vi.fn(async (input) => ({
       ...input,

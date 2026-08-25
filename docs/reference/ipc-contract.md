@@ -310,6 +310,12 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 | `software:application-updater-download` | `downloadApplicationUpdate`  |
 | `software:application-updater-install`  | `installApplicationUpdate`   |
 
+`software:application-updater-get` 的刷新参数始终是 check-only。只有显式调用
+`software:application-updater-download` 才授权本次交易下载；当 electron-updater 完成下载与 SHA-512
+校验后，主进程会合并并发请求、清理自有进程并自动退出安装。`software:application-updater-install`
+保留为已下载状态的兼容入口，正常界面不再要求用户二次点击；NSIS 以静默模式安装，完成后重新启动
+ClaudeDock。
+
 ### `runtime`（4）
 
 | 频道                        | 方法                      |

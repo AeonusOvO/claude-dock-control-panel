@@ -166,7 +166,12 @@ type AgentRuntimeBootstrap = Pick<
 
 type DiagnosticsBootstrap = Pick<
   BootstrapDependencies,
-  'advancedSettingsStore' | 'runtimeActivityRegistry' | 'runtimeProfile' | 'services' | 'workspace'
+  | 'advancedSettingsStore'
+  | 'runtimeActivityRegistry'
+  | 'runtimeProfile'
+  | 'services'
+  | 'state'
+  | 'workspace'
 >;
 
 const combinedCliEnvironment = (
@@ -600,6 +605,7 @@ const installDiagnostics = ({
   runtimeActivityRegistry,
   runtimeProfile,
   services,
+  state,
   workspace,
 }: DiagnosticsBootstrap): void => {
   mainLogger.configureDisk(path.join(app.getPath('userData'), 'diagnostics', 'main.jsonl'));
@@ -709,10 +715,13 @@ const installDiagnostics = ({
           runtimeProfile.effects.allowApplicationUpdates &&
           app.isPackaged &&
           process.platform === 'win32',
-        onChange: (state) => {
+        onChange: (updaterState) => {
           services
             .resolve(MAIN_WINDOW)
-            .current?.webContents.send(CHANNELS.SOFTWARE_APPLICATION_UPDATER_CHANGED, state);
+            .current?.webContents.send(CHANNELS.SOFTWARE_APPLICATION_UPDATER_CHANGED, updaterState);
+        },
+        onInstallError: () => {
+          state.isQuitting = false;
         },
       }),
   );

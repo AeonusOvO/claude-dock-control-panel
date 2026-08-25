@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.18（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.19（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -1201,7 +1201,11 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   选择都能预选入口，不能覆盖稍后到达的项目配置。
 - `form-wizard.ts` 独占 `choice/configure` 呈现状态、双向动效、进度条和底部上一步/下一步。选择 provider
   仍调用原 `applyPresetUi`，第二步继续移动同一 Router/cURL/ChatGPT 工具节点并复用原配置、历史、测试与
-  保存逻辑，不复制 DOM。连接测试与修复沿既有整体 busy 状态禁用向导返回。
+  保存逻辑，不复制 DOM。连接测试与修复沿既有整体 busy 状态禁用向导返回。步骤 viewport 保持 paint
+  overflow 可见，避免裁切主题阴影、`:focus-visible` 和横向退场帧；最外层 control panel 继续承担页面级
+  横向 containment。底部 sticky 操作区使用三列 pill grid、主题 `--mask-blur` backdrop filter 和半透明
+  表面 fallback，状态列可收缩换行，按钮在窄 viewport 保留一致 caption 字号与 `--control-h-md` 高度；
+  1024px 以下恢复正常文档流，防止 bottom-sticky 把胶囊提前拉到第二排卡片上方造成遮挡。
 - `ManagedChatGptSetupProgress.interruptible` 由 main 在发送进度时给出，当前只允许 OAuth `logging-in`
   阶段取消。renderer 同时核对 session scope；可取消时调用无参数
   `cancelManagedChatGptGatewaySetup`，主进程的 `ManagedChatGptGateway.cancelSetup()` 再检查实际仍处于
@@ -1361,9 +1365,15 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   `electron-updater` NSIS updater，仅在 `app.isPackaged && win32` 启用。打包的 `app-update.yml`
   固定一个无凭据 COS generic feed，并设置 `useMultipleRangeRequest: false`；`5.0.0-rc.N` 读取
   `rc.yml`，稳定版读取 `latest.yml`。首次加载和手动刷新执行可合并的 check-only，不开始下载；显式
-  下载 IPC 才调用 `downloadUpdate()`。`autoDownload/autoInstallOnAppQuit` 均关闭，进度通过 IPC 推送，
-  `update-downloaded` 后才允许 `quitAndInstall(false, true)`。显式关闭降级与 web installer，blockmap
-  支持差分下载；下载完成仍保留完整预发布版本字符串。
+  “下载并更新”IPC 才调用 `downloadUpdate()`。`autoDownload/autoInstallOnAppQuit` 均关闭，进度通过 IPC
+  推送；同一显式交易收到 `update-downloaded`、确认 SHA-512 一致后，先把退出闩置位并清理 ClaudeDock
+  拥有的进程，再自动调用 `quitAndInstall(true, true)` 静默安装并在完成后重新启动，不要求第二次确认。
+  check-only、后台刷新和孤立的
+  updater 事件都没有这项安装授权；并发下载与安装请求分别合并为一个操作。应用更新在“全部更新”中
+  固定最后执行，避免进入退出安装后再启动其他更新。清理、启动安装器失败或 updater 在 `installing`
+  阶段异步报告错误时撤销退出闩、进入 `error`，进程观察器保持运行以允许重新检查；成功后由标准
+  `before-quit` 清理停止观察器。显式关闭
+  降级与 web installer，blockmap 支持差分下载；下载完成仍保留完整预发布版本字符串。
 - 通道清单 SHA-512 证明安装包与所读取元数据一致，不证明发布者身份。当前安装包 Authenticode 为
   `NotSigned`，通道清单未签名，配置没有 `publisherName`；`update-downloaded`、TLS 可用或摘要通过均
   不得标记为“供应链已验证”。

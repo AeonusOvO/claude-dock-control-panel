@@ -430,6 +430,60 @@ app
       path.join(outputDirectory, 'onboarding-model-claude-820.png'),
       (await captureSettledPage()).toPNG(),
     );
+    const probeOnboardingTransition = async (from, to, direction) => {
+      const baseline = await window.webContents.executeJavaScript(`
+        (() => {
+          const viewport = document.querySelector('#onboarding-viewport');
+          for (const step of document.querySelectorAll('#onboarding-shell [data-onboarding-step]')) {
+            const active = step.dataset.onboardingStep === ${JSON.stringify(to)};
+            step.hidden = !active;
+            step.classList.toggle('onboarding-step--active', active);
+            step.classList.remove('onboarding-step--leaving');
+            step.style.animation = 'none';
+          }
+          delete viewport.dataset.direction;
+          return Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        })()
+      `);
+      await window.webContents.executeJavaScript(`
+        (() => {
+          const viewport = document.querySelector('#onboarding-viewport');
+          const fromStep = document.querySelector('[data-onboarding-step=${JSON.stringify(from)}]');
+          const toStep = document.querySelector('[data-onboarding-step=${JSON.stringify(to)}]');
+          for (const step of document.querySelectorAll('#onboarding-shell [data-onboarding-step]')) {
+            step.hidden = true;
+            step.classList.remove('onboarding-step--active', 'onboarding-step--leaving');
+            step.style.removeProperty('animation');
+          }
+          viewport.dataset.direction = ${JSON.stringify(direction)};
+          fromStep.hidden = false;
+          fromStep.classList.add('onboarding-step--leaving');
+          toStep.hidden = false;
+          toStep.classList.add('onboarding-step--active');
+          void viewport.offsetHeight;
+        })()
+      `);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const frame = await window.capturePage();
+      writeFileSync(
+        path.join(outputDirectory, `onboarding-transition-${direction}-claude-820.png`),
+        frame.toPNG(),
+      );
+      const transient = await window.webContents.executeJavaScript(`
+        (() => {
+          const viewport = document.querySelector('#onboarding-viewport');
+          return Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+        })()
+      `);
+      if (transient > baseline + 2) {
+        throw new Error(
+          `Onboarding ${direction} transition created transient scrollbar overflow: ${transient}px (baseline ${baseline}px)`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 340));
+    };
+    await probeOnboardingTransition('engine', 'model', 'forward');
+    await probeOnboardingTransition('model', 'engine', 'backward');
     await window.webContents.executeJavaScript(`
       document.querySelector('#onboarding-shell').hidden = true;
     `);
@@ -741,11 +795,38 @@ app
       );
     }
   `);
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const snapshot = (await captureSettledPage()).toPNG();
+      writeFileSync(path.join(outputDirectory, `connection-choice-${themeId}-1180.png`), snapshot);
+      if (themeId === 'claude') {
+        writeFileSync(path.join(outputDirectory, 'connection-1180.png'), snapshot);
+      }
+    }
+
+    window.setSize(820, 640);
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      writeFileSync(
+        path.join(outputDirectory, `connection-choice-${themeId}-820.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(`
+        document.querySelector('.connection-wizard-actions').scrollIntoView({ block: 'end' });
+      `);
+      writeFileSync(
+        path.join(outputDirectory, `connection-actions-${themeId}-820.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(`
+        document.querySelector('.control-panel').scrollTop = 0;
+      `);
+    }
+    window.setSize(1180, 760);
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
     await new Promise((resolve) => setTimeout(resolve, 80));
-    writeFileSync(
-      path.join(outputDirectory, 'connection-1180.png'),
-      (await captureSettledPage()).toPNG(),
-    );
 
     await window.webContents.executeJavaScript(`
     document.querySelector('[data-connection-wizard-step="choice"]').hidden = true;
