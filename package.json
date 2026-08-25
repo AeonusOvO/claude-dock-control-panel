@@ -59,6 +59,7 @@
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis",
+    "release:clean": "node scripts/release/clean-outputs.mjs",
     "release:manifest": "node scripts/release/manifest.mjs",
     "release:publish:cos": "node scripts/release/publish-cos.mjs",
     "release": "node scripts/release/release.mjs"

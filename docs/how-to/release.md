@@ -16,7 +16,8 @@ COS 并完成远端复核。没有完成通道发布的版本统一标记为“�
 1. 将 `package.json` 的 `version` 改为目标版本并同步 lockfile；确认 `build.files` 字面包含根目录 `LICENSE` 与 `NOTICE`。
 2. 新建 `docs/releases/<version>.md`，只记录稳定的变更与验收契约；不要预写测试数量、产物大小、摘要或签名结论。
 3. 提交本次发行需要的全部源码、测试和文档。最终候选的全部门禁（见 [verify.md](verify.md)，包括三项 opt-in Windows 集成测试）必须在该 exact commit 上运行；测试数量只取自这些 exact-commit 命令日志。
-4. 定向清理门禁产生的旧 `outputs/` 内容，使目录不存在或除仓库跟踪的空 `.gitkeep` 外为空。
+4. 运行 `npm run release:clean` 定向清理门禁产生的旧 `outputs/` 内容，使目录不存在或除仓库跟踪的空
+   `.gitkeep` 外为空。该脚本只接受仓库根目录下的真实 `outputs/` 目录并拒绝符号链接。
 5. 确认 `git status --short --untracked-files=all` 无输出，再运行 `npm run release`。该 Node 编排器依次执行 `npm ci`、lint、format check、全部 typecheck、全量 Vitest、dependency-cruiser、`npm run dist`、源码身份复核和 `release:manifest`；不访问外部发布服务。
 6. 检查 `outputs/release-manifest.json` 的 `problems` 为空，并核对版本、通道、feed、源码 HEAD、lockfile SHA-256、cohort、文件大小、SHA-256、SHA-512 和 Authenticode 状态；产物事实只取自这份最终 manifest。
 7. 在 GitHub 建立标签为 `v<version>` 的 Release，把 exact-commit 日志中的测试结果和最终 manifest 中的产物事实写入验证说明，并上传安装包、blockmap 和本次通道清单。GitHub 资产用于手动安装和追溯，不是 rc.15 之后的应用内更新源；`release-manifest.json` 保持本地，不上传其中的工作站路径。
