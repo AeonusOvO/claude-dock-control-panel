@@ -5,6 +5,7 @@ import type {
 } from '../../../shared/contracts';
 import { createProjectsContextMenuActions } from './actions-context-menu';
 import { createProjectsHistoryActions } from './actions-history';
+import type { StoredConversationResumeOptions } from './actions-history';
 import { createProjectsRenameActions } from './actions-rename';
 import { createProjectsWorkspaceActions } from './actions-workspace';
 import type { ProjectsElements } from './elements';
@@ -40,7 +41,11 @@ export interface ProjectsActions {
   renameStoredConversation: (projectPath: string, session: ClaudeSessionMetadata) => Promise<void>;
   requestConversationTitle: (currentTitle: string, historical: boolean) => Promise<string | null>;
   requestRenamedValue: (currentValue: string, copy: RenameDialogCopy) => Promise<string | null>;
-  resumeStoredConversation: (projectPath: string, session: ClaudeSessionMetadata) => Promise<void>;
+  resumeStoredConversation: (
+    projectPath: string,
+    session: ClaudeSessionMetadata,
+    options?: StoredConversationResumeOptions,
+  ) => Promise<void>;
   showConversationContextMenu: (
     event: MouseEvent,
     target: Exclude<ConversationContextTarget, undefined>,

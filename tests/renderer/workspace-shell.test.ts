@@ -103,8 +103,9 @@ describe('remaining renderer behavior contracts', () => {
         await settle(harness);
 
         expect(harness.method('setConversationResumePreferences')).toHaveBeenCalledWith({
+          autoLoadLastConversationModelOnStartup: true,
+          autoLoadLastConversationOnStartup: true,
           modelMismatchBehavior: 'use-current',
-          restoreLastWorkspaceOnStartup: true,
         });
         expect(harness.method('openStoredConversation')).toHaveBeenCalled();
         expectCss(/conversationModelCardEnter/u);

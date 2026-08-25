@@ -26,8 +26,9 @@ const appSettings = (overrides: Partial<AppSettingsView> = {}): AppSettingsView 
   claudeContextWindowMode: 'auto',
   closeBehavior: 'tray',
   conversationResume: {
+    autoLoadLastConversationModelOnStartup: true,
+    autoLoadLastConversationOnStartup: true,
     modelMismatchBehavior: 'ask',
-    restoreLastWorkspaceOnStartup: true,
   },
   footerResourcePreference: 'auto',
   language: 'zh-CN',

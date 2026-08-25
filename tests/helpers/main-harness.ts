@@ -419,6 +419,11 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     get: vi.fn(() => ({
       claudeContextWindowCustomTokens: undefined,
       claudeContextWindowMode: 'auto',
+      conversationResume: {
+        autoLoadLastConversationModelOnStartup: true,
+        autoLoadLastConversationOnStartup: true,
+        modelMismatchBehavior: 'ask',
+      },
       managedChatGptContextWindowMode: 'standard',
     })),
   };

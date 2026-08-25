@@ -28,8 +28,9 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   closeBehavior: 'tray',
   closeToTrayNoticeShown: false,
   conversationResume: {
+    autoLoadLastConversationModelOnStartup: true,
+    autoLoadLastConversationOnStartup: true,
     modelMismatchBehavior: 'ask',
-    restoreLastWorkspaceOnStartup: true,
   },
   footerResourcePreference: 'auto',
   managedChatGptContextWindowMode: 'standard',
@@ -102,7 +103,7 @@ export class AppPreferencesStore {
     }
     this.ensureDirectory();
     const temporaryPath = `${this.storagePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify({ ...next, version: 1 }, null, 2)}\n`, {
+    writeFileSync(temporaryPath, `${JSON.stringify({ ...next, version: 2 }, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
     });
@@ -136,7 +137,7 @@ export class AppPreferencesStore {
     }
     try {
       this.ensureDirectory();
-      writeFileSync(this.storagePath, `${JSON.stringify({ ...legacy, version: 1 }, null, 2)}\n`, {
+      writeFileSync(this.storagePath, `${JSON.stringify({ ...legacy, version: 2 }, null, 2)}\n`, {
         encoding: 'utf8',
         mode: 0o600,
       });
@@ -158,7 +159,7 @@ export class AppPreferencesStore {
         version?: unknown;
       };
       if (
-        parsed.version === 1 &&
+        (parsed.version === 1 || parsed.version === 2) &&
         (parsed.closeBehavior === 'exit' || parsed.closeBehavior === 'tray') &&
         typeof parsed.closeToTrayNoticeShown === 'boolean'
       ) {
@@ -181,7 +182,10 @@ export class AppPreferencesStore {
               : claudeContextWindowMode,
           closeBehavior: parsed.closeBehavior,
           closeToTrayNoticeShown: parsed.closeToTrayNoticeShown,
-          conversationResume: normalizeConversationResumePreferences(parsed.conversationResume),
+          conversationResume: normalizeConversationResumePreferences(
+            parsed.conversationResume,
+            parsed.version,
+          ),
           footerResourcePreference:
             parsed.footerResourcePreference === 'context' ||
             parsed.footerResourcePreference === 'quota'
@@ -207,11 +211,32 @@ const isConversationResumePreferences = (
     (record.modelMismatchBehavior === 'ask' ||
       record.modelMismatchBehavior === 'use-conversation' ||
       record.modelMismatchBehavior === 'use-current') &&
-    typeof record.restoreLastWorkspaceOnStartup === 'boolean'
+    typeof record.autoLoadLastConversationOnStartup === 'boolean' &&
+    typeof record.autoLoadLastConversationModelOnStartup === 'boolean'
   );
 };
 
-const normalizeConversationResumePreferences = (value: unknown): ConversationResumePreferences =>
-  isConversationResumePreferences(value)
-    ? { ...value }
-    : { ...DEFAULT_PREFERENCES.conversationResume };
+const normalizeConversationResumePreferences = (
+  value: unknown,
+  version: unknown,
+): ConversationResumePreferences => {
+  if (isConversationResumePreferences(value)) {
+    return { ...value };
+  }
+  if (version === 1 && value && typeof value === 'object' && !Array.isArray(value)) {
+    const legacy = value as Record<string, unknown>;
+    if (
+      (legacy.modelMismatchBehavior === 'ask' ||
+        legacy.modelMismatchBehavior === 'use-conversation' ||
+        legacy.modelMismatchBehavior === 'use-current') &&
+      typeof legacy.restoreLastWorkspaceOnStartup === 'boolean'
+    ) {
+      return {
+        autoLoadLastConversationModelOnStartup: legacy.restoreLastWorkspaceOnStartup,
+        autoLoadLastConversationOnStartup: legacy.restoreLastWorkspaceOnStartup,
+        modelMismatchBehavior: legacy.modelMismatchBehavior,
+      };
+    }
+  }
+  return { ...DEFAULT_PREFERENCES.conversationResume };
+};

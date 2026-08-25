@@ -65,7 +65,8 @@ export const createTerminalIoGenerationActions = (
     view: TerminalView,
   ): boolean =>
     ownsTerminalGeneration(sessionId, ptyGeneration, view) &&
-    terminalStatusForSession(sessionId)?.phase === 'running';
+    terminalStatusForSession(sessionId)?.phase === 'running' &&
+    !dependencies.claudeLaunchAttempts.isBusy(sessionId);
 
   const terminalViewForStatus = (status: TerminalStatus): TerminalView | undefined => {
     const view = state.terminalViews.get(status.id);

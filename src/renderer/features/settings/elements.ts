@@ -1,10 +1,11 @@
 import { requiredElement } from '../../platform/dom';
 
 export interface SettingsElements {
+  autoLoadLastConversation: HTMLInputElement;
+  autoLoadLastConversationModel: HTMLInputElement;
   chatIdleTimeout: HTMLSelectElement;
   closeBehavior: HTMLSelectElement;
   conversationModelMismatch: HTMLSelectElement;
-  restoreLastWorkspace: HTMLInputElement;
   language: HTMLSelectElement;
   launchAtLogin: HTMLInputElement;
   networkNewSession: HTMLInputElement;
@@ -15,6 +16,8 @@ export interface SettingsElements {
 }
 
 export const createSettingsElements = (): SettingsElements => ({
+  autoLoadLastConversation: requiredElement('#settings-auto-load-last-conversation'),
+  autoLoadLastConversationModel: requiredElement('#settings-auto-load-last-conversation-model'),
   chatIdleTimeout: requiredElement('#settings-chat-idle-timeout'),
   closeBehavior: requiredElement('#settings-close-behavior'),
   conversationModelMismatch: requiredElement('#settings-conversation-model-mismatch'),
@@ -22,7 +25,6 @@ export const createSettingsElements = (): SettingsElements => ({
   launchAtLogin: requiredElement('#settings-launch-at-login'),
   networkNewSession: requiredElement('#settings-network-new-session'),
   networkProviderLogin: requiredElement('#settings-network-provider-login'),
-  restoreLastWorkspace: requiredElement('#settings-restore-last-workspace'),
   unsavedIndicator: requiredElement('#settings-unsaved-indicator'),
   version: requiredElement('#settings-version'),
   webResearchIsolation: requiredElement('#settings-web-research-isolation'),

@@ -1,4 +1,5 @@
 import type {
+  ConversationResumePreferences,
   ClaudeSessionMetadata,
   TerminalStatus,
   WorkspaceState,
@@ -38,6 +39,9 @@ export interface ProjectsFeature {
   renderWorkspace: (state: WorkspaceState) => void;
   requestConversationTitle: (currentTitle: string, historical: boolean) => Promise<string | null>;
   requestRenamedValue: (currentValue: string, copy: RenameDialogCopy) => Promise<string | null>;
+  restoreLastConversationOnStartup: (
+    preferences: ConversationResumePreferences,
+  ) => Promise<boolean>;
 }
 
 export const PROJECTS_FEATURE = createRegistryToken<ProjectsFeature>('renderer.feature.projects');
@@ -74,6 +78,34 @@ const createProjectsFeature = (dependencies: ProjectsFeatureDependencies): Proje
       actions.showConversationContextMenu(event, target),
   };
 
+  const restoreLastConversationOnStartup = async (
+    preferences: ConversationResumePreferences,
+  ): Promise<boolean> => {
+    if (!preferences.autoLoadLastConversationOnStartup) {
+      return false;
+    }
+    try {
+      const project = [...dependencies.getWorkspaceState().projects]
+        .filter((candidate) => !candidate.missing)
+        .sort((left, right) => (right.lastActiveAt ?? 0) - (left.lastActiveAt ?? 0))[0];
+      if (!project) {
+        return false;
+      }
+      const session = (await window.controlPanel.getClaudeSessionsForPath(project.path))[0];
+      if (!session) {
+        return false;
+      }
+      await actions.resumeStoredConversation(project.path, session, {
+        autoLoadConversationModel: preferences.autoLoadLastConversationModelOnStartup,
+        source: 'startup',
+      });
+      return true;
+    } catch {
+      dependencies.showToast('无法自动恢复上次对话，请从历史列表手动重试。', 'error');
+      return false;
+    }
+  };
+
   const rows = createProjectsRows(state, elements, dependencies, handlers, titleView);
 
   return {
@@ -90,6 +122,7 @@ const createProjectsFeature = (dependencies: ProjectsFeatureDependencies): Proje
     renderWorkspace: workspaceRenderer.renderWorkspace,
     requestConversationTitle: actions.requestConversationTitle,
     requestRenamedValue: actions.requestRenamedValue,
+    restoreLastConversationOnStartup,
   };
 };
 

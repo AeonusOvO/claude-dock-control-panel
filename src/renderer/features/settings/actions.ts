@@ -94,8 +94,10 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
     if (
       pending.conversationResume.modelMismatchBehavior !==
         saved.conversationResume.modelMismatchBehavior ||
-      pending.conversationResume.restoreLastWorkspaceOnStartup !==
-        saved.conversationResume.restoreLastWorkspaceOnStartup
+      pending.conversationResume.autoLoadLastConversationOnStartup !==
+        saved.conversationResume.autoLoadLastConversationOnStartup ||
+      pending.conversationResume.autoLoadLastConversationModelOnStartup !==
+        saved.conversationResume.autoLoadLastConversationModelOnStartup
     ) {
       await window.controlPanel.setConversationResumePreferences(pending.conversationResume);
     }
@@ -167,7 +169,8 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
   elements.launchAtLogin.addEventListener('change', handleIndicatorChange);
   elements.closeBehavior.addEventListener('change', handleIndicatorChange);
   elements.conversationModelMismatch.addEventListener('change', handleIndicatorChange);
-  elements.restoreLastWorkspace.addEventListener('change', handleIndicatorChange);
+  elements.autoLoadLastConversation.addEventListener('change', handleIndicatorChange);
+  elements.autoLoadLastConversationModel.addEventListener('change', handleIndicatorChange);
   elements.webResearchIsolation.addEventListener('change', handleIndicatorChange);
   elements.networkNewSession.addEventListener('change', handleIndicatorChange);
   elements.networkProviderLogin.addEventListener('change', handleIndicatorChange);
@@ -184,7 +187,8 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
     elements.launchAtLogin.removeEventListener('change', handleIndicatorChange);
     elements.closeBehavior.removeEventListener('change', handleIndicatorChange);
     elements.conversationModelMismatch.removeEventListener('change', handleIndicatorChange);
-    elements.restoreLastWorkspace.removeEventListener('change', handleIndicatorChange);
+    elements.autoLoadLastConversation.removeEventListener('change', handleIndicatorChange);
+    elements.autoLoadLastConversationModel.removeEventListener('change', handleIndicatorChange);
     elements.webResearchIsolation.removeEventListener('change', handleIndicatorChange);
     elements.networkNewSession.removeEventListener('change', handleIndicatorChange);
     elements.networkProviderLogin.removeEventListener('change', handleIndicatorChange);

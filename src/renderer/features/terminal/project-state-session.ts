@@ -58,6 +58,7 @@ export const createTerminalSessionActions = (
     setRuntimeSummaryOpen,
     terminalFeature,
     projectsFeature,
+    claudeLaunchAttempts,
   } = deps;
 
   const renderActiveStatus = (status: TerminalStatus): void => {
@@ -82,7 +83,12 @@ export const createTerminalSessionActions = (
     workbenchScope.dataset.titleTyping = typing;
     renderRuntimePickerControls(deps, status.id);
     terminalFeature.renderControlStatus(status);
-    terminalFeature.setComposerEnabled(status.phase === 'running');
+    const launchBusy = claudeLaunchAttempts.isBusy(status.id);
+    terminalFeature.setComposerEnabled(status.phase === 'running' && !launchBusy);
+    const terminal = terminalFeature.getTerminalView(status.id)?.terminal;
+    if (terminal) {
+      terminal.options.disableStdin = launchBusy;
+    }
     if (status.phase === 'error') terminalFeature.showTerminalDiagnostic(status);
   };
 

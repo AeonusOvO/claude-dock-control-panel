@@ -541,6 +541,8 @@ const installProjectFeatures = (
   registerProjectsFeature(rendererRegistry, {
     activeDevelopmentRuntime,
     activeStatus,
+    beginTerminalMask: (sessionId, label) =>
+      features.terminalFeature.beginTerminalMask(sessionId, label),
     beginClaudeLaunchAttempt: terminalProjectState.beginClaudeLaunchAttempt,
     claudeLaunchAttempts,
     claudeSpeedOperations,

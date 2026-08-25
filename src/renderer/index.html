@@ -1361,14 +1361,15 @@
         <form class="terminal-composer" id="terminal-composer">
           <textarea
             id="composer-input"
+            disabled
             rows="1"
             spellcheck="false"
             autocomplete="off"
-            placeholder="输入提示词　·　Enter 发送　·　Shift+Enter 换行　·　↑↓ 翻阅历史"
+            placeholder="终端未运行；先启动对话后再输入"
             aria-label="终端输入框"
             aria-describedby="composer-hint"
           ></textarea>
-          <button id="composer-send" type="submit" title="发送到终端（Enter）">
+          <button id="composer-send" type="submit" title="发送到终端（Enter）" disabled>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 12h13M12 6l6 6-6 6" />
             </svg>
@@ -3072,7 +3073,7 @@
               type="button"
               aria-selected="true"
             >
-              总设置
+              通用
             </button>
             <button
               class="settings-tab"
@@ -3124,92 +3125,136 @@
             </button>
           </nav>
           <div class="settings-panels">
-            <section class="settings-panel settings-panel--active" data-settings-panel="general">
-              <div class="settings-section-heading">
-                <strong>应用偏好</strong>
-                <span>控制 ClaudeDock 自身的启动方式和外观。</span>
-              </div>
-              <label class="settings-row" for="settings-launch-at-login">
-                <span>
-                  <strong>开机启动</strong>
-                  <small>登录 Windows 后自动启动 ClaudeDock。</small>
-                </span>
-                <input id="settings-launch-at-login" type="checkbox" />
-              </label>
-              <label class="settings-row settings-row--select" for="settings-close-behavior">
-                <span>
-                  <strong>点击关闭按钮时</strong>
-                  <small>直接退出仍会检查正在进行的下载、安装和对话。</small>
-                </span>
-                <select id="settings-close-behavior">
-                  <option value="tray">最小化到托盘</option>
-                  <option value="exit">直接退出</option>
-                </select>
-              </label>
-              <div class="settings-section-heading settings-section-heading--subtle">
-                <strong>对话恢复</strong>
-                <span>让每个历史对话保持自己的完整模型接入。</span>
-              </div>
-              <label
-                class="settings-row settings-row--select"
-                for="settings-conversation-model-mismatch"
-              >
-                <span>
-                  <strong>历史对话模型不一致时</strong>
-                  <small
-                    >比较平台、账号/API、接口、主模型和小型/备用模型；弹窗内也可记住所选项。</small
+            <section
+              class="settings-panel settings-panel--active settings-general"
+              data-settings-panel="general"
+            >
+              <header class="settings-section-heading settings-general__intro">
+                <strong>通用设置</strong>
+                <span>按使用阶段整理启动、对话、窗口与应用信息。</span>
+              </header>
+              <section class="settings-group" aria-labelledby="settings-startup-heading">
+                <div class="settings-group__heading">
+                  <strong id="settings-startup-heading">启动与恢复</strong>
+                  <span>决定软件打开后恢复到哪里，以及是否接回上次对话的模型。</span>
+                </div>
+                <div class="settings-group__rows">
+                  <label class="settings-row" for="settings-launch-at-login">
+                    <span>
+                      <strong>开机启动</strong>
+                      <small>登录 Windows 后自动启动 ClaudeDock。</small>
+                    </span>
+                    <input id="settings-launch-at-login" type="checkbox" />
+                  </label>
+                  <label class="settings-row" for="settings-auto-load-last-conversation">
+                    <span>
+                      <strong>自动加载上次对话</strong>
+                      <small>启动后打开上次项目中最后使用的对话；默认开启。</small>
+                    </span>
+                    <input id="settings-auto-load-last-conversation" type="checkbox" checked />
+                  </label>
+                  <label class="settings-row" for="settings-auto-load-last-conversation-model">
+                    <span>
+                      <strong>自动加载模型</strong>
+                      <small
+                        >恢复该对话绑定的平台、账户/API、接口、详细模型和简单模型；默认开启，连接期间会锁定终端输入。</small
+                      >
+                    </span>
+                    <input
+                      id="settings-auto-load-last-conversation-model"
+                      type="checkbox"
+                      checked
+                    />
+                  </label>
+                </div>
+              </section>
+              <section class="settings-group" aria-labelledby="settings-conversation-heading">
+                <div class="settings-group__heading">
+                  <strong id="settings-conversation-heading">对话与模型</strong>
+                  <span>控制手动打开其他历史对话时的模型差异处理。</span>
+                </div>
+                <div class="settings-group__rows">
+                  <label
+                    class="settings-row settings-row--select"
+                    for="settings-conversation-model-mismatch"
                   >
-                </span>
-                <select id="settings-conversation-model-mismatch">
-                  <option value="ask">每次询问</option>
-                  <option value="use-current">始终使用当前模型</option>
-                  <option value="use-conversation">始终使用对话原有模型</option>
-                </select>
-              </label>
-              <label class="settings-row" for="settings-restore-last-workspace">
-                <span>
-                  <strong>启动时恢复上次工作区</strong>
-                  <small>关闭后仍保留项目列表，但不会自动打开上次对话或连接它的平台模型。</small>
-                </span>
-                <input id="settings-restore-last-workspace" type="checkbox" checked />
-              </label>
-              <label class="settings-row settings-row--select" for="settings-theme">
-                <span>
-                  <strong>主题</strong>
-                  <small>同步调整应用外观与终端配色。</small>
-                </span>
-                <select id="settings-theme">
-                  <option value="claude">Claude 明亮</option>
-                  <option value="telegram">Telegram 明亮</option>
-                  <option value="graphite">石墨深色</option>
-                  <option value="midnight">深海蓝</option>
-                </select>
-              </label>
-              <label class="settings-row settings-row--select" for="settings-language">
-                <span>
-                  <strong>语言</strong>
-                  <small>当前版本暂提供简体中文。</small>
-                </span>
-                <select id="settings-language" disabled>
-                  <option value="zh-CN">简体中文</option>
-                </select>
-              </label>
-              <div class="settings-row">
-                <span>
-                  <strong>当前版本</strong>
-                  <small>安装包与应用版本。</small>
-                </span>
-                <output id="settings-version">—</output>
-              </div>
-              <div class="settings-row settings-row--action">
-                <span>
-                  <strong>入门向导</strong>
-                  <small>重新选择使用路径、检查环境并打开一个项目。</small>
-                </span>
-                <button class="dialog-primary" id="settings-open-onboarding" type="button">
-                  重新打开
-                </button>
-              </div>
+                    <span>
+                      <strong>历史对话模型不一致时</strong>
+                      <small
+                        >比较平台、账号/API、接口、主模型和小型/备用模型；弹窗内也可记住所选项。</small
+                      >
+                    </span>
+                    <select id="settings-conversation-model-mismatch">
+                      <option value="ask">每次询问</option>
+                      <option value="use-current">始终使用当前模型</option>
+                      <option value="use-conversation">始终使用对话原有模型</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+              <section class="settings-group" aria-labelledby="settings-window-heading">
+                <div class="settings-group__heading">
+                  <strong id="settings-window-heading">窗口与外观</strong>
+                  <span>调整关闭方式、配色与界面语言。</span>
+                </div>
+                <div class="settings-group__rows">
+                  <label class="settings-row settings-row--select" for="settings-close-behavior">
+                    <span>
+                      <strong>点击关闭按钮时</strong>
+                      <small>直接退出仍会检查正在进行的下载、安装和对话。</small>
+                    </span>
+                    <select id="settings-close-behavior">
+                      <option value="tray">最小化到托盘</option>
+                      <option value="exit">直接退出</option>
+                    </select>
+                  </label>
+                  <label class="settings-row settings-row--select" for="settings-theme">
+                    <span>
+                      <strong>主题</strong>
+                      <small>同步调整应用外观与终端配色。</small>
+                    </span>
+                    <select id="settings-theme">
+                      <option value="claude">Claude 明亮</option>
+                      <option value="telegram">Telegram 明亮</option>
+                      <option value="graphite">石墨深色</option>
+                      <option value="midnight">深海蓝</option>
+                    </select>
+                  </label>
+                  <label class="settings-row settings-row--select" for="settings-language">
+                    <span>
+                      <strong>语言</strong>
+                      <small>当前版本暂提供简体中文。</small>
+                    </span>
+                    <select id="settings-language" disabled>
+                      <option value="zh-CN">简体中文</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+              <section class="settings-group" aria-labelledby="settings-about-heading">
+                <div class="settings-group__heading">
+                  <strong id="settings-about-heading">关于</strong>
+                  <span>查看版本，或重新运行首次使用引导。</span>
+                </div>
+                <div class="settings-group__rows">
+                  <div class="settings-row">
+                    <span>
+                      <strong>当前版本</strong>
+                      <small>安装包与应用版本。</small>
+                    </span>
+                    <output id="settings-version">—</output>
+                  </div>
+                  <div class="settings-row settings-row--action">
+                    <span>
+                      <strong>入门向导</strong>
+                      <small>重新选择使用路径、检查环境并打开一个项目。</small>
+                    </span>
+                    <button class="dialog-primary" id="settings-open-onboarding" type="button">
+                      重新打开
+                    </button>
+                  </div>
+                </div>
+              </section>
             </section>
             <section class="settings-panel network-settings" data-settings-panel="network">
               <div class="settings-section-heading network-settings__heading">

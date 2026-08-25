@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.22（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.23（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -655,10 +655,21 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 - `app:set-launch-at-login` 只接受布尔值，调用 Electron `app.setLoginItemSettings()` 后再次
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
-- `AppPreferencesStore` 的 `conversationResume` 保存两项独立偏好：模型不一致时每次询问、始终用
-  当前接入或始终恢复对话原接入，以及启动时是否恢复最后工作区。后者关闭后仍列出已记住的项目，但
-  bootstrap 不自动打开最后项目、最后对话或连接其平台模型；设置页和“不再提示”都通过同一严格校验
-  的 `app:set-conversation-resume-preferences` 原子保存。
+- `AppPreferencesStore` 的 `conversationResume` 保存三项偏好：模型不一致时每次询问、始终用当前接入或
+  始终恢复对话原接入，以及相互独立的“自动加载上次对话”“自动加载模型”。两个启动开关默认开启；
+  store schema 为 version 2，读取 version 1 的 `restoreLastWorkspaceOnStartup` 时把旧值同时迁移到两个
+  新开关，避免升级后擅自改变原有选择。设置页和“不再提示”都通过同一严格校验的
+  `app:set-conversation-resume-preferences` 原子保存。
+- renderer 启动时从 `WorkspaceStore` 投影中选择最后活动项目，再读取按时间倒序的第一条 Claude 对话；
+  自动模型开启时忽略手动历史点击的询问偏好，直接把该 conversation 的完整绑定送入与手动恢复共用的
+  `applyConversationModelConnection()`，经 prepare、真实连接测试、commit、complete 后才调用
+  `launchClaudeWithSession()`。自动模型关闭时不检查、不改写接入，仅恢复对话内容。
+- 只开启自动模型时没有可见 conversation owner，main bootstrap 在创建窗口前用短生命周期 PowerShell
+  session 提供 generation、取消和回滚边界，恢复成功或失败后都关闭该 session；两项都开启时该隐藏路径
+  跳过，由可见终端拥有事务。静态 HTML 首帧已将 composer 和发送按钮设为 disabled；可见恢复打开
+  stored conversation 后立即用 `beginTerminalMask()` 显示“正在连接模型…”，再在遮罩内完成模型识别，
+  不留“先可输入、后上锁”的 hydration 间隙。`ClaudeLaunchAttemptRegistry` 同时禁用 composer、设置
+  xterm `disableStdin`、拦截 raw terminal write，遮罩和三层输入门在 settlement 后统一释放。
 - 外部代理编辑使用单调递增的加载代次和 `proxyDraftEdited`。首次代理状态回读完成前禁用提交；
   迟到响应只有在代次仍为当前且用户尚未修改草稿时才能回填，避免取消勾选后被旧启用值覆盖。
   “完成”在同一保存路径提交应用设置与代理草稿，再以主进程持久化结果回填 UI。

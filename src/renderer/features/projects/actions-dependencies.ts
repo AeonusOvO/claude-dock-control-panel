@@ -19,6 +19,7 @@ export interface RenameDialogCopy {
 }
 
 export interface ProjectsActionsDependencies {
+  beginTerminalMask: (sessionId: string, label: string) => () => void;
   beginClaudeLaunchAttempt: (
     status: TerminalStatus,
     state?: ClaudeProjectState,

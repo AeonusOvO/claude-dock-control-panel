@@ -109,8 +109,9 @@ const defaultAppSettings = {
   claudeContextWindowMode: 'auto' as const,
   closeBehavior: 'tray' as const,
   conversationResume: {
+    autoLoadLastConversationModelOnStartup: true,
+    autoLoadLastConversationOnStartup: true,
     modelMismatchBehavior: 'ask' as const,
-    restoreLastWorkspaceOnStartup: true,
   },
   footerResourcePreference: 'auto' as const,
   language: 'zh-CN' as const,
@@ -209,6 +210,8 @@ export const createRendererHarness = async (
           sessionId: String(args[0] ?? ''),
         });
       case 'getClaudeConnectionHistory':
+      case 'getClaudeSessions':
+      case 'getClaudeSessionsForPath':
       case 'listBusyLeases':
       case 'listDownloads':
       case 'listNativeRecoveries':

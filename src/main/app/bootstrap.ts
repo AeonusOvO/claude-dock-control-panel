@@ -10,6 +10,7 @@ import { ArtifactService } from '../artifact/service';
 import { ClaudeAgentAdapter } from '../claude/agent-adapter';
 import { CcSwitchAdapter } from '../claude/cc-switch-adapter';
 import { ClaudeConversationLifecycleCoordinator } from '../claude/conversation-lifecycle';
+import { applyConversationModelConnection } from '../claude/conversation-model-application';
 import { resolveClaudeExecutionCapabilities } from '../claude/execution-settings-capabilities';
 import { claudeExecutionInstallationProvider } from '../claude/execution-settings-installation';
 import { ClaudeExecutionSettingsService } from '../claude/execution-settings-service';
@@ -91,10 +92,11 @@ import {
 import type { AppPreferencesStore } from '../stores/app-preferences';
 import type { WorkspaceStore } from '../stores/workspace';
 import type { ProjectOperations } from '../terminal/project-operations';
-import { sameDirectory, type TerminalWorkspace } from '../terminal/workspace';
+import type { TerminalWorkspace } from '../terminal/workspace';
 import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from '../updates/application';
 import { runtimeAssetPath } from './paths';
 import type { RuntimeProfile } from './profile';
+import { restoreLastConversationModelOnly } from './startup-model-restore';
 import type { TrayController } from './tray';
 import type { WindowController } from './window';
 
@@ -767,35 +769,93 @@ const installDiagnostics = ({
   services.resolve(APPLICATION_UPDATER_SERVICE);
 };
 
-const restoreLastWorkspace = ({
-  activateProject,
+/**
+ * The two startup switches are independent. When only model loading is enabled there is no visible
+ * conversation to own a transaction, so a short-lived PowerShell session supplies the same
+ * generation and rollback boundaries as an interactive history restore, then closes before the
+ * first window is painted.
+ */
+const runStartupModelRestore = async ({
   appPreferencesStore,
+  guards,
+  ipc,
   runtimeProfile,
+  services,
+  sessionManager,
   workspace,
   workspaceStore,
 }: Pick<
   BootstrapDependencies,
-  'activateProject' | 'appPreferencesStore' | 'runtimeProfile' | 'workspace' | 'workspaceStore'
->): void => {
-  // Remembered folders are listed without a terminal each — otherwise every folder ever opened
-  // would spawn a PowerShell at startup. Only the folder in use last time is reopened live.
-  const lastActive =
-    runtimeProfile.effects.restoreWorkspace &&
-    appPreferencesStore.get().conversationResume.restoreLastWorkspaceOnStartup
-      ? workspaceStore.getLastActiveProject()
-      : undefined;
-  if (!lastActive || !existsSync(lastActive)) return;
-  try {
-    const result = workspace.openProject(lastActive);
-    const restored = result.state.sessions.find((session) =>
-      sameDirectory(session.cwd, lastActive),
-    );
-    if (restored) {
-      activateProject(restored.id);
-    }
-  } catch {
-    // A folder that has become unreadable stays in the list as a remembered entry.
-  }
+  | 'appPreferencesStore'
+  | 'guards'
+  | 'ipc'
+  | 'runtimeProfile'
+  | 'services'
+  | 'sessionManager'
+  | 'workspace'
+  | 'workspaceStore'
+>): Promise<void> => {
+  const runtime = services.resolve(CLAUDE_RUNTIME);
+  await restoreLastConversationModelOnly({
+    allowExternalRoutingWrites: runtimeProfile.effects.allowExternalRoutingWrites,
+    applyConversationModel: async (projectPath, conversation, sessionId) => {
+      const networkAccess = runtime.conversationNetworkAccess(
+        projectPath,
+        conversation.conversationId,
+      );
+      await applyConversationModelConnection({
+        cwd: projectPath,
+        prepare: (assertCurrent) => {
+          const prepare = () =>
+            runtime.prepareConversationConnection(
+              projectPath,
+              conversation.conversationId,
+              assertCurrent,
+            );
+          if (!networkAccess) {
+            return prepare();
+          }
+          return guards.withOfficialProviderAccess(
+            { action: 'provider-switch', cwd: projectPath, ...networkAccess },
+            () => {
+              assertCurrent();
+              return prepare();
+            },
+          );
+        },
+        runClaudeProjectConfigTransaction: ipc.runClaudeProjectConfigTransaction,
+        runtime,
+        sessionId,
+        withDevelopmentSessionOperation: ipc.withDevelopmentSessionOperation,
+      });
+    },
+    closeTemporarySession: (sessionId) => {
+      if (!workspace.hasSession(sessionId)) return;
+      runtime.closeSession(sessionId);
+      workspace.close(sessionId);
+    },
+    getLastActiveProject: () => workspaceStore.getLastActiveProject(),
+    getLatestConversation: (projectPath) => sessionManager.getSessionsForProject(projectPath)[0],
+    getPreferences: () => appPreferencesStore.get().conversationResume,
+    inspectConversationModel: (projectPath, conversation) =>
+      runtime.inspectConversationModel(
+        projectPath,
+        conversation.conversationId,
+        conversation.modelId,
+        'use-conversation',
+      ),
+    openTemporarySession: (projectPath) => {
+      const before = new Set(workspace.getState().sessions.map(({ id }) => id));
+      const opened = workspace.openProject(projectPath).state;
+      const sessionId = opened.activeSessionId;
+      return sessionId && !before.has(sessionId) ? sessionId : undefined;
+    },
+    projectExists: existsSync,
+    projectRuntime: (projectPath) => ipc.agentRuntimeStore.get(projectPath),
+    restoreWorkspace: runtimeProfile.effects.restoreWorkspace,
+    warn: (message, error) =>
+      services.resolve(MAIN_LOGGER).warn('startup-model-restore', message, error),
+  });
 };
 
 const createBootstrapContributions = (
@@ -817,7 +877,7 @@ const createBootstrapContributions = (
     () => {
       if (runtimeProfile.effects.tray) createTray();
     },
-    () => restoreLastWorkspace(dependencies),
+    () => runStartupModelRestore(dependencies),
     () => createWindow(),
     () => {
       if (!runtimeProfile.effects.allowExternalRoutingWrites) return;

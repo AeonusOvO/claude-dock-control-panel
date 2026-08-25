@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -26,8 +26,9 @@ describe('app preferences store', () => {
       closeBehavior: 'tray',
       closeToTrayNoticeShown: false,
       conversationResume: {
+        autoLoadLastConversationModelOnStartup: true,
+        autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'ask',
-        restoreLastWorkspaceOnStartup: true,
       },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
@@ -38,8 +39,9 @@ describe('app preferences store', () => {
       closeBehavior: 'tray',
       closeToTrayNoticeShown: true,
       conversationResume: {
+        autoLoadLastConversationModelOnStartup: true,
+        autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'ask',
-        restoreLastWorkspaceOnStartup: true,
       },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
@@ -53,8 +55,9 @@ describe('app preferences store', () => {
       closeBehavior: 'exit',
       closeToTrayNoticeShown: false,
       conversationResume: {
+        autoLoadLastConversationModelOnStartup: true,
+        autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'ask',
-        restoreLastWorkspaceOnStartup: true,
       },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
@@ -67,15 +70,46 @@ describe('app preferences store', () => {
     expect(
       store.set({
         conversationResume: {
+          autoLoadLastConversationModelOnStartup: false,
+          autoLoadLastConversationOnStartup: true,
           modelMismatchBehavior: 'use-conversation',
-          restoreLastWorkspaceOnStartup: false,
         },
       }),
     ).toMatchObject({
       conversationResume: {
+        autoLoadLastConversationModelOnStartup: false,
+        autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'use-conversation',
-        restoreLastWorkspaceOnStartup: false,
       },
+    });
+  });
+
+  it('migrates the former combined startup switch into both independent choices', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
+    fixtureRoots.push(root);
+    const directory = path.join(root, 'app-preferences');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      path.join(directory, 'app.json'),
+      JSON.stringify({
+        claudeContextWindowMode: 'auto',
+        closeBehavior: 'tray',
+        closeToTrayNoticeShown: false,
+        conversationResume: {
+          modelMismatchBehavior: 'use-current',
+          restoreLastWorkspaceOnStartup: false,
+        },
+        footerResourcePreference: 'auto',
+        managedChatGptContextWindowMode: 'standard',
+        version: 1,
+      }),
+      'utf8',
+    );
+
+    expect(new AppPreferencesStore(root).get().conversationResume).toEqual({
+      autoLoadLastConversationModelOnStartup: false,
+      autoLoadLastConversationOnStartup: false,
+      modelMismatchBehavior: 'use-current',
     });
   });
 

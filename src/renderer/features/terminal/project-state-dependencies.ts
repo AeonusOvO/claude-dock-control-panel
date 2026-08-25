@@ -20,7 +20,7 @@ import type { ConfirmationRequest } from '../../shell/dialogs';
 
 interface TerminalViewLike {
   observedPermissionMode?: string | undefined;
-  terminal: { clear(): void; focus(): void };
+  terminal: { clear(): void; focus(): void; options: { disableStdin?: boolean } };
 }
 
 /** terminal 只依赖连接表单的这组门面成员；装配处直接传入完整 ConnectionForm 实例。 */

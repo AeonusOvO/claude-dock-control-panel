@@ -654,7 +654,7 @@ const addTerminalMaskFixture = `
     veil.className = 'terminal-mask__veil';
     const label = document.createElement('span');
     label.className = 'terminal-mask__label';
-    label.textContent = '正在执行操作';
+    label.textContent = '正在连接模型…';
     veil.append(label);
     mask.append(snapshot, veil);
     stage.append(mask);
@@ -710,7 +710,11 @@ const installLayoutSmokeStubs = () => {
   ipcMain.handle('app:get-settings', () => ({
     advanced: { chatIdleTimeoutMinutes: 0, webResearchIsolation: false },
     closeBehavior: 'tray',
-    conversationResume: { modelMismatchBehavior: 'ask', restoreLastWorkspaceOnStartup: true },
+    conversationResume: {
+      autoLoadLastConversationModelOnStartup: true,
+      autoLoadLastConversationOnStartup: true,
+      modelMismatchBehavior: 'ask',
+    },
     language: 'zh-CN',
     launchAtLogin: false,
     theme: 'claude',

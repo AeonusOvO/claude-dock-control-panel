@@ -8,8 +8,10 @@ export type ConversationModelMismatchBehavior = 'ask' | 'use-conversation' | 'us
 export interface ConversationResumePreferences {
   /** What to do when a stored conversation is bound to a different complete model connection. */
   modelMismatchBehavior: ConversationModelMismatchBehavior;
-  /** Reopen the last live workspace tab when ClaudeDock starts. Remembered folders remain listed. */
-  restoreLastWorkspaceOnStartup: boolean;
+  /** Reopen the newest conversation from the last active project when ClaudeDock starts. */
+  autoLoadLastConversationOnStartup: boolean;
+  /** Restore that conversation's complete model connection before its CLI is resumed. */
+  autoLoadLastConversationModelOnStartup: boolean;
 }
 
 export type BusyKind =

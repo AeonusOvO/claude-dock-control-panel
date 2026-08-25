@@ -9,6 +9,7 @@ import type {
   ClaudeProjectState,
 } from '../../shared/contracts';
 import type { RunClaudeProjectConfigTransaction } from '../claude/config-transaction';
+import { applyConversationModelConnection } from '../claude/conversation-model-application';
 import type { ReportClaudeOperationFailure } from '../claude/operation-failure';
 import type { PreparedClaudeConfigSave } from '../claude/runtime';
 import { claudeNetworkAccessForConfigInput } from '../claude/runtime-connection-config';
@@ -225,52 +226,34 @@ const registerConversationModelIpc = ({
           return { choice, ok: true, state };
         }
 
-        const state = await withDevelopmentSessionOperation(
-          validatedSessionId,
-          (assertCurrent, signal) =>
-            runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
+        const applied = await applyConversationModelConnection({
+          cwd: status.cwd,
+          onConnectionTest: (result) => {
+            connectionTest = result;
+          },
+          prepare: (assertCurrent) =>
+            withOptionalNetworkAccess(
+              withOfficialProviderAccess,
+              { action: 'provider-switch', cwd: status.cwd },
+              runtime.conversationNetworkAccess(status.cwd, validatedConversationId),
               assertCurrent,
-              commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
-              complete: (prepared) =>
-                runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
-              cwd: status.cwd,
-              prepare: () =>
-                withOptionalNetworkAccess(
-                  withOfficialProviderAccess,
-                  { action: 'provider-switch', cwd: status.cwd },
-                  runtime.conversationNetworkAccess(status.cwd, validatedConversationId),
-                  assertCurrent,
-                  () =>
-                    runtime.prepareConversationConnection(
-                      status.cwd,
-                      validatedConversationId,
-                      assertCurrent,
-                    ),
-                ),
-              runtime,
-              sessionId: validatedSessionId,
-              validatePrepared: async (prepared) => {
-                connectionTest = await runtime.testPreparedConnection(
+              () =>
+                runtime.prepareConversationConnection(
                   status.cwd,
-                  prepared,
+                  validatedConversationId,
                   assertCurrent,
-                  signal,
-                );
-                const officialLoginDeferred =
-                  !connectionTest.ok &&
-                  connectionTest.tone === 'warning' &&
-                  prepared.input.authMode === 'existing';
-                if (!connectionTest.ok && !officialLoginDeferred) {
-                  throw new Error(connectionTest.message ?? '对话原有模型未通过真实连接测试。');
-                }
-              },
-            }),
-        );
+                ),
+            ),
+          runClaudeProjectConfigTransaction,
+          runtime,
+          sessionId: validatedSessionId,
+          withDevelopmentSessionOperation,
+        });
         return {
           choice,
           ...(connectionTest ? { connectionTest } : {}),
           ok: true,
-          state,
+          state: applied.state,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法切换历史对话模型。';

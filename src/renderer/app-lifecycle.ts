@@ -4,6 +4,7 @@ import {
   type FooterMenuPair,
 } from './shell/footer-keyboard';
 import { resultFailureMessage } from './platform/format';
+import type { AppSettingsView } from '../shared/contracts';
 import type { ApplicationRuntime } from './runtime-types';
 
 /**
@@ -303,11 +304,12 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
     setWindowsBuildNumber,
   } = runtime;
   const { applyTerminalTheme } = themeShell;
+  let initialSettings: AppSettingsView | undefined;
 
   await downloadsFeature.load();
   void proxyFeature.loadState();
   try {
-    const initialSettings = await window.controlPanel.getAppSettings();
+    initialSettings = await window.controlPanel.getAppSettings();
     const reportedWindowsBuild = initialSettings.windowsBuildNumber;
     setWindowsBuildNumber(
       typeof reportedWindowsBuild === 'number' &&
@@ -328,6 +330,9 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
   }
   projectsFeature.renderWorkspace(await window.controlPanel.getWorkspace());
   await onboardingFeature.initialize();
+  if (initialSettings) {
+    await projectsFeature.restoreLastConversationOnStartup(initialSettings.conversationResume);
+  }
   void runtimeActivityShell.loadActiveRuntimeActivity();
   window.setTimeout(() => {
     void preflightFeature.runActiveNetworkPreflight(false);

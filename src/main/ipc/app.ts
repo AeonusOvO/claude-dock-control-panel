@@ -182,14 +182,16 @@ const registerConversationResumePreferencesIpc = (input: {
       (preferences.modelMismatchBehavior !== 'ask' &&
         preferences.modelMismatchBehavior !== 'use-conversation' &&
         preferences.modelMismatchBehavior !== 'use-current') ||
-      typeof preferences.restoreLastWorkspaceOnStartup !== 'boolean'
+      typeof preferences.autoLoadLastConversationOnStartup !== 'boolean' ||
+      typeof preferences.autoLoadLastConversationModelOnStartup !== 'boolean'
     ) {
       throw new Error('对话恢复设置无效。');
     }
     input.appPreferencesStore.set({
       conversationResume: {
+        autoLoadLastConversationModelOnStartup: preferences.autoLoadLastConversationModelOnStartup,
+        autoLoadLastConversationOnStartup: preferences.autoLoadLastConversationOnStartup,
         modelMismatchBehavior: preferences.modelMismatchBehavior,
-        restoreLastWorkspaceOnStartup: preferences.restoreLastWorkspaceOnStartup,
       },
     });
     return input.appSettingsView();

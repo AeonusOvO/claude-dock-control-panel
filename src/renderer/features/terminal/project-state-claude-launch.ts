@@ -50,6 +50,7 @@ export const createTerminalClaudeLaunchActions = (
     claudeStates,
     claudeLaunchAttempts,
     conversationFeature,
+    terminalFeature,
   } = deps;
 
   const claudeLaunchBlocked = (state: ClaudeProjectState): boolean =>
@@ -94,6 +95,14 @@ export const createTerminalClaudeLaunchActions = (
       button.disabled = busy;
       button.dataset.launchBlocked = String(launchBlocked);
       button.setAttribute('aria-busy', String(busy));
+    }
+    const status = getWorkspaceState().sessions.find(({ id }) => id === sessionId);
+    if (status?.id === getWorkspaceState().activeSessionId) {
+      terminalFeature.setComposerEnabled(!busy && status.phase === 'running');
+      const terminal = terminalFeature.getTerminalView(sessionId)?.terminal;
+      if (terminal) {
+        terminal.options.disableStdin = busy;
+      }
     }
   };
 

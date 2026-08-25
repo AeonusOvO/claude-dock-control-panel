@@ -1732,6 +1732,7 @@ html[data-compact-viewport='true'] .terminal-title > span {
 }
 
 .terminal-mask {
+  animation: terminal-mask-in var(--dur-3) var(--ease-decel) both;
   inset: 0;
   overflow: hidden;
   pointer-events: auto;
@@ -1770,14 +1771,27 @@ html[data-compact-viewport='true'] .terminal-title > span {
 }
 
 .terminal-mask__label {
+  align-items: center;
   background: var(--surface-3);
   border: 1px solid var(--line-strong);
   border-radius: var(--r-theme-pill);
   box-shadow: var(--shadow-overlay);
   color: var(--text-hi);
+  display: inline-flex;
+  gap: var(--s-2);
   font-weight: var(--fw-strong);
   letter-spacing: var(--ls-title);
   padding: var(--s-3) var(--s-5);
+}
+
+.terminal-mask__label::before {
+  animation: terminal-mask-spinner var(--dur-status-pulse-fast) linear infinite;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  border-top-color: var(--accent-solid);
+  content: '';
+  height: var(--s-3);
+  width: var(--s-3);
 }
 
 .xterm {

@@ -15,8 +15,9 @@ describe('conversation resume settings', () => {
     harness.method('getAppSettings').mockResolvedValue({
       ...initial,
       conversationResume: {
+        autoLoadLastConversationModelOnStartup: true,
+        autoLoadLastConversationOnStartup: false,
         modelMismatchBehavior: 'use-current',
-        restoreLastWorkspaceOnStartup: false,
       },
     });
 
@@ -27,25 +28,32 @@ describe('conversation resume settings', () => {
     const modelChoiceLabel = modelChoice
       .closest('.select')
       ?.querySelector<HTMLElement>('.select__label');
-    const restoreLastWorkspace = harness.query<HTMLInputElement>(
-      '#settings-restore-last-workspace',
+    const autoLoadConversation = harness.query<HTMLInputElement>(
+      '#settings-auto-load-last-conversation',
+    );
+    const autoLoadModel = harness.query<HTMLInputElement>(
+      '#settings-auto-load-last-conversation-model',
     );
     expect(modelChoice.value).toBe('use-current');
     expect(modelChoiceLabel?.textContent).toBe('始终使用当前模型');
-    expect(restoreLastWorkspace.checked).toBe(false);
+    expect(autoLoadConversation.checked).toBe(false);
+    expect(autoLoadModel.checked).toBe(true);
 
     modelChoice.value = 'use-conversation';
     modelChoice.dispatchEvent(new Event('change', { bubbles: true }));
-    restoreLastWorkspace.checked = true;
-    restoreLastWorkspace.dispatchEvent(new Event('change', { bubbles: true }));
+    autoLoadConversation.checked = true;
+    autoLoadConversation.dispatchEvent(new Event('change', { bubbles: true }));
+    autoLoadModel.checked = false;
+    autoLoadModel.dispatchEvent(new Event('change', { bubbles: true }));
     expect(modelChoiceLabel?.textContent).toBe('始终使用对话原有模型');
-    expect(harness.query('#settings-unsaved-indicator').textContent).toBe('*2 项未保存');
+    expect(harness.query('#settings-unsaved-indicator').textContent).toBe('*3 项未保存');
 
     harness.click('#complete-connection-advanced');
     await harness.flush();
     expect(harness.method('setConversationResumePreferences')).toHaveBeenCalledExactlyOnceWith({
+      autoLoadLastConversationModelOnStartup: false,
+      autoLoadLastConversationOnStartup: true,
       modelMismatchBehavior: 'use-conversation',
-      restoreLastWorkspaceOnStartup: true,
     });
   });
 });

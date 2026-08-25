@@ -13,6 +13,7 @@ app.on('web-contents-created', (_event, webContents) => {
 });
 const outputDirectory = path.join(repositoryRoot, 'dist', 'visual-qa');
 const userDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'claudedock-conpty-'));
+const appPreferencesDirectory = path.join(userDataDirectory, 'app-preferences');
 const workspaceDirectory = path.join(userDataDirectory, 'claude');
 const now = Date.now();
 // GitHub-hosted Windows runners can spend more than ten seconds on the first real PowerShell
@@ -21,7 +22,31 @@ const now = Date.now();
 const terminalOutputTimeoutMilliseconds = 30_000;
 
 app.setPath('userData', userDataDirectory);
+fs.mkdirSync(appPreferencesDirectory, { recursive: true });
 fs.mkdirSync(workspaceDirectory, { recursive: true });
+// This test owns project creation explicitly. Disabling startup restoration keeps a real local
+// Claude transcript from replacing the PowerShell prompt while the harness measures raw ConPTY.
+fs.writeFileSync(
+  path.join(appPreferencesDirectory, 'app.json'),
+  `${JSON.stringify(
+    {
+      claudeContextWindowMode: 'auto',
+      closeBehavior: 'exit',
+      closeToTrayNoticeShown: true,
+      conversationResume: {
+        autoLoadLastConversationModelOnStartup: false,
+        autoLoadLastConversationOnStartup: false,
+        modelMismatchBehavior: 'ask',
+      },
+      footerResourcePreference: 'auto',
+      managedChatGptContextWindowMode: 'standard',
+      version: 2,
+    },
+    null,
+    2,
+  )}\n`,
+  'utf8',
+);
 fs.writeFileSync(
   path.join(workspaceDirectory, 'workspace.json'),
   `${JSON.stringify(
@@ -292,17 +317,42 @@ const launchConptyHarness = async () => {
     () =>
       window.webContents
         .executeJavaScript(
-          `Boolean(document.querySelector('#composer-input') && !document.querySelector('#composer-input').disabled)`,
+          `Boolean(document.querySelector('#composer-input') && window.controlPanel?.addProject)`,
+          true,
+        )
+        .catch(() => false),
+    20_000,
+    'ConPTY 渲染器',
+  );
+  const lifecycleRecorder = await installLifecycleRecorder(window);
+  if (!lifecycleRecorder.ok) {
+    throw new Error(`终端生命周期桥接不可用：${JSON.stringify(lifecycleRecorder)}`);
+  }
+  const opened = await window.webContents.executeJavaScript(
+    `window.controlPanel.addProject(${JSON.stringify(repositoryRoot)})`,
+    true,
+  );
+  if (!opened.ok) {
+    throw new Error(`ConPTY 项目打开失败：${JSON.stringify(opened)}`);
+  }
+  await waitFor(
+    () =>
+      window.webContents
+        .executeJavaScript(
+          `(async () => {
+            const workspace = await window.controlPanel.getWorkspace();
+            const active = workspace.sessions.find(
+              (session) => session.id === workspace.activeSessionId,
+            );
+            return active?.phase === 'running' &&
+              !document.querySelector('#composer-input').disabled;
+          })()`,
           true,
         )
         .catch(() => false),
     20_000,
     'ConPTY 启动',
   );
-  const lifecycleRecorder = await installLifecycleRecorder(window);
-  if (!lifecycleRecorder.ok) {
-    throw new Error(`终端生命周期桥接不可用：${JSON.stringify(lifecycleRecorder)}`);
-  }
   return window;
 };
 

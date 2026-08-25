@@ -47,6 +47,7 @@ const setup = (): {
   dependencies: ProjectsActionsDependencies;
 } => {
   const dependencies = {
+    beginTerminalMask: vi.fn(() => () => undefined),
     beginClaudeLaunchAttempt: vi.fn(() => ({ generation: 1, sessionId: 'session-1' })),
     claudeLaunchAttempts: new ClaudeLaunchAttemptRegistry(),
     failClaudeLaunchAttempt: vi.fn(() => true),

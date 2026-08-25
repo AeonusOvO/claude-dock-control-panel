@@ -316,7 +316,7 @@ const installThemeMatrixFixtures = `
         veil.className = 'terminal-mask__veil';
         const label = document.createElement('span');
         label.className = 'terminal-mask__label';
-        label.textContent = '正在执行操作';
+        label.textContent = '正在连接模型…';
         veil.append(label);
         mask.append(snapshot, veil);
         stage.append(mask);
@@ -1122,7 +1122,10 @@ app
     await window.webContents.executeJavaScript(`
     document.querySelector('#connection-advanced-dialog').showModal();
   `);
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // Chromium can defer a dialog's @starting-style transition until the first captured frame.
+    // Prime one settled capture so the golden image always records the resting layout, not a
+    // translucent entrance frame that makes the underlying workspace look like UI overlap.
+    await captureSettledPage();
     writeFileSync(
       path.join(outputDirectory, 'global-settings-1180.png'),
       (await captureSettledPage()).toPNG(),

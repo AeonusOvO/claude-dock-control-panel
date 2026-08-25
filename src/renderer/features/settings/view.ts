@@ -102,12 +102,13 @@ const pendingAppSettings = (
     },
     closeBehavior: elements.closeBehavior.value === 'exit' ? 'exit' : 'tray',
     conversationResume: {
+      autoLoadLastConversationModelOnStartup: elements.autoLoadLastConversationModel.checked,
+      autoLoadLastConversationOnStartup: elements.autoLoadLastConversation.checked,
       modelMismatchBehavior:
         elements.conversationModelMismatch.value === 'use-current' ||
         elements.conversationModelMismatch.value === 'use-conversation'
           ? elements.conversationModelMismatch.value
           : 'ask',
-      restoreLastWorkspaceOnStartup: elements.restoreLastWorkspace.checked,
     },
     launchAtLogin: elements.launchAtLogin.checked,
     theme: isTerminalThemeId(themeValue) ? themeValue : DEFAULT_TERMINAL_THEME,
@@ -133,8 +134,10 @@ const updateSettingsUnsavedIndicator = (context: SettingsViewContext): number =>
     pending.closeBehavior !== state.saved.closeBehavior,
     pending.conversationResume.modelMismatchBehavior !==
       state.saved.conversationResume.modelMismatchBehavior,
-    pending.conversationResume.restoreLastWorkspaceOnStartup !==
-      state.saved.conversationResume.restoreLastWorkspaceOnStartup,
+    pending.conversationResume.autoLoadLastConversationOnStartup !==
+      state.saved.conversationResume.autoLoadLastConversationOnStartup,
+    pending.conversationResume.autoLoadLastConversationModelOnStartup !==
+      state.saved.conversationResume.autoLoadLastConversationModelOnStartup,
     pending.theme !== state.saved.theme,
     pending.advanced.chatIdleTimeoutMinutes !== state.saved.advanced.chatIdleTimeoutMinutes,
     pending.advanced.webResearchIsolation !== state.saved.advanced.webResearchIsolation,
@@ -159,7 +162,10 @@ const applyAppSettingsToControls = (
     elements.conversationModelMismatch,
     settings.conversationResume.modelMismatchBehavior,
   );
-  elements.restoreLastWorkspace.checked = settings.conversationResume.restoreLastWorkspaceOnStartup;
+  elements.autoLoadLastConversation.checked =
+    settings.conversationResume.autoLoadLastConversationOnStartup;
+  elements.autoLoadLastConversationModel.checked =
+    settings.conversationResume.autoLoadLastConversationModelOnStartup;
   setEnhancedSelectValue(
     elements.chatIdleTimeout,
     String(settings.advanced.chatIdleTimeoutMinutes),
