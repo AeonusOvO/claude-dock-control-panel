@@ -1,23 +1,48 @@
 import type {
-  OnboardingPath,
+  OnboardingDomesticModel,
+  OnboardingEngine,
+  OnboardingModelChoice,
   OnboardingState,
   OnboardingStep,
   WorkspaceState,
 } from '../../../shared/contracts';
 
-export const STEP_ORDER: readonly OnboardingStep[] = ['welcome', 'prepare', 'project', 'ready'];
+export const STEP_ORDER: readonly OnboardingStep[] = [
+  'engine',
+  'model',
+  'prepare',
+  'project',
+  'ready',
+];
 
-export const PATH_LABELS: Record<OnboardingPath, string> = {
+export const ENGINE_LABELS: Record<OnboardingEngine, string> = {
   claude: 'Claude Code',
-  codex: 'ChatGPT / Codex',
-  provider: 'API 服务商',
+  codex: 'Codex',
+};
+
+export const MODEL_CHOICE_LABELS: Record<OnboardingModelChoice, string> = {
+  api: 'API / 中转站',
+  'chatgpt-subscription': 'ChatGPT 官方订阅',
+  'claude-subscription': 'Claude 官方订阅',
+  domestic: '国产模型',
+};
+
+export const DOMESTIC_MODEL_LABELS: Record<OnboardingDomesticModel, string> = {
+  deepseek: 'DeepSeek',
+  doubao: '豆包',
+  'glm-cn': '智谱 GLM',
+  'kimi-open': 'Kimi',
+  'minimax-cn': 'MiniMax',
+  'qwen-cn': '通义千问',
 };
 
 export interface OnboardingMutableState {
   completedSteps: OnboardingStep[];
   currentStep: OnboardingStep;
+  domesticModel?: OnboardingDomesticModel;
+  engine?: OnboardingEngine;
   launchSource: 'first-run' | 'settings' | 'workspace';
-  path?: OnboardingPath;
+  modelChoice?: OnboardingModelChoice;
   scanGeneration: number;
   transitionGeneration: number;
   workspace: WorkspaceState;
@@ -34,7 +59,7 @@ export interface OnboardingFeatureDependencies {
 
 export const createOnboardingState = (): OnboardingMutableState => ({
   completedSteps: [],
-  currentStep: 'welcome',
+  currentStep: 'engine',
   launchSource: 'first-run',
   scanGeneration: 0,
   transitionGeneration: 0,
@@ -47,7 +72,9 @@ export const applyPersistedOnboarding = (
 ): void => {
   state.currentStep = persisted.currentStep;
   state.completedSteps = [...persisted.completedSteps];
-  state.path = persisted.path;
+  state.domesticModel = persisted.domesticModel;
+  state.engine = persisted.engine;
+  state.modelChoice = persisted.modelChoice;
 };
 
 export const activeProjectName = (workspace: WorkspaceState): string | undefined => {
@@ -61,8 +88,30 @@ export const activeProjectName = (workspace: WorkspaceState): string | undefined
   );
 };
 
-export const isOnboardingPath = (value: string | undefined): value is OnboardingPath =>
-  value === 'claude' || value === 'codex' || value === 'provider';
+export const isOnboardingEngine = (value: string | undefined): value is OnboardingEngine =>
+  value === 'claude' || value === 'codex';
+
+export const isOnboardingModelChoice = (
+  value: string | undefined,
+): value is OnboardingModelChoice =>
+  value === 'claude-subscription' ||
+  value === 'chatgpt-subscription' ||
+  value === 'domestic' ||
+  value === 'api';
+
+export const isOnboardingDomesticModel = (
+  value: string | undefined,
+): value is OnboardingDomesticModel =>
+  value === 'deepseek' ||
+  value === 'qwen-cn' ||
+  value === 'glm-cn' ||
+  value === 'kimi-open' ||
+  value === 'minimax-cn' ||
+  value === 'doubao';
 
 export const isOnboardingStep = (value: string | undefined): value is OnboardingStep =>
-  value === 'welcome' || value === 'prepare' || value === 'project' || value === 'ready';
+  value === 'engine' ||
+  value === 'model' ||
+  value === 'prepare' ||
+  value === 'project' ||
+  value === 'ready';

@@ -74,6 +74,7 @@ const requestChannels = {
   CLAUDE_LAUNCH_PREFLIGHT_DECIDE: 'claude:launch-preflight-decide',
   CLAUDE_LAUNCH_WITH_SESSION: 'claude:launch-with-session',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_MODEL: 'claude:managed-chatgpt-gateway-model',
+  CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP: 'claude:managed-chatgpt-gateway-cancel-setup',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT: 'claude:managed-chatgpt-gateway-logout',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_OPEN_MANAGEMENT: 'claude:managed-chatgpt-gateway-open-management',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP: 'claude:managed-chatgpt-gateway-setup',

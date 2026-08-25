@@ -9,6 +9,10 @@ import type {
 import { CHANNELS } from '../../shared/ipc/channels';
 
 export const managedChatgptBridge = {
+  cancelManagedChatGptGatewaySetup: () =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP,
+    ) as Promise<OperationResult>,
   getManagedChatGptGatewayState: () =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE,

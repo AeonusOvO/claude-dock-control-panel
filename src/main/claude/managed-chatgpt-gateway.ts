@@ -154,6 +154,7 @@ export class ManagedChatGptGateway {
   private readonly processLifecycle: ManagedGatewayProcessLifecycle;
   private shutdownCleanup?: Promise<void>;
   private shutdownRequested = false;
+  private setupCancellable = false;
   private setupInFlight?: Promise<ManagedChatGptGatewayProjectConfig>;
 
   public constructor(
@@ -303,6 +304,19 @@ export class ManagedChatGptGateway {
     return operation;
   }
 
+  /** Cancels only the current setup lifecycle; an already-ready gateway remains untouched. */
+  public async cancelSetup(): Promise<boolean> {
+    const operation = this.setupInFlight;
+    if (!operation || !this.setupCancellable) return false;
+    this.cancelLifecycleOperations();
+    try {
+      await operation;
+    } catch {
+      // Cancellation is the expected terminal state for the setup request.
+    }
+    return true;
+  }
+
   private async setupInternal(
     forceLogin: boolean,
     report: ManagedChatGptSetupReporter | undefined,
@@ -337,12 +351,17 @@ export class ManagedChatGptGateway {
           ) {
             report?.(5, '正在等待你在 OpenAI 官方页面完成授权。');
             authenticationTransaction?.rollback();
-            authenticationTransaction = await this.login(
-              prepared.state,
-              configPath,
-              snapshot.environment,
-              signal,
-            );
+            this.setupCancellable = true;
+            try {
+              authenticationTransaction = await this.login(
+                prepared.state,
+                configPath,
+                snapshot.environment,
+                signal,
+              );
+            } finally {
+              this.setupCancellable = false;
+            }
             this.assertEnvironmentCurrent(snapshot, signal);
             successfulLoginSignature = snapshot.signature;
             loginRequired = false;

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,25 +19,27 @@ const createRoot = (): string => {
 };
 
 describe('onboarding store', () => {
-  it('starts new profiles at the welcome step and resumes persisted progress', () => {
+  it('starts new profiles at the engine step and resumes independent engine/model progress', () => {
     const root = createRoot();
     const store = new OnboardingStore(root);
     expect(store.get()).toEqual({
       completedSteps: [],
-      currentStep: 'welcome',
-      flowVersion: 1,
+      currentStep: 'engine',
+      flowVersion: 2,
       status: 'pending',
     });
 
     store.update({
-      completedSteps: ['welcome'],
+      completedSteps: ['engine', 'model'],
       currentStep: 'prepare',
-      path: 'codex',
+      engine: 'codex',
+      modelChoice: 'chatgpt-subscription',
     });
     expect(new OnboardingStore(root).get()).toMatchObject({
-      completedSteps: ['welcome'],
+      completedSteps: ['engine', 'model'],
       currentStep: 'prepare',
-      path: 'codex',
+      engine: 'codex',
+      modelChoice: 'chatgpt-subscription',
       status: 'in-progress',
     });
   });
@@ -49,7 +51,7 @@ describe('onboarding store', () => {
     writeFileSync(path.join(workspaceDirectory, 'workspace.json'), '{"version":1,"projects":[]}');
 
     expect(new OnboardingStore(root).get()).toMatchObject({
-      completedSteps: ['welcome', 'prepare', 'project', 'ready'],
+      completedSteps: ['engine', 'model', 'prepare', 'project', 'ready'],
       currentStep: 'ready',
       status: 'completed',
     });
@@ -60,10 +62,48 @@ describe('onboarding store', () => {
     const store = new OnboardingStore(root);
     expect(store.skip().status).toBe('skipped');
     expect(store.reset().status).toBe('pending');
-    expect(store.complete('provider')).toMatchObject({
+    store.update({
+      completedSteps: ['engine', 'model', 'prepare', 'project'],
       currentStep: 'ready',
-      path: 'provider',
+      domesticModel: 'deepseek',
+      engine: 'claude',
+      modelChoice: 'domestic',
+    });
+    expect(store.complete()).toMatchObject({
+      currentStep: 'ready',
+      domesticModel: 'deepseek',
+      engine: 'claude',
+      modelChoice: 'domestic',
       status: 'completed',
+    });
+  });
+
+  it('migrates the v1 combined path into independent v2 engine and model choices', () => {
+    const root = createRoot();
+    const directory = path.join(root, 'app-preferences');
+    const storagePath = path.join(directory, 'onboarding.json');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      storagePath,
+      JSON.stringify({
+        completedSteps: ['welcome'],
+        currentStep: 'prepare',
+        flowVersion: 1,
+        path: 'codex',
+        status: 'in-progress',
+        version: 1,
+      }),
+    );
+
+    expect(new OnboardingStore(root).get()).toMatchObject({
+      completedSteps: ['engine', 'model'],
+      currentStep: 'prepare',
+      engine: 'codex',
+      flowVersion: 2,
+      modelChoice: 'chatgpt-subscription',
+    });
+    expect(JSON.parse(readFileSync(storagePath, 'utf8'))).toMatchObject({
+      version: 2,
     });
   });
 
@@ -72,11 +112,11 @@ describe('onboarding store', () => {
     const store = new OnboardingStore(root);
     expect(() =>
       store.update({
-        completedSteps: ['welcome', 'unknown' as 'ready'],
+        completedSteps: ['engine', 'unknown' as 'ready'],
         currentStep: 'prepare',
       }),
     ).toThrow('启动引导进度无效');
-    expect(() => store.complete('unknown' as 'claude')).toThrow('启动引导路径无效');
+    expect(() => store.complete()).toThrow('请先完成引擎与模型选择');
 
     const directory = path.join(root, 'app-preferences');
     mkdirSync(directory, { recursive: true });

@@ -96,6 +96,7 @@ export const createConnectionFormSyncActions = (
       );
     }
     syncApiKeyHelperPolicyUi();
+    formState.renderWizard?.();
   };
 
   return {

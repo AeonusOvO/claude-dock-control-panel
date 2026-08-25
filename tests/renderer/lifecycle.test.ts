@@ -382,20 +382,6 @@ describe('renderer interaction lifecycle behavior', () => {
     });
   });
 
-  it('treats provider selection, grouping and follow-up steps as explicit UI state', async () => {
-    await withTerminalRenderer({}, async (harness) => {
-      harness.click('[data-rail-tab="connection"]');
-      harness.query<HTMLButtonElement>('[data-provider-id="deepseek"]').click();
-      expect(
-        harness
-          .query<HTMLButtonElement>('[data-provider-id="deepseek"]')
-          .getAttribute('aria-pressed'),
-      ).toBe('true');
-      harness.query<HTMLButtonElement>('[data-provider-id="deepseek"]').click();
-      expect(harness.query('#connection-provider-setup').hasAttribute('hidden')).toBe(true);
-    });
-  });
-
   it('keeps managed gateway operations behind the isolated main-process bridge', async () => {
     await withRenderer({}, async (harness) => {
       await harness.api.setupManagedChatGptGateway(undefined);

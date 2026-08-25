@@ -155,8 +155,8 @@ afterEach(() => {
 });
 
 describe('package contracts', () => {
-  it('keeps the rc.17 identity and Apache license declaration', () => {
-    expect(packageManifest.version).toBe('5.0.0-rc.17');
+  it('keeps the rc.18 identity and Apache license declaration', () => {
+    expect(packageManifest.version).toBe('5.0.0-rc.18');
     expect(packageManifest.license).toBe('Apache-2.0');
     expect(packageManifest.engines).toEqual({ node: '>=24', npm: '>=11' });
   });

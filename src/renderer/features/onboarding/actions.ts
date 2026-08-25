@@ -4,7 +4,9 @@ import { scanOnboardingEnvironment } from './environment';
 import {
   activeProjectName,
   applyPersistedOnboarding,
-  isOnboardingPath,
+  isOnboardingDomesticModel,
+  isOnboardingEngine,
+  isOnboardingModelChoice,
   isOnboardingStep,
   type OnboardingMutableState,
   type OnboardingFeatureDependencies,
@@ -29,6 +31,46 @@ const trapOnboardingFocus = (elements: OnboardingElements, event: KeyboardEvent)
   }
 };
 
+const bindOnboardingSelections = (
+  elements: OnboardingElements,
+  state: OnboardingMutableState,
+  view: OnboardingView,
+  showToast: OnboardingFeatureDependencies['showToast'],
+  persist: () => Promise<void>,
+  bind: (element: HTMLElement, type: 'change' | 'click', listener: () => void) => void,
+): void => {
+  const report = (error: unknown, fallback: string): void => {
+    showToast(error instanceof Error ? error.message : fallback, 'error');
+  };
+  for (const button of elements.engineButtons) {
+    bind(button, 'click', () => {
+      const engine = button.dataset.onboardingEngine;
+      if (!isOnboardingEngine(engine)) return;
+      state.engine = engine;
+      view.renderSelection();
+      void persist().catch((error: unknown) => report(error, '无法保存引擎选择。'));
+    });
+  }
+  for (const button of elements.modelButtons) {
+    bind(button, 'click', () => {
+      const modelChoice = button.dataset.onboardingModelChoice;
+      if (!isOnboardingModelChoice(modelChoice)) return;
+      state.modelChoice = modelChoice;
+      if (modelChoice === 'domestic' && !state.domesticModel) state.domesticModel = 'deepseek';
+      if (modelChoice !== 'domestic') state.domesticModel = undefined;
+      view.renderSelection();
+      void persist().catch((error: unknown) => report(error, '无法保存模型选择。'));
+    });
+  }
+  bind(elements.domesticModelSelect, 'change', () => {
+    if (!isOnboardingDomesticModel(elements.domesticModelSelect.value)) return;
+    state.modelChoice = 'domestic';
+    state.domesticModel = elements.domesticModelSelect.value;
+    view.renderSelection();
+    void persist().catch((error: unknown) => report(error, '无法保存国产模型选择。'));
+  });
+};
+
 export const bindOnboardingActions = (
   elements: OnboardingElements,
   state: OnboardingMutableState,
@@ -50,7 +92,9 @@ export const bindOnboardingActions = (
       await window.controlPanel.updateOnboardingProgress({
         completedSteps: state.completedSteps,
         currentStep: state.currentStep,
-        ...(state.path ? { path: state.path } : {}),
+        ...(state.domesticModel ? { domesticModel: state.domesticModel } : {}),
+        ...(state.engine ? { engine: state.engine } : {}),
+        ...(state.modelChoice ? { modelChoice: state.modelChoice } : {}),
       }),
     );
   };
@@ -116,20 +160,14 @@ export const bindOnboardingActions = (
     }
   };
 
-  for (const button of elements.pathButtons) {
-    bind(button, 'click', () => {
-      const pathChoice = button.dataset.onboardingPath;
-      if (!isOnboardingPath(pathChoice)) return;
-      state.path = pathChoice;
-      view.renderPath();
-      void persist().catch((error: unknown) => {
-        dependencies.showToast(
-          error instanceof Error ? error.message : '无法保存路径选择。',
-          'error',
-        );
-      });
-    });
-  }
+  bindOnboardingSelections(
+    elements,
+    state,
+    view,
+    dependencies.showToast,
+    persist,
+    (element, type, listener) => bind(element, type, listener),
+  );
   for (const button of elements.progressButtons) {
     bind(button, 'click', () => {
       const step = button.dataset.onboardingProgressStep;
@@ -142,8 +180,11 @@ export const bindOnboardingActions = (
       if (isOnboardingStep(step)) returnTo(step);
     });
   }
-  bind(elements.welcomeNextButton, 'click', () => {
-    if (state.path) void moveTo('prepare');
+  bind(elements.engineNextButton, 'click', () => {
+    if (state.engine) void moveTo('model');
+  });
+  bind(elements.modelNextButton, 'click', () => {
+    if (state.modelChoice) void moveTo('prepare');
   });
   bind(elements.prepareNextButton, 'click', () => void moveTo('project'));
   bind(elements.recheckButton, 'click', () => void scanOnboardingEnvironment(elements, state));
@@ -169,10 +210,10 @@ export const bindOnboardingActions = (
     if (activeProjectName(state.workspace)) void moveTo('ready');
   });
   bind(elements.completeButton, 'click', () => {
-    if (!state.path) return;
+    if (!state.engine || !state.modelChoice) return;
     elements.completeButton.disabled = true;
     void window.controlPanel
-      .completeOnboarding(state.path)
+      .completeOnboarding()
       .then((persisted) => {
         applyPersistedOnboarding(state, persisted);
         dependencies.selectRailTab('projects');

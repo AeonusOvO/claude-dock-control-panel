@@ -1,6 +1,6 @@
 # ADR-0013 版本化工作区启动引导
 
-- 状态：已采纳
+- 状态：部分被 [ADR-0014](0014-independent-engine-model-access-wizard.md) 取代
 - 日期：2026-08-24
 
 ## 背景

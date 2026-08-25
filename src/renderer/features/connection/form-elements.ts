@@ -53,6 +53,27 @@ export const converterHelp = requiredElement<HTMLElement>('#converter-help');
 export const connectionGlossary = requiredElement<HTMLElement>('.connection-glossary');
 export const saveClaudeConfigButton = requiredElement<HTMLButtonElement>('#save-claude-config');
 export const connectionAdvice = requiredElement<HTMLElement>('#connection-advice');
+export const connectionWizardViewport = requiredElement<HTMLElement>('#connection-wizard-viewport');
+export const connectionWizardChoiceStep = requiredElement<HTMLElement>(
+  '[data-connection-wizard-step="choice"]',
+);
+export const connectionWizardConfigureStep = requiredElement<HTMLElement>(
+  '[data-connection-wizard-step="configure"]',
+);
+export const connectionWizardChoiceProgress = requiredElement<HTMLButtonElement>(
+  '#connection-wizard-progress-choice',
+);
+export const connectionWizardConfigureProgress = requiredElement<HTMLButtonElement>(
+  '#connection-wizard-progress-configure',
+);
+export const connectionWizardPreviousButton = requiredElement<HTMLButtonElement>(
+  '#connection-wizard-previous',
+);
+export const connectionWizardNextButton =
+  requiredElement<HTMLButtonElement>('#connection-wizard-next');
+export const connectionWizardStatus = requiredElement<HTMLElement>('#connection-wizard-status');
+
+connectionWizardConfigureStep.prepend(environmentSetup);
 
 connectionAdvancedContent.append(
   credentialSourceSettings,

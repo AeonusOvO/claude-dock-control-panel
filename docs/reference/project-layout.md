@@ -57,7 +57,7 @@ shared/
     claude-plugin.ts codex.ts diagnostics.ts download.ts egress-diagnostics.ts
     managed-chatgpt.ts mcp.ts network.ts proxy.ts resource.ts router.ts
     onboarding.ts runtime.ts software.ts terminal.ts workspace.ts
-    control-panel-api.ts  21 个域接口组合出 ControlPanelApi 的 201 个成员
+    control-panel-api.ts  21 个域接口组合出 ControlPanelApi 的 202 个成员
   claude/                 connection-remedy context-window curl effort model-id
                           native-commands permission-mode providers state-ownership
   conversation/           native reducer surface-switch composer-input
@@ -111,7 +111,7 @@ preload/
                           router runtime software-update terminal workspace
 ```
 
-通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 201 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
+通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 202 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
 
 ## `src/renderer/`
 

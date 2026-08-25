@@ -1332,6 +1332,7 @@ describe('managed ChatGPT gateway', () => {
 
       expect(state).toMatchObject({ busy: true, phase: 'installing' });
       expect(fetchImplementation).toHaveBeenCalledOnce();
+      await expect(manager.cancelSetup()).resolves.toBe(false);
 
       resolveFetch(
         new Response('{}', {

@@ -11,7 +11,7 @@ export const scanOnboardingEnvironment = async (
   elements.toolCheck.dataset.tone = 'checking';
   elements.toolStatus.textContent = '检测中';
   elements.prepareHint.textContent = '正在读取本机状态…';
-  if (state.path === 'codex') {
+  if (state.engine === 'codex') {
     elements.toolTitle.textContent = 'Codex CLI';
     elements.toolDetail.textContent = '选择项目后检测 CLI、账号与项目配置';
     elements.toolStatus.textContent = '项目后检测';

@@ -275,9 +275,26 @@
 
         <section class="rail-page" data-rail-page="connection">
           <div class="connection-heading">
-            <strong>选择服务商，一次完成接入</strong>
-            <span>ClaudeDock 会自动检测环境、补齐组件、发现模型、验证连接并保存。</span>
+            <strong>按步骤完成模型接入</strong>
+            <span>先选择模型来源，再进入对应配置；当前事务完成前不会留下半配置状态。</span>
           </div>
+
+          <nav class="connection-wizard-progress" aria-label="接入进度">
+            <button id="connection-wizard-progress-choice" data-state="active" type="button">
+              <span>1</span>
+              <span><strong>选择模型</strong><small>确定订阅、国产模型或 API</small></span>
+            </button>
+            <i aria-hidden="true"></i>
+            <button
+              id="connection-wizard-progress-configure"
+              data-state="pending"
+              type="button"
+              disabled
+            >
+              <span>2</span>
+              <span><strong>配置与验证</strong><small>进入所选模型的对应流程</small></span>
+            </button>
+          </nav>
 
           <section class="connection-advice" id="connection-advice" data-tone="info">
             <div class="connection-advice__icon" aria-hidden="true">💡</div>
@@ -329,490 +346,537 @@
             </div>
           </section>
 
-          <section class="provider-picker" id="connection-provider-picker">
-            <div class="step-heading">
-              <span class="step-number">1</span>
-              <div>
-                <strong>选择你的服务商</strong>
-                <span>按密钥所属平台选择；不要混用不同平台的密钥和地址。</span>
-              </div>
-            </div>
-            <div class="provider-groups" id="connection-provider-groups" aria-live="polite"></div>
-          </section>
-
-          <section class="provider-setup" id="connection-provider-setup" hidden>
-            <div class="provider-setup__heading">
-              <div>
-                <span class="step-kicker">已选择</span>
-                <strong id="connection-provider-title">选择服务商后继续</strong>
-              </div>
-              <div class="provider-setup__links">
-                <button id="open-provider-console" type="button" hidden>打开密钥控制台</button>
-                <button id="open-provider-docs" type="button" hidden>查看官方文档</button>
-              </div>
-            </div>
-            <p id="connection-provider-description"></p>
-            <p class="provider-caveat" id="connection-provider-caveat" hidden></p>
-            <div id="connection-provider-special"></div>
-          </section>
-
-          <section
-            class="credential-source-settings"
-            id="credential-source-settings"
-            aria-labelledby="credential-source-settings-title"
-          >
-            <div class="step-heading">
-              <span class="step-number">A</span>
-              <div>
-                <strong id="credential-source-settings-title">认证来源与密钥冲突</strong>
-                <span>控制 ClaudeDock 密钥与 Claude Code apiKeyHelper 同时存在时的行为。</span>
-              </div>
-            </div>
-            <label class="field" for="claude-api-key-helper-policy">
-              <span>显式凭据的优先策略</span>
-              <select id="claude-api-key-helper-policy">
-                <option value="prefer-claudedock">只使用 ClaudeDock 保存的凭据（推荐）</option>
-                <option value="inherit">保留 Claude Code 的 apiKeyHelper</option>
-              </select>
-              <small id="claude-api-key-helper-status">
-                推荐模式只覆盖本次 ClaudeDock 会话，不修改 Claude Code 用户或项目设置。
-              </small>
-            </label>
-          </section>
-
-          <section
-            class="gateway-discovery"
-            id="gateway-discovery"
-            aria-labelledby="gateway-discovery-title"
-          >
-            <div class="gateway-discovery__heading">
-              <div>
-                <span class="step-kicker">自动检测</span>
-                <strong id="gateway-discovery-title">这台电脑现在有什么？</strong>
-              </div>
-              <button id="refresh-gateways" type="button">重新检测</button>
-            </div>
-            <p id="gateway-diagnostics-summary">正在检查常见本地端口、命令和 Claude 设置…</p>
-            <div id="gateway-candidates" class="gateway-candidates" aria-live="polite"></div>
-            <div id="configuration-hints" class="configuration-hints" hidden></div>
-            <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
-          </section>
-
-          <section
-            class="curl-onboarding"
-            id="curl-onboarding"
-            aria-labelledby="curl-onboarding-title"
-          >
-            <div class="step-heading">
-              <span class="step-number">1</span>
-              <div>
-                <strong id="curl-onboarding-title">把服务商给你的 cURL 粘进来</strong>
-                <span>ClaudeDock 只做本地识别，不会自动发送，也不会记录到日志。</span>
-              </div>
-            </div>
-            <label class="field" for="curl-input">
-              <span>cURL 命令或接口地址</span>
-              <textarea
-                id="curl-input"
-                maxlength="50000"
-                rows="5"
-                spellcheck="false"
-                placeholder='curl https://example.com/v1/chat/completions -H "Authorization: Bearer 新密钥" -d &apos;{"model":"模型名",...}&apos;'
-              ></textarea>
-            </label>
-            <button class="analyze-curl" id="analyze-curl" type="button">识别这是什么接口</button>
-            <div class="curl-analysis" id="curl-analysis" hidden>
-              <div class="curl-analysis__headline">
-                <span id="curl-protocol-badge">等待识别</span>
-                <strong id="curl-analysis-title">—</strong>
-              </div>
-              <p id="curl-analysis-detail"></p>
-              <dl>
-                <div>
-                  <dt>接口</dt>
-                  <dd id="curl-analysis-endpoint">—</dd>
-                </div>
-                <div>
-                  <dt>模型</dt>
-                  <dd id="curl-analysis-model">—</dd>
-                </div>
-                <div>
-                  <dt>认证</dt>
-                  <dd id="curl-analysis-auth">—</dd>
-                </div>
-              </dl>
-              <div class="curl-next-step" id="curl-next-step"></div>
-              <div class="curl-analysis__actions">
-                <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
-                <button id="import-curl-router" type="button" hidden>
-                  一键写入路由器并接入当前项目
-                </button>
-                <button id="use-detected-router" type="button" hidden>选用已发现的路由器</button>
-                <button id="open-detected-router" type="button" hidden>打开路由器管理页</button>
-              </div>
-            </div>
-
-            <!-- Smart guidance hints -->
-            <div class="smart-guidance" id="smart-guidance" hidden>
-              <div class="smart-guidance__icon" aria-hidden="true">💡</div>
-              <div>
-                <strong id="smart-guidance-title">智能提示</strong>
-                <p id="smart-guidance-detail"></p>
-              </div>
-              <div class="smart-guidance__actions" id="smart-guidance-actions"></div>
-            </div>
-          </section>
-
-          <section
-            class="router-manager"
-            id="router-manager"
-            aria-labelledby="router-manager-title"
-          >
-            <div class="step-heading">
-              <span class="step-number">2</span>
-              <div>
-                <strong id="router-manager-title">安装与管理 Claude Code 路由器</strong>
-                <span>只管理 Claude Code 接入；不会修改 Codex 配置或系统代理。</span>
-              </div>
-            </div>
-            <div class="router-status" id="router-status" data-state="unknown">
-              <div>
-                <strong id="router-status-title">正在读取路由器状态…</strong>
-                <span id="router-status-detail">等待首次检测</span>
-              </div>
-              <span id="router-version">未检测</span>
-            </div>
-            <div class="router-remediation" id="router-remediation" hidden>
-              <strong id="router-remediation-title">路由器需要完成配置</strong>
-              <span id="router-remediation-detail"></span>
-              <div>
-                <button id="repair-router-from-project" type="button">
-                  用当前项目配置一键修复
-                </button>
-                <button id="configure-router-provider" type="button">
-                  手动添加第一个服务提供方
-                </button>
-              </div>
-            </div>
-            <div class="router-actions" id="router-actions">
-              <button id="install-router" type="button" hidden>一键安装</button>
-              <button id="uninstall-router" type="button">卸载 CLI 路由</button>
-              <button id="start-router" type="button">启动路由器</button>
-              <button id="stop-router" type="button">停止网关</button>
-              <button id="open-router-management" type="button">打开完整管理页</button>
-            </div>
-            <p class="router-install-note">
-              ClaudeDock 只在后台安装和管理 CCR CLI，不打开 CCR 桌面窗口，也不会改写 Claude 或 Codex
-              App。 npm 源只作用于本次安装命令，不会修改用户的全局 npm 配置。
-            </p>
-
-            <div class="router-provider-heading">
-              <div>
-                <strong>服务提供方配置</strong>
-                <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
-              </div>
-              <button id="add-router-provider" type="button">添加服务提供方</button>
-            </div>
-            <div id="router-provider-list" class="router-provider-list" aria-live="polite"></div>
-
-            <form id="router-provider-form" hidden>
-              <input id="router-provider-id" type="hidden" />
-              <div class="router-provider-form__heading">
-                <strong id="router-provider-form-title">添加服务提供方</strong>
-                <span>OpenAI cURL 通常选择“对话补全”协议。</span>
-              </div>
-              <label class="field" for="router-provider-name">
-                <span>服务提供方名称</span>
-                <input
-                  id="router-provider-name"
-                  type="text"
-                  maxlength="80"
-                  pattern="[A-Za-z0-9._-]+"
-                  placeholder="aancn-relay"
-                  spellcheck="false"
-                />
-                <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型标识。</small>
-              </label>
-              <label class="field" for="router-provider-protocol">
-                <span>上游协议</span>
-                <select id="router-provider-protocol">
-                  <option value="openai_chat_completions">OpenAI 对话补全协议</option>
-                  <option value="openai_responses">OpenAI 响应协议</option>
-                  <option value="anthropic_messages">Anthropic 消息协议</option>
-                </select>
-              </label>
-              <label class="field" for="router-provider-base-url">
-                <span>上游接口地址</span>
-                <input
-                  id="router-provider-base-url"
-                  type="url"
-                  maxlength="2048"
-                  placeholder="https://example.com/v1/chat/completions"
-                  spellcheck="false"
-                />
-              </label>
-              <label class="field" for="router-provider-models">
-                <span>模型标识（每行一个）</span>
-                <textarea
-                  id="router-provider-models"
-                  maxlength="10000"
-                  rows="3"
-                  spellcheck="false"
-                  placeholder="claude-fable-5"
-                ></textarea>
-              </label>
-              <label class="field" for="router-provider-api-key">
-                <span>上游接口密钥</span>
-                <input
-                  id="router-provider-api-key"
-                  type="password"
-                  maxlength="20000"
-                  autocomplete="new-password"
-                  placeholder="编辑时留空可保留 CCR 中的原密钥"
-                />
-              </label>
-              <label class="router-choice" for="router-provider-preferred">
-                <input id="router-provider-preferred" type="checkbox" checked />
-                <span>设为路由器首选服务提供方</span>
-              </label>
-              <label class="router-choice" for="router-provider-use-project">
-                <input id="router-provider-use-project" type="checkbox" checked />
-                <span>同时安全接入当前 ClaudeDock 项目</span>
-              </label>
-              <small class="router-project-note"
-                >启用后，路由器本机访问密钥会在主进程内直接进入 Windows
-                安全存储，不会传回界面。</small
-              >
-              <div class="router-provider-form__actions">
-                <button id="save-router-provider" type="submit">保存服务提供方</button>
-                <button id="cancel-router-provider" type="button">取消</button>
-              </div>
-            </form>
-          </section>
-
-          <section class="converter-help" id="converter-help">
-            <div class="step-heading">
-              <span class="step-number">3</span>
-              <div>
-                <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
-                <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
-              </div>
-            </div>
-            <p>
-              推荐新手使用 Claude Code 路由器图形版；它默认用
-              <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
-              更适合熟悉配置文件和 Python 的用户。
-            </p>
-            <div class="help-link-grid">
-              <button
-                type="button"
-                data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
-              >
-                获取路由器图形版
-              </button>
-              <button
-                type="button"
-                data-external-url="https://docs.litellm.ai/docs/anthropic_unified/"
-              >
-                查看 LiteLLM 教程
-              </button>
-              <button
-                type="button"
-                data-external-url="https://code.claude.com/docs/en/llm-gateway-connect"
-              >
-                Claude 官方网关说明
-              </button>
-            </div>
-          </section>
-
-          <section
-            class="connection-history"
-            id="connection-history"
-            aria-labelledby="connection-history-title"
-          >
-            <div class="connection-history__heading">
-              <strong id="connection-history-title">选择历史配置</strong>
-              <span id="connection-history-count">
-                记录曾填写的接口、网关和模型参数，点击即可一键恢复。
-              </span>
-            </div>
-            <p class="connection-history__empty" id="connection-history-empty">
-              还没有历史配置；完成一次保存后，这里会记录接口、网关和模型参数。
-            </p>
-            <ul class="connection-history__list" id="connection-history-list"></ul>
-          </section>
-
-          <form id="claude-config-form" hidden>
-            <div class="step-heading">
-              <span class="step-number">2</span>
-              <div>
-                <strong id="claude-config-step-title">选择模型并填写凭据</strong>
-                <span id="claude-config-step-description"
-                  >密钥只交给主进程加密保存，界面不会回显已保存内容。</span
-                >
-              </div>
-            </div>
-
-            <label class="field" for="claude-preset" hidden>
-              <span>最终连接方式</span>
-              <select id="claude-preset">
-                <option value="anthropic">Anthropic 官方</option>
-                <option value="gateway">本机转换器 / 模型网关</option>
-                <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
-                <option value="custom">自定义中转站接口</option>
-              </select>
-            </label>
-
-            <label class="field" id="protocol-field" for="claude-protocol">
-              <span>接口协议</span>
-              <select id="claude-protocol">
-                <option value="anthropic">Anthropic 消息接口</option>
-                <option value="openai">OpenAI 对话补全 / Responses</option>
-              </select>
-              <small id="protocol-help"
-                >Claude Code 可直接连接 Anthropic 协议；OpenAI 协议会由本地 Router 自动转换。</small
-              >
-            </label>
-
-            <label class="field" id="base-url-field" for="claude-base-url">
-              <span>中转站接口地址</span>
-              <input
-                id="claude-base-url"
-                type="text"
-                inputmode="url"
-                maxlength="2048"
-                placeholder="gateway.example.com"
-                spellcheck="false"
-              />
-              <small id="base-url-help"
-                >可只填域名、/v1 或完整接口地址，ClaudeDock 会自动补全协议和路径。</small
-              >
-            </label>
-
-            <label class="field" for="claude-model">
-              <span>模型标识</span>
-              <input
-                id="claude-model"
-                type="text"
-                maxlength="200"
-                value="default"
-                spellcheck="false"
-              />
-              <small id="model-help">必须与最终网关中可用的模型标识完全一致。</small>
-            </label>
-
-            <label class="field" for="claude-model-fast">
-              <span>小型/备用模型标识</span>
-              <input
-                id="claude-model-fast"
-                type="text"
-                maxlength="200"
-                value="default"
-                spellcheck="false"
-              />
-              <small
-                >用于 Haiku
-                与小型/备用任务；这是另一个模型，不是服务速度档位。留空时跟随主模型。</small
-              >
-            </label>
-
-            <label class="field" id="auth-mode-field" for="claude-auth-mode">
-              <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
-              <select id="claude-auth-mode">
-                <option value="existing">使用 Claude Code 现有登录</option>
-                <option value="apiKey">接口密钥（X-Api-Key）</option>
-              </select>
-              <small id="auth-mode-help"
-                >服务商要求 Authorization / Bearer 时选择“持有者令牌”；要求 x-api-key
-                时选择“接口密钥”。</small
-              >
-            </label>
-
-            <label class="field" id="credential-field" for="claude-credential">
-              <span id="credential-label">接口凭据</span>
-              <input
-                id="claude-credential"
-                type="password"
-                maxlength="4096"
-                autocomplete="new-password"
-                placeholder="留空则保留已保存的凭据"
-              />
-              <small id="credential-status">未保存凭据</small>
-            </label>
-
-            <div class="connection-test">
-              <div class="step-heading">
-                <span class="step-number">3</span>
-                <div>
-                  <strong>测试并接入</strong>
-                  <span>先真实验证端点、认证和模型，通过后再保存。</span>
-                </div>
-              </div>
-              <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
-            </div>
-            <div
-              class="connection-test-result"
-              id="connection-test-result"
-              aria-live="polite"
-              hidden
+          <div class="connection-wizard-viewport" id="connection-wizard-viewport">
+            <section
+              class="connection-wizard-step connection-wizard-step--active"
+              data-connection-wizard-step="choice"
             >
-              <strong id="connection-test-title">等待测试</strong>
-              <span id="connection-test-summary"></span>
-              <div id="connection-test-stages"></div>
-            </div>
-            <section class="connection-remedy" id="connection-remedy" hidden>
-              <strong id="connection-remedy-title">接入建议</strong>
-              <p id="connection-remedy-cause"></p>
-              <p id="connection-remedy-fix"></p>
-              <div id="connection-remedy-actions"></div>
+              <section class="provider-picker" id="connection-provider-picker">
+                <div class="step-heading">
+                  <span class="step-number">1</span>
+                  <div>
+                    <strong>选择模型来源</strong>
+                    <span>四个入口覆盖常用方式；国产模型在小选择框里继续细分。</span>
+                  </div>
+                </div>
+                <div
+                  class="provider-groups"
+                  id="connection-provider-groups"
+                  aria-live="polite"
+                ></div>
+              </section>
             </section>
 
-            <div class="privacy-shield">
-              <span class="privacy-shield__icon" aria-hidden="true">◆</span>
-              <div>
-                <strong>会话环境已锁定</strong>
-                <span
-                  >端点与模型由项目配置决定；遥测、错误上报与 WebFetch 的 Anthropic 预检关闭。</span
+            <section class="connection-wizard-step" data-connection-wizard-step="configure" hidden>
+              <section class="provider-setup" id="connection-provider-setup" hidden>
+                <div class="provider-setup__heading">
+                  <div>
+                    <span class="step-kicker">已选择</span>
+                    <strong id="connection-provider-title">选择服务商后继续</strong>
+                  </div>
+                  <div class="provider-setup__links">
+                    <button id="open-provider-console" type="button" hidden>打开密钥控制台</button>
+                    <button id="open-provider-docs" type="button" hidden>查看官方文档</button>
+                  </div>
+                </div>
+                <p id="connection-provider-description"></p>
+                <p class="provider-caveat" id="connection-provider-caveat" hidden></p>
+                <div id="connection-provider-special"></div>
+              </section>
+
+              <section
+                class="credential-source-settings"
+                id="credential-source-settings"
+                aria-labelledby="credential-source-settings-title"
+              >
+                <div class="step-heading">
+                  <span class="step-number">A</span>
+                  <div>
+                    <strong id="credential-source-settings-title">认证来源与密钥冲突</strong>
+                    <span>控制 ClaudeDock 密钥与 Claude Code apiKeyHelper 同时存在时的行为。</span>
+                  </div>
+                </div>
+                <label class="field" for="claude-api-key-helper-policy">
+                  <span>显式凭据的优先策略</span>
+                  <select id="claude-api-key-helper-policy">
+                    <option value="prefer-claudedock">只使用 ClaudeDock 保存的凭据（推荐）</option>
+                    <option value="inherit">保留 Claude Code 的 apiKeyHelper</option>
+                  </select>
+                  <small id="claude-api-key-helper-status">
+                    推荐模式只覆盖本次 ClaudeDock 会话，不修改 Claude Code 用户或项目设置。
+                  </small>
+                </label>
+              </section>
+
+              <section
+                class="gateway-discovery"
+                id="gateway-discovery"
+                aria-labelledby="gateway-discovery-title"
+              >
+                <div class="gateway-discovery__heading">
+                  <div>
+                    <span class="step-kicker">自动检测</span>
+                    <strong id="gateway-discovery-title">这台电脑现在有什么？</strong>
+                  </div>
+                  <button id="refresh-gateways" type="button">重新检测</button>
+                </div>
+                <p id="gateway-diagnostics-summary">正在检查常见本地端口、命令和 Claude 设置…</p>
+                <div id="gateway-candidates" class="gateway-candidates" aria-live="polite"></div>
+                <div id="configuration-hints" class="configuration-hints" hidden></div>
+                <span class="gateway-checked-at" id="gateway-checked-at">等待首次检测</span>
+              </section>
+
+              <section
+                class="curl-onboarding"
+                id="curl-onboarding"
+                aria-labelledby="curl-onboarding-title"
+              >
+                <div class="step-heading">
+                  <span class="step-number">1</span>
+                  <div>
+                    <strong id="curl-onboarding-title">把服务商给你的 cURL 粘进来</strong>
+                    <span>ClaudeDock 只做本地识别，不会自动发送，也不会记录到日志。</span>
+                  </div>
+                </div>
+                <label class="field" for="curl-input">
+                  <span>cURL 命令或接口地址</span>
+                  <textarea
+                    id="curl-input"
+                    maxlength="50000"
+                    rows="5"
+                    spellcheck="false"
+                    placeholder='curl https://example.com/v1/chat/completions -H "Authorization: Bearer 新密钥" -d &apos;{"model":"模型名",...}&apos;'
+                  ></textarea>
+                </label>
+                <button class="analyze-curl" id="analyze-curl" type="button">
+                  识别这是什么接口
+                </button>
+                <div class="curl-analysis" id="curl-analysis" hidden>
+                  <div class="curl-analysis__headline">
+                    <span id="curl-protocol-badge">等待识别</span>
+                    <strong id="curl-analysis-title">—</strong>
+                  </div>
+                  <p id="curl-analysis-detail"></p>
+                  <dl>
+                    <div>
+                      <dt>接口</dt>
+                      <dd id="curl-analysis-endpoint">—</dd>
+                    </div>
+                    <div>
+                      <dt>模型</dt>
+                      <dd id="curl-analysis-model">—</dd>
+                    </div>
+                    <div>
+                      <dt>认证</dt>
+                      <dd id="curl-analysis-auth">—</dd>
+                    </div>
+                  </dl>
+                  <div class="curl-next-step" id="curl-next-step"></div>
+                  <div class="curl-analysis__actions">
+                    <button id="apply-curl-direct" type="button" hidden>自动填入可直连配置</button>
+                    <button id="import-curl-router" type="button" hidden>
+                      一键写入路由器并接入当前项目
+                    </button>
+                    <button id="use-detected-router" type="button" hidden>
+                      选用已发现的路由器
+                    </button>
+                    <button id="open-detected-router" type="button" hidden>打开路由器管理页</button>
+                  </div>
+                </div>
+
+                <!-- Smart guidance hints -->
+                <div class="smart-guidance" id="smart-guidance" hidden>
+                  <div class="smart-guidance__icon" aria-hidden="true">💡</div>
+                  <div>
+                    <strong id="smart-guidance-title">智能提示</strong>
+                    <p id="smart-guidance-detail"></p>
+                  </div>
+                  <div class="smart-guidance__actions" id="smart-guidance-actions"></div>
+                </div>
+              </section>
+
+              <section
+                class="router-manager"
+                id="router-manager"
+                aria-labelledby="router-manager-title"
+              >
+                <div class="step-heading">
+                  <span class="step-number">2</span>
+                  <div>
+                    <strong id="router-manager-title">安装与管理 Claude Code 路由器</strong>
+                    <span>只管理 Claude Code 接入；不会修改 Codex 配置或系统代理。</span>
+                  </div>
+                </div>
+                <div class="router-status" id="router-status" data-state="unknown">
+                  <div>
+                    <strong id="router-status-title">正在读取路由器状态…</strong>
+                    <span id="router-status-detail">等待首次检测</span>
+                  </div>
+                  <span id="router-version">未检测</span>
+                </div>
+                <div class="router-remediation" id="router-remediation" hidden>
+                  <strong id="router-remediation-title">路由器需要完成配置</strong>
+                  <span id="router-remediation-detail"></span>
+                  <div>
+                    <button id="repair-router-from-project" type="button">
+                      用当前项目配置一键修复
+                    </button>
+                    <button id="configure-router-provider" type="button">
+                      手动添加第一个服务提供方
+                    </button>
+                  </div>
+                </div>
+                <div class="router-actions" id="router-actions">
+                  <button id="install-router" type="button" hidden>一键安装</button>
+                  <button id="uninstall-router" type="button">卸载 CLI 路由</button>
+                  <button id="start-router" type="button">启动路由器</button>
+                  <button id="stop-router" type="button">停止网关</button>
+                  <button id="open-router-management" type="button">打开完整管理页</button>
+                </div>
+                <p class="router-install-note">
+                  ClaudeDock 只在后台安装和管理 CCR CLI，不打开 CCR 桌面窗口，也不会改写 Claude 或
+                  Codex App。 npm 源只作用于本次安装命令，不会修改用户的全局 npm 配置。
+                </p>
+
+                <div class="router-provider-heading">
+                  <div>
+                    <strong>服务提供方配置</strong>
+                    <span>密钥不会回显；保存由 CCR 自己校验并安全落盘。</span>
+                  </div>
+                  <button id="add-router-provider" type="button">添加服务提供方</button>
+                </div>
+                <div
+                  id="router-provider-list"
+                  class="router-provider-list"
+                  aria-live="polite"
+                ></div>
+
+                <form id="router-provider-form" hidden>
+                  <input id="router-provider-id" type="hidden" />
+                  <div class="router-provider-form__heading">
+                    <strong id="router-provider-form-title">添加服务提供方</strong>
+                    <span>OpenAI cURL 通常选择“对话补全”协议。</span>
+                  </div>
+                  <label class="field" for="router-provider-name">
+                    <span>服务提供方名称</span>
+                    <input
+                      id="router-provider-name"
+                      type="text"
+                      maxlength="80"
+                      pattern="[A-Za-z0-9._-]+"
+                      placeholder="aancn-relay"
+                      spellcheck="false"
+                    />
+                    <small>只使用字母、数字、点、下划线和短横线，便于组成路由模型标识。</small>
+                  </label>
+                  <label class="field" for="router-provider-protocol">
+                    <span>上游协议</span>
+                    <select id="router-provider-protocol">
+                      <option value="openai_chat_completions">OpenAI 对话补全协议</option>
+                      <option value="openai_responses">OpenAI 响应协议</option>
+                      <option value="anthropic_messages">Anthropic 消息协议</option>
+                    </select>
+                  </label>
+                  <label class="field" for="router-provider-base-url">
+                    <span>上游接口地址</span>
+                    <input
+                      id="router-provider-base-url"
+                      type="url"
+                      maxlength="2048"
+                      placeholder="https://example.com/v1/chat/completions"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <label class="field" for="router-provider-models">
+                    <span>模型标识（每行一个）</span>
+                    <textarea
+                      id="router-provider-models"
+                      maxlength="10000"
+                      rows="3"
+                      spellcheck="false"
+                      placeholder="claude-fable-5"
+                    ></textarea>
+                  </label>
+                  <label class="field" for="router-provider-api-key">
+                    <span>上游接口密钥</span>
+                    <input
+                      id="router-provider-api-key"
+                      type="password"
+                      maxlength="20000"
+                      autocomplete="new-password"
+                      placeholder="编辑时留空可保留 CCR 中的原密钥"
+                    />
+                  </label>
+                  <label class="router-choice" for="router-provider-preferred">
+                    <input id="router-provider-preferred" type="checkbox" checked />
+                    <span>设为路由器首选服务提供方</span>
+                  </label>
+                  <label class="router-choice" for="router-provider-use-project">
+                    <input id="router-provider-use-project" type="checkbox" checked />
+                    <span>同时安全接入当前 ClaudeDock 项目</span>
+                  </label>
+                  <small class="router-project-note"
+                    >启用后，路由器本机访问密钥会在主进程内直接进入 Windows
+                    安全存储，不会传回界面。</small
+                  >
+                  <div class="router-provider-form__actions">
+                    <button id="save-router-provider" type="submit">保存服务提供方</button>
+                    <button id="cancel-router-provider" type="button">取消</button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="converter-help" id="converter-help">
+                <div class="step-heading">
+                  <span class="step-number">3</span>
+                  <div>
+                    <strong>如果是 OpenAI 格式，先准备“本地转换器”</strong>
+                    <span>模型网关就是翻译层；不是金融网关，也不是模型本身。</span>
+                  </div>
+                </div>
+                <p>
+                  推荐新手使用 Claude Code 路由器图形版；它默认用
+                  <code>3458</code> 管理、用 <code>3456</code> 给 Claude Code 提供接口。 LiteLLM
+                  更适合熟悉配置文件和 Python 的用户。
+                </p>
+                <div class="help-link-grid">
+                  <button
+                    type="button"
+                    data-external-url="https://github.com/musistudio/claude-code-router/releases/latest"
+                  >
+                    获取路由器图形版
+                  </button>
+                  <button
+                    type="button"
+                    data-external-url="https://docs.litellm.ai/docs/anthropic_unified/"
+                  >
+                    查看 LiteLLM 教程
+                  </button>
+                  <button
+                    type="button"
+                    data-external-url="https://code.claude.com/docs/en/llm-gateway-connect"
+                  >
+                    Claude 官方网关说明
+                  </button>
+                </div>
+              </section>
+
+              <section
+                class="connection-history"
+                id="connection-history"
+                aria-labelledby="connection-history-title"
+              >
+                <div class="connection-history__heading">
+                  <strong id="connection-history-title">选择历史配置</strong>
+                  <span id="connection-history-count">
+                    记录曾填写的接口、网关和模型参数，点击即可一键恢复。
+                  </span>
+                </div>
+                <p class="connection-history__empty" id="connection-history-empty">
+                  还没有历史配置；完成一次保存后，这里会记录接口、网关和模型参数。
+                </p>
+                <ul class="connection-history__list" id="connection-history-list"></ul>
+              </section>
+
+              <form id="claude-config-form" hidden>
+                <div class="step-heading">
+                  <span class="step-number">2</span>
+                  <div>
+                    <strong id="claude-config-step-title">选择模型并填写凭据</strong>
+                    <span id="claude-config-step-description"
+                      >密钥只交给主进程加密保存，界面不会回显已保存内容。</span
+                    >
+                  </div>
+                </div>
+
+                <label class="field" for="claude-preset" hidden>
+                  <span>最终连接方式</span>
+                  <select id="claude-preset">
+                    <option value="anthropic">Anthropic 官方</option>
+                    <option value="gateway">本机转换器 / 模型网关</option>
+                    <option value="deepseek">DeepSeek 官方 Anthropic 接口</option>
+                    <option value="custom">自定义中转站接口</option>
+                  </select>
+                </label>
+
+                <label class="field" id="protocol-field" for="claude-protocol">
+                  <span>接口协议</span>
+                  <select id="claude-protocol">
+                    <option value="anthropic">Anthropic 消息接口</option>
+                    <option value="openai">OpenAI 对话补全 / Responses</option>
+                  </select>
+                  <small id="protocol-help"
+                    >Claude Code 可直接连接 Anthropic 协议；OpenAI 协议会由本地 Router
+                    自动转换。</small
+                  >
+                </label>
+
+                <label class="field" id="base-url-field" for="claude-base-url">
+                  <span>中转站接口地址</span>
+                  <input
+                    id="claude-base-url"
+                    type="text"
+                    inputmode="url"
+                    maxlength="2048"
+                    placeholder="gateway.example.com"
+                    spellcheck="false"
+                  />
+                  <small id="base-url-help"
+                    >可只填域名、/v1 或完整接口地址，ClaudeDock 会自动补全协议和路径。</small
+                  >
+                </label>
+
+                <label class="field" for="claude-model">
+                  <span>模型标识</span>
+                  <input
+                    id="claude-model"
+                    type="text"
+                    maxlength="200"
+                    value="default"
+                    spellcheck="false"
+                  />
+                  <small id="model-help">必须与最终网关中可用的模型标识完全一致。</small>
+                </label>
+
+                <label class="field" for="claude-model-fast">
+                  <span>小型/备用模型标识</span>
+                  <input
+                    id="claude-model-fast"
+                    type="text"
+                    maxlength="200"
+                    value="default"
+                    spellcheck="false"
+                  />
+                  <small
+                    >用于 Haiku
+                    与小型/备用任务；这是另一个模型，不是服务速度档位。留空时跟随主模型。</small
+                  >
+                </label>
+
+                <label class="field" id="auth-mode-field" for="claude-auth-mode">
+                  <span id="auth-mode-label">Claude Code 到接口的认证方式</span>
+                  <select id="claude-auth-mode">
+                    <option value="existing">使用 Claude Code 现有登录</option>
+                    <option value="apiKey">接口密钥（X-Api-Key）</option>
+                  </select>
+                  <small id="auth-mode-help"
+                    >服务商要求 Authorization / Bearer 时选择“持有者令牌”；要求 x-api-key
+                    时选择“接口密钥”。</small
+                  >
+                </label>
+
+                <label class="field" id="credential-field" for="claude-credential">
+                  <span id="credential-label">接口凭据</span>
+                  <input
+                    id="claude-credential"
+                    type="password"
+                    maxlength="4096"
+                    autocomplete="new-password"
+                    placeholder="留空则保留已保存的凭据"
+                  />
+                  <small id="credential-status">未保存凭据</small>
+                </label>
+
+                <div class="connection-test">
+                  <div class="step-heading">
+                    <span class="step-number">3</span>
+                    <div>
+                      <strong>测试并接入</strong>
+                      <span>先真实验证端点、认证和模型，通过后再保存。</span>
+                    </div>
+                  </div>
+                  <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
+                </div>
+                <div
+                  class="connection-test-result"
+                  id="connection-test-result"
+                  aria-live="polite"
+                  hidden
                 >
-              </div>
-            </div>
+                  <strong id="connection-test-title">等待测试</strong>
+                  <span id="connection-test-summary"></span>
+                  <div id="connection-test-stages"></div>
+                </div>
+                <section class="connection-remedy" id="connection-remedy" hidden>
+                  <strong id="connection-remedy-title">接入建议</strong>
+                  <p id="connection-remedy-cause"></p>
+                  <p id="connection-remedy-fix"></p>
+                  <div id="connection-remedy-actions"></div>
+                </section>
 
-            <div class="config-actions">
-              <button class="save-config" id="test-claude-connection" type="submit">
-                测试并接入
-              </button>
-              <button class="skip-test" id="save-claude-config" type="button">
-                跳过测试并保存
-              </button>
-              <button class="clear-credential" id="clear-credential" type="button">清除密钥</button>
-            </div>
-          </form>
+                <div class="privacy-shield">
+                  <span class="privacy-shield__icon" aria-hidden="true">◆</span>
+                  <div>
+                    <strong>会话环境已锁定</strong>
+                    <span
+                      >端点与模型由项目配置决定；遥测、错误上报与 WebFetch 的 Anthropic
+                      预检关闭。</span
+                    >
+                  </div>
+                </div>
 
-          <details class="connection-glossary">
-            <summary>还是看不懂？展开术语解释</summary>
-            <dl>
-              <div>
-                <dt>上游接口</dt>
-                <dd>服务商给你的模型地址，例如带 /v1/chat/completions 的中转。</dd>
-              </div>
-              <div>
-                <dt>本地转换器 / 模型网关</dt>
-                <dd>把 OpenAI 格式翻译成 Claude Code 需要的 Anthropic 格式。</dd>
-              </div>
-              <div>
-                <dt>管理页 3458</dt>
-                <dd>用浏览器配置路由器，不是 Claude Code 应连接的模型接口。</dd>
-              </div>
-              <div>
-                <dt>模型接口 3456</dt>
-                <dd>路由器默认给 Claude Code 使用的地址，通常填到接口基址。</dd>
-              </div>
-              <div>
-                <dt>两种密钥</dt>
-                <dd>上游密钥交给路由器访问服务商；路由器访问密钥交给 ClaudeDock。两者可能不同。</dd>
-              </div>
-            </dl>
-          </details>
+                <div class="config-actions">
+                  <button class="save-config" id="test-claude-connection" type="submit">
+                    测试并接入
+                  </button>
+                  <button class="skip-test" id="save-claude-config" type="button">
+                    跳过测试并保存
+                  </button>
+                  <button class="clear-credential" id="clear-credential" type="button">
+                    清除密钥
+                  </button>
+                </div>
+              </form>
+
+              <details class="connection-glossary">
+                <summary>还是看不懂？展开术语解释</summary>
+                <dl>
+                  <div>
+                    <dt>上游接口</dt>
+                    <dd>服务商给你的模型地址，例如带 /v1/chat/completions 的中转。</dd>
+                  </div>
+                  <div>
+                    <dt>本地转换器 / 模型网关</dt>
+                    <dd>把 OpenAI 格式翻译成 Claude Code 需要的 Anthropic 格式。</dd>
+                  </div>
+                  <div>
+                    <dt>管理页 3458</dt>
+                    <dd>用浏览器配置路由器，不是 Claude Code 应连接的模型接口。</dd>
+                  </div>
+                  <div>
+                    <dt>模型接口 3456</dt>
+                    <dd>路由器默认给 Claude Code 使用的地址，通常填到接口基址。</dd>
+                  </div>
+                  <div>
+                    <dt>两种密钥</dt>
+                    <dd>
+                      上游密钥交给路由器访问服务商；路由器访问密钥交给 ClaudeDock。两者可能不同。
+                    </dd>
+                  </div>
+                </dl>
+              </details>
+            </section>
+          </div>
+
+          <footer class="connection-wizard-actions">
+            <button
+              class="button button--compact button--quiet"
+              id="connection-wizard-previous"
+              type="button"
+              disabled
+            >
+              上一步
+            </button>
+            <span id="connection-wizard-status">请选择模型来源</span>
+            <button
+              class="button button--compact button--primary"
+              id="connection-wizard-next"
+              type="button"
+              disabled
+            >
+              下一步
+            </button>
+          </footer>
         </section>
 
         <section class="rail-page" data-rail-page="plugins">
@@ -2018,23 +2082,28 @@
               <span class="onboarding-progress__eyebrow">开始使用</span>
               <ol>
                 <li>
-                  <button data-onboarding-progress-step="welcome" type="button">
-                    <span>1</span><strong>选择路径</strong><small>告诉我们你怎么使用 AI</small>
+                  <button data-onboarding-progress-step="engine" type="button">
+                    <span>1</span><strong>选择引擎</strong><small>Claude Code 或 Codex</small>
+                  </button>
+                </li>
+                <li>
+                  <button data-onboarding-progress-step="model" type="button">
+                    <span>2</span><strong>选择模型</strong><small>订阅、国产模型或 API</small>
                   </button>
                 </li>
                 <li>
                   <button data-onboarding-progress-step="prepare" type="button">
-                    <span>2</span><strong>自动准备</strong><small>检测环境与接入策略</small>
+                    <span>3</span><strong>自动准备</strong><small>检测环境与接入策略</small>
                   </button>
                 </li>
                 <li>
                   <button data-onboarding-progress-step="project" type="button">
-                    <span>3</span><strong>打开项目</strong><small>建立安全工作范围</small>
+                    <span>4</span><strong>打开项目</strong><small>建立安全工作范围</small>
                   </button>
                 </li>
                 <li>
                   <button data-onboarding-progress-step="ready" type="button">
-                    <span>4</span><strong>准备完成</strong><small>进入你的工作区</small>
+                    <span>5</span><strong>准备完成</strong><small>进入你的工作区</small>
                   </button>
                 </li>
               </ol>
@@ -2044,17 +2113,17 @@
             <div class="onboarding-viewport" id="onboarding-viewport" aria-live="polite">
               <section
                 class="onboarding-step onboarding-step--active"
-                data-onboarding-step="welcome"
+                data-onboarding-step="engine"
               >
                 <div class="onboarding-step__copy">
                   <span class="onboarding-kicker">欢迎来到 ClaudeDock</span>
-                  <h1 id="onboarding-title">先选一条最适合你的使用路径</h1>
-                  <p>之后的环境检测、接入方式和默认操作都会围绕这个选择自动收敛。</p>
+                  <h1 id="onboarding-title">第一步，选择工作引擎</h1>
+                  <p>引擎只决定工作区使用 Claude Code 还是 Codex，不再和模型来源捆绑。</p>
                 </div>
-                <div class="onboarding-paths" role="radiogroup" aria-label="使用路径">
+                <div class="onboarding-paths" role="radiogroup" aria-label="工作引擎">
                   <button
                     class="onboarding-path"
-                    data-onboarding-path="claude"
+                    data-onboarding-engine="claude"
                     role="radio"
                     aria-checked="false"
                     type="button"
@@ -2065,15 +2134,18 @@
                     >
                       <img src="./assets/brands/claude-spark-clay.svg" alt="" />
                     </span>
-                    <span
-                      ><strong>Claude Code</strong
-                      ><small>使用 Claude 官方 CLI 与原生对话</small></span
-                    >
+                    <span>
+                      <span class="onboarding-path__title-row">
+                        <strong>Claude Code</strong>
+                        <small class="onboarding-recommended">推荐</small>
+                      </span>
+                      <small>使用 Claude 官方 CLI 与原生对话</small>
+                    </span>
                     <span class="onboarding-path__check" aria-hidden="true">✓</span>
                   </button>
                   <button
                     class="onboarding-path"
-                    data-onboarding-path="codex"
+                    data-onboarding-engine="codex"
                     role="radio"
                     aria-checked="false"
                     type="button"
@@ -2094,36 +2166,100 @@
                       />
                     </span>
                     <span
-                      ><strong>ChatGPT / Codex</strong
-                      ><small>使用 OpenAI 官方登录与 Codex CLI</small></span
-                    >
-                    <span class="onboarding-path__check" aria-hidden="true">✓</span>
-                  </button>
-                  <button
-                    class="onboarding-path"
-                    data-onboarding-path="provider"
-                    role="radio"
-                    aria-checked="false"
-                    type="button"
-                  >
-                    <span class="onboarding-path__mark" aria-hidden="true">
-                      <svg viewBox="0 0 24 24">
-                        <path d="M10 14a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.3 7" />
-                        <path d="M14 10a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7L12.7 17" />
-                      </svg>
-                    </span>
-                    <span
-                      ><strong>API 服务商</strong
-                      ><small>使用已有接口，模型由 ClaudeDock 自动发现</small></span
+                      ><strong>Codex</strong><small>使用 OpenAI 官方登录与 Codex CLI</small></span
                     >
                     <span class="onboarding-path__check" aria-hidden="true">✓</span>
                   </button>
                 </div>
                 <footer class="onboarding-actions">
-                  <span id="onboarding-welcome-hint">请选择一条路径继续</span>
+                  <span id="onboarding-engine-hint">请选择一个引擎继续</span>
                   <button
                     class="button button--compact button--primary"
-                    id="onboarding-welcome-next"
+                    id="onboarding-engine-next"
+                    type="button"
+                    disabled
+                  >
+                    继续
+                  </button>
+                </footer>
+              </section>
+
+              <section class="onboarding-step" data-onboarding-step="model" hidden>
+                <div class="onboarding-step__copy">
+                  <span class="onboarding-kicker">模型来源</span>
+                  <h2>第二步，选择模型接入方式</h2>
+                  <p>这项选择独立于工作引擎；进入工作区后仍可随时在“接入”中更换。</p>
+                </div>
+                <div class="onboarding-model-grid" role="radiogroup" aria-label="模型接入方式">
+                  <button
+                    class="onboarding-model-choice"
+                    data-onboarding-model-choice="claude-subscription"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <strong>Claude 官方订阅</strong>
+                    <small>使用 Claude Code 已有官方登录</small>
+                    <span aria-hidden="true">✓</span>
+                  </button>
+                  <button
+                    class="onboarding-model-choice"
+                    data-onboarding-model-choice="chatgpt-subscription"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <strong>ChatGPT 官方订阅</strong>
+                    <small>授权后由 ClaudeDock 配置本机 Proxy API</small>
+                    <span aria-hidden="true">✓</span>
+                  </button>
+                  <button
+                    class="onboarding-model-choice"
+                    data-onboarding-model-choice="domestic"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <strong>国产模型</strong>
+                    <small>DeepSeek、千问、GLM 等</small>
+                    <span aria-hidden="true">✓</span>
+                  </button>
+                  <button
+                    class="onboarding-model-choice"
+                    data-onboarding-model-choice="api"
+                    role="radio"
+                    aria-checked="false"
+                    type="button"
+                  >
+                    <strong>API</strong>
+                    <small>使用已有密钥、端点或中转站</small>
+                    <span aria-hidden="true">✓</span>
+                  </button>
+                </div>
+                <div class="onboarding-domestic-model" id="onboarding-domestic-model-picker" hidden>
+                  <label for="onboarding-domestic-model">选择国产模型</label>
+                  <select id="onboarding-domestic-model">
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="qwen-cn">通义千问</option>
+                    <option value="glm-cn">智谱 GLM</option>
+                    <option value="kimi-open">Kimi</option>
+                    <option value="minimax-cn">MiniMax</option>
+                    <option value="doubao">豆包</option>
+                  </select>
+                  <small id="onboarding-domestic-model-hint">当前已选择 DeepSeek</small>
+                </div>
+                <footer class="onboarding-actions">
+                  <button
+                    class="button button--compact button--quiet"
+                    data-onboarding-back="engine"
+                    type="button"
+                  >
+                    返回
+                  </button>
+                  <span id="onboarding-model-hint">请选择一种模型来源</span>
+                  <button
+                    class="button button--compact button--primary"
+                    id="onboarding-model-next"
                     type="button"
                     disabled
                   >
@@ -2175,7 +2311,7 @@
                 <footer class="onboarding-actions onboarding-actions--split">
                   <button
                     class="button button--compact button--quiet"
-                    data-onboarding-back="welcome"
+                    data-onboarding-back="model"
                     type="button"
                   >
                     返回
@@ -2262,8 +2398,12 @@
                 </div>
                 <dl class="onboarding-summary">
                   <div>
-                    <dt>使用路径</dt>
-                    <dd id="onboarding-summary-path">—</dd>
+                    <dt>工作引擎</dt>
+                    <dd id="onboarding-summary-engine">—</dd>
+                  </div>
+                  <div>
+                    <dt>模型来源</dt>
+                    <dd id="onboarding-summary-model">—</dd>
                   </div>
                   <div>
                     <dt>当前项目</dt>

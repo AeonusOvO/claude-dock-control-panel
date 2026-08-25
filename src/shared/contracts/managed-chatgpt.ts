@@ -48,6 +48,7 @@ export type ManagedChatGptSetupStage =
 export interface ManagedChatGptSetupProgress {
   active: boolean;
   detail: string;
+  interruptible: boolean;
   sessionId?: string;
   stage: ManagedChatGptSetupStage;
   step: number;

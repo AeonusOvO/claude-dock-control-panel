@@ -108,6 +108,7 @@ const createManagedChatGptGlobalOperations = ({
       .current?.webContents.send(CHANNELS.CLAUDE_MANAGED_CHATGPT_SETUP_PROGRESS, {
         active,
         detail,
+        interruptible: active && stage === 'logging-in',
         sessionId,
         stage,
         step,
@@ -323,6 +324,19 @@ const createManagedChatGptProjectOperations = (
 const registerManagedChatGptAccessIpc = ({
   guards: { requireManagedChatGptGateway, validateSender },
 }: ManagedChatGptIpcDependencies): void => {
+  ipcMain.handle(
+    CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP,
+    async (event): Promise<OperationResult> => {
+      validateSender(event);
+      const cancelled = await requireManagedChatGptGateway().cancelSetup();
+      return {
+        message: cancelled
+          ? '已取消当前 OpenAI 授权并返回模型选择。'
+          : '当前没有可取消的授权操作。',
+        ok: cancelled,
+      };
+    },
+  );
   ipcMain.handle(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE, async (event) => {
     validateSender(event);
     return requireManagedChatGptGateway().getState();

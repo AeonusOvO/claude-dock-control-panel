@@ -68,13 +68,13 @@ preload: <dist/preload/preload.js>,
 
 ## 数据流
 
-三条独立通路共 201 个频道，形态与频率不同：
+三条独立通路共 202 个频道，形态与频率不同：
 
-- **请求响应**（171 个）—— renderer `invoke`，main `handle`，返回结构化结果。
+- **请求响应**（172 个）—— renderer `invoke`，main `handle`，返回结构化结果。
 - **单向发送**（7 个）—— 高频或握手型 renderer → main 消息使用 `send/on`；包括 generation-fenced `terminal:write`，避免每次按键产生 Promise 往返。
 - **事件推送**（23 个）—— main 状态变化后广播，renderer 订阅并重渲染对应界面。
 
-`ControlPanelApi` 同样有 201 个成员，但分区不同：171 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
+`ControlPanelApi` 同样有 202 个成员，但分区不同：172 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
 
 ## 外部进程
 

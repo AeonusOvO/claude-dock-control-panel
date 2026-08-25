@@ -32,6 +32,7 @@ import { createConnectionFormProviderToolsActions } from './form-provider-tools'
 import { createConnectionFormSaveActions } from './form-save';
 import { createConnectionFormState } from './form-state';
 import { createConnectionFormSyncActions } from './form-sync';
+import { createConnectionFormWizardActions } from './form-wizard';
 
 export type { ConnectionFormDeps } from './form-dependencies';
 
@@ -147,7 +148,9 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
   const unsubscribeManagedChatGptSetupProgress = window.controlPanel.onManagedChatGptSetupProgress(
     (progress) => {
       formState.managedChatGptOperations.update(progress.sessionId, progress.active);
+      formState.managedChatGptProgress = progress;
       formState.renderManagedChatGptProgress?.(progress);
+      formState.renderWizard?.();
     },
   );
 
@@ -160,6 +163,9 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     saveClaudeConfig,
   );
   bindingsActions.bindConnectionForm();
+  const wizardActions = createConnectionFormWizardActions(deps, formState, applyPresetUi);
+  formState.renderWizard = wizardActions.render;
+  void wizardActions.initializeFromOnboarding().catch(() => wizardActions.render());
 
   return {
     claudeAuthMode,
@@ -201,6 +207,10 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     setProviderGroupExpansionPending: (pending) => {
       providerGroupExpansionPending = pending;
     },
-    unsubscribeManagedChatGptSetupProgress,
+    unsubscribeManagedChatGptSetupProgress: () => {
+      formState.renderWizard = undefined;
+      wizardActions.dispose();
+      unsubscribeManagedChatGptSetupProgress();
+    },
   };
 };

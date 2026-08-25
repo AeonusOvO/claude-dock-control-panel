@@ -1,7 +1,7 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.17（2026-08-24）。本候选版引入版本化工作区启动引导，以 main 进程持久化状态、
-类型化 IPC 与 renderer feature 分片共同维护“选择路径、自动准备、打开项目、准备完成”四步事务；旧用户迁移、
+当前架构版本：5.0.0-rc.18（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
+类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
 继续由设计 token 与行为门禁统一约束。
@@ -27,15 +27,18 @@ Hook、后台任务和受控派生进程保持有效。Agent SDK 只解析用户
   分片。view 只管理步骤、焦点、背景 `inert`、来源原点和双向退出；actions 负责 IPC、目录选择器和
   键盘；environment 只消费现有软件版本能力，不复制安装或接入业务。
 - main 的 `OnboardingStore` 写入 `userData/app-preferences/onboarding.json`，当前 storage/flow version
-  都是 1。写入沿用临时文件 + rename 的原子替换；读取时逐项校验 status、step、path 和时间，损坏或
+  都是 2。写入沿用临时文件 + rename 的原子替换；读取时逐项校验 status、step、engine、model choice、
+  domestic model 和时间，损坏或
   新版本不兼容时回到安全默认值。检测到既有 `app-preferences/app.json`、旧 preferences、workspace、
   对话或连接历史时返回 completed，避免升级后强制弹出。
 - `onboarding:get/update/complete/skip/reset` 通过独立 preload bridge 暴露。progress input 只允许
-  `{ currentStep, completedSteps, path? }`；main 不接收密钥、令牌、模型 ID、项目路径或项目内容。
+  `{ currentStep, completedSteps, engine?, modelChoice?, domesticModel? }`；domestic model 只能取内置
+  provider ID 白名单。main 不接收密钥、令牌、自由模型 ID、项目路径或项目内容。v1 的
+  `claude/codex/provider` 路径在首次读取时迁移为等价的 engine/model choice 并原子写回，已完成用户不重播引导。
 - 顶层 rail 把 plugins / MCP 规范化为 `extensions`，内部 `extensionTab` 决定真实 rail page；旧的
   `/plugins` 与 `/mcp` 命令仍可传入原名称，由 shell 规范化到同一顶层入口。connection 与 extensions
   设置 `workspace.dataset.railPanel` 后跨越原侧栏、分隔条与终端列，退出时回到 projects。
-- 引导准备页对 Claude/API 路径读取 `getSoftwareUpdates(false)` 的真实 Claude Code 状态；Codex 的
+- 引导准备页按独立 engine 选择读取环境：Claude Code 读取 `getSoftwareUpdates(false)` 的真实状态；Codex 的
   CLI、账号与项目配置依赖项目作用域，因此明确标为“项目后检测”，不提前宣告成功。完成引导只进入
   工作区，不擅自启动终端或触发登录；后续沿既有单一自动事务继续检测、补齐、发现、实测与保存。
 - CSS 文件职责不变：业务外观在 `views/onboarding.css`，全部关键帧在 `04-motion.css`，720/1024
@@ -1192,16 +1195,19 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   还原回它所属的基址，粘进来的 OpenAI 端点直接报错并指向协议开关。此前把 Anthropic 也补成
   `/v1/messages` 再剥掉后缀，等于把 `/v1` 从基址里抹掉，按 `/v1` 发布的中转站因此在别的软件能
   连、在 ClaudeDock 连不上。
-- renderer 用 `selectedProviderId | undefined` 驱动三步 UI。点击不同服务商会清空未保存
-  凭据、旧测试结果与修复建议；再次点击同一服务商进入 `undefined`，同时隐藏服务商说明、
-  配置表单、测试结果和修复卡。Router/cURL 选择把原有完整工具节点移动到第二步，其他时候
-  移回“全局设置 → 接入”，没有缩减或复制原功能。
-- 六个服务商分组由独立 `Set<ClaudeProviderGroupId>` 保存折叠状态；每次切换只更新当前分组
-  的 `data-collapsed`、ARIA 与 `inert`，CSS 用可插值的网格行和透明度过渡。服务商卡片网格
-  用命名容器查询在 `<290 / 290–469 / >=470px` 切换一、二、三列，因此响应侧栏实际拖拽
-  宽度，而不依赖整个窗口的媒体查询。进入“接入”页时调用纯函数
-  `collapsedClaudeProviderGroups`，根据已选或已保存 preset 重建折叠集合，只保留其所在组展开；
-  项目配置尚未返回时先全折叠，`renderClaudeState` 到达后只补做一次正确展开。
+- renderer 仍以 `selectedProviderId | undefined` 保存精确目录项，但首屏只投影为
+  `claude-subscription / chatgpt-subscription / domestic / api` 四个 access choice。国产模型从同一
+  `CLAUDE_PROVIDERS` 目录生成紧凑 `<select>`，API 映射到 custom 表单；既有项目 preset 与 onboarding v2
+  选择都能预选入口，不能覆盖稍后到达的项目配置。
+- `form-wizard.ts` 独占 `choice/configure` 呈现状态、双向动效、进度条和底部上一步/下一步。选择 provider
+  仍调用原 `applyPresetUi`，第二步继续移动同一 Router/cURL/ChatGPT 工具节点并复用原配置、历史、测试与
+  保存逻辑，不复制 DOM。连接测试与修复沿既有整体 busy 状态禁用向导返回。
+- `ManagedChatGptSetupProgress.interruptible` 由 main 在发送进度时给出，当前只允许 OAuth `logging-in`
+  阶段取消。renderer 同时核对 session scope；可取消时调用无参数
+  `cancelManagedChatGptGatewaySetup`，主进程的 `ManagedChatGptGateway.cancelSetup()` 再检查实际仍处于
+  login 子进程后才 abort 并等待回收。Proxy API 安装/启动、模型发现、真实测试和保存继续不可打断，
+  不能仅靠 renderer disabled 伪造事务边界。若授权恰好在点击返回时跨入不可打断阶段，main 返回
+  `ok: false`；renderer 立即锁定返回并留在第二步，不能把过期 progress 当成取消成功。
 - 全局设置的“接入”分类使用原生模态 `<dialog>` 和唯一一组原有工具节点，认证来源选择由同一快照
   机制管理 `apiKeyHelperPolicy`。打开时保存服务商草稿及模态层
   内所有 `input/select/textarea` 的值与勾选状态；“取消”、关闭按钮和 `Esc` 恢复快照，

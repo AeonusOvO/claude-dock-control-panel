@@ -238,6 +238,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
   const networkPreflightService = { invalidate: vi.fn() };
   const codexRuntime = { dispose: vi.fn() };
   const managedChatGptGateway = {
+    cancelSetup: vi.fn(async () => false),
     ensureRunning: vi.fn(async () => {
       calls.push('gateway.ensureRunning');
     }),

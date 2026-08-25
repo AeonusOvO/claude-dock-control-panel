@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import type { OnboardingPath, OnboardingProgressInput } from '../../shared/contracts';
+import type { OnboardingProgressInput } from '../../shared/contracts';
 import { CHANNELS } from '../../shared/ipc/channels';
 import type { OnboardingStore } from '../stores/onboarding';
 import type { MainGuards } from './guards';
@@ -21,9 +21,9 @@ export const registerOnboardingIpc = ({
     validateSender(event);
     return onboardingStore.update(input);
   });
-  ipcMain.handle(CHANNELS.ONBOARDING_COMPLETE, (event, pathChoice?: OnboardingPath) => {
+  ipcMain.handle(CHANNELS.ONBOARDING_COMPLETE, (event) => {
     validateSender(event);
-    return onboardingStore.complete(pathChoice);
+    return onboardingStore.complete();
   });
   ipcMain.handle(CHANNELS.ONBOARDING_SKIP, (event) => {
     validateSender(event);

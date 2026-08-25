@@ -597,7 +597,7 @@ export const IPC_REQUESTS = {
     'setManagedChatGptContextWindowMode',
     [z.unknown()],
   ),
-  [CHANNELS.ONBOARDING_COMPLETE]: request('completeOnboarding', [z.unknown().optional()]),
+  [CHANNELS.ONBOARDING_COMPLETE]: request('completeOnboarding', []),
   [CHANNELS.ONBOARDING_GET]: request('getOnboardingState', []),
   [CHANNELS.ONBOARDING_RESET]: request('resetOnboarding', []),
   [CHANNELS.ONBOARDING_SKIP]: request('skipOnboarding', []),
@@ -691,6 +691,10 @@ export const IPC_REQUESTS = {
     sessionIdSchema,
     z.string(),
   ]),
+  [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP]: request(
+    'cancelManagedChatGptGatewaySetup',
+    [],
+  ),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_LOGOUT]: request('logoutManagedChatGptGateway', []),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_OPEN_MANAGEMENT]: request(
     'openManagedChatGptGatewayManagement',

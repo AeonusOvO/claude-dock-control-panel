@@ -167,7 +167,7 @@
   .onboarding-progress ol {
     display: grid;
     gap: var(--s-2);
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .onboarding-progress button {
@@ -187,6 +187,33 @@
 }
 
 @media (max-width: 720px) {
+  .connection-wizard-progress {
+    gap: var(--s-2);
+    grid-template-columns: minmax(0, 1fr) var(--s-5) minmax(0, 1fr);
+  }
+
+  .connection-wizard-progress button {
+    grid-template-columns: var(--control-h-sm) minmax(0, 1fr);
+    padding: var(--s-1-5);
+  }
+
+  .connection-wizard-progress button > span:first-child {
+    height: var(--control-h-sm);
+    width: var(--control-h-sm);
+  }
+
+  .connection-wizard-progress small {
+    display: none;
+  }
+
+  .access-choice-grid,
+  .domestic-model-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-wizard-actions > span {
+    text-align: left;
+  }
   /* Browser zoom reduces the CSS viewport without always dispatching a window resize in Electron.
    * Keep the default workspace usable even before the renderer reconciles its rail-preview state. */
   .workspace:not(.workspace--rail-preview) {
@@ -305,6 +332,15 @@
 
   .onboarding-path {
     grid-template-columns: var(--control-h-md) minmax(0, 1fr) var(--control-h-sm);
+  }
+
+  .onboarding-model-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onboarding-domestic-model {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .onboarding-path__mark,

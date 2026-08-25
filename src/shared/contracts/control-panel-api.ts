@@ -106,7 +106,7 @@ import type {
   NetworkPreflightRunInput,
   NetworkProviderId,
 } from './network';
-import type { OnboardingPath, OnboardingProgressInput, OnboardingState } from './onboarding';
+import type { OnboardingProgressInput, OnboardingState } from './onboarding';
 import type {
   ApplicationProxyCandidate,
   ApplicationProxyState,
@@ -201,7 +201,7 @@ export interface WorkspaceApi {
 export interface OnboardingApi {
   getOnboardingState: () => Promise<OnboardingState>;
   updateOnboardingProgress: (input: OnboardingProgressInput) => Promise<OnboardingState>;
-  completeOnboarding: (pathChoice?: OnboardingPath) => Promise<OnboardingState>;
+  completeOnboarding: () => Promise<OnboardingState>;
   skipOnboarding: () => Promise<OnboardingState>;
   resetOnboarding: () => Promise<OnboardingState>;
 }
@@ -517,6 +517,7 @@ export interface ClaudePluginApi {
 }
 
 export interface ManagedChatGptApi {
+  cancelManagedChatGptGatewaySetup: () => Promise<OperationResult>;
   getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
   logoutManagedChatGptGateway: () => Promise<ManagedChatGptGatewayOperationResult>;
   openManagedChatGptGatewayManagement: () => Promise<OperationResult>;

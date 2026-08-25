@@ -297,6 +297,22 @@ describe('design-system source architecture', () => {
       ['(max-width:720px)', '(max-width:1024px)', '(min-width:1280px)'].sort(),
     );
   });
+
+  it('keeps the compact onboarding progress grid aligned with the versioned flow', () => {
+    const stepCount = [...rendererMarkup.matchAll(/data-onboarding-progress-step=/g)].length;
+    const responsive = sourceByPath.get(RESPONSIVE_FILE);
+    let columns: string | undefined;
+    responsive?.root.walkRules('.onboarding-progress ol', (rule) => {
+      if (rule.parent?.type !== 'atrule' || rule.parent.params !== '(max-width: 1024px)') return;
+      const declaration = rule.nodes.find(
+        (node) => node.type === 'decl' && node.prop === 'grid-template-columns',
+      );
+      if (declaration?.type === 'decl') columns = declaration.value;
+    });
+
+    expect(stepCount).toBe(5);
+    expect(columns).toBe(`repeat(${stepCount}, minmax(0, 1fr))`);
+  });
 });
 
 describe('design-token literals', () => {

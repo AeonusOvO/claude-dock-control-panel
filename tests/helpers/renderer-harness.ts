@@ -21,9 +21,12 @@ const emptyWorkspace: WorkspaceState = {
 };
 
 const completedOnboarding = {
-  completedSteps: ['welcome', 'prepare', 'project', 'ready'] as const,
+  completedSteps: ['engine', 'model', 'prepare', 'project', 'ready'] as const,
   currentStep: 'ready' as const,
-  flowVersion: 1,
+  domesticModel: 'deepseek' as const,
+  engine: 'claude' as const,
+  flowVersion: 2,
+  modelChoice: 'domestic' as const,
   status: 'completed' as const,
 };
 
@@ -174,24 +177,25 @@ export const createRendererHarness = async (
         return Promise.resolve(completedOnboarding);
       case 'updateOnboardingProgress': {
         const input = args[0] as {
-          completedSteps: Array<'prepare' | 'project' | 'ready' | 'welcome'>;
-          currentStep: 'prepare' | 'project' | 'ready' | 'welcome';
-          path?: 'claude' | 'codex' | 'provider';
+          completedSteps: Array<'engine' | 'model' | 'prepare' | 'project' | 'ready'>;
+          currentStep: 'engine' | 'model' | 'prepare' | 'project' | 'ready';
+          domesticModel?: 'deepseek';
+          engine?: 'claude' | 'codex';
+          modelChoice?: 'api' | 'chatgpt-subscription' | 'claude-subscription' | 'domestic';
         };
-        return Promise.resolve({ ...input, flowVersion: 1, status: 'in-progress' as const });
+        return Promise.resolve({ ...input, flowVersion: 2, status: 'in-progress' as const });
       }
       case 'completeOnboarding':
         return Promise.resolve({
           ...completedOnboarding,
-          ...(args[0] ? { path: args[0] } : {}),
         });
       case 'skipOnboarding':
         return Promise.resolve({ ...completedOnboarding, status: 'skipped' as const });
       case 'resetOnboarding':
         return Promise.resolve({
           completedSteps: [],
-          currentStep: 'welcome' as const,
-          flowVersion: 1,
+          currentStep: 'engine' as const,
+          flowVersion: 2,
           status: 'pending' as const,
         });
       case 'getDevelopmentRuntime':

@@ -1,9 +1,12 @@
 import type { OnboardingStep } from '../../../shared/contracts';
+import { setEnhancedSelectValue } from '../../platform/components';
 import type { OnboardingElements } from './elements';
 import {
   activeProjectName,
+  DOMESTIC_MODEL_LABELS,
+  ENGINE_LABELS,
   isOnboardingStep,
-  PATH_LABELS,
+  MODEL_CHOICE_LABELS,
   STEP_ORDER,
   type OnboardingMutableState,
 } from './state';
@@ -13,7 +16,7 @@ export interface OnboardingView {
   dispose: () => void;
   open: (source: OnboardingMutableState['launchSource'], triggerRect?: DOMRect) => void;
   render: () => void;
-  renderPath: () => void;
+  renderSelection: () => void;
   renderProject: () => void;
   showStep: (next: OnboardingStep, direction?: 'backward' | 'forward') => void;
 }
@@ -39,15 +42,40 @@ export const createOnboardingView = (
     if (!inert) inertSiblings.clear();
   };
 
-  const renderPath = (): void => {
-    for (const button of elements.pathButtons) {
-      button.setAttribute('aria-checked', String(button.dataset.onboardingPath === state.path));
+  const renderSelection = (): void => {
+    for (const button of elements.engineButtons) {
+      button.setAttribute('aria-checked', String(button.dataset.onboardingEngine === state.engine));
     }
-    elements.welcomeNextButton.disabled = state.path === undefined;
-    elements.welcomeHint.textContent = state.path
-      ? `已选择 ${PATH_LABELS[state.path]}`
-      : '请选择一条路径继续';
-    elements.summaryPath.textContent = state.path ? PATH_LABELS[state.path] : '尚未选择';
+    for (const button of elements.modelButtons) {
+      button.setAttribute(
+        'aria-checked',
+        String(button.dataset.onboardingModelChoice === state.modelChoice),
+      );
+    }
+    elements.engineNextButton.disabled = state.engine === undefined;
+    elements.engineHint.textContent = state.engine
+      ? `已选择 ${ENGINE_LABELS[state.engine]}`
+      : '请选择一个引擎继续';
+    const domesticSelected = state.modelChoice === 'domestic';
+    elements.domesticModelPicker.hidden = !domesticSelected;
+    if (state.domesticModel) {
+      setEnhancedSelectValue(elements.domesticModelSelect, state.domesticModel);
+    }
+    elements.domesticModelHint.textContent = state.domesticModel
+      ? `当前已选择 ${DOMESTIC_MODEL_LABELS[state.domesticModel]}`
+      : '请选择一个国产模型';
+    elements.modelNextButton.disabled = state.modelChoice === undefined;
+    elements.modelHint.textContent = state.modelChoice
+      ? state.modelChoice === 'domestic' && state.domesticModel
+        ? `当前已选择 ${DOMESTIC_MODEL_LABELS[state.domesticModel]}`
+        : `已选择 ${MODEL_CHOICE_LABELS[state.modelChoice]}`
+      : '请选择一种模型来源';
+    elements.summaryEngine.textContent = state.engine ? ENGINE_LABELS[state.engine] : '尚未选择';
+    elements.summaryModel.textContent = state.modelChoice
+      ? state.modelChoice === 'domestic' && state.domesticModel
+        ? DOMESTIC_MODEL_LABELS[state.domesticModel]
+        : MODEL_CHOICE_LABELS[state.modelChoice]
+      : '尚未选择';
   };
 
   const renderProject = (): void => {
@@ -77,7 +105,7 @@ export const createOnboardingView = (
   };
 
   const render = (): void => {
-    renderPath();
+    renderSelection();
     renderProject();
     renderProgress();
   };
@@ -188,7 +216,7 @@ export const createOnboardingView = (
     },
     open,
     render,
-    renderPath,
+    renderSelection,
     renderProject,
     showStep,
   };

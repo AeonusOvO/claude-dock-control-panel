@@ -50,4 +50,45 @@ describe('managed ChatGPT management IPC privacy', () => {
     expect(openExternal).toHaveBeenCalledWith('http://127.0.0.1:8317/management.html');
     expect(writeText).not.toHaveBeenCalled();
   });
+
+  it('cancels only through the gateway-owned setup boundary', async () => {
+    const ipc = createIpcHarness();
+    vi.doMock('electron', () => ({
+      ipcMain: ipc.ipcMain,
+      shell: { openExternal: vi.fn() },
+    }));
+    const cancelSetup = vi.fn(async () => true);
+    const { registerManagedChatGptIpc } = await import('../../src/main/ipc/managed-chatgpt');
+    registerManagedChatGptIpc({
+      configTransactionState: vi.fn(),
+      failedRuntimeLaunchCleanupDependencies: {},
+      guards: {
+        requireClaudeRuntime: vi.fn(),
+        requireManagedChatGptGateway: () => ({ cancelSetup }),
+        validateSender: vi.fn(),
+        withOfficialProviderAccess: vi.fn(),
+      },
+      restartRuntimeTerminal: vi.fn(),
+      runClaudeProjectConfigTransaction: vi.fn(),
+      services: {},
+      withDevelopmentSessionOperation: vi.fn(),
+      withoutTerminalOperationInvalidation: vi.fn(),
+      workspace: {},
+    } as never);
+
+    await expect(ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP)).resolves.toEqual(
+      {
+        message: '已取消当前 OpenAI 授权并返回模型选择。',
+        ok: true,
+      },
+    );
+    cancelSetup.mockResolvedValueOnce(false);
+    await expect(ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP)).resolves.toEqual(
+      {
+        message: '当前没有可取消的授权操作。',
+        ok: false,
+      },
+    );
+    expect(cancelSetup).toHaveBeenCalledTimes(2);
+  });
 });

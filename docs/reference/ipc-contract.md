@@ -6,21 +6,21 @@
 
 | 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
 | -------- | -------------------------- | ------------------------- | ------------------ | ---- |
-| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 171  |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 172  |
 | 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
 | 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 23   |
 | 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
 
-`ControlPanelApi` 共 201 个成员：171 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+`ControlPanelApi` 共 202 个成员：172 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
 
 ## 当前实现位置
 
 | 内容         | 位置                                                                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 频道常量     | `src/shared/ipc/channels.ts`（201 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 频道常量     | `src/shared/ipc/channels.ts`（202 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
 | 参数 schema  | `src/shared/ipc/schema.ts` + `claude-execution-settings-schema.ts`                                                                             |
 | 类型定义     | `src/shared/contracts/`（21 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件）                                                            |
-| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 201 个成员）                                                                    |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 202 个成员）                                                                    |
 | 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 21 个桥文件                                           |
 | 主进程注册   | `src/main/ipc/`（31 个文件：25 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
 | 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 25 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
@@ -39,7 +39,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 - 事件订阅方法返回取消函数，内部调用 `removeListener`。
 - 渲染进程与主进程共享的类型只来自 `src/shared/`。
 
-## 请求响应频道（171）
+## 请求响应频道（172）
 
 ### `app`（11）
 
@@ -63,16 +63,16 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 
 ### `onboarding`（5）
 
-| 频道                  | 方法                       | 作用                           |
-| --------------------- | -------------------------- | ------------------------------ |
-| `onboarding:get`      | `getOnboardingState`       | 读取版本化本地进度             |
-| `onboarding:update`   | `updateOnboardingProgress` | 保存路径、当前步骤与已完成步骤 |
-| `onboarding:complete` | `completeOnboarding`       | 标记完成并保留所选使用路径     |
-| `onboarding:skip`     | `skipOnboarding`           | 标记跳过，后续不自动遮挡       |
-| `onboarding:reset`    | `resetOnboarding`          | 从设置或空工作区重新开始       |
+| 频道                  | 方法                       | 作用                     |
+| --------------------- | -------------------------- | ------------------------ |
+| `onboarding:get`      | `getOnboardingState`       | 读取版本化本地进度       |
+| `onboarding:update`   | `updateOnboardingProgress` | 保存引擎、模型来源与步骤 |
+| `onboarding:complete` | `completeOnboarding`       | 校验选择并标记完成       |
+| `onboarding:skip`     | `skipOnboarding`           | 标记跳过，后续不自动遮挡 |
+| `onboarding:reset`    | `resetOnboarding`          | 从设置或空工作区重新开始 |
 
-五个 handler 都先校验 sender；步骤与路径由 `OnboardingStore` 白名单校验。存储只包含版本、状态、
-步骤、路径和更新时间，不接受凭据、模型 ID 或项目正文。
+五个 handler 都先校验 sender；步骤、引擎、模型来源和国产 provider ID 由 `OnboardingStore` 白名单校验。
+存储只包含版本、状态、选择与更新时间，不接受凭据、自由模型 ID 或项目正文。
 
 ### `workspace`（3）
 
@@ -109,7 +109,7 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 | `terminal:restart` | `restartTerminal` |
 | `terminal:stop`    | `stopTerminal`    |
 
-### `claude`（53）
+### `claude`（54）
 
 | 频道                                             | 方法                                    |
 | ------------------------------------------------ | --------------------------------------- |
@@ -156,6 +156,7 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 | `claude:managed-chatgpt-gateway-state`           | `getManagedChatGptGatewayState`         |
 | `claude:managed-chatgpt-gateway-logout`          | `logoutManagedChatGptGateway`           |
 | `claude:managed-chatgpt-gateway-setup`           | `setupManagedChatGptGateway`            |
+| `claude:managed-chatgpt-gateway-cancel-setup`    | `cancelManagedChatGptGatewaySetup`      |
 | `claude:managed-chatgpt-gateway-model`           | `setManagedChatGptGatewayModel`         |
 | `claude:managed-chatgpt-gateway-open-management` | `openManagedChatGptGatewayManagement`   |
 | `claude:plugins-get`                             | `getClaudePlugins`                      |

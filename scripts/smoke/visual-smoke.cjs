@@ -1,4 +1,4 @@
-/* eslint-disable max-lines-per-function -- 单进程线性视觉场景脚本：主体为内联 DOM fixture 模板字符串，场景靠累积 DOM 状态隐式串联，拆分等于重写。 */
+/* eslint-disable max-lines, max-lines-per-function -- 单进程线性视觉场景脚本：主体为内联 DOM fixture 模板字符串，场景靠累积 DOM 状态隐式串联，拆分会破坏截图时序。 */
 const { app, BrowserWindow } = require('electron');
 const { mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
@@ -316,6 +316,124 @@ app
       });
     };
 
+    window.setSize(1180, 760);
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const shell = document.querySelector('#onboarding-shell');
+        shell.hidden = false;
+        shell.dataset.state = 'open';
+        shell.querySelector('.onboarding-surface').style.animation = 'none';
+        shell.querySelector('.onboarding-shell__backdrop').style.animation = 'none';
+        delete document.querySelector('#onboarding-viewport').dataset.direction;
+        for (const step of shell.querySelectorAll('[data-onboarding-step]')) {
+          const active = step.dataset.onboardingStep === 'engine';
+          step.hidden = !active;
+          step.classList.toggle('onboarding-step--active', active);
+          step.classList.remove('onboarding-step--leaving');
+          step.style.animation = 'none';
+        }
+        for (const button of shell.querySelectorAll('[data-onboarding-progress-step]')) {
+          button.dataset.state = button.dataset.onboardingProgressStep === 'engine' ? 'active' : 'pending';
+        }
+        shell.querySelector('[data-onboarding-engine="claude"]').setAttribute('aria-checked', 'true');
+        shell.querySelector('[data-onboarding-engine="codex"]').setAttribute('aria-checked', 'false');
+        document.querySelector('#onboarding-engine-hint').textContent = '已选择 Claude Code';
+        document.querySelector('#onboarding-engine-next').disabled = false;
+      })();
+    `);
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      await window.webContents.executeJavaScript(`
+        (() => {
+          for (const step of document.querySelectorAll('#onboarding-shell [data-onboarding-step]')) {
+            const active = step.dataset.onboardingStep === 'engine';
+            step.hidden = !active;
+            step.classList.toggle('onboarding-step--active', active);
+            step.classList.remove('onboarding-step--leaving');
+          }
+          for (const button of document.querySelectorAll('[data-onboarding-progress-step]')) {
+            button.dataset.state = button.dataset.onboardingProgressStep === 'engine' ? 'active' : 'pending';
+          }
+        })();
+      `);
+      writeFileSync(
+        path.join(outputDirectory, `onboarding-engine-${themeId}-1180.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+      await window.webContents.executeJavaScript(`
+        (() => {
+          for (const step of document.querySelectorAll('#onboarding-shell [data-onboarding-step]')) {
+            const active = step.dataset.onboardingStep === 'model';
+            step.hidden = !active;
+            step.classList.toggle('onboarding-step--active', active);
+            step.classList.remove('onboarding-step--leaving');
+          }
+          for (const button of document.querySelectorAll('[data-onboarding-progress-step]')) {
+            button.dataset.state = button.dataset.onboardingProgressStep === 'engine'
+              ? 'completed'
+              : button.dataset.onboardingProgressStep === 'model'
+                ? 'active'
+                : 'pending';
+          }
+          document.querySelector('[data-onboarding-model-choice="domestic"]').setAttribute('aria-checked', 'true');
+          document.querySelector('#onboarding-domestic-model-picker').hidden = false;
+          document.querySelector('#onboarding-domestic-model').value = 'deepseek';
+          const triggerLabel = document.querySelector('#onboarding-domestic-model')
+            ?.closest('.select')
+            ?.querySelector('.select__label');
+          if (triggerLabel) triggerLabel.textContent = 'DeepSeek';
+          document.querySelector('#onboarding-model-hint').textContent = '当前已选择 DeepSeek';
+          document.querySelector('#onboarding-model-next').disabled = false;
+        })();
+      `);
+      writeFileSync(
+        path.join(outputDirectory, `onboarding-model-${themeId}-1180.png`),
+        (await captureSettledPage()).toPNG(),
+      );
+    }
+    window.setSize(820, 720);
+    await window.webContents.executeJavaScript(applyQaTheme('claude'));
+    await window.webContents.executeJavaScript(`
+      (() => {
+        for (const step of document.querySelectorAll('#onboarding-shell [data-onboarding-step]')) {
+          const active = step.dataset.onboardingStep === 'engine';
+          step.hidden = !active;
+          step.classList.toggle('onboarding-step--active', active);
+          step.classList.remove('onboarding-step--leaving');
+        }
+        for (const button of document.querySelectorAll('[data-onboarding-progress-step]')) {
+          button.dataset.state = button.dataset.onboardingProgressStep === 'engine' ? 'active' : 'pending';
+        }
+      })();
+    `);
+    writeFileSync(
+      path.join(outputDirectory, 'onboarding-engine-claude-820.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+      (() => {
+        for (const step of document.querySelectorAll('#onboarding-shell [data-onboarding-step]')) {
+          const active = step.dataset.onboardingStep === 'model';
+          step.hidden = !active;
+          step.classList.toggle('onboarding-step--active', active);
+        }
+        for (const button of document.querySelectorAll('[data-onboarding-progress-step]')) {
+          button.dataset.state = button.dataset.onboardingProgressStep === 'engine'
+            ? 'completed'
+            : button.dataset.onboardingProgressStep === 'model'
+              ? 'active'
+              : 'pending';
+        }
+      })();
+    `);
+    writeFileSync(
+      path.join(outputDirectory, 'onboarding-model-claude-820.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#onboarding-shell').hidden = true;
+    `);
+
     await window.webContents.executeJavaScript(`
     ${activateRailPage('plugins')}
     ${activatePluginPage('marketplaces')}
@@ -431,6 +549,17 @@ app
     document.documentElement.style.setProperty('--rail-w', '560px');
     document.querySelector('#environment-setup').hidden = true;
     document.querySelector('#connection-provider-picker').setAttribute('aria-disabled', 'false');
+    const wizardChoice = document.querySelector('[data-connection-wizard-step="choice"]');
+    const wizardConfigure = document.querySelector('[data-connection-wizard-step="configure"]');
+    wizardChoice.hidden = false;
+    wizardChoice.classList.add('connection-wizard-step--active');
+    wizardConfigure.hidden = true;
+    wizardConfigure.classList.remove('connection-wizard-step--active');
+    document.querySelector('#connection-wizard-progress-choice').dataset.state = 'active';
+    document.querySelector('#connection-wizard-progress-configure').dataset.state = 'pending';
+    document.querySelector('#connection-wizard-previous').disabled = true;
+    document.querySelector('#connection-wizard-next').disabled = false;
+    document.querySelector('#connection-wizard-status').textContent = '已选择 ChatGPT 官方订阅';
     document.querySelector('#connection-provider-setup').hidden = false;
     document.querySelector('#connection-provider-title').textContent =
       'ChatGPT 订阅（ClaudeDock 托管）';
@@ -532,59 +661,38 @@ app
     specialSetup.replaceChildren(subscriptionGuide);
     const groups = document.querySelector('#connection-provider-groups');
     groups.replaceChildren();
+    const accessGrid = document.createElement('div');
+    accessGrid.className = 'access-choice-grid';
     for (const fixture of [
-      ['官方接入', ['Anthropic 官方登录', 'Anthropic API Key'], true],
-      ['订阅接入（实验性）', ['ChatGPT 订阅（ClaudeDock 托管）'], false],
-      ['国内服务', ['DeepSeek', '智谱 GLM（国内）', 'Kimi 开放平台', '通义千问（国内）'], true],
-      ['海外与聚合服务', ['智谱 GLM（国际）', 'OpenRouter', '硅基流动'], true],
-      ['本地服务', ['Ollama 本地模型'], true],
-      ['高级方式', ['从 cURL 识别', '本机转换器 / 模型网关', '自定义接口'], true],
+      ['Claude 官方订阅', '使用 Claude Code 已有的官方登录', false],
+      ['ChatGPT 官方订阅', '授权后自动配置本机 Proxy API', true],
+      ['国产模型', 'DeepSeek、千问、GLM 等国内服务', false],
+      ['API / 中转站', '填写已有密钥、端点或中转站', false],
     ]) {
-      const section = document.createElement('section');
-      section.className = 'provider-group';
-      section.dataset.collapsed = String(fixture[2]);
-      const toggle = document.createElement('button');
-      toggle.className = 'provider-group__toggle';
-      toggle.type = 'button';
-      toggle.setAttribute('aria-expanded', String(!fixture[2]));
-      const heading = document.createElement('span');
-      heading.className = 'provider-group__title';
-      heading.textContent = fixture[0];
-      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      arrow.setAttribute('class', 'provider-group__arrow');
-      arrow.setAttribute('viewBox', '0 0 24 24');
-      const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      arrowPath.setAttribute('d', 'm9 5 7 7-7 7');
-      arrow.append(arrowPath);
-      toggle.append(heading, arrow);
-      const content = document.createElement('div');
-      content.className = 'provider-group__content';
-      const grid = document.createElement('div');
-      grid.className = 'provider-card-grid';
-      for (const label of fixture[1]) {
-        const card = document.createElement('button');
-        card.className = 'provider-card';
-        card.classList.toggle('provider-card--selected', label === 'ChatGPT 订阅（本地网关）');
-        card.type = 'button';
-        const title = document.createElement('strong');
-        title.textContent = label;
-        const detail = document.createElement('span');
-        detail.textContent =
-          label === 'ChatGPT 订阅（本地网关）'
-            ? '使用 ChatGPT 的 Codex 订阅授权，经本地网关转换协议。'
-            : '由服务商目录自动填入兼容端点、认证方式与推荐模型。';
-        card.append(title, detail);
-        if (label === 'ChatGPT 订阅（本地网关）') {
-          const badge = document.createElement('small');
-          badge.textContent = '本地转换 · 非官方直连';
-          card.append(badge);
-        }
-        grid.append(card);
+      const card = document.createElement('button');
+      card.className = 'access-choice-card';
+      card.classList.toggle('access-choice-card--selected', fixture[2]);
+      card.type = 'button';
+      card.setAttribute('aria-pressed', String(fixture[2]));
+      const copy = document.createElement('span');
+      const title = document.createElement('strong');
+      title.textContent = fixture[0];
+      const detail = document.createElement('small');
+      detail.textContent = fixture[1];
+      copy.append(title, detail);
+      const check = document.createElement('span');
+      check.className = 'access-choice-card__check';
+      check.textContent = '✓';
+      card.append(copy, check);
+      if (fixture[2]) {
+        const current = document.createElement('small');
+        current.className = 'access-choice-card__current';
+        current.textContent = '当前配置';
+        card.append(current);
       }
-      content.append(grid);
-      section.append(toggle, content);
-      groups.append(section);
+      accessGrid.append(card);
     }
+    groups.append(accessGrid);
     const historyList = document.querySelector('#connection-history-list');
     historyList.replaceChildren();
     const historyItem = document.createElement('li');
@@ -640,6 +748,17 @@ app
     );
 
     await window.webContents.executeJavaScript(`
+    document.querySelector('[data-connection-wizard-step="choice"]').hidden = true;
+    document.querySelector('[data-connection-wizard-step="choice"]').classList.remove('connection-wizard-step--active', 'connection-wizard-step--leaving');
+    document.querySelector('[data-connection-wizard-step="configure"]').hidden = false;
+    document.querySelector('[data-connection-wizard-step="configure"]').classList.remove('connection-wizard-step--leaving');
+    document.querySelector('[data-connection-wizard-step="configure"]').classList.add('connection-wizard-step--active');
+    document.querySelector('[data-connection-wizard-step="configure"]').style.animation = 'none';
+    delete document.querySelector('#connection-wizard-viewport').dataset.direction;
+    document.querySelector('#connection-wizard-progress-choice').dataset.state = 'completed';
+    document.querySelector('#connection-wizard-progress-configure').dataset.state = 'active';
+    document.querySelector('#connection-wizard-previous').disabled = false;
+    document.querySelector('#connection-wizard-status').textContent = 'ChatGPT 官方订阅 · 配置与验证';
     document.querySelector('#connection-provider-special').scrollIntoView({ block: 'start' });
   `);
     for (const themeId of themeOrder) {

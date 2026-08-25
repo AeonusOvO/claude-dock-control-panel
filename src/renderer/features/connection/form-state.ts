@@ -9,7 +9,10 @@ export interface ConnectionFormState {
   connectionEnvironmentReady: boolean;
   collapsedProviderGroups: Set<ClaudeProviderGroupId>;
   managedChatGptOperations: ManagedChatGptOperationTracker;
+  managedChatGptProgress: ManagedChatGptSetupProgress | undefined;
+  renderWizard: (() => void) | undefined;
   renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
+  wizardStep: 'choice' | 'configure';
 }
 
 export const createConnectionFormState = (): ConnectionFormState => ({
@@ -19,5 +22,8 @@ export const createConnectionFormState = (): ConnectionFormState => ({
   connectionEnvironmentReady: false,
   collapsedProviderGroups: new Set(),
   managedChatGptOperations: new ManagedChatGptOperationTracker(),
+  managedChatGptProgress: undefined,
+  renderWizard: undefined,
   renderManagedChatGptProgress: undefined,
+  wizardStep: 'choice',
 });

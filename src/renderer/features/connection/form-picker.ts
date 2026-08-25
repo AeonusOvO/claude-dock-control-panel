@@ -1,13 +1,56 @@
 import type { ClaudePreset } from '../../../shared/contracts';
 import {
-  CLAUDE_PROVIDER_GROUPS,
   CLAUDE_PROVIDERS,
-  collapsedClaudeProviderGroups,
+  findClaudeProvider,
   type ClaudeProviderId,
 } from '../../../shared/claude/providers';
+import { enhanceSelect } from '../../platform/components';
 import { claudeCredential, providerGroups } from './form-elements';
 import type { ConnectionFormDeps } from './form-dependencies';
 import type { ConnectionFormState } from './form-state';
+
+type AccessChoice = 'api' | 'chatgpt-subscription' | 'claude-subscription' | 'domestic';
+
+const ACCESS_CHOICES: ReadonlyArray<{
+  detail: string;
+  id: AccessChoice;
+  label: string;
+  providerId: ClaudeProviderId;
+}> = [
+  {
+    detail: '使用 Claude Code 已有的官方登录',
+    id: 'claude-subscription',
+    label: 'Claude 官方订阅',
+    providerId: 'anthropic',
+  },
+  {
+    detail: '授权后自动配置本机 Proxy API',
+    id: 'chatgpt-subscription',
+    label: 'ChatGPT 官方订阅',
+    providerId: 'chatgpt-subscription',
+  },
+  {
+    detail: 'DeepSeek、千问、GLM 等国内服务',
+    id: 'domestic',
+    label: '国产模型',
+    providerId: 'deepseek',
+  },
+  {
+    detail: '填写已有密钥、端点或中转站',
+    id: 'api',
+    label: 'API / 中转站',
+    providerId: 'custom',
+  },
+];
+
+export const accessChoiceForProvider = (
+  providerId: ClaudeProviderId | undefined,
+): AccessChoice | undefined => {
+  if (providerId === 'anthropic') return 'claude-subscription';
+  if (providerId === 'chatgpt-subscription') return 'chatgpt-subscription';
+  if (findClaudeProvider(providerId)?.group === 'domestic') return 'domestic';
+  return providerId ? 'api' : undefined;
+};
 
 export interface ConnectionFormPickerActions {
   applyDefaultProviderGroupExpansion: (providerId?: ClaudeProviderId) => void;
@@ -17,114 +60,109 @@ export interface ConnectionFormPickerActions {
 export const createConnectionFormPickerActions = (
   deps: ConnectionFormDeps,
   formState: ConnectionFormState,
-  clearProviderSelection: (clearDraft?: boolean) => void,
+  _clearProviderSelection: (clearDraft?: boolean) => void,
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void,
 ): ConnectionFormPickerActions => {
-  const { getActiveSessionId, claudeStates, connectionFeature, showToast } = deps;
+  const { getActiveSessionId, claudeStates, connectionFeature } = deps;
 
-  const applyDefaultProviderGroupExpansion = (providerId?: ClaudeProviderId): void => {
+  const applyDefaultProviderGroupExpansion = (): void => {
     formState.collapsedProviderGroups.clear();
-    for (const groupId of collapsedClaudeProviderGroups(providerId)) {
-      formState.collapsedProviderGroups.add(groupId);
-    }
   };
 
-  function renderProviderPicker(): void {
+  const selectProvider = (providerId: ClaudeProviderId): void => {
+    applyPresetUi(providerId, false);
+    claudeCredential.value = '';
+    connectionFeature.clearTestResult();
+    formState.renderWizard?.();
+  };
+
+  const renderProviderPicker = (): void => {
     providerGroups.replaceChildren();
     const configuredPreset = claudeStates.get(getActiveSessionId())?.config.preset;
-    for (const group of CLAUDE_PROVIDER_GROUPS) {
-      const providers = CLAUDE_PROVIDERS.filter((provider) => provider.group === group.id);
-      const collapsed = formState.collapsedProviderGroups.has(group.id);
-      const section = document.createElement('section');
-      section.className = 'provider-group';
-      section.dataset.collapsed = String(collapsed);
+    const selectedAccess = accessChoiceForProvider(formState.selectedProviderId);
+    const grid = document.createElement('div');
+    grid.className = 'access-choice-grid';
 
-      const toggle = document.createElement('button');
-      toggle.className = 'provider-group__toggle';
-      toggle.type = 'button';
-      toggle.setAttribute('aria-controls', `provider-group-${group.id}`);
-      toggle.setAttribute('aria-expanded', String(!collapsed));
-      const heading = document.createElement('span');
-      heading.className = 'provider-group__title';
-      heading.textContent = group.label;
-      const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      arrow.setAttribute('class', 'provider-group__arrow');
-      arrow.setAttribute('viewBox', '0 0 24 24');
-      arrow.setAttribute('aria-hidden', 'true');
-      const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      arrowPath.setAttribute('d', 'm9 5 7 7-7 7');
-      arrow.append(arrowPath);
-      toggle.append(heading, arrow);
+    for (const choice of ACCESS_CHOICES) {
+      const card = document.createElement('button');
+      card.className = 'access-choice-card';
+      card.type = 'button';
+      card.dataset.accessChoice = choice.id;
+      card.dataset.providerId =
+        choice.id === 'domestic' &&
+        findClaudeProvider(formState.selectedProviderId)?.group === 'domestic'
+          ? (formState.selectedProviderId ?? choice.providerId)
+          : choice.providerId;
+      const selected = choice.id === selectedAccess;
+      card.classList.toggle('access-choice-card--selected', selected);
+      card.setAttribute('aria-pressed', String(selected));
+      card.disabled =
+        connectionFeature.isTestInProgress() || connectionFeature.isRemedyInProgress();
 
-      const content = document.createElement('div');
-      content.className = 'provider-group__content';
-      content.id = `provider-group-${group.id}`;
-      content.inert = collapsed;
-      content.setAttribute('aria-hidden', String(collapsed));
-      const grid = document.createElement('div');
-      grid.className = 'provider-card-grid';
-      for (const provider of providers) {
-        const card = document.createElement('button');
-        card.className = 'provider-card';
-        card.type = 'button';
-        card.dataset.providerId = provider.id;
-        card.classList.toggle(
-          'provider-card--selected',
-          provider.id === formState.selectedProviderId,
-        );
-        card.setAttribute('aria-pressed', String(provider.id === formState.selectedProviderId));
-        card.disabled =
-          connectionFeature.isTestInProgress() || connectionFeature.isRemedyInProgress();
+      const copy = document.createElement('span');
+      const title = document.createElement('strong');
+      title.textContent = choice.label;
+      const detail = document.createElement('small');
+      detail.textContent = choice.detail;
+      copy.append(title, detail);
+      const check = document.createElement('span');
+      check.className = 'access-choice-card__check';
+      check.setAttribute('aria-hidden', 'true');
+      check.textContent = '✓';
+      card.append(copy, check);
 
-        const title = document.createElement('strong');
-        title.textContent = provider.label;
-        const detail = document.createElement('span');
-        detail.textContent = provider.description;
-        card.append(title, detail);
-        if (provider.group === 'subscription') {
-          const badge = document.createElement('small');
-          badge.textContent = '本地转换 · 非官方直连';
-          card.append(badge);
-        }
-        if (provider.id === configuredPreset) {
-          const badge = document.createElement('small');
-          badge.textContent = '当前配置';
-          card.append(badge);
-        }
-        card.addEventListener('click', () => {
-          if (!formState.connectionEnvironmentReady && provider.id !== 'chatgpt-subscription') {
-            showToast('请先安装或更新 Claude Code。', 'error');
-            return;
-          }
-          if (formState.selectedProviderId === provider.id) {
-            clearProviderSelection();
-            showToast('已取消服务商选择');
-            return;
-          }
-          applyPresetUi(provider.id, false);
-          claudeCredential.value = '';
-          connectionFeature.clearTestResult();
-          renderProviderPicker();
-        });
-        grid.append(card);
+      if (configuredPreset && accessChoiceForProvider(configuredPreset) === choice.id) {
+        const current = document.createElement('small');
+        current.className = 'access-choice-card__current';
+        current.textContent = '当前配置';
+        card.append(current);
       }
-      content.append(grid);
-      toggle.addEventListener('click', () => {
-        const nextCollapsed = !formState.collapsedProviderGroups.has(group.id);
-        if (nextCollapsed) {
-          formState.collapsedProviderGroups.add(group.id);
-        } else {
-          formState.collapsedProviderGroups.delete(group.id);
-        }
-        section.dataset.collapsed = String(nextCollapsed);
-        toggle.setAttribute('aria-expanded', String(!nextCollapsed));
-        content.inert = nextCollapsed;
-        content.setAttribute('aria-hidden', String(nextCollapsed));
+      card.addEventListener('click', () => {
+        const providerId: ClaudeProviderId =
+          choice.id === 'domestic' &&
+          findClaudeProvider(formState.selectedProviderId)?.group === 'domestic'
+            ? (formState.selectedProviderId ?? 'deepseek')
+            : choice.providerId;
+        selectProvider(providerId);
       });
-      section.append(toggle, content);
-      providerGroups.append(section);
+      grid.append(card);
     }
-  }
+    providerGroups.append(grid);
+
+    if (selectedAccess === 'domestic') {
+      const picker = document.createElement('div');
+      picker.className = 'domestic-model-picker';
+      const label = document.createElement('label');
+      label.htmlFor = 'connection-domestic-model';
+      label.textContent = '选择国产模型';
+      const select = document.createElement('select');
+      select.id = 'connection-domestic-model';
+      const domesticProviders = CLAUDE_PROVIDERS.filter(
+        (provider) => provider.group === 'domestic',
+      );
+      select.replaceChildren(
+        ...domesticProviders.map((provider) => {
+          const option = document.createElement('option');
+          option.value = provider.id;
+          option.textContent = provider.label;
+          return option;
+        }),
+      );
+      const selectedDomestic: ClaudeProviderId =
+        findClaudeProvider(formState.selectedProviderId)?.group === 'domestic'
+          ? (formState.selectedProviderId ?? 'deepseek')
+          : 'deepseek';
+      select.value = selectedDomestic;
+      const hint = document.createElement('small');
+      hint.textContent = `当前已选择 ${findClaudeProvider(selectedDomestic)?.label ?? 'DeepSeek'}`;
+      select.addEventListener('change', () => {
+        selectProvider(select.value as ClaudeProviderId);
+      });
+      picker.append(label, select, hint);
+      providerGroups.append(picker);
+      enhanceSelect(select);
+    }
+  };
 
   return {
     applyDefaultProviderGroupExpansion,
