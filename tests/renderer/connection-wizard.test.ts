@@ -1,7 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
-import { withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
+import { withRenderer, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
+import type { ManagedChatGptGatewayState } from '../../src/shared/contracts';
+
+const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
+  authenticated: true,
+  availableModels: ['gpt-5.6-sol'],
+  busy: false,
+  checkedAt: 1,
+  endpoint: 'http://127.0.0.1:8317',
+  installed: true,
+  managementAvailable: true,
+  message: 'CLIProxyAPI 已在本机安全运行。',
+  phase: 'ready',
+  running: true,
+  usageStatisticsEnabled: false,
+});
 
 describe('connection access wizard', () => {
+  it('explains that global ChatGPT preparation still needs an opened conversation', async () => {
+    await withRenderer(
+      { getManagedChatGptGatewayState: async () => readyManagedChatGptState() },
+      async (harness) => {
+        harness.click('[data-rail-tab="connection"]');
+        harness.click('[data-provider-id="chatgpt-subscription"]');
+        harness.click('#connection-wizard-next');
+        await harness.flush();
+
+        expect(harness.query('#connection-wizard-status').textContent).toBe(
+          '安装与授权完成；新建或打开对话后即可验证接入',
+        );
+        expect(harness.query('#current-connection-name').textContent).toBe('当前没有打开对话');
+      },
+    );
+  });
+
   it('keeps model selection explicit and moves forward and backward', async () => {
     await withTerminalRenderer({}, async (harness) => {
       harness.click('[data-rail-tab="connection"]');

@@ -18,6 +18,7 @@ export interface ClaudeRuntimeLaunchBaseline {
   readonly active: boolean;
   readonly cwdKey: string;
   readonly exists: boolean;
+  readonly identity?: object;
   readonly launchGeneration?: number;
   readonly ptyGeneration?: PtyGeneration;
 }
@@ -42,6 +43,7 @@ export interface PreparedClaudeLaunchRecord {
 /** Owns exact prepared-launch identity and the atomic prepared-to-live PTY handoff. */
 export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
   private nextLaunchGeneration = 0;
+  private readonly launchRuntimeIdentities = new WeakMap<RuntimeSession, object>();
   private readonly preparedLaunchBySession = new Map<string, ClaudePreparedLaunchToken>();
   private readonly preparedLaunches = new Map<
     ClaudePreparedLaunchToken,
@@ -50,11 +52,22 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
   protected readonly runtimeLaunchToken = randomBytes(8).toString('hex');
 
   public captureRuntimeLaunchBaseline(sessionId: string, cwd: string): ClaudeRuntimeLaunchBaseline {
-    const runtime = this.sessions.get(sessionId);
+    // Claim the canonical inactive runtime synchronously. Renderer state hydration may read this
+    // session while provider preflight is awaiting network work; both paths must observe the same
+    // owner instead of treating that harmless display read as a newly-created competing runtime.
+    const runtime = this.sessions.get(sessionId) ?? this.ensureSession(sessionId, cwd);
+    return this.runtimeLaunchBaseline(runtime, cwd);
+  }
+
+  private runtimeLaunchBaseline(
+    runtime: RuntimeSession | undefined,
+    cwd: string,
+  ): ClaudeRuntimeLaunchBaseline {
     return Object.freeze({
       active: runtime?.active ?? false,
       cwdKey: projectKey(runtime?.cwd ?? cwd),
       exists: runtime !== undefined,
+      ...(runtime === undefined ? {} : { identity: this.launchRuntimeIdentity(runtime) }),
       ...(runtime?.launchGeneration === undefined
         ? {}
         : { launchGeneration: runtime.launchGeneration }),
@@ -67,9 +80,12 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
     cwd: string,
     baseline: ClaudeRuntimeLaunchBaseline,
   ): void {
-    const current = this.captureRuntimeLaunchBaseline(sessionId, cwd);
+    // Assertions are read-only. A real close must remain absent rather than being recreated by the
+    // stale-check itself, and an identical-looking replacement must still have a different identity.
+    const current = this.runtimeLaunchBaseline(this.sessions.get(sessionId), cwd);
     if (
       current.exists !== baseline.exists ||
+      current.identity !== baseline.identity ||
       current.active !== baseline.active ||
       current.cwdKey !== baseline.cwdKey ||
       current.launchGeneration !== baseline.launchGeneration ||
@@ -77,6 +93,14 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
     ) {
       throw new Error('Claude 运行时在等待确认期间已更新，本次启动已失效。');
     }
+  }
+
+  private launchRuntimeIdentity(runtime: RuntimeSession): object {
+    const existing = this.launchRuntimeIdentities.get(runtime);
+    if (existing) return existing;
+    const created = Object.freeze({});
+    this.launchRuntimeIdentities.set(runtime, created);
+    return created;
   }
 
   public bindPty(sessionId: string, ptyGeneration: PtyGeneration, launchToken?: object): void {

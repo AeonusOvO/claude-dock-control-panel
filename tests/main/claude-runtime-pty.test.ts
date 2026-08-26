@@ -213,6 +213,43 @@ const CONVERSATION_A = '8f9aa605-adb6-4e2b-a25a-607e14bad666';
 const CONVERSATION_B = '53b9f42a-a26a-4ce6-a6d3-82d783c8bdde';
 
 describe('Claude runtime PTY ownership', () => {
+  it('keeps a new launch baseline stable across concurrent display reads', async () => {
+    const { internals, runtime } = createRuntime();
+    const sessionId = 'new-session';
+    const cwd = 'D:\\New Project';
+    try {
+      expect(internals.sessions.has(sessionId)).toBe(false);
+
+      const baseline = runtime.captureRuntimeLaunchBaseline(sessionId, cwd);
+      expect(baseline).toMatchObject({ active: false, cwdKey: cwd.toLowerCase(), exists: true });
+      expect(internals.sessions.get(sessionId)).toMatchObject({ active: false, cwd, sessionId });
+
+      await runtime.getState(sessionId, cwd);
+      expect(() =>
+        runtime.assertRuntimeLaunchBaselineCurrent(sessionId, cwd, baseline),
+      ).not.toThrow();
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('rejects an identical-looking runtime recreated after the launch owner closes', async () => {
+    const { runtime } = createRuntime();
+    const sessionId = 'recreated-session';
+    const cwd = 'D:\\Recreated Project';
+    try {
+      const baseline = runtime.captureRuntimeLaunchBaseline(sessionId, cwd);
+      runtime.closeSession(sessionId);
+      await runtime.getState(sessionId, cwd);
+
+      expect(() => runtime.assertRuntimeLaunchBaselineCurrent(sessionId, cwd, baseline)).toThrow(
+        'Claude 运行时在等待确认期间已更新',
+      );
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
   it('finds every exact conversation owner before renderer metrics are available', () => {
     const { internals, runtime, session } = createRuntime();
     try {

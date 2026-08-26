@@ -3,7 +3,11 @@ import type {
   ClaudeConnectionHistoryEntry,
   ManagedChatGptGatewayState,
 } from '../../src/shared/contracts';
-import { settle, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
+import {
+  settle,
+  withRenderer,
+  withTerminalRenderer,
+} from '../helpers/renderer-interaction-fixture';
 import { claudeProjectState } from '../helpers/renderer-terminal-fixture';
 
 const managedChatGptState = (
@@ -24,6 +28,22 @@ const managedChatGptState = (
 });
 
 describe('current connection view', () => {
+  it('distinguishes a prepared account from an effective connection when no conversation is open', async () => {
+    await withRenderer(
+      {
+        getManagedChatGptGatewayState: async () =>
+          managedChatGptState({ accountEmail: 'member@example.test' }),
+      },
+      async (harness) => {
+        await settle(harness);
+        expect(harness.query('#current-connection-name').textContent).toBe('当前没有打开对话');
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          '实际生效的平台、账号和模型',
+        );
+      },
+    );
+  });
+
   it('uses the safe Claude CLI account projection for the official subscription', async () => {
     await withTerminalRenderer(
       {

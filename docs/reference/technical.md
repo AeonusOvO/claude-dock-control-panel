@@ -545,6 +545,10 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `beginLaunch()` supersede、session/global invalidation 与 restart 异常都必须清除未消费 expectation，
   禁止跨启动泄漏。restart 返回后才记录 owned generation、检查 intent、绑定 PTY 和写命令，因此后续
   失败仍只停止本次替代 generation 并中止精确 prepared token。
+- Claude 启动在进入任何异步预检前同步建立或复用 canonical inactive runtime，并把不含凭据的对象身份
+  纳入 launch baseline。renderer 为展示状态并发调用 `getState()` 只能复用同一 owner，不会再把正常读取
+  误判成外部更新；真正关闭后即使同一 session ID 被重建，identity 变化仍会使旧启动失效。baseline 断言
+  本身只读，不能为了比较而复活已关闭的 runtime。
 - 普通 UI 不再调用项目级 `runtime:set`。`runtime:get-next` / `runtime:set-next` 读写一个原子持久化的全局
   “下一次新建”偏好；新 session 在同步分配时捕获它，因此一次已被接受的点击不会被稍后的选择改换引擎。
   `runtime:get` 按 session 回读实际 runtime。旧 `ProjectRuntimeSwitchCoordinator` 与 `runtime:set` 只保留为

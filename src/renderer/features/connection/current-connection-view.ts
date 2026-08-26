@@ -33,8 +33,9 @@ const matchingHistoryName = (
 
 const renderEmpty = (): void => {
   currentConnection.dataset.kind = 'empty';
-  currentConnectionName.textContent = '尚未选择接入';
-  currentConnectionMetadata.textContent = '打开项目后，这里会显示当前生效的账号、模型或中转站。';
+  currentConnectionName.textContent = '当前没有打开对话';
+  currentConnectionMetadata.textContent =
+    '新建或打开对话后，这里会显示实际生效的平台、账号和模型。';
 };
 
 export interface CurrentConnectionViewActions {

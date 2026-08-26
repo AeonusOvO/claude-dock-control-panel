@@ -158,6 +158,11 @@ export const createConnectionFormWizardActions = (
       !formState.connectionEnvironmentReady
     ) {
       connectionWizardStatus.textContent = '请先完成 Claude Code 环境准备';
+    } else if (
+      formState.selectedProviderId === 'chatgpt-subscription' &&
+      !deps.getActiveSessionId()
+    ) {
+      connectionWizardStatus.textContent = '安装与授权完成；新建或打开对话后即可验证接入';
     } else {
       connectionWizardStatus.textContent = `正在配置 ${findClaudeProvider(formState.selectedProviderId)?.label ?? '所选模型'}`;
     }
