@@ -26,6 +26,8 @@ import type {
   ConversationResumePreferences,
   FooterResourcePreference,
   ManagedChatGptContextWindowMode,
+  StartupModelConnectionCancelResult,
+  StartupModelConnectionState,
 } from './app';
 import type {
   ArtifactCreateResult,
@@ -146,7 +148,9 @@ import type {
 export type Unsubscribe = () => void;
 
 export interface AppApi {
+  cancelStartupModelConnection: () => Promise<StartupModelConnectionCancelResult>;
   getAppSettings: () => Promise<AppSettingsView>;
+  getStartupModelConnection: () => Promise<StartupModelConnectionState>;
   getDiagnostics: (query?: DiagnosticsQuery) => Promise<DiagnosticsView>;
   setLaunchAtLogin: (enabled: boolean) => Promise<AppSettingsView>;
   setFooterResourcePreference: (preference: FooterResourcePreference) => Promise<AppSettingsView>;
@@ -175,6 +179,9 @@ export interface AppApi {
   minimizeToTray: () => void;
   onOpenDownloadCenterRequested: (listener: () => void) => Unsubscribe;
   onAppWindowRestored: (listener: () => void) => Unsubscribe;
+  onStartupModelConnectionChanged: (
+    listener: (state: StartupModelConnectionState) => void,
+  ) => Unsubscribe;
   openExternal: (url: string) => Promise<boolean>;
   /** Repaints the native frame and remembers the choice for the next cold start. */
   setAppTheme: (themeId: TerminalThemeId) => Promise<void>;

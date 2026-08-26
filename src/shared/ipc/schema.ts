@@ -580,7 +580,9 @@ const request = <Method extends RequestMethod>(
 export const IPC_REQUESTS = {
   [CHANNELS.APP_CLIPBOARD_READ]: request('readClipboardText', []),
   [CHANNELS.APP_CLIPBOARD_WRITE]: request('writeClipboardText', [z.string()]),
+  [CHANNELS.APP_CANCEL_STARTUP_MODEL_CONNECTION]: request('cancelStartupModelConnection', []),
   [CHANNELS.APP_GET_SETTINGS]: request('getAppSettings', []),
+  [CHANNELS.APP_GET_STARTUP_MODEL_CONNECTION]: request('getStartupModelConnection', []),
   [CHANNELS.APP_GET_DIAGNOSTICS]: request('getDiagnostics', [z.unknown().optional()]),
   [CHANNELS.APP_OPEN_EXTERNAL]: request('openExternal', [externalUrlInputSchema]),
   [CHANNELS.APP_SET_ADVANCED_SETTINGS]: request('setAdvancedSettings', [z.unknown()]),
@@ -976,6 +978,7 @@ export const IPC_EVENT_METHODS = {
   [CHANNELS.APP_OPEN_DOWNLOAD_CENTER]: 'onOpenDownloadCenterRequested',
   [CHANNELS.APP_QUIT_REQUESTED]: 'onAppQuitRequested',
   [CHANNELS.APP_QUIT_REQUEST_INVALIDATED]: 'onAppQuitRequestInvalidated',
+  [CHANNELS.APP_STARTUP_MODEL_CONNECTION_CHANGED]: 'onStartupModelConnectionChanged',
   [CHANNELS.APP_WINDOW_RESTORED]: 'onAppWindowRestored',
   [CHANNELS.APPLICATION_PROXY_CHANGED]: 'onApplicationProxyChanged',
   [CHANNELS.ARTIFACT_NETWORK_LOG]: 'onArtifactNetworkLog',

@@ -34,6 +34,7 @@ import { createConnectionFormSaveActions } from './form-save';
 import { createConnectionFormState } from './form-state';
 import { createConnectionFormSyncActions } from './form-sync';
 import { createConnectionFormWizardActions } from './form-wizard';
+import { createStartupModelConnectionOverlay } from './startup-model-connection';
 
 export type { ConnectionFormDeps } from './form-dependencies';
 
@@ -181,6 +182,11 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     () => formState.nextConnection,
   );
   const { saveClaudeConfig } = saveActions;
+  const startupModelConnectionOverlay = createStartupModelConnectionOverlay({
+    refreshConnection: loadNextClaudeConnection,
+    showToast: deps.showToast,
+  });
+  void startupModelConnectionOverlay.initialize();
 
   const advancedSnapshot = createAdvancedSnapshotApi({
     applyPresetUi,
@@ -279,6 +285,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     },
     unsubscribeManagedChatGptSetupProgress: () => {
       selectedProviderListeners.clear();
+      startupModelConnectionOverlay.dispose();
       formState.renderWizard = undefined;
       wizardActions.dispose();
       unsubscribeManagedChatGptSetupProgress();

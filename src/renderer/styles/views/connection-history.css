@@ -21,6 +21,99 @@
   gap: var(--s-1);
 }
 
+.rail-page[data-rail-page='connection'] {
+  position: relative;
+}
+
+.rail-page[data-rail-page='connection'][data-startup-connection='active']
+  > :not(.startup-model-connection) {
+  filter: blur(3px);
+  opacity: 0.34;
+  pointer-events: none;
+  transform: scale(0.995);
+  transition:
+    filter var(--dur-3) var(--ease-decel),
+    opacity var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-decel);
+  user-select: none;
+}
+
+.startup-model-connection {
+  align-content: center;
+  align-items: center;
+  animation: startup-model-connection-enter var(--dur-4) var(--ease-spring) both;
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  bottom: 0;
+  display: grid;
+  gap: var(--s-3);
+  justify-items: center;
+  left: var(--activity-rail-w);
+  padding: clamp(var(--s-5), 6vw, var(--s-8));
+  position: fixed;
+  right: 0;
+  text-align: center;
+  top: var(--titlebar-h);
+  z-index: 18;
+}
+
+.startup-model-connection[hidden] {
+  display: none;
+}
+
+.startup-model-connection__indicator {
+  align-items: center;
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-line);
+  border-radius: 50%;
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent-solid) 7%, transparent);
+  color: var(--accent-text);
+  display: flex;
+  height: 68px;
+  justify-content: center;
+  width: 68px;
+}
+
+.startup-model-connection__indicator svg {
+  animation: connection-history-recovery-orbit var(--dur-status-pulse) var(--ease-spring) infinite;
+  fill: none;
+  height: 34px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 34px;
+}
+
+.startup-model-connection > strong {
+  color: var(--text-hi);
+  font-size: var(--type-title-size);
+  font-weight: var(--fw-strong);
+  letter-spacing: var(--type-title-ls);
+  line-height: var(--type-title-lh);
+}
+
+.startup-model-connection > p,
+.startup-model-connection > small {
+  color: var(--text-dim);
+  line-height: var(--lh-prose);
+  margin: 0;
+  max-width: 620px;
+}
+
+.startup-model-connection > p {
+  font-size: var(--type-body-size);
+}
+
+.startup-model-connection > small {
+  font-size: var(--type-caption-size);
+}
+
+.startup-model-connection > .button {
+  border-radius: var(--r-pill);
+  margin-top: var(--s-2);
+  min-width: 128px;
+}
+
 .current-connection {
   align-items: center;
   background: color-mix(in srgb, var(--surface-3) 82%, var(--accent-tint));

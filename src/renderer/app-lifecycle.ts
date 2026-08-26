@@ -174,6 +174,40 @@ export const installGlobalInteractions = (runtime: ApplicationRuntime): void => 
   });
 };
 
+const waitForStartupModelConnection = async (): Promise<void> => {
+  let initial;
+  try {
+    initial = await window.controlPanel.getStartupModelConnection();
+  } catch {
+    return;
+  }
+  if (!initial.active) return;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    let unsubscribe = (): void => undefined;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      window.clearInterval(pollTimer);
+      unsubscribe();
+      resolve();
+    };
+    const reconcile = (): void => {
+      void window.controlPanel
+        .getStartupModelConnection()
+        .then((state) => {
+          if (!state.active) finish();
+        })
+        .catch(() => undefined);
+    };
+    unsubscribe = window.controlPanel.onStartupModelConnectionChanged((state) => {
+      if (!state.active) finish();
+    });
+    const pollTimer = window.setInterval(reconcile, 1_000);
+    reconcile();
+  });
+};
+
 /**
  * Installs window-level lifecycle handlers: focus/blur/visibility reconciliation, drag-and-drop
  * project import, and window resize cleanups.
@@ -331,6 +365,9 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
   projectsFeature.renderWorkspace(await window.controlPanel.getWorkspace());
   await onboardingFeature.initialize();
   if (initialSettings) {
+    if (initialSettings.conversationResume.autoLoadLastConversationModelOnStartup) {
+      await waitForStartupModelConnection();
+    }
     await projectsFeature.restoreLastConversationOnStartup(initialSettings.conversationResume);
   }
   void runtimeActivityShell.loadActiveRuntimeActivity();

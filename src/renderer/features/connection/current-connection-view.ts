@@ -56,6 +56,7 @@ export const createCurrentConnectionViewActions = (
   const applySummary = (
     nextConnection: ClaudeNextConversationConnectionState,
     accountIdentity?: string,
+    accountStatus?: 'failed' | 'loading',
   ): void => {
     if (!nextConnection.config) {
       renderEmpty();
@@ -63,6 +64,7 @@ export const createCurrentConnectionViewActions = (
     }
     const summary = createCurrentConnectionSummary(nextConnection.config, {
       accountIdentity,
+      accountStatus,
       connectionName: matchingHistoryName(historyState.allEntries, nextConnection.config),
       officialAuth: nextConnection.officialAuth,
     });
@@ -79,7 +81,11 @@ export const createCurrentConnectionViewActions = (
       return;
     }
 
-    applySummary(nextConnection);
+    applySummary(
+      nextConnection,
+      undefined,
+      nextConnection.config.preset === 'chatgpt-subscription' ? 'loading' : undefined,
+    );
     if (nextConnection.config.preset !== 'chatgpt-subscription') return;
 
     void dependencies
@@ -91,7 +97,10 @@ export const createCurrentConnectionViewActions = (
         applySummary(activeState, managedState.accountEmail);
       })
       .catch(() => {
-        // The already-rendered "账号信息暂不可用" state is the truthful fallback.
+        if (requestGeneration !== generation) return;
+        const activeState = dependencies.nextClaudeConnection() ?? {};
+        if (activeState !== nextConnection) return;
+        applySummary(activeState, undefined, 'failed');
       });
   };
 

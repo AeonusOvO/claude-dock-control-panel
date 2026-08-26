@@ -40,6 +40,12 @@ interface SettingsViewContext {
   state: SettingsState;
 }
 
+const startupModelConnectCancelAfterMinutes = (settings: AppSettingsView): number =>
+  settings.conversationResume.startupModelConnectCancelAfterMinutes ?? 2;
+
+const startupModelConnectForceStopAfterMinutes = (settings: AppSettingsView): number =>
+  settings.conversationResume.startupModelConnectForceStopAfterMinutes ?? 5;
+
 const selectSettingsTab = (context: SettingsViewContext, tab: SettingsTab): void => {
   const { dependencies, state } = context;
   state.selectedTab = tab;
@@ -109,6 +115,10 @@ const pendingAppSettings = (
         elements.conversationModelMismatch.value === 'use-conversation'
           ? elements.conversationModelMismatch.value
           : 'ask',
+      startupModelConnectCancelAfterMinutes: Number(elements.startupModelConnectCancelAfter.value),
+      startupModelConnectForceStopAfterMinutes: Number(
+        elements.startupModelConnectForceStopAfter.value,
+      ),
     },
     launchAtLogin: elements.launchAtLogin.checked,
     theme: isTerminalThemeId(themeValue) ? themeValue : DEFAULT_TERMINAL_THEME,
@@ -138,6 +148,10 @@ const updateSettingsUnsavedIndicator = (context: SettingsViewContext): number =>
       state.saved.conversationResume.autoLoadLastConversationOnStartup,
     pending.conversationResume.autoLoadLastConversationModelOnStartup !==
       state.saved.conversationResume.autoLoadLastConversationModelOnStartup,
+    pending.conversationResume.startupModelConnectCancelAfterMinutes !==
+      startupModelConnectCancelAfterMinutes(state.saved),
+    pending.conversationResume.startupModelConnectForceStopAfterMinutes !==
+      startupModelConnectForceStopAfterMinutes(state.saved),
     pending.theme !== state.saved.theme,
     pending.advanced.chatIdleTimeoutMinutes !== state.saved.advanced.chatIdleTimeoutMinutes,
     pending.advanced.webResearchIsolation !== state.saved.advanced.webResearchIsolation,
@@ -166,6 +180,12 @@ const applyAppSettingsToControls = (
     settings.conversationResume.autoLoadLastConversationOnStartup;
   elements.autoLoadLastConversationModel.checked =
     settings.conversationResume.autoLoadLastConversationModelOnStartup;
+  elements.startupModelConnectCancelAfter.value = String(
+    startupModelConnectCancelAfterMinutes(settings),
+  );
+  elements.startupModelConnectForceStopAfter.value = String(
+    startupModelConnectForceStopAfterMinutes(settings),
+  );
   setEnhancedSelectValue(
     elements.chatIdleTimeout,
     String(settings.advanced.chatIdleTimeoutMinutes),

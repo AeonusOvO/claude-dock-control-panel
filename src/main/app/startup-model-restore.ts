@@ -28,10 +28,13 @@ export interface StartupModelRestoreDependencies {
   projectExists: (projectPath: string) => boolean;
   projectRuntime: (projectPath: string) => 'claude' | 'codex';
   restoreWorkspace: boolean;
+  assertActive?: () => void;
+  progress?: (detail: string) => void;
+  signal?: AbortSignal;
   warn: (message: string, error?: unknown) => void;
 }
 
-export type StartupModelRestoreOutcome = 'failed' | 'restored' | 'skipped';
+export type StartupModelRestoreOutcome = 'cancelled' | 'failed' | 'restored' | 'skipped';
 
 /** Restores only the model connection when the user intentionally leaves conversation loading off. */
 export const restoreLastConversationModelOnly = async (
@@ -59,18 +62,29 @@ export const restoreLastConversationModelOnly = async (
   }
   let temporarySessionId: string | undefined;
   try {
+    dependencies.assertActive?.();
+    dependencies.progress?.('正在读取上一次会话保存的平台、账号与模型。');
     const resolution = await dependencies.inspectConversationModel(projectPath, conversation);
+    dependencies.assertActive?.();
     if (!resolution.restorable) {
       dependencies.warn('上次对话的模型接入信息不完整，保留当前接入。');
       return 'failed';
     }
+    dependencies.progress?.('正在创建隔离的接入事务；当前配置尚未发生变化。');
     temporarySessionId = dependencies.openTemporarySession(projectPath);
     if (!temporarySessionId) {
       throw new Error('无法创建自动模型恢复事务。');
     }
+    dependencies.assertActive?.();
+    dependencies.progress?.('正在启动并真实验证最近一次选择的平台和模型。');
     await dependencies.applyConversationModel(projectPath, conversation, temporarySessionId);
+    dependencies.assertActive?.();
+    dependencies.progress?.('验证已通过，正在提交下个对话使用的接入配置。');
     return 'restored';
   } catch (error) {
+    if (dependencies.signal?.aborted) {
+      return 'cancelled';
+    }
     dependencies.warn('自动加载上次对话模型失败，保留当前接入。', error);
     return 'failed';
   } finally {

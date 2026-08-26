@@ -158,4 +158,22 @@ describe('startup model-only restore', () => {
       expect.objectContaining({ message: 'fixture connection failure' }),
     );
   });
+
+  it('treats an aborted transaction as cancellation, closes its owner, and does not report failure', async () => {
+    const controller = new AbortController();
+    const input = dependencies({
+      applyConversationModel: vi.fn(async () => {
+        controller.abort(new Error('fixture cancellation'));
+        throw controller.signal.reason;
+      }),
+      assertActive: () => {
+        if (controller.signal.aborted) throw controller.signal.reason;
+      },
+      signal: controller.signal,
+    });
+
+    await expect(restoreLastConversationModelOnly(input)).resolves.toBe('cancelled');
+    expect(input.closeTemporarySession).toHaveBeenCalledExactlyOnceWith('temporary-session');
+    expect(input.warn).not.toHaveBeenCalled();
+  });
 });

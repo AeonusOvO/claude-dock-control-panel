@@ -19,11 +19,17 @@ import {
   type TerminalThemeId,
 } from '../../shared/ui/terminal-themes';
 import type { ArtifactService } from '../artifact/service';
+import type { StartupModelConnectionCoordinator } from '../app/startup-model-connection-coordinator';
 import { isValidClaudeCustomContextWindow } from '../claude/configuration';
 import type { Registry } from '../infra/registry';
-import { CLAUDE_RUNTIME, MAIN_DIAGNOSTICS } from '../infra/service-tokens';
+import { CLAUDE_RUNTIME, MAIN_DIAGNOSTICS, MAIN_WINDOW } from '../infra/service-tokens';
 import type { AdvancedSettingsStore } from '../stores/advanced-settings';
-import type { AppPreferencesStore } from '../stores/app-preferences';
+import {
+  normalizeStartupModelConnectionMinutes,
+  STARTUP_MODEL_CONNECT_CANCEL_MINUTES,
+  STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES,
+  type AppPreferencesStore,
+} from '../stores/app-preferences';
 import type { WorkspaceStore } from '../stores/workspace';
 import type { TerminalWorkspace } from '../terminal/workspace';
 import { validateExternalUrl, validateMarkdownExternalUrl, windowsBuildNumber } from './validation';
@@ -104,6 +110,7 @@ export interface AppIpcDependencies {
   guards: Pick<MainGuards, 'validateSender'>;
   hideMainWindowToTray: () => void;
   services: Registry;
+  startupModelConnectionCoordinator: StartupModelConnectionCoordinator;
   state: MainState;
   workspace: TerminalWorkspace;
   workspaceStore: WorkspaceStore;
@@ -178,23 +185,64 @@ const registerConversationResumePreferencesIpc = (input: {
       throw new Error('对话恢复设置无效。');
     }
     const preferences = value as Record<string, unknown>;
+    const cancelAfterMinutes = preferences.startupModelConnectCancelAfterMinutes;
+    const forceStopAfterMinutes = preferences.startupModelConnectForceStopAfterMinutes;
     if (
       (preferences.modelMismatchBehavior !== 'ask' &&
         preferences.modelMismatchBehavior !== 'use-conversation' &&
         preferences.modelMismatchBehavior !== 'use-current') ||
       typeof preferences.autoLoadLastConversationOnStartup !== 'boolean' ||
-      typeof preferences.autoLoadLastConversationModelOnStartup !== 'boolean'
+      typeof preferences.autoLoadLastConversationModelOnStartup !== 'boolean' ||
+      typeof cancelAfterMinutes !== 'number' ||
+      !Number.isSafeInteger(cancelAfterMinutes) ||
+      cancelAfterMinutes < STARTUP_MODEL_CONNECT_CANCEL_MINUTES.min ||
+      cancelAfterMinutes > STARTUP_MODEL_CONNECT_CANCEL_MINUTES.max ||
+      typeof forceStopAfterMinutes !== 'number' ||
+      !Number.isSafeInteger(forceStopAfterMinutes) ||
+      forceStopAfterMinutes < STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES.min ||
+      forceStopAfterMinutes > STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES.max ||
+      forceStopAfterMinutes <= cancelAfterMinutes
     ) {
       throw new Error('对话恢复设置无效。');
     }
+    const timing = normalizeStartupModelConnectionMinutes({
+      startupModelConnectCancelAfterMinutes: cancelAfterMinutes,
+      startupModelConnectForceStopAfterMinutes: forceStopAfterMinutes,
+    });
     input.appPreferencesStore.set({
       conversationResume: {
         autoLoadLastConversationModelOnStartup: preferences.autoLoadLastConversationModelOnStartup,
         autoLoadLastConversationOnStartup: preferences.autoLoadLastConversationOnStartup,
         modelMismatchBehavior: preferences.modelMismatchBehavior,
+        startupModelConnectCancelAfterMinutes: timing.cancelAfterMinutes,
+        startupModelConnectForceStopAfterMinutes: timing.forceStopAfterMinutes,
       },
     });
     return input.appSettingsView();
+  });
+};
+
+const registerStartupModelConnectionIpc = ({
+  services,
+  startupModelConnectionCoordinator,
+  validateSender,
+}: {
+  services: Registry;
+  startupModelConnectionCoordinator: StartupModelConnectionCoordinator;
+  validateSender: MainGuards['validateSender'];
+}): void => {
+  ipcMain.handle(CHANNELS.APP_GET_STARTUP_MODEL_CONNECTION, (event) => {
+    validateSender(event);
+    return startupModelConnectionCoordinator.getState();
+  });
+  ipcMain.handle(CHANNELS.APP_CANCEL_STARTUP_MODEL_CONNECTION, async (event) => {
+    validateSender(event);
+    return startupModelConnectionCoordinator.cancel('user');
+  });
+  startupModelConnectionCoordinator.onChanged((connectionState) => {
+    services
+      .resolve(MAIN_WINDOW)
+      .current?.webContents.send(CHANNELS.APP_STARTUP_MODEL_CONNECTION_CHANGED, connectionState);
   });
 };
 
@@ -208,6 +256,7 @@ export const registerAppIpc = ({
   guards: { validateSender },
   hideMainWindowToTray,
   services,
+  startupModelConnectionCoordinator,
   state,
   workspace,
   workspaceStore,
@@ -230,6 +279,11 @@ export const registerAppIpc = ({
   ipcMain.handle(CHANNELS.APP_GET_SETTINGS, (event) => {
     validateSender(event);
     return appSettingsView();
+  });
+  registerStartupModelConnectionIpc({
+    services,
+    startupModelConnectionCoordinator,
+    validateSender,
   });
   ipcMain.handle(CHANNELS.APP_GET_DIAGNOSTICS, (event, query: unknown) => {
     validateSender(event);

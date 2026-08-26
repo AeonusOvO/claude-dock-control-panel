@@ -80,7 +80,7 @@ shared/
 ```
 main/
   index.ts                装配：Registry、服务构造、依赖容器、生命周期接线
-  app/                    bootstrap.ts lifecycle.ts window.ts tray.ts profile.ts paths.ts
+  app/                    bootstrap/lifecycle/window/tray/profile/paths + startup model restore/coordinator
   infra/                  registry.ts service-tokens.ts contributions.ts logger.ts
                           diagnostics.ts 等；Registry 与四类贡献点见 ADR-0010
   ipc/                    31 个文件 = 25 个域 handler + 基础设施 + 入口：
@@ -113,7 +113,7 @@ preload/
                           router runtime software-update terminal workspace
 ```
 
-通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 203 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
+通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 215 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
 
 ## `src/renderer/`
 
@@ -146,7 +146,7 @@ renderer/
 | `register<Name>Feature` | `(registry, deps) => registry.register(token, factory)` 工厂注册 |
 | `Feature` 接口          | 该特性对外暴露的成员，消费方按 token 解析                        |
 
-特性内部按五文件（elements/state/view/actions/index）划分；单族职责超过可维护规模时以主题前缀拆子工厂（如 terminal 的 `terminal-io-*`、`terminal-layout-*`、`terminal-views-*`、`project-state-*`、`codex-launch-*` 五族）。connection 的历史子流进一步按 `history-dialog / history-render / history-mutations / history-recovery / current-connection-view` 拆分：分类弹窗只持有选择，恢复页持有运行期状态，顶部摘要只消费脱敏项目状态。跨特性依赖只经两条通道：显式 delegate（`{ current }` 引用盒）与 `-dependencies.ts` 最小接口（消费方声明鸭子类型，装配处传完整实例）。真正跨特性的状态（`workspaceState`、`selectedRailTab`、`mainView`、toast）归 `shell/`。
+特性内部按五文件（elements/state/view/actions/index）划分；单族职责超过可维护规模时以主题前缀拆子工厂（如 terminal 的 `terminal-io-*`、`terminal-layout-*`、`terminal-views-*`、`project-state-*`、`codex-launch-*` 五族）。connection 的历史与启动恢复子流按 `history-dialog / history-render / history-mutations / history-recovery / current-connection-view / startup-model-connection` 拆分：分类弹窗只持有选择，恢复页持有运行期状态，顶部摘要只消费脱敏项目状态，启动遮罩只消费 main 快照并派生 inert/倒计时。跨特性依赖只经两条通道：显式 delegate（`{ current }` 引用盒）与 `-dependencies.ts` 最小接口（消费方声明鸭子类型，装配处传完整实例）。真正跨特性的状态（`workspaceState`、`selectedRailTab`、`mainView`、toast）归 `shell/`。
 
 ### 样式
 

@@ -31,9 +31,62 @@ const DEFAULT_PREFERENCES: AppPreferences = {
     autoLoadLastConversationModelOnStartup: true,
     autoLoadLastConversationOnStartup: true,
     modelMismatchBehavior: 'ask',
+    startupModelConnectCancelAfterMinutes: 2,
+    startupModelConnectForceStopAfterMinutes: 5,
   },
   footerResourcePreference: 'auto',
   managedChatGptContextWindowMode: 'standard',
+};
+
+export const STARTUP_MODEL_CONNECT_CANCEL_MINUTES = Object.freeze({
+  default: 2,
+  max: 30,
+  min: 1,
+});
+
+export const STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES = Object.freeze({
+  default: 5,
+  max: 60,
+  min: 2,
+});
+
+const validWholeMinutes = (
+  value: unknown,
+  limits: Readonly<{ max: number; min: number }>,
+): value is number =>
+  typeof value === 'number' &&
+  Number.isSafeInteger(value) &&
+  value >= limits.min &&
+  value <= limits.max;
+
+export const normalizeStartupModelConnectionMinutes = (
+  preferences: Pick<
+    ConversationResumePreferences,
+    'startupModelConnectCancelAfterMinutes' | 'startupModelConnectForceStopAfterMinutes'
+  >,
+): { cancelAfterMinutes: number; forceStopAfterMinutes: number } => {
+  const cancelAfterMinutes = validWholeMinutes(
+    preferences.startupModelConnectCancelAfterMinutes,
+    STARTUP_MODEL_CONNECT_CANCEL_MINUTES,
+  )
+    ? preferences.startupModelConnectCancelAfterMinutes
+    : STARTUP_MODEL_CONNECT_CANCEL_MINUTES.default;
+  const requestedForceStop = validWholeMinutes(
+    preferences.startupModelConnectForceStopAfterMinutes,
+    STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES,
+  )
+    ? preferences.startupModelConnectForceStopAfterMinutes
+    : STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES.default;
+  return {
+    cancelAfterMinutes,
+    forceStopAfterMinutes:
+      requestedForceStop > cancelAfterMinutes
+        ? requestedForceStop
+        : Math.min(
+            STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES.max,
+            Math.max(STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES.default, cancelAfterMinutes + 1),
+          ),
+  };
 };
 
 const CLAUDE_CONTEXT_WINDOW_MODES: readonly ClaudeContextWindowMode[] = [
@@ -101,14 +154,30 @@ export class AppPreferencesStore {
     ) {
       throw new Error('应用偏好设置无效。');
     }
+    const startupModelConnectionTiming = normalizeStartupModelConnectionMinutes(
+      next.conversationResume,
+    );
+    const normalizedNext: AppPreferences = {
+      ...next,
+      conversationResume: {
+        ...next.conversationResume,
+        startupModelConnectCancelAfterMinutes: startupModelConnectionTiming.cancelAfterMinutes,
+        startupModelConnectForceStopAfterMinutes:
+          startupModelConnectionTiming.forceStopAfterMinutes,
+      },
+    };
     this.ensureDirectory();
     const temporaryPath = `${this.storagePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify({ ...next, version: 2 }, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+    writeFileSync(
+      temporaryPath,
+      `${JSON.stringify({ ...normalizedNext, version: 2 }, null, 2)}\n`,
+      {
+        encoding: 'utf8',
+        mode: 0o600,
+      },
+    );
     renameSync(temporaryPath, this.storagePath);
-    return next;
+    return normalizedNext;
   }
 
   private ensureDirectory(): void {
@@ -207,12 +276,28 @@ const isConversationResumePreferences = (
 ): value is ConversationResumePreferences => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return (
+  const baseValid =
     (record.modelMismatchBehavior === 'ask' ||
       record.modelMismatchBehavior === 'use-conversation' ||
       record.modelMismatchBehavior === 'use-current') &&
     typeof record.autoLoadLastConversationOnStartup === 'boolean' &&
-    typeof record.autoLoadLastConversationModelOnStartup === 'boolean'
+    typeof record.autoLoadLastConversationModelOnStartup === 'boolean';
+  if (!baseValid) return false;
+  const normalized = normalizeStartupModelConnectionMinutes({
+    startupModelConnectCancelAfterMinutes:
+      typeof record.startupModelConnectCancelAfterMinutes === 'number'
+        ? record.startupModelConnectCancelAfterMinutes
+        : undefined,
+    startupModelConnectForceStopAfterMinutes:
+      typeof record.startupModelConnectForceStopAfterMinutes === 'number'
+        ? record.startupModelConnectForceStopAfterMinutes
+        : undefined,
+  });
+  return (
+    (record.startupModelConnectCancelAfterMinutes === undefined ||
+      record.startupModelConnectCancelAfterMinutes === normalized.cancelAfterMinutes) &&
+    (record.startupModelConnectForceStopAfterMinutes === undefined ||
+      record.startupModelConnectForceStopAfterMinutes === normalized.forceStopAfterMinutes)
   );
 };
 
@@ -221,7 +306,12 @@ const normalizeConversationResumePreferences = (
   version: unknown,
 ): ConversationResumePreferences => {
   if (isConversationResumePreferences(value)) {
-    return { ...value };
+    const timing = normalizeStartupModelConnectionMinutes(value);
+    return {
+      ...value,
+      startupModelConnectCancelAfterMinutes: timing.cancelAfterMinutes,
+      startupModelConnectForceStopAfterMinutes: timing.forceStopAfterMinutes,
+    };
   }
   if (version === 1 && value && typeof value === 'object' && !Array.isArray(value)) {
     const legacy = value as Record<string, unknown>;
@@ -235,6 +325,8 @@ const normalizeConversationResumePreferences = (
         autoLoadLastConversationModelOnStartup: legacy.restoreLastWorkspaceOnStartup,
         autoLoadLastConversationOnStartup: legacy.restoreLastWorkspaceOnStartup,
         modelMismatchBehavior: legacy.modelMismatchBehavior,
+        startupModelConnectCancelAfterMinutes: STARTUP_MODEL_CONNECT_CANCEL_MINUTES.default,
+        startupModelConnectForceStopAfterMinutes: STARTUP_MODEL_CONNECT_FORCE_STOP_MINUTES.default,
       };
     }
   }

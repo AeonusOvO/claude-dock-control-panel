@@ -37,6 +37,8 @@ const settings = (autoLoadModel = true): AppSettingsView => ({
     autoLoadLastConversationModelOnStartup: autoLoadModel,
     autoLoadLastConversationOnStartup: true,
     modelMismatchBehavior: 'ask',
+    startupModelConnectCancelAfterMinutes: 2,
+    startupModelConnectForceStopAfterMinutes: 5,
   },
   footerResourcePreference: 'auto',
   language: 'zh-CN',
@@ -246,6 +248,41 @@ describe('startup conversation restore', () => {
     await harness.flush();
     expect(harness.method('getClaudeSessionsForPath')).not.toHaveBeenCalled();
     expect(harness.method('openStoredConversation')).not.toHaveBeenCalled();
+  });
+
+  it('waits asynchronously for the main-owned startup model transaction before restoring a conversation', async () => {
+    control = installFakeTerminalModules();
+    const startedAt = Date.now();
+    harness = await createRendererHarness({
+      getAppSettings: async () => settings(),
+      getClaudeSessionsForPath: async () => [],
+      getStartupModelConnection: async () => ({
+        active: true,
+        cancelAvailableAt: startedAt + 120_000,
+        detail: '正在真实验证最近一次选择的模型。',
+        forceStopAt: startedAt + 300_000,
+        phase: 'connecting',
+        startedAt,
+        updatedAt: startedAt,
+      }),
+      getWorkspace: async () => rememberedWorkspace(),
+    });
+
+    await harness.flush();
+    expect(harness.method('getClaudeSessionsForPath')).not.toHaveBeenCalled();
+
+    harness.emit('onStartupModelConnectionChanged', {
+      active: false,
+      detail: '最近一次选择的平台和模型已完成验证并接入。',
+      finishedAt: startedAt + 1,
+      phase: 'connected',
+      startedAt,
+      updatedAt: startedAt + 1,
+    });
+    await waitFor(
+      harness,
+      () => harness?.method('getClaudeSessionsForPath').mock.calls.length === 1,
+    );
   });
 
   it('keeps renderer startup usable when the history index cannot be read', async () => {

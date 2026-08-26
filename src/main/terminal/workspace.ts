@@ -66,6 +66,7 @@ export const sameDirectory = (left: string, right: string): boolean =>
  */
 export class TerminalWorkspace {
   private activeSessionId = '';
+  private readonly backgroundSessions = new Set<string>();
   private readonly claudeSessionTitles = new Map<string, string>();
   private currentThemeId: TerminalThemeId;
   private readonly developmentRuntimes = new Map<string, DevelopmentRuntime>();
@@ -96,6 +97,7 @@ export class TerminalWorkspace {
 
   public close(sessionId: string): TerminalWorkspaceState {
     const session = this.requireSession(sessionId);
+    const background = this.backgroundSessions.delete(sessionId);
     const sessionIds = [...this.sessions.keys()];
     const closedIndex = sessionIds.indexOf(sessionId);
 
@@ -103,6 +105,10 @@ export class TerminalWorkspace {
     this.sessions.delete(sessionId);
     this.claudeSessionTitles.delete(sessionId);
     this.developmentRuntimes.delete(sessionId);
+
+    if (background) {
+      return this.getState();
+    }
 
     if (this.sessions.size === 0) {
       this.setActiveSession('');
@@ -148,7 +154,9 @@ export class TerminalWorkspace {
   public getState(): TerminalWorkspaceState {
     return {
       activeSessionId: this.activeSessionId,
-      sessions: [...this.sessions.values()].map((session) => session.getStatus()),
+      sessions: [...this.sessions.entries()]
+        .filter(([sessionId]) => !this.backgroundSessions.has(sessionId))
+        .map(([, session]) => session.getStatus()),
     };
   }
 
@@ -157,9 +165,12 @@ export class TerminalWorkspace {
   }
 
   public sessionIdsForDirectory(cwd: string): string[] {
-    return [...this.sessions.values()]
-      .filter((session) => sameDirectory(session.getStatus().cwd, cwd))
-      .map((session) => session.getStatus().id);
+    return [...this.sessions.entries()]
+      .filter(
+        ([sessionId, session]) =>
+          !this.backgroundSessions.has(sessionId) && sameDirectory(session.getStatus().cwd, cwd),
+      )
+      .map(([, session]) => session.getStatus().id);
   }
 
   /**
@@ -195,6 +206,18 @@ export class TerminalWorkspace {
     this.emitState();
     this.requireSession(sessionId).start(cwd, this.withDefaultEnvironment(), this.currentThemeId);
     return this.getState();
+  }
+
+  /**
+   * Creates a real PTY owner for a main-process transaction without surfacing a fake conversation,
+   * changing the active row, or consuming a visible conversation title.
+   */
+  public openBackgroundSession(
+    cwd: string,
+    runtime: DevelopmentRuntime = 'claude',
+  ): TerminalStatus {
+    const sessionId = this.createSession(cwd, '后台模型接入', runtime, true);
+    return this.requireSession(sessionId).getStatus();
   }
 
   public renameSession(sessionId: string, title: string): TerminalWorkspaceState {
@@ -303,21 +326,29 @@ export class TerminalWorkspace {
     cwd: string,
     title = '对话 1',
     runtime: DevelopmentRuntime = 'claude',
+    background = false,
   ): string {
     const sessionId = `session-${this.nextSessionNumber}`;
     this.nextSessionNumber += 1;
+    if (background) this.backgroundSessions.add(sessionId);
 
-    const session = this.terminalFactory(
-      sessionId,
-      cwd,
-      title,
-      (ptyGeneration, data) => {
-        this.onData(sessionId, ptyGeneration, data);
-      },
-      () => {
-        this.emitState();
-      },
-    );
+    let session: ManagedTerminal;
+    try {
+      session = this.terminalFactory(
+        sessionId,
+        cwd,
+        title,
+        (ptyGeneration, data) => {
+          this.onData(sessionId, ptyGeneration, data);
+        },
+        () => {
+          if (!this.backgroundSessions.has(sessionId)) this.emitState();
+        },
+      );
+    } catch (error) {
+      this.backgroundSessions.delete(sessionId);
+      throw error;
+    }
     this.sessions.set(sessionId, session);
     this.developmentRuntimes.set(sessionId, runtime);
     return sessionId;

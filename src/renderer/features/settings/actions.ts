@@ -32,6 +32,27 @@ interface SettingsActionsContext {
   view: SettingsView;
 }
 
+const validateStartupModelConnectionTiming = (elements: SettingsElements): boolean => {
+  const cancelAfter = Number(elements.startupModelConnectCancelAfter.value);
+  const forceStopAfter = Number(elements.startupModelConnectForceStopAfter.value);
+  elements.startupModelConnectCancelAfter.setCustomValidity('');
+  elements.startupModelConnectForceStopAfter.setCustomValidity('');
+  if (!Number.isSafeInteger(cancelAfter) || cancelAfter < 1 || cancelAfter > 30) {
+    elements.startupModelConnectCancelAfter.setCustomValidity('请输入 1 到 30 之间的整数分钟。');
+  }
+  if (!Number.isSafeInteger(forceStopAfter) || forceStopAfter < 2 || forceStopAfter > 60) {
+    elements.startupModelConnectForceStopAfter.setCustomValidity('请输入 2 到 60 之间的整数分钟。');
+  } else if (forceStopAfter <= cancelAfter) {
+    elements.startupModelConnectForceStopAfter.setCustomValidity(
+      '最大等待时间必须晚于“允许取消”的时间。',
+    );
+  }
+  return (
+    elements.startupModelConnectCancelAfter.checkValidity() &&
+    elements.startupModelConnectForceStopAfter.checkValidity()
+  );
+};
+
 const loadAppSettings = async (context: SettingsActionsContext): Promise<void> => {
   const { dependencies, state, view } = context;
   try {
@@ -60,6 +81,12 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
   const saved = state.saved;
   if (!saved) {
     dependencies.showToast('全局设置仍在读取，请稍后重试。', 'error');
+    return;
+  }
+  if (!validateStartupModelConnectionTiming(context.elements)) {
+    context.elements.startupModelConnectCancelAfter.reportValidity();
+    context.elements.startupModelConnectForceStopAfter.reportValidity();
+    dependencies.showToast('自动接入等待时间无效，请修正后再保存。', 'error');
     return;
   }
   const claudeExecutionDirty = dependencies.isClaudeExecutionDirty();
@@ -97,7 +124,11 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
       pending.conversationResume.autoLoadLastConversationOnStartup !==
         saved.conversationResume.autoLoadLastConversationOnStartup ||
       pending.conversationResume.autoLoadLastConversationModelOnStartup !==
-        saved.conversationResume.autoLoadLastConversationModelOnStartup
+        saved.conversationResume.autoLoadLastConversationModelOnStartup ||
+      pending.conversationResume.startupModelConnectCancelAfterMinutes !==
+        (saved.conversationResume.startupModelConnectCancelAfterMinutes ?? 2) ||
+      pending.conversationResume.startupModelConnectForceStopAfterMinutes !==
+        (saved.conversationResume.startupModelConnectForceStopAfterMinutes ?? 5)
     ) {
       await window.controlPanel.setConversationResumePreferences(pending.conversationResume);
     }
@@ -137,6 +168,10 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
     }
     view.updateUnsavedIndicator();
   };
+  const handleStartupModelConnectionTimingChange = (): void => {
+    validateStartupModelConnectionTiming(elements);
+    view.updateUnsavedIndicator();
+  };
   const handleNetworkPreferencesUpdated = (event: Event): void => {
     const preferences = (event as CustomEvent<AppSettingsView['advanced']['networkPreflight']>)
       .detail;
@@ -171,6 +206,14 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
   elements.conversationModelMismatch.addEventListener('change', handleIndicatorChange);
   elements.autoLoadLastConversation.addEventListener('change', handleIndicatorChange);
   elements.autoLoadLastConversationModel.addEventListener('change', handleIndicatorChange);
+  elements.startupModelConnectCancelAfter.addEventListener(
+    'input',
+    handleStartupModelConnectionTimingChange,
+  );
+  elements.startupModelConnectForceStopAfter.addEventListener(
+    'input',
+    handleStartupModelConnectionTimingChange,
+  );
   elements.webResearchIsolation.addEventListener('change', handleIndicatorChange);
   elements.networkNewSession.addEventListener('change', handleIndicatorChange);
   elements.networkProviderLogin.addEventListener('change', handleIndicatorChange);
@@ -189,6 +232,14 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
     elements.conversationModelMismatch.removeEventListener('change', handleIndicatorChange);
     elements.autoLoadLastConversation.removeEventListener('change', handleIndicatorChange);
     elements.autoLoadLastConversationModel.removeEventListener('change', handleIndicatorChange);
+    elements.startupModelConnectCancelAfter.removeEventListener(
+      'input',
+      handleStartupModelConnectionTimingChange,
+    );
+    elements.startupModelConnectForceStopAfter.removeEventListener(
+      'input',
+      handleStartupModelConnectionTimingChange,
+    );
     elements.webResearchIsolation.removeEventListener('change', handleIndicatorChange);
     elements.networkNewSession.removeEventListener('change', handleIndicatorChange);
     elements.networkProviderLogin.removeEventListener('change', handleIndicatorChange);

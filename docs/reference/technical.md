@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.28（2026-08-26）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.29（2026-08-26）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -494,6 +494,8 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   冷启动和关掉最后一个对话之后都没有活动会话。`getActiveStatus()` 因此返回
   `TerminalStatus | undefined`，`OperationResult.status` 也是可选字段，渲染层要判空。
   用 `homedir()` 兜底会造出一个以 Windows 用户名命名、用户从没打开过的项目。
+- `StartupModelConnectionCoordinator` 在 main 中持有整次冷启动模型恢复。`TerminalWorkspace.openBackgroundSession()` 只创建一个 stopped 的事务 owner：不 spawn ConPTY、不改活动 session、不进入 workspace snapshot，也不消耗可见的“对话 N”编号。它复用 `SessionOperationCoordinator` 和 `runClaudeProjectConfigTransaction` 的 abort/rollback 边界完成真实连接测试，只在 `assertActive()` 仍有效时把经验证 profile 提升为“下个对话接入”。
+- coordinator 状态包含 strictly monotonic `updatedAt`、`cancelAvailableAt` 和 `forceStopAt`。preload 先订阅事件再读取快照，renderer 丢弃旧 `updatedAt`，因此页面切换或迟到 invoke 都不会倒退阶段。用户取消、硬超时和受控退出都 abort 同一操作，并等待 lease completion 后才发布 `cancelled/timed-out`；任何失败都保留原 profile、释放 BusyRegistry 租约与临时 owner。`AppPreferencesStore` 对旧 version 2 数据补默认 2/5 分钟，IPC 重新校验 1–30 / 2–60 整分钟范围及 `force > cancel`。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
 - 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。每个 session 在
   创建时把 `AgentRuntimeStore.getNext()` 捕获为不可变 runtime，`getDevelopmentRuntime(sessionId)` 只返回

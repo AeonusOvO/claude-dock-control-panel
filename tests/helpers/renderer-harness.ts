@@ -112,6 +112,8 @@ const defaultAppSettings = {
     autoLoadLastConversationModelOnStartup: true,
     autoLoadLastConversationOnStartup: true,
     modelMismatchBehavior: 'ask' as const,
+    startupModelConnectCancelAfterMinutes: 2,
+    startupModelConnectForceStopAfterMinutes: 5,
   },
   footerResourcePreference: 'auto' as const,
   language: 'zh-CN' as const,
@@ -176,6 +178,24 @@ export const createRendererHarness = async (
     switch (name) {
       case 'getAppSettings':
         return Promise.resolve(defaultAppSettings);
+      case 'getStartupModelConnection':
+        return Promise.resolve({
+          active: false,
+          detail: '当前没有正在进行的启动模型接入。',
+          phase: 'idle' as const,
+          updatedAt: 1,
+        });
+      case 'cancelStartupModelConnection':
+        return Promise.resolve({
+          message: '当前没有正在进行的启动模型接入。',
+          ok: false,
+          state: {
+            active: false,
+            detail: '当前没有正在进行的启动模型接入。',
+            phase: 'idle' as const,
+            updatedAt: 1,
+          },
+        });
       case 'getWorkspace':
         return Promise.resolve(emptyWorkspace);
       case 'getOnboardingState':

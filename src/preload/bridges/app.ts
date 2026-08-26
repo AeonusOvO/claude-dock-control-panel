@@ -1,9 +1,16 @@
 import { ipcRenderer, webUtils } from 'electron';
-import type { ControlPanelApi, AppQuitRequest } from '../../shared/contracts';
+import type {
+  AppQuitRequest,
+  ControlPanelApi,
+  StartupModelConnectionState,
+} from '../../shared/contracts';
 import { CHANNELS } from '../../shared/ipc/channels';
 
 export const appBridge = {
+  cancelStartupModelConnection: () =>
+    ipcRenderer.invoke(CHANNELS.APP_CANCEL_STARTUP_MODEL_CONNECTION),
   getAppSettings: () => ipcRenderer.invoke(CHANNELS.APP_GET_SETTINGS),
+  getStartupModelConnection: () => ipcRenderer.invoke(CHANNELS.APP_GET_STARTUP_MODEL_CONNECTION),
   getDiagnostics: (query) => ipcRenderer.invoke(CHANNELS.APP_GET_DIAGNOSTICS, query),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke(CHANNELS.APP_SET_LAUNCH_AT_LOGIN, enabled),
   setFooterResourcePreference: (preference) =>
@@ -60,6 +67,18 @@ export const appBridge = {
     ipcRenderer.on(CHANNELS.APP_WINDOW_RESTORED, callback);
     return () => {
       ipcRenderer.removeListener(CHANNELS.APP_WINDOW_RESTORED, callback);
+    };
+  },
+  onStartupModelConnectionChanged: (listener) => {
+    const callback = (
+      _event: Electron.IpcRendererEvent,
+      state: StartupModelConnectionState,
+    ): void => {
+      listener(state);
+    };
+    ipcRenderer.on(CHANNELS.APP_STARTUP_MODEL_CONNECTION_CHANGED, callback);
+    return () => {
+      ipcRenderer.removeListener(CHANNELS.APP_STARTUP_MODEL_CONNECTION_CHANGED, callback);
     };
   },
   openExternal: (url) => ipcRenderer.invoke(CHANNELS.APP_OPEN_EXTERNAL, url) as Promise<boolean>,

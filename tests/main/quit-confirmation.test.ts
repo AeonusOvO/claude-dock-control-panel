@@ -45,6 +45,7 @@ const createQuitDependencies = (services: Registry) => {
     shutdown: vi.fn(),
   };
   const chatService = { shutdown: vi.fn() };
+  const cancelStartupModelConnection = vi.fn(async (): Promise<void> => undefined);
   const invalidateLaunchPreflightDecisions = vi.fn();
   const nativeAttachmentStore = {
     releaseConversation: vi.fn(async (_conversationId: string): Promise<void> => undefined),
@@ -52,6 +53,7 @@ const createQuitDependencies = (services: Registry) => {
   const showMainWindow = vi.fn();
   const sweepPowershellTrees = vi.fn();
   return {
+    cancelStartupModelConnection,
     chatService,
     invalidateLaunchPreflightDecisions,
     nativeAttachmentStore,
@@ -371,6 +373,7 @@ describe('quit confirmation handshake', () => {
 
     await quit.beginControlledQuit(false);
 
+    expect(dependencies.cancelStartupModelConnection).toHaveBeenCalledTimes(1);
     expect(sweepPowershellTrees).toHaveBeenCalledTimes(1);
     expect(app.quit).toHaveBeenCalledTimes(1);
     expect(dependencies.state.isQuitting).toBe(true);
@@ -782,6 +785,7 @@ describe('quit confirmation handshake', () => {
       guards: { validateSender: vi.fn() },
       hideMainWindowToTray: vi.fn(),
       services,
+      startupModelConnectionCoordinator: { onChanged: vi.fn() } as never,
       state: dependencies.state,
       workspace: {} as never,
       workspaceStore: { getTheme: vi.fn() } as never,
@@ -870,6 +874,7 @@ describe('quit confirmation handshake', () => {
       guards: { validateSender },
       hideMainWindowToTray,
       services,
+      startupModelConnectionCoordinator: { onChanged: vi.fn() } as never,
       state,
       workspace: {} as never,
       workspaceStore: { getTheme: vi.fn() } as never,

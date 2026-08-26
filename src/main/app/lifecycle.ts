@@ -35,6 +35,7 @@ const QUIT_CONFIRMATION_DELIVERY_TIMEOUT_MS = 3_000;
 const QUIT_WATCHDOG_MS = 8_000;
 
 export interface QuitControllerDependencies {
+  cancelStartupModelConnection: () => Promise<void>;
   chatService: ChatService;
   invalidateLaunchPreflightDecisions: () => void;
   nativeAttachmentStore: NativeAttachmentStore;
@@ -280,7 +281,7 @@ const runControlledQuitCleanup = async (
   forceWithResidualProcesses: boolean,
   confirmationCallbacks: QuitCleanupConfirmationCallbacks,
 ): Promise<'asked' | 'done'> => {
-  const { nativeAttachmentStore, services } = dependencies;
+  const { cancelStartupModelConnection, nativeAttachmentStore, services } = dependencies;
   let conversationCleanupFailed = false;
   let processCleanupFailed = false;
   let nativeConversationService: NativeConversationService | undefined;
@@ -302,6 +303,12 @@ const runControlledQuitCleanup = async (
   }
 
   const cleanupOperations: Promise<void>[] = [];
+  cleanupOperations.push(
+    isolateQuitCleanup(cancelStartupModelConnection, (error) => {
+      conversationCleanupFailed = true;
+      reportQuitFailure('退出前无法取消启动模型接入。', error);
+    }),
+  );
   if (nativeConversationService) {
     cleanupOperations.push(
       (async () => {
@@ -479,6 +486,7 @@ const beginControlledQuit = async (
 };
 
 export const createQuitController = ({
+  cancelStartupModelConnection,
   chatService,
   invalidateLaunchPreflightDecisions,
   nativeAttachmentStore,
@@ -489,6 +497,7 @@ export const createQuitController = ({
   workspace,
 }: QuitControllerDependencies): QuitController => {
   const dependencies: ResolvedQuitControllerDependencies = {
+    cancelStartupModelConnection,
     chatService,
     invalidateLaunchPreflightDecisions,
     nativeAttachmentStore,

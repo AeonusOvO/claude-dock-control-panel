@@ -280,6 +280,33 @@
         </section>
 
         <section class="rail-page" data-rail-page="connection">
+          <div
+            class="startup-model-connection"
+            id="startup-model-connection"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          >
+            <div class="startup-model-connection__indicator" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3a9 9 0 1 1-8.5 6" />
+                <path d="M3 4v5h5" />
+              </svg>
+            </div>
+            <span class="step-kicker">启动接入</span>
+            <strong id="startup-model-connection-title">正在接入模型</strong>
+            <p id="startup-model-connection-detail">正在读取最近一次会话的平台、账号与模型配置。</p>
+            <small id="startup-model-connection-timing">正在后台安全验证，请稍候。</small>
+            <button
+              class="button button--compact button--quiet"
+              id="cancel-startup-model-connection"
+              type="button"
+              hidden
+            >
+              取消接入
+            </button>
+          </div>
           <div class="connection-heading connection-heading--with-action">
             <div class="connection-heading__copy">
               <div class="connection-heading__intro">
@@ -3183,6 +3210,48 @@
                       type="checkbox"
                       checked
                     />
+                  </label>
+                  <label
+                    class="settings-row settings-row--number"
+                    for="settings-startup-model-connect-cancel-after"
+                  >
+                    <span>
+                      <strong>何时允许取消自动接入</strong>
+                      <small>超过该时间仍未完成，接入页会显示“取消接入”；默认 2 分钟。</small>
+                    </span>
+                    <span class="settings-duration-control">
+                      <input
+                        id="settings-startup-model-connect-cancel-after"
+                        type="number"
+                        min="1"
+                        max="30"
+                        step="1"
+                        inputmode="numeric"
+                        value="2"
+                      />
+                      <small>分钟</small>
+                    </span>
+                  </label>
+                  <label
+                    class="settings-row settings-row--number"
+                    for="settings-startup-model-connect-force-stop-after"
+                  >
+                    <span>
+                      <strong>自动接入最大等待时间</strong>
+                      <small>到达上限后主进程会终止事务并回滚临时状态；默认 5 分钟。</small>
+                    </span>
+                    <span class="settings-duration-control">
+                      <input
+                        id="settings-startup-model-connect-force-stop-after"
+                        type="number"
+                        min="2"
+                        max="60"
+                        step="1"
+                        inputmode="numeric"
+                        value="5"
+                      />
+                      <small>分钟</small>
+                    </span>
                   </label>
                 </div>
               </section>

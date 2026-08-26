@@ -12,6 +12,38 @@ export interface ConversationResumePreferences {
   autoLoadLastConversationOnStartup: boolean;
   /** Restore that conversation's complete model connection before its CLI is resumed. */
   autoLoadLastConversationModelOnStartup: boolean;
+  /** Minutes before a visible startup model-connection transaction may be cancelled by the user. */
+  startupModelConnectCancelAfterMinutes?: number;
+  /** Minutes before the main process aborts a startup model-connection transaction automatically. */
+  startupModelConnectForceStopAfterMinutes?: number;
+}
+
+export type StartupModelConnectionPhase =
+  | 'cancelled'
+  | 'cancelling'
+  | 'connected'
+  | 'connecting'
+  | 'failed'
+  | 'idle'
+  | 'skipped'
+  | 'timed-out';
+
+/** Main-owned startup transaction state. Timestamps let every renderer derive the same countdown. */
+export interface StartupModelConnectionState {
+  active: boolean;
+  cancelAvailableAt?: number;
+  detail: string;
+  finishedAt?: number;
+  forceStopAt?: number;
+  phase: StartupModelConnectionPhase;
+  startedAt?: number;
+  updatedAt: number;
+}
+
+export interface StartupModelConnectionCancelResult {
+  message: string;
+  ok: boolean;
+  state: StartupModelConnectionState;
 }
 
 export type BusyKind =

@@ -29,6 +29,8 @@ describe('app preferences store', () => {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'ask',
+        startupModelConnectCancelAfterMinutes: 2,
+        startupModelConnectForceStopAfterMinutes: 5,
       },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
@@ -42,6 +44,8 @@ describe('app preferences store', () => {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'ask',
+        startupModelConnectCancelAfterMinutes: 2,
+        startupModelConnectForceStopAfterMinutes: 5,
       },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
@@ -58,6 +62,8 @@ describe('app preferences store', () => {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'ask',
+        startupModelConnectCancelAfterMinutes: 2,
+        startupModelConnectForceStopAfterMinutes: 5,
       },
       footerResourcePreference: 'auto',
       managedChatGptContextWindowMode: 'standard',
@@ -73,6 +79,8 @@ describe('app preferences store', () => {
           autoLoadLastConversationModelOnStartup: false,
           autoLoadLastConversationOnStartup: true,
           modelMismatchBehavior: 'use-conversation',
+          startupModelConnectCancelAfterMinutes: 3,
+          startupModelConnectForceStopAfterMinutes: 8,
         },
       }),
     ).toMatchObject({
@@ -80,6 +88,8 @@ describe('app preferences store', () => {
         autoLoadLastConversationModelOnStartup: false,
         autoLoadLastConversationOnStartup: true,
         modelMismatchBehavior: 'use-conversation',
+        startupModelConnectCancelAfterMinutes: 3,
+        startupModelConnectForceStopAfterMinutes: 8,
       },
     });
   });
@@ -110,7 +120,54 @@ describe('app preferences store', () => {
       autoLoadLastConversationModelOnStartup: false,
       autoLoadLastConversationOnStartup: false,
       modelMismatchBehavior: 'use-current',
+      startupModelConnectCancelAfterMinutes: 2,
+      startupModelConnectForceStopAfterMinutes: 5,
     });
+  });
+
+  it('fills the new startup connection timings when loading an older version 2 file', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
+    fixtureRoots.push(root);
+    const directory = path.join(root, 'app-preferences');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      path.join(directory, 'app.json'),
+      JSON.stringify({
+        claudeContextWindowMode: 'auto',
+        closeBehavior: 'tray',
+        closeToTrayNoticeShown: false,
+        conversationResume: {
+          autoLoadLastConversationModelOnStartup: true,
+          autoLoadLastConversationOnStartup: true,
+          modelMismatchBehavior: 'ask',
+        },
+        footerResourcePreference: 'auto',
+        managedChatGptContextWindowMode: 'standard',
+        version: 2,
+      }),
+      'utf8',
+    );
+
+    expect(new AppPreferencesStore(root).get().conversationResume).toMatchObject({
+      startupModelConnectCancelAfterMinutes: 2,
+      startupModelConnectForceStopAfterMinutes: 5,
+    });
+  });
+
+  it('rejects a hard deadline that is not later than the cancellation threshold', () => {
+    const store = createStore();
+
+    expect(() =>
+      store.set({
+        conversationResume: {
+          autoLoadLastConversationModelOnStartup: true,
+          autoLoadLastConversationOnStartup: true,
+          modelMismatchBehavior: 'ask',
+          startupModelConnectCancelAfterMinutes: 5,
+          startupModelConnectForceStopAfterMinutes: 5,
+        },
+      }),
+    ).toThrow('应用偏好设置无效');
   });
 
   it('persists the explicit extended managed ChatGPT context choice', () => {

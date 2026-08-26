@@ -82,6 +82,7 @@ describe('diagnostics IPC', () => {
       guards: { validateSender },
       hideMainWindowToTray: vi.fn(),
       services,
+      startupModelConnectionCoordinator: { onChanged: vi.fn() } as never,
       state: {} as never,
       workspace: {} as never,
       workspaceStore: {} as never,

@@ -31,6 +31,7 @@ const installAppClipboardIpc = async () => {
     guards: { validateSender },
     hideMainWindowToTray: vi.fn(),
     services: new Registry(),
+    startupModelConnectionCoordinator: { onChanged: vi.fn() } as never,
     state: {} as never,
     workspace: {} as never,
     workspaceStore: {} as never,

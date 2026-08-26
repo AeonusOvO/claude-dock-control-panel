@@ -246,6 +246,8 @@ describe('remaining renderer behavior contracts', () => {
           autoLoadLastConversationModelOnStartup: true,
           autoLoadLastConversationOnStartup: true,
           modelMismatchBehavior: 'use-current',
+          startupModelConnectCancelAfterMinutes: 2,
+          startupModelConnectForceStopAfterMinutes: 5,
         });
         expect(harness.method('openStoredConversation')).toHaveBeenCalled();
         expectCss(/conversationModelCardEnter/u);

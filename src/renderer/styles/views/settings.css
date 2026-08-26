@@ -990,6 +990,40 @@
   padding: 0 var(--s-2);
 }
 
+.settings-duration-control {
+  align-items: center;
+  display: flex !important;
+  flex: 0 0 auto;
+  gap: var(--s-2) !important;
+}
+
+.settings-duration-control input {
+  background: var(--surface-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-body-size);
+  height: 36px;
+  padding: 0 var(--s-2);
+  text-align: right;
+  width: 78px;
+}
+
+.settings-duration-control input:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 14%, transparent);
+  outline: none;
+}
+
+.settings-duration-control input:invalid {
+  border-color: var(--bad-line);
+}
+
+.settings-duration-control > small {
+  white-space: nowrap;
+}
+
 .settings-row output {
   color: var(--accent-text);
   font-family: var(--font-mono);

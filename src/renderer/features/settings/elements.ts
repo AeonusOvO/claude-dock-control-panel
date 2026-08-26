@@ -3,6 +3,8 @@ import { requiredElement } from '../../platform/dom';
 export interface SettingsElements {
   autoLoadLastConversation: HTMLInputElement;
   autoLoadLastConversationModel: HTMLInputElement;
+  startupModelConnectCancelAfter: HTMLInputElement;
+  startupModelConnectForceStopAfter: HTMLInputElement;
   chatIdleTimeout: HTMLSelectElement;
   closeBehavior: HTMLSelectElement;
   conversationModelMismatch: HTMLSelectElement;
@@ -18,6 +20,10 @@ export interface SettingsElements {
 export const createSettingsElements = (): SettingsElements => ({
   autoLoadLastConversation: requiredElement('#settings-auto-load-last-conversation'),
   autoLoadLastConversationModel: requiredElement('#settings-auto-load-last-conversation-model'),
+  startupModelConnectCancelAfter: requiredElement('#settings-startup-model-connect-cancel-after'),
+  startupModelConnectForceStopAfter: requiredElement(
+    '#settings-startup-model-connect-force-stop-after',
+  ),
   chatIdleTimeout: requiredElement('#settings-chat-idle-timeout'),
   closeBehavior: requiredElement('#settings-close-behavior'),
   conversationModelMismatch: requiredElement('#settings-conversation-model-mismatch'),

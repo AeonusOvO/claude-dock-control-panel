@@ -2,7 +2,9 @@ const requestChannels = {
   // app
   APP_CLIPBOARD_READ: 'app:clipboard-read',
   APP_CLIPBOARD_WRITE: 'app:clipboard-write',
+  APP_CANCEL_STARTUP_MODEL_CONNECTION: 'app:cancel-startup-model-connection',
   APP_GET_SETTINGS: 'app:get-settings',
+  APP_GET_STARTUP_MODEL_CONNECTION: 'app:get-startup-model-connection',
   APP_GET_DIAGNOSTICS: 'app:get-diagnostics',
   APP_OPEN_EXTERNAL: 'app:open-external',
   APP_SET_ADVANCED_SETTINGS: 'app:set-advanced-settings',
@@ -246,6 +248,7 @@ const eventChannels = {
   APP_OPEN_DOWNLOAD_CENTER: 'app:open-download-center',
   APP_QUIT_REQUESTED: 'app:quit-requested',
   APP_QUIT_REQUEST_INVALIDATED: 'app:quit-request-invalidated',
+  APP_STARTUP_MODEL_CONNECTION_CHANGED: 'app:startup-model-connection-changed',
   APP_WINDOW_RESTORED: 'app:window-restored',
 
   // application-proxy

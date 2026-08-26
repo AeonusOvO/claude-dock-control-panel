@@ -305,6 +305,38 @@ describe('TerminalWorkspace', () => {
     expect(state.sessions.filter((session) => session.phase === 'running')).toHaveLength(2);
   });
 
+  it('keeps a background transaction owner out of the visible workspace and does not spawn a PTY', () => {
+    const stateListener = vi.fn();
+    const { factory, terminals } = createFakeFactory();
+    const eagerStatusFactory = (...args: Parameters<typeof factory>): FakeTerminal => {
+      const terminal = factory(...args);
+      args[4](terminal.getStatus());
+      return terminal;
+    };
+    const workspace = new TerminalWorkspace(vi.fn(), stateListener, eagerStatusFactory);
+
+    const background = workspace.openBackgroundSession('D:\\Project Alpha', 'claude');
+
+    expect(background).toMatchObject({
+      cwd: 'D:\\Project Alpha',
+      phase: 'stopped',
+      title: '后台模型接入',
+    });
+    expect(workspace.getState()).toEqual({ activeSessionId: '', sessions: [] });
+    expect(workspace.sessionIdsForDirectory('D:\\Project Alpha')).toEqual([]);
+    expect(terminals.get(background.id)?.start).not.toHaveBeenCalled();
+    expect(stateListener).not.toHaveBeenCalled();
+
+    const visible = workspace.openConversation('D:\\Project Alpha');
+    expect(visible.sessions).toHaveLength(1);
+    expect(visible.sessions[0]?.title).toBe('对话 1');
+    expect(workspace.sessionIdsForDirectory('D:\\Project Alpha')).toEqual(['session-2']);
+
+    const afterClose = workspace.close(background.id);
+    expect(afterClose).toEqual(visible);
+    expect(terminals.get(background.id)?.stop).toHaveBeenCalledWith(false);
+  });
+
   it('captures the selected engine per conversation without mutating sibling sessions', () => {
     const { factory } = createFakeFactory();
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);

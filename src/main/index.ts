@@ -17,6 +17,7 @@ import {
 } from './claude/project-config-transaction';
 import { createClaudeStatePublisher } from './claude/state-publisher';
 import { createBootstrap } from './app/bootstrap';
+import { StartupModelConnectionCoordinator } from './app/startup-model-connection-coordinator';
 import {
   createQuitController,
   registerAppLifecycle,
@@ -88,6 +89,7 @@ registerProcessErrorHandlers();
  * a second quit attempt from stacking dialogs and rejects delayed responses to superseded prompts.
  */
 const state = createMainState();
+const startupModelConnectionCoordinator = new StartupModelConnectionCoordinator();
 
 const services = new Registry();
 registerLifecycleServiceReferences(services);
@@ -314,6 +316,10 @@ const { applyWindowTheme, createWindow, hideMainWindowToTray, showMainWindow } =
   });
 
 const quit = createQuitController({
+  cancelStartupModelConnection: async () => {
+    if (!startupModelConnectionCoordinator.getState().active) return;
+    await startupModelConnectionCoordinator.cancel('shutdown');
+  },
   chatService,
   invalidateLaunchPreflightDecisions: () => {
     launchPreflightDecisions.invalidateAll();
@@ -485,6 +491,7 @@ const onReady = createBootstrap({
     services,
     sessionManager,
     state,
+    startupModelConnectionCoordinator,
     terminalConversationOwners,
     terminalTransferSessions,
     withDevelopmentSessionOperation,
@@ -504,6 +511,7 @@ const onReady = createBootstrap({
   services,
   sessionManager,
   state,
+  startupModelConnectionCoordinator,
   updateTray,
   workspace,
   workspaceStore,

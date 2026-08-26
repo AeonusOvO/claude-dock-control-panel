@@ -18,6 +18,8 @@ describe('conversation resume settings', () => {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: false,
         modelMismatchBehavior: 'use-current',
+        startupModelConnectCancelAfterMinutes: 2,
+        startupModelConnectForceStopAfterMinutes: 5,
       },
     });
 
@@ -34,10 +36,18 @@ describe('conversation resume settings', () => {
     const autoLoadModel = harness.query<HTMLInputElement>(
       '#settings-auto-load-last-conversation-model',
     );
+    const cancelAfter = harness.query<HTMLInputElement>(
+      '#settings-startup-model-connect-cancel-after',
+    );
+    const forceStopAfter = harness.query<HTMLInputElement>(
+      '#settings-startup-model-connect-force-stop-after',
+    );
     expect(modelChoice.value).toBe('use-current');
     expect(modelChoiceLabel?.textContent).toBe('始终使用当前模型');
     expect(autoLoadConversation.checked).toBe(false);
     expect(autoLoadModel.checked).toBe(true);
+    expect(cancelAfter.value).toBe('2');
+    expect(forceStopAfter.value).toBe('5');
 
     modelChoice.value = 'use-conversation';
     modelChoice.dispatchEvent(new Event('change', { bubbles: true }));
@@ -45,8 +55,12 @@ describe('conversation resume settings', () => {
     autoLoadConversation.dispatchEvent(new Event('change', { bubbles: true }));
     autoLoadModel.checked = false;
     autoLoadModel.dispatchEvent(new Event('change', { bubbles: true }));
+    cancelAfter.value = '3';
+    cancelAfter.dispatchEvent(new Event('input', { bubbles: true }));
+    forceStopAfter.value = '8';
+    forceStopAfter.dispatchEvent(new Event('input', { bubbles: true }));
     expect(modelChoiceLabel?.textContent).toBe('始终使用对话原有模型');
-    expect(harness.query('#settings-unsaved-indicator').textContent).toBe('*3 项未保存');
+    expect(harness.query('#settings-unsaved-indicator').textContent).toBe('*5 项未保存');
 
     harness.click('#complete-connection-advanced');
     await harness.flush();
@@ -54,6 +68,33 @@ describe('conversation resume settings', () => {
       autoLoadLastConversationModelOnStartup: false,
       autoLoadLastConversationOnStartup: true,
       modelMismatchBehavior: 'use-conversation',
+      startupModelConnectCancelAfterMinutes: 3,
+      startupModelConnectForceStopAfterMinutes: 8,
     });
+  });
+
+  it('keeps settings open and reports an invalid timeout pair instead of pretending to save', async () => {
+    harness = await createRendererHarness();
+    harness.click('#open-connection-advanced');
+    await harness.flush();
+
+    const cancelAfter = harness.query<HTMLInputElement>(
+      '#settings-startup-model-connect-cancel-after',
+    );
+    const forceStopAfter = harness.query<HTMLInputElement>(
+      '#settings-startup-model-connect-force-stop-after',
+    );
+    cancelAfter.value = '5';
+    cancelAfter.dispatchEvent(new Event('input', { bubbles: true }));
+    forceStopAfter.value = '5';
+    forceStopAfter.dispatchEvent(new Event('input', { bubbles: true }));
+
+    harness.click('#complete-connection-advanced');
+    await harness.flush();
+
+    expect(harness.method('setConversationResumePreferences')).not.toHaveBeenCalled();
+    expect(forceStopAfter.validationMessage).toContain('必须晚于');
+    expect(harness.query('#toast').textContent).toContain('等待时间无效');
+    expect(harness.query<HTMLDialogElement>('#connection-advanced-dialog').open).toBe(true);
   });
 });

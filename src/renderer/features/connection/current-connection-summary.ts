@@ -16,6 +16,7 @@ export type CurrentConnectionSummaryKind = 'api' | 'domestic' | 'official-subscr
  */
 export interface CurrentConnectionSummaryContext {
   accountIdentity?: string;
+  accountStatus?: 'failed' | 'loading';
   connectionName?: string;
   officialAuth?: ClaudeOfficialAuthState;
 }
@@ -102,6 +103,12 @@ const officialAccountSummary = (
   );
   if (accountIdentity) {
     return { accountIdentity, metadata: `账号：${accountIdentity}` };
+  }
+  if (context.accountStatus === 'loading') {
+    return { metadata: '正在读取账号与本机网关状态…' };
+  }
+  if (context.accountStatus === 'failed') {
+    return { metadata: '账号状态读取失败；可重新验证接入' };
   }
 
   const officialAuth = config.preset === 'anthropic' ? context.officialAuth : undefined;

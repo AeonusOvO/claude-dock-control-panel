@@ -90,7 +90,10 @@ import {
   networkPreflightProcessEnvironment,
   type AdvancedSettingsStore,
 } from '../stores/advanced-settings';
-import type { AppPreferencesStore } from '../stores/app-preferences';
+import {
+  normalizeStartupModelConnectionMinutes,
+  type AppPreferencesStore,
+} from '../stores/app-preferences';
 import type { WorkspaceStore } from '../stores/workspace';
 import type { ProjectOperations } from '../terminal/project-operations';
 import type { TerminalWorkspace } from '../terminal/workspace';
@@ -98,6 +101,10 @@ import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from '../upd
 import { runtimeAssetPath } from './paths';
 import type { RuntimeProfile } from './profile';
 import { restoreLastConversationModelOnly } from './startup-model-restore';
+import type {
+  StartupModelConnectionCoordinator,
+  StartupModelConnectionRunContext,
+} from './startup-model-connection-coordinator';
 import type { TrayController } from './tray';
 import type { WindowController } from './window';
 
@@ -130,6 +137,7 @@ export interface BootstrapDependencies {
   services: Registry;
   sessionManager: ClaudeSessionManager;
   state: MainState;
+  startupModelConnectionCoordinator: StartupModelConnectionCoordinator;
   updateTray: TrayController['updateTray'];
   workspace: TerminalWorkspace;
   workspaceStore: WorkspaceStore;
@@ -780,9 +788,9 @@ const installDiagnostics = ({
 
 /**
  * The two startup switches are independent. When only model loading is enabled there is no visible
- * conversation to own a transaction, so a short-lived PowerShell session supplies the same
- * generation and rollback boundaries as an interactive history restore, then closes before the
- * first window is painted.
+ * conversation to own a transaction, so a hidden workspace owner supplies the same generation and
+ * rollback boundaries as an interactive history restore without spawning or showing a terminal.
+ * The window paints while the operation is pending so progress and cancellation remain visible.
  */
 const runStartupModelRestore = async ({
   appPreferencesStore,
@@ -791,6 +799,7 @@ const runStartupModelRestore = async ({
   runtimeProfile,
   services,
   sessionManager,
+  startupModelConnectionCoordinator,
   workspace,
   workspaceStore,
 }: Pick<
@@ -801,75 +810,132 @@ const runStartupModelRestore = async ({
   | 'runtimeProfile'
   | 'services'
   | 'sessionManager'
+  | 'startupModelConnectionCoordinator'
   | 'workspace'
   | 'workspaceStore'
 >): Promise<void> => {
   const runtime = services.resolve(CLAUDE_RUNTIME);
-  await restoreLastConversationModelOnly({
-    allowExternalRoutingWrites: runtimeProfile.effects.allowExternalRoutingWrites,
-    applyConversationModel: async (projectPath, conversation, sessionId) => {
-      const networkAccess = runtime.conversationNetworkAccess(
-        projectPath,
-        conversation.conversationId,
-      );
-      await applyConversationModelConnection({
-        cwd: projectPath,
-        prepare: (assertCurrent) => {
-          const prepare = () =>
-            runtime.prepareConversationConnection(
-              projectPath,
-              conversation.conversationId,
-              assertCurrent,
-              resolveSessionConnectionConfigScope(runtime, sessionId, projectPath),
-            );
-          if (!networkAccess) {
-            return prepare();
-          }
-          return guards.withOfficialProviderAccess(
-            { action: 'provider-switch', cwd: projectPath, ...networkAccess },
-            () => {
-              assertCurrent();
-              return prepare();
-            },
+  const preferences = appPreferencesStore.get().conversationResume;
+  const busyRegistry = services.resolve(BUSY_REGISTRY);
+  const restore = async (
+    context?: StartupModelConnectionRunContext,
+  ): Promise<Awaited<ReturnType<typeof restoreLastConversationModelOnly>>> => {
+    let temporarySessionId: string | undefined;
+    const invalidateTemporarySession = (): void => {
+      if (!temporarySessionId) return;
+      void ipc.invalidateAndWaitForDevelopmentSessionOperation(temporarySessionId);
+    };
+    context?.signal.addEventListener('abort', invalidateTemporarySession);
+    try {
+      return await restoreLastConversationModelOnly({
+        allowExternalRoutingWrites: runtimeProfile.effects.allowExternalRoutingWrites,
+        applyConversationModel: async (projectPath, conversation, sessionId) => {
+          const networkAccess = runtime.conversationNetworkAccess(
+            projectPath,
+            conversation.conversationId,
           );
+          await applyConversationModelConnection({
+            cwd: projectPath,
+            prepare: (assertCurrent) => {
+              const prepare = () =>
+                runtime.prepareConversationConnection(
+                  projectPath,
+                  conversation.conversationId,
+                  assertCurrent,
+                  resolveSessionConnectionConfigScope(runtime, sessionId, projectPath),
+                );
+              if (!networkAccess) {
+                return prepare();
+              }
+              return guards.withOfficialProviderAccess(
+                { action: 'provider-switch', cwd: projectPath, ...networkAccess },
+                () => {
+                  assertCurrent();
+                  return prepare();
+                },
+              );
+            },
+            runClaudeProjectConfigTransaction: ipc.runClaudeProjectConfigTransaction,
+            runtime,
+            sessionId,
+            withDevelopmentSessionOperation: ipc.withDevelopmentSessionOperation,
+          });
+          context?.assertActive();
+          runtime.promoteConversationConnectionToNext(sessionId, projectPath);
         },
-        runClaudeProjectConfigTransaction: ipc.runClaudeProjectConfigTransaction,
-        runtime,
-        sessionId,
-        withDevelopmentSessionOperation: ipc.withDevelopmentSessionOperation,
+        clearNextConnection: () => runtime.clearNextConversationConnection(),
+        closeTemporarySession: (sessionId) => {
+          if (!workspace.hasSession(sessionId)) return;
+          runtime.closeSession(sessionId);
+          workspace.close(sessionId);
+        },
+        getLastActiveProject: () => workspaceStore.getLastActiveProject(),
+        getLatestConversation: (projectPath) =>
+          sessionManager.getSessionsForProject(projectPath)[0],
+        getPreferences: () => preferences,
+        inspectConversationModel: (projectPath, conversation) =>
+          runtime.inspectConversationModel(
+            projectPath,
+            conversation.conversationId,
+            conversation.modelId,
+            'use-conversation',
+          ),
+        openTemporarySession: (projectPath) => {
+          const sessionId = workspace.openBackgroundSession(projectPath, 'claude').id;
+          runtime.bindProjectConversationConnection(sessionId, projectPath);
+          temporarySessionId = sessionId;
+          if (context?.signal.aborted) invalidateTemporarySession();
+          return sessionId;
+        },
+        projectExists: existsSync,
+        projectRuntime: () => 'claude',
+        restoreWorkspace: runtimeProfile.effects.restoreWorkspace,
+        ...(context
+          ? {
+              assertActive: context.assertActive,
+              progress: (detail: string) => {
+                context.updateDetail(detail);
+                try {
+                  busyRegistry.update('startup-model-connection', { stage: detail });
+                } catch {
+                  // Progress presentation cannot be allowed to fail the configuration transaction.
+                }
+              },
+              signal: context.signal,
+            }
+          : {}),
+        warn: (message, error) =>
+          services.resolve(MAIN_LOGGER).warn('startup-model-restore', message, error),
       });
-      runtime.promoteConversationConnectionToNext(sessionId, projectPath);
-    },
-    clearNextConnection: () => runtime.clearNextConversationConnection(),
-    closeTemporarySession: (sessionId) => {
-      if (!workspace.hasSession(sessionId)) return;
-      runtime.closeSession(sessionId);
-      workspace.close(sessionId);
-    },
-    getLastActiveProject: () => workspaceStore.getLastActiveProject(),
-    getLatestConversation: (projectPath) => sessionManager.getSessionsForProject(projectPath)[0],
-    getPreferences: () => appPreferencesStore.get().conversationResume,
-    inspectConversationModel: (projectPath, conversation) =>
-      runtime.inspectConversationModel(
-        projectPath,
-        conversation.conversationId,
-        conversation.modelId,
-        'use-conversation',
-      ),
-    openTemporarySession: (projectPath) => {
-      const before = new Set(workspace.getState().sessions.map(({ id }) => id));
-      const opened = workspace.openProject(projectPath, 'claude').state;
-      const sessionId = opened.activeSessionId;
-      if (!sessionId || before.has(sessionId)) return undefined;
-      runtime.bindProjectConversationConnection(sessionId, projectPath);
-      return sessionId;
-    },
-    projectExists: existsSync,
-    projectRuntime: () => 'claude',
-    restoreWorkspace: runtimeProfile.effects.restoreWorkspace,
-    warn: (message, error) =>
-      services.resolve(MAIN_LOGGER).warn('startup-model-restore', message, error),
+    } finally {
+      context?.signal.removeEventListener('abort', invalidateTemporarySession);
+    }
+  };
+  if (!preferences.autoLoadLastConversationModelOnStartup) {
+    await restore();
+    return;
+  }
+  const timing = normalizeStartupModelConnectionMinutes(preferences);
+  const releaseBusy = busyRegistry.acquire({
+    cancellable: false,
+    domain: 'gateway',
+    id: 'startup-model-connection',
+    kind: 'configure',
+    label: '正在后台恢复并验证上次选择的模型接入',
+    severity: 'blocking',
+    stage: '正在读取最近一次会话的平台、账号与模型配置。',
   });
+  try {
+    await startupModelConnectionCoordinator.run(
+      {
+        cancelAfterMs: timing.cancelAfterMinutes * 60_000,
+        forceStopAfterMs: timing.forceStopAfterMinutes * 60_000,
+      },
+      restore,
+    );
+  } finally {
+    releaseBusy();
+  }
 };
 
 const createBootstrapContributions = (
@@ -891,8 +957,11 @@ const createBootstrapContributions = (
     () => {
       if (runtimeProfile.effects.tray) createTray();
     },
-    () => runStartupModelRestore(dependencies),
-    () => createWindow(),
+    () => {
+      const startupModelRestore = runStartupModelRestore(dependencies);
+      const windowCreation = createWindow();
+      return Promise.all([startupModelRestore, windowCreation]).then(() => undefined);
+    },
     () => {
       if (!runtimeProfile.effects.allowExternalRoutingWrites) return;
       void services
