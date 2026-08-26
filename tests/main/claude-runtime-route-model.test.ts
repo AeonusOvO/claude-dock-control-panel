@@ -4,7 +4,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeRuntime } from '../../src/main/claude/runtime';
 import { claudeNetworkAccessForConfig } from '../../src/main/claude/runtime-connection-config';
-import { sameClaudeNetworkAccess } from '../../src/main/claude/runtime-types';
+import {
+  type PreparedClaudeConfigSave,
+  sameClaudeNetworkAccess,
+} from '../../src/main/claude/runtime-types';
 import type { ClaudePermissionMode, PtyGeneration } from '../../src/shared/contracts';
 
 interface TestRuntimeSession {
@@ -35,7 +38,7 @@ interface ClaudeRuntimeInternals {
     version: string;
   }>;
   emitState(runtime: TestRuntimeSession): Promise<void>;
-  prepareRouteServices(...args: unknown[]): Promise<void>;
+  prepareRouteServices(...args: unknown[]): Promise<unknown>;
   sessions: Map<string, TestRuntimeSession>;
   stopUnusedRoute(...args: unknown[]): Promise<void>;
   submitClaudeCommand(runtime: TestRuntimeSession, commandLine: string): Promise<void>;
@@ -44,6 +47,7 @@ interface ClaudeRuntimeInternals {
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
   }
@@ -96,7 +100,7 @@ const createRuntime = () => {
 };
 
 const createRouteBoundaryRuntime = (
-  ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
+  ensureManagedChatGptGatewayReady: (cwd: string) => Promise<boolean | void>,
 ) => {
   const root = mkdtempSync(path.join(tmpdir(), 'claudedock-route-boundary-'));
   temporaryRoots.push(root);
@@ -119,6 +123,19 @@ const createRouteBoundaryRuntime = (
   internals.stopUnusedRoute = stopUnusedRoute;
   return { internals, runtime, stopUnusedRoute };
 };
+
+const managedPreparedConnection = (): PreparedClaudeConfigSave => ({
+  input: {
+    authMode: 'authToken',
+    baseUrl: 'http://127.0.0.1:8317',
+    credential: 'local-gateway-token',
+    credentialAction: 'replace',
+    model: 'gpt-5.6-sol',
+    preset: 'chatgpt-subscription',
+    protocol: 'anthropic',
+    provider: 'gateway',
+  },
+});
 
 describe('Claude runtime network access identity', () => {
   it('keeps custom Anthropic-compatible gateways exact and distinct from official capability', () => {
@@ -193,6 +210,60 @@ describe('Claude runtime managed route boundary', () => {
         internals.prepareRouteServices('managed-chatgpt', 'session-1', 'D:\\Project'),
       ).rejects.toBe(blocked);
       expect(readiness).toHaveBeenCalledWith('D:\\Project');
+      expect(stopUnusedRoute).not.toHaveBeenCalled();
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('starts a stopped managed route before testing and records exact failure compensation', async () => {
+    const calls: string[] = [];
+    const readiness = vi.fn(async () => {
+      calls.push('ready');
+      return true;
+    });
+    const { runtime, stopUnusedRoute } = createRouteBoundaryRuntime(readiness);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls.push('request');
+        return new Response(JSON.stringify({ content: [], id: 'message-1' }), { status: 200 });
+      }),
+    );
+    const prepared = managedPreparedConnection();
+
+    try {
+      await expect(runtime.testPreparedConnection('D:\\Project', prepared)).resolves.toMatchObject({
+        ok: true,
+      });
+
+      expect(calls).toEqual(['ready', 'request']);
+      expect(prepared.rollbackRouteServices).toBeTypeOf('function');
+      await runtime.rollbackPreparedConfig(prepared);
+      expect(stopUnusedRoute).toHaveBeenCalledExactlyOnceWith('managed-chatgpt');
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('does not register a stop rollback for a managed route that was already running', async () => {
+    const readiness = vi.fn(async () => false);
+    const { runtime, stopUnusedRoute } = createRouteBoundaryRuntime(readiness);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => new Response(JSON.stringify({ content: [], id: 'message-1' }), { status: 200 }),
+      ),
+    );
+    const prepared = managedPreparedConnection();
+
+    try {
+      await expect(runtime.testPreparedConnection('D:\\Project', prepared)).resolves.toMatchObject({
+        ok: true,
+      });
+
+      expect(prepared.rollbackRouteServices).toBeUndefined();
+      await runtime.rollbackPreparedConfig(prepared);
       expect(stopUnusedRoute).not.toHaveBeenCalled();
     } finally {
       runtime.shutdown();

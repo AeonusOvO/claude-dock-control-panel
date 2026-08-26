@@ -85,7 +85,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       ptyGeneration: PtyGeneration,
     ) => Promise<ClaudePermissionMode | undefined>,
     private readonly managedChatGptGatewayInstalledVersion: () => string | undefined,
-    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
+    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<boolean | void>,
     fetchImplementation: typeof fetch,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void,
     stopManagedChatGptGateway: () => Promise<void> | void,

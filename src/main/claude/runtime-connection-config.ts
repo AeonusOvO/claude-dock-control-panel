@@ -125,7 +125,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
 
   protected constructor(
     userDataPath: string,
-    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
+    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<boolean | void>,
     fetchImplementation: typeof fetch,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void,
     stopManagedChatGptGateway: () => Promise<void> | void,
@@ -705,9 +705,21 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     const enteredCredential = prepared.input.credential?.trim();
     const credential = enteredCredential || this.configStore.getCredential(cwd);
     const fingerprint = connectionFingerprint(config, credential);
-    const result = await testClaudeConnection(config, credential, signal);
-    assertCurrent();
-    this.connectionChecks.set(projectKey(cwd), { fingerprint, result });
-    return result;
+    const routeKind = this.routeKindForConfig(config);
+    const ownerId = `connection-test:${projectKey(cwd)}:${randomBytes(8).toString('hex')}`;
+    const reservation = this.routeLifecycle.reserve(ownerId, routeKind);
+    try {
+      const routeStarted = await this.prepareRouteServices(routeKind, ownerId, cwd);
+      if (routeStarted && !prepared.rollbackRouteServices) {
+        prepared.rollbackRouteServices = () => this.stopUnusedRoute(routeKind);
+      }
+      assertCurrent();
+      const result = await testClaudeConnection(config, credential, signal);
+      assertCurrent();
+      this.connectionChecks.set(projectKey(cwd), { fingerprint, result });
+      return result;
+    } finally {
+      this.routeLifecycle.release(reservation);
+    }
   }
 }

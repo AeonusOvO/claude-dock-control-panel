@@ -274,6 +274,7 @@ describe('main bootstrap contributions', () => {
       const withOfficialProviderAccess = harness.stubs.withOfficialProviderAccess as Mock;
       const managedChatGptGateway = harness.stubs.managedChatGptGateway as {
         ensureRunning: Mock;
+        getState: Mock;
       };
       if (typeof readiness !== 'function') {
         throw new Error('ClaudeRuntime readiness callback was not captured.');
@@ -299,6 +300,7 @@ describe('main bootstrap contributions', () => {
 
       expect(withOfficialProviderAccess).not.toHaveBeenCalled();
       expect(managedChatGptGateway.ensureRunning).not.toHaveBeenCalled();
+      expect(managedChatGptGateway.getState).not.toHaveBeenCalled();
 
       await (readiness as (cwd: string) => Promise<void>)('D:\\Project');
 
@@ -310,6 +312,7 @@ describe('main bootstrap contributions', () => {
         },
         expect.any(Function),
       );
+      expect(managedChatGptGateway.getState).toHaveBeenCalledOnce();
       expect(routeEvents).toEqual(['guard-enter', 'gateway-ensure-running', 'guard-exit']);
       expect(providerAccessActive).toBe(false);
 

@@ -195,6 +195,8 @@ export interface PreparedClaudeConfigSave {
   historyMetadata?: ConnectionHistoryMetadata;
   input: SaveClaudeConfigInput;
   presentation?: ClaudeConfigPresentation;
+  /** Stops a route service started only for this tentative connection test when the transaction fails. */
+  rollbackRouteServices?: () => Promise<void>;
   /** Exact Router compensation retained only until the owning config transaction succeeds. */
   rollbackRouterConfig?: () => Promise<void>;
 }

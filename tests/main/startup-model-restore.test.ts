@@ -109,16 +109,24 @@ describe('startup model-only restore', () => {
     expect(input.warn).toHaveBeenCalledWith('上次对话的模型接入信息不完整，保留当前接入。');
   });
 
-  it('does not create a temporary terminal when the current connection already matches', async () => {
+  it('starts and verifies the matching route instead of treating saved configuration as a live connection', async () => {
+    const events: string[] = [];
     const input = dependencies({
+      applyConversationModel: vi.fn(async () => {
+        events.push('apply');
+      }),
+      closeTemporarySession: vi.fn(() => events.push('close')),
       inspectConversationModel: vi.fn(async () =>
-        modelResolution({ differences: [], mismatch: false }),
+        modelResolution({ differences: [], mismatch: false, restorable: true }),
       ),
+      openTemporarySession: vi.fn(() => {
+        events.push('open');
+        return 'temporary-session';
+      }),
     });
 
-    await expect(restoreLastConversationModelOnly(input)).resolves.toBe('unchanged');
-    expect(input.openTemporarySession).not.toHaveBeenCalled();
-    expect(input.applyConversationModel).not.toHaveBeenCalled();
+    await expect(restoreLastConversationModelOnly(input)).resolves.toBe('restored');
+    expect(events).toEqual(['open', 'apply', 'close']);
   });
 
   it('closes the temporary terminal and reports failure when model application rejects', async () => {

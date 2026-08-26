@@ -81,7 +81,7 @@ export abstract class ClaudeRuntimeRouting {
 
   protected constructor(
     userDataPath: string,
-    private readonly ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
+    private readonly ensureManagedChatGptGatewayReady: (cwd: string) => Promise<boolean | void>,
     fetchImplementation: typeof fetch,
     onRouterOperationProgress: (progress: RouterOperationProgress) => void,
     private readonly stopManagedChatGptGateway: () => Promise<void> | void,
@@ -260,10 +260,27 @@ export abstract class ClaudeRuntimeRouting {
   /** Compensates the external Router half of a prepared project-config transaction. */
   public async rollbackPreparedConfig(prepared: unknown): Promise<void> {
     if (typeof prepared !== 'object' || prepared === null) return;
-    const rollback = (prepared as Partial<PreparedClaudeConfigSave>).rollbackRouterConfig;
-    if (!rollback) return;
-    await rollback();
-    this.routerHealthCache.clear();
+    const candidate = prepared as Partial<PreparedClaudeConfigSave>;
+    const failures: unknown[] = [];
+    if (candidate.rollbackRouterConfig) {
+      try {
+        await candidate.rollbackRouterConfig();
+        this.routerHealthCache.clear();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (candidate.rollbackRouteServices) {
+      try {
+        await candidate.rollbackRouteServices();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, '已准备的 Router 配置与路由服务均回滚失败。');
+    }
   }
 
   /** Rolls back a prepared Router mutation when a later handoff check rejects the prepared value. */
@@ -373,31 +390,37 @@ export abstract class ClaudeRuntimeRouting {
     routeKind: ClaudeRouteKind,
     _ownerId: string,
     cwd: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     this.assertLaunchAdmissionAllowed();
     if (routeKind === 'managed-chatgpt') {
-      await this.routeLifecycle.runExclusive(() => {
-        this.assertLaunchAdmissionAllowed();
-        return this.ensureManagedChatGptGatewayReady(cwd);
-      });
-      return;
+      return this.routeLifecycle
+        .runExclusive(() => {
+          this.assertLaunchAdmissionAllowed();
+          return this.ensureManagedChatGptGatewayReady(cwd);
+        })
+        .then((started) => started === true);
     }
     if (routeKind === 'ccr') {
-      await this.routeLifecycle.runExclusive(async () => {
+      return this.routeLifecycle.runExclusive(async () => {
         this.assertLaunchAdmissionAllowed();
         let state = await this.routerManager.getState();
+        let started = false;
         this.assertLaunchAdmissionAllowed();
         if (!state.installed) {
           state = (await this.routerManager.installFromNpm('npm')).state;
+          started = true;
           this.assertLaunchAdmissionAllowed();
         }
         if (!state.managementAvailable || state.gatewayState !== 'running') {
           this.assertLaunchAdmissionAllowed();
           state = await this.routerManager.start();
+          started = true;
         }
         this.routerHealthCache.set(state);
+        return started;
       });
     }
+    return false;
   }
 
   protected getRouterHealthState(

@@ -664,14 +664,17 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
 - `AppPreferencesStore` 的 `conversationResume` 保存三项偏好：模型不一致时每次询问、始终用当前接入或
-  始终恢复对话原接入，以及相互独立的“自动加载上次对话”“自动加载模型”。两个启动开关默认开启；
+  始终恢复对话原接入，以及相互独立的“自动加载上次对话”“自动连接最近一次选择的平台和模型”。两个启动开关默认开启；
   store schema 为 version 2，读取 version 1 的 `restoreLastWorkspaceOnStartup` 时把旧值同时迁移到两个
   新开关，避免升级后擅自改变原有选择。设置页和“不再提示”都通过同一严格校验的
   `app:set-conversation-resume-preferences` 原子保存。
 - renderer 启动时从 `WorkspaceStore` 投影中选择最后活动项目，再读取按时间倒序的第一条 Claude 对话；
   自动模型开启时忽略手动历史点击的询问偏好，直接把该 conversation 的完整绑定送入与手动恢复共用的
-  `applyConversationModelConnection()`，经 prepare、真实连接测试、commit、complete 后才调用
-  `launchClaudeWithSession()`。自动模型关闭时不检查、不改写接入，仅恢复对话内容。
+  `applyConversationModelConnection()`。`testPreparedConnection()` 会先为候选配置保留路由、异步启动其
+  所需的托管 ChatGPT 网关或 CCR，再执行真实连接测试；测试通过后才 commit、complete 并调用
+  `launchClaudeWithSession()`。候选配置与当前配置相同也不能跳过此过程，因为静态配置不能证明后台
+  服务正在运行。测试或后续提交失败时，项目快照、Router 变更和本次新启动的闲置路由服务共同回滚。
+  自动模型关闭时不检查、不改写接入，仅恢复对话内容。
 - 只开启自动模型时没有可见 conversation owner，main bootstrap 在创建窗口前用短生命周期 PowerShell
   session 提供 generation、取消和回滚边界，恢复成功或失败后都关闭该 session；两项都开启时该隐藏路径
   跳过，由可见终端拥有事务。静态 HTML 首帧已将 composer 和发送按钮设为 disabled；可见恢复打开

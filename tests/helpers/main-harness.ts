@@ -244,6 +244,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
       calls.push('gateway.ensureRunning');
     }),
     getInstalledVersion: vi.fn(() => undefined),
+    getState: vi.fn(async () => ({ running: false })),
     shutdown: vi.fn(),
     stop: vi.fn(async () => undefined),
   };

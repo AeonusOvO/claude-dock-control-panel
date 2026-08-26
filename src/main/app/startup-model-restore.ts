@@ -30,7 +30,7 @@ export interface StartupModelRestoreDependencies {
   warn: (message: string, error?: unknown) => void;
 }
 
-export type StartupModelRestoreOutcome = 'failed' | 'restored' | 'skipped' | 'unchanged';
+export type StartupModelRestoreOutcome = 'failed' | 'restored' | 'skipped';
 
 /** Restores only the model connection when the user intentionally leaves conversation loading off. */
 export const restoreLastConversationModelOnly = async (
@@ -60,9 +60,6 @@ export const restoreLastConversationModelOnly = async (
   let temporarySessionId: string | undefined;
   try {
     const resolution = await dependencies.inspectConversationModel(projectPath, conversation);
-    if (!resolution.mismatch) {
-      return 'unchanged';
-    }
     if (!resolution.restorable) {
       dependencies.warn('上次对话的模型接入信息不完整，保留当前接入。');
       return 'failed';

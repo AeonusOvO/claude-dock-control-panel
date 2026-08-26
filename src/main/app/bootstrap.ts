@@ -184,6 +184,14 @@ const managedChatGptConversationAccount = async (gateway: ManagedChatGptGateway)
   };
 };
 
+const ensureManagedChatGptGatewayStarted = async (
+  gateway: ManagedChatGptGateway,
+): Promise<boolean> => {
+  const wasRunning = (await gateway.getState()).running;
+  await gateway.ensureRunning();
+  return !wasRunning;
+};
+
 const configureConversationModels = (
   runtime: ClaudeRuntime,
   requireGateway: () => ManagedChatGptGateway,
@@ -479,7 +487,7 @@ const installAgentRuntimes = ({
         (cwd) =>
           withOfficialProviderAccess(
             { action: 'first-request', cwd, provider: 'openai-codex' },
-            () => requireManagedChatGptGateway().ensureRunning(),
+            () => ensureManagedChatGptGatewayStarted(requireManagedChatGptGateway()),
           ),
         () => requireManagedChatGptGateway().getInstalledVersion(),
         createAuthenticatedSessionFetch(registry, session.defaultSession),

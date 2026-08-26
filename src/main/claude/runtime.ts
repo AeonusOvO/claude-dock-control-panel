@@ -155,7 +155,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       sessionId: string,
       ptyGeneration: PtyGeneration,
     ) => Promise<ClaudePermissionMode | undefined>,
-    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<void>,
+    ensureManagedChatGptGatewayReady: (cwd: string) => Promise<boolean | void>,
     managedChatGptGatewayInstalledVersion: () => string | undefined,
     fetchImplementation: typeof fetch = fetch,
     initialThemeId: TerminalThemeId = DEFAULT_TERMINAL_THEME,
