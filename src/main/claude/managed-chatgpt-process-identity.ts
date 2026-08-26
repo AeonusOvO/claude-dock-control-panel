@@ -2,7 +2,7 @@ import path from 'node:path';
 import { runProcess } from '../infra/windows-command';
 
 const OPERATION_ENVIRONMENT_PREFIX = 'CLAUDEDOCK_GATEWAY_PROCESS_';
-const PROCESS_OPERATION_TIMEOUT_MS = 2_000;
+const PROCESS_OPERATION_TIMEOUT_MS = 5_000;
 const CAPTURE_RETRY_DELAY_MS = 25;
 const PROCESS_BIRTH_TOKEN = /^\d{10,20}$/;
 

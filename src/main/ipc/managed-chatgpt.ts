@@ -143,8 +143,8 @@ const createManagedChatGptGlobalOperations = ({
         active = true,
       ): void => emitManagedChatGptProgress(undefined, stage, step, detail, active, 8);
       try {
+        const runtime = requireClaudeRuntime();
         const operation = async (): Promise<ManagedChatGptGatewayOperationResult> => {
-          const runtime = requireClaudeRuntime();
           progress('detecting', 1, '正在检测 Claude Code、登录网关与本机端口。');
           let environment = await runtime.getSoftwareUpdates(true);
           if (!environment.claudeCode.installed) {
@@ -213,7 +213,8 @@ const createManagedChatGptGlobalOperations = ({
         };
         const request = {
           action: 'login' as const,
-          cwd: undefined,
+          cwd: runtime.nextConversationConnectionScope(),
+          networkScope: 'application' as const,
           provider: 'openai-codex' as const,
         };
         return await withOfficialProviderAccess(request, operation);
@@ -618,7 +619,7 @@ const setManagedChatGptGatewayModelGlobally = async (
     return await withOfficialProviderAccess(
       {
         action: 'first-request',
-        cwd: undefined,
+        cwd: runtime.nextConversationConnectionScope(),
         networkScope: 'application',
         provider: 'openai-codex',
       },

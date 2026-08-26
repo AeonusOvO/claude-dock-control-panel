@@ -146,6 +146,7 @@ describe('managed ChatGPT projectless setup contract', () => {
 
   it('routes an omitted project directly to one deduplicated global setup', async () => {
     const ipc = createIpcHarness();
+    const nextConversationScope = 'C:\\ClaudeDock Data\\claude\\next-conversation-profile';
     const routeEvents: string[] = [];
     let providerAccessActive = false;
     const setup = vi.fn(async () => {
@@ -193,6 +194,7 @@ describe('managed ChatGPT projectless setup contract', () => {
         routeEvents.push('runtime-software-updates');
         return { claudeCode: { installed: true } };
       }),
+      nextConversationConnectionScope: vi.fn(() => nextConversationScope),
       verifyAndSaveNextConversationConfig: vi.fn(async () => {
         expect(providerAccessActive).toBe(true);
         routeEvents.push('next-connection-verify-save');
@@ -240,7 +242,8 @@ describe('managed ChatGPT projectless setup contract', () => {
     expect(withOfficialProviderAccess).toHaveBeenCalledWith(
       {
         action: 'login',
-        cwd: undefined,
+        cwd: nextConversationScope,
+        networkScope: 'application',
         provider: 'openai-codex',
       },
       expect.any(Function),
@@ -255,6 +258,7 @@ describe('managed ChatGPT projectless setup contract', () => {
       'guard-exit',
     ]);
     expect(providerAccessActive).toBe(false);
+    expect(runtime.nextConversationConnectionScope).toHaveBeenCalledOnce();
     expect(getStatus).not.toHaveBeenCalled();
   });
 
@@ -267,6 +271,79 @@ describe('managed ChatGPT projectless setup contract', () => {
     expect(execution).toEqual({ result: { sessionId: undefined }, started: true });
     expect(setup).toHaveBeenCalledWith(undefined);
     expect(tracker.busy).toBe(false);
+  });
+
+  it('keeps a global model change inside the exact next-conversation authorization scope', async () => {
+    const ipc = createIpcHarness();
+    const nextConversationScope = 'C:\\ClaudeDock Data\\claude\\next-conversation-profile';
+    const withOfficialProviderAccess = vi.fn(
+      async <T>(
+        _request: Parameters<MainGuards['withOfficialProviderAccess']>[0],
+        operation: () => Promise<T> | T,
+      ): Promise<T> => await operation(),
+    ) as unknown as MainGuards['withOfficialProviderAccess'];
+    const runtime = {
+      getNextConversationConnection: vi.fn(async () => nextConnection),
+      nextConversationConnectionScope: vi.fn(() => nextConversationScope),
+      verifyAndSaveNextConversationConfig: vi.fn(async () => ({
+        connectionTest,
+        state: nextConnection,
+      })),
+    };
+    const configurationForModel = vi.fn(async () => ({
+      availableModels: ['gpt-5.6-sol'],
+      baseUrl: state.endpoint,
+      credential: 'local-only-test-key',
+      model: 'gpt-5.6-sol',
+      modelFast: 'gpt-5.6-sol',
+    }));
+    vi.doMock('electron', () => ({
+      clipboard: { writeText: vi.fn() },
+      ipcMain: ipc.ipcMain,
+      shell: { openExternal: vi.fn(async () => undefined) },
+    }));
+    const { registerManagedChatGptIpc } = await import('../../src/main/ipc/managed-chatgpt');
+    const services = await createTestMainServiceRegistry();
+    const { MAIN_WINDOW } = await import('../../src/main/infra/service-tokens');
+    services.resolve(MAIN_WINDOW).current = {
+      webContents: ipc.webContents,
+    } as Electron.BrowserWindow;
+    registerManagedChatGptIpc({
+      configTransactionState: vi.fn(),
+      failedRuntimeLaunchCleanupDependencies: {} as never,
+      guards: {
+        requireClaudeRuntime: () => runtime as never,
+        requireManagedChatGptGateway: () =>
+          ({ configurationForModel, getState: vi.fn(async () => state) }) as never,
+        validateSender: vi.fn(),
+        withOfficialProviderAccess,
+      },
+      restartRuntimeTerminal: vi.fn(),
+      runClaudeProjectConfigTransaction: vi.fn(),
+      services,
+      withDevelopmentSessionOperation: vi.fn(),
+      withoutTerminalOperationInvalidation: vi.fn(),
+      workspace: { getStatus: vi.fn() } as never,
+    });
+
+    const result = await ipc.invoke(
+      CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_MODEL,
+      undefined,
+      'gpt-5.6-sol',
+    );
+
+    expect(result).toMatchObject({ nextConnection, ok: true, state });
+    expect(withOfficialProviderAccess).toHaveBeenCalledWith(
+      {
+        action: 'first-request',
+        cwd: nextConversationScope,
+        networkScope: 'application',
+        provider: 'openai-codex',
+      },
+      expect.any(Function),
+    );
+    expect(runtime.nextConversationConnectionScope).toHaveBeenCalledOnce();
+    expect(configurationForModel).toHaveBeenCalledWith('gpt-5.6-sol');
   });
 
   it('rejects a second renderer action while the setup coordinator owns the request', async () => {

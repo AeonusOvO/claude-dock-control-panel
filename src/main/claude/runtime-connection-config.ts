@@ -186,6 +186,11 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     };
   }
 
+  /** Main-only stable identity used to authorize work against the global next-conversation profile. */
+  public nextConversationConnectionScope(): string {
+    return this.nextConversationConfigScope;
+  }
+
   /** Captures the global choice atomically for one newly-created conversation. */
   public bindNextConversationConnection(sessionId: string, cwd: string): void {
     if (!this.hasNextConversationConnection()) {

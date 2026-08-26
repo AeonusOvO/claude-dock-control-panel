@@ -80,7 +80,7 @@ describe('managed gateway exact Windows process identity', () => {
       CLAUDEDOCK_GATEWAY_PROCESS_PID: '42',
       CLAUDEDOCK_GATEWAY_PROCESS_PORT: '8317',
     });
-    expect(options).toEqual({ maxBuffer: 4 * 1024, timeout: 2_000 });
+    expect(options).toEqual({ maxBuffer: 4 * 1024, timeout: 5_000 });
     expect(
       JSON.stringify(await identity.capture({ ...process, identity: undefined } as never)),
     ).not.toContain(process.configPath);

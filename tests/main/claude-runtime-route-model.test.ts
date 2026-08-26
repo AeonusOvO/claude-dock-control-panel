@@ -177,6 +177,29 @@ describe('Claude runtime network access identity', () => {
 });
 
 describe('Claude runtime managed route boundary', () => {
+  it('uses one exact global profile identity for readiness and next-conversation verification', async () => {
+    const readiness = vi.fn(async () => false);
+    const { runtime } = createRouteBoundaryRuntime(readiness);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: 'fixture failure' } }), { status: 500 }),
+      ),
+    );
+
+    try {
+      const result = await runtime.verifyAndSaveNextConversationConfig(
+        managedPreparedConnection().input,
+      );
+
+      expect(result.connectionTest).toMatchObject({ ok: false });
+      expect(readiness).toHaveBeenCalledExactlyOnceWith(runtime.nextConversationConnectionScope());
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
   it('passes the exact project to readiness without stopping the predecessor route', async () => {
     const calls: string[] = [];
     const readiness = vi.fn(async (cwd: string) => {
