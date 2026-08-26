@@ -19,10 +19,14 @@ import {
 export type { CodexLaunchDeps } from './codex-launch-dependencies';
 
 export interface CodexLaunch {
-  launchCodex: (mode: CodexLaunchMode) => Promise<void>;
-  installOrUpdateCodex: () => Promise<CodexProjectState | undefined>;
-  startCodexLogin: (method: CodexLoginMethod, launchAfterLogin: boolean) => Promise<void>;
-  prepareAndLaunchCodex: () => Promise<void>;
+  launchCodex: (mode: CodexLaunchMode, sessionId?: string, announce?: boolean) => Promise<boolean>;
+  installOrUpdateCodex: (sessionId?: string) => Promise<CodexProjectState | undefined>;
+  startCodexLogin: (
+    method: CodexLoginMethod,
+    launchAfterLogin: boolean,
+    sessionId?: string,
+  ) => Promise<void>;
+  prepareAndLaunchCodex: (sessionId?: string, announce?: boolean) => Promise<boolean>;
   switchDevelopmentRuntime: (runtime: DevelopmentRuntime) => Promise<void>;
   getCodexOperation: (state?: CodexProjectState) => CodexOperationPresentation | undefined;
   getRuntimeSwitchOperation: (sessionId: string) => RuntimeSwitchOperationToken | undefined;

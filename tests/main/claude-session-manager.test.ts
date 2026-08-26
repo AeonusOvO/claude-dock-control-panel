@@ -59,7 +59,7 @@ const writeSession = (
 };
 
 describe('ClaudeSessionManager', () => {
-  it('reads only direct JSONL sessions for the requested project', () => {
+  it('reads only direct JSONL sessions for the requested project without blocking the main loop', async () => {
     const currentProject = 'D:\\Projects\\Current';
     const otherProject = 'D:\\Projects\\Other';
     const olderId = '11111111-1111-4111-8111-111111111111';
@@ -70,8 +70,12 @@ describe('ClaudeSessionManager', () => {
     writeSession(otherProject, otherId, '2026-07-22T10:00:00.000Z');
 
     const sessions = new ClaudeSessionManager(projectsRoot).getSessionsForProject(currentProject);
+    const backgroundSessions = await new ClaudeSessionManager(
+      projectsRoot,
+    ).getSessionsForProjectAsync(currentProject);
 
     expect(sessions.map((session) => session.conversationId)).toEqual([newerId, olderId]);
+    expect(backgroundSessions).toEqual(sessions);
     expect(sessions[0]).toMatchObject({
       inputTokens: 17,
       messageCount: 2,

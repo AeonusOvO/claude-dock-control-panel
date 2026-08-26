@@ -99,6 +99,7 @@ const registerClaudeRelaunchHarness = async (input: {
       developmentSessionOperations.runIfStampCurrent(stamp, operation),
     withLaunchDecisionSessionOperation: input.withDevelopmentSessionOperation,
     workspace: {
+      getDevelopmentRuntime: vi.fn(() => 'claude'),
       getStatus: vi.fn(() => ({ cwd: 'D:\\Project', id: 'session-1', ptyGeneration: 7 })),
     } as never,
   });
@@ -522,6 +523,7 @@ describe('main project-config transaction integration', () => {
       return {} as ReturnType<RestartRuntimeTerminal>;
     };
     const workspace = {
+      getDevelopmentRuntime: vi.fn(() => 'claude'),
       getStatus: vi.fn(() => ({ cwd: 'D:\\Project', id: 'session-1', ptyGeneration: 3 })),
     };
     const guards = {

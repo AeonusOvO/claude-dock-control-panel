@@ -152,7 +152,7 @@ const installFixtures = String.raw`
       ];
       names.push(
         'Agent SDK 启动器与 NPM 安装路径兼容',
-        '安全会话按钮状态单一来源与主题悬停色',
+        '会话恢复入口状态单一来源与主题悬停色',
         '模型接入成功后的原生会话启动事务',
         '后台活动权威空快照与失联任务处理',
         '任务与下载中心的阶段和真实进度',
@@ -389,7 +389,7 @@ const installFixtures = String.raw`
       operation.append(metrics, el('pre', 'download-task__log', '检测安装方式：npm\n已选择 registry.npmjs.org\nnpm 下载与写入中（总量未知）\n正在校验 claude --version'));
       list.append(operation);
     };
-    const launchButton = () => {
+    const resumeButton = () => {
       activateProjects();
       buildHistory(320, true);
       byId('native-conversation').style.setProperty('display', 'none', 'important');
@@ -400,14 +400,13 @@ const installFixtures = String.raw`
       for (const page of workbench.querySelectorAll('.workbench-page')) {
         page.classList.toggle('workbench-page--active', page.dataset.workbenchPage === 'session');
       }
-      const launch = byId('launch-new');
-      launch.disabled = false;
-      launch.removeAttribute('aria-busy');
-      launch.dataset.launchBlocked = 'false';
-      launch.textContent = '新建安全会话';
-      launch.scrollIntoView({ block: 'center' });
+      const resume = byId('launch-continue');
+      resume.disabled = false;
+      resume.removeAttribute('aria-busy');
+      resume.dataset.launchBlocked = 'false';
+      resume.scrollIntoView({ block: 'center' });
     };
-    window.__nativeQa = { attachments, base, diagnostic, interaction, launchButton, plan, recovery, runtimeSelection, summary, themeMenu, updates };
+    window.__nativeQa = { attachments, base, diagnostic, interaction, plan, recovery, resumeButton, runtimeSelection, summary, themeMenu, updates };
   })()
 `;
 
@@ -436,7 +435,7 @@ const styleProbeScript = `
   (() => {
     const send = document.querySelector('#native-send');
     const stop = send ? send.querySelector('.native-composer__send-stop') : null;
-    const launch = document.querySelector('#launch-new');
+    const launch = document.querySelector('#launch-continue');
     return JSON.stringify([
       send ? getComputedStyle(send).backgroundColor : null,
       stop ? getComputedStyle(stop).display + ':' + Math.round(stop.getBoundingClientRect().width) : null,
@@ -516,7 +515,7 @@ app
         const projectFolder = document.querySelector('.project-folder');
         const historyRows = [...document.querySelectorAll('.history-item')];
         const historyScroller = document.querySelector('.project-folder__history');
-        const launchButton = document.querySelector('#launch-new');
+        const launchButton = document.querySelector('#launch-continue');
         const rect = view.getBoundingClientRect();
         return {
           composerDisplay: getComputedStyle(composer).display,
@@ -659,17 +658,17 @@ app
       window.setContentSize(900, 640);
       window.webContents.setZoomFactor(1);
       window.webContents.sendInputEvent({ type: 'mouseMove', x: 4, y: 4 });
-      await scene('launchButton');
-      await capture('safe-launch-button', `${theme}-900x640-normal.png`, {
+      await scene('resumeButton');
+      await capture('conversation-resume-button', `${theme}-900x640-normal.png`, {
         interaction: 'normal',
         theme,
       });
       const point = await window.webContents.executeJavaScript(`(() => {
-        const rect = document.querySelector('#launch-new').getBoundingClientRect();
+        const rect = document.querySelector('#launch-continue').getBoundingClientRect();
         return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
       })()`);
       window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
-      await capture('safe-launch-button', `${theme}-900x640-hover.png`, {
+      await capture('conversation-resume-button', `${theme}-900x640-hover.png`, {
         interaction: 'hover',
         theme,
       });
@@ -860,7 +859,9 @@ app
         throw new Error(`${capture.file}: a history row is compressed or overlaps its tail slot`);
       }
     }
-    const launchCaptures = captures.filter((capture) => capture.feature === 'safe-launch-button');
+    const launchCaptures = captures.filter(
+      (capture) => capture.feature === 'conversation-resume-button',
+    );
     for (const theme of themes) {
       const normal = launchCaptures.find(
         (capture) => capture.theme === theme && capture.interaction === 'normal',
@@ -869,13 +870,13 @@ app
         (capture) => capture.theme === theme && capture.interaction === 'hover',
       );
       if (!normal || !hover || normal.dom.launchDisabled || hover.dom.launchDisabled) {
-        throw new Error(`${theme}: safe launch button was missing or disabled`);
+        throw new Error(`${theme}: conversation resume button was missing or disabled`);
       }
       if (normal.dom.launchBackground === hover.dom.launchBackground) {
-        throw new Error(`${theme}: safe launch hover did not deepen the theme accent`);
+        throw new Error(`${theme}: conversation resume hover did not deepen the theme accent`);
       }
       if (hover.dom.launchOpacity !== '1') {
-        throw new Error(`${theme}: safe launch hover became translucent`);
+        throw new Error(`${theme}: conversation resume hover became translucent`);
       }
     }
 

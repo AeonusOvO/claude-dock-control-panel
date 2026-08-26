@@ -24,6 +24,7 @@ const registerHarness = async (switchOperation?: DevelopmentRuntimeSwitchOperati
     runtimeActivityRegistry: {} as never,
     services: {} as never,
     workspace: {
+      getDevelopmentRuntime: vi.fn(() => 'claude'),
       getStatus: vi.fn(() => ({ cwd: 'D:\\Project', id: 'session-1' })),
     } as never,
   });

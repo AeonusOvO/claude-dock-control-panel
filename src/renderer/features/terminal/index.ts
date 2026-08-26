@@ -26,6 +26,7 @@ export type TerminalFeatureDependencies = Omit<
 
 export interface TerminalFeature {
   beginTerminalMask: (sessionId: string, label: string) => () => void;
+  beginWorkspaceTerminalPreview: (label: string) => () => void;
   cancelActiveResizes: () => void;
   dispose: () => void;
   disposeTerminalView: (sessionId: string, view: TerminalView) => void;
@@ -39,6 +40,11 @@ export interface TerminalFeature {
   getTerminalViews: () => Map<string, TerminalView>;
   hideTerminalContextMenu: () => void;
   launchClaudeTerminal: (mode: ClaudeLaunchMode) => Promise<void>;
+  launchClaudeSession: (
+    sessionId: string,
+    mode: ClaudeLaunchMode,
+    announce?: boolean,
+  ) => Promise<boolean>;
   panelResizer: HTMLElement;
   playSendAnimation: (
     text: string,
@@ -103,9 +109,14 @@ const createTerminalFeature = (dependencies: TerminalFeatureDependencies): Termi
 
   return {
     beginTerminalMask: io.beginTerminalMask,
+    beginWorkspaceTerminalPreview: io.beginWorkspaceTerminalPreview,
     cancelActiveResizes: layout.cancelActiveResizes,
     dispose: () => {
       launchDecisionController.dispose();
+      state.workspaceTerminalPreviewState?.overlay.remove();
+      state.workspaceTerminalPreviews.clear();
+      state.workspaceTerminalPreviewState = undefined;
+      document.body.dataset.workspaceTerminalPreview = 'idle';
       actions.dispose();
     },
     disposeTerminalView: views.disposeTerminalView,
@@ -121,6 +132,7 @@ const createTerminalFeature = (dependencies: TerminalFeatureDependencies): Termi
     getTerminalViews: () => state.terminalViews,
     hideTerminalContextMenu: io.hideTerminalContextMenu,
     launchClaudeTerminal: actions.launchClaudeTerminal,
+    launchClaudeSession: actions.launchClaudeSession,
     panelResizer: elements.panelResizer,
     playSendAnimation: layout.playSendAnimation,
     pruneTerminalControlOperations: (validSessionIds) => {

@@ -7,7 +7,6 @@ import type {
 } from '../../shared/contracts';
 import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
-import type { AgentRuntimeStore } from '../runtime/store';
 import {
   cleanupFailedRuntimeLaunch,
   type FailedRuntimeLaunchCleanupDependencies,
@@ -23,7 +22,6 @@ import {
 import type { MainGuards } from './guards';
 
 export interface CodexIpcDependencies {
-  agentRuntimeStore: AgentRuntimeStore;
   /* Shared with every other runtime launch, all of which unwind the same terminal ownership. */
   failedRuntimeLaunchCleanupDependencies: FailedRuntimeLaunchCleanupDependencies;
   guards: Pick<
@@ -42,7 +40,6 @@ export interface CodexIpcDependencies {
 const reportCodexFailure = createFailureReporter('codex');
 
 export const registerCodexIpc = ({
-  agentRuntimeStore,
   failedRuntimeLaunchCleanupDependencies,
   guards: {
     assertApplicationUpdatesAllowed,
@@ -173,8 +170,8 @@ export const registerCodexIpc = ({
           let launchPrepared = false;
           let ownedGeneration: PtyGeneration | undefined;
           try {
-            if (agentRuntimeStore.get(status.cwd) !== 'codex') {
-              throw new Error('当前项目尚未选择 Codex 开发引擎。');
+            if (workspace.getDevelopmentRuntime(validatedSessionId) !== 'codex') {
+              throw new Error('这个对话不是使用 Codex 创建的。');
             }
             return await withOfficialProviderAccess(
               { action: 'cli-launch', cwd: status.cwd, provider: 'openai-codex' },
@@ -188,8 +185,8 @@ export const registerCodexIpc = ({
                 launchPrepared = true;
                 ownedGeneration = prepared.predecessorPtyGeneration;
                 assertCurrent();
-                if (agentRuntimeStore.get(status.cwd) !== 'codex') {
-                  throw new Error('当前项目已切换开发引擎，这次 Codex 启动已取消。');
+                if (workspace.getDevelopmentRuntime(validatedSessionId) !== 'codex') {
+                  throw new Error('这个对话的开发引擎已变化，这次 Codex 启动已取消。');
                 }
                 restartRuntimeTerminal(
                   runtime,

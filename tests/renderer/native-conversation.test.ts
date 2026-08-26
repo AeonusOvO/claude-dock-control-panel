@@ -107,7 +107,7 @@ describe('native conversation behavior', () => {
     });
   });
 
-  it('keeps the primary launch action visible through remediable route failures', async () => {
+  it('keeps the redundant primary new-session action removed through route failures', async () => {
     await withTerminalRenderer({}, async (harness) => {
       harness.emit(
         'onClaudeState',
@@ -123,9 +123,10 @@ describe('native conversation behavior', () => {
         }),
       );
       const button = harness.query<HTMLButtonElement>('#run-claude');
-      expect(button.hidden).toBe(false);
+      expect(button.hidden).toBe(true);
       expect(button.disabled).toBe(false);
       expect(button.dataset.launchBlocked).toBe('true');
+      expect(harness.query<HTMLButtonElement>('.project-folder__action').disabled).toBe(false);
     });
   });
 

@@ -7,7 +7,6 @@ import {
   finishCodexOperation,
   type CodexLaunchMutableState,
 } from './codex-operation-state';
-import { runtimeClaude, runtimeCodex } from './project-state-dom';
 
 export interface CodexLaunchAccountActions {
   switchDevelopmentRuntime: (runtime: DevelopmentRuntime) => Promise<void>;
@@ -41,113 +40,18 @@ const codexResultIsCurrent = (
 
 const createRuntimeSwitchAction = (
   deps: CodexLaunchDeps,
-  mutableState: CodexLaunchMutableState,
+  _mutableState: CodexLaunchMutableState,
 ): ((runtime: DevelopmentRuntime) => Promise<void>) => {
-  const {
-    getWorkspaceState,
-    activeStatus,
-    developmentRuntimeStates,
-    runtimeStateLoadGenerations,
-    terminalState,
-    showToast,
-    setWorkbenchOpen,
-    preflightFeature,
-  } = deps;
-
   return async (runtime: DevelopmentRuntime): Promise<void> => {
-    const status = activeStatus();
-    if (!status) {
-      return;
-    }
-    const projectCwd = status.cwd.toLocaleLowerCase('en-US');
-    const projectSessions = getWorkspaceState().sessions.filter(
-      (session) => session.cwd.toLocaleLowerCase('en-US') === projectCwd,
-    );
-    if (!projectSessions.some((session) => session.id === status.id)) {
-      return;
-    }
-    const mainOwnedState = projectSessions
-      .map((session) => developmentRuntimeStates.get(session.id))
-      .find((state) => state?.switchOperation);
-    if (
-      mainOwnedState ||
-      projectSessions.some((session) => mutableState.runtimeSwitchOperations.isActive(session.id))
-    ) {
-      const currentState = mainOwnedState ?? developmentRuntimeStates.get(status.id);
-      if (currentState) {
-        terminalState.renderDevelopmentRuntimeState(
-          { ...currentState, sessionId: status.id },
-          false,
-        );
-      }
-      return;
-    }
-    const operations = projectSessions.map((session) =>
-      mutableState.runtimeSwitchOperations.begin(session.id, runtime),
-    );
-    const projectOperationsAreCurrent = (): boolean =>
-      operations.every((candidate) => mutableState.runtimeSwitchOperations.isCurrent(candidate));
-    const activeProjectStatus = (): ReturnType<typeof activeStatus> => {
-      if (!projectOperationsAreCurrent()) {
-        return undefined;
-      }
-      const active = activeStatus();
-      return active?.cwd.toLocaleLowerCase('en-US') === projectCwd ? active : undefined;
-    };
-    const currentState = developmentRuntimeStates.get(status.id);
-    if (currentState) {
-      terminalState.renderDevelopmentRuntimeState(currentState, false);
-    }
     try {
-      const state = await window.controlPanel.setDevelopmentRuntime(status.id, runtime);
-      if (!projectOperationsAreCurrent() || state.sessionId !== status.id) {
-        return;
-      }
-      const normalizedCwd = state.cwd.toLocaleLowerCase('en-US');
-      for (const session of getWorkspaceState().sessions) {
-        if (session.cwd.toLocaleLowerCase('en-US') === normalizedCwd) {
-          runtimeStateLoadGenerations.invalidate(session.id);
-          developmentRuntimeStates.set(session.id, {
-            ...state,
-            sessionId: session.id,
-          });
-        }
-      }
-      const activeProject = activeProjectStatus();
-      if (!activeProject) return;
-      terminalState.renderDevelopmentRuntimeState({ ...state, sessionId: activeProject.id });
-      if (runtime === 'codex') {
-        await terminalState.loadCodexState(activeProject.id);
-        if (!activeProjectStatus()) return;
-        setWorkbenchOpen(true);
-      } else {
-        await terminalState.loadClaudeState(activeProject.id);
-        if (!activeProjectStatus()) return;
-      }
-      await preflightFeature.invalidateAndRun('provider-switch');
-      if (!activeProjectStatus()) return;
-      showToast(
-        runtime === 'codex' ? '当前项目已切换到 Codex。' : '当前项目已切换到 Claude Code。',
-      );
+      await window.controlPanel.setNextDevelopmentRuntime(runtime);
+      await deps.terminalState.loadNextDevelopmentRuntime();
+      deps.showToast(`下一个新对话将使用 ${runtime === 'codex' ? 'Codex' : 'Claude Code'}。`);
     } catch (error) {
-      if (activeProjectStatus()) {
-        showToast(error instanceof Error ? error.message : '无法切换开发引擎。', 'error');
-      }
-    } finally {
-      let finished = false;
-      for (const candidate of operations) {
-        finished = mutableState.runtimeSwitchOperations.finish(candidate) || finished;
-      }
-      if (finished) {
-        const active = activeStatus();
-        const latest =
-          active?.cwd.toLocaleLowerCase('en-US') === projectCwd
-            ? developmentRuntimeStates.get(active.id)
-            : undefined;
-        if (latest) {
-          terminalState.renderDevelopmentRuntimeState(latest, false);
-        }
-      }
+      deps.showToast(
+        error instanceof Error ? error.message : '无法保存新建项目开发引擎。',
+        'error',
+      );
     }
   };
 };
@@ -247,17 +151,6 @@ export const createCodexLaunchAccountActions = (
         });
     });
   };
-
-  runtimeClaude.addEventListener('change', () => {
-    if (runtimeClaude.checked) {
-      void switchDevelopmentRuntime('claude');
-    }
-  });
-  runtimeCodex.addEventListener('change', () => {
-    if (runtimeCodex.checked) {
-      void switchDevelopmentRuntime('codex');
-    }
-  });
 
   return {
     switchDevelopmentRuntime,

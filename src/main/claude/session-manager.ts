@@ -10,6 +10,8 @@ import {
   statSync,
   unlinkSync,
 } from 'node:fs';
+import type { Dirent } from 'node:fs';
+import { readFile, readdir, stat as statAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { ClaudeSessionMetadata } from '../../shared/contracts';
@@ -89,6 +91,38 @@ export class ClaudeSessionManager {
       return [];
     }
 
+    return sessions.sort((left, right) => right.lastActiveAt - left.lastActiveAt);
+  }
+
+  /**
+   * Interactive history reads stay off the Electron main-process hot path. File I/O is async and
+   * parsing yields between bounded batches, so a large JSONL archive cannot freeze window events,
+   * terminal IPC, or other session launches while its sidebar index is being rebuilt.
+   */
+  public async getSessionsForProjectAsync(cwd: string): Promise<ClaudeSessionMetadata[]> {
+    const projectDirectory = this.projectDirectory(cwd);
+    let entries: Dirent<string>[];
+    try {
+      entries = await readdir(projectDirectory, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const sessions: ClaudeSessionMetadata[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.jsonl') continue;
+      const conversationId = path.basename(entry.name, path.extname(entry.name));
+      if (!isValidClaudeSessionId(conversationId)) continue;
+      try {
+        const metadata = await this.extractSessionMetadataAsync(
+          path.join(projectDirectory, entry.name),
+          conversationId,
+        );
+        if (metadata) sessions.push(metadata);
+      } catch {
+        // A malformed, deleted, or concurrently-written transcript is isolated to its own row.
+      }
+    }
     return sessions.sort((left, right) => right.lastActiveAt - left.lastActiveAt);
   }
 
@@ -231,6 +265,96 @@ export class ClaudeSessionManager {
       estimatedCostUsd,
       inputTokens: inputTokens > 0 ? inputTokens : undefined,
       lastActiveAt: Math.floor(lastActiveAt || stat.mtimeMs),
+      messageCount,
+      modelId,
+      outputTokens: outputTokens > 0 ? outputTokens : undefined,
+      sessionId: normalizedSessionId,
+      sessionName: customTitle ?? aiTitle ?? sessionName ?? slug,
+    };
+  }
+
+  private async extractSessionMetadataAsync(
+    sessionFile: string,
+    conversationId: string,
+  ): Promise<ClaudeSessionMetadata | null> {
+    const fileStat = await statAsync(sessionFile);
+    if (!fileStat.isFile() || fileStat.size === 0 || fileStat.size > MAX_JSONL_SIZE) {
+      return null;
+    }
+
+    const contents = await readFile(sessionFile, 'utf8');
+    let sessionId: string | undefined;
+    let aiTitle: string | undefined;
+    let customTitle: string | undefined;
+    let sessionName: string | undefined;
+    let slug: string | undefined;
+    let modelId: string | undefined;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let estimatedCostUsd: number | undefined;
+    let messageCount = 0;
+    let lastActiveAt = 0;
+    const lines = contents.split('\n');
+
+    for (const [index, line] of lines.entries()) {
+      if (index > 0 && index % 256 === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        sessionId ??=
+          optionalNonEmptyString(parsed.sessionId) ?? optionalNonEmptyString(parsed.session_id);
+        slug ??= optionalNonEmptyString(parsed.slug);
+        sessionName ??= optionalNonEmptyString(parsed.sessionName);
+        if (parsed.type === 'ai-title') {
+          aiTitle = optionalNonEmptyString(parsed.aiTitle) ?? aiTitle;
+        }
+        if (parsed.type === 'custom-title') {
+          customTitle = optionalNonEmptyString(parsed.customTitle) ?? customTitle;
+        }
+
+        const message =
+          parsed.message && typeof parsed.message === 'object'
+            ? (parsed.message as Record<string, unknown>)
+            : undefined;
+        const recordRole =
+          optionalNonEmptyString(parsed.type) ?? optionalNonEmptyString(parsed.role);
+        const messageRole = optionalNonEmptyString(message?.role);
+        if (
+          recordRole === 'user' ||
+          recordRole === 'assistant' ||
+          messageRole === 'user' ||
+          messageRole === 'assistant'
+        ) {
+          messageCount += 1;
+        }
+
+        modelId ??= optionalNonEmptyString(message?.model) ?? optionalNonEmptyString(parsed.model);
+        const usageCandidate = message?.usage ?? parsed.usage;
+        if (usageCandidate && typeof usageCandidate === 'object') {
+          const usage = usageCandidate as Record<string, unknown>;
+          inputTokens += optionalFiniteNumber(usage.input_tokens) ?? 0;
+          outputTokens += optionalFiniteNumber(usage.output_tokens) ?? 0;
+        }
+        estimatedCostUsd ??=
+          optionalFiniteNumber(parsed.estimatedCostUsd) ??
+          optionalFiniteNumber(parsed.total_cost_usd) ??
+          optionalFiniteNumber(parsed.cost);
+        const timestamp = timestampMilliseconds(parsed.timestamp);
+        if (timestamp !== undefined && timestamp > lastActiveAt) lastActiveAt = timestamp;
+      } catch {
+        // Claude Code may append an incomplete final line while the index is being read.
+      }
+    }
+
+    const normalizedSessionId =
+      sessionId && isValidClaudeSessionId(sessionId) ? sessionId : conversationId;
+    return {
+      conversationId,
+      estimatedCostUsd,
+      inputTokens: inputTokens > 0 ? inputTokens : undefined,
+      lastActiveAt: Math.floor(lastActiveAt || fileStat.mtimeMs),
       messageCount,
       modelId,
       outputTokens: outputTokens > 0 ? outputTokens : undefined,

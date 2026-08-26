@@ -74,6 +74,7 @@ const createRuntimeState = (rendererRegistry: Registry): RuntimeState => {
   const onboardingBrandLogo = requiredElement<HTMLImageElement>('#onboarding-brand-logo');
 
   void window.controlPanel.setConversationBusy(false);
+  void window.controlPanel.setWorkspaceTransitionBusy(false);
 
   routerSettingsContent.append(routerManager);
 
@@ -372,6 +373,7 @@ const installTerminalProjectStack = (
     },
   });
   shells.terminalProjectState = terminalProjectState;
+  void terminalProjectState.loadNextDevelopmentRuntime();
 
   const codexLaunchShell = createCodexLaunch({
     getWorkspaceState,

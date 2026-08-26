@@ -65,9 +65,9 @@ export const registerSessionIpc = ({
     )) {
       active.add(conversationId);
     }
-    return sessionManager
-      .getSessionsForProject(status.cwd)
-      .filter((session) => !active.has(session.conversationId.toLowerCase()));
+    return (await sessionManager.getSessionsForProjectAsync(status.cwd)).filter(
+      (session) => !active.has(session.conversationId.toLowerCase()),
+    );
   });
   ipcMain.handle(CHANNELS.CLAUDE_GET_SESSIONS_FOR_PATH, async (event, projectPath: unknown) => {
     validateSender(event);
@@ -81,9 +81,9 @@ export const registerSessionIpc = ({
     )) {
       active.add(conversationId);
     }
-    return sessionManager
-      .getSessionsForProject(validatedProjectPath)
-      .filter((session) => !active.has(session.conversationId.toLowerCase()));
+    return (await sessionManager.getSessionsForProjectAsync(validatedProjectPath)).filter(
+      (session) => !active.has(session.conversationId.toLowerCase()),
+    );
   });
   ipcMain.handle(
     CHANNELS.CLAUDE_RENAME_SESSION,

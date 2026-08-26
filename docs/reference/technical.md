@@ -110,7 +110,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
         │                           ├─ TerminalSession ── node-pty ── PowerShell / ConPTY
         │                           └─ …
         │
-        ├── AgentRuntimeStore ── 项目路径 → Claude Code / Codex 选择
+        ├── AgentRuntimeStore ── 下一次新建使用的 Claude Code / Codex 全局偏好
         ├── SessionOperationCoordinator ── per-session PTY 变更租约 / 取消后等待 unwind
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
         │        ├── ClaudeConfigStore ── safeStorage / 项目级接入配置
@@ -151,9 +151,11 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
 
 ### Claude 会话入口路由
 
-- 主路径固定为 `launchClaudeTerminal(mode) → claude:launch → PowerShell/ConPTY`。侧栏“新建安全会话”、
-  工作台 new/continue/resume 和历史记录精确恢复均复用这条路径；成功后关闭原生可见层并恢复终端 fit/focus，
-  启动失败时保留当前界面与既有 owner。
+- 新建主路径固定为 `project:open-conversation → createdSessionId/runtime → launchClaudeSession()` 或
+  `prepareAndLaunchCodex()`。项目 `+` 的每次点击都取得精确 session ID 并启动独立后台续体；切换活动终端
+  不会取消它。Codex 共享安装/登录等待由 Codex 与工作区状态事件唤醒，5 秒异步定时器仅作丢信号兜底。
+  Claude 工作台的 continue/resume 与历史记录精确恢复仍复用同一 per-session 启动协调；
+  成功后关闭原生可见层并恢复终端 fit/focus，失败则回滚精确临时终端。
 - 次级路径固定为 `launchNativeClaude(mode) → native-conversation:start`。终端工具栏的“原生对话”是
   新建或重新打开 native owner 的唯一主界面入口；原生界面中的同一按钮显示“返回终端”，并复用既有
   加密草稿保全、精确 UUID 转移、附件保全和失败回滚事务；仅安全保存草稿不再额外要求确认。
@@ -493,7 +495,9 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `TerminalStatus | undefined`，`OperationResult.status` 也是可选字段，渲染层要判空。
   用 `homedir()` 兜底会造出一个以 Windows 用户名命名、用户从没打开过的项目。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
-- 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。
+- 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。每个 session 在
+  创建时把 `AgentRuntimeStore.getNext()` 捕获为不可变 runtime，`getDevelopmentRuntime(sessionId)` 只返回
+  该会话值；全局选择的后续变化不会改写同目录兄弟会话。
 - `directory:choose` 从 IPC sender 解析真实所属 `BrowserWindow`，并仅在活动 cwd 仍是可访问
   目录时把它设为 `defaultPath`，否则回退到用户目录。带父窗口的原生对话框若因 Windows
   owner handle 状态失败，会无父窗口重试一次；失败原因通过结构化结果返回，不与后续
@@ -541,12 +545,10 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `beginLaunch()` supersede、session/global invalidation 与 restart 异常都必须清除未消费 expectation，
   禁止跨启动泄漏。restart 返回后才记录 owned generation、检查 intent、绑定 PTY 和写命令，因此后续
   失败仍只停止本次替代 generation 并中止精确 prepared token。
-- `ProjectRuntimeSwitchCoordinator` 按规范化项目目录而非 renderer session 持有 `runtime:set`。main 在
-  provider policy 等待前后都重新检查该目录全部 session 的活动 agent，并通过 `runtime:get` 暴露单调
-  pending attempt 与目标 runtime；同目录 renderer session 共用 busy 状态，reload 后只在 pending 期间轮询
-  到提交结果。直接启动在异步准备完成、重启 PTY 之前再次核对 `AgentRuntimeStore`。由于最后检查、runtime
-  提交与同步 restart/write 之间没有 `await`，开发引擎切换和启动只能有一个先完成：切换先完成时旧引擎
-  启动取消，启动先写入时切换因活动 agent 拒绝。
+- 普通 UI 不再调用项目级 `runtime:set`。`runtime:get-next` / `runtime:set-next` 读写一个原子持久化的全局
+  “下一次新建”偏好；新 session 在同步分配时捕获它，因此一次已被接受的点击不会被稍后的选择改换引擎。
+  `runtime:get` 按 session 回读实际 runtime。旧 `ProjectRuntimeSwitchCoordinator` 与 `runtime:set` 只保留为
+  兼容/高级诊断路径，不参与普通新建交互。
 - renderer 的 `ClaudeLaunchAttemptRegistry`（`src/renderer/platform/claude-launch-attempt.ts`）按 session 保存
   generation、初始 conversation UUID、Claude active、PowerShell PID 与精确 `ptyGeneration`。点击主入口
   或任何 relaunch 在第一个 `await` 前登记并立即重绘 `disabled`/`aria-busy`；冷状态第一次观察只建立
@@ -570,11 +572,14 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   和 dispose 后 timer 都被 fenced。Claude launch registry 另保存 presentation phase：attempt 从 `preflight`
   开始，精确 terminal lifecycle 推进为 `starting`，owned confirmation 进入 `paused`；stale 结果不能倒退
   phase、toast 或恢复入口。
-- 项目页的工作区动作按 **目标** 而不是按元素去重（`ProjectsState.workspaceMutations`，与
-  `actions-history.ts` 的 `storedConversationRestores` 同一模式）。这些行由每次 workspace 重绘整体重建，
-  按下的那个按钮在请求返回前就已被一个 enabled 的新按钮替换，所以 `disabled` 拦不住第二次点击。
-  `openConversation` 必须去重：每次被接受的调用都会真的拉起一个 PTY，双击原本会留下一个用户没要过的
-  终端进程。`closeProject` 一并去重，避免确认框叠两层。
+- 关闭、删除等工作区动作仍按 **目标** 去重（`ProjectsState.workspaceMutations`）；新建是刻意的例外：
+  `openConversation` 不按目录合并，每次点击都先同步插入独立 pending 行和终端 preview，再向 main 请求
+  一个不同的 `createdSessionId`。main 返回后 pending 行无缝替换为带 `transitioningConversations` 的真实行，
+  CLI 成功才解除“正在新建”。失败会关闭精确 session；关闭也失败则写入
+  `failedConversationTransitions`，左栏显示红色“启动失败 · 请关闭”，不能伪装为运行成功。
+- 历史恢复只做可逆的 UI 移动，JSONL 正文从不重命名或删除。点击后历史行立即从原数组移除并进入
+  “正在恢复”行；打开终端、模型决策或 CLI 启动任一步失败都会恢复原快照并强制重新扫描。历史扫描使用
+  `getSessionsForProjectAsync()` 的异步 I/O，并每 256 条 JSONL 记录通过 `setImmediate` 让出 main 事件循环。
 
 ### 退出确认握手
 
@@ -600,7 +605,10 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
 `BusyRegistry` 是聊天之外的长期操作事实来源：下载登记为 `resumable`，安装、卸载和配置写入登记为
 `blocking`，释放函数幂等且所有调用点都在 `finally` 执行。它的快照同时驱动托盘 tooltip、下载
 中心与退出确认；渲染进程再把正在流式生成的回复、发送中的提交和附件读取合并进退出清单。确认框
-把可后台继续与中断风险分组，安全主按钮固定为最小化到托盘；没有活动项时仍显示一般退出确认。
+把可后台继续与中断风险分组；新建/恢复的引用计数还投影为 main 中不可取消的
+`conversation:workspace-transition` lease，其 `stage` 明确说明历史正文仍在磁盘，但强退会中断尚未提交的
+启动或恢复。弹窗以全窗口 backdrop 置灰应用，逐项显示 label、stage 与风险徽标；用户可返回软件、转到
+后台继续收尾或二次确认强制退出。没有活动项时仍显示一般退出确认。
 工作区终端不注册长期租约，避免把普通 shell 永久标成忙碌，但在退出握手时以精确 session 快照加入
 清单。确认框已被其他确认占用时按「取消退出」处理，而不是丢掉这次请求。
 
@@ -897,23 +905,19 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   MutationObserver 同时清理已断开 DOM 的 active 实例。详情抽屉从
   `getArtifactNetworkState` 取快照，再用 `artifact:network-log` 增量更新。
 
-## 项目开发引擎与 Codex
+## 新建项目开发引擎与 Codex
 
-### 项目级选择
+### 下一次新建选择
 
-- `AgentRuntimeStore`（`src/main/runtime/store.ts`）以小写规范化绝对路径为键，把
-  `claude | codex` 原子写入 `userData/claude/agent-runtimes.json`，文件权限为 `0600`。
-  新项目和损坏/未知版本的存储都安全回落到 `claude`；忘记项目时同步删除选择。
-- renderer 只能按 session ID 请求/切换，主进程再从 `TerminalWorkspace` 取可信 cwd。同一
-  项目任一 session 中有 Claude 或 Codex agent 运行时都拒绝切换，避免不同窗口绕过互斥规则。
-  相同项目的多个 session 在 renderer 同步更新选择快照。
-- 这条互斥只覆盖 PTY：`hasActiveRuntime` 走 `ClaudeRuntime.isActive`，读的是 workspace session
-  表，而原生对话把路由挂在 `nativeRouteReservations` 下。因此**活动的原生对话不会拒绝开发引擎
-  切换**，切换会照常提交。切换不具破坏性：`RouteLifecycleCoordinator.hasUser` 同时统计 reservation
-  而不只是活动 PTY session，所以 claude→codex 时 `stopUnusedRoutingServices` 不会掐掉原生对话仍在
-  使用的路由，面板、记录与输入框都保持可用。是否应当在原生回合进行中额外拒绝切换尚未定论，
-  主进程、renderer、文档与测试都没有实现该门禁，`real-electron-visual-qa.cjs` 断言的是"切换不丢
-  原生记录"，而不是"切换被拒绝"。
+- `AgentRuntimeStore`（`src/main/runtime/store.ts`）把 `nextRuntime: claude | codex` 原子写入
+  `userData/claude/agent-runtimes.json`，文件权限为 `0600`；缺失、损坏或未知值回落到 `claude`。旧版
+  `projects` 映射继续读取，供兼容 IPC 与诊断使用，但普通界面不再写它。
+- renderer 可在没有活动项目时读取或保存下一次偏好。保存期间先呈现用户选择；IPC 失败会恢复之前值、
+  解除 disabled 并显示错误。任一会话正在新建或恢复时 fieldset 暂时禁用，避免用户误以为选择能改变
+  已经分配的 session。
+- `TerminalWorkspace` 按 session ID 保存实际 runtime。`project:add`、`project:open-conversation` 在创建
+  session 的同步提交点读取 nextRuntime，并把 `createdSessionId + runtime` 一起返回；renderer 后续启动
+  永远使用这两个精确值，切换前台或稍后改变偏好都不会改写 owner。
 - `ControlPanelApi` 只暴露结构化 runtime、安装、登录、退出、账号状态和启动方法。preload
   不提供任意命令、任意 App Server method 或任意外链入口；主进程继续验证 sender、session、
   枚举值和登录 URL。

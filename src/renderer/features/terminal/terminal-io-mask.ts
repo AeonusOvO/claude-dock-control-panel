@@ -4,6 +4,7 @@ import type { TerminalMaskState, TerminalState } from './state';
 
 export interface TerminalIoMaskActions {
   beginTerminalMask: (sessionId: string, label: string) => () => void;
+  beginWorkspaceTerminalPreview: (label: string) => () => void;
 }
 
 export const createTerminalIoMaskActions = (
@@ -18,6 +19,7 @@ export const createTerminalIoMaskActions = (
     }
     state.terminalMasks.delete(sessionId);
     maskState.overlay.remove();
+    document.dispatchEvent(new Event('terminal-mask-change'));
     maskState.view.container.inert = false;
     const restore = maskState.focusBeforeMask;
     if (restore?.isConnected) {
@@ -75,6 +77,10 @@ export const createTerminalIoMaskActions = (
     }
     const overlay = document.createElement('div');
     overlay.className = 'terminal-mask';
+    const active = dependencies.getWorkspaceState().activeSessionId === sessionId;
+    overlay.classList.toggle('terminal-mask--active', active);
+    overlay.classList.toggle('terminal-mask--inactive', !active);
+    overlay.dataset.sessionId = sessionId;
     overlay.tabIndex = -1;
     overlay.setAttribute('role', 'status');
     overlay.setAttribute('aria-live', 'polite');
@@ -112,7 +118,9 @@ export const createTerminalIoMaskActions = (
     const focusBeforeMask =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     view.container.inert = true;
-    overlay.focus({ preventScroll: true });
+    if (dependencies.getWorkspaceState().activeSessionId === sessionId) {
+      overlay.focus({ preventScroll: true });
+    }
     const maskState: TerminalMaskState = {
       depth: 1,
       focusBeforeMask,
@@ -121,6 +129,7 @@ export const createTerminalIoMaskActions = (
       view,
     };
     state.terminalMasks.set(sessionId, maskState);
+    document.dispatchEvent(new Event('terminal-mask-change'));
 
     let disposed = false;
     return () => {
@@ -132,5 +141,74 @@ export const createTerminalIoMaskActions = (
     };
   };
 
-  return { beginTerminalMask };
+  const renderWorkspaceTerminalPreview = (): void => {
+    const presentation = state.workspaceTerminalPreviewState;
+    if (!presentation) return;
+    const previews = [...state.workspaceTerminalPreviews.values()];
+    const latest = previews.at(-1);
+    if (!latest) {
+      presentation.overlay.remove();
+      state.workspaceTerminalPreviewState = undefined;
+      document.body.dataset.workspaceTerminalPreview = 'idle';
+      document.dispatchEvent(new Event('workspace-terminal-preview-change'));
+      if (presentation.focusBeforePreview?.isConnected) {
+        presentation.focusBeforePreview.focus({ preventScroll: true });
+      } else {
+        dependencies.focusComposer();
+      }
+      return;
+    }
+    presentation.label.textContent = latest.label;
+    presentation.detail.textContent =
+      previews.length > 1
+        ? `${previews.length} 个对话正在后台并行准备，离开当前终端不会中断。`
+        : '后台正在建立独立终端，切换到其他对话不会中断。';
+  };
+
+  /** Paints feedback in the click frame, before the main process has allocated a session id. */
+  const beginWorkspaceTerminalPreview = (label: string): (() => void) => {
+    const id = ++state.workspaceTerminalPreviewSequence;
+    state.workspaceTerminalPreviews.set(id, { id, label });
+    if (!state.workspaceTerminalPreviewState) {
+      const overlay = document.createElement('div');
+      overlay.className = 'terminal-mask terminal-mask--active terminal-mask--workspace-preview';
+      overlay.tabIndex = -1;
+      overlay.setAttribute('role', 'status');
+      overlay.setAttribute('aria-live', 'polite');
+
+      const veil = document.createElement('div');
+      veil.className = 'terminal-mask__veil';
+      const card = document.createElement('div');
+      card.className = 'terminal-mask__progress';
+      const message = document.createElement('strong');
+      message.className = 'terminal-mask__label';
+      const detail = document.createElement('span');
+      detail.className = 'terminal-mask__detail';
+      card.append(message, detail);
+      veil.append(card);
+      overlay.append(veil);
+      elements.terminalStage.append(overlay);
+      state.workspaceTerminalPreviewState = {
+        detail,
+        focusBeforePreview:
+          document.activeElement instanceof HTMLElement ? document.activeElement : null,
+        label: message,
+        overlay,
+      };
+      document.body.dataset.workspaceTerminalPreview = 'busy';
+      document.dispatchEvent(new Event('workspace-terminal-preview-change'));
+      overlay.focus({ preventScroll: true });
+    }
+    renderWorkspaceTerminalPreview();
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      state.workspaceTerminalPreviews.delete(id);
+      renderWorkspaceTerminalPreview();
+    };
+  };
+
+  return { beginTerminalMask, beginWorkspaceTerminalPreview };
 };

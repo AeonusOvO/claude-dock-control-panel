@@ -200,8 +200,9 @@ describe('Chinese interface contract', () => {
         requestId: 'quit-request-1',
       });
       expect(harness.query('#quit-confirmation-title').textContent).toBe(
-        '有操作正在进行，不建议退出',
+        '正在完成退出前的收尾工作',
       );
+      expect(harness.query('#quit-minimize').textContent).toContain('转到后台，继续收尾');
 
       harness.emit('onAppQuitRequested', {
         hasBlocking: false,

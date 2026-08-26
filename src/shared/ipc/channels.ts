@@ -35,6 +35,7 @@ const requestChannels = {
   // busy
   BUSY_LIST: 'busy:list',
   BUSY_SET_CONVERSATION: 'busy:set-conversation',
+  BUSY_SET_WORKSPACE_TRANSITION: 'busy:set-workspace-transition',
 
   // chat
   CHAT_DELETE_CONVERSATION: 'chat:delete-conversation',
@@ -195,8 +196,10 @@ const requestChannels = {
 
   // runtime
   RUNTIME_GET: 'runtime:get',
+  RUNTIME_GET_NEXT: 'runtime:get-next',
   RUNTIME_GET_ACTIVITY: 'runtime:get-activity',
   RUNTIME_SET: 'runtime:set',
+  RUNTIME_SET_NEXT: 'runtime:set-next',
   RUNTIME_TERMINATE_PROCESS: 'runtime:terminate-process',
 
   // software

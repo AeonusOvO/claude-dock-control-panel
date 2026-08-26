@@ -8,6 +8,7 @@ import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dep
 import type { ProjectsElements } from './elements';
 import type { ProjectsState } from './state';
 import type { WorkspaceRenderer } from './workspace';
+import { beginWorkspaceConversationTransition } from './transition-busy';
 
 export interface ProjectsWorkspaceActions {
   activateProject: (sessionId: string) => Promise<void>;
@@ -18,6 +19,164 @@ export interface ProjectsWorkspaceActions {
   openConversation: (projectPath: string) => Promise<void>;
   openDirectoryPicker: () => Promise<void>;
 }
+
+const beginOptimisticConversation = (
+  state: ProjectsState,
+  dependencies: ProjectsActionsDependencies,
+  rowsApi: ProjectsRowsApi,
+  projectPath: string,
+  title: string,
+): { finish: (render?: boolean) => void } => {
+  const id = `pending-conversation-${++state.pendingConversationSequence}`;
+  state.pendingConversations.set(id, { id, kind: 'creating', projectPath, title });
+  state.expandedFolders.add(projectPath.toLowerCase());
+  rowsApi.renderProjectList();
+  const releasePreview = dependencies.beginWorkspaceTerminalPreview('正在新建会话…');
+  let finished = false;
+  return {
+    finish: (render = true) => {
+      if (finished) return;
+      finished = true;
+      state.pendingConversations.delete(id);
+      releasePreview();
+      if (render) rowsApi.renderProjectList();
+    },
+  };
+};
+
+interface LaunchCreatedConversationInput {
+  dependencies: ProjectsActionsDependencies;
+  onSettled?: () => void;
+  projectPath: string;
+  result: WorkspaceResult;
+  rowsApi: ProjectsRowsApi;
+  state: ProjectsState;
+  workspaceRenderer: WorkspaceRenderer;
+}
+
+const launchCreatedConversation = ({
+  dependencies,
+  onSettled = () => undefined,
+  projectPath,
+  result,
+  rowsApi,
+  state,
+  workspaceRenderer,
+}: LaunchCreatedConversationInput): boolean => {
+  if (!result.createdSessionId || !result.runtime) return false;
+  const { createdSessionId, runtime } = result;
+  state.transitioningConversations.set(createdSessionId, 'creating');
+  rowsApi.renderProjectList();
+  const releaseMask = dependencies.beginTerminalMask(createdSessionId, '正在新建会话…');
+  const rollback = async (reason: string): Promise<void> => {
+    try {
+      const rolledBack = await window.controlPanel.closeProject(createdSessionId);
+      workspaceRenderer.renderWorkspace(rolledBack.state);
+      if (!rolledBack.ok) {
+        throw new Error(dependencies.resultFailureMessage(rolledBack, '自动回滚没有完成。'));
+      }
+      state.failedConversationTransitions.delete(createdSessionId);
+      dependencies.showToast(`${reason} 已撤销本次新建，对话列表已恢复。`, 'error');
+    } catch (error) {
+      state.failedConversationTransitions.set(createdSessionId, 'creating');
+      rowsApi.renderProjectList();
+      dependencies.showToast(
+        `${reason} 自动回滚未完成，临时终端仍保留，请手动关闭。${
+          error instanceof Error && error.message ? ` ${error.message}` : ''
+        }`,
+        'error',
+      );
+    }
+  };
+  void dependencies
+    .launchCreatedConversation(createdSessionId, runtime)
+    .then(async (started) => {
+      if (started) {
+        state.failedConversationTransitions.delete(createdSessionId);
+        dependencies.showToast(
+          `已在 ${dependencies.projectNameFromPath(projectPath)} 新建 ${
+            runtime === 'codex' ? 'Codex' : 'Claude Code'
+          } 对话`,
+        );
+        return;
+      }
+      await rollback(runtime === 'codex' ? 'Codex 对话准备失败。' : 'Claude Code 对话启动失败。');
+    })
+    .catch(async (error: unknown) => {
+      await rollback(error instanceof Error ? `${error.message}。` : '新对话启动失败。');
+    })
+    .finally(() => {
+      state.transitioningConversations.delete(createdSessionId);
+      releaseMask();
+      rowsApi.renderProjectList();
+      onSettled();
+    });
+  return true;
+};
+
+const requestActiveTerminalFocus = (
+  dependencies: ProjectsActionsDependencies,
+  workspace: WorkspaceState,
+): void => {
+  const status = workspace.sessions.find((candidate) => candidate.id === workspace.activeSessionId);
+  if (!status || (status.phase !== 'running' && status.phase !== 'starting')) return;
+  dependencies.retryTerminalFitUntilMeasured();
+  dependencies.requestComposerFocus(status.id);
+};
+
+const closeProjectFolderWithDependencies = async (
+  project: WorkspaceProjectView,
+  state: ProjectsState,
+  dependencies: ProjectsActionsDependencies,
+  workspaceRenderer: WorkspaceRenderer,
+  rowsApi: ProjectsRowsApi,
+): Promise<void> => {
+  if (
+    project.sessionIds.length > 0 &&
+    !(await dependencies.requestConfirmation({
+      confirmLabel: '关闭并归档',
+      message: `关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？终端会停止，对话会归档到“历史对话”。`,
+      title: '关闭项目对话',
+      tone: 'danger',
+    }))
+  ) {
+    return;
+  }
+  const result = await window.controlPanel.closeProjectFolder(project.path);
+  workspaceRenderer.renderWorkspace(result.state);
+  if (!result.ok) {
+    dependencies.showToast(
+      dependencies.resultFailureMessage(result, '无法关闭这个项目。'),
+      'error',
+    );
+    return;
+  }
+  for (const sessionId of project.sessionIds) {
+    state.failedConversationTransitions.delete(sessionId);
+  }
+  state.expandedFolders.add(project.path.toLowerCase());
+  await rowsApi.loadFolderHistory(project.path, true);
+  dependencies.showToast(`已关闭 ${project.name}，对话已归档到历史记录`);
+};
+
+const handleAddedProjectResult = (
+  result: WorkspaceResult,
+  projectPath: string,
+  dependencies: ProjectsActionsDependencies,
+  workspaceRenderer: WorkspaceRenderer,
+): boolean => {
+  workspaceRenderer.renderWorkspace(result.state);
+  if (!result.ok) {
+    dependencies.showToast(
+      dependencies.resultFailureMessage(result, '添加项目失败，请重试。'),
+      'error',
+    );
+    return false;
+  }
+  const name = dependencies.projectNameFromPath(projectPath);
+  dependencies.showToast(result.reused ? `${name} 已经打开，已切换到该项目` : `已添加 ${name}`);
+  return true;
+};
 
 export const createProjectsWorkspaceActions = (
   elements: ProjectsElements,
@@ -46,17 +205,6 @@ export const createProjectsWorkspaceActions = (
     }
   };
 
-  const requestActiveTerminalFocus = (workspace: WorkspaceState): void => {
-    const status = workspace.sessions.find(
-      (candidate) => candidate.id === workspace.activeSessionId,
-    );
-    if (!status || (status.phase !== 'running' && status.phase !== 'starting')) {
-      return;
-    }
-    dependencies.retryTerminalFitUntilMeasured();
-    dependencies.requestComposerFocus(status.id);
-  };
-
   const activateProject = async (sessionId: string): Promise<void> => {
     const result = await window.controlPanel.activateProject(sessionId);
     if (!result.ok) {
@@ -64,7 +212,7 @@ export const createProjectsWorkspaceActions = (
       return;
     }
     workspaceRenderer.renderWorkspace(result.state);
-    requestActiveTerminalFocus(result.state);
+    requestActiveTerminalFocus(dependencies, result.state);
   };
 
   /**
@@ -96,56 +244,62 @@ export const createProjectsWorkspaceActions = (
         return;
       }
       workspaceRenderer.renderWorkspace(result.state);
+      state.failedConversationTransitions.delete(status.id);
       state.expandedFolders.add(projectPath.toLowerCase());
       await rowsApi.loadFolderHistory(projectPath, true);
       dependencies.showToast(`已关闭“${status.title}”，可在历史对话中恢复`);
     });
 
-  /*
-   * Guarded because every accepted call spawns a real PTY: the "+" button and the empty-folder
-   * "打开一个新对话" button both land here, neither is disabled while the request is in flight, and a
-   * double click used to leave a second terminal process running that the user never asked for.
+  /**
+   * Every click owns a distinct main-process session. There is intentionally no folder-level
+   * debounce: ten clicks create ten terminal owners, and each engine launch continues even when a
+   * later click makes another tab active.
    */
-  const openConversation = async (projectPath: string): Promise<void> =>
-    runOnce(`open:${projectPath.toLowerCase()}`, async () => {
-      const result = await window.controlPanel.openConversation(projectPath);
-      workspaceRenderer.renderWorkspace(result.state);
-      if (!result.ok) {
-        dependencies.showToast(
-          dependencies.resultFailureMessage(result, '无法新建对话。'),
-          'error',
-        );
-        return;
-      }
-      dependencies.showToast(`已在 ${dependencies.projectNameFromPath(projectPath)} 新开一个对话`);
-      requestActiveTerminalFocus(result.state);
-    });
-
-  const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
-    if (
-      project.sessionIds.length > 0 &&
-      !(await dependencies.requestConfirmation({
-        confirmLabel: '关闭并归档',
-        message: `关闭“${project.name}”的全部 ${project.sessionIds.length} 个对话？终端会停止，对话会归档到“历史对话”。`,
-        title: '关闭项目对话',
-        tone: 'danger',
-      }))
-    ) {
+  const openConversation = async (projectPath: string): Promise<void> => {
+    const releaseTransition = beginWorkspaceConversationTransition(state);
+    const optimistic = beginOptimisticConversation(
+      state,
+      dependencies,
+      rowsApi,
+      projectPath,
+      '新对话',
+    );
+    let result: WorkspaceResult;
+    try {
+      result = await window.controlPanel.openConversation(projectPath);
+    } catch (error) {
+      optimistic.finish();
+      releaseTransition();
+      dependencies.showToast(error instanceof Error ? error.message : '无法新建对话。', 'error');
       return;
     }
-    const result = await window.controlPanel.closeProjectFolder(project.path);
+    optimistic.finish(false);
     workspaceRenderer.renderWorkspace(result.state);
     if (!result.ok) {
-      dependencies.showToast(
-        dependencies.resultFailureMessage(result, '无法关闭这个项目。'),
-        'error',
-      );
+      releaseTransition();
+      dependencies.showToast(dependencies.resultFailureMessage(result, '无法新建对话。'), 'error');
       return;
     }
-    state.expandedFolders.add(project.path.toLowerCase());
-    await rowsApi.loadFolderHistory(project.path, true);
-    dependencies.showToast(`已关闭 ${project.name}，对话已归档到历史记录`);
+
+    if (
+      !launchCreatedConversation({
+        dependencies,
+        onSettled: releaseTransition,
+        projectPath,
+        result,
+        rowsApi,
+        state,
+        workspaceRenderer,
+      })
+    ) {
+      releaseTransition();
+      dependencies.showToast('新对话已打开，但没有取得对应的后台启动标识。', 'error');
+    }
+    requestActiveTerminalFocus(dependencies, result.state);
   };
+
+  const closeProjectFolder = (project: WorkspaceProjectView): Promise<void> =>
+    closeProjectFolderWithDependencies(project, state, dependencies, workspaceRenderer, rowsApi);
 
   const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
     if (
@@ -175,22 +329,6 @@ export const createProjectsWorkspaceActions = (
     dependencies.showToast(`已从列表中移除 ${project.name}`);
   };
 
-  const handleWorkspaceResult = (result: WorkspaceResult, projectPath: string): boolean => {
-    workspaceRenderer.renderWorkspace(result.state);
-    if (!result.ok) {
-      dependencies.showToast(
-        dependencies.resultFailureMessage(result, '添加项目失败，请重试。'),
-        'error',
-      );
-      return false;
-    }
-    const name = dependencies.projectNameFromPath(projectPath);
-    dependencies.showToast(
-      result.reused ? `${name} 已经打开，已切换到该项目` : `已添加并启动 ${name}`,
-    );
-    return true;
-  };
-
   const addProject = async (directoryPath: string): Promise<void> => {
     elements.dropZone.disabled = true;
     elements.chooseDirectoryButton.disabled = true;
@@ -198,8 +336,24 @@ export const createProjectsWorkspaceActions = (
 
     try {
       const result = await window.controlPanel.addProject(directoryPath);
-      if (handleWorkspaceResult(result, directoryPath)) {
-        requestActiveTerminalFocus(result.state);
+      if (handleAddedProjectResult(result, directoryPath, dependencies, workspaceRenderer)) {
+        if (!result.reused) {
+          const releaseTransition = beginWorkspaceConversationTransition(state);
+          if (
+            !launchCreatedConversation({
+              dependencies,
+              onSettled: releaseTransition,
+              projectPath: directoryPath,
+              result,
+              rowsApi,
+              state,
+              workspaceRenderer,
+            })
+          ) {
+            releaseTransition();
+          }
+        }
+        requestActiveTerminalFocus(dependencies, result.state);
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : '';

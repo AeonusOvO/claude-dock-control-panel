@@ -846,12 +846,12 @@ const runStartupModelRestore = async ({
       ),
     openTemporarySession: (projectPath) => {
       const before = new Set(workspace.getState().sessions.map(({ id }) => id));
-      const opened = workspace.openProject(projectPath).state;
+      const opened = workspace.openProject(projectPath, 'claude').state;
       const sessionId = opened.activeSessionId;
       return sessionId && !before.has(sessionId) ? sessionId : undefined;
     },
     projectExists: existsSync,
-    projectRuntime: (projectPath) => ipc.agentRuntimeStore.get(projectPath),
+    projectRuntime: () => 'claude',
     restoreWorkspace: runtimeProfile.effects.restoreWorkspace,
     warn: (message, error) =>
       services.resolve(MAIN_LOGGER).warn('startup-model-restore', message, error),

@@ -16,6 +16,7 @@ export const registerBusyIpc = ({
   services,
   state,
 }: BusyIpcDependencies): void => {
+  let releaseWorkspaceTransitionBusy: (() => void) | undefined;
   ipcMain.handle(CHANNELS.BUSY_LIST, (event) => {
     validateSender(event);
     return services.resolve(BUSY_REGISTRY).list();
@@ -37,6 +38,28 @@ export const registerBusyIpc = ({
     } else if (!busy && state.releaseConversationBusy) {
       state.releaseConversationBusy();
       state.releaseConversationBusy = undefined;
+    }
+    return busyRegistry.list();
+  });
+  ipcMain.handle(CHANNELS.BUSY_SET_WORKSPACE_TRANSITION, (event, busy: unknown) => {
+    validateSender(event);
+    if (typeof busy !== 'boolean') {
+      throw new Error('工作区会话收尾状态无效。');
+    }
+    const busyRegistry = services.resolve(BUSY_REGISTRY);
+    if (busy && !releaseWorkspaceTransitionBusy) {
+      releaseWorkspaceTransitionBusy = busyRegistry.acquire({
+        cancellable: false,
+        domain: 'conversation',
+        id: 'conversation:workspace-transition',
+        kind: 'conversation',
+        label: '正在新建或恢复对话，后台仍在完成模型接入与终端交接',
+        severity: 'blocking',
+        stage: '强制退出不会删除历史正文，但会中断尚未完成的启动或恢复',
+      });
+    } else if (!busy && releaseWorkspaceTransitionBusy) {
+      releaseWorkspaceTransitionBusy();
+      releaseWorkspaceTransitionBusy = undefined;
     }
     return busyRegistry.list();
   });

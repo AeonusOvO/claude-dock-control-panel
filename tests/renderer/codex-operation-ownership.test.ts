@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   CodexProjectState,
   ControlPanelApi,
-  DevelopmentRuntimeState,
   WorkspaceState,
 } from '../../src/shared/contracts';
 import { change, settle, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
@@ -75,58 +74,34 @@ const twoSessionWorkspace = (activeSessionId: 'session-a' | 'session-b'): Worksp
   };
 };
 
-const siblingSessionWorkspace = (activeSessionId: 'session-a' | 'session-b'): WorkspaceState => {
-  const sessionA = terminalStatus(1, {
-    cwd: 'D:\\Project',
-    id: 'session-a',
-    title: 'Conversation A',
-  });
-  const sessionB = terminalStatus(1, {
-    cwd: sessionA.cwd,
-    id: 'session-b',
-    title: 'Conversation B',
-  });
-  return {
-    activeSessionId,
-    projects: [
-      {
-        lastActiveAt: 2,
-        missing: false,
-        name: 'Project',
-        open: true,
-        path: sessionA.cwd,
-        remembered: true,
-        sessionIds: [sessionA.id, sessionB.id],
-      },
-    ],
-    sessions: [sessionA, sessionB],
-  };
-};
-
 describe('renderer Codex operation ownership', () => {
-  it('keeps runtime switching owned across session renders and restores on failure', async () => {
-    const runtimeSwitch = deferred<DevelopmentRuntimeState>();
+  it('owns the global next-conversation preference and restores it on save failure', async () => {
+    const preferenceSave = deferred<'claude' | 'codex'>();
     await withTerminalRenderer(
-      { setDevelopmentRuntime: () => runtimeSwitch.promise },
+      { setNextDevelopmentRuntime: () => preferenceSave.promise },
       async (harness) => {
         const codex = harness.query<HTMLInputElement>('#runtime-codex');
         codex.checked = true;
         change(codex);
 
         const picker = harness.query<HTMLFieldSetElement>('#runtime-picker');
-        expect(harness.query('#runtime-picker-label').textContent).toContain('正在切换并检查网络…');
+        expect(harness.query('#runtime-picker-label').textContent).toContain(
+          '正在保存下次新建使用的引擎…',
+        );
         expect(picker.disabled).toBe(true);
         expect(picker.getAttribute('aria-busy')).toBe('true');
 
         harness.emit('onWorkspaceState', terminalWorkspace());
         await harness.flush();
-        expect(harness.query('#runtime-picker-label').textContent).toContain('正在切换并检查网络…');
+        expect(harness.query('#runtime-picker-label').textContent).toContain(
+          '正在保存下次新建使用的引擎…',
+        );
         expect(picker.disabled).toBe(true);
         expect(codex.checked).toBe(true);
 
-        runtimeSwitch.reject(new Error('synthetic runtime switch failure'));
+        preferenceSave.reject(new Error('synthetic preference save failure'));
         await settle(harness);
-        expect(harness.query('#runtime-picker-label').textContent).toContain('当前项目开发引擎');
+        expect(harness.query('#runtime-picker-label').textContent).toContain('新建项目开发引擎');
         expect(picker.disabled).toBe(false);
         expect(picker.getAttribute('aria-busy')).toBe('false');
         expect(harness.query<HTMLInputElement>('#runtime-claude').checked).toBe(true);
@@ -134,8 +109,8 @@ describe('renderer Codex operation ownership', () => {
     );
   });
 
-  it('does not apply a completed runtime switch to a newly active project', async () => {
-    const runtimeSwitch = deferred<DevelopmentRuntimeState>();
+  it('keeps the next-conversation engine global when the active project changes', async () => {
+    const preferenceSave = deferred<'claude' | 'codex'>();
     await withTerminalRenderer(
       {
         getDevelopmentRuntime: async (sessionId) => ({
@@ -144,7 +119,7 @@ describe('renderer Codex operation ownership', () => {
           sessionId,
         }),
         getWorkspace: async () => twoSessionWorkspace('session-a'),
-        setDevelopmentRuntime: () => runtimeSwitch.promise,
+        setNextDevelopmentRuntime: () => preferenceSave.promise,
       },
       async (harness) => {
         const codex = harness.query<HTMLInputElement>('#runtime-codex');
@@ -152,155 +127,58 @@ describe('renderer Codex operation ownership', () => {
         change(codex);
         harness.emit('onWorkspaceState', twoSessionWorkspace('session-b'));
         await settle(harness);
+        expect(harness.method('setNextDevelopmentRuntime')).toHaveBeenCalledWith('codex');
         harness.clearCalls();
 
-        runtimeSwitch.resolve({
-          cwd: 'D:\\ProjectA',
-          runtime: 'codex',
-          sessionId: 'session-a',
-        });
+        preferenceSave.resolve('codex');
         await settle(harness);
 
         expect(harness.method('getCodexProjectState')).not.toHaveBeenCalled();
         expect(harness.method('runNetworkPreflight')).not.toHaveBeenCalled();
-        expect(harness.query<HTMLInputElement>('#runtime-claude').checked).toBe(true);
-      },
-    );
-  });
-
-  it('applies a completed runtime switch to the active sibling session in the same project', async () => {
-    const runtimeSwitch = deferred<DevelopmentRuntimeState>();
-    const stateB = codexProjectState({
-      cwd: 'D:\\Project',
-      sessionId: 'session-b',
-    });
-    await withTerminalRenderer(
-      {
-        getCodexProjectState: async () => stateB,
-        getDevelopmentRuntime: async (sessionId) => ({
-          cwd: 'D:\\Project',
-          runtime: 'claude',
-          sessionId,
-        }),
-        getWorkspace: async () => siblingSessionWorkspace('session-a'),
-        setDevelopmentRuntime: () => runtimeSwitch.promise,
-      },
-      async (harness) => {
-        const codex = harness.query<HTMLInputElement>('#runtime-codex');
-        codex.checked = true;
-        change(codex);
-        harness.emit('onWorkspaceState', siblingSessionWorkspace('session-b'));
-        await settle(harness);
-
-        const siblingPicker = harness.query<HTMLFieldSetElement>('#runtime-picker');
-        expect(harness.query('#runtime-picker-label').textContent).toContain('正在切换并检查网络…');
-        expect(siblingPicker.disabled).toBe(true);
-        expect(siblingPicker.getAttribute('aria-busy')).toBe('true');
-        harness.clearCalls();
-        const claude = harness.query<HTMLInputElement>('#runtime-claude');
-        claude.checked = true;
-        change(claude);
-        expect(harness.method('setDevelopmentRuntime')).not.toHaveBeenCalled();
-        expect(codex.checked).toBe(true);
-
-        runtimeSwitch.resolve({
-          cwd: 'D:\\Project',
-          runtime: 'codex',
-          sessionId: 'session-a',
-        });
-        await settle(harness);
-
-        expect(harness.query<HTMLInputElement>('#runtime-codex').checked).toBe(true);
-        expect(harness.method('getCodexProjectState')).toHaveBeenCalledWith('session-b');
-        expect(harness.method('runNetworkPreflight')).toHaveBeenCalled();
-      },
-    );
-  });
-
-  it('reconstructs a reserved switch after renderer reload and polls to the committed runtime', async () => {
-    let runtimeReads = 0;
-    await withTerminalRenderer(
-      {
-        getDevelopmentRuntime: async (sessionId) => {
-          runtimeReads += 1;
-          return runtimeReads < 3
-            ? {
-                cwd: 'D:\\Project',
-                runtime: 'claude' as const,
-                sessionId,
-                switchOperation: { attempt: 41, runtime: 'codex' as const },
-              }
-            : {
-                cwd: 'D:\\Project',
-                runtime: 'codex' as const,
-                sessionId,
-              };
-        },
-      },
-      async (harness) => {
-        const picker = harness.query<HTMLFieldSetElement>('#runtime-picker');
-        expect(harness.query('#runtime-picker-label').textContent).toContain('正在切换并检查网络…');
-        expect(picker.disabled).toBe(true);
-        expect(picker.getAttribute('aria-busy')).toBe('true');
         expect(harness.query<HTMLInputElement>('#runtime-codex').checked).toBe(true);
         expect(harness.document.body.dataset.agentRuntime).toBe('claude');
-        harness.clearCalls();
-
-        await new Promise((resolve) => setTimeout(resolve, 650));
-        await settle(harness);
-
-        expect(harness.method('getDevelopmentRuntime')).toHaveBeenCalledTimes(2);
-        expect(harness.query('#runtime-picker-label').textContent).toContain('当前项目开发引擎');
-        expect(picker.disabled).toBe(false);
-        expect(picker.getAttribute('aria-busy')).toBe('false');
-        expect(harness.query<HTMLInputElement>('#runtime-codex').checked).toBe(true);
-        expect(harness.document.body.dataset.agentRuntime).toBe('codex');
       },
     );
   });
 
-  it('does not project a pending runtime switch onto an unrelated project', async () => {
+  it('offers the next-conversation engine even when no project is active', async () => {
     await withTerminalRenderer(
       {
-        getDevelopmentRuntime: async (sessionId) => ({
-          cwd: sessionId === 'session-a' ? 'D:\\ProjectA' : 'D:\\ProjectB',
-          runtime: 'claude',
-          sessionId,
-          switchOperation:
-            sessionId === 'session-a' ? { attempt: 9, runtime: 'codex' as const } : undefined,
-        }),
-        getWorkspace: async () => twoSessionWorkspace('session-a'),
-        setDevelopmentRuntime: async (sessionId, runtime) => ({
-          cwd: 'D:\\ProjectB',
-          runtime,
-          sessionId,
-        }),
+        getNextDevelopmentRuntime: async () => 'codex',
+        getWorkspace: async () => ({ activeSessionId: '', projects: [], sessions: [] }),
       },
       async (harness) => {
-        expect(harness.query<HTMLFieldSetElement>('#runtime-picker').disabled).toBe(true);
-
-        harness.emit('onWorkspaceState', twoSessionWorkspace('session-b'));
         await settle(harness);
         const picker = harness.query<HTMLFieldSetElement>('#runtime-picker');
         expect(picker.disabled).toBe(false);
-        expect(picker.getAttribute('aria-busy')).toBe('false');
-        expect(harness.query('#runtime-picker-label').textContent).toContain('当前项目开发引擎');
-        harness.clearCalls();
-
-        const codex = harness.query<HTMLInputElement>('#runtime-codex');
-        codex.checked = true;
-        change(codex);
-        await settle(harness);
-
-        expect(harness.method('setDevelopmentRuntime')).toHaveBeenCalledExactlyOnceWith(
-          'session-b',
-          'codex',
-        );
+        expect(harness.query<HTMLInputElement>('#runtime-codex').checked).toBe(true);
+        expect(harness.query('#runtime-summary-value').textContent).toContain('下一个对话');
       },
     );
   });
 
-  it('does not continue Codex preparation in a different active project', async () => {
+  it('does not let a legacy project switch operation overwrite the global next preference', async () => {
+    await withTerminalRenderer(
+      {
+        getDevelopmentRuntime: async (sessionId) => ({
+          cwd: 'D:\\Project',
+          runtime: 'claude',
+          sessionId,
+          switchOperation: { attempt: 41, runtime: 'codex' },
+        }),
+        getNextDevelopmentRuntime: async () => 'claude',
+      },
+      async (harness) => {
+        await settle(harness);
+        const picker = harness.query<HTMLFieldSetElement>('#runtime-picker');
+        expect(picker.disabled).toBe(false);
+        expect(harness.query<HTMLInputElement>('#runtime-claude').checked).toBe(true);
+        expect(harness.query('#runtime-picker-label').textContent).toContain('新建项目开发引擎');
+      },
+    );
+  });
+
+  it('continues Codex preparation for its owning session after another project becomes active', async () => {
     const stateA = codexProjectState({
       cwd: 'D:\\ProjectA',
       installation: {
@@ -359,7 +237,7 @@ describe('renderer Codex operation ownership', () => {
         });
         await settle(harness);
 
-        expect(startCodexLogin).not.toHaveBeenCalled();
+        expect(startCodexLogin).toHaveBeenCalledExactlyOnceWith('session-a', 'browser');
         expect(launchCodex).not.toHaveBeenCalled();
       },
     );
@@ -676,6 +554,7 @@ describe('renderer Codex operation ownership', () => {
       },
       async (harness) => {
         harness.click('#codex-primary-action');
+        await harness.flush();
         expect(startCodexLogin).toHaveBeenCalledOnce();
 
         harness.emit('onCodexState', signedIn);

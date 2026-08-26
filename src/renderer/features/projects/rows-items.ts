@@ -1,23 +1,30 @@
 import type { ClaudeSessionMetadata, TerminalStatus } from '../../../shared/contracts';
 import type { ProjectsRowHandlers, ProjectsRowsDependencies } from './rows-dependencies';
 import type { ProjectsTitleView } from './view';
+import type { PendingConversation, ProjectsState } from './state';
 
 export interface ProjectsRowItemsActions {
   renderConversationRow: (status: TerminalStatus) => HTMLElement;
   renderHistoryRow: (projectPath: string, session: ClaudeSessionMetadata) => HTMLElement;
+  renderPendingConversationRow: (pending: PendingConversation) => HTMLElement;
 }
 
 export const createProjectsRowItemsActions = (
+  state: ProjectsState,
   dependencies: ProjectsRowsDependencies,
   handlers: ProjectsRowHandlers,
   titleView: ProjectsTitleView,
 ): ProjectsRowItemsActions => {
   const renderConversationRow = (status: TerminalStatus): HTMLElement => {
+    const transition = state.transitioningConversations.get(status.id);
+    const transitionFailure = state.failedConversationTransitions.get(status.id);
     const row = document.createElement('div');
     row.className = 'conversation-item';
     row.dataset.active = String(status.id === dependencies.getWorkspaceState().activeSessionId);
-    row.dataset.phase = status.phase;
+    row.dataset.phase = transitionFailure ? 'error' : status.phase;
     row.dataset.sessionId = status.id;
+    if (transition) row.dataset.transition = transition;
+    if (transitionFailure) row.dataset.transitionFailure = transitionFailure;
 
     const selectButton = document.createElement('button');
     selectButton.className = 'conversation-item__select';
@@ -39,7 +46,15 @@ export const createProjectsRowItemsActions = (
 
     const phaseText = document.createElement('span');
     phaseText.className = 'conversation-item__phase';
-    phaseText.textContent = dependencies.phaseCopy[status.phase].pill;
+    phaseText.textContent = transitionFailure
+      ? transitionFailure === 'restoring'
+        ? '恢复失败 · 请关闭'
+        : '启动失败 · 请关闭'
+      : transition
+        ? transition === 'restoring'
+          ? '正在恢复'
+          : '正在新建'
+        : dependencies.phaseCopy[status.phase].pill;
 
     selectButton.append(indicator, label, phaseText);
     selectButton.addEventListener('click', () => {
@@ -52,10 +67,15 @@ export const createProjectsRowItemsActions = (
     renameButton.textContent = '✎';
     renameButton.title = `重命名 ${status.title}`;
     renameButton.setAttribute('aria-label', `重命名对话 ${status.title}`);
+    renameButton.disabled = Boolean(transition || transitionFailure);
     renameButton.addEventListener('click', () => {
       void handlers.renameConversation(status);
     });
     row.addEventListener('contextmenu', (event) => {
+      if (transition || transitionFailure) {
+        event.preventDefault();
+        return;
+      }
       handlers.showConversationContextMenu(event, { kind: 'running', status });
     });
 
@@ -65,6 +85,7 @@ export const createProjectsRowItemsActions = (
     closeButton.textContent = '×';
     closeButton.title = `关闭并归档 ${status.title}`;
     closeButton.setAttribute('aria-label', `关闭对话 ${status.title}，归档到历史对话`);
+    closeButton.disabled = Boolean(transition);
     closeButton.addEventListener('click', () => {
       void handlers.closeProject(status);
     });
@@ -122,8 +143,37 @@ export const createProjectsRowItemsActions = (
     return row;
   };
 
+  const renderPendingConversationRow = (pending: PendingConversation): HTMLElement => {
+    const row = document.createElement('div');
+    row.className = 'conversation-item conversation-item--pending';
+    row.dataset.pendingId = pending.id;
+    row.dataset.phase = 'starting';
+    row.setAttribute('role', 'status');
+    row.setAttribute('aria-live', 'polite');
+
+    const content = document.createElement('div');
+    content.className = 'conversation-item__select';
+
+    const indicator = document.createElement('span');
+    indicator.className = 'conversation-item__status';
+    indicator.setAttribute('aria-hidden', 'true');
+
+    const label = document.createElement('span');
+    label.className = 'conversation-item__label';
+    label.textContent = pending.title;
+
+    const phaseText = document.createElement('span');
+    phaseText.className = 'conversation-item__phase';
+    phaseText.textContent = pending.kind === 'restoring' ? '正在恢复' : '正在新建';
+
+    content.append(indicator, label, phaseText);
+    row.append(content);
+    return row;
+  };
+
   return {
     renderConversationRow,
     renderHistoryRow,
+    renderPendingConversationRow,
   };
 };

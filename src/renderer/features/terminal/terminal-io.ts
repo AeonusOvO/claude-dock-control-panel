@@ -11,6 +11,7 @@ import type { TerminalIoDependencies } from './terminal-io-dependencies';
 
 export interface TerminalIo {
   beginTerminalMask: (sessionId: string, label: string) => () => void;
+  beginWorkspaceTerminalPreview: (label: string) => () => void;
   copyTerminalSelectionGeneration: (
     sessionId: string,
     ptyGeneration: PtyGeneration,
@@ -69,6 +70,7 @@ export const createTerminalIo = (
 
   return {
     beginTerminalMask: maskActions.beginTerminalMask,
+    beginWorkspaceTerminalPreview: maskActions.beginWorkspaceTerminalPreview,
     copyTerminalSelectionGeneration: generationActions.copyTerminalSelectionGeneration,
     hideTerminalContextMenu: menuActions.hideTerminalContextMenu,
     ownsTerminalGeneration: generationActions.ownsTerminalGeneration,

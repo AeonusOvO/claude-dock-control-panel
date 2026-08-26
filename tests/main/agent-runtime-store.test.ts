@@ -35,6 +35,19 @@ describe('AgentRuntimeStore', () => {
     expect(readFileSync(storagePath, 'utf8')).toContain('"codex"');
   });
 
+  it('persists one global next-conversation engine without changing legacy project values', () => {
+    const { fixtureRoot, store } = createStore();
+    const project = path.join(fixtureRoot, 'My Project');
+    store.set(project, 'claude');
+
+    expect(store.getNext()).toBe('claude');
+    store.setNext('codex');
+
+    expect(store.get(project)).toBe('claude');
+    expect(store.getNext()).toBe('codex');
+    expect(new AgentRuntimeStore(fixtureRoot).getNext()).toBe('codex');
+  });
+
   it('removes only the selected project and tolerates a corrupt store', () => {
     const { fixtureRoot, storagePath, store } = createStore();
     const first = path.join(fixtureRoot, 'first');

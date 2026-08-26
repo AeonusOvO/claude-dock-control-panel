@@ -305,6 +305,19 @@ describe('TerminalWorkspace', () => {
     expect(state.sessions.filter((session) => session.phase === 'running')).toHaveLength(2);
   });
 
+  it('captures the selected engine per conversation without mutating sibling sessions', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+
+    workspace.openProject('D:\\Project Alpha', 'claude');
+    workspace.openConversation('D:\\Project Alpha', undefined, 'codex');
+    workspace.openConversation('D:\\Project Alpha', undefined, 'claude');
+
+    expect(workspace.getDevelopmentRuntime('session-1')).toBe('claude');
+    expect(workspace.getDevelopmentRuntime('session-2')).toBe('codex');
+    expect(workspace.getDevelopmentRuntime('session-3')).toBe('claude');
+  });
+
   it('closes every conversation of a folder at once', () => {
     const { factory } = createFakeFactory();
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);

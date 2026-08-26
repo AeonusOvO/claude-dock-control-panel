@@ -1039,4 +1039,28 @@ describe('quit confirmation handshake', () => {
     expect(await ipc.invoke(CHANNELS.BUSY_LIST)).toEqual([]);
     expect(validateSender).toHaveBeenCalledTimes(4);
   });
+
+  it('holds concurrent workspace transitions behind one crash-visible blocking lease', async () => {
+    const ipc = createIpcHarness();
+    vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));
+    const services = await createQuitServices({ busyRegistry: new BusyRegistry() });
+    const state = createMainState();
+    const validateSender = vi.fn();
+    const { registerBusyIpc } = await import('../../src/main/ipc/busy');
+    registerBusyIpc({ guards: { validateSender }, services, state });
+
+    const first = await ipc.invoke(CHANNELS.BUSY_SET_WORKSPACE_TRANSITION, true);
+    const second = await ipc.invoke(CHANNELS.BUSY_SET_WORKSPACE_TRANSITION, true);
+    expect(first).toEqual([
+      expect.objectContaining({
+        cancellable: false,
+        id: 'conversation:workspace-transition',
+        severity: 'blocking',
+        stage: expect.stringContaining('历史正文'),
+      }),
+    ]);
+    expect(second).toHaveLength(1);
+    expect(await ipc.invoke(CHANNELS.BUSY_SET_WORKSPACE_TRANSITION, false)).toEqual([]);
+    expect(validateSender).toHaveBeenCalledTimes(3);
+  });
 });

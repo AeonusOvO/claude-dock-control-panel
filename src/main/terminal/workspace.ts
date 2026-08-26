@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type {
+  DevelopmentRuntime,
   PtyGeneration,
   TerminalStatus,
   TerminalWorkspaceState,
@@ -67,6 +68,7 @@ export class TerminalWorkspace {
   private activeSessionId = '';
   private readonly claudeSessionTitles = new Map<string, string>();
   private currentThemeId: TerminalThemeId;
+  private readonly developmentRuntimes = new Map<string, DevelopmentRuntime>();
   private nextSessionNumber = 1;
   private readonly sessions = new Map<string, ManagedTerminal>();
   private beforeActiveSessionChange: () => void = () => undefined;
@@ -100,6 +102,7 @@ export class TerminalWorkspace {
     session.stop(false);
     this.sessions.delete(sessionId);
     this.claudeSessionTitles.delete(sessionId);
+    this.developmentRuntimes.delete(sessionId);
 
     if (this.sessions.size === 0) {
       this.setActiveSession('');
@@ -136,6 +139,12 @@ export class TerminalWorkspace {
     return this.requireSession(sessionId).getStatus();
   }
 
+  /** Runtime captured when this conversation was created; live siblings may use another engine. */
+  public getDevelopmentRuntime(sessionId: string): DevelopmentRuntime {
+    this.requireSession(sessionId);
+    return this.developmentRuntimes.get(sessionId) ?? 'claude';
+  }
+
   public getState(): TerminalWorkspaceState {
     return {
       activeSessionId: this.activeSessionId,
@@ -157,7 +166,7 @@ export class TerminalWorkspace {
    * Focus a folder: reuse its first conversation when it is already open, otherwise
    * create the folder's first one. Use `openConversation` to add a parallel one.
    */
-  public openProject(cwd: string): OpenProjectResult {
+  public openProject(cwd: string, runtime: DevelopmentRuntime = 'claude'): OpenProjectResult {
     const existingId = this.sessionIdsForDirectory(cwd)[0];
 
     if (existingId) {
@@ -172,12 +181,16 @@ export class TerminalWorkspace {
       return { reused: true, state: this.getState() };
     }
 
-    return { reused: false, state: this.openConversation(cwd) };
+    return { reused: false, state: this.openConversation(cwd, undefined, runtime) };
   }
 
   /** Always create an additional concurrent conversation for this folder. */
-  public openConversation(cwd: string, title?: string): TerminalWorkspaceState {
-    const sessionId = this.createSession(cwd, title ?? this.nextConversationTitle(cwd));
+  public openConversation(
+    cwd: string,
+    title?: string,
+    runtime: DevelopmentRuntime = 'claude',
+  ): TerminalWorkspaceState {
+    const sessionId = this.createSession(cwd, title ?? this.nextConversationTitle(cwd), runtime);
     this.setActiveSession(sessionId);
     this.emitState();
     this.requireSession(sessionId).start(cwd, this.withDefaultEnvironment(), this.currentThemeId);
@@ -286,7 +299,11 @@ export class TerminalWorkspace {
     return { ...this.environmentProvider(), ...environment };
   }
 
-  private createSession(cwd: string, title = '对话 1'): string {
+  private createSession(
+    cwd: string,
+    title = '对话 1',
+    runtime: DevelopmentRuntime = 'claude',
+  ): string {
     const sessionId = `session-${this.nextSessionNumber}`;
     this.nextSessionNumber += 1;
 
@@ -302,6 +319,7 @@ export class TerminalWorkspace {
       },
     );
     this.sessions.set(sessionId, session);
+    this.developmentRuntimes.set(sessionId, runtime);
     return sessionId;
   }
 

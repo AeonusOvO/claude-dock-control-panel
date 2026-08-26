@@ -39,7 +39,7 @@ describe('stored conversation history ownership filter', () => {
         resolve: vi.fn(() => ({ activeConversationIds: () => new Set<string>() })),
       } as never,
       sessionManager: {
-        getSessionsForProject: vi.fn(() => [
+        getSessionsForProjectAsync: vi.fn(async () => [
           {
             conversationId,
             lastActiveAt: 1,

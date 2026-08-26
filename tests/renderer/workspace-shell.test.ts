@@ -35,6 +35,145 @@ describe('remaining renderer behavior contracts', () => {
     );
   });
 
+  it('moves history into a pending live row immediately and restores it after a failed resume', async () => {
+    const conversationId = '9f1c2b3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+    let historyReads = 0;
+    const opening =
+      deferred<Awaited<ReturnType<Window['controlPanel']['openStoredConversation']>>>();
+    await withTerminalRenderer(
+      {
+        getClaudeSessionsForPath: async () =>
+          ++historyReads === 1
+            ? []
+            : [
+                {
+                  conversationId,
+                  lastActiveAt: 1,
+                  messageCount: 2,
+                  sessionId: conversationId,
+                  sessionName: '待恢复设计稿',
+                },
+              ],
+        openStoredConversation: () => opening.promise,
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="projects"]');
+        harness.query<HTMLButtonElement>('.project-folder__disclosure').click();
+        await settle(harness);
+
+        harness.query<HTMLButtonElement>('.history-item__select').click();
+        await Promise.resolve();
+        expect(harness.document.querySelector('.history-item')).toBeNull();
+        expect(harness.query('.conversation-item--pending').textContent).toContain('正在恢复');
+        expect(harness.query('.terminal-mask--workspace-preview').textContent).toContain(
+          '正在恢复历史对话',
+        );
+
+        opening.resolve({ error: '历史终端无法创建', ok: false, state: terminalWorkspace() });
+        await settle(harness);
+
+        expect(harness.document.querySelector('.conversation-item--pending')).toBeNull();
+        expect(harness.query('.history-item').textContent).toContain('待恢复设计稿');
+        expect(harness.document.body.textContent).toContain('历史终端无法创建');
+      },
+    );
+  });
+
+  it('keeps a restored live row honest until the CLI launch commits', async () => {
+    const conversationId = '9f1c2b3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+    let historyReads = 0;
+    const launch =
+      deferred<Awaited<ReturnType<Window['controlPanel']['launchClaudeWithSession']>>>();
+    await withTerminalRenderer(
+      {
+        getClaudeSessionsForPath: async () =>
+          ++historyReads === 1
+            ? []
+            : [
+                {
+                  conversationId,
+                  lastActiveAt: 1,
+                  messageCount: 2,
+                  sessionId: conversationId,
+                  sessionName: '待恢复设计稿',
+                },
+              ],
+        closeProject: async () => ({
+          ok: true,
+          state: {
+            activeSessionId: '',
+            projects: [
+              {
+                lastActiveAt: 1,
+                missing: false,
+                name: 'Project',
+                open: false,
+                path: 'D:\\Project',
+                remembered: true,
+                sessionIds: [],
+              },
+            ],
+            sessions: [],
+          },
+        }),
+        inspectClaudeConversationModel: async () => {
+          const identity = {
+            accountDetail: 'Claude 官方登录',
+            authModeLabel: '订阅账户',
+            credentialConfigured: false,
+            mainModel: 'default',
+            networkPresentation: 'foreign' as const,
+            protocolLabel: 'Anthropic Messages',
+            providerLabel: 'Anthropic',
+            smallModel: 'default',
+            source: 'current' as const,
+          };
+          return {
+            conversation: identity,
+            current: identity,
+            differences: [],
+            mismatch: false,
+            preference: 'ask',
+            restorable: true,
+          };
+        },
+        launchClaudeWithSession: () => launch.promise,
+        openStoredConversation: async () => ({
+          createdSessionId: 'session-1',
+          ok: true,
+          reused: false,
+          runtime: 'claude',
+          state: terminalWorkspace(),
+        }),
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="projects"]');
+        harness.query<HTMLButtonElement>('.project-folder__disclosure').click();
+        await settle(harness);
+        harness.query<HTMLButtonElement>('.history-item__select').click();
+        await settle(harness);
+
+        const liveRow = harness.query<HTMLElement>(
+          '.conversation-item[data-session-id="session-1"]',
+        );
+        expect(liveRow.dataset.transition).toBe('restoring');
+        expect(liveRow.textContent).toContain('正在恢复');
+        expect(
+          liveRow.querySelectorAll<HTMLButtonElement>('.conversation-item__action')[0]?.disabled,
+        ).toBe(true);
+
+        launch.resolve({
+          result: { error: 'Claude 恢复失败', ok: false, state: claudeProjectState() },
+          status: 'completed',
+        });
+        await settle(harness);
+        expect(harness.document.querySelector('[data-transition="restoring"]')).toBeNull();
+        expect(harness.query('.history-item').textContent).toContain('待恢复设计稿');
+        expect(harness.document.body.textContent).toContain('Claude 恢复失败');
+      },
+    );
+  });
+
   it('shows a complete animated model comparison and remembers the selected policy', async () => {
     const conversationId = '9f1c2b3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
     await withTerminalRenderer(
@@ -81,8 +220,9 @@ describe('remaining renderer behavior contracts', () => {
           restorable: true,
         }),
         openStoredConversation: async () => ({
+          createdSessionId: 'session-1',
           ok: true,
-          reused: true,
+          reused: false,
           state: terminalWorkspace(),
         }),
       },

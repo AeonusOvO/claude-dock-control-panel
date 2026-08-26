@@ -50,30 +50,44 @@ export const createQuitConfirmationDialogActions = (
     quitConfirmationTitle.textContent = request.runtimeCleanupFailed
       ? '仍有会话或派生进程未能安全结束'
       : request.hasBlocking
-        ? '有操作正在进行，不建议退出'
+        ? '正在完成退出前的收尾工作'
         : request.leases.length > 0
           ? '还有后台任务未完成'
           : '确认退出 ClaudeDock？';
     quitConfirmationMessage.textContent = request.runtimeCleanupFailed
       ? '安全清理尚未完成。请重试；只有明确确认仍要退出，才会留下列出的会话或进程。'
-      : request.leases.length > 0
-        ? '退出会结束下列会话或任务；也可以最小化到托盘，让它们继续运行。'
-        : '确认要彻底退出吗？所有 ClaudeDock 窗口和终端都会关闭。';
+      : request.hasBlocking
+        ? '下列工作尚未安全提交。返回软件或转到后台可让它们继续；强制退出会造成每项所列后果。'
+        : request.leases.length > 0
+          ? '退出会结束下列会话或任务；也可以最小化到托盘，让它们继续运行。'
+          : '确认要彻底退出吗？所有 ClaudeDock 窗口和终端都会关闭。';
     quitMinimizeButton.textContent = request.runtimeCleanupFailed
       ? '重试安全清理'
-      : '最小化到托盘，继续运行';
+      : request.hasBlocking
+        ? '转到后台，继续收尾'
+        : '最小化到托盘，继续运行';
+    quitCancelButton.textContent = '不退出，返回软件';
     quitCancelButton.hidden = request.runtimeCleanupFailed === true;
     quitForceButton.dataset.tone = request.hasBlocking ? 'danger' : 'neutral';
     quitConfirmationList.hidden = request.leases.length === 0;
     quitConfirmationList.replaceChildren(
       ...request.leases.map((lease) => {
         const item = document.createElement('li');
+        const copy = document.createElement('div');
         const label = document.createElement('strong');
+        const stage = document.createElement('small');
         const badge = document.createElement('span');
         item.dataset.severity = lease.severity;
+        copy.className = 'quit-confirmation-list__copy';
         label.textContent = lease.label;
-        badge.textContent = lease.severity === 'blocking' ? '中断会留下不完整状态' : '可稍后继续';
-        item.append(label, badge);
+        stage.textContent =
+          lease.stage ??
+          (lease.severity === 'blocking'
+            ? '强制退出会中断尚未提交的状态。'
+            : '退出后可在下次启动时继续。');
+        badge.textContent = lease.severity === 'blocking' ? '强制退出有风险' : '可稍后继续';
+        copy.append(label, stage);
+        item.append(copy, badge);
         return item;
       }),
     );

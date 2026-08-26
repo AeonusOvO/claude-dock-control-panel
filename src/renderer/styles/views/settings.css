@@ -1659,6 +1659,18 @@
   letter-spacing: var(--ls-body);
 }
 
+.quit-confirmation-list__copy {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.quit-confirmation-list__copy small {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+}
+
 .quit-confirmation-list span {
   background: var(--surface-3);
   border: 1px solid var(--line-strong);

@@ -615,6 +615,7 @@ export const IPC_REQUESTS = {
   [CHANNELS.ARTIFACT_SET_NETWORK_ALLOWED]: request('setArtifactNetworkAllowed', [z.unknown()]),
   [CHANNELS.BUSY_LIST]: request('listBusyLeases', []),
   [CHANNELS.BUSY_SET_CONVERSATION]: request('setConversationBusy', [z.boolean()]),
+  [CHANNELS.BUSY_SET_WORKSPACE_TRANSITION]: request('setWorkspaceTransitionBusy', [z.boolean()]),
   [CHANNELS.CHAT_DELETE_CONVERSATION]: request('deleteChatConversation', [z.unknown()]),
   [CHANNELS.CHAT_DELETE_DRAFT_ATTACHMENT]: request('deleteChatDraftAttachment', [
     z.unknown(),
@@ -929,11 +930,13 @@ export const IPC_REQUESTS = {
   [CHANNELS.ROUTER_CC_SWITCH_UNINSTALL]: request('uninstallCcSwitch', [sessionIdSchema]),
   [CHANNELS.ROUTER_KERNEL_STATE]: request('getRouterKernelState', [sessionIdSchema]),
   [CHANNELS.RUNTIME_GET]: request('getDevelopmentRuntime', [sessionIdSchema]),
+  [CHANNELS.RUNTIME_GET_NEXT]: request('getNextDevelopmentRuntime', []),
   [CHANNELS.RUNTIME_GET_ACTIVITY]: request('getRuntimeActivity', [sessionIdSchema]),
   [CHANNELS.RUNTIME_SET]: request('setDevelopmentRuntime', [
     sessionIdSchema,
     developmentRuntimeSchema,
   ]),
+  [CHANNELS.RUNTIME_SET_NEXT]: request('setNextDevelopmentRuntime', [developmentRuntimeSchema]),
   [CHANNELS.RUNTIME_TERMINATE_PROCESS]: request('terminateRuntimeProcess', [
     sessionIdSchema,
     z.string(),

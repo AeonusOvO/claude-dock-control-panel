@@ -331,6 +331,7 @@ const { activateProject, addProject, chooseDirectory, failedWorkspaceResult } =
     beforeActivate: () => launchPreflightDecisions.invalidateAll(),
     describeWorkspace,
     homeDirectory: runtimeProfile.paths.home,
+    nextDevelopmentRuntime: () => agentRuntimeStore.getNext(),
     projectDirectoryLifecycle,
     workspace,
     workspaceStore,

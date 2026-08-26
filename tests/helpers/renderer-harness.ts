@@ -209,6 +209,10 @@ export const createRendererHarness = async (
           runtime: 'claude',
           sessionId: String(args[0] ?? ''),
         });
+      case 'getNextDevelopmentRuntime':
+        return Promise.resolve('claude');
+      case 'setNextDevelopmentRuntime':
+        return Promise.resolve(args[0] === 'codex' ? 'codex' : 'claude');
       case 'getClaudeConnectionHistory':
       case 'getClaudeSessions':
       case 'getClaudeSessionsForPath':
@@ -216,6 +220,7 @@ export const createRendererHarness = async (
       case 'listDownloads':
       case 'listNativeRecoveries':
       case 'setConversationBusy':
+      case 'setWorkspaceTransitionBusy':
         return Promise.resolve([]);
       case 'getDroppedPath':
         return '';

@@ -463,7 +463,6 @@ export const executeClaudeSessionResume = async ({
 };
 
 const registerClaudeRelaunchIpc = ({
-  agentRuntimeStore,
   claudeFailure,
   developmentSessionOperations,
   failedRuntimeLaunchCleanupDependencies,
@@ -520,7 +519,7 @@ const registerClaudeRelaunchIpc = ({
         if (
           currentStatus.cwd !== status.cwd ||
           currentStatus.ptyGeneration !== candidate.workspacePtyGeneration ||
-          agentRuntimeStore.get(status.cwd) !== 'claude'
+          workspace.getDevelopmentRuntime(validatedSessionId) !== 'claude'
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
@@ -560,7 +559,7 @@ const registerClaudeRelaunchIpc = ({
               const currentStatus = workspace.getStatus(validatedSessionId);
               if (
                 currentStatus.cwd !== status.cwd ||
-                agentRuntimeStore.get(status.cwd) !== 'claude'
+                workspace.getDevelopmentRuntime(validatedSessionId) !== 'claude'
               ) {
                 throw new LaunchPreflightDecisionStaleError();
               }
@@ -618,7 +617,6 @@ const registerClaudeRelaunchIpc = ({
 };
 
 const registerClaudeStartIpc = ({
-  agentRuntimeStore,
   claudeConversationLifecycle,
   claudeFailure,
   developmentSessionOperations,
@@ -667,7 +665,7 @@ const registerClaudeStartIpc = ({
         if (
           currentStatus.cwd !== status.cwd ||
           currentStatus.ptyGeneration !== candidate.workspacePtyGeneration ||
-          agentRuntimeStore.get(status.cwd) !== 'claude'
+          workspace.getDevelopmentRuntime(validatedSessionId) !== 'claude'
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
@@ -789,7 +787,6 @@ const registerClaudeStartIpc = ({
 };
 
 const registerClaudeSessionLaunchIpc = ({
-  agentRuntimeStore,
   claudeConversationLifecycle,
   claudeFailure,
   conversationOwnerRegistry,
@@ -846,7 +843,7 @@ const registerClaudeSessionLaunchIpc = ({
         if (
           currentStatus.cwd !== status.cwd ||
           currentStatus.ptyGeneration !== candidate.workspacePtyGeneration ||
-          agentRuntimeStore.get(status.cwd) !== 'claude'
+          workspace.getDevelopmentRuntime(validatedSessionId) !== 'claude'
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
@@ -883,7 +880,7 @@ const registerClaudeSessionLaunchIpc = ({
               const currentStatus = workspace.getStatus(validatedSessionId);
               if (
                 currentStatus.cwd !== status.cwd ||
-                agentRuntimeStore.get(status.cwd) !== 'claude'
+                workspace.getDevelopmentRuntime(validatedSessionId) !== 'claude'
               ) {
                 throw new LaunchPreflightDecisionStaleError();
               }

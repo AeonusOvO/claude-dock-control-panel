@@ -1,6 +1,7 @@
 import type {
   ClaudeProjectState,
   CodexProjectState,
+  DevelopmentRuntime,
   DevelopmentRuntimeState,
 } from '../../../shared/contracts';
 import type { TerminalProjectStateDeps } from './project-state-dependencies';
@@ -18,12 +19,57 @@ import {
 } from './project-state-dom';
 
 export interface TerminalRuntimeStateActions {
+  loadNextDevelopmentRuntime: () => Promise<void>;
   loadDevelopmentRuntime: (sessionId: string) => Promise<void>;
   renderDevelopmentRuntimeState: (
     state: DevelopmentRuntimeState,
     invalidatePendingLoad?: boolean,
   ) => void;
 }
+
+let nextDevelopmentRuntime: DevelopmentRuntime = 'claude';
+let nextRuntimeMutationBusy = false;
+
+const setOwnedInert = (element: HTMLElement | null, locked: boolean): void => {
+  if (!element) return;
+  if (locked) {
+    element.dataset.sessionTransitionLocked = 'true';
+    element.inert = true;
+    return;
+  }
+  if (element.dataset.sessionTransitionLocked === 'true') {
+    delete element.dataset.sessionTransitionLocked;
+    element.inert = false;
+  }
+};
+
+/** Locks only the active conversation surface; project rows remain usable for parallel creation. */
+export const syncConversationTransitionInteractivity = (
+  deps: Pick<
+    TerminalProjectStateDeps,
+    'claudeLaunchAttempts' | 'codexLaunchAttempts' | 'getWorkspaceState'
+  >,
+): void => {
+  const activeSessionId = deps.getWorkspaceState().activeSessionId;
+  const activeBusy = Boolean(
+    document.querySelector('.terminal-mask--active') ||
+    (activeSessionId &&
+      (deps.claudeLaunchAttempts.isBusy(activeSessionId) ||
+        deps.codexLaunchAttempts.isActive(activeSessionId))),
+  );
+  document.body.dataset.conversationTransition = activeBusy ? 'busy' : 'idle';
+  for (const element of [
+    document.querySelector<HTMLElement>('.terminal-toolbar__actions'),
+    document.querySelector<HTMLElement>('.terminal-title'),
+    document.querySelector<HTMLElement>('.terminal-footer'),
+    document.querySelector<HTMLElement>('.terminal-composer'),
+    document.querySelector<HTMLElement>('#claude-workbench'),
+    document.querySelector<HTMLElement>('#restart-terminal')?.closest<HTMLElement>('.actions') ??
+      null,
+  ]) {
+    setOwnedInert(element, activeBusy);
+  }
+};
 
 const RUNTIME_SWITCH_POLL_INTERVAL_MS = 250;
 const runtimeProjectKey = (cwd: string): string => cwd.toLocaleLowerCase('en-US');
@@ -34,25 +80,36 @@ interface RuntimeSwitchPoll {
 }
 
 export const renderRuntimePickerControls = (
-  deps: Pick<TerminalProjectStateDeps, 'developmentRuntimeStates' | 'getRuntimeSwitchOperation'>,
-  sessionId?: string,
+  deps: Pick<
+    TerminalProjectStateDeps,
+    'claudeLaunchAttempts' | 'codexLaunchAttempts' | 'getWorkspaceState'
+  >,
+  _sessionId?: string,
 ): void => {
-  const state = sessionId ? deps.developmentRuntimeStates.get(sessionId) : undefined;
-  const localOperation = sessionId ? deps.getRuntimeSwitchOperation(sessionId) : undefined;
-  const pendingRuntime = localOperation?.operation ?? state?.switchOperation?.runtime;
-  const stableRuntime = state?.runtime ?? 'claude';
-  const displayedRuntime = pendingRuntime ?? stableRuntime;
-  const switching = Boolean(pendingRuntime);
-  runtimeClaude.checked = displayedRuntime === 'claude';
-  runtimeCodex.checked = displayedRuntime === 'codex';
-  runtimePicker.disabled = !sessionId || switching;
-  runtimePicker.setAttribute('aria-busy', String(switching));
-  runtimePickerLabel.textContent = switching ? '正在切换并检查网络…' : '当前项目开发引擎';
-  runtimeSummaryValue.textContent = switching
-    ? `正在切换到 ${displayedRuntime === 'codex' ? 'Codex' : 'Claude Code'}…`
-    : displayedRuntime === 'codex'
-      ? 'Codex'
-      : 'Claude Code';
+  const conversationBusy = deps
+    .getWorkspaceState()
+    .sessions.some(
+      ({ id }) => deps.claudeLaunchAttempts.isBusy(id) || deps.codexLaunchAttempts.isActive(id),
+    );
+  const busy =
+    nextRuntimeMutationBusy ||
+    conversationBusy ||
+    Boolean(document.querySelector('.terminal-mask'));
+  runtimeClaude.checked = nextDevelopmentRuntime === 'claude';
+  runtimeCodex.checked = nextDevelopmentRuntime === 'codex';
+  runtimePicker.disabled = busy;
+  runtimePicker.setAttribute('aria-busy', String(busy));
+  runtimePickerLabel.textContent = nextRuntimeMutationBusy
+    ? '正在保存下次新建使用的引擎…'
+    : conversationBusy
+      ? '有对话正在准备，完成后可更改'
+      : '新建项目开发引擎';
+  runtimeSummaryValue.textContent = nextRuntimeMutationBusy
+    ? `下一个对话将使用 ${nextDevelopmentRuntime === 'codex' ? 'Codex' : 'Claude Code'}…`
+    : nextDevelopmentRuntime === 'codex'
+      ? 'Codex · 下一个对话'
+      : 'Claude Code · 下一个对话';
+  syncConversationTransitionInteractivity(deps);
 };
 
 export const createTerminalRuntimeStateActions = (
@@ -80,6 +137,51 @@ export const createTerminalRuntimeStateActions = (
     showToast,
     preflightFeature,
   } = deps;
+
+  const setNextRuntime = async (runtime: DevelopmentRuntime): Promise<void> => {
+    if (nextRuntimeMutationBusy || runtimePicker.disabled) {
+      renderRuntimePickerControls(deps);
+      return;
+    }
+    const previous = nextDevelopmentRuntime;
+    nextDevelopmentRuntime = runtime;
+    nextRuntimeMutationBusy = true;
+    renderRuntimePickerControls(deps);
+    try {
+      nextDevelopmentRuntime = await window.controlPanel.setNextDevelopmentRuntime(runtime);
+      showToast(
+        `下一个新对话将使用 ${nextDevelopmentRuntime === 'codex' ? 'Codex' : 'Claude Code'}。`,
+      );
+    } catch (error) {
+      nextDevelopmentRuntime = previous;
+      showToast(error instanceof Error ? error.message : '无法保存新建项目开发引擎。', 'error');
+    } finally {
+      nextRuntimeMutationBusy = false;
+      renderRuntimePickerControls(deps);
+    }
+  };
+
+  runtimeClaude.addEventListener('change', () => {
+    if (runtimeClaude.checked) void setNextRuntime('claude');
+  });
+  runtimeCodex.addEventListener('change', () => {
+    if (runtimeCodex.checked) void setNextRuntime('codex');
+  });
+  document.addEventListener('workspace-terminal-preview-change', () => {
+    renderRuntimePickerControls(deps);
+  });
+  document.addEventListener('terminal-mask-change', () => {
+    renderRuntimePickerControls(deps);
+  });
+
+  const loadNextDevelopmentRuntime = async (): Promise<void> => {
+    try {
+      nextDevelopmentRuntime = await window.controlPanel.getNextDevelopmentRuntime();
+    } catch {
+      nextDevelopmentRuntime = 'claude';
+    }
+    renderRuntimePickerControls(deps);
+  };
 
   const runtimeSwitchPolls = new Map<string, RuntimeSwitchPoll>();
   let disposed = false;
@@ -142,27 +244,17 @@ export const createTerminalRuntimeStateActions = (
     if (!sourceSession) {
       return;
     }
-    const projectSessions = workspace.sessions.filter(
-      (session) => runtimeProjectKey(session.cwd) === key,
-    );
-    for (const session of projectSessions) {
-      if (invalidatePendingLoad) {
-        runtimeStateLoadGenerations.invalidate(session.id);
-      }
-      developmentRuntimeStates.set(session.id, { ...state, sessionId: session.id });
-    }
+    if (invalidatePendingLoad) runtimeStateLoadGenerations.invalidate(state.sessionId);
+    developmentRuntimeStates.set(state.sessionId, state);
     scheduleRuntimeSwitchPoll(state);
 
-    const activeSession = projectSessions.find(
-      (session) => session.id === workspace.activeSessionId,
-    );
-    if (!activeSession) {
+    if (state.sessionId !== workspace.activeSessionId) {
       return;
     }
-    const activeState = { ...state, sessionId: activeSession.id };
+    const activeState = state;
     const codexSelected = activeState.runtime === 'codex';
     document.body.dataset.agentRuntime = activeState.runtime;
-    renderRuntimePickerControls(deps, activeState.sessionId);
+    renderRuntimePickerControls(deps);
     workbenchTabs.hidden = codexSelected;
     workbenchTitle.textContent = codexSelected ? 'Codex 工作台' : 'Claude 工作台';
     workbenchTriggerLabel.textContent = codexSelected ? 'Codex 工作台' : 'Claude 工作台';
@@ -217,6 +309,7 @@ export const createTerminalRuntimeStateActions = (
   }
 
   return {
+    loadNextDevelopmentRuntime,
     loadDevelopmentRuntime,
     renderDevelopmentRuntimeState,
   };

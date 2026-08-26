@@ -1,7 +1,9 @@
 import { projectNameFromPath } from '../../platform/format';
 import type { CodexProjectState } from '../../../shared/contracts';
+import { notifyCodexAdmissionChange } from '../../platform/runtime-state-events';
 import type { CodexOperationPresentation } from './codex-operation-state';
 import type { TerminalProjectStateDeps } from './project-state-dependencies';
+import { renderRuntimePickerControls } from './project-state-runtime';
 import {
   codexAccountDetail,
   codexAccountStep,
@@ -94,11 +96,16 @@ const renderCodexOperationControls = (
 const renderCodexLoadingPresentation = (
   deps: Pick<
     TerminalProjectStateDeps,
-    'activeDevelopmentRuntime' | 'getCodexOperation' | 'getWorkspaceState'
+    | 'activeDevelopmentRuntime'
+    | 'claudeLaunchAttempts'
+    | 'codexLaunchAttempts'
+    | 'getCodexOperation'
+    | 'getWorkspaceState'
   >,
   sessionId: string,
   errorMessage?: string,
 ): void => {
+  renderRuntimePickerControls(deps);
   if (
     sessionId !== deps.getWorkspaceState().activeSessionId ||
     deps.activeDevelopmentRuntime() !== 'codex'
@@ -136,13 +143,14 @@ const renderCodexLoadingPresentation = (
   codexProjectTitle.textContent = '等待环境与账号就绪';
   codexProjectDetail.textContent = errorMessage ?? '正在读取当前项目的 Codex 状态。';
   codexPrimaryAction.textContent = loadingLabel;
+  codexPrimaryAction.hidden = false;
   codexPrimaryAction.disabled = true;
   codexPrimaryAction.setAttribute('aria-busy', String(!operationInProgress && !errorMessage));
   runAgentLabel.textContent = loadingLabel;
   runClaudeButton.disabled = true;
   runClaudeButton.setAttribute('aria-busy', String(!operationInProgress && !errorMessage));
   for (const [button, idleLabel] of [
-    [codexLaunchNew, '新建安全会话'],
+    [codexLaunchNew, '启动当前对话'],
     [codexLaunchContinue, '继续最近会话'],
     [codexLaunchResume, '选择历史会话'],
   ] as const) {
@@ -164,6 +172,40 @@ export interface TerminalCodexStateActions {
   ) => Promise<CodexProjectState | undefined>;
 }
 
+const renderCodexFooter = (
+  state: CodexProjectState,
+  ready: boolean,
+  renderFooterResource: TerminalProjectStateDeps['renderFooterResource'],
+): void => {
+  routeHealth.hidden = true;
+  footerConnection.disabled = false;
+  footerConnection.dataset.tone = ready ? 'success' : 'warning';
+  footerConnectionLabel.textContent = ready
+    ? state.account?.type === 'chatgpt'
+      ? 'ChatGPT 已连接'
+      : 'Codex 已连接'
+    : 'Codex 待准备';
+  footerContextLabel.textContent = '上下文 —';
+  footerContextRing.style.setProperty('--context-progress', '0%');
+  renderFooterResource(state.resourceUsage);
+  for (const chip of [footerModel, footerSpeed, footerMode, footerEffort]) {
+    chip.dataset.presentationOwner = 'codex';
+  }
+  footerModel.textContent = '模型 Codex 自动';
+  footerModel.disabled = true;
+  footerSpeed.textContent = '速度 Codex 内管理';
+  footerSpeed.disabled = true;
+  footerSpeed.title = '原生 Codex 的速度设置由 Codex 自己管理，ClaudeDock 不接管。';
+  footerSpeed.setAttribute('aria-busy', 'false');
+  footerMode.textContent = '模式 工作区写入';
+  footerMode.disabled = true;
+  footerEffort.textContent = '思考 Codex 自动';
+  footerEffort.disabled = true;
+  codexBoundaryNote.textContent = state.warning
+    ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
+    : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
+};
+
 export const createTerminalCodexStateActions = (
   deps: TerminalProjectStateDeps,
 ): TerminalCodexStateActions => {
@@ -184,6 +226,7 @@ export const createTerminalCodexStateActions = (
   };
 
   const renderCodexState = (state: CodexProjectState, invalidatePendingLoad = true): void => {
+    renderRuntimePickerControls(deps);
     if (!getWorkspaceState().sessions.some((session) => session.id === state.sessionId)) {
       return;
     }
@@ -199,6 +242,7 @@ export const createTerminalCodexStateActions = (
       codexStateLoadGenerations.invalidate(state.sessionId);
     }
     codexStates.set(state.sessionId, state);
+    notifyCodexAdmissionChange();
     if (
       state.sessionId !== getWorkspaceState().activeSessionId ||
       activeDevelopmentRuntime() !== 'codex'
@@ -284,8 +328,9 @@ export const createTerminalCodexStateActions = (
           ? '一键安装、登录并启动'
           : !accountReady
             ? '使用 ChatGPT 登录并启动'
-            : '新建 Codex 安全会话';
+            : 'Codex 已就绪';
     codexPrimaryAction.textContent = actionLabel;
+    codexPrimaryAction.hidden = ready;
     codexPrimaryAction.disabled =
       operationInProgress || launchInProgress || waitingForLogin || officialNetworkBlocked;
     codexPrimaryAction.setAttribute('aria-busy', String(launchInProgress));
@@ -301,11 +346,11 @@ export const createTerminalCodexStateActions = (
     runClaudeButton.setAttribute('aria-busy', String(launchInProgress));
     runClaudeButton.dataset.routeHealth = ready ? 'success' : 'warning';
     runClaudeButton.title = ready
-      ? '在当前项目启动官方 Codex 安全会话'
+      ? 'Codex 已就绪；请使用项目旁的 + 新建对话'
       : '自动完成官方安装与 ChatGPT 登录';
 
     for (const [button, idleLabel] of [
-      [codexLaunchNew, '新建安全会话'],
+      [codexLaunchNew, '启动当前对话'],
       [codexLaunchContinue, '继续最近会话'],
       [codexLaunchResume, '选择历史会话'],
     ] as const) {
@@ -314,33 +359,7 @@ export const createTerminalCodexStateActions = (
       button.setAttribute('aria-busy', String(launchInProgress));
     }
 
-    routeHealth.hidden = true;
-    footerConnection.disabled = false;
-    footerConnection.dataset.tone = ready ? 'success' : 'warning';
-    footerConnectionLabel.textContent = ready
-      ? account?.type === 'chatgpt'
-        ? 'ChatGPT 已连接'
-        : 'Codex 已连接'
-      : 'Codex 待准备';
-    footerContextLabel.textContent = '上下文 —';
-    footerContextRing.style.setProperty('--context-progress', '0%');
-    renderFooterResource(state.resourceUsage);
-    for (const chip of [footerModel, footerSpeed, footerMode, footerEffort]) {
-      chip.dataset.presentationOwner = 'codex';
-    }
-    footerModel.textContent = '模型 Codex 自动';
-    footerModel.disabled = true;
-    footerSpeed.textContent = '速度 Codex 内管理';
-    footerSpeed.disabled = true;
-    footerSpeed.title = '原生 Codex 的速度设置由 Codex 自己管理，ClaudeDock 不接管。';
-    footerSpeed.setAttribute('aria-busy', 'false');
-    footerMode.textContent = '模式 工作区写入';
-    footerMode.disabled = true;
-    footerEffort.textContent = '思考 Codex 自动';
-    footerEffort.disabled = true;
-    codexBoundaryNote.textContent = state.warning
-      ? `${state.warning} 首版任务界面仍可回退到官方 Codex TUI。`
-      : '首版任务界面使用官方 Codex TUI：默认仅写当前工作区，模型需要更高权限时仍会向你确认。App Server 只用于结构化登录和账号状态，不会读取或转存 ChatGPT 令牌。';
+    renderCodexFooter(state, ready, renderFooterResource);
     preflightFeature.renderActiveNetworkPreflight();
   };
 

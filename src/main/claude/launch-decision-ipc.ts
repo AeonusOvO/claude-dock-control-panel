@@ -53,7 +53,6 @@ export interface ClaudeLaunchDecisionExecutions {
 
 export const registerClaudeLaunchDecisionIpc = (
   {
-    agentRuntimeStore,
     claudeConversationLifecycle,
     claudeFailure,
     conversationOwnerRegistry,
@@ -123,7 +122,7 @@ export const registerClaudeLaunchDecisionIpc = (
         if (
           currentStatus.cwd !== descriptor.cwd ||
           currentStatus.ptyGeneration !== reservation.baseline.workspacePtyGeneration ||
-          agentRuntimeStore.get(descriptor.cwd) !== 'claude'
+          workspace.getDevelopmentRuntime(descriptor.sessionId) !== 'claude'
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
@@ -176,7 +175,7 @@ export const registerClaudeLaunchDecisionIpc = (
               const currentStatus = workspace.getStatus(descriptor.sessionId);
               if (
                 currentStatus.cwd !== descriptor.cwd ||
-                agentRuntimeStore.get(descriptor.cwd) !== 'claude'
+                workspace.getDevelopmentRuntime(descriptor.sessionId) !== 'claude'
               ) {
                 throw new LaunchPreflightDecisionStaleError();
               }

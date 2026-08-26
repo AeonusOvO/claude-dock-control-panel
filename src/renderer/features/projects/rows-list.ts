@@ -56,11 +56,18 @@ export const createProjectsRowListActions = (
   };
 
   const renderProjectList = (): void => {
+    const liveSessionIds = new Set(dependencies.getWorkspaceState().sessions.map(({ id }) => id));
+    for (const sessionId of state.failedConversationTransitions.keys()) {
+      if (!liveSessionIds.has(sessionId)) state.failedConversationTransitions.delete(sessionId);
+    }
     elements.projectList.replaceChildren();
     const openFolders = dependencies
       .getWorkspaceState()
       .projects.filter((project) => project.open).length;
-    elements.projectCount.textContent = `${openFolders} 个项目 · ${dependencies.getWorkspaceState().sessions.length} 个对话`;
+    const pendingCount = state.pendingConversations.size;
+    elements.projectCount.textContent = `${openFolders} 个项目 · ${
+      dependencies.getWorkspaceState().sessions.length + pendingCount
+    } 个对话${pendingCount > 0 ? ` · ${pendingCount} 个准备中` : ''}`;
 
     for (const project of dependencies.getWorkspaceState().projects) {
       elements.projectList.append(renderProjectFolder(project));

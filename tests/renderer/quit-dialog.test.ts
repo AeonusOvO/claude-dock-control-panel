@@ -117,16 +117,19 @@ describe('quit dialog delivery', () => {
           kind: 'install',
           label: '关键安装正在提交',
           severity: 'blocking',
+          stage: '安装包正在写入；强制退出可能留下不完整文件。',
         },
       ],
       requestId: 'quit-request-1',
     });
     expect(dialog.open).toBe(true);
-    expect(renderer.query('#quit-confirmation-title').textContent).toBe(
-      '有操作正在进行，不建议退出',
-    );
+    expect(renderer.query('#quit-confirmation-title').textContent).toBe('正在完成退出前的收尾工作');
     expect(renderer.query('#quit-confirmation-list').textContent).toContain('关键安装正在提交');
-    expect(renderer.query('#quit-confirmation-list').textContent).toContain('中断会留下不完整状态');
+    expect(renderer.query('#quit-confirmation-list').textContent).toContain(
+      '安装包正在写入；强制退出可能留下不完整文件。',
+    );
+    expect(renderer.query('#quit-confirmation-list').textContent).toContain('强制退出有风险');
+    expect(cancel.textContent).toBe('不退出，返回软件');
     expect(renderer.document.activeElement).toBe(minimize);
 
     force.click();

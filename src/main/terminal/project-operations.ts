@@ -1,6 +1,7 @@
 import { dialog } from 'electron';
 import type { BrowserWindow } from 'electron';
 import type {
+  DevelopmentRuntime,
   DirectoryChoiceResult,
   WorkspaceResult,
   WorkspaceState,
@@ -17,6 +18,7 @@ export interface ProjectOperationDependencies {
   describeWorkspace: DescribeWorkspace;
   /* Fallback for the folder dialog and the ceiling the picker will not walk above. */
   homeDirectory: string;
+  nextDevelopmentRuntime?: () => DevelopmentRuntime;
   projectDirectoryLifecycle: ProjectDirectoryLifecycleCoordinator;
   workspace: TerminalWorkspace;
   workspaceStore: WorkspaceStore;
@@ -36,6 +38,7 @@ export const createProjectOperations = ({
   beforeActivate,
   describeWorkspace,
   homeDirectory,
+  nextDevelopmentRuntime = () => 'claude',
   projectDirectoryLifecycle,
   workspace,
   workspaceStore,
@@ -101,13 +104,18 @@ export const createProjectOperations = ({
       const resolved = resolveDirectory(directoryPath);
       return projectDirectoryLifecycle.runOpenSync(resolved, (ownership) => {
         ownership.assertCurrent();
-        const result = workspace.openProject(resolved);
+        const result = workspace.openProject(resolved, nextDevelopmentRuntime());
 
         // Save to persistent workspace only while this open still owns the folder lifecycle.
         ownership.assertCurrent();
         workspaceStore.addProject(resolved);
 
+        const createdSessionId = result.reused ? undefined : result.state.activeSessionId;
+
         return {
+          ...(createdSessionId
+            ? { createdSessionId, runtime: workspace.getDevelopmentRuntime(createdSessionId) }
+            : {}),
           ok: true,
           reused: result.reused,
           state: describeWorkspace(result.state),

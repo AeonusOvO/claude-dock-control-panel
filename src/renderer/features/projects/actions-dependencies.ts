@@ -20,6 +20,7 @@ export interface RenameDialogCopy {
 
 export interface ProjectsActionsDependencies {
   beginTerminalMask: (sessionId: string, label: string) => () => void;
+  beginWorkspaceTerminalPreview: (label: string) => () => void;
   beginClaudeLaunchAttempt: (
     status: TerminalStatus,
     state?: ClaudeProjectState,
@@ -28,6 +29,7 @@ export interface ProjectsActionsDependencies {
   failClaudeLaunchAttempt: (token: ClaudeLaunchAttemptToken) => boolean;
   getWorkspaceState: () => WorkspaceState;
   hideTerminalContextMenu: () => void;
+  launchCreatedConversation: (sessionId: string, runtime: 'claude' | 'codex') => Promise<boolean>;
   projectNameFromPath: (directoryPath: string) => string;
   refreshClaudeLaunchControls: (sessionId: string) => void;
   setClaudeLaunchPresentationPhase: (
@@ -58,4 +60,5 @@ export interface ProjectsActionsDependencies {
 
 export interface ProjectsRowsApi {
   loadFolderHistory: (projectPath: string, force?: boolean) => Promise<void>;
+  renderProjectList: () => void;
 }

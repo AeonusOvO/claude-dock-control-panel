@@ -14,13 +14,16 @@ export const createProjectsRowFolderActions = (
   itemsActions: ProjectsRowItemsActions,
   renderProjectList: () => void,
 ): ProjectsRowFolderActions => {
-  const { renderConversationRow, renderHistoryRow } = itemsActions;
+  const { renderConversationRow, renderHistoryRow, renderPendingConversationRow } = itemsActions;
 
   const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
     const key = project.path.toLowerCase();
     const sessions = dependencies
       .getWorkspaceState()
       .sessions.filter((session) => project.sessionIds.includes(session.id));
+    const pendingConversations = [...state.pendingConversations.values()].filter(
+      (pending) => pending.projectPath.toLowerCase() === key,
+    );
     const containsActive = project.sessionIds.includes(
       dependencies.getWorkspaceState().activeSessionId,
     );
@@ -30,7 +33,7 @@ export const createProjectsRowFolderActions = (
      * the live rows. Before, an active folder was forced open and its disclosure did nothing.
      */
     const expanded = state.expandedFolders.has(key);
-    const showsRunning = sessions.length > 0;
+    const showsRunning = sessions.length + pendingConversations.length > 0;
 
     const folder = document.createElement('section');
     folder.className = 'project-folder';
@@ -61,7 +64,9 @@ export const createProjectsRowFolderActions = (
     detail.textContent = project.missing
       ? '文件夹已不存在'
       : project.open
-        ? `${sessions.length} 个对话进行中`
+        ? pendingConversations.length > 0
+          ? `${sessions.length + pendingConversations.length} 个对话 · ${pendingConversations.length} 个正在准备`
+          : `${sessions.length} 个对话进行中`
         : project.lastActiveAt
           ? `上次使用 ${dependencies.formatRelativeTime(project.lastActiveAt)}`
           : '已记住，未打开';
@@ -122,6 +127,9 @@ export const createProjectsRowFolderActions = (
     for (const session of sessions) {
       body.append(renderConversationRow(session));
     }
+    for (const pending of pendingConversations) {
+      body.append(renderPendingConversationRow(pending));
+    }
 
     if (!expanded) {
       // Collapsed while in use: live conversations stay, the history section is tucked away.
@@ -129,7 +137,7 @@ export const createProjectsRowFolderActions = (
       return folder;
     }
 
-    if (sessions.length === 0) {
+    if (sessions.length === 0 && pendingConversations.length === 0) {
       const reopen = document.createElement('button');
       reopen.className = 'project-folder__reopen';
       reopen.type = 'button';

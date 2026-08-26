@@ -384,7 +384,8 @@ const registerConversationTransferIpc = (
             assertLaunchAdmissionAllowed();
             const usableTab = (candidate: string | undefined): string | undefined => {
               if (!candidate || !workspace.hasSession(candidate)) return undefined;
-              return sameDirectory(workspace.getStatus(candidate).cwd, identity.projectPath)
+              return sameDirectory(workspace.getStatus(candidate).cwd, identity.projectPath) &&
+                workspace.getDevelopmentRuntime(candidate) === 'claude'
                 ? candidate
                 : undefined;
             };
@@ -400,7 +401,7 @@ const registerConversationTransferIpc = (
             );
             let targetSessionId = reusableSessionId;
             if (!targetSessionId) {
-              workspace.openProject(identity.projectPath);
+              workspace.openProject(identity.projectPath, 'claude');
               targetSessionId = workspace.getState().activeSessionId;
               if (!targetSessionId) throw new Error('无法打开该项目的安全终端。');
             }

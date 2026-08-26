@@ -6,6 +6,7 @@ import {
   type ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 import type { TerminalProjectStateDeps } from './project-state-dependencies';
+import { renderRuntimePickerControls } from './project-state-runtime';
 import {
   launchContinueButton,
   launchNewButton,
@@ -57,6 +58,7 @@ export const createTerminalClaudeLaunchActions = (
     state.installation.security !== 'ready' || Boolean(state.routeHealth?.blocking);
 
   const renderClaudeLaunchControls = (sessionId: string, launchBlocked = false): void => {
+    renderRuntimePickerControls(deps);
     if (
       sessionId !== getWorkspaceState().activeSessionId ||
       activeDevelopmentRuntime() !== 'claude'
@@ -79,7 +81,7 @@ export const createTerminalClaudeLaunchActions = (
               : launchPhase === 'restoring-conversation'
                 ? '正在恢复历史对话…'
                 : '正在启动…';
-    runAgentLabel.textContent = busy ? busyLabel : '新建安全会话';
+    runAgentLabel.textContent = busy ? busyLabel : '对话已就绪';
     // Route health is a remediable preflight state, not a reason to turn the primary action into a
     // translucent dead end. The launch path can restart app-owned gateways and returns a precise
     // configuration error when user action is actually required.
@@ -87,7 +89,7 @@ export const createTerminalClaudeLaunchActions = (
     runClaudeButton.dataset.launchBlocked = String(launchBlocked);
     runClaudeButton.setAttribute('aria-busy', String(busy));
     for (const [button, idleLabel] of [
-      [launchNewButton, '新建安全会话'],
+      [launchNewButton, '启动当前对话'],
       [launchContinueButton, '继续最近会话'],
       [launchResumeButton, '选择历史会话'],
     ] as const) {

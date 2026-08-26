@@ -20,6 +20,18 @@ export interface TerminalMaskState {
   view: TerminalView;
 }
 
+export interface WorkspaceTerminalPreview {
+  id: number;
+  label: string;
+}
+
+export interface WorkspaceTerminalPreviewState {
+  detail: HTMLElement;
+  focusBeforePreview: HTMLElement | null;
+  label: HTMLElement;
+  overlay: HTMLDivElement;
+}
+
 export interface TerminalContextMenuTarget {
   menuRevision: number;
   ptyGeneration: TerminalStatus['ptyGeneration'];
@@ -42,6 +54,9 @@ export interface TerminalState {
   terminalFitGeneration: number;
   terminalMasks: Map<string, TerminalMaskState>;
   terminalViews: Map<string, TerminalView>;
+  workspaceTerminalPreviewSequence: number;
+  workspaceTerminalPreviews: Map<number, WorkspaceTerminalPreview>;
+  workspaceTerminalPreviewState: WorkspaceTerminalPreviewState | undefined;
 }
 
 export const createTerminalState = (): TerminalState => ({
@@ -57,4 +72,7 @@ export const createTerminalState = (): TerminalState => ({
   terminalFitGeneration: 0,
   terminalMasks: new Map<string, TerminalMaskState>(),
   terminalViews: new Map<string, TerminalView>(),
+  workspaceTerminalPreviewSequence: 0,
+  workspaceTerminalPreviews: new Map<number, WorkspaceTerminalPreview>(),
+  workspaceTerminalPreviewState: undefined,
 });

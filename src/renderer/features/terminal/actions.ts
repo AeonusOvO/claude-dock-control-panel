@@ -14,6 +14,11 @@ import type { TerminalActionsDependencies } from './actions-dependencies';
 
 export interface TerminalActions {
   dispose: () => void;
+  launchClaudeSession: (
+    sessionId: string,
+    mode: ClaudeLaunchMode,
+    announce?: boolean,
+  ) => Promise<boolean>;
   launchClaudeTerminal: (mode: ClaudeLaunchMode) => Promise<void>;
   renderControlStatus: (status?: TerminalStatus) => void;
   showTerminalDiagnostic: (status: TerminalStatus) => void;
@@ -72,6 +77,7 @@ export const createTerminalActions = (
 
   return {
     dispose,
+    launchClaudeSession: launchActions.launchClaudeSession,
     launchClaudeTerminal: launchActions.launchClaudeTerminal,
     renderControlStatus: controlActions.renderControlStatus,
     showTerminalDiagnostic: diagnosticActions.showTerminalDiagnostic,

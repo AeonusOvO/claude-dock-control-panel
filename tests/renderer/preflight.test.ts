@@ -919,11 +919,7 @@ describe('renderer preflight feature', () => {
         invalidateNetworkPreflight: async () => undefined,
         runNetworkPreflight: async ({ provider }) => preflightResult(provider, 'allowed'),
         saveApplicationProxy: async () => applicationProxy,
-        setDevelopmentRuntime: async (sessionId, runtime) => ({
-          cwd: 'D:\\Project',
-          runtime,
-          sessionId,
-        }),
+        setNextDevelopmentRuntime: async (runtime) => runtime,
       },
       async (harness) => {
         harness.click('#open-connection-advanced');
@@ -944,9 +940,8 @@ describe('renderer preflight feature', () => {
         codex.checked = true;
         change(codex);
         await settle(harness);
-        expect(harness.method('invalidateNetworkPreflight')).toHaveBeenCalledWith(
-          'provider-switch',
-        );
+        expect(harness.method('setNextDevelopmentRuntime')).toHaveBeenCalledWith('codex');
+        expect(harness.method('invalidateNetworkPreflight')).not.toHaveBeenCalled();
 
         harness.clearCalls();
         harness.dom.window.dispatchEvent(new harness.dom.window.Event('online'));

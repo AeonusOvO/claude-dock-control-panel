@@ -6,21 +6,21 @@
 
 | 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
 | -------- | -------------------------- | ------------------------- | ------------------ | ---- |
-| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 176  |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 179  |
 | 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
 | 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 23   |
 | 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
 
-`ControlPanelApi` 共 206 个成员：176 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+`ControlPanelApi` 共 209 个成员：179 请求响应 + 23 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
 
 ## 当前实现位置
 
 | 内容         | 位置                                                                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 频道常量     | `src/shared/ipc/channels.ts`（206 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 频道常量     | `src/shared/ipc/channels.ts`（209 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
 | 参数 schema  | `src/shared/ipc/schema.ts` + `claude-execution-settings-schema.ts`                                                                             |
 | 类型定义     | `src/shared/contracts/`（21 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件）                                                            |
-| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 206 个成员）                                                                    |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（21 个域接口组合出 209 个成员）                                                                    |
 | 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 21 个桥文件                                           |
 | 主进程注册   | `src/main/ipc/`（31 个文件：25 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
 | 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 25 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
@@ -39,7 +39,7 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 - 事件订阅方法返回取消函数，内部调用 `removeListener`。
 - 渲染进程与主进程共享的类型只来自 `src/shared/`。
 
-## 请求响应频道（176）
+## 请求响应频道（179）
 
 ### `app`（12）
 
@@ -320,21 +320,24 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 保留为已下载状态的兼容入口，正常界面不再要求用户二次点击；NSIS 以静默模式安装，完成后重新启动
 ClaudeDock。
 
-### `runtime`（4）
+### `runtime`（6）
 
-| 频道                        | 方法                      |
-| --------------------------- | ------------------------- |
-| `runtime:get`               | `getDevelopmentRuntime`   |
-| `runtime:set`               | `setDevelopmentRuntime`   |
-| `runtime:get-activity`      | `getRuntimeActivity`      |
-| `runtime:terminate-process` | `terminateRuntimeProcess` |
+| 频道                        | 方法                        |
+| --------------------------- | --------------------------- |
+| `runtime:get`               | `getDevelopmentRuntime`     |
+| `runtime:set`               | `setDevelopmentRuntime`     |
+| `runtime:get-next`          | `getNextDevelopmentRuntime` |
+| `runtime:set-next`          | `setNextDevelopmentRuntime` |
+| `runtime:get-activity`      | `getRuntimeActivity`        |
+| `runtime:terminate-process` | `terminateRuntimeProcess`   |
 
-### `busy`（2）
+### `busy`（3）
 
-| 频道                    | 方法                  |
-| ----------------------- | --------------------- |
-| `busy:list`             | `listBusyLeases`      |
-| `busy:set-conversation` | `setConversationBusy` |
+| 频道                            | 方法                         |
+| ------------------------------- | ---------------------------- |
+| `busy:list`                     | `listBusyLeases`             |
+| `busy:set-conversation`         | `setConversationBusy`        |
+| `busy:set-workspace-transition` | `setWorkspaceTransitionBusy` |
 
 ### `ui`（1）
 

@@ -6,6 +6,11 @@ import type { TerminalState } from './state';
 
 export interface TerminalLaunchActions {
   launchClaudeTerminal: (mode: ClaudeLaunchMode) => Promise<void>;
+  launchClaudeSession: (
+    sessionId: string,
+    mode: ClaudeLaunchMode,
+    announce?: boolean,
+  ) => Promise<boolean>;
 }
 
 export const createTerminalLaunchActions = (
@@ -13,10 +18,16 @@ export const createTerminalLaunchActions = (
   layout: TerminalLayout,
   dependencies: TerminalActionsDependencies,
 ): TerminalLaunchActions => {
-  const launchClaudeTerminal = async (mode: ClaudeLaunchMode): Promise<void> => {
-    const status = dependencies.activeStatus();
+  const launchClaudeSession = async (
+    sessionId: string,
+    mode: ClaudeLaunchMode,
+    announce = true,
+  ): Promise<boolean> => {
+    const status = dependencies
+      .getWorkspaceState()
+      .sessions.find((candidate) => candidate.id === sessionId);
     if (!status || dependencies.claudeLaunchAttempts.isBusy(status.id)) {
-      return;
+      return false;
     }
 
     // Capture the lifecycle baseline and paint the busy state before the first await, including when
@@ -38,17 +49,17 @@ export const createTerminalLaunchActions = (
       token: attempt,
     });
     if (outcome.status === 'rejected') {
-      dependencies.showToast('无法启动 Claude Code。', 'error');
-      return;
+      if (announce) dependencies.showToast('无法启动 Claude Code。', 'error');
+      return false;
     }
     if (outcome.status !== 'resolved') {
-      return;
+      return false;
     }
 
     let launchOutcome = outcome.result;
     if (launchOutcome.status === 'paused') {
       const decision = await dependencies.resolveClaudeLaunchDecision(attempt, launchOutcome);
-      if (decision.status !== 'completed') return;
+      if (decision.status !== 'completed') return false;
       launchOutcome = decision;
       if (
         !dependencies.renderClaudeLaunchResult(
@@ -57,36 +68,49 @@ export const createTerminalLaunchActions = (
           launchOutcome.result.ok ? 'success' : 'failure',
         )
       ) {
-        return;
+        return false;
       }
     }
 
     const { result } = launchOutcome;
     if (!result.ok) {
       dependencies.failClaudeLaunchAttempt(attempt);
-      dependencies.showToast(
-        dependencies.resultFailureMessage(result, '无法启动 Claude Code。'),
-        'error',
-      );
-      return;
+      if (announce) {
+        dependencies.showToast(
+          dependencies.resultFailureMessage(result, '无法启动 Claude Code。'),
+          'error',
+        );
+      }
+      return false;
     }
-    dependencies.setNativePanelVisible(false);
-    dependencies.showToast(
-      mode === 'new'
-        ? `已在 ${dependencies.projectNameFromPath(status.cwd)} 启动新会话`
-        : mode === 'continue'
-          ? '正在续接当前项目最近的会话'
-          : '已打开当前项目的历史会话选择器',
-    );
+    const stillActive = dependencies.getWorkspaceState().activeSessionId === status.id;
+    if (stillActive) dependencies.setNativePanelVisible(false);
+    if (announce) {
+      dependencies.showToast(
+        mode === 'new'
+          ? `已在 ${dependencies.projectNameFromPath(status.cwd)} 启动新会话`
+          : mode === 'continue'
+            ? '正在续接当前项目最近的会话'
+            : '已打开当前项目的历史会话选择器',
+      );
+    }
     // `resume` opens Claude's own arrow-key picker, which needs the raw keystrokes.
+    if (!stillActive) return true;
     if (mode === 'resume') {
       state.terminalViews.get(status.id)?.terminal.focus();
     } else {
       layout.requestComposerFocus(status.id);
     }
+    return true;
+  };
+
+  const launchClaudeTerminal = async (mode: ClaudeLaunchMode): Promise<void> => {
+    const status = dependencies.activeStatus();
+    if (status) await launchClaudeSession(status.id, mode);
   };
 
   return {
     launchClaudeTerminal,
+    launchClaudeSession,
   };
 };

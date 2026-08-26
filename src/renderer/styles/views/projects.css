@@ -797,6 +797,44 @@ html[data-appearance='dark'] .runtime-option__brand-mark--dark {
   background: var(--layer-hover);
 }
 
+.conversation-item--pending {
+  animation: pendingConversationEnter var(--dur-4) var(--ease-spring) both;
+  background: color-mix(in srgb, var(--accent-tint) 58%, transparent);
+  grid-template-columns: minmax(0, 1fr);
+  pointer-events: none;
+}
+
+.conversation-item--pending .conversation-item__status {
+  animation: pendingConversationPulse var(--dur-status-pulse) var(--ease-standard) infinite;
+  background: var(--accent-solid);
+  box-shadow: 0 0 0 0 var(--accent-line);
+}
+
+.conversation-item--pending .conversation-item__phase {
+  color: var(--accent-text);
+}
+
+.conversation-item[data-transition] {
+  background: color-mix(in srgb, var(--accent-tint) 42%, transparent);
+}
+
+.conversation-item[data-transition] .conversation-item__status {
+  animation: pendingConversationPulse var(--dur-status-pulse) var(--ease-standard) infinite;
+  background: var(--accent-solid);
+}
+
+.conversation-item[data-transition] .conversation-item__phase {
+  color: var(--accent-text);
+}
+
+.conversation-item[data-transition-failure] {
+  background: color-mix(in srgb, var(--bad-solid) 8%, transparent);
+}
+
+.conversation-item[data-transition-failure] .conversation-item__phase {
+  color: var(--bad-text);
+}
+
 .conversation-item__select {
   align-items: center;
   background: transparent;
@@ -896,6 +934,12 @@ html[data-appearance='dark'] .runtime-option__brand-mark--dark {
 .conversation-item__action:hover {
   background: var(--layer-active);
   color: var(--accent-text);
+}
+
+.conversation-item__action:disabled {
+  cursor: wait;
+  opacity: 0.24;
+  pointer-events: none;
 }
 
 .conversation-item__action--close {

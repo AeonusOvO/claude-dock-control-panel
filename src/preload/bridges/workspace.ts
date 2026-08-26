@@ -37,6 +37,8 @@ export const workspaceBridge = {
     ipcRenderer.invoke(CHANNELS.PROJECT_FORGET, projectPath) as Promise<WorkspaceResult>,
   getWorkspace: () => ipcRenderer.invoke(CHANNELS.WORKSPACE_GET_STATE) as Promise<WorkspaceState>,
   getDevelopmentRuntime: (sessionId) => ipcRenderer.invoke(CHANNELS.RUNTIME_GET, sessionId),
+  getNextDevelopmentRuntime: () => ipcRenderer.invoke(CHANNELS.RUNTIME_GET_NEXT),
+  setNextDevelopmentRuntime: (runtime) => ipcRenderer.invoke(CHANNELS.RUNTIME_SET_NEXT, runtime),
   setDevelopmentRuntime: (sessionId, runtime) =>
     ipcRenderer.invoke(CHANNELS.RUNTIME_SET, sessionId, runtime),
   onWorkspaceState: (listener) => {

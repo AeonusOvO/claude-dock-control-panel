@@ -149,7 +149,7 @@ describe('managed route launch guards', () => {
       ipc.invoke(CHANNELS.PROJECT_OPEN_STORED_CONVERSATION, projectPath, conversationId),
     ).resolves.toMatchObject({ ok: true, state });
 
-    expect(openConversation).toHaveBeenCalledWith(projectPath, '历史 11111111');
+    expect(openConversation).toHaveBeenCalledWith(projectPath, '历史 11111111', 'claude');
     expect(withOfficialProviderAccess).not.toHaveBeenCalled();
   });
 

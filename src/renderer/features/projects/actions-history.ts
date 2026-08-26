@@ -1,12 +1,14 @@
 import type {
   ClaudeConversationModelChoice,
   ClaudeSessionMetadata,
+  TerminalStatus,
 } from '../../../shared/contracts';
 import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-attempt';
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
 import type { ProjectsState } from './state';
 import type { WorkspaceRenderer } from './workspace';
 import type { ConversationModelDialogResult } from './model-resolution-dialog';
+import { beginWorkspaceConversationTransition } from './transition-busy';
 
 type ModelResolution = Awaited<
   ReturnType<typeof window.controlPanel.inspectClaudeConversationModel>
@@ -63,10 +65,150 @@ interface ResumeStoredConversationInput {
   options?: StoredConversationResumeOptions;
   projectPath: string;
   requestModelChoice: RequestModelChoice;
+  rowsApi: ProjectsRowsApi;
   session: ClaudeSessionMetadata;
   state: ProjectsState;
   workspaceRenderer: WorkspaceRenderer;
 }
+
+interface OptimisticHistoryMove {
+  finish: (render?: boolean) => void;
+  historyKey: string;
+  originalHistory: ClaudeSessionMetadata[] | undefined;
+}
+
+const beginOptimisticHistoryMove = (
+  dependencies: ProjectsActionsDependencies,
+  rowsApi: ProjectsRowsApi,
+  state: ProjectsState,
+  projectPath: string,
+  session: ClaudeSessionMetadata,
+  label: string,
+  startup: boolean,
+): OptimisticHistoryMove => {
+  const historyKey = projectPath.toLowerCase();
+  const originalHistory = state.storedConversations.get(historyKey);
+  const pendingId = `pending-conversation-${++state.pendingConversationSequence}`;
+  state.pendingConversations.set(pendingId, {
+    id: pendingId,
+    kind: 'restoring',
+    projectPath,
+    title: label,
+  });
+  if (originalHistory) {
+    state.storedConversations.set(
+      historyKey,
+      originalHistory.filter((candidate) => candidate.conversationId !== session.conversationId),
+    );
+  }
+  const releasePreview = dependencies.beginWorkspaceTerminalPreview(
+    startup ? '正在恢复上次对话…' : '正在恢复历史对话…',
+  );
+  rowsApi.renderProjectList();
+  let finished = false;
+  return {
+    finish: (render = true) => {
+      if (finished) return;
+      finished = true;
+      state.pendingConversations.delete(pendingId);
+      releasePreview();
+      if (render) rowsApi.renderProjectList();
+    },
+    historyKey,
+    originalHistory,
+  };
+};
+
+interface FailedHistoryResumeRollbackInput {
+  dependencies: ProjectsActionsDependencies;
+  historyKey: string;
+  openedNewSession: boolean;
+  openedSessionId?: string;
+  originalHistory: ClaudeSessionMetadata[] | undefined;
+  projectPath: string;
+  rowsApi: ProjectsRowsApi;
+  state: ProjectsState;
+  workspaceRenderer: WorkspaceRenderer;
+}
+
+const rollbackFailedHistoryResume = async ({
+  dependencies,
+  historyKey,
+  openedNewSession,
+  openedSessionId,
+  originalHistory,
+  projectPath,
+  rowsApi,
+  state,
+  workspaceRenderer,
+}: FailedHistoryResumeRollbackInput): Promise<void> => {
+  let rollbackFailure: string | undefined;
+  if (
+    openedNewSession &&
+    openedSessionId &&
+    dependencies.getWorkspaceState().sessions.some(({ id }) => id === openedSessionId)
+  ) {
+    try {
+      const rolledBack = await window.controlPanel.closeProject(openedSessionId);
+      workspaceRenderer.renderWorkspace(rolledBack.state);
+      if (!rolledBack.ok) {
+        rollbackFailure = dependencies.resultFailureMessage(rolledBack, '临时终端未能关闭。');
+      }
+    } catch (error) {
+      rollbackFailure =
+        error instanceof Error && error.message ? error.message : '临时终端未能关闭。';
+    }
+  }
+  if (originalHistory) {
+    state.storedConversations.set(historyKey, originalHistory);
+    rowsApi.renderProjectList();
+  }
+  try {
+    await rowsApi.loadFolderHistory(projectPath, true);
+  } catch {
+    // Keep the optimistic snapshot above; a later folder expansion retries the authoritative scan.
+  }
+  if (!rollbackFailure) return;
+  if (openedSessionId) {
+    state.failedConversationTransitions.set(openedSessionId, 'restoring');
+    rowsApi.renderProjectList();
+  }
+  dependencies.showToast(
+    `恢复失败，历史记录已保留，但自动回滚未完成：${rollbackFailure} 请手动关闭临时终端。`,
+    'error',
+  );
+};
+
+const beginRestoringSessionPresentation = (
+  dependencies: ProjectsActionsDependencies,
+  rowsApi: ProjectsRowsApi,
+  state: ProjectsState,
+  status: TerminalStatus,
+  options?: StoredConversationResumeOptions,
+): {
+  attempt: ReturnType<ProjectsActionsDependencies['beginClaudeLaunchAttempt']>;
+  finish: () => void;
+} => {
+  const attempt = dependencies.beginClaudeLaunchAttempt(status);
+  state.transitioningConversations.set(status.id, 'restoring');
+  rowsApi.renderProjectList();
+  const releaseMask = dependencies.beginTerminalMask(
+    status.id,
+    options
+      ? options.autoLoadConversationModel
+        ? '正在连接模型…'
+        : '正在恢复上次对话…'
+      : '正在恢复历史对话…',
+  );
+  return {
+    attempt,
+    finish: () => {
+      state.transitioningConversations.delete(status.id);
+      releaseMask();
+      rowsApi.renderProjectList();
+    },
+  };
+};
 
 /** Resumes a stored transcript in its canonical terminal owner. */
 const resumeStoredConversationWithDependencies = async ({
@@ -74,6 +216,7 @@ const resumeStoredConversationWithDependencies = async ({
   options,
   projectPath,
   requestModelChoice,
+  rowsApi,
   session,
   state,
   workspaceRenderer,
@@ -83,33 +226,27 @@ const resumeStoredConversationWithDependencies = async ({
     return;
   }
   state.storedConversationRestores.add(restoreKey);
+  const releaseTransition = beginWorkspaceConversationTransition(state);
+  const label = session.sessionName || session.conversationId.slice(0, 8);
+  const optimistic = beginOptimisticHistoryMove(
+    dependencies,
+    rowsApi,
+    state,
+    projectPath,
+    session,
+    label,
+    Boolean(options),
+  );
+  let committed = false;
+  let openedSessionId: string | undefined;
+  let openedNewSession = false;
   try {
-    const label = session.sessionName || session.conversationId.slice(0, 8);
-    // Manual history navigation must inspect before opening because the user can cancel the model
-    // dialog. Startup has no decision dialog, so defer its potentially slow inspection until after
-    // the terminal mask is visible; the static composer starts disabled and cannot accept input in
-    // the short hydration window before the stored conversation has opened.
-    let resolution = options
-      ? undefined
-      : await window.controlPanel.inspectClaudeConversationModel(
-          projectPath,
-          session.conversationId,
-          session.modelId,
-        );
-    const modelChoice = resolution
-      ? await resolveHistoryModelChoice(
-          resolution,
-          label,
-          requestModelChoice,
-          dependencies.showToast,
-        )
-      : undefined;
-    if (modelChoice === null) return;
-
+    // The transcript stays on disk; only its visible row moves, so a crash cannot erase history.
     const opened = await window.controlPanel.openStoredConversation(
       projectPath,
       session.conversationId,
     );
+    optimistic.finish(false);
     workspaceRenderer.renderWorkspace(opened.state);
     if (!opened.ok) {
       dependencies.showToast(
@@ -118,31 +255,58 @@ const resumeStoredConversationWithDependencies = async ({
       );
       return;
     }
+    openedSessionId = opened.createdSessionId ?? opened.state.activeSessionId;
+    openedNewSession = !opened.reused;
     dependencies.setNativePanelVisible(false);
     dependencies.retryTerminalFitUntilMeasured();
     if (opened.reused) {
+      committed = true;
+      await rowsApi.loadFolderHistory(projectPath, true);
       dependencies.requestComposerFocus(opened.state.activeSessionId);
       dependencies.showToast(`已切换到 ${label}`);
       return;
     }
 
-    const status = opened.state.sessions.find(({ id }) => id === opened.state.activeSessionId);
+    const status = opened.state.sessions.find(({ id }) => id === openedSessionId);
     if (!status) {
       dependencies.showToast('无法找到刚创建的历史会话终端。', 'error');
       return;
     }
-    const attempt = dependencies.beginClaudeLaunchAttempt(status);
-    const releaseMask = dependencies.beginTerminalMask(
-      status.id,
-      options
-        ? options.autoLoadConversationModel
-          ? '正在连接模型…'
-          : '正在恢复上次对话…'
-        : modelChoice === 'use-conversation'
-          ? '正在连接对话原有模型…'
-          : '正在恢复历史对话…',
+    const presentation = beginRestoringSessionPresentation(
+      dependencies,
+      rowsApi,
+      state,
+      status,
+      options,
     );
+    const { attempt } = presentation;
     try {
+      const resolution =
+        options && !options.autoLoadConversationModel
+          ? undefined
+          : await window.controlPanel.inspectClaudeConversationModel(
+              projectPath,
+              session.conversationId,
+              session.modelId,
+            );
+      const modelChoice = options
+        ? options.autoLoadConversationModel && resolution?.mismatch
+          ? resolution.restorable
+            ? ('use-conversation' as const)
+            : null
+          : undefined
+        : await resolveHistoryModelChoice(
+            resolution!,
+            label,
+            requestModelChoice,
+            dependencies.showToast,
+          );
+      if (modelChoice === null) {
+        if (options) {
+          throw new Error('上次对话的模型接入信息不完整，已取消自动恢复。');
+        }
+        return;
+      }
       const outcome = await orchestrateClaudeLaunchAttempt({
         applyResult: (launchOutcome) =>
           launchOutcome.status === 'paused' ||
@@ -153,18 +317,8 @@ const resumeStoredConversationWithDependencies = async ({
           ),
         onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
         prepare: async () => {
-          if (options?.autoLoadConversationModel) {
-            resolution = await window.controlPanel.inspectClaudeConversationModel(
-              projectPath,
-              session.conversationId,
-              session.modelId,
-            );
-            if (resolution.mismatch && !resolution.restorable) {
-              throw new Error('上次对话的模型接入信息不完整，已打开对话但没有自动启动。');
-            }
-          }
           const effectiveModelChoice = options
-            ? resolution?.mismatch
+            ? options.autoLoadConversationModel && resolution?.mismatch
               ? 'use-conversation'
               : undefined
             : modelChoice;
@@ -224,10 +378,15 @@ const resumeStoredConversationWithDependencies = async ({
         );
         return;
       }
+      committed = true;
+      await rowsApi.loadFolderHistory(projectPath, true);
       dependencies.requestComposerFocus(status.id);
-      dependencies.showToast(options ? `已自动恢复 ${label}` : `已在安全终端恢复 ${label}`);
+      dependencies.showToast(options ? `已自动恢复 ${label}` : `已恢复 ${label}`);
     } finally {
-      releaseMask();
+      if (!committed && dependencies.claudeLaunchAttempts.isCurrent(attempt)) {
+        dependencies.failClaudeLaunchAttempt(attempt);
+      }
+      presentation.finish();
     }
   } catch (error) {
     dependencies.showToast(
@@ -235,7 +394,22 @@ const resumeStoredConversationWithDependencies = async ({
       'error',
     );
   } finally {
+    optimistic.finish();
+    if (!committed) {
+      await rollbackFailedHistoryResume({
+        dependencies,
+        historyKey: optimistic.historyKey,
+        openedNewSession,
+        openedSessionId,
+        originalHistory: optimistic.originalHistory,
+        projectPath,
+        rowsApi,
+        state,
+        workspaceRenderer,
+      });
+    }
     state.storedConversationRestores.delete(restoreKey);
+    releaseTransition();
   }
 };
 
@@ -317,6 +491,7 @@ export const createProjectsHistoryActions = (
       ...(options ? { options } : {}),
       projectPath,
       requestModelChoice,
+      rowsApi,
       session,
       state,
       workspaceRenderer,

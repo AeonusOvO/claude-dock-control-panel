@@ -43,9 +43,13 @@ export interface WorkspaceState extends TerminalWorkspaceState {
 }
 
 export interface WorkspaceResult extends FailureMetadata {
+  /** Exact conversation created by this request; never inferred from the later active tab. */
+  createdSessionId?: string;
   error?: string;
   ok: boolean;
   reused?: boolean;
+  /** Engine captured for `createdSessionId` when a new live conversation is opened. */
+  runtime?: DevelopmentRuntime;
   state: WorkspaceState;
 }
 

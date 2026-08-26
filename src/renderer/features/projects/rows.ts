@@ -8,6 +8,7 @@ import { createProjectsRowFolderActions } from './rows-folder';
 import { createProjectsRowItemsActions } from './rows-items';
 import { createProjectsRowListActions } from './rows-list';
 import type { ProjectsState } from './state';
+import type { PendingConversation } from './state';
 import type { ProjectsTitleView } from './view';
 
 export type { ProjectsRowHandlers, ProjectsRowsDependencies } from './rows-dependencies';
@@ -17,6 +18,7 @@ export interface ProjectsRows {
   loadFolderHistory: (projectPath: string, force?: boolean) => Promise<void>;
   renderConversationRow: (status: TerminalStatus) => HTMLElement;
   renderHistoryRow: (projectPath: string, session: ClaudeSessionMetadata) => HTMLElement;
+  renderPendingConversationRow: (pending: PendingConversation) => HTMLElement;
   renderProjectFolder: (project: WorkspaceProjectView) => HTMLElement;
   renderProjectList: () => void;
 }
@@ -28,7 +30,7 @@ export const createProjectsRows = (
   handlers: ProjectsRowHandlers,
   titleView: ProjectsTitleView,
 ): ProjectsRows => {
-  const itemsActions = createProjectsRowItemsActions(dependencies, handlers, titleView);
+  const itemsActions = createProjectsRowItemsActions(state, dependencies, handlers, titleView);
   const folderActions = createProjectsRowFolderActions(
     state,
     dependencies,
@@ -44,6 +46,7 @@ export const createProjectsRows = (
     loadFolderHistory: listActions.loadFolderHistory,
     renderConversationRow: itemsActions.renderConversationRow,
     renderHistoryRow: itemsActions.renderHistoryRow,
+    renderPendingConversationRow: itemsActions.renderPendingConversationRow,
     renderProjectFolder: folderActions.renderProjectFolder,
     renderProjectList: listActions.renderProjectList,
   };

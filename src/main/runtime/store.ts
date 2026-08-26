@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { DevelopmentRuntime } from '../../shared/contracts';
 
 interface StoredAgentRuntimes {
+  nextRuntime?: DevelopmentRuntime;
   projects: Record<string, DevelopmentRuntime>;
   version: 1;
 }
@@ -30,9 +31,24 @@ export class AgentRuntimeStore {
     return this.load().projects[projectKey(projectPath)] ?? 'claude';
   }
 
+  /**
+   * Global engine captured by the next conversation that is created. It deliberately does not
+   * mutate any live session: changing the picker is a future-session preference, not a project
+   * runtime switch.
+   */
+  public getNext(): DevelopmentRuntime {
+    return this.load().nextRuntime ?? 'claude';
+  }
+
   public set(projectPath: string, runtime: DevelopmentRuntime): void {
     const store = this.load();
     store.projects[projectKey(projectPath)] = runtime;
+    this.persist(store);
+  }
+
+  public setNext(runtime: DevelopmentRuntime): void {
+    const store = this.load();
+    store.nextRuntime = runtime;
     this.persist(store);
   }
 
@@ -45,6 +61,7 @@ export class AgentRuntimeStore {
   private load(): StoredAgentRuntimes {
     try {
       const parsed = JSON.parse(readFileSync(this.storagePath, 'utf8')) as {
+        nextRuntime?: unknown;
         projects?: unknown;
         version?: unknown;
       };
@@ -57,7 +74,11 @@ export class AgentRuntimeStore {
           projects[key.toLowerCase()] = value;
         }
       }
-      return { projects, version: 1 };
+      return {
+        ...(isDevelopmentRuntime(parsed.nextRuntime) ? { nextRuntime: parsed.nextRuntime } : {}),
+        projects,
+        version: 1,
+      };
     } catch {
       return structuredClone(EMPTY_STORE);
     }

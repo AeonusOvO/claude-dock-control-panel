@@ -52,10 +52,20 @@ export const registerRuntimeIpc = ({
     const status = workspace.getStatus(validatedSessionId);
     return {
       cwd: status.cwd,
-      runtime: agentRuntimeStore.get(status.cwd),
+      runtime: workspace.getDevelopmentRuntime(validatedSessionId),
       sessionId: validatedSessionId,
       switchOperation: projectRuntimeSwitchOperations.activeSwitch(status.cwd),
     };
+  });
+  ipcMain.handle(CHANNELS.RUNTIME_GET_NEXT, (event) => {
+    validateSender(event);
+    return agentRuntimeStore.getNext();
+  });
+  ipcMain.handle(CHANNELS.RUNTIME_SET_NEXT, (event, runtime: unknown) => {
+    validateSender(event);
+    const selected = validateDevelopmentRuntime(runtime);
+    agentRuntimeStore.setNext(selected);
+    return selected;
   });
   ipcMain.handle(
     CHANNELS.RUNTIME_SET,

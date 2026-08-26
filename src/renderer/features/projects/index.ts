@@ -60,6 +60,7 @@ const createProjectsFeature = (dependencies: ProjectsFeatureDependencies): Proje
 
   const actions = createProjectsActions(elements, state, dependencies, workspaceRenderer, {
     loadFolderHistory: (projectPath, force) => rows.loadFolderHistory(projectPath, force),
+    renderProjectList: () => rows.renderProjectList(),
   });
 
   const handlers: ProjectsRowHandlers = {

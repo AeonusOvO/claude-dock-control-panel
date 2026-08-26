@@ -31,6 +31,7 @@ export type { TerminalProjectStateDeps } from './project-state-dependencies';
 export { phaseCopy } from './project-state-session';
 
 export interface TerminalProjectState {
+  loadNextDevelopmentRuntime: () => Promise<void>;
   renderDevelopmentRuntimeState: (
     state: DevelopmentRuntimeState,
     invalidatePendingLoad?: boolean,
@@ -110,6 +111,7 @@ export const createTerminalProjectState = (
   const sessionActions = createTerminalSessionActions(deps);
 
   return {
+    loadNextDevelopmentRuntime: runtimeActions.loadNextDevelopmentRuntime,
     renderDevelopmentRuntimeState: runtimeActions.renderDevelopmentRuntimeState,
     renderCodexLoadingState: codexActions.renderCodexLoadingState,
     renderCodexState: codexActions.renderCodexState,

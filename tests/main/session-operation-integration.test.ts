@@ -396,6 +396,7 @@ const registerLaunchPreflightHarness = async () => {
     withLaunchDecisionSessionOperation: (sessionId, operation) =>
       operations.run(sessionId, operation),
     workspace: {
+      getDevelopmentRuntime: vi.fn(() => 'claude'),
       getStatus: vi.fn(() => ({
         cwd: 'D:\\Project',
         id: 'session-1',
@@ -1664,7 +1665,6 @@ describe('main-process session operation ownership', () => {
       setInactive: vi.fn(() => true),
     };
     registerCodexIpc({
-      agentRuntimeStore: { get: vi.fn(() => 'codex') } as never,
       failedRuntimeLaunchCleanupDependencies: {
         hasSession: vi.fn(() => true),
         stopIfGeneration,
@@ -1680,6 +1680,7 @@ describe('main-process session operation ownership', () => {
       withDevelopmentSessionOperation: (sessionId, operation) =>
         operations.run(sessionId, operation),
       workspace: {
+        getDevelopmentRuntime: vi.fn(() => 'codex'),
         getStatus: vi.fn(() => ({ cwd: 'D:\\Project', ptyGeneration: 7 })),
       } as never,
     });
@@ -1941,6 +1942,7 @@ describe('main-process session operation ownership', () => {
       withLaunchDecisionSessionOperation: (sessionId, operation) =>
         operations.run(sessionId, operation),
       workspace: {
+        getDevelopmentRuntime: vi.fn(() => 'claude'),
         getStatus: vi.fn(() => ({ cwd: 'D:\\Project', ptyGeneration: 7 })),
       } as never,
     });

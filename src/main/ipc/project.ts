@@ -54,7 +54,6 @@ export interface ProjectIpcDependencies {
 }
 
 const registerStoredConversationIpc = ({
-  agentRuntimeStore,
   conversationOwnerRegistry,
   describeWorkspace,
   failedWorkspaceResult,
@@ -76,10 +75,6 @@ const registerStoredConversationIpc = ({
         return await projectDirectoryLifecycle.runOpen(resolved, async (ownership) => {
           ownership.assertCurrent();
           managedConfigTransactions.assertDevelopmentOperationAllowed(resolved);
-          if (agentRuntimeStore.get(resolved) !== 'claude') {
-            throw new Error('这是 Claude Code 历史会话，请先将该项目切换为 Claude Code。');
-          }
-
           const existingOwner = conversationOwnerRegistry.ownerFor({
             conversationId,
             projectPath: resolved,
@@ -103,14 +98,19 @@ const registerStoredConversationIpc = ({
           // exact transcript through `claude:launch-with-session`, so provider blocks use the same
           // main-owned pause/recheck/bypass coordinator and exact prepared-token handoff as every
           // other transcript resume.
-          workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`);
+          workspace.openConversation(resolved, `历史 ${conversationId.slice(0, 8)}`, 'claude');
           const openedSessionId = workspace.getState().activeSessionId;
           if (!openedSessionId) {
             throw new Error('无法创建历史会话终端。');
           }
           ownership.assertCurrent();
           workspaceStore.addProject(resolved);
-          return { ok: true, state: describeWorkspace() };
+          return {
+            createdSessionId: openedSessionId,
+            ok: true,
+            runtime: 'claude',
+            state: describeWorkspace(),
+          };
         });
       } catch (error) {
         return failedWorkspaceResult(error);
@@ -185,10 +185,16 @@ export const registerProjectIpc = (dependencies: ProjectIpcDependencies): void =
       const resolved = resolveDirectory(validateProjectPath(projectPath));
       return projectDirectoryLifecycle.runOpenSync(resolved, (ownership) => {
         ownership.assertCurrent();
-        const state = workspace.openConversation(resolved);
+        const state = workspace.openConversation(resolved, undefined, agentRuntimeStore.getNext());
+        const createdSessionId = state.activeSessionId;
         ownership.assertCurrent();
         workspaceStore.addProject(resolved);
-        return { ok: true, state: describeWorkspace(state) } satisfies WorkspaceResult;
+        return {
+          createdSessionId,
+          ok: true,
+          runtime: workspace.getDevelopmentRuntime(createdSessionId),
+          state: describeWorkspace(state),
+        } satisfies WorkspaceResult;
       });
     } catch (error) {
       return failedWorkspaceResult(error);

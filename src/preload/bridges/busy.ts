@@ -14,4 +14,6 @@ export const busyBridge = {
     };
   },
   setConversationBusy: (busy) => ipcRenderer.invoke(CHANNELS.BUSY_SET_CONVERSATION, busy),
+  setWorkspaceTransitionBusy: (busy) =>
+    ipcRenderer.invoke(CHANNELS.BUSY_SET_WORKSPACE_TRANSITION, busy),
 } satisfies Partial<ControlPanelApi>;

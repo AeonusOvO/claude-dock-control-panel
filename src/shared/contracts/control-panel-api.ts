@@ -196,6 +196,9 @@ export interface WorkspaceApi {
   forgetProject: (projectPath: string) => Promise<WorkspaceResult>;
   getWorkspace: () => Promise<WorkspaceState>;
   getDevelopmentRuntime: (sessionId: string) => Promise<DevelopmentRuntimeState>;
+  /** Global preference captured atomically by the next newly-created conversation. */
+  getNextDevelopmentRuntime: () => Promise<DevelopmentRuntime>;
+  setNextDevelopmentRuntime: (runtime: DevelopmentRuntime) => Promise<DevelopmentRuntime>;
   setDevelopmentRuntime: (
     sessionId: string,
     runtime: DevelopmentRuntime,
@@ -247,6 +250,7 @@ export interface BusyApi {
   listBusyLeases: () => Promise<BusyLease[]>;
   onBusyChanged: (listener: (leases: BusyLease[]) => void) => Unsubscribe;
   setConversationBusy: (busy: boolean) => Promise<BusyLease[]>;
+  setWorkspaceTransitionBusy: (busy: boolean) => Promise<BusyLease[]>;
 }
 
 export interface RuntimeApi {

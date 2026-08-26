@@ -143,14 +143,14 @@
           <details class="runtime-disclosure" id="runtime-disclosure">
             <summary>
               <span>
-                <small>当前项目开发引擎</small>
+                <small>新建项目开发引擎</small>
                 <strong id="runtime-summary-value">Claude Code</strong>
               </span>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5" /></svg>
             </summary>
             <fieldset class="runtime-picker" id="runtime-picker" aria-busy="false">
               <legend id="runtime-picker-label" aria-live="polite" aria-atomic="true">
-                当前项目开发引擎
+                新建项目开发引擎
               </legend>
               <label class="runtime-option card" for="runtime-claude">
                 <input id="runtime-claude" name="development-runtime" type="radio" value="claude" />
@@ -163,7 +163,7 @@
                 </span>
                 <span class="runtime-option__copy">
                   <strong>Claude Code</strong>
-                  <small>安全终端 · 原生对话可选</small>
+                  <small>用于下一次新建 · 原生对话可选</small>
                 </span>
                 <span class="runtime-option__check" aria-hidden="true">
                   <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
@@ -185,7 +185,7 @@
                 </span>
                 <span class="runtime-option__copy">
                   <strong>Codex</strong>
-                  <small>官方登录 · 高级终端</small>
+                  <small>用于下一次新建 · 官方登录</small>
                 </span>
                 <span class="runtime-option__check" aria-hidden="true">
                   <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
@@ -218,12 +218,18 @@
               <span id="actions-heading">快捷操作</span>
               <span>当前对话</span>
             </div>
-            <button class="button button--primary" id="run-claude" type="button" aria-busy="false">
+            <button
+              class="button button--primary"
+              id="run-claude"
+              type="button"
+              aria-busy="false"
+              hidden
+            >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m8 6 6 6-6 6" />
                 <path d="M15 18h3" />
               </svg>
-              <span id="run-agent-label" aria-live="polite" aria-atomic="true"> 新建安全会话 </span>
+              <span id="run-agent-label" aria-live="polite" aria-atomic="true"> 对话已就绪 </span>
             </button>
             <div class="button-row">
               <button
@@ -1708,8 +1714,14 @@
               <p class="workbench-warning" id="claude-runtime-warning" hidden></p>
 
               <div class="launch-actions">
-                <button class="launch-primary" id="launch-new" type="button" aria-busy="false">
-                  新建安全会话
+                <button
+                  class="launch-primary"
+                  id="launch-new"
+                  type="button"
+                  aria-busy="false"
+                  hidden
+                >
+                  启动当前对话
                 </button>
                 <div>
                   <button
@@ -1741,7 +1753,7 @@
                 </span>
               </label>
               <p class="session-explainer">
-                这些按钮只作用于当前这一个对话。想同时跑多个，请到左侧“项目”里给同一个文件夹再开一个对话。
+                新对话请直接点击左侧项目标题旁的“＋”；这里仅保留续接与高级恢复入口。
               </p>
             </section>
 
@@ -1878,7 +1890,7 @@
                 type="button"
                 aria-busy="false"
               >
-                一键准备并启动
+                继续准备当前对话
               </button>
             </section>
 
@@ -1944,8 +1956,14 @@
             </div>
 
             <div class="launch-actions codex-launch-actions">
-              <button class="launch-primary" id="codex-launch-new" type="button" aria-busy="false">
-                新建安全会话
+              <button
+                class="launch-primary"
+                id="codex-launch-new"
+                type="button"
+                aria-busy="false"
+                hidden
+              >
+                启动当前对话
               </button>
               <div>
                 <button
@@ -3913,7 +3931,7 @@
       <form method="dialog">
         <header>
           <span class="step-kicker">退出保护</span>
-          <strong id="quit-confirmation-title">有操作正在进行，不建议退出</strong>
+          <strong id="quit-confirmation-title">正在完成退出前的收尾工作</strong>
         </header>
         <p id="quit-confirmation-message">可以直接关闭窗口，后台会继续运行。</p>
         <ul class="quit-confirmation-list" id="quit-confirmation-list"></ul>
@@ -3922,7 +3940,7 @@
             最小化到托盘，继续运行
           </button>
           <button id="quit-force" type="button">仍要退出</button>
-          <button id="quit-cancel" type="button">取消</button>
+          <button id="quit-cancel" type="button">不退出，返回软件</button>
         </footer>
       </form>
     </dialog>

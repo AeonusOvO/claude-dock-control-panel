@@ -645,7 +645,7 @@ describe('renderer interaction lifecycle behavior', () => {
 
         launch.reject(new Error('synthetic launch failure'));
         await settle(harness);
-        expect(button.textContent).toBe('新建安全会话');
+        expect(button.textContent).toBe('启动当前对话');
         expect(button.disabled).toBe(false);
         expect(button.getAttribute('aria-busy')).toBe('false');
       },
@@ -747,7 +747,7 @@ describe('renderer interaction lifecycle behavior', () => {
     );
   });
 
-  it('releases login-and-launch ownership when authentication completes off project', async () => {
+  it('continues the exact login-and-launch owner after the user switches projects', async () => {
     const stateA = codexProjectState({
       cwd: 'D:\\ProjectA',
       requiresOpenaiAuth: true,
@@ -798,7 +798,8 @@ describe('renderer interaction lifecycle behavior', () => {
         harness.emit('onCodexState', { ...authenticatedA, revision: 4 });
         await settle(harness);
 
-        expect(launchCodex).not.toHaveBeenCalled();
+        expect(launchCodex).toHaveBeenCalledOnce();
+        expect(launchCodex).toHaveBeenCalledWith('session-a', 'new');
       },
     );
   });

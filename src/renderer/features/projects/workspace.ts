@@ -8,6 +8,7 @@ import type {
   WorkspaceState,
 } from '../../../shared/contracts';
 import type { ClaudeLaunchAttemptRegistry } from '../../platform/claude-launch-attempt';
+import { notifyWorkspaceStateChange } from '../../platform/runtime-state-events';
 import type { SessionGenerationRegistry } from '../../platform/session-generation';
 import type { TerminalView } from '../../platform/terminal-view';
 import type { ProjectsState } from './state';
@@ -122,6 +123,7 @@ export const createWorkspaceRenderer = (
       dependencies.setCodexAutoLaunchSessionId('');
     }
     dependencies.setWorkspaceState(workspace);
+    notifyWorkspaceStateChange();
     const pendingComposerFocusSessionId = dependencies.getPendingComposerFocusSessionId();
     const pendingComposerFocusStatus = workspace.sessions.find(
       ({ id }) => id === pendingComposerFocusSessionId,

@@ -4,6 +4,7 @@ import type {
   CodexLoginMethod,
   CodexProjectState,
 } from '../../../shared/contracts';
+import { waitForCodexAdmissionChange } from '../../platform/runtime-state-events';
 import type { CodexLaunchDeps } from './codex-launch-dependencies';
 import {
   beginCodexOperation,
@@ -28,14 +29,14 @@ const codexOperationOwnsResult = (
 };
 
 const shouldAutoLaunchCodex = (
-  deps: Pick<CodexLaunchDeps, 'activeDevelopmentRuntime' | 'getWorkspaceState'>,
+  deps: Pick<CodexLaunchDeps, 'developmentRuntimeStates' | 'getWorkspaceState'>,
   mutableState: CodexLaunchMutableState,
   state: CodexProjectState,
 ): boolean =>
   mutableState.codexAutoLaunchSessionId === state.sessionId &&
   Boolean(state.account) &&
-  state.sessionId === deps.getWorkspaceState().activeSessionId &&
-  deps.activeDevelopmentRuntime() === 'codex';
+  deps.getWorkspaceState().sessions.some(({ id }) => id === state.sessionId) &&
+  deps.developmentRuntimeStates.get(state.sessionId)?.runtime === 'codex';
 
 const renderActiveCodexState = (
   deps: Pick<CodexLaunchDeps, 'activeStatus' | 'codexStates' | 'terminalState'>,
@@ -54,11 +55,66 @@ const renderActiveCodexState = (
 };
 
 export interface CodexLaunchActions {
-  launchCodex: (mode: CodexLaunchMode) => Promise<void>;
-  installOrUpdateCodex: () => Promise<CodexProjectState | undefined>;
-  startCodexLogin: (method: CodexLoginMethod, launchAfterLogin: boolean) => Promise<void>;
-  prepareAndLaunchCodex: () => Promise<void>;
+  launchCodex: (mode: CodexLaunchMode, sessionId?: string, announce?: boolean) => Promise<boolean>;
+  installOrUpdateCodex: (sessionId?: string) => Promise<CodexProjectState | undefined>;
+  startCodexLogin: (
+    method: CodexLoginMethod,
+    launchAfterLogin: boolean,
+    sessionId?: string,
+  ) => Promise<void>;
+  prepareAndLaunchCodex: (sessionId?: string, announce?: boolean) => Promise<boolean>;
 }
+
+type CodexPreparationActions = Pick<
+  CodexLaunchActions,
+  'installOrUpdateCodex' | 'launchCodex' | 'startCodexLogin'
+>;
+
+const prepareAndLaunchCodexSession = async (
+  deps: CodexLaunchDeps,
+  mutableState: CodexLaunchMutableState,
+  actions: CodexPreparationActions,
+  sessionId: string | undefined,
+  announce: boolean,
+): Promise<boolean> => {
+  const status = deps.getWorkspaceState().sessions.find(({ id }) => id === sessionId);
+  if (!status || deps.codexLaunchAttempts.isActive(status.id)) return false;
+  const stillOwnsSession = (): boolean =>
+    deps.getWorkspaceState().sessions.some(({ id }) => id === status.id);
+  const waitForSharedOperation = async (): Promise<boolean> => {
+    while (codexOperationAdmissionBlocked(mutableState, deps.codexStates)) {
+      if (!stillOwnsSession()) return false;
+      await waitForCodexAdmissionChange(
+        () => stillOwnsSession() && codexOperationAdmissionBlocked(mutableState, deps.codexStates),
+      );
+    }
+    return stillOwnsSession();
+  };
+
+  // Installation and account login serialize as shared resources. Every requested conversation
+  // retains an independent async continuation and resumes without blocking the renderer thread.
+  for (;;) {
+    if (!(await waitForSharedOperation())) return false;
+    let state = await deps.terminalState.loadCodexState(status.id, '无法读取 Codex 环境。');
+    if (!state || !stillOwnsSession()) return false;
+    if (!state.installation.installed) {
+      state = await actions.installOrUpdateCodex(status.id);
+      if (state?.installation.installed) continue;
+      if (codexOperationAdmissionBlocked(mutableState, deps.codexStates)) continue;
+      return false;
+    }
+    if (state.requiresOpenaiAuth && !state.account) {
+      if (state.login.phase === 'error') return false;
+      await actions.startCodexLogin('browser', false, status.id);
+      if (!stillOwnsSession()) return false;
+      if (codexOperationAdmissionBlocked(mutableState, deps.codexStates)) continue;
+      state = await deps.terminalState.loadCodexState(status.id, '无法读取 Codex 登录状态。');
+      if (!state?.account) return false;
+      continue;
+    }
+    return actions.launchCodex('new', status.id, announce);
+  }
+};
 
 export const createCodexLaunchActions = (
   deps: CodexLaunchDeps,
@@ -73,14 +129,18 @@ export const createCodexLaunchActions = (
     terminalFeature,
   } = deps;
 
-  const launchCodex = async (mode: CodexLaunchMode): Promise<void> => {
-    const status = activeStatus();
+  const launchCodex = async (
+    mode: CodexLaunchMode,
+    sessionId = activeStatus()?.id,
+    announce = true,
+  ): Promise<boolean> => {
+    const status = deps.getWorkspaceState().sessions.find(({ id }) => id === sessionId);
     if (
       !status ||
       codexLaunchAttempts.isActive(status.id) ||
       codexOperationAdmissionBlocked(mutableState, codexStates)
     ) {
-      return;
+      return false;
     }
     const attempt = codexLaunchAttempts.begin(status.id);
     const existingState = codexStates.get(status.id);
@@ -89,37 +149,42 @@ export const createCodexLaunchActions = (
     }
     try {
       if (!codexLaunchAttempts.isCurrent(attempt)) {
-        return;
+        return false;
       }
       terminalFeature.getTerminalView(status.id)?.terminal.clear();
       if (!codexLaunchAttempts.isCurrent(attempt)) {
-        return;
+        return false;
       }
       const result = await window.controlPanel.launchCodex(status.id, mode);
       if (!codexLaunchAttempts.isCurrent(attempt) || result.state.sessionId !== attempt.sessionId) {
-        return;
+        return false;
       }
       terminalState.renderCodexState(result.state);
       if (!result.ok) {
-        showToast(resultFailureMessage(result, '无法启动 Codex。'), 'error');
-        return;
+        if (announce) showToast(resultFailureMessage(result, '无法启动 Codex。'), 'error');
+        return false;
       }
-      showToast(
-        mode === 'new'
-          ? `已在 ${projectNameFromPath(status.cwd)} 启动 Codex`
-          : mode === 'continue'
-            ? '正在续接当前项目最近的 Codex 会话'
-            : '已打开 Codex 历史会话选择器',
-      );
+      if (announce) {
+        showToast(
+          mode === 'new'
+            ? `已在 ${projectNameFromPath(status.cwd)} 启动 Codex`
+            : mode === 'continue'
+              ? '正在续接当前项目最近的 Codex 会话'
+              : '已打开 Codex 历史会话选择器',
+        );
+      }
+      if (deps.getWorkspaceState().activeSessionId !== status.id) return true;
       if (mode === 'resume') {
         terminalFeature.getTerminalView(status.id)?.terminal.focus();
       } else {
         terminalFeature.requestComposerFocus(status.id);
       }
+      return true;
     } catch {
       if (codexLaunchAttempts.isCurrent(attempt)) {
-        showToast('无法启动 Codex。', 'error');
+        if (announce) showToast('无法启动 Codex。', 'error');
       }
+      return false;
     } finally {
       if (codexLaunchAttempts.finish(attempt)) {
         const latest = codexStates.get(status.id);
@@ -130,8 +195,10 @@ export const createCodexLaunchActions = (
     }
   };
 
-  const installOrUpdateCodex = async (): Promise<CodexProjectState | undefined> => {
-    const status = activeStatus();
+  const installOrUpdateCodex = async (
+    sessionId = activeStatus()?.id,
+  ): Promise<CodexProjectState | undefined> => {
+    const status = deps.getWorkspaceState().sessions.find(({ id }) => id === sessionId);
     if (!status || codexOperationAdmissionBlocked(mutableState, codexStates)) {
       return undefined;
     }
@@ -168,8 +235,9 @@ export const createCodexLaunchActions = (
   const startCodexLogin = async (
     method: CodexLoginMethod,
     launchAfterLogin: boolean,
+    sessionId = activeStatus()?.id,
   ): Promise<void> => {
-    const status = activeStatus();
+    const status = deps.getWorkspaceState().sessions.find(({ id }) => id === sessionId);
     if (!status || codexOperationAdmissionBlocked(mutableState, codexStates)) {
       return;
     }
@@ -218,42 +286,24 @@ export const createCodexLaunchActions = (
           const launch = shouldAutoLaunchCodex(deps, mutableState, sourceState);
           mutableState.codexAutoLaunchSessionId = '';
           if (launch) {
-            void launchCodex('new');
+            void launchCodex('new', sourceState.sessionId);
           }
         }
       }
     }
   };
 
-  const prepareAndLaunchCodex = async (): Promise<void> => {
-    const status = activeStatus();
-    if (
-      !status ||
-      codexOperationAdmissionBlocked(mutableState, codexStates) ||
-      codexLaunchAttempts.isActive(status.id)
-    ) {
-      return;
-    }
-    const stillOwnsActiveSession = (): boolean => activeStatus()?.id === status.id;
-    let state = codexStates.get(status.id);
-    if (!state) {
-      state = await terminalState.loadCodexState(status.id, '无法读取 Codex 环境。');
-      if (!state || !stillOwnsActiveSession()) {
-        return;
-      }
-    }
-    if (!state.installation.installed) {
-      state = await installOrUpdateCodex();
-      if (!state || !stillOwnsActiveSession()) {
-        return;
-      }
-    }
-    if (state.requiresOpenaiAuth && !state.account) {
-      await startCodexLogin('browser', true);
-      return;
-    }
-    await launchCodex('new');
-  };
+  const prepareAndLaunchCodex = (
+    sessionId = activeStatus()?.id,
+    announce = true,
+  ): Promise<boolean> =>
+    prepareAndLaunchCodexSession(
+      deps,
+      mutableState,
+      { installOrUpdateCodex, launchCodex, startCodexLogin },
+      sessionId,
+      announce,
+    );
 
   return {
     launchCodex,

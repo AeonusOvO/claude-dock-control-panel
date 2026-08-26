@@ -117,7 +117,7 @@ const preflightConnectionTest = (
     };
   }
   if (config.provider === 'anthropic' && config.model === 'default') {
-    const message = '官方接入使用“默认”时由 Claude Code 选择模型，请直接启动安全会话验证。';
+    const message = '官方接入使用“默认”时由 Claude Code 选择模型，请通过项目旁的 + 新建对话验证。';
     return {
       ...reportConnectionFailure('user-input', message, { model: config.model }),
       authMode: config.authMode,

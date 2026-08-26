@@ -543,6 +543,8 @@ const installProjectFeatures = (
     activeStatus,
     beginTerminalMask: (sessionId, label) =>
       features.terminalFeature.beginTerminalMask(sessionId, label),
+    beginWorkspaceTerminalPreview: (label) =>
+      features.terminalFeature.beginWorkspaceTerminalPreview(label),
     beginClaudeLaunchAttempt: terminalProjectState.beginClaudeLaunchAttempt,
     claudeLaunchAttempts,
     claudeSpeedOperations,
@@ -569,6 +571,10 @@ const installProjectFeatures = (
     getTerminalViews: () => features.terminalFeature.getTerminalViews(),
     getWorkspaceState,
     hideTerminalContextMenu: features.terminalFeature.hideTerminalContextMenu,
+    launchCreatedConversation: (sessionId, runtime) =>
+      runtime === 'codex'
+        ? codexLaunchShell.prepareAndLaunchCodex(sessionId, false)
+        : features.terminalFeature.launchClaudeSession(sessionId, 'new', false),
     loadConnectionAdvice: () => features.connectionFeature.loadConnectionAdvice(),
     loadConnectionHistory: connectionHistory.load,
     loadDevelopmentRuntime: terminalProjectState.loadDevelopmentRuntime,
