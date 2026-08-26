@@ -55,7 +55,7 @@ export const createConnectionFormPickerActions = (
   _clearProviderSelection: (clearDraft?: boolean) => void,
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void,
 ): ConnectionFormPickerActions => {
-  const { getActiveSessionId, claudeStates, connectionFeature } = deps;
+  const { connectionFeature } = deps;
 
   const applyDefaultProviderGroupExpansion = (): void => {
     formState.collapsedProviderGroups.clear();
@@ -70,7 +70,7 @@ export const createConnectionFormPickerActions = (
 
   const renderProviderPicker = (): void => {
     providerGroups.replaceChildren();
-    const configuredPreset = claudeStates.get(getActiveSessionId())?.config.preset;
+    const configuredPreset = formState.nextConnection?.config?.preset;
     const selectedAccess = accessChoiceForProvider(formState.selectedProviderId);
     const grid = document.createElement('div');
     grid.className = 'access-choice-grid';
@@ -106,7 +106,7 @@ export const createConnectionFormPickerActions = (
       if (configuredPreset && accessChoiceForProvider(configuredPreset) === choice.id) {
         const current = document.createElement('small');
         current.className = 'access-choice-card__current';
-        current.textContent = '当前配置';
+        current.textContent = '下个对话';
         card.append(current);
       }
       card.addEventListener('click', () => {

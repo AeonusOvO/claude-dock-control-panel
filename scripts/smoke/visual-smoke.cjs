@@ -712,7 +712,7 @@ app
     const subscriptionProgressTitle = document.createElement('strong');
     subscriptionProgressTitle.textContent = '第 8/8 步';
     const subscriptionProgressDetail = document.createElement('span');
-    subscriptionProgressDetail.textContent = '连接已通过，当前项目配置保存完成。';
+    subscriptionProgressDetail.textContent = '连接已通过，下个对话接入保存完成。';
     const subscriptionProgressMeter = document.createElement('progress');
     subscriptionProgressMeter.max = 8;
     subscriptionProgressMeter.value = 8;
@@ -724,7 +724,7 @@ app
     const subscriptionModel = document.createElement('label');
     subscriptionModel.className = 'field subscription-gateway-model';
     const subscriptionModelLabel = document.createElement('span');
-    subscriptionModelLabel.textContent = '当前模型';
+    subscriptionModelLabel.textContent = '下个对话模型';
     const subscriptionModelSelect = document.createElement('select');
     subscriptionModelSelect.className = 'select-native';
     subscriptionModelSelect.dataset.enhanced = 'true';
@@ -791,7 +791,7 @@ app
       if (fixture[2]) {
         const current = document.createElement('small');
         current.className = 'access-choice-card__current';
-        current.textContent = '当前配置';
+        current.textContent = '下个对话';
         card.append(current);
       }
       accessGrid.append(card);

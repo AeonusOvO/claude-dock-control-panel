@@ -57,17 +57,17 @@ export const buildChatGptSubscriptionGuideElements = (): ChatGptGuideElements =>
   modelField.className = 'field subscription-gateway-model';
   modelField.hidden = true;
   const modelLabel = document.createElement('span');
-  modelLabel.textContent = '当前模型';
+  modelLabel.textContent = '下个对话模型';
   const modelSelect = document.createElement('select');
   const modelHelpText = document.createElement('small');
-  modelHelpText.textContent = '列表来自本机网关实时接口；打开项目后可复测并保存到当前项目。';
+  modelHelpText.textContent = '列表来自本机网关实时接口；选择后会真实测试并保存给下个新对话。';
   modelField.append(modelLabel, modelSelect, modelHelpText);
   enhanceSelect(modelSelect);
   const secondaryActions = document.createElement('div');
   secondaryActions.className = 'subscription-gateway-actions';
   const boundary = document.createElement('small');
   boundary.textContent =
-    '一次点击会自动检测 Claude Code、补齐缺失组件、打开 OpenAI 官方授权并读取模型列表；已打开项目时还会真实测试并保存到当前项目。此方式不需要 CCR；只在主进程本地校验授权文件结构，不保存、使用、记录或通过 IPC 暴露其中的 OAuth Token，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
+    '一次点击会自动检测 Claude Code、补齐缺失组件、打开 OpenAI 官方授权、读取模型列表、真实测试，并把通过的选择保存给下个新对话；不需要先打开项目。此方式不需要 CCR；只在主进程本地校验授权文件结构，不保存、使用、记录或通过 IPC 暴露其中的 OAuth Token，也不会修改 shell、Codex、Claude Code 用户设置或系统级路由。';
 
   return {
     guide,

@@ -1,4 +1,9 @@
-import type { ClaudePreset, ClaudeProjectState } from '../../../shared/contracts';
+import type {
+  ClaudeConfigView,
+  ClaudeNextConversationConnectionState,
+  ClaudePreset,
+  ClaudeProjectState,
+} from '../../../shared/contracts';
 import { findClaudeProvider } from '../../../shared/claude/providers';
 import { resolveConnectionAddress } from './form-config-input';
 import {
@@ -18,6 +23,7 @@ import type { ConnectionFormState } from './form-state';
 
 export interface ConnectionFormPopulateActions {
   populateClaudeConfigForm: (state: ClaudeProjectState) => void;
+  populateNextClaudeConfigForm: (state: ClaudeNextConversationConnectionState) => void;
 }
 
 export const createConnectionFormPopulateActions = (
@@ -25,8 +31,7 @@ export const createConnectionFormPopulateActions = (
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void,
   renderProviderPicker: () => void,
 ): ConnectionFormPopulateActions => {
-  const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
-    const { config } = state;
+  const populateConfig = (config: ClaudeConfigView, sessionId: string): void => {
     if (!claudePreset.querySelector(`option[value="${config.preset}"]`)) {
       const option = document.createElement('option');
       option.value = config.preset;
@@ -66,14 +71,24 @@ export const createConnectionFormPopulateActions = (
       ? config.protocol === 'openai'
         ? '已由本地 Router 保存；留空将继续使用'
         : '已使用 Windows 安全存储加密保存；留空将继续使用'
-      : '当前项目未保存凭据';
+      : '尚未保存凭据';
     clearCredentialButton.disabled = !credentialConfigured;
     formState.selectedRouterProviderId = config.routerProviderId;
-    formState.configFormSessionId = state.sessionId;
+    formState.configFormSessionId = sessionId;
     renderProviderPicker();
+  };
+
+  const populateClaudeConfigForm = (state: ClaudeProjectState): void => {
+    populateConfig(state.config, state.sessionId);
+  };
+
+  const populateNextClaudeConfigForm = (state: ClaudeNextConversationConnectionState): void => {
+    if (!state.config) return;
+    populateConfig(state.config, '');
   };
 
   return {
     populateClaudeConfigForm,
+    populateNextClaudeConfigForm,
   };
 };

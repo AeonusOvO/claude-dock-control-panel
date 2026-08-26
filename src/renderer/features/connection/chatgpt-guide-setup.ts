@@ -9,6 +9,23 @@ export interface ChatGptGuideSetupActions {
   runSetup: (button: HTMLButtonElement) => Promise<void>;
 }
 
+const loadInitialGatewayState = (
+  elements: ChatGptGuideElements,
+  renderState: ChatGptGuideRenderActions['renderState'],
+): void => {
+  void window.controlPanel
+    .getManagedChatGptGatewayState()
+    .then((state) => {
+      if (elements.guide.isConnected) renderState(state);
+    })
+    .catch(() => {
+      elements.statusCard.dataset.phase = 'error';
+      elements.statusTitle.textContent = '无法读取托管网关状态';
+      elements.statusDetail.textContent = '请稍后重试。';
+      elements.action.disabled = false;
+    });
+};
+
 export const createChatGptGuideSetupActions = (
   elements: ChatGptGuideElements,
   deps: ChatGptSubscriptionGuideDeps,
@@ -16,18 +33,18 @@ export const createChatGptGuideSetupActions = (
 ): ChatGptGuideSetupActions => {
   const { guide, statusCard, statusTitle, statusDetail, action, modelSelect } = elements;
   const {
-    getActiveSessionId,
-    claudeStates,
+    applyNextClaudeConnection,
+    getNextClaudeConnection,
     managedChatGptOperations,
     getSelectedProviderId,
     applyPresetUi,
-    renderClaudeState,
     showToast,
   } = deps;
   const { renderState } = renderActions;
 
   const runSetup = async (button: HTMLButtonElement): Promise<void> => {
-    const sessionId = getActiveSessionId() || undefined;
+    const sessionId = undefined;
+    const previous = getNextClaudeConnection();
     const original = button.textContent;
     let restoreOriginalLabel = true;
     let resultStateRendered = false;
@@ -53,8 +70,11 @@ export const createChatGptGuideSetupActions = (
         return;
       }
       const result = execution.result;
-      renderState(result.state, result.projectState?.config.model);
+      renderState(result.state, result.nextConnection?.config?.model);
       resultStateRendered = true;
+      if (result.nextConnection) {
+        applyNextClaudeConnection(result.nextConnection);
+      }
       if (!result.ok) {
         statusCard.dataset.phase = 'error';
         statusTitle.textContent = '配置未完成';
@@ -66,14 +86,12 @@ export const createChatGptGuideSetupActions = (
         showToast(resultFailureMessage(result, result.message), 'error');
         return;
       }
-      if (result.projectState) {
-        renderClaudeState(result.projectState);
-      }
       if (result.connectionTest) {
         statusDetail.textContent = result.connectionTest.message;
       }
       showToast(result.message);
     } catch {
+      applyNextClaudeConnection(previous);
       statusCard.dataset.phase = 'error';
       statusTitle.textContent = '配置未完成';
       statusDetail.textContent = '无法完成 ChatGPT 托管网关配置，请稍后重试。';
@@ -93,14 +111,14 @@ export const createChatGptGuideSetupActions = (
           applyPresetUi('chatgpt-subscription', true);
         }
         if (guide.isConnected) {
-          modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+          modelSelect.disabled = managedChatGptOperations.busy || modelSelect.options.length === 0;
         }
       }
     }
   };
 
   const runLogout = async (button: HTMLButtonElement): Promise<void> => {
-    const sessionId = getActiveSessionId() || undefined;
+    const sessionId = undefined;
     let operationFinished = false;
     if (!managedChatGptOperations.begin(sessionId)) {
       showToast('托管网关正在处理其他操作，请等待当前操作完成。');
@@ -138,7 +156,7 @@ export const createChatGptGuideSetupActions = (
         applyPresetUi('chatgpt-subscription', true);
       }
       if (guide.isConnected) {
-        modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+        modelSelect.disabled = managedChatGptOperations.busy || modelSelect.options.length === 0;
       }
     }
   };
@@ -147,10 +165,11 @@ export const createChatGptGuideSetupActions = (
     void runSetup(action);
   });
   modelSelect.addEventListener('change', () => {
-    const sessionId = getActiveSessionId();
-    const previousModel = claudeStates.get(sessionId)?.config.model;
+    const sessionId = undefined;
+    const previous = getNextClaudeConnection();
+    const previousModel = previous.config?.model;
     const requestedModel = modelSelect.value;
-    if (!sessionId || !requestedModel || !managedChatGptOperations.begin(sessionId)) {
+    if (!requestedModel || !managedChatGptOperations.begin(sessionId)) {
       return;
     }
     modelSelect.disabled = true;
@@ -158,7 +177,10 @@ export const createChatGptGuideSetupActions = (
       .setManagedChatGptGatewayModel(sessionId, requestedModel)
       .then((result) => {
         managedChatGptOperations.finish(sessionId);
-        renderState(result.state, result.projectState?.config.model);
+        renderState(result.state, result.nextConnection?.config?.model);
+        if (result.nextConnection) {
+          applyNextClaudeConnection(result.nextConnection);
+        }
         if (!result.ok) {
           if (previousModel && result.state.availableModels.includes(previousModel)) {
             modelSelect.value = previousModel;
@@ -169,14 +191,12 @@ export const createChatGptGuideSetupActions = (
           showToast(resultFailureMessage(result, result.message), 'error');
           return;
         }
-        if (result.projectState) {
-          renderClaudeState(result.projectState);
-        }
-        statusTitle.textContent = '模型已验证并切换';
+        statusTitle.textContent = '下个对话模型已验证并切换';
         statusDetail.textContent = result.message;
         showToast(result.message);
       })
       .catch(() => {
+        applyNextClaudeConnection(previous);
         if (previousModel) {
           modelSelect.value = previousModel;
         }
@@ -187,22 +207,10 @@ export const createChatGptGuideSetupActions = (
       })
       .finally(() => {
         managedChatGptOperations.finish(sessionId);
-        modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+        modelSelect.disabled = managedChatGptOperations.busy || modelSelect.options.length === 0;
       });
   });
-  void window.controlPanel
-    .getManagedChatGptGatewayState()
-    .then((state) => {
-      if (guide.isConnected) {
-        renderState(state);
-      }
-    })
-    .catch(() => {
-      statusCard.dataset.phase = 'error';
-      statusTitle.textContent = '无法读取托管网关状态';
-      statusDetail.textContent = '请稍后重试。';
-      action.disabled = false;
-    });
+  loadInitialGatewayState(elements, renderState);
 
   return {
     runLogout,

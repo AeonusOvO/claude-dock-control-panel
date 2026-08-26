@@ -184,7 +184,7 @@ const installPrimaryShells = (
   features: FeatureBundle,
   shells: ShellStack,
 ): void => {
-  const { claudeStates, connectionAdvancedDialog, getWorkspaceState } = state;
+  const { connectionAdvancedDialog } = state;
   const toastShell = createToastShell();
   const { showToast } = toastShell;
   const themeShell = createThemeShell({
@@ -204,9 +204,7 @@ const installPrimaryShells = (
   });
   const dialogShell = createDialogShell();
   const railShell = createRailShell({
-    claudeStates,
     connectionAdvancedDialog,
-    getActiveSessionId: () => getWorkspaceState().activeSessionId,
     getSelectedProviderId: () => shells.connectionForm.getSelectedProviderId(),
     setProviderGroupExpansionPending: (value) => {
       shells.connectionForm.setProviderGroupExpansionPending(value);
@@ -214,6 +212,8 @@ const installPrimaryShells = (
     applyDefaultProviderGroupExpansion: (providerId) =>
       shells.connectionForm.applyDefaultProviderGroupExpansion(providerId),
     renderProviderPicker: () => shells.connectionForm.renderProviderPicker(),
+    loadNextClaudeConnection: () => shells.connectionForm.loadNextClaudeConnection(),
+    showConnectionChoice: () => shells.connectionForm.showConnectionChoice(),
     loadChatConfig: (force) => features.chatFeature.loadChatConfig(force),
     loadChatHistory: () => features.chatFeature.loadChatHistory(),
     renderChatUsage: () => features.chatFeature.renderChatUsage(),
@@ -246,7 +246,7 @@ const installConnectionStack = (
   features: FeatureBundle,
   shells: ShellStack,
 ): void => {
-  const { claudeStates, developmentRuntimeStates, getWorkspaceState, runGuarded } = state;
+  const { developmentRuntimeStates, getWorkspaceState, runGuarded } = state;
   const { requestConfirmation } = shells.dialogShell;
   const { showToast } = shells.toastShell;
   const { openExternal } = shells;
@@ -262,10 +262,6 @@ const installConnectionStack = (
   };
 
   const connectionForm = createConnectionForm({
-    getActiveSessionId: () => getWorkspaceState().activeSessionId,
-    claudeStates,
-    activeStatus,
-    renderClaudeState: (state) => shells.terminalProjectState.renderClaudeState(state),
     runGuarded,
     requestConfirmation,
     openExternal: (url) => openExternal(url),
@@ -278,9 +274,7 @@ const installConnectionStack = (
       isTestInProgress: () => features.connectionFeature.isTestInProgress(),
       isRemedyInProgress: () => features.connectionFeature.isRemedyInProgress(),
     },
-    loadConnectionHistory: () => {
-      void shells.connectionHistory.load();
-    },
+    renderNextConnection: () => shells.connectionHistory?.renderCurrentConnection(),
   });
   shells.connectionForm = connectionForm;
   shells.activeStatus = activeStatus;
@@ -505,7 +499,7 @@ const installSecondaryShells = (
     getManagedChatGptGatewayState: () => window.controlPanel.getManagedChatGptGatewayState(),
     hideTerminalContextMenu: () => features.terminalFeature.hideTerminalContextMenu(),
     hideConversationContextMenu: () => features.projectsFeature.hideConversationContextMenu(),
-    populateClaudeConfigForm: connectionForm.populateClaudeConfigForm,
+    nextClaudeConnection: connectionForm.getNextClaudeConnection,
     renderClaudeState: terminalProjectState.renderClaudeState,
     requestConnectionHistoryName,
     resultFailureMessage,

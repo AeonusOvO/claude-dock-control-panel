@@ -78,6 +78,7 @@ import { ClaudeRuntimeConversationModels } from './runtime-conversation-model';
 import type { PreparedClaudeLaunchRecord } from './runtime-launch-handoff';
 import type { NativeRouteReservation } from './runtime-routing';
 import {
+  type ClaudeLaunchAuthorization,
   type ClaudeLaunchOverrides,
   type PreparedClaudeLaunch,
   type PreparedNativeClaudeConversation,
@@ -99,6 +100,11 @@ import type { ClaudeRouteKind } from '../coordination/route-lifecycle';
  * replayed. A `/effort` written into a terminal that is still booting is simply swallowed.
  */
 const EFFORT_RESTORE_DELAY_MS = 2_500;
+
+export interface ClaudeNativeConversationAuthorization {
+  readonly authorization: ClaudeLaunchAuthorization;
+  readonly configScope: string;
+}
 
 const longestMarkerPrefixSuffix = (value: string, marker: string): number => {
   const maximum = Math.min(value.length, marker.length - 1);
@@ -204,6 +210,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       this.emitSyntheticSessionEnd(previous);
     }
     this.sessions.delete(sessionId);
+    this.releaseConversationConnection(sessionId);
     if (previousRoute) {
       void this.stopUnusedRoute(previousRoute).catch(() => {});
     }
@@ -332,8 +339,9 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       if (!ownershipIsCurrent()) {
         continue;
       }
-      const config = this.configStore.getConfig(cwd);
-      const credential = this.configStore.getCredential(cwd);
+      const configScope = this.connectionConfigScope(sessionId, cwd);
+      const config = this.configStore.getConfig(configScope);
+      const credential = this.configStore.getCredential(configScope);
       const configFingerprint = connectionFingerprint(config, credential);
       const [providerUsage, routeHealth, officialAuth] = await Promise.all([
         this.resourceUsageService.read(projectKey(cwd), config.preset, credential),
@@ -347,8 +355,8 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
         !ownershipIsCurrent() ||
         runtime.lastApiError !== lastApiError ||
         connectionFingerprint(
-          this.configStore.getConfig(cwd),
-          this.configStore.getCredential(cwd),
+          this.configStore.getConfig(configScope),
+          this.configStore.getCredential(configScope),
         ) !== configFingerprint
       ) {
         continue;
@@ -367,8 +375,8 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       const contextUsage = claudeResourceUsage(displayMetrics, metricsConfig, contextWindowMode);
       return {
         active: runtime.active,
-        allowBypassPermissions: this.configStore.getAllowBypassPermissions(cwd),
-        config: this.configStore.getView(cwd),
+        allowBypassPermissions: this.configStore.getAllowBypassPermissions(configScope),
+        config: this.configStore.getView(configScope),
         cwd,
         effortCompatibility: runtime.effortCompatibility,
         effortRequest: runtime.effortRequest,
@@ -462,15 +470,24 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     ownerId: string,
     cwd: string,
     requestedModel?: string,
+    nativeAuthorization = this.captureNativeConversationAuthorization(cwd),
   ): Promise<PreparedNativeClaudeConversation> {
     this.assertLaunchAdmissionAllowed();
     if (this.nativeRouteReservations.has(ownerId)) {
       throw new Error('该原生会话已经持有接入路由。');
     }
-    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const { authorization, configScope } = nativeAuthorization;
+    this.assertLaunchAuthorizationCurrent(configScope, authorization);
+    const launchSnapshot = authorization.launchSnapshot;
     const config = launchSnapshot.config;
     const networkAccess = claudeNetworkAccessForLaunchSnapshot(launchSnapshot);
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
+    if (
+      officialNetworkProvider !== authorization.officialNetworkProvider ||
+      !sameClaudeNetworkAccess(networkAccess, authorization.networkAccess)
+    ) {
+      throw new Error('原生会话接入快照与已授权网络目标不一致，请重试。');
+    }
     const routeKind = this.routeKindForConfig(config);
     const entry: NativeRouteReservation = {
       phase: 'preparing',
@@ -483,9 +500,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       if (this.nativeRouteReservations.get(ownerId) !== entry) {
         throw new Error('该原生会话的接入路由准备已取消。');
       }
-      if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
-        throw new Error('Claude 接入配置在原生会话启动期间已更新，请重试。');
-      }
+      this.assertLaunchAuthorizationCurrent(configScope, authorization);
     };
     try {
       const installation = await this.diagnoseInstallation(true);
@@ -566,7 +581,27 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     }
   }
 
+  public captureNativeConversationAuthorization(
+    cwd: string,
+    sessionId?: string,
+  ): ClaudeNativeConversationAuthorization {
+    const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
+    return Object.freeze({
+      authorization: this.captureLaunchAuthorization(configScope),
+      configScope,
+    });
+  }
+
+  public captureNextNativeConversationAuthorization(
+    ownerId: string,
+    cwd: string,
+  ): ClaudeNativeConversationAuthorization {
+    this.bindNextConversationConnection(ownerId, cwd);
+    return this.captureNativeConversationAuthorization(cwd, ownerId);
+  }
+
   public releaseNativeConversation(ownerId: string): void {
+    this.releaseConversationConnection(ownerId);
     const entry = this.nativeRouteReservations.get(ownerId);
     if (!entry) return;
     this.nativeRouteReservations.delete(ownerId);
@@ -585,9 +620,12 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     cwd: string,
     mode: ClaudeLaunchMode,
     startMode?: ClaudePermissionMode,
-    authorization = this.captureLaunchAuthorization(cwd),
+    authorization = this.captureLaunchAuthorization(this.connectionConfigScope(sessionId, cwd)),
   ): Promise<PreparedClaudeLaunch> {
-    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    this.assertLaunchAuthorizationCurrent(
+      this.connectionConfigScope(sessionId, cwd),
+      authorization,
+    );
     return this.prepareLaunchInternal(
       sessionId,
       cwd,
@@ -603,9 +641,12 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     sessionId: string,
     cwd: string,
     conversationId: string,
-    authorization = this.captureLaunchAuthorization(cwd),
+    authorization = this.captureLaunchAuthorization(this.connectionConfigScope(sessionId, cwd)),
   ): Promise<PreparedClaudeLaunch> {
-    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    this.assertLaunchAuthorizationCurrent(
+      this.connectionConfigScope(sessionId, cwd),
+      authorization,
+    );
     return this.prepareLaunchInternal(
       sessionId,
       cwd,
@@ -624,10 +665,13 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     resumeSessionId?: string,
     startMode?: ClaudePermissionMode,
     overrides?: ClaudeLaunchOverrides,
-    authorization = this.captureLaunchAuthorization(cwd),
+    authorization = this.captureLaunchAuthorization(this.connectionConfigScope(sessionId, cwd)),
   ): Promise<PreparedClaudeLaunch> {
     this.assertLaunchAdmissionAllowed();
-    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    this.assertLaunchAuthorizationCurrent(
+      this.connectionConfigScope(sessionId, cwd),
+      authorization,
+    );
     const launchSnapshot = authorization.launchSnapshot;
     const config = launchSnapshot.config;
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
@@ -994,14 +1038,15 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     runtime: RuntimeSession,
     config: NormalizedClaudeConfig,
   ): Promise<ClaudeRouteHealth | undefined> {
-    const credential = this.configStore.getCredential(runtime.cwd);
+    const configScope = this.connectionConfigScope(runtime.sessionId, runtime.cwd);
+    const credential = this.configStore.getCredential(configScope);
     const fingerprint = connectionFingerprint(config, credential);
     const configuredHealth = await claudeRouteHealth({
       config,
       fingerprint,
       lastApiError: runtime.lastApiError,
       launchedConfigFingerprint: runtime.launchedConfigFingerprint,
-      matchingCheck: this.matchingConnectionCheck(runtime.cwd, fingerprint),
+      matchingCheck: this.matchingConnectionCheck(configScope, fingerprint),
       readRouterHealth: () => this.getRouterHealthState(),
     });
     // A concrete runtime or blocking configuration failure is more specific than the background

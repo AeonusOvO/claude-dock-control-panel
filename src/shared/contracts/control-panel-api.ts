@@ -63,6 +63,8 @@ import type {
   ClaudeLaunchPreflightDecisionInput,
   ClaudeLaunchPreflightDecisionOutcome,
   ClaudeModelOptions,
+  ClaudeNextConversationConnectionResult,
+  ClaudeNextConversationConnectionState,
   ClaudeOperationResult,
   ClaudePermissionDecision,
   ClaudePermissionMode,
@@ -395,6 +397,7 @@ export interface NativeAttachmentApi {
 }
 
 export interface ClaudeApi {
+  getNextClaudeConnection: () => Promise<ClaudeNextConversationConnectionState>;
   onClaudePermissionRequest: (
     listener: (request: ClaudePermissionRequestView) => void,
   ) => Unsubscribe;
@@ -483,6 +486,10 @@ export interface ClaudeApi {
     sessionId: string,
     input: SaveClaudeConfigInput,
   ) => Promise<ClaudeConfigResult>;
+  saveNextClaudeConfig: (
+    input: SaveClaudeConfigInput,
+  ) => Promise<ClaudeNextConversationConnectionResult>;
+  testNextClaudeConnection: (input: SaveClaudeConfigInput) => Promise<ClaudeConnectionTestResult>;
   testClaudeConnection: (
     sessionId: string,
     input: SaveClaudeConfigInput,
@@ -547,7 +554,7 @@ export interface ManagedChatGptApi {
     listener: (progress: ManagedChatGptSetupProgress) => void,
   ) => Unsubscribe;
   setManagedChatGptGatewayModel: (
-    sessionId: string,
+    sessionId: string | undefined,
     model: string,
   ) => Promise<ManagedChatGptGatewayOperationResult>;
   setupManagedChatGptGateway: (sessionId?: string) => Promise<ManagedChatGptGatewayOperationResult>;

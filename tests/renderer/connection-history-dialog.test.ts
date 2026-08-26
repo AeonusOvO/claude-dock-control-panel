@@ -120,8 +120,21 @@ describe('connection history dialog', () => {
   });
 
   it('returns focus to the stable history launcher when the source entry is inactive', async () => {
+    const entry = historyEntry('claude', 'anthropic');
     await withTerminalRenderer(
-      { getClaudeConnectionHistory: async () => [historyEntry('claude', 'anthropic')] },
+      {
+        getClaudeConnectionHistory: async () => [entry],
+        getNextClaudeConnection: async () => ({
+          config: {
+            ...claudeProjectState().config,
+            authMode: entry.authMode,
+            baseUrl: entry.baseUrl,
+            model: entry.model,
+            preset: entry.preset,
+            provider: entry.provider,
+          },
+        }),
+      },
       async (harness) => {
         const source = harness.query<HTMLButtonElement>(
           '#connection-history-list .connection-history__restore',
@@ -250,7 +263,7 @@ describe('connection history dialog', () => {
         expect(harness.query('#connection-history-recovery-title').textContent).toContain(
           '已完成接入',
         );
-        expect(harness.query('#current-connection-name').textContent).toBe('北美中转站');
+        expect(harness.query('#current-connection-name').textContent).toBe('尚未选择接入');
 
         await new Promise<void>((resolve) => harness.dom.window.setTimeout(resolve, 1_550));
         expect(harness.query('#connection-history-recovery').hasAttribute('hidden')).toBe(true);
@@ -270,6 +283,16 @@ describe('connection history dialog', () => {
           ok: false,
         }),
         getClaudeConnectionHistory: async () => [entry],
+        getNextClaudeConnection: async () => ({
+          config: {
+            ...claudeProjectState().config,
+            authMode: entry.authMode,
+            baseUrl: entry.baseUrl,
+            model: entry.model,
+            preset: entry.preset,
+            provider: entry.provider,
+          },
+        }),
       },
       async (harness) => {
         const source = harness.query<HTMLButtonElement>(
@@ -405,7 +428,7 @@ describe('connection history dialog', () => {
         applyB.resolve({ entries: [entryB], ok: true, state: projectState('session-2', entryB) });
         await settle(harness);
         expect(harness.query('#connection-history-recovery').dataset.phase).toBe('success');
-        expect(harness.query('#current-connection-name').textContent).toBe('中转站 B');
+        expect(harness.query('#current-connection-name').textContent).toBe('尚未选择接入');
       },
     );
   });

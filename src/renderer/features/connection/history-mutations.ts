@@ -32,7 +32,6 @@ export const createConnectionHistoryMutationActions = (
 ): ConnectionHistoryMutationActions => {
   const {
     activeStatus,
-    populateClaudeConfigForm,
     renderClaudeState,
     requestConnectionHistoryName,
     resultFailureMessage,
@@ -153,7 +152,6 @@ export const createConnectionHistoryMutationActions = (
       renderConnectionHistory();
       if (result.state) {
         renderClaudeState(result.state);
-        populateClaudeConfigForm(result.state);
         renderCurrentConnection(result.state);
       }
       return result;

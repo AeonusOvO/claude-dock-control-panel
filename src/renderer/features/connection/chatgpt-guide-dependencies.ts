@@ -1,14 +1,14 @@
 import type {
+  ClaudeNextConversationConnectionState,
   ClaudePreset,
-  ClaudeProjectState,
   ManagedChatGptSetupProgress,
 } from '../../../shared/contracts';
 import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import type { ManagedChatGptOperationTracker } from './managed-chatgpt-operation';
 
 export interface ChatGptSubscriptionGuideDeps {
-  getActiveSessionId: () => string;
-  claudeStates: Map<string, ClaudeProjectState>;
+  applyNextClaudeConnection: (state: ClaudeNextConversationConnectionState) => void;
+  getNextClaudeConnection: () => ClaudeNextConversationConnectionState;
   managedChatGptOperations: ManagedChatGptOperationTracker;
   setRenderManagedChatGptProgress: (
     renderer: ((progress: ManagedChatGptSetupProgress) => void) | undefined,
@@ -16,6 +16,5 @@ export interface ChatGptSubscriptionGuideDeps {
   getSelectedProviderId: () => ClaudeProviderId | undefined;
   claudeConfigForm: HTMLFormElement;
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void;
-  renderClaudeState: (state: ClaudeProjectState) => void;
   showToast: (message: string, tone?: 'error' | 'success') => void;
 }

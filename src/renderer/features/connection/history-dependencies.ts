@@ -1,5 +1,6 @@
 import type {
   ClaudeConnectionHistoryEntry,
+  ClaudeNextConversationConnectionState,
   ClaudeProjectState,
   ManagedChatGptGatewayState,
   TerminalStatus,
@@ -21,7 +22,7 @@ export interface ConnectionHistoryDependencies {
   getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
   hideTerminalContextMenu: () => void;
   hideConversationContextMenu: () => void;
-  populateClaudeConfigForm: (state: ClaudeProjectState) => void;
+  nextClaudeConnection: () => ClaudeNextConversationConnectionState;
   renderClaudeState: (state: ClaudeProjectState) => void;
   requestConnectionHistoryName: (currentName: string) => Promise<string | null>;
   resultFailureMessage: (result: unknown, fallback: string) => string;

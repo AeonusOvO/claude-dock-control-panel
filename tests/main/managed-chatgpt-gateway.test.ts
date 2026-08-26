@@ -14,7 +14,7 @@ import {
   ManagedChatGptGateway,
   ManagedGatewayStartupLog,
 } from '../../src/main/claude/managed-chatgpt-gateway';
-import { recommendedChatModel } from '../../src/main/claude/managed-chatgpt-models';
+import { recommendedChatModel } from '../../src/shared/claude/managed-chatgpt-models';
 import {
   protectManagedGatewayAuthentication,
   protectManagedGatewayConfig,

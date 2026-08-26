@@ -15,6 +15,7 @@ export interface StartupModelRestoreDependencies {
     conversation: StartupModelConversation,
     sessionId: string,
   ) => Promise<void>;
+  clearNextConnection: () => void;
   closeTemporarySession: (sessionId: string) => void;
   getLastActiveProject: () => string | undefined;
   getLatestConversation: (projectPath: string) => StartupModelConversation | undefined;
@@ -37,12 +38,11 @@ export const restoreLastConversationModelOnly = async (
   dependencies: StartupModelRestoreDependencies,
 ): Promise<StartupModelRestoreOutcome> => {
   const preferences = dependencies.getPreferences();
-  if (
-    !dependencies.restoreWorkspace ||
-    !dependencies.allowExternalRoutingWrites ||
-    preferences.autoLoadLastConversationOnStartup ||
-    !preferences.autoLoadLastConversationModelOnStartup
-  ) {
+  if (!dependencies.restoreWorkspace || !dependencies.allowExternalRoutingWrites) {
+    return 'skipped';
+  }
+  if (!preferences.autoLoadLastConversationModelOnStartup) {
+    dependencies.clearNextConnection();
     return 'skipped';
   }
   const projectPath = dependencies.getLastActiveProject();

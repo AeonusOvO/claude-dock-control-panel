@@ -244,6 +244,21 @@ export interface ClaudeProjectState {
   warning?: string;
 }
 
+/**
+ * Credential-free global model route captured by the next newly-created Claude conversation.
+ * It exists independently of workspace projects and live terminal sessions.
+ */
+export interface ClaudeNextConversationConnectionState {
+  config?: ClaudeConfigView;
+  officialAuth?: ClaudeOfficialAuthState;
+}
+
+export interface ClaudeNextConversationConnectionResult extends FailureMetadata {
+  error?: string;
+  ok: boolean;
+  state: ClaudeNextConversationConnectionState;
+}
+
 export interface ClaudeConfigResult extends FailureMetadata {
   error?: string;
   ok: boolean;

@@ -1,4 +1,7 @@
-import type { ManagedChatGptSetupProgress } from '../../../shared/contracts';
+import type {
+  ClaudeNextConversationConnectionState,
+  ManagedChatGptSetupProgress,
+} from '../../../shared/contracts';
 import type { ClaudeProviderGroupId, ClaudeProviderId } from '../../../shared/claude/providers';
 import { ManagedChatGptOperationTracker } from './managed-chatgpt-operation';
 
@@ -10,6 +13,7 @@ export interface ConnectionFormState {
   collapsedProviderGroups: Set<ClaudeProviderGroupId>;
   managedChatGptOperations: ManagedChatGptOperationTracker;
   managedChatGptProgress: ManagedChatGptSetupProgress | undefined;
+  nextConnection: ClaudeNextConversationConnectionState;
   renderWizard: (() => void) | undefined;
   renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
   wizardStep: 'choice' | 'configure';
@@ -23,6 +27,7 @@ export const createConnectionFormState = (): ConnectionFormState => ({
   collapsedProviderGroups: new Set(),
   managedChatGptOperations: new ManagedChatGptOperationTracker(),
   managedChatGptProgress: undefined,
+  nextConnection: {},
   renderWizard: undefined,
   renderManagedChatGptProgress: undefined,
   wizardStep: 'choice',

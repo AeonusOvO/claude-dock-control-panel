@@ -1,16 +1,7 @@
-import type {
-  ClaudeProjectState,
-  ClaudeGatewayDiagnostics,
-  SaveClaudeConfigInput,
-  TerminalStatus,
-} from '../../../shared/contracts';
+import type { ClaudeGatewayDiagnostics, SaveClaudeConfigInput } from '../../../shared/contracts';
 import type { ConfirmationRequest } from '../../shell/dialogs';
 
 export interface ConnectionFormDeps {
-  getActiveSessionId: () => string;
-  claudeStates: Map<string, ClaudeProjectState>;
-  activeStatus: () => TerminalStatus | undefined;
-  renderClaudeState: (state: ClaudeProjectState) => void;
   runGuarded: <T>(
     button: HTMLButtonElement,
     busyLabel: string,
@@ -29,5 +20,5 @@ export interface ConnectionFormDeps {
     isTestInProgress: () => boolean;
     isRemedyInProgress: () => boolean;
   };
-  loadConnectionHistory: () => void;
+  renderNextConnection: () => void;
 }

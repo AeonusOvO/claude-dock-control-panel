@@ -26,8 +26,32 @@ const state: ManagedChatGptGatewayState = {
   usageStatisticsEnabled: false,
 };
 
+const nextConnection = {
+  config: {
+    apiKeyHelperPolicy: 'prefer-claudedock' as const,
+    authMode: 'authToken' as const,
+    baseUrl: state.endpoint,
+    credentialConfigured: true,
+    model: 'gpt-5.6-sol',
+    preset: 'chatgpt-subscription' as const,
+    protocol: 'anthropic' as const,
+    provider: 'gateway' as const,
+  },
+};
+
+const connectionTest = {
+  authMode: 'authToken' as const,
+  message: '模型响应正常。',
+  ok: true as const,
+  stages: [],
+  testedAt: 1,
+  tone: 'success' as const,
+};
+
 const success: ManagedChatGptGatewayOperationResult = {
-  message: '安装和 OpenAI 授权已完成；打开项目后即可验证模型并用于当前项目。',
+  connectionTest,
+  message: 'ChatGPT 接入已验证；下个新对话将使用 gpt-5.6-sol。',
+  nextConnection,
   ok: true,
   state,
 };
@@ -127,6 +151,13 @@ describe('managed ChatGPT projectless setup contract', () => {
     const setup = vi.fn(async () => {
       expect(providerAccessActive).toBe(true);
       routeEvents.push('gateway-setup');
+      return {
+        availableModels: ['gpt-5.6-sol'],
+        baseUrl: state.endpoint,
+        credential: 'local-only-test-key',
+        model: 'gpt-5.6-sol',
+        modelFast: 'gpt-5.6-sol',
+      };
     });
     const getState = vi.fn(async () => {
       expect(providerAccessActive).toBe(true);
@@ -152,10 +183,20 @@ describe('managed ChatGPT projectless setup contract', () => {
       },
     ) as unknown as MainGuards['withOfficialProviderAccess'];
     const runtime = {
+      getNextConversationConnection: vi.fn(async () => {
+        expect(providerAccessActive).toBe(true);
+        routeEvents.push('next-connection-read');
+        return {};
+      }),
       getSoftwareUpdates: vi.fn(async () => {
         expect(providerAccessActive).toBe(true);
         routeEvents.push('runtime-software-updates');
         return { claudeCode: { installed: true } };
+      }),
+      verifyAndSaveNextConversationConfig: vi.fn(async () => {
+        expect(providerAccessActive).toBe(true);
+        routeEvents.push('next-connection-verify-save');
+        return { connectionTest, state: nextConnection };
       }),
     };
     vi.doMock('electron', () => ({
@@ -208,6 +249,8 @@ describe('managed ChatGPT projectless setup contract', () => {
       'guard-enter',
       'runtime-software-updates',
       'gateway-setup',
+      'next-connection-read',
+      'next-connection-verify-save',
       'gateway-state',
       'guard-exit',
     ]);

@@ -302,7 +302,8 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
    * conversation; the rest need a relaunch because base URL and credential are PTY-spawn variables.
    */
   public async getModelOptions(cwd: string, sessionId?: string): Promise<ClaudeModelOptions> {
-    const config = this.configStore.getConfig(cwd);
+    const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
+    const config = this.configStore.getConfig(configScope);
     const runtime = sessionId ? this.sessions.get(sessionId) : undefined;
     const installation = await this.diagnoseInstallation();
     const activeModel = runtime?.expectedModel ?? runtime?.metrics?.modelId ?? config.model;
@@ -404,7 +405,10 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
     const targetSpeed = this.resolveModelSpeed(
-      { ...this.configStore.getConfig(cwd), model: canonicalModel },
+      {
+        ...this.configStore.getConfig(this.connectionConfigScope(sessionId, cwd)),
+        model: canonicalModel,
+      },
       canonicalModel,
       installation.version,
     );
@@ -513,10 +517,11 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     if (runtime.active) {
       throw new Error('Claude Code 正在运行；调整服务速度需要精确恢复当前对话。');
     }
-    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+    const configScope = this.connectionConfigScope(sessionId, cwd);
+    const launchSnapshot = this.configStore.createLaunchSnapshot(configScope);
     const { config } = launchSnapshot;
     const installation = await this.diagnoseInstallation();
-    if (!this.configStore.launchSnapshotIsCurrent(cwd, launchSnapshot)) {
+    if (!this.configStore.launchSnapshotIsCurrent(configScope, launchSnapshot)) {
       throw new Error('Claude 接入配置在保存速度偏好期间已更新，请重试。');
     }
     const resolved = this.resolveModelSpeed(config, config.model, installation.version, mode);
@@ -530,9 +535,10 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     sessionId: string,
     cwd: string,
     mode: ModelSpeedMode,
-    authorization = this.captureLaunchAuthorization(cwd),
+    authorization = this.captureLaunchAuthorization(this.connectionConfigScope(sessionId, cwd)),
   ): Promise<PreparedClaudeSpeedRelaunch> {
-    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    const configScope = this.connectionConfigScope(sessionId, cwd);
+    this.assertLaunchAuthorizationCurrent(configScope, authorization);
     const runtime = this.ensureSession(sessionId, cwd);
     if (!runtime.active) {
       throw new Error('Claude Code 尚未运行；请直接保存下次启动使用的服务速度。');
@@ -544,7 +550,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     const { launchSnapshot } = authorization;
     const { config } = launchSnapshot;
     const installation = await this.diagnoseInstallation();
-    this.assertLaunchAuthorizationCurrent(cwd, authorization);
+    this.assertLaunchAuthorizationCurrent(configScope, authorization);
     const model = this.modelForSpeedPreference(runtime, config, installation.version);
     const resolved = this.resolveModelSpeed(config, model, installation.version, mode);
     const prepared = await this.prepareLaunchInternal(
@@ -609,7 +615,10 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     if (mode === 'dontAsk') {
       throw new Error('「仅预批准」不在 Shift+Tab 循环内，需要重启会话才能进入。');
     }
-    if (mode === 'bypassPermissions' && !this.configStore.getAllowBypassPermissions(cwd)) {
+    if (
+      mode === 'bypassPermissions' &&
+      !this.configStore.getAllowBypassPermissions(this.connectionConfigScope(sessionId, cwd))
+    ) {
       throw new Error('当前项目关闭了「完全允许」预置；请在工作台开启后重新启动会话。');
     }
     if (this.modeSwitchLocks.has(sessionId)) {
@@ -681,8 +690,14 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     }
   }
 
-  public commitAllowBypassPermissions(cwd: string, allowed: boolean): void {
+  public commitAllowBypassPermissions(cwd: string, allowed: boolean, sessionId?: string): void {
     this.configStore.setAllowBypassPermissions(cwd, allowed);
+    if (sessionId) {
+      this.configStore.setAllowBypassPermissions(
+        this.connectionConfigScope(sessionId, cwd),
+        allowed,
+      );
+    }
   }
 
   /**

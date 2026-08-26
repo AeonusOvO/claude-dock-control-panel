@@ -206,6 +206,26 @@ describe('Claude project profile store', () => {
     });
   });
 
+  it('copies a complete encrypted connection while keeping the destination permission choice', () => {
+    const { profilePath, store } = createStore();
+    const destination = 'D:\\Projects\\ConversationScope';
+    store.save(CWD, gatewayInput);
+    store.setAllowBypassPermissions(CWD, false);
+
+    expect(store.copyConnection(CWD, destination, true)).toBe(true);
+
+    expect(store.getView(destination)).toMatchObject({
+      baseUrl: gatewayInput.baseUrl,
+      credentialConfigured: true,
+      model: gatewayInput.model,
+      preset: gatewayInput.preset,
+    });
+    expect(store.getCredential(destination)).toBe('secret-token');
+    expect(store.getAllowBypassPermissions(destination)).toBe(true);
+    expect(store.getAllowBypassPermissions(CWD)).toBe(false);
+    expect(readFileSync(profilePath, 'utf8')).not.toContain('secret-token');
+  });
+
   it('keys a project the same way under a Turkish host locale', () => {
     const { store } = createStore();
     store.save('D:\\IDE\\Example', gatewayInput);

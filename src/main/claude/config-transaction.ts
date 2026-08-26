@@ -5,6 +5,8 @@ export interface ClaudeProjectConfigTransactionOptions<TPrepared> {
   assertCurrent: () => void;
   commit: (prepared: TPrepared) => void;
   complete: (prepared: TPrepared) => Promise<ClaudeProjectState>;
+  /** Optional conversation-owned profile; directory ownership still uses `cwd`. */
+  configScope?: string;
   cwd: string;
   prepare: () => Promise<TPrepared> | TPrepared;
   validatePrepared?: (prepared: TPrepared) => Promise<void> | void;

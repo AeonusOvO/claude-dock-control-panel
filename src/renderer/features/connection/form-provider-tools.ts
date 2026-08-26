@@ -30,12 +30,14 @@ export const createConnectionFormProviderToolsActions = (
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void,
   notifySelectedProviderChanged: () => void,
 ): ConnectionFormProviderToolsActions => {
-  const { getActiveSessionId, claudeStates, renderClaudeState, showToast, connectionFeature } =
-    deps;
+  const { showToast, connectionFeature } = deps;
 
   const buildChatGptSubscriptionGuide = createChatGptSubscriptionGuide({
-    getActiveSessionId,
-    claudeStates,
+    applyNextClaudeConnection: (state) => {
+      formState.nextConnection = state;
+      deps.renderNextConnection();
+    },
+    getNextClaudeConnection: () => formState.nextConnection,
     managedChatGptOperations: formState.managedChatGptOperations,
     setRenderManagedChatGptProgress: (renderer) => {
       formState.renderManagedChatGptProgress = renderer;
@@ -43,7 +45,6 @@ export const createConnectionFormProviderToolsActions = (
     getSelectedProviderId: () => formState.selectedProviderId,
     claudeConfigForm,
     applyPresetUi: (preset, preserveValues) => applyPresetUi(preset, preserveValues),
-    renderClaudeState,
     showToast,
   });
 

@@ -28,7 +28,7 @@ const managedChatGptState = (
 });
 
 describe('current connection view', () => {
-  it('distinguishes a prepared account from an effective connection when no conversation is open', async () => {
+  it('shows an empty next-conversation choice independently of open conversations', async () => {
     await withRenderer(
       {
         getManagedChatGptGatewayState: async () =>
@@ -36,9 +36,9 @@ describe('current connection view', () => {
       },
       async (harness) => {
         await settle(harness);
-        expect(harness.query('#current-connection-name').textContent).toBe('当前没有打开对话');
+        expect(harness.query('#current-connection-name').textContent).toBe('尚未选择接入');
         expect(harness.query('#current-connection-metadata').textContent).toContain(
-          '实际生效的平台、账号和模型',
+          '下个新对话会立即捕获这套配置',
         );
       },
     );
@@ -47,6 +47,16 @@ describe('current connection view', () => {
   it('uses the safe Claude CLI account projection for the official subscription', async () => {
     await withTerminalRenderer(
       {
+        getNextClaudeConnection: async () => ({
+          config: claudeProjectState().config,
+          officialAuth: {
+            accountIdentity: 'claude-member@example.test',
+            authMethod: 'claude.ai',
+            available: true,
+            checkedAt: 1,
+            loggedIn: true,
+          },
+        }),
         getClaudeProjectState: async () =>
           claudeProjectState({
             active: true,
@@ -70,7 +80,7 @@ describe('current connection view', () => {
     );
   });
 
-  it('shows the verified ChatGPT account and follows later active Claude state changes', async () => {
+  it('shows the verified ChatGPT account and ignores later active-conversation changes', async () => {
     const chatGptState = claudeProjectState({
       active: true,
       config: {
@@ -87,6 +97,7 @@ describe('current connection view', () => {
     await withTerminalRenderer(
       {
         getClaudeProjectState: async () => chatGptState,
+        getNextClaudeConnection: async () => ({ config: chatGptState.config }),
         getManagedChatGptGatewayState: async () =>
           managedChatGptState({ accountEmail: 'member@example.test' }),
       },
@@ -112,9 +123,7 @@ describe('current connection view', () => {
           }),
         );
         await settle(harness);
-        expect(harness.query('#current-connection-name').textContent).toBe(
-          'https://relay.example.test/anthropic',
-        );
+        expect(harness.query('#current-connection-name').textContent).toBe('ChatGPT 官方订阅');
         expect(harness.query('#current-connection-metadata').textContent).not.toContain('secret');
         expect(harness.query('#current-connection-metadata').textContent).not.toContain('private');
       },
@@ -151,6 +160,7 @@ describe('current connection view', () => {
           entry('effective', '当前中转站'),
           entry('tentative', '只是待选择'),
         ],
+        getNextClaudeConnection: async () => ({ config }),
         getClaudeProjectState: async () =>
           claudeProjectState({ active: true, config, ptyGeneration: 1 }),
       },

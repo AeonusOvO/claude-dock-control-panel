@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
   ClaudeConnectionAdvice,
@@ -72,7 +73,9 @@ export abstract class ClaudeRuntimeRouting {
     SOFTWARE_UPDATE_CACHE_MS,
   );
   protected readonly configStore: ClaudeConfigStore;
+  protected readonly conversationConfigScopeRoot: string;
   protected readonly fetchImplementation: typeof fetch;
+  protected readonly nextConversationConfigScope: string;
   protected readonly nativeRouteReservations = new Map<string, NativeRouteReservation>();
   protected readonly routeLifecycle = new RouteLifecycleCoordinator();
   protected readonly routerManager: ClaudeRouterManager;
@@ -88,6 +91,12 @@ export abstract class ClaudeRuntimeRouting {
     routerCommandEnvironment: () => Record<string, null | string | undefined>,
   ) {
     this.configStore = new ClaudeConfigStore(userDataPath);
+    this.conversationConfigScopeRoot = path.join(userDataPath, 'claude', 'conversation-profiles');
+    this.nextConversationConfigScope = path.join(
+      userDataPath,
+      'claude',
+      'next-conversation-profile',
+    );
     this.fetchImplementation = fetchImplementation;
     this.routerManager = new ClaudeRouterManager(
       userDataPath,

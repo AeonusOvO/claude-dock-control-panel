@@ -22,15 +22,15 @@ export const createConnectionTestActions = (
     saveOnSuccess = true,
     configInput?: SaveClaudeConfigInput,
   ): Promise<void> => {
-    const status = dependencies.activeStatus();
-    if (!status || state.connectionTestInProgress) {
+    if (state.connectionTestInProgress) {
       return;
     }
+    const activeStatus = configInput ? dependencies.activeStatus() : undefined;
     state.connectionTestInProgress = true;
     view.renderConnectionTestPending();
-    const knownState = dependencies.getClaudeState(status.id);
-    if (knownState) {
-      dependencies.renderClaudeState(knownState, true, false);
+    const activeState = activeStatus ? dependencies.getClaudeState(activeStatus.id) : undefined;
+    if (activeState) {
+      dependencies.renderClaudeState(activeState, true, false);
     }
     const originalLabel = elements.testClaudeConnectionButton.textContent;
     elements.testClaudeConnectionButton.disabled = true;
@@ -38,15 +38,17 @@ export const createConnectionTestActions = (
     elements.testClaudeConnectionButton.textContent = '正在发送单令牌测试…';
     dependencies.syncConnectionInteractivity();
     try {
-      const result = await window.controlPanel.testClaudeConnection(
-        status.id,
-        configInput ?? dependencies.currentConfigInput('keep'),
-      );
+      const result =
+        activeStatus && configInput
+          ? await window.controlPanel.testClaudeConnection(activeStatus.id, configInput)
+          : await window.controlPanel.testNextClaudeConnection(
+              configInput ?? dependencies.currentConfigInput('keep'),
+            );
       renderConnectionTest(result);
       if (result.ok && saveOnSuccess) {
         await dependencies.saveClaudeConfig('keep');
-      } else {
-        void dependencies.loadClaudeState(status.id);
+      } else if (activeStatus) {
+        void dependencies.loadClaudeState(activeStatus.id);
       }
     } catch (error) {
       elements.connectionTestResult.dataset.tone = 'error';
@@ -65,7 +67,7 @@ export const createConnectionTestActions = (
       elements.testClaudeConnectionButton.setAttribute('aria-busy', 'false');
       elements.testClaudeConnectionButton.textContent = originalLabel;
       dependencies.syncConnectionInteractivity();
-      const latestState = dependencies.getClaudeState(status.id);
+      const latestState = activeStatus ? dependencies.getClaudeState(activeStatus.id) : undefined;
       if (latestState) {
         dependencies.renderClaudeState(latestState, true, false);
       }

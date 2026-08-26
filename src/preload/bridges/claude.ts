@@ -14,6 +14,8 @@ import type {
   ClaudeLaunchPreflightDecisionInput,
   ClaudeLaunchPreflightDecisionOutcome,
   ClaudeModelOptions,
+  ClaudeNextConversationConnectionResult,
+  ClaudeNextConversationConnectionState,
   ClaudeOperationResult,
   ClaudePermissionMode,
   ClaudeProjectState,
@@ -166,6 +168,10 @@ export const claudeBridge = {
     ) as Promise<ClaudeProviderModelDiscoveryResult>,
   launchClaude: (sessionId, mode) =>
     ipcRenderer.invoke(CHANNELS.CLAUDE_LAUNCH, sessionId, mode) as Promise<ClaudeLaunchOutcome>,
+  getNextClaudeConnection: () =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_GET_NEXT_CONNECTION,
+    ) as Promise<ClaudeNextConversationConnectionState>,
   onClaudeState: (listener) => {
     const callback = (_event: Electron.IpcRendererEvent, state: ClaudeProjectState): void => {
       listener(state);
@@ -188,10 +194,20 @@ export const claudeBridge = {
       sessionId,
       input,
     ) as Promise<ClaudeConfigResult>,
+  saveNextClaudeConfig: (input) =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_SAVE_NEXT_CONFIG,
+      input,
+    ) as Promise<ClaudeNextConversationConnectionResult>,
   testClaudeConnection: (sessionId, input) =>
     ipcRenderer.invoke(
       CHANNELS.CLAUDE_TEST_CONNECTION,
       sessionId,
+      input,
+    ) as Promise<ClaudeConnectionTestResult>,
+  testNextClaudeConnection: (input) =>
+    ipcRenderer.invoke(
+      CHANNELS.CLAUDE_TEST_NEXT_CONNECTION,
       input,
     ) as Promise<ClaudeConnectionTestResult>,
   getClaudeSessions: (sessionId) =>

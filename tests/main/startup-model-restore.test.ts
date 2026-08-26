@@ -42,6 +42,7 @@ const dependencies = (
 ): StartupModelRestoreDependencies => ({
   allowExternalRoutingWrites: true,
   applyConversationModel: vi.fn(async () => undefined),
+  clearNextConnection: vi.fn(),
   closeTemporarySession: vi.fn(),
   getLastActiveProject: vi.fn(() => 'D:\\Project'),
   getLatestConversation: vi.fn(() => ({
@@ -85,7 +86,7 @@ describe('startup model-only restore', () => {
     );
   });
 
-  it('does not run the hidden model-only path when conversation loading is also enabled', async () => {
+  it('restores the next-conversation choice even when conversation loading is also enabled', async () => {
     const input = dependencies({
       getPreferences: vi.fn(() => ({
         autoLoadLastConversationModelOnStartup: true,
@@ -94,9 +95,23 @@ describe('startup model-only restore', () => {
       })),
     });
 
+    await expect(restoreLastConversationModelOnly(input)).resolves.toBe('restored');
+    expect(input.inspectConversationModel).toHaveBeenCalledOnce();
+    expect(input.openTemporarySession).toHaveBeenCalledOnce();
+  });
+
+  it('clears the next-conversation connection when automatic model restore is disabled', async () => {
+    const input = dependencies({
+      getPreferences: vi.fn(() => ({
+        autoLoadLastConversationModelOnStartup: false,
+        autoLoadLastConversationOnStartup: false,
+        modelMismatchBehavior: 'ask' as const,
+      })),
+    });
+
     await expect(restoreLastConversationModelOnly(input)).resolves.toBe('skipped');
+    expect(input.clearNextConnection).toHaveBeenCalledOnce();
     expect(input.inspectConversationModel).not.toHaveBeenCalled();
-    expect(input.openTemporarySession).not.toHaveBeenCalled();
   });
 
   it('keeps the current connection when the old binding cannot be restored', async () => {

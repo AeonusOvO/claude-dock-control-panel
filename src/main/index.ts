@@ -332,6 +332,11 @@ const { activateProject, addProject, chooseDirectory, failedWorkspaceResult } =
     describeWorkspace,
     homeDirectory: runtimeProfile.paths.home,
     nextDevelopmentRuntime: () => agentRuntimeStore.getNext(),
+    prepareCreatedConversation: (sessionId, projectPath, runtime) => {
+      if (runtime === 'claude') {
+        guards.requireClaudeRuntime().bindNextConversationConnection(sessionId, projectPath);
+      }
+    },
     projectDirectoryLifecycle,
     workspace,
     workspaceStore,

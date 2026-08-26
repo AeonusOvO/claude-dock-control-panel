@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { withRenderer, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
 import type { ManagedChatGptGatewayState } from '../../src/shared/contracts';
+import { claudeProjectState } from '../helpers/renderer-terminal-fixture';
 
 const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
   authenticated: true,
@@ -17,7 +18,7 @@ const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
 });
 
 describe('connection access wizard', () => {
-  it('explains that global ChatGPT preparation still needs an opened conversation', async () => {
+  it('configures the next ChatGPT conversation without requiring an opened conversation', async () => {
     await withRenderer(
       { getManagedChatGptGatewayState: async () => readyManagedChatGptState() },
       async (harness) => {
@@ -27,9 +28,9 @@ describe('connection access wizard', () => {
         await harness.flush();
 
         expect(harness.query('#connection-wizard-status').textContent).toBe(
-          '安装与授权完成；新建或打开对话后即可验证接入',
+          '正在配置下个对话使用的 ChatGPT 官方订阅',
         );
-        expect(harness.query('#current-connection-name').textContent).toBe('当前没有打开对话');
+        expect(harness.query('#current-connection-name').textContent).toBe('尚未选择接入');
       },
     );
   });
@@ -48,6 +49,53 @@ describe('connection access wizard', () => {
       expect(harness.query('#connection-provider-setup').hasAttribute('hidden')).toBe(false);
       harness.click('#connection-wizard-previous');
       expect(harness.query('[data-connection-wizard-step="choice"]').hidden).toBe(false);
+    });
+  });
+
+  it('returns to model selection whenever the user re-enters Access', async () => {
+    await withRenderer({}, async (harness) => {
+      harness.click('[data-rail-tab="connection"]');
+      harness.click('[data-provider-id="deepseek"]');
+      harness.click('#connection-wizard-next');
+      expect(harness.query('[data-connection-wizard-step="configure"]').hidden).toBe(false);
+
+      harness.click('[data-rail-tab="connection"]');
+      harness.click('[data-rail-tab="connection"]');
+
+      const choice = harness.query('[data-connection-wizard-step="choice"]');
+      const configure = harness.query('[data-connection-wizard-step="configure"]');
+      expect(choice.hidden).toBe(false);
+      expect(choice.classList.contains('connection-wizard-step--active')).toBe(true);
+      expect(configure.classList.contains('connection-wizard-step--active')).toBe(false);
+      expect(configure.classList.contains('connection-wizard-step--leaving')).toBe(true);
+    });
+  });
+
+  it('does not let a late global-profile read overwrite a model source the user just chose', async () => {
+    let resolveConnection!: (value: {
+      config: ReturnType<typeof claudeProjectState>['config'];
+    }) => void;
+    const connection = new Promise<{ config: ReturnType<typeof claudeProjectState>['config'] }>(
+      (resolve) => {
+        resolveConnection = resolve;
+      },
+    );
+    await withRenderer({ getNextClaudeConnection: () => connection }, async (harness) => {
+      harness.click('[data-rail-tab="connection"]');
+      harness.click('[data-provider-id="deepseek"]');
+      resolveConnection({ config: claudeProjectState().config });
+      await harness.flush();
+
+      expect(
+        harness
+          .query<HTMLButtonElement>('[data-provider-id="deepseek"]')
+          .getAttribute('aria-pressed'),
+      ).toBe('true');
+      expect(
+        harness
+          .query<HTMLButtonElement>('[data-provider-id="anthropic"]')
+          .getAttribute('aria-pressed'),
+      ).toBe('false');
     });
   });
 
@@ -124,7 +172,7 @@ describe('connection access wizard', () => {
           active: true,
           detail: '正在等待你在 OpenAI 官方页面完成授权。',
           interruptible: true,
-          sessionId: 'session-1',
+          sessionId: undefined,
           stage: 'logging-in',
           step: 5,
           totalSteps: 8,
@@ -141,7 +189,7 @@ describe('connection access wizard', () => {
           active: false,
           detail: 'OpenAI 授权已取消。',
           interruptible: false,
-          sessionId: 'session-1',
+          sessionId: undefined,
           stage: 'error',
           step: 5,
           totalSteps: 8,
@@ -151,7 +199,7 @@ describe('connection access wizard', () => {
           active: true,
           detail: '授权已确认，正在配置本机 Proxy API。',
           interruptible: false,
-          sessionId: 'session-1',
+          sessionId: undefined,
           stage: 'discovering-models',
           step: 6,
           totalSteps: 8,
@@ -178,7 +226,7 @@ describe('connection access wizard', () => {
           active: true,
           detail: '正在等待你在 OpenAI 官方页面完成授权。',
           interruptible: true,
-          sessionId: 'session-1',
+          sessionId: undefined,
           stage: 'logging-in',
           step: 5,
           totalSteps: 8,

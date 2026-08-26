@@ -60,6 +60,23 @@ const managedChatGptConnectionFailure = (
       }
     : reportManagedChatGptFailure('external-service', message, connectionTest);
 
+const managedChatGptConfigInput = (
+  managed: ManagedChatGptGatewayProjectConfig,
+  model = managed.model,
+  modelFast = managed.modelFast,
+): SaveClaudeConfigInput => ({
+  apiKeyHelperPolicy: 'prefer-claudedock',
+  authMode: 'authToken',
+  baseUrl: managed.baseUrl,
+  credential: managed.credential,
+  credentialAction: 'replace',
+  model,
+  modelFast,
+  preset: 'chatgpt-subscription',
+  protocol: 'anthropic',
+  provider: 'gateway',
+});
+
 interface ManagedChatGptGlobalOperations {
   emitManagedChatGptProgress: (
     sessionId: string | undefined,
@@ -116,11 +133,7 @@ const createManagedChatGptGlobalOperations = ({
       });
   };
 
-  /**
-   * Installs Claude Code and completes OpenAI OAuth without requiring a workspace tab. Project
-   * configuration and its real model probe remain a separate, project-scoped transaction once the
-   * user opens a project.
-   */
+  /** Installs, authenticates, discovers, tests and saves the global next-conversation choice. */
   const performManagedChatGptGatewayGlobalSetup =
     async (): Promise<ManagedChatGptGatewayOperationResult> => {
       const progress = (
@@ -128,7 +141,7 @@ const createManagedChatGptGlobalOperations = ({
         step: number,
         detail: string,
         active = true,
-      ): void => emitManagedChatGptProgress(undefined, stage, step, detail, active, 6);
+      ): void => emitManagedChatGptProgress(undefined, stage, step, detail, active, 8);
       try {
         const operation = async (): Promise<ManagedChatGptGatewayOperationResult> => {
           const runtime = requireClaudeRuntime();
@@ -148,20 +161,52 @@ const createManagedChatGptGlobalOperations = ({
             3,
             'Claude Code 已就绪，正在检查并配置 ChatGPT 本地网关；此方式不需要 CCR。',
           );
-          await requireManagedChatGptGateway().setup(false, (step, detail) => {
+          const managed = await requireManagedChatGptGateway().setup(false, (step, detail) => {
             const stage: ManagedChatGptSetupStage =
               step === 5 ? 'logging-in' : step >= 6 ? 'discovering-models' : 'installing-gateway';
             progress(stage, step, detail);
           });
-          const state = await requireManagedChatGptGateway().getState();
-          progress(
-            'complete',
-            6,
-            '安装和 OpenAI 授权已完成；打开项目后即可验证模型并用于当前项目。',
-            false,
+          const current = await runtime.getNextConversationConnection();
+          const model =
+            current.config?.preset === 'chatgpt-subscription' &&
+            managed.availableModels.includes(current.config.model)
+              ? current.config.model
+              : managed.model;
+          const modelFast =
+            current.config?.preset === 'chatgpt-subscription' &&
+            current.config.modelFast &&
+            managed.availableModels.includes(current.config.modelFast)
+              ? current.config.modelFast
+              : managed.modelFast;
+          progress('testing', 7, `正在真实验证模型 ${model}。`);
+          const applied = await runtime.verifyAndSaveNextConversationConfig(
+            managedChatGptConfigInput(managed, model, modelFast),
+            async () => {
+              progress('testing', 7, '连接首次失败，正在自动重启网关并复检。');
+              await requireManagedChatGptGateway().ensureRunning();
+            },
           );
+          const state = await requireManagedChatGptGateway().getState();
+          if (!applied.connectionTest.ok) {
+            progress('error', 8, `自动接入未通过：${applied.connectionTest.message}`, false);
+            return {
+              ...managedChatGptConnectionFailure(
+                applied.connectionTest,
+                '环境与模型列表已准备好，但真实连接测试未通过；原选择保持不变。',
+              ),
+              connectionTest: applied.connectionTest,
+              error: applied.connectionTest.message,
+              message: '所选 ChatGPT 模型未通过真实连接测试；原选择保持不变。',
+              nextConnection: applied.state,
+              ok: false,
+              state,
+            };
+          }
+          progress('complete', 8, `接入成功；下个新对话将使用模型 ${model}。`, false);
           return {
-            message: '安装和 OpenAI 授权已完成；打开项目后即可验证模型并用于当前项目。',
+            connectionTest: applied.connectionTest,
+            message: `ChatGPT 接入已验证；下个新对话将使用 ${model}。`,
+            nextConnection: applied.state,
             ok: true,
             state,
           };
@@ -176,10 +221,11 @@ const createManagedChatGptGlobalOperations = ({
         const state = await requireManagedChatGptGateway().getState();
         const message = error instanceof Error ? error.message : '托管网关配置失败。';
         const failureMessage = '未能完成 ChatGPT 订阅的一键安装与 OpenAI 授权。';
-        progress('error', 6, message, false);
+        progress('error', 8, message, false);
         return {
           ...reportManagedChatGptFailure('external-service', failureMessage, error),
           error: message,
+          nextConnection: await requireClaudeRuntime().getNextConversationConnection(),
           ok: false,
           state,
         };
@@ -202,23 +248,6 @@ const createManagedChatGptProjectOperations = (
   }: ManagedChatGptIpcDependencies,
   emitManagedChatGptProgress: ManagedChatGptGlobalOperations['emitManagedChatGptProgress'],
 ): ManagedChatGptProjectOperations => {
-  const managedChatGptConfigInput = (
-    managed: ManagedChatGptGatewayProjectConfig,
-    model = managed.model,
-    modelFast = managed.modelFast,
-  ): SaveClaudeConfigInput => ({
-    apiKeyHelperPolicy: 'prefer-claudedock',
-    authMode: 'authToken',
-    baseUrl: managed.baseUrl,
-    credential: managed.credential,
-    credentialAction: 'replace',
-    model,
-    modelFast,
-    preset: 'chatgpt-subscription',
-    protocol: 'anthropic',
-    provider: 'gateway',
-  });
-
   const resumeClaudeAfterManagedCutover = async (
     runtime: ClaudeRuntime,
     sessionId: string,
@@ -303,7 +332,7 @@ const createManagedChatGptProjectOperations = (
     emitManagedChatGptProgress(sessionId, 'saving', 8, '连接已通过，正在保存当前项目配置。');
     const projectState = await runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
       assertCurrent,
-      commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared),
+      commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared, sessionId),
       complete: async (prepared) => {
         const savedState = await runtime.completePreparedConfigSave(sessionId, cwd, prepared);
         assertCurrent();
@@ -576,6 +605,92 @@ const registerManagedChatGptSetupIpc = (
   );
 };
 
+const setManagedChatGptGatewayModelGlobally = async (
+  {
+    guards: { withOfficialProviderAccess, requireClaudeRuntime, requireManagedChatGptGateway },
+  }: Pick<ManagedChatGptIpcDependencies, 'guards'>,
+  emitManagedChatGptProgress: ManagedChatGptGlobalOperations['emitManagedChatGptProgress'],
+  requestedModel: string,
+): Promise<ManagedChatGptGatewayOperationResult> => {
+  const runtime = requireClaudeRuntime();
+  let connectionTest: ClaudeConnectionTestResult | undefined;
+  try {
+    return await withOfficialProviderAccess(
+      {
+        action: 'first-request',
+        cwd: undefined,
+        networkScope: 'application',
+        provider: 'openai-codex',
+      },
+      async () => {
+        emitManagedChatGptProgress(
+          undefined,
+          'discovering-models',
+          6,
+          '正在刷新网关模型列表并校验你的选择。',
+        );
+        const gateway = requireManagedChatGptGateway();
+        const managed = await gateway.configurationForModel(requestedModel);
+        emitManagedChatGptProgress(undefined, 'testing', 7, `正在真实验证模型 ${requestedModel}。`);
+        const applied = await runtime.verifyAndSaveNextConversationConfig(
+          managedChatGptConfigInput(managed, requestedModel, managed.modelFast),
+          async () => {
+            emitManagedChatGptProgress(
+              undefined,
+              'testing',
+              7,
+              '连接首次失败，正在自动重启网关并复检。',
+            );
+            await gateway.ensureRunning();
+          },
+        );
+        connectionTest = applied.connectionTest;
+        const state = await gateway.getState();
+        if (!connectionTest.ok) {
+          emitManagedChatGptProgress(undefined, 'error', 8, connectionTest.message, false);
+          return {
+            ...managedChatGptConnectionFailure(
+              connectionTest,
+              '所选模型未通过真实连接测试，原选择保持不变。',
+            ),
+            connectionTest,
+            error: connectionTest.message,
+            nextConnection: applied.state,
+            ok: false,
+            state,
+          };
+        }
+        emitManagedChatGptProgress(
+          undefined,
+          'complete',
+          8,
+          `模型 ${requestedModel} 已验证；下个新对话将使用它。`,
+          false,
+        );
+        return {
+          connectionTest,
+          message: `已选择并验证模型 ${requestedModel}；下个新对话将使用它。`,
+          nextConnection: applied.state,
+          ok: true,
+          state,
+        };
+      },
+    );
+  } catch (error) {
+    const state = await requireManagedChatGptGateway().getState();
+    const message = error instanceof Error ? error.message : '无法切换托管网关模型。';
+    emitManagedChatGptProgress(undefined, 'error', 8, message, false);
+    return {
+      ...reportManagedChatGptFailure('external-service', '无法完成模型切换。', error),
+      ...(connectionTest ? { connectionTest } : {}),
+      error: message,
+      nextConnection: await runtime.getNextConversationConnection(),
+      ok: false,
+      state,
+    };
+  }
+};
+
 const registerManagedChatGptModelIpc = (
   {
     configTransactionState,
@@ -598,13 +713,27 @@ const registerManagedChatGptModelIpc = (
       requestedModel: unknown,
     ): Promise<ManagedChatGptGatewayOperationResult> => {
       validateSender(event);
-      const validatedSessionId = validateSessionId(sessionId);
       if (
         typeof requestedModel !== 'string' ||
         !/^[-A-Za-z0-9._:/@[\]]{1,200}$/.test(requestedModel)
       ) {
         throw new Error('托管网关模型标识无效。');
       }
+      if (sessionId === undefined) {
+        return setManagedChatGptGatewayModelGlobally(
+          {
+            guards: {
+              withOfficialProviderAccess,
+              requireClaudeRuntime,
+              requireManagedChatGptGateway,
+              validateSender,
+            },
+          },
+          emitManagedChatGptProgress,
+          requestedModel,
+        );
+      }
+      const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
       const resumeAfterModelChange = runtime.isActive(validatedSessionId);

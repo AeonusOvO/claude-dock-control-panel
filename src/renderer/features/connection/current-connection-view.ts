@@ -1,6 +1,7 @@
 import type {
   ClaudeConfigView,
   ClaudeConnectionHistoryEntry,
+  ClaudeNextConversationConnectionState,
   ClaudeProjectState,
 } from '../../../shared/contracts';
 import { requiredElement } from '../../platform/dom';
@@ -33,9 +34,9 @@ const matchingHistoryName = (
 
 const renderEmpty = (): void => {
   currentConnection.dataset.kind = 'empty';
-  currentConnectionName.textContent = '当前没有打开对话';
+  currentConnectionName.textContent = '尚未选择接入';
   currentConnectionMetadata.textContent =
-    '新建或打开对话后，这里会显示实际生效的平台、账号和模型。';
+    '请先选择平台和模型；保存后，下个新对话会立即捕获这套配置。';
 };
 
 export interface CurrentConnectionViewActions {
@@ -46,39 +47,47 @@ export interface CurrentConnectionViewActions {
 export const createCurrentConnectionViewActions = (
   dependencies: Pick<
     ConnectionHistoryDependencies,
-    'activeClaudeState' | 'getManagedChatGptGatewayState'
+    'getManagedChatGptGatewayState' | 'nextClaudeConnection'
   >,
   historyState: ConnectionHistoryState,
 ): CurrentConnectionViewActions => {
   let generation = 0;
 
-  const applySummary = (projectState: ClaudeProjectState, accountIdentity?: string): void => {
-    const summary = createCurrentConnectionSummary(projectState.config, {
+  const applySummary = (
+    nextConnection: ClaudeNextConversationConnectionState,
+    accountIdentity?: string,
+  ): void => {
+    if (!nextConnection.config) {
+      renderEmpty();
+      return;
+    }
+    const summary = createCurrentConnectionSummary(nextConnection.config, {
       accountIdentity,
-      connectionName: matchingHistoryName(historyState.allEntries, projectState.config),
-      officialAuth: projectState.officialAuth,
+      connectionName: matchingHistoryName(historyState.allEntries, nextConnection.config),
+      officialAuth: nextConnection.officialAuth,
     });
     currentConnection.dataset.kind = summary.kind;
     currentConnectionName.textContent = summary.name;
     currentConnectionMetadata.textContent = summary.metadata.join(' · ');
   };
 
-  const render = (projectState = dependencies.activeClaudeState()): void => {
+  const render = (_projectState?: ClaudeProjectState): void => {
     const requestGeneration = ++generation;
-    if (!projectState) {
+    const nextConnection = dependencies.nextClaudeConnection() ?? {};
+    if (!nextConnection.config) {
       renderEmpty();
       return;
     }
 
-    applySummary(projectState);
-    if (projectState.config.preset !== 'chatgpt-subscription') return;
+    applySummary(nextConnection);
+    if (nextConnection.config.preset !== 'chatgpt-subscription') return;
 
     void dependencies
       .getManagedChatGptGatewayState()
       .then((managedState) => {
         if (requestGeneration !== generation) return;
-        const activeState = dependencies.activeClaudeState();
-        if (!activeState || activeState.sessionId !== projectState.sessionId) return;
+        const activeState = dependencies.nextClaudeConnection() ?? {};
+        if (activeState !== nextConnection) return;
         applySummary(activeState, managedState.accountEmail);
       })
       .catch(() => {

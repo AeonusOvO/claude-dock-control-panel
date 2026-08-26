@@ -75,6 +75,7 @@ const requestChannels = {
   CLAUDE_GET_SESSIONS: 'claude:get-sessions',
   CLAUDE_GET_SESSIONS_FOR_PATH: 'claude:get-sessions-for-path',
   CLAUDE_GET_STATE: 'claude:get-state',
+  CLAUDE_GET_NEXT_CONNECTION: 'claude:get-next-connection',
   CLAUDE_LAUNCH: 'claude:launch',
   CLAUDE_LAUNCH_PREFLIGHT_DECIDE: 'claude:launch-preflight-decide',
   CLAUDE_LAUNCH_WITH_SESSION: 'claude:launch-with-session',
@@ -109,12 +110,14 @@ const requestChannels = {
   CLAUDE_ROUTER_STOP: 'claude:router-stop',
   CLAUDE_ROUTER_UNINSTALL: 'claude:router-uninstall',
   CLAUDE_SAVE_CONFIG: 'claude:save-config',
+  CLAUDE_SAVE_NEXT_CONFIG: 'claude:save-next-config',
   CLAUDE_SET_ALLOW_BYPASS_PERMISSIONS: 'claude:set-allow-bypass-permissions',
   CLAUDE_SET_EFFORT: 'claude:set-effort',
   CLAUDE_SET_MODEL_SPEED: 'claude:set-model-speed',
   CLAUDE_SET_PERMISSION_MODE: 'claude:set-permission-mode',
   CLAUDE_SWITCH_MODEL: 'claude:switch-model',
   CLAUDE_TEST_CONNECTION: 'claude:test-connection',
+  CLAUDE_TEST_NEXT_CONNECTION: 'claude:test-next-connection',
 
   // codex
   CODEX_GET_STATE: 'codex:get-state',

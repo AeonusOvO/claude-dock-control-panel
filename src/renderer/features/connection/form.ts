@@ -1,4 +1,5 @@
 import type {
+  ClaudeNextConversationConnectionState,
   ClaudePreset,
   ClaudeProjectState,
   SaveClaudeConfigInput,
@@ -60,6 +61,10 @@ export interface ConnectionForm {
   clearProviderSelection: (clearDraft?: boolean) => void;
   applyDefaultProviderGroupExpansion: (providerId?: ClaudeProviderId) => void;
   renderProviderPicker: () => void;
+  applyNextClaudeConnection: (state: ClaudeNextConversationConnectionState) => void;
+  getNextClaudeConnection: () => ClaudeNextConversationConnectionState;
+  loadNextClaudeConnection: () => Promise<ClaudeNextConversationConnectionState>;
+  showConnectionChoice: () => void;
   populateClaudeConfigForm: (state: ClaudeProjectState) => void;
   currentConfigInput: (
     credentialAction: SaveClaudeConfigInput['credentialAction'],
@@ -126,11 +131,54 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     applyPresetUi,
     renderProviderPicker,
   );
-  const { populateClaudeConfigForm } = populateActions;
+  const { populateClaudeConfigForm, populateNextClaudeConfigForm } = populateActions;
+  const applyNextClaudeConnectionState = (
+    state: ClaudeNextConversationConnectionState,
+    populateForm: boolean,
+  ): ClaudeNextConversationConnectionState => {
+    const normalized = state && typeof state === 'object' ? state : {};
+    formState.nextConnection = normalized;
+    if (populateForm) {
+      if (normalized.config) {
+        populateNextClaudeConfigForm(normalized);
+      } else {
+        clearProviderSelection(false);
+      }
+    } else {
+      renderProviderPicker();
+    }
+    formState.renderWizard?.();
+    deps.renderNextConnection();
+    return normalized;
+  };
+  const applyNextClaudeConnection = (state: ClaudeNextConversationConnectionState): void => {
+    applyNextClaudeConnectionState(state, true);
+  };
+  const loadNextClaudeConnection = async (): Promise<ClaudeNextConversationConnectionState> => {
+    const selectedProviderAtRequest = formState.selectedProviderId;
+    const nextConnection = (await window.controlPanel.getNextClaudeConnection()) ?? {};
+    /* A late startup/read response must never erase a choice the user has already clicked. */
+    applyNextClaudeConnectionState(
+      nextConnection,
+      formState.selectedProviderId === selectedProviderAtRequest,
+    );
+    try {
+      const software = await window.controlPanel.getSoftwareUpdates();
+      formState.connectionEnvironmentReady = software.claudeCode.installed;
+    } catch {
+      formState.connectionEnvironmentReady = false;
+    }
+    environmentSetup.hidden =
+      formState.selectedProviderId === 'chatgpt-subscription' ||
+      formState.connectionEnvironmentReady;
+    syncConnectionInteractivity();
+    return nextConnection;
+  };
   const saveActions = createConnectionFormSaveActions(
     deps,
     currentConfigInput,
-    populateClaudeConfigForm,
+    applyNextClaudeConnection,
+    () => formState.nextConnection,
   );
   const { saveClaudeConfig } = saveActions;
 
@@ -174,7 +222,11 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
   bindingsActions.bindConnectionForm();
   const wizardActions = createConnectionFormWizardActions(deps, formState, applyPresetUi);
   formState.renderWizard = wizardActions.render;
-  void wizardActions.initializeFromOnboarding().catch(() => wizardActions.render());
+  void loadNextClaudeConnection()
+    .catch(() => undefined)
+    .finally(() => {
+      void wizardActions.initializeFromOnboarding().catch(() => wizardActions.render());
+    });
 
   return {
     claudeAuthMode,
@@ -197,6 +249,10 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     clearProviderSelection,
     applyDefaultProviderGroupExpansion,
     renderProviderPicker,
+    applyNextClaudeConnection,
+    getNextClaudeConnection: () => formState.nextConnection,
+    loadNextClaudeConnection,
+    showConnectionChoice: wizardActions.showChoice,
     populateClaudeConfigForm,
     currentConfigInput,
     completeVisibleConnectionEndpoint,

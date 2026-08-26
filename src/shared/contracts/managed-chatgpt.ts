@@ -1,5 +1,9 @@
 import type { FailureMetadata } from '../diagnostics/failure';
-import type { ClaudeConnectionTestResult, ClaudeProjectState } from './claude';
+import type {
+  ClaudeConnectionTestResult,
+  ClaudeNextConversationConnectionState,
+  ClaudeProjectState,
+} from './claude';
 
 export type ManagedChatGptGatewayPhase =
   'installing' | 'login-required' | 'not-installed' | 'ready' | 'stopped';
@@ -29,6 +33,7 @@ export interface ManagedChatGptGatewayOperationResult extends FailureMetadata {
   connectionTest?: ClaudeConnectionTestResult;
   error?: string;
   message: string;
+  nextConnection?: ClaudeNextConversationConnectionState;
   ok: boolean;
   projectState?: ClaudeProjectState;
   state: ManagedChatGptGatewayState;

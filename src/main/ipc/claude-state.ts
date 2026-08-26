@@ -2,9 +2,13 @@ import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
 import type {
   ClaudeConnectionTestResult,
+  ClaudeNextConversationConnectionState,
   ClaudeProviderModelDiscoveryResult,
 } from '../../shared/contracts';
-import { claudeNetworkAccessForConfigInput } from '../claude/runtime-connection-config';
+import {
+  claudeNetworkAccessForConfigInput,
+  resolveSessionConnectionConfigScope,
+} from '../claude/runtime-connection-config';
 import { createFailureReporter } from '../infra/logger';
 import { ProviderAccessBlockedError } from '../network/provider-access-guard';
 import {
@@ -69,6 +73,13 @@ export const registerClaudeStateIpc = ({
   },
   workspace,
 }: ClaudeStateIpcDependencies): void => {
+  ipcMain.handle(
+    CHANNELS.CLAUDE_GET_NEXT_CONNECTION,
+    async (event): Promise<ClaudeNextConversationConnectionState> => {
+      validateSender(event);
+      return requireClaudeRuntime().getNextConversationConnection();
+    },
+  );
   ipcMain.handle(CHANNELS.CLAUDE_GET_STATE, async (event, sessionId: unknown) => {
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
@@ -79,7 +90,10 @@ export const registerClaudeStateIpc = ({
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
     const status = workspace.getStatus(validatedSessionId);
-    return requireClaudeRuntime().getGatewayDiagnostics(status.cwd);
+    const runtime = requireClaudeRuntime();
+    return runtime.getGatewayDiagnostics(
+      resolveSessionConnectionConfigScope(runtime, validatedSessionId, status.cwd),
+    );
   });
   ipcMain.handle(
     CHANNELS.CLAUDE_PROVIDER_MODELS_DISCOVER,
@@ -158,6 +172,51 @@ export const registerClaudeStateIpc = ({
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : '无法测试 Claude 接入。';
+        return {
+          ...reportClaudeStateFailure('external-service', message, error),
+          ok: false,
+          stages: [
+            { detail: message, id: 'endpoint', label: '接口地址', status: 'failed' },
+            {
+              detail: '请先修正配置。',
+              id: 'authentication',
+              label: '身份认证',
+              status: 'skipped',
+            },
+            { detail: '尚未发送请求。', id: 'model', label: '模型响应', status: 'skipped' },
+          ],
+          testedAt: Date.now(),
+          tone: 'error',
+        };
+      }
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.CLAUDE_TEST_NEXT_CONNECTION,
+    async (event, input: unknown): Promise<ClaudeConnectionTestResult> => {
+      validateSender(event);
+      try {
+        const validatedInput = validateClaudeConfigInput(input);
+        const runtime = requireClaudeRuntime();
+        const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
+        const testConnection = async (): Promise<ClaudeConnectionTestResult> => {
+          if (validatedInput.preset === 'chatgpt-subscription') {
+            await requireManagedChatGptGateway().ensureRunning();
+          }
+          return runtime.testNextConversationConnection(validatedInput);
+        };
+        if (!networkAccess) return await testConnection();
+        return await withOfficialProviderAccess(
+          {
+            action: 'first-request',
+            cwd: undefined,
+            networkScope: 'application',
+            ...networkAccess,
+          },
+          testConnection,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法测试下个对话接入。';
         return {
           ...reportClaudeStateFailure('external-service', message, error),
           ok: false,

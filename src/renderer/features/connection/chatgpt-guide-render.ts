@@ -1,4 +1,5 @@
 import type { ManagedChatGptGatewayState } from '../../../shared/contracts';
+import { recommendedChatModel } from '../../../shared/claude/managed-chatgpt-models';
 import type { ChatGptGuideElements } from './chatgpt-guide-elements';
 import type { ChatGptSubscriptionGuideDeps } from './chatgpt-guide-dependencies';
 
@@ -26,8 +27,7 @@ export const createChatGptGuideRenderActions = (
     secondaryActions,
   } = elements;
   const {
-    getActiveSessionId,
-    claudeStates,
+    getNextClaudeConnection,
     managedChatGptOperations,
     setRenderManagedChatGptProgress,
     getSelectedProviderId,
@@ -35,14 +35,17 @@ export const createChatGptGuideRenderActions = (
   } = deps;
 
   const renderModels = (models: readonly string[], preferredModel?: string): void => {
-    const currentModel = claudeStates.get(getActiveSessionId())?.config.model;
-    const selected = models.includes(modelSelect.value)
-      ? modelSelect.value
-      : preferredModel && models.includes(preferredModel)
+    const nextModel = getNextClaudeConnection().config?.model;
+    const selected =
+      preferredModel && models.includes(preferredModel)
         ? preferredModel
-        : currentModel && models.includes(currentModel)
-          ? currentModel
-          : models[0];
+        : nextModel && models.includes(nextModel)
+          ? nextModel
+          : models.includes(modelSelect.value)
+            ? modelSelect.value
+            : models.length > 0
+              ? recommendedChatModel(models)
+              : undefined;
     modelSelect.replaceChildren(
       ...models.map((model) => {
         const option = document.createElement('option');
@@ -58,10 +61,10 @@ export const createChatGptGuideRenderActions = (
   };
 
   setRenderManagedChatGptProgress((progress): void => {
-    const matchesCurrentScope = progress.sessionId === (getActiveSessionId() || undefined);
+    const matchesCurrentScope = progress.sessionId === undefined;
     action.disabled = managedChatGptOperations.busy;
     action.setAttribute('aria-busy', String(managedChatGptOperations.busy));
-    modelSelect.disabled = managedChatGptOperations.busy || !getActiveSessionId();
+    modelSelect.disabled = managedChatGptOperations.busy || modelSelect.options.length === 0;
     if (!matchesCurrentScope) {
       if (!progress.active) {
         void window.controlPanel
@@ -91,27 +94,22 @@ export const createChatGptGuideRenderActions = (
   });
 
   const renderState = (state: ManagedChatGptGatewayState, preferredModel?: string): void => {
-    const hasProject = Boolean(getActiveSessionId());
     const operationBusy = state.busy || managedChatGptOperations.busy;
     statusCard.dataset.phase = state.phase;
     statusTitle.textContent = operationBusy
       ? '正在自动检测并接入'
       : state.phase === 'ready'
-        ? hasProject
-          ? 'ChatGPT 一键接入已就绪'
-          : '安装与 OpenAI 授权已就绪'
+        ? 'ChatGPT 一键接入已就绪'
         : state.phase === 'stopped'
           ? '授权已完成，等待启用'
           : state.phase === 'login-required'
             ? '安装完成，等待 OpenAI 授权'
             : '尚未安装托管网关';
-    statusDetail.textContent = hasProject
-      ? state.message
-      : `${state.message} 安装与授权不需要先打开项目；项目打开后再执行模型验证和保存。`;
+    statusDetail.textContent = `${state.message} 这里的选择将由下个新对话捕获。`;
     renderModels(state.availableModels, preferredModel);
     action.disabled = operationBusy;
     action.setAttribute('aria-busy', String(operationBusy));
-    modelSelect.disabled = operationBusy || !hasProject;
+    modelSelect.disabled = operationBusy || state.availableModels.length === 0;
     action.textContent = operationBusy
       ? '安装进行中…'
       : state.phase === 'not-installed'
@@ -119,12 +117,8 @@ export const createChatGptGuideRenderActions = (
         : state.phase === 'login-required'
           ? '登录 OpenAI 并自动配置'
           : state.phase === 'stopped'
-            ? hasProject
-              ? '启动并用于当前项目'
-              : '检查安装与登录状态'
-            : hasProject
-              ? '验证并用于当前项目'
-              : '检查安装与登录状态';
+            ? '启动并设为下个对话接入'
+            : '验证并设为下个对话接入';
     secondaryActions.replaceChildren();
     if (state.authenticated && !operationBusy) {
       const account = document.createElement('span');

@@ -25,7 +25,7 @@ export const createConnectionFormSyncActions = (
   deps: ConnectionFormDeps,
   formState: ConnectionFormState,
 ): ConnectionFormSyncActions => {
-  const { getActiveSessionId, claudeStates, connectionFeature } = deps;
+  const { connectionFeature } = deps;
 
   const setAuthOptions = (
     options: Array<{ label: string; value: SaveClaudeConfigInput['authMode'] }>,
@@ -90,7 +90,7 @@ export const createConnectionFormSyncActions = (
       button.disabled = busy;
     }
     if (formState.connectionEnvironmentReady && !busy) {
-      const config = claudeStates.get(getActiveSessionId())?.config;
+      const config = formState.nextConnection.config;
       clearCredentialButton.disabled = !(
         config?.sourceCredentialConfigured ?? config?.credentialConfigured
       );

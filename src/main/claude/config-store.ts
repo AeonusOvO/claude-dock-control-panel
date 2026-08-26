@@ -127,6 +127,10 @@ export class ClaudeConfigStore {
     return this.normalizedConfig(this.load().projects[projectKey(cwd)]);
   }
 
+  public has(cwd: string): boolean {
+    return this.load().projects[projectKey(cwd)] !== undefined;
+  }
+
   public getCredential(cwd: string): string | undefined {
     return this.decryptedCredential(this.load().projects[projectKey(cwd)]);
   }
@@ -189,6 +193,39 @@ export class ClaudeConfigStore {
     } else {
       delete store.projects[key];
     }
+    this.persist(store);
+  }
+
+  /**
+   * Captures one complete encrypted connection profile under another main-process-only scope.
+   * Conversation scopes deliberately keep the project's permission opt-in while taking their
+   * endpoint, account and models from the selected next-conversation profile.
+   */
+  public copyConnection(
+    sourceCwd: string,
+    destinationCwd: string,
+    allowBypassPermissions?: boolean,
+  ): boolean {
+    const store = this.load();
+    const source = store.projects[projectKey(sourceCwd)];
+    const destinationKey = projectKey(destinationCwd);
+    const destination = store.projects[destinationKey];
+    store.projects[destinationKey] = {
+      ...(source ? structuredClone(source) : { ...DEFAULT_CLAUDE_CONFIG, protocol: 'anthropic' }),
+      allowBypassPermissions:
+        allowBypassPermissions ??
+        destination?.allowBypassPermissions ??
+        DEFAULT_ALLOW_BYPASS_PERMISSIONS,
+    };
+    this.persist(store);
+    return source !== undefined;
+  }
+
+  public remove(cwd: string): void {
+    const store = this.load();
+    const key = projectKey(cwd);
+    if (store.projects[key] === undefined) return;
+    delete store.projects[key];
     this.persist(store);
   }
 

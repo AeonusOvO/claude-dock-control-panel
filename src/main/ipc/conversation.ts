@@ -136,23 +136,31 @@ const registerConversationStartIpc = (
     }
 
     let launch: NativeConversationLaunch | undefined;
+    const nativeOwnerId = `native-route:${conversationId}`;
     const runtime =
       runtimeProfile.adapterMode === 'production' ? requireClaudeRuntime() : undefined;
+    const nativeAuthorization = runtime
+      ? boundSessionId
+        ? runtime.captureNativeConversationAuthorization(projectPath, boundSessionId)
+        : request.resume
+          ? runtime.captureNativeConversationAuthorization(projectPath)
+          : runtime.captureNextNativeConversationAuthorization(nativeOwnerId, projectPath)
+      : undefined;
     const startNativeConversation = async () => {
       assertLaunchAdmissionAllowed();
       if (runtime) {
-        const ownerId = `native-route:${conversationId}`;
         const prepared = await runtime.prepareNativeConversation(
-          ownerId,
+          nativeOwnerId,
           projectPath,
           request.model,
+          nativeAuthorization,
         );
         try {
           assertLaunchAdmissionAllowed();
-          launch = { ownerId, prepared };
+          launch = { ownerId: nativeOwnerId, prepared };
           nativeLaunches.set(conversationId, launch);
         } catch (error) {
-          runtime.releaseNativeConversation(ownerId);
+          runtime.releaseNativeConversation(nativeOwnerId);
           throw error;
         }
       }
@@ -201,16 +209,25 @@ const registerConversationStartIpc = (
         throw error;
       }
     };
-    const networkAccess =
-      typeof runtime?.networkAccess === 'function'
-        ? runtime.networkAccess(projectPath)
-        : effectiveClaudeNetworkAccess(undefined, runtime?.officialNetworkProvider(projectPath));
-    return networkAccess
-      ? withOfficialProviderAccess(
-          { action: 'cli-launch', cwd: projectPath, ...networkAccess },
-          startNativeConversation,
+    const networkAccess = nativeAuthorization
+      ? effectiveClaudeNetworkAccess(
+          nativeAuthorization.authorization.networkAccess,
+          nativeAuthorization.authorization.officialNetworkProvider,
         )
-      : startNativeConversation();
+      : undefined;
+    try {
+      return await (networkAccess
+        ? withOfficialProviderAccess(
+            { action: 'cli-launch', cwd: projectPath, ...networkAccess },
+            startNativeConversation,
+          )
+        : startNativeConversation());
+    } catch (error) {
+      if (runtime && !boundSessionId && !request.resume) {
+        runtime.releaseNativeConversation(nativeOwnerId);
+      }
+      throw error;
+    }
   });
 };
 
@@ -527,6 +544,10 @@ const registerConversationAdoptionIpc = (
         };
       }
       const runtime = requireClaudeRuntime();
+      const nativeAuthorization = runtime.captureNativeConversationAuthorization(
+        projectPath,
+        validatedSessionId,
+      );
       const terminalHasRunningWork = (): boolean => {
         if (!workspace.hasSession(validatedSessionId)) return false;
         const currentStatus = workspace.getStatus(validatedSessionId);
@@ -559,7 +580,12 @@ const registerConversationAdoptionIpc = (
         assertLaunchAdmissionAllowed();
         if (runtimeProfile.adapterMode === 'production') {
           const ownerId = `native-route:${conversationId}`;
-          const prepared = await runtime.prepareNativeConversation(ownerId, projectPath, undefined);
+          const prepared = await runtime.prepareNativeConversation(
+            ownerId,
+            projectPath,
+            undefined,
+            nativeAuthorization,
+          );
           launch = { ownerId, prepared };
           try {
             assertLaunchAdmissionAllowed();
@@ -655,9 +681,10 @@ const registerConversationAdoptionIpc = (
       const networkAccess =
         runtimeProfile.adapterMode !== 'production'
           ? undefined
-          : typeof runtime.networkAccess === 'function'
-            ? runtime.networkAccess(projectPath)
-            : effectiveClaudeNetworkAccess(undefined, runtime.officialNetworkProvider(projectPath));
+          : effectiveClaudeNetworkAccess(
+              nativeAuthorization.authorization.networkAccess,
+              nativeAuthorization.authorization.officialNetworkProvider,
+            );
       return networkAccess
         ? withOfficialProviderAccess(
             { action: 'cli-launch', cwd: projectPath, ...networkAccess },

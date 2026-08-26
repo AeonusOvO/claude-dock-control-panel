@@ -1,10 +1,12 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type {
   ClaudeConfigView,
   ClaudeConnectionHistoryEntry,
   ClaudeConnectionTestResult,
   ClaudeEndpointProtocol,
+  ClaudeNextConversationConnectionState,
   ClaudeProjectState,
   ClaudeRouterManagementState,
   NetworkProviderId,
@@ -39,6 +41,7 @@ import {
   projectKey,
 } from './runtime-connection';
 import { ClaudeRuntimeRouting } from './runtime-routing';
+import { claudeOfficialAuthProvider } from './official-auth-status';
 import {
   captureClaudeNetworkAccess,
   type ClaudeLaunchAuthorization,
@@ -118,10 +121,18 @@ export const claudeNetworkAccessForLaunchSnapshot = (
 ): Readonly<ClaudeNetworkAccess> | undefined =>
   claudeNetworkAccessForConfig(snapshot.config, snapshot.protocol);
 
+export const resolveSessionConnectionConfigScope = (
+  runtime: { connectionConfigScope?: (sessionId: string, cwd: string) => string },
+  sessionId: string,
+  cwd: string,
+): string => runtime.connectionConfigScope?.call(runtime, sessionId, cwd) ?? cwd;
+
 export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting {
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
+  private readonly conversationConfigScopes = new Map<string, string>();
   private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly launchBaselineKey = randomBytes(32);
+  private nextConversationConfigQueue: Promise<void> = Promise.resolve();
 
   protected constructor(
     userDataPath: string,
@@ -140,6 +151,181 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       routerCommandEnvironment,
     );
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
+  }
+
+  private enqueueNextConversationConfig<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.nextConversationConfigQueue.then(operation, operation);
+    this.nextConversationConfigQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  private conversationScope(sessionId: string): string {
+    return path.join(this.conversationConfigScopeRoot, sessionId);
+  }
+
+  /** Returns the main-only profile owned by this conversation, falling back for legacy sessions. */
+  public connectionConfigScope(sessionId: string, cwd: string): string {
+    return this.conversationConfigScopes?.get(sessionId) ?? cwd;
+  }
+
+  public hasNextConversationConnection(): boolean {
+    return this.configStore.has(this.nextConversationConfigScope);
+  }
+
+  public async getNextConversationConnection(): Promise<ClaudeNextConversationConnectionState> {
+    if (!this.hasNextConversationConnection()) return {};
+    const config = this.configStore.getView(this.nextConversationConfigScope);
+    const officialAuth =
+      config.preset === 'anthropic' ? await claudeOfficialAuthProvider.getState() : undefined;
+    return {
+      config,
+      ...(officialAuth ? { officialAuth } : {}),
+    };
+  }
+
+  /** Captures the global choice atomically for one newly-created conversation. */
+  public bindNextConversationConnection(sessionId: string, cwd: string): void {
+    if (!this.hasNextConversationConnection()) {
+      throw new Error('尚未选择下个对话接入，请先在“接入”页面选择平台和模型。');
+    }
+    const scope = this.conversationScope(sessionId);
+    this.configStore.copyConnection(
+      this.nextConversationConfigScope,
+      scope,
+      this.configStore.getAllowBypassPermissions(cwd),
+    );
+    this.conversationConfigScopes.set(sessionId, scope);
+  }
+
+  /** Gives a restored conversation an isolated baseline before its remembered binding is applied. */
+  public bindProjectConversationConnection(sessionId: string, cwd: string): void {
+    const scope = this.conversationScope(sessionId);
+    const source = this.hasNextConversationConnection() ? this.nextConversationConfigScope : cwd;
+    this.configStore.copyConnection(source, scope, this.configStore.getAllowBypassPermissions(cwd));
+    this.conversationConfigScopes.set(sessionId, scope);
+  }
+
+  public releaseConversationConnection(sessionId: string): void {
+    const scope = this.conversationConfigScopes.get(sessionId);
+    if (!scope) return;
+    this.conversationConfigScopes.delete(sessionId);
+    this.configStore.remove(scope);
+  }
+
+  public clearNextConversationConnection(): void {
+    this.configStore.remove(this.nextConversationConfigScope);
+  }
+
+  /** Promotes an isolated restored session only after its full transaction has committed. */
+  public promoteConversationConnectionToNext(sessionId: string, cwd: string): void {
+    this.configStore.copyConnection(
+      this.connectionConfigScope(sessionId, cwd),
+      this.nextConversationConfigScope,
+    );
+  }
+
+  public saveNextConversationConfig(
+    input: SaveClaudeConfigInput,
+  ): Promise<ClaudeNextConversationConnectionState> {
+    return this.enqueueNextConversationConfig(async () => {
+      const snapshot = this.configStore.createSnapshot(this.nextConversationConfigScope);
+      let prepared: PreparedClaudeConfigSave | undefined;
+      try {
+        prepared = await this.prepareConnectionConfig(input);
+        this.commitPreparedConfig(this.nextConversationConfigScope, prepared);
+        return await this.getNextConversationConnection();
+      } catch (error) {
+        this.configStore.restoreSnapshot(this.nextConversationConfigScope, snapshot);
+        if (prepared) {
+          try {
+            await this.rollbackPreparedConfig(prepared);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              '下个对话接入保存失败，且外部路由回滚未完整完成。',
+              { cause: rollbackError },
+            );
+          }
+        }
+        throw error;
+      }
+    });
+  }
+
+  public testNextConversationConnection(
+    input: SaveClaudeConfigInput,
+  ): Promise<ClaudeConnectionTestResult> {
+    return this.enqueueNextConversationConfig(async () => {
+      const prepared = await this.prepareConnectionConfig(input);
+      try {
+        return await this.testPreparedConnection(this.nextConversationConfigScope, prepared);
+      } finally {
+        await this.rollbackPreparedConfig(prepared);
+      }
+    });
+  }
+
+  /** One serialized test-and-commit transaction used by the managed ChatGPT flow. */
+  public verifyAndSaveNextConversationConfig(
+    input: SaveClaudeConfigInput,
+    retryBeforeSecondAttempt?: () => Promise<void>,
+  ): Promise<{
+    connectionTest: ClaudeConnectionTestResult;
+    state: ClaudeNextConversationConnectionState;
+  }> {
+    return this.enqueueNextConversationConfig(async () => {
+      const snapshot = this.configStore.createSnapshot(this.nextConversationConfigScope);
+      let prepared: PreparedClaudeConfigSave | undefined;
+      try {
+        prepared = await this.prepareConnectionConfig(input);
+        let connectionTest = await this.testPreparedConnection(
+          this.nextConversationConfigScope,
+          prepared,
+        );
+        if (
+          !connectionTest.ok &&
+          retryBeforeSecondAttempt &&
+          (connectionTest.failureKind === 'network' || connectionTest.failureKind === 'timeout')
+        ) {
+          await retryBeforeSecondAttempt();
+          connectionTest = await this.testPreparedConnection(
+            this.nextConversationConfigScope,
+            prepared,
+          );
+        }
+        if (!connectionTest.ok) {
+          const rejected = prepared;
+          prepared = undefined;
+          await this.rollbackPreparedConfig(rejected);
+          return {
+            connectionTest,
+            state: await this.getNextConversationConnection(),
+          };
+        }
+        this.commitPreparedConfig(this.nextConversationConfigScope, prepared);
+        return {
+          connectionTest,
+          state: await this.getNextConversationConnection(),
+        };
+      } catch (error) {
+        this.configStore.restoreSnapshot(this.nextConversationConfigScope, snapshot);
+        if (prepared) {
+          try {
+            await this.rollbackPreparedConfig(prepared);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              '下个对话接入验证失败，且外部路由回滚未完整完成。',
+              { cause: rollbackError },
+            );
+          }
+        }
+        throw error;
+      }
+    });
   }
 
   protected abstract ensureSession(sessionId: string, cwd: string): RuntimeSession;
@@ -171,14 +357,15 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     return officialNetworkProviderForClaudePreset(this.configStore.getConfig(cwd).preset);
   }
 
-  public captureLaunchAuthorization(cwd: string): ClaudeLaunchAuthorization {
-    const launchSnapshot = this.configStore.createLaunchSnapshot(cwd);
+  public captureLaunchAuthorization(cwd: string, sessionId?: string): ClaudeLaunchAuthorization {
+    const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
+    const launchSnapshot = this.configStore.createLaunchSnapshot(configScope);
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(
       launchSnapshot.config.preset,
     );
     const networkAccess = claudeNetworkAccessForLaunchSnapshot(launchSnapshot);
     return Object.freeze({
-      cwdKey: projectKey(cwd),
+      cwdKey: projectKey(configScope),
       launchSnapshot,
       ...(networkAccess === undefined ? {} : { networkAccess }),
       ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
@@ -188,25 +375,31 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   public assertLaunchAuthorizationCurrent(
     cwd: string,
     authorization: ClaudeLaunchAuthorization,
+    sessionId?: string,
   ): void {
+    const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
     if (
-      authorization.cwdKey !== projectKey(cwd) ||
-      !this.configStore.launchSnapshotIsCurrent(cwd, authorization.launchSnapshot)
+      authorization.cwdKey !== projectKey(configScope) ||
+      !this.configStore.launchSnapshotIsCurrent(configScope, authorization.launchSnapshot)
     ) {
       throw new Error('Claude 接入配置在授权期间已更新，本次启动已取消，请重试。');
     }
   }
 
-  public captureLaunchConfigurationBaseline(cwd: string): ClaudeLaunchConfigurationBaseline {
-    const snapshot = this.configStore.createSnapshot(cwd);
-    const config = this.configStore.getConfig(cwd);
+  public captureLaunchConfigurationBaseline(
+    cwd: string,
+    sessionId?: string,
+  ): ClaudeLaunchConfigurationBaseline {
+    const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
+    const snapshot = this.configStore.createSnapshot(configScope);
+    const config = this.configStore.getConfig(configScope);
     const officialNetworkProvider = officialNetworkProviderForClaudePreset(config.preset);
     const networkAccess = claudeNetworkAccessForConfig(
       config,
-      this.configStore.getView(cwd).protocol,
+      this.configStore.getView(configScope).protocol,
     );
     return Object.freeze({
-      cwdKey: projectKey(cwd),
+      cwdKey: projectKey(configScope),
       ...(networkAccess === undefined ? {} : { networkAccess }),
       revision: this.baselineRevision(snapshot),
       ...(officialNetworkProvider === undefined ? {} : { officialNetworkProvider }),
@@ -216,8 +409,9 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   public assertLaunchConfigurationBaselineCurrent(
     cwd: string,
     baseline: ClaudeLaunchConfigurationBaseline,
+    sessionId?: string,
   ): void {
-    const current = this.captureLaunchConfigurationBaseline(cwd);
+    const current = this.captureLaunchConfigurationBaseline(cwd, sessionId);
     if (
       current.cwdKey !== baseline.cwdKey ||
       current.revision !== baseline.revision ||
@@ -445,8 +639,16 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   }
 
   /** The only project-route persistence point; callers hold the directory transaction here. */
-  public commitPreparedConfig(cwd: string, prepared: PreparedClaudeConfigSave): void {
-    this.configStore.save(cwd, prepared.input, prepared.presentation);
+  public commitPreparedConfig(
+    cwd: string,
+    prepared: PreparedClaudeConfigSave,
+    sessionId?: string,
+  ): void {
+    this.configStore.save(
+      sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd,
+      prepared.input,
+      prepared.presentation,
+    );
   }
 
   /** Performs fallible post-commit work while the caller still owns the tentative profile. */
@@ -457,9 +659,10 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   ): Promise<ClaudeProjectState> {
     await this.recordConnectionHistory(cwd, prepared.input, prepared.historyMetadata);
     const runtime = this.ensureSession(sessionId, cwd);
+    const configScope = this.connectionConfigScope(sessionId, cwd);
     if (!runtime.active) {
       await this.prepareRouteServices(
-        this.routeKindForConfig(this.configStore.getConfig(cwd)),
+        this.routeKindForConfig(this.configStore.getConfig(configScope)),
         sessionId,
         cwd,
       );
@@ -699,14 +902,15 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     prepared: PreparedClaudeConfigSave,
     assertCurrent: () => void = () => undefined,
     signal?: AbortSignal,
+    configScope = cwd,
   ): Promise<ClaudeConnectionTestResult> {
     assertCurrent();
     const config = normalizeClaudeConfig(prepared.input);
     const enteredCredential = prepared.input.credential?.trim();
-    const credential = enteredCredential || this.configStore.getCredential(cwd);
+    const credential = enteredCredential || this.configStore.getCredential(configScope);
     const fingerprint = connectionFingerprint(config, credential);
     const routeKind = this.routeKindForConfig(config);
-    const ownerId = `connection-test:${projectKey(cwd)}:${randomBytes(8).toString('hex')}`;
+    const ownerId = `connection-test:${projectKey(configScope)}:${randomBytes(8).toString('hex')}`;
     const reservation = this.routeLifecycle.reserve(ownerId, routeKind);
     try {
       const routeStarted = await this.prepareRouteServices(routeKind, ownerId, cwd);
@@ -716,7 +920,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       assertCurrent();
       const result = await testClaudeConnection(config, credential, signal);
       assertCurrent();
-      this.connectionChecks.set(projectKey(cwd), { fingerprint, result });
+      this.connectionChecks.set(projectKey(configScope), { fingerprint, result });
       return result;
     } finally {
       this.routeLifecycle.release(reservation);

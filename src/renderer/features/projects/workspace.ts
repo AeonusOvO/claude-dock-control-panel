@@ -193,13 +193,10 @@ export const createWorkspaceRenderer = (
     dependencies.flushPendingComposerFocus();
     if (workspace.activeSessionId !== dependencies.getLastClaudeSessionId()) {
       dependencies.setLastClaudeSessionId(workspace.activeSessionId);
-      dependencies.setConfigFormSessionId('');
-      dependencies.setConnectionEnvironmentReady(false);
       dependencies.setProviderGroupExpansionPending(
         dependencies.getSelectedRailTab() === 'connection',
       );
       dependencies.resetForProjectChange();
-      dependencies.clearProviderSelection();
       dependencies.resetProviderForm();
       const knownRuntimeState = dependencies.developmentRuntimeStates.get(
         workspace.activeSessionId,

@@ -28,6 +28,7 @@ export interface ConnectionFormWizardActions {
   dispose: () => void;
   initializeFromOnboarding: () => Promise<void>;
   render: () => void;
+  showChoice: () => void;
 }
 
 interface ConnectionActionsMotion {
@@ -120,8 +121,7 @@ export const createConnectionFormWizardActions = (
   const render = (): void => {
     const configure = formState.wizardStep === 'configure';
     const busy = operationBusy();
-    const progressMatchesCurrentScope =
-      formState.managedChatGptProgress?.sessionId === (deps.getActiveSessionId() || undefined);
+    const progressMatchesCurrentScope = formState.managedChatGptProgress?.sessionId === undefined;
     const interruptible =
       progressMatchesCurrentScope &&
       formState.managedChatGptProgress?.active === true &&
@@ -158,13 +158,12 @@ export const createConnectionFormWizardActions = (
       !formState.connectionEnvironmentReady
     ) {
       connectionWizardStatus.textContent = '请先完成 Claude Code 环境准备';
-    } else if (
-      formState.selectedProviderId === 'chatgpt-subscription' &&
-      !deps.getActiveSessionId()
-    ) {
-      connectionWizardStatus.textContent = '安装与授权完成；新建或打开对话后即可验证接入';
     } else {
-      connectionWizardStatus.textContent = `正在配置 ${findClaudeProvider(formState.selectedProviderId)?.label ?? '所选模型'}`;
+      const providerLabel =
+        formState.selectedProviderId === 'chatgpt-subscription'
+          ? 'ChatGPT 官方订阅'
+          : (findClaudeProvider(formState.selectedProviderId)?.label ?? '模型');
+      connectionWizardStatus.textContent = `正在配置下个对话使用的 ${providerLabel}`;
     }
   };
 
@@ -222,11 +221,7 @@ export const createConnectionFormWizardActions = (
       return;
     }
     const progress = formState.managedChatGptProgress;
-    if (
-      !progress ||
-      progress.sessionId !== (deps.getActiveSessionId() || undefined) ||
-      !progress.interruptible
-    ) {
+    if (!progress || progress.sessionId !== undefined || !progress.interruptible) {
       return;
     }
     connectionWizardPreviousButton.disabled = true;
@@ -294,12 +289,18 @@ export const createConnectionFormWizardActions = (
     },
     initializeFromOnboarding: async () => {
       const onboarding = await window.controlPanel.getOnboardingState();
-      if (!formState.selectedProviderId) {
+      if (
+        !formState.selectedProviderId &&
+        (onboarding.status === 'pending' || onboarding.status === 'in-progress')
+      ) {
         const providerId = onboardingProvider(onboarding);
         if (providerId) applyPresetUi(providerId, false);
       }
       render();
     },
     render,
+    showChoice: () => {
+      if (!operationBusy()) showStep('choice');
+    },
   };
 };

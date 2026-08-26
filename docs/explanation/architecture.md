@@ -39,21 +39,23 @@ preload: <dist/preload/preload.js>,
 
 主进程是全部业务状态的唯一事实源。渲染进程只持有派生的视图状态，不做业务判断。
 
-| 状态                       | 主进程持有者                             | 推送方式                                                   |
-| -------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
-| 项目列表、活动项目、主题   | `workspaceStore`                         | `workspace:state` 广播                                     |
-| 每项目的 Claude 状态       | `claude-runtime`                         | `claude:state` 广播                                        |
-| 每项目的 Codex 状态        | `codex-runtime`                          | `codex:state` 广播                                         |
-| 原生对话快照               | `native-conversation` 会话               | `native-conversation:snapshot` 广播                        |
-| 每条 Claude 对话的接入身份 | `ConversationPreferencesStore`           | 按需检查 / 应用后随项目状态返回                            |
-| 下载与更新                 | `download-center`、`application-updater` | `download:changed`、`software:application-updater-changed` |
-| 忙碌租约                   | `busy` 协调器                            | `busy:changed`                                             |
-| 启动引导进度               | `OnboardingStore`                        | 请求响应读取 / 原子 JSON 持久化                            |
-| 下一个新建对话的开发引擎   | `AgentRuntimeStore.nextRuntime`          | `runtime:get-next` / `runtime:set-next`                    |
+| 状态                         | 主进程持有者                             | 推送方式                                                   |
+| ---------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| 项目列表、活动项目、主题     | `workspaceStore`                         | `workspace:state` 广播                                     |
+| 每项目的 Claude 状态         | `claude-runtime`                         | `claude:state` 广播                                        |
+| 每项目的 Codex 状态          | `codex-runtime`                          | `codex:state` 广播                                         |
+| 原生对话快照                 | `native-conversation` 会话               | `native-conversation:snapshot` 广播                        |
+| 每条 Claude 对话的接入身份   | `ConversationPreferencesStore`           | 按需检查 / 应用后随项目状态返回                            |
+| 下载与更新                   | `download-center`、`application-updater` | `download:changed`、`software:application-updater-changed` |
+| 忙碌租约                     | `busy` 协调器                            | `busy:changed`                                             |
+| 启动引导进度                 | `OnboardingStore`                        | 请求响应读取 / 原子 JSON 持久化                            |
+| 下一个新建对话的开发引擎     | `AgentRuntimeStore.nextRuntime`          | `runtime:get-next` / `runtime:set-next`                    |
+| 下一个新建对话的平台与模型   | `ClaudeConfigStore` 应用级 profile       | `claude:get/save/test-next-*` 请求响应                     |
+| 已创建 Claude 会话的接入快照 | `ClaudeConfigStore` conversation profile | 创建时复制、关闭时释放                                     |
 
-渲染进程重新打开某个界面时不重建状态，而是重放最近一次广播快照。渲染端自身的异步反馈也是派生视图状态：busy 文案、disabled、`aria-busy` 与 live status 必须属于精确 operation token 和 session generation。工作区、目录或状态快照的无关重绘只消费当前 owner，不能恢复控件；只有仍为 current 的操作 settlement 可以结束并恢复它。新建对话的 runtime 在 main 创建 session 时从全局 `nextRuntime` 捕获并固化到该 session；之后改变选择只影响下一次新建，不修改任何现有项目或兄弟会话。Codex installer 与 App Server 登录/账号状态在 main 中是应用级单例；main 暴露单调 `revision` 和精确 `{ attempt, kind }` operation descriptor，renderer reload 后恢复原操作文案与 owner，并拒绝延迟快照或 completion。插件变更同样由 main 应用级单例持有；catalog snapshot 带 `{ attempt, kind, target, phase }`，相同逻辑请求加入已有 Promise，竞争请求不排队，renderer 只在 active 期间轮询并锁定完整 mutation surface。
+渲染进程重新打开某个界面时不重建状态，而是重放最近一次广播快照。渲染端自身的异步反馈也是派生视图状态：busy 文案、disabled、`aria-busy` 与 live status 必须属于精确 operation token 和 session generation。工作区、目录或状态快照的无关重绘只消费当前 owner，不能恢复控件；只有仍为 current 的操作 settlement 可以结束并恢复它。新建对话的 runtime 在 main 创建 session 时从全局 `nextRuntime` 捕获并固化到该 session；Claude 对话同时从应用级“下个对话接入”复制平台、端点、认证与模型的完整 profile。之后改变任一选择都只影响下一次新建，不修改任何现有项目或兄弟会话。Codex installer 与 App Server 登录/账号状态在 main 中是应用级单例；main 暴露单调 `revision` 和精确 `{ attempt, kind }` operation descriptor，renderer reload 后恢复原操作文案与 owner，并拒绝延迟快照或 completion。插件变更同样由 main 应用级单例持有；catalog snapshot 带 `{ attempt, kind, target, phase }`，相同逻辑请求加入已有 Promise，竞争请求不排队，renderer 只在 active 期间轮询并锁定完整 mutation surface。
 
-项目 `+` 的每次点击都拥有一个独立 session 和异步启动续体；同一项目连续点击十次不会合并，也不依赖哪一个终端仍在前台。只有 Codex 安装与登录这类应用级共享资源串行；等待者由 Codex/工作区状态事件立即唤醒，并以 5 秒异步定时器作为丢信号兜底，不占用 renderer 事件循环。历史索引使用异步文件 I/O，并在有界 JSONL 批次之间主动让出 main 事件循环，避免历史文件阻塞窗口与终端 IPC。
+项目 `+` 的每次点击都拥有一个独立 session、独立接入快照和异步启动续体；同一项目连续点击十次不会合并，也不依赖哪一个终端仍在前台。缺少下个对话接入或后台启动失败时，main 关闭精确临时 session，renderer 撤回 optimistic 行并显示失败原因，不能停留在“正在打开”。只有 Codex 安装与登录、全局接入保存这类应用级共享资源串行；等待者由状态事件立即唤醒，并以异步定时器作为丢信号兜底，不占用 renderer 事件循环。历史索引使用异步文件 I/O，并在有界 JSONL 批次之间主动让出 main 事件循环，避免历史文件阻塞窗口与终端 IPC。
 
 接入历史同样遵守双层所有权：renderer 的加载、应用、删除、重命名和专用恢复 surface 由单调 generation 与活动 session 共同持有，切换项目立即使旧 owner 失效；main 再确认该 session 仍映射到事务发起时的规范化项目目录。接入事务在 prepare 前保存项目配置快照，失败或取消时只在当前状态仍是本事务精确写入结果时恢复，并通过 prepared compensation 回滚它写入的 Router 外部状态；较新的项目配置或 Router 写入绝不被旧事务覆盖。
 
@@ -82,13 +84,13 @@ Claude 官方账号状态也归 main。`official-auth-status.ts` 以有界命令
 
 ## 数据流
 
-三条独立通路共 209 个频道，形态与频率不同：
+三条独立通路共 212 个频道，形态与频率不同：
 
-- **请求响应**（179 个）—— renderer `invoke`，main `handle`，返回结构化结果。
+- **请求响应**（182 个）—— renderer `invoke`，main `handle`，返回结构化结果。
 - **单向发送**（7 个）—— 高频或握手型 renderer → main 消息使用 `send/on`；包括 generation-fenced `terminal:write`，避免每次按键产生 Promise 往返。
 - **事件推送**（23 个）—— main 状态变化后广播，renderer 订阅并重渲染对应界面。
 
-`ControlPanelApi` 同样有 209 个成员，但分区不同：179 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
+`ControlPanelApi` 同样有 212 个成员，但分区不同：182 个请求方法、23 个事件订阅、6 个直接 send 方法和 1 个非 IPC `webUtils` 方法。第 7 个 send 频道由 `onAppQuitRequested` 的应答路径内部发出。完整映射见 [ipc-contract.md](../reference/ipc-contract.md)。
 
 ## 外部进程
 

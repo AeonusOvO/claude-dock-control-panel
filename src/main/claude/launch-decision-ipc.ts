@@ -129,6 +129,7 @@ export const registerClaudeLaunchDecisionIpc = (
         runtime.assertLaunchConfigurationBaselineCurrent(
           descriptor.cwd,
           reservation.baseline.configuration,
+          descriptor.sessionId,
         );
         runtime.assertRuntimeLaunchBaselineCurrent(
           descriptor.sessionId,
@@ -142,7 +143,10 @@ export const registerClaudeLaunchDecisionIpc = (
           );
         }
         return Object.freeze({
-          configuration: runtime.captureLaunchConfigurationBaseline(descriptor.cwd),
+          configuration: runtime.captureLaunchConfigurationBaseline(
+            descriptor.cwd,
+            descriptor.sessionId,
+          ),
           ...(descriptor.kind === 'relaunch' && descriptor.input.entryId !== undefined
             ? {
                 history: runtime.captureConnectionHistoryBaseline(
@@ -189,6 +193,7 @@ export const registerClaudeLaunchDecisionIpc = (
               runtime.assertLaunchConfigurationBaselineCurrent(
                 descriptor.cwd,
                 reservation.baseline.configuration,
+                descriptor.sessionId,
               );
               runtime.assertRuntimeLaunchBaselineCurrent(
                 descriptor.sessionId,
@@ -299,7 +304,10 @@ export const registerClaudeLaunchDecisionIpc = (
                   assertPreparationCurrent();
                 };
                 assertLaunchPreparationCurrent();
-                const authorization = runtime.captureLaunchAuthorization(descriptor.cwd);
+                const authorization = runtime.captureLaunchAuthorization(
+                  descriptor.cwd,
+                  descriptor.sessionId,
+                );
                 const networkAccess = baselineNetworkAccess(authorization);
                 if (
                   !sameClaudeNetworkAccess(
@@ -409,6 +417,7 @@ export const registerClaudeLaunchDecisionIpc = (
             runtime.assertLaunchConfigurationBaselineCurrent(
               descriptor.cwd,
               reservation.baseline.configuration,
+              descriptor.sessionId,
             );
             runtime.assertRuntimeLaunchBaselineCurrent(
               descriptor.sessionId,

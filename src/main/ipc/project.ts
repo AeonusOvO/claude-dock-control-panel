@@ -57,7 +57,7 @@ const registerStoredConversationIpc = ({
   conversationOwnerRegistry,
   describeWorkspace,
   failedWorkspaceResult,
-  guards: { validateSender },
+  guards: { requireClaudeRuntime, validateSender },
   managedConfigTransactions,
   projectDirectoryLifecycle,
   workspace,
@@ -102,6 +102,12 @@ const registerStoredConversationIpc = ({
           const openedSessionId = workspace.getState().activeSessionId;
           if (!openedSessionId) {
             throw new Error('无法创建历史会话终端。');
+          }
+          try {
+            requireClaudeRuntime().bindProjectConversationConnection(openedSessionId, resolved);
+          } catch (error) {
+            workspace.close(openedSessionId);
+            throw error;
           }
           ownership.assertCurrent();
           workspaceStore.addProject(resolved);
@@ -185,14 +191,26 @@ export const registerProjectIpc = (dependencies: ProjectIpcDependencies): void =
       const resolved = resolveDirectory(validateProjectPath(projectPath));
       return projectDirectoryLifecycle.runOpenSync(resolved, (ownership) => {
         ownership.assertCurrent();
-        const state = workspace.openConversation(resolved, undefined, agentRuntimeStore.getNext());
+        const runtime = agentRuntimeStore.getNext();
+        const state = workspace.openConversation(resolved, undefined, runtime);
         const createdSessionId = state.activeSessionId;
+        if (!createdSessionId) {
+          throw new Error('无法创建新对话。');
+        }
+        try {
+          if (runtime === 'claude') {
+            requireClaudeRuntime().bindNextConversationConnection(createdSessionId, resolved);
+          }
+        } catch (error) {
+          workspace.close(createdSessionId);
+          throw error;
+        }
         ownership.assertCurrent();
         workspaceStore.addProject(resolved);
         return {
           createdSessionId,
           ok: true,
-          runtime: workspace.getDevelopmentRuntime(createdSessionId),
+          runtime,
           state: describeWorkspace(state),
         } satisfies WorkspaceResult;
       });

@@ -19,6 +19,11 @@ export interface ProjectOperationDependencies {
   /* Fallback for the folder dialog and the ceiling the picker will not walk above. */
   homeDirectory: string;
   nextDevelopmentRuntime?: () => DevelopmentRuntime;
+  prepareCreatedConversation?: (
+    sessionId: string,
+    projectPath: string,
+    runtime: DevelopmentRuntime,
+  ) => void;
   projectDirectoryLifecycle: ProjectDirectoryLifecycleCoordinator;
   workspace: TerminalWorkspace;
   workspaceStore: WorkspaceStore;
@@ -39,6 +44,7 @@ export const createProjectOperations = ({
   describeWorkspace,
   homeDirectory,
   nextDevelopmentRuntime = () => 'claude',
+  prepareCreatedConversation = () => undefined,
   projectDirectoryLifecycle,
   workspace,
   workspaceStore,
@@ -106,11 +112,23 @@ export const createProjectOperations = ({
         ownership.assertCurrent();
         const result = workspace.openProject(resolved, nextDevelopmentRuntime());
 
+        const createdSessionId = result.reused ? undefined : result.state.activeSessionId;
+        if (createdSessionId) {
+          try {
+            prepareCreatedConversation(
+              createdSessionId,
+              resolved,
+              workspace.getDevelopmentRuntime(createdSessionId),
+            );
+          } catch (error) {
+            workspace.close(createdSessionId);
+            throw error;
+          }
+        }
+
         // Save to persistent workspace only while this open still owns the folder lifecycle.
         ownership.assertCurrent();
         workspaceStore.addProject(resolved);
-
-        const createdSessionId = result.reused ? undefined : result.state.activeSessionId;
 
         return {
           ...(createdSessionId

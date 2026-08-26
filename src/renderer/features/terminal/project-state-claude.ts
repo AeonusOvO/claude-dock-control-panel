@@ -235,9 +235,6 @@ export const createTerminalClaudeStateActions = (
 
     const { config, installation, metrics } = state;
     if (activeDevelopmentRuntime() !== 'claude') {
-      if (connectionForm.getConfigFormSessionId() !== state.sessionId) {
-        connectionForm.populateClaudeConfigForm(state);
-      }
       connectionForm.renderProviderPicker();
       connectionForm.syncConnectionInteractivity();
       return;
@@ -322,13 +319,8 @@ export const createTerminalClaudeStateActions = (
     claudeRuntimeWarning.hidden = !state.warning;
     claudeRuntimeWarning.textContent = state.warning ?? '';
 
-    if (connectionForm.getConfigFormSessionId() !== state.sessionId) {
-      connectionForm.populateClaudeConfigForm(state);
-    }
     if (connectionForm.getProviderGroupExpansionPending()) {
-      connectionForm.applyDefaultProviderGroupExpansion(
-        connectionForm.getSelectedProviderId() ?? config.preset,
-      );
+      connectionForm.applyDefaultProviderGroupExpansion(connectionForm.getSelectedProviderId());
       connectionForm.setProviderGroupExpansionPending(false);
     }
     connectionForm.renderProviderPicker();

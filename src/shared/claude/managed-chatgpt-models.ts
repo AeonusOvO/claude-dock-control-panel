@@ -1,5 +1,6 @@
 const nonChatModel = /(?:audio|embedding|image|moderation|realtime|speech|transcri|tts|whisper)/i;
 
+/** One recommendation policy shared by gateway persistence and the model picker. */
 export const recommendedChatModel = (models: readonly string[]): string => {
   if (models.length === 0) {
     throw new Error('网关没有返回可用模型。');

@@ -11,6 +11,7 @@ import { selectRouterKernelState } from '../../shared/router/kernel';
 import type { RunClaudeProjectConfigTransaction } from '../claude/config-transaction';
 import type { SavedRouterProvider } from '../claude/router-manager';
 import type { PreparedClaudeConfigSave } from '../claude/runtime';
+import { resolveSessionConnectionConfigScope } from '../claude/runtime-connection-config';
 import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
 import type { Registry } from '../infra/registry';
@@ -105,8 +106,11 @@ const registerRouterKernelIpc = (
       const validatedSessionId = validateSessionId(sessionId);
       const status = workspace.getStatus(validatedSessionId);
       try {
+        const runtime = requireClaudeRuntime();
         await requireCcSwitchAdapter().exportProvider(
-          requireClaudeRuntime().currentProviderForCcSwitch(status.cwd),
+          runtime.currentProviderForCcSwitch(
+            resolveSessionConnectionConfigScope(runtime, validatedSessionId, status.cwd),
+          ),
         );
         return {
           message: '已通过 ccswitch:// 打开单向导入确认；请在 CC Switch 中确认。',
@@ -262,7 +266,8 @@ const registerRouterProviderIpc = (
               const projectState =
                 await runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
                   assertCurrent,
-                  commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
+                  commit: (prepared) =>
+                    runtime.commitPreparedConfig(status.cwd, prepared, validatedSessionId),
                   complete: (prepared) =>
                     runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
                   cwd: status.cwd,
@@ -317,7 +322,8 @@ const registerRouterProviderIpc = (
             let saved: SavedRouterProvider | undefined;
             const projectState = await runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
               assertCurrent,
-              commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
+              commit: (prepared) =>
+                runtime.commitPreparedConfig(status.cwd, prepared, validatedSessionId),
               complete: (prepared) =>
                 runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
               cwd: status.cwd,

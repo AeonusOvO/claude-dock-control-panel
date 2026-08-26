@@ -5,6 +5,7 @@ import type {
   ClaudeConversationModelApplyResult,
   ClaudeConnectionTestResult,
   ClaudeConnectionHistoryResult,
+  ClaudeNextConversationConnectionResult,
   ClaudeOperationResult,
   ClaudeProjectState,
 } from '../../shared/contracts';
@@ -12,7 +13,10 @@ import type { RunClaudeProjectConfigTransaction } from '../claude/config-transac
 import { applyConversationModelConnection } from '../claude/conversation-model-application';
 import type { ReportClaudeOperationFailure } from '../claude/operation-failure';
 import type { PreparedClaudeConfigSave } from '../claude/runtime';
-import { claudeNetworkAccessForConfigInput } from '../claude/runtime-connection-config';
+import {
+  claudeNetworkAccessForConfigInput,
+  resolveSessionConnectionConfigScope,
+} from '../claude/runtime-connection-config';
 import { type ClaudeNetworkAccess, effectiveClaudeNetworkAccess } from '../claude/runtime-types';
 import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
@@ -33,7 +37,10 @@ export interface ClaudeConnectionIpcDependencies {
   configTransactionState: (error: unknown) => ClaudeProjectState | undefined;
   guards: Pick<
     MainGuards,
-    'requireClaudeRuntime' | 'validateSender' | 'withOfficialProviderAccess'
+    | 'assertExternalRoutingWritesAllowed'
+    | 'requireClaudeRuntime'
+    | 'validateSender'
+    | 'withOfficialProviderAccess'
   >;
   invalidateAndWaitForMatchingDevelopmentSessionOperation: (
     sessionId: string,
@@ -98,7 +105,8 @@ const registerConnectionHistoryApplyIpc = ({
             activeApplications.set(validatedSessionId, signal);
             return runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
               assertCurrent,
-              commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
+              commit: (prepared) =>
+                runtime.commitPreparedConfig(status.cwd, prepared, validatedSessionId),
               complete: (prepared) =>
                 runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
               cwd: status.cwd,
@@ -126,6 +134,7 @@ const registerConnectionHistoryApplyIpc = ({
                       prepared,
                       assertCurrent,
                       signal,
+                      resolveSessionConnectionConfigScope(runtime, validatedSessionId, status.cwd),
                     );
                     const officialLoginDeferred =
                       !connectionTest.ok &&
@@ -218,7 +227,11 @@ const registerConversationModelIpc = ({
           const state = await withDevelopmentSessionOperation(
             validatedSessionId,
             async (assertCurrent) => {
-              await runtime.bindConversationToCurrent(status.cwd, validatedConversationId);
+              await runtime.bindConversationToCurrent(
+                status.cwd,
+                validatedConversationId,
+                resolveSessionConnectionConfigScope(runtime, validatedSessionId, status.cwd),
+              );
               assertCurrent();
               return runtime.publishProjectState(validatedSessionId, status.cwd);
             },
@@ -242,6 +255,7 @@ const registerConversationModelIpc = ({
                   status.cwd,
                   validatedConversationId,
                   assertCurrent,
+                  resolveSessionConnectionConfigScope(runtime, validatedSessionId, status.cwd),
                 ),
             ),
           runClaudeProjectConfigTransaction,
@@ -273,19 +287,71 @@ const registerConversationModelIpc = ({
   );
 };
 
-export const registerClaudeConnectionIpc = ({
-  claudeFailure,
-  configTransactionState,
-  guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
-  invalidateAndWaitForMatchingDevelopmentSessionOperation,
-  runClaudeProjectConfigTransaction,
-  withDevelopmentSessionOperation,
-  workspace,
+const registerNextConversationConnectionIpc = ({
+  guards: {
+    assertExternalRoutingWritesAllowed,
+    requireClaudeRuntime,
+    validateSender,
+    withOfficialProviderAccess,
+  },
 }: ClaudeConnectionIpcDependencies): void => {
+  ipcMain.handle(
+    CHANNELS.CLAUDE_SAVE_NEXT_CONFIG,
+    async (event, input: unknown): Promise<ClaudeNextConversationConnectionResult> => {
+      validateSender(event);
+      const runtime = requireClaudeRuntime();
+      try {
+        assertExternalRoutingWritesAllowed();
+        const validatedInput = validateClaudeConfigInput(input);
+        const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
+        const state = await withOptionalNetworkAccess(
+          withOfficialProviderAccess,
+          { action: 'provider-switch', cwd: undefined, networkScope: 'application' },
+          networkAccess,
+          () => undefined,
+          () => runtime.saveNextConversationConfig(validatedInput),
+        );
+        return { ok: true, state };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '无法保存下个对话接入。';
+        return {
+          ...reportConfigurationFailure('user-input', message, error),
+          error: message,
+          ok: false,
+          state: await runtime.getNextConversationConnection(),
+        };
+      }
+    },
+  );
+};
+
+export const registerClaudeConnectionIpc = (
+  dependencies: ClaudeConnectionIpcDependencies,
+): void => {
+  registerNextConversationConnectionIpc(dependencies);
+  const {
+    claudeFailure,
+    configTransactionState,
+    guards: {
+      assertExternalRoutingWritesAllowed,
+      requireClaudeRuntime,
+      validateSender,
+      withOfficialProviderAccess,
+    },
+    invalidateAndWaitForMatchingDevelopmentSessionOperation,
+    runClaudeProjectConfigTransaction,
+    withDevelopmentSessionOperation,
+    workspace,
+  } = dependencies;
   registerConversationModelIpc({
     claudeFailure,
     configTransactionState,
-    guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+    guards: {
+      assertExternalRoutingWritesAllowed,
+      requireClaudeRuntime,
+      validateSender,
+      withOfficialProviderAccess,
+    },
     invalidateAndWaitForMatchingDevelopmentSessionOperation,
     runClaudeProjectConfigTransaction,
     withDevelopmentSessionOperation,
@@ -304,7 +370,8 @@ export const registerClaudeConnectionIpc = ({
         const state = await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
           runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
             assertCurrent,
-            commit: (prepared) => runtime.commitPreparedConfig(status.cwd, prepared),
+            commit: (prepared) =>
+              runtime.commitPreparedConfig(status.cwd, prepared, validatedSessionId),
             complete: (prepared) =>
               runtime.completePreparedConfigSave(validatedSessionId, status.cwd, prepared),
             cwd: status.cwd,
@@ -346,7 +413,12 @@ export const registerClaudeConnectionIpc = ({
   registerConnectionHistoryApplyIpc({
     claudeFailure,
     configTransactionState,
-    guards: { requireClaudeRuntime, validateSender, withOfficialProviderAccess },
+    guards: {
+      assertExternalRoutingWritesAllowed,
+      requireClaudeRuntime,
+      validateSender,
+      withOfficialProviderAccess,
+    },
     invalidateAndWaitForMatchingDevelopmentSessionOperation,
     runClaudeProjectConfigTransaction,
     withDevelopmentSessionOperation,
@@ -425,7 +497,7 @@ export const registerClaudeConnectionIpc = ({
           runClaudeProjectConfigTransaction<boolean>({
             assertCurrent,
             commit: (preparedAllowed) =>
-              runtime.commitAllowBypassPermissions(status.cwd, preparedAllowed),
+              runtime.commitAllowBypassPermissions(status.cwd, preparedAllowed, validatedSessionId),
             complete: () => runtime.publishProjectState(validatedSessionId, status.cwd),
             cwd: status.cwd,
             prepare: () => allowed,

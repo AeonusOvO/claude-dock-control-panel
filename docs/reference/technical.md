@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.23（2026-08-25）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.27（2026-08-26）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -113,7 +113,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
         ├── AgentRuntimeStore ── 下一次新建使用的 Claude Code / Codex 全局偏好
         ├── SessionOperationCoordinator ── per-session PTY 变更租约 / 取消后等待 unwind
         ├── ClaudeRuntime ── 版本门禁 / 临时 settings / statusLine 指标
-        │        ├── ClaudeConfigStore ── safeStorage / 项目级接入配置
+        │        ├── ClaudeConfigStore ── safeStorage / 下个对话 profile / 会话独立快照
         │        ├── ClaudeConnectionHistoryStore ── version 3 名称 / 协议 / 加密回放
         │        ├── ModelSpeedPreferencesStore ── 去凭据目标哈希 / 标准或快速偏好
         │        └── launch-owned Hooks ── 活动事件 / PermissionRequest named pipe
@@ -672,16 +672,17 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   store schema 为 version 2，读取 version 1 的 `restoreLastWorkspaceOnStartup` 时把旧值同时迁移到两个
   新开关，避免升级后擅自改变原有选择。设置页和“不再提示”都通过同一严格校验的
   `app:set-conversation-resume-preferences` 原子保存。
-- renderer 启动时从 `WorkspaceStore` 投影中选择最后活动项目，再读取按时间倒序的第一条 Claude 对话；
+- main 启动时从 `WorkspaceStore` 投影中选择最后活动项目，再读取按时间倒序的第一条 Claude 对话；
   自动模型开启时忽略手动历史点击的询问偏好，直接把该 conversation 的完整绑定送入与手动恢复共用的
   `applyConversationModelConnection()`。`testPreparedConnection()` 会先为候选配置保留路由、异步启动其
   所需的托管 ChatGPT 网关或 CCR，再执行真实连接测试；测试通过后才 commit、complete 并调用
-  `launchClaudeWithSession()`。候选配置与当前配置相同也不能跳过此过程，因为静态配置不能证明后台
-  服务正在运行。测试或后续提交失败时，项目快照、Router 变更和本次新启动的闲置路由服务共同回滚。
-  自动模型关闭时不检查、不改写接入，仅恢复对话内容。
-- 只开启自动模型时没有可见 conversation owner，main bootstrap 在创建窗口前用短生命周期 PowerShell
-  session 提供 generation、取消和回滚边界，恢复成功或失败后都关闭该 session；两项都开启时该隐藏路径
-  跳过，由可见终端拥有事务。静态 HTML 首帧已将 composer 和发送按钮设为 disabled；可见恢复打开
+  `launchClaudeWithSession()`。候选配置与已保存配置相同也不能跳过此过程，因为静态配置不能证明后台
+  服务正在运行。测试与应用成功后把该隔离 profile 提升为全局“下个对话接入”；失败时 profile、Router
+  变更和本次新启动的闲置路由服务共同回滚。自动模型关闭时在启动阶段清除全局下个对话 profile，界面
+  明确回到“尚未选择接入”，但不删除任何历史对话的绑定。
+- 无论“自动加载上次对话”是否同时开启，main bootstrap 都在创建窗口前用短生命周期 PowerShell session
+  提供 generation、取消和回滚边界，完成模型验证及全局 profile 提升后关闭该 session。随后可见恢复只
+  捕获这份已确认的全局选择，不再依赖 renderer 先打开某个终端。静态 HTML 首帧已将 composer 和发送按钮设为 disabled；可见恢复打开
   stored conversation 后立即用 `beginTerminalMask()` 显示“正在连接模型…”，再在遮罩内完成模型识别，
   不留“先可输入、后上锁”的 hydration 间隙。`ClaudeLaunchAttemptRegistry` 同时禁用 composer、设置
   xterm `disableStdin`、拦截 raw terminal write，遮罩和三层输入门在 settlement 后统一释放。
@@ -925,6 +926,13 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 - `TerminalWorkspace` 按 session ID 保存实际 runtime。`project:add`、`project:open-conversation` 在创建
   session 的同步提交点读取 nextRuntime，并把 `createdSessionId + runtime` 一起返回；renderer 后续启动
   永远使用这两个精确值，切换前台或稍后改变偏好都不会改写 owner。
+- `ClaudeConfigStore` 另以 main-only 应用 scope 保存“下个对话接入”的完整平台、协议、端点、认证、加密
+  凭据与主/小型模型。接入页不要求活动项目，通过 `claude:get-next-connection`、
+  `claude:test-next-connection`、`claude:save-next-config` 读取、真实测试并原子保存这份选择；失败恢复事务前
+  快照，renderer 同时恢复原选择并显示错误。
+- 每个新 Claude 终端或全新原生对话在创建同步提交点复制一份 conversation profile。后台预检、路由准备、
+  PTY/SDK 启动和后续状态读取只使用这份不可变快照；用户随后切换下个模型不会取消或改写已接受的会话。
+  关闭精确会话时释放对应 profile。历史恢复先创建隔离 profile，再在真实测试和事务提交成功后应用原绑定。
 - `ControlPanelApi` 只暴露结构化 runtime、安装、登录、退出、账号状态和启动方法。preload
   不提供任意命令、任意 App Server method 或任意外链入口；主进程继续验证 sender、session、
   枚举值和登录 URL。
@@ -1008,8 +1016,9 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   `ClaudeConfigStore` 加密。CLIProxyAPI 运行时必须读取的 `config.yaml` 含本机明文副本，因此该文件
   用权限 `0600` 写入且不进入仓库、日志或 IPC 状态。只有高级入口被点击时主进程才把管理密钥写入
   剪贴板并打开 `/management.html`，密钥不返回 renderer。
-- “一键安装并登录”IPC 只返回净化后的状态，`sessionId` 可选。没有项目时先完成应用级 Claude Code
-  检测/安装、网关安装、OpenAI 授权、启动与模型发现；打开项目后才进入连接实测、配置保存和会话恢复。
+- “一键安装并登录”IPC 只返回净化后的状态，普通接入不传 `sessionId`。没有项目也会连续完成应用级
+  Claude Code 检测/安装、网关安装、OpenAI 授权、启动、模型发现、真实连接测试与全局下个对话 profile
+  保存，共 8 个可观察步骤；任一步失败都返回明确结果并保留原选择，不会停在第 6 步形成伪成功。
   操作先检查 Claude Code；缺失时调用项目已有的官方
   安装路径补齐，再以隐藏窗口运行
   `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；
@@ -1028,7 +1037,7 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   本地网关进程，再只清除 `auth/` 内受管授权文件和 `state.json` 中的授权/进程记录。该操作不经过
   Provider 预检、不要求项目或模型、不调用浏览器 API，也不读取或删除浏览器 Cookie、Google 登录或
   Codex/Claude Code 用户目录。退出成功后界面进入等待授权状态；新的浏览器授权必须由用户再次点击主按钮。
-- 托管接入开始时若 `ClaudeRuntime.isActive(sessionId)` 为真，主进程先 `workspace.stop()` 并把
+- 兼容的会话内托管切换若收到 `sessionId` 且 `ClaudeRuntime.isActive(sessionId)` 为真，主进程先 `workspace.stop()` 并把
   runtime 标为 inactive；这是计费安全边界，不允许旧 PTY 在最长 10 分钟的授权窗口里继续使用启动
   时的中转环境。真实测试与保存成功后，主进程以 `prepareLaunch(..., 'continue')` 重新生成临时
   settings 和环境、重启 PTY 并恢复最近会话；准备、spawn 或写入失败都会再次停止 PTY，绝不回落到

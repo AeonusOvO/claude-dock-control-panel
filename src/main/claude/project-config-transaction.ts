@@ -10,6 +10,7 @@ import type {
   ClaudeProjectConfigTransactionOptions,
   RunClaudeProjectConfigTransaction,
 } from './config-transaction';
+import { resolveSessionConnectionConfigScope } from './runtime-connection-config';
 
 export interface ClaudeProjectConfigTransactionDependencies {
   acquireConfigTransactionIsolation: (sessionId: string, cwd: string) => Promise<void>;
@@ -39,6 +40,9 @@ export const createRunClaudeProjectConfigTransaction = ({
     options: ClaudeProjectConfigTransactionOptions<TPrepared>,
   ): Promise<ClaudeProjectState> => {
     assertExternalRoutingWritesAllowed();
+    const configScope =
+      options.configScope ??
+      resolveSessionConnectionConfigScope(options.runtime, options.sessionId, options.cwd);
     const assertTargetCurrent = (): void => {
       const currentStatus = workspace.getStatus(options.sessionId);
       if (!sameDirectory(currentStatus.cwd, options.cwd)) {
@@ -56,7 +60,7 @@ export const createRunClaudeProjectConfigTransaction = ({
       commit: options.commit,
       complete: options.complete,
       coordinator: managedConfigTransactions,
-      createSnapshot: () => options.runtime.createConfigSnapshot(options.cwd),
+      createSnapshot: () => options.runtime.createConfigSnapshot(configScope),
       cwd: options.cwd,
       mergeCompletionSnapshot: (committed, completed) =>
         options.runtime.mergeConfigCompletionSnapshot(committed, completed),
@@ -69,7 +73,7 @@ export const createRunClaudeProjectConfigTransaction = ({
         return options.runtime.getState(options.sessionId, options.cwd);
       },
       rollbackPrepared: (prepared) => options.runtime.rollbackPreparedConfig(prepared),
-      restoreSnapshot: (snapshot) => options.runtime.restoreConfigSnapshot(options.cwd, snapshot),
+      restoreSnapshot: (snapshot) => options.runtime.restoreConfigSnapshot(configScope, snapshot),
       sessionId: options.sessionId,
       validatePrepared: options.validatePrepared,
     });

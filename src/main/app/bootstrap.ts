@@ -19,6 +19,7 @@ import { ManagedChatGptGateway } from '../claude/managed-chatgpt-gateway';
 import { ClaudePermissionBridge } from '../claude/permission-bridge';
 import type { PermissionModeProbes } from '../claude/permission-mode-probe';
 import { ClaudeRuntime } from '../claude/runtime';
+import { resolveSessionConnectionConfigScope } from '../claude/runtime-connection-config';
 import { ClaudeSessionManager } from '../claude/session-manager';
 import type { ClaudeStatePublisher } from '../claude/state-publisher';
 import { ClaudeStreamDiagnosticsStore } from '../claude/stream-diagnostics-store';
@@ -819,6 +820,7 @@ const runStartupModelRestore = async ({
               projectPath,
               conversation.conversationId,
               assertCurrent,
+              resolveSessionConnectionConfigScope(runtime, sessionId, projectPath),
             );
           if (!networkAccess) {
             return prepare();
@@ -836,7 +838,9 @@ const runStartupModelRestore = async ({
         sessionId,
         withDevelopmentSessionOperation: ipc.withDevelopmentSessionOperation,
       });
+      runtime.promoteConversationConnectionToNext(sessionId, projectPath);
     },
+    clearNextConnection: () => runtime.clearNextConversationConnection(),
     closeTemporarySession: (sessionId) => {
       if (!workspace.hasSession(sessionId)) return;
       runtime.closeSession(sessionId);
@@ -856,7 +860,9 @@ const runStartupModelRestore = async ({
       const before = new Set(workspace.getState().sessions.map(({ id }) => id));
       const opened = workspace.openProject(projectPath, 'claude').state;
       const sessionId = opened.activeSessionId;
-      return sessionId && !before.has(sessionId) ? sessionId : undefined;
+      if (!sessionId || before.has(sessionId)) return undefined;
+      runtime.bindProjectConversationConnection(sessionId, projectPath);
+      return sessionId;
     },
     projectExists: existsSync,
     projectRuntime: () => 'claude',

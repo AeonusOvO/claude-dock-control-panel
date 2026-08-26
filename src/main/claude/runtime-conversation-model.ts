@@ -50,6 +50,7 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
   protected async currentConversationBinding(
     cwd: string,
     snapshot?: ClaudeLaunchConfigSnapshot,
+    configScope = cwd,
   ): Promise<ConversationConnectionBinding> {
     const stored = snapshot?.storage.project;
     const view: ClaudeConfigView = snapshot
@@ -64,7 +65,7 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
           sourceModel: stored?.sourceModel,
           sourceModelFast: stored?.sourceModelFast,
         }
-      : this.configStore.getView(cwd);
+      : this.configStore.getView(configScope);
     const account = await this.accountForConversationBinding(view.preset);
     return createConversationConnectionBinding({
       account,
@@ -72,10 +73,10 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
         view.protocol === 'openai'
           ? snapshot
             ? snapshot.sourceCredential
-            : this.configStore.getSourceCredential(cwd)
+            : this.configStore.getSourceCredential(configScope)
           : snapshot
             ? snapshot.credential
-            : this.configStore.getCredential(cwd),
+            : this.configStore.getCredential(configScope),
       preferReplayConfig: false,
       replay: snapshot
         ? this.conversationReplayForView(cwd, view)
@@ -95,12 +96,16 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
     });
   }
 
-  public async bindConversationToCurrent(cwd: string, conversationId: string): Promise<void> {
+  public async bindConversationToCurrent(
+    cwd: string,
+    conversationId: string,
+    configScope = cwd,
+  ): Promise<void> {
     if (!isConversationId(conversationId)) throw new Error('历史对话标识无效。');
-    const binding = await this.currentConversationBinding(cwd);
+    const binding = await this.currentConversationBinding(cwd, undefined, configScope);
     this.conversationPreferences.record(conversationId, {
       binding,
-      model: this.configStore.getConfig(cwd).model,
+      model: this.configStore.getConfig(configScope).model,
     });
   }
 
@@ -122,6 +127,7 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
     cwd: string,
     conversationId: string,
     assertCurrent: () => void = () => undefined,
+    configScope = cwd,
   ): Promise<PreparedClaudeConfigSave> {
     const remembered = this.conversationPreferences.get(conversationId);
     let binding = remembered?.binding;
@@ -132,12 +138,12 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
           account: await this.accountForConversationBinding(replay.config.preset),
           credential: replay.config.credential,
           replay,
-          view: this.configStore.getView(cwd),
+          view: this.configStore.getView(configScope),
         });
       }
     }
     if (!binding) throw new Error('这个旧对话没有可恢复的原始接入记录。');
-    const current = await this.currentConversationBinding(cwd);
+    const current = await this.currentConversationBinding(cwd, undefined, configScope);
     if (!conversationBindingIsRestorable(binding, current)) {
       throw new Error('该对话的原订阅账户与当前账户不同，无法在不重新登录的情况下安全恢复。');
     }
@@ -152,7 +158,10 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
     preference: ConversationModelMismatchBehavior = this.conversationModelPreference(),
   ): Promise<ClaudeConversationModelResolution> {
     if (!isConversationId(conversationId)) throw new Error('历史对话标识无效。');
-    const current = await this.currentConversationBinding(cwd);
+    const configScope = this.hasNextConversationConnection()
+      ? this.nextConversationConfigScope
+      : cwd;
+    const current = await this.currentConversationBinding(cwd, undefined, configScope);
     const remembered = this.conversationPreferences.get(conversationId);
     const legacyModel =
       remembered?.model ??
@@ -174,7 +183,7 @@ export abstract class ClaudeRuntimeConversationModels extends ClaudeRuntimeLaunc
               : await this.accountForConversationBinding(replay.config.preset),
           credential: replay.config.credential,
           replay,
-          view: this.configStore.getView(cwd),
+          view: this.configStore.getView(configScope),
         });
         source = 'legacy-inferred';
       }

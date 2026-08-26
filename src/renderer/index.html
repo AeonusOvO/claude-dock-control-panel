@@ -294,11 +294,11 @@
                 aria-live="polite"
                 aria-atomic="true"
               >
-                <span>当前接入</span>
+                <span>下个对话接入</span>
                 <div>
-                  <strong id="current-connection-name">当前没有打开对话</strong>
+                  <strong id="current-connection-name">尚未选择接入</strong>
                   <small id="current-connection-metadata"
-                    >新建或打开对话后，这里会显示实际生效的平台、账号和模型。</small
+                    >请先选择平台和模型；保存后，下个新对话会立即捕获这套配置。</small
                   >
                 </div>
               </div>
@@ -2380,7 +2380,7 @@
                 <div class="onboarding-step__copy">
                   <span class="onboarding-kicker">自动准备</span>
                   <h2>先确认环境，不让你填写能自动发现的内容</h2>
-                  <p>这里只报告真实状态；项目级路由、模型与登录会在打开项目后继续完成。</p>
+                  <p>这里只报告真实状态；平台与模型可随后在“接入”页独立完成，不要求先打开对话。</p>
                 </div>
                 <div class="onboarding-checklist" id="onboarding-checklist" aria-busy="false">
                   <div data-onboarding-check="desktop" data-tone="ready">
@@ -2403,7 +2403,7 @@
                     <span class="onboarding-checklist__icon" aria-hidden="true">↻</span>
                     <span
                       ><strong>接入与路由</strong
-                      ><small>打开项目后自动选择最短可用链路并真实测试</small></span
+                      ><small>进入“接入”后自动选择可用链路并真实测试</small></span
                     >
                     <output>自动</output>
                   </div>
@@ -2501,7 +2501,7 @@
                   <h2>你的工作区已经就位</h2>
                   <p>
                     进入后，ClaudeDock
-                    会在当前项目内继续执行接入检测、组件补齐、模型发现与真实连接测试。
+                    可先在“接入”页完成平台、模型与真实连接测试；下一个对话会捕获该选择。
                   </p>
                 </div>
                 <dl class="onboarding-summary">
@@ -3175,7 +3175,7 @@
                     <span>
                       <strong>自动连接最近一次选择的平台和模型</strong>
                       <small
-                        >启动后连接最近对话绑定的平台、账户/API、接口、详细模型和简单模型；默认开启，关闭后启动时不接入模型。</small
+                        >启动后恢复并验证最近一次的平台、账户/API、接口、详细模型和简单模型；默认开启，关闭后启动时不选择接入。</small
                       >
                     </span>
                     <input

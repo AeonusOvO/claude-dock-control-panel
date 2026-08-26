@@ -92,6 +92,7 @@ describe('managed route launch guards', () => {
     const projectPath = path.resolve('.');
     const conversationId = '11111111-1111-4111-8111-111111111111';
     const openConversation = vi.fn();
+    const bindProjectConversationConnection = vi.fn();
     const withOfficialProviderAccess = vi.fn();
     const state = {
       activeSessionId: 'stored-session',
@@ -123,7 +124,7 @@ describe('managed route launch guards', () => {
       })) as never,
       guards: {
         withOfficialProviderAccess,
-        requireClaudeRuntime: vi.fn() as never,
+        requireClaudeRuntime: vi.fn(() => ({ bindProjectConversationConnection })) as never,
         requireCodexRuntime: vi.fn() as never,
         validateSender: vi.fn(),
       },
@@ -150,6 +151,7 @@ describe('managed route launch guards', () => {
     ).resolves.toMatchObject({ ok: true, state });
 
     expect(openConversation).toHaveBeenCalledWith(projectPath, '历史 11111111', 'claude');
+    expect(bindProjectConversationConnection).toHaveBeenCalledWith('stored-session', projectPath);
     expect(withOfficialProviderAccess).not.toHaveBeenCalled();
   });
 

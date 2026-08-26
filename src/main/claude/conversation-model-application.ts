@@ -2,6 +2,7 @@ import type { ClaudeConnectionTestResult, ClaudeProjectState } from '../../share
 import type { WithSessionOperation } from '../coordination/session-operation';
 import type { RunClaudeProjectConfigTransaction } from './config-transaction';
 import type { ClaudeRuntime, PreparedClaudeConfigSave } from './runtime';
+import { resolveSessionConnectionConfigScope } from './runtime-connection-config';
 
 export interface ApplyConversationModelConnectionInput {
   cwd: string;
@@ -37,14 +38,20 @@ export const applyConversationModelConnection = async ({
   const state = await withDevelopmentSessionOperation(sessionId, (assertCurrent, signal) =>
     runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
       assertCurrent,
-      commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared),
+      commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared, sessionId),
       complete: (prepared) => runtime.completePreparedConfigSave(sessionId, cwd, prepared),
       cwd,
       prepare: () => prepare(assertCurrent),
       runtime,
       sessionId,
       validatePrepared: async (prepared) => {
-        connectionTest = await runtime.testPreparedConnection(cwd, prepared, assertCurrent, signal);
+        connectionTest = await runtime.testPreparedConnection(
+          cwd,
+          prepared,
+          assertCurrent,
+          signal,
+          resolveSessionConnectionConfigScope(runtime, sessionId, cwd),
+        );
         onConnectionTest?.(connectionTest);
         const officialLoginDeferred =
           !connectionTest.ok &&

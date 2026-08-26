@@ -696,6 +696,7 @@ export const IPC_REQUESTS = {
     projectPathInputSchema,
   ]),
   [CHANNELS.CLAUDE_GET_STATE]: request('getClaudeProjectState', [sessionIdSchema]),
+  [CHANNELS.CLAUDE_GET_NEXT_CONNECTION]: request('getNextClaudeConnection', []),
   [CHANNELS.CLAUDE_LAUNCH]: request('launchClaude', [sessionIdSchema, claudeLaunchModeSchema]),
   [CHANNELS.CLAUDE_LAUNCH_PREFLIGHT_DECIDE]: request('decideClaudeLaunchPreflight', [
     claudeLaunchPreflightDecisionInputSchema,
@@ -705,7 +706,7 @@ export const IPC_REQUESTS = {
     z.string(),
   ]),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_MODEL]: request('setManagedChatGptGatewayModel', [
-    sessionIdSchema,
+    sessionIdSchema.optional(),
     z.string(),
   ]),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_CANCEL_SETUP]: request(
@@ -780,6 +781,7 @@ export const IPC_REQUESTS = {
     sessionIdSchema,
     claudeConfigInputSchema,
   ]),
+  [CHANNELS.CLAUDE_SAVE_NEXT_CONFIG]: request('saveNextClaudeConfig', [claudeConfigInputSchema]),
   [CHANNELS.CLAUDE_SET_ALLOW_BYPASS_PERMISSIONS]: request('setClaudeAllowBypassPermissions', [
     sessionIdSchema,
     z.boolean(),
@@ -802,6 +804,9 @@ export const IPC_REQUESTS = {
   ]),
   [CHANNELS.CLAUDE_TEST_CONNECTION]: request('testClaudeConnection', [
     sessionIdSchema,
+    claudeConfigInputSchema,
+  ]),
+  [CHANNELS.CLAUDE_TEST_NEXT_CONNECTION]: request('testNextClaudeConnection', [
     claudeConfigInputSchema,
   ]),
   [CHANNELS.CODEX_GET_STATE]: request('getCodexProjectState', [sessionIdSchema]),

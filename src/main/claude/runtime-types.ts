@@ -97,6 +97,8 @@ interface RuntimeSession {
   claudeContextWindowCustomTokens?: number;
   claudeContextWindowMode?: ClaudeContextWindowMode;
   contextWindowMode?: ManagedChatGptContextWindowMode;
+  /** Main-only profile scope captured for this conversation; never exposed as its real cwd. */
+  configScope?: string;
   cwd: string;
   diagnosticBuffer: string;
   /** Temporary retry cap installed after Claude Code combines high effort with disabled thinking. */

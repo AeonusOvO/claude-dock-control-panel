@@ -88,12 +88,12 @@ export const executePreparedLaunch = async ({
   try {
     signal.throwIfAborted();
     assertPreparationCurrent();
-    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
     const prepared = await runtime.prepareLaunch(sessionId, cwd, mode, undefined, authorization);
     launchToken = prepared.token;
     signal.throwIfAborted();
     assertPreparationCurrent();
-    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
     restartRuntimeTerminal(
       runtime,
       sessionId,
@@ -176,7 +176,7 @@ export const executeClaudeRelaunch = async ({
   ): Promise<ClaudeProjectState> => {
     signal.throwIfAborted();
     assertCurrent();
-    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
     const prepared = await runtime.prepareLaunch(
       sessionId,
       cwd,
@@ -187,7 +187,7 @@ export const executeClaudeRelaunch = async ({
     launchToken = prepared.token;
     signal.throwIfAborted();
     assertCurrent();
-    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
     restartRuntimeTerminal(
       runtime,
       sessionId,
@@ -225,7 +225,7 @@ export const executeClaudeRelaunch = async ({
   const entryId = input.entryId;
   if (!entryId) {
     assertOriginalConfigurationCurrent();
-    const authorization = runtime.captureLaunchAuthorization(cwd);
+    const authorization = runtime.captureLaunchAuthorization(cwd, sessionId);
     const relaunchCurrent = (
       preflightResult?: NetworkPreflightResult,
     ): Promise<ClaudeProjectState> => {
@@ -235,11 +235,11 @@ export const executeClaudeRelaunch = async ({
         signal.throwIfAborted();
         assertCurrent();
         assertOriginalConfigurationCurrent();
-        runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+        runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
         await compactLiveConversation();
         signal.throwIfAborted();
         assertOriginalConfigurationCurrent();
-        runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+        runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
         return launchReplacement(authorization);
       });
     };
@@ -266,11 +266,11 @@ export const executeClaudeRelaunch = async ({
       assertOriginalConfigurationCurrent();
       return runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({
         assertCurrent,
-        commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared),
+        commit: (prepared) => runtime.commitPreparedConfig(cwd, prepared, sessionId),
         complete: async (prepared) => {
           signal.throwIfAborted();
           assertCurrent();
-          const launchAuthorization = runtime.captureLaunchAuthorization(cwd);
+          const launchAuthorization = runtime.captureLaunchAuthorization(cwd, sessionId);
           if (
             !sameClaudeNetworkAccess(
               authorizationNetworkAccess(launchAuthorization),
@@ -284,7 +284,7 @@ export const executeClaudeRelaunch = async ({
           await runtime.completePreparedConfigSave(sessionId, cwd, prepared);
           signal.throwIfAborted();
           assertCurrent();
-          runtime.assertLaunchAuthorizationCurrent(cwd, launchAuthorization);
+          runtime.assertLaunchAuthorizationCurrent(cwd, launchAuthorization, sessionId);
           return launchReplacement(launchAuthorization);
         },
         cwd,
@@ -359,7 +359,7 @@ export const executeClaudeSessionResume = async ({
     );
   }
 
-  const authorization = runtime.captureLaunchAuthorization(cwd);
+  const authorization = runtime.captureLaunchAuthorization(cwd, sessionId);
   if (!sameClaudeNetworkAccess(authorizationNetworkAccess(authorization), expectedNetworkAccess)) {
     throw new LaunchPreflightDecisionStaleError();
   }
@@ -368,7 +368,7 @@ export const executeClaudeSessionResume = async ({
   ): Promise<ClaudeOperationResult> => {
     signal.throwIfAborted();
     assertPreparationCurrent();
-    runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+    runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
     const currentStatus = workspace.getStatus(sessionId);
     const terminalOwner: ConversationOwner = {
       conversationId: conversationId.toLowerCase(),
@@ -412,7 +412,7 @@ export const executeClaudeSessionResume = async ({
             signal.throwIfAborted();
             conversationOwnership.assertCurrent();
             assertPreparationCurrent();
-            runtime.assertLaunchAuthorizationCurrent(cwd, authorization);
+            runtime.assertLaunchAuthorizationCurrent(cwd, authorization, sessionId);
           };
           const resumedGeneration = await runClaudeResumeLaunch(
             sessionId,
@@ -498,7 +498,7 @@ const registerClaudeRelaunchIpc = ({
 
       const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
         Object.freeze({
-          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd),
+          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd, validatedSessionId),
           ...(validatedInput.entryId === undefined
             ? {}
             : {
@@ -523,7 +523,11 @@ const registerClaudeRelaunchIpc = ({
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
-        runtime.assertLaunchConfigurationBaselineCurrent(status.cwd, candidate.configuration);
+        runtime.assertLaunchConfigurationBaselineCurrent(
+          status.cwd,
+          candidate.configuration,
+          validatedSessionId,
+        );
         runtime.assertRuntimeLaunchBaselineCurrent(
           validatedSessionId,
           status.cwd,
@@ -652,7 +656,7 @@ const registerClaudeStartIpc = ({
 
       const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
         Object.freeze({
-          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd),
+          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd, validatedSessionId),
           operation,
           runtime: runtime.captureRuntimeLaunchBaseline(validatedSessionId, status.cwd),
           workspacePtyGeneration: status.ptyGeneration,
@@ -669,7 +673,11 @@ const registerClaudeStartIpc = ({
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
-        runtime.assertLaunchConfigurationBaselineCurrent(status.cwd, candidate.configuration);
+        runtime.assertLaunchConfigurationBaselineCurrent(
+          status.cwd,
+          candidate.configuration,
+          validatedSessionId,
+        );
         runtime.assertRuntimeLaunchBaselineCurrent(
           validatedSessionId,
           status.cwd,
@@ -696,7 +704,10 @@ const registerClaudeStartIpc = ({
               };
               assertLaunchCurrent();
               assertBaselineCurrent(baseline as ClaudeLaunchDecisionBaseline);
-              const authorization = runtime.captureLaunchAuthorization(status.cwd);
+              const authorization = runtime.captureLaunchAuthorization(
+                status.cwd,
+                validatedSessionId,
+              );
               const networkAccess = authorizationNetworkAccess(authorization);
               if (
                 !sameClaudeNetworkAccess(
@@ -830,7 +841,7 @@ const registerClaudeSessionLaunchIpc = ({
 
       const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
         Object.freeze({
-          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd),
+          configuration: runtime.captureLaunchConfigurationBaseline(status.cwd, validatedSessionId),
           operation,
           runtime: runtime.captureRuntimeLaunchBaseline(validatedSessionId, status.cwd),
           workspacePtyGeneration: status.ptyGeneration,
@@ -847,7 +858,11 @@ const registerClaudeSessionLaunchIpc = ({
         ) {
           throw new LaunchPreflightDecisionStaleError();
         }
-        runtime.assertLaunchConfigurationBaselineCurrent(status.cwd, candidate.configuration);
+        runtime.assertLaunchConfigurationBaselineCurrent(
+          status.cwd,
+          candidate.configuration,
+          validatedSessionId,
+        );
         runtime.assertRuntimeLaunchBaselineCurrent(
           validatedSessionId,
           status.cwd,

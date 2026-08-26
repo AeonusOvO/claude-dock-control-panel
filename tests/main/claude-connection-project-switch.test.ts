@@ -50,6 +50,7 @@ describe('Claude connection IPC project ownership', () => {
     expect(runtime.bindConversationToCurrent).toHaveBeenCalledExactlyOnceWith(
       'D:\\ProjectA',
       conversationId,
+      'D:\\ProjectA',
     );
     expect(runtime.publishProjectState).toHaveBeenCalledExactlyOnceWith(
       'session-1',
@@ -119,6 +120,7 @@ describe('Claude connection IPC project ownership', () => {
       'D:\\ProjectA',
       conversationId,
       expect.any(Function),
+      'D:\\ProjectA',
     );
   });
 

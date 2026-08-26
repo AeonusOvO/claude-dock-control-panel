@@ -226,11 +226,18 @@ export const registerClaudeControlsIpc = ({
               return { ok: true, state };
             }
 
-            const authorization = runtime.captureLaunchAuthorization(status.cwd);
+            const authorization = runtime.captureLaunchAuthorization(
+              status.cwd,
+              validatedSessionId,
+            );
             const relaunchWithModelSpeed = async (): Promise<ClaudeOperationResult> => {
               try {
                 assertCurrent();
-                runtime.assertLaunchAuthorizationCurrent(status.cwd, authorization);
+                runtime.assertLaunchAuthorizationCurrent(
+                  status.cwd,
+                  authorization,
+                  validatedSessionId,
+                );
                 const prepared = await runtime.prepareModelSpeedRelaunch(
                   validatedSessionId,
                   status.cwd,

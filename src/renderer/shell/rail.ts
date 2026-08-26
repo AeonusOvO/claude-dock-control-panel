@@ -60,15 +60,21 @@ const normalizeRailTab = (state: RailMutableState, tab: string): string => {
 const effectiveRailPage = (state: RailMutableState, tab: string | undefined): string | undefined =>
   tab === 'extensions' ? state.extensionTab : tab;
 
+const bindTerminalFitSettlement = (workspace: HTMLElement, settle: () => void): void => {
+  workspace.addEventListener('transitionend', (event) => {
+    if (event.target === workspace && event.propertyName === 'grid-template-columns') settle();
+  });
+};
+
 export const createRailShell = (deps: RailShellDeps): RailShell => {
   const {
-    claudeStates,
     connectionAdvancedDialog,
-    getActiveSessionId,
     getSelectedProviderId,
     setProviderGroupExpansionPending,
     applyDefaultProviderGroupExpansion,
     renderProviderPicker,
+    loadNextClaudeConnection,
+    showConnectionChoice,
     loadChatConfig,
     loadChatHistory,
     renderChatUsage,
@@ -87,7 +93,6 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   const terminalShell = requiredElement<HTMLElement>('#terminal-shell');
   const chatShell = requiredElement<HTMLElement>('#chat-shell');
   const state = createRailMutableState();
-
   const previewActions = createRailPreviewActions(
     state,
     activityRail,
@@ -102,10 +107,11 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
       void loadChatHistory();
       renderChatUsage();
     } else if (tab === 'connection') {
-      const lastProvider =
-        getSelectedProviderId() ?? claudeStates.get(getActiveSessionId())?.config.preset;
+      showConnectionChoice();
+      void loadNextClaudeConnection().catch(() => undefined);
+      const lastProvider = getSelectedProviderId();
       applyDefaultProviderGroupExpansion(lastProvider);
-      setProviderGroupExpansionPending(Boolean(getActiveSessionId() && !lastProvider));
+      setProviderGroupExpansionPending(!lastProvider);
       renderProviderPicker();
     } else if (tab === 'extensions') {
       if (state.extensionTab === 'plugins') loadPluginsCatalog();
@@ -176,16 +182,7 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
     renderRailPresentation(normalizedTab, false);
   };
 
-  /**
-   * The sidebar column eases open and closed now, so the fit `applyRailTab` schedules lands while the
-   * grid is still moving. One more pass once the transition ends settles xterm on the final width —
-   * and doing it here rather than per animation frame keeps ConPTY from being resized dozens of times.
-   */
-  workspace.addEventListener('transitionend', (event) => {
-    if (event.target === workspace && event.propertyName === 'grid-template-columns') {
-      retryTerminalFitUntilMeasured();
-    }
-  });
+  bindTerminalFitSettlement(workspace, retryTerminalFitUntilMeasured);
 
   function selectRailTab(tab: string): void {
     applyRailTab(tab);

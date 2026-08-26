@@ -1,5 +1,8 @@
 import type { ChildProcess } from 'node:child_process';
-import { recommendedChatModel, recommendedFastModel } from './managed-chatgpt-models';
+import {
+  recommendedChatModel,
+  recommendedFastModel,
+} from '../../shared/claude/managed-chatgpt-models';
 import type { PersistedGatewayState } from './managed-chatgpt-state';
 
 export const MANAGED_GATEWAY_READINESS_PROBE_TIMEOUT_MS = 8_000;

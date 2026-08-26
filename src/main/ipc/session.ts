@@ -7,6 +7,7 @@ import {
   isValidClaudeSessionId,
   normalizeClaudeSessionTitle,
 } from '../claude/session-manager';
+import { resolveSessionConnectionConfigScope } from '../claude/runtime-connection-config';
 import { createFailureReporter } from '../infra/logger';
 import type { Registry } from '../infra/registry';
 import { NATIVE_CONVERSATION_SERVICE } from '../infra/service-tokens';
@@ -107,7 +108,10 @@ export const registerSessionIpc = ({
     validateSender(event);
     const validatedSessionId = validateSessionId(sessionId);
     const status = workspace.getStatus(validatedSessionId);
-    return requireClaudeRuntime().getConnectionAdvice(status.cwd);
+    const runtime = requireClaudeRuntime();
+    return runtime.getConnectionAdvice(
+      resolveSessionConnectionConfigScope(runtime, validatedSessionId, status.cwd),
+    );
   });
   ipcMain.handle(
     CHANNELS.CLAUDE_DELETE_SESSION,

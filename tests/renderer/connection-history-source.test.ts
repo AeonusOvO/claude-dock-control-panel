@@ -8,6 +8,7 @@ import {
   filterConnectionHistoryBySource,
 } from '../../src/renderer/features/connection/history-source';
 import { withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
+import { claudeProjectState } from '../helpers/renderer-terminal-fixture';
 
 const historyEntry = (
   id: string,
@@ -103,7 +104,10 @@ describe('connection history source rendering', () => {
       historyEntry('relay', 'custom'),
     ];
     await withTerminalRenderer(
-      { getClaudeConnectionHistory: async () => entries },
+      {
+        getClaudeConnectionHistory: async () => entries,
+        getNextClaudeConnection: async () => ({ config: claudeProjectState().config }),
+      },
       async (harness) => {
         const renderedIds = (): string[] =>
           Array.from(

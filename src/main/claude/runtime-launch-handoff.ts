@@ -317,6 +317,7 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
 
   protected assertPreparedLaunchCurrent(record: PreparedClaudeLaunchRecord): void {
     const { predecessor, token } = record;
+    const configScope = this.connectionConfigScope(token.sessionId, predecessor.cwd);
     if (
       this.preparedLaunches.get(token) !== record ||
       this.preparedLaunchBySession.get(token.sessionId) !== token ||
@@ -326,11 +327,11 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
       predecessor.launchToken !== record.predecessorLaunchToken ||
       predecessor.ptyGeneration !== record.predecessorPtyGeneration ||
       predecessor.routeKind !== record.predecessorRouteKind ||
-      projectKey(predecessor.cwd) !== record.authorization.cwdKey
+      projectKey(configScope) !== record.authorization.cwdKey
     ) {
       throw new Error('Claude Code 会话在启动准备期间已更新，本次启动已取消。');
     }
-    this.assertLaunchAuthorizationCurrent(predecessor.cwd, record.authorization);
+    this.assertLaunchAuthorizationCurrent(configScope, record.authorization);
   }
 
   private finishPreparedLaunchRecord(record: PreparedClaudeLaunchRecord): void {
