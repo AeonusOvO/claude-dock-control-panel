@@ -67,6 +67,13 @@ fs.writeFileSync(
   )}\n`,
   'utf8',
 );
+// Raw ConPTY lifecycle coverage does not exercise a model provider. Select Codex explicitly so the
+// fixture remains valid when startup is intentionally configured to keep the app unconnected.
+fs.writeFileSync(
+  path.join(workspaceDirectory, 'agent-runtimes.json'),
+  `${JSON.stringify({ nextRuntime: 'codex', projects: {}, version: 1 }, null, 2)}\n`,
+  'utf8',
+);
 
 require(path.join(repositoryRoot, 'dist', 'main', 'index.js'));
 

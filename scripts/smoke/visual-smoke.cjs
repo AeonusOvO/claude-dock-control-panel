@@ -884,6 +884,66 @@ app
       }
     }
 
+    const startupConnectionMotion = await window.webContents.executeJavaScript(`
+      (() => {
+        const page = document.querySelector('[data-rail-page="connection"]');
+        const overlay = document.querySelector('#startup-model-connection');
+        page.dataset.startupConnection = 'active';
+        overlay.hidden = false;
+        overlay.setAttribute('aria-hidden', 'false');
+        document.querySelector('#startup-model-connection-step').textContent =
+          '网络预检与连接验证';
+        document.querySelector('#startup-model-connection-detail').textContent =
+          '正在执行网络预检，并真实验证最近一次选择的平台和模型。';
+        const accountRow = document.querySelector('#startup-model-connection-account-row');
+        accountRow.hidden = false;
+        document.querySelector('#startup-model-connection-account').textContent =
+          'ChatGPT 官方订阅 · qa.account@example.com';
+        document.querySelector('#startup-model-connection-timing').textContent =
+          '1 分 34 秒后可取消 · 4 分 34 秒后自动停止';
+        const cancel = document.querySelector('#cancel-startup-model-connection');
+        cancel.hidden = true;
+
+        const indicator = document.querySelector('.startup-model-connection__indicator svg');
+        const style = getComputedStyle(indicator);
+        const animation = indicator.getAnimations()[0];
+        animation.pause();
+        const duration = Number(animation.effect.getTiming().duration);
+        animation.currentTime = duration / 4;
+        const matrix = new DOMMatrix(getComputedStyle(indicator).transform);
+        const result = {
+          animationName: style.animationName,
+          animationTimingFunction: style.animationTimingFunction,
+          quarterTurnB: matrix.b,
+        };
+        animation.play();
+        return result;
+      })()
+    `);
+    if (
+      startupConnectionMotion.animationName !== 'startup-model-connection-spin' ||
+      startupConnectionMotion.animationTimingFunction !== 'linear' ||
+      startupConnectionMotion.quarterTurnB > -0.9
+    ) {
+      throw new Error(
+        `Startup model connection arrow motion is incorrect: ${JSON.stringify(startupConnectionMotion)}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    writeFileSync(
+      path.join(outputDirectory, 'startup-model-connection-claude-1180.png'),
+      (await captureSettledPage()).toPNG(),
+    );
+    await window.webContents.executeJavaScript(`
+      (() => {
+        const page = document.querySelector('[data-rail-page="connection"]');
+        delete page.dataset.startupConnection;
+        const overlay = document.querySelector('#startup-model-connection');
+        overlay.hidden = true;
+        overlay.setAttribute('aria-hidden', 'true');
+      })()
+    `);
+
     window.setSize(820, 640);
     for (const themeId of themeOrder) {
       await window.webContents.executeJavaScript(applyQaTheme(themeId));

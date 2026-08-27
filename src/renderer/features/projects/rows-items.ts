@@ -49,7 +49,7 @@ export const createProjectsRowItemsActions = (
     phaseText.textContent = transitionFailure
       ? transitionFailure === 'restoring'
         ? '恢复失败 · 请关闭'
-        : '启动失败 · 请关闭'
+        : '创建失败 · 请关闭'
       : transition
         ? transition === 'restoring'
           ? '正在恢复'
@@ -83,8 +83,15 @@ export const createProjectsRowItemsActions = (
     closeButton.className = 'conversation-item__action conversation-item__action--close';
     closeButton.type = 'button';
     closeButton.textContent = '×';
-    closeButton.title = `关闭并归档 ${status.title}`;
-    closeButton.setAttribute('aria-label', `关闭对话 ${status.title}，归档到历史对话`);
+    closeButton.title = transitionFailure
+      ? `移除失败的临时会话 ${status.title}`
+      : `关闭并归档 ${status.title}`;
+    closeButton.setAttribute(
+      'aria-label',
+      transitionFailure
+        ? `移除失败的临时会话 ${status.title}`
+        : `关闭对话 ${status.title}，归档到历史对话`,
+    );
     closeButton.disabled = Boolean(transition);
     closeButton.addEventListener('click', () => {
       void handlers.closeProject(status);
@@ -147,7 +154,7 @@ export const createProjectsRowItemsActions = (
     const row = document.createElement('div');
     row.className = 'conversation-item conversation-item--pending';
     row.dataset.pendingId = pending.id;
-    row.dataset.phase = 'starting';
+    row.dataset.phase = pending.phase;
     row.setAttribute('role', 'status');
     row.setAttribute('aria-live', 'polite');
 
@@ -164,10 +171,28 @@ export const createProjectsRowItemsActions = (
 
     const phaseText = document.createElement('span');
     phaseText.className = 'conversation-item__phase';
-    phaseText.textContent = pending.kind === 'restoring' ? '正在恢复' : '正在新建';
+    phaseText.textContent =
+      pending.phase === 'queued'
+        ? `排队中${pending.queuePosition ? ` · 第 ${pending.queuePosition} 位` : ''}`
+        : pending.kind === 'restoring'
+          ? '正在恢复'
+          : '正在新建';
 
     content.append(indicator, label, phaseText);
-    row.append(content);
+    if (pending.phase === 'queued' && pending.cancel) {
+      const cancelButton = document.createElement('button');
+      cancelButton.className = 'conversation-item__action conversation-item__action--close';
+      cancelButton.type = 'button';
+      cancelButton.textContent = '×';
+      cancelButton.title = `取消排队 ${pending.title}`;
+      cancelButton.setAttribute('aria-label', `取消排队中的${pending.title}`);
+      cancelButton.addEventListener('click', () => {
+        pending.cancel?.();
+      });
+      row.append(content, cancelButton);
+    } else {
+      row.append(content);
+    }
     return row;
   };
 

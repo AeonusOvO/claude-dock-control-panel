@@ -15,6 +15,9 @@ const page = requiredElement<HTMLElement>(".rail-page[data-rail-page='connection
 const overlay = requiredElement<HTMLElement>('#startup-model-connection');
 const title = requiredElement<HTMLElement>('#startup-model-connection-title');
 const detail = requiredElement<HTMLElement>('#startup-model-connection-detail');
+const step = requiredElement<HTMLElement>('#startup-model-connection-step');
+const accountRow = requiredElement<HTMLElement>('#startup-model-connection-account-row');
+const account = requiredElement<HTMLElement>('#startup-model-connection-account');
 const timing = requiredElement<HTMLElement>('#startup-model-connection-timing');
 const cancelButton = requiredElement<HTMLButtonElement>('#cancel-startup-model-connection');
 
@@ -109,6 +112,9 @@ export const createStartupModelConnectionOverlay = (
     setPageLocked(true);
     title.textContent = state.phase === 'cancelling' ? '正在结束模型接入' : '正在接入模型';
     detail.textContent = state.detail;
+    step.textContent = state.phase === 'cancelling' ? '安全取消与回滚' : (state.step ?? '正在连接');
+    accountRow.hidden = !state.accountLabel;
+    account.textContent = state.accountLabel ?? '';
     renderTiming();
     if (countdownTimer === undefined) {
       countdownTimer = window.setInterval(renderTiming, 1_000);

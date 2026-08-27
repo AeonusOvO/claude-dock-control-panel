@@ -800,8 +800,16 @@ html[data-appearance='dark'] .runtime-option__brand-mark--dark {
 .conversation-item--pending {
   animation: pendingConversationEnter var(--dur-4) var(--ease-spring) both;
   background: color-mix(in srgb, var(--accent-tint) 58%, transparent);
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 24px;
+}
+
+.conversation-item--pending .conversation-item__select {
+  cursor: default;
   pointer-events: none;
+}
+
+.conversation-item--pending .conversation-item__action {
+  opacity: 1;
 }
 
 .conversation-item--pending .conversation-item__status {

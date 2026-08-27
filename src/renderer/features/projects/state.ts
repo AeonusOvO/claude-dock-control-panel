@@ -1,4 +1,5 @@
 import type { ClaudeSessionMetadata, TerminalStatus } from '../../../shared/contracts';
+import { ConversationTransitionQueue } from './conversation-transition-queue';
 import { FolderHistoryLoadCoordinator } from './folder-history-load';
 
 export interface TitleAnimationState {
@@ -10,9 +11,13 @@ export interface TitleAnimationState {
 }
 
 export interface PendingConversation {
+  cancel?: () => boolean;
   id: string;
   kind: 'creating' | 'restoring';
+  phase: 'queued' | 'starting';
   projectPath: string;
+  queuePosition?: number;
+  queueTotal?: number;
   title: string;
 }
 
@@ -25,6 +30,7 @@ export type ConversationContextTarget =
 
 export interface ProjectsState {
   conversationContextTarget: ConversationContextTarget;
+  conversationTransitionQueue: ConversationTransitionQueue;
   expandedFolders: Set<string>;
   failedConversationTransitions: Map<string, ConversationTransitionKind>;
   folderHistoryLoads: FolderHistoryLoadCoordinator;
@@ -38,6 +44,8 @@ export interface ProjectsState {
   suppressedTitleAnimations: Set<string>;
   titleAnimations: Map<string, TitleAnimationState>;
   workspaceActivationSyncInProgress: boolean;
+  /** Highest authoritative main-process workspace revision rendered so far. */
+  workspaceRevision: number;
   workspaceTransitionDepth: number;
   /**
    * Workspace mutations currently in flight, keyed by what they act on.
@@ -52,6 +60,7 @@ export interface ProjectsState {
 
 export const createProjectsState = (): ProjectsState => ({
   conversationContextTarget: undefined,
+  conversationTransitionQueue: new ConversationTransitionQueue(),
   expandedFolders: new Set<string>(),
   failedConversationTransitions: new Map<string, ConversationTransitionKind>(),
   folderHistoryLoads: new FolderHistoryLoadCoordinator(),
@@ -65,6 +74,7 @@ export const createProjectsState = (): ProjectsState => ({
   suppressedTitleAnimations: new Set<string>(),
   titleAnimations: new Map<string, TitleAnimationState>(),
   workspaceActivationSyncInProgress: false,
+  workspaceRevision: -1,
   workspaceTransitionDepth: 0,
   workspaceMutations: new Set<string>(),
 });

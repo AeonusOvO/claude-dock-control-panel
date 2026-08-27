@@ -74,7 +74,7 @@
 }
 
 .startup-model-connection__indicator svg {
-  animation: connection-history-recovery-orbit var(--dur-status-pulse) var(--ease-spring) infinite;
+  animation: startup-model-connection-spin var(--dur-status-pulse) linear infinite;
   fill: none;
   height: 34px;
   stroke: currentColor;
@@ -102,6 +102,46 @@
 
 .startup-model-connection > p {
   font-size: var(--type-body-size);
+}
+
+.startup-model-connection__facts {
+  display: grid;
+  gap: var(--s-2);
+  margin: 0;
+  width: min(520px, 100%);
+}
+
+.startup-model-connection__facts > div {
+  align-items: baseline;
+  background: color-mix(in srgb, var(--surface-4) 72%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: 76px minmax(0, 1fr);
+  padding: var(--s-2) var(--s-3);
+  text-align: left;
+}
+
+.startup-model-connection__facts > div[hidden] {
+  display: none;
+}
+
+.startup-model-connection__facts dt,
+.startup-model-connection__facts dd {
+  font-size: var(--type-caption-size);
+  line-height: var(--type-caption-lh);
+  margin: 0;
+}
+
+.startup-model-connection__facts dt {
+  color: var(--text-mute);
+}
+
+.startup-model-connection__facts dd {
+  color: var(--text-hi);
+  font-weight: var(--fw-strong);
+  overflow-wrap: anywhere;
 }
 
 .startup-model-connection > small {

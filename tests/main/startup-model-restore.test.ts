@@ -107,6 +107,7 @@ describe('startup model-only restore', () => {
         autoLoadLastConversationOnStartup: false,
         modelMismatchBehavior: 'ask' as const,
       })),
+      restoreWorkspace: false,
     });
 
     await expect(restoreLastConversationModelOnly(input)).resolves.toBe('skipped');
@@ -142,6 +143,29 @@ describe('startup model-only restore', () => {
 
     await expect(restoreLastConversationModelOnly(input)).resolves.toBe('restored');
     expect(events).toEqual(['open', 'apply', 'close']);
+  });
+
+  it('reports the exact official subscription account with each connection stage', async () => {
+    const progress = vi.fn();
+    const official = { ...modelResolution().current, accountIdentity: 'person@example.com' };
+    const input = dependencies({
+      inspectConversationModel: vi.fn(async () =>
+        modelResolution({ conversation: { ...official, source: 'bound' } }),
+      ),
+      progress,
+    });
+
+    await expect(restoreLastConversationModelOnly(input)).resolves.toBe('restored');
+    expect(progress).toHaveBeenCalledWith({
+      accountLabel: 'Anthropic · person@example.com',
+      detail: '正在执行网络预检，并真实验证最近一次选择的平台和模型。',
+      step: '网络预检与连接验证',
+    });
+    expect(progress).toHaveBeenLastCalledWith({
+      accountLabel: 'Anthropic · person@example.com',
+      detail: '验证已通过，正在提交下个对话使用的接入配置。',
+      step: '提交接入配置',
+    });
   });
 
   it('closes the temporary terminal and reports failure when model application rejects', async () => {

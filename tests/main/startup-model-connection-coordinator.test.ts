@@ -77,7 +77,11 @@ describe('startup model connection coordinator', () => {
 
     await expect(
       coordinator.run({ cancelAfterMs: 10, forceStopAfterMs: 20 }, async (context) => {
-        context.updateDetail('正在提交配置。');
+        context.updateProgress({
+          accountLabel: 'ChatGPT 官方订阅 · person@example.com',
+          detail: '正在提交配置。',
+          step: '提交接入配置',
+        });
         return 'restored';
       }),
     ).resolves.toBe('restored');

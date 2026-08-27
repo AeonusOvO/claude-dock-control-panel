@@ -147,7 +147,7 @@ describe('TerminalWorkspace', () => {
     const { factory, terminals } = createFakeFactory();
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
 
-    expect(workspace.getState()).toEqual({ activeSessionId: '', sessions: [] });
+    expect(workspace.getState()).toMatchObject({ activeSessionId: '', sessions: [] });
     expect(workspace.getActiveStatus()).toBeUndefined();
     expect(terminals.size).toBe(0);
   });
@@ -179,12 +179,12 @@ describe('TerminalWorkspace', () => {
     expect(dataListener).toHaveBeenNthCalledWith(2, 'session-2', betaGeneration, 'beta output');
   });
 
-  it('invalidates pending launch authority before every active-session change', () => {
+  it('reports the exact previous and next session before every active-session change', () => {
     const { factory } = createFakeFactory();
     const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
-    const activeSessionIds: string[] = [];
-    workspace.setBeforeActiveSessionChange(() => {
-      activeSessionIds.push(workspace.getState().activeSessionId);
+    const transitions: string[] = [];
+    workspace.setBeforeActiveSessionChange((previousSessionId, nextSessionId) => {
+      transitions.push(`${previousSessionId}->${nextSessionId}`);
     });
 
     workspace.openProject('D:\\Project Alpha');
@@ -193,7 +193,32 @@ describe('TerminalWorkspace', () => {
     workspace.activate('session-1');
     workspace.openConversation('D:\\Project Alpha');
 
-    expect(activeSessionIds).toEqual(['', 'session-1', 'session-2', 'session-1']);
+    expect(transitions).toEqual([
+      '->session-1',
+      'session-1->session-2',
+      'session-2->session-1',
+      'session-1->session-3',
+    ]);
+  });
+
+  it('increments a main-owned revision for every emitted workspace snapshot', () => {
+    const { factory } = createFakeFactory();
+    const snapshots: number[] = [];
+    const workspace = new TerminalWorkspace(
+      vi.fn(),
+      (state) => snapshots.push(state.revision ?? -1),
+      factory,
+    );
+
+    workspace.openProject('D:\\Project Alpha');
+    workspace.openConversation('D:\\Project Alpha');
+    workspace.activate('session-1');
+
+    expect(snapshots.length).toBeGreaterThanOrEqual(3);
+    expect(
+      snapshots.every((revision, index) => index === 0 || revision > snapshots[index - 1]!),
+    ).toBe(true);
+    expect(workspace.getState().revision).toBe(snapshots.at(-1));
   });
 
   it('rejects terminal data from an obsolete PTY generation', () => {
@@ -322,7 +347,7 @@ describe('TerminalWorkspace', () => {
       phase: 'stopped',
       title: '后台模型接入',
     });
-    expect(workspace.getState()).toEqual({ activeSessionId: '', sessions: [] });
+    expect(workspace.getState()).toMatchObject({ activeSessionId: '', sessions: [] });
     expect(workspace.sessionIdsForDirectory('D:\\Project Alpha')).toEqual([]);
     expect(terminals.get(background.id)?.start).not.toHaveBeenCalled();
     expect(stateListener).not.toHaveBeenCalled();
@@ -414,7 +439,7 @@ describe('TerminalWorkspace', () => {
 
     const state = workspace.close('session-1');
 
-    expect(state).toEqual({ activeSessionId: '', sessions: [] });
+    expect(state).toMatchObject({ activeSessionId: '', sessions: [] });
     expect(workspace.getActiveStatus()).toBeUndefined();
   });
 });

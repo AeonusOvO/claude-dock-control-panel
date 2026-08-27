@@ -23,6 +23,13 @@
   }
 }
 
+/* The glyph itself is a counter-clockwise refresh arrow, so its motion follows that direction. */
+@keyframes startup-model-connection-spin {
+  to {
+    transform: rotate(-1turn);
+  }
+}
+
 @keyframes titlebarGlyphSpin {
   to {
     rotate: 1turn;

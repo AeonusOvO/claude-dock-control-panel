@@ -82,7 +82,10 @@ const createProjectsFeature = (dependencies: ProjectsFeatureDependencies): Proje
   const restoreLastConversationOnStartup = async (
     preferences: ConversationResumePreferences,
   ): Promise<boolean> => {
-    if (!preferences.autoLoadLastConversationOnStartup) {
+    if (
+      !preferences.autoLoadLastConversationOnStartup ||
+      !preferences.autoLoadLastConversationModelOnStartup
+    ) {
       return false;
     }
     try {

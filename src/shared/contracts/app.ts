@@ -30,12 +30,16 @@ export type StartupModelConnectionPhase =
 
 /** Main-owned startup transaction state. Timestamps let every renderer derive the same countdown. */
 export interface StartupModelConnectionState {
+  /** Renderer-safe official subscription identity, including its provider label. */
+  accountLabel?: string;
   active: boolean;
   cancelAvailableAt?: number;
   detail: string;
   finishedAt?: number;
   forceStopAt?: number;
   phase: StartupModelConnectionPhase;
+  /** Short user-facing name for the exact transaction stage currently running. */
+  step?: string;
   startedAt?: number;
   updatedAt: number;
 }

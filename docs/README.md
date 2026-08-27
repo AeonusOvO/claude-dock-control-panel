@@ -48,6 +48,7 @@
 | [0016](adr/0016-confirmed-tested-history-replay.md)        | 先确认、实测后提交的历史接入事务         |
 | [0017](adr/0017-background-conversation-transitions.md)    | 后台会话事务与下一次新建引擎             |
 | [0018](adr/0018-global-next-conversation-connection.md)    | 全局下个对话接入与不可变会话快照         |
+| [0019](adr/0019-device-aware-conversation-admission.md)    | 设备感知会话准入与单调工作区快照         |
 
 ## releases
 

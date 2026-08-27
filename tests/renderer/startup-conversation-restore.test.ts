@@ -200,7 +200,7 @@ describe('startup conversation restore', () => {
     );
   });
 
-  it('can restore the conversation with the current model when automatic model loading is off', async () => {
+  it('keeps startup unconnected when automatic model loading is off', async () => {
     control = installFakeTerminalModules();
     harness = await createRendererHarness({
       getAppSettings: async () => settings(false),
@@ -224,10 +224,10 @@ describe('startup conversation restore', () => {
       openStoredConversation: async () => ({ ok: true, state: terminalWorkspace() }),
     });
 
-    await waitFor(
-      harness,
-      () => harness?.method('launchClaudeWithSession').mock.calls.length === 1,
-    );
+    await harness.flush();
+    expect(harness.method('getClaudeSessionsForPath')).not.toHaveBeenCalled();
+    expect(harness.method('openStoredConversation')).not.toHaveBeenCalled();
+    expect(harness.method('launchClaudeWithSession')).not.toHaveBeenCalled();
     expect(harness.method('inspectClaudeConversationModel')).not.toHaveBeenCalled();
     expect(harness.method('applyClaudeConversationModel')).not.toHaveBeenCalled();
   });

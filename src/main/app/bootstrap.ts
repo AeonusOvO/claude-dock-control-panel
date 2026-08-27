@@ -893,10 +893,10 @@ const runStartupModelRestore = async ({
         ...(context
           ? {
               assertActive: context.assertActive,
-              progress: (detail: string) => {
-                context.updateDetail(detail);
+              progress: (progress) => {
+                context.updateProgress(progress);
                 try {
-                  busyRegistry.update('startup-model-connection', { stage: detail });
+                  busyRegistry.update('startup-model-connection', { stage: progress.detail });
                 } catch {
                   // Progress presentation cannot be allowed to fail the configuration transaction.
                 }

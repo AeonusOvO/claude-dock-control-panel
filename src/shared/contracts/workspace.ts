@@ -24,6 +24,12 @@ export interface WorkspaceProject {
 /** Shape owned by TerminalWorkspace; it knows nothing about persisted projects. */
 export interface TerminalWorkspaceState {
   activeSessionId: string;
+  /**
+   * Monotonic main-process revision. Older render snapshots must never remove sessions that were
+   * created by a newer concurrent request. Optional only for backward-compatible persisted/test
+   * fixtures; every live `TerminalWorkspace` snapshot supplies it.
+   */
+  revision?: number;
   sessions: TerminalStatus[];
 }
 

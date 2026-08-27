@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalStatus, WorkspaceResult, WorkspaceState } from '../../src/shared/contracts';
+import { createProjectsHistoryActions } from '../../src/renderer/features/projects/actions-history';
 import { createProjectsWorkspaceActions } from '../../src/renderer/features/projects/actions-workspace';
 import type {
   ProjectsActionsDependencies,
@@ -10,6 +11,7 @@ import type { ProjectsElements } from '../../src/renderer/features/projects/elem
 import { createProjectsState } from '../../src/renderer/features/projects/state';
 import type { WorkspaceRenderer } from '../../src/renderer/features/projects/workspace';
 import { ClaudeLaunchAttemptRegistry } from '../../src/renderer/platform/claude-launch-attempt';
+import { ConversationTransitionQueue } from '../../src/renderer/features/projects/conversation-transition-queue';
 
 /*
  * These rows are rebuilt by every workspace re-render, so the button a user pressed is replaced by an
@@ -162,6 +164,98 @@ describe('projects workspace actions', () => {
     );
   });
 
+  it('keeps overflow queued and lets its exact cross cancel without opening a session', async () => {
+    const launch = deferred<boolean>();
+    const openConversation = vi.fn(async (): Promise<WorkspaceResult> => ({
+      createdSessionId: 'created-running',
+      ok: true,
+      runtime: 'claude',
+      state: workspaceState,
+    }));
+    Object.defineProperty(window, 'controlPanel', {
+      configurable: true,
+      value: {
+        openConversation,
+        setWorkspaceTransitionBusy: vi.fn(async () => []),
+      },
+    });
+    const { actions, dependencies, state } = setup();
+    state.conversationTransitionQueue = new ConversationTransitionQueue(1);
+    vi.mocked(dependencies.launchCreatedConversation).mockImplementation(() => launch.promise);
+
+    const first = actions.openConversation('D:\\work\\repo');
+    await vi.waitFor(() => {
+      expect(dependencies.launchCreatedConversation).toHaveBeenCalledOnce();
+    });
+    const second = actions.openConversation('D:\\work\\repo');
+    await vi.waitFor(() => {
+      expect([...state.pendingConversations.values()]).toEqual([
+        expect.objectContaining({ phase: 'queued', queuePosition: 1 }),
+      ]);
+    });
+    expect([...state.pendingConversations.values()][0]?.cancel?.()).toBe(true);
+    await second;
+
+    expect(openConversation).toHaveBeenCalledOnce();
+    expect(dependencies.showToast).toHaveBeenCalledWith('已取消排队中的新建对话');
+    launch.resolve(true);
+    await first;
+  });
+
+  it('shares admission with history restores and cancels queued history without touching main', async () => {
+    const launch = deferred<boolean>();
+    const openStoredConversation = vi.fn();
+    Object.defineProperty(window, 'controlPanel', {
+      configurable: true,
+      value: {
+        openConversation: vi.fn(async (): Promise<WorkspaceResult> => ({
+          createdSessionId: 'created-running',
+          ok: true,
+          runtime: 'claude',
+          state: workspaceState,
+        })),
+        openStoredConversation,
+        setWorkspaceTransitionBusy: vi.fn(async () => []),
+      },
+    });
+    const { actions, dependencies, rowsApi, state, workspaceRenderer } = setup();
+    state.conversationTransitionQueue = new ConversationTransitionQueue(1);
+    vi.mocked(dependencies.launchCreatedConversation).mockImplementation(() => launch.promise);
+    const stored = {
+      conversationId: '9f1c2b3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
+      lastActiveAt: 1,
+      messageCount: 2,
+      sessionId: '9f1c2b3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
+      sessionName: '排队恢复稿',
+    };
+    state.storedConversations.set('d:\\work\\repo', [stored]);
+    const historyActions = createProjectsHistoryActions(
+      state,
+      dependencies,
+      workspaceRenderer,
+      rowsApi,
+      async () => null,
+      async () => null,
+    );
+
+    const running = actions.openConversation('D:\\work\\repo');
+    await vi.waitFor(() => expect(dependencies.launchCreatedConversation).toHaveBeenCalledOnce());
+    const restoring = historyActions.resumeStoredConversation('D:\\work\\repo', stored);
+    await vi.waitFor(() => {
+      expect([...state.pendingConversations.values()]).toEqual([
+        expect.objectContaining({ kind: 'restoring', phase: 'queued', queuePosition: 1 }),
+      ]);
+    });
+    expect([...state.pendingConversations.values()][0]?.cancel?.()).toBe(true);
+    await restoring;
+
+    expect(openStoredConversation).not.toHaveBeenCalled();
+    expect(state.storedConversations.get('d:\\work\\repo')).toEqual([stored]);
+    expect(dependencies.showToast).toHaveBeenCalledWith('已取消排队中的历史对话“排队恢复稿”');
+    launch.resolve(true);
+    await running;
+  });
+
   it('rolls back the exact temporary terminal when background launch fails', async () => {
     const closeProject = vi.fn(async () => ({ ok: true, state: workspaceState }));
     Object.defineProperty(window, 'controlPanel', {
@@ -178,10 +272,15 @@ describe('projects workspace actions', () => {
       },
     });
     const { actions, dependencies, state, workspaceRenderer } = setup();
-    vi.mocked(dependencies.launchCreatedConversation).mockResolvedValue(false);
+    const launch = deferred<boolean>();
+    vi.mocked(dependencies.launchCreatedConversation).mockImplementation(() => launch.promise);
 
-    await actions.openConversation('D:\\work\\repo');
-    expect(state.transitioningConversations.get('created-failed')).toBe('creating');
+    const opening = actions.openConversation('D:\\work\\repo');
+    await vi.waitFor(() => {
+      expect(state.transitioningConversations.get('created-failed')).toBe('creating');
+    });
+    launch.resolve(false);
+    await opening;
     await vi.waitFor(() => {
       expect(closeProject).toHaveBeenCalledWith('created-failed');
     });
@@ -283,5 +382,22 @@ describe('projects workspace actions', () => {
 
     expect(requestConfirmation).toHaveBeenCalledTimes(1);
     expect(closeProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a failed temporary session without offering archive confirmation', async () => {
+    const closeProject = vi.fn(async () => ({ ok: true, state: workspaceState }));
+    Object.defineProperty(window, 'controlPanel', {
+      configurable: true,
+      value: { closeProject },
+    });
+    const { actions, dependencies, state } = setup();
+    state.failedConversationTransitions.set('session-1', 'creating');
+    const status = workspaceState.sessions[0]!;
+
+    await actions.closeProject(status);
+
+    expect(dependencies.requestConfirmation).not.toHaveBeenCalled();
+    expect(closeProject).toHaveBeenCalledExactlyOnceWith('session-1');
+    expect(dependencies.showToast).toHaveBeenCalledWith(expect.stringContaining('失败临时会话'));
   });
 });

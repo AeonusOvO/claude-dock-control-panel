@@ -1,6 +1,6 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.29（2026-08-26）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.30（2026-08-26）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
@@ -494,8 +494,19 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   冷启动和关掉最后一个对话之后都没有活动会话。`getActiveStatus()` 因此返回
   `TerminalStatus | undefined`，`OperationResult.status` 也是可选字段，渲染层要判空。
   用 `homedir()` 兜底会造出一个以 Windows 用户名命名、用户从没打开过的项目。
+- `TerminalWorkspace.emitState()` 在每次广播前递增应用生命周期内的 `WorkspaceState.revision`；同步
+  `getWorkspace()` 返回当前 revision。renderer 保存已接受的最大值并丢弃更小的快照，防止并发
+  `openConversation()` 返回顺序与创建顺序不同时，旧响应删除较新会话。活动 session 变化不再全局
+  invalidate Claude launch preflight；只在精确 session 消失、generation 过期或用户取消时结束该启动。
 - `StartupModelConnectionCoordinator` 在 main 中持有整次冷启动模型恢复。`TerminalWorkspace.openBackgroundSession()` 只创建一个 stopped 的事务 owner：不 spawn ConPTY、不改活动 session、不进入 workspace snapshot，也不消耗可见的“对话 N”编号。它复用 `SessionOperationCoordinator` 和 `runClaudeProjectConfigTransaction` 的 abort/rollback 边界完成真实连接测试，只在 `assertActive()` 仍有效时把经验证 profile 提升为“下个对话接入”。
-- coordinator 状态包含 strictly monotonic `updatedAt`、`cancelAvailableAt` 和 `forceStopAt`。preload 先订阅事件再读取快照，renderer 丢弃旧 `updatedAt`，因此页面切换或迟到 invoke 都不会倒退阶段。用户取消、硬超时和受控退出都 abort 同一操作，并等待 lease completion 后才发布 `cancelled/timed-out`；任何失败都保留原 profile、释放 BusyRegistry 租约与临时 owner。`AppPreferencesStore` 对旧 version 2 数据补默认 2/5 分钟，IPC 重新校验 1–30 / 2–60 整分钟范围及 `force > cancel`。
+- coordinator 状态包含 strictly monotonic `updatedAt`、`cancelAvailableAt`、`forceStopAt`，以及短步骤
+  `step` 和可选的 renderer-safe `accountLabel`。启动恢复依次发布“读取配置 / 准备接入与网关 /
+  网络预检与连接验证 / 提交接入配置”；官方 Claude/ChatGPT 订阅只显示 provider 与白名单账户标识，
+  不返回令牌或原始 CLI JSON。preload 先订阅事件再读取快照，renderer 丢弃旧 `updatedAt`，因此页面
+  切换或迟到 invoke 都不会倒退阶段。用户取消、硬超时和受控退出都 abort 同一操作，并等待 lease
+  completion 后才发布 `cancelled/timed-out`；任何失败都保留原 profile、释放 BusyRegistry 租约与临时
+  owner。`AppPreferencesStore` 对旧 version 2 数据补默认 2/5 分钟，IPC 重新校验 1–30 / 2–60 整分钟
+  范围及 `force > cancel`。
 - PTY 输出携带会话 ID 推送到渲染进程，并写入对应 xterm.js 实例；只有活动实例可见。
 - 添加目录会记住该项目并创建首个会话；同一路径可由项目层级继续新开多个独立对话。每个 session 在
   创建时把 `AgentRuntimeStore.getNext()` 捕获为不可变 runtime，`getDevelopmentRuntime(sessionId)` 只返回
@@ -579,13 +590,20 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   开始，精确 terminal lifecycle 推进为 `starting`，owned confirmation 进入 `paused`；stale 结果不能倒退
   phase、toast 或恢复入口。
 - 关闭、删除等工作区动作仍按 **目标** 去重（`ProjectsState.workspaceMutations`）；新建是刻意的例外：
-  `openConversation` 不按目录合并，每次点击都先同步插入独立 pending 行和终端 preview，再向 main 请求
-  一个不同的 `createdSessionId`。main 返回后 pending 行无缝替换为带 `transitioningConversations` 的真实行，
-  CLI 成功才解除“正在新建”。失败会关闭精确 session；关闭也失败则写入
-  `failedConversationTransitions`，左栏显示红色“启动失败 · 请关闭”，不能伪装为运行成功。
+  `openConversation` 不按目录合并，每次点击都先同步插入独立 pending 行和终端 preview。新建与历史恢复
+  共用 renderer `ConversationTransitionQueue`；并发上限由 `navigator.hardwareConcurrency` 推导：1–2 个逻辑
+  处理器为 1，3–4 个为 2，5 个以上取一半并限制在 3–8。准入槽内并发运行完整的 main 分配与 CLI 启动，
+  溢出任务 FIFO 排队；任务完成（包括回滚退栈）才释放槽，避免只限制 session 分配却同时启动过多 CLI。
+  排队状态发布精确 position/total，尾部 `×` 仅能取消尚未准入的 entry，取消后压紧其余位置且不调用
+  `openConversation` / `openStoredConversation`，因此没有关闭或归档确认。
+- main 返回后 pending 行无缝替换为带 `transitioningConversations` 的真实行，CLI 成功才解除“正在新建”。
+  失败会关闭精确 session；关闭也失败则写入 `failedConversationTransitions`，左栏显示红色“创建失败 ·
+  请关闭”。该失败行的 `×` 直接调用精确临时 session 关闭，不进入“关闭并归档”确认或成功归档文案。
 - 历史恢复只做可逆的 UI 移动，JSONL 正文从不重命名或删除。点击后历史行立即从原数组移除并进入
-  “正在恢复”行；打开终端、模型决策或 CLI 启动任一步失败都会恢复原快照并强制重新扫描。历史扫描使用
-  `getSessionsForProjectAsync()` 的异步 I/O，并每 256 条 JSONL 记录通过 `setImmediate` 让出 main 事件循环。
+  排队/“正在恢复”行；打开终端、模型决策或 CLI 启动任一步失败都会恢复原快照并强制重新扫描。多个
+  launch preflight 决策按到达顺序逐个展示；切到兄弟会话不会取消后台决策，只有 owner 消失或 token
+  过期才精确取消。历史扫描使用 `getSessionsForProjectAsync()` 的异步 I/O，并每 256 条 JSONL 记录通过
+  `setImmediate` 让出 main 事件循环。
 
 ### 退出确认握手
 
@@ -670,7 +688,7 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   读取实际状态返回。打包版本使用 `process.execPath`；开发版本额外传入 `app.getAppPath()`，
   避免登录项只启动空 Electron。
 - `AppPreferencesStore` 的 `conversationResume` 保存三项偏好：模型不一致时每次询问、始终用当前接入或
-  始终恢复对话原接入，以及相互独立的“自动加载上次对话”“自动连接最近一次选择的平台和模型”。两个启动开关默认开启；
+  始终恢复对话原接入，以及分别保存的“自动加载上次对话”“启动时自动接入模型”。两个启动开关默认开启；
   store schema 为 version 2，读取 version 1 的 `restoreLastWorkspaceOnStartup` 时把旧值同时迁移到两个
   新开关，避免升级后擅自改变原有选择。设置页和“不再提示”都通过同一严格校验的
   `app:set-conversation-resume-preferences` 原子保存。
@@ -680,9 +698,10 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   所需的托管 ChatGPT 网关或 CCR，再执行真实连接测试；测试通过后才 commit、complete 并调用
   `launchClaudeWithSession()`。候选配置与已保存配置相同也不能跳过此过程，因为静态配置不能证明后台
   服务正在运行。测试与应用成功后把该隔离 profile 提升为全局“下个对话接入”；失败时 profile、Router
-  变更和本次新启动的闲置路由服务共同回滚。自动模型关闭时在启动阶段清除全局下个对话 profile，界面
-  明确回到“尚未选择接入”，但不删除任何历史对话的绑定。
-- 无论“自动加载上次对话”是否同时开启，main bootstrap 都在创建窗口前用短生命周期 PowerShell session
+  变更和本次新启动的闲置路由服务共同回滚。自动模型关闭时即使 workspace restore effect 关闭也会在
+  启动阶段清除全局下个对话 profile，界面明确回到“尚未选择接入”；renderer 同时跳过可见历史恢复，
+  保持没有活动模型的普通工作区，但不删除任何项目、历史对话或对话绑定。
+- 自动模型开启时，无论“自动加载上次对话”是否同时开启，main bootstrap 都在创建窗口前用短生命周期 PowerShell session
   提供 generation、取消和回滚边界，完成模型验证及全局 profile 提升后关闭该 session。随后可见恢复只
   捕获这份已确认的全局选择，不再依赖 renderer 先打开某个终端。静态 HTML 首帧已将 composer 和发送按钮设为 disabled；可见恢复打开
   stored conversation 后立即用 `beginTerminalMask()` 显示“正在连接模型…”，再在遮罩内完成模型识别，

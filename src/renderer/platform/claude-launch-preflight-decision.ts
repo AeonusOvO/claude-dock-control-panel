@@ -80,18 +80,20 @@ export class ClaudeLaunchPreflightDecisionController {
   private readonly bypassButton = requiredElement<HTMLButtonElement>(
     '#claude-launch-preflight-bypass',
   );
-  private closingInternally = false;
   private readonly decisionDialog = requiredElement<HTMLDialogElement>(
     '#claude-launch-preflight-dialog',
   );
   private readonly details = requiredElement<HTMLDetailsElement>(
     '#claude-launch-preflight-details',
   );
+  private disposed = false;
   private readonly failedItems = requiredElement<HTMLUListElement>(
     '#claude-launch-preflight-failed-items',
   );
   private readonly meta = requiredElement<HTMLElement>('#claude-launch-preflight-meta');
   private pending: PendingLaunchDecision | undefined;
+  private pendingInternalCloseEvents = 0;
+  private readonly waiting: PendingLaunchDecision[] = [];
   private readonly reasons = requiredElement<HTMLUListElement>('#claude-launch-preflight-reasons');
   private readonly recheckButton = requiredElement<HTMLButtonElement>(
     '#claude-launch-preflight-recheck',
@@ -121,7 +123,9 @@ export class ClaudeLaunchPreflightDecisionController {
       if (event.target === this.decisionDialog) void this.decide('cancel');
     });
     this.decisionDialog.addEventListener('close', () => {
-      if (!this.closingInternally && this.pending && !this.pending.inProgress) {
+      if (this.pendingInternalCloseEvents > 0) {
+        this.pendingInternalCloseEvents -= 1;
+      } else if (this.pending && !this.pending.inProgress) {
         void this.decide('cancel');
       }
     });
@@ -131,12 +135,11 @@ export class ClaudeLaunchPreflightDecisionController {
     token: ClaudeLaunchAttemptToken,
     paused: PausedClaudeLaunch,
   ): Promise<ClaudeLaunchDecisionSettlement> {
-    if (!this.dependencies.launchAttempts.isCurrent(token)) {
+    if (this.disposed || !this.dependencies.launchAttempts.isCurrent(token)) {
       return Promise.resolve({ status: 'stale' });
     }
-    this.supersedePending();
     return new Promise((resolve) => {
-      this.pending = {
+      const pending: PendingLaunchDecision = {
         decisionId: paused.decisionId,
         diagnostics: paused.diagnostics,
         inProgress: false,
@@ -144,44 +147,44 @@ export class ClaudeLaunchPreflightDecisionController {
         settled: false,
         token: { ...token },
       };
-      this.render(paused.diagnostics);
-      this.setBusy(false);
-      if (!this.decisionDialog.open) this.decisionDialog.showModal();
-      this.recheckButton.focus();
+      if (this.pending) {
+        this.waiting.push(pending);
+      } else {
+        this.activate(pending);
+      }
     });
   }
 
-  /** Cancels a dialog after a project/session/PTY reconciliation makes its exact token stale. */
+  /** Cancels only decisions whose session/PTY disappeared; a foreground switch is presentation-only. */
   public reconcileWorkspace(workspace: WorkspaceState): void {
     const pending = this.pending;
-    if (!pending) return;
-    const session = workspace.sessions.find(({ id }) => id === pending.token.sessionId);
-    if (
-      workspace.activeSessionId === pending.token.sessionId &&
-      session &&
-      this.dependencies.launchAttempts.isCurrent(pending.token)
-    ) {
-      return;
+    if (pending && !this.decisionIsCurrent(pending, workspace)) {
+      if (!pending.inProgress) {
+        void this.decide('cancel');
+      } else {
+        void window.controlPanel.decideClaudeLaunchPreflight({
+          choice: 'cancel',
+          decisionId: pending.decisionId,
+        });
+        this.releasePending(pending, { status: 'stale' }, true);
+      }
     }
-    if (!pending.inProgress) {
-      void this.decide('cancel');
-      return;
+    for (const queued of [...this.waiting]) {
+      if (!this.decisionIsCurrent(queued, workspace)) this.cancelWaiting(queued);
     }
-    void window.controlPanel.decideClaudeLaunchPreflight({
-      choice: 'cancel',
-      decisionId: pending.decisionId,
-    });
-    this.releasePending(pending, { status: 'stale' }, true);
   }
 
   public dispose(): void {
+    this.disposed = true;
     const pending = this.pending;
-    if (!pending) return;
-    void window.controlPanel.decideClaudeLaunchPreflight({
-      choice: 'cancel',
-      decisionId: pending.decisionId,
-    });
-    this.releasePending(pending, { status: 'stale' }, true);
+    if (pending) {
+      void window.controlPanel.decideClaudeLaunchPreflight({
+        choice: 'cancel',
+        decisionId: pending.decisionId,
+      });
+      this.releasePending(pending, { status: 'stale' }, true);
+    }
+    for (const queued of [...this.waiting]) this.cancelWaiting(queued);
   }
 
   private async decide(choice: 'bypass' | 'cancel' | 'recheck'): Promise<void> {
@@ -232,25 +235,51 @@ export class ClaudeLaunchPreflightDecisionController {
       this.dependencies.launchAttempts.cancel(pending.token);
       this.dependencies.refreshLaunchControls(pending.token.sessionId);
     }
-    this.closeDialog();
     pending.resolve(outcome);
+    if (!this.activateNext()) this.closeDialog();
   }
 
-  private supersedePending(): void {
-    const pending = this.pending;
-    if (!pending) return;
+  private activate(pending: PendingLaunchDecision): void {
+    this.pending = pending;
+    this.render(pending.diagnostics);
+    this.setBusy(false);
+    if (!this.decisionDialog.open) this.decisionDialog.showModal();
+    this.recheckButton.focus();
+  }
+
+  private activateNext(): boolean {
+    if (this.disposed) return false;
+    const next = this.waiting.shift();
+    if (!next) return false;
+    this.activate(next);
+    return true;
+  }
+
+  private cancelWaiting(pending: PendingLaunchDecision): void {
+    const index = this.waiting.indexOf(pending);
+    if (index < 0 || pending.settled) return;
+    this.waiting.splice(index, 1);
+    pending.settled = true;
     void window.controlPanel.decideClaudeLaunchPreflight({
       choice: 'cancel',
       decisionId: pending.decisionId,
     });
-    this.releasePending(pending, { status: 'stale' }, true);
+    this.dependencies.launchAttempts.cancel(pending.token);
+    this.dependencies.refreshLaunchControls(pending.token.sessionId);
+    pending.resolve({ status: 'stale' });
+  }
+
+  private decisionIsCurrent(pending: PendingLaunchDecision, workspace: WorkspaceState): boolean {
+    return (
+      workspace.sessions.some(({ id }) => id === pending.token.sessionId) &&
+      this.dependencies.launchAttempts.isCurrent(pending.token)
+    );
   }
 
   private closeDialog(): void {
     if (!this.decisionDialog.open) return;
-    this.closingInternally = true;
+    this.pendingInternalCloseEvents += 1;
     this.decisionDialog.close();
-    this.closingInternally = false;
   }
 
   private setBusy(busy: boolean): void {

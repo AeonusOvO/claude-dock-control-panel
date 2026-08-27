@@ -397,6 +397,13 @@ ClaudeDock。
 | `terminal:size`                         | `onTerminalSize`                  |
 | `workspace:state`                       | `onWorkspaceState`                |
 
+`StartupModelConnectionState` 的 `updatedAt` 保持单调；活动事务可同时携带 `step` 与脱敏的
+`accountLabel`。`step` 只描述当前事务阶段，`accountLabel` 只用于 Claude 官方订阅或 ChatGPT 官方订阅
+的 provider/账户呈现，不得包含令牌、密钥或原始登录响应。
+
+`WorkspaceState.revision` 由 main 在每次 `workspace:state` 广播前递增，同步请求返回当前值。renderer
+必须拒绝小于已接受 revision 的迟到快照；字段保持可选只用于旧夹具与兼容读取，当前 main 始终提供。
+
 ## 非 IPC 方法（1）
 
 | 方法             | 实现                                                                                   |

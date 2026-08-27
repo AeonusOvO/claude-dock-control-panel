@@ -228,8 +228,6 @@ const workspace = new TerminalWorkspace(
     : (id, initialCwd, initialTitle, _onData, onStatus) =>
         new IsolatedTerminal(id, initialCwd, initialTitle, onStatus),
 );
-workspace.setBeforeActiveSessionChange(() => launchPreflightDecisions.invalidateAll());
-
 const { requestPermissionModeFromScreen, resolvePendingPermissionModeProbes } =
   createPermissionModeProbes({
     pendingPermissionModeProbes,
@@ -334,7 +332,6 @@ const quit = createQuitController({
 const { beginControlledQuit, requestQuit } = quit;
 const { activateProject, addProject, chooseDirectory, failedWorkspaceResult } =
   createProjectOperations({
-    beforeActivate: () => launchPreflightDecisions.invalidateAll(),
     describeWorkspace,
     homeDirectory: runtimeProfile.paths.home,
     nextDevelopmentRuntime: () => agentRuntimeStore.getNext(),

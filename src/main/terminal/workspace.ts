@@ -71,8 +71,10 @@ export class TerminalWorkspace {
   private currentThemeId: TerminalThemeId;
   private readonly developmentRuntimes = new Map<string, DevelopmentRuntime>();
   private nextSessionNumber = 1;
+  private stateRevision = 0;
   private readonly sessions = new Map<string, ManagedTerminal>();
-  private beforeActiveSessionChange: () => void = () => undefined;
+  private beforeActiveSessionChange: (previousSessionId: string, nextSessionId: string) => void =
+    () => undefined;
   private environmentProvider: () => TerminalEnvironmentOverrides = () => ({});
 
   public constructor(
@@ -154,6 +156,7 @@ export class TerminalWorkspace {
   public getState(): TerminalWorkspaceState {
     return {
       activeSessionId: this.activeSessionId,
+      revision: this.stateRevision,
       sessions: [...this.sessions.entries()]
         .filter(([sessionId]) => !this.backgroundSessions.has(sessionId))
         .map(([, session]) => session.getStatus()),
@@ -269,7 +272,9 @@ export class TerminalWorkspace {
     );
   }
 
-  public setBeforeActiveSessionChange(callback: () => void): void {
+  public setBeforeActiveSessionChange(
+    callback: (previousSessionId: string, nextSessionId: string) => void,
+  ): void {
     this.beforeActiveSessionChange = callback;
   }
 
@@ -355,12 +360,13 @@ export class TerminalWorkspace {
   }
 
   private emitState(): void {
+    this.stateRevision += 1;
     this.onState(this.getState());
   }
 
   private setActiveSession(sessionId: string): void {
     if (this.activeSessionId === sessionId) return;
-    this.beforeActiveSessionChange();
+    this.beforeActiveSessionChange(this.activeSessionId, sessionId);
     this.activeSessionId = sessionId;
   }
 

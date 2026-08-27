@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { expectCss, settle, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
-import { claudeProjectState, terminalWorkspace } from '../helpers/renderer-terminal-fixture';
+import {
+  claudeProjectState,
+  terminalStatus,
+  terminalWorkspace,
+} from '../helpers/renderer-terminal-fixture';
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -11,6 +15,45 @@ const deferred = <T>() => {
 };
 
 describe('remaining renderer behavior contracts', () => {
+  it('ignores an older workspace snapshot after a concurrent session was already rendered', async () => {
+    const first = terminalStatus(1, { id: 'session-1', title: 'First' });
+    const second = terminalStatus(1, { id: 'session-2', title: 'Second' });
+    const newest = {
+      activeSessionId: 'session-2',
+      projects: [
+        {
+          lastActiveAt: 2,
+          missing: false,
+          name: 'Project',
+          open: true,
+          path: 'D:\\Project',
+          remembered: true,
+          sessionIds: ['session-1', 'session-2'],
+        },
+      ],
+      revision: 12,
+      sessions: [first, second],
+    };
+    await withTerminalRenderer({ getWorkspace: async () => newest }, async (harness) => {
+      harness.click('[data-rail-tab="projects"]');
+      await settle(harness);
+      expect(harness.document.querySelector('[data-session-id="session-2"]')).not.toBeNull();
+
+      harness.emit('onWorkspaceState', {
+        ...newest,
+        activeSessionId: 'session-1',
+        revision: 11,
+        sessions: [first],
+      });
+      await settle(harness);
+
+      expect(harness.document.querySelector('[data-session-id="session-2"]')).not.toBeNull();
+      expect(harness.query<HTMLElement>('[data-session-id="session-2"]').dataset.active).toBe(
+        'true',
+      );
+    });
+  });
+
   it('exposes permanent history deletion with confirmation in every stored conversation row', async () => {
     await withTerminalRenderer(
       {

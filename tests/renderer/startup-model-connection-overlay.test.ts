@@ -6,10 +6,12 @@ const connectingState = (overrides: Partial<StartupModelConnectionState> = {}) =
   const now = Date.now();
   return {
     active: true,
+    accountLabel: 'ChatGPT 官方订阅 · person@example.com',
     cancelAvailableAt: now + 120_000,
     detail: '正在真实验证 ChatGPT 官方订阅。',
     forceStopAt: now + 300_000,
     phase: 'connecting' as const,
+    step: '网络预检与连接验证',
     startedAt: now,
     updatedAt: now,
     ...overrides,
@@ -35,6 +37,15 @@ describe('startup model connection overlay', () => {
         expect(heading.inert).toBe(true);
         expect(harness.query('#startup-model-connection-title').textContent).toBe('正在接入模型');
         expect(harness.query('#startup-model-connection-detail').textContent).toContain('ChatGPT');
+        expect(harness.query('#startup-model-connection-step').textContent).toBe(
+          '网络预检与连接验证',
+        );
+        expect(harness.query('#startup-model-connection-account').textContent).toContain(
+          'person@example.com',
+        );
+        expect(harness.query<HTMLElement>('#startup-model-connection-account-row').hidden).toBe(
+          false,
+        );
         expect(harness.query<HTMLButtonElement>('#cancel-startup-model-connection').hidden).toBe(
           true,
         );

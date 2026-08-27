@@ -5,7 +5,8 @@ import type {
 } from '../../../shared/contracts';
 import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-attempt';
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
-import type { ProjectsState } from './state';
+import type { ConversationTransitionQueueState } from './conversation-transition-queue';
+import type { PendingConversation, ProjectsState } from './state';
 import type { WorkspaceRenderer } from './workspace';
 import type { ConversationModelDialogResult } from './model-resolution-dialog';
 import { beginWorkspaceConversationTransition } from './transition-busy';
@@ -75,6 +76,9 @@ interface OptimisticHistoryMove {
   finish: (render?: boolean) => void;
   historyKey: string;
   originalHistory: ClaudeSessionMetadata[] | undefined;
+  pending: PendingConversation;
+  setCancel: (cancel: () => boolean) => void;
+  updateQueueState: (queueState: ConversationTransitionQueueState) => void;
 }
 
 const beginOptimisticHistoryMove = (
@@ -89,12 +93,14 @@ const beginOptimisticHistoryMove = (
   const historyKey = projectPath.toLowerCase();
   const originalHistory = state.storedConversations.get(historyKey);
   const pendingId = `pending-conversation-${++state.pendingConversationSequence}`;
-  state.pendingConversations.set(pendingId, {
+  const pending: PendingConversation = {
     id: pendingId,
     kind: 'restoring',
+    phase: 'queued',
     projectPath,
     title: label,
-  });
+  };
+  state.pendingConversations.set(pendingId, pending);
   if (originalHistory) {
     state.storedConversations.set(
       historyKey,
@@ -116,6 +122,18 @@ const beginOptimisticHistoryMove = (
     },
     historyKey,
     originalHistory,
+    pending,
+    setCancel: (cancel) => {
+      pending.cancel = cancel;
+      rowsApi.renderProjectList();
+    },
+    updateQueueState: (queueState) => {
+      if (finished) return;
+      pending.phase = queueState.phase === 'queued' ? 'queued' : 'starting';
+      pending.queuePosition = queueState.phase === 'queued' ? queueState.position : undefined;
+      pending.queueTotal = queueState.phase === 'queued' ? queueState.total : undefined;
+      rowsApi.renderProjectList();
+    },
   };
 };
 
@@ -210,33 +228,27 @@ const beginRestoringSessionPresentation = (
   };
 };
 
-/** Resumes a stored transcript in its canonical terminal owner. */
-const resumeStoredConversationWithDependencies = async ({
+interface AdmittedHistoryRestoreInput extends ResumeStoredConversationInput {
+  label: string;
+  optimistic: OptimisticHistoryMove;
+  releaseTransition: () => void;
+  restoreKey: string;
+}
+
+const runAdmittedHistoryRestore = async ({
   dependencies,
+  label,
+  optimistic,
   options,
   projectPath,
+  releaseTransition,
   requestModelChoice,
+  restoreKey,
   rowsApi,
   session,
   state,
   workspaceRenderer,
-}: ResumeStoredConversationInput): Promise<void> => {
-  const restoreKey = `${projectPath.toLowerCase()}:${session.conversationId}`;
-  if (state.storedConversationRestores.has(restoreKey)) {
-    return;
-  }
-  state.storedConversationRestores.add(restoreKey);
-  const releaseTransition = beginWorkspaceConversationTransition(state);
-  const label = session.sessionName || session.conversationId.slice(0, 8);
-  const optimistic = beginOptimisticHistoryMove(
-    dependencies,
-    rowsApi,
-    state,
-    projectPath,
-    session,
-    label,
-    Boolean(options),
-  );
+}: AdmittedHistoryRestoreInput): Promise<void> => {
   let committed = false;
   let openedSessionId: string | undefined;
   let openedNewSession = false;
@@ -410,6 +422,65 @@ const resumeStoredConversationWithDependencies = async ({
     }
     state.storedConversationRestores.delete(restoreKey);
     releaseTransition();
+  }
+};
+
+/** Resumes a stored transcript in its canonical terminal owner. */
+const resumeStoredConversationWithDependencies = async ({
+  dependencies,
+  options,
+  projectPath,
+  requestModelChoice,
+  rowsApi,
+  session,
+  state,
+  workspaceRenderer,
+}: ResumeStoredConversationInput): Promise<void> => {
+  const restoreKey = `${projectPath.toLowerCase()}:${session.conversationId}`;
+  if (state.storedConversationRestores.has(restoreKey)) {
+    return;
+  }
+  state.storedConversationRestores.add(restoreKey);
+  const releaseTransition = beginWorkspaceConversationTransition(state);
+  const label = session.sessionName || session.conversationId.slice(0, 8);
+  const optimistic = beginOptimisticHistoryMove(
+    dependencies,
+    rowsApi,
+    state,
+    projectPath,
+    session,
+    label,
+    Boolean(options),
+  );
+  const ticket = state.conversationTransitionQueue.enqueue(
+    () =>
+      runAdmittedHistoryRestore({
+        dependencies,
+        label,
+        optimistic,
+        options,
+        projectPath,
+        releaseTransition,
+        requestModelChoice,
+        restoreKey,
+        rowsApi,
+        session,
+        state,
+        workspaceRenderer,
+      }),
+    optimistic.updateQueueState,
+  );
+  optimistic.setCancel(ticket.cancel);
+  const outcome = await ticket.result;
+  if (outcome.status === 'cancelled') {
+    optimistic.finish(false);
+    if (optimistic.originalHistory) {
+      state.storedConversations.set(optimistic.historyKey, optimistic.originalHistory);
+    }
+    rowsApi.renderProjectList();
+    state.storedConversationRestores.delete(restoreKey);
+    releaseTransition();
+    dependencies.showToast(`已取消排队中的历史对话“${label}”`);
   }
 };
 

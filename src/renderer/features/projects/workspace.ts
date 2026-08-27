@@ -81,6 +81,12 @@ export const createWorkspaceRenderer = (
   titleView: ProjectsTitleView,
 ): WorkspaceRenderer => {
   const renderWorkspace = (workspace: WorkspaceState): void => {
+    if (workspace.revision !== undefined && workspace.revision < state.workspaceRevision) {
+      return;
+    }
+    if (workspace.revision !== undefined) {
+      state.workspaceRevision = workspace.revision;
+    }
     const previousActiveSessionId = dependencies.getWorkspaceState().activeSessionId;
     const nextActiveStatus = workspace.sessions.find(
       (status) => status.id === workspace.activeSessionId,

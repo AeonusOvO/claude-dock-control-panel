@@ -297,6 +297,16 @@
             <span class="step-kicker">启动接入</span>
             <strong id="startup-model-connection-title">正在接入模型</strong>
             <p id="startup-model-connection-detail">正在读取最近一次会话的平台、账号与模型配置。</p>
+            <dl class="startup-model-connection__facts">
+              <div>
+                <dt>当前步骤</dt>
+                <dd id="startup-model-connection-step">读取配置</dd>
+              </div>
+              <div id="startup-model-connection-account-row" hidden>
+                <dt>登录账户</dt>
+                <dd id="startup-model-connection-account"></dd>
+              </div>
+            </dl>
             <small id="startup-model-connection-timing">正在后台安全验证，请稍候。</small>
             <button
               class="button button--compact button--quiet"
@@ -3194,15 +3204,17 @@
                   <label class="settings-row" for="settings-auto-load-last-conversation">
                     <span>
                       <strong>自动加载上次对话</strong>
-                      <small>启动后打开上次项目中最后使用的对话；默认开启。</small>
+                      <small
+                        >启动后打开上次项目中最后使用的对话；仅在“启动时自动接入模型”开启时执行。</small
+                      >
                     </span>
                     <input id="settings-auto-load-last-conversation" type="checkbox" checked />
                   </label>
                   <label class="settings-row" for="settings-auto-load-last-conversation-model">
                     <span>
-                      <strong>自动连接最近一次选择的平台和模型</strong>
+                      <strong>启动时自动接入模型</strong>
                       <small
-                        >启动后恢复并验证最近一次的平台、账户/API、接口、详细模型和简单模型；默认开启，关闭后启动时不选择接入。</small
+                        >恢复并验证最近一次的平台、账户/API、接口和模型；关闭后不会自动打开或启动历史对话，并保持未接入状态。</small
                       >
                     </span>
                     <input

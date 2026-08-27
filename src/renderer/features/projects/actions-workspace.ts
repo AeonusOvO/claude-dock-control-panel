@@ -5,8 +5,9 @@ import type {
   WorkspaceState,
 } from '../../../shared/contracts';
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
+import type { ConversationTransitionQueueState } from './conversation-transition-queue';
 import type { ProjectsElements } from './elements';
-import type { ProjectsState } from './state';
+import type { PendingConversation, ProjectsState } from './state';
 import type { WorkspaceRenderer } from './workspace';
 import { beginWorkspaceConversationTransition } from './transition-busy';
 
@@ -26,9 +27,21 @@ const beginOptimisticConversation = (
   rowsApi: ProjectsRowsApi,
   projectPath: string,
   title: string,
-): { finish: (render?: boolean) => void } => {
+): {
+  finish: (render?: boolean) => void;
+  pending: PendingConversation;
+  setCancel: (cancel: () => boolean) => void;
+  updateQueueState: (queueState: ConversationTransitionQueueState) => void;
+} => {
   const id = `pending-conversation-${++state.pendingConversationSequence}`;
-  state.pendingConversations.set(id, { id, kind: 'creating', projectPath, title });
+  const pending: PendingConversation = {
+    id,
+    kind: 'creating',
+    phase: 'queued',
+    projectPath,
+    title,
+  };
+  state.pendingConversations.set(id, pending);
   state.expandedFolders.add(projectPath.toLowerCase());
   rowsApi.renderProjectList();
   const releasePreview = dependencies.beginWorkspaceTerminalPreview('正在新建会话…');
@@ -40,6 +53,18 @@ const beginOptimisticConversation = (
       state.pendingConversations.delete(id);
       releasePreview();
       if (render) rowsApi.renderProjectList();
+    },
+    pending,
+    setCancel: (cancel) => {
+      pending.cancel = cancel;
+      rowsApi.renderProjectList();
+    },
+    updateQueueState: (queueState) => {
+      if (finished) return;
+      pending.phase = queueState.phase === 'queued' ? 'queued' : 'starting';
+      pending.queuePosition = queueState.phase === 'queued' ? queueState.position : undefined;
+      pending.queueTotal = queueState.phase === 'queued' ? queueState.total : undefined;
+      rowsApi.renderProjectList();
     },
   };
 };
@@ -54,7 +79,7 @@ interface LaunchCreatedConversationInput {
   workspaceRenderer: WorkspaceRenderer;
 }
 
-const launchCreatedConversation = ({
+const launchCreatedConversation = async ({
   dependencies,
   onSettled = () => undefined,
   projectPath,
@@ -62,7 +87,7 @@ const launchCreatedConversation = ({
   rowsApi,
   state,
   workspaceRenderer,
-}: LaunchCreatedConversationInput): boolean => {
+}: LaunchCreatedConversationInput): Promise<boolean> => {
   if (!result.createdSessionId || !result.runtime) return false;
   const { createdSessionId, runtime } = result;
   state.transitioningConversations.set(createdSessionId, 'creating');
@@ -88,29 +113,26 @@ const launchCreatedConversation = ({
       );
     }
   };
-  void dependencies
-    .launchCreatedConversation(createdSessionId, runtime)
-    .then(async (started) => {
-      if (started) {
-        state.failedConversationTransitions.delete(createdSessionId);
-        dependencies.showToast(
-          `已在 ${dependencies.projectNameFromPath(projectPath)} 新建 ${
-            runtime === 'codex' ? 'Codex' : 'Claude Code'
-          } 对话`,
-        );
-        return;
-      }
+  try {
+    const started = await dependencies.launchCreatedConversation(createdSessionId, runtime);
+    if (started) {
+      state.failedConversationTransitions.delete(createdSessionId);
+      dependencies.showToast(
+        `已在 ${dependencies.projectNameFromPath(projectPath)} 新建 ${
+          runtime === 'codex' ? 'Codex' : 'Claude Code'
+        } 对话`,
+      );
+    } else {
       await rollback(runtime === 'codex' ? 'Codex 对话准备失败。' : 'Claude Code 对话启动失败。');
-    })
-    .catch(async (error: unknown) => {
-      await rollback(error instanceof Error ? `${error.message}。` : '新对话启动失败。');
-    })
-    .finally(() => {
-      state.transitioningConversations.delete(createdSessionId);
-      releaseMask();
-      rowsApi.renderProjectList();
-      onSettled();
-    });
+    }
+  } catch (error) {
+    await rollback(error instanceof Error ? `${error.message}。` : '新对话启动失败。');
+  } finally {
+    state.transitioningConversations.delete(createdSessionId);
+    releaseMask();
+    rowsApi.renderProjectList();
+    onSettled();
+  }
   return true;
 };
 
@@ -178,6 +200,79 @@ const handleAddedProjectResult = (
   return true;
 };
 
+interface OpenConversationInput {
+  dependencies: ProjectsActionsDependencies;
+  projectPath: string;
+  rowsApi: ProjectsRowsApi;
+  state: ProjectsState;
+  workspaceRenderer: WorkspaceRenderer;
+}
+
+/** Queues one independently owned conversation and retains its continuation across navigation. */
+const openConversationWithDependencies = async ({
+  dependencies,
+  projectPath,
+  rowsApi,
+  state,
+  workspaceRenderer,
+}: OpenConversationInput): Promise<void> => {
+  const releaseTransition = beginWorkspaceConversationTransition(state);
+  const optimistic = beginOptimisticConversation(
+    state,
+    dependencies,
+    rowsApi,
+    projectPath,
+    '新对话',
+  );
+  const ticket = state.conversationTransitionQueue.enqueue(async () => {
+    let result: WorkspaceResult;
+    try {
+      result = await window.controlPanel.openConversation(projectPath);
+    } catch (error) {
+      optimistic.finish();
+      releaseTransition();
+      dependencies.showToast(error instanceof Error ? error.message : '无法新建对话。', 'error');
+      return;
+    }
+    optimistic.finish(false);
+    workspaceRenderer.renderWorkspace(result.state);
+    if (!result.ok) {
+      releaseTransition();
+      dependencies.showToast(dependencies.resultFailureMessage(result, '无法新建对话。'), 'error');
+      return;
+    }
+
+    if (
+      !(await launchCreatedConversation({
+        dependencies,
+        onSettled: releaseTransition,
+        projectPath,
+        result,
+        rowsApi,
+        state,
+        workspaceRenderer,
+      }))
+    ) {
+      releaseTransition();
+      dependencies.showToast('新对话已打开，但没有取得对应的后台启动标识。', 'error');
+    }
+    requestActiveTerminalFocus(dependencies, result.state);
+  }, optimistic.updateQueueState);
+  optimistic.setCancel(ticket.cancel);
+  try {
+    const outcome = await ticket.result;
+    if (outcome.status === 'cancelled') {
+      optimistic.finish();
+      releaseTransition();
+      dependencies.showToast('已取消排队中的新建对话');
+    }
+  } catch (error) {
+    optimistic.finish();
+    releaseTransition();
+    dependencies.showToast(error instanceof Error ? error.message : '无法新建对话。', 'error');
+  }
+};
+
 export const createProjectsWorkspaceActions = (
   elements: ProjectsElements,
   state: ProjectsState,
@@ -222,7 +317,9 @@ export const createProjectsWorkspaceActions = (
    */
   const closeProject = async (status: TerminalStatus): Promise<void> =>
     runOnce(`close:${status.id}`, async () => {
+      const transitionFailure = state.failedConversationTransitions.get(status.id);
       if (
+        !transitionFailure &&
         status.phase === 'running' &&
         !(await dependencies.requestConfirmation({
           confirmLabel: '关闭并归档',
@@ -247,7 +344,11 @@ export const createProjectsWorkspaceActions = (
       state.failedConversationTransitions.delete(status.id);
       state.expandedFolders.add(projectPath.toLowerCase());
       await rowsApi.loadFolderHistory(projectPath, true);
-      dependencies.showToast(`已关闭“${status.title}”，可在历史对话中恢复`);
+      dependencies.showToast(
+        transitionFailure
+          ? `已移除“${status.title}”的失败临时会话`
+          : `已关闭“${status.title}”，可在历史对话中恢复`,
+      );
     });
 
   /**
@@ -255,48 +356,14 @@ export const createProjectsWorkspaceActions = (
    * debounce: ten clicks create ten terminal owners, and each engine launch continues even when a
    * later click makes another tab active.
    */
-  const openConversation = async (projectPath: string): Promise<void> => {
-    const releaseTransition = beginWorkspaceConversationTransition(state);
-    const optimistic = beginOptimisticConversation(
-      state,
+  const openConversation = (projectPath: string): Promise<void> =>
+    openConversationWithDependencies({
       dependencies,
-      rowsApi,
       projectPath,
-      '新对话',
-    );
-    let result: WorkspaceResult;
-    try {
-      result = await window.controlPanel.openConversation(projectPath);
-    } catch (error) {
-      optimistic.finish();
-      releaseTransition();
-      dependencies.showToast(error instanceof Error ? error.message : '无法新建对话。', 'error');
-      return;
-    }
-    optimistic.finish(false);
-    workspaceRenderer.renderWorkspace(result.state);
-    if (!result.ok) {
-      releaseTransition();
-      dependencies.showToast(dependencies.resultFailureMessage(result, '无法新建对话。'), 'error');
-      return;
-    }
-
-    if (
-      !launchCreatedConversation({
-        dependencies,
-        onSettled: releaseTransition,
-        projectPath,
-        result,
-        rowsApi,
-        state,
-        workspaceRenderer,
-      })
-    ) {
-      releaseTransition();
-      dependencies.showToast('新对话已打开，但没有取得对应的后台启动标识。', 'error');
-    }
-    requestActiveTerminalFocus(dependencies, result.state);
-  };
+      rowsApi,
+      state,
+      workspaceRenderer,
+    });
 
   const closeProjectFolder = (project: WorkspaceProjectView): Promise<void> =>
     closeProjectFolderWithDependencies(project, state, dependencies, workspaceRenderer, rowsApi);
@@ -340,7 +407,7 @@ export const createProjectsWorkspaceActions = (
         if (!result.reused) {
           const releaseTransition = beginWorkspaceConversationTransition(state);
           if (
-            !launchCreatedConversation({
+            !(await launchCreatedConversation({
               dependencies,
               onSettled: releaseTransition,
               projectPath: directoryPath,
@@ -348,7 +415,7 @@ export const createProjectsWorkspaceActions = (
               rowsApi,
               state,
               workspaceRenderer,
-            })
+            }))
           ) {
             releaseTransition();
           }

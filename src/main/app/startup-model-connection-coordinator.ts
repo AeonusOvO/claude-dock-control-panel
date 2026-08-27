@@ -13,6 +13,9 @@ export interface StartupModelConnectionRunContext {
   assertActive: () => void;
   signal: AbortSignal;
   updateDetail: (detail: string) => void;
+  updateProgress: (
+    progress: Pick<StartupModelConnectionState, 'accountLabel' | 'detail' | 'step'>,
+  ) => void;
 }
 
 type StartupModelConnectionListener = (state: StartupModelConnectionState) => void;
@@ -103,6 +106,7 @@ export class StartupModelConnectionCoordinator {
       detail: '正在读取最近一次会话的平台、账号与模型配置。',
       forceStopAt: startedAt + timing.forceStopAfterMs,
       phase: 'connecting',
+      step: '读取配置',
       startedAt,
       updatedAt: startedAt,
     });
@@ -122,6 +126,10 @@ export class StartupModelConnectionCoordinator {
         updateDetail: (detail) => {
           if (this.active !== active || active.cancelReason) return;
           this.publish({ ...this.state, detail, updatedAt: Date.now() });
+        },
+        updateProgress: (progress) => {
+          if (this.active !== active || active.cancelReason) return;
+          this.publish({ ...this.state, ...progress, updatedAt: Date.now() });
         },
       });
       if (controller.signal.aborted) {
