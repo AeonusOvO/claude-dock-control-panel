@@ -909,21 +909,40 @@ app
         const animation = indicator.getAnimations()[0];
         animation.pause();
         const duration = Number(animation.effect.getTiming().duration);
-        animation.currentTime = duration / 4;
-        const matrix = new DOMMatrix(getComputedStyle(indicator).transform);
+        const sampleRotation = (fraction) => {
+          animation.currentTime = duration * fraction;
+          return new DOMMatrix(getComputedStyle(indicator).transform);
+        };
+        const initialDirectionB = sampleRotation(1 / 16).b;
+        const turns = [0.25, 0.5, 0.75].map((fraction) => {
+          const matrix = sampleRotation(fraction);
+          return ((-Math.atan2(matrix.b, matrix.a) / (2 * Math.PI)) + 1) % 1;
+        });
         const result = {
           animationName: style.animationName,
           animationTimingFunction: style.animationTimingFunction,
-          quarterTurnB: matrix.b,
+          expectedTimingFunction: style.getPropertyValue('--ease-standard').trim(),
+          initialDirectionB,
+          turns,
         };
         animation.play();
         return result;
       })()
     `);
+    const [quarterTurn, halfTurn, threeQuarterTurn] = startupConnectionMotion.turns;
     if (
       startupConnectionMotion.animationName !== 'startup-model-connection-spin' ||
-      startupConnectionMotion.animationTimingFunction !== 'linear' ||
-      startupConnectionMotion.quarterTurnB > -0.9
+      startupConnectionMotion.animationTimingFunction !==
+        startupConnectionMotion.expectedTimingFunction ||
+      startupConnectionMotion.animationTimingFunction === 'linear' ||
+      startupConnectionMotion.initialDirectionB >= -0.1 ||
+      !startupConnectionMotion.turns.every(Number.isFinite) ||
+      quarterTurn <= 0.25 ||
+      halfTurn <= quarterTurn ||
+      threeQuarterTurn <= halfTurn ||
+      threeQuarterTurn >= 1 ||
+      quarterTurn <= halfTurn - quarterTurn ||
+      halfTurn - quarterTurn <= threeQuarterTurn - halfTurn
     ) {
       throw new Error(
         `Startup model connection arrow motion is incorrect: ${JSON.stringify(startupConnectionMotion)}`,
