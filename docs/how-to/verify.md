@@ -54,6 +54,11 @@ npm run dist
 Electron 布局、控件、视觉、select、滚动和 ConPTY 命令会构建对应进程并真实启动 Electron；accelerated
 soak 直接运行 Node 合成时钟。最终候选的这些门禁必须在全部发行改动提交后的 exact commit 上运行。
 
+`test:visual:real` 使用私有隔离目录中预置的无凭据 Claude 接入和 fake adapter；跳过引导不会替测试自动
+选择接入。禁止真实 CLI、外部路由写入和应用更新的隔离限制保持不变。旧版隐藏启动按钮不再作为可点击
+控件，真实 CLI 拒绝在 IPC 边界检查；其余视觉交互仍要求实际窗口命中，不能用脚本穿过隐藏控件。
+侧栏引擎选择验证“下一个对话”的偏好持久化，同时核对当前原生会话的 ID、引擎、正文和输入框保持不变。
+
 另有三项默认跳过的 Windows 集成测试，覆盖真实进程树捕获/终止、真实 listener/loopback tuple 和带
 exact-process 校验的模型读取。最终候选在 Windows 上运行：
 

@@ -14,14 +14,43 @@ const isolatedRoot = path.join(
 );
 const userData = path.join(isolatedRoot, 'userData');
 const appPreferences = path.join(userData, 'app-preferences');
+const claudePreferences = path.join(userData, 'claude');
 const fakeHome = path.join(isolatedRoot, 'home');
 const projects = path.join(isolatedRoot, 'projects');
 const projectPath = path.join(projects, 'native-conversation-visual-project');
 const electronPath = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
 
-for (const directory of [outputRoot, userData, appPreferences, fakeHome, projects, projectPath]) {
+for (const directory of [
+  outputRoot,
+  userData,
+  appPreferences,
+  claudePreferences,
+  fakeHome,
+  projects,
+  projectPath,
+]) {
   mkdirSync(directory, { recursive: true });
 }
+// A prepared, credential-free connection in this fixture's private profile. Keep the isolated
+// runtime's external-write/network/real-CLI guards intact; no host account or routing file is used.
+writeFileSync(
+  path.join(claudePreferences, 'project-profiles.json'),
+  JSON.stringify({
+    version: 1,
+    projects: {
+      [path.join(claudePreferences, 'next-conversation-profile').toLocaleLowerCase('en-US')]: {
+        apiKeyHelperPolicy: 'prefer-claudedock',
+        authMode: 'existing',
+        baseUrl: '',
+        model: 'default',
+        modelFast: 'default',
+        preset: 'anthropic',
+        protocol: 'anthropic',
+        provider: 'anthropic',
+      },
+    },
+  }),
+);
 writeFileSync(
   path.join(appPreferences, 'onboarding.json'),
   `${JSON.stringify(
@@ -353,25 +382,30 @@ const main = async () => {
       'the first-run guide to finish closing and release the workbench',
     );
     await evaluate(
-      `(async () => window.controlPanel.addProject(${JSON.stringify(projectPath)}))()`,
+      `(async () => {
+        // Skipping onboarding now deliberately leaves the next development runtime unconnected.
+        // This fixture exercises Claude explicitly, without configuring or launching a real CLI.
+        await window.controlPanel.setNextDevelopmentRuntime('claude');
+        const result = await window.controlPanel.addProject(${JSON.stringify(projectPath)});
+        if (!result.ok) throw new Error(result.error || 'Visual fixture project could not be created');
+        return true;
+      })()`,
     );
     await waitFor(`() => Boolean(document.querySelector('.conversation-item'))`, 'the project');
 
-    await waitFor(
-      `() => document.querySelector('#run-claude')?.disabled === false`,
-      'the actionable safe-session button',
-    );
-    await capture('claude-safe-session-action.png', {
-      interaction: 'launch-ready',
-      theme: await evaluate(`document.documentElement.dataset.theme`),
-    });
-    await click('#run-claude');
-    await waitFor(
-      `() => document.querySelector('#native-conversation')?.dataset.state !== 'open' && !document.querySelector('#terminal-shell')?.classList.contains('terminal-shell--native') && document.querySelector('#run-claude')?.disabled === false && document.querySelector('#toast')?.textContent?.includes('隔离运行配置禁止启动')`,
-      'the isolated profile to refuse the primary safe terminal launch',
-    );
-    await capture('claude-safe-terminal-primary.png', {
-      interaction: 'safe-terminal-primary',
+    // Conversations now launch automatically; the legacy run button is intentionally hidden.
+    // Keep the isolation guard assertion at the IPC boundary, not by clicking an invisible control.
+    const refusedLaunch = await evaluate(`(async () => {
+      const workspace = await window.controlPanel.getWorkspace();
+      try { return JSON.stringify(await window.controlPanel.launchClaude(workspace.activeSessionId, 'new')); }
+      catch (error) { return error instanceof Error ? error.message : String(error); }
+    })()`);
+    if (!refusedLaunch.includes('隔离运行配置禁止启动')) {
+      throw new Error('The isolated profile did not refuse a real CLI launch: ' + refusedLaunch);
+    }
+    await capture('claude-workspace-ready.png', {
+      interaction: 'workspace-ready',
+      isolatedLaunchRefused: true,
       theme: await evaluate(`document.documentElement.dataset.theme`),
     });
 
@@ -807,22 +841,16 @@ const main = async () => {
       theme: 'midnight',
     });
 
-    // Runtime switching is deliberately the final real-window interaction.
-    //
-    // This step used to claim the active native owner wins the conflict and the switch rolls back.
-    // It does not: `runtime:set` gates only on `hasActiveRuntime`, which is PTY-based
-    // (`ClaudeRuntime.isActive` reads the workspace-session map), while a native conversation holds
-    // its route under `nativeRouteReservations`. Nothing in the switch path consults conversation
-    // ownership, so the switch commits. The old assertion never caught this because `waitFor`
-    // evaluated an uninvoked arrow function and returned truthy on its first poll.
-    //
-    // What is actually guaranteed today — and what this now asserts — is that the switch is not
-    // destructive: the native transcript, the open panel and a usable composer all survive it,
-    // because the route stays reserved (`RouteLifecycleCoordinator.hasUser` counts reservations,
-    // not just active PTY sessions). Whether the switch *should* additionally be refused while a
-    // native turn is live is an open product question; it is not implemented anywhere in main, the
-    // renderer, the root docs or the tests, so this harness must not pretend it is.
-    const beforeSwitch = await evaluate(`document.querySelectorAll('.native-message').length`);
+    // The sidebar picker configures the NEXT conversation, not the active session. Verify both
+    // authorities: the next default persists, while the existing owner and native transcript stay.
+    const beforeSwitch = await evaluate(`(async () => {
+      const workspace = await window.controlPanel.getWorkspace();
+      return {
+        messages: document.querySelectorAll('.native-message').length,
+        runtime: (await window.controlPanel.getDevelopmentRuntime(workspace.activeSessionId)).runtime,
+        sessionId: workspace.activeSessionId,
+      };
+    })()`);
     await click('#runtime-disclosure > summary');
     await waitFor(
       `() => document.querySelector('#runtime-disclosure')?.open === true`,
@@ -830,17 +858,33 @@ const main = async () => {
     );
     await click("label[for='runtime-codex']");
     await waitFor(
-      `() => document.body.dataset.agentRuntime === 'codex' && document.querySelector('#runtime-codex')?.checked && !document.querySelector('#runtime-picker')?.disabled`,
-      'the runtime switch to settle',
+      `async () => (await window.controlPanel.getNextDevelopmentRuntime()) === 'codex' && document.querySelector('#runtime-codex')?.checked && !document.querySelector('#runtime-picker')?.disabled`,
+      'the next-conversation runtime selection to settle',
     );
-    const afterSwitch = await evaluate(`(() => ({
-      composerDisabled: document.querySelector('#native-composer-input')?.disabled ?? '(missing)',
-      messages: document.querySelectorAll('.native-message').length,
-      panelState: document.querySelector('#native-conversation')?.dataset.state ?? '(missing)',
-    }))()`);
-    if (afterSwitch.messages !== beforeSwitch) {
+    const afterSwitch = await evaluate(`(async () => {
+      const workspace = await window.controlPanel.getWorkspace();
+      return {
+        composerDisabled: document.querySelector('#native-composer-input')?.disabled ?? '(missing)',
+        displayedRuntime: document.body.dataset.agentRuntime,
+        messages: document.querySelectorAll('.native-message').length,
+        panelState: document.querySelector('#native-conversation')?.dataset.state ?? '(missing)',
+        runtime: (await window.controlPanel.getDevelopmentRuntime(workspace.activeSessionId)).runtime,
+        sessionId: workspace.activeSessionId,
+      };
+    })()`);
+    if (
+      afterSwitch.runtime !== beforeSwitch.runtime ||
+      afterSwitch.sessionId !== beforeSwitch.sessionId ||
+      afterSwitch.displayedRuntime !== beforeSwitch.runtime
+    ) {
       throw new Error(
-        `a runtime switch must not drop native transcript content, saw ${beforeSwitch} then ${afterSwitch.messages}.`,
+        'Selecting the next runtime changed the active session owner: ' +
+          JSON.stringify({ beforeSwitch, afterSwitch }),
+      );
+    }
+    if (afterSwitch.messages !== beforeSwitch.messages) {
+      throw new Error(
+        `a next-runtime selection must not drop native transcript content, saw ${beforeSwitch.messages} then ${afterSwitch.messages}.`,
       );
     }
     if (afterSwitch.panelState !== 'open') {
@@ -852,8 +896,8 @@ const main = async () => {
       throw new Error('a runtime switch must leave the native composer usable.');
     }
     await capture('midnight-runtime-switch.png', {
-      interaction: 'runtime-switch',
-      state: 'native-survives',
+      interaction: 'next-runtime-selection',
+      state: 'native-owner-preserved',
       theme: 'midnight',
     });
 

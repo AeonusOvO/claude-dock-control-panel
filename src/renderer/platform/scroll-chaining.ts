@@ -291,6 +291,21 @@ const percentile95 = (samples: readonly number[]): number => {
   return sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0;
 };
 
+const readScrollFrame = (
+  candidates: Iterable<Element>,
+  read: ProbeReader,
+): Map<Element, ScrollProbe> => {
+  const probes = new Map<Element, ScrollProbe>();
+  for (const candidate of candidates) {
+    try {
+      probes.set(candidate, read(candidate));
+    } catch {
+      probes.set(candidate, disconnectedProbe());
+    }
+  }
+  return probes;
+};
+
 const applyScrollFrame = (
   writes: ReadonlyMap<Element, number>,
   appliedTops: WeakMap<Element, number>,
@@ -350,14 +365,7 @@ export const installScrollChaining = (
     }
 
     // READ PHASE. Geometry and computed style are collected before any scrollTop assignment.
-    const probes = new Map<Element, ScrollProbe>();
-    for (const candidate of candidates) {
-      try {
-        probes.set(candidate, readProbe(candidate));
-      } catch {
-        probes.set(candidate, disconnectedProbe());
-      }
-    }
+    const probes = readScrollFrame(candidates, readProbe);
 
     // A scrollbar drag, keyboard action, state restoration or layout clamp owns its new position.
     // Never pull it back toward an old animated target, or retain the old parent latch afterwards.
@@ -513,7 +521,15 @@ export const installScrollChaining = (
     if (lastApplied !== undefined && Math.abs(target.scrollTop - lastApplied) <= 1) return;
     motions.delete(target);
     appliedTops.delete(target);
-    if (activeGesture?.chain.includes(target)) stopMotion();
+    if (activeGesture?.chain.includes(target)) {
+      for (const candidate of activeGesture.chain) motions.delete(candidate);
+      activeGesture = undefined;
+    }
+    // Native scroll notifications are asynchronous: they can arrive after the next wheel was queued.
+    // Cancel the old momentum, but retain that new input and reallocate it from the restored child.
+    for (const { gesture } of pending) {
+      if (gesture.chain.includes(target)) gesture.latchIndex = 0;
+    }
   };
 
   const updateMotionPreference = (): void => {

@@ -334,6 +334,7 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   立即取消余下惯性并开新 burst，从当前 child 重新向外分配；同方向且新事件路径包含原目标时保持已到达的
   祖先，避免新滑入光标下的卡片抢 tick，也不抢另一面板的输入。原生拖动、键盘操作、程序恢复位置或打开
   模态层会解除相应旧动画和 latch；迟到的动画不能把用户拉回旧位置。
+  原生 `scroll` 通知可能晚于下一次 wheel 到达，因此只取消旧动画、重置待分配路径，不清空新排队的输入。
   普通断开节点安全跳过；入队时快照到的 open dialog、`:modal`、`:popover-open` top-layer 边界即使随后
   断开也继续封闭背景。
 - `overscroll-behavior-y: contain | none` 是硬边界，但元素先消费自己的可用容量；增强 select 的

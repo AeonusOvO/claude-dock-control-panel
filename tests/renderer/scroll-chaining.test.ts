@@ -436,6 +436,25 @@ describe('scroll chaining installation', () => {
     expect(frames.size).toBe(0);
   });
 
+  it('retains a newly queued wheel when an earlier native scroll notification arrives late', () => {
+    const { dom, frame, inner, outer, ranges, wheel } = setup();
+    ranges.set(inner, 100);
+    inner.scrollTop = 80;
+    wheel(inner, 120);
+    frame(0);
+    inner.scrollTop = 24;
+    outer.scrollTop = 200;
+    wheel(inner, -120);
+    // Chromium can dispatch this notification after the newer wheel, but before its RAF.
+    outer.dispatchEvent(new dom.window.Event('scroll'));
+    frame(20);
+    expect(inner.scrollTop).toBeLessThan(24);
+    expect(outer.scrollTop).toBeLessThan(200);
+    frame(200);
+    expect(inner.scrollTop).toBe(0);
+    expect(outer.scrollTop).toBe(104);
+  });
+
   it('cancels background momentum when a modal owns the new wheel gesture', () => {
     const { dom, frame, inner, ranges, wheel } = setup();
     wheel(inner, 240);
