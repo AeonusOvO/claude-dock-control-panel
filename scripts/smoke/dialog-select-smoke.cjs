@@ -108,6 +108,9 @@ app.whenReady().then(async () => {
   });
 
   await window.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
+  // Hidden windows may leave CSS entry transitions at their starting transform, even with
+  // backgroundThrottling disabled. Hit-testing must exercise a painted, visible dialog.
+  window.show();
   await new Promise((resolve) => setTimeout(resolve, 1600));
 
   const result = await window.webContents.executeJavaScript(probe, true);
