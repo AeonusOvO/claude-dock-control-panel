@@ -57,6 +57,9 @@ export const createProjectsRowListActions = (
 
   const renderProjectList = (): void => {
     const liveSessionIds = new Set(dependencies.getWorkspaceState().sessions.map(({ id }) => id));
+    for (const [restoreKey, sessionId] of state.restoredConversationSessions) {
+      if (!liveSessionIds.has(sessionId)) state.restoredConversationSessions.delete(restoreKey);
+    }
     for (const sessionId of state.failedConversationTransitions.keys()) {
       if (!liveSessionIds.has(sessionId)) state.failedConversationTransitions.delete(sessionId);
     }

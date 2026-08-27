@@ -73,6 +73,32 @@ const adapter = (
   });
 
 describe('Electron main-process request adapter', () => {
+  it('keeps receiving redirects and response data after the request Writable has closed', async () => {
+    const harness = clientRequest(
+      () => undefined,
+      ({ emitter }) => {
+        const response = incomingResponse(200);
+        emitter.emit('response', response);
+        queueMicrotask(() => {
+          response.emit('data', Buffer.from('complete response'));
+          response.emit('end');
+        });
+      },
+    );
+    Object.defineProperty(harness.request, 'writableFinished', { value: true });
+    const operation = adapter(() => harness.request, {} as Session)('https://example.test/start', {
+      redirect: 'follow',
+    });
+    // Electron's auto-destroyed Writable closes after end(), before the URLLoader responds.
+    harness.emitter.emit('close');
+    harness.emitter.emit('redirect', 302, 'GET', 'https://example.test/final', {
+      location: ['https://example.test/final'],
+    });
+    const response = await operation;
+    expect(response.url).toBe('https://example.test/final');
+    await expect(response.text()).resolves.toBe('complete response');
+  });
+
   it('answers only an exact proxy login with credentials from the bound Session resolver', async () => {
     const session = {} as Session;
     const callback = vi.fn();

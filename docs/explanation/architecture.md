@@ -60,7 +60,11 @@ preload: <dist/preload/preload.js>,
 
 项目 `+` 的每次点击都拥有一个独立意图、独立 session、独立接入快照和异步启动续体；同一项目连续点击十次不会合并，也不依赖哪一个终端仍在前台。renderer 用 `navigator.hardwareConcurrency` 推导 1–8 个并发准入槽，新建与历史恢复共享 FIFO：槽内并行执行，溢出任务只保留可取消的 optimistic 行，前序任务退栈后立即补位。排队行的 `×` 只取消尚未准入的精确任务，不创建、关闭或归档 session。活动对话切换只是呈现变化，不能使别的启动续体或预检决策失效；main 的 `WorkspaceState.revision` 单调递增，renderer 拒绝迟到快照，避免并发结果把较新的会话列表覆盖。缺少下个对话接入或后台启动失败时，main 关闭精确临时 session，renderer 撤回 optimistic 行并显示失败原因，不能停留在“正在打开”；若回滚本身失败，失败行 `×` 直接移除临时会话，不再显示“关闭并归档”。只有 Codex 安装与登录、全局接入保存这类应用级共享资源串行；等待者由状态事件立即唤醒，并以异步定时器作为丢信号兜底，不占用 renderer 事件循环。历史索引使用异步文件 I/O，并在有界 JSONL 批次之间主动让出 main 事件循环，避免历史文件阻塞窗口与终端 IPC。
 
-接入历史同样遵守双层所有权：renderer 的加载、应用、删除、重命名和专用恢复 surface 由单调 generation 与活动 session 共同持有，切换项目立即使旧 owner 失效；main 再确认该 session 仍映射到事务发起时的规范化项目目录。接入事务在 prepare 前保存项目配置快照，失败或取消时只在当前状态仍是本事务精确写入结果时恢复，并通过 prepared compensation 回滚它写入的 Router 外部状态；较新的项目配置或 Router 写入绝不被旧事务覆盖。
+对话编号由 main 按项目单调分配，关闭或失败不复用编号。自动网络预检要求新鲜证据，但相同身份的并发启动
+共享进行中的检测，不互相 force 取消；手动重新检测与 route epoch 变化仍能使旧检测失效。历史恢复用精确
+UUID 的 overlay 派生行位置，不改写或整份回滚共享历史数组，模型差异弹窗依次服务各自的恢复意图。
+
+接入历史同样遵守双层所有权：renderer 的加载、应用、删除、重命名和专用恢复 surface 由单调 generation 与活动 session 共同持有，切换项目立即使旧 owner 失效；main 再确认该 session 仍映射到事务发起时的规范化项目目录。接入事务在 prepare 前保存配置快照：conversation profile 只锁定自己的配置 scope，旧版共享项目 profile 才锁定项目目录并隔离兄弟启动。失败或取消时只在当前状态仍是本事务精确写入结果时恢复，并通过 prepared compensation 回滚它写入的 Router 外部状态；较新的配置或 Router 写入绝不被旧事务覆盖。
 
 每条 Claude 对话还绑定创建或恢复时的完整接入身份：平台、协议、脱敏端点、认证方式、订阅账户或 API
 凭据指纹、Router Provider、主模型和小型模型。终端与原生对话都从同一份不可变启动快照记录绑定，避免

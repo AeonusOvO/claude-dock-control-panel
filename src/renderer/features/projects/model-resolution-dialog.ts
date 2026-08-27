@@ -64,6 +64,7 @@ export const createConversationModelDialog = (
   elements: ProjectsElements,
 ): ConversationModelDialog => {
   let resolveActive: ((result: ConversationModelDialogResult | null) => void) | undefined;
+  let choices: Promise<unknown> = Promise.resolve();
 
   elements.conversationModelDialog.addEventListener('cancel', (event) => {
     event.preventDefault();
@@ -96,7 +97,7 @@ export const createConversationModelDialog = (
     );
   });
 
-  const requestChoice = (
+  const showChoice = (
     resolution: ClaudeConversationModelResolution,
     conversationLabel: string,
   ): Promise<ConversationModelDialogResult | null> => {
@@ -123,6 +124,14 @@ export const createConversationModelDialog = (
     return new Promise((resolve) => {
       resolveActive = resolve;
     });
+  };
+
+  const requestChoice: ConversationModelDialog['requestChoice'] = (resolution, label) => {
+    // Concurrent restores share one modal surface, not one cancellation result. Each choice
+    // waits for its predecessor to close and retains its own conversation/model identity.
+    const choice = choices.then(() => showChoice(resolution, label));
+    choices = choice.catch(() => undefined);
+    return choice;
   };
 
   return { requestChoice };

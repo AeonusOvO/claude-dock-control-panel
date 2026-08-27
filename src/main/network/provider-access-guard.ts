@@ -294,7 +294,7 @@ export class ProviderAccessGuard {
     const input = Object.freeze({
       action: request.action,
       ...(canonicalCwd === undefined ? {} : { cwd: canonicalCwd }),
-      ...(this.forceFreshCheck(request) ? { force: true } : {}),
+      ...(this.forceFreshCheck(request) ? { fresh: true } : {}),
       ...(request.networkScope === undefined ? {} : { networkScope: request.networkScope }),
       provider: request.provider,
     });
@@ -313,7 +313,7 @@ export class ProviderAccessGuard {
       signal?.throwIfAborted();
       let operationStarted = false;
       try {
-        const attemptInput = transientRetries > 0 ? { ...input, force: true } : input;
+        const attemptInput = transientRetries > 0 ? { ...input, fresh: true } : input;
         const run = parentScope
           ? <TResult>(
               guardedOperation: (

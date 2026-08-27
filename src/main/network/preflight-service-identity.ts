@@ -12,6 +12,7 @@ export interface NetworkPreflightRequestCapture {
   readonly action: NetworkPreflightAction;
   readonly canonicalCwd?: string;
   readonly force: boolean;
+  readonly fresh: boolean;
   readonly networkScope: NetworkPreflightScope;
   readonly provider: NetworkProviderId;
   readonly target?: Readonly<NetworkPreflightTarget>;

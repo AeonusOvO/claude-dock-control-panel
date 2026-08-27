@@ -1,5 +1,5 @@
 /* eslint-disable max-lines-per-function -- The fetch adapter is one cancellation/cleanup state machine; splitting its event handlers would duplicate mutable transport ownership. */
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import type {
   AuthInfo,
   ClientRequest,
@@ -77,6 +77,7 @@ const SUPPORTED_REQUEST_INIT_KEYS = new Set([
 ]);
 
 type ElectronIncomingMessage = IncomingMessage & Pick<Readable, 'pause' | 'resume'>;
+type ElectronClientRequest = ClientRequest & Pick<Writable, 'writableFinished'>;
 type ElectronRequestPriority = NonNullable<ClientRequestConstructorOptions['priority']>;
 
 const abortReason = (signal: AbortSignal): Error =>
@@ -280,7 +281,7 @@ export const createElectronSessionFetch = ({
       let requestBodyReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       let responseController: ReadableStreamDefaultController<Uint8Array> | undefined;
       let detachIncomingListeners = (): void => undefined;
-      let request: ClientRequest;
+      let request: ElectronClientRequest;
       const cleanupWaiters = new Set<() => void>();
 
       const settleCleanupWaitersIfReady = (): void => {
@@ -336,6 +337,10 @@ export const createElectronSessionFetch = ({
         });
       };
       const cleanupAbortListenerIfTerminal = (): void => {
+        if (responseTerminal && uploadTerminal && requestClosed) {
+          detachRequestListeners();
+          detachIncomingListeners();
+        }
         if (responseTerminal && uploadTerminal && !pendingFailure && !pendingResponse) {
           normalized.signal.removeEventListener('abort', onSignalAbort);
         }
@@ -396,7 +401,9 @@ export const createElectronSessionFetch = ({
       };
 
       try {
-        request = requestFactory(clientRequestOptions(normalized, initialUrl, init, session));
+        request = requestFactory(
+          clientRequestOptions(normalized, initialUrl, init, session),
+        ) as ElectronClientRequest;
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
         return;
@@ -650,9 +657,20 @@ export const createElectronSessionFetch = ({
         request.removeListener('error', onRequestError);
         request.removeListener('abort', onRequestAbort);
         request.removeListener('close', onRequestClose);
+        // Electron may emit URLLoader errors after its Writable has already closed. Keep a
+        // closure-free sink after our terminal result so those cannot become uncaught errors.
+        if (request.writableFinished && request.listenerCount('error') === 0) {
+          request.on('error', () => undefined);
+        }
       };
       const onRequestClose = (): void => {
         requestClosed = true;
+        if (request.writableFinished && !responseTerminal && !normalized.signal.aborted) {
+          // Electron 43's ClientRequest auto-destroys its upload Writable at end(), while its
+          // URLLoader is still receiving redirects/headers/body. Only the response lifecycle,
+          // request error/abort or caller deadline can end that transaction (electron#47096).
+          return;
+        }
         detachRequestListeners();
         detachIncomingListeners();
         cancelUpload(new TypeError('Network request closed'));

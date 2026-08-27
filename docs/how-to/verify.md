@@ -33,21 +33,23 @@ npm run test:layout
 npm run test:control-theme
 npm run test:visual
 npm run test:conpty
+npm run test:network
 npm run test:runtime-soak:accelerated
 npm run dist
 ```
 
-| 命令                                                             | 覆盖                                                     |
-| ---------------------------------------------------------------- | -------------------------------------------------------- |
-| `npm run test:layout`                                            | 真实 Electron 里的布局场景                               |
-| `npm run test:control-theme`                                     | 四主题下控件的计算样式                                   |
-| `npm run test:visual`                                            | 原生视觉截图（`visual-smoke` + `native-visual-smoke`）   |
-| `npm run test:visual:real`                                       | 隔离 RuntimeProfile 下的真实 Electron 截图               |
-| `npm run test:conpty`                                            | 真实 ConPTY 的 resize 与 stop/restart 生命周期、事件顺序 |
-| `npm run test:select`、`test:select-theme`、`test:dialog-select` | 原生 `<select>` 交互与主题                               |
-| `npm run test:scroll-chaining`                                   | trusted 滚轮下的嵌套滚动链与弹层封闭（须可见窗口）       |
-| `npm run test:runtime-soak:accelerated`                          | 模拟 24 小时会话与服务回收                               |
-| `npm run dist`                                                   | 端到端打包并生成当前通道产物                             |
+| 命令                                                             | 覆盖                                                                 |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `npm run test:layout`                                            | 真实 Electron 里的布局场景                                           |
+| `npm run test:control-theme`                                     | 四主题下控件的计算样式                                               |
+| `npm run test:visual`                                            | 原生视觉截图（`visual-smoke` + `native-visual-smoke`）               |
+| `npm run test:visual:real`                                       | 隔离 RuntimeProfile 下的真实 Electron 截图                           |
+| `npm run test:conpty`                                            | 真实 ConPTY 的 resize 与 stop/restart 生命周期、事件顺序             |
+| `npm run test:network`                                           | 真实 Electron 上传先 close、十路 redirect/流式响应、HEAD、截断与取消 |
+| `npm run test:select`、`test:select-theme`、`test:dialog-select` | 原生 `<select>` 交互与主题                                           |
+| `npm run test:scroll-chaining`                                   | trusted 滚轮下的嵌套滚动链与弹层封闭（须可见窗口）                   |
+| `npm run test:runtime-soak:accelerated`                          | 模拟 24 小时会话与服务回收                                           |
+| `npm run dist`                                                   | 端到端打包并生成当前通道产物                                         |
 
 Electron 布局、控件、视觉、select、滚动和 ConPTY 命令会构建对应进程并真实启动 Electron；accelerated
 soak 直接运行 Node 合成时钟。最终候选的这些门禁必须在全部发行改动提交后的 exact commit 上运行。
@@ -99,6 +101,10 @@ dependency-cruiser、`npm run dist`、源码身份复核和 `npm run release:man
   编排另以 `release-orchestration.json` 记录固定步骤、源码身份和 frozen report 字节摘要。
 
 ## 真实发行包网络验收
+
+`npm run test:network` 使用真实 Electron、生产 `ClientRequest` adapter 和仅绑定 loopback 的测试 HTTP 服务，
+覆盖上传 Writable 先 close 后仍能接收响应的顺序；不需要账号或外网。报告写到
+`dist/visual-qa/network-request.json`。它不能替代下面的最终发行包外网验收。
 
 网络 transport、系统代理、TUN/VPN 或 Electron 版本变化后，单元测试和 renderer smoke 不能代替真实运行时验收。
 完成 `npm run dist` 后，必须使用该次 NSIS 候选包的真实生产应用（安装后程序或同批次

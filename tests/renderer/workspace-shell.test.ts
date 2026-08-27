@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import type {
+  ClaudeConversationModelResolution,
+  ClaudeLaunchOutcome,
+  WorkspaceState,
+} from '../../src/shared/contracts';
 import { expectCss, settle, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
 import {
   claudeProjectState,
@@ -14,7 +19,173 @@ const deferred = <T>() => {
   return { promise, resolve };
 };
 
+const appendConversation = (
+  workspace: WorkspaceState,
+  id: string,
+  title: string,
+): WorkspaceState => ({
+  ...workspace,
+  activeSessionId: id,
+  projects: workspace.projects.map((project) => ({
+    ...project,
+    sessionIds: [...project.sessionIds, id],
+  })),
+  revision: (workspace.revision ?? 0) + 1,
+  sessions: [...workspace.sessions, terminalStatus(1, { id, title })],
+});
+
 describe('remaining renderer behavior contracts', () => {
+  it('keeps all ten rapid new-conversation clicks through background and out-of-order launch completion', async () => {
+    let workspace = { ...terminalWorkspace(), revision: 1 };
+    const launches = new Map<string, ReturnType<typeof deferred<ClaudeLaunchOutcome>>>();
+    let sequence = 1;
+    await withTerminalRenderer(
+      {
+        getWorkspace: async () => workspace,
+        getClaudeProjectState: async (sessionId) => claudeProjectState({ sessionId }),
+        openConversation: async () => {
+          const id = `session-${++sequence}`;
+          workspace = appendConversation(workspace, id, `对话 ${sequence}`) as typeof workspace;
+          return { createdSessionId: id, ok: true, runtime: 'claude', state: workspace };
+        },
+        launchClaude: (sessionId) => {
+          const pending = deferred<ClaudeLaunchOutcome>();
+          launches.set(sessionId, pending);
+          return pending.promise;
+        },
+      },
+      async (harness) => {
+        for (let click = 0; click < 10; click += 1) harness.click('.project-folder__action');
+        await settle(harness);
+        expect(harness.document.querySelectorAll('.conversation-item')).toHaveLength(11);
+        expect(launches.size).toBeGreaterThan(0);
+        const completed = new Set<string>();
+        for (let round = 0; round < 10 && completed.size < 10; round += 1) {
+          for (const [sessionId, pending] of [...launches].reverse()) {
+            if (completed.has(sessionId)) continue;
+            completed.add(sessionId);
+            workspace = {
+              ...workspace,
+              revision: workspace.revision + 1,
+              sessions: workspace.sessions.map((status) =>
+                status.id === sessionId ? { ...status, ptyGeneration: 2 } : status,
+              ),
+            };
+            harness.emit('onWorkspaceState', workspace);
+            pending.resolve({
+              status: 'completed',
+              result: {
+                ok: true,
+                state: claudeProjectState({
+                  sessionId,
+                  active: true,
+                  ptyGeneration: 2,
+                  stateRevision: 2,
+                }),
+              },
+            });
+          }
+          await settle(harness);
+        }
+        expect(completed.size).toBe(10);
+        expect(harness.method('closeProject')).not.toHaveBeenCalled();
+        expect(harness.document.querySelectorAll('.conversation-item')).toHaveLength(11);
+        expect(harness.document.querySelectorAll('.conversation-item--pending')).toHaveLength(0);
+        expect(
+          harness.query<HTMLElement>('.conversation-item[data-session-id="session-11"]').dataset
+            .active,
+        ).toBe('true');
+      },
+    );
+  });
+
+  it('queues competing history model choices and resumes each exact conversation independently', async () => {
+    let workspace: WorkspaceState = { ...terminalWorkspace(), revision: 1 };
+    let sequence = 1;
+    let historyReads = 0;
+    const history = ['A', 'B'].map((label) => ({
+      conversationId: `history-${label}`,
+      sessionId: `history-${label}`,
+      sessionName: `历史 ${label}`,
+      lastActiveAt: 1,
+      messageCount: 2,
+    }));
+    const identity: ClaudeConversationModelResolution['conversation'] = {
+      accountDetail: 'API 已配置',
+      authModeLabel: 'Bearer',
+      credentialConfigured: true,
+      mainModel: 'old-model',
+      smallModel: 'old-fast',
+      networkPresentation: 'domestic',
+      protocolLabel: 'Anthropic Messages',
+      providerLabel: 'DeepSeek',
+      source: 'bound',
+    };
+    await withTerminalRenderer(
+      {
+        getWorkspace: async () => workspace,
+        getClaudeProjectState: async (sessionId) => claudeProjectState({ sessionId }),
+        getClaudeSessionsForPath: async () => (++historyReads === 1 ? [] : history),
+        openStoredConversation: async (_projectPath, conversationId) => {
+          const sessionId = `session-${++sequence}`;
+          workspace = appendConversation(workspace, sessionId, conversationId);
+          return {
+            createdSessionId: sessionId,
+            ok: true,
+            reused: false,
+            runtime: 'claude',
+            state: workspace,
+          };
+        },
+        inspectClaudeConversationModel: async () => ({
+          conversation: identity,
+          current: { ...identity, source: 'current', mainModel: 'new-model' },
+          differences: ['main-model'],
+          mismatch: true,
+          preference: 'ask',
+          restorable: true,
+        }),
+        applyClaudeConversationModel: async (sessionId, _conversationId, choice) => ({
+          choice,
+          ok: true,
+          state: claudeProjectState({ sessionId }),
+        }),
+        launchClaudeWithSession: async (sessionId) => ({
+          status: 'completed',
+          result: { ok: true, state: claudeProjectState({ sessionId, active: true }) },
+        }),
+      },
+      async (harness) => {
+        harness.click('.project-folder__disclosure');
+        await settle(harness);
+        const buttons =
+          harness.document.querySelectorAll<HTMLButtonElement>('.history-item__select');
+        expect(buttons).toHaveLength(2);
+        buttons[0]!.click();
+        buttons[1]!.click();
+        await settle(harness);
+        expect(harness.query('#conversation-model-dialog-title').textContent).toContain('历史 A');
+        expect(harness.method('closeProject')).not.toHaveBeenCalled();
+        harness.click('#conversation-model-dialog-current');
+        await settle(harness);
+        expect(harness.query<HTMLDialogElement>('#conversation-model-dialog').open).toBe(true);
+        expect(harness.query('#conversation-model-dialog-title').textContent).toContain('历史 B');
+        harness.click('#conversation-model-dialog-original');
+        await settle(harness);
+        expect(harness.method('launchClaudeWithSession')).toHaveBeenCalledWith(
+          'session-2',
+          'history-A',
+        );
+        expect(harness.method('launchClaudeWithSession')).toHaveBeenCalledWith(
+          'session-3',
+          'history-B',
+        );
+        expect(harness.method('closeProject')).not.toHaveBeenCalled();
+        expect(harness.document.querySelectorAll('.history-item')).toHaveLength(0);
+      },
+    );
+  });
+
   it('ignores an older workspace snapshot after a concurrent session was already rendered', async () => {
     const first = terminalStatus(1, { id: 'session-1', title: 'First' });
     const second = terminalStatus(1, { id: 'session-2', title: 'Second' });
@@ -310,19 +481,23 @@ describe('remaining renderer behavior contracts', () => {
         deferred<Awaited<ReturnType<Window['controlPanel']['applyClaudeConversationModel']>>>();
       const launch =
         deferred<Awaited<ReturnType<Window['controlPanel']['launchClaudeWithSession']>>>();
+      let historyReads = 0;
       await withTerminalRenderer(
         {
           applyClaudeConversationModel: () => apply.promise,
-          getClaudeSessionsForPath: async () => [
-            {
-              conversationId,
-              lastActiveAt: 1,
-              messageCount: 2,
-              modelId: 'old-model',
-              sessionId: conversationId,
-              sessionName: 'Stored',
-            },
-          ],
+          getClaudeSessionsForPath: async () =>
+            ++historyReads === 1
+              ? []
+              : [
+                  {
+                    conversationId,
+                    lastActiveAt: 1,
+                    messageCount: 2,
+                    modelId: 'old-model',
+                    sessionId: conversationId,
+                    sessionName: 'Stored',
+                  },
+                ],
           inspectClaudeConversationModel: async () => ({
             conversation: {
               accountDetail: 'API 凭据已配置',

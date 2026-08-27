@@ -596,13 +596,17 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   溢出任务 FIFO 排队；任务完成（包括回滚退栈）才释放槽，避免只限制 session 分配却同时启动过多 CLI。
   排队状态发布精确 position/total，尾部 `×` 仅能取消尚未准入的 entry，取消后压紧其余位置且不调用
   `openConversation` / `openStoredConversation`，因此没有关闭或归档确认。
+- main 按规范化项目路径单调分配“对话 N”编号；失败或关闭不会复用已消耗的编号，也不因当前行数减少而
+  生成重名。后台启动完成只更新自己的 session；需要聚焦时重新读取最新工作区，不使用迟到响应里的活动项。
 - main 返回后 pending 行无缝替换为带 `transitioningConversations` 的真实行，CLI 成功才解除“正在新建”。
   失败会关闭精确 session；关闭也失败则写入 `failedConversationTransitions`，左栏显示红色“创建失败 ·
   请关闭”。该失败行的 `×` 直接调用精确临时 session 关闭，不进入“关闭并归档”确认或成功归档文案。
-- 历史恢复只做可逆的 UI 移动，JSONL 正文从不重命名或删除。点击后历史行立即从原数组移除并进入
-  排队/“正在恢复”行；打开终端、模型决策或 CLI 启动任一步失败都会恢复原快照并强制重新扫描。多个
-  launch preflight 决策按到达顺序逐个展示；切到兄弟会话不会取消后台决策，只有 owner 消失或 token
-  过期才精确取消。历史扫描使用 `getSessionsForProjectAsync()` 的异步 I/O，并每 256 条 JSONL 记录通过
+- 历史恢复只做可逆的 UI 移动，JSONL 正文从不重命名或删除。按规范化项目路径和 UUID 记录恢复 overlay，
+  从历史呈现中过滤并进入排队/“正在恢复”行，不改写共享历史缓存。取消或失败只撤销自己的 overlay 并
+  重新扫描，不能用旧数组覆盖其他恢复和新扫描结果。成功项继续绑定精确 session，直到该 session 关闭，
+  避免迟到扫描把已经打开的对话重新显示为历史。模型差异弹窗与 launch preflight 决策各自按到达顺序展示；
+  后来的恢复不能因为已有弹窗而被取消。切到兄弟会话不会取消后台决策，只有 owner 消失或 token 过期才
+  精确取消。历史扫描使用 `getSessionsForProjectAsync()` 的异步 I/O，并每 256 条 JSONL 记录通过
   `setImmediate` 让出 main 事件循环。
 
 ### 退出确认握手
@@ -1977,8 +1981,11 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
    官方 redirect 可验证后接受；非白名单跨源、HTTP downgrade、TLS failure、portal/substitution 或必需
    transport failure 阻止对应动作。
 4. Electron application probe 绑定真实 application/conversation Session，读取有限状态/headers 后停止
-   body。Electron 43 + TUN 下 `ClientRequest` 可能只有 `finish → close` 而无 response/error，因此不能据此
-   宣告断网；预检使用同 scope 的 `Session.fetch`。CLI probe 使用即将启动业务的实际环境与 transport。
+   body。预检先使用同 scope 的 `Session.fetch`，需要逐跳校验 redirect 时走受控 `ClientRequest` adapter。
+   Electron 43 的上传 Writable 在 `end()` 后可能先 `finish → close`，URLLoader 随后才交付 redirect、
+   response 和流式 body；当 `writableFinished` 为真时，上传 close 不代表请求失败，adapter 保留网络监听
+   直到响应终态、真实 error/abort 或调用方 deadline。真实截断和取消仍失败，完成后移除监听并吸收可能
+   迟到的 URLLoader error。CLI probe 使用即将启动业务的实际环境与 transport。
 5. `RiskDecisionEngine` 只从 required Provider evidence 派生 `providerConnectivity` 与 `featureAccess`。
    `allowed_with_notice` 仍是绿色可用；TUN/virtual interface、显式代理、destination split、generic IP
    disagreement、reputation unavailable、language/time-zone 或本机 IPv6 状态都不能降级工作正常的 Provider。
@@ -2003,8 +2010,11 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
    provider switch 等动作的 commit/PTy mutation 前读取 `providerConnectivity`。自定义 gateway 和本地
    terminal 只检查自身 target，不受其他官方 Provider 状态影响。`ClaudeLaunchHealthMonitor` 同样保留
    `allowed_with_notice`，显示绿色“连接正常”并把 path/advice 放在 secondary copy。
+   自动新会话/登录检查使用 `fresh`：跳过已完成缓存，但相同身份的并发请求共享正在执行的检测，每个
+   等待者仍持有自己的取消信号和 route lease。只有显式“重新检测”的 `force` 才取代旧检测；代理 epoch
+   或目标变化仍使旧证据失效。不能把“需要新鲜证据”实现为取消同项目其他会话的自动预检。
 10. 首次阻止若仅来自 DNS、reset、connect failure 或 timeout，且仍有 active IP path，可等待 150ms 后
-    force 一次新 probe；offline、TLS、untrusted redirect、portal、unsupported CLI transport 和 internal
+    fresh 一次新 probe，并与同身份的其他重试共享进行中的检测；offline、TLS、untrusted redirect、portal、unsupported CLI transport 和 internal
     failure 不自动重试。等待和第二次 probe 共用调用方 AbortSignal，取消后不得继续业务操作。
 
 ### 操作授权与事务边界
@@ -2013,9 +2023,11 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   与 predecessor PTY generation。renderer 只能取消、force recheck 或一次性坚持连接；main 在消费前重验
   全部 identity，授权不能跨项目、跨 route、跨 provider 或重复使用。启动后的 health monitor 只有状态
   发布能力，不主动 stop/restart/close 已运行会话。
-- `SessionConfigTransactionCoordinator` 在 normalized directory 内串行 profile 事务。访问守卫先于无
-  `await` 的 profile commit/PTy mutation；rollback 只有在事务仍拥有目录、session 与精确 committed
-  snapshot 时才能恢复，不覆盖排队成功或外部更新。预检失败不把仍运行的 Claude/Codex 错标 inactive。
+- `SessionConfigTransactionCoordinator` 按实际配置 scope 串行 profile 事务。每个 conversation profile 使用
+  独立协调器的 scope key，不获取项目目录隔离，也不取消兄弟启动；旧版共享项目 profile 仍使用目录
+  barrier。访问守卫先于无 `await` 的 profile commit/PTy mutation；rollback 只有在事务仍拥有 scope、
+  session、原项目和精确 committed snapshot 时才能恢复，不覆盖兄弟会话或外部更新。预检失败不把仍运行
+  的 Claude/Codex 错标 inactive。
 - WebSocket 401/403/426 只证明 Upgrade endpoint 响应。可选 WebSocket 不改变普通 login/background
   结论；只有当前 action 明确 require 时，失败或 unknown 才进入 `partially_available`/`blocked`。
 - 本实现不修改 Windows system proxy、DNS、route table、NIC、time zone/language、Claude/Codex settings

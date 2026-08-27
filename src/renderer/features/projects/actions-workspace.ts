@@ -256,7 +256,7 @@ const openConversationWithDependencies = async ({
       releaseTransition();
       dependencies.showToast('新对话已打开，但没有取得对应的后台启动标识。', 'error');
     }
-    requestActiveTerminalFocus(dependencies, result.state);
+    requestActiveTerminalFocus(dependencies, dependencies.getWorkspaceState());
   }, optimistic.updateQueueState);
   optimistic.setCancel(ticket.cancel);
   try {
@@ -307,7 +307,7 @@ export const createProjectsWorkspaceActions = (
       return;
     }
     workspaceRenderer.renderWorkspace(result.state);
-    requestActiveTerminalFocus(dependencies, result.state);
+    requestActiveTerminalFocus(dependencies, dependencies.getWorkspaceState());
   };
 
   /**
@@ -420,7 +420,7 @@ export const createProjectsWorkspaceActions = (
             releaseTransition();
           }
         }
-        requestActiveTerminalFocus(dependencies, result.state);
+        requestActiveTerminalFocus(dependencies, dependencies.getWorkspaceState());
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : '';

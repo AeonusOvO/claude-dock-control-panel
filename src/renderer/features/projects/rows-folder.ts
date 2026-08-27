@@ -1,5 +1,6 @@
 import type { WorkspaceProjectView } from '../../../shared/contracts';
 import type { ProjectsState } from './state';
+import { storedConversationRestoreKey } from './state';
 import type { ProjectsRowHandlers, ProjectsRowsDependencies } from './rows-dependencies';
 import type { ProjectsRowItemsActions } from './rows-items';
 
@@ -149,7 +150,14 @@ export const createProjectsRowFolderActions = (
       body.append(reopen);
     }
 
-    const history = state.storedConversations.get(key);
+    // Optimistic moves are an overlay, never a rewrite/rollback of the shared history cache.
+    const history = state.storedConversations.get(key)?.filter((conversation) => {
+      const restoreKey = storedConversationRestoreKey(project.path, conversation.conversationId);
+      return (
+        !state.storedConversationRestores.has(restoreKey) &&
+        !state.restoredConversationSessions.has(restoreKey)
+      );
+    });
     if (history === undefined && !project.missing && state.folderHistoryLoads.hasFailed(key)) {
       // A failed read is never rendered as "no history": that is indistinguishable from an empty
       // folder and would quietly hide the user's real conversations.

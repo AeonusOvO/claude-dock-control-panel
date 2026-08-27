@@ -246,11 +246,21 @@ describe('projects workspace actions', () => {
         expect.objectContaining({ kind: 'restoring', phase: 'queued', queuePosition: 1 }),
       ]);
     });
+    const refreshed = [
+      stored,
+      {
+        ...stored,
+        conversationId: 'new-history',
+        sessionId: 'new-history',
+        sessionName: '较新历史',
+      },
+    ];
+    state.storedConversations.set('d:\\work\\repo', refreshed);
     expect([...state.pendingConversations.values()][0]?.cancel?.()).toBe(true);
     await restoring;
 
     expect(openStoredConversation).not.toHaveBeenCalled();
-    expect(state.storedConversations.get('d:\\work\\repo')).toEqual([stored]);
+    expect(state.storedConversations.get('d:\\work\\repo')).toEqual(refreshed);
     expect(dependencies.showToast).toHaveBeenCalledWith('已取消排队中的历史对话“排队恢复稿”');
     launch.resolve(true);
     await running;

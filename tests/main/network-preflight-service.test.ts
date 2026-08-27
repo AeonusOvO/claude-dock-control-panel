@@ -1351,6 +1351,48 @@ describe('NetworkPreflightService', () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it('admits ten fresh automatic launches together without superseding sibling conversations', async () => {
+    let complete!: (value: ConnectivityObservation) => void;
+    const signals: AbortSignal[] = [];
+    const run = vi.fn<ProviderConnectivityProbe['run']>(
+      (_provider, _action, _cwd, _scope, _target, signal) => {
+        if (signal) signals.push(signal);
+        return new Promise((resolve) => {
+          complete = resolve;
+        });
+      },
+    );
+    const { acquireNetworkLease, leases } = createNetworkLeaseHarness();
+    const service = new NetworkPreflightService({
+      acquireNetworkLease,
+      diagnosticsStore: new NetworkDiagnosticsStore(createRoot()),
+      probe: { run },
+    });
+    const guard = new ProviderAccessGuard(service, () => true);
+    const input = {
+      action: 'cli-launch' as const,
+      cwd: 'D:\\Project',
+      provider: 'openai-codex' as const,
+    };
+    const operations = Array.from({ length: 10 }, (_, index) => vi.fn(() => index));
+    const outcomes = Promise.allSettled(
+      operations.map((operation) => guard.withAllowed(input, operation)),
+    );
+
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    complete(successfulObservation());
+    expect(await outcomes).toEqual(operations.map((_, value) => ({ status: 'fulfilled', value })));
+    for (const operation of operations) expect(operation).toHaveBeenCalledOnce();
+    for (const lease of leases) expect(lease.release).toHaveBeenCalledOnce();
+
+    // A later launch must still run the configured fresh check, not use the completed cache.
+    const next = guard.withAllowed(input, () => 'next');
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    complete(successfulObservation());
+    await expect(next).resolves.toBe('next');
+  });
+
   it('automatically rechecks one transient first-launch failure before blocking the launch', async () => {
     const root = createRoot();
     const run = vi

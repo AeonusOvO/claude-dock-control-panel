@@ -71,6 +71,7 @@ export class TerminalWorkspace {
   private currentThemeId: TerminalThemeId;
   private readonly developmentRuntimes = new Map<string, DevelopmentRuntime>();
   private nextSessionNumber = 1;
+  private readonly conversationNumbers = new Map<string, number>();
   private stateRevision = 0;
   private readonly sessions = new Map<string, ManagedTerminal>();
   private beforeActiveSessionChange: (previousSessionId: string, nextSessionId: string) => void =
@@ -318,7 +319,15 @@ export class TerminalWorkspace {
   }
 
   private nextConversationTitle(cwd: string): string {
-    return `对话 ${this.sessionIdsForDirectory(cwd).length + 1}`;
+    const key = path.resolve(cwd).toLocaleLowerCase('en-US');
+    const usedTitles = new Set(
+      this.sessionIdsForDirectory(cwd).map((sessionId) => this.getStatus(sessionId).title),
+    );
+    let number = (this.conversationNumbers.get(key) ?? 0) + 1;
+    while (usedTitles.has(`对话 ${number}`)) number += 1;
+    // A failed/closed launch still consumed its number; live siblings must never be renumbered.
+    this.conversationNumbers.set(key, number);
+    return `对话 ${number}`;
   }
 
   private withDefaultEnvironment(

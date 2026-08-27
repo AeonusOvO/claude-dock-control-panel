@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeRuntime } from '../../src/main/claude/runtime';
 import type { SaveClaudeConfigInput } from '../../src/shared/contracts';
 
+vi.mock('electron', () => ({
+  safeStorage: {
+    decryptString: (buffer: Buffer) => buffer.toString('utf8').replace(/^enc:/, ''),
+    encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf8'),
+    isEncryptionAvailable: () => true,
+  },
+}));
+
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
@@ -52,6 +60,47 @@ const localInput = (model: string): SaveClaudeConfigInput => ({
 });
 
 describe('Claude next-conversation connection', () => {
+  it('keeps DeepSeek and ChatGPT credentials and routes isolated in the same project', async () => {
+    const runtime = createRuntime();
+    await runtime.saveNextConversationConfig({
+      authMode: 'apiKey',
+      baseUrl: 'https://api.deepseek.com/anthropic',
+      credential: 'fixture-deepseek-key',
+      credentialAction: 'replace',
+      model: 'deepseek-chat',
+      preset: 'deepseek',
+      protocol: 'anthropic',
+      provider: 'gateway',
+    });
+    runtime.bindNextConversationConnection('deepseek-session', 'D:\\Project');
+    const deepseek = runtime.captureLaunchAuthorization('D:\\Project', 'deepseek-session');
+
+    await runtime.saveNextConversationConfig({
+      apiKeyHelperPolicy: 'prefer-claudedock',
+      authMode: 'authToken',
+      baseUrl: 'http://127.0.0.1:8317/v1',
+      credential: 'fixture-managed-gateway-key',
+      credentialAction: 'replace',
+      model: 'gpt-conversation-test',
+      preset: 'chatgpt-subscription',
+      protocol: 'anthropic',
+      provider: 'gateway',
+    });
+    runtime.bindNextConversationConnection('chatgpt-session', 'D:\\Project');
+
+    expect(runtime.captureLaunchAuthorization('D:\\Project', 'deepseek-session')).toEqual(deepseek);
+    expect(runtime.captureLaunchAuthorization('D:\\Project', 'chatgpt-session')).toMatchObject({
+      launchSnapshot: {
+        config: { model: 'gpt-conversation-test', preset: 'chatgpt-subscription' },
+        credential: 'fixture-managed-gateway-key',
+      },
+      officialNetworkProvider: 'openai-codex',
+    });
+    expect(deepseek.launchSnapshot.credential).toBe('fixture-deepseek-key');
+    runtime.releaseConversationConnection('chatgpt-session');
+    expect(runtime.captureLaunchAuthorization('D:\\Project', 'deepseek-session')).toEqual(deepseek);
+  });
+
   it('captures an immutable profile for each conversation before the global choice changes', async () => {
     const runtime = createRuntime();
     await runtime.saveNextConversationConfig(localInput('model-a'));

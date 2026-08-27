@@ -92,6 +92,23 @@ const createFakeFactory = () => {
   return { factory, terminals };
 };
 
+describe('conversation numbering', () => {
+  it('does not reuse a number after an earlier launch rolls back or a tab closes', () => {
+    const { factory } = createFakeFactory();
+    const workspace = new TerminalWorkspace(vi.fn(), vi.fn(), factory);
+    workspace.openConversation('D:\\Project');
+    workspace.openConversation('D:\\Project');
+    workspace.close('session-1');
+    workspace.openConversation('d:\\project');
+    expect(workspace.getState().sessions.map(({ title }) => title)).toEqual(['对话 2', '对话 3']);
+    workspace.close('session-3');
+    workspace.openConversation('D:\\Project');
+    expect(workspace.getStatus('session-4').title).toBe('对话 4');
+    workspace.openConversation('D:\\Other');
+    expect(workspace.getStatus('session-5').title).toBe('对话 1');
+  });
+});
+
 describe('terminal size reconciliation', () => {
   /*
    * PSReadLine repaints its edit buffer with ABSOLUTE cursor moves (Ctrl+C emits e.g. `ESC[10;27H`).

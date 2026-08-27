@@ -165,7 +165,7 @@ describe('ProviderAccessGuard v2 authority', () => {
 
     await expect(guard.withAllowed(request, operation)).resolves.toBe('recovered');
     expect(runWithLease).toHaveBeenCalledTimes(2);
-    expect(runWithLease.mock.calls[1]?.[0]).toMatchObject({ force: true });
+    expect(runWithLease.mock.calls[1]?.[0]).toMatchObject({ fresh: true });
     expect(operation).toHaveBeenCalledWith(recovered);
   });
 

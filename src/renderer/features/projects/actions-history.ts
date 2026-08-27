@@ -7,6 +7,7 @@ import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-att
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
 import type { ConversationTransitionQueueState } from './conversation-transition-queue';
 import type { PendingConversation, ProjectsState } from './state';
+import { storedConversationRestoreKey } from './state';
 import type { WorkspaceRenderer } from './workspace';
 import type { ConversationModelDialogResult } from './model-resolution-dialog';
 import { beginWorkspaceConversationTransition } from './transition-busy';
@@ -74,8 +75,6 @@ interface ResumeStoredConversationInput {
 
 interface OptimisticHistoryMove {
   finish: (render?: boolean) => void;
-  historyKey: string;
-  originalHistory: ClaudeSessionMetadata[] | undefined;
   pending: PendingConversation;
   setCancel: (cancel: () => boolean) => void;
   updateQueueState: (queueState: ConversationTransitionQueueState) => void;
@@ -86,12 +85,9 @@ const beginOptimisticHistoryMove = (
   rowsApi: ProjectsRowsApi,
   state: ProjectsState,
   projectPath: string,
-  session: ClaudeSessionMetadata,
   label: string,
   startup: boolean,
 ): OptimisticHistoryMove => {
-  const historyKey = projectPath.toLowerCase();
-  const originalHistory = state.storedConversations.get(historyKey);
   const pendingId = `pending-conversation-${++state.pendingConversationSequence}`;
   const pending: PendingConversation = {
     id: pendingId,
@@ -101,12 +97,6 @@ const beginOptimisticHistoryMove = (
     title: label,
   };
   state.pendingConversations.set(pendingId, pending);
-  if (originalHistory) {
-    state.storedConversations.set(
-      historyKey,
-      originalHistory.filter((candidate) => candidate.conversationId !== session.conversationId),
-    );
-  }
   const releasePreview = dependencies.beginWorkspaceTerminalPreview(
     startup ? '正在恢复上次对话…' : '正在恢复历史对话…',
   );
@@ -120,8 +110,6 @@ const beginOptimisticHistoryMove = (
       releasePreview();
       if (render) rowsApi.renderProjectList();
     },
-    historyKey,
-    originalHistory,
     pending,
     setCancel: (cancel) => {
       pending.cancel = cancel;
@@ -139,10 +127,8 @@ const beginOptimisticHistoryMove = (
 
 interface FailedHistoryResumeRollbackInput {
   dependencies: ProjectsActionsDependencies;
-  historyKey: string;
   openedNewSession: boolean;
   openedSessionId?: string;
-  originalHistory: ClaudeSessionMetadata[] | undefined;
   projectPath: string;
   rowsApi: ProjectsRowsApi;
   state: ProjectsState;
@@ -151,10 +137,8 @@ interface FailedHistoryResumeRollbackInput {
 
 const rollbackFailedHistoryResume = async ({
   dependencies,
-  historyKey,
   openedNewSession,
   openedSessionId,
-  originalHistory,
   projectPath,
   rowsApi,
   state,
@@ -177,14 +161,10 @@ const rollbackFailedHistoryResume = async ({
         error instanceof Error && error.message ? error.message : '临时终端未能关闭。';
     }
   }
-  if (originalHistory) {
-    state.storedConversations.set(historyKey, originalHistory);
-    rowsApi.renderProjectList();
-  }
   try {
     await rowsApi.loadFolderHistory(projectPath, true);
   } catch {
-    // Keep the optimistic snapshot above; a later folder expansion retries the authoritative scan.
+    // The authoritative cache was never edited by the optimistic move. A later expansion retries.
   }
   if (!rollbackFailure) return;
   if (openedSessionId) {
@@ -269,12 +249,17 @@ const runAdmittedHistoryRestore = async ({
     }
     openedSessionId = opened.createdSessionId ?? opened.state.activeSessionId;
     openedNewSession = !opened.reused;
-    dependencies.setNativePanelVisible(false);
-    dependencies.retryTerminalFitUntilMeasured();
+    if (dependencies.getWorkspaceState().activeSessionId === openedSessionId) {
+      dependencies.setNativePanelVisible(false);
+      dependencies.retryTerminalFitUntilMeasured();
+    }
     if (opened.reused) {
       committed = true;
+      state.restoredConversationSessions.set(restoreKey, openedSessionId);
       await rowsApi.loadFolderHistory(projectPath, true);
-      dependencies.requestComposerFocus(opened.state.activeSessionId);
+      if (dependencies.getWorkspaceState().activeSessionId === openedSessionId) {
+        dependencies.requestComposerFocus(openedSessionId);
+      }
       dependencies.showToast(`已切换到 ${label}`);
       return;
     }
@@ -391,8 +376,11 @@ const runAdmittedHistoryRestore = async ({
         return;
       }
       committed = true;
+      state.restoredConversationSessions.set(restoreKey, status.id);
       await rowsApi.loadFolderHistory(projectPath, true);
-      dependencies.requestComposerFocus(status.id);
+      if (dependencies.getWorkspaceState().activeSessionId === status.id) {
+        dependencies.requestComposerFocus(status.id);
+      }
       dependencies.showToast(options ? `已自动恢复 ${label}` : `已恢复 ${label}`);
     } finally {
       if (!committed && dependencies.claudeLaunchAttempts.isCurrent(attempt)) {
@@ -410,10 +398,8 @@ const runAdmittedHistoryRestore = async ({
     if (!committed) {
       await rollbackFailedHistoryResume({
         dependencies,
-        historyKey: optimistic.historyKey,
         openedNewSession,
         openedSessionId,
-        originalHistory: optimistic.originalHistory,
         projectPath,
         rowsApi,
         state,
@@ -421,6 +407,7 @@ const runAdmittedHistoryRestore = async ({
       });
     }
     state.storedConversationRestores.delete(restoreKey);
+    rowsApi.renderProjectList();
     releaseTransition();
   }
 };
@@ -436,7 +423,7 @@ const resumeStoredConversationWithDependencies = async ({
   state,
   workspaceRenderer,
 }: ResumeStoredConversationInput): Promise<void> => {
-  const restoreKey = `${projectPath.toLowerCase()}:${session.conversationId}`;
+  const restoreKey = storedConversationRestoreKey(projectPath, session.conversationId);
   if (state.storedConversationRestores.has(restoreKey)) {
     return;
   }
@@ -448,7 +435,6 @@ const resumeStoredConversationWithDependencies = async ({
     rowsApi,
     state,
     projectPath,
-    session,
     label,
     Boolean(options),
   );
@@ -474,11 +460,8 @@ const resumeStoredConversationWithDependencies = async ({
   const outcome = await ticket.result;
   if (outcome.status === 'cancelled') {
     optimistic.finish(false);
-    if (optimistic.originalHistory) {
-      state.storedConversations.set(optimistic.historyKey, optimistic.originalHistory);
-    }
-    rowsApi.renderProjectList();
     state.storedConversationRestores.delete(restoreKey);
+    rowsApi.renderProjectList();
     releaseTransition();
     dependencies.showToast(`已取消排队中的历史对话“${label}”`);
   }

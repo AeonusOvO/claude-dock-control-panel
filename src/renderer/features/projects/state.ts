@@ -23,6 +23,9 @@ export interface PendingConversation {
 
 export type ConversationTransitionKind = 'creating' | 'restoring';
 
+export const storedConversationRestoreKey = (projectPath: string, conversationId: string): string =>
+  `${projectPath.toLowerCase()}:${conversationId.toLowerCase()}`;
+
 export type ConversationContextTarget =
   | { kind: 'history'; projectPath: string; session: ClaudeSessionMetadata }
   | { kind: 'running'; status: TerminalStatus }
@@ -40,6 +43,7 @@ export interface ProjectsState {
   transitioningConversations: Map<string, ConversationTransitionKind>;
   renderedConversationTitles: Map<string, string>;
   storedConversationRestores: Set<string>;
+  restoredConversationSessions: Map<string, string>;
   storedConversations: Map<string, ClaudeSessionMetadata[]>;
   suppressedTitleAnimations: Set<string>;
   titleAnimations: Map<string, TitleAnimationState>;
@@ -70,6 +74,7 @@ export const createProjectsState = (): ProjectsState => ({
   transitioningConversations: new Map<string, ConversationTransitionKind>(),
   renderedConversationTitles: new Map<string, string>(),
   storedConversationRestores: new Set<string>(),
+  restoredConversationSessions: new Map<string, string>(),
   storedConversations: new Map<string, ClaudeSessionMetadata[]>(),
   suppressedTitleAnimations: new Set<string>(),
   titleAnimations: new Map<string, TitleAnimationState>(),

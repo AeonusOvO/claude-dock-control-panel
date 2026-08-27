@@ -2,7 +2,7 @@ import type { ClaudeProjectState } from '../../shared/contracts';
 import {
   OwnedConfigTransactionError,
   runOwnedConfigTransaction,
-  type SessionConfigTransactionCoordinator,
+  SessionConfigTransactionCoordinator,
 } from '../coordination/main-process-operation';
 import type { MainGuards } from '../ipc/guards';
 import { sameDirectory, type TerminalWorkspace } from '../terminal/workspace';
@@ -36,6 +36,7 @@ export const createRunClaudeProjectConfigTransaction = ({
   publishRestoredClaudeProjectState,
   workspace,
 }: ClaudeProjectConfigTransactionDependencies): RunClaudeProjectConfigTransaction => {
+  const conversationConfigTransactions = new SessionConfigTransactionCoordinator();
   const runClaudeProjectConfigTransaction: RunClaudeProjectConfigTransaction = <TPrepared>(
     options: ClaudeProjectConfigTransactionOptions<TPrepared>,
   ): Promise<ClaudeProjectState> => {
@@ -43,6 +44,7 @@ export const createRunClaudeProjectConfigTransaction = ({
     const configScope =
       options.configScope ??
       resolveSessionConnectionConfigScope(options.runtime, options.sessionId, options.cwd);
+    const conversationOwned = !sameDirectory(configScope, options.cwd);
     const assertTargetCurrent = (): void => {
       const currentStatus = workspace.getStatus(options.sessionId);
       if (!sameDirectory(currentStatus.cwd, options.cwd)) {
@@ -54,14 +56,21 @@ export const createRunClaudeProjectConfigTransaction = ({
       assertTargetCurrent();
     };
     return runOwnedConfigTransaction({
-      acquireIsolation: () => acquireConfigTransactionIsolation(options.sessionId, options.cwd),
+      // A conversation profile is not shared by its folder's other terminals. Only legacy
+      // project-profile writes need the directory barrier and sibling-launch cancellation.
+      ...(conversationOwned
+        ? {}
+        : {
+            acquireIsolation: () =>
+              acquireConfigTransactionIsolation(options.sessionId, options.cwd),
+          }),
       assertOperationOwnership: assertTransactionCurrent,
       assertRollbackOwnership: assertTargetCurrent,
       commit: options.commit,
       complete: options.complete,
-      coordinator: managedConfigTransactions,
+      coordinator: conversationOwned ? conversationConfigTransactions : managedConfigTransactions,
       createSnapshot: () => options.runtime.createConfigSnapshot(configScope),
-      cwd: options.cwd,
+      cwd: configScope,
       mergeCompletionSnapshot: (committed, completed) =>
         options.runtime.mergeConfigCompletionSnapshot(committed, completed),
       prepare: options.prepare,

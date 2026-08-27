@@ -35,6 +35,11 @@ interface CachedResult {
   result: NetworkPreflightResult;
 }
 
+/** Automatic checks require live evidence but must not cancel a sibling's identical check. */
+interface NetworkPreflightRequestInput extends NetworkPreflightRunInput {
+  readonly fresh?: boolean;
+}
+
 export type NetworkPreflightObservabilityPhase =
   'diagnostics-persistence' | 'result-notification' | 'testing-notification';
 
@@ -168,7 +173,7 @@ export class NetworkPreflightService {
   }
 
   public runWithLease<T>(
-    input: NetworkPreflightRunInput,
+    input: NetworkPreflightRequestInput,
     target: NetworkPreflightTarget | undefined,
     operation: (
       result: NetworkPreflightResult,
@@ -251,7 +256,7 @@ export class NetworkPreflightService {
   }
 
   public runWithExistingLease<T>(
-    input: NetworkPreflightRunInput,
+    input: NetworkPreflightRequestInput,
     target: NetworkPreflightTarget | undefined,
     leaseContext: NetworkPreflightLeaseContext,
     operation: (
@@ -294,7 +299,7 @@ export class NetworkPreflightService {
   }
 
   private captureRequest(
-    input: NetworkPreflightRunInput,
+    input: NetworkPreflightRequestInput,
     target: NetworkPreflightTarget | undefined,
   ): NetworkPreflightRequestCapture {
     const canonicalCwd = input.cwd === undefined ? undefined : path.resolve(input.cwd);
@@ -303,6 +308,7 @@ export class NetworkPreflightService {
       action: input.action,
       ...(canonicalCwd === undefined ? {} : { canonicalCwd }),
       force: input.force === true,
+      fresh: input.fresh === true,
       networkScope: input.networkScope ?? 'application',
       provider: input.provider,
       ...(capturedTarget === undefined ? {} : { target: capturedTarget }),
@@ -386,8 +392,10 @@ export class NetworkPreflightService {
     let heldWaiter: NetworkPreflightRunWaiter | undefined;
     try {
       signal?.throwIfAborted();
-      if (capture.force) {
+      if (capture.force || capture.fresh) {
         this.cache.delete(key);
+      }
+      if (capture.force) {
         const supersedingRunId = this.nextRunId;
         for (const activeRun of this.activeRuns) {
           if (activeRun.key === key) {

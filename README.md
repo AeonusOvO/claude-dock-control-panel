@@ -3,7 +3,7 @@
 Windows 桌面 Electron 控制面板，用图形界面管理多个项目的 PowerShell/ConPTY 终端、Claude Code 与
 Codex 会话、模型接入、路由、MCP、插件和更新。
 
-当前版本 **5.0.0-rc.30**，仅发布 Windows x64。
+当前版本 **5.0.0-rc.31**，仅发布 Windows x64。
 
 ## 功能
 
