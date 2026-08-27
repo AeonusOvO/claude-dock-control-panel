@@ -365,6 +365,9 @@ ClaudeDock。
 | `app:quit-request-received`           | `onAppQuitRequested` 回调内部     | 无                                                             |
 
 `ptyGeneration` 与 `resizeRevision` 是版本号：终端重启后旧帧的写入与尺寸事件会带着过期版本抵达，主进程按版本丢弃。
+`TerminalStatus.size` 携带该 PTY 已采纳的 `{ cols, rows }`，renderer 必须在新建 xterm、解析输出前使用它。
+同一显示区域的尺寸一次测量后分发给前后台各个 generation；`terminal:size` 回声若早于 view 已发送的
+最新 `resizeRevision` 则直接忽略，不允许迟到回声覆盖最大化后的新尺寸。
 
 ## 事件频道（24）
 

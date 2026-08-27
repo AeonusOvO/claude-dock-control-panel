@@ -133,6 +133,10 @@ export type { ManagedChatGptGatewayManagementAccess } from './managed-chatgpt-ga
 export { ManagedGatewayStartupLog };
 
 export class ManagedChatGptGateway {
+  private readonly authenticationInspections = new Map<
+    ManagedGatewayAuthenticationTransaction | undefined,
+    Promise<ManagedGatewayAuthenticationInspection | undefined>
+  >();
   private readonly authDirectory: string;
   private readonly configFiles: ManagedGatewayConfigFiles;
   private readonly configPath: string;
@@ -210,10 +214,14 @@ export class ManagedChatGptGateway {
   }
 
   public async getState(): Promise<ManagedChatGptGatewayState> {
-    const busy = Boolean(this.setupInFlight);
+    // Status panels may read while another conversation is starting the shared gateway. They must
+    // not independently probe/promote its provisional process record during the owning transaction.
+    const busy = this.lifecycleControllers.size > 0;
     const persisted = this.loadState();
     const installed = Boolean(persisted && this.executableIsValid(persisted));
-    const authentication = managedGatewayPublicState(await this.inspectAuthentication());
+    const authentication = managedGatewayPublicState(
+      busy ? undefined : await this.inspectAuthentication(),
+    );
     const managementKey = persisted ? this.decryptManagementKey(persisted) : undefined;
     const stoppingOwnedProcess =
       !busy && Boolean(persisted) && installed && this.processLifecycle.ownsStoppingProcess();
@@ -253,7 +261,7 @@ export class ManagedChatGptGateway {
             : 'stopped';
     const message =
       phase === 'installing'
-        ? '正在下载、校验并配置托管网关；完成前无需重复点击。'
+        ? '正在准备并校验托管网关；并发对话会共享本次准备结果。'
         : phase === 'not-installed'
           ? '尚未安装 ClaudeDock 托管网关。'
           : phase === 'login-required'
@@ -809,7 +817,21 @@ export class ManagedChatGptGateway {
     return resolvedRuntime;
   }
 
-  private async inspectAuthentication(
+  private inspectAuthentication(
+    inspectedTransaction?: ManagedGatewayAuthenticationTransaction,
+  ): Promise<ManagedGatewayAuthenticationInspection | undefined> {
+    const existing = this.authenticationInspections.get(inspectedTransaction);
+    if (existing) return existing;
+    const operation = this.readAuthentication(inspectedTransaction).finally(() => {
+      if (this.authenticationInspections.get(inspectedTransaction) === operation) {
+        this.authenticationInspections.delete(inspectedTransaction);
+      }
+    });
+    this.authenticationInspections.set(inspectedTransaction, operation);
+    return operation;
+  }
+
+  private async readAuthentication(
     inspectedTransaction?: ManagedGatewayAuthenticationTransaction,
   ): Promise<ManagedGatewayAuthenticationInspection | undefined> {
     if (
@@ -820,12 +842,22 @@ export class ManagedChatGptGateway {
     }
     const candidates = snapshotManagedGatewayAuthenticationCandidates(this.authDirectory);
     await protectManagedGatewayAuthentication(this.authDirectory, [...candidates.keys()]);
+    if (
+      ManagedGatewayAuthenticationTransaction.hasPending(this.authDirectory, inspectedTransaction)
+    ) {
+      return undefined;
+    }
     const first = inspectManagedGatewayAuthentication(this.authDirectory);
     if (first) return first;
     if (candidates.size === 0) return undefined;
     await managedGatewayDelay(AUTH_ARTIFACT_RETRY_MS);
     const retriedCandidates = snapshotManagedGatewayAuthenticationCandidates(this.authDirectory);
     await protectManagedGatewayAuthentication(this.authDirectory, [...retriedCandidates.keys()]);
+    if (
+      ManagedGatewayAuthenticationTransaction.hasPending(this.authDirectory, inspectedTransaction)
+    ) {
+      return undefined;
+    }
     return inspectManagedGatewayAuthentication(this.authDirectory);
   }
 

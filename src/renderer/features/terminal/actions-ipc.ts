@@ -37,6 +37,7 @@ export const bindTerminalIpcListeners = (
     if (
       !view ||
       !io.ownsTerminalGeneration(sessionId, ptyGeneration, view) ||
+      resizeRevision < view.resizeRevision ||
       resizeRevision < view.appliedResizeRevision
     ) {
       return;

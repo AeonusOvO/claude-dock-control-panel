@@ -357,9 +357,21 @@ const bindPreflightActions = (context: PreflightActionsContext): (() => void) =>
   };
   const networkInformation = (
     navigator as Navigator & {
-      connection?: EventTarget;
+      connection?: EventTarget & { type?: string };
     }
   ).connection;
+  let connectionType = networkInformation?.type;
+  const handleConnectionChange = (): void => {
+    const previousType = connectionType;
+    connectionType = networkInformation?.type;
+    // Chromium also emits `change` for rolling RTT/downlink/effectiveType estimates. Probing the
+    // network changes those estimates itself; invalidating here used to cancel every waiting launch.
+    // Only a known transport change is authoritative. Online/offline and saved proxy changes retain
+    // their own invalidation paths, and launch probes still require current route leases.
+    if (previousType && connectionType && previousType !== connectionType) {
+      handleNetworkEnvironmentChange();
+    }
+  };
 
   elements.networkPreflightDetails.addEventListener('click', handleDetails);
   elements.networkPreflightTrigger.addEventListener('click', handleManualDetails);
@@ -372,7 +384,7 @@ const bindPreflightActions = (context: PreflightActionsContext): (() => void) =>
   elements.networkPreflightClearHistory.addEventListener('click', handleClearHistory);
   window.addEventListener('online', handleNetworkEnvironmentChange);
   window.addEventListener('offline', handleNetworkEnvironmentChange);
-  networkInformation?.addEventListener('change', handleNetworkEnvironmentChange);
+  networkInformation?.addEventListener('change', handleConnectionChange);
   document.addEventListener('visibilitychange', handleVisibilityChange);
 
   return () => {
@@ -388,7 +400,7 @@ const bindPreflightActions = (context: PreflightActionsContext): (() => void) =>
     elements.networkPreflightClearHistory.removeEventListener('click', handleClearHistory);
     window.removeEventListener('online', handleNetworkEnvironmentChange);
     window.removeEventListener('offline', handleNetworkEnvironmentChange);
-    networkInformation?.removeEventListener('change', handleNetworkEnvironmentChange);
+    networkInformation?.removeEventListener('change', handleConnectionChange);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
   };
 };

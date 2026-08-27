@@ -113,6 +113,45 @@ describe('renderer interaction lifecycle behavior', () => {
     });
   });
 
+  it('opens background replacement views at their PTY size before accepting any output', async () => {
+    const workspace = twoSessionWorkspace('session-a');
+    const size = { cols: 159, rows: 39 };
+    workspace.sessions = workspace.sessions.map((status) => ({ ...status, size }));
+    await withTerminalRenderer(
+      { getWorkspace: async () => workspace },
+      async (harness, control) => {
+        expect(control.terminals[1]?.options).toMatchObject(size);
+        control.proposedDimensions = size;
+        harness.clearCalls();
+        const replacement = {
+          ...workspace,
+          sessions: workspace.sessions.map((status) => ({ ...status, ptyGeneration: 2 })),
+        };
+        harness.emit('onWorkspaceState', replacement);
+        harness.emit('onTerminalData', 'session-b', 2, 'background full-screen output');
+        expect(control.terminals.at(-1)?.options).toMatchObject(size);
+        await settle(harness);
+        for (const status of replacement.sessions) {
+          expect(harness.method('resizeTerminal')).toHaveBeenCalledWith(status.id, 2, 1, 159, 39);
+        }
+        expect(control.terminals.at(-1)?.writes).toContain('background full-screen output');
+      },
+    );
+  });
+
+  it('does not let a delayed size echo overwrite a newer viewport measurement', async () => {
+    await withTerminalRenderer({}, async (harness, control) => {
+      const terminal = control.terminals[0]!;
+      control.proposedDimensions = { cols: 159, rows: 39 };
+      harness.dom.window.dispatchEvent(new harness.dom.window.Event('resize'));
+      await settle(harness);
+      expect(terminal.cols).toBe(159);
+      harness.emit('onTerminalSize', 'session-1', 1, 1, 100, 30);
+      expect(terminal.cols).toBe(159);
+      expect(terminal.rows).toBe(39);
+    });
+  });
+
   it('owns xterm views and asynchronous terminal work by exact PTY generation', async () => {
     await withTerminalRenderer({}, async (harness, control) => {
       const first = control.terminals[0]!;

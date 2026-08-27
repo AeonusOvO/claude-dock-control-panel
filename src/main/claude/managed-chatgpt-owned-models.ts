@@ -219,6 +219,13 @@ export class ManagedGatewayOwnedModelReader {
     }
     const deadline = Date.now() + timeoutMs;
     const socket = this.connect(process.port);
+    let socketFailure: Error | undefined;
+    // Ownership verification awaits a Windows helper between connect and response listeners.
+    // Keep an error owner across that gap (and post-response verification) so ECONNRESET cannot
+    // become an uncaught main-process exception. Never write a bearer after the socket failed.
+    socket.on('error', (error) => {
+      socketFailure = error;
+    });
     socket.setNoDelay(true);
     try {
       await waitForConnection(socket, deadline);
@@ -239,6 +246,9 @@ export class ManagedGatewayOwnedModelReader {
       );
       if (!ownsConnection) {
         throw new ProviderModelDiscoveryError('本机模型连接不属于托管网关进程。');
+      }
+      if (socketFailure || socket.destroyed || !socket.writable) {
+        throw new ProviderModelDiscoveryError('本机模型连接在身份检查期间已经断开。');
       }
       const request = [
         'GET /v1/models HTTP/1.1',

@@ -48,6 +48,25 @@ const availableLoopbackPort = async (): Promise<number> => {
 };
 
 describe('managed gateway exact Windows process identity', () => {
+  it('shares one concurrent exact-process inspection and never caches a completed result', async () => {
+    let finish!: (value: { stdout: string; stderr: string }) => void;
+    const run = vi.fn(
+      () =>
+        new Promise<{ stdout: string; stderr: string }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const identity = new ManagedGatewayProcessIdentity({ platform: 'win32', run });
+    const checks = Array.from({ length: 10 }, () => identity.matches(descriptor()));
+    expect(run).toHaveBeenCalledOnce();
+    finish({ stderr: '', stdout: 'MATCH' });
+    expect(await Promise.all(checks)).toEqual(Array.from({ length: 10 }, () => 'match'));
+    const next = identity.matches(descriptor());
+    expect(run).toHaveBeenCalledTimes(2);
+    finish({ stderr: '', stdout: 'MISMATCH' });
+    await expect(next).resolves.toBe('mismatch');
+  });
+
   it('captures only a normalized non-secret birth token through fixed script text', async () => {
     const run = runner('MATCH:638900000000000042');
     const identity = new ManagedGatewayProcessIdentity({ platform: 'win32', run });

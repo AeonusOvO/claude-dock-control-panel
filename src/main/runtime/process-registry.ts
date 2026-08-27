@@ -78,6 +78,7 @@ interface TerminationScope {
   ownerProvider: () => RuntimeProcessOwner[];
   ownerProviderRevision: number;
   rootStartedAtByOwner: Map<string, number>;
+  sessionId?: string;
 }
 
 interface ScopedProcessState {
@@ -292,14 +293,16 @@ export class RuntimeProcessRegistry {
   }
 
   public terminate(sessionId: string, processKey: string): Promise<void> {
-    return this.enqueueTermination((generation, scope) =>
-      this.terminateOwnedProcess(generation, scope, sessionId, processKey),
+    return this.enqueueTermination(
+      (generation, scope) => this.terminateOwnedProcess(generation, scope, sessionId, processKey),
+      sessionId,
     );
   }
 
   public terminateSession(sessionId: string): Promise<void> {
-    return this.enqueueTermination((generation, scope) =>
-      this.terminateOwnedSession(generation, scope, sessionId),
+    return this.enqueueTermination(
+      (generation, scope) => this.terminateOwnedSession(generation, scope, sessionId),
+      sessionId,
     );
   }
 
@@ -406,26 +409,28 @@ export class RuntimeProcessRegistry {
     return request;
   }
 
-  private captureTerminationScope(): TerminationScope {
+  private captureTerminationScope(sessionId?: string): TerminationScope {
     const ownerProvider = this.ownerProvider;
     const rootStartedAtByOwner = new Map(this.ownerRootStartedAt);
     for (const entry of this.owned.values()) {
       rootStartedAtByOwner.set(runtimeOwnerKey(entry.owner), entry.rootStartedAt);
     }
     return {
-      frozenOwners: this.readOwners(ownerProvider),
+      frozenOwners: this.readOwners(ownerProvider, sessionId),
       ownerProvider,
       ownerProviderRevision: this.ownerProviderRevision,
       rootStartedAtByOwner,
+      ...(sessionId === undefined ? {} : { sessionId }),
     };
   }
 
   private enqueueTermination(
     operation: (generation: number, scope: TerminationScope) => Promise<void>,
+    sessionId?: string,
   ): Promise<void> {
     let scope: TerminationScope;
     try {
-      scope = this.captureTerminationScope();
+      scope = this.captureTerminationScope(sessionId);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -453,11 +458,15 @@ export class RuntimeProcessRegistry {
     this.scanRequests = this.scanRequests.filter((candidate) => candidate !== request);
   }
 
-  private readOwners(provider: () => RuntimeProcessOwner[]): RuntimeProcessOwner[] {
+  private readOwners(
+    provider: () => RuntimeProcessOwner[],
+    sessionId?: string,
+  ): RuntimeProcessOwner[] {
     const owners = provider();
     const unique = new Map<string, RuntimeProcessOwner>();
     for (const owner of owners) {
       if (
+        (sessionId !== undefined && owner.sessionId !== sessionId) ||
         !Number.isSafeInteger(owner.rootPid) ||
         owner.rootPid <= 0 ||
         !Number.isSafeInteger(owner.launchGeneration) ||
@@ -667,7 +676,7 @@ export class RuntimeProcessRegistry {
   private async captureScopedState(scope: TerminationScope): Promise<ScopedProcessState> {
     const liveAtStart = this.scopeIsLive(scope);
     const ownersBeforeCapture = liveAtStart
-      ? this.readOwners(scope.ownerProvider)
+      ? this.readOwners(scope.ownerProvider, scope.sessionId)
       : scope.frozenOwners.map((owner) => ({ ...owner }));
     const snapshot =
       ownersBeforeCapture.length === 0
@@ -675,7 +684,7 @@ export class RuntimeProcessRegistry {
         : await this.system.capture();
     let owners = ownersBeforeCapture;
     if (liveAtStart && this.scopeIsLive(scope)) {
-      const ownersAfterCapture = this.readOwners(scope.ownerProvider);
+      const ownersAfterCapture = this.readOwners(scope.ownerProvider, scope.sessionId);
       if (ownerSetFingerprint(ownersBeforeCapture) !== ownerSetFingerprint(ownersAfterCapture)) {
         throw new Error('进程所有权在扫描期间发生变化，已拒绝应用扫描结果。');
       }
@@ -705,9 +714,22 @@ export class RuntimeProcessRegistry {
   ): void {
     if (!this.canApplyTerminationState(generation, scope)) return;
     const publish = this.isCurrent(generation) && this.scopeIsLive(scope);
-    this.replaceRootBindings(state.rootStartedAtByOwner);
+    // A single-session cleanup must neither depend on sibling launch generations nor overwrite
+    // their observations. Global shutdown still captures and replaces the complete owner set.
+    const discovered =
+      scope.sessionId === undefined
+        ? state.discovered
+        : new Map([
+            ...[...this.owned].filter(([, entry]) => entry.owner.sessionId !== scope.sessionId),
+            ...state.discovered,
+          ]);
+    this.replaceRootBindings(
+      scope.sessionId === undefined
+        ? state.rootStartedAtByOwner
+        : new Map([...this.ownerRootStartedAt, ...state.rootStartedAtByOwner]),
+    );
     this.replaceOwnedProcesses(
-      state.discovered,
+      discovered,
       generation,
       publish,
       state.owners.map((owner) => owner.sessionId),

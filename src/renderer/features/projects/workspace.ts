@@ -88,13 +88,9 @@ export const createWorkspaceRenderer = (
       state.workspaceRevision = workspace.revision;
     }
     const previousActiveSessionId = dependencies.getWorkspaceState().activeSessionId;
-    const nextActiveStatus = workspace.sessions.find(
-      (status) => status.id === workspace.activeSessionId,
+    const terminalViewsChanged = workspace.sessions.some(
+      (status) => dependencies.getTerminalView(status.id)?.ptyGeneration !== status.ptyGeneration,
     );
-    const activeViewAlreadyExists =
-      nextActiveStatus !== undefined &&
-      dependencies.getTerminalView(nextActiveStatus.id)?.ptyGeneration ===
-        nextActiveStatus.ptyGeneration;
     titleView.syncConversationTitles(workspace);
     const validSessionIds = new Set(workspace.sessions.map((status) => status.id));
     const releasedClaudeLaunches = new Set<string>();
@@ -223,7 +219,7 @@ export const createWorkspaceRenderer = (
     }
     if (
       workspace.activeSessionId &&
-      (workspace.activeSessionId !== previousActiveSessionId || !activeViewAlreadyExists)
+      (workspace.activeSessionId !== previousActiveSessionId || terminalViewsChanged)
     ) {
       dependencies.retryTerminalFitUntilMeasured();
     }

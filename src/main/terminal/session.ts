@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { IPty } from '@lydell/node-pty';
 import * as pty from '@lydell/node-pty';
 import type { PtyGeneration, TerminalStatus } from '../../shared/contracts';
+import { DEFAULT_TERMINAL_SIZE } from '../../shared/contracts/terminal';
 import {
   ansiBackground,
   ansiForeground,
@@ -242,12 +243,12 @@ export const killWindowsProcessTree = (pid: number): void => {
 };
 
 export class TerminalSession {
-  private cols = 100;
+  private cols = DEFAULT_TERMINAL_SIZE.cols;
   private generation = 0;
   private pidMarkerBuffer = '';
   private pidMarkerDone = true;
   private process?: IPty;
-  private rows = 30;
+  private rows = DEFAULT_TERMINAL_SIZE.rows;
   private status: TerminalStatus;
 
   public constructor(
@@ -269,7 +270,7 @@ export class TerminalSession {
   }
 
   public getStatus(): TerminalStatus {
-    return { ...this.status };
+    return { ...this.status, size: { cols: this.cols, rows: this.rows } };
   }
 
   public setTitle(title: string): TerminalStatus {

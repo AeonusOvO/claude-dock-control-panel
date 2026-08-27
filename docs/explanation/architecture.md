@@ -76,6 +76,11 @@ Claude 官方账号状态也归 main。`official-auth-status.ts` 以有界命令
 
 ### 会话所有权键
 
+终端的尺寸属于 PTY generation，并随状态发送；新建或替换的 xterm 在接收首个输出字节前使用该尺寸。
+前后台对话共用显示区域，只测量一次并分别同步各自的终端，不要求逐个激活或缩放窗口后才能正确绘制。
+单会话的 Web 子进程清理只验证目标 session 的 owner 集合，兄弟对话启动/恢复不使它失效，也不覆盖兄弟
+对话的进程观察；全局退出仍验证完整 owner 集合与精确 PID 出生身份。
+
 一个对话由 `(runtime, normalized project, UUID)` 三元组唯一标识。原生会话、历史恢复和项目终端会尝试打开同一个对话，三元组保证只有一个持有者，第二个尝试收到 `conversation:owner-conflict`。
 
 ### 版本号

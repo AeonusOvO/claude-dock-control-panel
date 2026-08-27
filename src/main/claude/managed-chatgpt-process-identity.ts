@@ -226,6 +226,7 @@ const delay = (milliseconds: number): Promise<void> =>
 
 /** Uses one fixed main-process operation so expected paths never become generated script text. */
 export class ManagedGatewayProcessIdentity {
+  private readonly inspectionsInFlight = new Map<string, Promise<ManagedGatewayProcessMatch>>();
   private readonly platform: NodeJS.Platform;
   private readonly run: ProcessRunner;
 
@@ -265,7 +266,27 @@ export class ManagedGatewayProcessIdentity {
     ) {
       return 'mismatch';
     }
-    return this.matchResult(await this.operation('inspect', process, undefined, timeoutMs));
+    const key = JSON.stringify([
+      process.processId,
+      process.identity.startedAtTicks,
+      path.resolve(process.executablePath).toLowerCase(),
+      path.resolve(process.configPath).toLowerCase(),
+      process.port,
+      timeoutMs,
+    ]);
+    const existing = this.inspectionsInFlight.get(key);
+    if (existing) return existing;
+    // Concurrent readers of one gateway must not launch a PowerShell/CIM scan each. Share only
+    // an in-flight exact identity check; every later read performs a fresh ownership verification.
+    const operation = this.operation('inspect', process, undefined, timeoutMs).then((result) =>
+      this.matchResult(result),
+    );
+    this.inspectionsInFlight.set(key, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.inspectionsInFlight.get(key) === operation) this.inspectionsInFlight.delete(key);
+    }
   }
 
   public async ownsEstablishedConnection(

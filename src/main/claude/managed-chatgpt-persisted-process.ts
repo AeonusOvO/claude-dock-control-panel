@@ -82,7 +82,9 @@ export class ManagedGatewayPersistedProcess {
     if (!descriptor || !ownership) return undefined;
     const match = await this.options.processIdentity.matches(descriptor);
     if (match === 'match') return descriptor.processId;
-    if (match === 'absent' || match === 'inaccessible' || match === 'mismatch') {
+    // A timed-out/denied inspection is not evidence of exit. Keep the exact birth record so another
+    // reader or the startup transaction can revalidate it; never authorize access on uncertainty.
+    if (match === 'absent' || match === 'mismatch') {
       try {
         this.clearOwnership(ownership);
       } catch {

@@ -11,6 +11,13 @@ export type TerminalPhase = 'error' | 'running' | 'starting' | 'stopped';
 
 export type PtyGeneration = number;
 
+export interface TerminalSize {
+  cols: number;
+  rows: number;
+}
+
+export const DEFAULT_TERMINAL_SIZE: Readonly<TerminalSize> = { cols: 100, rows: 30 };
+
 export interface TerminalStatus {
   cwd: string;
   diagnosticCode?:
@@ -24,6 +31,8 @@ export interface TerminalStatus {
   pid?: number;
   ptyGeneration: PtyGeneration;
   shell: string;
+  /** Adopted PTY grid; a replacement renderer must use it before parsing the first output byte. */
+  size?: TerminalSize;
   title: string;
 }
 

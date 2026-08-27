@@ -69,6 +69,26 @@ beforeEach(() => {
 });
 
 describe('TerminalSession PTY generation ownership', () => {
+  it('publishes the adopted grid with every replacement generation before its output', () => {
+    const statuses: TerminalStatus[] = [];
+    const session = new TerminalSession('session-size', 'D:\\Project', '对话', vi.fn(), (status) =>
+      statuses.push(status),
+    );
+    session.start();
+    session.resize(159, 39);
+    const restarted = session.restart();
+    expect(restarted).toMatchObject({ ptyGeneration: 2, size: { cols: 159, rows: 39 } });
+    expect(statuses.filter(({ ptyGeneration }) => ptyGeneration === 2)).toEqual([
+      expect.objectContaining({ phase: 'starting', size: { cols: 159, rows: 39 } }),
+      expect.objectContaining({ phase: 'running', size: { cols: 159, rows: 39 } }),
+    ]);
+    expect(ptyHarness.spawn).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({ cols: 159, rows: 39 }),
+    );
+  });
+
   it('starts the live ConPTY without loading PowerShell profiles', () => {
     const session = new TerminalSession('session-profile', 'D:\\Project', '对话', vi.fn(), vi.fn());
 

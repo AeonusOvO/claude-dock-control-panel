@@ -1025,6 +1025,12 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 
 ### ChatGPT 订阅受管网关
 
+- 并发启动共享一个 `ensureRunning()`；安装、启动、换号等生命周期事务进行中，公开状态读取只报告
+  busy，不另行探测或提升尚未提交的进程。相同授权事务的文件检查与相同 PID/出生时间/路径/端口的
+  Windows 进程检查只合并正在执行的工作，不缓存完成后的所有权结论。授权目录与其精确子文件在一个
+  PowerShell 调用内逐项设置并验证 ACL。检查超时或权限不可读只表示无法确认，保留精确出生身份记录，
+  不授权访问，也不把存活网关误删为“已退出”；只有 absent/mismatch 才清除对应旧记录。
+  模型传输在连接、异步所有权检查和响应复核全程持有 socket error listener，断开后不发送 Bearer。
 - `ManagedChatGptGateway`（`src/main/claude/managed-chatgpt-gateway.ts`）只从
   `router-for-me/CLIProxyAPI` 的 GitHub `releases/latest` 查询发行元数据。版本必须是严格 SemVer，
   资产名必须精确匹配 `CLIProxyAPI_<version>_windows_amd64.zip`，下载地址必须位于预期仓库/tag，
@@ -1915,11 +1921,12 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
   「Ctrl+A 无法全选」。
 - 会话内 Backspace 处理器检测光标前是否为 PSReadLine 多行换行符：是则删除该换行并回退
   光标，否则调用标准 `BackwardDeleteChar`。该绑定不会写入用户 profile。
-- 尺寸以 PTY 为准，不以 xterm 为准。`TerminalSession.resize()` 会夹紧尺寸，因此它返回
-  真正采纳的 `{ cols, rows }`，主进程再通过 `terminal:size` 回传，渲染层收到后调用
-  `terminal.resize()` 把 xterm 强制对齐到同一网格。这不是冗余：PSReadLine 用**绝对**光标
-  移动重绘编辑缓冲（按 `Ctrl+C` 会发出形如 `ESC[10;27H` 的序列），两侧网格只要不一致，
-  重绘就落在错误的行上，上一屏留在原地——这正是「两屏叠在一起」那个 bug。
+- `TerminalStatus.size` 随每次 PTY generation 发布其已采纳的 `{ cols, rows }`；xterm 在 `open()` 和
+  接收首个输出字节前就使用该网格，后台替换视图不能从默认 80×24 开始解析最大化终端的全屏输出。
+  所有对话共用同一显示区域和字体，因此每帧只测量可见视图一次，再按各自 generation 同步前后台视图
+  与 PTY。新增或后台 generation 替换也触发同步，不依赖用户改变窗口大小。`TerminalSession.resize()`
+  夹紧并返回实际采纳尺寸；`terminal:size` 回声必须不早于当前 view 的最新 resizeRevision，旧回声不能
+  将新网格缩回去。PSReadLine/CLI 的绝对光标重绘依赖两侧网格一致。
 - xterm 有选区时 `Ctrl+C` 通过主进程 `clipboard` API 复制；无选区时仍发送控制字符中断。
   粘贴的物理路径固定为
   `clipboard → Terminal.paste once → xterm onData once → generation-fenced writeTerminal once`。
@@ -2013,6 +2020,9 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
    自动新会话/登录检查使用 `fresh`：跳过已完成缓存，但相同身份的并发请求共享正在执行的检测，每个
    等待者仍持有自己的取消信号和 route lease。只有显式“重新检测”的 `force` 才取代旧检测；代理 epoch
    或目标变化仍使旧证据失效。不能把“需要新鲜证据”实现为取消同项目其他会话的自动预检。
+   Chromium `navigator.connection.change` 的 RTT、downlink、effectiveType 估计变化不作废证据；探测本身
+   也可能改变这些估计。只有已知 transport type 变化、online/offline 与主进程权威配置变化才走相应
+   失效路径，避免一批新建/恢复对话互相取消。
 10. 首次阻止若仅来自 DNS、reset、connect failure 或 timeout，且仍有 active IP path，可等待 150ms 后
     fresh 一次新 probe，并与同身份的其他重试共享进行中的检测；offline、TLS、untrusted redirect、portal、unsupported CLI transport 和 internal
     failure 不自动重试。等待和第二次 probe 共用调用方 AbortSignal，取消后不得继续业务操作。
@@ -2342,14 +2352,16 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   用于人工核对四主题的焦点颜色；
   其余继续核对主题结构差异、浅色终端背景与 dim 对比度、富文本、固定输入区、窄宽响应式和
   遮罩无重排。隐藏窗口截图会先丢弃一次未稳定合成帧，图片属于构建产物。
-- `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY，输出
+- `npm run test:conpty` 在一次性 `userData` 下加载真实工作区与 PowerShell ConPTY；最大化后连续创建
+  十个额外对话，并发替换全部十一个 PTY，保持后台状态读取每个真实 PowerShell 的 WindowWidth/Height，
+  对照各自 generation 的尺寸回声。随后保持最大化逐个切换，核对 xterm 画布铺满显示区并截图，再输出
   24 条带序号证明行，在 820/1400/900/1280/1180px 间往返调整 BrowserWindow；每次 resize 都等待
   preload 的权威 `terminal:size`，不靠固定睡眠。截图后连续执行三轮 restart → stop → start，再让最终
   generation 输出唯一 sentinel 并立即 `exit`，断言 data 先于 `stopped`、停止后没有同 generation
   迟到数据、旧 generation 的 `stopped/error` 不会覆盖最终运行状态。该 Windows 专用烟测已作为
   production build 后独立运行；首次命令、最终尺寸和 sentinel 输出都使用 30 秒硬上限，
   以容纳 GitHub Windows Runner 上 Electron/node-pty/PowerShell/Defender 的冷启动，但仍按 50ms
-  探测立即继续而不是固定等待。结束后删除临时用户目录。
+  探测立即继续而不是固定等待。成功和失败均先关闭该测试窗口自己的会话，再删除临时用户目录。
 - `npm run test:control-theme` 在隐藏窗口里加载渲染入口，遍历全部按钮并读取计算样式，把
   `border-top-style: outset`（Chromium 未被覆盖的原生按钮）列成清单。源码断言只能守住已知的
   几个选择器，这条烟测才是「有没有漏网的原生控件」的全量答案，当前结果是 163 个按钮全部命中

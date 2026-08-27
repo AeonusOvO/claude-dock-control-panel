@@ -167,6 +167,8 @@ export class FakeTerminal {
     private readonly control: FakeTerminalControl,
   ) {
     this.options = options;
+    this.cols = typeof options.cols === 'number' ? options.cols : 80;
+    this.rows = typeof options.rows === 'number' ? options.rows : 24;
   }
 
   public attachCustomKeyEventHandler(listener: (event: KeyboardEvent) => boolean): void {

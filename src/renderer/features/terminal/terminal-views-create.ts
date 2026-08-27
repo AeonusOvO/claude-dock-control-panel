@@ -4,6 +4,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { TERMINAL_THEMES } from '../../../shared/ui/terminal-themes';
 import type { TerminalStatus } from '../../../shared/contracts';
+import { DEFAULT_TERMINAL_SIZE } from '../../../shared/contracts/terminal';
 import { TerminalOutputPump } from '../../platform/terminal-output-pump';
 import type { TerminalElements } from './elements';
 import type { TerminalIo } from './terminal-io';
@@ -48,7 +49,12 @@ export const createTerminalViewActions = (
     container.dataset.sessionId = sessionId;
     elements.terminalStage.prepend(container);
 
-    const terminal = new Terminal(buildTerminalOptions());
+    // A hidden replacement can receive a complete TUI before it ever becomes active. Starting it
+    // at xterm's 80x24 default corrupts output from a PTY which retained a larger maximized grid.
+    const terminal = new Terminal({
+      ...buildTerminalOptions(),
+      ...(status.size ?? DEFAULT_TERMINAL_SIZE),
+    });
     const fitAddon = new FitAddon();
     const unicode11Addon = new Unicode11Addon();
     terminal.loadAddon(fitAddon);

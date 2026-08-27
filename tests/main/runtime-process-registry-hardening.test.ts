@@ -48,6 +48,70 @@ afterEach(() => {
 });
 
 describe('runtime process registry hardening', () => {
+  it('keeps session cleanup valid while a sibling changes generation during the scan', async () => {
+    vi.useFakeTimers();
+    const sibling = { ...owner, rootPid: 110, sessionId: 'session-2' };
+    let owners = [owner, sibling];
+    let current: WindowsProcessSnapshot = {
+      listeners: [...webSnapshot().listeners, { address: '127.0.0.1', pid: 120, port: 4_080 }],
+      processes: [
+        ...webSnapshot().processes,
+        { name: 'powershell.exe', parentPid: 1, pid: 110, startedAt: 11_000 },
+        { name: 'node.exe', parentPid: 110, pid: 120, startedAt: 12_000 },
+      ],
+    };
+    let changeSibling = false;
+    const capture = vi.fn(async () => {
+      if (changeSibling) {
+        changeSibling = false;
+        owners = [owner, { ...sibling, ptyGeneration: sibling.ptyGeneration + 1 }];
+      }
+      return current;
+    });
+    const gracefulStop = vi.fn(async (targets: RuntimeProcessStopTarget[]) => {
+      expect(targets).toEqual([{ pid: 20, startedAt: 2_000 }]);
+      current = {
+        listeners: current.listeners.filter(({ pid }) => pid !== 20),
+        processes: current.processes.filter(({ pid }) => pid !== 20),
+      };
+    });
+    const registry = new RuntimeProcessRegistry(() => undefined, {
+      capture,
+      forceStop: vi.fn(async () => undefined),
+      gracefulStop,
+    });
+    registry.start(() => owners);
+    await registry.scan();
+    const siblingView = registry.list().find(({ sessionId }) => sessionId === sibling.sessionId);
+    changeSibling = true;
+    const result = expect(registry.terminateSession(owner.sessionId)).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_500);
+    await result;
+    expect(gracefulStop).toHaveBeenCalledOnce();
+    expect(registry.list()).toEqual([siblingView]);
+    registry.stop();
+  });
+
+  it('still rejects cleanup when its own session changes generation during the scan', async () => {
+    let owners = [owner];
+    let changeOwner = false;
+    const stops = inertStops();
+    const registry = new RuntimeProcessRegistry(() => undefined, {
+      capture: vi.fn(async () => {
+        if (changeOwner) owners = [{ ...owner, ptyGeneration: owner.ptyGeneration + 1 }];
+        return webSnapshot();
+      }),
+      ...stops,
+    });
+    registry.start(() => owners);
+    await registry.scan();
+    changeOwner = true;
+    await expect(registry.terminateSession(owner.sessionId)).rejects.toThrow('进程所有权');
+    expect(stops.gracefulStop).not.toHaveBeenCalled();
+    expect(stops.forceStop).not.toHaveBeenCalled();
+    registry.stop();
+  });
+
   it('passes PID and birth time into one exact-stop PowerShell boundary', async () => {
     const run = vi.fn<RuntimeProcessRunner>(async () => ({ stderr: '', stdout: '' }));
     const system = createRuntimeProcessSystem({ platform: 'win32', run });

@@ -372,7 +372,7 @@ describe('managed ChatGPT gateway', () => {
       run: run as never,
     });
 
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledOnce();
     for (const call of run.mock.calls as unknown[][]) {
       const argumentsList = call[1] as string[];
       const environment = call[2] as NodeJS.ProcessEnv;
@@ -382,18 +382,15 @@ describe('managed ChatGPT gateway', () => {
       expect(script).toContain('ReparsePoint');
       expect(script).toContain('SetAccessRuleProtection($true, $false)');
       expect(script).toContain('FileSystemRights]::FullControl');
-      expect(environment.CLAUDEDOCK_GATEWAY_AUTH_PATH).toBeTruthy();
+      expect(environment.CLAUDEDOCK_GATEWAY_AUTH_TARGETS).toBeTruthy();
       expect(environment.CUSTOM_ENVIRONMENT_CANARY).toBeUndefined();
       expect(call[3]).toEqual({ maxBuffer: 64 * 1024, timeout: 10_000 });
     }
-    expect((run.mock.calls as unknown[][])[0]?.[2]).toMatchObject({
-      CLAUDEDOCK_GATEWAY_AUTH_PATH: authDirectory,
-      CLAUDEDOCK_GATEWAY_AUTH_PATH_KIND: 'directory',
-    });
-    expect((run.mock.calls as unknown[][])[1]?.[2]).toMatchObject({
-      CLAUDEDOCK_GATEWAY_AUTH_PATH: path.resolve(artifactPath),
-      CLAUDEDOCK_GATEWAY_AUTH_PATH_KIND: 'file',
-    });
+    const environment = (run.mock.calls as unknown[][])[0]?.[2] as NodeJS.ProcessEnv;
+    expect(JSON.parse(environment.CLAUDEDOCK_GATEWAY_AUTH_TARGETS!)).toEqual([
+      { kind: 'directory', targetPath: authDirectory },
+      { kind: 'file', targetPath: path.resolve(artifactPath) },
+    ]);
 
     await expect(
       protectManagedGatewayAuthentication(
@@ -402,7 +399,7 @@ describe('managed ChatGPT gateway', () => {
         { platform: 'win32', run: run as never },
       ),
     ).rejects.toThrow('授权文件路径无效');
-    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it('reads the installed version without starting or probing the gateway', () => {
@@ -463,6 +460,7 @@ describe('managed ChatGPT gateway', () => {
     const internals = manager as unknown as ManagedGatewayInternals;
     try {
       const inspection = internals.inspectAuthentication();
+      expect(internals.inspectAuthentication()).toBe(inspection);
       setTimeout(() => {
         writeFileSync(candidatePath, JSON.stringify(validCodexArtifact()), 'utf8');
       }, 20);
@@ -880,6 +878,15 @@ describe('managed ChatGPT gateway', () => {
     const startWithStableEnvironment = vi
       .spyOn(internals, 'startWithStableEnvironment')
       .mockReturnValue(readiness);
+    vi.spyOn(internals, 'loadState').mockReturnValue({
+      ...state,
+      process: testProcess(42, 'starting'),
+    });
+    vi.spyOn(internals, 'executableIsValid').mockReturnValue(true);
+    const inspectAuthentication = vi
+      .spyOn(internals, 'inspectAuthentication')
+      .mockResolvedValue(testAuthentication());
+    const inspectProcess = vi.spyOn(internals, 'ownedProcessId').mockResolvedValue(42);
 
     try {
       const first = manager.ensureRunning();
@@ -888,6 +895,10 @@ describe('managed ChatGPT gateway', () => {
       await vi.waitFor(() => {
         expect(startWithStableEnvironment).toHaveBeenCalledOnce();
       });
+      const panels = await Promise.all(Array.from({ length: 10 }, () => manager.getState()));
+      expect(panels.every((panel) => panel.busy && panel.phase === 'installing')).toBe(true);
+      expect(inspectAuthentication).not.toHaveBeenCalled();
+      expect(inspectProcess).not.toHaveBeenCalled();
       release(state);
       await expect(first).resolves.toBeUndefined();
     } finally {

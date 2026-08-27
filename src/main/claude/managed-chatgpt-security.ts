@@ -4,8 +4,7 @@ import { runProcess } from '../infra/windows-command';
 import { buildManagedGatewayEnvironment } from './managed-chatgpt-config';
 
 const CONFIG_PATH_ENVIRONMENT = 'CLAUDEDOCK_GATEWAY_CONFIG_PATH';
-const AUTH_PATH_ENVIRONMENT = 'CLAUDEDOCK_GATEWAY_AUTH_PATH';
-const AUTH_PATH_KIND_ENVIRONMENT = 'CLAUDEDOCK_GATEWAY_AUTH_PATH_KIND';
+const AUTH_TARGETS_ENVIRONMENT = 'CLAUDEDOCK_GATEWAY_AUTH_TARGETS';
 
 const WINDOWS_CONFIG_ACL_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
@@ -53,8 +52,10 @@ foreach ($sid in $allowedSids) {
 
 const WINDOWS_AUTH_ACL_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-$targetPath = [IO.Path]::GetFullPath($env:CLAUDEDOCK_GATEWAY_AUTH_PATH)
-$isDirectory = $env:CLAUDEDOCK_GATEWAY_AUTH_PATH_KIND -eq 'directory'
+function ProtectAuthTarget([string]$inputPath, [string]$kind) {
+if ($kind -ne 'directory' -and $kind -ne 'file') { throw 'Invalid managed auth target kind.' }
+$targetPath = [IO.Path]::GetFullPath($inputPath)
+$isDirectory = $kind -eq 'directory'
 $item = Get-Item -LiteralPath $targetPath -Force
 if ($item.PSIsContainer -ne $isDirectory) { throw 'Managed gateway auth path kind changed.' }
 if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -104,6 +105,11 @@ foreach ($rule in $verified.Access) {
 }
 foreach ($sid in $allowedSids) {
   if ($observedSids -notcontains $sid) { throw 'Managed gateway auth path misses a required rule.' }
+}
+}
+$targets = ConvertFrom-Json -InputObject $env:CLAUDEDOCK_GATEWAY_AUTH_TARGETS
+foreach ($target in $targets) {
+  ProtectAuthTarget ([string]$target.targetPath) ([string]$target.kind)
 }
 `;
 
@@ -205,29 +211,30 @@ export const protectManagedGatewayAuthentication = async (
     }
     return;
   }
-  for (const { kind, targetPath } of targets) {
-    const environment = buildManagedGatewayEnvironment();
-    environment[AUTH_PATH_ENVIRONMENT] = targetPath;
-    environment[AUTH_PATH_KIND_ENVIRONMENT] = kind;
-    try {
-      await (options.run ?? runProcess)(
-        'powershell.exe',
-        [
-          '-NoLogo',
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          WINDOWS_AUTH_ACL_SCRIPT,
-        ],
-        environment,
-        { maxBuffer: 64 * 1024, timeout: 10_000 },
-      );
-    } catch (error) {
-      throw new Error('无法确认托管网关授权路径仅允许当前 Windows 用户和系统账户访问。', {
-        cause: error,
-      });
-    }
+  const environment = buildManagedGatewayEnvironment();
+  for (const name of Object.keys(environment)) {
+    if (name.toUpperCase() === AUTH_TARGETS_ENVIRONMENT) delete environment[name];
+  }
+  environment[AUTH_TARGETS_ENVIRONMENT] = JSON.stringify(targets);
+  try {
+    // Protect and verify the directory plus all exact child artifacts in one helper process.
+    await (options.run ?? runProcess)(
+      'powershell.exe',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        WINDOWS_AUTH_ACL_SCRIPT,
+      ],
+      environment,
+      { maxBuffer: 64 * 1024, timeout: 10_000 },
+    );
+  } catch (error) {
+    throw new Error('无法确认托管网关授权路径仅允许当前 Windows 用户和系统账户访问。', {
+      cause: error,
+    });
   }
 };

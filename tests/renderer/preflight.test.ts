@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   ClaudeProjectState,
+  ControlPanelApi,
   NetworkPreflightResult,
+  NetworkProviderId,
   NetworkProviderConnectivityStatus,
 } from '../../src/shared/contracts';
 import { createRendererHarness } from '../helpers/renderer-harness';
@@ -20,57 +22,51 @@ import {
 } from '../helpers/renderer-preflight-fixture';
 
 describe('renderer preflight feature', () => {
-  it('selects official Claude and Codex providers without guessing for gateways or unloaded state', async () => {
-    await withTerminalRenderer(
-      {
-        runNetworkPreflight: async ({ provider }) => preflightResult(provider, 'allowed'),
-      },
-      async (harness) => {
-        expect(harness.method('runNetworkPreflight')).toHaveBeenCalledWith({
-          action: 'background',
-          force: false,
-          provider: 'anthropic-claude',
-        });
-      },
-    );
-
-    await withTerminalRenderer(
-      {
-        getClaudeProjectState: async () => gatewayClaudeState(),
-        runNetworkPreflight: async ({ provider }) => preflightResult(provider, 'allowed'),
-      },
-      async (harness) => {
-        expect(harness.method('runNetworkPreflight')).not.toHaveBeenCalled();
-        expect(harness.query('#network-preflight-provider').textContent).toBe('自定义网关');
-      },
-    );
-
-    await withTerminalRenderer(
-      {
-        getClaudeProjectState: () => new Promise<ClaudeProjectState>(() => undefined),
-        runNetworkPreflight: async ({ provider }) => preflightResult(provider, 'allowed'),
-      },
-      async (harness) => {
-        expect(harness.method('runNetworkPreflight')).not.toHaveBeenCalled();
-      },
-    );
-
-    await withTerminalRenderer(
-      {
+  it.each<{
+    label?: string;
+    name: string;
+    overrides: Partial<ControlPanelApi>;
+    provider?: NetworkProviderId;
+  }>([
+    { name: 'official Claude', overrides: {}, provider: 'anthropic-claude' },
+    {
+      name: 'custom gateway',
+      overrides: { getClaudeProjectState: async () => gatewayClaudeState() },
+      label: '自定义网关',
+    },
+    {
+      name: 'unloaded configuration',
+      overrides: { getClaudeProjectState: () => new Promise<ClaudeProjectState>(() => undefined) },
+    },
+    {
+      name: 'Codex',
+      overrides: {
         getCodexProjectState: async () => readyCodexState(),
         getDevelopmentRuntime: async (sessionId) => ({
           cwd: 'D:\\Project',
           runtime: 'codex',
           sessionId,
         }),
+      },
+      provider: 'openai-codex',
+    },
+  ])('selects the preflight provider for $name', async ({ overrides, provider, label }) => {
+    await withTerminalRenderer(
+      {
+        ...overrides,
         runNetworkPreflight: async ({ provider }) => preflightResult(provider, 'allowed'),
       },
       async (harness) => {
-        expect(harness.method('runNetworkPreflight')).toHaveBeenCalledWith({
-          action: 'background',
-          force: false,
-          provider: 'openai-codex',
-        });
+        if (provider) {
+          expect(harness.method('runNetworkPreflight')).toHaveBeenCalledWith({
+            action: 'background',
+            force: false,
+            provider,
+          });
+        } else {
+          expect(harness.method('runNetworkPreflight')).not.toHaveBeenCalled();
+        }
+        if (label) expect(harness.query('#network-preflight-provider').textContent).toBe(label);
       },
     );
   });
@@ -951,6 +947,46 @@ describe('renderer preflight feature', () => {
         );
       },
     );
+  });
+
+  it('does not invalidate admitted launches when only network quality estimates change', async () => {
+    const connection = {
+      addEventListener: vi.fn(),
+      downlink: 10,
+      effectiveType: '4g',
+      removeEventListener: vi.fn(),
+      rtt: 100,
+      type: 'wifi',
+    };
+    const harness = await createRendererHarness(
+      {},
+      {
+        prepareDom: (dom) => {
+          Object.defineProperty(dom.window.navigator, 'connection', { value: connection });
+        },
+      },
+    );
+    try {
+      await settle(harness);
+      harness.clearCalls();
+      const changed = connection.addEventListener.mock.calls[0]?.[1] as () => void;
+      for (let index = 0; index < 10; index += 1) {
+        connection.rtt += 25;
+        connection.downlink -= 0.1;
+        connection.effectiveType = index % 2 === 0 ? '3g' : '4g';
+        changed();
+      }
+      await settle(harness);
+      expect(harness.method('invalidateNetworkPreflight')).not.toHaveBeenCalled();
+      expect(harness.method('runNetworkPreflight')).not.toHaveBeenCalled();
+
+      connection.type = 'ethernet';
+      changed();
+      await settle(harness);
+      expect(harness.method('invalidateNetworkPreflight')).toHaveBeenCalledOnce();
+    } finally {
+      await harness.cleanup();
+    }
   });
 
   it('disposes the IPC, DOM, visibility, window, and network-information listeners', async () => {

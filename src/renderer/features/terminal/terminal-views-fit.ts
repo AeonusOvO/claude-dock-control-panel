@@ -12,7 +12,7 @@ export const createTerminalViewFitActions = (
   dependencies: TerminalViewsDependencies,
   io: TerminalIo,
 ): TerminalViewFitActions => {
-  const fitActiveTerminal = (): TerminalFitResult => {
+  const fitTerminalsToViewport = (): TerminalFitResult => {
     const sessionId = dependencies.getWorkspaceState().activeSessionId;
     const view = state.terminalViews.get(sessionId);
     if (!view) {
@@ -36,19 +36,31 @@ export const createTerminalViewFitActions = (
       if (!io.ownsTerminalGeneration(sessionId, ptyGeneration, view)) {
         return 'unavailable';
       }
-      if (view.lastFitCols === proposed.cols && view.lastFitRows === proposed.rows) return 'stable';
-      view.lastFitCols = proposed.cols;
-      view.lastFitRows = proposed.rows;
-      view.terminal.resize(proposed.cols, proposed.rows);
-      const resizeRevision = ++view.resizeRevision;
-      window.controlPanel.resizeTerminal(
-        sessionId,
-        ptyGeneration,
-        resizeRevision,
-        proposed.cols,
-        proposed.rows,
-      );
-      return 'changed';
+      // Every tab occupies this same viewport and uses the same font. Measure its visible xterm
+      // once, then synchronize all generations, including background launches/history restores.
+      let changed = false;
+      for (const [targetSessionId, target] of state.terminalViews) {
+        if (!io.ownsTerminalGeneration(targetSessionId, target.ptyGeneration, target)) continue;
+        if (
+          target.lastFitCols === proposed.cols &&
+          target.lastFitRows === proposed.rows &&
+          target.terminal.cols === proposed.cols &&
+          target.terminal.rows === proposed.rows
+        )
+          continue;
+        target.terminal.resize(proposed.cols, proposed.rows);
+        target.lastFitCols = proposed.cols;
+        target.lastFitRows = proposed.rows;
+        window.controlPanel.resizeTerminal(
+          targetSessionId,
+          target.ptyGeneration,
+          ++target.resizeRevision,
+          proposed.cols,
+          proposed.rows,
+        );
+        changed = true;
+      }
+      return changed ? 'changed' : 'stable';
     } catch {
       // A resize can race with initial layout; the bounded frame scheduler will retry.
       return 'unavailable';
@@ -75,7 +87,7 @@ export const createTerminalViewFitActions = (
         return;
       }
 
-      const result = fitActiveTerminal();
+      const result = fitTerminalsToViewport();
       if (result === 'stable') return;
       attemptsRemaining -= 1;
       if (attemptsRemaining > 0) {
@@ -90,7 +102,7 @@ export const createTerminalViewFitActions = (
     state.terminalFitFrame = undefined;
     if (!state.terminalFitDirty) return;
     state.terminalFitDirty = false;
-    fitActiveTerminal();
+    fitTerminalsToViewport();
     if (state.terminalFitDirty && state.terminalFitFrame === undefined) {
       state.terminalFitFrame = window.requestAnimationFrame(flushTerminalFitFrame);
     }

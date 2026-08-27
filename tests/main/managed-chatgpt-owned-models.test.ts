@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server, type Socket } from 'node:net';
+import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -94,6 +94,47 @@ afterEach(async () => {
 });
 
 describe('managed gateway exact-owner model transport', () => {
+  it('owns socket errors during the asynchronous identity check and sends no bearer afterward', async () => {
+    let release!: () => void;
+    let checking!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      checking = resolve;
+    });
+    let received = '';
+    const { port } = await listen((socket) => {
+      socket.on('data', (chunk) => {
+        received += String(chunk);
+      });
+    });
+    let client!: Socket;
+    const reader = new ManagedGatewayOwnedModelReader({
+      connect: (targetPort) => {
+        client = createConnection({ host: '127.0.0.1', port: targetPort });
+        return client;
+      },
+      processIdentity: {
+        matches: vi.fn(async () => 'match' as const),
+        ownsEstablishedConnection: vi.fn(async () => {
+          checking();
+          await held;
+          return true;
+        }),
+      },
+    });
+    const result = reader.read(exactProcess(port), 'private-test-bearer', 1_000).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await started;
+    client.destroy(new Error('read ECONNRESET'));
+    release();
+    expect(await result).toBeInstanceOf(Error);
+    expect(received).toBe('');
+  });
+
   it('writes Authorization only after proving the exact established tuple and revalidates afterward', async () => {
     const events: string[] = [];
     let observedRequest = '';

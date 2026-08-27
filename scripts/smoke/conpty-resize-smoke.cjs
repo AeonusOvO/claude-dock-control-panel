@@ -157,8 +157,8 @@ const installLifecycleRecorder = (window) =>
           record({ data, kind: 'data', ptyGeneration, sessionId }),
       );
       const unsubscribeSize = window.controlPanel.onTerminalSize(
-        (sessionId, ptyGeneration, cols, rows) =>
-          record({ cols, kind: 'size', ptyGeneration, rows, sessionId }),
+        (sessionId, ptyGeneration, resizeRevision, cols, rows) =>
+          record({ cols, kind: 'size', ptyGeneration, resizeRevision, rows, sessionId }),
       );
       const unsubscribeState = window.controlPanel.onWorkspaceState((state) =>
         record({ kind: 'state', state }),
@@ -389,6 +389,116 @@ const assertInitialWorkspace = async (window) => {
   }
 };
 
+const runConcurrentInitialSizeScenario = async (window) => {
+  window.maximize();
+  await waitFor(() => window.isMaximized(), 5_000, '最大化窗口');
+  const sessions = await window.webContents.executeJavaScript(
+    `(async () => {
+      const opened = await Promise.all(Array.from({ length: 10 }, () =>
+        window.controlPanel.openConversation(${JSON.stringify(repositoryRoot)})));
+      if (opened.some((result) => !result.ok)) throw new Error('Concurrent open failed.');
+      const workspace = await window.controlPanel.getWorkspace();
+      const statuses = workspace.sessions;
+      const restarted = await Promise.all(statuses.map((status) =>
+        window.controlPanel.restartTerminal(status.id, status.ptyGeneration)));
+      if (restarted.some((result) => !result.ok)) throw new Error('Concurrent restart failed.');
+      return restarted.map((result) => result.status);
+    })()`,
+    true,
+  );
+  // Observe the real PowerShell grid without activating the background tabs. The shell command's
+  // echo contains an expression, so only its evaluated output can match the GRID proof below.
+  await window.webContents.executeJavaScript(
+    `(() => {
+      for (const status of ${JSON.stringify(sessions)}) {
+        window.controlPanel.writeTerminal(status.id, status.ptyGeneration,
+          "[Console]::WriteLine('GRID:' + [Console]::WindowWidth + 'x' + [Console]::WindowHeight)\\r");
+      }
+    })()`,
+    true,
+  );
+  await waitFor(
+    () =>
+      window.webContents.executeJavaScript(
+        `(() => {
+        const events = window.__claudeDockConptyLifecycle.events;
+        return ${JSON.stringify(sessions)}.every((status) => /GRID:\\d+x\\d+/.test(events
+          .filter((event) => event.kind === 'data' && event.sessionId === status.id &&
+            event.ptyGeneration === status.ptyGeneration).map((event) => event.data).join('')));
+      })()`,
+        true,
+      ),
+    terminalOutputTimeoutMilliseconds,
+    '并发终端首次网格',
+  );
+  const grids = await window.webContents.executeJavaScript(
+    `(() => {
+      const events = window.__claudeDockConptyLifecycle.events;
+      return ${JSON.stringify(sessions)}.map((status) => {
+        const own = events.filter((event) => event.sessionId === status.id &&
+          event.ptyGeneration === status.ptyGeneration);
+        const measured = own.filter((event) => event.kind === 'size').at(-1);
+        const output = own.filter((event) => event.kind === 'data').map((event) => event.data).join('');
+        return { id: status.id, measured, proof: /GRID:(\\d+x\\d+)/.exec(output)?.[1] };
+      });
+    })()`,
+    true,
+  );
+  const expected = grids.at(-1)?.measured;
+  if (
+    !expected ||
+    grids.some(
+      ({ measured, proof }) =>
+        !measured ||
+        measured.cols !== expected.cols ||
+        measured.rows !== expected.rows ||
+        proof !== `${expected.cols}x${expected.rows}`,
+    )
+  ) {
+    throw new Error(`并发终端未继承最大化网格：${JSON.stringify(grids)}`);
+  }
+  for (const status of sessions) {
+    await window.webContents.executeJavaScript(
+      `window.controlPanel.activateProject(${JSON.stringify(status.id)})`,
+      true,
+    );
+    await waitFor(
+      () =>
+        window.webContents.executeJavaScript(
+          `(() => {
+        const container = document.querySelector('.project-terminal--active');
+        const screen = container?.querySelector('.xterm-screen');
+        if (!screen || container.dataset.sessionId !== ${JSON.stringify(status.id)}) return false;
+        const bounds = container.getBoundingClientRect();
+        const grid = screen.getBoundingClientRect();
+        return grid.width > bounds.width - 32 && grid.width <= bounds.width + 1 &&
+          grid.height > bounds.height - 24 && grid.height <= bounds.height + 1;
+      })()`,
+          true,
+        ),
+      5_000,
+      `最大化切换 ${status.id} 的终端画布`,
+    );
+  }
+  fs.mkdirSync(outputDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(outputDirectory, 'conpty-concurrent-maximized.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  );
+  // Close only fixture-owned background sessions; keep one for the existing resize/lifecycle checks.
+  await window.webContents.executeJavaScript(
+    `(async () => {
+      for (const status of ${JSON.stringify(sessions.slice(0, -1))}) {
+        const closed = await window.controlPanel.closeProject(status.id);
+        if (!closed.ok) throw new Error('Fixture session cleanup failed.');
+      }
+    })()`,
+    true,
+  );
+  window.unmaximize();
+  return grids;
+};
+
 const runResizeScenario = async (window) => {
   await submitComposerCommand(window, `1..24 | ForEach-Object { 'resize-proof-' + $_ }`);
   await waitFor(
@@ -560,6 +670,7 @@ const runSentinelShutdown = async (window, finalStatus) => {
 const run = async () => {
   const window = await launchConptyHarness();
   await assertInitialWorkspace(window);
+  const concurrentInitialGrids = await runConcurrentInitialSizeScenario(window);
   const { outputPath, resizeSequence, state } = await runResizeScenario(window);
   const lifecycle = await runLifecycleCycles(window);
   const { lifecycleEvents, sentinel } = await runSentinelShutdown(window, lifecycle.finalStatus);
@@ -574,6 +685,7 @@ const run = async () => {
     `${JSON.stringify(
       {
         fixture: 'live-conpty',
+        concurrentInitialGrids,
         lifecycleCycles: lifecycle.cycles.map((cycle) => ({
           restartedGeneration: cycle.restarted.ptyGeneration,
           startedGeneration: cycle.started.ptyGeneration,
@@ -590,16 +702,35 @@ const run = async () => {
   );
 };
 
+const closeFixtureSessions = async () => {
+  const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+  if (!window) return;
+  await window.webContents.executeJavaScript(
+    `(async () => {
+    const workspace = await window.controlPanel.getWorkspace();
+    for (const status of workspace.sessions) {
+      const result = await window.controlPanel.closeProject(status.id);
+      if (!result.ok) throw new Error('Failed to clean up fixture-owned terminal ' + status.id);
+    }
+  })()`,
+    true,
+  );
+};
+
 run()
-  .then(() => {
+  .then(async () => {
+    await closeFixtureSessions();
     scheduleTemporaryUserDataCleanup();
     // This is a one-shot test host. `app.quit()` enters ClaudeDock's user-facing busy/tray
     // handshake and can keep the harness alive after the screenshot has already passed. Exiting the
     // harness directly closes the ConPTY handles; the detached helper then removes its temp data.
     app.exit(0);
   })
-  .catch((error) => {
+  .catch(async (error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    await closeFixtureSessions().catch((cleanupError) => {
+      process.stderr.write(`Fixture cleanup failed: ${String(cleanupError)}\n`);
+    });
     scheduleTemporaryUserDataCleanup();
     app.exit(1);
   });

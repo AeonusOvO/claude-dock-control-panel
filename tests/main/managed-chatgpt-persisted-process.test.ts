@@ -221,7 +221,7 @@ describe('managed gateway persisted state ownership', () => {
     expect(fixture.current().process?.processId).toBe(43);
   });
 
-  it.each(['absent', 'inaccessible', 'mismatch'] as const)(
+  it.each(['absent', 'mismatch'] as const)(
     'treats an %s process as non-owned and clears stale state without throwing',
     async (status) => {
       const fixture = createPersistedProcess(state(), {
@@ -233,6 +233,19 @@ describe('managed gateway persisted state ownership', () => {
       expect(fixture.terminate).not.toHaveBeenCalled();
     },
   );
+
+  it('retains exact ownership when a concurrent inspection times out instead of erasing a live gateway', async () => {
+    const fixture = createPersistedProcess(state(42, 'starting'), {
+      matches: vi.fn(async () => 'inaccessible' as const),
+    });
+    const starting = fixture.current();
+    await expect(fixture.persisted.ownedProcessId(starting)).resolves.toBeUndefined();
+    expect(fixture.current()).toEqual(starting);
+    expect(fixture.persistState).not.toHaveBeenCalled();
+    expect(fixture.terminate).not.toHaveBeenCalled();
+    fixture.matches.mockResolvedValue('match');
+    await expect(fixture.persisted.ownedProcessId(starting)).resolves.toBe(42);
+  });
 
   it('does not poison normal ownership reads when stale-record cleanup cannot be committed', async () => {
     const persistState = vi.fn(() => {
