@@ -36,7 +36,10 @@ export const createGatewayDiagnosticsActions = (
         ? `已选用 ${candidate.label}；请填写路由器自己的访问密钥`
         : `已选用 ${candidate.label}；下一步执行真实连接测试`,
     );
-    dependencies.claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    dependencies.claudeConfigForm.scrollIntoView({
+      behavior: userScrollBehavior(),
+      block: 'start',
+    });
   };
 
   const renderGatewayDiagnostics = (diagnostics: ClaudeGatewayDiagnostics): void => {
@@ -171,3 +174,4 @@ export const createGatewayDiagnosticsActions = (
     preferredRouter,
   };
 };
+import { userScrollBehavior } from '../../platform/motion';

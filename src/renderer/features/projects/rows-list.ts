@@ -1,4 +1,5 @@
 import type { WorkspaceProjectView } from '../../../shared/contracts';
+import { EASE_OUT_CUBIC, prefersReducedMotion, SCROLL_DURATION_MS } from '../../platform/motion';
 import type { ProjectsElements } from './elements';
 import type { ProjectsRowsDependencies } from './rows-dependencies';
 import type { ProjectsState } from './state';
@@ -14,6 +15,9 @@ export const createProjectsRowListActions = (
   dependencies: ProjectsRowsDependencies,
   renderProjectFolder: (project: WorkspaceProjectView) => HTMLElement,
 ): ProjectsRowListActions => {
+  let hasRendered = false;
+  let listAnimation: Animation | undefined;
+  let animationTargetHeight = 0;
   const workspaceContainsProject = (projectKey: string): boolean =>
     dependencies
       .getWorkspaceState()
@@ -63,7 +67,14 @@ export const createProjectsRowListActions = (
     for (const sessionId of state.failedConversationTransitions.keys()) {
       if (!liveSessionIds.has(sessionId)) state.failedConversationTransitions.delete(sessionId);
     }
-    elements.projectList.replaceChildren();
+    const list = elements.projectList;
+    const previousHeight = list.getBoundingClientRect().height;
+    const previousScrollTop = list.scrollTop;
+    const previousAnimation = listAnimation;
+    const previousTime = previousAnimation?.currentTime;
+    const wasAnimating = previousAnimation?.playState === 'running';
+    listAnimation?.cancel();
+    listAnimation = undefined;
     const openFolders = dependencies
       .getWorkspaceState()
       .projects.filter((project) => project.open).length;
@@ -72,9 +83,33 @@ export const createProjectsRowListActions = (
       dependencies.getWorkspaceState().sessions.length + pendingCount
     } 个对话${pendingCount > 0 ? ` · ${pendingCount} 个准备中` : ''}`;
 
-    for (const project of dependencies.getWorkspaceState().projects) {
-      elements.projectList.append(renderProjectFolder(project));
+    // Replace once: emptying a live scroller first clamps its position to zero on every status push.
+    list.replaceChildren(...dependencies.getWorkspaceState().projects.map(renderProjectFolder));
+    const nextHeight = list.getBoundingClientRect().height;
+    list.scrollTop = previousScrollTop;
+    if (hasRendered && !prefersReducedMotion() && list.animate) {
+      // Animate the actual list height so the footer follows it without overlapping new rows.
+      // Retarget from the currently painted height when another session arrives mid-animation.
+      if (
+        wasAnimating &&
+        previousAnimation &&
+        previousTime != null &&
+        Math.abs(animationTargetHeight - nextHeight) <= 1
+      ) {
+        // Status pushes often rebuild identical rows. Keep elapsed time rather than restarting the
+        // same destination on every push, which could indefinitely postpone the footer settling.
+        previousAnimation.currentTime = previousTime;
+        previousAnimation.play();
+        listAnimation = previousAnimation;
+      } else if (Math.abs(previousHeight - nextHeight) > 1) {
+        animationTargetHeight = nextHeight;
+        listAnimation = list.animate(
+          [{ height: `${previousHeight}px` }, { height: `${nextHeight}px` }],
+          { duration: SCROLL_DURATION_MS, easing: EASE_OUT_CUBIC },
+        );
+      }
     }
+    hasRendered = true;
   };
 
   return {

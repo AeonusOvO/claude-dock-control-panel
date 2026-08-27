@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TerminalStatus, WorkspaceResult, WorkspaceState } from '../../src/shared/contracts';
+import type {
+  TerminalStatus,
+  WorkspaceProjectView,
+  WorkspaceResult,
+  WorkspaceState,
+} from '../../src/shared/contracts';
 import { createProjectsHistoryActions } from '../../src/renderer/features/projects/actions-history';
 import { createProjectsWorkspaceActions } from '../../src/renderer/features/projects/actions-workspace';
 import type {
@@ -35,12 +40,28 @@ const workspaceState: WorkspaceState = {
 };
 
 /** A deferred main-process reply, so a second click can be made to land mid-flight. */
-const deferred = <T>(): { promise: Promise<T>; resolve: (value: T) => void } => {
+const deferred = <T>(): {
+  promise: Promise<T>;
+  reject: (reason: Error) => void;
+  resolve: (value: T) => void;
+} => {
+  let reject!: (reason: Error) => void;
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    reject = rejectPromise;
     resolve = resolvePromise;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
+};
+
+const project: WorkspaceProjectView = {
+  lastActiveAt: 1,
+  missing: false,
+  name: 'Repo',
+  open: true,
+  path: 'D:\\work\\repo',
+  remembered: true,
+  sessionIds: ['session-1'],
 };
 
 const setup = (): {
@@ -409,5 +430,88 @@ describe('projects workspace actions', () => {
     expect(dependencies.requestConfirmation).not.toHaveBeenCalled();
     expect(closeProject).toHaveBeenCalledExactlyOnceWith('session-1');
     expect(dependencies.showToast).toHaveBeenCalledWith(expect.stringContaining('失败临时会话'));
+  });
+
+  it('renders a target-owned close lock immediately and unlocks after an IPC failure for retry', async () => {
+    const pending = deferred<WorkspaceResult>();
+    const closeProject = vi.fn(() => pending.promise);
+    Object.defineProperty(window, 'controlPanel', { configurable: true, value: { closeProject } });
+    const { actions, dependencies, rowsApi, state } = setup();
+    const releaseMask = vi.fn();
+    vi.mocked(dependencies.beginTerminalMask).mockReturnValue(releaseMask);
+
+    const first = actions.closeProject(workspaceState.sessions[0]!);
+    expect(state.workspaceMutations.has('close:session-1')).toBe(true);
+    expect(rowsApi.renderProjectList).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(dependencies.beginTerminalMask).toHaveBeenCalledWith('session-1', '正在关闭并归档…');
+    await actions.closeProject(workspaceState.sessions[0]!);
+    await actions.closeProjectFolder(project);
+    expect(closeProject).toHaveBeenCalledOnce();
+
+    pending.reject(new Error('终端停止失败'));
+    await first;
+    expect(state.workspaceMutations.size).toBe(0);
+    expect(rowsApi.renderProjectList).toHaveBeenCalledTimes(2);
+    expect(releaseMask).toHaveBeenCalledOnce();
+    expect(dependencies.showToast).toHaveBeenCalledWith('终端停止失败', 'error');
+
+    closeProject.mockResolvedValueOnce({ ok: true, state: workspaceState });
+    await actions.closeProject(workspaceState.sessions[0]!);
+    expect(closeProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the visible lock when the user cancels confirmation', async () => {
+    const { actions, dependencies, rowsApi, state } = setup();
+    vi.mocked(dependencies.requestConfirmation).mockResolvedValue(false);
+    await actions.closeProject(workspaceState.sessions[0]!);
+    expect(state.workspaceMutations.size).toBe(0);
+    expect(rowsApi.renderProjectList).toHaveBeenCalledTimes(2);
+    expect(dependencies.beginTerminalMask).not.toHaveBeenCalled();
+  });
+
+  it('keeps a folder close exclusive with child closes and new conversations until settled', async () => {
+    const pending = deferred<WorkspaceResult>();
+    const closeProjectFolder = vi.fn(() => pending.promise);
+    const closeProject = vi.fn();
+    const openConversation = vi.fn();
+    Object.defineProperty(window, 'controlPanel', {
+      configurable: true,
+      value: { closeProject, closeProjectFolder, openConversation },
+    });
+    const { actions, dependencies, state, workspaceRenderer } = setup();
+    const releaseMask = vi.fn();
+    vi.mocked(dependencies.beginTerminalMask).mockReturnValue(releaseMask);
+
+    const closing = actions.closeProjectFolder(project);
+    await actions.closeProjectFolder({ ...project, path: project.path.toUpperCase() });
+    await actions.closeProject(workspaceState.sessions[0]!);
+    await actions.openConversation(project.path.toUpperCase());
+    expect(closeProjectFolder).toHaveBeenCalledOnce();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(openConversation).not.toHaveBeenCalled();
+    expect(dependencies.requestConfirmation).toHaveBeenCalledOnce();
+
+    pending.resolve({ ok: false, state: workspaceState });
+    await closing;
+    expect(workspaceRenderer.renderWorkspace).toHaveBeenCalledWith(workspaceState);
+    expect(state.workspaceMutations.size).toBe(0);
+    expect(releaseMask).toHaveBeenCalledOnce();
+    expect(dependencies.showToast).toHaveBeenCalledWith('无法关闭这个项目。', 'error');
+  });
+
+  it('allows independent conversations to close concurrently', async () => {
+    const pending = deferred<WorkspaceResult>();
+    const closeProject = vi.fn(() => pending.promise);
+    Object.defineProperty(window, 'controlPanel', { configurable: true, value: { closeProject } });
+    const { actions, state } = setup();
+    const first = actions.closeProject(workspaceState.sessions[0]!);
+    const second = actions.closeProject({ ...workspaceState.sessions[0]!, id: 'session-2' });
+    await Promise.resolve();
+    expect(closeProject).toHaveBeenCalledTimes(2);
+    expect(state.workspaceMutations.size).toBe(2);
+    pending.resolve({ ok: true, state: workspaceState });
+    await Promise.all([first, second]);
+    expect(state.workspaceMutations.size).toBe(0);
   });
 });

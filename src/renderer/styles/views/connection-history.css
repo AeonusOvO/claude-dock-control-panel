@@ -74,7 +74,7 @@
 }
 
 .startup-model-connection__indicator svg {
-  animation: startup-model-connection-spin var(--dur-status-pulse) linear infinite;
+  animation: startup-model-connection-spin var(--dur-status-pulse) var(--ease-standard) infinite;
   fill: none;
   height: 34px;
   stroke: currentColor;

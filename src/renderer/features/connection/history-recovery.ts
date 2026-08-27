@@ -134,7 +134,7 @@ export const createConnectionHistoryRecoveryActions = (
       recoverySurface.hidden = false;
       recoverySurface.toggleAttribute('inert', false);
     }
-    recoverySurface.scrollIntoView({ behavior: 'auto', block: 'start' });
+    recoverySurface.scrollIntoView({ behavior: userScrollBehavior(), block: 'start' });
     window.setTimeout(() => recoveryTitle.focus({ preventScroll: true }), 0);
   };
 
@@ -265,3 +265,4 @@ export const createConnectionHistoryRecoveryActions = (
 
   return { reset, start };
 };
+import { userScrollBehavior } from '../../platform/motion';

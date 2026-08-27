@@ -162,7 +162,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
     }
     const active = buttons[activeIndex];
     if (active && scroll) {
-      active.scrollIntoView({ block: 'nearest' });
+      active.scrollIntoView({ behavior: userScrollBehavior(), block: 'nearest' });
     }
   };
 
@@ -472,3 +472,4 @@ export const installPressRipples = (): void => {
     }, 800);
   });
 };
+import { userScrollBehavior } from './motion';

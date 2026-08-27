@@ -7,7 +7,7 @@ import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-att
 import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dependencies';
 import type { ConversationTransitionQueueState } from './conversation-transition-queue';
 import type { PendingConversation, ProjectsState } from './state';
-import { storedConversationRestoreKey } from './state';
+import { isProjectClosing, storedConversationRestoreKey } from './state';
 import type { WorkspaceRenderer } from './workspace';
 import type { ConversationModelDialogResult } from './model-resolution-dialog';
 import { beginWorkspaceConversationTransition } from './transition-busy';
@@ -423,6 +423,7 @@ const resumeStoredConversationWithDependencies = async ({
   state,
   workspaceRenderer,
 }: ResumeStoredConversationInput): Promise<void> => {
+  if (isProjectClosing(state, projectPath)) return;
   const restoreKey = storedConversationRestoreKey(projectPath, session.conversationId);
   if (state.storedConversationRestores.has(restoreKey)) {
     return;

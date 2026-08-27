@@ -527,7 +527,7 @@
 
 /* The percentage / ellipsis in the middle must stay readable, so only this overlay arc turns. */
 .download-progress[data-indeterminate='true'] .download-progress__ring::after {
-  animation: spinnerRingSpin var(--dur-progress) linear infinite;
+  animation: spinnerRingSpin var(--dur-progress) var(--ease-standard) infinite;
   border: var(--s-1) solid transparent;
   border-radius: inherit;
   border-top-color: var(--accent-solid);

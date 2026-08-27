@@ -34,7 +34,10 @@ export const createConnectionAdviceActions = (
 
   const focusConnectionForm = (): void => {
     dependencies.selectRailTab('connection');
-    dependencies.claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    dependencies.claudeConfigForm.scrollIntoView({
+      behavior: userScrollBehavior(),
+      block: 'start',
+    });
   };
 
   const runAdviceAction = (
@@ -76,7 +79,7 @@ export const createConnectionAdviceActions = (
       }
       case 'import-curl': {
         dependencies.selectRailTab('connection');
-        elements.curlInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        elements.curlInput.scrollIntoView({ behavior: userScrollBehavior(), block: 'center' });
         elements.curlInput.focus();
         return;
       }
@@ -148,3 +151,4 @@ export const createConnectionAdviceActions = (
 
   return { loadConnectionAdvice };
 };
+import { userScrollBehavior } from '../../platform/motion';

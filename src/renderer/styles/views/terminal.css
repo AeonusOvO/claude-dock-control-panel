@@ -1825,7 +1825,7 @@ html[data-compact-viewport='true'] .terminal-title > span {
 }
 
 .terminal-mask__label::before {
-  animation: terminal-mask-spinner var(--dur-status-pulse-fast) linear infinite;
+  animation: terminal-mask-spinner var(--dur-status-pulse-fast) var(--ease-standard) infinite;
   border: 2px solid var(--line-strong);
   border-radius: 50%;
   border-top-color: var(--accent-solid);

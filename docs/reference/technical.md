@@ -321,11 +321,19 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   composed path、更新 burst 时钟、`preventDefault()` 并入队；不在 wheel handler 中读取布局。
 - 下一次 `requestAnimationFrame` 严格按 read → compute → write 执行：先一次读取本帧候选几何与 computed
   style，再按事件顺序用虚拟 `scrollTop` 把完整 delta 从 child → parent → outer 分配，最后每个连接目标
-  只写一次最终位置。某层只消费自身容量，余量同帧继续向外；向上完全对称，双层与三层以上均保持
+  只写一次该帧插值位置。某层只消费自身容量，余量同帧继续向外；向上完全对称，双层与三层以上均保持
   `consumed + residual = input`，同帧多事件也不互相覆盖。目标是 handoff 不超过一帧、可测环境下 wheel
   handler p95 小于 2ms。
+- `platform/motion.ts` 定义 180ms、`1 - (1 - t)^3` 的非线性减速。滚动链在原有同一个 RAF 中维护
+  逻辑终点与绘制位置；追加 tick 按逻辑终点分配，不能拿尚未完成的插值位置重新计算而吞掉输入。
+  第一帧即推进子级和父级，之后逐步减速；原生滚动条随真实 `scrollTop` 同步，不另画滑块或叠加滚动器。
+  xterm 使用其原生三次缓动实现，通过 `smoothScrollDuration` 采用同一时长，不接管已经被终端消费的 wheel。
+  导航到字段、步骤、标签页和下拉选项使用浏览器非线性 smooth scroll。状态恢复、输出追加及直接拖动
+  不附加延迟；`prefers-reduced-motion` 同时关闭 JS 缓动与 xterm 缓动，销毁视图时解绑监听。
 - burst idle 不是固定 200ms：首对 tick 后按真实间隔的指数移动平均计算 64–320ms 自适应窗口。方向反转
-  立即开新 burst，从当前 child 重新向外分配；同方向保持已到达的祖先，避免新滑入光标下的卡片抢 tick。
+  立即取消余下惯性并开新 burst，从当前 child 重新向外分配；同方向且新事件路径包含原目标时保持已到达的
+  祖先，避免新滑入光标下的卡片抢 tick，也不抢另一面板的输入。原生拖动、键盘操作、程序恢复位置或打开
+  模态层会解除相应旧动画和 latch；迟到的动画不能把用户拉回旧位置。
   普通断开节点安全跳过；入队时快照到的 open dialog、`:modal`、`:popover-open` top-layer 边界即使随后
   断开也继续封闭背景。
 - `overscroll-behavior-y: contain | none` 是硬边界，但元素先消费自己的可用容量；增强 select 的
@@ -340,8 +348,10 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   `installSelectDismissHandlers()` 的 capture 期 `scroll` 监听要跳过源自弹层内部的滚动——`scroll`
   不冒泡但会 capture，弹层滚自己也会触发重新定位，从而与用户抢滚动条。两处缺一，弹层都滚不动。
 - `tests/renderer/scroll-chaining.test.ts` 以注入 probe 覆盖守恒、双向 residual、三层以上、方向反转、
-  adaptive burst、断开节点、重复 install/dispose 与 top-layer containment。真实几何、trusted wheel、
-  单帧 handoff 和 handler p95 由 `npm run test:scroll-chaining` 验证。smoke 必须 `show: true`；隐藏窗口会
+  adaptive burst、断开节点、重复 install/dispose、缓动重定向、原生拖动、减少动态效果与 top-layer containment。
+  真实几何、trusted wheel、非线性中间帧、单帧 handoff 和 handler p95 由 `npm run test:scroll-chaining`
+  验证。夹具先计算目标与所有裁剪祖先的可见交集，并核对 `elementFromPoint`；不能将屏幕外坐标直接
+  截到窗口边缘，否则滚轮实际落在外层却被误报为子列表失败。smoke 必须 `show: true`；隐藏窗口会
   静默丢 tick。`sendInputEvent` 使用 Windows WM_MOUSEWHEEL 符号，`deltaY: -120` 是向下，与 DOM 相反。
 
 ### 模型能力与呈现
@@ -596,6 +606,14 @@ Electron Main ── RuntimeProfile + AppPaths ── production / isolated-test
   溢出任务 FIFO 排队；任务完成（包括回滚退栈）才释放槽，避免只限制 session 分配却同时启动过多 CLI。
   排队状态发布精确 position/total，尾部 `×` 仅能取消尚未准入的 entry，取消后压紧其余位置且不调用
   `openConversation` / `openStoredConversation`，因此没有关闭或归档确认。
+- `close:<sessionId>` 与 `close-folder:<规范化路径>` 在确认开始前取得锁并立即重绘，确认取消、IPC
+  失败和正常完成都在 `finally` 解锁重绘。会话行显示“正在关闭并归档…”、`aria-busy` 和禁用按钮；
+  确认后追加该会话自己的终端遮罩，其他会话仍能操作。全项目关闭与子会话关闭互斥，准备中的项目
+  不能整组关闭；全组关闭期间禁止该项目新建和历史恢复。后台推送重建按钮后仍从同一目标锁读取禁用状态，
+  不提前删除行，也不把停止失败显示成已归档；失败时保留主进程真实状态供重试。
+- 项目列表一次性替换完整子节点并保留外层滚动位置，避免“先清空再逐项添加”把滚动位置夹回零。
+  列表高度变化使用三次减速动画推动底部操作区；同一终点的状态刷新保留动画进度，终点变化才从当前
+  绘制高度重新定向，不能让频繁后台刷新反复重启动画。
 - main 按规范化项目路径单调分配“对话 N”编号；失败或关闭不会复用已消耗的编号，也不因当前行数减少而
   生成重名。后台启动完成只更新自己的 session；需要聚焦时重新读取最新工作区，不使用迟到响应里的活动项。
 - main 返回后 pending 行无缝替换为带 `transitioningConversations` 的真实行，CLI 成功才解除“正在新建”。
@@ -892,11 +910,13 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 - 独立对话左栏只有一个可增长的历史区：`.rail-page--chat` 与 `.chat-history` 依次占满
   `control-panel` 剩余高度，`.chat-history__list` 取消固定 `248px` 上限并独立滚动；空列表时
   `:empty` 取消弹性占位，使说明仍靠近标题。模型配置 DOM 只存在于右上角齿轮模态窗。
-- 其余 `.rail-page` 与它们的直接子块显式 `flex-shrink: 0`，由 `control-panel` 承担整页滚动。
+- 工作区的 `.project-section` 按剩余高度收缩，项目列表不再限制为 340px；`.workspace-sidebar-footer`
+  包含添加项目、快捷操作和托盘说明，按列表自然高度下移，到窗口底部后停止，之后只滚动项目列表。
+  列表缩短时操作区重新上移。项目行使用 `grid-auto-rows: max-content`，不得压缩对话行来假装容纳内容。
+- 管理页 `.rail-page` 与它们的直接子块显式 `flex-shrink: 0`，由 `control-panel` 承担整页滚动。
   `control-panel` 是定高 flex 列，而 `overflow-y: auto` 的元素自动最小尺寸为 0，因此不加这条
   规则时，接入历史列表会在记录变多时第一个被压扁到几乎不可见，而不是在自己的 360px
-  区域里滚动。规则用 `:not(.rail-page--chat)` 排除独立对话左栏，那里的历史区依赖 `flex: 1`
-  增长。
+  区域里滚动。规则同时排除独立对话和工作区页面，保留它们各自的列表伸缩逻辑。
 - 活动栏点击路径在 `toggleRailTab('chat')` 完成主视图和侧栏布局后，通过
   `requestAnimationFrame` 聚焦 `#chat-input`。聚焦前重新核对主视图、`hidden`、输入框禁用、
   composer `inert`、设置模态窗和 Artifact 详情抽屉，避免导航抢走更高层界面的焦点。

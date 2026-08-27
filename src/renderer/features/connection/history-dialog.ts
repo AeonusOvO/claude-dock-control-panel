@@ -99,7 +99,7 @@ export const createConnectionHistoryDialogActions = (
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
       if (selected) {
-        tab.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+        tab.scrollIntoView({ behavior: userScrollBehavior(), block: 'nearest', inline: 'nearest' });
         if (focus) tab.focus({ preventScroll: true });
       }
     }
@@ -239,3 +239,4 @@ export const createConnectionHistoryDialogActions = (
     selectSource,
   };
 };
+import { userScrollBehavior } from '../../platform/motion';

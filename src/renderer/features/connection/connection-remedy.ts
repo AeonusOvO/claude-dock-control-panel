@@ -148,7 +148,10 @@ export const createConnectionRemedyActions = (
       }
       case 'install-claude':
         dependencies.environmentSetup.hidden = false;
-        dependencies.environmentSetup.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        dependencies.environmentSetup.scrollIntoView({
+          behavior: userScrollBehavior(),
+          block: 'start',
+        });
         await dependencies.updates.runClaudeInstallUpdate();
         break;
       case 'install-router':
@@ -170,10 +173,14 @@ export const createConnectionRemedyActions = (
         break;
       case 'switch-provider':
         dependencies.clearProviderSelection();
-        dependencies.providerPicker.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        dependencies.providerPicker.scrollIntoView({
+          behavior: userScrollBehavior(),
+          block: 'start',
+        });
         break;
     }
   };
 
   return { renderConnectionTest };
 };
+import { userScrollBehavior } from '../../platform/motion';

@@ -89,7 +89,10 @@ export const createRouterProviderFormActions = (
       ? `编辑 ${provider.name}`
       : '添加服务提供方';
     elements.routerProviderForm.hidden = false;
-    elements.routerProviderForm.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    elements.routerProviderForm.scrollIntoView({
+      behavior: userScrollBehavior(),
+      block: 'nearest',
+    });
     elements.routerProviderName.focus();
   };
 
@@ -104,3 +107,4 @@ export const createRouterProviderFormActions = (
     runRouterProviderSave,
   };
 };
+import { userScrollBehavior } from '../../platform/motion';

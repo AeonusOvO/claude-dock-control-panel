@@ -1,6 +1,6 @@
 import type { WorkspaceProjectView } from '../../../shared/contracts';
 import type { ProjectsState } from './state';
-import { storedConversationRestoreKey } from './state';
+import { isConversationClosing, isProjectClosing, storedConversationRestoreKey } from './state';
 import type { ProjectsRowHandlers, ProjectsRowsDependencies } from './rows-dependencies';
 import type { ProjectsRowItemsActions } from './rows-items';
 
@@ -19,6 +19,7 @@ export const createProjectsRowFolderActions = (
 
   const renderProjectFolder = (project: WorkspaceProjectView): HTMLElement => {
     const key = project.path.toLowerCase();
+    const closing = isProjectClosing(state, project.path);
     const sessions = dependencies
       .getWorkspaceState()
       .sessions.filter((session) => project.sessionIds.includes(session.id));
@@ -42,6 +43,7 @@ export const createProjectsRowFolderActions = (
     folder.dataset.expanded = String(expanded);
     folder.dataset.missing = String(project.missing);
     folder.dataset.active = String(containsActive);
+    folder.setAttribute('aria-busy', String(closing));
 
     const header = document.createElement('div');
     header.className = 'project-folder__header';
@@ -62,15 +64,19 @@ export const createProjectsRowFolderActions = (
     const name = document.createElement('strong');
     name.textContent = project.name;
     const detail = document.createElement('span');
-    detail.textContent = project.missing
-      ? '文件夹已不存在'
-      : project.open
-        ? pendingConversations.length > 0
-          ? `${sessions.length + pendingConversations.length} 个对话 · ${pendingConversations.length} 个正在准备`
-          : `${sessions.length} 个对话进行中`
-        : project.lastActiveAt
-          ? `上次使用 ${dependencies.formatRelativeTime(project.lastActiveAt)}`
-          : '已记住，未打开';
+    detail.textContent = closing
+      ? project.open
+        ? '正在关闭并归档…'
+        : '正在从列表移除…'
+      : project.missing
+        ? '文件夹已不存在'
+        : project.open
+          ? pendingConversations.length > 0
+            ? `${sessions.length + pendingConversations.length} 个对话 · ${pendingConversations.length} 个正在准备`
+            : `${sessions.length} 个对话进行中`
+          : project.lastActiveAt
+            ? `上次使用 ${dependencies.formatRelativeTime(project.lastActiveAt)}`
+            : '已记住，未打开';
     copy.append(name, detail);
 
     disclosure.append(chevron, copy);
@@ -95,7 +101,7 @@ export const createProjectsRowFolderActions = (
     newConversation.textContent = '+';
     newConversation.title = `在 ${project.name} 里新开一个对话`;
     newConversation.setAttribute('aria-label', `在 ${project.name} 里新开一个对话`);
-    newConversation.disabled = project.missing;
+    newConversation.disabled = project.missing || closing;
     newConversation.addEventListener('click', () => {
       state.expandedFolders.add(key);
       void handlers.openConversation(project.path);
@@ -110,6 +116,13 @@ export const createProjectsRowFolderActions = (
       ? `关闭 ${project.name} 的所有对话`
       : `从列表中移除 ${project.name}`;
     removeButton.setAttribute('aria-label', removeButton.title);
+    removeButton.disabled =
+      closing ||
+      pendingConversations.length > 0 ||
+      sessions.some(
+        (session) =>
+          isConversationClosing(state, session) || state.transitioningConversations.has(session.id),
+      );
     removeButton.addEventListener('click', () => {
       void (project.open ? handlers.closeProjectFolder(project) : handlers.forgetProject(project));
     });
@@ -143,7 +156,7 @@ export const createProjectsRowFolderActions = (
       reopen.className = 'project-folder__reopen';
       reopen.type = 'button';
       reopen.textContent = project.missing ? '文件夹已不存在，可从列表中移除' : '打开一个新对话';
-      reopen.disabled = project.missing;
+      reopen.disabled = project.missing || closing;
       reopen.addEventListener('click', () => {
         void handlers.openConversation(project.path);
       });

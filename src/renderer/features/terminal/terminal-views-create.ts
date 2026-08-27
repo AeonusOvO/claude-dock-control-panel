@@ -6,6 +6,7 @@ import { TERMINAL_THEMES } from '../../../shared/ui/terminal-themes';
 import type { TerminalStatus } from '../../../shared/contracts';
 import { DEFAULT_TERMINAL_SIZE } from '../../../shared/contracts/terminal';
 import { TerminalOutputPump } from '../../platform/terminal-output-pump';
+import { prefersReducedMotion, SCROLL_DURATION_MS } from '../../platform/motion';
 import type { TerminalElements } from './elements';
 import type { TerminalIo } from './terminal-io';
 import { BUNDLED_CONPTY_BUILD, type TerminalState, type TerminalView } from './state';
@@ -34,6 +35,8 @@ export const createTerminalViewActions = (
     lineHeight: 1.28,
     minimumContrastRatio: 4.5,
     scrollback: 10_000,
+    // xterm's native scroller uses the same ease-out cubic curve for its canvas and scrollbar.
+    smoothScrollDuration: prefersReducedMotion() ? 0 : SCROLL_DURATION_MS,
     theme: { ...TERMINAL_THEMES[dependencies.getActiveTheme()].palette },
     windowsPty: {
       backend: 'conpty' as const,
@@ -159,9 +162,15 @@ export const createTerminalViewActions = (
     };
     container.addEventListener('mousedown', handleMouseDown, { capture: true });
     container.addEventListener('contextmenu', handleContextMenu, { capture: true });
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const updateScrollMotion = (): void => {
+      terminal.options.smoothScrollDuration = reducedMotion?.matches ? 0 : SCROLL_DURATION_MS;
+    };
+    reducedMotion?.addEventListener('change', updateScrollMotion);
     view.disposeInteractionListeners = () => {
       container.removeEventListener('mousedown', handleMouseDown, { capture: true });
       container.removeEventListener('contextmenu', handleContextMenu, { capture: true });
+      reducedMotion?.removeEventListener('change', updateScrollMotion);
     };
 
     state.terminalViews.set(sessionId, view);

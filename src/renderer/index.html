@@ -200,6 +200,8 @@
               <span id="project-count">1 个对话</span>
             </div>
             <div class="project-list" id="project-list" aria-label="项目文件夹与对话"></div>
+          </section>
+          <div class="workspace-sidebar-footer">
             <button class="drop-zone" id="choose-directory" type="button">
               <span class="drop-zone__icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
@@ -211,58 +213,58 @@
               <span class="drop-zone__title">＋ 添加项目</span>
               <span class="drop-zone__hint">点击选择，或把项目文件夹拖到这里</span>
             </button>
-          </section>
 
-          <section class="actions" aria-labelledby="actions-heading">
-            <div class="section-label">
-              <span id="actions-heading">快捷操作</span>
-              <span>当前对话</span>
-            </div>
-            <button
-              class="button button--primary"
-              id="run-claude"
-              type="button"
-              aria-busy="false"
-              hidden
-            >
+            <section class="actions" aria-labelledby="actions-heading">
+              <div class="section-label">
+                <span id="actions-heading">快捷操作</span>
+                <span>当前对话</span>
+              </div>
+              <button
+                class="button button--primary"
+                id="run-claude"
+                type="button"
+                aria-busy="false"
+                hidden
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m8 6 6 6-6 6" />
+                  <path d="M15 18h3" />
+                </svg>
+                <span id="run-agent-label" aria-live="polite" aria-atomic="true"> 对话已就绪 </span>
+              </button>
+              <div class="button-row">
+                <button
+                  class="button button--quiet"
+                  id="restart-terminal"
+                  type="button"
+                  aria-busy="false"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
+                  </svg>
+                  <span id="restart-terminal-label">重启</span>
+                </button>
+                <button
+                  class="button button--quiet"
+                  id="toggle-terminal"
+                  type="button"
+                  aria-busy="false"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="5" y="5" width="14" height="14" rx="2" />
+                  </svg>
+                  <span id="toggle-terminal-label">启动</span>
+                </button>
+              </div>
+            </section>
+
+            <div class="tray-note">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m8 6 6 6-6 6" />
-                <path d="M15 18h3" />
+                <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
+                <path d="M10 20h4" />
               </svg>
-              <span id="run-agent-label" aria-live="polite" aria-atomic="true"> 对话已就绪 </span>
-            </button>
-            <div class="button-row">
-              <button
-                class="button button--quiet"
-                id="restart-terminal"
-                type="button"
-                aria-busy="false"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M19 8V4l-2 2a8 8 0 1 0 2.3 8" />
-                </svg>
-                <span id="restart-terminal-label">重启</span>
-              </button>
-              <button
-                class="button button--quiet"
-                id="toggle-terminal"
-                type="button"
-                aria-busy="false"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="5" y="5" width="14" height="14" rx="2" />
-                </svg>
-                <span id="toggle-terminal-label">启动</span>
-              </button>
+              <p>关闭窗口后所有对话继续在托盘运行。项目会被记住，下次打开还在。</p>
             </div>
-          </section>
-
-          <div class="tray-note">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 17.5h12l-1.6-2.1V11a4.4 4.4 0 0 0-8.8 0v4.4L6 17.5Z" />
-              <path d="M10 20h4" />
-            </svg>
-            <p>关闭窗口后所有对话继续在托盘运行。项目会被记住，下次打开还在。</p>
           </div>
         </section>
 

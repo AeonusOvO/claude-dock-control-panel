@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   ClaudeConversationModelResolution,
   ClaudeLaunchOutcome,
+  WorkspaceResult,
   WorkspaceState,
 } from '../../src/shared/contracts';
 import { expectCss, settle, withTerminalRenderer } from '../helpers/renderer-interaction-fixture';
@@ -35,6 +36,124 @@ const appendConversation = (
 });
 
 describe('remaining renderer behavior contracts', () => {
+  it('preserves scroll position and animation progress through identical workspace status pushes', async () => {
+    const initial = { ...terminalWorkspace(), revision: 1 };
+    await withTerminalRenderer({ getWorkspace: async () => initial }, async (harness) => {
+      const list = harness.query<HTMLElement>('#project-list');
+      let paintedHeight = 80;
+      let animation:
+        | { currentTime: number; playState: string; cancel: () => void; play: () => void }
+        | undefined;
+      vi.spyOn(list, 'getBoundingClientRect').mockImplementation(
+        () =>
+          ({
+            height:
+              animation?.playState === 'running'
+                ? paintedHeight
+                : 50 + list.querySelectorAll('.conversation-item').length * 30,
+          }) as DOMRect,
+      );
+      const animate = vi.fn<HTMLElement['animate']>(() => {
+        animation = {
+          currentTime: 0,
+          playState: 'running',
+          cancel() {
+            this.playState = 'idle';
+          },
+          play() {
+            this.playState = 'running';
+          },
+        };
+        return animation as unknown as Animation;
+      });
+      list.animate = animate;
+      list.scrollTop = 12;
+      const grown = appendConversation(initial, 'session-2', '第二个对话');
+      harness.emit('onWorkspaceState', grown);
+      await settle(harness);
+      expect(animate).toHaveBeenCalledTimes(1);
+      expect(list.scrollTop).toBe(12);
+
+      animation!.currentTime = 90;
+      paintedHeight = 106;
+      harness.emit('onWorkspaceState', { ...grown, revision: 3 });
+      await settle(harness);
+      expect(animate).toHaveBeenCalledTimes(1);
+      expect(animation!.currentTime).toBe(90);
+      expect(animation!.playState).toBe('running');
+
+      harness.emit('onWorkspaceState', {
+        ...appendConversation(grown, 'session-3', '第三个对话'),
+        revision: 4,
+      });
+      await settle(harness);
+      expect(animate).toHaveBeenCalledTimes(2);
+      expect(animate.mock.calls.at(-1)?.[0]).toEqual([{ height: '106px' }, { height: '140px' }]);
+    });
+  });
+
+  it.each(['conversation', 'folder'] as const)(
+    'keeps %s archive controls disabled across workspace pushes and restores them on failure',
+    async (kind) => {
+      const pending = deferred<WorkspaceResult>();
+      const workspace = { ...terminalWorkspace(), revision: 2 };
+      await withTerminalRenderer(
+        {
+          getWorkspace: async () => workspace,
+          closeProject: () => pending.promise,
+          closeProjectFolder: () => pending.promise,
+        },
+        async (harness) => {
+          const selector =
+            kind === 'folder'
+              ? '.project-folder__action--close'
+              : '.conversation-item__action--close';
+          harness.click(selector);
+          harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
+          await settle(harness);
+          expect(harness.query('.conversation-item__phase').textContent).toBe('正在关闭并归档…');
+          expect(harness.query('.conversation-item').getAttribute('aria-busy')).toBe('true');
+          expect(harness.query('.terminal-mask').textContent).toContain('正在关闭并归档');
+
+          harness.emit('onWorkspaceState', { ...workspace, revision: 3 });
+          await settle(harness);
+          for (const button of harness.document.querySelectorAll<HTMLButtonElement>(
+            '.conversation-item button',
+          )) {
+            expect(button.disabled).toBe(true);
+          }
+          expect(harness.query<HTMLButtonElement>('.project-folder__action--close').disabled).toBe(
+            true,
+          );
+          expect(
+            harness.query<HTMLButtonElement>(
+              '.project-folder__action:not(.project-folder__action--close)',
+            ).disabled,
+          ).toBe(kind === 'folder');
+          harness.click(selector);
+          expect(
+            harness.method(kind === 'folder' ? 'closeProjectFolder' : 'closeProject'),
+          ).toHaveBeenCalledTimes(1);
+
+          pending.resolve({
+            error: '终端关闭失败，请重试',
+            ok: false,
+            state: { ...workspace, revision: 4 },
+          });
+          await settle(harness);
+          expect(harness.query<HTMLButtonElement>(selector).disabled).toBe(false);
+          expect(harness.query('.conversation-item').getAttribute('aria-busy')).toBe('false');
+          expect(harness.document.body.textContent).toContain('终端关闭失败，请重试');
+          harness.click(selector);
+          expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(true);
+          harness.query<HTMLDialogElement>('#confirmation-dialog').close('cancel');
+          await settle(harness);
+          expect(harness.query<HTMLButtonElement>(selector).disabled).toBe(false);
+        },
+      );
+    },
+  );
+
   it('keeps all ten rapid new-conversation clicks through background and out-of-order launch completion', async () => {
     let workspace = { ...terminalWorkspace(), revision: 1 };
     const launches = new Map<string, ReturnType<typeof deferred<ClaudeLaunchOutcome>>>();

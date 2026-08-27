@@ -7,6 +7,7 @@
  * animation frame, measures every candidate before writing anything, and allocates each delta from
  * child to parent until it is consumed or meets a deliberate containment boundary.
  */
+import { easeOutCubic, SCROLL_DURATION_MS } from './motion';
 
 /** Pixels assumed per line when a wheel reports `DOM_DELTA_LINE`. */
 const LINE_DELTA_PX = 16;
@@ -247,6 +248,12 @@ interface PendingWheel {
   readonly measured: boolean;
 }
 
+interface ScrollMotion {
+  readonly from: number;
+  readonly startedAt: number;
+  readonly to: number;
+}
+
 export interface ScrollChainingInstallOptions {
   readonly cancelAnimationFrame?: (handle: number) => void;
   readonly readProbe?: ProbeReader;
@@ -284,6 +291,23 @@ const percentile95 = (samples: readonly number[]): number => {
   return sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0;
 };
 
+const applyScrollFrame = (
+  writes: ReadonlyMap<Element, number>,
+  appliedTops: WeakMap<Element, number>,
+): void => {
+  // Keep the non-layout connectivity pass separate from this frame's write-only loop.
+  const liveWrites = [...writes].filter(([candidate]) => candidate.isConnected);
+  for (const [candidate, scrollTop] of liveWrites) {
+    try {
+      // Scroll events arrive asynchronously; allow DOM rounding when recognizing our own writes.
+      appliedTops.set(candidate, scrollTop);
+      candidate.scrollTop = scrollTop;
+    } catch {
+      // A node can be adopted or detached between phases; dropping that stale write is safe.
+    }
+  }
+};
+
 /**
  * Installs one idempotent document-wide wheel controller and returns its idempotent disposer.
  * Reinstalling on the same Window returns the existing disposer instead of adding another listener.
@@ -302,6 +326,9 @@ export const installScrollChaining = (
   const cancelFrame =
     options.cancelAnimationFrame ?? targetWindow.cancelAnimationFrame.bind(targetWindow);
   const pending: PendingWheel[] = [];
+  const motions = new Map<Element, ScrollMotion>();
+  const appliedTops = new WeakMap<Element, number>();
+  const reducedMotion = targetWindow.matchMedia?.('(prefers-reduced-motion: reduce)');
   const handlerSamples: number[] = [];
   let activeGesture: GestureState | undefined;
   let frameHandle: number | undefined;
@@ -312,16 +339,14 @@ export const installScrollChaining = (
     frameHandle = requestFrame(flushFrame);
   };
 
-  function flushFrame(): void {
+  function flushFrame(timestamp: number): void {
     frameHandle = undefined;
-    if (disposed || pending.length === 0) return;
+    if (disposed || (pending.length === 0 && motions.size === 0)) return;
 
     const batch = pending.splice(0);
-    const candidates = new Set<Element>();
+    const candidates = new Set(motions.keys());
     for (const item of batch) {
-      for (let index = item.gesture.latchIndex; index < item.gesture.chain.length; index += 1) {
-        candidates.add(item.gesture.chain[index]!);
-      }
+      for (const candidate of item.gesture.chain) candidates.add(candidate);
     }
 
     // READ PHASE. Geometry and computed style are collected before any scrollTop assignment.
@@ -334,10 +359,33 @@ export const installScrollChaining = (
       }
     }
 
-    // COMPUTE PHASE. Consecutive same-frame events share virtual positions, preserving event order.
+    // A scrollbar drag, keyboard action, state restoration or layout clamp owns its new position.
+    // Never pull it back toward an old animated target, or retain the old parent latch afterwards.
+    for (const [candidate, probe] of probes) {
+      const lastApplied = appliedTops.get(candidate);
+      const externallyMoved =
+        lastApplied !== undefined && Math.abs(probe.scrollTop - lastApplied) > 1;
+      if (externallyMoved || !probe.isConnected || !probe.canScrollY) {
+        motions.delete(candidate);
+        appliedTops.delete(candidate);
+        if (externallyMoved) {
+          for (const { gesture } of batch) {
+            if (gesture.chain.includes(candidate)) gesture.latchIndex = 0;
+          }
+        }
+      }
+    }
+
+    // COMPUTE PHASE. Allocate against logical destinations, not the intermediate painted position.
+    // Otherwise fast wheel input loses pixels on every frame while the previous notch is easing.
     const virtualTops = new Map<Element, number>();
-    for (const [candidate, probe] of probes) virtualTops.set(candidate, probe.scrollTop);
-    const writes = new Map<Element, number>();
+    for (const [candidate, probe] of probes) {
+      virtualTops.set(
+        candidate,
+        clamp(motions.get(candidate)?.to ?? probe.scrollTop, 0, probe.maxScroll),
+      );
+    }
+    const targets = new Map<Element, number>();
 
     for (const item of batch) {
       const { gesture } = item;
@@ -357,23 +405,37 @@ export const installScrollChaining = (
 
       for (const allocation of result.allocations) {
         virtualTops.set(allocation.target, allocation.to);
-        writes.set(allocation.target, allocation.to);
+        targets.set(allocation.target, allocation.to);
       }
       const lastAllocation = result.allocations.at(-1);
       if (lastAllocation) gesture.latchIndex = lastAllocation.index;
     }
 
-    // A non-layout connectivity pass keeps detached targets out of the following write-only loop.
-    const liveWrites = [...writes].filter(([candidate]) => candidate.isConnected);
+    for (const [candidate, to] of targets) {
+      if (motions.get(candidate)?.to === to) continue;
+      motions.set(candidate, {
+        from: probes.get(candidate)!.scrollTop,
+        // A small head start gives immediate first-frame feedback, including parent handoff.
+        startedAt: timestamp - 10,
+        to,
+      });
+    }
+    const writes = new Map<Element, number>();
+    for (const [candidate, motion] of motions) {
+      const probe = probes.get(candidate)!;
+      const progress = reducedMotion?.matches
+        ? 1
+        : clamp((timestamp - motion.startedAt) / SCROLL_DURATION_MS, 0, 1);
+      const to = clamp(motion.to, 0, probe.maxScroll);
+      writes.set(
+        candidate,
+        clamp(motion.from + (to - motion.from) * easeOutCubic(progress), 0, probe.maxScroll),
+      );
+      if (progress === 1) motions.delete(candidate);
+    }
 
     // WRITE PHASE. Every target receives at most one final scrollTop assignment for this frame.
-    for (const [candidate, scrollTop] of liveWrites) {
-      try {
-        candidate.scrollTop = scrollTop;
-      } catch {
-        // A node can be adopted or detached between phases; dropping that stale write is safe.
-      }
-    }
+    applyScrollFrame(writes, appliedTops);
 
     if (batch.some((item) => item.measured)) {
       const root = targetDocument.documentElement;
@@ -381,7 +443,7 @@ export const installScrollChaining = (
       root.dataset.scrollChainingHandoffFrames = '1';
     }
 
-    if (pending.length > 0) scheduleFrame();
+    if (pending.length > 0 || motions.size > 0) scheduleFrame();
   }
 
   const onWheel = (rawEvent: Event): void => {
@@ -400,11 +462,22 @@ export const installScrollChaining = (
     const timingUpdate = advanceGestureTiming(activeGesture?.timing, event.timeStamp, direction);
     const boundary = chain.find(isTopLayerElement);
     const latchedTarget = activeGesture?.chain[activeGesture.latchIndex];
+    if (activeGesture && direction !== activeGesture.timing.direction) {
+      // Reversing direction cancels remaining momentum, so the next notch moves immediately back.
+      for (const candidate of chain) motions.delete(candidate);
+    }
+    if (boundary && boundary !== activeGesture?.boundary) {
+      for (const candidate of motions.keys()) {
+        if (!boundary.contains(candidate)) motions.delete(candidate);
+      }
+    }
     const continueExisting =
       timingUpdate.continued &&
       activeGesture !== undefined &&
       activeGesture.boundary === boundary &&
-      (latchedTarget?.isConnected ?? false);
+      latchedTarget !== undefined &&
+      latchedTarget.isConnected &&
+      chain.includes(latchedTarget);
 
     let gesture = activeGesture;
     if (!continueExisting || !gesture) {
@@ -414,7 +487,7 @@ export const installScrollChaining = (
     activeGesture = gesture;
 
     // Prevent native latching before returning from the cancelable listener. The complete delta is
-    // then applied exactly once by the next frame's allocator.
+    // then allocated exactly once next frame and eased toward its destination by this same loop.
     event.preventDefault();
     pending.push({ delta, gesture, measured: metricsEnabled });
     scheduleFrame();
@@ -425,20 +498,47 @@ export const installScrollChaining = (
     }
   };
 
+  const stopMotion = (): void => {
+    pending.splice(0);
+    motions.clear();
+    activeGesture = undefined;
+    if (frameHandle !== undefined) cancelFrame(frameHandle);
+    frameHandle = undefined;
+  };
+
+  const onScroll = (event: Event): void => {
+    const target = event.target;
+    if (!(target instanceof targetWindow.Element)) return;
+    const lastApplied = appliedTops.get(target);
+    if (lastApplied !== undefined && Math.abs(target.scrollTop - lastApplied) <= 1) return;
+    motions.delete(target);
+    appliedTops.delete(target);
+    if (activeGesture?.chain.includes(target)) stopMotion();
+  };
+
+  const updateMotionPreference = (): void => {
+    if (motions.size > 0) scheduleFrame();
+  };
+
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
     targetWindow.removeEventListener('wheel', onWheel, false);
+    targetWindow.removeEventListener('scroll', onScroll, true);
+    targetWindow.removeEventListener('pointerdown', stopMotion, true);
+    targetWindow.removeEventListener('keydown', stopMotion, true);
     targetWindow.removeEventListener('beforeunload', dispose, false);
-    if (frameHandle !== undefined) cancelFrame(frameHandle);
-    frameHandle = undefined;
-    pending.splice(0);
-    activeGesture = undefined;
+    reducedMotion?.removeEventListener('change', updateMotionPreference);
+    stopMotion();
     if (installations.get(targetWindow) === dispose) installations.delete(targetWindow);
   };
 
   installations.set(targetWindow, dispose);
   targetWindow.addEventListener('wheel', onWheel, { passive: false });
+  targetWindow.addEventListener('scroll', onScroll, true);
+  targetWindow.addEventListener('pointerdown', stopMotion, true);
+  targetWindow.addEventListener('keydown', stopMotion, true);
   targetWindow.addEventListener('beforeunload', dispose, { once: true });
+  reducedMotion?.addEventListener('change', updateMotionPreference);
   return dispose;
 };

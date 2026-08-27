@@ -202,7 +202,7 @@ export const createConnectionFormWizardActions = (
       /* Align before the FLIP's final measurement. The browser applies this in the same frame, so
        * users see the capsule continue from its current screen position instead of a separate
        * smooth-scroll drift fighting the spring translation. */
-      connectionWizardViewport.scrollIntoView({ behavior: 'auto', block: 'start' });
+      connectionWizardViewport.scrollIntoView({ behavior: userScrollBehavior(), block: 'start' });
     }
     actionsMotion.animateFrom(actionsFirstRect);
     next
@@ -258,7 +258,7 @@ export const createConnectionFormWizardActions = (
       formState.selectedProviderId !== 'chatgpt-subscription' &&
       !formState.connectionEnvironmentReady
     ) {
-      environmentSetup.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      environmentSetup.scrollIntoView({ behavior: userScrollBehavior(), block: 'center' });
       deps.showToast('请先安装或更新 Claude Code。', 'error');
       return;
     }
@@ -304,3 +304,4 @@ export const createConnectionFormWizardActions = (
     },
   };
 };
+import { userScrollBehavior } from '../../platform/motion';

@@ -174,7 +174,10 @@ export const createCurlAnalysisActions = (
     dependencies.claudeCredential.value = analysis.credential ?? '';
     dependencies.credentialField.hidden = analysis.authMode === 'none';
     elements.connectionTestResult.hidden = true;
-    dependencies.claudeConfigForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    dependencies.claudeConfigForm.scrollIntoView({
+      behavior: userScrollBehavior(),
+      block: 'start',
+    });
     dependencies.showToast('已填入直连接口；请先进行真实连接测试');
     updateSmartGuidance();
   };
@@ -185,3 +188,4 @@ export const createCurlAnalysisActions = (
     importCurlIntoRouter,
   };
 };
+import { userScrollBehavior } from '../../platform/motion';

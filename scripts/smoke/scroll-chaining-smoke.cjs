@@ -14,6 +14,7 @@ app.setPath('userData', path.join(root, 'dist', '.electron-scroll-chaining-smoke
 const setup = `
 (() => {
   document.documentElement.dataset.scrollChainingMetrics = 'true';
+  document.querySelector('.workspace').dataset.railPanel = 'connection';
   for (const page of document.querySelectorAll('[data-rail-page]')) {
     page.classList.remove('rail-page--active');
   }
@@ -64,6 +65,34 @@ const setup = `
     item.append(restore);
     list.append(item);
   }
+  // Hit the visible intersection, never a clamped off-screen point in an unrelated shell region.
+  window.__scrollChainingPoint = (element) => {
+    const rect = element.getBoundingClientRect();
+    let left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
+    let top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      const bounds = parent.getBoundingClientRect();
+      if (/auto|clip|hidden|scroll/.test(style.overflowX)) {
+        left = Math.max(left, bounds.left); right = Math.min(right, bounds.right);
+      }
+      if (/auto|clip|hidden|scroll/.test(style.overflowY)) {
+        top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom);
+      }
+    }
+    if (right - left < 8 || bottom - top < 8) throw new Error('Scroll target is clipped: ' + element.id);
+    const point = { x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) };
+    if (!element.contains(document.elementFromPoint(point.x, point.y))) {
+      throw new Error('Wheel would miss the intended scroller: ' + element.id);
+    }
+    return point;
+  };
+  window.__scrollChainingPositionHistory = () => {
+    const panel = document.querySelector('.control-panel');
+    const list = document.querySelector('#connection-history-list');
+    const offset = panel.scrollTop + list.getBoundingClientRect().top - panel.getBoundingClientRect().top;
+    panel.scrollTop = Math.max(120, Math.min(panel.scrollHeight - panel.clientHeight - 120, offset - 180));
+  };
   return true;
 })()
 `;
@@ -86,11 +115,7 @@ const pointOver = (selector) => `
 (() => {
   const element = document.querySelector(${JSON.stringify(selector)});
   if (!element) return undefined;
-  const rect = element.getBoundingClientRect();
-  return {
-    x: Math.round(Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2))),
-    y: Math.round(Math.max(8, Math.min(window.innerHeight - 8, rect.top + 12))),
-  };
+  return window.__scrollChainingPoint(element);
 })()
 `;
 
@@ -99,16 +124,13 @@ const armHandoff = (direction) => `
   const panel = document.querySelector('.control-panel');
   const list = document.querySelector('#connection-history-list');
   const listRoom = list.scrollHeight - list.clientHeight;
-  const panelRoom = panel.scrollHeight - panel.clientHeight;
   const edgeReserve = Math.min(24, Math.max(1, listRoom));
   if (${JSON.stringify(direction)} === 'down') {
     list.scrollTop = Math.max(0, listRoom - edgeReserve);
-    panel.scrollTop = 0;
   } else {
     list.scrollTop = edgeReserve;
-    panel.scrollTop = Math.min(200, panelRoom);
   }
-  const rect = list.getBoundingClientRect();
+  window.__scrollChainingPositionHistory();
   const before = { list: list.scrollTop, panel: panel.scrollTop };
   window.__scrollChainingHandoff = new Promise((resolve) => {
     window.addEventListener('wheel', (event) => {
@@ -117,20 +139,23 @@ const armHandoff = (direction) => `
         : event.deltaMode === 2
           ? event.deltaY * window.innerHeight
           : event.deltaY;
-      requestAnimationFrame(() => resolve({
-        after: { list: list.scrollTop, panel: panel.scrollTop },
-        before,
-        delta,
-        listRoom,
-      }));
+      requestAnimationFrame((startedAt) => {
+        const first = { list: list.scrollTop, panel: panel.scrollTop };
+        const samples = [{ at: 0, ...first }];
+        const sample = (at) => {
+          if (at - startedAt - samples.at(-1).at >= 30 || at - startedAt >= 220) {
+            samples.push({ at: at - startedAt, list: list.scrollTop, panel: panel.scrollTop });
+          }
+          if (at - startedAt < 220) { requestAnimationFrame(sample); return; }
+          resolve({ after: { list: list.scrollTop, panel: panel.scrollTop }, before, delta, first, listRoom, samples });
+        };
+        requestAnimationFrame(sample);
+      });
     }, { once: true });
   });
   return {
     before,
-    point: {
-      x: Math.round(Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2))),
-      y: Math.round(Math.max(8, Math.min(window.innerHeight - 8, rect.top + 12))),
-    },
+    point: window.__scrollChainingPoint(list),
   };
 })()
 `;
@@ -182,6 +207,12 @@ const openTallSelect = `
 (async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const select = document.querySelector('#terminal-theme');
+  // The terminal settings drawer is closed during connection tests. Place this existing enhanced
+  // select in a visible fixture, instead of accidentally clicking whatever covers the closed drawer.
+  const fixture = document.createElement('div');
+  fixture.style.cssText = 'position: fixed; left: 400px; top: 90px; width: 280px; z-index: 100;';
+  fixture.append(select.closest('.select'));
+  document.body.append(fixture);
   select.replaceChildren();
   for (let index = 0; index < 40; index += 1) {
     const option = document.createElement('option');
@@ -198,6 +229,7 @@ const openTallSelect = `
     clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
   };
   const hit = document.elementFromPoint(init.clientX, init.clientY);
+  if (!shell.contains(hit)) throw new Error('Tall select fixture is not hit-testable');
   hit.dispatchEvent(new PointerEvent('pointerdown', init));
   hit.dispatchEvent(new MouseEvent('mousedown', init));
   await sleep(200);
@@ -359,13 +391,13 @@ app
             `downward residual did not finish the child (${result.after.list}/${result.listRoom})`,
           );
         }
-        if (panelMovement <= 0)
+        if (result.first.panel <= result.before.panel || result.first.list <= result.before.list)
           failures.push('downward residual did not reach the parent in one frame');
       } else {
         if (Math.abs(result.after.list) > 1) {
           failures.push(`upward residual did not finish the child (${result.after.list}/0)`);
         }
-        if (panelMovement >= 0)
+        if (result.first.panel >= result.before.panel || result.first.list >= result.before.list)
           failures.push('upward residual did not reach the parent in one frame');
       }
       if (Math.abs(totalMovement - result.delta) > 2) {
@@ -373,6 +405,19 @@ app
           `${direction} delta was not conserved (${totalMovement} moved for ${result.delta} input)`,
         );
       }
+      const firstMovement = Math.abs(
+        result.first.list + result.first.panel - result.before.list - result.before.panel,
+      );
+      if (firstMovement >= Math.abs(result.delta) - 1)
+        failures.push('wheel motion jumped to its final target');
+      const middle = result.samples.find((sample) => sample.at >= 60 && sample.at <= 120);
+      if (middle) {
+        const moved = Math.abs(
+          middle.list + middle.panel - result.before.list - result.before.panel,
+        );
+        if (moved / Math.abs(result.delta) <= middle.at / 180 + 0.1)
+          failures.push('wheel motion did not use nonlinear deceleration');
+      } else failures.push('missing intermediate animation frames');
     };
 
     await assertHandoff('down');
@@ -380,13 +425,14 @@ app
 
     // A continuous burst must stay on the claimed history chain even as new cards slide under the
     // pointer; otherwise the list advances in lurches and the parent never receives the tail.
-    await window.webContents.executeJavaScript(
+    const continuousStart = await window.webContents.executeJavaScript(
       `
     (() => {
       const panel = document.querySelector('.control-panel');
       const list = document.querySelector('#connection-history-list');
-      panel.scrollTop = 0;
       list.scrollTop = 0;
+      window.__scrollChainingPositionHistory();
+      return panel.scrollTop;
     })()
   `,
       true,
@@ -404,7 +450,7 @@ app
         `the continuous burst did not finish the history list (${afterContinuous.list.top}/${afterContinuous.list.room})`,
       );
     }
-    if (afterContinuous.panel.top <= 0) {
+    if (afterContinuous.panel.top <= continuousStart) {
       failures.push('the continuous burst did not continue from the history list to the panel');
     }
 

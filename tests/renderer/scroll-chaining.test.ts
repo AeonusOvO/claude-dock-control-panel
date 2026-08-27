@@ -1,5 +1,6 @@
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { SCROLL_DURATION_MS } from '../../src/renderer/platform/motion';
 import {
   advanceGestureTiming,
   allocateScrollDelta,
@@ -209,77 +210,247 @@ describe('adaptive gesture boundaries', () => {
 });
 
 describe('scroll chaining installation', () => {
-  it('batches same-frame deltas once and supports repeated install/dispose', () => {
-    const dom = new JSDOM('<!doctype html><div id="inner"></div>', {
-      pretendToBeVisual: true,
-      url: 'http://localhost/',
-    });
+  const cleanups: (() => void)[] = [];
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) cleanup();
+  });
+
+  const setup = () => {
+    const dom = new JSDOM(
+      '<!doctype html><div id="outer"><div id="inner"></div></div><div id="sibling"></div>',
+      {
+        pretendToBeVisual: true,
+        url: 'http://localhost/',
+      },
+    );
     const targetWindow = dom.window as unknown as Window & typeof globalThis;
     const inner = dom.window.document.getElementById('inner')!;
-    const frames: FrameRequestCallback[] = [];
-    const read: ProbeReader = (element) => ({
-      canScrollY: element === inner,
-      isConnected: element.isConnected,
-      isTopLayer: false,
-      maxScroll: element === inner ? 1_000 : 0,
-      scrollTop: element.scrollTop,
-      trapsChaining: false,
-    });
+    const outer = dom.window.document.getElementById('outer')!;
+    const sibling = dom.window.document.getElementById('sibling')!;
+    const ranges = new Map<Element, number>([
+      [inner, 1_000],
+      [outer, 1_000],
+      [sibling, 1_000],
+    ]);
+    const frames = new Map<number, FrameRequestCallback>();
+    const media = Object.assign(new dom.window.EventTarget(), { matches: false });
+    Object.defineProperty(targetWindow, 'matchMedia', { value: () => media });
+    const operations: string[] = [];
+    let nextFrame = 0;
+    let clock = 0;
+    for (const element of [inner, outer, sibling]) {
+      let top = 0;
+      Object.defineProperty(element, 'scrollTop', {
+        get: () => top,
+        set: (value: number) => {
+          operations.push('write');
+          top = value;
+        },
+      });
+    }
+    const read: ProbeReader = (element) => {
+      operations.push('read');
+      return {
+        canScrollY: (ranges.get(element) ?? 0) > 1,
+        isConnected: element.isConnected,
+        isTopLayer: false,
+        maxScroll: ranges.get(element) ?? 0,
+        scrollTop: element.scrollTop,
+        trapsChaining: false,
+      };
+    };
     const options = {
-      cancelAnimationFrame: () => undefined,
+      cancelAnimationFrame: (handle: number) => {
+        frames.delete(handle);
+      },
       readProbe: read,
       requestAnimationFrame: (callback: FrameRequestCallback) => {
-        frames.push(callback);
-        return frames.length;
+        frames.set(++nextFrame, callback);
+        return nextFrame;
       },
     };
-
     const dispose = installScrollChaining(targetWindow, options);
+    const frame = (at: number): void => {
+      clock = at;
+      const batch = [...frames.values()];
+      frames.clear();
+      operations.splice(0);
+      for (const callback of batch) callback(at);
+      // No forced layout interleaved with the frame's writes, even when several scrollers move.
+      const firstWrite = operations.indexOf('write');
+      if (firstWrite >= 0) expect(operations.slice(firstWrite)).not.toContain('read');
+    };
+    const wheel = (target: Element, deltaY: number): WheelEvent => {
+      const event = new dom.window.WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY });
+      Object.defineProperty(event, 'timeStamp', { value: clock });
+      target.dispatchEvent(event);
+      return event;
+    };
+    cleanups.push(() => {
+      dispose();
+      dom.window.close();
+    });
+    return {
+      dispose,
+      dom,
+      frame,
+      frames,
+      inner,
+      media,
+      options,
+      outer,
+      ranges,
+      sibling,
+      targetWindow,
+      wheel,
+    };
+  };
+
+  it('batches same-frame deltas, decelerates nonlinearly and supports repeated install/dispose', () => {
+    const { dispose, frame, frames, inner, options, targetWindow, wheel } = setup();
     expect(installScrollChaining(targetWindow, options)).toBe(dispose);
-
-    const first = new dom.window.WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      deltaY: 120,
-    });
-    const second = new dom.window.WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      deltaY: 120,
-    });
-    inner.dispatchEvent(first);
-    inner.dispatchEvent(second);
-
+    const first = wheel(inner, 120);
+    const second = wheel(inner, 120);
     expect(first.defaultPrevented).toBe(true);
     expect(second.defaultPrevented).toBe(true);
-    expect(frames).toHaveLength(1);
-    frames.shift()!(0);
+    expect(frames.size).toBe(1);
+    frame(0);
+    const firstTop = inner.scrollTop;
+    expect(firstTop).toBeGreaterThan(0);
+    expect(firstTop).toBeLessThan(240);
+    frame(60);
+    const secondTop = inner.scrollTop;
+    frame(120);
+    const thirdTop = inner.scrollTop;
+    frame(SCROLL_DURATION_MS);
     expect(inner.scrollTop).toBe(240);
+    expect(secondTop - firstTop).toBeGreaterThan(thirdTop - secondTop);
+    expect(thirdTop - secondTop).toBeGreaterThan(240 - thirdTop);
+    expect(frames.size).toBe(0);
 
     dispose();
     dispose();
-    const afterDispose = new dom.window.WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      deltaY: 120,
-    });
-    inner.dispatchEvent(afterDispose);
+    const afterDispose = wheel(inner, 120);
     expect(afterDispose.defaultPrevented).toBe(false);
-    expect(frames).toHaveLength(0);
+    expect(frames.size).toBe(0);
 
     const disposeAgain = installScrollChaining(targetWindow, options);
     expect(disposeAgain).not.toBe(dispose);
-    const afterReinstall = new dom.window.WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      deltaY: 120,
-    });
-    inner.dispatchEvent(afterReinstall);
-    expect(frames).toHaveLength(1);
-    frames.shift()!(0);
+    wheel(inner, 120);
+    frame(200);
+    frame(200 + SCROLL_DURATION_MS);
     expect(inner.scrollTop).toBe(360);
-
     disposeAgain();
-    dom.window.close();
+  });
+
+  it('conserves rapid retargeted input and starts child and parent motion in the first frame', () => {
+    const { frame, inner, outer, ranges, wheel } = setup();
+    ranges.set(inner, 100);
+    inner.scrollTop = 80;
+    wheel(inner, 120);
+    frame(0);
+    expect(inner.scrollTop).toBeGreaterThan(80);
+    expect(outer.scrollTop).toBeGreaterThan(0);
+    frame(50);
+    wheel(inner, 120);
+    frame(60);
+    frame(240);
+    expect(inner.scrollTop).toBe(100);
+    expect(outer.scrollTop).toBe(220);
+  });
+
+  it('reverses promptly and does not steal a wheel burst from an unrelated panel', () => {
+    const { frame, inner, sibling, wheel } = setup();
+    wheel(inner, 240);
+    frame(0);
+    const beforeReverse = inner.scrollTop;
+    wheel(inner, -120);
+    frame(30);
+    expect(inner.scrollTop).toBeLessThan(beforeReverse);
+    wheel(sibling, 120);
+    frame(50);
+    frame(250);
+    expect(inner.scrollTop).toBe(0);
+    expect(sibling.scrollTop).toBe(120);
+  });
+
+  it('drops a stale parent latch after programmatic scroll restoration between wheel events', () => {
+    const { frame, inner, outer, ranges, wheel } = setup();
+    ranges.set(inner, 100);
+    inner.scrollTop = 80;
+    wheel(inner, 120);
+    frame(0);
+    // No scroll event is required: a same-frame state replacement can precede its native event.
+    inner.scrollTop = 0;
+    outer.scrollTop = 0;
+    wheel(inner, 120);
+    frame(40);
+    frame(220);
+    expect(inner.scrollTop).toBe(100);
+    expect(outer.scrollTop).toBe(20);
+  });
+
+  it('hands control back immediately to native scrollbar dragging', () => {
+    const { dom, frame, frames, inner, wheel } = setup();
+    wheel(inner, 240);
+    frame(0);
+    inner.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true }));
+    inner.scrollTop = 17;
+    inner.dispatchEvent(new dom.window.Event('scroll'));
+    frame(200);
+    expect(inner.scrollTop).toBe(17);
+    expect(frames.size).toBe(0);
+    wheel(inner, 120);
+    frame(210);
+    frame(400);
+    expect(inner.scrollTop).toBe(137);
+  });
+
+  it('finishes ongoing motion immediately when reduced motion is enabled', () => {
+    const { dom, frame, frames, inner, media, wheel } = setup();
+    wheel(inner, 240);
+    frame(0);
+    media.matches = true;
+    media.dispatchEvent(new dom.window.Event('change'));
+    frame(16);
+    expect(inner.scrollTop).toBe(240);
+    expect(frames.size).toBe(0);
+    wheel(inner, 120);
+    frame(32);
+    expect(inner.scrollTop).toBe(360);
+    expect(frames.size).toBe(0);
+  });
+
+  it('cancels inherited momentum when native scrolling overrides a nested scroller', () => {
+    const { dom, frame, frames, inner, outer, ranges, wheel } = setup();
+    ranges.set(inner, 100);
+    inner.scrollTop = 80;
+    wheel(inner, 240);
+    frame(0);
+    const parentTop = outer.scrollTop;
+    inner.scrollTop = 17;
+    inner.dispatchEvent(new dom.window.Event('scroll'));
+    frame(200);
+    expect(inner.scrollTop).toBe(17);
+    expect(outer.scrollTop).toBe(parentTop);
+    expect(frames.size).toBe(0);
+  });
+
+  it('cancels background momentum when a modal owns the new wheel gesture', () => {
+    const { dom, frame, inner, ranges, wheel } = setup();
+    wheel(inner, 240);
+    frame(0);
+    const backgroundTop = inner.scrollTop;
+    const dialog = dom.window.document.createElement('dialog');
+    dialog.open = true;
+    const popup = dom.window.document.createElement('div');
+    dialog.append(popup);
+    dom.window.document.body.append(dialog);
+    ranges.set(popup, 50);
+    wheel(popup, 120);
+    frame(20);
+    frame(200);
+    expect(inner.scrollTop).toBe(backgroundTop);
+    expect(popup.scrollTop).toBe(50);
   });
 });

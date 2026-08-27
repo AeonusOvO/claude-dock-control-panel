@@ -8,6 +8,7 @@ import type { ProjectsActionsDependencies, ProjectsRowsApi } from './actions-dep
 import type { ConversationTransitionQueueState } from './conversation-transition-queue';
 import type { ProjectsElements } from './elements';
 import type { PendingConversation, ProjectsState } from './state';
+import { isConversationClosing, isProjectClosing } from './state';
 import type { WorkspaceRenderer } from './workspace';
 import { beginWorkspaceConversationTransition } from './transition-busy';
 
@@ -164,21 +165,28 @@ const closeProjectFolderWithDependencies = async (
   ) {
     return;
   }
-  const result = await window.controlPanel.closeProjectFolder(project.path);
-  workspaceRenderer.renderWorkspace(result.state);
-  if (!result.ok) {
-    dependencies.showToast(
-      dependencies.resultFailureMessage(result, '无法关闭这个项目。'),
-      'error',
-    );
-    return;
+  const releaseMasks = project.sessionIds.map((sessionId) =>
+    dependencies.beginTerminalMask(sessionId, '正在关闭并归档…'),
+  );
+  try {
+    const result = await window.controlPanel.closeProjectFolder(project.path);
+    workspaceRenderer.renderWorkspace(result.state);
+    if (!result.ok) {
+      dependencies.showToast(
+        dependencies.resultFailureMessage(result, '无法关闭这个项目。'),
+        'error',
+      );
+      return;
+    }
+    for (const sessionId of project.sessionIds) {
+      state.failedConversationTransitions.delete(sessionId);
+    }
+    state.expandedFolders.add(project.path.toLowerCase());
+    await rowsApi.loadFolderHistory(project.path, true);
+    dependencies.showToast(`已关闭 ${project.name}，对话已归档到历史记录`);
+  } finally {
+    for (const releaseMask of releaseMasks) releaseMask();
   }
-  for (const sessionId of project.sessionIds) {
-    state.failedConversationTransitions.delete(sessionId);
-  }
-  state.expandedFolders.add(project.path.toLowerCase());
-  await rowsApi.loadFolderHistory(project.path, true);
-  dependencies.showToast(`已关闭 ${project.name}，对话已归档到历史记录`);
 };
 
 const handleAddedProjectResult = (
@@ -294,13 +302,22 @@ export const createProjectsWorkspaceActions = (
     }
     state.workspaceMutations.add(key);
     try {
+      rowsApi.renderProjectList();
       await task();
+    } catch (error) {
+      dependencies.showToast(
+        error instanceof Error ? error.message : '操作未完成，请重试。',
+        'error',
+      );
     } finally {
       state.workspaceMutations.delete(key);
+      rowsApi.renderProjectList();
     }
   };
 
   const activateProject = async (sessionId: string): Promise<void> => {
+    const status = dependencies.getWorkspaceState().sessions.find((item) => item.id === sessionId);
+    if (status && isConversationClosing(state, status)) return;
     const result = await window.controlPanel.activateProject(sessionId);
     if (!result.ok) {
       dependencies.showToast(dependencies.resultFailureMessage(result, '无法切换对话。'), 'error');
@@ -315,8 +332,10 @@ export const createProjectsWorkspaceActions = (
    * conversation itself stays on disk under 历史对话. The folder is expanded and its history re-read
    * afterwards so the row visibly lands there instead of appearing to vanish.
    */
-  const closeProject = async (status: TerminalStatus): Promise<void> =>
-    runOnce(`close:${status.id}`, async () => {
+  const closeProject = async (status: TerminalStatus): Promise<void> => {
+    if (isProjectClosing(state, status.cwd) || state.transitioningConversations.has(status.id))
+      return;
+    await runOnce(`close:${status.id}`, async () => {
       const transitionFailure = state.failedConversationTransitions.get(status.id);
       if (
         !transitionFailure &&
@@ -332,69 +351,91 @@ export const createProjectsWorkspaceActions = (
       }
 
       const projectPath = status.cwd;
-      const result = await window.controlPanel.closeProject(status.id);
-      if (!result.ok) {
+      const releaseMask = dependencies.beginTerminalMask(status.id, '正在关闭并归档…');
+      try {
+        const result = await window.controlPanel.closeProject(status.id);
+        workspaceRenderer.renderWorkspace(result.state);
+        if (!result.ok) {
+          dependencies.showToast(
+            dependencies.resultFailureMessage(result, '无法关闭这个对话。'),
+            'error',
+          );
+          return;
+        }
+        state.failedConversationTransitions.delete(status.id);
+        state.expandedFolders.add(projectPath.toLowerCase());
+        await rowsApi.loadFolderHistory(projectPath, true);
         dependencies.showToast(
-          dependencies.resultFailureMessage(result, '无法关闭这个对话。'),
-          'error',
+          transitionFailure
+            ? `已移除“${status.title}”的失败临时会话`
+            : `已关闭“${status.title}”，可在历史对话中恢复`,
         );
-        return;
+      } finally {
+        releaseMask();
       }
-      workspaceRenderer.renderWorkspace(result.state);
-      state.failedConversationTransitions.delete(status.id);
-      state.expandedFolders.add(projectPath.toLowerCase());
-      await rowsApi.loadFolderHistory(projectPath, true);
-      dependencies.showToast(
-        transitionFailure
-          ? `已移除“${status.title}”的失败临时会话`
-          : `已关闭“${status.title}”，可在历史对话中恢复`,
-      );
     });
+  };
 
   /**
    * Every click owns a distinct main-process session. There is intentionally no folder-level
    * debounce: ten clicks create ten terminal owners, and each engine launch continues even when a
    * later click makes another tab active.
    */
-  const openConversation = (projectPath: string): Promise<void> =>
-    openConversationWithDependencies({
+  const openConversation = async (projectPath: string): Promise<void> => {
+    if (isProjectClosing(state, projectPath)) return;
+    await openConversationWithDependencies({
       dependencies,
       projectPath,
       rowsApi,
       state,
       workspaceRenderer,
     });
-
-  const closeProjectFolder = (project: WorkspaceProjectView): Promise<void> =>
-    closeProjectFolderWithDependencies(project, state, dependencies, workspaceRenderer, rowsApi);
-
-  const forgetProject = async (project: WorkspaceProjectView): Promise<void> => {
-    if (
-      !(await dependencies.requestConfirmation({
-        confirmLabel: '从列表移除',
-        message: `把“${project.name}”从列表中移除？磁盘上的文件不会被删除。`,
-        title: '移除项目',
-        tone: 'danger',
-      }))
-    ) {
-      return;
-    }
-    const result = await window.controlPanel.forgetProject(project.path);
-    workspaceRenderer.renderWorkspace(result.state);
-    if (!result.ok) {
-      dependencies.showToast(
-        dependencies.resultFailureMessage(result, '无法移除这个项目。'),
-        'error',
-      );
-      return;
-    }
-    const key = project.path.toLowerCase();
-    state.folderHistoryLoads.invalidate(key);
-    state.storedConversations.delete(key);
-    state.expandedFolders.delete(key);
-    state.historyScrollPositions.delete(key);
-    dependencies.showToast(`已从列表中移除 ${project.name}`);
   };
+
+  const closeProjectFolder = async (project: WorkspaceProjectView): Promise<void> => {
+    if (
+      project.sessionIds.some(
+        (id) =>
+          state.workspaceMutations.has(`close:${id}`) || state.transitioningConversations.has(id),
+      ) ||
+      [...state.pendingConversations.values()].some(
+        (pending) => pending.projectPath.toLowerCase() === project.path.toLowerCase(),
+      )
+    )
+      return;
+    await runOnce(`close-folder:${project.path.toLowerCase()}`, () =>
+      closeProjectFolderWithDependencies(project, state, dependencies, workspaceRenderer, rowsApi),
+    );
+  };
+
+  const forgetProject = async (project: WorkspaceProjectView): Promise<void> =>
+    runOnce(`close-folder:${project.path.toLowerCase()}`, async () => {
+      if (
+        !(await dependencies.requestConfirmation({
+          confirmLabel: '从列表移除',
+          message: `把“${project.name}”从列表中移除？磁盘上的文件不会被删除。`,
+          title: '移除项目',
+          tone: 'danger',
+        }))
+      ) {
+        return;
+      }
+      const result = await window.controlPanel.forgetProject(project.path);
+      workspaceRenderer.renderWorkspace(result.state);
+      if (!result.ok) {
+        dependencies.showToast(
+          dependencies.resultFailureMessage(result, '无法移除这个项目。'),
+          'error',
+        );
+        return;
+      }
+      const key = project.path.toLowerCase();
+      state.folderHistoryLoads.invalidate(key);
+      state.storedConversations.delete(key);
+      state.expandedFolders.delete(key);
+      state.historyScrollPositions.delete(key);
+      dependencies.showToast(`已从列表中移除 ${project.name}`);
+    });
 
   const addProject = async (directoryPath: string): Promise<void> => {
     elements.dropZone.disabled = true;

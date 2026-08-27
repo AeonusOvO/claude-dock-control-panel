@@ -642,10 +642,50 @@ html[data-appearance='dark'] .runtime-option__brand-mark--dark {
   margin-top: var(--s-1);
 }
 
+.control-panel:has(> .rail-page--active[data-rail-page='projects']) {
+  overflow-y: hidden;
+}
+
+.rail-page[data-rail-page='projects'] {
+  flex: 1;
+  min-height: 0;
+}
+
+.rail-page[data-rail-page='projects'] > .runtime-disclosure,
+.workspace-sidebar-footer {
+  flex: 0 0 auto;
+}
+
+/* The footer follows the list's natural height until the available window height is exhausted. */
+.project-section {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.project-section > .section-label {
+  flex: 0 0 auto;
+}
+
+.workspace-sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3-5);
+}
+
+.workspace-sidebar-footer > .drop-zone,
+.workspace-sidebar-footer > .tray-note {
+  margin-top: 0;
+}
+
 .project-list {
+  align-content: start;
   display: grid;
+  flex: 0 1 auto;
   gap: var(--s-1-5);
-  max-height: 340px;
+  grid-auto-rows: max-content;
+  min-height: 0;
   /*
    * `overflow-y: auto` alone computes `overflow-x` to `auto` as well, so a single long conversation
    * title used to grow a horizontal scrollbar under the whole project list. Rows clip and ellipsize
@@ -833,6 +873,28 @@ html[data-appearance='dark'] .runtime-option__brand-mark--dark {
 
 .conversation-item[data-transition] .conversation-item__phase {
   color: var(--accent-text);
+}
+
+.conversation-item[data-closing='true'] {
+  background: var(--surface-inset);
+}
+
+.conversation-item[data-closing='true'] .conversation-item__status {
+  animation: pendingConversationPulse var(--dur-status-pulse) var(--ease-standard) infinite;
+  background: var(--text-mute);
+}
+
+.conversation-item[data-closing='true'] .conversation-item__phase {
+  color: var(--text-dim);
+}
+
+.conversation-item__select:disabled,
+.project-folder__action:disabled {
+  cursor: wait;
+}
+
+.project-folder__action:disabled {
+  opacity: var(--opacity-disabled);
 }
 
 .conversation-item[data-transition-failure] {

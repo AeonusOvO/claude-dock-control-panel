@@ -389,9 +389,93 @@ const assertInitialWorkspace = async (window) => {
   }
 };
 
+const readWorkspaceSidebar = (window) =>
+  window.webContents.executeJavaScript(
+    `(() => {
+  const panel = document.querySelector('.control-panel');
+  const page = document.querySelector('[data-rail-page="projects"]');
+  const list = document.querySelector('#project-list');
+  const footer = document.querySelector('.workspace-sidebar-footer');
+  const listRect = list.getBoundingClientRect(), footerRect = footer.getBoundingClientRect();
+  return {
+    footerBottom: footerRect.bottom,
+    footerTop: footerRect.top,
+    gap: parseFloat(getComputedStyle(page).gap),
+    listBottom: listRect.bottom,
+    listHeight: list.clientHeight,
+    listRoom: list.scrollHeight - list.clientHeight,
+    panelBottom: panel.getBoundingClientRect().bottom - parseFloat(getComputedStyle(panel).paddingBottom),
+    panelRoom: panel.scrollHeight - panel.clientHeight,
+    rowHeights: [...list.querySelectorAll('.conversation-item')].map((row) => row.getBoundingClientRect().height),
+    rows: list.querySelectorAll('.conversation-item').length,
+  };
+})()`,
+    true,
+  );
+
+const assertSidebarGeometry = (state, label) => {
+  if (
+    state.listHeight <= 0 ||
+    state.panelRoom > 1 ||
+    state.footerBottom > state.panelBottom + 1 ||
+    Math.abs(state.footerTop - state.listBottom - state.gap) > 1 ||
+    state.rowHeights.some((height) => height < 24)
+  )
+    throw new Error(`${label} 左栏布局异常：${JSON.stringify(state)}`);
+};
+
+const closeFixtureSessionFromUi = async (window, sessionId) => {
+  const feedback = await window.webContents.executeJavaScript(
+    `(() => {
+    const row = document.querySelector('[data-session-id="${sessionId}"].conversation-item');
+    row.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    row.querySelector('.conversation-item__action--close').click();
+    document.querySelector('#confirmation-dialog-confirm').click();
+    const pending = document.querySelector('[data-session-id="${sessionId}"].conversation-item');
+    pending.querySelector('.conversation-item__action--close').click();
+    return {
+      busy: pending.getAttribute('aria-busy'),
+      disabled: [...pending.querySelectorAll('button')].every((button) => button.disabled),
+      phase: pending.querySelector('.conversation-item__phase').textContent,
+    };
+  })()`,
+    true,
+  );
+  if (
+    feedback.busy !== 'true' ||
+    !feedback.disabled ||
+    !feedback.phase.includes('正在关闭并归档')
+  ) {
+    throw new Error(`关闭并归档未立即禁用：${JSON.stringify(feedback)}`);
+  }
+  await waitFor(
+    () =>
+      window.webContents.executeJavaScript(
+        `!document.querySelector('[data-session-id="${sessionId}"].conversation-item')`,
+        true,
+      ),
+    10_000,
+    '界面关闭并归档',
+  );
+  return feedback;
+};
+
+const settleWorkspaceSidebar = async (window) => {
+  await window.webContents.executeJavaScript(
+    `(() => {
+    for (const disclosure of document.querySelectorAll('.project-folder__disclosure[aria-expanded="true"]')) disclosure.click();
+  })()`,
+    true,
+  );
+  await delay(250);
+  return readWorkspaceSidebar(window);
+};
+
 const runConcurrentInitialSizeScenario = async (window) => {
   window.maximize();
   await waitFor(() => window.isMaximized(), 5_000, '最大化窗口');
+  const short = await settleWorkspaceSidebar(window);
+  assertSidebarGeometry(short, '单会话最大化');
   const sessions = await window.webContents.executeJavaScript(
     `(async () => {
       const opened = await Promise.all(Array.from({ length: 10 }, () =>
@@ -485,18 +569,45 @@ const runConcurrentInitialSizeScenario = async (window) => {
     path.join(outputDirectory, 'conpty-concurrent-maximized.png'),
     (await window.webContents.capturePage()).toPNG(),
   );
+  const grown = await settleWorkspaceSidebar(window);
+  assertSidebarGeometry(grown, '并发会话最大化');
+  if (grown.footerTop <= short.footerTop) throw new Error('列表增长未推动左栏底部操作区。');
+
+  window.unmaximize();
+  window.setSize(1180, 700);
+  const overflowing = await settleWorkspaceSidebar(window);
+  assertSidebarGeometry(overflowing, '短窗口长列表');
+  if (
+    overflowing.listRoom <= 0 ||
+    Math.abs(overflowing.footerBottom - overflowing.panelBottom) > 1
+  ) {
+    throw new Error(`长列表未内部滚动或底部未停靠：${JSON.stringify(overflowing)}`);
+  }
+  fs.writeFileSync(
+    path.join(outputDirectory, 'workspace-sidebar-overflow.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  );
+  const closeFeedback = await closeFixtureSessionFromUi(window, sessions[0].id);
   // Close only fixture-owned background sessions; keep one for the existing resize/lifecycle checks.
   await window.webContents.executeJavaScript(
     `(async () => {
-      for (const status of ${JSON.stringify(sessions.slice(0, -1))}) {
+      for (const status of ${JSON.stringify(sessions.slice(1, -1))}) {
         const closed = await window.controlPanel.closeProject(status.id);
         if (!closed.ok) throw new Error('Fixture session cleanup failed.');
       }
     })()`,
     true,
   );
-  window.unmaximize();
-  return grids;
+  const shrunk = await settleWorkspaceSidebar(window);
+  assertSidebarGeometry(shrunk, '列表缩短');
+  if (shrunk.footerTop >= overflowing.footerTop || shrunk.listRoom > 1) {
+    throw new Error(`列表缩短后底部操作区未上移：${JSON.stringify(shrunk)}`);
+  }
+  fs.writeFileSync(
+    path.join(outputDirectory, 'workspace-sidebar-short.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  );
+  return { grids, sidebar: { closeFeedback, grown, overflowing, short, shrunk } };
 };
 
 const runResizeScenario = async (window) => {
@@ -670,7 +781,7 @@ const runSentinelShutdown = async (window, finalStatus) => {
 const run = async () => {
   const window = await launchConptyHarness();
   await assertInitialWorkspace(window);
-  const concurrentInitialGrids = await runConcurrentInitialSizeScenario(window);
+  const { grids: concurrentInitialGrids, sidebar } = await runConcurrentInitialSizeScenario(window);
   const { outputPath, resizeSequence, state } = await runResizeScenario(window);
   const lifecycle = await runLifecycleCycles(window);
   const { lifecycleEvents, sentinel } = await runSentinelShutdown(window, lifecycle.finalStatus);
@@ -686,6 +797,7 @@ const run = async () => {
       {
         fixture: 'live-conpty',
         concurrentInitialGrids,
+        sidebar,
         lifecycleCycles: lifecycle.cycles.map((cycle) => ({
           restartedGeneration: cycle.restarted.ptyGeneration,
           startedGeneration: cycle.started.ptyGeneration,

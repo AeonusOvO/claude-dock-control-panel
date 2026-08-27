@@ -62,6 +62,12 @@ export interface ProjectsState {
   workspaceMutations: Set<string>;
 }
 
+export const isProjectClosing = (state: ProjectsState, projectPath: string): boolean =>
+  state.workspaceMutations.has(`close-folder:${projectPath.toLowerCase()}`);
+
+export const isConversationClosing = (state: ProjectsState, status: TerminalStatus): boolean =>
+  state.workspaceMutations.has(`close:${status.id}`) || isProjectClosing(state, status.cwd);
+
 export const createProjectsState = (): ProjectsState => ({
   conversationContextTarget: undefined,
   conversationTransitionQueue: new ConversationTransitionQueue(),

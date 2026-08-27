@@ -2,6 +2,7 @@ import type { ClaudeSessionMetadata, TerminalStatus } from '../../../shared/cont
 import type { ProjectsRowHandlers, ProjectsRowsDependencies } from './rows-dependencies';
 import type { ProjectsTitleView } from './view';
 import type { PendingConversation, ProjectsState } from './state';
+import { isConversationClosing, isProjectClosing } from './state';
 
 export interface ProjectsRowItemsActions {
   renderConversationRow: (status: TerminalStatus) => HTMLElement;
@@ -18,11 +19,14 @@ export const createProjectsRowItemsActions = (
   const renderConversationRow = (status: TerminalStatus): HTMLElement => {
     const transition = state.transitioningConversations.get(status.id);
     const transitionFailure = state.failedConversationTransitions.get(status.id);
+    const closing = isConversationClosing(state, status);
     const row = document.createElement('div');
     row.className = 'conversation-item';
     row.dataset.active = String(status.id === dependencies.getWorkspaceState().activeSessionId);
     row.dataset.phase = transitionFailure ? 'error' : status.phase;
     row.dataset.sessionId = status.id;
+    row.dataset.closing = String(closing);
+    row.setAttribute('aria-busy', String(closing));
     if (transition) row.dataset.transition = transition;
     if (transitionFailure) row.dataset.transitionFailure = transitionFailure;
 
@@ -30,6 +34,7 @@ export const createProjectsRowItemsActions = (
     selectButton.className = 'conversation-item__select';
     selectButton.type = 'button';
     selectButton.title = `${status.title} · ${status.cwd}`;
+    selectButton.disabled = closing;
     selectButton.setAttribute(
       'aria-pressed',
       String(status.id === dependencies.getWorkspaceState().activeSessionId),
@@ -46,15 +51,17 @@ export const createProjectsRowItemsActions = (
 
     const phaseText = document.createElement('span');
     phaseText.className = 'conversation-item__phase';
-    phaseText.textContent = transitionFailure
-      ? transitionFailure === 'restoring'
-        ? '恢复失败 · 请关闭'
-        : '创建失败 · 请关闭'
-      : transition
-        ? transition === 'restoring'
-          ? '正在恢复'
-          : '正在新建'
-        : dependencies.phaseCopy[status.phase].pill;
+    phaseText.textContent = closing
+      ? '正在关闭并归档…'
+      : transitionFailure
+        ? transitionFailure === 'restoring'
+          ? '恢复失败 · 请关闭'
+          : '创建失败 · 请关闭'
+        : transition
+          ? transition === 'restoring'
+            ? '正在恢复'
+            : '正在新建'
+          : dependencies.phaseCopy[status.phase].pill;
 
     selectButton.append(indicator, label, phaseText);
     selectButton.addEventListener('click', () => {
@@ -67,12 +74,12 @@ export const createProjectsRowItemsActions = (
     renameButton.textContent = '✎';
     renameButton.title = `重命名 ${status.title}`;
     renameButton.setAttribute('aria-label', `重命名对话 ${status.title}`);
-    renameButton.disabled = Boolean(transition || transitionFailure);
+    renameButton.disabled = Boolean(closing || transition || transitionFailure);
     renameButton.addEventListener('click', () => {
       void handlers.renameConversation(status);
     });
     row.addEventListener('contextmenu', (event) => {
-      if (transition || transitionFailure) {
+      if (closing || transition || transitionFailure) {
         event.preventDefault();
         return;
       }
@@ -83,16 +90,18 @@ export const createProjectsRowItemsActions = (
     closeButton.className = 'conversation-item__action conversation-item__action--close';
     closeButton.type = 'button';
     closeButton.textContent = '×';
-    closeButton.title = transitionFailure
-      ? `移除失败的临时会话 ${status.title}`
-      : `关闭并归档 ${status.title}`;
+    closeButton.title = closing
+      ? '正在关闭并归档，请稍候'
+      : transitionFailure
+        ? `移除失败的临时会话 ${status.title}`
+        : `关闭并归档 ${status.title}`;
     closeButton.setAttribute(
       'aria-label',
       transitionFailure
         ? `移除失败的临时会话 ${status.title}`
         : `关闭对话 ${status.title}，归档到历史对话`,
     );
-    closeButton.disabled = Boolean(transition);
+    closeButton.disabled = Boolean(closing || transition);
     closeButton.addEventListener('click', () => {
       void handlers.closeProject(status);
     });
@@ -102,6 +111,7 @@ export const createProjectsRowItemsActions = (
   };
 
   const renderHistoryRow = (projectPath: string, session: ClaudeSessionMetadata): HTMLElement => {
+    const closing = isProjectClosing(state, projectPath);
     const row = document.createElement('div');
     row.className = 'history-item';
     row.setAttribute('role', 'listitem');
@@ -109,6 +119,7 @@ export const createProjectsRowItemsActions = (
     const selectButton = document.createElement('button');
     selectButton.className = 'history-item__select';
     selectButton.type = 'button';
+    selectButton.disabled = closing;
     selectButton.setAttribute(
       'aria-label',
       `恢复历史对话 ${session.sessionName || session.sessionId.slice(0, 8)}`,
@@ -134,6 +145,7 @@ export const createProjectsRowItemsActions = (
     const deleteButton = document.createElement('button');
     deleteButton.className = 'history-item__delete';
     deleteButton.type = 'button';
+    deleteButton.disabled = closing;
     deleteButton.textContent = '×';
     deleteButton.title = '删除历史对话';
     deleteButton.setAttribute(
@@ -145,6 +157,10 @@ export const createProjectsRowItemsActions = (
     });
     row.append(selectButton, deleteButton);
     row.addEventListener('contextmenu', (event) => {
+      if (closing) {
+        event.preventDefault();
+        return;
+      }
       handlers.showConversationContextMenu(event, { kind: 'history', projectPath, session });
     });
     return row;

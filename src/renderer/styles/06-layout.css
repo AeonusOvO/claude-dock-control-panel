@@ -116,7 +116,7 @@
  * feedback the shape of the download button is reserved for.
  */
 .titlebar__refresh--busy svg {
-  animation: titlebarGlyphSpin var(--dur-refresh) linear infinite;
+  animation: titlebarGlyphSpin var(--dur-refresh) var(--ease-standard) infinite;
   transform-origin: 50% 50%;
 }
 
@@ -182,7 +182,7 @@
 
 /* Only the arc turns; the glyph and the unread badge stay upright. */
 .titlebar__downloads[data-indeterminate='true'][data-active='true']::after {
-  animation: spinnerRingSpin var(--dur-progress) linear infinite;
+  animation: spinnerRingSpin var(--dur-progress) var(--ease-standard) infinite;
   border: 2px solid transparent;
   border-radius: var(--r-pill);
   border-top-color: var(--accent-solid);
@@ -331,6 +331,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--s-3-5);
+  min-height: 0;
   min-width: 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -662,12 +663,13 @@ body.is-resizing * {
 }
 
 /*
- * The control panel is the scroll container for every page except chat, so those pages keep their
+ * The control panel scrolls management pages; workspace and chat own their list scroll containers.
+ * Management pages keep their
  * natural height instead of shrinking to fit. Without this the connection history list — whose own
  * `overflow-y` gives it an automatic minimum size of zero — is the first thing squeezed flat as the
  * list fills up, instead of scrolling inside its own box.
  */
-.rail-page:not(.rail-page--chat),
-.rail-page:not(.rail-page--chat) > * {
+.rail-page:not(.rail-page--chat, [data-rail-page='projects']),
+.rail-page:not(.rail-page--chat, [data-rail-page='projects']) > * {
   flex-shrink: 0;
 }
