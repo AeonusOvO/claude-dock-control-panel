@@ -1,4 +1,5 @@
 import type { ClaudePreset, SaveClaudeConfigInput } from '../../../shared/contracts';
+import { isSubscriptionProvider } from '../../../shared/claude/subscriptions';
 import { findClaudeProvider, type ClaudeProviderId } from '../../../shared/claude/providers';
 import type { ConfigurableEndpointProtocol } from '../../../shared/router/connection-endpoint';
 import {
@@ -56,7 +57,8 @@ export const createConnectionFormPresetActions = (
     }
     formState.selectedProviderId = provider.id;
     claudePreset.value = provider.id;
-    const isManagedChatGpt = provider.id === 'chatgpt-subscription';
+    const isManagedChatGpt =
+      provider.id === 'chatgpt-subscription' || isSubscriptionProvider(provider.id);
     environmentSetup.hidden = isManagedChatGpt || formState.connectionEnvironmentReady;
     claudeConfigForm.hidden = isManagedChatGpt;
     const isOfficialLogin = provider.id === 'anthropic';
@@ -157,7 +159,9 @@ export const createConnectionFormPresetActions = (
         ? '中转站认证方式'
         : 'Claude Code 到接口的认证方式';
     credentialLabel.textContent = !advanced
-      ? '密钥'
+      ? provider.codingPlan
+        ? '订阅密钥'
+        : '密钥'
       : provider.id === 'chatgpt-subscription'
         ? '本地网关访问密钥（不是 ChatGPT 凭据）'
         : provider.id === 'gateway'

@@ -52,7 +52,9 @@ Kimi 要求第三方保留真实客户端标识，见[会员使用指南](https:
 存在相同域名，单靠 URL 不能推断套餐权限；独立对话应使用符合用途的 API 密钥，不声称自动识别全部套餐。
 
 已有 ChatGPT 订阅链路保持独立。官方 Codex 支持 ChatGPT 登录，但这不等于普通 OpenAI API 额度，见
-[Codex 认证](https://developers.openai.com/codex/auth)。本次不新增网页登录态抓取或第三方订阅令牌迁移。
+[Codex 认证](https://developers.openai.com/codex/auth)。国内账号授权新增 Kimi、MiniMax 与实验性 GLM 入口，
+实现、来源及付费账号验证限制见[订阅账号接入](subscription-access.md)。授权由用户在官网完成，
+不抓取 Cookie、导入浏览器会话或复制其他客户端的令牌文件。GLM 在真实测试前还需确认编程套餐额度。
 
 ## 自动探测与安全边界
 

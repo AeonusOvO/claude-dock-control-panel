@@ -1,10 +1,15 @@
 # ClaudeDock 技术说明
 
-当前架构版本：5.0.0-rc.30（2026-08-26）。版本化工作区启动引导以 main 进程持久化状态、
+当前架构版本：5.0.0-rc.36（2026-08-28）。版本化工作区启动引导以 main 进程持久化状态、
 类型化 IPC 与 renderer feature 分片共同维护“选择引擎、选择模型、自动准备、打开项目、准备完成”五步事务；旧用户迁移、
 跳过、续接和重置均不保存密钥或项目正文。顶层信息架构收敛为“工作区 / 独立对话 / 接入 / 扩展”，接入与扩展
 使用完整内容画布，工作区运行时选择器改为按需展开。主题字体、文字层级、自适应控件及来源可追踪的非线性动效
 继续由设计 token 与行为门禁统一约束。
+
+国内订阅新增 main 内置账号授权与回环转发，不启动第三方管理窗口。Kimi/MiniMax 设备授权、实验性 GLM
+浏览器授权、套餐检查、DPAPI 凭据库、固定端口和独立会话绑定由 `src/main/subscriptions/` 维护。
+订阅与 ChatGPT 全局安装授权在浏览器等待前占有统一接入租约；刷新按账号合并，取消和退出拒绝迟到写入。
+协议来源、网络作用域、IPC 脱敏与付费账号验证限制见[订阅账号接入](subscription-access.md)。
 
 renderer 入口继续保持 feature-sliced shell/platform 注册架构，IPC 的 channel/schema/preload 桥是单一
 事实源，main 通过运行期注册表与 contribution 装配，lint 与 dependency-cruiser 维持零警告门禁

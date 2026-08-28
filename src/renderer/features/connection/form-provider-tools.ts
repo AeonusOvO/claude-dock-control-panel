@@ -1,4 +1,6 @@
 import type { ClaudePreset } from '../../../shared/contracts';
+import { isSubscriptionProvider } from '../../../shared/claude/subscriptions';
+import { buildSubscriptionGuide } from './subscription-guide';
 import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import { createChatGptSubscriptionGuide } from './chatgpt-guide';
 import {
@@ -50,6 +52,7 @@ export const createConnectionFormProviderToolsActions = (
 
   const moveProviderTools = (providerId?: ClaudeProviderId): void => {
     formState.renderManagedChatGptProgress = undefined;
+    formState.renderSubscription = undefined;
     providerSpecialSetup.replaceChildren();
     connectionAdvancedContent.append(
       connectionAdvice,
@@ -58,6 +61,10 @@ export const createConnectionFormProviderToolsActions = (
       converterHelp,
       connectionGlossary,
     );
+    if (isSubscriptionProvider(providerId)) {
+      providerSpecialSetup.append(buildSubscriptionGuide(formState, providerId, applyPresetUi));
+      return;
+    }
     if (providerId === 'chatgpt-subscription') {
       providerSpecialSetup.append(buildChatGptSubscriptionGuide());
       return;

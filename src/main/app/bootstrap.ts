@@ -16,6 +16,9 @@ import { claudeExecutionInstallationProvider } from '../claude/execution-setting
 import { ClaudeExecutionSettingsService } from '../claude/execution-settings-service';
 import { ClaudeExecutionSettingsStore } from '../claude/execution-settings-store';
 import { ManagedChatGptGateway } from '../claude/managed-chatgpt-gateway';
+import { SubscriptionService } from '../subscriptions/service';
+import { SubscriptionRelay, type SubscriptionNetwork } from '../subscriptions/relay';
+import { SubscriptionVault } from '../subscriptions/vault';
 import { ClaudePermissionBridge } from '../claude/permission-bridge';
 import type { PermissionModeProbes } from '../claude/permission-mode-probe';
 import { ClaudeRuntime } from '../claude/runtime';
@@ -55,6 +58,7 @@ import {
   MAIN_LOGGER,
   MAIN_WINDOW,
   MANAGED_CHATGPT_GATEWAY,
+  SUBSCRIPTION_SERVICE,
   MCP_MANAGER,
   NATIVE_CONVERSATION_SERVICE,
   NETWORK_DIAGNOSTICS_STORE,
@@ -191,6 +195,10 @@ const managedChatGptConversationAccount = async (gateway: ManagedChatGptGateway)
     ...(state.accountEmail ? { accountIdentity: state.accountEmail } : {}),
     ...(state.authenticated ? { authMethod: 'ChatGPT OAuth 订阅' } : {}),
   };
+};
+
+const configureSubscriptionRuntime = (runtime: ClaudeRuntime, services: Registry): void => {
+  runtime.setSubscriptionRelayStarter(() => services.resolve(SUBSCRIPTION_SERVICE).ensureRunning());
 };
 
 const ensureManagedChatGptGatewayStarted = async (
@@ -341,6 +349,50 @@ const installNetworkServices = async ({
   services.register(CONVERSATION_NETWORK_SESSION, () =>
     session.fromPartition('claudedock-conversation-network'),
   );
+  services.register(SUBSCRIPTION_SERVICE, (registry) => {
+    const networkFor = (scope: 'application' | 'conversation'): SubscriptionNetwork => ({
+      fetch: createAuthenticatedSessionFetch(
+        registry,
+        scope === 'application'
+          ? session.defaultSession
+          : registry.resolve(CONVERSATION_NETWORK_SESSION),
+      ),
+      network: (url, operation, signal) =>
+        registry.resolve(PROVIDER_ACCESS_GUARD).withAllowed(
+          {
+            action: scope === 'application' ? 'login' : 'first-request',
+            networkScope: scope,
+            provider: 'anthropic-claude',
+            target: { process: scope === 'application' ? 'application' : 'claude-cli', url },
+          },
+          operation,
+          signal,
+        ),
+    });
+    const authNetwork = networkFor('application');
+    const relay = new SubscriptionRelay(
+      new SubscriptionVault(app.getPath('userData'), safeStorage),
+      authNetwork,
+      networkFor('conversation'),
+    );
+    return new SubscriptionService({
+      assertAllowed: () => {
+        assertExternalRoutingWritesAllowed();
+        if (!runtimeProfile.effects.allowRealRuntimes)
+          throw new Error('隔离运行配置禁止真实订阅授权。');
+      },
+      runtime: () => registry.resolve(CLAUDE_RUNTIME),
+      relay,
+      authNetwork,
+      busyRegistry: registry.resolve(BUSY_REGISTRY),
+      open: (url) => shell.openExternal(url),
+      publish: (value) => {
+        registry
+          .resolve(MAIN_WINDOW)
+          .current?.webContents.send(CHANNELS.SUBSCRIPTION_CHANGED, value);
+      },
+    });
+  });
   services.register(
     APPLICATION_PROXY_COORDINATOR,
     (registry) =>
@@ -515,6 +567,7 @@ const installAgentRuntimes = ({
   services.resolve(RUNTIME_PROCESS_REGISTRY);
   const claudeRuntime = services.resolve(CLAUDE_RUNTIME);
   claudeRuntime.setLaunchAdmissionGuard(assertLaunchAdmissionAllowed);
+  configureSubscriptionRuntime(claudeRuntime, services);
   configureConversationModels(claudeRuntime, requireManagedChatGptGateway, appPreferencesStore);
   const nativeAdapter =
     runtimeProfile.adapterMode === 'fake'

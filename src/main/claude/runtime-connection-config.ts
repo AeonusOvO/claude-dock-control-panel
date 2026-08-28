@@ -134,6 +134,8 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   private readonly historyStore: ClaudeConnectionHistoryStore;
   private readonly launchBaselineKey = randomBytes(32);
   private nextConversationConfigQueue: Promise<void> = Promise.resolve();
+  private nextConversationMutationCount = 0;
+  private nextConversationReservation: symbol | undefined;
 
   protected constructor(
     userDataPath: string,
@@ -154,8 +156,45 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     this.historyStore = new ClaudeConnectionHistoryStore(userDataPath);
   }
 
-  private enqueueNextConversationConfig<T>(operation: () => Promise<T>): Promise<T> {
-    const queued = this.nextConversationConfigQueue.then(operation, operation);
+  /** Reserves the entire login/test/save transaction, including time spent in a browser. */
+  public reserveNextConversationConnection(): { token: symbol; release: () => void } {
+    if (this.nextConversationReservation || this.nextConversationMutationCount) {
+      throw new Error('已有接入操作正在进行，请稍候。');
+    }
+    const token = Symbol('subscription-connection');
+    this.nextConversationReservation = token;
+    return {
+      token,
+      release: () => {
+        if (this.nextConversationReservation === token)
+          this.nextConversationReservation = undefined;
+      },
+    };
+  }
+
+  private assertNextConversationReservation(token?: symbol): void {
+    if (this.nextConversationReservation !== token) {
+      throw new Error('已有订阅接入正在进行，请先完成或取消。');
+    }
+  }
+
+  private enqueueNextConversationConfig<T>(
+    operation: () => Promise<T>,
+    token?: symbol,
+  ): Promise<T> {
+    try {
+      this.assertNextConversationReservation(token);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    this.nextConversationMutationCount += 1;
+    const guarded = async (): Promise<T> => {
+      this.assertNextConversationReservation(token);
+      return operation();
+    };
+    const queued = this.nextConversationConfigQueue.then(guarded, guarded).finally(() => {
+      this.nextConversationMutationCount -= 1;
+    });
     this.nextConversationConfigQueue = queued.then(
       () => undefined,
       () => undefined,
@@ -222,11 +261,15 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   }
 
   public clearNextConversationConnection(): void {
+    this.assertNextConversationReservation();
+    if (this.nextConversationMutationCount) throw new Error('已有接入操作正在进行。');
     this.configStore.remove(this.nextConversationConfigScope);
   }
 
   /** Promotes an isolated restored session only after its full transaction has committed. */
   public promoteConversationConnectionToNext(sessionId: string, cwd: string): void {
+    this.assertNextConversationReservation();
+    if (this.nextConversationMutationCount) throw new Error('已有接入操作正在进行。');
     this.configStore.copyConnection(
       this.connectionConfigScope(sessionId, cwd),
       this.nextConversationConfigScope,
@@ -278,12 +321,23 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   public verifyAndSaveNextConversationConfig(
     input: SaveClaudeConfigInput,
     retryBeforeSecondAttempt?: () => Promise<void>,
-    options: { automaticFetch?: typeof fetch; testOnly?: boolean } = {},
+    options: {
+      automaticFetch?: typeof fetch;
+      testOnly?: boolean;
+      reservation?: symbol;
+      signal?: AbortSignal;
+      beforeCommit?: () => void;
+    } = {},
   ): Promise<{
     connectionTest: ClaudeConnectionTestResult;
     state: ClaudeNextConversationConnectionState;
   }> {
     return this.enqueueNextConversationConfig(async () => {
+      const assertCurrent = (): void => {
+        options.signal?.throwIfAborted();
+        this.assertNextConversationReservation(options.reservation);
+      };
+      assertCurrent();
       const snapshot = this.configStore.createSnapshot(this.nextConversationConfigScope);
       let prepared: PreparedClaudeConfigSave | undefined;
       try {
@@ -300,19 +354,29 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
               )
             : undefined;
         prepared = await this.prepareConnectionConfig(automatic?.input ?? input);
+        assertCurrent();
         let connectionTest =
           automatic?.input.protocol === 'anthropic'
             ? automatic.test
-            : await this.testPreparedConnection(this.nextConversationConfigScope, prepared);
+            : await this.testPreparedConnection(
+                this.nextConversationConfigScope,
+                prepared,
+                assertCurrent,
+                options.signal,
+              );
+        assertCurrent();
         if (
           !connectionTest.ok &&
           retryBeforeSecondAttempt &&
           (connectionTest.failureKind === 'network' || connectionTest.failureKind === 'timeout')
         ) {
           await retryBeforeSecondAttempt();
+          assertCurrent();
           connectionTest = await this.testPreparedConnection(
             this.nextConversationConfigScope,
             prepared,
+            assertCurrent,
+            options.signal,
           );
         }
         if (!connectionTest.ok || options.testOnly) {
@@ -324,6 +388,8 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
             state: await this.getNextConversationConnection(),
           };
         }
+        assertCurrent();
+        options.beforeCommit?.();
         this.commitPreparedConfig(this.nextConversationConfigScope, prepared);
         return {
           connectionTest,
@@ -344,7 +410,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
         }
         throw error;
       }
-    });
+    }, options.reservation);
   }
 
   protected abstract ensureSession(sessionId: string, cwd: string): RuntimeSession;

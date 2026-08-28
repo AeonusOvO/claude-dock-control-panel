@@ -123,7 +123,7 @@ export const createRouterElements = (): RouterElements => {
       title.textContent = provider.label;
       const badge = document.createElement('span');
       badge.textContent =
-        provider.id === 'chatgpt-subscription'
+        provider.id === 'chatgpt-subscription' || isSubscriptionProvider(provider.id)
           ? '本机网关'
           : capability.mode === 'direct'
             ? '直连'
@@ -141,7 +141,8 @@ export const createRouterElements = (): RouterElements => {
   );
   elements.routerWizardProvider.replaceChildren(
     ...CLAUDE_PROVIDERS.filter(
-      (provider) => provider.id !== 'curl' && provider.id !== 'gateway',
+      (provider) =>
+        provider.id !== 'curl' && provider.id !== 'gateway' && !isSubscriptionProvider(provider.id),
     ).map((provider) => {
       const option = document.createElement('option');
       option.value = provider.id;
@@ -151,3 +152,4 @@ export const createRouterElements = (): RouterElements => {
   );
   return elements;
 };
+import { isSubscriptionProvider } from '../../../shared/claude/subscriptions';

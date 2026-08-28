@@ -94,6 +94,19 @@ const positionListbox = (trigger: HTMLElement, listbox: HTMLElement): void => {
  * Gives one `<select>` a themed presentation. Idempotent: calling it twice on the same element is a
  * no-op, so callers may re-run it after repopulating options.
  */
+const syncSelectBadge = (badge: HTMLSpanElement, text: string): void => {
+  badge.textContent = text;
+  badge.hidden = !text;
+  badge.dataset.kind = text === '订阅' ? 'subscription' : 'api';
+};
+
+const createSelectBadge = (text: string): HTMLSpanElement => {
+  const badge = document.createElement('span');
+  badge.className = 'select__badge';
+  syncSelectBadge(badge, text);
+  return badge;
+};
+
 export const enhanceSelect = (select: HTMLSelectElement): void => {
   if (select.dataset.enhanced === 'true') {
     selectControllers.get(select)?.sync();
@@ -116,11 +129,12 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
 
   const label = document.createElement('span');
   label.className = 'select__label';
+  const badge = createSelectBadge('');
   const chevron = document.createElement('span');
   chevron.className = 'select__chevron';
   chevron.setAttribute('aria-hidden', 'true');
   chevron.innerHTML = '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>';
-  trigger.append(label, chevron);
+  trigger.append(badge, label, chevron);
 
   const listbox = document.createElement('div');
   listbox.className = 'select__listbox popover';
@@ -141,6 +155,7 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
   /** Mirrors the native element's current option text and disabled state onto the trigger. */
   const syncTrigger = (): void => {
     const selected = select.selectedOptions[0];
+    syncSelectBadge(badge, selected?.dataset.badge ?? '');
     label.textContent = select.dataset.triggerLabel ?? selected?.textContent?.trim() ?? '';
     label.dataset.placeholder = String(!selected);
     trigger.disabled = select.disabled;
@@ -189,6 +204,9 @@ export const enhanceSelect = (select: HTMLSelectElement): void => {
       row.setAttribute('aria-selected', String(option.selected));
       row.dataset.selected = String(option.selected);
       row.textContent = option.textContent?.trim() ?? option.value;
+      if (option.dataset.badge) {
+        row.prepend(createSelectBadge(option.dataset.badge));
+      }
       row.addEventListener('click', () => {
         commit(option.value);
       });

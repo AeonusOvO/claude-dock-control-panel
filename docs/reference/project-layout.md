@@ -56,10 +56,10 @@ shared/
     app.ts artifact.ts chat.ts claude.ts claude-execution-settings.ts
     claude-plugin.ts codex.ts diagnostics.ts download.ts egress-diagnostics.ts
     managed-chatgpt.ts mcp.ts network.ts proxy.ts resource.ts router.ts
-    onboarding.ts runtime.ts software.ts terminal.ts workspace.ts
-    control-panel-api.ts  21 个域接口组合出 ControlPanelApi 的 203 个成员
+    onboarding.ts runtime.ts software.ts subscription.ts terminal.ts workspace.ts
+    control-panel-api.ts  22 个域接口组合出 ControlPanelApi 的 219 个成员
   claude/                 connection-remedy context-window curl effort model-id
-                          native-commands permission-mode providers state-ownership
+                          native-commands permission-mode providers state-ownership subscriptions
   conversation/           native reducer surface-switch composer-input
                           composer-history chat-usage
   router/                 capabilities kernel provider-profiles connection-endpoint
@@ -83,18 +83,19 @@ main/
   app/                    bootstrap/lifecycle/window/tray/profile/paths + startup model restore/coordinator
   infra/                  registry.ts service-tokens.ts contributions.ts logger.ts
                           diagnostics.ts 等；Registry 与四类贡献点见 ADR-0010
-  ipc/                    31 个文件 = 25 个域 handler + 基础设施 + 入口：
+  ipc/                    32 个文件 = 26 个域 handler + 基础设施 + 入口：
     index.ts              registerIpc(deps)：一次跑完全部贡献
-    contributions.ts      MAIN_IPC_CONTRIBUTIONS：25 个域贡献的注册数组
+    contributions.ts      MAIN_IPC_CONTRIBUTIONS：26 个域贡献的注册数组
     contribution.ts       IpcContribution 类型与依赖推导工具
     context.ts guards.ts validation.ts   MainState、guards、共享校验
     app.ts artifact.ts busy.ts chat.ts claude-connection.ts claude-controls.ts
     claude-execution-settings.ts claude-launch.ts claude-plugin.ts claude-state.ts codex.ts conversation.ts
     conversation-attachment.ts download.ts managed-chatgpt.ts mcp.ts network.ts
-    onboarding.ts project.ts proxy.ts router.ts runtime.ts session.ts software.ts terminal.ts
+    onboarding.ts project.ts proxy.ts router.ts runtime.ts session.ts software.ts subscription.ts terminal.ts
   claude/                 项目配置事务、接入历史、路由、运行态等
     official-auth-status.ts  `claude auth status --json` 的缓存与安全白名单投影
   codex/ chat/ conversation/ terminal/ network/ proxy/
+  subscriptions/          service oauth zcode relay vault catalog http：账号授权、固定回环转发与加密凭据
   download/ mcp/ artifact/ updates/ stores/ coordination/
 ```
 
@@ -106,14 +107,14 @@ handler 之间禁止互相 import：共享只经 `context/guards/validation`，�
 
 ```
 preload/
-  index.ts                展开组装 21 个 bridge，satisfies ControlPanelApi，单点暴露
-  bridges/                按域拆分的 21 个桥文件：app application-proxy artifact busy
+  index.ts                展开组装 22 个 bridge，satisfies ControlPanelApi，单点暴露
+  bridges/                按域拆分的 22 个桥文件：app application-proxy artifact busy
                           chat claude claude-execution-settings claude-plugin codex download managed-chatgpt mcp
                           native-attachment native-conversation network-preflight onboarding
-                          router runtime software-update terminal workspace
+                          router runtime software-update subscription terminal workspace
 ```
 
-通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 215 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
+通道名常量与载荷校验在 `src/shared/ipc/`（`channels.ts` 219 个常量，通用 schema 与 Claude 执行 schema 分文件维护），preload 与 main 两侧同源引用，见 [ADR-0008](../adr/0008-ipc-single-source-of-truth.md)。
 
 ## `src/renderer/`
 

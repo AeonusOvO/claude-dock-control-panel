@@ -1,3 +1,5 @@
+import type { SubscriptionProvider } from '../claude/subscriptions';
+import type { SubscriptionResult, SubscriptionState } from './subscription';
 import type {
   ConversationControlUpdate,
   ConversationInteractionResponse,
@@ -649,7 +651,15 @@ export interface ControlPanelApi
     ClaudeExecutionSettingsApi,
     ClaudePluginApi,
     ManagedChatGptApi,
+    SubscriptionApi,
     RouterApi,
     CodexApi,
     McpApi,
     SoftwareUpdateApi {}
+
+export interface SubscriptionApi {
+  getSubscriptionState: () => Promise<SubscriptionState>;
+  setupSubscription: (provider: SubscriptionProvider) => Promise<SubscriptionResult>;
+  cancelSubscriptionSetup: (attempt: string) => Promise<SubscriptionResult>;
+  onSubscriptionState: (listener: (state: SubscriptionState) => void) => Unsubscribe;
+}

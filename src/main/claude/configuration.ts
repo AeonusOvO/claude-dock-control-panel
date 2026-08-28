@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isSubscriptionBaseUrl, isSubscriptionProvider } from '../../shared/claude/subscriptions';
 import type {
   ClaudeContextWindowMode,
   ClaudeInstallationStatus,
@@ -328,6 +329,12 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
   }
 
   const baseUrl = normalizeBaseUrl(input.baseUrl);
+  if (
+    isSubscriptionProvider(preset) &&
+    (!isSubscriptionBaseUrl(baseUrl) || input.authMode !== 'authToken')
+  ) {
+    throw new Error('订阅只能使用 ClaudeDock 托管的本机授权连接。');
+  }
   if (
     preset === 'chatgpt-subscription' &&
     !LOOPBACK_GATEWAY_HOSTS.has(new URL(baseUrl).hostname.toLowerCase())

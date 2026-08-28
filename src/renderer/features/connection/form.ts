@@ -5,6 +5,8 @@ import type {
   SaveClaudeConfigInput,
 } from '../../../shared/contracts';
 import type { ClaudeProviderId } from '../../../shared/claude/providers';
+import { isSubscriptionProvider } from '../../../shared/claude/subscriptions';
+import { connectSubscriptionUi } from './subscription-guide';
 import { createAdvancedSnapshotApi, type AdvancedSnapshotApi } from './advanced-snapshot';
 import { savedClaudeConfigInput } from './form-config-input';
 import {
@@ -31,7 +33,7 @@ import { createConnectionFormPopulateActions } from './form-populate';
 import { createConnectionFormPresetActions } from './form-preset';
 import { createConnectionFormProviderToolsActions } from './form-provider-tools';
 import { createConnectionFormSaveActions } from './form-save';
-import { createConnectionFormState } from './form-state';
+import { createConnectionFormState, type ConnectionFormState } from './form-state';
 import { createConnectionFormSyncActions } from './form-sync';
 import { createConnectionFormWizardActions } from './form-wizard';
 import { createStartupModelConnectionOverlay } from './startup-model-connection';
@@ -89,6 +91,28 @@ export interface ConnectionForm {
   unsubscribeManagedChatGptSetupProgress: () => void;
 }
 
+const subscribeChatGptProgress = (formState: ConnectionFormState, sync: () => void): (() => void) =>
+  window.controlPanel.onManagedChatGptSetupProgress((progress) => {
+    formState.managedChatGptOperations.update(progress.sessionId, progress.active);
+    formState.managedChatGptProgress = progress;
+    formState.renderManagedChatGptProgress?.(progress);
+    formState.renderSubscription?.();
+    sync();
+  });
+
+const updateConnectionEnvironment = async (formState: ConnectionFormState): Promise<void> => {
+  try {
+    const software = await window.controlPanel.getSoftwareUpdates();
+    formState.connectionEnvironmentReady = software.claudeCode.installed;
+  } catch {
+    formState.connectionEnvironmentReady = false;
+  }
+  environmentSetup.hidden =
+    formState.selectedProviderId === 'chatgpt-subscription' ||
+    isSubscriptionProvider(formState.selectedProviderId) ||
+    formState.connectionEnvironmentReady;
+};
+
 export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm => {
   const formState = createConnectionFormState();
   let providerGroupExpansionPending = false;
@@ -137,6 +161,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     state: ClaudeNextConversationConnectionState,
     populateForm: boolean,
   ): ClaudeNextConversationConnectionState => {
+    formState.nextConnectionRevision += 1;
     const normalized = state && typeof state === 'object' ? state : {};
     formState.nextConnection = normalized;
     if (populateForm) {
@@ -156,24 +181,20 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     applyNextClaudeConnectionState(state, true);
   };
   const loadNextClaudeConnection = async (): Promise<ClaudeNextConversationConnectionState> => {
+    const revision = ++formState.nextConnectionRevision;
     const selectedProviderAtRequest = formState.selectedProviderId;
     const nextConnection = (await window.controlPanel.getNextClaudeConnection()) ?? {};
     /* A late startup/read response must never erase a choice the user has already clicked. */
-    applyNextClaudeConnectionState(
-      nextConnection,
-      formState.selectedProviderId === selectedProviderAtRequest,
-    );
-    try {
-      const software = await window.controlPanel.getSoftwareUpdates();
-      formState.connectionEnvironmentReady = software.claudeCode.installed;
-    } catch {
-      formState.connectionEnvironmentReady = false;
-    }
-    environmentSetup.hidden =
-      formState.selectedProviderId === 'chatgpt-subscription' ||
-      formState.connectionEnvironmentReady;
+    if (revision === formState.nextConnectionRevision)
+      applyNextClaudeConnectionState(
+        nextConnection,
+        formState.selectedProviderId === selectedProviderAtRequest &&
+          !formState.subscriptionPending &&
+          !formState.subscription?.busy,
+      );
+    await updateConnectionEnvironment(formState);
     syncConnectionInteractivity();
-    return nextConnection;
+    return formState.nextConnection;
   };
   const saveActions = createConnectionFormSaveActions(
     deps,
@@ -208,13 +229,9 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     syncConnectionInteractivity,
   });
 
-  const unsubscribeManagedChatGptSetupProgress = window.controlPanel.onManagedChatGptSetupProgress(
-    (progress) => {
-      formState.managedChatGptOperations.update(progress.sessionId, progress.active);
-      formState.managedChatGptProgress = progress;
-      formState.renderManagedChatGptProgress?.(progress);
-      formState.renderWizard?.();
-    },
+  const unsubscribeManagedChatGptSetupProgress = subscribeChatGptProgress(
+    formState,
+    syncConnectionInteractivity,
   );
 
   const bindingsActions = createConnectionFormBindingsActions(
@@ -228,6 +245,12 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
   bindingsActions.bindConnectionForm();
   const wizardActions = createConnectionFormWizardActions(deps, formState, applyPresetUi);
   formState.renderWizard = wizardActions.render;
+  const unsubscribeSubscription = connectSubscriptionUi(
+    deps,
+    formState,
+    applyNextClaudeConnection,
+    syncConnectionInteractivity,
+  );
   void loadNextClaudeConnection()
     .catch(() => undefined)
     .finally(() => {
@@ -284,6 +307,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
       return () => selectedProviderListeners.delete(listener);
     },
     unsubscribeManagedChatGptSetupProgress: () => {
+      unsubscribeSubscription();
       selectedProviderListeners.clear();
       startupModelConnectionOverlay.dispose();
       formState.renderWizard = undefined;

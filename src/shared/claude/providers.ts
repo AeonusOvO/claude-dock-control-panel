@@ -1,3 +1,5 @@
+import type { SubscriptionProvider } from './subscriptions';
+
 export type ClaudeProviderGroupId =
   'advanced' | 'domestic' | 'local' | 'official' | 'overseas' | 'subscription';
 
@@ -15,6 +17,7 @@ export interface ClaudeProviderDefinition {
   protocol?: 'anthropic' | 'openai';
   group: ClaudeProviderGroupId;
   id:
+    | SubscriptionProvider
     | 'anthropic'
     | 'anthropic-api'
     | 'chatgpt-subscription'
@@ -59,6 +62,25 @@ export const CLAUDE_PROVIDER_GROUPS = [
   { id: 'local', label: '本地服务' },
   { id: 'advanced', label: '高级方式' },
 ] as const satisfies ReadonlyArray<{ id: ClaudeProviderGroupId; label: string }>;
+
+const subscriptionPreset = (
+  id: SubscriptionProvider,
+  label: string,
+  docsUrl: string,
+  model: string,
+): ClaudeProviderDefinition => ({
+  id,
+  label,
+  model,
+  docsUrl,
+  authMode: 'authToken',
+  baseUrl: '',
+  editableBaseUrl: false,
+  codingPlan: true,
+  protocol: 'anthropic',
+  group: 'domestic',
+  description: '登录账号并连接订阅。',
+});
 
 /**
  * Claude Code provider endpoints verified against each provider's current integration guide.
@@ -107,6 +129,36 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     model: 'gpt-5.6-sol',
     modelFast: 'gpt-5.4-mini',
   },
+  subscriptionPreset(
+    'kimi-subscription',
+    'Kimi Code',
+    'https://www.kimi.com/help/kimi-code/membership-guide',
+    'kimi-for-coding',
+  ),
+  subscriptionPreset(
+    'minimax-subscription-cn',
+    'MiniMax',
+    'https://platform.minimaxi.com/docs/token-plan/openclaw',
+    'MiniMax-M3',
+  ),
+  subscriptionPreset(
+    'glm-subscription-cn',
+    '智谱 GLM（实验性）',
+    'https://docs.bigmodel.cn/cn/guide/develop/claude',
+    'glm-5.2',
+  ),
+  subscriptionPreset(
+    'minimax-subscription-global',
+    'MiniMax（国际）',
+    'https://docs.openclaw.ai/providers/minimax',
+    'MiniMax-M3',
+  ),
+  subscriptionPreset(
+    'glm-subscription-global',
+    'GLM 国际（实验性）',
+    'https://docs.z.ai/scenario-example/develop-tools/claude',
+    'glm-5.2',
+  ),
   {
     authMode: 'authToken',
     baseUrl: 'https://api.deepseek.com/anthropic',
@@ -132,7 +184,7 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     group: 'domestic',
     id: 'glm-cn',
     codingPlan: true,
-    label: '智谱 GLM Coding Plan',
+    label: '智谱 GLM（套餐密钥）',
     model: 'glm-5.2[1m]',
     modelFast: 'glm-4.7',
   },
@@ -175,7 +227,7 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     group: 'domestic',
     id: 'kimi-code',
     codingPlan: true,
-    label: 'Kimi Code 会员',
+    label: 'Kimi Code（套餐密钥）',
     model: 'kimi-for-coding',
     modelFast: 'kimi-for-coding',
   },

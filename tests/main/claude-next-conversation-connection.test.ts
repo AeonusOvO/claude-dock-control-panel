@@ -61,6 +61,51 @@ const localInput = (model: string): SaveClaudeConfigInput => ({
 });
 
 describe('Claude next-conversation connection', () => {
+  it('reserves configuration across browser login and rejects competing writes, clear and promotion', async () => {
+    const runtime = createRuntime();
+    await runtime.saveNextConversationConfig(localInput('old'));
+    const reservation = runtime.reserveNextConversationConnection();
+    await expect(runtime.saveNextConversationConfig(localInput('competing'))).rejects.toThrow(
+      '订阅接入',
+    );
+    expect(() => runtime.clearNextConversationConnection()).toThrow('订阅接入');
+    expect(() => runtime.promoteConversationConnectionToNext('session-1', 'D:\\Project')).toThrow(
+      '订阅接入',
+    );
+    expect(() => runtime.reserveNextConversationConnection()).toThrow('已有接入');
+    reservation.release();
+    const newer = runtime.reserveNextConversationConnection();
+    reservation.release();
+    await expect(runtime.saveNextConversationConfig(localInput('late'))).rejects.toThrow(
+      '订阅接入',
+    );
+    newer.release();
+    await runtime.saveNextConversationConfig(localInput('new'));
+    expect((await runtime.getNextConversationConnection()).config?.model).toBe('new');
+  });
+
+  it('fences a late successful test after login cancellation before credentials or config can commit', async () => {
+    const runtime = createRuntime();
+    await runtime.saveNextConversationConfig(localInput('old'));
+    const reservation = runtime.reserveNextConversationConnection();
+    const controller = new AbortController();
+    const test = deferred<Awaited<ReturnType<ClaudeRuntime['testPreparedConnection']>>>();
+    const probe = vi.spyOn(runtime, 'testPreparedConnection').mockReturnValueOnce(test.promise);
+    const beforeCommit = vi.fn();
+    const operation = runtime.verifyAndSaveNextConversationConfig(localInput('new'), undefined, {
+      reservation: reservation.token,
+      signal: controller.signal,
+      beforeCommit,
+    });
+    const rejected = expect(operation).rejects.toThrow();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalled());
+    controller.abort();
+    test.resolve({ ok: true, testedAt: 1, stages: [], message: '', tone: 'success' });
+    await rejected;
+    expect(beforeCommit).not.toHaveBeenCalled();
+    expect((await runtime.getNextConversationConnection()).config?.model).toBe('old');
+    reservation.release();
+  });
   const automaticInput = (patch: Partial<SaveClaudeConfigInput> = {}): SaveClaudeConfigInput => ({
     autoDetect: true,
     authMode: 'apiKey',

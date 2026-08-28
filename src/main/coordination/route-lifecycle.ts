@@ -1,4 +1,4 @@
-export type ClaudeRouteKind = 'ccr' | 'direct' | 'managed-chatgpt';
+export type ClaudeRouteKind = 'ccr' | 'direct' | 'managed-chatgpt' | 'managed-subscription';
 
 export interface RouteReservationToken {
   generation: number;

@@ -45,6 +45,43 @@ module.exports = async ({ capture, click, evaluate, waitFor }) => {
   await click('#connection-settings-mode');
   await assertForm('#claude-config-form', 'simple');
 
+  await click('#connection-wizard-previous');
+  await click('#connection-domestic-model');
+  await capture(
+    'connection-subscription-picker.png',
+    { interaction: 'subscription-api-pills' },
+    450,
+  );
+  await click('.select__listbox[data-open="true"] [data-value="kimi-subscription"]');
+  await click('#connection-wizard-next');
+  await waitFor(
+    '() => Boolean(document.querySelector(".domestic-subscription-guide"))',
+    'subscription login',
+  );
+  const subscription = await evaluate(`(() => {
+    const guide = document.querySelector('.domestic-subscription-guide');
+    return {
+      formHidden: document.querySelector('#claude-config-form').hidden,
+      notice: guide.querySelector('.field-help').textContent.trim(),
+      login: document.querySelector('#connection-wizard-next').textContent,
+      overflow: guide.scrollWidth > guide.clientWidth + 2,
+    };
+  })()`);
+  if (
+    !subscription.formHidden ||
+    subscription.notice !== '可能会消耗少量 token' ||
+    subscription.login !== '登录并连接' ||
+    subscription.overflow
+  ) {
+    throw new Error('Subscription form mismatch: ' + JSON.stringify(subscription));
+  }
+  await capture(
+    'connection-subscription-login.png',
+    { interaction: 'subscription-login', provider: 'kimi' },
+    450,
+  );
+  // No login click here: this isolated UI gate must not touch a real account or authorization page.
+
   await click('[data-rail-tab="chat"]');
   await click('#open-chat-settings');
   await waitFor(

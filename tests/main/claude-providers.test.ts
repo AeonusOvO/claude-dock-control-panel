@@ -93,7 +93,9 @@ describe('Claude provider catalog', () => {
   it('only permits HTTPS remote endpoints and explicit loopback HTTP endpoints', () => {
     for (const provider of CLAUDE_PROVIDERS) {
       if (!provider.baseUrl) {
-        expect(providerForPreset(provider.id)).toBe('anthropic');
+        expect(providerForPreset(provider.id)).toBe(
+          isSubscriptionProvider(provider.id) ? 'gateway' : 'anthropic',
+        );
         continue;
       }
       const parsed = new URL(provider.baseUrl);
@@ -148,3 +150,4 @@ describe('Claude provider catalog', () => {
     );
   });
 });
+import { isSubscriptionProvider } from '../../src/shared/claude/subscriptions';

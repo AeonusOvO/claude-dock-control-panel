@@ -17,6 +17,7 @@ import { claudeBridge } from './bridges/claude';
 import { claudeExecutionSettingsBridge } from './bridges/claude-execution-settings';
 import { claudePluginBridge } from './bridges/claude-plugin';
 import { managedChatgptBridge } from './bridges/managed-chatgpt';
+import { subscriptionBridge } from './bridges/subscription';
 import { routerBridge } from './bridges/router';
 import { codexBridge } from './bridges/codex';
 import { mcpBridge } from './bridges/mcp';
@@ -40,6 +41,7 @@ const api = {
   ...claudeExecutionSettingsBridge,
   ...claudePluginBridge,
   ...managedChatgptBridge,
+  ...subscriptionBridge,
   ...routerBridge,
   ...codexBridge,
   ...mcpBridge,

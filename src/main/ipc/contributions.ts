@@ -14,6 +14,7 @@ import { registerConversationIpc } from './conversation';
 import { registerConversationAttachmentIpc } from './conversation-attachment';
 import { registerDownloadIpc } from './download';
 import { registerManagedChatGptIpc } from './managed-chatgpt';
+import { registerSubscriptionIpc } from './subscription';
 import { registerMcpIpc } from './mcp';
 import { registerNetworkIpc } from './network';
 import { registerOnboardingIpc } from './onboarding';
@@ -44,6 +45,7 @@ export const MAIN_IPC_CONTRIBUTIONS = [
   registerClaudeExecutionSettingsIpc,
   registerCodexIpc,
   registerManagedChatGptIpc,
+  registerSubscriptionIpc,
   registerRouterIpc,
   registerClaudeConnectionIpc,
   registerClaudeLaunchIpc,

@@ -49,6 +49,7 @@ type QuitServiceOverrides = Partial<
     | 'codexRuntime'
     | 'downloadEngine'
     | 'managedChatGptGateway'
+    | 'subscriptionService'
     | 'nativeConversationService'
     | 'runtimeProcessRegistry',
     unknown
@@ -66,6 +67,7 @@ export const createQuitServices = async (
     CODEX_RUNTIME,
     DOWNLOAD_ENGINE,
     MANAGED_CHATGPT_GATEWAY,
+    SUBSCRIPTION_SERVICE,
     NATIVE_CONVERSATION_SERVICE,
     RUNTIME_PROCESS_REGISTRY,
   } = await import('../../src/main/infra/service-tokens');
@@ -108,6 +110,14 @@ export const createQuitServices = async (
     (overrides.nativeConversationService ?? {
       activeIds: vi.fn(() => []),
       closeAll: vi.fn(async () => undefined),
+    }) as never,
+  );
+  registerTestService(
+    services,
+    SUBSCRIPTION_SERVICE,
+    (overrides.subscriptionService ?? {
+      shutdown: vi.fn(),
+      shutdownForQuit: vi.fn(async () => undefined),
     }) as never,
   );
   registerTestService(

@@ -15,9 +15,10 @@
 | ---------------------------------------------------------- | --------------------------------------------------------- |
 | [technical.md](reference/technical.md)                     | 各功能域的实现细节、接线与技术约束                        |
 | [project-layout.md](reference/project-layout.md)           | 目录结构、依赖规则、文件体积护栏                          |
-| [ipc-contract.md](reference/ipc-contract.md)               | 全部 212 个通道与 `ControlPanelApi` 212 个 API 成员的映射 |
+| [ipc-contract.md](reference/ipc-contract.md)               | 全部 219 个通道与 `ControlPanelApi` 219 个 API 成员的映射 |
 | [cli-command-catalog.md](reference/cli-command-catalog.md) | Claude / Codex 斜杠命令清单                               |
 | [provider-access.md](reference/provider-access.md)         | 官方地址、国产模型与订阅范围、自动探测边界                |
+| [subscription-access.md](reference/subscription-access.md) | 订阅账号授权、后台转发、凭据与并发安全、验证限制          |
 
 ## how-to —— 照着做
 

@@ -1,6 +1,7 @@
 import type {
   ClaudeNextConversationConnectionState,
   ManagedChatGptSetupProgress,
+  SubscriptionState,
 } from '../../../shared/contracts';
 import type { ClaudeProviderGroupId, ClaudeProviderId } from '../../../shared/claude/providers';
 import { ManagedChatGptOperationTracker } from './managed-chatgpt-operation';
@@ -14,7 +15,13 @@ export interface ConnectionFormState {
   collapsedProviderGroups: Set<ClaudeProviderGroupId>;
   managedChatGptOperations: ManagedChatGptOperationTracker;
   managedChatGptProgress: ManagedChatGptSetupProgress | undefined;
+  subscription: SubscriptionState | undefined;
+  subscriptionPending: boolean;
+  startSubscription: (() => void) | undefined;
+  cancelSubscription: (() => Promise<boolean>) | undefined;
+  renderSubscription: (() => void) | undefined;
   nextConnection: ClaudeNextConversationConnectionState;
+  nextConnectionRevision: number;
   renderWizard: (() => void) | undefined;
   renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
   wizardStep: 'choice' | 'configure';
@@ -29,7 +36,13 @@ export const createConnectionFormState = (): ConnectionFormState => ({
   collapsedProviderGroups: new Set(),
   managedChatGptOperations: new ManagedChatGptOperationTracker(),
   managedChatGptProgress: undefined,
+  subscription: undefined,
+  subscriptionPending: false,
+  startSubscription: undefined,
+  cancelSubscription: undefined,
+  renderSubscription: undefined,
   nextConnection: {},
+  nextConnectionRevision: 0,
   renderWizard: undefined,
   renderManagedChatGptProgress: undefined,
   wizardStep: 'choice',

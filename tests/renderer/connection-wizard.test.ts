@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   input,
+  change,
   settle,
   withRenderer,
   withTerminalRenderer,
 } from '../helpers/renderer-interaction-fixture';
-import type { ManagedChatGptGatewayState } from '../../src/shared/contracts';
+import type {
+  ClaudeNextConversationConnectionState,
+  ManagedChatGptGatewayState,
+  SubscriptionResult,
+  SubscriptionState,
+} from '../../src/shared/contracts';
 import { claudeProjectState } from '../helpers/renderer-terminal-fixture';
 
 const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
@@ -23,6 +29,170 @@ const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
 });
 
 describe('connection access wizard', () => {
+  it('labels domestic options with subscription/API capsules and opens an account login without key fields', async () => {
+    let finish!: (value: SubscriptionResult) => void;
+    await withRenderer(
+      {
+        setupSubscription: () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="connection"]');
+        harness.click('[data-provider-id="deepseek"]');
+        const select = harness.query<HTMLSelectElement>('#connection-domestic-model');
+        expect(select.querySelector<HTMLOptionElement>('[value="deepseek"]')?.dataset.badge).toBe(
+          'API',
+        );
+        expect(
+          select.querySelector<HTMLOptionElement>('[value="kimi-subscription"]')?.dataset.badge,
+        ).toBe('订阅');
+        change(select, 'kimi-subscription');
+        expect(
+          harness.query('#connection-domestic-model').parentElement?.querySelector('.select__badge')
+            ?.textContent,
+        ).toBe('订阅');
+        harness.click('#connection-wizard-next');
+        expect(harness.query('#claude-config-form').hidden).toBe(true);
+        expect(harness.query('.domestic-subscription-guide').textContent).toContain(
+          '可能会消耗少量 token',
+        );
+        harness.click('#connection-wizard-next');
+        harness.click('#connection-wizard-next');
+        expect(harness.method('setupSubscription')).toHaveBeenCalledExactlyOnceWith(
+          'kimi-subscription',
+        );
+        expect(harness.method('saveNextClaudeConfig')).not.toHaveBeenCalled();
+        finish({
+          ok: false,
+          message: '已取消',
+          state: {
+            revision: 2,
+            phase: 'error',
+            provider: 'kimi-subscription',
+            attempt: 'one',
+            message: '已取消',
+            busy: false,
+            cancellable: false,
+          },
+        });
+        await harness.flush();
+      },
+    );
+  });
+
+  it('uses the exact main-owned attempt for cancellation and ignores stale subscription snapshots', async () => {
+    let finish!: (value: SubscriptionResult) => void;
+    const active: SubscriptionState = {
+      revision: 8,
+      phase: 'authorizing',
+      provider: 'kimi-subscription',
+      attempt: 'current-attempt',
+      busy: true,
+      cancellable: true,
+      message: '请在浏览器中完成登录。',
+      userCode: 'ABCD',
+    };
+    const stopped: SubscriptionState = {
+      ...active,
+      revision: 9,
+      phase: 'error',
+      busy: false,
+      cancellable: false,
+      message: '已取消',
+      userCode: undefined,
+    };
+    await withRenderer(
+      {
+        setupSubscription: () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+        cancelSubscriptionSetup: async () => {
+          const result = { ok: true, message: '已取消', state: stopped };
+          finish({ ...result, ok: false });
+          return result;
+        },
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="connection"]');
+        harness.click('[data-provider-id="deepseek"]');
+        change(harness.query<HTMLSelectElement>('#connection-domestic-model'), 'kimi-subscription');
+        harness.click('#connection-wizard-next');
+        harness.click('#connection-wizard-next');
+        harness.emit('onSubscriptionState', active);
+        harness.emit('onSubscriptionState', {
+          ...active,
+          revision: 2,
+          busy: false,
+          cancellable: false,
+          message: 'stale',
+        });
+        expect(harness.query('#connection-wizard-status').textContent).toBe(active.message);
+        expect(harness.query('.subscription-user-code').textContent).toContain('ABCD');
+        expect(harness.query<HTMLButtonElement>('#connection-wizard-next').disabled).toBe(true);
+        harness.click('#connection-wizard-previous');
+        await harness.flush();
+        expect(harness.method('cancelSubscriptionSetup')).toHaveBeenCalledExactlyOnceWith(
+          'current-attempt',
+        );
+        expect(harness.query('[data-connection-wizard-step="choice"]').hidden).toBe(false);
+        expect(harness.method('saveNextClaudeConfig')).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it('does not let a slow startup read overwrite a newly connected subscription', async () => {
+    let finishRead!: (value: ClaudeNextConversationConnectionState) => void;
+    const connected: ClaudeNextConversationConnectionState = {
+      config: {
+        preset: 'kimi-subscription',
+        provider: 'gateway',
+        protocol: 'anthropic',
+        baseUrl: 'http://127.0.0.1:18520/s/' + 'a'.repeat(32),
+        authMode: 'authToken',
+        credentialConfigured: true,
+        model: 'kimi-for-coding',
+        apiKeyHelperPolicy: 'prefer-claudedock',
+      },
+    };
+    await withRenderer(
+      {
+        getNextClaudeConnection: () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+        setupSubscription: async () => ({
+          ok: true,
+          message: '订阅已连接。',
+          nextConnection: connected,
+          state: {
+            revision: 3,
+            attempt: 'new',
+            provider: 'kimi-subscription',
+            phase: 'complete',
+            busy: false,
+            cancellable: false,
+            message: '订阅已连接。',
+          },
+        }),
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="connection"]');
+        harness.click('[data-provider-id="deepseek"]');
+        change(harness.query<HTMLSelectElement>('#connection-domestic-model'), 'kimi-subscription');
+        harness.click('#connection-wizard-next');
+        harness.click('#connection-wizard-next');
+        await harness.flush();
+        expect(harness.method('setupSubscription')).toHaveBeenCalledOnce();
+        finishRead({});
+        await harness.flush();
+        expect(harness.query<HTMLSelectElement>('#claude-preset').value).toBe('kimi-subscription');
+        expect(harness.query('#current-connection-name').textContent).toContain('Kimi');
+      },
+    );
+  });
   it('shows only the key for domestic presets and preserves fields when advanced settings are toggled', async () => {
     await withRenderer(
       {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SUBSCRIPTION_PROVIDERS } from '../claude/subscriptions';
 import type {
   ClaudeEffortRequest,
   ClaudeLaunchMode,
@@ -726,6 +727,9 @@ export const IPC_REQUESTS = {
     sessionIdSchema.optional(),
   ]),
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE]: request('getManagedChatGptGatewayState', []),
+  [CHANNELS.SUBSCRIPTION_STATE]: request('getSubscriptionState', []),
+  [CHANNELS.SUBSCRIPTION_SETUP]: request('setupSubscription', [z.enum(SUBSCRIPTION_PROVIDERS)]),
+  [CHANNELS.SUBSCRIPTION_CANCEL]: request('cancelSubscriptionSetup', [z.string().uuid()]),
   [CHANNELS.CLAUDE_MODEL_OPTIONS]: request('getClaudeModelOptions', [sessionIdSchema]),
   [CHANNELS.CLAUDE_PERMISSION_RESPONSE]: request('respondClaudePermission', [
     z.string(),
@@ -987,6 +991,7 @@ export const IPC_EVENT_METHODS = {
   [CHANNELS.BUSY_CHANGED]: 'onBusyChanged',
   [CHANNELS.CHAT_STREAM]: 'onChatStream',
   [CHANNELS.CLAUDE_MANAGED_CHATGPT_SETUP_PROGRESS]: 'onManagedChatGptSetupProgress',
+  [CHANNELS.SUBSCRIPTION_CHANGED]: 'onSubscriptionState',
   [CHANNELS.CLAUDE_PERMISSION_MODE_PROBE]: 'onClaudePermissionModeProbe',
   [CHANNELS.CLAUDE_PERMISSION_REQUEST]: 'onClaudePermissionRequest',
   [CHANNELS.CLAUDE_STATE]: 'onClaudeState',

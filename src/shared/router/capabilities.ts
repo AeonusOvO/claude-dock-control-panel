@@ -12,8 +12,18 @@ const OPENAI_API: RouterCapability = {
   reason: 'OpenAI 兼容 API 由本地路由器自动转换。',
   verifiedAt: '2026-08-27',
 };
+const SUBSCRIPTION_RELAY: RouterCapability = {
+  mode: 'direct',
+  reason: '由 ClaudeDock 后台订阅代理托管授权，不需要 CCR。',
+  verifiedAt: '2026-08-27',
+};
 
 export const ROUTER_CAPABILITIES: Readonly<Record<ClaudeProviderId, RouterCapability>> = {
+  'kimi-subscription': SUBSCRIPTION_RELAY,
+  'minimax-subscription-cn': SUBSCRIPTION_RELAY,
+  'minimax-subscription-global': SUBSCRIPTION_RELAY,
+  'glm-subscription-cn': SUBSCRIPTION_RELAY,
+  'glm-subscription-global': SUBSCRIPTION_RELAY,
   'glm-api': OPENAI_API,
   'qwen-api': OPENAI_API,
   'doubao-api': OPENAI_API,

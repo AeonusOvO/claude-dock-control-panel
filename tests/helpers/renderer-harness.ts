@@ -176,6 +176,14 @@ export const createRendererHarness = async (
       };
     }
     switch (name) {
+      case 'getSubscriptionState':
+        return Promise.resolve({
+          revision: 0,
+          busy: false,
+          cancellable: false,
+          phase: 'idle',
+          message: '',
+        });
       case 'getAppSettings':
         return Promise.resolve(defaultAppSettings);
       case 'getStartupModelConnection':

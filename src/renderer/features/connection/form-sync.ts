@@ -73,7 +73,12 @@ export const createConnectionFormSyncActions = (
   };
 
   const syncConnectionInteractivity = (): void => {
-    const busy = connectionFeature.isTestInProgress() || connectionFeature.isRemedyInProgress();
+    const busy =
+      connectionFeature.isTestInProgress() ||
+      connectionFeature.isRemedyInProgress() ||
+      formState.subscriptionPending ||
+      formState.subscription?.busy === true ||
+      formState.managedChatGptOperations.busy;
     providerPicker.setAttribute('aria-disabled', String(busy));
     providerPicker.inert = busy;
     claudeConfigForm.inert = !formState.connectionEnvironmentReady || busy;

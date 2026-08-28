@@ -13,6 +13,7 @@ export type * from './control-panel-api';
 export type * from './diagnostics';
 export type * from './download';
 export type * from './managed-chatgpt';
+export type * from './subscription';
 export type * from './mcp';
 export type * from './network';
 export type * from './onboarding';

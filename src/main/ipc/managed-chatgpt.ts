@@ -142,8 +142,11 @@ const createManagedChatGptGlobalOperations = ({
         detail: string,
         active = true,
       ): void => emitManagedChatGptProgress(undefined, stage, step, detail, active, 8);
+      let releaseConnection: (() => void) | undefined;
       try {
         const runtime = requireClaudeRuntime();
+        const reservation = runtime.reserveNextConversationConnection();
+        releaseConnection = reservation.release;
         const operation = async (): Promise<ManagedChatGptGatewayOperationResult> => {
           progress('detecting', 1, '正在检测 Claude Code、登录网关与本机端口。');
           let environment = await runtime.getSoftwareUpdates(true);
@@ -185,6 +188,7 @@ const createManagedChatGptGlobalOperations = ({
               progress('testing', 7, '连接首次失败，正在自动重启网关并复检。');
               await requireManagedChatGptGateway().ensureRunning();
             },
+            { reservation: reservation.token },
           );
           const state = await requireManagedChatGptGateway().getState();
           if (!applied.connectionTest.ok) {
@@ -230,6 +234,8 @@ const createManagedChatGptGlobalOperations = ({
           ok: false,
           state,
         };
+      } finally {
+        releaseConnection?.();
       }
     };
 

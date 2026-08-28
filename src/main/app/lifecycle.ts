@@ -17,6 +17,7 @@ import {
   DOWNLOAD_ENGINE,
   MAIN_WINDOW,
   MANAGED_CHATGPT_GATEWAY,
+  SUBSCRIPTION_SERVICE,
   NATIVE_CONVERSATION_SERVICE,
   RUNTIME_PROCESS_REGISTRY,
 } from '../infra/service-tokens';
@@ -138,6 +139,7 @@ const shutdownRuntimeForControlledQuit = ({
     () => chatService.shutdown(),
     () => services.resolve(CLAUDE_RUNTIME).shutdown(),
     () => services.resolve(MANAGED_CHATGPT_GATEWAY).shutdown(),
+    () => services.resolve(SUBSCRIPTION_SERVICE).shutdown(),
     () => services.resolve(CODEX_RUNTIME).dispose(),
     () => workspace.shutdown(),
     () => sweepPowershellTrees(),
@@ -352,6 +354,15 @@ const runControlledQuitCleanup = async (
       (error) => {
         processCleanupFailed = true;
         reportQuitFailure('退出前无法完成 ChatGPT 托管网关清理。', error);
+      },
+    ),
+  );
+  cleanupOperations.push(
+    isolateQuitCleanup(
+      () => services.resolve(SUBSCRIPTION_SERVICE).shutdownForQuit(),
+      (error) => {
+        processCleanupFailed = true;
+        reportQuitFailure('退出前无法完成订阅后台清理。', error);
       },
     ),
   );

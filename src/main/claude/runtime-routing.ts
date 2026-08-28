@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { isSubscriptionProvider } from '../../shared/claude/subscriptions';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type {
@@ -81,6 +82,13 @@ export abstract class ClaudeRuntimeRouting {
   protected readonly routerManager: ClaudeRouterManager;
   private readonly gatewayDetector = new ClaudeGatewayDetector();
   private launchAdmissionGuard: () => void = () => undefined;
+  private ensureSubscriptionRelay: () => Promise<void> = async () => {
+    throw new Error('订阅后台尚未就绪。');
+  };
+
+  public setSubscriptionRelayStarter(start: () => Promise<void>): void {
+    this.ensureSubscriptionRelay = start;
+  }
 
   protected constructor(
     userDataPath: string,
@@ -359,6 +367,7 @@ export abstract class ClaudeRuntimeRouting {
   }
 
   protected routeKindForConfig(config: NormalizedClaudeConfig): ClaudeRouteKind {
+    if (isSubscriptionProvider(config.preset)) return 'managed-subscription';
     if (config.preset === 'chatgpt-subscription') {
       return 'managed-chatgpt';
     }
@@ -369,7 +378,9 @@ export abstract class ClaudeRuntimeRouting {
     routeKind: ClaudeRouteKind,
     excludedSessionId?: string,
   ): Promise<void> {
-    if (routeKind === 'direct') {
+    // The embedded subscription relay is cheap and lives until main-process shutdown. Keeping its
+    // bound socket avoids a stop/start race or another process taking over a persisted endpoint.
+    if (routeKind === 'direct' || routeKind === 'managed-subscription') {
       return;
     }
     const stopped = await this.routeLifecycle.stopWhenUnused({
@@ -401,6 +412,11 @@ export abstract class ClaudeRuntimeRouting {
     cwd: string,
   ): Promise<boolean> {
     this.assertLaunchAdmissionAllowed();
+    if (routeKind === 'managed-subscription') {
+      await this.ensureSubscriptionRelay();
+      this.assertLaunchAdmissionAllowed();
+      return false;
+    }
     if (routeKind === 'managed-chatgpt') {
       return this.routeLifecycle
         .runExclusive(() => {

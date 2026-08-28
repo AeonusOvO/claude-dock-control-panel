@@ -1,4 +1,5 @@
 import type { OnboardingState } from '../../../shared/contracts';
+import { isSubscriptionProvider } from '../../../shared/claude/subscriptions';
 import { findClaudeProvider, type ClaudeProviderId } from '../../../shared/claude/providers';
 import {
   claudeConfigForm,
@@ -99,6 +100,28 @@ const createConnectionActionsMotion = (element: HTMLElement): ConnectionActionsM
   return { animateFrom, cancel, getRect: () => element.getBoundingClientRect() };
 };
 
+const submitConfiguredConnection = (
+  deps: ConnectionFormDeps,
+  formState: ConnectionFormState,
+): void => {
+  if (isSubscriptionProvider(formState.selectedProviderId)) {
+    formState.startSubscription?.();
+    return;
+  }
+  if (formState.selectedProviderId === 'chatgpt-subscription') {
+    const action = providerSpecialSetup.querySelector<HTMLButtonElement>(
+      '.subscription-gateway-status > button',
+    );
+    if (!action || action.disabled) {
+      deps.showToast('ChatGPT 接入状态正在准备，请稍候。');
+      return;
+    }
+    action.click();
+    return;
+  }
+  claudeConfigForm.requestSubmit();
+};
+
 export const createConnectionFormWizardActions = (
   deps: ConnectionFormDeps,
   formState: ConnectionFormState,
@@ -114,6 +137,8 @@ export const createConnectionFormWizardActions = (
   const actionsMotion = createConnectionActionsMotion(connectionWizardActions);
 
   const operationBusy = (): boolean =>
+    formState.subscriptionPending ||
+    formState.subscription?.busy === true ||
     formState.managedChatGptOperations.busy ||
     deps.connectionFeature.isTestInProgress() ||
     deps.connectionFeature.isRemedyInProgress();
@@ -123,9 +148,10 @@ export const createConnectionFormWizardActions = (
     const busy = operationBusy();
     const progressMatchesCurrentScope = formState.managedChatGptProgress?.sessionId === undefined;
     const interruptible =
-      progressMatchesCurrentScope &&
-      formState.managedChatGptProgress?.active === true &&
-      formState.managedChatGptProgress.interruptible;
+      formState.subscription?.cancellable === true ||
+      (progressMatchesCurrentScope &&
+        formState.managedChatGptProgress?.active === true &&
+        formState.managedChatGptProgress.interruptible);
     connectionWizardChoiceProgress.dataset.state = configure ? 'completed' : 'active';
     connectionWizardConfigureProgress.dataset.state = configure ? 'active' : 'pending';
     connectionWizardChoiceProgress.disabled = !configure || (busy && !interruptible);
@@ -136,6 +162,7 @@ export const createConnectionFormWizardActions = (
       !formState.selectedProviderId ||
       (configure &&
         formState.selectedProviderId !== 'chatgpt-subscription' &&
+        !isSubscriptionProvider(formState.selectedProviderId) &&
         !formState.connectionEnvironmentReady);
 
     if (!configure) {
@@ -144,8 +171,12 @@ export const createConnectionFormWizardActions = (
       connectionWizardNextButton.textContent = '下一步';
       return;
     }
-    connectionWizardNextButton.textContent = '连接并保存';
-    if (progressMatchesCurrentScope && formState.managedChatGptProgress?.active) {
+    connectionWizardNextButton.textContent = isSubscriptionProvider(formState.selectedProviderId)
+      ? '登录并连接'
+      : '连接并保存';
+    if (formState.subscription?.busy || formState.subscriptionPending) {
+      connectionWizardStatus.textContent = formState.subscription?.message || '正在准备…';
+    } else if (progressMatchesCurrentScope && formState.managedChatGptProgress?.active) {
       connectionWizardStatus.textContent = interruptible
         ? `${formState.managedChatGptProgress.detail} · 可返回并取消`
         : `${formState.managedChatGptProgress.detail} · 当前步骤不可打断`;
@@ -155,6 +186,7 @@ export const createConnectionFormWizardActions = (
       connectionWizardStatus.textContent = '正在修复接入配置，完成前不可返回';
     } else if (
       formState.selectedProviderId !== 'chatgpt-subscription' &&
+      !isSubscriptionProvider(formState.selectedProviderId) &&
       !formState.connectionEnvironmentReady
     ) {
       connectionWizardStatus.textContent = '请先完成 Claude Code 环境准备';
@@ -220,6 +252,10 @@ export const createConnectionFormWizardActions = (
       showStep('choice');
       return;
     }
+    if (formState.subscription?.cancellable) {
+      if (await formState.cancelSubscription?.()) showStep('choice');
+      return;
+    }
     const progress = formState.managedChatGptProgress;
     if (!progress || progress.sessionId !== undefined || !progress.interruptible) {
       return;
@@ -256,24 +292,14 @@ export const createConnectionFormWizardActions = (
     }
     if (
       formState.selectedProviderId !== 'chatgpt-subscription' &&
+      !isSubscriptionProvider(formState.selectedProviderId) &&
       !formState.connectionEnvironmentReady
     ) {
       environmentSetup.scrollIntoView({ behavior: userScrollBehavior(), block: 'center' });
       deps.showToast('请先安装或更新 Claude Code。', 'error');
       return;
     }
-    if (formState.selectedProviderId === 'chatgpt-subscription') {
-      const action = providerSpecialSetup.querySelector<HTMLButtonElement>(
-        '.subscription-gateway-status > button',
-      );
-      if (!action || action.disabled) {
-        deps.showToast('ChatGPT 接入状态正在准备，请稍候。');
-        return;
-      }
-      action.click();
-      return;
-    }
-    claudeConfigForm.requestSubmit();
+    submitConfiguredConnection(deps, formState);
   };
 
   connectionWizardPreviousButton.addEventListener('click', handlePrevious);

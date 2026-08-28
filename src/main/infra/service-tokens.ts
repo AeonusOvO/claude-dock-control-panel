@@ -1,4 +1,5 @@
 import type { BrowserWindow, Session, Tray } from 'electron';
+import type { SubscriptionService } from '../subscriptions/service';
 import type { CcSwitchAdapter } from '../claude/cc-switch-adapter';
 import type { ClaudeExecutionInstallationProvider } from '../claude/execution-settings-installation';
 import type {
@@ -67,6 +68,8 @@ export const MAIN_WINDOW =
   createRegistryToken<ServiceReference<BrowserWindow>>('main-window-reference');
 export const MANAGED_CHATGPT_GATEWAY =
   createRegistryToken<ManagedChatGptGateway>('managed-chatgpt-gateway');
+export const SUBSCRIPTION_SERVICE =
+  createRegistryToken<SubscriptionService>('subscription-service');
 export const MCP_MANAGER = createRegistryToken<McpManager>('mcp-manager');
 export const NATIVE_CONVERSATION_SERVICE = createRegistryToken<NativeConversationService>(
   'native-conversation-service',

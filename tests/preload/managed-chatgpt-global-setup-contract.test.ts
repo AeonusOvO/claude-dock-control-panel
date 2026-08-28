@@ -183,7 +183,9 @@ describe('managed ChatGPT projectless setup contract', () => {
         }
       },
     ) as unknown as MainGuards['withOfficialProviderAccess'];
+    const reservation = { token: Symbol('connection'), release: vi.fn() };
     const runtime = {
+      reserveNextConversationConnection: vi.fn(() => reservation),
       getNextConversationConnection: vi.fn(async () => {
         expect(providerAccessActive).toBe(true);
         routeEvents.push('next-connection-read');
@@ -238,6 +240,13 @@ describe('managed ChatGPT projectless setup contract', () => {
     expect(second).toEqual(success);
     expect(setup).toHaveBeenCalledOnce();
     expect(setup).toHaveBeenCalledWith(false, expect.any(Function));
+    expect(runtime.reserveNextConversationConnection).toHaveBeenCalledOnce();
+    expect(runtime.verifyAndSaveNextConversationConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ preset: 'chatgpt-subscription' }),
+      expect.any(Function),
+      { reservation: reservation.token },
+    );
+    expect(reservation.release).toHaveBeenCalledOnce();
     expect(withOfficialProviderAccess).toHaveBeenCalledOnce();
     expect(withOfficialProviderAccess).toHaveBeenCalledWith(
       {
@@ -260,6 +269,18 @@ describe('managed ChatGPT projectless setup contract', () => {
     expect(providerAccessActive).toBe(false);
     expect(runtime.nextConversationConnectionScope).toHaveBeenCalledOnce();
     expect(getStatus).not.toHaveBeenCalled();
+
+    runtime.reserveNextConversationConnection.mockImplementationOnce(() => {
+      throw new Error('已有订阅接入正在进行');
+    });
+    getState.mockResolvedValueOnce(state);
+    runtime.getNextConversationConnection.mockResolvedValueOnce({});
+    expect(
+      await ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, undefined),
+    ).toMatchObject({ ok: false });
+    expect(setup).toHaveBeenCalledOnce();
+    expect(runtime.getSoftwareUpdates).toHaveBeenCalledOnce();
+    expect(reservation.release).toHaveBeenCalledOnce();
   });
 
   it('submits setup through the renderer coordinator without an active project', async () => {

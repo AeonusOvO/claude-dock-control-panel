@@ -20,6 +20,7 @@ import { claudePluginBridge } from '../../src/preload/bridges/claude-plugin';
 import { codexBridge } from '../../src/preload/bridges/codex';
 import { downloadBridge } from '../../src/preload/bridges/download';
 import { managedChatgptBridge } from '../../src/preload/bridges/managed-chatgpt';
+import { subscriptionBridge } from '../../src/preload/bridges/subscription';
 import { mcpBridge } from '../../src/preload/bridges/mcp';
 import { nativeAttachmentBridge } from '../../src/preload/bridges/native-attachment';
 import { nativeConversationBridge } from '../../src/preload/bridges/native-conversation';
@@ -60,6 +61,7 @@ const bridgeFragments = [
   claudeExecutionSettingsBridge,
   claudePluginBridge,
   managedChatgptBridge,
+  subscriptionBridge,
   routerBridge,
   codexBridge,
   mcpBridge,
@@ -125,11 +127,11 @@ const executionSettingsDto: ClaudeExecutionSettingsDto = {
 
 describe('IPC contract consistency', () => {
   it('keeps the channel partitions complete and disjoint', () => {
-    expect(REQUEST_CHANNELS).toHaveLength(184);
+    expect(REQUEST_CHANNELS).toHaveLength(187);
     expect(SEND_CHANNELS).toHaveLength(7);
-    expect(EVENT_CHANNELS).toHaveLength(24);
-    expect(IPC_CHANNELS).toHaveLength(215);
-    expect(new Set(IPC_CHANNELS).size).toBe(215);
+    expect(EVENT_CHANNELS).toHaveLength(25);
+    expect(IPC_CHANNELS).toHaveLength(219);
+    expect(new Set(IPC_CHANNELS).size).toBe(219);
     expect(new Set([...REQUEST_CHANNELS, ...SEND_CHANNELS, ...EVENT_CHANNELS])).toEqual(
       new Set(IPC_CHANNELS),
     );
@@ -214,27 +216,27 @@ describe('IPC contract consistency', () => {
     await expect(api.restoreClaudeExecutionSettingsDefault()).rejects.toThrow();
   });
 
-  it('assembles all 215 API members without duplicate bridge ownership', () => {
+  it('assembles all 219 API members without duplicate bridge ownership', () => {
     const declaredMembers = bridgeFragments.flatMap((fragment) => Object.keys(fragment));
-    expect(declaredMembers).toHaveLength(215);
-    expect(new Set(declaredMembers).size).toBe(215);
-    expect(Object.keys(api)).toHaveLength(215);
+    expect(declaredMembers).toHaveLength(219);
+    expect(new Set(declaredMembers).size).toBe(219);
+    expect(Object.keys(api)).toHaveLength(219);
   });
 
   it('maps every IPC-backed member and records the local and auxiliary exceptions', () => {
     const requestMethods = Object.values(IPC_REQUESTS).map(({ method }) => method);
     const sendMethods = Object.values(IPC_SEND_METHODS);
     const eventMethods = Object.values(IPC_EVENT_METHODS);
-    expect(new Set(requestMethods).size).toBe(184);
+    expect(new Set(requestMethods).size).toBe(187);
     expect(new Set(sendMethods).size).toBe(7);
-    expect(new Set(eventMethods).size).toBe(24);
+    expect(new Set(eventMethods).size).toBe(25);
 
     const mappedMethods = new Set<keyof ControlPanelApi>([
       ...requestMethods,
       ...sendMethods,
       ...eventMethods,
     ]);
-    expect(mappedMethods.size).toBe(214);
+    expect(mappedMethods.size).toBe(218);
     expect(
       Object.keys(api).filter((method) => !mappedMethods.has(method as keyof ControlPanelApi)),
     ).toEqual(['getDroppedPath']);

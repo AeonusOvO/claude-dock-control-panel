@@ -1,6 +1,12 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
-const commonExcludes = [...configDefaults.exclude, '**/.claude/worktrees/**'];
+// Research checkouts and generated artifacts are data, never executable project tests.
+const commonExcludes = [
+  ...configDefaults.exclude,
+  '**/.claude/worktrees/**',
+  '**/work/**',
+  '**/outputs/**',
+];
 
 const electronMockIsolatedTests = [
   'tests/main/claude-runtime-diagnostics.test.ts',

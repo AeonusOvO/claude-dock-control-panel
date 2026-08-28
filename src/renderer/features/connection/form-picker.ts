@@ -62,6 +62,14 @@ export const createConnectionFormPickerActions = (
   };
 
   const selectProvider = (providerId: ClaudeProviderId): void => {
+    if (
+      connectionFeature.isTestInProgress() ||
+      connectionFeature.isRemedyInProgress() ||
+      formState.subscriptionPending ||
+      formState.subscription?.busy ||
+      formState.managedChatGptOperations.busy
+    )
+      return;
     applyPresetUi(providerId, false);
     claudeCredential.value = '';
     connectionFeature.clearTestResult();
@@ -89,7 +97,11 @@ export const createConnectionFormPickerActions = (
       card.classList.toggle('access-choice-card--selected', selected);
       card.setAttribute('aria-pressed', String(selected));
       card.disabled =
-        connectionFeature.isTestInProgress() || connectionFeature.isRemedyInProgress();
+        connectionFeature.isTestInProgress() ||
+        connectionFeature.isRemedyInProgress() ||
+        formState.subscriptionPending ||
+        formState.subscription?.busy === true ||
+        formState.managedChatGptOperations.busy;
 
       const copy = document.createElement('span');
       const title = document.createElement('strong');
@@ -130,13 +142,18 @@ export const createConnectionFormPickerActions = (
       const select = document.createElement('select');
       select.id = 'connection-domestic-model';
       const domesticProviders = CLAUDE_PROVIDERS.filter(
-        (provider) => provider.group === 'domestic',
+        (provider) =>
+          provider.group === 'domestic' &&
+          (!['glm-cn', 'kimi-code'].includes(provider.id) ||
+            formState.selectedProviderId === provider.id),
       );
       select.replaceChildren(
         ...domesticProviders.map((provider) => {
           const option = document.createElement('option');
           option.value = provider.id;
           option.textContent = provider.label;
+          option.dataset.badge = provider.codingPlan ? '订阅' : 'API';
+          option.setAttribute('aria-label', `${option.dataset.badge} · ${provider.label}`);
           return option;
         }),
       );
@@ -145,6 +162,12 @@ export const createConnectionFormPickerActions = (
           ? (formState.selectedProviderId ?? 'deepseek')
           : 'deepseek';
       select.value = selectedDomestic;
+      select.disabled =
+        connectionFeature.isTestInProgress() ||
+        connectionFeature.isRemedyInProgress() ||
+        formState.subscriptionPending ||
+        formState.subscription?.busy === true ||
+        formState.managedChatGptOperations.busy;
       const hint = document.createElement('small');
       hint.textContent = `当前已选择 ${findClaudeProvider(selectedDomestic)?.label ?? 'DeepSeek'}`;
       select.addEventListener('change', () => {

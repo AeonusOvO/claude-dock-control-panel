@@ -87,6 +87,9 @@ const requestChannels = {
   CLAUDE_MANAGED_CHATGPT_GATEWAY_OPEN_MANAGEMENT: 'claude:managed-chatgpt-gateway-open-management',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP: 'claude:managed-chatgpt-gateway-setup',
   CLAUDE_MANAGED_CHATGPT_GATEWAY_STATE: 'claude:managed-chatgpt-gateway-state',
+  SUBSCRIPTION_STATE: 'subscription:state',
+  SUBSCRIPTION_SETUP: 'subscription:setup',
+  SUBSCRIPTION_CANCEL: 'subscription:cancel',
   CLAUDE_MODEL_OPTIONS: 'claude:model-options',
   CLAUDE_PERMISSION_RESPONSE: 'claude:permission-response',
   CLAUDE_PLUGINS_GET: 'claude:plugins-get',
@@ -265,6 +268,7 @@ const eventChannels = {
 
   // claude
   CLAUDE_MANAGED_CHATGPT_SETUP_PROGRESS: 'claude:managed-chatgpt-setup-progress',
+  SUBSCRIPTION_CHANGED: 'subscription:changed',
   CLAUDE_PERMISSION_MODE_PROBE: 'claude:permission-mode-probe',
   CLAUDE_PERMISSION_REQUEST: 'claude:permission-request',
   CLAUDE_STATE: 'claude:state',

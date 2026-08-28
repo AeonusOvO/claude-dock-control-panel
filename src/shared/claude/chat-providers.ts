@@ -41,7 +41,12 @@ export const assertChatApiAccess = (address: string, credential?: string): void 
     'coding-intl.dashscope.aliyuncs.com',
   ]);
   const codingPath = CLAUDE_PROVIDERS.some((provider) => {
-    if (!provider.codingPlan || provider.id === 'glm-cn' || provider.id === 'glm-global')
+    if (
+      !provider.codingPlan ||
+      !provider.baseUrl ||
+      provider.id === 'glm-cn' ||
+      provider.id === 'glm-global'
+    )
       return false;
     const preset = new URL(provider.baseUrl);
     return (
@@ -52,7 +57,12 @@ export const assertChatApiAccess = (address: string, credential?: string): void 
   const glmCoding =
     ['open.bigmodel.cn', 'api.z.ai'].includes(hostname) &&
     (url.pathname.startsWith('/api/coding/') || url.pathname.startsWith('/api/anthropic'));
-  if (codingHosts.has(hostname) || codingPath || glmCoding) {
+  const localSubscription =
+    hostname === '127.0.0.1' &&
+    Number(url.port) >= 18520 &&
+    Number(url.port) <= 18540 &&
+    /^\/s\/[a-f0-9]{32}(?:\/|$)/.test(url.pathname);
+  if (codingHosts.has(hostname) || codingPath || glmCoding || localSubscription) {
     throw new Error('此订阅用于编程工具，请在“接入”页使用。');
   }
 };

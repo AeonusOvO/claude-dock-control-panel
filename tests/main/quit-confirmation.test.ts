@@ -405,10 +405,15 @@ describe('quit confirmation handshake', () => {
       shutdown: vi.fn(),
       shutdownForQuit: vi.fn(async () => true),
     };
+    const subscriptionService = {
+      shutdown: vi.fn(),
+      shutdownForQuit: vi.fn(async () => undefined),
+    };
     const services = await createQuitServices({
       claudeRuntime,
       codexRuntime,
       managedChatGptGateway,
+      subscriptionService,
       nativeConversationService: {
         activeIds: vi.fn(() => ['conversation-1', 'conversation-2']),
         closeAll: vi.fn(async () => {
@@ -446,6 +451,8 @@ describe('quit confirmation handshake', () => {
     expect(terminateAll).toHaveBeenCalledTimes(2);
     expect(claudeRuntime.shutdown).toHaveBeenCalledTimes(1);
     expect(managedChatGptGateway.shutdown).toHaveBeenCalledTimes(1);
+    expect(subscriptionService.shutdownForQuit).toHaveBeenCalledTimes(2);
+    expect(subscriptionService.shutdown).toHaveBeenCalledTimes(1);
     expect(codexRuntime.dispose).toHaveBeenCalledTimes(1);
     expect(dependencies.workspace.shutdown).toHaveBeenCalledTimes(1);
     expect(dependencies.sweepPowershellTrees).toHaveBeenCalledTimes(1);
