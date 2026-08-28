@@ -3471,10 +3471,13 @@
               <label class="settings-row" for="settings-network-provider-login">
                 <span>
                   <strong>每次登录海外服务时检测</strong>
-                  <small>在 ChatGPT、Claude 官方登录或切换账号前执行；默认开启。</small>
+                  <small>在官方登录、切换接入和启动恢复模型前执行；默认开启。</small>
                 </span>
                 <input id="settings-network-provider-login" type="checkbox" checked />
               </label>
+              <p class="settings-help">
+                两项都关闭后，启动、窗口重新显示和网络变化不再自动预检；仍可手动“重新检测”。关闭预检不影响登录、模型连接验证或正常会话。
+              </p>
               <div class="settings-section-heading">
                 <strong>出口与本机环境</strong>
                 <span>地址只展示脱敏前缀，完整公网 IP 不写入设置或诊断历史。</span>

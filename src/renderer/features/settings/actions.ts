@@ -138,7 +138,8 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
       pending.advanced.networkPreflight.checkOnNewSession !== savedNetwork.checkOnNewSession ||
       pending.advanced.networkPreflight.checkOnProviderLogin !== savedNetwork.checkOnProviderLogin
     ) {
-      await window.controlPanel.setAdvancedSettings(pending.advanced);
+      const settings = await window.controlPanel.setAdvancedSettings(pending.advanced);
+      dependencies.onSettingsLoaded(settings);
     }
     if (pending.theme !== saved.theme) {
       await window.controlPanel.setAppTheme(pending.theme);

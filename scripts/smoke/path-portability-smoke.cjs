@@ -20,6 +20,10 @@ const { NetworkDiagnosticsStore } = moduleAt('network/diagnostics-store.js');
 const { NetworkPreflightService } = moduleAt('network/preflight-service.js');
 const { ProviderAccessGuard } = moduleAt('network/provider-access-guard.js');
 const { ProviderConnectivityProbe } = moduleAt('network/provider-connectivity-probe.js');
+const { AdvancedSettingsStore } = moduleAt('stores/advanced-settings.js');
+const { automaticNetworkPreflightEnabled } = require(
+  path.join(applicationRoot, 'dist', 'shared', 'network-preflight-policy.js'),
+);
 
 const cleanup = () => {
   if (
@@ -63,6 +67,7 @@ app
         dnsLookup: async () => [{ address: '203.0.113.10', family: 4 }],
         resolveProxy: async () => 'DIRECT',
       });
+      const diagnosticsStore = new NetworkDiagnosticsStore(userData);
       const service = new NetworkPreflightService({
         acquireNetworkLease: async (requested) => {
           const scopes = typeof requested === 'string' ? [requested] : requested;
@@ -73,7 +78,7 @@ app
             release() {},
           };
         },
-        diagnosticsStore: new NetworkDiagnosticsStore(userData),
+        diagnosticsStore,
         probe,
         probeWorkingDirectory: userData,
       });
@@ -101,12 +106,52 @@ app
       assert.equal(admitted, 2);
       assert.equal(existsSync(profile), false);
       assert.deepEqual(requests, [{ method: 'GET', authenticated: false }]);
+      const settings = new AdvancedSettingsStore(userData);
+      settings.set({
+        ...settings.get(),
+        networkPreflight: { checkOnNewSession: false, checkOnProviderLogin: false },
+      });
+      const savedSettings = new AdvancedSettingsStore(userData);
+      const configuredGuard = new ProviderAccessGuard(
+        service,
+        () => true,
+        ({ action }) =>
+          automaticNetworkPreflightEnabled(savedSettings.get().networkPreflight, action),
+      );
+      const historyBefore = diagnosticsStore.getView().entries.length;
+      let admittedWithoutPreflight = 0;
+      for (const action of ['login', 'provider-switch', 'cli-launch', 'first-request']) {
+        await configuredGuard.withAllowed({ ...request, action }, async (result) => {
+          assert.equal(result, undefined);
+          admittedWithoutPreflight++;
+          await configuredGuard.withAllowed({ ...request, action }, (nested) => {
+            assert.equal(nested, undefined);
+            admittedWithoutPreflight++;
+          });
+        });
+      }
+      assert.equal(admittedWithoutPreflight, 8);
+      assert.equal(requests.length, 1);
+      assert.equal(diagnosticsStore.getView().entries.length, historyBefore);
+      await service.run({ ...request, action: 'background', force: true }, request.target);
+      assert.equal(requests.length, 2);
+      settings.set({
+        ...settings.get(),
+        networkPreflight: { checkOnNewSession: false, checkOnProviderLogin: true },
+      });
+      await configuredGuard.withAllowed(request, (result) => assert.equal(result.action, 'login'));
+      assert.equal(requests.length, 3);
+      assert(requests.every(({ authenticated }) => !authenticated));
       console.log(
         JSON.stringify({
           packaged,
           version: require(path.join(applicationRoot, 'package.json')).version,
           electron: process.versions.electron,
           admitted,
+          admittedWithoutPreflight,
+          disabledChecksSentNoRequests: true,
+          explicitManualCheckSentRequest: true,
+          reenabledLoginSentRequest: true,
           requests,
           logicalProfileCreated: existsSync(profile),
           relocatedUnicodeDataDirectory: true,

@@ -96,8 +96,8 @@ export const restoreLastConversationModelOnly = async (
     dependencies.assertActive?.();
     dependencies.progress?.({
       ...(accountLabel ? { accountLabel } : {}),
-      detail: '正在执行网络预检，并真实验证最近一次选择的平台和模型。',
-      step: '网络预检与连接验证',
+      detail: '正在连接并验证最近一次选择的平台和模型。',
+      step: '连接验证',
     });
     await dependencies.applyConversationModel(projectPath, conversation, temporarySessionId);
     dependencies.assertActive?.();

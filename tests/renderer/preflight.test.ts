@@ -446,7 +446,7 @@ describe('renderer preflight feature', () => {
         expect(harness.query<HTMLDialogElement>('#network-preflight-dialog').open).toBe(true);
         expect(harness.query('#network-preflight-dialog-summary').textContent).toBe('尚无探测结果');
         expect(harness.query('#network-preflight-reasons').textContent).toContain(
-          '打开工作台后会自动执行首次检查。',
+          '点击“立即重新检测”执行网络检查。',
         );
         expect(harness.query('#network-preflight-paths').textContent).toContain(
           '尚未解析进程网络路径。',

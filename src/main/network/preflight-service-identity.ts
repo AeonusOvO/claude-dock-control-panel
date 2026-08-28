@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type {
   NetworkEnvironmentAssessment,
   NetworkPreflightAction,
@@ -26,6 +27,43 @@ export interface NetworkPreflightIdentity {
   mainRunId: number;
   networkScope: NetworkPreflightScope;
 }
+
+export interface NetworkPreflightRouteIdentity {
+  readonly action: NetworkPreflightAction;
+  readonly canonicalCwd?: string;
+  readonly configurationRevision: string;
+  readonly generation: number;
+  readonly networkScope: NetworkPreflightScope;
+  readonly provider: NetworkProviderId;
+  readonly target?: Readonly<NetworkPreflightTarget>;
+}
+
+export const networkPreflightRequiredScopes = (
+  capture: NetworkPreflightRequestCapture,
+): readonly NetworkPreflightScope[] =>
+  Object.freeze(
+    capture.target || capture.networkScope === 'application'
+      ? [capture.networkScope]
+      : ['application', 'conversation'],
+  );
+
+export const networkRouteRevision = (
+  provider: NetworkProviderId,
+  lease: {
+    readonly scopes: readonly NetworkPreflightScope[];
+    readonly epochs: Readonly<Partial<Record<NetworkPreflightScope, string>>>;
+  },
+  revisionKey: Uint8Array,
+): string => {
+  const epochs = lease.scopes.map((scope) => {
+    const epoch = lease.epochs[scope];
+    if (!epoch) throw new Error(`网络预检作用范围 ${scope} 缺少稳定配置标识。`);
+    return [scope, epoch] as const;
+  });
+  return createHmac('sha256', revisionKey)
+    .update(JSON.stringify([getProviderProfile(provider).profileVersion, epochs]))
+    .digest('base64url');
+};
 
 export const networkPreflightCwdCacheKey = (canonicalCwd: string | undefined): string =>
   canonicalCwd && process.platform === 'win32' ? canonicalCwd.toLowerCase() : (canonicalCwd ?? '');

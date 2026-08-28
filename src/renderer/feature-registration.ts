@@ -208,6 +208,7 @@ const installSettingsFeatures = (
       void features.routerFeature.loadKernelState();
     },
     onSettingsLoaded: (settings) => {
+      features.preflightFeature.setPreferences(settings.advanced.networkPreflight);
       footerShell.setFooterResourcePreference(settings.footerResourcePreference);
       footerShell.setManagedChatGptContextWindowMode(settings.managedChatGptContextWindowMode);
     },

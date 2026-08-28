@@ -105,6 +105,7 @@ const drainMicrotasks = async (): Promise<void> => {
 const createComposition = (
   probe: Pick<ProviderConnectivityProbe, 'run'>,
   events: string[] = [],
+  automaticChecks = true,
 ) => {
   const root = mkdtempSync(path.join(tmpdir(), 'claudedock-proxy-preflight-integration-'));
   fixtureRoots.push(root);
@@ -134,7 +135,7 @@ const createComposition = (
   coordinator.subscribe((scope) => {
     preflightService.invalidate(`application-proxy-${scope}-transition`);
   });
-  const guard = new ProviderAccessGuard(preflightService);
+  const guard = new ProviderAccessGuard(preflightService, undefined, () => automaticChecks);
   return {
     applicationSession,
     conversationSession,
@@ -312,59 +313,62 @@ describe('proxy and preflight integration', () => {
     expect(harness.coordinator.getView().host).toBe('new-route.example.com');
   });
 
-  it('runs an exact nested provider check inside the active lease ahead of a queued save', async () => {
-    const events: string[] = [];
-    const probeRun = vi.fn(async () => successfulObservation());
-    const harness = createComposition({ run: probeRun }, events);
-    await harness.coordinator.initialize();
-    await harness.coordinator.save(proxyInput('nested-old-route.example.com'));
-    events.length = 0;
+  it.each([true, false])(
+    'keeps an exact nested operation ahead of a queued proxy save (automatic checks: %s)',
+    async (automaticChecks) => {
+      const events: string[] = [];
+      const probeRun = vi.fn(async () => successfulObservation());
+      const harness = createComposition({ run: probeRun }, events, automaticChecks);
+      await harness.coordinator.initialize();
+      await harness.coordinator.save(proxyInput('nested-old-route.example.com'));
+      events.length = 0;
 
-    const outerStarted = createSignal();
-    const requestNestedCheck = createSignal();
-    const authorization = harness.guard.withAllowed(
-      { action: 'cli-launch', cwd: 'C:\\workspace', provider: 'openai-codex' },
-      async () => {
-        events.push('outer:start');
-        outerStarted.resolve();
-        await requestNestedCheck.promise;
-        const nested = await harness.guard.withAllowed(
-          { action: 'first-request', cwd: 'C:\\workspace', provider: 'openai-codex' },
-          () => {
-            events.push(`nested:${harness.coordinator.getView().host}`);
-            return 'nested-authorized';
-          },
-        );
-        events.push('outer:finish');
-        return nested;
-      },
-    );
-    await outerStarted.promise;
+      const outerStarted = createSignal();
+      const requestNestedCheck = createSignal();
+      const authorization = harness.guard.withAllowed(
+        { action: 'cli-launch', cwd: 'C:\\workspace', provider: 'openai-codex' },
+        async () => {
+          events.push('outer:start');
+          outerStarted.resolve();
+          await requestNestedCheck.promise;
+          const nested = await harness.guard.withAllowed(
+            { action: 'first-request', cwd: 'C:\\workspace', provider: 'openai-codex' },
+            () => {
+              events.push(`nested:${harness.coordinator.getView().host}`);
+              return 'nested-authorized';
+            },
+          );
+          events.push('outer:finish');
+          return nested;
+        },
+      );
+      await outerStarted.promise;
 
-    let saveSettled = false;
-    const save = harness.coordinator
-      .save(proxyInput('nested-new-route.example.com'))
-      .then((view) => {
-        saveSettled = true;
-        return view;
-      });
-    await drainMicrotasks();
-    expect(saveSettled).toBe(false);
-    expect(harness.coordinator.getView().host).toBe('nested-old-route.example.com');
+      let saveSettled = false;
+      const save = harness.coordinator
+        .save(proxyInput('nested-new-route.example.com'))
+        .then((view) => {
+          saveSettled = true;
+          return view;
+        });
+      await drainMicrotasks();
+      expect(saveSettled).toBe(false);
+      expect(harness.coordinator.getView().host).toBe('nested-old-route.example.com');
 
-    requestNestedCheck.resolve();
-    await expect(authorization).resolves.toBe('nested-authorized');
-    await expect(save).resolves.toMatchObject({ host: 'nested-new-route.example.com' });
+      requestNestedCheck.resolve();
+      await expect(authorization).resolves.toBe('nested-authorized');
+      await expect(save).resolves.toMatchObject({ host: 'nested-new-route.example.com' });
 
-    expect(probeRun).toHaveBeenCalledTimes(2);
-    expect(events).toEqual([
-      'outer:start',
-      'nested:nested-old-route.example.com',
-      'outer:finish',
-      'application:set:http://nested-new-route.example.com:7890',
-      'application:close',
-    ]);
-  });
+      expect(probeRun).toHaveBeenCalledTimes(automaticChecks ? 2 : 0);
+      expect(events).toEqual([
+        'outer:start',
+        'nested:nested-old-route.example.com',
+        'outer:finish',
+        'application:set:http://nested-new-route.example.com:7890',
+        'application:close',
+      ]);
+    },
+  );
 
   it('expires callback authority before a queued microtask can barge ahead of a writer', async () => {
     const events: string[] = [];

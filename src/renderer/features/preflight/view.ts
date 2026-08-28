@@ -6,6 +6,7 @@ import type {
   NetworkPublicAddressObservation,
   NetworkRiskSignal,
 } from '../../../shared/contracts';
+import { automaticNetworkPreflightEnabled } from '../../../shared/network-preflight-policy';
 import type { PreflightElements } from './elements';
 import type { PreflightState } from './state';
 
@@ -433,7 +434,7 @@ const renderNetworkPreflightDetails = (
     elements.networkPreflightDialogSummary.textContent = '尚无探测结果';
     elements.networkPreflightDialogMeta.textContent =
       '探测不调用模型、不读取登录令牌，也不修改系统代理。';
-    replaceList(elements.networkPreflightReasons, [], '打开工作台后会自动执行首次检查。');
+    replaceList(elements.networkPreflightReasons, [], '点击“立即重新检测”执行网络检查。');
     replaceList(elements.networkPreflightPaths, [], '尚未解析进程网络路径。');
     elements.networkPreflightProbes.replaceChildren();
     elements.networkPreflightEnvironment.textContent = '尚未读取辅助环境证据。';
@@ -562,6 +563,33 @@ const renderActiveNetworkPreflight = (context: PreflightViewContext): void => {
   const manualInProgress = operation?.manual ?? false;
   const activeProvider = dependencies.getActiveNetworkProvider();
   const provider = activeProvider ?? state.networkPreflightDisplayProvider;
+  const automaticEnabled = automaticNetworkPreflightEnabled(
+    state.networkPreflightPreferences,
+    'background',
+  );
+  if (
+    !automaticEnabled &&
+    !operation &&
+    (!provider || !state.networkPreflightResults.has(provider))
+  ) {
+    const label = state.networkPreflightPreferences ? '自动网络预检已关闭' : '等待读取网络检测设置';
+    elements.networkPreflightCard.dataset.tone = 'unknown';
+    elements.networkPreflightProvider.textContent = provider
+      ? providerDisplayLabel(provider)
+      : '网络预检';
+    elements.networkPreflightSummary.textContent = label;
+    renderEnvironmentAssessment(elements);
+    elements.settingsNetworkSummary.textContent = label;
+    if (dependencies.isCodexActive()) {
+      dependencies.setCodexFooterConnection({
+        busy: false,
+        disabled: false,
+        label,
+        tone: 'warning',
+      });
+    }
+    return;
+  }
   if (!provider) {
     elements.networkPreflightCard.dataset.tone = 'success';
     elements.networkPreflightProvider.textContent = '自定义网关';

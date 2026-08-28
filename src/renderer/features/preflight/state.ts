@@ -1,5 +1,6 @@
 import type {
   NetworkPreflightAction,
+  NetworkPreflightPreferences,
   NetworkPreflightResult,
   NetworkProviderId,
 } from '../../../shared/contracts';
@@ -12,6 +13,7 @@ export interface PreflightOperationToken {
 }
 
 export interface PreflightState {
+  networkPreflightPreferences?: NetworkPreflightPreferences;
   networkPreflightDialogProvider?: NetworkProviderId;
   networkPreflightDisplayProvider?: NetworkProviderId;
   networkPreflightOperation?: PreflightOperationToken;

@@ -158,8 +158,8 @@ describe('startup model-only restore', () => {
     await expect(restoreLastConversationModelOnly(input)).resolves.toBe('restored');
     expect(progress).toHaveBeenCalledWith({
       accountLabel: 'Anthropic · person@example.com',
-      detail: '正在执行网络预检，并真实验证最近一次选择的平台和模型。',
-      step: '网络预检与连接验证',
+      detail: '正在连接并验证最近一次选择的平台和模型。',
+      step: '连接验证',
     });
     expect(progress).toHaveBeenLastCalledWith({
       accountLabel: 'Anthropic · person@example.com',

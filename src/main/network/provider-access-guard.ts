@@ -276,11 +276,12 @@ export class ProviderAccessGuard {
   public constructor(
     private readonly service: NetworkPreflightService,
     private readonly forceFreshCheck: (request: ProviderAccessRequest) => boolean = () => false,
+    private readonly shouldCheck: (request: ProviderAccessRequest) => boolean = () => true,
   ) {}
 
   public async withAllowed<T>(
     request: ProviderAccessRequest,
-    operation: (result: NetworkPreflightResult) => PromiseLike<T> | T,
+    operation: (result: NetworkPreflightResult | undefined) => PromiseLike<T> | T,
     signal?: AbortSignal,
   ): Promise<T> {
     signal?.throwIfAborted();
@@ -298,6 +299,10 @@ export class ProviderAccessGuard {
       ...(request.networkScope === undefined ? {} : { networkScope: request.networkScope }),
       provider: request.provider,
     });
+    const policyRequest: ProviderAccessRequest = Object.freeze({
+      ...input,
+      ...(capturedTarget === undefined ? {} : { target: capturedTarget }),
+    });
 
     if (parentScope) {
       await waitForInheritedSettlementCheckpoint();
@@ -313,6 +318,41 @@ export class ProviderAccessGuard {
       signal?.throwIfAborted();
       let operationStarted = false;
       try {
+        const enterOperation = (
+          leaseContext: NetworkPreflightLeaseContext,
+          result?: NetworkPreflightResult,
+        ): Promise<T> | T => {
+          signal?.throwIfAborted();
+          if (parentScope && !parentScope.active) {
+            throw new ProviderAccessContextExpiredError();
+          }
+          return this.runOperation(
+            leaseContext,
+            () => {
+              operationStarted = true;
+              return operation(result);
+            },
+            signal,
+          );
+        };
+        if (!this.shouldCheck(policyRequest)) {
+          // Disabling automatic diagnostics does not disable route ownership, cancellation or TLS.
+          // No synthetic successful preflight result is created, cached, recorded or broadcast.
+          return parentScope
+            ? await this.service.runWithExistingRouteLease(
+                input,
+                capturedTarget,
+                parentScope.leaseContext,
+                (leaseContext) => enterOperation(leaseContext),
+                signal,
+              )
+            : await this.service.runWithCurrentRouteLease(
+                input,
+                capturedTarget,
+                (_identity, leaseContext) => enterOperation(leaseContext),
+                signal,
+              );
+        }
         const attemptInput = transientRetries > 0 ? { ...input, fresh: true } : input;
         const run = parentScope
           ? <TResult>(
@@ -347,14 +387,7 @@ export class ProviderAccessGuard {
           if (!access?.allowed || connectivity.status === 'blocked') {
             throw new ProviderAccessBlockedError(result, capturedTarget);
           }
-          return this.runOperation(
-            leaseContext,
-            () => {
-              operationStarted = true;
-              return operation(result);
-            },
-            signal,
-          );
+          return enterOperation(leaseContext, result);
         });
       } catch (error: unknown) {
         if (

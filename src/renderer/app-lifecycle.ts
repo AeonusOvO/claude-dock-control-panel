@@ -344,6 +344,7 @@ export const runStartupSequence = async (runtime: ApplicationRuntime): Promise<v
   void proxyFeature.loadState();
   try {
     initialSettings = await window.controlPanel.getAppSettings();
+    preflightFeature.setPreferences(initialSettings.advanced.networkPreflight);
     const reportedWindowsBuild = initialSettings.windowsBuildNumber;
     setWindowsBuildNumber(
       typeof reportedWindowsBuild === 'number' &&

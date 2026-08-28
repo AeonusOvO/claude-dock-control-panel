@@ -54,6 +54,108 @@ const flush = async (): Promise<void> => {
 };
 
 describe('Claude launch health monitor', () => {
+  it.each([false, true])(
+    'does not start background probes when disabled (seeded: %s)',
+    async (seeded) => {
+      const run = vi.fn(async () => result('allowed'));
+      const onSnapshot = vi.fn();
+      const setTimer = vi.fn();
+      const monitor = new ClaudeLaunchHealthMonitor({
+        isCurrent: () => true,
+        onSnapshot,
+        preflight: { run },
+        setTimer,
+        shouldCheck: () => false,
+      });
+      monitor.start({
+        cwd: 'D:\\Project',
+        ...(seeded
+          ? {
+              initialEvidence: {
+                checkedAt: 100,
+                provider: 'anthropic-claude' as const,
+                status: 'allowed' as const,
+              },
+            }
+          : {}),
+        provider: 'anthropic-claude',
+        ptyGeneration: 1,
+        runtimeLaunchGeneration: 1,
+        sessionId: 'session-1',
+      });
+      await flush();
+      expect(run).not.toHaveBeenCalled();
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(setTimer).not.toHaveBeenCalled();
+      expect(monitor.activeCount()).toBe(0);
+    },
+  );
+
+  it('drops an in-flight result and stops rescheduling after automatic checks are disabled', async () => {
+    let enabled = true;
+    let finish!: (value: NetworkPreflightResult) => void;
+    const run = vi.fn(
+      () =>
+        new Promise<NetworkPreflightResult>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const onSnapshot = vi.fn();
+    const setTimer = vi.fn();
+    const monitor = new ClaudeLaunchHealthMonitor({
+      isCurrent: () => true,
+      onSnapshot,
+      preflight: { run },
+      setTimer,
+      shouldCheck: () => enabled,
+    });
+    monitor.start({
+      cwd: 'D:\\Project',
+      provider: 'anthropic-claude',
+      ptyGeneration: 1,
+      runtimeLaunchGeneration: 1,
+      sessionId: 'session-1',
+    });
+    enabled = false;
+    finish(result('blocked'));
+    await flush();
+    expect(run).toHaveBeenCalledOnce();
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(setTimer).not.toHaveBeenCalled();
+    expect(monitor.activeCount()).toBe(0);
+  });
+
+  it('re-reads the switch before a previously scheduled background check', async () => {
+    let enabled = true;
+    let tick!: () => void;
+    const run = vi.fn(async () => result('allowed'));
+    const setTimer = vi.fn((callback: () => void) => {
+      tick = callback;
+      return { unref: () => undefined } as unknown as NodeJS.Timeout;
+    });
+    const monitor = new ClaudeLaunchHealthMonitor({
+      isCurrent: () => true,
+      onSnapshot: vi.fn(),
+      preflight: { run },
+      setTimer,
+      shouldCheck: () => enabled,
+    });
+    monitor.start({
+      cwd: 'D:\\Project',
+      provider: 'anthropic-claude',
+      ptyGeneration: 1,
+      runtimeLaunchGeneration: 1,
+      sessionId: 'session-1',
+    });
+    await flush();
+    enabled = false;
+    tick();
+    await flush();
+    expect(run).toHaveBeenCalledOnce();
+    expect(setTimer).toHaveBeenCalledOnce();
+    expect(monitor.activeCount()).toBe(0);
+  });
+
   it('checks immediately through NetworkPreflightService and publishes only advisory redacted state', async () => {
     const run = vi.fn(async () => result('blocked', 321));
     const onSnapshot = vi.fn();

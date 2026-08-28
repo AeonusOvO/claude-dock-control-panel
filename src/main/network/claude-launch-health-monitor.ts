@@ -41,6 +41,7 @@ interface ClaudeLaunchHealthMonitorOptions {
   onSnapshot: (key: ClaudeLaunchHealthMonitorKey, snapshot: ClaudeRouteHealth) => void;
   preflight: Pick<NetworkPreflightService, 'run'>;
   random?: () => number;
+  shouldCheck?: () => boolean;
   setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout;
   clearTimer?: (timer: NodeJS.Timeout) => void;
 }
@@ -131,6 +132,7 @@ export class ClaudeLaunchHealthMonitor {
   private readonly preflight: Pick<NetworkPreflightService, 'run'>;
   private readonly random: () => number;
   private readonly setTimer: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+  private readonly shouldCheck: () => boolean;
 
   public constructor(options: ClaudeLaunchHealthMonitorOptions) {
     this.clearTimer = options.clearTimer ?? clearTimeout;
@@ -144,6 +146,7 @@ export class ClaudeLaunchHealthMonitor {
     this.preflight = options.preflight;
     this.random = options.random ?? Math.random;
     this.setTimer = options.setTimer ?? setTimeout;
+    this.shouldCheck = options.shouldCheck ?? (() => true);
   }
 
   /** Synchronously supersedes any older launch monitor for this workspace session. */
@@ -233,7 +236,7 @@ export class ClaudeLaunchHealthMonitor {
   private owns(record: MonitorRecord): boolean {
     if (!record.active || this.monitors.get(record.key.sessionId) !== record) return false;
     try {
-      return this.isCurrent(record.key);
+      return this.shouldCheck() && this.isCurrent(record.key);
     } catch {
       return false;
     }

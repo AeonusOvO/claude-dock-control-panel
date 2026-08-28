@@ -1,15 +1,13 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
-  NetworkPreflightAction,
   NetworkPreflightHistoryView,
   NetworkPreflightResult,
   NetworkPreflightRunInput,
   NetworkPreflightScope,
   NetworkProviderId,
 } from '../../shared/contracts';
-import { getProviderProfile } from '../../shared/router/provider-profiles';
 import { NetworkDiagnosticsStore } from './diagnostics-store';
 import {
   type ConnectivityObservation,
@@ -27,10 +25,20 @@ import {
   type NetworkPreflightIdentity,
   networkPreflightInternalFailureResult,
   type NetworkPreflightRequestCapture,
+  networkPreflightRequiredScopes,
+  type NetworkPreflightRouteIdentity,
   networkPreflightTestingResult,
   networkPreflightUnavailableEnvironmentAssessment,
+  networkRouteRevision,
 } from './preflight-service-identity';
+import {
+  NetworkPreflightLeaseContextError,
+  NetworkPreflightSupersededError,
+} from './preflight-service-errors';
 import { RiskDecisionEngine } from './risk-decision-engine';
+
+export { NetworkPreflightLeaseContextError, NetworkPreflightSupersededError };
+export type { NetworkPreflightRouteIdentity };
 
 /** Automatic checks require live evidence but must not cancel a sibling's identical check. */
 interface NetworkPreflightRequestInput extends NetworkPreflightRunInput {
@@ -74,39 +82,6 @@ interface NetworkPreflightServiceOptions {
   probeWorkingDirectory?: string;
   riskEngine?: RiskDecisionEngine;
   shouldAssessEnvironment?: (input: NetworkPreflightRunInput) => boolean;
-}
-
-export class NetworkPreflightSupersededError extends Error {
-  public constructor(
-    public readonly startedGeneration: number,
-    public readonly currentGeneration: number,
-    public readonly startedRunId?: number,
-    public readonly currentRunId?: number,
-    cause?: unknown,
-  ) {
-    super(
-      '网络预检已被更新的检查或配置取代，本次结果已作废。',
-      cause === undefined ? undefined : { cause },
-    );
-    this.name = 'NetworkPreflightSupersededError';
-  }
-}
-
-export class NetworkPreflightLeaseContextError extends Error {
-  public constructor(message: string) {
-    super(message);
-    this.name = 'NetworkPreflightLeaseContextError';
-  }
-}
-
-export interface NetworkPreflightRouteIdentity {
-  readonly action: NetworkPreflightAction;
-  readonly canonicalCwd?: string;
-  readonly configurationRevision: string;
-  readonly generation: number;
-  readonly networkScope: NetworkPreflightScope;
-  readonly provider: NetworkProviderId;
-  readonly target?: Readonly<NetworkPreflightTarget>;
 }
 
 interface ActiveNetworkPreflightRun {
@@ -195,7 +170,7 @@ export class NetworkPreflightService {
   ): Promise<T> {
     signal?.throwIfAborted();
     const capture = this.captureRequest(input, target);
-    const lease = await this.acquireCallerLease(this.requiredScopes(capture), signal);
+    const lease = await this.acquireCallerLease(networkPreflightRequiredScopes(capture), signal);
     let active: ActiveNetworkPreflightLeaseContext | undefined;
     let leaseContext: NetworkPreflightLeaseContext | undefined;
     const generation = this.generation;
@@ -218,7 +193,7 @@ export class NetworkPreflightService {
       const identity: NetworkPreflightRouteIdentity = Object.freeze({
         action: capture.action,
         ...(capture.canonicalCwd === undefined ? {} : { canonicalCwd: capture.canonicalCwd }),
-        configurationRevision: this.configurationRevision(capture.provider, lease),
+        configurationRevision: networkRouteRevision(capture.provider, lease, this.revisionKey),
         generation,
         networkScope: capture.networkScope,
         provider: capture.provider,
@@ -264,6 +239,51 @@ export class NetworkPreflightService {
     ) => Promise<T> | T,
     signal?: AbortSignal,
   ): Promise<T> {
+    return this.withExistingLease(
+      input,
+      target,
+      leaseContext,
+      (capture, active) =>
+        this.runCapturedWithLease(capture, active.lease, leaseContext, operation, signal),
+      signal,
+    );
+  }
+
+  /** Reuses a live parent route without probing, while retaining its identity and lifetime checks. */
+  public runWithExistingRouteLease<T>(
+    input: NetworkPreflightRunInput,
+    target: NetworkPreflightTarget | undefined,
+    leaseContext: NetworkPreflightLeaseContext,
+    operation: (activeLeaseContext: NetworkPreflightLeaseContext) => Promise<T> | T,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.withExistingLease(
+      input,
+      target,
+      leaseContext,
+      async (_capture, active) => {
+        const generation = this.generation;
+        signal?.throwIfAborted();
+        this.assertRouteCurrent(active.lease, generation);
+        const result = await operation(leaseContext);
+        signal?.throwIfAborted();
+        this.assertRouteCurrent(active.lease, generation);
+        return result;
+      },
+      signal,
+    );
+  }
+
+  private withExistingLease<T>(
+    input: NetworkPreflightRequestInput,
+    target: NetworkPreflightTarget | undefined,
+    leaseContext: NetworkPreflightLeaseContext,
+    operation: (
+      capture: NetworkPreflightRequestCapture,
+      active: ActiveNetworkPreflightLeaseContext,
+    ) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (signal?.aborted) {
       return Promise.reject(abortReasonFor(signal));
     }
@@ -282,13 +302,7 @@ export class NetworkPreflightService {
       return Promise.reject(error);
     }
 
-    const nested = this.runCapturedWithLease(
-      capture,
-      active.lease,
-      leaseContext,
-      operation,
-      signal,
-    );
+    const nested = operation(capture, active);
     active.pending.add(nested);
     void nested.then(
       () => active.pending.delete(nested),
@@ -323,7 +337,7 @@ export class NetworkPreflightService {
     signal?: AbortSignal,
   ): Promise<T> {
     signal?.throwIfAborted();
-    const lease = await this.acquireCallerLease(this.requiredScopes(capture), signal);
+    const lease = await this.acquireCallerLease(networkPreflightRequiredScopes(capture), signal);
     let active: ActiveNetworkPreflightLeaseContext | undefined;
     let leaseContext: NetworkPreflightLeaseContext | undefined;
     let releaseLease = (): void => lease.release();
@@ -380,7 +394,7 @@ export class NetworkPreflightService {
   ): Promise<T> {
     signal?.throwIfAborted();
     this.assertLeaseCurrent(lease, this.generation);
-    const configurationRevision = this.configurationRevision(capture.provider, lease);
+    const configurationRevision = networkRouteRevision(capture.provider, lease, this.revisionKey);
     const key = networkPreflightCacheKey(capture, {
       canonicalCwd: capture.canonicalCwd,
       configurationRevision,
@@ -593,7 +607,7 @@ export class NetworkPreflightService {
   ): Promise<NetworkPreflightResult> {
     try {
       signal.throwIfAborted();
-      const authorityRevision = this.configurationRevision(capture.provider, lease);
+      const authorityRevision = networkRouteRevision(capture.provider, lease, this.revisionKey);
       if (authorityRevision !== identity.configurationRevision) {
         throw new NetworkPreflightSupersededError(
           identity.generation,
@@ -928,33 +942,11 @@ export class NetworkPreflightService {
     lease: NetworkPreflightLease,
     capture: NetworkPreflightRequestCapture,
   ): void {
-    const required = this.requiredScopes(capture);
+    const required = networkPreflightRequiredScopes(capture);
     if (required.some((scope) => !lease.scopes.includes(scope))) {
       throw new NetworkPreflightLeaseContextError('当前网络预检作用范围不能覆盖嵌套网络操作。');
     }
     lease.assertCurrent();
-  }
-
-  private requiredScopes(
-    capture: NetworkPreflightRequestCapture,
-  ): readonly NetworkPreflightScope[] {
-    if (capture.target || capture.networkScope === 'application') {
-      return Object.freeze([capture.networkScope]);
-    }
-    return Object.freeze(['application', 'conversation']);
-  }
-
-  private configurationRevision(provider: NetworkProviderId, lease: NetworkPreflightLease): string {
-    const epochs = lease.scopes.map((scope) => {
-      const epoch = lease.epochs[scope];
-      if (!epoch) {
-        throw new Error(`网络预检作用范围 ${scope} 缺少稳定配置标识。`);
-      }
-      return [scope, epoch] as const;
-    });
-    return createHmac('sha256', this.revisionKey)
-      .update(JSON.stringify([getProviderProfile(provider).profileVersion, epochs]))
-      .digest('base64url');
   }
 
   private assertLeaseCurrent(

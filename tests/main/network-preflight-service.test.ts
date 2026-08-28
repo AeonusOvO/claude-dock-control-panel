@@ -1409,7 +1409,10 @@ describe('NetworkPreflightService', () => {
       probe: { run },
     });
     const guard = new ProviderAccessGuard(service);
-    const operation = vi.fn(async (result: NetworkPreflightResult) => result.status);
+    const operation = vi.fn(async (result: NetworkPreflightResult | undefined) => {
+      expect(result).toBeDefined();
+      return result?.status;
+    });
 
     await expect(
       guard.withAllowed({ action: 'cli-launch', provider: 'openai-codex' }, operation),
@@ -1745,8 +1748,9 @@ describe('NetworkPreflightService', () => {
       });
       const guard = new ProviderAccessGuard(service);
       const operationCwds: (string | undefined)[] = [];
-      const operation = vi.fn((result: NetworkPreflightResult) => {
-        operationCwds.push(result.canonicalCwd);
+      const operation = vi.fn((result: NetworkPreflightResult | undefined) => {
+        expect(result).toBeDefined();
+        operationCwds.push(result?.canonicalCwd);
         return 'started';
       });
 

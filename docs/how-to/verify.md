@@ -31,6 +31,12 @@ npm run build
 匿名回环用例：逻辑 profile 不存在时，仍必须在带中文/空格的独立数据目录内通过；不得靠预先创建 profile
 目录或跳过守卫使测试成功。路径来源与保留的合法绝对路径见[路径与可移植性](../reference/paths.md)。
 
+自动预检开关变更还需运行 main/renderer 的 `automatic-network-preflight`、shared 的
+`network-preflight-policy`、`claude-launch-health-monitor`、`proxy-preflight-integration` 与既有 preflight
+回归：关闭后启动/登录/窗口恢复不探测，手动检测仍可用，且不探测时仍保持路由租约、嵌套身份和取消边界。
+`test:paths` 另通过真实 Electron/curl 与匿名回环收包数验证：持久化关闭后多个动作及嵌套续体均不新增请求，
+手动检测与重新开启登录检测各恢复一次请求；最终 ASAR 使用同一脚本的 `--packaged` 模式复核。
+
 改动跨进程契约、主进程结构、渲染进程结构或构建配置后运行：
 
 ```powershell

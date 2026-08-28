@@ -103,6 +103,7 @@ export interface RendererHarness {
 const defaultAppSettings = {
   advanced: {
     chatIdleTimeoutMinutes: 0 as const,
+    networkPreflight: { checkOnNewSession: true, checkOnProviderLogin: true },
     webResearchIsolation: false,
   },
   artifactNetworkAllowed: true,
@@ -196,6 +197,8 @@ export const createRendererHarness = async (
         });
       case 'getAppSettings':
         return Promise.resolve(defaultAppSettings);
+      case 'setAdvancedSettings':
+        return Promise.resolve({ ...defaultAppSettings, advanced: args[0] });
       case 'getStartupModelConnection':
         return Promise.resolve({
           active: false,

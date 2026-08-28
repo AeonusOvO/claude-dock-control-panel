@@ -86,7 +86,7 @@ describe('network preflight working directory', () => {
     };
     const operation = vi.fn(async () => {
       await guard.withAllowed(request, (nested) => {
-        expect(nested.canonicalCwd).toBe(configScope);
+        expect(nested).toMatchObject({ canonicalCwd: configScope });
       });
       await expect(
         guard.withAllowed({ ...request, cwd: path.join(root, 'another-profile') }, vi.fn()),

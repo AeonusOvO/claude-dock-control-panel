@@ -55,6 +55,7 @@ packaged identity 并生成本地 `release-manifest.json`。`scripts/release/pub
 
 ```
 shared/
+  network-preflight-policy.ts  自动检测开关与动作的纯映射，main/renderer 共用
   contracts/              跨进程类型导出，零运行期代码
     index.ts              桶文件，`export type *` re-export 全部类型
     app.ts artifact.ts chat.ts claude.ts claude-execution-settings.ts
@@ -106,6 +107,10 @@ main/
 handler 之间禁止互相 import：共享只经 `context/guards/validation`，注册只经 `contributions.ts` 聚合器与 `index.ts` 入口（dependency-cruiser 的 error 规则）。
 
 `app/paths.ts` 由 `app.getAppPath()` 单点推导 `preload.js` 与 `index.html` 的位置。此前这两条路径写作 `path.join(__dirname, '..', ...)`，依赖文件所在深度，文件移入子目录后会在打包产物里静默失效。
+
+`network/preflight-service-identity.ts` 持有路由身份、所需 scope 与 epoch 摘要等纯派生；
+`preflight-service-errors.ts` 收口租约失效错误。服务层保留原有导出兼容调用者，探测与不探测的业务入口
+均通过同一套 route lease 生命周期校验，不把关闭自动检测实现为跳过整个网络事务。
 
 ## `src/preload/`
 

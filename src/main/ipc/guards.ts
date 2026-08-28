@@ -43,7 +43,7 @@ export interface MainGuards {
   /** Keeps the checked network route stable until the authorized operation finishes. */
   withOfficialProviderAccess: <T>(
     request: ProviderAccessRequest,
-    operation: (result: NetworkPreflightResult) => PromiseLike<T> | T,
+    operation: (result: NetworkPreflightResult | undefined) => PromiseLike<T> | T,
     signal?: AbortSignal,
   ) => Promise<T>;
   assertPluginMutationsAllowed: () => void;

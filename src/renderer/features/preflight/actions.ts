@@ -1,9 +1,11 @@
 import type {
   ClaudeProvider,
   DevelopmentRuntime,
+  NetworkPreflightPreferences,
   NetworkPreflightResult,
   NetworkProviderId,
 } from '../../../shared/contracts';
+import { automaticNetworkPreflightEnabled } from '../../../shared/network-preflight-policy';
 import type { PreflightElements } from './elements';
 import {
   acceptBackgroundApplicationResult,
@@ -31,6 +33,7 @@ export interface PreflightActions {
     force: boolean,
     providerOverride?: NetworkProviderId,
   ) => Promise<void>;
+  setPreferences: (preferences: NetworkPreflightPreferences) => void;
 }
 
 interface PreflightRunRequest {
@@ -186,6 +189,9 @@ const runActiveNetworkPreflight = (
   providerOverride?: NetworkProviderId,
   supersedeActive = false,
 ): Promise<void> => {
+  if (!automaticNetworkPreflightEnabled(context.state.networkPreflightPreferences, 'background')) {
+    return Promise.resolve();
+  }
   const provider = providerOverride ?? activeNetworkProvider(context);
   if (!provider) {
     if (force) {
@@ -255,6 +261,12 @@ const handleNetworkPreflight = (
   result: NetworkPreflightResult,
 ): void => {
   const { dependencies, elements, state, view } = context;
+  if (
+    !automaticNetworkPreflightEnabled(state.networkPreflightPreferences, 'background') &&
+    !state.networkPreflightOperation?.manual
+  ) {
+    return;
+  }
   if (!acceptBackgroundApplicationResult(state, result)) return;
   const displayedProvider = activeNetworkProvider(context) ?? state.networkPreflightDisplayProvider;
   if (result.provider === displayedProvider) {
@@ -274,6 +286,33 @@ const handleNetworkPreflight = (
     if (!elements.networkPreflightDialog.open && !hasPausedClaudeLaunchDialog()) {
       elements.networkPreflightDialog.showModal();
     }
+  }
+};
+
+const setPreferences = (
+  context: PreflightActionsContext,
+  preferences: NetworkPreflightPreferences,
+): void => {
+  context.state.networkPreflightPreferences = { ...preferences };
+  if (!automaticNetworkPreflightEnabled(preferences, 'background')) {
+    const queued = context.queuedRun;
+    if (queued && !queued.request.manual) {
+      context.queuedRun = undefined;
+      for (const resolve of queued.waiters) resolve();
+    }
+    const active = context.activeRun;
+    if (active && !active.request.manual) {
+      // Detach only presentation ownership. Do not invalidate the main route or interrupt a login,
+      // terminal or explicit manual diagnostic that may be using the same network configuration.
+      context.activeRun = undefined;
+      if (ownsPreflightOperation(context.state, active.operation)) {
+        context.state.networkPreflightOperation = undefined;
+      }
+    }
+    clearTestingBackgroundResults(context.state);
+  }
+  if (!context.dependencies.refreshActiveRuntimeAfterPreflight()) {
+    context.view.renderActiveNetworkPreflight();
   }
 };
 
@@ -421,5 +460,6 @@ export const createPreflightActions = (
     refreshAfterAuthoritativeChange: () => refreshAfterAuthoritativeChange(context),
     runActiveNetworkPreflight: (force, providerOverride) =>
       runActiveNetworkPreflight(context, force, providerOverride),
+    setPreferences: (preferences) => setPreferences(context, preferences),
   };
 };

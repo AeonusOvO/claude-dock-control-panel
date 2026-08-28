@@ -76,6 +76,8 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 `app:set-advanced-settings` 的结构化参数包含 `networkPreflight.checkOnNewSession`、
 `checkOnProviderLogin` 及可选的 CLI-only `cliTimezone` / `cliLanguages`。主进程校验 IANA 时区和
 BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 Windows 系统设置。
+两个布尔值关闭的是对应自动探测，而非只关闭附加环境信息。保存返回的偏好立即更新 renderer；main
+在下次登录、启动、切换接入和健康复查时现读。手动 `network-preflight:run` 仍可显式检测；频道与参数不变。
 
 ### `onboarding`（5）
 

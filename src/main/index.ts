@@ -1,4 +1,5 @@
 import { CHANNELS } from '../shared/ipc/channels';
+import { automaticNetworkPreflightEnabled } from '../shared/network-preflight-policy';
 import { app } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -259,6 +260,8 @@ const launchHealthMonitor = new ClaudeLaunchHealthMonitor({
   preflight: {
     run: (input, target) => services.resolve(NETWORK_PREFLIGHT_SERVICE).run(input, target),
   },
+  shouldCheck: () =>
+    automaticNetworkPreflightEnabled(advancedSettingsStore.get().networkPreflight, 'cli-launch'),
 });
 invalidateLaunchHealthSession = (sessionId) => launchHealthMonitor.invalidateSession(sessionId);
 

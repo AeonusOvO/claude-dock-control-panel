@@ -1,10 +1,11 @@
 import { getClaudeExecutionProfile } from '../../shared/claude/execution-profiles';
 import { CHANNELS } from '../../shared/ipc/channels';
+import { automaticNetworkPreflightEnabled } from '../../shared/network-preflight-policy';
 import { app, net, safeStorage, session, shell, type Session } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import type { TerminalStatus } from '../../shared/contracts';
+import type { NetworkPreflightAction, TerminalStatus } from '../../shared/contracts';
 import { DEFAULT_TERMINAL_THEME } from '../../shared/ui/terminal-themes';
 import { ArtifactService } from '../artifact/service';
 import { ClaudeAgentAdapter } from '../claude/agent-adapter';
@@ -719,6 +720,8 @@ const installDiagnostics = ({
   state,
   workspace,
 }: DiagnosticsBootstrap): void => {
+  const automaticPreflightEnabled = (action: NetworkPreflightAction): boolean =>
+    automaticNetworkPreflightEnabled(advancedSettingsStore.get().networkPreflight, action);
   mainLogger.configureDisk(path.join(app.getPath('userData'), 'diagnostics', 'main.jsonl'));
   services.register(MAIN_LOGGER, () => mainLogger);
   services.register(
@@ -808,14 +811,13 @@ const installDiagnostics = ({
   services.register(
     PROVIDER_ACCESS_GUARD,
     (registry) =>
-      new ProviderAccessGuard(registry.resolve(NETWORK_PREFLIGHT_SERVICE), (request) => {
-        const settings = advancedSettingsStore.get().networkPreflight;
-        return (
-          (request.action === 'cli-launch' && settings.checkOnNewSession) ||
-          ((request.action === 'login' || request.action === 'provider-switch') &&
-            settings.checkOnProviderLogin)
-        );
-      }),
+      new ProviderAccessGuard(
+        registry.resolve(NETWORK_PREFLIGHT_SERVICE),
+        ({ action }) =>
+          ['cli-launch', 'login', 'provider-switch'].includes(action) &&
+          automaticPreflightEnabled(action),
+        ({ action }) => automaticPreflightEnabled(action),
+      ),
   );
   services.register(
     APPLICATION_UPDATER_SERVICE,

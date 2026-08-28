@@ -1,4 +1,9 @@
-import type { NetworkPreflightResult, NetworkProviderId } from '../../../shared/contracts';
+import type {
+  NetworkPreflightPreferences,
+  NetworkPreflightResult,
+  NetworkProviderId,
+} from '../../../shared/contracts';
+import { automaticNetworkPreflightEnabled } from '../../../shared/network-preflight-policy';
 import { createRegistryToken, type Registry } from '../../platform/registry';
 import {
   createPreflightActions,
@@ -28,6 +33,7 @@ export interface PreflightFeature {
     force: boolean,
     providerOverride?: NetworkProviderId,
   ) => Promise<void>;
+  setPreferences: (preferences: NetworkPreflightPreferences) => void;
 }
 
 export const PREFLIGHT_FEATURE = createRegistryToken<PreflightFeature>(
@@ -65,11 +71,13 @@ const createPreflightFeature = (dependencies: PreflightFeatureDependencies): Pre
     hasResult: (provider) => state.networkPreflightResults.has(provider),
     invalidateAndRun: actions.invalidateAndRun,
     isBlocked: (provider) =>
+      automaticNetworkPreflightEnabled(state.networkPreflightPreferences, 'cli-launch') &&
       state.networkPreflightResults.get(provider)?.providerConnectivity.status === 'blocked',
     openNetworkPreflightDialog: actions.openNetworkPreflightDialog,
     refreshAfterAuthoritativeChange: actions.refreshAfterAuthoritativeChange,
     renderActiveNetworkPreflight: view.renderActiveNetworkPreflight,
     runActiveNetworkPreflight: actions.runActiveNetworkPreflight,
+    setPreferences: actions.setPreferences,
   };
 };
 

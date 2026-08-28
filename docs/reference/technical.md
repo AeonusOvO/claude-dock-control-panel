@@ -722,6 +722,11 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   文件加 `renameSync`，权限 `0600`）；version 1 自动迁移，文件损坏、版本不符或字段缺失时回落默认值。
   中转站兼容开关默认关闭；“每次新建会话/登录检测”作为独立安全开关默认开启。运行时在每次创建进程
   前现读，所以改兼容项或 CLI 覆盖不需要重启应用，但不热改已经运行的 PTY。
+- 自动网络检测开关控制是否发起探测，而不只是缓存刷新或附加环境评估。新会话开关覆盖 CLI 启动、
+  首个请求、云端任务与运行中健康复查；登录开关覆盖官方登录、切换接入与启动模型恢复。两项都关闭时，
+  renderer 的启动、可见性、网络变化和设置页不会自动发出预检；显式“重新检测”不受影响。
+  保存后后续动作立即现读偏好；renderer 在设置加载前不抢跑，并丢弃关闭前尚未完成的自动检测反馈。
+  关闭开关不取消已经开始的登录或会话，不关闭代理路由保护、实际 HTTPS/TLS 校验及必要的模型连接测试。
 - 高级设置另有两个只读运行态入口：CCR CLI 管理页与受管 ChatGPT 网关管理页。renderer 每次进入
   该页重新查询主进程；只有对应后台真实运行且管理能力可用时才启用按钮，点击入口本身不启动服务。
   ChatGPT 管理密钥只由主进程写入剪贴板，不通过 preload 返回 renderer。
@@ -1643,8 +1648,8 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   状态经 `showMainWindow()` 恢复时发送 `app:window-restored`；preload 暴露受限订阅，renderer
   清除当前项目的去重标记后再调度一次。窗口一直可见时的 focus、Alt+Tab、visibility 事件不
   清除标记，避免反复消耗 token。若测试队列正忙，自动任务延后重试而不并发。
-- `claude:test-connection` 在主进程重新校验输入。`provider === 'anthropic'` 时先执行
-  `ProviderAccessGuard.assertAllowed('anthropic-claude', 'first-request', cwd)`，通过后才向
+- `claude:test-connection` 在主进程重新校验输入。`provider === 'anthropic'` 时通过
+  `ProviderAccessGuard.withAllowed` 持有当前路由；自动检测开启时还先执行 `first-request` 预检，再向
   官方模型接口发出最小请求；`gateway`（中转站、自定义网关和本地转换器）跳过官方服务商
   预检并直接验证自己的已保存端点。预检是额外防护，不替代真实连接测试。
 - 每次测试按“规范化配置 + 凭据 SHA-256”生成内存指纹，只在当前项目保存的配置与凭据完全
@@ -2067,7 +2072,10 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
    run ID、generation、target、epoch 与 lease currentness。stale result 不写缓存、不记 history、不通知、
    不授权业务。
 9. `ProviderAccessGuard` 在 Codex login/launch、官方 Claude、受管 ChatGPT、official chat first request 和
-   provider switch 等动作的 commit/PTy mutation 前读取 `providerConnectivity`。自定义 gateway 和本地
+   provider switch 等动作的 commit/PTy mutation 前读取对应的已保存自动检测开关；开启时才探测并读取
+   `providerConnectivity`。关闭时仍取得精确的当前 route lease，嵌套操作复用同一租约并重验 Provider、
+   CWD、scope、target、取消与生命周期，但不探测、不读取旧阻止结论、不伪造成功结果，也不写诊断或广播。
+   业务回调收到 `undefined` 而非虚构的预检证据；手动 recheck 的权威探测路径不变。自定义 gateway 和本地
    terminal 只检查自身 target，不受其他官方 Provider 状态影响。`ClaudeLaunchHealthMonitor` 同样保留
    `allowed_with_notice`，显示绿色“连接正常”并把 path/advice 放在 secondary copy。
    自动新会话/登录检查使用 `fresh`：跳过已完成缓存，但相同身份的并发请求共享正在执行的检测，每个
@@ -2076,6 +2084,8 @@ Claude 只有无必填参数且风险允许的条目能进入 `ClaudeRuntime.run
    Chromium `navigator.connection.change` 的 RTT、downlink、effectiveType 估计变化不作废证据；探测本身
    也可能改变这些估计。只有已知 transport type 变化、online/offline 与主进程权威配置变化才走相应
    失效路径，避免一批新建/恢复对话互相取消。
+   `ClaudeLaunchHealthMonitor` 在创建、每次定时执行和回传前现读新会话检测开关；关闭后不发起新探测，
+   不发布迟到健康结果，也不续排定时器。启动恢复进度统一使用“连接验证”，不把必要的模型实测误称为预检。
 10. 首次阻止若仅来自 DNS、reset、connect failure 或 timeout，且仍有 active IP path，可等待 150ms 后
     fresh 一次新 probe，并与同身份的其他重试共享进行中的检测；offline、TLS、untrusted redirect、portal、unsupported CLI transport 和 internal
     failure 不自动重试。等待和第二次 probe 共用调用方 AbortSignal，取消后不得继续业务操作。
@@ -2328,6 +2338,9 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   的条目。
 - `tests/main/advanced-settings-store.test.ts` 锁定中转站兼容项默认关闭、两项网络自动检测默认开启、
   version 1 迁移、version 2 往返持久化、非法布尔值/时区/语言被拒，以及损坏文件回落默认值。
+- `automatic-network-preflight` 的 main/renderer 测试与 shared policy 测试覆盖开关组合、冷启动、保存后
+  生效、首个请求、手动检测、迟到结果、旧阻止缓存及不探测时的路由与取消边界；proxy integration 同时
+  验证开/关两种模式下，嵌套操作不会越过排队中的代理写入。health monitor 测试覆盖关闭后的定时器退场。
 - `tests/shared/connection-endpoint.test.ts` 分开覆盖两条路径：`completeConnectionEndpoint` 补出完整
   请求地址，`normalizeConnectionBaseUrl` 保留中转站发布的基址路径、只把整段 `/v1/messages`
   还原回基址、把粘进来的 OpenAI 端点指向协议开关，两者共用同一套不安全输入拒绝规则。

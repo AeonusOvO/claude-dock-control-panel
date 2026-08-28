@@ -70,6 +70,10 @@ preload: <dist/preload/preload.js>,
 共享进行中的检测，不互相 force 取消；手动重新检测与 route epoch 变化仍能使旧检测失效。历史恢复用精确
 UUID 的 overlay 派生行位置，不改写或整份回滚共享历史数组，模型差异弹窗依次服务各自的恢复意图。
 
+自动预检由已保存的新会话/登录开关决定是否执行；纯策略由 shared 统一映射，main 是执行事实源，renderer
+在设置加载前不得抢跑。关闭探测不取消网络 route lease：主进程仍保持精确 Provider/CWD/scope/target
+与取消、嵌套和代理写入顺序边界，只是不生成预检结果。手动诊断保持独立，后台健康监测也现读偏好退场。
+
 接入历史同样遵守双层所有权：renderer 的加载、应用、删除、重命名和专用恢复 surface 由单调 generation 与活动 session 共同持有，切换项目立即使旧 owner 失效；main 再确认该 session 仍映射到事务发起时的规范化项目目录。接入事务在 prepare 前保存配置快照：conversation profile 只锁定自己的配置 scope，旧版共享项目 profile 才锁定项目目录并隔离兄弟启动。失败或取消时只在当前状态仍是本事务精确写入结果时恢复，并通过 prepared compensation 回滚它写入的 Router 外部状态；较新的配置或 Router 写入绝不被旧事务覆盖。
 
 每条 Claude 对话还绑定创建或恢复时的完整接入身份：平台、协议、脱敏端点、认证方式、订阅账户或 API
