@@ -62,6 +62,97 @@ afterEach(() => {
 });
 
 describe('managed ChatGPT projectless setup contract', () => {
+  it('explains local preflight failures before setup without touching installation, login or the saved connection', async () => {
+    const ipc = createIpcHarness();
+    vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain, shell: { openExternal: vi.fn() } }));
+    const { ProviderAccessBlockedError } =
+      await import('../../src/main/network/provider-access-guard');
+    const { RiskDecisionEngine } = await import('../../src/main/network/risk-decision-engine');
+    const blocked = new ProviderAccessBlockedError({
+      action: 'login',
+      configurationRevision: 'test-revision',
+      generation: 0,
+      mainRunId: 1,
+      networkScope: 'application',
+      ...new RiskDecisionEngine().evaluate(
+        'openai-codex',
+        'login',
+        {
+          paths: [],
+          probes: [
+            {
+              checkedAt: 1,
+              detail: '可选的应用探测未响应。',
+              id: 'app:optional',
+              kind: 'api',
+              label: 'optional',
+              process: 'application',
+              required: false,
+              status: 'failed',
+            },
+            {
+              checkedAt: 1,
+              detail:
+                '本机网络探测程序未能启动（ENOENT），请求尚未发出；请检查系统命令及运行目录。',
+              id: 'cli:openai-codex-api',
+              kind: 'api',
+              label: 'Codex API',
+              process: 'codex-cli',
+              required: true,
+              status: 'failed',
+            },
+          ],
+        },
+        1,
+        2,
+      ),
+    });
+    const reservation = { token: Symbol('next-connection'), release: vi.fn() };
+    const runtime = {
+      reserveNextConversationConnection: vi.fn(() => reservation),
+      nextConversationConnectionScope: vi.fn(() => 'logical-profile'),
+      getNextConversationConnection: vi.fn(async () => nextConnection),
+      getSoftwareUpdates: vi.fn(),
+      verifyAndSaveNextConversationConfig: vi.fn(),
+    };
+    const setup = vi.fn();
+    const services = await createTestMainServiceRegistry();
+    const { MAIN_WINDOW } = await import('../../src/main/infra/service-tokens');
+    services.resolve(MAIN_WINDOW).current = {
+      webContents: ipc.webContents,
+    } as Electron.BrowserWindow;
+    const { registerManagedChatGptIpc } = await import('../../src/main/ipc/managed-chatgpt');
+    registerManagedChatGptIpc({
+      configTransactionState: vi.fn(),
+      failedRuntimeLaunchCleanupDependencies: {} as never,
+      guards: {
+        requireClaudeRuntime: () => runtime as never,
+        requireManagedChatGptGateway: () => ({ getState: async () => state, setup }) as never,
+        validateSender: vi.fn(),
+        withOfficialProviderAccess: vi.fn(async () => {
+          throw blocked;
+        }),
+      },
+      restartRuntimeTerminal: vi.fn(),
+      runClaudeProjectConfigTransaction: vi.fn(),
+      services,
+      withDevelopmentSessionOperation: vi.fn(),
+      withoutTerminalOperationInvalidation: vi.fn(),
+      workspace: {} as never,
+    });
+
+    const result = await ipc.invoke(CHANNELS.CLAUDE_MANAGED_CHATGPT_GATEWAY_SETUP, undefined);
+
+    expect(result).toMatchObject({ kind: 'environment', nextConnection, ok: false });
+    expect(result.message).toContain('本机网络检测未完成');
+    expect(result.message).toContain('安装和 OpenAI 授权尚未开始');
+    expect(result.message).toContain('ENOENT');
+    expect(setup).not.toHaveBeenCalled();
+    expect(runtime.getSoftwareUpdates).not.toHaveBeenCalled();
+    expect(runtime.verifyAndSaveNextConversationConfig).not.toHaveBeenCalled();
+    expect(reservation.release).toHaveBeenCalledOnce();
+  });
+
   it('sends an omitted project and the default login mode through the real preload bridge', async () => {
     const ipc = createIpcHarness();
     vi.doMock('electron', () => ({

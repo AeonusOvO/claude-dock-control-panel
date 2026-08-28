@@ -54,6 +54,15 @@ interface ReleaseValidation {
 }
 
 interface ManifestTools {
+  authenticodeStatus(
+    filePath: string,
+    options?: {
+      environment?: NodeJS.ProcessEnv;
+      execute?: (command: string, argumentsList: string[], options: unknown) => string;
+      fileExists?: (candidate: string) => boolean;
+      platform?: NodeJS.Platform;
+    },
+  ): string;
   compareSemanticVersions(left: string, right: string): number;
   readSourceIdentity(options: { projectRoot: string }): SourceIdentity;
   resolveReleaseChannel(packageManifest: unknown): string;

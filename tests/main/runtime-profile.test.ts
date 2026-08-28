@@ -3,6 +3,25 @@ import { describe, expect, it } from 'vitest';
 import { resolveRuntimeProfile } from '../../src/main/app/profile';
 
 describe('runtime profile', () => {
+  it.each(['E:\\Accounts\\Another User', 'Z:\\用户资料\\测试用户'])(
+    'derives production storage from this user instead of the build or installation machine: %s',
+    (userHome) => {
+      const userData = path.resolve(userHome, '应用数据 with spaces', 'ClaudeDock');
+      const profile = resolveRuntimeProfile({
+        argv: ['Q:\\Custom Apps\\ClaudeDock.exe'],
+        defaultHome: userHome,
+        defaultUserData: userData,
+        env: {},
+      });
+      expect(profile.paths).toEqual({
+        home: path.resolve(userHome),
+        projects: path.join(path.resolve(userHome), '.claude', 'projects'),
+        sessionData: path.join(userData, 'chromium-session'),
+        userData,
+      });
+    },
+  );
+
   it('preserves all production capabilities and paths by default', () => {
     const profile = resolveRuntimeProfile({
       argv: ['electron', '.'],

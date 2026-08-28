@@ -26,6 +26,11 @@ npm run build
 
 ## 全门禁
 
+路径与接入预检变更还需运行 `preflight-working-directory`、`windows-system-executable`、`app-paths`、
+`runtime-profile` 与 `managed-chatgpt-global-setup-contract` 的行为回归。Windows 默认执行真实 curl 的
+匿名回环用例：逻辑 profile 不存在时，仍必须在带中文/空格的独立数据目录内通过；不得靠预先创建 profile
+目录或跳过守卫使测试成功。路径来源与保留的合法绝对路径见[路径与可移植性](../reference/paths.md)。
+
 改动跨进程契约、主进程结构、渲染进程结构或构建配置后运行：
 
 ```powershell
@@ -34,24 +39,26 @@ npm run test:control-theme
 npm run test:visual
 npm run test:conpty
 npm run test:network
+npm run test:paths
 npm run test:model-usage
 npm run test:runtime-soak:accelerated
 npm run dist
 ```
 
-| 命令                                                             | 覆盖                                                                 |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `npm run test:layout`                                            | 真实 Electron 里的布局场景                                           |
-| `npm run test:control-theme`                                     | 四主题下控件的计算样式                                               |
-| `npm run test:visual`                                            | 原生视觉截图（`visual-smoke` + `native-visual-smoke`）               |
-| `npm run test:visual:real`                                       | 隔离 RuntimeProfile 下的真实 Electron 截图                           |
-| `npm run test:conpty`                                            | 真实 ConPTY 的 resize 与 stop/restart 生命周期、事件顺序             |
-| `npm run test:network`                                           | 真实 Electron 上传先 close、十路 redirect/流式响应、HEAD、截断与取消 |
-| `npm run test:model-usage`                                       | 独立 Worker 用量统计、主线程延迟、四主题置顶球与受限 preload         |
-| `npm run test:select`、`test:select-theme`、`test:dialog-select` | 原生 `<select>` 交互与主题                                           |
-| `npm run test:scroll-chaining`                                   | trusted 滚轮下的嵌套滚动链与弹层封闭（须可见窗口）                   |
-| `npm run test:runtime-soak:accelerated`                          | 模拟 24 小时会话与服务回收                                           |
-| `npm run dist`                                                   | 端到端打包并生成当前通道产物                                         |
+| 命令                                                             | 覆盖                                                                                      |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `npm run test:layout`                                            | 真实 Electron 里的布局场景                                                                |
+| `npm run test:control-theme`                                     | 四主题下控件的计算样式                                                                    |
+| `npm run test:visual`                                            | 原生视觉截图（`visual-smoke` + `native-visual-smoke`）                                    |
+| `npm run test:visual:real`                                       | 隔离 RuntimeProfile 下的真实 Electron 截图                                                |
+| `npm run test:conpty`                                            | 真实 ConPTY 的 resize 与 stop/restart 生命周期、事件顺序                                  |
+| `npm run test:network`                                           | 真实 Electron 上传先 close、十路 redirect/流式响应、HEAD、截断与取消                      |
+| `npm run test:paths`                                             | 真实 Electron/curl 在中文、空格数据目录下保留授权隔离；支持 `-- --packaged` 读取最终 ASAR |
+| `npm run test:model-usage`                                       | 独立 Worker 用量统计、主线程延迟、四主题置顶球与受限 preload                              |
+| `npm run test:select`、`test:select-theme`、`test:dialog-select` | 原生 `<select>` 交互与主题                                                                |
+| `npm run test:scroll-chaining`                                   | trusted 滚轮下的嵌套滚动链与弹层封闭（须可见窗口）                                        |
+| `npm run test:runtime-soak:accelerated`                          | 模拟 24 小时会话与服务回收                                                                |
+| `npm run dist`                                                   | 端到端打包并生成当前通道产物                                                              |
 
 Electron 布局、控件、视觉、select、滚动和 ConPTY 命令会构建对应进程并真实启动 Electron；accelerated
 soak 直接运行 Node 合成时钟。最终候选的这些门禁必须在全部发行改动提交后的 exact commit 上运行。

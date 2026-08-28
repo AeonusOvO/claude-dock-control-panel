@@ -650,7 +650,7 @@ const addTerminalMaskFixture = `
     const fallback = document.createElement('pre');
     fallback.className = 'terminal-mask__fallback';
     fallback.textContent =
-      'PS D:\\\\Projects\\\\ClaudeDock> claude\\n正在处理不会改变终端网格的静态布局 fixture…';
+      'PS .\\\\ClaudeDock> claude\\n正在处理不会改变终端网格的静态布局 fixture…';
     snapshot.append(fallback);
     const veil = document.createElement('div');
     veil.className = 'terminal-mask__veil';

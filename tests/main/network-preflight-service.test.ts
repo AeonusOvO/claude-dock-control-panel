@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- This integration specification exercises one shared preflight concurrency harness and its complete race matrix. */
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NetworkPreflightResult, NetworkPreflightScope } from '../../src/shared/contracts';
@@ -688,7 +688,7 @@ describe('NetworkPreflightService', () => {
     expect(run).toHaveBeenCalledWith(
       'openai-codex',
       'first-request',
-      canonicalCwd,
+      homedir(),
       'conversation',
       undefined,
       expect.any(AbortSignal),
@@ -837,7 +837,7 @@ describe('NetworkPreflightService', () => {
       1,
       'openai-api',
       'first-request',
-      undefined,
+      homedir(),
       'conversation',
       firstTarget,
       expect.any(AbortSignal),
@@ -846,7 +846,7 @@ describe('NetworkPreflightService', () => {
       2,
       'openai-api',
       'first-request',
-      undefined,
+      homedir(),
       'conversation',
       secondTarget,
       expect.any(AbortSignal),
@@ -885,7 +885,7 @@ describe('NetworkPreflightService', () => {
       1,
       'anthropic-claude',
       'cli-launch',
-      undefined,
+      homedir(),
       'application',
       undefined,
       expect.any(AbortSignal),
@@ -894,7 +894,7 @@ describe('NetworkPreflightService', () => {
       2,
       'anthropic-claude',
       'cli-launch',
-      undefined,
+      homedir(),
       'application',
       firstGateway,
       expect.any(AbortSignal),
@@ -903,7 +903,7 @@ describe('NetworkPreflightService', () => {
       3,
       'anthropic-claude',
       'cli-launch',
-      undefined,
+      homedir(),
       'application',
       secondGateway,
       expect.any(AbortSignal),
@@ -1772,7 +1772,7 @@ describe('NetworkPreflightService', () => {
         1,
         'openai-codex',
         'cli-launch',
-        canonicalCwd,
+        homedir(),
         'conversation',
         undefined,
         expect.any(AbortSignal),
@@ -1781,7 +1781,7 @@ describe('NetworkPreflightService', () => {
         2,
         'openai-codex',
         'cli-launch',
-        canonicalCwd,
+        homedir(),
         'conversation',
         undefined,
         expect.any(AbortSignal),
@@ -1835,7 +1835,7 @@ describe('NetworkPreflightService', () => {
       1,
       'openai-api',
       'first-request',
-      undefined,
+      homedir(),
       'conversation',
       {
         process: 'application',
@@ -1847,7 +1847,7 @@ describe('NetworkPreflightService', () => {
       2,
       'openai-api',
       'first-request',
-      undefined,
+      homedir(),
       'conversation',
       {
         process: 'application',

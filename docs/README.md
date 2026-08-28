@@ -20,6 +20,7 @@
 | [provider-access.md](reference/provider-access.md)         | 官方地址、国产模型与订阅范围、自动探测边界                |
 | [subscription-access.md](reference/subscription-access.md) | 订阅账号授权、后台转发、凭据与并发安全、验证限制          |
 | [model-usage.md](reference/model-usage.md)                 | 本地模型图标、额度来源、Token 统计与置顶悬浮球            |
+| [paths.md](reference/paths.md)                             | 路径来源、跨用户安装可移植性与预检工作目录                |
 
 ## how-to —— 照着做
 

@@ -17,6 +17,7 @@ import {
   type ProviderProfile,
 } from '../../shared/router/provider-profiles';
 import { runProcess, runWindowsCommand } from '../infra/windows-command';
+import { resolveWindowsSystemExecutable } from '../infra/windows-system-executable';
 import { NetworkPathResolver, type ResolveProxy } from './path-resolver';
 import type { NetworkPreflightTarget } from './preflight-target';
 
@@ -333,6 +334,14 @@ const dnsAuthorityForTransport = (
 
 const classifyNetworkError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
+  const processError = error as NodeJS.ErrnoException | undefined;
+  if (
+    processError &&
+    /^(?:ENOENT|ENOTDIR|EACCES|EPERM)$/.test(processError.code ?? '') &&
+    (processError.syscall?.startsWith('spawn') || /^spawn\b/.test(message))
+  ) {
+    return `本机网络探测程序未能启动（${processError.code}），请求尚未发出；请检查系统命令及运行目录。`;
+  }
   const stderr =
     error && typeof error === 'object' && typeof (error as { stderr?: unknown }).stderr === 'string'
       ? (error as { stderr: string }).stderr
@@ -435,12 +444,17 @@ const defaultCliRequest = async (
   }
   delete environment.ELECTRON_RUN_AS_NODE;
   try {
-    const result = await runProcess('curl.exe', argumentsList, environment, {
-      cwd,
-      maxBuffer: MAX_RESPONSE_BYTES,
-      signal,
-      timeout: REQUEST_TIMEOUT_MS + 1_000,
-    });
+    const result = await runProcess(
+      resolveWindowsSystemExecutable('curl.exe'),
+      argumentsList,
+      environment,
+      {
+        cwd,
+        maxBuffer: MAX_RESPONSE_BYTES,
+        signal,
+        timeout: REQUEST_TIMEOUT_MS + 1_000,
+      },
+    );
     return result.stdout;
   } catch (error) {
     const stdout =

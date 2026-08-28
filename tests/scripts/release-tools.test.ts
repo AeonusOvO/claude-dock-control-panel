@@ -25,6 +25,41 @@ import {
 afterEach(cleanupReleaseFixtures);
 
 describe('release manifest validation', () => {
+  it.each(['D:\\系统目录', 'E:\\Windows with spaces'])(
+    'uses the current Windows directory for signature inspection: %s',
+    (windowsRoot) => {
+      const execute = vi.fn(() => 'NotSigned\r\n');
+      const signature = manifestTools.authenticodeStatus('F:\\Release Files\\candidate.exe', {
+        environment: { windir: windowsRoot },
+        execute,
+        fileExists: () => true,
+        platform: 'win32',
+      });
+      expect(signature).toBe('NotSigned');
+      expect(execute).toHaveBeenCalledWith(
+        path.win32.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        expect.arrayContaining([expect.stringContaining(path.win32.join(windowsRoot, 'System32'))]),
+        expect.objectContaining({ windowsHide: true }),
+      );
+    },
+  );
+
+  it.each([{}, { SystemRoot: 'relative-path' }, { SystemRoot: 'Q:\\Missing' }])(
+    'does not guess an installation drive or report a signature when Windows metadata is unavailable: %j',
+    (environment) => {
+      const execute = vi.fn(() => 'Valid');
+      expect(
+        manifestTools.authenticodeStatus('candidate.exe', {
+          environment,
+          execute,
+          fileExists: () => false,
+          platform: 'win32',
+        }),
+      ).toBe('unavailable');
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
   it('selects detected prerelease channels and compares complete semantic versions', () => {
     expect(manifestTools.resolveReleaseChannel(packageManifest('5.0.0-rc.15'))).toBe('rc');
     expect(manifestTools.resolveReleaseChannel(packageManifest('5.0.0-beta.2'))).toBe('beta');

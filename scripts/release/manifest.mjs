@@ -480,18 +480,36 @@ export const resolveReleaseChannel = (packageManifest) => {
   return channel;
 };
 
-const authenticodeStatus = (filePath) => {
-  if (process.platform !== 'win32') return 'unavailable';
+export const authenticodeStatus = (
+  filePath,
+  {
+    environment = process.env,
+    execute = execFileSync,
+    fileExists = existsSync,
+    platform = process.platform,
+  } = {},
+) => {
+  if (platform !== 'win32') return 'unavailable';
   try {
-    const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows';
-    const powershellExecutable = path.join(
+    const environmentEntries = Object.entries(environment);
+    const windowsRoot = ['SYSTEMROOT', 'WINDIR']
+      .map((name) => environmentEntries.find(([key]) => key.toUpperCase() === name)?.[1])
+      .find((root) =>
+        typeof root === 'string' &&
+        path.win32.isAbsolute(root) &&
+        !['/', '\\'].includes(path.win32.parse(root).root) &&
+        fileExists(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')),
+      );
+    // Release trust checks fail closed if Windows cannot be located; never guess a system drive.
+    if (!windowsRoot) return 'unavailable';
+    const powershellExecutable = path.win32.join(
       windowsRoot,
       'System32',
       'WindowsPowerShell',
       'v1.0',
       'powershell.exe',
     );
-    const securityModulePath = path.join(
+    const securityModulePath = path.win32.join(
       windowsRoot,
       'System32',
       'WindowsPowerShell',
@@ -502,7 +520,7 @@ const authenticodeStatus = (filePath) => {
     );
     const escapedPath = filePath.replaceAll("'", "''");
     const escapedModulePath = securityModulePath.replaceAll("'", "''");
-    return execFileSync(
+    return execute(
       powershellExecutable,
       [
         '-NoProfile',
@@ -510,7 +528,7 @@ const authenticodeStatus = (filePath) => {
         '-Command',
         `Import-Module -Name '${escapedModulePath}' -Force; (Get-AuthenticodeSignature -LiteralPath '${escapedPath}').Status.ToString()`,
       ],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', windowsHide: true },
     ).trim();
   } catch {
     return 'unknown';

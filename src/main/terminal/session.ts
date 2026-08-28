@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import path from 'node:path';
 import type { IPty } from '@lydell/node-pty';
 import * as pty from '@lydell/node-pty';
 import type { PtyGeneration, TerminalStatus } from '../../shared/contracts';
@@ -14,6 +13,7 @@ import {
   type TerminalThemePalette,
 } from '../../shared/ui/terminal-themes';
 import { normalizeTerminalSize } from '../infra/directory';
+import { resolveWindowsSystemExecutable } from '../infra/windows-system-executable';
 
 type DataListener = (ptyGeneration: PtyGeneration, data: string) => void;
 type StatusListener = (status: TerminalStatus) => void;
@@ -88,18 +88,7 @@ const buildEnvironment = (overrides: TerminalEnvironmentOverrides = {}): Record<
   return environment;
 };
 
-const resolvePowerShell = (): string => {
-  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
-  const absolutePath = path.join(
-    systemRoot,
-    'System32',
-    'WindowsPowerShell',
-    'v1.0',
-    'powershell.exe',
-  );
-
-  return existsSync(absolutePath) ? absolutePath : 'powershell.exe';
-};
+const resolvePowerShell = (): string => resolveWindowsSystemExecutable('powershell.exe');
 
 const terminalFailure = (
   error: unknown,

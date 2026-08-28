@@ -778,6 +778,7 @@ const installDiagnostics = ({
           return view.scope.cli && view.protocol === 'http' ? applicationProxyUrl(view) : undefined;
         },
       }),
+      probeWorkingDirectory: runtimeProfile.paths.userData,
       shouldAssessEnvironment: (input) => {
         const settings = advancedSettingsStore.get().networkPreflight;
         return (

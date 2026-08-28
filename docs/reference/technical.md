@@ -1097,6 +1097,10 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   全局安装和模型切换的外层 Provider 守卫使用 `nextConversationConnectionScope()` 返回的 main-only profile
   身份及 application 网络作用域；内部首次请求复用同一精确身份，因此嵌套预检不会把全局事务误判为跨项目，
   同时仍拒绝真正的跨 Provider、跨项目、跨网络作用域或跨 target 复用。
+  该 profile 是授权身份而非实际工作目录：`NetworkPreflightService.probeWorkingDirectory` 单独使用当前
+  RuntimeProfile 的真实 userData 目录运行 curl 与 CLI 版本探测，不能把不存在的逻辑 profile 传给 spawn。
+  系统 curl/PowerShell 通过 SystemRoot/WINDIR 发现，不假定系统盘符。本机探测启动错误单独分类；若在
+  安装前被拦截，界面明确说明尚未开始安装或授权。路径来源和回归边界见[路径与可移植性](paths.md)。
   操作先检查 Claude Code；缺失时调用项目已有的官方
   安装路径补齐，再以隐藏窗口运行
   `cli-proxy-api.exe -config <owned-config> -codex-login`，由上游进程打开 OpenAI 官方授权页；

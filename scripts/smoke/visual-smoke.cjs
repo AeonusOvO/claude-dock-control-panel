@@ -293,7 +293,7 @@ const installThemeMatrixFixtures = `
         output.append(row);
       };
       line([['PowerShell 7.5.2', palette.brightCyan]]);
-      line([['PS D:\\\\Projects\\\\ClaudeDock> ', palette.foreground], ['claude', palette.brightGreen]]);
+      line([['PS .\\\\ClaudeDock> ', palette.foreground], ['claude', palette.brightGreen]]);
       line([['✦ Claude Code 已准备就绪', palette.brightMagenta]]);
       line([['  模型 ', palette.brightBlack], ['claude-sonnet-4-5', palette.blue]]);
       line([['  参数 ', palette.brightBlack], ['--permission-mode default', palette.brightBlack]]);
@@ -580,9 +580,9 @@ app
       const installed = document.querySelector('#mcp-installed-list');
       installed.replaceChildren();
       for (const fixture of [
-        ['filesystem', 'Claude · stdio', '已连接 · MCP initialize 握手成功。', 'project · 项目共享', 'D:/Program/ClaudeDesk/.mcp.json'],
-        ['context7', 'Claude · http', '连接失败 · 初始化请求返回 HTTP 401。', 'user · 用户级', 'C:/Users/ExampleUser/.claude.json'],
-        ['node_repl', 'Codex · stdio', '状态未知 · 来自 Codex CLI；ClaudeDock 仅只读发现。', 'user · 用户级', 'C:/Users/ExampleUser/.codex/config.toml'],
+        ['filesystem', 'Claude · stdio', '已连接 · MCP initialize 握手成功。', 'project · 项目共享', '<项目目录>/.mcp.json'],
+        ['context7', 'Claude · http', '连接失败 · 初始化请求返回 HTTP 401。', 'user · 用户级', '<用户目录>/.claude.json'],
+        ['node_repl', 'Codex · stdio', '状态未知 · 来自 Codex CLI；ClaudeDock 仅只读发现。', 'user · 用户级', '<用户目录>/.codex/config.toml'],
       ]) {
         const card = document.createElement('article');
         card.className = 'plugin-card';
@@ -1358,7 +1358,7 @@ app
     focusFixture.tabIndex = 0;
     const terminalText = document.createElement('pre');
     terminalText.textContent =
-      'PowerShell 7.5.2\\nPS D:\\\\Projects\\\\ClaudeDock> claude\\nClaude Code 已准备就绪';
+      'PowerShell 7.5.2\\nPS .\\\\ClaudeDock> claude\\nClaude Code 已准备就绪';
     terminalText.style.color = 'var(--text-hi)';
     terminalText.style.padding = '14px';
     focusFixture.append(terminalText);

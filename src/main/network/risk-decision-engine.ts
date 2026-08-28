@@ -217,17 +217,20 @@ const probeRiskSignals = (probes: NetworkProbeResult[], checkedAt: number): Netw
     const tls = isTlsFailure(probe.detail);
     const redirect = isRedirectFailure(probe.detail);
     const captivePortal = isCaptivePortalFailure(probe.detail);
+    const localProcess = probe.detail.startsWith('本机网络探测程序未能启动');
     const critical = probe.required;
     addSignal(
       signals,
       checkedAt,
-      tls
-        ? `tls-invalid:${probe.id}`
-        : redirect
-          ? `unexpected-redirect:${probe.id}`
-          : captivePortal
-            ? `captive-portal:${probe.id}`
-            : `probe-failed:${probe.id}`,
+      localProcess
+        ? `local-process-unavailable:${probe.id}`
+        : tls
+          ? `tls-invalid:${probe.id}`
+          : redirect
+            ? `unexpected-redirect:${probe.id}`
+            : captivePortal
+              ? `captive-portal:${probe.id}`
+              : `probe-failed:${probe.id}`,
       `${probe.label}失败`,
       probe.detail,
       critical ? 90 : probe.kind === 'websocket' ? 45 : 35,
@@ -284,7 +287,9 @@ const featureAccessFor = (
 const providerReasons = (signals: NetworkRiskSignal[], probes: NetworkProbeResult[]): string[] => {
   const recommendations = new Set<string>();
   for (const signal of signals) {
-    if (signal.id === 'unsupported-cli-proxy') {
+    if (signal.id.startsWith('local-process-unavailable:')) {
+      recommendations.add('建议：检查本机探测组件、系统命令和运行目录；这不是账户授权被拒绝。');
+    } else if (signal.id === 'unsupported-cli-proxy') {
       recommendations.add('建议：为 Claude Code 改用受信任的 HTTP/HTTPS 代理或可用直连/TUN 路径。');
     } else if (signal.id.startsWith('tls-invalid:')) {
       recommendations.add('建议：核对系统时间、企业根 CA 和 TLS 检查策略，不要关闭证书校验。');

@@ -16,6 +16,7 @@ import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
 import type { Registry } from '../infra/registry';
 import { MAIN_WINDOW } from '../infra/service-tokens';
+import { ProviderAccessBlockedError } from '../network/provider-access-guard';
 import {
   cleanupFailedRuntimeLaunch,
   type FailedRuntimeLaunchCleanupDependencies,
@@ -143,11 +144,13 @@ const createManagedChatGptGlobalOperations = ({
         active = true,
       ): void => emitManagedChatGptProgress(undefined, stage, step, detail, active, 8);
       let releaseConnection: (() => void) | undefined;
+      let setupStarted = false;
       try {
         const runtime = requireClaudeRuntime();
         const reservation = runtime.reserveNextConversationConnection();
         releaseConnection = reservation.release;
         const operation = async (): Promise<ManagedChatGptGatewayOperationResult> => {
+          setupStarted = true;
           progress('detecting', 1, '正在检测 Claude Code、登录网关与本机端口。');
           let environment = await runtime.getSoftwareUpdates(true);
           if (!environment.claudeCode.installed) {
@@ -225,10 +228,25 @@ const createManagedChatGptGlobalOperations = ({
       } catch (error) {
         const state = await requireManagedChatGptGateway().getState();
         const message = error instanceof Error ? error.message : '托管网关配置失败。';
-        const failureMessage = '未能完成 ChatGPT 订阅的一键安装与 OpenAI 授权。';
+        const preflightBlocked = !setupStarted && error instanceof ProviderAccessBlockedError;
+        const blockingDetail = preflightBlocked
+          ? (error.result.providerConnectivity.probes.find(
+              (probe) => probe.required && probe.status === 'failed',
+            )?.detail ??
+            error.result.providerConnectivity.reasons[0] ??
+            '')
+          : '';
+        const localProbeFailure = blockingDetail.startsWith('本机网络探测程序未能启动');
+        const failureMessage = preflightBlocked
+          ? `接入前的${localProbeFailure ? '本机网络检测未完成' : '网络预检未通过'}，安装和 OpenAI 授权尚未开始。${blockingDetail}`
+          : '未能完成 ChatGPT 订阅的一键安装与 OpenAI 授权。';
         progress('error', 8, message, false);
         return {
-          ...reportManagedChatGptFailure('external-service', failureMessage, error),
+          ...reportManagedChatGptFailure(
+            localProbeFailure ? 'environment' : 'external-service',
+            failureMessage,
+            error,
+          ),
           error: message,
           nextConnection: await requireClaudeRuntime().getNextConversationConnection(),
           ok: false,

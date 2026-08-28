@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import type {
   NetworkPreflightAction,
@@ -30,10 +31,6 @@ import {
   networkPreflightUnavailableEnvironmentAssessment,
 } from './preflight-service-identity';
 import { RiskDecisionEngine } from './risk-decision-engine';
-
-interface CachedResult {
-  result: NetworkPreflightResult;
-}
 
 /** Automatic checks require live evidence but must not cancel a sibling's identical check. */
 interface NetworkPreflightRequestInput extends NetworkPreflightRunInput {
@@ -73,6 +70,8 @@ interface NetworkPreflightServiceOptions {
   onObservabilityError?: (phase: NetworkPreflightObservabilityPhase, error: unknown) => void;
   onResult?: (result: NetworkPreflightResult) => void;
   probe: Pick<ProviderConnectivityProbe, 'run'>;
+  /** Real process directory, never the logical configuration/authorization identity in input.cwd. */
+  probeWorkingDirectory?: string;
   riskEngine?: RiskDecisionEngine;
   shouldAssessEnvironment?: (input: NetworkPreflightRunInput) => boolean;
 }
@@ -142,7 +141,7 @@ export class NetworkPreflightService {
   >();
   private readonly activeRuns = new Set<ActiveNetworkPreflightRun>();
   private readonly activeUsesByKey = new Map<string, number>();
-  private readonly cache = new Map<string, CachedResult>();
+  private readonly cache = new Map<string, { result: NetworkPreflightResult }>();
   private readonly environmentTimeoutMs: number;
   private generation = 0;
   private readonly inFlight = new Map<string, ActiveNetworkPreflightRun>();
@@ -832,7 +831,7 @@ export class NetworkPreflightService {
     const connectivity = this.options.probe.run(
       capture.provider,
       capture.action,
-      capture.canonicalCwd,
+      this.options.probeWorkingDirectory ?? homedir(),
       capture.networkScope,
       capture.target,
       signal,
