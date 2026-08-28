@@ -20,6 +20,10 @@ import {
 } from './request-runner';
 export type { ChatServiceTimeouts } from './request-runner';
 import { preflightChatRequest } from './protocol';
+import { assertChatApiAccess } from '../../shared/claude/chat-providers';
+import { resolveAutomaticChatConnection } from './automatic-connection';
+import { guardedAutomaticConnectionFetch } from '../network/automatic-connection-access';
+import type { ProviderAccessGuard } from '../network/provider-access-guard';
 export {
   directChatResponse,
   endpointFor,
@@ -40,12 +44,23 @@ export class ChatService extends ChatRequestRunner {
   public constructor(
     private readonly store: ChatConfigStore,
     emit: EmitChatEvent,
-    fetchImpl: ChatFetch = fetch,
+    private readonly connectionFetch: ChatFetch = fetch,
     attachmentStore?: ChatAttachmentStore,
     timeouts: ChatServiceTimeouts = {},
     readHardIdleTimeoutMs: () => number = () => 0,
   ) {
-    super(emit, fetchImpl, attachmentStore, timeouts, readHardIdleTimeoutMs);
+    super(emit, connectionFetch, attachmentStore, timeouts, readHardIdleTimeoutMs);
+  }
+
+  public resolveAutomaticConnection(
+    input: SaveChatConfigInput,
+    withAccess: ProviderAccessGuard['withAllowed'],
+  ): ReturnType<typeof resolveAutomaticChatConnection> {
+    return resolveAutomaticChatConnection(
+      input,
+      this.store,
+      guardedAutomaticConnectionFetch(withAccess, this.connectionFetch, 'conversation'),
+    );
   }
 
   public preflight(input: ChatStartInput): ChatPreflightResult {
@@ -108,6 +123,7 @@ export class ChatService extends ChatRequestRunner {
 
   private validateRuntimeConfig(config: ChatRuntimeConfig): void {
     normalizeChatBaseUrl(config.baseUrl);
+    assertChatApiAccess(config.baseUrl, config.credential);
     if (!config.model) {
       throw new Error('请先在“对话”选项卡中配置模型。');
     }

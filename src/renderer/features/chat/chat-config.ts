@@ -3,6 +3,7 @@ import type { ChatActionsDependencies } from './dependencies';
 import type { ChatElements } from './elements';
 import type { ChatState } from './state';
 import type { ChatView } from './view';
+import { selectedChatPreset } from './settings-mode';
 
 export interface ChatConfigActions {
   chatConfigInput: () => SaveChatConfigInput;
@@ -35,17 +36,21 @@ export const createChatConfigActions = (
 
   const chatConfigInput = (): SaveChatConfigInput => {
     const credential = elements.chatCredential.value.trim();
+    const automatic = elements.chatConfigForm.dataset.settingsMode !== 'advanced';
     return {
+      ...(automatic ? { autoDetect: true } : {}),
       authMode: elements.chatAuthMode.value as SaveChatConfigInput['authMode'],
       baseUrl: elements.chatBaseUrl.value,
       credential: credential || undefined,
-      credentialAction: elements.chatClearCredential.checked
-        ? 'clear'
-        : credential
-          ? 'replace'
-          : 'keep',
+      credentialAction:
+        !automatic && elements.chatClearCredential.checked
+          ? 'clear'
+          : credential
+            ? 'replace'
+            : 'keep',
       model: elements.chatModel.value,
       protocol: elements.chatProtocol.value as SaveChatConfigInput['protocol'],
+      preset: automatic ? elements.chatProvider.value : selectedChatPreset(elements),
     };
   };
 
@@ -53,20 +58,20 @@ export const createChatConfigActions = (
     if (state.chatConfigLoadPromise && !force) {
       return state.chatConfigLoadPromise;
     }
+    const generation = ++state.chatConfigLoadGeneration;
     state.chatConfigLoadPromise = window.controlPanel
       .getChatConfig()
       .then((config) => {
+        if (generation !== state.chatConfigLoadGeneration) return;
         view.renderChatConfig(config);
-        elements.chatConfigStatus.textContent = config.model
-          ? '独立接入已就绪。'
-          : '请填写模型并保存。';
       })
       .catch(() => {
+        if (generation !== state.chatConfigLoadGeneration) return;
         elements.chatConfigStatus.textContent = '无法读取独立对话配置。';
         dependencies.showToast('无法读取独立对话配置。', 'error');
       })
       .finally(() => {
-        state.chatConfigLoadPromise = undefined;
+        if (generation === state.chatConfigLoadGeneration) state.chatConfigLoadPromise = undefined;
       });
     return state.chatConfigLoadPromise;
   };

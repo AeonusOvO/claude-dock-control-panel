@@ -144,13 +144,13 @@ export const createConnectionFormWizardActions = (
       connectionWizardNextButton.textContent = '下一步';
       return;
     }
-    connectionWizardNextButton.textContent = '下一步';
+    connectionWizardNextButton.textContent = '连接并保存';
     if (progressMatchesCurrentScope && formState.managedChatGptProgress?.active) {
       connectionWizardStatus.textContent = interruptible
         ? `${formState.managedChatGptProgress.detail} · 可返回并取消`
         : `${formState.managedChatGptProgress.detail} · 当前步骤不可打断`;
     } else if (deps.connectionFeature.isTestInProgress()) {
-      connectionWizardStatus.textContent = '正在真实测试连接，完成前不可返回';
+      connectionWizardStatus.textContent = '正在连接…';
     } else if (deps.connectionFeature.isRemedyInProgress()) {
       connectionWizardStatus.textContent = '正在修复接入配置，完成前不可返回';
     } else if (

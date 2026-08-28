@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatConfigStore, ChatRuntimeSnapshot } from '../../src/main/chat/config-store';
 import { ChatService } from '../../src/main/chat/service';
 import type { MainGuards } from '../../src/main/ipc/guards';
+import type { SaveChatConfigInput } from '../../src/shared/contracts';
 import { CHANNELS } from '../../src/shared/ipc/channels';
 import { createIpcHarness } from '../helpers/ipc-harness';
 
@@ -43,6 +44,85 @@ afterEach(() => {
 });
 
 describe('direct-chat IPC authorization', () => {
+  it('auto-connects through the conversation fetch and guard, then atomically saves only a proven draft', async () => {
+    const ipc = installElectronMock();
+    const { registerChatIpc } = await import('../../src/main/ipc/chat');
+    const view = {
+      authMode: 'bearer',
+      baseUrl: 'https://api.openai.com',
+      credentialConfigured: true,
+      model: 'saved-model',
+      protocol: 'openai',
+    } as const;
+    const save = vi.fn((input) => ({ ...view, model: input.model }));
+    const store = {
+      getView: () => view,
+      resolveCredential: () => 'draft-secret',
+      save,
+    } as unknown as ChatConfigStore;
+    let resolveCatalog!: (value: Response) => void;
+    const catalogGate = new Promise<Response>((resolve) => {
+      resolveCatalog = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+      if (!options?.method) return catalogGate;
+      return String(url).endsWith('/v1/responses')
+        ? Response.json({ id: 'resp-test', object: 'response', status: 'completed', output: [] })
+        : new Response('', { status: 404 });
+    });
+    const service = new ChatService(store, () => undefined, fetchMock);
+    const withOfficialProviderAccess = vi.fn(
+      async <T>(
+        _request: Parameters<MainGuards['withOfficialProviderAccess']>[0],
+        operation: () => Promise<T> | T,
+      ): Promise<T> => operation(),
+    );
+    registerChatIpc({
+      chatAttachmentStore: {} as never,
+      chatHistoryStore: {} as never,
+      chatConfigStore: store,
+      chatService: service,
+      guards: {
+        validateSender: vi.fn(),
+        withOfficialProviderAccess:
+          withOfficialProviderAccess as unknown as MainGuards['withOfficialProviderAccess'],
+      },
+    });
+    const input: SaveChatConfigInput = {
+      autoDetect: true,
+      authMode: 'bearer',
+      baseUrl: 'api.openai.com',
+      credential: 'draft-secret',
+      credentialAction: 'replace',
+      model: '',
+      preset: 'custom',
+      protocol: 'openai',
+    };
+    const operation = ipc.invoke(CHANNELS.CHAT_SAVE_CONFIG, input);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    input.baseUrl = 'another.example.com';
+    expect(save).not.toHaveBeenCalled();
+    await expect(
+      ipc.invoke(CHANNELS.CHAT_SAVE_CONFIG, { ...input, autoDetect: false }),
+    ).rejects.toThrow('正在连接');
+    resolveCatalog(Response.json({ data: [{ id: 'live-model' }] }));
+    await expect(operation).resolves.toMatchObject({ model: 'live-model' });
+    expect(save).toHaveBeenCalledOnce();
+    expect(save.mock.calls[0]?.[0]).toMatchObject({
+      baseUrl: 'https://api.openai.com/v1/responses',
+      model: 'live-model',
+      protocol: 'openai-responses',
+    });
+    expect(
+      fetchMock.mock.calls.every(([url]) => new URL(String(url)).hostname === 'api.openai.com'),
+    ).toBe(true);
+    expect(
+      withOfficialProviderAccess.mock.calls.every(
+        ([request]) => request.networkScope === 'conversation' && request.provider === 'openai-api',
+      ),
+    ).toBe(true);
+  });
+
   it('classifies official API origins and rejects protocol mismatches', async () => {
     installElectronMock();
     const { officialTargetForChat } = await import('../../src/main/ipc/chat');

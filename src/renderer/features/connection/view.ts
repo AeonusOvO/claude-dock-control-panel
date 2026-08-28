@@ -41,9 +41,8 @@ export const createConnectionView = (
     elements.connectionTestResult.hidden = false;
     elements.connectionTestResult.dataset.tone = 'pending';
     elements.connectionTestResult.setAttribute('aria-busy', 'true');
-    elements.connectionTestTitle.textContent = '后台正在测试连接';
-    elements.connectionTestSummary.textContent =
-      '界面与 PowerShell 仍可继续使用；真实请求最多等待 15 秒。';
+    elements.connectionTestTitle.textContent = '正在连接…';
+    elements.connectionTestSummary.textContent = '';
     elements.connectionTestStages.replaceChildren();
   };
 

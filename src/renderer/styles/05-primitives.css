@@ -1,3 +1,35 @@
+/* Default connection settings expose only inputs needed to connect. */
+form[data-settings-mode='simple'] [data-connection-advanced],
+#chat-config-form[data-settings-mode='simple'] #chat-connection-test[data-tone='idle'],
+#chat-credential-status:empty,
+#chat-config-status:empty,
+#claude-config-form[data-settings-mode='simple'] #connection-test-stages,
+#claude-config-form[data-settings-mode='simple'] .connection-test .step-heading,
+#claude-config-form[data-settings-mode='simple'] .config-actions,
+[data-connection-wizard-step='configure']:has(#claude-config-form[data-settings-mode='simple'])
+  .connection-history:has(#connection-history-list:empty) {
+  display: none;
+}
+
+#chat-config-form[data-settings-mode='simple'] .chat-config-actions {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#claude-config-form .connection-settings-mode,
+.chat-config-form .connection-settings-mode {
+  display: block;
+  justify-self: end;
+  margin-block: var(--s-2);
+  margin-inline-start: auto;
+  width: fit-content;
+}
+
+.connection-cost-notice {
+  color: var(--text-lo);
+  font-size: var(--type-caption-size);
+  margin: 0;
+}
+
 /*
  * POPOVER. `hidden` and dialog `open` remain the synchronous accessibility/state contract; discrete
  * display/overlay transitions keep the final painted frame alive long enough to animate out.

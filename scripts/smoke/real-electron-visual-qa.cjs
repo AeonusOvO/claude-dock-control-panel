@@ -409,6 +409,8 @@ const main = async () => {
       theme: await evaluate(`document.documentElement.dataset.theme`),
     });
 
+    await require('./connection-settings-scenarios.cjs')({ capture, click, evaluate, waitFor });
+
     await click('#native-terminal-toggle');
     await waitFor(
       `() => document.querySelector('#native-conversation')?.dataset.state === 'open'`,

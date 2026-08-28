@@ -22,6 +22,7 @@ export const createConnectionRemedyActions = (
   ) => Promise<void>,
 ): ConnectionRemedyActions => {
   const renderConnectionTest = (result: ClaudeConnectionTestResult): void => {
+    const simple = elements.testClaudeConnectionButton.form?.dataset.settingsMode === 'simple';
     elements.connectionTestResult.hidden = false;
     elements.connectionTestResult.dataset.tone = result.tone;
     elements.connectionTestResult.setAttribute('aria-busy', 'false');
@@ -31,11 +32,14 @@ export const createConnectionRemedyActions = (
         : result.tone === 'warning'
           ? '部分通过，还需处理'
           : '连接测试未通过';
-    const message = result.ok
-      ? result.message
-      : dependencies.resultFailureMessage(result, result.message);
+    const message =
+      result.ok && simple
+        ? '连接成功。'
+        : result.ok
+          ? result.message
+          : dependencies.resultFailureMessage(result, result.message);
     elements.connectionTestSummary.textContent = `${message}${
-      result.latencyMs === undefined ? '' : ` · ${result.latencyMs} ms`
+      simple || result.latencyMs === undefined ? '' : ` · ${result.latencyMs} ms`
     }`;
     elements.connectionTestStages.replaceChildren();
     for (const resultStage of result.stages) {
@@ -67,9 +71,9 @@ export const createConnectionRemedyActions = (
       routerInstalled: dependencies.router.getManagementState()?.installed,
       routerRunning: dependencies.router.getManagementState()?.gatewayState === 'running',
     });
-    elements.connectionRemedy.hidden = !remedy;
+    elements.connectionRemedy.hidden = simple || !remedy;
     dependencies.connectionRemedyActions.replaceChildren();
-    if (!remedy) {
+    if (simple || !remedy) {
       return;
     }
     elements.connectionRemedyTitle.textContent = remedy.title;

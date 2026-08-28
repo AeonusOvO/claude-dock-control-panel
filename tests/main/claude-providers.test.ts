@@ -108,8 +108,9 @@ describe('Claude provider catalog', () => {
 
   it('uses valid main and fast model identifiers', () => {
     for (const provider of CLAUDE_PROVIDERS) {
-      expect(MODEL_NAME_PATTERN.test(provider.model)).toBe(true);
-      expect(MODEL_NAME_PATTERN.test(provider.modelFast ?? provider.model)).toBe(true);
+      for (const model of [provider.model, provider.modelFast].filter(Boolean)) {
+        expect(MODEL_NAME_PATTERN.test(model!)).toBe(true);
+      }
     }
   });
 

@@ -7,6 +7,9 @@ import type {
   ChatProtocol,
   SaveChatConfigInput,
 } from '../../shared/contracts';
+import { normalizeConnectionAddress } from '../../shared/router/connection-endpoint';
+import { sameConnectionCredentialScope } from '../../shared/router/automatic-connection';
+import { assertChatApiAccess } from '../../shared/claude/chat-providers';
 
 interface StoredChatConfig {
   authMode: ChatAuthMode;
@@ -14,6 +17,7 @@ interface StoredChatConfig {
   encryptedCredential?: string;
   model: string;
   protocol: ChatProtocol;
+  preset?: string;
 }
 
 export interface ChatRuntimeConfig {
@@ -38,38 +42,7 @@ const DEFAULT_CHAT_CONFIG: StoredChatConfig = {
   protocol: 'anthropic',
 };
 
-const isLoopbackHost = (hostname: string): boolean =>
-  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
-
-export const normalizeChatBaseUrl = (value: string): string => {
-  const raw = value.trim();
-  if (!raw || raw.length > 2048) {
-    throw new Error('接口地址不能为空，且长度不能超过 2048 个字符。');
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error('接口地址不是有效的 URL。');
-  }
-
-  if (
-    (parsed.protocol !== 'https:' &&
-      !(parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname))) ||
-    parsed.username ||
-    parsed.password ||
-    parsed.search ||
-    parsed.hash
-  ) {
-    throw new Error(
-      '接口地址必须使用 HTTPS；仅本机回环地址可使用 HTTP，且不能包含凭据、查询或片段。',
-    );
-  }
-
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
-  return parsed.toString().replace(/\/$/, '');
-};
+export const normalizeChatBaseUrl = normalizeConnectionAddress;
 
 const normalizeModel = (value: string): string => {
   const model = value.trim();
@@ -89,7 +62,9 @@ const isStoredConfig = (value: unknown): value is StoredChatConfig => {
   }
   const record = value as Record<string, unknown>;
   return (
-    (record.protocol === 'anthropic' || record.protocol === 'openai') &&
+    (record.protocol === 'anthropic' ||
+      record.protocol === 'openai' ||
+      record.protocol === 'openai-responses') &&
     (record.authMode === 'apiKey' || record.authMode === 'bearer' || record.authMode === 'none') &&
     typeof record.baseUrl === 'string' &&
     typeof record.model === 'string' &&
@@ -100,7 +75,11 @@ const isStoredConfig = (value: unknown): value is StoredChatConfig => {
 const validateInput = (
   input: SaveChatConfigInput,
 ): Omit<StoredChatConfig, 'encryptedCredential'> => {
-  if (input.protocol !== 'anthropic' && input.protocol !== 'openai') {
+  if (
+    input.protocol !== 'anthropic' &&
+    input.protocol !== 'openai' &&
+    input.protocol !== 'openai-responses'
+  ) {
     throw new Error('对话接口协议无效。');
   }
   if (input.authMode !== 'apiKey' && input.authMode !== 'bearer' && input.authMode !== 'none') {
@@ -118,6 +97,7 @@ const validateInput = (
     baseUrl: normalizeChatBaseUrl(input.baseUrl),
     model: normalizeModel(input.model),
     protocol: input.protocol,
+    ...(typeof input.preset === 'string' ? { preset: input.preset } : {}),
   };
 };
 
@@ -138,6 +118,7 @@ export class ChatConfigStore {
       credentialConfigured: Boolean(config.encryptedCredential),
       model: config.model,
       protocol: config.protocol,
+      ...(config.preset ? { preset: config.preset } : {}),
     };
   }
 
@@ -154,23 +135,36 @@ export class ChatConfigStore {
 
   public resolveRuntimeConfig(input: SaveChatConfigInput): ChatRuntimeConfig {
     const normalized = validateInput(input);
+    const credential = this.resolveCredential(input, normalized.baseUrl);
+    assertChatApiAccess(normalized.baseUrl, credential);
+    return { ...normalized, credential };
+  }
+
+  public resolveCredential(input: SaveChatConfigInput, address: string): string | undefined {
     const current = this.load().config;
     let credential: string | undefined;
-    if (normalized.authMode !== 'none' && input.credentialAction !== 'clear') {
+    if (input.authMode !== 'none' && input.credentialAction !== 'clear') {
       if (input.credentialAction === 'replace') {
         credential = input.credential?.trim();
         if (!credential || credential.length > 4096 || /[\r\n]/.test(credential)) {
           throw new Error('接口凭据不能为空、不能换行，且长度不能超过 4096 个字符。');
         }
       } else {
+        if (
+          current.encryptedCredential &&
+          !sameConnectionCredentialScope(address, current.baseUrl)
+        ) {
+          throw new Error('网址已更换，请重新填写密钥。');
+        }
         credential = this.decryptCredential(current.encryptedCredential);
       }
     }
-    return { ...normalized, credential };
+    return credential;
   }
 
   public save(input: SaveChatConfigInput): ChatConfigView {
     const normalized = validateInput(input);
+    assertChatApiAccess(normalized.baseUrl, this.resolveCredential(input, normalized.baseUrl));
 
     const current = this.load().config;
     let encryptedCredential = current.encryptedCredential;
@@ -194,6 +188,7 @@ export class ChatConfigStore {
         encryptedCredential,
         model: normalized.model,
         protocol: normalized.protocol,
+        ...(normalized.preset ? { preset: normalized.preset } : {}),
       },
       version: 1,
     };

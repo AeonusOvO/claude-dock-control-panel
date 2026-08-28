@@ -16,6 +16,7 @@ vi.mock('electron', () => ({
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
   }
@@ -60,6 +61,109 @@ const localInput = (model: string): SaveClaudeConfigInput => ({
 });
 
 describe('Claude next-conversation connection', () => {
+  const automaticInput = (patch: Partial<SaveClaudeConfigInput> = {}): SaveClaudeConfigInput => ({
+    autoDetect: true,
+    authMode: 'apiKey',
+    baseUrl: 'relay.example.com',
+    credential: 'private-test-key',
+    credentialAction: 'replace',
+    model: 'hidden-default',
+    preset: 'custom',
+    protocol: 'anthropic',
+    provider: 'gateway',
+    ...patch,
+  });
+  const automaticFetch = () =>
+    vi.fn<typeof fetch>(async (_url, options) =>
+      options?.method
+        ? Response.json({ id: 'msg-test', content: [{ type: 'text', text: '1' }] })
+        : Response.json({ data: [{ id: 'discovered-model' }] }),
+    );
+
+  it('saves only the automatically proven settings and does not charge a duplicate direct probe', async () => {
+    const runtime = createRuntime();
+    const fetchMock = automaticFetch();
+    const duplicateProbe = vi.spyOn(runtime, 'testPreparedConnection');
+    const result = await runtime.verifyAndSaveNextConversationConfig(automaticInput(), undefined, {
+      automaticFetch: fetchMock,
+    });
+    expect(result.connectionTest.ok).toBe(true);
+    expect(result.state.config).toMatchObject({
+      authMode: 'authToken',
+      baseUrl: 'https://relay.example.com',
+      model: 'discovered-model',
+      modelFast: 'discovered-model',
+      preset: 'custom',
+      credentialConfigured: true,
+    });
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(
+      1,
+    );
+    expect(duplicateProbe).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('private-test-key');
+  });
+
+  it('makes Test Connection read-only and preserves the previous profile on failure', async () => {
+    const runtime = createRuntime();
+    await runtime.saveNextConversationConfig(localInput('stable-model'));
+    const before = await runtime.getNextConversationConnection();
+    const test = await runtime.verifyAndSaveNextConversationConfig(automaticInput(), undefined, {
+      automaticFetch: automaticFetch(),
+      testOnly: true,
+    });
+    expect(test.connectionTest.ok).toBe(true);
+    expect(test.state).toEqual(before);
+    const fetchMock = vi.fn<typeof fetch>(async (_url, options) =>
+      options?.method
+        ? new Response('', { status: 401 })
+        : Response.json({ data: [{ id: 'discovered-model' }] }),
+    );
+    await expect(
+      runtime.verifyAndSaveNextConversationConfig(automaticInput(), undefined, {
+        automaticFetch: fetchMock,
+      }),
+    ).rejects.toThrow('检查网址和密钥');
+    expect(await runtime.getNextConversationConnection()).toEqual(before);
+  });
+
+  it('requires guarded network access and never borrows a key after changing a relay host', async () => {
+    const runtime = createRuntime();
+    await expect(runtime.verifyAndSaveNextConversationConfig(automaticInput())).rejects.toThrow(
+      '网络授权',
+    );
+    await runtime.verifyAndSaveNextConversationConfig(automaticInput(), undefined, {
+      automaticFetch: automaticFetch(),
+    });
+    const fetchMock = automaticFetch();
+    await expect(
+      runtime.verifyAndSaveNextConversationConfig(
+        automaticInput({
+          baseUrl: 'another.example.com',
+          credential: undefined,
+          credentialAction: 'keep',
+        }),
+        undefined,
+        { automaticFetch: fetchMock },
+      ),
+    ).rejects.toThrow('请填写密钥');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await runtime.getNextConversationConnection()).config?.baseUrl).toBe(
+      'https://relay.example.com',
+    );
+  });
+
+  it('does not accept hidden renderer models when a new relay cannot discover any', async () => {
+    const runtime = createRuntime();
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('', { status: 404 }));
+    await expect(
+      runtime.verifyAndSaveNextConversationConfig(automaticInput(), undefined, {
+        automaticFetch: fetchMock,
+      }),
+    ).rejects.toThrow('未能获取模型');
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+    expect((await runtime.getNextConversationConnection()).config).toBeUndefined();
+  });
+
   it('keeps DeepSeek and ChatGPT credentials and routes isolated in the same project', async () => {
     const runtime = createRuntime();
     await runtime.saveNextConversationConfig({

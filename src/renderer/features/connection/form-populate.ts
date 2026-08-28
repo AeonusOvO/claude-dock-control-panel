@@ -67,11 +67,7 @@ export const createConnectionFormPopulateActions = (
     }
     claudeCredential.value = '';
     const credentialConfigured = config.sourceCredentialConfigured ?? config.credentialConfigured;
-    credentialStatus.textContent = credentialConfigured
-      ? config.protocol === 'openai'
-        ? '已由本地 Router 保存；留空将继续使用'
-        : '已使用 Windows 安全存储加密保存；留空将继续使用'
-      : '尚未保存凭据';
+    credentialStatus.textContent = credentialConfigured ? '已保存，留空继续使用' : '尚未保存密钥';
     clearCredentialButton.disabled = !credentialConfigured;
     formState.selectedRouterProviderId = config.routerProviderId;
     formState.configFormSessionId = sessionId;

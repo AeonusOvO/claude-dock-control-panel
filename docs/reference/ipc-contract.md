@@ -415,6 +415,16 @@ ClaudeDock。
 
 ## 新增频道的步骤
 
+### 自动接入载荷
+
+`claude:save-next-config`、`claude:test-next-connection`、`chat:save-config` 与 `chat:test-connection`
+复用既有通道，接收可选 `autoDetect: true`。这是请求参数，不作为持久化的已验证标记。
+main 重新解析服务商、地址、密钥和在线模型，只在成功后保存；测试通道不保存。
+Claude 保存结果可携带 `connectionTest`，renderer 不再先测后另发保存。会话级 `claude:save-config`
+拒绝自动载荷。Chat 视图另返回可选 `preset`，协议增加 `openai-responses`；已保存密钥仍只返回 configured 状态。
+
+### 扩展通道
+
 1. 在 `src/shared/ipc/channels.ts` 的对应组（请求响应/单向命令/事件）加频道常量。
 2. 在 `src/shared/contracts/control-panel-api.ts` 的对应域接口加方法签名，参数与返回值类型加在同域的 `src/shared/contracts/<domain>.ts`。
 3. 在 `src/preload/bridges/<domain>.ts` 加对应桥方法，频道引用 `CHANNELS` 常量。

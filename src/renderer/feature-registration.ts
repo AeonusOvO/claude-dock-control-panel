@@ -478,6 +478,7 @@ const installManagementFeatures = (
     runGuarded,
     savedClaudeConfigInput: connectionForm.savedClaudeConfigInput,
     saveClaudeConfig: connectionForm.saveClaudeConfig,
+    applyNextClaudeConnection: connectionForm.applyNextClaudeConnection,
     selectRailTab: railShell.selectRailTab,
     setAuthOptions: connectionForm.setAuthOptions,
     settings: {

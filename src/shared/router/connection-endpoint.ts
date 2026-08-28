@@ -85,6 +85,12 @@ const addressWithPath = (url: URL, path: string): string => {
   return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
 };
 
+/** Normalize what was pasted without choosing an API protocol or changing its path. */
+export const normalizeConnectionAddress = (value: string): string => {
+  const { path, url } = parseConnectionAddress(value);
+  return addressWithPath(url, path);
+};
+
 /**
  * Returns the complete protocol endpoint. Used where a full request URL is genuinely required —
  * the local Router's provider entries and the connectivity probe — never for `ANTHROPIC_BASE_URL`.
@@ -111,7 +117,9 @@ export const completeConnectionEndpoint = (
         : `${basePath}/v1/messages`
       : /\/v1$/i.test(basePath)
         ? `${basePath}/chat/completions`
-        : `${basePath}/v1/chat/completions`;
+        : /\/v\d+$/i.test(basePath)
+          ? `${basePath}/chat/completions`
+          : `${basePath}/v1/chat/completions`;
   url.pathname = completed.replace(/\/{2,}/g, '/');
   return url.toString();
 };
@@ -138,10 +146,9 @@ export const openAiModelsEndpoint = (value: string): string => {
   const basePath = path
     .replace(/\/(?:v1\/)?(?:chat\/completions|responses|models)$/i, '')
     .replace(/\/+$/, '');
-  url.pathname = (/\/v1$/i.test(basePath) ? `${basePath}/models` : `${basePath}/v1/models`).replace(
-    /\/{2,}/g,
-    '/',
-  );
+  url.pathname = (
+    /\/v\d+$/i.test(basePath) ? `${basePath}/models` : `${basePath}/v1/models`
+  ).replace(/\/{2,}/g, '/');
   return url.toString();
 };
 

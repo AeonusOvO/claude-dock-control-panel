@@ -17,14 +17,16 @@
 | [project-layout.md](reference/project-layout.md)           | 目录结构、依赖规则、文件体积护栏                          |
 | [ipc-contract.md](reference/ipc-contract.md)               | 全部 212 个通道与 `ControlPanelApi` 212 个 API 成员的映射 |
 | [cli-command-catalog.md](reference/cli-command-catalog.md) | Claude / Codex 斜杠命令清单                               |
+| [provider-access.md](reference/provider-access.md)         | 官方地址、国产模型与订阅范围、自动探测边界                |
 
 ## how-to —— 照着做
 
-| 文档                            | 内容                                                         |
-| ------------------------------- | ------------------------------------------------------------ |
-| [develop.md](how-to/develop.md) | 环境、命令、加 IPC 往返 / 状态广播 / 设置项 / 视图样式、约定 |
-| [verify.md](how-to/verify.md)   | 快门禁、全门禁、发布报告、COS 公开 feed 验收                 |
-| [release.md](how-to/release.md) | 通道产物、COS 发布、控制台备用、引导与信任边界               |
+| 文档                                          | 内容                                                         |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| [develop.md](how-to/develop.md)               | 环境、命令、加 IPC 往返 / 状态广播 / 设置项 / 视图样式、约定 |
+| [verify.md](how-to/verify.md)                 | 快门禁、全门禁、发布报告、COS 公开 feed 验收                 |
+| [release.md](how-to/release.md)               | 通道产物、COS 发布、控制台备用、引导与信任边界               |
+| [connect-models.md](how-to/connect-models.md) | 极简接入、高级设置与官方套餐                                 |
 
 ## adr —— 决策记录
 

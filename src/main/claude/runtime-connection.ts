@@ -21,7 +21,8 @@ export const connectionProtocolForRouterProvider = (
 
 export const defaultConnectionProtocolForPreset = (
   preset: SaveClaudeConfigInput['preset'],
-): ClaudeEndpointProtocol => (preset === 'gateway' ? 'unknown' : 'anthropic');
+): ClaudeEndpointProtocol =>
+  preset === 'gateway' ? 'unknown' : (findClaudeProvider(preset)?.protocol ?? 'anthropic');
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 

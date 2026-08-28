@@ -73,7 +73,10 @@ export const officialTargetForChat = (
     return undefined;
   }
   const expectedProtocol = provider === 'anthropic-claude' ? 'anthropic' : 'openai';
-  if (runtime.protocol !== expectedProtocol) {
+  if (
+    runtime.protocol !== expectedProtocol &&
+    !(expectedProtocol === 'openai' && runtime.protocol === 'openai-responses')
+  ) {
     throw new Error('官方接口地址与所选对话协议不一致，请检查接口配置。');
   }
   return { provider, target: { process: 'application', url } };
@@ -85,6 +88,20 @@ const registerChatConfigIpc = (
   withOfficialProviderAccess: WithOfficialProviderAccess,
   validateSender: ValidateSender,
 ): void => {
+  let automaticConnectionPending = false;
+  const connectAutomatically = async (input: SaveChatConfigInput, save: boolean) => {
+    if (automaticConnectionPending) throw new Error('正在连接，请稍候。');
+    automaticConnectionPending = true;
+    try {
+      const resolved = await chatService.resolveAutomaticConnection(
+        structuredClone(input),
+        withOfficialProviderAccess,
+      );
+      return save ? chatConfigStore.save(resolved.input) : resolved.test;
+    } finally {
+      automaticConnectionPending = false;
+    }
+  };
   ipcMain.handle(CHANNELS.CHAT_GET_CONFIG, (event) => {
     validateSender(event);
     return chatConfigStore.getView();
@@ -94,6 +111,9 @@ const registerChatConfigIpc = (
     if (!input || typeof input !== 'object') {
       throw new Error('对话接入配置格式无效。');
     }
+    if (automaticConnectionPending) throw new Error('正在连接，请稍候。');
+    if ((input as SaveChatConfigInput).autoDetect)
+      return connectAutomatically(input as SaveChatConfigInput, true);
     return chatConfigStore.save(input as SaveChatConfigInput);
   });
   ipcMain.handle(CHANNELS.CHAT_TEST_CONNECTION, async (event, input: unknown) => {
@@ -102,6 +122,7 @@ const registerChatConfigIpc = (
       throw new Error('对话接入测试参数无效。');
     }
     const request = input as SaveChatConfigInput;
+    if (request.autoDetect) return connectAutomatically(request, false);
     const runtime = chatService.captureTestRuntimeSnapshot(request);
     const officialTarget = officialTargetForChat(runtime);
     const test = () => chatService.testRuntime(runtime);

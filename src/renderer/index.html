@@ -812,7 +812,7 @@
                 <ul class="connection-history__list" id="connection-history-list"></ul>
               </section>
 
-              <form id="claude-config-form" hidden>
+              <form id="claude-config-form" data-settings-mode="simple" hidden>
                 <div class="step-heading">
                   <span class="step-number">2</span>
                   <div>
@@ -822,6 +822,15 @@
                     >
                   </div>
                 </div>
+
+                <button
+                  class="button button--secondary connection-settings-mode"
+                  id="connection-settings-mode"
+                  type="button"
+                  aria-expanded="false"
+                >
+                  高级设置
+                </button>
 
                 <label class="field" for="claude-preset" hidden>
                   <span>最终连接方式</span>
@@ -846,7 +855,7 @@
                 </label>
 
                 <label class="field" id="base-url-field" for="claude-base-url">
-                  <span>中转站接口地址</span>
+                  <span>网址</span>
                   <input
                     id="claude-base-url"
                     type="text"
@@ -860,7 +869,7 @@
                   >
                 </label>
 
-                <label class="field" for="claude-model">
+                <label class="field" for="claude-model" data-connection-advanced>
                   <span>模型标识</span>
                   <input
                     id="claude-model"
@@ -872,7 +881,7 @@
                   <small id="model-help">必须与最终网关中可用的模型标识完全一致。</small>
                 </label>
 
-                <label class="field" for="claude-model-fast">
+                <label class="field" for="claude-model-fast" data-connection-advanced>
                   <span>小型/备用模型标识</span>
                   <input
                     id="claude-model-fast"
@@ -919,7 +928,7 @@
                       <span>先真实验证端点、认证和模型，通过后再保存。</span>
                     </div>
                   </div>
-                  <span>会发送最多 1 个输出令牌，可能产生极少量费用。</span>
+                  <span>可能会消耗少量 token</span>
                 </div>
                 <div
                   class="connection-test-result"
@@ -938,7 +947,7 @@
                   <div id="connection-remedy-actions"></div>
                 </section>
 
-                <div class="privacy-shield">
+                <div class="privacy-shield" data-connection-advanced>
                   <span class="privacy-shield__icon" aria-hidden="true">◆</span>
                   <div>
                     <strong>会话环境已锁定</strong>
@@ -953,10 +962,20 @@
                   <button class="save-config" id="test-claude-connection" type="submit">
                     测试并接入
                   </button>
-                  <button class="skip-test" id="save-claude-config" type="button">
+                  <button
+                    class="skip-test"
+                    id="save-claude-config"
+                    type="button"
+                    data-connection-advanced
+                  >
                     跳过测试并保存
                   </button>
-                  <button class="clear-credential" id="clear-credential" type="button">
+                  <button
+                    class="clear-credential"
+                    id="clear-credential"
+                    type="button"
+                    data-connection-advanced
+                  >
                     清除密钥
                   </button>
                 </div>
@@ -3731,11 +3750,11 @@
       id="chat-settings-dialog"
       aria-labelledby="chat-settings-dialog-title"
     >
-      <form class="chat-config-form" id="chat-config-form">
+      <form class="chat-config-form" id="chat-config-form" data-settings-mode="simple">
         <header>
           <div>
             <strong id="chat-settings-dialog-title">独立模型接入</strong>
-            <span>此处配置只用于“对话”页，不会修改项目终端和 Claude Code 的接入。</span>
+            <span>仅用于独立对话。</span>
           </div>
           <button
             class="chat-settings-dialog__close"
@@ -3749,26 +3768,40 @@
           </button>
         </header>
         <div class="chat-settings-dialog__body">
-          <label class="field" for="chat-protocol">
+          <label class="field" for="chat-provider">
+            <span>服务商</span>
+            <select id="chat-provider"></select>
+          </label>
+          <button
+            class="button button--secondary connection-settings-mode"
+            id="chat-settings-mode"
+            type="button"
+            aria-expanded="false"
+          >
+            高级设置
+          </button>
+          <label class="field" for="chat-protocol" data-connection-advanced>
             <span>接口协议</span>
             <select id="chat-protocol">
               <option value="anthropic">Anthropic 消息接口</option>
               <option value="openai">OpenAI 对话补全接口</option>
+              <option value="openai-responses">OpenAI Responses 接口</option>
             </select>
           </label>
-          <label class="field" for="chat-base-url">
-            <span>接口地址</span>
+          <label class="field" id="chat-base-url-field" for="chat-base-url">
+            <span>网址</span>
             <input
               id="chat-base-url"
-              type="url"
+              type="text"
+              inputmode="url"
               maxlength="2048"
               spellcheck="false"
-              placeholder="https://api.anthropic.com"
+              placeholder="api.example.com"
               required
             />
-            <small>会自动补全对应的 /v1/messages 或 /v1/chat/completions。</small>
+            <small data-connection-advanced>支持域名、基址或完整接口地址。</small>
           </label>
-          <label class="field" for="chat-model">
+          <label class="field" for="chat-model" data-connection-advanced>
             <span>模型名称</span>
             <input
               id="chat-model"
@@ -3776,10 +3809,9 @@
               maxlength="256"
               spellcheck="false"
               placeholder="填写接口实际支持的模型 ID"
-              required
             />
           </label>
-          <label class="field" for="chat-auth-mode">
+          <label class="field" for="chat-auth-mode" data-connection-advanced>
             <span>认证方式</span>
             <select id="chat-auth-mode">
               <option value="apiKey">x-api-key</option>
@@ -3788,36 +3820,43 @@
             </select>
           </label>
           <label class="field" for="chat-credential">
-            <span>接口凭据</span>
+            <span>密钥</span>
             <input
               id="chat-credential"
               type="password"
               maxlength="4096"
               autocomplete="new-password"
-              placeholder="填写新凭据，留空则保留已保存凭据"
+              placeholder="填写密钥"
             />
-            <small id="chat-credential-status">尚未保存凭据。</small>
+            <small id="chat-credential-status"></small>
           </label>
-          <label class="router-choice" for="chat-clear-credential">
+          <label class="router-choice" for="chat-clear-credential" data-connection-advanced>
             <input id="chat-clear-credential" type="checkbox" />
             <span>保存时清除已有凭据</span>
           </label>
           <div
             class="chat-connection-test"
             id="chat-connection-test"
+            data-tone="idle"
             role="status"
             aria-live="polite"
           >
             尚未测试当前配置。
           </div>
           <p class="chat-config-status" id="chat-config-status" role="status"></p>
+          <p class="connection-cost-notice">可能会消耗少量 token</p>
         </div>
         <footer class="chat-config-actions">
-          <button class="button button--secondary" id="test-chat-connection" type="button">
+          <button
+            class="button button--secondary"
+            id="test-chat-connection"
+            type="button"
+            data-connection-advanced
+          >
             测试连接
           </button>
           <button class="button button--primary" id="save-chat-config" type="submit">
-            保存独立接入
+            连接并保存
           </button>
         </footer>
       </form>

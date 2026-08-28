@@ -40,6 +40,7 @@ export const EXTENSION_BY_MEDIA_TYPE: Readonly<Record<string, string>> = {
 };
 
 export interface ChatState {
+  chatConfigLoadGeneration: number;
   activeChatAttachmentDraftId: string | undefined;
   activeChatConversationId: string | undefined;
   activeChatIdleNoticeElement: HTMLElement | undefined;
@@ -65,6 +66,7 @@ export interface ChatState {
 }
 
 export const createChatState = (): ChatState => ({
+  chatConfigLoadGeneration: 0,
   activeChatAttachmentDraftId: undefined,
   activeChatConversationId: undefined,
   activeChatIdleNoticeElement: undefined,

@@ -1,5 +1,6 @@
 import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
+import { guardedAutomaticConnectionFetch } from '../network/automatic-connection-access';
 import type {
   ClaudeConnectionTestResult,
   ClaudeNextConversationConnectionState,
@@ -152,6 +153,9 @@ export const registerClaudeStateIpc = ({
       try {
         const validatedInput = validateClaudeConfigInput(input);
         const runtime = requireClaudeRuntime();
+        if (validatedInput.autoDetect) {
+          throw new Error('请在“接入”页自动配置新对话。');
+        }
         const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const testConnection = async (): Promise<ClaudeConnectionTestResult> => {
           // Readiness can make the sidecar contact its upstream provider, so it must remain behind the
@@ -198,6 +202,17 @@ export const registerClaudeStateIpc = ({
       try {
         const validatedInput = validateClaudeConfigInput(input);
         const runtime = requireClaudeRuntime();
+        if (validatedInput.autoDetect) {
+          const result = await runtime.verifyAndSaveNextConversationConfig(
+            validatedInput,
+            undefined,
+            {
+              automaticFetch: guardedAutomaticConnectionFetch(withOfficialProviderAccess),
+              testOnly: true,
+            },
+          );
+          return result.connectionTest;
+        }
         const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const testConnection = async (): Promise<ClaudeConnectionTestResult> => {
           if (validatedInput.preset === 'chatgpt-subscription') {

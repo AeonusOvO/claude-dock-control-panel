@@ -6,6 +6,7 @@ import type { ClaudeProviderGroupId, ClaudeProviderId } from '../../../shared/cl
 import { ManagedChatGptOperationTracker } from './managed-chatgpt-operation';
 
 export interface ConnectionFormState {
+  advancedSettings: boolean;
   selectedProviderId: ClaudeProviderId | undefined;
   selectedRouterProviderId: string | undefined;
   configFormSessionId: string;
@@ -20,6 +21,7 @@ export interface ConnectionFormState {
 }
 
 export const createConnectionFormState = (): ConnectionFormState => ({
+  advancedSettings: false,
   selectedProviderId: undefined,
   selectedRouterProviderId: undefined,
   configFormSessionId: '',

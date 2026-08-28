@@ -52,6 +52,8 @@ describe('connection endpoint completion', () => {
     ['api.example.com', 'https://api.example.com/v1/models'],
     ['api.example.com/v1', 'https://api.example.com/v1/models'],
     ['api.example.com/openai/v1/chat/completions', 'https://api.example.com/openai/v1/models'],
+    ['open.bigmodel.cn/api/paas/v4', 'https://open.bigmodel.cn/api/paas/v4/models'],
+    ['qianfan.baidubce.com/v2/chat/completions', 'https://qianfan.baidubce.com/v2/models'],
     ['http://127.0.0.1:8317/v1/models', 'http://127.0.0.1:8317/v1/models'],
   ])('derives the model catalog for %s', (input, expected) => {
     expect(openAiModelsEndpoint(input)).toBe(expected);

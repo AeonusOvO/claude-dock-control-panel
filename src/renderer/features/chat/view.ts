@@ -8,6 +8,8 @@ import { estimateChatUsage } from '../../../shared/conversation/chat-usage';
 import type { MarkdownDomRenderer } from '../../platform/markdown';
 import type { ChatElements } from './elements';
 import type { ChatState } from './state';
+import { inferChatProvider } from '../../../shared/claude/chat-providers';
+import { initializeChatProviders, renderChatSettingsMode } from './settings-mode';
 
 export interface ChatViewDependencies {
   chatMessagesElement: HTMLElement;
@@ -70,6 +72,9 @@ export const createChatView = (
 
   const renderChatConfig = (config: ChatConfigView): void => {
     state.chatConfig = config;
+    initializeChatProviders(elements);
+    elements.chatProvider.value =
+      config.preset ?? (config.model ? inferChatProvider(config.baseUrl) : 'custom');
     elements.chatProtocol.value = config.protocol;
     elements.chatBaseUrl.value = config.baseUrl;
     elements.chatModel.value = config.model;
@@ -78,13 +83,14 @@ export const createChatView = (
     elements.chatClearCredential.checked = false;
     elements.chatCredential.disabled = config.authMode === 'none';
     elements.chatClearCredential.disabled = config.authMode === 'none';
-    elements.chatCredentialStatus.textContent =
-      config.authMode === 'none'
-        ? '当前接口不使用认证凭据。'
-        : config.credentialConfigured
-          ? '已通过 Windows 安全存储保存凭据；留空可继续使用。'
-          : '尚未保存凭据。';
+    elements.chatCredentialStatus.textContent = config.credentialConfigured
+      ? '已保存，留空继续使用。'
+      : '';
+    elements.chatConfigStatus.textContent = '';
+    elements.chatConnectionTest.dataset.tone = 'idle';
+    elements.chatConnectionTest.textContent = '尚未测试当前配置。';
     elements.chatActiveModel.textContent = config.model || '尚未配置模型';
+    renderChatSettingsMode(elements);
   };
 
   const normalizedChatBlocks = (content: ChatMessage['content']): ChatContentBlock[] =>

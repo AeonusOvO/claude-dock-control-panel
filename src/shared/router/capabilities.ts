@@ -7,8 +7,20 @@ export interface RouterCapability {
 }
 
 const VERIFIED_AT = '2026-08-04';
+const OPENAI_API: RouterCapability = {
+  mode: 'router-required',
+  reason: 'OpenAI 兼容 API 由本地路由器自动转换。',
+  verifiedAt: '2026-08-27',
+};
 
 export const ROUTER_CAPABILITIES: Readonly<Record<ClaudeProviderId, RouterCapability>> = {
+  'glm-api': OPENAI_API,
+  'qwen-api': OPENAI_API,
+  'doubao-api': OPENAI_API,
+  'stepfun-api': OPENAI_API,
+  hunyuan: OPENAI_API,
+  qianfan: OPENAI_API,
+  spark: OPENAI_API,
   anthropic: {
     mode: 'direct',
     reason: 'Claude Code 官方登录原生直连 Anthropic，不需要协议转换。',

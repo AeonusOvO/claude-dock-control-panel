@@ -21,6 +21,7 @@ import { type ClaudeNetworkAccess, effectiveClaudeNetworkAccess } from '../claud
 import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
 import { resolveDirectory } from '../infra/directory';
+import { guardedAutomaticConnectionFetch } from '../network/automatic-connection-access';
 import type { TerminalWorkspace } from '../terminal/workspace';
 import {
   validateClaudeConfigInput,
@@ -303,6 +304,20 @@ const registerNextConversationConnectionIpc = ({
       try {
         assertExternalRoutingWritesAllowed();
         const validatedInput = validateClaudeConfigInput(input);
+        if (validatedInput.autoDetect) {
+          const result = await runtime.verifyAndSaveNextConversationConfig(
+            validatedInput,
+            undefined,
+            {
+              automaticFetch: guardedAutomaticConnectionFetch(withOfficialProviderAccess),
+            },
+          );
+          return {
+            ...result,
+            ok: result.connectionTest.ok,
+            error: result.connectionTest.ok ? undefined : result.connectionTest.message,
+          };
+        }
         const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const state = await withOptionalNetworkAccess(
           withOfficialProviderAccess,
@@ -366,6 +381,9 @@ export const registerClaudeConnectionIpc = (
       const runtime = requireClaudeRuntime();
       try {
         const validatedInput = validateClaudeConfigInput(input);
+        if (validatedInput.autoDetect) {
+          throw new Error('请在“接入”页自动配置新对话。');
+        }
         const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const state = await withDevelopmentSessionOperation(validatedSessionId, (assertCurrent) =>
           runClaudeProjectConfigTransaction<PreparedClaudeConfigSave>({

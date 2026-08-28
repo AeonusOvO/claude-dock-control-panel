@@ -9,6 +9,10 @@ import type {
 import type { ChatAttachmentStore } from './attachment-store';
 import type { ChatRuntimeConfig } from './config-store';
 import { validateChatMessages } from './history-store';
+import {
+  completeConnectionEndpoint,
+  normalizeConnectionAddress,
+} from '../../shared/router/connection-endpoint';
 
 interface UsagePatch {
   inputTokens?: number;
@@ -171,16 +175,18 @@ export const validateChatRequest = (
 ): ChatMessage[] => preflightChatRequest(input, attachmentStore).messages;
 
 export const endpointFor = (baseUrl: string, protocol: ChatProtocol): string => {
-  const parsed = new URL(baseUrl);
-  const expected = protocol === 'anthropic' ? 'messages' : 'chat/completions';
-  const pathname = parsed.pathname.replace(/\/+$/, '');
-  if (pathname.endsWith(`/v1/${expected}`)) {
-    return parsed.toString();
-  }
-  parsed.pathname = pathname.endsWith('/v1')
-    ? `${pathname}/${expected}`
-    : `${pathname}/v1/${expected}`;
-  return parsed.toString();
+  const normalized = normalizeConnectionAddress(baseUrl);
+  if (protocol === 'anthropic' && /\/messages$/i.test(new URL(normalized).pathname))
+    return normalized;
+  const completed = completeConnectionEndpoint(
+    normalized,
+    protocol === 'anthropic' ? 'anthropic' : 'openai',
+  );
+  return protocol === 'openai-responses'
+    ? completed.replace(/\/chat\/completions$/i, '/responses')
+    : protocol === 'openai'
+      ? completed.replace(/\/responses$/i, '/chat/completions')
+      : completed;
 };
 
 const hasRemoteFile = (messages: ChatMessage[]): boolean =>
@@ -196,11 +202,7 @@ export const requestHeaders = (
 ): Record<string, string> => {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (config.authMode === 'apiKey' && config.credential) {
-    // Gateways disagree on which header carries the key: official Anthropic reads x-api-key,
-    // while most OpenAI-style relays only read Authorization. Sending both keeps one saved
-    // credential working across gateways that the project terminal already connects to.
     headers['x-api-key'] = config.credential;
-    headers.authorization = `Bearer ${config.credential}`;
   } else if (config.authMode === 'bearer' && config.credential) {
     headers.authorization = `Bearer ${config.credential}`;
   }
@@ -335,6 +337,32 @@ export const serializeChatRequestBody = (
   options: ChatRequestBodyOptions,
   attachmentStore?: ChatAttachmentStore,
 ): Record<string, unknown> => {
+  if (config.protocol === 'openai-responses') {
+    return {
+      input: messages.map((message) => ({
+        role: message.role,
+        content: openAiContent(message, attachmentStore).map((value) => {
+          const block = value as Record<string, unknown>;
+          if (block.type === 'text')
+            return {
+              text: block.text,
+              type: 'input_text',
+            };
+          if (block.type === 'image_url')
+            return {
+              type: 'input_image',
+              detail: 'auto',
+              image_url: (block.image_url as { url: string }).url,
+            };
+          return { type: 'input_file', ...(block.file as Record<string, unknown>) };
+        }),
+      })),
+      max_output_tokens: options.stream ? options.maxTokens : 16,
+      model: config.model,
+      store: false,
+      stream: options.stream,
+    };
+  }
   if (config.protocol === 'anthropic') {
     return {
       max_tokens: options.stream ? (options.maxTokens ?? STREAM_MAX_TOKENS) : 1,
@@ -386,11 +414,52 @@ interface DirectChatResponse {
   text?: string;
 }
 
+const responsesStopReason = (value: Record<string, unknown>): string | undefined => {
+  if (value.status !== 'incomplete') return undefined;
+  const details = value.incomplete_details;
+  const reason =
+    details && typeof details === 'object' ? (details as { reason?: unknown }).reason : undefined;
+  return reason === 'max_output_tokens'
+    ? 'max_tokens'
+    : typeof reason === 'string'
+      ? reason
+      : 'incomplete';
+};
+
 export const directChatResponse = (protocol: ChatProtocol, value: unknown): DirectChatResponse => {
   if (!value || typeof value !== 'object') {
     return { recognized: false };
   }
   const record = value as Record<string, unknown>;
+  if (
+    protocol === 'openai-responses' &&
+    record.object === 'response' &&
+    Array.isArray(record.output)
+  ) {
+    if (record.status === 'failed' || record.error)
+      throw new ChatStreamProviderError('接口生成失败。', false);
+    const content = record.output
+      .flatMap((item) =>
+        item && typeof item === 'object' && Array.isArray(item.content)
+          ? (item.content as Record<string, unknown>[])
+          : [],
+      )
+      .filter((item) => item && typeof item === 'object');
+    return {
+      recognized: ['completed', 'incomplete'].includes(String(record.status)),
+      text:
+        content
+          .filter((item) => item.type === 'output_text' && typeof item.text === 'string')
+          .map((item) => item.text)
+          .join('') || undefined,
+      refusal:
+        content
+          .filter((item) => item.type === 'refusal' && typeof item.refusal === 'string')
+          .map((item) => item.refusal)
+          .join('') || undefined,
+      stopReason: responsesStopReason(record),
+    };
+  }
   if (protocol === 'anthropic' && Array.isArray(record.content)) {
     const blocks = record.content.filter((item): item is Record<string, unknown> =>
       Boolean(item && typeof item === 'object'),
@@ -444,16 +513,16 @@ export const usageFromPayload = (
   const directUsage =
     protocol === 'anthropic' && record.type === 'message_start'
       ? (record.message as { usage?: unknown } | undefined)?.usage
-      : record.usage;
+      : protocol === 'openai-responses' && record.response && typeof record.response === 'object'
+        ? (record.response as { usage?: unknown }).usage
+        : record.usage;
   if (!directUsage || typeof directUsage !== 'object') {
     return undefined;
   }
   const usage = directUsage as Record<string, unknown>;
-  const inputTokens = finiteToken(
-    protocol === 'anthropic' ? usage.input_tokens : usage.prompt_tokens,
-  );
+  const inputTokens = finiteToken(protocol !== 'openai' ? usage.input_tokens : usage.prompt_tokens);
   const outputTokens = finiteToken(
-    protocol === 'anthropic' ? usage.output_tokens : usage.completion_tokens,
+    protocol !== 'openai' ? usage.output_tokens : usage.completion_tokens,
   );
   const totalTokens = finiteToken(usage.total_tokens);
   return inputTokens === undefined && outputTokens === undefined && totalTokens === undefined
@@ -504,6 +573,33 @@ export const parseChatStreamDelta = (
     );
   }
   const usage = usageFromPayload(protocol, value);
+  if (protocol === 'openai-responses') {
+    if (record.type === 'response.failed')
+      throw new ChatStreamProviderError('接口生成失败。', false);
+    return {
+      done: record.type === 'response.completed' || record.type === 'response.incomplete',
+      text:
+        record.type === 'response.output_text.delta' && typeof record.delta === 'string'
+          ? record.delta
+          : undefined,
+      thinking:
+        record.type === 'response.reasoning_summary_text.delta' && typeof record.delta === 'string'
+          ? record.delta
+          : undefined,
+      refusal:
+        record.type === 'response.refusal.delta' && typeof record.delta === 'string'
+          ? record.delta
+          : undefined,
+      stopReason:
+        record.type === 'response.incomplete'
+          ? responsesStopReason({
+              ...(record.response && typeof record.response === 'object' ? record.response : {}),
+              status: 'incomplete',
+            })
+          : undefined,
+      usage,
+    };
+  }
   if (protocol === 'anthropic') {
     if (record.type === 'message_stop') {
       return { done: true, usage };

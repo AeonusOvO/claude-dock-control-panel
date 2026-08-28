@@ -1,7 +1,7 @@
 import type { FailureMetadata } from '../diagnostics/failure';
 import type { ClaudeCredentialAction } from './claude';
 
-export type ChatProtocol = 'anthropic' | 'openai';
+export type ChatProtocol = 'anthropic' | 'openai' | 'openai-responses';
 
 export type ChatAuthMode = 'apiKey' | 'bearer' | 'none';
 
@@ -31,15 +31,18 @@ export interface ChatConfigView {
   credentialConfigured: boolean;
   model: string;
   protocol: ChatProtocol;
+  preset?: string;
 }
 
 export interface SaveChatConfigInput {
+  autoDetect?: boolean;
   authMode: ChatAuthMode;
   baseUrl: string;
   credential?: string;
   credentialAction: ClaudeCredentialAction;
   model: string;
   protocol: ChatProtocol;
+  preset?: string;
 }
 
 export type ChatAttachmentSource =

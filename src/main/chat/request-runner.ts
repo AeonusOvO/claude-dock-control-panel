@@ -493,10 +493,12 @@ export abstract class ChatRequestRunner {
             { includeUsage: true, thinking: false },
             { includeUsage: true, maxTokens: STREAM_MAX_TOKENS_FALLBACK, thinking: false },
           ]
-        : [
-            { includeUsage: true, thinking: false },
-            { includeUsage: false, thinking: false },
-          ];
+        : config.protocol === 'openai-responses'
+          ? [{ includeUsage: false, thinking: false }]
+          : [
+              { includeUsage: true, thinking: false },
+              { includeUsage: false, thinking: false },
+            ];
     let transientRetries = 0;
     const retry = async (
       retryReason: ChatRetryReason,

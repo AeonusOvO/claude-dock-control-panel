@@ -35,15 +35,30 @@ export const createConnectionTestActions = (
     const originalLabel = elements.testClaudeConnectionButton.textContent;
     elements.testClaudeConnectionButton.disabled = true;
     elements.testClaudeConnectionButton.setAttribute('aria-busy', 'true');
-    elements.testClaudeConnectionButton.textContent = '正在发送单令牌测试…';
+    elements.testClaudeConnectionButton.textContent = '正在连接…';
     dependencies.syncConnectionInteractivity();
     try {
+      const input = configInput ?? dependencies.currentConfigInput('keep');
+      if (input.autoDetect && !activeStatus && saveOnSuccess) {
+        const result = await window.controlPanel.saveNextClaudeConfig(input);
+        if (result.ok) dependencies.applyNextClaudeConnection(result.state);
+        const message = result.ok ? '已连接。' : (result.error ?? '连接失败，请重试。');
+        renderConnectionTest(
+          result.connectionTest ?? {
+            message,
+            ok: result.ok,
+            stages: [],
+            testedAt: Date.now(),
+            tone: result.ok ? 'success' : 'error',
+          },
+        );
+        dependencies.showToast(message, result.ok ? 'success' : 'error');
+        return;
+      }
       const result =
         activeStatus && configInput
           ? await window.controlPanel.testClaudeConnection(activeStatus.id, configInput)
-          : await window.controlPanel.testNextClaudeConnection(
-              configInput ?? dependencies.currentConfigInput('keep'),
-            );
+          : await window.controlPanel.testNextClaudeConnection(input);
       renderConnectionTest(result);
       if (result.ok && saveOnSuccess) {
         await dependencies.saveClaudeConfig('keep');

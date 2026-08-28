@@ -21,6 +21,9 @@ export interface ChatElements {
   chatInput: HTMLTextAreaElement;
   chatModel: HTMLInputElement;
   chatProtocol: HTMLSelectElement;
+  chatProvider: HTMLSelectElement;
+  chatSettingsModeButton: HTMLButtonElement;
+  chatBaseUrlField: HTMLElement;
   chatSettingsDialog: HTMLDialogElement;
   chatTokenUsage: HTMLElement;
   closeChatSettingsButton: HTMLButtonElement;
@@ -53,6 +56,9 @@ export const createChatElements = (): ChatElements => ({
   chatInput: requiredElement<HTMLTextAreaElement>('#chat-input'),
   chatModel: requiredElement<HTMLInputElement>('#chat-model'),
   chatProtocol: requiredElement<HTMLSelectElement>('#chat-protocol'),
+  chatProvider: requiredElement<HTMLSelectElement>('#chat-provider'),
+  chatSettingsModeButton: requiredElement<HTMLButtonElement>('#chat-settings-mode'),
+  chatBaseUrlField: requiredElement<HTMLElement>('#chat-base-url-field'),
   chatSettingsDialog: requiredElement<HTMLDialogElement>('#chat-settings-dialog'),
   chatTokenUsage: requiredElement<HTMLElement>('#chat-token-usage'),
   closeChatSettingsButton: requiredElement<HTMLButtonElement>('#close-chat-settings'),

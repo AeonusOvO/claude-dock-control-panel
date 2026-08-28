@@ -295,6 +295,7 @@ export const claudeConfigInputSchema = z
       return;
     }
     if (
+      (value.autoDetect !== undefined && typeof value.autoDetect !== 'boolean') ||
       (value.provider !== 'anthropic' && value.provider !== 'gateway') ||
       typeof value.preset !== 'string' ||
       !claudeProviderIdSet.has(value.preset) ||
@@ -323,6 +324,7 @@ export const claudeConfigInputSchema = z
   .transform((value) => {
     const input = value as Record<string, unknown>;
     return {
+      ...(input.autoDetect === undefined ? {} : { autoDetect: input.autoDetect as boolean }),
       apiKeyHelperPolicy: input.apiKeyHelperPolicy as SaveClaudeConfigInput['apiKeyHelperPolicy'],
       authMode: input.authMode as SaveClaudeConfigInput['authMode'],
       baseUrl: input.baseUrl as string,

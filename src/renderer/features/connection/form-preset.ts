@@ -20,6 +20,7 @@ import {
   credentialField,
   credentialLabel,
   credentialSourceSettings,
+  connectionSettingsModeButton,
   environmentSetup,
   modelHelp,
   openProviderConsoleButton,
@@ -59,21 +60,32 @@ export const createConnectionFormPresetActions = (
     environmentSetup.hidden = isManagedChatGpt || formState.connectionEnvironmentReady;
     claudeConfigForm.hidden = isManagedChatGpt;
     const isOfficialLogin = provider.id === 'anthropic';
-    const isAdvanced =
-      provider.id === 'custom' || provider.id === 'gateway' || provider.id === 'curl';
-    const supportsProtocolSwitch = provider.id === 'custom';
+    const advanced = formState.advancedSettings;
+    claudeConfigForm.dataset.settingsMode = advanced ? 'advanced' : 'simple';
+    connectionSettingsModeButton.textContent = advanced ? '极简设置' : '高级设置';
+    connectionSettingsModeButton.setAttribute('aria-expanded', String(advanced));
+    const isAdvanced = !isOfficialLogin && provider.id !== 'anthropic-api' && !isManagedChatGpt;
+    const supportsProtocolSwitch = isAdvanced;
     if (!preserveValues || !supportsProtocolSwitch) {
-      claudeProtocol.value = 'anthropic';
+      claudeProtocol.value = provider.protocol ?? 'anthropic';
       formState.selectedRouterProviderId = undefined;
     }
     const protocol = claudeProtocol.value as ConfigurableEndpointProtocol;
-    protocolField.hidden = !supportsProtocolSwitch;
-    baseUrlField.hidden = isManagedChatGpt || !provider.editableBaseUrl;
-    authModeField.hidden = isManagedChatGpt;
+    protocolField.hidden = !advanced || !supportsProtocolSwitch;
+    baseUrlField.hidden =
+      isManagedChatGpt || provider.group === 'official' || (!advanced && !provider.editableBaseUrl);
+    authModeField.hidden = !advanced || isManagedChatGpt;
     credentialSourceSettings.hidden = isManagedChatGpt;
     claudeConfigStepTitle.textContent = isManagedChatGpt
       ? '选择托管网关模型'
-      : '选择模型并填写凭据';
+      : advanced
+        ? '接入设置'
+        : provider.editableBaseUrl
+          ? '填写网址和密钥'
+          : isOfficialLogin
+            ? '使用官方账号'
+            : '填写密钥';
+    claudeConfigStepDescription.hidden = !advanced;
     claudeConfigStepDescription.textContent = isManagedChatGpt
       ? '地址和本地访问密钥由 ClaudeDock 自动配置；你只需要按需调整模型。'
       : '密钥只交给主进程加密保存，界面不会回显已保存内容。';
@@ -120,6 +132,7 @@ export const createConnectionFormPresetActions = (
         : provider.id === 'gateway'
           ? '填写路由器真正的模型接口；默认 3456 是模型接口，3458 是管理页。'
           : '接口必须提供 Anthropic /v1/messages，且不能直接使用 OpenAI /chat/completions。';
+    baseUrlHelp.hidden = !advanced;
     protocolHelp.textContent =
       provider.id === 'chatgpt-subscription'
         ? 'Claude Code 访问本机 Anthropic Messages 入口；本地网关再完成 Codex OAuth 请求与协议转换，这不是官方直连。'
@@ -143,25 +156,29 @@ export const createConnectionFormPresetActions = (
       : supportsProtocolSwitch && protocol === 'openai'
         ? '中转站认证方式'
         : 'Claude Code 到接口的认证方式';
-    credentialLabel.textContent =
-      provider.id === 'chatgpt-subscription'
+    credentialLabel.textContent = !advanced
+      ? '密钥'
+      : provider.id === 'chatgpt-subscription'
         ? '本地网关访问密钥（不是 ChatGPT 凭据）'
         : provider.id === 'gateway'
           ? '路由器访问密钥（不是上游密钥）'
           : supportsProtocolSwitch && protocol === 'openai'
             ? 'OpenAI 中转站密钥'
-            : `${provider.label} 凭据`;
-    claudeCredential.placeholder = provider.keyHint ?? '留空则保留已保存的凭据';
+            : '密钥';
+    claudeCredential.placeholder = advanced
+      ? (provider.keyHint ?? '留空则保留已保存的凭据')
+      : '填写密钥';
     credentialField.hidden =
       isManagedChatGpt ||
       claudeAuthMode.value === 'existing' ||
-      claudeAuthMode.value === 'none' ||
+      (advanced && claudeAuthMode.value === 'none') ||
       provider.id === 'ollama';
 
     providerSetup.hidden = false;
     providerTitle.textContent = provider.label;
     providerDescription.textContent = provider.description;
-    providerCaveat.hidden = !provider.caveat;
+    providerDescription.hidden = !advanced;
+    providerCaveat.hidden = !advanced || !provider.caveat;
     providerCaveat.textContent = provider.caveat ?? '';
     openProviderConsoleButton.hidden = !provider.consoleUrl;
     openProviderConsoleButton.dataset.externalUrl = provider.consoleUrl ?? '';

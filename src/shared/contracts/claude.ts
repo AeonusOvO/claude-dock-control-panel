@@ -108,6 +108,8 @@ export interface ClaudeConfigView {
 }
 
 export interface SaveClaudeConfigInput {
+  /** Request-only: main discovers and verifies concrete settings before persisting anything. */
+  autoDetect?: boolean;
   apiKeyHelperPolicy?: ClaudeApiKeyHelperPolicy;
   authMode: ClaudeAuthMode;
   baseUrl: string;
@@ -254,6 +256,7 @@ export interface ClaudeNextConversationConnectionState {
 }
 
 export interface ClaudeNextConversationConnectionResult extends FailureMetadata {
+  connectionTest?: ClaudeConnectionTestResult;
   error?: string;
   ok: boolean;
   state: ClaudeNextConversationConnectionState;

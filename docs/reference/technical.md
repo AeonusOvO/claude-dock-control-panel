@@ -832,7 +832,7 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 
 - `ChatConfigStore`（`src/main/chat/config-store.ts`）把单一独立 profile 原子写入
   `userData/claude/chat-profile.json`。renderer 只能读取协议、基址、模型、认证方式和
-  `credentialConfigured`；密钥用 Electron `safeStorage` 加密，安全存储不可用时拒绝明文
+  `credentialConfigured` 与可选服务商 `preset`；密钥用 Electron `safeStorage` 加密，安全存储不可用时拒绝明文
   降级。该文件和项目级 `project-profiles.json` 没有共享键或联动逻辑。
 - 基址校验只允许远程 HTTPS，本机 `localhost` / `127.0.0.1` / `::1` 可以使用 HTTP；拒绝
   URL 用户信息、查询和片段。模型名、凭据长度与换行、credential action 均在主进程重验。
@@ -843,13 +843,14 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   base64 编码，Files API 引用自动带 beta header。OpenAI 兼容协议补全
   `/v1/chat/completions`、支持 Bearer，并解析
   `choices[0].delta.content`。OpenAI 流默认请求 `stream_options.include_usage`；遇到拒绝该扩展
-  的 400/422 兼容网关会自动重试一次普通流。两种协议都解析供应商 usage 并沿流事件回传；
+  的 400/422 兼容网关会自动重试一次普通流。Responses 协议保留 `/responses` 入口，序列化 stateless
+  `input`/`store: false`，解析正文、推理摘要、拒绝与完成事件，保留 incomplete 原因。三种协议都解析供应商 usage 并沿流事件回传；
   中转若返回非 SSE JSON，则提取对应协议的普通文本与 usage。
 - 瞬时恢复使用一个跨兼容降级步骤共享的预算：首个有效模型输出前，网络失败以及
   408/409/425/429/500/502/503/504/529 最多自动重试 4 次，采用 500ms 起步、10 秒封顶的
   带抖动指数退避，并接受最长 60 秒的 `Retry-After`。typed `retrying` 事件只回传次数、等待、
   原因和可选状态码，不含请求头、正文或凭据。SSE 必须以 Anthropic `message_stop` 或 OpenAI
-  `[DONE]` 正式结束；首个有效输出前的 EOF、读失败和可重试 provider error 可复用剩余预算，
+  `[DONE]`、Responses `response.completed`/`response.incomplete` 正式结束；首个有效输出前的 EOF、读失败和可重试 provider error 可复用剩余预算，
   已有任何输出后则不重放非幂等请求，以避免重复扣费与重复文本，并把干净的部分回答留在历史。
 - 所有消息 POST 使用 `redirect: manual`：301/302/303 因可能改写方法而拒绝，跨源 307/308 因
   可能外带认证头而拒绝，只跟随最多 3 次同源且无 URL 用户信息的 307/308。连接测试复用同一
@@ -868,11 +869,15 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   400/422 不兼容则丢弃首个响应体并安全重试无 thinking 版本。每次最多 100 条消息、单个文本
   块 200,000 字符、文本合计 1,000,000 字符、响应
   2,000,000 字符；错误文案再次替换可能回显的凭据。
-- `chat:test-connection` 使用当前未保存表单草稿解析运行期配置，发送最多 1-token、15 秒超时、
+- 手动 `chat:test-connection` 使用当前未保存表单草稿解析运行期配置，发送输出上限 1-token（Responses 16）、15 秒超时、
   64 KiB 响应上限的非流式最小请求；不会顺带保存草稿。结果包含成功状态、净化后的说明、
   延迟和供应商可用时的 usage。协议兼容按 envelope 判定：Anthropic `content` 数组或 OpenAI
   `choices` 数组即为已识别；DeepSeek 思考模型在 1-token 探针中只返回 thinking、没有可见正文时
   仍可通过。真实发送的非流式兼容回退仍要求可见文本，不能因此保存空回复。
+- 极简表单通过 `autoDetect: true` 使用 `ChatService.resolveAutomaticConnection`，复用聊天本身的
+  conversation fetch 与精确端点授权；只有验证成功后 `chat:save-config` 才原子保存，单独测试只返回结果。
+  main 串行保护自动配置，拒绝期间的重复测试与手动保存。renderer 捕获不可变草稿并禁用设置控件，
+  关闭弹窗后拒绝旧操作重绘。更换站点、端口或租户路径不得自动复用旧密钥。
 - `src/shared/conversation/chat-usage.ts` 是供应商未返回 usage 时的显式回退：ASCII 约 4 字符/token，
   非 ASCII 按 1 字符/token，加上每条消息固定开销。renderer 在输入事件、发送、流式增量及
   终止事件上更新显示；估算数据使用 `source: 'estimated'` 并在 UI 标“约”，供应商数据使用
@@ -975,7 +980,12 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
 - `ClaudeConfigStore` 另以 main-only 应用 scope 保存“下个对话接入”的完整平台、协议、端点、认证、加密
   凭据与主/小型模型。接入页不要求活动项目，通过 `claude:get-next-connection`、
   `claude:test-next-connection`、`claude:save-next-config` 读取、真实测试并原子保存这份选择；失败恢复事务前
-  快照，renderer 同时恢复原选择并显示错误。
+  快照；极简新配置失败时保留用户草稿并显示简短错误。
+- 极简 `claude:save-next-config` 在同一队列中进行地址归一化、模型发现、最小生成验证和保存。
+  Anthropic 直连复用已通过的探针，OpenAI 源还需准备并验证本地 Router，失败回滚。
+  自动请求的模型、认证和内置网址由 main 解析，隐藏表单字段不充当验证证据；
+  `claude:test-next-connection` 使用同一事务但始终回滚。会话级旧保存通道拒绝自动请求。
+  共享候选算法、预算、官方预设与订阅边界见[服务商接入参考](provider-access.md)。
 - 每个新 Claude 终端或全新原生对话在创建同步提交点复制一份 conversation profile。后台预检、路由准备、
   PTY/SDK 启动和后续状态读取只使用这份不可变快照；用户随后切换下个模型不会取消或改写已接受的会话。
   关闭精确会话时释放对应 profile。历史恢复先创建隔离 profile，再在真实测试和事务提交成功后应用原绑定。

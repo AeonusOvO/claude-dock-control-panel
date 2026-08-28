@@ -427,7 +427,7 @@ describe('independent chat service', () => {
     expect(prepared.messages[0]?.content).toEqual([{ text: '旧问题', type: 'text' }]);
   });
 
-  it('sends both gateway auth headers and a generous generation ceiling in apiKey mode', async () => {
+  it('preserves the selected apiKey header without adding a competing Bearer header', async () => {
     const events: ChatStreamEvent[] = [];
     const fetchMock = vi.fn<typeof fetch>(async () =>
       streamResponse(['data: {"type":"message_stop"}\n\n']),
@@ -453,7 +453,7 @@ describe('independent chat service', () => {
     });
     const headers = (fetchMock.mock.calls[0]?.[1]?.headers ?? {}) as Record<string, string>;
     expect(headers['x-api-key']).toBe('relay-key');
-    expect(headers.authorization).toBe('Bearer relay-key');
+    expect(headers.authorization).toBeUndefined();
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
       max_tokens: 64_000,
     });

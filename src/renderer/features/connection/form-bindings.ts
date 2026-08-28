@@ -11,12 +11,15 @@ import {
   claudeProtocol,
   clearCredentialButton,
   credentialField,
+  connectionSettingsModeButton,
   openProviderConsoleButton,
   openProviderDocsButton,
   saveClaudeConfigButton,
 } from './form-elements';
 import type { ConnectionFormDeps } from './form-dependencies';
 import type { ConnectionFormState } from './form-state';
+import { findClaudeProvider } from '../../../shared/claude/providers';
+import { sameConnectionCredentialScope } from '../../../shared/router/automatic-connection';
 
 export interface ConnectionFormBindingsActions {
   bindConnectionForm: () => void;
@@ -35,6 +38,23 @@ export const createConnectionFormBindingsActions = (
   const { runGuarded, requestConfirmation, openExternal, connectionFeature } = deps;
 
   const bindConnectionForm = (): void => {
+    connectionSettingsModeButton.addEventListener('click', () => {
+      const provider = findClaudeProvider(claudePreset.value);
+      if (
+        formState.advancedSettings &&
+        provider &&
+        !provider.editableBaseUrl &&
+        provider.baseUrl &&
+        !sameConnectionCredentialScope(claudeBaseUrl.value, provider.baseUrl)
+      ) {
+        claudePreset.value = 'custom';
+        formState.selectedRouterProviderId = undefined;
+      }
+      formState.advancedSettings = !formState.advancedSettings;
+      applyPresetUi(claudePreset.value as ClaudePreset, true);
+      claudeBaseUrl.setCustomValidity('');
+      connectionFeature.clearTestResult();
+    });
     claudePreset.addEventListener('change', () => {
       formState.selectedRouterProviderId = undefined;
       applyPresetUi(claudePreset.value as ClaudePreset, false);
@@ -42,7 +62,7 @@ export const createConnectionFormBindingsActions = (
     });
     claudeProtocol.addEventListener('change', () => {
       completeVisibleConnectionEndpoint(false);
-      applyPresetUi('custom', true);
+      applyPresetUi(claudePreset.value as ClaudePreset, true);
       connectionFeature.clearTestResult();
     });
     claudeBaseUrl.addEventListener('blur', () => {

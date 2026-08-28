@@ -1,5 +1,6 @@
 import type {
   ClaudePreset,
+  ClaudeNextConversationConnectionState,
   ClaudeProjectState,
   ClaudeRouterManagementState,
   ClaudeRouterOperationResult,
@@ -12,6 +13,7 @@ import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import type { AdvancedConnectionSnapshot } from './state';
 
 export interface ConnectionActionsDependencies {
+  applyNextClaudeConnection: (state: ClaudeNextConversationConnectionState) => void;
   activeStatus: () => TerminalStatus | undefined;
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void;
   cancelConnectionAdvancedButton: HTMLButtonElement;

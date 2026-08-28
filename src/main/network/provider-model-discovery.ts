@@ -35,7 +35,7 @@ export interface ProviderModelDiscoveryTarget {
   readonly officialProvider?: NetworkProviderId;
 }
 
-const officialProviderForHostname = (hostname: string): NetworkProviderId | undefined => {
+export const officialProviderForHostname = (hostname: string): NetworkProviderId | undefined => {
   // URL preserves the DNS root marker in a fully qualified hostname (`api.example.com.`).
   // DNS treats that name as the same host, so classification must do the same or a renderer could
   // bypass the official-provider guard while the transport still reaches the official endpoint.

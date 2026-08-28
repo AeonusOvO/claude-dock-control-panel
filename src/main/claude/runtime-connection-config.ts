@@ -23,6 +23,7 @@ import {
 } from '../../shared/claude/providers';
 import type { CcSwitchProviderExportInput } from './cc-switch-adapter';
 import { testClaudeConnection } from './connection-test';
+import { resolveAutomaticClaudeConnection } from './automatic-connection';
 import type { ClaudeConfigSnapshot, ClaudeLaunchConfigSnapshot } from './config-store';
 import {
   ClaudeConnectionHistoryStore,
@@ -277,6 +278,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   public verifyAndSaveNextConversationConfig(
     input: SaveClaudeConfigInput,
     retryBeforeSecondAttempt?: () => Promise<void>,
+    options: { automaticFetch?: typeof fetch; testOnly?: boolean } = {},
   ): Promise<{
     connectionTest: ClaudeConnectionTestResult;
     state: ClaudeNextConversationConnectionState;
@@ -285,11 +287,23 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       const snapshot = this.configStore.createSnapshot(this.nextConversationConfigScope);
       let prepared: PreparedClaudeConfigSave | undefined;
       try {
-        prepared = await this.prepareConnectionConfig(input);
-        let connectionTest = await this.testPreparedConnection(
-          this.nextConversationConfigScope,
-          prepared,
-        );
+        if (input.autoDetect && !options.automaticFetch) {
+          throw new Error('自动接入缺少网络授权。');
+        }
+        const automatic =
+          input.autoDetect && options.automaticFetch
+            ? await resolveAutomaticClaudeConnection(
+                input,
+                this.configStore,
+                this.nextConversationConfigScope,
+                options.automaticFetch,
+              )
+            : undefined;
+        prepared = await this.prepareConnectionConfig(automatic?.input ?? input);
+        let connectionTest =
+          automatic?.input.protocol === 'anthropic'
+            ? automatic.test
+            : await this.testPreparedConnection(this.nextConversationConfigScope, prepared);
         if (
           !connectionTest.ok &&
           retryBeforeSecondAttempt &&
@@ -301,7 +315,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
             prepared,
           );
         }
-        if (!connectionTest.ok) {
+        if (!connectionTest.ok || options.testOnly) {
           const rejected = prepared;
           prepared = undefined;
           await this.rollbackPreparedConfig(rejected);
@@ -819,7 +833,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
           credentialAction: 'replace',
           model: `${saved.provider.name}/${model}`,
           modelFast: `${saved.provider.name}/${modelFast}`,
-          preset: 'custom',
+          preset: input.preset,
           provider: 'gateway',
         },
         historyMetadata: {

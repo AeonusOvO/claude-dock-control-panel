@@ -13,6 +13,9 @@ export const claudeApiKeyHelperStatus = requiredElement<HTMLElement>(
 );
 export const claudeBaseUrl = requiredElement<HTMLInputElement>('#claude-base-url');
 export const claudeConfigForm = requiredElement<HTMLFormElement>('#claude-config-form');
+export const connectionSettingsModeButton = requiredElement<HTMLButtonElement>(
+  '#connection-settings-mode',
+);
 export const claudeConfigStepTitle = requiredElement<HTMLElement>('#claude-config-step-title');
 export const claudeConfigStepDescription = requiredElement<HTMLElement>(
   '#claude-config-step-description',

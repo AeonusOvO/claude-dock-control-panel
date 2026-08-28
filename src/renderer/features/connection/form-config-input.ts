@@ -3,10 +3,12 @@ import type {
   ClaudeProjectState,
   SaveClaudeConfigInput,
 } from '../../../shared/contracts';
-import { providerForPreset } from '../../../shared/claude/providers';
+import { findClaudeProvider, providerForPreset } from '../../../shared/claude/providers';
+import { sameConnectionCredentialScope } from '../../../shared/router/automatic-connection';
 import {
   completeConnectionEndpoint,
   normalizeConnectionBaseUrl,
+  normalizeConnectionAddress,
   type ConfigurableEndpointProtocol,
 } from '../../../shared/router/connection-endpoint';
 import {
@@ -63,17 +65,32 @@ export const createConnectionFormConfigInputActions = (
   const currentConfigInput = (
     credentialAction: SaveClaudeConfigInput['credentialAction'],
   ): SaveClaudeConfigInput => {
-    const preset = claudePreset.value as ClaudePreset;
-    const protocol: ConfigurableEndpointProtocol =
-      preset === 'custom' ? (claudeProtocol.value as ConfigurableEndpointProtocol) : 'anthropic';
+    let preset = claudePreset.value as ClaudePreset;
+    const provider = findClaudeProvider(preset);
+    if (
+      formState.advancedSettings &&
+      provider &&
+      !provider.editableBaseUrl &&
+      provider.baseUrl &&
+      !sameConnectionCredentialScope(claudeBaseUrl.value, provider.baseUrl)
+    ) {
+      preset = 'custom';
+    }
+    const autoDetect =
+      !formState.advancedSettings &&
+      !['anthropic', 'chatgpt-subscription', 'curl'].includes(preset);
+    const protocol = claudeProtocol.value as ConfigurableEndpointProtocol;
     const baseUrl =
       preset === 'custom' && claudeBaseUrl.value.trim()
-        ? resolveConnectionAddress(claudeBaseUrl.value, protocol)
+        ? autoDetect
+          ? normalizeConnectionAddress(claudeBaseUrl.value)
+          : resolveConnectionAddress(claudeBaseUrl.value, protocol)
         : claudeBaseUrl.value;
     if (preset === 'custom') {
       claudeBaseUrl.value = baseUrl;
     }
     return {
+      ...(autoDetect ? { autoDetect: true } : {}),
       apiKeyHelperPolicy:
         claudeApiKeyHelperPolicy.value as SaveClaudeConfigInput['apiKeyHelperPolicy'],
       authMode: claudeAuthMode.value as SaveClaudeConfigInput['authMode'],
@@ -95,10 +112,12 @@ export const createConnectionFormConfigInputActions = (
       return;
     }
     try {
-      claudeBaseUrl.value = resolveConnectionAddress(
-        claudeBaseUrl.value,
-        claudeProtocol.value as ConfigurableEndpointProtocol,
-      );
+      claudeBaseUrl.value = formState.advancedSettings
+        ? resolveConnectionAddress(
+            claudeBaseUrl.value,
+            claudeProtocol.value as ConfigurableEndpointProtocol,
+          )
+        : normalizeConnectionAddress(claudeBaseUrl.value);
       claudeBaseUrl.setCustomValidity('');
     } catch (error) {
       claudeBaseUrl.setCustomValidity(

@@ -9,6 +9,10 @@ export interface ClaudeProviderDefinition {
   description: string;
   docsUrl?: string;
   editableBaseUrl: boolean;
+  /** API-only metadata; Coding Plan credentials must never be offered as general chat access. */
+  codingPlan?: boolean;
+  modelsUrl?: string;
+  protocol?: 'anthropic' | 'openai';
   group: ClaudeProviderGroupId;
   id:
     | 'anthropic'
@@ -21,6 +25,7 @@ export interface ClaudeProviderDefinition {
     | 'gateway'
     | 'glm-cn'
     | 'glm-global'
+    | 'glm-api'
     | 'kimi-code'
     | 'kimi-open'
     | 'minimax-cn'
@@ -30,6 +35,12 @@ export interface ClaudeProviderDefinition {
     | 'openrouter'
     | 'qwen-cn'
     | 'qwen-global'
+    | 'qwen-api'
+    | 'doubao-api'
+    | 'stepfun-api'
+    | 'hunyuan'
+    | 'qianfan'
+    | 'spark'
     | 'siliconflow'
     | 'stepfun';
   keyHint?: string;
@@ -105,6 +116,7 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'deepseek',
+    modelsUrl: 'https://api.deepseek.com/models',
     keyHint: 'sk-…',
     label: 'DeepSeek',
     model: 'deepseek-v4-pro[1m]',
@@ -119,7 +131,8 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'glm-cn',
-    label: '智谱 GLM（国内）',
+    codingPlan: true,
+    label: '智谱 GLM Coding Plan',
     model: 'glm-5.2[1m]',
     modelFast: 'glm-4.7',
   },
@@ -132,6 +145,7 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'overseas',
     id: 'glm-global',
+    codingPlan: true,
     label: '智谱 GLM（国际）',
     model: 'glm-5.2',
     modelFast: 'glm-4.5-air',
@@ -160,6 +174,7 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'kimi-code',
+    codingPlan: true,
     label: 'Kimi Code 会员',
     model: 'kimi-for-coding',
     modelFast: 'kimi-for-coding',
@@ -174,9 +189,10 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'qwen-cn',
-    label: '通义千问（国内）',
+    codingPlan: true,
+    label: '千问 Coding Plan（国内）',
     model: 'qwen3.7-plus',
-    modelFast: 'qwen3.6-flash',
+    modelFast: 'qwen3.7-plus',
   },
   {
     authMode: 'authToken',
@@ -188,9 +204,10 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'overseas',
     id: 'qwen-global',
-    label: '通义千问（国际）',
+    codingPlan: true,
+    label: '千问 Coding Plan（国际）',
     model: 'qwen3.7-plus',
-    modelFast: 'qwen3.6-flash',
+    modelFast: 'qwen3.7-plus',
   },
   {
     authMode: 'authToken',
@@ -227,7 +244,8 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'doubao',
-    label: '豆包 / 火山方舟',
+    codingPlan: true,
+    label: '火山方舟 Coding Plan',
     model: 'doubao-seed-2.0-code',
     modelFast: 'ark-code-latest',
   },
@@ -237,7 +255,7 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     caveat: '按量密钥与 Token Plan 密钥前缀不同，请不要混用。',
     consoleUrl: 'https://platform.xiaomimimo.com/',
     description: '小米 MiMo 官方 Anthropic 兼容接口。',
-    docsUrl: 'https://mimo.mi.com/docs/en-US/integration/claudecode',
+    docsUrl: 'https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call',
     editableBaseUrl: false,
     group: 'domestic',
     id: 'mimo',
@@ -254,7 +272,8 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'stepfun',
-    label: '阶跃星辰 StepFun',
+    codingPlan: true,
+    label: '阶跃星辰 Step Plan',
     model: 'step-3.7-flash',
     modelFast: 'step-3.7-flash',
   },
@@ -298,6 +317,99 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     label: 'Ollama 本地模型',
     model: 'qwen3-coder',
     modelFast: 'qwen3-coder',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    consoleUrl: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
+    description: '使用百炼按量计费 API 密钥。',
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'qwen-api',
+    label: '千问 API（北京）',
+    model: 'qwen-plus',
+    protocol: 'openai',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    consoleUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
+    description: '使用智谱开放平台按量计费 API 密钥。',
+    docsUrl: 'https://docs.bigmodel.cn/cn/guide/develop/openai/introduction',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'glm-api',
+    label: '智谱 GLM API',
+    model: 'glm-5.3',
+    protocol: 'openai',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    consoleUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apikey',
+    description: '使用火山方舟按量计费 API 密钥。',
+    docsUrl: 'https://www.volcengine.com/docs/82379/1330626',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'doubao-api',
+    label: '豆包 / 火山方舟 API',
+    model: '',
+    protocol: 'openai',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://api.stepfun.com/v1',
+    consoleUrl: 'https://platform.stepfun.com/interface-key',
+    description: '使用阶跃星辰按量计费 API 密钥。',
+    docsUrl: 'https://platform.stepfun.com/docs/zh/guides/developer/openai',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'stepfun-api',
+    label: '阶跃星辰 API',
+    model: 'step-3.5-flash',
+    protocol: 'openai',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://tokenhub.tencentmaas.com/v1',
+    consoleUrl: 'https://console.cloud.tencent.com/hunyuan/api-key',
+    description: '使用腾讯云 TokenHub API 密钥。',
+    docsUrl: 'https://cloud.tencent.com/document/product/1823/130078',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'hunyuan',
+    label: '腾讯混元 / TokenHub',
+    model: 'hy3',
+    protocol: 'openai',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://qianfan.baidubce.com/v2',
+    consoleUrl: 'https://console.bce.baidu.com/qianfan/',
+    description: '使用百度千帆 API 密钥。',
+    docsUrl: 'https://cloud.baidu.com/doc/qianfan/s/rmh4stn9m',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'qianfan',
+    label: '百度千帆 / 文心',
+    model: 'ernie-4.0-turbo-8k',
+    modelFast: 'ernie-3.5-8k',
+    protocol: 'openai',
+  },
+  {
+    authMode: 'authToken',
+    baseUrl: 'https://spark-api-open.xf-yun.com/v1',
+    consoleUrl: 'https://console.xfyun.cn/',
+    description: '使用讯飞星火 HTTP 接口的 APIPassword。',
+    docsUrl: 'https://www.xfyun.cn/doc/spark/HTTP调用文档.html',
+    editableBaseUrl: false,
+    group: 'domestic',
+    id: 'spark',
+    keyHint: 'APIPassword',
+    label: '讯飞星火',
+    model: '4.0Ultra',
+    protocol: 'openai',
   },
   {
     authMode: 'authToken',

@@ -23,7 +23,7 @@ const ACCESS_CHOICES: ReadonlyArray<{
     providerId: 'anthropic',
   },
   {
-    detail: '授权后自动配置本机 Proxy API',
+    detail: '登录 ChatGPT 账号',
     id: 'chatgpt-subscription',
     label: 'ChatGPT 官方订阅',
     providerId: 'chatgpt-subscription',
@@ -35,7 +35,7 @@ const ACCESS_CHOICES: ReadonlyArray<{
     providerId: 'deepseek',
   },
   {
-    detail: '填写已有密钥、端点或中转站',
+    detail: '填写网址和密钥',
     id: 'api',
     label: 'API / 中转站',
     providerId: 'custom',
