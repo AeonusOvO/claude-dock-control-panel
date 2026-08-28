@@ -56,7 +56,7 @@ const TERMINATE_EXITED_DESCENDANTS = [
   "$ErrorActionPreference = 'Stop'",
   `$rootPid = [uint32]$env:${EXITED_ROOT_PID_ENV}`,
   `$minimumCreatedAt = [long]$env:${EXITED_ROOT_STARTED_AT_ENV}`,
-  '$processes = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate)',
+  '$processes = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate)',
   "$known = New-Object 'System.Collections.Generic.HashSet[uint32]'",
   '[void]$known.Add($rootPid)',
   "$targets = New-Object 'System.Collections.Generic.List[object]'",
@@ -99,6 +99,7 @@ type ProcessState = 'running' | 'settled' | 'stopping';
 interface ProcessTerminationMetadata {
   cleanupTimedOut: boolean;
   directKillAttempted: boolean;
+  exitedRootCleanupAttempted?: boolean;
   treeKillAttempted: boolean;
   treeKillCode?: number | null;
   treeKillError?: string;
@@ -374,12 +375,28 @@ export const runProcess = (
         };
         if (termination.treeKillAttempted && pid !== undefined) {
           const treeKillTimeout = Math.min(
-            TREE_KILL_TIMEOUT_MS,
+            // CIM cold start needs more time than taskkill. Keep the same total cleanup bound.
+            processAlreadyExited ? PROCESS_CLEANUP_BUDGET_MS : TREE_KILL_TIMEOUT_MS,
             Math.max(1, deadline - Date.now()),
           );
-          const treeResult = processAlreadyExited
+          termination.exitedRootCleanupAttempted = processAlreadyExited;
+          let treeResult = processAlreadyExited
             ? await terminateExitedWindowsDescendants(pid, childStartedAt, treeKillTimeout)
             : await terminateWindowsProcessTree(pid, treeKillTimeout);
+          // The wrapper can exit after the first snapshot but before taskkill reaches it.
+          if (
+            !processAlreadyExited &&
+            treeResult.treeKillCode !== 0 &&
+            (child.exitCode !== null || child.signalCode !== null) &&
+            Date.now() < deadline
+          ) {
+            termination.exitedRootCleanupAttempted = true;
+            treeResult = await terminateExitedWindowsDescendants(
+              pid,
+              childStartedAt,
+              deadline - Date.now(),
+            );
+          }
           Object.assign(termination, treeResult);
         }
         const treeKillSucceeded = termination.treeKillAttempted && termination.treeKillCode === 0;
@@ -426,9 +443,7 @@ export const runProcess = (
       target.push(chunk);
       emitLines(stream, decoders[stream].write(chunk));
     }
-    function onChildError(error: Error): void {
-      stop(error);
-    }
+    const onChildError = stop;
     function onChildClose(code: number | null, closeSignal: NodeJS.Signals | null): void {
       childClosed = true;
       resolveChildClose();

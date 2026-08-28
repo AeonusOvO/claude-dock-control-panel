@@ -188,8 +188,21 @@ describe('Windows command streaming', () => {
         controller.abort(abortError);
 
         await expect(operation).rejects.toBe(abortError);
-        await vi.waitFor(() => expect(processIsRunning(descendantPid as number)).toBe(false), {
-          timeout: 2_000,
+        await vi.waitFor(
+          () =>
+            expect(processIsRunning(descendantPid as number), JSON.stringify(abortError)).toBe(
+              false,
+            ),
+          { timeout: 2_000 },
+        );
+        expect(abortError).toMatchObject({
+          termination: {
+            cleanupTimedOut: false,
+            exitedRootCleanupAttempted: true,
+            treeKillAttempted: true,
+            treeKillCode: 0,
+            treeKillTimedOut: false,
+          },
         });
       } finally {
         controller.abort();
