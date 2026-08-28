@@ -909,7 +909,7 @@ app
       })()`);
       if (!valid) throw new Error('Connection success dialog layout or focus failed.');
       await captureThemeMatrixPage(`connection-success-${themeId}-1180.png`, {
-        area: 'connection-success',
+        scene: 'connection-success',
         theme: themeId,
       });
     }
@@ -1523,7 +1523,7 @@ app
       });
     }
 
-    const expectedThemeMatrixCaptures = themeOrder.length * 3;
+    const expectedThemeMatrixCaptures = themeOrder.length * 4;
     if (themeMatrixCaptures.length !== expectedThemeMatrixCaptures) {
       throw new Error(
         `Theme matrix is incomplete: expected ${expectedThemeMatrixCaptures}, captured ${themeMatrixCaptures.length}`,
@@ -1535,7 +1535,7 @@ app
         {
           captures: themeMatrixCaptures,
           disclaimer:
-            'Terminal and mask images are static renderer fixtures. They verify theme and layout only; they are not ConPTY, PTY resize, or PSReadLine integration evidence.',
+            'Connection, terminal and mask images are static renderer fixtures. They verify theme and layout only; they are not account authorization, ConPTY, PTY resize, or PSReadLine integration evidence.',
           expectedCaptures: expectedThemeMatrixCaptures,
           generatedAt: new Date().toISOString(),
           themes: themeOrder,
