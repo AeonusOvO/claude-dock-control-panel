@@ -9,6 +9,7 @@ import {
   type AuthContext,
 } from '../../src/main/subscriptions/http';
 import type { SubscriptionProvider } from '../../src/shared/claude/subscriptions';
+import { subscriptionAccountIdentity } from '../../src/main/subscriptions/account';
 
 vi.mock('../../src/main/subscriptions/http', async (original) => ({
   ...(await original<typeof import('../../src/main/subscriptions/http')>()),
@@ -38,13 +39,63 @@ const token = () => ({
 afterEach(() => vi.clearAllMocks());
 
 describe('domestic subscription OAuth', () => {
+  it('projects only account fields and rejects credentials, invisible controls and malformed claims', () => {
+    expect(
+      subscriptionAccountIdentity({ user: { email: 'member@example.test', name: 'Member' } }),
+    ).toBe('member@example.test');
+    expect(subscriptionAccountIdentity({ user: { user_id: 'account-123' } })).toBe(
+      'ID account-123',
+    );
+    const jwt = [
+      'e30',
+      Buffer.from(JSON.stringify({ sub: 'kimi-member', token: 'secret' })).toString('base64url'),
+      'signature',
+    ].join('.');
+    expect(subscriptionAccountIdentity({ access_token: jwt })).toBe('ID kimi-member');
+    expect(
+      subscriptionAccountIdentity({
+        access_token: 'bad.not-json.token',
+        refresh_token: 'private-refresh',
+      }),
+    ).toBeUndefined();
+    expect(
+      subscriptionAccountIdentity({
+        user: { email: 'private-access' },
+        access_token: 'private-access',
+      }),
+    ).toBeUndefined();
+    expect(
+      subscriptionAccountIdentity({ user: { name: 'Bearer secret', email: 'a\u202Eb@test' } }),
+    ).toBeUndefined();
+    expect(
+      subscriptionAccountIdentity({ api_key: 'sk-secret', username: 'unused-field' }),
+    ).toBeUndefined();
+  });
+
+  it('keeps a subscription account bound through token refresh', async () => {
+    const ctx = context(
+      vi.fn(async () => Response.json({ ...token(), user: { email: 'different@example.test' } })),
+    );
+    const result = await refreshSubscription(
+      {
+        provider: 'kimi-subscription',
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        expiresAt: 1,
+        accountIdentity: 'original@example.test',
+      },
+      ctx,
+    );
+    expect(result.accountIdentity).toBe('original@example.test');
+  });
+
   it('opens Kimi consent, polls with device identity and honors slow_down without exposing device tokens', async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(Response.json(kimiCode()))
       .mockResolvedValueOnce(Response.json({ error: 'slow_down' }))
       .mockResolvedValueOnce(Response.json({ error: 'authorization_pending' }, { status: 400 }))
-      .mockResolvedValueOnce(Response.json(token()));
+      .mockResolvedValueOnce(Response.json({ ...token(), user: { email: 'kimi@example.test' } }));
     const ctx = context(fetch);
     const result = await authorizeSubscription('kimi-subscription', ctx);
     expect(ctx.open).toHaveBeenCalledWith('https://www.kimi.com/code');
@@ -60,6 +111,7 @@ describe('domestic subscription OAuth', () => {
       'device_code',
     );
     expect(result.accessToken).toBe('private-access-token');
+    expect(result.accountIdentity).toBe('kimi@example.test');
     expect(result.deviceId).toBe(requestHeaders[0]?.get('X-Msh-Device-Id'));
   });
 
@@ -89,6 +141,7 @@ describe('domestic subscription OAuth', () => {
           status: 'success',
           expired_in: 900,
           resource_url: `https://api.${host}`,
+          profile: { user_id: 'minimax-member' },
         });
       });
       const ctx = context(fetch);
@@ -99,6 +152,7 @@ describe('domestic subscription OAuth', () => {
         `https://account.${host}`,
       ]);
       expect(result.provider).toBe(provider);
+      expect(result.accountIdentity).toBe('ID minimax-member');
       expect(result.expiresAt).toBeGreaterThan(Date.now() + 800000);
     },
   );
@@ -248,13 +302,18 @@ describe('GLM ZCode subscription authorization', () => {
       if (path.endsWith('/poll/flow'))
         return Response.json({
           code: 0,
-          data: { status: 'ready', zai: { access_token: 'account-token' } },
+          data: {
+            status: 'ready',
+            zai: { access_token: 'account-token' },
+            user: { user_id: 'glm-member', email: 'glm@example.test' },
+          },
         });
       return businessResponse(path, init);
     });
     const ctx = context(fetch);
     const result = await authorizeSubscription('glm-subscription-global', ctx);
     expect(result.accessToken).toBe('key.secret');
+    expect(result.accountIdentity).toBe('glm@example.test');
     expect(ctx.open).toHaveBeenCalledWith('https://chat.z.ai/auth');
     expect(JSON.stringify(result)).not.toMatch(/account-token|business-token|poll/);
     expect(fetch.mock.calls.some(([url]) => String(url).includes('zcode-plan'))).toBe(false);
@@ -269,7 +328,13 @@ describe('GLM ZCode subscription authorization', () => {
           state: expectedState,
           provider: 'bigmodel',
         });
-        return Response.json({ code: 0, data: { bigmodel: { access_token: 'account-token' } } });
+        return Response.json({
+          code: 0,
+          data: {
+            bigmodel: { access_token: 'account-token' },
+            user: { user_id: 'glm-cn-member' },
+          },
+        });
       }
       return businessResponse(String(url), init);
     });
@@ -302,6 +367,7 @@ describe('GLM ZCode subscription authorization', () => {
     };
     const result = await authorizeSubscription('glm-subscription-cn', ctx);
     expect(result.accessToken).toBe('key.secret');
+    expect(result.accountIdentity).toBe('ID glm-cn-member');
     await expect(globalThis.fetch(callbackUrl)).rejects.toThrow();
   });
 

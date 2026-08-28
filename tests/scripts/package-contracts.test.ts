@@ -156,7 +156,7 @@ afterEach(() => {
 
 describe('package contracts', () => {
   it('keeps the rc.36 identity and Apache license declaration', () => {
-    expect(packageManifest.version).toBe('5.0.0-rc.36');
+    expect(packageManifest.version).toBe('5.0.0-rc.37');
     expect(packageManifest.license).toBe('Apache-2.0');
     expect(packageManifest.engines).toEqual({ node: '>=24', npm: '>=11' });
   });

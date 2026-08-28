@@ -199,7 +199,7 @@ describe('connection history dialog', () => {
     );
   });
 
-  it('shows a dedicated tested recovery state and returns to the normal page after success', async () => {
+  it('returns to model selection and shows the shared success dialog after tested history recovery', async () => {
     const entry = { ...historyEntry('relay', 'custom'), name: '北美中转站' };
     const pending = deferred<ClaudeConnectionHistoryResult>();
     const apply = vi.fn(() => pending.promise);
@@ -259,13 +259,14 @@ describe('connection history dialog', () => {
         });
         await settle(harness);
 
-        expect(harness.query('#connection-history-recovery').dataset.phase).toBe('success');
-        expect(harness.query('#connection-history-recovery-title').textContent).toContain(
-          '已完成接入',
-        );
+        expect(harness.query('#connection-history-recovery').dataset.phase).toBe('idle');
+        expect(harness.query<HTMLDialogElement>('#connection-success-dialog').open).toBe(true);
+        expect(
+          harness
+            .query('[data-connection-wizard-step="choice"]')
+            .classList.contains('connection-wizard-step--active'),
+        ).toBe(true);
         expect(harness.query('#current-connection-name').textContent).toBe('尚未选择接入');
-
-        await new Promise<void>((resolve) => harness.dom.window.setTimeout(resolve, 1_550));
         expect(harness.query('#connection-history-recovery').hasAttribute('hidden')).toBe(true);
         expect(harness.query('#connection-wizard-progress').hasAttribute('hidden')).toBe(false);
         expect(harness.query('#connection-wizard-viewport').hasAttribute('inert')).toBe(false);

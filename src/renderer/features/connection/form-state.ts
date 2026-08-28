@@ -23,6 +23,7 @@ export interface ConnectionFormState {
   nextConnection: ClaudeNextConversationConnectionState;
   nextConnectionRevision: number;
   renderWizard: (() => void) | undefined;
+  connectionSucceeded: (() => void) | undefined;
   renderManagedChatGptProgress: ((progress: ManagedChatGptSetupProgress) => void) | undefined;
   wizardStep: 'choice' | 'configure';
 }
@@ -44,6 +45,7 @@ export const createConnectionFormState = (): ConnectionFormState => ({
   nextConnection: {},
   nextConnectionRevision: 0,
   renderWizard: undefined,
+  connectionSucceeded: undefined,
   renderManagedChatGptProgress: undefined,
   wizardStep: 'choice',
 });

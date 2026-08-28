@@ -11,6 +11,7 @@ import {
 import path from 'node:path';
 import { z } from 'zod';
 import { SUBSCRIPTION_PROVIDERS } from '../../shared/claude/subscriptions';
+import { sanitizeAccountIdentity } from '../../shared/claude/account-identity';
 import type { SubscriptionCredential } from './catalog';
 import { hasControlCharacters, SubscriptionError } from './http';
 
@@ -34,6 +35,10 @@ const slotSchema = z.object({
     refreshToken: token.optional(),
     expiresAt: z.number().positive().finite(),
     deviceId: z.string().uuid().optional(),
+    accountIdentity: z
+      .string()
+      .refine((value) => sanitizeAccountIdentity(value) === value)
+      .optional(),
   }),
 });
 const vaultSchema = z

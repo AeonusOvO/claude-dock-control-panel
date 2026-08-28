@@ -95,7 +95,7 @@ main/
   claude/                 项目配置事务、接入历史、路由、运行态等
     official-auth-status.ts  `claude auth status --json` 的缓存与安全白名单投影
   codex/ chat/ conversation/ terminal/ network/ proxy/
-  subscriptions/          service oauth zcode relay vault catalog http：账号授权、固定回环转发与加密凭据
+  subscriptions/          service oauth zcode relay vault catalog http account：账号授权、固定回环转发、加密凭据与账户投影
   download/ mcp/ artifact/ updates/ stores/ coordination/
 ```
 

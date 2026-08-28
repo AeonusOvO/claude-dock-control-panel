@@ -4,6 +4,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeRuntime } from '../../src/main/claude/runtime';
 import type { SaveClaudeConfigInput } from '../../src/shared/contracts';
+import {
+  SUBSCRIPTION_PROVIDERS,
+  SUBSCRIPTION_UPSTREAM_URLS,
+} from '../../src/shared/claude/subscriptions';
 
 vi.mock('electron', () => ({
   safeStorage: {
@@ -61,6 +65,40 @@ const localInput = (model: string): SaveClaudeConfigInput => ({
 });
 
 describe('Claude next-conversation connection', () => {
+  it.each(SUBSCRIPTION_PROVIDERS)(
+    'preflights the real upstream without rewriting the local account binding: %s',
+    async (preset) => {
+      const runtime = createRuntime();
+      const baseUrl = 'http://127.0.0.1:18520/s/' + 'a'.repeat(32);
+      const input: SaveClaudeConfigInput = {
+        ...localInput('test-model'),
+        preset,
+        baseUrl,
+        authMode: 'authToken',
+        credentialAction: 'replace',
+        credential: 'b'.repeat(64),
+      };
+      const expected = {
+        provider: 'anthropic-claude',
+        target: { process: 'claude-cli', url: SUBSCRIPTION_UPSTREAM_URLS[preset] + '/v1/messages' },
+      };
+      expect(runtime.networkAccessForConfigInput(input)).toEqual(expected);
+      runtime.setSubscriptionAccountIdentityResolver((config) =>
+        config.baseUrl === baseUrl ? 'member@example.test' : undefined,
+      );
+      const saved = await runtime.saveNextConversationConfig(input);
+      expect(saved.accountIdentity).toBe('member@example.test');
+      expect(saved.config?.baseUrl).toBe(baseUrl);
+      expect(runtime.networkAccess(runtime.nextConversationConnectionScope())).toEqual(expected);
+      expect(JSON.stringify(saved)).not.toContain('b'.repeat(64));
+      expect(runtime.networkAccessForConfigInput({ ...input, preset: 'custom' })?.target?.url).toBe(
+        baseUrl + '/v1/messages',
+      );
+      await runtime.saveNextConversationConfig(localInput('another'));
+      expect((await runtime.getNextConversationConnection()).accountIdentity).toBeUndefined();
+    },
+  );
+
   it('reserves configuration across browser login and rejects competing writes, clear and promotion', async () => {
     const runtime = createRuntime();
     await runtime.saveNextConversationConfig(localInput('old'));

@@ -119,15 +119,17 @@ export const connectSubscriptionUi = (
       if (disposed) return;
       receive(result.state);
       if (result.state.attempt !== form.subscription?.attempt) return;
-      if (result.ok && result.nextConnection) {
+      if (result.ok && result.nextConnection?.config) {
         if (form.selectedProviderId === provider) applyNext(result.nextConnection);
         else {
           form.nextConnectionRevision += 1;
           form.nextConnection = result.nextConnection;
           deps.renderNextConnection();
         }
+        form.connectionSucceeded?.();
+      } else {
+        deps.showToast(result.message, result.ok ? 'success' : 'error');
       }
-      deps.showToast(result.message, result.ok ? 'success' : 'error');
     } catch {
       if (!disposed) deps.showToast('无法连接订阅，请重试。', 'error');
     } finally {

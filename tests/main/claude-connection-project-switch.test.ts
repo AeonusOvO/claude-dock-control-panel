@@ -4,11 +4,54 @@ import { CHANNELS } from '../../src/shared/ipc/channels';
 import { createIpcHarness } from '../helpers/ipc-harness';
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.doUnmock('electron');
   vi.resetModules();
 });
 
 describe('Claude connection IPC project ownership', () => {
+  it.each([false, true])(
+    'only saves an official subscription after confirming the existing CLI login: %s',
+    async (loggedIn) => {
+      const ipc = createIpcHarness();
+      vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));
+      const { claudeOfficialAuthProvider } =
+        await import('../../src/main/claude/official-auth-status');
+      vi.spyOn(claudeOfficialAuthProvider, 'getState').mockResolvedValue({
+        available: true,
+        loggedIn,
+        checkedAt: 1,
+      });
+      const { registerClaudeConnectionIpc } = await import('../../src/main/ipc/claude-connection');
+      const runtime = {
+        saveNextConversationConfig: vi.fn(async () => ({ config: { preset: 'anthropic' } })),
+        getNextConversationConnection: vi.fn(async () => ({})),
+      };
+      registerClaudeConnectionIpc({
+        guards: {
+          assertExternalRoutingWritesAllowed: vi.fn(),
+          requireClaudeRuntime: () => runtime,
+          validateSender: vi.fn(),
+          withOfficialProviderAccess: vi.fn((_request, operation) => operation()),
+        },
+      } as never);
+      const result = await ipc.invoke(CHANNELS.CLAUDE_SAVE_NEXT_CONFIG, {
+        authMode: 'existing',
+        baseUrl: '',
+        credentialAction: 'keep',
+        model: 'default',
+        preset: 'anthropic',
+        provider: 'anthropic',
+      });
+      expect(result).toMatchObject({ ok: loggedIn });
+      if (loggedIn) expect(runtime.saveNextConversationConfig).toHaveBeenCalledOnce();
+      else {
+        expect(runtime.saveNextConversationConfig).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ error: '请先完成 Claude 官方账号登录。' });
+      }
+    },
+  );
+
   it('rebinds a conversation to the current complete connection without changing project config', async () => {
     const ipc = createIpcHarness();
     vi.doMock('electron', () => ({ ipcMain: ipc.ipcMain }));

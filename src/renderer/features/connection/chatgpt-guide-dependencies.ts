@@ -7,6 +7,7 @@ import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import type { ManagedChatGptOperationTracker } from './managed-chatgpt-operation';
 
 export interface ChatGptSubscriptionGuideDeps {
+  connectionSucceeded: () => void;
   applyNextClaudeConnection: (state: ClaudeNextConversationConnectionState) => void;
   getNextClaudeConnection: () => ClaudeNextConversationConnectionState;
   managedChatGptOperations: ManagedChatGptOperationTracker;

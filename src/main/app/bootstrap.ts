@@ -199,6 +199,9 @@ const managedChatGptConversationAccount = async (gateway: ManagedChatGptGateway)
 
 const configureSubscriptionRuntime = (runtime: ClaudeRuntime, services: Registry): void => {
   runtime.setSubscriptionRelayStarter(() => services.resolve(SUBSCRIPTION_SERVICE).ensureRunning());
+  runtime.setSubscriptionAccountIdentityResolver((config) =>
+    services.resolve(SUBSCRIPTION_SERVICE).getAccountIdentity(config.preset, config.baseUrl),
+  );
 };
 
 const ensureManagedChatGptGatewayStarted = async (

@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { SubscriptionProvider } from '../../shared/claude/subscriptions';
 import { kimiHeaders, subscriptionEndpoints, type SubscriptionCredential } from './catalog';
 import { authorizeGlm } from './zcode';
+import { subscriptionAccountIdentity } from './account';
 import {
   authJson,
   expiresAt,
@@ -46,6 +47,8 @@ const parseToken = (
     accessToken,
     refreshToken,
     expiresAt: expiry,
+    accountIdentity:
+      previous?.accountIdentity ?? subscriptionAccountIdentity(body, [accessToken, refreshToken]),
     ...(previous?.deviceId ? { deviceId: previous.deviceId } : {}),
   };
 };

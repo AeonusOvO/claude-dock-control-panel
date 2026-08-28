@@ -39,7 +39,11 @@ export const createConnectionTestActions = (
     dependencies.syncConnectionInteractivity();
     try {
       const input = configInput ?? dependencies.currentConfigInput('keep');
-      if (input.autoDetect && !activeStatus && saveOnSuccess) {
+      if (
+        !activeStatus &&
+        saveOnSuccess &&
+        (input.autoDetect || (input.preset === 'anthropic' && input.authMode === 'existing'))
+      ) {
         const result = await window.controlPanel.saveNextClaudeConfig(input);
         if (result.ok) dependencies.applyNextClaudeConnection(result.state);
         const message = result.ok ? '已连接。' : (result.error ?? '连接失败，请重试。');
@@ -52,7 +56,8 @@ export const createConnectionTestActions = (
             tone: result.ok ? 'success' : 'error',
           },
         );
-        dependencies.showToast(message, result.ok ? 'success' : 'error');
+        if (result.ok) dependencies.connectionSucceeded();
+        else dependencies.showToast(message, 'error');
         return;
       }
       const result =
@@ -61,7 +66,7 @@ export const createConnectionTestActions = (
           : await window.controlPanel.testNextClaudeConnection(input);
       renderConnectionTest(result);
       if (result.ok && saveOnSuccess) {
-        await dependencies.saveClaudeConfig('keep');
+        if (await dependencies.saveClaudeConfig('keep')) dependencies.connectionSucceeded();
       } else if (activeStatus) {
         void dependencies.loadClaudeState(activeStatus.id);
       }

@@ -39,7 +39,7 @@ export const createConnectionFormSaveActions = (
             showToast(resultFailureMessage(result, '无法保存接入配置。'), 'error');
             return false;
           }
-          showToast('已保存；下个新对话将使用这套平台与模型');
+          showToast('已保存');
           return true;
         } catch (error) {
           applyNextConnection(previous);

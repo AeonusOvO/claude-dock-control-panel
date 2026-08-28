@@ -68,6 +68,7 @@ export interface ConnectionForm {
   getNextClaudeConnection: () => ClaudeNextConversationConnectionState;
   loadNextClaudeConnection: () => Promise<ClaudeNextConversationConnectionState>;
   showConnectionChoice: () => void;
+  connectionSucceeded: () => void;
   populateClaudeConfigForm: (state: ClaudeProjectState) => void;
   currentConfigInput: (
     credentialAction: SaveClaudeConfigInput['credentialAction'],
@@ -245,6 +246,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
   bindingsActions.bindConnectionForm();
   const wizardActions = createConnectionFormWizardActions(deps, formState, applyPresetUi);
   formState.renderWizard = wizardActions.render;
+  formState.connectionSucceeded = wizardActions.connectionSucceeded;
   const unsubscribeSubscription = connectSubscriptionUi(
     deps,
     formState,
@@ -282,6 +284,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
     getNextClaudeConnection: () => formState.nextConnection,
     loadNextClaudeConnection,
     showConnectionChoice: wizardActions.showChoice,
+    connectionSucceeded: wizardActions.connectionSucceeded,
     populateClaudeConfigForm,
     currentConfigInput,
     completeVisibleConnectionEndpoint,
@@ -311,6 +314,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
       selectedProviderListeners.clear();
       startupModelConnectionOverlay.dispose();
       formState.renderWizard = undefined;
+      formState.connectionSucceeded = undefined;
       wizardActions.dispose();
       unsubscribeManagedChatGptSetupProgress();
     },

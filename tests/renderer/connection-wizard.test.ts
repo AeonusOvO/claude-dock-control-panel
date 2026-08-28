@@ -13,6 +13,7 @@ import type {
   SubscriptionState,
 } from '../../src/shared/contracts';
 import { claudeProjectState } from '../helpers/renderer-terminal-fixture';
+import { SUBSCRIPTION_PROVIDERS } from '../../src/shared/claude/subscriptions';
 
 const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
   authenticated: true,
@@ -29,6 +30,202 @@ const readyManagedChatGptState = (): ManagedChatGptGatewayState => ({
 });
 
 describe('connection access wizard', () => {
+  it('keeps an open domestic model menu alive during repeated terminal state updates', async () => {
+    await withTerminalRenderer({}, async (harness) => {
+      harness.click('[data-rail-tab="connection"]');
+      await settle(harness);
+      harness.click('[data-provider-id="deepseek"]');
+      const select = harness.query<HTMLSelectElement>('#connection-domestic-model');
+      const trigger = select.parentElement!.querySelector<HTMLButtonElement>('button')!;
+      select.dispatchEvent(
+        new harness.dom.window.MouseEvent('mousedown', { bubbles: true, button: 0 }),
+      );
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      for (let revision = 2; revision <= 5; revision += 1) {
+        harness.emit(
+          'onClaudeState',
+          claudeProjectState({
+            active: true,
+            ptyGeneration: 1,
+            stateRevision: revision,
+            metrics: { capturedAt: revision, inputTokens: revision * 10 },
+          }),
+        );
+        await harness.flush();
+      }
+      expect(harness.query('#connection-domestic-model')).toBe(select);
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      change(select, 'glm-subscription-cn');
+      expect(harness.query<HTMLSelectElement>('#claude-preset').value).toBe('glm-subscription-cn');
+    });
+  });
+
+  it.each(['custom', 'deepseek', 'anthropic-api', 'anthropic'] as const)(
+    'shows one success dialog and returns to model selection after connecting %s',
+    async (preset) => {
+      await withRenderer(
+        {
+          saveNextClaudeConfig: async (input) => ({
+            ok: true,
+            state: {
+              config: {
+                ...claudeProjectState().config,
+                preset: input.preset,
+                baseUrl: input.baseUrl,
+                authMode: input.authMode,
+                model: input.model,
+                provider: input.provider,
+                credentialConfigured: true,
+              },
+            },
+          }),
+        },
+        async (harness) => {
+          harness.click('[data-rail-tab="connection"]');
+          harness.click(
+            preset === 'anthropic'
+              ? '[data-provider-id="anthropic"]'
+              : preset === 'deepseek'
+                ? '[data-provider-id="deepseek"]'
+                : '[data-provider-id="custom"]',
+          );
+          harness.click('#connection-wizard-next');
+          if (preset === 'anthropic-api')
+            change(harness.query<HTMLSelectElement>('#claude-preset'), preset);
+          if (preset !== 'anthropic') {
+            input(harness.query('#claude-base-url'), 'https://api.example.test');
+            input(harness.query('#claude-credential'), 'test-secret');
+          }
+          harness.query<HTMLFormElement>('#claude-config-form').requestSubmit();
+          await settle(harness);
+          expect(harness.query<HTMLDialogElement>('#connection-success-dialog').open).toBe(true);
+          expect(harness.query('#connection-success-title').textContent).toBe('模型已连接');
+          expect(
+            harness
+              .query('[data-connection-wizard-step="choice"]')
+              .classList.contains('connection-wizard-step--active'),
+          ).toBe(true);
+          expect(
+            harness
+              .query('[data-connection-wizard-step="configure"]')
+              .classList.contains('connection-wizard-step--active'),
+          ).toBe(false);
+          expect(harness.method('saveNextClaudeConfig')).toHaveBeenCalledOnce();
+        },
+      );
+    },
+  );
+
+  it.each(SUBSCRIPTION_PROVIDERS)(
+    'returns to the picker with the bound account after %s succeeds',
+    async (provider) => {
+      const complete: SubscriptionState = {
+        attempt: 'completed-login',
+        provider,
+        revision: 5,
+        phase: 'complete',
+        busy: false,
+        cancellable: false,
+        message: '订阅已连接。',
+      };
+      await withRenderer(
+        {
+          setupSubscription: async () => ({
+            ok: true,
+            message: '订阅已连接。',
+            state: complete,
+            nextConnection: {
+              accountIdentity: 'member@example.test',
+              config: {
+                ...claudeProjectState().config,
+                preset: provider,
+                provider: 'gateway',
+                authMode: 'authToken',
+                baseUrl: 'http://127.0.0.1:18520/s/' + 'a'.repeat(32),
+                model: 'subscription-model',
+                credentialConfigured: true,
+              },
+            },
+          }),
+        },
+        async (harness) => {
+          harness.click('[data-rail-tab="connection"]');
+          harness.click('[data-provider-id="deepseek"]');
+          change(harness.query<HTMLSelectElement>('#connection-domestic-model'), provider);
+          harness.click('#connection-wizard-next');
+          harness.click('#connection-wizard-next');
+          await settle(harness);
+          const dialog = harness.query<HTMLDialogElement>('#connection-success-dialog');
+          expect(dialog.open).toBe(true);
+          expect(
+            harness
+              .query('[data-connection-wizard-step="choice"]')
+              .classList.contains('connection-wizard-step--active'),
+          ).toBe(true);
+          expect(harness.query('#current-connection-type').textContent).toBe('订阅');
+          expect(harness.query('#current-connection-metadata').textContent).toContain(
+            '账户：member@example.test',
+          );
+          expect(harness.query('#current-connection').textContent).not.toContain('127.0.0.1');
+          dialog.close();
+          harness.emit('onSubscriptionState', complete);
+          await harness.flush();
+          expect(dialog.open).toBe(false);
+        },
+      );
+    },
+  );
+
+  it('confirms ChatGPT setup once and rejects an older connection read after it commits', async () => {
+    let finishRead!: (value: ClaudeNextConversationConnectionState) => void;
+    const previousConnection = new Promise<ClaudeNextConversationConnectionState>((resolve) => {
+      finishRead = resolve;
+    });
+    const connected = {
+      config: {
+        ...claudeProjectState().config,
+        preset: 'chatgpt-subscription' as const,
+        provider: 'gateway' as const,
+        authMode: 'authToken' as const,
+        baseUrl: 'http://127.0.0.1:8317',
+        model: 'gpt-5.6-sol',
+        credentialConfigured: true,
+      },
+    };
+    await withRenderer(
+      {
+        getNextClaudeConnection: () => previousConnection,
+        getManagedChatGptGatewayState: async () => readyManagedChatGptState(),
+        setupManagedChatGptGateway: async () => ({
+          ok: true,
+          message: '已连接',
+          state: readyManagedChatGptState(),
+          nextConnection: connected,
+        }),
+      },
+      async (harness) => {
+        harness.click('[data-rail-tab="connection"]');
+        harness.click('[data-provider-id="chatgpt-subscription"]');
+        harness.click('#connection-wizard-next');
+        await settle(harness);
+        harness.click('#connection-wizard-next');
+        await settle(harness);
+        expect(harness.query<HTMLDialogElement>('#connection-success-dialog').open).toBe(true);
+        expect(
+          harness
+            .query('[data-connection-wizard-step="choice"]')
+            .classList.contains('connection-wizard-step--active'),
+        ).toBe(true);
+        harness.query<HTMLDialogElement>('#connection-success-dialog').close();
+        finishRead({ config: claudeProjectState().config });
+        await settle(harness);
+        expect(harness.query('#current-connection-name').textContent).toBe('ChatGPT 官方订阅');
+        expect(harness.query('#current-connection-type').textContent).toBe('订阅');
+        expect(harness.query<HTMLDialogElement>('#connection-success-dialog').open).toBe(false);
+      },
+    );
+  });
+
   it('labels domestic options with subscription/API capsules and opens an account login without key fields', async () => {
     let finish!: (value: SubscriptionResult) => void;
     await withRenderer(
@@ -257,6 +454,12 @@ describe('connection access wizard', () => {
         expect(harness.method('testNextClaudeConnection')).not.toHaveBeenCalled();
         expect(harness.query<HTMLInputElement>('#claude-credential').value).toBe('draft-secret');
         expect(harness.query('#connection-test-summary').textContent).toBe('请检查密钥。');
+        expect(harness.query<HTMLDialogElement>('#connection-success-dialog').open).toBe(false);
+        expect(
+          harness
+            .query('[data-connection-wizard-step="configure"]')
+            .classList.contains('connection-wizard-step--active'),
+        ).toBe(true);
       },
     );
   });

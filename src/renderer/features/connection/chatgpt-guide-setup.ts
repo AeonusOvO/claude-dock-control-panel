@@ -89,7 +89,7 @@ export const createChatGptGuideSetupActions = (
       if (result.connectionTest) {
         statusDetail.textContent = result.connectionTest.message;
       }
-      showToast(result.message);
+      if (result.nextConnection?.config) deps.connectionSucceeded();
     } catch {
       applyNextClaudeConnection(previous);
       statusCard.dataset.phase = 'error';
@@ -193,7 +193,7 @@ export const createChatGptGuideSetupActions = (
         }
         statusTitle.textContent = '下个对话模型已验证并切换';
         statusDetail.textContent = result.message;
-        showToast(result.message);
+        if (result.nextConnection?.config) deps.connectionSucceeded();
       })
       .catch(() => {
         applyNextClaudeConnection(previous);

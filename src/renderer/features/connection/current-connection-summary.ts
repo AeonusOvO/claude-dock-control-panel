@@ -1,4 +1,5 @@
 import { findClaudeProvider, type ClaudeProviderId } from '../../../shared/claude/providers';
+import { sanitizeAccountIdentity } from '../../../shared/claude/account-identity';
 import type {
   ClaudeAuthMode,
   ClaudeConfigView,
@@ -22,6 +23,7 @@ export interface CurrentConnectionSummaryContext {
 }
 
 export interface CurrentConnectionSummary {
+  connectionType: 'subscription' | 'api';
   /** Account identity is separate so a future UI can style or announce it without parsing copy. */
   accountIdentity?: string;
   /** Renderer-safe endpoint: URL credentials, query parameters and fragments are never included. */
@@ -96,26 +98,25 @@ const officialAccountSummary = (
   config: ClaudeConfigView,
   context: CurrentConnectionSummaryContext,
 ): { accountIdentity?: string; metadata: string } => {
-  const accountIdentity = normalizedOptionalText(
+  const accountIdentity = sanitizeAccountIdentity(
     config.preset === 'anthropic'
       ? (context.officialAuth?.accountIdentity ?? context.accountIdentity)
       : context.accountIdentity,
   );
   if (accountIdentity) {
-    return { accountIdentity, metadata: `账号：${accountIdentity}` };
+    return { accountIdentity, metadata: '账户：' + accountIdentity };
   }
   if (context.accountStatus === 'loading') {
-    return { metadata: '正在读取账号与本机网关状态…' };
+    return { metadata: '正在读取账户…' };
   }
   if (context.accountStatus === 'failed') {
-    return { metadata: '账号状态读取失败；可重新验证接入' };
+    return { metadata: '账户信息暂不可用' };
   }
 
   const officialAuth = config.preset === 'anthropic' ? context.officialAuth : undefined;
-  if (!officialAuth || !officialAuth.available) return { metadata: '账号信息暂不可用' };
+  if (!officialAuth || !officialAuth.available) return { metadata: '账户信息暂不可用' };
   if (!officialAuth.loggedIn) return { metadata: '未登录' };
-  const authMethod = normalizedOptionalText(officialAuth.authMethod);
-  return { metadata: authMethod ? `登录方式：${authMethod}` : '已登录' };
+  return { metadata: '账户信息暂不可用' };
 };
 
 const apiDisplayName = (
@@ -143,13 +144,21 @@ export const createCurrentConnectionSummary = (
   const provider = findClaudeProvider(config.preset);
   const endpoint = sourceEndpoint(config);
 
-  if (isOfficialSubscription(config.preset)) {
+  if (isOfficialSubscription(config.preset) || provider?.codingPlan) {
     const account = officialAccountSummary(config, context);
     return {
       ...(account.accountIdentity ? { accountIdentity: account.accountIdentity } : {}),
-      kind: 'official-subscription',
-      name: officialSubscriptionName(config.preset),
-      metadata: [account.metadata],
+      connectionType: 'subscription',
+      kind: isOfficialSubscription(config.preset) ? 'official-subscription' : 'domestic',
+      name: isOfficialSubscription(config.preset)
+        ? officialSubscriptionName(config.preset)
+        : provider!.label,
+      metadata: [
+        ...(!isOfficialSubscription(config.preset) && sourceModel(config)
+          ? ['模型：' + sourceModel(config)]
+          : []),
+        account.metadata,
+      ],
     };
   }
 
@@ -158,6 +167,7 @@ export const createCurrentConnectionSummary = (
     return {
       ...(endpoint ? { endpoint } : {}),
       kind: 'domestic',
+      connectionType: 'api',
       name: provider.label,
       metadata: [
         ...(model ? [`模型：${model}`] : []),
@@ -171,6 +181,7 @@ export const createCurrentConnectionSummary = (
   return {
     ...(endpoint ? { endpoint } : {}),
     kind: 'api',
+    connectionType: 'api',
     name,
     metadata: [
       ...(endpoint && endpoint !== name ? [`接口：${endpoint}`] : []),

@@ -251,6 +251,8 @@ export interface ClaudeProjectState {
  * It exists independently of workspace projects and live terminal sessions.
  */
 export interface ClaudeNextConversationConnectionState {
+  /** Display-only identity from the exact committed subscription binding; never a credential. */
+  accountIdentity?: string;
   config?: ClaudeConfigView;
   officialAuth?: ClaudeOfficialAuthState;
 }

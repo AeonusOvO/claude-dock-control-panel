@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { SubscriptionProvider } from '../../shared/claude/subscriptions';
 import { subscriptionEndpoints, type SubscriptionCredential } from './catalog';
+import { subscriptionAccountIdentity } from './account';
 import {
   authJson,
   hasControlCharacters,
@@ -38,8 +39,13 @@ const envelope = async (
   return result.body;
 };
 
+interface AuthorizedGlmAccount {
+  accessToken: string;
+  accountIdentity?: string;
+}
+
 /** Own the bound socket from start to finish; bad callbacks never consume the valid one. */
-const authorizeChina = async (ctx: AuthContext): Promise<string> => {
+const authorizeChina = async (ctx: AuthContext): Promise<AuthorizedGlmAccount> => {
   const state = randomBytes(32).toString('hex');
   let accepted = false;
   let resolveCode: (value: string) => void = () => undefined;
@@ -121,7 +127,13 @@ const authorizeChina = async (ctx: AuthContext): Promise<string> => {
       ).data,
     );
     const bigmodel = record(payload.bigmodel);
-    return requiredText(bigmodel.access_token ?? bigmodel.accessToken ?? payload.access_token);
+    const accessToken = requiredText(
+      bigmodel.access_token ?? bigmodel.accessToken ?? payload.access_token,
+    );
+    return {
+      accessToken,
+      accountIdentity: subscriptionAccountIdentity(payload, [accessToken, code]),
+    };
   } finally {
     ctx.signal.removeEventListener('abort', abort);
     server.closeAllConnections();
@@ -129,7 +141,7 @@ const authorizeChina = async (ctx: AuthContext): Promise<string> => {
   }
 };
 
-const authorizeGlobal = async (ctx: AuthContext): Promise<string> => {
+const authorizeGlobal = async (ctx: AuthContext): Promise<AuthorizedGlmAccount> => {
   const initialToken = randomBytes(32).toString('hex');
   const init = jsonPost({ provider: 'zai' });
   init.headers = { ...init.headers, Authorization: `Bearer ${initialToken}` };
@@ -158,7 +170,11 @@ const authorizeGlobal = async (ctx: AuthContext): Promise<string> => {
     );
     if (poll.status === 'pending') continue;
     if (poll.status !== 'ready') throw new SubscriptionError('GLM 授权未完成，请重新登录。', 401);
-    return requiredText(record(poll.zai).access_token);
+    const accessToken = requiredText(record(poll.zai).access_token);
+    return {
+      accessToken,
+      accountIdentity: subscriptionAccountIdentity(poll, [accessToken, token]),
+    };
   }
 };
 
@@ -218,7 +234,8 @@ export const authorizeGlm = async (
   ctx: AuthContext,
 ): Promise<SubscriptionCredential> => {
   const china = provider === 'glm-subscription-cn';
-  const accountToken = china ? await authorizeChina(ctx) : await authorizeGlobal(ctx);
+  const authorization = china ? await authorizeChina(ctx) : await authorizeGlobal(ctx);
+  const accountToken = authorization.accessToken;
   const base = china ? 'https://bigmodel.cn' : 'https://api.z.ai';
   const businessToken = china
     ? accountToken
@@ -268,5 +285,12 @@ export const authorizeGlm = async (
   const key = `${keyId}.${secret}`;
   await assertCodingPlan(provider, key, ctx);
   ctx.signal.throwIfAborted();
-  return { provider, accessToken: key, expiresAt: Number.MAX_SAFE_INTEGER };
+  return {
+    provider,
+    accessToken: key,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    accountIdentity:
+      authorization.accountIdentity ??
+      subscriptionAccountIdentity(customer, [accountToken, businessToken, keyId, secret, key]),
+  };
 };

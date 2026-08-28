@@ -19,6 +19,7 @@ export interface ConnectionHistoryState {
 export interface ConnectionHistoryDependencies {
   activeClaudeState: () => ClaudeProjectState | undefined;
   activeStatus: () => TerminalStatus | undefined;
+  connectionSucceeded: () => void;
   getManagedChatGptGatewayState: () => Promise<ManagedChatGptGatewayState>;
   hideTerminalContextMenu: () => void;
   hideConversationContextMenu: () => void;

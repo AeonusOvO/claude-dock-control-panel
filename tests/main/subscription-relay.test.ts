@@ -83,6 +83,38 @@ afterEach(async () => {
 });
 
 describe('embedded subscription relay and vault', () => {
+  it('shows only committed account identities, keeps accounts isolated and restores them without a listener', async () => {
+    const { relay, root, upstream } = await create();
+    const first = relay.addCandidate({ ...credential(), accountIdentity: 'first@example.test' });
+    const firstUrl = relay.baseUrl(first.id);
+    expect(relay.getAccountIdentity('kimi-subscription', firstUrl)).toBeUndefined();
+    relay.persist(first.id);
+    const second = relay.addCandidate({
+      ...credential('second-access'),
+      accountIdentity: 'second@example.test',
+    });
+    relay.persist(second.id);
+    expect(relay.getAccountIdentity('kimi-subscription', firstUrl)).toBe('first@example.test');
+    expect(relay.getAccountIdentity('kimi-subscription', relay.baseUrl(second.id))).toBe(
+      'second@example.test',
+    );
+    expect(relay.getAccountIdentity('minimax-subscription-cn', firstUrl)).toBeUndefined();
+    expect(
+      relay.getAccountIdentity('kimi-subscription', firstUrl + '?token=secret'),
+    ).toBeUndefined();
+    const restored = new SubscriptionRelay(
+      new SubscriptionVault(root, encryption),
+      network(vi.fn()),
+      network(vi.fn()),
+    );
+    relays.push(restored);
+    expect(restored.getAccountIdentity('kimi-subscription', firstUrl)).toBe('first@example.test');
+    expect(upstream).not.toHaveBeenCalled();
+    expect(
+      readFileSync(path.join(root, 'managed-subscriptions', 'credentials.enc'), 'utf8'),
+    ).not.toContain('first@example.test');
+  });
+
   it('authenticates loopback callers and rejects browsers, unknown slots and arbitrary routes before forwarding', async () => {
     const { relay, upstream } = await create();
     const slot = relay.addCandidate(credential());

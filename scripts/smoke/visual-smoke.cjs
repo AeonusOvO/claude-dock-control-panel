@@ -862,6 +862,8 @@ app
     document.querySelector('#connection-history-dialog-summary').textContent =
       '当前项目共 4 条接入记录';
     document.querySelector('#current-connection').dataset.kind = 'api';
+    document.querySelector('#current-connection-type').hidden = false;
+    document.querySelector('#current-connection-type').textContent = 'API';
     document.querySelector('#current-connection-name').textContent = '研发中转站';
     document.querySelector('#current-connection-metadata').textContent =
       '接口：https://gateway.example.com/anthropic/ · API 凭据已配置';
@@ -883,6 +885,42 @@ app
         writeFileSync(path.join(outputDirectory, 'connection-1180.png'), snapshot);
       }
     }
+
+    // Layout-only fixtures: actual success, cancellation and account ownership are tested through
+    // the real renderer handlers in Vitest. This gate never authorizes or charges a real account.
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#current-connection').dataset.kind = 'domestic';
+      document.querySelector('#current-connection-type').textContent = '订阅';
+      document.querySelector('#current-connection-name').textContent = 'Kimi Code · 订阅';
+      document.querySelector('#current-connection-metadata').textContent =
+        '模型：kimi-for-coding · 账户：member@example.test';
+      document.querySelector('#connection-success-dialog').showModal();
+    `);
+    for (const themeId of themeOrder) {
+      await window.webContents.executeJavaScript(applyQaTheme(themeId));
+      const valid = await window.webContents.executeJavaScript(`(() => {
+        const dialog = document.querySelector('#connection-success-dialog');
+        const bounds = dialog.getBoundingClientRect();
+        return dialog.open && dialog.contains(document.activeElement) &&
+          dialog.querySelector('strong').textContent === '模型已连接' &&
+          dialog.scrollWidth <= dialog.clientWidth + 2 &&
+          bounds.left >= 0 && bounds.right <= innerWidth &&
+          bounds.top >= 0 && bounds.bottom <= innerHeight;
+      })()`);
+      if (!valid) throw new Error('Connection success dialog layout or focus failed.');
+      await captureThemeMatrixPage(`connection-success-${themeId}-1180.png`, {
+        area: 'connection-success',
+        theme: themeId,
+      });
+    }
+    await window.webContents.executeJavaScript(`
+      document.querySelector('#connection-success-dialog').close();
+      document.querySelector('#current-connection').dataset.kind = 'api';
+      document.querySelector('#current-connection-type').textContent = 'API';
+      document.querySelector('#current-connection-name').textContent = '研发中转站';
+      document.querySelector('#current-connection-metadata').textContent =
+        '接口：https://gateway.example.com/anthropic/ · API 凭据已配置';
+    `);
 
     const startupConnectionMotion = await window.webContents.executeJavaScript(`
       (() => {

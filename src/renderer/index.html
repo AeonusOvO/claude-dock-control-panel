@@ -335,7 +335,14 @@
               >
                 <span>下个对话接入</span>
                 <div>
-                  <strong id="current-connection-name">尚未选择接入</strong>
+                  <div class="current-connection-heading">
+                    <span
+                      class="current-connection-type"
+                      id="current-connection-type"
+                      hidden
+                    ></span>
+                    <strong id="current-connection-name">尚未选择接入</strong>
+                  </div>
                   <small id="current-connection-metadata"
                     >请先选择平台和模型；保存后，下个新对话会立即捕获这套配置。</small
                   >
@@ -4015,6 +4022,21 @@
             检查网络
           </button>
           <button id="claude-launch-preflight-bypass" type="button">坚持连接</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog
+      class="confirmation-dialog popover"
+      id="connection-success-dialog"
+      aria-labelledby="connection-success-title"
+    >
+      <form method="dialog">
+        <header>
+          <strong id="connection-success-title">模型已连接</strong>
+        </header>
+        <footer>
+          <button class="dialog-primary" type="submit" autofocus>知道了</button>
         </footer>
       </form>
     </dialog>

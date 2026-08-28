@@ -1,4 +1,7 @@
-import type { SubscriptionProvider } from '../../shared/claude/subscriptions';
+import {
+  SUBSCRIPTION_UPSTREAM_URLS,
+  type SubscriptionProvider,
+} from '../../shared/claude/subscriptions';
 
 export interface SubscriptionEndpoint {
   label: string;
@@ -10,31 +13,31 @@ export interface SubscriptionEndpoint {
 export const subscriptionEndpoints: Record<SubscriptionProvider, SubscriptionEndpoint> = {
   'kimi-subscription': {
     label: 'Kimi Code',
-    baseUrl: 'https://api.kimi.com/coding',
+    baseUrl: SUBSCRIPTION_UPSTREAM_URLS['kimi-subscription'],
     authBase: 'https://auth.kimi.com',
     models: ['kimi-for-coding'],
   },
   'minimax-subscription-cn': {
     label: 'MiniMax',
-    baseUrl: 'https://api.minimaxi.com/anthropic',
+    baseUrl: SUBSCRIPTION_UPSTREAM_URLS['minimax-subscription-cn'],
     authBase: 'https://account.minimaxi.com',
     models: ['MiniMax-M3', 'MiniMax-M2.7'],
   },
   'minimax-subscription-global': {
     label: 'MiniMax（国际）',
-    baseUrl: 'https://api.minimax.io/anthropic',
+    baseUrl: SUBSCRIPTION_UPSTREAM_URLS['minimax-subscription-global'],
     authBase: 'https://account.minimax.io',
     models: ['MiniMax-M3', 'MiniMax-M2.7'],
   },
   'glm-subscription-cn': {
     label: '智谱 GLM',
-    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    baseUrl: SUBSCRIPTION_UPSTREAM_URLS['glm-subscription-cn'],
     authBase: 'https://bigmodel.cn',
     models: ['glm-5.2', 'glm-4.7'],
   },
   'glm-subscription-global': {
     label: 'GLM（国际）',
-    baseUrl: 'https://api.z.ai/api/anthropic',
+    baseUrl: SUBSCRIPTION_UPSTREAM_URLS['glm-subscription-global'],
     authBase: 'https://zcode.z.ai',
     models: ['glm-5.2', 'glm-4.7'],
   },
@@ -46,6 +49,7 @@ export interface SubscriptionCredential {
   refreshToken?: string;
   expiresAt: number;
   deviceId?: string;
+  accountIdentity?: string;
 }
 
 export const kimiHeaders = (deviceId: string): Record<string, string> => ({

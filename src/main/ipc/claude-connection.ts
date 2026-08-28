@@ -22,6 +22,7 @@ import type { WithSessionOperation } from '../coordination/session-operation';
 import { createFailureReporter } from '../infra/logger';
 import { resolveDirectory } from '../infra/directory';
 import { guardedAutomaticConnectionFetch } from '../network/automatic-connection-access';
+import { claudeOfficialAuthProvider } from '../claude/official-auth-status';
 import type { TerminalWorkspace } from '../terminal/workspace';
 import {
   validateClaudeConfigInput,
@@ -304,6 +305,10 @@ const registerNextConversationConnectionIpc = ({
       try {
         assertExternalRoutingWritesAllowed();
         const validatedInput = validateClaudeConfigInput(input);
+        if (validatedInput.preset === 'anthropic' && validatedInput.authMode === 'existing') {
+          const auth = await claudeOfficialAuthProvider.getState();
+          if (!auth.available || !auth.loggedIn) throw new Error('请先完成 Claude 官方账号登录。');
+        }
         if (validatedInput.autoDetect) {
           const result = await runtime.verifyAndSaveNextConversationConfig(
             validatedInput,

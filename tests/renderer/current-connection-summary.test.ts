@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ClaudeConfigView } from '../../src/shared/contracts';
+import { CLAUDE_PROVIDERS } from '../../src/shared/claude/providers';
 import {
   createCurrentConnectionSummary,
   redactConnectionEndpoint,
@@ -22,6 +23,7 @@ describe('current connection summary', () => {
     expect(createCurrentConnectionSummary(configView(), { connectionName: '团队中转站' })).toEqual({
       endpoint: 'https://relay.example.test/v1',
       kind: 'api',
+      connectionType: 'api',
       metadata: ['接口：https://relay.example.test/v1', 'API 凭据已配置'],
       name: '团队中转站',
     });
@@ -31,6 +33,7 @@ describe('current connection summary', () => {
     expect(createCurrentConnectionSummary(configView())).toEqual({
       endpoint: 'https://relay.example.test/v1',
       kind: 'api',
+      connectionType: 'api',
       metadata: ['API 凭据已配置'],
       name: 'https://relay.example.test/v1',
     });
@@ -48,6 +51,7 @@ describe('current connection summary', () => {
     ).toEqual({
       endpoint: 'https://openrouter.ai/api',
       kind: 'api',
+      connectionType: 'api',
       metadata: ['接口：https://openrouter.ai/api', 'API 凭据已配置'],
       name: 'OpenRouter',
     });
@@ -69,6 +73,7 @@ describe('current connection summary', () => {
     ).toEqual({
       endpoint: 'https://api.deepseek.com/anthropic',
       kind: 'domestic',
+      connectionType: 'api',
       metadata: [
         '模型：deepseek-v4-pro[1m]',
         'API 凭据已配置',
@@ -89,7 +94,8 @@ describe('current connection summary', () => {
     ).toEqual({
       accountIdentity: 'member@example.test',
       kind: 'official-subscription',
-      metadata: ['账号：member@example.test'],
+      connectionType: 'subscription',
+      metadata: ['账户：member@example.test'],
       name,
     });
   });
@@ -107,10 +113,38 @@ describe('current connection summary', () => {
       ),
     ).toEqual({
       kind: 'official-subscription',
-      metadata: ['账号信息暂不可用'],
+      connectionType: 'subscription',
+      metadata: ['账户信息暂不可用'],
       name: 'Claude 官方订阅',
     });
   });
+
+  it.each(CLAUDE_PROVIDERS.filter((provider) => provider.codingPlan))(
+    'labels $id as a subscription and only displays safe account metadata',
+    (provider) => {
+      const config = configView({
+        preset: provider.id,
+        baseUrl: 'http://127.0.0.1:18520/s/' + 'a'.repeat(32),
+        model: 'selected-model',
+      });
+      const connected = createCurrentConnectionSummary(config, {
+        accountIdentity: 'member@example.test',
+      });
+      expect(connected).toMatchObject({
+        connectionType: 'subscription',
+        name: provider.label,
+        accountIdentity: 'member@example.test',
+        metadata: ['模型：selected-model', '账户：member@example.test'],
+      });
+      expect(connected.endpoint).toBeUndefined();
+      const missing = createCurrentConnectionSummary(config, {
+        accountIdentity: 'Bearer private-token',
+      });
+      expect(missing.accountIdentity).toBeUndefined();
+      expect(missing.metadata).toContain('账户信息暂不可用');
+      expect(JSON.stringify(missing)).not.toMatch(/private-token|127\.0\.0\.1/);
+    },
+  );
 
   it.each([
     [
@@ -120,14 +154,14 @@ describe('current connection summary', () => {
         checkedAt: 1,
         loggedIn: true,
       },
-      '账号：claude-member@example.test',
+      '账户：claude-member@example.test',
     ],
     [{ authMethod: 'none', available: true, checkedAt: 1, loggedIn: false }, '未登录'],
     [
       { authMethod: 'claude.ai', available: true, checkedAt: 1, loggedIn: true },
-      '登录方式：claude.ai',
+      '账户信息暂不可用',
     ],
-    [{ available: false, checkedAt: 1, loggedIn: false }, '账号信息暂不可用'],
+    [{ available: false, checkedAt: 1, loggedIn: false }, '账户信息暂不可用'],
   ] as const)('renders safe Claude CLI auth state %#', (officialAuth, metadata) => {
     expect(
       createCurrentConnectionSummary(

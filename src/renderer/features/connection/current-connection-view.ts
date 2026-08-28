@@ -10,6 +10,7 @@ import type { ConnectionHistoryDependencies, ConnectionHistoryState } from './hi
 
 const currentConnection = requiredElement<HTMLElement>('#current-connection');
 const currentConnectionName = requiredElement<HTMLElement>('#current-connection-name');
+const currentConnectionType = requiredElement<HTMLElement>('#current-connection-type');
 const currentConnectionMetadata = requiredElement<HTMLElement>('#current-connection-metadata');
 
 const visibleBaseUrl = (config: ClaudeConfigView): string =>
@@ -34,6 +35,9 @@ const matchingHistoryName = (
 
 const renderEmpty = (): void => {
   currentConnection.dataset.kind = 'empty';
+  delete currentConnection.dataset.connectionType;
+  currentConnectionType.hidden = true;
+  currentConnectionType.textContent = '';
   currentConnectionName.textContent = '尚未选择接入';
   currentConnectionMetadata.textContent =
     '请先选择平台和模型；保存后，下个新对话会立即捕获这套配置。';
@@ -63,12 +67,15 @@ export const createCurrentConnectionViewActions = (
       return;
     }
     const summary = createCurrentConnectionSummary(nextConnection.config, {
-      accountIdentity,
+      accountIdentity: accountIdentity ?? nextConnection.accountIdentity,
       accountStatus,
       connectionName: matchingHistoryName(historyState.allEntries, nextConnection.config),
       officialAuth: nextConnection.officialAuth,
     });
     currentConnection.dataset.kind = summary.kind;
+    currentConnection.dataset.connectionType = summary.connectionType;
+    currentConnectionType.hidden = false;
+    currentConnectionType.textContent = summary.connectionType === 'subscription' ? '订阅' : 'API';
     currentConnectionName.textContent = summary.name;
     currentConnectionMetadata.textContent = summary.metadata.join(' · ');
   };

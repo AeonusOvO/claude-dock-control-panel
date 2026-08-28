@@ -35,7 +35,9 @@ export const createConnectionFormProviderToolsActions = (
   const { showToast, connectionFeature } = deps;
 
   const buildChatGptSubscriptionGuide = createChatGptSubscriptionGuide({
+    connectionSucceeded: () => formState.connectionSucceeded?.(),
     applyNextClaudeConnection: (state) => {
+      formState.nextConnectionRevision += 1;
       formState.nextConnection = state;
       deps.renderNextConnection();
     },

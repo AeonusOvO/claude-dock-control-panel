@@ -9,6 +9,15 @@ export const SUBSCRIPTION_PROVIDERS = [
 
 export type SubscriptionProvider = (typeof SUBSCRIPTION_PROVIDERS)[number];
 
+/** The upstream stays public; the per-account loopback URL is only the local relay entrance. */
+export const SUBSCRIPTION_UPSTREAM_URLS: Record<SubscriptionProvider, string> = {
+  'kimi-subscription': 'https://api.kimi.com/coding',
+  'minimax-subscription-cn': 'https://api.minimaxi.com/anthropic',
+  'minimax-subscription-global': 'https://api.minimax.io/anthropic',
+  'glm-subscription-cn': 'https://open.bigmodel.cn/api/anthropic',
+  'glm-subscription-global': 'https://api.z.ai/api/anthropic',
+};
+
 export const isSubscriptionProvider = (value: unknown): value is SubscriptionProvider =>
   typeof value === 'string' && SUBSCRIPTION_PROVIDERS.some((id) => id === value);
 

@@ -158,7 +158,7 @@ describe('current connection view', () => {
       },
       async (harness) => {
         await settle(harness);
-        expect(harness.query('#current-connection-metadata').textContent).toContain('正在读取账号');
+        expect(harness.query('#current-connection-metadata').textContent).toContain('正在读取账户');
         expect(harness.query('#current-connection-metadata').textContent).not.toContain('暂不可用');
 
         gateway.resolve(managedChatGptState({ accountEmail: 'member@example.test' }));
@@ -191,8 +191,10 @@ describe('current connection view', () => {
         gateway.reject(new Error('fixture gateway read failure'));
         await settle(harness);
 
-        expect(harness.query('#current-connection-metadata').textContent).toContain('读取失败');
-        expect(harness.query('#current-connection-metadata').textContent).not.toContain('暂不可用');
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          '账户信息暂不可用',
+        );
+        expect(harness.query('#current-connection-metadata').textContent).not.toContain('正在读取');
       },
     );
   });

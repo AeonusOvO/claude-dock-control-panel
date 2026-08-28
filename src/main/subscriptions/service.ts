@@ -57,6 +57,10 @@ export class SubscriptionService {
     return this.deps.relay.ensureRunning();
   }
 
+  public getAccountIdentity(provider: unknown, baseUrl: string): string | undefined {
+    return this.deps.relay.getAccountIdentity(provider, baseUrl);
+  }
+
   private publish(update: Partial<SubscriptionState>): void {
     this.state = { ...this.state, ...update, revision: this.state.revision + 1 };
     // A renderer teardown must not turn a committed configuration into a reported failure.

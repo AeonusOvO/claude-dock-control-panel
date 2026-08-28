@@ -190,7 +190,9 @@ BCP-47 语言后原子保存；它不接受任意环境变量名，也不修改 
 
 setup 只接收受支持 provider 枚举，cancel 只接收本次 attempt UUID。main 验证发送者、运行时权限和配置租约。
 响应及事件只包含版本化阶段、通用提示和用户设备码；不得跨 IPC 返回授权 URL、access/refresh/device token 或本机口令。
-成功时附加已有脱敏 `ClaudeNextConversationConnectionState`，详见[订阅账号接入](subscription-access.md)。
+成功时附加脱敏 `ClaudeNextConversationConnectionState`；其可选 `accountIdentity` 仅包含经白名单与
+长度/控制字符校验的账户展示文字，绑定已提交的 provider、端口和 slot，不返回凭据。字段缺失不推断账户。
+通道数不变，详见[订阅账号接入](subscription-access.md)。
 
 ### `codex`（6）
 

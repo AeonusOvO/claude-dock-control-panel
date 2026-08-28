@@ -6,6 +6,9 @@ import { subscriptionEndpoints, subscriptionHeaders, type SubscriptionCredential
 import { readBoundedJson, record, SubscriptionError, type AuthContext } from './http';
 import { refreshSubscription } from './oauth';
 import { SubscriptionVault, type SubscriptionSlot } from './vault';
+import { isSubscriptionBaseUrl, isSubscriptionProvider } from '../../shared/claude/subscriptions';
+import { sanitizeAccountIdentity } from '../../shared/claude/account-identity';
+import { subscriptionAccountIdentity } from './account';
 
 export interface SubscriptionNetwork {
   fetch: typeof fetch;
@@ -141,6 +144,27 @@ export class SubscriptionRelay {
 
   public discard(id: string): void {
     if (!this.persisted.has(id)) this.slots.delete(id);
+  }
+
+  /** Read only the committed binding; no network request, listener startup or credential IPC. */
+  public getAccountIdentity(provider: unknown, baseUrl: string): string | undefined {
+    if (!isSubscriptionProvider(provider) || !isSubscriptionBaseUrl(baseUrl)) return undefined;
+    try {
+      const url = new URL(baseUrl);
+      const stored = this.vault.load();
+      if (Number(url.port) !== stored.port) return undefined;
+      const slot = stored.slots.find((entry) => entry.id === url.pathname.slice(3));
+      if (slot?.credential.provider !== provider) return undefined;
+      return (
+        sanitizeAccountIdentity(slot.credential.accountIdentity) ??
+        subscriptionAccountIdentity({ access_token: slot.credential.accessToken }, [
+          slot.credential.refreshToken,
+        ])
+      );
+    } catch {
+      // Display metadata may be unavailable; launching still validates the vault and fails closed.
+      return undefined;
+    }
   }
 
   private credential(id: string, rejectedToken?: string): Promise<SubscriptionCredential> {

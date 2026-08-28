@@ -497,6 +497,7 @@ const installSecondaryShells = (
     },
     activeStatus,
     getManagedChatGptGatewayState: () => window.controlPanel.getManagedChatGptGatewayState(),
+    connectionSucceeded: connectionForm.connectionSucceeded,
     hideTerminalContextMenu: () => features.terminalFeature.hideTerminalContextMenu(),
     hideConversationContextMenu: () => features.projectsFeature.hideConversationContextMenu(),
     nextClaudeConnection: connectionForm.getNextClaudeConnection,

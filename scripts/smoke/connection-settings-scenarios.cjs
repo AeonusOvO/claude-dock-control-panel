@@ -47,11 +47,24 @@ module.exports = async ({ capture, click, evaluate, waitFor }) => {
 
   await click('#connection-wizard-previous');
   await click('#connection-domestic-model');
+  await evaluate(`(() => {
+    window.__claudeDockQaDomesticSelect = document.querySelector('#connection-domestic-model');
+    return true;
+  })()`);
   await capture(
     'connection-subscription-picker.png',
     { interaction: 'subscription-api-pills' },
     450,
   );
+  const pickerStable = await evaluate(`(() => {
+    const select = document.querySelector('#connection-domestic-model');
+    const stable = select === window.__claudeDockQaDomesticSelect &&
+      select.closest('.select').querySelector('.select__trigger').getAttribute('aria-expanded') === 'true' &&
+      document.querySelector('.select__listbox[data-open="true"] [data-value="glm-subscription-cn"] .select__badge')?.textContent === '订阅';
+    delete window.__claudeDockQaDomesticSelect;
+    return stable;
+  })()`);
+  if (!pickerStable) throw new Error('The domestic model menu was replaced or closed while open.');
   await click('.select__listbox[data-open="true"] [data-value="kimi-subscription"]');
   await click('#connection-wizard-next');
   await waitFor(

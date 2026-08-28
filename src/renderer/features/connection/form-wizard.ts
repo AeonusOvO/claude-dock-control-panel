@@ -3,6 +3,7 @@ import { isSubscriptionProvider } from '../../../shared/claude/subscriptions';
 import { findClaudeProvider, type ClaudeProviderId } from '../../../shared/claude/providers';
 import {
   claudeConfigForm,
+  connectionSuccessDialog,
   connectionWizardChoiceProgress,
   connectionWizardChoiceStep,
   connectionWizardConfigureProgress,
@@ -26,6 +27,7 @@ const onboardingProvider = (state: OnboardingState): ClaudeProviderId | undefine
 };
 
 export interface ConnectionFormWizardActions {
+  connectionSucceeded: () => void;
   dispose: () => void;
   initializeFromOnboarding: () => Promise<void>;
   render: () => void;
@@ -120,6 +122,27 @@ const submitConfiguredConnection = (
     return;
   }
   claudeConfigForm.requestSubmit();
+};
+
+const createConnectionSuccessActions = (formState: ConnectionFormState, showChoice: () => void) => {
+  let disposed = false;
+  const restoreChoiceFocus = (): void => {
+    if (!disposed && formState.wizardStep === 'choice')
+      connectionWizardChoiceStep.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+  };
+  connectionSuccessDialog.addEventListener('close', restoreChoiceFocus);
+  return {
+    connectionSucceeded: (): void => {
+      if (disposed) return;
+      showChoice();
+      if (!connectionSuccessDialog.open) connectionSuccessDialog.showModal();
+    },
+    dispose: (): void => {
+      disposed = true;
+      connectionSuccessDialog.removeEventListener('close', restoreChoiceFocus);
+      if (connectionSuccessDialog.open) connectionSuccessDialog.close();
+    },
+  };
 };
 
 export const createConnectionFormWizardActions = (
@@ -305,9 +328,14 @@ export const createConnectionFormWizardActions = (
   connectionWizardPreviousButton.addEventListener('click', handlePrevious);
   connectionWizardChoiceProgress.addEventListener('click', handleChoiceProgress);
   connectionWizardNextButton.addEventListener('click', handleNext);
+  // The committed result may arrive before its operation's finally releases the UI busy flag.
+  const success = createConnectionSuccessActions(formState, () => showStep('choice', true));
 
   return {
+    connectionSucceeded: success.connectionSucceeded,
     dispose: () => {
+      transitionGeneration += 1;
+      success.dispose();
       actionsMotion.cancel();
       connectionWizardPreviousButton.removeEventListener('click', handlePrevious);
       connectionWizardChoiceProgress.removeEventListener('click', handleChoiceProgress);

@@ -197,6 +197,23 @@
   overflow-wrap: anywhere;
 }
 
+.current-connection-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.current-connection-type {
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-pill);
+  color: var(--text-hi);
+  flex: none;
+  font-size: var(--type-micro-size);
+  line-height: var(--type-micro-lh);
+  padding: var(--s-0-5) var(--s-2);
+}
+
 .current-connection small {
   color: var(--text-dim);
   font-size: var(--type-caption-size);

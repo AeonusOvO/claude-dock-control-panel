@@ -213,6 +213,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     setConversationModelResolvers: vi.fn(() => calls.push('claude.setConversationModelResolvers')),
     setLaunchAdmissionGuard: vi.fn(() => calls.push('claude.setLaunchAdmissionGuard')),
     setSubscriptionRelayStarter: vi.fn(() => calls.push('claude.setSubscriptionRelayStarter')),
+    setSubscriptionAccountIdentityResolver: vi.fn(),
     setPermissionRequestHook: vi.fn(() => calls.push('claude.setPermissionRequestHook')),
     setRuntimeActivityHandler: vi.fn(() => calls.push('claude.setRuntimeActivityHandler')),
     setStreamFailureHandler: vi.fn(() => calls.push('claude.setStreamFailureHandler')),

@@ -43,6 +43,12 @@ import {
 } from './runtime-connection';
 import { ClaudeRuntimeRouting } from './runtime-routing';
 import { claudeOfficialAuthProvider } from './official-auth-status';
+import { sanitizeAccountIdentity } from '../../shared/claude/account-identity';
+import {
+  isSubscriptionBaseUrl,
+  isSubscriptionProvider,
+  SUBSCRIPTION_UPSTREAM_URLS,
+} from '../../shared/claude/subscriptions';
 import {
   captureClaudeNetworkAccess,
   type ClaudeLaunchAuthorization,
@@ -94,11 +100,15 @@ export const claudeNetworkAccessForConfig = (
     return captureClaudeNetworkAccess({ provider: officialNetworkProvider });
   }
   if (protocol === 'openai' || !config.baseUrl.trim()) return undefined;
+  const baseUrl =
+    isSubscriptionProvider(config.preset) && isSubscriptionBaseUrl(config.baseUrl)
+      ? SUBSCRIPTION_UPSTREAM_URLS[config.preset]
+      : config.baseUrl;
   return captureClaudeNetworkAccess({
     provider: 'anthropic-claude',
     target: {
       process: 'claude-cli',
-      url: completeConnectionEndpoint(config.baseUrl, 'anthropic'),
+      url: completeConnectionEndpoint(baseUrl, 'anthropic'),
     },
   });
 };
@@ -136,6 +146,14 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   private nextConversationConfigQueue: Promise<void> = Promise.resolve();
   private nextConversationMutationCount = 0;
   private nextConversationReservation: symbol | undefined;
+  private subscriptionAccountIdentity: (config: ClaudeConfigView) => string | undefined = () =>
+    undefined;
+
+  public setSubscriptionAccountIdentityResolver(
+    resolve: (config: ClaudeConfigView) => string | undefined,
+  ): void {
+    this.subscriptionAccountIdentity = resolve;
+  }
 
   protected constructor(
     userDataPath: string,
@@ -218,10 +236,14 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   public async getNextConversationConnection(): Promise<ClaudeNextConversationConnectionState> {
     if (!this.hasNextConversationConnection()) return {};
     const config = this.configStore.getView(this.nextConversationConfigScope);
+    const accountIdentity = isSubscriptionProvider(config.preset)
+      ? sanitizeAccountIdentity(this.subscriptionAccountIdentity(config))
+      : undefined;
     const officialAuth =
       config.preset === 'anthropic' ? await claudeOfficialAuthProvider.getState() : undefined;
     return {
       config,
+      ...(accountIdentity ? { accountIdentity } : {}),
       ...(officialAuth ? { officialAuth } : {}),
     };
   }

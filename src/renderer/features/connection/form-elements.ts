@@ -75,6 +75,9 @@ export const connectionWizardPreviousButton = requiredElement<HTMLButtonElement>
 export const connectionWizardNextButton =
   requiredElement<HTMLButtonElement>('#connection-wizard-next');
 export const connectionWizardStatus = requiredElement<HTMLElement>('#connection-wizard-status');
+export const connectionSuccessDialog = requiredElement<HTMLDialogElement>(
+  '#connection-success-dialog',
+);
 
 connectionWizardConfigureStep.prepend(environmentSetup);
 

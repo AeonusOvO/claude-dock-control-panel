@@ -13,6 +13,7 @@ import type { ClaudeProviderId } from '../../../shared/claude/providers';
 import type { AdvancedConnectionSnapshot } from './state';
 
 export interface ConnectionActionsDependencies {
+  connectionSucceeded: () => void;
   applyNextClaudeConnection: (state: ClaudeNextConversationConnectionState) => void;
   activeStatus: () => TerminalStatus | undefined;
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void;

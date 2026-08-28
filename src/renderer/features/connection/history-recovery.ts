@@ -158,7 +158,7 @@ export const createConnectionHistoryRecoveryActions = (
     recoverySurface.setAttribute('aria-busy', 'true');
     recoveryKicker.textContent = '接入历史';
     recoveryTitle.textContent = `当前正在接入 ${activeLabel}`;
-    recoveryDetail.textContent = '正在恢复完整配置，并完成真实网络、身份认证和模型响应测试。';
+    recoveryDetail.textContent = '可能会消耗少量 token';
     renderTestDetails(undefined);
     setActions(phase);
   };
@@ -224,6 +224,13 @@ export const createConnectionHistoryRecoveryActions = (
 
     if (!result?.ok) {
       renderFailure(result);
+      return;
+    }
+
+    if (result.connectionTest?.ok) {
+      leaveRecovery(false);
+      renderCurrentConnection();
+      dependencies.connectionSucceeded();
       return;
     }
 

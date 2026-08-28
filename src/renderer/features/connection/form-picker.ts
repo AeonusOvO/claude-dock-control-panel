@@ -56,6 +56,7 @@ export const createConnectionFormPickerActions = (
   applyPresetUi: (preset: ClaudePreset, preserveValues: boolean) => void,
 ): ConnectionFormPickerActions => {
   const { connectionFeature } = deps;
+  let renderedSelection: string | undefined;
 
   const applyDefaultProviderGroupExpansion = (): void => {
     formState.collapsedProviderGroups.clear();
@@ -77,6 +78,17 @@ export const createConnectionFormPickerActions = (
   };
 
   const renderProviderPicker = (): void => {
+    const selection = JSON.stringify([
+      formState.selectedProviderId,
+      formState.nextConnection?.config?.preset,
+      connectionFeature.isTestInProgress(),
+      connectionFeature.isRemedyInProgress(),
+      formState.subscriptionPending || formState.subscription?.busy === true,
+      formState.managedChatGptOperations.busy,
+    ]);
+    // Runtime polling must not destroy a focused/open select when its displayed state is unchanged.
+    if (selection === renderedSelection && providerGroups.childElementCount > 0) return;
+    renderedSelection = selection;
     providerGroups.replaceChildren();
     const configuredPreset = formState.nextConnection?.config?.preset;
     const selectedAccess = accessChoiceForProvider(formState.selectedProviderId);
