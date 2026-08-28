@@ -41,6 +41,7 @@ npm run test:conpty
 npm run test:network
 npm run test:paths
 npm run test:model-usage
+npm run test:chatgpt-quota
 npm run test:runtime-soak:accelerated
 npm run dist
 ```
@@ -55,6 +56,7 @@ npm run dist
 | `npm run test:network`                                           | 真实 Electron 上传先 close、十路 redirect/流式响应、HEAD、截断与取消                      |
 | `npm run test:paths`                                             | 真实 Electron/curl 在中文、空格数据目录下保留授权隔离；支持 `-- --packaged` 读取最终 ASAR |
 | `npm run test:model-usage`                                       | 独立 Worker 用量统计、主线程延迟、四主题置顶球与受限 preload                              |
+| `npm run test:chatgpt-quota`                                     | 当前托管账户额度、真实 Electron HTTP/流式取消、文件不变与主线程延迟；支持最终 ASAR 验证   |
 | `npm run test:select`、`test:select-theme`、`test:dialog-select` | 原生 `<select>` 交互与主题                                                                |
 | `npm run test:scroll-chaining`                                   | trusted 滚轮下的嵌套滚动链与弹层封闭（须可见窗口）                                        |
 | `npm run test:runtime-soak:accelerated`                          | 模拟 24 小时会话与服务回收                                                                |
@@ -73,6 +75,9 @@ soak 直接运行 Node 合成时钟。最终候选的这些门禁必须在全部
 单请求断开、取消后迟到结果与退出。真实视觉场景检查订阅/API 胶囊和无密钥登录表单，但不点击真实账号授权。
 匿名初始化与回环夹具不能替代用户本人授权后的套餐抵扣、令牌刷新和 Claude Code 工具调用验收。
 研究下载目录 `work/` 与安装包目录 `outputs/` 明确排除在 Vitest 外，不执行第三方仓库的测试或脚本。
+
+ChatGPT 额度回归覆盖没有独立 Codex 安装/登录仍可读取、同邮箱不同工作区隔离、令牌轮换、授权事务、
+路径/文件链接拒绝、响应上限、超时中止与明确错误提示；不使用真实账户进行登录、刷新或付费推理测试。
 
 另有三项默认跳过的 Windows 集成测试，覆盖真实进程树捕获/终止、真实 listener/loopback tuple 和带
 exact-process 校验的模型读取。最终候选在 Windows 上运行：

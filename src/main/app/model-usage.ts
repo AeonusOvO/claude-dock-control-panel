@@ -1,7 +1,6 @@
 import type { Registry } from '../infra/registry';
 import {
   CLAUDE_RUNTIME,
-  CODEX_RUNTIME,
   MAIN_WINDOW,
   MANAGED_CHATGPT_GATEWAY,
   MODEL_USAGE_SERVICE,
@@ -36,13 +35,9 @@ export const installModelUsage = (
             main.webContents.send(CHANNELS.MODEL_USAGE_CHANGED, snapshot);
           services.resolve(MODEL_USAGE_WINDOW).publish(snapshot);
         },
-        readChatGptQuota: async () => {
+        readChatGptQuota: async (signal, model) => {
           if (!profile.effects.allowRealRuntimes) return undefined;
-          const gateway = services.resolve(MANAGED_CHATGPT_GATEWAY);
-          const account = await gateway.getUsageAccountIdentity();
-          if (!account) return undefined;
-          const quota = await services.resolve(CODEX_RUNTIME).readAccountResourceUsage(account);
-          return account === (await gateway.getUsageAccountIdentity()) ? quota : undefined;
+          return services.resolve(MANAGED_CHATGPT_GATEWAY).readAccountResourceUsage(model, signal);
         },
       }),
   );

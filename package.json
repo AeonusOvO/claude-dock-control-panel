@@ -1,6 +1,6 @@
 {
   "name": "claude-dock-control-panel",
-  "version": "5.0.0-rc.39",
+  "version": "5.0.0-rc.40",
   "description": "Windows 项目终端与 Claude Code / Codex 可视化工作台。",
   "license": "Apache-2.0",
   "main": "dist/main/index.js",
@@ -46,6 +46,7 @@
     "test:network": "npm run build:main && electron scripts/smoke/network-request-smoke.cjs",
     "test:paths": "npm run build:main && electron scripts/smoke/path-portability-smoke.cjs",
     "test:model-usage": "npm run build:main && npm run build:preload && npm run build:renderer && electron scripts/smoke/model-usage-smoke.cjs",
+    "test:chatgpt-quota": "npm run build:main && electron scripts/smoke/chatgpt-quota-smoke.cjs",
     "test:runtime-soak": "node scripts/smoke/runtime-soak.cjs",
     "test:runtime-soak:accelerated": "node scripts/smoke/runtime-soak.cjs --hours=24 --accelerated",
     "test:scroll-chaining": "npm run build:preload && npm run build:renderer && electron scripts/smoke/scroll-chaining-smoke.cjs",

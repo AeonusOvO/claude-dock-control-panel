@@ -69,6 +69,8 @@ import {
   type PersistedGatewayState,
 } from './managed-chatgpt-state';
 import type { CliProxyApiRelease } from './managed-chatgpt-release';
+import { ManagedChatGptQuotaReader } from './managed-chatgpt-quota';
+import type { ModelQuotaResult } from '../usage/quota';
 
 const START_TIMEOUT_MS = 20_000;
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
@@ -138,6 +140,7 @@ export class ManagedChatGptGateway {
     Promise<ManagedGatewayAuthenticationInspection | undefined>
   >();
   private readonly authDirectory: string;
+  private readonly quotaReader: ManagedChatGptQuotaReader;
   private readonly configFiles: ManagedGatewayConfigFiles;
   private readonly configPath: string;
   private readonly downloadsDirectory: string;
@@ -173,6 +176,11 @@ export class ManagedChatGptGateway {
   ) {
     this.rootDirectory = path.join(userDataPath, 'managed-gateways', 'cliproxyapi');
     this.authDirectory = path.join(this.rootDirectory, 'auth');
+    this.quotaReader = new ManagedChatGptQuotaReader(
+      this.authDirectory,
+      this.fetchImplementation,
+      () => !this.shutdownRequested && this.lifecycleControllers.size === 0,
+    );
     this.configPath = path.join(this.rootDirectory, 'config.yaml');
     this.downloadsDirectory = path.join(this.rootDirectory, 'downloads');
     this.runtimeDirectory = path.join(this.rootDirectory, 'runtime');
@@ -287,13 +295,9 @@ export class ManagedChatGptGateway {
     };
   }
 
-  /** Quota observers only need the owned account, never process scans or model reconciliation. */
-  public async getUsageAccountIdentity(): Promise<string | undefined> {
-    if (this.lifecycleControllers.size > 0) return undefined;
-    const authentication = managedGatewayPublicState(await this.inspectAuthentication());
-    return this.lifecycleControllers.size === 0 && authentication.authenticated
-      ? authentication.accountEmail
-      : undefined;
+  /** Read the managed subscription directly, without a separate Codex login or process scan. */
+  public readAccountResourceUsage(model: string, signal?: AbortSignal): Promise<ModelQuotaResult> {
+    return this.quotaReader.read(model, signal);
   }
 
   /** Reads only ClaudeDock's validated state file; it never starts or probes the gateway. */
@@ -548,10 +552,12 @@ export class ManagedChatGptGateway {
   }
 
   private cancelLifecycleOperations(): void {
+    this.quotaReader.invalidate();
     for (const controller of this.lifecycleControllers) controller.abort();
   }
 
   private enqueueLifecycle<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    this.quotaReader.invalidate();
     const controller = new AbortController();
     this.lifecycleControllers.add(controller);
     const current = this.lifecycleTail.then(async () => {

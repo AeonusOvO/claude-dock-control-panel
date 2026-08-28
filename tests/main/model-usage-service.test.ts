@@ -6,6 +6,7 @@ import type { ResourceUsageView } from '../../src/shared/contracts';
 import type { ModelUsageConnection } from '../../src/main/usage/identity';
 import type { TranscriptUsageReply } from '../../src/main/usage/transcript-client';
 import { ModelUsageService } from '../../src/main/usage/service';
+import type { ModelQuotaResult } from '../../src/main/usage/quota';
 
 const clients = vi.hoisted(
   () =>
@@ -46,7 +47,10 @@ const api: ModelUsageConnection = {
 };
 const session = '00000000-1111-2222-3333-444444444444';
 const fixture = async (
-  readChatGptQuota: () => Promise<ResourceUsageView | undefined> = async () => undefined,
+  readChatGptQuota: (
+    signal: AbortSignal,
+    model: string,
+  ) => Promise<ModelQuotaResult | undefined> = async () => undefined,
   existingRoot?: string,
 ) => {
   const root = existingRoot ?? (await mkdtemp(path.join(tmpdir(), 'claudedock-usage-service-')));
@@ -203,5 +207,148 @@ describe('model usage snapshots', () => {
     expect(service.getSnapshot()).toMatchObject({ status: 'stale', tokens: { input: 100 } });
     service.select(undefined, true);
     expect(service.getSnapshot()).toMatchObject({ mode: 'none', tokens: undefined });
+  });
+
+  it('preserves explicit failure reasons and only keeps old quota for the same account', async () => {
+    vi.useFakeTimers();
+    const quota = vi.fn<() => Promise<ModelQuotaResult>>().mockResolvedValue({
+      accountKey: 'account-a',
+      availability: 'available',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      windows: [{ label: '5 小时', usedPercent: 37 }],
+    });
+    const { service } = await fixture(quota);
+    service.select({ ...api, preset: 'chatgpt-subscription', mode: 'subscription' });
+    await vi.advanceTimersByTimeAsync(0);
+    const first = service.getSnapshot();
+    expect(first.windows?.[0]?.remainingPercent).toBe(63);
+    const failure: ModelQuotaResult = {
+      accountKey: 'account-a',
+      availability: 'unavailable',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      detail: 'ChatGPT 额度查询超时，稍后后台重试。',
+    };
+    quota.mockResolvedValue(failure);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(service.getSnapshot()).toMatchObject({
+      status: 'stale',
+      windows: first.windows,
+      updatedAt: first.updatedAt,
+    });
+    expect(service.getSnapshot().detail).toContain('查询超时');
+    quota.mockResolvedValue({ ...failure, accountKey: 'account-b' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(service.getSnapshot().status).toBe('unavailable');
+    expect(service.getSnapshot().windows).toBeUndefined();
+    expect(service.getSnapshot().updatedAt).toBeUndefined();
+    expect(JSON.stringify(service.getSnapshot())).not.toMatch(/accountKey|account-a|account-b/);
+  });
+
+  it('clears previous data when the current account cannot be established', async () => {
+    vi.useFakeTimers();
+    const quota = vi.fn<() => Promise<ModelQuotaResult>>().mockResolvedValue({
+      accountKey: 'account-a',
+      availability: 'available',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      windows: [{ label: '5 小时', usedPercent: 0 }],
+    });
+    const { service } = await fixture(quota);
+    service.select({ ...api, preset: 'chatgpt-subscription', mode: 'subscription' });
+    await vi.advanceTimersByTimeAsync(0);
+    quota.mockResolvedValue({
+      clearPrevious: true,
+      availability: 'unavailable',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      detail: '当前账户尚未授权。',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(service.getSnapshot()).toMatchObject({
+      status: 'unavailable',
+      detail: '当前账户尚未授权。',
+    });
+    expect(service.getSnapshot().windows).toBeUndefined();
+  });
+
+  it('starts the new account read immediately and ignores the old request after reconnect', async () => {
+    let finishOld!: (value: ModelQuotaResult) => void;
+    let oldSignal: AbortSignal | undefined;
+    const quota = vi
+      .fn<(signal: AbortSignal, model: string) => Promise<ModelQuotaResult>>()
+      .mockImplementationOnce((signal) => {
+        oldSignal = signal;
+        return new Promise((resolve) => {
+          finishOld = resolve;
+        });
+      })
+      .mockResolvedValue({
+        accountKey: 'new-account',
+        availability: 'available',
+        capabilities: { balance: false, context: false, windows: true },
+        checkedAt: Date.now(),
+        source: 'managed-chatgpt-gateway',
+        windows: [{ label: '5 小时', usedPercent: 25 }],
+      });
+    const { service } = await fixture(quota);
+    const connection: ModelUsageConnection = {
+      ...api,
+      preset: 'chatgpt-subscription',
+      mode: 'subscription',
+    };
+    service.select(connection);
+    service.select({ ...connection, id: 'new-connection', model: 'gpt-5.3-codex' }, true);
+    expect(oldSignal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(75));
+    expect(quota.mock.calls[1]?.[1]).toBe('gpt-5.3-codex');
+    finishOld({
+      accountKey: 'old-account',
+      availability: 'available',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      windows: [{ label: '5 小时', usedPercent: 99 }],
+    });
+    await Promise.resolve();
+    expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(75);
+  });
+
+  it('does not burst at a timer boundary or poll when the floating window and theme change', async () => {
+    vi.useFakeTimers();
+    const quota = vi.fn(async () => undefined);
+    const { service } = await fixture(quota);
+    await vi.advanceTimersByTimeAsync(59_000);
+    service.select({ ...api, preset: 'chatgpt-subscription', mode: 'subscription' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    service.setFloating(true);
+    service.setTheme('midnight');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(quota).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(58_000);
+    expect(quota).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes the model-specific bucket without requiring a different account identifier', async () => {
+    const quota = vi.fn(async () => undefined);
+    const { service } = await fixture(quota);
+    const connection: ModelUsageConnection = {
+      ...api,
+      preset: 'chatgpt-subscription',
+      mode: 'subscription',
+      model: 'gpt-5.3-codex',
+    };
+    service.select(connection);
+    await Promise.resolve();
+    const connectedAt = service.getSnapshot().connectedAt;
+    service.select({ ...connection, model: 'gpt-5.3-codex-spark' });
+    await Promise.resolve();
+    expect(quota).toHaveBeenCalledTimes(2);
+    expect(service.getSnapshot().connectedAt).toBe(connectedAt);
   });
 });

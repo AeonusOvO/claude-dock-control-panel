@@ -65,6 +65,30 @@ describe('model usage card', () => {
       },
     );
   });
+
+  it('keeps the quota failure reason visible and marks retained percentages as old data', () => {
+    const unavailable: ModelUsageSnapshot = {
+      ...state,
+      mode: 'subscription',
+      status: 'unavailable',
+      preset: 'chatgpt-subscription',
+      tokens: undefined,
+      detail: 'ChatGPT 额度查询授权已失效，等待网关刷新。',
+    };
+    expect(modelUsagePresentation(unavailable)).toMatchObject({
+      value: '暂无法获取',
+      detail: unavailable.detail,
+      percent: undefined,
+    });
+    expect(
+      modelUsagePresentation({
+        ...unavailable,
+        status: 'stale',
+        windows: [{ label: '7 天', remainingPercent: 92 }],
+        detail: 'ChatGPT 额度查询超时；显示上次结果',
+      }),
+    ).toMatchObject({ value: '92%', detail: 'ChatGPT 额度查询超时；显示上次结果（旧数据）' });
+  });
   it('ignores a stale initial read after a newer push and shows errors without breaking navigation', async () => {
     let resolve!: (value: ModelUsageSnapshot) => void;
     await withRenderer(

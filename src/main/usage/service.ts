@@ -2,17 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type {
-  ClaudeMetrics,
-  ModelTokenUsage,
-  ModelUsageSnapshot,
-  ResourceUsageView,
-} from '../../shared/contracts';
+import type { ClaudeMetrics, ModelTokenUsage, ModelUsageSnapshot } from '../../shared/contracts';
 import { DEFAULT_TERMINAL_THEME, type TerminalThemeId } from '../../shared/ui/terminal-themes';
 import { claudeProjectDirectoryName, isValidClaudeSessionId } from '../claude/session-manager';
 import type { ModelUsageConnection } from './identity';
 import { TranscriptUsageClient, type TranscriptUsageReply } from './transcript-client';
 import { emptyTokens } from './transcript-reader';
+import type { ModelQuotaResult } from './quota';
 
 interface UsageJournal {
   version: 1;
@@ -26,7 +22,7 @@ export interface ModelUsageServiceOptions {
   userDataPath: string;
   projectsRoot: string;
   onChanged: (snapshot: ModelUsageSnapshot) => void;
-  readChatGptQuota: () => Promise<ResourceUsageView | undefined>;
+  readChatGptQuota: (signal: AbortSignal, model: string) => Promise<ModelQuotaResult | undefined>;
   themeId?: TerminalThemeId;
 }
 
@@ -58,7 +54,9 @@ export class ModelUsageService {
   private partial = false;
   private persistTimer?: NodeJS.Timeout;
   private quotaTimer: NodeJS.Timeout;
-  private quotaInFlight = false;
+  private quotaRun?: AbortController;
+  private quotaAccountKey?: string;
+  private lastQuotaStartedAt?: number;
   private writes = Promise.resolve();
   private closed = false;
 
@@ -96,7 +94,10 @@ export class ModelUsageService {
 
   public select(connection: ModelUsageConnection | undefined, reset = false): void {
     if (this.closed) return;
-    const changed = connection?.id !== this.connection?.id;
+    const changed =
+      connection?.id !== this.connection?.id ||
+      (connection?.preset === 'chatgpt-subscription' &&
+        connection.model !== this.connection?.model);
     this.connection = connection;
     if (reset || connection?.id !== this.journal.connectionId) {
       this.transcripts.reset();
@@ -110,6 +111,10 @@ export class ModelUsageService {
       this.persist();
     }
     if (changed || reset) {
+      this.quotaRun?.abort();
+      this.quotaRun = undefined;
+      this.quotaAccountKey = undefined;
+      this.lastQuotaStartedAt = undefined;
       this.windows = undefined;
       this.updatedAt = undefined;
       this.partial = false;
@@ -120,7 +125,9 @@ export class ModelUsageService {
           ? Object.keys(this.journal.sources).length
             ? '本次接入后 · 含输入、输出与缓存 Token'
             : '本次接入后 · 等待用量上报'
-          : '当前平台尚未提供可读取的额度';
+          : connection.preset === 'chatgpt-subscription'
+            ? '正在后台获取当前 ChatGPT 账户的订阅额度'
+            : '当前平台尚未提供可读取的额度';
     }
     this.publish();
     if (changed || reset) void this.refreshQuota();
@@ -236,15 +243,26 @@ export class ModelUsageService {
     this.publish();
   }
 
-  private applyQuota(resource: ResourceUsageView | undefined): void {
+  private applyQuota(resource: ModelQuotaResult | undefined): void {
+    if (
+      resource?.clearPrevious ||
+      (resource?.accountKey && resource.accountKey !== this.quotaAccountKey)
+    ) {
+      this.windows = undefined;
+      this.updatedAt = undefined;
+    }
+    if (resource?.accountKey || resource?.clearPrevious) this.quotaAccountKey = resource.accountKey;
     const windows = resource?.windows?.filter(
       (window) => typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent),
     );
     if (!windows?.length) {
       this.status = this.windows?.length ? 'stale' : 'unavailable';
       this.detail = this.windows?.length
-        ? '额度暂未更新，显示上次结果'
-        : '当前平台尚未提供可读取的额度';
+        ? `${resource?.detail ?? '额度暂未更新'}；显示上次结果`
+        : (resource?.detail ??
+          (this.connection?.preset === 'chatgpt-subscription'
+            ? 'ChatGPT 暂未返回额度，稍后后台重试'
+            : '当前平台尚未提供可读取的额度'));
     } else {
       this.windows = windows.slice(0, 2).map((window) => ({
         label: window.label,
@@ -253,13 +271,13 @@ export class ModelUsageService {
       }));
       this.updatedAt = resource!.checkedAt;
       this.status = resource!.availability === 'stale' ? 'stale' : 'available';
-      this.detail = '平台上报的剩余额度 · 非上下文占用';
+      this.detail = resource!.detail ?? '平台上报的剩余额度 · 非上下文占用';
     }
     this.publish();
   }
 
   private async refreshQuota(): Promise<void> {
-    if (this.closed || this.quotaInFlight || this.connection?.preset !== 'chatgpt-subscription') {
+    if (this.closed || this.quotaRun || this.connection?.preset !== 'chatgpt-subscription') {
       if (
         this.windows &&
         this.updatedAt &&
@@ -272,15 +290,21 @@ export class ModelUsageService {
       }
       return;
     }
+    if (this.lastQuotaStartedAt !== undefined && Date.now() - this.lastQuotaStartedAt < 60_000)
+      return;
     const epoch = this.journal.epoch;
-    this.quotaInFlight = true;
+    const run = new AbortController();
+    this.quotaRun = run;
+    this.lastQuotaStartedAt = Date.now();
     try {
-      const resource = await this.options.readChatGptQuota();
-      if (!this.closed && epoch === this.journal.epoch) this.applyQuota(resource);
+      const resource = await this.options.readChatGptQuota(run.signal, this.connection.model);
+      if (!this.closed && !run.signal.aborted && epoch === this.journal.epoch)
+        this.applyQuota(resource);
     } catch {
-      if (!this.closed && epoch === this.journal.epoch) this.applyQuota(undefined);
+      if (!this.closed && !run.signal.aborted && epoch === this.journal.epoch)
+        this.applyQuota(undefined);
     } finally {
-      this.quotaInFlight = false;
+      if (this.quotaRun === run) this.quotaRun = undefined;
     }
   }
 
@@ -312,6 +336,7 @@ export class ModelUsageService {
   }
   public dispose(): void {
     this.closed = true;
+    this.quotaRun?.abort();
     clearInterval(this.quotaTimer);
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.flush();
