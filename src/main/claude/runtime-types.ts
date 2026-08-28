@@ -15,6 +15,7 @@ import type {
   SaveClaudeConfigInput,
 } from '../../shared/contracts';
 import type { ClaudeConfigPresentation, ClaudeLaunchConfigSnapshot } from './config-store';
+import type { ModelUsageConnection } from '../usage/identity';
 import type { ClaudeEnvironmentOverrides, ClaudeServingSpeedProfile } from './configuration';
 import type { ModelSpeedCapability } from './model-speed-capabilities';
 import type { ClaudeRouteKind } from '../coordination/route-lifecycle';
@@ -85,6 +86,7 @@ export interface ClaudeLaunchAuthorization {
 }
 
 interface RuntimeSession {
+  usageConnection?: ModelUsageConnection;
   active: boolean;
   activityEventsPath?: string;
   /** Directory containing only this launch's settings and filesystem side-channel artifacts. */
@@ -166,6 +168,7 @@ interface RuntimeSession {
 }
 
 export interface PreparedNativeClaudeConversation {
+  usageConnection?: ModelUsageConnection;
   allowBypassPermissions: boolean;
   cliVersion?: string;
   /** Complete route binding retained in main for the native conversation preference store. */

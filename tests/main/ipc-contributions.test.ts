@@ -10,6 +10,7 @@ import { MAIN_IPC_CONTRIBUTIONS } from '../../src/main/ipc/contributions';
 describe('main IPC contributions', () => {
   it('keeps the established domain registration order in the catalog', () => {
     expect(MAIN_IPC_CONTRIBUTIONS.map((contribution) => contribution.name)).toEqual([
+      'registerModelUsageIpc',
       'registerConversationAttachmentIpc',
       'registerConversationIpc',
       'registerBusyIpc',

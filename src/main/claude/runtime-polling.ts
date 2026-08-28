@@ -247,6 +247,12 @@ export abstract class ClaudeRuntimePolling extends ClaudeRuntimeControls {
         this.enableThinkingForHighEffort(runtime);
       }
       runtime.metrics = metrics;
+      this.modelUsageObserver?.observe(
+        runtime.usageConnection,
+        runtime.cwd,
+        metrics.sessionId,
+        metrics,
+      );
       if (runtime.lastApiError && metrics.capturedAt > runtime.lastApiError.detectedAt) {
         runtime.lastApiError = undefined;
       }

@@ -1,4 +1,5 @@
 import { contextBridge } from 'electron';
+import { modelUsageBridge } from './bridges/model-usage';
 import type { ControlPanelApi } from '../shared/contracts';
 import { appBridge } from './bridges/app';
 import { workspaceBridge } from './bridges/workspace';
@@ -24,6 +25,7 @@ import { mcpBridge } from './bridges/mcp';
 import { softwareUpdateBridge } from './bridges/software-update';
 
 const api = {
+  ...modelUsageBridge,
   ...appBridge,
   ...workspaceBridge,
   ...terminalBridge,
@@ -48,4 +50,8 @@ const api = {
   ...softwareUpdateBridge,
 } satisfies ControlPanelApi;
 
-contextBridge.exposeInMainWorld('controlPanel', api);
+if (process.argv.includes('--claudedock-usage-widget')) {
+  contextBridge.exposeInMainWorld('modelUsage', modelUsageBridge);
+} else {
+  contextBridge.exposeInMainWorld('controlPanel', api);
+}

@@ -38,7 +38,7 @@ export const scanOnboardingEnvironment = async (
       : '打开项目后，自动接入流程会补齐缺少的组件';
   } catch {
     if (generation !== state.scanGeneration) return;
-    elements.toolDetail.textContent = '暂时无法读取版本；可继续，稍后在接入页重试';
+    elements.toolDetail.textContent = '暂时无法读取版本；可继续，稍后在模型页重试';
     elements.toolStatus.textContent = '稍后重试';
     elements.toolCheck.dataset.tone = 'warning';
     elements.prepareHint.textContent = '检测未完成，但不会把未知状态显示为成功';

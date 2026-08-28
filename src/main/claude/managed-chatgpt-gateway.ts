@@ -287,6 +287,15 @@ export class ManagedChatGptGateway {
     };
   }
 
+  /** Quota observers only need the owned account, never process scans or model reconciliation. */
+  public async getUsageAccountIdentity(): Promise<string | undefined> {
+    if (this.lifecycleControllers.size > 0) return undefined;
+    const authentication = managedGatewayPublicState(await this.inspectAuthentication());
+    return this.lifecycleControllers.size === 0 && authentication.authenticated
+      ? authentication.accountEmail
+      : undefined;
+  }
+
   /** Reads only ClaudeDock's validated state file; it never starts or probes the gateway. */
   public getInstalledVersion(): string | undefined {
     return this.loadState()?.installedVersion;

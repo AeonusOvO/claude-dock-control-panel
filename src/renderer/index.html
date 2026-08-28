@@ -67,7 +67,7 @@
               d="M3.5 7.5h6l2-2h4.8a2.2 2.2 0 0 1 2.2 2.2v8.6a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2Z"
             />
           </svg>
-          <span>工作区</span>
+          <span class="activity-rail__label">工作区</span>
         </button>
         <button
           class="activity-rail__button"
@@ -84,7 +84,7 @@
             />
             <path d="M8 10h8M8 13.5h5" />
           </svg>
-          <span>独立对话</span>
+          <span class="activity-rail__label">独立对话</span>
         </button>
         <button
           class="activity-rail__button"
@@ -93,13 +93,16 @@
           aria-controls="control-panel"
           aria-expanded="false"
           aria-pressed="false"
-          title="接入"
+          title="模型"
+          aria-label="模型"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M10 14a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.3 7" />
-            <path d="M14 10a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7L12.7 17" />
-          </svg>
-          <span>接入</span>
+          <span class="activity-rail__model-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3 3 7.5 12 12l9-4.5L12 3Z" />
+              <path d="M3 12l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5" />
+            </svg>
+          </span>
+          <span class="activity-rail__label">模型</span>
           <span class="activity-rail__dot" id="connection-rail-dot" hidden></span>
         </button>
         <button
@@ -116,7 +119,7 @@
               d="M9 4v3H6.2A1.2 1.2 0 0 0 5 8.2V11h2.4a2.6 2.6 0 1 1 0 5.2H5v2.6A1.2 1.2 0 0 0 6.2 20H9v-2.4a2.6 2.6 0 1 1 5.2 0V20h3.6a1.2 1.2 0 0 0 1.2-1.2V15h-2.4a2.6 2.6 0 1 1 0-5.2H19V8.2A1.2 1.2 0 0 0 17.8 7H15V4Z"
             />
           </svg>
-          <span>扩展</span>
+          <span class="activity-rail__label">扩展</span>
           <span class="activity-rail__dot" id="plugin-rail-dot" hidden></span>
         </button>
         <button
@@ -134,7 +137,7 @@
               transform="translate(1 -1)"
             />
           </svg>
-          <span>设置</span>
+          <span class="activity-rail__label">设置</span>
         </button>
       </nav>
 
@@ -325,28 +328,71 @@
                 <strong>按步骤完成模型接入</strong>
                 <span>选择模型，连接后即可使用。</span>
               </div>
-              <div
-                class="current-connection"
-                id="current-connection"
-                data-kind="empty"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                <span>下个对话接入</span>
-                <div>
-                  <div class="current-connection-heading">
-                    <span
-                      class="current-connection-type"
-                      id="current-connection-type"
-                      hidden
-                    ></span>
-                    <strong id="current-connection-name">尚未选择接入</strong>
+              <div class="connection-overview">
+                <div
+                  class="current-connection"
+                  id="current-connection"
+                  data-kind="empty"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  <span>下个对话接入</span>
+                  <div>
+                    <div class="current-connection-heading">
+                      <span
+                        class="current-connection-type"
+                        id="current-connection-type"
+                        hidden
+                      ></span>
+                      <strong id="current-connection-name">尚未选择接入</strong>
+                    </div>
+                    <small id="current-connection-metadata"
+                      >请先选择平台和模型；保存后，下个新对话会立即捕获这套配置。</small
+                    >
                   </div>
-                  <small id="current-connection-metadata"
-                    >请先选择平台和模型；保存后，下个新对话会立即捕获这套配置。</small
-                  >
                 </div>
+                <section
+                  id="model-usage"
+                  class="model-usage"
+                  data-mode="none"
+                  data-status="unavailable"
+                  aria-label="模型额度与用量"
+                >
+                  <div class="model-usage__ring" aria-hidden="true">
+                    <svg viewBox="0 0 48 48">
+                      <circle cx="24" cy="24" r="21" />
+                      <circle cx="24" cy="24" r="21" pathLength="100" data-usage-meter />
+                    </svg>
+                    <span data-usage-center>—</span>
+                  </div>
+                  <div
+                    class="model-usage__copy"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    <span data-usage-label>剩余额度</span>
+                    <div class="model-usage__value">
+                      <strong data-usage-value>尚未接入</strong
+                      ><small data-usage-unit>后台自动获取</small>
+                    </div>
+                    <small data-usage-detail>尚未接入模型</small>
+                  </div>
+                  <button
+                    id="model-usage-floating"
+                    class="model-usage__toggle"
+                    type="button"
+                    title="打开置顶悬浮球"
+                    aria-label="打开置顶悬浮球"
+                    aria-pressed="false"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="9" cy="15" r="5" />
+                      <path d="M14 4h6v6M20 4l-7 7" />
+                    </svg>
+                  </button>
+                </section>
               </div>
             </div>
             <button
@@ -411,7 +457,7 @@
                 type="button"
                 hidden
               >
-                返回接入页
+                返回模型页
               </button>
             </div>
           </section>
@@ -2361,7 +2407,7 @@
                 <div class="onboarding-step__copy">
                   <span class="onboarding-kicker">模型来源</span>
                   <h2>第二步，选择模型接入方式</h2>
-                  <p>这项选择独立于工作引擎；进入工作区后仍可随时在“接入”中更换。</p>
+                  <p>这项选择独立于工作引擎；进入工作区后仍可随时在“模型”中更换。</p>
                 </div>
                 <div class="onboarding-model-grid" role="radiogroup" aria-label="模型接入方式">
                   <button
@@ -2445,7 +2491,7 @@
                 <div class="onboarding-step__copy">
                   <span class="onboarding-kicker">自动准备</span>
                   <h2>先确认环境，不让你填写能自动发现的内容</h2>
-                  <p>这里只报告真实状态；平台与模型可随后在“接入”页独立完成，不要求先打开对话。</p>
+                  <p>这里只报告真实状态；平台与模型可随后在“模型”页独立完成，不要求先打开对话。</p>
                 </div>
                 <div class="onboarding-checklist" id="onboarding-checklist" aria-busy="false">
                   <div data-onboarding-check="desktop" data-tone="ready">
@@ -2468,7 +2514,7 @@
                     <span class="onboarding-checklist__icon" aria-hidden="true">↻</span>
                     <span
                       ><strong>接入与路由</strong
-                      ><small>进入“接入”后自动选择可用链路并真实测试</small></span
+                      ><small>进入“模型”后自动选择可用链路并真实测试</small></span
                     >
                     <output>自动</output>
                   </div>
@@ -2566,7 +2612,7 @@
                   <h2>你的工作区已经就位</h2>
                   <p>
                     进入后，ClaudeDock
-                    可先在“接入”页完成平台、模型与真实连接测试；下一个对话会捕获该选择。
+                    可先在“模型”页完成平台、模型与真实连接测试；下一个对话会捕获该选择。
                   </p>
                 </div>
                 <dl class="onboarding-summary">
@@ -3257,7 +3303,7 @@
                   >
                     <span>
                       <strong>何时允许取消自动接入</strong>
-                      <small>超过该时间仍未完成，接入页会显示“取消接入”；默认 2 分钟。</small>
+                      <small>超过该时间仍未完成，模型页会显示“取消接入”；默认 2 分钟。</small>
                     </span>
                     <span class="settings-duration-control">
                       <input

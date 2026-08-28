@@ -22,6 +22,25 @@ module.exports = async ({ capture, click, evaluate, waitFor }) => {
     '() => Boolean(document.querySelector("[data-access-choice=domestic]"))',
     'the provider picker',
   );
+  const overview = await evaluate(`(() => {
+    const overview = document.querySelector('.connection-overview');
+    overview.scrollIntoView({ block: 'start' });
+    const connection = overview.querySelector('.current-connection').getBoundingClientRect();
+    const usage = overview.querySelector('.model-usage').getBoundingClientRect();
+    return {
+      overflow: overview.scrollWidth > overview.clientWidth + 2,
+      arranged: innerWidth > 1024 ? usage.left >= connection.right : usage.top >= connection.bottom,
+      value: overview.querySelector('[data-usage-value]').textContent,
+      modelTab: document.querySelector('[data-rail-tab="connection"] .activity-rail__label').textContent.trim(),
+    };
+  })()`);
+  if (overview.overflow || !overview.arranged || overview.modelTab !== '模型' || !overview.value)
+    throw new Error('Model usage overview mismatch: ' + JSON.stringify(overview));
+  await capture(
+    'connection-model-usage.png',
+    { interaction: 'model-usage-overview', ...overview },
+    450,
+  );
   await click('[data-access-choice="domestic"]');
   await click('#connection-wizard-next');
   await waitFor(

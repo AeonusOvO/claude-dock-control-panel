@@ -154,7 +154,7 @@ export const registerClaudeStateIpc = ({
         const validatedInput = validateClaudeConfigInput(input);
         const runtime = requireClaudeRuntime();
         if (validatedInput.autoDetect) {
-          throw new Error('请在“接入”页自动配置新对话。');
+          throw new Error('请在“模型”页自动配置新对话。');
         }
         const networkAccess = claudeNetworkAccessForConfigInput(validatedInput);
         const testConnection = async (): Promise<ClaudeConnectionTestResult> => {

@@ -65,6 +65,41 @@ const localInput = (model: string): SaveClaudeConfigInput => ({
 });
 
 describe('Claude next-conversation connection', () => {
+  it('notifies usage epochs only after committed connections, never tests or rollback', async () => {
+    const runtime = createRuntime();
+    const select = vi.fn();
+    runtime.setModelUsageObserver({
+      select,
+      capture: (connection) => connection,
+      observe: vi.fn(),
+    });
+    expect(select).toHaveBeenLastCalledWith(undefined, false);
+    await runtime.saveNextConversationConfig(localInput('first'));
+    expect(select).toHaveBeenLastCalledWith(
+      expect.objectContaining({ model: 'first', mode: 'api' }),
+      true,
+    );
+    select.mockClear();
+    Reflect.set(
+      runtime,
+      'testPreparedConnection',
+      vi.fn(async () => ({ ok: true })),
+    );
+    await runtime.verifyAndSaveNextConversationConfig(localInput('draft'), undefined, {
+      testOnly: true,
+    });
+    expect(select).not.toHaveBeenCalled();
+    vi.spyOn(runtime, 'getNextConversationConnection').mockRejectedValueOnce(new Error('rollback'));
+    await expect(runtime.saveNextConversationConfig(localInput('failed'))).rejects.toThrow(
+      'rollback',
+    );
+    expect(select).not.toHaveBeenCalled();
+    await runtime.verifyAndSaveNextConversationConfig(localInput('second'));
+    expect(select).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'second' }), true);
+    runtime.clearNextConversationConnection();
+    expect(select).toHaveBeenLastCalledWith(undefined, true);
+    runtime.shutdown();
+  });
   it.each(SUBSCRIPTION_PROVIDERS)(
     'preflights the real upstream without rewriting the local account binding: %s',
     async (preset) => {

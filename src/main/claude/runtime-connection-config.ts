@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { modelUsageConnection, type ModelUsageObserver } from '../usage/identity';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type {
@@ -139,6 +140,28 @@ export const resolveSessionConnectionConfigScope = (
 ): string => runtime.connectionConfigScope?.call(runtime, sessionId, cwd) ?? cwd;
 
 export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting {
+  protected modelUsageObserver?: ModelUsageObserver;
+
+  public setModelUsageObserver(observer: ModelUsageObserver): void {
+    this.modelUsageObserver = observer;
+    this.notifyModelUsageConnection(false);
+  }
+
+  private notifyModelUsageConnection(reset: boolean): void {
+    if (!this.modelUsageObserver) return;
+    try {
+      this.modelUsageObserver.select(
+        this.hasNextConversationConnection()
+          ? modelUsageConnection(
+              this.configStore.createLaunchSnapshot(this.nextConversationConfigScope),
+            )
+          : undefined,
+        reset,
+      );
+    } catch {
+      /* Optional usage observers never participate in the configuration transaction. */
+    }
+  }
   private readonly connectionChecks = new Map<string, ConnectionCheckRecord>();
   private readonly conversationConfigScopes = new Map<string, string>();
   private readonly historyStore: ClaudeConnectionHistoryStore;
@@ -256,7 +279,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   /** Captures the global choice atomically for one newly-created conversation. */
   public bindNextConversationConnection(sessionId: string, cwd: string): void {
     if (!this.hasNextConversationConnection()) {
-      throw new Error('尚未选择下个对话接入，请先在“接入”页面选择平台和模型。');
+      throw new Error('尚未选择下个对话接入，请先在“模型”页面选择平台和模型。');
     }
     const scope = this.conversationScope(sessionId);
     this.configStore.copyConnection(
@@ -286,6 +309,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     this.assertNextConversationReservation();
     if (this.nextConversationMutationCount) throw new Error('已有接入操作正在进行。');
     this.configStore.remove(this.nextConversationConfigScope);
+    this.notifyModelUsageConnection(true);
   }
 
   /** Promotes an isolated restored session only after its full transaction has committed. */
@@ -296,6 +320,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       this.connectionConfigScope(sessionId, cwd),
       this.nextConversationConfigScope,
     );
+    this.notifyModelUsageConnection(false);
   }
 
   public saveNextConversationConfig(
@@ -307,7 +332,9 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       try {
         prepared = await this.prepareConnectionConfig(input);
         this.commitPreparedConfig(this.nextConversationConfigScope, prepared);
-        return await this.getNextConversationConnection();
+        const state = await this.getNextConversationConnection();
+        this.notifyModelUsageConnection(true);
+        return state;
       } catch (error) {
         this.configStore.restoreSnapshot(this.nextConversationConfigScope, snapshot);
         if (prepared) {
@@ -413,9 +440,11 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
         assertCurrent();
         options.beforeCommit?.();
         this.commitPreparedConfig(this.nextConversationConfigScope, prepared);
+        const state = await this.getNextConversationConnection();
+        this.notifyModelUsageConnection(true);
         return {
           connectionTest,
-          state: await this.getNextConversationConnection(),
+          state,
         };
       } catch (error) {
         this.configStore.restoreSnapshot(this.nextConversationConfigScope, snapshot);

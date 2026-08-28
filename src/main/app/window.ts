@@ -11,6 +11,7 @@ import {
   CLAUDE_PERMISSION_BRIDGE,
   DOWNLOAD_ENGINE,
   MAIN_WINDOW,
+  MODEL_USAGE_SERVICE,
   TRAY,
 } from '../infra/service-tokens';
 import type { MainState } from '../ipc/context';
@@ -92,6 +93,7 @@ export const createWindowController = ({
    * well — otherwise the chosen colour stops at the document edge and the window keeps a dark ring.
    */
   const applyWindowTheme = (themeId: TerminalThemeId): void => {
+    services.resolve(MODEL_USAGE_SERVICE).setTheme(themeId);
     const { shell } = TERMINAL_THEMES[themeId];
     const mainWindow = services.resolve(MAIN_WINDOW).current;
     mainWindow?.setBackgroundColor(shell.surfaceCanvas);

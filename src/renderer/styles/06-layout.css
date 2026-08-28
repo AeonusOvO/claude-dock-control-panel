@@ -256,7 +256,7 @@
     color var(--dur-2) var(--ease-standard);
 }
 
-.activity-rail__button span {
+.activity-rail__label {
   font-size: var(--type-caption-size);
   font-weight: var(--fw-strong);
   letter-spacing: var(--ls-caps);
@@ -266,6 +266,34 @@
 .activity-rail__button svg {
   height: 20px;
   width: 20px;
+}
+
+.activity-rail__model-icon {
+  display: grid;
+  flex: 0 0 20px;
+  height: 20px;
+  place-items: center;
+  width: 20px;
+}
+
+.activity-rail__model-image {
+  display: block;
+  height: 20px;
+  object-fit: contain;
+  width: 20px;
+}
+
+.activity-rail__model-image--dark,
+html[data-appearance='dark'] .activity-rail__model-image--light {
+  display: none;
+}
+
+html[data-appearance='dark'] .activity-rail__model-image--dark {
+  display: block;
+}
+
+html[data-appearance='dark'] .activity-rail__model-image--monochrome {
+  filter: brightness(0) invert(1);
 }
 
 .activity-rail__button:hover {

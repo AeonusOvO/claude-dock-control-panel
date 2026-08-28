@@ -1,4 +1,5 @@
 import type { SubscriptionProvider } from '../claude/subscriptions';
+import type { ModelUsageSnapshot } from './model-usage';
 import type { SubscriptionResult, SubscriptionState } from './subscription';
 import type {
   ConversationControlUpdate,
@@ -634,6 +635,7 @@ export interface SoftwareUpdateApi {
  */
 export interface ControlPanelApi
   extends
+    ModelUsageApi,
     AppApi,
     OnboardingApi,
     WorkspaceApi,
@@ -656,6 +658,12 @@ export interface ControlPanelApi
     CodexApi,
     McpApi,
     SoftwareUpdateApi {}
+
+export interface ModelUsageApi {
+  getModelUsage: () => Promise<ModelUsageSnapshot>;
+  setModelUsageFloating: (visible: boolean) => Promise<ModelUsageSnapshot>;
+  onModelUsage: (listener: (snapshot: ModelUsageSnapshot) => void) => Unsubscribe;
+}
 
 export interface SubscriptionApi {
   getSubscriptionState: () => Promise<SubscriptionState>;

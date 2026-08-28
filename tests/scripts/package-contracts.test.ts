@@ -81,6 +81,18 @@ const brandFileNames = [
   'claude-spark-clay.svg',
   'openai-blossom-black.svg',
   'openai-blossom-white.svg',
+  'model-deepseek.svg',
+  'model-glm.svg',
+  'model-kimi.svg',
+  'model-minimax.svg',
+  'model-mimo.svg',
+  'model-qwen.svg',
+  'model-doubao.svg',
+  'model-stepfun.svg',
+  'model-hunyuan.svg',
+  'model-wenxin.svg',
+  'model-spark.svg',
+  'model-ollama.svg',
 ] as const;
 const feedUrl = 'https://claudedock-test-123.cos.ap-test.myqcloud.com/updates/windows/x64/';
 
@@ -155,8 +167,8 @@ afterEach(() => {
 });
 
 describe('package contracts', () => {
-  it('keeps the rc.36 identity and Apache license declaration', () => {
-    expect(packageManifest.version).toBe('5.0.0-rc.37');
+  it('keeps the rc.38 identity and Apache license declaration', () => {
+    expect(packageManifest.version).toBe('5.0.0-rc.38');
     expect(packageManifest.license).toBe('Apache-2.0');
     expect(packageManifest.engines).toEqual({ node: '>=24', npm: '>=11' });
   });
@@ -279,7 +291,7 @@ describe('package contracts', () => {
         expect.stringContaining('packaged source identity Git HEAD differs'),
         expect.stringContaining('packaged app version 5.0.0-rc.15'),
         expect.stringContaining('packaged root LICENSE is invalid'),
-        expect.stringContaining('must contain exactly 3 SVG files; found 4'),
+        expect.stringContaining('must contain exactly 15 SVG files; found 16'),
         expect.stringContaining('bytes differ from claude-spark-clay.svg'),
         expect.stringContaining('contains forbidden claude.exe'),
         expect.stringContaining('useMultipleRangeRequest=false'),

@@ -34,7 +34,7 @@ export const assertChatApiAccess = (address: string, credential?: string): void 
   const url = new URL(normalizeConnectionAddress(address));
   const hostname = url.hostname.replace(/\.$/, '');
   if (credential?.startsWith('sk-sp-') && /(^|\.)dashscope\.aliyuncs\.com$/.test(hostname)) {
-    throw new Error('这是 Coding Plan 密钥，请在“接入”页使用。');
+    throw new Error('这是 Coding Plan 密钥，请在“模型”页使用。');
   }
   const codingHosts = new Set([
     'coding.dashscope.aliyuncs.com',
@@ -63,6 +63,6 @@ export const assertChatApiAccess = (address: string, credential?: string): void 
     Number(url.port) <= 18540 &&
     /^\/s\/[a-f0-9]{32}(?:\/|$)/.test(url.pathname);
   if (codingHosts.has(hostname) || codingPath || glmCoding || localSubscription) {
-    throw new Error('此订阅用于编程工具，请在“接入”页使用。');
+    throw new Error('此订阅用于编程工具，请在“模型”页使用。');
   }
 };

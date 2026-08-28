@@ -1,4 +1,6 @@
 import type { BrowserWindow, Session, Tray } from 'electron';
+import type { ModelUsageService } from '../usage/service';
+import type { ModelUsageWindow } from '../app/model-usage-window';
 import type { SubscriptionService } from '../subscriptions/service';
 import type { CcSwitchAdapter } from '../claude/cc-switch-adapter';
 import type { ClaudeExecutionInstallationProvider } from '../claude/execution-settings-installation';
@@ -66,6 +68,8 @@ export const MAIN_DIAGNOSTICS = createRegistryToken<MainDiagnostics>('main-diagn
 export const MAIN_LOGGER = createRegistryToken<Logger>('main-logger');
 export const MAIN_WINDOW =
   createRegistryToken<ServiceReference<BrowserWindow>>('main-window-reference');
+export const MODEL_USAGE_SERVICE = createRegistryToken<ModelUsageService>('model-usage-service');
+export const MODEL_USAGE_WINDOW = createRegistryToken<ModelUsageWindow>('model-usage-window');
 export const MANAGED_CHATGPT_GATEWAY =
   createRegistryToken<ManagedChatGptGateway>('managed-chatgpt-gateway');
 export const SUBSCRIPTION_SERVICE =

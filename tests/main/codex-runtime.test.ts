@@ -84,6 +84,45 @@ const markerFromLaunchCommand = (command: string): string => {
 };
 
 describe('Codex runtime protocol adapters', () => {
+  it('reads quota only for the expected account without creating a session or running diagnostics', async () => {
+    const { runtime } = createRuntime();
+    const request = vi.fn(async (method: string) =>
+      method === 'account/read'
+        ? { requiresOpenaiAuth: false, account: { type: 'chatgpt', email: 'member@example.com' } }
+        : { rateLimits: { primary: { usedPercent: 35, windowDurationMins: 300 } } },
+    );
+    Reflect.set(runtime, 'appServer', { request, stop: vi.fn() });
+    try {
+      expect(await runtime.readAccountResourceUsage('other@example.com')).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(1);
+      const quota = await runtime.readAccountResourceUsage('MEMBER@example.com');
+      expect(quota?.windows?.[0]?.usedPercent).toBe(35);
+      expect(runtime.getState).not.toHaveBeenCalled();
+      expect((Reflect.get(runtime, 'sessions') as Map<string, unknown>).size).toBe(0);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('rejects quota data if account state changes during the request', async () => {
+    const { runtime } = createRuntime();
+    const pending = deferred<unknown>();
+    Reflect.set(runtime, 'appServer', {
+      request: vi.fn(async (method: string) =>
+        method === 'account/read'
+          ? { requiresOpenaiAuth: false, account: { type: 'chatgpt', email: 'member@example.com' } }
+          : pending.promise,
+      ),
+      stop: vi.fn(),
+    });
+    const read = runtime.readAccountResourceUsage('member@example.com');
+    await Promise.resolve();
+    await Promise.resolve();
+    Reflect.set(runtime, 'stateRevision', 20);
+    pending.resolve({ rateLimits: { primary: { usedPercent: 75 } } });
+    expect(await read).toBeUndefined();
+    runtime.dispose();
+  });
   it('exposes only display-safe ChatGPT account fields', () => {
     expect(
       parseCodexAccountRead({

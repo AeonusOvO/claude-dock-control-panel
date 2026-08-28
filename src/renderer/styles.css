@@ -8,6 +8,7 @@
 @import './styles/views/markdown.css';
 @import './styles/views/router.css';
 @import './styles/views/connection-history.css';
+@import './styles/views/model-usage.css';
 @import './styles/views/mcp.css';
 @import './styles/views/settings.css';
 @import './styles/views/onboarding.css';

@@ -39,7 +39,7 @@ export const createConnectionFormProviderToolsActions = (
     applyNextClaudeConnection: (state) => {
       formState.nextConnectionRevision += 1;
       formState.nextConnection = state;
-      deps.renderNextConnection();
+      deps.renderNextConnection(state);
     },
     getNextClaudeConnection: () => formState.nextConnection,
     managedChatGptOperations: formState.managedChatGptOperations,

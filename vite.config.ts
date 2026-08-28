@@ -1,4 +1,5 @@
 import { configDefaults, defineConfig } from 'vitest/config';
+import path from 'node:path';
 
 // Research checkouts and generated artifacts are data, never executable project tests.
 const commonExcludes = [
@@ -17,6 +18,12 @@ export default defineConfig({
   root: 'src/renderer',
   base: './',
   build: {
+    rolldownOptions: {
+      input: {
+        main: path.resolve('src/renderer/index.html'),
+        usageWidget: path.resolve('src/renderer/usage-widget.html'),
+      },
+    },
     // Keep bundled visual assets as inspectable packaged files; brand provenance must not be folded
     // into opaque data URLs in the renderer document.
     assetsInlineLimit: 0,

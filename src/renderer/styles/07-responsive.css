@@ -1,6 +1,9 @@
 /* Responsive breakpoints (CSS media conditions cannot consume custom properties):
  * compact = 720px · medium = 1024px · wide = 1280px */
 @media (max-width: 1024px) {
+  .connection-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
   :root {
     --activity-rail-w: 54px;
     --drawer-w: 420px;
@@ -28,7 +31,7 @@
     display: none;
   }
 
-  .activity-rail__button span:not(.activity-rail__dot) {
+  .activity-rail__label {
     display: none;
   }
   .chat-toolbar__metrics {

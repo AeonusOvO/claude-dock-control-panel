@@ -176,6 +176,16 @@ export const createRendererHarness = async (
       };
     }
     switch (name) {
+      case 'getModelUsage':
+      case 'setModelUsageFloating':
+        return Promise.resolve({
+          revision: 0,
+          mode: 'none',
+          status: 'unavailable',
+          floating: args[0] === true,
+          themeId: 'claude',
+          detail: '尚未接入模型',
+        });
       case 'getSubscriptionState':
         return Promise.resolve({
           revision: 0,

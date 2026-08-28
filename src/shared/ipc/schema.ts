@@ -581,6 +581,8 @@ const request = <Method extends RequestMethod>(
 };
 
 export const IPC_REQUESTS = {
+  [CHANNELS.MODEL_USAGE_GET]: request('getModelUsage', []),
+  [CHANNELS.MODEL_USAGE_SET_FLOATING]: request('setModelUsageFloating', [z.boolean()]),
   [CHANNELS.APP_CLIPBOARD_READ]: request('readClipboardText', []),
   [CHANNELS.APP_CLIPBOARD_WRITE]: request('writeClipboardText', [z.string()]),
   [CHANNELS.APP_CANCEL_STARTUP_MODEL_CONNECTION]: request('cancelStartupModelConnection', []),
@@ -981,6 +983,7 @@ export const IPC_SEND_METHODS = {
 } as const satisfies Record<SendChannel, keyof ControlPanelApi>;
 
 export const IPC_EVENT_METHODS = {
+  [CHANNELS.MODEL_USAGE_CHANGED]: 'onModelUsage',
   [CHANNELS.APP_OPEN_DOWNLOAD_CENTER]: 'onOpenDownloadCenterRequested',
   [CHANNELS.APP_QUIT_REQUESTED]: 'onAppQuitRequested',
   [CHANNELS.APP_QUIT_REQUEST_INVALIDATED]: 'onAppQuitRequestInvalidated',

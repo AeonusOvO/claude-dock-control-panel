@@ -1,4 +1,8 @@
-import type { ClaudeGatewayDiagnostics, SaveClaudeConfigInput } from '../../../shared/contracts';
+import type {
+  ClaudeGatewayDiagnostics,
+  ClaudeNextConversationConnectionState,
+  SaveClaudeConfigInput,
+} from '../../../shared/contracts';
 import type { ConfirmationRequest } from '../../shell/dialogs';
 
 export interface ConnectionFormDeps {
@@ -20,5 +24,5 @@ export interface ConnectionFormDeps {
     isTestInProgress: () => boolean;
     isRemedyInProgress: () => boolean;
   };
-  renderNextConnection: () => void;
+  renderNextConnection: (state: ClaudeNextConversationConnectionState) => void;
 }

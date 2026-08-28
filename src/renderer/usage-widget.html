@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN" class="usage-widget-root">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>ClaudeDock 模型用量</title>
+    <link rel="stylesheet" href="./styles/usage-widget.css" />
+  </head>
+  <body>
+    <main id="usage-ball" class="usage-ball" aria-label="模型用量悬浮球">
+      <div class="usage-ball__content" role="status" aria-live="polite">
+        <span data-usage-label>剩余额度</span>
+        <strong data-usage-value>暂无法获取</strong>
+        <span data-usage-unit>后台自动获取</span>
+      </div>
+      <svg class="usage-ball__ring" viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="50" cy="50" r="46" />
+        <circle cx="50" cy="50" r="46" pathLength="100" data-usage-meter />
+      </svg>
+      <button id="close-usage-ball" type="button" aria-label="关闭悬浮球" title="关闭悬浮球">
+        ×
+      </button>
+    </main>
+    <script type="module" src="/usage-widget.ts"></script>
+  </body>
+</html>

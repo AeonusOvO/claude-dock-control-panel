@@ -1,4 +1,6 @@
 import { requiredElement } from '../platform/dom';
+import type { ClaudeConfigView } from '../../shared/contracts';
+import { createModelRail } from './model-rail';
 import { createRailPreviewActions } from './rail-preview';
 import { createRailMutableState, type RailMutableState } from './rail-state';
 
@@ -6,6 +8,7 @@ export type { RailShellDeps } from './rail-dependencies';
 import type { RailShellDeps } from './rail-dependencies';
 
 export interface RailShell {
+  renderModelConnection: (config?: ClaudeConfigView) => void;
   selectRailTab: (tab: string) => void;
   toggleRailTab: (tab: string) => void;
   closeRailPreview: () => void;
@@ -88,6 +91,10 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   } = deps;
 
   const activityRail = requiredElement<HTMLElement>('#activity-rail');
+  const renderModelConnection = createModelRail(
+    requiredElement<HTMLButtonElement>('[data-rail-tab="connection"]'),
+  );
+  renderModelConnection();
   const workspace = requiredElement<HTMLElement>('#workspace');
   const controlPanel = requiredElement<HTMLElement>('#control-panel');
   const terminalShell = requiredElement<HTMLElement>('#terminal-shell');
@@ -137,7 +144,7 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
       button.classList.toggle('activity-rail__button--preview', transient);
       button.setAttribute('aria-expanded', String(selected || transient));
       button.setAttribute('aria-pressed', String(selected));
-      const label = button.querySelector<HTMLElement>('span:not(.activity-rail__dot)')?.textContent;
+      const label = button.querySelector<HTMLElement>('.activity-rail__label')?.textContent;
       button.title = selected ? `${label ?? '侧栏'}（再次点击可收起侧栏）` : (label ?? '打开侧栏');
     }
     for (const page of document.querySelectorAll<HTMLElement>('[data-rail-page]')) {
@@ -183,10 +190,6 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   };
 
   bindTerminalFitSettlement(workspace, retryTerminalFitUntilMeasured);
-
-  function selectRailTab(tab: string): void {
-    applyRailTab(tab);
-  }
 
   const compactWorkspaceViewportWidth = (): number =>
     Math.min(window.innerWidth, window.visualViewport?.width ?? window.innerWidth);
@@ -262,7 +265,8 @@ export const createRailShell = (deps: RailShellDeps): RailShell => {
   });
 
   return {
-    selectRailTab,
+    renderModelConnection,
+    selectRailTab: applyRailTab,
     toggleRailTab,
     closeRailPreview: previewActions.closeRailPreview,
     getSelectedRailTab: () => state.selectedRailTab,

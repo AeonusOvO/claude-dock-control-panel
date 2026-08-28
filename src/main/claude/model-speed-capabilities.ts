@@ -129,7 +129,7 @@ export const classifyModelSpeed = (input: ModelSpeedCapabilityInput): ModelSpeed
       return {
         availability: 'update-required',
         canSelectFast: false,
-        detail: `GPT 快速档需要 CLIProxyAPI ${MINIMUM_MANAGED_GPT_FAST_GATEWAY_VERSION} 或更高版本；请到“接入”页运行“检查并自动修复”。`,
+        detail: `GPT 快速档需要 CLIProxyAPI ${MINIMUM_MANAGED_GPT_FAST_GATEWAY_VERSION} 或更高版本；请到“模型”页运行“检查并自动修复”。`,
         mechanism: 'gpt-service-tier',
       };
     }

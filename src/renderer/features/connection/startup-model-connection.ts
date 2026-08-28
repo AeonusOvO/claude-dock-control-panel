@@ -162,7 +162,7 @@ export const createStartupModelConnectionOverlay = (
       } catch {
         overlay.hidden = true;
         setPageLocked(false);
-        dependencies.showToast('无法读取启动模型接入状态；接入页已恢复为可操作状态。', 'error');
+        dependencies.showToast('无法读取启动模型接入状态；模型页已恢复为可操作状态。', 'error');
       }
     },
   };

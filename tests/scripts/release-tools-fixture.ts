@@ -180,6 +180,18 @@ const brandFileNames = [
   'claude-spark-clay.svg',
   'openai-blossom-black.svg',
   'openai-blossom-white.svg',
+  'model-deepseek.svg',
+  'model-glm.svg',
+  'model-kimi.svg',
+  'model-minimax.svg',
+  'model-mimo.svg',
+  'model-qwen.svg',
+  'model-doubao.svg',
+  'model-stepfun.svg',
+  'model-hunyuan.svg',
+  'model-wenxin.svg',
+  'model-spark.svg',
+  'model-ollama.svg',
 ] as const;
 
 export const digest = (algorithm: 'sha256' | 'sha512', encoding: 'base64' | 'hex', body: Buffer) =>

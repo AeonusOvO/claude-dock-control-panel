@@ -15,6 +15,7 @@ export type * from './download';
 export type * from './managed-chatgpt';
 export type * from './subscription';
 export type * from './mcp';
+export type * from './model-usage';
 export type * from './network';
 export type * from './onboarding';
 export type * from './proxy';

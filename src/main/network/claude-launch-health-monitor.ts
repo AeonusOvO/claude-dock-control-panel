@@ -88,7 +88,7 @@ const healthForResult = (
     return Object.freeze({
       blocking: false,
       checkedAt,
-      detail: '后台复查发现连接风险；当前会话不会被中断，可在“接入”页查看并处理。',
+      detail: '后台复查发现连接风险；当前会话不会被中断，可在“模型”页查看并处理。',
       headline: '运行中连接可能不可用',
       source: 'runtime',
       tone: 'error',

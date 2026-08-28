@@ -79,6 +79,9 @@ Hook、后台任务和受控派生进程保持有效。Agent SDK 只解析用户
 
 ### 本地品牌资产与法律文件
 
+rc.38 的模型活动栏新增 12 个固定版本 Lobe Icons SVG，连同下面三项官方资源共 15 个独立本地文件。
+映射、单色变体、额度 Worker、统计口径与悬浮球安全边界见[模型额度与用量](model-usage.md)。
+
 | 资源                                                  | 官方来源                              | Source SVG SHA-256                                                 | LF-normalized body SHA-256                                         |
 | ----------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
 | `src/renderer/assets/brands/claude-spark-clay.svg`    | <https://www.anthropic.com/press-kit> | `6D53DB4BE375E899C937C26CF16684A80D6E869B1928D72B37748BEF2560E219` | `1E3C6BD43F5B0598FF4452769410D0597AD0BE3FBDD043930DA664AF9E1FD39F` |
@@ -988,7 +991,7 @@ contribution 会跳过其后全部步骤，而进程级 `unhandledRejection` 处
   session 的同步提交点读取 nextRuntime，并把 `createdSessionId + runtime` 一起返回；renderer 后续启动
   永远使用这两个精确值，切换前台或稍后改变偏好都不会改写 owner。
 - `ClaudeConfigStore` 另以 main-only 应用 scope 保存“下个对话接入”的完整平台、协议、端点、认证、加密
-  凭据与主/小型模型。接入页不要求活动项目，通过 `claude:get-next-connection`、
+  凭据与主/小型模型。模型页不要求活动项目，通过 `claude:get-next-connection`、
   `claude:test-next-connection`、`claude:save-next-config` 读取、真实测试并原子保存这份选择；失败恢复事务前
   快照；极简新配置失败时保留用户草稿并显示简短错误。
 - 极简 `claude:save-next-config` 在同一队列中进行地址归一化、模型发现、最小生成验证和保存。
@@ -1402,7 +1405,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   因此渲染器默认值不会反向写掉上次主题。
 - Kimi 开放平台与 Kimi Code 会员分为两个目录项，明确阻止密钥/基址混用；SiliconFlow 按其
   Claude Code 文档使用 `apiKey`（`x-api-key`）；Ollama 使用不落盘的 `ollama` 占位令牌。
-- `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“接入”页打开期间每 6 秒刷新。它用
+- `ClaudeGatewayDetector` 每次最多缓存 3 秒，renderer 在“模型”页打开期间每 6 秒刷新。它用
   短连接检查 Claude Code Router 默认 `3456/3458`、CLIProxyAPI 默认 `8317` 与 LiteLLM 常用
   `4000`，不会枚举或扫描
   全部本机端口。这个探测器只描述外部工具；受管 CLIProxyAPI 的状态由
@@ -1645,7 +1648,7 @@ unknown`），并可保存 OpenAI 原始上游的地址、认证、主/小型（
   success/warning/error、检查时间、说明及是否阻止启动。renderer 在会话页显示健康卡，
   新错误同时触发一次 toast。
 - 只有当前项目的基址确实是本机回环 `http://*:3456` 时，启动前才读取 CCR 状态；Provider
-  为空或 gateway 非 running 会在重启 PowerShell 前阻断，并引导到接入页。远程直连和其他
+  为空或 gateway 非 running 会在重启 PowerShell 前阻断，并引导到模型页。远程直连和其他
   本机端口不会被无关 CCR 故障影响。
 - `ClaudeRuntime.consumeTerminalOutput` 保留最多 4 KiB 的短期诊断窗口，只识别 Claude
   Code 明确输出的 `API Error:`。ConnectionRefused、401/403、404 与模型错误映射为可读
@@ -2275,7 +2278,7 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
   以及活动栏二次点击收起也作为源码/结构契约锁定。终端提示词上方不得重新出现模式、模型或思考
   控制条，这些入口只能由底栏和命令页承载。底栏交互同样在这里锁定：连接按钮必须
   用保存配置原地测试、不得跳转
-  “接入”页；当前 Claude 项目首次载入及窗口从托盘恢复时必须各自动实测一次，同一显示周期
+  “模型”页；当前 Claude 项目首次载入及窗口从托盘恢复时必须各自动实测一次，同一显示周期
   按 session 去重，普通 focus/visibility 不得重复消耗 token；忙态分支必须排在健康色分支
   之前（否则陈旧的路由健康会盖掉刚点下去的进度）；
   模型/速度/模式菜单必须挂在同一套 `pointerdown` + `blur` 收拢逻辑上并按响应式层级隐藏，六种
@@ -2353,7 +2356,7 @@ SHA-256/SHA-512、cohort、公开 COS 长度/Range/缓存验证及 Authenticode 
 - `tests/main/async-refresh-cache.test.ts` 与 `tests/main/background-task-coordinator.test.ts` 覆盖
   同键合并、TTL、失败重试、旧请求不覆盖新状态、两个并发槽和交互任务优先级；
   `tests/main/claude-connection-test.test.ts` 额外锁定响应体 64 KiB 读取上限与 owner cancellation 原样传播；
-  `tests/renderer/connection-history-dialog.test.ts` 覆盖未选择取消、选中反馈、分类清空、确认后专用接入页、
+  `tests/renderer/connection-history-dialog.test.ts` 覆盖未选择取消、选中反馈、分类清空、确认后专用模型页、
   成功延时回落、失败重试、后台确认取消，以及加载、应用、删除、重命名跨项目后的迟到结果隔离；
   `tests/renderer/current-connection-summary.test.ts` 与 `current-connection-view.test.ts` 锁定账号、模型、中转
   名称/地址优先级、URL 敏感字段净化和 ChatGPT 账号的 generation + session fence。

@@ -175,7 +175,7 @@ export const createConnectionForm = (deps: ConnectionFormDeps): ConnectionForm =
       renderProviderPicker();
     }
     formState.renderWizard?.();
-    deps.renderNextConnection();
+    deps.renderNextConnection(normalized);
     return normalized;
   };
   const applyNextClaudeConnection = (state: ClaudeNextConversationConnectionState): void => {

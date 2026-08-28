@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { modelUsageConnection } from '../usage/identity';
 import type {
   ClaudeContextWindowMode,
   ClaudeLaunchMode,
@@ -510,7 +511,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       assertReservationCurrent();
       const credential = launchSnapshot.credential;
       if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
-        throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
+        throw new Error('当前接入需要接口凭据，请先在“模型”页保存密钥。');
       }
       if (usesDefaultClaudeRouter(config)) {
         const router = await this.getRouterHealthState(true);
@@ -559,6 +560,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       entry.phase = 'active';
       return {
         allowBypassPermissions: launchSnapshot.allowBypassPermissions,
+        usageConnection: this.modelUsageObserver?.capture(modelUsageConnection(launchSnapshot)),
         cliVersion: installation.version,
         configFingerprint: connectionFingerprint(launchConfig, credential),
         conversationBinding,
@@ -737,7 +739,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     assertLaunchSnapshotCurrent();
     const credential = launchSnapshot.credential;
     if ((config.authMode === 'apiKey' || config.authMode === 'authToken') && !credential) {
-      throw new Error('当前接入需要接口凭据，请先在“接入”页保存密钥。');
+      throw new Error('当前接入需要接口凭据，请先在“模型”页保存密钥。');
     }
     if (usesDefaultClaudeRouter(config)) {
       const router = await this.getRouterHealthState(true);
@@ -859,6 +861,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
 
     // The detached replacement is not observable as active until its exact token binds a PTY.
     const replacement: RuntimeSession = {
+      usageConnection: this.modelUsageObserver?.capture(modelUsageConnection(launchSnapshot)),
       active: true,
       activityEventsPath: this.activityScriptPath ? activityEventsPath : undefined,
       artifactDirectory,

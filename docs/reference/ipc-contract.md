@@ -6,24 +6,24 @@
 
 | 形态     | 方向                       | 渲染端                    | 主进程             | 数量 |
 | -------- | -------------------------- | ------------------------- | ------------------ | ---- |
-| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 187  |
+| 请求响应 | renderer → main → renderer | `ipcRenderer.invoke`      | `ipcMain.handle`   | 189  |
 | 单向命令 | renderer → main            | `ipcRenderer.send`        | `ipcMain.on`       | 7    |
-| 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 25   |
+| 事件推送 | main → renderer            | `ipcRenderer.on`          | `webContents.send` | 26   |
 | 非 IPC   | 进程内                     | `webUtils.getPathForFile` | —                  | 1    |
 
-`ControlPanelApi` 共 219 个成员：187 请求响应 + 25 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
+`ControlPanelApi` 共 222 个成员：189 请求响应 + 26 事件订阅 + 6 单向命令 + 1 非 IPC。第 7 个单向通道 `app:quit-request-received` 由 `onAppQuitRequested` 的回调内部发出，不占独立方法位。
 
 ## 当前实现位置
 
 | 内容         | 位置                                                                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 频道常量     | `src/shared/ipc/channels.ts`（219 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
+| 频道常量     | `src/shared/ipc/channels.ts`（222 个常量，REQUEST/SEND/EVENT 三组，派生频道类型与冻结数组）                                                    |
 | 参数 schema  | `src/shared/ipc/schema.ts` + `claude-execution-settings-schema.ts`                                                                             |
-| 类型定义     | `src/shared/contracts/`（22 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件）                                                            |
-| API 组合     | `src/shared/contracts/control-panel-api.ts`（22 个域接口组合出 219 个成员）                                                                    |
-| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 22 个桥文件                                           |
-| 主进程注册   | `src/main/ipc/`（32 个文件：26 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
-| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 26 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
+| 类型定义     | `src/shared/contracts/`（23 个域文件 + `control-panel-api.ts` + `index.ts` 桶文件）                                                            |
+| API 组合     | `src/shared/contracts/control-panel-api.ts`（23 个域接口组合出 222 个成员）                                                                    |
+| 渲染端桥     | `src/preload/index.ts`（单点 `contextBridge.exposeInMainWorld`）+ `src/preload/bridges/` 23 个桥文件                                           |
+| 主进程注册   | `src/main/ipc/`（33 个文件：27 个域注册 + 贡献点机制 + 守卫 + 校验 + 共享上下文）                                                              |
+| 注册组合     | `src/main/ipc/index.ts`（`registerIpc(dependencies)`；`MAIN_IPC_CONTRIBUTIONS` 27 个贡献项，`UnionToIntersection` 派生 `MainIpcDependencies`） |
 | 参数校验     | `src/main/ipc/validation.ts`（`validate*()` 由 `schema.ts` 的 schema 派生）                                                                    |
 | 发送者守卫   | `src/main/ipc/guards.ts`（`validateSender` 拒绝非主窗口来源；另含运行时效果断言与服务解析器）                                                  |
 | 插件变更通道 | `src/main/ipc/claude-plugin.ts` 的 `pluginMutations` Map，8 个通道循环注册，共用 `runPluginMutation` 包装                                      |
@@ -34,12 +34,25 @@ preload 由 `vite.preload.config.ts` 从 `src/preload/index.ts` 构建为单 CJS
 
 - 频道名只能引用 `src/shared/ipc/channels.ts` 的 `CHANNELS` 常量，preload 与 main 两侧不写裸字符串字面量。
 - 每个 `ipcMain.handle` 与 `ipcMain.on` 首先调用 `validateSender(event)`，拒绝非主窗口 `webContents` 的调用。
+  唯一窄例外是 `model-usage` 两个请求：它们也接受主进程拥有的悬浮球顶层 frame；悬浮球只能读取用量和关闭自身。
 - 参数以 `unknown` 接收，经 `validate*()` 函数收窄后才进入业务代码。
 - preload 只导出白名单方法，不导出 `ipcRenderer` 本体，不透传任意频道名。
 - 事件订阅方法返回取消函数，内部调用 `removeListener`。
 - 渲染进程与主进程共享的类型只来自 `src/shared/`。
 
-## 请求响应频道（187）
+## 请求响应频道（189）
+
+### `model-usage`（2）
+
+| 频道                       | 方法                    |
+| -------------------------- | ----------------------- |
+| `model-usage:get`          | `getModelUsage`         |
+| `model-usage:set-floating` | `setModelUsageFloating` |
+
+`model-usage:changed` 对应 `onModelUsage`，载荷 `ModelUsageSnapshot` 只含修订号、模式、可用性、平台/模型、
+统计起点、Token 或剩余窗口、更新时间、浮窗可见性及主题，不携带凭据或正文。
+主窗口仍暴露 `controlPanel`；沙箱 preload 收到主进程专用参数 `--claudedock-usage-widget` 时只暴露
+三个方法的 `modelUsage`，不能使用其他业务频道。详见[模型额度与用量](model-usage.md)。
 
 ### `app`（14）
 
@@ -383,7 +396,7 @@ ClaudeDock。
 同一显示区域的尺寸一次测量后分发给前后台各个 generation；`terminal:size` 回声若早于 view 已发送的
 最新 `resizeRevision` 则直接忽略，不允许迟到回声覆盖最大化后的新尺寸。
 
-## 事件频道（25）
+## 事件频道（26）
 
 `webContents.send` → `ipcRenderer.on`。订阅方法返回取消函数。
 

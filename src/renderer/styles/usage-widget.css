@@ -1,0 +1,96 @@
+@import './01-tokens.css';
+
+.usage-widget-root,
+.usage-widget-root body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+.usage-widget-root body {
+  display: grid;
+  place-items: center;
+}
+.usage-ball {
+  position: relative;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: var(--surface-1);
+  color: var(--text-hi);
+  box-shadow: var(--sheen);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.usage-ball__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-0-5);
+  height: 100%;
+  padding: 0 var(--s-2);
+  text-align: center;
+}
+.usage-ball__content span {
+  font-size: var(--type-micro-size);
+  color: var(--text-dim);
+}
+.usage-ball__content strong {
+  font-size: var(--type-title-size);
+  font-weight: var(--fw-strong);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+.usage-ball[data-status='unavailable'] strong,
+.usage-ball[data-mode='none'] strong {
+  font-size: var(--type-caption-size);
+}
+.usage-ball[data-status='stale'] .usage-ball__content span:last-child::after {
+  content: ' · 旧';
+}
+.usage-ball__ring {
+  position: absolute;
+  inset: 0;
+  width: 110px;
+  height: 110px;
+  pointer-events: none;
+  transform: rotate(-90deg);
+}
+.usage-ball__ring circle {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+}
+.usage-ball__ring [data-usage-meter] {
+  stroke: var(--accent-solid);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+}
+#close-usage-ball {
+  position: absolute;
+  right: -1px;
+  top: -3px;
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface-1);
+  color: var(--text-hi);
+  font-size: var(--type-title-size);
+  line-height: 1;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+#close-usage-ball:hover {
+  background: var(--surface-3);
+}
+#close-usage-ball:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 2px;
+}

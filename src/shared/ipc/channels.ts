@@ -1,4 +1,6 @@
 const requestChannels = {
+  MODEL_USAGE_GET: 'model-usage:get',
+  MODEL_USAGE_SET_FLOATING: 'model-usage:set-floating',
   // app
   APP_CLIPBOARD_READ: 'app:clipboard-read',
   APP_CLIPBOARD_WRITE: 'app:clipboard-write',
@@ -247,6 +249,7 @@ const sendChannels = {
 } as const;
 
 const eventChannels = {
+  MODEL_USAGE_CHANGED: 'model-usage:changed',
   // app
   APP_OPEN_DOWNLOAD_CENTER: 'app:open-download-center',
   APP_QUIT_REQUESTED: 'app:quit-requested',

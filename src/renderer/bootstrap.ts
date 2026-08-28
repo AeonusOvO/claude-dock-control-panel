@@ -18,6 +18,7 @@ import { createTerminalProjectState } from './features/terminal/project-state';
 import { formatTokenCount, resultFailureMessage } from './platform/format';
 import { createDialogShell } from './shell/dialogs';
 import { createRailShell } from './shell/rail';
+import { installModelUsageCard } from './shell/model-usage';
 import { createFooterShell } from './shell/footer';
 import { createThemeShell } from './shell/theme';
 import { createToastShell } from './shell/toast';
@@ -274,7 +275,10 @@ const installConnectionStack = (
       isTestInProgress: () => features.connectionFeature.isTestInProgress(),
       isRemedyInProgress: () => features.connectionFeature.isRemedyInProgress(),
     },
-    renderNextConnection: () => shells.connectionHistory?.renderCurrentConnection(),
+    renderNextConnection: (nextConnection) => {
+      shells.connectionHistory?.renderCurrentConnection();
+      shells.railShell.renderModelConnection(nextConnection.config);
+    },
   });
   shells.connectionForm = connectionForm;
   shells.activeStatus = activeStatus;
@@ -524,6 +528,10 @@ export const bootstrapApplication = (rendererRegistry: Registry): ApplicationRun
   installTerminalProjectStack(state, features, shells);
   installSecondaryShells(state, features, shells);
   installFeatureStack(rendererRegistry, state, shells, features);
+  const disposeModelUsage = installModelUsageCard(window.controlPanel, (message) =>
+    shells.toastShell.showToast(message, 'error'),
+  );
+  window.addEventListener('beforeunload', disposeModelUsage, { once: true });
   const runtime = { ...state, ...shells, ...features } as ApplicationRuntime;
   installGlobalInteractions(runtime);
   installWindowLifecycle(runtime);

@@ -23,6 +23,11 @@ preload: <dist/preload/preload.js>,
 
 ## 分层依据
 
+模型用量由 main 的 `usage/service.ts` 持有并推送；`usage/transcript-worker.ts` 是独立 Node Worker 入口，
+只在后台解析受限项目目录内的增量用量，不参与 ConPTY 输出或请求路由。
+`usage-widget.html` 是独立轻量 renderer，使用相同主题和数据快照，但 preload 仅开放三个用量方法。
+详见[模型额度与用量](../reference/model-usage.md)。
+
 采用环境轴 × 领域轴的双轴分层：
 
 - [VS Code Source Code Organization](https://github.com/microsoft/vscode/wiki/Source-Code-Organization) —— `layer × target-environment` 双轴，层只向下依赖。

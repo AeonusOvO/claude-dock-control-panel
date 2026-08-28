@@ -57,6 +57,7 @@ import {
   MAIN_DIAGNOSTICS,
   MAIN_LOGGER,
   MAIN_WINDOW,
+  MODEL_USAGE_SERVICE,
   MANAGED_CHATGPT_GATEWAY,
   SUBSCRIPTION_SERVICE,
   MCP_MANAGER,
@@ -103,6 +104,7 @@ import type { ProjectOperations } from '../terminal/project-operations';
 import type { TerminalWorkspace } from '../terminal/workspace';
 import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from '../updates/application';
 import { runtimeAssetPath } from './paths';
+import { installModelUsage } from './model-usage';
 import type { RuntimeProfile } from './profile';
 import { restoreLastConversationModelOnly } from './startup-model-restore';
 import type {
@@ -489,6 +491,25 @@ const registerClaudePermissionBridge = (services: Registry): void => {
  * diagnostics sink, the activity feed and the native conversation service all need the Claude runtime
  * that is created here, and the native adapter's environment is only complete once it exists.
  */
+const installCodexRuntime = (services: Registry, workspace: TerminalWorkspace): void => {
+  services.register(
+    CODEX_RUNTIME,
+    (registry) =>
+      new CodexRuntime(
+        app.getPath('userData'),
+        (state) => {
+          if (workspace.hasSession(state.sessionId)) {
+            services.resolve(MAIN_WINDOW).current?.webContents.send(CHANNELS.CODEX_STATE, state);
+          }
+        },
+        (sessionId, ptyGeneration, data) => workspace.write(sessionId, ptyGeneration, data),
+        registry.resolve(DOWNLOAD_ENGINE),
+        registry.resolve(BUSY_REGISTRY),
+        createAuthenticatedSessionFetch(registry, session.defaultSession),
+      ),
+  );
+};
+
 const installAgentRuntimes = ({
   advancedSettingsStore,
   appPreferencesStore,
@@ -592,6 +613,15 @@ const installAgentRuntimes = ({
       new NativeConversationService({
         adapter: nativeAdapter,
         assertLaunchAdmissionAllowed,
+        onUsageReported: (conversationId, cwd) => {
+          services
+            .resolve(MODEL_USAGE_SERVICE)
+            .observe(
+              nativeLaunches.get(conversationId)?.prepared.usageConnection,
+              cwd,
+              conversationId,
+            );
+        },
         onSnapshot: (snapshot) => {
           publishNativeSnapshot(snapshot);
           if (snapshot.phase === 'failed' || snapshot.phase === 'stopped') {
@@ -622,22 +652,7 @@ const installAgentRuntimes = ({
     CLAUDE_STREAM_DIAGNOSTICS_STORE,
     () => new ClaudeStreamDiagnosticsStore(app.getPath('userData')),
   );
-  services.register(
-    CODEX_RUNTIME,
-    (registry) =>
-      new CodexRuntime(
-        app.getPath('userData'),
-        (state) => {
-          if (workspace.hasSession(state.sessionId)) {
-            services.resolve(MAIN_WINDOW).current?.webContents.send(CHANNELS.CODEX_STATE, state);
-          }
-        },
-        (sessionId, ptyGeneration, data) => workspace.write(sessionId, ptyGeneration, data),
-        registry.resolve(DOWNLOAD_ENGINE),
-        registry.resolve(BUSY_REGISTRY),
-        createAuthenticatedSessionFetch(registry, session.defaultSession),
-      ),
-  );
+  installCodexRuntime(services, workspace);
 
   const permissionBridge = services.resolve(CLAUDE_PERMISSION_BRIDGE);
   claudeRuntime.setPermissionRequestHook(
@@ -692,6 +707,7 @@ const installAgentRuntimes = ({
     claudeConversationLifecycle.assertLaunchAllowed(cwd, mode, conversationId);
   });
   services.resolve(CODEX_RUNTIME);
+  installModelUsage(services, runtimeProfile, workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
 };
 
 /** Preflight, the access guard it feeds, process scanning and the updater — all read-only observers. */

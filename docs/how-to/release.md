@@ -71,7 +71,7 @@ COS 并完成远端复核。没有完成通道发布的版本统一标记为“�
   `package-lock.json` 的 SHA-256。ignored `dist/`、`outputs/` 不计入源码 dirt。
 - `npm run build` 在 clean 后、任何图标生成、typecheck 或编译前写入 `dist/build-source-identity.json`；开发态允许记录 `treeClean: false`，最终发布只接受 clean identity。打包后的 ASAR 必须包含该固定 schema 文件并与当前源码身份一致。
 - `outputs/win-unpacked/resources/app.asar` 的根 `package.json` 版本正确，根 `LICENSE`、`NOTICE` 存在且
-  非空，renderer assets 恰好包含三个 hashed 品牌 SVG 且字节与源码相同，ASAR 与整个 `win-unpacked`
+  非空，renderer assets 恰好包含十五个 hashed 品牌 SVG 且字节与源码相同，ASAR 与整个 `win-unpacked`
   都没有 `claude.exe`。
 - 使用固定的 `7zip-bin` 只解压而不运行 NSIS，并读取其直接物化的 application payload。安装器 payload 的 `resources/app.asar`、完整 `app.asar.unpacked` 树和存在性对称的 `app-update.yml` 必须逐字节等于同批次 `win-unpacked`。
 - `outputs/win-unpacked/resources/app-update.yml` 是与源码配置精确一致的 generic HTTPS feed，包含与发行版本相同的通道，且 `useMultipleRangeRequest=false`。

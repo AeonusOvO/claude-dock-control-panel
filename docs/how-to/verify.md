@@ -34,6 +34,7 @@ npm run test:control-theme
 npm run test:visual
 npm run test:conpty
 npm run test:network
+npm run test:model-usage
 npm run test:runtime-soak:accelerated
 npm run dist
 ```
@@ -46,6 +47,7 @@ npm run dist
 | `npm run test:visual:real`                                       | 隔离 RuntimeProfile 下的真实 Electron 截图                           |
 | `npm run test:conpty`                                            | 真实 ConPTY 的 resize 与 stop/restart 生命周期、事件顺序             |
 | `npm run test:network`                                           | 真实 Electron 上传先 close、十路 redirect/流式响应、HEAD、截断与取消 |
+| `npm run test:model-usage`                                       | 独立 Worker 用量统计、主线程延迟、四主题置顶球与受限 preload         |
 | `npm run test:select`、`test:select-theme`、`test:dialog-select` | 原生 `<select>` 交互与主题                                           |
 | `npm run test:scroll-chaining`                                   | trusted 滚轮下的嵌套滚动链与弹层封闭（须可见窗口）                   |
 | `npm run test:runtime-soak:accelerated`                          | 模拟 24 小时会话与服务回收                                           |
@@ -101,7 +103,7 @@ dependency-cruiser、`npm run dist`、源码身份复核和 `npm run release:man
   `dist/`、`outputs/` 不计入 dirt，其他 tracked/untracked 文件一律拒绝。
 - `npm run build` 在 clean 后、任何生成或编译前写入 `dist/build-source-identity.json`；该文件必须存在于
   ASAR，只含固定 schema 和无凭据源码身份字段，并与打包前后当前源码身份一致。
-- `win-unpacked/resources/app.asar` 的版本、根 `LICENSE` / `NOTICE`、恰好三个 byte-identical hashed 品牌
+- `win-unpacked/resources/app.asar` 的版本、根 `LICENSE` / `NOTICE`、恰好十五个 byte-identical hashed 品牌
   SVG，以及 ASAR/解包目录不含 `claude.exe`。
 - 固定 `7zip-bin` 直接物化 NSIS application payload，且不运行安装器；payload 的 `app.asar`、完整
   `app.asar.unpacked` 树和存在性对称的 `app-update.yml` 与同批次 `win-unpacked` 逐字节相同。

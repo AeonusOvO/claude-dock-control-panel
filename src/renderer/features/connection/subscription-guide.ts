@@ -124,7 +124,7 @@ export const connectSubscriptionUi = (
         else {
           form.nextConnectionRevision += 1;
           form.nextConnection = result.nextConnection;
-          deps.renderNextConnection();
+          deps.renderNextConnection(result.nextConnection);
         }
         form.connectionSucceeded?.();
       } else {

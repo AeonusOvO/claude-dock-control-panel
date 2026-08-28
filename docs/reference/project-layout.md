@@ -18,6 +18,10 @@ main/       shared/ + electron    renderer/   shared/ + DOM
 
 ## 仓库根
 
+新增入口：`src/main/usage/transcript-worker.ts`（后台用量读取）与 `src/renderer/usage-widget.html` /
+`usage-widget.ts`（置顶悬浮球）。main 入口由 TypeScript 编译，Vite 对主页面和悬浮球进行多页构建；
+两个 renderer 入口共享纯展示/主题代码，不共享终端与对话运行时。依赖规则仅增加这两个明确入口豁免。
+
 | 路径                       | 内容                                                  |
 | -------------------------- | ----------------------------------------------------- |
 | `assets/source/`           | SVG 图标源                                            |

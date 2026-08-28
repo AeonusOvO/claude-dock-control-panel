@@ -12,7 +12,7 @@ const path = require('node:path');
 
 /** Modules that are launched by Electron or Vite rather than imported by another module. */
 const ENTRY_POINTS =
-  '^src/(main/(main|index)\\.ts|preload/(preload|index)\\.ts|renderer/main\\.ts)$';
+  '^src/(main/((main|index)\\.ts|usage/transcript-worker\\.ts)|preload/(preload|index)\\.ts|renderer/(main|usage-widget)\\.ts)$';
 
 /**
  * Renderer features are horizontally isolated: a feature may import its own directory,

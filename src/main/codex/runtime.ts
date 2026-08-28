@@ -818,6 +818,25 @@ export class CodexRuntime {
     );
   }
 
+  /** Read-only quota query without creating a terminal or running installation diagnostics. */
+  public async readAccountResourceUsage(
+    expectedEmail: string,
+  ): Promise<ResourceUsageView | undefined> {
+    const revision = this.stateRevision;
+    const account = await this.readAccount();
+    if (
+      revision !== this.stateRevision ||
+      account.account?.type !== 'chatgpt' ||
+      !account.account.email ||
+      account.account.email.toLowerCase() !== expectedEmail.toLowerCase()
+    )
+      return undefined;
+    const limits = await this.readRateLimits();
+    return revision === this.stateRevision
+      ? codexResourceUsage(account.account, limits)
+      : undefined;
+  }
+
   private async readRateLimits(): Promise<CodexRateLimitsView | undefined> {
     try {
       return parseCodexRateLimits(await this.appServer.request('account/rateLimits/read'));

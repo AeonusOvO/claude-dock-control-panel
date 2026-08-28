@@ -16,6 +16,7 @@ import { registerDownloadIpc } from './download';
 import { registerManagedChatGptIpc } from './managed-chatgpt';
 import { registerSubscriptionIpc } from './subscription';
 import { registerMcpIpc } from './mcp';
+import { registerModelUsageIpc } from './model-usage';
 import { registerNetworkIpc } from './network';
 import { registerOnboardingIpc } from './onboarding';
 import { registerProjectIpc } from './project';
@@ -27,6 +28,7 @@ import { registerSoftwareIpc } from './software';
 import { registerTerminalIpc } from './terminal';
 
 export const MAIN_IPC_CONTRIBUTIONS = [
+  registerModelUsageIpc,
   registerConversationAttachmentIpc,
   registerConversationIpc,
   registerBusyIpc,

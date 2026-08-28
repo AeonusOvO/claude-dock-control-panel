@@ -206,6 +206,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     subscribe: vi.fn(() => vi.fn()),
   };
   const claudeRuntime = {
+    setModelUsageObserver: vi.fn(),
     ownsLaunch: vi.fn(() => false),
     recoverInterruptedRouterInstall: vi.fn(async () => undefined),
     releaseNativeConversation: vi.fn(),

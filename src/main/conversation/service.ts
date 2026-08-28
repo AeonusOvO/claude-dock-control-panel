@@ -52,6 +52,7 @@ export interface NativeConversationServiceOptions {
   /** Main-owned shutdown fence, checked at every adapter or terminal launch boundary. */
   assertLaunchAdmissionAllowed?: () => void;
   onSnapshot: (snapshot: ConversationSnapshot) => void;
+  onUsageReported?: (conversationId: string, projectPath: string) => void;
   onSubmissionConfirmed?: (conversationId: string, attachmentIds: string[]) => void | Promise<void>;
   ownerRegistry: ConversationOwnerRegistry;
   recoveryStore: ConversationRecoveryStore;
@@ -762,6 +763,9 @@ export class NativeConversationService {
     const nextSnapshot = reduceConversationEvent(previousSnapshot, event);
     if (nextSnapshot === previousSnapshot) return;
     current.snapshot = nextSnapshot;
+    if (event.type === 'usage.updated') {
+      this.options.onUsageReported?.(event.conversationId, current.owner.projectPath);
+    }
     if (
       event.type === 'conversation.phase' &&
       (event.phase === 'running' || event.phase === 'requires-action') &&

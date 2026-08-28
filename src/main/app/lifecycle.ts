@@ -16,6 +16,8 @@ import {
   CODEX_RUNTIME,
   DOWNLOAD_ENGINE,
   MAIN_WINDOW,
+  MODEL_USAGE_SERVICE,
+  MODEL_USAGE_WINDOW,
   MANAGED_CHATGPT_GATEWAY,
   SUBSCRIPTION_SERVICE,
   NATIVE_CONVERSATION_SERVICE,
@@ -135,6 +137,8 @@ const shutdownRuntimeForControlledQuit = ({
   if (state.runtimeShutdownForQuitDone) return;
   state.runtimeShutdownForQuitDone = true;
   const failures = runQuitContributions([
+    () => services.resolve(MODEL_USAGE_WINDOW).dispose(),
+    () => services.resolve(MODEL_USAGE_SERVICE).dispose(),
     () => services.resolve(CLAUDE_PERMISSION_BRIDGE).shutdown(),
     () => chatService.shutdown(),
     () => services.resolve(CLAUDE_RUNTIME).shutdown(),

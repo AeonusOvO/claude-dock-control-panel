@@ -108,7 +108,7 @@ export const routerBlockingDetail = (
     return undefined;
   }
   if (router.providers.length === 0) {
-    return '当前项目指向路由器的 3456 接口，但 CCR 没有任何服务提供方或模型。请先在“接入”页添加服务提供方。';
+    return '当前项目指向路由器的 3456 接口，但 CCR 没有任何服务提供方或模型。请先在“模型”页添加服务提供方。';
   }
   if (router.gatewayState !== 'running') {
     return `当前项目指向路由器的 3456 接口，但模型网关未就绪：${router.message}`;
