@@ -11,7 +11,7 @@ import type {
   ClaudeLaunchPresentationPhase,
   ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
-import type { TerminalProgressHandle } from '../terminal/state';
+import type { TerminalProgressHandle } from '../../platform/terminal-progress';
 
 export interface RenameDialogCopy {
   description: string;

@@ -4,12 +4,8 @@ import { createTerminalIoGenerationActions } from './terminal-io-generation';
 import { createTerminalIoMaskActions } from './terminal-io-mask';
 import { createTerminalIoMenuActions } from './terminal-io-menu';
 import { createTerminalIoRelaunchActions } from './terminal-io-relaunch';
-import type {
-  TerminalContextMenuTarget,
-  TerminalProgressHandle,
-  TerminalState,
-  TerminalView,
-} from './state';
+import type { TerminalProgressHandle } from '../../platform/terminal-progress';
+import type { TerminalContextMenuTarget, TerminalState, TerminalView } from './state';
 
 export type { TerminalIoDependencies } from './terminal-io-dependencies';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';

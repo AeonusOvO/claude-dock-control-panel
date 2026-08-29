@@ -15,7 +15,8 @@ import { createTerminalElements } from './elements';
 import { createTerminalIo, type TerminalIoDependencies } from './terminal-io';
 import { createTerminalLayout, type TerminalLayoutDependencies } from './terminal-layout';
 import { createTerminalViews, type TerminalViewsDependencies } from './terminal-views';
-import { createTerminalState, type TerminalProgressHandle, type TerminalView } from './state';
+import { createTerminalState, type TerminalView } from './state';
+import type { TerminalProgressHandle } from '../../platform/terminal-progress';
 
 export type TerminalFeatureDependencies = Omit<
   TerminalIoDependencies,

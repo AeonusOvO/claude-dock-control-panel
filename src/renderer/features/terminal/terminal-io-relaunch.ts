@@ -1,6 +1,6 @@
 import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-attempt';
 import type { ClaudeRelaunchInput } from '../../../shared/contracts';
-import type { TerminalProgressHandle } from './state';
+import type { TerminalProgressHandle } from '../../platform/terminal-progress';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
 
 export interface TerminalIoRelaunchActions {

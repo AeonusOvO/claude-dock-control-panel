@@ -1,6 +1,7 @@
 import type { TerminalElements } from './elements';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
-import type { TerminalMaskState, TerminalProgressHandle, TerminalState } from './state';
+import type { TerminalProgressHandle } from '../../platform/terminal-progress';
+import type { TerminalMaskState, TerminalState } from './state';
 
 export interface TerminalIoMaskActions {
   beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle;
