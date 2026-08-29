@@ -59,6 +59,8 @@ const run = async () => {
   const originalAuth = await readFile(authFile);
   let mode = 'success';
   let requests = 0;
+  let publishQuotaInvalidated;
+  let publishQuotaReadable;
   let stalledConnectionClosed = false;
   let fixtureFailure;
   const server = createServer((request, response) => {
@@ -136,20 +138,40 @@ const run = async () => {
     projectsRoot: path.join(userData, 'projects'),
     onChanged() {},
     readChatGptQuota: (signal, model) => reader.read(model, signal),
+    subscribeChatGptQuotaInvalidated: (listener) => {
+      publishQuotaInvalidated = listener;
+      return () => {
+        if (publishQuotaInvalidated === listener) publishQuotaInvalidated = undefined;
+      };
+    },
+    subscribeChatGptQuotaReadable: (listener) => {
+      publishQuotaReadable = listener;
+      return () => {
+        if (publishQuotaReadable === listener) publishQuotaReadable = undefined;
+      };
+    },
   });
   const delay = monitorEventLoopDelay({ resolution: 10 });
   delay.enable();
   try {
+    mode = 'slow';
     usage.select({
       id: 'owned-account',
       mode: 'subscription',
       preset: 'chatgpt-subscription',
       model: 'gpt-5.3-codex',
     });
+    await until(() => requests === 1);
+    assert.equal(typeof publishQuotaInvalidated, 'function');
+    assert.equal(typeof publishQuotaReadable, 'function');
+    reader.invalidate();
+    publishQuotaInvalidated();
+    mode = 'success';
+    publishQuotaReadable();
     await until(() => usage.getSnapshot().status === 'available');
     assert.equal(usage.getSnapshot().windows[0].remainingPercent, 92);
     assert.equal(usage.getSnapshot().windows[0].label, '7 天');
-    assert.equal(requests, 1);
+    assert.equal(requests, 2);
     assert.doesNotMatch(
       JSON.stringify(usage.getSnapshot()),
       /smoke-access|smoke-refresh|smoke-id|accountKey/,
@@ -162,7 +184,7 @@ const run = async () => {
     assert.match((await reader.read('gpt-5.3-codex')).detail, /查询超时/);
     await until(() => stalledConnectionClosed, 3000);
     assert.equal(fixtureFailure, undefined);
-    assert.equal(requests, 4);
+    assert.equal(requests, 5);
     assert.deepEqual(await readFile(authFile), originalAuth);
     delay.disable();
     const maxMainDelayMs = delay.max / 1e6;

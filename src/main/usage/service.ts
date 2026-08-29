@@ -23,6 +23,8 @@ export interface ModelUsageServiceOptions {
   projectsRoot: string;
   onChanged: (snapshot: ModelUsageSnapshot) => void;
   readChatGptQuota: (signal: AbortSignal, model: string) => Promise<ModelQuotaResult | undefined>;
+  subscribeChatGptQuotaReadable?: (listener: () => void) => () => void;
+  subscribeChatGptQuotaInvalidated?: (listener: (accountChanging: boolean) => void) => () => void;
   themeId?: TerminalThemeId;
 }
 
@@ -57,6 +59,21 @@ export class ModelUsageService {
   private quotaRun?: AbortController;
   private quotaAccountKey?: string;
   private lastQuotaStartedAt?: number;
+  private quotaReadableRevision = 0;
+  private quotaInvalidationRevision = 0;
+  private quotaAccountChangingRevision = 0;
+  private quotaGatewayBusy = false;
+  private quotaSelectionRevision = 0;
+  private quotaRetry?: {
+    epoch: string;
+    selectionRevision: number;
+    startedRevision: number;
+    accountChanging: boolean;
+  };
+  private quotaRefreshPending = false;
+  private quotaRefreshForced = false;
+  private unsubscribeQuotaReadable?: () => void;
+  private unsubscribeQuotaInvalidated?: () => void;
   private writes = Promise.resolve();
   private closed = false;
 
@@ -86,8 +103,26 @@ export class ModelUsageService {
     this.transcripts = new TranscriptUsageClient(options.projectsRoot, (reply) =>
       this.consumeTranscriptReply(reply),
     );
+    if (options.subscribeChatGptQuotaReadable) {
+      try {
+        this.unsubscribeQuotaReadable = options.subscribeChatGptQuotaReadable(() =>
+          this.handleQuotaReadable(),
+        );
+      } catch {
+        // An optional quota observer must never prevent the usage service from starting.
+      }
+    }
+    if (options.subscribeChatGptQuotaInvalidated) {
+      try {
+        this.unsubscribeQuotaInvalidated = options.subscribeChatGptQuotaInvalidated(
+          (accountChanging) => this.handleQuotaInvalidated(accountChanging),
+        );
+      } catch {
+        // An optional quota observer must never prevent the usage service from starting.
+      }
+    }
     this.quotaTimer = setInterval(() => {
-      void this.refreshQuota();
+      this.requestQuotaRefresh();
     }, 60_000);
     this.quotaTimer.unref();
   }
@@ -111,10 +146,22 @@ export class ModelUsageService {
       this.persist();
     }
     if (changed || reset) {
+      this.quotaSelectionRevision += 1;
       this.quotaRun?.abort();
       this.quotaRun = undefined;
       this.quotaAccountKey = undefined;
       this.lastQuotaStartedAt = undefined;
+      this.quotaRetry =
+        connection?.preset === 'chatgpt-subscription' && this.quotaGatewayBusy
+          ? {
+              epoch: this.journal.epoch,
+              selectionRevision: this.quotaSelectionRevision,
+              startedRevision: this.quotaReadableRevision,
+              accountChanging: false,
+            }
+          : undefined;
+      this.quotaRefreshPending = false;
+      this.quotaRefreshForced = false;
       this.windows = undefined;
       this.updatedAt = undefined;
       this.partial = false;
@@ -130,7 +177,7 @@ export class ModelUsageService {
             : '当前平台尚未提供可读取的额度';
     }
     this.publish();
-    if (changed || reset) void this.refreshQuota();
+    if (changed || reset) this.requestQuotaRefresh();
   }
 
   public getSnapshot(): ModelUsageSnapshot {
@@ -243,15 +290,17 @@ export class ModelUsageService {
     this.publish();
   }
 
-  private applyQuota(resource: ModelQuotaResult | undefined): void {
+  private applyQuota(resource: ModelQuotaResult | undefined, preservePrevious = false): void {
     if (
-      resource?.clearPrevious ||
-      (resource?.accountKey && resource.accountKey !== this.quotaAccountKey)
+      !preservePrevious &&
+      (resource?.clearPrevious ||
+        (resource?.accountKey && resource.accountKey !== this.quotaAccountKey))
     ) {
       this.windows = undefined;
       this.updatedAt = undefined;
     }
-    if (resource?.accountKey || resource?.clearPrevious) this.quotaAccountKey = resource.accountKey;
+    if (!preservePrevious && (resource?.accountKey || resource?.clearPrevious))
+      this.quotaAccountKey = resource.accountKey;
     const windows = resource?.windows?.filter(
       (window) => typeof window.usedPercent === 'number' && Number.isFinite(window.usedPercent),
     );
@@ -276,42 +325,225 @@ export class ModelUsageService {
     this.publish();
   }
 
-  private async refreshQuota(): Promise<void> {
-    if (this.closed || this.quotaRun || this.connection?.preset !== 'chatgpt-subscription') {
-      if (
-        this.windows &&
-        this.updatedAt &&
-        Date.now() - this.updatedAt > 5 * 60_000 &&
-        this.status !== 'stale'
-      ) {
-        this.status = 'stale';
-        this.detail = '额度暂未更新，显示上次结果';
-        this.publish();
-      }
+  private handleQuotaReadable(): void {
+    if (this.closed) return;
+    this.quotaGatewayBusy = false;
+    this.quotaReadableRevision += 1;
+    const retry = this.quotaRetry;
+    if (
+      !retry ||
+      retry.epoch !== this.journal.epoch ||
+      retry.selectionRevision !== this.quotaSelectionRevision ||
+      retry.startedRevision >= this.quotaReadableRevision
+    )
+      return;
+    this.quotaRetry = undefined;
+    this.requestQuotaRefresh(true);
+  }
+
+  private handleQuotaInvalidated(accountChanging = false): void {
+    if (this.closed) return;
+    this.quotaGatewayBusy = true;
+    this.quotaInvalidationRevision += 1;
+    if (accountChanging) this.quotaAccountChangingRevision += 1;
+    if (this.connection?.preset !== 'chatgpt-subscription') return;
+    if (this.quotaRun || accountChanging) {
+      const retry = this.quotaRetry;
+      this.quotaRetry = {
+        epoch: this.journal.epoch,
+        selectionRevision: this.quotaSelectionRevision,
+        startedRevision: retry?.startedRevision ?? this.quotaReadableRevision,
+        accountChanging: Boolean(retry?.accountChanging || accountChanging),
+      };
+    }
+    if (this.windows?.length) {
+      this.status = 'stale';
+      this.detail = accountChanging
+        ? 'ChatGPT 账户或授权正在更新；显示上次结果'
+        : 'ChatGPT 网关正在更新；显示上次结果';
+      this.publish();
+    }
+  }
+
+  private deferQuotaRefreshUntilReadable(
+    epoch: string,
+    selectionRevision: number,
+    startedRevision: number,
+    accountChanging = false,
+    resource?: ModelQuotaResult,
+  ): void {
+    const retry = this.quotaRetry;
+    this.quotaRetry = {
+      epoch,
+      selectionRevision,
+      startedRevision,
+      accountChanging: Boolean(retry?.accountChanging || accountChanging),
+    };
+    if (resource) this.applyQuota(resource);
+    if (this.quotaReadableRevision > startedRevision) {
+      this.quotaRetry = undefined;
+      this.requestQuotaRefresh(true);
+    }
+  }
+
+  private requestQuotaRefresh(force = false): void {
+    if (this.closed) return;
+    this.quotaRefreshPending = true;
+    this.quotaRefreshForced ||= force;
+    void this.drainQuotaRefresh();
+  }
+
+  private async drainQuotaRefresh(): Promise<void> {
+    if (this.closed || !this.quotaRefreshPending) return;
+    if (this.quotaRun) {
+      this.markQuotaStaleIfNeeded();
       return;
     }
-    if (this.lastQuotaStartedAt !== undefined && Date.now() - this.lastQuotaStartedAt < 60_000)
+    const force = this.quotaRefreshForced;
+    this.quotaRefreshPending = false;
+    this.quotaRefreshForced = false;
+    await this.refreshQuota(force);
+    if (!this.closed && this.quotaRefreshPending && !this.quotaRun && !this.quotaRetry)
+      void this.drainQuotaRefresh();
+  }
+
+  private markQuotaStaleIfNeeded(): void {
+    if (
+      this.windows &&
+      this.updatedAt &&
+      Date.now() - this.updatedAt > 5 * 60_000 &&
+      this.status !== 'stale'
+    ) {
+      this.status = 'stale';
+      this.detail = '额度暂未更新，显示上次结果';
+      this.publish();
+    }
+  }
+
+  private async refreshQuota(force = false): Promise<void> {
+    if (this.closed || this.connection?.preset !== 'chatgpt-subscription') {
+      this.markQuotaStaleIfNeeded();
+      return;
+    }
+    if (this.quotaRun) return;
+    if (this.quotaRetry && !force) {
+      this.markQuotaStaleIfNeeded();
+      return;
+    }
+    if (this.quotaGatewayBusy) {
+      if (force) {
+        this.quotaRetry ??= {
+          epoch: this.journal.epoch,
+          selectionRevision: this.quotaSelectionRevision,
+          startedRevision: this.quotaReadableRevision,
+          accountChanging: false,
+        };
+      }
+      this.markQuotaStaleIfNeeded();
+      return;
+    }
+    if (
+      this.lastQuotaStartedAt !== undefined &&
+      !force &&
+      Date.now() - this.lastQuotaStartedAt < 60_000
+    )
       return;
     const epoch = this.journal.epoch;
+    const selectionRevision = this.quotaSelectionRevision;
+    const startedRevision = this.quotaReadableRevision;
+    const startedInvalidationRevision = this.quotaInvalidationRevision;
+    const startedAccountChangingRevision = this.quotaAccountChangingRevision;
+    const startedGatewayBusy = this.quotaGatewayBusy;
+    const startedAccountChanging = this.quotaRetry?.accountChanging === true;
+    const model = this.connection.model;
     const run = new AbortController();
     this.quotaRun = run;
     this.lastQuotaStartedAt = Date.now();
+    let resource: ModelQuotaResult | undefined;
     try {
-      const resource = await this.options.readChatGptQuota(run.signal, this.connection.model);
-      if (!this.closed && !run.signal.aborted && epoch === this.journal.epoch)
-        this.applyQuota(resource);
+      resource = await this.options.readChatGptQuota(run.signal, model);
     } catch {
-      if (!this.closed && !run.signal.aborted && epoch === this.journal.epoch)
-        this.applyQuota(undefined);
+      if (
+        !this.closed &&
+        !run.signal.aborted &&
+        epoch === this.journal.epoch &&
+        selectionRevision === this.quotaSelectionRevision
+      ) {
+        if (this.quotaInvalidationRevision > startedInvalidationRevision) {
+          const accountChanging =
+            startedAccountChanging ||
+            this.quotaAccountChangingRevision > startedAccountChangingRevision ||
+            this.quotaRetry?.accountChanging === true;
+          this.deferQuotaRefreshUntilReadable(
+            epoch,
+            selectionRevision,
+            startedRevision,
+            accountChanging,
+          );
+          this.applyQuota(undefined);
+        } else {
+          const forcedRefreshPending = this.quotaRefreshForced;
+          this.quotaRetry = undefined;
+          if (!forcedRefreshPending) {
+            this.quotaRefreshPending = false;
+            this.quotaRefreshForced = false;
+          }
+          this.applyQuota(undefined);
+        }
+      }
+      return;
     } finally {
       if (this.quotaRun === run) this.quotaRun = undefined;
     }
+    if (
+      this.closed ||
+      run.signal.aborted ||
+      epoch !== this.journal.epoch ||
+      selectionRevision !== this.quotaSelectionRevision
+    )
+      return;
+
+    const accountChanging =
+      startedAccountChanging ||
+      this.quotaAccountChangingRevision > startedAccountChangingRevision ||
+      this.quotaRetry?.accountChanging === true;
+    if (this.quotaInvalidationRevision > startedInvalidationRevision) {
+      this.deferQuotaRefreshUntilReadable(
+        epoch,
+        selectionRevision,
+        startedRevision,
+        accountChanging,
+        accountChanging && resource?.retryWhenGatewayStable ? resource : undefined,
+      );
+      return;
+    }
+
+    if (resource?.retryWhenGatewayStable && startedGatewayBusy) {
+      if (!this.quotaRetry) return;
+      this.deferQuotaRefreshUntilReadable(
+        epoch,
+        selectionRevision,
+        startedRevision,
+        accountChanging,
+        accountChanging && resource?.retryWhenGatewayStable ? resource : undefined,
+      );
+      return;
+    }
+
+    this.quotaRetry = undefined;
+    this.quotaRefreshPending = false;
+    this.quotaRefreshForced = false;
+    this.applyQuota(resource);
   }
 
   private publish(): void {
     if (!this.closed) {
       this.revision += 1;
-      this.options.onChanged(this.getSnapshot());
+      try {
+        this.options.onChanged(this.getSnapshot());
+      } catch {
+        // A renderer can disappear between its liveness check and the IPC send.
+      }
     }
   }
   private persist(): void {
@@ -336,6 +568,13 @@ export class ModelUsageService {
   }
   public dispose(): void {
     this.closed = true;
+    this.unsubscribeQuotaReadable?.();
+    this.unsubscribeQuotaReadable = undefined;
+    this.unsubscribeQuotaInvalidated?.();
+    this.unsubscribeQuotaInvalidated = undefined;
+    this.quotaRetry = undefined;
+    this.quotaRefreshPending = false;
+    this.quotaRefreshForced = false;
     this.quotaRun?.abort();
     clearInterval(this.quotaTimer);
     if (this.persistTimer) clearTimeout(this.persistTimer);

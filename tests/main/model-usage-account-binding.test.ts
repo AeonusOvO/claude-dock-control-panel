@@ -35,6 +35,8 @@ describe('subscription quota account binding', () => {
         checkedAt: Date.now(),
         windows: [{ label: '5 小时', usedPercent: 37 }],
       }));
+      let publishQuotaInvalidated: ((kind: 'lifecycle' | 'account') => void) | undefined;
+      let publishQuotaReadable: (() => void) | undefined;
       services.register(CLAUDE_RUNTIME, () => ({ setModelUsageObserver: vi.fn() }) as never);
       services.register(CODEX_RUNTIME, codex);
       services.register(MAIN_WINDOW, () => ({ current: undefined }) as never);
@@ -43,6 +45,18 @@ describe('subscription quota account binding', () => {
         () =>
           ({
             getUsageAccountIdentity: async () => 'managed@example.com',
+            onQuotaInvalidated: (listener: (kind: 'lifecycle' | 'account') => void) => {
+              publishQuotaInvalidated = listener;
+              return () => {
+                if (publishQuotaInvalidated === listener) publishQuotaInvalidated = undefined;
+              };
+            },
+            onQuotaReadable: (listener: () => void) => {
+              publishQuotaReadable = listener;
+              return () => {
+                if (publishQuotaReadable === listener) publishQuotaReadable = undefined;
+              };
+            },
             readAccountResourceUsage,
           }) as never,
       );
@@ -67,6 +81,16 @@ describe('subscription quota account binding', () => {
             expect(usage.getSnapshot().windows?.[0]?.remainingPercent).toBe(63);
           });
           expect(readAccountResourceUsage).toHaveBeenCalledOnce();
+          if (!publishQuotaInvalidated || !publishQuotaReadable)
+            throw new Error('Model usage did not subscribe to gateway quota lifecycle events');
+          publishQuotaInvalidated('account');
+          expect(usage.getSnapshot()).toMatchObject({
+            status: 'stale',
+            windows: [{ remainingPercent: 63 }],
+          });
+          publishQuotaReadable();
+          await vi.waitFor(() => expect(readAccountResourceUsage).toHaveBeenCalledTimes(2));
+          await vi.waitFor(() => expect(usage.getSnapshot().status).toBe('available'));
         } else {
           await Promise.resolve();
           expect(usage.getSnapshot().status).toBe('unavailable');

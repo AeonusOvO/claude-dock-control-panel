@@ -13,6 +13,7 @@ import {
 import {
   ManagedChatGptGateway,
   ManagedGatewayStartupLog,
+  type ManagedGatewayQuotaInvalidation,
 } from '../../src/main/claude/managed-chatgpt-gateway';
 import { recommendedChatModel } from '../../src/shared/claude/managed-chatgpt-models';
 import {
@@ -126,6 +127,14 @@ const testAuthentication = (): ManagedGatewayAuthenticationInspection => ({
 
 interface ManagedGatewayInternals {
   activateConfiguration: (pendingConfigPath: string) => Promise<TestConfigTransaction>;
+  enqueueLifecycle: <T>(
+    operation: (signal: AbortSignal) => Promise<T>,
+    kind?: ManagedGatewayQuotaInvalidation,
+    onController?: (controller: AbortController) => void,
+  ) => Promise<T>;
+  setupCancellable: boolean;
+  setupInFlight?: Promise<unknown>;
+  setupLifecycleController?: AbortController;
   configFiles: {
     commit: (transaction: TestConfigTransaction) => void;
   };
@@ -134,6 +143,7 @@ interface ManagedGatewayInternals {
     transaction: TestConfigTransaction,
     state: TestGatewayState,
     snapshot: TestEnvironmentSnapshot,
+    signal?: AbortSignal,
   ) => Promise<void>;
   configurationLaunchIdentity: (state: TestGatewayState) => string;
   decryptClientKey: (state: TestGatewayState) => string | undefined;
@@ -181,6 +191,8 @@ interface ManagedGatewayInternals {
   ) => Promise<TestGatewayState>;
   startWithStableEnvironment: (
     prepared: TestPreparedGatewayConfiguration,
+    beforeStart?: (configPath: string, snapshot: TestEnvironmentSnapshot) => Promise<unknown>,
+    signal?: AbortSignal,
   ) => Promise<TestGatewayState>;
   stopProcessesForState: (state: TestGatewayState, occupiedPortMessage: string) => Promise<void>;
 }
@@ -907,6 +919,143 @@ describe('managed ChatGPT gateway', () => {
     }
   });
 
+  it('publishes one quota-readable signal only after the last queued lifecycle settles', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-readable-'));
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    let firstStarted!: () => void;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstStartedPromise = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondDone = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let secondStarted!: () => void;
+    const secondStartedPromise = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    const readable = vi.fn();
+    manager.onQuotaReadable(readable);
+    const first = internals.enqueueLifecycle(async () => {
+      firstStarted();
+      await firstDone;
+      return 'first';
+    });
+    const second = internals.enqueueLifecycle(async () => {
+      secondStarted();
+      await secondDone;
+      return 'second';
+    });
+
+    try {
+      await firstStartedPromise;
+      expect(readable).not.toHaveBeenCalled();
+      releaseFirst();
+      await secondStartedPromise;
+      expect(readable).not.toHaveBeenCalled();
+      releaseSecond();
+      await expect(Promise.all([first, second])).resolves.toEqual(['first', 'second']);
+      expect(readable).toHaveBeenCalledOnce();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('publishes quota invalidation before lifecycle work and isolates observer errors', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-invalidate-'));
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    const invalidated = vi.fn(() => {
+      throw new Error('observer failure');
+    });
+    const readable = vi.fn();
+    manager.onQuotaInvalidated(invalidated);
+    manager.onQuotaReadable(readable);
+
+    try {
+      await expect(
+        internals.enqueueLifecycle(async () => {
+          expect(invalidated).toHaveBeenCalledOnce();
+          return undefined;
+        }),
+      ).resolves.toBeUndefined();
+      expect(invalidated).toHaveBeenCalledOnce();
+      expect(readable).toHaveBeenCalledOnce();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('does not publish a quota-readable signal after gateway shutdown', async () => {
+    const userDataPath = mkdtempSync(
+      path.join(tmpdir(), 'claudedock-managed-gateway-readable-stop-'),
+    );
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    let started!: () => void;
+    let release!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const readable = vi.fn();
+    manager.onQuotaReadable(readable);
+    const lifecycle = internals.enqueueLifecycle(async () => {
+      started();
+      await done;
+    });
+
+    try {
+      await startedPromise;
+      manager.shutdown();
+      release();
+      await expect(lifecycle).resolves.toBeUndefined();
+      expect(readable).not.toHaveBeenCalled();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
   it('uses an opaque in-memory route identity and rotates it when proxy credentials change', () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-signature-'));
     let proxyUrl = 'http://user:password-one@127.0.0.1:7890';
@@ -1060,6 +1209,7 @@ describe('managed ChatGPT gateway', () => {
         transaction,
         expect.objectContaining({ authorization: testAuthentication().manifest }),
         expect.any(Object),
+        undefined,
       );
       expect(ownedProcessId).toHaveBeenCalledWith(
         expect.objectContaining({ authorization: testAuthentication().manifest }),
@@ -1068,6 +1218,71 @@ describe('managed ChatGPT gateway', () => {
         commit.mock.invocationCallOrder[0]!,
       );
       expect(rollback).not.toHaveBeenCalled();
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('does not commit when cancelled during final process ownership verification', async () => {
+    const userDataPath = mkdtempSync(
+      path.join(tmpdir(), 'claudedock-managed-gateway-cancel-commit-'),
+    );
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => true),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    const state: TestGatewayState = {
+      encryptedClientKey: 'encrypted-client-key',
+      executableRelativePath: path.join('versions', '7.2.117', 'cli-proxy-api.exe'),
+      executableSha256: 'a'.repeat(64),
+      installedVersion: '7.2.117',
+      port: 8317,
+      releaseDigest: 'b'.repeat(64),
+      version: 1,
+    };
+    const prepared: TestPreparedGatewayConfiguration = {
+      config: 'config',
+      configSignature: 'config-signature',
+      state,
+    };
+    const transaction: TestConfigTransaction = { committed: false };
+    const controller = new AbortController();
+    vi.spyOn(internals, 'stageConfiguration').mockResolvedValue(
+      path.join(userDataPath, 'config-0123456789abcdef01234567.pending.yaml'),
+    );
+    vi.spyOn(internals, 'activateConfiguration').mockResolvedValue(transaction);
+    vi.spyOn(internals, 'inspectAuthentication').mockResolvedValue(testAuthentication());
+    vi.spyOn(internals, 'start').mockResolvedValue({
+      ...state,
+      process: testProcess(42, 'starting'),
+    });
+    vi.spyOn(internals, 'ownedProcessId').mockImplementation(async () => {
+      controller.abort();
+      return 42;
+    });
+    const persistState = vi.spyOn(internals, 'persistState').mockImplementation(() => {});
+    const configCommit = vi.spyOn(internals.configFiles, 'commit');
+    const stop = vi.spyOn(internals, 'stopProcessesForState').mockImplementation(async () => {});
+    const rollback = vi.spyOn(internals, 'rollbackConfiguration').mockImplementation(() => {});
+    vi.spyOn(internals, 'removeStagedConfig').mockImplementation(() => {});
+
+    try {
+      await expect(
+        internals.startWithStableEnvironment(prepared, undefined, controller.signal),
+      ).rejects.toThrow('操作已取消');
+      expect(persistState).not.toHaveBeenCalled();
+      expect(configCommit).not.toHaveBeenCalled();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(rollback).toHaveBeenCalledWith(transaction);
     } finally {
       manager.shutdown();
       rmSync(userDataPath, { force: true, recursive: true });
@@ -1312,6 +1527,63 @@ describe('managed ChatGPT gateway', () => {
       await expect(internals.startWithStableEnvironment(prepared)).rejects.toThrow('not ready');
       expect(commit).not.toHaveBeenCalled();
       expect(rollback).toHaveBeenCalledWith(transaction);
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('cancels only setup while preserving a queued account lifecycle', async () => {
+    const userDataPath = mkdtempSync(
+      path.join(tmpdir(), 'claudedock-managed-gateway-cancel-setup-'),
+    );
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const internals = manager as unknown as ManagedGatewayInternals;
+    let setupStarted!: () => void;
+    let releaseSetup!: () => void;
+    const setupStartedPromise = new Promise<void>((resolve) => {
+      setupStarted = resolve;
+    });
+    const setupGate = new Promise<void>((resolve) => {
+      releaseSetup = resolve;
+    });
+    const setup = internals.enqueueLifecycle(
+      async (signal) => {
+        setupStarted();
+        await setupGate;
+        signal.throwIfAborted();
+      },
+      'account',
+      (controller) => {
+        internals.setupLifecycleController = controller;
+      },
+    );
+    internals.setupInFlight = setup;
+    internals.setupCancellable = true;
+    let logoutRan = false;
+    const logout = internals.enqueueLifecycle(async () => {
+      logoutRan = true;
+    }, 'account');
+
+    try {
+      await setupStartedPromise;
+      const cancellation = manager.cancelSetup();
+      await vi.waitFor(() => expect(internals.setupLifecycleController?.signal.aborted).toBe(true));
+      releaseSetup();
+      await expect(cancellation).resolves.toBe(true);
+      await expect(setup).rejects.toThrow();
+      await expect(logout).resolves.toBeUndefined();
+      expect(logoutRan).toBe(true);
     } finally {
       manager.shutdown();
       rmSync(userDataPath, { force: true, recursive: true });

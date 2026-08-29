@@ -22,25 +22,29 @@ export const installModelUsage = (
     () =>
       new ModelUsageWindow((visible) => services.resolve(MODEL_USAGE_SERVICE).setFloating(visible)),
   );
-  services.register(
-    MODEL_USAGE_SERVICE,
-    () =>
-      new ModelUsageService({
-        projectsRoot: profile.paths.projects,
-        userDataPath: profile.paths.userData,
-        themeId,
-        onChanged: (snapshot) => {
-          const main = services.resolve(MAIN_WINDOW).current;
-          if (main && !main.isDestroyed())
-            main.webContents.send(CHANNELS.MODEL_USAGE_CHANGED, snapshot);
-          services.resolve(MODEL_USAGE_WINDOW).publish(snapshot);
-        },
-        readChatGptQuota: async (signal, model) => {
-          if (!profile.effects.allowRealRuntimes) return undefined;
-          return services.resolve(MANAGED_CHATGPT_GATEWAY).readAccountResourceUsage(model, signal);
-        },
-      }),
-  );
+  services.register(MODEL_USAGE_SERVICE, () => {
+    const gateway = profile.effects.allowRealRuntimes
+      ? services.resolve(MANAGED_CHATGPT_GATEWAY)
+      : undefined;
+    return new ModelUsageService({
+      projectsRoot: profile.paths.projects,
+      userDataPath: profile.paths.userData,
+      themeId,
+      onChanged: (snapshot) => {
+        const main = services.resolve(MAIN_WINDOW).current;
+        if (main && !main.isDestroyed())
+          main.webContents.send(CHANNELS.MODEL_USAGE_CHANGED, snapshot);
+        services.resolve(MODEL_USAGE_WINDOW).publish(snapshot);
+      },
+      readChatGptQuota: async (signal, model) => gateway?.readAccountResourceUsage(model, signal),
+      subscribeChatGptQuotaInvalidated: gateway
+        ? (listener) => gateway.onQuotaInvalidated((kind) => listener(kind === 'account'))
+        : undefined,
+      subscribeChatGptQuotaReadable: gateway
+        ? (listener) => gateway.onQuotaReadable(listener)
+        : undefined,
+    });
+  });
   const usage = services.resolve(MODEL_USAGE_SERVICE);
   services.resolve(CLAUDE_RUNTIME).setModelUsageObserver({
     capture: (connection) => usage.capture(connection),

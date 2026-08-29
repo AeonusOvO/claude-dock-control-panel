@@ -57,6 +57,9 @@ export const unavailableManagedQuota = (
   capabilities: { balance: false, context: false, windows: true },
   checkedAt: Date.now(),
   detail: DETAILS[reason],
+  ...(reason === 'account-changing' || reason === 'unauthorized'
+    ? { retryWhenGatewayStable: true }
+    : {}),
   source: 'managed-chatgpt-gateway',
 });
 

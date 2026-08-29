@@ -132,6 +132,8 @@ export type { ManagedChatGptSetupReporter } from './managed-chatgpt-gateway-type
 
 export type { ManagedChatGptGatewayManagementAccess } from './managed-chatgpt-gateway-types';
 
+export type ManagedGatewayQuotaInvalidation = 'lifecycle' | 'account';
+
 export { ManagedGatewayStartupLog };
 
 export class ManagedChatGptGateway {
@@ -153,6 +155,11 @@ export class ManagedChatGptGateway {
   private environmentIdentity?: ManagedGatewayEnvironmentIdentity;
   private lifecycleTail: Promise<void> = Promise.resolve();
   private readonly lifecycleControllers = new Set<AbortController>();
+  private setupLifecycleController?: AbortController;
+  private readonly quotaInvalidatedListeners = new Set<
+    (kind: ManagedGatewayQuotaInvalidation) => void
+  >();
+  private readonly quotaReadableListeners = new Set<() => void>();
   private configurationIdentity?: ManagedGatewayConfigurationIdentity;
   private readonly modelReconciliation: ManagedGatewayModelReconciliation;
   private readonly ownedModelReader: ManagedGatewayOwnedModelReader;
@@ -300,6 +307,24 @@ export class ManagedChatGptGateway {
     return this.quotaReader.read(model, signal);
   }
 
+  /** Notifies background readers when a gateway lifecycle invalidates quota state. */
+  public onQuotaInvalidated(listener: (kind: ManagedGatewayQuotaInvalidation) => void): () => void {
+    if (this.shutdownRequested) return () => undefined;
+    this.quotaInvalidatedListeners.add(listener);
+    return () => {
+      this.quotaInvalidatedListeners.delete(listener);
+    };
+  }
+
+  /** Notifies background readers after all gateway lifecycle work has settled without starting it. */
+  public onQuotaReadable(listener: () => void): () => void {
+    if (this.shutdownRequested) return () => undefined;
+    this.quotaReadableListeners.add(listener);
+    return () => {
+      this.quotaReadableListeners.delete(listener);
+    };
+  }
+
   /** Reads only ClaudeDock's validated state file; it never starts or probes the gateway. */
   public getInstalledVersion(): string | undefined {
     return this.loadState()?.installedVersion;
@@ -312,8 +337,12 @@ export class ManagedChatGptGateway {
     if (this.setupInFlight) {
       return this.setupInFlight;
     }
-    const operation = this.enqueueLifecycle((signal) =>
-      this.setupInternal(forceLogin, report, signal),
+    const operation = this.enqueueLifecycle(
+      (signal) => this.setupInternal(forceLogin, report, signal),
+      'account',
+      (controller) => {
+        this.setupLifecycleController = controller;
+      },
     );
     this.setupInFlight = operation;
     const clear = (): void => {
@@ -329,7 +358,8 @@ export class ManagedChatGptGateway {
   public async cancelSetup(): Promise<boolean> {
     const operation = this.setupInFlight;
     if (!operation || !this.setupCancellable) return false;
-    this.cancelLifecycleOperations();
+    this.invalidateQuota('account');
+    this.setupLifecycleController?.abort();
     try {
       await operation;
     } catch {
@@ -527,12 +557,14 @@ export class ManagedChatGptGateway {
         this.persistState(loggedOutState);
       }
       this.modelReconciliation.clear();
-    });
+    }, 'account');
   }
 
   public shutdown(): void {
     if (this.shutdownCleanup) return;
     this.shutdownRequested = true;
+    this.quotaInvalidatedListeners.clear();
+    this.quotaReadableListeners.clear();
     this.cancelLifecycleOperations();
     this.processLifecycle.stop();
     const state = this.loadState();
@@ -551,21 +583,30 @@ export class ManagedChatGptGateway {
     return !state?.process && !this.processLifecycle.currentOwnership();
   }
 
-  private cancelLifecycleOperations(): void {
-    this.quotaReader.invalidate();
+  private cancelLifecycleOperations(kind: ManagedGatewayQuotaInvalidation = 'lifecycle'): void {
+    this.invalidateQuota(kind);
     for (const controller of this.lifecycleControllers) controller.abort();
   }
 
-  private enqueueLifecycle<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    this.quotaReader.invalidate();
+  private enqueueLifecycle<T>(
+    operation: (signal: AbortSignal) => Promise<T>,
+    kind: ManagedGatewayQuotaInvalidation = 'lifecycle',
+    onController?: (controller: AbortController) => void,
+  ): Promise<T> {
     const controller = new AbortController();
     this.lifecycleControllers.add(controller);
+    onController?.(controller);
+    this.invalidateQuota(kind);
     const current = this.lifecycleTail.then(async () => {
       this.assertActive(controller.signal);
       return operation(controller.signal);
     });
     const clear = (): void => {
       this.lifecycleControllers.delete(controller);
+      if (this.setupLifecycleController === controller) this.setupLifecycleController = undefined;
+      if (!this.shutdownRequested && this.lifecycleControllers.size === 0) {
+        this.publishQuotaReadable();
+      }
     };
     void current.then(clear, clear);
     this.lifecycleTail = current.then(
@@ -573,6 +614,27 @@ export class ManagedChatGptGateway {
       () => undefined,
     );
     return current;
+  }
+
+  private invalidateQuota(kind: ManagedGatewayQuotaInvalidation): void {
+    this.quotaReader.invalidate();
+    for (const listener of [...this.quotaInvalidatedListeners]) {
+      try {
+        listener(kind);
+      } catch {
+        // Optional quota observers must never alter gateway lifecycle outcomes.
+      }
+    }
+  }
+
+  private publishQuotaReadable(): void {
+    for (const listener of [...this.quotaReadableListeners]) {
+      try {
+        listener();
+      } catch {
+        // Optional quota observers must never alter gateway lifecycle outcomes.
+      }
+    }
   }
 
   private assertActive(signal?: AbortSignal): void {
@@ -664,7 +726,7 @@ export class ManagedChatGptGateway {
         if (!(await this.ownedProcessId(committedState))) {
           throw new Error('CLIProxyAPI 在就绪状态保存完成前已经退出。');
         }
-        await this.commitConfiguration(transaction, committedState, snapshot);
+        await this.commitConfiguration(transaction, committedState, snapshot, signal);
         return committedState;
       } catch (error) {
         const stoppingState = this.loadState() ?? prepared.state;
@@ -707,8 +769,9 @@ export class ManagedChatGptGateway {
     transaction: GatewayConfigTransaction,
     state: PersistedGatewayState,
     snapshot: ManagedGatewayEnvironmentSnapshot,
+    signal?: AbortSignal,
   ): Promise<void> {
-    this.assertEnvironmentCurrent(snapshot);
+    this.assertEnvironmentCurrent(snapshot, signal);
     const persisted = this.loadState();
     if (
       state.process?.phase === 'ready' &&

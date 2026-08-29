@@ -176,6 +176,8 @@ describe('current managed ChatGPT account quota', () => {
     );
     const quota = await reader.read('gpt-5.3-codex');
     expect(quota).toMatchObject({ availability: 'unavailable', clearPrevious: false });
+    if (status === 401) expect(quota.retryWhenGatewayStable).toBe(true);
+    else expect(quota).not.toHaveProperty('retryWhenGatewayStable');
     expect(quota.detail).toContain(message);
     expect(JSON.stringify(quota)).not.toContain('managed-access-secret');
   });
@@ -250,7 +252,11 @@ describe('current managed ChatGPT account quota', () => {
     const pending = reader.read('');
     await awaitFetch(fetcher);
     reader.invalidate();
-    expect(await pending).toMatchObject({ availability: 'unavailable', clearPrevious: true });
+    expect(await pending).toMatchObject({
+      availability: 'unavailable',
+      clearPrevious: true,
+      retryWhenGatewayStable: true,
+    });
     expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     const cancel = vi.fn();
     settle(new Response(new ReadableStream({ cancel })));
