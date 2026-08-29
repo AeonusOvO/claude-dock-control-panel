@@ -36,6 +36,7 @@ export const createConnectionFormProviderToolsActions = (
 
   const buildChatGptSubscriptionGuide = createChatGptSubscriptionGuide({
     connectionSucceeded: () => formState.connectionSucceeded?.(),
+    invalidateManagedChatGptAccount: deps.invalidateManagedChatGptAccount,
     applyNextClaudeConnection: (state) => {
       formState.nextConnectionRevision += 1;
       formState.nextConnection = state;

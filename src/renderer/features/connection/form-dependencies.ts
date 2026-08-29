@@ -14,6 +14,7 @@ export interface ConnectionFormDeps {
   requestConfirmation: (request: ConfirmationRequest) => Promise<boolean>;
   openExternal: (url: string) => Promise<void>;
   showToast: (message: string, tone?: 'error' | 'success') => void;
+  invalidateManagedChatGptAccount: () => void;
   connectionFeature: {
     clearTestResult: () => void;
     runConnectionTest: (

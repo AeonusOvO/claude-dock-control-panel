@@ -1,8 +1,11 @@
+import { officialNetworkProviderForClaudePreset } from '../../../shared/claude/providers';
 import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-attempt';
 import type { ClaudeLaunchMode } from '../../../shared/contracts';
 import type { TerminalActionsDependencies } from './actions-dependencies';
 import type { TerminalLayout } from './terminal-layout';
 import type { TerminalState } from './state';
+
+export type ClaudeLaunchProgressListener = (label: string) => void;
 
 export interface TerminalLaunchActions {
   launchClaudeTerminal: (mode: ClaudeLaunchMode) => Promise<void>;
@@ -10,6 +13,7 @@ export interface TerminalLaunchActions {
     sessionId: string,
     mode: ClaudeLaunchMode,
     announce?: boolean,
+    onProgress?: ClaudeLaunchProgressListener,
   ) => Promise<boolean>;
 }
 
@@ -18,10 +22,20 @@ export const createTerminalLaunchActions = (
   layout: TerminalLayout,
   dependencies: TerminalActionsDependencies,
 ): TerminalLaunchActions => {
+  const launchAuthorizationPhase = (sessionId: string): 'authorizing-launch' | 'starting' => {
+    const config = dependencies.getClaudeState?.(sessionId)?.config;
+    const preset = config?.preset;
+    const networkAccessRequired =
+      Boolean(preset && officialNetworkProviderForClaudePreset(preset)) ||
+      (config?.protocol !== 'openai' && Boolean(config?.baseUrl.trim()));
+    return networkAccessRequired ? 'authorizing-launch' : 'starting';
+  };
+
   const launchClaudeSession = async (
     sessionId: string,
     mode: ClaudeLaunchMode,
     announce = true,
+    onProgress?: ClaudeLaunchProgressListener,
   ): Promise<boolean> => {
     const status = dependencies
       .getWorkspaceState()
@@ -32,20 +46,33 @@ export const createTerminalLaunchActions = (
 
     // Capture the lifecycle baseline and paint the busy state before the first await, including when
     // the renderer has not loaded a ClaudeProjectState for this session yet.
+    onProgress?.('正在读取配置…');
     const attempt = dependencies.beginClaudeLaunchAttempt(status);
     const outcome = await orchestrateClaudeLaunchAttempt({
-      applyResult: (launchOutcome) =>
-        launchOutcome.status === 'paused'
-          ? dependencies.setClaudeLaunchPaused(attempt)
-          : dependencies.renderClaudeLaunchResult(
-              attempt,
-              launchOutcome.result.state,
-              launchOutcome.result.ok ? 'success' : 'failure',
-            ),
+      applyResult: (launchOutcome) => {
+        if (launchOutcome.status === 'paused') {
+          onProgress?.('等待网络确认…');
+          return dependencies.setClaudeLaunchPaused(attempt);
+        }
+        return dependencies.renderClaudeLaunchResult(
+          attempt,
+          launchOutcome.result.state,
+          launchOutcome.result.ok ? 'success' : 'failure',
+        );
+      },
       onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
-      prepare: () => state.terminalViews.get(status.id)?.terminal.clear(),
+      prepare: () => {
+        dependencies.setClaudeLaunchPresentationPhase(attempt, 'preparing-terminal');
+        onProgress?.('正在准备 Claude Code 终端…');
+        state.terminalViews.get(status.id)?.terminal.clear();
+      },
       registry: dependencies.claudeLaunchAttempts,
-      start: () => window.controlPanel.launchClaude(status.id, mode),
+      start: () => {
+        const phase = launchAuthorizationPhase(status.id);
+        dependencies.setClaudeLaunchPresentationPhase(attempt, phase);
+        onProgress?.(phase === 'authorizing-launch' ? '正在准备网络访问…' : '正在启动 Claude Code…');
+        return window.controlPanel.launchClaude(status.id, mode);
+      },
       token: attempt,
     });
     if (outcome.status === 'rejected') {

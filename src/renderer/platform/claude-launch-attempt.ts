@@ -16,9 +16,16 @@ type ClaudeLaunchLifecycleEvidenceReason = Extract<
 
 export type ClaudeLaunchResultDisposition = 'failure' | 'success';
 export type ClaudeLaunchPresentationPhase =
+  | 'authorizing-launch'
+  | 'awaiting-model-choice'
+  | 'awaiting-restart-confirmation'
   | 'checking-model-network'
+  | 'inspecting-conversation-model'
   | 'paused'
   | 'preflight'
+  | 'preparing-terminal'
+  | 'reading-configuration'
+  | 'relaunching-conversation'
   | 'restoring-conversation'
   | 'starting'
   | 'switching-model';
@@ -88,7 +95,7 @@ export class ClaudeLaunchAttemptRegistry {
       baselinePid: baseline.terminalPhase === 'running' ? baseline.terminalPid : undefined,
       baselinePtyGeneration: baseline.terminalPtyGeneration,
       latestClaudeActive: baseline.active,
-      presentationPhase: 'preflight',
+      presentationPhase: 'reading-configuration',
       sawClaudeActive: baseline.active === true,
     });
     return token;
@@ -210,7 +217,22 @@ export class ClaudeLaunchAttemptRegistry {
     if (!attempt) {
       return undefined;
     }
-    if (status.phase === 'starting') {
+    if (
+      status.phase === 'starting' &&
+      ![
+        'authorizing-launch',
+        'awaiting-model-choice',
+        'awaiting-restart-confirmation',
+        'checking-model-network',
+        'inspecting-conversation-model',
+        'paused',
+        'preflight',
+        'preparing-terminal',
+        'relaunching-conversation',
+        'restoring-conversation',
+        'switching-model',
+      ].includes(attempt.presentationPhase)
+    ) {
       attempt.presentationPhase = 'starting';
     }
     if (status.phase === 'error' || status.phase === 'stopped') {

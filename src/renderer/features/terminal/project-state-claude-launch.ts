@@ -68,19 +68,36 @@ export const createTerminalClaudeLaunchActions = (
     const launchPhase = claudeLaunchAttempts.presentationPhase(sessionId);
     const conversationStarting = conversationFeature.startingSessionId() === sessionId;
     const busy = conversationStarting || Boolean(launchPhase);
-    const busyLabel = conversationStarting
-      ? '正在启动…'
-      : launchPhase === 'preflight'
-        ? '正在进行网络预检…'
-        : launchPhase === 'paused'
-          ? '等待网络确认…'
-          : launchPhase === 'checking-model-network'
-            ? '正在切换模型并检查网络…'
-            : launchPhase === 'switching-model'
-              ? '正在切换对话模型…'
-              : launchPhase === 'restoring-conversation'
-                ? '正在恢复历史对话…'
-                : '正在启动…';
+    const busyLabel =
+      launchPhase === 'reading-configuration'
+        ? '正在读取配置…'
+        : launchPhase === 'inspecting-conversation-model'
+          ? '正在读取历史会话模型…'
+          : launchPhase === 'awaiting-model-choice'
+            ? '等待选择历史模型…'
+            : launchPhase === 'awaiting-restart-confirmation'
+              ? '等待确认重启会话…'
+              : launchPhase === 'preflight'
+              ? '正在检查网络…'
+              : launchPhase === 'paused'
+                ? '等待网络确认…'
+                : launchPhase === 'checking-model-network'
+                  ? '正在检查历史模型网络…'
+                  : launchPhase === 'switching-model'
+                    ? '正在切换对话模型…'
+                    : launchPhase === 'authorizing-launch'
+                      ? '正在准备网络访问…'
+                      : launchPhase === 'preparing-terminal'
+                        ? '正在准备 Claude Code 终端…'
+                        : launchPhase === 'relaunching-conversation'
+                          ? '正在重启并恢复 Claude Code…'
+                          : launchPhase === 'restoring-conversation'
+                            ? '正在恢复历史对话…'
+                          : launchPhase === 'starting'
+                            ? '正在启动 Claude Code…'
+                            : conversationStarting
+                              ? '正在启动 Claude Code…'
+                              : '正在启动 Claude Code…';
     runAgentLabel.textContent = busy ? busyLabel : '对话已就绪';
     // Route health is a remediable preflight state, not a reason to turn the primary action into a
     // translucent dead end. The launch path can restart app-owned gateways and returns a precise

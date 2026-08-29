@@ -72,10 +72,12 @@ export const createChatGptGuideSetupActions = (
       const result = execution.result;
       renderState(result.state, result.nextConnection?.config?.model);
       resultStateRendered = true;
-      if (result.nextConnection) {
-        applyNextClaudeConnection(result.nextConnection);
-      }
       if (!result.ok) {
+        deps.invalidateManagedChatGptAccount();
+        if (result.nextConnection) {
+          applyNextClaudeConnection(result.nextConnection);
+        }
+
         statusCard.dataset.phase = 'error';
         statusTitle.textContent = '配置未完成';
         statusDetail.textContent = resultFailureMessage(result, result.message);
@@ -86,11 +88,16 @@ export const createChatGptGuideSetupActions = (
         showToast(resultFailureMessage(result, result.message), 'error');
         return;
       }
+      deps.invalidateManagedChatGptAccount();
+      if (result.nextConnection) {
+        applyNextClaudeConnection(result.nextConnection);
+      }
       if (result.connectionTest) {
         statusDetail.textContent = result.connectionTest.message;
       }
       if (result.nextConnection?.config) deps.connectionSucceeded();
     } catch {
+      deps.invalidateManagedChatGptAccount();
       applyNextClaudeConnection(previous);
       statusCard.dataset.phase = 'error';
       statusTitle.textContent = '配置未完成';
@@ -132,6 +139,8 @@ export const createChatGptGuideSetupActions = (
       managedChatGptOperations.finish(sessionId);
       operationFinished = true;
       renderState(result.state);
+      // A failed or partially-applied logout can leave the committed account binding uncertain.
+      deps.invalidateManagedChatGptAccount();
       if (!result.ok) {
         statusCard.dataset.phase = 'error';
         statusTitle.textContent = '退出未完成';
@@ -141,6 +150,7 @@ export const createChatGptGuideSetupActions = (
       }
       showToast(result.message);
     } catch {
+      deps.invalidateManagedChatGptAccount();
       statusCard.dataset.phase = 'error';
       statusTitle.textContent = '退出未完成';
       statusDetail.textContent = '无法退出 ClaudeDock 托管的 OpenAI 账号，请稍后重试。';

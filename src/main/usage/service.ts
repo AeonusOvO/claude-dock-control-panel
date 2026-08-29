@@ -177,7 +177,7 @@ export class ModelUsageService {
             : '当前平台尚未提供可读取的额度';
     }
     this.publish();
-    if (changed || reset) this.requestQuotaRefresh();
+    if (changed || reset) this.requestQuotaRefresh(true);
   }
 
   public getSnapshot(): ModelUsageSnapshot {

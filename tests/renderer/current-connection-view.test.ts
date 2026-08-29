@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   ClaudeConnectionHistoryEntry,
   ManagedChatGptGatewayState,
@@ -195,6 +195,223 @@ describe('current connection view', () => {
           '账户信息暂不可用',
         );
         expect(harness.query('#current-connection-metadata').textContent).not.toContain('正在读取');
+      },
+    );
+  });
+
+  it('keeps the verified ChatGPT account visible across unrelated runtime repaints', async () => {
+    const config = {
+      ...claudeProjectState().config,
+      authMode: 'authToken' as const,
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialConfigured: true,
+      model: 'gpt-5.6-sol',
+      preset: 'chatgpt-subscription' as const,
+      provider: 'gateway' as const,
+    };
+    let accountReads = 0;
+    await withTerminalRenderer(
+      {
+        getClaudeProjectState: async () => claudeProjectState({ active: true, config }),
+        getNextClaudeConnection: async () => ({ config }),
+        getManagedChatGptGatewayState: async () => {
+          accountReads += 1;
+          return managedChatGptState({ accountEmail: 'member@example.test' });
+        },
+      },
+      async (harness) => {
+        await settle(harness);
+        const readsAfterInitialRender = accountReads;
+        harness.emit(
+          'onClaudeState',
+          claudeProjectState({ active: true, config, ptyGeneration: 2, stateRevision: 2 }),
+        );
+        harness.emit(
+          'onClaudeState',
+          claudeProjectState({ active: true, config, ptyGeneration: 3, stateRevision: 3 }),
+        );
+        await settle(harness);
+
+        expect(accountReads).toBe(readsAfterInitialRender);
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          'member@example.test',
+        );
+      },
+    );
+  });
+
+  it('shares one pending ChatGPT account read across repeated runtime repaints', async () => {
+    const gateway = deferred<ManagedChatGptGatewayState>();
+    const config = {
+      ...claudeProjectState().config,
+      authMode: 'authToken' as const,
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialConfigured: true,
+      model: 'gpt-5.6-sol',
+      preset: 'chatgpt-subscription' as const,
+      provider: 'gateway' as const,
+    };
+    let accountReads = 0;
+    await withTerminalRenderer(
+      {
+        getClaudeProjectState: async () => claudeProjectState({ active: true, config }),
+        getNextClaudeConnection: async () => ({ config }),
+        getManagedChatGptGatewayState: () => {
+          accountReads += 1;
+          return gateway.promise;
+        },
+      },
+      async (harness) => {
+        await settle(harness);
+        const readsWhilePending = accountReads;
+        harness.emit('onClaudeState', claudeProjectState({ active: true, config }));
+        harness.emit('onClaudeState', claudeProjectState({ active: true, config }));
+        await settle(harness);
+
+        expect(accountReads).toBe(readsWhilePending);
+        gateway.resolve(managedChatGptState({ accountEmail: 'member@example.test' }));
+        await settle(harness);
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          'member@example.test',
+        );
+      },
+    );
+  });
+
+  it('retries account discovery after a busy gateway state', async () => {
+    const gateway = deferred<ManagedChatGptGatewayState>();
+    const config = {
+      ...claudeProjectState().config,
+      authMode: 'authToken' as const,
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialConfigured: true,
+      model: 'gpt-5.6-sol' as const,
+      preset: 'chatgpt-subscription' as const,
+      provider: 'gateway' as const,
+    };
+    let accountReads = 0;
+    let busy = true;
+    const getManagedChatGptGatewayState = vi.fn(() => {
+      accountReads += 1;
+      return busy
+        ? Promise.resolve(managedChatGptState({ busy: true, phase: 'installing' }))
+        : gateway.promise;
+    });
+    await withTerminalRenderer(
+      {
+        getClaudeProjectState: async () => claudeProjectState({ active: true, config }),
+        getNextClaudeConnection: async () => ({ config }),
+        getManagedChatGptGatewayState,
+      },
+      async (harness) => {
+        await settle(harness);
+        const readsWhileBusy = accountReads;
+        expect(readsWhileBusy).toBeGreaterThan(0);
+        expect(harness.query('#current-connection-metadata').textContent).toContain('正在读取账户');
+
+        busy = false;
+        await new Promise<void>((resolve) => harness.dom.window.setTimeout(resolve, 1_100));
+        await settle(harness);
+        expect(accountReads).toBe(readsWhileBusy + 1);
+
+        gateway.resolve(managedChatGptState({ accountEmail: 'member@example.test' }));
+        await settle(harness);
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          'member@example.test',
+        );
+      },
+    );
+  });
+
+  it('caches a successful logged-out account read across runtime repaints', async () => {
+    const config = {
+      ...claudeProjectState().config,
+      authMode: 'authToken' as const,
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialConfigured: true,
+      model: 'gpt-5.6-sol' as const,
+      preset: 'chatgpt-subscription' as const,
+      provider: 'gateway' as const,
+    };
+    let accountReads = 0;
+    await withTerminalRenderer(
+      {
+        getClaudeProjectState: async () => claudeProjectState({ active: true, config }),
+        getNextClaudeConnection: async () => ({ config }),
+        getManagedChatGptGatewayState: async () => {
+          accountReads += 1;
+          return managedChatGptState({
+            accountEmail: undefined,
+            authenticated: false,
+            phase: 'login-required',
+          });
+        },
+      },
+      async (harness) => {
+        await settle(harness);
+        const readsAfterInitialRender = accountReads;
+        expect(harness.query('#current-connection-metadata').textContent).not.toContain(
+          '正在读取账户',
+        );
+
+        harness.emit(
+          'onClaudeState',
+          claudeProjectState({ active: true, config, ptyGeneration: 2, stateRevision: 2 }),
+        );
+        await settle(harness);
+
+        expect(accountReads).toBe(readsAfterInitialRender);
+        expect(harness.query('#current-connection-metadata').textContent).not.toContain(
+          '正在读取账户',
+        );
+      },
+    );
+  });
+
+  it('retries a transient account read failure without flashing loading', async () => {
+    const second = deferred<ManagedChatGptGatewayState>();
+    const config = {
+      ...claudeProjectState().config,
+      authMode: 'authToken' as const,
+      baseUrl: 'http://127.0.0.1:8317',
+      credentialConfigured: true,
+      model: 'gpt-5.6-sol' as const,
+      preset: 'chatgpt-subscription' as const,
+      provider: 'gateway' as const,
+    };
+    let accountReads = 0;
+    let failing = true;
+    const getManagedChatGptGatewayState = vi.fn(() => {
+      accountReads += 1;
+      return failing ? Promise.reject(new Error('transient gateway read failure')) : second.promise;
+    });
+    await withTerminalRenderer(
+      {
+        getClaudeProjectState: async () => claudeProjectState({ active: true, config }),
+        getNextClaudeConnection: async () => ({ config }),
+        getManagedChatGptGatewayState,
+      },
+      async (harness) => {
+        await settle(harness);
+        const readsAfterFailure = accountReads;
+        expect(readsAfterFailure).toBeGreaterThan(0);
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          '账户信息暂不可用',
+        );
+
+        failing = false;
+        await new Promise<void>((resolve) => harness.dom.window.setTimeout(resolve, 1_100));
+        await settle(harness);
+        expect(accountReads).toBe(readsAfterFailure + 1);
+        expect(harness.query('#current-connection-metadata').textContent).not.toContain(
+          '正在读取账户',
+        );
+
+        second.resolve(managedChatGptState({ accountEmail: 'member@example.test' }));
+        await settle(harness);
+        expect(harness.query('#current-connection-metadata').textContent).toContain(
+          'member@example.test',
+        );
       },
     );
   });

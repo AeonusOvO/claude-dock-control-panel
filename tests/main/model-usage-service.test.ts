@@ -495,6 +495,47 @@ describe('model usage snapshots', () => {
     expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(76);
   });
 
+  it('preserves a forced quota refresh when invalidation re-enters selection publish', async () => {
+    vi.useFakeTimers();
+    let invalidated!: (accountChanging: boolean) => void;
+    let readable!: () => void;
+    let reentered = false;
+    const quota = vi.fn<() => Promise<ModelQuotaResult>>().mockResolvedValue({
+      accountKey: 'account-a',
+      availability: 'available',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      windows: [{ label: '5 小时', usedPercent: 24 }],
+    });
+    const { service } = await fixture(
+      quota,
+      undefined,
+      (listener) => {
+        readable = listener;
+        return () => undefined;
+      },
+      (listener) => {
+        invalidated = listener;
+        return () => undefined;
+      },
+      () => {
+        if (!reentered) {
+          reentered = true;
+          invalidated(false);
+        }
+      },
+    );
+
+    service.select({ ...api, preset: 'chatgpt-subscription', mode: 'subscription' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(quota).not.toHaveBeenCalled();
+
+    readable();
+    await vi.waitFor(() => expect(quota).toHaveBeenCalledOnce());
+    expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(76);
+  });
+
   it('keeps an unauthorized result on normal polling when no lifecycle is active', async () => {
     vi.useFakeTimers();
     const unauthorized: ModelQuotaResult = {

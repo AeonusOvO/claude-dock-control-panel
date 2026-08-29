@@ -12,10 +12,16 @@ export type { TerminalPermissionModeProbe, TerminalView } from '../../platform/t
  */
 export const BUNDLED_CONPTY_BUILD = 21376;
 
+/** A releasable UI lease whose owner may update its visible progress text. */
+export type TerminalProgressHandle = (() => void) & {
+  setLabel?: (label: string) => void;
+};
+
 export interface TerminalMaskState {
   depth: number;
   focusBeforeMask: HTMLElement | null;
   label: HTMLElement;
+  leases: Map<number, string>;
   overlay: HTMLDivElement;
   view: TerminalView;
 }

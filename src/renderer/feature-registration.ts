@@ -341,6 +341,7 @@ const installConversationFeatures = (
   const conversationFeature = features.conversationFeature;
   registerTerminalFeature(rendererRegistry, {
     activeStatus,
+    getClaudeState: (sessionId) => claudeStates.get(sessionId),
     beginClaudeLaunchAttempt: terminalProjectState.beginClaudeLaunchAttempt,
     claudeLaunchAttempts: state.claudeLaunchAttempts,
     failClaudeLaunchAttempt: terminalProjectState.failClaudeLaunchAttempt,
@@ -354,6 +355,7 @@ const installConversationFeatures = (
     projectNameFromPath,
     refreshClaudeLaunchControls: terminalProjectState.refreshClaudeLaunchControls,
     setClaudeLaunchPaused: terminalProjectState.setClaudeLaunchPaused,
+    setClaudeLaunchPresentationPhase: terminalProjectState.setClaudeLaunchPresentationPhase,
     renderClaudeLaunchResult: terminalProjectState.renderClaudeLaunchResult,
     requestConfirmation,
     resultFailureMessage,
@@ -565,6 +567,7 @@ const installProjectFeatures = (
     flushPendingComposerFocus: features.terminalFeature.flushPendingComposerFocus,
     forgetSession: (sessionId) => features.connectionFeature.forgetSession(sessionId),
     formatRelativeTime,
+    getClaudeState: (sessionId) => claudeStates.get(sessionId),
     getCodexAutoLaunchSessionId: () => codexLaunchShell.getCodexAutoLaunchSessionId(),
     getLastClaudeSessionId,
     getPendingComposerFocusSessionId: () =>
@@ -574,10 +577,10 @@ const installProjectFeatures = (
     getTerminalViews: () => features.terminalFeature.getTerminalViews(),
     getWorkspaceState,
     hideTerminalContextMenu: features.terminalFeature.hideTerminalContextMenu,
-    launchCreatedConversation: (sessionId, runtime) =>
+    launchCreatedConversation: (sessionId, runtime, onProgress) =>
       runtime === 'codex'
         ? codexLaunchShell.prepareAndLaunchCodex(sessionId, false)
-        : features.terminalFeature.launchClaudeSession(sessionId, 'new', false),
+        : features.terminalFeature.launchClaudeSession(sessionId, 'new', false, onProgress),
     loadConnectionAdvice: () => features.connectionFeature.loadConnectionAdvice(),
     loadConnectionHistory: connectionHistory.load,
     loadDevelopmentRuntime: terminalProjectState.loadDevelopmentRuntime,
@@ -594,6 +597,7 @@ const installProjectFeatures = (
     renderRuntimeActivity: runtimeActivityShell.renderRuntimeActivity,
     renderClaudeLaunchResult: terminalProjectState.renderClaudeLaunchResult,
     refreshClaudeLaunchControls: terminalProjectState.refreshClaudeLaunchControls,
+    setClaudeLaunchPaused: terminalProjectState.setClaudeLaunchPaused,
     setClaudeLaunchPresentationPhase: terminalProjectState.setClaudeLaunchPresentationPhase,
     requestComposerFocus: features.terminalFeature.requestComposerFocus,
     requestConfirmation,
@@ -726,6 +730,7 @@ const installApplicationSubscriptions = (
     proxyFeature.dispose();
     settingsFeature.dispose();
     connectionForm.unsubscribeManagedChatGptSetupProgress();
+    shells.connectionHistory.dispose();
     routerFeature.dispose();
     connectionFeature.dispose();
     unsubscribeRuntimeActivityChanged();

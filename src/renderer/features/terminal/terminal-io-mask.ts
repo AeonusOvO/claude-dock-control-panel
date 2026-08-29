@@ -1,19 +1,29 @@
 import type { TerminalElements } from './elements';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
-import type { TerminalMaskState, TerminalState } from './state';
+import type { TerminalMaskState, TerminalProgressHandle, TerminalState } from './state';
 
 export interface TerminalIoMaskActions {
-  beginTerminalMask: (sessionId: string, label: string) => () => void;
-  beginWorkspaceTerminalPreview: (label: string) => () => void;
+  beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle;
+  beginWorkspaceTerminalPreview: (label: string) => TerminalProgressHandle;
 }
 
+/* eslint-disable max-lines-per-function -- The terminal mask and workspace preview share one ownership and focus lifecycle. */
 export const createTerminalIoMaskActions = (
   state: TerminalState,
   elements: TerminalElements,
   dependencies: TerminalIoDependencies,
 ): TerminalIoMaskActions => {
-  const releaseTerminalMask = (sessionId: string, maskState: TerminalMaskState): void => {
-    maskState.depth -= 1;
+  let nextMaskLeaseId = 0;
+
+  const releaseTerminalMask = (
+    sessionId: string,
+    maskState: TerminalMaskState,
+    leaseId: number,
+  ): void => {
+    maskState.leases.delete(leaseId);
+    maskState.depth = maskState.leases.size;
+    const latestLabel = [...maskState.leases.values()].at(-1);
+    if (latestLabel !== undefined) maskState.label.textContent = latestLabel;
     if (maskState.depth > 0 || state.terminalMasks.get(sessionId) !== maskState) {
       return;
     }
@@ -56,24 +66,36 @@ export const createTerminalIoMaskActions = (
    * before/after badge probe. A copied visual layer gives the requested frozen blur without breaking
    * that state machine.
    */
-  const beginTerminalMask = (sessionId: string, label: string): (() => void) => {
+  const beginTerminalMask = (sessionId: string, label: string): TerminalProgressHandle => {
     const existing = state.terminalMasks.get(sessionId);
     if (existing) {
+      const leaseId = ++nextMaskLeaseId;
       existing.depth += 1;
+      existing.leases.set(leaseId, label);
       existing.label.textContent = label;
       let disposed = false;
-      return () => {
+      const release = (() => {
         if (disposed) {
           return;
         }
         disposed = true;
-        releaseTerminalMask(sessionId, existing);
+        releaseTerminalMask(sessionId, existing, leaseId);
+      }) as TerminalProgressHandle;
+      release.setLabel = (nextLabel) => {
+        if (disposed || state.terminalMasks.get(sessionId) !== existing) return;
+        existing.leases.set(leaseId, nextLabel);
+        if ([...existing.leases.keys()].at(-1) === leaseId) {
+          existing.label.textContent = nextLabel;
+        }
       };
+      return release;
     }
 
     const view = state.terminalViews.get(sessionId);
     if (!view) {
-      return () => undefined;
+      const release = (() => undefined) as TerminalProgressHandle;
+      release.setLabel = () => undefined;
+      return release;
     }
     const overlay = document.createElement('div');
     overlay.className = 'terminal-mask';
@@ -121,10 +143,12 @@ export const createTerminalIoMaskActions = (
     if (dependencies.getWorkspaceState().activeSessionId === sessionId) {
       overlay.focus({ preventScroll: true });
     }
+    const leaseId = ++nextMaskLeaseId;
     const maskState: TerminalMaskState = {
       depth: 1,
       focusBeforeMask,
       label: message,
+      leases: new Map([[leaseId, label]]),
       overlay,
       view,
     };
@@ -132,13 +156,21 @@ export const createTerminalIoMaskActions = (
     document.dispatchEvent(new Event('terminal-mask-change'));
 
     let disposed = false;
-    return () => {
+    const release = (() => {
       if (disposed) {
         return;
       }
       disposed = true;
-      releaseTerminalMask(sessionId, maskState);
+      releaseTerminalMask(sessionId, maskState, leaseId);
+    }) as TerminalProgressHandle;
+    release.setLabel = (nextLabel) => {
+      if (disposed || state.terminalMasks.get(sessionId) !== maskState) return;
+      maskState.leases.set(leaseId, nextLabel);
+      if ([...maskState.leases.keys()].at(-1) === leaseId) {
+        maskState.label.textContent = nextLabel;
+      }
     };
+    return release;
   };
 
   const renderWorkspaceTerminalPreview = (): void => {
@@ -166,7 +198,7 @@ export const createTerminalIoMaskActions = (
   };
 
   /** Paints feedback in the click frame, before the main process has allocated a session id. */
-  const beginWorkspaceTerminalPreview = (label: string): (() => void) => {
+  const beginWorkspaceTerminalPreview = (label: string): TerminalProgressHandle => {
     const id = ++state.workspaceTerminalPreviewSequence;
     state.workspaceTerminalPreviews.set(id, { id, label });
     if (!state.workspaceTerminalPreviewState) {
@@ -202,13 +234,22 @@ export const createTerminalIoMaskActions = (
     renderWorkspaceTerminalPreview();
 
     let released = false;
-    return () => {
+    const release = (() => {
       if (released) return;
       released = true;
       state.workspaceTerminalPreviews.delete(id);
       renderWorkspaceTerminalPreview();
+    }) as TerminalProgressHandle;
+    release.setLabel = (nextLabel) => {
+      if (released) return;
+      const preview = state.workspaceTerminalPreviews.get(id);
+      if (!preview) return;
+      preview.label = nextLabel;
+      renderWorkspaceTerminalPreview();
     };
+    return release;
   };
 
   return { beginTerminalMask, beginWorkspaceTerminalPreview };
 };
+/* eslint-enable max-lines-per-function */

@@ -1,6 +1,7 @@
 import type {
   ClaudeLaunchAttemptRegistry,
   ClaudeLaunchAttemptToken,
+  ClaudeLaunchPresentationPhase,
   ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 import type {
@@ -14,6 +15,7 @@ import type {
 
 export interface TerminalActionsDependencies {
   activeStatus: () => TerminalStatus | undefined;
+  getClaudeState?: (sessionId: string) => ClaudeProjectState | undefined;
   beginClaudeLaunchAttempt: (
     status: TerminalStatus,
     state?: ClaudeProjectState,
@@ -26,6 +28,10 @@ export interface TerminalActionsDependencies {
   projectNameFromPath: (directoryPath: string) => string;
   refreshClaudeLaunchControls: (sessionId: string) => void;
   setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
+  setClaudeLaunchPresentationPhase: (
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ) => boolean;
   resolveClaudeLaunchDecision: (
     token: ClaudeLaunchAttemptToken,
     paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,

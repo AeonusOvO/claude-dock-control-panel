@@ -490,7 +490,7 @@ describe('remaining renderer behavior contracts', () => {
           '.conversation-item[data-session-id="session-1"]',
         );
         expect(liveRow.dataset.transition).toBe('restoring');
-        expect(liveRow.textContent).toContain('正在恢复');
+        expect(liveRow.textContent).toContain('正在准备网络访问…');
         expect(
           liveRow.querySelectorAll<HTMLButtonElement>('.conversation-item__action')[0]?.disabled,
         ).toBe(true);
@@ -591,7 +591,7 @@ describe('remaining renderer behavior contracts', () => {
 
   it.each([
     ['domestic', '正在切换对话模型…', false],
-    ['foreign', '正在切换模型并检查网络…', true],
+    ['foreign', '正在检查历史模型网络…', true],
   ] as const)(
     'uses the %s model progress copy without inventing the word 当前',
     async (networkPresentation, switchingLabel, mentionsNetwork) => {
@@ -667,7 +667,7 @@ describe('remaining renderer behavior contracts', () => {
           const state = claudeProjectState({ active: true, stateRevision: 2 });
           apply.resolve({ choice: 'use-conversation', ok: true, state });
           await settle(harness);
-          expect(harness.query('#run-agent-label').textContent).toContain('正在恢复历史对话…');
+          expect(harness.query('#run-agent-label').textContent).toContain('正在准备网络访问…');
           launch.resolve({ result: { ok: true, state }, status: 'completed' });
           await settle(harness);
         },

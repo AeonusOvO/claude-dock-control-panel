@@ -210,18 +210,18 @@ describe('renderer interaction lifecycle behavior', () => {
     await withTerminalRenderer({ launchClaude: () => launch.promise }, async (harness) => {
       harness.click('#run-claude');
       const run = harness.query<HTMLButtonElement>('#run-claude');
-      expect(harness.query('#run-agent-label').textContent).toContain('正在进行网络预检…');
+      expect(harness.query('#run-agent-label').textContent).toContain('正在准备 Claude Code 终端…');
       expect(run.disabled).toBe(true);
       expect(run.getAttribute('aria-busy')).toBe('true');
 
       harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(2, { phase: 'starting' })));
       await harness.flush();
-      expect(harness.query('#run-agent-label').textContent).toContain('正在启动…');
-      expect(harness.query('#launch-new').textContent).toContain('正在启动…');
+      expect(harness.query('#run-agent-label').textContent).toContain('正在准备网络访问…');
+      expect(harness.query('#launch-new').textContent).toContain('正在准备网络访问…');
 
       harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(2)));
       await settle(harness);
-      expect(harness.query('#run-agent-label').textContent).toContain('正在启动…');
+      expect(harness.query('#run-agent-label').textContent).toContain('正在准备网络访问…');
       expect(run.disabled).toBe(true);
       expect(run.getAttribute('aria-busy')).toBe('true');
       expect(harness.query('#toast').textContent).not.toContain('启动新会话');

@@ -23,6 +23,48 @@ export const createProjectsRowListActions = (
       .getWorkspaceState()
       .projects.some((project) => project.path.toLowerCase() === projectKey);
 
+  interface FocusSnapshot {
+    classes: string[];
+    key: string;
+    ordinal: number;
+    tagName: string;
+  }
+
+  const focusSnapshot = (list: HTMLElement): FocusSnapshot | undefined => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !list.contains(active)) return undefined;
+    const row = active.closest<HTMLElement>('[data-session-id], [data-pending-id]');
+    if (!row) return undefined;
+    const key = row.dataset.sessionId ?? row.dataset.pendingId;
+    if (!key) return undefined;
+    const classes = [...active.classList];
+    const candidates = [row, ...row.querySelectorAll<HTMLElement>('*')].filter(
+      (candidate) =>
+        candidate.tagName === active.tagName && classes.every((name) => candidate.classList.contains(name)),
+    );
+    return {
+      classes,
+      key,
+      ordinal: Math.max(0, candidates.indexOf(active)),
+      tagName: active.tagName,
+    };
+  };
+
+  const restoreFocus = (list: HTMLElement, snapshot: FocusSnapshot | undefined): void => {
+    if (!snapshot) return;
+    const row = [...list.querySelectorAll<HTMLElement>('[data-session-id], [data-pending-id]')].find(
+      (candidate) =>
+        (candidate.dataset.sessionId ?? candidate.dataset.pendingId) === snapshot.key,
+    );
+    if (!row) return;
+    const candidates = [row, ...row.querySelectorAll<HTMLElement>('*')].filter(
+      (candidate) =>
+        candidate.tagName === snapshot.tagName &&
+        snapshot.classes.every((name) => candidate.classList.contains(name)),
+    );
+    (candidates[snapshot.ordinal] ?? candidates[0])?.focus({ preventScroll: true });
+  };
+
   /** Loads a folder's Claude conversation history without requiring a live terminal for it. */
   const loadFolderHistory = async (projectPath: string, force = false): Promise<void> => {
     const key = projectPath.toLowerCase();
@@ -67,7 +109,11 @@ export const createProjectsRowListActions = (
     for (const sessionId of state.failedConversationTransitions.keys()) {
       if (!liveSessionIds.has(sessionId)) state.failedConversationTransitions.delete(sessionId);
     }
+    for (const sessionId of state.transitionProgress.keys()) {
+      if (!liveSessionIds.has(sessionId)) state.transitionProgress.delete(sessionId);
+    }
     const list = elements.projectList;
+    const focused = focusSnapshot(list);
     const previousHeight = list.getBoundingClientRect().height;
     const previousScrollTop = list.scrollTop;
     const previousAnimation = listAnimation;
@@ -87,6 +133,7 @@ export const createProjectsRowListActions = (
     list.replaceChildren(...dependencies.getWorkspaceState().projects.map(renderProjectFolder));
     const nextHeight = list.getBoundingClientRect().height;
     list.scrollTop = previousScrollTop;
+    restoreFocus(list, focused);
     if (hasRendered && !prefersReducedMotion() && list.animate) {
       // Animate the actual list height so the footer follows it without overlapping new rows.
       // Retarget from the currently painted height when another session arrives mid-animation.

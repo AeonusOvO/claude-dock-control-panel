@@ -11,6 +11,7 @@ import type {
   ClaudeLaunchPresentationPhase,
   ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
+import type { TerminalProgressHandle } from '../terminal/state';
 
 export interface RenameDialogCopy {
   description: string;
@@ -19,19 +20,25 @@ export interface RenameDialogCopy {
 }
 
 export interface ProjectsActionsDependencies {
-  beginTerminalMask: (sessionId: string, label: string) => () => void;
-  beginWorkspaceTerminalPreview: (label: string) => () => void;
+  beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle;
+  beginWorkspaceTerminalPreview: (label: string) => TerminalProgressHandle;
   beginClaudeLaunchAttempt: (
     status: TerminalStatus,
     state?: ClaudeProjectState,
   ) => ClaudeLaunchAttemptToken;
   claudeLaunchAttempts: ClaudeLaunchAttemptRegistry;
   failClaudeLaunchAttempt: (token: ClaudeLaunchAttemptToken) => boolean;
+  getClaudeState?: (sessionId: string) => ClaudeProjectState | undefined;
   getWorkspaceState: () => WorkspaceState;
   hideTerminalContextMenu: () => void;
-  launchCreatedConversation: (sessionId: string, runtime: 'claude' | 'codex') => Promise<boolean>;
+  launchCreatedConversation: (
+    sessionId: string,
+    runtime: 'claude' | 'codex',
+    onProgress?: (label: string) => void,
+  ) => Promise<boolean>;
   projectNameFromPath: (directoryPath: string) => string;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
   setClaudeLaunchPresentationPhase: (
     token: ClaudeLaunchAttemptToken,
     phase: ClaudeLaunchPresentationPhase,

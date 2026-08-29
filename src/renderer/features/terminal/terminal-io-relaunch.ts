@@ -1,5 +1,6 @@
 import { orchestrateClaudeLaunchAttempt } from '../../platform/claude-launch-attempt';
 import type { ClaudeRelaunchInput } from '../../../shared/contracts';
+import type { TerminalProgressHandle } from './state';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
 
 export interface TerminalIoRelaunchActions {
@@ -11,7 +12,7 @@ export interface TerminalIoRelaunchActions {
 
 export const createTerminalIoRelaunchActions = (
   dependencies: TerminalIoDependencies,
-  beginTerminalMask: (sessionId: string, label: string) => () => void,
+  beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle,
 ): TerminalIoRelaunchActions => {
   /**
    * Restarts the PTY and reattaches with `--continue`. Used by both cross-endpoint model switches and
@@ -27,18 +28,22 @@ export const createTerminalIoRelaunchActions = (
       return;
     }
     const attempt = dependencies.beginClaudeLaunchAttempt(status);
-    let endMask = (): void => undefined;
+    dependencies.setClaudeLaunchPresentationPhase(attempt, 'awaiting-restart-confirmation');
+    let endMask = (() => undefined) as TerminalProgressHandle;
     let loadStateAfterCompletion = false;
     try {
       const outcome = await orchestrateClaudeLaunchAttempt({
-        applyResult: (launchOutcome) =>
-          launchOutcome.status === 'paused'
-            ? dependencies.setClaudeLaunchPaused(attempt)
-            : dependencies.renderClaudeLaunchResult(
-                attempt,
-                launchOutcome.result.state,
-                launchOutcome.result.ok ? 'success' : 'failure',
-              ),
+        applyResult: (launchOutcome) => {
+          if (launchOutcome.status === 'paused') {
+            endMask.setLabel?.('等待网络确认…');
+            return dependencies.setClaudeLaunchPaused(attempt);
+          }
+          return dependencies.renderClaudeLaunchResult(
+            attempt,
+            launchOutcome.result.state,
+            launchOutcome.result.ok ? 'success' : 'failure',
+          );
+        },
         confirmation: () =>
           dependencies.requestConfirmation({
             confirmLabel: '压缩并重启',
@@ -47,7 +52,8 @@ export const createTerminalIoRelaunchActions = (
           }),
         onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
         prepare: () => {
-          endMask = beginTerminalMask(status.id, '正在压缩上下文并恢复会话');
+          dependencies.setClaudeLaunchPresentationPhase(attempt, 'relaunching-conversation');
+          endMask = beginTerminalMask(status.id, '正在重启并恢复 Claude Code…');
         },
         registry: dependencies.claudeLaunchAttempts,
         start: () =>
@@ -68,6 +74,7 @@ export const createTerminalIoRelaunchActions = (
 
       let launchOutcome = outcome.result;
       if (launchOutcome.status === 'paused') {
+        endMask.setLabel?.('等待网络确认…');
         const decision = await dependencies.resolveClaudeLaunchDecision(attempt, launchOutcome);
         if (decision.status !== 'completed') return;
         launchOutcome = decision;

@@ -8,6 +8,7 @@ import type {
 import type {
   ClaudeLaunchAttemptRegistry,
   ClaudeLaunchAttemptToken,
+  ClaudeLaunchPresentationPhase,
 } from '../../platform/claude-launch-attempt';
 import type { SessionGenerationRegistry } from '../../platform/session-generation';
 import type { ConfirmationRequest } from '../dialogs';
@@ -34,6 +35,10 @@ export interface FooterSwitchesDeps {
   openNativeModelMenu: () => void;
   openNativeSpeedMenu: () => void;
   refreshClaudeLaunchControls: (sessionId: string) => void;
+  setClaudeLaunchPresentationPhase: (
+    token: ClaudeLaunchAttemptToken,
+    phase: ClaudeLaunchPresentationPhase,
+  ) => boolean;
   relaunchClaudeSession: (
     summary: string,
     input: { entryId?: string; permissionMode?: ClaudePermissionMode },

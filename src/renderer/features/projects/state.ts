@@ -15,6 +15,7 @@ export interface PendingConversation {
   id: string;
   kind: 'creating' | 'restoring';
   phase: 'queued' | 'starting';
+  progressLabel: string;
   projectPath: string;
   queuePosition?: number;
   queueTotal?: number;
@@ -41,6 +42,7 @@ export interface ProjectsState {
   pendingConversationSequence: number;
   pendingConversations: Map<string, PendingConversation>;
   transitioningConversations: Map<string, ConversationTransitionKind>;
+  transitionProgress: Map<string, string>;
   renderedConversationTitles: Map<string, string>;
   storedConversationRestores: Set<string>;
   restoredConversationSessions: Map<string, string>;
@@ -78,6 +80,7 @@ export const createProjectsState = (): ProjectsState => ({
   pendingConversationSequence: 0,
   pendingConversations: new Map<string, PendingConversation>(),
   transitioningConversations: new Map<string, ConversationTransitionKind>(),
+  transitionProgress: new Map<string, string>(),
   renderedConversationTitles: new Map<string, string>(),
   storedConversationRestores: new Set<string>(),
   restoredConversationSessions: new Map<string, string>(),

@@ -82,6 +82,7 @@ const setup = (): {
     launchCreatedConversation: vi.fn(async () => true),
     projectNameFromPath: (directoryPath: string) => directoryPath,
     refreshClaudeLaunchControls: vi.fn(),
+    setClaudeLaunchPaused: vi.fn(() => true),
     setClaudeLaunchPresentationPhase: vi.fn(() => true),
     requestComposerFocus: vi.fn(),
     requestConfirmation: vi.fn(async () => true),
@@ -149,7 +150,7 @@ describe('projects workspace actions', () => {
     expect([...state.pendingConversations.values()]).toEqual([
       expect.objectContaining({ kind: 'creating', projectPath: 'D:\\work\\repo' }),
     ]);
-    expect(dependencies.beginWorkspaceTerminalPreview).toHaveBeenCalledWith('正在新建会话…');
+    expect(dependencies.beginWorkspaceTerminalPreview).toHaveBeenCalledWith('正在读取配置…');
 
     pending.resolve({ ok: false, state: workspaceState });
     await opening;
@@ -182,6 +183,7 @@ describe('projects workspace actions', () => {
       10,
       'created-10',
       'claude',
+      expect.any(Function),
     );
   });
 

@@ -25,6 +25,10 @@ export interface TerminalIoDependencies {
   loadClaudeState: (sessionId: string) => Promise<void>;
   refreshClaudeLaunchControls: (sessionId: string) => void;
   setClaudeLaunchPaused: (token: ClaudeLaunchAttemptToken) => boolean;
+  setClaudeLaunchPresentationPhase: (
+    token: ClaudeLaunchAttemptToken,
+    phase: import('../../platform/claude-launch-attempt').ClaudeLaunchPresentationPhase,
+  ) => boolean;
   resolveClaudeLaunchDecision: (
     token: ClaudeLaunchAttemptToken,
     paused: Extract<ClaudeLaunchOutcome, { status: 'paused' }>,

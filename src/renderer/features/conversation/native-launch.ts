@@ -47,16 +47,24 @@ export const createNativeLaunchActions = (
     state.nativeConversationStartingSessionId = status.id;
     dependencies.refreshClaudeLaunchControls(status.id);
     elements.nativeSendButton.disabled = true;
-    elements.nativeComposerStatus.textContent = '正在安全启动 Claude…';
+    elements.nativeComposerStatus.textContent = conversationId
+      ? '正在读取历史对话配置…'
+      : '正在读取配置…';
+    // Yield one frame so the initial phase is painted and announced before the main-process call.
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     let launchSucceeded = false;
     let launchFailureMessage = '';
     try {
-      const result = await window.controlPanel.startNativeConversation({
+      const launchPromise = window.controlPanel.startNativeConversation({
         conversationId,
         projectPath: status.cwd,
         resume: Boolean(conversationId),
         sessionId: status.id,
       });
+      elements.nativeComposerStatus.textContent = conversationId
+        ? '正在恢复历史对话…'
+        : '正在准备 Claude Code 终端…';
+      const result = await launchPromise;
       if (!result.ok) {
         launchFailureMessage = dependencies.resultFailureMessage(
           result,

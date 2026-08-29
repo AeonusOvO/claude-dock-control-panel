@@ -9,12 +9,16 @@ import type {
 import type { ClaudeLaunchAttemptToken } from '../../platform/claude-launch-attempt';
 import { ClaudeLaunchPreflightDecisionController } from '../../platform/claude-launch-preflight-decision';
 import { createRegistryToken, type Registry } from '../../platform/registry';
-import { createTerminalActions, type TerminalActionsDependencies } from './actions';
+import {
+  createTerminalActions,
+  type TerminalActionsDependencies,
+} from './actions';
+import type { ClaudeLaunchProgressListener } from './actions-launch';
 import { createTerminalElements } from './elements';
 import { createTerminalIo, type TerminalIoDependencies } from './terminal-io';
 import { createTerminalLayout, type TerminalLayoutDependencies } from './terminal-layout';
 import { createTerminalViews, type TerminalViewsDependencies } from './terminal-views';
-import { createTerminalState, type TerminalView } from './state';
+import { createTerminalState, type TerminalProgressHandle, type TerminalView } from './state';
 
 export type TerminalFeatureDependencies = Omit<
   TerminalIoDependencies,
@@ -25,8 +29,8 @@ export type TerminalFeatureDependencies = Omit<
   Omit<TerminalActionsDependencies, 'resolveClaudeLaunchDecision'>;
 
 export interface TerminalFeature {
-  beginTerminalMask: (sessionId: string, label: string) => () => void;
-  beginWorkspaceTerminalPreview: (label: string) => () => void;
+  beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle;
+  beginWorkspaceTerminalPreview: (label: string) => TerminalProgressHandle;
   cancelActiveResizes: () => void;
   dispose: () => void;
   disposeTerminalView: (sessionId: string, view: TerminalView) => void;
@@ -44,6 +48,7 @@ export interface TerminalFeature {
     sessionId: string,
     mode: ClaudeLaunchMode,
     announce?: boolean,
+    onProgress?: ClaudeLaunchProgressListener,
   ) => Promise<boolean>;
   panelResizer: HTMLElement;
   playSendAnimation: (

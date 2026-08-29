@@ -267,6 +267,9 @@ const installConnectionStack = (
     requestConfirmation,
     openExternal: (url) => openExternal(url),
     showToast,
+    invalidateManagedChatGptAccount: () => {
+      shells.connectionHistory?.invalidateManagedChatGptAccount();
+    },
     connectionFeature: {
       clearTestResult: () => features.connectionFeature.clearTestResult(),
       runConnectionTest: (saveOnSuccess, configInput) =>
@@ -443,6 +446,7 @@ const installSecondaryShells = (
     openNativeModelMenu: () => features.conversationFeature.openNativeModelMenu(),
     openNativeSpeedMenu: () => features.conversationFeature.openNativeSpeedMenu(),
     refreshClaudeLaunchControls: terminalProjectState.refreshClaudeLaunchControls,
+    setClaudeLaunchPresentationPhase: terminalProjectState.setClaudeLaunchPresentationPhase,
     relaunchClaudeSession: (summary, input) =>
       features.terminalFeature.relaunchClaudeSession(summary, input),
     renderActiveConversation: () => features.conversationFeature.renderActiveConversation(),

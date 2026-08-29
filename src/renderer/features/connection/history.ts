@@ -18,10 +18,12 @@ export interface ConnectionHistory {
   readonly historyContextMenu: HTMLElement;
   readonly state: ConnectionHistoryState;
   closeDialog: () => void;
+  dispose: () => void;
   load: () => Promise<void>;
   openDialog: () => void;
   render: () => void;
   renderCurrentConnection: () => void;
+  invalidateManagedChatGptAccount: () => void;
   resetForProjectChange: () => void;
   setEntries: (entries: ClaudeConnectionHistoryEntry[]) => void;
   setSelectedProvider: (providerId: ClaudeProviderId | undefined) => void;
@@ -88,6 +90,7 @@ export const createConnectionHistory = (deps: ConnectionHistoryDependencies): Co
 
   return {
     closeDialog: dialogActions.close,
+    dispose: currentConnectionActions.dispose,
     historyContextMenu: menuActions.historyContextMenu,
     state,
     load: mutationActions.loadConnectionHistory,
@@ -97,6 +100,7 @@ export const createConnectionHistory = (deps: ConnectionHistoryDependencies): Co
       currentConnectionActions.render();
     },
     renderCurrentConnection: currentConnectionActions.render,
+    invalidateManagedChatGptAccount: currentConnectionActions.invalidateManagedChatGptAccount,
     resetForProjectChange,
     setEntries,
     setSelectedProvider: (providerId) => {

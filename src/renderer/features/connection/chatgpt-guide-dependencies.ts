@@ -8,6 +8,7 @@ import type { ManagedChatGptOperationTracker } from './managed-chatgpt-operation
 
 export interface ChatGptSubscriptionGuideDeps {
   connectionSucceeded: () => void;
+  invalidateManagedChatGptAccount: () => void;
   applyNextClaudeConnection: (state: ClaudeNextConversationConnectionState) => void;
   getNextClaudeConnection: () => ClaudeNextConversationConnectionState;
   managedChatGptOperations: ManagedChatGptOperationTracker;

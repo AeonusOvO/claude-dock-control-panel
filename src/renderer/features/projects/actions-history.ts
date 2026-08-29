@@ -1,5 +1,7 @@
+import { officialNetworkProviderForClaudePreset } from '../../../shared/claude/providers';
 import type {
   ClaudeConversationModelChoice,
+  ClaudeLaunchOutcome,
   ClaudeSessionMetadata,
   TerminalStatus,
 } from '../../../shared/contracts';
@@ -77,6 +79,7 @@ interface OptimisticHistoryMove {
   finish: (render?: boolean) => void;
   pending: PendingConversation;
   setCancel: (cancel: () => boolean) => void;
+  setProgress: (label: string) => void;
   updateQueueState: (queueState: ConversationTransitionQueueState) => void;
 }
 
@@ -89,17 +92,17 @@ const beginOptimisticHistoryMove = (
   startup: boolean,
 ): OptimisticHistoryMove => {
   const pendingId = `pending-conversation-${++state.pendingConversationSequence}`;
+  const initialProgress = startup ? '正在读取上次对话配置…' : '正在恢复历史对话…';
   const pending: PendingConversation = {
     id: pendingId,
     kind: 'restoring',
     phase: 'queued',
+    progressLabel: initialProgress,
     projectPath,
     title: label,
   };
   state.pendingConversations.set(pendingId, pending);
-  const releasePreview = dependencies.beginWorkspaceTerminalPreview(
-    startup ? '正在恢复上次对话…' : '正在恢复历史对话…',
-  );
+  const preview = dependencies.beginWorkspaceTerminalPreview(initialProgress);
   rowsApi.renderProjectList();
   let finished = false;
   return {
@@ -107,12 +110,18 @@ const beginOptimisticHistoryMove = (
       if (finished) return;
       finished = true;
       state.pendingConversations.delete(pendingId);
-      releasePreview();
+      preview();
       if (render) rowsApi.renderProjectList();
     },
     pending,
     setCancel: (cancel) => {
       pending.cancel = cancel;
+      rowsApi.renderProjectList();
+    },
+    setProgress: (label) => {
+      if (finished) return;
+      pending.progressLabel = label;
+      preview.setLabel?.(label);
       rowsApi.renderProjectList();
     },
     updateQueueState: (queueState) => {
@@ -186,26 +195,109 @@ const beginRestoringSessionPresentation = (
 ): {
   attempt: ReturnType<ProjectsActionsDependencies['beginClaudeLaunchAttempt']>;
   finish: () => void;
+  setLabel: (label: string) => void;
 } => {
   const attempt = dependencies.beginClaudeLaunchAttempt(status);
+  const initialProgress = options
+    ? options.autoLoadConversationModel
+      ? '正在准备恢复上次对话…'
+      : '正在恢复上次对话…'
+    : '正在恢复历史对话…';
   state.transitioningConversations.set(status.id, 'restoring');
+  state.transitionProgress.set(status.id, initialProgress);
   rowsApi.renderProjectList();
-  const releaseMask = dependencies.beginTerminalMask(
-    status.id,
-    options
-      ? options.autoLoadConversationModel
-        ? '正在连接模型…'
-        : '正在恢复上次对话…'
-      : '正在恢复历史对话…',
-  );
+  const mask = dependencies.beginTerminalMask(status.id, initialProgress);
+  const setLabel = (label: string): void => {
+    state.transitionProgress.set(status.id, label);
+    mask.setLabel?.(label);
+    rowsApi.renderProjectList();
+  };
   return {
     attempt,
     finish: () => {
       state.transitioningConversations.delete(status.id);
-      releaseMask();
+      state.transitionProgress.delete(status.id);
+      mask();
       rowsApi.renderProjectList();
     },
+    setLabel,
   };
+};
+
+const historyLaunchAuthorizationPhase = (
+  dependencies: ProjectsActionsDependencies,
+  sessionId: string,
+): 'authorizing-launch' | 'starting' => {
+  const config = dependencies.getClaudeState?.(sessionId)?.config;
+  const preset = config?.preset;
+  const networkAccessRequired =
+    Boolean(preset && officialNetworkProviderForClaudePreset(preset)) ||
+    (config?.protocol !== 'openai' && Boolean(config?.baseUrl.trim()));
+  return networkAccessRequired ? 'authorizing-launch' : 'starting';
+};
+
+const applyHistoryLaunchResult = (
+  dependencies: ProjectsActionsDependencies,
+  presentation: ReturnType<typeof beginRestoringSessionPresentation>,
+  attempt: ReturnType<ProjectsActionsDependencies['beginClaudeLaunchAttempt']>,
+  launchOutcome: ClaudeLaunchOutcome,
+): boolean => {
+  if (launchOutcome.status === 'paused') {
+    presentation.setLabel('等待网络确认…');
+    return dependencies.setClaudeLaunchPaused(attempt);
+  }
+  return dependencies.renderClaudeLaunchResult(
+    attempt,
+    launchOutcome.result.state,
+    launchOutcome.result.ok ? 'success' : 'failure',
+  );
+};
+
+interface PrepareHistoryLaunchInput {
+  dependencies: ProjectsActionsDependencies;
+  modelChoice: ClaudeConversationModelChoice | null | undefined;
+  options?: StoredConversationResumeOptions;
+  presentation: ReturnType<typeof beginRestoringSessionPresentation>;
+  resolution: ModelResolution | undefined;
+  session: ClaudeSessionMetadata;
+  status: TerminalStatus;
+}
+
+const prepareHistoryLaunch = async ({
+  dependencies,
+  modelChoice,
+  options,
+  presentation,
+  resolution,
+  session,
+  status,
+}: PrepareHistoryLaunchInput): Promise<void> => {
+  const effectiveModelChoice = options
+    ? options.autoLoadConversationModel && resolution?.mismatch
+      ? 'use-conversation'
+      : undefined
+    : modelChoice;
+  if (effectiveModelChoice && resolution) {
+    const phase =
+      effectiveModelChoice === 'use-conversation' &&
+      resolution.conversation.networkPresentation === 'foreign'
+        ? 'checking-model-network'
+        : 'switching-model';
+    const phaseLabel =
+      phase === 'checking-model-network' ? '正在检查历史模型网络…' : '正在切换对话模型…';
+    presentation.setLabel(phaseLabel);
+    dependencies.setClaudeLaunchPresentationPhase(presentation.attempt, phase);
+    const applied = await window.controlPanel.applyClaudeConversationModel(
+      status.id,
+      session.conversationId,
+      effectiveModelChoice,
+    );
+    if (!applied.ok) {
+      throw new Error(dependencies.resultFailureMessage(applied, '无法切换历史对话的模型接入。'));
+    }
+  }
+  presentation.setLabel('正在恢复历史对话…');
+  dependencies.setClaudeLaunchPresentationPhase(presentation.attempt, 'restoring-conversation');
 };
 
 interface AdmittedHistoryRestoreInput extends ResumeStoredConversationInput {
@@ -278,6 +370,13 @@ const runAdmittedHistoryRestore = async ({
     );
     const { attempt } = presentation;
     try {
+      if (!options || options.autoLoadConversationModel) {
+        presentation.setLabel('正在读取历史会话模型…');
+        dependencies.setClaudeLaunchPresentationPhase(attempt, 'inspecting-conversation-model');
+      } else {
+        presentation.setLabel('正在准备 Claude Code 终端…');
+        dependencies.setClaudeLaunchPresentationPhase(attempt, 'preparing-terminal');
+      }
       const resolution =
         options && !options.autoLoadConversationModel
           ? undefined
@@ -286,6 +385,15 @@ const runAdmittedHistoryRestore = async ({
               session.conversationId,
               session.modelId,
             );
+      const awaitingModelChoice =
+        !options &&
+        resolution?.mismatch === true &&
+        resolution.preference !== 'use-current' &&
+        !(resolution.preference === 'use-conversation' && resolution.restorable);
+      if (awaitingModelChoice) {
+        presentation.setLabel('等待选择历史模型…');
+        dependencies.setClaudeLaunchPresentationPhase(attempt, 'awaiting-model-choice');
+      }
       const modelChoice = options
         ? options.autoLoadConversationModel && resolution?.mismatch
           ? resolution.restorable
@@ -306,41 +414,27 @@ const runAdmittedHistoryRestore = async ({
       }
       const outcome = await orchestrateClaudeLaunchAttempt({
         applyResult: (launchOutcome) =>
-          launchOutcome.status === 'paused' ||
-          dependencies.renderClaudeLaunchResult(
-            attempt,
-            launchOutcome.result.state,
-            launchOutcome.result.ok ? 'success' : 'failure',
-          ),
+          applyHistoryLaunchResult(dependencies, presentation, attempt, launchOutcome),
         onRelease: () => dependencies.refreshClaudeLaunchControls(attempt.sessionId),
-        prepare: async () => {
-          const effectiveModelChoice = options
-            ? options.autoLoadConversationModel && resolution?.mismatch
-              ? 'use-conversation'
-              : undefined
-            : modelChoice;
-          if (effectiveModelChoice && resolution) {
-            const phase =
-              effectiveModelChoice === 'use-conversation' &&
-              resolution.conversation.networkPresentation === 'foreign'
-                ? 'checking-model-network'
-                : 'switching-model';
-            dependencies.setClaudeLaunchPresentationPhase(attempt, phase);
-            const applied = await window.controlPanel.applyClaudeConversationModel(
-              status.id,
-              session.conversationId,
-              effectiveModelChoice,
-            );
-            if (!applied.ok) {
-              throw new Error(
-                dependencies.resultFailureMessage(applied, '无法切换历史对话的模型接入。'),
-              );
-            }
-          }
-          dependencies.setClaudeLaunchPresentationPhase(attempt, 'restoring-conversation');
-        },
+        prepare: () =>
+          prepareHistoryLaunch({
+            dependencies,
+            modelChoice,
+            options,
+            presentation,
+            resolution,
+            session,
+            status,
+          }),
         registry: dependencies.claudeLaunchAttempts,
-        start: () => window.controlPanel.launchClaudeWithSession(status.id, session.conversationId),
+        start: () => {
+          const phase = historyLaunchAuthorizationPhase(dependencies, status.id);
+          presentation.setLabel(
+            phase === 'authorizing-launch' ? '正在准备网络访问…' : '正在启动 Claude Code…',
+          );
+          dependencies.setClaudeLaunchPresentationPhase(attempt, phase);
+          return window.controlPanel.launchClaudeWithSession(status.id, session.conversationId);
+        },
         token: attempt,
       });
       if (outcome.status === 'rejected') {

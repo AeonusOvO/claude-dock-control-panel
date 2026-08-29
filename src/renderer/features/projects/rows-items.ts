@@ -26,7 +26,7 @@ export const createProjectsRowItemsActions = (
     row.dataset.phase = transitionFailure ? 'error' : status.phase;
     row.dataset.sessionId = status.id;
     row.dataset.closing = String(closing);
-    row.setAttribute('aria-busy', String(closing));
+    row.setAttribute('aria-busy', String(closing || Boolean(transition)));
     if (transition) row.dataset.transition = transition;
     if (transitionFailure) row.dataset.transitionFailure = transitionFailure;
 
@@ -58,10 +58,14 @@ export const createProjectsRowItemsActions = (
           ? '恢复失败 · 请关闭'
           : '创建失败 · 请关闭'
         : transition
-          ? transition === 'restoring'
-            ? '正在恢复'
-            : '正在新建'
+          ? state.transitionProgress.get(status.id) ??
+            (transition === 'restoring' ? '正在恢复…' : '正在新建…')
           : dependencies.phaseCopy[status.phase].pill;
+    if (transition) {
+      phaseText.setAttribute('role', 'status');
+      phaseText.setAttribute('aria-live', 'polite');
+      phaseText.setAttribute('aria-atomic', 'true');
+    }
 
     selectButton.append(indicator, label, phaseText);
     selectButton.addEventListener('click', () => {
@@ -190,9 +194,7 @@ export const createProjectsRowItemsActions = (
     phaseText.textContent =
       pending.phase === 'queued'
         ? `排队中${pending.queuePosition ? ` · 第 ${pending.queuePosition} 位` : ''}`
-        : pending.kind === 'restoring'
-          ? '正在恢复'
-          : '正在新建';
+        : pending.progressLabel;
 
     content.append(indicator, label, phaseText);
     if (pending.phase === 'queued' && pending.cancel) {

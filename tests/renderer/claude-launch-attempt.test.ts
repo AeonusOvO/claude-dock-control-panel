@@ -87,7 +87,7 @@ describe('Claude launch attempts', () => {
       terminalPtyGeneration: 1,
     });
 
-    expect(registry.presentationPhase('session-a')).toBe('preflight');
+    expect(registry.presentationPhase('session-a')).toBe('reading-configuration');
     expect(
       registry.observeTerminal(terminal('session-a', 'starting', undefined, 2)),
     ).toBeUndefined();
@@ -98,8 +98,21 @@ describe('Claude launch attempts', () => {
     registry.invalidate('session-a');
     const replacement = registry.begin('session-a', {});
     expect(registry.setPresentationPhase(first, 'starting')).toBe(false);
-    expect(registry.presentationPhase('session-a')).toBe('preflight');
+    expect(registry.presentationPhase('session-a')).toBe('reading-configuration');
     expect(registry.isCurrent(replacement)).toBe(true);
+  });
+
+  it.each([
+    'authorizing-launch',
+    'preflight',
+    'preparing-terminal',
+  ] as const)('preserves the %s phase when the terminal reports starting', (phase) => {
+    const registry = new ClaudeLaunchAttemptRegistry();
+    const token = registry.begin('session-a', {});
+
+    expect(registry.setPresentationPhase(token, phase)).toBe(true);
+    expect(registry.observeTerminal(terminal('session-a', 'starting'))).toBeUndefined();
+    expect(registry.presentationPhase('session-a')).toBe(phase);
   });
 
   it('releases when an accepted result is followed by a different conversation UUID', () => {

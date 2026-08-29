@@ -2,7 +2,10 @@ import type { ClaudeLaunchMode, TerminalStatus } from '../../../shared/contracts
 import { createTerminalControlActions } from './actions-controls';
 import { createTerminalDiagnosticActions } from './actions-diagnostic';
 import { bindTerminalIpcListeners } from './actions-ipc';
-import { createTerminalLaunchActions } from './actions-launch';
+import {
+  createTerminalLaunchActions,
+  type ClaudeLaunchProgressListener,
+} from './actions-launch';
 import type { TerminalElements } from './elements';
 import type { TerminalIo } from './terminal-io';
 import type { TerminalLayout } from './terminal-layout';
@@ -18,6 +21,7 @@ export interface TerminalActions {
     sessionId: string,
     mode: ClaudeLaunchMode,
     announce?: boolean,
+    onProgress?: ClaudeLaunchProgressListener,
   ) => Promise<boolean>;
   launchClaudeTerminal: (mode: ClaudeLaunchMode) => Promise<void>;
   renderControlStatus: (status?: TerminalStatus) => void;

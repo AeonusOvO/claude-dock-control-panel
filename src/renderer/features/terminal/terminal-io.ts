@@ -4,14 +4,19 @@ import { createTerminalIoGenerationActions } from './terminal-io-generation';
 import { createTerminalIoMaskActions } from './terminal-io-mask';
 import { createTerminalIoMenuActions } from './terminal-io-menu';
 import { createTerminalIoRelaunchActions } from './terminal-io-relaunch';
-import type { TerminalContextMenuTarget, TerminalState, TerminalView } from './state';
+import type {
+  TerminalContextMenuTarget,
+  TerminalProgressHandle,
+  TerminalState,
+  TerminalView,
+} from './state';
 
 export type { TerminalIoDependencies } from './terminal-io-dependencies';
 import type { TerminalIoDependencies } from './terminal-io-dependencies';
 
 export interface TerminalIo {
-  beginTerminalMask: (sessionId: string, label: string) => () => void;
-  beginWorkspaceTerminalPreview: (label: string) => () => void;
+  beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle;
+  beginWorkspaceTerminalPreview: (label: string) => TerminalProgressHandle;
   copyTerminalSelectionGeneration: (
     sessionId: string,
     ptyGeneration: PtyGeneration,

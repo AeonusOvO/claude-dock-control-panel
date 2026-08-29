@@ -148,7 +148,7 @@ describe('startup conversation restore', () => {
       'D:\\Project',
       conversationId,
     );
-    expect(harness.query('.terminal-mask__label').textContent).toBe('正在连接模型…');
+    expect(harness.query('.terminal-mask__label').textContent).toBe('正在读取历史会话模型…');
     expect(harness.query<HTMLTextAreaElement>('#composer-input').disabled).toBe(true);
     expect(control.terminals[0]?.options.disableStdin).toBe(true);
 

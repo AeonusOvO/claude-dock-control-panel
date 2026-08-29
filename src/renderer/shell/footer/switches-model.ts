@@ -91,6 +91,7 @@ export const createFooterSwitchesModelActions = (
 
     const operation = claudeSpeedOperations.begin(status.id);
     const attempt = beginClaudeLaunchAttempt(status, state);
+    deps.setClaudeLaunchPresentationPhase(attempt, 'awaiting-restart-confirmation');
     renderClaudeState(state, false, false);
     const fastLabel = modelSpeedFastLabel(state);
     const speedDetail =
@@ -127,6 +128,7 @@ export const createFooterSwitchesModelActions = (
           if (!claudeLaunchAttempts.isCurrent(attempt)) {
             throw new Error('确认期间会话状态已经变化。');
           }
+          deps.setClaudeLaunchPresentationPhase(attempt, 'relaunching-conversation');
           endMask = beginTerminalMask(status.id, '正在应用服务速度设置');
           return window.controlPanel.setClaudeModelSpeed(status.id, mode);
         },

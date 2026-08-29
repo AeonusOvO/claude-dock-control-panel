@@ -32,6 +32,7 @@ const beginOptimisticConversation = (
   finish: (render?: boolean) => void;
   pending: PendingConversation;
   setCancel: (cancel: () => boolean) => void;
+  setProgress: (label: string) => void;
   updateQueueState: (queueState: ConversationTransitionQueueState) => void;
 } => {
   const id = `pending-conversation-${++state.pendingConversationSequence}`;
@@ -39,25 +40,32 @@ const beginOptimisticConversation = (
     id,
     kind: 'creating',
     phase: 'queued',
+    progressLabel: '正在读取配置…',
     projectPath,
     title,
   };
   state.pendingConversations.set(id, pending);
   state.expandedFolders.add(projectPath.toLowerCase());
   rowsApi.renderProjectList();
-  const releasePreview = dependencies.beginWorkspaceTerminalPreview('正在新建会话…');
+  const preview = dependencies.beginWorkspaceTerminalPreview(pending.progressLabel);
   let finished = false;
   return {
     finish: (render = true) => {
       if (finished) return;
       finished = true;
       state.pendingConversations.delete(id);
-      releasePreview();
+      preview();
       if (render) rowsApi.renderProjectList();
     },
     pending,
     setCancel: (cancel) => {
       pending.cancel = cancel;
+      rowsApi.renderProjectList();
+    },
+    setProgress: (label) => {
+      if (finished) return;
+      pending.progressLabel = label;
+      preview.setLabel?.(label);
       rowsApi.renderProjectList();
     },
     updateQueueState: (queueState) => {
@@ -91,9 +99,17 @@ const launchCreatedConversation = async ({
 }: LaunchCreatedConversationInput): Promise<boolean> => {
   if (!result.createdSessionId || !result.runtime) return false;
   const { createdSessionId, runtime } = result;
+  const initialProgress =
+    runtime === 'codex' ? '正在准备 Codex 终端…' : '正在准备 Claude Code 终端…';
   state.transitioningConversations.set(createdSessionId, 'creating');
+  state.transitionProgress.set(createdSessionId, initialProgress);
   rowsApi.renderProjectList();
-  const releaseMask = dependencies.beginTerminalMask(createdSessionId, '正在新建会话…');
+  const mask = dependencies.beginTerminalMask(createdSessionId, initialProgress);
+  const setProgress = (label: string): void => {
+    state.transitionProgress.set(createdSessionId, label);
+    mask.setLabel?.(label);
+    rowsApi.renderProjectList();
+  };
   const rollback = async (reason: string): Promise<void> => {
     try {
       const rolledBack = await window.controlPanel.closeProject(createdSessionId);
@@ -115,7 +131,12 @@ const launchCreatedConversation = async ({
     }
   };
   try {
-    const started = await dependencies.launchCreatedConversation(createdSessionId, runtime);
+    setProgress(runtime === 'codex' ? '正在启动 Codex…' : '正在读取配置…');
+    const started = await dependencies.launchCreatedConversation(
+      createdSessionId,
+      runtime,
+      runtime === 'claude' ? setProgress : undefined,
+    );
     if (started) {
       state.failedConversationTransitions.delete(createdSessionId);
       dependencies.showToast(
@@ -130,7 +151,8 @@ const launchCreatedConversation = async ({
     await rollback(error instanceof Error ? `${error.message}。` : '新对话启动失败。');
   } finally {
     state.transitioningConversations.delete(createdSessionId);
-    releaseMask();
+    state.transitionProgress.delete(createdSessionId);
+    mask();
     rowsApi.renderProjectList();
     onSettled();
   }

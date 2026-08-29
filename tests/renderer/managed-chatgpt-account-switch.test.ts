@@ -116,6 +116,10 @@ it('logs out only the managed account when the red current-account button is cli
   await withTerminalRenderer(
     {
       getManagedChatGptGatewayState: async () => currentState,
+      getNextClaudeConnection: async () => ({
+        ...nextChatGptConnection(),
+        accountIdentity: 'current@example.test',
+      }),
       logoutManagedChatGptGateway: async () => {
         currentState = loggedOutState;
         return result;
@@ -138,6 +142,14 @@ it('logs out only the managed account when the red current-account button is cli
       expect(harness.method('setupManagedChatGptGateway')).not.toHaveBeenCalled();
       expect(harness.query('.subscription-gateway-status strong').textContent).toContain(
         '等待 OpenAI 授权',
+      );
+      expect(harness.query('#current-connection-metadata').textContent).not.toContain(
+        'current@example.test',
+      );
+      harness.emit('onClaudeState', claudeProjectState({ active: true, ptyGeneration: 2 }));
+      await settle(harness);
+      expect(harness.query('#current-connection-metadata').textContent).not.toContain(
+        'current@example.test',
       );
     },
   );
