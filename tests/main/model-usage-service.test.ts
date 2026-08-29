@@ -975,7 +975,7 @@ describe('model usage snapshots', () => {
     expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(63);
   });
 
-  it('refreshes after an explicit account invalidation even when no read is active', async () => {
+  it('retains account-specific stale status during a queued ordinary lifecycle', async () => {
     let invalidated!: (accountChanging: boolean) => void;
     let readable!: () => void;
     const quota = vi
@@ -1013,7 +1013,17 @@ describe('model usage snapshots', () => {
     const previous = service.getSnapshot();
 
     invalidated(true);
-    expect(service.getSnapshot()).toMatchObject({ status: 'stale', windows: previous.windows });
+    expect(service.getSnapshot()).toMatchObject({
+      status: 'stale',
+      windows: previous.windows,
+      detail: 'ChatGPT 账户或授权正在更新；显示上次结果',
+    });
+    invalidated(false);
+    expect(service.getSnapshot()).toMatchObject({
+      status: 'stale',
+      windows: previous.windows,
+      detail: 'ChatGPT 账户或授权正在更新；显示上次结果',
+    });
     readable();
     await vi.waitFor(() => expect(quota).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(service.getSnapshot().detail).toContain('查询超时'));

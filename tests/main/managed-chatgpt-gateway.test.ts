@@ -755,6 +755,31 @@ describe('managed ChatGPT gateway', () => {
     }
   });
 
+  it('publishes one quota invalidation for stop', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-stop-event-'));
+    const manager = new ManagedChatGptGateway(
+      userDataPath,
+      {} as DownloadEngine,
+      new BusyRegistry(),
+      {
+        decryptString: vi.fn(),
+        encryptString: vi.fn(),
+        isEncryptionAvailable: vi.fn(() => false),
+      },
+      vi.fn() as unknown as typeof fetch,
+    );
+    const invalidated = vi.fn();
+    manager.onQuotaInvalidated(invalidated);
+    try {
+      await expect(manager.stop()).resolves.toBeUndefined();
+      expect(invalidated).toHaveBeenCalledOnce();
+      expect(invalidated).toHaveBeenCalledWith('lifecycle');
+    } finally {
+      manager.shutdown();
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
   it('logs out by removing only managed authorization without invoking browser login', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-managed-gateway-logout-'));
     const root = path.join(userDataPath, 'managed-gateways', 'cliproxyapi');

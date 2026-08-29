@@ -506,7 +506,7 @@ export class ManagedChatGptGateway {
   }
 
   public stop(): Promise<void> {
-    this.cancelLifecycleOperations();
+    this.abortLifecycleOperations();
     this.setupInFlight = undefined;
     this.ensureRunningInFlight = undefined;
     return this.enqueueLifecycle(async () => {
@@ -585,6 +585,10 @@ export class ManagedChatGptGateway {
 
   private cancelLifecycleOperations(kind: ManagedGatewayQuotaInvalidation = 'lifecycle'): void {
     this.invalidateQuota(kind);
+    this.abortLifecycleOperations();
+  }
+
+  private abortLifecycleOperations(): void {
     for (const controller of this.lifecycleControllers) controller.abort();
   }
 

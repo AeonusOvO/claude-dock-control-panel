@@ -347,18 +347,19 @@ export class ModelUsageService {
     this.quotaInvalidationRevision += 1;
     if (accountChanging) this.quotaAccountChangingRevision += 1;
     if (this.connection?.preset !== 'chatgpt-subscription') return;
+    const retry = this.quotaRetry;
+    const accountLifecycleActive = accountChanging || retry?.accountChanging === true;
     if (this.quotaRun || accountChanging) {
-      const retry = this.quotaRetry;
       this.quotaRetry = {
         epoch: this.journal.epoch,
         selectionRevision: this.quotaSelectionRevision,
         startedRevision: retry?.startedRevision ?? this.quotaReadableRevision,
-        accountChanging: Boolean(retry?.accountChanging || accountChanging),
+        accountChanging: accountLifecycleActive,
       };
     }
     if (this.windows?.length) {
       this.status = 'stale';
-      this.detail = accountChanging
+      this.detail = accountLifecycleActive
         ? 'ChatGPT 账户或授权正在更新；显示上次结果'
         : 'ChatGPT 网关正在更新；显示上次结果';
       this.publish();
