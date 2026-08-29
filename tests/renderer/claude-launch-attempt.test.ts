@@ -102,18 +102,17 @@ describe('Claude launch attempts', () => {
     expect(registry.isCurrent(replacement)).toBe(true);
   });
 
-  it.each([
-    'authorizing-launch',
-    'preflight',
-    'preparing-terminal',
-  ] as const)('preserves the %s phase when the terminal reports starting', (phase) => {
-    const registry = new ClaudeLaunchAttemptRegistry();
-    const token = registry.begin('session-a', {});
+  it.each(['authorizing-launch', 'preflight', 'preparing-terminal'] as const)(
+    'preserves the %s phase when the terminal reports starting',
+    (phase) => {
+      const registry = new ClaudeLaunchAttemptRegistry();
+      const token = registry.begin('session-a', {});
 
-    expect(registry.setPresentationPhase(token, phase)).toBe(true);
-    expect(registry.observeTerminal(terminal('session-a', 'starting'))).toBeUndefined();
-    expect(registry.presentationPhase('session-a')).toBe(phase);
-  });
+      expect(registry.setPresentationPhase(token, phase)).toBe(true);
+      expect(registry.observeTerminal(terminal('session-a', 'starting'))).toBeUndefined();
+      expect(registry.presentationPhase('session-a')).toBe(phase);
+    },
+  );
 
   it('releases when an accepted result is followed by a different conversation UUID', () => {
     const registry = new ClaudeLaunchAttemptRegistry();

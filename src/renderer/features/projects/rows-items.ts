@@ -58,8 +58,8 @@ export const createProjectsRowItemsActions = (
           ? '恢复失败 · 请关闭'
           : '创建失败 · 请关闭'
         : transition
-          ? state.transitionProgress.get(status.id) ??
-            (transition === 'restoring' ? '正在恢复…' : '正在新建…')
+          ? (state.transitionProgress.get(status.id) ??
+            (transition === 'restoring' ? '正在恢复…' : '正在新建…'))
           : dependencies.phaseCopy[status.phase].pill;
     if (transition) {
       phaseText.setAttribute('role', 'status');

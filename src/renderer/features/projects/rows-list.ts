@@ -40,7 +40,8 @@ export const createProjectsRowListActions = (
     const classes = [...active.classList];
     const candidates = [row, ...row.querySelectorAll<HTMLElement>('*')].filter(
       (candidate) =>
-        candidate.tagName === active.tagName && classes.every((name) => candidate.classList.contains(name)),
+        candidate.tagName === active.tagName &&
+        classes.every((name) => candidate.classList.contains(name)),
     );
     return {
       classes,
@@ -52,9 +53,10 @@ export const createProjectsRowListActions = (
 
   const restoreFocus = (list: HTMLElement, snapshot: FocusSnapshot | undefined): void => {
     if (!snapshot) return;
-    const row = [...list.querySelectorAll<HTMLElement>('[data-session-id], [data-pending-id]')].find(
-      (candidate) =>
-        (candidate.dataset.sessionId ?? candidate.dataset.pendingId) === snapshot.key,
+    const row = [
+      ...list.querySelectorAll<HTMLElement>('[data-session-id], [data-pending-id]'),
+    ].find(
+      (candidate) => (candidate.dataset.sessionId ?? candidate.dataset.pendingId) === snapshot.key,
     );
     if (!row) return;
     const candidates = [row, ...row.querySelectorAll<HTMLElement>('*')].filter(

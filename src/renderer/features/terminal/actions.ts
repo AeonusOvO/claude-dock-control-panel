@@ -2,10 +2,7 @@ import type { ClaudeLaunchMode, TerminalStatus } from '../../../shared/contracts
 import { createTerminalControlActions } from './actions-controls';
 import { createTerminalDiagnosticActions } from './actions-diagnostic';
 import { bindTerminalIpcListeners } from './actions-ipc';
-import {
-  createTerminalLaunchActions,
-  type ClaudeLaunchProgressListener,
-} from './actions-launch';
+import { createTerminalLaunchActions, type ClaudeLaunchProgressListener } from './actions-launch';
 import type { TerminalElements } from './elements';
 import type { TerminalIo } from './terminal-io';
 import type { TerminalLayout } from './terminal-layout';

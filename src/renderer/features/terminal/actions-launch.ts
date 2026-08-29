@@ -70,7 +70,9 @@ export const createTerminalLaunchActions = (
       start: () => {
         const phase = launchAuthorizationPhase(status.id);
         dependencies.setClaudeLaunchPresentationPhase(attempt, phase);
-        onProgress?.(phase === 'authorizing-launch' ? '正在准备网络访问…' : '正在启动 Claude Code…');
+        onProgress?.(
+          phase === 'authorizing-launch' ? '正在准备网络访问…' : '正在启动 Claude Code…',
+        );
         return window.controlPanel.launchClaude(status.id, mode);
       },
       token: attempt,

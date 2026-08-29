@@ -9,10 +9,7 @@ import type {
 import type { ClaudeLaunchAttemptToken } from '../../platform/claude-launch-attempt';
 import { ClaudeLaunchPreflightDecisionController } from '../../platform/claude-launch-preflight-decision';
 import { createRegistryToken, type Registry } from '../../platform/registry';
-import {
-  createTerminalActions,
-  type TerminalActionsDependencies,
-} from './actions';
+import { createTerminalActions, type TerminalActionsDependencies } from './actions';
 import type { ClaudeLaunchProgressListener } from './actions-launch';
 import { createTerminalElements } from './elements';
 import { createTerminalIo, type TerminalIoDependencies } from './terminal-io';

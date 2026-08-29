@@ -70,7 +70,9 @@ const accountConnectionKey = (config: ClaudeConfigView, accountIdentity?: string
   JSON.stringify([
     config.preset,
     config.provider,
-    redactConnectionEndpoint(config.sourceBaseUrl) ?? redactConnectionEndpoint(config.baseUrl) ?? '',
+    redactConnectionEndpoint(config.sourceBaseUrl) ??
+      redactConnectionEndpoint(config.baseUrl) ??
+      '',
     visibleModel(config),
     config.protocol,
     config.routerProviderId ?? '',
@@ -296,11 +298,7 @@ export const createCurrentConnectionViewActions = (
       entry.identity = undefined;
       entry.lastReadAt = undefined;
       entry.status = 'loading';
-    } else if (
-      suppliedIdentity &&
-      !entry.readAttempted &&
-      entry.identity !== suppliedIdentity
-    ) {
+    } else if (suppliedIdentity && !entry.readAttempted && entry.identity !== suppliedIdentity) {
       entry.identity = suppliedIdentity;
       entry.lastReadAt = Date.now();
       entry.status = 'ready';
@@ -331,8 +329,7 @@ export const createCurrentConnectionViewActions = (
       entry.retryAfter = undefined;
     }
     if (entry.status === 'ready' && entry.lastReadAt !== undefined) {
-      const revalidateIn =
-        ACCOUNT_READ_REVALIDATE_INTERVAL_MS - (Date.now() - entry.lastReadAt);
+      const revalidateIn = ACCOUNT_READ_REVALIDATE_INTERVAL_MS - (Date.now() - entry.lastReadAt);
       if (revalidateIn > 0) {
         scheduleAccountRetry(revalidateIn);
         return;
