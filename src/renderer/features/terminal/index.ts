@@ -27,6 +27,7 @@ export type TerminalFeatureDependencies = Omit<
   Omit<TerminalActionsDependencies, 'resolveClaudeLaunchDecision'>;
 
 export interface TerminalFeature {
+  appendDroppedPaths: (paths: readonly string[]) => boolean;
   beginTerminalMask: (sessionId: string, label: string) => TerminalProgressHandle;
   beginWorkspaceTerminalPreview: (label: string) => TerminalProgressHandle;
   cancelActiveResizes: () => void;
@@ -111,6 +112,7 @@ const createTerminalFeature = (dependencies: TerminalFeatureDependencies): Termi
   );
 
   return {
+    appendDroppedPaths: layout.appendDroppedPaths,
     beginTerminalMask: io.beginTerminalMask,
     beginWorkspaceTerminalPreview: io.beginWorkspaceTerminalPreview,
     cancelActiveResizes: layout.cancelActiveResizes,

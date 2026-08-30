@@ -10,6 +10,7 @@ import type {
 import { normalizeConnectionAddress } from '../../shared/router/connection-endpoint';
 import { sameConnectionCredentialScope } from '../../shared/router/automatic-connection';
 import { assertChatApiAccess } from '../../shared/claude/chat-providers';
+import { assertChatProviderAccess } from '../network/provider-access-policy';
 
 interface StoredChatConfig {
   authMode: ChatAuthMode;
@@ -25,6 +26,7 @@ export interface ChatRuntimeConfig {
   baseUrl: string;
   credential?: string;
   model: string;
+  preset?: string;
   protocol: ChatProtocol;
 }
 
@@ -92,13 +94,19 @@ const validateInput = (
   ) {
     throw new Error('对话接口凭据操作无效。');
   }
-  return {
+  const normalized = {
     authMode: input.authMode,
     baseUrl: normalizeChatBaseUrl(input.baseUrl),
     model: normalizeModel(input.model),
     protocol: input.protocol,
     ...(typeof input.preset === 'string' ? { preset: input.preset } : {}),
   };
+  assertChatProviderAccess({
+    address: normalized.baseUrl,
+    preset: normalized.preset,
+    protocol: normalized.protocol,
+  });
+  return normalized;
 };
 
 export class ChatConfigStore {
@@ -129,6 +137,7 @@ export class ChatConfigStore {
       baseUrl: config.baseUrl,
       credential: this.decryptCredential(config.encryptedCredential),
       model: config.model,
+      ...(config.preset ? { preset: config.preset } : {}),
       protocol: config.protocol,
     };
   }
@@ -136,6 +145,12 @@ export class ChatConfigStore {
   public resolveRuntimeConfig(input: SaveChatConfigInput): ChatRuntimeConfig {
     const normalized = validateInput(input);
     const credential = this.resolveCredential(input, normalized.baseUrl);
+    assertChatProviderAccess({
+      address: normalized.baseUrl,
+      credential,
+      preset: normalized.preset,
+      protocol: normalized.protocol,
+    });
     assertChatApiAccess(normalized.baseUrl, credential);
     return { ...normalized, credential };
   }
@@ -164,7 +179,14 @@ export class ChatConfigStore {
 
   public save(input: SaveChatConfigInput): ChatConfigView {
     const normalized = validateInput(input);
-    assertChatApiAccess(normalized.baseUrl, this.resolveCredential(input, normalized.baseUrl));
+    const credential = this.resolveCredential(input, normalized.baseUrl);
+    assertChatProviderAccess({
+      address: normalized.baseUrl,
+      credential,
+      preset: normalized.preset,
+      protocol: normalized.protocol,
+    });
+    assertChatApiAccess(normalized.baseUrl, credential);
 
     const current = this.load().config;
     let encryptedCredential = current.encryptedCredential;

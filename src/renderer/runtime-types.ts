@@ -83,6 +83,8 @@ export interface RuntimeState {
   setWindowsBuildNumber: (value: number | undefined) => void;
   getDragDepth: () => number;
   setDragDepth: (value: number) => void;
+  getFileDropConfirmationEnabled: () => boolean;
+  setFileDropConfirmationEnabled: (value: boolean) => void;
   getLastClaudeSessionId: () => string;
   setLastClaudeSessionId: (value: string) => void;
 }

@@ -89,6 +89,21 @@ dialog.popover[open]::backdrop {
   }
 }
 
+/* Centered confirmation surfaces bloom in place instead of borrowing anchored-popover travel. */
+.confirmation-dialog.popover {
+  transform-origin: center;
+}
+
+.confirmation-dialog.popover:not([open]) {
+  transform: scale(var(--pop-scale-from));
+}
+
+@starting-style {
+  dialog.confirmation-dialog.popover[open] {
+    transform: scale(var(--pop-scale-from));
+  }
+}
+
 /* TOOLTIP. The trigger owns focus/hover; aria-describedby keeps the same text accessible. */
 .tooltip {
   position: relative;
@@ -123,6 +138,52 @@ dialog.popover[open]::backdrop {
 .tooltip:is(:hover, :focus-within) > .tooltip__content {
   opacity: 1;
   transform: translate(-50%, 0);
+  transition-delay: var(--dur-zero);
+  visibility: visible;
+}
+
+/* High-risk option hints are fixed to the viewport so they can follow the pointer without clipping. */
+.high-risk-tooltip {
+  background: var(--surface-4);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-overlay);
+  color: var(--warn-text);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-tight);
+  max-width: min(320px, calc(100vw - 24px));
+  opacity: 0;
+  padding: var(--s-2) var(--s-3);
+  pointer-events: none;
+  position: fixed;
+  visibility: hidden;
+  white-space: normal;
+  z-index: 85;
+  transition:
+    opacity var(--dur-2) var(--ease-standard),
+    transform var(--dur-2) var(--ease-decel),
+    visibility var(--dur-zero) linear var(--dur-2);
+}
+
+.high-risk-tooltip[data-placement='above'] {
+  transform: translateY(var(--s-1));
+}
+
+.high-risk-tooltip[data-placement='below'] {
+  transform: translateY(calc(var(--s-1) * -1));
+}
+
+.high-risk-tooltip[data-placement='left'] {
+  transform: translateX(var(--s-1));
+}
+
+.high-risk-tooltip[data-placement='right'] {
+  transform: translateX(calc(var(--s-1) * -1));
+}
+
+.high-risk-tooltip[data-state='visible'] {
+  opacity: 1;
+  transform: none;
   transition-delay: var(--dur-zero);
   visibility: visible;
 }
@@ -360,10 +421,13 @@ button.status-chip:active:not(:disabled) {
   border: 1px dashed var(--accent-text);
   border-radius: var(--r-2xl);
   box-shadow: var(--shadow-overlay);
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  min-width: 350px;
+  min-width: 0;
   padding: var(--s-10);
+  text-align: center;
+  width: min(560px, calc(100% - var(--s-8)));
 }
 
 .drop-overlay svg {
@@ -379,6 +443,8 @@ button.status-chip:active:not(:disabled) {
   font-weight: var(--fw-strong);
   letter-spacing: var(--ls-tight);
   line-height: var(--type-subtitle-lh);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .drop-overlay span {
@@ -387,6 +453,8 @@ button.status-chip:active:not(:disabled) {
   letter-spacing: var(--ls-body);
   line-height: var(--type-body-lh);
   margin-top: var(--s-1-5);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .toast[data-tone='error'] {
@@ -735,7 +803,8 @@ button:disabled {
   opacity: 0;
   pointer-events: none;
   position: fixed;
-  z-index: 20;
+  /* Sit above shell chrome and menus while remaining below native dialog top-layer surfaces. */
+  z-index: 75;
   transition:
     opacity var(--dur-3) var(--ease-decel),
     backdrop-filter var(--dur-3) var(--ease-decel);

@@ -1,8 +1,15 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ApplicationUpdaterService,
   type ApplicationUpdaterDriver,
 } from '../../src/main/updates/application';
+import {
+  ApplicationUpdateRecoveryJournal,
+  type ApplicationUpdateRecoveryStore,
+} from '../../src/main/updates/recovery';
 import type { ApplicationUpdaterState } from '../../src/shared/contracts';
 
 type DriverListener = (payload?: unknown) => void;
@@ -17,7 +24,11 @@ const deferred = <T>() => {
   return { promise, reject, resolve };
 };
 
-const createHarness = (enabled = true) => {
+const createHarness = (
+  enabled = true,
+  recoveryStore?: ApplicationUpdateRecoveryStore,
+  currentVersion = '5.0.0-rc.15',
+) => {
   const listeners = new Map<string, DriverListener[]>();
   const checkForUpdates = vi.fn<ApplicationUpdaterDriver['checkForUpdates']>(async () => ({
     isUpdateAvailable: false,
@@ -42,11 +53,12 @@ const createHarness = (enabled = true) => {
   };
   const changes: ApplicationUpdaterState[] = [];
   const service = new ApplicationUpdaterService({
-    currentVersion: '5.0.0-rc.15',
+    currentVersion,
     driver,
     enabled,
     onChange: (state) => changes.push(state),
     onInstallError,
+    recoveryStore,
   });
   return {
     changes,
@@ -304,5 +316,104 @@ describe('application updater service', () => {
       phase: 'error',
     });
     expect(harness.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it('persists the install intent until the new version starts', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-updater-marker-'));
+    try {
+      const recoveryStore = new ApplicationUpdateRecoveryJournal(userDataPath);
+      const harness = createHarness(true, recoveryStore);
+      harness.emit('update-downloaded', { version: '5.0.0-rc.16' });
+
+      await harness.service.installDownloaded();
+      expect(recoveryStore.read()).toMatchObject({
+        currentVersion: '5.0.0-rc.15',
+        phase: 'installing',
+        source: 'electron-updater',
+        targetVersion: '5.0.0-rc.16',
+      });
+
+      const restarted = createHarness(true, recoveryStore, '5.0.0-rc.16');
+      expect(restarted.service.getState()).toMatchObject({
+        currentVersion: '5.0.0-rc.16',
+        phase: 'idle',
+      });
+      expect(recoveryStore.read()).toBeUndefined();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('clears an install marker when a newer version is already running', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-updater-newer-'));
+    try {
+      const recoveryStore = new ApplicationUpdateRecoveryJournal(userDataPath);
+      recoveryStore.write({
+        currentVersion: '5.0.0-rc.15',
+        createdAt: Date.now(),
+        phase: 'installing',
+        source: 'electron-updater',
+        targetVersion: '5.0.0-rc.16',
+      });
+
+      const harness = createHarness(true, recoveryStore, '5.0.0-rc.17');
+
+      expect(harness.service.getState().phase).toBe('idle');
+      expect(recoveryStore.read()).toBeUndefined();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('surfaces an interrupted install and redownloads instead of trusting its old cache', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-updater-recovery-'));
+    try {
+      const recoveryStore = new ApplicationUpdateRecoveryJournal(userDataPath);
+      recoveryStore.write({
+        currentVersion: '5.0.0-rc.15',
+        createdAt: Date.now(),
+        phase: 'installing',
+        source: 'electron-updater',
+        targetVersion: '5.0.0-rc.16',
+      });
+      const harness = createHarness(true, recoveryStore);
+      expect(harness.service.getState()).toMatchObject({
+        latestVersion: '5.0.0-rc.16',
+        message: expect.stringContaining('安装未完成'),
+        phase: 'install-recovery',
+      });
+
+      harness.checkForUpdates.mockResolvedValueOnce({
+        isUpdateAvailable: true,
+        updateInfo: { version: '5.0.0-rc.17' },
+      });
+      const state = await harness.service.checkAndDownload();
+
+      expect(state.phase).toBe('downloading');
+      expect(harness.checkForUpdates).toHaveBeenCalledOnce();
+      expect(harness.downloadUpdate).toHaveBeenCalledOnce();
+      expect(recoveryStore.read()).toBeUndefined();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('blocks installer launch when the intent marker cannot be written', async () => {
+    const recoveryStore: ApplicationUpdateRecoveryStore = {
+      clear: vi.fn(),
+      read: vi.fn(() => undefined),
+      write: vi.fn(() => {
+        throw new Error('marker disk full');
+      }),
+    };
+    const harness = createHarness(true, recoveryStore);
+    harness.emit('update-downloaded', { version: '5.0.0-rc.16' });
+
+    await expect(harness.service.installDownloaded()).rejects.toThrow('marker disk full');
+    expect(harness.quitAndInstall).not.toHaveBeenCalled();
+    expect(harness.service.getState()).toMatchObject({
+      message: '应用更新失败：无法保存应用安装恢复记录：marker disk full',
+      phase: 'error',
+    });
   });
 });

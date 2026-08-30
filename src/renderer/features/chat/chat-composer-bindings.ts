@@ -1,4 +1,5 @@
 import type { ChatAttachmentImportResult, ChatStreamEvent } from '../../../shared/contracts';
+import type { ChatAttachmentImportCompletion } from './chat-attachment-import';
 import type { ChatActionsDependencies } from './dependencies';
 import type { ChatElements } from './elements';
 import type { ChatState } from './state';
@@ -15,7 +16,10 @@ export const createChatComposerBindings = (
   view: ChatView,
   resizeChatComposer: () => void,
   setChatBusy: (busy: boolean) => void,
-  queueChatAttachmentImport: (files: File[]) => void,
+  queueChatAttachmentImport: (
+    files: File[],
+    onComplete?: ChatAttachmentImportCompletion,
+  ) => boolean,
   applyChatAttachmentImportResult: (result: ChatAttachmentImportResult) => void,
   handleChatStream: (event: ChatStreamEvent) => void,
   resetChatConversation: () => void,

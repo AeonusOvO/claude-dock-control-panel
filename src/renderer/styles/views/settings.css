@@ -231,9 +231,81 @@
   padding: var(--s-4);
 }
 
-.update-center-list {
+.update-center-tabs {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: var(--s-1);
+  overflow-x: auto;
+  padding: var(--s-2) var(--s-4) 0;
+}
+
+.update-center-tabs .plugin-tab {
+  flex: 0 0 auto;
+}
+
+.update-center-list,
+.update-center-history-list {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.update-center-section {
   display: grid;
   gap: var(--s-2);
+}
+
+.update-center-section > header {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-1) 0;
+}
+
+.update-center-section > header strong {
+  color: var(--text-hi);
+  font-size: var(--type-body-size);
+}
+
+.update-center-section > header small,
+.update-center-section__empty,
+.update-center-history-item span,
+.update-center-history-item small {
+  color: var(--text-dim);
+  font-size: var(--type-caption-size);
+  line-height: var(--lh-note);
+}
+
+.update-center-section__items {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.update-center-section__empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--r-lg);
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+}
+
+.update-center-history-panel {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.update-center-history-item {
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s-1);
+  padding: var(--s-4);
+}
+
+.update-center-history-item strong {
+  color: var(--text-hi);
+  overflow-wrap: anywhere;
 }
 
 .update-center-item {
@@ -1532,6 +1604,12 @@
   padding: var(--s-5);
 }
 
+.confirmation-dialog form {
+  max-height: min(720px, calc(100vh - var(--s-8)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .conversation-rename-dialog header,
 .confirmation-dialog header {
   display: grid;
@@ -1578,7 +1656,30 @@
   font-size: var(--type-body-size);
   line-height: var(--lh-relaxed);
   margin: 0;
+  overflow-wrap: anywhere;
   white-space: pre-line;
+}
+
+.confirmation-dialog__suppress {
+  align-items: flex-start;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--type-caption-size);
+  gap: var(--s-2);
+  line-height: var(--lh-tight);
+  max-width: 100%;
+  user-select: none;
+}
+
+.confirmation-dialog__suppress input {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.confirmation-dialog__suppress span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .confirmation-dialog[data-tone='danger'] footer .dialog-primary {

@@ -10,6 +10,7 @@ export type { TerminalLayoutDependencies } from './terminal-layout-dependencies'
 import type { TerminalLayoutDependencies } from './terminal-layout-dependencies';
 
 export interface TerminalLayout {
+  appendDroppedPaths: (paths: readonly string[]) => boolean;
   cancelActiveResizes: () => void;
   focusComposer: () => boolean;
   flushPendingComposerFocus: () => void;
@@ -36,6 +37,7 @@ export const createTerminalLayout = (
   const resizerActions = createTerminalLayoutResizerActions(elements, dependencies, views);
 
   return {
+    appendDroppedPaths: composerActions.appendDroppedPaths,
     cancelActiveResizes: resizerActions.cancelActiveResizes,
     focusComposer: composerActions.focusComposer,
     flushPendingComposerFocus: composerActions.flushPendingComposerFocus,

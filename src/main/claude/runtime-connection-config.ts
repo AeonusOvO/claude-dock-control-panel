@@ -22,6 +22,7 @@ import {
   findClaudeProvider,
   officialNetworkProviderForClaudePreset,
 } from '../../shared/claude/providers';
+import { withProviderProtocol } from '../network/provider-access-policy';
 import type { CcSwitchProviderExportInput } from './cc-switch-adapter';
 import { testClaudeConnection } from './connection-test';
 import { resolveAutomaticClaudeConnection } from './automatic-connection';
@@ -117,14 +118,15 @@ export const claudeNetworkAccessForConfig = (
 export const claudeNetworkAccessForConfigInput = (
   input: SaveClaudeConfigInput,
 ): Readonly<ClaudeNetworkAccess> | undefined => {
-  const officialNetworkProvider = officialNetworkProviderForClaudePreset(input.preset);
+  const validatedInput = withProviderProtocol(input);
+  const officialNetworkProvider = officialNetworkProviderForClaudePreset(validatedInput.preset);
   if (officialNetworkProvider) {
     return captureClaudeNetworkAccess({ provider: officialNetworkProvider });
   }
-  if (input.protocol === 'openai') return undefined;
+  if (validatedInput.protocol === 'openai') return undefined;
   return claudeNetworkAccessForConfig(
-    normalizeClaudeConfig(input),
-    input.protocol ?? defaultConnectionProtocolForPreset(input.preset),
+    normalizeClaudeConfig(validatedInput),
+    validatedInput.protocol ?? defaultConnectionProtocolForPreset(validatedInput.preset),
   );
 };
 
@@ -686,17 +688,19 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     historyName?: string,
     assertCurrent: () => void = () => undefined,
   ): Promise<PreparedClaudeConfigSave> {
-    if (input.protocol !== 'openai') {
+    const validatedInput = withProviderProtocol(input);
+    if (validatedInput.protocol !== 'openai') {
       return {
         historyMetadata: {
           ...(historyName ? { name: historyName } : {}),
-          protocol: input.protocol ?? defaultConnectionProtocolForPreset(input.preset),
+          protocol:
+            validatedInput.protocol ?? defaultConnectionProtocolForPreset(validatedInput.preset),
         },
-        input,
+        input: validatedInput,
       };
     }
 
-    const openAiPrepared = await this.prepareOpenAiConnection(input, assertCurrent);
+    const openAiPrepared = await this.prepareOpenAiConnection(validatedInput, assertCurrent);
     const prepared: PreparedClaudeConfigSave = {
       historyMetadata: {
         ...openAiPrepared.historyMetadata,
@@ -740,7 +744,9 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       assertCurrent();
       this.assertConnectionHistoryAuthorizationCurrent(cwd, authorization);
       const preparedNetworkAccess = claudeNetworkAccessForConfig(
-        normalizeClaudeConfig(prepared.input),
+        normalizeClaudeConfig(prepared.input, {
+          allowRoutedEffectiveRoute: prepared.presentation?.protocol === 'openai',
+        }),
         prepared.presentation?.protocol ??
           prepared.input.protocol ??
           defaultConnectionProtocolForPreset(prepared.input.preset),
@@ -762,15 +768,16 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     replay: ConnectionHistoryReplay,
     assertCurrent: () => void,
   ): Promise<PreparedClaudeConfigSave> | PreparedClaudeConfigSave {
-    if (replay.config.protocol === 'openai') {
-      return this.prepareConnectionConfig(replay.config, replay.name, assertCurrent);
+    const validatedInput = withProviderProtocol(replay.config);
+    if (validatedInput.protocol === 'openai') {
+      return this.prepareConnectionConfig(validatedInput, replay.name, assertCurrent);
     }
     return {
       historyMetadata: {
         name: replay.name,
         protocol: replay.protocol,
       },
-      input: replay.config,
+      input: validatedInput,
     };
   }
 
@@ -951,6 +958,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
           model: `${saved.provider.name}/${model}`,
           modelFast: `${saved.provider.name}/${modelFast}`,
           preset: input.preset,
+          protocol: 'openai',
           provider: 'gateway',
         },
         historyMetadata: {
@@ -1013,10 +1021,15 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     cwd: string,
     input: SaveClaudeConfigInput,
   ): Promise<ClaudeConnectionTestResult> {
+    const validatedInput = withProviderProtocol(input);
     const prepared =
-      input.protocol === 'openai' ? await this.prepareOpenAiConnection(input) : undefined;
-    const testInput = prepared?.effectiveInput ?? input;
-    const config = normalizeClaudeConfig(testInput);
+      validatedInput.protocol === 'openai'
+        ? await this.prepareOpenAiConnection(validatedInput)
+        : undefined;
+    const testInput = prepared?.effectiveInput ?? validatedInput;
+    const config = normalizeClaudeConfig(testInput, {
+      allowRoutedEffectiveRoute: Boolean(prepared),
+    });
     const enteredCredential = testInput.credential?.trim();
     const credential = enteredCredential || this.configStore.getCredential(cwd);
     const fingerprint = connectionFingerprint(config, credential);
@@ -1041,7 +1054,9 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     configScope = cwd,
   ): Promise<ClaudeConnectionTestResult> {
     assertCurrent();
-    const config = normalizeClaudeConfig(prepared.input);
+    const config = normalizeClaudeConfig(prepared.input, {
+      allowRoutedEffectiveRoute: prepared.presentation?.protocol === 'openai',
+    });
     const enteredCredential = prepared.input.credential?.trim();
     const credential = enteredCredential || this.configStore.getCredential(configScope);
     const fingerprint = connectionFingerprint(config, credential);

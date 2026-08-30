@@ -23,6 +23,7 @@ const createStore = () => {
 
 const settings = (chatIdleTimeoutMinutes: 0 | 5 | 10 | 30, webResearchIsolation: boolean) => ({
   chatIdleTimeoutMinutes,
+  confirmFileDrops: true,
   networkPreflight: { checkOnNewSession: true, checkOnProviderLogin: true },
   webResearchIsolation,
 });

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   ApplicationUpdaterState,
   ClaudePluginCatalog,
+  DownloadTaskView,
   SoftwareUpdateState,
 } from '../../src/shared/contracts';
 import { createRendererHarness } from '../helpers/renderer-harness';
@@ -103,6 +104,30 @@ describe('renderer updates feature', () => {
     }
   });
 
+  it('offers a fresh download after an interrupted application install', async () => {
+    const interrupted = applicationUpdater('install-recovery', {
+      message: '上次 ClaudeDock 5.0.0-rc.16 的安装未完成，请重新下载并安装。',
+    });
+    const harness = await createRendererHarness({
+      getApplicationUpdaterState: vi.fn(async () => interrupted),
+      getSoftwareUpdates: vi.fn(async () => softwareUpdates),
+    });
+    try {
+      await settle(harness);
+      expect(harness.query('#application-update-action').textContent).toBe('重新下载并安装');
+
+      harness.click('#refresh-updates');
+      await settle(harness);
+
+      expect(
+        harness.query('[data-update-id="application"] .update-center-item__action').textContent,
+      ).toBe('重新下载并安装');
+      expect(harness.query('#update-center-list').textContent).toContain('安装未完成');
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   it('runs the application update last because success exits into the installer', async () => {
     const operationOrder: string[] = [];
     let updaterState = applicationUpdater('available');
@@ -135,6 +160,56 @@ describe('renderer updates feature', () => {
       await settle(harness);
 
       expect(operationOrder).toEqual(['claude-code', 'application']);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it('asks before resuming an interrupted download and refreshes the recovery state', async () => {
+    const recoveryTask: DownloadTaskView = {
+      bytesPerSecond: 128,
+      canPause: false,
+      canResume: true,
+      elapsedMs: 10_000,
+      id: 'recovered-tool',
+      label: '恢复生命周期测试下载',
+      percent: 10,
+      receivedBytes: 100,
+      remainingMs: 70_000,
+      recoveryPending: true,
+      startedAt: 1_000,
+      state: 'paused',
+      totalBytes: 1_000,
+    };
+    let recoveryVisible = true;
+    const harness = await createRendererHarness({
+      discardDownloadRecovery: vi.fn(async () => {
+        recoveryVisible = false;
+        return [];
+      }),
+      listDownloadRecoveryPending: vi.fn(async () => (recoveryVisible ? [recoveryTask] : [])),
+      listDownloads: vi.fn(async () => (recoveryVisible ? [recoveryTask] : [])),
+      resumeDownloadRecovery: vi.fn(async () => {
+        recoveryVisible = false;
+        return { ...recoveryTask, recoveryPending: false };
+      }),
+    });
+    try {
+      harness.click('#refresh-updates');
+      expect(harness.query<HTMLDialogElement>('#update-center-dialog').open).toBe(true);
+      await settle(harness);
+
+      expect(harness.query<HTMLDialogElement>('#update-center-dialog').open).toBe(true);
+      expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(true);
+      expect(harness.query('#confirmation-dialog-message').textContent).toContain('上次下载被中断');
+      expect(harness.query('#confirmation-dialog-confirm').textContent).toBe('恢复更新');
+
+      harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
+      await settle(harness);
+
+      expect(harness.method('resumeDownloadRecovery')).toHaveBeenCalledWith('recovered-tool');
+      expect(harness.method('discardDownloadRecovery')).not.toHaveBeenCalled();
+      expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(false);
     } finally {
       await harness.cleanup();
     }

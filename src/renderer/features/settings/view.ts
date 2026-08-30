@@ -94,6 +94,7 @@ const pendingAppSettings = (
   return {
     advanced: {
       chatIdleTimeoutMinutes: Number(elements.chatIdleTimeout.value) as 0 | 5 | 10 | 30,
+      confirmFileDrops: elements.confirmFileDrops.checked,
       networkPreflight: {
         checkOnNewSession: elements.networkNewSession.checked,
         checkOnProviderLogin: elements.networkProviderLogin.checked,
@@ -154,6 +155,7 @@ const updateSettingsUnsavedIndicator = (context: SettingsViewContext): number =>
       startupModelConnectForceStopAfterMinutes(state.saved),
     pending.theme !== state.saved.theme,
     pending.advanced.chatIdleTimeoutMinutes !== state.saved.advanced.chatIdleTimeoutMinutes,
+    pending.advanced.confirmFileDrops !== (state.saved.advanced.confirmFileDrops ?? true),
     pending.advanced.webResearchIsolation !== state.saved.advanced.webResearchIsolation,
     pending.advanced.networkPreflight.checkOnNewSession !== savedNetwork.checkOnNewSession,
     pending.advanced.networkPreflight.checkOnProviderLogin !== savedNetwork.checkOnProviderLogin,
@@ -190,6 +192,7 @@ const applyAppSettingsToControls = (
     elements.chatIdleTimeout,
     String(settings.advanced.chatIdleTimeoutMinutes),
   );
+  elements.confirmFileDrops.checked = settings.advanced.confirmFileDrops ?? true;
   elements.webResearchIsolation.checked = settings.advanced.webResearchIsolation;
   const networkPreflight = settings.advanced.networkPreflight ?? {
     checkOnNewSession: true,

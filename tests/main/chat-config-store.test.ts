@@ -249,6 +249,38 @@ describe('independent chat profile store', () => {
     expect(fetchMock.mock.calls.every(([, options]) => !options?.method)).toBe(true);
   });
 
+  it('rejects a Coding Plan key during a direct ordinary-API save', () => {
+    const { store } = createStore();
+    expect(() =>
+      store.save({
+        authMode: 'bearer',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        credential: 'sk-sp-plan-key',
+        credentialAction: 'replace',
+        model: 'qwen-plus',
+        preset: 'qwen-api',
+        protocol: 'openai',
+      }),
+    ).toThrow('Coding Plan');
+    expect(store.getView().credentialConfigured).toBe(false);
+  });
+
+  it('rejects the managed ChatGPT subscription even when a renderer forges its hidden preset', () => {
+    const { store } = createStore();
+    expect(() =>
+      store.save({
+        authMode: 'bearer',
+        baseUrl: 'http://127.0.0.1:8317',
+        credential: 'managed-token',
+        credentialAction: 'replace',
+        model: 'gpt-5.6-sol',
+        preset: 'chatgpt-subscription',
+        protocol: 'anthropic',
+      }),
+    ).toThrow('ChatGPT 订阅');
+    expect(store.getView()).not.toHaveProperty('preset');
+  });
+
   it('separates coding plans from ordinary chat APIs and recognizes saved API endpoints', async () => {
     expect(findChatProvider('qwen-cn')).toBeUndefined();
     expect(findChatProvider('glm-cn')).toBeUndefined();

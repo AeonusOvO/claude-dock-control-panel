@@ -88,8 +88,20 @@ describe('automatic terminal start ownership', () => {
       async (harness) => {
         const file = new harness.dom.window.File(['project'], 'project');
         const drop = new harness.dom.window.Event('drop', { bubbles: true, cancelable: true });
-        Object.defineProperty(drop, 'dataTransfer', { value: { files: [file] } });
+        Object.defineProperty(drop, 'dataTransfer', {
+          value: {
+            files: [file],
+            items: [
+              {
+                getAsFile: () => file,
+                kind: 'file',
+                webkitGetAsEntry: () => ({ isDirectory: true }),
+              },
+            ],
+          },
+        });
         harness.document.dispatchEvent(drop);
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
         await settle(harness);
 
         expect(harness.method('addProject')).toHaveBeenCalledWith(errored.cwd);

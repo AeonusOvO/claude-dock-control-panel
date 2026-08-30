@@ -1,3 +1,5 @@
+/* eslint-disable max-lines */
+
 import { z } from 'zod';
 import { SUBSCRIPTION_PROVIDERS } from '../claude/subscriptions';
 import type {
@@ -40,7 +42,11 @@ const SESSION_ID_PATTERN = /^session-\d{1,10}$/u;
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const DOWNLOAD_TASK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u;
 const HISTORY_ENTRY_ID_PATTERN = /^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/u;
+const MCP_BACKUP_ID_PATTERN =
+  /^(?:[0-9TZ-]+|[0-9TZ-]+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
 const MCP_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
+const MCP_TOGGLE_PREVIEW_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MODEL_OPTION_ID_PATTERN = /^(?:current|history-[a-z0-9]{1,16}-[a-z0-9]{1,16})$/u;
 const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,79})?$/u;
 const NATIVE_SUBMIT_AUTHORITY_FIELDS = new Set([
@@ -397,9 +403,25 @@ export const pluginIdSchema = guarded<string>(
   '插件标识无效。',
 );
 
+export const mcpBackupIdSchema = guarded<string>(
+  (value): value is string => typeof value === 'string' && MCP_BACKUP_ID_PATTERN.test(value),
+  'MCP 备份标识无效。',
+);
+
+export const mcpNameSchema = guarded<string>(
+  (value): value is string => typeof value === 'string' && MCP_NAME_PATTERN.test(value),
+  'MCP 名称无效。',
+);
+
 export const mcpScopeSchema = guarded<McpScope>(
   (value): value is McpScope => value === 'local' || value === 'project' || value === 'user',
   'MCP 作用域无效。',
+);
+
+export const mcpTogglePreviewIdSchema = guarded<string>(
+  (value): value is string =>
+    typeof value === 'string' && MCP_TOGGLE_PREVIEW_ID_PATTERN.test(value),
+  'MCP 改动预览标识无效。',
 );
 
 export const projectPathInputSchema = guarded<string>(
@@ -467,8 +489,9 @@ export const mcpRemoveInputSchema = z
       addIssue(context, 'MCP 卸载参数无效。');
       return;
     }
-    if (typeof value.name !== 'string' || !MCP_NAME_PATTERN.test(value.name)) {
-      addIssue(context, 'MCP 名称无效。');
+    const name = mcpNameSchema.safeParse(value.name);
+    if (!name.success) {
+      addIssue(context, name.error.issues[0]?.message ?? 'MCP 名称无效。');
       return;
     }
     const cwd = projectPathInputSchema.safeParse(value.cwd);
@@ -837,20 +860,29 @@ export const IPC_REQUESTS = {
   [CHANNELS.DOWNLOAD_HISTORY_DELETE]: request('deleteDownloadHistory', [downloadTaskIdSchema]),
   [CHANNELS.DOWNLOAD_LIST]: request('listDownloads', []),
   [CHANNELS.DOWNLOAD_PAUSE]: request('pauseDownload', [downloadTaskIdSchema]),
+  [CHANNELS.DOWNLOAD_RECOVERY_DISCARD]: request('discardDownloadRecovery', [downloadTaskIdSchema]),
+  [CHANNELS.DOWNLOAD_RECOVERY_LIST]: request('listDownloadRecoveryPending', []),
+  [CHANNELS.DOWNLOAD_RECOVERY_RESUME]: request('resumeDownloadRecovery', [downloadTaskIdSchema]),
   [CHANNELS.DOWNLOAD_RESUME]: request('resumeDownload', [downloadTaskIdSchema]),
   [CHANNELS.MARKDOWN_OPEN_EXTERNAL]: request('openMarkdownExternal', [
     markdownExternalUrlInputSchema,
   ]),
-  [CHANNELS.MCP_BACKUP_RESTORE]: request('restoreMcpBackup', [z.string(), projectPathInputSchema]),
+  [CHANNELS.MCP_BACKUP_RESTORE]: request('restoreMcpBackup', [
+    mcpBackupIdSchema,
+    projectPathInputSchema,
+  ]),
   [CHANNELS.MCP_BACKUPS]: request('getMcpBackups', []),
   [CHANNELS.MCP_GET_CATALOG]: request('getMcpCatalog', [projectPathInputSchema, z.boolean()]),
   [CHANNELS.MCP_INSTALL]: request('installMcpServer', [mcpInstallInputSchema]),
   [CHANNELS.MCP_REMOVE]: request('removeMcpServer', [mcpRemoveInputSchema]),
-  [CHANNELS.MCP_TOGGLE_APPLY]: request('applyMcpToggle', [z.string(), projectPathInputSchema]),
-  [CHANNELS.MCP_TOGGLE_DISCARD]: request('discardMcpToggle', [z.string()]),
+  [CHANNELS.MCP_TOGGLE_APPLY]: request('applyMcpToggle', [
+    mcpTogglePreviewIdSchema,
+    projectPathInputSchema,
+  ]),
+  [CHANNELS.MCP_TOGGLE_DISCARD]: request('discardMcpToggle', [mcpTogglePreviewIdSchema]),
   [CHANNELS.MCP_TOGGLE_PREVIEW]: request('previewMcpToggle', [
     projectPathInputSchema,
-    z.string(),
+    mcpNameSchema,
     z.boolean(),
   ]),
   [CHANNELS.NATIVE_ATTACHMENT_IMPORT_BYTES]: request('importNativeAttachmentBytes', [

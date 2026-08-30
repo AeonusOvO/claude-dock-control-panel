@@ -263,6 +263,38 @@ describe('Claude plugin manager parsing', () => {
       expect.not.objectContaining({ repo: expect.anything() }),
     ]);
   });
+
+  it('extracts only structured GitHub repositories and keeps credentialed sources non-repositories', () => {
+    const catalog = parsePluginCatalog(
+      JSON.stringify({
+        available: [
+          {
+            description: 'safe',
+            marketplaceName: 'official',
+            name: 'safe',
+            pluginId: 'safe@official',
+            source: { url: 'https://GitHub.com/Owner/Repo.git?ref=main' },
+          },
+          {
+            description: 'credentialed',
+            marketplaceName: 'private',
+            name: 'credentialed',
+            pluginId: 'credentialed@private',
+            source: { url: 'https://user:secret@github.com/owner/private' },
+          },
+        ],
+        installed: [],
+      }),
+    );
+
+    expect(catalog.available[0]?.github).toEqual({
+      provenance: 'built-in',
+      repositoryUri: 'https://github.com/owner/repo',
+      stars: null,
+    });
+    expect(catalog.available[1]?.github).toBeUndefined();
+    expect(JSON.stringify(catalog)).not.toContain('secret');
+  });
 });
 
 describe('Claude plugin manager catalog fencing', () => {
@@ -482,6 +514,195 @@ describe('Claude plugin manager catalog fencing', () => {
       ['plugin', 'update', 'example@official', '--scope', 'user'],
     ]);
     expect(mutationCalls.flat()).not.toContain('--yes');
+  });
+
+  it('looks up one normalized repository per catalog and preserves plugin identities', async () => {
+    const commandRunner = vi.fn(async (_command: string, argumentsList: string[]) => {
+      if (commandIs(argumentsList, 'plugin', 'list')) {
+        return JSON.stringify({
+          available: [
+            {
+              description: 'first',
+              marketplaceName: 'official',
+              name: 'first',
+              pluginId: 'first@official',
+              source: { url: 'https://github.com/Owner/Repo.git' },
+            },
+            {
+              description: 'second',
+              marketplaceName: 'official',
+              name: 'second',
+              pluginId: 'second@official',
+              source: { source: 'github.com/owner/repo' },
+            },
+          ],
+          installed: [],
+        });
+      }
+      return '[]';
+    });
+    const metadataService = {
+      get: vi.fn(async () => ({
+        provenance: 'live' as const,
+        repositoryUri: 'https://github.com/owner/repo',
+        stars: 321,
+      })),
+    };
+    const manager = new ClaudePluginManager(
+      'C:\\test',
+      commandRunner as unknown as typeof runWindowsCommand,
+      async () => '{}',
+      metadataService,
+    );
+
+    const catalog = await manager.getCatalog(true);
+
+    expect(metadataService.get).toHaveBeenCalledTimes(1);
+    expect(metadataService.get).toHaveBeenCalledWith('https://github.com/owner/repo');
+    expect(catalog.available.map((plugin) => plugin.pluginId)).toEqual([
+      'first@official',
+      'second@official',
+    ]);
+    expect(catalog.available.every((plugin) => plugin.github?.stars === 321)).toBe(true);
+  });
+
+  it('keeps the catalog available when metadata lookup fails and refreshes metadata on cached reads', async () => {
+    let metadataCall = 0;
+    const commandRunner = vi.fn(async (_command: string, argumentsList: string[]) => {
+      if (commandIs(argumentsList, 'plugin', 'list')) {
+        return JSON.stringify({
+          available: [
+            {
+              description: 'stable',
+              marketplaceName: 'official',
+              name: 'stable',
+              pluginId: 'stable@official',
+              source: { url: 'https://github.com/owner/repo' },
+            },
+          ],
+          installed: [],
+        });
+      }
+      return '[]';
+    });
+    const metadataService = {
+      get: vi.fn(async () => {
+        metadataCall += 1;
+        if (metadataCall === 1) {
+          throw new Error('metadata unavailable');
+        }
+        return {
+          provenance: 'live' as const,
+          repositoryUri: 'https://github.com/owner/repo',
+          stars: 88,
+        };
+      }),
+    };
+    const manager = new ClaudePluginManager(
+      'C:\\test',
+      commandRunner as unknown as typeof runWindowsCommand,
+      async () => '{}',
+      metadataService,
+    );
+
+    const first = await manager.getCatalog(true);
+    const second = await manager.getCatalog(false);
+
+    expect(first.available).toHaveLength(1);
+    expect(first.available[0]?.github).toMatchObject({
+      provenance: 'built-in',
+      repositoryUri: 'https://github.com/owner/repo',
+      stars: null,
+    });
+    expect(second.available[0]?.github).toMatchObject({ provenance: 'live', stars: 88 });
+    expect(metadataService.get).toHaveBeenCalledTimes(2);
+    expect(
+      commandRunner.mock.calls.filter((call) => commandIs(call[1], 'plugin', 'list')),
+    ).toHaveLength(1);
+  });
+
+  it('ignores unsafe metadata service results rather than replacing a safe built-in identity', async () => {
+    const commandRunner = vi.fn(async (_command: string, argumentsList: string[]) => {
+      if (commandIs(argumentsList, 'plugin', 'list')) {
+        return JSON.stringify({
+          available: [
+            {
+              description: 'safe',
+              marketplaceName: 'official',
+              name: 'safe',
+              pluginId: 'safe@official',
+              source: { url: 'https://github.com/owner/repo' },
+            },
+          ],
+          installed: [],
+        });
+      }
+      return '[]';
+    });
+    const manager = new ClaudePluginManager(
+      'C:\\test',
+      commandRunner as unknown as typeof runWindowsCommand,
+      async () => '{}',
+      {
+        get: vi.fn(async () => ({
+          provenance: 'live' as const,
+          repositoryUri: 'https://user:secret@github.com/owner/repo',
+          stars: 999,
+        })),
+      },
+    );
+
+    const catalog = await manager.getCatalog(true);
+
+    expect(catalog.available[0]?.github).toEqual({
+      provenance: 'built-in',
+      repositoryUri: 'https://github.com/owner/repo',
+      stars: null,
+    });
+    expect(JSON.stringify(catalog)).not.toContain('secret');
+  });
+
+  it('uses a normalized GitHub repository from the marketplace record for installed entries', async () => {
+    const commandRunner = vi.fn(async (_command: string, argumentsList: string[]) => {
+      if (commandIs(argumentsList, 'plugin', 'list')) {
+        return JSON.stringify({
+          available: [],
+          installed: [{ enabled: true, id: 'installed@official', version: '1.0.0' }],
+        });
+      }
+      if (commandIs(argumentsList, 'plugin', 'marketplace', 'list')) {
+        return JSON.stringify([
+          {
+            name: 'official',
+            repo: 'https://www.github.com/Owner/Repo.git',
+            source: 'https://github.com/Owner/Repo.git',
+          },
+        ]);
+      }
+      return '';
+    });
+    const metadataService = {
+      get: vi.fn(async () => ({
+        provenance: 'live' as const,
+        repositoryUri: 'https://github.com/owner/repo',
+        stars: 17,
+      })),
+    };
+    const manager = new ClaudePluginManager(
+      'C:\\test',
+      commandRunner as unknown as typeof runWindowsCommand,
+      async () => '{}',
+      metadataService,
+    );
+
+    const catalog = await manager.getCatalog(true);
+
+    expect(metadataService.get).toHaveBeenCalledWith('https://github.com/owner/repo');
+    expect(catalog.installed[0]?.github).toMatchObject({
+      provenance: 'live',
+      repositoryUri: 'https://github.com/owner/repo',
+      stars: 17,
+    });
   });
 });
 

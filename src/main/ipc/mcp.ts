@@ -7,7 +7,8 @@ import type {
   McpTogglePreview,
 } from '../../shared/contracts';
 import { createFailureReporter } from '../infra/logger';
-import { validateMcpInstallInput, validateMcpRemoveInput, validateProjectPath } from './validation';
+import { validateProjectPath } from './validation';
+import { parseIpcRequestArgs } from '../../shared/ipc/schema';
 import type { MainGuards } from './guards';
 
 export interface McpIpcDependencies {
@@ -18,16 +19,6 @@ export interface McpIpcDependencies {
 }
 
 const reportMcpFailure = createFailureReporter('mcp');
-
-const validateTogglePreviewId = (value: unknown): string => {
-  if (
-    typeof value !== 'string' ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  ) {
-    throw new Error('MCP 改动预览标识无效。');
-  }
-  return value;
-};
 
 export const registerMcpIpc = ({
   guards: { assertExternalRoutingWritesAllowed, requireMcpManager, validateSender },
@@ -53,51 +44,53 @@ export const registerMcpIpc = ({
   };
   ipcMain.handle(
     CHANNELS.MCP_GET_CATALOG,
-    async (event, cwd: unknown, refreshRegistry: unknown): Promise<McpCatalog> => {
+    async (event, ...args: unknown[]): Promise<McpCatalog> => {
       validateSender(event);
-      return requireMcpManager().getCatalog(validateProjectPath(cwd), refreshRegistry === true);
+      const [cwd, refreshRegistry] = parseIpcRequestArgs(CHANNELS.MCP_GET_CATALOG, args);
+      return requireMcpManager().getCatalog(validateProjectPath(cwd), refreshRegistry);
     },
   );
   ipcMain.handle(
     CHANNELS.MCP_INSTALL,
-    async (event, rawInput: unknown): Promise<McpOperationResult> => {
+    async (event, ...args: unknown[]): Promise<McpOperationResult> => {
       validateSender(event);
-      const input = validateMcpInstallInput(rawInput);
+      const [parsedInput] = parseIpcRequestArgs(CHANNELS.MCP_INSTALL, args);
+      const input = { ...parsedInput, cwd: validateProjectPath(parsedInput.cwd) };
       return runMcpMutation(input.cwd, () => requireMcpManager().install(input));
     },
   );
   ipcMain.handle(
     CHANNELS.MCP_REMOVE,
-    async (event, rawInput: unknown): Promise<McpOperationResult> => {
+    async (event, ...args: unknown[]): Promise<McpOperationResult> => {
       validateSender(event);
-      const input = validateMcpRemoveInput(rawInput);
+      const [parsedInput] = parseIpcRequestArgs(CHANNELS.MCP_REMOVE, args);
+      const input = { ...parsedInput, cwd: validateProjectPath(parsedInput.cwd) };
       return runMcpMutation(input.cwd, () => requireMcpManager().remove(input));
     },
   );
   ipcMain.handle(
     CHANNELS.MCP_TOGGLE_PREVIEW,
-    async (event, cwd: unknown, name: unknown, enabled: unknown): Promise<McpTogglePreview> => {
+    async (event, ...args: unknown[]): Promise<McpTogglePreview> => {
       validateSender(event);
-      if (typeof name !== 'string' || typeof enabled !== 'boolean') {
-        throw new Error('MCP 启停参数无效。');
-      }
+      const [cwd, name, enabled] = parseIpcRequestArgs(CHANNELS.MCP_TOGGLE_PREVIEW, args);
       return requireMcpManager().previewToggle(validateProjectPath(cwd), name, enabled);
     },
   );
   ipcMain.handle(
     CHANNELS.MCP_TOGGLE_APPLY,
-    async (event, previewId: unknown, cwd: unknown): Promise<McpOperationResult> => {
+    async (event, ...args: unknown[]): Promise<McpOperationResult> => {
       validateSender(event);
-      const validatedPreviewId = validateTogglePreviewId(previewId);
+      const [previewId, cwd] = parseIpcRequestArgs(CHANNELS.MCP_TOGGLE_APPLY, args);
       const validatedCwd = validateProjectPath(cwd);
       return runMcpMutation(validatedCwd, () =>
-        requireMcpManager().applyToggle(validatedPreviewId),
+        requireMcpManager().applyToggle(previewId, validatedCwd),
       );
     },
   );
-  ipcMain.handle(CHANNELS.MCP_TOGGLE_DISCARD, (event, previewId: unknown): boolean => {
+  ipcMain.handle(CHANNELS.MCP_TOGGLE_DISCARD, (event, ...args: unknown[]): boolean => {
     validateSender(event);
-    return requireMcpManager().discardToggle(validateTogglePreviewId(previewId));
+    const [previewId] = parseIpcRequestArgs(CHANNELS.MCP_TOGGLE_DISCARD, args);
+    return requireMcpManager().discardToggle(previewId);
   });
   ipcMain.handle(CHANNELS.MCP_BACKUPS, (event): McpBackupView[] => {
     validateSender(event);
@@ -105,9 +98,9 @@ export const registerMcpIpc = ({
   });
   ipcMain.handle(
     CHANNELS.MCP_BACKUP_RESTORE,
-    async (event, backupId: unknown, cwd: unknown): Promise<McpOperationResult> => {
+    async (event, ...args: unknown[]): Promise<McpOperationResult> => {
       validateSender(event);
-      if (typeof backupId !== 'string') throw new Error('MCP 备份标识无效。');
+      const [backupId, cwd] = parseIpcRequestArgs(CHANNELS.MCP_BACKUP_RESTORE, args);
       const validatedCwd = validateProjectPath(cwd);
       return runMcpMutation(validatedCwd, () =>
         requireMcpManager().restoreBackup(backupId, validatedCwd),

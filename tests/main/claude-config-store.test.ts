@@ -253,4 +253,47 @@ describe('Claude project profile store', () => {
       spy.mockRestore();
     }
   });
+
+  it('rejects wrong Qwen credential kinds before persisting a direct project save', () => {
+    const { store, profilePath } = createStore();
+    const qwenCodingPlan = {
+      authMode: 'authToken' as const,
+      baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+      credential: 'sk-dashscope-ordinary-key',
+      credentialAction: 'replace' as const,
+      model: 'qwen3.7-plus',
+      preset: 'qwen-cn' as const,
+      provider: 'gateway' as const,
+    };
+    expect(() => store.save('D:\\Projects\\Qwen', qwenCodingPlan)).toThrow('Coding Plan');
+    expect(store.getCredential('D:\\Projects\\Qwen')).toBeUndefined();
+    expect(() => readFileSync(profilePath, 'utf8')).toThrow();
+
+    expect(() =>
+      store.save('D:\\Projects\\QwenApi', {
+        ...qwenCodingPlan,
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        credential: 'sk-sp-plan-key',
+        model: 'qwen-plus',
+        preset: 'qwen-api',
+        protocol: 'openai',
+      }),
+    ).toThrow('Coding Plan');
+  });
+
+  it('rejects a fixed Qwen protocol mismatch without contacting or saving a route', () => {
+    const { store } = createStore();
+    expect(() =>
+      store.save('D:\\Projects\\QwenApi', {
+        authMode: 'authToken',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        credential: 'sk-api-key',
+        credentialAction: 'replace',
+        model: 'qwen-plus',
+        preset: 'qwen-api',
+        protocol: 'anthropic',
+        provider: 'gateway',
+      }),
+    ).toThrow('固定使用 OpenAI 协议');
+  });
 });

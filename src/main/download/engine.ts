@@ -183,6 +183,89 @@ export class DownloadEngine {
     return [...current, ...this.history.list().filter(({ id }) => !currentIds.has(id))];
   }
 
+  public listRecoveryPending(): DownloadTaskView[] {
+    return [...this.tasks.values()]
+      .filter(({ recoveryAwaitingDecision, settled }) => recoveryAwaitingDecision && !settled)
+      .map(({ view }) => ({ ...view, recoveryPending: true }));
+  }
+
+  /** Resumes one startup-recovered task only after the renderer has obtained explicit consent. */
+  public resumeRecovery(taskId: string): DownloadTaskView {
+    this.requireOperational();
+    const task = this.requireActiveTask(taskId);
+    if (!task.recoveryAwaitingDecision || !task.restored) {
+      throw new Error('该下载不需要恢复确认。');
+    }
+    task.resumeOnBind = true;
+    const item = task.item;
+    const generation = task.itemGeneration;
+    if (item && this.ownsItemGeneration(task, item, generation)) {
+      try {
+        if (!item.canResume()) throw new Error('当前下载不能继续。');
+        item.resume();
+      } catch (error) {
+        // Keep the recovery decision visible when the native item cannot actually continue. The
+        // user may retry or discard it after a transient scanner/network failure.
+        task.resumeOnBind = false;
+        throw error;
+      }
+      if (this.ownsItemGeneration(task, item, generation)) {
+        task.resumeOnBind = false;
+        task.recoveryAwaitingDecision = false;
+        task.view = { ...task.view, recoveryPending: false };
+        this.retry.armStallTimer(task, item, generation);
+      }
+    } else {
+      // The startup item may still be binding. Keep the recovery decision visible until acceptItem()
+      // has confirmed that the exact native generation can actually resume; a false canResume()
+      // must leave the user a retry or discard path.
+    }
+    this.notify();
+    return { ...task.view };
+  }
+
+  /** Discards only the selected recovered task and its journal/snapshot, never its final artifact. */
+  public discardRecovery(taskId: string): DownloadTaskView[] {
+    this.requireOperational();
+    const task = this.requireActiveTask(taskId);
+    if (!task.recoveryAwaitingDecision || !task.restored) {
+      throw new Error('该下载不需要恢复确认。');
+    }
+    // Remove the durable record first. If this fails the task remains visible and recoverable.
+    this.journal.remove(taskId);
+    this.retry.clearStallTimer(task);
+    this.retry.clearAutoResumeTimer(task);
+    removePendingOwnership(task, this.pendingRestores, this.pendingByUrl);
+    this.retry.detachItemListeners(task);
+    const item = task.item;
+    task.item = undefined;
+    task.requestGeneration = undefined;
+    task.itemGeneration += 1;
+    task.startupCreatePending = false;
+    task.startupItemBindPending = false;
+    try {
+      item?.cancel();
+    } catch {
+      // Native recovery teardown is best effort; the journal removal prevents future execution.
+    }
+    this.deletePartial(task);
+    task.settled = true;
+    task.recoveryAwaitingDecision = false;
+    task.view = {
+      ...task.view,
+      canPause: false,
+      canResume: false,
+      finishedAt: Date.now(),
+      recoveryPending: false,
+      state: 'cancelled',
+    };
+    this.tasks.delete(taskId);
+    task.releaseBusy();
+    task.reject(new Error('恢复下载已放弃。'));
+    this.notify();
+    return this.list();
+  }
+
   public clearHistory(): DownloadTaskView[] {
     this.requireOperational();
     for (const [id, task] of this.tasks) {
@@ -533,6 +616,7 @@ export class DownloadEngine {
       request: { ...request },
       resolve,
       restored: Boolean(journalEntry),
+      recoveryAwaitingDecision: Boolean(journalEntry),
       resumeOnBind: false,
       settled: false,
       stallBytes: journalEntry?.receivedBytes ?? 0,
@@ -553,6 +637,7 @@ export class DownloadEngine {
         startedAt,
         state: journalEntry ? 'paused' : 'queued',
         totalBytes: journalEntry?.length ?? 0,
+        recoveryPending: Boolean(journalEntry),
       },
     };
     if (journalEntry) {
@@ -663,6 +748,10 @@ export class DownloadEngine {
           item.resume();
           if (task.view.state === 'verifying' || !this.ownsItemGeneration(task, item, generation)) {
             return;
+          }
+          if (task.recoveryAwaitingDecision) {
+            task.recoveryAwaitingDecision = false;
+            task.view = { ...task.view, recoveryPending: false };
           }
           this.retry.armStallTimer(task, item, generation);
         }

@@ -143,6 +143,9 @@ const requestChannels = {
   DOWNLOAD_HISTORY_DELETE: 'download:history-delete',
   DOWNLOAD_LIST: 'download:list',
   DOWNLOAD_PAUSE: 'download:pause',
+  DOWNLOAD_RECOVERY_DISCARD: 'download:recovery-discard',
+  DOWNLOAD_RECOVERY_LIST: 'download:recovery-list',
+  DOWNLOAD_RECOVERY_RESUME: 'download:recovery-resume',
   DOWNLOAD_RESUME: 'download:resume',
 
   // markdown

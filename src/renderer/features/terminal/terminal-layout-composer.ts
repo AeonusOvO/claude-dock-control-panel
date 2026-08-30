@@ -3,6 +3,7 @@ import type { TerminalLayoutDependencies } from './terminal-layout-dependencies'
 import type { TerminalState } from './state';
 
 export interface TerminalLayoutComposerActions {
+  appendDroppedPaths: (paths: readonly string[]) => boolean;
   focusComposer: () => boolean;
   flushPendingComposerFocus: () => void;
   playSendAnimation: (
@@ -39,6 +40,32 @@ export const createTerminalLayoutComposerActions = (
 
   /* The keyboard hints live in the placeholder, so they vanish the moment the user starts typing. */
   const COMPOSER_PLACEHOLDER = '输入提示词　·　Enter 发送　·　Shift+Enter 换行　·　↑↓ 翻阅历史';
+
+  /** Keep dropped Windows paths literal for PowerShell; embedded apostrophes are doubled. */
+  const quoteTerminalPath = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+  const appendDroppedPaths = (paths: readonly string[]): boolean => {
+    const validPaths = paths.filter((path) => path.length > 0);
+    const status = dependencies.activeStatus();
+    if (validPaths.length === 0) {
+      return false;
+    }
+    if (status?.phase !== 'running' || elements.composerInput.disabled) {
+      dependencies.showToast('当前终端不可输入，无法插入文件路径。', 'error');
+      return false;
+    }
+
+    const insertion = validPaths.map(quoteTerminalPath).join(' ');
+    const current = elements.composerInput.value;
+    elements.composerInput.value = `${current}${current.length > 0 && !/\\s$/u.test(current) ? ' ' : ''}${insertion}`;
+    elements.composerInput.setSelectionRange(
+      elements.composerInput.value.length,
+      elements.composerInput.value.length,
+    );
+    elements.composerInput.dispatchEvent(new Event('input', { bubbles: true }));
+    focusComposer();
+    return true;
+  };
 
   const setComposerEnabled = (enabled: boolean): void => {
     elements.composerInput.disabled = !enabled;
@@ -138,6 +165,7 @@ export const createTerminalLayoutComposerActions = (
   };
 
   return {
+    appendDroppedPaths,
     focusComposer,
     flushPendingComposerFocus,
     playSendAnimation,

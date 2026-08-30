@@ -190,6 +190,37 @@
 }
 
 @media (max-width: 720px) {
+  .drop-overlay > div {
+    padding: var(--s-6) var(--s-4);
+    width: calc(100% - var(--s-4));
+  }
+
+  .terminal-composer {
+    gap: var(--s-1-5);
+    padding-inline: var(--s-2);
+  }
+
+  #composer-send {
+    width: 48px;
+  }
+
+  .settings-row > span {
+    min-width: 0;
+  }
+
+  .settings-duration-control {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .settings-duration-control > small {
+    white-space: normal;
+  }
+
+  .settings-row--backend button {
+    min-width: 0;
+  }
+
   .conversation-model-dialog__comparison {
     grid-template-columns: minmax(0, 1fr);
   }

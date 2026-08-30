@@ -1,4 +1,5 @@
 import { createRegistryToken, type Registry } from '../../platform/registry';
+import type { ChatAttachmentImportCompletion } from './chat-attachment-import';
 import { createChatActions, type ChatActionsDependencies, type ChatActions } from './actions';
 import { createChatElements } from './elements';
 import {
@@ -19,7 +20,7 @@ export interface ChatFeature {
   hasActiveRequest: () => boolean;
   loadChatConfig: (force?: boolean) => Promise<void>;
   loadChatHistory: () => Promise<void>;
-  queueAttachmentImport: (files: File[]) => void;
+  queueAttachmentImport: (files: File[], onComplete?: ChatAttachmentImportCompletion) => boolean;
   renderChatMessages: () => void;
   renderChatUsage: () => void;
 }

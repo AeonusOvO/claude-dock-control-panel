@@ -533,6 +533,10 @@ describe('MCP discovery', () => {
         },
       })}\n`,
     );
+    writeFileSync(
+      path.join(cwd, '.mcp.json'),
+      JSON.stringify({ mcpServers: { sharedServer: { command: 'node', type: 'stdio' } } }),
+    );
     const { manager } = managerWithRegistry(
       home,
       userData,
@@ -610,6 +614,10 @@ describe('MCP discovery', () => {
       })}\n`,
     );
     writeFileSync(configPath, original);
+    writeFileSync(
+      path.join(cwd, '.mcp.json'),
+      JSON.stringify({ mcpServers: { sharedServer: { command: 'node', type: 'stdio' } } }),
+    );
     const { manager } = managerWithRegistry(home, userData, registryFetch({ servers: [] }));
 
     const preview = manager.previewToggle(cwd, 'sharedServer', false);

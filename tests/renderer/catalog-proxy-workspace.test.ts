@@ -509,8 +509,20 @@ describe('select, plugin, MCP, proxy and workspace behavior', () => {
       async (harness) => {
         const file = new harness.dom.window.File(['x'], 'folder');
         const event = new harness.dom.window.Event('drop', { bubbles: true, cancelable: true });
-        Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } });
+        Object.defineProperty(event, 'dataTransfer', {
+          value: {
+            files: [file],
+            items: [
+              {
+                getAsFile: () => file,
+                kind: 'file',
+                webkitGetAsEntry: () => ({ isDirectory: true }),
+              },
+            ],
+          },
+        });
         harness.document.dispatchEvent(event);
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
         await harness.flush();
         expect(harness.method('addProject')).toHaveBeenCalledWith('D:\\Dropped');
         expect(harness.document.querySelector('[data-drop-zone="proxy-core"]')).toBeNull();

@@ -1,16 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
+  lstatSync,
   mkdirSync,
-  readFileSync,
+  openSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { TextDecoder } from 'node:util';
 import type {
   McpCatalog,
   McpCatalogEntry,
@@ -29,6 +33,8 @@ import { runWindowsCommand } from '../infra/windows-command';
 import type { McpRegistrySyncService } from './registry-service';
 import type { McpRegistryInputFields, McpRegistryRecord, McpRegistryState } from './registry-types';
 
+const BACKUP_ID =
+  /^(?:[0-9TZ-]+|[0-9TZ-]+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 const CATALOG_CACHE_TTL_MS = 10_000;
 const MAX_CONFIG_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING_TOGGLE_METADATA_BYTES = 256 * 1024;
@@ -52,6 +58,8 @@ interface PendingToggle {
   beforeDigest: string;
   cwd: string;
   expiresAt: number;
+  projectMcpDigest: string;
+  projectMcpServerDigest: string;
   preview: McpTogglePreview;
   retainedBytes: number;
 }
@@ -67,6 +75,15 @@ interface CuratedMcpInstallSpec {
   name: string;
 }
 
+interface ProjectMcpServerSnapshot {
+  bytes: Buffer;
+  digest: string;
+  path: string;
+  serverDigest: string;
+  serverNames: ReadonlySet<string>;
+  server: Record<string, unknown>;
+}
+
 /*
  * This allowlist is the complete direct-install authority. Registry metadata is browse-only and
  * renderer input can select only one of these IDs; it can never contribute command, args, URL,
@@ -77,7 +94,7 @@ const CURATED_MCP_INSTALL_SPECS = new Map<string, CuratedMcpInstallSpec>([
     'curated:filesystem',
     {
       config: {
-        args: ['-y', '@modelcontextprotocol/server-filesystem', '{{cwd}}'],
+        args: ['-y', '@modelcontextprotocol/server-filesystem@2026.7.10', '{{cwd}}'],
         command: 'npx',
         type: 'stdio',
       },
@@ -88,7 +105,7 @@ const CURATED_MCP_INSTALL_SPECS = new Map<string, CuratedMcpInstallSpec>([
     'curated:sequential-thinking',
     {
       config: {
-        args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
+        args: ['-y', '@modelcontextprotocol/server-sequential-thinking@2026.7.4'],
         command: 'npx',
         type: 'stdio',
       },
@@ -119,20 +136,67 @@ const nonnegativeSafeInteger = (value: number, name: string): number => {
   return value;
 };
 
-const readBounded = (filePath: string): Buffer => {
-  const stats = statSync(filePath);
-  if (!stats.isFile() || stats.size > MAX_CONFIG_BYTES) {
-    throw new Error(`MCP 配置文件大小异常：${filePath}`);
+const isNodeError = (error: unknown, code: string): boolean =>
+  isRecord(error) && error.code === code;
+
+const readBounded = (filePath: string, rejectSymbolicLink = false): Buffer => {
+  let handle: number | undefined;
+  try {
+    if (rejectSymbolicLink && lstatSync(filePath).isSymbolicLink()) {
+      throw new Error(`MCP 配置文件不能是符号链接：${filePath}`);
+    }
+    handle = openSync(filePath, 'r');
+    const stats = fstatSync(handle);
+    if (!stats.isFile() || stats.size > MAX_CONFIG_BYTES) {
+      throw new Error(`MCP 配置文件大小异常：${filePath}`);
+    }
+
+    const chunks: Buffer[] = [];
+    let offset = 0;
+    while (offset < MAX_CONFIG_BYTES) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, MAX_CONFIG_BYTES - offset));
+      const count = readSync(handle, chunk, 0, chunk.length, offset);
+      if (count === 0) break;
+      chunks.push(chunk.subarray(0, count));
+      offset += count;
+    }
+    if (offset === MAX_CONFIG_BYTES) {
+      const extra = Buffer.allocUnsafe(1);
+      if (readSync(handle, extra, 0, 1, offset) > 0) {
+        throw new Error(`MCP 配置文件大小异常：${filePath}`);
+      }
+    }
+    return Buffer.concat(chunks, offset);
+  } finally {
+    if (handle !== undefined) closeSync(handle);
   }
-  return readFileSync(filePath);
 };
 
-const readJsonRecord = (filePath: string): Record<string, unknown> => {
-  if (!existsSync(filePath)) {
+const decodeJson = (bytes: Buffer, filePath: string): unknown => {
+  try {
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
+  } catch (error) {
+    throw new Error(`MCP 配置文件格式无效：${filePath}`, { cause: error });
+  }
+};
+
+const readJsonRecord = (filePath: string, rejectSymbolicLink = false): Record<string, unknown> => {
+  try {
+    const value = decodeJson(readBounded(filePath, rejectSymbolicLink), filePath);
+    return isRecord(value) ? value : {};
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return {};
+    throw error;
+  }
+};
+
+const tryReadJsonRecord = (filePath: string): Record<string, unknown> => {
+  try {
+    return readJsonRecord(filePath);
+  } catch {
+    // A malformed, inaccessible, or oversized source is independent of the other MCP sources.
     return {};
   }
-  const value: unknown = JSON.parse(readBounded(filePath).toString('utf8'));
-  return isRecord(value) ? value : {};
 };
 
 const serverTransport = (config: Record<string, unknown>): McpTransport => {
@@ -188,6 +252,54 @@ const findProjectRecord = (
   return undefined;
 };
 
+const readProjectMcpServer = (cwd: string, name: string): ProjectMcpServerSnapshot => {
+  const configPath = path.join(path.resolve(cwd), '.mcp.json');
+  const bytes = readBounded(configPath, true);
+  const value = decodeJson(bytes, configPath);
+  if (!isRecord(value) || !isRecord(value.mcpServers)) {
+    throw new Error('当前项目的 .mcp.json 未包含有效的 mcpServers 对象。');
+  }
+  const entries = Object.entries(value.mcpServers).filter(
+    ([candidate, config]) => MCP_NAME.test(candidate) && isRecord(config),
+  );
+  const serverNames = new Set(entries.map(([candidate]) => candidate));
+  const server = value.mcpServers[name];
+  if (!MCP_NAME.test(name) || !serverNames.has(name) || !isRecord(server)) {
+    throw new Error('只能启停当前项目 .mcp.json 中已发现的 Claude MCP 服务。');
+  }
+  return {
+    bytes,
+    digest: sha256(bytes),
+    path: configPath,
+    serverDigest: sha256(Buffer.from(JSON.stringify(server), 'utf8')),
+    serverNames,
+    server,
+  };
+};
+
+const readProjectToggleNames = (
+  project: Record<string, unknown>,
+  field: 'disabledMcpjsonServers' | 'enabledMcpjsonServers',
+  serverNames: ReadonlySet<string>,
+): string[] => {
+  const value = project[field];
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    !value.every((candidate): candidate is string => MCP_NAME.test(candidate))
+  ) {
+    throw new Error(`Claude Code 的 ${field} 必须是有效 MCP 名称数组。`);
+  }
+  const names = [...value];
+  if (new Set(names).size !== names.length) {
+    throw new Error(`Claude Code 的 ${field} 不能包含重复 MCP 名称。`);
+  }
+  if (names.some((candidate) => !serverNames.has(candidate))) {
+    throw new Error(`Claude Code 的 ${field} 包含当前项目未发现的 MCP 服务。`);
+  }
+  return names;
+};
+
 const collectServers = (
   source: unknown,
   configPath: string,
@@ -222,9 +334,9 @@ const collectServers = (
 
 export const discoverMcpServers = (homeDirectory: string, cwd: string): McpServerView[] => {
   const claudePath = path.join(homeDirectory, '.claude.json');
-  const projectMcpPath = path.join(cwd, '.mcp.json');
+  const projectMcpPath = path.join(path.resolve(cwd), '.mcp.json');
   const codexPath = path.join(homeDirectory, '.codex', 'config.toml');
-  const claude = readJsonRecord(claudePath);
+  const claude = tryReadJsonRecord(claudePath);
   const projects = isRecord(claude.projects) ? claude.projects : {};
   const currentProject = findProjectRecord(projects, cwd)?.[1] ?? {};
   const disabled = new Set(
@@ -234,17 +346,21 @@ export const discoverMcpServers = (homeDirectory: string, cwd: string): McpServe
         )
       : [],
   );
-  const projectMcp = readJsonRecord(projectMcpPath);
+  const projectMcp = tryReadJsonRecord(projectMcpPath);
   const discovered = [
     ...collectServers(claude.mcpServers, claudePath, 'user', 'claude'),
     ...collectServers(currentProject.mcpServers, claudePath, 'local', 'claude'),
     ...collectServers(projectMcp.mcpServers, projectMcpPath, 'project', 'claude', disabled),
   ];
-  if (existsSync(codexPath)) {
+  try {
     const toml = readBounded(codexPath).toString('utf8');
     for (const match of toml.matchAll(/^\[mcp_servers\.([A-Za-z0-9._-]+)\]\s*$/gm)) {
       const name = match[1];
-      if (!name || discovered.some((server) => server.client === 'codex' && server.name === name)) {
+      if (
+        !name ||
+        !MCP_NAME.test(name) ||
+        discovered.some((server) => server.client === 'codex' && server.name === name)
+      ) {
         continue;
       }
       const sectionStart = (match.index ?? 0) + match[0].length;
@@ -263,6 +379,8 @@ export const discoverMcpServers = (homeDirectory: string, cwd: string): McpServe
         }),
       );
     }
+  } catch {
+    // A malformed, inaccessible, or oversized Codex source cannot hide Claude discoveries.
   }
   return discovered;
 };
@@ -363,11 +481,24 @@ const registryStateMessage = (state: McpRegistryState): string => {
   return '当前使用离线精选目录';
 };
 
+const lstatKind = (filePath: string, kind: 'file' | 'directory'): boolean => {
+  try {
+    const stats = lstatSync(filePath);
+    return !stats.isSymbolicLink() && (kind === 'file' ? stats.isFile() : stats.isDirectory());
+  } catch {
+    return false;
+  }
+};
+
+const backupIdFor = (timestamp: number): string =>
+  `${new Date(timestamp).toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+
 const updateProjectToggleState = (
   root: unknown,
   cwd: string,
   name: string,
   enabled: boolean,
+  serverNames: ReadonlySet<string>,
 ): Record<string, unknown> => {
   if (!isRecord(root) || !isRecord(root.projects)) {
     throw new Error('Claude Code 项目 MCP 状态结构不存在。');
@@ -378,15 +509,17 @@ const updateProjectToggleState = (
   }
   const [, project] = found;
   const enabledNames = new Set(
-    Array.isArray(project.enabledMcpjsonServers)
-      ? project.enabledMcpjsonServers.filter((value): value is string => typeof value === 'string')
-      : [],
+    readProjectToggleNames(project, 'enabledMcpjsonServers', serverNames),
   );
   const disabledNames = new Set(
-    Array.isArray(project.disabledMcpjsonServers)
-      ? project.disabledMcpjsonServers.filter((value): value is string => typeof value === 'string')
-      : [],
+    readProjectToggleNames(project, 'disabledMcpjsonServers', serverNames),
   );
+  if ([...enabledNames].some((candidate) => disabledNames.has(candidate))) {
+    throw new Error('Claude Code 的 MCP 启用和停用数组不能有交集。');
+  }
+  if (!serverNames.has(name)) {
+    throw new Error('只能启停当前项目 .mcp.json 中已发现的 Claude MCP 服务。');
+  }
   (enabled ? enabledNames : disabledNames).add(name);
   (enabled ? disabledNames : enabledNames).delete(name);
   project.enabledMcpjsonServers = [...enabledNames].sort();
@@ -515,13 +648,19 @@ export class McpManager {
     if (this.pendingToggles.size >= MAX_PENDING_TOGGLES) {
       throw new Error('待确认的 MCP 改动过多，请先确认或取消已有预览。');
     }
+    const projectCwd = path.resolve(cwd);
+    if (Buffer.byteLength(projectCwd, 'utf8') > MAX_PENDING_TOGGLE_METADATA_BYTES) {
+      throw new Error('待确认的 MCP 改动元数据过大，请缩短项目路径后重试。');
+    }
+    const projectMcp = readProjectMcpServer(projectCwd, name);
     const targetPath = path.join(this.homeDirectory, '.claude.json');
-    const beforeBytes = readBounded(targetPath);
+    const beforeBytes = readBounded(targetPath, true);
     updateProjectToggleState(
-      JSON.parse(beforeBytes.toString('utf8')) as unknown,
-      cwd,
+      decodeJson(beforeBytes, targetPath),
+      projectCwd,
       name,
       enabled,
+      projectMcp.serverNames,
     );
     const preview: McpTogglePreview = {
       after: `${enabled ? 'enabledMcpjsonServers' : 'disabledMcpjsonServers'} += ${name}`,
@@ -533,7 +672,17 @@ export class McpManager {
     };
     const beforeDigest = sha256(beforeBytes);
     const retainedBytes = Buffer.byteLength(
-      [beforeDigest, cwd, preview.after, preview.before, preview.id, name, targetPath].join('\0'),
+      [
+        beforeDigest,
+        projectCwd,
+        projectMcp.digest,
+        projectMcp.serverDigest,
+        preview.after,
+        preview.before,
+        preview.id,
+        name,
+        targetPath,
+      ].join('\0'),
       'utf8',
     );
     if (this.pendingToggleMetadataBytes + retainedBytes > MAX_PENDING_TOGGLE_METADATA_BYTES) {
@@ -541,8 +690,10 @@ export class McpManager {
     }
     this.pendingToggles.set(preview.id, {
       beforeDigest,
-      cwd,
+      cwd: projectCwd,
       expiresAt: this.now() + TOGGLE_PREVIEW_TTL_MS,
+      projectMcpDigest: projectMcp.digest,
+      projectMcpServerDigest: projectMcp.serverDigest,
       preview,
       retainedBytes,
     });
@@ -557,11 +708,14 @@ export class McpManager {
     return discarded;
   }
 
-  public async applyToggle(previewId: string): Promise<string> {
+  public async applyToggle(previewId: string, expectedCwd?: string): Promise<string> {
     const pending = this.takePendingToggle(previewId);
     this.refreshPendingTogglePruneTimer();
     if (!pending || pending.expiresAt <= this.now()) {
       throw new Error('MCP 改动预览已过期，请重新确认。');
+    }
+    if (expectedCwd !== undefined && projectKey(expectedCwd) !== projectKey(pending.cwd)) {
+      throw new Error('MCP 改动预览所属项目与当前项目不一致，请重新确认。');
     }
     const release = this.busyRegistry.acquire({
       cancellable: false,
@@ -571,36 +725,45 @@ export class McpManager {
       severity: 'blocking',
     });
     const rollback = new RollbackCoordinator();
-    const backupDirectory = path.join(
-      this.userDataPath,
-      'mcp-backups',
-      new Date().toISOString().replace(/[:.]/g, '-'),
-    );
+    const backupId = backupIdFor(this.now());
+    const backupDirectory = path.join(this.userDataPath, 'mcp-backups', backupId);
     const backupPath = path.join(backupDirectory, 'claude.json');
     try {
-      const current = readBounded(pending.preview.targetPath);
+      const current = readBounded(pending.preview.targetPath, true);
       if (sha256(current) !== pending.beforeDigest) {
         throw new Error('预览后配置文件已被其他程序修改；未写入任何内容。');
       }
+      const projectMcp = readProjectMcpServer(pending.cwd, pending.preview.name);
+      if (
+        projectMcp.digest !== pending.projectMcpDigest ||
+        projectMcp.serverDigest !== pending.projectMcpServerDigest
+      ) {
+        throw new Error('预览后项目 MCP 配置已被其他程序修改；未写入任何内容。');
+      }
       const root = updateProjectToggleState(
-        JSON.parse(current.toString('utf8')) as unknown,
+        decodeJson(current, pending.preview.targetPath),
         pending.cwd,
         pending.preview.name,
         pending.preview.enabled,
+        projectMcp.serverNames,
       );
       const afterBytes = Buffer.from(`${JSON.stringify(root, null, 2)}\n`, 'utf8');
       mkdirSync(backupDirectory, { recursive: true });
-      copyFileSync(pending.preview.targetPath, backupPath);
+      writeFileSync(backupPath, current, { flag: 'wx', mode: 0o600 });
       rollback.add(() => copyFileSync(backupPath, pending.preview.targetPath));
       const temporary = `${pending.preview.targetPath}.claudedock-${process.pid}.tmp`;
-      writeFileSync(temporary, afterBytes, { flag: 'wx' });
+      writeFileSync(temporary, afterBytes, { flag: 'wx', mode: 0o600 });
       renameSync(temporary, pending.preview.targetPath);
       rollback.commit();
       this.pruneBackups();
       this.invalidate(pending.cwd);
       return `MCP ${pending.preview.name} 已${pending.preview.enabled ? '启用' : '停用'}；备份保存在 ${backupPath}。`;
     } catch (error) {
-      await rollback.rollback();
+      try {
+        await rollback.rollback();
+      } catch {
+        // Recovery is best effort; preserve the mutation error as the authoritative failure.
+      }
       throw error;
     } finally {
       release();
@@ -609,30 +772,54 @@ export class McpManager {
 
   public listBackups(): McpBackupView[] {
     const root = path.join(this.userDataPath, 'mcp-backups');
-    if (!existsSync(root)) return [];
-    return readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && /^[0-9TZ-]+$/.test(entry.name))
+    if (!lstatKind(root, 'directory')) return [];
+    let entries;
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.isDirectory() && BACKUP_ID.test(entry.name))
       .map((entry) => {
-        const backupPath = path.join(root, entry.name, 'claude.json');
-        if (!existsSync(backupPath)) return undefined;
-        return {
-          createdAt: statSync(backupPath).mtimeMs,
-          id: entry.name,
-          path: backupPath,
-        };
+        const backupDirectory = path.join(root, entry.name);
+        const backupPath = path.join(backupDirectory, 'claude.json');
+        if (!lstatKind(backupDirectory, 'directory') || !lstatKind(backupPath, 'file')) {
+          return undefined;
+        }
+        try {
+          return {
+            createdAt: lstatSync(backupPath).mtimeMs,
+            id: entry.name,
+            path: backupPath,
+          };
+        } catch {
+          return undefined;
+        }
       })
       .filter((entry): entry is McpBackupView => entry !== undefined)
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
   public async restoreBackup(backupId: string, cwd: string): Promise<string> {
-    if (!/^[0-9TZ-]+$/.test(backupId)) throw new Error('MCP 备份标识无效。');
+    if (!BACKUP_ID.test(backupId)) throw new Error('MCP 备份标识无效。');
     const root = path.resolve(this.userDataPath, 'mcp-backups');
-    const backupPath = path.resolve(root, backupId, 'claude.json');
-    if (path.dirname(path.dirname(backupPath)) !== root || !existsSync(backupPath)) {
+    const backupDirectory = path.resolve(root, backupId);
+    const backupPath = path.resolve(backupDirectory, 'claude.json');
+    if (
+      path.dirname(backupDirectory) !== root ||
+      path.dirname(path.dirname(backupPath)) !== root ||
+      !lstatKind(root, 'directory') ||
+      !lstatKind(backupDirectory, 'directory') ||
+      !lstatKind(backupPath, 'file')
+    ) {
       throw new Error('MCP 备份不存在或已被清理。');
     }
     const targetPath = path.join(this.homeDirectory, '.claude.json');
+    if (!lstatKind(targetPath, 'file')) {
+      throw new Error('MCP 当前配置不存在或不是普通文件。');
+    }
+    const backupBytes = readBounded(backupPath, true);
     const release = this.busyRegistry.acquire({
       cancellable: false,
       id: `mcp:restore:${backupId}`,
@@ -641,21 +828,27 @@ export class McpManager {
       severity: 'blocking',
     });
     const rollback = new RollbackCoordinator();
-    const safetyDirectory = path.join(root, new Date().toISOString().replace(/[:.]/g, '-'));
+    const safetyId = backupIdFor(this.now());
+    const safetyDirectory = path.join(root, safetyId);
     const safetyPath = path.join(safetyDirectory, 'claude.json');
     try {
+      const currentBytes = readBounded(targetPath, true);
       mkdirSync(safetyDirectory, { recursive: true });
-      copyFileSync(targetPath, safetyPath);
+      writeFileSync(safetyPath, currentBytes, { flag: 'wx', mode: 0o600 });
       rollback.add(() => copyFileSync(safetyPath, targetPath));
       const temporary = `${targetPath}.claudedock-${process.pid}.tmp`;
-      copyFileSync(backupPath, temporary);
+      writeFileSync(temporary, backupBytes, { flag: 'wx', mode: 0o600 });
       renameSync(temporary, targetPath);
       rollback.commit();
       this.invalidate(cwd);
       this.pruneBackups();
       return `已逐字节还原 MCP 备份 ${backupId}；还原前状态另存为 ${safetyPath}。`;
     } catch (error) {
-      await rollback.rollback();
+      try {
+        await rollback.rollback();
+      } catch {
+        // Recovery is best effort; preserve the restore error as the authoritative failure.
+      }
       throw error;
     } finally {
       release();

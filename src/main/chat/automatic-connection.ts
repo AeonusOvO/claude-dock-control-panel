@@ -5,6 +5,10 @@ import {
   providerApiAddress,
 } from '../../shared/claude/chat-providers';
 import { sameConnectionCredentialScope } from '../../shared/router/automatic-connection';
+import {
+  allowedProtocolsForProvider,
+  assertChatProviderAccess,
+} from '../network/provider-access-policy';
 import { detectAutomaticConnection } from '../network/automatic-connection';
 import type { ChatConfigStore } from './config-store';
 
@@ -27,6 +31,15 @@ export const resolveAutomaticChatConnection = async (
   const saved = store.getView();
   const sameIdentity = sameConnectionCredentialScope(address, saved.baseUrl);
   const credential = store.resolveCredential({ ...input, authMode: 'bearer' }, address);
+  const preferredProtocol =
+    assertChatProviderAccess({
+      address,
+      credential,
+      preset: provider.id,
+      protocol: input.protocol ?? provider.protocol,
+    }) ??
+    provider.protocol ??
+    'anthropic';
   assertChatApiAccess(address, credential);
   const result = await detectAutomaticConnection(
     {
@@ -36,10 +49,11 @@ export const resolveAutomaticChatConnection = async (
         ...(sameIdentity ? [saved.model] : []),
         ...(provider.editableBaseUrl ? [] : [provider.model, provider.modelFast ?? '']),
       ],
+      allowedProtocols: allowedProtocolsForProvider(provider.id),
       modelsAddress: provider.modelsUrl,
       openAiApiKey: true,
       preferredAuth: provider.authMode === 'apiKey' ? 'apiKey' : 'bearer',
-      preferredProtocol: provider.protocol ?? 'anthropic',
+      preferredProtocol,
     },
     fetchImplementation,
   );

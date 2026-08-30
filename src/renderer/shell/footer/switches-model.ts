@@ -109,8 +109,11 @@ export const createFooterSwitchesModelActions = (
           if (result.state.sessionId !== operation.sessionId) {
             return false;
           }
-          renderClaudeState(result.state);
-          return true;
+          return deps.renderClaudeLaunchResult(
+            attempt,
+            result.state,
+            result.ok ? 'success' : 'failure',
+          );
         },
         confirmation: () =>
           requestConfirmation({

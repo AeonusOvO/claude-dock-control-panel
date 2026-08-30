@@ -8,6 +8,7 @@ import type { AdvancedSettings, ChatIdleTimeoutMinutes } from '../../shared/cont
  */
 const DEFAULT_SETTINGS: AdvancedSettings = {
   chatIdleTimeoutMinutes: 0,
+  confirmFileDrops: true,
   networkPreflight: {
     checkOnNewSession: true,
     checkOnProviderLogin: true,
@@ -31,6 +32,7 @@ export class AdvancedSettingsStore {
     try {
       const parsed = JSON.parse(readFileSync(this.storagePath, 'utf8')) as {
         chatIdleTimeoutMinutes?: unknown;
+        confirmFileDrops?: unknown;
         networkPreflight?: unknown;
         version?: unknown;
         webResearchIsolation?: unknown;
@@ -44,6 +46,8 @@ export class AdvancedSettingsStore {
           chatIdleTimeoutMinutes: isChatIdleTimeoutMinutes(parsed.chatIdleTimeoutMinutes)
             ? parsed.chatIdleTimeoutMinutes
             : 0,
+          confirmFileDrops:
+            typeof parsed.confirmFileDrops === 'boolean' ? parsed.confirmFileDrops : true,
           networkPreflight,
           webResearchIsolation: parsed.webResearchIsolation,
         };
@@ -57,19 +61,29 @@ export class AdvancedSettingsStore {
   public set(settings: AdvancedSettings): AdvancedSettings {
     if (
       !isChatIdleTimeoutMinutes(settings.chatIdleTimeoutMinutes) ||
+      (settings.confirmFileDrops !== undefined && typeof settings.confirmFileDrops !== 'boolean') ||
       !isNetworkPreflightPreferences(settings.networkPreflight) ||
       typeof settings.webResearchIsolation !== 'boolean'
     ) {
       throw new Error('高级设置无效。');
     }
+    const normalizedSettings: AdvancedSettings = {
+      ...settings,
+      confirmFileDrops: settings.confirmFileDrops ?? true,
+      networkPreflight: { ...settings.networkPreflight },
+    };
     mkdirSync(this.directory, { recursive: true });
     const temporaryPath = `${this.storagePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify({ ...settings, version: 2 }, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+    writeFileSync(
+      temporaryPath,
+      `${JSON.stringify({ ...normalizedSettings, version: 2 }, null, 2)}\n`,
+      {
+        encoding: 'utf8',
+        mode: 0o600,
+      },
+    );
     renameSync(temporaryPath, this.storagePath);
-    return { ...settings, networkPreflight: { ...settings.networkPreflight } };
+    return normalizedSettings;
   }
 }
 

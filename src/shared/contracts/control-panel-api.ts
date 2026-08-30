@@ -279,9 +279,12 @@ export interface DownloadApi {
   clearDownloadHistory: () => Promise<DownloadTaskView[]>;
   deleteDownloadHistory: (taskId: string) => Promise<DownloadTaskView[]>;
   listDownloads: () => Promise<DownloadTaskView[]>;
+  listDownloadRecoveryPending: () => Promise<DownloadTaskView[]>;
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
   pauseDownload: (taskId: string) => Promise<DownloadTaskView>;
+  discardDownloadRecovery: (taskId: string) => Promise<DownloadTaskView[]>;
   resumeDownload: (taskId: string) => Promise<DownloadTaskView>;
+  resumeDownloadRecovery: (taskId: string) => Promise<DownloadTaskView>;
 }
 
 export interface ApplicationProxyApi {

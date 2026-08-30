@@ -13,6 +13,8 @@ export interface DownloadTaskView {
   percent: number;
   receivedBytes: number;
   remainingMs: number;
+  /** True when this interrupted task is waiting for an explicit resume/discard decision. */
+  recoveryPending?: boolean;
   startedAt?: number;
   state: DownloadTaskState;
   totalBytes: number;

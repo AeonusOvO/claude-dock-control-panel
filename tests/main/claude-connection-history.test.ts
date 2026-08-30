@@ -124,6 +124,42 @@ describe('ClaudeConnectionHistoryStore', () => {
     expect(store.toSaveInput(CWD, entry?.id ?? '')).toMatchObject(sourceConfig);
   });
 
+  it('retains the fixed Qwen API identity when replaying an OpenAI-converted history entry', () => {
+    const { store } = createStore();
+    const sourceConfig = {
+      authMode: 'authToken' as const,
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+      credentialAction: 'replace' as const,
+      credential: 'sk-dashscope-api-key',
+      model: 'qwen-plus',
+      preset: 'qwen-api' as const,
+      protocol: 'openai' as const,
+      provider: 'gateway' as const,
+    };
+    const [entry] = store.record(CWD, {
+      ...gatewayConfig({
+        authMode: 'authToken',
+        baseUrl: 'http://127.0.0.1:3456',
+        credentialAction: 'replace',
+        model: 'qwen-api/qwen-plus',
+        preset: 'qwen-api',
+        protocol: 'openai',
+      }),
+      credential: sourceConfig.credential,
+      gatewayState: 'running',
+      protocol: 'openai',
+      sourceConfig,
+      sourceCredentialConfigured: true,
+    });
+
+    expect(store.toSaveInput(CWD, entry?.id ?? '')).toMatchObject({
+      baseUrl: sourceConfig.baseUrl,
+      preset: 'qwen-api',
+      protocol: 'openai',
+      provider: 'gateway',
+    });
+  });
+
   it('inherits a kept OpenAI upstream key for deduplication and records a rotation', () => {
     const { historyPath, store } = createStore();
     const sourceConfig = {

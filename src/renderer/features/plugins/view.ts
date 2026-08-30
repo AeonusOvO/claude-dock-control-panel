@@ -20,6 +20,7 @@ export interface PluginConfirmationRequest {
 export interface PluginsViewDependencies {
   formatTokenCount: (value: number | undefined) => string;
   installOperation: (plugin: ClaudePluginView) => () => Promise<ClaudePluginOperationResult>;
+  openExternal: (url: string) => Promise<void>;
   removeMarketplaceOperation: (
     marketplace: ClaudePluginMarketplaceView,
   ) => () => Promise<ClaudePluginOperationResult>;
@@ -65,6 +66,90 @@ const pluginMatchesSearch = (plugin: ClaudePluginView, needle: string): boolean 
   })();
 
 const pluginCategory = (plugin: ClaudePluginView): string => localizePluginCopy(plugin).category;
+
+const comparePluginText = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
+
+const knownPluginStars = (plugin: ClaudePluginView): number | undefined => {
+  const stars = plugin.github?.stars;
+  return typeof stars === 'number' && Number.isSafeInteger(stars) && stars >= 0 ? stars : undefined;
+};
+
+/** Known star counts sort first; all ties use stable identity text rather than locale collation. */
+export const comparePluginsByGithubStars = (
+  left: ClaudePluginView,
+  right: ClaudePluginView,
+): number => {
+  const leftStars = knownPluginStars(left);
+  const rightStars = knownPluginStars(right);
+  if (leftStars !== undefined && rightStars !== undefined && leftStars !== rightStars) {
+    return rightStars - leftStars;
+  }
+  if (leftStars !== undefined && rightStars === undefined) {
+    return -1;
+  }
+  if (leftStars === undefined && rightStars !== undefined) {
+    return 1;
+  }
+  for (const [leftValue, rightValue] of [
+    [left.pluginId, right.pluginId],
+    [left.marketplaceName, right.marketplaceName],
+    [left.name, right.name],
+  ] as const) {
+    const difference = comparePluginText(leftValue, rightValue);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+};
+
+export const sortPluginsByGithubStars = (
+  plugins: readonly ClaudePluginView[],
+): ClaudePluginView[] => [...plugins].sort(comparePluginsByGithubStars);
+
+const safeGithubRepositoryUri = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  try {
+    const uri = new URL(value);
+    if (
+      uri.protocol !== 'https:' ||
+      !/^(?:www\.)?github\.com$/i.test(uri.hostname) ||
+      uri.username ||
+      uri.password ||
+      uri.search ||
+      uri.hash
+    ) {
+      return undefined;
+    }
+    const segments = uri.pathname.split('/').filter(Boolean);
+    if (
+      segments.length !== 2 ||
+      !/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/.test(segments[0] ?? '') ||
+      !/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/.test(segments[1] ?? '')
+    ) {
+      return undefined;
+    }
+    return `https://github.com/${segments[0]!.toLowerCase()}/${segments[1]!.toLowerCase()}`;
+  } catch {
+    return undefined;
+  }
+};
+
+const githubProvenanceLabel = (value: ClaudePluginView['github']): string => {
+  switch (value?.provenance) {
+    case 'live':
+      return '实时';
+    case 'cached':
+      return '缓存';
+    case 'built-in':
+      return '内置';
+    default:
+      return '未知';
+  }
+};
 
 /**
  * The category dropdown mirrors MCP's 作用域 filter: same control, same position in the toolbar, same
@@ -221,6 +306,29 @@ const renderPluginCard = (
     installs.textContent = `${dependencies.formatTokenCount(plugin.installCount)} 次安装`;
     meta.append(installs);
   }
+  const repositoryUri = safeGithubRepositoryUri(plugin.github?.repositoryUri);
+  if (plugin.github && repositoryUri) {
+    const stars = document.createElement('span');
+    stars.className = 'plugin-card__github-stars';
+    stars.dataset.provenance = plugin.github.provenance;
+    stars.textContent = `★ ${
+      knownPluginStars(plugin) === undefined
+        ? '暂无'
+        : dependencies.formatTokenCount(knownPluginStars(plugin))
+    }（${githubProvenanceLabel(plugin.github)}）`;
+    const repository = document.createElement('a');
+    repository.className = 'plugin-card__category';
+    repository.href = repositoryUri;
+    repository.rel = 'noopener noreferrer';
+    repository.target = '_blank';
+    repository.textContent = repositoryUri.slice('https://github.com/'.length);
+    repository.title = repositoryUri;
+    repository.addEventListener('click', (event) => {
+      event.preventDefault();
+      void dependencies.openExternal(repositoryUri);
+    });
+    meta.append(stars, repository);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'plugin-card__actions';
@@ -372,11 +480,11 @@ const renderPluginCatalog = (context: PluginsViewContext, catalog: ClaudePluginC
   const matches = (plugin: ClaudePluginView): boolean =>
     (categoryFilter === 'all' || pluginCategory(plugin) === categoryFilter) &&
     pluginMatchesSearch(plugin, needle);
-  const installed = catalog.installed.filter(matches);
+  const installed = sortPluginsByGithubStars(catalog.installed.filter(matches));
   const installedKeys = new Set(catalog.installed.map(pluginKey));
-  const available = catalog.available
-    .filter((plugin) => !installedKeys.has(pluginKey(plugin)))
-    .filter(matches);
+  const available = sortPluginsByGithubStars(
+    catalog.available.filter((plugin) => !installedKeys.has(pluginKey(plugin))).filter(matches),
+  );
 
   const renderContext = `${categoryFilter}|${needle}`;
   const previousKeys = state.renderedContext === null ? null : state.renderedKeys;

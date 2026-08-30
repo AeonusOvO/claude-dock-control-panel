@@ -103,6 +103,7 @@ export interface RendererHarness {
 const defaultAppSettings = {
   advanced: {
     chatIdleTimeoutMinutes: 0 as const,
+    confirmFileDrops: true,
     networkPreflight: { checkOnNewSession: true, checkOnProviderLogin: true },
     webResearchIsolation: false,
   },

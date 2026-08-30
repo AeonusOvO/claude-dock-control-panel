@@ -2,9 +2,19 @@ import type { FailureMetadata } from '../diagnostics/failure';
 
 export type ClaudePluginScope = 'local' | 'project' | 'user';
 
+export type ClaudePluginGitHubStarsProvenance = 'live' | 'cached' | 'built-in';
+
+/** Presentation-only public repository metadata; it never participates in plugin identity or trust. */
+export interface ClaudePluginGitHubMetadata {
+  provenance: ClaudePluginGitHubStarsProvenance;
+  repositoryUri: string;
+  stars: number | null;
+}
+
 export interface ClaudePluginView {
   description: string;
   enabled: boolean;
+  github?: ClaudePluginGitHubMetadata;
   installCount?: number;
   installed: boolean;
   latestVersion?: string;

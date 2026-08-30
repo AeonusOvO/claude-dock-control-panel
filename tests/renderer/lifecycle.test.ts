@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeLaunchAttemptRegistry } from '../../src/renderer/platform/claude-launch-attempt';
 import { FolderHistoryLoadCoordinator } from '../../src/renderer/features/projects/folder-history-load';
@@ -555,6 +556,73 @@ describe('renderer interaction lifecycle behavior', () => {
         await settle(harness);
         expect(harness.method('switchClaudeModel')).toHaveBeenCalledWith('session-1', 'next');
         expect(harness.query<HTMLButtonElement>('#footer-model').disabled).toBe(false);
+      },
+    );
+  });
+
+  it('settles an active Claude speed switch after the replacement PTY starts', async () => {
+    type SpeedResult = Awaited<ReturnType<ControlPanelApi['setClaudeModelSpeed']>>;
+    const speed = deferred<SpeedResult>();
+    await withTerminalRenderer(
+      {
+        setClaudeModelSpeed: () => speed.promise,
+      },
+      async (harness, control) => {
+        harness.click('#footer-speed');
+        const speedOptions = harness
+          .query<HTMLDivElement>('#footer-speed-menu')
+          .querySelectorAll<HTMLButtonElement>('button');
+        speedOptions[1]?.click();
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
+        await harness.flush();
+
+        expect(harness.method('setClaudeModelSpeed')).toHaveBeenCalledWith('session-1', 'fast');
+        expect(harness.document.body.dataset.conversationTransition).toBe('busy');
+        expect(harness.query('#terminal-composer').inert).toBe(true);
+        expect(control.terminals[0]?.options.disableStdin).toBe(true);
+
+        harness.emit(
+          'onWorkspaceState',
+          terminalWorkspace(terminalStatus(2, { phase: 'starting' })),
+        );
+        await harness.flush();
+        harness.emit('onWorkspaceState', terminalWorkspace(terminalStatus(2)));
+        await settle(harness);
+
+        speed.resolve({
+          ok: true,
+          state: claudeProjectState({
+            active: true,
+            ptyGeneration: 2,
+            speed: {
+              availability: 'available',
+              canSelectFast: true,
+              detail: '可切换 Claude Fast。',
+              mechanism: 'claude-native-fast',
+              model: 'claude-sonnet-5',
+              preference: 'fast',
+              status: 'active',
+            },
+            stateRevision: 2,
+          }),
+        });
+        await settle(harness);
+        const composerInput = harness.query<HTMLTextAreaElement>('#composer-input');
+        composerInput.value = 'echo ready';
+        composerInput.dispatchEvent(new harness.dom.window.Event('input', { bubbles: true }));
+        harness.query<HTMLFormElement>('#terminal-composer').requestSubmit();
+        await settle(harness);
+
+        expect(harness.document.body.dataset.conversationTransition).toBe('idle');
+        expect(harness.query('#terminal-composer').inert).toBe(false);
+        expect(control.terminals.at(-1)?.options.disableStdin).toBe(false);
+        expect(harness.query<HTMLTextAreaElement>('#composer-input').disabled).toBe(false);
+        expect(harness.query('#toast').textContent).toContain('已请求 Claude Fast');
+        expect(harness.method('writeTerminal')).toHaveBeenCalledWith(
+          'session-1',
+          2,
+          expect.any(String),
+        );
       },
     );
   });

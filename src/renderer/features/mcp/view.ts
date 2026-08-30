@@ -35,6 +35,14 @@ export const mcpScopeLabel = (scope: McpScope): string =>
 const mcpServerKey = (server: McpServerView): string =>
   `${server.client}\\u0000${server.scope}\\u0000${server.name}`;
 
+const mcpCatalogEntryKey = (entry: McpCatalogEntry): string => `${entry.id}\\u0000${entry.name}`;
+
+const mcpInstalledIdentityKey = (
+  client: McpServerView['client'],
+  scope: McpScope,
+  name: string,
+): string => `${client}\\u0000${scope}\\u0000${name}`;
+
 const mcpMatchesSearch = (
   value: Pick<McpServerView, 'configPath' | 'name'> | Pick<McpCatalogEntry, 'description' | 'name'>,
   needle: string,
@@ -135,13 +143,15 @@ const renderMcpCatalogCard = (
   { dependencies, state }: McpViewContext,
   entry: McpCatalogEntry,
   cwd: string,
-  installedNames: ReadonlySet<string>,
+  installedKeys: ReadonlySet<string>,
+  installScope: McpScope,
   fresh: boolean,
 ): HTMLElement => {
   const card = document.createElement('article');
   card.className = 'plugin-card';
   card.dataset.fresh = String(fresh);
-  card.dataset.installed = String(installedNames.has(entry.name));
+  const installed = installedKeys.has(mcpInstalledIdentityKey('claude', installScope, entry.name));
+  card.dataset.installed = String(installed);
   const header = document.createElement('div');
   header.className = 'plugin-card__header';
   const title = document.createElement('strong');
@@ -157,16 +167,9 @@ const renderMcpCatalogCard = (
   const install = document.createElement('button');
   install.type = 'button';
   install.className = 'button button--primary button--small';
-  install.textContent = installedNames.has(entry.name)
-    ? '已安装'
-    : entry.installable
-      ? '安装'
-      : '仅浏览';
+  install.textContent = installed ? '已安装' : entry.installable ? '安装' : '仅浏览';
   install.disabled =
-    state.mutationInProgress ||
-    installedNames.has(entry.name) ||
-    !entry.installable ||
-    entry.requiresCredential;
+    state.mutationInProgress || installed || !entry.installable || entry.requiresCredential;
   install.title = !entry.installable
     ? 'Registry 条目仅供浏览；ClaudeDock 不会执行其安装配置。'
     : entry.requiresCredential
@@ -189,17 +192,22 @@ const renderMcpCatalog = (context: McpViewContext, catalog: McpCatalog): void =>
   const cwd = status?.cwd;
   const needle = elements.search.value.trim().toLowerCase();
   const scopeFilter = elements.scopeFilter.value;
+  const installScope = elements.installScope.value as McpScope;
   const installed = catalog.installed.filter(
     (server) =>
       (scopeFilter === 'all' || server.scope === scopeFilter) && mcpMatchesSearch(server, needle),
   );
   const available = catalog.available.filter((entry) => mcpMatchesSearch(entry, needle));
   const renderContext = `${cwd ?? ''}|${scopeFilter}|${needle}`;
-  const previousKeys = state.renderedContext === null ? null : state.renderedKeys;
-  const isFresh = (server: McpServerView): boolean =>
-    previousKeys === null || !previousKeys.has(mcpServerKey(server));
+  const previousInstalledKeys = state.renderedContext === null ? null : state.renderedInstalledKeys;
+  const previousAvailableKeys = state.renderedContext === null ? null : state.renderedAvailableKeys;
+  const isInstalledFresh = (server: McpServerView): boolean =>
+    previousInstalledKeys === null || !previousInstalledKeys.has(mcpServerKey(server));
+  const isAvailableFresh = (entry: McpCatalogEntry): boolean =>
+    previousAvailableKeys === null || !previousAvailableKeys.has(mcpCatalogEntryKey(entry));
   state.renderedContext = renderContext;
-  state.renderedKeys = new Set(catalog.installed.map(mcpServerKey));
+  state.renderedInstalledKeys = new Set(catalog.installed.map(mcpServerKey));
+  state.renderedAvailableKeys = new Set(catalog.available.map(mcpCatalogEntryKey));
   elements.installedCount.textContent = String(installed.length);
   elements.catalogCount.textContent = String(available.length);
   elements.status.textContent = `${catalog.message} · 上次读取 ${new Date(catalog.checkedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
@@ -222,7 +230,9 @@ const renderMcpCatalog = (context: McpViewContext, catalog: McpCatalog): void =>
     elements.installedList.append(empty);
   } else {
     elements.installedList.append(
-      ...installed.map((server) => renderMcpInstalledCard(context, server, cwd, isFresh(server))),
+      ...installed.map((server) =>
+        renderMcpInstalledCard(context, server, cwd, isInstalledFresh(server)),
+      ),
     );
   }
   elements.catalogList.replaceChildren();
@@ -232,10 +242,17 @@ const renderMcpCatalog = (context: McpViewContext, catalog: McpCatalog): void =>
     empty.textContent = cwd ? '目录中没有匹配项。' : '打开项目后即可安装精选 MCP。';
     elements.catalogList.append(empty);
   } else {
-    const installedNames = new Set(catalog.installed.map((server) => server.name));
+    const installedKeys = new Set(catalog.installed.map(mcpServerKey));
     elements.catalogList.append(
       ...available.map((entry) =>
-        renderMcpCatalogCard(context, entry, cwd, installedNames, previousKeys === null),
+        renderMcpCatalogCard(
+          context,
+          entry,
+          cwd,
+          installedKeys,
+          installScope,
+          isAvailableFresh(entry),
+        ),
       ),
     );
   }

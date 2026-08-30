@@ -52,7 +52,25 @@ describe('Claude provider catalog', () => {
     });
     expect(findClaudeProvider('qwen-global')).toMatchObject({
       baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/apps/anthropic',
+      credentialKind: 'coding-plan',
+      fixedProtocol: true,
       model: 'qwen3.7-plus',
+      product: 'qwen-coding-plan',
+      region: 'international',
+    });
+    expect(findClaudeProvider('qwen-cn')).toMatchObject({
+      credentialKind: 'coding-plan',
+      fixedProtocol: true,
+      product: 'qwen-coding-plan',
+      region: 'cn',
+    });
+    expect(findClaudeProvider('qwen-api')).toMatchObject({
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      credentialKind: 'dashscope-api-key',
+      fixedProtocol: true,
+      product: 'bailian-model-studio',
+      protocol: 'openai',
+      region: 'cn-beijing',
     });
     for (const providerId of ['minimax-cn', 'minimax-global']) {
       expect(findClaudeProvider(providerId)).toMatchObject({

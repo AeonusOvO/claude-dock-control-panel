@@ -172,8 +172,18 @@
                   <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
                 </span>
               </label>
-              <label class="runtime-option card" for="runtime-codex">
-                <input id="runtime-codex" name="development-runtime" type="radio" value="codex" />
+              <label
+                class="runtime-option card"
+                data-high-risk-target="runtime-codex"
+                for="runtime-codex"
+              >
+                <input
+                  id="runtime-codex"
+                  name="development-runtime"
+                  type="radio"
+                  value="codex"
+                  aria-describedby="high-risk-option-description"
+                />
                 <span class="runtime-option__icon runtime-option__icon--codex" aria-hidden="true">
                   <img
                     class="runtime-option__brand-mark runtime-option__brand-mark--light"
@@ -1314,7 +1324,9 @@
             </div>
             <div class="toolbar-group toolbar-group--icons">
               <button
+                aria-describedby="high-risk-option-description"
                 class="icon-button"
+                data-high-risk-target="native-terminal-toggle"
                 id="native-terminal-toggle"
                 type="button"
                 aria-pressed="false"
@@ -2669,6 +2681,9 @@
         <span>将为该项目创建独立终端会话</span>
       </div>
     </div>
+    <span class="sr-only" id="high-risk-option-description">
+      此为高危选项，未经完整检测或验证，谨慎选择
+    </span>
 
     <div class="terminal-context-menu" id="terminal-context-menu" role="menu" hidden>
       <button data-terminal-context-action="copy" role="menuitem" type="button">
@@ -2849,12 +2864,53 @@
             </svg>
           </button>
         </header>
+        <nav class="update-center-tabs" role="tablist" aria-label="更新中心视图">
+          <button
+            class="plugin-tab plugin-tab--active"
+            id="update-center-pending-tab"
+            type="button"
+            role="tab"
+            aria-controls="update-center-pending-panel"
+            aria-selected="true"
+          >
+            待更新
+          </button>
+          <button
+            class="plugin-tab"
+            id="update-center-history-tab"
+            type="button"
+            role="tab"
+            aria-controls="update-center-history-panel"
+            aria-selected="false"
+          >
+            历史记录
+          </button>
+        </nav>
         <section class="update-center-dialog__body" aria-live="polite">
-          <div class="update-center-empty" id="update-center-empty" hidden>
-            <strong>当前没有发现可用更新</strong>
-            <span>各更新来源均已检查；稍后可从右上角重新检查。</span>
-          </div>
-          <div class="update-center-list" id="update-center-list"></div>
+          <section
+            id="update-center-pending-panel"
+            role="tabpanel"
+            aria-labelledby="update-center-pending-tab"
+          >
+            <div class="update-center-empty" id="update-center-empty" hidden>
+              <strong>当前没有发现可用更新</strong>
+              <span>各更新来源均已检查；稍后可从右上角重新检查。</span>
+            </div>
+            <div class="update-center-list" id="update-center-list"></div>
+          </section>
+          <section
+            class="update-center-history-panel"
+            id="update-center-history-panel"
+            role="tabpanel"
+            aria-labelledby="update-center-history-tab"
+            hidden
+          >
+            <div class="update-center-empty" id="update-center-history-empty">
+              <strong>暂无更新历史</strong>
+              <span>完成、取消或失败的下载记录会显示在这里。</span>
+            </div>
+            <div class="update-center-history-list" id="update-center-history-list"></div>
+          </section>
         </section>
         <footer>
           <span id="update-center-summary">等待检查结果</span>
@@ -3521,6 +3577,15 @@
                 </span>
                 <input id="settings-web-research-isolation" type="checkbox" />
               </label>
+              <label class="settings-row" for="settings-confirm-file-drops">
+                <span>
+                  <strong>确认文件拖放</strong>
+                  <small>
+                    文件或文件夹拖入应用时先显示确认框。取消不会改变设置；确认时选择“不再提示”才会关闭此确认。
+                  </small>
+                </span>
+                <input id="settings-confirm-file-drops" type="checkbox" checked />
+              </label>
               <div class="settings-section-heading">
                 <strong>CLI 路由后台</strong>
                 <span
@@ -4103,6 +4168,10 @@
           <strong id="confirmation-dialog-title">确认操作</strong>
         </header>
         <p id="confirmation-dialog-message"></p>
+        <label class="confirmation-dialog__suppress" id="confirmation-dialog-suppress-label" hidden>
+          <input id="confirmation-dialog-suppress" type="checkbox" />
+          <span>以后不再提示</span>
+        </label>
         <footer>
           <button type="submit" value="cancel" autofocus>取消</button>
           <button

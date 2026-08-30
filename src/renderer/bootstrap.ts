@@ -91,6 +91,7 @@ const createRuntimeState = (rendererRegistry: Registry): RuntimeState => {
   const codexStateLoadGenerations = new SessionGenerationRegistry();
   const runtimeStateLoadGenerations = new SessionGenerationRegistry();
   let dragDepth = 0;
+  let fileDropConfirmationEnabled = true;
   let lastClaudeSessionId = '';
   const claudeLaunchAttempts = new ClaudeLaunchAttemptRegistry();
   const claudeSpeedOperations = new SessionGenerationRegistry();
@@ -172,6 +173,10 @@ const createRuntimeState = (rendererRegistry: Registry): RuntimeState => {
     getDragDepth: (): number => dragDepth,
     setDragDepth: (value: number): void => {
       dragDepth = value;
+    },
+    getFileDropConfirmationEnabled: (): boolean => fileDropConfirmationEnabled,
+    setFileDropConfirmationEnabled: (value: boolean): void => {
+      fileDropConfirmationEnabled = value;
     },
     getLastClaudeSessionId: (): string => lastClaudeSessionId,
     setLastClaudeSessionId: (value: string): void => {
@@ -450,6 +455,7 @@ const installSecondaryShells = (
     relaunchClaudeSession: (summary, input) =>
       features.terminalFeature.relaunchClaudeSession(summary, input),
     renderActiveConversation: () => features.conversationFeature.renderActiveConversation(),
+    renderClaudeLaunchResult: terminalProjectState.renderClaudeLaunchResult,
     renderClaudeState: terminalProjectState.renderClaudeState,
     requestConfirmation,
     resultFailureMessage,

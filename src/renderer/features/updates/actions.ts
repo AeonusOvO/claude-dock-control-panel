@@ -178,6 +178,46 @@ const runAllUpdates = async (context: UpdatesActionsContext): Promise<void> => {
   }
 };
 
+const resolveDownloadRecoveries = async (context: UpdatesActionsContext): Promise<void> => {
+  const { dependencies, state } = context;
+  let pending: unknown;
+  try {
+    // Recovery decisions belong to the main-process journal, not to a possibly stale renderer
+    // history snapshot. This also surfaces records restored during startup before the next refresh.
+    pending = await window.controlPanel.listDownloadRecoveryPending();
+  } catch {
+    // The update center can still show software updates when recovery metadata is unavailable.
+    return;
+  }
+  if (!Array.isArray(pending)) return;
+  for (const task of pending) {
+    const shouldResume = await dependencies.requestConfirmation({
+      confirmLabel: '恢复更新',
+      message: `检测到“${task.label}”上次下载被中断，已保留 ${Math.round(
+        Math.max(0, task.percent),
+      )}% 的安全快照。选择“恢复更新”会从上次位置继续；取消将删除该任务的残留片段和恢复记录。`,
+      title: '恢复中断的更新？',
+    });
+    try {
+      if (shouldResume) {
+        await window.controlPanel.resumeDownloadRecovery(task.id);
+      } else {
+        await window.controlPanel.discardDownloadRecovery(task.id);
+      }
+    } catch (error) {
+      dependencies.showToast(
+        error instanceof Error ? error.message : `无法处理“${task.label}”的恢复记录。`,
+        'error',
+      );
+    }
+  }
+  try {
+    state.downloadHistory = await window.controlPanel.listDownloads();
+  } catch {
+    // The update center can still show software updates when download history is unavailable.
+  }
+};
+
 const refreshAvailableUpdates = async (
   context: UpdatesActionsContext,
   manual: boolean,
@@ -190,6 +230,12 @@ const refreshAvailableUpdates = async (
   elements.refreshUpdatesButton.disabled = true;
   elements.refreshUpdatesButton.classList.add('titlebar__refresh--busy');
   elements.refreshUpdatesButton.setAttribute('aria-busy', 'true');
+  if (manual) {
+    state.updateCenterTab = 'pending';
+    if (!elements.updateCenterDialog.open) elements.updateCenterDialog.showModal();
+    view.renderUpdateCenter();
+    elements.closeUpdateCenterButton.focus();
+  }
 
   try {
     const results = await Promise.allSettled([
@@ -201,9 +247,14 @@ const refreshAvailableUpdates = async (
       // MCP refresh only re-discovers configuration and synchronizes the trusted Registry endpoint;
       // it is never consent to execute or contact a project-defined MCP server.
       dependencies.getActiveSessionId() ? dependencies.loadMcpCatalog(true) : Promise.resolve(),
+      window.controlPanel.listDownloads().then((tasks) => {
+        state.downloadHistory = tasks;
+      }),
     ]);
     const pluginsOk = results[1]?.status === 'fulfilled' && results[1].value;
     const failedSources = results.filter(({ status }) => status === 'rejected').length;
+    await resolveDownloadRecoveries(context);
+    state.updateRefreshInProgress = false;
     view.syncUpdateActionVisibility();
     if (manual) {
       const actions = deriveUpdateActionState(
@@ -234,11 +285,21 @@ const refreshAvailableUpdates = async (
 };
 
 const bindUpdatesActions = (context: UpdatesActionsContext): (() => void) => {
-  const { dependencies, elements, view } = context;
+  const { dependencies, elements, state, view } = context;
   const unsubscribeApplicationUpdaterChanged = window.controlPanel.onApplicationUpdaterChanged(
     view.renderApplicationUpdater,
   );
   const handleRefresh = (): void => void refreshAvailableUpdates(context, true);
+  const handlePendingTab = (): void => {
+    state.updateCenterTab = 'pending';
+    view.renderUpdateCenter();
+    elements.updateCenterPendingTab.focus();
+  };
+  const handleHistoryTab = (): void => {
+    state.updateCenterTab = 'history';
+    view.renderUpdateCenter();
+    elements.updateCenterHistoryTab.focus();
+  };
   const handleClose = (): void => elements.updateCenterDialog.close('close');
   const handleCancel = (): void => elements.updateCenterDialog.close('cancel');
   const handleAll = (): void => void runAllUpdates(context);
@@ -259,6 +320,8 @@ const bindUpdatesActions = (context: UpdatesActionsContext): (() => void) => {
   const handleApplicationAction = (): void => void runApplicationUpdateAction(context);
 
   elements.refreshUpdatesButton.addEventListener('click', handleRefresh);
+  elements.updateCenterPendingTab.addEventListener('click', handlePendingTab);
+  elements.updateCenterHistoryTab.addEventListener('click', handleHistoryTab);
   elements.closeUpdateCenterButton.addEventListener('click', handleClose);
   elements.cancelUpdateCenterButton.addEventListener('click', handleCancel);
   elements.updateCenterAllButton.addEventListener('click', handleAll);
@@ -270,6 +333,8 @@ const bindUpdatesActions = (context: UpdatesActionsContext): (() => void) => {
   return () => {
     unsubscribeApplicationUpdaterChanged();
     elements.refreshUpdatesButton.removeEventListener('click', handleRefresh);
+    elements.updateCenterPendingTab.removeEventListener('click', handlePendingTab);
+    elements.updateCenterHistoryTab.removeEventListener('click', handleHistoryTab);
     elements.closeUpdateCenterButton.removeEventListener('click', handleClose);
     elements.cancelUpdateCenterButton.removeEventListener('click', handleCancel);
     elements.updateCenterAllButton.removeEventListener('click', handleAll);

@@ -134,6 +134,7 @@ const savePendingAppSettings = async (context: SettingsActionsContext): Promise<
     }
     if (
       pending.advanced.chatIdleTimeoutMinutes !== saved.advanced.chatIdleTimeoutMinutes ||
+      pending.advanced.confirmFileDrops !== (saved.advanced.confirmFileDrops ?? true) ||
       pending.advanced.webResearchIsolation !== saved.advanced.webResearchIsolation ||
       pending.advanced.networkPreflight.checkOnNewSession !== savedNetwork.checkOnNewSession ||
       pending.advanced.networkPreflight.checkOnProviderLogin !== savedNetwork.checkOnProviderLogin
@@ -216,6 +217,7 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
     handleStartupModelConnectionTimingChange,
   );
   elements.webResearchIsolation.addEventListener('change', handleIndicatorChange);
+  elements.confirmFileDrops.addEventListener('change', handleIndicatorChange);
   elements.networkNewSession.addEventListener('change', handleIndicatorChange);
   elements.networkProviderLogin.addEventListener('change', handleIndicatorChange);
   elements.chatIdleTimeout.addEventListener('change', handleChatIdleTimeoutChange);
@@ -242,6 +244,7 @@ const bindSettingsActions = (context: SettingsActionsContext): (() => void) => {
       handleStartupModelConnectionTimingChange,
     );
     elements.webResearchIsolation.removeEventListener('change', handleIndicatorChange);
+    elements.confirmFileDrops.removeEventListener('change', handleIndicatorChange);
     elements.networkNewSession.removeEventListener('change', handleIndicatorChange);
     elements.networkProviderLogin.removeEventListener('change', handleIndicatorChange);
     elements.chatIdleTimeout.removeEventListener('change', handleChatIdleTimeoutChange);

@@ -17,6 +17,7 @@ import {
 } from '../../shared/claude/model-id';
 import { normalizeConnectionBaseUrl } from '../../shared/router/connection-endpoint';
 import { findClaudeProvider, providerForPreset } from '../../shared/claude/providers';
+import { assertClaudeProviderAccess } from '../network/provider-access-policy';
 import {
   blockingVersionRuleFor,
   compareSemanticVersions,
@@ -290,7 +291,15 @@ export const evaluateClaudeInstallation = (
  */
 const normalizeBaseUrl = (value: string): string => normalizeConnectionBaseUrl(value);
 
-export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedClaudeConfig => {
+export interface NormalizeClaudeConfigOptions {
+  /** Allows the effective local route created for an OpenAI upstream after policy checks. */
+  allowRoutedEffectiveRoute?: boolean;
+}
+
+export const normalizeClaudeConfig = (
+  input: SaveClaudeConfigInput,
+  options: NormalizeClaudeConfigOptions = {},
+): NormalizedClaudeConfig => {
   const apiKeyHelperPolicy =
     input.apiKeyHelperPolicy === 'inherit' ? 'inherit' : 'prefer-claudedock';
   const model = input.model.trim();
@@ -308,6 +317,16 @@ export const normalizeClaudeConfig = (input: SaveClaudeConfigInput): NormalizedC
   if (input.provider !== provider) {
     throw new Error('服务商预设与连接类型不一致。');
   }
+
+  assertClaudeProviderAccess(
+    {
+      address: input.baseUrl,
+      credential: input.credential,
+      preset,
+      protocol: input.protocol,
+    },
+    { allowRoutedEffectiveRoute: options.allowRoutedEffectiveRoute },
+  );
 
   if (provider === 'anthropic') {
     if (input.authMode !== 'existing' && input.authMode !== 'apiKey') {

@@ -3,9 +3,14 @@ import type { ChatActionsDependencies } from './dependencies';
 import type { ChatElements } from './elements';
 import { EXTENSION_BY_MEDIA_TYPE, type ChatState } from './state';
 
+export type ChatAttachmentImportCompletion = (succeeded: boolean) => void;
+
 export interface ChatAttachmentImportActions {
-  importChatAttachments: (files: File[]) => Promise<void>;
-  queueChatAttachmentImport: (files: File[]) => void;
+  importChatAttachments: (files: File[]) => Promise<boolean>;
+  queueChatAttachmentImport: (
+    files: File[],
+    onComplete?: ChatAttachmentImportCompletion,
+  ) => boolean;
 }
 
 export const createChatAttachmentImportActions = (
@@ -24,11 +29,11 @@ export const createChatAttachmentImportActions = (
     return `${name || `粘贴内容-${index + 1}`}${extension}`;
   };
 
-  const importChatAttachments = async (files: File[]): Promise<void> => {
+  const importChatAttachments = async (files: File[]): Promise<boolean> => {
     const remaining = 10 - state.pendingChatAttachments.length;
     if (remaining <= 0) {
       dependencies.showToast('每条消息最多添加 10 个附件。', 'error');
-      return;
+      return false;
     }
     const selected = files.slice(0, remaining);
     // Files dropped or picked from disk expose a native path; clipboard payloads do not, so they
@@ -50,16 +55,17 @@ export const createChatAttachmentImportActions = (
     }
     if (paths.length === 0 && inMemory.length === 0) {
       dependencies.showToast('无法读取所选附件的内容。', 'error');
-      return;
+      return false;
     }
     try {
+      let succeeded = true;
       if (paths.length > 0) {
-        applyChatAttachmentImportResult(
-          await window.controlPanel.importChatAttachments({
-            draftId: state.activeChatAttachmentDraftId,
-            paths,
-          }),
-        );
+        const result = await window.controlPanel.importChatAttachments({
+          draftId: state.activeChatAttachmentDraftId,
+          paths,
+        });
+        applyChatAttachmentImportResult(result);
+        succeeded = result.ok;
       }
       if (inMemory.length > 0) {
         const sources = await Promise.all(
@@ -68,35 +74,46 @@ export const createChatAttachmentImportActions = (
             fileName: pastedFileName(file, index),
           })),
         );
-        applyChatAttachmentImportResult(
-          await window.controlPanel.importChatAttachmentBytes({
-            draftId: state.activeChatAttachmentDraftId,
-            sources,
-          }),
-        );
+        const result = await window.controlPanel.importChatAttachmentBytes({
+          draftId: state.activeChatAttachmentDraftId,
+          sources,
+        });
+        applyChatAttachmentImportResult(result);
+        succeeded = result.ok && succeeded;
       }
+      return succeeded;
     } catch (error) {
       dependencies.showToast(error instanceof Error ? error.message : '无法导入附件。', 'error');
+      return false;
     } finally {
       elements.chatAttachmentInput.value = '';
     }
   };
 
-  const queueChatAttachmentImport = (files: File[]): void => {
+  const queueChatAttachmentImport = (
+    files: File[],
+    onComplete?: ChatAttachmentImportCompletion,
+  ): boolean => {
     if (files.length === 0 || state.activeChatRequestId || state.chatSubmissionInFlight) {
-      return;
+      return false;
     }
     state.queuedChatAttachmentImports += 1;
     setChatBusy(Boolean(state.activeChatRequestId));
     const queued = state.chatAttachmentImportQueue.then(() => importChatAttachments(files));
     state.chatAttachmentImportQueue = queued
-      .catch(() => {
-        // importChatAttachments already presents an actionable error.
+      .catch(() => false)
+      .then((succeeded) => {
+        try {
+          onComplete?.(succeeded);
+        } catch {
+          // Completion observers must not break the serialized import queue.
+        }
       })
       .finally(() => {
         state.queuedChatAttachmentImports = Math.max(0, state.queuedChatAttachmentImports - 1);
         setChatBusy(Boolean(state.activeChatRequestId));
       });
+    return true;
   };
 
   return {

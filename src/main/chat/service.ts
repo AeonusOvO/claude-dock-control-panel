@@ -21,6 +21,7 @@ import {
 export type { ChatServiceTimeouts } from './request-runner';
 import { preflightChatRequest } from './protocol';
 import { assertChatApiAccess } from '../../shared/claude/chat-providers';
+import { assertChatProviderAccess } from '../network/provider-access-policy';
 import { resolveAutomaticChatConnection } from './automatic-connection';
 import { guardedAutomaticConnectionFetch } from '../network/automatic-connection-access';
 import type { ProviderAccessGuard } from '../network/provider-access-guard';
@@ -123,6 +124,12 @@ export class ChatService extends ChatRequestRunner {
 
   private validateRuntimeConfig(config: ChatRuntimeConfig): void {
     normalizeChatBaseUrl(config.baseUrl);
+    assertChatProviderAccess({
+      address: config.baseUrl,
+      credential: config.credential,
+      preset: config.preset,
+      protocol: config.protocol,
+    });
     assertChatApiAccess(config.baseUrl, config.credential);
     if (!config.model) {
       throw new Error('请先在“对话”选项卡中配置模型。');

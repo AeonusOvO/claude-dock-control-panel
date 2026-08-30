@@ -13,8 +13,14 @@ export interface ClaudeProviderDefinition {
   editableBaseUrl: boolean;
   /** API-only metadata; Coding Plan credentials must never be offered as general chat access. */
   codingPlan?: boolean;
+  /** Product and credential taxonomy used by the main-process access policy. */
+  credentialKind?: 'coding-plan' | 'dashscope-api-key';
+  /** The catalog owns the protocol for providers marked this way. */
+  fixedProtocol?: boolean;
   modelsUrl?: string;
+  product?: 'qwen-coding-plan' | 'bailian-model-studio';
   protocol?: 'anthropic' | 'openai';
+  region?: 'cn' | 'international' | 'cn-beijing';
   group: ClaudeProviderGroupId;
   id:
     | SubscriptionProvider
@@ -242,7 +248,11 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     group: 'domestic',
     id: 'qwen-cn',
     codingPlan: true,
+    credentialKind: 'coding-plan',
+    fixedProtocol: true,
     label: '千问 Coding Plan（国内）',
+    product: 'qwen-coding-plan',
+    region: 'cn',
     model: 'qwen3.7-plus',
     modelFast: 'qwen3.7-plus',
   },
@@ -257,7 +267,11 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     group: 'overseas',
     id: 'qwen-global',
     codingPlan: true,
+    credentialKind: 'coding-plan',
+    fixedProtocol: true,
     label: '千问 Coding Plan（国际）',
+    product: 'qwen-coding-plan',
+    region: 'international',
     model: 'qwen3.7-plus',
     modelFast: 'qwen3.7-plus',
   },
@@ -379,9 +393,13 @@ export const CLAUDE_PROVIDERS: readonly ClaudeProviderDefinition[] = [
     editableBaseUrl: false,
     group: 'domestic',
     id: 'qwen-api',
+    credentialKind: 'dashscope-api-key',
+    fixedProtocol: true,
     label: '千问 API（北京）',
     model: 'qwen-plus',
+    product: 'bailian-model-studio',
     protocol: 'openai',
+    region: 'cn-beijing',
   },
   {
     authMode: 'authToken',

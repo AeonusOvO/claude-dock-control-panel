@@ -804,6 +804,155 @@ describe('download engine disposal and race fencing', () => {
     }
   });
 
+  it('holds startup recovery until explicit consent, then resumes the bound item', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-consent-'));
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      const item = createItem({
+        getReceivedBytes: vi.fn(() => 100),
+        getState: vi.fn(() => 'interrupted'),
+      });
+      const session = createSession();
+      const busyRegistry = new BusyRegistry();
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        busyRegistry,
+        userDataPath,
+      );
+
+      engine.restoreInterrupted();
+      expect(session.createInterruptedDownload).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: entry.receivedBytes, path: entry.savePath }),
+      );
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({
+          id: entry.id,
+          recoveryPending: true,
+          receivedBytes: entry.receivedBytes,
+          state: 'paused',
+        }),
+      ]);
+
+      session.emit('will-download', { preventDefault: vi.fn() }, item);
+      expect(item.resume).not.toHaveBeenCalled();
+      expect(engine.listRecoveryPending()).toHaveLength(1);
+
+      const resumed = engine.resumeRecovery(entry.id);
+      expect(resumed).toMatchObject({ id: entry.id, recoveryPending: false });
+      expect(item.resume).toHaveBeenCalledOnce();
+
+      item.emit('updated', {}, 'progressing');
+      expect(engine.list()[0]).toMatchObject({
+        id: entry.id,
+        recoveryPending: false,
+        state: 'progressing',
+      });
+      expect(engine.listRecoveryPending()).toEqual([]);
+
+      engine.cancel(entry.id);
+      expect(busyRegistry.list()).toEqual([]);
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('discards only the selected recovery task and preserves final artifacts', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-discard-'));
+    try {
+      const first = writeRecoveryFixture(userDataPath, 'recovered-first');
+      const second = writeRecoveryFixture(userDataPath, 'recovered-second');
+      writeFileSync(
+        path.join(userDataPath, 'download-journal.json'),
+        JSON.stringify([first, second]),
+      );
+      writeFileSync(first.finalPath, 'existing-first');
+      writeFileSync(second.finalPath, 'existing-second');
+      const firstItem = createItem({
+        getReceivedBytes: vi.fn(() => first.receivedBytes),
+        getURL: vi.fn(() => first.urlChain[0]),
+        getURLChain: vi.fn(() => first.urlChain),
+      });
+      const secondItem = createItem({
+        getReceivedBytes: vi.fn(() => second.receivedBytes),
+        getURL: vi.fn(() => second.urlChain[0]),
+        getURLChain: vi.fn(() => second.urlChain),
+      });
+      const session = createSession();
+      session.createInterruptedDownload.mockImplementation(() => {
+        const item =
+          session.createInterruptedDownload.mock.calls.length === 1 ? firstItem : secondItem;
+        session.emit('will-download', { preventDefault: vi.fn() }, item);
+      });
+      const busyRegistry = new BusyRegistry();
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        busyRegistry,
+        userDataPath,
+      );
+
+      engine.restoreInterrupted();
+      writeFileSync(`${first.savePath}.resume`, Buffer.alloc(first.receivedBytes));
+      writeFileSync(`${second.savePath}.resume`, Buffer.alloc(second.receivedBytes));
+      expect(engine.listRecoveryPending().map(({ id }) => id)).toEqual([first.id, second.id]);
+
+      const remaining = engine.discardRecovery(first.id);
+      expect(remaining.map(({ id }) => id)).toEqual([second.id]);
+      expect(existsSync(first.savePath)).toBe(false);
+      expect(existsSync(`${first.savePath}.resume`)).toBe(false);
+      expect(readFileSync(first.finalPath, 'utf8')).toBe('existing-first');
+      expect(existsSync(second.savePath)).toBe(true);
+      expect(existsSync(`${second.savePath}.resume`)).toBe(true);
+      expect(readFileSync(second.finalPath, 'utf8')).toBe('existing-second');
+      expect(firstItem.cancel).toHaveBeenCalledOnce();
+      expect(secondItem.cancel).not.toHaveBeenCalled();
+      expect(readJournal(userDataPath)).toEqual([expect.objectContaining({ id: second.id })]);
+      expect(busyRegistry.list().map(({ id }) => id)).toEqual([`download:${second.id}`]);
+
+      engine.discardRecovery(second.id);
+      expect(busyRegistry.list()).toEqual([]);
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('fences a late startup item after recovery is discarded', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-late-bind-'));
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      let resolveCreation!: () => void;
+      const creation = new Promise<void>((resolve) => {
+        resolveCreation = resolve;
+      });
+      const session = createSession();
+      session.createInterruptedDownload.mockReturnValue(creation);
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+
+      engine.restoreInterrupted();
+      expect(engine.listRecoveryPending()).toHaveLength(1);
+      expect(engine.discardRecovery(entry.id)).toEqual([]);
+
+      const preventDefault = vi.fn();
+      const lateItem = createItem();
+      session.emit('will-download', { preventDefault }, lateItem);
+      resolveCreation();
+      await creation;
+      await Promise.resolve();
+
+      expect(preventDefault).toHaveBeenCalledOnce();
+      expect(lateItem.setSavePath).not.toHaveBeenCalled();
+      expect(engine.list()).toEqual([]);
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
   it('filters an invalid journal before creating any restore task and skips no-op replace', () => {
     const firstPath = mkdtempSync(path.join(tmpdir(), 'claudedock-restore-filter-'));
     try {

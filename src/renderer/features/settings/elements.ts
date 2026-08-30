@@ -6,6 +6,7 @@ export interface SettingsElements {
   startupModelConnectCancelAfter: HTMLInputElement;
   startupModelConnectForceStopAfter: HTMLInputElement;
   chatIdleTimeout: HTMLSelectElement;
+  confirmFileDrops: HTMLInputElement;
   closeBehavior: HTMLSelectElement;
   conversationModelMismatch: HTMLSelectElement;
   language: HTMLSelectElement;
@@ -25,6 +26,7 @@ export const createSettingsElements = (): SettingsElements => ({
     '#settings-startup-model-connect-force-stop-after',
   ),
   chatIdleTimeout: requiredElement('#settings-chat-idle-timeout'),
+  confirmFileDrops: requiredElement('#settings-confirm-file-drops'),
   closeBehavior: requiredElement('#settings-close-behavior'),
   conversationModelMismatch: requiredElement('#settings-conversation-model-mismatch'),
   language: requiredElement('#settings-language'),

@@ -39,7 +39,8 @@ export const deriveUpdateActionState = (
     applicationUpdater?.phase === 'available' ||
     applicationUpdater?.phase === 'downloading' ||
     applicationUpdater?.phase === 'downloaded' ||
-    applicationUpdater?.phase === 'installing';
+    applicationUpdater?.phase === 'installing' ||
+    applicationUpdater?.phase === 'install-recovery';
   return {
     application,
     claudeCode: softwareAction(software?.claudeCode),

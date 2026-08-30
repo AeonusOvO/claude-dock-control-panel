@@ -876,6 +876,24 @@ describe('independent chat service', () => {
     });
   });
 
+  it('rejects a stored managed ChatGPT subscription before sending a chat request', () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const store = {
+      getRuntimeConfig: () => ({
+        authMode: 'bearer' as const,
+        baseUrl: 'http://127.0.0.1:8317',
+        credential: 'managed-token',
+        model: 'gpt-5.6-sol',
+        preset: 'chatgpt-subscription',
+        protocol: 'anthropic' as const,
+      }),
+    } as unknown as ChatConfigStore;
+    const service = new ChatService(store, () => undefined, fetchMock);
+
+    expect(() => service.captureRuntimeSnapshot()).toThrow('ChatGPT 订阅');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('only aborts at the second idle threshold when the local setting opts in', async () => {
     const events: ChatStreamEvent[] = [];
     const store = {

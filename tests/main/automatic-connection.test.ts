@@ -143,6 +143,31 @@ describe('automatic provider connection', () => {
     expect(result.requestCount).toBeLessThanOrEqual(5);
   });
 
+  it('does not fall back from a fixed Anthropic provider to OpenAI protocols', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+      if (!options?.method) return catalog();
+      return String(url).endsWith('/v1/messages') ? reject(400) : reply('openai');
+    });
+    await expect(
+      detectAutomaticConnection(
+        {
+          address: 'coding.dashscope.aliyuncs.com/apps/anthropic',
+          allowedProtocols: ['anthropic'],
+          claudeCompatible: true,
+          credential: 'sk-sp-plan-key',
+          modelHints: ['qwen3.7-plus'],
+          preferredProtocol: 'anthropic',
+        },
+        fetchMock,
+      ),
+    ).rejects.toThrow('未找到可用连接');
+    expect(
+      fetchMock.mock.calls
+        .filter(([, options]) => options?.method === 'POST')
+        .every(([url]) => String(url).endsWith('/v1/messages')),
+    ).toBe(true);
+  });
+
   it('tries another discovered model on a supported endpoint without repeating rejected endpoints', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
       if (!options?.method) return Response.json({ data: [{ id: 'model-a' }, { id: 'model-b' }] });

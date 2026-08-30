@@ -1,15 +1,27 @@
 import type { McpCatalog } from '../../../shared/contracts';
 
 export interface McpState {
+  /** Cwd whose catalog/mutation result is currently allowed to own the page. */
+  activeCwd?: string;
+  /** Monotonic ownership token for active-cwd changes. */
+  activeCwdGeneration: number;
   catalog?: McpCatalog;
+  catalogCwd?: string;
+  loadCwd?: string;
   loadPromise?: Promise<void>;
   mutationInProgress: boolean;
+  renderedAvailableKeys: ReadonlySet<string>;
   renderedContext: string | null;
-  renderedKeys: ReadonlySet<string>;
+  renderedInstalledKeys: ReadonlySet<string>;
+  disposed: boolean;
 }
 
 export const createMcpState = (): McpState => ({
+  activeCwd: undefined,
+  activeCwdGeneration: 0,
+  disposed: false,
   mutationInProgress: false,
+  renderedAvailableKeys: new Set<string>(),
   renderedContext: null,
-  renderedKeys: new Set<string>(),
+  renderedInstalledKeys: new Set<string>(),
 });

@@ -297,6 +297,7 @@ export const registerAppIpc = ({
         : undefined;
     if (
       ![0, 5, 10, 30].includes(record?.chatIdleTimeoutMinutes ?? -1) ||
+      (record?.confirmFileDrops !== undefined && typeof record.confirmFileDrops !== 'boolean') ||
       !record?.networkPreflight ||
       typeof record.networkPreflight.checkOnNewSession !== 'boolean' ||
       typeof record.networkPreflight.checkOnProviderLogin !== 'boolean' ||
@@ -311,6 +312,7 @@ export const registerAppIpc = ({
     }
     advancedSettingsStore.set({
       chatIdleTimeoutMinutes: record.chatIdleTimeoutMinutes as 0 | 5 | 10 | 30,
+      confirmFileDrops: record.confirmFileDrops ?? true,
       networkPreflight: {
         checkOnNewSession: record.networkPreflight.checkOnNewSession,
         checkOnProviderLogin: record.networkPreflight.checkOnProviderLogin,

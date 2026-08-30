@@ -9,6 +9,7 @@ import type {
   ClaudeLaunchAttemptRegistry,
   ClaudeLaunchAttemptToken,
   ClaudeLaunchPresentationPhase,
+  ClaudeLaunchResultDisposition,
 } from '../../platform/claude-launch-attempt';
 import type { SessionGenerationRegistry } from '../../platform/session-generation';
 import type { ConfirmationRequest } from '../dialogs';
@@ -44,6 +45,11 @@ export interface FooterSwitchesDeps {
     input: { entryId?: string; permissionMode?: ClaudePermissionMode },
   ) => Promise<void>;
   renderActiveConversation: () => void;
+  renderClaudeLaunchResult: (
+    token: ClaudeLaunchAttemptToken,
+    state: ClaudeProjectState,
+    disposition: ClaudeLaunchResultDisposition,
+  ) => boolean;
   renderClaudeState: (
     state: ClaudeProjectState,
     invalidatePendingLoad?: boolean,

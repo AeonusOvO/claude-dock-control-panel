@@ -3,6 +3,10 @@ import { findClaudeProvider, providerForPreset } from '../../shared/claude/provi
 import { providerApiAddress } from '../../shared/claude/chat-providers';
 import { sameConnectionCredentialScope } from '../../shared/router/automatic-connection';
 import { normalizeConnectionBaseUrl } from '../../shared/router/connection-endpoint';
+import {
+  allowedProtocolsForProvider,
+  assertClaudeProviderAccess,
+} from '../network/provider-access-policy';
 import { detectAutomaticConnection } from '../network/automatic-connection';
 import type { ClaudeConfigStore } from './config-store';
 
@@ -40,17 +44,15 @@ export const resolveAutomaticClaudeConnection = async (
     snapshot?.credential ||
     (provider.id === 'ollama' ? 'ollama' : undefined);
   if (input.credentialAction === 'replace' && !entered) throw new Error('请填写密钥。');
-  if (
-    provider.id.startsWith('qwen-') &&
-    provider.codingPlan &&
-    credential &&
-    !credential.startsWith('sk-sp-')
-  ) {
-    throw new Error('请填写 Coding Plan 密钥，普通 API 密钥请使用“千问 API”。');
-  }
-  if (provider.id === 'qwen-api' && credential?.startsWith('sk-sp-')) {
-    throw new Error('这是套餐密钥，请选择“千问 Coding Plan”。');
-  }
+  const preferredProtocol =
+    assertClaudeProviderAccess({
+      address,
+      credential,
+      preset: provider.id,
+      protocol: input.protocol ?? provider.protocol,
+    }) ??
+    provider.protocol ??
+    'anthropic';
   const result = await detectAutomaticConnection(
     {
       address,
@@ -61,8 +63,9 @@ export const resolveAutomaticClaudeConnection = async (
         ...(provider.editableBaseUrl ? [] : [provider.model, provider.modelFast ?? '']),
       ],
       modelsAddress: provider.modelsUrl,
+      allowedProtocols: allowedProtocolsForProvider(provider.id),
       preferredAuth: provider.authMode === 'apiKey' ? 'apiKey' : 'bearer',
-      preferredProtocol: provider.protocol ?? 'anthropic',
+      preferredProtocol,
     },
     fetchImplementation,
   );

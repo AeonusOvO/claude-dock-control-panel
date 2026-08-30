@@ -22,6 +22,8 @@ export interface AutomaticConnectionInput {
   modelsAddress?: string;
   preferredAuth?: AutomaticConnectionAuth;
   preferredProtocol?: AutomaticConnectionProtocol;
+  /** Fixed catalog providers opt out of generic cross-protocol probing. */
+  allowedProtocols?: readonly AutomaticConnectionProtocol[];
   /** Claude's OpenAI converter only supports Bearer authentication. */
   openAiApiKey?: boolean;
   /** Claude Code always appends /v1/messages itself. */
@@ -183,7 +185,11 @@ export const detectAutomaticConnection = async (
   const timeout = AbortSignal.timeout(TOTAL_TIMEOUT_MS);
   const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
   const context = { fetch: fetchImplementation, input: normalizedInput, signal };
-  const candidates = automaticConnectionCandidates(address, input.preferredProtocol).filter(
+  const candidates = automaticConnectionCandidates(
+    address,
+    input.preferredProtocol,
+    input.allowedProtocols,
+  ).filter(
     (candidate) =>
       !input.claudeCompatible ||
       candidate.protocol !== 'anthropic' ||

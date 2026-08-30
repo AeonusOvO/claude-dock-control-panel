@@ -208,6 +208,76 @@ const waitForStartupModelConnection = async (): Promise<void> => {
   });
 };
 
+interface DroppedEntry {
+  file: File;
+  /** Undefined means the host did not expose enough metadata to distinguish a file from a folder. */
+  isDirectory: boolean | undefined;
+}
+
+const droppedEntriesFromEvent = (event: DragEvent): DroppedEntry[] => {
+  const transfer = event.dataTransfer;
+  const files = Array.from(transfer?.files ?? []);
+  const items = Array.from(transfer?.items ?? []).filter(({ kind }) => kind === 'file');
+  if (items.length === 0) {
+    // `DataTransfer.files` does not identify folders. Keep the drop explicitly ambiguous instead of
+    // routing ordinary files through the project-add path or injecting an unverified path.
+    return files.map((file) => ({ file, isDirectory: undefined }));
+  }
+
+  let fallbackFileIndex = 0;
+  return items.flatMap((item) => {
+    const file = item.getAsFile() ?? files[fallbackFileIndex++];
+    if (!file) return [];
+    const entry = (
+      item as DataTransferItem & {
+        webkitGetAsEntry?: () => { isDirectory?: boolean } | null;
+      }
+    ).webkitGetAsEntry?.();
+    return [
+      {
+        file,
+        isDirectory: typeof entry?.isDirectory === 'boolean' ? entry.isDirectory : undefined,
+      },
+    ];
+  });
+};
+
+const readableDropPath = (value: string): string => {
+  if (value.length <= 180) return value;
+  return `${value.slice(0, 86)}…${value.slice(-86)}`;
+};
+
+const describeDropEntries = (
+  entries: readonly DroppedEntry[],
+  paths: readonly string[],
+): string => {
+  const visible = entries.slice(0, 12).map((entry, index) => {
+    const path = paths[index] || entry.file.name;
+    return `• ${entry.file.name}\n  ${readableDropPath(path)}`;
+  });
+  if (entries.length > visible.length) {
+    visible.push(`• 以及另外 ${entries.length - visible.length} 个项目`);
+  }
+  return visible.join('\n');
+};
+
+const persistFileDropConfirmationDisabled = async (
+  runtime: ApplicationRuntime,
+  showToast: (message: string, tone?: 'error' | 'success') => void,
+): Promise<void> => {
+  // Keep the current session aligned with the accepted choice even when persistence is unavailable.
+  runtime.setFileDropConfirmationEnabled(false);
+  try {
+    const settings = await window.controlPanel.getAppSettings();
+    await window.controlPanel.setAdvancedSettings({
+      ...settings.advanced,
+      confirmFileDrops: false,
+    });
+  } catch {
+    showToast('本次操作已完成，但无法保存“以后不再提示”。', 'error');
+  }
+};
+
 /**
  * Installs window-level lifecycle handlers: focus/blur/visibility reconciliation, drag-and-drop
  * project import, and window resize cleanups.
@@ -263,12 +333,29 @@ export const installWindowLifecycle = (runtime: ApplicationRuntime): void => {
     const title = dropOverlay.querySelector('strong');
     const detail = dropOverlay.querySelector('span');
     if (title && detail) {
-      title.textContent =
-        railShell.getMainView() === 'chat' ? '松开以添加到当前消息' : '松开以添加项目';
-      detail.textContent =
-        railShell.getMainView() === 'chat'
-          ? '支持图片、PDF、CSV 与纯文本；文件只会复制到本机应用数据目录'
-          : '将为该项目创建独立终端会话';
+      const entries = droppedEntriesFromEvent(event);
+      const hasDirectory = entries.some(({ isDirectory }) => isDirectory === true);
+      const hasFile = entries.some(({ isDirectory }) => isDirectory === false);
+      const hasUnknownType = entries.some(({ isDirectory }) => isDirectory === undefined);
+      if (hasDirectory && hasFile) {
+        title.textContent = '松开以查看拖放提示';
+        detail.textContent = '文件夹和文件不能混合拖入；本次操作不会自动执行';
+      } else if (hasUnknownType) {
+        title.textContent = '松开以查看拖放提示';
+        detail.textContent = '当前主机无法判断文件夹类型；本次操作不会自动执行';
+      } else if (hasDirectory) {
+        title.textContent = '松开以添加项目';
+        detail.textContent = '将为该项目创建独立终端会话';
+      } else if (railShell.getMainView() === 'chat') {
+        title.textContent = '松开以添加到当前消息';
+        detail.textContent = '支持图片、PDF、CSV 与纯文本；文件只会复制到本机应用数据目录';
+      } else if (hasFile) {
+        title.textContent = '松开以插入文件路径';
+        detail.textContent = '路径会追加到当前 Claude Code 提示词草稿，不会自动发送';
+      } else {
+        title.textContent = '松开以查看拖放提示';
+        detail.textContent = '没有检测到可识别的拖放类型';
+      }
     }
     dropOverlay.classList.add('drop-overlay--visible');
   });
@@ -290,27 +377,108 @@ export const installWindowLifecycle = (runtime: ApplicationRuntime): void => {
     setDragDepth(0);
     dropOverlay.classList.remove('drop-overlay--visible');
 
-    const files = Array.from(event.dataTransfer?.files ?? []);
-    const file = files[0];
-    if (!file) {
-      showToast('没有检测到文件夹。', 'error');
+    const entries = droppedEntriesFromEvent(event);
+    if (entries.length === 0) {
+      showToast('没有检测到可处理的文件。', 'error');
       return;
     }
 
-    try {
-      if (railShell.getMainView() === 'chat') {
-        chatFeature.queueAttachmentImport(files);
+    void (async () => {
+      if (entries.some(({ isDirectory }) => isDirectory === undefined)) {
+        showToast('当前主机无法判断文件夹类型，拖放未执行。', 'error');
         return;
       }
-      const directoryPath = window.controlPanel.getDroppedPath(file);
-      if (!directoryPath) {
-        showToast('无法读取拖入项目的路径。', 'error');
+      const directories = entries.filter(({ isDirectory }) => isDirectory === true);
+      const files = entries.filter(({ isDirectory }) => isDirectory === false);
+      // A mixed drop has no unambiguous destination: never silently discard files or add a
+      // directory while pretending the remaining files were handled.
+      if (directories.length > 0 && files.length > 0) {
+        showToast('请一次只拖入文件或文件夹，混合拖放未执行。', 'error');
         return;
       }
-      void projectsFeature.addProject(directoryPath);
-    } catch {
-      showToast('无法读取拖入项目的路径。', 'error');
-    }
+      if (directories.length > 1) {
+        showToast('一次只能添加一个文件夹项目。', 'error');
+        return;
+      }
+
+      const paths = entries.map(({ file }) => {
+        try {
+          return window.controlPanel.getDroppedPath(file);
+        } catch {
+          return '';
+        }
+      });
+      const isChat = railShell.getMainView() === 'chat';
+      const action =
+        directories.length > 0
+          ? '将这个文件夹添加为新项目'
+          : isChat
+            ? '将这些文件添加到当前消息作为附件'
+            : '将这些文件的路径追加到当前 Claude Code 提示词末尾';
+      const confirmationMessage =
+        `${action}：\n\n${describeDropEntries(entries, paths)}\n\n` +
+        (directories.length > 0
+          ? '确认后会沿用现有项目添加流程。'
+          : isChat
+            ? '确认后才会导入附件。'
+            : '确认后只会修改提示词草稿，不会自动发送，也不会写入正在运行的终端。');
+
+      let suppressDialog = false;
+      if (runtime.getFileDropConfirmationEnabled()) {
+        const result = await runtime.dialogShell.requestConfirmationResult({
+          message: confirmationMessage,
+          showSuppressOption: true,
+          suppressLabel: '以后不再提示文件拖放',
+          title: directories.length > 0 ? '确认添加项目？' : '确认处理拖入文件？',
+        });
+        if (!result.confirmed) return;
+        suppressDialog = result.suppressDialog;
+      }
+
+      if (directories.length > 0) {
+        const directoryPath = paths[0];
+        if (!directoryPath) {
+          showToast('无法读取拖入项目的路径。', 'error');
+          return;
+        }
+        try {
+          await projectsFeature.addProject(directoryPath);
+        } catch {
+          showToast('无法添加拖入的项目文件夹。', 'error');
+          return;
+        }
+        if (suppressDialog) {
+          await persistFileDropConfirmationDisabled(runtime, showToast);
+        }
+        return;
+      }
+      if (isChat) {
+        const queued = chatFeature.queueAttachmentImport(
+          entries.map(({ file }) => file),
+          suppressDialog
+            ? (succeeded) => {
+                if (succeeded) {
+                  void persistFileDropConfirmationDisabled(runtime, showToast);
+                }
+              }
+            : undefined,
+        );
+        if (!queued) {
+          showToast('当前对话正在运行，暂不能添加附件。', 'error');
+        }
+        return;
+      }
+      if (paths.some((path) => !path)) {
+        showToast('无法读取一个或多个拖入文件的路径。', 'error');
+        return;
+      }
+      const appended = terminalFeature.appendDroppedPaths(paths);
+      if (appended && suppressDialog) {
+        await persistFileDropConfirmationDisabled(runtime, showToast);
+      }
+    })().catch(() => {
+      showToast('无法处理拖入的文件。', 'error');
+    });
   });
 };
 

@@ -14,7 +14,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BusyRegistry } from '../../src/main/coordination/busy-registry';
 import { DownloadEngine, type DownloadSession } from '../../src/main/download/engine';
-import { snapshotPartialForRecovery } from '../../src/main/download/engine-state';
+import {
+  promoteRecoverySnapshot,
+  snapshotPartialForRecovery,
+} from '../../src/main/download/engine-state';
 import { DownloadJournal, type DownloadJournalEntry } from '../../src/main/download/journal';
 
 const DOWNLOAD_URL = 'https://downloads.example.com/tool.exe';
@@ -151,6 +154,120 @@ describe('download rebind ownership races', () => {
       expect(readJournal(userDataPath)).toEqual([
         expect.objectContaining({ id: entry.id, receivedBytes: 100 }),
       ]);
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('does not discard a snapshot when an existing partial has the wrong prefix', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-promotion-identity-'));
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      writeFileSync(entry.savePath, Buffer.alloc(100, 2));
+      writeFileSync(`${entry.savePath}.resume`, Buffer.alloc(100, 1));
+
+      expect(promoteRecoverySnapshot(userDataPath, entry)).toBe('ready');
+      expect(readFileSync(entry.savePath)).toEqual(Buffer.alloc(100, 1));
+      expect(existsSync(`${entry.savePath}.resume`)).toBe(false);
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps recovery consent pending when the native item rejects resume', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-resume-failure-'));
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      const item = createItem({ getReceivedBytes: vi.fn(() => 100) });
+      const session = createSession();
+      session.createInterruptedDownload.mockImplementation(() => {
+        session.emit('will-download', { preventDefault: vi.fn() }, item);
+      });
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+
+      engine.restoreInterrupted();
+      item.canResume.mockImplementation(() => {
+        throw new Error('native resume failed');
+      });
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+
+      expect(() => engine.resumeRecovery(entry.id)).toThrow('native resume failed');
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+      expect(item.resume).not.toHaveBeenCalled();
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('clears recovery consent after a late native item resumes successfully', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-late-success-'));
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      const item = createItem({ getReceivedBytes: vi.fn(() => 100) });
+      const session = createSession();
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+
+      engine.restoreInterrupted();
+      engine.resumeRecovery(entry.id);
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+
+      session.emit('will-download', { preventDefault: vi.fn() }, item);
+
+      expect(item.resume).toHaveBeenCalledOnce();
+      expect(engine.listRecoveryPending()).toEqual([]);
+      expect(engine.list()[0]).toMatchObject({ id: entry.id, recoveryPending: false });
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps recovery consent pending when a late native item cannot resume', () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-late-failure-'));
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      const item = createItem({
+        canResume: vi.fn(() => false),
+        getReceivedBytes: vi.fn(() => 100),
+      });
+      const session = createSession();
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+
+      engine.restoreInterrupted();
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+      engine.resumeRecovery(entry.id);
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+
+      session.emit('will-download', { preventDefault: vi.fn() }, item);
+
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+      expect(item.resume).not.toHaveBeenCalled();
       engine.dispose();
     } finally {
       rmSync(userDataPath, { force: true, recursive: true });

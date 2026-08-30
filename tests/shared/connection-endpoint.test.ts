@@ -82,12 +82,30 @@ describe('connection base URL normalization', () => {
     ['https://api.example.com/v1/', 'https://api.example.com/v1'],
     ['api.example.com/relay/v1', 'https://api.example.com/relay/v1'],
     ['api.example.com/proxy/anthropic', 'https://api.example.com/proxy/anthropic'],
+    [
+      'coding.dashscope.aliyuncs.com/apps/anthropic',
+      'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+    ],
     ['api.example.com/openai/v1', 'https://api.example.com/openai/v1'],
     ['https:\\api.example.com\\relay\\v1', 'https://api.example.com/relay/v1'],
     ['localhost:3456', 'http://localhost:3456'],
     ['[::1]:3456', 'http://[::1]:3456'],
   ])('keeps the published path of %s', (input, expected) => {
     expect(normalizeConnectionBaseUrl(input)).toBe(expected);
+  });
+
+  it('completes the Qwen Coding Plan path without dropping /apps/anthropic', () => {
+    expect(
+      completeConnectionEndpoint(
+        'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+        'anthropic',
+      ),
+    ).toBe('https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages');
+    expect(
+      normalizeConnectionBaseUrl(
+        'https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages',
+      ),
+    ).toBe('https://coding.dashscope.aliyuncs.com/apps/anthropic');
   });
 
   it('reduces a pasted Messages endpoint back to the base it belongs to', () => {

@@ -523,7 +523,7 @@ describe('MCP catalog execution boundary', () => {
       'filesystem',
     ]);
     expect(JSON.parse(String(installArguments[5]))).toEqual({
-      args: ['-y', '@modelcontextprotocol/server-filesystem', path.resolve(fixture.cwd)],
+      args: ['-y', '@modelcontextprotocol/server-filesystem@2026.7.10', path.resolve(fixture.cwd)],
       command: 'npx',
       type: 'stdio',
     });

@@ -3,13 +3,21 @@ import { requiredElement } from '../platform/dom';
 export interface ConfirmationRequest {
   confirmLabel?: string;
   message: string;
+  showSuppressOption?: boolean;
+  suppressLabel?: string;
   title: string;
   tone?: 'danger' | 'default';
+}
+
+export interface ConfirmationResult {
+  confirmed: boolean;
+  suppressDialog: boolean;
 }
 
 export interface ConfirmationDialogActions {
   cancelPending: () => void;
   requestConfirmation: (request: ConfirmationRequest) => Promise<boolean>;
+  requestConfirmationResult: (request: ConfirmationRequest) => Promise<ConfirmationResult>;
 }
 
 export const createConfirmationDialogActions = (): ConfirmationDialogActions => {
@@ -19,26 +27,41 @@ export const createConfirmationDialogActions = (): ConfirmationDialogActions => 
   const confirmationDialogConfirm = requiredElement<HTMLButtonElement>(
     '#confirmation-dialog-confirm',
   );
+  const confirmationDialogSuppress = requiredElement<HTMLInputElement>(
+    '#confirmation-dialog-suppress',
+  );
+  const confirmationDialogSuppressLabel = requiredElement<HTMLElement>(
+    '#confirmation-dialog-suppress-label',
+  );
 
   /**
    * Uses an in-page modal instead of `window.confirm`. Electron on Windows can lose the renderer's
    * DOM focus after a native JavaScript dialog closes, leaving both the composer and xterm's hidden
    * IME textarea unable to regain focus. A DOM `<dialog>` keeps focus ownership inside the page.
    */
-  const requestConfirmation = ({
+  const requestConfirmationResult = ({
     confirmLabel = '确认',
     message,
+    showSuppressOption = false,
+    suppressLabel = '以后不再提示',
     title,
     tone = 'default',
-  }: ConfirmationRequest): Promise<boolean> => {
+  }: ConfirmationRequest): Promise<ConfirmationResult> => {
     if (confirmationDialog.open) {
-      return Promise.resolve(false);
+      return Promise.resolve({ confirmed: false, suppressDialog: false });
     }
 
     confirmationDialogTitle.textContent = title;
     confirmationDialogMessage.textContent = message;
     confirmationDialogConfirm.textContent = confirmLabel;
     confirmationDialog.dataset.tone = tone;
+    const suppressionText = confirmationDialogSuppressLabel.querySelector('span');
+    if (suppressionText) {
+      suppressionText.textContent = suppressLabel;
+    }
+    confirmationDialogSuppress.checked = false;
+    confirmationDialogSuppress.hidden = !showSuppressOption;
+    confirmationDialogSuppressLabel.hidden = !showSuppressOption;
     confirmationDialog.returnValue = 'cancel';
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
@@ -46,7 +69,10 @@ export const createConfirmationDialogActions = (): ConfirmationDialogActions => 
     return new Promise((resolve) => {
       const finish = (): void => {
         const confirmed = confirmationDialog.returnValue === 'confirm';
-        resolve(confirmed);
+        resolve({
+          confirmed,
+          suppressDialog: confirmed && showSuppressOption && confirmationDialogSuppress.checked,
+        });
         window.requestAnimationFrame(() => {
           const previouslyFocusedControl =
             previouslyFocused instanceof HTMLButtonElement ||
@@ -69,7 +95,7 @@ export const createConfirmationDialogActions = (): ConfirmationDialogActions => 
         confirmationDialog.showModal();
       } catch {
         confirmationDialog.removeEventListener('close', finish);
-        resolve(false);
+        resolve({ confirmed: false, suppressDialog: false });
       }
     });
   };
@@ -78,6 +104,8 @@ export const createConfirmationDialogActions = (): ConfirmationDialogActions => 
     cancelPending: () => {
       if (confirmationDialog.open) confirmationDialog.close('cancel');
     },
-    requestConfirmation,
+    requestConfirmation: (request) =>
+      requestConfirmationResult(request).then(({ confirmed }) => confirmed),
+    requestConfirmationResult,
   };
 };

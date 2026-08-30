@@ -5,6 +5,7 @@ import {
   existsSync,
   fsyncSync,
   openSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -64,6 +65,8 @@ export interface ActiveDownload {
   startupItemBindPending: boolean;
   /** Immutable metadata restored if Electron create/bind fails after mutating the live task. */
   startupJournalEntry?: DownloadJournalEntry;
+  /** True until the user explicitly chooses to resume or discard an interrupted task. */
+  recoveryAwaitingDecision: boolean;
   view: DownloadTaskView;
 }
 
@@ -156,6 +159,34 @@ export const deleteStagingPartial = (request: DownloadRequest): void => {
   }
 };
 
+const recoveryComparisonChunkBytes = 64 * 1024;
+
+const sharesRecoveryPrefix = (leftPath: string, rightPath: string, bytes: number): boolean => {
+  let leftHandle: number | undefined;
+  let rightHandle: number | undefined;
+  try {
+    leftHandle = openSync(leftPath, 'r');
+    rightHandle = openSync(rightPath, 'r');
+    const leftBuffer = Buffer.alloc(recoveryComparisonChunkBytes);
+    const rightBuffer = Buffer.alloc(recoveryComparisonChunkBytes);
+    let offset = 0;
+    while (offset < bytes) {
+      const length = Math.min(recoveryComparisonChunkBytes, bytes - offset);
+      const leftRead = readSync(leftHandle, leftBuffer, 0, length, offset);
+      const rightRead = readSync(rightHandle, rightBuffer, 0, length, offset);
+      if (leftRead !== length || rightRead !== length) return false;
+      if (!leftBuffer.subarray(0, length).equals(rightBuffer.subarray(0, length))) return false;
+      offset += length;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (leftHandle !== undefined) closeSync(leftHandle);
+    if (rightHandle !== undefined) closeSync(rightHandle);
+  }
+};
+
 export type RecoverySnapshotPromotion = 'blocked' | 'none' | 'ready';
 
 export const promoteRecoverySnapshot = (
@@ -171,11 +202,20 @@ export const promoteRecoverySnapshot = (
   const snapshotPath = `${entry.savePath}${RESUME_SNAPSHOT_SUFFIX}`;
   if (!existsSync(snapshotPath)) return 'none';
   try {
-    if (existsSync(entry.savePath) && statSync(entry.savePath).size >= entry.receivedBytes) {
+    if (statSync(snapshotPath).size < entry.receivedBytes) return 'none';
+    // A current partial is usable only when its recorded prefix matches the durable sibling
+    // snapshot. Length alone cannot prove that a stale or replaced file belongs to this task.
+    if (
+      existsSync(entry.savePath) &&
+      statSync(entry.savePath).size >= entry.receivedBytes &&
+      sharesRecoveryPrefix(entry.savePath, snapshotPath, entry.receivedBytes)
+    ) {
       unlinkSync(snapshotPath);
       return 'ready';
     }
-    if (statSync(snapshotPath).size < entry.receivedBytes) return 'none';
+    // The snapshot is the only task-associated recovery artifact. If the live partial is missing,
+    // shorter, or has a different prefix, replace it from the verified snapshot rather than using
+    // the unverified file or deleting the snapshot.
     if (existsSync(entry.savePath)) unlinkSync(entry.savePath);
     renameSync(snapshotPath, entry.savePath);
     return 'ready';

@@ -10,6 +10,10 @@ import type {
 } from '../../shared/contracts';
 import { findClaudeProvider, providerForPreset } from '../../shared/claude/providers';
 import {
+  assertClaudeProviderAccess,
+  fixedProviderProtocol,
+} from '../network/provider-access-policy';
+import {
   DEFAULT_CLAUDE_CONFIG,
   type NormalizedClaudeConfig,
   normalizeClaudeConfig,
@@ -248,11 +252,36 @@ export class ClaudeConfigStore {
     input: SaveClaudeConfigInput,
     presentation?: ClaudeConfigPresentation,
   ): ClaudeConfigView {
-    const config = normalizeClaudeConfig(input);
     const store = this.load();
     const key = projectKey(cwd);
     const existingCredential = store.projects[key]?.encryptedCredential;
     const existingSource = store.projects[key];
+    const allowRoutedEffectiveRoute = presentation?.protocol === 'openai';
+    const validationCredential =
+      presentation?.protocol === 'openai'
+        ? (presentation.sourceCredential?.trim() ??
+          (presentation.sourceCredentialConfigured
+            ? this.decryptedSourceCredential(existingSource)
+            : undefined))
+        : input.authMode !== 'none' && input.credentialAction === 'keep'
+          ? this.decryptedCredential(existingSource)
+          : input.credential?.trim();
+    const policyInput =
+      presentation?.protocol === 'openai' && presentation.sourceBaseUrl
+        ? {
+            address: presentation.sourceBaseUrl,
+            credential: validationCredential,
+            preset: input.preset,
+            protocol: 'openai' as const,
+          }
+        : {
+            address: input.baseUrl,
+            credential: validationCredential,
+            preset: input.preset,
+            protocol: input.protocol,
+          };
+    assertClaudeProviderAccess(policyInput, { allowRoutedEffectiveRoute });
+    const config = normalizeClaudeConfig(input, { allowRoutedEffectiveRoute });
     let encryptedCredential = existingCredential;
 
     if (input.credentialAction === 'replace') {
@@ -302,6 +331,7 @@ export class ClaudeConfigStore {
       protocol:
         presentation?.protocol ??
         input.protocol ??
+        fixedProviderProtocol(config.preset) ??
         (config.provider === 'anthropic' || config.preset !== 'gateway' ? 'anthropic' : 'unknown'),
       routerProviderId: presentation?.routerProviderId,
       sourceAuthMode: presentation?.sourceAuthMode,
@@ -321,6 +351,7 @@ export class ClaudeConfigStore {
   ): ClaudeEndpointProtocol {
     return (
       stored?.protocol ??
+      fixedProviderProtocol(config.preset) ??
       (config.provider === 'anthropic' || config.preset !== 'gateway' ? 'anthropic' : 'unknown')
     );
   }
@@ -332,16 +363,27 @@ export class ClaudeConfigStore {
 
     const preset = findClaudeProvider(stored.preset)?.id ?? 'custom';
     try {
-      return normalizeClaudeConfig({
-        apiKeyHelperPolicy: stored.apiKeyHelperPolicy,
-        authMode: stored.authMode,
-        baseUrl: stored.baseUrl,
-        credentialAction: 'keep',
-        model: stored.model,
-        modelFast: stored.modelFast || stored.model,
-        preset,
-        provider: providerForPreset(preset),
-      });
+      return normalizeClaudeConfig(
+        {
+          apiKeyHelperPolicy: stored.apiKeyHelperPolicy,
+          authMode: stored.authMode,
+          baseUrl: stored.baseUrl,
+          credentialAction: 'keep',
+          model: stored.model,
+          modelFast: stored.modelFast || stored.model,
+          preset,
+          protocol:
+            stored.protocol === 'openai'
+              ? 'openai'
+              : stored.protocol === 'anthropic'
+                ? 'anthropic'
+                : undefined,
+          provider: providerForPreset(preset),
+        },
+        {
+          allowRoutedEffectiveRoute: stored.protocol === 'openai',
+        },
+      );
     } catch {
       return { ...DEFAULT_CLAUDE_CONFIG };
     }

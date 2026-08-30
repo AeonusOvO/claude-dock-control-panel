@@ -35,7 +35,7 @@ const installUtilityFeatures = (
   features: FeatureBundle,
 ): void => {
   const { installRouterButton } = state;
-  const { activeStatus, terminalProjectState } = shells;
+  const { activeStatus, openExternal, terminalProjectState } = shells;
   const { requestConfirmation } = shells.dialogShell;
   const { showToast } = shells.toastShell;
   registerDownloadsFeature(rendererRegistry, {
@@ -61,6 +61,7 @@ const installUtilityFeatures = (
   const updatesSyncDelegate: { current: () => void } = { current: () => undefined };
   registerPluginsFeature(rendererRegistry, {
     formatTokenCount,
+    openExternal,
     requestConfirmation,
     resultFailureMessage,
     showToast,
@@ -208,6 +209,7 @@ const installSettingsFeatures = (
       void features.routerFeature.loadKernelState();
     },
     onSettingsLoaded: (settings) => {
+      state.setFileDropConfirmationEnabled(settings.advanced.confirmFileDrops ?? true);
       features.preflightFeature.setPreferences(settings.advanced.networkPreflight);
       footerShell.setFooterResourcePreference(settings.footerResourcePreference);
       footerShell.setManagedChatGptContextWindowMode(settings.managedChatGptContextWindowMode);

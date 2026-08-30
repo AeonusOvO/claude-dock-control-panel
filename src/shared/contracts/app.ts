@@ -95,6 +95,8 @@ export interface AppQuitDecisionResponse {
 export interface AdvancedSettings {
   /** Zero leaves slow conversations running until the user stops them. */
   chatIdleTimeoutMinutes: ChatIdleTimeoutMinutes;
+  /** Default-on confirmation before a dropped file or folder changes the current workspace draft. */
+  confirmFileDrops?: boolean;
   /**
    * Routes WebSearch and WebFetch through a dedicated subagent instead of the main conversation.
    * Turn this on when the relay refuses web search once the model is raised to high effort.

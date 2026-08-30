@@ -14,7 +14,7 @@ import {
 } from './view';
 
 export type PluginsFeatureDependencies = PluginsActionsDependencies &
-  Pick<PluginsViewDependencies, 'formatTokenCount'> & {
+  Pick<PluginsViewDependencies, 'formatTokenCount' | 'openExternal'> & {
     requestConfirmation: (request: PluginConfirmationRequest) => Promise<boolean>;
   };
 
@@ -44,6 +44,7 @@ const createPluginsFeature = (dependencies: PluginsFeatureDependencies): Plugins
   const view = createPluginsView(elements, state, {
     formatTokenCount: dependencies.formatTokenCount,
     installOperation: (plugin) => resolveActions().installOperation(plugin),
+    openExternal: dependencies.openExternal,
     removeMarketplaceOperation: (marketplace) =>
       resolveActions().removeMarketplaceOperation(marketplace),
     requestConfirmation: dependencies.requestConfirmation,

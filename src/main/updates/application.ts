@@ -1,4 +1,5 @@
 import type { ApplicationUpdaterState } from '../../shared/contracts';
+import type { ApplicationUpdateRecoveryRecord, ApplicationUpdateRecoveryStore } from './recovery';
 
 interface UpdateInfoView {
   version?: unknown;
@@ -34,6 +35,7 @@ interface ApplicationUpdaterOptions {
   enabled: boolean;
   onChange: (state: ApplicationUpdaterState) => void;
   onInstallError?: () => void;
+  recoveryStore?: ApplicationUpdateRecoveryStore;
 }
 
 const errorMessage = (value: unknown): string =>
@@ -41,6 +43,64 @@ const errorMessage = (value: unknown): string =>
 
 const numericValue = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+interface ComparableVersion {
+  core: [number, number, number];
+  prerelease: string[];
+}
+
+const parseComparableVersion = (value: string): ComparableVersion | undefined => {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+    value.trim(),
+  );
+  if (!match) return undefined;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4]?.split('.') ?? [],
+  };
+};
+
+const compareComparableVersions = (left: string, right: string): number | undefined => {
+  const leftVersion = parseComparableVersion(left);
+  const rightVersion = parseComparableVersion(right);
+  if (!leftVersion || !rightVersion) return undefined;
+  const [leftMajor, leftMinor, leftPatch] = leftVersion.core;
+  const [rightMajor, rightMinor, rightPatch] = rightVersion.core;
+  const majorDifference = leftMajor - rightMajor;
+  if (majorDifference !== 0) return majorDifference;
+  const minorDifference = leftMinor - rightMinor;
+  if (minorDifference !== 0) return minorDifference;
+  const patchDifference = leftPatch - rightPatch;
+  if (patchDifference !== 0) return patchDifference;
+  if (leftVersion.prerelease.length === 0 || rightVersion.prerelease.length === 0) {
+    return leftVersion.prerelease.length === rightVersion.prerelease.length
+      ? 0
+      : leftVersion.prerelease.length === 0
+        ? 1
+        : -1;
+  }
+  for (
+    let index = 0;
+    index < Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length);
+    index += 1
+  ) {
+    const leftIdentifier = leftVersion.prerelease[index];
+    const rightIdentifier = rightVersion.prerelease[index];
+    if (leftIdentifier === undefined) return -1;
+    if (rightIdentifier === undefined) return 1;
+    const leftNumeric = /^\d+$/.test(leftIdentifier);
+    const rightNumeric = /^\d+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) {
+      const difference = Number(leftIdentifier) - Number(rightIdentifier);
+      if (difference !== 0) return difference;
+    } else if (leftNumeric !== rightNumeric) {
+      return leftNumeric ? -1 : 1;
+    } else if (leftIdentifier !== rightIdentifier) {
+      return leftIdentifier < rightIdentifier ? -1 : 1;
+    }
+  }
+  return 0;
+};
 
 export class ApplicationUpdaterService {
   private checkOperation: Promise<UpdateCheckResultView | undefined> | undefined;
@@ -66,6 +126,7 @@ export class ApplicationUpdaterService {
           phase: 'disabled',
         };
     if (options.enabled) {
+      this.reconcileInterruptedInstall();
       this.installEventHandlers();
     }
   }
@@ -78,7 +139,8 @@ export class ApplicationUpdaterService {
     if (
       !this.options.enabled ||
       this.state.phase === 'downloaded' ||
-      this.state.phase === 'installing'
+      this.state.phase === 'installing' ||
+      this.state.phase === 'install-recovery'
     ) {
       return this.getState();
     }
@@ -95,6 +157,9 @@ export class ApplicationUpdaterService {
       this.state.phase === 'downloaded' ||
       this.state.phase === 'installing'
     ) {
+      return Promise.resolve(this.getState());
+    }
+    if (this.state.phase === 'install-recovery' && !this.clearRecoveryForRetry()) {
       return Promise.resolve(this.getState());
     }
     if (this.downloadOperation) {
@@ -188,6 +253,20 @@ export class ApplicationUpdaterService {
     if (this.state.phase !== 'downloaded') {
       return Promise.reject(new Error('更新安装包尚未下载完成。'));
     }
+    const targetVersion = this.state.latestVersion ?? '未知版本';
+    try {
+      this.options.recoveryStore?.write({
+        currentVersion: this.options.currentVersion,
+        createdAt: Date.now(),
+        phase: 'installing',
+        source: 'electron-updater',
+        targetVersion,
+      });
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error('无法保存应用安装恢复记录。');
+      this.updateError(new Error(`无法保存应用安装恢复记录：${failure.message}`));
+      return Promise.reject(failure);
+    }
     this.updateState({
       currentVersion: this.options.currentVersion,
       latestVersion: this.state.latestVersion,
@@ -200,6 +279,7 @@ export class ApplicationUpdaterService {
         await prepareInstall();
         this.options.driver.quitAndInstall(true, true);
       } catch (error) {
+        this.clearRecoveryAfterInstallFailure();
         this.updateInstallError(error);
         throw error;
       }
@@ -211,6 +291,62 @@ export class ApplicationUpdaterService {
       }
     });
     return operation;
+  }
+
+  private reconcileInterruptedInstall(): void {
+    const recoveryStore = this.options.recoveryStore;
+    if (!recoveryStore) return;
+    let record: ApplicationUpdateRecoveryRecord | undefined;
+    try {
+      record = recoveryStore.read();
+    } catch (error) {
+      this.state = {
+        currentVersion: this.options.currentVersion,
+        message: `无法读取上次应用安装记录：${errorMessage(error)}。请重新下载并安装。`,
+        phase: 'install-recovery',
+      };
+      return;
+    }
+    if (!record) return;
+    const versionOrder = compareComparableVersions(
+      this.options.currentVersion,
+      record.targetVersion,
+    );
+    if (
+      (versionOrder !== undefined && versionOrder >= 0) ||
+      (versionOrder === undefined && record.targetVersion === this.options.currentVersion)
+    ) {
+      try {
+        recoveryStore.clear();
+      } catch {
+        // The new version is already running; a stale marker cannot authorize an installer cache.
+      }
+      return;
+    }
+    this.state = {
+      currentVersion: this.options.currentVersion,
+      latestVersion: record.targetVersion,
+      message: `上次 ClaudeDock ${record.targetVersion} 的安装未完成。当前仍是 ${this.options.currentVersion}，请重新下载并安装。`,
+      phase: 'install-recovery',
+    };
+  }
+
+  private clearRecoveryForRetry(): boolean {
+    try {
+      this.options.recoveryStore?.clear();
+      return true;
+    } catch (error) {
+      this.updateError(new Error(`无法清理上次应用安装记录：${errorMessage(error)}`));
+      return false;
+    }
+  }
+
+  private clearRecoveryAfterInstallFailure(): void {
+    try {
+      this.options.recoveryStore?.clear();
+    } catch {
+      // A stale marker is safer than trusting an installer cache; the next launch will offer recovery.
+    }
   }
 
   private installEventHandlers(): void {
@@ -272,6 +408,7 @@ export class ApplicationUpdaterService {
   }
 
   private updateInstallError(error: unknown): void {
+    this.clearRecoveryAfterInstallFailure();
     this.installOperation = undefined;
     try {
       this.options.onInstallError?.();

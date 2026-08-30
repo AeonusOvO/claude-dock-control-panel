@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type {
   ClaudePluginCatalog,
+  ClaudePluginGitHubMetadata,
   ClaudePluginMarketplaceView,
   ClaudePluginOperationKind,
   ClaudePluginOperationView,
@@ -8,6 +9,11 @@ import type {
   ClaudePluginView,
 } from '../../shared/contracts';
 import { runWindowsCommand } from '../infra/windows-command';
+import {
+  normalizeGitHubRepositoryIdentity,
+  type GitHubRepositoryIdentity,
+} from './plugins/source-types';
+import { GitHubRepositoryStarsService } from './plugins/github-repository-service';
 
 const LIST_TIMEOUT_MS = 120_000;
 const MUTATION_TIMEOUT_MS = 180_000;
@@ -117,6 +123,45 @@ const optionalString = (
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const normalizedGitHubIdentity = (value: unknown): GitHubRepositoryIdentity | undefined => {
+  try {
+    return normalizeGitHubRepositoryIdentity(value);
+  } catch {
+    return undefined;
+  }
+};
+
+/** Extracts only the repository identity already present in the CLI's structured source field. */
+const githubIdentityFromSource = (value: unknown): GitHubRepositoryIdentity | undefined => {
+  const candidates = isRecord(value) ? [value.url, value.source] : [value];
+  for (const candidate of candidates) {
+    const identity = normalizedGitHubIdentity(candidate);
+    if (identity) {
+      return identity;
+    }
+    // Marketplace records sometimes omit the scheme while retaining the www host. Normalize that
+    // display spelling through the shared identity helper rather than trusting it as a URI.
+    if (typeof candidate === 'string' && /^(?:www\.)?github\.com\//i.test(candidate)) {
+      const hostIdentity = normalizedGitHubIdentity(`https://${candidate}`);
+      if (hostIdentity) {
+        return hostIdentity;
+      }
+    }
+  }
+  return undefined;
+};
+
+const builtInGitHubMetadata = (identity: GitHubRepositoryIdentity): ClaudePluginGitHubMetadata => ({
+  provenance: 'built-in',
+  repositoryUri: identity.uri,
+  stars: null,
+});
+
+const githubMetadataFromSource = (value: unknown): ClaudePluginGitHubMetadata | undefined => {
+  const identity = githubIdentityFromSource(value);
+  return identity ? builtInGitHubMetadata(identity) : undefined;
+};
 
 const optionalCount = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
@@ -238,6 +283,7 @@ export const parsePluginEntry = (value: unknown, installed: boolean): ClaudePlug
       optionalString(record.description, MAX_DESCRIPTION_LENGTH) ?? MISSING_PLUGIN_DESCRIPTION,
     // The CLI omits `enabled` for available plugins and for enabled installs alike.
     enabled: installed ? record.enabled !== false : false,
+    github: githubMetadataFromSource(record.source),
     installCount: optionalCount(record.installCount),
     installed,
     marketplaceName:
@@ -296,6 +342,7 @@ export const parsePluginCatalog = (
     const latestSourceRevision = latest?.sourceRevision;
     return {
       ...plugin,
+      github: plugin.github ?? latest?.github,
       latestVersion,
       latestSourceRevision,
       updateAvailable:
@@ -507,6 +554,32 @@ export const enrichInstalledPlugins = (
     };
   });
 
+/** Supplies repository identity from the existing marketplace record without trusting its label. */
+export const enrichPluginRepositoryMetadata = (
+  plugins: ClaudePluginView[],
+  marketplaces: ClaudePluginMarketplaceView[],
+): ClaudePluginView[] => {
+  const repositoriesByMarketplace = new Map<string, ClaudePluginGitHubMetadata>();
+  for (const marketplace of marketplaces) {
+    const identity = githubIdentityFromSource(marketplace.repo);
+    if (identity) {
+      repositoriesByMarketplace.set(marketplace.name, builtInGitHubMetadata(identity));
+    }
+  }
+  return plugins.map((plugin) =>
+    plugin.github || !repositoriesByMarketplace.has(plugin.marketplaceName)
+      ? plugin
+      : {
+          ...plugin,
+          github: repositoriesByMarketplace.get(plugin.marketplaceName),
+        },
+  );
+};
+
+export interface ClaudePluginGitHubMetadataService {
+  get: (value: unknown) => Promise<ClaudePluginGitHubMetadata | undefined>;
+}
+
 const emptyCatalog = (message: string, cliAvailable: boolean): ClaudePluginCatalog => ({
   available: [],
   checkedAt: Date.now(),
@@ -640,6 +713,7 @@ export class ClaudePluginManager {
     private readonly manifestReader: (
       installLocation: string,
     ) => Promise<string> | string = readMarketplaceManifest,
+    private readonly githubMetadataService: ClaudePluginGitHubMetadataService = new GitHubRepositoryStarsService(),
   ) {}
 
   /** Returns a stable snapshot immediately, including any application-global mutation owner. */
@@ -745,7 +819,10 @@ export class ClaudePluginManager {
       );
     }
     if (!refresh && this.cacheCurrent && this.cached) {
-      return this.catalogForView(this.cached);
+      const catalog = await this.withGitHubMetadata(this.cached);
+      this.cached = catalog;
+      this.lastGood = catalog;
+      return this.catalogForView(catalog);
     }
 
     const generation = this.catalogGeneration;
@@ -756,11 +833,12 @@ export class ClaudePluginManager {
     }
 
     try {
-      const catalog = await load.promise;
+      const loadedCatalog = await load.promise;
       if (generation !== this.catalogGeneration) {
         const active = this.activeMutation;
         return active ? this.catalogAfterMutation(active) : this.readCatalog(false, false);
       }
+      const catalog = await this.withGitHubMetadata(loadedCatalog);
       this.cached = catalog;
       this.lastGood = catalog;
       this.cacheCurrent = true;
@@ -777,12 +855,15 @@ export class ClaudePluginManager {
       if (this.lastGood) {
         this.cached = this.lastGood;
         this.cacheCurrent = true;
-        return this.catalogForView({
+        const catalog = await this.withGitHubMetadata({
           ...this.lastGood,
           checkedAt: Date.now(),
           cliAvailable: failure.cliAvailable,
           message: failure.message,
         });
+        // Keep the legacy last-known-good snapshot as the process cache. The degraded presentation
+        // is returned only for this refresh, so a subsequent cached read retains its old identity.
+        return this.catalogForView(catalog);
       }
       return this.catalogForView(emptyCatalog(failure.message, failure.cliAvailable));
     } finally {
@@ -790,6 +871,75 @@ export class ClaudePluginManager {
         this.inFlight = undefined;
       }
     }
+  }
+
+  private async withGitHubMetadata(catalog: ClaudePluginCatalog): Promise<ClaudePluginCatalog> {
+    const repositories = new Map<string, string>();
+    for (const plugin of [...catalog.installed, ...catalog.available]) {
+      const identity = plugin.github
+        ? normalizedGitHubIdentity(plugin.github.repositoryUri)
+        : undefined;
+      if (identity) {
+        repositories.set(identity.repositoryIdentity, identity.uri);
+      }
+    }
+    if (repositories.size === 0) {
+      return catalog;
+    }
+
+    const metadataByRepository = new Map<string, ClaudePluginGitHubMetadata>();
+    await Promise.all(
+      [...repositories].map(async ([repositoryIdentity, repositoryUri]) => {
+        try {
+          const candidate = await this.githubMetadataService.get(repositoryUri);
+          if (!candidate) {
+            return;
+          }
+          const identity = normalizedGitHubIdentity(candidate.repositoryUri);
+          const validStars =
+            candidate.stars === null ||
+            (Number.isSafeInteger(candidate.stars) && candidate.stars >= 0);
+          const validProvenance =
+            candidate.provenance === 'live' ||
+            candidate.provenance === 'cached' ||
+            candidate.provenance === 'built-in';
+          if (
+            !identity ||
+            identity.repositoryIdentity !== repositoryIdentity ||
+            candidate.repositoryUri !== identity.uri ||
+            !validStars ||
+            !validProvenance
+          ) {
+            return;
+          }
+          metadataByRepository.set(repositoryIdentity, candidate);
+        } catch {
+          // Repository metadata is display-only; a failed lookup never fails the plugin catalog.
+        }
+      }),
+    );
+
+    let changed = false;
+    const decorate = (plugin: ClaudePluginView): ClaudePluginView => {
+      if (!plugin.github) {
+        return plugin;
+      }
+      const identity = normalizedGitHubIdentity(plugin.github.repositoryUri);
+      const metadata = identity ? metadataByRepository.get(identity.repositoryIdentity) : undefined;
+      if (
+        !metadata ||
+        (metadata.stars === plugin.github.stars &&
+          metadata.provenance === plugin.github.provenance &&
+          metadata.repositoryUri === plugin.github.repositoryUri)
+      ) {
+        return plugin;
+      }
+      changed = true;
+      return { ...plugin, github: metadata };
+    };
+    const installed = catalog.installed.map(decorate);
+    const available = catalog.available.map(decorate);
+    return changed ? { ...catalog, available, installed } : catalog;
   }
 
   private assertPluginId(pluginId: string): void {
@@ -905,18 +1055,22 @@ export class ClaudePluginManager {
       // A missing marketplace list must not hide the plugins that were read successfully.
     }
 
-    const installed = enrichInstalledPlugins(
-      plugins.installed,
-      await collectMarketplaceManifests(marketplaces, this.manifestReader),
+    const available = enrichPluginRepositoryMetadata(plugins.available, marketplaces);
+    const installed = enrichPluginRepositoryMetadata(
+      enrichInstalledPlugins(
+        plugins.installed,
+        await collectMarketplaceManifests(marketplaces, this.manifestReader),
+      ),
+      marketplaces,
     );
 
     return {
-      available: plugins.available,
+      available,
       checkedAt: Date.now(),
       cliAvailable: true,
       installed,
       marketplaces,
-      message: `已安装 ${installed.length} 个插件，市场中还有 ${plugins.available.length} 个可选。`,
+      message: `已安装 ${installed.length} 个插件，市场中还有 ${available.length} 个可选。`,
       updatesAvailable: installed.filter((plugin) => plugin.updateAvailable).length,
     };
   }

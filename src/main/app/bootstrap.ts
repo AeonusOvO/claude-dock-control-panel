@@ -104,6 +104,7 @@ import type { WorkspaceStore } from '../stores/workspace';
 import type { ProjectOperations } from '../terminal/project-operations';
 import type { TerminalWorkspace } from '../terminal/workspace';
 import { ApplicationUpdaterService, type ApplicationUpdaterDriver } from '../updates/application';
+import { ApplicationUpdateRecoveryJournal } from '../updates/recovery';
 import { runtimeAssetPath } from './paths';
 import { installModelUsage } from './model-usage';
 import type { RuntimeProfile } from './profile';
@@ -837,6 +838,7 @@ const installDiagnostics = ({
         onInstallError: () => {
           state.isQuitting = false;
         },
+        recoveryStore: new ApplicationUpdateRecoveryJournal(runtimeProfile.paths.userData),
       }),
   );
 

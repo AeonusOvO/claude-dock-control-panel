@@ -28,6 +28,7 @@ import {
 } from './platform/components';
 import { Registry } from './platform/registry';
 import { installScrollChaining } from './platform/scroll-chaining';
+import { installHighRiskTooltips } from './shell/high-risk-tooltip';
 import { bootstrapApplication } from './bootstrap';
 
 /*
@@ -40,6 +41,8 @@ enhanceAllSelects();
 installSelectDismissHandlers();
 installPressRipples();
 installScrollChaining();
+const disposeHighRiskTooltips = installHighRiskTooltips();
+window.addEventListener('beforeunload', disposeHighRiskTooltips, { once: true });
 
 const rendererRegistry = new Registry();
 

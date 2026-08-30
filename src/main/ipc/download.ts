@@ -14,6 +14,18 @@ export const registerDownloadIpc = ({
     validateSender(event);
     return requireDownloadEngine().list();
   });
+  ipcMain.handle(CHANNELS.DOWNLOAD_RECOVERY_LIST, (event) => {
+    validateSender(event);
+    return requireDownloadEngine().listRecoveryPending();
+  });
+  ipcMain.handle(CHANNELS.DOWNLOAD_RECOVERY_RESUME, (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().resumeRecovery(validateDownloadTaskId(taskId));
+  });
+  ipcMain.handle(CHANNELS.DOWNLOAD_RECOVERY_DISCARD, (event, taskId: unknown) => {
+    validateSender(event);
+    return requireDownloadEngine().discardRecovery(validateDownloadTaskId(taskId));
+  });
   ipcMain.handle(CHANNELS.DOWNLOAD_PAUSE, (event, taskId: unknown) => {
     validateSender(event);
     return requireDownloadEngine().pause(validateDownloadTaskId(taskId));

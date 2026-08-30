@@ -35,6 +35,31 @@ const gatewayInput: SaveClaudeConfigInput = {
 };
 
 describe('Claude Code configuration', () => {
+  it('preserves the Qwen Coding Plan operation path and enforces its fixed protocol', () => {
+    const normalized = normalizeClaudeConfig({
+      authMode: 'authToken',
+      baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+      credentialAction: 'replace',
+      model: 'qwen3.7-plus',
+      preset: 'qwen-cn',
+      protocol: 'anthropic',
+      provider: 'gateway',
+    });
+    expect(normalized.baseUrl).toBe('https://coding.dashscope.aliyuncs.com/apps/anthropic');
+    expect(() =>
+      normalizeClaudeConfig({
+        ...normalized,
+        authMode: 'authToken',
+        baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+        credentialAction: 'replace',
+        model: 'qwen3.7-plus',
+        preset: 'qwen-cn',
+        protocol: 'openai',
+        provider: 'gateway',
+      }),
+    ).toThrow('固定使用 Anthropic 协议');
+  });
+
   it('normalizes an Anthropic-compatible gateway without accepting insecure remote HTTP', () => {
     expect(normalizeClaudeConfig(gatewayInput)).toEqual({
       apiKeyHelperPolicy: 'prefer-claudedock',

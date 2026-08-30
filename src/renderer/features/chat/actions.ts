@@ -1,5 +1,8 @@
 import type { ChatAttachmentImportResult, SaveChatConfigInput } from '../../../shared/contracts';
-import { createChatAttachmentImportActions } from './chat-attachment-import';
+import {
+  createChatAttachmentImportActions,
+  type ChatAttachmentImportCompletion,
+} from './chat-attachment-import';
 import { createChatAttachmentActions } from './chat-attachments';
 import { createChatComposerBindings } from './chat-composer-bindings';
 import { createChatConfigActions } from './chat-config';
@@ -22,10 +25,13 @@ export interface ChatActions {
   chatConfigInput: () => SaveChatConfigInput;
   focusChatInputAfterNavigation: () => void;
   hasActiveRequest: () => boolean;
-  importChatAttachments: (files: File[]) => Promise<void>;
+  importChatAttachments: (files: File[]) => Promise<boolean>;
   loadChatConfig: (force?: boolean) => Promise<void>;
   persistActiveChat: () => Promise<void>;
-  queueChatAttachmentImport: (files: File[]) => void;
+  queueChatAttachmentImport: (
+    files: File[],
+    onComplete?: ChatAttachmentImportCompletion,
+  ) => boolean;
   renderPendingChatAttachments: () => void;
   resetChatConversation: () => void;
   resizeChatComposer: () => void;

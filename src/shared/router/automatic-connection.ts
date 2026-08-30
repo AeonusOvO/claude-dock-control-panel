@@ -20,6 +20,7 @@ const operations: Record<AutomaticConnectionProtocol, string> = {
 export const automaticConnectionCandidates = (
   address: string,
   preferred: AutomaticConnectionProtocol = 'anthropic',
+  allowedProtocols?: readonly AutomaticConnectionProtocol[],
 ): ConnectionCandidate[] => {
   const url = new URL(normalizeConnectionAddress(address));
   const path = url.pathname.replace(/\/+$/, '');
@@ -39,11 +40,11 @@ export const automaticConnectionCandidates = (
     ...new Set<AutomaticConnectionProtocol>([
       protocol,
       preferred,
-      'anthropic',
-      'openai',
-      'openai-responses',
+      ...(allowedProtocols ?? ['anthropic', 'openai', 'openai-responses']),
     ]),
-  ];
+  ].filter((candidateProtocol) =>
+    allowedProtocols ? allowedProtocols.includes(candidateProtocol) : true,
+  );
   return roots.flatMap((root) =>
     protocols.map((candidateProtocol) => ({
       endpoint: `${url.origin}${root}/${operations[candidateProtocol]}`,

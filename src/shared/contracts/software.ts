@@ -30,6 +30,7 @@ export type ApplicationUpdaterPhase =
   | 'error'
   | 'idle'
   | 'installing'
+  | 'install-recovery'
   | 'up-to-date';
 
 export interface ApplicationUpdaterState {

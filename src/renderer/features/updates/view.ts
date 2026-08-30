@@ -8,8 +8,11 @@ import { deriveUpdateActionState } from '../../../shared/ui/update-actions';
 import type { UpdatesElements } from './elements';
 import type { UpdatesState } from './state';
 
+export type UpdateCenterCategory = 'application' | 'extensions' | 'tools';
+
 export interface UpdateCenterItem {
   actionLabel: string;
+  category: UpdateCenterCategory;
   detail: string;
   disabled?: boolean;
   id: string;
@@ -88,13 +91,17 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
     applicationUpdater?.phase === 'available' ||
     applicationUpdater?.phase === 'downloading' ||
     applicationUpdater?.phase === 'downloaded' ||
-    applicationUpdater?.phase === 'installing'
+    applicationUpdater?.phase === 'installing' ||
+    applicationUpdater?.phase === 'install-recovery'
   ) {
     items.push({
       actionLabel:
-        applicationUpdater.phase === 'downloaded' || applicationUpdater.phase === 'installing'
-          ? '正在安装…'
-          : '下载并更新',
+        applicationUpdater.phase === 'install-recovery'
+          ? '重新下载并安装'
+          : applicationUpdater.phase === 'downloaded' || applicationUpdater.phase === 'installing'
+            ? '正在安装…'
+            : '下载并更新',
+      category: 'application',
       detail: applicationUpdater.message,
       disabled:
         state.updateCenterOperationInProgress ||
@@ -110,6 +117,7 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
   if (state.softwareUpdates?.claudeCode.updateAvailable) {
     items.push({
       actionLabel: '更新',
+      category: 'tools',
       detail: state.softwareUpdates.claudeCode.message,
       disabled: state.updateCenterOperationInProgress || state.softwareUpdateInProgress,
       id: 'claude-code',
@@ -122,6 +130,7 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
     const hasProject = dependencies.hasActiveProject();
     items.push({
       actionLabel: hasProject ? '更新' : '先打开项目',
+      category: 'tools',
       detail: hasProject
         ? state.softwareUpdates.router.message
         : `${state.softwareUpdates.router.message} 路由器操作需要一个已打开项目作为安全作用域。`,
@@ -140,6 +149,7 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
     ?.installed.filter(({ updateAvailable }) => updateAvailable) ?? []) {
     items.push({
       actionLabel: '更新',
+      category: 'extensions',
       detail: `${plugin.marketplaceName} · ${localizePluginCopy(plugin).description}`,
       disabled: state.updateCenterOperationInProgress || dependencies.isPluginMutationInProgress(),
       id: `plugin:${plugin.pluginId}`,
@@ -151,41 +161,159 @@ const updateCenterItems = (context: UpdatesViewContext): UpdateCenterItem[] => {
   return items;
 };
 
-const renderUpdateCenter = (context: UpdatesViewContext): void => {
-  const { dependencies, elements, state } = context;
-  const items = updateCenterItems(context);
-  elements.updateCenterList.replaceChildren(
-    ...items.map((item) => {
+const UPDATE_SECTION_META: ReadonlyArray<{
+  category: UpdateCenterCategory;
+  description: string;
+  title: string;
+}> = [
+  {
+    category: 'application',
+    description: 'ClaudeDock 软件本体，始终优先处理。',
+    title: 'ClaudeDock 软件本体',
+  },
+  {
+    category: 'tools',
+    description: 'Claude Code、Codex、路由器等开发工具。',
+    title: 'Claude Code、Codex 等开发工具',
+  },
+  {
+    category: 'extensions',
+    description: '已安装扩展和插件的可用更新。',
+    title: '扩展 / 插件',
+  },
+];
+
+const DOWNLOAD_STATE_LABELS: Record<string, string> = {
+  cancelled: '已取消',
+  completed: '已完成',
+  failed: '失败',
+  paused: '已暂停',
+  progressing: '下载中',
+  queued: '排队中',
+  verifying: '正在校验',
+};
+
+const createUpdateItemRow = (
+  dependencies: UpdatesViewDependencies,
+  item: UpdateCenterItem,
+): HTMLElement => {
+  const row = document.createElement('article');
+  row.className = 'update-center-item';
+  row.dataset.updateId = item.id;
+  const copy = document.createElement('div');
+  copy.className = 'update-center-item__copy';
+  const title = document.createElement('strong');
+  title.textContent = item.title;
+  const version = document.createElement('span');
+  version.textContent = item.version;
+  const detail = document.createElement('small');
+  detail.textContent = item.detail;
+  copy.append(title, version, detail);
+  const action = document.createElement('button');
+  action.className = 'update-center-item__action';
+  action.type = 'button';
+  action.textContent = item.actionLabel;
+  action.disabled = item.disabled === true;
+  action.addEventListener('click', () => {
+    void dependencies.runUpdateCenterAction(item);
+  });
+  row.append(copy, action);
+  return row;
+};
+
+const createUpdateSection = (
+  dependencies: UpdatesViewDependencies,
+  meta: (typeof UPDATE_SECTION_META)[number],
+  items: readonly UpdateCenterItem[],
+): HTMLElement => {
+  const section = document.createElement('section');
+  section.className = 'update-center-section';
+  section.dataset.updateCategory = meta.category;
+  const heading = document.createElement('header');
+  const title = document.createElement('strong');
+  title.textContent = meta.title;
+  const description = document.createElement('small');
+  description.textContent = meta.description;
+  heading.append(title, description);
+  const list = document.createElement('div');
+  list.className = 'update-center-section__items';
+  if (items.length > 0) {
+    list.append(...items.map((item) => createUpdateItemRow(dependencies, item)));
+  } else {
+    const empty = document.createElement('p');
+    empty.className = 'update-center-section__empty';
+    empty.textContent = '当前没有发现可用更新';
+    list.append(empty);
+  }
+  section.append(heading, list);
+  return section;
+};
+
+const renderUpdateHistory = (elements: UpdatesElements, state: UpdatesState): void => {
+  const history = [...state.downloadHistory].sort(
+    (left, right) =>
+      (right.finishedAt ?? right.startedAt ?? 0) - (left.finishedAt ?? left.startedAt ?? 0),
+  );
+  elements.updateCenterHistoryList.replaceChildren(
+    ...history.map((task) => {
       const row = document.createElement('article');
-      row.className = 'update-center-item';
-      row.dataset.updateId = item.id;
-      const copy = document.createElement('div');
-      copy.className = 'update-center-item__copy';
+      row.className = 'update-center-history-item';
+      row.dataset.downloadId = task.id;
       const title = document.createElement('strong');
-      title.textContent = item.title;
-      const version = document.createElement('span');
-      version.textContent = item.version;
+      title.textContent = task.label;
+      const status = document.createElement('span');
+      status.textContent = `${DOWNLOAD_STATE_LABELS[task.state] ?? task.state} · ${
+        task.finishedAt ? new Date(task.finishedAt).toLocaleString('zh-CN') : '本次运行'
+      }`;
       const detail = document.createElement('small');
-      detail.textContent = item.detail;
-      copy.append(title, version, detail);
-      const action = document.createElement('button');
-      action.className = 'update-center-item__action';
-      action.type = 'button';
-      action.textContent = item.actionLabel;
-      action.disabled = item.disabled === true;
-      action.addEventListener('click', () => {
-        void dependencies.runUpdateCenterAction(item);
-      });
-      row.append(copy, action);
+      detail.textContent =
+        task.errorMessage ?? `${Math.round(Math.max(0, task.percent))}% · 更新下载记录`;
+      row.append(title, status, detail);
       return row;
     }),
   );
-  elements.updateCenterEmpty.hidden = items.length > 0;
-  elements.updateCenterSummary.textContent =
-    items.length > 0 ? `共 ${items.length} 项可更新` : '全部项目均为当前可检测到的最新版本';
+  elements.updateCenterHistoryEmpty.hidden = history.length > 0;
+};
+
+const renderUpdateCenter = (context: UpdatesViewContext): void => {
+  const { dependencies, elements, state } = context;
+  const items = updateCenterItems(context);
+  const itemsByCategory = new Map<UpdateCenterCategory, UpdateCenterItem[]>();
+  for (const meta of UPDATE_SECTION_META) itemsByCategory.set(meta.category, []);
+  for (const item of items) itemsByCategory.get(item.category)?.push(item);
+  elements.updateCenterList.replaceChildren(
+    ...UPDATE_SECTION_META.map((meta) =>
+      createUpdateSection(dependencies, meta, itemsByCategory.get(meta.category) ?? []),
+    ),
+  );
+  elements.updateCenterEmpty.hidden = items.length > 0 || state.updateRefreshInProgress;
+  elements.updateCenterSummary.textContent = state.updateRefreshInProgress
+    ? '正在检查更新来源…'
+    : items.length > 0
+      ? `共 ${items.length} 项可更新`
+      : '全部项目均为当前可检测到的最新版本';
   elements.updateCenterAllButton.hidden = items.length === 0;
   elements.updateCenterAllButton.disabled =
     state.updateCenterOperationInProgress || items.every(({ disabled }) => disabled);
+  elements.updateCenterPendingTab.classList.toggle(
+    'plugin-tab--active',
+    state.updateCenterTab === 'pending',
+  );
+  elements.updateCenterHistoryTab.classList.toggle(
+    'plugin-tab--active',
+    state.updateCenterTab === 'history',
+  );
+  elements.updateCenterPendingTab.setAttribute(
+    'aria-selected',
+    String(state.updateCenterTab === 'pending'),
+  );
+  elements.updateCenterHistoryTab.setAttribute(
+    'aria-selected',
+    String(state.updateCenterTab === 'history'),
+  );
+  elements.updateCenterPendingPanel.hidden = state.updateCenterTab !== 'pending';
+  elements.updateCenterHistoryList.parentElement!.hidden = state.updateCenterTab !== 'history';
+  renderUpdateHistory(elements, state);
 };
 
 const renderApplicationUpdater = (
@@ -211,22 +339,25 @@ const renderApplicationUpdater = (
     updaterState.phase === 'downloaded' ||
     updaterState.phase === 'installing';
   elements.applicationUpdateAction.textContent =
-    updaterState.phase === 'downloaded' || updaterState.phase === 'installing'
-      ? '正在安装…'
-      : updaterState.phase === 'checking'
-        ? '正在检查…'
-        : updaterState.phase === 'downloading'
-          ? `正在下载${updaterState.percent === undefined ? '…' : ` ${Math.round(updaterState.percent)}%`}`
-          : updaterState.phase === 'error'
-            ? '重试检查'
-            : updaterState.phase === 'available'
-              ? '下载并更新'
-              : '检查应用更新';
+    updaterState.phase === 'install-recovery'
+      ? '重新下载并安装'
+      : updaterState.phase === 'downloaded' || updaterState.phase === 'installing'
+        ? '正在安装…'
+        : updaterState.phase === 'checking'
+          ? '正在检查…'
+          : updaterState.phase === 'downloading'
+            ? `正在下载${updaterState.percent === undefined ? '…' : ` ${Math.round(updaterState.percent)}%`}`
+            : updaterState.phase === 'error'
+              ? '重试检查'
+              : updaterState.phase === 'available'
+                ? '下载并更新'
+                : '检查应用更新';
   elements.applicationUpdateVersion.dataset.update = String(
     updaterState.phase === 'available' ||
       updaterState.phase === 'downloaded' ||
       updaterState.phase === 'downloading' ||
-      updaterState.phase === 'installing',
+      updaterState.phase === 'installing' ||
+      updaterState.phase === 'install-recovery',
   );
   dependencies.setApplicationUpdaterState(updaterState);
   if (elements.updateCenterDialog.open) renderUpdateCenter(context);

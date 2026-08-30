@@ -9,7 +9,15 @@ import type {
   ClaudeRouterGatewayState,
   SaveClaudeConfigInput,
 } from '../../shared/contracts';
-import { claudeProviderIdSet } from '../../shared/claude/providers';
+import {
+  claudeProviderIdSet,
+  findClaudeProvider,
+  providerForPreset,
+} from '../../shared/claude/providers';
+import {
+  assertClaudeProviderAccess,
+  fixedProviderProtocol,
+} from '../network/provider-access-policy';
 import { normalizeClaudeConfig, type NormalizedClaudeConfig } from './configuration';
 
 /**
@@ -29,6 +37,7 @@ interface StoredHistoryEntry extends NormalizedClaudeConfig {
   sourceAuthMode?: SaveClaudeConfigInput['authMode'];
   sourceBaseUrl?: string;
   sourceCredentialConfigured?: boolean;
+  sourcePreset?: SaveClaudeConfigInput['preset'];
   sourceModel?: string;
   sourceModelFast?: string;
 }
@@ -106,6 +115,8 @@ const parseStoredEntry = (value: unknown): StoredHistoryEntry | undefined => {
     (record.sourceBaseUrl === undefined || typeof record.sourceBaseUrl === 'string') &&
     (record.sourceCredentialConfigured === undefined ||
       typeof record.sourceCredentialConfigured === 'boolean') &&
+    (record.sourcePreset === undefined ||
+      (typeof record.sourcePreset === 'string' && claudeProviderIdSet.has(record.sourcePreset))) &&
     (record.sourceModel === undefined || typeof record.sourceModel === 'string') &&
     (record.sourceModelFast === undefined || typeof record.sourceModelFast === 'string')
   ) {
@@ -132,6 +143,7 @@ const parseStoredEntry = (value: unknown): StoredHistoryEntry | undefined => {
       sourceAuthMode: record.sourceAuthMode as SaveClaudeConfigInput['authMode'] | undefined,
       sourceBaseUrl: record.sourceBaseUrl as string | undefined,
       sourceCredentialConfigured: record.sourceCredentialConfigured as boolean | undefined,
+      sourcePreset: record.sourcePreset as SaveClaudeConfigInput['preset'] | undefined,
       sourceModel: record.sourceModel as string | undefined,
       sourceModelFast: record.sourceModelFast as string | undefined,
     };
@@ -153,6 +165,7 @@ const entryFingerprint = (
     baseUrl?: string;
     model?: string;
     modelFast?: string;
+    preset?: SaveClaudeConfigInput['preset'];
     routerProviderId?: string;
     sourceCredentialConfigured?: boolean;
   },
@@ -242,11 +255,17 @@ export class ClaudeConnectionHistoryStore {
    * doing that must not turn one setup into a wall of identical records.
    */
   public record(cwd: string, input: RecordConnectionInput): ClaudeConnectionHistoryEntry[] {
-    const config = normalizeClaudeConfig(input.config);
+    const protocol =
+      input.protocol ??
+      input.sourceConfig?.protocol ??
+      fixedProviderProtocol(input.config.preset) ??
+      'anthropic';
+    const config = normalizeClaudeConfig(input.config, {
+      allowRoutedEffectiveRoute: protocol === 'openai',
+    });
     const store = this.load();
     const key = projectKey(cwd);
     const entries = store.projects[key] ?? [];
-    const protocol = input.protocol ?? 'anthropic';
     const name = input.name ? normalizeHistoryName(input.name) : undefined;
     let credential = input.credential?.trim() || undefined;
     if (!credential && input.sourceConfig && input.sourceCredentialConfigured) {
@@ -256,12 +275,25 @@ export class ClaudeConnectionHistoryStore {
       credential = this.decrypt(previous?.encryptedCredential);
     }
 
+    const policyConfig = input.sourceConfig ?? input.config;
+    const policyProtocol = policyConfig.protocol ?? (protocol === 'unknown' ? undefined : protocol);
+    assertClaudeProviderAccess(
+      {
+        address: policyConfig.baseUrl,
+        credential,
+        preset: policyConfig.preset,
+        protocol: policyProtocol,
+      },
+      { allowRoutedEffectiveRoute: !input.sourceConfig && protocol === 'openai' },
+    );
+
     const sourceIdentity = input.sourceConfig
       ? {
           authMode: input.sourceConfig.authMode,
           baseUrl: input.sourceConfig.baseUrl,
           model: input.sourceConfig.model,
           modelFast: input.sourceConfig.modelFast || input.sourceConfig.model,
+          preset: input.sourceConfig.preset,
           routerProviderId: input.routerProviderId,
           sourceCredentialConfigured: input.sourceCredentialConfigured,
         }
@@ -295,6 +327,7 @@ export class ClaudeConnectionHistoryStore {
       sourceAuthMode: input.sourceConfig?.authMode,
       sourceBaseUrl: input.sourceConfig?.baseUrl,
       sourceCredentialConfigured: input.sourceCredentialConfigured,
+      sourcePreset: input.sourceConfig?.preset,
       sourceModel: input.sourceConfig?.model,
       // Stored the way the fingerprint reads it, so a blank fast model cannot look like a change.
       sourceModelFast: input.sourceConfig
@@ -413,6 +446,10 @@ export class ClaudeConnectionHistoryStore {
 
   private replayEntry(entry: StoredHistoryEntry): ConnectionHistoryReplay {
     const credential = this.decrypt(entry.encryptedCredential);
+    const sourcePreset =
+      entry.sourcePreset && fixedProviderProtocol(entry.sourcePreset)
+        ? findClaudeProvider(entry.sourcePreset)?.id
+        : undefined;
     const sourceConfig =
       entry.protocol === 'openai' && entry.sourceBaseUrl && entry.sourceModel
         ? {
@@ -423,9 +460,9 @@ export class ClaudeConnectionHistoryStore {
             credentialAction: credential ? ('replace' as const) : ('keep' as const),
             model: entry.sourceModel,
             modelFast: entry.sourceModelFast || entry.sourceModel,
-            preset: 'custom' as const,
+            preset: sourcePreset ?? ('custom' as const),
             protocol: 'openai' as const,
-            provider: 'gateway' as const,
+            provider: sourcePreset ? providerForPreset(sourcePreset) : ('gateway' as const),
             routerProviderId: entry.routerProviderId,
           }
         : undefined;
@@ -468,6 +505,7 @@ export class ClaudeConnectionHistoryStore {
             baseUrl: entry.sourceBaseUrl,
             model: entry.sourceModel,
             modelFast: entry.sourceModelFast || entry.sourceModel,
+            preset: entry.sourcePreset,
             routerProviderId: entry.routerProviderId,
             sourceCredentialConfigured: entry.sourceCredentialConfigured,
           }
