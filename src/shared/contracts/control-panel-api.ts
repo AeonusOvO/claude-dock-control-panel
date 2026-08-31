@@ -282,9 +282,9 @@ export interface DownloadApi {
   listDownloadRecoveryPending: () => Promise<DownloadTaskView[]>;
   onDownloadsChanged: (listener: (tasks: DownloadTaskView[]) => void) => Unsubscribe;
   pauseDownload: (taskId: string) => Promise<DownloadTaskView>;
-  discardDownloadRecovery: (taskId: string) => Promise<DownloadTaskView[]>;
+  discardDownloadRecovery: (taskId: string, recoveryToken: string) => Promise<DownloadTaskView[]>;
   resumeDownload: (taskId: string) => Promise<DownloadTaskView>;
-  resumeDownloadRecovery: (taskId: string) => Promise<DownloadTaskView>;
+  resumeDownloadRecovery: (taskId: string, recoveryToken: string) => Promise<DownloadTaskView>;
 }
 
 export interface ApplicationProxyApi {

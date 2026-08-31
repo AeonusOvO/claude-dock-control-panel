@@ -43,6 +43,7 @@ import {
   codexLoginMethodSchema,
   conversationIdSchema,
   developmentRuntimeSchema,
+  downloadRecoveryTokenSchema,
   downloadTaskIdSchema,
   externalUrlInputSchema,
   historyEntryIdSchema,
@@ -103,6 +104,9 @@ export const validateNativeControlUpdate = (value: unknown): ConversationControl
 
 export const validateDownloadTaskId = (taskId: unknown): string =>
   parseSchema(downloadTaskIdSchema, taskId);
+
+export const validateDownloadRecoveryToken = (value: unknown): string =>
+  parseSchema(downloadRecoveryTokenSchema, value);
 
 export const validateDevelopmentRuntime = (value: unknown): DevelopmentRuntime =>
   parseSchema(developmentRuntimeSchema, value);

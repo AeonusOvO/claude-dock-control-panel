@@ -339,7 +339,7 @@ const createManagedChatGptProjectOperations = (
         : managed.modelFast;
     const input = managedChatGptConfigInput(managed, model, modelFast);
     emitManagedChatGptProgress(sessionId, 'testing', 7, `正在真实验证模型 ${model}。`);
-    let connectionTest = await runtime.testConnection(cwd, input);
+    let connectionTest = await runtime.testConnection(cwd, input, sessionId);
     assertCurrent();
     if (
       !connectionTest.ok &&
@@ -348,7 +348,7 @@ const createManagedChatGptProjectOperations = (
       emitManagedChatGptProgress(sessionId, 'testing', 7, '连接首次失败，正在自动重启网关并复检。');
       await requireManagedChatGptGateway().ensureRunning();
       assertCurrent();
-      connectionTest = await runtime.testConnection(cwd, input);
+      connectionTest = await runtime.testConnection(cwd, input, sessionId);
       assertCurrent();
     }
     if (!connectionTest.ok) {

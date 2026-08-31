@@ -132,7 +132,7 @@ afterEach(() => {
 });
 
 describe('download rebind ownership races', () => {
-  it('retains a sufficient snapshot and journal when startup promotion is transiently blocked', () => {
+  it('retains a sufficient snapshot and journal when startup promotion is transiently blocked', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-promotion-lock-'));
     try {
       const entry = writeRecoveryFixture(userDataPath);
@@ -146,7 +146,7 @@ describe('download rebind ownership races', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
 
       expect(session.createInterruptedDownload).not.toHaveBeenCalled();
       expect(engine.list()).toEqual([]);
@@ -160,14 +160,14 @@ describe('download rebind ownership races', () => {
     }
   });
 
-  it('does not discard a snapshot when an existing partial has the wrong prefix', () => {
+  it('does not discard a snapshot when an existing partial has the wrong prefix', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-promotion-identity-'));
     try {
       const entry = writeRecoveryFixture(userDataPath);
       writeFileSync(entry.savePath, Buffer.alloc(100, 2));
       writeFileSync(`${entry.savePath}.resume`, Buffer.alloc(100, 1));
 
-      expect(promoteRecoverySnapshot(userDataPath, entry)).toBe('ready');
+      await expect(promoteRecoverySnapshot(userDataPath, entry)).resolves.toBe('ready');
       expect(readFileSync(entry.savePath)).toEqual(Buffer.alloc(100, 1));
       expect(existsSync(`${entry.savePath}.resume`)).toBe(false);
     } finally {
@@ -175,7 +175,7 @@ describe('download rebind ownership races', () => {
     }
   });
 
-  it('keeps recovery consent pending when the native item rejects resume', () => {
+  it('keeps recovery consent pending when the native item rejects resume', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-resume-failure-'));
     try {
       const entry = writeRecoveryFixture(userDataPath);
@@ -190,7 +190,7 @@ describe('download rebind ownership races', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       item.canResume.mockImplementation(() => {
         throw new Error('native resume failed');
       });
@@ -209,7 +209,59 @@ describe('download rebind ownership races', () => {
     }
   });
 
-  it('clears recovery consent after a late native item resumes successfully', () => {
+  it('keeps a delayed startup recovery task after native resume throws', async () => {
+    const userDataPath = mkdtempSync(
+      path.join(tmpdir(), 'claudedock-recovery-delayed-resume-failure-'),
+    );
+    try {
+      const entry = writeRecoveryFixture(userDataPath);
+      const item = createItem({ getReceivedBytes: vi.fn(() => entry.receivedBytes) });
+      item.resume.mockImplementationOnce(() => {
+        throw new Error('delayed native resume failed');
+      });
+      let rejectCreation!: (error: Error) => void;
+      const creation = new Promise<void>((_resolve, reject) => {
+        rejectCreation = reject;
+      });
+      const session = createSession();
+      session.createInterruptedDownload.mockReturnValue(creation);
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+
+      const completion = engine.restoreInterrupted();
+      await completion;
+      engine.resumeRecovery(entry.id);
+      const preventDefault = vi.fn();
+      session.emit('will-download', { preventDefault }, item);
+
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(item.pause).toHaveBeenCalledOnce();
+      expect(item.cancel).not.toHaveBeenCalled();
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+
+      rejectCreation(new Error('late create rejection'));
+      await Promise.resolve();
+      expect(engine.listRecoveryPending()).toEqual([
+        expect.objectContaining({ id: entry.id, recoveryPending: true }),
+      ]);
+
+      engine.resumeRecovery(entry.id);
+      expect(item.resume).toHaveBeenCalledTimes(2);
+      expect(engine.listRecoveryPending()).toEqual([]);
+      engine.cancel(entry.id);
+      expect(engine.list()[0]).toMatchObject({ id: entry.id, state: 'cancelled' });
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
+    }
+  });
+
+  it('clears recovery consent after a late native item resumes successfully', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-late-success-'));
     try {
       const entry = writeRecoveryFixture(userDataPath);
@@ -221,11 +273,9 @@ describe('download rebind ownership races', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       engine.resumeRecovery(entry.id);
-      expect(engine.listRecoveryPending()).toEqual([
-        expect.objectContaining({ id: entry.id, recoveryPending: true }),
-      ]);
+      expect(engine.listRecoveryPending()).toEqual([]);
 
       session.emit('will-download', { preventDefault: vi.fn() }, item);
 
@@ -238,7 +288,7 @@ describe('download rebind ownership races', () => {
     }
   });
 
-  it('keeps recovery consent pending when a late native item cannot resume', () => {
+  it('routes a consented late native item that cannot resume through retry', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-late-failure-'));
     try {
       const entry = writeRecoveryFixture(userDataPath);
@@ -253,20 +303,16 @@ describe('download rebind ownership races', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       expect(engine.listRecoveryPending()).toEqual([
         expect.objectContaining({ id: entry.id, recoveryPending: true }),
       ]);
       engine.resumeRecovery(entry.id);
-      expect(engine.listRecoveryPending()).toEqual([
-        expect.objectContaining({ id: entry.id, recoveryPending: true }),
-      ]);
+      expect(engine.listRecoveryPending()).toEqual([]);
 
       session.emit('will-download', { preventDefault: vi.fn() }, item);
 
-      expect(engine.listRecoveryPending()).toEqual([
-        expect.objectContaining({ id: entry.id, recoveryPending: true }),
-      ]);
+      expect(engine.listRecoveryPending()).toEqual([]);
       expect(item.resume).not.toHaveBeenCalled();
       engine.dispose();
     } finally {
@@ -353,7 +399,7 @@ describe('download rebind ownership races', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       expect(preventDefault).toHaveBeenCalledOnce();
       expect(busyRegistry.list()).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(STALL_TIMEOUT_MS);
@@ -552,7 +598,7 @@ describe('download rebind ownership races', () => {
         busyRegistry,
         userDataPath,
       );
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       item.emit('done', {}, 'completed');
       await vi.waitFor(() => expect(engine.list()[0]).toMatchObject({ state: 'completed' }));
 

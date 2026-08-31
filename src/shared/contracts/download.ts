@@ -15,6 +15,8 @@ export interface DownloadTaskView {
   remainingMs: number;
   /** True when this interrupted task is waiting for an explicit resume/discard decision. */
   recoveryPending?: boolean;
+  /** Opaque main-process token binding a recovery decision to this task instance. */
+  recoveryToken?: string;
   startedAt?: number;
   state: DownloadTaskState;
   totalBytes: number;

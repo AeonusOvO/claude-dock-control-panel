@@ -9,6 +9,7 @@ import {
 import { CHANNELS } from '../../shared/ipc/channels';
 import type { TerminalThemeId } from '../../shared/ui/terminal-themes';
 import { ModelUsageService } from '../usage/service';
+import type { AppPreferencesStore } from '../stores/app-preferences';
 import type { RuntimeProfile } from './profile';
 import { ModelUsageWindow } from './model-usage-window';
 
@@ -16,11 +17,34 @@ export const installModelUsage = (
   services: Registry,
   profile: RuntimeProfile,
   themeId: TerminalThemeId,
+  appPreferencesStore: Pick<AppPreferencesStore, 'get' | 'set'>,
 ): void => {
+  let pendingRequestedVisibility: boolean | undefined;
+  let restoringVisibility = false;
+  const persistVisibility = (visible: boolean): void => {
+    appPreferencesStore.set({ modelUsageFloatingVisible: visible });
+  };
+  const requestVisibility = (visible: boolean): void => {
+    if (restoringVisibility) return;
+    persistVisibility(visible);
+    pendingRequestedVisibility = visible;
+  };
+  const handleVisibility = (visible: boolean): void => {
+    const requested = pendingRequestedVisibility;
+    pendingRequestedVisibility = undefined;
+    services.resolve(MODEL_USAGE_SERVICE).setFloating(visible);
+    if (!visible && requested !== false) {
+      try {
+        // A native close is an explicit hide; shutdown destruction is suppressed by the window guard.
+        persistVisibility(false);
+      } catch {
+        // Keep the in-memory state accurate even if the preference store is unavailable.
+      }
+    }
+  };
   services.register(
     MODEL_USAGE_WINDOW,
-    () =>
-      new ModelUsageWindow((visible) => services.resolve(MODEL_USAGE_SERVICE).setFloating(visible)),
+    () => new ModelUsageWindow(handleVisibility, requestVisibility),
   );
   services.register(MODEL_USAGE_SERVICE, () => {
     const gateway = profile.effects.allowRealRuntimes
@@ -52,4 +76,17 @@ export const installModelUsage = (
     observe: (connection, cwd, sessionId, metrics) =>
       usage.observe(connection, cwd, sessionId, metrics),
   });
+
+  if (appPreferencesStore.get().modelUsageFloatingVisible) {
+    restoringVisibility = true;
+    void services
+      .resolve(MODEL_USAGE_WINDOW)
+      .setVisible(true)
+      .catch(() => {
+        // Keep the remembered preference so the next startup can retry the widget.
+      })
+      .finally(() => {
+        restoringVisibility = false;
+      });
+  }
 };

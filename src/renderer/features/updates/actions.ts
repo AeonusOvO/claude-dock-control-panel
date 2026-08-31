@@ -199,10 +199,14 @@ const resolveDownloadRecoveries = async (context: UpdatesActionsContext): Promis
       title: '恢复中断的更新？',
     });
     try {
+      if (typeof task.recoveryToken !== 'string') {
+        dependencies.showToast(`“${task.label}”的恢复记录已更新，请刷新后重试。`, 'error');
+        continue;
+      }
       if (shouldResume) {
-        await window.controlPanel.resumeDownloadRecovery(task.id);
+        await window.controlPanel.resumeDownloadRecovery(task.id, task.recoveryToken);
       } else {
-        await window.controlPanel.discardDownloadRecovery(task.id);
+        await window.controlPanel.discardDownloadRecovery(task.id, task.recoveryToken);
       }
     } catch (error) {
       dependencies.showToast(

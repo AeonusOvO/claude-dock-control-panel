@@ -275,7 +275,6 @@ describe('renderer interaction lifecycle behavior', () => {
           activeModel: 'claude-sonnet-5',
           options: [
             {
-              entryId: 'history-next',
               id: 'next',
               label: 'Next',
               model: 'claude-opus-5',
@@ -283,6 +282,20 @@ describe('renderer interaction lifecycle behavior', () => {
               relaunchReason: 'connection',
               requiresRelaunch: true,
               sameEndpoint: false,
+              section: 'history',
+              source: 'history',
+            },
+          ],
+          sections: [
+            {
+              id: 'current-platform',
+              label: '当前接入平台的其他模型',
+              status: 'discovered',
+            },
+            {
+              id: 'history',
+              label: '用户曾经接入的模型',
+              status: 'history',
             },
           ],
         }),
@@ -301,7 +314,7 @@ describe('renderer interaction lifecycle behavior', () => {
 
         expect(harness.method('relaunchClaudeSession')).toHaveBeenCalledWith('session-1', {
           compactFirst: true,
-          entryId: 'history-next',
+          modelOptionId: 'next',
         });
         expect(harness.query('#run-agent-label').textContent).toContain('等待网络确认…');
         expect(harness.query('#launch-new').textContent).toContain('等待网络确认…');

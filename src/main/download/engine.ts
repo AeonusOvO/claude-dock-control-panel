@@ -1,5 +1,7 @@
+/* eslint-disable max-lines -- Download engine coordinates lifecycle, recovery, and ownership. */
 import type { DownloadItem, Event } from 'electron';
-import { mkdirSync, renameSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import type { DownloadTaskView } from '../../shared/contracts';
 import type { BusyRegistry } from '../coordination/busy-registry';
@@ -14,6 +16,7 @@ import {
   type PendingDownloadOwnership,
   promoteRecoverySnapshot,
   removePendingOwnership,
+  RESUME_SNAPSHOT_SUFFIX,
   snapshotPartialForRecovery,
 } from './engine-state';
 import { DownloadRetryController } from './engine-retry';
@@ -51,6 +54,7 @@ export class DownloadEngine {
   private readonly journal: DownloadJournal;
   private readonly history: DownloadHistoryStore;
   private readonly retry: DownloadRetryController;
+  private recoveryRestorePromise?: Promise<void>;
   private readonly willDownloadListener = (event: Event, item: DownloadItem): void => {
     this.acceptItem(event, item);
   };
@@ -69,6 +73,7 @@ export class DownloadEngine {
       fail: (task, error, preserveJournal) => this.fail(task, error, preserveJournal),
       journal: this.journal,
       notify: () => this.notify(),
+      hasActiveDownloadUrl: (url, excludedTask) => this.hasActiveDownloadUrl(url, excludedTask),
       ownsItemGeneration: (task, item, generation) =>
         this.ownsItemGeneration(task, item, generation),
       pendingByUrl: this.pendingByUrl,
@@ -86,6 +91,9 @@ export class DownloadEngine {
     this.requireOperational();
     const task = this.requireTask(taskId);
     if (task.settled) return { ...task.view };
+    if (task.recoveryAwaitingDecision) {
+      throw new Error('请先处理恢复确认。');
+    }
     this.retry.clearStallTimer(task);
     this.retry.clearAutoResumeTimer(task);
     removePendingOwnership(task, this.pendingRestores, this.pendingByUrl);
@@ -186,48 +194,71 @@ export class DownloadEngine {
   public listRecoveryPending(): DownloadTaskView[] {
     return [...this.tasks.values()]
       .filter(({ recoveryAwaitingDecision, settled }) => recoveryAwaitingDecision && !settled)
-      .map(({ view }) => ({ ...view, recoveryPending: true }));
+      .map(({ view, recoveryToken }) => ({ ...view, recoveryPending: true, recoveryToken }));
   }
 
   /** Resumes one startup-recovered task only after the renderer has obtained explicit consent. */
-  public resumeRecovery(taskId: string): DownloadTaskView {
+  public resumeRecovery(taskId: string, recoveryToken?: string): DownloadTaskView {
     this.requireOperational();
     const task = this.requireActiveTask(taskId);
+    if (recoveryToken !== undefined && task.recoveryToken !== recoveryToken) {
+      throw new Error('恢复记录已更新，请重新确认后再操作。');
+    }
+    if (task.recoveryJournalPending || task.recoverySnapshotPending) {
+      throw new Error('正在保存恢复快照，当前下载不能继续。');
+    }
     if (!task.recoveryAwaitingDecision || !task.restored) {
       throw new Error('该下载不需要恢复确认。');
     }
+    this.retry.clearAutoResumeTimer(task);
     task.resumeOnBind = true;
     const item = task.item;
     const generation = task.itemGeneration;
     if (item && this.ownsItemGeneration(task, item, generation)) {
       try {
-        if (!item.canResume()) throw new Error('当前下载不能继续。');
-        item.resume();
-      } catch (error) {
-        // Keep the recovery decision visible when the native item cannot actually continue. The
-        // user may retry or discard it after a transient scanner/network failure.
-        task.resumeOnBind = false;
-        throw error;
-      }
-      if (this.ownsItemGeneration(task, item, generation)) {
-        task.resumeOnBind = false;
+        const canResume = item.canResume();
+        // The explicit user choice is the authorization boundary. A native item that cannot resume
+        // is allowed to fall through the existing source-restart path, but a thrown probe leaves the
+        // prompt intact so a transient native failure cannot consume consent.
         task.recoveryAwaitingDecision = false;
         task.view = { ...task.view, recoveryPending: false };
-        this.retry.armStallTimer(task, item, generation);
+        task.resumeOnBind = false;
+        task.startupResumeFailed = false;
+        if (canResume) {
+          item.resume();
+          if (this.ownsItemGeneration(task, item, generation)) {
+            this.retry.armStallTimer(task, item, generation);
+          }
+        } else {
+          this.retry.scheduleAutoResume(task, '恢复项目无法就地续传', item, generation);
+        }
+      } catch (error) {
+        task.resumeOnBind = false;
+        task.startupResumeFailed = task.startupItemBindPending;
+        task.recoveryAwaitingDecision = true;
+        task.view = { ...task.view, recoveryPending: true };
+        throw error;
       }
     } else {
-      // The startup item may still be binding. Keep the recovery decision visible until acceptItem()
-      // has confirmed that the exact native generation can actually resume; a false canResume()
-      // must leave the user a retry or discard path.
+      // The startup item may still be binding. Consent is recorded now; acceptItem() will either
+      // resume the exact item or invoke the source-restart path when it reports canResume=false.
+      task.recoveryAwaitingDecision = false;
+      task.view = { ...task.view, recoveryPending: false };
     }
     this.notify();
     return { ...task.view };
   }
 
   /** Discards only the selected recovered task and its journal/snapshot, never its final artifact. */
-  public discardRecovery(taskId: string): DownloadTaskView[] {
+  public discardRecovery(taskId: string, recoveryToken?: string): DownloadTaskView[] {
     this.requireOperational();
     const task = this.requireActiveTask(taskId);
+    if (recoveryToken !== undefined && task.recoveryToken !== recoveryToken) {
+      throw new Error('恢复记录已更新，请重新确认后再操作。');
+    }
+    if (task.recoveryJournalPending || task.recoverySnapshotPending) {
+      throw new Error('正在保存恢复快照，当前下载不能放弃。');
+    }
     if (!task.recoveryAwaitingDecision || !task.restored) {
       throw new Error('该下载不需要恢复确认。');
     }
@@ -305,6 +336,9 @@ export class DownloadEngine {
   public pause(taskId: string): DownloadTaskView {
     this.requireOperational();
     const task = this.requireActiveTask(taskId);
+    if (task.recoveryAwaitingDecision) {
+      throw new Error('请先处理恢复确认。');
+    }
     if (task.recoveryJournalPending || task.recoverySnapshotPending) {
       throw new Error('正在保存恢复快照，当前下载不能暂停。');
     }
@@ -322,6 +356,9 @@ export class DownloadEngine {
   public resume(taskId: string): DownloadTaskView {
     this.requireOperational();
     const task = this.requireActiveTask(taskId);
+    if (task.recoveryAwaitingDecision) {
+      throw new Error('请先处理恢复确认。');
+    }
     if (task.recoveryJournalPending || task.recoverySnapshotPending) {
       throw new Error('正在保存恢复快照，当前下载不能继续。');
     }
@@ -343,25 +380,64 @@ export class DownloadEngine {
     return { ...task.view };
   }
 
-  public restoreInterrupted(): void {
-    if (this.disposed || this.disposing) return;
+  public restoreInterrupted(): Promise<void> {
+    if (this.disposed || this.disposing) return Promise.resolve();
     this.install();
-    if (this.disposed || this.disposing) return;
+    if (this.disposed || this.disposing) return Promise.resolve();
+    if (this.recoveryRestorePromise) return this.recoveryRestorePromise;
+    const restore = this.restoreInterruptedAsync();
+    const pending = restore.finally(() => {
+      if (this.recoveryRestorePromise === pending) this.recoveryRestorePromise = undefined;
+    });
+    this.recoveryRestorePromise = pending;
+    return pending;
+  }
 
+  private async restoreInterruptedAsync(): Promise<void> {
     const storedEntries = this.journal.list();
     const retainedEntries: DownloadJournalEntry[] = [];
     const recoverableEntries: DownloadJournalEntry[] = [];
+    const seenRestorePaths = new Set<string>();
     for (const entry of storedEntries) {
-      const promotion = promoteRecoverySnapshot(this.userDataPath, entry);
-      if (isRecoverableEntry(this.userDataPath, entry)) {
-        retainedEntries.push(entry);
-        recoverableEntries.push(entry);
-        continue;
-      }
+      // Distinct journal IDs must never be allowed to operate on one staging path concurrently.
+      // Keep the first record authoritative and leave its artifact untouched while dropping later
+      // duplicates from the durable journal below.
+      const restorePath = path.resolve(entry.savePath);
+      if (seenRestorePaths.has(restorePath)) continue;
+      seenRestorePaths.add(restorePath);
+
+      const promotion = existsSync(`${entry.savePath}${RESUME_SNAPSHOT_SUFFIX}`)
+        ? await promoteRecoverySnapshot(this.userDataPath, entry)
+        : 'none';
+      const request = {
+        allowedHosts: entry.allowedHosts,
+        allowedPathPrefixes: entry.allowedPathPrefixes,
+        expectedBytes: entry.expectedBytes,
+        expectedSha256: entry.expectedSha256,
+        finalPath: entry.finalPath,
+        id: entry.id,
+        label: entry.label,
+        maxBytes: entry.maxBytes,
+        url: entry.urlChain[0]!,
+      };
       if (promotion === 'blocked') {
         // A sufficient sibling snapshot exists but a transient lock prevented promotion. Keep its
         // durable metadata and retry on a later startup; do not create a task against the bad path.
         retainedEntries.push(entry);
+        continue;
+      }
+      if (
+        entry.urlChain.every((candidate) => isAllowedUrl(request, candidate)) &&
+        isRecoverableEntry(this.userDataPath, entry)
+      ) {
+        retainedEntries.push(entry);
+        if (this.hasActiveDownloadUrl(entry.urlChain[0]!)) {
+          // Electron exposes only URL metadata for will-download. Two live restores with the same
+          // URL cannot be associated safely, so retain the later journal record for a future retry
+          // instead of allowing either item to steal the other task's staging path.
+          continue;
+        }
+        recoverableEntries.push(entry);
         continue;
       }
       if (isSafePartialPath(this.userDataPath, entry.savePath)) {
@@ -479,8 +555,36 @@ export class DownloadEngine {
     });
   }
 
+  private hasActiveDownloadUrl(url: string, excludedTask?: ActiveDownload): boolean {
+    let normalized: string;
+    try {
+      normalized = new URL(url).toString();
+    } catch {
+      return false;
+    }
+    for (const task of this.tasks.values()) {
+      if (task === excludedTask || task.settled) continue;
+      const knownUrls = [task.request.url, ...(task.journalEntry?.urlChain ?? [])];
+      if (
+        knownUrls.some((known) => {
+          try {
+            return new URL(known).toString() === normalized;
+          } catch {
+            return false;
+          }
+        })
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private launch(request: DownloadRequest): Promise<DownloadResult> {
     this.requireOperational();
+    if (this.hasActiveDownloadUrl(request.url)) {
+      return Promise.reject(new Error('同一下载地址已有任务正在进行，请等待当前任务结束后重试。'));
+    }
     const { completion, task } = this.createTask(request);
     const generation = task.itemGeneration;
     try {
@@ -494,7 +598,10 @@ export class DownloadEngine {
       this.persistTask(task, true);
       this.notify();
       if (!this.ownsItemGeneration(task, undefined, generation)) return completion;
-      this.retry.queuePendingUrl(task, task.request.url, generation);
+      if (!this.retry.queuePendingUrl(task, task.request.url, generation)) {
+        this.fail(task, new Error('同一下载地址已有任务正在等待系统交付，请稍后重试。'));
+        return completion;
+      }
       this.electronSession.downloadURL(task.request.url);
       this.retry.armStallTimer(task, task.item, task.itemGeneration);
     } catch (error) {
@@ -523,6 +630,7 @@ export class DownloadEngine {
       this.disposed ||
       this.disposing ||
       task.settled ||
+      task.startupResumeFailed ||
       task.recoveryJournalPending ||
       task.recoverySnapshotPending ||
       (!task.startupCreatePending && !task.startupItemBindPending) ||
@@ -615,6 +723,7 @@ export class DownloadEngine {
       releaseBusy,
       request: { ...request },
       resolve,
+      recoveryToken: journalEntry ? randomUUID() : undefined,
       restored: Boolean(journalEntry),
       recoveryAwaitingDecision: Boolean(journalEntry),
       resumeOnBind: false,
@@ -623,6 +732,7 @@ export class DownloadEngine {
       startedAt,
       startupCreatePending: Boolean(journalEntry),
       startupItemBindPending: Boolean(journalEntry),
+      startupResumeFailed: false,
       startupJournalEntry: journalEntry ? cloneJournalEntry(journalEntry) : undefined,
       view: {
         bytesPerSecond: 0,
@@ -676,6 +786,7 @@ export class DownloadEngine {
       : task.restored && task.journalEntry
         ? cloneJournalEntry(task.journalEntry)
         : undefined;
+    let attemptedStartupRecoveryResume = false;
     try {
       if (!ownership.urlChain.every((candidate) => isAllowedUrl(task.request, candidate))) {
         event.preventDefault();
@@ -694,7 +805,7 @@ export class DownloadEngine {
       // snapshot transaction is blocked, retain and pause the exact item until retry succeeds.
       if (recoveryEntry) {
         try {
-          snapshotPartialForRecovery(task.request, true, true);
+          snapshotPartialForRecovery(task.request, true, true, recoveryEntry.receivedBytes);
           task.recoveryFallback = cloneJournalEntry(recoveryEntry);
         } catch (error) {
           this.retry.holdItemForRecoverySnapshot(
@@ -744,23 +855,57 @@ export class DownloadEngine {
       if (!this.ownsItemGeneration(task, item, generation)) return;
       if (task.resumeOnBind) {
         task.resumeOnBind = false;
-        if (item.canResume()) {
+        this.retry.clearAutoResumeTimer(task);
+        let canResume = false;
+        try {
+          canResume = item.canResume();
+        } catch {
+          // A native probe failure after explicit consent follows the same source-restart path as a
+          // non-resumable item instead of reopening a hidden automatic retry.
+        }
+        if (canResume) {
+          attemptedStartupRecoveryResume = task.startupItemBindPending;
           item.resume();
           if (task.view.state === 'verifying' || !this.ownsItemGeneration(task, item, generation)) {
             return;
           }
-          if (task.recoveryAwaitingDecision) {
-            task.recoveryAwaitingDecision = false;
-            task.view = { ...task.view, recoveryPending: false };
-          }
+          task.startupResumeFailed = false;
           this.retry.armStallTimer(task, item, generation);
+        } else {
+          this.retry.scheduleAutoResume(task, '恢复项目无法就地续传', item, generation);
+          if (!this.ownsItemGeneration(task, item, generation)) return;
         }
       }
       task.startupItemBindPending = false;
       if (!task.startupCreatePending) task.startupJournalEntry = undefined;
     } catch (error) {
-      event.preventDefault();
       const failure = this.asError(error, '无法接管恢复的下载。');
+      if (attemptedStartupRecoveryResume && recoveryEntry) {
+        // The item is already bound, but native resume failed after explicit consent. Keep the item
+        // and completion alive so the user can retry; a late create promise must not discard the
+        // recovery task or its journal while this prompt is visible.
+        task.startupResumeFailed = true;
+        task.startupItemBindPending = false;
+        task.resumeOnBind = false;
+        task.recoveryAwaitingDecision = true;
+        task.view = {
+          ...task.view,
+          canPause: false,
+          canResume: false,
+          errorMessage: failure.message,
+          recoveryPending: true,
+          state: 'paused',
+        };
+        try {
+          item.pause();
+        } catch {
+          // A failed native resume may already have torn down the item; retain the journal regardless.
+        }
+        if (!task.startupCreatePending) task.startupJournalEntry = undefined;
+        this.notify();
+        return;
+      }
+      event.preventDefault();
       if (task.startupItemBindPending) {
         if (task.item !== item) {
           try {
@@ -1015,6 +1160,23 @@ export class DownloadEngine {
       return;
     }
     const item = task.item;
+    const safeInteger = (value: number | undefined, fallbackValue = 0): number =>
+      value !== undefined && Number.isSafeInteger(value) && value >= 0
+        ? value
+        : Number.isSafeInteger(fallbackValue) && fallbackValue >= 0
+          ? fallbackValue
+          : 0;
+    const receivedBytes = safeInteger(
+      recoveryBytes ?? item?.getReceivedBytes(),
+      task.view.receivedBytes,
+    );
+    const reportedLength = safeInteger(item?.getTotalBytes());
+    const knownLength = safeInteger(task.journalEntry?.length, task.view.totalBytes);
+    const length = Math.max(
+      receivedBytes,
+      reportedLength || knownLength,
+      safeInteger(task.request.expectedBytes),
+    );
     const entry: DownloadJournalEntry = {
       allowedHosts: [...task.request.allowedHosts],
       allowedPathPrefixes: [...task.request.allowedPathPrefixes],
@@ -1025,14 +1187,11 @@ export class DownloadEngine {
       id: task.request.id,
       label: task.request.label,
       lastModified: item?.getLastModifiedTime() || task.journalEntry?.lastModified,
-      length: Math.max(0, item?.getTotalBytes() ?? task.view.totalBytes),
+      length,
       maxBytes: task.request.maxBytes,
-      receivedBytes: Math.max(
-        0,
-        recoveryBytes ?? item?.getReceivedBytes() ?? task.view.receivedBytes,
-      ),
+      receivedBytes,
       savePath: `${task.request.finalPath}.partial`,
-      startTime: item?.getStartTime() || task.startedAt / 1000,
+      startTime: safeInteger(item?.getStartTime(), Math.floor(task.startedAt / 1000)),
       urlChain: item?.getURLChain() ?? task.journalEntry?.urlChain ?? [task.request.url],
     };
     if (fallback && entry.receivedBytes <= fallback.receivedBytes) {
@@ -1101,7 +1260,10 @@ export class DownloadEngine {
   private finishStartupCreate(task: ActiveDownload): void {
     if (this.tasks.get(task.request.id) !== task || task.settled) return;
     task.startupCreatePending = false;
-    if (!task.startupItemBindPending) task.startupJournalEntry = undefined;
+    if (!task.startupItemBindPending) {
+      task.startupJournalEntry = undefined;
+      task.startupResumeFailed = false;
+    }
   }
 
   private requireOperational(): void {

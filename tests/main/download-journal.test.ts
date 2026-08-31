@@ -7,7 +7,7 @@ import { DownloadEngine, type DownloadSession } from '../../src/main/download/en
 import { DownloadJournal } from '../../src/main/download/journal';
 
 describe('download journal recovery', () => {
-  it('recreates a valid interrupted download without resuming it automatically', () => {
+  it('recreates a valid interrupted download without resuming it automatically', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-journal-'));
     const finalPath = path.join(userDataPath, 'installers', 'tool.exe');
     const savePath = `${finalPath}.partial`;
@@ -37,7 +37,7 @@ describe('download journal recovery', () => {
     } satisfies DownloadSession;
     const engine = new DownloadEngine(electronSession, new BusyRegistry(), userDataPath);
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
 
     expect(electronSession.createInterruptedDownload).toHaveBeenCalledWith(
       expect.objectContaining({ offset: 4, path: savePath }),
@@ -49,7 +49,7 @@ describe('download journal recovery', () => {
     rmSync(userDataPath, { force: true, recursive: true });
   });
 
-  it('drops a mismatched partial file and its journal entry', () => {
+  it('drops a mismatched partial file and its journal entry', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-journal-'));
     const finalPath = path.join(userDataPath, 'installers', 'tool.exe');
     const savePath = `${finalPath}.partial`;
@@ -75,7 +75,7 @@ describe('download journal recovery', () => {
     } satisfies DownloadSession;
     const engine = new DownloadEngine(electronSession, new BusyRegistry(), userDataPath);
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
 
     expect(engine.list()).toEqual([]);
     expect(existsSync(savePath)).toBe(false);
@@ -112,7 +112,7 @@ describe('download journal recovery', () => {
     rmSync(userDataPath, { force: true, recursive: true });
   });
 
-  it('resumes from the journal offset when the throttled journal lags the partial file', () => {
+  it('resumes from the journal offset when the throttled journal lags the partial file', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-journal-'));
     const finalPath = path.join(userDataPath, 'installers', 'tool.exe');
     const savePath = `${finalPath}.partial`;
@@ -148,7 +148,7 @@ describe('download journal recovery', () => {
     } satisfies DownloadSession;
     const engine = new DownloadEngine(electronSession, new BusyRegistry(), userDataPath);
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
 
     // Downloads only ever append, so the journal offset is always a valid prefix: Chromium
     // overwrites from it and the surplus tail bytes are discarded.

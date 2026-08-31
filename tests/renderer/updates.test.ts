@@ -177,6 +177,7 @@ describe('renderer updates feature', () => {
       receivedBytes: 100,
       remainingMs: 70_000,
       recoveryPending: true,
+      recoveryToken: '00000000-0000-4000-8000-000000000001',
       startedAt: 1_000,
       state: 'paused',
       totalBytes: 1_000,
@@ -207,7 +208,10 @@ describe('renderer updates feature', () => {
       harness.query<HTMLDialogElement>('#confirmation-dialog').close('confirm');
       await settle(harness);
 
-      expect(harness.method('resumeDownloadRecovery')).toHaveBeenCalledWith('recovered-tool');
+      expect(harness.method('resumeDownloadRecovery')).toHaveBeenCalledWith(
+        'recovered-tool',
+        '00000000-0000-4000-8000-000000000001',
+      );
       expect(harness.method('discardDownloadRecovery')).not.toHaveBeenCalled();
       expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(false);
     } finally {

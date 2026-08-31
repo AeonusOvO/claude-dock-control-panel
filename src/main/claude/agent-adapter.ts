@@ -53,6 +53,8 @@ export interface ClaudeAgentAdapterOptions {
   startTimeoutMs?: number;
 }
 
+const MAX_TRANSPORT_RECOVERY_ATTEMPTS = 2;
+
 export class ClaudeAgentAdapter implements ConversationAdapter {
   private readonly listeners = new Set<(event: ConversationEvent) => void>();
   private readonly sessions = new Map<string, AgentSession>();
@@ -169,15 +171,16 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     this.emit(session, { ownerKind: input.ownerKind, type: 'conversation.started' });
     const consume = this.consume(session);
     const timeoutMs = this.options.startTimeoutMs ?? 30_000;
+    let initializationTimer: NodeJS.Timeout | undefined;
     try {
       const initialization = await Promise.race([
         query.initializationResult(),
         new Promise<never>((_resolve, reject) => {
-          const timer = setTimeout(
+          initializationTimer = setTimeout(
             () => reject(new Error(`Claude 原生会话在 ${timeoutMs} 毫秒内没有完成初始化。`)),
             timeoutMs,
           );
-          timer.unref();
+          initializationTimer.unref();
         }),
       ]);
       assertSessionCurrent();
@@ -190,6 +193,8 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
         this.emit(session, { phase: 'stopped', type: 'conversation.phase' });
       }
       throw error;
+    } finally {
+      if (initializationTimer) clearTimeout(initializationTimer);
     }
   }
 
@@ -383,13 +388,43 @@ export class ClaudeAgentAdapter implements ConversationAdapter {
     const emit: AgentEventEmit = (target, event) => {
       if (this.sessions.get(target.input.conversationId) === target) this.emit(target, event);
     };
-    try {
-      for await (const message of session.query) consumeMessage(session, message, emit);
-      if (this.sessions.get(session.input.conversationId) === session) {
-        this.failSession(session, new Error('Claude 原生会话输入流意外结束。'));
+    let transportRecoveryAttempts = 0;
+    while (this.sessions.get(session.input.conversationId) === session) {
+      try {
+        for await (const message of session.query) {
+          // A successfully received frame proves that the stream recovered; a later, unrelated
+          // transport gap gets its own bounded retry budget instead of inheriting an old failure.
+          transportRecoveryAttempts = 0;
+          consumeMessage(session, message, emit);
+        }
+        if (this.sessions.get(session.input.conversationId) === session) {
+          this.failSession(session, new Error('Claude 原生会话输入流意外结束。'));
+        }
+        return;
+      } catch (error) {
+        if (
+          this.sessions.get(session.input.conversationId) !== session ||
+          transportRecoveryAttempts >= MAX_TRANSPORT_RECOVERY_ATTEMPTS ||
+          !(await this.reinitializeAfterTransportGap(session))
+        ) {
+          this.failSession(session, error);
+          return;
+        }
+        transportRecoveryAttempts += 1;
       }
-    } catch (error) {
-      this.failSession(session, error);
+    }
+  }
+
+  private async reinitializeAfterTransportGap(session: AgentSession): Promise<boolean> {
+    const reinitialize = session.query.reinitialize;
+    if (!reinitialize || this.sessions.get(session.input.conversationId) !== session) return false;
+    try {
+      const initialization = await reinitialize.call(session.query);
+      if (this.sessions.get(session.input.conversationId) !== session) return false;
+      await this.publishInitialization(session, initialization);
+      return this.sessions.get(session.input.conversationId) === session;
+    } catch {
+      return false;
     }
   }
 

@@ -9,6 +9,7 @@ import type {
 } from '../../src/shared/contracts';
 import { ClaudeConversationLifecycleCoordinator } from '../../src/main/claude/conversation-lifecycle';
 import { ClaudeRuntime } from '../../src/main/claude/runtime';
+import { connectionFingerprint, projectKey } from '../../src/main/claude/runtime-connection';
 import { createDevelopmentSessionCoordination } from '../../src/main/coordination/development-session';
 import {
   LAUNCH_PREFLIGHT_DECISION_TTL_MS,
@@ -74,7 +75,12 @@ const launchDecisionBaseline = (sessionId = 'session-1'): ClaudeLaunchDecisionBa
 
 const launchDecisionDescriptor = (sessionId = 'session-1'): ClaudeLaunchDescriptor => ({
   cwd: 'D:\\Project',
-  input: { compactFirst: true, permissionMode: 'plan' },
+  input: {
+    compactFirst: true,
+    model: 'claude-opus-5',
+    permissionMode: 'plan',
+    speed: 'fast',
+  },
   kind: 'relaunch',
   sessionId,
 });
@@ -257,6 +263,7 @@ const registerLaunchPreflightHarness = async () => {
       } as Record<string, string>,
       token: { id: 'prepared-token' },
     })),
+    relaunchInputForModelOption: vi.fn((_sessionId: string, _cwd: string, input: unknown) => input),
     seedActiveLaunchPreflightEvidence: vi.fn(() => true),
     setInactive: vi.fn(() => true),
   };
@@ -592,7 +599,11 @@ describe('main-process session operation ownership', () => {
     expect(reserved.status).toBe('reserved');
     if (reserved.status !== 'reserved') throw new Error('Expected a reserved launch decision.');
     expect(reserved.reservation.descriptor).toMatchObject({
-      input: { compactFirst: true },
+      input: {
+        compactFirst: true,
+        model: 'claude-opus-5',
+        speed: 'fast',
+      },
     });
     expect(reserved.reservation.blocked.target).toEqual({
       process: 'application',
@@ -964,6 +975,14 @@ describe('main-process session operation ownership', () => {
     async (choice) => {
       const harness = await registerLaunchPreflightHarness();
       const events: string[] = [];
+      const modelOptionId = `model-${'c'.repeat(16)}`;
+      harness.runtime.relaunchInputForModelOption.mockImplementation(
+        (_sessionId, _cwd, input: unknown) => ({
+          compactFirst: (input as { compactFirst: boolean }).compactFirst,
+          model: 'claude-opus-5',
+          speed: 'fast',
+        }),
+      );
       harness.launchAuthorization.officialNetworkProvider = 'openai-codex';
       harness.launchConfigurationBaseline.officialNetworkProvider = 'openai-codex';
       harness.runtime.isActive.mockReturnValue(true);
@@ -982,8 +1001,21 @@ describe('main-process session operation ownership', () => {
 
       const paused = await harness.ipc.invoke(CHANNELS.CLAUDE_RELAUNCH, 'session-1', {
         compactFirst: true,
+        entryId: 'history-renderer-entry',
+        model: 'renderer-model',
+        modelOptionId,
+        speed: 'standard',
       });
       if (paused.status !== 'paused') throw new Error('Expected relaunch to pause.');
+      expect(harness.runtime.relaunchInputForModelOption).toHaveBeenCalledWith(
+        'session-1',
+        'D:\\Project',
+        {
+          compactFirst: true,
+          entryId: 'history-renderer-entry',
+          modelOptionId,
+        },
+      );
       expect(events).toEqual(['guard:openai-codex', 'guard:anthropic-claude']);
       expect(harness.runtime.compactBeforeRelaunch).not.toHaveBeenCalled();
       expect(harness.runtime.prepareLaunch).not.toHaveBeenCalled();
@@ -1053,6 +1085,14 @@ describe('main-process session operation ownership', () => {
         }),
       ).resolves.toMatchObject({ result: { ok: true }, status: 'completed' });
 
+      expect(harness.runtime.prepareLaunch).toHaveBeenCalledWith(
+        'session-1',
+        'D:\\Project',
+        'continue',
+        undefined,
+        harness.launchAuthorization,
+        { model: 'claude-opus-5', speed: 'fast' },
+      );
       expect(events).toEqual([
         'guard:openai-codex',
         'guard:anthropic-claude',
@@ -2062,9 +2102,33 @@ describe('main-process session operation ownership', () => {
     const switchInternals = runtime as unknown as {
       assertRuntimePty: () => void;
       captureConversationPreferences: () => void;
-      configStore: { getConfig: () => { model: string } };
+      configStore: {
+        getConfig: () => {
+          apiKeyHelperPolicy: 'inherit' | 'prefer-claudedock';
+          authMode: 'apiKey' | 'authToken' | 'existing' | 'none';
+          baseUrl: string;
+          model: string;
+          modelFast?: string;
+          preset: 'anthropic';
+          provider: 'anthropic';
+        };
+        getCredential: () => string | undefined;
+      };
       diagnoseInstallation: () => Promise<{ version: string }>;
       ensureSession: () => typeof runtimeSession;
+      modelOptionRegistry: Map<
+        string,
+        {
+          configFingerprint: string;
+          configScope: string;
+          cwdKey: string;
+          expiresAt: number;
+          launchGeneration: number;
+          option: { id: string; model: string; requiresRelaunch: boolean };
+          sessionId: string;
+        }
+      >;
+      sessions: Map<string, typeof runtimeSession>;
       getModelOptions: () => Promise<{
         options: Array<{
           id: string;
@@ -2084,12 +2148,35 @@ describe('main-process session operation ownership', () => {
     };
     switchInternals.ensureSession = vi.fn(() => runtimeSession);
     switchInternals.requireBoundPty = vi.fn(() => 9);
-    switchInternals.getModelOptions = vi.fn(async () => ({
-      options: [{ id: 'current', model: 'target-model', requiresRelaunch: false }],
-    }));
     switchInternals.assertRuntimePty = vi.fn();
     switchInternals.diagnoseInstallation = vi.fn(async () => ({ version: '2.1.221' }));
-    switchInternals.configStore = { getConfig: () => ({ model: 'old-model' }) };
+    const switchConfig = {
+      apiKeyHelperPolicy: 'prefer-claudedock' as const,
+      authMode: 'existing' as const,
+      baseUrl: '',
+      model: 'old-model',
+      preset: 'anthropic' as const,
+      provider: 'anthropic' as const,
+    };
+    switchInternals.configStore = {
+      getConfig: () => switchConfig,
+      getCredential: () => undefined,
+    };
+    switchInternals.sessions = new Map([['session-1', runtimeSession]]);
+    switchInternals.modelOptionRegistry = new Map([
+      [
+        'current',
+        {
+          configFingerprint: connectionFingerprint(switchConfig),
+          configScope: 'D:\\Project',
+          cwdKey: projectKey('D:\\Project'),
+          expiresAt: Date.now() + 120_000,
+          launchGeneration: 0,
+          option: { id: 'current', model: 'target-model', requiresRelaunch: false },
+          sessionId: 'session-1',
+        },
+      ],
+    ]);
     switchInternals.resolveModelSpeed = vi.fn(() => ({
       preference: 'standard',
       signature: 'standard',

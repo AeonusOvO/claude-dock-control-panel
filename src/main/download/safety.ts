@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, lstatSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { DownloadJournalEntry } from './journal';
 import type { DownloadRequest } from './request';
@@ -32,6 +32,19 @@ export const isSafePartialPath = (userDataPath: string, candidate: string): bool
 
 export const isRecoverableEntry = (userDataPath: string, entry: DownloadJournalEntry): boolean => {
   if (
+    !Number.isSafeInteger(entry.length) ||
+    !Number.isSafeInteger(entry.maxBytes) ||
+    !Number.isSafeInteger(entry.receivedBytes) ||
+    entry.length < 0 ||
+    entry.maxBytes <= 0 ||
+    entry.length > entry.maxBytes ||
+    entry.receivedBytes < 0 ||
+    entry.receivedBytes > entry.length ||
+    entry.receivedBytes > entry.maxBytes ||
+    (entry.expectedBytes !== undefined &&
+      (!Number.isSafeInteger(entry.expectedBytes) ||
+        entry.expectedBytes < entry.receivedBytes ||
+        entry.expectedBytes > entry.maxBytes)) ||
     !isPathWithinUserData(userDataPath, entry.finalPath) ||
     !isSafePartialPath(userDataPath, entry.savePath) ||
     !existsSync(entry.savePath)
@@ -39,6 +52,9 @@ export const isRecoverableEntry = (userDataPath: string, entry: DownloadJournalE
     return false;
   }
   try {
+    const partial = lstatSync(entry.savePath);
+    if (!partial.isFile() || partial.isSymbolicLink()) return false;
+    const bytes = statSync(entry.savePath).size;
     /*
      * The partial is normally AHEAD of the journal, never behind: `persistTask` is throttled to
      * one write per JOURNAL_WRITE_INTERVAL_MS and `flushJournal` only re-serializes the cached
@@ -51,7 +67,12 @@ export const isRecoverableEntry = (userDataPath: string, entry: DownloadJournalE
      * partial SHORTER than the journal is still unrecoverable: those bytes were never written, so
      * resuming at the recorded offset would leave a hole.
      */
-    return statSync(entry.savePath).size >= entry.receivedBytes;
+    return (
+      Number.isSafeInteger(bytes) &&
+      bytes >= entry.receivedBytes &&
+      bytes <= entry.maxBytes &&
+      (entry.expectedBytes === undefined || bytes <= entry.expectedBytes)
+    );
   } catch {
     return false;
   }
@@ -59,6 +80,10 @@ export const isRecoverableEntry = (userDataPath: string, entry: DownloadJournalE
 
 export const verifyPartial = async (request: DownloadRequest): Promise<void> => {
   const partialPath = `${request.finalPath}.partial`;
+  const partial = lstatSync(partialPath);
+  if (!partial.isFile() || partial.isSymbolicLink()) {
+    throw new Error('下载临时文件类型无效。');
+  }
   const actualBytes = statSync(partialPath).size;
   if (actualBytes > request.maxBytes) {
     throw new Error('下载内容超过安全上限。');

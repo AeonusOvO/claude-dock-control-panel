@@ -88,7 +88,14 @@ describe('embedded subscription relay and vault', () => {
     const first = relay.addCandidate({ ...credential(), accountIdentity: 'first@example.test' });
     const firstUrl = relay.baseUrl(first.id);
     expect(relay.getAccountIdentity('kimi-subscription', firstUrl)).toBeUndefined();
+    expect(() => relay.committedSlotIdForConnection('kimi-subscription', firstUrl)).toThrow(
+      '服务商不匹配',
+    );
     relay.persist(first.id);
+    expect(relay.committedSlotIdForConnection('kimi-subscription', firstUrl)).toBe(first.id);
+    expect(() =>
+      relay.committedSlotIdForConnection('kimi-subscription', firstUrl.replace('18520', '18521')),
+    ).toThrow('服务商不匹配');
     const second = relay.addCandidate({
       ...credential('second-access'),
       accountIdentity: 'second@example.test',
@@ -379,6 +386,9 @@ describe('embedded subscription relay and vault', () => {
     expect(await relay.discoverModels(slot.id, new AbortController().signal)).toEqual([
       'kimi-for-coding',
     ]);
+    await expect(
+      relay.discoverModels(slot.id, new AbortController().signal, 'minimax-subscription-cn'),
+    ).rejects.toThrow('服务商不匹配');
     await expect(relay.discoverModels(slot.id, new AbortController().signal)).rejects.toThrow(
       '检查套餐',
     );

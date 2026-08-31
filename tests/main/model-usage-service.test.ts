@@ -434,6 +434,46 @@ describe('model usage snapshots', () => {
     expect(quota).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps ordinary gateway invalidation inside the recent-read throttle', async () => {
+    vi.useFakeTimers();
+    let invalidated!: (accountChanging: boolean) => void;
+    let readable!: () => void;
+    const quota = vi.fn<() => Promise<ModelQuotaResult>>().mockResolvedValue({
+      accountKey: 'account-a',
+      availability: 'available',
+      capabilities: { balance: false, context: false, windows: true },
+      checkedAt: Date.now(),
+      source: 'managed-chatgpt-gateway',
+      windows: [{ label: '5 小时', usedPercent: 24 }],
+    });
+    const { service } = await fixture(
+      quota,
+      undefined,
+      (listener) => {
+        readable = listener;
+        return () => undefined;
+      },
+      (listener) => {
+        invalidated = listener;
+        return () => undefined;
+      },
+    );
+
+    service.select({ ...api, preset: 'chatgpt-subscription', mode: 'subscription' });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(quota).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(0);
+
+    invalidated(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    readable();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(quota).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(quota).toHaveBeenCalledTimes(2));
+  });
+
   it('does not poll while a quota read waits for gateway stability', async () => {
     vi.useFakeTimers();
     let invalidated!: (accountChanging: boolean) => void;
@@ -923,18 +963,28 @@ describe('model usage snapshots', () => {
     await vi.waitFor(() => expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(70));
   });
 
-  it('skips timer quota reads while an ordinary lifecycle is active', async () => {
+  it('retries quota reads after an ordinary lifecycle becomes readable', async () => {
     vi.useFakeTimers();
     let invalidated!: (accountChanging: boolean) => void;
     let readable!: () => void;
-    const quota = vi.fn<() => Promise<ModelQuotaResult>>().mockResolvedValueOnce({
-      accountKey: 'account-a',
-      availability: 'available',
-      capabilities: { balance: false, context: false, windows: true },
-      checkedAt: Date.now(),
-      source: 'managed-chatgpt-gateway',
-      windows: [{ label: '5 小时', usedPercent: 37 }],
-    });
+    const quota = vi
+      .fn<() => Promise<ModelQuotaResult>>()
+      .mockResolvedValueOnce({
+        accountKey: 'account-a',
+        availability: 'available',
+        capabilities: { balance: false, context: false, windows: true },
+        checkedAt: Date.now(),
+        source: 'managed-chatgpt-gateway',
+        windows: [{ label: '5 小时', usedPercent: 37 }],
+      })
+      .mockResolvedValueOnce({
+        accountKey: 'account-a',
+        availability: 'available',
+        capabilities: { balance: false, context: false, windows: true },
+        checkedAt: Date.now(),
+        source: 'managed-chatgpt-gateway',
+        windows: [{ label: '5 小时', usedPercent: 30 }],
+      });
     const { service } = await fixture(
       quota,
       undefined,
@@ -963,8 +1013,9 @@ describe('model usage snapshots', () => {
 
     readable();
     await vi.advanceTimersByTimeAsync(0);
-    expect(quota).toHaveBeenCalledOnce();
-    expect(service.getSnapshot()).toMatchObject({ status: 'stale', windows: previous.windows });
+    expect(quota).toHaveBeenCalledTimes(2);
+    expect(service.getSnapshot().windows?.[0]?.remainingPercent).toBe(70);
+    expect(service.getSnapshot().status).toBe('available');
   });
 
   it('does not treat coalesced lifecycle invalidations as a permanently busy gateway', async () => {

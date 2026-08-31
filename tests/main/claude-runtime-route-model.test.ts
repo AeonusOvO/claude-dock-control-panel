@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeRuntime } from '../../src/main/claude/runtime';
+import { connectionFingerprint, projectKey } from '../../src/main/claude/runtime-connection';
 import { claudeNetworkAccessForConfig } from '../../src/main/claude/runtime-connection-config';
 import {
   type PreparedClaudeConfigSave,
@@ -18,6 +19,7 @@ interface TestRuntimeSession {
   effortRestoreInProgress: boolean;
   expectedModel?: string;
   exitMarker?: string;
+  launchedConfigFingerprint?: string;
   liveOfficialNetworkProvider?: 'anthropic-claude' | 'openai-codex';
   launchGeneration?: number;
   markerRemainder: string;
@@ -29,6 +31,10 @@ interface TestRuntimeSession {
 }
 
 interface ClaudeRuntimeInternals {
+  configStore: {
+    getConfig(cwd: string): Parameters<typeof connectionFingerprint>[0];
+    getCredential(cwd: string): string | undefined;
+  };
   diagnoseInstallation(): Promise<{
     executable: string;
     installationKind: 'native';
@@ -38,6 +44,24 @@ interface ClaudeRuntimeInternals {
     version: string;
   }>;
   emitState(runtime: TestRuntimeSession): Promise<void>;
+  modelOptionRegistry: Map<
+    string,
+    {
+      configFingerprint: string;
+      configScope: string;
+      cwdKey: string;
+      expiresAt: number;
+      launchGeneration: number;
+      option: {
+        id: string;
+        model: string;
+        requiresRelaunch: boolean;
+        relaunchReason?: 'connection' | 'speed-profile';
+      };
+      ptyGeneration?: PtyGeneration;
+      sessionId: string;
+    }
+  >;
   prepareRouteServices(...args: unknown[]): Promise<unknown>;
   sessions: Map<string, TestRuntimeSession>;
   stopUnusedRoute(...args: unknown[]): Promise<void>;
@@ -350,18 +374,24 @@ describe('Claude runtime live model context', () => {
       cwd: session.cwd,
       sessionId: session.sessionId,
     } as Awaited<ReturnType<ClaudeRuntime['getState']>>;
-    vi.spyOn(runtime, 'getModelOptions').mockResolvedValue({
-      activeModel: 'claude-opus-5',
-      options: [
-        {
-          id: 'same-endpoint-sonnet',
-          label: 'claude-sonnet-5',
-          model: 'claude-sonnet-5',
-          providerLabel: '当前接入',
-          requiresRelaunch: false,
-          sameEndpoint: true,
-        },
-      ],
+    const configScope = runtime.connectionConfigScope(session.sessionId, session.cwd);
+    const config = internals.configStore.getConfig(configScope);
+    internals.modelOptionRegistry.set('same-endpoint-sonnet', {
+      configFingerprint: connectionFingerprint(
+        config,
+        internals.configStore.getCredential(configScope),
+      ),
+      configScope,
+      cwdKey: projectKey(session.cwd),
+      expiresAt: Date.now() + 120_000,
+      launchGeneration: session.launchGeneration ?? 0,
+      option: {
+        id: 'same-endpoint-sonnet',
+        model: 'claude-sonnet-5',
+        requiresRelaunch: false,
+      },
+      ptyGeneration: session.ptyGeneration,
+      sessionId: session.sessionId,
     });
     vi.spyOn(runtime, 'getState').mockResolvedValue(targetState);
     const submit = vi.spyOn(internals, 'submitClaudeCommand').mockResolvedValue(undefined);
@@ -376,6 +406,12 @@ describe('Claude runtime live model context', () => {
       );
       expect(session.expectedModel).toBe('claude-sonnet-5');
       expect(session.runtimeModel).toBe('claude-sonnet-5[1m]');
+      expect(session.launchedConfigFingerprint).toBe(
+        connectionFingerprint(
+          { ...config, model: 'claude-sonnet-5' },
+          internals.configStore.getCredential(configScope),
+        ),
+      );
     } finally {
       runtime.shutdown();
     }

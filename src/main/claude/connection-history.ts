@@ -19,6 +19,7 @@ import {
   fixedProviderProtocol,
 } from '../network/provider-access-policy';
 import { normalizeClaudeConfig, type NormalizedClaudeConfig } from './configuration';
+import { connectionEndpointFingerprint } from './runtime-connection';
 
 /**
  * One saved connection setup, as it was entered. The credential is encrypted with the same
@@ -247,6 +248,26 @@ export class ClaudeConnectionHistoryStore {
       sourceModel: entry.sourceModel,
       sourceModelFast: entry.sourceModelFast,
     }));
+  }
+
+  /** Computes all endpoint identities from one history-file read for model-picker rendering. */
+  public endpointFingerprints(cwd: string): ReadonlyMap<string, string> {
+    const fingerprints = new Map<string, string>();
+    for (const entry of this.load().projects[projectKey(cwd)] ?? []) {
+      fingerprints.set(entry.id, this.endpointFingerprintOf(entry));
+    }
+    return fingerprints;
+  }
+
+  /** Computes one entry identity without normalizing an OpenAI request URL as an Anthropic base. */
+  public endpointFingerprint(cwd: string, entryId: string): string {
+    const entry = (this.load().projects[projectKey(cwd)] ?? []).find(
+      (candidate) => candidate.id === entryId,
+    );
+    if (!entry) {
+      throw new Error('这条接入记录已被删除。');
+    }
+    return this.endpointFingerprintOf(entry);
   }
 
   /**
@@ -512,6 +533,35 @@ export class ClaudeConnectionHistoryStore {
         : entry.routerProviderId
           ? { routerProviderId: entry.routerProviderId }
           : undefined,
+    );
+  }
+
+  private endpointFingerprintOf(entry: StoredHistoryEntry): string {
+    const config: NormalizedClaudeConfig =
+      entry.sourceBaseUrl && entry.sourceModel
+        ? {
+            apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
+            authMode: entry.sourceAuthMode ?? 'authToken',
+            baseUrl: entry.sourceBaseUrl,
+            model: entry.sourceModel,
+            modelFast: entry.sourceModelFast || entry.sourceModel,
+            preset: entry.sourcePreset ?? 'custom',
+            provider: entry.sourcePreset ? providerForPreset(entry.sourcePreset) : 'gateway',
+          }
+        : {
+            apiKeyHelperPolicy: entry.apiKeyHelperPolicy ?? 'prefer-claudedock',
+            authMode: entry.authMode,
+            baseUrl: entry.baseUrl,
+            model: entry.model,
+            modelFast: entry.modelFast || entry.model,
+            preset: entry.preset,
+            provider: entry.provider,
+          };
+    return connectionEndpointFingerprint(
+      config,
+      this.decrypt(entry.encryptedCredential),
+      entry.routerProviderId,
+      entry.protocol,
     );
   }
 

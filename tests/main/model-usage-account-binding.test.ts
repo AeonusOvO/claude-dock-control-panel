@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installModelUsage } from '../../src/main/app/model-usage';
 import { Registry } from '../../src/main/infra/registry';
 import {
@@ -10,14 +10,40 @@ import {
   MAIN_WINDOW,
   MANAGED_CHATGPT_GATEWAY,
   MODEL_USAGE_SERVICE,
+  MODEL_USAGE_WINDOW,
 } from '../../src/main/infra/service-tokens';
 import type { RuntimeProfile } from '../../src/main/app/profile';
 
+const usageWindows = vi.hoisted(
+  () =>
+    [] as {
+      onVisibility: (visible: boolean) => void;
+      onVisibilityRequest: (visible: boolean) => void;
+      setVisible: ReturnType<typeof vi.fn>;
+    }[],
+);
+const usageWindowOpenFailure = vi.hoisted(() => ({ current: undefined as Error | undefined }));
 vi.mock('../../src/main/app/model-usage-window', () => ({
   ModelUsageWindow: class {
+    public readonly setVisible = vi.fn(async (visible: boolean) => {
+      if (visible && usageWindowOpenFailure.current) throw usageWindowOpenFailure.current;
+      this.onVisibilityRequest(visible);
+      this.onVisibility(visible);
+    });
     public publish = vi.fn();
+    public constructor(
+      private readonly onVisibility: (visible: boolean) => void,
+      private readonly onVisibilityRequest: (visible: boolean) => void,
+    ) {
+      usageWindows.push({ onVisibility, onVisibilityRequest, setVisible: this.setVisible });
+    }
   },
 }));
+
+afterEach(() => {
+  usageWindows.length = 0;
+  usageWindowOpenFailure.current = undefined;
+});
 
 describe('subscription quota account binding', () => {
   it.each([true, false])(
@@ -25,6 +51,24 @@ describe('subscription quota account binding', () => {
     async (allowRealRuntimes) => {
       const root = await mkdtemp(path.join(tmpdir(), 'claudedock-quota-binding-'));
       const services = new Registry();
+      const appPreferencesStore = {
+        get: vi.fn(() => ({
+          claudeContextWindowMode: 'auto' as const,
+          closeBehavior: 'tray' as const,
+          closeToTrayNoticeShown: false,
+          conversationResume: {
+            autoLoadLastConversationModelOnStartup: true,
+            autoLoadLastConversationOnStartup: true,
+            modelMismatchBehavior: 'ask' as const,
+            startupModelConnectCancelAfterMinutes: 2,
+            startupModelConnectForceStopAfterMinutes: 5,
+          },
+          footerResourcePreference: 'auto' as const,
+          managedChatGptContextWindowMode: 'standard' as const,
+          modelUsageFloatingVisible: false,
+        })),
+        set: vi.fn(),
+      };
       const codex = vi.fn(() => {
         throw new Error('No independent Codex installation or login');
       });
@@ -67,8 +111,20 @@ describe('subscription quota account binding', () => {
           paths: { userData: root, projects: path.join(root, 'projects') },
         } as RuntimeProfile,
         'claude',
+        appPreferencesStore,
       );
       const usage = services.resolve(MODEL_USAGE_SERVICE);
+      services.resolve(MODEL_USAGE_WINDOW);
+      const usageWindow = usageWindows.at(-1);
+      if (!usageWindow) throw new Error('Model usage window was not registered');
+      usageWindow.onVisibilityRequest(true);
+      expect(appPreferencesStore.set).toHaveBeenLastCalledWith({
+        modelUsageFloatingVisible: true,
+      });
+      usageWindow.onVisibility(false);
+      expect(appPreferencesStore.set).toHaveBeenLastCalledWith({
+        modelUsageFloatingVisible: false,
+      });
       try {
         usage.select({
           id: 'managed-connection',
@@ -104,4 +160,49 @@ describe('subscription quota account binding', () => {
       }
     },
   );
+
+  it('keeps a remembered visible preference when startup restoration fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'claudedock-quota-restoration-'));
+    const services = new Registry();
+    const appPreferencesStore = {
+      get: vi.fn(() => ({
+        claudeContextWindowMode: 'auto' as const,
+        closeBehavior: 'tray' as const,
+        closeToTrayNoticeShown: false,
+        conversationResume: {
+          autoLoadLastConversationModelOnStartup: true,
+          autoLoadLastConversationOnStartup: true,
+          modelMismatchBehavior: 'ask' as const,
+          startupModelConnectCancelAfterMinutes: 2,
+          startupModelConnectForceStopAfterMinutes: 5,
+        },
+        footerResourcePreference: 'auto' as const,
+        managedChatGptContextWindowMode: 'standard' as const,
+        modelUsageFloatingVisible: true,
+      })),
+      set: vi.fn(),
+    };
+    usageWindowOpenFailure.current = new Error('widget unavailable');
+    services.register(CLAUDE_RUNTIME, () => ({ setModelUsageObserver: vi.fn() }) as never);
+
+    installModelUsage(
+      services,
+      {
+        effects: { allowRealRuntimes: false },
+        paths: { userData: root, projects: path.join(root, 'projects') },
+      } as RuntimeProfile,
+      'claude',
+      appPreferencesStore,
+    );
+
+    const usageWindow = usageWindows.at(-1);
+    if (!usageWindow) throw new Error('Model usage window was not registered');
+    await vi.waitFor(() => expect(usageWindow.setVisible).toHaveBeenCalledWith(true));
+    expect(appPreferencesStore.set).not.toHaveBeenCalled();
+
+    const usage = services.resolve(MODEL_USAGE_SERVICE);
+    usage.dispose();
+    await Reflect.get(usage, 'writes');
+    await rm(root, { recursive: true, force: true });
+  });
 });

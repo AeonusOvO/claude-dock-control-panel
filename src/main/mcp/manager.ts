@@ -527,6 +527,53 @@ const updateProjectToggleState = (
   return root;
 };
 
+/** Removes a project-scoped server from both Claude Code toggle arrays after CLI removal. */
+const removeProjectToggleName = (root: unknown, cwd: string, name: string): boolean => {
+  if (!isRecord(root) || !isRecord(root.projects)) return false;
+  const found = findProjectRecord(root.projects, cwd);
+  if (!found) return false;
+  const [, project] = found;
+  let changed = false;
+  for (const field of ['enabledMcpjsonServers', 'disabledMcpjsonServers'] as const) {
+    const value = project[field];
+    if (value === undefined) continue;
+    if (
+      !Array.isArray(value) ||
+      !value.every((candidate): candidate is string => MCP_NAME.test(candidate))
+    ) {
+      throw new Error(`Claude Code 的 ${field} 必须是有效 MCP 名称数组。`);
+    }
+    const names = value.filter((candidate) => candidate !== name);
+    if (names.length !== value.length) changed = true;
+    project[field] = names;
+  }
+  return changed;
+};
+
+const removeProjectToggleNameFromFile = (
+  targetPath: string,
+  cwd: string,
+  name: string,
+): boolean => {
+  const root = readJsonRecord(targetPath, true);
+  if (!removeProjectToggleName(root, cwd, name)) return false;
+  const temporary = `${targetPath}.claudedock-${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(root, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    renameSync(temporary, targetPath);
+    return true;
+  } finally {
+    try {
+      if (existsSync(temporary)) rmSync(temporary, { force: true });
+    } catch {
+      // The completed rename is authoritative; a leftover temporary file is harmless and bounded.
+    }
+  }
+};
+
 export class McpManager {
   private readonly caches = new Map<string, AsyncRefreshCache<McpCatalog>>();
   private readonly catalogCacheTtlMs: number;
@@ -633,6 +680,13 @@ export class McpManager {
         maxBuffer: 4 * 1024 * 1024,
         timeout: 120_000,
       });
+      if (input.scope === 'project') {
+        removeProjectToggleNameFromFile(
+          path.join(this.homeDirectory, '.claude.json'),
+          input.cwd,
+          input.name,
+        );
+      }
       this.invalidate(input.cwd);
       return `MCP ${input.name} 已从 ${input.scope} 作用域移除。`;
     } finally {

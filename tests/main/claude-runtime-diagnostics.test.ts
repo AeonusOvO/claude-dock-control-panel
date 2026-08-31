@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- This integration specification keeps runtime diagnostic races together. */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,7 @@ import { POWERSHELL_STARTUP_COMMAND_ENV } from '../../src/main/terminal/session'
 import { SUBMIT_DELAY_MS } from '../../src/shared/conversation/composer-input';
 import { CHANNELS } from '../../src/shared/ipc/channels';
 import type {
+  ClaudeConnectionState,
   ClaudeConnectionTestResult,
   ClaudeEffortCompatibility,
   ClaudeEffortRequest,
@@ -34,6 +36,7 @@ import type {
   SaveClaudeConfigInput,
 } from '../../src/shared/contracts';
 import type { PendingPermissionModeProbe } from '../../src/main/claude/permission-mode-probe';
+import { connectionFingerprint, projectKey } from '../../src/main/claude/runtime-connection';
 import { createIpcHarness } from '../helpers/ipc-harness';
 import { createTestMainServiceRegistry } from '../helpers/main-service-registry';
 
@@ -64,6 +67,11 @@ interface RuntimeTestSession {
 }
 
 interface RuntimeTestInternals {
+  connectionState(
+    runtime: RuntimeTestSession,
+    fingerprint: string,
+    matchingCheck: ClaudeConnectionTestResult | undefined,
+  ): ClaudeConnectionState;
   configStore: {
     createLaunchSnapshot(cwd: string): RuntimeLaunchSnapshot;
     getAllowBypassPermissions(cwd: string): boolean;
@@ -80,6 +88,21 @@ interface RuntimeTestInternals {
     version: string;
   }>;
   emitState(runtime: RuntimeTestSession): Promise<void>;
+  modelOptionRegistry: Map<
+    string,
+    {
+      configFingerprint: string;
+      configScope: string;
+      cwdKey: string;
+      entryId?: string;
+      expiresAt: number;
+      launchGeneration: number;
+      option: ClaudeModelOption;
+      ptyGeneration?: PtyGeneration;
+      sessionId: string;
+      targetSpeed?: 'fast' | 'standard';
+    }
+  >;
   pollMetricsOnce(): Promise<void>;
   preparedLaunches: Map<object, { replacement?: RuntimeTestSession }>;
   prepareRouteServices(...args: unknown[]): Promise<void>;
@@ -242,6 +265,28 @@ describe('connection history protocol metadata', () => {
     expect(connectionProtocolForRouterProvider('openai_responses')).toBe('openai');
     expect(defaultConnectionProtocolForPreset('gateway')).toBe('unknown');
     expect(defaultConnectionProtocolForPreset('custom')).toBe('anthropic');
+  });
+
+  it('does not turn warning-only connection checks into a failed model connection', () => {
+    const { internals, runtime, session } = createRuntime();
+    const warning: ClaudeConnectionTestResult = {
+      message: '需要启动会话后确认。',
+      ok: false,
+      stages: [],
+      testedAt: 1,
+      tone: 'warning',
+    };
+
+    try {
+      expect(internals.connectionState(session, 'matching', warning)).toEqual({
+        detail: warning.message,
+        observedAt: warning.testedAt,
+        readiness: 'unknown',
+        source: 'connection-test',
+      });
+    } finally {
+      runtime.shutdown();
+    }
   });
 });
 
@@ -816,13 +861,26 @@ describe('Claude runtime permission mode observation', () => {
     }
   });
 
-  it('re-reads and validates every model option before writing to the live shell', async () => {
+  it('validates opaque model options before writing to the live shell', async () => {
     const { internals, runtime, session } = createRuntime();
     session.ptyGeneration = 12;
+    useLaunchConfig(internals, launchConfig('prefer-claudedock'));
     vi.spyOn(runtime, 'getState').mockResolvedValue(projectState(session));
-    const getModelOptions = vi.spyOn(runtime, 'getModelOptions');
     const submit = vi.fn(async () => undefined);
     internals.submitClaudeCommand = submit;
+    type TestModelOptionRecord = {
+      configFingerprint: string;
+      configScope: string;
+      cwdKey: string;
+      expiresAt: number;
+      launchGeneration: number;
+      option: ClaudeModelOption;
+      ptyGeneration?: PtyGeneration;
+      sessionId: string;
+    };
+    const registry = (
+      runtime as unknown as { modelOptionRegistry: Map<string, TestModelOptionRecord> }
+    ).modelOptionRegistry;
     const option = (overrides: Partial<ClaudeModelOption> = {}): ClaudeModelOption => ({
       id: 'selected',
       label: 'Claude Sonnet 5',
@@ -832,46 +890,161 @@ describe('Claude runtime permission mode observation', () => {
       sameEndpoint: true,
       ...overrides,
     });
+    const registerOption = (modelOption: ClaudeModelOption): void => {
+      const configScope = runtime.connectionConfigScope(session.sessionId, session.cwd);
+      const config = internals.configStore.getConfig(configScope);
+      registry.set(modelOption.id, {
+        configFingerprint: connectionFingerprint(
+          config,
+          internals.configStore.getCredential(configScope),
+        ),
+        configScope,
+        cwdKey: projectKey(session.cwd),
+        expiresAt: Date.now() + 120_000,
+        launchGeneration: session.launchGeneration ?? 0,
+        option: modelOption,
+        ptyGeneration: session.ptyGeneration,
+        sessionId: session.sessionId,
+      });
+    };
 
     try {
-      getModelOptions.mockResolvedValueOnce({ activeModel: 'default', options: [] });
       await expect(runtime.switchModel(session.sessionId, session.cwd, 'selected')).rejects.toThrow(
         '模型选项已经失效',
       );
 
-      getModelOptions.mockResolvedValueOnce({
-        activeModel: 'default',
-        options: [option({ relaunchReason: 'connection', requiresRelaunch: true })],
-      });
+      registerOption(option({ relaunchReason: 'connection', requiresRelaunch: true }));
       await expect(runtime.switchModel(session.sessionId, session.cwd, 'selected')).rejects.toThrow(
         '其他接入端点',
       );
 
-      getModelOptions.mockResolvedValueOnce({
-        activeModel: 'default',
-        options: [option({ relaunchReason: 'speed-profile', requiresRelaunch: true })],
-      });
+      registerOption(option({ relaunchReason: 'speed-profile', requiresRelaunch: true }));
       await expect(runtime.switchModel(session.sessionId, session.cwd, 'selected')).rejects.toThrow(
         '服务速度配置',
       );
 
-      getModelOptions.mockResolvedValueOnce({
-        activeModel: 'default',
-        options: [option({ model: 'bad model' })],
-      });
+      registerOption(option({ model: 'bad model' }));
       await expect(runtime.switchModel(session.sessionId, session.cwd, 'selected')).rejects.toThrow(
         '模型标识不合法',
       );
 
-      getModelOptions.mockResolvedValueOnce({
-        activeModel: 'default',
-        options: [option()],
-      });
+      registerOption(option());
       await runtime.switchModel(session.sessionId, session.cwd, 'selected');
       expect(submit).toHaveBeenCalledOnce();
       expect(submit).toHaveBeenCalledWith(session, '/model claude-sonnet-5', expect.any(Function));
-      expect(getModelOptions).toHaveBeenCalledTimes(5);
-      expect(getModelOptions).toHaveBeenLastCalledWith(session.cwd, session.sessionId);
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('invalidates opaque model options across every session and runtime binding fence', () => {
+    const { internals, runtime, session } = createRuntime();
+    session.launchGeneration = 4;
+    session.ptyGeneration = 12;
+    useLaunchConfig(internals, launchConfig('prefer-claudedock'));
+    const configScope = runtime.connectionConfigScope(session.sessionId, session.cwd);
+    const optionId = `model-${'b'.repeat(16)}`;
+    const validRecord = (): RuntimeTestInternals['modelOptionRegistry'] extends Map<
+      string,
+      infer Record
+    >
+      ? Record
+      : never => ({
+      configFingerprint: connectionFingerprint(
+        internals.configStore.getConfig(configScope),
+        internals.configStore.getCredential(configScope),
+      ),
+      configScope,
+      cwdKey: projectKey(session.cwd),
+      expiresAt: Date.now() + 120_000,
+      launchGeneration: session.launchGeneration ?? 0,
+      option: {
+        action: 'relaunch',
+        id: optionId,
+        label: 'Claude Opus 5',
+        model: 'claude-opus-5',
+        providerLabel: '当前平台',
+        relaunchReason: 'speed-profile',
+        requiresRelaunch: true,
+        sameEndpoint: true,
+        section: 'current-platform',
+        source: 'discovered',
+      },
+      ptyGeneration: session.ptyGeneration,
+      sessionId: session.sessionId,
+      targetSpeed: 'fast',
+    });
+    const resolve = (sessionId = session.sessionId, cwd = session.cwd): void => {
+      runtime.relaunchInputForModelOption(sessionId, cwd, {
+        compactFirst: false,
+        modelOptionId: optionId,
+      });
+    };
+    const expectStale = (record: ReturnType<typeof validRecord>, invoke = resolve): void => {
+      internals.modelOptionRegistry.set(optionId, record);
+      expect(invoke).toThrow('模型选项已经失效');
+    };
+
+    try {
+      expectStale({ ...validRecord(), expiresAt: Date.now() - 1 });
+      expectStale(validRecord(), () => resolve('other-session'));
+      expectStale(validRecord(), () => resolve(session.sessionId, 'D:\\OtherProject'));
+      expectStale({ ...validRecord(), configFingerprint: 'stale-configuration' });
+      expectStale({ ...validRecord(), launchGeneration: (session.launchGeneration ?? 0) - 1 });
+      expectStale({ ...validRecord(), ptyGeneration: (session.ptyGeneration ?? 0) - 1 });
+    } finally {
+      runtime.shutdown();
+    }
+  });
+
+  it('resolves a current-platform relaunch token to its main-owned model and speed', () => {
+    const { internals, runtime, session } = createRuntime();
+    session.ptyGeneration = 12;
+    useLaunchConfig(internals, launchConfig('prefer-claudedock'));
+    const configScope = runtime.connectionConfigScope(session.sessionId, session.cwd);
+    const optionId = `model-${'a'.repeat(16)}`;
+    internals.modelOptionRegistry.set(optionId, {
+      configFingerprint: connectionFingerprint(
+        internals.configStore.getConfig(configScope),
+        internals.configStore.getCredential(configScope),
+      ),
+      configScope,
+      cwdKey: projectKey(session.cwd),
+      expiresAt: Date.now() + 120_000,
+      launchGeneration: session.launchGeneration ?? 0,
+      option: {
+        action: 'relaunch',
+        id: optionId,
+        label: 'Claude Opus 5',
+        model: 'claude-opus-5',
+        providerLabel: '当前平台',
+        relaunchReason: 'speed-profile',
+        requiresRelaunch: true,
+        sameEndpoint: true,
+        section: 'current-platform',
+        source: 'discovered',
+      },
+      ptyGeneration: session.ptyGeneration,
+      sessionId: session.sessionId,
+      targetSpeed: 'fast',
+    });
+
+    try {
+      expect(
+        runtime.relaunchInputForModelOption(session.sessionId, session.cwd, {
+          compactFirst: true,
+          entryId: 'renderer-entry',
+          model: 'renderer-model',
+          modelOptionId: optionId,
+          permissionMode: 'plan',
+          speed: 'standard',
+        }),
+      ).toEqual({
+        compactFirst: true,
+        model: 'claude-opus-5',
+        permissionMode: 'plan',
+        speed: 'fast',
+      });
     } finally {
       runtime.shutdown();
     }

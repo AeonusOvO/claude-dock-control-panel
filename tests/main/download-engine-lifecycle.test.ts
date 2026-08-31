@@ -188,7 +188,7 @@ describe('download engine disposal and race fencing', () => {
         new BusyRegistry(),
         userDataPath,
       );
-      recoveryEngine.restoreInterrupted();
+      await recoveryEngine.restoreInterrupted();
       expect(recoverySession.createInterruptedDownload).toHaveBeenCalledWith(
         expect.objectContaining({ offset: 100, path: `${request.finalPath}.partial` }),
       );
@@ -319,6 +319,37 @@ describe('download engine disposal and race fencing', () => {
       expect(busyRegistry.list()).toEqual([]);
     } finally {
       rmSync(secondPath, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects a second task with the same URL before an ambiguous native claim', async () => {
+    const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-duplicate-url-'));
+    try {
+      const session = createSession();
+      const engine = new DownloadEngine(
+        session as unknown as DownloadSession,
+        new BusyRegistry(),
+        userDataPath,
+      );
+      const firstRequest = createRequest(userDataPath);
+      const firstCompletion = engine.start(firstRequest);
+      const secondRequest = {
+        ...createRequest(userDataPath, 'duplicate-tool'),
+        finalPath: path.join(userDataPath, 'downloads', 'duplicate-tool.exe'),
+      };
+
+      await expect(engine.start(secondRequest)).rejects.toThrow('同一下载地址');
+      expect(session.downloadURL).toHaveBeenCalledOnce();
+
+      const firstItem = createItem();
+      const preventDefault = vi.fn();
+      session.emit('will-download', { preventDefault }, firstItem);
+      expect(preventDefault).not.toHaveBeenCalled();
+      engine.cancel(firstRequest.id);
+      await expect(firstCompletion).rejects.toThrow('下载已取消');
+      engine.dispose();
+    } finally {
+      rmSync(userDataPath, { force: true, recursive: true });
     }
   });
 
@@ -691,7 +722,7 @@ describe('download engine disposal and race fencing', () => {
         new BusyRegistry(),
         userDataPath,
       );
-      recoveryEngine.restoreInterrupted();
+      await recoveryEngine.restoreInterrupted();
       expect(recoverySession.createInterruptedDownload).toHaveBeenCalledWith(
         expect.objectContaining({ offset: 100 }),
       );
@@ -724,7 +755,7 @@ describe('download engine disposal and race fencing', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       expect(item.setSavePath).toHaveBeenCalledOnce();
       rejectCreation(new Error('deferred create failure'));
       await vi.waitFor(() => expect(engine.list()).toEqual([]));
@@ -740,7 +771,7 @@ describe('download engine disposal and race fencing', () => {
     }
   });
 
-  it('restores original journal metadata when post-setSavePath binding fails', () => {
+  it('restores original journal metadata when post-setSavePath binding fails', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-bind-journal-'));
     try {
       const original = writeRecoveryFixture(userDataPath);
@@ -762,7 +793,7 @@ describe('download engine disposal and race fencing', () => {
         userDataPath,
       );
 
-      expect(() => engine.restoreInterrupted()).not.toThrow();
+      await expect(engine.restoreInterrupted()).resolves.toBeUndefined();
 
       expect(item.setSavePath).toHaveBeenCalledOnce();
       expect(item.cancel).toHaveBeenCalledOnce();
@@ -804,7 +835,7 @@ describe('download engine disposal and race fencing', () => {
     }
   });
 
-  it('holds startup recovery until explicit consent, then resumes the bound item', () => {
+  it('holds startup recovery until explicit consent, then resumes the bound item', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-consent-'));
     try {
       const entry = writeRecoveryFixture(userDataPath);
@@ -820,7 +851,7 @@ describe('download engine disposal and race fencing', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       expect(session.createInterruptedDownload).toHaveBeenCalledWith(
         expect.objectContaining({ offset: entry.receivedBytes, path: entry.savePath }),
       );
@@ -857,7 +888,7 @@ describe('download engine disposal and race fencing', () => {
     }
   });
 
-  it('discards only the selected recovery task and preserves final artifacts', () => {
+  it('discards only the selected recovery task and preserves final artifacts', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-recovery-discard-'));
     try {
       const first = writeRecoveryFixture(userDataPath, 'recovered-first');
@@ -891,7 +922,7 @@ describe('download engine disposal and race fencing', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       writeFileSync(`${first.savePath}.resume`, Buffer.alloc(first.receivedBytes));
       writeFileSync(`${second.savePath}.resume`, Buffer.alloc(second.receivedBytes));
       expect(engine.listRecoveryPending().map(({ id }) => id)).toEqual([first.id, second.id]);
@@ -933,7 +964,7 @@ describe('download engine disposal and race fencing', () => {
         userDataPath,
       );
 
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       expect(engine.listRecoveryPending()).toHaveLength(1);
       expect(engine.discardRecovery(entry.id)).toEqual([]);
 
@@ -953,7 +984,7 @@ describe('download engine disposal and race fencing', () => {
     }
   });
 
-  it('filters an invalid journal before creating any restore task and skips no-op replace', () => {
+  it('filters an invalid journal before creating any restore task and skips no-op replace', async () => {
     const firstPath = mkdtempSync(path.join(tmpdir(), 'claudedock-restore-filter-'));
     try {
       const valid = writeRecoveryFixture(firstPath);
@@ -977,12 +1008,12 @@ describe('download engine disposal and race fencing', () => {
         firstPath,
       );
 
-      expect(() => engine.restoreInterrupted()).toThrow();
+      await expect(engine.restoreInterrupted()).rejects.toThrow();
       expect(session.createInterruptedDownload).not.toHaveBeenCalled();
       expect(engine.list()).toEqual([]);
       expect(busyRegistry.list()).toEqual([]);
       rmSync(temporaryPath, { force: true, recursive: true });
-      engine.restoreInterrupted();
+      await engine.restoreInterrupted();
       expect(session.createInterruptedDownload).toHaveBeenCalledOnce();
       engine.dispose();
     } finally {
@@ -1001,7 +1032,7 @@ describe('download engine disposal and race fencing', () => {
         secondPath,
       );
 
-      expect(() => engine.restoreInterrupted()).not.toThrow();
+      await expect(engine.restoreInterrupted()).resolves.toBeUndefined();
       expect(session.createInterruptedDownload).toHaveBeenCalledOnce();
       rmSync(temporaryPath, { force: true, recursive: true });
       engine.dispose();

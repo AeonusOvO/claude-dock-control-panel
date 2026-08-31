@@ -119,6 +119,7 @@ const registerConversationStartIpc = (
     const service = requireNativeConversationService();
     const boundSessionId =
       request.sessionId === undefined ? undefined : validateSessionId(request.sessionId);
+    const previousBoundSessionId = nativeConversationSessions.get(conversationId);
     if (boundSessionId) nativeConversationSessions.set(conversationId, boundSessionId);
     const existing = conversationOwnerRegistry.ownerFor({
       conversationId,
@@ -136,6 +137,10 @@ const registerConversationStartIpc = (
     }
 
     let launch: NativeConversationLaunch | undefined;
+    const restoreConversationBinding = (): void => {
+      if (previousBoundSessionId === undefined) nativeConversationSessions.delete(conversationId);
+      else nativeConversationSessions.set(conversationId, previousBoundSessionId);
+    };
     const nativeOwnerId = `native-route:${conversationId}`;
     const runtime =
       runtimeProfile.adapterMode === 'production' ? requireClaudeRuntime() : undefined;
@@ -196,12 +201,16 @@ const registerConversationStartIpc = (
             launch.prepared.model,
           );
         }
-        if (!result.ok && launch) {
-          runtime?.releaseNativeConversation(launch.ownerId);
-          nativeLaunches.delete(conversationId);
+        if (!result.ok) {
+          restoreConversationBinding();
+          if (launch) {
+            runtime?.releaseNativeConversation(launch.ownerId);
+            nativeLaunches.delete(conversationId);
+          }
         }
         return result;
       } catch (error) {
+        restoreConversationBinding();
         if (launch) {
           runtime?.releaseNativeConversation(launch.ownerId);
           nativeLaunches.delete(conversationId);
@@ -437,16 +446,27 @@ const registerConversationTransferIpc = (
               );
             });
             if (ownedGeneration === undefined) throw new Error('安全终端没有有效的进程代际。');
+            const terminalGeneration = Number(ownedGeneration);
             transferredOwner = {
               conversationId: identity.conversationId,
-              generation: Number(ownedGeneration),
+              generation: terminalGeneration,
               ownerId: `terminal:${targetSessionId}`,
               ownerKind: 'terminal',
               phase: 'active',
               projectPath: identity.projectPath,
               runtime: 'claude',
             };
-            return { owner: transferredOwner, terminalSessionId: targetSessionId };
+            return {
+              owner: transferredOwner,
+              stop: async (): Promise<boolean> => {
+                const stopped = await workspace.stopIfGenerationAndWait(
+                  targetSessionId,
+                  terminalGeneration,
+                );
+                return stopped !== undefined;
+              },
+              terminalSessionId: targetSessionId,
+            };
           },
           allowInterrupt,
           async (identity, operation) => {
@@ -471,7 +491,13 @@ const registerConversationTransferIpc = (
               : operation();
           },
         );
-        if (result.ok && transferredOwner && transferredSessionId) {
+        if (
+          transferredOwner &&
+          transferredSessionId &&
+          (result.ok || result.terminalSessionId === transferredSessionId)
+        ) {
+          // A failed cleanup keeps the already-running terminal authoritative; mapping it here avoids
+          // leaving a live writer untracked while the native side is deliberately not restarted.
           terminalConversationOwners.set(transferredSessionId, transferredOwner);
           nativeConversationSessions.set(validatedConversationId, transferredSessionId);
           const launch = nativeLaunches.get(validatedConversationId);
@@ -490,6 +516,7 @@ const registerConversationTransferIpc = (
 
 const registerConversationAdoptionIpc = (
   {
+    conversationOwnerRegistry,
     guards: {
       assertLaunchAdmissionAllowed,
       requireClaudeRuntime,
@@ -509,6 +536,7 @@ const registerConversationAdoptionIpc = (
     workspace,
   }: ConversationIpcDependencies,
   { nativeConversationSessions }: ConversationIpcContext,
+  // eslint-disable-next-line max-lines-per-function -- adoption coordinates guarded process, PTY, and route cleanup.
 ): void => {
   ipcMain.handle(
     CHANNELS.NATIVE_CONVERSATION_ADOPT_TERMINAL,
@@ -639,22 +667,29 @@ const registerConversationAdoptionIpc = (
             },
             // Stop the Claude process inside the tab, but keep the tab. Leaving it running would put
             // two writers on one JSONL; closing it would destroy the tab the user is switching within.
-            async () => {
-              await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId).catch(
-                () => undefined,
-              );
-              await services
-                .resolve(RUNTIME_PROCESS_REGISTRY)
-                .terminateSession(validatedSessionId)
-                .catch(() => undefined);
-              if (!workspace.hasSession(validatedSessionId)) return;
+            async (): Promise<boolean> => {
+              // Do not proceed to native adoption while a verified child process or the PTY itself
+              // may still be writing the transcript. Cleanup failures are intentionally propagated.
+              await invalidateAndWaitForDevelopmentSessionOperation(validatedSessionId);
+              await services.resolve(RUNTIME_PROCESS_REGISTRY).terminateSession(validatedSessionId);
+              if (!workspace.hasSession(validatedSessionId)) return false;
               const current = workspace.getStatus(validatedSessionId);
-              workspace.stop(validatedSessionId);
-              requireClaudeRuntime().setInactive(validatedSessionId, current.ptyGeneration);
+              const stopped = await workspace.stopIfGenerationAndWait(
+                validatedSessionId,
+                current.ptyGeneration,
+              );
+              if (!stopped) return false;
+              const deactivated = requireClaudeRuntime().setInactive(
+                validatedSessionId,
+                current.ptyGeneration,
+              );
+              if (deactivated === false) return false;
+              return true;
             },
-            async () => {
+            async (): Promise<boolean> => {
+              let ownedGeneration: PtyGeneration | undefined;
               await withDevelopmentSessionOperation(validatedSessionId, async (assertCurrent) => {
-                await runClaudeResumeLaunch(
+                ownedGeneration = await runClaudeResumeLaunch(
                   validatedSessionId,
                   projectPath,
                   conversationId,
@@ -662,13 +697,38 @@ const registerConversationAdoptionIpc = (
                   assertCurrent,
                 );
               });
+              return ownedGeneration !== undefined;
             },
           );
-          if (result.ok) {
+          const finalOwner = conversationOwnerRegistry.ownerFor({
+            conversationId,
+            projectPath,
+            runtime: 'claude',
+          });
+          if (finalOwner?.ownerKind === 'native') {
+            // A failed adoption can conservatively retain a native writer when adapter teardown is
+            // uncertain. Keep its prepared route lease and binding instead of making future submits
+            // fail while the service still owns the conversation.
+            if (launch) {
+              runtime.recordNativeConversationBinding(
+                conversationId,
+                launch.prepared.conversationBinding,
+                launch.prepared.model,
+              );
+            }
             terminalConversationOwners.delete(validatedSessionId);
             nativeConversationSessions.set(conversationId, validatedSessionId);
           } else {
             releasePreparedLaunch();
+            if (finalOwner?.ownerKind === 'terminal') {
+              terminalConversationOwners.set(validatedSessionId, finalOwner);
+              nativeConversationSessions.set(conversationId, validatedSessionId);
+            } else {
+              // An explicit no-writer outcome must not leave a stale terminal mapping that can be
+              // mistaken for an authoritative Claude process on the next switch.
+              terminalConversationOwners.delete(validatedSessionId);
+              nativeConversationSessions.delete(conversationId);
+            }
           }
           return result;
         } catch (error) {

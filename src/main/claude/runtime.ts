@@ -1,7 +1,10 @@
+/* eslint-disable max-lines -- Runtime coordinates launch, polling, diagnostics, and state publication. */
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { modelUsageConnection } from '../usage/identity';
 import type {
+  ClaudeConnectionState,
+  ClaudeConnectionTestResult,
   ClaudeContextWindowMode,
   ClaudeLaunchMode,
   ClaudePermissionMode,
@@ -264,7 +267,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
         recovery: 'pending',
         rejectedLevel: rejectedEffort,
       };
-      void this.recoverEffortAfterThinkingDisabled(runtime, rejectedEffort);
+      void this.recoverEffortAfterThinkingDisabled(runtime, rejectedEffort).catch(() => {});
     }
     const detectedError = parseClaudeRuntimeApiError(runtime.diagnosticBuffer);
     const contextWindowExceeded = parseClaudeContextWindowError(runtime.diagnosticBuffer);
@@ -294,7 +297,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
           sessionRuntimeMs: Math.max(0, detectedAt - (runtime.launchedAt ?? detectedAt)),
         });
       }
-      void this.emitState(runtime);
+      void this.emitState(runtime).catch(() => {});
     }
     this.observePermissionModeFromRawOutput(runtime);
 
@@ -344,9 +347,15 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       const config = this.configStore.getConfig(configScope);
       const credential = this.configStore.getCredential(configScope);
       const configFingerprint = connectionFingerprint(config, credential);
+      const runtimeConfig = runtime.expectedModel
+        ? { ...config, model: runtime.expectedModel }
+        : config;
+      const runtimeFingerprint = connectionFingerprint(runtimeConfig, credential);
+      const matchingConnectionCheck = this.matchingConnectionCheck(configScope, configFingerprint);
+      const connection = this.connectionState(runtime, runtimeFingerprint, matchingConnectionCheck);
       const [providerUsage, routeHealth, officialAuth] = await Promise.all([
         this.resourceUsageService.read(projectKey(cwd), config.preset, credential),
-        this.getRouteHealth(runtime, config),
+        this.getRouteHealth(runtime, runtimeConfig),
         config.preset === 'anthropic' ? claudeOfficialAuthProvider.getState() : undefined,
       ]);
       if (this.sessions.get(sessionId) !== runtime) {
@@ -378,6 +387,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
         active: runtime.active,
         allowBypassPermissions: this.configStore.getAllowBypassPermissions(configScope),
         config: this.configStore.getView(configScope),
+        connection,
         cwd,
         effortCompatibility: runtime.effortCompatibility,
         effortRequest: runtime.effortRequest,
@@ -623,6 +633,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     mode: ClaudeLaunchMode,
     startMode?: ClaudePermissionMode,
     authorization = this.captureLaunchAuthorization(this.connectionConfigScope(sessionId, cwd)),
+    overrides?: ClaudeLaunchOverrides,
   ): Promise<PreparedClaudeLaunch> {
     this.assertLaunchAuthorizationCurrent(
       this.connectionConfigScope(sessionId, cwd),
@@ -634,7 +645,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       mode,
       undefined,
       startMode,
-      undefined,
+      overrides,
       authorization,
     );
   }
@@ -882,7 +893,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
       lastApiError: undefined,
       launchedAt: Date.now(),
       launchedCliVersion: installation.version,
-      launchedConfigFingerprint: connectionFingerprint(config, credential),
+      launchedConfigFingerprint: connectionFingerprint(launchConfig, credential),
       launchedSpeedPreference: speed.preference,
       launchedSpeedSignature: speed.signature,
       launchedSpeedTargetKey: speed.targetKey,
@@ -1037,6 +1048,46 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
     }
   }
 
+  private connectionState(
+    runtime: RuntimeSession,
+    fingerprint: string,
+    matchingCheck: ClaudeConnectionTestResult | undefined,
+  ): ClaudeConnectionState {
+    if (runtime.lastApiError && runtime.launchedConfigFingerprint === fingerprint) {
+      return {
+        detail: runtime.lastApiError.detail,
+        observedAt: runtime.lastApiError.detectedAt,
+        readiness: 'failed',
+        source: 'runtime',
+      };
+    }
+    if (
+      runtime.active &&
+      runtime.launchedConfigFingerprint === fingerprint &&
+      runtime.metrics?.modelId
+    ) {
+      return {
+        detail: '当前 Claude 会话已上报有效模型状态。',
+        observedAt: runtime.metrics.capturedAt,
+        readiness: 'connected',
+        source: 'runtime',
+      };
+    }
+    if (matchingCheck) {
+      return {
+        detail: matchingCheck.message,
+        observedAt: matchingCheck.testedAt,
+        readiness: matchingCheck.ok
+          ? 'connected'
+          : matchingCheck.tone === 'warning'
+            ? 'unknown'
+            : 'failed',
+        source: 'connection-test',
+      };
+    }
+    return { readiness: 'unknown' };
+  }
+
   private async getRouteHealth(
     runtime: RuntimeSession,
     config: NormalizedClaudeConfig,
@@ -1060,6 +1111,7 @@ export class ClaudeRuntime extends ClaudeRuntimeConversationModels {
   }
 
   protected override async emitState(runtime: RuntimeSession): Promise<void> {
+    if (this.sessions.get(runtime.sessionId) !== runtime) return;
     this.onState(await this.getState(runtime.sessionId, runtime.cwd));
   }
 

@@ -438,7 +438,7 @@ export abstract class ClaudeRuntimeLaunchHandoff extends ClaudeRuntimePolling {
     if (runtime.routeKind) {
       void this.stopUnusedRoute(runtime.routeKind).catch(() => {});
     }
-    void this.emitState(runtime);
+    void this.emitState(runtime).catch(() => {});
     return true;
   }
 

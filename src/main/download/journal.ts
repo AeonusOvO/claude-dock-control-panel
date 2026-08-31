@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 export interface DownloadJournalEntry {
@@ -19,8 +19,27 @@ export interface DownloadJournalEntry {
   urlChain: string[];
 }
 
-const isNonNegativeNumber = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const MAX_JOURNAL_BYTES = 4 * 1024 * 1024;
+const MAX_JOURNAL_ENTRIES = 256;
+const MAX_JOURNAL_ARRAY_ITEMS = 64;
+const MAX_JOURNAL_STRING_LENGTH = 16 * 1024;
+const MAX_JOURNAL_URL_LENGTH = 8 * 1024;
+
+const isSafeNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+const isBoundedString = (value: unknown, maximum = MAX_JOURNAL_STRING_LENGTH): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= maximum;
+
+const isSafeHttpsUrl = (value: unknown): value is string => {
+  if (!isBoundedString(value, MAX_JOURNAL_URL_LENGTH)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+};
 
 const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
   if (!value || typeof value !== 'object') {
@@ -30,38 +49,53 @@ const parseEntry = (value: unknown): DownloadJournalEntry | undefined => {
   if (
     !Array.isArray(entry.allowedHosts) ||
     entry.allowedHosts.length === 0 ||
-    !entry.allowedHosts.every((host) => typeof host === 'string' && host.length > 0) ||
+    entry.allowedHosts.length > MAX_JOURNAL_ARRAY_ITEMS ||
+    !entry.allowedHosts.every((host) => isBoundedString(host, 255)) ||
     !Array.isArray(entry.allowedPathPrefixes) ||
     entry.allowedPathPrefixes.length === 0 ||
+    entry.allowedPathPrefixes.length > MAX_JOURNAL_ARRAY_ITEMS ||
     entry.allowedHosts.length !== entry.allowedPathPrefixes.length ||
     !entry.allowedPathPrefixes.every(
-      (prefix) => typeof prefix === 'string' && prefix.startsWith('/'),
+      (prefix) => isBoundedString(prefix) && prefix.startsWith('/'),
     ) ||
-    typeof entry.finalPath !== 'string' ||
+    !isBoundedString(entry.finalPath) ||
     !path.isAbsolute(entry.finalPath) ||
-    typeof entry.id !== 'string' ||
-    !entry.id ||
-    typeof entry.label !== 'string' ||
-    !entry.label ||
-    !isNonNegativeNumber(entry.length) ||
-    !isNonNegativeNumber(entry.maxBytes) ||
+    !isBoundedString(entry.id, 512) ||
+    !isBoundedString(entry.label) ||
+    !isSafeNonNegativeInteger(entry.length) ||
+    !isSafeNonNegativeInteger(entry.maxBytes) ||
     entry.maxBytes <= 0 ||
-    !isNonNegativeNumber(entry.receivedBytes) ||
-    typeof entry.savePath !== 'string' ||
+    entry.length > entry.maxBytes ||
+    !isSafeNonNegativeInteger(entry.receivedBytes) ||
+    entry.receivedBytes > entry.length ||
+    entry.receivedBytes > entry.maxBytes ||
+    !isBoundedString(entry.savePath) ||
     !path.isAbsolute(entry.savePath) ||
     entry.savePath !== `${entry.finalPath}.partial` ||
-    !isNonNegativeNumber(entry.startTime) ||
+    !isSafeNonNegativeInteger(entry.startTime) ||
     !Array.isArray(entry.urlChain) ||
     entry.urlChain.length === 0 ||
-    !entry.urlChain.every((url) => typeof url === 'string' && url.startsWith('https://'))
+    entry.urlChain.length > MAX_JOURNAL_ARRAY_ITEMS ||
+    !entry.urlChain.every((url) => isSafeHttpsUrl(url))
   ) {
     return undefined;
   }
-  const expectedBytes = isNonNegativeNumber(entry.expectedBytes) ? entry.expectedBytes : undefined;
+  const expectedBytes =
+    entry.expectedBytes === undefined
+      ? undefined
+      : isSafeNonNegativeInteger(entry.expectedBytes) &&
+          entry.expectedBytes <= entry.maxBytes &&
+          entry.receivedBytes <= entry.expectedBytes
+        ? entry.expectedBytes
+        : undefined;
+  if (entry.expectedBytes !== undefined && expectedBytes === undefined) return undefined;
   const expectedSha256 =
-    typeof entry.expectedSha256 === 'string' && /^[0-9a-f]{64}$/i.test(entry.expectedSha256)
-      ? entry.expectedSha256.toLowerCase()
-      : undefined;
+    entry.expectedSha256 === undefined
+      ? undefined
+      : typeof entry.expectedSha256 === 'string' && /^[0-9a-f]{64}$/i.test(entry.expectedSha256)
+        ? entry.expectedSha256.toLowerCase()
+        : undefined;
+  if (entry.expectedSha256 !== undefined && expectedSha256 === undefined) return undefined;
   return {
     allowedHosts: [...entry.allowedHosts],
     allowedPathPrefixes: [...entry.allowedPathPrefixes],
@@ -139,10 +173,15 @@ export class DownloadJournal {
   }
 
   private write(entries = this.entries): void {
+    const snapshot = [...entries.values()].map((entry) => this.cloneEntry(entry));
+    if (snapshot.length > MAX_JOURNAL_ENTRIES) throw new Error('下载恢复日志条目过多。');
+    const serialized = `${JSON.stringify(snapshot, null, 2)}\n`;
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_JOURNAL_BYTES) {
+      throw new Error('下载恢复日志超过安全上限。');
+    }
     mkdirSync(path.dirname(this.storagePath), { recursive: true });
     const temporaryPath = `${this.storagePath}.tmp`;
-    const snapshot = [...entries.values()].map((entry) => this.cloneEntry(entry));
-    writeFileSync(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+    writeFileSync(temporaryPath, serialized, {
       encoding: 'utf8',
       mode: 0o600,
     });
@@ -154,13 +193,14 @@ export class DownloadJournal {
       return;
     }
     try {
+      if (statSync(this.storagePath).size > MAX_JOURNAL_BYTES) return;
       const value = JSON.parse(readFileSync(this.storagePath, 'utf8')) as unknown;
-      if (!Array.isArray(value)) {
+      if (!Array.isArray(value) || value.length > MAX_JOURNAL_ENTRIES) {
         return;
       }
       for (const candidate of value) {
         const entry = parseEntry(candidate);
-        if (entry) {
+        if (entry && !this.entries.has(entry.id)) {
           this.entries.set(entry.id, entry);
         }
       }

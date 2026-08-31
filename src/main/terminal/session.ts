@@ -213,6 +213,7 @@ export const terminateSpawnedPowershells = (): void => {
 };
 
 const PTY_KILL_TIMEOUT_MS = 3_000;
+const PTY_EXIT_WAIT_TIMEOUT_MS = PTY_KILL_TIMEOUT_MS + 1_000;
 
 /**
  * Reliable runtime tree termination for a single session. `kill()` only closes the
@@ -231,11 +232,17 @@ export const killWindowsProcessTree = (pid: number): void => {
   );
 };
 
+interface PtyExitWaiter {
+  readonly resolve: (exited: boolean) => void;
+  readonly timer: NodeJS.Timeout;
+}
+
 export class TerminalSession {
   private cols = DEFAULT_TERMINAL_SIZE.cols;
   private generation = 0;
   private pidMarkerBuffer = '';
   private pidMarkerDone = true;
+  private readonly exitWaiters = new Map<number, Set<PtyExitWaiter>>();
   private process?: IPty;
   private rows = DEFAULT_TERMINAL_SIZE.rows;
   private status: TerminalStatus;
@@ -343,20 +350,21 @@ export class TerminalSession {
         }
       });
       terminalProcess.onExit(({ exitCode }) => {
-        if (generation !== this.generation || this.process !== terminalProcess) {
-          return;
-        }
+        if (generation !== this.generation) return;
 
-        this.process = undefined;
-        this.setStatus({
-          cwd: this.status.cwd,
-          id: this.status.id,
-          message: `终端已退出（代码 ${exitCode}）`,
-          phase: 'stopped',
-          ptyGeneration: generation,
-          shell: 'Windows 终端',
-          title: this.status.title,
-        });
+        if (this.process === terminalProcess) {
+          this.process = undefined;
+          this.setStatus({
+            cwd: this.status.cwd,
+            id: this.status.id,
+            message: `终端已退出（代码 ${exitCode}）`,
+            phase: 'stopped',
+            ptyGeneration: generation,
+            shell: 'Windows 终端',
+            title: this.status.title,
+          });
+        }
+        this.resolveExitWaiters(generation, true);
       });
 
       this.setStatus({
@@ -419,6 +427,25 @@ export class TerminalSession {
     return expectedGeneration === this.generation ? this.stop(emitStatus) : undefined;
   }
 
+  /**
+   * Stops one exact generation and waits for node-pty's exit callback. A timeout is a deliberate
+   * failure signal: callers that are about to start another writer must not assume kill() completed.
+   */
+  public async stopIfGenerationAndWait(
+    expectedGeneration: PtyGeneration,
+    emitStatus = true,
+  ): Promise<TerminalStatus | undefined> {
+    if (expectedGeneration !== this.generation) return undefined;
+    const terminalProcess = this.process;
+    if (!terminalProcess) return this.getStatus();
+
+    const exited = this.waitForExit(expectedGeneration, terminalProcess);
+    const status = this.stopIfGeneration(expectedGeneration, emitStatus);
+    if (!status) return undefined;
+    if (!(await exited)) return undefined;
+    return this.getStatus();
+  }
+
   public write(expectedGeneration: PtyGeneration, data: string): boolean {
     if (
       expectedGeneration !== this.generation ||
@@ -468,6 +495,38 @@ export class TerminalSession {
     const holdback = pidMarkerHoldbackLength(stripped);
     this.pidMarkerBuffer = holdback > 0 ? stripped.slice(stripped.length - holdback) : '';
     return holdback > 0 ? stripped.slice(0, stripped.length - holdback) : stripped;
+  }
+
+  private waitForExit(expectedGeneration: PtyGeneration, terminalProcess: IPty): Promise<boolean> {
+    if (expectedGeneration !== this.generation || this.process !== terminalProcess) {
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        const waiters = this.exitWaiters.get(expectedGeneration);
+        waiters?.delete(waiter);
+        if (waiters?.size === 0) this.exitWaiters.delete(expectedGeneration);
+        resolve(false);
+      }, PTY_EXIT_WAIT_TIMEOUT_MS);
+      timer.unref();
+      const waiter: PtyExitWaiter = {
+        resolve: (exited) => {
+          clearTimeout(timer);
+          resolve(exited);
+        },
+        timer,
+      };
+      const waiters = this.exitWaiters.get(expectedGeneration) ?? new Set<PtyExitWaiter>();
+      waiters.add(waiter);
+      this.exitWaiters.set(expectedGeneration, waiters);
+    });
+  }
+
+  private resolveExitWaiters(expectedGeneration: PtyGeneration, exited: boolean): void {
+    const waiters = this.exitWaiters.get(expectedGeneration);
+    if (!waiters) return;
+    this.exitWaiters.delete(expectedGeneration);
+    for (const waiter of waiters) waiter.resolve(exited);
   }
 
   private setStatus(status: TerminalStatus): void {

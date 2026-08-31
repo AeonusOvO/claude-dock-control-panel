@@ -44,7 +44,7 @@ export const createFooterSwitchesModelActions = (
           : option.relaunchReason === 'speed-profile'
             ? `切换到「${option.providerLabel} · ${option.model}」会同时应用该模型已保存的服务速度配置。`
             : `切换到「${option.providerLabel} · ${option.model}」需要重启当前会话。`;
-      await relaunchClaudeSession(summary, { entryId: option.entryId });
+      await relaunchClaudeSession(summary, { modelOptionId: option.id });
       return;
     }
 

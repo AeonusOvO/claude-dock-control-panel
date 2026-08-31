@@ -31,6 +31,7 @@ export interface DownloadRetryControllerHost {
   fail: (task: ActiveDownload, error: Error, preserveJournal?: boolean) => void;
   journal: Pick<DownloadJournal, 'upsert'>;
   notify: () => void;
+  hasActiveDownloadUrl: (url: string, excludedTask?: ActiveDownload) => boolean;
   ownsItemGeneration: (
     task: ActiveDownload,
     item: DownloadItem | undefined,
@@ -105,6 +106,7 @@ export class DownloadRetryController {
   ): void {
     if (
       task.settled ||
+      task.recoveryAwaitingDecision ||
       task.pendingAutoResume ||
       !this.host.ownsItemGeneration(task, item, generation)
     ) {
@@ -188,6 +190,7 @@ export class DownloadRetryController {
     generation = task.itemGeneration,
   ): void {
     if (
+      task.recoveryAwaitingDecision ||
       !task.pendingAutoResume ||
       task.autoResumeGeneration !== generation ||
       !this.host.ownsItemGeneration(task, item, generation)
@@ -307,7 +310,15 @@ export class DownloadRetryController {
     }
     if (task.restored && receivedBytes < task.lastSampleBytes) {
       task.restored = false;
-      task.view.errorMessage = '服务端文件已更新，已重新开始下载。';
+      task.recoveryAwaitingDecision = false;
+      task.resumeOnBind = false;
+      task.recoveryFallback = undefined;
+      this.clearAutoResumeTimer(task);
+      task.view = {
+        ...task.view,
+        errorMessage: '服务端文件已更新，已重新开始下载。',
+        recoveryPending: false,
+      };
     }
     if (now - task.lastSampleAt >= SPEED_SAMPLE_MINIMUM_MS) {
       task.view.bytesPerSecond = exponentialMovingAverage(
@@ -377,11 +388,18 @@ export class DownloadRetryController {
     this.host.pendingRestores.push({ generation, task });
   }
 
-  public queuePendingUrl(task: ActiveDownload, url: string, generation: number): void {
+  public queuePendingUrl(task: ActiveDownload, url: string, generation: number): boolean {
     removePendingOwnership(task, this.host.pendingRestores, this.host.pendingByUrl);
-    const pending = this.host.pendingByUrl.get(url) ?? [];
-    pending.push({ generation, task });
-    this.host.pendingByUrl.set(url, pending);
+    const pending = this.host.pendingByUrl.get(url);
+    if (
+      pending?.some(({ task: candidate, generation: candidateGeneration }) =>
+        this.host.ownsItemGeneration(candidate, undefined, candidateGeneration),
+      )
+    ) {
+      return false;
+    }
+    this.host.pendingByUrl.set(url, [{ generation, task }]);
+    return true;
   }
 
   public holdStartupJournalRollback(task: ActiveDownload, error: Error): void {
@@ -581,7 +599,9 @@ export class DownloadRetryController {
     item: DownloadItem | undefined,
     generation: number,
   ): void {
-    if (!this.host.ownsItemGeneration(task, item, generation)) return;
+    if (task.recoveryAwaitingDecision || !this.host.ownsItemGeneration(task, item, generation)) {
+      return;
+    }
     const savePath = `${task.request.finalPath}.partial`;
     const snapshotPath = `${savePath}${RESUME_SNAPSHOT_SUFFIX}`;
     let offset: number;
@@ -748,7 +768,12 @@ export class DownloadRetryController {
     generation: number,
     preserveRecoverySnapshot = false,
   ): void {
-    if (!this.host.ownsItemGeneration(task, undefined, generation)) return;
+    if (
+      task.recoveryAwaitingDecision ||
+      !this.host.ownsItemGeneration(task, undefined, generation)
+    ) {
+      return;
+    }
     let recoveryBytes: number | undefined;
     try {
       recoveryBytes = snapshotPartialForRecovery(
@@ -787,8 +812,17 @@ export class DownloadRetryController {
     };
     this.host.notify();
     if (!this.host.ownsItemGeneration(task, undefined, requestGeneration)) return;
+    if (this.host.hasActiveDownloadUrl(task.request.url, task)) {
+      // Electron exposes no request identity beyond URL metadata. Wait for the other task to leave
+      // this URL before deleting our snapshot or issuing an ambiguous downloadURL call.
+      this.deferSourceRestart(task, requestGeneration);
+      return;
+    }
     deleteStagingPartial(task.request);
-    this.queuePendingUrl(task, task.request.url, requestGeneration);
+    if (!this.queuePendingUrl(task, task.request.url, requestGeneration)) {
+      this.deferSourceRestart(task, requestGeneration);
+      return;
+    }
     try {
       this.host.electronSession.downloadURL(task.request.url);
       this.armStallTimer(task, task.item, task.itemGeneration);
@@ -915,6 +949,7 @@ export class DownloadRetryController {
       if (task.autoResumeTimer !== timer) return;
       task.autoResumeTimer = undefined;
       if (
+        !task.recoveryAwaitingDecision &&
         task.pendingAutoResume &&
         task.autoResumeGeneration === generation &&
         this.host.ownsItemGeneration(task, item, generation)
@@ -938,6 +973,7 @@ export class DownloadRetryController {
       if (task.autoResumeTimer !== timer) return;
       task.autoResumeTimer = undefined;
       if (
+        task.recoveryAwaitingDecision ||
         !task.pendingAutoResume ||
         task.autoResumeGeneration !== generation ||
         !this.host.ownsItemGeneration(task, undefined, generation)

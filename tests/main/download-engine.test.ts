@@ -136,7 +136,7 @@ describe('download engine', () => {
     rmSync(userDataPath, { force: true, recursive: true });
   });
 
-  it('rolls back a synchronous interrupted-download creation throw without losing recovery state', () => {
+  it('rolls back a synchronous interrupted-download creation throw without losing recovery state', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-restore-sync-'));
     const { entry } = writeRecoveryFixture(userDataPath);
     const createInterruptedDownload = vi.fn(() => {
@@ -153,7 +153,7 @@ describe('download engine', () => {
       userDataPath,
     );
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
 
     expect(createInterruptedDownload).toHaveBeenCalledOnce();
     expect(engine.list()).toEqual([]);
@@ -164,7 +164,7 @@ describe('download engine', () => {
     const preventDefault = vi.fn();
     session.emit('will-download', { preventDefault }, createDownloadItem());
     expect(preventDefault).toHaveBeenCalledOnce();
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
     expect(createInterruptedDownload).toHaveBeenCalledTimes(2);
     expect(engine.list()).toEqual([]);
     expect(busyRegistry.list()).toEqual([]);
@@ -185,7 +185,7 @@ describe('download engine', () => {
       userDataPath,
     );
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
     await vi.waitFor(() => expect(busyRegistry.list()).toEqual([]));
 
     expect(engine.list()).toEqual([]);
@@ -216,7 +216,7 @@ describe('download engine', () => {
       }),
     });
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
     await Promise.resolve();
     expect(() => session.emit('will-download', { preventDefault: vi.fn() }, item)).not.toThrow();
 
@@ -227,7 +227,7 @@ describe('download engine', () => {
     rmSync(userDataPath, { force: true, recursive: true });
   });
 
-  it('drops a recovery record only when a synchronous item violates an explicit safety policy', () => {
+  it('drops a recovery record only when a synchronous item violates an explicit safety policy', async () => {
     const userDataPath = mkdtempSync(path.join(tmpdir(), 'claudedock-restore-policy-'));
     const { savePath } = writeRecoveryFixture(userDataPath);
     const item = createDownloadItem({
@@ -247,7 +247,7 @@ describe('download engine', () => {
       userDataPath,
     );
 
-    engine.restoreInterrupted();
+    await engine.restoreInterrupted();
 
     expect(item.cancel).toHaveBeenCalledOnce();
     expect(engine.list()[0]).toMatchObject({ state: 'failed' });

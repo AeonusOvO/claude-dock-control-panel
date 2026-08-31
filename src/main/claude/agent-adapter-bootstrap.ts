@@ -6,6 +6,8 @@ export interface SdkQuery extends AsyncIterable<unknown> {
   applyFlagSettings(settings: Record<string, unknown>): Promise<void>;
   close(): void;
   initializationResult(): Promise<unknown>;
+  /** Reconnect the SDK control stream after a recoverable transport gap. */
+  reinitialize?: () => Promise<unknown>;
   interrupt(): Promise<unknown>;
   setModel(model?: string): Promise<void>;
   setPermissionMode(mode: string): Promise<void>;

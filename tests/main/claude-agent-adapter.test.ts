@@ -34,7 +34,7 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
   public permissionModes: string[] = [];
   public selectedModels: Array<string | undefined> = [];
   public stoppedTasks: string[] = [];
-  private failure?: Error;
+  protected failure?: Error;
   private readonly pending: Array<{
     reject: (error: Error) => void;
     resolve: (value: IteratorResult<unknown>) => void;
@@ -102,6 +102,16 @@ class FakeSdkQuery implements AsyncIterable<unknown> {
         return new Promise((resolve, reject) => this.pending.push({ reject, resolve }));
       },
     };
+  }
+}
+
+class RecoveringFakeSdkQuery extends FakeSdkQuery {
+  public reinitializeCalls = 0;
+
+  public async reinitialize(): Promise<unknown> {
+    this.reinitializeCalls += 1;
+    this.failure = undefined;
+    return this.initialization;
   }
 }
 
@@ -624,6 +634,74 @@ describe('Claude Agent SDK adapter', () => {
         clientSubmissionId: 'submit-after-fatal',
       }),
     ).rejects.toThrow('原生会话不存在');
+  });
+
+  it('reinitializes a recoverable SDK transport gap and keeps the same session usable', async () => {
+    const query = new RecoveringFakeSdkQuery();
+    let prompt: AsyncIterable<unknown> | undefined;
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.14',
+      queryFactory: async () => (input) => {
+        prompt = input.prompt;
+        return query;
+      },
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+
+    query.fail(new Error('SDK transport briefly disconnected'));
+    await vi.waitFor(() => expect(query.reinitializeCalls).toBe(1));
+
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        message: 'SDK transport briefly disconnected',
+        type: 'conversation.error',
+      }),
+    );
+    await expect(adapter.listCommands(startInput.conversationId)).resolves.not.toEqual([]);
+
+    const iterator = prompt![Symbol.asyncIterator]();
+    await expect(
+      adapter.submit(startInput.conversationId, {
+        blocks: [{ text: '恢复后继续', type: 'text' }],
+        clientSubmissionId: 'submit-after-recovery',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { uuid: 'submit-after-recovery' },
+    });
+
+    await adapter.close(startInput.conversationId);
+  });
+
+  it('ignores unknown SDK session states instead of turning a completed turn busy', async () => {
+    const query = new FakeSdkQuery();
+    const adapter = new ClaudeAgentAdapter({
+      appVersion: '5.0.0-rc.14',
+      queryFactory: async () => () => query,
+      resolveExecutable: async () => 'C:\\Claude\\claude.exe',
+    });
+    const events: ConversationEvent[] = [];
+    adapter.subscribe((event) => events.push(event));
+    await adapter.start(startInput);
+
+    query.emit({ state: 'idle', subtype: 'session_state_changed', type: 'system' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.at(-1)).toMatchObject({ phase: 'idle', type: 'conversation.phase' });
+    const phaseCount = events.filter((event) => event.type === 'conversation.phase').length;
+
+    query.emit({ state: 'future_state', subtype: 'session_state_changed', type: 'system' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.filter((event) => event.type === 'conversation.phase')).toHaveLength(phaseCount);
+
+    query.emit({ state: 'running', subtype: 'session_state_changed', type: 'system' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.at(-1)).toMatchObject({ phase: 'running', type: 'conversation.phase' });
+
+    await adapter.close(startInput.conversationId);
   });
 
   it('surfaces permission requests and only resolves them from the native interaction queue', async () => {

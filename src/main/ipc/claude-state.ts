@@ -163,7 +163,7 @@ export const registerClaudeStateIpc = ({
           if (validatedInput.preset === 'chatgpt-subscription') {
             await requireManagedChatGptGateway().ensureRunning();
           }
-          return runtime.testConnection(status.cwd, validatedInput);
+          return runtime.testConnection(status.cwd, validatedInput, validatedSessionId);
         };
         if (!networkAccess) return await testConnection();
         return await withOfficialProviderAccess(

@@ -242,13 +242,138 @@ describe('session settings interaction', () => {
     expect(measuredTrigger.tabIndex).toBe(0);
 
     controller.setOpen(true);
+    controller.refreshLayout();
+    expect(controller.isOverflowing()).toBe(true);
+    expect(controller.isOpen()).toBe(true);
+    expect(measuredTrigger.getAttribute('aria-expanded')).toBe('true');
+
     availableWidth = 600;
     controller.refreshLayout();
     expect(controller.isOverflowing()).toBe(false);
     expect(controller.isOpen()).toBe(false);
+    expect(measuredTrigger.getAttribute('aria-expanded')).toBe('false');
     expect(measuredTrigger.tabIndex).toBe(-1);
 
     controller.dispose();
+    measured.window.close();
+  });
+
+  it('keeps the live layout state stable while observer notifications share one frame', async () => {
+    const measured = new JSDOM(
+      `<!doctype html><footer class="terminal-footer" data-session-settings-overflow="true">
+        <div class="terminal-footer__core"><button>连接</button><button>资源</button></div>
+        <div class="terminal-footer__secondary" id="measured-region" data-open="true">
+          <button>模型</button><button>速度</button><button>模式</button><button>思考</button>
+        </div>
+        <div class="terminal-footer__group--status">
+          <span id="footer-status">后台待命</span>
+          <button id="measured-trigger" aria-expanded="true">会话设置</button>
+        </div>
+      </footer>`,
+      { pretendToBeVisual: true },
+    );
+    const footer = measured.window.document.querySelector<HTMLElement>('footer')!;
+    const measuredRegion = measured.window.document.getElementById('measured-region')!;
+    const measuredTrigger = measured.window.document.getElementById(
+      'measured-trigger',
+    ) as HTMLButtonElement;
+    Object.defineProperty(footer, 'clientWidth', { configurable: true, value: 280 });
+    for (const child of measured.window.document.querySelectorAll<HTMLElement>(
+      'button, #footer-status',
+    )) {
+      Object.defineProperty(child, 'scrollWidth', {
+        configurable: true,
+        value: child === measuredTrigger ? 90 : 50,
+      });
+    }
+
+    const animationFrames: FrameRequestCallback[] = [];
+    let nextFrameHandle = 1;
+    Object.defineProperty(measured.window, 'requestAnimationFrame', {
+      configurable: true,
+      value: (callback: FrameRequestCallback): number => {
+        animationFrames.push(callback);
+        return nextFrameHandle++;
+      },
+    });
+    const cancelledFrames: number[] = [];
+    Object.defineProperty(measured.window, 'cancelAnimationFrame', {
+      configurable: true,
+      value: (handle: number): void => {
+        cancelledFrames.push(handle);
+      },
+    });
+    const resizeCallbacks: ResizeObserverCallback[] = [];
+    class TestResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallbacks.push(callback);
+      }
+
+      observe(): void {}
+
+      disconnect(): void {}
+    }
+    const mutationCallbacks: MutationCallback[] = [];
+    class TestMutationObserver {
+      constructor(callback: MutationCallback) {
+        mutationCallbacks.push(callback);
+      }
+
+      observe(): void {}
+
+      disconnect(): void {}
+    }
+    const NativeMutationObserver = measured.window.MutationObserver;
+    Object.defineProperty(measured.window, 'ResizeObserver', {
+      configurable: true,
+      value: TestResizeObserver,
+    });
+    Object.defineProperty(measured.window, 'MutationObserver', {
+      configurable: true,
+      value: TestMutationObserver,
+    });
+
+    const liveAttributeRecords: MutationRecord[] = [];
+    const liveAttributeObserver = new NativeMutationObserver((records) => {
+      liveAttributeRecords.push(...records);
+    });
+    liveAttributeObserver.observe(footer, {
+      attributeFilter: ['data-session-settings-overflow'],
+      attributeOldValue: true,
+      attributes: true,
+    });
+
+    const controller = installSessionSettings({
+      document: measured.window.document,
+      region: measuredRegion,
+      trigger: measuredTrigger,
+      window: measured.window,
+    });
+    expect(controller.isOverflowing()).toBe(true);
+    expect(controller.isOpen()).toBe(true);
+    const frameCountAfterInstall = animationFrames.length;
+
+    controller.refreshLayout();
+    await Promise.resolve();
+    expect(liveAttributeRecords).toHaveLength(0);
+    expect(footer.dataset.sessionSettingsOverflow).toBe('true');
+
+    resizeCallbacks[0]!([], {} as ResizeObserver);
+    mutationCallbacks[0]!([], {} as MutationObserver);
+    measured.window.dispatchEvent(new measured.window.Event('resize'));
+    expect(animationFrames).toHaveLength(frameCountAfterInstall + 1);
+
+    const frame = animationFrames.at(-1)!;
+    frame(0);
+    expect(controller.isOverflowing()).toBe(true);
+    expect(controller.isOpen()).toBe(true);
+    expect(footer.dataset.sessionSettingsOverflow).toBe('true');
+
+    resizeCallbacks[0]!([], {} as ResizeObserver);
+    expect(animationFrames).toHaveLength(frameCountAfterInstall + 2);
+    controller.dispose();
+    expect(cancelledFrames).toContain(nextFrameHandle - 1);
+    liveAttributeObserver.disconnect();
     measured.window.close();
   });
 });

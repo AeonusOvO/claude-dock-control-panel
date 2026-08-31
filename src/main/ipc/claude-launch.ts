@@ -183,6 +183,12 @@ export const executeClaudeRelaunch = async ({
       'continue',
       input.permissionMode,
       authorization,
+      input.model === undefined && input.speed === undefined
+        ? undefined
+        : {
+            ...(input.model === undefined ? {} : { model: input.model }),
+            ...(input.speed === undefined ? {} : { speed: input.speed }),
+          },
     );
     launchToken = prepared.token;
     signal.throwIfAborted();
@@ -487,10 +493,15 @@ const registerClaudeRelaunchIpc = ({
       const validatedInput = validateClaudeRelaunchInput(input);
       const status = workspace.getStatus(validatedSessionId);
       const runtime = requireClaudeRuntime();
+      const effectiveInput = runtime.relaunchInputForModelOption(
+        validatedSessionId,
+        status.cwd,
+        validatedInput,
+      );
       const intent = launchPreflightDecisions.beginLaunch(validatedSessionId);
       const descriptor: ClaudeLaunchDescriptor = Object.freeze({
         cwd: status.cwd,
-        input: validatedInput,
+        input: effectiveInput,
         kind: 'relaunch',
         sessionId: validatedSessionId,
       });
@@ -499,12 +510,12 @@ const registerClaudeRelaunchIpc = ({
       const captureBaseline = (operation: SessionOperationStamp): ClaudeLaunchDecisionBaseline =>
         Object.freeze({
           configuration: runtime.captureLaunchConfigurationBaseline(status.cwd, validatedSessionId),
-          ...(validatedInput.entryId === undefined
+          ...(effectiveInput.entryId === undefined
             ? {}
             : {
                 history: runtime.captureConnectionHistoryBaseline(
                   status.cwd,
-                  validatedInput.entryId,
+                  effectiveInput.entryId,
                 ),
               }),
           operation,
@@ -579,7 +590,7 @@ const registerClaudeRelaunchIpc = ({
               authorizeNestedProvider: authorizeProvider,
               cleanup: failedRuntimeLaunchCleanupDependencies,
               cwd: status.cwd,
-              input: validatedInput,
+              input: effectiveInput,
               restartRuntimeTerminal,
               runClaudeProjectConfigTransaction,
               runtime,

@@ -3122,6 +3122,19 @@ body[data-agent-runtime='codex'] .codex-workbench-page {
   text-align: left;
 }
 
+.footer-menu__section-heading {
+  color: var(--text-mute);
+  font-size: var(--type-micro-size);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.02em;
+  margin: var(--s-2) 0 var(--s-0-5);
+  padding: 0 var(--s-2);
+}
+
+.footer-menu__section-heading:first-child {
+  margin-top: var(--s-0-5);
+}
+
 .footer-menu button strong {
   font-size: var(--type-body-size);
   font-weight: var(--fw-medium);

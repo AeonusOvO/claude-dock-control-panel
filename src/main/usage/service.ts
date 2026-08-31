@@ -69,6 +69,7 @@ export class ModelUsageService {
     selectionRevision: number;
     startedRevision: number;
     accountChanging: boolean;
+    force: boolean;
   };
   private quotaRefreshPending = false;
   private quotaRefreshForced = false;
@@ -158,6 +159,7 @@ export class ModelUsageService {
               selectionRevision: this.quotaSelectionRevision,
               startedRevision: this.quotaReadableRevision,
               accountChanging: false,
+              force: true,
             }
           : undefined;
       this.quotaRefreshPending = false;
@@ -330,15 +332,20 @@ export class ModelUsageService {
     this.quotaGatewayBusy = false;
     this.quotaReadableRevision += 1;
     const retry = this.quotaRetry;
+    if (!retry) {
+      // A normal invalidation without an active read does not bypass the ordinary 60-second poll
+      // throttle; the stable signal merely gives the next refresh a chance to run.
+      this.requestQuotaRefresh(false);
+      return;
+    }
     if (
-      !retry ||
       retry.epoch !== this.journal.epoch ||
       retry.selectionRevision !== this.quotaSelectionRevision ||
       retry.startedRevision >= this.quotaReadableRevision
     )
       return;
     this.quotaRetry = undefined;
-    this.requestQuotaRefresh(true);
+    this.requestQuotaRefresh(retry.force || retry.accountChanging);
   }
 
   private handleQuotaInvalidated(accountChanging = false): void {
@@ -355,6 +362,7 @@ export class ModelUsageService {
         selectionRevision: this.quotaSelectionRevision,
         startedRevision: retry?.startedRevision ?? this.quotaReadableRevision,
         accountChanging: accountLifecycleActive,
+        force: retry?.force === true || this.quotaRun !== undefined || accountChanging,
       };
     }
     if (this.windows?.length) {
@@ -374,16 +382,18 @@ export class ModelUsageService {
     resource?: ModelQuotaResult,
   ): void {
     const retry = this.quotaRetry;
+    const effectiveAccountChanging = Boolean(retry?.accountChanging || accountChanging);
     this.quotaRetry = {
       epoch,
       selectionRevision,
       startedRevision,
-      accountChanging: Boolean(retry?.accountChanging || accountChanging),
+      accountChanging: effectiveAccountChanging,
+      force: Boolean(retry?.force || accountChanging),
     };
     if (resource) this.applyQuota(resource);
     if (this.quotaReadableRevision > startedRevision) {
       this.quotaRetry = undefined;
-      this.requestQuotaRefresh(true);
+      this.requestQuotaRefresh(effectiveAccountChanging);
     }
   }
 
@@ -438,6 +448,7 @@ export class ModelUsageService {
           selectionRevision: this.quotaSelectionRevision,
           startedRevision: this.quotaReadableRevision,
           accountChanging: false,
+          force: true,
         };
       }
       this.markQuotaStaleIfNeeded();

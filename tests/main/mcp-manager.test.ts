@@ -12,8 +12,14 @@ import { CURATED_MCP_SERVERS } from '../../src/shared/ui/mcp-catalog';
 import { createRendererHarness } from '../helpers/renderer-harness';
 
 const childProcessHarness = vi.hoisted(() => ({ spawn: vi.fn() }));
+const windowsCommandHarness = vi.hoisted(() => ({
+  runWindowsCommand: vi.fn(async () => ''),
+}));
 
 vi.mock('node:child_process', () => ({ spawn: childProcessHarness.spawn }));
+vi.mock('../../src/main/infra/windows-command', () => ({
+  runWindowsCommand: windowsCommandHarness.runWindowsCommand,
+}));
 
 const REGISTRY_ORIGIN = 'https://registry.modelcontextprotocol.io';
 const REGISTRY_PATH = '/v0.1/servers';
@@ -118,6 +124,7 @@ const createCatalogFixture = (prefix: string) => {
 
 beforeEach(() => {
   childProcessHarness.spawn.mockClear();
+  windowsCommandHarness.runWindowsCommand.mockClear();
 });
 
 afterEach(() => {
@@ -636,5 +643,44 @@ describe('MCP discovery', () => {
     expect(backup).toBeDefined();
     await manager.restoreBackup(backup!.id, cwd);
     expect(readFileSync(configPath)).toEqual(original);
+  });
+
+  it('cleans stale project toggle names after removing a project-scoped server', async () => {
+    const { cwd, home, userData } = createCatalogFixture('claudedock-mcp-remove-cleanup-');
+    const projectKey = cwd.replaceAll('\\', '/');
+    const configPath = path.join(home, '.claude.json');
+    writeFileSync(
+      configPath,
+      `${JSON.stringify({
+        projects: {
+          [projectKey]: {
+            disabledMcpjsonServers: ['removedServer'],
+            enabledMcpjsonServers: ['unrelatedServer'],
+          },
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      path.join(cwd, '.mcp.json'),
+      JSON.stringify({
+        mcpServers: { unrelatedServer: { command: 'node', type: 'stdio' } },
+      }),
+    );
+    const { manager } = managerWithRegistry(home, userData, registryFetch({ servers: [] }));
+
+    await expect(
+      manager.remove({ cwd, name: 'removedServer', scope: 'project' }),
+    ).resolves.toContain('已从 project 作用域移除');
+    expect(windowsCommandHarness.runWindowsCommand).toHaveBeenCalledWith(
+      'claude',
+      ['mcp', 'remove', '--scope', 'project', 'removedServer'],
+      expect.objectContaining({ cwd }),
+    );
+    expect(JSON.parse(readFileSync(configPath, 'utf8')).projects[projectKey]).toEqual({
+      disabledMcpjsonServers: [],
+      enabledMcpjsonServers: ['unrelatedServer'],
+    });
+
+    expect(() => manager.previewToggle(cwd, 'unrelatedServer', false)).not.toThrow();
   });
 });

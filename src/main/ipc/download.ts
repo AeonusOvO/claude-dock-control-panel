@@ -1,6 +1,6 @@
 import { CHANNELS } from '../../shared/ipc/channels';
 import { ipcMain } from 'electron';
-import { validateDownloadTaskId } from './validation';
+import { validateDownloadRecoveryToken, validateDownloadTaskId } from './validation';
 import type { MainGuards } from './guards';
 
 export interface DownloadIpcDependencies {
@@ -18,14 +18,26 @@ export const registerDownloadIpc = ({
     validateSender(event);
     return requireDownloadEngine().listRecoveryPending();
   });
-  ipcMain.handle(CHANNELS.DOWNLOAD_RECOVERY_RESUME, (event, taskId: unknown) => {
-    validateSender(event);
-    return requireDownloadEngine().resumeRecovery(validateDownloadTaskId(taskId));
-  });
-  ipcMain.handle(CHANNELS.DOWNLOAD_RECOVERY_DISCARD, (event, taskId: unknown) => {
-    validateSender(event);
-    return requireDownloadEngine().discardRecovery(validateDownloadTaskId(taskId));
-  });
+  ipcMain.handle(
+    CHANNELS.DOWNLOAD_RECOVERY_RESUME,
+    (event, taskId: unknown, recoveryToken: unknown) => {
+      validateSender(event);
+      return requireDownloadEngine().resumeRecovery(
+        validateDownloadTaskId(taskId),
+        validateDownloadRecoveryToken(recoveryToken),
+      );
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.DOWNLOAD_RECOVERY_DISCARD,
+    (event, taskId: unknown, recoveryToken: unknown) => {
+      validateSender(event);
+      return requireDownloadEngine().discardRecovery(
+        validateDownloadTaskId(taskId),
+        validateDownloadRecoveryToken(recoveryToken),
+      );
+    },
+  );
   ipcMain.handle(CHANNELS.DOWNLOAD_PAUSE, (event, taskId: unknown) => {
     validateSender(event);
     return requireDownloadEngine().pause(validateDownloadTaskId(taskId));

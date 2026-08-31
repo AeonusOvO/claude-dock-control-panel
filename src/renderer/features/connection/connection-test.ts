@@ -68,7 +68,7 @@ export const createConnectionTestActions = (
       if (result.ok && saveOnSuccess) {
         if (await dependencies.saveClaudeConfig('keep')) dependencies.connectionSucceeded();
       } else if (activeStatus) {
-        void dependencies.loadClaudeState(activeStatus.id);
+        await dependencies.loadClaudeState(activeStatus.id);
       }
     } catch (error) {
       elements.connectionTestResult.dataset.tone = 'error';
@@ -87,9 +87,12 @@ export const createConnectionTestActions = (
       elements.testClaudeConnectionButton.setAttribute('aria-busy', 'false');
       elements.testClaudeConnectionButton.textContent = originalLabel;
       dependencies.syncConnectionInteractivity();
-      const latestState = activeStatus ? dependencies.getClaudeState(activeStatus.id) : undefined;
-      if (latestState) {
-        dependencies.renderClaudeState(latestState, true, false);
+      if (activeStatus) {
+        await dependencies.loadClaudeState(activeStatus.id);
+        const latestState = dependencies.getClaudeState(activeStatus.id);
+        if (latestState) {
+          dependencies.renderClaudeState(latestState, true, false);
+        }
       }
     }
   };

@@ -201,6 +201,18 @@ export interface ClaudeRouteHealth {
   tone: ClaudeRouteHealthTone;
 }
 
+export type ClaudeConnectionReadiness = 'connected' | 'failed' | 'unknown';
+
+export type ClaudeConnectionReadinessSource = 'connection-test' | 'runtime';
+
+/** Sanitized evidence that the current Claude model route can or cannot serve requests. */
+export interface ClaudeConnectionState {
+  detail?: string;
+  observedAt?: number;
+  readiness: ClaudeConnectionReadiness;
+  source?: ClaudeConnectionReadinessSource;
+}
+
 /** Safe, credential-free identity reported by the installed Claude Code CLI. */
 export interface ClaudeOfficialAuthState {
   accountIdentity?: string;
@@ -215,6 +227,8 @@ export interface ClaudeProjectState {
   /** Whether the next launch arms `bypassPermissions` so Shift+Tab can reach it. */
   allowBypassPermissions: boolean;
   config: ClaudeConfigView;
+  /** Current model/route evidence; independent from network preflight and advisory route health. */
+  connection?: ClaudeConnectionState;
   cwd: string;
   /**
    * Effort last requested from the status bar this session. Shown until the status line reports the
@@ -354,18 +368,39 @@ export interface ClaudeConnectionTestResult extends FailureMetadata {
   tone: ClaudeConnectionTestTone;
 }
 
+export type ClaudeModelOptionSection = 'current-platform' | 'history';
+
+export type ClaudeModelOptionSource = 'active' | 'discovered' | 'fallback' | 'history';
+
+export type ClaudeModelOptionAction = 'switch' | 'relaunch';
+
+export type ClaudeModelSectionStatus = 'discovered' | 'fallback' | 'degraded' | 'history';
+
+export interface ClaudeModelSection {
+  detail?: string;
+  id: ClaudeModelOptionSection;
+  label: string;
+  status: ClaudeModelSectionStatus;
+}
+
 /**
  * One switchable model in the status-bar picker. `sameEndpoint` decides the mechanism: same
  * endpoint switches inside the live conversation via `/model`, otherwise the session must relaunch
  * because the base URL and credential are baked into the PTY environment.
  */
 export interface ClaudeModelOption {
+  /** Main-process action chosen from the complete, validated option descriptor. */
+  action?: ClaudeModelOptionAction;
   /** Present when the option came from connection history; needed to replay that entry. */
   entryId?: string;
   id: string;
   label: string;
   model: string;
   providerLabel: string;
+  /** Main-process section used to render the option in the picker. */
+  section?: ClaudeModelOptionSection;
+  /** How the model entered the section; never supplied by the renderer. */
+  source?: ClaudeModelOptionSource;
   /** A different connection or serving-speed profile is baked into the PTY and needs a relaunch. */
   requiresRelaunch: boolean;
   relaunchReason?: 'connection' | 'speed-profile';
@@ -375,6 +410,8 @@ export interface ClaudeModelOption {
 export interface ClaudeModelOptions {
   activeModel: string;
   options: ClaudeModelOption[];
+  /** Main-process section metadata; absent only in legacy renderer fixtures. */
+  sections?: ClaudeModelSection[];
 }
 
 /**
@@ -385,6 +422,12 @@ export interface ClaudeModelOptions {
 export interface ClaudeRelaunchInput {
   /** Run `/compact` and wait for the PostCompact signal before restarting. */
   compactFirst: boolean;
+  /** Main-process model-picker token; resolved to a history entry without exposing that entry to the renderer. */
+  modelOptionId?: string;
+  /** Main-process-only model target resolved from a current-platform option. */
+  model?: string;
+  /** Main-process-only serving-speed target resolved from a current-platform option. */
+  speed?: ModelSpeedMode;
   /** Connection-history entry to apply first; omit to keep the current configuration. */
   entryId?: string;
   /** Permission mode to start the new session in; omit to keep the project default. */

@@ -5,11 +5,11 @@ import {
   existsSync,
   fsyncSync,
   openSync,
-  readSync,
   renameSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
+import { open as openAsync } from 'node:fs/promises';
 import type { DownloadTaskView } from '../../shared/contracts';
 import type { DownloadJournalEntry } from './journal';
 import type { DownloadRequest, DownloadResult } from './request';
@@ -63,6 +63,10 @@ export interface ActiveDownload {
   startupCreatePending: boolean;
   /** True until an app-start recovery item has fully bound. */
   startupItemBindPending: boolean;
+  /** Opaque in-memory token binding renderer recovery decisions to this task instance. */
+  recoveryToken?: string;
+  /** Prevents a late startup-create rejection from tearing down a recovery prompt after native resume failed. */
+  startupResumeFailed: boolean;
   /** Immutable metadata restored if Electron create/bind fails after mutating the live task. */
   startupJournalEntry?: DownloadJournalEntry;
   /** True until the user explicitly chooses to resume or discard an interrupted task. */
@@ -161,20 +165,26 @@ export const deleteStagingPartial = (request: DownloadRequest): void => {
 
 const recoveryComparisonChunkBytes = 64 * 1024;
 
-const sharesRecoveryPrefix = (leftPath: string, rightPath: string, bytes: number): boolean => {
-  let leftHandle: number | undefined;
-  let rightHandle: number | undefined;
+const sharesRecoveryPrefix = async (
+  leftPath: string,
+  rightPath: string,
+  bytes: number,
+): Promise<boolean> => {
+  let leftHandle: Awaited<ReturnType<typeof openAsync>> | undefined;
+  let rightHandle: Awaited<ReturnType<typeof openAsync>> | undefined;
   try {
-    leftHandle = openSync(leftPath, 'r');
-    rightHandle = openSync(rightPath, 'r');
+    leftHandle = await openAsync(leftPath, 'r');
+    rightHandle = await openAsync(rightPath, 'r');
     const leftBuffer = Buffer.alloc(recoveryComparisonChunkBytes);
     const rightBuffer = Buffer.alloc(recoveryComparisonChunkBytes);
     let offset = 0;
     while (offset < bytes) {
       const length = Math.min(recoveryComparisonChunkBytes, bytes - offset);
-      const leftRead = readSync(leftHandle, leftBuffer, 0, length, offset);
-      const rightRead = readSync(rightHandle, rightBuffer, 0, length, offset);
-      if (leftRead !== length || rightRead !== length) return false;
+      const [leftRead, rightRead] = await Promise.all([
+        leftHandle.read(leftBuffer, 0, length, offset),
+        rightHandle.read(rightBuffer, 0, length, offset),
+      ]);
+      if (leftRead.bytesRead !== length || rightRead.bytesRead !== length) return false;
       if (!leftBuffer.subarray(0, length).equals(rightBuffer.subarray(0, length))) return false;
       offset += length;
     }
@@ -182,18 +192,19 @@ const sharesRecoveryPrefix = (leftPath: string, rightPath: string, bytes: number
   } catch {
     return false;
   } finally {
-    if (leftHandle !== undefined) closeSync(leftHandle);
-    if (rightHandle !== undefined) closeSync(rightHandle);
+    await Promise.allSettled([leftHandle?.close(), rightHandle?.close()]);
   }
 };
 
 export type RecoverySnapshotPromotion = 'blocked' | 'none' | 'ready';
 
-export const promoteRecoverySnapshot = (
+export const promoteRecoverySnapshot = async (
   userDataPath: string,
   entry: DownloadJournalEntry,
-): RecoverySnapshotPromotion => {
+): Promise<RecoverySnapshotPromotion> => {
   if (
+    !Number.isSafeInteger(entry.receivedBytes) ||
+    entry.receivedBytes < 0 ||
     !isPathWithinUserData(userDataPath, entry.finalPath) ||
     !isSafePartialPath(userDataPath, entry.savePath)
   ) {
@@ -202,13 +213,21 @@ export const promoteRecoverySnapshot = (
   const snapshotPath = `${entry.savePath}${RESUME_SNAPSHOT_SUFFIX}`;
   if (!existsSync(snapshotPath)) return 'none';
   try {
-    if (statSync(snapshotPath).size < entry.receivedBytes) return 'none';
+    const snapshotBytes = statSync(snapshotPath).size;
+    if (snapshotBytes < entry.receivedBytes || snapshotBytes > entry.maxBytes) {
+      // A snapshot shorter than the journal cannot satisfy the recorded offset. It must not remain
+      // available for a later rebind where it could silently roll progress backwards.
+      unlinkSync(snapshotPath);
+      return 'none';
+    }
     // A current partial is usable only when its recorded prefix matches the durable sibling
     // snapshot. Length alone cannot prove that a stale or replaced file belongs to this task.
+    const currentBytes = existsSync(entry.savePath) ? statSync(entry.savePath).size : 0;
     if (
       existsSync(entry.savePath) &&
-      statSync(entry.savePath).size >= entry.receivedBytes &&
-      sharesRecoveryPrefix(entry.savePath, snapshotPath, entry.receivedBytes)
+      currentBytes >= entry.receivedBytes &&
+      currentBytes >= snapshotBytes &&
+      (await sharesRecoveryPrefix(entry.savePath, snapshotPath, entry.receivedBytes))
     ) {
       unlinkSync(snapshotPath);
       return 'ready';
@@ -230,6 +249,7 @@ export const snapshotPartialForRecovery = (
   request: DownloadRequest,
   strict: boolean,
   preserveExisting = false,
+  minimumBytes = 0,
 ): number | undefined => {
   const savePath = `${request.finalPath}.partial`;
   const snapshotPath = `${savePath}${RESUME_SNAPSHOT_SUFFIX}`;
@@ -237,9 +257,20 @@ export const snapshotPartialForRecovery = (
   let existingSnapshotBytes: number | undefined;
   try {
     existingSnapshotBytes = statSync(snapshotPath).size;
-    if (preserveExisting) return existingSnapshotBytes;
-  } catch {
-    // Most first attempts do not have a prior snapshot.
+    if (existingSnapshotBytes > request.maxBytes) {
+      existingSnapshotBytes = undefined;
+      throw new Error('恢复快照超过安全上限。');
+    }
+    if (preserveExisting && existingSnapshotBytes >= minimumBytes) return existingSnapshotBytes;
+    if (existingSnapshotBytes < minimumBytes) {
+      // A stale snapshot must not win over a newer live partial or be returned as a lower offset.
+      unlinkSync(snapshotPath);
+      existingSnapshotBytes = undefined;
+    }
+  } catch (error) {
+    if (strict && error instanceof Error && error.message === '恢复快照超过安全上限。') throw error;
+    // Most first attempts do not have a prior snapshot. An undersized sibling is also discarded
+    // above; a locked stale sibling remains non-authoritative and will be retried later.
   }
   try {
     try {
@@ -255,14 +286,22 @@ export const snapshotPartialForRecovery = (
       closeSync(descriptor);
     }
     renameSync(temporaryPath, snapshotPath);
-    return statSync(snapshotPath).size;
+    const snapshotBytes = statSync(snapshotPath).size;
+    if (snapshotBytes < minimumBytes || snapshotBytes > request.maxBytes) {
+      unlinkSync(snapshotPath);
+      if (strict) throw new Error('恢复快照不满足安全边界。');
+      return undefined;
+    }
+    return snapshotBytes;
   } catch (error) {
     try {
       unlinkSync(temporaryPath);
     } catch {
       // Preserve the original error; stale temporary bytes are never considered recoverable.
     }
-    if (existingSnapshotBytes !== undefined) return existingSnapshotBytes;
+    if (existingSnapshotBytes !== undefined && existingSnapshotBytes >= minimumBytes) {
+      return existingSnapshotBytes;
+    }
     if (strict && existsSync(savePath)) throw error;
     return undefined;
   }

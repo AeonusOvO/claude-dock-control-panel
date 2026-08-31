@@ -11,6 +11,7 @@ import {
   validateCodexLoginMethod,
   validateConversationId,
   validateDevelopmentRuntime,
+  validateDownloadRecoveryToken,
   validateDownloadTaskId,
   validateExternalUrl,
   validateHistoryEntryId,
@@ -59,8 +60,25 @@ describe('shared IPC schemas', () => {
       'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     );
     expect(validateDownloadTaskId('download:item-1')).toBe('download:item-1');
+    expect(validateDownloadRecoveryToken('00000000-0000-4000-8000-000000000001')).toBe(
+      '00000000-0000-4000-8000-000000000001',
+    );
+    expect(() => validateDownloadRecoveryToken('stale-token')).toThrow('下载恢复标识无效。');
     expect(validateHistoryEntryId('history-a1-b2')).toBe('history-a1-b2');
     expect(validateModelOptionId('history:current')).toBe('history:current');
+  });
+
+  it('requires recovery decisions to carry the task-bound token', () => {
+    const token = '00000000-0000-4000-8000-000000000001';
+    expect(
+      parseIpcRequestArgs(CHANNELS.DOWNLOAD_RECOVERY_RESUME, ['download:item-1', token]),
+    ).toEqual(['download:item-1', token]);
+    expect(() =>
+      parseIpcRequestArgs(CHANNELS.DOWNLOAD_RECOVERY_RESUME, ['download:item-1']),
+    ).toThrow();
+    expect(() =>
+      parseIpcRequestArgs(CHANNELS.DOWNLOAD_RECOVERY_DISCARD, ['download:item-1', 'stale-token']),
+    ).toThrow();
   });
 
   it('preserves native submit extensions while rejecting renderer authority fields', () => {

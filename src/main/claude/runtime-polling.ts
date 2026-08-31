@@ -119,7 +119,7 @@ export abstract class ClaudeRuntimePolling extends ClaudeRuntimeControls {
       ) {
         return;
       }
-      void this.restoreEffortAfterCompatibilityTurn(runtime);
+      void this.restoreEffortAfterCompatibilityTurn(runtime).catch(() => {});
     } catch {
       // The helper replaces the file atomically; retry on the next poll.
     }
@@ -258,7 +258,7 @@ export abstract class ClaudeRuntimePolling extends ClaudeRuntimeControls {
       }
       this.captureConversationPreferences(runtime);
       this.replayRememberedEffort(runtime);
-      void this.emitState(runtime);
+      void this.emitState(runtime).catch(() => {});
     } catch {
       // The status-line helper replaces the file atomically; retry on the next poll.
     }

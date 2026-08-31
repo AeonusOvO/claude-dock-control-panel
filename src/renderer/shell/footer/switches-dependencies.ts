@@ -42,7 +42,11 @@ export interface FooterSwitchesDeps {
   ) => boolean;
   relaunchClaudeSession: (
     summary: string,
-    input: { entryId?: string; permissionMode?: ClaudePermissionMode },
+    input: {
+      entryId?: string;
+      modelOptionId?: string;
+      permissionMode?: ClaudePermissionMode;
+    },
   ) => Promise<void>;
   renderActiveConversation: () => void;
   renderClaudeLaunchResult: (

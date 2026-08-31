@@ -213,6 +213,7 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
     setConversationLaunchGuard: vi.fn(() => calls.push('claude.setConversationLaunchGuard')),
     setConversationModelResolvers: vi.fn(() => calls.push('claude.setConversationModelResolvers')),
     setLaunchAdmissionGuard: vi.fn(() => calls.push('claude.setLaunchAdmissionGuard')),
+    setModelDiscoveryResolvers: vi.fn(() => calls.push('claude.setModelDiscoveryResolvers')),
     setSubscriptionRelayStarter: vi.fn(() => calls.push('claude.setSubscriptionRelayStarter')),
     setSubscriptionAccountIdentityResolver: vi.fn(),
     setPermissionRequestHook: vi.fn(() => calls.push('claude.setPermissionRequestHook')),
@@ -429,7 +430,9 @@ export const createMainHarness = async (options: MainHarnessOptions = {}): Promi
         modelMismatchBehavior: 'ask',
       },
       managedChatGptContextWindowMode: 'standard',
+      modelUsageFloatingVisible: false,
     })),
+    set: vi.fn(),
   };
 
   const dependencies = createDependencyContainer(

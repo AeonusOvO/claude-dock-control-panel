@@ -428,13 +428,16 @@ export class NativeConversationService {
     }
   }
 
+  // eslint-disable-next-line max-lines-per-function -- transfer coordinates two writer lifecycles and recovery.
   public async transferToTerminal(
     conversationId: string,
     draft: ConversationSubmitInput | undefined,
-    startTerminal: (identity: {
-      conversationId: string;
-      projectPath: string;
-    }) => Promise<{ owner: ConversationOwner; terminalSessionId: string }>,
+    startTerminal: (identity: { conversationId: string; projectPath: string }) => Promise<{
+      owner: ConversationOwner;
+      /** Resolves false when the exact terminal writer could not be confirmed stopped. */
+      stop?: () => Promise<boolean | void> | boolean | void;
+      terminalSessionId: string;
+    }>,
     allowInterrupt = false,
     authorizeTerminalLaunch?: <T>(
       identity: {
@@ -507,14 +510,24 @@ export class NativeConversationService {
         current.owner.ownerId,
       );
       current.transfer = transfer;
+      let terminal:
+        | {
+            owner: ConversationOwner;
+            /** Resolves false when the exact terminal writer could not be confirmed stopped. */
+            stop?: () => Promise<boolean | void> | boolean | void;
+            terminalSessionId: string;
+          }
+        | undefined;
+      let terminalRecoveryReserved = false;
       try {
         await this.options.adapter.close(conversationId);
         this.options.assertLaunchAdmissionAllowed?.();
-        const terminal = await startTerminal({
+        terminal = await startTerminal({
           conversationId,
           projectPath: current.owner.projectPath,
         });
-        this.options.ownerRegistry.commitTransfer(transfer, terminal.owner);
+        // Keep commitTransfer as the final fallible state mutation. If persistence fails, the new
+        // terminal must be stopped while the transfer token still lets us restore the native owner.
         this.options.recoveryStore.reserve({
           conversationId,
           launch: current.launch,
@@ -522,6 +535,9 @@ export class NativeConversationService {
           projectPath: current.owner.projectPath,
           runtime: this.options.runtime,
         });
+        terminalRecoveryReserved = true;
+        this.options.ownerRegistry.commitTransfer(transfer, terminal.owner);
+        if (current.turnCompletion) this.finishTurn(current, current.turnCompletion);
         this.active.delete(conversationId);
         return {
           message: draft ? '已保存草稿并切换到高级终端。' : '已切换到高级终端。',
@@ -530,14 +546,122 @@ export class NativeConversationService {
           terminalSessionId: terminal.terminalSessionId,
         };
       } catch (error) {
+        let terminalStopError: unknown;
+        if (terminal) {
+          if (!terminal.stop) {
+            terminalStopError = new Error('高级终端没有提供安全清理句柄。');
+          } else {
+            try {
+              const stopped = await terminal.stop();
+              if (stopped === false) {
+                throw new Error('高级终端未能确认已停止。', { cause: error });
+              }
+            } catch (stopError) {
+              terminalStopError = stopError;
+            }
+          }
+        }
+        if (terminalStopError && terminal) {
+          // Never start the native writer while the terminal writer may still be alive. If it cannot
+          // be stopped, make the terminal owner authoritative instead of creating duplicate writers.
+          try {
+            this.options.ownerRegistry.commitTransfer(transfer, {
+              ...terminal.owner,
+              phase: 'active',
+            });
+            if (current.turnCompletion) this.finishTurn(current, current.turnCompletion);
+            this.active.delete(conversationId);
+            current.transfer = undefined;
+            if (!terminalRecoveryReserved) {
+              try {
+                this.options.recoveryStore.reserve({
+                  conversationId,
+                  launch: current.launch,
+                  ownerKind: 'terminal',
+                  projectPath: current.owner.projectPath,
+                  runtime: this.options.runtime,
+                });
+              } catch {
+                // The terminal remains the safer owner even if its recovery row cannot be refreshed.
+              }
+            }
+            return {
+              ...reportConversationFailure(
+                'environment',
+                `${error instanceof Error ? error.message : '高级终端切换失败'}；高级终端未能停止，已保留高级终端。`,
+                error,
+              ),
+              ok: false,
+              snapshot: current.snapshot,
+              terminalSessionId: terminal.terminalSessionId,
+            };
+          } catch {
+            this.options.ownerRegistry.rollbackTransfer(transfer);
+            this.release(current);
+          }
+        }
+
+        let nativeStartAttempted = false;
+        let nativeCloseError: unknown;
         try {
           this.options.assertLaunchAdmissionAllowed?.();
+          // Persist the native owner before starting its writer. This makes persistence failure
+          // recoverable without ever leaving a live adapter whose owner row still says terminal.
+          if (terminalRecoveryReserved) {
+            this.options.recoveryStore.reserve({
+              conversationId,
+              launch: current.launch,
+              ownerKind: 'native',
+              projectPath: current.owner.projectPath,
+              runtime: this.options.runtime,
+            });
+          }
+          nativeStartAttempted = true;
           await this.options.adapter.start({ ...current.startInput, resume: true });
-          this.options.ownerRegistry.rollbackTransfer(transfer);
+          if (!this.options.ownerRegistry.rollbackTransfer(transfer)) {
+            throw new Error('原生会话 owner 已变化，恢复已取消。', { cause: error });
+          }
           current.transfer = undefined;
-        } catch {
-          this.options.ownerRegistry.rollbackTransfer(transfer);
-          this.release(current);
+        } catch (recoveryError) {
+          // `start()` may reject after creating a writer. Always close after an attempted start;
+          // otherwise a partial adapter can race the next terminal or native owner.
+          if (nativeStartAttempted) {
+            try {
+              await this.options.adapter.close(conversationId);
+            } catch (closeError) {
+              nativeCloseError = closeError;
+            }
+          }
+          if (nativeCloseError !== undefined) {
+            // The adapter may still be writing, so retain the native side rather than restoring a
+            // terminal writer. The owner is intentionally conservative until manual recovery.
+            try {
+              this.options.ownerRegistry.commitTransfer(transfer, {
+                ...current.owner,
+                phase: 'active',
+              });
+              current.transfer = undefined;
+            } catch {
+              // Leave the transfer fenced; releasing either side could create duplicate writers.
+            }
+          } else {
+            const rolledBack = this.options.ownerRegistry.rollbackTransfer(transfer);
+            if (rolledBack) {
+              current.transfer = undefined;
+              this.release(current);
+            }
+          }
+          return {
+            ...reportConversationFailure(
+              'environment',
+              error instanceof Error
+                ? `${error.message}；已尝试恢复原生界面。`
+                : '高级终端启动失败；已尝试恢复原生界面。',
+              recoveryError,
+            ),
+            ok: false,
+            snapshot: current.snapshot,
+          };
         }
         return {
           ...reportConversationFailure(
@@ -572,8 +696,8 @@ export class NativeConversationService {
    */
   public async adoptFromTerminal(
     input: NativeConversationLaunchInput & { conversationId: string },
-    stopTerminal: () => Promise<void>,
-    restoreTerminal: () => Promise<void>,
+    stopTerminal: () => Promise<boolean | void>,
+    restoreTerminal: () => Promise<boolean | void>,
   ): Promise<NativeConversationAdoptResult> {
     this.options.assertLaunchAdmissionAllowed?.();
     const conversationId = input.conversationId.toLowerCase();
@@ -647,14 +771,52 @@ export class NativeConversationService {
       transfer,
     };
     this.active.set(conversationId, adopted);
-    try {
-      await stopTerminal();
-      this.options.assertLaunchAdmissionAllowed?.();
-      await this.options.adapter.start(startInput);
-      const activeOwner: ConversationOwner = { ...owner, phase: 'active' };
-      this.options.ownerRegistry.commitTransfer(transfer, activeOwner);
-      adopted.owner = activeOwner;
+    let terminalStopped = false;
+    let nativeStartAttempted = false;
+    let nativeRecoveryReserved = false;
+    const activeNativeOwner: ConversationOwner = { ...owner, phase: 'active' };
+    const activeTerminalOwner: ConversationOwner = { ...terminalOwner, phase: 'active' };
+    const retainNativeOwner = (): void => {
+      this.options.ownerRegistry.commitTransfer(transfer, activeNativeOwner);
+      adopted.owner = activeNativeOwner;
       adopted.transfer = undefined;
+    };
+    const retainTerminalOwner = (): void => {
+      this.options.ownerRegistry.commitTransfer(transfer, activeTerminalOwner);
+      if (nativeRecoveryReserved) {
+        try {
+          this.options.recoveryStore.reserve({
+            conversationId,
+            launch: launchSnapshot,
+            ownerKind: 'terminal',
+            projectPath: input.projectPath,
+            runtime: this.options.runtime,
+          });
+        } catch {
+          // The terminal remains the safer owner even if its recovery row cannot be refreshed.
+        }
+      }
+      if (adopted.transfer) adopted.transfer = undefined;
+      this.active.delete(conversationId);
+    };
+    const releaseWithoutWriter = (): void => {
+      if (this.options.ownerRegistry.rollbackTransfer(transfer)) {
+        adopted.transfer = undefined;
+        this.options.ownerRegistry.release(
+          transfer.current,
+          transfer.current.ownerId,
+          transfer.current.generation,
+        );
+        this.active.delete(conversationId);
+      }
+    };
+    try {
+      const stopped = await stopTerminal();
+      if (stopped === false) throw new Error('安全终端未能确认已停止。');
+      terminalStopped = true;
+      this.options.assertLaunchAdmissionAllowed?.();
+      // Persist the native owner before starting its writer. If this fails, the terminal can be
+      // restored without ever having a live native adapter whose journal row says terminal.
       this.options.recoveryStore.reserve({
         conversationId,
         launch: launchSnapshot,
@@ -662,6 +824,12 @@ export class NativeConversationService {
         projectPath: input.projectPath,
         runtime: this.options.runtime,
       });
+      nativeRecoveryReserved = true;
+      nativeStartAttempted = true;
+      await this.options.adapter.start(startInput);
+      this.options.ownerRegistry.commitTransfer(transfer, activeNativeOwner);
+      adopted.owner = activeNativeOwner;
+      adopted.transfer = undefined;
       return {
         conversationId,
         message: '已切换到原生对话。',
@@ -669,22 +837,72 @@ export class NativeConversationService {
         snapshot: this.active.get(conversationId)?.snapshot,
       };
     } catch (error) {
-      this.active.delete(conversationId);
-      this.options.ownerRegistry.rollbackTransfer(transfer);
-      let restored = true;
-      try {
-        this.options.assertLaunchAdmissionAllowed?.();
-        await restoreTerminal();
-      } catch {
-        restored = false;
+      let nativeCloseError: unknown;
+      // `start()` may reject after creating a writer. Always close after an attempted start before
+      // allowing the terminal owner to be restored.
+      if (nativeStartAttempted) {
+        try {
+          await this.options.adapter.close(conversationId);
+        } catch (closeError) {
+          nativeCloseError = closeError;
+        }
+      }
+
+      if (nativeCloseError !== undefined) {
+        // The native writer may still be alive. Keep it authoritative and never restart the terminal
+        // on top of an unknown adapter state.
+        try {
+          retainNativeOwner();
+        } catch {
+          // Leave the transfer fenced; releasing either owner could create duplicate writers.
+        }
+      } else if (!terminalStopped) {
+        // A failed/ambiguous stop means the terminal may still be writing the transcript.
+        try {
+          retainTerminalOwner();
+        } catch {
+          // Leave the transfer fenced rather than claiming that either writer is safe.
+        }
+      } else {
+        let restoreUncertain = false;
+        let restoreRejected = false;
+        let restored = false;
+        try {
+          this.options.assertLaunchAdmissionAllowed?.();
+          const restoredResult = await restoreTerminal();
+          if (restoredResult !== false) {
+            restored = true;
+            retainTerminalOwner();
+          } else {
+            restoreRejected = true;
+          }
+        } catch {
+          restoreUncertain = true;
+        }
+        if (!restored) {
+          if (restoreUncertain) {
+            // A thrown restore is ambiguous: its cleanup may have left a terminal writer alive. Keep
+            // the terminal owner fenced instead of starting a second native writer later.
+            try {
+              retainTerminalOwner();
+            } catch {
+              // Leave the transfer fenced if ownership changed concurrently.
+            }
+          } else if (restoreRejected) {
+            // An explicit false is a confirmed no-writer result; release the transaction cleanly.
+            releaseWithoutWriter();
+          }
+        }
       }
       const reason = error instanceof Error ? error.message : '原生会话启动失败';
       return {
         ...reportConversationFailure(
           'environment',
-          restored
-            ? `${reason}；已尝试恢复安全终端。`
-            : `${reason}；安全终端也未能恢复，请手动重新启动该会话。`,
+          nativeCloseError !== undefined
+            ? `${reason}；无法确认原生会话已关闭，已保留原生会话。`
+            : terminalStopped
+              ? `${reason}；安全终端未能安全恢复，请手动重新启动该会话。`
+              : `${reason}；安全终端未能安全停止，已保留安全终端。`,
           error,
         ),
         conversationId,

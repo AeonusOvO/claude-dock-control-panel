@@ -67,6 +67,7 @@ const registerClaudeRelaunchHarness = async (input: {
     captureConnectionHistoryBaseline: vi.fn(() => ({})),
     captureLaunchConfigurationBaseline: vi.fn(() => ({})),
     captureRuntimeLaunchBaseline: vi.fn(() => ({})),
+    relaunchInputForModelOption: vi.fn((_sessionId: string, _cwd: string, value: unknown) => value),
     ...input.runtime,
   };
   registerClaudeLaunchIpc({
@@ -419,6 +420,9 @@ describe('main project-config transaction integration', () => {
       captureLaunchAuthorization: vi.fn(() => launchAuthorization),
       captureLaunchConfigurationBaseline: vi.fn(() => ({})),
       captureRuntimeLaunchBaseline: vi.fn(() => ({})),
+      relaunchInputForModelOption: vi.fn(
+        (_sessionId: string, _cwd: string, value: unknown) => value,
+      ),
       commitAllowBypassPermissions: vi.fn(() => {
         calls.push(`${active}:commit-bypass`);
       }),

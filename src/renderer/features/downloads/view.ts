@@ -140,9 +140,12 @@ const createDownloadTaskCard = (
     card.append(heading, metrics);
   }
   const actions = document.createElement('footer');
-  if (!historical && task.canPause) appendDownloadAction(context, actions, task, 'pause', '暂停');
-  if (!historical && task.canResume) appendDownloadAction(context, actions, task, 'resume', '继续');
-  if (!historical && !settled) appendDownloadAction(context, actions, task, 'cancel', '取消');
+  if (!historical && !task.recoveryPending && task.canPause)
+    appendDownloadAction(context, actions, task, 'pause', '暂停');
+  if (!historical && !task.recoveryPending && task.canResume)
+    appendDownloadAction(context, actions, task, 'resume', '继续');
+  if (!historical && !task.recoveryPending && !settled)
+    appendDownloadAction(context, actions, task, 'cancel', '取消');
   if (historical) {
     const finishedAt = document.createElement('span');
     finishedAt.className = 'download-task__history-time';

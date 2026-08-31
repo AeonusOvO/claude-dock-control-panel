@@ -14,6 +14,7 @@ export interface AppPreferences {
   claudeContextWindowMode: ClaudeContextWindowMode;
   closeBehavior: CloseBehavior;
   closeToTrayNoticeShown: boolean;
+  modelUsageFloatingVisible: boolean;
   conversationResume: ConversationResumePreferences;
   footerResourcePreference: FooterResourcePreference;
   managedChatGptContextWindowMode: ManagedChatGptContextWindowMode;
@@ -27,6 +28,7 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   claudeContextWindowMode: 'auto',
   closeBehavior: 'tray',
   closeToTrayNoticeShown: false,
+  modelUsageFloatingVisible: false,
   conversationResume: {
     autoLoadLastConversationModelOnStartup: true,
     autoLoadLastConversationOnStartup: true,
@@ -142,6 +144,7 @@ export class AppPreferencesStore {
     if (
       (next.closeBehavior !== 'exit' && next.closeBehavior !== 'tray') ||
       typeof next.closeToTrayNoticeShown !== 'boolean' ||
+      typeof next.modelUsageFloatingVisible !== 'boolean' ||
       !isConversationResumePreferences(next.conversationResume) ||
       !['auto', 'context', 'quota'].includes(next.footerResourcePreference) ||
       (next.managedChatGptContextWindowMode !== 'standard' &&
@@ -170,7 +173,7 @@ export class AppPreferencesStore {
     const temporaryPath = `${this.storagePath}.tmp`;
     writeFileSync(
       temporaryPath,
-      `${JSON.stringify({ ...normalizedNext, version: 2 }, null, 2)}\n`,
+      `${JSON.stringify({ ...normalizedNext, version: 3 }, null, 2)}\n`,
       {
         encoding: 'utf8',
         mode: 0o600,
@@ -206,7 +209,7 @@ export class AppPreferencesStore {
     }
     try {
       this.ensureDirectory();
-      writeFileSync(this.storagePath, `${JSON.stringify({ ...legacy, version: 2 }, null, 2)}\n`, {
+      writeFileSync(this.storagePath, `${JSON.stringify({ ...legacy, version: 3 }, null, 2)}\n`, {
         encoding: 'utf8',
         mode: 0o600,
       });
@@ -222,13 +225,14 @@ export class AppPreferencesStore {
         claudeContextWindowMode?: unknown;
         closeBehavior?: unknown;
         closeToTrayNoticeShown?: unknown;
+        modelUsageFloatingVisible?: unknown;
         conversationResume?: unknown;
         footerResourcePreference?: unknown;
         managedChatGptContextWindowMode?: unknown;
         version?: unknown;
       };
       if (
-        (parsed.version === 1 || parsed.version === 2) &&
+        (parsed.version === 1 || parsed.version === 2 || parsed.version === 3) &&
         (parsed.closeBehavior === 'exit' || parsed.closeBehavior === 'tray') &&
         typeof parsed.closeToTrayNoticeShown === 'boolean'
       ) {
@@ -251,6 +255,7 @@ export class AppPreferencesStore {
               : claudeContextWindowMode,
           closeBehavior: parsed.closeBehavior,
           closeToTrayNoticeShown: parsed.closeToTrayNoticeShown,
+          modelUsageFloatingVisible: parsed.modelUsageFloatingVisible === true,
           conversationResume: normalizeConversationResumePreferences(
             parsed.conversationResume,
             parsed.version,

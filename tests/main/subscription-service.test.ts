@@ -33,7 +33,10 @@ const fixture = () => {
       credential,
     })),
     baseUrl: vi.fn(() => `http://127.0.0.1:18520/s/${'a'.repeat(32)}`),
-    discoverModels: vi.fn(async () => ['kimi-for-coding']),
+    committedSlotIdForConnection: vi.fn(() => 'a'.repeat(32)),
+    discoverModels: vi.fn(async (_id: string, _signal: AbortSignal, _expectedProvider?: string) => [
+      'kimi-for-coding',
+    ]),
     persist: vi.fn(),
     discard: vi.fn(),
     shutdown: vi.fn(),
@@ -72,6 +75,33 @@ const fixture = () => {
 };
 
 describe('subscription connection transaction', () => {
+  it('rejects discovery when the claimed provider does not match the relay binding', async () => {
+    const { service, relay } = fixture();
+    const baseUrl = `http://127.0.0.1:18520/s/${'a'.repeat(32)}`;
+    relay.committedSlotIdForConnection.mockImplementationOnce(() => {
+      throw new Error('订阅接入地址与服务商不匹配。');
+    });
+
+    await expect(
+      service.discoverModelsForConnection('minimax-subscription-cn', baseUrl),
+    ).rejects.toThrow('服务商不匹配');
+    expect(relay.discoverModels).not.toHaveBeenCalled();
+  });
+
+  it('passes the claimed provider through after validating the committed relay binding', async () => {
+    const { service, relay } = fixture();
+    const baseUrl = `http://127.0.0.1:18520/s/${'a'.repeat(32)}`;
+
+    await expect(
+      service.discoverModelsForConnection('minimax-subscription-cn', baseUrl),
+    ).resolves.toEqual(['kimi-for-coding']);
+    expect(relay.discoverModels).toHaveBeenCalledWith(
+      'a'.repeat(32),
+      expect.any(AbortSignal),
+      'minimax-subscription-cn',
+    );
+  });
+
   it('joins duplicate clicks, rejects another provider, and commits only after the exact test', async () => {
     const { service, authorize, relay, runtime, states, release } = fixture();
     const gate = deferred<SubscriptionCredential>();

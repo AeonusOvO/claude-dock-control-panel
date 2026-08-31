@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Connection configuration owns one atomic save/test/history transaction. */
 import { createHmac, randomBytes } from 'node:crypto';
 import { modelUsageConnection, type ModelUsageObserver } from '../usage/identity';
 import path from 'node:path';
@@ -800,9 +801,9 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     cwd: string,
     prepared: PreparedClaudeConfigSave,
   ): Promise<ClaudeProjectState> {
-    await this.recordConnectionHistory(cwd, prepared.input, prepared.historyMetadata);
-    const runtime = this.ensureSession(sessionId, cwd);
     const configScope = this.connectionConfigScope(sessionId, cwd);
+    await this.recordConnectionHistory(cwd, prepared.input, prepared.historyMetadata, configScope);
+    const runtime = this.ensureSession(sessionId, cwd);
     if (!runtime.active) {
       await this.prepareRouteServices(
         this.routeKindForConfig(this.configStore.getConfig(configScope)),
@@ -815,6 +816,16 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
 
   public getConnectionHistory(cwd: string): ClaudeConnectionHistoryEntry[] {
     return this.historyStore.list(cwd);
+  }
+
+  /** Main-only credential-safe identity used to decide whether a history model can switch in place. */
+  public connectionHistoryEndpointFingerprint(cwd: string, entryId: string): string {
+    return this.historyStore.endpointFingerprint(cwd, entryId);
+  }
+
+  /** Computes history endpoint identities in one main-process history-file read. */
+  public connectionHistoryEndpointFingerprints(cwd: string): ReadonlyMap<string, string> {
+    return this.historyStore.endpointFingerprints(cwd);
   }
 
   protected conversationReplayForCurrent(cwd: string): ConnectionHistoryReplay | undefined {
@@ -996,6 +1007,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
     cwd: string,
     input: SaveClaudeConfigInput,
     metadata?: ConnectionHistoryMetadata,
+    configScope = cwd,
   ): Promise<void> {
     try {
       const router = await this.getRouterHealthState();
@@ -1003,7 +1015,7 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
         config: input,
         credential: metadata?.sourceConfig
           ? metadata.sourceCredential
-          : this.configStore.getCredential(cwd),
+          : this.configStore.getCredential(configScope),
         gatewayEndpoint: router.endpoint,
         gatewayState: router.gatewayState,
         name: metadata?.name,
@@ -1020,7 +1032,9 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
   public async testConnection(
     cwd: string,
     input: SaveClaudeConfigInput,
+    sessionId?: string,
   ): Promise<ClaudeConnectionTestResult> {
+    const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
     const validatedInput = withProviderProtocol(input);
     const prepared =
       validatedInput.protocol === 'openai'
@@ -1031,14 +1045,15 @@ export abstract class ClaudeRuntimeConnectionConfig extends ClaudeRuntimeRouting
       allowRoutedEffectiveRoute: Boolean(prepared),
     });
     const enteredCredential = testInput.credential?.trim();
-    const credential = enteredCredential || this.configStore.getCredential(cwd);
+    const credential = enteredCredential || this.configStore.getCredential(configScope);
     const fingerprint = connectionFingerprint(config, credential);
+    const scopeKey = projectKey(configScope);
     const result = await this.backgroundTasks.run(
-      `connection-test:${projectKey(cwd)}:${fingerprint}`,
+      `connection-test:${scopeKey}:${fingerprint}`,
       'interactive',
       () => testClaudeConnection(config, credential),
     );
-    this.connectionChecks.set(projectKey(cwd), {
+    this.connectionChecks.set(scopeKey, {
       fingerprint,
       result,
     });

@@ -62,6 +62,16 @@ export interface NativeRouteReservation {
   readonly token: RouteReservationToken;
 }
 
+export interface ClaudeModelDiscoveryResolvers {
+  generic: (
+    cwd: string,
+    target: Readonly<ProviderModelDiscoveryTarget>,
+    credential?: string,
+  ) => Promise<string[]>;
+  managedChatGpt: () => Promise<string[]>;
+  subscription: (provider: string, baseUrl: string) => Promise<string[]>;
+}
+
 export abstract class ClaudeRuntimeRouting {
   protected readonly backgroundTasks = new BackgroundTaskCoordinator(2);
   protected readonly installationCache = new AsyncRefreshCache<ClaudeInstallationStatus>(
@@ -85,9 +95,39 @@ export abstract class ClaudeRuntimeRouting {
   private ensureSubscriptionRelay: () => Promise<void> = async () => {
     throw new Error('订阅后台尚未就绪。');
   };
+  private genericModelDiscovery: ClaudeModelDiscoveryResolvers['generic'] = async (
+    _cwd,
+    target,
+    credential,
+  ) => this.discoverProviderModels(target, credential);
+  private managedChatGptModelDiscovery: () => Promise<string[]> = async () => [];
+  private subscriptionModelDiscovery: ClaudeModelDiscoveryResolvers['subscription'] =
+    async () => [];
 
   public setSubscriptionRelayStarter(start: () => Promise<void>): void {
     this.ensureSubscriptionRelay = start;
+  }
+
+  public setModelDiscoveryResolvers(resolvers: ClaudeModelDiscoveryResolvers): void {
+    this.genericModelDiscovery = resolvers.generic;
+    this.managedChatGptModelDiscovery = resolvers.managedChatGpt;
+    this.subscriptionModelDiscovery = resolvers.subscription;
+  }
+
+  protected discoverGenericModels(
+    cwd: string,
+    target: Readonly<ProviderModelDiscoveryTarget>,
+    credential?: string,
+  ): Promise<string[]> {
+    return this.genericModelDiscovery(cwd, target, credential);
+  }
+
+  protected discoverManagedChatGptModels(): Promise<string[]> {
+    return this.managedChatGptModelDiscovery();
+  }
+
+  protected discoverSubscriptionModels(provider: string, baseUrl: string): Promise<string[]> {
+    return this.subscriptionModelDiscovery(provider, baseUrl);
   }
 
   protected constructor(

@@ -45,6 +45,23 @@ const connectionFingerprint = (config: NormalizedClaudeConfig, credential?: stri
     provider: config.provider,
   });
 
+export const connectionEndpointFingerprint = (
+  config: NormalizedClaudeConfig,
+  credential?: string,
+  routerProviderId?: string,
+  protocol: ClaudeEndpointProtocol = 'unknown',
+): string =>
+  JSON.stringify({
+    apiKeyHelperPolicy: config.apiKeyHelperPolicy,
+    authMode: config.authMode,
+    baseUrl: config.baseUrl,
+    credentialDigest: credentialDigest(credential),
+    preset: config.preset,
+    protocol,
+    provider: config.provider,
+    routerProviderId: routerProviderId ?? '',
+  });
+
 export const usesDefaultClaudeRouter = (config: NormalizedClaudeConfig): boolean => {
   if (config.provider !== 'gateway' || !config.baseUrl) {
     return false;

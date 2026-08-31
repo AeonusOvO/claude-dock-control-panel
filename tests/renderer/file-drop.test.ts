@@ -152,6 +152,41 @@ describe('Claude Code file and folder drops', () => {
     },
   );
 
+  it('queues a second confirmation instead of treating an open dialog as rejection', async () => {
+    const first = {
+      name: 'first.md',
+      path: 'D:\\workspace\\first.md',
+    };
+    const second = {
+      name: 'second.md',
+      path: 'D:\\workspace\\second.md',
+    };
+    const paths = droppedPathMap([first, second]);
+
+    await withTerminalRenderer(
+      { getDroppedPath: (file) => paths.get(file.name) ?? '' },
+      async (harness) => {
+        dispatchDrop(harness, '#terminal-shell', [first]);
+        expect(harness.query('#confirmation-dialog-message').textContent).toContain(first.name);
+
+        dispatchDrop(harness, '#terminal-shell', [second]);
+        expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(true);
+        expect(harness.query('#confirmation-dialog-message').textContent).toContain(first.name);
+        expect(harness.method('writeTerminal')).not.toHaveBeenCalled();
+
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('cancel');
+        await settle(harness);
+        expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(true);
+        expect(harness.query('#confirmation-dialog-message').textContent).toContain(second.name);
+        expect(harness.method('writeTerminal')).not.toHaveBeenCalled();
+
+        harness.query<HTMLDialogElement>('#confirmation-dialog').close('cancel');
+        await settle(harness);
+        expect(harness.query<HTMLDialogElement>('#confirmation-dialog').open).toBe(false);
+      },
+    );
+  });
+
   it('keeps folder drops on the existing add-project path and waits for confirmation', async () => {
     const folder = {
       directory: true,

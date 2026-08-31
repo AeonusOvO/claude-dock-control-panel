@@ -41,13 +41,15 @@ export * from './claude-execution-settings-schema';
 const SESSION_ID_PATTERN = /^session-\d{1,10}$/u;
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const DOWNLOAD_TASK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u;
+const DOWNLOAD_RECOVERY_TOKEN_PATTERN = /^[A-Za-z0-9-]{36}$/u;
 const HISTORY_ENTRY_ID_PATTERN = /^history-[a-z0-9]{1,16}-[a-z0-9]{1,16}$/u;
 const MCP_BACKUP_ID_PATTERN =
   /^(?:[0-9TZ-]+|[0-9TZ-]+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
 const MCP_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u;
 const MCP_TOGGLE_PREVIEW_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const MODEL_OPTION_ID_PATTERN = /^(?:current|history-[a-z0-9]{1,16}-[a-z0-9]{1,16})$/u;
+const MODEL_OPTION_ID_PATTERN =
+  /^(?:current|history-[a-z0-9]{1,16}-[a-z0-9]{1,16}|model-[A-Za-z0-9_-]{16,128})$/u;
 const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,79})?$/u;
 const NATIVE_SUBMIT_AUTHORITY_FIELDS = new Set([
   'action',
@@ -181,6 +183,12 @@ export const downloadTaskIdSchema = guarded<string>(
   '下载任务标识无效。',
 );
 
+export const downloadRecoveryTokenSchema = guarded<string>(
+  (value): value is string =>
+    typeof value === 'string' && DOWNLOAD_RECOVERY_TOKEN_PATTERN.test(value),
+  '下载恢复标识无效。',
+);
+
 export const developmentRuntimeSchema = guarded<DevelopmentRuntime>(
   (value): value is DevelopmentRuntime => value === 'claude' || value === 'codex',
   '开发引擎标识无效。',
@@ -279,6 +287,11 @@ export const claudeRelaunchInputSchema = z
       if (!result.success)
         addIssue(context, result.error.issues[0]?.message ?? '接入记录标识无效。');
     }
+    if (value.modelOptionId !== undefined) {
+      const result = modelOptionIdSchema.safeParse(value.modelOptionId);
+      if (!result.success)
+        addIssue(context, result.error.issues[0]?.message ?? '模型选项标识无效。');
+    }
     if (value.permissionMode !== undefined) {
       const result = claudePermissionModeSchema.safeParse(value.permissionMode);
       if (!result.success)
@@ -289,8 +302,13 @@ export const claudeRelaunchInputSchema = z
     const input = value as Record<string, unknown>;
     return {
       compactFirst: input.compactFirst as boolean,
-      entryId: input.entryId as string | undefined,
-      permissionMode: input.permissionMode as ClaudePermissionMode | undefined,
+      ...(input.entryId === undefined ? {} : { entryId: input.entryId as string }),
+      ...(input.modelOptionId === undefined
+        ? {}
+        : { modelOptionId: input.modelOptionId as string }),
+      ...(input.permissionMode === undefined
+        ? {}
+        : { permissionMode: input.permissionMode as ClaudePermissionMode }),
     } satisfies ClaudeRelaunchInput;
   });
 
@@ -860,9 +878,15 @@ export const IPC_REQUESTS = {
   [CHANNELS.DOWNLOAD_HISTORY_DELETE]: request('deleteDownloadHistory', [downloadTaskIdSchema]),
   [CHANNELS.DOWNLOAD_LIST]: request('listDownloads', []),
   [CHANNELS.DOWNLOAD_PAUSE]: request('pauseDownload', [downloadTaskIdSchema]),
-  [CHANNELS.DOWNLOAD_RECOVERY_DISCARD]: request('discardDownloadRecovery', [downloadTaskIdSchema]),
+  [CHANNELS.DOWNLOAD_RECOVERY_DISCARD]: request('discardDownloadRecovery', [
+    downloadTaskIdSchema,
+    downloadRecoveryTokenSchema,
+  ]),
   [CHANNELS.DOWNLOAD_RECOVERY_LIST]: request('listDownloadRecoveryPending', []),
-  [CHANNELS.DOWNLOAD_RECOVERY_RESUME]: request('resumeDownloadRecovery', [downloadTaskIdSchema]),
+  [CHANNELS.DOWNLOAD_RECOVERY_RESUME]: request('resumeDownloadRecovery', [
+    downloadTaskIdSchema,
+    downloadRecoveryTokenSchema,
+  ]),
   [CHANNELS.DOWNLOAD_RESUME]: request('resumeDownload', [downloadTaskIdSchema]),
   [CHANNELS.MARKDOWN_OPEN_EXTERNAL]: request('openMarkdownExternal', [
     markdownExternalUrlInputSchema,

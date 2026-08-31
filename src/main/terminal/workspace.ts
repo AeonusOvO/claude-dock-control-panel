@@ -29,6 +29,11 @@ export interface ManagedTerminal {
     expectedGeneration: PtyGeneration,
     emitStatus?: boolean,
   ) => TerminalStatus | undefined;
+  /** Stops one exact PTY generation and resolves only after its process exit is observed. */
+  stopIfGenerationAndWait?: (
+    expectedGeneration: PtyGeneration,
+    emitStatus?: boolean,
+  ) => Promise<TerminalStatus | undefined>;
   write: (expectedGeneration: PtyGeneration, data: string) => boolean;
 }
 
@@ -312,6 +317,22 @@ export class TerminalWorkspace {
     emitStatus = true,
   ): TerminalStatus | undefined {
     return this.requireSession(sessionId).stopIfGeneration(expectedGeneration, emitStatus);
+  }
+
+  /**
+   * Stops one exact PTY generation and waits for the underlying process exit when the terminal
+   * implementation can observe it. The synchronous fallback keeps test and alternate terminal
+   * implementations compatible, while the bundled TerminalSession provides the production ack.
+   */
+  public stopIfGenerationAndWait(
+    sessionId: string,
+    expectedGeneration: PtyGeneration,
+    emitStatus = true,
+  ): Promise<TerminalStatus | undefined> {
+    const session = this.requireSession(sessionId);
+    return session.stopIfGenerationAndWait
+      ? session.stopIfGenerationAndWait(expectedGeneration, emitStatus)
+      : Promise.resolve(session.stopIfGeneration(expectedGeneration, emitStatus));
   }
 
   public write(sessionId: string, expectedGeneration: PtyGeneration, data: string): boolean {

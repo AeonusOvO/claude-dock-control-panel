@@ -6,8 +6,10 @@ export const downloadBridge = {
   cancelDownload: (taskId) => ipcRenderer.invoke(CHANNELS.DOWNLOAD_CANCEL, taskId),
   clearDownloadHistory: () => ipcRenderer.invoke(CHANNELS.DOWNLOAD_HISTORY_CLEAR),
   deleteDownloadHistory: (taskId) => ipcRenderer.invoke(CHANNELS.DOWNLOAD_HISTORY_DELETE, taskId),
-  discardDownloadRecovery: (taskId) =>
-    ipcRenderer.invoke(CHANNELS.DOWNLOAD_RECOVERY_DISCARD, taskId) as Promise<DownloadTaskView[]>,
+  discardDownloadRecovery: (taskId, recoveryToken) =>
+    ipcRenderer.invoke(CHANNELS.DOWNLOAD_RECOVERY_DISCARD, taskId, recoveryToken) as Promise<
+      DownloadTaskView[]
+    >,
   listDownloads: () => ipcRenderer.invoke(CHANNELS.DOWNLOAD_LIST) as Promise<DownloadTaskView[]>,
   listDownloadRecoveryPending: () =>
     ipcRenderer.invoke(CHANNELS.DOWNLOAD_RECOVERY_LIST) as Promise<DownloadTaskView[]>,
@@ -22,6 +24,10 @@ export const downloadBridge = {
   },
   pauseDownload: (taskId) => ipcRenderer.invoke(CHANNELS.DOWNLOAD_PAUSE, taskId),
   resumeDownload: (taskId) => ipcRenderer.invoke(CHANNELS.DOWNLOAD_RESUME, taskId),
-  resumeDownloadRecovery: (taskId) =>
-    ipcRenderer.invoke(CHANNELS.DOWNLOAD_RECOVERY_RESUME, taskId) as Promise<DownloadTaskView>,
+  resumeDownloadRecovery: (taskId, recoveryToken) =>
+    ipcRenderer.invoke(
+      CHANNELS.DOWNLOAD_RECOVERY_RESUME,
+      taskId,
+      recoveryToken,
+    ) as Promise<DownloadTaskView>,
 } satisfies Partial<ControlPanelApi>;

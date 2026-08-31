@@ -4,7 +4,11 @@ import type {
   SubscriptionResult,
   SubscriptionState,
 } from '../../shared/contracts';
-import type { SubscriptionProvider } from '../../shared/claude/subscriptions';
+import {
+  isSubscriptionBaseUrl,
+  isSubscriptionProvider,
+  type SubscriptionProvider,
+} from '../../shared/claude/subscriptions';
 import type { ClaudeRuntime } from '../claude/runtime';
 import type { BusyRegistry } from '../coordination/busy-registry';
 import { subscriptionEndpoints } from './catalog';
@@ -59,6 +63,16 @@ export class SubscriptionService {
 
   public getAccountIdentity(provider: unknown, baseUrl: string): string | undefined {
     return this.deps.relay.getAccountIdentity(provider, baseUrl);
+  }
+
+  /** Discovers models for an already-committed local relay binding without exposing its credential. */
+  public async discoverModelsForConnection(provider: unknown, baseUrl: string): Promise<string[]> {
+    if (!isSubscriptionProvider(provider) || !isSubscriptionBaseUrl(baseUrl)) {
+      throw new SubscriptionError('订阅接入地址无效。');
+    }
+    await this.deps.relay.ensureRunning();
+    const slotId = this.deps.relay.committedSlotIdForConnection(provider, baseUrl);
+    return this.deps.relay.discoverModels(slotId, AbortSignal.timeout(20_000), provider);
   }
 
   private publish(update: Partial<SubscriptionState>): void {

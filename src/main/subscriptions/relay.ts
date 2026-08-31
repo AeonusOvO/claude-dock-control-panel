@@ -6,7 +6,11 @@ import { subscriptionEndpoints, subscriptionHeaders, type SubscriptionCredential
 import { readBoundedJson, record, SubscriptionError, type AuthContext } from './http';
 import { refreshSubscription } from './oauth';
 import { SubscriptionVault, type SubscriptionSlot } from './vault';
-import { isSubscriptionBaseUrl, isSubscriptionProvider } from '../../shared/claude/subscriptions';
+import {
+  isSubscriptionBaseUrl,
+  isSubscriptionProvider,
+  type SubscriptionProvider,
+} from '../../shared/claude/subscriptions';
 import { sanitizeAccountIdentity } from '../../shared/claude/account-identity';
 import { subscriptionAccountIdentity } from './account';
 
@@ -134,6 +138,25 @@ export class SubscriptionRelay {
     return `http://127.0.0.1:${this.port}/s/${id}`;
   }
 
+  /** Validates the immutable provider, listener port, and committed slot behind a saved config. */
+  public committedSlotIdForConnection(provider: unknown, baseUrl: string): string {
+    if (!isSubscriptionProvider(provider) || !isSubscriptionBaseUrl(baseUrl)) {
+      throw new SubscriptionError('订阅接入地址无效。');
+    }
+    const url = new URL(baseUrl);
+    const slotId = url.pathname.slice('/s/'.length);
+    const slot = this.slots.get(slotId);
+    if (
+      !slot ||
+      !this.persisted.has(slotId) ||
+      Number(url.port) !== this.port ||
+      slot.credential.provider !== provider
+    ) {
+      throw new SubscriptionError('订阅接入地址与服务商不匹配。');
+    }
+    return slotId;
+  }
+
   public persist(id: string): void {
     this.lifetime.signal.throwIfAborted();
     const slot = this.slots.get(id);
@@ -203,8 +226,15 @@ export class SubscriptionRelay {
     return pending;
   }
 
-  public async discoverModels(id: string, signal: AbortSignal): Promise<string[]> {
+  public async discoverModels(
+    id: string,
+    signal: AbortSignal,
+    expectedProvider?: SubscriptionProvider,
+  ): Promise<string[]> {
     const credential = await this.credential(id);
+    if (expectedProvider !== undefined && credential.provider !== expectedProvider) {
+      throw new SubscriptionError('订阅接入地址与服务商不匹配。');
+    }
     const endpoint = subscriptionEndpoints[credential.provider];
     const url = `${endpoint.baseUrl}/v1/models`;
     return this.inferenceNetwork.network(

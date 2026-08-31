@@ -294,16 +294,23 @@ export const createTerminalClaudeStateActions = (
     } else {
       footerConnection.disabled = false;
       footerConnection.setAttribute('aria-busy', 'false');
-      footerConnection.dataset.tone = health?.tone ?? (installationReady ? 'warning' : 'error');
-      footerConnectionLabel.textContent = health
-        ? health.tone === 'success'
+      const readiness = state.connection?.readiness ?? 'unknown';
+      footerConnection.dataset.tone =
+        readiness === 'connected'
+          ? 'success'
+          : readiness === 'failed'
+            ? 'error'
+            : installationReady
+              ? 'warning'
+              : 'error';
+      footerConnectionLabel.textContent =
+        readiness === 'connected'
           ? '连接正常'
-          : health.tone === 'warning'
-            ? '连接需确认'
-            : '连接异常'
-        : installationReady
-          ? '连接待测试'
-          : '环境未就绪';
+          : readiness === 'failed'
+            ? '连接异常'
+            : installationReady
+              ? '连接待测试'
+              : '环境未就绪';
     }
 
     renderClaudeContextReadout(

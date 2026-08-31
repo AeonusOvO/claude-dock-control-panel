@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- This specification keeps the native writer ownership race matrix together. */
+
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -939,5 +941,394 @@ describe('native conversation service', () => {
 
     // Both failures have to reach the user: silently claiming recovery would strand the session.
     expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/手动重新启动/) });
+  });
+
+  it('keeps the terminal owner when its exact stop acknowledgement is false', async () => {
+    const adapter = new FakeConversationAdapter();
+    const adapterStart = vi.spyOn(adapter, 'start');
+    const conversationId = '77777777-7777-4777-8777-777777777777';
+    const ownerRegistry = new ConversationOwnerRegistry();
+    ownerRegistry.claim({
+      conversationId,
+      generation: 3,
+      ownerId: 'terminal:session-3',
+      ownerKind: 'terminal',
+      phase: 'active',
+      projectPath,
+      runtime: 'claude',
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const stopTerminal = vi.fn(async () => false);
+    const restoreTerminal = vi.fn(async () => true);
+
+    const result = await service.adoptFromTerminal(
+      { conversationId, projectPath },
+      stopTerminal,
+      restoreTerminal,
+    );
+
+    expect(result).toMatchObject({
+      conversationId,
+      message: expect.stringContaining('安全终端未能安全停止'),
+      ok: false,
+    });
+    expect(stopTerminal).toHaveBeenCalledOnce();
+    expect(restoreTerminal).not.toHaveBeenCalled();
+    expect(adapterStart).not.toHaveBeenCalled();
+    expect(service.activeIds()).toEqual([]);
+    expect(
+      ownerRegistry.ownerFor({ conversationId, projectPath, runtime: 'claude' }),
+    ).toMatchObject({
+      ownerId: 'terminal:session-3',
+      ownerKind: 'terminal',
+      phase: 'active',
+    });
+  });
+
+  it('does not start native recovery when its journal reservation fails', async () => {
+    const adapter = new FakeConversationAdapter();
+    const adapterStart = vi.spyOn(adapter, 'start');
+    const conversationId = '88888888-8888-4888-8888-888888888888';
+    const ownerRegistry = new ConversationOwnerRegistry();
+    ownerRegistry.claim({
+      conversationId,
+      generation: 4,
+      ownerId: 'terminal:session-4',
+      ownerKind: 'terminal',
+      phase: 'active',
+      projectPath,
+      runtime: 'claude',
+    });
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
+    vi.spyOn(recoveryStore, 'reserve').mockImplementation(() => {
+      throw new Error('recovery journal unavailable');
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore,
+      runtime: 'claude',
+    });
+    const restoreTerminal = vi.fn(async () => true);
+
+    const result = await service.adoptFromTerminal(
+      { conversationId, projectPath },
+      async () => true,
+      restoreTerminal,
+    );
+
+    expect(result).toMatchObject({
+      conversationId,
+      message: expect.stringContaining('recovery journal unavailable'),
+      ok: false,
+    });
+    expect(adapterStart).not.toHaveBeenCalled();
+    expect(restoreTerminal).toHaveBeenCalledOnce();
+    expect(service.activeIds()).toEqual([]);
+    expect(
+      ownerRegistry.ownerFor({ conversationId, projectPath, runtime: 'claude' }),
+    ).toMatchObject({
+      ownerId: 'terminal:session-4',
+      ownerKind: 'terminal',
+      phase: 'active',
+    });
+  });
+
+  it('closes an adapter that rejects after partially creating a native writer', async () => {
+    const adapter = new FakeConversationAdapter();
+    const start = adapter.start.bind(adapter);
+    adapter.start = async (input) => {
+      await start(input);
+      throw new Error('native start failed after writer creation');
+    };
+    const close = vi.spyOn(adapter, 'close');
+    const conversationId = '99999999-9999-4999-8999-999999999999';
+    const ownerRegistry = new ConversationOwnerRegistry();
+    ownerRegistry.claim({
+      conversationId,
+      generation: 5,
+      ownerId: 'terminal:session-5',
+      ownerKind: 'terminal',
+      phase: 'active',
+      projectPath,
+      runtime: 'claude',
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const restoreTerminal = vi.fn(async () => true);
+
+    const result = await service.adoptFromTerminal(
+      { conversationId, projectPath },
+      async () => true,
+      restoreTerminal,
+    );
+
+    expect(result).toMatchObject({
+      conversationId,
+      message: expect.stringContaining('native start failed after writer creation'),
+      ok: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(restoreTerminal).toHaveBeenCalledOnce();
+    expect(service.activeIds()).toEqual([]);
+    expect(
+      ownerRegistry.ownerFor({ conversationId, projectPath, runtime: 'claude' }),
+    ).toMatchObject({
+      ownerId: 'terminal:session-5',
+      ownerKind: 'terminal',
+      phase: 'active',
+    });
+  });
+
+  it('retains native ownership when partial adapter cleanup is uncertain', async () => {
+    const adapter = new FakeConversationAdapter();
+    const start = adapter.start.bind(adapter);
+    adapter.start = async (input) => {
+      await start(input);
+      throw new Error('native start failed');
+    };
+    const close = vi.spyOn(adapter, 'close').mockRejectedValue(new Error('native close uncertain'));
+    const conversationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const ownerRegistry = new ConversationOwnerRegistry();
+    ownerRegistry.claim({
+      conversationId,
+      generation: 6,
+      ownerId: 'terminal:session-6',
+      ownerKind: 'terminal',
+      phase: 'active',
+      projectPath,
+      runtime: 'claude',
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const restoreTerminal = vi.fn(async () => true);
+
+    const result = await service.adoptFromTerminal(
+      { conversationId, projectPath },
+      async () => true,
+      restoreTerminal,
+    );
+
+    expect(result).toMatchObject({
+      conversationId,
+      message: expect.stringContaining('无法确认原生会话已关闭'),
+      ok: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(restoreTerminal).not.toHaveBeenCalled();
+    expect(service.activeIds()).toEqual([conversationId]);
+    expect(
+      ownerRegistry.ownerFor({ conversationId, projectPath, runtime: 'claude' }),
+    ).toMatchObject({
+      ownerId: expect.stringContaining('native:'),
+      ownerKind: 'native',
+      phase: 'active',
+    });
+  });
+
+  it('settles a pending native turn when transferring to the terminal', async () => {
+    const adapter = new FakeConversationAdapter();
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const started = await service.start({ projectPath });
+    const waiting = service.submitAndWaitForTurn(started.conversationId, {
+      blocks: [{ text: '[fixture:hold]', type: 'text' }],
+      clientSubmissionId: 'transfer-pending-turn',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(service.getSnapshot(started.conversationId)?.phase).toBe('running');
+
+    const result = await service.transferToTerminal(
+      started.conversationId,
+      undefined,
+      async ({ conversationId, projectPath: cwd }) => ({
+        owner: {
+          conversationId,
+          generation: 7,
+          ownerId: 'terminal:session-7',
+          ownerKind: 'terminal' as const,
+          phase: 'active' as const,
+          projectPath: cwd,
+          runtime: 'claude' as const,
+        },
+        terminalSessionId: 'session-7',
+      }),
+      true,
+    );
+
+    expect(result).toMatchObject({ ok: true, terminalSessionId: 'session-7' });
+    await expect(waiting).resolves.toMatchObject({ ok: true });
+    expect(service.activeIds()).toEqual([]);
+    expect(
+      ownerRegistry.ownerFor({
+        conversationId: started.conversationId,
+        projectPath,
+        runtime: 'claude',
+      }),
+    ).toMatchObject({ ownerKind: 'terminal', phase: 'active' });
+  });
+
+  it('releases ownership when terminal restoration explicitly reports no writer', async () => {
+    const adapter = new FakeConversationAdapter();
+    adapter.start = async () => {
+      throw new Error('native start failed');
+    };
+    const conversationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const ownerRegistry = new ConversationOwnerRegistry();
+    ownerRegistry.claim({
+      conversationId,
+      generation: 7,
+      ownerId: 'terminal:session-7',
+      ownerKind: 'terminal',
+      phase: 'active',
+      projectPath,
+      runtime: 'claude',
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const restoreTerminal = vi.fn(async () => false);
+
+    const result = await service.adoptFromTerminal(
+      { conversationId, projectPath },
+      async () => true,
+      restoreTerminal,
+    );
+
+    expect(result).toMatchObject({ conversationId, ok: false });
+    expect(restoreTerminal).toHaveBeenCalledOnce();
+    expect(service.activeIds()).toEqual([]);
+    expect(
+      ownerRegistry.ownerFor({ conversationId, projectPath, runtime: 'claude' }),
+    ).toBeUndefined();
+  });
+
+  it('restores the native owner when terminal recovery persistence fails after launch', async () => {
+    const adapter = new FakeConversationAdapter();
+    const adapterStart = vi.spyOn(adapter, 'start');
+    const recoveryStore = new ConversationRecoveryStore(root(), encryption());
+    const originalReserve = recoveryStore.reserve.bind(recoveryStore);
+    vi.spyOn(recoveryStore, 'reserve').mockImplementation((input) => {
+      if (input.ownerKind === 'terminal') throw new Error('terminal recovery persistence failed');
+      return originalReserve(input);
+    });
+    const ownerRegistry = new ConversationOwnerRegistry();
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore,
+      runtime: 'claude',
+    });
+    const started = await service.start({ projectPath });
+    const terminalStop = vi.fn(async () => true);
+
+    const result = await service.transferToTerminal(
+      started.conversationId,
+      undefined,
+      async ({ conversationId, projectPath: cwd }) => ({
+        owner: {
+          conversationId,
+          generation: 8,
+          ownerId: 'terminal:session-8',
+          ownerKind: 'terminal' as const,
+          phase: 'active' as const,
+          projectPath: cwd,
+          runtime: 'claude' as const,
+        },
+        stop: terminalStop,
+        terminalSessionId: 'session-8',
+      }),
+    );
+
+    expect(result).toMatchObject({
+      message: expect.stringContaining('terminal recovery persistence failed'),
+      ok: false,
+    });
+    expect(terminalStop).toHaveBeenCalledOnce();
+    expect(adapterStart).toHaveBeenCalledTimes(2);
+    expect(service.activeIds()).toEqual([started.conversationId]);
+    expect(
+      ownerRegistry.ownerFor({
+        conversationId: started.conversationId,
+        projectPath,
+        runtime: 'claude',
+      }),
+    ).toMatchObject({ ownerKind: 'native', phase: 'active' });
+  });
+
+  it('releases a transfer when native owner commit fails after cleanup', async () => {
+    const adapter = new FakeConversationAdapter();
+    const close = vi.spyOn(adapter, 'close');
+    const conversationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const ownerRegistry = new ConversationOwnerRegistry();
+    ownerRegistry.claim({
+      conversationId,
+      generation: 8,
+      ownerId: 'terminal:session-8',
+      ownerKind: 'terminal',
+      phase: 'active',
+      projectPath,
+      runtime: 'claude',
+    });
+    const commit = vi.spyOn(ownerRegistry, 'commitTransfer');
+    const originalCommit = ownerRegistry.commitTransfer.bind(ownerRegistry);
+    commit.mockImplementation((transfer, nextOwner) => {
+      if (nextOwner.ownerKind === 'native') throw new Error('native owner commit failed');
+      originalCommit(transfer, nextOwner);
+    });
+    const service = new NativeConversationService({
+      adapter,
+      onSnapshot: () => undefined,
+      ownerRegistry,
+      recoveryStore: new ConversationRecoveryStore(root(), encryption()),
+      runtime: 'claude',
+    });
+    const restoreTerminal = vi.fn(async () => false);
+
+    const result = await service.adoptFromTerminal(
+      { conversationId, projectPath },
+      async () => true,
+      restoreTerminal,
+    );
+
+    expect(result).toMatchObject({
+      message: expect.stringContaining('native owner commit failed'),
+      ok: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(restoreTerminal).toHaveBeenCalledOnce();
+    expect(service.activeIds()).toEqual([]);
+    expect(
+      ownerRegistry.ownerFor({ conversationId, projectPath, runtime: 'claude' }),
+    ).toBeUndefined();
   });
 });

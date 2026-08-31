@@ -287,11 +287,17 @@ const consumeSystem = (
   const subtype = stringValue(value.subtype);
   if (subtype === 'session_state_changed') {
     const state = stringValue(value.state);
-    emit(session, {
-      phase:
-        state === 'idle' ? 'idle' : state === 'requires_action' ? 'requires-action' : 'running',
-      type: 'conversation.phase',
-    });
+    const phase =
+      state === 'idle'
+        ? 'idle'
+        : state === 'requires_action'
+          ? 'requires-action'
+          : state === 'running'
+            ? 'running'
+            : undefined;
+    // Keep an unknown SDK state from clobbering a known idle/result snapshot into a permanently
+    // busy phase. New SDK states must be explicitly mapped before they affect turn completion.
+    if (phase) emit(session, { phase, type: 'conversation.phase' });
     return;
   }
   if (subtype === 'commands_changed') {

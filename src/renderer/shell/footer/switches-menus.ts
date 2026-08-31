@@ -4,6 +4,7 @@ import type {
   ClaudePermissionMode,
   ModelSpeedMode,
 } from '../../../shared/contracts';
+import { stripClaudeContextWindowSuffix } from '../../../shared/claude/model-id';
 import {
   footerMode,
   footerModeMenu,
@@ -21,6 +22,7 @@ export interface FooterSwitchesMenusActions {
   openModeMenu: () => void;
 }
 
+/* eslint-disable max-lines-per-function -- Model, speed, and permission menus share footer lifecycle dependencies. */
 export const createFooterSwitchesMenusActions = (
   deps: FooterSwitchesDeps,
   menus: FooterMenus,
@@ -66,25 +68,73 @@ export const createFooterSwitchesMenusActions = (
     }
 
     const running = claudeStates.get(status.id)?.active ?? false;
-    footerModelMenu.replaceChildren(
-      ...options.options.map((option) =>
-        buildFooterMenuItem(
-          option.model,
-          option.requiresRelaunch
-            ? option.relaunchReason === 'connection'
-              ? `${option.providerLabel} · 更换接入，需重启会话`
-              : `${option.providerLabel} · 速度配置不同，需重启会话`
-            : option.providerLabel,
-          option.model === options.activeModel,
-          () => switchClaudeModel(option),
-          !running,
-          footerModel,
-        ),
-      ),
-    );
+    const activeModel = stripClaudeContextWindowSuffix(options.activeModel).toLowerCase();
+    const sections = options.sections ?? [
+      {
+        id: 'current-platform' as const,
+        label: '当前接入平台的其他模型',
+        status: 'fallback' as const,
+      },
+      {
+        id: 'history' as const,
+        label: '用户曾经接入的模型',
+        status: 'history' as const,
+      },
+    ];
+    const optionSection = (option: ClaudeModelOption): 'current-platform' | 'history' =>
+      option.section ?? (option.entryId ? 'history' : 'current-platform');
+    const discoveryStatusLabel: Record<(typeof sections)[number]['status'], string> = {
+      degraded: '读取失败，已降级',
+      discovered: '已扫描',
+      fallback: '使用配置模型',
+      history: '可恢复接入',
+    };
+
+    footerModelMenu.replaceChildren();
+    for (const section of sections) {
+      const heading = document.createElement('p');
+      heading.className = 'footer-menu__section-heading';
+      heading.textContent = section.label;
+      footerModelMenu.append(heading);
+
+      if (section.detail) {
+        const detail = document.createElement('p');
+        detail.className = 'footer-menu__hint';
+        detail.textContent = section.detail;
+        footerModelMenu.append(detail);
+      }
+
+      const sectionOptions = options.options.filter(
+        (option) => optionSection(option) === section.id,
+      );
+      for (const option of sectionOptions) {
+        const optionModel = stripClaudeContextWindowSuffix(option.model).toLowerCase();
+        footerModelMenu.append(
+          buildFooterMenuItem(
+            option.model,
+            option.requiresRelaunch
+              ? option.relaunchReason === 'connection'
+                ? `${option.providerLabel} · 更换接入，需重启会话`
+                : `${option.providerLabel} · 速度配置不同，需重启会话`
+              : option.providerLabel,
+            section.id === 'current-platform' && optionModel === activeModel,
+            () => switchClaudeModel(option),
+            !running,
+            footerModel,
+          ),
+        );
+      }
+
+      if (!sectionOptions.length && !section.detail) {
+        const empty = document.createElement('p');
+        empty.className = 'footer-menu__hint';
+        empty.textContent = `${discoveryStatusLabel[section.status]}：暂无可选模型。`;
+        footerModelMenu.append(empty);
+      }
+    }
     if (!running) {
       const hint = document.createElement('p');
-      hint.className = 'footer-menu__hint';
+      hint.className = 'footer-menu__hint footer-menu__hint--separated';
       hint.textContent = '请先在工作台启动 Claude Code 会话。';
       footerModelMenu.append(hint);
     }

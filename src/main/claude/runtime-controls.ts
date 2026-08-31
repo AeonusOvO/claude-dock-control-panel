@@ -1,9 +1,13 @@
+/* eslint-disable max-lines -- Runtime controls keep one session-scoped command state machine together. */
+import { randomBytes } from 'node:crypto';
 import type {
   ClaudeEffortRequest,
   ClaudeLaunchMode,
   ClaudeModelOption,
   ClaudeModelOptions,
+  ClaudeModelSection,
   ClaudePermissionMode,
+  ClaudeRelaunchInput,
   ClaudeProjectState,
   ModelSpeedMode,
   ModelSpeedState,
@@ -23,8 +27,11 @@ import {
   resolveClaudeRuntimeModel,
   stripClaudeContextWindowSuffix,
 } from '../../shared/claude/model-id';
+import { isSubscriptionBaseUrl, isSubscriptionProvider } from '../../shared/claude/subscriptions';
+import { findClaudeProvider } from '../../shared/claude/providers';
 import { parseClaudePermissionMode } from '../../shared/claude/permission-mode';
 import { ConversationPreferencesStore, isConversationId } from '../conversation/preferences-store';
+import { resolveProviderModelDiscoveryTarget } from '../network/provider-model-discovery';
 import { ProviderResourceUsageService } from '../network/provider-resource-usage';
 import { MODEL_NAME_PATTERN, type NormalizedClaudeConfig } from './configuration';
 import {
@@ -34,7 +41,12 @@ import {
 } from './model-speed-capabilities';
 import { ModelSpeedPreferencesStore } from './model-speed-store';
 import { ClaudeRuntimeConnectionConfig } from './runtime-connection-config';
-import { describeEndpoint, endpointKey } from './runtime-connection';
+import {
+  connectionEndpointFingerprint,
+  connectionFingerprint,
+  describeEndpoint,
+  projectKey,
+} from './runtime-connection';
 import type {
   ClaudeLaunchAuthorization,
   ClaudeLaunchOverrides,
@@ -57,6 +69,37 @@ const PERMISSION_MODE_STEP_TIMEOUT_MS = 2_000;
 const PERMISSION_MODE_PROBE_INTERVAL_MS = 50;
 const COMPACT_TIMEOUT_MS = 120_000;
 const COMPACT_INSTRUCTION = '请保留：当前任务目标、已完成的修改、待办的下一步。';
+const MODEL_OPTION_TTL_MS = 2 * 60_000;
+const MAX_DISCOVERED_MODELS = 256;
+
+interface ModelOptionRecord {
+  configFingerprint: string;
+  configScope: string;
+  cwdKey: string;
+  entryId?: string;
+  expiresAt: number;
+  launchGeneration: number;
+  option: ClaudeModelOption;
+  ptyGeneration?: PtyGeneration;
+  sessionId: string;
+  targetSpeed?: ModelSpeedMode;
+}
+
+interface CurrentPlatformDiscovery {
+  detail?: string;
+  models: string[];
+  status: ClaudeModelSection['status'];
+}
+
+const safeModelIds = (models: readonly (string | undefined)[]): string[] =>
+  [
+    ...new Set(
+      models
+        .filter((model): model is string => typeof model === 'string')
+        .map((model) => model.trim())
+        .filter((model) => MODEL_NAME_PATTERN.test(model)),
+    ),
+  ].slice(0, MAX_DISCOVERED_MODELS);
 
 export const modelMatches = (expected: string | undefined, actual: string | undefined): boolean => {
   return claudeModelIdsMatch(expected, actual);
@@ -70,6 +113,8 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
   protected readonly resourceUsageService: ProviderResourceUsageService;
   /** Serialises Shift+Tab stepping per session so two clicks can never interleave presses. */
   private readonly modeSwitchLocks = new Set<string>();
+  /** Short-lived descriptors keep renderer-visible IDs unguessable and bound to one live session. */
+  private readonly modelOptionRegistry = new Map<string, ModelOptionRecord>();
   protected readonly sessions = new Map<string, RuntimeSession>();
 
   protected constructor(
@@ -122,6 +167,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
 
   protected clearControlState(): void {
     this.commandSubmissionQueues.clear();
+    this.modelOptionRegistry.clear();
   }
 
   public removeConversationPreferences(conversationId: string): void {
@@ -296,53 +342,258 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     }
   }
 
+  private async discoverCurrentPlatformModels(
+    cwd: string,
+    configScope: string,
+    config: NormalizedClaudeConfig,
+  ): Promise<CurrentPlatformDiscovery> {
+    const definition = findClaudeProvider(config.preset);
+    const fallback = safeModelIds([
+      config.model,
+      config.modelFast,
+      definition?.model,
+      definition?.modelFast,
+    ]);
+    const fallbackDetail = '当前接入未提供可读取的模型目录，已保留配置中的模型。';
+    try {
+      let models: string[];
+      if (config.preset === 'chatgpt-subscription') {
+        models = await this.discoverManagedChatGptModels();
+      } else if (isSubscriptionProvider(config.preset) && isSubscriptionBaseUrl(config.baseUrl)) {
+        models = await this.discoverSubscriptionModels(config.preset, config.baseUrl);
+      } else {
+        const view = this.configStore.getView(configScope);
+        if (view.protocol !== 'openai' && config.provider !== 'gateway') {
+          return { detail: fallbackDetail, models: fallback, status: 'fallback' };
+        }
+        const target = resolveProviderModelDiscoveryTarget(config.baseUrl);
+        models = await this.discoverGenericModels(
+          cwd,
+          target,
+          this.configStore.getCredential(configScope),
+        );
+      }
+      const normalized = safeModelIds([...models, ...fallback]);
+      if (!normalized.length) throw new Error('当前接口没有返回可用模型。');
+      return {
+        detail: `已读取 ${normalized.length} 个当前接入平台模型。`,
+        models: normalized,
+        status: 'discovered',
+      };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '模型目录读取失败。';
+      return {
+        detail: `${detail} 已保留配置中的模型。`,
+        models: fallback,
+        status: 'degraded',
+      };
+    }
+  }
+
+  private registerModelOptions(
+    cwd: string,
+    sessionId: string | undefined,
+    configScope: string,
+    configFingerprint: string,
+    runtime: RuntimeSession | undefined,
+    descriptors: readonly {
+      entryId?: string;
+      option: ClaudeModelOption;
+      targetSpeed?: ModelSpeedMode;
+    }[],
+  ): void {
+    const now = Date.now();
+    const cwdKey = projectKey(cwd);
+    const registrySessionId = sessionId ?? '';
+    for (const [id, record] of this.modelOptionRegistry) {
+      if (
+        record.expiresAt <= now ||
+        (record.sessionId === registrySessionId && record.cwdKey === cwdKey)
+      ) {
+        this.modelOptionRegistry.delete(id);
+      }
+    }
+    for (const { entryId, option, targetSpeed } of descriptors) {
+      this.modelOptionRegistry.set(option.id, {
+        configFingerprint,
+        configScope,
+        cwdKey: projectKey(cwd),
+        ...(entryId === undefined ? {} : { entryId }),
+        expiresAt: now + MODEL_OPTION_TTL_MS,
+        launchGeneration: runtime?.launchGeneration ?? 0,
+        option,
+        ...(runtime?.ptyGeneration === undefined ? {} : { ptyGeneration: runtime.ptyGeneration }),
+        sessionId: sessionId ?? '',
+        ...(targetSpeed === undefined ? {} : { targetSpeed }),
+      });
+    }
+  }
+
+  private modelOptionRecord(sessionId: string, cwd: string, optionId: string): ModelOptionRecord {
+    const record = this.modelOptionRegistry.get(optionId);
+    const runtime = this.sessions.get(sessionId);
+    const configScope = this.connectionConfigScope(sessionId, cwd);
+    const config = this.configStore.getConfig(configScope);
+    const currentFingerprint = connectionFingerprint(
+      config,
+      this.configStore.getCredential(configScope),
+    );
+    if (
+      !record ||
+      record.expiresAt <= Date.now() ||
+      record.sessionId !== sessionId ||
+      record.cwdKey !== projectKey(cwd) ||
+      record.configScope !== configScope ||
+      record.configFingerprint !== currentFingerprint ||
+      record.launchGeneration !== (runtime?.launchGeneration ?? 0) ||
+      record.ptyGeneration !== runtime?.ptyGeneration
+    ) {
+      if (record && record.expiresAt <= Date.now()) this.modelOptionRegistry.delete(optionId);
+      throw new Error('这个模型选项已经失效，请重新打开列表。');
+    }
+    return record;
+  }
+
+  /** Resolves a relaunch option without exposing its history entry or credential to the renderer. */
+  public relaunchInputForModelOption(
+    sessionId: string,
+    cwd: string,
+    input: ClaudeRelaunchInput,
+  ): ClaudeRelaunchInput {
+    if (!input.modelOptionId) return input;
+    const record = this.modelOptionRecord(sessionId, cwd, input.modelOptionId);
+    if (!record.option.requiresRelaunch) {
+      throw new Error('这个模型选项不需要重启会话。');
+    }
+    const withoutOptionId = { ...input };
+    delete withoutOptionId.entryId;
+    delete withoutOptionId.modelOptionId;
+    delete withoutOptionId.model;
+    delete withoutOptionId.speed;
+    if (record.entryId !== undefined) {
+      return { ...withoutOptionId, entryId: record.entryId };
+    }
+    if (record.option.section !== 'current-platform' || !record.option.sameEndpoint) {
+      throw new Error('这个模型选项缺少安全的重启目标。');
+    }
+    return {
+      ...withoutOptionId,
+      model: record.option.model,
+      ...(record.targetSpeed === undefined ? {} : { speed: record.targetSpeed }),
+    };
+  }
+
   /**
-   * Everything the status-bar picker can offer: the model this project is configured with, plus one
-   * entry per saved connection. Entries that keep the current endpoint switch inside the live
-   * conversation; the rest need a relaunch because base URL and credential are PTY-spawn variables.
+   * Everything the status-bar picker can offer, split into models from the current platform and
+   * previously saved connections. Discovery is main-owned; the renderer receives only opaque IDs.
    */
   public async getModelOptions(cwd: string, sessionId?: string): Promise<ClaudeModelOptions> {
     const configScope = sessionId ? this.connectionConfigScope(sessionId, cwd) : cwd;
     const config = this.configStore.getConfig(configScope);
+    const configView = this.configStore.getView(configScope);
     const runtime = sessionId ? this.sessions.get(sessionId) : undefined;
     const installation = await this.diagnoseInstallation();
     const activeModel = runtime?.expectedModel ?? runtime?.metrics?.modelId ?? config.model;
     const launchedSignature = runtime?.launchedSpeedSignature ?? 'standard';
+    const configFingerprint = connectionFingerprint(
+      config,
+      this.configStore.getCredential(configScope),
+    );
+    const discovery = await this.discoverCurrentPlatformModels(cwd, configScope, config);
     const relaunchMetadata = (
       targetConfig: NormalizedClaudeConfig,
       sameEndpoint: boolean,
-    ): Pick<ClaudeModelOption, 'relaunchReason' | 'requiresRelaunch'> => {
-      if (!sameEndpoint) {
-        return { relaunchReason: 'connection', requiresRelaunch: true };
-      }
+    ): Pick<ClaudeModelOption, 'relaunchReason' | 'requiresRelaunch'> & {
+      targetSpeed?: ModelSpeedMode;
+    } => {
+      if (!sameEndpoint) return { relaunchReason: 'connection', requiresRelaunch: true };
       const targetSpeed = this.resolveModelSpeed(
         targetConfig,
         targetConfig.model,
         installation.version,
       );
       return runtime?.active && targetSpeed.signature !== launchedSignature
-        ? { relaunchReason: 'speed-profile', requiresRelaunch: true }
+        ? {
+            relaunchReason: 'speed-profile',
+            requiresRelaunch: true,
+            targetSpeed: targetSpeed.preference,
+          }
         : { requiresRelaunch: false };
     };
-    const options: ClaudeModelOption[] = [
-      {
-        id: 'current',
-        label: config.model,
-        model: config.model,
-        providerLabel: '当前接入',
-        ...relaunchMetadata(config, true),
-        sameEndpoint: true,
-      },
-    ];
+    const descriptors: {
+      entryId?: string;
+      option: ClaudeModelOption;
+      targetSpeed?: ModelSpeedMode;
+    }[] = [];
+    const seen = new Set<string>();
+    const addOption = (
+      model: string,
+      providerLabel: string,
+      source: ClaudeModelOption['source'],
+      section: ClaudeModelOption['section'],
+      targetConfig: NormalizedClaudeConfig,
+      sameEndpoint: boolean,
+      entryId?: string,
+    ): void => {
+      const canonicalModel =
+        section === 'current-platform' ? stripClaudeContextWindowSuffix(model) : model;
+      const dedupeKey =
+        entryId === undefined ? `${section}|${canonicalModel}` : `${section}|${entryId}`;
+      if (!MODEL_NAME_PATTERN.test(canonicalModel) || seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      const id = `model-${randomBytes(18).toString('base64url')}`;
+      const relaunch = relaunchMetadata({ ...targetConfig, model: canonicalModel }, sameEndpoint);
+      const { targetSpeed, ...optionRelaunch } = relaunch;
+      const option: ClaudeModelOption = {
+        action: relaunch.requiresRelaunch ? 'relaunch' : 'switch',
+        id,
+        label: canonicalModel,
+        model: canonicalModel,
+        providerLabel,
+        ...optionRelaunch,
+        sameEndpoint,
+        section,
+        source,
+      };
+      descriptors.push({
+        ...(entryId === undefined ? {} : { entryId }),
+        option,
+        ...(targetSpeed === undefined ? {} : { targetSpeed }),
+      });
+    };
 
-    const seen = new Set([`${endpointKey(config)}|${config.model}`]);
+    for (const model of safeModelIds([activeModel, ...discovery.models])) {
+      const isActiveModel = modelMatches(activeModel, model);
+      addOption(
+        model,
+        isActiveModel ? '当前接入' : configView.protocol === 'openai' ? '当前平台发现' : '当前平台',
+        isActiveModel ? 'active' : discovery.status === 'discovered' ? 'discovered' : 'fallback',
+        'current-platform',
+        { ...config, model },
+        true,
+      );
+    }
+
+    const currentEndpointConfig: NormalizedClaudeConfig =
+      configView.protocol === 'openai' && configView.sourceBaseUrl
+        ? {
+            ...config,
+            authMode: configView.sourceAuthMode ?? config.authMode,
+            baseUrl: configView.sourceBaseUrl,
+          }
+        : config;
+    const currentEndpointCredential =
+      configView.protocol === 'openai' && configView.sourceBaseUrl
+        ? this.configStore.getSourceCredential(configScope)
+        : this.configStore.getCredential(configScope);
+    const currentEndpointIdentity = connectionEndpointFingerprint(
+      currentEndpointConfig,
+      currentEndpointCredential,
+      configView.routerProviderId,
+      configView.protocol,
+    );
+    const historyEndpointFingerprints = this.connectionHistoryEndpointFingerprints(cwd);
     for (const entry of this.getConnectionHistory(cwd)) {
-      const sameEndpoint = endpointKey(entry) === endpointKey(config);
-      const key = `${endpointKey(entry)}|${entry.model}`;
-      if (seen.has(key) || !MODEL_NAME_PATTERN.test(entry.model)) {
-        continue;
-      }
-      seen.add(key);
       const entryConfig: NormalizedClaudeConfig = {
         apiKeyHelperPolicy: entry.apiKeyHelperPolicy,
         authMode: entry.authMode,
@@ -352,18 +603,39 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
         preset: entry.preset,
         provider: entry.provider,
       };
-      options.push({
-        entryId: entry.id,
-        id: `history:${entry.id}`,
-        label: entry.model,
-        model: entry.model,
-        providerLabel: describeEndpoint(entry),
-        ...relaunchMetadata(entryConfig, sameEndpoint),
+      const sameEndpoint = historyEndpointFingerprints.get(entry.id) === currentEndpointIdentity;
+      addOption(
+        entry.model,
+        describeEndpoint(entry),
+        'history',
+        'history',
+        entryConfig,
         sameEndpoint,
-      });
+        entry.id,
+      );
     }
 
-    return { activeModel: stripClaudeContextWindowSuffix(activeModel), options };
+    this.registerModelOptions(cwd, sessionId, configScope, configFingerprint, runtime, descriptors);
+    return {
+      activeModel: stripClaudeContextWindowSuffix(activeModel),
+      options: descriptors.map(({ option }) => option),
+      sections: [
+        {
+          detail: discovery.detail,
+          id: 'current-platform',
+          label: '当前接入平台的其他模型',
+          status: discovery.status,
+        },
+        {
+          detail: descriptors.some(({ option }) => option.section === 'history')
+            ? undefined
+            : '暂无可恢复的历史接入。',
+          id: 'history',
+          label: '用户曾经接入的模型',
+          status: 'history',
+        },
+      ],
+    };
   }
 
   /**
@@ -379,14 +651,10 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     const runtime = this.ensureSession(sessionId, cwd);
     const ptyGeneration = this.requireBoundPty(runtime);
 
-    const option = (await this.getModelOptions(cwd, sessionId)).options.find(
-      (candidate) => candidate.id === optionId,
-    );
+    const optionRecord = this.modelOptionRecord(sessionId, cwd, optionId);
+    const option = optionRecord.option;
     assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
-    if (!option) {
-      throw new Error('这个模型选项已经失效，请重新打开列表。');
-    }
     if (option.requiresRelaunch) {
       throw new Error(
         option.relaunchReason === 'speed-profile'
@@ -404,14 +672,11 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     const installation = await this.diagnoseInstallation();
     assertCurrent();
     this.assertRuntimePty(runtime, ptyGeneration);
-    const targetSpeed = this.resolveModelSpeed(
-      {
-        ...this.configStore.getConfig(this.connectionConfigScope(sessionId, cwd)),
-        model: canonicalModel,
-      },
-      canonicalModel,
-      installation.version,
-    );
+    const configScope = this.connectionConfigScope(sessionId, cwd);
+    const currentConfig = this.configStore.getConfig(configScope);
+    const credential = this.configStore.getCredential(configScope);
+    const targetConfig = { ...currentConfig, model: canonicalModel };
+    const targetSpeed = this.resolveModelSpeed(targetConfig, canonicalModel, installation.version);
     const runtimeModel = resolveClaudeRuntimeModel(
       option.model,
       runtime.claudeContextWindowMode ?? 'auto',
@@ -423,15 +688,14 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     this.assertRuntimePty(runtime, ptyGeneration);
     runtime.expectedModel = canonicalModel;
     runtime.runtimeModel = runtimeModel;
+    runtime.launchedConfigFingerprint = connectionFingerprint(targetConfig, credential);
     runtime.launchedSpeedPreference = targetSpeed.preference;
     runtime.launchedSpeedSignature = targetSpeed.signature;
     runtime.launchedSpeedTargetKey = targetSpeed.targetKey;
     runtime.diagnosticBuffer = '';
     runtime.effortCompatibility = undefined;
     runtime.effortRestoreAfterTurn = undefined;
-    if (runtime.lastApiError?.category === 'effort-thinking-disabled') {
-      runtime.lastApiError = undefined;
-    }
+    runtime.lastApiError = undefined;
     this.captureConversationPreferences(runtime);
     const state = await this.getState(sessionId, cwd);
     this.assertRuntimePty(runtime, ptyGeneration);
@@ -628,7 +892,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     assertCurrent();
     this.modeSwitchLocks.add(sessionId);
     runtime.permissionModeRequest = mode;
-    void this.emitState(runtime);
+    void this.emitState(runtime).catch(() => {});
     try {
       const current = await this.readPermissionModeFromScreen(sessionId, ptyGeneration);
       assertCurrent();
@@ -684,7 +948,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
     } finally {
       if (runtime.permissionMode !== mode) {
         runtime.permissionModeRequest = undefined;
-        void this.emitState(runtime);
+        void this.emitState(runtime).catch(() => {});
       }
       this.modeSwitchLocks.delete(sessionId);
     }
@@ -736,7 +1000,7 @@ export abstract class ClaudeRuntimeControls extends ClaudeRuntimeConnectionConfi
       runtime.permissionModeCycle.push(mode);
     }
     this.captureConversationPreferences(runtime);
-    void this.emitState(runtime);
+    void this.emitState(runtime).catch(() => {});
   }
 
   /**

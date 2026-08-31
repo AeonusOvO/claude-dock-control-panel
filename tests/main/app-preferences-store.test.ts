@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,6 +25,7 @@ describe('app preferences store', () => {
       claudeContextWindowMode: 'auto',
       closeBehavior: 'tray',
       closeToTrayNoticeShown: false,
+      modelUsageFloatingVisible: false,
       conversationResume: {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: true,
@@ -37,9 +38,11 @@ describe('app preferences store', () => {
     });
     store.set({ closeToTrayNoticeShown: true });
     expect(store.get()).toEqual({
+      claudeContextWindowCustomTokens: undefined,
       claudeContextWindowMode: 'auto',
       closeBehavior: 'tray',
       closeToTrayNoticeShown: true,
+      modelUsageFloatingVisible: false,
       conversationResume: {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: true,
@@ -58,6 +61,7 @@ describe('app preferences store', () => {
       claudeContextWindowMode: 'auto',
       closeBehavior: 'exit',
       closeToTrayNoticeShown: false,
+      modelUsageFloatingVisible: false,
       conversationResume: {
         autoLoadLastConversationModelOnStartup: true,
         autoLoadLastConversationOnStartup: true,
@@ -116,19 +120,51 @@ describe('app preferences store', () => {
       'utf8',
     );
 
-    expect(new AppPreferencesStore(root).get().conversationResume).toEqual({
+    const store = new AppPreferencesStore(root);
+    expect(store.get().conversationResume).toEqual({
       autoLoadLastConversationModelOnStartup: false,
       autoLoadLastConversationOnStartup: false,
       modelMismatchBehavior: 'use-current',
       startupModelConnectCancelAfterMinutes: 2,
       startupModelConnectForceStopAfterMinutes: 5,
     });
+    expect(store.get().modelUsageFloatingVisible).toBe(false);
   });
 
   it('fills the new startup connection timings when loading an older version 2 file', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
     fixtureRoots.push(root);
     const directory = path.join(root, 'app-preferences');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      path.join(directory, 'app.json'),
+      JSON.stringify({
+        claudeContextWindowMode: 'auto',
+        closeBehavior: 'tray',
+        closeToTrayNoticeShown: false,
+        modelUsageFloatingVisible: false,
+        conversationResume: {
+          autoLoadLastConversationModelOnStartup: true,
+          autoLoadLastConversationOnStartup: true,
+          modelMismatchBehavior: 'ask',
+        },
+        footerResourcePreference: 'auto',
+        managedChatGptContextWindowMode: 'standard',
+        version: 2,
+      }),
+      'utf8',
+    );
+
+    expect(new AppPreferencesStore(root).get().conversationResume).toMatchObject({
+      startupModelConnectCancelAfterMinutes: 2,
+      startupModelConnectForceStopAfterMinutes: 5,
+    });
+  });
+
+  it('migrates the legacy preferences directory to version 3 with hidden visibility', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
+    fixtureRoots.push(root);
+    const directory = path.join(root, 'preferences');
     mkdirSync(directory, { recursive: true });
     writeFileSync(
       path.join(directory, 'app.json'),
@@ -148,9 +184,13 @@ describe('app preferences store', () => {
       'utf8',
     );
 
-    expect(new AppPreferencesStore(root).get().conversationResume).toMatchObject({
-      startupModelConnectCancelAfterMinutes: 2,
-      startupModelConnectForceStopAfterMinutes: 5,
+    const store = new AppPreferencesStore(root);
+    expect(store.get().modelUsageFloatingVisible).toBe(false);
+    expect(
+      JSON.parse(readFileSync(path.join(root, 'app-preferences', 'app.json'), 'utf8')),
+    ).toMatchObject({
+      modelUsageFloatingVisible: false,
+      version: 3,
     });
   });
 
@@ -168,6 +208,47 @@ describe('app preferences store', () => {
         },
       }),
     ).toThrow('应用偏好设置无效');
+  });
+
+  it('persists the explicit floating quota visibility choice independently', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
+    fixtureRoots.push(directory);
+    const store = new AppPreferencesStore(directory);
+    expect(store.set({ modelUsageFloatingVisible: true }).modelUsageFloatingVisible).toBe(true);
+    expect(new AppPreferencesStore(directory).get().modelUsageFloatingVisible).toBe(true);
+    expect(
+      JSON.parse(readFileSync(path.join(directory, 'app-preferences', 'app.json'), 'utf8')),
+    ).toMatchObject({
+      modelUsageFloatingVisible: true,
+      version: 3,
+    });
+  });
+
+  it('defaults invalid floating quota visibility data to hidden', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'claudedock-preferences-'));
+    fixtureRoots.push(root);
+    const directory = path.join(root, 'app-preferences');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      path.join(directory, 'app.json'),
+      JSON.stringify({
+        claudeContextWindowMode: 'auto',
+        closeBehavior: 'tray',
+        closeToTrayNoticeShown: false,
+        conversationResume: {
+          autoLoadLastConversationModelOnStartup: true,
+          autoLoadLastConversationOnStartup: true,
+          modelMismatchBehavior: 'ask',
+        },
+        footerResourcePreference: 'auto',
+        managedChatGptContextWindowMode: 'standard',
+        modelUsageFloatingVisible: 'yes',
+        version: 3,
+      }),
+      'utf8',
+    );
+
+    expect(new AppPreferencesStore(root).get().modelUsageFloatingVisible).toBe(false);
   });
 
   it('persists the explicit extended managed ChatGPT context choice', () => {

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Bootstrap keeps startup dependency wiring in one ordered contribution list. */
 import { getClaudeExecutionProfile } from '../../shared/claude/execution-profiles';
 import { CHANNELS } from '../../shared/ipc/channels';
 import { automaticNetworkPreflightEnabled } from '../../shared/network-preflight-policy';
@@ -201,11 +202,35 @@ const managedChatGptConversationAccount = async (gateway: ManagedChatGptGateway)
   };
 };
 
-const configureSubscriptionRuntime = (runtime: ClaudeRuntime, services: Registry): void => {
+const configureSubscriptionRuntime = (
+  runtime: ClaudeRuntime,
+  services: Registry,
+  withOfficialProviderAccess: BootstrapDependencies['guards']['withOfficialProviderAccess'],
+): void => {
   runtime.setSubscriptionRelayStarter(() => services.resolve(SUBSCRIPTION_SERVICE).ensureRunning());
   runtime.setSubscriptionAccountIdentityResolver((config) =>
     services.resolve(SUBSCRIPTION_SERVICE).getAccountIdentity(config.preset, config.baseUrl),
   );
+  runtime.setModelDiscoveryResolvers({
+    generic: (cwd, target, credential) => {
+      const discover = () => runtime.discoverProviderModels(target, credential);
+      if (!target.officialProvider) return discover();
+      return withOfficialProviderAccess(
+        {
+          action: 'first-request',
+          cwd,
+          networkScope: 'application',
+          provider: target.officialProvider,
+          target: { process: 'application', url: target.endpoint },
+        },
+        discover,
+      );
+    },
+    managedChatGpt: async () =>
+      (await services.resolve(MANAGED_CHATGPT_GATEWAY).getState()).availableModels,
+    subscription: (provider, baseUrl) =>
+      services.resolve(SUBSCRIPTION_SERVICE).discoverModelsForConnection(provider, baseUrl),
+  });
 };
 
 const ensureManagedChatGptGatewayStarted = async (
@@ -427,7 +452,8 @@ const installNetworkServices = async ({
   await applicationProxyCoordinator.initialize();
   // Restore only after the selected application network path is stable.
   if (runtimeProfile.effects.restoreWorkspace) {
-    downloadEngine.restoreInterrupted();
+    // Recovery prefix validation is asynchronous and must not delay creation of the main window.
+    void downloadEngine.restoreInterrupted().catch(() => undefined);
   }
   workspace.setEnvironmentProvider(() =>
     combinedCliEnvironment(advancedSettingsStore, applicationProxyCoordinator),
@@ -593,7 +619,7 @@ const installAgentRuntimes = ({
   services.resolve(RUNTIME_PROCESS_REGISTRY);
   const claudeRuntime = services.resolve(CLAUDE_RUNTIME);
   claudeRuntime.setLaunchAdmissionGuard(assertLaunchAdmissionAllowed);
-  configureSubscriptionRuntime(claudeRuntime, services);
+  configureSubscriptionRuntime(claudeRuntime, services, withOfficialProviderAccess);
   configureConversationModels(claudeRuntime, requireManagedChatGptGateway, appPreferencesStore);
   const nativeAdapter =
     runtimeProfile.adapterMode === 'fake'
@@ -709,7 +735,12 @@ const installAgentRuntimes = ({
     claudeConversationLifecycle.assertLaunchAllowed(cwd, mode, conversationId);
   });
   services.resolve(CODEX_RUNTIME);
-  installModelUsage(services, runtimeProfile, workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME);
+  installModelUsage(
+    services,
+    runtimeProfile,
+    workspaceStore.getTheme() ?? DEFAULT_TERMINAL_THEME,
+    appPreferencesStore,
+  );
 };
 
 /** Preflight, the access guard it feeds, process scanning and the updater — all read-only observers. */

@@ -126,6 +126,8 @@ const captureDescriptor = (descriptor: ClaudeLaunchDescriptor): ClaudeLaunchDesc
     cwd: descriptor.cwd,
     input: freeze({
       compactFirst: descriptor.input.compactFirst,
+      ...(descriptor.input.model === undefined ? {} : { model: descriptor.input.model }),
+      ...(descriptor.input.speed === undefined ? {} : { speed: descriptor.input.speed }),
       ...(descriptor.input.entryId === undefined ? {} : { entryId: descriptor.input.entryId }),
       ...(descriptor.input.permissionMode === undefined
         ? {}
