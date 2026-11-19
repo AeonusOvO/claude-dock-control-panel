@@ -502,6 +502,7 @@ describe('remaining renderer behavior contracts', () => {
         await settle(harness);
         expect(harness.document.querySelector('[data-transition="restoring"]')).toBeNull();
         expect(harness.query('.history-item').textContent).toContain('待恢复设计稿');
+        expect(harness.query('#project-count').textContent).toBe('1 个项目 · 0 个对话');
         expect(harness.document.body.textContent).toContain('Claude 恢复失败');
       },
     );

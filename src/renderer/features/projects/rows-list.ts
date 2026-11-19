@@ -123,16 +123,14 @@ export const createProjectsRowListActions = (
     const wasAnimating = previousAnimation?.playState === 'running';
     listAnimation?.cancel();
     listAnimation = undefined;
-    const openFolders = dependencies
-      .getWorkspaceState()
-      .projects.filter((project) => project.open).length;
+    const { projects, sessions } = dependencies.getWorkspaceState();
     const pendingCount = state.pendingConversations.size;
-    elements.projectCount.textContent = `${openFolders} 个项目 · ${
-      dependencies.getWorkspaceState().sessions.length + pendingCount
+    elements.projectCount.textContent = `${projects.length} 个项目 · ${
+      sessions.length + pendingCount
     } 个对话${pendingCount > 0 ? ` · ${pendingCount} 个准备中` : ''}`;
 
     // Replace once: emptying a live scroller first clamps its position to zero on every status push.
-    list.replaceChildren(...dependencies.getWorkspaceState().projects.map(renderProjectFolder));
+    list.replaceChildren(...projects.map(renderProjectFolder));
     const nextHeight = list.getBoundingClientRect().height;
     list.scrollTop = previousScrollTop;
     restoreFocus(list, focused);
